@@ -1,0 +1,27 @@
+﻿idf_component_register(
+    SRCS
+        "m5stack_tab5.c"
+        "esp_lcd_st7123.c"
+    INCLUDE_DIRS
+        "include"
+        "include/bsp"
+    PRIV_INCLUDE_DIRS
+        "priv_include"
+    REQUIRES
+        driver
+        esp_lcd
+        esp_driver_gpio
+        esp_driver_i2c
+        esp_driver_ledc
+        espressif__esp_codec_dev
+        espressif__esp_lvgl_port
+        espressif__esp_lcd_ili9881c
+        espressif__esp_lcd_touch
+        espressif__esp_lcd_touch_gt911
+        espressif__esp_lcd_touch_st7123
+        lvgl__lvgl
+    PRIV_REQUIRES
+        usb
+        spiffs
+        fatfs
+)

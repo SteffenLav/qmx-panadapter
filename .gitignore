@@ -1,0 +1,24 @@
+﻿# Build output
+build/
+managed_components/
+
+# ESP-IDF generated files
+sdkconfig.old
+dependencies.lock
+
+# VS Code workspace state (keep settings/extensions.json if you want)
+.vscode/ipch/
+.vscode/.browse.*
+.cache/
+
+# Python
+__pycache__/
+*.pyc
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Editor swap files
+*.swp
+*~

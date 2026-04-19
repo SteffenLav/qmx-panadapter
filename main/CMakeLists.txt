@@ -1,0 +1,19 @@
+﻿idf_component_register(
+    SRCS
+        "main.c"
+        "display/display.c"
+        "ui/ui.c"
+        "util/fps.c"
+    INCLUDE_DIRS
+        "."
+        "display"
+        "ui"
+        "util"
+    REQUIRES
+        esp_lcd
+        esp_timer
+        driver
+        lvgl__lvgl
+        m5stack_tab5
+        espressif__esp_lcd_touch
+)
