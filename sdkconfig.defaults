@@ -40,3 +40,8 @@ CONFIG_COMPILER_OPTIMIZATION_PERF=y
 # Logging
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_COLORS=y
+# Phase 2.1 - bump USB enum buffer for devices with large config descriptors (QMX has CDC + UAC)
+CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=2048
+
+# v1.3 engineering-sample silicon needs 360MHz max (400MHz default fails clock init)
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y

@@ -4,15 +4,18 @@
         "display/display.c"
         "ui/ui.c"
         "util/fps.c"
+        "cat/cat.c"
     INCLUDE_DIRS
         "."
         "display"
         "ui"
         "util"
+        "cat"
     REQUIRES
         esp_lcd
         esp_timer
         driver
+        usb
         lvgl__lvgl
         m5stack_tab5
         espressif__esp_lcd_touch
