@@ -1,6 +1,7 @@
 ﻿#include "cat.h"
 
 #include <string.h>
+#include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -11,70 +12,65 @@
 #include "usb/cdc_acm_host.h"
 #include "bsp/m5stack_tab5.h"
 
+#include "ui.h"
+
 static const char *TAG = "cat";
 
-// QMX (and QMX+, same family) identifiers (STM32 with QRP Labs custom firmware)
 #define QMX_VID  0x0483
 #define QMX_PID  0xA34C
-
-// Baud rate for Kenwood TS-480 CAT emulation on QMX
 #define CAT_BAUD_RATE 38400
+#define CAT_POLL_INTERVAL_MS 200
+#define CAT_RX_BUFFER_SIZE 128
 
-// Event bits for signaling between USB host events and our task
 #define EVT_DEV_CONNECTED  BIT0
 #define EVT_DEV_GONE       BIT1
 
-// State
-static TaskHandle_t s_cat_task_handle = NULL;
+static TaskHandle_t s_link_task = NULL;
+static TaskHandle_t s_poll_task = NULL;
 static EventGroupHandle_t s_evt_group = NULL;
 static cdc_acm_dev_hdl_t s_cdc_dev = NULL;
 
-// Forward decls
-static void cat_task(void *arg);
+static char s_rx_buf[CAT_RX_BUFFER_SIZE];
+static size_t s_rx_len = 0;
+static uint32_t s_last_freq_hz = 0;
+
+static void link_task(void *arg);
+static void poll_task(void *arg);
 static bool handle_rx(const uint8_t *data, size_t data_len, void *user_arg);
 static void handle_cdc_event(const cdc_acm_host_dev_event_data_t *event, void *user_ctx);
 static esp_err_t try_open_qmx(void);
+static void process_cat_message(const char *msg, size_t len);
 
 esp_err_t cat_init(void)
 {
-    ESP_LOGI(TAG, "CAT init (Phase 2.2 - CDC-ACM to QMX)");
+    ESP_LOGI(TAG, "CAT init (Phase 2.3 - polling frequency, updating UI)");
 
     s_evt_group = xEventGroupCreate();
-    if (!s_evt_group) {
-        ESP_LOGE(TAG, "Failed to create event group");
-        return ESP_ERR_NO_MEM;
-    }
+    if (!s_evt_group) return ESP_ERR_NO_MEM;
 
-    // Step 1: bring up USB host via BSP
     esp_err_t err = bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "bsp_usb_host_start failed: 0x%x", err);
         return err;
     }
-    ESP_LOGI(TAG, "BSP USB host started, 5V enabled on USB-A port");
+    ESP_LOGI(TAG, "BSP USB host started");
 
-    // Step 2: install the CDC-ACM host class driver
-    err = cdc_acm_host_install(NULL);  // NULL = default config (own task, default stack/priority)
+    err = cdc_acm_host_install(NULL);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "cdc_acm_host_install failed: 0x%x", err);
         return err;
     }
     ESP_LOGI(TAG, "CDC-ACM host driver installed");
 
-    // Step 3: spawn our task that watches for QMX and drives CAT communication
     BaseType_t ok = xTaskCreatePinnedToCore(
-        cat_task, "cat_task", 8192, NULL, 5, &s_cat_task_handle, 1);
-    if (ok != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create cat_task");
-        return ESP_FAIL;
-    }
-    ESP_LOGI(TAG, "CAT task started, looking for QMX (VID=0x%04X PID=0x%04X)...",
-             QMX_VID, QMX_PID);
+        link_task, "cat_link", 8192, NULL, 5, &s_link_task, 1);
+    if (ok != pdPASS) return ESP_FAIL;
 
+    ESP_LOGI(TAG, "CAT link task started, waiting for QMX (VID=0x%04X PID=0x%04X)",
+             QMX_VID, QMX_PID);
     return ESP_OK;
 }
 
-// CDC-ACM event callback (connection lost, error, etc.)
 static void handle_cdc_event(const cdc_acm_host_dev_event_data_t *event, void *user_ctx)
 {
     switch (event->type) {
@@ -86,32 +82,62 @@ static void handle_cdc_event(const cdc_acm_host_dev_event_data_t *event, void *u
         xEventGroupSetBits(s_evt_group, EVT_DEV_GONE);
         break;
     case CDC_ACM_HOST_SERIAL_STATE:
-        ESP_LOGI(TAG, "Serial state notification: 0x%04X",
-                 event->data.serial_state.val);
-        break;
-    case CDC_ACM_HOST_NETWORK_CONNECTION:
-        // Not used for serial CDC
         break;
     default:
-        ESP_LOGI(TAG, "Other CDC event: %d", event->type);
         break;
     }
 }
 
-// Inbound data handler — called when the QMX sends bytes to us
 static bool handle_rx(const uint8_t *data, size_t data_len, void *user_arg)
 {
-    // CAT responses are ASCII text, semicolon-terminated.
-    // Log as a string for easy reading. Cap at 128 chars per line.
-    char buf[129];
-    size_t copy_len = (data_len < sizeof(buf) - 1) ? data_len : sizeof(buf) - 1;
-    memcpy(buf, data, copy_len);
-    buf[copy_len] = '\0';
-    ESP_LOGI(TAG, "<<< QMX RX (%d bytes): %s", (int)data_len, buf);
-    return true; // we've consumed the data
+    for (size_t i = 0; i < data_len; i++) {
+        char c = (char)data[i];
+        if (s_rx_len >= CAT_RX_BUFFER_SIZE - 1) {
+            ESP_LOGW(TAG, "RX buffer overflow, dropping accumulated data");
+            s_rx_len = 0;
+        }
+        s_rx_buf[s_rx_len++] = c;
+        if (c == ';') {
+            s_rx_buf[s_rx_len] = '\0';
+            process_cat_message(s_rx_buf, s_rx_len);
+            s_rx_len = 0;
+        }
+    }
+    return true;
 }
 
-// Try to open the QMX as a CDC-ACM device
+static void process_cat_message(const char *msg, size_t len)
+{
+    ESP_LOGI(TAG, "<<< CAT msg (%d): %s", (int)len, msg);
+    if (len == 15 && msg[0] == 'F' && msg[1] == 'A') {
+        uint32_t freq_hz = 0;
+        for (size_t i = 2; i < 13; i++) {
+            char d = msg[i];
+            if (d < '0' || d > '9') {
+                ESP_LOGW(TAG, "Bad digit in FA response: '%c'", d);
+                return;
+            }
+            freq_hz = freq_hz * 10 + (d - '0');
+        }
+        if (freq_hz != s_last_freq_hz) {
+            s_last_freq_hz = freq_hz;
+            ESP_LOGI(TAG, "Freq = %lu Hz (%lu.%03lu MHz)",
+                     (unsigned long)freq_hz,
+                     (unsigned long)(freq_hz / 1000000),
+                     (unsigned long)((freq_hz / 1000) % 1000));
+            ui_update_frequency(freq_hz);
+        }
+        return;
+    }
+
+    if (len == 6 && msg[0] == 'I' && msg[1] == 'D') {
+        ESP_LOGI(TAG, "Radio ID: %s", msg);
+        return;
+    }
+
+    ESP_LOGD(TAG, "Unhandled CAT msg: %s", msg);
+}
+
 static esp_err_t try_open_qmx(void)
 {
     const cdc_acm_host_device_config_t cfg = {
@@ -123,71 +149,67 @@ static esp_err_t try_open_qmx(void)
         .user_arg = NULL,
     };
 
-    // Interface 0 is the CDC Communications Class on the QMX.
-    // (The CDC-ACM helper picks the data interface automatically based on descriptors.)
-    ESP_LOGI(TAG, "Attempting to open QMX CDC interface...");
     esp_err_t err = cdc_acm_host_open(QMX_VID, QMX_PID, 0, &cfg, &s_cdc_dev);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "cdc_acm_host_open failed: 0x%x (%s)", err, esp_err_to_name(err));
-        return err;
-    }
-    ESP_LOGI(TAG, "QMX CDC opened successfully");
+    if (err != ESP_OK) return err;
 
-    // Configure line coding: 38400 baud, 8N1
-    const cdc_acm_line_coding_t line_coding = {
+    ESP_LOGI(TAG, "QMX CDC opened");
+
+    const cdc_acm_line_coding_t lc = {
         .dwDTERate = CAT_BAUD_RATE,
-        .bCharFormat = 0,    // 1 stop bit
-        .bParityType = 0,    // no parity
+        .bCharFormat = 0,
+        .bParityType = 0,
         .bDataBits = 8,
     };
-    err = cdc_acm_host_line_coding_set(s_cdc_dev, &line_coding);
+    err = cdc_acm_host_line_coding_set(s_cdc_dev, &lc);
     if (err != ESP_OK) {
-        ESP_LOGE(TAG, "cdc_acm_host_line_coding_set failed: 0x%x", err);
+        ESP_LOGE(TAG, "line_coding_set failed: 0x%x", err);
         return err;
     }
-    ESP_LOGI(TAG, "Line coding set: %d baud, 8N1", CAT_BAUD_RATE);
 
-    // Assert DTR and RTS so the radio knows we want to talk
-    err = cdc_acm_host_set_control_line_state(s_cdc_dev, true, true);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "cdc_acm_host_set_control_line_state failed: 0x%x", err);
-        // not fatal; some implementations don't care
-    }
+    cdc_acm_host_set_control_line_state(s_cdc_dev, true, true);
+    ESP_LOGI(TAG, "QMX configured: %d baud, 8N1", CAT_BAUD_RATE);
 
-    // Send a test command: "ID;" asks the radio for its identity (TS-480 protocol)
-    const char *test_cmd = "ID;";
-    err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)test_cmd,
-                                        strlen(test_cmd), 500);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to send ID;: 0x%x", err);
-        return err;
-    }
-    ESP_LOGI(TAG, ">>> QMX TX: %s", test_cmd);
-
+    cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"ID;", 3, 500);
     return ESP_OK;
 }
 
-// Main task — handles connect attempts and orchestrates CAT lifecycle
-static void cat_task(void *arg)
+static void poll_task(void *arg)
+{
+    ESP_LOGI(TAG, "Poll task started (%d ms interval)", CAT_POLL_INTERVAL_MS);
+    while (s_cdc_dev != NULL) {
+        esp_err_t err = cdc_acm_host_data_tx_blocking(
+            s_cdc_dev, (const uint8_t *)"FA;", 3, 200);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "FA; send failed: 0x%x (radio likely disconnected)", err);
+            break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+    }
+    ESP_LOGI(TAG, "Poll task exiting");
+    s_poll_task = NULL;
+    vTaskDelete(NULL);
+}
+
+static void link_task(void *arg)
 {
     while (1) {
-        // Try to open the QMX. If it's not present, this returns quickly with
-        // an error and we wait before retrying.
         esp_err_t err = try_open_qmx();
         if (err == ESP_OK) {
-            // Successfully opened. Wait for it to disappear.
-            EventBits_t bits = xEventGroupWaitBits(
-                s_evt_group, EVT_DEV_GONE, pdTRUE, pdFALSE, portMAX_DELAY);
-            if (bits & EVT_DEV_GONE) {
-                ESP_LOGW(TAG, "Cleaning up after QMX disconnect");
-                if (s_cdc_dev) {
-                    cdc_acm_host_close(s_cdc_dev);
-                    s_cdc_dev = NULL;
-                }
+            s_rx_len = 0;
+            s_last_freq_hz = 0;
+            xTaskCreatePinnedToCore(
+                poll_task, "cat_poll", 4096, NULL, 5, &s_poll_task, 1);
+
+            xEventGroupWaitBits(s_evt_group, EVT_DEV_GONE,
+                                pdTRUE, pdFALSE, portMAX_DELAY);
+            ESP_LOGW(TAG, "QMX gone, cleaning up");
+            if (s_cdc_dev) {
+                cdc_acm_host_close(s_cdc_dev);
+                s_cdc_dev = NULL;
             }
         } else {
-            // Not present (or open failed). Wait a bit then retry.
             vTaskDelay(pdMS_TO_TICKS(2000));
         }
     }
 }
+
