@@ -9,5 +9,6 @@
   espressif/esp_lvgl_port: "^2.5.0"
 
   espressif/usb_host_cdc_acm: "^2.0.0"
+  espressif/usb_host_uac: "^1.4.0"
 
   lvgl/lvgl: "~9.2.0"

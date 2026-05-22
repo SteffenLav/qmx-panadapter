@@ -60,14 +60,8 @@ esp_err_t cat_init(void)
     s_evt_group = xEventGroupCreate();
     if (!s_evt_group) return ESP_ERR_NO_MEM;
 
-    esp_err_t err = bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "bsp_usb_host_start failed: 0x%x", err);
-        return err;
-    }
-    ESP_LOGI(TAG, "BSP USB host started");
-
-    err = cdc_acm_host_install(NULL);
+    esp_err_t err = ESP_OK;
+err = cdc_acm_host_install(NULL);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "cdc_acm_host_install failed: 0x%x", err);
         return err;
@@ -368,4 +362,5 @@ static void link_task(void *arg)
         }
     }
 }
+
 
