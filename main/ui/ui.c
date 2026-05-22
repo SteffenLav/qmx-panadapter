@@ -1,4 +1,4 @@
-#include "ui.h"
+﻿#include "ui.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -14,7 +14,7 @@ static const char *TAG = "ui";
 #define TOP_BAR_H       60
 #define BOTTOM_BAR_H    30
 #define SPECTRUM_H      200
-#define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - BOTTOM_BAR_H)  // 430
+#define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - BOTTOM_BAR_H)
 
 // Widget handles
 static lv_obj_t *s_freq_label = NULL;
@@ -23,6 +23,13 @@ static lv_obj_t *s_mode_label = NULL;
 static lv_obj_t *s_spectrum_obj = NULL;
 static lv_obj_t *s_waterfall_obj = NULL;
 static lv_obj_t *s_status_label = NULL;
+
+static lv_obj_t *s_wf_canvas = NULL;
+static uint8_t *s_wf_canvas_buf = NULL;
+
+// Spectrum canvas (Phase 5.1)
+static lv_obj_t *s_spec_canvas = NULL;
+static uint8_t *s_spec_canvas_buf = NULL;
 
 // ==== Top bar ====
 static void build_top_bar(lv_obj_t *parent)
@@ -36,28 +43,24 @@ static void build_top_bar(lv_obj_t *parent)
     lv_obj_set_style_pad_all(bar, 8, 0);
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Frequency (big, left-aligned)
     s_freq_label = lv_label_create(bar);
     lv_label_set_text(s_freq_label, "14.074.000 MHz");
     lv_obj_set_style_text_color(s_freq_label, lv_color_hex(0xFFD76B), 0);
     lv_obj_set_style_text_font(s_freq_label, &lv_font_montserrat_14, 0);
     lv_obj_align(s_freq_label, LV_ALIGN_LEFT_MID, 8, 0);
 
-    // Mode (center)
     s_mode_label = lv_label_create(bar);
     lv_label_set_text(s_mode_label, "USB");
     lv_obj_set_style_text_color(s_mode_label, lv_color_hex(0xA0E0A0), 0);
     lv_obj_set_style_text_font(s_mode_label, &lv_font_montserrat_14, 0);
     lv_obj_align(s_mode_label, LV_ALIGN_CENTER, -60, 0);
 
-    // S-meter (right of mode)
     s_smeter_label = lv_label_create(bar);
     lv_label_set_text(s_smeter_label, "S9+20");
     lv_obj_set_style_text_color(s_smeter_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(s_smeter_label, &lv_font_montserrat_14, 0);
     lv_obj_align(s_smeter_label, LV_ALIGN_CENTER, 60, 0);
 
-    // Menu button (right)
     lv_obj_t *btn = lv_btn_create(bar);
     lv_obj_set_size(btn, 60, 44);
     lv_obj_align(btn, LV_ALIGN_RIGHT_MID, -4, 0);
@@ -66,9 +69,7 @@ static void build_top_bar(lv_obj_t *parent)
     lv_obj_center(blbl);
 }
 
-// ==== Spectrum region (placeholder) ====
-// Phase 4 will replace this with real FFT data. For Phase 1 we draw a static
-// fake spectrum so we can see the region and measure FPS.
+// ==== Spectrum region (Phase 5.1: real-time line graph) ====
 static void build_spectrum(lv_obj_t *parent)
 {
     s_spectrum_obj = lv_obj_create(parent);
@@ -81,20 +82,23 @@ static void build_spectrum(lv_obj_t *parent)
     lv_obj_set_style_pad_all(s_spectrum_obj, 0, 0);
     lv_obj_clear_flag(s_spectrum_obj, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Placeholder label to confirm rendering
-    lv_obj_t *lbl = lv_label_create(s_spectrum_obj);
-    lv_label_set_text(lbl, "[ spectrum — Phase 4 will fill this ]");
-    lv_obj_set_style_text_color(lbl, lv_color_hex(0x707070), 0);
-    lv_obj_center(lbl);
+    // 1280 x 200 x 2 bytes = 512 KB in PSRAM
+    size_t buf_size = LV_CANVAS_BUF_SIZE(DISPLAY_H_RES, SPECTRUM_H, 16,
+                                         LV_DRAW_BUF_STRIDE_ALIGN);
+    s_spec_canvas_buf = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
+    if (!s_spec_canvas_buf) {
+        ESP_LOGE(TAG, "Failed to alloc spectrum canvas (%zu bytes)", buf_size);
+        return;
+    }
+    memset(s_spec_canvas_buf, 0, buf_size);
+
+    s_spec_canvas = lv_canvas_create(s_spectrum_obj);
+    lv_canvas_set_buffer(s_spec_canvas, s_spec_canvas_buf,
+                         DISPLAY_H_RES, SPECTRUM_H, LV_COLOR_FORMAT_RGB565);
+    lv_obj_align(s_spec_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
 }
 
-// ==== Waterfall region (placeholder with test gradient) ====
-// Phase 5 will replace this with direct framebuffer writes. For Phase 1 we use
-// an LVGL canvas filled with a gradient — this lets us visually confirm the
-// region bounds and that LVGL isn't overdrawing it.
-static lv_obj_t *s_wf_canvas = NULL;
-static uint8_t *s_wf_canvas_buf = NULL;
-
+// ==== Waterfall region (placeholder gradient from Phase 1) ====
 static void build_waterfall(lv_obj_t *parent)
 {
     s_waterfall_obj = lv_obj_create(parent);
@@ -106,8 +110,6 @@ static void build_waterfall(lv_obj_t *parent)
     lv_obj_set_style_pad_all(s_waterfall_obj, 0, 0);
     lv_obj_clear_flag(s_waterfall_obj, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Allocate canvas buffer in PSRAM (too big for internal SRAM)
-    // 1280 x 430 x 2 bytes = ~1.1 MB
     size_t buf_size = LV_CANVAS_BUF_SIZE(DISPLAY_H_RES, WATERFALL_H, 16, LV_DRAW_BUF_STRIDE_ALIGN);
     s_wf_canvas_buf = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
     if (!s_wf_canvas_buf) {
@@ -120,7 +122,6 @@ static void build_waterfall(lv_obj_t *parent)
                          DISPLAY_H_RES, WATERFALL_H, LV_COLOR_FORMAT_RGB565);
     lv_obj_align(s_wf_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    // Fill with a diagonal gradient to confirm we own this region
     uint16_t *px = (uint16_t *)s_wf_canvas_buf;
     for (int y = 0; y < WATERFALL_H; y++) {
         for (int x = 0; x < DISPLAY_H_RES; x++) {
@@ -152,7 +153,6 @@ static void build_bottom_bar(lv_obj_t *parent)
 }
 
 // ==== Public API ====
-
 void ui_init(lv_display_t *disp)
 {
     display_lock(portMAX_DELAY);
@@ -189,20 +189,64 @@ void ui_update_frequency(uint32_t freq_hz)
 
 void ui_update_smeter(int s_units)
 {
-    // Placeholder — Phase 4
+    // Placeholder
+}
+
+#define DB_MIN_DISPLAY   40.0f
+#define DB_MAX_DISPLAY  130.0f
+
+static inline int db_to_y(float db)
+{
+    if (db < DB_MIN_DISPLAY) db = DB_MIN_DISPLAY;
+    if (db > DB_MAX_DISPLAY) db = DB_MAX_DISPLAY;
+    float norm = (db - DB_MIN_DISPLAY) / (DB_MAX_DISPLAY - DB_MIN_DISPLAY);
+    int y = (int)((1.0f - norm) * (float)(SPECTRUM_H - 1));
+    if (y < 0) y = 0;
+    if (y > SPECTRUM_H - 1) y = SPECTRUM_H - 1;
+    return y;
 }
 
 void ui_push_spectrum(const float *bins, int n_bins)
 {
-    // Placeholder — Phase 4
+    if (!s_spec_canvas_buf || !bins || n_bins <= 0) return;
+    if (!display_lock(20)) return;
+
+    uint16_t *px = (uint16_t *)s_spec_canvas_buf;
+    const uint16_t fg = 0x07E0;  // green in RGB565
+
+    // Clear canvas to black
+    memset(px, 0, (size_t)DISPLAY_H_RES * SPECTRUM_H * 2);
+
+    int N = n_bins;
+    int half = N / 2;
+
+    for (int x = 0; x < DISPLAY_H_RES; x++) {
+        int shifted = (int)((float)x * (float)N / (float)DISPLAY_H_RES);
+        if (shifted < 0) shifted = 0;
+        if (shifted >= N) shifted = N - 1;
+
+        int bin;
+        if (shifted < half) {
+            bin = shifted + half;
+        } else {
+            bin = shifted - half;
+        }
+
+        int y_top = db_to_y(bins[bin]);
+        for (int y = y_top; y < SPECTRUM_H; y++) {
+            px[y * DISPLAY_H_RES + x] = fg;
+        }
+    }
+
+    lv_obj_invalidate(s_spec_canvas);
+    display_unlock();
 }
 
 void ui_push_waterfall_row(const uint8_t *rgb565_row)
 {
-    // Placeholder — Phase 5
+    // Placeholder - Phase 5.2
 }
 
-// Called by FPS counter to update the bottom bar
 void ui_set_fps_text(const char *text)
 {
     if (!s_status_label) return;

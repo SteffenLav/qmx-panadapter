@@ -7,6 +7,7 @@
         "cat/cat.c"
         "audio/audio.c"
         "dsp/dsp.c"
+        "render/render.c"
     INCLUDE_DIRS
         "."
         "display"
@@ -15,6 +16,7 @@
         "cat"
         "audio"
         "dsp"
+        "render"
     REQUIRES
         esp_lcd
         esp_timer
