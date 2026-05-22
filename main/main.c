@@ -11,6 +11,7 @@
 #include "fps.h"
 #include "cat.h"
 #include "audio.h"
+#include "dsp.h"
 
 static const char *TAG = "main";
 
@@ -31,6 +32,7 @@ void app_main(void)
 
     ESP_ERROR_CHECK(audio_init());
     ESP_ERROR_CHECK(cat_init());
+    ESP_ERROR_CHECK(dsp_init());
 
     ESP_LOGI(TAG, "Init complete — main task idle");
 }

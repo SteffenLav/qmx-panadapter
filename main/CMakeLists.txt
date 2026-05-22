@@ -6,6 +6,7 @@
         "util/fps.c"
         "cat/cat.c"
         "audio/audio.c"
+        "dsp/dsp.c"
     INCLUDE_DIRS
         "."
         "display"
@@ -13,6 +14,7 @@
         "util"
         "cat"
         "audio"
+        "dsp"
     REQUIRES
         esp_lcd
         esp_timer
@@ -23,4 +25,5 @@
         espressif__esp_lcd_touch
         espressif__usb_host_cdc_acm
         espressif__usb_host_uac
+        espressif__esp-dsp
 )
