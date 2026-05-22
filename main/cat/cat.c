@@ -109,7 +109,7 @@ static bool handle_rx(const uint8_t *data, size_t data_len, void *user_arg)
 static void process_cat_message(const char *msg, size_t len)
 {
     ESP_LOGI(TAG, "<<< CAT msg (%d): %s", (int)len, msg);
-    if (len == 15 && msg[0] == 'F' && msg[1] == 'A') {
+    if (len == 14 && msg[0] == 'F' && msg[1] == 'A') {
         uint32_t freq_hz = 0;
         for (size_t i = 2; i < 13; i++) {
             char d = msg[i];
@@ -212,4 +212,6 @@ static void link_task(void *arg)
         }
     }
 }
+
+
 
