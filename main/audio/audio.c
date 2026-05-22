@@ -56,13 +56,8 @@ static uint8_t  s_channels    = 0;
 static uint8_t  s_bit_res     = 0;
 
 // Consumer (stub DSP) stats
-static TaskHandle_t s_dsp_stub_task = NULL;
-static volatile uint32_t s_dsp_consumed_this_period = 0;
-static int64_t s_dsp_period_start_us = 0;
-
 // Forward decls
 static void audio_task(void *arg);
-static void dsp_stub_task(void *arg);
 static void uac_lib_event_cb(uint8_t addr, uint8_t iface_num,
                              const uac_host_driver_event_t event, void *arg);
 static void uac_dev_event_cb(uac_host_device_handle_t dev_hdl,
@@ -103,11 +98,6 @@ esp_err_t audio_init(void)
 
     BaseType_t ok = xTaskCreatePinnedToCore(
         audio_task, "audio_task", 4096, NULL, 5, &s_audio_task, 1);
-    if (ok != pdPASS) return ESP_FAIL;
-
-    // Spawn the stub DSP consumer (Phase 4 will replace this with actual FFT)
-    ok = xTaskCreatePinnedToCore(
-        dsp_stub_task, "dsp_stub", 4096, NULL, 4, &s_dsp_stub_task, 1);
     if (ok != pdPASS) return ESP_FAIL;
 
     return ESP_OK;
@@ -349,24 +339,4 @@ static void audio_task(void *arg)
     }
 }
 
-// Stub DSP consumer: drains the ring buffer to validate the pipeline.
-// Phase 4 will replace this with windowing + FFT.
-static void dsp_stub_task(void *arg)
-{
-    static int16_t sink[2048];  // 1024 stereo pairs per read
-    s_dsp_period_start_us = esp_timer_get_time();
 
-    while (1) {
-        size_t pairs = audio_read_samples(sink, 1024, 100);
-        s_dsp_consumed_this_period += pairs;
-
-        int64_t now = esp_timer_get_time();
-        if (now - s_dsp_period_start_us >= STATS_PERIOD_MS * 1000) {
-            uint32_t consumed = s_dsp_consumed_this_period;
-            s_dsp_consumed_this_period = 0;
-            s_dsp_period_start_us = now;
-            ESP_LOGI(TAG, "DSP-stub consumed %u pairs/s",
-                     (unsigned)consumed);
-        }
-    }
-}
