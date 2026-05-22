@@ -19,4 +19,5 @@
         lvgl__lvgl
         m5stack_tab5
         espressif__esp_lcd_touch
+        espressif__usb_host_cdc_acm
 )
