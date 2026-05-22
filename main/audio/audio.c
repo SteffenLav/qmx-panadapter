@@ -4,6 +4,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
+#include "freertos/ringbuf.h"
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_timer.h"
@@ -12,13 +13,12 @@
 
 static const char *TAG = "audio";
 
-// Driver-event queue entry: which RX device just got connected/disconnected,
-// or which device had an RX-done event.
+// Internal event types we put on our queue
 typedef enum {
     AE_NONE = 0,
-    AE_RX_CONNECTED,     // lib callback - new RX iface
-    AE_RX_DONE,          // device callback - data ready
-    AE_DISCONNECTED,     // device callback - device gone
+    AE_RX_CONNECTED,
+    AE_RX_DONE,
+    AE_DISCONNECTED,
     AE_TRANSFER_ERROR,
 } audio_evt_kind_t;
 
@@ -30,23 +30,39 @@ typedef struct {
 
 #define EVT_QUEUE_LEN          16
 #define RX_BUF_BYTES           4096
-#define INTERNAL_RX_BUF_BYTES  19200   // matches the example's microphone path
+#define INTERNAL_RX_BUF_BYTES  19200
 #define STATS_PERIOD_MS        1000
 
+// Ring buffer holds decoded int16 stereo pairs (4 bytes per pair).
+// 64 kB / 4 = 16384 pairs = ~341 ms of headroom @ 48 kHz
+#define SAMPLE_RING_BYTES      (64 * 1024)
+
+// Producer-side state
 static TaskHandle_t s_audio_task = NULL;
 static QueueHandle_t s_evt_queue = NULL;
 static uac_host_device_handle_t s_uac_dev = NULL;
+static RingbufHandle_t s_ring = NULL;
 
+// Stats (touched from RX context, snapshot from task)
 static volatile uint32_t s_samples_this_period = 0;
 static volatile int16_t  s_peak_left  = 0;
 static volatile int16_t  s_peak_right = 0;
+static volatile uint32_t s_dropped_this_period = 0;
 static int64_t s_period_start_us = 0;
 
-static uint32_t s_sample_freq = 0;  // discovered at open time
+// Discovered at runtime
+static uint32_t s_sample_freq = 0;
 static uint8_t  s_channels    = 0;
 static uint8_t  s_bit_res     = 0;
 
+// Consumer (stub DSP) stats
+static TaskHandle_t s_dsp_stub_task = NULL;
+static volatile uint32_t s_dsp_consumed_this_period = 0;
+static int64_t s_dsp_period_start_us = 0;
+
+// Forward decls
 static void audio_task(void *arg);
+static void dsp_stub_task(void *arg);
 static void uac_lib_event_cb(uint8_t addr, uint8_t iface_num,
                              const uac_host_driver_event_t event, void *arg);
 static void uac_dev_event_cb(uac_host_device_handle_t dev_hdl,
@@ -54,10 +70,20 @@ static void uac_dev_event_cb(uac_host_device_handle_t dev_hdl,
 
 esp_err_t audio_init(void)
 {
-    ESP_LOGI(TAG, "Audio init (Phase 3.2 - UAC RX, discover params dynamically)");
+    ESP_LOGI(TAG, "Audio init (Phase 3.3 - ring-buffered int16 stereo + stub consumer)");
 
     s_evt_queue = xQueueCreate(EVT_QUEUE_LEN, sizeof(audio_evt_t));
     if (!s_evt_queue) return ESP_ERR_NO_MEM;
+
+    s_ring = xRingbufferCreate(SAMPLE_RING_BYTES, RINGBUF_TYPE_BYTEBUF);
+    if (!s_ring) {
+        ESP_LOGE(TAG, "Failed to create sample ring buffer (%d bytes)",
+                 SAMPLE_RING_BYTES);
+        return ESP_ERR_NO_MEM;
+    }
+    ESP_LOGI(TAG, "Sample ring buffer: %d bytes (~%lu ms @ 48k stereo int16)",
+             SAMPLE_RING_BYTES,
+             (unsigned long)(SAMPLE_RING_BYTES / 4 * 1000 / 48000));
 
     const uac_host_driver_config_t cfg = {
         .create_background_task = true,
@@ -77,7 +103,29 @@ esp_err_t audio_init(void)
 
     BaseType_t ok = xTaskCreatePinnedToCore(
         audio_task, "audio_task", 4096, NULL, 5, &s_audio_task, 1);
-    return (ok == pdPASS) ? ESP_OK : ESP_FAIL;
+    if (ok != pdPASS) return ESP_FAIL;
+
+    // Spawn the stub DSP consumer (Phase 4 will replace this with actual FFT)
+    ok = xTaskCreatePinnedToCore(
+        dsp_stub_task, "dsp_stub", 4096, NULL, 4, &s_dsp_stub_task, 1);
+    if (ok != pdPASS) return ESP_FAIL;
+
+    return ESP_OK;
+}
+
+size_t audio_read_samples(int16_t *dst, size_t max_pairs, uint32_t timeout_ms)
+{
+    if (!s_ring || !dst || max_pairs == 0) return 0;
+
+    size_t want_bytes = max_pairs * sizeof(int16_t) * 2;
+    size_t got_bytes = 0;
+    void *item = xRingbufferReceiveUpTo(
+        s_ring, &got_bytes, pdMS_TO_TICKS(timeout_ms), want_bytes);
+    if (!item) return 0;
+
+    memcpy(dst, item, got_bytes);
+    vRingbufferReturnItem(s_ring, item);
+    return got_bytes / (sizeof(int16_t) * 2);
 }
 
 static void uac_lib_event_cb(uint8_t addr, uint8_t iface_num,
@@ -123,74 +171,91 @@ static void uac_dev_event_cb(uac_host_device_handle_t dev_hdl,
 static void log_stats(void)
 {
     int64_t now = esp_timer_get_time();
-    if (s_period_start_us == 0) {
-        s_period_start_us = now;
-        return;
-    }
+    if (s_period_start_us == 0) { s_period_start_us = now; return; }
     int64_t elapsed_us = now - s_period_start_us;
     if (elapsed_us < STATS_PERIOD_MS * 1000) return;
 
     uint32_t samples = s_samples_this_period;
     int16_t  pL = s_peak_left;
     int16_t  pR = s_peak_right;
+    uint32_t dropped = s_dropped_this_period;
     s_samples_this_period = 0;
     s_peak_left = 0;
     s_peak_right = 0;
+    s_dropped_this_period = 0;
     s_period_start_us = now;
 
     uint32_t pairs_per_sec = (uint32_t)((uint64_t)samples * 1000000ULL / (uint64_t)elapsed_us);
-    ESP_LOGI(TAG, "RX %u pairs/s (target %u), peak L=%d R=%d",
-             (unsigned)pairs_per_sec, (unsigned)s_sample_freq,
-             (int)pL, (int)pR);
+    if (dropped > 0) {
+        ESP_LOGW(TAG, "RX %u pairs/s peak L=%d R=%d DROPPED=%u (ring full)",
+                 (unsigned)pairs_per_sec, (int)pL, (int)pR, (unsigned)dropped);
+    } else {
+        ESP_LOGI(TAG, "RX %u pairs/s peak L=%d R=%d",
+                 (unsigned)pairs_per_sec, (int)pL, (int)pR);
+    }
 }
 
-// Decode a packed 24-bit little-endian signed PCM sample (3 bytes) into int32_t,
-// sign-extended.
+// Decode a packed 24-bit little-endian signed PCM sample (3 bytes) into int32_t.
 static inline int32_t s24_to_s32(const uint8_t *p)
 {
     uint32_t u = (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16);
-    // sign-extend from 24-bit to 32-bit
     if (u & 0x00800000U) u |= 0xFF000000U;
     return (int32_t)u;
 }
 
 static void process_rx(void)
 {
-    static uint8_t buf[RX_BUF_BYTES];
-    uint32_t bytes_read = 0;
+    // Raw 24-bit packed bytes from the QMX
+    static uint8_t raw[RX_BUF_BYTES];
+    // Decoded int16 stereo pairs (max half the bytes from raw, since 6B->4B)
+    static int16_t decoded[(RX_BUF_BYTES / 6) * 2 + 2];
 
-    esp_err_t err = uac_host_device_read(s_uac_dev, buf, sizeof(buf),
+    uint32_t bytes_read = 0;
+    esp_err_t err = uac_host_device_read(s_uac_dev, raw, sizeof(raw),
                                          &bytes_read, 0);
     if (err != ESP_OK || bytes_read == 0) return;
 
-    // QMX delivers 24-bit packed stereo: L[3B] R[3B] = 6 bytes per stereo pair.
+    // Each stereo pair = 6 bytes (3B L + 3B R, little-endian signed 24-bit)
     size_t pairs = bytes_read / 6;
+    if (pairs == 0) return;
 
-    // Track peak as scaled-to-16-bit for display compatibility:
-    //   24-bit range is [-8388608 .. +8388607]
-    //   shift right by 8 to fit into int16 range [-32768 .. +32767]
     int16_t local_peak_L = s_peak_left;
     int16_t local_peak_R = s_peak_right;
 
     for (size_t i = 0; i < pairs; i++) {
-        const uint8_t *p = buf + 6*i;
-        int32_t L = s24_to_s32(p);          // sample L
-        int32_t R = s24_to_s32(p + 3);      // sample R
-        int32_t aL = (L < 0) ? -L : L;
-        int32_t aR = (R < 0) ? -R : R;
-        // Scale 24-bit magnitude to 16-bit range for logging readability
-        int16_t aL16 = (int16_t)(aL >> 8);
-        int16_t aR16 = (int16_t)(aR >> 8);
-        if (aL16 > local_peak_L) local_peak_L = aL16;
-        if (aR16 > local_peak_R) local_peak_R = aR16;
+        const uint8_t *p = raw + 6*i;
+        int32_t L = s24_to_s32(p);
+        int32_t R = s24_to_s32(p + 3);
+        // Scale 24-bit to 16-bit via arithmetic shift right by 8.
+        // Saturate to int16 range just to be safe.
+        int32_t Ls = L >> 8;
+        int32_t Rs = R >> 8;
+        if (Ls > 32767) Ls = 32767; else if (Ls < -32768) Ls = -32768;
+        if (Rs > 32767) Rs = 32767; else if (Rs < -32768) Rs = -32768;
+
+        decoded[2*i]     = (int16_t)Ls;
+        decoded[2*i + 1] = (int16_t)Rs;
+
+        // Peak tracking (absolute)
+        int16_t aL = (Ls < 0) ? (int16_t)-Ls : (int16_t)Ls;
+        int16_t aR = (Rs < 0) ? (int16_t)-Rs : (int16_t)Rs;
+        if (aL > local_peak_L) local_peak_L = aL;
+        if (aR > local_peak_R) local_peak_R = aR;
     }
 
     s_peak_left = local_peak_L;
     s_peak_right = local_peak_R;
     s_samples_this_period += pairs;
+
+    // Push decoded samples to the ring buffer (non-blocking).
+    // If the ring is full, count drops and move on - we never block audio.
+    size_t bytes_to_push = pairs * sizeof(int16_t) * 2;
+    BaseType_t sent = xRingbufferSend(s_ring, decoded, bytes_to_push, 0);
+    if (sent != pdTRUE) {
+        s_dropped_this_period += pairs;
+    }
 }
 
-// Open the UAC RX device that the lib just told us about, and start streaming.
 static esp_err_t open_and_start(uint8_t addr, uint8_t iface_num)
 {
     const uac_host_device_config_t dev_cfg = {
@@ -209,8 +274,6 @@ static esp_err_t open_and_start(uint8_t addr, uint8_t iface_num)
     }
     ESP_LOGI(TAG, "Device opened (addr=%u iface=%u)", addr, iface_num);
 
-    // Discover what format the interface actually supports.
-    // Alt setting 1 is the "active" one (alt 0 = zero-bandwidth state).
     uac_host_dev_alt_param_t alt = {0};
     err = uac_host_get_device_alt_param(s_uac_dev, 1, &alt);
     if (err != ESP_OK) {
@@ -219,14 +282,14 @@ static esp_err_t open_and_start(uint8_t addr, uint8_t iface_num)
         s_uac_dev = NULL;
         return err;
     }
-    ESP_LOGI(TAG, "Alt 1: channels=%u, %u-bit, sample_freq_type=%u, first_rate=%lu Hz",
-             alt.channels, alt.bit_resolution, alt.sample_freq_type,
+    ESP_LOGI(TAG, "Alt 1: channels=%u, %u-bit, first_rate=%lu Hz",
+             alt.channels, alt.bit_resolution,
              (unsigned long)alt.sample_freq[0]);
 
     const uac_host_stream_config_t stream_cfg = {
         .channels = alt.channels,
         .bit_resolution = alt.bit_resolution,
-        .sample_freq = alt.sample_freq[0],   // pick first offered rate
+        .sample_freq = alt.sample_freq[0],
         .flags = 0,
     };
     err = uac_host_device_start(s_uac_dev, &stream_cfg);
@@ -244,6 +307,7 @@ static esp_err_t open_and_start(uint8_t addr, uint8_t iface_num)
     s_samples_this_period = 0;
     s_peak_left = 0;
     s_peak_right = 0;
+    s_dropped_this_period = 0;
 
     ESP_LOGI(TAG, "UAC stream started: %lu Hz, %u ch, %u-bit",
              (unsigned long)s_sample_freq, s_channels, s_bit_res);
@@ -263,15 +327,12 @@ static void audio_task(void *arg)
                 }
                 open_and_start(e.addr, e.iface_num);
                 break;
-
             case AE_RX_DONE:
                 process_rx();
                 break;
-
             case AE_TRANSFER_ERROR:
                 ESP_LOGW(TAG, "Transfer error reported");
                 break;
-
             case AE_DISCONNECTED:
                 ESP_LOGW(TAG, "UAC disconnected, cleaning up");
                 if (s_uac_dev) {
@@ -280,7 +341,6 @@ static void audio_task(void *arg)
                     s_uac_dev = NULL;
                 }
                 break;
-
             default:
                 break;
             }
@@ -289,7 +349,24 @@ static void audio_task(void *arg)
     }
 }
 
+// Stub DSP consumer: drains the ring buffer to validate the pipeline.
+// Phase 4 will replace this with windowing + FFT.
+static void dsp_stub_task(void *arg)
+{
+    static int16_t sink[2048];  // 1024 stereo pairs per read
+    s_dsp_period_start_us = esp_timer_get_time();
 
+    while (1) {
+        size_t pairs = audio_read_samples(sink, 1024, 100);
+        s_dsp_consumed_this_period += pairs;
 
-
-
+        int64_t now = esp_timer_get_time();
+        if (now - s_dsp_period_start_us >= STATS_PERIOD_MS * 1000) {
+            uint32_t consumed = s_dsp_consumed_this_period;
+            s_dsp_consumed_this_period = 0;
+            s_dsp_period_start_us = now;
+            ESP_LOGI(TAG, "DSP-stub consumed %u pairs/s",
+                     (unsigned)consumed);
+        }
+    }
+}

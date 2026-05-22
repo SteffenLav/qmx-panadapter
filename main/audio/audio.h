@@ -1,14 +1,26 @@
 ﻿#pragma once
 
+#include <stddef.h>
+#include <stdint.h>
 #include "esp_err.h"
 
 /**
  * @brief Initialize the audio subsystem.
  *
- * Phase 3.2: install UAC host driver, wait for QMX as UAC microphone,
- *            open stream IN at 48 kHz / 2 ch / 16-bit, log sample stats
- *            once per second (count + peak L/R).
+ * Phase 3.2: UAC host driver + stream open at 48 kHz / 2 ch / 24-bit
+ *            (auto-discovered from device descriptors).
+ * Phase 3.3: ring-buffered int16 stereo samples for downstream consumption.
  *
- * Must be called AFTER cat_init() has installed the USB host stack.
+ * Must be called AFTER bsp_usb_host_start() has been invoked.
  */
 esp_err_t audio_init(void);
+
+/**
+ * @brief Read decoded audio samples (interleaved int16 L/R) from the ring buffer.
+ *
+ * @param[out] dst              Destination buffer (host-allocated)
+ * @param[in]  max_pairs        Max stereo pairs the caller can accept
+ * @param[in]  timeout_ms       How long to wait if buffer is empty (0 = no wait)
+ * @return Number of stereo pairs actually written into dst (may be 0)
+ */
+size_t audio_read_samples(int16_t *dst, size_t max_pairs, uint32_t timeout_ms);
