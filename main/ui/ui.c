@@ -16,7 +16,8 @@ static const char *TAG = "ui";
 #define TOP_BAR_H       60
 #define BOTTOM_BAR_H    30
 #define SPECTRUM_H      200
-#define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - BOTTOM_BAR_H)
+#define LABEL_BAR_H     18
+#define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - LABEL_BAR_H - BOTTOM_BAR_H)
 
 // Forward declarations (Phase 6.1 - touch-to-tune)
 static void touch_event_cb(lv_event_t *e);
@@ -113,12 +114,73 @@ static void build_spectrum(lv_obj_t *parent)
     lv_obj_align(s_spec_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
 }
 
+// ==== Label band (Phase 5.3): black strip between spectrum and waterfall with offset ticks ====
+static lv_obj_t *s_label_canvas = NULL;
+static uint8_t *s_label_canvas_buf = NULL;
+
+static void build_label_bar(lv_obj_t *parent)
+{
+    lv_obj_t *bar = lv_obj_create(parent);
+    lv_obj_set_size(bar, DISPLAY_H_RES, LABEL_BAR_H);
+    lv_obj_align(bar, LV_ALIGN_TOP_LEFT, 0, TOP_BAR_H + SPECTRUM_H);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_border_width(bar, 0, 0);
+    lv_obj_set_style_radius(bar, 0, 0);
+    lv_obj_set_style_pad_all(bar, 0, 0);
+    lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Tick canvas: DISPLAY_H_RES x LABEL_BAR_H, drawn once
+    size_t buf_size = LV_CANVAS_BUF_SIZE(DISPLAY_H_RES, LABEL_BAR_H, 16, LV_DRAW_BUF_STRIDE_ALIGN);
+    s_label_canvas_buf = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
+    if (s_label_canvas_buf) {
+        memset(s_label_canvas_buf, 0, buf_size);
+        // Draw ticks: major at multiples of 12 kHz (top-aligned, taller),
+        // minor at multiples of 3 kHz (top-aligned, shorter)
+        uint16_t *px = (uint16_t *)s_label_canvas_buf;
+        const uint16_t major_color = 0xC618;  // light grey
+        const uint16_t minor_color = 0x8410;  // medium grey
+        const int center_x = DISPLAY_H_RES / 2;
+        const int px_per_khz = DISPLAY_H_RES / 48;  // 15 px/kHz at 720
+        for (int khz = -24; khz <= 24; khz += 3) {
+            int x = center_x + khz * px_per_khz;
+            if (x < 0 || x >= DISPLAY_H_RES) continue;
+            int is_major = (khz % 12 == 0);
+            int h = is_major ? 10 : 5;
+            uint16_t color = is_major ? major_color : minor_color;
+            for (int y = 0; y < h; y++) {
+                px[y * DISPLAY_H_RES + x] = color;
+            }
+        }
+        s_label_canvas = lv_canvas_create(bar);
+        lv_canvas_set_buffer(s_label_canvas, s_label_canvas_buf,
+                             DISPLAY_H_RES, LABEL_BAR_H, LV_COLOR_FORMAT_RGB565);
+        lv_obj_align(s_label_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
+    }
+
+    // Labels sit below the ticks
+    const char *tick_labels[5] = { "-24k", "-12k", "0", "+12k", "+24k" };
+    const int tick_xs[5] = { 0, 180, 360, 540, 720 };
+    for (int i = 0; i < 5; i++) {
+        lv_obj_t *lbl = lv_label_create(bar);
+        lv_label_set_text(lbl, tick_labels[i]);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xA0A0A0), 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+        if (i == 0) {
+            lv_obj_align(lbl, LV_ALIGN_BOTTOM_LEFT, 2, 0);
+        } else if (i == 4) {
+            lv_obj_align(lbl, LV_ALIGN_BOTTOM_RIGHT, -2, 0);
+        } else {
+            lv_obj_align(lbl, LV_ALIGN_BOTTOM_LEFT, tick_xs[i] - 14, 0);
+        }
+    }
+}
+
 // ==== Waterfall region (placeholder gradient from Phase 1) ====
 static void build_waterfall(lv_obj_t *parent)
 {
     s_waterfall_obj = lv_obj_create(parent);
     lv_obj_set_size(s_waterfall_obj, DISPLAY_H_RES, WATERFALL_H);
-    lv_obj_align(s_waterfall_obj, LV_ALIGN_TOP_LEFT, 0, TOP_BAR_H + SPECTRUM_H);
+    lv_obj_align(s_waterfall_obj, LV_ALIGN_TOP_LEFT, 0, TOP_BAR_H + SPECTRUM_H + LABEL_BAR_H);
     lv_obj_set_style_bg_color(s_waterfall_obj, lv_color_hex(0x000010), 0);
     lv_obj_set_style_border_width(s_waterfall_obj, 0, 0);
     lv_obj_set_style_radius(s_waterfall_obj, 0, 0);
@@ -178,13 +240,14 @@ void ui_init(lv_display_t *disp)
 
     build_top_bar(scr);
     build_spectrum(scr);
+    build_label_bar(scr);
     build_waterfall(scr);
     build_bottom_bar(scr);
 
     display_unlock();
 
-    ESP_LOGI(TAG, "UI built: top=%dpx spectrum=%dpx waterfall=%dpx bottom=%dpx",
-             TOP_BAR_H, SPECTRUM_H, WATERFALL_H, BOTTOM_BAR_H);
+    ESP_LOGI(TAG, "UI built: top=%dpx spectrum=%dpx labels=%dpx waterfall=%dpx bottom=%dpx",
+             TOP_BAR_H, SPECTRUM_H, LABEL_BAR_H, WATERFALL_H, BOTTOM_BAR_H);
 }
 
 void ui_update_frequency(uint32_t freq_hz)
@@ -228,9 +291,22 @@ void ui_push_spectrum(const float *bins, int n_bins)
 
     uint16_t *px = (uint16_t *)s_spec_canvas_buf;
     const uint16_t fg = 0x07E0;  // green in RGB565
+    const uint16_t grid_color = 0x4208;  // dim grey grid lines
 
     // Clear canvas to black
     memset(px, 0, (size_t)DISPLAY_H_RES * SPECTRUM_H * 2);
+
+    // dB grid lines (Phase 5.3) - draw before spectrum so green overdraws on hits
+    {
+        const float grid_dbs[5] = { 50.0f, 70.0f, 90.0f, 110.0f, 130.0f };
+        for (int g = 0; g < 5; g++) {
+            int gy = db_to_y(grid_dbs[g]);
+            if (gy >= 0 && gy < SPECTRUM_H) {
+                uint16_t *row = px + gy * DISPLAY_H_RES;
+                for (int x = 0; x < DISPLAY_H_RES; x++) row[x] = grid_color;
+            }
+        }
+    }
 
     int N = n_bins;
     int half = N / 2;
@@ -392,6 +468,11 @@ static void touch_event_cb(lv_event_t *e)
 }
 
 // Hook into ui_update_frequency to track latest known QMX frequency
+
+
+
+
+
 
 
 
