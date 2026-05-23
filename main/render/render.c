@@ -8,6 +8,7 @@
 
 #include "dsp.h"
 #include "ui.h"
+#include "render_waterfall.h"
 
 static const char *TAG = "render";
 
@@ -26,6 +27,7 @@ static void render_task(void *arg)
         esp_err_t err = dsp_get_spectrum(s_scratch);
         if (err == ESP_OK) {
             ui_push_spectrum(s_scratch, DSP_FFT_SIZE);
+            render_waterfall_tick(s_scratch, DSP_FFT_SIZE);
         }
         // ESP_ERR_NOT_FOUND just means no spectrum yet (no audio); skip silently.
     }
@@ -33,7 +35,7 @@ static void render_task(void *arg)
 
 esp_err_t render_init(void)
 {
-    ESP_LOGI(TAG, "Render init (Phase 5.1 - spectrum line at %d Hz)",
+    ESP_LOGI(TAG, "Render init (Phase 5.2 - spectrum + waterfall at %d Hz)",
              1000 / RENDER_PERIOD_MS);
 
     // Scratch buffer in PSRAM, accessed once per frame
@@ -42,7 +44,10 @@ esp_err_t render_init(void)
         ESP_LOGE(TAG, "Failed to alloc render scratch buffer");
         return ESP_ERR_NO_MEM;
     }
-
+    esp_err_t wferr = render_waterfall_init();
+    if (wferr != ESP_OK) {
+        return wferr;
+    }
     BaseType_t ok = xTaskCreatePinnedToCore(
         render_task, "render", 4096, NULL, 3, &s_render_task, 0);
     if (ok != pdPASS) {
@@ -52,3 +57,10 @@ esp_err_t render_init(void)
     ESP_LOGI(TAG, "Render task started");
     return ESP_OK;
 }
+
+
+
+
+
+
+

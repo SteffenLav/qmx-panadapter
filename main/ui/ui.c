@@ -5,6 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "display.h"
 
@@ -110,7 +111,10 @@ static void build_waterfall(lv_obj_t *parent)
     lv_obj_set_style_pad_all(s_waterfall_obj, 0, 0);
     lv_obj_clear_flag(s_waterfall_obj, LV_OBJ_FLAG_SCROLLABLE);
 
-    size_t buf_size = LV_CANVAS_BUF_SIZE(DISPLAY_H_RES, WATERFALL_H, 16, LV_DRAW_BUF_STRIDE_ALIGN);
+    // Allocate 2x WATERFALL_H so we can use the "double buffer" scroll trick:
+    // new rows are written to both write_head and write_head+WATERFALL_H positions,
+    // and the canvas view pointer moves through the buffer instead of memmove'ing.
+    size_t buf_size = LV_CANVAS_BUF_SIZE(DISPLAY_H_RES, WATERFALL_H * 2, 16, LV_DRAW_BUF_STRIDE_ALIGN);
     s_wf_canvas_buf = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
     if (!s_wf_canvas_buf) {
         ESP_LOGE(TAG, "Failed to alloc waterfall canvas (%zu bytes)", buf_size);
@@ -122,15 +126,8 @@ static void build_waterfall(lv_obj_t *parent)
                          DISPLAY_H_RES, WATERFALL_H, LV_COLOR_FORMAT_RGB565);
     lv_obj_align(s_wf_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    uint16_t *px = (uint16_t *)s_wf_canvas_buf;
-    for (int y = 0; y < WATERFALL_H; y++) {
-        for (int x = 0; x < DISPLAY_H_RES; x++) {
-            uint8_t r = (x * 31) / DISPLAY_H_RES;
-            uint8_t g = ((x + y) * 63) / (DISPLAY_H_RES + WATERFALL_H);
-            uint8_t b = (y * 31) / WATERFALL_H;
-            px[y * DISPLAY_H_RES + x] = (r << 11) | (g << 5) | b;
-        }
-    }
+    // Initialize entire 2x buffer to black (waterfall starts empty)
+    memset(s_wf_canvas_buf, 0, (size_t)DISPLAY_H_RES * WATERFALL_H * 2 * 2);
     lv_obj_invalidate(s_wf_canvas);
 }
 
@@ -242,9 +239,45 @@ void ui_push_spectrum(const float *bins, int n_bins)
     display_unlock();
 }
 
+// Moving-pointer (double-buffer) scroll. We allocate a 2*WATERFALL_H buffer.
+// Each tick we write the new row to position s_wf_head AND to s_wf_head + WATERFALL_H,
+// then we increment s_wf_head (mod WATERFALL_H). The canvas's buffer pointer is set
+// to (base + s_wf_head*row_bytes), giving LVGL a contiguous WATERFALL_H view of the
+// freshest data. No memmove needed.
+//
+// Visual order: row 0 of the LVGL canvas view = newest row (top); WATERFALL_H-1 = oldest.
+// To achieve this, after incrementing s_wf_head, the "newest" row in the buffer is at
+// (s_wf_head - 1) mod WATERFALL_H, and we want the canvas view to start with it at row 0.
+// That means the view base = the position of the newest row.
+static int s_wf_head = 0;  // next write position (0..WATERFALL_H-1)
+
+// Waterfall scroll via moving-pointer trick.
+// build_waterfall() allocates the canvas buffer at 2x WATERFALL_H height so we
+// can write each new row to BOTH s_wf_head and s_wf_head + WATERFALL_H. The
+// head DECREMENTS each tick, so the just-written row is at the TOP of the
+// WATERFALL_H window that starts at s_wf_head. We point the canvas's buffer at
+// that window. No memmove needed; ~100 us/tick instead of ~92 ms.
 void ui_push_waterfall_row(const uint8_t *rgb565_row)
 {
-    // Placeholder - Phase 5.2
+    if (!s_wf_canvas_buf || !rgb565_row) return;
+
+    const size_t row_bytes = DISPLAY_H_RES * 2;  // RGB565 = 2 B/px
+
+    if (!display_lock(20)) return;
+
+    // Decrement head (with wrap), then write the new row at head and head+WATERFALL_H.
+    s_wf_head = (s_wf_head + WATERFALL_H - 1) % WATERFALL_H;
+    memcpy(s_wf_canvas_buf +  s_wf_head                * row_bytes, rgb565_row, row_bytes);
+    memcpy(s_wf_canvas_buf + (s_wf_head + WATERFALL_H) * row_bytes, rgb565_row, row_bytes);
+
+    // Point the canvas at the WATERFALL_H window starting at s_wf_head.
+    // Newest row sits at view row 0 (top), oldest at view row WATERFALL_H-1 (bottom).
+    lv_canvas_set_buffer(s_wf_canvas,
+                         s_wf_canvas_buf + s_wf_head * row_bytes,
+                         DISPLAY_H_RES, WATERFALL_H, LV_COLOR_FORMAT_RGB565);
+
+    lv_obj_invalidate(s_wf_canvas);
+    display_unlock();
 }
 
 void ui_set_fps_text(const char *text)
@@ -255,3 +288,11 @@ void ui_set_fps_text(const char *text)
         display_unlock();
     }
 }
+
+
+
+
+
+
+
+

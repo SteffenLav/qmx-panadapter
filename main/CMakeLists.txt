@@ -8,6 +8,7 @@
         "audio/audio.c"
         "dsp/dsp.c"
         "render/render.c"
+        "render/render_waterfall.c"
     INCLUDE_DIRS
         "."
         "display"
@@ -29,3 +30,4 @@
         espressif__usb_host_uac
         espressif__esp-dsp
 )
+
