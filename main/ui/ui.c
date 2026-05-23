@@ -8,6 +8,7 @@
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "display.h"
+#include "cat.h"
 
 static const char *TAG = "ui";
 
@@ -16,6 +17,16 @@ static const char *TAG = "ui";
 #define BOTTOM_BAR_H    30
 #define SPECTRUM_H      200
 #define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - BOTTOM_BAR_H)
+
+// Forward declarations (Phase 6.1 - touch-to-tune)
+static void touch_event_cb(lv_event_t *e);
+static uint32_t s_last_qmx_freq_hz = 0;  // updated by ui_update_frequency
+
+// Touch-target cursor state (Phase 6.1)
+static int s_target_x = -1;
+static uint64_t s_target_until_us = 0;
+#define TARGET_DISPLAY_MS  600
+// (s_last_qmx_freq_hz declared at top of file)
 
 // Widget handles
 static lv_obj_t *s_freq_label = NULL;
@@ -94,6 +105,9 @@ static void build_spectrum(lv_obj_t *parent)
     memset(s_spec_canvas_buf, 0, buf_size);
 
     s_spec_canvas = lv_canvas_create(s_spectrum_obj);
+    lv_obj_add_flag(s_spectrum_obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_spectrum_obj, touch_event_cb, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(s_spectrum_obj, touch_event_cb, LV_EVENT_RELEASED, NULL);
     lv_canvas_set_buffer(s_spec_canvas, s_spec_canvas_buf,
                          DISPLAY_H_RES, SPECTRUM_H, LV_COLOR_FORMAT_RGB565);
     lv_obj_align(s_spec_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -122,6 +136,9 @@ static void build_waterfall(lv_obj_t *parent)
     }
 
     s_wf_canvas = lv_canvas_create(s_waterfall_obj);
+    lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_waterfall_obj, touch_event_cb, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(s_waterfall_obj, touch_event_cb, LV_EVENT_RELEASED, NULL);
     lv_canvas_set_buffer(s_wf_canvas, s_wf_canvas_buf,
                          DISPLAY_H_RES, WATERFALL_H, LV_COLOR_FORMAT_RGB565);
     lv_obj_align(s_wf_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -172,6 +189,7 @@ void ui_init(lv_display_t *disp)
 
 void ui_update_frequency(uint32_t freq_hz)
 {
+    s_last_qmx_freq_hz = freq_hz;
     if (!s_freq_label) return;
     char buf[32];
     uint32_t mhz = freq_hz / 1000000;
@@ -235,6 +253,29 @@ void ui_push_spectrum(const float *bins, int n_bins)
         }
     }
 
+    // Center cursor: amber 1-px vertical line at canvas center (where QMX is tuned)
+    {
+        const uint16_t center_color = 0xFD00;
+        int cx = DISPLAY_H_RES / 2;
+        for (int y = 0; y < SPECTRUM_H; y++) {
+            px[y * DISPLAY_H_RES + cx] = center_color;
+        }
+    }
+    // Target cursor: cyan 1-px vertical line at last touched x, ~600 ms
+    if (s_target_x >= 0) {
+        uint64_t now = esp_timer_get_time();
+        if (now < s_target_until_us) {
+            const uint16_t target_color = 0x07FF;
+            int tx = s_target_x;
+            if (tx >= 0 && tx < DISPLAY_H_RES) {
+                for (int y = 0; y < SPECTRUM_H; y++) {
+                    px[y * DISPLAY_H_RES + tx] = target_color;
+                }
+            }
+        } else {
+            s_target_x = -1;
+        }
+    }
     lv_obj_invalidate(s_spec_canvas);
     display_unlock();
 }
@@ -250,6 +291,8 @@ void ui_push_spectrum(const float *bins, int n_bins)
 // (s_wf_head - 1) mod WATERFALL_H, and we want the canvas view to start with it at row 0.
 // That means the view base = the position of the newest row.
 static int s_wf_head = 0;  // next write position (0..WATERFALL_H-1)
+
+// (touch-target cursor state declared near top of file)
 
 // Waterfall scroll via moving-pointer trick.
 // build_waterfall() allocates the canvas buffer at 2x WATERFALL_H height so we
@@ -290,6 +333,65 @@ void ui_set_fps_text(const char *text)
 }
 
 
+
+
+
+
+
+
+
+
+// =============================================================================
+// Touch-to-tune (Phase 6.1)
+// =============================================================================
+
+#define UAC_SAMPLE_RATE   48000     // I/Q sample rate from QMX
+#define DSP_FFT_SIZE_HZ   48000     // full FFT span = sample rate (complex FFT)
+#define TUNE_ROUND_HZ     10        // round target frequency to nearest 10 Hz
+
+// (s_last_qmx_freq_hz declared at top of file)
+
+static void touch_event_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_indev_t *indev = lv_event_get_indev(e);
+    if (!indev) return;
+
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+
+    // p.x is screen-x; matches canvas-x because spectrum/waterfall are full-width at x=0.
+    if (p.x < 0 || p.x >= DISPLAY_H_RES) return;
+
+    if (code == LV_EVENT_PRESSING) {
+        // Live preview: cyan cursor tracks the finger; refresh the 200ms lingering window
+        // every tick so the line stays visible while the finger is down.
+        s_target_x = (int)p.x;
+        s_target_until_us = esp_timer_get_time() + 200000;  // 200 ms grace after lift
+        return;
+    }
+
+    if (code == LV_EVENT_RELEASED) {
+        if (s_last_qmx_freq_hz == 0) return;  // no freq known yet, can't tune
+
+        // Compute target frequency from final touch position
+        int dx = (int)p.x - DISPLAY_H_RES / 2;
+        int32_t offset_hz = (int32_t)((int64_t)dx * UAC_SAMPLE_RATE / DISPLAY_H_RES);
+        int32_t rounded = (offset_hz + (offset_hz >= 0 ? TUNE_ROUND_HZ/2 : -TUNE_ROUND_HZ/2))
+                          / TUNE_ROUND_HZ * TUNE_ROUND_HZ;
+        int64_t target = (int64_t)s_last_qmx_freq_hz + rounded;
+        if (target < 0) return;
+        uint32_t target_hz = (uint32_t)target;
+
+        esp_err_t err = cat_set_frequency(target_hz);
+        ESP_LOGI("ui_touch", "RELEASED x=%d dx=%d off=%ld tgt=%lu err=0x%x",
+                 (int)p.x, dx, (long)rounded, (unsigned long)target_hz, err);
+        // Let the cursor linger briefly after release, then clear
+        s_target_until_us = esp_timer_get_time() + 200000;
+    }
+}
+
+// Hook into ui_update_frequency to track latest known QMX frequency
 
 
 

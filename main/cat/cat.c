@@ -6,6 +6,7 @@
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_err.h"
 
 #include "usb/usb_host.h"
@@ -44,6 +45,7 @@ static bool s_audio_dumped = false;
 static char s_rx_buf[CAT_RX_BUFFER_SIZE];
 static size_t s_rx_len = 0;
 static uint32_t s_last_freq_hz = 0;
+static uint64_t s_last_tx_us = 0;   // for rate-limiting cat_set_frequency
 
 static void link_task(void *arg);
 static void poll_task(void *arg);
@@ -364,3 +366,32 @@ static void link_task(void *arg)
 }
 
 
+
+
+esp_err_t cat_set_frequency(uint32_t freq_hz)
+{
+    if (s_cdc_dev == NULL) {
+        return ESP_ERR_INVALID_STATE;  // QMX not connected
+    }
+    // Rate-limit: drop calls that arrive within 200 ms of previous TX
+    uint64_t now = esp_timer_get_time();
+    if (now - s_last_tx_us < 200000) {
+        return ESP_ERR_TIMEOUT;
+    }
+    s_last_tx_us = now;
+
+    // Format: "FA" + 11 digits zero-padded + ";"
+    char cmd[16];
+    int n = snprintf(cmd, sizeof(cmd), "FA%011lu;", (unsigned long)freq_hz);
+    if (n != 14) {
+        ESP_LOGW(TAG, "cat_set_frequency: snprintf produced %d chars (expected 14)", n);
+        return ESP_FAIL;
+    }
+    esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd, 14, 200);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "FA TX failed: 0x%x", err);
+        return err;
+    }
+    ESP_LOGI(TAG, "Sent: %s (target %lu Hz)", cmd, (unsigned long)freq_hz);
+    return ESP_OK;
+}
