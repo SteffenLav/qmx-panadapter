@@ -1,0 +1,28 @@
+dependencies:
+  cmake_utilities: 0.5.*
+  idf: '>=5.0'
+  usb:
+    public: true
+    rules:
+    - if: idf_version >=6.0
+    - if: target not in ["linux"]
+    version: ^1.0.0
+description: USB Host UAC driver
+files:
+  exclude:
+  - test_app
+  - host_test
+issues: https://github.com/espressif/esp-usb/issues
+repository: git://github.com/espressif/esp-usb.git
+repository_info:
+  commit_sha: bb33936af290ee1713b9544895669a98f3864f80
+  path: host/class/uac/usb_host_uac
+targets:
+- esp32s2
+- esp32s3
+- esp32s31
+- esp32p4
+- esp32h4
+- linux
+url: https://github.com/espressif/esp-usb/tree/master/host/class/uac/usb_host_uac
+version: 1.4.0
