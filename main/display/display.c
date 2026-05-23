@@ -34,12 +34,12 @@ esp_err_t display_init(lv_display_t **out_disp)
             .task_max_sleep_ms = 500,
             .timer_period_ms  = 5,
         },
-        .buffer_size   = DISPLAY_H_RES * 72,
+        .buffer_size   = DISPLAY_H_RES * 36,  // Phase 6.2: smaller flushes to keep LVGL rotate task under watchdog
         .double_buffer = true,
         .flags = {
             .buff_dma    = 0,
             .buff_spiram = 1,
-            .sw_rotate   = 0,
+            .sw_rotate   = 1,   // Phase 6.2: enable LVGL software rotation
         },
     };
 
@@ -51,7 +51,11 @@ esp_err_t display_init(lv_display_t **out_disp)
 
     bsp_display_backlight_on();
 
-    ESP_LOGI(TAG, "Display ready: %dx%d", DISPLAY_H_RES, DISPLAY_V_RES);
+    // Phase 6.2: rotate to landscape (panel is natively 720x1280 portrait)
+    lv_display_set_rotation(s_disp, LV_DISPLAY_ROTATION_90);
+    ESP_LOGI(TAG, "Phase 6.2: requested LV_DISPLAY_ROTATION_90 (landscape)");
+
+    ESP_LOGI(TAG, "Display ready: native=%dx%d (rotated to landscape)", DISPLAY_H_RES, DISPLAY_V_RES);
     ESP_LOGI(TAG, "Free PSRAM=%zu KB, free internal=%zu KB",
              heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024,
              heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024);
@@ -59,3 +63,5 @@ esp_err_t display_init(lv_display_t **out_disp)
     if (out_disp) *out_disp = s_disp;
     return ESP_OK;
 }
+
+

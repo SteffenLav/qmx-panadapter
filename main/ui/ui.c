@@ -140,9 +140,9 @@ static void build_label_bar(lv_obj_t *parent)
         const uint16_t major_color = 0xC618;  // light grey
         const uint16_t minor_color = 0x8410;  // medium grey
         const int center_x = DISPLAY_H_RES / 2;
-        const int px_per_khz = DISPLAY_H_RES / 48;  // 15 px/kHz at 720
+        const float px_per_khz = (float)DISPLAY_H_RES / 48.0f;  // 26.67 at 1280 / 15 at 720
         for (int khz = -24; khz <= 24; khz += 3) {
-            int x = center_x + khz * px_per_khz;
+            int x = center_x + (int)(khz * px_per_khz);
             if (x < 0 || x >= DISPLAY_H_RES) continue;
             int is_major = (khz % 12 == 0);
             int h = is_major ? 10 : 5;
@@ -159,7 +159,7 @@ static void build_label_bar(lv_obj_t *parent)
 
     // Labels sit below the ticks
     const char *tick_labels[5] = { "-24k", "-12k", "0", "+12k", "+24k" };
-    const int tick_xs[5] = { 0, 180, 360, 540, 720 };
+    const int tick_xs[5] = { 0, 320, 640, 960, 1280 };
     for (int i = 0; i < 5; i++) {
         lv_obj_t *lbl = lv_label_create(bar);
         lv_label_set_text(lbl, tick_labels[i]);
@@ -468,6 +468,7 @@ static void touch_event_cb(lv_event_t *e)
 }
 
 // Hook into ui_update_frequency to track latest known QMX frequency
+
 
 
 
