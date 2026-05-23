@@ -4,6 +4,8 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "bsp/m5stack_tab5.h"
 #include "bsp/display.h"
 #include "esp_lvgl_port.h"
@@ -25,6 +27,21 @@ void display_unlock(void)
 esp_err_t display_init(lv_display_t **out_disp)
 {
     ESP_LOGI(TAG, "Bringing up display via local M5Stack BSP");
+
+    // Cold-boot fix: PI4IO expander holds LCD_RST and TP_RST low until configured.
+    // bsp_display_start_with_config does NOT do this for us; warm/soft resets only
+    // work because the expander retains state from the previous boot. Without these
+    // two calls, on a true power-on-from-off the panel never responds to DSI commands
+    // and esp_lcd_new_panel_io_dbi hangs forever in the read-FIFO wait loop.
+    ESP_ERROR_CHECK(bsp_i2c_init());
+    bsp_io_expander_pi4ioe_init(bsp_i2c_get_handle());
+    ESP_LOGI(TAG, "PI4IO expander initialized (LCD_RST + TP_RST released)");
+    // Let panel and touch chip come out of reset before the BSP probes I2C
+    // for the touch chip. Without this, the probe fires too fast on cold boot,
+    // the touch chip does not respond, BSP picks ST7703/ILI9881C path, but
+    // touch chip *does* respond by the time touch init runs -> driver mismatch
+    // -> assert in bsp_display_indev_init_to_st7123.
+    vTaskDelay(pdMS_TO_TICKS(120));
 
     bsp_display_cfg_t cfg = {
         .lvgl_port_cfg = {
@@ -63,5 +80,7 @@ esp_err_t display_init(lv_display_t **out_disp)
     if (out_disp) *out_disp = s_disp;
     return ESP_OK;
 }
+
+
 
 
