@@ -40,6 +40,10 @@ static lv_obj_t *s_status_label = NULL;
 static lv_obj_t *s_wf_canvas = NULL;
 static uint8_t *s_wf_canvas_buf = NULL;
 
+// Spectrum dB labels (Phase 5.4)
+static lv_obj_t *s_db_max_label = NULL;
+static lv_obj_t *s_db_min_label = NULL;
+
 // Spectrum canvas (Phase 5.1)
 static lv_obj_t *s_spec_canvas = NULL;
 static uint8_t *s_spec_canvas_buf = NULL;
@@ -112,6 +116,19 @@ static void build_spectrum(lv_obj_t *parent)
     lv_canvas_set_buffer(s_spec_canvas, s_spec_canvas_buf,
                          DISPLAY_H_RES, SPECTRUM_H, LV_COLOR_FORMAT_RGB565);
     lv_obj_align(s_spec_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    // Phase 5.4: dB range labels (top-left and bottom-left of spectrum)
+    s_db_max_label = lv_label_create(s_spectrum_obj);
+    lv_label_set_text(s_db_max_label, "");
+    lv_obj_set_style_text_color(s_db_max_label, lv_color_hex(0xC0C0C0), 0);
+    lv_obj_set_style_text_font(s_db_max_label, &lv_font_montserrat_14, 0);
+    lv_obj_align(s_db_max_label, LV_ALIGN_TOP_LEFT, 4, 2);
+
+    s_db_min_label = lv_label_create(s_spectrum_obj);
+    lv_label_set_text(s_db_min_label, "");
+    lv_obj_set_style_text_color(s_db_min_label, lv_color_hex(0xC0C0C0), 0);
+    lv_obj_set_style_text_font(s_db_min_label, &lv_font_montserrat_14, 0);
+    lv_obj_align(s_db_min_label, LV_ALIGN_BOTTOM_LEFT, 4, -2);
 }
 
 // ==== Label band (Phase 5.3): black strip between spectrum and waterfall with offset ticks ====
@@ -270,8 +287,30 @@ void ui_update_smeter(int s_units)
     // Placeholder
 }
 
-#define DB_MIN_DISPLAY   40.0f
-#define DB_MAX_DISPLAY  130.0f
+// Phase 5.4: was #define, now runtime-settable via ui_set_db_range()
+static float DB_MIN_DISPLAY = 40.0f;
+static float DB_MAX_DISPLAY = 130.0f;
+
+void ui_set_db_range(float db_min, float db_max)
+{
+    // Clamp to sane bounds
+    if (db_max - db_min < 10.0f) return;  // ignore degenerate ranges
+    DB_MIN_DISPLAY = db_min;
+    DB_MAX_DISPLAY = db_max;
+}
+
+void ui_set_db_labels(float db_min, float db_max)
+{
+    if (!s_db_max_label || !s_db_min_label) return;
+    char buf_max[16], buf_min[16];
+    snprintf(buf_max, sizeof(buf_max), "%.0f dB", (double)db_max);
+    snprintf(buf_min, sizeof(buf_min), "%.0f dB", (double)db_min);
+    if (display_lock(20)) {
+        lv_label_set_text(s_db_max_label, buf_max);
+        lv_label_set_text(s_db_min_label, buf_min);
+        display_unlock();
+    }
+}
 
 static inline int db_to_y(float db)
 {
@@ -468,6 +507,8 @@ static void touch_event_cb(lv_event_t *e)
 }
 
 // Hook into ui_update_frequency to track latest known QMX frequency
+
+
 
 
 
