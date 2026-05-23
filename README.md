@@ -1,158 +1,159 @@
-# QMX Panadapter
+# QMX+ Panadapter
 
-A standalone real-time spectrum analyzer and waterfall display for the [QRP Labs QMX / QMX+](https://qrp-labs.com/qmx.html) family of transceivers, running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/Tab5) (ESP32-P4, MIPI-DSI, 5" touchscreen).
+A standalone real-time panadapter — spectrum analyzer and waterfall — for the [QRP Labs QMX/QMX+](https://www.qrp-labs.com/qmxp.html) HF transceiver, running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 with a 5" 720×1280 touch display).
 
-The Tab5 connects to the QMX via a single USB cable. It draws I/Q audio over USB Audio Class (UAC) and controls the radio via USB CDC-ACM using the Kenwood TS-480 CAT protocol — no analog tap, no extra wiring.
+The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Tab5 connects to the QMX as a USB host, decodes the I/Q in real time on the ESP32-P4, and renders a touch-driven panadapter with tap-to-tune.
 
-## Current status
+---
 
-Working signal chain end-to-end:
+## Status
 
-> QMX RX → USB UAC (48 kHz, 24-bit I/Q) → Tab5 → 1024-pt complex FFT → spectrum canvas at 30 Hz
+Working. All phases through 6.2 complete.
 
-The live radio frequency is read from the QMX via CAT and displayed on screen. The spectrum updates in real time as the QMX hears RF.
+| Phase | What | Status |
+|-------|------|--------|
+| 1     | LVGL UI on Tab5 ST7123 display | done |
+| 2     | USB Host CDC-ACM, CAT poll, frequency display | done |
+| 3     | USB UAC audio streaming + ring buffer + DSP consumer | done |
+| 4     | esp-dsp FFT (1024-pt complex, Blackman-Harris) at 48 frames/s | done |
+| 5.1   | Real-time spectrum line graph @ 30 Hz | done |
+| 5.2   | Waterfall with classic SDR gradient + moving-pointer scroll | done |
+| 5.3   | Label band, offset ticks, dB grid | done |
+| 6.1   | Touch-to-tune via CAT FA, live cyan drag cursor | done |
+| 6.2   | Landscape rotation 1280×720 (LVGL software rotation) | done |
 
-![status](docs/status.png) <!-- replace with a real photo -->
+Open ideas: smoothing/autoscale (5.4), manual pre-rotated rendering to recover FPS (6.3), FT8 decoder, memory channels, WiFi station mode.
 
-### Done
-
-- **Phase 1** — LVGL UI on the ST7123 panel (M5Stack UserDemo BSP)
-- **Phase 2** — USB host + CDC-ACM + Kenwood CAT polling (live frequency display)
-- **Phase 3** — USB UAC audio streaming (48 kHz, 2 ch, 24-bit packed I/Q), decoded into a ring buffer
-- **Phase 4** — Real-time 1024-pt complex FFT with Blackman-Harris window via [esp-dsp](https://github.com/espressif/esp-dsp), ~48 frames/s
-- **Phase 5.1** — Spectrum line graph rendered to an LVGL canvas at 30 Hz, with proper FFT-shifted bin mapping (negative frequencies left, positive right)
-
-### Planned
-
-- **Phase 5.2** — Waterfall (scrolling spectrogram)
-- **Phase 5.3** — Frequency axis labels, dB grid
-- **Phase 5.4** — Averaging, autoscale, smoothing
-- Touch interaction (slip-tune, span control, reference level)
-- Memory channels, mode/filter display
-- NVS settings persistence
-- Optional FT8 decode (via [ft8_lib](https://github.com/kgoba/ft8_lib))
+---
 
 ## Hardware
 
-| Item | Notes |
-|---|---|
-| M5Stack Tab5 | ESP32-P4 v1.3 silicon, 32 MB hex PSRAM, ST7123 panel + touch, MIPI-DSI 1280×720 |
-| QRP Labs QMX+ | All-HF-band CW/SSB transceiver, USB composite (CDC + UAC) |
-| QRP Labs QMX | 20m and up, QRP version — also works as a target |
+- **M5Stack Tab5** with ESP32-P4 v1.3 (ECO2) silicon, ST7123 5" 720×1280 MIPI-DSI touch panel, 32 MB hex PSRAM
+- **QRP Labs QMX or QMX+** transceiver (Kenwood-style CAT, UAC audio)
+- USB-C OTG cable Tab5 ↔ QMX
 
-> **Important:** Steffen's Tab5 has the **ST7123** panel variant. The publicly distributed M5Stack Tab5 BSP (`espressif/m5stack_tab5` on the component registry) targets ILI9881C and **does not work** on the ST7123 variant. This project uses the local BSP from M5Stack's UserDemo as `components/m5stack_tab5/`.
+## Software requirements
 
-## Software stack
+- **ESP-IDF v5.4.4** — pinned, because:
+  - ESP32-P4 v1.3 silicon needs `CONFIG_ESP32P4_REV_MIN_0=y` and CPU capped at 360 MHz
+  - The local M5Stack UserDemo BSP is built against this IDF version
+- VS Code with the Espressif IDF extension (or any IDF-compatible setup)
+- Windows 11 + PowerShell (other platforms work fine, just no `qmx` helper)
 
-- **ESP-IDF v5.4.4** (pinned — required for v1.3 silicon + BSP compatibility)
-- **FreeRTOS** SMP
-- **LVGL v9.2.2**
-- **esp-dsp 1.8.2** (FFT and windows)
-- **espressif/usb_host_cdc_acm 2.4.0**
-- **espressif/usb_host_uac 1.4.0**
+## Build, flash, monitor
 
-CPU is capped at 360 MHz (not the 400 MHz default) — required for the v1.3 engineering-sample silicon.
+Standard IDF flow:
 
-## Architecture
+    idf.py build flash monitor
 
-```
-                                  ┌─────────────────────┐
-                                  │   M5Stack Tab5      │
-                                  │   ESP32-P4          │
-                                  │                     │
-   QMX+/QMX                       │  ┌───────────────┐  │
-   ┌────────┐   USB    CDC-ACM    │  │ cat task      │  │
-   │        │◄──────►  ──────────►├──│  (Kenwood)    │  │──► freq label
-   │  STM32 │          UAC RX     │  └───────────────┘  │
-   │ comp.  │  I/Q 48k/24b ─────► │  ┌───────────────┐  │
-   │  USB   │                     │  │ audio task    │  │
-   └────────┘                     │  │  ring buffer  │  │
-                                  │  └──────┬────────┘  │
-                                  │         ▼           │
-                                  │  ┌───────────────┐  │
-                                  │  │ fft task      │  │
-                                  │  │  esp-dsp      │  │
-                                  │  │  1024 cplx    │  │──► spectrum[1024]
-                                  │  └──────┬────────┘  │
-                                  │         ▼           │
-                                  │  ┌───────────────┐  │
-                                  │  │ render task   │  │
-                                  │  │  LVGL canvas  │  │──► MIPI-DSI panel
-                                  │  └───────────────┘  │
-                                  └─────────────────────┘
-```
+Or via the helper function in `$PROFILE` (see Tools section below):
 
-- `cat/` — USB CDC-ACM client, Kenwood CAT polling, frequency parsing
-- `audio/` — USB UAC client, 24-bit packed decode, ring buffer producer
-- `dsp/` — Blackman-Harris window + complex FFT + magnitude → dB
-- `render/` — 30 Hz canvas updater (Phase 5)
-- `ui/` — LVGL widgets, layout, canvas surface
-- `display/` — Local M5Stack BSP wrapper, LVGL port init
+    qmx fm      # build + flash + monitor
+    qmx b       # build only
+    qmx m       # monitor only
 
-## Build & flash
+Exit monitor with Ctrl+T then Ctrl+X.
 
-Prerequisites:
+## Layout (landscape 1280 × 720)
 
-- ESP-IDF v5.4.4 installed at `C:\esp\v5.4.4\esp-idf` (or equivalent)
-- M5Stack Tab5 with ST7123 panel
-- QRP Labs QMX or QMX+
+    +----------------------------------------------------------+
+    | Top bar (60 px)  freq | mode | s-meter | menu            |
+    +----------------------------------------------------------+
+    | Spectrum (200 px) green line + amber center + cyan touch |
+    |                   + horizontal dB grid                   |
+    +----------------------------------------------------------+
+    | Label band (18 px) -24k -12k 0 +12k +24k + tick marks    |
+    +----------------------------------------------------------+
+    | Waterfall (412 px) 1280 × 412, newest row at top         |
+    |                    classic SDR gradient                  |
+    +----------------------------------------------------------+
+    | Bottom bar (30 px) status, span, fps                     |
+    +----------------------------------------------------------+
 
-```powershell
-# One-time
-. C:\esp\v5.4.4\esp-idf\export.ps1
+## Touch-to-tune
 
-# Build & flash
-idf.py build
-idf.py -p COM3 flash monitor
-```
+- Touch anywhere on spectrum or waterfall → cyan cursor tracks your finger
+- Drag to position → cursor follows live
+- Lift → CAT `FA` command sent with rounded 10 Hz target; QMX retunes; spectrum re-centers on the tapped signal
+- Center cursor (amber, fixed at x=640) marks where the QMX is currently tuned
 
-`sdkconfig.defaults` already includes the required tunings:
+CAT writes are internally rate-limited to one per 200 ms; rapid taps within that window are dropped silently.
 
-```ini
-CONFIG_ESP32P4_REV_MIN_0=y
-CONFIG_SPIRAM_MODE_HEX=y
-CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=2048
-CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_360=y
-```
+## Project layout
 
-## Hard-won lessons
+    qmx-panadapter/
+    |-- main/
+    |   |-- main.c                  app_main, orchestration
+    |   |-- display/                LVGL bring-up via local BSP
+    |   |-- ui/                     LVGL widgets, touch handler, canvases
+    |   |-- cat/                    USB CDC-ACM + Kenwood CAT
+    |   |-- audio/                  USB UAC + ring buffer
+    |   |-- dsp/                    esp-dsp FFT, spectrum mutex
+    |   `-- render/                 30 Hz render task, spectrum + waterfall
+    |-- components/
+    |   |-- m5stack_tab5/                  M5Stack local BSP (ST7123 panel + touch)
+    |   `-- espressif__usb_host_uac/       Patched UAC component (see Quirks)
+    `-- managed_components/         Other deps fetched via idf_component.yml
 
-A few things that cost real time and may save you yours:
+## Quirks and trade-offs (read this!)
 
-- **`uac_host_install()` needs `create_background_task = true`.** Without it the UAC driver never gets `NEW_DEV` events even though the client is registered. Compositely, this is the single most opaque failure mode in the stack.
-- **The QMX delivers 24-bit packed PCM**, not 16-bit and not 24-in-32. Each stereo I/Q pair is exactly 6 bytes, little-endian signed. Misinterpret this and you'll see 1.5× sample rate and pinned peaks.
-- **Kenwood `FA;` response is 14 bytes** (not the 15 you might count). 11 digits between `FA` and `;`.
-- **`CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=2048` is required** — the QMX's composite config descriptor is 268 bytes, the default 256 buffer is too small and enumeration fails silently with `CHECK_SHORT_DEV_DESC FAILED`.
-- **ESP32-P4 chip revision must match the menuconfig minimum**, or you'll get an `Illegal instruction` at `call_start_cpu0` before any of your code runs. Set `CONFIG_ESP32P4_REV_MIN_0=y` for engineering-sample silicon.
-- **For panadapter use, do a complex FFT with I as real and Q as imaginary.** Real-only FFT throws away the sign of frequency offset from the LO — fine for a single SSB receiver, wrong for a panadapter.
-- **No antenna ≠ silence.** The QMX's LO leakage and ADC noise floor will easily peg the I/Q channels. With no antenna, expect `peak=32767` constantly — it's real RF, not a bug.
+A few decisions that matter and that someone (including future-me) will otherwise relearn the hard way.
+
+### Patched UAC component lives in `components/`
+
+`espressif/usb_host_uac` was hand-patched in Phase 3.2 to set `create_background_task = true` in `uac_host_install`. Without this, UAC and CDC-ACM cannot coexist on the same USB host on this hardware.
+
+Because the component manager refuses to clean `managed_components/` after a hand-patch, the component was moved permanently to `components/espressif__usb_host_uac/`. **Trade-off:** no auto-updates from the registry. If you want to update it, fetch a fresh copy, re-apply the patch, and replace the directory.
+
+### LVGL software rotation costs ~50% FPS
+
+The ST7123 panel is natively portrait 720×1280 and does *not* implement `esp_lcd_panel_swap_xy`. To get landscape, we use `bsp_display_cfg.sw_rotate=1` plus `lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_90)`.
+
+LVGL rotates every flush in software (`rotate90_rgb565`). Real-world impact on this hardware: spectrum FPS drops from ~22 (portrait) to ~13 (landscape).
+
+Acceptable for a panadapter — commercial radios in this class run 10–15 Hz waterfalls. If FPS ever feels insufficient, Phase 6.3 would render directly in panel-native orientation and bypass LVGL rotation entirely.
+
+### IDLE-task watchdog is disabled
+
+LVGL's rotation pipeline keeps CPU0 busy long enough that the IDLE0 task can't reset its watchdog within the default 5 s. The system isn't actually hung — it just doesn't yield to IDLE. We:
+
+- Disabled `CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0/CPU1`
+- Bumped `CONFIG_ESP_TASK_WDT_TIMEOUT_S` from 5 to 30 (safety net for genuinely stuck app tasks)
+
+Real hangs in our app tasks will still be caught. Idle starvation under LVGL load won't generate noise.
+
+### Engineering-sample silicon (ESP32-P4 v1.3)
+
+- Use `CONFIG_ESP32P4_REV_MIN_0=y` (the build will fault `Illegal instruction` if revision is set too high)
+- Cap CPU at 360 MHz (`CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ=360`)
+- Both already baked into `sdkconfig`
+
+### Waterfall scroll trick
+
+We allocate the waterfall canvas at 2× height (1280×824 RGB565). Each tick writes the new row at both `s_wf_head` and `s_wf_head + WATERFALL_H`, then decrements `s_wf_head` (with wrap). The canvas view pointer is moved through the buffer instead of `memmove`-ing. ~130 µs/tick instead of ~92 ms/tick.
+
+## Tools
+
+### `qmx` PowerShell helper
+
+Add to your `$PROFILE`. Adjust the COM port and IDF path:
+
+    function qmx {
+        param([string]$cmd = "fm")
+        if (-not $env:IDF_PATH) {
+            & C:\esp\v5.4.4\esp-idf\export.ps1
+        }
+        switch ($cmd) {
+            "b"   { idf.py build }
+            "f"   { idf.py flash }
+            "m"   { python -m esp_idf_monitor -p COM3 build\qmx_panadapter.elf }
+            "fm"  { idf.py flash; python -m esp_idf_monitor -p COM3 build\qmx_panadapter.elf }
+            "bfm" { idf.py build flash; python -m esp_idf_monitor -p COM3 build\qmx_panadapter.elf }
+        }
+    }
+
+Exit monitor with `Ctrl+T` then `Ctrl+X` (works on Danish/non-US keyboard layouts where `Ctrl+]` is awkward).
 
 ## License
 
-MIT License
-
-Copyright (c) 2026 Steffen Lav, OZ1LAV
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
-
-## Author
-
-Steffen Lav OZ1LAV — ham radio operator, embedded developer.
-Built across a generous handful of late-night sessions with [Claude](https://claude.ai) as a pair-programming companion.
+MIT (see LICENSE).
