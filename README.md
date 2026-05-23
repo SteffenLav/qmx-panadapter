@@ -8,7 +8,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 ## Status
 
-Working. All phases through 6.2 complete.
+Working. All phases through 6.2 complete, with cold-boot reliability fix.
 
 | Phase | What | Status |
 |-------|------|--------|
@@ -19,10 +19,12 @@ Working. All phases through 6.2 complete.
 | 5.1   | Real-time spectrum line graph @ 30 Hz | done |
 | 5.2   | Waterfall with classic SDR gradient + moving-pointer scroll | done |
 | 5.3   | Label band, offset ticks, dB grid | done |
+| 5.4   | EMA spectrum smoothing + autoscaling dB range with live labels | done |
 | 6.1   | Touch-to-tune via CAT FA, live cyan drag cursor | done |
 | 6.2   | Landscape rotation 1280×720 (LVGL software rotation) | done |
+| —     | Cold-boot fix (PI4IO expander init for LCD_RST / TP_RST) | done |
 
-Open ideas: smoothing/autoscale (5.4), manual pre-rotated rendering to recover FPS (6.3), FT8 decoder, memory channels, WiFi station mode.
+Open ideas: manual pre-rotated rendering to recover FPS (6.3), FT8 decoder, memory channels, WiFi station mode.
 
 ---
 
@@ -60,7 +62,7 @@ Exit monitor with Ctrl+T then Ctrl+X.
     | Top bar (60 px)  freq | mode | s-meter | menu            |
     +----------------------------------------------------------+
     | Spectrum (200 px) green line + amber center + cyan touch |
-    |                   + horizontal dB grid                   |
+    |                   + horizontal dB grid + live dB labels  |
     +----------------------------------------------------------+
     | Label band (18 px) -24k -12k 0 +12k +24k + tick marks    |
     +----------------------------------------------------------+
@@ -79,6 +81,12 @@ Exit monitor with Ctrl+T then Ctrl+X.
 
 CAT writes are internally rate-limited to one per 200 ms; rapid taps within that window are dropped silently.
 
+## Spectrum smoothing and autoscale (Phase 5.4)
+
+The spectrum is smoothed per bin with an exponential moving average (α = 0.4) before display, balancing visual stability against the snappy response needed to see real signals (CW, SSB attack).
+
+The dB display range is autoscaled once per second using the median of the spectrum (approximating the noise floor) and the maximum bin (the loudest signal). New range is `[median - 10 dB, max + 5 dB]`, clamped to a 40-120 dB span. Top-left and bottom-left labels on the spectrum show the current range and update with autoscale.
+
 ## Project layout
 
     qmx-panadapter/
@@ -89,7 +97,7 @@ CAT writes are internally rate-limited to one per 200 ms; rapid taps within that
     |   |-- cat/                    USB CDC-ACM + Kenwood CAT
     |   |-- audio/                  USB UAC + ring buffer
     |   |-- dsp/                    esp-dsp FFT, spectrum mutex
-    |   `-- render/                 30 Hz render task, spectrum + waterfall
+    |   `-- render/                 30 Hz render task, smoothing, autoscale
     |-- components/
     |   |-- m5stack_tab5/                  M5Stack local BSP (ST7123 panel + touch)
     |   `-- espressif__usb_host_uac/       Patched UAC component (see Quirks)
@@ -98,6 +106,14 @@ CAT writes are internally rate-limited to one per 200 ms; rapid taps within that
 ## Quirks and trade-offs (read this!)
 
 A few decisions that matter and that someone (including future-me) will otherwise relearn the hard way.
+
+### PI4IO expander must be initialized explicitly before display bring-up
+
+The Tab5's PI4IO I/O expander holds `LCD_RST` and `TP_RST` low at chip power-on. The BSP's `bsp_display_start_with_config` does **not** call `bsp_io_expander_pi4ioe_init` internally. Without it, on a true cold boot the panel never comes out of reset, doesn't respond to DSI commands, and `esp_lcd_new_panel_io_dbi` hangs forever in the read FIFO wait loop.
+
+Soft resets and USB-tethered development mask this entirely: the expander is a separate I²C peripheral that retains its state across ESP32 resets, so LCD_RST and TP_RST stay high from the previous boot.
+
+Our `display_init` calls `bsp_i2c_init()` + `bsp_io_expander_pi4ioe_init(bsp_i2c_get_handle())` at the very start, then waits 120 ms for both chips to come out of reset before letting the BSP probe I²C for the touch controller. Without that delay, the probe runs too fast on cold boot, falls back to ILI9881C panel, then mismatches with the (now-responding) ST7123 touch chip and asserts.
 
 ### Patched UAC component lives in `components/`
 
