@@ -281,7 +281,7 @@ void bsp_io_expander_pi4ioe_init(i2c_master_bus_handle_t bus_handle)
     write_buf[0] = PI4IO_REG_OUT_SET;
     write_buf[1] = 0b01000110;  /* P4=0 P5=0: LCD_RST + TP_RST asserted (low) */
     i2c_master_transmit(i2c_dev_handle_pi4ioe1, write_buf, 2, I2C_MASTER_TIMEOUT_MS);
-    vTaskDelay(pdMS_TO_TICKS(20));
+    vTaskDelay(pdMS_TO_TICKS(50));
     write_buf[0] = PI4IO_REG_OUT_SET;
     write_buf[1] = 0b01110110;  /* P4=1 P5=1: release reset */
     i2c_master_transmit(i2c_dev_handle_pi4ioe1, write_buf, 2, I2C_MASTER_TIMEOUT_MS);
