@@ -1,0 +1,225 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 780" font-family="ui-monospace, 'Courier New', monospace">
+  <title>Tab5 panadapter — ideal display at 14.000 MHz CW</title>
+  <desc>Mockup of the Tab5 panadapter showing CW activity around 14.000 MHz with spectrum trace on top and waterfall below, as the display would look with all design goals met.</desc>
+
+  <!-- Outer black frame -->
+  <rect x="0" y="0" width="1280" height="780" fill="#000"/>
+
+  <!-- Top status bar -->
+  <rect x="0" y="0" width="1280" height="30" fill="#0a0a0a"/>
+  <line x1="0" y1="30" x2="1280" y2="30" stroke="#1a1a1a" stroke-width="1"/>
+  <g font-size="11" fill="#888">
+    <text x="12" y="19" fill="#fd00aa">QMX+ • CW</text>
+    <text x="120" y="19">USB: <tspan fill="#4ade80">●</tspan> linked</text>
+    <text x="240" y="19">I/Q: 48 kHz</text>
+    <text x="1050" y="19">FFT 1024</text>
+    <text x="1140" y="19">FPS 30</text>
+    <text x="1210" y="19">RAM 41%</text>
+  </g>
+
+  <!-- ===== SPECTRUM PANE ===== -->
+  <rect x="0" y="30" width="1280" height="276" fill="#050505"/>
+
+  <g stroke="#1a1a1a" stroke-width="1">
+    <line x1="0" y1="70" x2="1280" y2="70"/>
+    <line x1="0" y1="110" x2="1280" y2="110"/>
+    <line x1="0" y1="150" x2="1280" y2="150"/>
+    <line x1="0" y1="190" x2="1280" y2="190"/>
+    <line x1="0" y1="230" x2="1280" y2="230"/>
+    <line x1="0" y1="270" x2="1280" y2="270"/>
+  </g>
+  <g font-size="10" fill="#666">
+    <text x="6" y="74">-40 dB</text>
+    <text x="6" y="114">-50</text>
+    <text x="6" y="154">-60</text>
+    <text x="6" y="194">-70</text>
+    <text x="6" y="234">-80</text>
+    <text x="6" y="274">-90</text>
+  </g>
+
+  <g stroke="#1a1a1a" stroke-width="1">
+    <line x1="160" y1="30" x2="160" y2="306"/>
+    <line x1="373" y1="30" x2="373" y2="306"/>
+    <line x1="587" y1="30" x2="587" y2="306"/>
+    <line x1="800" y1="30" x2="800" y2="306"/>
+    <line x1="907" y1="30" x2="907" y2="306"/>
+    <line x1="1013" y1="30" x2="1013" y2="306"/>
+    <line x1="1120" y1="30" x2="1120" y2="306"/>
+  </g>
+
+  <polygon
+    points="0,255 8,252 14,254 20,249 28,253 36,251 42,248 48,252 54,250 60,247 68,251 74,250
+            82,249 88,251 92,170 96,210 100,252 108,249 114,253 120,251 126,250 132,252 138,249 144,251
+            150,110 154,170 158,230 164,252 170,249 178,251 184,253 190,250 196,248 202,251 208,249
+            214,252 220,250 226,248 230,200 234,240 238,252 244,249 250,251 256,248 262,252 268,250
+            276,249 282,251 288,253 294,250 300,248 306,251 312,249 316,180 320,230 324,252 330,250 336,248
+            344,251 350,249 358,252 364,250 370,248 378,251 384,249 390,252 396,250 402,248 408,251
+            414,249 420,252 426,250 432,248 438,251 444,249 448,120 452,200 456,240 460,252 468,249 474,251
+            480,248 486,252 492,250 498,249 504,251 510,253 516,250 522,248 528,251 534,249 540,252
+            548,250 554,248 560,251 566,249 572,252 578,250 584,248 592,251 598,249 604,252 610,250
+            614,190 618,235 622,252 628,249 634,251 640,248
+            646,60 650,120 654,200 658,240 662,252
+            668,249 674,251 680,253 686,250 692,248 698,251 704,249 710,252 716,250 722,248
+            728,251 734,249 740,252 746,250 752,248 758,251 764,249 770,252 776,250 782,248
+            788,251 794,249 800,252 806,250 812,248 818,251 824,249 828,140 832,210 836,245 840,252
+            846,249 852,251 858,253 864,250 870,248 876,251 882,249 888,252 894,250 900,248
+            908,251 914,249 920,252 926,250 932,248 938,251 944,249 950,252 956,250 962,248
+            968,251 974,249 980,252 986,250 990,180 994,230 998,252
+            1004,249 1010,251 1016,253 1022,250 1028,248 1034,251 1040,249 1046,252 1052,250
+            1058,248 1064,251 1070,249 1076,252 1082,250 1088,248 1094,251 1100,249 1106,252
+    1112,250 1118,248 1124,251 1130,249 1136,252 1142,250
+    1148,90 1152,170 1156,230 1160,252
+    1166,249 1172,251 1178,253 1184,250 1190,248 1196,251 1202,249 1208,252 1214,250
+    1220,248 1226,251 1232,249 1238,252 1244,250 1250,248 1256,251 1262,249 1268,252 1280,252
+    1280,306 0,306"
+    fill="#39ff14" fill-opacity="0.18" stroke="#39ff14" stroke-width="1.2" stroke-linejoin="round"/>
+
+  <!-- VFO line and label -->
+  <line x1="640" y1="30" x2="640" y2="306" stroke="#fd00aa" stroke-width="1.5" stroke-dasharray="3,3" opacity="0.9"/>
+  <rect x="618" y="34" width="44" height="14" rx="2" fill="#fd00aa"/>
+  <text x="640" y="44" text-anchor="middle" font-size="10" font-weight="500" fill="#000">VFO</text>
+
+  <!-- CW filter passband -->
+  <rect x="652" y="30" width="13" height="276" fill="#fd00aa" fill-opacity="0.12"/>
+
+  <!-- Frequency axis -->
+  <rect x="0" y="306" width="1280" height="28" fill="#0d0d0d" stroke="#1a1a1a" stroke-width="1"/>
+  <g font-size="11" fill="#aaa" text-anchor="middle">
+    <text x="50" y="323">13.980</text>
+    <text x="160" y="323">13.985</text>
+    <text x="373" y="323">13.990</text>
+    <text x="587" y="323">13.995</text>
+    <text x="640" y="323" fill="#fd00aa" font-weight="500">14.000</text>
+    <text x="693" y="323">14.005</text>
+    <text x="907" y="323">14.010</text>
+    <text x="1120" y="323">14.015</text>
+    <text x="1230" y="323">14.020</text>
+  </g>
+  <g stroke="#555" stroke-width="1">
+    <line x1="50" y1="306" x2="50" y2="311"/>
+    <line x1="160" y1="306" x2="160" y2="311"/>
+    <line x1="373" y1="306" x2="373" y2="311"/>
+    <line x1="587" y1="306" x2="587" y2="311"/>
+    <line x1="640" y1="306" x2="640" y2="313"/>
+    <line x1="693" y1="306" x2="693" y2="311"/>
+    <line x1="907" y1="306" x2="907" y2="311"/>
+    <line x1="1120" y1="306" x2="1120" y2="311"/>
+    <line x1="1230" y1="306" x2="1230" y2="311"/>
+  </g>
+
+  <!-- ===== WATERFALL ===== -->
+  <rect x="0" y="334" width="1280" height="416" fill="#020010"/>
+  <rect x="0" y="334" width="1280" height="416" fill="#1a1a4a" fill-opacity="0.4"/>
+
+  <g opacity="0.25">
+    <rect x="0" y="334" width="1280" height="3" fill="#2a2a6a"/>
+    <rect x="0" y="346" width="1280" height="2" fill="#15154a"/>
+    <rect x="0" y="362" width="1280" height="3" fill="#252560"/>
+    <rect x="0" y="388" width="1280" height="2" fill="#1a1a55"/>
+    <rect x="0" y="414" width="1280" height="3" fill="#252560"/>
+    <rect x="0" y="440" width="1280" height="2" fill="#15154a"/>
+    <rect x="0" y="468" width="1280" height="3" fill="#2a2a6a"/>
+    <rect x="0" y="498" width="1280" height="2" fill="#15154a"/>
+    <rect x="0" y="530" width="1280" height="3" fill="#252560"/>
+    <rect x="0" y="568" width="1280" height="2" fill="#1a1a55"/>
+    <rect x="0" y="602" width="1280" height="3" fill="#2a2a6a"/>
+    <rect x="0" y="638" width="1280" height="2" fill="#15154a"/>
+    <rect x="0" y="674" width="1280" height="3" fill="#252560"/>
+    <rect x="0" y="712" width="1280" height="2" fill="#1a1a55"/>
+    <rect x="0" y="740" width="1280" height="3" fill="#2a2a6a"/>
+  </g>
+
+  <g fill="#4488cc" fill-opacity="0.7">
+    <rect x="92" y="340" width="2" height="80"/>
+    <rect x="92" y="440" width="2" height="40"/>
+    <rect x="92" y="500" width="2" height="60"/>
+    <rect x="92" y="590" width="2" height="30"/>
+  </g>
+
+  <g fill="#00ddee">
+    <rect x="151" y="336" width="2" height="100"/>
+    <rect x="151" y="450" width="2" height="50"/>
+    <rect x="151" y="520" width="2" height="80"/>
+    <rect x="151" y="620" width="2" height="40"/>
+    <rect x="151" y="680" width="2" height="60"/>
+  </g>
+  <rect x="151" y="334" width="2" height="416" fill="#00ddee" fill-opacity="0.6"/>
+
+  <g fill="#88dd44">
+    <rect x="231" y="336" width="2" height="20"/>
+    <rect x="231" y="362" width="2" height="40"/>
+    <rect x="231" y="410" width="2" height="20"/>
+  </g>
+  <rect x="231" y="336" width="2" height="100" fill="#88dd44" fill-opacity="0.4"/>
+
+  <g fill="#ffdd00">
+    <rect x="317" y="336" width="2" height="110"/>
+    <rect x="317" y="460" width="2" height="60"/>
+    <rect x="317" y="530" width="2" height="40"/>
+    <rect x="317" y="590" width="2" height="80"/>
+    <rect x="317" y="690" width="2" height="50"/>
+  </g>
+  <rect x="317" y="336" width="2" height="416" fill="#ffdd00" fill-opacity="0.55"/>
+
+  <g fill="#00ddee">
+    <rect x="449" y="336" width="2" height="60"/>
+    <rect x="449" y="410" width="2" height="40"/>
+    <rect x="449" y="470" width="2" height="50"/>
+  </g>
+  <rect x="449" y="336" width="2" height="200" fill="#00ddee" fill-opacity="0.5"/>
+
+  <g fill="#88dd44">
+    <rect x="615" y="350" width="2" height="80"/>
+    <rect x="615" y="440" width="2" height="50"/>
+    <rect x="615" y="510" width="2" height="70"/>
+    <rect x="615" y="600" width="2" height="40"/>
+  </g>
+  <rect x="615" y="336" width="2" height="416" fill="#88dd44" fill-opacity="0.45"/>
+
+  <rect x="647" y="336" width="3" height="416" fill="#ff3366"/>
+  <g fill="#ffaa00">
+    <rect x="647" y="336" width="3" height="120"/>
+    <rect x="647" y="480" width="3" height="80"/>
+    <rect x="647" y="590" width="3" height="100"/>
+  </g>
+  <rect x="645" y="336" width="7" height="416" fill="#ff3366" fill-opacity="0.3"/>
+
+  <g fill="#ffdd00">
+    <rect x="829" y="336" width="2" height="90"/>
+    <rect x="829" y="450" width="2" height="50"/>
+    <rect x="829" y="520" width="2" height="70"/>
+    <rect x="829" y="610" width="2" height="40"/>
+    <rect x="829" y="670" width="2" height="60"/>
+  </g>
+  <rect x="829" y="336" width="2" height="416" fill="#ffdd00" fill-opacity="0.5"/>
+
+  <g fill="#00ddee">
+    <rect x="991" y="350" width="2" height="60"/>
+    <rect x="991" y="430" width="2" height="40"/>
+    <rect x="991" y="500" width="2" height="80"/>
+    <rect x="991" y="600" width="2" height="50"/>
+  </g>
+  <rect x="991" y="336" width="2" height="416" fill="#00ddee" fill-opacity="0.5"/>
+
+  <g fill="#4488cc" fill-opacity="0.5">
+    <rect x="1149" y="530" width="2" height="60"/>
+    <rect x="1149" y="610" width="2" height="50"/>
+    <rect x="1149" y="680" width="2" height="40"/>
+  </g>
+
+  <line x1="640" y1="334" x2="640" y2="750" stroke="#fd00aa" stroke-width="1" stroke-dasharray="4,4" opacity="0.7"/>
+  <rect x="652" y="334" width="13" height="416" fill="#fd00aa" fill-opacity="0.08"/>
+
+  <!-- Bottom info bar -->
+  <rect x="0" y="750" width="1280" height="30" fill="#0a0a0a"/>
+  <line x1="0" y1="750" x2="1280" y2="750" stroke="#1a1a1a" stroke-width="1"/>
+  <g font-size="11" fill="#888">
+    <text x="12" y="769">Span: 48 kHz</text>
+    <text x="120" y="769">RBW: 47 Hz</text>
+    <text x="220" y="769">Avg: EMA 0.4</text>
+    <text x="880" y="769" fill="#fd00aa">● VFO 14.000 000</text>
+    <text x="1060" y="769">Mode CW-U</text>
+    <text x="1170" y="769">RF +20 dB</text>
+  </g>
+</svg>
