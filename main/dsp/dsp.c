@@ -6,6 +6,12 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
+
+// Phase 5.6: enable DC blocker on I/Q stream before FFT (standard SDR hygiene)
+// Set to 0 to bypass.
+#ifndef DSP_DC_BLOCKER
+#define DSP_DC_BLOCKER 1
+#endif
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -152,6 +158,28 @@ static void fft_task(void *arg)
             got += r;
         }
 
+        // DC blocker (Phase 5.6): one-pole IIR per QUISK sound.c / Lyons UDSP 3rd ed. p.762
+        // ~100 Hz high-pass at Fs=48 kHz; removes any slow drift on I and Q channels.
+        // QMX has 12 kHz IF so there is no useful signal at DC anyway.
+#if DSP_DC_BLOCKER
+        {
+            static float dc_state_I = 0.0f;
+            static float dc_state_Q = 0.0f;
+            const float alpha = 0.9869f;  // omega = pi * 100 / (48000/2) -> alpha per QUISK formula
+            for (int i = 0; i < DSP_FFT_SIZE; i++) {
+                float xI = (float)samples[2*i];
+                float xQ = (float)samples[2*i + 1];
+                float cI = xI + dc_state_I * alpha;
+                float cQ = xQ + dc_state_Q * alpha;
+                float yI = cI - dc_state_I;
+                float yQ = cQ - dc_state_Q;
+                dc_state_I = cI;
+                dc_state_Q = cQ;
+                samples[2*i]     = (int16_t)yI;
+                samples[2*i + 1] = (int16_t)yQ;
+            }
+        }
+#endif
         // Apply window and pack into interleaved complex (I=real, Q=imag).
         // samples[] is interleaved L,R,L,R,... where L = I, R = Q.
         for (int i = 0; i < DSP_FFT_SIZE; i++) {
