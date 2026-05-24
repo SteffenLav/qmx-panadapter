@@ -37,6 +37,14 @@ static lv_obj_t *s_spectrum_obj = NULL;
 static lv_obj_t *s_waterfall_obj = NULL;
 static lv_obj_t *s_status_label = NULL;
 
+// Phase 5.5: static defaults — manual Ref/Range, user-controlled later
+// (internal arbitrary dB scale; ~80=noise floor, ~125=strong signal on test rig)
+static float DB_MIN_DISPLAY = 80.0f;
+static float DB_MAX_DISPLAY = 140.0f;
+
+// Forward decl so build_spectrum can call this
+static void ui_set_db_labels_internal(float db_min, float db_max);
+
 static lv_obj_t *s_wf_canvas = NULL;
 static uint8_t *s_wf_canvas_buf = NULL;
 
@@ -129,6 +137,13 @@ static void build_spectrum(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_db_min_label, lv_color_hex(0xC0C0C0), 0);
     lv_obj_set_style_text_font(s_db_min_label, &lv_font_montserrat_14, 0);
     lv_obj_align(s_db_min_label, LV_ALIGN_BOTTOM_LEFT, 4, -2);
+
+    // Phase 5.5: show static defaults immediately (no autoscale to update them)
+    char buf_max[16], buf_min[16];
+    snprintf(buf_max, sizeof(buf_max), "%.0f dB", (double)DB_MAX_DISPLAY);
+    snprintf(buf_min, sizeof(buf_min), "%.0f dB", (double)DB_MIN_DISPLAY);
+    lv_label_set_text(s_db_max_label, buf_max);
+    lv_label_set_text(s_db_min_label, buf_min);
 }
 
 // ==== Label band (Phase 5.3): black strip between spectrum and waterfall with offset ticks ====
@@ -287,9 +302,6 @@ void ui_update_smeter(int s_units)
     // Placeholder
 }
 
-// Phase 5.4: was #define, now runtime-settable via ui_set_db_range()
-static float DB_MIN_DISPLAY = 40.0f;
-static float DB_MAX_DISPLAY = 130.0f;
 
 void ui_set_db_range(float db_min, float db_max)
 {
@@ -297,6 +309,8 @@ void ui_set_db_range(float db_min, float db_max)
     if (db_max - db_min < 10.0f) return;  // ignore degenerate ranges
     DB_MIN_DISPLAY = db_min;
     DB_MAX_DISPLAY = db_max;
+    // Refresh labels so any caller (menu, one-shot auto, NVS load) sees the change
+    ui_set_db_labels(db_min, db_max);
 }
 
 void ui_set_db_labels(float db_min, float db_max)
@@ -507,6 +521,8 @@ static void touch_event_cb(lv_event_t *e)
 }
 
 // Hook into ui_update_frequency to track latest known QMX frequency
+
+
 
 
 

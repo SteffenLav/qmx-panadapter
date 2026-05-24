@@ -216,10 +216,10 @@ static void process_rx(void)
         const uint8_t *p = raw + 6*i;
         int32_t L = s24_to_s32(p);
         int32_t R = s24_to_s32(p + 3);
-        // Scale 24-bit to 16-bit via arithmetic shift right by 8.
+        // Scale 24-bit to 16-bit via arithmetic shift right by 9.
         // Saturate to int16 range just to be safe.
-        int32_t Ls = L >> 8;
-        int32_t Rs = R >> 8;
+        int32_t Ls = L >> 9;
+        int32_t Rs = R >> 9;
         if (Ls > 32767) Ls = 32767; else if (Ls < -32768) Ls = -32768;
         if (Rs > 32767) Rs = 32767; else if (Rs < -32768) Rs = -32768;
 
