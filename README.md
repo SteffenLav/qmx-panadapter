@@ -4,6 +4,10 @@ A standalone real-time panadapter — spectrum analyzer and waterfall — for th
 
 The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Tab5 connects to the QMX as a USB host, decodes the I/Q in real time on the ESP32-P4, and renders a touch-driven panadapter with tap-to-tune.
 
+![Panadapter display — QMX+ tuned to 14.000 MHz with CW activity](docs/panadapter-mockup-ideal.svg)
+
+*The display in action: 48 kHz of spectrum centered on the QMX VFO, live FFT trace on top, scrolling waterfall below, magenta VFO marker with CW filter passband shading. See [`docs/panadapter-display-design.md`](docs/panadapter-display-design.md) for the design notes including the hardware artifacts (DC spike, I/Q image) you'll see in practice.*
+
 ---
 
 ## Status
@@ -24,7 +28,7 @@ Working. All phases through 6.2 complete, with cold-boot reliability fix.
 | 6.2   | Landscape rotation 1280×720 (LVGL software rotation) | done |
 | —     | Cold-boot fix (PI4IO expander init for LCD_RST / TP_RST) | done |
 
-Open ideas: manual pre-rotated rendering to recover FPS (6.3), FT8 decoder, memory channels, WiFi station mode.
+See the [Roadmap](#roadmap) at the bottom for what's next.
 
 ---
 
@@ -101,6 +105,9 @@ The dB display range is autoscaled once per second using the median of the spect
     |-- components/
     |   |-- m5stack_tab5/                  M5Stack local BSP (ST7123 panel + touch)
     |   `-- espressif__usb_host_uac/       Patched UAC component (see Quirks)
+    |-- docs/
+    |   |-- architecture.md                Overall signal path
+    |   `-- panadapter-display-design.md   Display mockups + DC-spike / I/Q image notes
     `-- managed_components/         Other deps fetched via idf_component.yml
 
 ## Quirks and trade-offs (read this!)
@@ -169,6 +176,35 @@ Add to your `$PROFILE`. Adjust the COM port and IDF path:
     }
 
 Exit monitor with `Ctrl+T` then `Ctrl+X` (works on Danish/non-US keyboard layouts where `Ctrl+]` is awkward).
+
+---
+
+## Roadmap
+
+### Next up
+
+Concrete items planned for the near term, in roughly the order they'll likely be tackled.
+
+- **Phase 6.3 — Native-orientation rendering.** Render directly in the panel's native portrait coordinates and skip LVGL's software rotation, recovering the ~50% FPS lost to `rotate90_rgb565`. The display still appears landscape because the device is held that way; only the pixel layout changes.
+- **DC-spike suppression.** Mask the center 3 FFT bins for v1; later, add a time-domain running-mean DC block on the I/Q stream before the FFT. See [`docs/panadapter-display-design.md`](docs/panadapter-display-design.md) for background.
+- **NVS settings persistence.** Survive power cycles for user preferences: last VFO, autoscale state, EMA α, waterfall colour map. Foundation for everything else in this list.
+- **Memory channels.** Quick-recall frequency presets — touch a slot, QMX retunes via CAT. Stored in NVS.
+- **I/Q balance correction.** Per-band amplitude/phase coefficients applied before the FFT to push image rejection from the native ~30 dB to 50+ dB. One-time calibration step per band.
+
+### Longer term
+
+Ideas that fit the project but aren't on the immediate path. Order is rough; appetite and curiosity will decide.
+
+- **FT8 decoder onboard.** Integrate [`ft8_lib`](https://github.com/kgoba/ft8_lib) using the existing audio pipeline (decimated to 12 kHz IF inside the QMX, or done locally from I/Q). Show decoded callsigns/grids overlaid on the spectrum at their carrier frequencies — a feature no commercial standalone panadapter currently offers.
+- **CW decoder.** A Goertzel-based decoder on the demodulated CW passband, with text scrolling under the spectrum. The QMX itself already does this internally; question is whether to mirror its output via CAT or run a parallel decoder on the Tab5.
+- **WiFi station mode + web UI.** ESP32-P4 has WiFi via the C6 co-processor. A small web server (Mongoose or `esp_http_server`) could expose the spectrum as a remote panadapter, with the Tab5 acting as a head unit at the rig.
+- **Network CAT bridge.** TCP server forwarding CAT to the QMX, so WSJT-X / fldigi / N1MM on a PC can talk to the radio through the Tab5 — useful when the QMX is in the shack and the operating position is elsewhere.
+- **QMX (small) support.** Same UI, different USB endpoint config and band table. Should be mostly a build-flag matter; the 5-band QMX speaks the same CAT and UAC.
+- **Extended waterfall history.** PSRAM has plenty of room for several minutes of scrollback. Two-finger drag to scrub through history would be a natural UX fit.
+- **Touch-to-tune refinements.** Pinch-to-zoom span (sub-48 kHz windows), drag-to-pan inside the current 48 kHz, snap-to-strongest-bin, configurable cursor offset for CW tone preference.
+- **DSP polish.** Noise reduction, auto-notch, denoise — the feature surface the QuantumSDR Spectrum DSP M4 defines as the boutique-standalone target.
+
+---
 
 ## License
 
