@@ -48,6 +48,7 @@ static lv_obj_t *s_mode_label = NULL;
 static lv_obj_t *s_spectrum_obj = NULL;
 static lv_obj_t *s_waterfall_obj = NULL;
 static lv_obj_t *s_status_label = NULL;
+static lv_obj_t *s_burger_btn = NULL;  // Phase 5.10I: kept for foreground move after all UI built
 
 // Phase 5.10D Stage 2: settings drawer state
 static lv_obj_t *s_drawer = NULL;
@@ -128,12 +129,18 @@ static void build_top_bar(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_smeter_label, &lv_font_montserrat_20, 0);
     lv_obj_align(s_smeter_label, LV_ALIGN_CENTER, 320, 0);  // Phase 5.10D: centered in right half
 
-    lv_obj_t *btn = lv_btn_create(bar);
-    lv_obj_set_size(btn, 60, 44);
-    lv_obj_align(btn, LV_ALIGN_RIGHT_MID, -4, 0);
-    lv_obj_add_event_cb(btn, settings_button_cb, LV_EVENT_CLICKED, NULL);  // Phase 5.10D
-    lv_obj_t *blbl = lv_label_create(btn);
+    // Phase 5.10I: 80x80 burger, overflows downward into the spectrum.
+    // Top bar stays at 60 px; clip content disabled so button can be larger.
+    // Phase 5.10I: parent burger to the SCREEN, not the top bar.
+    // Avoids the top bar's clipping issue. Positioned absolutely so it
+    // straddles the top bar boundary and extends into the spectrum area.
+    s_burger_btn = lv_btn_create(parent);  /* parent = screen */
+    lv_obj_set_size(s_burger_btn, 80, 80);
+    lv_obj_align(s_burger_btn, LV_ALIGN_TOP_RIGHT, -4, 10);
+    lv_obj_add_event_cb(s_burger_btn, settings_button_cb, LV_EVENT_CLICKED, NULL);  // Phase 5.10D
+    lv_obj_t *blbl = lv_label_create(s_burger_btn);
     lv_label_set_text(blbl, LV_SYMBOL_LIST);
+    lv_obj_set_style_text_font(blbl, &lv_font_montserrat_32, 0);  // Phase 5.10I: fill the 80x80 button, but not too prominent
     lv_obj_center(blbl);
 }
 
@@ -348,6 +355,8 @@ void ui_init(lv_display_t *disp)
 
     display_unlock();
 
+    // Phase 5.10I: ensure the oversized burger sits on top of everything
+    if (s_burger_btn) lv_obj_move_foreground(s_burger_btn);
     ESP_LOGI(TAG, "UI built: top=%dpx spectrum=%dpx labels=%dpx waterfall=%dpx bottom=%dpx",
              TOP_BAR_H, SPECTRUM_H, LABEL_BAR_H, WATERFALL_H, BOTTOM_BAR_H);
 }
@@ -744,8 +753,8 @@ static void touch_event_cb(lv_event_t *e)
         // Burger is at top-right (~x=1216..1276, ~y=top bar). Block touches
         // landing in a 180x80 region in the top-right of the spectrum so a
         // wide finger pressing the button doesn't also retune.
-        if (p.x >= 1100 && p.y < 80) {
-            ESP_LOGI("ui_touch", "RELEASED in burger deadzone (x=%d y=%d) - ignored", (int)p.x, (int)p.y);
+        if (p.x >= 1080 && p.y < 120) {  // Phase 5.10I: enlarged for 80x80 burger
+            ESP_LOGI("ui_touch", "RELEASED in burger deadzone (200x120) (x=%d y=%d) - ignored", (int)p.x, (int)p.y);
             return;
         }
 
@@ -848,12 +857,14 @@ static void drawer_build(void)
     lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
 
+    // Phase 5.10I: bigger close target (80x80 matching the burger)
     lv_obj_t *close_btn = lv_btn_create(s_drawer);
-    lv_obj_set_size(close_btn, 56, 44);
+    lv_obj_set_size(close_btn, 80, 80);
     lv_obj_align(close_btn, LV_ALIGN_TOP_RIGHT, 0, 0);
     lv_obj_add_event_cb(close_btn, drawer_close_button_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *close_lbl = lv_label_create(close_btn);
     lv_label_set_text(close_lbl, LV_SYMBOL_CLOSE);
+    lv_obj_set_style_text_font(close_lbl, &lv_font_montserrat_32, 0);  // Phase 5.10I: matching the burger
     lv_obj_center(close_lbl);
 
     // === Phase 5.10D Stage 2b: presets + sliders ===
