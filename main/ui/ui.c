@@ -288,6 +288,9 @@ void ui_init(lv_display_t *disp)
              TOP_BAR_H, SPECTRUM_H, LABEL_BAR_H, WATERFALL_H, BOTTOM_BAR_H);
 }
 
+// Phase 5.10: forward declaration for band_from_freq (defined below)
+static const char *band_from_freq(uint32_t freq_hz);
+
 void ui_update_frequency(uint32_t freq_hz)
 {
     s_last_qmx_freq_hz = freq_hz;
@@ -300,6 +303,51 @@ void ui_update_frequency(uint32_t freq_hz)
     if (display_lock(20)) {
         lv_label_set_text(s_freq_label, buf);
         display_unlock();
+    }
+    // Phase 5.10: derive band and push to UI
+    const char *band = band_from_freq(freq_hz);
+    if (band) ui_update_band(band);
+}
+
+// Phase 5.10: map QMX frequency to ham-band name.
+// Returns NULL outside known band ranges.
+static const char *band_from_freq(uint32_t freq_hz)
+{
+    if (freq_hz >= 1800000  && freq_hz < 2000000)  return "160m";
+    if (freq_hz >= 3500000  && freq_hz < 4000000)  return "80m";
+    if (freq_hz >= 5330500  && freq_hz < 5406500)  return "60m";
+    if (freq_hz >= 7000000  && freq_hz < 7300000)  return "40m";
+    if (freq_hz >= 10100000 && freq_hz < 10150000) return "30m";
+    if (freq_hz >= 14000000 && freq_hz < 14350000) return "20m";
+    if (freq_hz >= 17900000 && freq_hz < 18500000) return "17m";
+    if (freq_hz >= 21000000 && freq_hz < 21450000) return "15m";
+    if (freq_hz >= 24890000 && freq_hz < 24990000) return "12m";
+    if (freq_hz >= 28000000 && freq_hz < 29700000) return "10m";
+    if (freq_hz >= 50000000 && freq_hz < 54000000) return "6m";
+    return NULL;
+}
+
+void ui_update_mode(const char *mode)
+{
+    if (!s_mode_label || !mode) return;
+    if (display_lock(100)) {
+        lv_label_set_text(s_mode_label, mode);
+        lv_obj_invalidate(s_mode_label);
+        display_unlock();
+    } else {
+        ESP_LOGW("ui", "ui_update_mode: display_lock timeout for '%s'", mode);
+    }
+}
+
+void ui_update_band(const char *band)
+{
+    if (!s_smeter_label || !band) return;
+    if (display_lock(100)) {
+        lv_label_set_text(s_smeter_label, band);
+        lv_obj_invalidate(s_smeter_label);
+        display_unlock();
+    } else {
+        ESP_LOGW("ui", "ui_update_band: display_lock timeout for '%s'", band);
     }
 }
 

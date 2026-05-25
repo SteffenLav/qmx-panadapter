@@ -45,6 +45,7 @@ static bool s_audio_dumped = false;
 static char s_rx_buf[CAT_RX_BUFFER_SIZE];
 static size_t s_rx_len = 0;
 static uint32_t s_last_freq_hz = 0;
+static char s_last_mode_digit = 0;  // Phase 5.10: cached Kenwood mode digit
 static uint64_t s_last_tx_us = 0;   // for rate-limiting cat_set_frequency
 
 static void link_task(void *arg);
@@ -133,6 +134,26 @@ static void process_cat_message(const char *msg, size_t len)
                      (unsigned long)(freq_hz / 1000000),
                      (unsigned long)((freq_hz / 1000) % 1000));
             ui_update_frequency(freq_hz);
+        }
+        return;
+    }
+
+    // MD response: "MDn;" — Kenwood mode digit. QMX uses:
+    // 1=LSB, 2=USB, 3=CW, 4=FM, 5=AM, 6=FSK, 7=CW-R, 9=FSK-R
+    if (len == 4 && msg[0] == 'M' && msg[1] == 'D') {
+        char d = msg[2];
+        if (d < '1' || d > '9') {
+            ESP_LOGW(TAG, "Bad mode digit in MD response: '%c'", d);
+            return;
+        }
+        static const char *kw_modes[] = {
+            "?", "LSB", "USB", "CW", "FM", "AM", "FSK", "CW-R", "?", "FSK-R"
+        };
+        const char *mode_str = kw_modes[d - '0'];
+        if (d != s_last_mode_digit) {
+            s_last_mode_digit = d;
+            ESP_LOGI(TAG, "Mode = %s (raw %c)", mode_str, d);
+            ui_update_mode(mode_str);
         }
         return;
     }
@@ -327,14 +348,17 @@ static esp_err_t try_open_qmx(void)
 
 static void poll_task(void *arg)
 {
-    ESP_LOGI(TAG, "Poll task started (%d ms interval)", CAT_POLL_INTERVAL_MS);
+    ESP_LOGI(TAG, "Poll task started (%d ms interval, alternating FA/MD)", CAT_POLL_INTERVAL_MS);
+    int phase = 0;
     while (s_cdc_dev != NULL) {
+        const char *cmd = (phase == 0) ? "FA;" : "MD;";
         esp_err_t err = cdc_acm_host_data_tx_blocking(
-            s_cdc_dev, (const uint8_t *)"FA;", 3, 200);
+            s_cdc_dev, (const uint8_t *)cmd, 3, 200);
         if (err != ESP_OK) {
-            ESP_LOGW(TAG, "FA; send failed: 0x%x (radio likely disconnected)", err);
+            ESP_LOGW(TAG, "%s send failed: 0x%x (radio likely disconnected)", cmd, err);
             break;
         }
+        phase ^= 1;
         vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
     }
     ESP_LOGI(TAG, "Poll task exiting");
@@ -349,6 +373,7 @@ static void link_task(void *arg)
         if (err == ESP_OK) {
             s_rx_len = 0;
             s_last_freq_hz = 0;
+            s_last_mode_digit = 0;
             xTaskCreatePinnedToCore(
                 poll_task, "cat_poll", 4096, NULL, 5, &s_poll_task, 1);
 
