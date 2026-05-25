@@ -39,8 +39,8 @@ static lv_obj_t *s_status_label = NULL;
 
 // Phase 5.5: static defaults — manual Ref/Range, user-controlled later
 // (internal arbitrary dB scale; ~80=noise floor, ~125=strong signal on test rig)
-static float DB_MIN_DISPLAY = 80.0f;
-static float DB_MAX_DISPLAY = 140.0f;
+static float DB_MIN_DISPLAY = 10.0f;
+static float DB_MAX_DISPLAY = 130.0f;
 
 // Forward decl so build_spectrum can call this
 static void ui_set_db_labels_internal(float db_min, float db_max);

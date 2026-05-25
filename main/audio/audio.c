@@ -29,7 +29,7 @@ typedef struct {
 } audio_evt_t;
 
 #define EVT_QUEUE_LEN          16
-#define RX_BUF_BYTES           4096
+#define RX_BUF_BYTES           19200
 #define INTERNAL_RX_BUF_BYTES  19200
 #define STATS_PERIOD_MS        1000
 
@@ -97,7 +97,7 @@ esp_err_t audio_init(void)
     ESP_LOGI(TAG, "UAC host driver installed");
 
     BaseType_t ok = xTaskCreatePinnedToCore(
-        audio_task, "audio_task", 4096, NULL, 5, &s_audio_task, 1);
+        audio_task, "audio_task", 4096, NULL, 3, &s_audio_task, 0);  // Phase 5.7: core 0 pri 3
     if (ok != pdPASS) return ESP_FAIL;
 
     return ESP_OK;
@@ -200,49 +200,53 @@ static void process_rx(void)
     // Decoded int16 stereo pairs (max half the bytes from raw, since 6B->4B)
     static int16_t decoded[(RX_BUF_BYTES / 6) * 2 + 2];
 
-    uint32_t bytes_read = 0;
-    esp_err_t err = uac_host_device_read(s_uac_dev, raw, sizeof(raw),
-                                         &bytes_read, 0);
-    if (err != ESP_OK || bytes_read == 0) return;
+    // Phase 5.7: drain loop. First read waits up to 25 ms for data;
+    // subsequent reads in the same call are non-blocking so we drain the
+    // UAC driver buffer in one polling iteration of audio_task.
+    bool first_read = true;
+    while (1) {
+        uint32_t bytes_read = 0;
+        uint32_t to = first_read ? pdMS_TO_TICKS(25) : 0;
+        first_read = false;
+        esp_err_t err = uac_host_device_read(s_uac_dev, raw, sizeof(raw),
+                                             &bytes_read, to);
+        if (err != ESP_OK || bytes_read == 0) return;
 
-    // Each stereo pair = 6 bytes (3B L + 3B R, little-endian signed 24-bit)
-    size_t pairs = bytes_read / 6;
-    if (pairs == 0) return;
+        // Each stereo pair = 6 bytes (3B L + 3B R, little-endian signed 24-bit)
+        size_t pairs = bytes_read / 6;
+        if (pairs == 0) return;
 
-    int16_t local_peak_L = s_peak_left;
-    int16_t local_peak_R = s_peak_right;
+        int16_t local_peak_L = s_peak_left;
+        int16_t local_peak_R = s_peak_right;
 
-    for (size_t i = 0; i < pairs; i++) {
-        const uint8_t *p = raw + 6*i;
-        int32_t L = s24_to_s32(p);
-        int32_t R = s24_to_s32(p + 3);
-        // Scale 24-bit to 16-bit via arithmetic shift right by 9.
-        // Saturate to int16 range just to be safe.
-        int32_t Ls = L >> 9;
-        int32_t Rs = R >> 9;
-        if (Ls > 32767) Ls = 32767; else if (Ls < -32768) Ls = -32768;
-        if (Rs > 32767) Rs = 32767; else if (Rs < -32768) Rs = -32768;
+        for (size_t i = 0; i < pairs; i++) {
+            const uint8_t *p = raw + 6*i;
+            int32_t L = s24_to_s32(p);
+            int32_t R = s24_to_s32(p + 3);
+            int32_t Ls = L >> 8;
+            int32_t Rs = R >> 8;
+            if (Ls > 32767) Ls = 32767; else if (Ls < -32768) Ls = -32768;
+            if (Rs > 32767) Rs = 32767; else if (Rs < -32768) Rs = -32768;
 
-        decoded[2*i]     = (int16_t)Ls;
-        decoded[2*i + 1] = (int16_t)Rs;
+            decoded[2*i]     = (int16_t)Ls;
+            decoded[2*i + 1] = (int16_t)Rs;
 
-        // Peak tracking (absolute)
-        int16_t aL = (Ls < 0) ? (int16_t)-Ls : (int16_t)Ls;
-        int16_t aR = (Rs < 0) ? (int16_t)-Rs : (int16_t)Rs;
-        if (aL > local_peak_L) local_peak_L = aL;
-        if (aR > local_peak_R) local_peak_R = aR;
-    }
+            int16_t aL = (Ls < 0) ? (int16_t)-Ls : (int16_t)Ls;
+            int16_t aR = (Rs < 0) ? (int16_t)-Rs : (int16_t)Rs;
+            if (aL > local_peak_L) local_peak_L = aL;
+            if (aR > local_peak_R) local_peak_R = aR;
+        }
 
-    s_peak_left = local_peak_L;
-    s_peak_right = local_peak_R;
-    s_samples_this_period += pairs;
+        s_peak_left = local_peak_L;
+        s_peak_right = local_peak_R;
+        s_samples_this_period += pairs;
 
-    // Push decoded samples to the ring buffer (non-blocking).
-    // If the ring is full, count drops and move on - we never block audio.
-    size_t bytes_to_push = pairs * sizeof(int16_t) * 2;
-    BaseType_t sent = xRingbufferSend(s_ring, decoded, bytes_to_push, 0);
-    if (sent != pdTRUE) {
-        s_dropped_this_period += pairs;
+        size_t bytes_to_push = pairs * sizeof(int16_t) * 2;
+        BaseType_t sent = xRingbufferSend(s_ring, decoded, bytes_to_push, 0);
+        if (sent != pdTRUE) {
+            s_dropped_this_period += pairs;
+        }
+        // Loop back for another non-blocking drain read.
     }
 }
 
@@ -306,22 +310,21 @@ static esp_err_t open_and_start(uint8_t addr, uint8_t iface_num)
 
 static void audio_task(void *arg)
 {
+    // Phase 5.7: polling loop mirroring qrp_companion (Zhenxing Han, N6HAN) mic_task pattern.
+    // audio_task pulls UAC bytes in a tight loop with a 200 ms read timeout while the device
+    // is up, and yields once per iteration for the watchdog. RX_DONE / TRANSFER_ERROR events
+    // are no longer consumed; only connect / disconnect events are handled out-of-band.
     while (1) {
+        // Connect / disconnect events still arrive on the queue (non-blocking peek).
         audio_evt_t e;
-        if (xQueueReceive(s_evt_queue, &e, pdMS_TO_TICKS(100)) == pdTRUE) {
+        if (xQueueReceive(s_evt_queue, &e, 0) == pdTRUE) {
             switch (e.kind) {
             case AE_RX_CONNECTED:
-                if (s_uac_dev != NULL) {
+                if (s_uac_dev == NULL) {
+                    open_and_start(e.addr, e.iface_num);
+                } else {
                     ESP_LOGW(TAG, "Already streaming; ignoring extra RX_CONNECTED");
-                    break;
                 }
-                open_and_start(e.addr, e.iface_num);
-                break;
-            case AE_RX_DONE:
-                process_rx();
-                break;
-            case AE_TRANSFER_ERROR:
-                ESP_LOGW(TAG, "Transfer error reported");
                 break;
             case AE_DISCONNECTED:
                 ESP_LOGW(TAG, "UAC disconnected, cleaning up");
@@ -335,8 +338,12 @@ static void audio_task(void *arg)
                 break;
             }
         }
+        if (s_uac_dev) {
+            process_rx();
+            // vTaskDelay(1) removed - 10ms at default tick rate, was starving the read
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
         log_stats();
     }
 }
-
-
