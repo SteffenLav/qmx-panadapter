@@ -71,19 +71,19 @@ static void build_top_bar(lv_obj_t *parent)
     s_freq_label = lv_label_create(bar);
     lv_label_set_text(s_freq_label, "14.074.000 MHz");
     lv_obj_set_style_text_color(s_freq_label, lv_color_hex(0xFFD76B), 0);
-    lv_obj_set_style_text_font(s_freq_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_freq_label, &lv_font_montserrat_20, 0);
     lv_obj_align(s_freq_label, LV_ALIGN_LEFT_MID, 8, 0);
 
     s_mode_label = lv_label_create(bar);
     lv_label_set_text(s_mode_label, "USB");
     lv_obj_set_style_text_color(s_mode_label, lv_color_hex(0xA0E0A0), 0);
-    lv_obj_set_style_text_font(s_mode_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_mode_label, &lv_font_montserrat_20, 0);
     lv_obj_align(s_mode_label, LV_ALIGN_CENTER, -60, 0);
 
     s_smeter_label = lv_label_create(bar);
     lv_label_set_text(s_smeter_label, "S9+20");
     lv_obj_set_style_text_color(s_smeter_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_smeter_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_smeter_label, &lv_font_montserrat_20, 0);
     lv_obj_align(s_smeter_label, LV_ALIGN_CENTER, 60, 0);
 
     lv_obj_t *btn = lv_btn_create(bar);
@@ -129,13 +129,19 @@ static void build_spectrum(lv_obj_t *parent)
     s_db_max_label = lv_label_create(s_spectrum_obj);
     lv_label_set_text(s_db_max_label, "");
     lv_obj_set_style_text_color(s_db_max_label, lv_color_hex(0xC0C0C0), 0);
-    lv_obj_set_style_text_font(s_db_max_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_db_max_label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_bg_color(s_db_max_label, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_db_max_label, LV_OPA_70, 0);
+    lv_obj_set_style_pad_all(s_db_max_label, 3, 0);
     lv_obj_align(s_db_max_label, LV_ALIGN_TOP_LEFT, 4, 2);
 
     s_db_min_label = lv_label_create(s_spectrum_obj);
     lv_label_set_text(s_db_min_label, "");
     lv_obj_set_style_text_color(s_db_min_label, lv_color_hex(0xC0C0C0), 0);
-    lv_obj_set_style_text_font(s_db_min_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_db_min_label, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_bg_color(s_db_min_label, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_db_min_label, LV_OPA_70, 0);
+    lv_obj_set_style_pad_all(s_db_min_label, 3, 0);
     lv_obj_align(s_db_min_label, LV_ALIGN_BOTTOM_LEFT, 4, -2);
 
     // Phase 5.5: show static defaults immediately (no autoscale to update them)
@@ -196,7 +202,7 @@ static void build_label_bar(lv_obj_t *parent)
         lv_obj_t *lbl = lv_label_create(bar);
         lv_label_set_text(lbl, tick_labels[i]);
         lv_obj_set_style_text_color(lbl, lv_color_hex(0xA0A0A0), 0);
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
         if (i == 0) {
             lv_obj_align(lbl, LV_ALIGN_BOTTOM_LEFT, 2, 0);
         } else if (i == 4) {
@@ -343,6 +349,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
     if (!display_lock(20)) return;
 
     uint16_t *px = (uint16_t *)s_spec_canvas_buf;
+    static int s_prev_y_top = 0;
     const uint16_t fg = 0x07E0;  // green in RGB565
     const uint16_t grid_color = 0x4208;  // dim grey grid lines
 
@@ -351,7 +358,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
 
     // dB grid lines (Phase 5.3) - draw before spectrum so green overdraws on hits
     {
-        const float grid_dbs[5] = { 50.0f, 70.0f, 90.0f, 110.0f, 130.0f };
+        const float grid_dbs[5] = { -120.0f, -100.0f, -80.0f, -60.0f, -40.0f };
         for (int g = 0; g < 5; g++) {
             int gy = db_to_y(grid_dbs[g]);
             if (gy >= 0 && gy < SPECTRUM_H) {
@@ -377,9 +384,26 @@ void ui_push_spectrum(const float *bins, int n_bins)
         }
 
         int y_top = db_to_y(bins[bin]);
-        for (int y = y_top; y < SPECTRUM_H; y++) {
+        if (y_top < 0) y_top = 0;
+        if (y_top >= SPECTRUM_H) y_top = SPECTRUM_H - 1;
+        // Phase 5.9: continuous spectrum curve. Connect this column's y_top to
+        // the previous column's y_top with a bright line, then fill the area
+        // below with a dim green (matches docs/panadapter-mockup-ideal.svg).
+        const uint16_t fg_dim = 0x01C0;  // ~25% green in RGB565
+        // Connect from prev_y to y_top vertically so the curve is continuous,
+        // not a series of disconnected column tops.
+        int y_a = (x > 0) ? s_prev_y_top : y_top;
+        int y_b = y_top;
+        int y_lo = (y_a < y_b) ? y_a : y_b;
+        int y_hi = (y_a > y_b) ? y_a : y_b;
+        for (int y = y_lo; y <= y_hi; y++) {
             px[y * DISPLAY_H_RES + x] = fg;
         }
+        // Dim fill from just below the connecting line down to the bottom.
+        for (int y = y_hi + 1; y < SPECTRUM_H; y++) {
+            px[y * DISPLAY_H_RES + x] = fg_dim;
+        }
+        s_prev_y_top = y_top;
     }
 
     // Center cursor: amber 1-px vertical line at canvas center (where QMX is tuned)
