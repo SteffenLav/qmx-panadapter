@@ -768,6 +768,13 @@ static void touch_event_cb(lv_event_t *e)
         esp_err_t err = cat_set_frequency(target_hz);
         ESP_LOGI("ui_touch", "RELEASED x=%d dx=%d off=%ld tgt=%lu err=0x%x",
                  (int)p.x, dx, (long)rounded, (unsigned long)target_hz, err);
+        // Phase 5.10H: optimistically update the on-screen freq label
+        // immediately so the user sees their target before the CAT FA
+        // poll confirms (~300 ms later). If the QMX rejects the tune,
+        // the next CAT FA will correct the display.
+        if (err == ESP_OK) {
+            ui_update_frequency(target_hz);
+        }
         // Let the cursor linger briefly after release, then clear
         s_target_until_us = esp_timer_get_time() + 200000;
     }

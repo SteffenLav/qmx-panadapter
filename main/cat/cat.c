@@ -20,7 +20,7 @@ static const char *TAG = "cat";
 #define QMX_VID  0x0483
 #define QMX_PID  0xA34C
 #define CAT_BAUD_RATE 38400
-#define CAT_POLL_INTERVAL_MS 200
+#define CAT_POLL_INTERVAL_MS 50   // Phase 5.10H: was 200 -> 100 -> 50 (FA every 150 ms)
 #define CAT_RX_BUFFER_SIZE 128
 
 #define EVT_DEV_CONNECTED  BIT0
