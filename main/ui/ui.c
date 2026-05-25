@@ -31,6 +31,7 @@ static const char *TAG = "ui";
 static void touch_event_cb(lv_event_t *e);
 static void settings_button_cb(lv_event_t *e);  // Phase 5.10D
 static uint32_t s_last_qmx_freq_hz = 0;  // updated by ui_update_frequency
+static char s_current_mode[8] = "USB";  // Phase 5.10F: latest CAT mode for snap-aware tuning
 
 // Touch-target cursor state (Phase 6.1)
 static int s_target_x = -1;
@@ -399,6 +400,11 @@ static const char *band_from_freq(uint32_t freq_hz)
 
 void ui_update_mode(const char *mode)
 {
+    // Phase 5.10F: cache for snap-step lookup in touch handler
+    if (mode) {
+        strncpy(s_current_mode, mode, sizeof(s_current_mode) - 1);
+        s_current_mode[sizeof(s_current_mode) - 1] = '\0';
+    }
     if (!s_mode_label || !mode) return;
     if (display_lock(100)) {
         char buf[32]; snprintf(buf, sizeof(buf), "Mode: %s", mode); lv_label_set_text(s_mode_label, buf);
@@ -676,8 +682,15 @@ static void touch_event_cb(lv_event_t *e)
         // Compute target frequency from final touch position
         int dx = (int)p.x - DISPLAY_H_RES / 2;
         int32_t offset_hz = (int32_t)((int64_t)dx * UAC_SAMPLE_RATE / DISPLAY_H_RES);
-        int32_t rounded = (offset_hz + (offset_hz >= 0 ? TUNE_ROUND_HZ/2 : -TUNE_ROUND_HZ/2))
-                          / TUNE_ROUND_HZ * TUNE_ROUND_HZ;
+        // Phase 5.10F: mode-aware snap. CW=10 Hz (precision), SSB=500 Hz
+        // (voice channels), FT8/data=100 Hz, AM/FM=1 kHz.
+        int32_t snap = 10;
+        if (strstr(s_current_mode, "USB") || strstr(s_current_mode, "LSB")) snap = 500;
+        else if (strstr(s_current_mode, "FT") || strstr(s_current_mode, "DIG") || strstr(s_current_mode, "RTTY")
+                 || strstr(s_current_mode, "FSK")) snap = 100;
+        else if (strstr(s_current_mode, "AM") || strstr(s_current_mode, "FM")) snap = 1000;
+        else if (strstr(s_current_mode, "CW")) snap = 10;
+        int32_t rounded = (offset_hz + (offset_hz >= 0 ? snap/2 : -snap/2)) / snap * snap;
         int64_t target = (int64_t)s_last_qmx_freq_hz + rounded;
         if (target < 0) return;
         uint32_t target_hz = (uint32_t)target;
