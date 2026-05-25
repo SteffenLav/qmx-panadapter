@@ -32,6 +32,7 @@ static void touch_event_cb(lv_event_t *e);
 static void settings_button_cb(lv_event_t *e);  // Phase 5.10D
 static uint32_t s_last_qmx_freq_hz = 0;  // updated by ui_update_frequency
 static char s_current_mode[8] = "USB";  // Phase 5.10F: latest CAT mode for snap-aware tuning
+static uint32_t s_passband_width_hz = 0;  // Phase 5.10G: 0 = use mode default; else from CAT FW
 
 // Touch-target cursor state (Phase 6.1)
 static int s_target_x = -1;
@@ -427,6 +428,60 @@ void ui_update_band(const char *band)
     }
 }
 
+// Phase 5.10G: receive passband width from CAT (FW response) or
+// fallback to 0 = use per-mode defaults. Called by cat.c.
+void ui_update_passband_width(uint32_t hz)
+{
+    if (hz > 0 && hz != s_passband_width_hz) {
+        ESP_LOGI("ui", "Passband width = %lu Hz (CAT FW)", (unsigned long)hz);
+    }
+    s_passband_width_hz = hz;
+}
+
+// Helper: returns (low, high) passband edges in Hz, relative to VFO,
+// from current mode + (optional) CAT FW width. CW is symmetric around VFO,
+// USB is +200 to +(200+width), LSB is -(200+width) to -200, etc.
+static void compute_passband_edges_hz(int32_t *out_low, int32_t *out_high)
+{
+    // Mode defaults if CAT FW didn't report
+    uint32_t w = s_passband_width_hz;
+    int32_t low, high;
+    if (strstr(s_current_mode, "CW")) {
+        if (w == 0) w = 300;
+        low = -(int32_t)w / 2;
+        high = (int32_t)w / 2;
+    } else if (strstr(s_current_mode, "USB")) {
+        if (w == 0) w = 2700;
+        low = 200;
+        high = 200 + (int32_t)w;
+    } else if (strstr(s_current_mode, "LSB")) {
+        if (w == 0) w = 2700;
+        low = -(200 + (int32_t)w);
+        high = -200;
+    } else if (strstr(s_current_mode, "AM")) {
+        if (w == 0) w = 6000;
+        low = -(int32_t)w / 2;
+        high = (int32_t)w / 2;
+    } else if (strstr(s_current_mode, "FM")) {
+        if (w == 0) w = 10000;
+        low = -(int32_t)w / 2;
+        high = (int32_t)w / 2;
+    } else if (strstr(s_current_mode, "FSK") || strstr(s_current_mode, "RTTY")
+               || strstr(s_current_mode, "FT") || strstr(s_current_mode, "DIG")) {
+        if (w == 0) w = 2700;
+        low = 200;
+        high = 200 + (int32_t)w;
+    } else {
+        // Unknown mode: a small symmetric default
+        if (w == 0) w = 2700;
+        low = -(int32_t)w / 2;
+        high = (int32_t)w / 2;
+    }
+    *out_low = low;
+    *out_high = high;
+}
+
+
 void ui_update_smeter(int s_units)
 {
     if (!s_smeter_label) return;
@@ -552,6 +607,21 @@ void ui_push_spectrum(const float *bins, int n_bins)
 
     // Center cursor: amber 1-px vertical line at canvas center (where QMX is tuned)
     {
+        // Phase 5.10G: passband edges (2 px grey lines)
+        int32_t pb_low_hz, pb_high_hz;
+        compute_passband_edges_hz(&pb_low_hz, &pb_high_hz);
+        const uint16_t pb_color = 0x8410;  /* medium grey */
+        for (int side = 0; side < 2; side++) {
+            int32_t edge_hz = (side == 0) ? pb_low_hz : pb_high_hz;
+            /* Edge frequency in Hz -> screen x. Sample rate = 48 kHz spans full width. */
+            int edge_x = DISPLAY_H_RES / 2 + (int)((int64_t)edge_hz * DISPLAY_H_RES / 48000);
+            if (edge_x < 0 || edge_x >= DISPLAY_H_RES) continue;
+            for (int y = 0; y < SPECTRUM_H; y++) {
+                px[y * DISPLAY_H_RES + edge_x] = pb_color;
+                if (edge_x + 1 < DISPLAY_H_RES) px[y * DISPLAY_H_RES + edge_x + 1] = pb_color;
+            }
+        }
+
         const uint16_t center_color = 0xFD00;
         int cx = DISPLAY_H_RES / 2;
         for (int y = 0; y < SPECTRUM_H; y++) {

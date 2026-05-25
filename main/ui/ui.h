@@ -18,3 +18,6 @@ void ui_set_db_range(float db_min, float db_max);
 // Phase 5.4: update dB label text (called by autoscale)
 void ui_set_db_labels(float db_min, float db_max);
 
+
+// Phase 5.10G: passband indicator (CAT FW or mode default)
+void ui_update_passband_width(uint32_t hz);

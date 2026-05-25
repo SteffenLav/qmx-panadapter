@@ -158,6 +158,30 @@ static void process_cat_message(const char *msg, size_t len)
         return;
     }
 
+    // Phase 5.10G: FW (filter width) response: "FWnnnn;" - 4 digits in Hz.
+    // Accept 4..5 digits (len 7 or 8) for safety.
+    if ((len == 7 || len == 8) && msg[0] == 'F' && msg[1] == 'W') {
+        uint32_t hz = 0;
+        for (size_t i = 2; i < len - 1; i++) {
+            char d = msg[i];
+            if (d < '0' || d > '9') {
+                ESP_LOGW(TAG, "Bad digit in FW response: '%c'", d);
+                return;
+            }
+            hz = hz * 10 + (d - '0');
+        }
+        ui_update_passband_width(hz);
+        return;
+    }
+    // QMX returns "?;" for unsupported commands; we just log once.
+    if (len == 2 && msg[0] == '?' && msg[1] == ';') {
+        static bool warned = false;
+        if (!warned) {
+            ESP_LOGW(TAG, "QMX returned ?; (one or more poll commands unsupported)");
+            warned = true;
+        }
+        return;
+    }
     if (len == 6 && msg[0] == 'I' && msg[1] == 'D') {
         ESP_LOGI(TAG, "Radio ID: %s", msg);
         return;
@@ -351,14 +375,20 @@ static void poll_task(void *arg)
     ESP_LOGI(TAG, "Poll task started (%d ms interval, alternating FA/MD)", CAT_POLL_INTERVAL_MS);
     int phase = 0;
     while (s_cdc_dev != NULL) {
-        const char *cmd = (phase == 0) ? "FA;" : "MD;";
+        // Phase 5.10G: 3-way rotation FA / MD / FW (passband width)
+        const char *cmd;
+        switch (phase) {
+            case 0:  cmd = "FA;"; break;
+            case 1:  cmd = "MD;"; break;
+            default: cmd = "FW;"; break;
+        }
         esp_err_t err = cdc_acm_host_data_tx_blocking(
             s_cdc_dev, (const uint8_t *)cmd, 3, 200);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "%s send failed: 0x%x (radio likely disconnected)", cmd, err);
             break;
         }
-        phase ^= 1;
+        phase = (phase + 1) % 3;
         vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
     }
     ESP_LOGI(TAG, "Poll task exiting");
