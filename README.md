@@ -28,6 +28,7 @@ Working. All phases through 6.2 complete, with cold-boot reliability fix.
 | 5.4   | EMA spectrum smoothing + autoscaling dB range (superseded by 5.5) | done |
 | 5.5   | Static dB range (manual Ref/Range convention), correct 24-bit scaling | done |
 | 5.6   | One-pole IIR DC blocker on the I/Q stream before FFT | done |
+| 5.7   | Polling audio_task on core 0 + drain loop — fixes noise-floor pumping | done |
 | 6.1   | Touch-to-tune via CAT FA, live cyan drag cursor | done |
 | 6.2   | Landscape rotation 1280×720 (LVGL software rotation) | done |
 | —     | Cold-boot fix (PI4IO expander init for LCD_RST / TP_RST) | done |
@@ -89,11 +90,11 @@ Exit monitor with Ctrl+T then Ctrl+X.
 
 CAT writes are internally rate-limited to one per 200 ms; rapid taps within that window are dropped silently.
 
-## Spectrum smoothing and autoscale (Phase 5.4)
+## Spectrum smoothing and dB range (Phase 5.5 / 5.7)
 
 The spectrum is smoothed per bin with an exponential moving average (α = 0.4) before display, balancing visual stability against the snappy response needed to see real signals (CW, SSB attack).
 
-The dB display range is autoscaled once per second using the median of the spectrum (approximating the noise floor) and the maximum bin (the loudest signal). New range is `[median - 10 dB, max + 5 dB]`, clamped to a 40-120 dB span. Top-left and bottom-left labels on the spectrum show the current range and update with autoscale.
+The displayed dB range is fixed at 10 to 130 dB, matching commercial SDR convention (HDSDR, SDR Console, Flex Maestro) where the user picks a manual Ref/Range rather than letting the display continuously rescale. Continuous autoscale was tried in Phase 5.4 and removed in 5.5 — it actively hid signal-vs-noise dynamics. The 10 dB floor and 130 dB ceiling cover real signal range from quiet HF noise floor to strong birdies, calibrated for the corrected 24-bit → 16-bit scaling (`>> 8`) restored in Phase 5.7.
 
 ## Project layout
 
@@ -159,29 +160,21 @@ Real hangs in our app tasks will still be caught. Idle starvation under LVGL loa
 
 We allocate the waterfall canvas at 2× height (1280×824 RGB565). Each tick writes the new row at both `s_wf_head` and `s_wf_head + WATERFALL_H`, then decrements `s_wf_head` (with wrap). The canvas view pointer is moved through the buffer instead of `memmove`-ing. ~130 µs/tick instead of ~92 ms/tick.
 
-### Noise floor pumping on QMX I/Q (under investigation)
+### Noise floor pumping on QMX I/Q (resolved in Phase 5.7)
 
-With the QMX in IQ Mode, the panadapter shows a slow ~13 s cycle on the displayed noise floor: ~6 s at a high level (~104 dB mean), then a 7 s descending ramp through middle values back to a ~60 dB floor, then a sharp jump back up. Strong tones (birdies, real signals) stay rock-steady through the cycle; only the broadband floor between them pumps.
+Earlier versions of the panadapter showed a slow ~13 s cycle on the displayed noise floor: ~6 s at a high level (~104 dB mean), then a 7 s descending ramp back to a low floor, then a sharp jump back up. The same QMX into HDSDR or an iPad SDR app showed a flat steady noise floor, so the I/Q stream out of the QMX was always clean.
 
-What we have ruled out, with logs:
-- The QMX itself. The same QMX into HDSDR on a PC, or the iPad SDR app, shows a flat steady noise floor with no pumping. The I/Q stream out of the QMX is clean.
-- CAT polling. Pumping persists with the CAT poll task disabled and no touch events.
-- Ring buffer overflow. `RX <n> pairs/s` stays rock-steady at 47880–48045 throughout. The only `DROPPED` warning fires once at USB connect; never during pumping.
-- Ring buffer sizing. 64 KB ring = ~170 ms headroom at 48 kHz int16 stereo. Generous.
-- Task placement / starvation. Audio on core 1 pri 5, FFT on core 1 pri 4, render on core 0 pri 3, UAC background on core 0 pri 5. Moving audio_task to core 0 at pri 6 did not change the pumping.
-- Our FFT, window, and dB conversion math. Same-frame diagnostics (PRE-FFT workbuf, POST-FFT workbuf, samples, bin dB) all line up with expected behavior given the input.
+**Root cause:** data starvation in our event-driven `audio_task`. Non-blocking `uac_host_device_read` calls on core 1 periodically returned truncated chunks. The decoder's `peak L/R` saturated at 16384 every period (an artifact of the broken pipeline, not real signal amplitude), and the FFT input acquired periodic step discontinuities which spread broadband energy across all bins on a slow envelope.
 
-What we observed but cannot yet explain:
-- During "high" phase, `samples[0..5]` reads as 0 while `samples[1020..1023]` reads as full-scale signal. A step-like pattern within the 21 ms FFT window. The FFT of such a step legitimately spreads broadband energy across all bins, which matches the high-mean reading.
-- The raw bytes coming in from the UAC layer during the same instant do contain real non-zero data. The zeros appear somewhere between `raw[]` and the consumer side of the ring, but neither the decoder nor the ring buffer code shows an obvious mechanism.
+**Fix (commit `6d3d968`):** replicate qrp_companion's `mic_task` producer-side architecture:
+- Polling loop on core 0 priority 3 (was event-driven on core 1 priority 5)
+- `uac_host_device_read` with 25 ms timeout
+- Drain loop inside `process_rx` reads until the UAC driver returns 0 bytes
+- `RX_BUF_BYTES` raised from 4096 to 19200 to match the UAC internal buffer
+- 24-bit → 16-bit scaling restored to `>> 8` (the Phase 5.5 `>> 9` was a misdiagnosis)
+- Display dB range shifted to 10–130 dB to cover real signal amplitudes
 
-Likely remaining root causes (in rough order):
-1. A subtle interaction in the patched `usb_host_uac` component when it coexists with CDC-ACM — possibly periodic isochronous-transfer replay or buffer reuse that escapes the pairs/s counter.
-2. A cache coherency or DMA-vs-CPU race we cannot see through `printf` debugging.
-3. Something less likely in the consumer / ring / DSP path that we have not yet thought to check.
-
-Pinning this further likely needs a USB protocol analyzer or a logic-analyzer trace on the ESP32-P4 isoc transfers, both of which are out of scope for now. The artifact is cosmetic — real signals remain visible and stable — and we are shipping with it documented. The planned DC blocker on the I/Q stream (see Phase 5.6 in the roadmap and the DC-spike suppression entry below) is unlikely to mask this fully but is standard SDR hygiene and may reduce the visual impact.
-
+Inspired by [`qrp_companion`](https://groups.io/g/QRPLabs/topic/118645485) by Zhenxing Han (N6HAN), who confirmed his code on Tab5 did not exhibit the issue and offered his source as reference. Thanks Zhenxing.
 ## Tools
 
 ### `qmx` PowerShell helper
@@ -213,7 +206,6 @@ Exit monitor with `Ctrl+T` then `Ctrl+X` (works on Danish/non-US keyboard layout
 Concrete items planned for the near term, in roughly the order they'll likely be tackled.
 
 - **Phase 6.3 — Native-orientation rendering.** Render directly in the panel's native portrait coordinates and skip LVGL's software rotation, recovering the ~50% FPS lost to `rotate90_rgb565`. The display still appears landscape because the device is held that way; only the pixel layout changes.
-- **DC-spike suppression.** Mask the center 3 FFT bins for v1; later, add a time-domain running-mean DC block on the I/Q stream before the FFT. See [`docs/panadapter-display-design.md`](docs/panadapter-display-design.md) for background.
 - **NVS settings persistence.** Survive power cycles for user preferences: last VFO, autoscale state, EMA α, waterfall colour map. Foundation for everything else in this list.
 - **Memory channels.** Quick-recall frequency presets — touch a slot, QMX retunes via CAT. Stored in NVS.
 - **I/Q balance correction.** Per-band amplitude/phase coefficients applied before the FFT to push image rejection from the native ~30 dB to 50+ dB. One-time calibration step per band.
