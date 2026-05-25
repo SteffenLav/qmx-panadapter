@@ -19,6 +19,12 @@ static const char *TAG = "ui";
 #define BOTTOM_BAR_H    30
 #define SPECTRUM_H      200
 #define LABEL_BAR_H     32  /* Phase 5.10C: room for Montserrat 18 labels under tick marks */
+// Phase 5.10E: QMX I/Q has a 12 kHz IF offset — the signal at the QMX's
+// tuned frequency lands at +12 kHz in the baseband. We compensate by
+// shifting the displayed spectrum left by 12 kHz so the tuned signal
+// appears at the visual center. Touch-to-tune math is unchanged because
+// s_last_qmx_freq_hz is the dial reading, not the LO.
+#define IF_OFFSET_HZ    12000
 #define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - LABEL_BAR_H - BOTTOM_BAR_H)
 
 // Forward declarations (Phase 6.1 - touch-to-tune)
@@ -509,6 +515,11 @@ void ui_push_spectrum(const float *bins, int n_bins)
         } else {
             bin = shifted - half;
         }
+        // Phase 5.10E: 12 kHz IF offset compensation. Shift selected bin
+        // right by (IF_OFFSET_HZ / sample_rate * N) bins so the QMX tuned
+        // frequency (+12 kHz in baseband) appears at the visual center.
+        bin = (bin + (IF_OFFSET_HZ * N) / 48000) % N;
+        if (bin < 0) bin += N;
 
         int y_top = db_to_y(bins[bin]);
         if (y_top < 0) y_top = 0;

@@ -82,6 +82,8 @@ void render_waterfall_tick(const float *spectrum, int n_bins)
         // Map x in [0, WF_WIDTH) to bin in [0, n_bins) with fftshift
         int bin_unshifted = (x * n_bins) / WF_WIDTH;       // 0..n_bins-1
         int bin = (bin_unshifted + n_bins / 2) % n_bins;    // fftshift
+        // Phase 5.10E: QMX 12 kHz IF offset compensation (match ui_push_spectrum)
+        bin = (bin + n_bins / 4) % n_bins;  // shift right by 12 kHz out of 48 kHz = n_bins/4
 
         float db = spectrum[bin];
         // Clip and scale to 0..255 LUT index
