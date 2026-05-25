@@ -1,12 +1,12 @@
-﻿# QMX+ Panadapter
+# QMX+ Panadapter
 
 *By Steffen Lav (OZ1LAV).*
 
-A standalone real-time panadapter â€” spectrum analyzer and waterfall â€” for the [QRP Labs QMX/QMX+](https://www.qrp-labs.com/qmxp.html) HF transceiver, running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 with a 5" 720Ã—1280 touch display).
+A standalone real-time panadapter — spectrum analyzer and waterfall — for the [QRP Labs QMX/QMX+](https://www.qrp-labs.com/qmxp.html) HF transceiver, running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 with a 5" 720×1280 touch display).
 
 The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Tab5 connects to the QMX as a USB host, decodes the I/Q in real time on the ESP32-P4, and renders a touch-driven panadapter with tap-to-tune.
 
-![Panadapter display â€” QMX+ tuned to 14.000 MHz with CW activity](docs/panadapter-mockup-ideal.svg)
+![Panadapter display — QMX+ tuned to 14.000 MHz with CW activity](docs/panadapter-mockup-ideal.svg)
 
 *The display in action: 48 kHz of spectrum centered on the QMX VFO, live FFT trace on top, scrolling waterfall below, magenta VFO marker with CW filter passband shading. See [`docs/panadapter-display-design.md`](docs/panadapter-display-design.md) for the design notes including the hardware artifacts (DC spike, I/Q image) you'll see in practice.*
 
@@ -28,7 +28,7 @@ Working. All phases through 6.2 complete, with cold-boot reliability fix.
 | 5.4   | EMA spectrum smoothing + autoscaling dB range (superseded by 5.5) | done |
 | 5.5   | Static dB range (manual Ref/Range convention), correct 24-bit scaling | done |
 | 5.6   | One-pole IIR DC blocker on the I/Q stream before FFT | done |
-| 5.7   | Polling audio_task on core 0 + drain loop â€” fixes noise-floor pumping | done |
+| 5.7   | Polling audio_task on core 0 + drain loop — fixes noise-floor pumping | done |
 | 5.8   | dBm calibration scale anchored on QMX dummy load | done |
 | 5.9   | Larger fonts + continuous green spectrum curve + dim fill | done |
 | 5.10A | CAT mode polling (alternating FA / MD; 5 Hz each) | done |
@@ -36,8 +36,8 @@ Working. All phases through 6.2 complete, with cold-boot reliability fix.
 | 5.10C | Real frequency axis labels (absolute MHz centered on VFO) | done |
 | 5.10D | Top-bar layout, S-meter, settings drawer with presets and sliders | done |
 | 6.1   | Touch-to-tune via CAT FA, live cyan drag cursor | done |
-| 6.2   | Landscape rotation 1280Ã—720 (LVGL software rotation) | done |
-| â€”     | Cold-boot fix (PI4IO expander init for LCD_RST / TP_RST) | done |
+| 6.2   | Landscape rotation 1280×720 (LVGL software rotation) | done |
+| —     | Cold-boot fix (PI4IO expander init for LCD_RST / TP_RST) | done |
 
 See the [Roadmap](#roadmap) at the bottom for what's next.
 
@@ -45,13 +45,13 @@ See the [Roadmap](#roadmap) at the bottom for what's next.
 
 ## Hardware
 
-- **M5Stack Tab5** with ESP32-P4 v1.3 (ECO2) silicon, ST7123 5" 720Ã—1280 MIPI-DSI touch panel, 32 MB hex PSRAM
+- **M5Stack Tab5** with ESP32-P4 v1.3 (ECO2) silicon, ST7123 5" 720×1280 MIPI-DSI touch panel, 32 MB hex PSRAM
 - **QRP Labs QMX or QMX+** transceiver (Kenwood-style CAT, UAC audio)
-- USB-C OTG cable Tab5 â†” QMX
+- USB-C OTG cable Tab5 ↔ QMX
 
 ## Software requirements
 
-- **ESP-IDF v5.4.4** â€” pinned, because:
+- **ESP-IDF v5.4.4** — pinned, because:
   - ESP32-P4 v1.3 silicon needs `CONFIG_ESP32P4_REV_MIN_0=y` and CPU capped at 360 MHz
   - The local M5Stack UserDemo BSP is built against this IDF version
 - VS Code with the Espressif IDF extension (or any IDF-compatible setup)
@@ -71,7 +71,7 @@ Or via the helper function in `$PROFILE` (see Tools section below):
 
 Exit monitor with Ctrl+T then Ctrl+X.
 
-## Layout (landscape 1280 Ã— 720)
+## Layout (landscape 1280 × 720)
 
     +----------------------------------------------------------+
     | Top bar (60 px)  freq | mode | s-meter | menu            |
@@ -81,7 +81,7 @@ Exit monitor with Ctrl+T then Ctrl+X.
     +----------------------------------------------------------+
     | Label band (18 px) -24k -12k 0 +12k +24k + tick marks    |
     +----------------------------------------------------------+
-    | Waterfall (412 px) 1280 Ã— 412, newest row at top         |
+    | Waterfall (412 px) 1280 × 412, newest row at top         |
     |                    classic SDR gradient                  |
     +----------------------------------------------------------+
     | Bottom bar (30 px) status, span, fps                     |
@@ -89,9 +89,9 @@ Exit monitor with Ctrl+T then Ctrl+X.
 
 ## Touch-to-tune
 
-- Touch anywhere on spectrum or waterfall â†’ cyan cursor tracks your finger
-- Drag to position â†’ cursor follows live
-- Lift â†’ CAT `FA` command sent with rounded 10 Hz target; QMX retunes; spectrum re-centers on the tapped signal
+- Touch anywhere on spectrum or waterfall → cyan cursor tracks your finger
+- Drag to position → cursor follows live
+- Lift → CAT `FA` command sent with rounded 10 Hz target; QMX retunes; spectrum re-centers on the tapped signal
 - Center cursor (amber, fixed at x=640) marks where the QMX is currently tuned
 
 CAT writes are internally rate-limited to one per 200 ms; rapid taps within that window are dropped silently.
@@ -100,24 +100,24 @@ CAT writes are internally rate-limited to one per 200 ms; rapid taps within that
 
 ## Top bar, S-meter, settings drawer (Phase 5.10)
 
-The top status bar reads `Band | Mode | Center Freq | Signal` left to right, with the frequency centered. Band and mode come from CAT (the `FA` and `MD` queries alternate at 5 Hz each, giving 200 ms response on either field). The band name is derived from the VFO frequency using widened ranges that cover the QMX's tunable region beyond the strict IARU edges. The Signal field shows S-units derived from `dsp_get_peak_dbm_around_vfo(64, ...)` â€” the peak dBm within +/-64 bins (~+/-3 kHz) of the VFO â€” sampled at 5 Hz in the render task.
+The top status bar reads `Band | Mode | Center Freq | Signal` left to right, with the frequency centered. Band and mode come from CAT (the `FA` and `MD` queries alternate at 5 Hz each, giving 200 ms response on either field). The band name is derived from the VFO frequency using widened ranges that cover the QMX's tunable region beyond the strict IARU edges. The Signal field shows S-units derived from `dsp_get_peak_dbm_around_vfo(64, ...)` — the peak dBm within +/-64 bins (~+/-3 kHz) of the VFO — sampled at 5 Hz in the render task.
 
 Under the spectrum, the frequency axis labels show absolute MHz centered on the VFO (e.g. `13.988 / 13.994 / 14.000 / 14.006 / 14.012` at 48 kHz span), refreshed on every CAT freq update.
 
 The burger button on the top right opens a 400 px right-side settings drawer with a 250 ms slide-in animation. Contents:
-- **Presets** (HF Normal / HF DX / Strong Sig.) â€” each sets dB range and EMA smoothing in one tap
-- **dB Range sliders** (Min and Max in dBm) â€” live updates `ui_set_db_range()`
-- **Smoothing slider** (EMA alpha, 0.05-1.00) â€” live updates `render_set_ema_alpha()` (the formerly hard-coded `SMOOTH_ALPHA` is now a runtime variable)
+- **Presets** (HF Normal / HF DX / Strong Sig.) — each sets dB range and EMA smoothing in one tap
+- **dB Range sliders** (Min and Max in dBm) — live updates `ui_set_db_range()`
+- **Smoothing slider** (EMA alpha, 0.05-1.00) — live updates `render_set_ema_alpha()` (the formerly hard-coded `SMOOTH_ALPHA` is now a runtime variable)
 
 A 180 x 80 deadzone in the top-right of the spectrum suppresses tunes that overlap the burger button, so a wide finger pressing the button does not also retune the radio.
 
 ## Spectrum smoothing, dB range, dBm calibration (Phase 5.5 / 5.7 / 5.8)
 
-The spectrum is smoothed per bin with an exponential moving average (Î± = 0.4) before display, balancing visual stability against the snappy response needed to see real signals (CW, SSB attack).
+The spectrum is smoothed per bin with an exponential moving average (α = 0.4) before display, balancing visual stability against the snappy response needed to see real signals (CW, SSB attack).
 
-The displayed dB range is fixed at -130 to -30 dBm, matching commercial SDR convention (HDSDR, SDR Console, Flex Maestro) where the user picks a manual Ref/Range rather than letting the display continuously rescale. Continuous autoscale was tried in Phase 5.4 and removed in 5.5 â€” it actively hid signal-vs-noise dynamics. The -130 dBm floor and -30 dBm ceiling cover the real signal range from quiet HF noise floor (anchored on dummy load in Phase 5.8) to S9+40 strong signals.
+The displayed dB range is fixed at -130 to -30 dBm, matching commercial SDR convention (HDSDR, SDR Console, Flex Maestro) where the user picks a manual Ref/Range rather than letting the display continuously rescale. Continuous autoscale was tried in Phase 5.4 and removed in 5.5 — it actively hid signal-vs-noise dynamics. The -130 dBm floor and -30 dBm ceiling cover the real signal range from quiet HF noise floor (anchored on dummy load in Phase 5.8) to S9+40 strong signals.
 
-**dBm calibration (Phase 5.8).** The displayed dB values are calibrated against the QMX on a dummy load: with no antenna, the median dB across all bins per second is logged, and `DSP_DB_CALIBRATION_OFFSET` is set to `-130 - median` so the noise floor reads -130 dBm. On this hardware the measured offset is -148.0 dB. S-unit reference: S9 = -73 dBm, S5 â‰ˆ -97 dBm, S1 â‰ˆ -121 dBm. Signals stronger than ~S9+40 (-30 dBm) clip at the display ceiling but still indicate presence at full-scale.
+**dBm calibration (Phase 5.8).** The displayed dB values are calibrated against the QMX on a dummy load: with no antenna, the median dB across all bins per second is logged, and `DSP_DB_CALIBRATION_OFFSET` is set to `-130 - median` so the noise floor reads -130 dBm. On this hardware the measured offset is -148.0 dB. S-unit reference: S9 = -73 dBm, S5 ≈ -97 dBm, S1 ≈ -121 dBm. Signals stronger than ~S9+40 (-30 dBm) clip at the display ceiling but still indicate presence at full-scale.
 
 **Continuous green curve (Phase 5.9).** Each column's trace is connected to the previous column's `y_top` with a bright vertical line, so the spectrum reads as a continuous curve rather than disconnected per-column dots. Below the curve, a dim ~25% green fill (RGB565 `0x01C0`) gives the look of [docs/panadapter-mockup-ideal.svg](docs/panadapter-mockup-ideal.svg). Grid lines at -120, -100, -80, -60, -40 dBm.
 
@@ -148,9 +148,9 @@ A few decisions that matter and that someone (including future-me) will otherwis
 
 The Tab5's PI4IO I/O expander holds `LCD_RST` and `TP_RST` low at chip power-on. The BSP's `bsp_display_start_with_config` does **not** call `bsp_io_expander_pi4ioe_init` internally. Without it, on a true cold boot the panel never comes out of reset, doesn't respond to DSI commands, and `esp_lcd_new_panel_io_dbi` hangs forever in the read FIFO wait loop.
 
-Soft resets and USB-tethered development mask this entirely: the expander is a separate IÂ²C peripheral that retains its state across ESP32 resets, so LCD_RST and TP_RST stay high from the previous boot.
+Soft resets and USB-tethered development mask this entirely: the expander is a separate I²C peripheral that retains its state across ESP32 resets, so LCD_RST and TP_RST stay high from the previous boot.
 
-Our `display_init` calls `bsp_i2c_init()` + `bsp_io_expander_pi4ioe_init(bsp_i2c_get_handle())` at the very start, then waits 120 ms for both chips to come out of reset before letting the BSP probe IÂ²C for the touch controller. Without that delay, the probe runs too fast on cold boot, falls back to ILI9881C panel, then mismatches with the (now-responding) ST7123 touch chip and asserts.
+Our `display_init` calls `bsp_i2c_init()` + `bsp_io_expander_pi4ioe_init(bsp_i2c_get_handle())` at the very start, then waits 120 ms for both chips to come out of reset before letting the BSP probe I²C for the touch controller. Without that delay, the probe runs too fast on cold boot, falls back to ILI9881C panel, then mismatches with the (now-responding) ST7123 touch chip and asserts.
 
 ### Patched UAC component lives in `components/`
 
@@ -160,15 +160,15 @@ Because the component manager refuses to clean `managed_components/` after a han
 
 ### LVGL software rotation costs ~50% FPS
 
-The ST7123 panel is natively portrait 720Ã—1280 and does *not* implement `esp_lcd_panel_swap_xy`. To get landscape, we use `bsp_display_cfg.sw_rotate=1` plus `lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_90)`.
+The ST7123 panel is natively portrait 720×1280 and does *not* implement `esp_lcd_panel_swap_xy`. To get landscape, we use `bsp_display_cfg.sw_rotate=1` plus `lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_90)`.
 
 LVGL rotates every flush in software (`rotate90_rgb565`). Real-world impact on this hardware: spectrum FPS drops from ~22 (portrait) to ~13 (landscape).
 
-Acceptable for a panadapter â€” commercial radios in this class run 10â€“15 Hz waterfalls. If FPS ever feels insufficient, Phase 6.3 would render directly in panel-native orientation and bypass LVGL rotation entirely.
+Acceptable for a panadapter — commercial radios in this class run 10–15 Hz waterfalls. If FPS ever feels insufficient, Phase 6.3 would render directly in panel-native orientation and bypass LVGL rotation entirely.
 
 ### IDLE-task watchdog is disabled
 
-LVGL's rotation pipeline keeps CPU0 busy long enough that the IDLE0 task can't reset its watchdog within the default 5 s. The system isn't actually hung â€” it just doesn't yield to IDLE. We:
+LVGL's rotation pipeline keeps CPU0 busy long enough that the IDLE0 task can't reset its watchdog within the default 5 s. The system isn't actually hung — it just doesn't yield to IDLE. We:
 
 - Disabled `CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0/CPU1`
 - Bumped `CONFIG_ESP_TASK_WDT_TIMEOUT_S` from 5 to 30 (safety net for genuinely stuck app tasks)
@@ -183,7 +183,7 @@ Real hangs in our app tasks will still be caught. Idle starvation under LVGL loa
 
 ### Waterfall scroll trick
 
-We allocate the waterfall canvas at 2Ã— height (1280Ã—824 RGB565). Each tick writes the new row at both `s_wf_head` and `s_wf_head + WATERFALL_H`, then decrements `s_wf_head` (with wrap). The canvas view pointer is moved through the buffer instead of `memmove`-ing. ~130 Âµs/tick instead of ~92 ms/tick.
+We allocate the waterfall canvas at 2× height (1280×824 RGB565). Each tick writes the new row at both `s_wf_head` and `s_wf_head + WATERFALL_H`, then decrements `s_wf_head` (with wrap). The canvas view pointer is moved through the buffer instead of `memmove`-ing. ~130 µs/tick instead of ~92 ms/tick.
 
 ### Noise floor pumping on QMX I/Q (resolved in Phase 5.7)
 
@@ -196,7 +196,7 @@ Earlier versions of the panadapter showed a slow ~13 s cycle on the displayed no
 - `uac_host_device_read` with 25 ms timeout
 - Drain loop inside `process_rx` reads until the UAC driver returns 0 bytes
 - `RX_BUF_BYTES` raised from 4096 to 19200 to match the UAC internal buffer
-- 24-bit â†’ 16-bit scaling restored to `>> 8` (the Phase 5.5 `>> 9` was a misdiagnosis)
+- 24-bit → 16-bit scaling restored to `>> 8` (the Phase 5.5 `>> 9` was a misdiagnosis)
 - Display dB range shifted to 10–130 dB to cover real signal amplitudes (later recalibrated to -130 to -30 dBm in Phase 5.8)
 
 Inspired by [`qrp_companion`](https://groups.io/g/QRPLabs/topic/118645485) by Zhenxing Han (N6HAN), who confirmed his code on Tab5 did not exhibit the issue and offered his source as reference. Thanks Zhenxing.
@@ -230,23 +230,23 @@ Exit monitor with `Ctrl+T` then `Ctrl+X` (works on Danish/non-US keyboard layout
 
 Concrete items planned for the near term, in roughly the order they'll likely be tackled.
 
-- **Phase 6.3 â€” Native-orientation rendering.** Render directly in the panel's native portrait coordinates and skip LVGL's software rotation, recovering the ~50% FPS lost to `rotate90_rgb565`. The display still appears landscape because the device is held that way; only the pixel layout changes.
-- **NVS settings persistence.** Survive power cycles for user preferences: last VFO, autoscale state, EMA Î±, waterfall colour map. Foundation for everything else in this list.
-- **Memory channels.** Quick-recall frequency presets â€” touch a slot, QMX retunes via CAT. Stored in NVS.
+- **Phase 6.3 — Native-orientation rendering.** Render directly in the panel's native portrait coordinates and skip LVGL's software rotation, recovering the ~50% FPS lost to `rotate90_rgb565`. The display still appears landscape because the device is held that way; only the pixel layout changes.
+- **NVS settings persistence.** Survive power cycles for user preferences: last VFO, autoscale state, EMA α, waterfall colour map. Foundation for everything else in this list.
+- **Memory channels.** Quick-recall frequency presets — touch a slot, QMX retunes via CAT. Stored in NVS.
 - **I/Q balance correction.** Per-band amplitude/phase coefficients applied before the FFT to push image rejection from the native ~30 dB to 50+ dB. One-time calibration step per band.
 
 ### Longer term
 
 Ideas that fit the project but aren't on the immediate path. Order is rough; appetite and curiosity will decide.
 
-- **FT8 decoder onboard.** Integrate [`ft8_lib`](https://github.com/kgoba/ft8_lib) using the existing audio pipeline (decimated to 12 kHz IF inside the QMX, or done locally from I/Q). Show decoded callsigns/grids overlaid on the spectrum at their carrier frequencies â€” a feature no commercial standalone panadapter currently offers.
+- **FT8 decoder onboard.** Integrate [`ft8_lib`](https://github.com/kgoba/ft8_lib) using the existing audio pipeline (decimated to 12 kHz IF inside the QMX, or done locally from I/Q). Show decoded callsigns/grids overlaid on the spectrum at their carrier frequencies — a feature no commercial standalone panadapter currently offers.
 - **CW decoder.** A Goertzel-based decoder on the demodulated CW passband, with text scrolling under the spectrum. The QMX itself already does this internally; question is whether to mirror its output via CAT or run a parallel decoder on the Tab5.
 - **WiFi station mode + web UI.** ESP32-P4 has WiFi via the C6 co-processor. A small web server (Mongoose or `esp_http_server`) could expose the spectrum as a remote panadapter, with the Tab5 acting as a head unit at the rig.
-- **Network CAT bridge.** TCP server forwarding CAT to the QMX, so WSJT-X / fldigi / N1MM on a PC can talk to the radio through the Tab5 â€” useful when the QMX is in the shack and the operating position is elsewhere.
+- **Network CAT bridge.** TCP server forwarding CAT to the QMX, so WSJT-X / fldigi / N1MM on a PC can talk to the radio through the Tab5 — useful when the QMX is in the shack and the operating position is elsewhere.
 - **QMX (small) support.** Same UI, different USB endpoint config and band table. Should be mostly a build-flag matter; the 5-band QMX speaks the same CAT and UAC.
 - **Extended waterfall history.** PSRAM has plenty of room for several minutes of scrollback. Two-finger drag to scrub through history would be a natural UX fit.
 - **Touch-to-tune refinements.** Pinch-to-zoom span (sub-48 kHz windows), drag-to-pan inside the current 48 kHz, snap-to-strongest-bin, configurable cursor offset for CW tone preference.
-- **DSP polish.** Noise reduction, auto-notch, denoise â€” the feature surface the QuantumSDR Spectrum DSP M4 defines as the boutique-standalone target.
+- **DSP polish.** Noise reduction, auto-notch, denoise — the feature surface the QuantumSDR Spectrum DSP M4 defines as the boutique-standalone target.
 
 ---
 
