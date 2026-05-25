@@ -31,3 +31,8 @@ esp_err_t dsp_init(void);
  *         spectrum has been computed yet.
  */
 esp_err_t dsp_get_spectrum(float *dst);
+
+// Phase 5.10D: peak dBm in a window centered on the spectrum center bin
+// (which is the VFO). half_width_bins=64 at 48 kHz/1024 ~ ±3 kHz.
+// Returns peak via *peak_dbm. ESP_ERR_NOT_FOUND if no spectrum yet.
+esp_err_t dsp_get_peak_dbm_around_vfo(int half_width_bins, float *peak_dbm);

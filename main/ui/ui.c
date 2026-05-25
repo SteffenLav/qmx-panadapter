@@ -1,4 +1,5 @@
 ﻿#include "ui.h"
+#include "render.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -14,13 +15,15 @@ static const char *TAG = "ui";
 
 // Layout constants (1280x720)
 #define TOP_BAR_H       60
+#define DRAWER_W        400  /* Phase 5.10D Stage 2: settings drawer width */
 #define BOTTOM_BAR_H    30
 #define SPECTRUM_H      200
-#define LABEL_BAR_H     18
+#define LABEL_BAR_H     32  /* Phase 5.10C: room for Montserrat 18 labels under tick marks */
 #define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - LABEL_BAR_H - BOTTOM_BAR_H)
 
 // Forward declarations (Phase 6.1 - touch-to-tune)
 static void touch_event_cb(lv_event_t *e);
+static void settings_button_cb(lv_event_t *e);  // Phase 5.10D
 static uint32_t s_last_qmx_freq_hz = 0;  // updated by ui_update_frequency
 
 // Touch-target cursor state (Phase 6.1)
@@ -32,10 +35,34 @@ static uint64_t s_target_until_us = 0;
 // Widget handles
 static lv_obj_t *s_freq_label = NULL;
 static lv_obj_t *s_smeter_label = NULL;
+static lv_obj_t *s_band_label = NULL;   // Phase 5.10D: dedicated band slot
 static lv_obj_t *s_mode_label = NULL;
 static lv_obj_t *s_spectrum_obj = NULL;
 static lv_obj_t *s_waterfall_obj = NULL;
 static lv_obj_t *s_status_label = NULL;
+
+// Phase 5.10D Stage 2: settings drawer state
+static lv_obj_t *s_drawer = NULL;
+static bool s_drawer_open = false;
+// Phase 5.10D Stage 2b: drawer widgets we need to keep handles to
+static lv_obj_t *s_slider_db_min = NULL;
+static lv_obj_t *s_slider_db_max = NULL;
+static lv_obj_t *s_slider_alpha = NULL;
+static lv_obj_t *s_lbl_db_min = NULL;
+static lv_obj_t *s_lbl_db_max = NULL;
+static lv_obj_t *s_lbl_alpha = NULL;
+static void drawer_preset_normal_cb(lv_event_t *e);
+static void drawer_preset_dx_cb(lv_event_t *e);
+static void drawer_preset_strong_cb(lv_event_t *e);
+static void drawer_slider_db_min_cb(lv_event_t *e);
+static void drawer_slider_db_max_cb(lv_event_t *e);
+static void drawer_slider_alpha_cb(lv_event_t *e);
+static void drawer_apply_preset(int db_min, int db_max, float alpha);
+static void drawer_build(void);
+static void drawer_open(void);
+static void drawer_close(void);
+static void drawer_anim_x_cb(void *obj, int32_t v);
+static void drawer_close_button_cb(lv_event_t *e);
 
 // Phase 5.5: static defaults — manual Ref/Range, user-controlled later
 // (internal arbitrary dB scale; ~80=noise floor, ~125=strong signal on test rig)
@@ -68,27 +95,35 @@ static void build_top_bar(lv_obj_t *parent)
     lv_obj_set_style_pad_all(bar, 8, 0);
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_freq_label = lv_label_create(bar);
-    lv_label_set_text(s_freq_label, "14.074.000 MHz");
-    lv_obj_set_style_text_color(s_freq_label, lv_color_hex(0xFFD76B), 0);
-    lv_obj_set_style_text_font(s_freq_label, &lv_font_montserrat_20, 0);
-    lv_obj_align(s_freq_label, LV_ALIGN_LEFT_MID, 8, 0);
+    // Phase 5.10D: top-bar layout — Band | Mode | [center: Freq] | S-meter
+    s_band_label = lv_label_create(bar);
+    lv_label_set_text(s_band_label, "Band: ---");
+    lv_obj_set_style_text_color(s_band_label, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(s_band_label, &lv_font_montserrat_20, 0);
+    lv_obj_align(s_band_label, LV_ALIGN_LEFT_MID, 8, 0);
 
     s_mode_label = lv_label_create(bar);
-    lv_label_set_text(s_mode_label, "USB");
+    lv_label_set_text(s_mode_label, "Mode: USB");
     lv_obj_set_style_text_color(s_mode_label, lv_color_hex(0xA0E0A0), 0);
     lv_obj_set_style_text_font(s_mode_label, &lv_font_montserrat_20, 0);
-    lv_obj_align(s_mode_label, LV_ALIGN_CENTER, -60, 0);
+    lv_obj_align(s_mode_label, LV_ALIGN_LEFT_MID, 200, 0);
+
+    s_freq_label = lv_label_create(bar);
+    lv_label_set_text(s_freq_label, "Center Freq: 14.074.000 Hz");
+    lv_obj_set_style_text_color(s_freq_label, lv_color_hex(0xFFD76B), 0);
+    lv_obj_set_style_text_font(s_freq_label, &lv_font_montserrat_20, 0);
+    lv_obj_align(s_freq_label, LV_ALIGN_CENTER, 0, 0);
 
     s_smeter_label = lv_label_create(bar);
-    lv_label_set_text(s_smeter_label, "S9+20");
-    lv_obj_set_style_text_color(s_smeter_label, lv_color_hex(0xFFFFFF), 0);
+    lv_label_set_text(s_smeter_label, "Signal: S0");
+    lv_obj_set_style_text_color(s_smeter_label, lv_color_hex(0x00FF00), 0);  // Phase 5.10D: match spectrum trace green
     lv_obj_set_style_text_font(s_smeter_label, &lv_font_montserrat_20, 0);
-    lv_obj_align(s_smeter_label, LV_ALIGN_CENTER, 60, 0);
+    lv_obj_align(s_smeter_label, LV_ALIGN_CENTER, 320, 0);  // Phase 5.10D: centered in right half
 
     lv_obj_t *btn = lv_btn_create(bar);
     lv_obj_set_size(btn, 60, 44);
     lv_obj_align(btn, LV_ALIGN_RIGHT_MID, -4, 0);
+    lv_obj_add_event_cb(btn, settings_button_cb, LV_EVENT_CLICKED, NULL);  // Phase 5.10D
     lv_obj_t *blbl = lv_label_create(btn);
     lv_label_set_text(blbl, LV_SYMBOL_LIST);
     lv_obj_center(blbl);
@@ -155,6 +190,9 @@ static void build_spectrum(lv_obj_t *parent)
 // ==== Label band (Phase 5.3): black strip between spectrum and waterfall with offset ticks ====
 static lv_obj_t *s_label_canvas = NULL;
 static uint8_t *s_label_canvas_buf = NULL;
+// Phase 5.10C: handles for the 5 tick labels under the spectrum, so we
+// can update them with actual MHz when the VFO changes.
+static lv_obj_t *s_tick_labels[5] = { NULL, NULL, NULL, NULL, NULL };
 
 static void build_label_bar(lv_obj_t *parent)
 {
@@ -195,21 +233,39 @@ static void build_label_bar(lv_obj_t *parent)
         lv_obj_align(s_label_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
     }
 
-    // Labels sit below the ticks
-    const char *tick_labels[5] = { "-24k", "-12k", "0", "+12k", "+24k" };
+    // Labels sit below the ticks. Phase 5.10C: store handles so the labels
+    // can be rewritten with actual MHz on every VFO change.
     const int tick_xs[5] = { 0, 320, 640, 960, 1280 };
     for (int i = 0; i < 5; i++) {
-        lv_obj_t *lbl = lv_label_create(bar);
-        lv_label_set_text(lbl, tick_labels[i]);
-        lv_obj_set_style_text_color(lbl, lv_color_hex(0xA0A0A0), 0);
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
+        s_tick_labels[i] = lv_label_create(bar);
+        lv_label_set_text(s_tick_labels[i], "--.---");
+        lv_obj_set_style_text_color(s_tick_labels[i], lv_color_hex(0xA0A0A0), 0);
+        lv_obj_set_style_text_font(s_tick_labels[i], &lv_font_montserrat_18, 0);
         if (i == 0) {
-            lv_obj_align(lbl, LV_ALIGN_BOTTOM_LEFT, 2, 0);
+            lv_obj_align(s_tick_labels[i], LV_ALIGN_BOTTOM_LEFT, 2, 0);
         } else if (i == 4) {
-            lv_obj_align(lbl, LV_ALIGN_BOTTOM_RIGHT, -2, 0);
+            lv_obj_align(s_tick_labels[i], LV_ALIGN_BOTTOM_RIGHT, -2, 0);
         } else {
-            lv_obj_align(lbl, LV_ALIGN_BOTTOM_LEFT, tick_xs[i] - 14, 0);
+            lv_obj_align(s_tick_labels[i], LV_ALIGN_BOTTOM_LEFT, tick_xs[i] - 28, 0);
         }
+    }
+}
+
+// Phase 5.10C: rewrite the 5 tick labels with absolute MHz centered on VFO.
+// At 48 kHz span, ticks are at -24/-12/0/+12/+24 kHz. Format as 7.000 / 14.012 etc.
+static void update_freq_axis_labels(uint32_t center_hz)
+{
+    const int offsets_khz[5] = { -24, -12, 0, +12, +24 };
+    for (int i = 0; i < 5; i++) {
+        if (!s_tick_labels[i]) continue;
+        int32_t hz = (int32_t)center_hz + offsets_khz[i] * 1000;
+        if (hz < 0) hz = 0;
+        char buf[16];
+        // Format: MM.HHH where MM = MHz, HHH = kHz (1 kHz resolution shown)
+        snprintf(buf, sizeof(buf), "%lu.%03lu",
+                 (unsigned long)(hz / 1000000),
+                 (unsigned long)((hz / 1000) % 1000));
+        lv_label_set_text(s_tick_labels[i], buf);
     }
 }
 
@@ -290,6 +346,7 @@ void ui_init(lv_display_t *disp)
 
 // Phase 5.10: forward declaration for band_from_freq (defined below)
 static const char *band_from_freq(uint32_t freq_hz);
+static void update_freq_axis_labels(uint32_t center_hz);  // Phase 5.10C
 
 void ui_update_frequency(uint32_t freq_hz)
 {
@@ -299,7 +356,7 @@ void ui_update_frequency(uint32_t freq_hz)
     uint32_t mhz = freq_hz / 1000000;
     uint32_t khz = (freq_hz / 1000) % 1000;
     uint32_t hz  = freq_hz % 1000;
-    snprintf(buf, sizeof(buf), "%lu.%03lu.%03lu MHz", mhz, khz, hz);
+    snprintf(buf, sizeof(buf), "Center Freq: %lu.%03lu.%03lu Hz", mhz, khz, hz);
     if (display_lock(20)) {
         lv_label_set_text(s_freq_label, buf);
         display_unlock();
@@ -307,6 +364,13 @@ void ui_update_frequency(uint32_t freq_hz)
     // Phase 5.10: derive band and push to UI
     const char *band = band_from_freq(freq_hz);
     if (band) ui_update_band(band);
+    // Phase 5.10C: refresh the frequency axis labels under the spectrum
+    if (display_lock(100)) {
+        update_freq_axis_labels(freq_hz);
+        display_unlock();
+    } else {
+        ESP_LOGW("ui", "ui_update_frequency: axis label lock timeout");
+    }
 }
 
 // Phase 5.10: map QMX frequency to ham-band name.
@@ -331,7 +395,7 @@ void ui_update_mode(const char *mode)
 {
     if (!s_mode_label || !mode) return;
     if (display_lock(100)) {
-        lv_label_set_text(s_mode_label, mode);
+        char buf[32]; snprintf(buf, sizeof(buf), "Mode: %s", mode); lv_label_set_text(s_mode_label, buf);
         lv_obj_invalidate(s_mode_label);
         display_unlock();
     } else {
@@ -341,10 +405,10 @@ void ui_update_mode(const char *mode)
 
 void ui_update_band(const char *band)
 {
-    if (!s_smeter_label || !band) return;
+    if (!s_band_label || !band) return;
     if (display_lock(100)) {
-        lv_label_set_text(s_smeter_label, band);
-        lv_obj_invalidate(s_smeter_label);
+        char buf[32]; snprintf(buf, sizeof(buf), "Band: %s", band); lv_label_set_text(s_band_label, buf);
+        lv_obj_invalidate(s_band_label);
         display_unlock();
     } else {
         ESP_LOGW("ui", "ui_update_band: display_lock timeout for '%s'", band);
@@ -353,7 +417,22 @@ void ui_update_band(const char *band)
 
 void ui_update_smeter(int s_units)
 {
-    // Placeholder
+    if (!s_smeter_label) return;
+    char buf[32];
+    if (s_units > 108) s_units = 108;  // clamp at S9+99
+    if (s_units <= 0) {
+        snprintf(buf, sizeof(buf), "Signal: S0");
+    } else if (s_units <= 9) {
+        snprintf(buf, sizeof(buf), "Signal: S%d", s_units);
+    } else {
+        // S9+xx (over S9 is reported as +dB above S9)
+        snprintf(buf, sizeof(buf), "Signal: S9+%d", s_units - 9);
+    }
+    if (display_lock(100)) {
+        lv_label_set_text(s_smeter_label, buf);
+        lv_obj_invalidate(s_smeter_label);
+        display_unlock();
+    }
 }
 
 
@@ -574,6 +653,14 @@ static void touch_event_cb(lv_event_t *e)
 
     if (code == LV_EVENT_RELEASED) {
         if (s_last_qmx_freq_hz == 0) return;  // no freq known yet, can't tune
+        // Phase 5.10D: deadzone under-and-left of the burger button.
+        // Burger is at top-right (~x=1216..1276, ~y=top bar). Block touches
+        // landing in a 180x80 region in the top-right of the spectrum so a
+        // wide finger pressing the button doesn't also retune.
+        if (p.x >= 1100 && p.y < 80) {
+            ESP_LOGI("ui_touch", "RELEASED in burger deadzone (x=%d y=%d) - ignored", (int)p.x, (int)p.y);
+            return;
+        }
 
         // Compute target frequency from final touch position
         int dx = (int)p.x - DISPLAY_H_RES / 2;
@@ -609,3 +696,255 @@ static void touch_event_cb(lv_event_t *e)
 
 
 
+
+
+// Phase 5.10D Stage 2: burger menu click — toggle settings drawer
+static void settings_button_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_drawer_open) {
+        drawer_close();
+    } else {
+        drawer_open();
+    }
+}
+
+// Animate x position. Used for slide-in/out.
+static void drawer_anim_x_cb(void *obj, int32_t v)
+{
+    lv_obj_set_x((lv_obj_t *)obj, v);
+}
+
+static void drawer_close_button_cb(lv_event_t *e)
+{
+    (void)e;
+    drawer_close();
+}
+
+// Build the drawer once. Hidden off-screen on the right initially.
+static void drawer_build(void)
+{
+    if (s_drawer) return;
+
+    lv_obj_t *scr = lv_screen_active();
+    s_drawer = lv_obj_create(scr);
+    lv_obj_set_size(s_drawer, DRAWER_W, DISPLAY_V_RES);
+    // Park off-screen to the right
+    lv_obj_set_pos(s_drawer, DISPLAY_H_RES, 0);
+    lv_obj_set_style_bg_color(s_drawer, lv_color_hex(0x1c2128), 0);
+    lv_obj_set_style_bg_opa(s_drawer, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_drawer, lv_color_hex(0x444444), 0);
+    lv_obj_set_style_border_width(s_drawer, 1, 0);
+    lv_obj_set_style_border_side(s_drawer, LV_BORDER_SIDE_LEFT, 0);
+    lv_obj_set_style_radius(s_drawer, 0, 0);
+    lv_obj_set_style_pad_all(s_drawer, 16, 0);
+    lv_obj_clear_flag(s_drawer, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Title bar with "Settings" + close X
+    lv_obj_t *title = lv_label_create(s_drawer);
+    lv_label_set_text(title, "Settings");
+    lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    lv_obj_t *close_btn = lv_btn_create(s_drawer);
+    lv_obj_set_size(close_btn, 56, 44);
+    lv_obj_align(close_btn, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_obj_add_event_cb(close_btn, drawer_close_button_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *close_lbl = lv_label_create(close_btn);
+    lv_label_set_text(close_lbl, LV_SYMBOL_CLOSE);
+    lv_obj_center(close_lbl);
+
+    // === Phase 5.10D Stage 2b: presets + sliders ===
+    int y = 80;
+
+    // Presets section header
+    lv_obj_t *presets_hdr = lv_label_create(s_drawer);
+    lv_label_set_text(presets_hdr, "Presets");
+    lv_obj_set_style_text_color(presets_hdr, lv_color_hex(0xA0E0A0), 0);
+    lv_obj_set_style_text_font(presets_hdr, &lv_font_montserrat_18, 0);
+    lv_obj_align(presets_hdr, LV_ALIGN_TOP_LEFT, 0, y);
+    y += 40;
+
+    // Three preset buttons, stacked
+    const char *preset_names[3] = { "HF Normal", "HF DX", "Strong Sig." };
+    lv_event_cb_t preset_cbs[3] = {
+        drawer_preset_normal_cb,
+        drawer_preset_dx_cb,
+        drawer_preset_strong_cb,
+    };
+    for (int i = 0; i < 3; i++) {
+        lv_obj_t *btn = lv_btn_create(s_drawer);
+        lv_obj_set_size(btn, DRAWER_W - 32, 60);  /* Phase 5.10D Stage 2b polish: bigger touch target */
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, y);
+        lv_obj_add_event_cb(btn, preset_cbs[i], LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, preset_names[i]);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
+        lv_obj_center(lbl);
+        y += 72;  /* more breathing room */
+    }
+
+    y += 24;
+    // dB Range section header
+    lv_obj_t *db_hdr = lv_label_create(s_drawer);
+    lv_label_set_text(db_hdr, "dB Range");
+    lv_obj_set_style_text_color(db_hdr, lv_color_hex(0xA0E0A0), 0);
+    lv_obj_set_style_text_font(db_hdr, &lv_font_montserrat_18, 0);
+    lv_obj_align(db_hdr, LV_ALIGN_TOP_LEFT, 0, y);
+    y += 40;
+
+    // dB min slider
+    s_lbl_db_min = lv_label_create(s_drawer);
+    lv_label_set_text(s_lbl_db_min, "Min: -130 dBm");
+    lv_obj_set_style_text_color(s_lbl_db_min, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(s_lbl_db_min, &lv_font_montserrat_18, 0);
+    lv_obj_align(s_lbl_db_min, LV_ALIGN_TOP_LEFT, 0, y);
+    y += 30;
+
+    s_slider_db_min = lv_slider_create(s_drawer);
+    lv_obj_set_size(s_slider_db_min, DRAWER_W - 32, 30);
+    lv_slider_set_range(s_slider_db_min, -150, -50);
+    lv_slider_set_value(s_slider_db_min, -130, LV_ANIM_OFF);
+    lv_obj_align(s_slider_db_min, LV_ALIGN_TOP_LEFT, 0, y);
+    lv_obj_add_event_cb(s_slider_db_min, drawer_slider_db_min_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    y += 52;
+
+    // dB max slider
+    s_lbl_db_max = lv_label_create(s_drawer);
+    lv_label_set_text(s_lbl_db_max, "Max: -30 dBm");
+    lv_obj_set_style_text_color(s_lbl_db_max, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(s_lbl_db_max, &lv_font_montserrat_18, 0);
+    lv_obj_align(s_lbl_db_max, LV_ALIGN_TOP_LEFT, 0, y);
+    y += 30;
+
+    s_slider_db_max = lv_slider_create(s_drawer);
+    lv_obj_set_size(s_slider_db_max, DRAWER_W - 32, 30);
+    lv_slider_set_range(s_slider_db_max, -50, 10);
+    lv_slider_set_value(s_slider_db_max, -30, LV_ANIM_OFF);
+    lv_obj_align(s_slider_db_max, LV_ALIGN_TOP_LEFT, 0, y);
+    lv_obj_add_event_cb(s_slider_db_max, drawer_slider_db_max_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    y += 60;
+
+    // Smoothing section header
+    lv_obj_t *sm_hdr = lv_label_create(s_drawer);
+    lv_label_set_text(sm_hdr, "Smoothing");
+    lv_obj_set_style_text_color(sm_hdr, lv_color_hex(0xA0E0A0), 0);
+    lv_obj_set_style_text_font(sm_hdr, &lv_font_montserrat_18, 0);
+    lv_obj_align(sm_hdr, LV_ALIGN_TOP_LEFT, 0, y);
+    y += 40;
+
+    s_lbl_alpha = lv_label_create(s_drawer);
+    lv_label_set_text(s_lbl_alpha, "Alpha: 0.40");
+    lv_obj_set_style_text_color(s_lbl_alpha, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(s_lbl_alpha, &lv_font_montserrat_18, 0);
+    lv_obj_align(s_lbl_alpha, LV_ALIGN_TOP_LEFT, 0, y);
+    y += 30;
+
+    s_slider_alpha = lv_slider_create(s_drawer);
+    lv_obj_set_size(s_slider_alpha, DRAWER_W - 32, 30);
+    lv_slider_set_range(s_slider_alpha, 5, 100);   // = alpha 0.05..1.00
+    lv_slider_set_value(s_slider_alpha, 40, LV_ANIM_OFF);
+    lv_obj_align(s_slider_alpha, LV_ALIGN_TOP_LEFT, 0, y);
+    lv_obj_add_event_cb(s_slider_alpha, drawer_slider_alpha_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    ESP_LOGI(TAG, "Settings drawer built (off-screen at x=%d)", DISPLAY_H_RES);
+}
+
+static void drawer_open(void)
+{
+    drawer_build();  // lazy build on first open
+    if (!s_drawer || s_drawer_open) return;
+    lv_obj_move_foreground(s_drawer);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_drawer);
+    lv_anim_set_exec_cb(&a, drawer_anim_x_cb);
+    lv_anim_set_values(&a, DISPLAY_H_RES, DISPLAY_H_RES - DRAWER_W);
+    lv_anim_set_time(&a, 250);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);
+    s_drawer_open = true;
+    ESP_LOGI(TAG, "Settings drawer open");
+}
+
+static void drawer_close(void)
+{
+    if (!s_drawer || !s_drawer_open) return;
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_drawer);
+    lv_anim_set_exec_cb(&a, drawer_anim_x_cb);
+    lv_anim_set_values(&a, DISPLAY_H_RES - DRAWER_W, DISPLAY_H_RES);
+    lv_anim_set_time(&a, 250);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in);
+    lv_anim_start(&a);
+    s_drawer_open = false;
+    ESP_LOGI(TAG, "Settings drawer closed");
+}
+
+
+// === Phase 5.10D Stage 2b: drawer button + slider callbacks ===
+
+static void drawer_apply_preset(int db_min, int db_max, float alpha)
+{
+    if (s_slider_db_min) lv_slider_set_value(s_slider_db_min, db_min, LV_ANIM_OFF);
+    if (s_slider_db_max) lv_slider_set_value(s_slider_db_max, db_max, LV_ANIM_OFF);
+    if (s_slider_alpha)  lv_slider_set_value(s_slider_alpha, (int)(alpha * 100.0f + 0.5f), LV_ANIM_OFF);
+
+    char buf[24];
+    if (s_lbl_db_min) {
+        snprintf(buf, sizeof(buf), "Min: %d dBm", db_min);
+        lv_label_set_text(s_lbl_db_min, buf);
+    }
+    if (s_lbl_db_max) {
+        snprintf(buf, sizeof(buf), "Max: %d dBm", db_max);
+        lv_label_set_text(s_lbl_db_max, buf);
+    }
+    if (s_lbl_alpha) {
+        snprintf(buf, sizeof(buf), "Alpha: %.2f", (double)alpha);
+        lv_label_set_text(s_lbl_alpha, buf);
+    }
+
+    ui_set_db_range((float)db_min, (float)db_max);
+    render_set_ema_alpha(alpha);
+}
+
+static void drawer_preset_normal_cb(lv_event_t *e)  { (void)e; drawer_apply_preset(-130, -30, 0.40f); }
+static void drawer_preset_dx_cb(lv_event_t *e)      { (void)e; drawer_apply_preset(-130, -50, 0.60f); }
+static void drawer_preset_strong_cb(lv_event_t *e)  { (void)e; drawer_apply_preset(-110, -20, 0.20f); }
+
+static void drawer_slider_db_min_cb(lv_event_t *e)
+{
+    lv_obj_t *sl = lv_event_get_target(e);
+    int v = (int)lv_slider_get_value(sl);
+    char buf[24];
+    snprintf(buf, sizeof(buf), "Min: %d dBm", v);
+    if (s_lbl_db_min) lv_label_set_text(s_lbl_db_min, buf);
+    int max_v = s_slider_db_max ? (int)lv_slider_get_value(s_slider_db_max) : -30;
+    if (v >= max_v) v = max_v - 5;
+    ui_set_db_range((float)v, (float)max_v);
+}
+
+static void drawer_slider_db_max_cb(lv_event_t *e)
+{
+    lv_obj_t *sl = lv_event_get_target(e);
+    int v = (int)lv_slider_get_value(sl);
+    char buf[24];
+    snprintf(buf, sizeof(buf), "Max: %d dBm", v);
+    if (s_lbl_db_max) lv_label_set_text(s_lbl_db_max, buf);
+    int min_v = s_slider_db_min ? (int)lv_slider_get_value(s_slider_db_min) : -130;
+    if (v <= min_v) v = min_v + 5;
+    ui_set_db_range((float)min_v, (float)v);
+}
+
+static void drawer_slider_alpha_cb(lv_event_t *e)
+{
+    lv_obj_t *sl = lv_event_get_target(e);
+    int v = (int)lv_slider_get_value(sl);
+    float alpha = (float)v / 100.0f;
+    char buf[24];
+    snprintf(buf, sizeof(buf), "Alpha: %.2f", (double)alpha);
+    if (s_lbl_alpha) lv_label_set_text(s_lbl_alpha, buf);
+    render_set_ema_alpha(alpha);
+}

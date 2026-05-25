@@ -130,6 +130,40 @@ esp_err_t dsp_get_spectrum(float *dst)
     return ESP_OK;
 }
 
+// Phase 5.10D: peak dBm in a window around bin DSP_FFT_SIZE/2 (the VFO center).
+// We treat the spectrum as it sits in s_spectrum which is in FFT-natural order;
+// the center bin of the displayed spectrum is at index DSP_FFT_SIZE/2 after
+// the fftshift performed in ui_push_spectrum. However s_spectrum here is the
+// raw post-FFT array. To be consistent with the displayed center we use the
+// DC bin (index 0) plus the negative-frequency half, equivalent to the center
+// of the shifted spectrum being bin 0.  Concretely: bin 0 is DC = VFO.
+esp_err_t dsp_get_peak_dbm_around_vfo(int half_width_bins, float *peak_dbm)
+{
+    if (!s_spectrum_mtx || !peak_dbm) return ESP_ERR_INVALID_ARG;
+    if (xSemaphoreTake(s_spectrum_mtx, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (!s_have_spectrum) {
+        xSemaphoreGive(s_spectrum_mtx);
+        return ESP_ERR_NOT_FOUND;
+    }
+    // VFO = bin 0 (DC) in s_spectrum (pre-shift order).
+    // Search positive bins 0..half and negative bins -half..-1 (mapped to
+    // DSP_FFT_SIZE - half ... DSP_FFT_SIZE - 1).
+    if (half_width_bins <= 0) half_width_bins = 1;
+    if (half_width_bins > DSP_FFT_SIZE / 2) half_width_bins = DSP_FFT_SIZE / 2;
+    float peak = -1e9f;
+    for (int i = 0; i <= half_width_bins; i++) {
+        if (s_spectrum[i] > peak) peak = s_spectrum[i];
+    }
+    for (int i = DSP_FFT_SIZE - half_width_bins; i < DSP_FFT_SIZE; i++) {
+        if (s_spectrum[i] > peak) peak = s_spectrum[i];
+    }
+    *peak_dbm = peak;
+    xSemaphoreGive(s_spectrum_mtx);
+    return ESP_OK;
+}
+
 static void log_stats(float min_db, float max_db, float mean_db)
 {
     int64_t now = esp_timer_get_time();

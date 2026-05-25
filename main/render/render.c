@@ -23,7 +23,16 @@ static float *s_scratch = NULL;
 // Phase 5.4: smoothing (EMA per bin, alpha=0.4)
 static float *s_smoothed = NULL;
 static bool s_smoothed_init = false;
-#define SMOOTH_ALPHA  0.4f
+// Phase 5.10D Stage 2: runtime-adjustable EMA smoothing
+static float s_ema_alpha = 0.4f;
+
+void render_set_ema_alpha(float alpha)
+{
+    if (alpha < 0.05f) alpha = 0.05f;
+    if (alpha > 1.0f) alpha = 1.0f;
+    s_ema_alpha = alpha;
+    ESP_LOGI("render", "EMA alpha = %.2f", (double)alpha);
+}
 
 
 
@@ -45,14 +54,36 @@ static void render_task(void *arg)
                 s_smoothed_init = true;
             } else {
                 for (int i = 0; i < DSP_FFT_SIZE; i++) {
-                    s_smoothed[i] = SMOOTH_ALPHA * s_scratch[i]
-                                  + (1.0f - SMOOTH_ALPHA) * s_smoothed[i];
+                    s_smoothed[i] = s_ema_alpha * s_scratch[i]
+                                  + (1.0f - s_ema_alpha) * s_smoothed[i];
                 }
             }
 
 
             // Push smoothed spectrum to UI and waterfall
             ui_push_spectrum(s_smoothed, DSP_FFT_SIZE);
+
+            // Phase 5.10D: sample S-meter at ~5 Hz from spectrum peak around VFO
+            {
+                static int s_smeter_tick = 0;
+                s_smeter_tick++;
+                if (s_smeter_tick >= 6) {  // 30 Hz / 6 = 5 Hz
+                    s_smeter_tick = 0;
+                    float peak_dbm;
+                    if (dsp_get_peak_dbm_around_vfo(64, &peak_dbm) == ESP_OK) {
+                        // S-unit conversion: S9 = -73 dBm, 6 dB per S-unit below.
+                        // Above S9, we use S9+xx where xx = dbm - (-73).
+                        int s_units;
+                        if (peak_dbm >= -73.0f) {
+                            s_units = 9 + (int)((peak_dbm + 73.0f) + 0.5f);
+                        } else {
+                            s_units = 9 + (int)((peak_dbm + 73.0f) / 6.0f + 0.5f);
+                            if (s_units < 0) s_units = 0;
+                        }
+                        ui_update_smeter(s_units);
+                    }
+                }
+            }
             render_waterfall_tick(s_smoothed, DSP_FFT_SIZE);
         }
         // ESP_ERR_NOT_FOUND just means no spectrum yet (no audio); skip silently.
