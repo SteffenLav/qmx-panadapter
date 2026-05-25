@@ -9,8 +9,8 @@ static const char *TAG = "render_wf";
 
 // Must match the display canvas width.
 #define WF_WIDTH        DISPLAY_H_RES
-#define DB_MIN_DISPLAY  40.0f
-#define DB_MAX_DISPLAY  130.0f
+#define DB_MIN_DISPLAY  -130.0f  /* dBm, matches ui.c spectrum range */
+#define DB_MAX_DISPLAY  -30.0f   /* dBm, matches ui.c spectrum range */
 
 // 256-entry RGB565 classic-SDR gradient LUT:
 //  black -> dark blue -> blue -> cyan -> green -> yellow -> red

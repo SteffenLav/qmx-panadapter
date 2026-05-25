@@ -12,6 +12,14 @@
 #ifndef DSP_DC_BLOCKER
 #define DSP_DC_BLOCKER 1
 #endif
+
+// Phase 5.8: dBm calibration offset. Added to every dB value before display so
+// readings match real-world signal strength. Procedure: with QMX on dummy load,
+// log the per-second MEDIAN dB across all bins (= noise floor in raw dB);
+// the offset is then -130 - median.
+#ifndef DSP_DB_CALIBRATION_OFFSET
+#define DSP_DB_CALIBRATION_OFFSET -148.0f  /* measured against QMX on dummy load (-130 dBm floor target) */
+#endif
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -131,7 +139,7 @@ static void log_stats(float min_db, float max_db, float mean_db)
     uint32_t frames = s_frames_this_period;
     s_frames_this_period = 0;
     s_period_start_us = now;
-    ESP_LOGI(TAG, "Spectrum: min=%.1f dB, max=%.1f dB, mean=%.1f dB, frames=%u/s",
+    ESP_LOGI(TAG, "Spectrum: min=%.1f dBm, max=%.1f dBm, mean=%.1f dBm, frames=%u/s",
              min_db, max_db, mean_db, (unsigned)frames);
 }
 
@@ -209,7 +217,7 @@ static void fft_task(void *arg)
             // dB scale across different input amplitudes / FFT sizes.
             // For 16-bit input max=32768, mag2 max ~ (32768 * N * windowGain)^2
             // We just take 10*log10 directly here; scaling can be tuned later.
-            float db = 10.0f * log10f(mag2);
+            float db = 10.0f * log10f(mag2) + DSP_DB_CALIBRATION_OFFSET;
             tmp_spectrum[i] = db;
             sum_db += db;
             if (db < min_db) min_db = db;
@@ -219,6 +227,31 @@ static void fft_task(void *arg)
         last_min = min_db;
         last_max = max_db;
         last_mean = mean_db;
+
+        // Phase 5.8: median dB across all bins (robust noise floor estimate).
+        // Logged once per second; use on dummy load to compute
+        // DSP_DB_CALIBRATION_OFFSET = -130 - median (target -130 dBm floor).
+        {
+            static float s_med_buf[DSP_FFT_SIZE];
+            memcpy(s_med_buf, tmp_spectrum, DSP_FFT_SIZE * sizeof(float));
+            for (int a = 1; a < DSP_FFT_SIZE; a++) {
+                float key = s_med_buf[a];
+                int b = a - 1;
+                while (b >= 0 && s_med_buf[b] > key) {
+                    s_med_buf[b+1] = s_med_buf[b];
+                    b--;
+                }
+                s_med_buf[b+1] = key;
+            }
+            float median_db = s_med_buf[DSP_FFT_SIZE / 2];
+            static int64_t s_last_median_log_us = 0;
+            int64_t now_us = esp_timer_get_time();
+            if (now_us - s_last_median_log_us > 1000000) {
+                s_last_median_log_us = now_us;
+                ESP_LOGI(TAG, "CALIB: median=%.1f dB  (target -130 dBm at QMX dummy load -> offset = %.1f)",
+                         (double)median_db, (double)(-130.0f - median_db));
+            }
+        }
 
         // Publish under mutex
         if (xSemaphoreTake(s_spectrum_mtx, pdMS_TO_TICKS(10)) == pdTRUE) {
