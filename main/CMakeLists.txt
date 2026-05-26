@@ -1,4 +1,4 @@
-﻿idf_component_register(
+idf_component_register(
     SRCS
         "main.c"
         "display/display.c"
@@ -9,6 +9,7 @@
         "dsp/dsp.c"
         "render/render.c"
         "render/render_waterfall.c"
+        "screenshot/screenshot.c"
     INCLUDE_DIRS
         "."
         "display"
@@ -18,6 +19,7 @@
         "audio"
         "dsp"
         "render"
+        "screenshot"
     REQUIRES
         esp_lcd
         esp_timer
@@ -30,4 +32,3 @@
         espressif__usb_host_uac
         espressif__esp-dsp
 )
-

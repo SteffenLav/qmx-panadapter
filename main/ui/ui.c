@@ -1,4 +1,4 @@
-﻿#include "ui.h"
+#include "ui.h"
 #include "render.h"
 
 #include <stdio.h>
@@ -10,6 +10,7 @@
 #include "esp_heap_caps.h"
 #include "display.h"
 #include "cat.h"
+#include "screenshot.h"
 
 static const char *TAG = "ui";
 
@@ -19,7 +20,7 @@ static const char *TAG = "ui";
 #define BOTTOM_BAR_H    30
 #define SPECTRUM_H      200
 #define LABEL_BAR_H     32  /* Phase 5.10C: room for Montserrat 18 labels under tick marks */
-// Phase 5.10E: QMX I/Q has a 12 kHz IF offset — the signal at the QMX's
+// Phase 5.10E: QMX I/Q has a 12 kHz IF offset Ã¢â‚¬â€ the signal at the QMX's
 // tuned frequency lands at +12 kHz in the baseband. We compensate by
 // shifting the displayed spectrum left by 12 kHz so the tuned signal
 // appears at the visual center. Touch-to-tune math is unchanged because
@@ -73,7 +74,7 @@ static void drawer_close(void);
 static void drawer_anim_x_cb(void *obj, int32_t v);
 static void drawer_close_button_cb(lv_event_t *e);
 
-// Phase 5.5: static defaults — manual Ref/Range, user-controlled later
+// Phase 5.5: static defaults Ã¢â‚¬â€ manual Ref/Range, user-controlled later
 // (internal arbitrary dB scale; ~80=noise floor, ~125=strong signal on test rig)
 static float DB_MIN_DISPLAY = -130.0f;  /* dBm, calibrated scale */
 static float DB_MAX_DISPLAY = -30.0f;  /* dBm, headroom for S9+40 */
@@ -104,7 +105,7 @@ static void build_top_bar(lv_obj_t *parent)
     lv_obj_set_style_pad_all(bar, 8, 0);
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Phase 5.10D: top-bar layout — Band | Mode | [center: Freq] | S-meter
+    // Phase 5.10D: top-bar layout Ã¢â‚¬â€ Band | Mode | [center: Freq] | S-meter
     s_band_label = lv_label_create(bar);
     lv_label_set_text(s_band_label, "Band: ---");
     lv_obj_set_style_text_color(s_band_label, lv_color_hex(0xFFFFFF), 0);
@@ -357,6 +358,9 @@ void ui_init(lv_display_t *disp)
 
     // Phase 5.10I: ensure the oversized burger sits on top of everything
     if (s_burger_btn) lv_obj_move_foreground(s_burger_btn);
+
+    // Hidden 80x80 long-press screenshot region in top-left
+    screenshot_init(scr);
     ESP_LOGI(TAG, "UI built: top=%dpx spectrum=%dpx labels=%dpx waterfall=%dpx bottom=%dpx",
              TOP_BAR_H, SPECTRUM_H, LABEL_BAR_H, WATERFALL_H, BOTTOM_BAR_H);
 }
@@ -758,6 +762,12 @@ static void touch_event_cb(lv_event_t *e)
             return;
         }
 
+        // Screenshot button deadzone: top-left 80x80
+        if (p.x < 80 && p.y < 80) {
+            ESP_LOGI("ui_touch", "RELEASED in screenshot deadzone (80x80) (x=%d y=%d) - ignored", (int)p.x, (int)p.y);
+            return;
+        }
+
         // Compute target frequency from final touch position
         int dx = (int)p.x - DISPLAY_H_RES / 2;
         int32_t offset_hz = (int32_t)((int64_t)dx * UAC_SAMPLE_RATE / DISPLAY_H_RES);
@@ -808,7 +818,7 @@ static void touch_event_cb(lv_event_t *e)
 
 
 
-// Phase 5.10D Stage 2: burger menu click — toggle settings drawer
+// Phase 5.10D Stage 2: burger menu click Ã¢â‚¬â€ toggle settings drawer
 static void settings_button_cb(lv_event_t *e)
 {
     (void)e;
