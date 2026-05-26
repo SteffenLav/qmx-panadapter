@@ -404,6 +404,19 @@ static void link_task(void *arg)
             s_rx_len = 0;
             s_last_freq_hz = 0;
             s_last_mode_digit = 0;
+            // Phase 5.10J: enable QMX IQ mode for this session. Q9 1; is
+            // session-only (not written to EEPROM), so the user's normal
+            // QMX state is restored automatically on disconnect/power-cycle.
+            {
+                const char *iq_on = "Q9 1;";
+                esp_err_t terr = cdc_acm_host_data_tx_blocking(
+                    s_cdc_dev, (const uint8_t *)iq_on, 5, 200);
+                if (terr == ESP_OK) {
+                    ESP_LOGI(TAG, "QMX IQ mode enabled (Q9 1;)");
+                } else {
+                    ESP_LOGW(TAG, "Failed to enable QMX IQ mode: 0x%x", terr);
+                }
+            }
             xTaskCreatePinnedToCore(
                 poll_task, "cat_poll", 4096, NULL, 5, &s_poll_task, 1);
 
