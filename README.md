@@ -46,12 +46,15 @@ Working. All phases through 6.2 complete, plus cold-boot reliability fix and I/Q
 | 5.10G | Passband indicator from CAT FW (with mode defaults) | done |
 | 5.10H | Faster CAT poll + optimistic touch-to-tune UI | done |
 | 5.10I | Bigger burger and close buttons (80x80) | done |
+| 5.10J | Auto-enable QMX IQ mode (`Q9 1;`) on CAT connect | done |
+| 5.11  | Hidden long-press screenshot to UART (top-left 80x80) | done |
 | 6.1   | Touch-to-tune via CAT FA, live cyan drag cursor | done |
 | 6.2   | Landscape rotation 1280×720 (LVGL software rotation) | done |
 | —     | Cold-boot fix (PI4IO expander init for LCD_RST / TP_RST) | done |
 | A     | I/Q balance correction (Gram-Schmidt blind adaptive, hardcoded ON) | done |
 | B     | I/Q balance ON/OFF toggle in settings drawer | done |
 | C     | I/Q balance time constant tuning (two-speed convergence) | done |
+| —     | NVS settings persistence (dB range, EMA alpha, IQ toggle) | done |
 
 See the [Roadmap](#roadmap) at the bottom for what's next.
 
@@ -277,27 +280,31 @@ Exit monitor with `Ctrl+T` then `Ctrl+X` (works on Danish/non-US keyboard layout
 
 ## Roadmap
 
+### Shipped in v0.7.0
+
+- **Hidden long-press screenshot** (Phase 5.11). Top-left 80x80 corner, 1 sec hold. Base64 streamed over UART; Python decoder saves PNG to `~/Downloads`.
+- **I/Q balance correction** (Phases A–C). Gram-Schmidt blind adaptive image-rejection; toggle in settings drawer.
+- **NVS settings persistence**. dB range, EMA alpha and IQ toggle survive reboots. Debounced flush minimises flash wear.
+
 ### Next up
 
 Concrete items planned for the near term, in roughly the order they'll likely be tackled.
 
-- **Phase 6.3 — Native-orientation rendering.** Render in the panel's native 720×1280 portrait coordinates so LVGL has no rotation step, recovering the ~50% FPS lost to `rotate90_rgb565`. Requires transposing all widget positions and rewriting all canvas drawing code for portrait. The PPA hardware rotation path (`CONFIG_LVGL_PORT_ENABLE_PPA`) was investigated but ruled out — it conflicts with the USB host stack over DW-GDMA channels and breaks QMX connectivity.
-- **NVS settings persistence.** Survive power cycles for user preferences: last VFO, autoscale state, EMA α, waterfall colour map. Foundation for everything else in this list.
 - **Memory channels.** Quick-recall frequency presets — touch a slot, QMX retunes via CAT. Stored in NVS.
+- **FT8 decoder onboard.** Integrate [`ft8_lib`](https://github.com/kgoba/ft8_lib) using the existing audio pipeline. Show decoded callsigns/grids overlaid on the spectrum at their carrier frequencies.
+- **DSP polish.** Noise reduction, auto-notch — the feature surface the QuantumSDR Spectrum DSP M4 defines as the boutique-standalone target.
+- **Phase 6.3 — Native-orientation rendering** *(deferred)*. First attempt in v0.6.x was reverted; UI elements were half-migrated. Worth revisiting once memory channels and FT8 land, since the ~50% FPS recovery is real. PPA hardware rotation ruled out earlier — it conflicts with the USB host stack over DW-GDMA channels.
 
 ### Longer term
 
 Ideas that fit the project but aren't on the immediate path. Order is rough; appetite and curiosity will decide.
 
-- **FT8 decoder onboard.** Integrate [`ft8_lib`](https://github.com/kgoba/ft8_lib) using the existing audio pipeline (decimated to 12 kHz IF inside the QMX, or done locally from I/Q). Show decoded callsigns/grids overlaid on the spectrum at their carrier frequencies — a feature no commercial standalone panadapter currently offers.
 - **CW decoder.** A Goertzel-based decoder on the demodulated CW passband, with text scrolling under the spectrum. The QMX itself already does this internally; question is whether to mirror its output via CAT or run a parallel decoder on the Tab5.
 - **WiFi station mode + web UI.** ESP32-P4 has WiFi via the C6 co-processor. A small web server (Mongoose or `esp_http_server`) could expose the spectrum as a remote panadapter, with the Tab5 acting as a head unit at the rig.
 - **Network CAT bridge.** TCP server forwarding CAT to the QMX, so WSJT-X / fldigi / N1MM on a PC can talk to the radio through the Tab5 — useful when the QMX is in the shack and the operating position is elsewhere.
 - **QMX (small) support.** Same UI, different USB endpoint config and band table. Should be mostly a build-flag matter; the 5-band QMX speaks the same CAT and UAC.
 - **Extended waterfall history.** PSRAM has plenty of room for several minutes of scrollback. Two-finger drag to scrub through history would be a natural UX fit.
 - **Touch-to-tune refinements.** Pinch-to-zoom span (sub-48 kHz windows), drag-to-pan inside the current 48 kHz, snap-to-strongest-bin, configurable cursor offset for CW tone preference.
-- **DSP polish.** Noise reduction, auto-notch, denoise — the feature surface the QuantumSDR Spectrum DSP M4 defines as the boutique-standalone target.
-
 ---
 
 ## License
