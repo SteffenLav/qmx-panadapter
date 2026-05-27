@@ -12,6 +12,7 @@ idf_component_register(
         "render/render_waterfall.c"
         "screenshot/screenshot.c"
         "storage/settings.c"
+        "wifi/wifi.c"
     INCLUDE_DIRS
         "."
         "display"
@@ -23,6 +24,7 @@ idf_component_register(
         "render"
         "screenshot"
         "storage"
+        "wifi"
     REQUIRES
         esp_lcd
         esp_timer
@@ -35,4 +37,8 @@ idf_component_register(
         espressif__usb_host_uac
         espressif__esp-dsp
         nvs_flash
+        esp_wifi
+        esp_netif
+        esp_event
+        lwip
 )

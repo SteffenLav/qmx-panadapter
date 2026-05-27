@@ -15,6 +15,7 @@
 #include "dsp.h"
 #include "render.h"
 #include "settings.h"
+#include "wifi.h"
 #include "iq_balance.h"
 
 static const char *TAG = "main";
@@ -59,6 +60,10 @@ void app_main(void)
     ESP_ERROR_CHECK(audio_init());
     iq_balance_set_enabled(cfg.iq_enabled);
     ESP_ERROR_CHECK(cat_init());
+
+    // WiFi+SNTP runs in a background task; doesn't block boot.
+    // DISABLED pending C6 firmware investigation (see CLAUDE.md / git log).
+    // wifi_start();
     ESP_ERROR_CHECK(dsp_init());
     ESP_ERROR_CHECK(render_init());
 
