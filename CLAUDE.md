@@ -25,6 +25,7 @@ main/
   cat/cat.c               USB CDC-ACM + Kenwood CAT (FA/MD/FW poll, tune write)
   audio/audio.c           USB UAC + ring buffer producer (core 0, polling)
   dsp/dsp.c               FFT consumer (reads ring buffer), spectrum mutex, DC blocker
+  dsp/iq_balance.c        Blind adaptive Gram-Schmidt I/Q correction (Phases A–C)
   render/render.c         30 Hz render task, EMA smoothing, dB scaling
   render/render_waterfall.c  Waterfall tick, double-height canvas scroll trick
   screenshot/screenshot.c UART screenshot dump (hidden long-press, top-left 80×80)
@@ -82,10 +83,21 @@ Kenwood-style. Round-robin poll: `FA` (freq) / `MD` (mode) / `FW` (passband widt
 
 `DSP_DB_CALIBRATION_OFFSET = -148.0 dB` (measured on dummy load, noise floor → -130 dBm). S9 = -73 dBm. Display range: -130 to -30 dBm.
 
+## I/Q balance correction
+
+`dsp/iq_balance.c` — blind adaptive Gram-Schmidt orthogonaliser applied per sample in `audio.c` before samples enter the ring buffer.
+
+- **DC removal**: exponential tracker, τ = 1 s
+- **Power tracking** (I² and Q²): τ = 200 ms
+- **Cross-product tracking** (I·Q): τ = 1 s
+- **Two-speed startup** (Phase C): all alphas run at 8× for the first 2 s of signal after each reset, giving ~125 ms convergence; then drop to steady-state for stable long-term tracking
+- **Correction**: `q_out = (q - K_phi·i) × K_amp`; I channel is unchanged
+- **Toggle**: `iq_balance_set_enabled()` / `iq_balance_is_enabled()` — wired to the settings drawer switch (Phase B); re-enabling calls `iq_balance_reset()` so the estimator reconverges from clean state
+
+Do not call `AI1;` on the QMX CAT port — it partially executes (enables auto-info mode) despite returning `?;`, which breaks FA polling for the entire session until power cycle.
+
 ## Branch state
 
 | Branch | What | State |
 |--------|------|-------|
-| `main` | All phases through 5.11 + Phase A IQ balance + cold-boot fix | stable |
-
-Phase B will add a settings drawer toggle for IQ balance; Phase C will tune time constants.
+| `main` | All phases through 5.11 + cold-boot fix + IQ balance Phases A–C | stable |
