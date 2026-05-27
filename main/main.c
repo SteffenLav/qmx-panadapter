@@ -1,8 +1,9 @@
-﻿#include <stdio.h>
+#include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "nvs_flash.h"
 #include "lvgl.h"
 #include "bsp/m5stack_tab5.h"
 
@@ -13,6 +14,8 @@
 #include "audio.h"
 #include "dsp.h"
 #include "render.h"
+#include "settings.h"
+#include "iq_balance.h"
 
 static const char *TAG = "main";
 
@@ -21,17 +24,40 @@ void app_main(void)
     ESP_LOGI(TAG, "QMX+ Panadapter starting");
     ESP_LOGI(TAG, "PSRAM total: %zu MB",
              heap_caps_get_total_size(MALLOC_CAP_SPIRAM) / (1024 * 1024));
+    // Initialise NVS (settings persistence). If the partition is full or
+    // a new version invalidated it, erase and retry — never block boot.
+    esp_err_t nvs_err = nvs_flash_init();
+    if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_LOGW(TAG, "NVS needs erase (0x%x); erasing and retrying", nvs_err);
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        nvs_err = nvs_flash_init();
+    }
+    if (nvs_err != ESP_OK) {
+        ESP_LOGE(TAG, "NVS init failed: 0x%x — settings will not persist", nvs_err);
+    } else {
+        ESP_LOGI(TAG, "NVS initialised");
+    }
+
+    settings_init();
+    qmx_settings_t cfg;
+    settings_load_all(&cfg);
 
     lv_display_t *disp = NULL;
     ESP_ERROR_CHECK(display_init(&disp));
 
     ui_init(disp);
+
+    // Apply persisted settings to UI / render pipeline.
+    ui_set_db_range(cfg.db_min, cfg.db_max);
+    ui_set_db_labels(cfg.db_min, cfg.db_max);
+    render_set_ema_alpha(cfg.ema_alpha);
     fps_counter_start();
 
     ESP_ERROR_CHECK(bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true));
     ESP_LOGI(TAG, "USB host started");
 
     ESP_ERROR_CHECK(audio_init());
+    iq_balance_set_enabled(cfg.iq_enabled);
     ESP_ERROR_CHECK(cat_init());
     ESP_ERROR_CHECK(dsp_init());
     ESP_ERROR_CHECK(render_init());

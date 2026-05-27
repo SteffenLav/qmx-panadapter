@@ -11,6 +11,7 @@ idf_component_register(
         "render/render.c"
         "render/render_waterfall.c"
         "screenshot/screenshot.c"
+        "storage/settings.c"
     INCLUDE_DIRS
         "."
         "display"
@@ -21,6 +22,7 @@ idf_component_register(
         "dsp"
         "render"
         "screenshot"
+        "storage"
     REQUIRES
         esp_lcd
         esp_timer
@@ -32,4 +34,5 @@ idf_component_register(
         espressif__usb_host_cdc_acm
         espressif__usb_host_uac
         espressif__esp-dsp
+        nvs_flash
 )

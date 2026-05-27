@@ -11,6 +11,7 @@
 #include "display.h"
 #include "cat.h"
 #include "screenshot.h"
+#include "settings.h"
 #include "iq_balance.h"
 
 static const char *TAG = "ui";
@@ -849,6 +850,7 @@ static void iq_balance_toggle_cb(lv_event_t *e)
     lv_obj_t *sw = lv_event_get_target(e);
     bool on = lv_obj_has_state(sw, LV_STATE_CHECKED);
     iq_balance_set_enabled(on);
+    settings_set_iq_enabled(on);
     if (on) iq_balance_reset();
 }
 
@@ -1056,6 +1058,9 @@ static void drawer_apply_preset(int db_min, int db_max, float alpha)
 
     ui_set_db_range((float)db_min, (float)db_max);
     render_set_ema_alpha(alpha);
+    settings_set_db_min((float)db_min);
+    settings_set_db_max((float)db_max);
+    settings_set_ema_alpha(alpha);
 }
 
 static void drawer_preset_normal_cb(lv_event_t *e)  { (void)e; drawer_apply_preset(-130, -30, 0.40f); }
@@ -1072,6 +1077,8 @@ static void drawer_slider_db_min_cb(lv_event_t *e)
     int max_v = s_slider_db_max ? (int)lv_slider_get_value(s_slider_db_max) : -30;
     if (v >= max_v) v = max_v - 5;
     ui_set_db_range((float)v, (float)max_v);
+    settings_set_db_min((float)v);
+    settings_set_db_max((float)max_v);
 }
 
 static void drawer_slider_db_max_cb(lv_event_t *e)
@@ -1084,6 +1091,8 @@ static void drawer_slider_db_max_cb(lv_event_t *e)
     int min_v = s_slider_db_min ? (int)lv_slider_get_value(s_slider_db_min) : -130;
     if (v <= min_v) v = min_v + 5;
     ui_set_db_range((float)min_v, (float)v);
+    settings_set_db_min((float)min_v);
+    settings_set_db_max((float)v);
 }
 
 static void drawer_slider_alpha_cb(lv_event_t *e)
@@ -1095,4 +1104,5 @@ static void drawer_slider_alpha_cb(lv_event_t *e)
     snprintf(buf, sizeof(buf), "Alpha: %.2f", (double)alpha);
     if (s_lbl_alpha) lv_label_set_text(s_lbl_alpha, buf);
     render_set_ema_alpha(alpha);
+    settings_set_ema_alpha(alpha);
 }
