@@ -11,6 +11,7 @@
 #include "display.h"
 #include "cat.h"
 #include "screenshot.h"
+#include "iq_balance.h"
 
 static const char *TAG = "ui";
 
@@ -50,6 +51,7 @@ static lv_obj_t *s_spectrum_obj = NULL;
 static lv_obj_t *s_waterfall_obj = NULL;
 static lv_obj_t *s_status_label = NULL;
 static lv_obj_t *s_burger_btn = NULL;  // Phase 5.10I: kept for foreground move after all UI built
+static lv_obj_t *s_switch_iq  = NULL;  // Phase B: IQ balance toggle in settings drawer
 
 // Phase 5.10D Stage 2: settings drawer state
 static lv_obj_t *s_drawer = NULL;
@@ -73,6 +75,7 @@ static void drawer_open(void);
 static void drawer_close(void);
 static void drawer_anim_x_cb(void *obj, int32_t v);
 static void drawer_close_button_cb(lv_event_t *e);
+static void iq_balance_toggle_cb(lv_event_t *e);
 
 // Phase 5.5: static defaults Ã¢â‚¬â€ manual Ref/Range, user-controlled later
 // (internal arbitrary dB scale; ~80=noise floor, ~125=strong signal on test rig)
@@ -841,6 +844,14 @@ static void drawer_close_button_cb(lv_event_t *e)
     drawer_close();
 }
 
+static void iq_balance_toggle_cb(lv_event_t *e)
+{
+    lv_obj_t *sw = lv_event_get_target(e);
+    bool on = lv_obj_has_state(sw, LV_STATE_CHECKED);
+    iq_balance_set_enabled(on);
+    if (on) iq_balance_reset();
+}
+
 // Build the drawer once. Hidden off-screen on the right initially.
 static void drawer_build(void)
 {
@@ -880,6 +891,21 @@ static void drawer_build(void)
     // === Phase 5.10D Stage 2b: presets + sliders ===
     int y = 80;
 
+    // Phase B: IQ balance on/off toggle
+    {
+        lv_obj_t *iq_lbl = lv_label_create(s_drawer);
+        lv_label_set_text(iq_lbl, "IQ Balance");
+        lv_obj_set_style_text_color(iq_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(iq_lbl, &lv_font_montserrat_18, 0);
+        lv_obj_align(iq_lbl, LV_ALIGN_TOP_LEFT, 0, y + 6);
+        s_switch_iq = lv_switch_create(s_drawer);
+        lv_obj_set_size(s_switch_iq, 60, 32);
+        lv_obj_align(s_switch_iq, LV_ALIGN_TOP_RIGHT, 0, y);
+        if (iq_balance_is_enabled()) lv_obj_add_state(s_switch_iq, LV_STATE_CHECKED);
+        lv_obj_add_event_cb(s_switch_iq, iq_balance_toggle_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        y += 48;
+    }
+
     // Presets section header
     lv_obj_t *presets_hdr = lv_label_create(s_drawer);
     lv_label_set_text(presets_hdr, "Presets");
@@ -904,10 +930,10 @@ static void drawer_build(void)
         lv_label_set_text(lbl, preset_names[i]);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
         lv_obj_center(lbl);
-        y += 72;  /* more breathing room */
+        y += 64;
     }
 
-    y += 24;
+    y += 8;
     // dB Range section header
     lv_obj_t *db_hdr = lv_label_create(s_drawer);
     lv_label_set_text(db_hdr, "dB Range");
