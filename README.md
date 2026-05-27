@@ -20,7 +20,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 ## Status
 
-Working. All phases through 6.2 complete, with cold-boot reliability fix.
+Working. All phases through 6.2 complete, plus cold-boot reliability fix and I/Q balance correction (Phases A–C).
 
 | Phase | What | Status |
 |-------|------|--------|
@@ -50,6 +50,8 @@ Working. All phases through 6.2 complete, with cold-boot reliability fix.
 | 6.2   | Landscape rotation 1280×720 (LVGL software rotation) | done |
 | —     | Cold-boot fix (PI4IO expander init for LCD_RST / TP_RST) | done |
 | A     | I/Q balance correction (Gram-Schmidt blind adaptive, hardcoded ON) | done |
+| B     | I/Q balance ON/OFF toggle in settings drawer | done |
+| C     | I/Q balance time constant tuning (two-speed convergence) | done |
 
 See the [Roadmap](#roadmap) at the bottom for what's next.
 
@@ -126,12 +128,35 @@ Under the spectrum, the frequency axis labels show absolute MHz centered on the 
 
 **Faster CAT + optimistic UI (Phase 5.10H).** CAT poll interval dropped from 200 ms to 50 ms so dial-spinning no longer skips. Touch-to-tune optimistically updates the on-screen frequency label immediately on a successful CAT write rather than waiting ~150 ms for the next FA poll to confirm.
 
-**Settings drawer (Phase 5.10D).** The burger button on the top right opens a 400 px right-side settings drawer with a 250 ms slide-in animation. Contents:
-- **Presets** (HF Normal / HF DX / Strong Sig.) -- each sets dB range and EMA smoothing in one tap
-- **dB Range sliders** (Min and Max in dBm) -- live updates `ui_set_db_range()`
-- **Smoothing slider** (EMA alpha, 0.05 to 1.00) -- live updates `render_set_ema_alpha()` (the formerly hard-coded `SMOOTH_ALPHA` is now a runtime variable)
+**Settings drawer (Phase 5.10D / Phase B).** The burger button on the top right opens a 400 px right-side settings drawer with a 250 ms slide-in animation. Contents:
+- **IQ Balance toggle** (Phase B) — ON/OFF switch wired to `iq_balance_set_enabled()`; re-enabling resets the estimator so it converges from a clean state
+- **Presets** (HF Normal / HF DX / Strong Sig.) — each sets dB range and EMA smoothing in one tap
+- **dB Range sliders** (Min and Max in dBm) — live updates `ui_set_db_range()`
+- **Smoothing slider** (EMA alpha, 0.05 to 1.00) — live updates `render_set_ema_alpha()` (the formerly hard-coded `SMOOTH_ALPHA` is now a runtime variable)
 
 **Bigger touch targets (Phase 5.10I).** The burger button is 80x80, parented to the screen so it overflows downward into the spectrum area without being clipped by the top bar. The drawer close X is also 80x80. Both icons use Montserrat 32 to fill the button size cleanly. A 200x120 deadzone in the top-right of the spectrum suppresses tunes that overlap the burger button.
+
+## I/Q balance correction (Phases A–C)
+
+The QMX presents I/Q audio over USB UAC with a small but measurable amplitude imbalance and quadrature error between the I and Q channels. Without correction, the result is an "image" of every signal mirrored across the center frequency — a strong signal 10 kHz above center also appears at 10 kHz below center, around 30 dB weaker. This clutters the waterfall and spectrum, especially on a busy band.
+
+**Algorithm (Phase A).** A blind adaptive Gram-Schmidt orthogonaliser runs sample-by-sample in the audio pipeline, before the samples reach the FFT. It maintains running estimates of three statistics:
+- **DC offset** on each channel (exponential moving average, τ = 1 s)
+- **Power** in I and Q (τ = 200 ms)
+- **Cross-product** I·Q (τ = 1 s) — the key signal: non-zero cross-product means the channels are not orthogonal
+
+From these it computes per-sample correction coefficients (`K_phi`, `K_amp`) and applies:
+
+    i_out = i
+    q_out = (q - K_phi · i) × K_amp
+
+No calibration step is needed. The estimator converges automatically on ambient band noise within a few seconds of receiving any signal.
+
+**Time constant tuning (Phase C).** A two-speed scheme speeds up initial lock-in: for the first 2 s of real signal after each reset, all three estimators run at 8× their steady-state alpha, giving effective convergence in ~125 ms. After that they drop to their slow steady-state values for stable long-term tracking. The cross-product time constant was also halved (2 s → 1 s) for quicker steady-state response to slow phase drift.
+
+**Toggle (Phase B).** The settings drawer has an IQ Balance ON/OFF switch. Turning it off freezes the estimator (coefficients are preserved but stop updating); turning it back on resets it so it reconverges from a clean state.
+
+The DC spike at bin 0 (caused by a small ADC DC offset, present even with correction active) is separately handled by the one-pole IIR DC blocker in Phase 5.6.
 
 ## Spectrum smoothing, dB range, dBm calibration (Phase 5.5 / 5.7 / 5.8)
 
@@ -152,7 +177,7 @@ The displayed dB range is fixed at -130 to -30 dBm, matching commercial SDR conv
     |   |-- ui/                     LVGL widgets, touch handler, canvases
     |   |-- cat/                    USB CDC-ACM + Kenwood CAT
     |   |-- audio/                  USB UAC + ring buffer
-    |   |-- dsp/                    esp-dsp FFT, spectrum mutex
+    |   |-- dsp/                    esp-dsp FFT, spectrum mutex, I/Q balance correction
     |   `-- render/                 30 Hz render task, smoothing, autoscale
     |-- components/
     |   |-- m5stack_tab5/                  M5Stack local BSP (ST7123 panel + touch)
@@ -255,7 +280,6 @@ Concrete items planned for the near term, in roughly the order they'll likely be
 - **Phase 6.3 — Native-orientation rendering.** Render directly in the panel's native portrait coordinates and skip LVGL's software rotation, recovering the ~50% FPS lost to `rotate90_rgb565`. The display still appears landscape because the device is held that way; only the pixel layout changes.
 - **NVS settings persistence.** Survive power cycles for user preferences: last VFO, autoscale state, EMA α, waterfall colour map. Foundation for everything else in this list.
 - **Memory channels.** Quick-recall frequency presets — touch a slot, QMX retunes via CAT. Stored in NVS.
-- **I/Q balance correction.** Per-band amplitude/phase coefficients applied before the FFT to push image rejection from the native ~30 dB to 50+ dB. One-time calibration step per band.
 
 ### Longer term
 
