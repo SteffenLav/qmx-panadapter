@@ -1,4 +1,4 @@
-﻿#include "audio.h"
+#include "audio.h"
 
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -10,6 +10,7 @@
 #include "esp_timer.h"
 
 #include "usb/uac_host.h"
+#include "iq_balance.h"
 
 static const char *TAG = "audio";
 
@@ -76,6 +77,10 @@ esp_err_t audio_init(void)
                  SAMPLE_RING_BYTES);
         return ESP_ERR_NO_MEM;
     }
+
+    iq_balance_init();
+    iq_balance_set_enabled(true);  // Phase A: hardcoded ON for first test
+    ESP_LOGI(TAG, "IQ balance correction: ENABLED");
     ESP_LOGI(TAG, "Sample ring buffer: %d bytes (~%lu ms @ 48k stereo int16)",
              SAMPLE_RING_BYTES,
              (unsigned long)(SAMPLE_RING_BYTES / 4 * 1000 / 48000));
@@ -228,8 +233,11 @@ static void process_rx(void)
             if (Ls > 32767) Ls = 32767; else if (Ls < -32768) Ls = -32768;
             if (Rs > 32767) Rs = 32767; else if (Rs < -32768) Rs = -32768;
 
-            decoded[2*i]     = (int16_t)Ls;
-            decoded[2*i + 1] = (int16_t)Rs;
+            int16_t Is = (int16_t)Ls;
+            int16_t Qs = (int16_t)Rs;
+            iq_balance_apply(&Is, &Qs);
+            decoded[2*i]     = Is;
+            decoded[2*i + 1] = Qs;
 
             int16_t aL = (Ls < 0) ? (int16_t)-Ls : (int16_t)Ls;
             int16_t aR = (Rs < 0) ? (int16_t)-Rs : (int16_t)Rs;

@@ -7,6 +7,7 @@ idf_component_register(
         "cat/cat.c"
         "audio/audio.c"
         "dsp/dsp.c"
+        "dsp/iq_balance.c"
         "render/render.c"
         "render/render_waterfall.c"
         "screenshot/screenshot.c"

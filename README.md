@@ -49,6 +49,7 @@ Working. All phases through 6.2 complete, with cold-boot reliability fix.
 | 6.1   | Touch-to-tune via CAT FA, live cyan drag cursor | done |
 | 6.2   | Landscape rotation 1280×720 (LVGL software rotation) | done |
 | —     | Cold-boot fix (PI4IO expander init for LCD_RST / TP_RST) | done |
+| A     | I/Q balance correction (Gram-Schmidt blind adaptive, hardcoded ON) | done |
 
 See the [Roadmap](#roadmap) at the bottom for what's next.
 
