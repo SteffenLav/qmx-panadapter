@@ -111,36 +111,36 @@ static void build_top_bar(lv_obj_t *parent)
     // Phase 5.10D: top-bar layout Ã¢â‚¬â€ Band | Mode | [center: Freq] | S-meter
     // Labels rotated 900 (90° CW); landscape_x → portrait_y = 1279 - landscape_x.
     // Band: landscape x≈8 → portrait y=1271, offset from center=631
-    s_band_label = lv_label_create(parent);
+    s_band_label = lv_label_create(bar);
     lv_label_set_text(s_band_label, "Band: ---");
     lv_obj_set_style_text_color(s_band_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(s_band_label, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_transform_rotation(s_band_label, 2700, 0);
-    lv_obj_set_pos(s_band_label, 5, 1261);
+    lv_obj_set_style_transform_rotation(s_band_label, 900, 0);
+    lv_obj_align(s_band_label, LV_ALIGN_CENTER, 0, 631);
 
     // Mode: landscape x≈200 → portrait y=1079, offset=439
-    s_mode_label = lv_label_create(parent);
+    s_mode_label = lv_label_create(bar);
     lv_label_set_text(s_mode_label, "Mode: USB");
     lv_obj_set_style_text_color(s_mode_label, lv_color_hex(0xA0E0A0), 0);
     lv_obj_set_style_text_font(s_mode_label, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_transform_rotation(s_mode_label, 2700, 0);
-    lv_obj_set_pos(s_mode_label, 5, 1069);
+    lv_obj_set_style_transform_rotation(s_mode_label, 900, 0);
+    lv_obj_align(s_mode_label, LV_ALIGN_CENTER, 0, 439);
 
     // Freq: landscape x=640 → portrait y=639 (center of bar)
-    s_freq_label = lv_label_create(parent);
-    lv_label_set_text(s_freq_label, "14.074.000");
+    s_freq_label = lv_label_create(bar);
+    lv_label_set_text(s_freq_label, "Center Freq: 14.074.000 Hz");
     lv_obj_set_style_text_color(s_freq_label, lv_color_hex(0xFFD76B), 0);
     lv_obj_set_style_text_font(s_freq_label, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_transform_rotation(s_freq_label, 2700, 0);
-    lv_obj_set_pos(s_freq_label, 5, 619);
+    lv_obj_set_style_transform_rotation(s_freq_label, 900, 0);
+    lv_obj_align(s_freq_label, LV_ALIGN_CENTER, 0, 0);
 
     // S-meter: landscape x≈960 → portrait y=319, offset=-321
-    s_smeter_label = lv_label_create(parent);
+    s_smeter_label = lv_label_create(bar);
     lv_label_set_text(s_smeter_label, "Signal: S0");
     lv_obj_set_style_text_color(s_smeter_label, lv_color_hex(0x00FF00), 0);
     lv_obj_set_style_text_font(s_smeter_label, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_transform_rotation(s_smeter_label, 2700, 0);
-    lv_obj_set_pos(s_smeter_label, 5, 309);
+    lv_obj_set_style_transform_rotation(s_smeter_label, 900, 0);
+    lv_obj_align(s_smeter_label, LV_ALIGN_CENTER, 0, -321);
 
     // Burger: 80×80 at portrait (px=10, py=3) = landscape top-right.
     s_burger_btn = lv_btn_create(parent);
@@ -195,7 +195,7 @@ static void build_spectrum(lv_obj_t *parent)
     lv_obj_set_style_bg_color(s_db_max_label, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_db_max_label, LV_OPA_70, 0);
     lv_obj_set_style_pad_all(s_db_max_label, 3, 0);
-    lv_obj_set_style_transform_rotation(s_db_max_label, 2700, 0);
+    lv_obj_set_style_transform_rotation(s_db_max_label, 900, 0);
     lv_obj_align(s_db_max_label, LV_ALIGN_TOP_LEFT, 2, 4);
 
     s_db_min_label = lv_label_create(s_spectrum_obj);
@@ -205,7 +205,7 @@ static void build_spectrum(lv_obj_t *parent)
     lv_obj_set_style_bg_color(s_db_min_label, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_db_min_label, LV_OPA_70, 0);
     lv_obj_set_style_pad_all(s_db_min_label, 3, 0);
-    lv_obj_set_style_transform_rotation(s_db_min_label, 2700, 0);
+    lv_obj_set_style_transform_rotation(s_db_min_label, 900, 0);
     lv_obj_align(s_db_min_label, LV_ALIGN_TOP_RIGHT, -2, 4);
 
     // Phase 5.5: show static defaults immediately (no autoscale to update them)
@@ -274,7 +274,7 @@ static void build_label_bar(lv_obj_t *parent)
         lv_label_set_text(s_tick_labels[i], "--.---");
         lv_obj_set_style_text_color(s_tick_labels[i], lv_color_hex(0xA0A0A0), 0);
         lv_obj_set_style_text_font(s_tick_labels[i], &lv_font_montserrat_18, 0);
-        lv_obj_set_style_transform_rotation(s_tick_labels[i], 2700, 0);
+        lv_obj_set_style_transform_rotation(s_tick_labels[i], 900, 0);
         int py = (DISPLAY_H_RES - 1) - tick_xs[i];
         lv_obj_align(s_tick_labels[i], LV_ALIGN_CENTER, 0, py - DISPLAY_H_RES / 2);
     }
@@ -356,7 +356,7 @@ static void build_bottom_bar(lv_obj_t *parent)
     s_status_label = lv_label_create(bar);
     lv_label_set_text(s_status_label, "Span: 48kHz  Ref: -40dB  Avg: 4  FPS: --");
     lv_obj_set_style_text_color(s_status_label, lv_color_hex(0xC0C0C0), 0);
-    lv_obj_set_style_transform_rotation(s_status_label, 2700, 0);
+    lv_obj_set_style_transform_rotation(s_status_label, 900, 0);
     lv_obj_align(s_status_label, LV_ALIGN_CENTER, 0, 0);
 }
 
@@ -399,7 +399,7 @@ void ui_update_frequency(uint32_t freq_hz)
     uint32_t mhz = freq_hz / 1000000;
     uint32_t khz = (freq_hz / 1000) % 1000;
     uint32_t hz  = freq_hz % 1000;
-    snprintf(buf, sizeof(buf), "%lu.%03lu.%03lu", mhz, khz, hz);
+    snprintf(buf, sizeof(buf), "Center Freq: %lu.%03lu.%03lu Hz", mhz, khz, hz);
     if (display_lock(20)) {
         lv_label_set_text(s_freq_label, buf);
         display_unlock();
@@ -882,7 +882,7 @@ static void drawer_build(void)
     lv_label_set_text(title, "Settings");
     lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_transform_rotation(title, 2700, 0);
+    lv_obj_set_style_transform_rotation(title, 900, 0);
     lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
 
     lv_obj_t *close_btn = lv_btn_create(s_drawer);
@@ -903,7 +903,6 @@ static void drawer_build(void)
         lv_label_set_text(iq_lbl, "IQ Balance");
         lv_obj_set_style_text_color(iq_lbl, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(iq_lbl, &lv_font_montserrat_18, 0);
-        lv_obj_set_style_transform_rotation(iq_lbl, 2700, 0);
         lv_obj_align(iq_lbl, LV_ALIGN_TOP_LEFT, 0, y + 6);
         s_switch_iq = lv_switch_create(s_drawer);
         lv_obj_set_size(s_switch_iq, 60, 32);
@@ -918,7 +917,6 @@ static void drawer_build(void)
     lv_label_set_text(presets_hdr, "Presets");
     lv_obj_set_style_text_color(presets_hdr, lv_color_hex(0xA0E0A0), 0);
     lv_obj_set_style_text_font(presets_hdr, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_transform_rotation(presets_hdr, 2700, 0);
     lv_obj_align(presets_hdr, LV_ALIGN_TOP_LEFT, 0, y);
     y += 40;
 
@@ -937,7 +935,6 @@ static void drawer_build(void)
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, preset_names[i]);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
-        lv_obj_set_style_transform_rotation(lbl, 2700, 0);
         lv_obj_center(lbl);
         y += 64;
     }
@@ -948,7 +945,6 @@ static void drawer_build(void)
     lv_label_set_text(db_hdr, "dB Range");
     lv_obj_set_style_text_color(db_hdr, lv_color_hex(0xA0E0A0), 0);
     lv_obj_set_style_text_font(db_hdr, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_transform_rotation(db_hdr, 2700, 0);
     lv_obj_align(db_hdr, LV_ALIGN_TOP_LEFT, 0, y);
     y += 40;
 
@@ -957,7 +953,6 @@ static void drawer_build(void)
     lv_label_set_text(s_lbl_db_min, "Min: -130 dBm");
     lv_obj_set_style_text_color(s_lbl_db_min, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(s_lbl_db_min, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_transform_rotation(s_lbl_db_min, 2700, 0);
     lv_obj_align(s_lbl_db_min, LV_ALIGN_TOP_LEFT, 0, y);
     y += 30;
 
@@ -974,7 +969,6 @@ static void drawer_build(void)
     lv_label_set_text(s_lbl_db_max, "Max: -30 dBm");
     lv_obj_set_style_text_color(s_lbl_db_max, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(s_lbl_db_max, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_transform_rotation(s_lbl_db_max, 2700, 0);
     lv_obj_align(s_lbl_db_max, LV_ALIGN_TOP_LEFT, 0, y);
     y += 30;
 
@@ -991,7 +985,6 @@ static void drawer_build(void)
     lv_label_set_text(sm_hdr, "Smoothing");
     lv_obj_set_style_text_color(sm_hdr, lv_color_hex(0xA0E0A0), 0);
     lv_obj_set_style_text_font(sm_hdr, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_transform_rotation(sm_hdr, 2700, 0);
     lv_obj_align(sm_hdr, LV_ALIGN_TOP_LEFT, 0, y);
     y += 40;
 
@@ -999,7 +992,6 @@ static void drawer_build(void)
     lv_label_set_text(s_lbl_alpha, "Alpha: 0.40");
     lv_obj_set_style_text_color(s_lbl_alpha, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(s_lbl_alpha, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_transform_rotation(s_lbl_alpha, 2700, 0);
     lv_obj_align(s_lbl_alpha, LV_ALIGN_TOP_LEFT, 0, y);
     y += 30;
 
