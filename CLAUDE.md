@@ -43,7 +43,11 @@ Data flow: **audio → ring buffer → dsp (FFT) → spectrum mutex → render �
 `components/espressif__usb_host_uac/` is a hand-patched fork with `create_background_task = true`. This is required for UAC + CDC-ACM to coexist on the same USB host. Do not replace it with the registry version without re-applying the patch.
 
 ### LVGL software rotation (~50% FPS cost)
-The ST7123 panel is natively portrait; landscape is achieved via `lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_90)`. Every LVGL flush goes through `rotate90_rgb565`. FPS is ~13 landscape vs ~22 portrait. Acceptable for a panadapter; Phase 6.3 plans native-orientation rendering to recover the loss.
+The ST7123 panel is natively portrait; landscape is achieved via `lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_90)`. Every LVGL flush goes through `rotate90_rgb565`. FPS is ~13 landscape vs ~22 portrait. Acceptable for a panadapter.
+
+**Do not enable `CONFIG_LVGL_PORT_ENABLE_PPA=y`.** The PPA driver and the USB host stack (UAC + CDC-ACM) compete for DW-GDMA channels. Enabling PPA silently kills QMX connectivity — audio and CAT both stop. Tested and confirmed broken.
+
+Phase 6.3 (FPS recovery) requires a full native-portrait UI rewrite: LVGL configured as 720×1280, all widget positions transposed (landscape x↔y swap), all canvas drawing code rewritten for portrait orientation. Significant work; not yet done.
 
 ### IDLE watchdog disabled
 `CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0/CPU1` are off. The LVGL rotation pipeline keeps CPU0 busy past the default watchdog window. App-task watchdog (30 s) is still active.

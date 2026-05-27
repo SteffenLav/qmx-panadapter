@@ -211,7 +211,11 @@ The ST7123 panel is natively portrait 720×1280 and does *not* implement `esp_lc
 
 LVGL rotates every flush in software (`rotate90_rgb565`). Real-world impact on this hardware: spectrum FPS drops from ~22 (portrait) to ~13 (landscape).
 
-Acceptable for a panadapter — commercial radios in this class run 10–15 Hz waterfalls. If FPS ever feels insufficient, Phase 6.3 would render directly in panel-native orientation and bypass LVGL rotation entirely.
+Acceptable for a panadapter — commercial radios in this class run 10–15 Hz waterfalls.
+
+**PPA hardware rotation is not usable here.** The ESP32-P4 PPA driver (`CONFIG_LVGL_PORT_ENABLE_PPA`) conflicts with the USB host stack over DW-GDMA channels — enabling it silently breaks UAC and CDC-ACM, so the QMX appears disconnected. Do not set `CONFIG_LVGL_PORT_ENABLE_PPA=y`.
+
+Phase 6.3 (FPS recovery) requires rendering directly in the panel's native 720×1280 portrait coordinates — all widget positions transposed, all canvas drawing code rewritten in portrait — so LVGL never has a rotation step to perform. This is a significant UI rewrite and has not been attempted yet.
 
 ### IDLE-task watchdog is disabled
 
@@ -277,7 +281,7 @@ Exit monitor with `Ctrl+T` then `Ctrl+X` (works on Danish/non-US keyboard layout
 
 Concrete items planned for the near term, in roughly the order they'll likely be tackled.
 
-- **Phase 6.3 — Native-orientation rendering.** Render directly in the panel's native portrait coordinates and skip LVGL's software rotation, recovering the ~50% FPS lost to `rotate90_rgb565`. The display still appears landscape because the device is held that way; only the pixel layout changes.
+- **Phase 6.3 — Native-orientation rendering.** Render in the panel's native 720×1280 portrait coordinates so LVGL has no rotation step, recovering the ~50% FPS lost to `rotate90_rgb565`. Requires transposing all widget positions and rewriting all canvas drawing code for portrait. The PPA hardware rotation path (`CONFIG_LVGL_PORT_ENABLE_PPA`) was investigated but ruled out — it conflicts with the USB host stack over DW-GDMA channels and breaks QMX connectivity.
 - **NVS settings persistence.** Survive power cycles for user preferences: last VFO, autoscale state, EMA α, waterfall colour map. Foundation for everything else in this list.
 - **Memory channels.** Quick-recall frequency presets — touch a slot, QMX retunes via CAT. Stored in NVS.
 
