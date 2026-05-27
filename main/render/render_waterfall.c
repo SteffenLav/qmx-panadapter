@@ -62,14 +62,14 @@ static void build_lut(void)
 esp_err_t render_waterfall_init(void)
 {
     build_lut();
-    // Row scratch: 1280 px * 2 B = 2560 B. DRAM is fine and faster than PSRAM here.
+    // Phase 6.3: scratch is a portrait column = DISPLAY_H_RES pixels (1280).
+    // WF_WIDTH == DISPLAY_H_RES == 1280, so the allocation size is unchanged.
     s_row = heap_caps_malloc(WF_WIDTH * 2, MALLOC_CAP_8BIT);
     if (!s_row) {
-        ESP_LOGE(TAG, "Failed to alloc waterfall row scratch");
+        ESP_LOGE(TAG, "Failed to alloc waterfall column scratch");
         return ESP_ERR_NO_MEM;
     }
-    ESP_LOGI(TAG, "Waterfall renderer init (LUT 256 entries, row scratch %d B)",
-             WF_WIDTH * 2);
+    ESP_LOGI(TAG, "Waterfall renderer init (LUT 256, col scratch %d B)", WF_WIDTH * 2);
     return ESP_OK;
 }
 
@@ -106,26 +106,21 @@ void render_waterfall_tick(const float *spectrum, int n_bins)
     const float db_span = DB_MAX_DISPLAY - DB_MIN_DISPLAY;
     uint16_t *row = (uint16_t *)s_row;
 
-    // Pixel x -> FFT bin, with fftshift:
-    //   x=0       -> bin n_bins/2  (most-negative freq)
-    //   x=WF_W/2  -> bin 0         (DC)
-    //   x=WF_W-1  -> bin n_bins/2 - 1 (most-positive freq, wraps to n_bins/2 - 1)
-    // For 1024 bins on 1280 px we have ~0.8 bins/px (slight oversample, fine for waterfall).
-    for (int x = 0; x < WF_WIDTH; x++) {
-        // Map x in [0, WF_WIDTH) to bin in [0, n_bins) with fftshift
-        int bin_unshifted = (x * n_bins) / WF_WIDTH;       // 0..n_bins-1
+    // Phase 6.3: fill portrait column. portrait_y=0 = landscape x=(WF_WIDTH-1).
+    // Loop over portrait_y, compute landscape_x = (WF_WIDTH-1) - portrait_y.
+    for (int py = 0; py < WF_WIDTH; py++) {
+        int x = (WF_WIDTH - 1) - py;  // landscape_x (frequency axis, reversed)
+        int bin_unshifted = (x * n_bins) / WF_WIDTH;
         int bin = (bin_unshifted + n_bins / 2) % n_bins;    // fftshift
-        // Phase 5.10E: QMX 12 kHz IF offset compensation (match ui_push_spectrum)
-        bin = (bin + n_bins / 4) % n_bins;  // shift right by 12 kHz out of 48 kHz = n_bins/4
+        bin = (bin + n_bins / 4) % n_bins;                   // 12 kHz IF shift
 
         float db = spectrum[bin];
-        // Clip and scale to 0..255 LUT index
         if (db < DB_MIN_DISPLAY) db = DB_MIN_DISPLAY;
         if (db > DB_MAX_DISPLAY) db = DB_MAX_DISPLAY;
         int idx = (int)(((db - DB_MIN_DISPLAY) / db_span) * 255.0f);
         if (idx < 0) idx = 0;
         if (idx > 255) idx = 255;
-        row[x] = s_lut[idx];
+        row[py] = s_lut[idx];
     }
 
     ui_push_waterfall_row(s_row);

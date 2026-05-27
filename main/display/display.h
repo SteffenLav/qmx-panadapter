@@ -4,8 +4,9 @@
 #include "esp_lcd_panel_ops.h"
 #include "lvgl.h"
 
-// Phase 6.2: landscape orientation (rotated via LVGL software rotation)
-// Panel is natively 720x1280 portrait, but we view it as 1280x720 landscape.
+// Phase 6.3: native portrait 720x1280.  LVGL screen is 720 wide x 1280 tall.
+// DISPLAY_H_RES=1280 = portrait height (= landscape width), used for frequency axis.
+// DISPLAY_V_RES=720  = portrait width  (= landscape height), used for bar widths.
 #define DISPLAY_H_RES   1280
 #define DISPLAY_V_RES   720
 

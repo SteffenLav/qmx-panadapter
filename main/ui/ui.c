@@ -73,20 +73,19 @@ static void drawer_apply_preset(int db_min, int db_max, float alpha);
 static void drawer_build(void);
 static void drawer_open(void);
 static void drawer_close(void);
-static void drawer_anim_x_cb(void *obj, int32_t v);
 static void drawer_close_button_cb(lv_event_t *e);
 static void iq_balance_toggle_cb(lv_event_t *e);
+static void drawer_anim_y_cb(void *obj, int32_t v);
 
 // Phase 5.5: static defaults Ã¢â‚¬â€ manual Ref/Range, user-controlled later
 // (internal arbitrary dB scale; ~80=noise floor, ~125=strong signal on test rig)
 static float DB_MIN_DISPLAY = -130.0f;  /* dBm, calibrated scale */
 static float DB_MAX_DISPLAY = -30.0f;  /* dBm, headroom for S9+40 */
 
-// Forward decl so build_spectrum can call this
-static void ui_set_db_labels_internal(float db_min, float db_max);
 
 static lv_obj_t *s_wf_canvas = NULL;
 static uint8_t *s_wf_canvas_buf = NULL;
+static lv_draw_buf_t s_wf_draw_buf;
 
 // Spectrum dB labels (Phase 5.4)
 static lv_obj_t *s_db_max_label = NULL;
@@ -100,60 +99,67 @@ static uint8_t *s_spec_canvas_buf = NULL;
 static void build_top_bar(lv_obj_t *parent)
 {
     lv_obj_t *bar = lv_obj_create(parent);
-    lv_obj_set_size(bar, DISPLAY_H_RES, TOP_BAR_H);
+    lv_obj_set_size(bar, TOP_BAR_H, DISPLAY_H_RES);  // 60 wide × 1280 tall (portrait)
     lv_obj_align(bar, LV_ALIGN_TOP_LEFT, 0, 0);
     lv_obj_set_style_bg_color(bar, lv_color_hex(0x101820), 0);
     lv_obj_set_style_border_width(bar, 0, 0);
     lv_obj_set_style_radius(bar, 0, 0);
-    lv_obj_set_style_pad_all(bar, 8, 0);
+    lv_obj_set_style_pad_all(bar, 0, 0);
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(bar, LV_OBJ_FLAG_OVERFLOW_VISIBLE);
 
     // Phase 5.10D: top-bar layout Ã¢â‚¬â€ Band | Mode | [center: Freq] | S-meter
+    // Labels rotated 900 (90° CW); landscape_x → portrait_y = 1279 - landscape_x.
+    // Band: landscape x≈8 → portrait y=1271, offset from center=631
     s_band_label = lv_label_create(bar);
     lv_label_set_text(s_band_label, "Band: ---");
     lv_obj_set_style_text_color(s_band_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(s_band_label, &lv_font_montserrat_20, 0);
-    lv_obj_align(s_band_label, LV_ALIGN_LEFT_MID, 8, 0);
+    lv_obj_set_style_transform_rotation(s_band_label, 900, 0);
+    lv_obj_align(s_band_label, LV_ALIGN_CENTER, 0, 631);
 
+    // Mode: landscape x≈200 → portrait y=1079, offset=439
     s_mode_label = lv_label_create(bar);
     lv_label_set_text(s_mode_label, "Mode: USB");
     lv_obj_set_style_text_color(s_mode_label, lv_color_hex(0xA0E0A0), 0);
     lv_obj_set_style_text_font(s_mode_label, &lv_font_montserrat_20, 0);
-    lv_obj_align(s_mode_label, LV_ALIGN_LEFT_MID, 200, 0);
+    lv_obj_set_style_transform_rotation(s_mode_label, 900, 0);
+    lv_obj_align(s_mode_label, LV_ALIGN_CENTER, 0, 439);
 
+    // Freq: landscape x=640 → portrait y=639 (center of bar)
     s_freq_label = lv_label_create(bar);
     lv_label_set_text(s_freq_label, "Center Freq: 14.074.000 Hz");
     lv_obj_set_style_text_color(s_freq_label, lv_color_hex(0xFFD76B), 0);
     lv_obj_set_style_text_font(s_freq_label, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_transform_rotation(s_freq_label, 900, 0);
     lv_obj_align(s_freq_label, LV_ALIGN_CENTER, 0, 0);
 
+    // S-meter: landscape x≈960 → portrait y=319, offset=-321
     s_smeter_label = lv_label_create(bar);
     lv_label_set_text(s_smeter_label, "Signal: S0");
-    lv_obj_set_style_text_color(s_smeter_label, lv_color_hex(0x00FF00), 0);  // Phase 5.10D: match spectrum trace green
+    lv_obj_set_style_text_color(s_smeter_label, lv_color_hex(0x00FF00), 0);
     lv_obj_set_style_text_font(s_smeter_label, &lv_font_montserrat_20, 0);
-    lv_obj_align(s_smeter_label, LV_ALIGN_CENTER, 320, 0);  // Phase 5.10D: centered in right half
+    lv_obj_set_style_transform_rotation(s_smeter_label, 900, 0);
+    lv_obj_align(s_smeter_label, LV_ALIGN_CENTER, 0, -321);
 
-    // Phase 5.10I: 80x80 burger, overflows downward into the spectrum.
-    // Top bar stays at 60 px; clip content disabled so button can be larger.
-    // Phase 5.10I: parent burger to the SCREEN, not the top bar.
-    // Avoids the top bar's clipping issue. Positioned absolutely so it
-    // straddles the top bar boundary and extends into the spectrum area.
-    s_burger_btn = lv_btn_create(parent);  /* parent = screen */
+    // Burger: 80×80 at portrait (px=10, py=3) = landscape top-right.
+    s_burger_btn = lv_btn_create(parent);
     lv_obj_set_size(s_burger_btn, 80, 80);
-    lv_obj_align(s_burger_btn, LV_ALIGN_TOP_RIGHT, -4, 10);
-    lv_obj_add_event_cb(s_burger_btn, settings_button_cb, LV_EVENT_CLICKED, NULL);  // Phase 5.10D
+    lv_obj_set_pos(s_burger_btn, 10, 3);
+    lv_obj_add_event_cb(s_burger_btn, settings_button_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *blbl = lv_label_create(s_burger_btn);
     lv_label_set_text(blbl, LV_SYMBOL_LIST);
-    lv_obj_set_style_text_font(blbl, &lv_font_montserrat_32, 0);  // Phase 5.10I: fill the 80x80 button, but not too prominent
+    lv_obj_set_style_text_font(blbl, &lv_font_montserrat_32, 0);
     lv_obj_center(blbl);
 }
 
 // ==== Spectrum region (Phase 5.1: real-time line graph) ====
 static void build_spectrum(lv_obj_t *parent)
 {
+    // Phase 6.3: portrait (SPECTRUM_H wide × DISPLAY_H_RES tall) at portrait x=TOP_BAR_H
     s_spectrum_obj = lv_obj_create(parent);
-    lv_obj_set_size(s_spectrum_obj, DISPLAY_H_RES, SPECTRUM_H);
-    lv_obj_align(s_spectrum_obj, LV_ALIGN_TOP_LEFT, 0, TOP_BAR_H);
+    lv_obj_set_size(s_spectrum_obj, SPECTRUM_H, DISPLAY_H_RES);
+    lv_obj_set_pos(s_spectrum_obj, TOP_BAR_H, 0);
     lv_obj_set_style_bg_color(s_spectrum_obj, lv_color_hex(0x000000), 0);
     lv_obj_set_style_border_color(s_spectrum_obj, lv_color_hex(0x303030), 0);
     lv_obj_set_style_border_width(s_spectrum_obj, 1, 0);
@@ -161,8 +167,8 @@ static void build_spectrum(lv_obj_t *parent)
     lv_obj_set_style_pad_all(s_spectrum_obj, 0, 0);
     lv_obj_clear_flag(s_spectrum_obj, LV_OBJ_FLAG_SCROLLABLE);
 
-    // 1280 x 200 x 2 bytes = 512 KB in PSRAM
-    size_t buf_size = LV_CANVAS_BUF_SIZE(DISPLAY_H_RES, SPECTRUM_H, 16,
+    // 200 × 1280 × 2 = 512 KB in PSRAM (same total, dimensions swapped)
+    size_t buf_size = LV_CANVAS_BUF_SIZE(SPECTRUM_H, DISPLAY_H_RES, 16,
                                          LV_DRAW_BUF_STRIDE_ALIGN);
     s_spec_canvas_buf = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
     if (!s_spec_canvas_buf) {
@@ -176,10 +182,12 @@ static void build_spectrum(lv_obj_t *parent)
     lv_obj_add_event_cb(s_spectrum_obj, touch_event_cb, LV_EVENT_PRESSING, NULL);
     lv_obj_add_event_cb(s_spectrum_obj, touch_event_cb, LV_EVENT_RELEASED, NULL);
     lv_canvas_set_buffer(s_spec_canvas, s_spec_canvas_buf,
-                         DISPLAY_H_RES, SPECTRUM_H, LV_COLOR_FORMAT_RGB565);
+                         SPECTRUM_H, DISPLAY_H_RES, LV_COLOR_FORMAT_RGB565);
     lv_obj_align(s_spec_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
 
     // Phase 5.4: dB range labels (top-left and bottom-left of spectrum)
+    // dB labels: portrait x=0 (left) = high dB, x=SPECTRUM_H-1 (right) = low dB.
+    // db_max at landscape top (portrait left=x=0→near TOP_LEFT), db_min at portrait RIGHT.
     s_db_max_label = lv_label_create(s_spectrum_obj);
     lv_label_set_text(s_db_max_label, "");
     lv_obj_set_style_text_color(s_db_max_label, lv_color_hex(0xC0C0C0), 0);
@@ -187,7 +195,8 @@ static void build_spectrum(lv_obj_t *parent)
     lv_obj_set_style_bg_color(s_db_max_label, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_db_max_label, LV_OPA_70, 0);
     lv_obj_set_style_pad_all(s_db_max_label, 3, 0);
-    lv_obj_align(s_db_max_label, LV_ALIGN_TOP_LEFT, 4, 2);
+    lv_obj_set_style_transform_rotation(s_db_max_label, 900, 0);
+    lv_obj_align(s_db_max_label, LV_ALIGN_TOP_LEFT, 2, 4);
 
     s_db_min_label = lv_label_create(s_spectrum_obj);
     lv_label_set_text(s_db_min_label, "");
@@ -196,7 +205,8 @@ static void build_spectrum(lv_obj_t *parent)
     lv_obj_set_style_bg_color(s_db_min_label, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_db_min_label, LV_OPA_70, 0);
     lv_obj_set_style_pad_all(s_db_min_label, 3, 0);
-    lv_obj_align(s_db_min_label, LV_ALIGN_BOTTOM_LEFT, 4, -2);
+    lv_obj_set_style_transform_rotation(s_db_min_label, 900, 0);
+    lv_obj_align(s_db_min_label, LV_ALIGN_TOP_RIGHT, -2, 4);
 
     // Phase 5.5: show static defaults immediately (no autoscale to update them)
     char buf_max[16], buf_min[16];
@@ -215,58 +225,58 @@ static lv_obj_t *s_tick_labels[5] = { NULL, NULL, NULL, NULL, NULL };
 
 static void build_label_bar(lv_obj_t *parent)
 {
+    // Phase 6.3: portrait — bar is LABEL_BAR_H wide × DISPLAY_H_RES tall at portrait x=260
     lv_obj_t *bar = lv_obj_create(parent);
-    lv_obj_set_size(bar, DISPLAY_H_RES, LABEL_BAR_H);
-    lv_obj_align(bar, LV_ALIGN_TOP_LEFT, 0, TOP_BAR_H + SPECTRUM_H);
+    lv_obj_set_size(bar, LABEL_BAR_H, DISPLAY_H_RES);
+    lv_obj_set_pos(bar, TOP_BAR_H + SPECTRUM_H, 0);
     lv_obj_set_style_bg_color(bar, lv_color_hex(0x000000), 0);
     lv_obj_set_style_border_width(bar, 0, 0);
     lv_obj_set_style_radius(bar, 0, 0);
     lv_obj_set_style_pad_all(bar, 0, 0);
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Tick canvas: DISPLAY_H_RES x LABEL_BAR_H, drawn once
-    size_t buf_size = LV_CANVAS_BUF_SIZE(DISPLAY_H_RES, LABEL_BAR_H, 16, LV_DRAW_BUF_STRIDE_ALIGN);
+    // Tick canvas: LABEL_BAR_H wide × DISPLAY_H_RES tall (portrait).
+    // landscape_x → portrait_y = (DISPLAY_H_RES-1) - landscape_x.
+    // Ticks are horizontal lines at specific portrait_y positions.
+    size_t buf_size = LV_CANVAS_BUF_SIZE(LABEL_BAR_H, DISPLAY_H_RES, 16, LV_DRAW_BUF_STRIDE_ALIGN);
     s_label_canvas_buf = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
     if (s_label_canvas_buf) {
         memset(s_label_canvas_buf, 0, buf_size);
-        // Draw ticks: major at multiples of 12 kHz (top-aligned, taller),
-        // minor at multiples of 3 kHz (top-aligned, shorter)
         uint16_t *px = (uint16_t *)s_label_canvas_buf;
-        const uint16_t major_color = 0xC618;  // light grey
-        const uint16_t minor_color = 0x8410;  // medium grey
+        const uint16_t major_color = 0xC618;
+        const uint16_t minor_color = 0x8410;
         const int center_x = DISPLAY_H_RES / 2;
-        const float px_per_khz = (float)DISPLAY_H_RES / 48.0f;  // 26.67 at 1280 / 15 at 720
+        const float px_per_khz = (float)DISPLAY_H_RES / 48.0f;
         for (int khz = -24; khz <= 24; khz += 3) {
-            int x = center_x + (int)(khz * px_per_khz);
-            if (x < 0 || x >= DISPLAY_H_RES) continue;
+            int lx = center_x + (int)(khz * px_per_khz);  // landscape x
+            if (lx < 0 || lx >= DISPLAY_H_RES) continue;
+            int py = (DISPLAY_H_RES - 1) - lx;  // portrait y
+            if (py < 0 || py >= DISPLAY_H_RES) continue;
             int is_major = (khz % 12 == 0);
             int h = is_major ? 10 : 5;
             uint16_t color = is_major ? major_color : minor_color;
-            for (int y = 0; y < h; y++) {
-                px[y * DISPLAY_H_RES + x] = color;
+            // Horizontal tick: fill portrait x=0..h-1 at portrait y=py
+            for (int dx = 0; dx < h; dx++) {
+                px[py * LABEL_BAR_H + dx] = color;
             }
         }
         s_label_canvas = lv_canvas_create(bar);
         lv_canvas_set_buffer(s_label_canvas, s_label_canvas_buf,
-                             DISPLAY_H_RES, LABEL_BAR_H, LV_COLOR_FORMAT_RGB565);
+                             LABEL_BAR_H, DISPLAY_H_RES, LV_COLOR_FORMAT_RGB565);
         lv_obj_align(s_label_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
     }
 
-    // Labels sit below the ticks. Phase 5.10C: store handles so the labels
-    // can be rewritten with actual MHz on every VFO change.
-    const int tick_xs[5] = { 0, 320, 640, 960, 1280 };
+    // Tick labels: rotated 900. landscape_x → portrait_y = 1279 - landscape_x.
+    // Offset from portrait bar center (DISPLAY_H_RES/2=640).
+    const int tick_xs[5] = { 0, 320, 640, 960, 1279 };
     for (int i = 0; i < 5; i++) {
         s_tick_labels[i] = lv_label_create(bar);
         lv_label_set_text(s_tick_labels[i], "--.---");
         lv_obj_set_style_text_color(s_tick_labels[i], lv_color_hex(0xA0A0A0), 0);
         lv_obj_set_style_text_font(s_tick_labels[i], &lv_font_montserrat_18, 0);
-        if (i == 0) {
-            lv_obj_align(s_tick_labels[i], LV_ALIGN_BOTTOM_LEFT, 2, 0);
-        } else if (i == 4) {
-            lv_obj_align(s_tick_labels[i], LV_ALIGN_BOTTOM_RIGHT, -2, 0);
-        } else {
-            lv_obj_align(s_tick_labels[i], LV_ALIGN_BOTTOM_LEFT, tick_xs[i] - 28, 0);
-        }
+        lv_obj_set_style_transform_rotation(s_tick_labels[i], 900, 0);
+        int py = (DISPLAY_H_RES - 1) - tick_xs[i];
+        lv_obj_align(s_tick_labels[i], LV_ALIGN_CENTER, 0, py - DISPLAY_H_RES / 2);
     }
 }
 
@@ -289,56 +299,65 @@ static void update_freq_axis_labels(uint32_t center_hz)
 }
 
 // ==== Waterfall region (placeholder gradient from Phase 1) ====
+// Phase 6.3: portrait waterfall double-buffer using custom-stride lv_draw_buf_t.
+// Physical buffer: WATERFALL_H*2 wide × DISPLAY_H_RES tall (row-major).
+// Viewing window: WATERFALL_H wide × DISPLAY_H_RES tall, starting at col s_wf_head.
+// Write each new column at physical_col = s_wf_head AND s_wf_head+WATERFALL_H.
+// lv_draw_buf stride = WATERFALL_H*2*2 bytes allows the window pointer to slide.
 static void build_waterfall(lv_obj_t *parent)
 {
     s_waterfall_obj = lv_obj_create(parent);
-    lv_obj_set_size(s_waterfall_obj, DISPLAY_H_RES, WATERFALL_H);
-    lv_obj_align(s_waterfall_obj, LV_ALIGN_TOP_LEFT, 0, TOP_BAR_H + SPECTRUM_H + LABEL_BAR_H);
+    lv_obj_set_size(s_waterfall_obj, WATERFALL_H, DISPLAY_H_RES);
+    lv_obj_set_pos(s_waterfall_obj, TOP_BAR_H + SPECTRUM_H + LABEL_BAR_H, 0);
     lv_obj_set_style_bg_color(s_waterfall_obj, lv_color_hex(0x000010), 0);
     lv_obj_set_style_border_width(s_waterfall_obj, 0, 0);
     lv_obj_set_style_radius(s_waterfall_obj, 0, 0);
     lv_obj_set_style_pad_all(s_waterfall_obj, 0, 0);
     lv_obj_clear_flag(s_waterfall_obj, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Allocate 2x WATERFALL_H so we can use the "double buffer" scroll trick:
-    // new rows are written to both write_head and write_head+WATERFALL_H positions,
-    // and the canvas view pointer moves through the buffer instead of memmove'ing.
-    size_t buf_size = LV_CANVAS_BUF_SIZE(DISPLAY_H_RES, WATERFALL_H * 2, 16, LV_DRAW_BUF_STRIDE_ALIGN);
-    s_wf_canvas_buf = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
+    // Physical buffer: WATERFALL_H*2 cols × DISPLAY_H_RES rows (row-major).
+    size_t phys_stride_px = (size_t)(WATERFALL_H * 2);
+    size_t buf_bytes = phys_stride_px * DISPLAY_H_RES * 2;
+    s_wf_canvas_buf = heap_caps_malloc(buf_bytes, MALLOC_CAP_SPIRAM);
     if (!s_wf_canvas_buf) {
-        ESP_LOGE(TAG, "Failed to alloc waterfall canvas (%zu bytes)", buf_size);
+        ESP_LOGE(TAG, "Failed to alloc waterfall canvas (%zu bytes)", buf_bytes);
         return;
     }
+    memset(s_wf_canvas_buf, 0, buf_bytes);
+
+    // Initialise draw_buf with custom stride so we can slide the view window.
+    uint32_t stride_bytes = (uint32_t)(phys_stride_px * 2);
+    lv_draw_buf_init(&s_wf_draw_buf, WATERFALL_H, DISPLAY_H_RES,
+                     LV_COLOR_FORMAT_RGB565, stride_bytes,
+                     s_wf_canvas_buf, (uint32_t)buf_bytes);
 
     s_wf_canvas = lv_canvas_create(s_waterfall_obj);
     lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_waterfall_obj, touch_event_cb, LV_EVENT_PRESSING, NULL);
     lv_obj_add_event_cb(s_waterfall_obj, touch_event_cb, LV_EVENT_RELEASED, NULL);
-    lv_canvas_set_buffer(s_wf_canvas, s_wf_canvas_buf,
-                         DISPLAY_H_RES, WATERFALL_H, LV_COLOR_FORMAT_RGB565);
+    lv_canvas_set_draw_buf(s_wf_canvas, &s_wf_draw_buf);
     lv_obj_align(s_wf_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
-
-    // Initialize entire 2x buffer to black (waterfall starts empty)
-    memset(s_wf_canvas_buf, 0, (size_t)DISPLAY_H_RES * WATERFALL_H * 2 * 2);
     lv_obj_invalidate(s_wf_canvas);
 }
 
 // ==== Bottom status bar ====
 static void build_bottom_bar(lv_obj_t *parent)
 {
+    // Phase 6.3: portrait — bottom bar is BOTTOM_BAR_H wide × DISPLAY_H_RES tall at portrait x=690
     lv_obj_t *bar = lv_obj_create(parent);
-    lv_obj_set_size(bar, DISPLAY_H_RES, BOTTOM_BAR_H);
-    lv_obj_align(bar, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_size(bar, BOTTOM_BAR_H, DISPLAY_H_RES);
+    lv_obj_set_pos(bar, TOP_BAR_H + SPECTRUM_H + LABEL_BAR_H + WATERFALL_H, 0);
     lv_obj_set_style_bg_color(bar, lv_color_hex(0x0A1014), 0);
     lv_obj_set_style_border_width(bar, 0, 0);
     lv_obj_set_style_radius(bar, 0, 0);
-    lv_obj_set_style_pad_all(bar, 4, 0);
+    lv_obj_set_style_pad_all(bar, 0, 0);
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
     s_status_label = lv_label_create(bar);
     lv_label_set_text(s_status_label, "Span: 48kHz  Ref: -40dB  Avg: 4  FPS: --");
     lv_obj_set_style_text_color(s_status_label, lv_color_hex(0xC0C0C0), 0);
-    lv_obj_align(s_status_label, LV_ALIGN_LEFT_MID, 4, 0);
+    lv_obj_set_style_transform_rotation(s_status_label, 900, 0);
+    lv_obj_align(s_status_label, LV_ALIGN_CENTER, 0, 0);
 }
 
 // ==== Public API ====
@@ -553,107 +572,101 @@ static inline int db_to_y(float db)
     return y;
 }
 
+// Phase 6.3: portrait spectrum canvas is SPECTRUM_H wide × DISPLAY_H_RES tall.
+// Buffer layout: px[portrait_y * SPECTRUM_H + portrait_x]
+//   portrait_x = 0..SPECTRUM_H-1: left = high dB (landscape top), right = low dB
+//   portrait_y = 0..DISPLAY_H_RES-1: maps to landscape_x = DISPLAY_H_RES-1-portrait_y
+// Cursor lines are horizontal (constant portrait_y) rather than vertical.
 void ui_push_spectrum(const float *bins, int n_bins)
 {
     if (!s_spec_canvas_buf || !bins || n_bins <= 0) return;
     if (!display_lock(20)) return;
 
     uint16_t *px = (uint16_t *)s_spec_canvas_buf;
-    static int s_prev_y_top = 0;
-    const uint16_t fg = 0x07E0;  // green in RGB565
-    const uint16_t grid_color = 0x4208;  // dim grey grid lines
+    static int s_prev_x_top = 0;
+    const uint16_t fg = 0x07E0;
+    const uint16_t fg_dim = 0x01C0;
+    const uint16_t grid_color = 0x4208;
 
-    // Clear canvas to black
-    memset(px, 0, (size_t)DISPLAY_H_RES * SPECTRUM_H * 2);
+    memset(px, 0, (size_t)SPECTRUM_H * DISPLAY_H_RES * 2);
 
-    // dB grid lines (Phase 5.3) - draw before spectrum so green overdraws on hits
+    // dB grid lines: vertical bands at constant portrait_x = db_to_y(dB)
     {
         const float grid_dbs[5] = { -120.0f, -100.0f, -80.0f, -60.0f, -40.0f };
         for (int g = 0; g < 5; g++) {
-            int gy = db_to_y(grid_dbs[g]);
-            if (gy >= 0 && gy < SPECTRUM_H) {
-                uint16_t *row = px + gy * DISPLAY_H_RES;
-                for (int x = 0; x < DISPLAY_H_RES; x++) row[x] = grid_color;
-            }
+            int gx = db_to_y(grid_dbs[g]);  // portrait x
+            if (gx < 0 || gx >= SPECTRUM_H) continue;
+            for (int py = 0; py < DISPLAY_H_RES; py++)
+                px[py * SPECTRUM_H + gx] = grid_color;
         }
     }
 
     int N = n_bins;
     int half = N / 2;
 
-    for (int x = 0; x < DISPLAY_H_RES; x++) {
-        int shifted = (int)((float)x * (float)N / (float)DISPLAY_H_RES);
+    // Iterate over portrait_y (= landscape_x in reverse)
+    for (int py = 0; py < DISPLAY_H_RES; py++) {
+        // landscape_x = (DISPLAY_H_RES-1) - py
+        int lx = (DISPLAY_H_RES - 1) - py;
+        int shifted = (int)((float)lx * (float)N / (float)DISPLAY_H_RES);
         if (shifted < 0) shifted = 0;
         if (shifted >= N) shifted = N - 1;
 
-        int bin;
-        if (shifted < half) {
-            bin = shifted + half;
-        } else {
-            bin = shifted - half;
-        }
-        // Phase 5.10E: 12 kHz IF offset compensation. Shift selected bin
-        // right by (IF_OFFSET_HZ / sample_rate * N) bins so the QMX tuned
-        // frequency (+12 kHz in baseband) appears at the visual center.
+        int bin = (shifted < half) ? shifted + half : shifted - half;
         bin = (bin + (IF_OFFSET_HZ * N) / 48000) % N;
         if (bin < 0) bin += N;
 
-        int y_top = db_to_y(bins[bin]);
-        if (y_top < 0) y_top = 0;
-        if (y_top >= SPECTRUM_H) y_top = SPECTRUM_H - 1;
-        // Phase 5.9: continuous spectrum curve. Connect this column's y_top to
-        // the previous column's y_top with a bright line, then fill the area
-        // below with a dim green (matches docs/panadapter-mockup-ideal.svg).
-        const uint16_t fg_dim = 0x01C0;  // ~25% green in RGB565
-        // Connect from prev_y to y_top vertically so the curve is continuous,
-        // not a series of disconnected column tops.
-        int y_a = (x > 0) ? s_prev_y_top : y_top;
-        int y_b = y_top;
-        int y_lo = (y_a < y_b) ? y_a : y_b;
-        int y_hi = (y_a > y_b) ? y_a : y_b;
-        for (int y = y_lo; y <= y_hi; y++) {
-            px[y * DISPLAY_H_RES + x] = fg;
-        }
-        // Dim fill from just below the connecting line down to the bottom.
-        for (int y = y_hi + 1; y < SPECTRUM_H; y++) {
-            px[y * DISPLAY_H_RES + x] = fg_dim;
-        }
-        s_prev_y_top = y_top;
+        int x_top = db_to_y(bins[bin]);  // portrait x of signal peak
+        if (x_top < 0) x_top = 0;
+        if (x_top >= SPECTRUM_H) x_top = SPECTRUM_H - 1;
+
+        // Connect prev_x to x_top horizontally
+        int x_a = (py > 0) ? s_prev_x_top : x_top;
+        int x_b = x_top;
+        int x_lo = (x_a < x_b) ? x_a : x_b;
+        int x_hi = (x_a > x_b) ? x_a : x_b;
+        for (int px_x = x_lo; px_x <= x_hi; px_x++)
+            px[py * SPECTRUM_H + px_x] = fg;
+        // Dim fill to the right (low dB direction)
+        for (int px_x = x_hi + 1; px_x < SPECTRUM_H; px_x++)
+            px[py * SPECTRUM_H + px_x] = fg_dim;
+        s_prev_x_top = x_top;
     }
 
-    // Center cursor: amber 1-px vertical line at canvas center (where QMX is tuned)
+    // Cursor lines: horizontal at portrait_y = (DISPLAY_H_RES-1) - landscape_x
     {
-        // Phase 5.10G: passband edges (2 px grey lines)
         int32_t pb_low_hz, pb_high_hz;
         compute_passband_edges_hz(&pb_low_hz, &pb_high_hz);
-        const uint16_t pb_color = 0x8410;  /* medium grey */
+        const uint16_t pb_color = 0x8410;
         for (int side = 0; side < 2; side++) {
             int32_t edge_hz = (side == 0) ? pb_low_hz : pb_high_hz;
-            /* Edge frequency in Hz -> screen x. Sample rate = 48 kHz spans full width. */
-            int edge_x = DISPLAY_H_RES / 2 + (int)((int64_t)edge_hz * DISPLAY_H_RES / 48000);
-            if (edge_x < 0 || edge_x >= DISPLAY_H_RES) continue;
-            for (int y = 0; y < SPECTRUM_H; y++) {
-                px[y * DISPLAY_H_RES + edge_x] = pb_color;
-                if (edge_x + 1 < DISPLAY_H_RES) px[y * DISPLAY_H_RES + edge_x + 1] = pb_color;
+            int edge_lx = DISPLAY_H_RES / 2 + (int)((int64_t)edge_hz * DISPLAY_H_RES / 48000);
+            if (edge_lx < 0 || edge_lx >= DISPLAY_H_RES) continue;
+            int edge_py = (DISPLAY_H_RES - 1) - edge_lx;
+            if (edge_py >= 0 && edge_py < DISPLAY_H_RES) {
+                for (int px_x = 0; px_x < SPECTRUM_H; px_x++)
+                    px[edge_py * SPECTRUM_H + px_x] = pb_color;
+            }
+            if (edge_py - 1 >= 0) {
+                for (int px_x = 0; px_x < SPECTRUM_H; px_x++)
+                    px[(edge_py - 1) * SPECTRUM_H + px_x] = pb_color;
             }
         }
-
+        // Center cursor (amber): at landscape_x=DISPLAY_H_RES/2 → portrait_y=639
         const uint16_t center_color = 0xFD00;
-        int cx = DISPLAY_H_RES / 2;
-        for (int y = 0; y < SPECTRUM_H; y++) {
-            px[y * DISPLAY_H_RES + cx] = center_color;
-        }
+        int center_py = (DISPLAY_H_RES - 1) - DISPLAY_H_RES / 2;
+        for (int px_x = 0; px_x < SPECTRUM_H; px_x++)
+            px[center_py * SPECTRUM_H + px_x] = center_color;
     }
-    // Target cursor: cyan 1-px vertical line at last touched x, ~600 ms
+    // Target cursor (cyan): at portrait_y = s_target_x (s_target_x stores landscape_x)
     if (s_target_x >= 0) {
         uint64_t now = esp_timer_get_time();
         if (now < s_target_until_us) {
             const uint16_t target_color = 0x07FF;
-            int tx = s_target_x;
-            if (tx >= 0 && tx < DISPLAY_H_RES) {
-                for (int y = 0; y < SPECTRUM_H; y++) {
-                    px[y * DISPLAY_H_RES + tx] = target_color;
-                }
+            int tpy = (DISPLAY_H_RES - 1) - s_target_x;
+            if (tpy >= 0 && tpy < DISPLAY_H_RES) {
+                for (int px_x = 0; px_x < SPECTRUM_H; px_x++)
+                    px[tpy * SPECTRUM_H + px_x] = target_color;
             }
         } else {
             s_target_x = -1;
@@ -663,45 +676,34 @@ void ui_push_spectrum(const float *bins, int n_bins)
     display_unlock();
 }
 
-// Moving-pointer (double-buffer) scroll. We allocate a 2*WATERFALL_H buffer.
-// Each tick we write the new row to position s_wf_head AND to s_wf_head + WATERFALL_H,
-// then we increment s_wf_head (mod WATERFALL_H). The canvas's buffer pointer is set
-// to (base + s_wf_head*row_bytes), giving LVGL a contiguous WATERFALL_H view of the
-// freshest data. No memmove needed.
-//
-// Visual order: row 0 of the LVGL canvas view = newest row (top); WATERFALL_H-1 = oldest.
-// To achieve this, after incrementing s_wf_head, the "newest" row in the buffer is at
-// (s_wf_head - 1) mod WATERFALL_H, and we want the canvas view to start with it at row 0.
-// That means the view base = the position of the newest row.
-static int s_wf_head = 0;  // next write position (0..WATERFALL_H-1)
+// Phase 6.3 portrait waterfall double-buffer (column-based).
+// Physical buffer: WATERFALL_H*2 wide × DISPLAY_H_RES tall (row-major).
+// Each tick: decrement s_wf_head, write new column at s_wf_head AND s_wf_head+WATERFALL_H.
+// Update lv_draw_buf data pointer to buf + s_wf_head*2 bytes; stride = WATERFALL_H*2*2.
+// Newest column at portrait x=0 of canvas = landscape top of waterfall.
+static int s_wf_head = 0;
 
-// (touch-target cursor state declared near top of file)
-
-// Waterfall scroll via moving-pointer trick.
-// build_waterfall() allocates the canvas buffer at 2x WATERFALL_H height so we
-// can write each new row to BOTH s_wf_head and s_wf_head + WATERFALL_H. The
-// head DECREMENTS each tick, so the just-written row is at the TOP of the
-// WATERFALL_H window that starts at s_wf_head. We point the canvas's buffer at
-// that window. No memmove needed; ~100 us/tick instead of ~92 ms.
-void ui_push_waterfall_row(const uint8_t *rgb565_row)
+void ui_push_waterfall_row(const uint8_t *rgb565_col)
 {
-    if (!s_wf_canvas_buf || !rgb565_row) return;
-
-    const size_t row_bytes = DISPLAY_H_RES * 2;  // RGB565 = 2 B/px
-
+    if (!s_wf_canvas_buf || !rgb565_col) return;
     if (!display_lock(20)) return;
 
-    // Decrement head (with wrap), then write the new row at head and head+WATERFALL_H.
+    // Decrement head so the new column lands at portrait x=0 of the view.
     s_wf_head = (s_wf_head + WATERFALL_H - 1) % WATERFALL_H;
-    memcpy(s_wf_canvas_buf +  s_wf_head                * row_bytes, rgb565_row, row_bytes);
-    memcpy(s_wf_canvas_buf + (s_wf_head + WATERFALL_H) * row_bytes, rgb565_row, row_bytes);
 
-    // Point the canvas at the WATERFALL_H window starting at s_wf_head.
-    // Newest row sits at view row 0 (top), oldest at view row WATERFALL_H-1 (bottom).
-    lv_canvas_set_buffer(s_wf_canvas,
-                         s_wf_canvas_buf + s_wf_head * row_bytes,
-                         DISPLAY_H_RES, WATERFALL_H, LV_COLOR_FORMAT_RGB565);
+    // Write 1280 pixels into column s_wf_head and s_wf_head+WATERFALL_H.
+    // Physical pixel at (col c, row r) = buf16[r * WATERFALL_H*2 + c].
+    uint16_t *buf16 = (uint16_t *)s_wf_canvas_buf;
+    const uint16_t *col_data = (const uint16_t *)rgb565_col;
+    const int phys_w = WATERFALL_H * 2;
+    for (int r = 0; r < DISPLAY_H_RES; r++) {
+        buf16[r * phys_w + s_wf_head]              = col_data[r];
+        buf16[r * phys_w + s_wf_head + WATERFALL_H] = col_data[r];
+    }
 
+    // Slide the draw_buf window to start at column s_wf_head.
+    s_wf_draw_buf.data = s_wf_canvas_buf + s_wf_head * 2;
+    lv_canvas_set_draw_buf(s_wf_canvas, &s_wf_draw_buf);
     lv_obj_invalidate(s_wf_canvas);
     display_unlock();
 }
@@ -743,36 +745,35 @@ static void touch_event_cb(lv_event_t *e)
     lv_point_t p;
     lv_indev_get_point(indev, &p);
 
-    // p.x is screen-x; matches canvas-x because spectrum/waterfall are full-width at x=0.
-    if (p.x < 0 || p.x >= DISPLAY_H_RES) return;
+    // Phase 6.3: portrait coords. Frequency axis = portrait y (= landscape x).
+    // landscape_x = (DISPLAY_H_RES-1) - p.y
+    if (p.y < 0 || p.y >= DISPLAY_H_RES) return;
+    int landscape_x = (DISPLAY_H_RES - 1) - (int)p.y;
 
     if (code == LV_EVENT_PRESSING) {
-        // Live preview: cyan cursor tracks the finger; refresh the 200ms lingering window
-        // every tick so the line stays visible while the finger is down.
-        s_target_x = (int)p.x;
-        s_target_until_us = esp_timer_get_time() + 200000;  // 200 ms grace after lift
+        s_target_x = landscape_x;  // stored as landscape_x for cursor rendering
+        s_target_until_us = esp_timer_get_time() + 200000;
         return;
     }
 
     if (code == LV_EVENT_RELEASED) {
-        if (s_last_qmx_freq_hz == 0) return;  // no freq known yet, can't tune
-        // Phase 5.10D: deadzone under-and-left of the burger button.
-        // Burger is at top-right (~x=1216..1276, ~y=top bar). Block touches
-        // landing in a 180x80 region in the top-right of the spectrum so a
-        // wide finger pressing the button doesn't also retune.
-        if (p.x >= 1080 && p.y < 120) {  // Phase 5.10I: enlarged for 80x80 burger
-            ESP_LOGI("ui_touch", "RELEASED in burger deadzone (200x120) (x=%d y=%d) - ignored", (int)p.x, (int)p.y);
+        if (s_last_qmx_freq_hz == 0) return;
+        // Burger deadzone: landscape (x>=1080, y<120)
+        // In portrait: landscape_x = (DISPLAY_H_RES-1)-p.y >= 1080 → p.y <= 199
+        //              landscape_y = p.x < 120 (p.x is portrait x)
+        if (landscape_x >= 1080 && (int)p.x < 120) {
+            ESP_LOGI("ui_touch", "RELEASED in burger deadzone (lx=%d px=%d) - ignored", landscape_x, (int)p.x);
             return;
         }
 
-        // Screenshot button deadzone: top-left 80x80
-        if (p.x < 80 && p.y < 80) {
-            ESP_LOGI("ui_touch", "RELEASED in screenshot deadzone (80x80) (x=%d y=%d) - ignored", (int)p.x, (int)p.y);
+        // Screenshot deadzone: landscape (x<80, y<80) → portrait_y>1199 && portrait_x<80
+        if (landscape_x < 80 && (int)p.x < 80) {
+            ESP_LOGI("ui_touch", "RELEASED in screenshot deadzone - ignored");
             return;
         }
 
         // Compute target frequency from final touch position
-        int dx = (int)p.x - DISPLAY_H_RES / 2;
+        int dx = landscape_x - DISPLAY_H_RES / 2;
         int32_t offset_hz = (int32_t)((int64_t)dx * UAC_SAMPLE_RATE / DISPLAY_H_RES);
         // Phase 5.10F: mode-aware snap. CW=10 Hz (precision), SSB=500 Hz
         // (voice channels), FT8/data=100 Hz, AM/FM=1 kHz.
@@ -788,8 +789,8 @@ static void touch_event_cb(lv_event_t *e)
         uint32_t target_hz = (uint32_t)target;
 
         esp_err_t err = cat_set_frequency(target_hz);
-        ESP_LOGI("ui_touch", "RELEASED x=%d dx=%d off=%ld tgt=%lu err=0x%x",
-                 (int)p.x, dx, (long)rounded, (unsigned long)target_hz, err);
+        ESP_LOGI("ui_touch", "RELEASED lx=%d dx=%d off=%ld tgt=%lu err=0x%x",
+                 landscape_x, dx, (long)rounded, (unsigned long)target_hz, err);
         // Phase 5.10H: optimistically update the on-screen freq label
         // immediately so the user sees their target before the CAT FA
         // poll confirms (~300 ms later). If the QMX rejects the tune,
@@ -832,10 +833,10 @@ static void settings_button_cb(lv_event_t *e)
     }
 }
 
-// Animate x position. Used for slide-in/out.
-static void drawer_anim_x_cb(void *obj, int32_t v)
+// Phase 6.3: drawer slides in from portrait top (= landscape right).
+static void drawer_anim_y_cb(void *obj, int32_t v)
 {
-    lv_obj_set_x((lv_obj_t *)obj, v);
+    lv_obj_set_y((lv_obj_t *)obj, v);
 }
 
 static void drawer_close_button_cb(lv_event_t *e)
@@ -858,10 +859,13 @@ static void drawer_build(void)
     if (s_drawer) return;
 
     lv_obj_t *scr = lv_screen_active();
+    // Phase 6.3: portrait drawer — DISPLAY_V_RES wide × DRAWER_W tall.
+    // Landscape: drawer slides in from the right (x-animation).
+    // Portrait: slides in from portrait top (= landscape right); y-animation.
+    // Parked off-screen above: y = -DRAWER_W.
     s_drawer = lv_obj_create(scr);
-    lv_obj_set_size(s_drawer, DRAWER_W, DISPLAY_V_RES);
-    // Park off-screen to the right
-    lv_obj_set_pos(s_drawer, DISPLAY_H_RES, 0);
+    lv_obj_set_size(s_drawer, DISPLAY_V_RES, DRAWER_W);  // 720 × 400
+    lv_obj_set_pos(s_drawer, 0, -DRAWER_W);
     lv_obj_set_style_bg_color(s_drawer, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(s_drawer, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_drawer, lv_color_hex(0x444444), 0);
@@ -869,19 +873,21 @@ static void drawer_build(void)
     lv_obj_set_style_border_side(s_drawer, LV_BORDER_SIDE_LEFT, 0);
     lv_obj_set_style_radius(s_drawer, 0, 0);
     lv_obj_set_style_pad_all(s_drawer, 16, 0);
-    lv_obj_clear_flag(s_drawer, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_drawer, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scroll_dir(s_drawer, LV_DIR_VER);  // portrait y scrolling = landscape horizontal
 
-    // Title bar with "Settings" + close X
+    // Phase 6.3 portrait: title rotated 900, close button at portrait top-left
+    // (= landscape bottom-left of drawer, which appears at landscape-right side).
     lv_obj_t *title = lv_label_create(s_drawer);
     lv_label_set_text(title, "Settings");
     lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_set_style_transform_rotation(title, 900, 0);
+    lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
 
-    // Phase 5.10I: bigger close target (80x80 matching the burger)
     lv_obj_t *close_btn = lv_btn_create(s_drawer);
     lv_obj_set_size(close_btn, 80, 80);
-    lv_obj_align(close_btn, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_obj_align(close_btn, LV_ALIGN_TOP_LEFT, 0, 0);
     lv_obj_add_event_cb(close_btn, drawer_close_button_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *close_lbl = lv_label_create(close_btn);
     lv_label_set_text(close_lbl, LV_SYMBOL_CLOSE);
@@ -996,19 +1002,20 @@ static void drawer_build(void)
     lv_obj_align(s_slider_alpha, LV_ALIGN_TOP_LEFT, 0, y);
     lv_obj_add_event_cb(s_slider_alpha, drawer_slider_alpha_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
-    ESP_LOGI(TAG, "Settings drawer built (off-screen at x=%d)", DISPLAY_H_RES);
+    ESP_LOGI(TAG, "Settings drawer built (off-screen at y=%d)", -DRAWER_W);
 }
 
+// Phase 6.3: drawer slides in from portrait top (y: -DRAWER_W → 0).
 static void drawer_open(void)
 {
-    drawer_build();  // lazy build on first open
+    drawer_build();
     if (!s_drawer || s_drawer_open) return;
     lv_obj_move_foreground(s_drawer);
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, s_drawer);
-    lv_anim_set_exec_cb(&a, drawer_anim_x_cb);
-    lv_anim_set_values(&a, DISPLAY_H_RES, DISPLAY_H_RES - DRAWER_W);
+    lv_anim_set_exec_cb(&a, drawer_anim_y_cb);
+    lv_anim_set_values(&a, -DRAWER_W, 0);
     lv_anim_set_time(&a, 250);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
     lv_anim_start(&a);
@@ -1022,8 +1029,8 @@ static void drawer_close(void)
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, s_drawer);
-    lv_anim_set_exec_cb(&a, drawer_anim_x_cb);
-    lv_anim_set_values(&a, DISPLAY_H_RES - DRAWER_W, DISPLAY_H_RES);
+    lv_anim_set_exec_cb(&a, drawer_anim_y_cb);
+    lv_anim_set_values(&a, 0, -DRAWER_W);
     lv_anim_set_time(&a, 250);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_in);
     lv_anim_start(&a);
