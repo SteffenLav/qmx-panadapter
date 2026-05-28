@@ -3,6 +3,7 @@ idf_component_register(
         "main.c"
         "display/display.c"
         "ui/ui.c"
+        "ui/wifi_config.c"
         "util/fps.c"
         "cat/cat.c"
         "audio/audio.c"

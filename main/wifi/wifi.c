@@ -1,5 +1,6 @@
 #include "wifi.h"
-#include "wifi_credentials.h"
+#include "settings.h"
+#include <stdbool.h>
 
 #include <string.h>
 #include <time.h>
@@ -26,6 +27,11 @@ static EventGroupHandle_t s_events = NULL;
 
 static int s_retry_count = 0;
 #define MAX_FAST_RETRIES 5
+
+// Live credentials. Filled at boot from NVS, or overwritten via
+// panadapter_wifi_reconnect(). 0-length ssid means "not configured".
+static char s_ssid[33] = {0};
+static char s_pass[65] = {0};
 
 // Tab5 SDIO pin drive-strength quirk -----------------------------------
 // Matches N6HAN's qrp_companion and M5Stack factory demo: SDIO between P4
@@ -58,7 +64,11 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
                           int32_t id, void *data)
 {
     if (id == WIFI_EVENT_STA_START) {
-        ESP_LOGI(TAG, "STA started, connecting to '%s'", WIFI_STA_SSID);
+        if (s_ssid[0] == '\0') {
+            ESP_LOGI(TAG, "STA started but no SSID configured; not connecting");
+            return;
+        }
+        ESP_LOGI(TAG, "STA started, connecting to '%s'", s_ssid);
         esp_wifi_connect();
     } else if (id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *e = (wifi_event_sta_disconnected_t *)data;
@@ -101,6 +111,15 @@ static void on_ip_event(void *arg, esp_event_base_t base,
 // Init runs in its own task so app_main is not blocked --------------
 static void wifi_task(void *arg)
 {
+    ESP_LOGI(TAG, "calling esp_hosted_init() explicitly (constructor not running)");
+    extern esp_err_t esp_hosted_init(void);
+    esp_err_t hosted_err = esp_hosted_init();
+    if (hosted_err != ESP_OK) {
+        ESP_LOGE(TAG, "esp_hosted_init failed: %s", esp_err_to_name(hosted_err));
+        return;
+    }
+    ESP_LOGI(TAG, "esp_hosted_init OK");
+
     ESP_LOGI(TAG, "powering on C6 co-processor");
     bsp_set_wifi_power_enable(true);
     vTaskDelay(pdMS_TO_TICKS(100));
@@ -120,14 +139,27 @@ static void wifi_task(void *arg)
     ESP_ERROR_CHECK(esp_event_handler_instance_register(
         IP_EVENT, IP_EVENT_STA_GOT_IP, on_ip_event, NULL, NULL));
 
+    // Load credentials from NVS.
+    qmx_settings_t cfg;
+    settings_load_all(&cfg);
+    strncpy(s_ssid, cfg.wifi_ssid, sizeof(s_ssid) - 1);
+    s_ssid[sizeof(s_ssid) - 1] = '\0';
+    strncpy(s_pass, cfg.wifi_pass, sizeof(s_pass) - 1);
+    s_pass[sizeof(s_pass) - 1] = '\0';
+
     wifi_config_t sta_cfg = { 0 };
-    strncpy((char *)sta_cfg.sta.ssid, WIFI_STA_SSID, sizeof(sta_cfg.sta.ssid) - 1);
-    strncpy((char *)sta_cfg.sta.password, WIFI_STA_PASS, sizeof(sta_cfg.sta.password) - 1);
-    sta_cfg.sta.threshold.authmode = WIFI_AUTH_OPEN; // accept any; AP advertises actual mode
+    // s_ssid/s_pass already NUL-terminated; sta.ssid/password are zero-init via { 0 }.
+    memcpy(sta_cfg.sta.ssid, s_ssid, sizeof(sta_cfg.sta.ssid));
+    memcpy(sta_cfg.sta.password, s_pass, sizeof(sta_cfg.sta.password));
+    sta_cfg.sta.threshold.authmode = WIFI_AUTH_OPEN;
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg));
     ESP_ERROR_CHECK(esp_wifi_start());
+
+    if (s_ssid[0] == '\0') {
+        ESP_LOGW(TAG, "no WiFi credentials configured; waiting for user input");
+    }
 
     // Periodic status log so user can see what's going on.
     while (1) {
@@ -145,7 +177,7 @@ static void wifi_task(void *arg)
 }
 
 // Public API -----------------------------------------------------------
-void wifi_start(void)
+void panadapter_wifi_start(void)
 {
     if (s_events) return;  // idempotent
     s_events = xEventGroupCreate();
@@ -162,4 +194,40 @@ bool wifi_time_is_valid(void)
 {
     if (!s_events) return false;
     return (xEventGroupGetBits(s_events) & BIT_TIME_OK) != 0;
+}
+void panadapter_wifi_reconnect(const char *ssid, const char *pass)
+{
+    if (!ssid || ssid[0] == '\0') {
+        ESP_LOGW(TAG, "reconnect: empty SSID, ignoring");
+        return;
+    }
+    ESP_LOGI(TAG, "reconnect: switching to '%s'", ssid);
+
+    // Update live creds.
+    strncpy(s_ssid, ssid, sizeof(s_ssid) - 1);
+    s_ssid[sizeof(s_ssid) - 1] = '\0';
+    if (pass) {
+        strncpy(s_pass, pass, sizeof(s_pass) - 1);
+        s_pass[sizeof(s_pass) - 1] = '\0';
+    } else {
+        s_pass[0] = '\0';
+    }
+
+    // Persist.
+    settings_set_wifi_ssid(s_ssid);
+    settings_set_wifi_pass(s_pass);
+
+    // Reset retry counter so fast retries get a fresh budget.
+    s_retry_count = 0;
+
+    // Disconnect, push new config, reconnect.
+    esp_wifi_disconnect();
+
+    wifi_config_t sta_cfg = { 0 };
+    memcpy(sta_cfg.sta.ssid, s_ssid, sizeof(sta_cfg.sta.ssid));
+    memcpy(sta_cfg.sta.password, s_pass, sizeof(sta_cfg.sta.password));
+    sta_cfg.sta.threshold.authmode = WIFI_AUTH_OPEN;
+    esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
+
+    esp_wifi_connect();
 }
