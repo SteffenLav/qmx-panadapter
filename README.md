@@ -12,9 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 ### Work in progress: real hardware
 
-![Working FT8 on 20m, QMX+ tuned to 14.074 MHz (FSK = digi on QMX)](docs/QMX-Panadapter_1st_snapshot.jpg)
+![Working FT8 on 20m, QMX+ tuned to 14.074 MHz (FSK = digi on QMX)](docs/QMX-Panadapter_1st_snapshot.png)
 
-*First real-world snapshot: QMX+ on 20m, decoding FT8 traffic at 14.074 MHz. Top status bar shows Band 20m / Mode FSK / Center Freq 14.074.000 Hz / Signal S6. Spectrum trace and waterfall both centered on the VFO after the 12 kHz IF offset compensation. Two faint grey lines on the spectrum mark the passband edges reported by the QMX over CAT FW.*
+*First real-world screenshot: QMX on 20m, working FT8 traffic at 14.074 MHz. Top status bar shows Band 20m / Mode FSK = DiGi / Center Freq 14.074.000 Hz / Signal S9. Spectrum trace and waterfall both centered on the VFO after the 12 kHz IF offset compensation. Two faint grey lines on the spectrum mark the passband edges reported by the QMX over CAT FW.*
 
 ---
 
