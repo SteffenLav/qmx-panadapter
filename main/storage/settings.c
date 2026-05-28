@@ -18,6 +18,8 @@ static const char *TAG = "settings";
 #define KEY_DB_MAX      "db_max"
 #define KEY_EMA_ALPHA   "ema_alpha"
 #define KEY_IQ_ENABLED  "iq_en"
+#define KEY_WIFI_SSID   "wifi_ssid"
+#define KEY_WIFI_PASS   "wifi_pass"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -33,6 +35,8 @@ static const char *TAG = "settings";
 #define DIRTY_DB_MAX     (1u << 1)
 #define DIRTY_EMA_ALPHA  (1u << 2)
 #define DIRTY_IQ_ENABLED (1u << 3)
+#define DIRTY_WIFI_SSID  (1u << 4)
+#define DIRTY_WIFI_PASS  (1u << 5)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -107,6 +111,8 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_DB_MAX)     nvs_set_float(KEY_DB_MAX,    snap.db_max);
         if (dirty_local & DIRTY_EMA_ALPHA)  nvs_set_float(KEY_EMA_ALPHA, snap.ema_alpha);
         if (dirty_local & DIRTY_IQ_ENABLED) nvs_set_u8(s_nvs, KEY_IQ_ENABLED, snap.iq_enabled ? 1 : 0);
+        if (dirty_local & DIRTY_WIFI_SSID)  nvs_set_str(s_nvs, KEY_WIFI_SSID, snap.wifi_ssid);
+        if (dirty_local & DIRTY_WIFI_PASS)  nvs_set_str(s_nvs, KEY_WIFI_PASS, snap.wifi_pass);
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
@@ -160,6 +166,14 @@ void settings_load_all(qmx_settings_t *out)
     if (nvs_get_float(KEY_DB_MAX,    &fv)) out->db_max    = fv;
     if (nvs_get_float(KEY_EMA_ALPHA, &fv)) out->ema_alpha = fv;
     if (nvs_get_u8(s_nvs, KEY_IQ_ENABLED, &u8v) == ESP_OK) out->iq_enabled = (u8v != 0);
+
+    // Strings: zero buffers first, then read length-bounded.
+    out->wifi_ssid[0] = '\0';
+    out->wifi_pass[0] = '\0';
+    size_t sz = sizeof(out->wifi_ssid);
+    nvs_get_str(s_nvs, KEY_WIFI_SSID, out->wifi_ssid, &sz);
+    sz = sizeof(out->wifi_pass);
+    nvs_get_str(s_nvs, KEY_WIFI_PASS, out->wifi_pass, &sz);
 
     ESP_LOGI(TAG, "loaded: db=[%.1f..%.1f] ema=%.2f iq=%d",
              out->db_min, out->db_max, out->ema_alpha, out->iq_enabled);
@@ -222,4 +236,31 @@ void settings_flush(void)
     // Give the flush task a chance to run. Not deterministic, but
     // usually enough.
     vTaskDelay(pdMS_TO_TICKS(200));
+}
+void settings_set_wifi_ssid(const char *ssid)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (ssid) {
+        strncpy(s_pending.wifi_ssid, ssid, sizeof(s_pending.wifi_ssid) - 1);
+        s_pending.wifi_ssid[sizeof(s_pending.wifi_ssid) - 1] = '\0';
+    } else {
+        s_pending.wifi_ssid[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WIFI_SSID);
+}
+
+void settings_set_wifi_pass(const char *pass)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (pass) {
+        strncpy(s_pending.wifi_pass, pass, sizeof(s_pending.wifi_pass) - 1);
+        s_pending.wifi_pass[sizeof(s_pending.wifi_pass) - 1] = '\0';
+    } else {
+        s_pending.wifi_pass[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WIFI_PASS);
 }

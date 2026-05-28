@@ -13,6 +13,8 @@ typedef struct {
     float db_max;       // spectrum/waterfall ceiling (dBm)
     float ema_alpha;    // spectrum EMA smoothing (0..1)
     bool  iq_enabled;   // I/Q balance correction on/off
+    char  wifi_ssid[33];   // WiFi SSID (32 chars + NUL, IEEE max)
+    char  wifi_pass[65];   // WiFi password (64 chars + NUL, WPA2 max)
 } qmx_settings_t;
 
 // Initialise the settings module. Opens an NVS handle. Safe to call
@@ -31,6 +33,9 @@ void settings_set_db_min(float v);
 void settings_set_db_max(float v);
 void settings_set_ema_alpha(float v);
 void settings_set_iq_enabled(bool v);
+// WiFi credential setters. Pass NULL or empty string to clear.
+void settings_set_wifi_ssid(const char *ssid);
+void settings_set_wifi_pass(const char *pass);
 
 // Force any pending writes to flash immediately. Call before reboot
 // if you want absolute certainty. Normally not needed.

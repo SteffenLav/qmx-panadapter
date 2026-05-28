@@ -63,7 +63,7 @@ void app_main(void)
 
     // WiFi+SNTP runs in a background task; doesn't block boot.
     // DISABLED pending C6 firmware investigation (see CLAUDE.md / git log).
-    // wifi_start();
+    panadapter_wifi_start();
     ESP_ERROR_CHECK(dsp_init());
     ESP_ERROR_CHECK(render_init());
 
