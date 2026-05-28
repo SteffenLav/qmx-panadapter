@@ -7,7 +7,7 @@ extern "C" {
 #endif
 
 // Bring up the C6 co-processor, initialise the WiFi station, connect to
-// the SSID/password defined in wifi_credentials.h, and start SNTP.
+// the SSID/password stored in NVS (skipped if empty), and start SNTP.
 // Returns immediately; the actual work runs in a background task.
 // Safe to call once at startup.
 void panadapter_wifi_start(void);
