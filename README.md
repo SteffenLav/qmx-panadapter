@@ -20,7 +20,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 ## Status
 
-Working. All phases through 6.2 complete, plus cold-boot reliability fix and I/Q balance correction (Phases A–C).
+Working. All phases through 6.2 complete, plus cold-boot reliability fix, I/Q balance correction (Phases A–C), and WiFi STA with on-screen credential entry.
 
 | Phase | What | Status |
 |-------|------|--------|
@@ -55,6 +55,8 @@ Working. All phases through 6.2 complete, plus cold-boot reliability fix and I/Q
 | B     | I/Q balance ON/OFF toggle in settings drawer | done |
 | C     | I/Q balance time constant tuning (two-speed convergence) | done |
 | —     | NVS settings persistence (dB range, EMA alpha, IQ toggle) | done |
+| —     | WiFi STA via esp_hosted + SNTP UTC sync | done |
+| —     | On-screen WiFi credential modal (SSID/password in NVS) | done |
 
 See the [Roadmap](#roadmap) at the bottom for what's next.
 
@@ -62,7 +64,7 @@ See the [Roadmap](#roadmap) at the bottom for what's next.
 
 ## Hardware
 
-- **M5Stack Tab5** with ESP32-P4 v1.3 (ECO2) silicon, ST7123 5" 720×1280 MIPI-DSI touch panel, 32 MB hex PSRAM
+- **M5Stack Tab5** with ESP32-P4 v1.3 (ECO2) silicon, ST7123 5" 720×1280 MIPI-DSI touch panel, 32 MB hex PSRAM, ESP32-C6 co-processor for WiFi
 - **QRP Labs QMX or QMX+** transceiver (Kenwood-style CAT, UAC audio)
 - USB-C OTG cable Tab5 ↔ QMX
 
@@ -134,6 +136,7 @@ Under the spectrum, the frequency axis labels show absolute MHz centered on the 
 **Settings drawer (Phase 5.10D / Phase B).** The burger button on the top right opens a 400 px right-side settings drawer with a 250 ms slide-in animation. Contents:
 - **IQ Balance toggle** (Phase B) — ON/OFF switch wired to `iq_balance_set_enabled()`; re-enabling resets the estimator so it converges from a clean state
 - **Presets** (HF Normal / HF DX / Strong Sig.) — each sets dB range and EMA smoothing in one tap
+- **WiFi** button — opens the credential modal (see WiFi section below)
 - **dB Range sliders** (Min and Max in dBm) — live updates `ui_set_db_range()`
 - **Smoothing slider** (EMA alpha, 0.05 to 1.00) — live updates `render_set_ema_alpha()` (the formerly hard-coded `SMOOTH_ALPHA` is now a runtime variable)
 
@@ -171,17 +174,42 @@ The displayed dB range is fixed at -130 to -30 dBm, matching commercial SDR conv
 
 **Continuous green curve (Phase 5.9).** Each column's trace is connected to the previous column's `y_top` with a bright vertical line, so the spectrum reads as a continuous curve rather than disconnected per-column dots. Below the curve, a dim ~25% green fill (RGB565 `0x01C0`) gives the look of [docs/panadapter-mockup-ideal.svg](docs/panadapter-mockup-ideal.svg). Grid lines at -120, -100, -80, -60, -40 dBm.
 
+## WiFi configuration
+
+The Tab5 connects to the local network through the on-board ESP32-C6 co-processor via [`esp_hosted`](https://github.com/espressif/esp-hosted) over SDIO. Once online, SNTP syncs UTC time. By itself this isn't visible to the user beyond a log line, but it satisfies the time-reference prerequisite for the upcoming onboard FT8 decoder, the planned network CAT bridge, and an eventual remote-panadapter web UI.
+
+Credentials are entered through a full-screen LVGL modal launched from the **WiFi** button in the settings drawer.
+
+- **SSID textarea** — pre-filled from NVS on each open, so you can see what's currently configured
+- **Password textarea** — masked, always starts blank
+- **On-screen keyboard** — appears when a textarea is focused; hides on the keyboard's close-icon or Enter
+- **Save / Cancel** buttons
+
+On **Save**, `panadapter_wifi_reconnect(ssid, pass)` is called. This:
+
+1. Writes the new credentials to NVS (32-char SSID, 64-char WPA2 password limits)
+2. Triggers a disconnect-then-reconnect cycle so the new SSID takes effect immediately
+3. Closes the modal
+
+If no credentials are configured at boot, WiFi stays idle (no retry storm) until the user opens the modal and saves something. Saving an empty SSID is silently ignored — Cancel discards changes and leaves NVS untouched.
+
+**Why a runtime modal instead of build-time `wifi_credentials.h`.** Earlier versions kept SSID/password in a gitignored header. That made every WiFi change a rebuild-and-flash cycle, and required publishing build instructions to teach new users about the file. With the modal, a flashed binary is portable: the user enters their own network on first boot. Credentials are stored only in NVS, never embedded in the firmware image.
+
 ## Project layout
 
     qmx-panadapter/
     |-- main/
     |   |-- main.c                  app_main, orchestration
     |   |-- display/                LVGL bring-up via local BSP
-    |   |-- ui/                     LVGL widgets, touch handler, canvases
+    |   |-- ui/                     LVGL widgets, touch handler, canvases, WiFi modal
     |   |-- cat/                    USB CDC-ACM + Kenwood CAT
     |   |-- audio/                  USB UAC + ring buffer
     |   |-- dsp/                    esp-dsp FFT, spectrum mutex, I/Q balance correction
-    |   `-- render/                 30 Hz render task, smoothing, autoscale
+    |   |-- render/                 30 Hz render task, smoothing, autoscale
+    |   |-- screenshot/             Long-press capture, base64 UART stream
+    |   |-- storage/                NVS settings persistence (dB, EMA, IQ, WiFi creds)
+    |   |-- wifi/                   esp_hosted STA + SNTP
+    |   `-- util/                   FPS counter etc.
     |-- components/
     |   |-- m5stack_tab5/                  M5Stack local BSP (ST7123 panel + touch)
     |   `-- espressif__usb_host_uac/       Patched UAC component (see Quirks)
@@ -254,6 +282,14 @@ Earlier versions of the panadapter showed a slow ~13 s cycle on the displayed no
 - Display dB range shifted to 10–130 dB to cover real signal amplitudes (later recalibrated to -130 to -30 dBm in Phase 5.8)
 
 Inspired by [`qrp_companion`](https://groups.io/g/QRPLabs/topic/118645485) by Zhenxing Han (N6HAN), who confirmed his code on Tab5 did not exhibit the issue and offered his source as reference. Thanks Zhenxing.
+
+### WiFi via esp_hosted on Tab5
+
+Two stacked issues had to be worked around before WiFi STA would come up reliably:
+
+- **Symbol collision on `wifi_start`.** Our `wifi.c` originally exposed `void wifi_start(void)`, which collides with `esp_hosted`'s internal `wifi_start(req)`. With `esp_hosted` linked under `-Wl,--whole-archive`, the linker picked the wrong symbol and WiFi never started. Fix: rename our public entry point to `panadapter_wifi_start`. **Lesson:** never use generic names like `wifi_start`/`stop`/`connect` for module exports — prefix with the module name.
+- **`esp_hosted` constructor doesn't auto-fire.** `esp_hosted_host_init.c` uses `__attribute__((constructor))` to initialise the SDIO transport before `app_main` runs. On this build it doesn't fire (root cause unknown — not blocking). Workaround: call `esp_hosted_init()` explicitly at the start of `wifi_task`.
+
 ## Tools
 
 ### `qmx` PowerShell helper
@@ -286,12 +322,16 @@ Exit monitor with `Ctrl+T` then `Ctrl+X` (works on Danish/non-US keyboard layout
 - **I/Q balance correction** (Phases A–C). Gram-Schmidt blind adaptive image-rejection; toggle in settings drawer.
 - **NVS settings persistence**. dB range, EMA alpha and IQ toggle survive reboots. Debounced flush minimises flash wear.
 
+### Shipped post-v0.7.0
+
+- **WiFi STA + on-screen credential UI.** ESP32-C6 co-processor over `esp_hosted` SDIO; SSID/password entered via a full-screen LVGL modal launched from the settings drawer; creds persist to NVS, no rebuild required to change networks. SNTP syncs UTC on connect — this is the prerequisite for onboard FT8 decoding.
+
 ### Next up
 
 Concrete items planned for the near term, in roughly the order they'll likely be tackled.
 
 - **Memory channels.** Quick-recall frequency presets — touch a slot, QMX retunes via CAT. Stored in NVS.
-- **FT8 decoder onboard.** Integrate [`ft8_lib`](https://github.com/kgoba/ft8_lib) using the existing audio pipeline. Show decoded callsigns/grids overlaid on the spectrum at their carrier frequencies.
+- **FT8 decoder onboard.** Integrate [`ft8_lib`](https://github.com/kgoba/ft8_lib) using the existing audio pipeline. The required UTC reference is now in place via SNTP. Show decoded callsigns/grids overlaid on the spectrum at their carrier frequencies.
 - **DSP polish.** Noise reduction, auto-notch — the feature surface the QuantumSDR Spectrum DSP M4 defines as the boutique-standalone target.
 - **Phase 6.3 — Native-orientation rendering** *(deferred)*. First attempt in v0.6.x was reverted; UI elements were half-migrated. Worth revisiting once memory channels and FT8 land, since the ~50% FPS recovery is real. PPA hardware rotation ruled out earlier — it conflicts with the USB host stack over DW-GDMA channels.
 
@@ -299,9 +339,9 @@ Concrete items planned for the near term, in roughly the order they'll likely be
 
 Ideas that fit the project but aren't on the immediate path. Order is rough; appetite and curiosity will decide.
 
+- **Web UI for remote operation.** A small web server (Mongoose or `esp_http_server`) exposing the spectrum as a remote panadapter, with the Tab5 acting as a head unit at the rig. WiFi STA is already in place; this just needs the HTTP layer and a streaming protocol.
+- **Network CAT bridge.** TCP server forwarding CAT to the QMX, so WSJT-X / fldigi / N1MM on a PC can talk to the radio through the Tab5 — useful when the QMX is in the shack and the operating position is elsewhere. WiFi STA already in place.
 - **CW decoder.** A Goertzel-based decoder on the demodulated CW passband, with text scrolling under the spectrum. The QMX itself already does this internally; question is whether to mirror its output via CAT or run a parallel decoder on the Tab5.
-- **WiFi station mode + web UI.** ESP32-P4 has WiFi via the C6 co-processor. A small web server (Mongoose or `esp_http_server`) could expose the spectrum as a remote panadapter, with the Tab5 acting as a head unit at the rig.
-- **Network CAT bridge.** TCP server forwarding CAT to the QMX, so WSJT-X / fldigi / N1MM on a PC can talk to the radio through the Tab5 — useful when the QMX is in the shack and the operating position is elsewhere.
 - **QMX (small) support.** Same UI, different USB endpoint config and band table. Should be mostly a build-flag matter; the 5-band QMX speaks the same CAT and UAC.
 - **Extended waterfall history.** PSRAM has plenty of room for several minutes of scrollback. Two-finger drag to scrub through history would be a natural UX fit.
 - **Touch-to-tune refinements.** Pinch-to-zoom span (sub-48 kHz windows), drag-to-pan inside the current 48 kHz, snap-to-strongest-bin, configurable cursor offset for CW tone preference.
