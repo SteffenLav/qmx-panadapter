@@ -10,6 +10,7 @@
 #include "display.h"
 #include "ui.h"
 #include "status.h"
+#include "battery.h"
 #include "cat.h"
 #include "audio.h"
 #include "dsp.h"
@@ -49,6 +50,9 @@ void app_main(void)
     // Enable battery charging (BSP defines these but never calls them)
     bsp_set_charge_qc_en(true);
     bsp_set_charge_en(true);
+
+    // Initialise INA226 battery monitor (shares main I2C bus with PI4IO)
+    battery_init(bsp_i2c_get_handle());
 
     ui_init(disp);
 

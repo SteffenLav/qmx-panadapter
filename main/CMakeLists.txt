@@ -6,6 +6,7 @@ idf_component_register(
         "ui/wifi_config.c"
         "util/status.c"
         "util/battery.c"
+        "util/ina226.c"
         "cat/cat.c"
         "audio/audio.c"
         "dsp/dsp.c"
