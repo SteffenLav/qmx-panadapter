@@ -26,7 +26,7 @@ void app_main(void)
     ESP_LOGI(TAG, "PSRAM total: %zu MB",
              heap_caps_get_total_size(MALLOC_CAP_SPIRAM) / (1024 * 1024));
     // Initialise NVS (settings persistence). If the partition is full or
-    // a new version invalidated it, erase and retry — never block boot.
+    // a new version invalidated it, erase and retry â€” never block boot.
     esp_err_t nvs_err = nvs_flash_init();
     if (nvs_err == ESP_ERR_NVS_NO_FREE_PAGES || nvs_err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         ESP_LOGW(TAG, "NVS needs erase (0x%x); erasing and retrying", nvs_err);
@@ -34,7 +34,7 @@ void app_main(void)
         nvs_err = nvs_flash_init();
     }
     if (nvs_err != ESP_OK) {
-        ESP_LOGE(TAG, "NVS init failed: 0x%x — settings will not persist", nvs_err);
+        ESP_LOGE(TAG, "NVS init failed: 0x%x â€” settings will not persist", nvs_err);
     } else {
         ESP_LOGI(TAG, "NVS initialised");
     }
@@ -45,6 +45,10 @@ void app_main(void)
 
     lv_display_t *disp = NULL;
     ESP_ERROR_CHECK(display_init(&disp));
+
+    // Enable battery charging (BSP defines these but never calls them)
+    bsp_set_charge_qc_en(true);
+    bsp_set_charge_en(true);
 
     ui_init(disp);
 
@@ -67,6 +71,6 @@ void app_main(void)
     ESP_ERROR_CHECK(dsp_init());
     ESP_ERROR_CHECK(render_init());
 
-    ESP_LOGI(TAG, "Init complete — main task idle");
+    ESP_LOGI(TAG, "Init complete â€” main task idle");
 }
 
