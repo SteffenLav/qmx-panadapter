@@ -133,7 +133,7 @@ Under the spectrum, the frequency axis labels show absolute MHz centered on the 
 
 **Faster CAT + optimistic UI (Phase 5.10H).** CAT poll interval dropped from 200 ms to 50 ms so dial-spinning no longer skips. Touch-to-tune optimistically updates the on-screen frequency label immediately on a successful CAT write rather than waiting ~150 ms for the next FA poll to confirm.
 
-**Settings drawer (Phase 5.10D / Phase B).** The burger button on the top right opens a 400 px right-side settings drawer with a 250 ms slide-in animation. Contents:
+**Settings drawer (Phase 5.10D / Phase B).** The burger button on the top right opens a 520 px right-side settings drawer with a 250 ms slide-in animation. Contents:
 - **IQ Balance toggle** (Phase B) — ON/OFF switch wired to `iq_balance_set_enabled()`; re-enabling resets the estimator so it converges from a clean state
 - **Presets** (HF Normal / HF DX / Strong Sig.) — each sets dB range and EMA smoothing in one tap
 - **WiFi** button — opens the credential modal (see WiFi section below)
@@ -209,7 +209,7 @@ If no credentials are configured at boot, WiFi stays idle (no retry storm) until
     |   |-- screenshot/             Long-press capture, base64 UART stream
     |   |-- storage/                NVS settings persistence (dB, EMA, IQ, WiFi creds)
     |   |-- wifi/                   esp_hosted STA + SNTP
-    |   `-- util/                   FPS counter etc.
+    |   `-- util/                   Status bar (battery + WiFi)
     |-- components/
     |   |-- m5stack_tab5/                  M5Stack local BSP (ST7123 panel + touch)
     |   `-- espressif__usb_host_uac/       Patched UAC component (see Quirks)
@@ -322,9 +322,15 @@ Exit monitor with `Ctrl+T` then `Ctrl+X` (works on Danish/non-US keyboard layout
 - **I/Q balance correction** (Phases A–C). Gram-Schmidt blind adaptive image-rejection; toggle in settings drawer.
 - **NVS settings persistence**. dB range, EMA alpha and IQ toggle survive reboots. Debounced flush minimises flash wear.
 
-### Shipped post-v0.7.0
+### Shipped in v0.8.0
 
 - **WiFi STA + on-screen credential UI.** ESP32-C6 co-processor over `esp_hosted` SDIO; SSID/password entered via a full-screen LVGL modal launched from the settings drawer; creds persist to NVS, no rebuild required to change networks. SNTP syncs UTC on connect — this is the prerequisite for onboard FT8 decoding.
+
+### Shipped in v0.8.1
+
+- **Bottom status bar.** Battery indicator (level + charging) and WiFi state (SSID + RSSI in dBm) replace the dev-only FPS/PSRAM/IRAM line. Battery readout is stubbed pending INA226 wiring (see N6HAN's qrp_companion for the planned approach).
+- **Drawer polish.** Drawer widened from 400 px to 520 px; IQ Balance row moved up under the title; presets (HF Normal / HF DX / Strong Sig) laid out side-by-side in a single row; on-screen keyboard buttons darker for better contrast.
+- **Larger fonts.** Top-bar and bottom-bar text bumped from Montserrat 20 to Montserrat 24 to match the drawer.
 
 ### Next up
 

@@ -20,6 +20,12 @@ void panadapter_wifi_reconnect(const char *ssid, const char *pass);
 // Returns true once the station has an IP address.
 bool wifi_is_connected(void);
 
+// Currently-connected SSID; empty string if not connected.
+const char *wifi_get_ssid(void);
+
+// Current AP signal strength in dBm; 0 if not connected.
+int wifi_get_rssi_dbm(void);
+
 // Returns true once SNTP has set the system time at least once.
 bool wifi_time_is_valid(void);
 
