@@ -115,25 +115,25 @@ static void build_top_bar(lv_obj_t *parent)
     s_band_label = lv_label_create(bar);
     lv_label_set_text(s_band_label, "Band: ---");
     lv_obj_set_style_text_color(s_band_label, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_band_label, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_band_label, &lv_font_montserrat_24, 0);
     lv_obj_align(s_band_label, LV_ALIGN_LEFT_MID, 8, 0);
 
     s_mode_label = lv_label_create(bar);
     lv_label_set_text(s_mode_label, "Mode: USB");
     lv_obj_set_style_text_color(s_mode_label, lv_color_hex(0xA0E0A0), 0);
-    lv_obj_set_style_text_font(s_mode_label, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_mode_label, &lv_font_montserrat_24, 0);
     lv_obj_align(s_mode_label, LV_ALIGN_LEFT_MID, 200, 0);
 
     s_freq_label = lv_label_create(bar);
     lv_label_set_text(s_freq_label, "Center Freq: 14.074.000 Hz");
     lv_obj_set_style_text_color(s_freq_label, lv_color_hex(0xFFD76B), 0);
-    lv_obj_set_style_text_font(s_freq_label, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_freq_label, &lv_font_montserrat_24, 0);
     lv_obj_align(s_freq_label, LV_ALIGN_CENTER, 0, 0);
 
     s_smeter_label = lv_label_create(bar);
     lv_label_set_text(s_smeter_label, "Signal: S0");
     lv_obj_set_style_text_color(s_smeter_label, lv_color_hex(0x00FF00), 0);  // Phase 5.10D: match spectrum trace green
-    lv_obj_set_style_text_font(s_smeter_label, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_smeter_label, &lv_font_montserrat_24, 0);
     lv_obj_align(s_smeter_label, LV_ALIGN_CENTER, 320, 0);  // Phase 5.10D: centered in right half
 
     // Phase 5.10I: 80x80 burger, overflows downward into the spectrum.
@@ -341,6 +341,7 @@ static void build_bottom_bar(lv_obj_t *parent)
     s_status_label = lv_label_create(bar);
     lv_label_set_text(s_status_label, "Span: 48kHz  Ref: -40dB  Avg: 4  FPS: --");
     lv_obj_set_style_text_color(s_status_label, lv_color_hex(0xC0C0C0), 0);
+    lv_obj_set_style_text_font(s_status_label, &lv_font_montserrat_24, 0);
     lv_obj_align(s_status_label, LV_ALIGN_LEFT_MID, 4, 0);
 }
 

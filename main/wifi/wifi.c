@@ -190,6 +190,25 @@ bool wifi_is_connected(void)
     return (xEventGroupGetBits(s_events) & BIT_CONNECTED) != 0;
 }
 
+const char *wifi_get_ssid(void)
+{
+    static char ssid_buf[33];
+    if (!wifi_is_connected()) { ssid_buf[0] = '\0'; return ssid_buf; }
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) { ssid_buf[0] = '\0'; return ssid_buf; }
+    memcpy(ssid_buf, ap.ssid, sizeof(ssid_buf) - 1);
+    ssid_buf[sizeof(ssid_buf) - 1] = '\0';
+    return ssid_buf;
+}
+
+int wifi_get_rssi_dbm(void)
+{
+    if (!wifi_is_connected()) return 0;
+    wifi_ap_record_t ap;
+    if (esp_wifi_sta_get_ap_info(&ap) != ESP_OK) return 0;
+    return ap.rssi;
+}
+
 bool wifi_time_is_valid(void)
 {
     if (!s_events) return false;

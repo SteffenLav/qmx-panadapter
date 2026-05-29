@@ -9,7 +9,7 @@
 
 #include "display.h"
 #include "ui.h"
-#include "fps.h"
+#include "status.h"
 #include "cat.h"
 #include "audio.h"
 #include "dsp.h"
@@ -52,7 +52,7 @@ void app_main(void)
     ui_set_db_range(cfg.db_min, cfg.db_max);
     ui_set_db_labels(cfg.db_min, cfg.db_max);
     render_set_ema_alpha(cfg.ema_alpha);
-    fps_counter_start();
+    status_bar_start();
 
     ESP_ERROR_CHECK(bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true));
     ESP_LOGI(TAG, "USB host started");
