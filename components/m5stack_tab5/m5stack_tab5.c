@@ -1,4 +1,4 @@
-﻿/*
+/*
  * SPDX-FileCopyrightText: 2024 Espressif Systems (Shanghai) CO LTD
  *
  * SPDX-License-Identifier: Apache-2.0
@@ -804,6 +804,7 @@ esp_codec_dev_handle_t bsp_audio_codec_speaker_init(void)
     assert(i2s_data_if);
 
     const audio_codec_gpio_if_t* gpio_if = audio_codec_new_gpio();
+    (void)gpio_if;
 
     i2c_master_bus_handle_t i2c_bus_handle = bsp_i2c_get_handle();
     audio_codec_i2c_cfg_t i2c_cfg          = {
@@ -818,6 +819,7 @@ esp_codec_dev_handle_t bsp_audio_codec_speaker_init(void)
         .pa_voltage        = 5.0,
         .codec_dac_voltage = 3.3,
     };
+    (void)gain;
 
     es8388_codec_cfg_t es8388_cfg = {
         .codec_mode  = ESP_CODEC_DEV_WORK_MODE_DAC,

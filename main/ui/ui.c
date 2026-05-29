@@ -86,7 +86,6 @@ static float DB_MIN_DISPLAY = -130.0f;  /* dBm, calibrated scale */
 static float DB_MAX_DISPLAY = -30.0f;  /* dBm, headroom for S9+40 */
 
 // Forward decl so build_spectrum can call this
-static void ui_set_db_labels_internal(float db_min, float db_max);
 
 static lv_obj_t *s_wf_canvas = NULL;
 static uint8_t *s_wf_canvas_buf = NULL;
