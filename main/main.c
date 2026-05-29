@@ -67,6 +67,11 @@ void app_main(void)
 
     ESP_ERROR_CHECK(audio_init());
     iq_balance_set_enabled(cfg.iq_enabled);
+
+    // Restore last-known VFO frequency (display only; QMX is source of truth).
+    if (cfg.last_vfo_hz != 0) {
+        ui_update_frequency(cfg.last_vfo_hz);
+    }
     ESP_ERROR_CHECK(cat_init());
 
     // WiFi+SNTP runs in a background task; doesn't block boot.

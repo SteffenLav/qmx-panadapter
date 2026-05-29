@@ -20,6 +20,7 @@ static const char *TAG = "settings";
 #define KEY_IQ_ENABLED  "iq_en"
 #define KEY_WIFI_SSID   "wifi_ssid"
 #define KEY_WIFI_PASS   "wifi_pass"
+#define KEY_LAST_VFO   "last_vfo"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -37,6 +38,7 @@ static const char *TAG = "settings";
 #define DIRTY_IQ_ENABLED (1u << 3)
 #define DIRTY_WIFI_SSID  (1u << 4)
 #define DIRTY_WIFI_PASS  (1u << 5)
+#define DIRTY_LAST_VFO  (1u << 6)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -113,6 +115,7 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_IQ_ENABLED) nvs_set_u8(s_nvs, KEY_IQ_ENABLED, snap.iq_enabled ? 1 : 0);
         if (dirty_local & DIRTY_WIFI_SSID)  nvs_set_str(s_nvs, KEY_WIFI_SSID, snap.wifi_ssid);
         if (dirty_local & DIRTY_WIFI_PASS)  nvs_set_str(s_nvs, KEY_WIFI_PASS, snap.wifi_pass);
+        if (dirty_local & DIRTY_LAST_VFO)  nvs_set_u32(s_nvs, KEY_LAST_VFO, snap.last_vfo_hz);
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
@@ -154,6 +157,7 @@ void settings_load_all(qmx_settings_t *out)
     out->db_max     = DEF_DB_MAX;
     out->ema_alpha  = DEF_EMA_ALPHA;
     out->iq_enabled = DEF_IQ_ENABLED;
+    out->last_vfo_hz = 0;
 
     if (!s_ready) {
         ESP_LOGW(TAG, "load_all: NVS not ready, using defaults");
@@ -166,6 +170,7 @@ void settings_load_all(qmx_settings_t *out)
     if (nvs_get_float(KEY_DB_MAX,    &fv)) out->db_max    = fv;
     if (nvs_get_float(KEY_EMA_ALPHA, &fv)) out->ema_alpha = fv;
     if (nvs_get_u8(s_nvs, KEY_IQ_ENABLED, &u8v) == ESP_OK) out->iq_enabled = (u8v != 0);
+    nvs_get_u32(s_nvs, KEY_LAST_VFO, &out->last_vfo_hz);
 
     // Strings: zero buffers first, then read length-bounded.
     out->wifi_ssid[0] = '\0';
@@ -263,4 +268,17 @@ void settings_set_wifi_pass(const char *pass)
     }
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_WIFI_PASS);
+}
+
+void settings_set_last_vfo(uint32_t hz)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.last_vfo_hz == hz) {
+        xSemaphoreGive(s_mutex);
+        return;  // unchanged, skip the dirty/flush cycle
+    }
+    s_pending.last_vfo_hz = hz;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_LAST_VFO);
 }

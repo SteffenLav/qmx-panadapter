@@ -378,6 +378,7 @@ static void update_freq_axis_labels(uint32_t center_hz);  // Phase 5.10C
 void ui_update_frequency(uint32_t freq_hz)
 {
     s_last_qmx_freq_hz = freq_hz;
+    settings_set_last_vfo(freq_hz);
     if (!s_freq_label) return;
     char buf[32];
     uint32_t mhz = freq_hz / 1000000;

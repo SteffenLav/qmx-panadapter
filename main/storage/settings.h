@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -15,6 +16,7 @@ typedef struct {
     bool  iq_enabled;   // I/Q balance correction on/off
     char  wifi_ssid[33];   // WiFi SSID (32 chars + NUL, IEEE max)
     char  wifi_pass[65];   // WiFi password (64 chars + NUL, WPA2 max)
+    uint32_t last_vfo_hz; // last QMX VFO frequency in Hz (0 = unknown)
 } qmx_settings_t;
 
 // Initialise the settings module. Opens an NVS handle. Safe to call
@@ -36,6 +38,9 @@ void settings_set_iq_enabled(bool v);
 // WiFi credential setters. Pass NULL or empty string to clear.
 void settings_set_wifi_ssid(const char *ssid);
 void settings_set_wifi_pass(const char *pass);
+
+// Save last-known VFO frequency (debounced flush; same wear profile as the sliders).
+void settings_set_last_vfo(uint32_t hz);
 
 // Force any pending writes to flash immediately. Call before reboot
 // if you want absolute certainty. Normally not needed.
