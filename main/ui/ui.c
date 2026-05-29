@@ -19,11 +19,11 @@ static const char *TAG = "ui";
 
 // Layout constants (1280x720)
 #define TOP_BAR_H       60
-#define DRAWER_W        400  /* Phase 5.10D Stage 2: settings drawer width */
+#define DRAWER_W        520  /* Phase 5.10D Stage 2: settings drawer width (520 in v0.8.x to fit WiFi button + smoothing slider) */
 #define BOTTOM_BAR_H    30
 #define SPECTRUM_H      200
 #define LABEL_BAR_H     32  /* Phase 5.10C: room for Montserrat 18 labels under tick marks */
-// Phase 5.10E: QMX I/Q has a 12 kHz IF offset ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â the signal at the QMX's
+// Phase 5.10E: QMX I/Q has a 12 kHz IF offset -- the signal at the QMX's
 // tuned frequency lands at +12 kHz in the baseband. We compensate by
 // shifting the displayed spectrum left by 12 kHz so the tuned signal
 // appears at the visual center. Touch-to-tune math is unchanged because
@@ -80,7 +80,7 @@ static void drawer_anim_x_cb(void *obj, int32_t v);
 static void drawer_close_button_cb(lv_event_t *e);
 static void iq_balance_toggle_cb(lv_event_t *e);
 
-// Phase 5.5: static defaults ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â manual Ref/Range, user-controlled later
+// Phase 5.5: static defaults -- manual Ref/Range, user-controlled later
 // (internal arbitrary dB scale; ~80=noise floor, ~125=strong signal on test rig)
 static float DB_MIN_DISPLAY = -130.0f;  /* dBm, calibrated scale */
 static float DB_MAX_DISPLAY = -30.0f;  /* dBm, headroom for S9+40 */
@@ -111,7 +111,7 @@ static void build_top_bar(lv_obj_t *parent)
     lv_obj_set_style_pad_all(bar, 8, 0);
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Phase 5.10D: top-bar layout ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â Band | Mode | [center: Freq] | S-meter
+    // Phase 5.10D: top-bar layout -- Band | Mode | [center: Freq] | S-meter
     s_band_label = lv_label_create(bar);
     lv_label_set_text(s_band_label, "Band: ---");
     lv_obj_set_style_text_color(s_band_label, lv_color_hex(0xFFFFFF), 0);
@@ -824,7 +824,7 @@ static void touch_event_cb(lv_event_t *e)
 
 
 
-// Phase 5.10D Stage 2: burger menu click ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â‚¬Å¾Ã‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Â¦Ãƒâ€šÃ‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã‚Â¡ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â toggle settings drawer
+// Phase 5.10D Stage 2: burger menu click -- toggle settings drawer
 static void settings_button_cb(lv_event_t *e)
 {
     (void)e;
@@ -893,72 +893,78 @@ static void drawer_build(void)
     lv_obj_center(close_lbl);
 
     // === Phase 5.10D Stage 2b: presets + sliders ===
-    int y = 80;
+    // v0.8.x layout: 520 wide drawer, _24pt fonts, IQ row moved below title,
+    // presets 3-across in a single row to free vertical space.
+    int y = 96;
 
-    // Phase B: IQ balance on/off toggle
+    // IQ balance ON/OFF row -- full width, well clear of the close button
     {
         lv_obj_t *iq_lbl = lv_label_create(s_drawer);
         lv_label_set_text(iq_lbl, "IQ Balance");
         lv_obj_set_style_text_color(iq_lbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(iq_lbl, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_font(iq_lbl, &lv_font_montserrat_24, 0);
         lv_obj_align(iq_lbl, LV_ALIGN_TOP_LEFT, 0, y + 6);
         s_switch_iq = lv_switch_create(s_drawer);
-        lv_obj_set_size(s_switch_iq, 60, 32);
+        lv_obj_set_size(s_switch_iq, 72, 36);
         lv_obj_align(s_switch_iq, LV_ALIGN_TOP_RIGHT, 0, y);
         if (iq_balance_is_enabled()) lv_obj_add_state(s_switch_iq, LV_STATE_CHECKED);
         lv_obj_add_event_cb(s_switch_iq, iq_balance_toggle_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        y += 48;
+        y += 56;
     }
 
     // Presets section header
     lv_obj_t *presets_hdr = lv_label_create(s_drawer);
     lv_label_set_text(presets_hdr, "Presets");
     lv_obj_set_style_text_color(presets_hdr, lv_color_hex(0xA0E0A0), 0);
-    lv_obj_set_style_text_font(presets_hdr, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(presets_hdr, &lv_font_montserrat_24, 0);
     lv_obj_align(presets_hdr, LV_ALIGN_TOP_LEFT, 0, y);
-    y += 40;
+    y += 36;
 
-    // Three preset buttons, stacked
-    const char *preset_names[3] = { "HF Normal", "HF DX", "Strong Sig." };
-    lv_event_cb_t preset_cbs[3] = {
-        drawer_preset_normal_cb,
-        drawer_preset_dx_cb,
-        drawer_preset_strong_cb,
-    };
-    for (int i = 0; i < 3; i++) {
-        lv_obj_t *btn = lv_btn_create(s_drawer);
-        lv_obj_set_size(btn, DRAWER_W - 32, 60);  /* Phase 5.10D Stage 2b polish: bigger touch target */
-        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, y);
-        lv_obj_add_event_cb(btn, preset_cbs[i], LV_EVENT_CLICKED, NULL);
-        lv_obj_t *lbl = lv_label_create(btn);
-        lv_label_set_text(lbl, preset_names[i]);
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
-        lv_obj_center(lbl);
-        y += 64;
+    // Three preset buttons, side-by-side in a single row
+    {
+        const char *preset_names[3] = { "HF Normal", "HF DX", "Strong Sig." };
+        lv_event_cb_t preset_cbs[3] = {
+            drawer_preset_normal_cb,
+            drawer_preset_dx_cb,
+            drawer_preset_strong_cb,
+        };
+        const int row_w   = DRAWER_W - 32;   // inner usable width
+        const int gap     = 8;
+        const int btn_w   = (row_w - 2 * gap) / 3;
+        const int btn_h   = 56;
+        for (int i = 0; i < 3; i++) {
+            lv_obj_t *btn = lv_btn_create(s_drawer);
+            lv_obj_set_size(btn, btn_w, btn_h);
+            lv_obj_align(btn, LV_ALIGN_TOP_LEFT, i * (btn_w + gap), y);
+            lv_obj_add_event_cb(btn, preset_cbs[i], LV_EVENT_CLICKED, NULL);
+            lv_obj_t *lbl = lv_label_create(btn);
+            lv_label_set_text(lbl, preset_names[i]);
+            lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+            lv_obj_center(lbl);
+        }
+        y += btn_h + 16;
     }
 
-    y += 8;
-
-    // WiFi configuration button
+    // WiFi configuration button -- full width
     {
         lv_obj_t *btn = lv_btn_create(s_drawer);
-        lv_obj_set_size(btn, DRAWER_W - 32, 60);
+        lv_obj_set_size(btn, DRAWER_W - 32, 56);
         lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, y);
         lv_obj_set_style_bg_color(btn, lv_color_hex(0x2c4d6e), 0);
         lv_obj_add_event_cb(btn, drawer_wifi_btn_cb, LV_EVENT_CLICKED, NULL);
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, "WiFi");
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
         lv_obj_center(lbl);
-        y += 64;
+        y += 72;
     }
 
     // dB Range section header
     lv_obj_t *db_hdr = lv_label_create(s_drawer);
     lv_label_set_text(db_hdr, "dB Range");
     lv_obj_set_style_text_color(db_hdr, lv_color_hex(0xA0E0A0), 0);
-    lv_obj_set_style_text_font(db_hdr, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(db_hdr, &lv_font_montserrat_24, 0);
     lv_obj_align(db_hdr, LV_ALIGN_TOP_LEFT, 0, y);
     y += 40;
 
@@ -966,7 +972,7 @@ static void drawer_build(void)
     s_lbl_db_min = lv_label_create(s_drawer);
     lv_label_set_text(s_lbl_db_min, "Min: -130 dBm");
     lv_obj_set_style_text_color(s_lbl_db_min, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_lbl_db_min, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(s_lbl_db_min, &lv_font_montserrat_24, 0);
     lv_obj_align(s_lbl_db_min, LV_ALIGN_TOP_LEFT, 0, y);
     y += 30;
 
@@ -982,7 +988,7 @@ static void drawer_build(void)
     s_lbl_db_max = lv_label_create(s_drawer);
     lv_label_set_text(s_lbl_db_max, "Max: -30 dBm");
     lv_obj_set_style_text_color(s_lbl_db_max, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_lbl_db_max, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(s_lbl_db_max, &lv_font_montserrat_24, 0);
     lv_obj_align(s_lbl_db_max, LV_ALIGN_TOP_LEFT, 0, y);
     y += 30;
 
@@ -998,14 +1004,14 @@ static void drawer_build(void)
     lv_obj_t *sm_hdr = lv_label_create(s_drawer);
     lv_label_set_text(sm_hdr, "Smoothing");
     lv_obj_set_style_text_color(sm_hdr, lv_color_hex(0xA0E0A0), 0);
-    lv_obj_set_style_text_font(sm_hdr, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(sm_hdr, &lv_font_montserrat_24, 0);
     lv_obj_align(sm_hdr, LV_ALIGN_TOP_LEFT, 0, y);
     y += 40;
 
     s_lbl_alpha = lv_label_create(s_drawer);
     lv_label_set_text(s_lbl_alpha, "Alpha: 0.40");
     lv_obj_set_style_text_color(s_lbl_alpha, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_lbl_alpha, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(s_lbl_alpha, &lv_font_montserrat_24, 0);
     lv_obj_align(s_lbl_alpha, LV_ALIGN_TOP_LEFT, 0, y);
     y += 30;
 

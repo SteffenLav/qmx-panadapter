@@ -171,6 +171,18 @@ static void modal_build(void)
     // Keyboard Ã¢â‚¬â€ child of the modal (so it sits above the backdrop but is
     // not clipped by the dialog panel). Hidden until a textarea is focused.
     s_keyboard = lv_keyboard_create(s_modal);
+    static lv_style_t style_kb_btn;
+    static bool kb_btn_style_inited = false;
+    if (!kb_btn_style_inited) {
+        lv_style_init(&style_kb_btn);
+        lv_style_set_bg_color(&style_kb_btn, lv_color_hex(0x303030));
+        lv_style_set_bg_opa(&style_kb_btn, LV_OPA_COVER);
+        lv_style_set_text_color(&style_kb_btn, lv_color_white());
+        lv_style_set_border_width(&style_kb_btn, 1);
+        lv_style_set_border_color(&style_kb_btn, lv_color_hex(0x505050));
+        kb_btn_style_inited = true;
+    }
+    lv_obj_add_style(s_keyboard, &style_kb_btn, LV_PART_ITEMS);
     lv_obj_set_size(s_keyboard, LV_PCT(100), 280);
     lv_obj_align(s_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_keyboard_set_mode(s_keyboard, LV_KEYBOARD_MODE_TEXT_LOWER);
