@@ -18,7 +18,7 @@ The original mockup that drove the design ([panadapter-mockup-ideal.svg](docs/pa
 
 ## Status
 
-Working. All phases through 6.2 complete, plus cold-boot reliability fix, I/Q balance correction (Phases A–C), and WiFi STA with on-screen credential entry.
+Working. All phases through 8 complete, plus cold-boot reliability fix, I/Q balance correction (Phases A–C), WiFi STA with on-screen credential entry, web UI (v0.9.0), and flat-spectrum mode (v0.9.2).
 
 | Phase | What | Status |
 |-------|------|--------|
@@ -52,6 +52,12 @@ Working. All phases through 6.2 complete, plus cold-boot reliability fix, I/Q ba
 | A     | I/Q balance correction (Gram-Schmidt blind adaptive, hardcoded ON) | done |
 | B     | I/Q balance ON/OFF toggle in settings drawer | done |
 | C     | I/Q balance time constant tuning (two-speed convergence) | done |
+| 7.1   | Phase 1 web UI: HTTP status page and /api/status JSON (v0.9.0) | done |
+| 7.2   | Phase 2 web UI: binary /ws WebSocket spectrum streaming at ~10 fps (v0.9.0) | done |
+| 7.3   | Phase 3 web UI: browser waterfall with auto-tracking thermal palette (v0.9.0) | done |
+| 7.4   | Unified Tab5 + browser visual identity (palette, floor maths, curve) (v0.9.0) | done |
+| 7.5   | Screenshot mutex fix — hold display lock blocking during snapshot (v0.9.1) | done |
+| 8     | Flat-spectrum mode (per-bin tracked floor; drawer toggle + NVS) (v0.9.2) | done |
 | —     | NVS settings persistence (dB range, EMA alpha, IQ toggle) | done |
 | —     | WiFi STA via esp_hosted + SNTP UTC sync | done |
 | —     | On-screen WiFi credential modal (SSID/password in NVS) | done |
