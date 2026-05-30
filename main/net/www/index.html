@@ -156,19 +156,28 @@ function drawSpectrum(bytes) {
     ctx.fillRect(0, y, SPEC_W, 1);
   }
 
-  // Spectrum: bright top edge, dim fill below — mirrors device aesthetic
+  // Connected curve mirroring the Tab5 device renderer:
+  //   closed polyline -> dim fill under the curve, then bright stroke on top.
+  ctx.beginPath();
+  ctx.moveTo(0, SPEC_H);
+  for (let x = 0; x < SPEC_W; x++) {
+    const y = SPEC_H - 1 - Math.round(bytes[x] * (SPEC_H - 1) / 255);
+    ctx.lineTo(x, y);
+  }
+  ctx.lineTo(SPEC_W - 1, SPEC_H);
+  ctx.closePath();
   ctx.fillStyle = "#003800";
-  for (let x = 0; x < SPEC_W; x++) {
-    const q = bytes[x];
-    const y = SPEC_H - 1 - Math.round(q * (SPEC_H - 1) / 255);
-    ctx.fillRect(x, y + 1, 1, SPEC_H - y - 1);
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(0, SPEC_H - 1 - Math.round(bytes[0] * (SPEC_H - 1) / 255));
+  for (let x = 1; x < SPEC_W; x++) {
+    const y = SPEC_H - 1 - Math.round(bytes[x] * (SPEC_H - 1) / 255);
+    ctx.lineTo(x, y);
   }
-  ctx.fillStyle = "#07e007";
-  for (let x = 0; x < SPEC_W; x++) {
-    const q = bytes[x];
-    const y = SPEC_H - 1 - Math.round(q * (SPEC_H - 1) / 255);
-    ctx.fillRect(x, y, 1, 1);
-  }
+  ctx.strokeStyle = "#07e007";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
 }
 
 function connectWs() {
