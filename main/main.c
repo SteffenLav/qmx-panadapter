@@ -11,6 +11,7 @@
 #include "ui.h"
 #include "status.h"
 #include "battery.h"
+#include "bsp_info.h"
 #include "cat.h"
 #include "audio.h"
 #include "dsp.h"
@@ -46,6 +47,8 @@ void app_main(void)
 
     lv_display_t *disp = NULL;
     ESP_ERROR_CHECK(display_init(&disp));
+
+    bsp_info_log();
 
     // Enable battery charging (BSP defines these but never calls them)
     bsp_set_charge_qc_en(true);
