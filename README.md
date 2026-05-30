@@ -10,6 +10,48 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *The panadapter live on hardware in flat-spectrum mode (new in v0.9.2): 48 kHz of spectrum centered on the QMX VFO (14.074 MHz, 20m FT8). The spectrum trace tracks a per-bin noise floor and renders dB-above-floor, so noise collapses to a calm baseline and real signals (here the FT8 pile-up around 14.074) pop sharp above it. Thermal-palette waterfall below uses matching colour and floor maths. Top status bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN via the web UI — see [Quick start: web UI](#quick-start-web-ui) below.*
 
+## Hardware setup
+
+The panadapter needs two USB connections:
+
+```
+┌──────────────┐    USB-A → USB-C    ┌─────────────┐
+│              │ ──────────────────► │             │
+│  M5Stack     │   (UAC + CDC-ACM)   │   QMX+      │
+│  Tab5        │                     │             │
+│              │                     └─────────────┘
+│              │
+│              │    USB-C → USB-C/A  ┌─────────────┐
+│              │ ──────────────────► │   Laptop    │
+└──────────────┘  (power + dev UART) └─────────────┘
+```
+
+- **Tab5 USB-A → QMX+ USB-C** — Tab5 acts as the USB host. The QMX+ exposes itself as a UAC audio class device (I/Q audio) and a CDC-ACM serial port (CAT control). The Tab5 talks to both simultaneously.
+
+- **Tab5 USB-C → laptop** — provides power to the Tab5 (and charge the battery if present) and gives you a serial console at 115200 baud for the boot log, plus the dev USB-JTAG channel for flashing.
+
+You can run the panadapter standalone once it's flashed — just power the Tab5 from any USB-C source (5V/2A or better) or the internal battery if present. The laptop is only needed for flashing, debugging, or capturing screenshots.
+
+## Reporting hardware issues
+
+The M5Stack Tab5 ships in at least two hardware variants that look identical from the outside. This firmware currently supports the **ST7123 panel + ST7123 touch** variant (Tab5 v1.3 ECO2). If the panadapter doesn't work on your unit — display stays blank, frequency stuck at default, web UI shows "disconnected" — please flash the latest release and capture the boot log.
+
+Near the top of the log you'll see a block like:
+
+```
+I (xxxx) bsp_info: === TAB5 BSP INFO ===
+I (xxxx) bsp_info: chip:     ESP32-P4 rev v1.3
+I (xxxx) bsp_info: psram:    30 MB
+I (xxxx) bsp_info: panel:    ST7123 (inferred from touch)
+I (xxxx) bsp_info: touch:    ST7123 @ 0x55
+I (xxxx) bsp_info: heap:     230.5 kB internal free, 28.80 MB PSRAM free
+I (xxxx) bsp_info: idf:      v5.4.4
+I (xxxx) bsp_info: firmware: v0.9.3
+I (xxxx) bsp_info: =====================
+```
+
+Open an [issue](https://github.com/SteffenLav/qmx-panadapter/issues) with this block pasted in. The `panel` and `touch` lines tell us which hardware revision you have, which is the first thing we need to know.
+
 ### History
 
 The original mockup that drove the design ([panadapter-mockup-ideal.svg](docs/panadapter-mockup-ideal.svg)) and the first real-world screenshot from v0.7 ([QMX-Panadapter_1st_snapshot.png](docs/QMX-Panadapter_1st_snapshot.png)) are kept in `docs/` for reference. The design notes including the expected hardware artifacts (DC spike, I/Q image) live in [docs/panadapter-display-design.md](docs/panadapter-display-design.md).
