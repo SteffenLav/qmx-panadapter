@@ -26,6 +26,10 @@ const char *wifi_get_ssid(void);
 // Current AP signal strength in dBm; 0 if not connected.
 int wifi_get_rssi_dbm(void);
 
+// Currently-assigned IP address as a dotted-quad string.
+// Returns empty string if not connected or no IP yet.
+const char *wifi_get_ip(void);
+
 // Returns true once SNTP has set the system time at least once.
 bool wifi_time_is_valid(void);
 

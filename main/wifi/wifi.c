@@ -209,6 +209,20 @@ int wifi_get_rssi_dbm(void)
     return ap.rssi;
 }
 
+const char *wifi_get_ip(void)
+{
+    static char ip_buf[16];
+    ip_buf[0] = '\0';
+    if (!wifi_is_connected()) return ip_buf;
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (!netif) return ip_buf;
+    esp_netif_ip_info_t ip_info;
+    if (esp_netif_get_ip_info(netif, &ip_info) != ESP_OK) return ip_buf;
+    if (ip_info.ip.addr == 0) return ip_buf;
+    snprintf(ip_buf, sizeof(ip_buf), IPSTR, IP2STR(&ip_info.ip));
+    return ip_buf;
+}
+
 bool wifi_time_is_valid(void)
 {
     if (!s_events) return false;

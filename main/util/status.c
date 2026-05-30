@@ -19,6 +19,7 @@ static void status_task(void *arg)
         bool charging = battery_is_charging();
         const char *ssid = wifi_get_ssid();
         int rssi = wifi_get_rssi_dbm();
+        const char *ip = wifi_get_ip();
         bool connected = wifi_is_connected();
 
         char bat_part[40];
@@ -31,7 +32,7 @@ static void status_task(void *arg)
 
         char wifi_part[80];
         if (connected && ssid[0]) {
-            snprintf(wifi_part, sizeof(wifi_part), "WiFi %s %ddBm", ssid, rssi);
+            snprintf(wifi_part, sizeof(wifi_part), "WiFi %s %ddBm %s", ssid, rssi, ip);
         } else {
             snprintf(wifi_part, sizeof(wifi_part), "WiFi off");
         }
