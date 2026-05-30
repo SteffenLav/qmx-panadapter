@@ -17,6 +17,7 @@ idf_component_register(
         "storage/settings.c"
         "wifi/wifi.c"
         "net/webserver.c"
+        "net/webserver_ws.c"
     INCLUDE_DIRS
         "."
         "display"

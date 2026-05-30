@@ -1,4 +1,5 @@
 #include "webserver.h"
+#include "webserver_ws.h"
 
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -76,7 +77,7 @@ esp_err_t webserver_start(void)
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
-    config.stack_size  = 8192;
+    config.stack_size  = 12288;
 
     ESP_LOGI(TAG, "Starting HTTP server on port %d", config.server_port);
     esp_err_t err = httpd_start(&s_server, &config);
@@ -89,6 +90,8 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_root);
     httpd_register_uri_handler(s_server, &uri_status);
 
+    webserver_ws_start(s_server);
+
     ESP_LOGI(TAG, "HTTP server started");
     return ESP_OK;
 }
@@ -99,6 +102,7 @@ void webserver_stop(void)
         return;
     }
     ESP_LOGI(TAG, "Stopping HTTP server");
+    webserver_ws_stop();
     httpd_stop(s_server);
     s_server = NULL;
 }

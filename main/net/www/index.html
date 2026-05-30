@@ -11,8 +11,13 @@
     --dim: #6a7a85;
     --accent: #ffb95a;
     --ok: #6ed27a;
+    --bad: #d26e6e;
     --card: #131922;
     --border: #1f2937;
+    --spec-bg: #000;
+    --spec-fg: #07e007;       /* match device 0x07E0 */
+    --spec-fg-dim: #003800;   /* dim green fill */
+    --spec-grid: #1f2530;
   }
   * { box-sizing: border-box; }
   body {
@@ -43,12 +48,31 @@
   .row { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
   .charging { color: var(--ok); }
   .stale { opacity: 0.5; }
+  #spec-card { padding: 0.5rem; }
+  #spec-head { display: flex; justify-content: space-between; padding: 0 0.25rem 0.4rem 0.25rem; }
+  #spec-status { font-size: 0.75rem; }
+  #spec-status.ok  { color: var(--ok);  }
+  #spec-status.bad { color: var(--bad); }
+  #spec {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: var(--spec-bg);
+    border-radius: 4px;
+    image-rendering: pixelated;
+  }
   footer { color: var(--dim); font-size: 0.75rem; margin-top: 1rem; text-align: center; }
 </style>
 </head>
 <body>
   <h1>QMX+ PANADAPTER</h1>
-
+  <div class="card" id="spec-card">
+    <div id="spec-head">
+      <span class="label">Spectrum</span>
+      <span id="spec-status" class="bad">disconnected</span>
+    </div>
+    <canvas id="spec" width="1024" height="256"></canvas>
+  </div>
   <div id="status" class="stale">
     <div class="card">
       <div class="label">VFO</div>
@@ -71,24 +95,20 @@
       </div>
     </div>
   </div>
-
   <footer id="updated">never updated</footer>
-
 <script>
 "use strict";
 
+/* ---------- /api/status @ 1 Hz (Phase 1, unchanged) ---------- */
 function fmtFreq(hz) {
   if (hz === 0) return "no signal";
-  const mhz = (hz / 1e6).toFixed(3);
-  return mhz + " MHz";
+  return (hz / 1e6).toFixed(3) + " MHz";
 }
-
 async function tick() {
   try {
     const r = await fetch("/api/status", { cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const s = await r.json();
-
     document.getElementById("freq").textContent = fmtFreq(s.freq_hz);
     document.getElementById("batt").textContent =
       (s.battery.level >= 0 ? s.battery.level + "%" : "--");
@@ -105,9 +125,90 @@ async function tick() {
     document.getElementById("updated").textContent = "error: " + e.message;
   }
 }
-
 tick();
 setInterval(tick, 1000);
+
+/* ---------- /ws spectrum (Phase 2) ---------- */
+const SPEC_W = 1024;
+const SPEC_H = 256;
+const FRAME_TYPE_SPECTRUM = 0x01;
+const HEADER_LEN = 2;
+
+const canvas = document.getElementById("spec");
+const ctx    = canvas.getContext("2d");
+const statusEl = document.getElementById("spec-status");
+
+let ws = null;
+let frameCount = 0;
+let lastFpsAt  = performance.now();
+
+function drawSpectrum(bytes) {
+  // bytes: Uint8Array of length SPEC_W, value 0..255 -> -130..-30 dBm
+  ctx.fillStyle = "var(--spec-bg)";
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, SPEC_W, SPEC_H);
+
+  // dB grid lines at -120, -100, -80, -60, -40 (matches device)
+  ctx.fillStyle = "#1f2530";
+  for (const db of [-120, -100, -80, -60, -40]) {
+    const q = (db + 130) * 255 / 100;
+    const y = SPEC_H - 1 - Math.round(q * (SPEC_H - 1) / 255);
+    ctx.fillRect(0, y, SPEC_W, 1);
+  }
+
+  // Spectrum: bright top edge, dim fill below — mirrors device aesthetic
+  ctx.fillStyle = "#003800";
+  for (let x = 0; x < SPEC_W; x++) {
+    const q = bytes[x];
+    const y = SPEC_H - 1 - Math.round(q * (SPEC_H - 1) / 255);
+    ctx.fillRect(x, y + 1, 1, SPEC_H - y - 1);
+  }
+  ctx.fillStyle = "#07e007";
+  for (let x = 0; x < SPEC_W; x++) {
+    const q = bytes[x];
+    const y = SPEC_H - 1 - Math.round(q * (SPEC_H - 1) / 255);
+    ctx.fillRect(x, y, 1, 1);
+  }
+}
+
+function connectWs() {
+  const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
+  ws = new WebSocket(url);
+  ws.binaryType = "arraybuffer";
+
+  ws.onopen = () => {
+    statusEl.textContent = "connected";
+    statusEl.className = "ok";
+  };
+
+  ws.onmessage = (ev) => {
+    const buf = new Uint8Array(ev.data);
+    if (buf.length < HEADER_LEN + SPEC_W) return;
+    if (buf[0] !== FRAME_TYPE_SPECTRUM) return;
+    drawSpectrum(buf.subarray(HEADER_LEN, HEADER_LEN + SPEC_W));
+
+    frameCount++;
+    const now = performance.now();
+    if (now - lastFpsAt >= 1000) {
+      const fps = (frameCount * 1000 / (now - lastFpsAt)).toFixed(1);
+      statusEl.textContent = "connected  " + fps + " fps";
+      statusEl.className = "ok";
+      frameCount = 0;
+      lastFpsAt = now;
+    }
+  };
+
+  ws.onclose = () => {
+    statusEl.textContent = "disconnected, retrying...";
+    statusEl.className = "bad";
+    setTimeout(connectWs, 2000);
+  };
+
+  ws.onerror = () => {
+    /* onclose follows; handle there */
+  };
+}
+connectWs();
 </script>
 </body>
 </html>
