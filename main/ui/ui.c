@@ -490,7 +490,7 @@ static void compute_passband_edges_hz(int32_t *out_low, int32_t *out_high)
         if (w == 0) w = 10000;
         low = -(int32_t)w / 2;
         high = (int32_t)w / 2;
-    } else if (strstr(s_current_mode, "FSK") || strstr(s_current_mode, "RTTY")
+    } else if (strstr(s_current_mode, "DiGi") || strstr(s_current_mode, "RTTY")
                || strstr(s_current_mode, "FT") || strstr(s_current_mode, "DIG")) {
         if (w == 0) w = 2700;
         low = 200;
@@ -848,7 +848,7 @@ static void touch_event_cb(lv_event_t *e)
         int32_t snap = 10;
         if (strstr(s_current_mode, "USB") || strstr(s_current_mode, "LSB")) snap = 500;
         else if (strstr(s_current_mode, "FT") || strstr(s_current_mode, "DIG") || strstr(s_current_mode, "RTTY")
-                 || strstr(s_current_mode, "FSK")) snap = 100;
+                 || strstr(s_current_mode, "DiGi")) snap = 100;
         else if (strstr(s_current_mode, "AM") || strstr(s_current_mode, "FM")) snap = 1000;
         else if (strstr(s_current_mode, "CW")) snap = 10;
         int32_t rounded = (offset_hz + (offset_hz >= 0 ? snap/2 : -snap/2)) / snap * snap;

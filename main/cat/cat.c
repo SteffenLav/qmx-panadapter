@@ -147,7 +147,7 @@ static void process_cat_message(const char *msg, size_t len)
             return;
         }
         static const char *kw_modes[] = {
-            "?", "LSB", "USB", "CW", "FM", "AM", "FSK", "CW-R", "?", "FSK-R"
+            "?", "LSB", "USB", "CW", "FM", "AM", "DiGi", "CW-R", "?", "DiGi-R"
         };
         const char *mode_str = kw_modes[d - '0'];
         if (d != s_last_mode_digit) {
