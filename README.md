@@ -6,15 +6,13 @@ A standalone real-time panadapter — spectrum analyzer and waterfall — for th
 
 The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Tab5 connects to the QMX as a USB host, decodes the I/Q in real time on the ESP32-P4, and renders a touch-driven panadapter with tap-to-tune.
 
-![Panadapter display — QMX+ tuned to 14.000 MHz with CW activity](docs/panadapter-mockup-ideal.svg)
+![Panadapter on M5Stack Tab5 — QMX+ tuned to 14.074 MHz, FT8 traffic visible](docs/QMX-Panadapter_v0.9.0.png)
 
-*The display in action: 48 kHz of spectrum centered on the QMX VFO, live FFT trace on top, scrolling waterfall below, magenta VFO marker with CW filter passband shading. See [`docs/panadapter-display-design.md`](docs/panadapter-display-design.md) for the design notes including the hardware artifacts (DC spike, I/Q image) you'll see in practice.*
+*The panadapter live on hardware: 48 kHz of spectrum centered on the QMX VFO (14.074 MHz, 20m FT8), spectrum trace with passband indicator above, thermal-palette waterfall below, top status bar with band/mode/freq/S-meter, bottom bar with battery and WiFi. Captured pixel-perfect with the built-in screenshot helper (Phase 5.11). The same view is also streamed live to any browser on the LAN via the v0.9.0 web UI — see [Quick start: web UI](#quick-start-web-ui) below.*
 
-### Work in progress: real hardware
+### History
 
-![Working FT8 on 20m, QMX+ tuned to 14.074 MHz (FSK = digi on QMX)](docs/QMX-Panadapter_1st_snapshot.png)
-
-*First real-world screenshot: QMX on 20m, working FT8 traffic at 14.074 MHz. Top status bar shows Band 20m / Mode FSK = DiGi / Center Freq 14.074.000 Hz / Signal S9. Spectrum trace and waterfall both centered on the VFO after the 12 kHz IF offset compensation. Two faint grey lines on the spectrum mark the passband edges reported by the QMX over CAT FW.*
+The original mockup that drove the design ([panadapter-mockup-ideal.svg](docs/panadapter-mockup-ideal.svg)) and the first real-world screenshot from v0.7 ([QMX-Panadapter_1st_snapshot.png](docs/QMX-Panadapter_1st_snapshot.png)) are kept in `docs/` for reference. The design notes including the expected hardware artifacts (DC spike, I/Q image) live in [docs/panadapter-display-design.md](docs/panadapter-display-design.md).
 
 ---
 
@@ -89,6 +87,38 @@ Or via the helper function in `$PROFILE` (see Tools section below):
     qmx m       # monitor only
 
 Exit monitor with Ctrl+T then Ctrl+X.
+
+## Quick start: web UI
+
+Once the Tab5 is on WiFi (see [WiFi configuration](#wifi-configuration)), it serves both an HTTP status page and a live spectrum/waterfall WebSocket on port 80. Open the Tab5's IP address in any modern browser — the IP is shown in the bottom status bar and in the boot log.
+
+### `/` — status + live spectrum
+
+The landing page mirrors the device screen in real time: spectrum trace updates at ≈10 fps via WebSocket, full waterfall history (≈50 seconds, 512 rows) auto-tracks the noise floor and uses the same thermal palette as the device. Underneath, a live status card shows VFO, battery, WiFi RSSI and the Tab5's own IP.
+
+### `/api/status` — polled status JSON
+
+```json
+{
+  "battery": { "level": 100, "charging": true },
+  "wifi":    { "ssid": "BV50", "rssi": -44, "ip": "192.168.1.213" },
+  "freq_hz": 14074000
+}
+```
+
+Polled by the landing page at 1 Hz; safe to consume from any other client (monitoring scripts, home automation, etc.).
+
+### `/ws` — binary spectrum WebSocket
+
+Single-client endpoint. Each binary frame is 1026 bytes:
+
+| Bytes | Meaning |
+|-------|---------|
+| `0`   | Frame type: `0x01` = spectrum |
+| `1`   | Reserved (always 0 for now) |
+| `2–1025` | 1024 unsigned bytes, each one bin, quantised −130 dBm (q=0) to −30 dBm (q=255) |
+
+Bins are pre-shifted server-side: byte 2 is the leftmost device pixel, byte 1025 the rightmost. The 12 kHz QMX IF offset is already applied, so the QMX dial frequency lands at the visual centre. Push rate is ~10 fps; a new connection refuses if a session is already active.
 
 ## Layout (landscape 1280 × 720)
 
@@ -331,6 +361,13 @@ Exit monitor with `Ctrl+T` then `Ctrl+X` (works on Danish/non-US keyboard layout
 - **Bottom status bar.** Battery indicator (level + charging) and WiFi state (SSID + RSSI in dBm) replace the dev-only FPS/PSRAM/IRAM line. Battery readout is stubbed pending INA226 wiring (see N6HAN's qrp_companion for the planned approach).
 - **Drawer polish.** Drawer widened from 400 px to 520 px; IQ Balance row moved up under the title; presets (HF Normal / HF DX / Strong Sig) laid out side-by-side in a single row; on-screen keyboard buttons darker for better contrast.
 - **Larger fonts.** Top-bar and bottom-bar text bumped from Montserrat 20 to Montserrat 24 to match the drawer.
+
+### Shipped in v0.9.0
+
+- **Web UI.** Phase 1 + Phase 2 + Phase 3 of the remote panadapter front-end landed together: an HTTP status page on `/`, a polled `/api/status` JSON endpoint, and a binary `/ws` WebSocket streaming the live spectrum at ~10 fps. The browser canvas renders a continuous-curve spectrum (matching the device aesthetic) and a full waterfall with auto-tracking noise floor. See [Quick start: web UI](#quick-start-web-ui).
+- **Unified visual identity.** Tab5 device and browser now share the same thermal waterfall palette (black→dark blue→teal→green→yellow→red), the same auto-tracking floor maths (median + 6 dB bias, 30 dB dynamic range above floor), and the same closed-polyline spectrum rendering. A signal of given strength looks the same in both places.
+- **Pixel-perfect screenshots.** The Phase 5.11 long-press screenshot infrastructure now reliably round-trips through `tools/screenshot_decode.py` — the headline image of this README is its own output.
+- **ESP-DSP fallback to portable C FFT.** The ESP32-P4 PIE/vector FFT (`dsps_fft2r_fc32_arp4.S`) crashed deterministically under sustained WebSocket load; falling back to `CONFIG_DSP_ANSI=y` removed the failure mode at the cost of ~10% FPS (35–42 vs 40–45). TODO: revisit once upstream esp-dsp PIE preemption handling matures.
 
 ### Shipped in v0.8.2
 
