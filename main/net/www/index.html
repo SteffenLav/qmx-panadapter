@@ -15,8 +15,6 @@
     --card: #131922;
     --border: #1f2937;
     --spec-bg: #000;
-    --spec-fg: #07e007;       /* match device 0x07E0 */
-    --spec-fg-dim: #003800;   /* dim green fill */
     --spec-grid: #1f2530;
   }
   * { box-sizing: border-box; }
@@ -48,7 +46,7 @@
   .row { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
   .charging { color: var(--ok); }
   .stale { opacity: 0.5; }
-  #spec-card { padding: 0.5rem; }
+  #spec-card { padding: 0.5rem; margin-bottom: 0; }
   #spec-head { display: flex; justify-content: space-between; padding: 0 0.25rem 0.4rem 0.25rem; }
   #spec-status { font-size: 0.75rem; }
   #spec-status.ok  { color: var(--ok);  }
@@ -60,6 +58,14 @@
     background: var(--spec-bg);
     border-radius: 4px;
     image-rendering: pixelated;
+  }
+  #waterfall {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: var(--spec-bg);
+    image-rendering: pixelated;
+    margin-bottom: 0.75rem;
   }
   footer { color: var(--dim); font-size: 0.75rem; margin-top: 1rem; text-align: center; }
 </style>
@@ -73,6 +79,8 @@
     </div>
     <canvas id="spec" width="1024" height="256"></canvas>
   </div>
+  <canvas id="waterfall" width="1024" height="512"></canvas>
+
   <div id="status" class="stale">
     <div class="card">
       <div class="label">VFO</div>
@@ -99,7 +107,7 @@
 <script>
 "use strict";
 
-/* ---------- /api/status @ 1 Hz (Phase 1, unchanged) ---------- */
+/* ---------- /api/status @ 1 Hz ---------- */
 function fmtFreq(hz) {
   if (hz === 0) return "no signal";
   return (hz / 1e6).toFixed(3) + " MHz";
@@ -128,27 +136,22 @@ async function tick() {
 tick();
 setInterval(tick, 1000);
 
-/* ---------- /ws spectrum (Phase 2) ---------- */
+/* ---------- /ws spectrum + waterfall ---------- */
 const SPEC_W = 1024;
 const SPEC_H = 256;
+const WF_H = 512;
 const FRAME_TYPE_SPECTRUM = 0x01;
 const HEADER_LEN = 2;
 
 const canvas = document.getElementById("spec");
-const ctx    = canvas.getContext("2d");
+const ctx = canvas.getContext("2d");
 const statusEl = document.getElementById("spec-status");
 
-let ws = null;
-let frameCount = 0;
-let lastFpsAt  = performance.now();
-
+/* Spectrum render: closed polyline -> dim fill, then bright stroke on top. */
 function drawSpectrum(bytes) {
-  // bytes: Uint8Array of length SPEC_W, value 0..255 -> -130..-30 dBm
-  ctx.fillStyle = "var(--spec-bg)";
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, SPEC_W, SPEC_H);
 
-  // dB grid lines at -120, -100, -80, -60, -40 (matches device)
   ctx.fillStyle = "#1f2530";
   for (const db of [-120, -100, -80, -60, -40]) {
     const q = (db + 130) * 255 / 100;
@@ -156,8 +159,6 @@ function drawSpectrum(bytes) {
     ctx.fillRect(0, y, SPEC_W, 1);
   }
 
-  // Connected curve mirroring the Tab5 device renderer:
-  //   closed polyline -> dim fill under the curve, then bright stroke on top.
   ctx.beginPath();
   ctx.moveTo(0, SPEC_H);
   for (let x = 0; x < SPEC_W; x++) {
@@ -180,6 +181,90 @@ function drawSpectrum(bytes) {
   ctx.stroke();
 }
 
+/* ---------- Waterfall: 512 rows, auto-tracking floor, thermal palette ---------- */
+const wfCanvas = document.getElementById("waterfall");
+const wfCtx = wfCanvas.getContext("2d");
+const wfRow = wfCtx.createImageData(SPEC_W, 1);
+
+const wfPalette = (() => {
+  const stops = [
+    [0.00, [0,   0,   0  ]],
+    [0.20, [0,   0,   128]],
+    [0.40, [0,   128, 192]],
+    [0.60, [0,   192, 0  ]],
+    [0.80, [255, 224, 0  ]],
+    [1.00, [255, 0,   0  ]],
+  ];
+  const lut = new Uint8Array(256 * 4);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let s = 0;
+    while (s < stops.length - 2 && stops[s + 1][0] < t) s++;
+    const [t0, c0] = stops[s];
+    const [t1, c1] = stops[s + 1];
+    const f = (t - t0) / (t1 - t0);
+    lut[i * 4 + 0] = c0[0] + (c1[0] - c0[0]) * f;
+    lut[i * 4 + 1] = c0[1] + (c1[1] - c0[1]) * f;
+    lut[i * 4 + 2] = c0[2] + (c1[2] - c0[2]) * f;
+    lut[i * 4 + 3] = 255;
+  }
+  return lut;
+})();
+
+let wfFloor = 64;
+let wfFrameCount = 0;
+const WF_FLOOR_ALPHA  = 0.3;
+const WF_FLOOR_PERIOD = 10;
+const WF_DYN_RANGE_Q  = 80;
+const WF_SCALE        = 255 / WF_DYN_RANGE_Q;
+const WF_FLOOR_OFFSET = 32;
+
+wfCtx.fillStyle = "#000";
+wfCtx.fillRect(0, 0, SPEC_W, WF_H);
+
+function median256(bytes) {
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < bytes.length; i++) hist[bytes[i]]++;
+  const half = bytes.length >> 1;
+  let acc = 0;
+  for (let i = 0; i < 256; i++) {
+    acc += hist[i];
+    if (acc >= half) return i;
+  }
+  return 255;
+}
+
+function drawWaterfall(bytes) {
+  if (++wfFrameCount >= WF_FLOOR_PERIOD) {
+    wfFrameCount = 0;
+    const m = median256(bytes);
+    wfFloor = WF_FLOOR_ALPHA * (m + 15) + (1 - WF_FLOOR_ALPHA) * wfFloor;  // +15 q-units = +6 dB, matches device
+  }
+
+  const floor = wfFloor;
+  const data = wfRow.data;
+  for (let x = 0; x < SPEC_W; x++) {
+    let idx = (bytes[x] - floor) * WF_SCALE + WF_FLOOR_OFFSET;
+    if (idx < 0) idx = 0;
+    else if (idx > 255) idx = 255;
+    idx = idx | 0;
+    const p = idx * 4;
+    const o = x * 4;
+    data[o    ] = wfPalette[p    ];
+    data[o + 1] = wfPalette[p + 1];
+    data[o + 2] = wfPalette[p + 2];
+    data[o + 3] = 255;
+  }
+
+  wfCtx.drawImage(wfCanvas, 0, 1);
+  wfCtx.putImageData(wfRow, 0, 0);
+}
+
+/* ---------- WebSocket plumbing ---------- */
+let ws = null;
+let frameCount = 0;
+let lastFpsAt = performance.now();
+
 function connectWs() {
   const url = (location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/ws";
   ws = new WebSocket(url);
@@ -194,7 +279,9 @@ function connectWs() {
     const buf = new Uint8Array(ev.data);
     if (buf.length < HEADER_LEN + SPEC_W) return;
     if (buf[0] !== FRAME_TYPE_SPECTRUM) return;
-    drawSpectrum(buf.subarray(HEADER_LEN, HEADER_LEN + SPEC_W));
+    const payload = buf.subarray(HEADER_LEN, HEADER_LEN + SPEC_W);
+    drawSpectrum(payload);
+    drawWaterfall(payload);
 
     frameCount++;
     const now = performance.now();
@@ -213,9 +300,7 @@ function connectWs() {
     setTimeout(connectWs, 2000);
   };
 
-  ws.onerror = () => {
-    /* onclose follows; handle there */
-  };
+  ws.onerror = () => { /* onclose follows; handle there */ };
 }
 connectWs();
 </script>

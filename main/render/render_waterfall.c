@@ -1,4 +1,4 @@
-﻿#include "render_waterfall.h"
+#include "render_waterfall.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
@@ -19,9 +19,9 @@ static const char *TAG = "render_wf";
 static float DB_MIN_DISPLAY = DB_MIN_INITIAL;  /* updated from noise floor */
 #define DB_MAX_DISPLAY  -30.0f   /* dBm, matches ui.c spectrum range */
 
-// 256-entry RGB565 classic-SDR gradient LUT:
-//  black -> dark blue -> blue -> cyan -> green -> yellow -> red
-// Built at init from 7 anchor colors with linear interpolation.
+// 256-entry RGB565 thermal LUT (matches browser palette):
+//  black -> dark blue -> teal -> green -> yellow -> red
+// Built at init from 6 anchor colors with linear interpolation.
 static uint16_t s_lut[256];
 
 // One scratch row in DRAM (small, 2.5 KB) - written every tick, read by UI.
@@ -37,11 +37,10 @@ static void build_lut(void)
     // Anchor points: (index, R, G, B). Indices must be ascending and cover 0..255.
     static const struct { int idx; uint8_t r, g, b; } anchors[] = {
         {   0,   0,   0,   0 },  // black
-        {  32,   0,   0,  80 },  // dark blue
-        {  80,   0,   0, 255 },  // blue
-        { 128,   0, 255, 255 },  // cyan
-        { 176,   0, 255,   0 },  // green
-        { 224, 255, 255,   0 },  // yellow
+        {  51,   0,   0, 128 },  // dark blue
+        { 102,   0, 128, 192 },  // teal
+        { 153,   0, 192,   0 },  // green
+        { 204, 255, 224,   0 },  // yellow
         { 255, 255,   0,   0 },  // red
     };
     const int n = sizeof(anchors) / sizeof(anchors[0]);
@@ -97,13 +96,13 @@ void render_waterfall_tick(const float *spectrum, int n_bins)
         float median = scratch[n/2];
         /* EMA smoothing so the floor doesn't jump between samples */
         const float alpha = 0.3f;
-        DB_MIN_DISPLAY = alpha * (median + 3.0f) + (1.0f - alpha) * DB_MIN_DISPLAY;
+        /* Track median directly: floor lands at LUT idx 32 (dark blue), not 0. */
+        DB_MIN_DISPLAY = alpha * (median + 6.0f) + (1.0f - alpha) * DB_MIN_DISPLAY;
         /* Sanity clamp */
         if (DB_MIN_DISPLAY < -150.0f) DB_MIN_DISPLAY = -150.0f;
         if (DB_MIN_DISPLAY > -30.0f)  DB_MIN_DISPLAY = -30.0f;
     }
 
-    const float db_span = DB_MAX_DISPLAY - DB_MIN_DISPLAY;
     uint16_t *row = (uint16_t *)s_row;
 
     // Pixel x -> FFT bin, with fftshift:
@@ -119,10 +118,9 @@ void render_waterfall_tick(const float *spectrum, int n_bins)
         bin = (bin + n_bins / 4) % n_bins;  // shift right by 12 kHz out of 48 kHz = n_bins/4
 
         float db = spectrum[bin];
-        // Clip and scale to 0..255 LUT index
-        if (db < DB_MIN_DISPLAY) db = DB_MIN_DISPLAY;
-        if (db > DB_MAX_DISPLAY) db = DB_MAX_DISPLAY;
-        int idx = (int)(((db - DB_MIN_DISPLAY) / db_span) * 255.0f);
+        // Match browser LUT mapping: noise floor -> idx 32, +31 dB above floor -> idx 255.
+        // 30 dB above floor -> idx 255 (red). Tuned by eye.
+        int idx = (int)((db - DB_MIN_DISPLAY) * (255.0f / 30.0f) + 32.0f);
         if (idx < 0) idx = 0;
         if (idx > 255) idx = 255;
         row[x] = s_lut[idx];
