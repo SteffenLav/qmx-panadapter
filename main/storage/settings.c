@@ -139,7 +139,16 @@ void settings_init(void)
         return;
     }
 
-    esp_err_t err = nvs_open(NVS_NS, NVS_READWRITE, &s_nvs);
+    esp_err_t err = nvs_flash_init_partition("user_nvs");
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        ESP_ERROR_CHECK(nvs_flash_erase_partition("user_nvs"));
+        err = nvs_flash_init_partition("user_nvs");
+    }
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "user_nvs init failed: 0x%x", err);
+        return;
+    }
+    err = nvs_open_from_partition("user_nvs", NVS_NS, NVS_READWRITE, &s_nvs);
     if (err != ESP_OK) {
         ESP_LOGW(TAG, "nvs_open failed: 0x%x — settings will not persist", err);
         return;
