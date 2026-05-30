@@ -27,3 +27,5 @@ qmx_panadapter_merged.bin
 # Screenshots (decoded locally to ~/Downloads, never in repo)
 qmx_*.png
 
+qmx_panadapter-*-merged.bin
+hunt.txt

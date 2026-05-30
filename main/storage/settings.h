@@ -14,6 +14,7 @@ typedef struct {
     float db_max;       // spectrum/waterfall ceiling (dBm)
     float ema_alpha;    // spectrum EMA smoothing (0..1)
     bool  iq_enabled;   // I/Q balance correction on/off
+    bool  flat_mode;    // Phase 5.12: flat-spectrum view (per-bin floor)
     char  wifi_ssid[33];   // WiFi SSID (32 chars + NUL, IEEE max)
     char  wifi_pass[65];   // WiFi password (64 chars + NUL, WPA2 max)
     uint32_t last_vfo_hz; // last QMX VFO frequency in Hz (0 = unknown)
@@ -35,6 +36,7 @@ void settings_set_db_min(float v);
 void settings_set_db_max(float v);
 void settings_set_ema_alpha(float v);
 void settings_set_iq_enabled(bool v);
+void settings_set_flat_mode(bool v);
 // WiFi credential setters. Pass NULL or empty string to clear.
 void settings_set_wifi_ssid(const char *ssid);
 void settings_set_wifi_pass(const char *pass);

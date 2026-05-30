@@ -54,6 +54,7 @@ static lv_obj_t *s_waterfall_obj = NULL;
 static lv_obj_t *s_status_label = NULL;
 static lv_obj_t *s_burger_btn = NULL;  // Phase 5.10I: kept for foreground move after all UI built
 static lv_obj_t *s_switch_iq  = NULL;  // Phase B: IQ balance toggle in settings drawer
+static lv_obj_t *s_switch_flat = NULL; // Phase 5.12: flat-spectrum toggle in settings drawer
 
 // Phase 5.10D Stage 2: settings drawer state
 static lv_obj_t *s_drawer = NULL;
@@ -72,6 +73,9 @@ static void drawer_wifi_btn_cb(lv_event_t *e);
 static void drawer_slider_db_min_cb(lv_event_t *e);
 static void drawer_slider_db_max_cb(lv_event_t *e);
 static void drawer_slider_alpha_cb(lv_event_t *e);
+static void drawer_switch_flat_cb(lv_event_t *e);
+bool ui_get_flat_mode(void);
+void ui_set_flat_mode(bool on);
 static void drawer_apply_preset(int db_min, int db_max, float alpha);
 static void drawer_build(void);
 static void drawer_open(void);
@@ -557,6 +561,17 @@ static inline int db_to_y(float db)
     return y;
 }
 
+/* Phase 5.12: flat-spectrum mode (per-bin floor tracking) */
+#define FLAT_SMOOTH_ALPHA     0.25f
+#define FLAT_FLOOR_UP_ALPHA   0.002f
+#define FLAT_FLOOR_DOWN_ALPHA 0.08f
+#define FLAT_FLOOR_BIAS_DB    6.0f
+#define FLAT_RANGE_DB         30.0f
+static float *s_flat_smooth = NULL;
+static float *s_flat_floor  = NULL;
+static bool   s_flat_ready  = false;
+static bool   s_flat_mode   = true;  /* TODO: drawer toggle + NVS */
+
 void ui_push_spectrum(const float *bins, int n_bins)
 {
     if (!s_spec_canvas_buf || !bins || n_bins <= 0) return;
@@ -571,6 +586,8 @@ void ui_push_spectrum(const float *bins, int n_bins)
     memset(px, 0, (size_t)DISPLAY_H_RES * SPECTRUM_H * 2);
 
     // dB grid lines (Phase 5.3) - draw before spectrum so green overdraws on hits
+    // Phase 5.12: suppressed in flat mode (dBm axis meaningless when shown as dB-above-floor)
+    if (!s_flat_mode)
     {
         const float grid_dbs[5] = { -120.0f, -100.0f, -80.0f, -60.0f, -40.0f };
         for (int g = 0; g < 5; g++) {
@@ -578,6 +595,31 @@ void ui_push_spectrum(const float *bins, int n_bins)
             if (gy >= 0 && gy < SPECTRUM_H) {
                 uint16_t *row = px + gy * DISPLAY_H_RES;
                 for (int x = 0; x < DISPLAY_H_RES; x++) row[x] = grid_color;
+            }
+        }
+    }
+
+    /* Phase 5.12: per-bin floor + smooth update, once per frame */
+    if (s_flat_mode) {
+        if (!s_flat_smooth) {
+            s_flat_smooth = heap_caps_malloc(n_bins * sizeof(float), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            s_flat_floor  = heap_caps_malloc(n_bins * sizeof(float), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (!s_flat_smooth || !s_flat_floor) s_flat_mode = false;
+        }
+        if (s_flat_mode) {
+            if (!s_flat_ready) {
+                float sum = 0.0f;
+                for (int b = 0; b < n_bins; b++) { s_flat_smooth[b] = bins[b]; sum += bins[b]; }
+                float avg = sum / (float)n_bins;
+                for (int b = 0; b < n_bins; b++) s_flat_floor[b] = avg;
+                s_flat_ready = true;
+            } else {
+                for (int b = 0; b < n_bins; b++) {
+                    s_flat_smooth[b] += FLAT_SMOOTH_ALPHA * (bins[b] - s_flat_smooth[b]);
+                    float d = s_flat_smooth[b] - s_flat_floor[b];
+                    float a = (d > 0.0f) ? FLAT_FLOOR_UP_ALPHA : FLAT_FLOOR_DOWN_ALPHA;
+                    s_flat_floor[b] += a * d;
+                }
             }
         }
     }
@@ -602,7 +644,30 @@ void ui_push_spectrum(const float *bins, int n_bins)
         bin = (bin + (IF_OFFSET_HZ * N) / 48000) % N;
         if (bin < 0) bin += N;
 
-        int y_top = db_to_y(bins[bin]);
+        int y_top;
+        if (s_flat_mode) {
+            /* 5-tap spatial smooth on (smooth - floor), then map to flat-axis y. */
+            float sum = 0.0f;
+            int   cnt = 0;
+            for (int dx = -2; dx <= 2; dx++) {
+                int xn = x + dx;
+                if (xn < 0 || xn >= DISPLAY_H_RES) continue;
+                int sn = (int)((float)xn * (float)N / (float)DISPLAY_H_RES);
+                if (sn < 0) sn = 0;
+                if (sn >= N) sn = N - 1;
+                int bn = (sn < half) ? (sn + half) : (sn - half);
+                bn = (bn + (IF_OFFSET_HZ * N) / 48000) % N;
+                if (bn < 0) bn += N;
+                sum += s_flat_smooth[bn] - s_flat_floor[bn];
+                cnt++;
+            }
+            float v = sum / (float)cnt - FLAT_FLOOR_BIAS_DB;
+            if (v < 0.0f) v = 0.0f;
+            if (v > FLAT_RANGE_DB) v = FLAT_RANGE_DB;
+            y_top = SPECTRUM_H - 1 - (int)(v * (SPECTRUM_H - 1) / FLAT_RANGE_DB);
+        } else {
+            y_top = db_to_y(bins[bin]);
+        }
         if (y_top < 0) y_top = 0;
         if (y_top >= SPECTRUM_H) y_top = SPECTRUM_H - 1;
         // Phase 5.9: continuous spectrum curve. Connect this column's y_top to
@@ -913,6 +978,20 @@ static void drawer_build(void)
         y += 56;
     }
 
+    // Phase 5.12: Flat Spectrum ON/OFF row
+    {
+        lv_obj_t *flat_lbl = lv_label_create(s_drawer);
+        lv_label_set_text(flat_lbl, "Flat Spectrum");
+        lv_obj_set_style_text_color(flat_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(flat_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_align(flat_lbl, LV_ALIGN_TOP_LEFT, 0, y + 6);
+        s_switch_flat = lv_switch_create(s_drawer);
+        lv_obj_set_size(s_switch_flat, 72, 36);
+        lv_obj_align(s_switch_flat, LV_ALIGN_TOP_RIGHT, 0, y);
+        if (ui_get_flat_mode()) lv_obj_add_state(s_switch_flat, LV_STATE_CHECKED);
+        lv_obj_add_event_cb(s_switch_flat, drawer_switch_flat_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        y += 56;
+    }
     // Presets section header
     lv_obj_t *presets_hdr = lv_label_create(s_drawer);
     lv_label_set_text(presets_hdr, "Presets");
@@ -1086,6 +1165,31 @@ static void drawer_apply_preset(int db_min, int db_max, float alpha)
     settings_set_db_min((float)db_min);
     settings_set_db_max((float)db_max);
     settings_set_ema_alpha(alpha);
+}
+
+/* Phase 5.12: flat-spectrum mode accessor + drawer callback */
+bool ui_get_flat_mode(void)
+{
+    return s_flat_mode;
+}
+
+void ui_set_flat_mode(bool on)
+{
+    s_flat_mode  = on;
+    s_flat_ready = false;  /* re-seed floor on next draw */
+    if (s_switch_flat) {
+        if (on) lv_obj_add_state(s_switch_flat, LV_STATE_CHECKED);
+        else    lv_obj_remove_state(s_switch_flat, LV_STATE_CHECKED);
+    }
+}
+
+static void drawer_switch_flat_cb(lv_event_t *e)
+{
+    lv_obj_t *sw = lv_event_get_target(e);
+    s_flat_mode = lv_obj_has_state(sw, LV_STATE_CHECKED);
+    s_flat_ready = false;  /* re-seed floor next time flat mode draws */
+    ESP_LOGI(TAG, "flat-spectrum mode: %s", s_flat_mode ? "ON" : "OFF");
+    settings_set_flat_mode(s_flat_mode);
 }
 
 static void drawer_preset_normal_cb(lv_event_t *e)  { (void)e; drawer_apply_preset(-130, -30, 0.40f); }

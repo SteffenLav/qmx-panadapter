@@ -18,6 +18,7 @@ static const char *TAG = "settings";
 #define KEY_DB_MAX      "db_max"
 #define KEY_EMA_ALPHA   "ema_alpha"
 #define KEY_IQ_ENABLED  "iq_en"
+#define KEY_FLAT_MODE   "flat_md"
 #define KEY_WIFI_SSID   "wifi_ssid"
 #define KEY_WIFI_PASS   "wifi_pass"
 #define KEY_LAST_VFO   "last_vfo"
@@ -27,6 +28,7 @@ static const char *TAG = "settings";
 #define DEF_DB_MAX      (-30.0f)
 #define DEF_EMA_ALPHA   (0.4f)
 #define DEF_IQ_ENABLED  (true)
+#define DEF_FLAT_MODE   (true)
 
 // Debounce: how long we wait after the last change before flushing.
 #define DEBOUNCE_MS     500
@@ -36,6 +38,7 @@ static const char *TAG = "settings";
 #define DIRTY_DB_MAX     (1u << 1)
 #define DIRTY_EMA_ALPHA  (1u << 2)
 #define DIRTY_IQ_ENABLED (1u << 3)
+#define DIRTY_FLAT_MODE  (1u << 7)
 #define DIRTY_WIFI_SSID  (1u << 4)
 #define DIRTY_WIFI_PASS  (1u << 5)
 #define DIRTY_LAST_VFO  (1u << 6)
@@ -113,6 +116,7 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_DB_MAX)     nvs_set_float(KEY_DB_MAX,    snap.db_max);
         if (dirty_local & DIRTY_EMA_ALPHA)  nvs_set_float(KEY_EMA_ALPHA, snap.ema_alpha);
         if (dirty_local & DIRTY_IQ_ENABLED) nvs_set_u8(s_nvs, KEY_IQ_ENABLED, snap.iq_enabled ? 1 : 0);
+        if (dirty_local & DIRTY_FLAT_MODE)  nvs_set_u8(s_nvs, KEY_FLAT_MODE,  snap.flat_mode    ? 1 : 0);
         if (dirty_local & DIRTY_WIFI_SSID)  nvs_set_str(s_nvs, KEY_WIFI_SSID, snap.wifi_ssid);
         if (dirty_local & DIRTY_WIFI_PASS)  nvs_set_str(s_nvs, KEY_WIFI_PASS, snap.wifi_pass);
         if (dirty_local & DIRTY_LAST_VFO)  nvs_set_u32(s_nvs, KEY_LAST_VFO, snap.last_vfo_hz);
@@ -157,6 +161,7 @@ void settings_load_all(qmx_settings_t *out)
     out->db_max     = DEF_DB_MAX;
     out->ema_alpha  = DEF_EMA_ALPHA;
     out->iq_enabled = DEF_IQ_ENABLED;
+    out->flat_mode  = DEF_FLAT_MODE;
     out->last_vfo_hz = 0;
 
     if (!s_ready) {
@@ -170,6 +175,7 @@ void settings_load_all(qmx_settings_t *out)
     if (nvs_get_float(KEY_DB_MAX,    &fv)) out->db_max    = fv;
     if (nvs_get_float(KEY_EMA_ALPHA, &fv)) out->ema_alpha = fv;
     if (nvs_get_u8(s_nvs, KEY_IQ_ENABLED, &u8v) == ESP_OK) out->iq_enabled = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_FLAT_MODE,  &u8v) == ESP_OK) out->flat_mode  = (u8v != 0);
     nvs_get_u32(s_nvs, KEY_LAST_VFO, &out->last_vfo_hz);
 
     // Strings: zero buffers first, then read length-bounded.
@@ -228,6 +234,15 @@ void settings_set_iq_enabled(bool v)
     s_pending.iq_enabled = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_IQ_ENABLED);
+}
+
+void settings_set_flat_mode(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_pending.flat_mode = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_FLAT_MODE);
 }
 
 void settings_flush(void)

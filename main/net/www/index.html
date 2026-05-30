@@ -46,8 +46,7 @@
   .row { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
   .charging { color: var(--ok); }
   .stale { opacity: 0.5; }
-  #spec-card { padding: 0.5rem; margin-bottom: 0; }
-  #spec-head { display: flex; justify-content: space-between; padding: 0 0.25rem 0.4rem 0.25rem; }
+  #spec-head { display: flex; justify-content: space-between; padding: 0 0 0.4rem 0; margin-bottom: 0; }
   #spec-status { font-size: 0.75rem; }
   #spec-status.ok  { color: var(--ok);  }
   #spec-status.bad { color: var(--bad); }
@@ -58,6 +57,7 @@
     background: var(--spec-bg);
     border-radius: 4px;
     image-rendering: pixelated;
+    margin-bottom: 0.5rem;
   }
   #waterfall {
     display: block;
@@ -72,13 +72,11 @@
 </head>
 <body>
   <h1>QMX+ PANADAPTER</h1>
-  <div class="card" id="spec-card">
-    <div id="spec-head">
-      <span class="label">Spectrum</span>
-      <span id="spec-status" class="bad">disconnected</span>
-    </div>
-    <canvas id="spec" width="1024" height="256"></canvas>
+  <div id="spec-head">
+    <span class="label">Spectrum</span>
+    <span id="spec-status" class="bad">disconnected</span>
   </div>
+  <canvas id="spec" width="1024" height="256"></canvas>
   <canvas id="waterfall" width="1024" height="512"></canvas>
 
   <div id="status" class="stale">
@@ -146,6 +144,96 @@ const HEADER_LEN = 2;
 const canvas = document.getElementById("spec");
 const ctx = canvas.getContext("2d");
 const statusEl = document.getElementById("spec-status");
+
+/* --- Experimental: flatten-floor spectrum (toggle with 'f') --- */
+const specFloor   = new Float32Array(SPEC_W);
+const specSmooth  = new Float32Array(SPEC_W);  // temporal EMA of incoming bins
+let   specFloorReady = false;
+let   specSmoothReady = false;
+let   specFlatten = true;  // start in flat mode; press 'f' to compare to raw
+const SPEC_SMOOTH_ALPHA     = 0.25;    // EMA on incoming bins (lower = smoother, slower)
+const SPEC_FLOOR_UP_ALPHA   = 0.002;   // very slow when bin > floor (signal present)
+const SPEC_FLOOR_DOWN_ALPHA = 0.08;    // moderate when bin < floor (track noise)
+const SPEC_RANGE_Q          = 150;     // canvas height = ~59 dB above floor
+document.addEventListener('keypress', (e) => {
+  if (e.key === 'f' || e.key === 'F') {
+    specFlatten = !specFlatten;
+    console.log('spectrum mode:', specFlatten ? 'flat' : 'raw');
+  }
+});
+
+function drawSpectrumFlat(bytes) {
+  // Temporal EMA on each bin, on every frame -- collapses bin-to-bin and
+  // frame-to-frame jitter without blurring across nearby bins (no spatial
+  // averaging, so closely-spaced FT8 carriers stay separated).
+  if (!specSmoothReady) {
+    for (let i = 0; i < SPEC_W; i++) specSmooth[i] = bytes[i];
+    specSmoothReady = true;
+  } else {
+    const a = SPEC_SMOOTH_ALPHA;
+    for (let i = 0; i < SPEC_W; i++) {
+      specSmooth[i] += a * (bytes[i] - specSmooth[i]);
+    }
+  }
+
+  if (!specFloorReady) {
+    const m = median256(bytes);
+    for (let i = 0; i < SPEC_W; i++) specFloor[i] = m;
+    specFloorReady = true;
+  }
+  for (let i = 0; i < SPEC_W; i++) {
+    const b = specSmooth[i];
+    const d = b - specFloor[i];
+    specFloor[i] += (d > 0 ? SPEC_FLOOR_UP_ALPHA : SPEC_FLOOR_DOWN_ALPHA) * d;
+  }
+
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, SPEC_W, SPEC_H);
+
+  // Gridlines at +10, +20, +30, +40 dB above floor (1 dB = ~2.55 q-units).
+  ctx.fillStyle = "#1f2530";
+  for (const dbAbove of [10, 20, 30, 40]) {
+    const q = dbAbove * 2.55;
+    const y = SPEC_H - 1 - Math.round(q * (SPEC_H - 1) / SPEC_RANGE_Q);
+    if (y >= 0 && y < SPEC_H) ctx.fillRect(0, y, SPEC_W, 1);
+  }
+
+  // SPEC_FLOOR_BIAS in q-units: pushes the visual zero this many q above the
+  // tracked floor so typical noise variance (about 5 dB peak-to-peak ~= 13 q)
+  // collapses to a flat baseline.
+  const SPEC_FLOOR_BIAS = 12;
+  const aboveRaw = (x) => specSmooth[x] - specFloor[x] - SPEC_FLOOR_BIAS;
+  // Light spatial 5-bin moving average to calm bin-to-bin jitter without
+  // blurring real peaks (FT8 carriers are wider than this window).
+  const above = (x) => {
+    let v;
+    if (x < 2 || x >= SPEC_W - 2) {
+      v = aboveRaw(x);
+    } else {
+      v = (aboveRaw(x - 2) + aboveRaw(x - 1) + aboveRaw(x) +
+           aboveRaw(x + 1) + aboveRaw(x + 2)) * 0.2;
+    }
+    if (v < 0) v = 0;
+    else if (v > SPEC_RANGE_Q) v = SPEC_RANGE_Q;
+    return v;
+  };
+  const yOf = (x) => SPEC_H - 1 - Math.round(above(x) * (SPEC_H - 1) / SPEC_RANGE_Q);
+
+  ctx.beginPath();
+  ctx.moveTo(0, SPEC_H);
+  for (let x = 0; x < SPEC_W; x++) ctx.lineTo(x, yOf(x));
+  ctx.lineTo(SPEC_W - 1, SPEC_H);
+  ctx.closePath();
+  ctx.fillStyle = "#003800";
+  ctx.fill();
+
+  ctx.beginPath();
+  ctx.moveTo(0, yOf(0));
+  for (let x = 1; x < SPEC_W; x++) ctx.lineTo(x, yOf(x));
+  ctx.strokeStyle = "#07e007";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+}
 
 /* Spectrum render: closed polyline -> dim fill, then bright stroke on top. */
 function drawSpectrum(bytes) {
@@ -280,7 +368,7 @@ function connectWs() {
     if (buf.length < HEADER_LEN + SPEC_W) return;
     if (buf[0] !== FRAME_TYPE_SPECTRUM) return;
     const payload = buf.subarray(HEADER_LEN, HEADER_LEN + SPEC_W);
-    drawSpectrum(payload);
+    (specFlatten ? drawSpectrumFlat : drawSpectrum)(payload);
     drawWaterfall(payload);
 
     frameCount++;
