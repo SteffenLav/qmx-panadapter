@@ -105,7 +105,7 @@ static void long_press_cb(lv_event_t *e)
     lv_image_dsc_t dsc;
     memset(&dsc, 0, sizeof(dsc));
 
-    bsp_display_lock(0);
+    bsp_display_lock(portMAX_DELAY);
     lv_result_t res = lv_snapshot_take_to_buf(screen, LV_COLOR_FORMAT_RGB565,
                                               &dsc, buf, buf_size);
     bsp_display_unlock();
