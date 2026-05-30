@@ -1,4 +1,4 @@
-﻿#include "cat.h"
+#include "cat.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -462,4 +462,9 @@ esp_err_t cat_set_frequency(uint32_t freq_hz)
     }
     ESP_LOGI(TAG, "Sent: %s (target %lu Hz)", cmd, (unsigned long)freq_hz);
     return ESP_OK;
+}
+
+uint32_t cat_get_frequency(void)
+{
+    return s_last_freq_hz;
 }

@@ -17,6 +17,7 @@
 #include "freertos/event_groups.h"
 #include "driver/gpio.h"
 #include "bsp/esp-bsp.h"
+#include "webserver.h"
 
 static const char *TAG = "wifi";
 
@@ -73,6 +74,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
     } else if (id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *e = (wifi_event_sta_disconnected_t *)data;
         xEventGroupClearBits(s_events, BIT_CONNECTED);
+        webserver_stop();
         s_retry_count++;
         if (s_retry_count <= MAX_FAST_RETRIES) {
             ESP_LOGW(TAG, "Disconnected (reason=%d) retry %d/%d",
@@ -105,6 +107,8 @@ static void on_ip_event(void *arg, esp_event_base_t base,
             esp_netif_sntp_init(&cfg);
             ESP_LOGI(TAG, "SNTP started (pool.ntp.org)");
         }
+
+        webserver_start();
     }
 }
 

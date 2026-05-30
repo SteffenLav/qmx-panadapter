@@ -16,6 +16,7 @@ idf_component_register(
         "screenshot/screenshot.c"
         "storage/settings.c"
         "wifi/wifi.c"
+        "net/webserver.c"
     INCLUDE_DIRS
         "."
         "display"
@@ -28,6 +29,7 @@ idf_component_register(
         "screenshot"
         "storage"
         "wifi"
+        "net"
     REQUIRES
         esp_lcd
         esp_timer
@@ -44,4 +46,8 @@ idf_component_register(
         esp_netif
         esp_event
         lwip
+        esp_http_server
+        json
+    EMBED_TXTFILES
+        "net/www/index.html"
 )

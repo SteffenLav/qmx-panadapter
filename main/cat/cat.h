@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "esp_err.h"
 
@@ -24,3 +24,13 @@ esp_err_t cat_init(void);
  */
 esp_err_t cat_set_frequency(uint32_t freq_hz);
 
+
+/**
+ * @brief Get the most recently observed VFO frequency.
+ *
+ * Updated by the CAT poll loop on every FA response. Returns 0 before
+ * the first poll completes or if the QMX is disconnected.
+ *
+ * @return frequency in Hz
+ */
+uint32_t cat_get_frequency(void);

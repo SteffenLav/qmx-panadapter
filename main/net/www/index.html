@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QMX+ Panadapter</title>
+<style>
+  :root {
+    --bg: #0a0e14;
+    --fg: #c5d4dd;
+    --dim: #6a7a85;
+    --accent: #ffb95a;
+    --ok: #6ed27a;
+    --card: #131922;
+    --border: #1f2937;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 1rem;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    background: var(--bg);
+    color: var(--fg);
+    min-height: 100vh;
+  }
+  h1 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    margin: 0 0 1rem 0;
+    color: var(--accent);
+    letter-spacing: 0.05em;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+  }
+  .label { color: var(--dim); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; }
+  .value { font-size: 1.4rem; margin-top: 0.2rem; }
+  .freq { font-size: 1.8rem; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .row { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
+  .charging { color: var(--ok); }
+  .stale { opacity: 0.5; }
+  footer { color: var(--dim); font-size: 0.75rem; margin-top: 1rem; text-align: center; }
+</style>
+</head>
+<body>
+  <h1>QMX+ PANADAPTER</h1>
+
+  <div id="status" class="stale">
+    <div class="card">
+      <div class="label">VFO</div>
+      <div class="value freq" id="freq">--</div>
+    </div>
+    <div class="card">
+      <div class="row">
+        <div>
+          <div class="label">Battery</div>
+          <div class="value"><span id="batt">--</span><span id="chg"></span></div>
+        </div>
+        <div>
+          <div class="label">WiFi</div>
+          <div class="value" id="wifi">--</div>
+        </div>
+      </div>
+      <div style="margin-top: 0.6rem;">
+        <div class="label">IP</div>
+        <div class="value" id="ip">--</div>
+      </div>
+    </div>
+  </div>
+
+  <footer id="updated">never updated</footer>
+
+<script>
+"use strict";
+
+function fmtFreq(hz) {
+  if (hz === 0) return "no signal";
+  const mhz = (hz / 1e6).toFixed(3);
+  return mhz + " MHz";
+}
+
+async function tick() {
+  try {
+    const r = await fetch("/api/status", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const s = await r.json();
+
+    document.getElementById("freq").textContent = fmtFreq(s.freq_hz);
+    document.getElementById("batt").textContent =
+      (s.battery.level >= 0 ? s.battery.level + "%" : "--");
+    document.getElementById("chg").innerHTML =
+      s.battery.charging ? ' <span class="charging">CHG</span>' : '';
+    document.getElementById("wifi").textContent =
+      s.wifi.ssid ? (s.wifi.ssid + "  " + s.wifi.rssi + " dBm") : "--";
+    document.getElementById("ip").textContent = s.wifi.ip || "--";
+    document.getElementById("updated").textContent =
+      "updated " + new Date().toLocaleTimeString();
+    document.getElementById("status").classList.remove("stale");
+  } catch (e) {
+    document.getElementById("status").classList.add("stale");
+    document.getElementById("updated").textContent = "error: " + e.message;
+  }
+}
+
+tick();
+setInterval(tick, 1000);
+</script>
+</body>
+</html>
