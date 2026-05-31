@@ -68,7 +68,7 @@ Working. All phases through 8 complete, plus cold-boot reliability fix, I/Q bala
 | 2     | USB Host CDC-ACM, CAT poll, frequency display | done |
 | 3     | USB UAC audio streaming + ring buffer + DSP consumer | done |
 | 4     | esp-dsp FFT (1024-pt complex, Blackman-Harris) at 48 frames/s | done |
-| 5.1   | Real-time spectrum line graph @ 30 Hz | done |
+| 5.1   | Real-time spectrum line graph @ 10 Hz | done |
 | 5.2   | Waterfall with classic SDR gradient + moving-pointer scroll | done |
 | 5.3   | Label band, offset ticks, dB grid | done |
 | 5.4   | EMA spectrum smoothing + autoscaling dB range (superseded by 5.5) | done |
@@ -292,7 +292,7 @@ If no credentials are configured at boot, WiFi stays idle (no retry storm) until
     |   |-- cat/                    USB CDC-ACM + Kenwood CAT
     |   |-- audio/                  USB UAC + ring buffer
     |   |-- dsp/                    esp-dsp FFT, spectrum mutex, I/Q balance correction
-    |   |-- render/                 30 Hz render task, smoothing, autoscale
+    |   |-- render/                 10 Hz render task, smoothing, autoscale
     |   |-- screenshot/             Long-press capture, base64 UART stream
     |   |-- storage/                NVS settings persistence (dB, EMA, IQ, WiFi creds)
     |   |-- wifi/                   esp_hosted STA + SNTP
