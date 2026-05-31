@@ -22,7 +22,7 @@ static const char *TAG = "ui";
 // Layout constants (1280x720)
 #define TOP_BAR_H       60
 #define DRAWER_W        520  /* Phase 5.10D Stage 2: settings drawer width (520 in v0.8.x to fit WiFi button + smoothing slider) */
-#define BOTTOM_BAR_H    30
+#define BOTTOM_BAR_H    36
 #define SPECTRUM_H      200
 #define LABEL_BAR_H     32  /* Phase 5.10C: room for Montserrat 18 labels under tick marks */
 // Phase 5.10E: QMX I/Q has a 12 kHz IF offset -- the signal at the QMX's
@@ -55,7 +55,10 @@ static lv_obj_t *s_band_label = NULL;   // Phase 5.10D: dedicated band slot
 static lv_obj_t *s_mode_label = NULL;
 static lv_obj_t *s_spectrum_obj = NULL;
 static lv_obj_t *s_waterfall_obj = NULL;
-static lv_obj_t *s_status_label = NULL;
+static lv_obj_t *s_status_label = NULL;  // legacy: single label, kept for compatibility (unused after Phase 5.13)
+static lv_obj_t *s_bot_left   = NULL;
+static lv_obj_t *s_bot_center = NULL;
+static lv_obj_t *s_bot_right  = NULL;
 static lv_obj_t *s_burger_btn = NULL;  // Phase 5.10I: kept for foreground move after all UI built
 static lv_obj_t *s_switch_iq  = NULL;  // Phase B: IQ balance toggle in settings drawer
 static lv_obj_t *s_switch_flat = NULL; // Phase 5.12: flat-spectrum toggle in settings drawer
@@ -350,11 +353,25 @@ static void build_bottom_bar(lv_obj_t *parent)
     lv_obj_set_style_pad_all(bar, 4, 0);
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
-    s_status_label = lv_label_create(bar);
-    lv_label_set_text(s_status_label, "Span: 48kHz  Ref: -40dB  Avg: 4  FPS: --");
-    lv_obj_set_style_text_color(s_status_label, lv_color_hex(0xC0C0C0), 0);
-    lv_obj_set_style_text_font(s_status_label, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_status_label, LV_ALIGN_LEFT_MID, 4, 0);
+    // 3-zone bottom bar: battery (left), UTC clock (center), WiFi (right).
+    s_bot_left = lv_label_create(bar);
+    lv_label_set_text(s_bot_left, "");
+    lv_obj_set_style_text_color(s_bot_left, lv_color_hex(0xC0C0C0), 0);
+    lv_obj_set_style_text_font(s_bot_left, &lv_font_montserrat_24, 0);
+    lv_obj_align(s_bot_left, LV_ALIGN_LEFT_MID, 8, 0);
+
+    s_bot_center = lv_label_create(bar);
+    lv_label_set_text(s_bot_center, "");
+    lv_obj_set_style_text_color(s_bot_center, lv_color_hex(0xC0C0C0), 0);
+    lv_obj_set_style_text_font(s_bot_center, &lv_font_montserrat_24, 0);
+    lv_obj_align(s_bot_center, LV_ALIGN_CENTER, 0, 0);
+
+    s_bot_right = lv_label_create(bar);
+    lv_label_set_text(s_bot_right, "");
+    lv_obj_set_style_text_color(s_bot_right, lv_color_hex(0xC0C0C0), 0);
+    lv_obj_set_style_text_font(s_bot_right, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_align(s_bot_right, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(s_bot_right, LV_ALIGN_RIGHT_MID, -8, 0);
 }
 
 // ==== Public API ====
@@ -786,8 +803,36 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row)
     display_unlock();
 }
 
+void ui_set_bottom_left(const char *text)
+{
+    if (!s_bot_left) return;
+    if (display_lock(20)) {
+        lv_label_set_text(s_bot_left, text ? text : "");
+        display_unlock();
+    }
+}
+
+void ui_set_bottom_center(const char *text)
+{
+    if (!s_bot_center) return;
+    if (display_lock(20)) {
+        lv_label_set_text(s_bot_center, text ? text : "");
+        display_unlock();
+    }
+}
+
+void ui_set_bottom_right(const char *text)
+{
+    if (!s_bot_right) return;
+    if (display_lock(20)) {
+        lv_label_set_text(s_bot_right, text ? text : "");
+        display_unlock();
+    }
+}
+
 void ui_set_fps_text(const char *text)
 {
+    (void)text;  // legacy no-op; status.c now uses zone setters
     if (!s_status_label) return;
     if (display_lock(20)) {
         lv_label_set_text(s_status_label, text);

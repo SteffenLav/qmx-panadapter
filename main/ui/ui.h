@@ -16,6 +16,11 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row);  // Phase 5
 // Phase 5.4: runtime-set spectrum display range (autoscale)
 void ui_set_db_range(float db_min, float db_max);
 void ui_set_cw_pitch_hz(uint16_t hz);  // CW sidetone offset, persisted to NVS
+
+// Bottom status bar: 3-zone layout (left/center/right). Pass NULL or "" to clear.
+void ui_set_bottom_left(const char *text);
+void ui_set_bottom_center(const char *text);
+void ui_set_bottom_right(const char *text);
 void ui_set_flat_mode(bool on);
 
 // Phase 5.4: update dB label text (called by autoscale)
