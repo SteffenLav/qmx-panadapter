@@ -185,7 +185,7 @@ static void log_stats(void)
         ESP_LOGW(TAG, "RX %u pairs/s peak L=%d R=%d DROPPED=%u (ring full)",
                  (unsigned)pairs_per_sec, (int)pL, (int)pR, (unsigned)dropped);
     } else {
-        ESP_LOGI(TAG, "RX %u pairs/s peak L=%d R=%d",
+        ESP_LOGD(TAG, "RX %u pairs/s peak L=%d R=%d",
                  (unsigned)pairs_per_sec, (int)pL, (int)pR);
     }
 }
