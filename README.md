@@ -60,7 +60,7 @@ The original mockup that drove the design ([panadapter-mockup-ideal.svg](docs/pa
 
 ## Status
 
-Working. All phases through 8 complete, plus cold-boot reliability fix, I/Q balance correction (Phases A-C), WiFi STA with on-screen credential entry, web UI (v0.9.0), flat-spectrum mode (v0.9.2), hardware-revision diagnostics (v0.9.3), persistent settings + DiGi label (v0.9.4), and full radio-state parity in the browser (v0.9.5).
+Working. All phases through 8 complete, plus cold-boot reliability fix, I/Q balance correction (Phases A-C), WiFi STA with on-screen credential entry, web UI (v0.9.0), flat-spectrum mode (v0.9.2), hardware-revision diagnostics (v0.9.3), persistent settings + DiGi label (v0.9.4), full radio-state parity in the browser (v0.9.5), and Hamlib rigctld network CAT bridge (v0.9.6).
 
 | Phase | What | Status |
 |-------|------|--------|
@@ -109,6 +109,8 @@ Working. All phases through 8 complete, plus cold-boot reliability fix, I/Q bala
 | -     | Web UI: VFO + mode + band + S-meter parity with Tab5 top bar (v0.9.5) | done |
 | -     | Web UI: centre marker + passband indicator + frequency axis labels (v0.9.5) | done |
 | -     | /ws refactor: dedicated push task unblocks /api/status during streaming (v0.9.5) | done |
+| -     | CAT setters: cat_set_mode() + cat_set_passband_hz() (v0.9.6) | done |
+| -     | Hamlib rigctld TCP server on port 4532 (network CAT bridge) (v0.9.6) | done |
 
 See the [Roadmap](#roadmap) at the bottom for what's next.
 
@@ -445,6 +447,11 @@ Exit monitor with `Ctrl+T` then `Ctrl+X` (works on Danish/non-US keyboard layout
 - **Browser top bar parity with Tab5.** The status row above the spectrum now shows VFO, mode, band, and S-meter (S-units and absolute dBm) updating once per second from `/api/status`. Amber centre marker on both spectrum and waterfall shows where the QMX dial is. Two grey passband edge lines on the spectrum mark the current filter window, mode-aware for USB / LSB / CW / AM / FM / DiGi. A frequency axis below the spectrum shows the centre MHz plus +/-12 and +/-24 kHz tick labels.
 - **Responsive single-page layout.** CSS Grid with `100dvh` keeps everything on one screen with no scrolling, on phone portrait through 4K landscape. Spectrum-to-waterfall ratio 1:3. Narrow-screen breakpoint shrinks fonts and hides redundant pill labels. ResizeObserver matches canvas pixel count to the layout so rendering stays sharp at any size. Tap-target flat-mode button replaces the desktop-only `f` keypress (which still works).
 - **`/ws` refactor.** The previous URI handler entered an infinite send loop and pinned the only httpd worker for the whole WS session, so `/api/status` requests queued without being served and the browser top bar froze the moment the spectrum stream connected. New architecture: URI handler captures `(server, fd)` on handshake and returns immediately; a dedicated `ws_push_task` runs the 10 fps send loop using `httpd_ws_send_frame_async` with static frame buffers. Status JSON and spectrum stream now coexist cleanly.
+
+### Shipped in v0.9.6
+
+- **Hamlib rigctld TCP server on port 4532.** The Tab5 is now a Hamlib network rig adapter. WSJT-X, fldigi, N1MM and any other Hamlib-aware app on the LAN can talk to the QMX through the Tab5 -- frequency tracking, mode and passband control, S-meter reads. Configure your app for rig model "NET rigctl" (model 2) at `<tab5-ip>:4532`. Up to 4 concurrent clients; per-client tasks with 8 KB stacks. Supported commands: `f` `F` `m` `M` `v` `s` `t` `q` plus `\dump_state`, `\chk_vfo`, `\get_powerstat`, `\get_lock_mode`, `\get_vfo`. Unblocked by item 18 in the backlog -- WiFi STA + esp_netif lwIP sockets in place since v0.8.0.
+- **CAT setters.** New `cat_set_mode(const char *)` translates Hamlib mode strings (USB / LSB / CW / AM / FM / PKTUSB / PKTLSB / RTTY / FT8 / CWR) to Kenwood mode digits and sends `MDn;`. New `cat_set_passband_hz(uint32_t)` sends `FWnnnn;`. Both share the existing 200 ms TX rate-limit with `cat_set_frequency`.
 
 ### Next up
 
