@@ -173,7 +173,7 @@ static void log_stats(float min_db, float max_db, float mean_db)
     uint32_t frames = s_frames_this_period;
     s_frames_this_period = 0;
     s_period_start_us = now;
-    ESP_LOGI(TAG, "Spectrum: min=%.1f dBm, max=%.1f dBm, mean=%.1f dBm, frames=%u/s",
+    ESP_LOGD(TAG, "Spectrum: min=%.1f dBm, max=%.1f dBm, mean=%.1f dBm, frames=%u/s",
              min_db, max_db, mean_db, (unsigned)frames);
 }
 
@@ -262,30 +262,6 @@ static void fft_task(void *arg)
         last_max = max_db;
         last_mean = mean_db;
 
-        // Phase 5.8: median dB across all bins (robust noise floor estimate).
-        // Logged once per second; use on dummy load to compute
-        // DSP_DB_CALIBRATION_OFFSET = -130 - median (target -130 dBm floor).
-        {
-            static float s_med_buf[DSP_FFT_SIZE];
-            memcpy(s_med_buf, tmp_spectrum, DSP_FFT_SIZE * sizeof(float));
-            for (int a = 1; a < DSP_FFT_SIZE; a++) {
-                float key = s_med_buf[a];
-                int b = a - 1;
-                while (b >= 0 && s_med_buf[b] > key) {
-                    s_med_buf[b+1] = s_med_buf[b];
-                    b--;
-                }
-                s_med_buf[b+1] = key;
-            }
-            float median_db = s_med_buf[DSP_FFT_SIZE / 2];
-            static int64_t s_last_median_log_us = 0;
-            int64_t now_us = esp_timer_get_time();
-            if (now_us - s_last_median_log_us > 1000000) {
-                s_last_median_log_us = now_us;
-                ESP_LOGI(TAG, "CALIB: median=%.1f dB  (target -130 dBm at QMX dummy load -> offset = %.1f)",
-                         (double)median_db, (double)(-130.0f - median_db));
-            }
-        }
 
         // Publish under mutex
         if (xSemaphoreTake(s_spectrum_mtx, pdMS_TO_TICKS(10)) == pdTRUE) {
