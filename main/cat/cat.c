@@ -468,3 +468,88 @@ uint32_t cat_get_frequency(void)
 {
     return s_last_freq_hz;
 }
+
+// ---- Phase 9 (v0.9.6): setters used by rigctld_server -------------------
+
+// Map a Hamlib mode string (case-insensitive) to a Kenwood mode digit.
+// Returns 0 for unknown.
+static char hamlib_mode_to_digit(const char *mode)
+{
+    if (!mode) return 0;
+    // Uppercase comparison
+    char buf[16];
+    size_t n = 0;
+    while (mode[n] && n < sizeof(buf) - 1) {
+        char c = mode[n];
+        if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+        buf[n++] = c;
+    }
+    buf[n] = 0;
+    // Reverse variants come first so "USB" does not match "CW-R" etc.
+    if (strcmp(buf, "CW-R")   == 0 || strcmp(buf, "CWR") == 0)   return '7';
+    if (strcmp(buf, "FSK-R")  == 0 || strcmp(buf, "RTTYR") == 0 ||
+        strcmp(buf, "DIGI-R") == 0 || strcmp(buf, "PKTLSB") == 0) return '9';
+    if (strcmp(buf, "LSB")    == 0) return '1';
+    if (strcmp(buf, "USB")    == 0) return '2';
+    if (strcmp(buf, "CW")     == 0) return '3';
+    if (strcmp(buf, "FM")     == 0) return '4';
+    if (strcmp(buf, "AM")     == 0) return '5';
+    // Digital soundcard family all map to mode 6 (DiGi/FSK)
+    if (strcmp(buf, "FSK")    == 0 ||
+        strcmp(buf, "DIGI")   == 0 ||
+        strcmp(buf, "PKTUSB") == 0 ||
+        strcmp(buf, "RTTY")   == 0 ||
+        strcmp(buf, "FT8")    == 0 ||
+        strcmp(buf, "FT4")    == 0 ||
+        strcmp(buf, "JS8")    == 0) return '6';
+    return 0;
+}
+
+esp_err_t cat_set_mode(const char *mode)
+{
+    char digit = hamlib_mode_to_digit(mode);
+    if (digit == 0) {
+        ESP_LOGW(TAG, "cat_set_mode: unknown mode '%s'", mode ? mode : "(null)");
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (s_cdc_dev == NULL) return ESP_ERR_INVALID_STATE;
+
+    uint64_t now = esp_timer_get_time();
+    if (now - s_last_tx_us < 200000) return ESP_ERR_TIMEOUT;
+    s_last_tx_us = now;
+
+    char cmd[8];
+    cmd[0] = 'M'; cmd[1] = 'D'; cmd[2] = digit; cmd[3] = ';'; cmd[4] = 0;
+    esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd, 4, 200);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "MD TX failed: 0x%x", err);
+        return err;
+    }
+    ESP_LOGI(TAG, "Sent: %s (mode '%s')", cmd, mode);
+    return ESP_OK;
+}
+
+esp_err_t cat_set_passband_hz(uint32_t hz)
+{
+    if (hz < 50 || hz > 9999) return ESP_ERR_INVALID_ARG;
+    if (s_cdc_dev == NULL) return ESP_ERR_INVALID_STATE;
+
+    uint64_t now = esp_timer_get_time();
+    if (now - s_last_tx_us < 200000) return ESP_ERR_TIMEOUT;
+    s_last_tx_us = now;
+
+    // Format: "FW" + 4 digits zero-padded + ";"
+    char cmd[10];
+    int n = snprintf(cmd, sizeof(cmd), "FW%04lu;", (unsigned long)hz);
+    if (n != 7) {
+        ESP_LOGW(TAG, "cat_set_passband_hz: snprintf produced %d chars (expected 7)", n);
+        return ESP_FAIL;
+    }
+    esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd, 7, 200);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "FW TX failed: 0x%x", err);
+        return err;
+    }
+    ESP_LOGI(TAG, "Sent: %s (passband %lu Hz)", cmd, (unsigned long)hz);
+    return ESP_OK;
+}

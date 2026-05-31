@@ -34,3 +34,33 @@ esp_err_t cat_set_frequency(uint32_t freq_hz);
  * @return frequency in Hz
  */
 uint32_t cat_get_frequency(void);
+
+/**
+ * @brief Send a mode-set command (MD; in Kenwood/Elecraft protocol) to the QMX.
+ *
+ * Translates Hamlib mode strings to Kenwood digits:
+ *   LSB=1, USB=2, CW=3, FM=4, AM=5, FSK/DiGi/PKTUSB/RTTY/FT8=6,
+ *   CW-R/CWR=7, FSK-R/DIGI-R/RTTYR=9.
+ * Anything unrecognised returns ESP_ERR_INVALID_ARG.
+ *
+ * Shares the 200 ms TX rate-limit with cat_set_frequency().
+ *
+ * @param mode  Hamlib mode string (case-insensitive)
+ * @return ESP_OK on send, ESP_ERR_INVALID_ARG on unknown mode,
+ *         ESP_ERR_INVALID_STATE if QMX not connected,
+ *         ESP_ERR_TIMEOUT if rate-limited.
+ */
+esp_err_t cat_set_mode(const char *mode);
+
+/**
+ * @brief Send a passband-width command (FW; in Kenwood/Elecraft protocol).
+ *
+ * Width is rounded to nearest Hz and clipped to 4 digits. Shares the
+ * 200 ms TX rate-limit.
+ *
+ * @param hz  passband width in Hz (50 .. 9999)
+ * @return ESP_OK on send, ESP_ERR_INVALID_ARG if out of range,
+ *         ESP_ERR_INVALID_STATE if QMX not connected,
+ *         ESP_ERR_TIMEOUT if rate-limited.
+ */
+esp_err_t cat_set_passband_hz(uint32_t hz);
