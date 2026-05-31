@@ -8,6 +8,8 @@
 #include "battery.h"     // battery_get_level, battery_is_charging
 #include "wifi.h"        // wifi_get_ssid, wifi_get_rssi_dbm, wifi_get_ip
 #include "cat.h"         // cat_get_frequency
+#include "ui.h"          // ui_get_mode_str, ui_get_band_str, ui_get_passband_width_hz
+#include "dsp.h"         // dsp_get_peak_dbm_around_vfo
 
 static const char *TAG = "webserver";
 
@@ -42,6 +44,19 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddStringToObject(wifi, "ip",   wifi_get_ip());
 
     cJSON_AddNumberToObject(root, "freq_hz", (double)cat_get_frequency());
+
+    // Phase 9 (v0.9.5): radio state for browser UI top-bar parity with Tab5.
+    cJSON_AddStringToObject(root, "mode", ui_get_mode_str());
+    cJSON_AddStringToObject(root, "band", ui_get_band_str());
+    cJSON_AddNumberToObject(root, "passband_hz", (double)ui_get_passband_width_hz());
+
+    // Signal: peak dBm in +-3 kHz window around the VFO centre (matches Tab5 S-meter).
+    float peak_dbm = -999.0f;
+    if (dsp_get_peak_dbm_around_vfo(64, &peak_dbm) == ESP_OK) {
+        cJSON_AddNumberToObject(root, "signal_dbm", (double)peak_dbm);
+    } else {
+        cJSON_AddNullToObject(root, "signal_dbm");
+    }
 
     char *out = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);
