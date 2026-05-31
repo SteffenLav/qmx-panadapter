@@ -9,7 +9,7 @@
 #include "bsp/m5stack_tab5.h"
 
 #ifndef FW_VERSION
-#define FW_VERSION "v0.9.5"
+#define FW_VERSION "v0.9.6"
 #endif
 
 static const char *TAG = "bsp_info";
