@@ -18,6 +18,7 @@
 #include "driver/gpio.h"
 #include "bsp/esp-bsp.h"
 #include "webserver.h"
+#include "rigctld_server.h"
 
 static const char *TAG = "wifi";
 
@@ -109,6 +110,7 @@ static void on_ip_event(void *arg, esp_event_base_t base,
         }
 
         webserver_start();
+        rigctld_server_start();
     }
 }
 

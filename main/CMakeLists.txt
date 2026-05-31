@@ -19,6 +19,7 @@ idf_component_register(
         "wifi/wifi.c"
         "net/webserver.c"
         "net/webserver_ws.c"
+        "net/rigctld_server.c"
     INCLUDE_DIRS
         "."
         "display"
