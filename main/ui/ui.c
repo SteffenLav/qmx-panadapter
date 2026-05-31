@@ -38,6 +38,7 @@ static uint32_t s_last_qmx_freq_hz = 0;  // updated by ui_update_frequency
 static char s_current_mode[8] = "USB";  // Phase 5.10F: latest CAT mode for snap-aware tuning
 static char s_current_band[8] = "---";  // Phase 9 (v0.9.5): cached band string for web JSON
 static uint32_t s_passband_width_hz = 0;  // Phase 5.10G: 0 = use mode default; else from CAT FW
+static uint16_t s_cw_pitch_hz = 700;  // CW sidetone offset (Hz); applied to touch-tune in CW modes
 
 // Touch-target cursor state (Phase 6.1)
 static int s_target_x = -1;
@@ -67,6 +68,8 @@ static lv_obj_t *s_slider_alpha = NULL;
 static lv_obj_t *s_lbl_db_min = NULL;
 static lv_obj_t *s_lbl_db_max = NULL;
 static lv_obj_t *s_lbl_alpha = NULL;
+static lv_obj_t *s_slider_cwpitch = NULL;
+static lv_obj_t *s_lbl_cwpitch = NULL;
 static void drawer_preset_normal_cb(lv_event_t *e);
 static void drawer_preset_dx_cb(lv_event_t *e);
 static void drawer_preset_strong_cb(lv_event_t *e);
@@ -74,6 +77,7 @@ static void drawer_wifi_btn_cb(lv_event_t *e);
 static void drawer_slider_db_min_cb(lv_event_t *e);
 static void drawer_slider_db_max_cb(lv_event_t *e);
 static void drawer_slider_alpha_cb(lv_event_t *e);
+static void drawer_slider_cwpitch_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
 bool ui_get_flat_mode(void);
 void ui_set_flat_mode(bool on);
@@ -846,6 +850,14 @@ static void touch_event_cb(lv_event_t *e)
         // Compute target frequency from final touch position
         int dx = (int)p.x - DISPLAY_H_RES / 2;
         int32_t offset_hz = (int32_t)((int64_t)dx * UAC_SAMPLE_RATE / DISPLAY_H_RES);
+        // CW pitch correction: signal sits at +pitch (CW/USB-side) or -pitch (CW-R/LSB-side)
+        // above/below the dial. Subtract/add so the touched audio peak lands at sidetone.
+        // CW-R must be tested before CW (strstr would match both).
+        if (strstr(s_current_mode, "CW-R") || strstr(s_current_mode, "CWR")) {
+            offset_hz += (int32_t)s_cw_pitch_hz;
+        } else if (strstr(s_current_mode, "CW")) {
+            offset_hz -= (int32_t)s_cw_pitch_hz;
+        }
         // Phase 5.10F: mode-aware snap. CW=10 Hz (precision), SSB=500 Hz
         // (voice channels), FT8/data=100 Hz, AM/FM=1 kHz.
         int32_t snap = 10;
@@ -872,6 +884,14 @@ static void touch_event_cb(lv_event_t *e)
         // Let the cursor linger briefly after release, then clear
         s_target_until_us = esp_timer_get_time() + 200000;
     }
+}
+
+void ui_set_cw_pitch_hz(uint16_t hz)
+{
+    if (hz < 300 || hz > 1200) return;  // sanity clamp
+    s_cw_pitch_hz = hz;
+    settings_set_cw_pitch_hz(hz);
+    ESP_LOGI(TAG, "CW pitch set to %u Hz", (unsigned)hz);
 }
 
 // Hook into ui_update_frequency to track latest known QMX frequency
@@ -942,7 +962,9 @@ static void drawer_build(void)
     lv_obj_set_style_border_side(s_drawer, LV_BORDER_SIDE_LEFT, 0);
     lv_obj_set_style_radius(s_drawer, 0, 0);
     lv_obj_set_style_pad_all(s_drawer, 16, 0);
-    lv_obj_clear_flag(s_drawer, LV_OBJ_FLAG_SCROLLABLE);
+    // Drawer scrolls vertically — content overflows once CW section is added.
+    lv_obj_set_scroll_dir(s_drawer, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_drawer, LV_SCROLLBAR_MODE_AUTO);
 
     // Title bar with "Settings" + close X
     lv_obj_t *title = lv_label_create(s_drawer);
@@ -1104,6 +1126,29 @@ static void drawer_build(void)
     lv_slider_set_value(s_slider_alpha, 40, LV_ANIM_OFF);
     lv_obj_align(s_slider_alpha, LV_ALIGN_TOP_LEFT, 0, y);
     lv_obj_add_event_cb(s_slider_alpha, drawer_slider_alpha_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    y += 60;
+    // CW section header
+    lv_obj_t *cw_hdr = lv_label_create(s_drawer);
+    lv_label_set_text(cw_hdr, "CW");
+    lv_obj_set_style_text_color(cw_hdr, lv_color_hex(0xA0E0A0), 0);
+    lv_obj_set_style_text_font(cw_hdr, &lv_font_montserrat_24, 0);
+    lv_obj_align(cw_hdr, LV_ALIGN_TOP_LEFT, 0, y);
+    y += 40;
+    s_lbl_cwpitch = lv_label_create(s_drawer);
+    lv_label_set_text(s_lbl_cwpitch, "Pitch: 700 Hz");
+    lv_obj_set_style_text_color(s_lbl_cwpitch, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(s_lbl_cwpitch, &lv_font_montserrat_24, 0);
+    lv_obj_align(s_lbl_cwpitch, LV_ALIGN_TOP_LEFT, 0, y);
+    y += 30;
+    s_slider_cwpitch = lv_slider_create(s_drawer);
+    lv_obj_set_size(s_slider_cwpitch, DRAWER_W - 32, 30);
+    lv_slider_set_range(s_slider_cwpitch, 400, 1000);
+    lv_slider_set_value(s_slider_cwpitch, (int)s_cw_pitch_hz, LV_ANIM_OFF);
+    lv_obj_align(s_slider_cwpitch, LV_ALIGN_TOP_LEFT, 0, y);
+    lv_obj_add_event_cb(s_slider_cwpitch, drawer_slider_cwpitch_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    char cwbuf[24];
+    snprintf(cwbuf, sizeof(cwbuf), "Pitch: %u Hz", (unsigned)s_cw_pitch_hz);
+    lv_label_set_text(s_lbl_cwpitch, cwbuf);
 
     ESP_LOGI(TAG, "Settings drawer built (off-screen at x=%d)", DISPLAY_H_RES);
 }
@@ -1238,6 +1283,20 @@ static void drawer_slider_alpha_cb(lv_event_t *e)
     if (s_lbl_alpha) lv_label_set_text(s_lbl_alpha, buf);
     render_set_ema_alpha(alpha);
     settings_set_ema_alpha(alpha);
+}
+
+static void drawer_slider_cwpitch_cb(lv_event_t *e)
+{
+    lv_obj_t *sl = lv_event_get_target(e);
+    int v = (int)lv_slider_get_value(sl);
+    // Snap to nearest 50 Hz
+    int snapped = ((v + 25) / 50) * 50;
+    if (snapped < 400) snapped = 400;
+    if (snapped > 1000) snapped = 1000;
+    ui_set_cw_pitch_hz((uint16_t)snapped);
+    char buf[24];
+    snprintf(buf, sizeof(buf), "Pitch: %d Hz", snapped);
+    if (s_lbl_cwpitch) lv_label_set_text(s_lbl_cwpitch, buf);
 }
 
 // ---- Phase 9 (v0.9.5): read-only getters for web JSON ------------------

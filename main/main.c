@@ -71,6 +71,7 @@ void app_main(void)
     ESP_ERROR_CHECK(audio_init());
     iq_balance_set_enabled(cfg.iq_enabled);
     ui_set_flat_mode(cfg.flat_mode);
+    ui_set_cw_pitch_hz(cfg.cw_pitch_hz);
 
     // Restore last-known VFO frequency (display only; QMX is source of truth).
     if (cfg.last_vfo_hz != 0) {
