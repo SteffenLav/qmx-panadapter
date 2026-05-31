@@ -32,22 +32,63 @@ static inline uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b)
     return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
 }
 
+// Anchor-based colour maps. Each map is a list of (idx, R, G, B) anchors;
+// indices must be ascending and the last must be 255. build_lut() interpolates linearly.
+typedef struct { uint8_t idx, r, g, b; } cmap_anchor_t;
+
+static const cmap_anchor_t CMAP_THERMAL[] = {
+    {   0,   0,   0,   0 },  // black
+    {  51,   0,   0, 128 },  // dark blue
+    { 102,   0, 128, 192 },  // teal
+    { 153,   0, 192,   0 },  // green
+    { 204, 255, 224,   0 },  // yellow
+    { 255, 255,   0,   0 },  // red
+};
+static const cmap_anchor_t CMAP_VIRIDIS[] = {
+    {   0,  68,   1,  84 },  // deep purple
+    {  64,  59,  82, 139 },  // blue
+    { 128,  33, 144, 141 },  // teal
+    { 192,  93, 201,  99 },  // green
+    { 255, 253, 231,  37 },  // yellow
+};
+static const cmap_anchor_t CMAP_TURBO[] = {
+    {   0,  48,  18,  59 },  // deep purple-blue
+    {  43,  64, 100, 225 },  // blue
+    {  85,  46, 197, 233 },  // cyan
+    { 128, 119, 245, 138 },  // green
+    { 170, 251, 197,  53 },  // yellow-orange
+    { 212, 245,  98,  37 },  // orange-red
+    { 255, 122,   4,   2 },  // dark red
+};
+static const cmap_anchor_t CMAP_GRAYSCALE[] = {
+    {   0,   0,   0,   0 },
+    { 255, 255, 255, 255 },
+};
+
+static const struct {
+    const cmap_anchor_t *anchors;
+    int n;
+    const char *name;
+} g_colormaps[] = {
+    { CMAP_THERMAL,   sizeof(CMAP_THERMAL)/sizeof(CMAP_THERMAL[0]),   "Thermal"   },
+    { CMAP_VIRIDIS,   sizeof(CMAP_VIRIDIS)/sizeof(CMAP_VIRIDIS[0]),   "Viridis"   },
+    { CMAP_TURBO,     sizeof(CMAP_TURBO)/sizeof(CMAP_TURBO[0]),       "Turbo"     },
+    { CMAP_GRAYSCALE, sizeof(CMAP_GRAYSCALE)/sizeof(CMAP_GRAYSCALE[0]), "Grayscale" },
+};
+#define CMAP_COUNT (sizeof(g_colormaps)/sizeof(g_colormaps[0]))
+
+static uint8_t s_colormap_idx = 0;
+
 static void build_lut(void)
 {
-    // Anchor points: (index, R, G, B). Indices must be ascending and cover 0..255.
-    static const struct { int idx; uint8_t r, g, b; } anchors[] = {
-        {   0,   0,   0,   0 },  // black
-        {  51,   0,   0, 128 },  // dark blue
-        { 102,   0, 128, 192 },  // teal
-        { 153,   0, 192,   0 },  // green
-        { 204, 255, 224,   0 },  // yellow
-        { 255, 255,   0,   0 },  // red
-    };
-    const int n = sizeof(anchors) / sizeof(anchors[0]);
+    if (s_colormap_idx >= CMAP_COUNT) s_colormap_idx = 0;
+    const cmap_anchor_t *anchors = g_colormaps[s_colormap_idx].anchors;
+    int n = g_colormaps[s_colormap_idx].n;
     for (int seg = 0; seg < n - 1; seg++) {
         int i0 = anchors[seg].idx;
         int i1 = anchors[seg + 1].idx;
         int span = i1 - i0;
+        if (span <= 0) continue;
         for (int i = i0; i <= i1; i++) {
             float t = (float)(i - i0) / (float)span;
             uint8_t r = (uint8_t)(anchors[seg].r + t * (anchors[seg + 1].r - anchors[seg].r));
@@ -56,6 +97,15 @@ static void build_lut(void)
             s_lut[i] = rgb565(r, g, b);
         }
     }
+}
+
+void render_waterfall_set_colormap(uint8_t idx)
+{
+    if (idx >= CMAP_COUNT) return;
+    if (idx == s_colormap_idx) return;
+    s_colormap_idx = idx;
+    build_lut();
+    ESP_LOGI(TAG, "Colour map set to '%s' (idx %u)", g_colormaps[idx].name, (unsigned)idx);
 }
 
 esp_err_t render_waterfall_init(void)

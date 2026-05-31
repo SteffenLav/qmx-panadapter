@@ -9,3 +9,7 @@ esp_err_t render_waterfall_init(void);
 // The spectrum argument is the same scratch buffer the spectrum line used,
 // to avoid a second dsp_get_spectrum() call (saves a mutex acquire).
 void render_waterfall_tick(const float *spectrum, int n_bins);
+
+// Switch the active colour map. idx range: 0=Thermal 1=Viridis 2=Turbo 3=Grayscale.
+// Rebuilds the LUT in-place; visible on the next render tick.
+void render_waterfall_set_colormap(uint8_t idx);

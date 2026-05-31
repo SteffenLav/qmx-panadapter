@@ -1,5 +1,6 @@
 #include "ui.h"
 #include "render.h"
+#include "render_waterfall.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -70,6 +71,7 @@ static lv_obj_t *s_lbl_db_max = NULL;
 static lv_obj_t *s_lbl_alpha = NULL;
 static lv_obj_t *s_slider_cwpitch = NULL;
 static lv_obj_t *s_lbl_cwpitch = NULL;
+static lv_obj_t *s_dropdown_cmap = NULL;
 static void drawer_preset_normal_cb(lv_event_t *e);
 static void drawer_preset_dx_cb(lv_event_t *e);
 static void drawer_preset_strong_cb(lv_event_t *e);
@@ -78,6 +80,7 @@ static void drawer_slider_db_min_cb(lv_event_t *e);
 static void drawer_slider_db_max_cb(lv_event_t *e);
 static void drawer_slider_alpha_cb(lv_event_t *e);
 static void drawer_slider_cwpitch_cb(lv_event_t *e);
+static void drawer_dropdown_cmap_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
 bool ui_get_flat_mode(void);
 void ui_set_flat_mode(bool on);
@@ -1149,6 +1152,25 @@ static void drawer_build(void)
     char cwbuf[24];
     snprintf(cwbuf, sizeof(cwbuf), "Pitch: %u Hz", (unsigned)s_cw_pitch_hz);
     lv_label_set_text(s_lbl_cwpitch, cwbuf);
+    y += 60;
+    // Waterfall colour-map section
+    lv_obj_t *cmap_hdr = lv_label_create(s_drawer);
+    lv_label_set_text(cmap_hdr, "Waterfall colour map");
+    lv_obj_set_style_text_color(cmap_hdr, lv_color_hex(0xA0E0A0), 0);
+    lv_obj_set_style_text_font(cmap_hdr, &lv_font_montserrat_24, 0);
+    lv_obj_align(cmap_hdr, LV_ALIGN_TOP_LEFT, 0, y);
+    y += 40;
+    s_dropdown_cmap = lv_dropdown_create(s_drawer);
+    lv_dropdown_set_options(s_dropdown_cmap, "Thermal\nViridis\nTurbo\nGrayscale");
+    lv_obj_set_size(s_dropdown_cmap, DRAWER_W - 32, 50);
+    lv_obj_align(s_dropdown_cmap, LV_ALIGN_TOP_LEFT, 0, y);
+    lv_obj_set_style_text_font(s_dropdown_cmap, &lv_font_montserrat_24, 0);
+    {
+        qmx_settings_t scfg;
+        settings_load_all(&scfg);
+        if (scfg.colormap_idx < 4) lv_dropdown_set_selected(s_dropdown_cmap, scfg.colormap_idx);
+    }
+    lv_obj_add_event_cb(s_dropdown_cmap, drawer_dropdown_cmap_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     ESP_LOGI(TAG, "Settings drawer built (off-screen at x=%d)", DISPLAY_H_RES);
 }
@@ -1297,6 +1319,14 @@ static void drawer_slider_cwpitch_cb(lv_event_t *e)
     char buf[24];
     snprintf(buf, sizeof(buf), "Pitch: %d Hz", snapped);
     if (s_lbl_cwpitch) lv_label_set_text(s_lbl_cwpitch, buf);
+}
+
+static void drawer_dropdown_cmap_cb(lv_event_t *e)
+{
+    lv_obj_t *dd = lv_event_get_target(e);
+    uint8_t idx = (uint8_t)lv_dropdown_get_selected(dd);
+    render_waterfall_set_colormap(idx);
+    settings_set_colormap_idx(idx);
 }
 
 // ---- Phase 9 (v0.9.5): read-only getters for web JSON ------------------

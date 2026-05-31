@@ -19,6 +19,7 @@ typedef struct {
     char  wifi_pass[65];   // WiFi password (64 chars + NUL, WPA2 max)
     uint32_t last_vfo_hz; // last QMX VFO frequency in Hz (0 = unknown)
     uint16_t cw_pitch_hz;  // CW sidetone offset in Hz (default 700)
+    uint8_t  colormap_idx; // waterfall colour map: 0=Thermal 1=Viridis 2=Turbo 3=Grayscale
 } qmx_settings_t;
 
 // Initialise the settings module. Opens an NVS handle. Safe to call
@@ -46,6 +47,8 @@ void settings_set_wifi_pass(const char *pass);
 void settings_set_last_vfo(uint32_t hz);
 // Save CW sidetone pitch in Hz (debounced flush).
 void settings_set_cw_pitch_hz(uint16_t hz);
+// Save waterfall colour-map index (debounced flush).
+void settings_set_colormap_idx(uint8_t idx);
 
 // Force any pending writes to flash immediately. Call before reboot
 // if you want absolute certainty. Normally not needed.

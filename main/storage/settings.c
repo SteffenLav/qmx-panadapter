@@ -23,6 +23,7 @@ static const char *TAG = "settings";
 #define KEY_WIFI_PASS   "wifi_pass"
 #define KEY_LAST_VFO   "last_vfo"
 #define KEY_CW_PITCH   "cw_pitch"
+#define KEY_COLORMAP   "colormap"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -31,6 +32,7 @@ static const char *TAG = "settings";
 #define DEF_IQ_ENABLED  (true)
 #define DEF_FLAT_MODE   (true)
 #define DEF_CW_PITCH    (700)
+#define DEF_COLORMAP    (0)  // Thermal
 
 // Debounce: how long we wait after the last change before flushing.
 #define DEBOUNCE_MS     500
@@ -45,6 +47,7 @@ static const char *TAG = "settings";
 #define DIRTY_WIFI_PASS  (1u << 5)
 #define DIRTY_LAST_VFO  (1u << 6)
 #define DIRTY_CW_PITCH  (1u << 8)
+#define DIRTY_COLORMAP  (1u << 9)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -124,6 +127,7 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_WIFI_PASS)  nvs_set_str(s_nvs, KEY_WIFI_PASS, snap.wifi_pass);
         if (dirty_local & DIRTY_LAST_VFO)  nvs_set_u32(s_nvs, KEY_LAST_VFO, snap.last_vfo_hz);
         if (dirty_local & DIRTY_CW_PITCH)  nvs_set_u16(s_nvs, KEY_CW_PITCH, snap.cw_pitch_hz);
+        if (dirty_local & DIRTY_COLORMAP)  nvs_set_u8(s_nvs, KEY_COLORMAP, snap.colormap_idx);
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
@@ -177,6 +181,7 @@ void settings_load_all(qmx_settings_t *out)
     out->flat_mode  = DEF_FLAT_MODE;
     out->last_vfo_hz = 0;
     out->cw_pitch_hz = DEF_CW_PITCH;
+    out->colormap_idx = DEF_COLORMAP;
 
     if (!s_ready) {
         ESP_LOGW(TAG, "load_all: NVS not ready, using defaults");
@@ -192,6 +197,7 @@ void settings_load_all(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_FLAT_MODE,  &u8v) == ESP_OK) out->flat_mode  = (u8v != 0);
     nvs_get_u32(s_nvs, KEY_LAST_VFO, &out->last_vfo_hz);
     nvs_get_u16(s_nvs, KEY_CW_PITCH, &out->cw_pitch_hz);
+    nvs_get_u8(s_nvs, KEY_COLORMAP, &out->colormap_idx);
 
     // Strings: zero buffers first, then read length-bounded.
     out->wifi_ssid[0] = '\0';
@@ -324,4 +330,17 @@ void settings_set_cw_pitch_hz(uint16_t hz)
     s_pending.cw_pitch_hz = hz;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CW_PITCH);
+}
+
+void settings_set_colormap_idx(uint8_t idx)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.colormap_idx == idx) {
+        xSemaphoreGive(s_mutex);
+        return;
+    }
+    s_pending.colormap_idx = idx;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_COLORMAP);
 }
