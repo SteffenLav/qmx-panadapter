@@ -1,6 +1,7 @@
 #include "ui.h"
 #include "render.h"
 #include "render_waterfall.h"
+#include "dsp.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -853,6 +854,14 @@ static void touch_event_cb(lv_event_t *e)
         // Compute target frequency from final touch position
         int dx = (int)p.x - DISPLAY_H_RES / 2;
         int32_t offset_hz = (int32_t)((int64_t)dx * UAC_SAMPLE_RATE / DISPLAY_H_RES);
+        // Snap to strongest bin within +/-700 Hz of touch (handler falls through if no peak).
+        int32_t snapped_hz = offset_hz;
+        if (dsp_find_peak_hz_around(offset_hz, 700, &snapped_hz) == ESP_OK) {
+            if (snapped_hz != offset_hz) {
+                ESP_LOGI("ui_touch", "snap-to-peak: %ld -> %ld Hz", (long)offset_hz, (long)snapped_hz);
+            }
+            offset_hz = snapped_hz;
+        }
         // CW pitch correction: signal sits at +pitch (CW/USB-side) or -pitch (CW-R/LSB-side)
         // above/below the dial. Subtract/add so the touched audio peak lands at sidetone.
         // CW-R must be tested before CW (strstr would match both).

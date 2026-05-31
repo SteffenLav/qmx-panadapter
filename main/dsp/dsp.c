@@ -164,6 +164,61 @@ esp_err_t dsp_get_peak_dbm_around_vfo(int half_width_bins, float *peak_dbm)
     return ESP_OK;
 }
 
+// Snap-to-peak — see dsp.h for contract.
+esp_err_t dsp_find_peak_hz_around(int32_t center_hz, int32_t radius_hz, int32_t *out_hz)
+{
+    if (!s_spectrum_mtx || !out_hz) return ESP_ERR_INVALID_ARG;
+    if (radius_hz <= 0) { *out_hz = center_hz; return ESP_OK; }
+
+    if (xSemaphoreTake(s_spectrum_mtx, pdMS_TO_TICKS(10)) != pdTRUE) {
+        return ESP_ERR_TIMEOUT;
+    }
+    if (!s_have_spectrum) {
+        xSemaphoreGive(s_spectrum_mtx);
+        *out_hz = center_hz;
+        return ESP_ERR_NOT_FOUND;
+    }
+
+    // Convert "Hz from dial" to "DSP bin index".
+    // DSP bin 0 = audio DC; QMX dial is at +12 kHz in baseband, so a touch at
+    // center_hz from dial maps to baseband freq (center_hz + 12000) Hz, which is
+    // bin (center_hz + 12000) / bin_width. Negative bins wrap to N - |bin|.
+    const float bin_width = (float)DSP_SAMPLE_RATE_HZ / (float)DSP_FFT_SIZE;  // 46.875 Hz
+    const int N = DSP_FFT_SIZE;
+
+    int center_bin = (int)((center_hz + 12000) / bin_width);  // truncation OK; we search a window
+    int radius_bins = (int)(radius_hz / bin_width);
+    if (radius_bins < 1) radius_bins = 1;
+
+    // Search [center_bin - radius_bins, center_bin + radius_bins], wrapping mod N.
+    float peak_db = -1e9f;
+    int   peak_bin = center_bin;
+    float sum_db = 0.0f;
+    int   count = 0;
+    for (int d = -radius_bins; d <= radius_bins; d++) {
+        int b = ((center_bin + d) % N + N) % N;  // positive modulo
+        float v = s_spectrum[b];
+        sum_db += v;
+        count++;
+        if (v > peak_db) { peak_db = v; peak_bin = b; }
+    }
+    float mean_db = (count > 0) ? (sum_db / (float)count) : -120.0f;
+    xSemaphoreGive(s_spectrum_mtx);
+
+    // Only snap if the peak is meaningfully above local mean (avoids snapping to noise).
+    if (peak_db - mean_db < 3.0f) {
+        *out_hz = center_hz;
+        return ESP_OK;
+    }
+
+    // Unwrap peak_bin back into a signed bin offset (-N/2 .. +N/2), then to Hz from dial.
+    int signed_bin = peak_bin;
+    if (signed_bin >= N / 2) signed_bin -= N;
+    int32_t peak_hz_baseband = (int32_t)(signed_bin * bin_width + 0.5f * (signed_bin >= 0 ? 1.0f : -1.0f));
+    *out_hz = peak_hz_baseband - 12000;
+    return ESP_OK;
+}
+
 static void log_stats(float min_db, float max_db, float mean_db)
 {
     int64_t now = esp_timer_get_time();

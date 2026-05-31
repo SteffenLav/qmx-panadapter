@@ -36,3 +36,10 @@ esp_err_t dsp_get_spectrum(float *dst);
 // (which is the VFO). half_width_bins=64 at 48 kHz/1024 ~ ±3 kHz.
 // Returns peak via *peak_dbm. ESP_ERR_NOT_FOUND if no spectrum yet.
 esp_err_t dsp_get_peak_dbm_around_vfo(int half_width_bins, float *peak_dbm);
+
+// Snap-to-peak helper for touch-to-tune. Given a touched frequency offset
+// from the QMX dial (in Hz, can be negative), search ±radius_hz for the
+// strongest spectrum bin. If the peak exceeds the local mean by >3 dB,
+// returns its Hz offset in *out_hz; otherwise returns center_hz unchanged.
+// IF offset (+12 kHz baseband shift) is handled internally.
+esp_err_t dsp_find_peak_hz_around(int32_t center_hz, int32_t radius_hz, int32_t *out_hz);
