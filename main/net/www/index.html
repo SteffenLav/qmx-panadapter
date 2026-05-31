@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
 <title>QMX+ Panadapter</title>
 <style>
   :root {
@@ -15,300 +16,285 @@
     --card: #131922;
     --border: #1f2937;
     --spec-bg: #000;
-    --spec-grid: #1f2530;
+    --passband: #4a5560;
   }
   * { box-sizing: border-box; }
-  body {
+  html, body {
     margin: 0;
-    padding: 1rem;
+    padding: 0;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     background: var(--bg);
     color: var(--fg);
-    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
   }
-  h1 {
-    font-size: 1.1rem;
-    font-weight: 600;
-    margin: 0 0 1rem 0;
-    color: var(--accent);
-    letter-spacing: 0.05em;
+  body {
+    display: grid;
+    grid-template-rows: auto 1fr auto 3fr auto;
+    gap: 0;
+    padding: 0.3rem;
   }
-  .card {
+
+  /* ---- Top status row ---- */
+  #top {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.2rem 0.4rem;
     background: var(--card);
     border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 1rem;
-    margin-bottom: 0.75rem;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    min-height: 2.2rem;
+    flex-wrap: nowrap;
+    overflow: hidden;
   }
-  .label { color: var(--dim); font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.08em; }
-  .value { font-size: 1.4rem; margin-top: 0.2rem; }
-  .freq { font-size: 1.8rem; color: var(--accent); font-variant-numeric: tabular-nums; }
-  .row { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
-  .charging { color: var(--ok); }
-  .stale { opacity: 0.5; }
-  #spec-head { display: flex; justify-content: space-between; padding: 0 0 0.4rem 0; margin-bottom: 0; }
-  #spec-status { font-size: 0.75rem; }
-  #spec-status.ok  { color: var(--ok);  }
-  #spec-status.bad { color: var(--bad); }
-  #spec {
-    display: block;
-    width: 100%;
-    height: auto;
-    background: var(--spec-bg);
+  #vfo {
+    color: var(--accent);
+    font-size: 1.4rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    flex-shrink: 0;
+  }
+  .pill {
+    background: #1f2937;
     border-radius: 4px;
-    image-rendering: pixelated;
-    margin-bottom: 0.5rem;
+    padding: 0.15rem 0.5rem;
+    color: var(--fg);
+    white-space: nowrap;
+    flex-shrink: 0;
   }
-  #waterfall {
+  .pill .lab { color: var(--dim); font-size: 0.7rem; margin-right: 0.3rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  #spacer { flex: 1; }
+  #flatbtn {
+    background: #1f2937;
+    color: var(--dim);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    width: 2rem;
+    height: 1.8rem;
+    font-family: inherit;
+    font-weight: 700;
+    cursor: pointer;
+    flex-shrink: 0;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #flatbtn.on { background: var(--accent); color: var(--bg); }
+  #fps {
+    color: var(--ok);
+    font-size: 0.75rem;
+    min-width: 4.5rem;
+    text-align: right;
+    flex-shrink: 0;
+  }
+  #fps.bad { color: var(--bad); }
+
+  /* ---- Canvases ---- */
+  #spec, #waterfall {
     display: block;
     width: 100%;
-    height: auto;
+    height: 100%;
     background: var(--spec-bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    margin-top: 0.3rem;
     image-rendering: pixelated;
-    margin-bottom: 0.75rem;
   }
-  footer { color: var(--dim); font-size: 0.75rem; margin-top: 1rem; text-align: center; }
+  #spec-wrap, #wf-wrap {
+    position: relative;
+    min-height: 0;
+    display: flex;
+  }
+  #freqaxis {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.2rem 0.4rem;
+    font-size: 0.7rem;
+    color: var(--dim);
+    font-variant-numeric: tabular-nums;
+  }
+  #freqaxis .center { color: var(--accent); font-weight: 600; }
+
+  /* ---- Bottom status row ---- */
+  #bot {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    padding: 0.2rem 0.4rem;
+    margin-top: 0.3rem;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 0.8rem;
+    min-height: 1.8rem;
+    flex-wrap: nowrap;
+    overflow: hidden;
+  }
+  .charging { color: var(--ok); }
+
+  /* ---- Narrow screens: shrink things ---- */
+  @media (max-width: 480px) {
+    #vfo { font-size: 1.1rem; }
+    #top, #bot { font-size: 0.72rem; gap: 0.3rem; padding: 0.15rem 0.3rem; }
+    .pill { padding: 0.1rem 0.35rem; }
+    .pill .lab { display: none; }
+    #freqaxis { font-size: 0.6rem; }
+  }
 </style>
 </head>
 <body>
-  <h1>QMX+ PANADAPTER</h1>
-  <div id="spec-head">
-    <span class="label">Spectrum</span>
-    <span id="spec-status" class="bad">disconnected</span>
+  <div id="top">
+    <div id="vfo">--.---</div>
+    <div class="pill"><span class="lab">Mode</span><span id="mode">--</span></div>
+    <div class="pill"><span class="lab">Band</span><span id="band">--</span></div>
+    <div class="pill"><span class="lab">Sig</span><span id="smeter">--</span></div>
+    <div id="spacer"></div>
+    <button id="flatbtn" type="button" title="Flat-spectrum mode">F</button>
+    <div id="fps" class="bad">disconnected</div>
   </div>
-  <canvas id="spec" width="1024" height="256"></canvas>
-  <canvas id="waterfall" width="1024" height="512"></canvas>
 
-  <div id="status" class="stale">
-    <div class="card">
-      <div class="label">VFO</div>
-      <div class="value freq" id="freq">--</div>
-    </div>
-    <div class="card">
-      <div class="row">
-        <div>
-          <div class="label">Battery</div>
-          <div class="value"><span id="batt">--</span><span id="chg"></span></div>
-        </div>
-        <div>
-          <div class="label">WiFi</div>
-          <div class="value" id="wifi">--</div>
-        </div>
-      </div>
-      <div style="margin-top: 0.6rem;">
-        <div class="label">IP</div>
-        <div class="value" id="ip">--</div>
-      </div>
-    </div>
+  <div id="spec-wrap"><canvas id="spec" width="1024" height="200"></canvas></div>
+
+  <div id="freqaxis">
+    <span id="fL2">-24k</span>
+    <span id="fL1">-12k</span>
+    <span class="center" id="fC">--.---</span>
+    <span id="fR1">+12k</span>
+    <span id="fR2">+24k</span>
   </div>
-  <footer id="updated">never updated</footer>
+
+  <div id="wf-wrap"><canvas id="waterfall" width="1024" height="600"></canvas></div>
+
+  <div id="bot">
+    <div class="pill"><span class="lab">Batt</span><span id="batt">--</span><span id="chg"></span></div>
+    <div class="pill"><span class="lab">WiFi</span><span id="wifi">--</span></div>
+    <div id="spacer"></div>
+    <div class="pill"><span class="lab">IP</span><span id="ip">--</span></div>
+  </div>
+
 <script>
 "use strict";
 
-/* ---------- /api/status @ 1 Hz ---------- */
-function fmtFreq(hz) {
-  if (hz === 0) return "no signal";
+/* =====================================================================
+   /api/status @ 1 Hz: VFO, mode, band, signal, battery, WiFi, IP
+   ===================================================================== */
+function fmtMHz(hz) {
+  if (!hz) return "--.---";
   return (hz / 1e6).toFixed(3) + " MHz";
 }
+function fmtMHzShort(hz) {
+  if (!hz) return "--.---";
+  return (hz / 1e6).toFixed(3);
+}
+function sUnitsFromDbm(dbm) {
+  // S9 = -73 dBm, 6 dB per S-unit.
+  if (dbm === null || dbm === undefined) return "--";
+  const above9 = dbm - (-73);
+  if (above9 >= 0) {
+    const db = Math.round(above9 / 10) * 10;
+    return db === 0 ? "S9" : "S9+" + db;
+  }
+  const s = Math.max(1, Math.min(9, Math.round(9 + (dbm + 73) / 6)));
+  return "S" + s;
+}
+
+let lastFreqHz = 0;
+let lastPassbandHz = 0;
+let lastMode = "USB";
+
 async function tick() {
   try {
     const r = await fetch("/api/status", { cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const s = await r.json();
-    document.getElementById("freq").textContent = fmtFreq(s.freq_hz);
+
+    lastFreqHz = s.freq_hz || 0;
+    lastPassbandHz = s.passband_hz || 0;
+    lastMode = s.mode || "USB";
+
+    document.getElementById("vfo").textContent = fmtMHz(s.freq_hz);
+    document.getElementById("mode").textContent = s.mode || "--";
+    document.getElementById("band").textContent = s.band || "--";
+
+    const dbm = s.signal_dbm;
+    if (dbm === null || dbm === undefined) {
+      document.getElementById("smeter").textContent = "--";
+    } else {
+      document.getElementById("smeter").textContent =
+        sUnitsFromDbm(dbm) + " " + dbm.toFixed(0) + " dBm";
+    }
+
     document.getElementById("batt").textContent =
-      (s.battery.level >= 0 ? s.battery.level + "%" : "--");
+      (s.battery && s.battery.level >= 0 ? s.battery.level + "%" : "--");
     document.getElementById("chg").innerHTML =
-      s.battery.charging ? ' <span class="charging">CHG</span>' : '';
+      s.battery && s.battery.charging ? ' <span class="charging">CHG</span>' : '';
     document.getElementById("wifi").textContent =
-      s.wifi.ssid ? (s.wifi.ssid + "  " + s.wifi.rssi + " dBm") : "--";
-    document.getElementById("ip").textContent = s.wifi.ip || "--";
-    document.getElementById("updated").textContent =
-      "updated " + new Date().toLocaleTimeString();
-    document.getElementById("status").classList.remove("stale");
+      s.wifi && s.wifi.ssid ? (s.wifi.ssid + " " + s.wifi.rssi + " dBm") : "--";
+    document.getElementById("ip").textContent = (s.wifi && s.wifi.ip) || "--";
+
+    /* Frequency axis labels: center MHz, +/-12 and +/-24 kHz. */
+    document.getElementById("fC").textContent = fmtMHzShort(s.freq_hz);
+    if (s.freq_hz) {
+      document.getElementById("fL2").textContent = ((s.freq_hz - 24000) / 1e6).toFixed(3);
+      document.getElementById("fL1").textContent = ((s.freq_hz - 12000) / 1e6).toFixed(3);
+      document.getElementById("fR1").textContent = ((s.freq_hz + 12000) / 1e6).toFixed(3);
+      document.getElementById("fR2").textContent = ((s.freq_hz + 24000) / 1e6).toFixed(3);
+    }
   } catch (e) {
-    document.getElementById("status").classList.add("stale");
-    document.getElementById("updated").textContent = "error: " + e.message;
+    /* Quietly leave previous values; FPS row already shows ws state. */
   }
 }
 tick();
 setInterval(tick, 1000);
 
-/* ---------- /ws spectrum + waterfall ---------- */
-const SPEC_W = 1024;
-const SPEC_H = 256;
-const WF_H = 512;
+/* =====================================================================
+   /ws spectrum @ ~10 fps: spectrum + waterfall + center marker + passband
+   ===================================================================== */
+const SPEC_W = 1024;       /* bins in WS frame */
 const FRAME_TYPE_SPECTRUM = 0x01;
 const HEADER_LEN = 2;
 
-const canvas = document.getElementById("spec");
-const ctx = canvas.getContext("2d");
-const statusEl = document.getElementById("spec-status");
+/* Canvas internal pixel dimensions are set by ResizeObserver to match the
+   layout pixel size, so rendering stays sharp on any viewport / DPR. */
+let specPxW = SPEC_W, specPxH = 200;
+let wfPxW   = SPEC_W, wfPxH   = 600;
 
-/* --- Experimental: flatten-floor spectrum (toggle with 'f') --- */
+const spec = document.getElementById("spec");
+const sctx = spec.getContext("2d");
+const wf = document.getElementById("waterfall");
+const wfctx = wf.getContext("2d");
+
+const fpsEl = document.getElementById("fps");
+
+/* --- Flat-mode spectrum (browser-side) --- */
 const specFloor   = new Float32Array(SPEC_W);
-const specSmooth  = new Float32Array(SPEC_W);  // temporal EMA of incoming bins
+const specSmooth  = new Float32Array(SPEC_W);
 let   specFloorReady = false;
 let   specSmoothReady = false;
-let   specFlatten = true;  // start in flat mode; press 'f' to compare to raw
-const SPEC_SMOOTH_ALPHA     = 0.25;    // EMA on incoming bins (lower = smoother, slower)
-const SPEC_FLOOR_UP_ALPHA   = 0.002;   // very slow when bin > floor (signal present)
-const SPEC_FLOOR_DOWN_ALPHA = 0.08;    // moderate when bin < floor (track noise)
-const SPEC_RANGE_Q          = 150;     // canvas height = ~59 dB above floor
-document.addEventListener('keypress', (e) => {
-  if (e.key === 'f' || e.key === 'F') {
+let   specFlatten = true;
+const SPEC_SMOOTH_ALPHA     = 0.25;
+const SPEC_FLOOR_UP_ALPHA   = 0.002;
+const SPEC_FLOOR_DOWN_ALPHA = 0.08;
+const SPEC_RANGE_Q          = 150;
+const SPEC_FLOOR_BIAS       = 12;
+
+function updateFlatBtn() {
+  const b = document.getElementById("flatbtn");
+  if (specFlatten) b.classList.add("on"); else b.classList.remove("on");
+}
+updateFlatBtn();
+document.getElementById("flatbtn").addEventListener("click", () => {
+  specFlatten = !specFlatten;
+  updateFlatBtn();
+});
+document.addEventListener("keypress", (e) => {
+  if (e.key === "f" || e.key === "F") {
     specFlatten = !specFlatten;
-    console.log('spectrum mode:', specFlatten ? 'flat' : 'raw');
+    updateFlatBtn();
   }
 });
-
-function drawSpectrumFlat(bytes) {
-  // Temporal EMA on each bin, on every frame -- collapses bin-to-bin and
-  // frame-to-frame jitter without blurring across nearby bins (no spatial
-  // averaging, so closely-spaced FT8 carriers stay separated).
-  if (!specSmoothReady) {
-    for (let i = 0; i < SPEC_W; i++) specSmooth[i] = bytes[i];
-    specSmoothReady = true;
-  } else {
-    const a = SPEC_SMOOTH_ALPHA;
-    for (let i = 0; i < SPEC_W; i++) {
-      specSmooth[i] += a * (bytes[i] - specSmooth[i]);
-    }
-  }
-
-  if (!specFloorReady) {
-    const m = median256(bytes);
-    for (let i = 0; i < SPEC_W; i++) specFloor[i] = m;
-    specFloorReady = true;
-  }
-  for (let i = 0; i < SPEC_W; i++) {
-    const b = specSmooth[i];
-    const d = b - specFloor[i];
-    specFloor[i] += (d > 0 ? SPEC_FLOOR_UP_ALPHA : SPEC_FLOOR_DOWN_ALPHA) * d;
-  }
-
-  ctx.fillStyle = "#000";
-  ctx.fillRect(0, 0, SPEC_W, SPEC_H);
-
-  // Gridlines at +10, +20, +30, +40 dB above floor (1 dB = ~2.55 q-units).
-  ctx.fillStyle = "#1f2530";
-  for (const dbAbove of [10, 20, 30, 40]) {
-    const q = dbAbove * 2.55;
-    const y = SPEC_H - 1 - Math.round(q * (SPEC_H - 1) / SPEC_RANGE_Q);
-    if (y >= 0 && y < SPEC_H) ctx.fillRect(0, y, SPEC_W, 1);
-  }
-
-  // SPEC_FLOOR_BIAS in q-units: pushes the visual zero this many q above the
-  // tracked floor so typical noise variance (about 5 dB peak-to-peak ~= 13 q)
-  // collapses to a flat baseline.
-  const SPEC_FLOOR_BIAS = 12;
-  const aboveRaw = (x) => specSmooth[x] - specFloor[x] - SPEC_FLOOR_BIAS;
-  // Light spatial 5-bin moving average to calm bin-to-bin jitter without
-  // blurring real peaks (FT8 carriers are wider than this window).
-  const above = (x) => {
-    let v;
-    if (x < 2 || x >= SPEC_W - 2) {
-      v = aboveRaw(x);
-    } else {
-      v = (aboveRaw(x - 2) + aboveRaw(x - 1) + aboveRaw(x) +
-           aboveRaw(x + 1) + aboveRaw(x + 2)) * 0.2;
-    }
-    if (v < 0) v = 0;
-    else if (v > SPEC_RANGE_Q) v = SPEC_RANGE_Q;
-    return v;
-  };
-  const yOf = (x) => SPEC_H - 1 - Math.round(above(x) * (SPEC_H - 1) / SPEC_RANGE_Q);
-
-  ctx.beginPath();
-  ctx.moveTo(0, SPEC_H);
-  for (let x = 0; x < SPEC_W; x++) ctx.lineTo(x, yOf(x));
-  ctx.lineTo(SPEC_W - 1, SPEC_H);
-  ctx.closePath();
-  ctx.fillStyle = "#003800";
-  ctx.fill();
-
-  ctx.beginPath();
-  ctx.moveTo(0, yOf(0));
-  for (let x = 1; x < SPEC_W; x++) ctx.lineTo(x, yOf(x));
-  ctx.strokeStyle = "#07e007";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-}
-
-/* Spectrum render: closed polyline -> dim fill, then bright stroke on top. */
-function drawSpectrum(bytes) {
-  ctx.fillStyle = "#000";
-  ctx.fillRect(0, 0, SPEC_W, SPEC_H);
-
-  ctx.fillStyle = "#1f2530";
-  for (const db of [-120, -100, -80, -60, -40]) {
-    const q = (db + 130) * 255 / 100;
-    const y = SPEC_H - 1 - Math.round(q * (SPEC_H - 1) / 255);
-    ctx.fillRect(0, y, SPEC_W, 1);
-  }
-
-  ctx.beginPath();
-  ctx.moveTo(0, SPEC_H);
-  for (let x = 0; x < SPEC_W; x++) {
-    const y = SPEC_H - 1 - Math.round(bytes[x] * (SPEC_H - 1) / 255);
-    ctx.lineTo(x, y);
-  }
-  ctx.lineTo(SPEC_W - 1, SPEC_H);
-  ctx.closePath();
-  ctx.fillStyle = "#003800";
-  ctx.fill();
-
-  ctx.beginPath();
-  ctx.moveTo(0, SPEC_H - 1 - Math.round(bytes[0] * (SPEC_H - 1) / 255));
-  for (let x = 1; x < SPEC_W; x++) {
-    const y = SPEC_H - 1 - Math.round(bytes[x] * (SPEC_H - 1) / 255);
-    ctx.lineTo(x, y);
-  }
-  ctx.strokeStyle = "#07e007";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-}
-
-/* ---------- Waterfall: 512 rows, auto-tracking floor, thermal palette ---------- */
-const wfCanvas = document.getElementById("waterfall");
-const wfCtx = wfCanvas.getContext("2d");
-const wfRow = wfCtx.createImageData(SPEC_W, 1);
-
-const wfPalette = (() => {
-  const stops = [
-    [0.00, [0,   0,   0  ]],
-    [0.20, [0,   0,   128]],
-    [0.40, [0,   128, 192]],
-    [0.60, [0,   192, 0  ]],
-    [0.80, [255, 224, 0  ]],
-    [1.00, [255, 0,   0  ]],
-  ];
-  const lut = new Uint8Array(256 * 4);
-  for (let i = 0; i < 256; i++) {
-    const t = i / 255;
-    let s = 0;
-    while (s < stops.length - 2 && stops[s + 1][0] < t) s++;
-    const [t0, c0] = stops[s];
-    const [t1, c1] = stops[s + 1];
-    const f = (t - t0) / (t1 - t0);
-    lut[i * 4 + 0] = c0[0] + (c1[0] - c0[0]) * f;
-    lut[i * 4 + 1] = c0[1] + (c1[1] - c0[1]) * f;
-    lut[i * 4 + 2] = c0[2] + (c1[2] - c0[2]) * f;
-    lut[i * 4 + 3] = 255;
-  }
-  return lut;
-})();
-
-let wfFloor = 64;
-let wfFrameCount = 0;
-const WF_FLOOR_ALPHA  = 0.3;
-const WF_FLOOR_PERIOD = 10;
-const WF_DYN_RANGE_Q  = 80;
-const WF_SCALE        = 255 / WF_DYN_RANGE_Q;
-const WF_FLOOR_OFFSET = 32;
-
-wfCtx.fillStyle = "#000";
-wfCtx.fillRect(0, 0, SPEC_W, WF_H);
 
 function median256(bytes) {
   const hist = new Uint32Array(256);
@@ -322,33 +308,260 @@ function median256(bytes) {
   return 255;
 }
 
+/* Mode-aware passband bin offsets (in spectrum bins, with 1024 bins
+   spanning 48 kHz so 1 bin = 46.875 Hz). Returns {loBin, hiBin} or null. */
+function passbandBins() {
+  if (!lastPassbandHz) return null;
+  const HZ_PER_BIN = 48000 / SPEC_W;
+  const centerBin = SPEC_W / 2;
+  const widthBins = lastPassbandHz / HZ_PER_BIN;
+  const m = (lastMode || "").toUpperCase();
+  let loHz, hiHz;
+  if (m.indexOf("USB") >= 0 || m.indexOf("DIGI") >= 0 ||
+      m.indexOf("FT")  >= 0 || m.indexOf("RTTY") >= 0) {
+    loHz = 200;
+    hiHz = 200 + lastPassbandHz;
+  } else if (m.indexOf("LSB") >= 0) {
+    loHz = -(200 + lastPassbandHz);
+    hiHz = -200;
+  } else {
+    /* CW/AM/FM: symmetric */
+    loHz = -lastPassbandHz / 2;
+    hiHz =  lastPassbandHz / 2;
+  }
+  const loBin = centerBin + loHz / HZ_PER_BIN;
+  const hiBin = centerBin + hiHz / HZ_PER_BIN;
+  return { loBin, hiBin };
+}
+
+/* --- Spectrum rendering --- */
+function drawSpectrumFlat(bytes) {
+  if (!specSmoothReady) {
+    for (let i = 0; i < SPEC_W; i++) specSmooth[i] = bytes[i];
+    specSmoothReady = true;
+  } else {
+    const a = SPEC_SMOOTH_ALPHA;
+    for (let i = 0; i < SPEC_W; i++) specSmooth[i] += a * (bytes[i] - specSmooth[i]);
+  }
+  if (!specFloorReady) {
+    const m = median256(bytes);
+    for (let i = 0; i < SPEC_W; i++) specFloor[i] = m;
+    specFloorReady = true;
+  }
+  for (let i = 0; i < SPEC_W; i++) {
+    const d = specSmooth[i] - specFloor[i];
+    specFloor[i] += (d > 0 ? SPEC_FLOOR_UP_ALPHA : SPEC_FLOOR_DOWN_ALPHA) * d;
+  }
+
+  const W = specPxW, H = specPxH;
+  sctx.fillStyle = "#000";
+  sctx.fillRect(0, 0, W, H);
+
+  /* Grid */
+  sctx.fillStyle = "#1f2530";
+  for (const dbAbove of [10, 20, 30, 40]) {
+    const q = dbAbove * 2.55;
+    const y = H - 1 - Math.round(q * (H - 1) / SPEC_RANGE_Q);
+    if (y >= 0 && y < H) sctx.fillRect(0, y, W, 1);
+  }
+
+  /* Passband shading: two thin grey vertical bars marking filter edges */
+  const pb = passbandBins();
+  if (pb) {
+    sctx.fillStyle = "var(--passband)";  /* var() in fillStyle does not work */
+    sctx.fillStyle = "#4a5560";
+    const x1 = Math.round(pb.loBin * W / SPEC_W);
+    const x2 = Math.round(pb.hiBin * W / SPEC_W);
+    if (x1 >= 0 && x1 < W) sctx.fillRect(x1, 0, 2, H);
+    if (x2 >= 0 && x2 < W) sctx.fillRect(x2, 0, 2, H);
+  }
+
+  const aboveRaw = (x) => specSmooth[x] - specFloor[x] - SPEC_FLOOR_BIAS;
+  const above = (x) => {
+    let v;
+    if (x < 2 || x >= SPEC_W - 2) v = aboveRaw(x);
+    else v = (aboveRaw(x-2)+aboveRaw(x-1)+aboveRaw(x)+aboveRaw(x+1)+aboveRaw(x+2))*0.2;
+    if (v < 0) v = 0; else if (v > SPEC_RANGE_Q) v = SPEC_RANGE_Q;
+    return v;
+  };
+  const yOf = (bin) => H - 1 - Math.round(above(bin) * (H - 1) / SPEC_RANGE_Q);
+  const xOf = (bin) => Math.round(bin * W / SPEC_W);
+
+  /* Filled curve */
+  sctx.beginPath();
+  sctx.moveTo(0, H);
+  for (let i = 0; i < SPEC_W; i++) sctx.lineTo(xOf(i), yOf(i));
+  sctx.lineTo(W, H);
+  sctx.closePath();
+  sctx.fillStyle = "#003800";
+  sctx.fill();
+
+  /* Outline */
+  sctx.beginPath();
+  sctx.moveTo(0, yOf(0));
+  for (let i = 1; i < SPEC_W; i++) sctx.lineTo(xOf(i), yOf(i));
+  sctx.strokeStyle = "#07e007";
+  sctx.lineWidth = 1.5;
+  sctx.stroke();
+
+  /* Center marker (amber, on top) */
+  sctx.fillStyle = "#ffb95a";
+  sctx.fillRect((W >> 1) - 1, 0, 2, H);
+}
+
+function drawSpectrumRaw(bytes) {
+  const W = specPxW, H = specPxH;
+  sctx.fillStyle = "#000";
+  sctx.fillRect(0, 0, W, H);
+
+  sctx.fillStyle = "#1f2530";
+  for (const db of [-120, -100, -80, -60, -40]) {
+    const q = (db + 130) * 255 / 100;
+    const y = H - 1 - Math.round(q * (H - 1) / 255);
+    sctx.fillRect(0, y, W, 1);
+  }
+
+  const pb = passbandBins();
+  if (pb) {
+    sctx.fillStyle = "#4a5560";
+    const x1 = Math.round(pb.loBin * W / SPEC_W);
+    const x2 = Math.round(pb.hiBin * W / SPEC_W);
+    if (x1 >= 0 && x1 < W) sctx.fillRect(x1, 0, 2, H);
+    if (x2 >= 0 && x2 < W) sctx.fillRect(x2, 0, 2, H);
+  }
+
+  const xOf = (bin) => Math.round(bin * W / SPEC_W);
+
+  sctx.beginPath();
+  sctx.moveTo(0, H);
+  for (let i = 0; i < SPEC_W; i++) {
+    const y = H - 1 - Math.round(bytes[i] * (H - 1) / 255);
+    sctx.lineTo(xOf(i), y);
+  }
+  sctx.lineTo(W, H);
+  sctx.closePath();
+  sctx.fillStyle = "#003800";
+  sctx.fill();
+
+  sctx.beginPath();
+  sctx.moveTo(0, H - 1 - Math.round(bytes[0] * (H - 1) / 255));
+  for (let i = 1; i < SPEC_W; i++) {
+    const y = H - 1 - Math.round(bytes[i] * (H - 1) / 255);
+    sctx.lineTo(xOf(i), y);
+  }
+  sctx.strokeStyle = "#07e007";
+  sctx.lineWidth = 1.5;
+  sctx.stroke();
+
+  sctx.fillStyle = "#ffb95a";
+  sctx.fillRect((W >> 1) - 1, 0, 2, H);
+}
+
+/* --- Waterfall rendering ---
+   Build a row at SPEC_W pixels in an offscreen ImageData, then scroll the
+   visible canvas down by 1 logical pixel and blit the new row at top.
+   Center marker drawn after blit. */
+const wfRow = document.createElement("canvas");
+wfRow.width = SPEC_W; wfRow.height = 1;
+const wfRowCtx = wfRow.getContext("2d");
+const wfRowImg = wfRowCtx.createImageData(SPEC_W, 1);
+
+const wfPalette = (() => {
+  const stops = [
+    [0.00, [0,0,0]],
+    [0.20, [0,0,128]],
+    [0.40, [0,128,192]],
+    [0.60, [0,192,0]],
+    [0.80, [255,224,0]],
+    [1.00, [255,0,0]],
+  ];
+  const lut = new Uint8Array(256 * 4);
+  for (let i = 0; i < 256; i++) {
+    const t = i / 255;
+    let s = 0;
+    while (s < stops.length - 2 && stops[s+1][0] < t) s++;
+    const [t0, c0] = stops[s];
+    const [t1, c1] = stops[s+1];
+    const f = (t - t0) / (t1 - t0);
+    lut[i*4+0] = c0[0] + (c1[0]-c0[0])*f;
+    lut[i*4+1] = c0[1] + (c1[1]-c0[1])*f;
+    lut[i*4+2] = c0[2] + (c1[2]-c0[2])*f;
+    lut[i*4+3] = 255;
+  }
+  return lut;
+})();
+
+let wfFloor = 64;
+let wfFrameCount = 0;
+const WF_FLOOR_ALPHA  = 0.3;
+const WF_FLOOR_PERIOD = 10;
+const WF_DYN_RANGE_Q  = 80;
+const WF_SCALE        = 255 / WF_DYN_RANGE_Q;
+const WF_FLOOR_OFFSET = 32;
+
+wfctx.fillStyle = "#000";
+wfctx.fillRect(0, 0, wfPxW, wfPxH);
+
 function drawWaterfall(bytes) {
   if (++wfFrameCount >= WF_FLOOR_PERIOD) {
     wfFrameCount = 0;
     const m = median256(bytes);
-    wfFloor = WF_FLOOR_ALPHA * (m + 15) + (1 - WF_FLOOR_ALPHA) * wfFloor;  // +15 q-units = +6 dB, matches device
+    wfFloor = WF_FLOOR_ALPHA * (m + 15) + (1 - WF_FLOOR_ALPHA) * wfFloor;
   }
-
-  const floor = wfFloor;
-  const data = wfRow.data;
+  const data = wfRowImg.data;
   for (let x = 0; x < SPEC_W; x++) {
-    let idx = (bytes[x] - floor) * WF_SCALE + WF_FLOOR_OFFSET;
-    if (idx < 0) idx = 0;
-    else if (idx > 255) idx = 255;
+    let idx = (bytes[x] - wfFloor) * WF_SCALE + WF_FLOOR_OFFSET;
+    if (idx < 0) idx = 0; else if (idx > 255) idx = 255;
     idx = idx | 0;
-    const p = idx * 4;
-    const o = x * 4;
-    data[o    ] = wfPalette[p    ];
-    data[o + 1] = wfPalette[p + 1];
-    data[o + 2] = wfPalette[p + 2];
-    data[o + 3] = 255;
+    const p = idx * 4, o = x * 4;
+    data[o]   = wfPalette[p];
+    data[o+1] = wfPalette[p+1];
+    data[o+2] = wfPalette[p+2];
+    data[o+3] = 255;
   }
+  wfRowCtx.putImageData(wfRowImg, 0, 0);
 
-  wfCtx.drawImage(wfCanvas, 0, 1);
-  wfCtx.putImageData(wfRow, 0, 0);
+  /* Scroll existing image down by 1 px, draw new row at y=0 */
+  wfctx.drawImage(wf, 0, 1, wfPxW, wfPxH - 1, 0, 1, wfPxW, wfPxH - 1);
+  /* But the above is a self-blit; safer is to draw to itself with offset: */
+  wfctx.drawImage(wf, 0, 0, wfPxW, wfPxH, 0, 1, wfPxW, wfPxH);
+  wfctx.drawImage(wfRow, 0, 0, SPEC_W, 1, 0, 0, wfPxW, 1);
+
+  /* Center marker */
+  wfctx.fillStyle = "#ffb95a";
+  wfctx.fillRect((wfPxW >> 1) - 1, 0, 2, wfPxH);
 }
 
-/* ---------- WebSocket plumbing ---------- */
+/* --- ResizeObserver: keep canvas internal pixels matched to layout --- */
+function resizeCanvas(canvas, wrap) {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.max(1, Math.floor(wrap.clientWidth  * dpr));
+  const h = Math.max(1, Math.floor(wrap.clientHeight * dpr));
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+    return true;
+  }
+  return false;
+}
+function refreshSizes() {
+  if (resizeCanvas(spec, document.getElementById("spec-wrap"))) {
+    specPxW = spec.width; specPxH = spec.height;
+  }
+  if (resizeCanvas(wf, document.getElementById("wf-wrap"))) {
+    wfPxW = wf.width; wfPxH = wf.height;
+    wfctx.fillStyle = "#000";
+    wfctx.fillRect(0, 0, wfPxW, wfPxH);
+  }
+}
+const ro = new ResizeObserver(refreshSizes);
+ro.observe(document.getElementById("spec-wrap"));
+ro.observe(document.getElementById("wf-wrap"));
+refreshSizes();
+
+/* =====================================================================
+   WebSocket plumbing with auto-reconnect
+   ===================================================================== */
 let ws = null;
 let frameCount = 0;
 let lastFpsAt = performance.now();
@@ -359,36 +572,33 @@ function connectWs() {
   ws.binaryType = "arraybuffer";
 
   ws.onopen = () => {
-    statusEl.textContent = "connected";
-    statusEl.className = "ok";
+    fpsEl.textContent = "connected";
+    fpsEl.classList.remove("bad");
   };
-
   ws.onmessage = (ev) => {
     const buf = new Uint8Array(ev.data);
     if (buf.length < HEADER_LEN + SPEC_W) return;
     if (buf[0] !== FRAME_TYPE_SPECTRUM) return;
     const payload = buf.subarray(HEADER_LEN, HEADER_LEN + SPEC_W);
-    (specFlatten ? drawSpectrumFlat : drawSpectrum)(payload);
+    (specFlatten ? drawSpectrumFlat : drawSpectrumRaw)(payload);
     drawWaterfall(payload);
 
     frameCount++;
     const now = performance.now();
     if (now - lastFpsAt >= 1000) {
       const fps = (frameCount * 1000 / (now - lastFpsAt)).toFixed(1);
-      statusEl.textContent = "connected  " + fps + " fps";
-      statusEl.className = "ok";
+      fpsEl.textContent = fps + " fps";
+      fpsEl.classList.remove("bad");
       frameCount = 0;
       lastFpsAt = now;
     }
   };
-
   ws.onclose = () => {
-    statusEl.textContent = "disconnected, retrying...";
-    statusEl.className = "bad";
+    fpsEl.textContent = "reconnecting";
+    fpsEl.classList.add("bad");
     setTimeout(connectWs, 2000);
   };
-
-  ws.onerror = () => { /* onclose follows; handle there */ };
+  ws.onerror = () => { /* onclose follows */ };
 }
 connectWs();
 </script>
