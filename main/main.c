@@ -74,7 +74,10 @@ void app_main(void)
 
     // Restore last-known VFO frequency (display only; QMX is source of truth).
     if (cfg.last_vfo_hz != 0) {
+        ESP_LOGI(TAG, "Restored last VFO: %lu Hz", (unsigned long)cfg.last_vfo_hz);
         ui_update_frequency(cfg.last_vfo_hz);
+    } else {
+        ESP_LOGI(TAG, "No stored VFO (first boot or cleared NVS)");
     }
     ESP_ERROR_CHECK(cat_init());
 
