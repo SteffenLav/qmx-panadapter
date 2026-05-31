@@ -23,3 +23,10 @@ void ui_set_db_labels(float db_min, float db_max);
 
 // Phase 5.10G: passband indicator (CAT FW or mode default)
 void ui_update_passband_width(uint32_t hz);
+
+// Phase 9 (v0.9.5): read-only getters for the web server status JSON.
+// Updated by the CAT task; readers may observe a torn ASCII string briefly
+// during a mode change. Acceptable for a 1 Hz status poll.
+const char *ui_get_mode_str(void);
+const char *ui_get_band_str(void);
+uint32_t ui_get_passband_width_hz(void);

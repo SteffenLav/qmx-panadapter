@@ -36,6 +36,7 @@ static void touch_event_cb(lv_event_t *e);
 static void settings_button_cb(lv_event_t *e);  // Phase 5.10D
 static uint32_t s_last_qmx_freq_hz = 0;  // updated by ui_update_frequency
 static char s_current_mode[8] = "USB";  // Phase 5.10F: latest CAT mode for snap-aware tuning
+static char s_current_band[8] = "---";  // Phase 9 (v0.9.5): cached band string for web JSON
 static uint32_t s_passband_width_hz = 0;  // Phase 5.10G: 0 = use mode default; else from CAT FW
 
 // Touch-target cursor state (Phase 6.1)
@@ -443,6 +444,8 @@ void ui_update_mode(const char *mode)
 void ui_update_band(const char *band)
 {
     if (!s_band_label || !band) return;
+    strncpy(s_current_band, band, sizeof(s_current_band) - 1);
+    s_current_band[sizeof(s_current_band) - 1] = '\0';
     if (display_lock(100)) {
         char buf[32]; snprintf(buf, sizeof(buf), "Band: %s", band); lv_label_set_text(s_band_label, buf);
         lv_obj_invalidate(s_band_label);
@@ -1236,3 +1239,9 @@ static void drawer_slider_alpha_cb(lv_event_t *e)
     render_set_ema_alpha(alpha);
     settings_set_ema_alpha(alpha);
 }
+
+// ---- Phase 9 (v0.9.5): read-only getters for web JSON ------------------
+
+const char *ui_get_mode_str(void) { return s_current_mode; }
+const char *ui_get_band_str(void) { return s_current_band; }
+uint32_t ui_get_passband_width_hz(void) { return s_passband_width_hz; }
