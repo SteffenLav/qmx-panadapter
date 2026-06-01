@@ -3,14 +3,12 @@
 #include "esp_log.h"
 #include "esp_chip_info.h"
 #include "esp_idf_version.h"
+#include "esp_app_desc.h"
 #include "esp_heap_caps.h"
 #include "hal/efuse_hal.h"
 #include "driver/i2c_master.h"
 #include "bsp/m5stack_tab5.h"
 
-#ifndef FW_VERSION
-#define FW_VERSION "v0.9.7"
-#endif
 
 static const char *TAG = "bsp_info";
 
@@ -66,6 +64,7 @@ void bsp_info_log(void)
     ESP_LOGI(TAG, "heap:     %.1f kB internal free, %.2f MB PSRAM free",
              free_internal / 1024.0f, free_psram / (1024.0f * 1024.0f));
     ESP_LOGI(TAG, "idf:      %s", esp_get_idf_version());
-    ESP_LOGI(TAG, "firmware: %s", FW_VERSION);
+    const esp_app_desc_t *app = esp_app_get_description();
+    ESP_LOGI(TAG, "firmware: %s", app ? app->version : "unknown");
     ESP_LOGI(TAG, "=====================");
 }

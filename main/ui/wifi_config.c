@@ -1,4 +1,4 @@
-// WiFi configuration modal Ã¢â‚¬â€ full-screen overlay for entering SSID/password.
+// WiFi configuration modal - full-screen overlay for entering SSID/password.
 // On Save: persists to NVS via panadapter_wifi_reconnect() and triggers a
 // disconnect/reconnect cycle. On Cancel: closes without changes.
 
@@ -10,7 +10,7 @@
 
 static const char *TAG = "wifi_config";
 
-// Modal state Ã¢â‚¬â€ lazily created on first show.
+// Modal state - lazily created on first show.
 static lv_obj_t *s_modal       = NULL;  // root full-screen overlay
 static lv_obj_t *s_panel       = NULL;  // centred dialog panel
 static lv_obj_t *s_ta_ssid     = NULL;
@@ -84,7 +84,7 @@ static void modal_build(void)
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 
-    // Centred dialog panel Ã¢â‚¬â€ taller now to fit larger fonts
+    // Centred dialog panel - taller now to fit larger fonts
     s_panel = lv_obj_create(s_modal);
     lv_obj_set_size(s_panel, 880, 420);
     lv_obj_align(s_panel, LV_ALIGN_TOP_MID, 0, 24);
@@ -96,21 +96,21 @@ static void modal_build(void)
     lv_obj_set_style_pad_all(s_panel, 24, 0);
     lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Title Ã¢â‚¬â€ larger, brighter
+    // Title - larger, brighter
     lv_obj_t *title = lv_label_create(s_panel);
     lv_label_set_text(title, "WiFi Configuration");
     lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
 
-    // SSID label Ã¢â‚¬â€ larger
+    // SSID label - larger
     lv_obj_t *ssid_lbl = lv_label_create(s_panel);
     lv_label_set_text(ssid_lbl, "SSID");
     lv_obj_set_style_text_color(ssid_lbl, lv_color_hex(0xe0e0e0), 0);
     lv_obj_set_style_text_font(ssid_lbl, &lv_font_montserrat_24, 0);
     lv_obj_align(ssid_lbl, LV_ALIGN_TOP_LEFT, 0, 56);
 
-    // SSID textarea Ã¢â‚¬â€ larger font + taller
+    // SSID textarea - larger font + taller
     s_ta_ssid = lv_textarea_create(s_panel);
     lv_obj_set_size(s_ta_ssid, 820, 60);
     lv_obj_align(s_ta_ssid, LV_ALIGN_TOP_LEFT, 0, 86);
@@ -120,14 +120,14 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_ta_ssid, &lv_font_montserrat_24, 0);
     lv_obj_add_event_cb(s_ta_ssid, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
 
-    // Password label Ã¢â‚¬â€ larger
+    // Password label - larger
     lv_obj_t *pass_lbl = lv_label_create(s_panel);
     lv_label_set_text(pass_lbl, "Password");
     lv_obj_set_style_text_color(pass_lbl, lv_color_hex(0xe0e0e0), 0);
     lv_obj_set_style_text_font(pass_lbl, &lv_font_montserrat_24, 0);
     lv_obj_align(pass_lbl, LV_ALIGN_TOP_LEFT, 0, 160);
 
-    // Password textarea Ã¢â‚¬â€ larger font + taller, masked
+    // Password textarea - larger font + taller, masked
     s_ta_pass = lv_textarea_create(s_panel);
     lv_obj_set_size(s_ta_pass, 820, 60);
     lv_obj_align(s_ta_pass, LV_ALIGN_TOP_LEFT, 0, 190);
@@ -138,7 +138,7 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_ta_pass, &lv_font_montserrat_24, 0);
     lv_obj_add_event_cb(s_ta_pass, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
 
-    // Cancel button Ã¢â‚¬â€ bigger, red-tinted for "destructive" semantics
+    // Cancel button - bigger, red-tinted for "destructive" semantics
     lv_obj_t *cancel_btn = lv_btn_create(s_panel);
     lv_obj_set_size(cancel_btn, 240, 72);
     lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_LEFT, 80, 0);
@@ -153,7 +153,7 @@ static void modal_build(void)
     lv_obj_set_style_text_font(cancel_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(cancel_lbl);
 
-    // Save button Ã¢â‚¬â€ bigger, brighter green
+    // Save button - bigger, brighter green
     lv_obj_t *save_btn = lv_btn_create(s_panel);
     lv_obj_set_size(save_btn, 240, 72);
     lv_obj_align(save_btn, LV_ALIGN_BOTTOM_RIGHT, -80, 0);
@@ -168,7 +168,7 @@ static void modal_build(void)
     lv_obj_set_style_text_font(save_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(save_lbl);
 
-    // Keyboard Ã¢â‚¬â€ child of the modal (so it sits above the backdrop but is
+    // Keyboard - child of the modal (so it sits above the backdrop but is
     // not clipped by the dialog panel). Hidden until a textarea is focused.
     s_keyboard = lv_keyboard_create(s_modal);
     static lv_style_t style_kb_btn;

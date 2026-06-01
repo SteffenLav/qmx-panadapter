@@ -1305,6 +1305,16 @@ void ui_set_flat_mode(bool on)
         if (on) lv_obj_add_state(s_switch_flat, LV_STATE_CHECKED);
         else    lv_obj_remove_state(s_switch_flat, LV_STATE_CHECKED);
     }
+    // Hide absolute dBm labels in flat mode (axis is dB-above-floor; labels misleading).
+    if (s_db_min_label && s_db_max_label) {
+        if (on) {
+            lv_obj_add_flag(s_db_min_label, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_db_max_label, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_remove_flag(s_db_min_label, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(s_db_max_label, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 }
 
 static void drawer_switch_flat_cb(lv_event_t *e)
@@ -1314,6 +1324,15 @@ static void drawer_switch_flat_cb(lv_event_t *e)
     s_flat_ready = false;  /* re-seed floor next time flat mode draws */
     ESP_LOGI(TAG, "flat-spectrum mode: %s", s_flat_mode ? "ON" : "OFF");
     settings_set_flat_mode(s_flat_mode);
+    if (s_db_min_label && s_db_max_label) {
+        if (s_flat_mode) {
+            lv_obj_add_flag(s_db_min_label, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_db_max_label, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_remove_flag(s_db_min_label, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_remove_flag(s_db_max_label, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 }
 
 static void drawer_preset_normal_cb(lv_event_t *e)  { (void)e; drawer_apply_preset(-130, -30, 0.40f); }

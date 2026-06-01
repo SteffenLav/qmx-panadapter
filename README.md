@@ -263,7 +263,7 @@ The displayed dB range is fixed at -130 to -30 dBm, matching commercial SDR conv
 
 ## WiFi configuration
 
-The Tab5 connects to the local network through the on-board ESP32-C6 co-processor via [`esp_hosted`](https://github.com/espressif/esp-hosted) over SDIO. Once online, SNTP syncs UTC time. By itself this isn't visible to the user beyond a log line, but it satisfies the time-reference prerequisite for the upcoming onboard FT8 decoder, the planned network CAT bridge, and an eventual remote-panadapter web UI.
+The Tab5 connects to the local network through the on-board ESP32-C6 co-processor via [`esp_hosted`](https://github.com/espressif/esp-hosted) over SDIO. Once online, SNTP syncs UTC time. By itself this isn't visible to the user beyond a log line, but it satisfies the time-reference prerequisite for the upcoming onboard FT8 decoder and the web UI features that now live in v0.9.0+.
 
 Credentials are entered through a full-screen LVGL modal launched from the **WiFi** button in the settings drawer.
 
@@ -488,7 +488,6 @@ Ideas that fit the project but aren't on the immediate path. Order is rough; app
 
 - **Hide dBm axis labels in flat mode.** Known issue carried over from v0.9.2: the `-30 dBm` / `-130 dBm` labels at the left edge of the spectrum still render in flat mode, where the axis is dB-above-floor and the labels are misleading. Small fix.
 - **Flat-mode tunables in the drawer.** Currently the per-bin floor parameters (`FLAT_FLOOR_BIAS_DB`, `FLAT_RANGE_DB`, smoothing alphas) are compile-time constants. Sliders in the settings drawer plus NVS persistence would let people tune the look without rebuilding.
-- **Network CAT bridge.** TCP server forwarding CAT to the QMX, so WSJT-X / fldigi / N1MM on a PC can talk to the radio through the Tab5 — useful when the QMX is in the shack and the operating position is elsewhere. WiFi STA already in place.
 - **CW decoder.** A Goertzel-based decoder on the demodulated CW passband, with text scrolling under the spectrum. The QMX itself already does this internally; question is whether to mirror its output via CAT or run a parallel decoder on the Tab5.
 - **QMX (small) support.** Same UI, different USB endpoint config and band table. Should be mostly a build-flag matter; the 5-band QMX speaks the same CAT and UAC.
 - **Extended waterfall history.** PSRAM has plenty of room for several minutes of scrollback. Two-finger drag to scrub through history would be a natural UX fit.

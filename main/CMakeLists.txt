@@ -51,6 +51,8 @@ idf_component_register(
         lwip
         esp_http_server
         json
+    PRIV_REQUIRES
+        esp_app_format
     EMBED_TXTFILES
         "net/www/index.html"
 )
