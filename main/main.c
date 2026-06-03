@@ -2,6 +2,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "ft8_test.h"
 #include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "lvgl.h"
@@ -91,5 +92,9 @@ void app_main(void)
     ESP_ERROR_CHECK(render_init());
 
     ESP_LOGI(TAG, "Init complete - main task idle");
+    // Spawn FT8 self-test on a dedicated task (32 KB stack, core 1).
+    // Verifies ft8_lib encoder + monitor + decoder work on ESP32-P4.
+    // Logs PASS/FAIL with per-stage timing once the worker completes.
+    ft8_self_test();
 }
 

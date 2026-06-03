@@ -20,6 +20,7 @@ idf_component_register(
         "net/webserver.c"
         "net/webserver_ws.c"
         "net/rigctld_server.c"
+        "ft8_test.c"
     INCLUDE_DIRS
         "."
         "display"
@@ -51,6 +52,7 @@ idf_component_register(
         lwip
         esp_http_server
         json
+        ft8_lib
     PRIV_REQUIRES
         esp_app_format
     EMBED_TXTFILES
