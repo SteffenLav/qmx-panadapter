@@ -1,0 +1,5 @@
+# Upstream test fixtures (22.6 MB of WAVs + paired TXT decode expectations).
+# Not needed for the firmware build. Re-fetch from kgoba/ft8_lib for offline tests.
+test/
+# Upstream host-only utility scripts (Python research helpers).
+utils/
