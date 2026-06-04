@@ -16,11 +16,15 @@
 #define FT8_TEXT_MAX_LEN          40   // FTX_MAX_MESSAGE_LENGTH is 35
 #define FT8_CALL_TABLE_SIZE       128
 
+#define FT8_GRID_MAX_LEN          7   // "JO45ab" + NUL
+
 typedef struct {
     char     call[FT8_CALL_MAX_LEN];
     char     last_text[FT8_TEXT_MAX_LEN];
+    char     last_grid[FT8_GRID_MAX_LEN];  // remote's grid (empty if unknown)
     int64_t  last_utc;
     int16_t  last_score;
+    int16_t  last_snr_db;  // approx SNR = score - 20 (rough calibration)
     int16_t  last_freq;
     uint16_t heard_count;
     bool     occupied;

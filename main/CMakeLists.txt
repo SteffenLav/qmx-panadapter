@@ -9,6 +9,8 @@ idf_component_register(
         "ui/ft8_screen.c"
         "ui/ft8_screen_view.c"
         "util/status.c"
+        "util/maidenhead.c"
+        "util/dxcc.c"
         "util/battery.c"
         "util/ina226.c"
         "util/bsp_info.c"

@@ -101,6 +101,55 @@ void ft8_screen_init(void)
              FT8_CALL_TABLE_SIZE, (unsigned)sizeof(s_table), s_mutex);
 }
 
+// Parse a Maidenhead grid out of an FT8 message. Grids appear as the
+// last whitespace-separated token of a CQ message ("CQ K1ABC FN42")
+// or the 3rd token of an exchange ("K1ABC K9XYZ FN42"). They are 4 or
+// 6 chars: 2 letters + 2 digits + (optional) 2 letters. Anything that
+// doesn't match (e.g. signal reports "-10", "R+05", "73", "RR73") is
+// ignored. Writes "" to out_grid when no grid is found.
+static bool token_looks_like_grid(const char *t, size_t len)
+{
+    if (len != 4 && len != 6) return false;
+    if (t[0] < 'A' || t[0] > 'R') return false;
+    if (t[1] < 'A' || t[1] > 'R') return false;
+    if (t[2] < '0' || t[2] > '9') return false;
+    if (t[3] < '0' || t[3] > '9') return false;
+    if (len == 6) {
+        // Subsquare letters can be upper or lower a..x; we'll see them upper
+        // from the wire, but be tolerant.
+        char c4 = t[4]; if (c4 >= 'a' && c4 <= 'z') c4 = (char)(c4 - 32);
+        char c5 = t[5]; if (c5 >= 'a' && c5 <= 'z') c5 = (char)(c5 - 32);
+        if (c4 < 'A' || c4 > 'X') return false;
+        if (c5 < 'A' || c5 > 'X') return false;
+    }
+    return true;
+}
+
+static void extract_grid_from_text(const char *msg, char *out_grid, size_t cap)
+{
+    out_grid[0] = '\0';
+    // Scan to last token.
+    const char *p = msg;
+    const char *last_tok = NULL;
+    size_t last_len = 0;
+    while (*p == ' ') p++;
+    while (*p) {
+        const char *tok = p;
+        size_t l = 0;
+        while (p[l] && p[l] != ' ') l++;
+        last_tok = tok;
+        last_len = l;
+        p += l;
+        while (*p == ' ') p++;
+    }
+    if (last_tok && token_looks_like_grid(last_tok, last_len)) {
+        size_t n = last_len;
+        if (n >= cap) n = cap - 1;
+        memcpy(out_grid, last_tok, n);
+        out_grid[n] = '\0';
+    }
+}
+
 void ft8_screen_record_decode(const char *text,
                               int score, int freq_off,
                               int64_t utc_sec)
@@ -127,7 +176,16 @@ void ft8_screen_record_decode(const char *text,
     e->last_text[n] = '\0';
     e->last_utc   = utc_sec;
     e->last_score = (int16_t)score;
+    e->last_snr_db = (int16_t)(score - 20);  // rough SNR proxy
     e->last_freq  = (int16_t)freq_off;
+    // Update grid if this message contains one (don't clobber prior grid
+    // with empty when later messages omit it).
+    char new_grid[FT8_GRID_MAX_LEN];
+    extract_grid_from_text(text, e->last_grid, FT8_GRID_MAX_LEN);
+    extract_grid_from_text(text, new_grid, FT8_GRID_MAX_LEN);
+    if (new_grid[0]) {
+        memcpy(e->last_grid, new_grid, FT8_GRID_MAX_LEN);
+    }
     e->heard_count++;
     ESP_LOGI(TAG, "%s call=%-10s heard=%u score=%d freq=%d text='%s'",
              first_time ? "NEW " : "UPD ",

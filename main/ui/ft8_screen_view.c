@@ -10,6 +10,8 @@
 #include "esp_log.h"
 #include "cat/cat.h"
 #include "storage/settings.h"
+#include "util/maidenhead.h"
+#include "util/dxcc.h"
 
 static const char *TAG = "ft8_view";
 
@@ -41,6 +43,11 @@ static lv_timer_t *s_t_clock    = NULL;
 
 static volatile bool s_refresh_pending = false;
 
+// User's location, derived from my_grid in settings. NaN when unset.
+static double s_user_lat = 0.0;
+static double s_user_lon = 0.0;
+static bool   s_user_loc_valid = false;
+
 // ---------------- helpers ----------------
 
 static int cmp_by_utc_desc(const void *a, const void *b)
@@ -53,11 +60,14 @@ static int cmp_by_utc_desc(const void *a, const void *b)
 }
 
 // Column x-offsets within the row (right pane is 960 px wide).
+// Layout: CALL | MESSAGE | COUNTRY | SNR | KM | BRG | HEARD
 #define COL_CALL_X      12
-#define COL_TEXT_X      160
-#define COL_SCORE_X     520
-#define COL_FREQ_X      640
-#define COL_HEARD_X     770
+#define COL_TEXT_X      150
+#define COL_COUNTRY_X   430
+#define COL_SNR_X       580
+#define COL_KM_X        670
+#define COL_BRG_X       770
+#define COL_HEARD_X     880
 #define COL_RIGHT_EDGE  960
 #define ROW_H           36
 
@@ -84,6 +94,13 @@ static void rebuild_list(void)
 
     lv_obj_clean(s_list);
 
+    const lv_color_t white  = lv_color_hex(0xFFFFFF);
+    const lv_color_t amber  = lv_color_hex(0xFFD700);
+    const lv_color_t dim    = lv_color_hex(0xC0C0C0);
+    const lv_color_t green  = lv_color_hex(0x80FF80);
+    const lv_color_t orange = lv_color_hex(0xFFA040);
+    const lv_color_t grey   = lv_color_hex(0x707070);
+
     for (int i = 0; i < n; i++) {
         lv_obj_t *row = lv_obj_create(s_list);
         lv_obj_set_size(row, RIGHT_W, ROW_H);
@@ -97,26 +114,55 @@ static void rebuild_list(void)
         lv_obj_set_style_border_side(row, LV_BORDER_SIDE_BOTTOM, 0);
         lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
 
-        char b_score[12], b_freq[12], b_heard[12];
-        snprintf(b_score, sizeof(b_score), "%d",  (int)snap[i].last_score);
-        snprintf(b_freq,  sizeof(b_freq),  "%+d", (int)snap[i].last_freq);
-        snprintf(b_heard, sizeof(b_heard), "(%u)", (unsigned)snap[i].heard_count);
+        int snr = (int)snap[i].last_snr_db;
+        char b_snr[12], b_km[12], b_brg[12], b_heard[12];
+        snprintf(b_snr,   sizeof(b_snr),   "%+d dB", snr);
+        snprintf(b_heard, sizeof(b_heard), "(%u)",  (unsigned)snap[i].heard_count);
 
-        const lv_color_t white  = lv_color_hex(0xFFFFFF);
-        const lv_color_t amber  = lv_color_hex(0xFFD700);
-        const lv_color_t dim    = lv_color_hex(0xC0C0C0);
+        // Distance + bearing (only when remote grid is known and user grid is set)
+        if (s_user_loc_valid && snap[i].last_grid[0]) {
+            double rlat = 0.0, rlon = 0.0;
+            if (maidenhead_to_latlon(snap[i].last_grid, &rlat, &rlon)) {
+                double km  = haversine_km(s_user_lat, s_user_lon, rlat, rlon);
+                double brg = bearing_deg (s_user_lat, s_user_lon, rlat, rlon);
+                snprintf(b_km,  sizeof(b_km),  "%d",   (int)(km + 0.5));
+                snprintf(b_brg, sizeof(b_brg), "%d°", (int)(brg + 0.5));
+            } else {
+                snprintf(b_km,  sizeof(b_km),  "--");
+                snprintf(b_brg, sizeof(b_brg), "--");
+            }
+        } else {
+            snprintf(b_km,  sizeof(b_km),  "--");
+            snprintf(b_brg, sizeof(b_brg), "--");
+        }
+
+        // SNR colour band: >=0 green, -5..-1 white, -15..-6 orange, <-15 grey
+        lv_color_t snr_col;
+        if      (snr >=  0) snr_col = green;
+        else if (snr >= -5) snr_col = white;
+        else if (snr >= -15) snr_col = orange;
+        else                 snr_col = grey;
+
+        const char *country = dxcc_lookup(snap[i].call);
+        if (!country) country = "--";
 
         add_row_label(row, snap[i].call,        COL_CALL_X,
                       COL_TEXT_X - COL_CALL_X - 8,
                       LV_TEXT_ALIGN_LEFT,  amber, &lv_font_montserrat_24);
         add_row_label(row, snap[i].last_text,   COL_TEXT_X,
-                      COL_SCORE_X - COL_TEXT_X - 8,
+                      COL_COUNTRY_X - COL_TEXT_X - 8,
                       LV_TEXT_ALIGN_LEFT,  white, &lv_font_montserrat_24);
-        add_row_label(row, b_score,             COL_SCORE_X,
-                      COL_FREQ_X - COL_SCORE_X - 8,
+        add_row_label(row, country,             COL_COUNTRY_X,
+                      COL_SNR_X - COL_COUNTRY_X - 8,
+                      LV_TEXT_ALIGN_LEFT,  dim, &lv_font_montserrat_24);
+        add_row_label(row, b_snr,               COL_SNR_X,
+                      COL_KM_X - COL_SNR_X - 8,
+                      LV_TEXT_ALIGN_RIGHT, snr_col, &lv_font_montserrat_24);
+        add_row_label(row, b_km,                COL_KM_X,
+                      COL_BRG_X - COL_KM_X - 8,
                       LV_TEXT_ALIGN_RIGHT, dim,   &lv_font_montserrat_24);
-        add_row_label(row, b_freq,              COL_FREQ_X,
-                      COL_HEARD_X - COL_FREQ_X - 8,
+        add_row_label(row, b_brg,               COL_BRG_X,
+                      COL_HEARD_X - COL_BRG_X - 8,
                       LV_TEXT_ALIGN_RIGHT, dim,   &lv_font_montserrat_24);
         add_row_label(row, b_heard,             COL_HEARD_X,
                       COL_RIGHT_EDGE - COL_HEARD_X - 16,
@@ -255,14 +301,16 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_radius(hdr, 0, 0);
     lv_obj_set_style_pad_all(hdr, 0, 0);
     lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
-    struct { const char *t; int x; int w; lv_text_align_t a; } cols[5] = {
-        { "CALL",    COL_CALL_X,  COL_TEXT_X - COL_CALL_X - 8,         LV_TEXT_ALIGN_LEFT  },
-        { "MESSAGE", COL_TEXT_X,  COL_SCORE_X - COL_TEXT_X - 8,        LV_TEXT_ALIGN_LEFT  },
-        { "SCORE",   COL_SCORE_X, COL_FREQ_X - COL_SCORE_X - 8,        LV_TEXT_ALIGN_RIGHT },
-        { "FREQ",    COL_FREQ_X,  COL_HEARD_X - COL_FREQ_X - 8,        LV_TEXT_ALIGN_RIGHT },
-        { "HEARD",   COL_HEARD_X, COL_RIGHT_EDGE - COL_HEARD_X - 16,   LV_TEXT_ALIGN_RIGHT },
+    struct { const char *t; int x; int w; lv_text_align_t a; } cols[7] = {
+        { "CALL",    COL_CALL_X,    COL_TEXT_X    - COL_CALL_X    - 8, LV_TEXT_ALIGN_LEFT  },
+        { "MESSAGE", COL_TEXT_X,    COL_COUNTRY_X - COL_TEXT_X    - 8, LV_TEXT_ALIGN_LEFT  },
+        { "COUNTRY", COL_COUNTRY_X, COL_SNR_X     - COL_COUNTRY_X - 8, LV_TEXT_ALIGN_LEFT  },
+        { "SNR",     COL_SNR_X,     COL_KM_X      - COL_SNR_X     - 8, LV_TEXT_ALIGN_RIGHT },
+        { "KM",      COL_KM_X,      COL_BRG_X     - COL_KM_X      - 8, LV_TEXT_ALIGN_RIGHT },
+        { "BRG",     COL_BRG_X,     COL_HEARD_X   - COL_BRG_X     - 8, LV_TEXT_ALIGN_RIGHT },
+        { "HRD",     COL_HEARD_X,   COL_RIGHT_EDGE - COL_HEARD_X  - 16, LV_TEXT_ALIGN_RIGHT },
     };
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < 7; i++) {
         lv_obj_t *lbl = lv_label_create(hdr);
         lv_label_set_text(lbl, cols[i].t);
         lv_obj_set_style_text_color(lbl, lv_color_hex(0x808080), 0);
@@ -313,6 +361,13 @@ void ft8_screen_view_show(void)
             lv_obj_clear_flag(s_lbl_me, LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(s_lbl_me, LV_OBJ_FLAG_HIDDEN);
+        }
+        // Cache user lat/lon for KM/BRG row columns. Invalid when grid empty.
+        s_user_loc_valid = false;
+        if (s.my_grid[0]) {
+            s_user_loc_valid = maidenhead_to_latlon(s.my_grid,
+                                                    &s_user_lat,
+                                                    &s_user_lon);
         }
     }
     ESP_LOGI(TAG, "show");
