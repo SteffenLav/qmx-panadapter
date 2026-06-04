@@ -18,6 +18,7 @@
 #include "iq_balance.h"
 #include "ui_mode.h"
 #include "ft8_screen.h"
+#include "ft8_screen_view.h"
 #include "ft8_test.h"
 
 static const char *TAG = "ui";
@@ -59,6 +60,7 @@ static lv_obj_t *s_band_label = NULL;   // Phase 5.10D: dedicated band slot
 static lv_obj_t *s_mode_label = NULL;
 static lv_obj_t *s_spectrum_obj = NULL;
 static lv_obj_t *s_waterfall_obj = NULL;
+static lv_obj_t *s_label_bar = NULL;
 static lv_obj_t *s_status_label = NULL;  // legacy: single label, kept for compatibility (unused after Phase 5.13)
 static lv_obj_t *s_bot_left   = NULL;
 static lv_obj_t *s_bot_center = NULL;
@@ -163,12 +165,22 @@ static void build_top_bar(lv_obj_t *parent)
     // Avoids the top bar's clipping issue. Positioned absolutely so it
     // straddles the top bar boundary and extends into the spectrum area.
     s_burger_btn = lv_btn_create(parent);  /* parent = screen */
-    lv_obj_set_size(s_burger_btn, 80, 80);
-    lv_obj_align(s_burger_btn, LV_ALIGN_TOP_RIGHT, -4, 10);
-    lv_obj_add_event_cb(s_burger_btn, settings_button_cb, LV_EVENT_CLICKED, NULL);  // Phase 5.10D
+    // Step 4c.2 polish: 60x60 (top-bar height), dim theme, flush in top-right.
+    // Visible region only; touch-to-tune deadzone is a separate coordinate
+    // filter in touch_event_cb and is unaffected by this resize.
+    lv_obj_set_size(s_burger_btn, 60, 60);
+    lv_obj_align(s_burger_btn, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(s_burger_btn, lv_color_hex(0x202028), 0);
+    lv_obj_set_style_bg_opa(s_burger_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_burger_btn, lv_color_hex(0x303030), 0);
+    lv_obj_set_style_border_width(s_burger_btn, 1, 0);
+    lv_obj_set_style_radius(s_burger_btn, 0, 0);
+    lv_obj_set_style_shadow_width(s_burger_btn, 0, 0);
+    lv_obj_add_event_cb(s_burger_btn, settings_button_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *blbl = lv_label_create(s_burger_btn);
     lv_label_set_text(blbl, LV_SYMBOL_LIST);
-    lv_obj_set_style_text_font(blbl, &lv_font_montserrat_32, 0);  // Phase 5.10I: fill the 80x80 button, but not too prominent
+    lv_obj_set_style_text_color(blbl, lv_color_hex(0xC0C0C0), 0);
+    lv_obj_set_style_text_font(blbl, &lv_font_montserrat_24, 0);
     lv_obj_center(blbl);
 }
 
@@ -240,6 +252,7 @@ static lv_obj_t *s_tick_labels[5] = { NULL, NULL, NULL, NULL, NULL };
 static void build_label_bar(lv_obj_t *parent)
 {
     lv_obj_t *bar = lv_obj_create(parent);
+    s_label_bar = bar;
     lv_obj_set_size(bar, DISPLAY_H_RES, LABEL_BAR_H);
     lv_obj_align(bar, LV_ALIGN_TOP_LEFT, 0, TOP_BAR_H + SPECTRUM_H);
     lv_obj_set_style_bg_color(bar, lv_color_hex(0x000000), 0);
@@ -395,6 +408,7 @@ void ui_init(lv_display_t *disp)
     build_label_bar(scr);
     build_waterfall(scr);
     build_bottom_bar(scr);
+    ft8_screen_view_init(scr);
 
     display_unlock();
 
@@ -403,6 +417,10 @@ void ui_init(lv_display_t *disp)
 
     // Hidden 80x80 long-press screenshot region in top-left
     screenshot_init(scr);
+    // Step 4c.2 fix: ensure the screenshot region stays on top of the
+    // FT8 container (which was created later and otherwise wins z-order
+    // wherever they overlap in the top 20 px).
+    lv_obj_move_foreground(screenshot_get_btn());
     ESP_LOGI(TAG, "UI built: top=%dpx spectrum=%dpx labels=%dpx waterfall=%dpx bottom=%dpx",
              TOP_BAR_H, SPECTRUM_H, LABEL_BAR_H, WATERFALL_H, BOTTOM_BAR_H);
 }
@@ -1455,9 +1473,19 @@ static void drawer_mode_btn_cb(lv_event_t *e)
              cur  == UI_MODE_FT8 ? "FT8" : "Panadapter",
              next == UI_MODE_FT8 ? "FT8" : "Panadapter");
     ui_mode_set(next);
+    // Swap visible widgets. Top/bottom bars stay visible in both modes.
     if (next == UI_MODE_FT8) {
-        // Respawn the FT8 task; it self-deleted on the previous exit.
+        if (s_spectrum_obj)  lv_obj_add_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN);
+        if (s_label_bar)     lv_obj_add_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN);
+        if (s_waterfall_obj) lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN);
+        ft8_screen_view_show();
+        // Respawn the FT8 task; it self-deleted on previous exit.
         ft8_self_test();
+    } else {
+        ft8_screen_view_hide();
+        if (s_spectrum_obj)  lv_obj_clear_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN);
+        if (s_label_bar)     lv_obj_clear_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN);
+        if (s_waterfall_obj) lv_obj_clear_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN);
     }
     ui_refresh_mode_button_label();
     // Close the drawer after toggling. UX nicety, and (4c.1 finding)

@@ -6,6 +6,7 @@ idf_component_register(
         "ui/wifi_config.c"
         "ui/ui_mode.c"
         "ui/ft8_screen.c"
+        "ui/ft8_screen_view.c"
         "util/status.c"
         "util/battery.c"
         "util/ina226.c"

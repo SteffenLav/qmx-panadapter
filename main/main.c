@@ -101,7 +101,8 @@ void app_main(void)
     // flash-and-watch decode flow keeps working. Step 4c will let
     // the user toggle from the settings drawer.
     ft8_screen_init();
-    ui_mode_set(UI_MODE_FT8);
-    ft8_self_test();
+    // Step 4c.2: boot into panadapter mode. FT8 spawns on first
+    // toggle via the drawer Mode button (drawer_mode_btn_cb in ui.c).
+    ui_mode_set(UI_MODE_PANADAPTER);
 }
 

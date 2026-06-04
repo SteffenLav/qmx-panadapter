@@ -44,6 +44,7 @@
 #include "cat/cat.h"
 #include "ui/ui_mode.h"
 #include "ui/ft8_screen.h"
+#include "ui/ft8_screen_view.h"
 
 static const char *TAG = "ft8_test";
 
@@ -235,6 +236,9 @@ static void ft8_task(void *arg)
                 (unsigned)heap_i, (unsigned)heap_p);
         }
 
+        // Step 4c.2: tell the FT8 LVGL view a slot finished so it can
+        // snapshot the decode table and rebuild the list.
+        ft8_screen_view_request_refresh();
         slot_idx++;
         // Brief yield - slot boundary wait will dominate.
         vTaskDelay(pdMS_TO_TICKS(10));

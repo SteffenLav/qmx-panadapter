@@ -12,6 +12,7 @@
 #include "bsp/esp-bsp.h"
 
 static const char *TAG = "SCREENSHOT";
+static lv_obj_t *s_btn = NULL;
 
 // Base64 alphabet
 static const char B64[] =
@@ -145,6 +146,7 @@ void screenshot_init(lv_obj_t *parent)
     }
 
     lv_obj_t *btn = lv_obj_create(parent);
+    s_btn = btn;
     lv_obj_set_size(btn, 80, 80);
     lv_obj_set_pos(btn, 0, 0);
     lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, 0);
@@ -156,3 +158,5 @@ void screenshot_init(lv_obj_t *parent)
 
     ESP_LOGI(TAG, "hidden 80x80 capture region at (0,0) ready");
 }
+
+lv_obj_t *screenshot_get_btn(void) { return s_btn; }
