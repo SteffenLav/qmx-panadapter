@@ -20,6 +20,8 @@ static const char *TAG = "settings";
 #define KEY_IQ_ENABLED  "iq_en"
 #define KEY_FLAT_MODE   "flat_md"
 #define KEY_WIFI_SSID   "wifi_ssid"
+#define KEY_MY_CALL     "my_call"
+#define KEY_MY_GRID     "my_grid"
 #define KEY_WIFI_PASS   "wifi_pass"
 #define KEY_LAST_VFO   "last_vfo"
 #define KEY_CW_PITCH   "cw_pitch"
@@ -48,6 +50,8 @@ static const char *TAG = "settings";
 #define DIRTY_LAST_VFO  (1u << 6)
 #define DIRTY_CW_PITCH  (1u << 8)
 #define DIRTY_COLORMAP  (1u << 9)
+#define DIRTY_MY_CALL   (1u << 10)
+#define DIRTY_MY_GRID   (1u << 11)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -124,6 +128,8 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_IQ_ENABLED) nvs_set_u8(s_nvs, KEY_IQ_ENABLED, snap.iq_enabled ? 1 : 0);
         if (dirty_local & DIRTY_FLAT_MODE)  nvs_set_u8(s_nvs, KEY_FLAT_MODE,  snap.flat_mode    ? 1 : 0);
         if (dirty_local & DIRTY_WIFI_SSID)  nvs_set_str(s_nvs, KEY_WIFI_SSID, snap.wifi_ssid);
+        if (dirty_local & DIRTY_MY_CALL)    nvs_set_str(s_nvs, KEY_MY_CALL,   snap.my_callsign);
+        if (dirty_local & DIRTY_MY_GRID)    nvs_set_str(s_nvs, KEY_MY_GRID,   snap.my_grid);
         if (dirty_local & DIRTY_WIFI_PASS)  nvs_set_str(s_nvs, KEY_WIFI_PASS, snap.wifi_pass);
         if (dirty_local & DIRTY_LAST_VFO)  nvs_set_u32(s_nvs, KEY_LAST_VFO, snap.last_vfo_hz);
         if (dirty_local & DIRTY_CW_PITCH)  nvs_set_u16(s_nvs, KEY_CW_PITCH, snap.cw_pitch_hz);
@@ -206,6 +212,14 @@ void settings_load_all(qmx_settings_t *out)
     nvs_get_str(s_nvs, KEY_WIFI_SSID, out->wifi_ssid, &sz);
     sz = sizeof(out->wifi_pass);
     nvs_get_str(s_nvs, KEY_WIFI_PASS, out->wifi_pass, &sz);
+
+    // FT8 operator identity
+    out->my_callsign[0] = '\0';
+    sz = sizeof(out->my_callsign);
+    nvs_get_str(s_nvs, KEY_MY_CALL, out->my_callsign, &sz);
+    out->my_grid[0] = '\0';
+    sz = sizeof(out->my_grid);
+    nvs_get_str(s_nvs, KEY_MY_GRID, out->my_grid, &sz);
 
     ESP_LOGI(TAG, "loaded: db=[%.1f..%.1f] ema=%.2f iq=%d",
              out->db_min, out->db_max, out->ema_alpha, out->iq_enabled);
@@ -343,4 +357,32 @@ void settings_set_colormap_idx(uint8_t idx)
     s_pending.colormap_idx = idx;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_COLORMAP);
+}
+
+void settings_set_my_callsign(const char *call)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (call) {
+        strncpy(s_pending.my_callsign, call, sizeof(s_pending.my_callsign) - 1);
+        s_pending.my_callsign[sizeof(s_pending.my_callsign) - 1] = '\0';
+    } else {
+        s_pending.my_callsign[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_MY_CALL);
+}
+
+void settings_set_my_grid(const char *grid)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (grid) {
+        strncpy(s_pending.my_grid, grid, sizeof(s_pending.my_grid) - 1);
+        s_pending.my_grid[sizeof(s_pending.my_grid) - 1] = '\0';
+    } else {
+        s_pending.my_grid[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_MY_GRID);
 }

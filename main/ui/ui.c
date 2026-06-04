@@ -15,6 +15,7 @@
 #include "screenshot.h"
 #include "settings.h"
 #include "wifi_config.h"
+#include "identity_config.h"
 #include "iq_balance.h"
 #include "ui_mode.h"
 #include "ft8_screen.h"
@@ -86,6 +87,7 @@ static void drawer_preset_normal_cb(lv_event_t *e);
 static void drawer_preset_dx_cb(lv_event_t *e);
 static void drawer_preset_strong_cb(lv_event_t *e);
 static void drawer_wifi_btn_cb(lv_event_t *e);
+static void drawer_identity_btn_cb(lv_event_t *e);
 static void drawer_mode_btn_cb(lv_event_t *e);
 static void ui_refresh_mode_button_label(void);
 static void drawer_slider_db_min_cb(lv_event_t *e);
@@ -1159,6 +1161,20 @@ static void drawer_build(void)
         lv_obj_center(lbl);
         y += 72;
     }
+    // Operator identity button -- full width (callsign + grid for FT8 TX)
+    {
+        lv_obj_t *btn = lv_btn_create(s_drawer);
+        lv_obj_set_size(btn, DRAWER_W - 32, 56);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, y);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2c4d6e), 0);
+        lv_obj_add_event_cb(btn, drawer_identity_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, "Identity");
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_center(lbl);
+        y += 72;
+    }
 
     // dB Range section header
     lv_obj_t *db_hdr = lv_label_create(s_drawer);
@@ -1377,6 +1393,7 @@ static void drawer_preset_normal_cb(lv_event_t *e)  { (void)e; drawer_apply_pres
 static void drawer_preset_dx_cb(lv_event_t *e)      { (void)e; drawer_apply_preset(-130, -50, 0.60f); }
 static void drawer_preset_strong_cb(lv_event_t *e)  { (void)e; drawer_apply_preset(-110, -20, 0.20f); }
 static void drawer_wifi_btn_cb(lv_event_t *e)       { (void)e; wifi_config_modal_show(); }
+static void drawer_identity_btn_cb(lv_event_t *e)   { (void)e; identity_config_modal_show(); }
 
 static void drawer_slider_db_min_cb(lv_event_t *e)
 {

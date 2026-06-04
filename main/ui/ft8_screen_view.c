@@ -9,6 +9,7 @@
 
 #include "esp_log.h"
 #include "cat/cat.h"
+#include "storage/settings.h"
 
 static const char *TAG = "ft8_view";
 
@@ -31,6 +32,7 @@ static lv_obj_t *s_lbl_freq     = NULL;
 static lv_obj_t *s_lbl_utc      = NULL;
 static lv_obj_t *s_lbl_count    = NULL;   // slot countdown
 static lv_obj_t *s_lbl_heard    = NULL;   // unique callsigns
+static lv_obj_t *s_lbl_me       = NULL;   // "ME: CALL GRID" (if set)
 
 static lv_obj_t *s_list         = NULL;
 
@@ -225,6 +227,14 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_lbl_heard, &lv_font_montserrat_24, 0);
     lv_obj_set_pos(s_lbl_heard, 0, 300);
 
+    // ME: callsign + grid (hidden until set via Identity modal)
+    s_lbl_me = lv_label_create(s_left_pane);
+    lv_label_set_text(s_lbl_me, "");
+    lv_obj_set_style_text_color(s_lbl_me, lv_color_hex(0xA0FFA0), 0);
+    lv_obj_set_style_text_font(s_lbl_me, &lv_font_montserrat_24, 0);
+    lv_obj_set_pos(s_lbl_me, 0, 360);
+    lv_obj_add_flag(s_lbl_me, LV_OBJ_FLAG_HIDDEN);
+
     // Right decode list
     s_right_pane = lv_obj_create(s_container);
     lv_obj_set_size(s_right_pane, RIGHT_W, MID_H);
@@ -287,6 +297,24 @@ void ft8_screen_view_show(void)
     if (!s_container) return;
     lv_obj_clear_flag(s_container, LV_OBJ_FLAG_HIDDEN);
     s_refresh_pending = true;   // force immediate first paint
+    // Refresh the ME label from NVS (call/grid may have been edited
+    // since last show).
+    if (s_lbl_me) {
+        qmx_settings_t s;
+        settings_load_all(&s);
+        if (s.my_callsign[0]) {
+            char buf[40];
+            if (s.my_grid[0]) {
+                snprintf(buf, sizeof(buf), "ME: %s %s", s.my_callsign, s.my_grid);
+            } else {
+                snprintf(buf, sizeof(buf), "ME: %s", s.my_callsign);
+            }
+            lv_label_set_text(s_lbl_me, buf);
+            lv_obj_clear_flag(s_lbl_me, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_lbl_me, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
     ESP_LOGI(TAG, "show");
 }
 

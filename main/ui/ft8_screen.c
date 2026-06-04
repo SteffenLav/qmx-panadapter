@@ -12,22 +12,59 @@ static const char *TAG = "ft8_screen";
 static ft8_call_t s_table[FT8_CALL_TABLE_SIZE];
 static SemaphoreHandle_t s_mutex = NULL;
 
-// Extract the 2nd whitespace-separated token from msg into out_call.
-// FT8 message convention: 2nd token is the transmitter in both CQ
-// and QSO forms. "CQ DX X" mis-attributes to "DX" (rare edge case).
+// Extract the transmitter callsign from an FT8 message.
+//
+// FT8 message forms:
+//   "CQ K1ABC"             -> K1ABC  (plain CQ, 2nd token)
+//   "CQ DX K1ABC"          -> K1ABC  (directional CQ, 3rd token)
+//   "CQ NA K1ABC"          -> K1ABC  (continent-directional CQ)
+//   "CQ POTA K1ABC"        -> K1ABC  (arbitrary directional)
+//   "K9XYZ K1ABC FN42"     -> K1ABC  (QSO reply, source = 2nd token)
+//   "K9XYZ K1ABC -10"      -> K1ABC  (signal report)
+//
+// Rule (matches WSJT-X heuristic in packjt77.f90): if the 1st token
+// is exactly "CQ" and the 2nd token contains no digit, treat it as
+// a directional qualifier and take the 3rd token. Otherwise take
+// the 2nd token. Real callsigns nearly always contain a digit;
+// directional tokens (DX, NA, EU, AS, AF, SA, OC, POTA, etc.) do not.
+static bool token_has_digit(const char *t, size_t len)
+{
+    for (size_t i = 0; i < len; i++) {
+        if (t[i] >= '0' && t[i] <= '9') return true;
+    }
+    return false;
+}
+
 static bool extract_remote_call(const char *msg, char *out_call, size_t cap)
 {
+    // Locate token starts/lengths for up to 3 tokens.
+    const char *t[3] = {NULL, NULL, NULL};
+    size_t      len[3] = {0, 0, 0};
+    int n = 0;
     while (*msg == ' ') msg++;
-    while (*msg && *msg != ' ') msg++;
-    while (*msg == ' ') msg++;
-    if (!*msg) return false;
-    size_t i = 0;
-    while (msg[i] && msg[i] != ' ' && i + 1 < cap) {
-        out_call[i] = msg[i];
-        i++;
+    while (*msg && n < 3) {
+        t[n] = msg;
+        size_t l = 0;
+        while (msg[l] && msg[l] != ' ') l++;
+        len[n] = l;
+        n++;
+        msg += l;
+        while (*msg == ' ') msg++;
     }
-    out_call[i] = '\0';
-    return i > 0;
+    if (n < 2) return false;
+
+    // Pick source token: 3rd if 1st is "CQ" and 2nd has no digit.
+    int pick = 1;  // default 2nd token
+    bool first_is_cq = (len[0] == 2 && t[0][0] == 'C' && t[0][1] == 'Q');
+    if (first_is_cq && n >= 3 && !token_has_digit(t[1], len[1])) {
+        pick = 2;
+    }
+
+    size_t out_len = len[pick];
+    if (out_len >= cap) out_len = cap - 1;
+    memcpy(out_call, t[pick], out_len);
+    out_call[out_len] = '\0';
+    return out_len > 0;
 }
 
 // Caller must hold s_mutex.
