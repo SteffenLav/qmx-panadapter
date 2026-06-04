@@ -64,3 +64,16 @@ esp_err_t cat_set_mode(const char *mode);
  *         ESP_ERR_TIMEOUT if rate-limited.
  */
 esp_err_t cat_set_passband_hz(uint32_t hz);
+
+#include <stdbool.h>
+
+/**
+ * @brief Returns true once the QMX has fully booted on the CAT link.
+ *
+ * Set when the first FW (passband width) response is parsed, which is
+ * the last leg of the CDC-open -> Q9 1; -> FA -> MD -> FW handshake.
+ * Empirically this is the earliest moment the QMX is producing clean,
+ * mode-correct I/Q on the USB sound card.
+ * Cleared on QMX USB disconnect.
+ */
+bool cat_is_ready(void);
