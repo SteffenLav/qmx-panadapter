@@ -70,6 +70,14 @@ static int    s_ft8_target = 0;
 static volatile bool s_ft8_active = false;
 static float s_ft8_mix_buf[DSP_FFT_SIZE];
 static float s_ft8_dec_buf[DSP_FFT_SIZE / 4];
+// Debug instrumentation: once-per-second log of FT8 branch activity.
+static uint32_t s_ft8_iter_count = 0;
+static uint32_t s_ft8_total_n_out = 0;
+static int64_t  s_ft8_last_log_us = 0;
+static uint64_t s_ft8_read_us = 0;
+static uint64_t s_ft8_work_us = 0;
+static uint32_t s_ft8_slow_reads = 0;
+static uint32_t s_ft8_slow_works = 0;
 
 esp_err_t dsp_ft8_capture(float *dst_180000, uint32_t timeout_ms)
 {
@@ -318,6 +326,13 @@ static void fft_task(void *arg)
         // shifts QMX +12 kHz IF to DC, then /4 FIR decimator.
         // Skip DC blocker / FFT / render push during capture.
         if (s_ft8_active) {
+            static int64_t s_prev_work_end_us = 0;
+            int64_t t_read_done = esp_timer_get_time();
+            if (s_prev_work_end_us != 0) {
+                int64_t dt = t_read_done - s_prev_work_end_us;
+                s_ft8_read_us += dt;
+                if (dt > 30000) s_ft8_slow_reads++;
+            }
             for (int i = 0; i < DSP_FFT_SIZE; i += 4) {
                 s_ft8_mix_buf[i + 0] =  (float)samples[2*(i+0)];      // +I
                 s_ft8_mix_buf[i + 1] =  (float)samples[2*(i+1) + 1];  // +Q
@@ -340,6 +355,33 @@ static void fft_task(void *arg)
             }
             if (s_ft8_idx >= s_ft8_target) {
                 xSemaphoreGive(s_ft8_done_sem);
+            }
+            int64_t t_work_end = esp_timer_get_time();
+            int64_t work_dt = t_work_end - t_read_done;
+            s_ft8_work_us += work_dt;
+            if (work_dt > 10000) s_ft8_slow_works++;
+            s_prev_work_end_us = t_work_end;
+            s_ft8_iter_count++;
+            s_ft8_total_n_out += n_out;
+            int64_t now = t_work_end;
+            if (now - s_ft8_last_log_us > 1000000) {
+                uint32_t n = s_ft8_iter_count ? s_ft8_iter_count : 1;
+                ESP_LOGI(TAG,
+                    "FT8 br: %u iters %u smp idx=%d/%d  read_avg=%uus work_avg=%uus  slow_r=%u slow_w=%u",
+                    (unsigned)s_ft8_iter_count,
+                    (unsigned)s_ft8_total_n_out,
+                    s_ft8_idx, s_ft8_target,
+                    (unsigned)(s_ft8_read_us / n),
+                    (unsigned)(s_ft8_work_us / n),
+                    (unsigned)s_ft8_slow_reads,
+                    (unsigned)s_ft8_slow_works);
+                s_ft8_iter_count = 0;
+                s_ft8_total_n_out = 0;
+                s_ft8_read_us = 0;
+                s_ft8_work_us = 0;
+                s_ft8_slow_reads = 0;
+                s_ft8_slow_works = 0;
+                s_ft8_last_log_us = now;
             }
             continue;
         }

@@ -43,6 +43,7 @@
 #include "dsp.h"
 #include "cat/cat.h"
 #include "ui/ui_mode.h"
+#include "ui/ft8_screen.h"
 
 static const char *TAG = "ft8_test";
 
@@ -54,41 +55,6 @@ static const char *TAG = "ft8_test";
 
 // Minimum sane Unix epoch: 2023-11-14. Anything below = SNTP not synced.
 #define EPOCH_SANE_MIN        1700000000
-
-// ----- Decode ring buffer ---------------------------------------------------
-// Single producer (this task), no consumer yet. Step 4c will add UI reads
-// and a mutex when needed. ~3 KB BSS, internal RAM is fine.
-
-#define FT8_DECODE_RING_SIZE  64
-
-typedef struct {
-    int64_t utc_sec;                      // slot start time
-    char    text[FTX_MAX_MESSAGE_LENGTH]; // null-terminated decoded message
-    int16_t score;
-    int16_t freq_off;
-} ft8_decode_t;
-
-static ft8_decode_t s_decode_ring[FT8_DECODE_RING_SIZE];
-static int s_decode_head  = 0;   // index of next write slot
-static int s_decode_total = 0;   // cumulative count across reboot
-
-static void decode_ring_push(int64_t utc_sec, const char *text,
-                             int score, int freq_off)
-{
-    ft8_decode_t *e = &s_decode_ring[s_decode_head];
-    e->utc_sec  = utc_sec;
-    e->score    = (int16_t)score;
-    e->freq_off = (int16_t)freq_off;
-    // memcpy + manual NUL, not strncpy: GCC -Wstringop-truncation
-    // errors on strncpy with sizeof-1 because the compiler can prove
-    // the source may equal the buffer size. Truncate explicitly.
-    size_t n = strlen(text);
-    if (n >= sizeof(e->text)) n = sizeof(e->text) - 1;
-    memcpy(e->text, text, n);
-    e->text[n] = '\0';
-    s_decode_head = (s_decode_head + 1) % FT8_DECODE_RING_SIZE;
-    s_decode_total++;
-}
 
 // ----- Boot-time gating helpers ---------------------------------------------
 
@@ -184,8 +150,9 @@ static esp_err_t process_one_slot(float *audio, monitor_t *mon,
             n_decoded++;
             ESP_LOGI(TAG, "decoded: '%s' (score=%d freq_off=%d)",
                      text, heap[i].score, heap[i].freq_offset);
-            decode_ring_push(slot_sec, text,
-                             heap[i].score, heap[i].freq_offset);
+            ft8_screen_record_decode(text,
+                                     heap[i].score, heap[i].freq_offset,
+                                     slot_sec);
         }
     }
     int64_t t_dec = esp_timer_get_time();
@@ -257,10 +224,9 @@ static void ft8_task(void *arg)
         if (e == ESP_OK) {
             ESP_LOGI(TAG,
                 "slot %d UTC %lld: cap=%dms mon=%dms dec=%dms "
-                "cand=%d dec=%d (total=%d) heap_i=%uKB heap_p=%uKB",
+                "cand=%d dec=%d heap_i=%uKB heap_p=%uKB",
                 slot_idx, (long long)slot_sec,
                 cap_ms, mon_ms, dec_ms, n_cand, n_decoded,
-                s_decode_total,
                 (unsigned)heap_i, (unsigned)heap_p);
         } else {
             ESP_LOGW(TAG,
@@ -275,8 +241,11 @@ static void ft8_task(void *arg)
     }
 
     // Mode switched away from FT8 (4c will trigger this from UI).
-    // Free the slot buffer and exit; respawn on next FT8 entry.
+    // Free monitor's internal allocations (~200 KB internal heap:
+    // waterfall mag buffer + fft_work + window + last_frame) and the
+    // slot buffer (~720 KB PSRAM), then exit. Respawn on next FT8 entry.
     ESP_LOGI(TAG, "ft8_task exiting (mode changed); processed %d slots", slot_idx);
+    monitor_free(&mon);
     heap_caps_free(audio);
     vTaskDelete(NULL);
 }

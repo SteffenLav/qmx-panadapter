@@ -22,6 +22,7 @@
 #include "wifi.h"
 #include "iq_balance.h"
 #include "ui_mode.h"
+#include "ft8_screen.h"
 
 static const char *TAG = "main";
 
@@ -99,6 +100,7 @@ void app_main(void)
     // Step 4b v0.10: boot directly into FT8 mode so the existing
     // flash-and-watch decode flow keeps working. Step 4c will let
     // the user toggle from the settings drawer.
+    ft8_screen_init();
     ui_mode_set(UI_MODE_FT8);
     ft8_self_test();
 }

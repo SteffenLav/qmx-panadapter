@@ -16,8 +16,12 @@
 #include "settings.h"
 #include "wifi_config.h"
 #include "iq_balance.h"
+#include "ui_mode.h"
+#include "ft8_screen.h"
+#include "ft8_test.h"
 
 static const char *TAG = "ui";
+static lv_obj_t *s_mode_btn_lbl = NULL;
 
 // Layout constants (1280x720)
 #define TOP_BAR_H       60
@@ -80,6 +84,8 @@ static void drawer_preset_normal_cb(lv_event_t *e);
 static void drawer_preset_dx_cb(lv_event_t *e);
 static void drawer_preset_strong_cb(lv_event_t *e);
 static void drawer_wifi_btn_cb(lv_event_t *e);
+static void drawer_mode_btn_cb(lv_event_t *e);
+static void ui_refresh_mode_button_label(void);
 static void drawer_slider_db_min_cb(lv_event_t *e);
 static void drawer_slider_db_max_cb(lv_event_t *e);
 static void drawer_slider_alpha_cb(lv_event_t *e);
@@ -1107,6 +1113,20 @@ static void drawer_build(void)
         y += btn_h + 16;
     }
 
+    // FT8/Panadapter mode toggle -- full width
+    {
+        lv_obj_t *btn = lv_btn_create(s_drawer);
+        lv_obj_set_size(btn, DRAWER_W - 32, 56);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, y);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2c4d6e), 0);
+        lv_obj_add_event_cb(btn, drawer_mode_btn_cb, LV_EVENT_CLICKED, NULL);
+        s_mode_btn_lbl = lv_label_create(btn);
+        lv_obj_set_style_text_font(s_mode_btn_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(s_mode_btn_lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_center(s_mode_btn_lbl);
+        ui_refresh_mode_button_label();
+        y += 72;
+    }
     // WiFi configuration button -- full width
     {
         lv_obj_t *btn = lv_btn_create(s_drawer);
@@ -1407,3 +1427,41 @@ static void drawer_dropdown_cmap_cb(lv_event_t *e)
 const char *ui_get_mode_str(void) { return s_current_mode; }
 const char *ui_get_band_str(void) { return s_current_band; }
 uint32_t ui_get_passband_width_hz(void) { return s_passband_width_hz; }
+
+// Step 4c.1 v0.10: drawer mode toggle.
+//
+// Tap flips ui_mode between PANADAPTER and FT8. On entry to FT8 we
+// respawn ft8_task (it self-deletes on mode-exit, so we re-spawn
+// each time the user re-enters FT8 mode). On exit, fft_task drops
+// back to its panadapter path (DC blocker + FFT + spectrum push)
+// and the waterfall resumes.
+//
+// 4c.2 will add the LVGL screen switch alongside this.
+static void ui_refresh_mode_button_label(void)
+{
+    if (!s_mode_btn_lbl) return;
+    ui_mode_t m = ui_mode_get();
+    lv_label_set_text(s_mode_btn_lbl,
+                      m == UI_MODE_FT8 ? "Mode: FT8 (tap for panadapter)"
+                                       : "Mode: Panadapter (tap for FT8)");
+}
+
+static void drawer_mode_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    ui_mode_t cur = ui_mode_get();
+    ui_mode_t next = (cur == UI_MODE_FT8) ? UI_MODE_PANADAPTER : UI_MODE_FT8;
+    ESP_LOGI(TAG, "Mode toggle: %s -> %s",
+             cur  == UI_MODE_FT8 ? "FT8" : "Panadapter",
+             next == UI_MODE_FT8 ? "FT8" : "Panadapter");
+    ui_mode_set(next);
+    if (next == UI_MODE_FT8) {
+        // Respawn the FT8 task; it self-deleted on the previous exit.
+        ft8_self_test();
+    }
+    ui_refresh_mode_button_label();
+    // Close the drawer after toggling. UX nicety, and (4c.1 finding)
+    // an open drawer keeps LVGL busy enough to starve audio/fft tasks
+    // and stall the next FT8 capture.
+    drawer_close();
+}
