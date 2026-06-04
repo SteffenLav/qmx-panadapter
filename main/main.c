@@ -21,6 +21,7 @@
 #include "settings.h"
 #include "wifi.h"
 #include "iq_balance.h"
+#include "ui_mode.h"
 
 static const char *TAG = "main";
 
@@ -95,6 +96,10 @@ void app_main(void)
     // Spawn FT8 self-test on a dedicated task (32 KB stack, core 1).
     // Verifies ft8_lib encoder + monitor + decoder work on ESP32-P4.
     // Logs PASS/FAIL with per-stage timing once the worker completes.
+    // Step 4b v0.10: boot directly into FT8 mode so the existing
+    // flash-and-watch decode flow keeps working. Step 4c will let
+    // the user toggle from the settings drawer.
+    ui_mode_set(UI_MODE_FT8);
     ft8_self_test();
 }
 

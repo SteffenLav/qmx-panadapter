@@ -29,6 +29,7 @@
 #include "dsps_fir.h"
 
 #include "audio.h"
+#include "ui_mode.h"
 
 static const char *TAG = "dsp";
 
@@ -340,6 +341,13 @@ static void fft_task(void *arg)
             if (s_ft8_idx >= s_ft8_target) {
                 xSemaphoreGive(s_ft8_done_sem);
             }
+            continue;
+        }
+        // Step 4b v0.10: FT8 mode but no capture armed - drain and
+        // discard. We MUST still consume samples here; audio.c is
+        // single-consumer and a stalled fft_task would back-pressure
+        // the ring buffer and corrupt the next capture.
+        if (ui_mode_get() == UI_MODE_FT8) {
             continue;
         }
         // DC blocker (Phase 5.6): one-pole IIR per QUISK sound.c / Lyons UDSP 3rd ed. p.762

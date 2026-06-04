@@ -42,6 +42,7 @@
 
 #include "dsp.h"
 #include "cat/cat.h"
+#include "ui/ui_mode.h"
 
 static const char *TAG = "ft8_test";
 
@@ -240,7 +241,7 @@ static void ft8_task(void *arg)
     ESP_LOGI(TAG, "entering continuous slot loop");
 
     int slot_idx = 0;
-    while (1) {
+    while (ui_mode_get() == UI_MODE_FT8) {
         ESP_LOGI(TAG, "slot %d: waiting for next FT8 boundary...", slot_idx);
         int64_t slot_sec = wait_for_slot_boundary();
 
@@ -272,6 +273,12 @@ static void ft8_task(void *arg)
         // Brief yield - slot boundary wait will dominate.
         vTaskDelay(pdMS_TO_TICKS(10));
     }
+
+    // Mode switched away from FT8 (4c will trigger this from UI).
+    // Free the slot buffer and exit; respawn on next FT8 entry.
+    ESP_LOGI(TAG, "ft8_task exiting (mode changed); processed %d slots", slot_idx);
+    heap_caps_free(audio);
+    vTaskDelete(NULL);
 }
 
 // Public entry point: spawn the FT8 task on a 64 KB stack in PSRAM,

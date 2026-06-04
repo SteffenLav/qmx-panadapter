@@ -4,6 +4,7 @@ idf_component_register(
         "display/display.c"
         "ui/ui.c"
         "ui/wifi_config.c"
+        "ui/ui_mode.c"
         "util/status.c"
         "util/battery.c"
         "util/ina226.c"
