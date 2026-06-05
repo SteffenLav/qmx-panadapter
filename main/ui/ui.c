@@ -37,6 +37,31 @@ static lv_obj_t *s_mode_btn_lbl = NULL;
 // appears at the visual center. Touch-to-tune math is unchanged because
 // s_last_qmx_freq_hz is the dial reading, not the LO.
 #define IF_OFFSET_HZ    12000
+
+// Per-unit QMX IF calibration trim (Hz), loaded from NVS at init.
+// Updated by drawer slider; used by ui_get_if_bin_shift() helper.
+static int16_t s_if_cal_hz = 0;
+
+int ui_get_if_bin_shift(int n_bins)
+{
+    // (IF_OFFSET_HZ + s_if_cal_hz) Hz expressed as a bin count at 48 kHz.
+    // Integer math, rounded to nearest bin via half-step add when positive,
+    // half-step subtract when negative.
+    int total_hz = IF_OFFSET_HZ + (int)s_if_cal_hz;
+    int sign = (total_hz < 0) ? -1 : 1;
+    int abs_hz = (total_hz < 0) ? -total_hz : total_hz;
+    int shift = ((abs_hz * n_bins) + 24000) / 48000;  // +24000 = round to nearest
+    return sign * shift;
+}
+
+void ui_set_if_cal_hz(int16_t hz)
+{
+    if (hz < -200) hz = -200;
+    if (hz >  200) hz =  200;
+    s_if_cal_hz = hz;
+    settings_set_if_cal_hz(hz);
+    ESP_LOGI("ui", "IF cal set to %+d Hz", (int)hz);
+}
 #define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - LABEL_BAR_H - BOTTOM_BAR_H)
 
 // Forward declarations (Phase 6.1 - touch-to-tune)
@@ -81,6 +106,8 @@ static lv_obj_t *s_lbl_db_min = NULL;
 static lv_obj_t *s_lbl_db_max = NULL;
 static lv_obj_t *s_lbl_alpha = NULL;
 static lv_obj_t *s_slider_cwpitch = NULL;
+static lv_obj_t *s_lbl_ifcal    = NULL;
+static lv_obj_t *s_slider_ifcal = NULL;
 static lv_obj_t *s_lbl_cwpitch = NULL;
 static lv_obj_t *s_dropdown_cmap = NULL;
 static void drawer_preset_normal_cb(lv_event_t *e);
@@ -93,6 +120,23 @@ static void ui_refresh_mode_button_label(void);
 static void drawer_slider_db_min_cb(lv_event_t *e);
 static void drawer_slider_db_max_cb(lv_event_t *e);
 static void drawer_slider_alpha_cb(lv_event_t *e);
+static void drawer_slider_ifcal_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!s_slider_ifcal) return;
+    int v = (int)lv_slider_get_value(s_slider_ifcal);
+    // Step is 10 Hz on the LVGL side; round to nearest 10 in case of slop.
+    int snapped = ((v + (v >= 0 ? 5 : -5)) / 10) * 10;
+    if (snapped < -200) snapped = -200;
+    if (snapped >  200) snapped =  200;
+    ui_set_if_cal_hz((int16_t)snapped);
+    if (s_lbl_ifcal) {
+        char b[24];
+        snprintf(b, sizeof(b), "IF cal: %+d Hz", snapped);
+        lv_label_set_text(s_lbl_ifcal, b);
+    }
+}
+
 static void drawer_slider_cwpitch_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
@@ -695,7 +739,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
         // Phase 5.10E: 12 kHz IF offset compensation. Shift selected bin
         // right by (IF_OFFSET_HZ / sample_rate * N) bins so the QMX tuned
         // frequency (+12 kHz in baseband) appears at the visual center.
-        bin = (bin + (IF_OFFSET_HZ * N) / 48000) % N;
+        bin = (bin + ui_get_if_bin_shift(N)) % N;
         if (bin < 0) bin += N;
 
         int y_top;
@@ -710,7 +754,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
                 if (sn < 0) sn = 0;
                 if (sn >= N) sn = N - 1;
                 int bn = (sn < half) ? (sn + half) : (sn - half);
-                bn = (bn + (IF_OFFSET_HZ * N) / 48000) % N;
+                bn = (bn + ui_get_if_bin_shift(N)) % N;
                 if (bn < 0) bn += N;
                 sum += s_flat_smooth[bn] - s_flat_floor[bn];
                 cnt++;
@@ -1260,6 +1304,36 @@ static void drawer_build(void)
     char cwbuf[24];
     snprintf(cwbuf, sizeof(cwbuf), "Pitch: %u Hz", (unsigned)s_cw_pitch_hz);
     lv_label_set_text(s_lbl_cwpitch, cwbuf);
+    y += 60;
+    // IF calibration section (per-unit QMX oscillator trim)
+    lv_obj_t *ifcal_hdr = lv_label_create(s_drawer);
+    lv_label_set_text(ifcal_hdr, "IF calibration");
+    lv_obj_set_style_text_color(ifcal_hdr, lv_color_hex(0xA0E0A0), 0);
+    lv_obj_set_style_text_font(ifcal_hdr, &lv_font_montserrat_24, 0);
+    lv_obj_align(ifcal_hdr, LV_ALIGN_TOP_LEFT, 0, y);
+    y += 40;
+    s_lbl_ifcal = lv_label_create(s_drawer);
+    char ifbuf[24];
+    {
+        qmx_settings_t scfg2;
+        settings_load_all(&scfg2);
+        snprintf(ifbuf, sizeof(ifbuf), "IF cal: %+d Hz", (int)scfg2.if_cal_hz);
+    }
+    lv_label_set_text(s_lbl_ifcal, ifbuf);
+    lv_obj_set_style_text_color(s_lbl_ifcal, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(s_lbl_ifcal, &lv_font_montserrat_24, 0);
+    lv_obj_align(s_lbl_ifcal, LV_ALIGN_TOP_LEFT, 0, y);
+    y += 30;
+    s_slider_ifcal = lv_slider_create(s_drawer);
+    lv_obj_set_size(s_slider_ifcal, DRAWER_W - 32, 30);
+    lv_slider_set_range(s_slider_ifcal, -200, 200);
+    {
+        qmx_settings_t scfg3;
+        settings_load_all(&scfg3);
+        lv_slider_set_value(s_slider_ifcal, (int)scfg3.if_cal_hz, LV_ANIM_OFF);
+    }
+    lv_obj_align(s_slider_ifcal, LV_ALIGN_TOP_LEFT, 0, y);
+    lv_obj_add_event_cb(s_slider_ifcal, drawer_slider_ifcal_cb, LV_EVENT_VALUE_CHANGED, NULL);
     y += 60;
     // Waterfall colour-map section
     lv_obj_t *cmap_hdr = lv_label_create(s_drawer);

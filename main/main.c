@@ -76,6 +76,7 @@ void app_main(void)
     iq_balance_set_enabled(cfg.iq_enabled);
     ui_set_flat_mode(cfg.flat_mode);
     ui_set_cw_pitch_hz(cfg.cw_pitch_hz);
+    ui_set_if_cal_hz(cfg.if_cal_hz);
     render_waterfall_set_colormap(cfg.colormap_idx);
 
     // Restore last-known VFO frequency (display only; QMX is source of truth).
