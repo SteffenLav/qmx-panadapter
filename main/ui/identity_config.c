@@ -192,9 +192,14 @@ static void modal_build(void)
     ESP_LOGI(TAG, "Modal built");
 }
 
-void identity_config_modal_show(void)
+void identity_config_modal_init(void)
 {
     modal_build();
+}
+
+void identity_config_modal_show(void)
+{
+    modal_build();  // no-op if already built (idempotent via s_modal guard)
     if (s_modal_open) return;
 
     qmx_settings_t s;

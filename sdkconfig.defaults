@@ -72,3 +72,15 @@ CONFIG_ESP_HOSTED_SDIO_PIN_D2=9
 CONFIG_ESP_HOSTED_SDIO_PIN_D3=8
 CONFIG_ESP_HOSTED_GPIO_SLAVE_RESET_SLAVE=15
 CONFIG_HTTPD_WS_SUPPORT=y
+
+# LVGL memory pool -- bumped from default 64 KB to 128 KB to accommodate
+# pre-built modals + drawer + 20-row FT8 pool (~110 KB cumulative).
+# Pool is a .bss static array in internal SRAM; cost is 64 KB more internal RAM.
+CONFIG_LV_MEM_SIZE_KILOBYTES=128
+
+
+# Move LVGL static memory pool to PSRAM (.ext_ram.bss). Without this,
+# the pool lives in internal SRAM (.bss) and steals DMA-capable memory
+# from SDIO/USB. With PSRAM placement, the pool is effectively
+# unlimited (28 MB free) and internal SRAM is preserved for DMA.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y

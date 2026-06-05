@@ -46,15 +46,19 @@ static const char *TAG = "ft8_view";
 #define COL_BRG_W       (COL_HEARD_X   - COL_BRG_X     - 8)
 #define COL_HEARD_W     (COL_RIGHT_EDGE - COL_HEARD_X  - 16)
 
-// Pool size: pre-allocated row container/label objects in BSS.
-// Combined with shared lv_style_t (below), per-row local styles
-// drop from ~42 to 1 (SNR colour), so 20 rows is comfortable.
-// MAX_ROWS=12 (was 20 in v0.10.0-beta1). 20 rows pre-allocated at boot caused
-// internal-heap fragmentation that broke the WiFi modal -- lv_draw_label
-// crashed with a NULL memcpy destination because some allocation downstream
-// of modal_build returned NULL. TODO (v0.10.0-beta3 or later): defer the
-// row pool until first FT8 mode entry, then 20 rows can come back.
-#define MAX_ROWS        12
+// Pool size: pre-allocated row container/label objects.
+// Combined with shared lv_style_t (below), per-row local styles drop
+// from ~42 to 1 (SNR colour).
+//
+// Row count: 20. The LVGL static pool (CONFIG_LV_MEM_SIZE_KILOBYTES)
+// was raised from 64 KB to 128 KB in sdkconfig to accommodate the
+// cumulative LVGL allocation of pre-built modals + drawer + 20-row
+// FT8 pool (~110 KB). Below 128 KB the allocator hit hard cliffs at
+// ~60 KB of cumulative LVGL objects, manifesting as NULL store
+// faults, lv_obj_create hangs, or lv_obj_allocate_spec_attr lockup.
+// The cost is 64 KB more internal SRAM consumed at link time
+// (the pool is a static .bss array in internal RAM).
+#define MAX_ROWS        20
 
 // Shared styles. These live in BSS, not on the heap, so the dozens
 // of label objects can share them via lv_obj_add_style() without
@@ -221,6 +225,10 @@ static void build_row(int i)
     row_widgets_t *r = &s_rows[i];
 
     r->row = lv_obj_create(s_list);
+    if (!r->row) {
+        ESP_LOGE(TAG, "build_row(%d): lv_obj_create returned NULL", i);
+        return;
+    }
     lv_obj_set_size(r->row, RIGHT_W, ROW_H);
     lv_obj_set_pos(r->row, 0, i * ROW_H);
     lv_obj_add_style(r->row, &s_style_row, 0);
@@ -478,16 +486,17 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_pad_all(s_list, 0, 0);
     lv_obj_set_scroll_dir(s_list, LV_DIR_VER);
 
-    // Pre-allocate the row pool using shared styles.
+    // Pre-allocate the row pool at boot, when ~199 KB internal heap is
+    // free. See MAX_ROWS comment block for the beta3 rationale.
     size_t heap_before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     memset(s_rows, 0, sizeof(s_rows));
     for (int i = 0; i < MAX_ROWS; i++) {
         build_row(i);
     }
     size_t heap_after = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    ESP_LOGI(TAG, "row pool built (%d rows, heap_i %u -> %u, delta %d KB)",
+    ESP_LOGI(TAG, "row pool built (%d rows, heap_i %u -> %u, delta %d B)",
              MAX_ROWS, (unsigned)heap_before, (unsigned)heap_after,
-             ((int)heap_after - (int)heap_before) / 1024);
+             (int)heap_after - (int)heap_before);
 
     s_t_refresh = lv_timer_create(t_refresh_cb, 500, NULL);
     s_t_clock   = lv_timer_create(t_clock_cb,  1000, NULL);

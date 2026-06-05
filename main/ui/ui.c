@@ -454,6 +454,18 @@ void ui_init(lv_display_t *disp)
     build_label_bar(scr);
     build_waterfall(scr);
     build_bottom_bar(scr);
+
+    // Pre-build modals at boot, when internal heap is at maximum (~199 KB free).
+    // This avoids the fragmentation cliff that breaks modal_build() at runtime
+    // (~70 KB free post-services). Modals are show/hide singletons.
+    wifi_config_modal_init();
+    identity_config_modal_init();
+
+    // Pre-build the settings drawer at boot for the same reason. Drawer is
+    // smaller than each modal (~30-50 objects) but still hit the cliff when
+    // built lazily at first burger tap (post-WiFi/audio/services).
+    drawer_build();
+
     ft8_screen_view_init(scr);
 
     display_unlock();

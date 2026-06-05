@@ -194,9 +194,14 @@ static void modal_build(void)
     ESP_LOGI(TAG, "Modal built");
 }
 
-void wifi_config_modal_show(void)
+void wifi_config_modal_init(void)
 {
     modal_build();
+}
+
+void wifi_config_modal_show(void)
+{
+    modal_build();  // no-op if already built (idempotent via s_modal guard)
     if (s_modal_open) return;
 
     // Pre-fill SSID from current settings; leave password blank.
