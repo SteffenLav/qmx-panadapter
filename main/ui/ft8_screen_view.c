@@ -49,7 +49,12 @@ static const char *TAG = "ft8_view";
 // Pool size: pre-allocated row container/label objects in BSS.
 // Combined with shared lv_style_t (below), per-row local styles
 // drop from ~42 to 1 (SNR colour), so 20 rows is comfortable.
-#define MAX_ROWS        20
+// MAX_ROWS=12 (was 20 in v0.10.0-beta1). 20 rows pre-allocated at boot caused
+// internal-heap fragmentation that broke the WiFi modal -- lv_draw_label
+// crashed with a NULL memcpy destination because some allocation downstream
+// of modal_build returned NULL. TODO (v0.10.0-beta3 or later): defer the
+// row pool until first FT8 mode entry, then 20 rows can come back.
+#define MAX_ROWS        12
 
 // Shared styles. These live in BSS, not on the heap, so the dozens
 // of label objects can share them via lv_obj_add_style() without
