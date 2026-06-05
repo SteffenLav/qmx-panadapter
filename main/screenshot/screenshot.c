@@ -83,6 +83,22 @@ static void dump_image(const uint8_t *data, size_t size,
     free(line);
 }
 
+// Recursively zero horizontal scroll on every object in the tree.
+// Vertical scroll is preserved (the FT8 decode list intentionally scrolls
+// vertically; we don't want to reset that). Defensive: any container that
+// has acquired a non-zero scroll_x for any reason (focus chain, layout
+// nudge, animation residue) will be reset to 0 before we render the
+// snapshot, so the captured image matches what the user sees.
+static void zero_h_scroll_recursive(lv_obj_t *obj)
+{
+    if (!obj) return;
+    lv_obj_scroll_to_x(obj, 0, LV_ANIM_OFF);
+    uint32_t cnt = lv_obj_get_child_count(obj);
+    for (uint32_t i = 0; i < cnt; i++) {
+        zero_h_scroll_recursive(lv_obj_get_child(obj, i));
+    }
+}
+
 static void long_press_cb(lv_event_t *e)
 {
     ESP_LOGI(TAG, "capture triggered");
@@ -107,6 +123,13 @@ static void long_press_cb(lv_event_t *e)
     memset(&dsc, 0, sizeof(dsc));
 
     bsp_display_lock(portMAX_DELAY);
+    // Defensive: kill any stale horizontal scroll offset on every object in
+    // the tree. Without this, FT8-view captures could wrap leftmost content
+    // to the right edge if a container's scroll_x had drifted to ~45 px.
+    zero_h_scroll_recursive(screen);
+    // Also stop any in-flight animations so the snapshot renders a stable
+    // frame (no mid-tween position interpolation).
+    lv_anim_delete_all();
     lv_result_t res = lv_snapshot_take_to_buf(screen, LV_COLOR_FORMAT_RGB565,
                                               &dsc, buf, buf_size);
     bsp_display_unlock();
