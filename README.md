@@ -60,7 +60,7 @@ The original mockup that drove the design ([panadapter-mockup-ideal.svg](docs/pa
 
 ## Status
 
-Working. All phases through 8 complete, plus cold-boot reliability fix, I/Q balance correction (Phases A-C), WiFi STA with on-screen credential entry, web UI (v0.9.0), flat-spectrum mode (v0.9.2), hardware-revision diagnostics (v0.9.3), persistent settings + DiGi label (v0.9.4), full radio-state parity in the browser (v0.9.5), Hamlib rigctld network CAT bridge (v0.9.6), and DSP cleanup removing the per-frame median sort (v0.9.7).
+Working. All phases through 8 complete, plus cold-boot reliability fix, I/Q balance correction (Phases A-C), WiFi STA with on-screen credential entry, web UI (v0.9.0), flat-spectrum mode (v0.9.2), hardware-revision diagnostics (v0.9.3), persistent settings + DiGi label (v0.9.4), full radio-state parity in the browser (v0.9.5), Hamlib rigctld network CAT bridge (v0.9.6), DSP cleanup (v0.9.7), waterfall jump fix (v0.9.8), persistence + polish pass (v0.9.9), trivial-debt cleanup (v0.9.9.1), and onboard FT8 RX (v0.10.0-beta1).
 
 | Phase | What | Status |
 |-------|------|--------|
@@ -112,6 +112,11 @@ Working. All phases through 8 complete, plus cold-boot reliability fix, I/Q bala
 | -     | CAT setters: cat_set_mode() + cat_set_passband_hz() (v0.9.6) | done |
 | -     | Hamlib rigctld TCP server on port 4532 (network CAT bridge) (v0.9.6) | done |
 | -     | DSP cleanup: remove per-frame median sort (v0.9.7) | done |
+| -     | Waterfall jump fix: 30 Hz -> 10 Hz render avoids LVGL flush cascade (v0.9.8) | done |
+| -     | Persistence + polish: last-VFO, CW pitch, waterfall colour maps, snap-to-peak (v0.9.9) | done |
+| -     | Trivial-debt cleanup: dynamic version, flat-mode label hide, mojibake fix (v0.9.9.1) | done |
+| -     | Onboard FT8 RX decoder with DXCC, distance, bearing per call (v0.10.0-beta1) | beta |
+| -     | Per-unit QMX IF calibration trim slider (v0.10.0-beta1) | beta |
 
 See the [Roadmap](#roadmap) at the bottom for what's next.
 
@@ -281,6 +286,49 @@ On **Save**, `panadapter_wifi_reconnect(ssid, pass)` is called. This:
 If no credentials are configured at boot, WiFi stays idle (no retry storm) until the user opens the modal and saves something. Saving an empty SSID is silently ignored — Cancel discards changes and leaves NVS untouched.
 
 **Why a runtime modal instead of build-time `wifi_credentials.h`.** Earlier versions kept SSID/password in a gitignored header. That made every WiFi change a rebuild-and-flash cycle, and required publishing build instructions to teach new users about the file. With the modal, a flashed binary is portable: the user enters their own network on first boot. Credentials are stored only in NVS, never embedded in the firmware image.
+
+## Onboard FT8 (v0.10.0-beta1, RX-only)
+
+![FT8 RX in action on 20 m -- decode list with DXCC, distance, bearing, and SNR](docs/QMX-Panadapter_FT8_RX_v0.10.0-beta1.png)
+
+*Live FT8 reception on 20 m at 14.074 MHz. Left pane: MODE / VFO / UTC / slot countdown / heard count / operator identity (callsign+grid). Right pane: scrollable decode list with CALL / MESSAGE / COUNTRY / SNR / KM / BRG / HRD columns. Country pulled from DXCC prefix lookup, KM and BRG computed great-circle from the operator's grid square to each decoded station's grid.*
+
+Switch the panadapter into FT8 mode via the **Mode: FT8** button in the settings drawer. The Tab5 then decodes the 15-second FT8 slots directly on the ESP32-P4 with no PC required.
+
+**What's shown.**
+- **Left info pane** - large MODE / VFO / UTC / slot countdown, plus heard count and operator identity (callsign + grid loaded from NVS).
+- **Right decode list** - scrollable table with columns CALL / MESSAGE / COUNTRY / SNR / KM / BRG / HRD:
+  - CALL: extracted remote callsign (handles `CQ DX K1ABC`, `CQ POTA K1ABC`, and standard `<base> <call> <grid>` formats).
+  - MESSAGE: full decoded FT8 message text.
+  - COUNTRY: DXCC entity from prefix lookup (~190 entities, longest-prefix match, handles common /P /M suffixes).
+  - SNR: rough proxy from decoder score, colour-banded (green >=0, white -5..-1, orange -15..-6, grey <-15). Not WSJT-X-equivalent dB yet.
+  - KM / BRG: great-circle distance + bearing from your grid (set via the **Identity** button in the drawer) to the decoded station's grid.
+  - HRD: count of times this call has been decoded since power-on.
+
+**Set your callsign and grid first.** Drawer -> **Identity** -> enter callsign and 4 or 6-char Maidenhead grid. Values persist to NVS. Without a grid set, the KM and BRG columns show `--`.
+
+**Performance.** On a busy 20 m FT8 slot the decoder regularly yields 25-50 callsigns per slot. Heap is stable across long sessions (39 KB internal RAM free, 25 MB PSRAM free during decoding).
+
+**Known limitations (beta).**
+- RX only. No TX yet -- that's v0.11.
+- SNR is a coarse proxy from the LDPC decoder score, not a calibrated dB value relative to 2500 Hz noise BW like WSJT-X.
+- No ADIF logging yet (v0.13).
+- Mode switching between Panadapter and FT8 currently discards panadapter state (waterfall history, IQ balance estimator). Accepted trade-off for the simpler RX-only release.
+- Long sessions (multi-hour) not yet soaked end-to-end -- please open an issue if you see reboots while in FT8 mode.
+
+FT8 reception requires accurate UTC time, which the Tab5 gets from SNTP -- WiFi must be configured first.
+
+## Per-unit IF calibration
+
+QMX local oscillator trim varies slightly between units, so the +12 kHz IF injection isn't pixel-perfect 12000 Hz on every unit. If signals appear consistently shifted left or right of where the QMX is actually tuned, open the settings drawer and find the **IF calibration** slider (between CW Pitch and Waterfall colour map). Range +/-200 Hz in 10 Hz steps. Persisted to NVS. Default 0.
+
+Reported by Ken (KF0AYY), whose unit needed about -55 Hz to land on centre.
+
+## Related projects
+
+- [DX-FT8](https://github.com/WB2CBA/DX-FT8-FT8-MULTIBAND-TABLET-TRANSCEIVER) by Barb (WB2CBA) - an open-hardware FT8 tablet transceiver. Inspiring reference for a similar use-case.
+- [`qrp_companion`](https://groups.io/g/QRPLabs/topic/118645485) by Zhenxing Han (N6HAN) - Tab5 companion for QMX with audio + CAT. Source of several architectural ideas including the polling audio task pattern.
+- [`ft8_lib`](https://github.com/kgoba/ft8_lib) by Karlis Goba - the FT8 encoder/decoder vendored in this project as `components/ft8_lib`.
 
 ## Project layout
 
@@ -480,14 +528,28 @@ Trivial-debt cleanup pass. No new features.
 - **Mojibake cleanup.** 14 instances of em-dash corruption (`â€"`, `Ã¢â‚¬â€`) removed from `main.c` and `wifi_config.c`. Replaced with ASCII `-` to be robust against future re-encoding round-trips.
 - **README.** Removed stale "Network CAT bridge" entry from the longer-term roadmap (shipped in v0.9.6).
 
+### Shipped in v0.10.0-beta1
+
+- **Onboard FT8 RX decoder.** Switch to a dedicated FT8 view from the settings drawer; the Tab5 decodes 15-second slots in real time on the ESP32-P4 using vendored [`ft8_lib`](https://github.com/kgoba/ft8_lib). Decode list with callsign, message, DXCC country, distance, bearing, SNR, and heard count. Operator identity (callsign + Maidenhead grid) configured via a new Identity modal in the drawer; persisted to NVS. See the [Onboard FT8](#onboard-ft8-v0100-beta1-rx-only) section above for details.
+- **FT8 view stability.** Pre-allocated row pool of 20 LVGL row containers with shared `lv_style_t` objects, refreshed in place via dirty-tracked `lv_label_set_text`. Eliminates the long-session reboot caused by `lv_obj_clean` + `lv_obj_create` cycling that fragmented internal heap and left stale draw queue entries.
+- **Per-unit IF calibration trim.** New slider in the settings drawer (+/-200 Hz, 10 Hz steps, persisted to NVS) compensates for QMX local oscillator variance that shifts the 12 kHz IF baseband injection. Centralised the bin shift math in `ui_get_if_bin_shift()` so both spectrum and waterfall apply the same offset.
+- **Beta status.** This is a public beta release. Stability across multi-hour FT8 sessions is not yet fully soaked. Please open an [issue](https://github.com/SteffenLav/qmx-panadapter/issues) if you see reboots or unexpected behaviour.
+
 ### Next up
 
-Concrete items planned for the near term, in roughly the order they'll likely be tackled.
+The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF.
 
-- **Memory channels.** Quick-recall frequency presets — touch a slot, QMX retunes via CAT. Stored in NVS.
-- **FT8 decoder onboard.** Integrate [`ft8_lib`](https://github.com/kgoba/ft8_lib) using the existing audio pipeline. The required UTC reference is now in place via SNTP. Show decoded callsigns/grids overlaid on the spectrum at their carrier frequencies.
-- **DSP polish.** Noise reduction, auto-notch — the feature surface the QuantumSDR Spectrum DSP M4 defines as the boutique-standalone target.
-- **Phase 6.3 — Native-orientation rendering** *(deferred)*. First attempt in v0.6.x was reverted; UI elements were half-migrated. Worth revisiting once memory channels and FT8 land, since the ~50% FPS recovery is real. PPA hardware rotation ruled out earlier — it conflicts with the USB host stack over DW-GDMA channels.
+- **v0.10.0 (stable).** Promote v0.10.0-beta1 to v0.10.0 once multi-hour soak tests pass with no reboots and a few outside users have reported clean operation.
+- **v0.11.0 - Manual FT8 TX.** Use the existing CAT setters to put the QMX into TX, transmit FT8 frames generated by `ft8_lib`. UI to pick a CQ-er from the decode list, send standard reply sequence. No automation; user clicks each step.
+- **v0.12.0 - Auto search-and-pounce.** Auto-reply to a tapped CQ, follow the QSO state machine through 73/RR73. Sequence timing driven by SNTP-aligned slot boundaries.
+- **v0.13.0 - ADIF logging.** Write each completed QSO to an ADIF file in NVS (or external SD via web UI download). Per-QSO QRZ-style detail.
+- **v1.0.0 - Standalone FT8 station.** All of the above polished + multi-day stability + cleaner UI. The major-release milestone this project is reserved for.
+
+Alongside the FT8 path:
+
+- **Memory channels.** Quick-recall frequency presets - touch a slot, QMX retunes via CAT. 32 NVS-blob slots with editable labels. Spec ready, ~5-8h work.
+- **DSP polish.** Noise reduction, auto-notch.
+- **Phase 6.3 - Native-orientation rendering** *(deferred)*. ~50% FPS recovery available if we render directly in the panel's native 720x1280 portrait coordinates so LVGL has no rotation step.
 
 ### Longer term
 

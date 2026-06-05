@@ -40,6 +40,12 @@ static TaskHandle_t s_link_task = NULL;
 static TaskHandle_t s_poll_task = NULL;
 static EventGroupHandle_t s_evt_group = NULL;
 static cdc_acm_dev_hdl_t s_cdc_dev = NULL;
+static volatile bool s_cat_ready = false;
+
+bool cat_is_ready(void)
+{
+    return s_cat_ready;
+}
 static bool s_audio_dumped = false;
 
 static char s_rx_buf[CAT_RX_BUFFER_SIZE];
@@ -171,6 +177,7 @@ static void process_cat_message(const char *msg, size_t len)
             hz = hz * 10 + (d - '0');
         }
         ui_update_passband_width(hz);
+        s_cat_ready = true;
         return;
     }
     // QMX returns "?;" for unsupported commands; we just log once.
@@ -426,6 +433,7 @@ static void link_task(void *arg)
             if (s_cdc_dev) {
                 cdc_acm_host_close(s_cdc_dev);
                 s_cdc_dev = NULL;
+                s_cat_ready = false;
             }
         } else {
             vTaskDelay(pdMS_TO_TICKS(2000));

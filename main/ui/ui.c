@@ -15,9 +15,15 @@
 #include "screenshot.h"
 #include "settings.h"
 #include "wifi_config.h"
+#include "identity_config.h"
 #include "iq_balance.h"
+#include "ui_mode.h"
+#include "ft8_screen.h"
+#include "ft8_screen_view.h"
+#include "ft8_test.h"
 
 static const char *TAG = "ui";
+static lv_obj_t *s_mode_btn_lbl = NULL;
 
 // Layout constants (1280x720)
 #define TOP_BAR_H       60
@@ -31,6 +37,31 @@ static const char *TAG = "ui";
 // appears at the visual center. Touch-to-tune math is unchanged because
 // s_last_qmx_freq_hz is the dial reading, not the LO.
 #define IF_OFFSET_HZ    12000
+
+// Per-unit QMX IF calibration trim (Hz), loaded from NVS at init.
+// Updated by drawer slider; used by ui_get_if_bin_shift() helper.
+static int16_t s_if_cal_hz = 0;
+
+int ui_get_if_bin_shift(int n_bins)
+{
+    // (IF_OFFSET_HZ + s_if_cal_hz) Hz expressed as a bin count at 48 kHz.
+    // Integer math, rounded to nearest bin via half-step add when positive,
+    // half-step subtract when negative.
+    int total_hz = IF_OFFSET_HZ + (int)s_if_cal_hz;
+    int sign = (total_hz < 0) ? -1 : 1;
+    int abs_hz = (total_hz < 0) ? -total_hz : total_hz;
+    int shift = ((abs_hz * n_bins) + 24000) / 48000;  // +24000 = round to nearest
+    return sign * shift;
+}
+
+void ui_set_if_cal_hz(int16_t hz)
+{
+    if (hz < -200) hz = -200;
+    if (hz >  200) hz =  200;
+    s_if_cal_hz = hz;
+    settings_set_if_cal_hz(hz);
+    ESP_LOGI("ui", "IF cal set to %+d Hz", (int)hz);
+}
 #define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - LABEL_BAR_H - BOTTOM_BAR_H)
 
 // Forward declarations (Phase 6.1 - touch-to-tune)
@@ -55,6 +86,7 @@ static lv_obj_t *s_band_label = NULL;   // Phase 5.10D: dedicated band slot
 static lv_obj_t *s_mode_label = NULL;
 static lv_obj_t *s_spectrum_obj = NULL;
 static lv_obj_t *s_waterfall_obj = NULL;
+static lv_obj_t *s_label_bar = NULL;
 static lv_obj_t *s_status_label = NULL;  // legacy: single label, kept for compatibility (unused after Phase 5.13)
 static lv_obj_t *s_bot_left   = NULL;
 static lv_obj_t *s_bot_center = NULL;
@@ -74,15 +106,37 @@ static lv_obj_t *s_lbl_db_min = NULL;
 static lv_obj_t *s_lbl_db_max = NULL;
 static lv_obj_t *s_lbl_alpha = NULL;
 static lv_obj_t *s_slider_cwpitch = NULL;
+static lv_obj_t *s_lbl_ifcal    = NULL;
+static lv_obj_t *s_slider_ifcal = NULL;
 static lv_obj_t *s_lbl_cwpitch = NULL;
 static lv_obj_t *s_dropdown_cmap = NULL;
 static void drawer_preset_normal_cb(lv_event_t *e);
 static void drawer_preset_dx_cb(lv_event_t *e);
 static void drawer_preset_strong_cb(lv_event_t *e);
 static void drawer_wifi_btn_cb(lv_event_t *e);
+static void drawer_identity_btn_cb(lv_event_t *e);
+static void drawer_mode_btn_cb(lv_event_t *e);
+static void ui_refresh_mode_button_label(void);
 static void drawer_slider_db_min_cb(lv_event_t *e);
 static void drawer_slider_db_max_cb(lv_event_t *e);
 static void drawer_slider_alpha_cb(lv_event_t *e);
+static void drawer_slider_ifcal_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!s_slider_ifcal) return;
+    int v = (int)lv_slider_get_value(s_slider_ifcal);
+    // Step is 10 Hz on the LVGL side; round to nearest 10 in case of slop.
+    int snapped = ((v + (v >= 0 ? 5 : -5)) / 10) * 10;
+    if (snapped < -200) snapped = -200;
+    if (snapped >  200) snapped =  200;
+    ui_set_if_cal_hz((int16_t)snapped);
+    if (s_lbl_ifcal) {
+        char b[24];
+        snprintf(b, sizeof(b), "IF cal: %+d Hz", snapped);
+        lv_label_set_text(s_lbl_ifcal, b);
+    }
+}
+
 static void drawer_slider_cwpitch_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
@@ -157,12 +211,22 @@ static void build_top_bar(lv_obj_t *parent)
     // Avoids the top bar's clipping issue. Positioned absolutely so it
     // straddles the top bar boundary and extends into the spectrum area.
     s_burger_btn = lv_btn_create(parent);  /* parent = screen */
-    lv_obj_set_size(s_burger_btn, 80, 80);
-    lv_obj_align(s_burger_btn, LV_ALIGN_TOP_RIGHT, -4, 10);
-    lv_obj_add_event_cb(s_burger_btn, settings_button_cb, LV_EVENT_CLICKED, NULL);  // Phase 5.10D
+    // Step 4c.2 polish: 60x60 (top-bar height), dim theme, flush in top-right.
+    // Visible region only; touch-to-tune deadzone is a separate coordinate
+    // filter in touch_event_cb and is unaffected by this resize.
+    lv_obj_set_size(s_burger_btn, 60, 60);
+    lv_obj_align(s_burger_btn, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(s_burger_btn, lv_color_hex(0x202028), 0);
+    lv_obj_set_style_bg_opa(s_burger_btn, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_burger_btn, lv_color_hex(0x303030), 0);
+    lv_obj_set_style_border_width(s_burger_btn, 1, 0);
+    lv_obj_set_style_radius(s_burger_btn, 0, 0);
+    lv_obj_set_style_shadow_width(s_burger_btn, 0, 0);
+    lv_obj_add_event_cb(s_burger_btn, settings_button_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *blbl = lv_label_create(s_burger_btn);
     lv_label_set_text(blbl, LV_SYMBOL_LIST);
-    lv_obj_set_style_text_font(blbl, &lv_font_montserrat_32, 0);  // Phase 5.10I: fill the 80x80 button, but not too prominent
+    lv_obj_set_style_text_color(blbl, lv_color_hex(0xC0C0C0), 0);
+    lv_obj_set_style_text_font(blbl, &lv_font_montserrat_24, 0);
     lv_obj_center(blbl);
 }
 
@@ -234,6 +298,7 @@ static lv_obj_t *s_tick_labels[5] = { NULL, NULL, NULL, NULL, NULL };
 static void build_label_bar(lv_obj_t *parent)
 {
     lv_obj_t *bar = lv_obj_create(parent);
+    s_label_bar = bar;
     lv_obj_set_size(bar, DISPLAY_H_RES, LABEL_BAR_H);
     lv_obj_align(bar, LV_ALIGN_TOP_LEFT, 0, TOP_BAR_H + SPECTRUM_H);
     lv_obj_set_style_bg_color(bar, lv_color_hex(0x000000), 0);
@@ -389,6 +454,7 @@ void ui_init(lv_display_t *disp)
     build_label_bar(scr);
     build_waterfall(scr);
     build_bottom_bar(scr);
+    ft8_screen_view_init(scr);
 
     display_unlock();
 
@@ -397,6 +463,10 @@ void ui_init(lv_display_t *disp)
 
     // Hidden 80x80 long-press screenshot region in top-left
     screenshot_init(scr);
+    // Step 4c.2 fix: ensure the screenshot region stays on top of the
+    // FT8 container (which was created later and otherwise wins z-order
+    // wherever they overlap in the top 20 px).
+    lv_obj_move_foreground(screenshot_get_btn());
     ESP_LOGI(TAG, "UI built: top=%dpx spectrum=%dpx labels=%dpx waterfall=%dpx bottom=%dpx",
              TOP_BAR_H, SPECTRUM_H, LABEL_BAR_H, WATERFALL_H, BOTTOM_BAR_H);
 }
@@ -669,7 +739,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
         // Phase 5.10E: 12 kHz IF offset compensation. Shift selected bin
         // right by (IF_OFFSET_HZ / sample_rate * N) bins so the QMX tuned
         // frequency (+12 kHz in baseband) appears at the visual center.
-        bin = (bin + (IF_OFFSET_HZ * N) / 48000) % N;
+        bin = (bin + ui_get_if_bin_shift(N)) % N;
         if (bin < 0) bin += N;
 
         int y_top;
@@ -684,7 +754,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
                 if (sn < 0) sn = 0;
                 if (sn >= N) sn = N - 1;
                 int bn = (sn < half) ? (sn + half) : (sn - half);
-                bn = (bn + (IF_OFFSET_HZ * N) / 48000) % N;
+                bn = (bn + ui_get_if_bin_shift(N)) % N;
                 if (bn < 0) bn += N;
                 sum += s_flat_smooth[bn] - s_flat_floor[bn];
                 cnt++;
@@ -1107,6 +1177,20 @@ static void drawer_build(void)
         y += btn_h + 16;
     }
 
+    // FT8/Panadapter mode toggle -- full width
+    {
+        lv_obj_t *btn = lv_btn_create(s_drawer);
+        lv_obj_set_size(btn, DRAWER_W - 32, 56);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, y);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2c4d6e), 0);
+        lv_obj_add_event_cb(btn, drawer_mode_btn_cb, LV_EVENT_CLICKED, NULL);
+        s_mode_btn_lbl = lv_label_create(btn);
+        lv_obj_set_style_text_font(s_mode_btn_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(s_mode_btn_lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_center(s_mode_btn_lbl);
+        ui_refresh_mode_button_label();
+        y += 72;
+    }
     // WiFi configuration button -- full width
     {
         lv_obj_t *btn = lv_btn_create(s_drawer);
@@ -1116,6 +1200,20 @@ static void drawer_build(void)
         lv_obj_add_event_cb(btn, drawer_wifi_btn_cb, LV_EVENT_CLICKED, NULL);
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, "WiFi");
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_center(lbl);
+        y += 72;
+    }
+    // Operator identity button -- full width (callsign + grid for FT8 TX)
+    {
+        lv_obj_t *btn = lv_btn_create(s_drawer);
+        lv_obj_set_size(btn, DRAWER_W - 32, 56);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, y);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2c4d6e), 0);
+        lv_obj_add_event_cb(btn, drawer_identity_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, "Identity");
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
         lv_obj_center(lbl);
@@ -1206,6 +1304,36 @@ static void drawer_build(void)
     char cwbuf[24];
     snprintf(cwbuf, sizeof(cwbuf), "Pitch: %u Hz", (unsigned)s_cw_pitch_hz);
     lv_label_set_text(s_lbl_cwpitch, cwbuf);
+    y += 60;
+    // IF calibration section (per-unit QMX oscillator trim)
+    lv_obj_t *ifcal_hdr = lv_label_create(s_drawer);
+    lv_label_set_text(ifcal_hdr, "IF calibration");
+    lv_obj_set_style_text_color(ifcal_hdr, lv_color_hex(0xA0E0A0), 0);
+    lv_obj_set_style_text_font(ifcal_hdr, &lv_font_montserrat_24, 0);
+    lv_obj_align(ifcal_hdr, LV_ALIGN_TOP_LEFT, 0, y);
+    y += 40;
+    s_lbl_ifcal = lv_label_create(s_drawer);
+    char ifbuf[24];
+    {
+        qmx_settings_t scfg2;
+        settings_load_all(&scfg2);
+        snprintf(ifbuf, sizeof(ifbuf), "IF cal: %+d Hz", (int)scfg2.if_cal_hz);
+    }
+    lv_label_set_text(s_lbl_ifcal, ifbuf);
+    lv_obj_set_style_text_color(s_lbl_ifcal, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(s_lbl_ifcal, &lv_font_montserrat_24, 0);
+    lv_obj_align(s_lbl_ifcal, LV_ALIGN_TOP_LEFT, 0, y);
+    y += 30;
+    s_slider_ifcal = lv_slider_create(s_drawer);
+    lv_obj_set_size(s_slider_ifcal, DRAWER_W - 32, 30);
+    lv_slider_set_range(s_slider_ifcal, -200, 200);
+    {
+        qmx_settings_t scfg3;
+        settings_load_all(&scfg3);
+        lv_slider_set_value(s_slider_ifcal, (int)scfg3.if_cal_hz, LV_ANIM_OFF);
+    }
+    lv_obj_align(s_slider_ifcal, LV_ALIGN_TOP_LEFT, 0, y);
+    lv_obj_add_event_cb(s_slider_ifcal, drawer_slider_ifcal_cb, LV_EVENT_VALUE_CHANGED, NULL);
     y += 60;
     // Waterfall colour-map section
     lv_obj_t *cmap_hdr = lv_label_create(s_drawer);
@@ -1339,6 +1467,7 @@ static void drawer_preset_normal_cb(lv_event_t *e)  { (void)e; drawer_apply_pres
 static void drawer_preset_dx_cb(lv_event_t *e)      { (void)e; drawer_apply_preset(-130, -50, 0.60f); }
 static void drawer_preset_strong_cb(lv_event_t *e)  { (void)e; drawer_apply_preset(-110, -20, 0.20f); }
 static void drawer_wifi_btn_cb(lv_event_t *e)       { (void)e; wifi_config_modal_show(); }
+static void drawer_identity_btn_cb(lv_event_t *e)   { (void)e; identity_config_modal_show(); }
 
 static void drawer_slider_db_min_cb(lv_event_t *e)
 {
@@ -1407,3 +1536,51 @@ static void drawer_dropdown_cmap_cb(lv_event_t *e)
 const char *ui_get_mode_str(void) { return s_current_mode; }
 const char *ui_get_band_str(void) { return s_current_band; }
 uint32_t ui_get_passband_width_hz(void) { return s_passband_width_hz; }
+
+// Step 4c.1 v0.10: drawer mode toggle.
+//
+// Tap flips ui_mode between PANADAPTER and FT8. On entry to FT8 we
+// respawn ft8_task (it self-deletes on mode-exit, so we re-spawn
+// each time the user re-enters FT8 mode). On exit, fft_task drops
+// back to its panadapter path (DC blocker + FFT + spectrum push)
+// and the waterfall resumes.
+//
+// 4c.2 will add the LVGL screen switch alongside this.
+static void ui_refresh_mode_button_label(void)
+{
+    if (!s_mode_btn_lbl) return;
+    ui_mode_t m = ui_mode_get();
+    lv_label_set_text(s_mode_btn_lbl,
+                      m == UI_MODE_FT8 ? "Mode: FT8 (tap for panadapter)"
+                                       : "Mode: Panadapter (tap for FT8)");
+}
+
+static void drawer_mode_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    ui_mode_t cur = ui_mode_get();
+    ui_mode_t next = (cur == UI_MODE_FT8) ? UI_MODE_PANADAPTER : UI_MODE_FT8;
+    ESP_LOGI(TAG, "Mode toggle: %s -> %s",
+             cur  == UI_MODE_FT8 ? "FT8" : "Panadapter",
+             next == UI_MODE_FT8 ? "FT8" : "Panadapter");
+    ui_mode_set(next);
+    // Swap visible widgets. Top/bottom bars stay visible in both modes.
+    if (next == UI_MODE_FT8) {
+        if (s_spectrum_obj)  lv_obj_add_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN);
+        if (s_label_bar)     lv_obj_add_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN);
+        if (s_waterfall_obj) lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN);
+        ft8_screen_view_show();
+        // Respawn the FT8 task; it self-deleted on previous exit.
+        ft8_self_test();
+    } else {
+        ft8_screen_view_hide();
+        if (s_spectrum_obj)  lv_obj_clear_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN);
+        if (s_label_bar)     lv_obj_clear_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN);
+        if (s_waterfall_obj) lv_obj_clear_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN);
+    }
+    ui_refresh_mode_button_label();
+    // Close the drawer after toggling. UX nicety, and (4c.1 finding)
+    // an open drawer keeps LVGL busy enough to starve audio/fft tasks
+    // and stall the next FT8 capture.
+    drawer_close();
+}

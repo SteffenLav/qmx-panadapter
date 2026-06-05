@@ -20,6 +20,9 @@ typedef struct {
     uint32_t last_vfo_hz; // last QMX VFO frequency in Hz (0 = unknown)
     uint16_t cw_pitch_hz;  // CW sidetone offset in Hz (default 700)
     uint8_t  colormap_idx; // waterfall colour map: 0=Thermal 1=Viridis 2=Turbo 3=Grayscale
+    char     my_callsign[16];  // operator callsign for FT8 (15 chars + NUL)
+    char     my_grid[8];       // Maidenhead grid (6 chars + NUL, e.g. "JO45ab")
+    int16_t  if_cal_hz;        // QMX IF offset calibration trim (Hz), default 0, range +/-200
 } qmx_settings_t;
 
 // Initialise the settings module. Opens an NVS handle. Safe to call
@@ -49,6 +52,16 @@ void settings_set_last_vfo(uint32_t hz);
 void settings_set_cw_pitch_hz(uint16_t hz);
 // Save waterfall colour-map index (debounced flush).
 void settings_set_colormap_idx(uint8_t idx);
+
+// Operator identity. Pass NULL or empty to clear. Used by the FT8
+// transmitter (v0.11+) and shown in the FT8 view info pane.
+void settings_set_my_callsign(const char *call);
+void settings_set_my_grid(const char *grid);
+
+// QMX IF offset calibration trim (Hz). Per-unit oscillator variance shifts
+// the +12 kHz IF injection; this trim corrects what users see on the spectrum/
+// waterfall. Clamped to +/-200 Hz, persisted to NVS (debounced flush).
+void settings_set_if_cal_hz(int16_t hz);
 
 // Force any pending writes to flash immediately. Call before reboot
 // if you want absolute certainty. Normally not needed.

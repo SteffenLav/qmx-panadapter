@@ -26,8 +26,10 @@
 
 #include "dsps_fft2r.h"
 #include "dsps_wind_blackman_harris.h"
+#include "dsps_fir.h"
 
 #include "audio.h"
+#include "ui_mode.h"
 
 static const char *TAG = "dsp";
 
@@ -44,6 +46,71 @@ static bool s_have_spectrum = false;
 static TaskHandle_t s_fft_task = NULL;
 static uint32_t s_frames_this_period = 0;
 static int64_t  s_period_start_us = 0;
+
+// ----- Step 3 v0.10 FT8 RX capture -----------------------------------------
+// 31-tap LPF: scipy.signal.firwin(31, 4500/24000, window='hamming')
+// Passband 0-3 kHz flat (<0.5 dB), -65 dB at 9 kHz (worst aliaser into
+// 0-3 kHz after /4 decimation to 12 kHz).
+static const float s_ft8_lpf_taps[31] = {
+    +9.4083799097e-04f, +1.8869410051e-03f, +2.8691449162e-03f, +3.1405658090e-03f,
+    +1.3076221170e-03f, -3.7668515379e-03f, -1.1670857504e-02f, -1.9524454627e-02f,
+    -2.2180134993e-02f, -1.3814782554e-02f, +9.5396753619e-03f, +4.7587798377e-02f,
+    +9.4688024813e-02f, +1.4084394523e-01f, +1.7463386062e-01f, +1.8703732996e-01f,
+    +1.7463386062e-01f, +1.4084394523e-01f, +9.4688024813e-02f, +4.7587798377e-02f,
+    +9.5396753619e-03f, -1.3814782554e-02f, -2.2180134993e-02f, -1.9524454627e-02f,
+    -1.1670857504e-02f, -3.7668515379e-03f, +1.3076221170e-03f, +3.1405658090e-03f,
+    +2.8691449162e-03f, +1.8869410051e-03f, +9.4083799097e-04f
+};
+static float       s_ft8_fir_delay[31];
+static fir_f32_t   s_ft8_fir;
+static SemaphoreHandle_t s_ft8_done_sem = NULL;
+static float *s_ft8_dst    = NULL;
+static int    s_ft8_idx    = 0;
+static int    s_ft8_target = 0;
+static volatile bool s_ft8_active = false;
+static float s_ft8_mix_buf[DSP_FFT_SIZE];
+static float s_ft8_dec_buf[DSP_FFT_SIZE / 4];
+// Debug instrumentation: once-per-second log of FT8 branch activity.
+static uint32_t s_ft8_iter_count = 0;
+static uint32_t s_ft8_total_n_out = 0;
+static int64_t  s_ft8_last_log_us = 0;
+static uint64_t s_ft8_read_us = 0;
+static uint64_t s_ft8_work_us = 0;
+static uint32_t s_ft8_slow_reads = 0;
+static uint32_t s_ft8_slow_works = 0;
+
+esp_err_t dsp_ft8_capture(float *dst_180000, uint32_t timeout_ms)
+{
+    if (!dst_180000) return ESP_ERR_INVALID_ARG;
+    if (!s_ft8_done_sem) {
+        s_ft8_done_sem = xSemaphoreCreateBinary();
+        if (!s_ft8_done_sem) return ESP_ERR_NO_MEM;
+    }
+    memset(s_ft8_fir_delay, 0, sizeof(s_ft8_fir_delay));
+    esp_err_t e = dsps_fird_init_f32(&s_ft8_fir,
+                                     (float *)s_ft8_lpf_taps,
+                                     s_ft8_fir_delay,
+                                     31, 4);
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "dsps_fird_init_f32 failed: %d", e);
+        return e;
+    }
+    xSemaphoreTake(s_ft8_done_sem, 0);  // drain stale
+    s_ft8_dst    = dst_180000;
+    s_ft8_idx    = 0;
+    s_ft8_target = 180000;
+    __sync_synchronize();
+    s_ft8_active = true;
+    BaseType_t ok = xSemaphoreTake(s_ft8_done_sem, pdMS_TO_TICKS(timeout_ms));
+    s_ft8_active = false;
+    if (ok != pdTRUE) {
+        ESP_LOGW(TAG, "FT8 capture timeout after %lu ms (got %d/%d samples)",
+                 (unsigned long)timeout_ms, s_ft8_idx, s_ft8_target);
+        return ESP_ERR_TIMEOUT;
+    }
+    return ESP_OK;
+}
+// ----- end Step 3 v0.10 FT8 RX capture --------------------------------------
 
 static void fft_task(void *arg);
 
@@ -255,6 +322,76 @@ static void fft_task(void *arg)
             got += r;
         }
 
+        // Step 3 v0.10: FT8 capture branch. fs/4 sign-flip mixer
+        // shifts QMX +12 kHz IF to DC, then /4 FIR decimator.
+        // Skip DC blocker / FFT / render push during capture.
+        if (s_ft8_active) {
+            static int64_t s_prev_work_end_us = 0;
+            int64_t t_read_done = esp_timer_get_time();
+            if (s_prev_work_end_us != 0) {
+                int64_t dt = t_read_done - s_prev_work_end_us;
+                s_ft8_read_us += dt;
+                if (dt > 30000) s_ft8_slow_reads++;
+            }
+            for (int i = 0; i < DSP_FFT_SIZE; i += 4) {
+                s_ft8_mix_buf[i + 0] =  (float)samples[2*(i+0)];      // +I
+                s_ft8_mix_buf[i + 1] =  (float)samples[2*(i+1) + 1];  // +Q
+                s_ft8_mix_buf[i + 2] = -(float)samples[2*(i+2)];      // -I
+                s_ft8_mix_buf[i + 3] = -(float)samples[2*(i+3) + 1];  // -Q
+            }
+            // NB: dsps_fird_f32's `len` is OUTPUT length, not input.
+            // For decim=4 and 1024 inputs, request 256 outputs.
+            int n_out = dsps_fird_f32(&s_ft8_fir,
+                                      s_ft8_mix_buf,
+                                      s_ft8_dec_buf,
+                                      DSP_FFT_SIZE / 4);
+            int writable = s_ft8_target - s_ft8_idx;
+            if (writable > 0 && n_out > 0) {
+                int copy = (n_out < writable) ? n_out : writable;
+                memcpy(&s_ft8_dst[s_ft8_idx],
+                       s_ft8_dec_buf,
+                       copy * sizeof(float));
+                s_ft8_idx += copy;
+            }
+            if (s_ft8_idx >= s_ft8_target) {
+                xSemaphoreGive(s_ft8_done_sem);
+            }
+            int64_t t_work_end = esp_timer_get_time();
+            int64_t work_dt = t_work_end - t_read_done;
+            s_ft8_work_us += work_dt;
+            if (work_dt > 10000) s_ft8_slow_works++;
+            s_prev_work_end_us = t_work_end;
+            s_ft8_iter_count++;
+            s_ft8_total_n_out += n_out;
+            int64_t now = t_work_end;
+            if (now - s_ft8_last_log_us > 1000000) {
+                uint32_t n = s_ft8_iter_count ? s_ft8_iter_count : 1;
+                ESP_LOGI(TAG,
+                    "FT8 br: %u iters %u smp idx=%d/%d  read_avg=%uus work_avg=%uus  slow_r=%u slow_w=%u",
+                    (unsigned)s_ft8_iter_count,
+                    (unsigned)s_ft8_total_n_out,
+                    s_ft8_idx, s_ft8_target,
+                    (unsigned)(s_ft8_read_us / n),
+                    (unsigned)(s_ft8_work_us / n),
+                    (unsigned)s_ft8_slow_reads,
+                    (unsigned)s_ft8_slow_works);
+                s_ft8_iter_count = 0;
+                s_ft8_total_n_out = 0;
+                s_ft8_read_us = 0;
+                s_ft8_work_us = 0;
+                s_ft8_slow_reads = 0;
+                s_ft8_slow_works = 0;
+                s_ft8_last_log_us = now;
+            }
+            continue;
+        }
+        // Step 4b v0.10: FT8 mode but no capture armed - drain and
+        // discard. We MUST still consume samples here; audio.c is
+        // single-consumer and a stalled fft_task would back-pressure
+        // the ring buffer and corrupt the next capture.
+        if (ui_mode_get() == UI_MODE_FT8) {
+            continue;
+        }
         // DC blocker (Phase 5.6): one-pole IIR per QUISK sound.c / Lyons UDSP 3rd ed. p.762
         // ~100 Hz high-pass at Fs=48 kHz; removes any slow drift on I and Q channels.
         // QMX has 12 kHz IF so there is no useful signal at DC anyway.

@@ -43,3 +43,13 @@ esp_err_t dsp_get_peak_dbm_around_vfo(int half_width_bins, float *peak_dbm);
 // returns its Hz offset in *out_hz; otherwise returns center_hz unchanged.
 // IF offset (+12 kHz baseband shift) is handled internally.
 esp_err_t dsp_find_peak_hz_around(int32_t center_hz, int32_t radius_hz, int32_t *out_hz);
+
+// Step 3 v0.10 FT8 RX: one-shot slot capture.
+// When armed, the FFT task diverts its 1024-sample reads through a mixer
+// (-12 kHz IF removal via fs/4 sign-flip), then an esp-dsp 31-tap FIR
+// decimator (/4 -> 12 kHz mono real), filling dst with exactly 180000
+// samples (= 15 s at 12 kHz). DC blocker / panadapter FFT / spectrum push
+// are skipped during capture; waterfall freezes for the duration.
+// dst MUST point to 180000 floats in PSRAM (heap_caps_malloc).
+// Returns ESP_OK on success, ESP_ERR_TIMEOUT if no audio after timeout_ms.
+esp_err_t dsp_ft8_capture(float *dst_180000, uint32_t timeout_ms);

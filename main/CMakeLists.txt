@@ -4,7 +4,13 @@ idf_component_register(
         "display/display.c"
         "ui/ui.c"
         "ui/wifi_config.c"
+        "ui/identity_config.c"
+        "ui/ui_mode.c"
+        "ui/ft8_screen.c"
+        "ui/ft8_screen_view.c"
         "util/status.c"
+        "util/maidenhead.c"
+        "util/dxcc.c"
         "util/battery.c"
         "util/ina226.c"
         "util/bsp_info.c"
@@ -20,6 +26,7 @@ idf_component_register(
         "net/webserver.c"
         "net/webserver_ws.c"
         "net/rigctld_server.c"
+        "ft8_test.c"
     INCLUDE_DIRS
         "."
         "display"
@@ -51,6 +58,7 @@ idf_component_register(
         lwip
         esp_http_server
         json
+        ft8_lib
     PRIV_REQUIRES
         esp_app_format
     EMBED_TXTFILES

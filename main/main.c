@@ -2,6 +2,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
+#include "ft8_test.h"
 #include "esp_heap_caps.h"
 #include "nvs_flash.h"
 #include "lvgl.h"
@@ -20,6 +21,8 @@
 #include "settings.h"
 #include "wifi.h"
 #include "iq_balance.h"
+#include "ui_mode.h"
+#include "ft8_screen.h"
 
 static const char *TAG = "main";
 
@@ -73,6 +76,7 @@ void app_main(void)
     iq_balance_set_enabled(cfg.iq_enabled);
     ui_set_flat_mode(cfg.flat_mode);
     ui_set_cw_pitch_hz(cfg.cw_pitch_hz);
+    ui_set_if_cal_hz(cfg.if_cal_hz);
     render_waterfall_set_colormap(cfg.colormap_idx);
 
     // Restore last-known VFO frequency (display only; QMX is source of truth).
@@ -91,5 +95,15 @@ void app_main(void)
     ESP_ERROR_CHECK(render_init());
 
     ESP_LOGI(TAG, "Init complete - main task idle");
+    // Spawn FT8 self-test on a dedicated task (32 KB stack, core 1).
+    // Verifies ft8_lib encoder + monitor + decoder work on ESP32-P4.
+    // Logs PASS/FAIL with per-stage timing once the worker completes.
+    // Step 4b v0.10: boot directly into FT8 mode so the existing
+    // flash-and-watch decode flow keeps working. Step 4c will let
+    // the user toggle from the settings drawer.
+    ft8_screen_init();
+    // Step 4c.2: boot into panadapter mode. FT8 spawns on first
+    // toggle via the drawer Mode button (drawer_mode_btn_cb in ui.c).
+    ui_mode_set(UI_MODE_PANADAPTER);
 }
 
