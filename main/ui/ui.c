@@ -92,6 +92,7 @@ static lv_obj_t *s_status_label = NULL;  // legacy: single label, kept for compa
 static lv_obj_t *s_bot_left   = NULL;
 static lv_obj_t *s_bot_center = NULL;
 static lv_obj_t *s_bot_right  = NULL;
+static lv_obj_t *s_bot_mem    = NULL;  /* active memory channel indicator */
 static lv_obj_t *s_burger_btn = NULL;  // Phase 5.10I: kept for foreground move after all UI built
 static lv_obj_t *s_switch_iq  = NULL;  // Phase B: IQ balance toggle in settings drawer
 static lv_obj_t *s_switch_flat = NULL; // Phase 5.12: flat-spectrum toggle in settings drawer
@@ -433,6 +434,12 @@ static void build_bottom_bar(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_bot_center, &lv_font_montserrat_24, 0);
     lv_obj_align(s_bot_center, LV_ALIGN_CENTER, 0, 0);
 
+    s_bot_mem = lv_label_create(bar);
+    lv_label_set_text(s_bot_mem, "");
+    lv_obj_set_style_text_color(s_bot_mem, lv_color_hex(0xFFE080), 0);
+    lv_obj_set_style_text_font(s_bot_mem, &lv_font_montserrat_24, 0);
+    lv_obj_align(s_bot_mem, LV_ALIGN_CENTER, -300, 0);
+
     s_bot_right = lv_label_create(bar);
     lv_label_set_text(s_bot_right, "");
     lv_obj_set_style_text_color(s_bot_right, lv_color_hex(0xC0C0C0), 0);
@@ -502,6 +509,7 @@ void ui_update_frequency(uint32_t freq_hz)
     snprintf(buf, sizeof(buf), "Center Freq: %lu.%03lu.%03lu Hz", mhz, khz, hz);
     if (display_lock(20)) {
         lv_label_set_text(s_freq_label, buf);
+        if (s_bot_mem) lv_label_set_text(s_bot_mem, "");  /* clear memory label on any freq change */
         display_unlock();
     }
     // Phase 5.10: derive band and push to UI
@@ -902,6 +910,15 @@ void ui_set_bottom_center(const char *text)
     if (!s_bot_center) return;
     if (display_lock(20)) {
         lv_label_set_text(s_bot_center, text ? text : "");
+        display_unlock();
+    }
+}
+
+void ui_set_memory_label(const char *text)
+{
+    if (!s_bot_mem) return;
+    if (display_lock(20)) {
+        lv_label_set_text(s_bot_mem, text ? text : "");
         display_unlock();
     }
 }

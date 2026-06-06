@@ -7,6 +7,7 @@ void ui_init(lv_display_t *disp);
 
 // Phase 4/5 hooks (stubs for now)
 void ui_update_frequency(uint32_t freq_hz);
+void ui_set_memory_label(const char *text);  /* active memory channel; pass NULL to clear */
 void ui_update_smeter(int s_units);
 void ui_update_mode(const char *mode);   // Phase 5.10: e.g. "USB", "CW"
 void ui_update_band(const char *band);   // Phase 5.10: e.g. "20m", "40m"

@@ -34,6 +34,9 @@ esp_err_t cat_set_frequency(uint32_t freq_hz);
  * @return frequency in Hz
  */
 uint32_t cat_get_frequency(void);
+/* Returns current mode string (e.g. "USB", "CW", "DiGi").
+ * Returns "" if CAT not ready or no MD response yet. */
+const char *cat_get_mode_str(void);
 
 /**
  * @brief Send a mode-set command (MD; in Kenwood/Elecraft protocol) to the QMX.

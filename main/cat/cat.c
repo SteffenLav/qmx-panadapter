@@ -477,6 +477,16 @@ uint32_t cat_get_frequency(void)
     return s_last_freq_hz;
 }
 
+const char *cat_get_mode_str(void)
+{
+    char d = s_last_mode_digit;
+    if (d < '1' || d > '9') return "";
+    static const char *kw_modes[] = {
+        "?", "LSB", "USB", "CW", "FM", "AM", "DiGi", "CW-R", "?", "DiGi-R"
+    };
+    return kw_modes[d - '0'];
+}
+
 // ---- Phase 9 (v0.9.6): setters used by rigctld_server -------------------
 
 // Map a Hamlib mode string (case-insensitive) to a Kenwood mode digit.

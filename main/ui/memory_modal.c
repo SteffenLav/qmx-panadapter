@@ -1,7 +1,9 @@
 // Memory channels modal - 4x8 grid of frequency/mode/label slots.
-// Tap occupied = recall (commit 3). Long-press = save/edit (commit 4-5).
+// Tap occupied = recall. Long-press occupied = Edit/Delete/Cancel.
 #include "memory_modal.h"
 #include "mem_channels.h"
+#include "cat.h"
+#include "ui.h"
 #include "esp_log.h"
 #include "lvgl.h"
 #include <stdio.h>
@@ -19,12 +21,18 @@ static const char *TAG = "mem_modal";
 #define COLS           4
 #define ROWS           8
 
-static lv_obj_t *s_modal      = NULL;
-static lv_obj_t *s_panel      = NULL;
-static lv_obj_t *s_grid       = NULL;
+static lv_obj_t *s_modal       = NULL;
+static lv_obj_t *s_panel       = NULL;
+static lv_obj_t *s_grid        = NULL;
 static lv_obj_t *s_cell_btn[MEM_SLOTS];
 static lv_obj_t *s_cell_lbl[MEM_SLOTS];
-static bool      s_open       = false;
+static bool      s_open        = false;
+
+/* Action menu for long-press occupied */
+static lv_obj_t *s_action_panel = NULL;
+static lv_obj_t *s_action_ta    = NULL;  /* label edit textarea */
+static lv_obj_t *s_action_kb    = NULL;
+static int       s_action_idx   = -1;
 
 static void modal_close(void)
 {
@@ -74,6 +82,141 @@ static void memory_modal_refresh(void)
     }
 }
 
+/* Action menu callbacks */
+static void action_cancel_cb(lv_event_t *e)
+{
+    (void)e;
+    lv_obj_add_flag(s_action_panel, LV_OBJ_FLAG_HIDDEN);
+    s_action_idx = -1;
+}
+
+static void action_ta_focused_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!s_action_kb) return;
+    lv_keyboard_set_textarea(s_action_kb, s_action_ta);
+    lv_obj_clear_flag(s_action_kb, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_action_kb);
+}
+
+static void action_kb_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL)
+        lv_obj_add_flag(s_action_kb, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void action_delete_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_action_idx < 0) return;
+    mem_channels_clear(s_action_idx);
+    ESP_LOGI(TAG, "deleted slot %d", s_action_idx);
+    lv_obj_add_flag(s_action_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_action_kb, LV_OBJ_FLAG_HIDDEN);
+    s_action_idx = -1;
+    memory_modal_refresh();
+}
+
+static void action_save_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_action_idx < 0) return;
+    mem_slot_t slot = {0};
+    mem_channels_get(s_action_idx, &slot);
+
+    if (!slot.occupied) {
+        /* New slot: capture current VFO + mode */
+        uint32_t freq = cat_get_frequency();
+        const char *mode = cat_get_mode_str();
+        if (freq == 0) {
+            ESP_LOGW(TAG, "save: no freq from CAT");
+            return;
+        }
+        slot.freq_hz = freq;
+        slot.occupied = 1;
+        strncpy(slot.mode, mode[0] ? mode : "???", sizeof(slot.mode) - 1);
+    }
+
+    /* Both new and edit: update label from textarea */
+    const char *new_label = lv_textarea_get_text(s_action_ta);
+    if (new_label) strncpy(slot.label, new_label, sizeof(slot.label) - 1);
+
+    mem_channels_set(s_action_idx, &slot);
+    ESP_LOGI(TAG, "saved slot %d: %lu Hz %s '%s'",
+             s_action_idx, (unsigned long)slot.freq_hz, slot.mode, slot.label);
+
+    lv_obj_add_flag(s_action_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_action_kb, LV_OBJ_FLAG_HIDDEN);
+    s_action_idx = -1;
+    memory_modal_refresh();
+}
+
+static void cell_tap_cb(lv_event_t *e)
+{
+    if (s_action_idx >= 0) return;  /* suppress tap if long-press action panel is open */
+    lv_obj_t *btn = lv_event_get_target(e);
+    int idx = (int)(intptr_t)lv_obj_get_user_data(btn);
+    if (idx < 0 || idx >= MEM_SLOTS) return;
+
+    mem_slot_t slot;
+    mem_channels_get(idx, &slot);
+    if (!slot.occupied) return;
+
+    ESP_LOGI(TAG, "recall slot %d: %lu Hz %s '%s'",
+             idx, (unsigned long)slot.freq_hz, slot.mode, slot.label);
+
+    cat_set_frequency(slot.freq_hz);
+    if (slot.mode[0]) cat_set_mode(slot.mode);
+    {
+        char mem_lbl[32];
+        if (slot.label[0]) {
+            snprintf(mem_lbl, sizeof(mem_lbl), "[M%02d] %s", idx + 1, slot.label);
+        } else {
+            uint32_t mhz = slot.freq_hz / 1000000UL;
+            uint32_t khz = (slot.freq_hz % 1000000UL) / 1000UL;
+            snprintf(mem_lbl, sizeof(mem_lbl), "[M%02d] %lu.%03lu %s",
+                     idx + 1, (unsigned long)mhz, (unsigned long)khz, slot.mode);
+        }
+        ui_set_memory_label(mem_lbl);
+    }
+    modal_close();
+}
+
+static void cell_longpress_cb(lv_event_t *e)
+{
+    lv_obj_t *btn = lv_event_get_target(e);
+    int idx = (int)(intptr_t)lv_obj_get_user_data(btn);
+    if (idx < 0 || idx >= MEM_SLOTS) return;
+
+    mem_slot_t slot;
+    mem_channels_get(idx, &slot);
+
+    s_action_idx = idx;
+    lv_obj_t *ttl = lv_obj_get_child(s_action_panel, 0);
+
+    if (slot.occupied) {
+        /* Edit occupied slot */
+        char title[32];
+        snprintf(title, sizeof(title), "M%02d: %s", idx + 1,
+                 slot.label[0] ? slot.label : slot.mode);
+        if (ttl) lv_label_set_text(ttl, title);
+        lv_textarea_set_text(s_action_ta, slot.label);
+    } else {
+        /* Save new slot */
+        char title[32];
+        snprintf(title, sizeof(title), "M%02d: New", idx + 1);
+        if (ttl) lv_label_set_text(ttl, title);
+        lv_textarea_set_text(s_action_ta, "");
+    }
+
+    lv_obj_clear_flag(s_action_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_action_panel);
+    lv_obj_clear_flag(s_action_kb, LV_OBJ_FLAG_HIDDEN);
+    lv_keyboard_set_textarea(s_action_kb, s_action_ta);
+    lv_obj_move_foreground(s_action_kb);
+}
+
 static void modal_build(void)
 {
     if (s_modal) return;
@@ -108,9 +251,8 @@ static void modal_build(void)
     lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
 
-    /* Scrollable grid container */
     int grid_w = COLS * CELL_W + (COLS - 1) * CELL_GAP;
-    int grid_h = PANEL_H - PAD * 2 - TITLE_H - 8 - 56 - 8;  /* panel - pad - title - gap - close - gap */
+    int grid_h = PANEL_H - PAD * 2 - TITLE_H - 8 - 56 - 8;
     s_grid = lv_obj_create(s_panel);
     lv_obj_set_size(s_grid, grid_w, grid_h);
     lv_obj_align(s_grid, LV_ALIGN_TOP_MID, 0, TITLE_H + 8);
@@ -120,7 +262,6 @@ static void modal_build(void)
     lv_obj_set_scroll_dir(s_grid, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_grid, LV_SCROLLBAR_MODE_ACTIVE);
 
-    /* 32 cell buttons */
     for (int i = 0; i < MEM_SLOTS; i++) {
         int col = i % COLS;
         int row = i / COLS;
@@ -136,6 +277,8 @@ static void modal_build(void)
         lv_obj_set_style_border_width(btn, 1, 0);
         lv_obj_set_style_pad_all(btn, 4, 0);
         lv_obj_set_user_data(btn, (void *)(intptr_t)i);
+        lv_obj_add_event_cb(btn, cell_tap_cb,      LV_EVENT_CLICKED,     NULL);
+        lv_obj_add_event_cb(btn, cell_longpress_cb, LV_EVENT_LONG_PRESSED, NULL);
         s_cell_btn[i] = btn;
 
         lv_obj_t *lbl = lv_label_create(btn);
@@ -147,7 +290,6 @@ static void modal_build(void)
         s_cell_lbl[i] = lbl;
     }
 
-    /* Close button */
     lv_obj_t *close_btn = lv_btn_create(s_panel);
     lv_obj_set_size(close_btn, grid_w, 48);
     lv_obj_align(close_btn, LV_ALIGN_BOTTOM_MID, 0, 0);
@@ -159,6 +301,90 @@ static void modal_build(void)
     lv_obj_set_style_text_color(close_lbl, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(close_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(close_lbl);
+
+    /* Action panel for long-press */
+    s_action_panel = lv_obj_create(s_panel);
+    lv_obj_set_size(s_action_panel, 600, 280);
+    lv_obj_align(s_action_panel, LV_ALIGN_CENTER, 0, -80);
+    lv_obj_set_style_bg_color(s_action_panel, lv_color_hex(0x1c2840), 0);
+    lv_obj_set_style_border_color(s_action_panel, lv_color_hex(0x4a90d9), 0);
+    lv_obj_set_style_border_width(s_action_panel, 2, 0);
+    lv_obj_set_style_radius(s_action_panel, 10, 0);
+    lv_obj_set_style_pad_all(s_action_panel, 12, 0);
+    lv_obj_clear_flag(s_action_panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *act_title = lv_label_create(s_action_panel);
+    lv_label_set_text(act_title, "");
+    lv_obj_set_style_text_color(act_title, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(act_title, &lv_font_montserrat_24, 0);
+    lv_obj_align(act_title, LV_ALIGN_TOP_MID, 0, 0);
+
+    s_action_ta = lv_textarea_create(s_action_panel);
+    lv_obj_set_size(s_action_ta, 560, 60);
+    lv_obj_align(s_action_ta, LV_ALIGN_TOP_MID, 0, 32);
+    lv_textarea_set_one_line(s_action_ta, true);
+    lv_textarea_set_max_length(s_action_ta, 15);
+    lv_obj_set_style_text_font(s_action_ta, &lv_font_montserrat_24, 0);
+    lv_obj_add_event_cb(s_action_ta, action_ta_focused_cb, LV_EVENT_FOCUSED, NULL);
+
+    lv_obj_t *act_cancel = lv_btn_create(s_action_panel);
+    lv_obj_set_size(act_cancel, 160, 56);
+    lv_obj_align(act_cancel, LV_ALIGN_BOTTOM_LEFT, 20, -12);
+    lv_obj_set_style_bg_color(act_cancel, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_radius(act_cancel, 8, 0);
+    lv_obj_add_event_cb(act_cancel, action_cancel_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *cancel_lbl = lv_label_create(act_cancel);
+    lv_label_set_text(cancel_lbl, "Cancel");
+    lv_obj_set_style_text_color(cancel_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(cancel_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(cancel_lbl);
+
+    lv_obj_t *act_delete = lv_btn_create(s_action_panel);
+    lv_obj_set_size(act_delete, 160, 56);
+    lv_obj_align(act_delete, LV_ALIGN_BOTTOM_LEFT, 190, -12);
+    lv_obj_set_style_bg_color(act_delete, lv_color_hex(0x962020), 0);
+    lv_obj_set_style_radius(act_delete, 8, 0);
+    lv_obj_add_event_cb(act_delete, action_delete_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *delete_lbl = lv_label_create(act_delete);
+    lv_label_set_text(delete_lbl, "Delete");
+    lv_obj_set_style_text_color(delete_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(delete_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(delete_lbl);
+
+    lv_obj_t *act_save = lv_btn_create(s_action_panel);
+    lv_obj_set_size(act_save, 160, 56);
+    lv_obj_align(act_save, LV_ALIGN_BOTTOM_RIGHT, -20, -12);
+    lv_obj_set_style_bg_color(act_save, lv_color_hex(0x2e8b3a), 0);
+    lv_obj_set_style_radius(act_save, 8, 0);
+    lv_obj_add_event_cb(act_save, action_save_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *save_lbl = lv_label_create(act_save);
+    lv_label_set_text(save_lbl, "Save");
+    lv_obj_set_style_text_color(save_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(save_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(save_lbl);
+
+    lv_obj_add_flag(s_action_panel, LV_OBJ_FLAG_HIDDEN);
+
+    s_action_kb = lv_keyboard_create(s_modal);
+    static lv_style_t style_kb;
+    static bool kb_inited = false;
+    if (!kb_inited) {
+        lv_style_init(&style_kb);
+        lv_style_set_bg_color(&style_kb, lv_color_hex(0x303030));
+        lv_style_set_bg_opa(&style_kb, LV_OPA_COVER);
+        lv_style_set_text_color(&style_kb, lv_color_white());
+        lv_style_set_border_width(&style_kb, 1);
+        lv_style_set_border_color(&style_kb, lv_color_hex(0x505050));
+        kb_inited = true;
+    }
+    lv_obj_add_style(s_action_kb, &style_kb, LV_PART_ITEMS);
+    lv_obj_set_size(s_action_kb, LV_PCT(100), 280);
+    lv_obj_align(s_action_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_keyboard_set_mode(s_action_kb, LV_KEYBOARD_MODE_TEXT_UPPER);
+    lv_obj_set_style_text_font(s_action_kb, &lv_font_montserrat_24, 0);
+    lv_obj_add_flag(s_action_kb, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_action_kb, action_kb_cb, LV_EVENT_READY,  NULL);
+    lv_obj_add_event_cb(s_action_kb, action_kb_cb, LV_EVENT_CANCEL, NULL);
 
     ESP_LOGI(TAG, "built");
 }
