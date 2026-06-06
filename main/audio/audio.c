@@ -78,7 +78,7 @@ esp_err_t audio_init(void)
         return ESP_ERR_NO_MEM;
     }
 
-    iq_balance_init();
+    // IQ balance initialized from main.c after settings load
     iq_balance_set_enabled(true);  // Phase A: hardcoded ON for first test
     ESP_LOGI(TAG, "IQ balance correction: ENABLED");
     ESP_LOGI(TAG, "Sample ring buffer: %d bytes (~%lu ms @ 48k stereo int16)",

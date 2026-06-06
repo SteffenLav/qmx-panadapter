@@ -87,6 +87,7 @@ static void action_cancel_cb(lv_event_t *e)
 {
     (void)e;
     lv_obj_add_flag(s_action_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_action_kb, LV_OBJ_FLAG_HIDDEN);
     s_action_idx = -1;
 }
 

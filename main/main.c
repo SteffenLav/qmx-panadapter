@@ -19,6 +19,7 @@
 #include "render.h"
 #include "render_waterfall.h"
 #include "settings.h"
+#include "dsp/iq_balance.h"
 #include "mem_channels.h"
 #include "wifi.h"
 #include "iq_balance.h"
@@ -50,6 +51,7 @@ void app_main(void)
     mem_channels_init();
     qmx_settings_t cfg;
     settings_load_all(&cfg);
+    iq_balance_init(cfg.iq_enabled);  /* Restore IQ balance state from NVS */
 
     lv_display_t *disp = NULL;
     ESP_ERROR_CHECK(display_init(&disp));

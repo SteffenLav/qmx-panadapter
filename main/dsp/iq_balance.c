@@ -43,11 +43,6 @@ static float    s_K_phi         = 0.0f;
 static float    s_K_amp         = 1.0f;
 
 // ---- Public API --------------------------------------------------------
-void iq_balance_init(void)
-{
-    iq_balance_reset();
-}
-
 void iq_balance_reset(void)
 {
     s_startup_count = 0;
@@ -60,6 +55,11 @@ void iq_balance_reset(void)
     s_K_amp = 1.0f;
 }
 
+void iq_balance_init(bool enabled)
+{
+    s_enabled = enabled;
+    iq_balance_reset();
+}
 void iq_balance_set_enabled(bool on)
 {
     s_enabled = on;
