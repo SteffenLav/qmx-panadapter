@@ -5,6 +5,7 @@ idf_component_register(
         "ui/ui.c"
         "ui/wifi_config.c"
         "ui/identity_config.c"
+        "ui/memory_modal.c"
         "ui/ui_mode.c"
         "ui/ft8_screen.c"
         "ui/ft8_screen_view.c"
