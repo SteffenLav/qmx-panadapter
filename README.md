@@ -555,6 +555,9 @@ Validated live on 20 m FT8 across 25+ consecutive slots with drawer + modal inte
 - **FT8 decode colour coding.** RED = own callsign (priority), GREEN = "CQ " prefix, WHITE = other. Colours on callsign + message labels only.
 - **`cat_get_mode_str()` helper.** Returns cached Kenwood mode digit as readable string (e.g. "USB", "CW", "DiGi").
 
+### Shipped in v0.10.3
+- CW mode frequency display: added 640 Hz LO offset correction for accurate dial alignment
+
 ### Shipped in v0.10.2
 
 - **IQ Balance setting now persistent.** Toggle state is restored from NVS on every boot/flash/power-cycle, no longer defaults to OFF.
