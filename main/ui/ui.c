@@ -49,6 +49,9 @@ int ui_get_if_bin_shift(int n_bins)
     // Integer math, rounded to nearest bin via half-step add when positive,
     // half-step subtract when negative.
     int total_hz = IF_OFFSET_HZ + (int)s_if_cal_hz;
+    // Add 640 Hz CW LO offset if in CW mode
+    const char *m = cat_get_mode_str();
+    if (m && strcmp(m, "CW") == 0) total_hz += 640;
     int sign = (total_hz < 0) ? -1 : 1;
     int abs_hz = (total_hz < 0) ? -total_hz : total_hz;
     int shift = ((abs_hz * n_bins) + 24000) / 48000;  // +24000 = round to nearest
