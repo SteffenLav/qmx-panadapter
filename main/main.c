@@ -19,6 +19,7 @@
 #include "render.h"
 #include "render_waterfall.h"
 #include "settings.h"
+#include "mem_channels.h"
 #include "wifi.h"
 #include "iq_balance.h"
 #include "ui_mode.h"
@@ -46,6 +47,7 @@ void app_main(void)
     }
 
     settings_init();
+    mem_channels_init();
     qmx_settings_t cfg;
     settings_load_all(&cfg);
 
