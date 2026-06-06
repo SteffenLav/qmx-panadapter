@@ -94,6 +94,7 @@ typedef struct {
     char prev_brg[12];
     char prev_heard[12];
     int16_t prev_snr_db;
+    int8_t  prev_color;     /* -1=unset 0=other 1=CQ/green 2=self/red */
 } row_widgets_t;
 
 static lv_obj_t *s_container   = NULL;
@@ -112,6 +113,7 @@ static row_widgets_t s_rows[MAX_ROWS];
 
 static lv_timer_t *s_t_refresh  = NULL;
 static lv_timer_t *s_t_clock    = NULL;
+static char         s_my_call[16] = {0};  /* operator callsign uppercased; refreshed by 1 Hz clock timer */
 
 static volatile bool s_refresh_pending = false;
 
@@ -256,6 +258,7 @@ static void build_row(int i)
     r->prev_brg[0]     = '\0';
     r->prev_heard[0]   = '\0';
     r->prev_snr_db     = -127;
+    r->prev_color      = -1;
 }
 
 static void update_row(int i, const ft8_call_t *src)
@@ -295,6 +298,23 @@ static void update_row(int i, const ft8_call_t *src)
     set_text_if_changed(r->l_brg,     r->prev_brg,     sizeof(r->prev_brg),     b_brg);
     set_text_if_changed(r->l_heard,   r->prev_heard,   sizeof(r->prev_heard),   b_heard);
 
+    /* Ken's colour scheme: RED=own call heard, GREEN=CQ, WHITE=other */
+    {
+        int8_t col = 0; /* other / white */
+        if (s_my_call[0] && strstr(src->last_text, s_my_call)) {
+            col = 2; /* own call in message -> red */
+        } else if (strncmp(src->last_text, "CQ ", 3) == 0) {
+            col = 1; /* CQ -> green */
+        }
+        if (col != r->prev_color) {
+            r->prev_color = col;
+            lv_color_t c = (col == 2) ? lv_palette_main(LV_PALETTE_RED)
+                         : (col == 1) ? lv_palette_main(LV_PALETTE_GREEN)
+                         :              lv_color_white();
+            lv_obj_set_style_text_color(r->l_call, c, 0);
+            lv_obj_set_style_text_color(r->l_msg,  c, 0);
+        }
+    }
     if (src->last_snr_db != r->prev_snr_db) {
         r->prev_snr_db = src->last_snr_db;
         lv_obj_set_style_text_color(r->l_snr, snr_color(snr), 0);
@@ -520,6 +540,14 @@ void ft8_screen_view_show(void)
                 snprintf(buf, sizeof(buf), "ME: %s %s", s.my_callsign, s.my_grid);
             } else {
                 snprintf(buf, sizeof(buf), "ME: %s", s.my_callsign);
+            }
+            /* refresh callsign cache for row colour scheme */
+            {
+                size_t ci;
+                for (ci = 0; ci < sizeof(s_my_call) - 1 && s.my_callsign[ci]; ci++)
+                    s_my_call[ci] = (s.my_callsign[ci] >= 'a' && s.my_callsign[ci] <= 'z')
+                                   ? (char)(s.my_callsign[ci] - 32) : s.my_callsign[ci];
+                s_my_call[ci] = 0;
             }
             lv_label_set_text(s_lbl_me, buf);
             lv_obj_clear_flag(s_lbl_me, LV_OBJ_FLAG_HIDDEN);
