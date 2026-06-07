@@ -164,6 +164,197 @@ static void band_label_clicked_cb(lv_event_t *e)
     band_popup_open();
 }
 
+// ---- BW preset popup --------------------------------------------------
+static lv_obj_t *s_bw_popup = NULL;
+static lv_obj_t *s_bw_label;  // forward ref
+
+static void bw_popup_close(void)
+{
+    if (s_bw_popup) { lv_obj_delete(s_bw_popup); s_bw_popup = NULL; }
+}
+
+static void bw_preset_cb(lv_event_t *e)
+{
+    uint32_t hz = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
+    bw_popup_close();
+    const char *mode = cat_get_mode_str();
+    if (strcmp(mode, "CW") == 0 || strcmp(mode, "CW-R") == 0) {
+        cat_send_raw_cmd("MMCW|CW passband=%lu;", (unsigned long)hz);
+    } else {
+        cat_send_raw_cmd("MMSSB|Filter RX=%lu;", (unsigned long)hz);
+        // Force DSP reinit: switch to CW then back to trigger filter reload
+        vTaskDelay(pdMS_TO_TICKS(50));
+        cat_set_mode("CW");
+        vTaskDelay(pdMS_TO_TICKS(100));
+        cat_set_mode(mode);
+    }
+}
+
+static void bw_overlay_cb(lv_event_t *e)
+{
+    (void)e;
+    bw_popup_close();
+}
+
+static void bw_label_clicked_cb(lv_event_t *e);
+static void bw_popup_open(void)
+{
+    if (s_bw_popup) { bw_popup_close(); return; }
+
+    // BW only adjustable in CW mode via CAT
+    static const uint32_t cw_bw[]  = {50, 100, 150, 200, 250, 300, 400, 500};
+    static const char    *cw_lbl[] = {"50","100","150","200","250","300","400","500"};
+    const char *cur_mode = cat_get_mode_str();
+    if (strcmp(cur_mode, "CW") != 0 && strcmp(cur_mode, "CW-R") != 0) return;
+    const uint32_t *bw_list = cw_bw;
+    const char **lbl_list = cw_lbl;
+    int n_bw = 8;
+
+    lv_obj_t *ov = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(ov, LV_HOR_RES, LV_VER_RES);
+    lv_obj_set_pos(ov, 0, 0);
+    lv_obj_set_style_bg_opa(ov, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(ov, 0, 0);
+    lv_obj_clear_flag(ov, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(ov, bw_overlay_cb, LV_EVENT_CLICKED, NULL);
+    s_bw_popup = ov;
+
+    int btn_h = 64;
+    int panel_w = 140;
+    int panel_h = n_bw * btn_h + 4;
+    lv_obj_t *panel = lv_obj_create(ov);
+    lv_obj_set_size(panel, panel_w, panel_h);
+    lv_obj_set_style_pad_top(panel, 0, 0);
+    lv_obj_set_style_pad_bottom(panel, 0, 0);
+    lv_obj_set_style_pad_left(panel, 0, 0);
+    lv_obj_set_style_pad_right(panel, 0, 0);
+    lv_obj_set_style_pad_row(panel, 0, 0);
+    lv_area_t la;
+    lv_obj_get_coords(s_bw_label, &la);
+    int label_cx = (la.x1 + la.x2) / 2;
+    lv_obj_set_pos(panel, label_cx - panel_w / 2 - 10, 60);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0x1A1A1A), 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(0x444444), 0);
+    lv_obj_set_style_border_width(panel, 1, 0);
+    lv_obj_set_style_pad_all(panel, 0, 0);
+    lv_obj_set_style_radius(panel, 6, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+
+    uint32_t cur_bw = ui_get_passband_width_hz();
+    for (int i = 0; i < n_bw; i++) {
+        bool active = (cur_bw == bw_list[i]);
+        lv_obj_t *btn = lv_obj_create(panel);
+        lv_obj_set_size(btn, panel_w, btn_h);
+        lv_obj_set_style_bg_color(btn, active ? lv_color_hex(0x2A2A00) : lv_color_hex(0x1A1A1A), 0);
+        lv_obj_set_style_border_width(btn, 0, 0);
+        lv_obj_set_style_radius(btn, 0, 0);
+        lv_obj_set_style_pad_all(btn, 0, 0);
+        lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(btn, bw_preset_cb, LV_EVENT_CLICKED,
+                            (void *)(uintptr_t)bw_list[i]);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, lbl_list[i]);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(lbl, active ? lv_color_hex(0xFFD700) : lv_color_hex(0xC0C0C0), 0);
+        lv_obj_center(lbl);
+    }
+}
+
+static void bw_label_clicked_cb(lv_event_t *e)
+{
+    (void)e;
+    bw_popup_open();
+}
+
+// ---- Mode preset popup ------------------------------------------------
+static lv_obj_t *s_mode_popup = NULL;
+static lv_obj_t *s_mode_label;  // forward ref — defined below with other label statics
+
+static void mode_popup_close(void)
+{
+    if (s_mode_popup) { lv_obj_delete(s_mode_popup); s_mode_popup = NULL; }
+}
+
+static void mode_preset_cb(lv_event_t *e)
+{
+    const char *mode = (const char *)lv_event_get_user_data(e);
+    mode_popup_close();
+    cat_set_mode(mode);
+}
+
+static void mode_overlay_cb(lv_event_t *e)
+{
+    (void)e;
+    mode_popup_close();
+}
+
+static void mode_label_clicked_cb(lv_event_t *e);
+static void mode_popup_open(void)
+{
+    if (s_mode_popup) { mode_popup_close(); return; }
+
+    static const char *modes[] = {"USB", "LSB", "CW", "DiGi"};
+    int n_modes = 4;
+
+    lv_obj_t *ov = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(ov, LV_HOR_RES, LV_VER_RES);
+    lv_obj_set_pos(ov, 0, 0);
+    lv_obj_set_style_bg_opa(ov, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(ov, 0, 0);
+    lv_obj_clear_flag(ov, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(ov, mode_overlay_cb, LV_EVENT_CLICKED, NULL);
+    s_mode_popup = ov;
+
+    int btn_h = 64;
+    int panel_w = 140;
+    int panel_h = n_modes * btn_h + 4;  // +4 so flex fits all rows
+    lv_obj_t *panel = lv_obj_create(ov);
+    lv_obj_set_size(panel, panel_w, panel_h);
+    lv_obj_set_style_pad_top(panel, 0, 0);
+    lv_obj_set_style_pad_bottom(panel, 0, 0);
+    lv_obj_set_style_pad_left(panel, 0, 0);
+    lv_obj_set_style_pad_right(panel, 0, 0);
+    lv_obj_set_style_pad_row(panel, 0, 0);
+    lv_area_t la;
+    lv_obj_get_coords(s_mode_label, &la);
+    int label_cx = (la.x1 + la.x2) / 2;
+    lv_obj_set_pos(panel, label_cx - panel_w / 2 - 20, 60);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0x1A1A1A), 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(0x444444), 0);
+    lv_obj_set_style_border_width(panel, 1, 0);
+    lv_obj_set_style_pad_all(panel, 0, 0);
+    lv_obj_set_style_radius(panel, 6, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+
+    const char *cur_mode = cat_get_mode_str();
+    for (int i = 0; i < n_modes; i++) {
+        bool active = (strcmp(cur_mode, modes[i]) == 0);
+        lv_obj_t *btn = lv_obj_create(panel);
+        lv_obj_set_size(btn, panel_w, btn_h);
+        lv_obj_set_style_bg_color(btn, active ? lv_color_hex(0x2A2A00) : lv_color_hex(0x1A1A1A), 0);
+        lv_obj_set_style_border_width(btn, 0, 0);
+        lv_obj_set_style_radius(btn, 0, 0);
+        lv_obj_set_style_pad_all(btn, 0, 0);
+        lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(btn, mode_preset_cb, LV_EVENT_CLICKED, (void *)modes[i]);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, modes[i]);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(lbl, active ? lv_color_hex(0xFFD700) : lv_color_hex(0xC0C0C0), 0);
+        lv_obj_center(lbl);
+    }
+}
+
+static void mode_label_clicked_cb(lv_event_t *e)
+{
+    (void)e;
+    mode_popup_open();
+}
+
 // ---- Zoom preset popup ------------------------------------------------
 static void zoom_popup_open(void);  // forward decl
 static void zoom_popup_close(void)
@@ -423,13 +614,19 @@ static void build_top_bar(lv_obj_t *parent)
     lv_label_set_text(s_mode_label, "Mode: USB");
     lv_obj_set_style_text_color(s_mode_label, lv_color_hex(0xA0E0A0), 0);
     lv_obj_set_style_text_font(s_mode_label, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_mode_label, LV_ALIGN_LEFT_MID, 200, 0);
+    lv_obj_align(s_mode_label, LV_ALIGN_LEFT_MID, 188, 0);
+    lv_obj_set_ext_click_area(s_mode_label, 20);
+    lv_obj_add_flag(s_mode_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_mode_label, mode_label_clicked_cb, LV_EVENT_CLICKED, NULL);
 
     s_bw_label = lv_label_create(bar);
     lv_label_set_text(s_bw_label, "BW: ---");
     lv_obj_set_style_text_color(s_bw_label, lv_color_hex(0xC0C0FF), 0);
     lv_obj_set_style_text_font(s_bw_label, &lv_font_montserrat_24, 0);
     lv_obj_align(s_bw_label, LV_ALIGN_LEFT_MID, 355, 0);
+    lv_obj_set_ext_click_area(s_bw_label, 20);
+    lv_obj_add_flag(s_bw_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_bw_label, bw_label_clicked_cb, LV_EVENT_CLICKED, NULL);
 
     s_freq_label = lv_label_create(bar);
     lv_label_set_text(s_freq_label, "Center Freq: 14.074.000 Hz");

@@ -53,6 +53,7 @@ static char s_rx_buf[CAT_RX_BUFFER_SIZE];
 static size_t s_rx_len = 0;
 static char   s_mm_resp[64] = {0};  // last MM response, set by process_cat_message
 static size_t s_mm_resp_len = 0;
+
 static uint32_t s_last_freq_hz = 0;
 static char s_last_mode_digit = 0;  // Phase 5.10: cached Kenwood mode digit
 static int  s_cw_offset_hz = 700;   // CW LO offset read from QMX at connect, default 700
