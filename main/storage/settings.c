@@ -27,6 +27,7 @@ static const char *TAG = "settings";
 #define KEY_CW_PITCH   "cw_pitch"
 #define KEY_COLORMAP   "colormap"
 #define KEY_CW_CAL     "cw_cal"
+#define KEY_ZOOM       "zoom"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -36,6 +37,7 @@ static const char *TAG = "settings";
 #define DEF_FLAT_MODE   (true)
 #define DEF_CW_PITCH    (700)
 #define DEF_CW_CAL      (-60)
+#define DEF_ZOOM        (1.0f)
 #define DEF_COLORMAP    (0)  // Thermal
 
 // Debounce: how long we wait after the last change before flushing.
@@ -55,6 +57,7 @@ static const char *TAG = "settings";
 #define DIRTY_MY_CALL   (1u << 10)
 #define DIRTY_MY_GRID   (1u << 11)
 #define DIRTY_CW_CAL    (1u << 12)
+#define DIRTY_ZOOM      (1u << 13)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -137,6 +140,10 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_LAST_VFO)  nvs_set_u32(s_nvs, KEY_LAST_VFO, snap.last_vfo_hz);
         if (dirty_local & DIRTY_CW_PITCH)  nvs_set_u16(s_nvs, KEY_CW_PITCH, snap.cw_pitch_hz);
         if (dirty_local & DIRTY_CW_CAL)    nvs_set_i16(s_nvs, KEY_CW_CAL,   snap.cw_cal_hz);
+        if (dirty_local & DIRTY_ZOOM) {
+            uint32_t bits; memcpy(&bits, &snap.zoom_factor, 4);
+            nvs_set_u32(s_nvs, KEY_ZOOM, bits);
+        }
         if (dirty_local & DIRTY_COLORMAP)  nvs_set_u8(s_nvs, KEY_COLORMAP, snap.colormap_idx);
 
         esp_err_t err = nvs_commit(s_nvs);
@@ -175,7 +182,7 @@ void settings_init(void)
     s_ready = true;
 
     // Spawn the debounced flush task. Low priority — IO, not real-time.
-    xTaskCreate(flush_task, "settings_flush", 2048, NULL, 3, &s_flush_task);
+    xTaskCreate(flush_task, "settings_flush", 3072, NULL, 3, &s_flush_task);
     ESP_LOGI(TAG, "ready");
 }
 
@@ -192,6 +199,7 @@ void settings_load_all(qmx_settings_t *out)
     out->last_vfo_hz = 0;
     out->cw_pitch_hz = DEF_CW_PITCH;
     out->cw_cal_hz   = DEF_CW_CAL;
+    out->zoom_factor = DEF_ZOOM;
     out->colormap_idx = DEF_COLORMAP;
 
     if (!s_ready) {
@@ -209,6 +217,7 @@ void settings_load_all(qmx_settings_t *out)
     nvs_get_u32(s_nvs, KEY_LAST_VFO, &out->last_vfo_hz);
     nvs_get_u16(s_nvs, KEY_CW_PITCH, &out->cw_pitch_hz);
     nvs_get_i16(s_nvs, KEY_CW_CAL,   &out->cw_cal_hz);
+    { uint32_t bits = 0; if (nvs_get_u32(s_nvs, KEY_ZOOM, &bits) == ESP_OK) memcpy(&out->zoom_factor, &bits, 4); }
     nvs_get_u8(s_nvs, KEY_COLORMAP, &out->colormap_idx);
 
     // Strings: zero buffers first, then read length-bounded.
@@ -393,6 +402,16 @@ void settings_set_my_grid(const char *grid)
     mark_dirty(DIRTY_MY_GRID);
 }
 
+void settings_set_zoom_factor(float v)
+{
+    if (v < 1.0f) v = 1.0f;
+    if (v > 24.0f) v = 24.0f;
+    uint32_t bits; memcpy(&bits, &v, 4);
+    uint32_t cur_bits; memcpy(&cur_bits, &s_pending.zoom_factor, 4);
+    if (bits == cur_bits) return;
+    s_pending.zoom_factor = v;
+    mark_dirty(DIRTY_ZOOM);
+}
 void settings_set_cw_cal_hz(int16_t hz)
 {
     if (hz < -200) hz = -200;

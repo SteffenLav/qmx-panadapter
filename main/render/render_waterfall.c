@@ -160,12 +160,15 @@ void render_waterfall_tick(const float *spectrum, int n_bins)
     //   x=WF_W/2  -> bin 0         (DC)
     //   x=WF_W-1  -> bin n_bins/2 - 1 (most-positive freq, wraps to n_bins/2 - 1)
     // For 1024 bins on 1280 px we have ~0.8 bins/px (slight oversample, fine for waterfall).
+    // Zoom+pan: mirror spectrum render path exactly.
+    int wf_window = (int)((float)n_bins / ui_get_zoom_factor());
+    if (wf_window < 4) wf_window = 4;
+    if (wf_window > n_bins) wf_window = n_bins;
+    int wf_center = ((ui_get_if_bin_shift(n_bins) + ui_get_pan_offset_bins()) % n_bins + n_bins) % n_bins;
+    int wf_start  = wf_center - wf_window / 2;
     for (int x = 0; x < WF_WIDTH; x++) {
-        // Map x in [0, WF_WIDTH) to bin in [0, n_bins) with fftshift
-        int bin_unshifted = (x * n_bins) / WF_WIDTH;       // 0..n_bins-1
-        int bin = (bin_unshifted + n_bins / 2) % n_bins;    // fftshift
-        // Phase 5.10E: QMX 12 kHz IF offset compensation (match ui_push_spectrum)
-        bin = (bin + ui_get_if_bin_shift(n_bins)) % n_bins;  // 12 kHz IF + per-unit cal trim
+        int b = wf_start + (int)((float)x * (float)wf_window / (float)WF_WIDTH);
+        int bin = ((b % n_bins) + n_bins) % n_bins;
 
         float db = spectrum[bin];
         // Match browser LUT mapping: noise floor -> idx 32, +31 dB above floor -> idx 255.

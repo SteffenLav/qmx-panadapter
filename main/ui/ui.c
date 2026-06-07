@@ -22,6 +22,7 @@
 #include "ft8_screen.h"
 #include "ft8_screen_view.h"
 #include "ft8_test.h"
+#include "esp_lcd_touch.h"
 
 static const char *TAG = "ui";
 static lv_obj_t *s_mode_btn_lbl = NULL;
@@ -66,11 +67,45 @@ void ui_set_cw_cal_hz(int16_t hz)
     settings_set_cw_cal_hz(hz);
     ESP_LOGI("ui", "IF cal set to %+d Hz", (int)hz);
 }
+// Zoom and pan state. zoom_factor=1.0 = full 48 kHz view.
+// pan_offset_bins=0 = centered on dial freq. Not thread-safe —
+// only written from LVGL task (touch callbacks) and read from render task.
+// Zoom persisted to NVS; pan resets to 0 on boot/band change.
+static float s_zoom_factor    = 1.0f;
+static int   s_pan_offset_bins = 0;
+static lv_obj_t *s_zoom_label  = NULL;  // top bar zoom indicator
+
+float ui_get_zoom_factor(void)    { return s_zoom_factor; }
+int   ui_get_pan_offset_bins(void){ return s_pan_offset_bins; }
+
+void ui_set_zoom(float zoom, int pan_bins)
+{
+    if (zoom < 1.0f)  zoom = 1.0f;
+    if (zoom > 24.0f) zoom = 24.0f;
+    s_zoom_factor     = zoom;
+    s_pan_offset_bins = pan_bins;
+    settings_set_zoom_factor(zoom);
+    // Update zoom label
+    if (s_zoom_label) {
+        if (zoom <= 1.01f) {
+            lv_obj_set_style_text_color(s_zoom_label, lv_color_hex(0x606060), 0);
+            lv_label_set_text(s_zoom_label, "Zoom: x1.0");
+        } else {
+            char b[24];
+            snprintf(b, sizeof(b), "Zoom: x%.1f", (double)zoom);
+            lv_obj_set_style_text_color(s_zoom_label, lv_color_hex(0xFFD700), 0);
+            lv_label_set_text(s_zoom_label, b);
+        }
+    }
+}
+
 #define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - LABEL_BAR_H - BOTTOM_BAR_H)
 
 // Forward declarations (Phase 6.1 - touch-to-tune)
 static void touch_event_cb(lv_event_t *e);
 static void settings_button_cb(lv_event_t *e);  // Phase 5.10D
+static void pinch_poll_cb(lv_timer_t *t);
+static void update_freq_axis_labels(uint32_t center_hz);
 static uint32_t s_last_qmx_freq_hz = 0;  // updated by ui_update_frequency
 static char s_current_mode[8] = "USB";  // Phase 5.10F: latest CAT mode for snap-aware tuning
 static char s_current_band[8] = "---";  // Phase 9 (v0.9.5): cached band string for web JSON
@@ -81,6 +116,19 @@ static uint16_t s_cw_pitch_hz = 700;  // CW sidetone offset (Hz); applied to tou
 static int s_target_x = -1;
 static uint64_t s_target_until_us = 0;
 #define TARGET_DISPLAY_MS  600
+
+// Multi-touch / zoom+pan state
+extern esp_lcd_touch_handle_t bsp_display_get_touch_handle(void);
+static esp_lcd_touch_handle_t s_tp = NULL;  // set in ui_init
+static bool     s_pinch_active      = false;
+static float    s_pinch_start_zoom  = 1.0f;
+static int      s_pinch_start_dist  = 0;
+static int      s_pinch_start_pan   = 0;   // pan at pinch start
+static int      s_pinch_mid_x       = 0;   // midpoint x at pinch start
+static uint64_t s_last_tap_us       = 0;   // for double-tap detection
+static int      s_last_tap_x        = -1;
+#define DOUBLE_TAP_MS   500
+#define DOUBLE_TAP_PX   120
 // (s_last_qmx_freq_hz declared at top of file)
 
 // Widget handles
@@ -115,6 +163,7 @@ static lv_obj_t *s_lbl_ifcal    = NULL;
 static lv_obj_t *s_slider_ifcal = NULL;
 static lv_obj_t *s_lbl_cwpitch = NULL;
 static lv_obj_t *s_dropdown_cmap = NULL;
+static lv_obj_t *s_tune_tooltip  = NULL;  // freq label above finger during tap-to-tune
 static void drawer_preset_normal_cb(lv_event_t *e);
 static void drawer_preset_dx_cb(lv_event_t *e);
 static void drawer_preset_strong_cb(lv_event_t *e);
@@ -234,6 +283,13 @@ static void build_top_bar(lv_obj_t *parent)
     lv_obj_set_style_text_color(blbl, lv_color_hex(0xC0C0C0), 0);
     lv_obj_set_style_text_font(blbl, &lv_font_montserrat_24, 0);
     lv_obj_center(blbl);
+
+    // Zoom indicator: dim grey at x1.0, amber when zoomed in.
+    s_zoom_label = lv_label_create(bar);
+    lv_label_set_text(s_zoom_label, "Zoom: x1.0");
+    lv_obj_set_style_text_color(s_zoom_label, lv_color_hex(0x606060), 0);
+    lv_obj_set_style_text_font(s_zoom_label, &lv_font_montserrat_20, 0);
+    lv_obj_align(s_zoom_label, LV_ALIGN_RIGHT_MID, -80, 0);
 }
 
 // ==== Spectrum region (Phase 5.1: real-time line graph) ====
@@ -363,16 +419,30 @@ static void build_label_bar(lv_obj_t *parent)
 // At 48 kHz span, ticks are at -24/-12/0/+12/+24 kHz. Format as 7.000 / 14.012 etc.
 static void update_freq_axis_labels(uint32_t center_hz)
 {
-    const int offsets_khz[5] = { -24, -12, 0, +12, +24 };
+    // Zoomed view: full span = sample_rate / zoom_factor.
+    // 5 ticks at display positions 0, 1/4, 1/2, 3/4, 1 of display width.
+    // Pan shifts the center by pan_bins * (sample_rate / N) Hz.
+    int32_t span_hz = (int32_t)(48000.0f / s_zoom_factor);
+    int32_t pan_hz  = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
+    // Tick positions: -span/2, -span/4, 0, +span/4, +span/2 relative to panned center.
     for (int i = 0; i < 5; i++) {
         if (!s_tick_labels[i]) continue;
-        int32_t hz = (int32_t)center_hz + offsets_khz[i] * 1000;
+        int32_t offset = pan_hz + (span_hz * (i - 2)) / 4;
+        int32_t hz = (int32_t)center_hz + offset;
         if (hz < 0) hz = 0;
-        char buf[16];
-        // Format: MM.HHH where MM = MHz, HHH = kHz (1 kHz resolution shown)
-        snprintf(buf, sizeof(buf), "%lu.%03lu",
-                 (unsigned long)(hz / 1000000),
-                 (unsigned long)((hz / 1000) % 1000));
+        char buf[20];
+        // High zoom: show Hz resolution; low zoom: kHz is enough.
+        if (span_hz < 10000) {
+            // Show MM.KKK.HHH
+            snprintf(buf, sizeof(buf), "%lu.%03lu.%03lu",
+                     (unsigned long)(hz / 1000000),
+                     (unsigned long)((hz / 1000) % 1000),
+                     (unsigned long)(hz % 1000));
+        } else {
+            snprintf(buf, sizeof(buf), "%lu.%03lu",
+                     (unsigned long)(hz / 1000000),
+                     (unsigned long)((hz / 1000) % 1000));
+        }
         lv_label_set_text(s_tick_labels[i], buf);
     }
 }
@@ -408,8 +478,7 @@ static void build_waterfall(lv_obj_t *parent)
     lv_obj_align(s_wf_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
 
     // Initialize entire 2x buffer to black (waterfall starts empty)
-    memset(s_wf_canvas_buf, 0, (size_t)DISPLAY_H_RES * WATERFALL_H * 2 * 2);
-    lv_obj_invalidate(s_wf_canvas);
+    memset(s_wf_canvas_buf, 0, (size_t)DISPLAY_H_RES * WATERFALL_H * 2 * 2);    lv_obj_invalidate(s_wf_canvas);
 }
 
 // ==== Bottom status bar ====
@@ -500,7 +569,79 @@ void ui_init(lv_display_t *disp)
         settings_load_all(&s);
         s_cw_cal_hz = s.cw_cal_hz;
         ESP_LOGI(TAG, "CW trim loaded from NVS: %d Hz", (int)s_cw_cal_hz);
+        // Load zoom from NVS; pan always resets to 0 on boot.
+        if (s.zoom_factor >= 1.0f && s.zoom_factor <= 24.0f)
+            s_zoom_factor = s.zoom_factor;
+        ui_set_zoom(s_zoom_factor, 0);
+        ESP_LOGI(TAG, "Zoom loaded from NVS: %.1f", (double)s_zoom_factor);
     }
+    // Floating freq tooltip shown above finger during tap-to-tune.
+    s_tune_tooltip = lv_label_create(lv_screen_active());
+    lv_label_set_text(s_tune_tooltip, "");
+    lv_obj_set_style_text_color(s_tune_tooltip, lv_color_hex(0x00FFFF), 0);
+    lv_obj_set_style_text_font(s_tune_tooltip, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_bg_color(s_tune_tooltip, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_tune_tooltip, LV_OPA_70, 0);
+    lv_obj_set_style_pad_all(s_tune_tooltip, 4, 0);
+    lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_tune_tooltip);
+
+    // Grab touch handle for multi-touch polling in touch_event_cb.
+    s_tp = bsp_display_get_touch_handle();
+    ESP_LOGI(TAG, "Touch handle: %s", s_tp ? "OK" : "NULL");
+    // Pinch/pan polling timer: 50 ms, reads raw touch driver directly.
+    lv_timer_create(pinch_poll_cb, 50, NULL);
+}
+
+// Pinch/pan polling timer callback. Runs on LVGL task (core 0) every 50 ms.
+// Reads raw touch driver coords directly so two-finger gestures are detected
+// independently of LVGL single-pointer event routing.
+static void pinch_poll_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_tp) return;
+    esp_lcd_touch_read_data(s_tp);
+    uint8_t npts = s_tp->data.points;
+    if (npts < 2) {
+        if (s_pinch_active) {
+            ESP_LOGI("pinch", "Pinch end: zoom=%.1f pan=%d", (double)s_zoom_factor, s_pan_offset_bins);
+            s_pinch_active = false;
+        }
+        return;
+    }
+    // Two fingers detected. Under sw_rotate+LV_DISPLAY_ROTATION_90,
+    // raw panel coords are portrait (720x1280). Landscape x = panel y.
+    int lx0 = (int)s_tp->data.coords[0].y;
+    int lx1 = (int)s_tp->data.coords[1].y;
+    int dist = lx1 - lx0;
+    if (dist < 0) dist = -dist;
+    if (dist < 4) dist = 4;
+    int mid_x = (lx0 + lx1) / 2;
+    if (!s_pinch_active) {
+        s_pinch_active     = true;
+        s_pinch_start_dist = dist;
+        s_pinch_start_zoom = s_zoom_factor;
+        s_pinch_start_pan  = s_pan_offset_bins;
+        s_pinch_mid_x      = mid_x;
+        ESP_LOGI("pinch", "Pinch start: dist=%d zoom=%.1f", dist, (double)s_zoom_factor);
+        return;
+    }
+    // Update zoom from spread ratio.
+    float new_zoom = s_pinch_start_zoom * (float)dist / (float)s_pinch_start_dist;
+    if (new_zoom < 1.0f)  new_zoom = 1.0f;
+    if (new_zoom > 24.0f) new_zoom = 24.0f;
+    // Update pan from midpoint shift.
+    int N = DSP_FFT_SIZE;
+    int window_bins = (int)((float)N / new_zoom);
+    if (window_bins < 4) window_bins = 4;
+    int pan_delta_px   = mid_x - s_pinch_mid_x;  // positive = fingers moved right = view moves right = lower freqs
+    int pan_delta_bins = (pan_delta_px * window_bins) / DISPLAY_H_RES;
+    int new_pan = s_pinch_start_pan + pan_delta_bins;
+    int max_pan = (N - window_bins) / 2;
+    if (new_pan < -max_pan) new_pan = -max_pan;
+    if (new_pan >  max_pan) new_pan =  max_pan;
+    ui_set_zoom(new_zoom, new_pan);
+    s_target_until_us = 0;  // suppress tune cursor during pinch
 }
 
 // Phase 5.10: forward declaration for band_from_freq (defined below)
@@ -510,6 +651,8 @@ static void update_freq_axis_labels(uint32_t center_hz);  // Phase 5.10C
 void ui_update_frequency(uint32_t freq_hz)
 {
     s_last_qmx_freq_hz = freq_hz;
+    // Reset pan to 0 on freq change — new center is the tuned freq.
+    s_pan_offset_bins = 0;
     settings_set_last_vfo(freq_hz);
     if (!s_freq_label) return;
     char buf[32];
@@ -756,24 +899,18 @@ void ui_push_spectrum(const float *bins, int n_bins)
     }
 
     int N = n_bins;
-    int half = N / 2;
+    // Zoom+pan: window_bins = how many FFT bins span the display.
+    int window_bins = (int)((float)N / s_zoom_factor);
+    if (window_bins < 4) window_bins = 4;
+    if (window_bins > N) window_bins = N;
+    // center_bin: in the raw (non-fftshifted) FFT array, DC is at bin 0.
+    // The display center maps to the IF-shifted bin, adjusted for pan.
+    int center_bin = ((ui_get_if_bin_shift(N) + s_pan_offset_bins) % N + N) % N;
+    int bin_start  = center_bin - window_bins / 2;
 
     for (int x = 0; x < DISPLAY_H_RES; x++) {
-        int shifted = (int)((float)x * (float)N / (float)DISPLAY_H_RES);
-        if (shifted < 0) shifted = 0;
-        if (shifted >= N) shifted = N - 1;
-
-        int bin;
-        if (shifted < half) {
-            bin = shifted + half;
-        } else {
-            bin = shifted - half;
-        }
-        // Phase 5.10E: 12 kHz IF offset compensation. Shift selected bin
-        // right by (IF_OFFSET_HZ / sample_rate * N) bins so the QMX tuned
-        // frequency (+12 kHz in baseband) appears at the visual center.
-        bin = (bin + ui_get_if_bin_shift(N)) % N;
-        if (bin < 0) bin += N;
+        int b = bin_start + (int)((float)x * (float)window_bins / (float)DISPLAY_H_RES);
+        int bin = ((b % N) + N) % N;
 
         int y_top;
         if (s_flat_mode) {
@@ -783,12 +920,8 @@ void ui_push_spectrum(const float *bins, int n_bins)
             for (int dx = -2; dx <= 2; dx++) {
                 int xn = x + dx;
                 if (xn < 0 || xn >= DISPLAY_H_RES) continue;
-                int sn = (int)((float)xn * (float)N / (float)DISPLAY_H_RES);
-                if (sn < 0) sn = 0;
-                if (sn >= N) sn = N - 1;
-                int bn = (sn < half) ? (sn + half) : (sn - half);
-                bn = (bn + ui_get_if_bin_shift(N)) % N;
-                if (bn < 0) bn += N;
+                int sn = bin_start + (int)((float)xn * (float)window_bins / (float)DISPLAY_H_RES);
+                int bn = ((sn % N) + N) % N;
                 sum += s_flat_smooth[bn] - s_flat_floor[bn];
                 cnt++;
             }
@@ -829,8 +962,10 @@ void ui_push_spectrum(const float *bins, int n_bins)
         const uint16_t pb_color = 0x8410;  /* medium grey */
         for (int side = 0; side < 2; side++) {
             int32_t edge_hz = (side == 0) ? pb_low_hz : pb_high_hz;
-            /* Edge frequency in Hz -> screen x. Sample rate = 48 kHz spans full width. */
-            int edge_x = DISPLAY_H_RES / 2 + (int)((int64_t)edge_hz * DISPLAY_H_RES / 48000);
+            /* Edge frequency in Hz -> screen x, accounting for zoom and pan. */
+            int32_t pan_hz = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
+            int32_t span_hz_pb = (int32_t)(48000.0f / s_zoom_factor);
+            int edge_x = (int)((int64_t)(edge_hz - pan_hz) * DISPLAY_H_RES / span_hz_pb) + DISPLAY_H_RES / 2;
             if (edge_x < 0 || edge_x >= DISPLAY_H_RES) continue;
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + edge_x] = pb_color;
@@ -855,11 +990,43 @@ void ui_push_spectrum(const float *bins, int n_bins)
                     px[y * DISPLAY_H_RES + tx] = target_color;
                 }
             }
+            // Update floating freq tooltip.
+            if (s_tune_tooltip && s_last_qmx_freq_hz > 0) {
+                int dx_tt = tx - DISPLAY_H_RES / 2;
+                int32_t span_hz_tt = (int32_t)(48000.0f / s_zoom_factor);
+                int32_t pan_hz_tt  = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
+                int32_t off_hz = (int32_t)((int64_t)dx_tt * span_hz_tt / DISPLAY_H_RES) + pan_hz_tt;
+                // Snap to 10 Hz in CW mode so tooltip matches what will be tuned.
+                if (strstr(s_current_mode, "CW")) {
+                    off_hz = (off_hz + (off_hz >= 0 ? 5 : -5)) / 10 * 10;
+                }
+                int64_t tip_hz = (int64_t)s_last_qmx_freq_hz + off_hz;
+                if (tip_hz > 0) {
+                    char tbuf[24];
+                    snprintf(tbuf, sizeof(tbuf), "%lu.%03lu.%03lu",
+                        (unsigned long)(tip_hz / 1000000),
+                        (unsigned long)((tip_hz / 1000) % 1000),
+                        (unsigned long)(tip_hz % 1000));
+                    lv_label_set_text(s_tune_tooltip, tbuf);
+                    // Position above finger, clamped to screen.
+                    int tip_x = tx - 50;
+                    if (tip_x < 0) tip_x = 0;
+                    if (tip_x > DISPLAY_H_RES - 120) tip_x = DISPLAY_H_RES - 120;
+                    int tip_y = TOP_BAR_H + 4;
+                    lv_obj_set_pos(s_tune_tooltip, tip_x, tip_y);
+                    lv_obj_clear_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+                }
+            }
         } else {
             s_target_x = -1;
+            if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
         }
+    } else if (s_tune_tooltip) {
+        lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
     }
     lv_obj_invalidate(s_spec_canvas);
+    // Update freq axis labels every frame so zoom/pan changes are reflected.
+    update_freq_axis_labels(s_last_qmx_freq_hz);
     display_unlock();
 }
 
@@ -902,6 +1069,17 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row)
                          s_wf_canvas_buf + s_wf_head * row_bytes,
                          DISPLAY_H_RES, WATERFALL_H, LV_COLOR_FORMAT_RGB565);
 
+    // Overlay cyan cursor on the newest waterfall row only.
+    // Drawing on all rows would permanently burn cyan into old rows.
+    if (s_target_x >= 0 && esp_timer_get_time() < s_target_until_us) {
+        const uint16_t cyan = 0x07FF;
+        uint16_t *row0 = (uint16_t *)(s_wf_canvas_buf + s_wf_head * row_bytes);
+        int tx = s_target_x;
+        if (tx >= 0 && tx < DISPLAY_H_RES) {
+            row0[tx] = cyan;
+            if (tx + 1 < DISPLAY_H_RES) row0[tx + 1] = cyan;
+        }
+    }
     lv_obj_invalidate(s_wf_canvas);
     display_unlock();
 }
@@ -984,14 +1162,29 @@ static void touch_event_cb(lv_event_t *e)
     if (p.x < 0 || p.x >= DISPLAY_H_RES) return;
 
     if (code == LV_EVENT_PRESSING) {
-        // Live preview: cyan cursor tracks the finger; refresh the 200ms lingering window
-        // every tick so the line stays visible while the finger is down.
+        if (s_pinch_active) return;  // pinch timer owns gesture
         s_target_x = (int)p.x;
-        s_target_until_us = esp_timer_get_time() + 200000;  // 200 ms grace after lift
+        s_target_until_us = esp_timer_get_time() + 200000;
         return;
     }
-
     if (code == LV_EVENT_RELEASED) {
+        // If releasing a pinch, clear pinch state and skip tune.
+        if (s_pinch_active) {
+            s_pinch_active = false;
+            return;
+        }
+        // Double-tap: reset zoom+pan to 1.0/0.
+        uint64_t now_us = esp_timer_get_time();
+        if (s_last_tap_x >= 0 &&
+            (now_us - s_last_tap_us) < (uint64_t)DOUBLE_TAP_MS * 1000 &&
+            abs((int)p.x - s_last_tap_x) < DOUBLE_TAP_PX) {
+            ESP_LOGI("ui_touch", "Double-tap: reset zoom+pan");
+            ui_set_zoom(1.0f, 0);
+            s_last_tap_x = -1;
+            return;
+        }
+        s_last_tap_us = now_us;
+        s_last_tap_x  = (int)p.x;
         if (s_last_qmx_freq_hz == 0) return;  // no freq known yet, can't tune
         // Phase 5.10D: deadzone under-and-left of the burger button.
         // Burger is at top-right (~x=1216..1276, ~y=top bar). Block touches
@@ -1008,24 +1201,22 @@ static void touch_event_cb(lv_event_t *e)
             return;
         }
 
-        // Compute target frequency from final touch position
+        // Compute target frequency from final touch position.
+        // When zoomed in, each pixel covers fewer Hz; pan shifts the center.
         int dx = (int)p.x - DISPLAY_H_RES / 2;
-        int32_t offset_hz = (int32_t)((int64_t)dx * UAC_SAMPLE_RATE / DISPLAY_H_RES);
+        // Effective Hz per pixel = (sample_rate / zoom) / display_width
+        int32_t offset_hz = (int32_t)((int64_t)dx * UAC_SAMPLE_RATE / (int)(DISPLAY_H_RES * s_zoom_factor));
+        // Add pan offset in Hz (pan_bins -> Hz)
+        int32_t pan_hz = (int32_t)((int64_t)s_pan_offset_bins * UAC_SAMPLE_RATE / DSP_FFT_SIZE);
+        offset_hz += pan_hz;
         // Snap to strongest bin within +/-700 Hz of touch (handler falls through if no peak).
         int32_t snapped_hz = offset_hz;
-        if (dsp_find_peak_hz_around(offset_hz, 700, &snapped_hz) == ESP_OK) {
+        // Only snap to peak when not zoomed in — at high zoom the tap is precise enough.
+        if (s_zoom_factor <= 1.5f && dsp_find_peak_hz_around(offset_hz, 700, &snapped_hz) == ESP_OK) {
             if (snapped_hz != offset_hz) {
                 ESP_LOGI("ui_touch", "snap-to-peak: %ld -> %ld Hz", (long)offset_hz, (long)snapped_hz);
             }
             offset_hz = snapped_hz;
-        }
-        // CW pitch correction: signal sits at +pitch (CW/USB-side) or -pitch (CW-R/LSB-side)
-        // above/below the dial. Subtract/add so the touched audio peak lands at sidetone.
-        // CW-R must be tested before CW (strstr would match both).
-        if (strstr(s_current_mode, "CW-R") || strstr(s_current_mode, "CWR")) {
-            offset_hz += (int32_t)s_cw_pitch_hz;
-        } else if (strstr(s_current_mode, "CW")) {
-            offset_hz -= (int32_t)s_cw_pitch_hz;
         }
         // Phase 5.10F: mode-aware snap. CW=10 Hz (precision), SSB=500 Hz
         // (voice channels), FT8/data=100 Hz, AM/FM=1 kHz.

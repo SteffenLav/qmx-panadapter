@@ -23,6 +23,7 @@ typedef struct {
     char     my_callsign[16];  // operator callsign for FT8 (15 chars + NUL)
     char     my_grid[8];       // Maidenhead grid (6 chars + NUL, e.g. "JO45ab")
     int16_t  cw_cal_hz;        // CW LO trim (Hz), default -60, range +/-100
+    float    zoom_factor;      // spectrum/waterfall zoom, 1.0=full, max 24.0
 } qmx_settings_t;
 
 // Initialise the settings module. Opens an NVS handle. Safe to call
@@ -62,6 +63,7 @@ void settings_set_my_grid(const char *grid);
 // the +12 kHz IF injection; this trim corrects what users see on the spectrum/
 // waterfall. Clamped to +/-200 Hz, persisted to NVS (debounced flush).
 void settings_set_cw_cal_hz(int16_t hz);
+void settings_set_zoom_factor(float v);
 
 // Force any pending writes to flash immediately. Call before reboot
 // if you want absolute certainty. Normally not needed.

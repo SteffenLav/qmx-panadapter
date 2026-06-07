@@ -18,6 +18,9 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row);  // Phase 5
 void ui_set_db_range(float db_min, float db_max);
 void ui_set_cw_pitch_hz(uint16_t hz);  // CW sidetone offset, persisted to NVS
 void ui_set_cw_cal_hz(int16_t hz);     // CW LO trim (Hz), +/-100, persisted to NVS
+float ui_get_zoom_factor(void);         // current zoom (1.0=full, max 24.0)
+int   ui_get_pan_offset_bins(void);     // current pan offset in FFT bins
+void  ui_set_zoom(float zoom, int pan_bins); // set zoom+pan, persists zoom to NVS
 int  ui_get_if_bin_shift(int n_bins);  // Total bin shift = (IF_OFFSET_HZ + if_cal_hz) -> bins
 
 // Bottom status bar: 3-zone layout (left/center/right). Pass NULL or "" to clear.
