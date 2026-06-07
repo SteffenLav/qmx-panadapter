@@ -87,3 +87,22 @@ bool cat_is_ready(void);
  * Returns 700 (QMX default) if not yet read or CAT not connected.
  */
 int cat_get_cw_offset_hz(void);
+/**
+ * @brief Send a raw formatted CAT/MM command string to the QMX.
+ * Uses printf-style format. Fire-and-forget, no response parsed.
+ */
+esp_err_t cat_send_raw_cmd(const char *fmt, ...);
+
+#define CAT_MAX_BANDS 16
+
+typedef struct {
+    char     name[8];      // e.g. "40"
+    uint32_t center_hz;    // Frequency center from band config
+} cat_band_entry_t;
+
+/**
+ * @brief Get the band list read from QMX at connect time.
+ * @param out_count  number of valid entries populated
+ * @return pointer to static array of cat_band_entry_t
+ */
+const cat_band_entry_t *cat_get_band_list(int *out_count);

@@ -79,6 +79,91 @@ static lv_obj_t *s_zoom_popup  = NULL;  // zoom preset dropdown panel
 float ui_get_zoom_factor(void)    { return s_zoom_factor; }
 int   ui_get_pan_offset_bins(void){ return s_pan_offset_bins; }
 
+// ---- Band preset popup ------------------------------------------------
+static lv_obj_t *s_band_popup = NULL;
+static lv_obj_t *s_band_label;  // forward ref — defined below with other label statics
+
+static void band_popup_close(void)
+{
+    if (s_band_popup) { lv_obj_delete(s_band_popup); s_band_popup = NULL; }
+}
+
+static void band_preset_cb(lv_event_t *e)
+{
+    uint32_t hz = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
+    band_popup_close();
+    cat_set_frequency(hz);
+}
+
+static void band_overlay_cb(lv_event_t *e)
+{
+    (void)e;
+    band_popup_close();
+}
+
+static void band_label_clicked_cb(lv_event_t *e);
+static void band_popup_open(void)
+{
+    if (s_band_popup) { band_popup_close(); return; }
+    int band_count = 0;
+    const cat_band_entry_t *bands = cat_get_band_list(&band_count);
+    if (band_count == 0) return;
+
+    lv_obj_t *ov = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(ov, LV_HOR_RES, LV_VER_RES);
+    lv_obj_set_pos(ov, 0, 0);
+    lv_obj_set_style_bg_opa(ov, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(ov, 0, 0);
+    lv_obj_clear_flag(ov, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(ov, band_overlay_cb, LV_EVENT_CLICKED, NULL);
+    s_band_popup = ov;
+
+    int btn_h = 64;
+    int panel_w = 140;
+    int panel_h = band_count * btn_h;
+    lv_obj_t *panel = lv_obj_create(ov);
+    lv_obj_set_size(panel, panel_w, panel_h);
+    lv_area_t la;
+    lv_obj_get_coords(s_band_label, &la);
+    lv_obj_set_pos(panel, -8, 60);  // centered under band label
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0x1A1A1A), 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(0x444444), 0);
+    lv_obj_set_style_border_width(panel, 1, 0);
+    lv_obj_set_style_pad_all(panel, 0, 0);
+    lv_obj_set_style_radius(panel, 6, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+
+    uint32_t cur_hz = cat_get_frequency();
+    for (int i = 0; i < band_count; i++) {
+        bool active = (cur_hz >= bands[i].center_hz - 1000000 &&
+                       cur_hz <= bands[i].center_hz + 1000000);
+        lv_obj_t *btn = lv_obj_create(panel);
+        lv_obj_set_size(btn, panel_w, btn_h);
+        lv_obj_set_style_bg_color(btn, active ? lv_color_hex(0x2A2A00) : lv_color_hex(0x1A1A1A), 0);
+        lv_obj_set_style_border_width(btn, 0, 0);
+        lv_obj_set_style_radius(btn, 0, 0);
+        lv_obj_set_style_pad_all(btn, 0, 0);
+        lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(btn, band_preset_cb, LV_EVENT_CLICKED,
+                            (void *)(uintptr_t)bands[i].center_hz);
+        lv_obj_t *lbl = lv_label_create(btn);
+        char bstr[12];
+        snprintf(bstr, sizeof(bstr), "%sm", bands[i].name);
+        lv_label_set_text(lbl, bstr);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(lbl, active ? lv_color_hex(0xFFD700) : lv_color_hex(0xC0C0C0), 0);
+        lv_obj_center(lbl);
+    }
+}
+
+static void band_label_clicked_cb(lv_event_t *e)
+{
+    (void)e;
+    band_popup_open();
+}
+
 // ---- Zoom preset popup ------------------------------------------------
 static void zoom_popup_open(void);  // forward decl
 static void zoom_popup_close(void)
@@ -330,6 +415,9 @@ static void build_top_bar(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_band_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(s_band_label, &lv_font_montserrat_24, 0);
     lv_obj_align(s_band_label, LV_ALIGN_LEFT_MID, 8, 0);
+    lv_obj_set_ext_click_area(s_band_label, 20);
+    lv_obj_add_flag(s_band_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_band_label, band_label_clicked_cb, LV_EVENT_CLICKED, NULL);
 
     s_mode_label = lv_label_create(bar);
     lv_label_set_text(s_mode_label, "Mode: USB");

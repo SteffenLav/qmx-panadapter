@@ -1,6 +1,7 @@
 #include "cat.h"
 
 #include <string.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -50,12 +51,34 @@ static bool s_audio_dumped = false;
 
 static char s_rx_buf[CAT_RX_BUFFER_SIZE];
 static size_t s_rx_len = 0;
+static char   s_mm_resp[64] = {0};  // last MM response, set by process_cat_message
+static size_t s_mm_resp_len = 0;
 static uint32_t s_last_freq_hz = 0;
 static char s_last_mode_digit = 0;  // Phase 5.10: cached Kenwood mode digit
 static int  s_cw_offset_hz = 700;   // CW LO offset read from QMX at connect, default 700
+static cat_band_entry_t s_band_list[CAT_MAX_BANDS];
+static int              s_band_count = 0;
+
+const cat_band_entry_t *cat_get_band_list(int *out_count)
+{
+    if (out_count) *out_count = s_band_count;
+    return s_band_list;
+}
 static uint64_t s_last_tx_us = 0;   // for rate-limiting cat_set_frequency
 
 int cat_get_cw_offset_hz(void) { return s_cw_offset_hz; }
+esp_err_t cat_send_raw_cmd(const char *fmt, ...)
+{
+    if (!s_cdc_dev) return ESP_ERR_INVALID_STATE;
+    char buf[64];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    size_t len = strlen(buf);
+    ESP_LOGI("cat", "raw cmd: %s", buf);
+    return cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)buf, len, 200);
+}
 static void link_task(void *arg);
 static void poll_task(void *arg);
 static bool handle_rx(const uint8_t *data, size_t data_len, void *user_arg);
@@ -180,6 +203,13 @@ static void process_cat_message(const char *msg, size_t len)
         }
         ui_update_passband_width(hz);
         s_cat_ready = true;
+        return;
+    }
+    // MM response: starts with "MM", ends with ";"
+    if (len >= 3 && msg[0] == 'M' && msg[1] == 'M') {
+        s_mm_resp_len = len;
+        memcpy(s_mm_resp, msg, len < sizeof(s_mm_resp) ? len : sizeof(s_mm_resp) - 1);
+        s_mm_resp[len < sizeof(s_mm_resp) ? len : sizeof(s_mm_resp) - 1] = '\0';
         return;
     }
     // QMX returns "?;" for unsupported commands; we just log once.
@@ -433,9 +463,9 @@ static void link_task(void *arg)
                     s_cdc_dev, (const uint8_t *)cw_q, strlen(cw_q), 200);
                 if (cerr == ESP_OK) {
                     vTaskDelay(pdMS_TO_TICKS(100));
-                    // Response is in s_rx_buf — parse MMnnn;
-                    if (s_rx_len >= 4 && strncmp(s_rx_buf, "MM", 2) == 0) {
-                        int val = atoi(s_rx_buf + 2);
+                    // Response is in s_mm_resp — parse MMnnn;
+                    if (s_mm_resp_len >= 4 && strncmp(s_mm_resp, "MM", 2) == 0) {
+                        int val = atoi(s_mm_resp + 2);
                         if (val >= 600 && val <= 800) {
                             s_cw_offset_hz = val;
                             ESP_LOGI(TAG, "QMX CW offset: %d Hz", s_cw_offset_hz);
@@ -449,6 +479,45 @@ static void link_task(void *arg)
                 } else {
                     ESP_LOGW(TAG, "Failed to query CW offset: 0x%x", cerr);
                 }
+            }
+            // Query band list from QMX band config (up to 16 slots)
+            {
+                s_band_count = 0;
+                for (int bi = 0; bi < CAT_MAX_BANDS; bi++) {
+                    // Query band name
+                    char qname[48];
+                    snprintf(qname, sizeof(qname), "MMBand config.|Band name (m)[%d];", bi);
+                    s_rx_len = 0;
+                    esp_err_t be = cdc_acm_host_data_tx_blocking(
+                        s_cdc_dev, (const uint8_t *)qname, strlen(qname), 200);
+                    if (be != ESP_OK) break;
+                    vTaskDelay(pdMS_TO_TICKS(80));
+                    // "?;" means empty slot — stop
+                    if (s_mm_resp_len < 3 || strncmp(s_mm_resp, "MM", 2) != 0 ||
+                        strncmp(s_mm_resp, "MM?", 3) == 0) break;
+                    // Parse: MMxx; where xx is band name
+                    char bname[8] = {0};
+                    int nlen = (int)s_mm_resp_len - 3;  // strip "MM" prefix and ";"
+                    if (nlen <= 0 || nlen >= (int)sizeof(bname)) break;
+                    snprintf(bname, sizeof(bname), "%.*s", nlen, s_mm_resp + 2);
+                    s_mm_resp_len = 0;
+                    // Query center frequency
+                    char qfreq[56];
+                    snprintf(qfreq, sizeof(qfreq), "MMBand config.|Frequency center[%d];", bi);
+                    be = cdc_acm_host_data_tx_blocking(
+                        s_cdc_dev, (const uint8_t *)qfreq, strlen(qfreq), 200);
+                    if (be != ESP_OK) break;
+                    vTaskDelay(pdMS_TO_TICKS(80));
+                    if (s_mm_resp_len < 3 || strncmp(s_mm_resp, "MM", 2) != 0) break;
+                    uint32_t cf = (uint32_t)atoi(s_mm_resp + 2);
+                    s_mm_resp_len = 0;
+                    if (cf == 0) break;
+                    snprintf(s_band_list[s_band_count].name, sizeof(s_band_list[0].name), "%s", bname);
+                    s_band_list[s_band_count].center_hz = cf;
+                    ESP_LOGI(TAG, "Band[%d]: %sm @ %lu Hz", bi, bname, (unsigned long)cf);
+                    s_band_count++;
+                }
+                ESP_LOGI(TAG, "Band list: %d bands found", s_band_count);
             }
             xTaskCreatePinnedToCore(
                 poll_task, "cat_poll", 4096, NULL, 5, &s_poll_task, 1);
