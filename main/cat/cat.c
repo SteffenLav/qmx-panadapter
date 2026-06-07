@@ -52,8 +52,10 @@ static char s_rx_buf[CAT_RX_BUFFER_SIZE];
 static size_t s_rx_len = 0;
 static uint32_t s_last_freq_hz = 0;
 static char s_last_mode_digit = 0;  // Phase 5.10: cached Kenwood mode digit
+static int  s_cw_offset_hz = 700;   // CW LO offset read from QMX at connect, default 700
 static uint64_t s_last_tx_us = 0;   // for rate-limiting cat_set_frequency
 
+int cat_get_cw_offset_hz(void) { return s_cw_offset_hz; }
 static void link_task(void *arg);
 static void poll_task(void *arg);
 static bool handle_rx(const uint8_t *data, size_t data_len, void *user_arg);
@@ -422,6 +424,30 @@ static void link_task(void *arg)
                     ESP_LOGI(TAG, "QMX IQ mode enabled (Q9 1;)");
                 } else {
                     ESP_LOGW(TAG, "Failed to enable QMX IQ mode: 0x%x", terr);
+                }
+            }
+            // Read CW offset from QMX menu (session value, EEPROM-persisted on QMX side)
+            {
+                const char *cw_q = "MMCW|CW offset;";
+                esp_err_t cerr = cdc_acm_host_data_tx_blocking(
+                    s_cdc_dev, (const uint8_t *)cw_q, strlen(cw_q), 200);
+                if (cerr == ESP_OK) {
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                    // Response is in s_rx_buf — parse MMnnn;
+                    if (s_rx_len >= 4 && strncmp(s_rx_buf, "MM", 2) == 0) {
+                        int val = atoi(s_rx_buf + 2);
+                        if (val >= 600 && val <= 800) {
+                            s_cw_offset_hz = val;
+                            ESP_LOGI(TAG, "QMX CW offset: %d Hz", s_cw_offset_hz);
+                        } else {
+                            ESP_LOGW(TAG, "CW offset out of range (%d), using 700", val);
+                        }
+                    } else {
+                        ESP_LOGW(TAG, "No valid MM response for CW offset, using 700");
+                    }
+                    s_rx_len = 0;
+                } else {
+                    ESP_LOGW(TAG, "Failed to query CW offset: 0x%x", cerr);
                 }
             }
             xTaskCreatePinnedToCore(

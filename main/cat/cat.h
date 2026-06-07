@@ -80,3 +80,10 @@ esp_err_t cat_set_passband_hz(uint32_t hz);
  * Cleared on QMX USB disconnect.
  */
 bool cat_is_ready(void);
+/**
+ * @brief Get the CW offset (Hz) read from QMX at connect time.
+ *
+ * Read once via MMCW|CW offset; after Q9 1; on CDC open.
+ * Returns 700 (QMX default) if not yet read or CAT not connected.
+ */
+int cat_get_cw_offset_hz(void);

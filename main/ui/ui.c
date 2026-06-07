@@ -41,29 +41,29 @@ static lv_obj_t *s_mode_btn_lbl = NULL;
 
 // Per-unit QMX IF calibration trim (Hz), loaded from NVS at init.
 // Updated by drawer slider; used by ui_get_if_bin_shift() helper.
-static int16_t s_if_cal_hz = 0;
+static int16_t s_cw_cal_hz = 0;  // loaded from NVS at boot, default -60
 
 int ui_get_if_bin_shift(int n_bins)
 {
-    // (IF_OFFSET_HZ + s_if_cal_hz) Hz expressed as a bin count at 48 kHz.
+    // IF_OFFSET_HZ (12 kHz) always. In CW mode add QMX CW LO offset + per-unit trim.
     // Integer math, rounded to nearest bin via half-step add when positive,
     // half-step subtract when negative.
-    int total_hz = IF_OFFSET_HZ + (int)s_if_cal_hz;
-    // Add 640 Hz CW LO offset if in CW mode
+    int total_hz = IF_OFFSET_HZ;
     const char *m = cat_get_mode_str();
-    if (m && strcmp(m, "CW") == 0) total_hz += 640;
+    if (m && strcmp(m, "CW") == 0)
+        total_hz += cat_get_cw_offset_hz() + (int)s_cw_cal_hz;
     int sign = (total_hz < 0) ? -1 : 1;
     int abs_hz = (total_hz < 0) ? -total_hz : total_hz;
     int shift = ((abs_hz * n_bins) + 24000) / 48000;  // +24000 = round to nearest
     return sign * shift;
 }
 
-void ui_set_if_cal_hz(int16_t hz)
+void ui_set_cw_cal_hz(int16_t hz)
 {
     if (hz < -200) hz = -200;
     if (hz >  200) hz =  200;
-    s_if_cal_hz = hz;
-    settings_set_if_cal_hz(hz);
+    s_cw_cal_hz = hz;
+    settings_set_cw_cal_hz(hz);
     ESP_LOGI("ui", "IF cal set to %+d Hz", (int)hz);
 }
 #define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - LABEL_BAR_H - BOTTOM_BAR_H)
@@ -131,14 +131,14 @@ static void drawer_slider_ifcal_cb(lv_event_t *e)
     (void)e;
     if (!s_slider_ifcal) return;
     int v = (int)lv_slider_get_value(s_slider_ifcal);
-    // Step is 10 Hz on the LVGL side; round to nearest 10 in case of slop.
-    int snapped = ((v + (v >= 0 ? 5 : -5)) / 10) * 10;
-    if (snapped < -200) snapped = -200;
-    if (snapped >  200) snapped =  200;
-    ui_set_if_cal_hz((int16_t)snapped);
+    // Step is 5 Hz on the LVGL side; round to nearest 5 in case of slop.
+    int snapped = ((v + (v >= 0 ? 2 : -2)) / 5) * 5;
+    if (snapped < -100) snapped = -100;
+    if (snapped >  100) snapped =  100;
+    ui_set_cw_cal_hz((int16_t)snapped);
     if (s_lbl_ifcal) {
         char b[24];
-        snprintf(b, sizeof(b), "IF cal: %+d Hz", snapped);
+        snprintf(b, sizeof(b), "CW trim: %+d Hz", snapped);
         lv_label_set_text(s_lbl_ifcal, b);
     }
 }
@@ -494,6 +494,13 @@ void ui_init(lv_display_t *disp)
     lv_obj_move_foreground(screenshot_get_btn());
     ESP_LOGI(TAG, "UI built: top=%dpx spectrum=%dpx labels=%dpx waterfall=%dpx bottom=%dpx",
              TOP_BAR_H, SPECTRUM_H, LABEL_BAR_H, WATERFALL_H, BOTTOM_BAR_H);
+    // Load CW trim from NVS so bin shift is correct from first frame.
+    {
+        qmx_settings_t s;
+        settings_load_all(&s);
+        s_cw_cal_hz = s.cw_cal_hz;
+        ESP_LOGI(TAG, "CW trim loaded from NVS: %d Hz", (int)s_cw_cal_hz);
+    }
 }
 
 // Phase 5.10: forward declaration for band_from_freq (defined below)
@@ -1366,7 +1373,7 @@ static void drawer_build(void)
     {
         qmx_settings_t scfg2;
         settings_load_all(&scfg2);
-        snprintf(ifbuf, sizeof(ifbuf), "IF cal: %+d Hz", (int)scfg2.if_cal_hz);
+        snprintf(ifbuf, sizeof(ifbuf), "CW trim: %+d Hz", (int)scfg2.cw_cal_hz);
     }
     lv_label_set_text(s_lbl_ifcal, ifbuf);
     lv_obj_set_style_text_color(s_lbl_ifcal, lv_color_hex(0xFFFFFF), 0);
@@ -1375,11 +1382,11 @@ static void drawer_build(void)
     y += 30;
     s_slider_ifcal = lv_slider_create(s_drawer);
     lv_obj_set_size(s_slider_ifcal, DRAWER_W - 32, 30);
-    lv_slider_set_range(s_slider_ifcal, -200, 200);
+    lv_slider_set_range(s_slider_ifcal, -100, 100);
     {
         qmx_settings_t scfg3;
         settings_load_all(&scfg3);
-        lv_slider_set_value(s_slider_ifcal, (int)scfg3.if_cal_hz, LV_ANIM_OFF);
+        lv_slider_set_value(s_slider_ifcal, (int)scfg3.cw_cal_hz, LV_ANIM_OFF);
     }
     lv_obj_align(s_slider_ifcal, LV_ALIGN_TOP_LEFT, 0, y);
     lv_obj_add_event_cb(s_slider_ifcal, drawer_slider_ifcal_cb, LV_EVENT_VALUE_CHANGED, NULL);

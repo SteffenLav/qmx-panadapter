@@ -22,7 +22,7 @@ typedef struct {
     uint8_t  colormap_idx; // waterfall colour map: 0=Thermal 1=Viridis 2=Turbo 3=Grayscale
     char     my_callsign[16];  // operator callsign for FT8 (15 chars + NUL)
     char     my_grid[8];       // Maidenhead grid (6 chars + NUL, e.g. "JO45ab")
-    int16_t  if_cal_hz;        // QMX IF offset calibration trim (Hz), default 0, range +/-200
+    int16_t  cw_cal_hz;        // CW LO trim (Hz), default -60, range +/-100
 } qmx_settings_t;
 
 // Initialise the settings module. Opens an NVS handle. Safe to call
@@ -61,7 +61,7 @@ void settings_set_my_grid(const char *grid);
 // QMX IF offset calibration trim (Hz). Per-unit oscillator variance shifts
 // the +12 kHz IF injection; this trim corrects what users see on the spectrum/
 // waterfall. Clamped to +/-200 Hz, persisted to NVS (debounced flush).
-void settings_set_if_cal_hz(int16_t hz);
+void settings_set_cw_cal_hz(int16_t hz);
 
 // Force any pending writes to flash immediately. Call before reboot
 // if you want absolute certainty. Normally not needed.

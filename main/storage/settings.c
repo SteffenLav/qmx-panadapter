@@ -26,7 +26,7 @@ static const char *TAG = "settings";
 #define KEY_LAST_VFO   "last_vfo"
 #define KEY_CW_PITCH   "cw_pitch"
 #define KEY_COLORMAP   "colormap"
-#define KEY_IF_CAL     "if_cal"
+#define KEY_CW_CAL     "cw_cal"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -35,7 +35,7 @@ static const char *TAG = "settings";
 #define DEF_IQ_ENABLED  (true)
 #define DEF_FLAT_MODE   (true)
 #define DEF_CW_PITCH    (700)
-#define DEF_IF_CAL      (0)
+#define DEF_CW_CAL      (-60)
 #define DEF_COLORMAP    (0)  // Thermal
 
 // Debounce: how long we wait after the last change before flushing.
@@ -54,7 +54,7 @@ static const char *TAG = "settings";
 #define DIRTY_COLORMAP  (1u << 9)
 #define DIRTY_MY_CALL   (1u << 10)
 #define DIRTY_MY_GRID   (1u << 11)
-#define DIRTY_IF_CAL    (1u << 12)
+#define DIRTY_CW_CAL    (1u << 12)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -136,7 +136,7 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_WIFI_PASS)  nvs_set_str(s_nvs, KEY_WIFI_PASS, snap.wifi_pass);
         if (dirty_local & DIRTY_LAST_VFO)  nvs_set_u32(s_nvs, KEY_LAST_VFO, snap.last_vfo_hz);
         if (dirty_local & DIRTY_CW_PITCH)  nvs_set_u16(s_nvs, KEY_CW_PITCH, snap.cw_pitch_hz);
-        if (dirty_local & DIRTY_IF_CAL)    nvs_set_i16(s_nvs, KEY_IF_CAL,   snap.if_cal_hz);
+        if (dirty_local & DIRTY_CW_CAL)    nvs_set_i16(s_nvs, KEY_CW_CAL,   snap.cw_cal_hz);
         if (dirty_local & DIRTY_COLORMAP)  nvs_set_u8(s_nvs, KEY_COLORMAP, snap.colormap_idx);
 
         esp_err_t err = nvs_commit(s_nvs);
@@ -191,7 +191,7 @@ void settings_load_all(qmx_settings_t *out)
     out->flat_mode  = DEF_FLAT_MODE;
     out->last_vfo_hz = 0;
     out->cw_pitch_hz = DEF_CW_PITCH;
-    out->if_cal_hz   = DEF_IF_CAL;
+    out->cw_cal_hz   = DEF_CW_CAL;
     out->colormap_idx = DEF_COLORMAP;
 
     if (!s_ready) {
@@ -208,7 +208,7 @@ void settings_load_all(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_FLAT_MODE,  &u8v) == ESP_OK) out->flat_mode  = (u8v != 0);
     nvs_get_u32(s_nvs, KEY_LAST_VFO, &out->last_vfo_hz);
     nvs_get_u16(s_nvs, KEY_CW_PITCH, &out->cw_pitch_hz);
-    nvs_get_i16(s_nvs, KEY_IF_CAL,   &out->if_cal_hz);
+    nvs_get_i16(s_nvs, KEY_CW_CAL,   &out->cw_cal_hz);
     nvs_get_u8(s_nvs, KEY_COLORMAP, &out->colormap_idx);
 
     // Strings: zero buffers first, then read length-bounded.
@@ -393,13 +393,13 @@ void settings_set_my_grid(const char *grid)
     mark_dirty(DIRTY_MY_GRID);
 }
 
-void settings_set_if_cal_hz(int16_t hz)
+void settings_set_cw_cal_hz(int16_t hz)
 {
     if (hz < -200) hz = -200;
     if (hz >  200) hz =  200;
-    if (s_pending.if_cal_hz == hz) {
+    if (s_pending.cw_cal_hz == hz) {
         return;
     }
-    s_pending.if_cal_hz = hz;
-    mark_dirty(DIRTY_IF_CAL);
+    s_pending.cw_cal_hz = hz;
+    mark_dirty(DIRTY_CW_CAL);
 }
