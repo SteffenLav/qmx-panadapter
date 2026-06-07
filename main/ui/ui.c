@@ -74,9 +74,97 @@ void ui_set_cw_cal_hz(int16_t hz)
 static float s_zoom_factor    = 1.0f;
 static int   s_pan_offset_bins = 0;
 static lv_obj_t *s_zoom_label  = NULL;  // top bar zoom indicator
+static lv_obj_t *s_zoom_popup  = NULL;  // zoom preset dropdown panel
 
 float ui_get_zoom_factor(void)    { return s_zoom_factor; }
 int   ui_get_pan_offset_bins(void){ return s_pan_offset_bins; }
+
+// ---- Zoom preset popup ------------------------------------------------
+static void zoom_popup_open(void);  // forward decl
+static void zoom_popup_close(void)
+{
+    if (s_zoom_popup) { lv_obj_delete(s_zoom_popup); s_zoom_popup = NULL; }
+}
+
+static void zoom_preset_cb(lv_event_t *e)
+{
+    float z = *(float *)lv_event_get_user_data(e);
+    zoom_popup_close();
+    ui_set_zoom(z, 0);
+}
+
+static void zoom_overlay_cb(lv_event_t *e)
+{
+    (void)e;
+    zoom_popup_close();
+}
+
+static const float ZOOM_PRESETS[] = {1.0f, 2.0f, 4.0f, 8.0f, 16.0f, 24.0f};
+static const char *ZOOM_LABELS[]  = {"x1",  "x2",  "x4",  "x8",  "x16", "x24"};
+#define N_ZOOM_PRESETS 6
+
+static void zoom_label_clicked_cb(lv_event_t *e)
+{
+    (void)e;
+    zoom_popup_open();
+}
+
+static void zoom_popup_open(void)
+{
+    if (s_zoom_popup) { zoom_popup_close(); return; }  // toggle
+
+    // Full-screen transparent overlay catches outside taps
+    lv_obj_t *ov = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(ov, LV_HOR_RES, LV_VER_RES);
+    lv_obj_set_pos(ov, 0, 0);
+    lv_obj_set_style_bg_opa(ov, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(ov, 0, 0);
+    lv_obj_clear_flag(ov, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(ov, zoom_overlay_cb, LV_EVENT_CLICKED, NULL);
+    s_zoom_popup = ov;
+
+    // Popup panel anchored below zoom label (right side, below top bar)
+    int btn_h = 64;
+    int panel_w = 140;
+    int panel_h = N_ZOOM_PRESETS * btn_h;
+    lv_obj_t *panel = lv_obj_create(ov);
+    lv_obj_set_size(panel, panel_w, panel_h);
+    // Center popup under zoom label using actual rendered coords
+    lv_area_t la;
+    lv_obj_get_coords(s_zoom_label, &la);
+    int label_cx = (la.x1 + la.x2) / 2;
+    lv_obj_set_pos(panel, label_cx - panel_w / 2, 60);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0x1A1A1A), 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(0x444444), 0);
+    lv_obj_set_style_border_width(panel, 1, 0);
+    lv_obj_set_style_pad_all(panel, 0, 0);
+    lv_obj_set_style_radius(panel, 6, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+
+    float cur = s_zoom_factor;
+    for (int i = 0; i < N_ZOOM_PRESETS; i++) {
+        lv_obj_t *btn = lv_obj_create(panel);
+        lv_obj_set_size(btn, panel_w, btn_h);
+        lv_obj_set_style_bg_color(btn,
+            (cur >= ZOOM_PRESETS[i] - 0.1f && cur <= ZOOM_PRESETS[i] + 0.1f)
+            ? lv_color_hex(0x2A2A00) : lv_color_hex(0x1A1A1A), 0);
+        lv_obj_set_style_border_width(btn, 0, 0);
+        lv_obj_set_style_radius(btn, 0, 0);
+        lv_obj_set_style_pad_all(btn, 0, 0);
+        lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(btn, zoom_preset_cb, LV_EVENT_CLICKED,
+                            (void *)&ZOOM_PRESETS[i]);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, ZOOM_LABELS[i]);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(lbl,
+            (cur >= ZOOM_PRESETS[i] - 0.1f && cur <= ZOOM_PRESETS[i] + 0.1f)
+            ? lv_color_hex(0xFFD700) : lv_color_hex(0xC0C0C0), 0);
+        lv_obj_center(lbl);
+    }
+}
 
 void ui_set_zoom(float zoom, int pan_bins)
 {
@@ -164,6 +252,7 @@ static lv_obj_t *s_slider_ifcal = NULL;
 static lv_obj_t *s_lbl_cwpitch = NULL;
 static lv_obj_t *s_dropdown_cmap = NULL;
 static lv_obj_t *s_tune_tooltip  = NULL;  // freq label above finger during tap-to-tune
+static lv_obj_t *s_bw_label      = NULL;  // passband width in top bar
 static void drawer_preset_normal_cb(lv_event_t *e);
 static void drawer_preset_dx_cb(lv_event_t *e);
 static void drawer_preset_strong_cb(lv_event_t *e);
@@ -248,11 +337,17 @@ static void build_top_bar(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_mode_label, &lv_font_montserrat_24, 0);
     lv_obj_align(s_mode_label, LV_ALIGN_LEFT_MID, 200, 0);
 
+    s_bw_label = lv_label_create(bar);
+    lv_label_set_text(s_bw_label, "BW: ---");
+    lv_obj_set_style_text_color(s_bw_label, lv_color_hex(0xC0C0FF), 0);
+    lv_obj_set_style_text_font(s_bw_label, &lv_font_montserrat_24, 0);
+    lv_obj_align(s_bw_label, LV_ALIGN_LEFT_MID, 355, 0);
+
     s_freq_label = lv_label_create(bar);
     lv_label_set_text(s_freq_label, "Center Freq: 14.074.000 Hz");
     lv_obj_set_style_text_color(s_freq_label, lv_color_hex(0xFFD76B), 0);
     lv_obj_set_style_text_font(s_freq_label, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_freq_label, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(s_freq_label, LV_ALIGN_CENTER, 60, 0);
 
     s_smeter_label = lv_label_create(bar);
     lv_label_set_text(s_smeter_label, "Signal: S0");
@@ -288,8 +383,11 @@ static void build_top_bar(lv_obj_t *parent)
     s_zoom_label = lv_label_create(bar);
     lv_label_set_text(s_zoom_label, "Zoom: x1.0");
     lv_obj_set_style_text_color(s_zoom_label, lv_color_hex(0x606060), 0);
-    lv_obj_set_style_text_font(s_zoom_label, &lv_font_montserrat_20, 0);
-    lv_obj_align(s_zoom_label, LV_ALIGN_RIGHT_MID, -80, 0);
+    lv_obj_set_style_text_font(s_zoom_label, &lv_font_montserrat_24, 0);
+    lv_obj_align(s_zoom_label, LV_ALIGN_RIGHT_MID, -90, 0);
+    lv_obj_add_flag(s_zoom_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(s_zoom_label, 20);
+    lv_obj_add_event_cb(s_zoom_label, zoom_label_clicked_cb, LV_EVENT_CLICKED, NULL);
 }
 
 // ==== Spectrum region (Phase 5.1: real-time line graph) ====
@@ -734,6 +832,13 @@ void ui_update_passband_width(uint32_t hz)
         ESP_LOGI("ui", "Passband width = %lu Hz (CAT FW)", (unsigned long)hz);
     }
     s_passband_width_hz = hz;
+    if (s_bw_label && display_lock(20)) {
+        char buf[20];
+        if (hz >= 1000) snprintf(buf, sizeof(buf), "BW: %lu.%01lu kHz", (unsigned long)(hz/1000), (unsigned long)((hz%1000)/100));
+        else            snprintf(buf, sizeof(buf), "BW: %lu Hz", (unsigned long)hz);
+        lv_label_set_text(s_bw_label, buf);
+        display_unlock();
+    }
 }
 
 // Helper: returns (low, high) passband edges in Hz, relative to VFO,
@@ -1252,6 +1357,10 @@ void ui_set_cw_pitch_hz(uint16_t hz)
     s_cw_pitch_hz = hz;
     settings_set_cw_pitch_hz(hz);
     ESP_LOGI(TAG, "CW pitch set to %u Hz", (unsigned)hz);
+    // Sync to QMX CW offset setting via Menu Manager CAT command.
+    // With Auto-offset/tone=YES (QMX default), setting CW center also
+    // updates CW offset and sidetone to match.
+    cat_send_raw_cmd("MMCW|CW center=%u;", (unsigned)hz);
 }
 
 // Hook into ui_update_frequency to track latest known QMX frequency
@@ -1537,19 +1646,19 @@ static void drawer_build(void)
     lv_obj_align(cw_hdr, LV_ALIGN_TOP_LEFT, 0, y);
     y += 40;
     s_lbl_cwpitch = lv_label_create(s_drawer);
-    lv_label_set_text(s_lbl_cwpitch, "Pitch: 700 Hz");
+    lv_label_set_text(s_lbl_cwpitch, "CW center: 700 Hz");
     lv_obj_set_style_text_color(s_lbl_cwpitch, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(s_lbl_cwpitch, &lv_font_montserrat_24, 0);
     lv_obj_align(s_lbl_cwpitch, LV_ALIGN_TOP_LEFT, 0, y);
     y += 30;
     s_slider_cwpitch = lv_slider_create(s_drawer);
     lv_obj_set_size(s_slider_cwpitch, DRAWER_W - 32, 30);
-    lv_slider_set_range(s_slider_cwpitch, 400, 1000);
+    lv_slider_set_range(s_slider_cwpitch, 600, 800);
     lv_slider_set_value(s_slider_cwpitch, (int)s_cw_pitch_hz, LV_ANIM_OFF);
     lv_obj_align(s_slider_cwpitch, LV_ALIGN_TOP_LEFT, 0, y);
     lv_obj_add_event_cb(s_slider_cwpitch, drawer_slider_cwpitch_cb, LV_EVENT_VALUE_CHANGED, NULL);
     char cwbuf[24];
-    snprintf(cwbuf, sizeof(cwbuf), "Pitch: %u Hz", (unsigned)s_cw_pitch_hz);
+    snprintf(cwbuf, sizeof(cwbuf), "CW center: %u Hz", (unsigned)s_cw_pitch_hz);
     lv_label_set_text(s_lbl_cwpitch, cwbuf);
     y += 60;
     // IF calibration section (per-unit QMX oscillator trim)
@@ -1761,13 +1870,13 @@ static void drawer_slider_cwpitch_cb(lv_event_t *e)
 {
     lv_obj_t *sl = lv_event_get_target(e);
     int v = (int)lv_slider_get_value(sl);
-    // Snap to nearest 50 Hz
+    // Snap to nearest 50 Hz (valid QMX CW center values are 50 Hz apart)
     int snapped = ((v + 25) / 50) * 50;
-    if (snapped < 400) snapped = 400;
-    if (snapped > 1000) snapped = 1000;
+    if (snapped < 600) snapped = 600;
+    if (snapped > 800) snapped = 800;
     ui_set_cw_pitch_hz((uint16_t)snapped);
     char buf[24];
-    snprintf(buf, sizeof(buf), "Pitch: %d Hz", snapped);
+    snprintf(buf, sizeof(buf), "CW center: %d Hz", snapped);
     if (s_lbl_cwpitch) lv_label_set_text(s_lbl_cwpitch, buf);
 }
 
