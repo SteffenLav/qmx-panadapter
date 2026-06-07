@@ -563,6 +563,9 @@ Validated live on 20 m FT8 across 25+ consecutive slots with drawer + modal inte
 - **IQ Balance setting now persistent.** Toggle state is restored from NVS on every boot/flash/power-cycle, no longer defaults to OFF.
 - **Memory modal: keyboard dismiss on cancel.** Keyboard hidden automatically when cancel button pressed during label edit/delete.
 
+### Shipped in v0.11.1
+- **Top-bar quick-access control strip.** Tap any label in the top bar to open a popup selector. Band popup reads all configured bands dynamically from the QMX at connect time (`MMBand config.` CAT commands) — automatically matches your QMX variant (low/mid/top band). Mode popup switches USB/LSB/CW/DiGi via `MD;`. BW popup selects CW filter width (50–500 Hz) via `MMCW|CW passband=N;` — CW mode only (SSB BW not live-adjustable via CAT). Zoom popup selects ×1/×2/×4/×8/×16/×24 presets with pan reset to centre.
+
 ### Shipped in v0.11.0
 
 - **Pinch-zoom and two-finger pan.** Pinch (two-finger spread/squeeze) zooms the spectrum and waterfall from x1.0 (full 48 kHz view) up to x24.0. Two-finger drag pans the zoomed window. Double-tap resets zoom and pan to x1.0/centre. Zoom persisted to NVS across power cycles.
