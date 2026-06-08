@@ -563,6 +563,14 @@ Validated live on 20 m FT8 across 25+ consecutive slots with drawer + modal inte
 - **IQ Balance setting now persistent.** Toggle state is restored from NVS on every boot/flash/power-cycle, no longer defaults to OFF.
 - **Memory modal: keyboard dismiss on cancel.** Keyboard hidden automatically when cancel button pressed during label edit/delete.
 
+### Shipped in v0.11.3
+- **Browser interactive controls.** Band, Mode, BW, and Zoom dropdown pills in the browser top bar — click to change, mirrors the Tab5 top-bar dropdowns. Commands sent via new `POST /api/cmd` endpoint.
+- **Browser click/drag to tune.** Click or drag the spectrum or waterfall to tune the QMX. Cyan cursor with live frequency readout tracks the pointer; mode-aware step rounding; commits on release.
+- **Browser zoom + pan sync.** Spectrum and waterfall now render the same zoomed window as the Tab5. Frequency axis labels track the visible span.
+- **Browser passband marker corrected.** CW passband symmetric around VFO centre; mode-default widths used when CAT has not yet reported BW.
+- **Band memory (Tab5 + browser).** Band switching returns to the last-used frequency per band for the session.
+- **`/api/status` extended.** Added `zoom`, `pan_bins`, `cw_pitch_hz`, `if_cal_hz`, `bands[]`.
+
 ### Shipped in v0.11.2
 - **ST7121 display compatibility.** Tab5 units shipped after ~April 28, 2026 use an ST7121 display controller instead of ST7123, causing a blank screen with previous firmware. The binary now auto-detects the panel at boot via touch controller I2C firmware version (FW=1 → ST7121, FW=3 → ST7123) and applies the correct driver and MIPI-DSI timings. One merged binary works on both hardware versions.
 

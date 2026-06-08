@@ -28,8 +28,10 @@
 
 static const char *TAG = "main";
 
+
 void app_main(void)
 {
+
     ESP_LOGI(TAG, "QMX+ Panadapter starting");
     ESP_LOGI(TAG, "PSRAM total: %zu MB",
              heap_caps_get_total_size(MALLOC_CAP_SPIRAM) / (1024 * 1024));

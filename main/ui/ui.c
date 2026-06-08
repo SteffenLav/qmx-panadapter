@@ -80,6 +80,20 @@ float ui_get_zoom_factor(void)    { return s_zoom_factor; }
 int   ui_get_pan_offset_bins(void){ return s_pan_offset_bins; }
 
 // ---- Band preset popup ------------------------------------------------
+// Per-band last-used frequency (session memory, not persisted).
+// Index mirrors cat_get_band_list(). 0 = never visited, use center_hz.
+static uint32_t s_band_last_hz[CAT_MAX_BANDS] = {0};
+
+uint32_t ui_band_last_hz(uint32_t center_hz)
+{
+    int band_count = 0;
+    const cat_band_entry_t *bands = cat_get_band_list(&band_count);
+    for (int i = 0; i < band_count; i++) {
+        if (bands[i].center_hz == center_hz) return s_band_last_hz[i];
+    }
+    return 0;
+}
+
 static lv_obj_t *s_band_popup = NULL;
 static lv_obj_t *s_band_label;  // forward ref — defined below with other label statics
 
@@ -90,9 +104,19 @@ static void band_popup_close(void)
 
 static void band_preset_cb(lv_event_t *e)
 {
-    uint32_t hz = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
+    uint32_t center_hz = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
     band_popup_close();
-    cat_set_frequency(hz);
+    // Use last-visited frequency on this band if we have one.
+    int band_count = 0;
+    const cat_band_entry_t *bands = cat_get_band_list(&band_count);
+    uint32_t target = center_hz;
+    for (int i = 0; i < band_count; i++) {
+        if (bands[i].center_hz == center_hz && s_band_last_hz[i] != 0) {
+            target = s_band_last_hz[i];
+            break;
+        }
+    }
+    cat_set_frequency(target);
 }
 
 static void band_overlay_cb(lv_event_t *e)
@@ -475,6 +499,9 @@ static char s_current_mode[8] = "USB";  // Phase 5.10F: latest CAT mode for snap
 static char s_current_band[8] = "---";  // Phase 9 (v0.9.5): cached band string for web JSON
 static uint32_t s_passband_width_hz = 0;  // Phase 5.10G: 0 = use mode default; else from CAT FW
 static uint16_t s_cw_pitch_hz = 700;  // CW sidetone offset (Hz); applied to touch-tune in CW modes
+
+uint16_t ui_get_cw_pitch_hz(void) { return s_cw_pitch_hz; }
+int16_t  ui_get_if_cal_hz(void)   { return s_cw_cal_hz; }
 
 // Touch-target cursor state (Phase 6.1)
 static int s_target_x = -1;
@@ -1033,6 +1060,18 @@ static void update_freq_axis_labels(uint32_t center_hz);  // Phase 5.10C
 
 void ui_update_frequency(uint32_t freq_hz)
 {
+    // Update per-band session memory.
+    {
+        int band_count = 0;
+        const cat_band_entry_t *bands = cat_get_band_list(&band_count);
+        for (int i = 0; i < band_count; i++) {
+            if (freq_hz >= bands[i].center_hz - 1500000 &&
+                freq_hz <= bands[i].center_hz + 1500000) {
+                s_band_last_hz[i] = freq_hz;
+                break;
+            }
+        }
+    }
     s_last_qmx_freq_hz = freq_hz;
     // Reset pan to 0 on freq change — new center is the tuned freq.
     s_pan_offset_bins = 0;
