@@ -117,6 +117,17 @@ Working. All phases through 8 complete. Current release: v0.11.3. Includes: cold
 | -     | Trivial-debt cleanup: dynamic version, flat-mode label hide, mojibake fix (v0.9.9.1) | done |
 | -     | Onboard FT8 RX decoder with DXCC, distance, bearing per call (v0.10.0) | done |
 | -     | Per-unit QMX IF calibration trim slider (v0.10.0) | done |
+| -     | WiFi modal crash fix + LVGL pool moved to PSRAM (v0.10.0-beta2/beta3) | done |
+| -     | Memory channels v2: 32 NVS slots, recall + save + label edit (v0.10.1) | done |
+| -     | FT8 decode colour coding: own call / CQ / other (v0.10.1) | done |
+| -     | IQ Balance state persisted across reboots (v0.10.2) | done |
+| -     | CW mode 640 Hz LO offset correction for accurate dial (v0.10.3) | done |
+| -     | Pinch-zoom (x1-x24) + two-finger pan + zoom-aware axis + passband (v0.11.0) | done |
+| -     | CW LO offset read from QMX via CAT; CW trim slider (v0.11.0) | done |
+| -     | Top-bar Band/Mode/BW/Zoom popup selectors on Tab5 (v0.11.1) | done |
+| -     | ST7121 display auto-detection for post-April-2026 Tab5 hardware (v0.11.2) | done |
+| -     | Browser Band/Mode/BW/Zoom dropdowns + click-to-tune + zoom sync (v0.11.3) | done |
+| -     | Band memory: returns to last-used freq per band, Tab5 + browser (v0.11.3) | done |
 
 See the [Roadmap](#roadmap) at the bottom for what's next.
 
