@@ -2,6 +2,7 @@
     SRCS
         "m5stack_tab5.c"
         "esp_lcd_st7123.c"
+        "esp_lcd_st7121.c"
     INCLUDE_DIRS
         "include"
         "include/bsp"

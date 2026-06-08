@@ -21,6 +21,7 @@
 #include "sdmmc_cmd.h"
 #include "esp_lcd_st7703.h"
 #include "esp_lcd_st7123.h"
+#include "esp_lcd_st7121.h"
 #include "esp_lcd_ili9881c.h"
 #include "bsp/m5stack_tab5.h"
 #include "bsp/display.h"
@@ -1009,6 +1010,7 @@ uint8_t bsp_codec_feed_channel(void)
 typedef enum {
     BSP_DISPLAY_TYPE_UNKNOWN = 0,
     BSP_DISPLAY_TYPE_ST7703_GT911,
+    BSP_DISPLAY_TYPE_ST7121,
     BSP_DISPLAY_TYPE_ST7123
 } bsp_display_type_t;
 
@@ -1030,8 +1032,22 @@ static bsp_display_type_t bsp_detect_display_type(void)
     }
 
     // æ£€æµ‹ST7123è§¦æ‘¸å±
+    // Detect ST7121 vs ST7123 by reading touch FW version (both at I2C 0x55)
     ret = i2c_master_probe(i2c_handle, 0x55, 50);
     if (ret == ESP_OK) {
+        // Read FW version: 1 = ST7121, 3 = ST7123
+        esp_lcd_panel_io_handle_t tp_io = NULL;
+        esp_lcd_panel_io_i2c_config_t tp_io_cfg = ESP_LCD_TOUCH_IO_I2C_ST7123_CONFIG();
+        tp_io_cfg.scl_speed_hz = 100000;
+        if (esp_lcd_new_panel_io_i2c(i2c_handle, &tp_io_cfg, &tp_io) == ESP_OK) {
+            uint8_t fw_version = 0;
+            if (esp_lcd_panel_io_rx_param(tp_io, 0x0000, &fw_version, 1) == ESP_OK && fw_version == 1) {
+                ESP_LOGI(TAG, "Detected ST7121 touch (FW=%u), using ST7121 display", fw_version);
+                esp_lcd_panel_io_del(tp_io);
+                return BSP_DISPLAY_TYPE_ST7121;
+            }
+            esp_lcd_panel_io_del(tp_io);
+        }
         ESP_LOGI(TAG, "Detected ST7123 touch controller, using ST7123 display");
         return BSP_DISPLAY_TYPE_ST7123;
     }
@@ -1366,6 +1382,79 @@ static const st7123_lcd_init_cmd_t st7123_vendor_specific_init_default[] = {
 };
 
 // é€‚é…st7123 tab5 å±å¹•
+esp_err_t bsp_display_new_with_handles_to_st7121(const bsp_display_config_t* config, bsp_lcd_handles_t* ret_handles)
+{
+    esp_err_t ret                         = ESP_OK;
+    esp_lcd_panel_io_handle_t io          = NULL;
+    esp_lcd_panel_handle_t disp_panel     = NULL;
+    esp_lcd_dsi_bus_handle_t mipi_dsi_bus = NULL;
+    ESP_RETURN_ON_ERROR(bsp_display_brightness_init(), TAG, "Brightness init failed");
+    ESP_RETURN_ON_ERROR(bsp_enable_dsi_phy_power(), TAG, "DSI PHY power failed");
+    esp_lcd_dsi_bus_config_t bus_config = {
+        .bus_id             = 0,
+        .num_data_lanes     = 2,
+        .phy_clk_src        = MIPI_DSI_PHY_CLK_SRC_DEFAULT,
+        .lane_bit_rate_mbps = 1300,
+    };
+    ESP_RETURN_ON_ERROR(esp_lcd_new_dsi_bus(&bus_config, &mipi_dsi_bus), TAG, "New DSI bus init failed");
+    ESP_LOGI(TAG, "Install MIPI DSI LCD control panel for ST7121");
+    esp_lcd_dbi_io_config_t dbi_config = {
+        .virtual_channel = 0,
+        .lcd_cmd_bits    = 8,
+        .lcd_param_bits  = 8,
+    };
+    ESP_GOTO_ON_ERROR(esp_lcd_new_panel_io_dbi(mipi_dsi_bus, &dbi_config, &io), err, TAG, "New panel IO failed");
+    ESP_LOGI(TAG, "Install LCD driver of ST7121");
+    esp_lcd_dpi_panel_config_t dpi_config = {
+        .virtual_channel    = 0,
+        .dpi_clk_src        = MIPI_DSI_DPI_CLK_SRC_DEFAULT,
+        .dpi_clock_freq_mhz = 70,
+        .pixel_format       = LCD_COLOR_PIXEL_FORMAT_RGB565,
+        .num_fbs            = 1,
+        .video_timing = {
+            .h_size            = 720,
+            .v_size            = 1280,
+            .hsync_pulse_width = 2,
+            .hsync_back_porch  = 40,
+            .hsync_front_porch = 40,
+            .vsync_pulse_width = 20,
+            .vsync_back_porch  = 24,
+            .vsync_front_porch = 200,
+        },
+        .flags = { .use_dma2d = true },
+    };
+    st7121_vendor_config_t vendor_config = {
+        .init_cmds      = NULL,
+        .init_cmds_size = 0,
+        .mipi_config = {
+            .dsi_bus    = mipi_dsi_bus,
+            .dpi_config = &dpi_config,
+        },
+    };
+    const esp_lcd_panel_dev_config_t lcd_dev_config = {
+        .reset_gpio_num = -1,
+        .rgb_ele_order  = LCD_RGB_ELEMENT_ORDER_RGB,
+        .data_endian    = LCD_RGB_DATA_ENDIAN_LITTLE,
+        .bits_per_pixel = 24,
+        .vendor_config  = &vendor_config,
+    };
+    ESP_GOTO_ON_ERROR(esp_lcd_new_panel_st7121(io, &lcd_dev_config, &disp_panel), err, TAG,
+                      "New LCD panel ST7121 failed");
+    ESP_GOTO_ON_ERROR(esp_lcd_panel_reset(disp_panel), err, TAG, "LCD panel reset failed");
+    ESP_GOTO_ON_ERROR(esp_lcd_panel_init(disp_panel), err, TAG, "LCD panel init failed");
+    ESP_GOTO_ON_ERROR(esp_lcd_panel_disp_on_off(disp_panel, true), err, TAG, "LCD panel display on failed");
+    ret_handles->io           = io;
+    ret_handles->mipi_dsi_bus = mipi_dsi_bus;
+    ret_handles->panel        = disp_panel;
+    ret_handles->control      = NULL;
+    return ESP_OK;
+err:
+    if (disp_panel) { esp_lcd_panel_del(disp_panel); }
+    if (io)         { esp_lcd_panel_io_del(io); }
+    if (mipi_dsi_bus) { esp_lcd_del_dsi_bus(mipi_dsi_bus); }
+    return ret;
+}
+
 esp_err_t bsp_display_new_with_handles_to_st7123(const bsp_display_config_t* config, bsp_lcd_handles_t* ret_handles)
 {
     esp_err_t ret                         = ESP_OK;
@@ -1510,7 +1599,9 @@ static lv_display_t* bsp_display_lcd_init(const bsp_display_cfg_t* cfg)
     // åŠ¨æ€æ£€æµ‹æ˜¾ç¤ºå±ç±»åž‹
     bsp_display_type_t display_type = bsp_detect_display_type();
 
-    if (display_type == BSP_DISPLAY_TYPE_ST7123) {
+    if (display_type == BSP_DISPLAY_TYPE_ST7121) {
+        BSP_ERROR_CHECK_RETURN_NULL(bsp_display_new_with_handles_to_st7121(NULL, &lcd_panels));
+    } else if (display_type == BSP_DISPLAY_TYPE_ST7123) {
         BSP_ERROR_CHECK_RETURN_NULL(bsp_display_new_with_handles_to_st7123(NULL, &lcd_panels));
     } else {
         BSP_ERROR_CHECK_RETURN_NULL(bsp_display_new_with_handles(NULL, &lcd_panels));
@@ -1728,7 +1819,7 @@ lv_display_t* bsp_display_start_with_config(const bsp_display_cfg_t* cfg)
     // åŠ¨æ€æ£€æµ‹æ˜¾ç¤ºå±ç±»åž‹å¹¶åˆå§‹åŒ–å¯¹åº”çš„è§¦æ‘¸å±
     bsp_display_type_t display_type = bsp_detect_display_type();
 
-    if (display_type == BSP_DISPLAY_TYPE_ST7123) {
+    if (display_type == BSP_DISPLAY_TYPE_ST7121 || display_type == BSP_DISPLAY_TYPE_ST7123) {
         BSP_NULL_CHECK(disp_indev = bsp_display_indev_init_to_st7123(disp), NULL);
     } else {
         BSP_NULL_CHECK(disp_indev = bsp_display_indev_init(disp), NULL);
