@@ -66,6 +66,7 @@ const cat_band_entry_t *cat_get_band_list(int *out_count)
     return s_band_list;
 }
 static uint64_t s_last_tx_us = 0;   // for rate-limiting cat_set_frequency
+static volatile bool s_poll_paused = false;  // v0.12.0: cooperative pause for FT8 TX bursts
 
 int cat_get_cw_offset_hz(void) { return s_cw_offset_hz; }
 esp_err_t cat_send_raw_cmd(const char *fmt, ...)
@@ -80,6 +81,13 @@ esp_err_t cat_send_raw_cmd(const char *fmt, ...)
     ESP_LOGI("cat", "raw cmd: %s", buf);
     return cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)buf, len, 200);
 }
+
+void cat_poll_set_paused(bool paused)
+{
+    s_poll_paused = paused;
+    ESP_LOGI(TAG, "background poll %s", paused ? "PAUSED (TX burst owns the link)" : "resumed");
+}
+
 static void link_task(void *arg);
 static void poll_task(void *arg);
 static bool handle_rx(const uint8_t *data, size_t data_len, void *user_arg);
@@ -415,6 +423,15 @@ static void poll_task(void *arg)
     ESP_LOGI(TAG, "Poll task started (%d ms interval, alternating FA/MD)", CAT_POLL_INTERVAL_MS);
     int phase = 0;
     while (s_cdc_dev != NULL) {
+        // v0.12.0: an FT8 TX burst owns the CDC-ACM link exclusively for its
+        // ~12.7s duration (precise 160ms-cadence TA<freq>; sequence) - an
+        // interleaved poll here would desync its timing or garble the
+        // stream. Cooperative check only (never vTaskSuspend - that risks
+        // deadlocking on the driver's internal mutex mid-transfer).
+        if (s_poll_paused) {
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
         // Phase 5.10G: 3-way rotation FA / MD / FW (passband width)
         const char *cmd;
         switch (phase) {

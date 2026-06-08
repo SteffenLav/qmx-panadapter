@@ -30,3 +30,14 @@ qmx_*.png
 qmx_panadapter-*-merged.bin
 hunt.txt
 qmx_panadapter_v*.bin
+
+# Third-party vendor manuals (QRP Labs copyright) — kept locally for reference,
+# not redistributed in this public MIT repo. See docs/qmx-reference/SOURCES.md
+# for what they are and where to download your own copy.
+docs/qmx-reference/*.pdf
+
+# Local dev session log captures (idf.py output redirected to file)
+build_flash*.txt
+build_only.txt
+flash_only.txt
+flash_monitor.txt

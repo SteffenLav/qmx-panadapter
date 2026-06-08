@@ -45,6 +45,7 @@
 #include "ui/ui_mode.h"
 #include "ui/ft8_screen.h"
 #include "ui/ft8_screen_view.h"
+#include "ft8_tx.h"
 
 static const char *TAG = "ft8_test";
 
@@ -213,27 +214,39 @@ static void ft8_task(void *arg)
         ESP_LOGI(TAG, "slot %d: waiting for next FT8 boundary...", slot_idx);
         int64_t slot_sec = wait_for_slot_boundary();
 
-        int n_cand = 0, n_decoded = 0;
-        int cap_ms = 0, mon_ms = 0, dec_ms = 0;
-        esp_err_t e = process_one_slot(audio, &mon, slot_sec,
-                                       &n_cand, &n_decoded,
-                                       &cap_ms, &mon_ms, &dec_ms);
-
-        size_t heap_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024;
-        size_t heap_p = heap_caps_get_free_size(MALLOC_CAP_SPIRAM)   / 1024;
-
-        if (e == ESP_OK) {
-            ESP_LOGI(TAG,
-                "slot %d UTC %lld: cap=%dms mon=%dms dec=%dms "
-                "cand=%d dec=%d heap_i=%uKB heap_p=%uKB",
-                slot_idx, (long long)slot_sec,
-                cap_ms, mon_ms, dec_ms, n_cand, n_decoded,
-                (unsigned)heap_i, (unsigned)heap_p);
+        // v0.12.0: a slot is either RX (decode, as always) or - if a TX
+        // request is armed and its required parity matches (or it's a CQ
+        // call firing on the next boundary) - a ~12.7s CAT burst. These are
+        // structurally exclusive: while keyed up, the QMX's USB audio
+        // captures its own TX output, not the air, so running both in the
+        // same slot would be meaningless even if it were safe (it isn't -
+        // they'd fight over the same audio ring buffer and CDC-ACM link).
+        ft8_tx_request_t txreq;
+        if (ft8_tx_should_run_this_slot(slot_sec, &txreq)) {
+            ft8_tx_run(&txreq);   // blocks ~12.7s; always restores RX before returning
         } else {
-            ESP_LOGW(TAG,
-                "slot %d UTC %lld: error %d after cap=%dms heap_i=%uKB heap_p=%uKB",
-                slot_idx, (long long)slot_sec, e, cap_ms,
-                (unsigned)heap_i, (unsigned)heap_p);
+            int n_cand = 0, n_decoded = 0;
+            int cap_ms = 0, mon_ms = 0, dec_ms = 0;
+            esp_err_t e = process_one_slot(audio, &mon, slot_sec,
+                                           &n_cand, &n_decoded,
+                                           &cap_ms, &mon_ms, &dec_ms);
+
+            size_t heap_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024;
+            size_t heap_p = heap_caps_get_free_size(MALLOC_CAP_SPIRAM)   / 1024;
+
+            if (e == ESP_OK) {
+                ESP_LOGI(TAG,
+                    "slot %d UTC %lld: cap=%dms mon=%dms dec=%dms "
+                    "cand=%d dec=%d heap_i=%uKB heap_p=%uKB",
+                    slot_idx, (long long)slot_sec,
+                    cap_ms, mon_ms, dec_ms, n_cand, n_decoded,
+                    (unsigned)heap_i, (unsigned)heap_p);
+            } else {
+                ESP_LOGW(TAG,
+                    "slot %d UTC %lld: error %d after cap=%dms heap_i=%uKB heap_p=%uKB",
+                    slot_idx, (long long)slot_sec, e, cap_ms,
+                    (unsigned)heap_i, (unsigned)heap_p);
+            }
         }
 
         // Step 4c.2: tell the FT8 LVGL view a slot finished so it can

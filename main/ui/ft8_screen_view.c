@@ -14,6 +14,14 @@
 #include "util/maidenhead.h"
 #include "util/dxcc.h"
 
+// v0.12.0: Manual FT8 TX (Reply + Call CQ) - tap a heard-station row, or
+// the "Call CQ" button below, to open the confirmation modal; a small
+// state indicator (armed/active, tap to cancel/abort) lives in the left
+// info pane alongside "ME: <call> <grid>".
+#include "ft8_tx.h"
+#include "ft8_tx_modal.h"
+#include "identity_config.h"
+
 static const char *TAG = "ft8_view";
 
 // Geometry. Display is 1280x720 landscape (sw_rotate). Top bar 60,
@@ -107,6 +115,14 @@ static lv_obj_t *s_lbl_utc      = NULL;
 static lv_obj_t *s_lbl_count    = NULL;
 static lv_obj_t *s_lbl_heard    = NULL;
 static lv_obj_t *s_lbl_me       = NULL;
+static lv_obj_t *s_btn_cq       = NULL;  // "Call CQ" - opens the TX confirmation modal
+static lv_obj_t *s_lbl_tx       = NULL;  // TX state indicator: armed/active, tap to cancel/abort
+// CQ TX parity preference: -1=any slot, 0=EVEN only, 1=ODD only.
+// Shown as two small toggle buttons between the slot countdown and "Heard: N".
+// Tap once to lock; tap the active button again to revert to "any".
+static lv_obj_t *s_btn_tx_even  = NULL;
+static lv_obj_t *s_btn_tx_odd   = NULL;
+static int        s_cq_parity   = -1;
 
 static lv_obj_t *s_list         = NULL;
 static row_widgets_t s_rows[MAX_ROWS];
@@ -116,6 +132,21 @@ static lv_timer_t *s_t_clock    = NULL;
 static char         s_my_call[16] = {0};  /* operator callsign uppercased; refreshed by 1 Hz clock timer */
 
 static volatile bool s_refresh_pending = false;
+
+// Touch-and-drag row selection.
+//
+// A hold-time gate distinguishes "swipe to scroll" from "hold to select":
+//   - Finger lifts before ROW_HOLD_SELECT_MS  → no action (was a swipe/tap)
+//   - Finger held ≥ ROW_HOLD_SELECT_MS        → selection mode active:
+//       row highlights; dragging shifts highlight; lifting opens the modal
+//   - LV_EVENT_PRESS_LOST (LVGL scroll kick-in) → cancel, no action
+//
+// This prevents accidental station selection while scrolling the list.
+#define ROW_HOLD_SELECT_MS  400
+
+static int      s_row_hover         = -1;
+static uint32_t s_press_start_ms    = 0;
+static bool     s_in_selection_mode = false;  // true while scroll is locked for drag-select
 
 static double s_user_lat = 0.0;
 static double s_user_lon = 0.0;
@@ -222,6 +253,155 @@ static lv_obj_t *make_label_styled(lv_obj_t *row, const lv_style_t *style)
     return lbl;
 }
 
+// Set / clear the hover highlight on a row.  Always clears the previous row
+// first.  Silently ignores hidden rows (sets s_row_hover = -1 instead).
+static void row_set_hover(int new_idx)
+{
+    if (new_idx == s_row_hover) return;
+    // Clear previous highlight
+    if (s_row_hover >= 0 && s_row_hover < MAX_ROWS && s_rows[s_row_hover].row)
+        lv_obj_set_style_bg_opa(s_rows[s_row_hover].row, LV_OPA_0, 0);
+
+    s_row_hover = new_idx;
+
+    // Apply highlight to new row (only if it is actually visible)
+    if (new_idx >= 0 && new_idx < MAX_ROWS
+        && s_rows[new_idx].row
+        && !lv_obj_has_flag(s_rows[new_idx].row, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_set_style_bg_color(s_rows[new_idx].row, lv_color_hex(0x1050A0), 0);
+        lv_obj_set_style_bg_opa(s_rows[new_idx].row, LV_OPA_70, 0);
+    } else {
+        s_row_hover = -1; // can't highlight a hidden / out-of-range row
+    }
+}
+
+// Map an absolute screen Y coordinate to a row index in s_list, accounting
+// for s_list's screen position and its current vertical scroll offset.
+// Returns -1 when the coordinate is outside the list content area.
+static int screen_y_to_row(lv_coord_t abs_y)
+{
+    if (!s_list) return -1;
+    lv_area_t a;
+    lv_obj_get_coords(s_list, &a);
+    int32_t scroll_y = lv_obj_get_scroll_y(s_list);
+    int32_t content_y = (int32_t)abs_y - (int32_t)a.y1 + scroll_y;
+    if (content_y < 0) return -1;
+    int row = (int)(content_y / ROW_H);
+    if (row < 0 || row >= MAX_ROWS) return -1;
+    return row;
+}
+
+// v0.12.0: confirm a row selection - resolve the callsign against a fresh
+// table snapshot and open the TX confirmation modal.
+// Rows are repopulated every 500 ms by rebuild_list() and are NOT
+// permanently bound to a callsign, so we re-resolve here from the live table.
+static void row_activate(int idx)
+{
+    if (idx < 0 || idx >= MAX_ROWS) return;
+    row_widgets_t *r = &s_rows[idx];
+    if (!r->row || !r->l_call || lv_obj_has_flag(r->row, LV_OBJ_FLAG_HIDDEN)) return;
+
+    const char *call = lv_label_get_text(r->l_call);
+    if (!call || !call[0]) return;
+
+    static ft8_call_t snap[FT8_CALL_TABLE_SIZE];
+    int n = 0;
+    ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+    const ft8_call_t *match = NULL;
+    for (int i = 0; i < n; i++) {
+        if (strcmp(snap[i].call, call) == 0) { match = &snap[i]; break; }
+    }
+    if (!match) {
+        ESP_LOGW(TAG, "row activate: '%s' no longer in heard table - ignoring", call);
+        return;
+    }
+    ESP_LOGI(TAG, "row activate: reply to %s (freq=%d Hz, last_utc=%lld)",
+             match->call, (int)match->last_freq, (long long)match->last_utc);
+
+    ft8_tx_request_t req;
+    char err[64];
+    if (ft8_tx_build_request(FT8_TX_KIND_REPLY, match->call, match->last_freq,
+                             match->last_utc, &req, err, sizeof(err))) {
+        ft8_tx_modal_show(&req);
+    } else {
+        ESP_LOGW(TAG, "build_request(reply to %s) failed: %s", match->call, err);
+        identity_config_modal_show();
+    }
+}
+
+// Touch-and-drag row selection handler registered on every row for
+// PRESSED / PRESSING / RELEASED / PRESS_LOST:
+//
+//   PRESSED     - finger touches down: record timestamp, no highlight yet.
+//                 The hold gate (ROW_HOLD_SELECT_MS) prevents fast scroll
+//                 swipes from ever entering selection mode.
+//
+//   PRESSING    - fires continuously while held. Selection mode only activates
+//                 once the finger has been down for ≥ ROW_HOLD_SELECT_MS; at
+//                 that point the row under the fingertip highlights and dragging
+//                 moves the highlight.
+//
+//   RELEASED    - finger lifts. Only opens the modal if selection mode was
+//                 active (held long enough AND a row is highlighted). A quick
+//                 swipe-and-release that never crossed the time threshold does
+//                 nothing — the list just scrolls naturally.
+//
+//   PRESS_LOST  - LVGL detected a scroll gesture and stole the touch. Always
+//                 cancels selection silently, regardless of hold time.
+static void row_touch_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+
+    if (code == LV_EVENT_PRESSED) {
+        // Start the hold clock; don't highlight yet.
+        s_press_start_ms    = lv_tick_get();
+        s_in_selection_mode = false;
+        row_set_hover(-1);
+
+    } else if (code == LV_EVENT_PRESSING) {
+        // Only enter selection mode after ROW_HOLD_SELECT_MS of continuous hold.
+        uint32_t held_ms = lv_tick_get() - s_press_start_ms;
+        if (held_ms >= ROW_HOLD_SELECT_MS) {
+            // Lock the list scroll the first time we cross the threshold so
+            // that dragging the finger to a different row doesn't also scroll
+            // the whole list.
+            if (!s_in_selection_mode) {
+                s_in_selection_mode = true;
+                if (s_list) lv_obj_clear_flag(s_list, LV_OBJ_FLAG_SCROLLABLE);
+            }
+            lv_indev_t *indev = lv_indev_get_act();
+            if (indev) {
+                lv_point_t pt;
+                lv_indev_get_point(indev, &pt);
+                int hover = screen_y_to_row(pt.y);
+                if (hover != s_row_hover)
+                    row_set_hover(hover);
+            }
+        }
+
+    } else if (code == LV_EVENT_RELEASED) {
+        uint32_t held_ms = lv_tick_get() - s_press_start_ms;
+        int confirm = s_row_hover;
+        row_set_hover(-1);
+        // Restore list scroll before anything else.
+        if (s_in_selection_mode && s_list)
+            lv_obj_add_flag(s_list, LV_OBJ_FLAG_SCROLLABLE);
+        s_in_selection_mode = false;
+        // Only fire if the hold gate was crossed AND a row was highlighted.
+        // A quick tap or swipe (held_ms < threshold) just lets the list scroll.
+        if (held_ms >= ROW_HOLD_SELECT_MS && confirm >= 0)
+            row_activate(confirm);
+
+    } else if (code == LV_EVENT_PRESS_LOST) {
+        row_set_hover(-1);
+        // Restore scroll if we somehow get PRESS_LOST while in selection mode.
+        if (s_in_selection_mode && s_list)
+            lv_obj_add_flag(s_list, LV_OBJ_FLAG_SCROLLABLE);
+        s_in_selection_mode = false;
+        s_press_start_ms    = 0;
+    }
+}
+
 static void build_row(int i)
 {
     row_widgets_t *r = &s_rows[i];
@@ -236,6 +416,17 @@ static void build_row(int i)
     lv_obj_add_style(r->row, &s_style_row, 0);
     lv_obj_clear_flag(r->row, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(r->row, LV_OBJ_FLAG_HIDDEN);
+
+    // v0.12.0: touch-and-drag row selection. Finger-down highlights the row
+    // immediately; dragging shifts the highlight to whichever row is under
+    // the fingertip; lifting confirms the selection. A scroll swipe triggers
+    // PRESS_LOST, which cancels without opening a modal.
+    lv_obj_add_flag(r->row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_user_data(r->row, (void *)(intptr_t)i);
+    lv_obj_add_event_cb(r->row, row_touch_cb, LV_EVENT_PRESSED,    NULL);
+    lv_obj_add_event_cb(r->row, row_touch_cb, LV_EVENT_PRESSING,   NULL);
+    lv_obj_add_event_cb(r->row, row_touch_cb, LV_EVENT_RELEASED,   NULL);
+    lv_obj_add_event_cb(r->row, row_touch_cb, LV_EVENT_PRESS_LOST, NULL);
 
     r->l_call    = make_label_styled(r->row, &s_style_col_call);
     r->l_msg     = make_label_styled(r->row, &s_style_col_msg);
@@ -331,7 +522,9 @@ static void hide_row(int i)
     if (!r->row) return;
     if (!lv_obj_has_flag(r->row, LV_OBJ_FLAG_HIDDEN)) {
         lv_obj_add_flag(r->row, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_set_style_bg_opa(r->row, LV_OPA_0, 0); // clear any hover highlight
     }
+    if (s_row_hover == i) s_row_hover = -1;
 }
 
 static void rebuild_list(void)
@@ -382,9 +575,14 @@ static void t_clock_cb(lv_timer_t *t)
     if (s_lbl_count) {
         int sec_in_slot = (int)(now % 15);
         int remain = 15 - sec_in_slot;
+        bool is_even = (((int64_t)now / 15) % 2) == 0;
         char b[16];
-        snprintf(b, sizeof(b), "Slot: %2d s", remain);
+        snprintf(b, sizeof(b), "%s  %d s", is_even ? "EVEN" : "ODD", remain);
         lv_label_set_text(s_lbl_count, b);
+        // Steel blue for EVEN, warm orange for ODD - neither conflicts with the
+        // TX-armed amber (0xFFA040) or any other colour already in this view.
+        lv_obj_set_style_text_color(s_lbl_count,
+            is_even ? lv_color_hex(0x40A0E0) : lv_color_hex(0xE09040), 0);
     }
     if (s_lbl_freq) {
         uint32_t hz = cat_get_frequency();
@@ -395,6 +593,125 @@ static void t_clock_cb(lv_timer_t *t)
         snprintf(b, sizeof(b), "%lu.%03lu.%03lu",
                  (unsigned long)mhz, (unsigned long)khz, (unsigned long)rem);
         lv_label_set_text(s_lbl_freq, b);
+    }
+
+    // v0.12.0: TX state indicator - hidden when idle; amber while a reply
+    // or CQ call is armed and waiting for its slot (tap to cancel); red
+    // while a burst is actually on-air (tap to abort). Reuses this view's
+    // existing colour conventions (0xFFA040 amber already used for
+    // mid-range SNR; LV_PALETTE_RED already used for "own call heard" rows).
+    if (s_lbl_tx) {
+        char text[32];
+        int secs_until = 0;
+        ft8_tx_state_t st = ft8_tx_get_status(text, sizeof(text), &secs_until);
+        char b[96];
+        switch (st) {
+            case FT8_TX_ARMED: {
+                // Compute the parity of the slot this burst will fire in.
+                // now + secs_until approximates that slot's start second;
+                // (x/15)%2 gives its even/odd index, same as slot_is_even().
+                bool tx_even = (((int64_t)now + secs_until) / 15) % 2 == 0;
+                snprintf(b, sizeof(b), "TX armed: %s\n-> %s slot, ~%ds (tap to cancel)",
+                         text, tx_even ? "EVEN" : "ODD", secs_until);
+                lv_label_set_text(s_lbl_tx, b);
+                lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0xFFA040), 0);
+                lv_obj_clear_flag(s_lbl_tx, LV_OBJ_FLAG_HIDDEN);
+                break;
+            }
+            case FT8_TX_ACTIVE:
+                snprintf(b, sizeof(b), "TRANSMITTING: %s\n(tap to abort)", text);
+                lv_label_set_text(s_lbl_tx, b);
+                lv_obj_set_style_text_color(s_lbl_tx, lv_palette_main(LV_PALETTE_RED), 0);
+                lv_obj_clear_flag(s_lbl_tx, LV_OBJ_FLAG_HIDDEN);
+                break;
+            default:
+                lv_obj_add_flag(s_lbl_tx, LV_OBJ_FLAG_HIDDEN);
+                break;
+        }
+    }
+}
+
+// Sync button appearance to s_cq_parity: the active choice glows in the
+// slot colour; the inactive choice stays dim grey.
+static void update_parity_btns(void)
+{
+    if (!s_btn_tx_even || !s_btn_tx_odd) return;
+    lv_obj_set_style_bg_color(s_btn_tx_even,
+        s_cq_parity == 0 ? lv_color_hex(0x40A0E0)   // steel blue = EVEN
+                         : lv_color_hex(0x303044), 0);
+    lv_obj_set_style_bg_color(s_btn_tx_odd,
+        s_cq_parity == 1 ? lv_color_hex(0xE09040)   // warm orange = ODD
+                         : lv_color_hex(0x303044), 0);
+}
+
+static void tx_even_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    s_cq_parity = (s_cq_parity == 0) ? -1 : 0;  // tap again to deselect
+    update_parity_btns();
+    ESP_LOGI(TAG, "CQ parity pref: %s",
+             s_cq_parity < 0 ? "any" : s_cq_parity == 0 ? "EVEN only" : "ODD only");
+}
+
+static void tx_odd_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    s_cq_parity = (s_cq_parity == 1) ? -1 : 1;  // tap again to deselect
+    update_parity_btns();
+    ESP_LOGI(TAG, "CQ parity pref: %s",
+             s_cq_parity < 0 ? "any" : s_cq_parity == 0 ? "EVEN only" : "ODD only");
+}
+
+// v0.12.0: "Call CQ" - auto-selects the nearest clear 50-Hz audio slot to
+// 1500 Hz (scanning the current heard-station table via ft8_find_clear_tone_hz),
+// then opens the same confirmation modal a reply uses. parity/last_utc are
+// irrelevant for CQ (fires on the very next slot boundary).
+static void cq_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    ESP_LOGI(TAG, "Call CQ tapped");
+
+    ft8_tx_request_t req;
+    char err[64];
+    // Auto-select the nearest clear 50-Hz slot to 1500 Hz; if the table is
+    // empty (nothing decoded yet) ft8_find_clear_tone_hz() returns 1500 Hz.
+    int cq_freq_hz = ft8_find_clear_tone_hz();
+    if (ft8_tx_build_request(FT8_TX_KIND_CQ, NULL, cq_freq_hz,
+                             0, &req, err, sizeof(err))) {
+        // Apply TX parity preference if the user has locked one.
+        // build_request sets use_parity=false for CQ; we override here so
+        // ft8_tx_should_run_this_slot only fires on the preferred slot type.
+        if (s_cq_parity >= 0) {
+            req.use_parity     = true;
+            req.want_even_slot = (s_cq_parity == 0);
+        }
+        ft8_tx_modal_show(&req);
+    } else {
+        ESP_LOGW(TAG, "build_request(CQ) failed: %s", err);
+        identity_config_modal_show();
+    }
+}
+
+// v0.12.0: tap the TX state indicator to back out - cancels an ARMED
+// request before it fires, or asks an in-flight ACTIVE burst to wind down
+// early (clean TA0;/RX; tail; radio never left keyed up). No-op if IDLE
+// (the label is hidden then anyway, so this shouldn't normally fire).
+static void tx_indicator_tap_cb(lv_event_t *e)
+{
+    (void)e;
+    char text[32];
+    ft8_tx_state_t st = ft8_tx_get_status(text, sizeof(text), NULL);
+    switch (st) {
+        case FT8_TX_ARMED:
+            ESP_LOGI(TAG, "TX indicator tapped while ARMED ('%s') - disarming", text);
+            ft8_tx_disarm();
+            break;
+        case FT8_TX_ACTIVE:
+            ESP_LOGI(TAG, "TX indicator tapped while ACTIVE ('%s') - requesting abort", text);
+            ft8_tx_request_abort();
+            break;
+        default:
+            break;
     }
 }
 
@@ -447,11 +764,45 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_lbl_count, &lv_font_montserrat_24, 0);
     lv_obj_set_pos(s_lbl_count, 0, 240);
 
+    // CQ TX parity preference: [TX: EVEN] [TX: ODD] toggle row.
+    // Fits in the 60 px gap between the slot countdown (y=240, ~28 px tall)
+    // and the heard count (y=304).  Dim grey when inactive; lights up in the
+    // same slot colours as s_lbl_count (steel blue / warm orange) when active.
+    s_btn_tx_even = lv_btn_create(s_left_pane);
+    lv_obj_set_size(s_btn_tx_even, 136, 26);
+    lv_obj_set_pos(s_btn_tx_even, 0, 272);
+    lv_obj_set_style_bg_color(s_btn_tx_even, lv_color_hex(0x303044), 0);
+    lv_obj_set_style_border_width(s_btn_tx_even, 0, 0);
+    lv_obj_set_style_radius(s_btn_tx_even, 4, 0);
+    lv_obj_set_style_pad_all(s_btn_tx_even, 0, 0);
+    lv_obj_add_event_cb(s_btn_tx_even, tx_even_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *even_lbl = lv_label_create(s_btn_tx_even);
+    lv_label_set_text(even_lbl, "TX: EVEN");
+    lv_obj_set_style_text_color(even_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(even_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_center(even_lbl);
+
+    s_btn_tx_odd = lv_btn_create(s_left_pane);
+    lv_obj_set_size(s_btn_tx_odd, 136, 26);
+    lv_obj_set_pos(s_btn_tx_odd, 148, 272);
+    lv_obj_set_style_bg_color(s_btn_tx_odd, lv_color_hex(0x303044), 0);
+    lv_obj_set_style_border_width(s_btn_tx_odd, 0, 0);
+    lv_obj_set_style_radius(s_btn_tx_odd, 4, 0);
+    lv_obj_set_style_pad_all(s_btn_tx_odd, 0, 0);
+    lv_obj_add_event_cb(s_btn_tx_odd, tx_odd_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *odd_lbl = lv_label_create(s_btn_tx_odd);
+    lv_label_set_text(odd_lbl, "TX: ODD");
+    lv_obj_set_style_text_color(odd_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(odd_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_center(odd_lbl);
+
+    update_parity_btns();  // sync colours to s_cq_parity (persists on FT8 re-entry)
+
     s_lbl_heard = lv_label_create(s_left_pane);
     lv_label_set_text(s_lbl_heard, "Heard: 0");
     lv_obj_set_style_text_color(s_lbl_heard, lv_color_hex(0xC0C0C0), 0);
     lv_obj_set_style_text_font(s_lbl_heard, &lv_font_montserrat_24, 0);
-    lv_obj_set_pos(s_lbl_heard, 0, 300);
+    lv_obj_set_pos(s_lbl_heard, 0, 304);
 
     s_lbl_me = lv_label_create(s_left_pane);
     lv_label_set_text(s_lbl_me, "");
@@ -459,6 +810,38 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_lbl_me, &lv_font_montserrat_24, 0);
     lv_obj_set_pos(s_lbl_me, 0, 360);
     lv_obj_add_flag(s_lbl_me, LV_OBJ_FLAG_HIDDEN);
+
+    // v0.12.0: "Call CQ" - opens the TX confirmation modal pre-filled with
+    // a CQ message at the conventional default audio tone. Coloured the
+    // same green as the modal's "Transmit" / identity modal's "Save"
+    // buttons - this app's established "primary action" colour - tying
+    // the two steps of the flow together visually.
+    s_btn_cq = lv_btn_create(s_left_pane);
+    lv_obj_set_size(s_btn_cq, 288, 60);
+    lv_obj_set_pos(s_btn_cq, 0, 410);
+    lv_obj_set_style_bg_color(s_btn_cq, lv_color_hex(0x2e8b3a), 0);
+    lv_obj_set_style_border_color(s_btn_cq, lv_color_hex(0x4caf50), 0);
+    lv_obj_set_style_border_width(s_btn_cq, 2, 0);
+    lv_obj_set_style_radius(s_btn_cq, 8, 0);
+    lv_obj_add_event_cb(s_btn_cq, cq_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *cq_lbl = lv_label_create(s_btn_cq);
+    lv_label_set_text(cq_lbl, "Call CQ");
+    lv_obj_set_style_text_color(cq_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(cq_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(cq_lbl);
+
+    // TX state indicator - hidden while idle; amber/armed or red/active,
+    // tap to cancel/abort. See t_clock_cb (1 Hz refresh: state, colour,
+    // countdown text) and tx_indicator_tap_cb (the tap action itself).
+    s_lbl_tx = lv_label_create(s_left_pane);
+    lv_label_set_text(s_lbl_tx, "");
+    lv_obj_set_style_text_font(s_lbl_tx, &lv_font_montserrat_20, 0);
+    lv_label_set_long_mode(s_lbl_tx, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_lbl_tx, 288);
+    lv_obj_set_pos(s_lbl_tx, 0, 482);
+    lv_obj_add_flag(s_lbl_tx, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_lbl_tx, tx_indicator_tap_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(s_lbl_tx, LV_OBJ_FLAG_HIDDEN);
 
     // Right pane
     s_right_pane = lv_obj_create(s_container);

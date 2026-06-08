@@ -10,6 +10,37 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *The panadapter live on hardware in flat-spectrum mode (new in v0.9.2): 48 kHz of spectrum centered on the QMX VFO (14.074 MHz, 20m FT8). The spectrum trace tracks a per-bin noise floor and renders dB-above-floor, so noise collapses to a calm baseline and real signals (here the FT8 pile-up around 14.074) pop sharp above it. Thermal-palette waterfall below uses matching colour and floor maths. Top status bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN via the web UI — see [Quick start: web UI](#quick-start-web-ui) below.*
 
+---
+
+> ## ⚠️ DEVELOPMENT FIRMWARE — FT8 TRANSMIT IS EXPERIMENTAL
+>
+> **v0.12.0 adds real RF transmission.** When you arm a TX request and the slot fires, the
+> firmware sends `TX;` over CAT, walks 79 `TA<freq>;` symbols at 160 ms cadence, then sends
+> `TA0; RX;`. **Your radio will key up and put a signal on the air.**
+>
+> **You are solely responsible for operating legally** — correct licence class, operating
+> within your licence privileges, band plan compliance, no harmful interference.
+>
+> **What is NOT yet in place in v0.12.0:**
+> - No duty-cycle protection — back-to-back TX slots are not prevented by the firmware
+> - No automatic QSO sequencing — fully manual; the operator initiates every step
+> - No ADIF logging — completed QSOs are not recorded anywhere
+> - No audio loopback verification — the firmware cannot confirm the transmitted waveform
+> - No over-temperature or supply-voltage monitoring
+> - Multi-hour TX soak testing not yet completed
+> - SNR reporting in the decode list is a coarse proxy, not calibrated dB/2500 Hz like WSJT-X
+>
+> **Recommended first steps before going on-air:**
+> 1. Set the QMX to low PA voltage and connect a dummy load — not an antenna — for first tests
+> 2. Watch the QMX LCD TX indicator and a power/SWR meter if available
+> 3. Confirm your own message is decoded by an independent receiver before working anyone
+>
+> The QMX has a built-in CAT timeout (default 120 s) that returns it to RX if the Tab5 stops
+> sending commands — so a firmware crash cannot leave the radio transmitting indefinitely.
+> That is the only hardware safety net. **Use at your own risk.**
+
+---
+
 ## Hardware setup
 
 The panadapter needs two USB connections:
@@ -60,7 +91,7 @@ The original mockup that drove the design ([panadapter-mockup-ideal.svg](docs/pa
 
 ## Status
 
-Working. All phases through 8 complete. Current release: v0.11.3. Includes: cold-boot reliability fix, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings, Hamlib rigctld bridge, onboard FT8 RX decoder, memory channels, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser), browser click-to-tune, zoom sync, and band memory.
+Working. All phases through 8 complete. Current release: **v0.12.0**. Includes: cold-boot reliability fix, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings, Hamlib rigctld bridge, onboard FT8 RX decoder, memory channels, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser), browser click-to-tune, zoom sync, band memory, and **manual FT8 TX** (reply + CQ via CAT `TA;`). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
 
 | Phase | What | Status |
 |-------|------|--------|
@@ -128,6 +159,10 @@ Working. All phases through 8 complete. Current release: v0.11.3. Includes: cold
 | -     | ST7121 display auto-detection for post-April-2026 Tab5 hardware (v0.11.2) | done |
 | -     | Browser Band/Mode/BW/Zoom dropdowns + click-to-tune + zoom sync (v0.11.3) | done |
 | -     | Band memory: returns to last-used freq per band, Tab5 + browser (v0.11.3) | done |
+| -     | Manual FT8 TX: reply to heard station or call CQ via CAT TA; (v0.12.0) ⚠️ experimental | done |
+| -     | EVEN/ODD slot parity indicator + TX parity preference (v0.12.0) | done |
+| -     | Auto-find clear audio slot for CQ calls (v0.12.0) | done |
+| -     | Touch-and-hold row selection with scroll lock (v0.12.0) | done |
 
 See the [Roadmap](#roadmap) at the bottom for what's next.
 
@@ -328,6 +363,61 @@ Switch the panadapter into FT8 mode via the **Mode: FT8** button in the settings
 - Long sessions (multi-hour) not yet soaked end-to-end -- please open an issue if you see reboots while in FT8 mode.
 
 FT8 reception requires accurate UTC time, which the Tab5 gets from SNTP -- WiFi must be configured first.
+
+## Manual FT8 TX (v0.12.0) ⚠️ experimental — read the warning above
+
+> **Before using TX**, read the [development warning](#️-development-firmware--ft8-transmit-is-experimental) at the top of this document.
+
+The Tab5 can now transmit FT8 directly via the QMX's `TA<freq>;` CAT command — no PC audio path, no WSJT-X. The QMX does its own DDS synthesis and envelope shaping; the Tab5 just sends the 79 tone-frequency commands at 160 ms cadence, bracketed by `TX;` / `TA0;` / `RX;`.
+
+### Replying to a station
+
+1. In the FT8 decode list, **hold your finger on a row** for ~400 ms until it highlights blue.
+2. Drag up or down if needed to land on the right row (list scroll is locked while selecting).
+3. **Lift** — a confirmation modal appears showing the exact message that will go on air, the audio frequency, and the target slot parity (EVEN or ODD).
+4. Tap **Transmit** to arm. The engine waits for the correct slot boundary, then transmits.
+5. Tap **Cancel** (in the modal, or the armed-indicator in the left pane) to disarm without transmitting.
+
+The reply message is the standard FT8 format: `<their_call> <my_call> <my_grid>`. Slot parity is set automatically — if you heard them in an EVEN slot, your reply goes in an ODD slot (so they're listening when you transmit).
+
+### Calling CQ
+
+Tap the **Call CQ** button in the left pane. The firmware:
+1. Scans the current decode list for occupied 50 Hz audio bins.
+2. Picks the nearest unoccupied bin to 1500 Hz (standard FT8 sub-band centre).
+3. Opens the confirmation modal with message `CQ <my_call> <my_grid>` and the chosen audio frequency.
+
+Use the **TX: EVEN** / **TX: ODD** buttons (just below the slot countdown) to restrict CQ calls to a specific slot parity. Tap the active button to release the lock (any slot). Both slots are always decoded regardless of the TX preference.
+
+### Slot parity display
+
+The slot countdown in the left pane shows the current slot parity:
+
+- **EVEN N s** in blue — current slot is EVEN
+- **ODD N s** in amber — current slot is ODD
+
+When a TX is armed, the indicator also shows which slot parity it will fire on.
+
+### TX status indicators
+
+The left pane shows a persistent TX status line below the slot countdown:
+- **Hidden** when idle
+- **Amber** `TX armed: <message> → EVEN/ODD slot, ~Ns (tap to cancel)` when waiting for the slot
+- **Red** `TRANSMITTING: <message> (tap to abort)` during the burst
+
+Tapping the amber/red line cancels or aborts the current TX.
+
+### How it works (for the technically curious)
+
+The QMX `TA<freq.f>;` command sets the transmitted audio tone directly in decimal Hz. The Tab5 pre-encodes the 79-symbol FT8 message at confirmation time using `ft8_lib` (the same library used for RX), then at slot time sends one `TA` command per symbol every 160 ms, using `esp_timer_get_time()` absolute timestamps to avoid drift. TX runs inside the existing 15-second slot loop — a slot is either RX or TX, never both, which is also correct behaviour (while keyed up, the QMX's USB audio captures its own TX output, not the air).
+
+### Known limitations
+
+- Fully manual — no automatic QSO sequencing (that is v0.13.0)
+- No ADIF logging yet (v0.14.0)
+- No duty-cycle protection — the firmware will not refuse consecutive TX slots
+- SNR in the decode list is a coarse proxy, not calibrated to WSJT-X dB/2500 Hz
+- TX code has not been soaked across multi-hour sessions
 
 ## Per-unit IF calibration
 
@@ -605,11 +695,20 @@ Validated live on 20 m FT8 across 25+ consecutive slots with drawer + modal inte
 - **Band memory (Tab5 + browser).** Switching bands returns to the last-used frequency on that band for the session.
 - **`/api/status` extended.** Added `zoom`, `pan_bins`, `cw_pitch_hz`, `if_cal_hz`, `bands[]`.
 
+### Shipped in v0.12.0 ⚠️ experimental TX — read the warning at the top
+
+The long-planned manual FT8 TX path. **Read the [development warning](#️-development-firmware--ft8-transmit-is-experimental) before transmitting.**
+
+- **Manual FT8 TX via CAT `TA;`.** Tap-and-hold a row in the decode list to reply to a heard station, or tap Call CQ to originate a call. A confirmation modal shows the exact message that will go on air, the audio frequency, and the target slot parity before anything is armed. The QMX does DDS synthesis and envelope shaping; the Tab5 only sends tone-frequency commands. No PC audio path required.
+- **EVEN/ODD slot parity.** The slot countdown in the left pane now shows the current parity (EVEN in blue, ODD in amber). Reply parity is set automatically (opposite of the slot you heard the target in). CQ parity is user-selectable via TX: EVEN / TX: ODD buttons; default is any slot.
+- **Auto-find clear audio slot for CQ.** Scans the current heard-station table for occupied 50 Hz bins and picks the nearest unoccupied slot to 1500 Hz.
+- **Touch-and-hold row selection with scroll lock.** Finger-down for ≥ 400 ms enters selection mode; the row highlights and the list scroll locks so dragging the finger moves the highlight rather than scrolling the list. Lift confirms. A quick swipe still scrolls freely.
+- **TX state indicator.** Left pane shows armed / transmitting status with slot parity, countdown, and tap-to-cancel/abort.
+
 ### Next up
 
 The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF.
 
-- **v0.12.0 - Manual FT8 TX.** Use the existing CAT setters to put the QMX into TX and transmit FT8 frames generated by `ft8_lib`. UI to pick a CQ-er from the decode list and send the standard reply sequence; no automation, the operator clicks each step.
 - **v0.13.0 - Auto search-and-pounce.** Auto-reply to a tapped CQ, follow the QSO state machine through 73 / RR73. Sequence timing driven by SNTP-aligned slot boundaries.
 - **v0.14.0 - ADIF logging.** Write each completed QSO to an ADIF file for upload to LOTW, QRZ, eQSL, or POTA.app.
 - **v1.0.0 - Standalone FT8 station.** All of the above polished + multi-day stability + cleaner UI.

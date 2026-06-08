@@ -9,6 +9,7 @@ idf_component_register(
         "ui/ui_mode.c"
         "ui/ft8_screen.c"
         "ui/ft8_screen_view.c"
+        "ui/ft8_tx_modal.c"
         "util/status.c"
         "util/maidenhead.c"
         "util/dxcc.c"
@@ -29,6 +30,7 @@ idf_component_register(
         "net/webserver_ws.c"
         "net/rigctld_server.c"
         "ft8_test.c"
+        "ft8_tx.c"
     INCLUDE_DIRS
         "."
         "display"

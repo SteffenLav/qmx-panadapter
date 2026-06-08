@@ -1,0 +1,242 @@
+// FT8 TX confirmation modal - the sole path to ft8_tx_arm(). Shown after
+// the operator taps a heard-station row (reply) or "Call CQ"; the request
+// arrives already built+validated+encoded via ft8_tx_build_request(), so
+// this modal only needs to present it and, on confirm, arm it.
+//
+// Structurally a copy of identity_config.c's full-screen-overlay scaffold
+// (black backdrop + dark panel + red Cancel / green confirm), with a
+// message preview, a live 1 Hz countdown, and an inline error line for
+// arm-time failures (e.g. QMX won't confirm Digi mode).
+
+#include "ft8_tx_modal.h"
+#include "ft8_tx.h"
+
+#include <stdio.h>
+#include <stdint.h>
+#include <string.h>
+#include <time.h>
+
+#include "esp_log.h"
+
+static const char *TAG = "ft8_tx_modal";
+
+// Modal state - lazily created on first show (mirrors identity_config.c).
+static lv_obj_t   *s_modal         = NULL;
+static lv_obj_t   *s_panel         = NULL;
+static lv_obj_t   *s_lbl_message   = NULL;
+static lv_obj_t   *s_lbl_detail    = NULL;
+static lv_obj_t   *s_lbl_countdown = NULL;
+static lv_obj_t   *s_lbl_error     = NULL;
+static lv_timer_t *s_timer         = NULL;
+static bool        s_modal_open    = false;
+
+// Private copy of the request being confirmed - taken at show() time so the
+// caller's stack copy (e.g. a local in a row-tap handler) can go out of
+// scope immediately. Only ever read from the LVGL task (button/timer
+// callbacks), so no locking needed.
+static ft8_tx_request_t s_pending_req;
+
+// Seconds from now until the next slot this request could fire in, *if*
+// armed right this instant. Mirrors ft8_tx.c's slot_is_even()/
+// seconds_until_slot() - kept as a small local duplicate rather than
+// exposing an internal helper across the module boundary, since this is
+// purely a UI preview: the request isn't armed yet (ft8_tx_get_status()
+// only knows about already-armed requests), and the *actual* fire time
+// will be fixed at the moment the operator taps Transmit, not now.
+static int seconds_until_fire(const ft8_tx_request_t *req)
+{
+    time_t now = time(NULL);
+    int64_t next = ((int64_t)now / 15) * 15 + 15;
+    // Advance until the slot parity matches, for both REPLY and parity-locked CQ.
+    if (req->use_parity) {
+        while ((((next / 15) % 2) == 0) != req->want_even_slot) next += 15;
+    }
+    int64_t delta = next - (int64_t)now;
+    return (delta < 0) ? 0 : (int)delta;
+}
+
+static void update_countdown(void)
+{
+    char b[32];
+    snprintf(b, sizeof(b), "Transmits in ~%d s", seconds_until_fire(&s_pending_req));
+    lv_label_set_text(s_lbl_countdown, b);
+}
+
+static void timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_modal_open) return;
+    update_countdown();
+}
+
+static void modal_close(void)
+{
+    if (!s_modal || !s_modal_open) return;
+    lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
+    s_modal_open = false;
+    ESP_LOGI(TAG, "modal closed");
+}
+
+static void cancel_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    ESP_LOGI(TAG, "cancelled - nothing armed, radio untouched ('%s')", s_pending_req.display_text);
+    modal_close();
+}
+
+static void transmit_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    char err[64] = {0};
+    if (ft8_tx_arm(&s_pending_req, err, sizeof(err))) {
+        ESP_LOGI(TAG, "armed via modal: '%s'", s_pending_req.display_text);
+        modal_close();
+    } else {
+        // Stay open - let the operator read the reason, then retry or
+        // cancel. ft8_tx_arm() guarantees the radio was left untouched.
+        ESP_LOGW(TAG, "arm refused: %s", err);
+        lv_label_set_text(s_lbl_error, err[0] ? err : "Could not arm transmission");
+        lv_obj_clear_flag(s_lbl_error, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void modal_build(void)
+{
+    if (s_modal) return;
+
+    lv_obj_t *scr = lv_screen_active();
+
+    s_modal = lv_obj_create(scr);
+    lv_obj_set_size(s_modal, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_pos(s_modal, 0, 0);
+    lv_obj_set_style_bg_color(s_modal, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_modal, LV_OPA_70, 0);
+    lv_obj_set_style_border_width(s_modal, 0, 0);
+    lv_obj_set_style_radius(s_modal, 0, 0);
+    lv_obj_set_style_pad_all(s_modal, 0, 0);
+    lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
+
+    s_panel = lv_obj_create(s_modal);
+    lv_obj_set_size(s_panel, 880, 460);
+    lv_obj_align(s_panel, LV_ALIGN_TOP_MID, 0, 24);
+    lv_obj_set_style_bg_color(s_panel, lv_color_hex(0x1c2128), 0);
+    lv_obj_set_style_bg_opa(s_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_panel, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_border_width(s_panel, 2, 0);
+    lv_obj_set_style_radius(s_panel, 10, 0);
+    lv_obj_set_style_pad_all(s_panel, 24, 0);
+    lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *title = lv_label_create(s_panel);
+    lv_label_set_text(title, "Confirm FT8 Transmission");
+    lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
+
+    // The encoded message preview - the most important line in the dialog
+    // (this is *exactly* what will go on-air; ft8_tx_build_request already
+    // ran it through ftx_message_encode_std + ft8_encode).
+    s_lbl_message = lv_label_create(s_panel);
+    lv_label_set_text(s_lbl_message, "");
+    lv_obj_set_style_text_color(s_lbl_message, lv_color_hex(0xFFA040), 0);
+    lv_obj_set_style_text_font(s_lbl_message, &lv_font_montserrat_32, 0);
+    lv_obj_align(s_lbl_message, LV_ALIGN_TOP_MID, 0, 64);
+
+    s_lbl_detail = lv_label_create(s_panel);
+    lv_label_set_text(s_lbl_detail, "");
+    lv_obj_set_style_text_color(s_lbl_detail, lv_color_hex(0xa0a0a0), 0);
+    lv_obj_set_style_text_font(s_lbl_detail, &lv_font_montserrat_24, 0);
+    lv_obj_align(s_lbl_detail, LV_ALIGN_TOP_MID, 0, 130);
+
+    s_lbl_countdown = lv_label_create(s_panel);
+    lv_label_set_text(s_lbl_countdown, "");
+    lv_obj_set_style_text_color(s_lbl_countdown, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(s_lbl_countdown, &lv_font_montserrat_24, 0);
+    lv_obj_align(s_lbl_countdown, LV_ALIGN_TOP_MID, 0, 174);
+
+    s_lbl_error = lv_label_create(s_panel);
+    lv_label_set_text(s_lbl_error, "");
+    lv_obj_set_style_text_color(s_lbl_error, lv_palette_main(LV_PALETTE_RED), 0);
+    lv_obj_set_style_text_font(s_lbl_error, &lv_font_montserrat_20, 0);
+    lv_label_set_long_mode(s_lbl_error, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(s_lbl_error, 800);
+    lv_obj_align(s_lbl_error, LV_ALIGN_TOP_MID, 0, 224);
+    lv_obj_add_flag(s_lbl_error, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *cancel_btn = lv_btn_create(s_panel);
+    lv_obj_set_size(cancel_btn, 240, 72);
+    lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_LEFT, 80, 0);
+    lv_obj_set_style_bg_color(cancel_btn, lv_color_hex(0x962020), 0);
+    lv_obj_set_style_border_color(cancel_btn, lv_color_hex(0xc04040), 0);
+    lv_obj_set_style_border_width(cancel_btn, 2, 0);
+    lv_obj_set_style_radius(cancel_btn, 8, 0);
+    lv_obj_add_event_cb(cancel_btn, cancel_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *cancel_lbl = lv_label_create(cancel_btn);
+    lv_label_set_text(cancel_lbl, "Cancel");
+    lv_obj_set_style_text_color(cancel_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(cancel_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(cancel_lbl);
+
+    lv_obj_t *tx_btn = lv_btn_create(s_panel);
+    lv_obj_set_size(tx_btn, 240, 72);
+    lv_obj_align(tx_btn, LV_ALIGN_BOTTOM_RIGHT, -80, 0);
+    lv_obj_set_style_bg_color(tx_btn, lv_color_hex(0x2e8b3a), 0);
+    lv_obj_set_style_border_color(tx_btn, lv_color_hex(0x4caf50), 0);
+    lv_obj_set_style_border_width(tx_btn, 2, 0);
+    lv_obj_set_style_radius(tx_btn, 8, 0);
+    lv_obj_add_event_cb(tx_btn, transmit_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *tx_lbl = lv_label_create(tx_btn);
+    lv_label_set_text(tx_lbl, "Transmit");
+    lv_obj_set_style_text_color(tx_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(tx_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(tx_lbl);
+
+    s_timer = lv_timer_create(timer_cb, 1000, NULL);
+
+    ESP_LOGI(TAG, "modal built");
+}
+
+void ft8_tx_modal_init(void)
+{
+    modal_build();
+}
+
+void ft8_tx_modal_show(const ft8_tx_request_t *req)
+{
+    if (!req) return;
+    modal_build();   // no-op if already built (idempotent via s_modal guard)
+
+    s_pending_req = *req;   // private copy - caller's may go out of scope
+
+    lv_label_set_text(s_lbl_message, s_pending_req.display_text);
+
+    char detail[80];
+    if (s_pending_req.use_parity) {
+        // Both REPLY and parity-locked CQ fire on a specific slot type.
+        const char *slot_name = s_pending_req.want_even_slot ? "EVEN" : "ODD";
+        const char *verb      = (s_pending_req.kind == FT8_TX_KIND_REPLY)
+                                ? "reply in" : "fire on";
+        snprintf(detail, sizeof(detail), "Audio %d Hz  -  needs an %s slot to %s",
+                 s_pending_req.audio_freq_hz, slot_name, verb);
+    } else {
+        snprintf(detail, sizeof(detail), "Audio %d Hz  -  fires on the next slot boundary",
+                 s_pending_req.audio_freq_hz);
+    }
+    lv_label_set_text(s_lbl_detail, detail);
+
+    lv_label_set_text(s_lbl_error, "");
+    lv_obj_add_flag(s_lbl_error, LV_OBJ_FLAG_HIDDEN);
+
+    update_countdown();   // populate immediately - don't wait up to 1s for the first tick
+
+    lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_modal);
+    s_modal_open = true;
+    ESP_LOGI(TAG, "showing confirmation: '%s' (%s)", s_pending_req.display_text, detail);
+}
+
+void ft8_tx_modal_hide(void)
+{
+    modal_close();
+}

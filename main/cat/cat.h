@@ -93,6 +93,21 @@ int cat_get_cw_offset_hz(void);
  */
 esp_err_t cat_send_raw_cmd(const char *fmt, ...);
 
+/**
+ * @brief Cooperatively pause/resume the background FA;/MD;/FW; poll loop.
+ *
+ * v0.12.0 (FT8 TX): while a TX burst owns the CDC-ACM link (sending
+ * TX;/TA<freq>;/.../RX; at a precise 160 ms cadence), an interleaved poll
+ * could desync the burst timing or garble the stream. The poll task checks
+ * this flag cooperatively at the top of its loop (a plain vTaskDelay+continue
+ * — never vTaskSuspend, which risks deadlocking on the driver's internal
+ * mutex if the task is paused mid-transfer). Idempotent; safe to call from
+ * any task.
+ *
+ * @param paused  true to pause polling, false to resume
+ */
+void cat_poll_set_paused(bool paused);
+
 #define CAT_MAX_BANDS 16
 
 typedef struct {

@@ -25,6 +25,7 @@
 #include "iq_balance.h"
 #include "ui_mode.h"
 #include "ft8_screen.h"
+#include "ft8_tx.h"
 
 static const char *TAG = "main";
 
@@ -108,6 +109,7 @@ void app_main(void)
     // flash-and-watch decode flow keeps working. Step 4c will let
     // the user toggle from the settings drawer.
     ft8_screen_init();
+    ft8_tx_init();   // v0.12.0: Manual FT8 TX core (mutex only; runs inside ft8_task)
     // Step 4c.2: boot into panadapter mode. FT8 spawns on first
     // toggle via the drawer Mode button (drawer_mode_btn_cb in ui.c).
     ui_mode_set(UI_MODE_PANADAPTER);
