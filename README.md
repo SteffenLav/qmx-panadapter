@@ -60,7 +60,7 @@ The original mockup that drove the design ([panadapter-mockup-ideal.svg](docs/pa
 
 ## Status
 
-Working. All phases through 8 complete, plus cold-boot reliability fix, I/Q balance correction (Phases A-C), WiFi STA with on-screen credential entry, web UI (v0.9.0), flat-spectrum mode (v0.9.2), hardware-revision diagnostics (v0.9.3), persistent settings + DiGi label (v0.9.4), full radio-state parity in the browser (v0.9.5), Hamlib rigctld network CAT bridge (v0.9.6), DSP cleanup (v0.9.7), waterfall jump fix (v0.9.8), persistence + polish pass (v0.9.9), trivial-debt cleanup (v0.9.9.1), onboard FT8 RX (v0.10.0-beta1), WiFi modal hotfix (v0.10.0-beta2), LVGL pool migration to PSRAM (v0.10.0-beta3), memory channels v2 + FT8 colour coding (v0.10.1), IQ persistence (v0.10.2), CW offset fix (v0.10.3), and pinch-zoom + pan + CW improvements (v0.11.0).
+Working. All phases through 8 complete. Current release: v0.11.3. Includes: cold-boot reliability fix, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings, Hamlib rigctld bridge, onboard FT8 RX decoder, memory channels, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser), browser click-to-tune, zoom sync, and band memory.
 
 | Phase | What | Status |
 |-------|------|--------|
@@ -115,8 +115,8 @@ Working. All phases through 8 complete, plus cold-boot reliability fix, I/Q bala
 | -     | Waterfall jump fix: 30 Hz -> 10 Hz render avoids LVGL flush cascade (v0.9.8) | done |
 | -     | Persistence + polish: last-VFO, CW pitch, waterfall colour maps, snap-to-peak (v0.9.9) | done |
 | -     | Trivial-debt cleanup: dynamic version, flat-mode label hide, mojibake fix (v0.9.9.1) | done |
-| -     | Onboard FT8 RX decoder with DXCC, distance, bearing per call (v0.10.0-beta1) | beta |
-| -     | Per-unit QMX IF calibration trim slider (v0.10.0-beta1) | beta |
+| -     | Onboard FT8 RX decoder with DXCC, distance, bearing per call (v0.10.0) | done |
+| -     | Per-unit QMX IF calibration trim slider (v0.10.0) | done |
 
 See the [Roadmap](#roadmap) at the bottom for what's next.
 
@@ -555,13 +555,14 @@ Validated live on 20 m FT8 across 25+ consecutive slots with drawer + modal inte
 - **FT8 decode colour coding.** RED = own callsign (priority), GREEN = "CQ " prefix, WHITE = other. Colours on callsign + message labels only.
 - **`cat_get_mode_str()` helper.** Returns cached Kenwood mode digit as readable string (e.g. "USB", "CW", "DiGi").
 
-### Shipped in v0.10.3
-- CW mode frequency display: added 640 Hz LO offset correction for accurate dial alignment
-
 ### Shipped in v0.10.2
 
 - **IQ Balance setting now persistent.** Toggle state is restored from NVS on every boot/flash/power-cycle, no longer defaults to OFF.
 - **Memory modal: keyboard dismiss on cancel.** Keyboard hidden automatically when cancel button pressed during label edit/delete.
+
+### Shipped in v0.10.3
+
+- **CW mode frequency display.** Added 640 Hz LO offset correction for accurate dial alignment in CW mode.
 
 ### Shipped in v0.11.3
 - **Browser interactive controls.** Band, Mode, BW, and Zoom dropdown pills in the browser top bar — click to change, mirrors the Tab5 top-bar dropdowns. Commands sent via new `POST /api/cmd` endpoint.
@@ -571,11 +572,22 @@ Validated live on 20 m FT8 across 25+ consecutive slots with drawer + modal inte
 - **Band memory (Tab5 + browser).** Band switching returns to the last-used frequency per band for the session.
 - **`/api/status` extended.** Added `zoom`, `pan_bins`, `cw_pitch_hz`, `if_cal_hz`, `bands[]`.
 
+### Shipped in v0.11.1
+
+- **Top-bar quick-access control strip (Tab5).** Tap any label in the top bar to open a popup selector. Band popup reads all configured bands dynamically from the QMX at connect time. Mode popup switches USB/LSB/CW/DiGi. BW popup selects CW filter width (50–500 Hz) — CW mode only. Zoom popup selects ×1/×2/×4/×8/×16/×24 presets with pan reset to centre.
+
 ### Shipped in v0.11.2
+
 - **ST7121 display compatibility.** Tab5 units shipped after ~April 28, 2026 use an ST7121 display controller instead of ST7123, causing a blank screen with previous firmware. The binary now auto-detects the panel at boot via touch controller I2C firmware version (FW=1 → ST7121, FW=3 → ST7123) and applies the correct driver and MIPI-DSI timings. One merged binary works on both hardware versions.
 
-### Shipped in v0.11.1
-- **Top-bar quick-access control strip.** Tap any label in the top bar to open a popup selector. Band popup reads all configured bands dynamically from the QMX at connect time (`MMBand config.` CAT commands) — automatically matches your QMX variant (low/mid/top band). Mode popup switches USB/LSB/CW/DiGi via `MD;`. BW popup selects CW filter width (50–500 Hz) via `MMCW|CW passband=N;` — CW mode only (SSB BW not live-adjustable via CAT). Zoom popup selects ×1/×2/×4/×8/×16/×24 presets with pan reset to centre.
+### Shipped in v0.11.3
+
+- **Browser interactive controls.** Band, Mode, BW, and Zoom dropdown pills in the browser top bar mirror the Tab5 top-bar dropdowns. Commands sent via new `POST /api/cmd` endpoint (`set_freq`, `set_band`, `set_mode`, `set_bw`, `set_zoom`).
+- **Browser click/drag to tune.** Click or drag the spectrum or waterfall to tune the QMX. Cyan cursor with live frequency readout tracks the pointer; mode-aware step rounding (CW=10 Hz, DiGi=100 Hz, SSB=500 Hz); commits on release.
+- **Browser zoom + pan sync.** Spectrum and waterfall render the same zoomed window as the Tab5; frequency axis labels track the visible span.
+- **Browser passband marker corrected.** CW passband symmetric around VFO centre; mode-default widths used when CAT has not yet reported BW.
+- **Band memory (Tab5 + browser).** Switching bands returns to the last-used frequency on that band for the session. First visit uses the QMX default.
+- **`/api/status` extended.** Added `zoom`, `pan_bins`, `cw_pitch_hz`, `if_cal_hz`, `bands[]`.
 
 ### Shipped in v0.11.0
 
@@ -601,7 +613,6 @@ The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF
 
 Alongside the FT8 path:
 
-- **Memory channels.** Quick-recall frequency presets - touch a slot, QMX retunes via CAT. 32 NVS-blob slots with editable labels. Spec ready, ~5-8h work.
 - **DSP polish.** Noise reduction, auto-notch.
 - **Phase 6.3 - Native-orientation rendering** *(deferred)*. ~50% FPS recovery available if we render directly in the panel's native 720x1280 portrait coordinates so LVGL has no rotation step.
 
