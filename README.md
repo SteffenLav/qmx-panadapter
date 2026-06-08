@@ -563,6 +563,9 @@ Validated live on 20 m FT8 across 25+ consecutive slots with drawer + modal inte
 - **IQ Balance setting now persistent.** Toggle state is restored from NVS on every boot/flash/power-cycle, no longer defaults to OFF.
 - **Memory modal: keyboard dismiss on cancel.** Keyboard hidden automatically when cancel button pressed during label edit/delete.
 
+### Shipped in v0.11.2
+- **ST7121 display compatibility.** Tab5 units shipped after ~April 28, 2026 use an ST7121 display controller instead of ST7123, causing a blank screen with previous firmware. The binary now auto-detects the panel at boot via touch controller I2C firmware version (FW=1 → ST7121, FW=3 → ST7123) and applies the correct driver and MIPI-DSI timings. One merged binary works on both hardware versions.
+
 ### Shipped in v0.11.1
 - **Top-bar quick-access control strip.** Tap any label in the top bar to open a popup selector. Band popup reads all configured bands dynamically from the QMX at connect time (`MMBand config.` CAT commands) — automatically matches your QMX variant (low/mid/top band). Mode popup switches USB/LSB/CW/DiGi via `MD;`. BW popup selects CW filter width (50–500 Hz) via `MMCW|CW passband=N;` — CW mode only (SSB BW not live-adjustable via CAT). Zoom popup selects ×1/×2/×4/×8/×16/×24 presets with pan reset to centre.
 
