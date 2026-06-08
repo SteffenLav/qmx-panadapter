@@ -564,13 +564,18 @@ Validated live on 20 m FT8 across 25+ consecutive slots with drawer + modal inte
 
 - **CW mode frequency display.** Added 640 Hz LO offset correction for accurate dial alignment in CW mode.
 
-### Shipped in v0.11.3
-- **Browser interactive controls.** Band, Mode, BW, and Zoom dropdown pills in the browser top bar — click to change, mirrors the Tab5 top-bar dropdowns. Commands sent via new `POST /api/cmd` endpoint.
-- **Browser click/drag to tune.** Click or drag the spectrum or waterfall to tune the QMX. Cyan cursor with live frequency readout tracks the pointer; mode-aware step rounding; commits on release.
-- **Browser zoom + pan sync.** Spectrum and waterfall now render the same zoomed window as the Tab5. Frequency axis labels track the visible span.
-- **Browser passband marker corrected.** CW passband symmetric around VFO centre; mode-default widths used when CAT has not yet reported BW.
-- **Band memory (Tab5 + browser).** Band switching returns to the last-used frequency per band for the session.
-- **`/api/status` extended.** Added `zoom`, `pan_bins`, `cw_pitch_hz`, `if_cal_hz`, `bands[]`.
+### Shipped in v0.11.0
+
+- **Pinch-zoom and two-finger pan.** Pinch zooms the spectrum and waterfall from x1.0 (full 48 kHz view) up to x24.0. Two-finger drag pans the zoomed window. Double-tap resets zoom and pan to x1.0/centre. Zoom persisted to NVS.
+- **Zoom indicator.** Top bar shows "Zoom: x1.0" in dim grey at full view, amber at any zoom level.
+- **Frequency axis labels zoom-aware.** Tick labels update in real time as you zoom and pan. Resolution increases to Hz precision when the visible span is below 10 kHz.
+- **Passband indicator lines zoom-aware.** Grey filter-width lines follow zoom and pan correctly.
+- **Floating frequency tooltip.** Cyan label above the finger shows the target frequency in real time while dragging to tune.
+- **Cyan cursor in waterfall.** Tune-cursor line extends across the waterfall as well as the spectrum.
+- **CW LO offset read from QMX via CAT.** Read at connect time via `MMCW|CW offset;` and applied to bin shift math automatically.
+- **CW trim slider.** ±100 Hz, 5 Hz steps, CW mode only, default −60 Hz. Persisted to NVS.
+- **CW touch-to-tune corrected.** Tapping a signal tunes the dial to that signal's RF frequency in all modes.
+- **Tap-to-tune precision at zoom.** Snap-to-peak disabled when zoom > x1.5; snap radius scales with zoom at lower zoom levels.
 
 ### Shipped in v0.11.1
 
@@ -578,29 +583,16 @@ Validated live on 20 m FT8 across 25+ consecutive slots with drawer + modal inte
 
 ### Shipped in v0.11.2
 
-- **ST7121 display compatibility.** Tab5 units shipped after ~April 28, 2026 use an ST7121 display controller instead of ST7123, causing a blank screen with previous firmware. The binary now auto-detects the panel at boot via touch controller I2C firmware version (FW=1 → ST7121, FW=3 → ST7123) and applies the correct driver and MIPI-DSI timings. One merged binary works on both hardware versions.
+- **ST7121 display compatibility.** Tab5 units shipped after ~April 28, 2026 use an ST7121 display controller instead of ST7123, causing a blank screen with previous firmware. Auto-detects at boot via touch controller I2C firmware version (FW=1 → ST7121, FW=3 → ST7123). One merged binary works on both hardware versions.
 
 ### Shipped in v0.11.3
 
-- **Browser interactive controls.** Band, Mode, BW, and Zoom dropdown pills in the browser top bar mirror the Tab5 top-bar dropdowns. Commands sent via new `POST /api/cmd` endpoint (`set_freq`, `set_band`, `set_mode`, `set_bw`, `set_zoom`).
-- **Browser click/drag to tune.** Click or drag the spectrum or waterfall to tune the QMX. Cyan cursor with live frequency readout tracks the pointer; mode-aware step rounding (CW=10 Hz, DiGi=100 Hz, SSB=500 Hz); commits on release.
+- **Browser interactive controls.** Band, Mode, BW, and Zoom dropdown pills in the browser top bar mirror the Tab5 top-bar dropdowns. Commands sent via new `POST /api/cmd` endpoint.
+- **Browser click/drag to tune.** Click or drag the spectrum or waterfall to tune the QMX. Cyan cursor with live frequency readout; mode-aware step rounding; commits on release.
 - **Browser zoom + pan sync.** Spectrum and waterfall render the same zoomed window as the Tab5; frequency axis labels track the visible span.
 - **Browser passband marker corrected.** CW passband symmetric around VFO centre; mode-default widths used when CAT has not yet reported BW.
-- **Band memory (Tab5 + browser).** Switching bands returns to the last-used frequency on that band for the session. First visit uses the QMX default.
+- **Band memory (Tab5 + browser).** Switching bands returns to the last-used frequency on that band for the session.
 - **`/api/status` extended.** Added `zoom`, `pan_bins`, `cw_pitch_hz`, `if_cal_hz`, `bands[]`.
-
-### Shipped in v0.11.0
-
-- **Pinch-zoom and two-finger pan.** Pinch (two-finger spread/squeeze) zooms the spectrum and waterfall from x1.0 (full 48 kHz view) up to x24.0. Two-finger drag pans the zoomed window. Double-tap resets zoom and pan to x1.0/centre. Zoom persisted to NVS across power cycles.
-- **Zoom indicator.** Top bar shows "Zoom: x1.0" in dim grey at full view, amber at any zoom level.
-- **Frequency axis labels zoom-aware.** The five tick labels under the spectrum update in real time as you zoom and pan. Resolution automatically increases to Hz precision when the visible span is below 10 kHz.
-- **Passband indicator lines zoom-aware.** The grey filter-width lines follow zoom and pan correctly.
-- **Floating frequency tooltip.** A cyan label above the finger shows the target frequency (MM.KKK.HHH) in real time while dragging to tune. In CW mode the display snaps to the nearest 10 Hz.
-- **Cyan cursor in waterfall.** The cyan tune-cursor line now extends across the waterfall as well as the spectrum.
-- **CW LO offset read from QMX via CAT.** The CW offset (default 700 Hz, user-configurable on the QMX) is read at connect time via `MMCW|CW offset;` and applied to the bin shift math automatically.
-- **CW trim slider.** Replaces the old IF cal slider. ±100 Hz, 5 Hz steps, CW mode only, default −60 Hz (per-unit TCXO compensation). Persisted to NVS.
-- **CW touch-to-tune corrected.** The sidetone pitch correction has been removed from touch-to-tune math. Tapping a signal now tunes the dial to that signal's RF frequency in all modes, consistent with SDR convention.
-- **Tap-to-tune precision at zoom.** Snap-to-peak is disabled when zoom > x1.5; at high zoom the tap position is already precise enough. Snap radius scales with zoom at lower zoom levels.
 
 ### Next up
 
