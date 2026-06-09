@@ -354,7 +354,7 @@ ft8_tx_state_t ft8_tx_get_status(char *text, size_t text_len, int *secs_until)
     }
     if (st == FT8_TX_ARMED) {
         secs = seconds_until_slot(time(NULL),
-                                  s_armed.kind == FT8_TX_KIND_REPLY,
+                                  s_armed.use_parity,
                                   s_armed.want_even_slot);
     }
     unlock();

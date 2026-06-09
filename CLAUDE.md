@@ -60,7 +60,9 @@ Newer Tab5 units ship with an **ST7121** touch controller (I2C 0x55, FW version 
 
 Detection lives in `bsp_detect_display_type()` in `components/m5stack_tab5/m5stack_tab5.c`. It probes I2C on startup, reads register 0x0000 from 0x55, and returns `BSP_DISPLAY_TYPE_ST7121` or `BSP_DISPLAY_TYPE_ST7123` accordingly. The result is cached in `s_detected_display_type` — do not call the function more than once per boot (the second call used to re-probe the touch chip after the 800 ms DISPON delay, leaving the bus dirty).
 
-**Critical: I2C speed for ST7121/ST7123 touch must be 100 kHz.** The detection probe uses 100 kHz; `bsp_display_indev_init_to_st7123()` must also use 100 kHz (`tp_io_config.scl_speed_hz = 100000`). Do not change this to `CONFIG_BSP_I2C_CLK_SPEED_HZ` (400 kHz) — ST7121 does not respond reliably at 400 kHz and `read_fw_info()` will fail, causing a reboot loop. Fixed in v0.12.1.
+**I2C speed for ST7121/ST7123 touch must be 100 kHz.** The detection probe uses 100 kHz; `bsp_display_indev_init_to_st7123()` must also use 100 kHz (`tp_io_config.scl_speed_hz = 100000`). Do not change this to `CONFIG_BSP_I2C_CLK_SPEED_HZ` (400 kHz) — ST7121 does not respond reliably at 400 kHz.
+
+**ST7121 has an incomplete register map.** The `read_fw_info()` function in `esp_lcd_touch_st7123.c` originally called `ESP_RETURN_ON_ERROR` for all three register reads (`FW_REVISION_REG 0x000C`, `MAX_X_COORD_H_REG 0x0005`). ST7121 NACKs both — causing `esp_lcd_touch_new_i2c_st7123()` to return an error, `bsp_display_start_with_config()` to return NULL, `ESP_ERROR_CHECK(display_init())` to abort, and a 5-second panic → reboot loop. Fixed in v0.13.1: the component is forked to `components/espressif__esp_lcd_touch_st7123/` where only `FW_VERSION_REG (0x0000)` is mandatory; the other reads are optional (LOGW on failure). Also adds a `max_touches > 10` bounds clamp in `read_data()` to prevent a stack smash from a garbage register read.
 
 Both ST7121 and ST7123 use the same touch driver (`esp_lcd_touch_new_i2c_st7123`) and the same init path (`bsp_display_indev_init_to_st7123`). The ST7121 and ST7123 LCD panels use separate init sequences (`bsp_display_new_with_handles_to_st7121` / `_to_st7123`) with different DSI lane bitrates (1300 Mbps vs 965 Mbps).
 
@@ -159,7 +161,7 @@ Timeout: `QSO_TIMEOUT_SLOTS = 2` consecutive missed RX slots in any WAIT state �
 
 | Branch | What | State |
 |--------|------|-------|
-| `main` | v0.13.0 — auto search-and-pounce QSO state machine | stable |
+| `main` | v0.13.1 — ST7121 touch crash fix + FT8 slot-skip + parity fix | stable |
 
 ## Next up (v0.14.0)
 

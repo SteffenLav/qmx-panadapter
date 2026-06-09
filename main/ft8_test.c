@@ -233,32 +233,40 @@ static void ft8_task(void *arg)
             ft8_tx_run(&txreq);   // blocks ~12.7s; always restores RX before returning
             ft8_status_set("TX done — waiting for next slot");
         } else {
-            int n_cand = 0, n_decoded = 0;
-            int cap_ms = 0, mon_ms = 0, dec_ms = 0;
-
-            ft8_status_set("RX: capturing...");
-            esp_err_t e = process_one_slot(audio, &mon, slot_sec,
-                                           &n_cand, &n_decoded,
-                                           &cap_ms, &mon_ms, &dec_ms);
-
-            size_t heap_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024;
-            size_t heap_p = heap_caps_get_free_size(MALLOC_CAP_SPIRAM)   / 1024;
-
-            if (e == ESP_OK) {
-                ft8_status_set("RX: %d decoded  (%d candidates)", n_decoded, n_cand);
-                ESP_LOGI(TAG,
-                    "slot %d UTC %lld: cap=%dms mon=%dms dec=%dms "
-                    "cand=%d dec=%d heap_i=%uKB heap_p=%uKB",
-                    slot_idx, (long long)slot_sec,
-                    cap_ms, mon_ms, dec_ms, n_cand, n_decoded,
-                    (unsigned)heap_i, (unsigned)heap_p);
-                ft8_qso_advance(slot_sec);
+            // Skip RX when a TX is armed but waiting for its parity-matched
+            // slot. process_one_slot takes ~19s and would swallow the next
+            // boundary, so a parity-locked CQ or reply would never fire.
+            ft8_tx_state_t tx_state = ft8_tx_get_status(NULL, 0, NULL);
+            if (tx_state == FT8_TX_ARMED) {
+                ft8_status_set("TX: waiting for matching slot...");
             } else {
-                ft8_status_set("RX: capture error");
-                ESP_LOGW(TAG,
-                    "slot %d UTC %lld: error %d after cap=%dms heap_i=%uKB heap_p=%uKB",
-                    slot_idx, (long long)slot_sec, e, cap_ms,
-                    (unsigned)heap_i, (unsigned)heap_p);
+                int n_cand = 0, n_decoded = 0;
+                int cap_ms = 0, mon_ms = 0, dec_ms = 0;
+
+                ft8_status_set("RX: capturing...");
+                esp_err_t e = process_one_slot(audio, &mon, slot_sec,
+                                               &n_cand, &n_decoded,
+                                               &cap_ms, &mon_ms, &dec_ms);
+
+                size_t heap_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024;
+                size_t heap_p = heap_caps_get_free_size(MALLOC_CAP_SPIRAM)   / 1024;
+
+                if (e == ESP_OK) {
+                    ft8_status_set("RX: %d decoded  (%d candidates)", n_decoded, n_cand);
+                    ESP_LOGI(TAG,
+                        "slot %d UTC %lld: cap=%dms mon=%dms dec=%dms "
+                        "cand=%d dec=%d heap_i=%uKB heap_p=%uKB",
+                        slot_idx, (long long)slot_sec,
+                        cap_ms, mon_ms, dec_ms, n_cand, n_decoded,
+                        (unsigned)heap_i, (unsigned)heap_p);
+                    ft8_qso_advance(slot_sec);
+                } else {
+                    ft8_status_set("RX: capture error");
+                    ESP_LOGW(TAG,
+                        "slot %d UTC %lld: error %d after cap=%dms heap_i=%uKB heap_p=%uKB",
+                        slot_idx, (long long)slot_sec, e, cap_ms,
+                        (unsigned)heap_i, (unsigned)heap_p);
+                }
             }
         }
 
