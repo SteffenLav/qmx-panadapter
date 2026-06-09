@@ -220,8 +220,19 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
     }
     s_my_call[ci] = '\0';
 
+    // CQ must alternate TX/RX every 30 s. If no parity preference was set,
+    // lock to the parity of the first TX slot so re-arms always target the
+    // same slot type and the opposite slot stays free for RX.
+    ft8_tx_request_t req_copy = *cq_req;
+    if (!req_copy.use_parity) {
+        int64_t now_sec   = (int64_t)time(NULL);
+        int64_t next_slot = (now_sec / 15) * 15 + 15;
+        req_copy.use_parity     = true;
+        req_copy.want_even_slot = (((next_slot / 15) % 2) == 0);
+    }
+
     char arm_err[64];
-    if (!ft8_tx_arm(cq_req, arm_err, sizeof(arm_err))) {
+    if (!ft8_tx_arm(&req_copy, arm_err, sizeof(arm_err))) {
         if (err) snprintf(err, err_len, "%s", arm_err);
         return false;
     }
@@ -229,8 +240,8 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
     lock();
     s_state        = FT8_QSO_CQ;
     s_target[0]    = '\0';
-    s_freq_hz      = cq_req->audio_freq_hz;
-    s_cq_req       = *cq_req;
+    s_freq_hz      = req_copy.audio_freq_hz;
+    s_cq_req       = req_copy;
     s_missed_slots = 0;
     unlock();
 
@@ -270,11 +281,13 @@ void ft8_qso_advance(int64_t slot_sec)
         return;
     }
 
-    // CQ loop — re-arm after every unanswered TX slot; stop when someone replies
+    // CQ loop — scan for replies every RX slot; stop when someone replies.
+    // Re-arming is done by ft8_qso_on_tx_complete (called from ft8_task
+    // right after TX ends), so by the time we get here the next CQ is
+    // typically already ARMED.  We still handle the IDLE fallback in case
+    // on_tx_complete failed, and we always scan so a reply can cancel the
+    // pending CQ before it fires.
     if (st == FT8_QSO_CQ) {
-        // Only act once the CQ has actually fired (TX idle)
-        if (ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE) return;
-
         char caller[FT8_CALL_MAX_LEN] = {0};
         int  caller_freq = freq;
         char report[8]   = {0};
@@ -285,23 +298,24 @@ void ft8_qso_advance(int64_t slot_sec)
                                           report, sizeof(report),
                                           &got_rr73, &got_73);
         if (!found) {
-            // No reply — re-arm CQ for the next matching slot
-            ft8_tx_request_t cq_copy;
-            lock(); cq_copy = s_cq_req; unlock();
-            char arm_err[64];
-            if (ft8_tx_arm(&cq_copy, arm_err, sizeof(arm_err))) {
-                ft8_status_set("CQ: no reply — trying again");
-                ESP_LOGI(TAG, "CQ: no reply in slot %lld, re-arming", (long long)slot_sec);
-            } else {
-                ESP_LOGW(TAG, "CQ re-arm failed: %s", arm_err);
-                ft8_status_set("CQ: re-arm error");
+            // No reply — if the re-arm from on_tx_complete somehow didn't
+            // happen, fall back to re-arming here.
+            if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_IDLE) {
+                ft8_tx_request_t cq_copy;
+                lock(); cq_copy = s_cq_req; unlock();
+                char arm_err[64];
+                if (!ft8_tx_arm(&cq_copy, arm_err, sizeof(arm_err))) {
+                    ESP_LOGW(TAG, "CQ fallback re-arm failed: %s", arm_err);
+                    ft8_status_set("CQ: re-arm error");
+                }
             }
             return;
         }
 
-        // Someone replied — start the exchange on their frequency
+        // Someone replied — cancel the pending CQ and start the exchange
         ESP_LOGI(TAG, "CQ: reply from %s @ %d Hz, report='%s' rr73=%d 73=%d",
                  caller, caller_freq, report, got_rr73, got_73);
+        ft8_tx_disarm();  // cancel the re-armed CQ (no-op if already ACTIVE)
         lock();
         strncpy(s_target, caller, sizeof(s_target) - 1);
         s_target[sizeof(s_target) - 1] = '\0';
@@ -334,7 +348,7 @@ void ft8_qso_advance(int64_t slot_sec)
             lock(); s_state = next_state; s_missed_slots = 0; unlock();
         } else {
             ESP_LOGE(TAG, "CQ: failed to arm response to %s: %s", caller, arm_err);
-            // Stay in CQ loop; re-arm CQ and try again next slot
+            // Re-arm CQ and try again next round
             ft8_tx_request_t cq_copy;
             lock(); cq_copy = s_cq_req; unlock();
             ft8_tx_arm(&cq_copy, arm_err, sizeof(arm_err));
@@ -430,6 +444,21 @@ void ft8_qso_advance(int64_t slot_sec)
             lock(); s_state = FT8_QSO_TIMEOUT; unlock();
             ft8_status_set("QSO %s: TX error — %s", target, arm_err);
         }
+    }
+}
+
+void ft8_qso_on_tx_complete(void)
+{
+    lock();
+    ft8_qso_state_t st = s_state;
+    ft8_tx_request_t cq_copy = s_cq_req;
+    unlock();
+    if (st != FT8_QSO_CQ) return;
+    // Re-arm immediately so the next even-or-odd slot check in the capture
+    // task (which runs < 3 s from now) sees ARMED, not IDLE.
+    char arm_err[64];
+    if (!ft8_tx_arm(&cq_copy, arm_err, sizeof(arm_err))) {
+        ESP_LOGW(TAG, "CQ on_tx_complete re-arm failed: %s", arm_err);
     }
 }
 

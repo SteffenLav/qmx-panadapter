@@ -40,6 +40,12 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len);
 // to this slot and not stale ones from previous slots).
 void ft8_qso_advance(int64_t slot_sec);
 
+// Called by ft8_task immediately after ft8_tx_run() returns.
+// When in CQ loop mode, re-arms the CQ for the next matching slot so the
+// re-arm happens at T+12.7 s (TX end), not at T+19 s (after decode), which
+// would be too late for the capture task's slot-boundary check.
+void ft8_qso_on_tx_complete(void);
+
 // Abort QSO and disarm any pending TX. No-op when IDLE.
 void ft8_qso_abort(void);
 

@@ -312,6 +312,7 @@ static void ft8_task(void *arg)
         if (ft8_tx_should_run_this_slot(slot_sec, &txreq)) {
             ft8_status_set("TX: %s", txreq.display_text);
             ft8_tx_run(&txreq);   // blocks ~12.7 s; always restores RX before returning
+            ft8_qso_on_tx_complete();  // re-arm CQ immediately if in CQ loop mode
             ft8_status_set("TX done — waiting for next slot");
             ft8_screen_view_request_refresh();
         } else if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ARMED) {
