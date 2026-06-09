@@ -1,25 +1,29 @@
-// ft8_test.c - Step 4a v0.10: Continuous FT8 RX slot loop.
+// ft8_test.c — Continuous FT8 slot loop with ping-pong decode.
 //
-// Boot-time task: waits for SNTP, waits for CAT-ready (QMX CDC +
-// Q9 1; + FA + MD + FW handshake), then loops forever capturing
-// each 15 s FT8 slot via dsp_ft8_capture() and running the
-// monitor + decode pipeline on the result.
+// Two tasks cooperate so every 15-second FT8 slot is decoded:
 //
-// 4a delta vs step 3:
-//   - one-shot -> continuous loop
-//   - audio buffer + monitor_t hoisted out of the loop (no
-//     per-slot heap churn)
-//   - decoded messages also recorded into a small ring buffer
-//     for future UI use (step 4c)
-//   - per-slot summary log includes free internal/PSRAM heap
-//     so we can spot leaks across slots
+//   ft8_task (capture)
+//     Owns the slot-boundary loop and TX logic. For each RX slot it
+//     captures 15 s of audio into one of two alternating PSRAM buffers,
+//     posts a decode_job_t to s_decode_queue, and immediately loops back
+//     without waiting for decode to finish.
 //
-// Slot cadence: capture 15 s + monitor ~2 s + decode ~2 s = ~19 s.
-// FT8 slots are 15 s apart, so we catch every other slot.
-// Ping-pong buffers to overlap decode with next capture are a
-// future refactor (tracked in step 4 plan).
+//   ft8_decode_task (decode)
+//     Waits on the queue, runs monitor-process + candidate-search +
+//     decode (~4 s), records results, advances the QSO state machine,
+//     and refreshes the view.
 //
-// Output for 4a is still log lines only. UI mode switch is 4b/4c.
+// Because decode (~4 s) finishes well before the next capture completes
+// (15 s), the queue never backs up and every slot is decoded regardless
+// of parity.
+//
+// TX slots: ft8_task runs ft8_tx_run() instead of capturing; no job is
+// queued for that slot (the radio is transmitting, not receiving).
+//
+// Parity-skip slots: when a TX is armed but the current slot has the
+// wrong parity, ft8_task skips the capture and returns to
+// wait_for_slot_boundary() so the correct parity slot is reached within
+// one loop iteration (~10 ms).
 
 #include "ft8_test.h"
 
@@ -33,6 +37,7 @@
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "freertos/idf_additions.h"
 
 #include "ft8/message.h"
@@ -52,15 +57,31 @@
 static const char *TAG = "ft8_test";
 
 #define SR_HZ                 12000
-#define SLOT_SAMPLES          180000      // 15 s at 12 kHz
-#define SLOT_TIMEOUT_MS       20000       // 15 s + headroom
+#define SLOT_SAMPLES          180000      // 15 s × 12 kHz
+#define SLOT_TIMEOUT_MS       20000
 #define SNTP_WAIT_TIMEOUT_MS  30000
 #define CAT_WAIT_TIMEOUT_MS   60000
+#define DECODE_QUEUE_DEPTH    2           // one in-flight + one ready, never backs up
 
-// Minimum sane Unix epoch: 2023-11-14. Anything below = SNTP not synced.
-#define EPOCH_SANE_MIN        1700000000
+#define EPOCH_SANE_MIN        1700000000  // 2023-11-14 — SNTP not synced if below this
 
-// ----- Boot-time gating helpers ---------------------------------------------
+// ---------------------------------------------------------------------------
+// Ping-pong decode queue
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    float   *audio;     // which ping-pong buffer to decode (NULL = sentinel)
+    int64_t  slot_sec;  // UTC slot start; -1 = termination sentinel
+    int      slot_idx;
+    int      cap_ms;    // measured capture duration, for log line
+} decode_job_t;
+
+static QueueHandle_t  s_decode_queue = NULL;
+static volatile bool  s_ft8_running  = false;
+
+// ---------------------------------------------------------------------------
+// Boot-time gating helpers
+// ---------------------------------------------------------------------------
 
 static bool wait_for_sntp(uint32_t timeout_ms)
 {
@@ -77,9 +98,6 @@ static bool wait_for_sntp(uint32_t timeout_ms)
     return false;
 }
 
-// Block until CAT layer reports QMX is fully handshaken:
-// CDC open -> Q9 1; -> FA -> MD -> FW response parsed.
-// Empirically this is the earliest moment we see mode-correct I/Q on USB.
 static bool wait_for_cat_ready(uint32_t timeout_ms)
 {
     int64_t t0 = esp_timer_get_time();
@@ -93,86 +111,129 @@ static bool wait_for_cat_ready(uint32_t timeout_ms)
     return false;
 }
 
-// Block until UTC second crosses a 15 s slot boundary within 100 ms.
-// Returns the UTC second at which capture is about to start.
-static int64_t wait_for_slot_boundary(void)
+// Block until the next 15 s slot boundary strictly after after_sec.
+// Returns that slot's UTC second. No fixed arrival window — we return
+// the current slot if it's newer than after_sec, which handles the
+// case where the previous capture ran a little long and we land
+// 100+ ms into the new slot.
+static int64_t wait_for_slot_boundary(int64_t after_sec)
 {
     while (1) {
         struct timeval tv;
         gettimeofday(&tv, NULL);
-        if ((tv.tv_sec % 15) == 0 && tv.tv_usec < 100000) {
-            return (int64_t)tv.tv_sec;
+        int64_t slot = (int64_t)(tv.tv_sec / 15) * 15;
+        if (slot > after_sec) {
+            return slot;
         }
         vTaskDelay(1);  // ~10 ms at default tick rate
     }
 }
 
-// ----- Per-slot processing --------------------------------------------------
+// ---------------------------------------------------------------------------
+// Decode pipeline — called only from ft8_decode_task
+// ---------------------------------------------------------------------------
 
-// Returns ESP_OK on success, propagates dsp_ft8_capture errors.
-// On success, mon already has all 93 blocks fed and is ready for candidate
-// search. n_cand_out / n_decoded_out / timing pointers receive stats.
-static esp_err_t process_one_slot(float *audio, monitor_t *mon,
-                                  int64_t slot_sec,
-                                  int *n_cand_out, int *n_decoded_out,
-                                  int *cap_ms, int *mon_ms, int *dec_ms)
+static void decode_slot(float *audio, monitor_t *mon,
+                        int64_t slot_sec, int slot_idx, int cap_ms)
 {
-    int64_t t0 = esp_timer_get_time();
-    esp_err_t e = dsp_ft8_capture(audio, SLOT_TIMEOUT_MS);
-    int64_t t_cap = esp_timer_get_time();
-    *cap_ms = (int)((t_cap - t0) / 1000);
-    if (e != ESP_OK) {
-        ESP_LOGW(TAG, "slot UTC %lld: capture failed (%d)",
-                 (long long)slot_sec, e);
-        return e;
-    }
+    int64_t t_start = esp_timer_get_time();
 
     monitor_reset(mon);
     int blk = mon->block_size;
-    int n_blocks_fed = 0;
     for (int pos = 0; pos + blk <= SLOT_SAMPLES; pos += blk) {
         monitor_process(mon, &audio[pos]);
-        n_blocks_fed++;
     }
-    int64_t t_mon = esp_timer_get_time();
-    *mon_ms = (int)((t_mon - t_cap) / 1000);
+    int mon_ms = (int)((esp_timer_get_time() - t_start) / 1000);
 
-    ftx_candidate_t heap[140];
-    int n_cand = ftx_find_candidates(&mon->wf, 140, heap, 10);
-    *n_cand_out = n_cand;
+    ftx_candidate_t cands[140];
+    int n_cand = ftx_find_candidates(&mon->wf, 140, cands, 10);
 
     int n_decoded = 0;
     for (int i = 0; i < n_cand; i++) {
-        ftx_message_t out_msg;
+        ftx_message_t msg;
         ftx_decode_status_t st;
-        if (!ftx_decode_candidate(&mon->wf, &heap[i], 60, &out_msg, &st)) {
-            continue;
-        }
+        if (!ftx_decode_candidate(&mon->wf, &cands[i], 60, &msg, &st)) continue;
         char text[FTX_MAX_MESSAGE_LENGTH];
         ftx_message_offsets_t off;
-        if (ftx_message_decode(&out_msg, NULL, text, &off) == FTX_MESSAGE_RC_OK) {
+        if (ftx_message_decode(&msg, NULL, text, &off) == FTX_MESSAGE_RC_OK) {
             n_decoded++;
             ESP_LOGI(TAG, "decoded: '%s' (score=%d freq_off=%d)",
-                     text, heap[i].score, heap[i].freq_offset);
-            ft8_screen_record_decode(text,
-                                     heap[i].score, heap[i].freq_offset,
-                                     slot_sec);
+                     text, cands[i].score, cands[i].freq_offset);
+            ft8_screen_record_decode(text, cands[i].score, cands[i].freq_offset, slot_sec);
         }
     }
-    int64_t t_dec = esp_timer_get_time();
-    *dec_ms = (int)((t_dec - t_mon) / 1000);
-    *n_decoded_out = n_decoded;
-    return ESP_OK;
+    int dec_ms = (int)((esp_timer_get_time() - t_start) / 1000) - mon_ms;
+
+    size_t heap_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024;
+    size_t heap_p = heap_caps_get_free_size(MALLOC_CAP_SPIRAM)   / 1024;
+
+    ft8_status_set("RX: %d decoded  (%d candidates)", n_decoded, n_cand);
+    ESP_LOGI(TAG,
+        "slot %d UTC %lld: cap=%dms mon=%dms dec=%dms cand=%d dec=%d "
+        "heap_i=%uKB heap_p=%uKB",
+        slot_idx, (long long)slot_sec,
+        cap_ms, mon_ms, dec_ms, n_cand, n_decoded,
+        (unsigned)heap_i, (unsigned)heap_p);
+
+    ft8_qso_advance(slot_sec);
+    ft8_screen_view_request_refresh();
 }
 
-// ----- Task ------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Decode task
+// ---------------------------------------------------------------------------
+
+static void ft8_decode_task(void *arg)
+{
+    TaskHandle_t notify_target = (TaskHandle_t)arg;
+
+    monitor_t *mon = heap_caps_malloc(sizeof(monitor_t),
+                                      MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!mon) {
+        ESP_LOGE(TAG, "decode task: monitor_t alloc failed");
+        if (notify_target) xTaskNotify(notify_target, 1, eSetBits);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    monitor_config_t cfg = {
+        .f_min       = 200.0f,
+        .f_max       = 3000.0f,
+        .sample_rate = SR_HZ,
+        .time_osr    = 2,
+        .freq_osr    = 2,
+        .protocol    = FTX_PROTOCOL_FT8,
+    };
+    monitor_init(mon, &cfg);
+    ESP_LOGI(TAG, "decode task ready");
+
+    while (true) {
+        decode_job_t job;
+        if (xQueueReceive(s_decode_queue, &job, pdMS_TO_TICKS(500)) != pdTRUE) {
+            if (!s_ft8_running) break;
+            continue;
+        }
+        if (job.slot_sec < 0) break;    // termination sentinel from capture task
+        decode_slot(job.audio, mon, job.slot_sec, job.slot_idx, job.cap_ms);
+    }
+
+    monitor_free(mon);
+    heap_caps_free(mon);
+    ESP_LOGI(TAG, "decode task exiting");
+    if (notify_target) xTaskNotify(notify_target, 1, eSetBits);
+    vTaskDelete(NULL);
+}
+
+// ---------------------------------------------------------------------------
+// Capture task
+// ---------------------------------------------------------------------------
 
 static void ft8_task(void *arg)
 {
     (void)arg;
 
     ft8_status_set("Waiting for SNTP sync...");
-    ESP_LOGI(TAG, "Step 4a continuous FT8 RX: waiting for SNTP sync...");
+    ESP_LOGI(TAG, "waiting for SNTP...");
     if (!wait_for_sntp(SNTP_WAIT_TIMEOUT_MS)) {
         ESP_LOGE(TAG, "SNTP did not sync within %d ms - check WiFi",
                  SNTP_WAIT_TIMEOUT_MS);
@@ -191,118 +252,123 @@ static void ft8_task(void *arg)
         return;
     }
 
-    // Reused across all slots; allocated once.
-    float *audio = heap_caps_malloc(SLOT_SAMPLES * sizeof(float),
-                                    MALLOC_CAP_SPIRAM);
-    if (!audio) {
-        ESP_LOGE(TAG, "PSRAM alloc for slot buffer failed");
+    // Two ping-pong audio buffers — one captures while the other decodes.
+    float *audio[2] = {
+        heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM),
+        heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM),
+    };
+    if (!audio[0] || !audio[1]) {
+        ESP_LOGE(TAG, "PSRAM alloc for audio ping-pong buffers failed");
+        heap_caps_free(audio[0]);
+        heap_caps_free(audio[1]);
         vTaskDelete(NULL);
         return;
     }
-    ESP_LOGI(TAG, "slot buffer: %d floats at %p (PSRAM, reused per slot)",
-             SLOT_SAMPLES, audio);
+    ESP_LOGI(TAG, "audio ping-pong: [%p / %p]  %d floats = %u KB each",
+             audio[0], audio[1], SLOT_SAMPLES,
+             (unsigned)(SLOT_SAMPLES * sizeof(float) / 1024));
 
-    monitor_t mon;
-    monitor_config_t cfg = {
-        .f_min       = 200.0f,
-        .f_max       = 3000.0f,
-        .sample_rate = SR_HZ,
-        .time_osr    = 2,
-        .freq_osr    = 2,
-        .protocol    = FTX_PROTOCOL_FT8,
-    };
-    monitor_init(&mon, &cfg);
+    s_decode_queue = xQueueCreate(DECODE_QUEUE_DEPTH, sizeof(decode_job_t));
+    if (!s_decode_queue) {
+        ESP_LOGE(TAG, "failed to create decode queue");
+        heap_caps_free(audio[0]);
+        heap_caps_free(audio[1]);
+        vTaskDelete(NULL);
+        return;
+    }
 
-    ESP_LOGI(TAG, "entering continuous slot loop");
+    // Spawn decode task, passing our handle so it can notify us on exit.
+    s_ft8_running = true;
+    BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
+        ft8_decode_task, "ft8_dec", 65536,
+        xTaskGetCurrentTaskHandle(),
+        tskIDLE_PRIORITY + 1, NULL, 1,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (rc != pdPASS) {
+        ESP_LOGE(TAG, "failed to spawn ft8_decode_task (rc=%d)", (int)rc);
+        s_ft8_running = false;
+        vQueueDelete(s_decode_queue);
+        s_decode_queue = NULL;
+        heap_caps_free(audio[0]);
+        heap_caps_free(audio[1]);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    ESP_LOGI(TAG, "entering continuous slot loop (ping-pong decode)");
 
     int slot_idx = 0;
+    int buf_idx  = 0;
+    struct timeval tv_init;
+    gettimeofday(&tv_init, NULL);
+    int64_t last_slot = (int64_t)(tv_init.tv_sec / 15) * 15;
+
     while (ui_mode_get() == UI_MODE_FT8) {
         ESP_LOGI(TAG, "slot %d: waiting for next FT8 boundary...", slot_idx);
-        int64_t slot_sec = wait_for_slot_boundary();
+        int64_t slot_sec = wait_for_slot_boundary(last_slot);
+        last_slot = slot_sec;
 
-        // v0.12.0: a slot is either RX (decode, as always) or - if a TX
-        // request is armed and its required parity matches (or it's a CQ
-        // call firing on the next boundary) - a ~12.7s CAT burst. These are
-        // structurally exclusive: while keyed up, the QMX's USB audio
-        // captures its own TX output, not the air, so running both in the
-        // same slot would be meaningless even if it were safe (it isn't -
-        // they'd fight over the same audio ring buffer and CDC-ACM link).
         ft8_tx_request_t txreq;
         if (ft8_tx_should_run_this_slot(slot_sec, &txreq)) {
             ft8_status_set("TX: %s", txreq.display_text);
-            ft8_tx_run(&txreq);   // blocks ~12.7s; always restores RX before returning
+            ft8_tx_run(&txreq);   // blocks ~12.7 s; always restores RX before returning
             ft8_status_set("TX done — waiting for next slot");
+            ft8_screen_view_request_refresh();
+        } else if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ARMED) {
+            // Wrong parity — skip the blocking capture so the loop reaches
+            // the correct parity boundary within one ~10 ms iteration.
+            ft8_status_set("TX: waiting for matching slot...");
         } else {
-            // Skip RX when a TX is armed but waiting for its parity-matched
-            // slot. process_one_slot takes ~19s and would swallow the next
-            // boundary, so a parity-locked CQ or reply would never fire.
-            ft8_tx_state_t tx_state = ft8_tx_get_status(NULL, 0, NULL);
-            if (tx_state == FT8_TX_ARMED) {
-                ft8_status_set("TX: waiting for matching slot...");
-            } else {
-                int n_cand = 0, n_decoded = 0;
-                int cap_ms = 0, mon_ms = 0, dec_ms = 0;
+            float *buf = audio[buf_idx];
+            buf_idx ^= 1;   // alternate buffers: 0→1→0→1...
 
-                ft8_status_set("RX: capturing...");
-                esp_err_t e = process_one_slot(audio, &mon, slot_sec,
-                                               &n_cand, &n_decoded,
-                                               &cap_ms, &mon_ms, &dec_ms);
+            ft8_status_set("RX: capturing...");
+            int64_t t0 = esp_timer_get_time();
+            esp_err_t e = dsp_ft8_capture(buf, SLOT_TIMEOUT_MS);
+            int cap_ms = (int)((esp_timer_get_time() - t0) / 1000);
 
-                size_t heap_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024;
-                size_t heap_p = heap_caps_get_free_size(MALLOC_CAP_SPIRAM)   / 1024;
-
-                if (e == ESP_OK) {
-                    ft8_status_set("RX: %d decoded  (%d candidates)", n_decoded, n_cand);
-                    ESP_LOGI(TAG,
-                        "slot %d UTC %lld: cap=%dms mon=%dms dec=%dms "
-                        "cand=%d dec=%d heap_i=%uKB heap_p=%uKB",
-                        slot_idx, (long long)slot_sec,
-                        cap_ms, mon_ms, dec_ms, n_cand, n_decoded,
-                        (unsigned)heap_i, (unsigned)heap_p);
-                    ft8_qso_advance(slot_sec);
-                } else {
-                    ft8_status_set("RX: capture error");
-                    ESP_LOGW(TAG,
-                        "slot %d UTC %lld: error %d after cap=%dms heap_i=%uKB heap_p=%uKB",
-                        slot_idx, (long long)slot_sec, e, cap_ms,
-                        (unsigned)heap_i, (unsigned)heap_p);
+            if (e == ESP_OK) {
+                decode_job_t job = { buf, slot_sec, slot_idx, cap_ms };
+                if (xQueueSend(s_decode_queue, &job, 0) != pdTRUE) {
+                    // Should never happen: decode takes ~4 s, capture takes 15 s
+                    ESP_LOGW(TAG, "slot %d: decode queue full — slot dropped", slot_idx);
                 }
+            } else {
+                ft8_status_set("RX: capture error");
+                ESP_LOGW(TAG, "slot %d UTC %lld: capture failed (%d)",
+                         slot_idx, (long long)slot_sec, e);
             }
         }
 
-        // Step 4c.2: tell the FT8 LVGL view a slot finished so it can
-        // snapshot the decode table and rebuild the list.
-        ft8_screen_view_request_refresh();
         slot_idx++;
-        // Brief yield - slot boundary wait will dominate.
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 
-    // Mode switched away from FT8 (4c will trigger this from UI).
-    // Free monitor's internal allocations (~200 KB internal heap:
-    // waterfall mag buffer + fft_work + window + last_frame) and the
-    // slot buffer (~720 KB PSRAM), then exit. Respawn on next FT8 entry.
-    ESP_LOGI(TAG, "ft8_task exiting (mode changed); processed %d slots", slot_idx);
-    monitor_free(&mon);
-    heap_caps_free(audio);
+    // Signal decode task to stop, then wait for it to drain and exit.
+    s_ft8_running = false;
+    decode_job_t sentinel = { NULL, -1LL, 0, 0 };
+    xQueueSend(s_decode_queue, &sentinel, pdMS_TO_TICKS(1000));
+    // Clear any stale notification, then wait up to 10 s for decode task exit.
+    xTaskNotifyWait(0x01, 0x01, NULL, pdMS_TO_TICKS(10000));
+
+    vQueueDelete(s_decode_queue);
+    s_decode_queue = NULL;
+    heap_caps_free(audio[0]);
+    heap_caps_free(audio[1]);
+
+    ESP_LOGI(TAG, "ft8_task exiting; processed %d slots", slot_idx);
     vTaskDelete(NULL);
 }
 
-// Public entry point: spawn the FT8 task on a 64 KB stack in PSRAM,
-// pinned to core 1.
+// ---------------------------------------------------------------------------
+// Public entry point: spawn the capture task
+// ---------------------------------------------------------------------------
+
 void ft8_self_test(void)
 {
-    // Stack pinned in PSRAM to keep DMA-capable internal RAM free
-    // for USB host endpoint allocation. UAC + CDC both need DMA-able
-    // RAM and a 64 KB stack from internal heap starves the CDC claim.
     BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
-        ft8_task,
-        "ft8",
-        65536,
-        NULL,
-        tskIDLE_PRIORITY + 1,
-        NULL,
-        1,
+        ft8_task, "ft8", 65536, NULL,
+        tskIDLE_PRIORITY + 1, NULL, 1,
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (rc != pdPASS) {
         ESP_LOGE(TAG, "failed to spawn ft8_task (rc=%d)", (int)rc);

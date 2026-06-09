@@ -12,6 +12,7 @@
 
 typedef enum {
     FT8_QSO_IDLE = 0,
+    FT8_QSO_CQ,          // CQ loop: re-arm CQ every TX slot until answered or cancelled
     FT8_QSO_WAIT_RPT,    // TX1 armed/fired; listening for their signal report
     FT8_QSO_WAIT_RR73,   // TX2 armed/fired; listening for RR73/73
     FT8_QSO_WAIT_DONE,   // TX3 (73) armed/fired; wrapping up
@@ -20,6 +21,12 @@ typedef enum {
 } ft8_qso_state_t;
 
 void ft8_qso_init(void);
+
+// Start a continuous CQ loop: arm the CQ request immediately and re-arm it
+// after every TX slot that receives no reply. Stops when a station answers
+// (transitions into the normal WAIT_RR73/WAIT_DONE exchange), or when the
+// operator cancels via ft8_qso_abort().
+bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len);
 
 // Arm TX1 and enter the QSO machine.
 // tx1_req: the pre-built, pre-encoded TX1 request produced by ft8_tx_build_request().

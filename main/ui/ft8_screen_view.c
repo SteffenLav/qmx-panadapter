@@ -216,12 +216,16 @@ static void styles_init(void)
 
 // ---------------- helpers ----------------
 
-static int cmp_by_utc_desc(const void *a, const void *b)
+static int cmp_cq_then_snr(const void *a, const void *b)
 {
     const ft8_call_t *ca = (const ft8_call_t *)a;
     const ft8_call_t *cb = (const ft8_call_t *)b;
-    if (cb->last_utc < ca->last_utc) return -1;
-    if (cb->last_utc > ca->last_utc) return  1;
+    bool a_cq = (strncmp(ca->last_text, "CQ ", 3) == 0);
+    bool b_cq = (strncmp(cb->last_text, "CQ ", 3) == 0);
+    if (a_cq != b_cq) return b_cq ? 1 : -1;  // CQ rows first
+    // Within same category: strongest SNR first
+    if (cb->last_snr_db > ca->last_snr_db) return  1;
+    if (cb->last_snr_db < ca->last_snr_db) return -1;
     return 0;
 }
 
@@ -534,7 +538,7 @@ static void rebuild_list(void)
     static ft8_call_t snap[FT8_CALL_TABLE_SIZE];
     int n = 0;
     ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
-    qsort(snap, n, sizeof(ft8_call_t), cmp_by_utc_desc);
+    qsort(snap, n, sizeof(ft8_call_t), cmp_cq_then_snr);
 
     int shown = n < MAX_ROWS ? n : MAX_ROWS;
     for (int i = 0; i < shown; i++) {
@@ -694,14 +698,17 @@ static void cq_btn_cb(lv_event_t *e)
     int cq_freq_hz = ft8_find_clear_tone_hz();
     if (ft8_tx_build_request(FT8_TX_KIND_CQ, NULL, cq_freq_hz,
                              0, NULL, &req, err, sizeof(err))) {
-        // Apply TX parity preference if the user has locked one.
-        // build_request sets use_parity=false for CQ; we override here so
-        // ft8_tx_should_run_this_slot only fires on the preferred slot type.
         if (s_cq_parity >= 0) {
             req.use_parity     = true;
             req.want_even_slot = (s_cq_parity == 0);
         }
-        ft8_tx_modal_show(&req);
+        char qso_err[64];
+        if (!ft8_qso_start_cq(&req, qso_err, sizeof(qso_err))) {
+            ESP_LOGW(TAG, "CQ start failed: %s", qso_err);
+            if (strstr(qso_err, "callsign") || strstr(qso_err, "Set your")) {
+                identity_config_modal_show();
+            }
+        }
     } else {
         ESP_LOGW(TAG, "build_request(CQ) failed: %s", err);
         identity_config_modal_show();
