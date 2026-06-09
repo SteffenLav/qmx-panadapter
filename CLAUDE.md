@@ -49,11 +49,20 @@ FT8 TX data flow: **ft8_screen_view (tap) → ft8_tx_modal (confirm) → ft8_tx_
 `components/espressif__usb_host_uac/` is a hand-patched fork with `create_background_task = true`. This is required for UAC + CDC-ACM to coexist on the same USB host. Do not replace it with the registry version without re-applying the patch.
 
 ### LVGL software rotation (~50% FPS cost)
-The ST7123 panel is natively portrait; landscape is achieved via `lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_90)`. Every LVGL flush goes through `rotate90_rgb565`. FPS is ~13 landscape vs ~22 portrait. Acceptable for a panadapter.
+The display panel is natively portrait; landscape is achieved via `lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_90)`. Every LVGL flush goes through `rotate90_rgb565`. FPS is ~13 landscape vs ~22 portrait. Acceptable for a panadapter.
 
 **Do not enable `CONFIG_LVGL_PORT_ENABLE_PPA=y`.** The PPA driver and the USB host stack (UAC + CDC-ACM) compete for DW-GDMA channels. Enabling PPA silently kills QMX connectivity — audio and CAT both stop. Tested and confirmed broken.
 
 Phase 6.3 (FPS recovery) requires a full native-portrait UI rewrite: LVGL configured as 720×1280, all widget positions transposed (landscape x↔y swap), all canvas drawing code rewritten for portrait orientation. Significant work; not yet done.
+
+### Hardware revision detection — ST7121 vs ST7123 touch controller
+Newer Tab5 units ship with an **ST7121** touch controller (I2C 0x55, FW version = 1) instead of the original **ST7123** (same address, FW version = 3). Both also differ from the older ST7703/GT911 hardware.
+
+Detection lives in `bsp_detect_display_type()` in `components/m5stack_tab5/m5stack_tab5.c`. It probes I2C on startup, reads register 0x0000 from 0x55, and returns `BSP_DISPLAY_TYPE_ST7121` or `BSP_DISPLAY_TYPE_ST7123` accordingly. The result is cached in `s_detected_display_type` — do not call the function more than once per boot (the second call used to re-probe the touch chip after the 800 ms DISPON delay, leaving the bus dirty).
+
+**Critical: I2C speed for ST7121/ST7123 touch must be 100 kHz.** The detection probe uses 100 kHz; `bsp_display_indev_init_to_st7123()` must also use 100 kHz (`tp_io_config.scl_speed_hz = 100000`). Do not change this to `CONFIG_BSP_I2C_CLK_SPEED_HZ` (400 kHz) — ST7121 does not respond reliably at 400 kHz and `read_fw_info()` will fail, causing a reboot loop. Fixed in v0.12.1.
+
+Both ST7121 and ST7123 use the same touch driver (`esp_lcd_touch_new_i2c_st7123`) and the same init path (`bsp_display_indev_init_to_st7123`). The ST7121 and ST7123 LCD panels use separate init sequences (`bsp_display_new_with_handles_to_st7121` / `_to_st7123`) with different DSI lane bitrates (1300 Mbps vs 965 Mbps).
 
 ### IDLE watchdog disabled
 `CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0/CPU1` are off. The LVGL rotation pipeline keeps CPU0 busy past the default watchdog window. App-task watchdog (30 s) is still active.
@@ -128,7 +137,7 @@ Do not call `AI1;` on the QMX CAT port — it partially executes (enables auto-i
 
 | Branch | What | State |
 |--------|------|-------|
-| `main` | v0.12.0 — panadapter + FT8 RX + manual FT8 TX (experimental) | stable |
+| `main` | v0.12.1 — ST7121 touch fix; v0.12.0 FT8 TX feature intact | stable |
 
 ## Next up (v0.13.0)
 
