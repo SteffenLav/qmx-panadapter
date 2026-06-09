@@ -22,10 +22,14 @@ main/
   main.c                  app_main, task launch, orchestration
   display/display.c       BSP bring-up (PI4IO expander + LCD + touch)
   ui/ui.c                 LVGL widgets, touch handler, spectrum/waterfall canvases
+  ui/ft8_screen_view.c    FT8 RX decode list UI, touch-drag row selection, TX controls
+  ui/ft8_tx_modal.c       TX confirmation modal (message preview, countdown, arm/cancel)
   cat/cat.c               USB CDC-ACM + Kenwood CAT (FA/MD/FW poll, tune write)
   audio/audio.c           USB UAC + ring buffer producer (core 0, polling)
   dsp/dsp.c               FFT consumer (reads ring buffer), spectrum mutex, DC blocker
   dsp/iq_balance.c        Blind adaptive Gram-Schmidt I/Q correction (Phases A–C)
+  ft8_tx.c                FT8 TX engine: build/arm/run/abort, ft8_find_clear_tone_hz()
+  ft8_test.c              FT8 slot loop: RX decode or TX burst each 15-second slot
   render/render.c         30 Hz render task, EMA smoothing, dB scaling
   render/render_waterfall.c  Waterfall tick, double-height canvas scroll trick
   screenshot/screenshot.c UART screenshot dump (hidden long-press, top-left 80×80)
@@ -33,6 +37,8 @@ main/
 ```
 
 Data flow: **audio → ring buffer → dsp (FFT) → spectrum mutex → render → LVGL canvases**
+
+FT8 TX data flow: **ft8_screen_view (tap) → ft8_tx_modal (confirm) → ft8_tx_arm() → ft8_test slot loop → ft8_tx_run() → CAT TA; burst**
 
 ## Critical quirks
 
@@ -100,8 +106,30 @@ Kenwood-style. Round-robin poll: `FA` (freq) / `MD` (mode) / `FW` (passband widt
 
 Do not call `AI1;` on the QMX CAT port — it partially executes (enables auto-info mode) despite returning `?;`, which breaks FA polling for the entire session until power cycle.
 
+## FT8 TX (v0.12.0) — key design points
+
+`FT8_TX_SEND_LIVE = 1` in `ft8_tx.c` — this is live TX; the radio keys up for real.
+
+- **CAT burst sequence**: `TX;` → 79× `TA<freq>;` at 160 ms cadence (absolute `esp_timer_get_time()` targets, no drift) → `TA0;` → 5 ms settle → `RX;`. Always runs the tail even on abort or error.
+- **Tone spacing**: 6.25 Hz per FT8 tone index (0–7). `freq = base_hz + tone * 6.25f`.
+- **Slot parity**: `((unix_sec / 15) % 2) == 0` → EVEN. Reply fires on the opposite parity from the heard slot. CQ fires on any slot unless `use_parity=true` + `want_even_slot` set.
+- **`cat_poll_set_paused(true/false)`** in `cat.c` — cooperative flag; TX burst holds this for its entire duration so the poll task doesn't interleave commands. Do **not** use `vTaskSuspend` — that can deadlock the CDC-ACM driver mutex.
+- **Digi-mode pre-flight**: checked at arm time (blocking, ~1 s worst case); re-checked at burst time (cached string read, free). If mode has drifted at burst time, abort cleanly before `TX;` — never attempt a corrective switch at burst time (would desync slot start).
+- **`ft8_find_clear_tone_hz()`**: heap-allocs a snapshot of the heard-station table, builds a `uint64_t` bitmask of occupied 50 Hz bins (200–2800 Hz, 52 slots), walks outward from bin 26 (1500 Hz) with ±1 guard, returns first clear bin in Hz. Returns `FT8_TX_CQ_DEFAULT_FREQ_HZ` (1500) on OOM or empty table.
+
+### Touch-drag row selection (ft8_screen_view.c)
+
+- `ROW_HOLD_SELECT_MS = 400` — finger must be held ≥ 400 ms before selection mode activates.
+- On threshold crossing: `lv_obj_clear_flag(s_list, LV_OBJ_FLAG_SCROLLABLE)` locks list scroll so drag moves the highlight rather than scrolling.
+- On `RELEASED` or `PRESS_LOST`: `lv_obj_add_flag(s_list, LV_OBJ_FLAG_SCROLLABLE)` restores scroll unconditionally.
+- `screen_y_to_row(abs_y)`: maps absolute screen Y to row index accounting for `s_list` coords and `lv_obj_get_scroll_y()`.
+
 ## Branch state
 
 | Branch | What | State |
 |--------|------|-------|
-| `main` | All phases through 5.11 + cold-boot fix + IQ balance Phases A–C | stable |
+| `main` | v0.12.0 — panadapter + FT8 RX + manual FT8 TX (experimental) | stable |
+
+## Next up (v0.13.0)
+
+Auto search-and-pounce: auto-reply to a tapped CQ, follow the QSO state machine through 73/RR73. Sequence timing driven by SNTP-aligned slot boundaries.
