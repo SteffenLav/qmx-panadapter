@@ -30,6 +30,8 @@ main/
   dsp/iq_balance.c        Blind adaptive Gram-Schmidt I/Q correction (Phases A–C)
   ft8_tx.c                FT8 TX engine: build/arm/run/abort, ft8_find_clear_tone_hz()
   ft8_test.c              FT8 slot loop: RX decode or TX burst each 15-second slot
+  ft8_qso.c               Auto search-and-pounce QSO state machine (WAIT_RPT/RR73/DONE)
+  ft8_status.c            Mutex-protected status string written by ft8_task, read by LVGL timer
   render/render.c         30 Hz render task, EMA smoothing, dB scaling
   render/render_waterfall.c  Waterfall tick, double-height canvas scroll trick
   screenshot/screenshot.c UART screenshot dump (hidden long-press, top-left 80×80)
@@ -45,8 +47,10 @@ FT8 TX data flow: **ft8_screen_view (tap) → ft8_tx_modal (confirm) → ft8_tx_
 ### PI4IO expander must be initialized before display bring-up
 `display_init` calls `bsp_i2c_init()` + `bsp_io_expander_pi4ioe_init()` first, then waits 120 ms. Skipping this causes a cold-boot hang in the DSI FIFO loop. Soft resets mask the bug because the expander retains state across ESP32 resets.
 
-### Patched UAC component in `components/`
-`components/espressif__usb_host_uac/` is a hand-patched fork with `create_background_task = true`. This is required for UAC + CDC-ACM to coexist on the same USB host. Do not replace it with the registry version without re-applying the patch.
+### Patched components in `components/`
+`components/espressif__usb_host_uac/` is a hand-patched fork with `create_background_task = true`. Required for UAC + CDC-ACM to coexist on the same USB host. Do not replace with the registry version without re-applying the patch.
+
+`components/espressif__esp_lcd_touch_st7123/` is a hand-patched fork fixing ST7121 compatibility (see **ST7121 has an incomplete register map** below). Do not replace with the registry version.
 
 ### LVGL software rotation (~50% FPS cost)
 The display panel is natively portrait; landscape is achieved via `lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_90)`. Every LVGL flush goes through `rotate90_rgb565`. FPS is ~13 landscape vs ~22 portrait. Acceptable for a panadapter.
@@ -150,6 +154,8 @@ WAIT_DONE → (TX3 fired, ft8_tx IDLE)    →                        DONE → ID
 ```
 
 Timeout: `QSO_TIMEOUT_SLOTS = 2` consecutive missed RX slots in any WAIT state → TIMEOUT.
+
+**Slot skip (v0.13.1)**: `ft8_task` skips `process_one_slot` when `ft8_tx_get_status()` returns `FT8_TX_ARMED`. Capture takes ~19 s and would swallow the next slot boundary, preventing a parity-locked TX from ever firing.
 
 **UI**: TX confirmation modal has "Auto Pounce" button (visible for REPLY kind only) alongside "Transmit". The left-pane status label (`s_lbl_tx`) is always visible and shows — in priority order: ACTIVE (red), ARMED (amber), QSO complete (green), QSO timeout (orange, tap to clear), `ft8_status` passthrough (dim white).
 
