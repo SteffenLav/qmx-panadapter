@@ -10,6 +10,7 @@
 
 #include "ft8_tx_modal.h"
 #include "ft8_tx.h"
+#include "ft8_qso.h"
 
 #include <stdio.h>
 #include <stdint.h>
@@ -27,6 +28,7 @@ static lv_obj_t   *s_lbl_message   = NULL;
 static lv_obj_t   *s_lbl_detail    = NULL;
 static lv_obj_t   *s_lbl_countdown = NULL;
 static lv_obj_t   *s_lbl_error     = NULL;
+static lv_obj_t   *s_btn_pounce    = NULL;  // "Auto Pounce" (REPLY only)
 static lv_timer_t *s_timer         = NULL;
 static bool        s_modal_open    = false;
 
@@ -92,10 +94,24 @@ static void transmit_btn_cb(lv_event_t *e)
         ESP_LOGI(TAG, "armed via modal: '%s'", s_pending_req.display_text);
         modal_close();
     } else {
-        // Stay open - let the operator read the reason, then retry or
-        // cancel. ft8_tx_arm() guarantees the radio was left untouched.
         ESP_LOGW(TAG, "arm refused: %s", err);
         lv_label_set_text(s_lbl_error, err[0] ? err : "Could not arm transmission");
+        lv_obj_clear_flag(s_lbl_error, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+static void pounce_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    char err[64] = {0};
+    // Pass the pre-built, pre-encoded TX1 request directly — no re-encoding,
+    // parity already correctly set by ft8_tx_build_request at row_activate time.
+    if (ft8_qso_start(&s_pending_req, err, sizeof(err))) {
+        ESP_LOGI(TAG, "auto pounce started: '%s'", s_pending_req.display_text);
+        modal_close();
+    } else {
+        ESP_LOGW(TAG, "pounce refused: %s", err);
+        lv_label_set_text(s_lbl_error, err[0] ? err : "Could not start auto pounce");
         lv_obj_clear_flag(s_lbl_error, LV_OBJ_FLAG_HIDDEN);
     }
 }
@@ -164,9 +180,11 @@ static void modal_build(void)
     lv_obj_align(s_lbl_error, LV_ALIGN_TOP_MID, 0, 224);
     lv_obj_add_flag(s_lbl_error, LV_OBJ_FLAG_HIDDEN);
 
+    // Bottom row: [Cancel]  [Auto Pounce]  [Transmit]
+    // Cancel — always visible
     lv_obj_t *cancel_btn = lv_btn_create(s_panel);
-    lv_obj_set_size(cancel_btn, 240, 72);
-    lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_LEFT, 80, 0);
+    lv_obj_set_size(cancel_btn, 180, 72);
+    lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_LEFT, 20, 0);
     lv_obj_set_style_bg_color(cancel_btn, lv_color_hex(0x962020), 0);
     lv_obj_set_style_border_color(cancel_btn, lv_color_hex(0xc04040), 0);
     lv_obj_set_style_border_width(cancel_btn, 2, 0);
@@ -178,9 +196,25 @@ static void modal_build(void)
     lv_obj_set_style_text_font(cancel_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(cancel_lbl);
 
+    // Auto Pounce — visible only for REPLY kind (hidden initially, shown in show())
+    s_btn_pounce = lv_btn_create(s_panel);
+    lv_obj_set_size(s_btn_pounce, 220, 72);
+    lv_obj_align(s_btn_pounce, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(s_btn_pounce, lv_color_hex(0x1a5a8a), 0);
+    lv_obj_set_style_border_color(s_btn_pounce, lv_color_hex(0x3090d0), 0);
+    lv_obj_set_style_border_width(s_btn_pounce, 2, 0);
+    lv_obj_set_style_radius(s_btn_pounce, 8, 0);
+    lv_obj_add_event_cb(s_btn_pounce, pounce_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *pounce_lbl = lv_label_create(s_btn_pounce);
+    lv_label_set_text(pounce_lbl, "Auto Pounce");
+    lv_obj_set_style_text_color(pounce_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(pounce_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(pounce_lbl);
+
+    // Transmit (manual single TX)
     lv_obj_t *tx_btn = lv_btn_create(s_panel);
-    lv_obj_set_size(tx_btn, 240, 72);
-    lv_obj_align(tx_btn, LV_ALIGN_BOTTOM_RIGHT, -80, 0);
+    lv_obj_set_size(tx_btn, 180, 72);
+    lv_obj_align(tx_btn, LV_ALIGN_BOTTOM_RIGHT, -20, 0);
     lv_obj_set_style_bg_color(tx_btn, lv_color_hex(0x2e8b3a), 0);
     lv_obj_set_style_border_color(tx_btn, lv_color_hex(0x4caf50), 0);
     lv_obj_set_style_border_width(tx_btn, 2, 0);
@@ -227,6 +261,16 @@ void ft8_tx_modal_show(const ft8_tx_request_t *req)
 
     lv_label_set_text(s_lbl_error, "");
     lv_obj_add_flag(s_lbl_error, LV_OBJ_FLAG_HIDDEN);
+
+    // Auto Pounce only makes sense for a REPLY (we're working someone else's CQ).
+    // Hide it for CQ kind (we *are* the caller).
+    if (s_btn_pounce) {
+        if (s_pending_req.kind == FT8_TX_KIND_REPLY) {
+            lv_obj_clear_flag(s_btn_pounce, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_btn_pounce, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 
     update_countdown();   // populate immediately - don't wait up to 1s for the first tick
 

@@ -31,6 +31,8 @@ idf_component_register(
         "net/rigctld_server.c"
         "ft8_test.c"
         "ft8_tx.c"
+        "ft8_status.c"
+        "ft8_qso.c"
     INCLUDE_DIRS
         "."
         "display"

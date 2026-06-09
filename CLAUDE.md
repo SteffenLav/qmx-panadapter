@@ -133,12 +133,34 @@ Do not call `AI1;` on the QMX CAT port — it partially executes (enables auto-i
 - On `RELEASED` or `PRESS_LOST`: `lv_obj_add_flag(s_list, LV_OBJ_FLAG_SCROLLABLE)` restores scroll unconditionally.
 - `screen_y_to_row(abs_y)`: maps absolute screen Y to row index accounting for `s_list` coords and `lv_obj_get_scroll_y()`.
 
+## FT8 auto search-and-pounce (v0.13.0)
+
+`ft8_qso.c` — QSO state machine driven by two call sites:
+- `ft8_qso_start(tx1_req)` — LVGL task: accepts a pre-built TX1 request (already encoded by `ft8_tx_build_request`), arms it, enters WAIT_RPT
+- `ft8_qso_advance(slot_sec)` — ft8_task after each RX slot: scans ft8_screen table for responses from the target with `last_utc == slot_sec`, arms TX2/TX3 automatically
+
+**QSO state machine:**
+```
+WAIT_RPT → (heard <my> <their> <report>) → arm TX2 (R<report>) → WAIT_RR73
+         → (heard RR73/73 directly)       → arm TX3 (73)        → WAIT_DONE
+WAIT_RR73 → (heard RR73/73)              → arm TX3 (73)        → WAIT_DONE
+WAIT_DONE → (TX3 fired, ft8_tx IDLE)    →                        DONE → IDLE
+```
+
+Timeout: `QSO_TIMEOUT_SLOTS = 2` consecutive missed RX slots in any WAIT state → TIMEOUT.
+
+**UI**: TX confirmation modal has "Auto Pounce" button (visible for REPLY kind only) alongside "Transmit". The left-pane status label (`s_lbl_tx`) is always visible and shows — in priority order: ACTIVE (red), ARMED (amber), QSO complete (green), QSO timeout (orange, tap to clear), `ft8_status` passthrough (dim white).
+
+**`ft8_status.c`**: tiny mutex-protected string written by ft8_task (RX capturing, decoding, TX symbol count), read by the 1 Hz LVGL timer. Shows what the FT8 process is doing at all times.
+
+**`ft8_tx` extensions**: added `FT8_TX_KIND_ROGER_RPT` / `FT8_TX_KIND_73` and `extra_field[8]` to `ft8_tx_request_t`. `ft8_tx_build_request` now takes a `const char *extra` parameter (NULL = use `my_grid`, for backward compat).
+
 ## Branch state
 
 | Branch | What | State |
 |--------|------|-------|
-| `main` | v0.12.1 — ST7121 touch fix; v0.12.0 FT8 TX feature intact | stable |
+| `main` | v0.13.0 — auto search-and-pounce QSO state machine | stable |
 
-## Next up (v0.13.0)
+## Next up (v0.14.0)
 
-Auto search-and-pounce: auto-reply to a tapped CQ, follow the QSO state machine through 73/RR73. Sequence timing driven by SNTP-aligned slot boundaries.
+SNTP-aligned auto search-and-pounce: queue multiple pounce candidates, auto-select best SNR CQ, retry on timeout.

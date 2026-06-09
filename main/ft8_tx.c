@@ -4,6 +4,7 @@
 // synthesis + envelope shaping; we just feed it tone frequencies).
 
 #include "ft8_tx.h"
+#include "ft8_status.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -182,6 +183,7 @@ bool ft8_tx_build_request(ft8_tx_kind_t kind,
                           const char *target_call,
                           int target_audio_freq_hz,
                           int64_t target_last_utc,
+                          const char *extra,
                           ft8_tx_request_t *out_req,
                           char *out_err, size_t out_err_len)
 {
@@ -198,46 +200,56 @@ bool ft8_tx_build_request(ft8_tx_kind_t kind,
     }
 
     const char *call_to;
-    if (kind == FT8_TX_KIND_REPLY) {
+    if (kind == FT8_TX_KIND_CQ) {
+        call_to = "CQ";
+    } else {
         if (!target_call || !target_call[0]) {
             if (out_err) snprintf(out_err, out_err_len, "No target callsign");
             return false;
         }
         call_to = target_call;
         strncpy(out_req->target_call, target_call, sizeof(out_req->target_call) - 1);
-    } else {
-        call_to = "CQ";
     }
 
-    // Encode now - never at burst time. ftx_message_encode_std fails for
-    // callsigns it can't pack into the standard 28-bit form (needing the
-    // hashed/compound encoding instead); reporting that here means the user
-    // sees it in the confirmation modal, not as a silent no-op on-air.
-    ftx_message_t msg;
-    ftx_message_rc_t rc = ftx_message_encode_std(&msg, NULL, call_to, s.my_callsign, s.my_grid);
-    if (rc != FTX_MESSAGE_RC_OK) {
-        if (out_err) snprintf(out_err, out_err_len, "Can't encode message (rc=%d)", (int)rc);
+    // Third field: explicit extra overrides my_grid for QSO exchange messages.
+    const char *third = extra ? extra : s.my_grid;
+    if (!third[0]) {
+        if (out_err) snprintf(out_err, out_err_len, "No grid set (Settings)");
         return false;
     }
 
-    out_req->kind            = kind;
-    out_req->audio_freq_hz   = target_audio_freq_hz;
-    // For a reply: always fire on the opposite parity from when we heard them.
-    // For CQ: default to "any slot" (use_parity=false); the caller may override
-    // use_parity=true + want_even_slot after this call to enforce a preference.
-    out_req->want_even_slot  = (kind == FT8_TX_KIND_REPLY) ? !slot_is_even(target_last_utc)
-                                                            : false;
-    out_req->use_parity      = (kind == FT8_TX_KIND_REPLY);
+    // Encode now — never at burst time. Errors surface here in the UI, not
+    // mid-burst where there's nothing we can do about them.
+    ftx_message_t msg;
+    ftx_message_rc_t rc = ftx_message_encode_std(&msg, NULL, call_to, s.my_callsign, third);
+    if (rc != FTX_MESSAGE_RC_OK) {
+        if (out_err) snprintf(out_err, out_err_len,
+                              "Can't encode message (rc=%d)", (int)rc);
+        return false;
+    }
+
+    // Slot parity: REPLY/ROGER_RPT/73 all fire on the slot opposite to when
+    // the target last transmitted (target_last_utc). CQ fires on any slot
+    // unless the caller overrides use_parity+want_even_slot afterwards.
+    bool needs_parity = (kind == FT8_TX_KIND_REPLY    ||
+                         kind == FT8_TX_KIND_ROGER_RPT ||
+                         kind == FT8_TX_KIND_73);
+
+    out_req->kind           = kind;
+    out_req->audio_freq_hz  = target_audio_freq_hz;
+    out_req->want_even_slot = needs_parity ? !slot_is_even(target_last_utc) : false;
+    out_req->use_parity     = needs_parity && (target_last_utc != 0);
     ft8_encode(msg.payload, out_req->tones);
     snprintf(out_req->display_text, sizeof(out_req->display_text),
-             "%s %s %s", call_to, s.my_callsign, s.my_grid);
+             "%s %s %s", call_to, s.my_callsign, third);
+    if (extra) strncpy(out_req->extra_field, extra, sizeof(out_req->extra_field) - 1);
 
-    ESP_LOGI(TAG, "built %s request: '%s' base=%d Hz%s",
-             kind == FT8_TX_KIND_CQ ? "CQ" : "reply",
-             out_req->display_text, out_req->audio_freq_hz,
-             kind == FT8_TX_KIND_REPLY
-                 ? (out_req->want_even_slot ? " (needs EVEN slot)" : " (needs ODD slot)")
-                 : " (next slot, any parity)");
+    static const char * const kind_names[] = { "reply", "CQ", "roger-rpt", "73" };
+    ESP_LOGI(TAG, "built %s: '%s' @ %d Hz%s",
+             kind_names[kind], out_req->display_text, out_req->audio_freq_hz,
+             out_req->use_parity
+                 ? (out_req->want_even_slot ? " (EVEN)" : " (ODD)")
+                 : " (any slot)");
     return true;
 }
 
@@ -455,6 +467,10 @@ void ft8_tx_run(const ft8_tx_request_t *req)
                 ESP_LOGW(TAG, "TX abort requested at symbol %d/%d - keying up now", i, FT8_NN);
                 aborted = true;
                 break;
+            }
+            // Update status every ~10 symbols so the UI shows TX progress.
+            if (i == 0 || i % 10 == 0) {
+                ft8_status_set("TX [%d/%d] %s", i + 1, FT8_NN, req->display_text);
             }
             float freq = (float)req->audio_freq_hz + (float)req->tones[i] * FT8_TONE_SPACING_HZ;
             sleep_until(t0, (int64_t)i * FT8_SYMBOL_PERIOD_US);

@@ -19,6 +19,8 @@
 // state indicator (armed/active, tap to cancel/abort) lives in the left
 // info pane alongside "ME: <call> <grid>".
 #include "ft8_tx.h"
+#include "ft8_qso.h"
+#include "ft8_status.h"
 #include "ft8_tx_modal.h"
 #include "identity_config.h"
 
@@ -321,7 +323,7 @@ static void row_activate(int idx)
     ft8_tx_request_t req;
     char err[64];
     if (ft8_tx_build_request(FT8_TX_KIND_REPLY, match->call, match->last_freq,
-                             match->last_utc, &req, err, sizeof(err))) {
+                             match->last_utc, NULL, &req, err, sizeof(err))) {
         ft8_tx_modal_show(&req);
     } else {
         ESP_LOGW(TAG, "build_request(reply to %s) failed: %s", match->call, err);
@@ -595,39 +597,53 @@ static void t_clock_cb(lv_timer_t *t)
         lv_label_set_text(s_lbl_freq, b);
     }
 
-    // v0.12.0: TX state indicator - hidden when idle; amber while a reply
-    // or CQ call is armed and waiting for its slot (tap to cancel); red
-    // while a burst is actually on-air (tap to abort). Reuses this view's
-    // existing colour conventions (0xFFA040 amber already used for
-    // mid-range SNR; LV_PALETTE_RED already used for "own call heard" rows).
+    // Status / TX / QSO indicator — always visible.
+    // Priority: ACTIVE (red) > ARMED (amber) > QSO state (cyan) > ft8_status (dim white).
     if (s_lbl_tx) {
-        char text[32];
-        int secs_until = 0;
-        ft8_tx_state_t st = ft8_tx_get_status(text, sizeof(text), &secs_until);
+        char tx_text[32];
+        int  secs_until = 0;
+        ft8_tx_state_t tx_st = ft8_tx_get_status(tx_text, sizeof(tx_text), &secs_until);
+        ft8_qso_state_t qso_st = ft8_qso_get_state();
         char b[96];
-        switch (st) {
-            case FT8_TX_ARMED: {
-                // Compute the parity of the slot this burst will fire in.
-                // now + secs_until approximates that slot's start second;
-                // (x/15)%2 gives its even/odd index, same as slot_is_even().
-                bool tx_even = (((int64_t)now + secs_until) / 15) % 2 == 0;
-                snprintf(b, sizeof(b), "TX armed: %s\n-> %s slot, ~%ds (tap to cancel)",
-                         text, tx_even ? "EVEN" : "ODD", secs_until);
-                lv_label_set_text(s_lbl_tx, b);
-                lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0xFFA040), 0);
-                lv_obj_clear_flag(s_lbl_tx, LV_OBJ_FLAG_HIDDEN);
-                break;
-            }
-            case FT8_TX_ACTIVE:
-                snprintf(b, sizeof(b), "TRANSMITTING: %s\n(tap to abort)", text);
-                lv_label_set_text(s_lbl_tx, b);
-                lv_obj_set_style_text_color(s_lbl_tx, lv_palette_main(LV_PALETTE_RED), 0);
-                lv_obj_clear_flag(s_lbl_tx, LV_OBJ_FLAG_HIDDEN);
-                break;
-            default:
-                lv_obj_add_flag(s_lbl_tx, LV_OBJ_FLAG_HIDDEN);
-                break;
+
+        if (tx_st == FT8_TX_ACTIVE) {
+            // Red: transmitting right now (tap to abort)
+            snprintf(b, sizeof(b), "TRANSMITTING: %s\n(tap to abort)", tx_text);
+            lv_label_set_text(s_lbl_tx, b);
+            lv_obj_set_style_text_color(s_lbl_tx, lv_palette_main(LV_PALETTE_RED), 0);
+
+        } else if (tx_st == FT8_TX_ARMED) {
+            // Amber: burst scheduled (tap to cancel)
+            bool tx_even = (((int64_t)now + secs_until) / 15) % 2 == 0;
+            snprintf(b, sizeof(b), "TX armed: %s\n-> %s slot, ~%ds (tap to cancel)",
+                     tx_text, tx_even ? "EVEN" : "ODD", secs_until);
+            lv_label_set_text(s_lbl_tx, b);
+            lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0xFFA040), 0);
+
+        } else if (qso_st == FT8_QSO_DONE) {
+            // Bright green: QSO complete
+            char target[FT8_CALL_MAX_LEN];
+            ft8_qso_get_target(target, sizeof(target));
+            snprintf(b, sizeof(b), "QSO %s: complete!", target);
+            lv_label_set_text(s_lbl_tx, b);
+            lv_obj_set_style_text_color(s_lbl_tx, lv_palette_main(LV_PALETTE_GREEN), 0);
+
+        } else if (qso_st == FT8_QSO_TIMEOUT) {
+            // Orange-red: QSO timed out (tap to clear)
+            char target[FT8_CALL_MAX_LEN];
+            ft8_qso_get_target(target, sizeof(target));
+            snprintf(b, sizeof(b), "QSO %s: timeout\n(tap to clear)", target);
+            lv_label_set_text(s_lbl_tx, b);
+            lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0xFF6020), 0);
+
+        } else {
+            // Dim white: ft8_status passthrough (RX state, decode count, etc.)
+            char status[96];
+            ft8_status_get(status, sizeof(status));
+            lv_label_set_text(s_lbl_tx, status[0] ? status : "Idle");
+            lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0x909090), 0);
         }
+        lv_obj_clear_flag(s_lbl_tx, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -677,7 +693,7 @@ static void cq_btn_cb(lv_event_t *e)
     // empty (nothing decoded yet) ft8_find_clear_tone_hz() returns 1500 Hz.
     int cq_freq_hz = ft8_find_clear_tone_hz();
     if (ft8_tx_build_request(FT8_TX_KIND_CQ, NULL, cq_freq_hz,
-                             0, &req, err, sizeof(err))) {
+                             0, NULL, &req, err, sizeof(err))) {
         // Apply TX parity preference if the user has locked one.
         // build_request sets use_parity=false for CQ; we override here so
         // ft8_tx_should_run_this_slot only fires on the preferred slot type.
@@ -700,18 +716,20 @@ static void tx_indicator_tap_cb(lv_event_t *e)
 {
     (void)e;
     char text[32];
-    ft8_tx_state_t st = ft8_tx_get_status(text, sizeof(text), NULL);
-    switch (st) {
-        case FT8_TX_ARMED:
-            ESP_LOGI(TAG, "TX indicator tapped while ARMED ('%s') - disarming", text);
-            ft8_tx_disarm();
-            break;
-        case FT8_TX_ACTIVE:
-            ESP_LOGI(TAG, "TX indicator tapped while ACTIVE ('%s') - requesting abort", text);
-            ft8_tx_request_abort();
-            break;
-        default:
-            break;
+    ft8_tx_state_t  tx_st  = ft8_tx_get_status(text, sizeof(text), NULL);
+    ft8_qso_state_t qso_st = ft8_qso_get_state();
+
+    if (tx_st == FT8_TX_ACTIVE) {
+        ESP_LOGI(TAG, "TX indicator tapped ACTIVE — requesting abort");
+        ft8_qso_abort();          // also aborts the auto-pounce QSO if one is running
+        ft8_tx_request_abort();
+    } else if (tx_st == FT8_TX_ARMED) {
+        ESP_LOGI(TAG, "TX indicator tapped ARMED — disarming");
+        ft8_qso_abort();
+        ft8_tx_disarm();
+    } else if (qso_st == FT8_QSO_TIMEOUT) {
+        ESP_LOGI(TAG, "QSO timeout indicator tapped — clearing");
+        ft8_qso_abort();          // resets to IDLE
     }
 }
 
@@ -836,12 +854,12 @@ void ft8_screen_view_init(lv_obj_t *parent)
     s_lbl_tx = lv_label_create(s_left_pane);
     lv_label_set_text(s_lbl_tx, "");
     lv_obj_set_style_text_font(s_lbl_tx, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0x909090), 0);
     lv_label_set_long_mode(s_lbl_tx, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_lbl_tx, 288);
     lv_obj_set_pos(s_lbl_tx, 0, 482);
     lv_obj_add_flag(s_lbl_tx, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_lbl_tx, tx_indicator_tap_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_add_flag(s_lbl_tx, LV_OBJ_FLAG_HIDDEN);
 
     // Right pane
     s_right_pane = lv_obj_create(s_container);

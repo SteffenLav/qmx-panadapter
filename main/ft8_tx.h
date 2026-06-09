@@ -39,8 +39,10 @@ typedef enum {
 } ft8_tx_state_t;
 
 typedef enum {
-    FT8_TX_KIND_REPLY = 0,  // encodes "<their_call> <my_call> <my_grid>"
-    FT8_TX_KIND_CQ,         // encodes "CQ <my_call> <my_grid>"
+    FT8_TX_KIND_REPLY = 0,  // <their_call> <my_call> <my_grid>
+    FT8_TX_KIND_CQ,         // CQ <my_call> <my_grid>
+    FT8_TX_KIND_ROGER_RPT,  // <their_call> <my_call> R<snr>   (QSO TX2)
+    FT8_TX_KIND_73,         // <their_call> <my_call> 73        (QSO TX3)
 } ft8_tx_kind_t;
 
 // A fully-built, ready-to-arm TX request. Always produced by
@@ -57,6 +59,7 @@ typedef struct {
                                               // optional for CQ (user TX preference)
     uint8_t  tones[FT8_NN];                  // pre-encoded tone indices (0..7)
     char     display_text[32];               // e.g. "K1ABC OZ1LAV JO45ab"
+    char     extra_field[8];                 // for ROGER_RPT: "R-10"; for 73: "73"
 } ft8_tx_request_t;
 
 // Default base audio tone (Hz) for an originated CQ call - there's no
@@ -84,10 +87,14 @@ void ft8_tx_init(void);
 //   target_last_utc       slot-start second the target was last heard in,
 //                         i.e. ft8_call_t.last_utc (REPLY only - used to
 //                         derive the required reply parity; ignored for CQ)
+// extra: for ROGER_RPT pass "R-10" etc; for 73 pass "73"; pass NULL for
+// REPLY/CQ (uses my_grid). Existing callers that don't use the new kinds
+// may pass NULL safely.
 bool ft8_tx_build_request(ft8_tx_kind_t kind,
                           const char *target_call,
                           int target_audio_freq_hz,
                           int64_t target_last_utc,
+                          const char *extra,
                           ft8_tx_request_t *out_req,
                           char *out_err, size_t out_err_len);
 

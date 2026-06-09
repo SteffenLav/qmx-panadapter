@@ -46,6 +46,8 @@
 #include "ui/ft8_screen.h"
 #include "ui/ft8_screen_view.h"
 #include "ft8_tx.h"
+#include "ft8_qso.h"
+#include "ft8_status.h"
 
 static const char *TAG = "ft8_test";
 
@@ -169,18 +171,22 @@ static void ft8_task(void *arg)
 {
     (void)arg;
 
+    ft8_status_set("Waiting for SNTP sync...");
     ESP_LOGI(TAG, "Step 4a continuous FT8 RX: waiting for SNTP sync...");
     if (!wait_for_sntp(SNTP_WAIT_TIMEOUT_MS)) {
         ESP_LOGE(TAG, "SNTP did not sync within %d ms - check WiFi",
                  SNTP_WAIT_TIMEOUT_MS);
+        ft8_status_set("SNTP timeout — check WiFi");
         vTaskDelete(NULL);
         return;
     }
 
+    ft8_status_set("Waiting for QMX...");
     ESP_LOGI(TAG, "waiting for CAT (QMX USB + Q9 1; handshake)...");
     if (!wait_for_cat_ready(CAT_WAIT_TIMEOUT_MS)) {
         ESP_LOGE(TAG, "CAT did not become ready within %d ms - check QMX USB",
                  CAT_WAIT_TIMEOUT_MS);
+        ft8_status_set("QMX not found — check USB");
         vTaskDelete(NULL);
         return;
     }
@@ -223,10 +229,14 @@ static void ft8_task(void *arg)
         // they'd fight over the same audio ring buffer and CDC-ACM link).
         ft8_tx_request_t txreq;
         if (ft8_tx_should_run_this_slot(slot_sec, &txreq)) {
+            ft8_status_set("TX: %s", txreq.display_text);
             ft8_tx_run(&txreq);   // blocks ~12.7s; always restores RX before returning
+            ft8_status_set("TX done — waiting for next slot");
         } else {
             int n_cand = 0, n_decoded = 0;
             int cap_ms = 0, mon_ms = 0, dec_ms = 0;
+
+            ft8_status_set("RX: capturing...");
             esp_err_t e = process_one_slot(audio, &mon, slot_sec,
                                            &n_cand, &n_decoded,
                                            &cap_ms, &mon_ms, &dec_ms);
@@ -235,13 +245,16 @@ static void ft8_task(void *arg)
             size_t heap_p = heap_caps_get_free_size(MALLOC_CAP_SPIRAM)   / 1024;
 
             if (e == ESP_OK) {
+                ft8_status_set("RX: %d decoded  (%d candidates)", n_decoded, n_cand);
                 ESP_LOGI(TAG,
                     "slot %d UTC %lld: cap=%dms mon=%dms dec=%dms "
                     "cand=%d dec=%d heap_i=%uKB heap_p=%uKB",
                     slot_idx, (long long)slot_sec,
                     cap_ms, mon_ms, dec_ms, n_cand, n_decoded,
                     (unsigned)heap_i, (unsigned)heap_p);
+                ft8_qso_advance(slot_sec);
             } else {
+                ft8_status_set("RX: capture error");
                 ESP_LOGW(TAG,
                     "slot %d UTC %lld: error %d after cap=%dms heap_i=%uKB heap_p=%uKB",
                     slot_idx, (long long)slot_sec, e, cap_ms,
