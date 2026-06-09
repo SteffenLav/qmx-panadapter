@@ -37,12 +37,16 @@ static const char *TAG = "ft8_view";
 #define RIGHT_W          (MID_W - LEFT_W)
 
 // Column x-offsets / widths within the row.
-// Layout: CALL | MESSAGE | COUNTRY | SNR | KM | BRG | HRD
-#define COL_CALL_X      12
-#define COL_TEXT_X      150
-#define COL_COUNTRY_X   430
-#define COL_SNR_X       580
-#define COL_KM_X        670
+// Layout: SL | CALL | MESSAGE | COUNTRY | SNR | KM | BRG | HRD
+// SL = slot parity (E blue / O amber). CALL…KM shifted +24 to make room;
+// KM absorbs the 24 px taken from its right edge (BRG/HEARD unchanged).
+#define COL_SLOT_X      6
+#define COL_SLOT_W      22
+#define COL_CALL_X      36
+#define COL_TEXT_X      174
+#define COL_COUNTRY_X   454
+#define COL_SNR_X       604
+#define COL_KM_X        694
 #define COL_BRG_X       770
 #define COL_HEARD_X     880
 #define COL_RIGHT_EDGE  960
@@ -75,6 +79,7 @@ static const char *TAG = "ft8_view";
 // triggering per-object local-style allocations. This was the root
 // of the burger-press crash at higher row counts.
 static lv_style_t s_style_row;          // row container
+static lv_style_t s_style_col_slot;     // SL column (font/pos/size; colour set per-row)
 static lv_style_t s_style_col_call;     // CALL column (amber, left)
 static lv_style_t s_style_col_msg;      // MESSAGE column (white, left)
 static lv_style_t s_style_col_country;  // COUNTRY (dim, left)
@@ -88,6 +93,7 @@ static bool s_styles_inited = false;
 
 typedef struct {
     lv_obj_t *row;
+    lv_obj_t *l_slot;
     lv_obj_t *l_call;
     lv_obj_t *l_msg;
     lv_obj_t *l_country;
@@ -104,7 +110,8 @@ typedef struct {
     char prev_brg[12];
     char prev_heard[12];
     int16_t prev_snr_db;
-    int8_t  prev_color;     /* -1=unset 0=other 1=CQ/green 2=self/red */
+    int8_t  prev_color;          /* -1=unset 0=other 1=CQ/green 2=self/red */
+    int8_t  prev_slot_parity;    /* -1=unset 0=odd 1=even */
 } row_widgets_t;
 
 static lv_obj_t *s_container   = NULL;
@@ -182,6 +189,14 @@ static void styles_init(void)
         lv_style_set_width     (&(s), (w)); \
         lv_style_set_x         (&(s), (x)); \
         lv_style_set_y         (&(s), 6);
+
+    // Slot parity (E/O): no colour (set per-row), font/pos/align shared.
+    lv_style_init(&s_style_col_slot);
+    lv_style_set_text_font (&s_style_col_slot, &lv_font_montserrat_24);
+    lv_style_set_text_align(&s_style_col_slot, LV_TEXT_ALIGN_LEFT);
+    lv_style_set_width     (&s_style_col_slot, COL_SLOT_W);
+    lv_style_set_x         (&s_style_col_slot, COL_SLOT_X);
+    lv_style_set_y         (&s_style_col_slot, 6);
 
     INIT_COL(s_style_col_call,    COL_CALL_X,    COL_CALL_W,    LV_TEXT_ALIGN_LEFT,  &lv_font_montserrat_24, 0xFFD700);
     INIT_COL(s_style_col_msg,     COL_TEXT_X,    COL_MSG_W,     LV_TEXT_ALIGN_LEFT,  &lv_font_montserrat_24, 0xFFFFFF);
@@ -434,6 +449,7 @@ static void build_row(int i)
     lv_obj_add_event_cb(r->row, row_touch_cb, LV_EVENT_RELEASED,   NULL);
     lv_obj_add_event_cb(r->row, row_touch_cb, LV_EVENT_PRESS_LOST, NULL);
 
+    r->l_slot    = make_label_styled(r->row, &s_style_col_slot);
     r->l_call    = make_label_styled(r->row, &s_style_col_call);
     r->l_msg     = make_label_styled(r->row, &s_style_col_msg);
     r->l_country = make_label_styled(r->row, &s_style_col_country);
@@ -454,8 +470,9 @@ static void build_row(int i)
     r->prev_km[0]      = '\0';
     r->prev_brg[0]     = '\0';
     r->prev_heard[0]   = '\0';
-    r->prev_snr_db     = -127;
-    r->prev_color      = -1;
+    r->prev_snr_db       = -127;
+    r->prev_color        = -1;
+    r->prev_slot_parity  = -1;
 }
 
 static void update_row(int i, const ft8_call_t *src)
@@ -485,6 +502,19 @@ static void update_row(int i, const ft8_call_t *src)
     } else {
         snprintf(b_km,  sizeof(b_km),  "--");
         snprintf(b_brg, sizeof(b_brg), "--");
+    }
+
+    /* E (blue) / O (amber) slot parity indicator */
+    {
+        int8_t parity = ((src->last_utc / 15) % 2) == 0 ? 1 : 0; /* 1=even 0=odd */
+        if (parity != r->prev_slot_parity) {
+            r->prev_slot_parity = parity;
+            lv_label_set_text(r->l_slot, parity ? "E" : "O");
+            lv_obj_set_style_text_color(r->l_slot,
+                parity ? lv_color_hex(0x40A0E0)   /* steel blue = EVEN */
+                       : lv_color_hex(0xE09040),  /* warm orange = ODD */
+                0);
+        }
     }
 
     set_text_if_changed(r->l_call,    r->prev_call,    sizeof(r->prev_call),    src->call);
@@ -885,7 +915,8 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_add_style(hdr, &s_style_header, 0);
     lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
 
-    struct { const char *t; int x; int w; lv_text_align_t a; } cols[7] = {
+    struct { const char *t; int x; int w; lv_text_align_t a; } cols[8] = {
+        { "SL",      COL_SLOT_X,    COL_SLOT_W,    LV_TEXT_ALIGN_LEFT  },
         { "CALL",    COL_CALL_X,    COL_CALL_W,    LV_TEXT_ALIGN_LEFT  },
         { "MESSAGE", COL_TEXT_X,    COL_MSG_W,     LV_TEXT_ALIGN_LEFT  },
         { "COUNTRY", COL_COUNTRY_X, COL_COUNTRY_W, LV_TEXT_ALIGN_LEFT  },
@@ -894,7 +925,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
         { "BRG",     COL_BRG_X,     COL_BRG_W,     LV_TEXT_ALIGN_RIGHT },
         { "HRD",     COL_HEARD_X,   COL_HEARD_W,   LV_TEXT_ALIGN_RIGHT },
     };
-    for (int i = 0; i < 7; i++) {
+    for (int i = 0; i < 8; i++) {
         lv_obj_t *lbl = lv_label_create(hdr);
         lv_obj_add_style(lbl, &s_style_header_label, 0);
         lv_label_set_text(lbl, cols[i].t);
