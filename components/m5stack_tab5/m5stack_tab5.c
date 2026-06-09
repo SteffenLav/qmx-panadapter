@@ -1014,8 +1014,17 @@ typedef enum {
     BSP_DISPLAY_TYPE_ST7123
 } bsp_display_type_t;
 
+static bsp_display_type_t s_detected_display_type = BSP_DISPLAY_TYPE_UNKNOWN;
+
 static bsp_display_type_t bsp_detect_display_type(void)
 {
+    // Return cached result — bsp_display_start_with_config calls this twice
+    // (once inside bsp_display_lcd_init, once for touch init). The second probe
+    // fires after the 800 ms DISPON delay and would interfere with touch init.
+    if (s_detected_display_type != BSP_DISPLAY_TYPE_UNKNOWN) {
+        return s_detected_display_type;
+    }
+
     esp_err_t ret;
 
     // ç¡®ä¿I2Cå·²åˆå§‹åŒ–
@@ -1028,7 +1037,8 @@ static bsp_display_type_t bsp_detect_display_type(void)
     ret = i2c_master_probe(i2c_handle, ESP_LCD_TOUCH_IO_I2C_GT911_ADDRESS_BACKUP, 50);
     if (ret == ESP_OK) {
         ESP_LOGI(TAG, "Detected GT911 touch controller, using ST7703 display");
-        return BSP_DISPLAY_TYPE_ST7703_GT911;
+        s_detected_display_type = BSP_DISPLAY_TYPE_ST7703_GT911;
+        return s_detected_display_type;
     }
 
     // æ£€æµ‹ST7123è§¦æ‘¸å±
@@ -1044,16 +1054,19 @@ static bsp_display_type_t bsp_detect_display_type(void)
             if (esp_lcd_panel_io_rx_param(tp_io, 0x0000, &fw_version, 1) == ESP_OK && fw_version == 1) {
                 ESP_LOGI(TAG, "Detected ST7121 touch (FW=%u), using ST7121 display", fw_version);
                 esp_lcd_panel_io_del(tp_io);
-                return BSP_DISPLAY_TYPE_ST7121;
+                s_detected_display_type = BSP_DISPLAY_TYPE_ST7121;
+                return s_detected_display_type;
             }
             esp_lcd_panel_io_del(tp_io);
         }
         ESP_LOGI(TAG, "Detected ST7123 touch controller, using ST7123 display");
-        return BSP_DISPLAY_TYPE_ST7123;
+        s_detected_display_type = BSP_DISPLAY_TYPE_ST7123;
+        return s_detected_display_type;
     }
 
     ESP_LOGW(TAG, "No known touch controller detected, defaulting to ST7703");
-    return BSP_DISPLAY_TYPE_ST7703_GT911;
+    s_detected_display_type = BSP_DISPLAY_TYPE_ST7703_GT911;
+    return s_detected_display_type;
 }
 
 //==================================================================================
@@ -1731,7 +1744,9 @@ static lv_indev_t* bsp_display_indev_init_to_st7123(lv_display_t* disp)
                 .disable_control_phase = 1,
             },
     };
-    tp_io_config.scl_speed_hz = CONFIG_BSP_I2C_CLK_SPEED_HZ;
+    // Use 100 kHz to match the speed used during detection — ST7121 touch chip
+    // does not reliably respond at 400 kHz (CONFIG_BSP_I2C_CLK_SPEED_HZ).
+    tp_io_config.scl_speed_hz = 100000;
 
     ret = esp_lcd_new_panel_io_i2c_v2(bsp_i2c_get_handle(), &tp_io_config, &tp_io_handle);
     // ret = esp_lcd_new_panel_io_i2c(bsp_i2c_get_handle(), &tp_io_config, &tp_io_handle);
