@@ -14,16 +14,15 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 > ## ⚠️ DEVELOPMENT FIRMWARE — FT8 TRANSMIT IS EXPERIMENTAL
 >
-> **v0.12.0 adds real RF transmission.** When you arm a TX request and the slot fires, the
-> firmware sends `TX;` over CAT, walks 79 `TA<freq>;` symbols at 160 ms cadence, then sends
-> `TA0; RX;`. **Your radio will key up and put a signal on the air.**
+> **v0.12.0+ includes real RF transmission.** When a TX request fires, the firmware sends
+> `TX;` over CAT, walks 79 `TA<freq>;` symbols at 160 ms cadence, then sends `TA0; RX;`.
+> **Your radio will key up and put a signal on the air.**
 >
 > **You are solely responsible for operating legally** — correct licence class, operating
 > within your licence privileges, band plan compliance, no harmful interference.
 >
-> **What is NOT yet in place in v0.12.0:**
+> **What is NOT yet in place in v0.14.0:**
 > - No duty-cycle protection — back-to-back TX slots are not prevented by the firmware
-> - No automatic QSO sequencing — fully manual; the operator initiates every step
 > - No ADIF logging — completed QSOs are not recorded anywhere
 > - No audio loopback verification — the firmware cannot confirm the transmitted waveform
 > - No over-temperature or supply-voltage monitoring
@@ -91,7 +90,7 @@ The original mockup that drove the design ([panadapter-mockup-ideal.svg](docs/pa
 
 ## Status
 
-Working. All phases through 8 complete. Current release: **v0.12.0**. Includes: cold-boot reliability fix, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings, Hamlib rigctld bridge, onboard FT8 RX decoder, memory channels, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser), browser click-to-tune, zoom sync, band memory, and **manual FT8 TX** (reply + CQ via CAT `TA;`). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
+Working. All phases through 8 complete. Current release: **v0.14.0**. Includes: cold-boot reliability fix, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings, Hamlib rigctld bridge, onboard FT8 RX decoder, memory channels, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser), browser click-to-tune, zoom sync, band memory, **manual FT8 TX** (reply + CQ via CAT `TA;`), **auto search-and-pounce QSO state machine**, and **CQ loop mode** (continuous CQ until answered or cancelled). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
 
 | Phase | What | Status |
 |-------|------|--------|
@@ -163,6 +162,13 @@ Working. All phases through 8 complete. Current release: **v0.12.0**. Includes: 
 | -     | EVEN/ODD slot parity indicator + TX parity preference (v0.12.0) | done |
 | -     | Auto-find clear audio slot for CQ calls (v0.12.0) | done |
 | -     | Touch-and-hold row selection with scroll lock (v0.12.0) | done |
+| -     | Auto search-and-pounce QSO state machine (WAIT_RPT→WAIT_RR73→73) (v0.13.0) | done |
+| -     | Auto-Pounce button in TX modal; persistent FT8 status bar (v0.13.0) | done |
+| -     | ST7121 touch controller support (100 kHz I2C, optional register reads) (v0.13.1) | done |
+| -     | Ping-pong dual-buffer decode: every slot decoded regardless of TX parity (v0.13.1) | done |
+| -     | CQ loop: no modal, fires every 30 s on same parity, stops when answered (v0.14.0) | done |
+| -     | Decoded list: CQ rows first (strongest SNR), then rest by SNR (v0.14.0) | done |
+| -     | E/O slot parity column: blue E / amber O before each decoded row (v0.14.0) | done |
 
 See the [Roadmap](#roadmap) at the bottom for what's next.
 
@@ -343,7 +349,8 @@ Switch the panadapter into FT8 mode via the **Mode: FT8** button in the settings
 
 **What's shown.**
 - **Left info pane** - large MODE / VFO / UTC / slot countdown, plus heard count and operator identity (callsign + grid loaded from NVS).
-- **Right decode list** - scrollable table with columns CALL / MESSAGE / COUNTRY / SNR / KM / BRG / HRD:
+- **Right decode list** - scrollable table with columns SL / CALL / MESSAGE / COUNTRY / SNR / KM / BRG / HRD. CQ calls always appear at the top, sorted strongest-SNR first; all other rows follow sorted by SNR descending.
+  - SL: slot parity — **E** (blue) = EVEN slot (:00/:30), **O** (amber) = ODD slot (:15/:45). Makes it easy to know which slot to transmit on in reply.
   - CALL: extracted remote callsign (handles `CQ DX K1ABC`, `CQ POTA K1ABC`, and standard `<base> <call> <grid>` formats).
   - MESSAGE: full decoded FT8 message text.
   - COUNTRY: DXCC entity from prefix lookup (~190 entities, longest-prefix match, handles common /P /M suffixes).
@@ -382,12 +389,16 @@ The reply message is the standard FT8 format: `<their_call> <my_call> <my_grid>`
 
 ### Calling CQ
 
-Tap the **Call CQ** button in the left pane. The firmware:
+Tap the **Call CQ** button in the left pane. No confirmation modal — the CQ arms immediately. The firmware:
 1. Scans the current decode list for occupied 50 Hz audio bins.
 2. Picks the nearest unoccupied bin to 1500 Hz (standard FT8 sub-band centre).
-3. Opens the confirmation modal with message `CQ <my_call> <my_grid>` and the chosen audio frequency.
+3. Arms the CQ on the next matching slot parity and waits for the slot boundary.
 
-Use the **TX: EVEN** / **TX: ODD** buttons (just below the slot countdown) to restrict CQ calls to a specific slot parity. Tap the active button to release the lock (any slot). Both slots are always decoded regardless of the TX preference.
+After transmitting, the engine automatically re-arms the same CQ for the next matching slot (30 s later) and continues transmitting every 30 s until either:
+- A station answers — the QSO state machine transitions automatically into reply mode, and
+- You tap **Cancel** in the TX status bar.
+
+The opposite-parity slot is always decoded while CQ is running, so any reply is heard immediately and the exchange starts automatically without operator intervention.
 
 ### Slot parity display
 
@@ -413,8 +424,7 @@ The QMX `TA<freq.f>;` command sets the transmitted audio tone directly in decima
 
 ### Known limitations
 
-- Fully manual — no automatic QSO sequencing (that is v0.13.0)
-- No ADIF logging yet (v0.14.0)
+- No ADIF logging — completed QSOs are not recorded anywhere (planned for v0.15.0)
 - No duty-cycle protection — the firmware will not refuse consecutive TX slots
 - SNR in the decode list is a coarse proxy, not calibrated to WSJT-X dB/2500 Hz
 - TX code has not been soaked across multi-hour sessions
@@ -705,12 +715,32 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 - **Touch-and-hold row selection with scroll lock.** Finger-down for ≥ 400 ms enters selection mode; the row highlights and the list scroll locks so dragging the finger moves the highlight rather than scrolling the list. Lift confirms. A quick swipe still scrolls freely.
 - **TX state indicator.** Left pane shows armed / transmitting status with slot parity, countdown, and tap-to-cancel/abort.
 
+### Shipped in v0.13.0
+
+- **Auto search-and-pounce QSO state machine.** Touch-and-hold a CQ row and tap **Auto Pounce** (new button in the TX modal alongside **Transmit**). The engine arms TX1 and drives the full exchange automatically: TX1 (`<their_call> <my_call> <my_grid>`) → wait for their signal report → TX2 (`<their_call> <my_call> R<report>`) → wait for RR73/73 → TX3 (`<their_call> <my_call> 73`) → DONE. Each transition is triggered by scanning the decode list for the target callsign in the current slot. Timeout after 2 consecutive missed slots in any WAIT state.
+- **Auto-Pounce button in TX modal.** The confirmation modal now offers both **Transmit** (fire once, manual) and **Auto Pounce** (hand over to the state machine) for REPLY-kind requests.
+- **Persistent FT8 status bar.** Left pane shows a permanent status line below the slot countdown — what the FT8 process is doing at all times: capturing, decoding, TX armed/active, QSO state, or timeout. Written by the FT8 task; read by the LVGL 1 Hz timer via a mutex-protected string.
+
+### Shipped in v0.13.1
+
+- **ST7121 touch controller support.** Tab5 units shipped after ~April 2026 carry an ST7121 touch chip (I2C 0x55, firmware version 1). Previous firmware entered a panic-reboot loop on these units because ST7121 NACKs two optional register reads that the driver treated as fatal. Fixed in the forked touch component: only `FW_VERSION_REG (0x0000)` is mandatory; the other reads are silently skipped. Also adds a `max_touches > 10` bounds clamp against a garbage register read. Both ST7121 and ST7123 now boot cleanly from a single merged binary.
+- **I2C speed fix for ST7121.** ST7121 touch does not respond reliably at 400 kHz. Touch initialisation now always uses 100 kHz regardless of the system I2C clock setting.
+- **Ping-pong dual-buffer decode.** A second PSRAM audio buffer and a dedicated decode task run in parallel: while slot N is being captured (15 s), slot N−1 is being decoded (~4 s). Every single slot is decoded — TX parity no longer causes a slot to be dropped. Previously, the slot immediately after a TX slot was silently skipped.
+- **FT8 slot-skip fix.** `wait_for_slot_boundary` now tracks the previous slot start and returns as soon as any strictly-later slot boundary is seen, with no fixed arrival window. Eliminates the 30 s double-skip that occurred when a TX slot ended slightly past the boundary.
+
+### Shipped in v0.14.0
+
+- **CQ loop mode.** Tap **Call CQ** — no confirmation modal. The engine picks the nearest unoccupied audio slot near 1500 Hz, arms immediately, and re-arms automatically after every TX slot, continuing to CQ every 30 s on the same slot parity until a station answers or you tap Cancel. The opposite-parity slot is always decoded so any reply triggers the automatic exchange.
+- **CQ reply detection.** While in CQ loop mode, `ft8_qso_advance` scans every RX decode for any station sending `<my_call> <their_call> <report>`. Best-SNR caller is selected if multiple stations answer simultaneously. The CQ disarms and the reply TX is armed immediately without operator intervention.
+- **SNR-sorted decode list.** CQ rows always appear at the top, sorted strongest-first; all other rows follow sorted by SNR descending. Replaces the previous by-UTC sort, making it much easier to pick the best DX to work.
+- **E/O slot parity column.** First column in every decoded row shows **E** (blue, EVEN slot :00/:30) or **O** (amber, ODD slot :15/:45). Immediately visible which slot a decode came from, so you know which slot to transmit on when replying manually.
+- **CQ timing fix.** `ft8_qso_on_tx_complete()` re-arms the CQ immediately after `ft8_tx_run()` returns (~T+12.7 s) rather than waiting for the decode task at T+19 s — the slot-boundary check at T+30 s now always finds the CQ armed and fires without missing a slot.
+
 ### Next up
 
 The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF.
 
-- **v0.13.0 - Auto search-and-pounce.** Auto-reply to a tapped CQ, follow the QSO state machine through 73 / RR73. Sequence timing driven by SNTP-aligned slot boundaries.
-- **v0.14.0 - ADIF logging.** Write each completed QSO to an ADIF file for upload to LOTW, QRZ, eQSL, or POTA.app.
+- **v0.15.0 - ADIF logging.** Write each completed QSO to an ADIF file on-device; show a log view in the FT8 screen. Upload to LOTW, QRZ, eQSL, or POTA.app via the web UI.
 - **v1.0.0 - Standalone FT8 station.** All of the above polished + multi-day stability + cleaner UI.
 
 Alongside the FT8 path:

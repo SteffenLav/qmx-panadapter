@@ -167,8 +167,8 @@ Timeout: `QSO_TIMEOUT_SLOTS = 2` consecutive missed RX slots in any WAIT state �
 
 | Branch | What | State |
 |--------|------|-------|
-| `main` | v0.13.1 — ST7121 touch crash fix + FT8 slot-skip + parity fix | stable |
+| `main` | v0.14.0 — CQ loop, SNR-sorted decode list, E/O slot column, timing fixes | stable |
 
-## Next up (v0.14.0)
+## Next up (v0.15.0)
 
-SNTP-aligned auto search-and-pounce: queue multiple pounce candidates, auto-select best SNR CQ, retry on timeout.
+ADIF logging: write each completed QSO to an ADIF file on-device; log view in FT8 screen; upload via web UI to LOTW/QRZ/eQSL/POTA.app.
