@@ -315,9 +315,12 @@ static void ft8_task(void *arg)
             ft8_qso_on_tx_complete();  // re-arm CQ immediately if in CQ loop mode
             ft8_status_set("TX done — waiting for next slot");
             ft8_screen_view_request_refresh();
-        } else if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ARMED) {
+        } else if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ARMED
+                   && ft8_qso_get_state() != FT8_QSO_CQ) {
             // Wrong parity — skip the blocking capture so the loop reaches
             // the correct parity boundary within one ~10 ms iteration.
+            // CQ loop is exempt: the opposite-parity slot must be captured
+            // to hear replies, even though the next CQ is already armed.
             ft8_status_set("TX: waiting for matching slot...");
         } else {
             float *buf = audio[buf_idx];
