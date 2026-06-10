@@ -74,6 +74,8 @@ typedef struct {
     int64_t  slot_sec;  // UTC slot start; -1 = termination sentinel
     int      slot_idx;
     int      cap_ms;    // measured capture duration, for log line
+    int      start_off_ms; // wall-clock at capture start minus the UTC slot
+                           // boundary; should stay ~0, drift = the bug
 } decode_job_t;
 
 static QueueHandle_t  s_decode_queue = NULL;
@@ -134,7 +136,8 @@ static int64_t wait_for_slot_boundary(int64_t after_sec)
 // ---------------------------------------------------------------------------
 
 static void decode_slot(float *audio, monitor_t *mon,
-                        int64_t slot_sec, int slot_idx, int cap_ms)
+                        int64_t slot_sec, int slot_idx, int cap_ms,
+                        int start_off_ms)
 {
     int64_t t_start = esp_timer_get_time();
 
@@ -169,9 +172,9 @@ static void decode_slot(float *audio, monitor_t *mon,
 
     ft8_status_set("RX: %d decoded  (%d candidates)", n_decoded, n_cand);
     ESP_LOGI(TAG,
-        "slot %d UTC %lld: cap=%dms mon=%dms dec=%dms cand=%d dec=%d "
+        "slot %d UTC %lld: off=%+dms cap=%dms mon=%dms dec=%dms cand=%d dec=%d "
         "heap_i=%uKB heap_p=%uKB",
-        slot_idx, (long long)slot_sec,
+        slot_idx, (long long)slot_sec, start_off_ms,
         cap_ms, mon_ms, dec_ms, n_cand, n_decoded,
         (unsigned)heap_i, (unsigned)heap_p);
 
@@ -214,7 +217,8 @@ static void ft8_decode_task(void *arg)
             continue;
         }
         if (job.slot_sec < 0) break;    // termination sentinel from capture task
-        decode_slot(job.audio, mon, job.slot_sec, job.slot_idx, job.cap_ms);
+        decode_slot(job.audio, mon, job.slot_sec, job.slot_idx, job.cap_ms,
+                    job.start_off_ms);
     }
 
     monitor_free(mon);
@@ -327,12 +331,26 @@ static void ft8_task(void *arg)
             buf_idx ^= 1;   // alternate buffers: 0→1→0→1...
 
             ft8_status_set("RX: capturing...");
+            // Capture-start offset from the UTC slot boundary. Should stay ~0;
+            // if it climbs ~0.2 s/slot the capture window is drifting off the
+            // FT8 timing grid (the ~3-min decode-death bug).
+            struct timeval tv_cap;
+            gettimeofday(&tv_cap, NULL);
+            int start_off_ms = (int)((tv_cap.tv_sec - slot_sec) * 1000
+                                     + tv_cap.tv_usec / 1000);
+            // Cap the capture at the next UTC slot boundary so the 15 s window
+            // stays anchored to the FT8 grid. Without this the window slides
+            // ~0.2 s/slot (capture takes a touch over 15 s) and decoding dies
+            // after ~3 min; dsp_ft8_capture zero-pads any shortfall.
+            int ms_to_boundary = 15000 - start_off_ms;
+            if (ms_to_boundary < 2000)                  ms_to_boundary = 2000;
+            if (ms_to_boundary > (int)SLOT_TIMEOUT_MS)  ms_to_boundary = SLOT_TIMEOUT_MS;
             int64_t t0 = esp_timer_get_time();
-            esp_err_t e = dsp_ft8_capture(buf, SLOT_TIMEOUT_MS);
+            esp_err_t e = dsp_ft8_capture(buf, (uint32_t)ms_to_boundary);
             int cap_ms = (int)((esp_timer_get_time() - t0) / 1000);
 
             if (e == ESP_OK) {
-                decode_job_t job = { buf, slot_sec, slot_idx, cap_ms };
+                decode_job_t job = { buf, slot_sec, slot_idx, cap_ms, start_off_ms };
                 if (xQueueSend(s_decode_queue, &job, 0) != pdTRUE) {
                     // Should never happen: decode takes ~4 s, capture takes 15 s
                     ESP_LOGW(TAG, "slot %d: decode queue full — slot dropped", slot_idx);
@@ -350,7 +368,7 @@ static void ft8_task(void *arg)
 
     // Signal decode task to stop, then wait for it to drain and exit.
     s_ft8_running = false;
-    decode_job_t sentinel = { NULL, -1LL, 0, 0 };
+    decode_job_t sentinel = { NULL, -1LL, 0, 0, 0 };
     xQueueSend(s_decode_queue, &sentinel, pdMS_TO_TICKS(1000));
     // Clear any stale notification, then wait up to 10 s for decode task exit.
     xTaskNotifyWait(0x01, 0x01, NULL, pdMS_TO_TICKS(10000));

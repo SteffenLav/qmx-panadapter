@@ -2,12 +2,20 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
 static const char *TAG = "ft8_screen";
+
+// The decode list is a live picture of who is transmitting *now*, not a log.
+// A station that hasn't been re-decoded within this many seconds is expired
+// (you can't work a signal that's already gone). ~1 minute keeps stations that
+// are actively calling/working (they transmit every 15–30 s) while dropping
+// one-shot decodes and stations that have left. Tunable.
+#define FT8_ROW_STALE_SEC   60
 
 static ft8_call_t s_table[FT8_CALL_TABLE_SIZE];
 static SemaphoreHandle_t s_mutex = NULL;
@@ -203,10 +211,20 @@ void ft8_screen_get_all(ft8_call_t *out, int max, int *count_out)
         ESP_LOGW(TAG, "get_all: mutex timeout");
         return;
     }
-    for (int i = 0; i < FT8_CALL_TABLE_SIZE && n < max; i++) {
-        if (s_table[i].occupied) {
-            out[n++] = s_table[i];
+    // Expire stale stations as we snapshot: anything not re-decoded within
+    // FT8_ROW_STALE_SEC is freed here, so it vanishes from the view, the active
+    // count, and the CQ clear-frequency scan in one place. last_utc and now are
+    // both UTC seconds (slot start vs wall clock); valid because FT8 mode gates
+    // on SNTP sync. Scan the whole table (not limited by max) so purging is
+    // complete even if the caller's buffer fills.
+    int64_t now = (int64_t)time(NULL);
+    for (int i = 0; i < FT8_CALL_TABLE_SIZE; i++) {
+        if (!s_table[i].occupied) continue;
+        if (now - s_table[i].last_utc > FT8_ROW_STALE_SEC) {
+            s_table[i].occupied = false;   // station went quiet — drop it
+            continue;
         }
+        if (n < max) out[n++] = s_table[i];
     }
     if (s_mutex) xSemaphoreGive(s_mutex);
     if (count_out) *count_out = n;

@@ -585,7 +585,7 @@ static void rebuild_list(void)
 
     if (s_lbl_heard) {
         char b[32];
-        snprintf(b, sizeof(b), "Heard: %d", n);
+        snprintf(b, sizeof(b), "Active: %d", n);
         lv_label_set_text(s_lbl_heard, b);
     }
 }
@@ -684,6 +684,11 @@ static void t_clock_cb(lv_timer_t *t)
         }
         lv_obj_clear_flag(s_lbl_tx, LV_OBJ_FLAG_HIDDEN);
     }
+
+    // Rebuild the decode list every second so stations that have gone stale
+    // (not re-decoded within FT8_ROW_STALE_SEC) leave the view even when the
+    // band is quiet and no fresh decode is triggering a refresh on its own.
+    s_refresh_pending = true;
 }
 
 // Sync button appearance to s_cq_parity: the active choice glows in the
@@ -859,7 +864,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     update_parity_btns();  // sync colours to s_cq_parity (persists on FT8 re-entry)
 
     s_lbl_heard = lv_label_create(s_left_pane);
-    lv_label_set_text(s_lbl_heard, "Heard: 0");
+    lv_label_set_text(s_lbl_heard, "Active: 0");
     lv_obj_set_style_text_color(s_lbl_heard, lv_color_hex(0xC0C0C0), 0);
     lv_obj_set_style_text_font(s_lbl_heard, &lv_font_montserrat_24, 0);
     lv_obj_set_pos(s_lbl_heard, 0, 304);

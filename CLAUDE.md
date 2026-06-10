@@ -96,6 +96,11 @@ The v0.13.1 touch-driver fork (register-map tolerance, `max_touches` clamp) is h
 ### 12 kHz IF offset
 The QMX presents IQ with +12 kHz IF offset — the VFO signal lands at +12 kHz in baseband. Spectrum and waterfall shift bin selection by `n_bins/4` to center the VFO signal visually. Touch-to-tune math uses the raw CAT frequency, so no adjustment needed there.
 
+### FT8 capture window must be UTC-boundary-capped, not fixed-sample-count (v0.15.1)
+`dsp_ft8_capture()` used to wait for a fixed 180000 samples (nominally 15.000 s @ 12 kHz). The QMX's USB audio clock isn't bit-exact 48 kHz, so 180000 samples actually take a hair over 15.000 s wall-clock — the capture window slides later by ~0.2–0.4 s every slot. After ~12–15 slots (~3 min) the FT8 signal falls outside ft8_lib's decoder time-search window: candidates stay high (~140) but decodes drop to 0. A mode-bounce (FT8 → Panadapter → FT8) "heals" it by resetting to a fresh UTC boundary — that was the tell that pinned this down.
+
+Fix: `ft8_task` (`ft8_test.c`) computes `ms_to_boundary = 15000 - start_off_ms` and passes that as the capture timeout (clamped to `[2000, SLOT_TIMEOUT_MS]`). `dsp_ft8_capture()` treats hitting that boundary as the normal case — it zero-pads any sample shortfall (dead air after the FT8 signal) instead of returning `ESP_ERR_TIMEOUT`. The per-slot log gained `off=%+dms` (capture-start offset from the UTC boundary): should stay near 0 forever; if it climbs again, the anchor is broken.
+
 ## Display layout (landscape 1280×720)
 
 ```
@@ -180,6 +185,8 @@ POUNCE (we answered their CQ)          CQ-RUN (they answered our CQ)
 
 **CQ-row filtering**: `ft8_qso_cq_filter_active()` is true throughout a CQ-originated session; `rebuild_list()` in `ft8_screen_view.c` then hides other stations' `CQ ` rows so replies to us stand out.
 
+**Decode-list aging (v0.15.1)**: the list is a live picture of who's on frequency *now*, not a history log. `ft8_screen_get_all()` in `ft8_screen.c` expires entries not re-decoded within `FT8_ROW_STALE_SEC` (60 s) during the snapshot. The 1 Hz clock timer (`t_clock_cb`) sets `s_refresh_pending = true` every tick so stale rows drop even when the band is quiet and nothing new is decoded. "Heard: N" → "Active: N".
+
 **No slot-skip**: `ft8_task` captures *every* non-TX slot, including the parity opposite an armed TX. With ping-pong decode a capture is exactly one slot (15 s) and ends on the next boundary, so the armed burst still fires on time — and capturing the opposite slot is the only way to hear the station we're working. (The old v0.13.1 parity-skip was removed in v0.15.0: it made us deaf on the partner's slots. The "~19 s swallow" it guarded against was pre-ping-pong, when capture+decode were synchronous.)
 
 **UI**: TX confirmation modal has "Auto Pounce" button (visible for REPLY kind only) alongside "Transmit". The left-pane status label (`s_lbl_tx`) is always visible and shows — in priority order: ACTIVE (red), ARMED (amber), QSO complete (green), QSO timeout (orange, tap to clear), `ft8_status` passthrough (dim white).
@@ -192,7 +199,7 @@ POUNCE (we answered their CQ)          CQ-RUN (they answered our CQ)
 
 | Branch | What | State |
 |--------|------|-------|
-| `main` | v0.15.0 — FT8 CQ-run mode + patient retry; WiFi boot-loop fix (netif double-add) | stable on ST7123 and ST7121 |
+| `main` | v0.15.1 — FT8 capture-window UTC-anchor fix (decode death after ~3min); decode-list live-view aging (60s) | stable on ST7123 and ST7121 |
 
 ## Next up (v0.16.0)
 

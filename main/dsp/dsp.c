@@ -101,12 +101,31 @@ esp_err_t dsp_ft8_capture(float *dst_180000, uint32_t timeout_ms)
     s_ft8_target = 180000;
     __sync_synchronize();
     s_ft8_active = true;
+    // timeout_ms is the time until the next UTC slot boundary: the caller caps
+    // each capture there so the 15 s window stays anchored to the FT8 timing
+    // grid. Whichever comes first — 180000 samples, or the boundary — ends the
+    // capture.
     BaseType_t ok = xSemaphoreTake(s_ft8_done_sem, pdMS_TO_TICKS(timeout_ms));
     s_ft8_active = false;
+    __sync_synchronize();
+
     if (ok != pdTRUE) {
-        ESP_LOGW(TAG, "FT8 capture timeout after %lu ms (got %d/%d samples)",
-                 (unsigned long)timeout_ms, s_ft8_idx, s_ft8_target);
-        return ESP_ERR_TIMEOUT;
+        // Boundary reached before a full frame. This is the normal path (the
+        // QMX clock isn't bit-exact 48 kHz, so 180000 samples take a hair more
+        // than one slot). Let the FT8 branch finish any in-flight chunk, then
+        // zero-pad the tail — it's the slot's dead air, after the FT8 signal.
+        vTaskDelay(pdMS_TO_TICKS(20));
+        int got = s_ft8_idx;
+        if (got <= 0) {
+            ESP_LOGW(TAG, "FT8 capture: no audio in %lu ms", (unsigned long)timeout_ms);
+            return ESP_ERR_TIMEOUT;     // genuine audio failure
+        }
+        if (got < s_ft8_target) {
+            memset(&dst_180000[got], 0,
+                   (size_t)(s_ft8_target - got) * sizeof(float));
+        }
+        ESP_LOGD(TAG, "FT8 capture cut at boundary: %d/%d samples (padded)",
+                 got, s_ft8_target);
     }
     return ESP_OK;
 }
