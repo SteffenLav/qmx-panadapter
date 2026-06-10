@@ -30,6 +30,10 @@ static EventGroupHandle_t s_events = NULL;
 static int s_retry_count = 0;
 #define MAX_FAST_RETRIES 5
 
+// STA netif handle + whether esp_wifi_start() has been called this boot.
+static esp_netif_t *s_sta_netif = NULL;
+static bool s_wifi_started = false;
+
 // Live credentials. Filled at boot from NVS, or overwritten via
 // panadapter_wifi_reconnect(). 0-length ssid means "not configured".
 static char s_ssid[33] = {0};
@@ -135,7 +139,22 @@ static void wifi_task(void *arg)
     // ESP-IDF core init (event loop, default STA netif).
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    esp_netif_create_default_wifi_sta();
+
+    // Boot-loop fix (newer M5Stack Tab5 / C6 firmware): on newer ESP-Hosted
+    // builds the hosted layer auto-creates the default "WIFI_STA_DEF" netif and
+    // registers the default STA event handlers once the C6 link comes up.
+    // Calling esp_netif_create_default_wifi_sta() again then registers a SECOND
+    // copy of wifi_default_action_sta_start, so a single WIFI_EVENT_STA_START
+    // runs the start action twice -> esp_netif_start_api() (no double-add guard)
+    // -> lwip netif_add() asserts "netif already added" (netif.c:420) -> panic
+    // and endless reboot. Older C6 firmware doesn't auto-create, so this never
+    // bit on the dev bench. Only create the netif if one isn't already present.
+    s_sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (s_sta_netif == NULL) {
+        s_sta_netif = esp_netif_create_default_wifi_sta();
+    } else {
+        ESP_LOGW(TAG, "STA netif already exists (ESP-Hosted auto-created); reusing");
+    }
 
     wifi_init_config_t wcfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&wcfg));
@@ -160,11 +179,19 @@ static void wifi_task(void *arg)
     sta_cfg.sta.threshold.authmode = WIFI_AUTH_OPEN;
 
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg));
-    ESP_ERROR_CHECK(esp_wifi_start());
 
-    if (s_ssid[0] == '\0') {
-        ESP_LOGW(TAG, "no WiFi credentials configured; waiting for user input");
+    // Only start the radio if we actually have credentials. esp_wifi_start()
+    // is what raises WIFI_EVENT_STA_START and drives the netif start/add path;
+    // not starting it with no SSID both avoids that path entirely (belt-and-
+    // suspenders against the double-add crash above) and saves power. WiFi is
+    // brought up later from panadapter_wifi_reconnect() when the user saves
+    // credentials in the settings drawer.
+    if (s_ssid[0] != '\0') {
+        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg));
+        ESP_ERROR_CHECK(esp_wifi_start());
+        s_wifi_started = true;
+    } else {
+        ESP_LOGW(TAG, "no WiFi credentials configured; WiFi idle until configured");
     }
 
     // Periodic status log so user can see what's going on.
@@ -259,14 +286,22 @@ void panadapter_wifi_reconnect(const char *ssid, const char *pass)
     // Reset retry counter so fast retries get a fresh budget.
     s_retry_count = 0;
 
-    // Disconnect, push new config, reconnect.
-    esp_wifi_disconnect();
-
     wifi_config_t sta_cfg = { 0 };
     memcpy(sta_cfg.sta.ssid, s_ssid, sizeof(sta_cfg.sta.ssid));
     memcpy(sta_cfg.sta.password, s_pass, sizeof(sta_cfg.sta.password));
     sta_cfg.sta.threshold.authmode = WIFI_AUTH_OPEN;
     esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
 
-    esp_wifi_connect();
+    if (!s_wifi_started) {
+        // First credentials this boot (booted with no SSID, so the radio was
+        // left idle). Bring it up now; esp_wifi_start() raises STA_START and
+        // the event handler issues the connect.
+        ESP_LOGI(TAG, "starting WiFi for the first time this boot");
+        ESP_ERROR_CHECK(esp_wifi_start());
+        s_wifi_started = true;
+    } else {
+        // Already running: cycle the connection with the new config.
+        esp_wifi_disconnect();
+        esp_wifi_connect();
+    }
 }
