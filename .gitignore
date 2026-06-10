@@ -41,3 +41,6 @@ build_flash*.txt
 build_only.txt
 flash_only.txt
 flash_monitor.txt
+
+# Serial console captures from capture_serial_log.ps1 (debug artifacts)
+tools/qmx_log_*.txt
