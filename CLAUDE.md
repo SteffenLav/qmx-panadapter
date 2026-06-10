@@ -70,16 +70,19 @@ Detection lives in `bsp_detect_display_type()` in `components/m5stack_tab5/m5sta
 
 Both ST7121 and ST7123 use the same touch driver (`esp_lcd_touch_new_i2c_st7123`) and the same init path (`bsp_display_indev_init_to_st7123`). The ST7121 and ST7123 LCD panels use separate init sequences (`bsp_display_new_with_handles_to_st7121` / `_to_st7123`) with different DSI lane bitrates (1300 Mbps vs 965 Mbps).
 
-### ST7121 boot-loop — UNRESOLVED, active investigation
-**The v0.13.1 touch-driver fix above did NOT resolve the user-reported crash.** Confirmed: v0.13.1 still boot-loops on the affected ST7121 unit, but now the panadapter GUI renders fully, then the device resets, then GUI renders again — repeating endlessly.
+### New-Tab5 boot-loop — RESOLVED (v0.15.0): it was WiFi, not touch
+The endless reboot reported on new ST7121 units was **never a display/touch problem**. The GUI rendered fully, then the device reset ~2.5 s later. v0.12.1 (I2C speed) and v0.13.1 (touch register-map tolerance) were shots in the dark without a serial log and fixed nothing — that unit's ST7121 reads every register fine.
 
-This is new information that rules out the original hypothesis: since the GUI shows before reset, `display_init()` (including touch init) is succeeding. The crash happens **later** — somewhere after `ui_init()` in `app_main()` (USB host start, `audio_init()`, `cat_init()`, `dsp_init()`, `render_init()`, FT8 task inits) or at runtime (watchdog timeout, heap exhaustion, stack overflow in a task). v0.12.1 (I2C speed) and v0.13.1 (register-map tolerance) were both shots in the dark without a serial log — neither fixed it.
+The serial log (captured via `tools/capture_serial_log.ps1` — see below) showed the real crash: `assert failed: netif_add ... netif.c:420 (netif already added)`, firing in the background `wifi_task` after `app_main` returns. Root cause: on newer ESP-Hosted/C6 firmware the hosted layer **auto-creates** the default `WIFI_STA_DEF` netif and registers the default STA handlers once the C6 link comes up; `wifi_task` then called `esp_netif_create_default_wifi_sta()` again, registering a **second** copy of `wifi_default_action_sta_start`. One `WIFI_EVENT_STA_START` ran the start action twice, and `esp_netif_start_api()` has no double-add guard → second `netif_add()` → `LWIP_ASSERT` → panic loop. Older C6 firmware doesn't auto-create, so the dev bench (single registration) never reproduced it.
 
-No serial log has been obtained yet — the affected user has no dev environment, only the merged binary. Diagnostic tooling was added (attached to the [v0.13.1 release](https://github.com/SteffenLav/qmx-panadapter/releases/tag/v0.13.1)):
-- `tools/capture_serial_log.ps1` — no-install PowerShell script (.NET `SerialPort`), logs USB console output continuously across reboot cycles to a timestamped `.txt`, with auto-reconnect. Deliberately does **not** set `DtrEnable`/`RtsEnable` — the ESP32-P4 USB-Serial/JTAG auto-reset-to-bootloader circuit watches those lines (same as `esptool`'s reset sequence); asserting them can drop the chip into the ROM download stub with no console output.
+Fixed in `main/wifi/wifi.c`: (1) only call `esp_netif_create_default_wifi_sta()` if `WIFI_STA_DEF` doesn't already exist; (2) don't call `esp_wifi_start()` with no SSID — STA_START is never raised, so a no-credentials unit cannot hit the path regardless of C6 timing (`panadapter_wifi_reconnect()` starts the radio when credentials are first saved).
+
+**Diagnostic tooling** (kept for future remote debugging, attached to releases):
+- `tools/capture_serial_log.ps1` — no-install PowerShell script (.NET `SerialPort`), logs USB console output across reboot cycles to a timestamped `.txt`, with auto-reconnect. Deliberately does **not** set `DtrEnable`/`RtsEnable` — the ESP32-P4 USB-Serial/JTAG auto-reset-to-bootloader circuit watches those lines; asserting them can drop the chip into the ROM download stub with no output.
 - `docs/serial-log-howto.md` / `.pdf` — end-user step-by-step guide.
+- Decode a panic backtrace with `riscv32-esp-elf-addr2line -e build/qmx_panadapter.elf <addr> ...` — but note `build/` must match the flashed commit (the embedded SHA differs only by compile timestamp; code addresses match if same commit + same pinned IDF).
 
-**Next step once a log is received**: look for a "Guru Meditation Error" / backtrace. Decode addresses with `riscv32-esp-elf-addr2line -e build/qmx_panadapter.elf <addr> <addr> ...` (the v0.13.1 `.elf` is in `build/` from the last session). Do not guess at further fixes without this data.
+The v0.13.1 touch-driver fork (register-map tolerance, `max_touches` clamp) is harmless and kept as defensive cover for ST7121 units that *do* have an incomplete register map.
 
 ### IDLE watchdog disabled
 `CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0/CPU1` are off. The LVGL rotation pipeline keeps CPU0 busy past the default watchdog window. App-task watchdog (30 s) is still active.
@@ -150,23 +153,34 @@ Do not call `AI1;` on the QMX CAT port — it partially executes (enables auto-i
 - On `RELEASED` or `PRESS_LOST`: `lv_obj_add_flag(s_list, LV_OBJ_FLAG_SCROLLABLE)` restores scroll unconditionally.
 - `screen_y_to_row(abs_y)`: maps absolute screen Y to row index accounting for `s_list` coords and `lv_obj_get_scroll_y()`.
 
-## FT8 auto search-and-pounce (v0.13.0)
+## FT8 QSO state machine — pounce + CQ-run (v0.13.0 / v0.15.0)
 
-`ft8_qso.c` — QSO state machine driven by two call sites:
-- `ft8_qso_start(tx1_req)` — LVGL task: accepts a pre-built TX1 request (already encoded by `ft8_tx_build_request`), arms it, enters WAIT_RPT
-- `ft8_qso_advance(slot_sec)` — ft8_task after each RX slot: scans ft8_screen table for responses from the target with `last_utc == slot_sec`, arms TX2/TX3 automatically
+`ft8_qso.c` — one state machine, two roles. Driven by three call sites:
+- `ft8_qso_start(tx1_req)` — LVGL task: pounce. Accepts a pre-built TX1 (`<them> <me> <grid>`), enters WAIT_RPT.
+- `ft8_qso_start_cq(cq_req)` — LVGL task: CQ-run. Arms CQ, enters CQ.
+- `ft8_qso_advance(slot_sec)` — **decode task** after each RX slot: scans `ft8_screen` for messages with `last_utc == slot_sec`, decides the next message.
+- `ft8_qso_on_tx_complete()` — **capture task** right after each burst: re-arms the current outgoing message.
 
-**QSO state machine:**
+**Two role flows** (third field of the FT8 message decides):
 ```
-WAIT_RPT → (heard <my> <their> <report>) → arm TX2 (R<report>) → WAIT_RR73
-         → (heard RR73/73 directly)       → arm TX3 (73)        → WAIT_DONE
-WAIT_RR73 → (heard RR73/73)              → arm TX3 (73)        → WAIT_DONE
-WAIT_DONE → (TX3 fired, ft8_tx IDLE)    →                        DONE → IDLE
+POUNCE (we answered their CQ)          CQ-RUN (they answered our CQ)
+ TX1 <them> <me> <grid>                 CQ  CQ <me> <grid>
+ RX  <me> <them> <report>   WAIT_RPT     RX  <me> <them> <grid|rpt>   CQ
+ TX2 <them> <me> R<report>               TX  <them> <me> <report>     (snr proxy)
+ RX  <me> <them> RR73/73    WAIT_RR73    RX  <me> <them> R<report>    WAIT_ROGER
+ TX3 <them> <me> 73                      TX  <them> <me> RR73
+                            WAIT_DONE → (final fired, ft8_tx IDLE) → DONE → IDLE
 ```
 
-Timeout: `QSO_TIMEOUT_SLOTS = 2` consecutive missed RX slots in any WAIT state → TIMEOUT.
+**Patience / retry (v0.15.0)**: the *current outgoing message* (`s_cur_req`) is re-armed every TX slot by `on_tx_complete()` (CQ cadence + exchange retries), so we keep pushing the same call until progress. `QSO_TIMEOUT_SLOTS = 4` consecutive RX slots with no progress → give up. CQ-originated QSOs **resume CQ** on timeout (don't drop the frequency); pounce QSOs go sticky TIMEOUT.
 
-**Slot skip (v0.13.1)**: `ft8_task` skips `process_one_slot` when `ft8_tx_get_status()` returns `FT8_TX_ARMED`. Capture takes ~19 s and would swallow the next slot boundary, preventing a parity-locked TX from ever firing.
+**Deferred arming (v0.15.0)**: `advance()` runs in the decode task ~4 s into the *next* slot — usually while our re-armed burst is already ACTIVE, when `ft8_tx_arm()` refuses. So advance() only updates state + `s_cur_req`; `rearm_current()` (from `on_tx_complete()`, or `arm_current_if_idle()` as a safety net) does the actual arm. WAIT_DONE arms the final exactly once then clears `s_have_cur`. This fixes the v0.14.0 bug where a CQ reply detected during the next CQ burst could never transition out of CQ.
+
+**Report value**: CQ-run sends a signal report built from the answering station's coarse proxy SNR (`fmt_report`, clamped −24..+15, e.g. `-07`). Not WSJT-X-calibrated.
+
+**CQ-row filtering**: `ft8_qso_cq_filter_active()` is true throughout a CQ-originated session; `rebuild_list()` in `ft8_screen_view.c` then hides other stations' `CQ ` rows so replies to us stand out.
+
+**No slot-skip**: `ft8_task` captures *every* non-TX slot, including the parity opposite an armed TX. With ping-pong decode a capture is exactly one slot (15 s) and ends on the next boundary, so the armed burst still fires on time — and capturing the opposite slot is the only way to hear the station we're working. (The old v0.13.1 parity-skip was removed in v0.15.0: it made us deaf on the partner's slots. The "~19 s swallow" it guarded against was pre-ping-pong, when capture+decode were synchronous.)
 
 **UI**: TX confirmation modal has "Auto Pounce" button (visible for REPLY kind only) alongside "Transmit". The left-pane status label (`s_lbl_tx`) is always visible and shows — in priority order: ACTIVE (red), ARMED (amber), QSO complete (green), QSO timeout (orange, tap to clear), `ft8_status` passthrough (dim white).
 
@@ -178,8 +192,8 @@ Timeout: `QSO_TIMEOUT_SLOTS = 2` consecutive missed RX slots in any WAIT state �
 
 | Branch | What | State |
 |--------|------|-------|
-| `main` | v0.14.0 — CQ loop, SNR-sorted decode list, E/O slot column, timing fixes | stable on ST7123; **ST7121 boot-loop unresolved** (see Hardware revision detection) |
+| `main` | v0.15.0 — FT8 CQ-run mode + patient retry; WiFi boot-loop fix (netif double-add) | stable on ST7123 and ST7121 |
 
-## Next up (v0.15.0)
+## Next up (v0.16.0)
 
 ADIF logging: write each completed QSO to an ADIF file on-device; log view in FT8 screen; upload via web UI to LOTW/QRZ/eQSL/POTA.app.
