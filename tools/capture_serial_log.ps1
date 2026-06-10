@@ -85,8 +85,10 @@ Write-Host ""
 while ($true) {
     $port = New-Object System.IO.Ports.SerialPort $portName, 115200, ([System.IO.Ports.Parity]::None), 8, ([System.IO.Ports.StopBits]::One)
     $port.ReadTimeout = 1000
-    $port.DtrEnable = $true
-    $port.RtsEnable = $true
+    # Leave DTR/RTS untouched (default false): the ESP32-P4 USB-Serial/JTAG
+    # auto-reset-to-bootloader circuit watches these lines (same as esptool's
+    # reset sequence). Asserting them here can drop the chip into the ROM
+    # download stub, which prints nothing.
 
     try {
         $port.Open()
