@@ -66,9 +66,20 @@ Detection lives in `bsp_detect_display_type()` in `components/m5stack_tab5/m5sta
 
 **I2C speed for ST7121/ST7123 touch must be 100 kHz.** The detection probe uses 100 kHz; `bsp_display_indev_init_to_st7123()` must also use 100 kHz (`tp_io_config.scl_speed_hz = 100000`). Do not change this to `CONFIG_BSP_I2C_CLK_SPEED_HZ` (400 kHz) — ST7121 does not respond reliably at 400 kHz.
 
-**ST7121 has an incomplete register map.** The `read_fw_info()` function in `esp_lcd_touch_st7123.c` originally called `ESP_RETURN_ON_ERROR` for all three register reads (`FW_REVISION_REG 0x000C`, `MAX_X_COORD_H_REG 0x0005`). ST7121 NACKs both — causing `esp_lcd_touch_new_i2c_st7123()` to return an error, `bsp_display_start_with_config()` to return NULL, `ESP_ERROR_CHECK(display_init())` to abort, and a 5-second panic → reboot loop. Fixed in v0.13.1: the component is forked to `components/espressif__esp_lcd_touch_st7123/` where only `FW_VERSION_REG (0x0000)` is mandatory; the other reads are optional (LOGW on failure). Also adds a `max_touches > 10` bounds clamp in `read_data()` to prevent a stack smash from a garbage register read.
+**ST7121 has an incomplete register map.** The `read_fw_info()` function in `esp_lcd_touch_st7123.c` originally called `ESP_RETURN_ON_ERROR` for all three register reads (`FW_REVISION_REG 0x000C`, `MAX_X_COORD_H_REG 0x0005`). ST7121 NACKs both — this alone would cause `esp_lcd_touch_new_i2c_st7123()` to return an error, `bsp_display_start_with_config()` to return NULL, `ESP_ERROR_CHECK(display_init())` to abort, and an immediate panic → reboot **before any UI renders**. v0.13.1 forked the component to `components/espressif__esp_lcd_touch_st7123/`, making only `FW_VERSION_REG (0x0000)` mandatory (others LOGW on failure) and clamping `max_touches > 10` in `read_data()` to prevent a stack smash.
 
 Both ST7121 and ST7123 use the same touch driver (`esp_lcd_touch_new_i2c_st7123`) and the same init path (`bsp_display_indev_init_to_st7123`). The ST7121 and ST7123 LCD panels use separate init sequences (`bsp_display_new_with_handles_to_st7121` / `_to_st7123`) with different DSI lane bitrates (1300 Mbps vs 965 Mbps).
+
+### ST7121 boot-loop — UNRESOLVED, active investigation
+**The v0.13.1 touch-driver fix above did NOT resolve the user-reported crash.** Confirmed: v0.13.1 still boot-loops on the affected ST7121 unit, but now the panadapter GUI renders fully, then the device resets, then GUI renders again — repeating endlessly.
+
+This is new information that rules out the original hypothesis: since the GUI shows before reset, `display_init()` (including touch init) is succeeding. The crash happens **later** — somewhere after `ui_init()` in `app_main()` (USB host start, `audio_init()`, `cat_init()`, `dsp_init()`, `render_init()`, FT8 task inits) or at runtime (watchdog timeout, heap exhaustion, stack overflow in a task). v0.12.1 (I2C speed) and v0.13.1 (register-map tolerance) were both shots in the dark without a serial log — neither fixed it.
+
+No serial log has been obtained yet — the affected user has no dev environment, only the merged binary. Diagnostic tooling was added (attached to the [v0.13.1 release](https://github.com/SteffenLav/qmx-panadapter/releases/tag/v0.13.1)):
+- `tools/capture_serial_log.ps1` — no-install PowerShell script (.NET `SerialPort`), logs USB console output continuously across reboot cycles to a timestamped `.txt`, with auto-reconnect. Deliberately does **not** set `DtrEnable`/`RtsEnable` — the ESP32-P4 USB-Serial/JTAG auto-reset-to-bootloader circuit watches those lines (same as `esptool`'s reset sequence); asserting them can drop the chip into the ROM download stub with no console output.
+- `docs/serial-log-howto.md` / `.pdf` — end-user step-by-step guide.
+
+**Next step once a log is received**: look for a "Guru Meditation Error" / backtrace. Decode addresses with `riscv32-esp-elf-addr2line -e build/qmx_panadapter.elf <addr> <addr> ...` (the v0.13.1 `.elf` is in `build/` from the last session). Do not guess at further fixes without this data.
 
 ### IDLE watchdog disabled
 `CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0/CPU1` are off. The LVGL rotation pipeline keeps CPU0 busy past the default watchdog window. App-task watchdog (30 s) is still active.
@@ -167,7 +178,7 @@ Timeout: `QSO_TIMEOUT_SLOTS = 2` consecutive missed RX slots in any WAIT state �
 
 | Branch | What | State |
 |--------|------|-------|
-| `main` | v0.14.0 — CQ loop, SNR-sorted decode list, E/O slot column, timing fixes | stable |
+| `main` | v0.14.0 — CQ loop, SNR-sorted decode list, E/O slot column, timing fixes | stable on ST7123; **ST7121 boot-loop unresolved** (see Hardware revision detection) |
 
 ## Next up (v0.15.0)
 
