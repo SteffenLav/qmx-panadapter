@@ -21,7 +21,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 > **You are solely responsible for operating legally** — correct licence class, operating
 > within your licence privileges, band plan compliance, no harmful interference.
 >
-> **What is NOT yet in place in v0.14.0:**
+> **What is NOT yet in place in v0.15.1:**
 > - No duty-cycle protection — back-to-back TX slots are not prevented by the firmware
 > - No ADIF logging — completed QSOs are not recorded anywhere
 > - No audio loopback verification — the firmware cannot confirm the transmitted waveform
@@ -90,7 +90,7 @@ The original mockup that drove the design ([panadapter-mockup-ideal.svg](docs/pa
 
 ## Status
 
-Working. All phases through 8 complete. Current release: **v0.14.0**. Includes: cold-boot reliability fix, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings, Hamlib rigctld bridge, onboard FT8 RX decoder, memory channels, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser), browser click-to-tune, zoom sync, band memory, **manual FT8 TX** (reply + CQ via CAT `TA;`), **auto search-and-pounce QSO state machine**, and **CQ loop mode** (continuous CQ until answered or cancelled). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
+Working. All phases through 8 complete. Current release: **v0.15.1**. Includes: cold-boot reliability fix, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings, Hamlib rigctld bridge, onboard FT8 RX decoder with a live-view decode list, memory channels, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser), browser click-to-tune, zoom sync, band memory, **manual FT8 TX** (reply + CQ via CAT `TA;`), and a **full auto QSO engine** — search-and-pounce plus **CQ-run** (auto-answers callers, runs the exchange to completion with patient retry, then resumes CQ). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
 
 | Phase | What | Status |
 |-------|------|--------|
@@ -169,6 +169,10 @@ Working. All phases through 8 complete. Current release: **v0.14.0**. Includes: 
 | -     | CQ loop: no modal, fires every 30 s on same parity, stops when answered (v0.14.0) | done |
 | -     | Decoded list: CQ rows first (strongest SNR), then rest by SNR (v0.14.0) | done |
 | -     | E/O slot parity column: blue E / amber O before each decoded row (v0.14.0) | done |
+| -     | FT8 CQ-run: auto-answer callers, run exchange to completion, patient retry (v0.15.0) | done |
+| -     | WiFi boot-loop fix on newer Tab5/C6 firmware — netif double-add (v0.15.0) | done |
+| -     | FT8 capture window UTC-anchor fix — decode no longer dies after ~3 min (v0.15.1) | done |
+| -     | FT8 decode list live view — entries age out after 60 s of silence (v0.15.1) | done |
 
 See the [Roadmap](#roadmap) at the bottom for what's next.
 
@@ -339,7 +343,7 @@ If no credentials are configured at boot, WiFi stays idle (no retry storm) until
 
 **Why a runtime modal instead of build-time `wifi_credentials.h`.** Earlier versions kept SSID/password in a gitignored header. That made every WiFi change a rebuild-and-flash cycle, and required publishing build instructions to teach new users about the file. With the modal, a flashed binary is portable: the user enters their own network on first boot. Credentials are stored only in NVS, never embedded in the firmware image.
 
-## Onboard FT8 (v0.10.0-beta1, RX-only)
+## Onboard FT8
 
 ![FT8 RX in action on 20 m -- decode list with DXCC, distance, bearing, and SNR](docs/QMX-Panadapter_FT8_RX_v0.10.0-beta1.png)
 
@@ -356,22 +360,23 @@ Switch the panadapter into FT8 mode via the **Mode: FT8** button in the settings
   - COUNTRY: DXCC entity from prefix lookup (~190 entities, longest-prefix match, handles common /P /M suffixes).
   - SNR: rough proxy from decoder score, colour-banded (green >=0, white -5..-1, orange -15..-6, grey <-15). Not WSJT-X-equivalent dB yet.
   - KM / BRG: great-circle distance + bearing from your grid (set via the **Identity** button in the drawer) to the decoded station's grid.
-  - HRD: count of times this call has been decoded since power-on.
+  - HRD: count of times this call has been decoded since it last appeared in the list (resets if the station drops off — see live view below).
+
+**Live view (v0.15.1).** The decode list shows who's on frequency *now*, not a growing history: a station not re-decoded within 60 seconds drops off the list automatically, even while the band is quiet. The left-pane count label reflects this — "Active: N" rather than a cumulative "Heard".
 
 **Set your callsign and grid first.** Drawer -> **Identity** -> enter callsign and 4 or 6-char Maidenhead grid. Values persist to NVS. Without a grid set, the KM and BRG columns show `--`.
 
 **Performance.** On a busy 20 m FT8 slot the decoder regularly yields 25-50 callsigns per slot. Heap is stable across long sessions (39 KB internal RAM free, 25 MB PSRAM free during decoding).
 
-**Known limitations (beta).**
-- RX only. No TX yet -- that's v0.11.
+**Known limitations.**
 - SNR is a coarse proxy from the LDPC decoder score, not a calibrated dB value relative to 2500 Hz noise BW like WSJT-X.
-- No ADIF logging yet (v0.13).
-- Mode switching between Panadapter and FT8 currently discards panadapter state (waterfall history, IQ balance estimator). Accepted trade-off for the simpler RX-only release.
-- Long sessions (multi-hour) not yet soaked end-to-end -- please open an issue if you see reboots while in FT8 mode.
+- No ADIF logging yet (planned for v0.16.0).
+- Mode switching between Panadapter and FT8 currently discards panadapter state (waterfall history, IQ balance estimator). Accepted trade-off.
+- Long sessions (multi-hour) not yet soaked end-to-end, though FT8 RX now runs continuously without the ~3-minute decode die-off seen pre-v0.15.1 -- please open an issue if you see reboots while in FT8 mode.
 
 FT8 reception requires accurate UTC time, which the Tab5 gets from SNTP -- WiFi must be configured first.
 
-## Manual FT8 TX (v0.12.0) ⚠️ experimental — read the warning above
+## FT8 TX & auto QSO (v0.12.0–v0.15.0) ⚠️ experimental — read the warning above
 
 > **Before using TX**, read the [development warning](#️-development-firmware--ft8-transmit-is-experimental) at the top of this document.
 
@@ -382,23 +387,26 @@ The Tab5 can now transmit FT8 directly via the QMX's `TA<freq>;` CAT command —
 1. In the FT8 decode list, **hold your finger on a row** for ~400 ms until it highlights blue.
 2. Drag up or down if needed to land on the right row (list scroll is locked while selecting).
 3. **Lift** — a confirmation modal appears showing the exact message that will go on air, the audio frequency, and the target slot parity (EVEN or ODD).
-4. Tap **Transmit** to arm. The engine waits for the correct slot boundary, then transmits.
+4. Tap **Transmit** to send just this one message, or **Auto Pounce** to hand the whole QSO to the auto engine — it sends this reply, then automatically works through report → RR73 → done. Same patient retry as CQ-run: each step is re-sent for up to 4 slots if the other station doesn't respond.
 5. Tap **Cancel** (in the modal, or the armed-indicator in the left pane) to disarm without transmitting.
 
 The reply message is the standard FT8 format: `<their_call> <my_call> <my_grid>`. Slot parity is set automatically — if you heard them in an EVEN slot, your reply goes in an ODD slot (so they're listening when you transmit).
 
-### Calling CQ
+### Calling CQ — CQ-run mode
 
 Tap the **Call CQ** button in the left pane. No confirmation modal — the CQ arms immediately. The firmware:
 1. Scans the current decode list for occupied 50 Hz audio bins.
 2. Picks the nearest unoccupied bin to 1500 Hz (standard FT8 sub-band centre).
 3. Arms the CQ on the next matching slot parity and waits for the slot boundary.
 
-After transmitting, the engine automatically re-arms the same CQ for the next matching slot (30 s later) and continues transmitting every 30 s until either:
-- A station answers — the QSO state machine transitions automatically into reply mode, and
-- You tap **Cancel** in the TX status bar.
+From there it's a full auto QSO engine, not just a repeating call:
 
-The opposite-parity slot is always decoded while CQ is running, so any reply is heard immediately and the exchange starts automatically without operator intervention.
+- **Auto-answer.** The opposite-parity slot is always decoded while CQ is running. The moment a station replies to *your* call (best-SNR caller chosen if more than one), CQing stops and the exchange starts automatically — no operator intervention needed.
+- **Full exchange.** The engine sends a signal report to the caller, waits for their roger/report, sends RR73, marks the QSO done, then automatically resumes calling CQ for the next contact.
+- **Patient retry.** At every step — CQ cadence or mid-exchange — the current message is re-sent for up to 4 consecutive slots if the other station doesn't respond. If a mid-exchange reply never comes, CQ-run gives up on that station and resumes calling CQ on the same frequency rather than going silent.
+- **Decode-list filtering.** While CQ-run is active, other stations' `CQ` rows are hidden from the decode list so any reply addressed to you stands out immediately.
+
+Tap **Cancel** in the TX status bar at any time to stop CQ-run.
 
 ### Slot parity display
 
@@ -409,14 +417,16 @@ The slot countdown in the left pane shows the current slot parity:
 
 When a TX is armed, the indicator also shows which slot parity it will fire on.
 
-### TX status indicators
+### TX / QSO status indicator
 
-The left pane shows a persistent TX status line below the slot countdown:
-- **Hidden** when idle
+The left pane shows a persistent status line below the slot countdown. Priority order, highest first:
+- **Red** `TRANSMITTING: <message> (tap to abort)` during a TX burst
 - **Amber** `TX armed: <message> → EVEN/ODD slot, ~Ns (tap to cancel)` when waiting for the slot
-- **Red** `TRANSMITTING: <message> (tap to abort)` during the burst
+- **Green** QSO complete
+- **Orange** QSO timed out — tap to clear (a search-and-pounce reply that got no response after 4 slots)
+- **Dim white** otherwise — live passthrough of what the FT8 engine is doing (capturing, decoding, slot/symbol count, ...)
 
-Tapping the amber/red line cancels or aborts the current TX.
+Tapping the amber/red line cancels or aborts the current TX; tapping the orange line clears a timed-out QSO.
 
 ### How it works (for the technically curious)
 
@@ -424,7 +434,7 @@ The QMX `TA<freq.f>;` command sets the transmitted audio tone directly in decima
 
 ### Known limitations
 
-- No ADIF logging — completed QSOs are not recorded anywhere (planned for v0.15.0)
+- No ADIF logging — completed QSOs are not recorded anywhere (planned for v0.16.0)
 - No duty-cycle protection — the firmware will not refuse consecutive TX slots
 - SNR in the decode list is a coarse proxy, not calibrated to WSJT-X dB/2500 Hz
 - TX code has not been soaked across multi-hour sessions
@@ -528,6 +538,14 @@ Earlier versions of the panadapter showed a slow ~13 s cycle on the displayed no
 - Display dB range shifted to 10–130 dB to cover real signal amplitudes (later recalibrated to -130 to -30 dBm in Phase 5.8)
 
 Inspired by [`qrp_companion`](https://groups.io/g/QRPLabs/topic/118645485) by Zhenxing Han (N6HAN), who confirmed his code on Tab5 did not exhibit the issue and offered his source as reference. Thanks Zhenxing.
+
+### FT8 capture window drift (resolved in v0.15.1)
+
+After roughly 3 minutes in FT8 mode, decoding would gradually die: candidate count stayed high (~140 per slot) but decoded count dropped to 0, even with a band full of strong signals. A mode-bounce (FT8 → Panadapter → FT8) instantly restored decoding — for another ~3 minutes.
+
+**Root cause:** each capture waited for a fixed 180000 audio samples, nominally 15.000 s at the 12 kHz decimated rate. The QMX's USB audio clock isn't bit-exact 48 kHz, so 180000 samples actually take a hair over 15.000 s wall-clock. The capture window therefore slid later by ~0.2-0.4 s every slot, and after ~12-15 slots the FT8 signal fell outside `ft8_lib`'s decoder time-search window. The mode-bounce "healed" it by resetting to a fresh UTC boundary — that observation is what pinned the cause down.
+
+**Fix:** each capture is now capped at the next UTC slot boundary instead of a fixed sample count; any shortfall (dead air after the FT8 signal ends) is zero-padded. The window stays anchored to the FT8 timing grid indefinitely. A per-slot log field, `off=%+dms` (capture-start offset from the UTC boundary), tracks this going forward — it should stay near 0.
 
 ### WiFi via esp_hosted on Tab5
 
@@ -641,7 +659,7 @@ Trivial-debt cleanup pass. No new features.
 
 ### Shipped in v0.10.0-beta1
 
-- **Onboard FT8 RX decoder.** Switch to a dedicated FT8 view from the settings drawer; the Tab5 decodes 15-second slots in real time on the ESP32-P4 using vendored [`ft8_lib`](https://github.com/kgoba/ft8_lib). Decode list with callsign, message, DXCC country, distance, bearing, SNR, and heard count. Operator identity (callsign + Maidenhead grid) configured via a new Identity modal in the drawer; persisted to NVS. See the [Onboard FT8](#onboard-ft8-v0100-beta1-rx-only) section above for details.
+- **Onboard FT8 RX decoder.** Switch to a dedicated FT8 view from the settings drawer; the Tab5 decodes 15-second slots in real time on the ESP32-P4 using vendored [`ft8_lib`](https://github.com/kgoba/ft8_lib). Decode list with callsign, message, DXCC country, distance, bearing, SNR, and heard count. Operator identity (callsign + Maidenhead grid) configured via a new Identity modal in the drawer; persisted to NVS. See the [Onboard FT8](#onboard-ft8) section above for details.
 - **FT8 view stability.** Pre-allocated row pool of 20 LVGL row containers with shared `lv_style_t` objects, refreshed in place via dirty-tracked `lv_label_set_text`. Eliminates the long-session reboot caused by `lv_obj_clean` + `lv_obj_create` cycling that fragmented internal heap and left stale draw queue entries.
 - **Per-unit IF calibration trim.** New slider in the settings drawer (+/-200 Hz, 10 Hz steps, persisted to NVS) compensates for QMX local oscillator variance that shifts the 12 kHz IF baseband injection. Centralised the bin shift math in `ui_get_if_bin_shift()` so both spectrum and waterfall apply the same offset.
 - **Beta status.** This is a public beta release. Stability across multi-hour FT8 sessions is not yet fully soaked. Please open an [issue](https://github.com/SteffenLav/qmx-panadapter/issues) if you see reboots or unexpected behaviour.
@@ -736,11 +754,24 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 - **E/O slot parity column.** First column in every decoded row shows **E** (blue, EVEN slot :00/:30) or **O** (amber, ODD slot :15/:45). Immediately visible which slot a decode came from, so you know which slot to transmit on when replying manually.
 - **CQ timing fix.** `ft8_qso_on_tx_complete()` re-arms the CQ immediately after `ft8_tx_run()` returns (~T+12.7 s) rather than waiting for the decode task at T+19 s — the slot-boundary check at T+30 s now always finds the CQ armed and fires without missing a slot.
 
+### Shipped in v0.15.0
+
+- **FT8 CQ-run mode.** Calling CQ is now a full auto QSO engine, not just a repeating call. The moment a station answers your CQ, the engine stops CQing, sends a signal report, runs the exchange (report → RR73 → done), then automatically resumes calling CQ for the next contact. Best-SNR caller is picked if multiple stations answer in the same slot. See [Calling CQ — CQ-run mode](#calling-cq--cq-run-mode).
+- **Patient retry.** At every step — CQ cadence or mid-exchange — the current message is re-sent for up to 4 consecutive slots if the other station doesn't respond, instead of going quiet after one transmission. CQ-originated QSOs that time out mid-exchange resume CQ on the same frequency rather than dropping it; search-and-pounce QSOs go to a sticky timeout (orange status, tap to clear).
+- **CQ-row filtering.** While a CQ-run session is active, other stations' `CQ` rows are hidden from the decode list so replies addressed to you stand out.
+- **Auto Pounce documented.** The TX confirmation modal's **Auto Pounce** button (search-and-pounce QSO automation, shipped v0.13.0) now has usage docs — see [Replying to a station](#replying-to-a-station).
+- **WiFi boot-loop fix.** Units with newer Tab5/ESP32-C6 WiFi co-processor firmware were rebooting endlessly a couple of seconds after boot — the GUI rendered fully every time, so this was never a display/touch issue despite earlier attempts to fix it as one. A serial log pinned the real cause: newer ESP-Hosted/C6 firmware auto-creates the default WiFi STA network interface and its event handlers once the C6 link comes up; the app then created a second one, so a single STA-start event ran the netif-start handler twice and the second `netif_add()` tripped an assertion, panicking the chip. Fixed by checking for an existing default STA interface before creating one, and by not starting WiFi at all on units with no saved credentials.
+
+### Shipped in v0.15.1
+
+- **FT8 capture-window drift fix.** On FT8, decoding would gradually degrade and stop entirely after roughly 3 minutes — candidate count stayed high (~140/slot) but decoded count dropped to 0, even with strong signals on the air. A mode-bounce (FT8 → Panadapter → FT8) instantly restored decoding, for another ~3 minutes. Root cause: each capture waited for a fixed 180000-sample buffer (nominally 15.000 s @ 12 kHz), but the QMX's USB audio clock isn't bit-exact 48 kHz, so each capture took a hair over 15 s — the window slid later by ~0.2-0.4 s every slot until the FT8 signal fell outside the decoder's time-search window. Fixed by capping each capture at the next UTC slot boundary (zero-padding any shortfall), so the window stays anchored to the FT8 grid indefinitely. Field-tested: 20-30 decodes/slot continuously, no more die-off. Full root-cause writeup: [FT8 capture window drift](#ft8-capture-window-drift-resolved-in-v0151) under Quirks and trade-offs.
+- **FT8 decode list live view.** The decode list now shows who's on frequency *now*, not a growing history: stations not re-decoded within 60 seconds drop off the list automatically, even while the band is quiet. "Heard: N" became "Active: N".
+
 ### Next up
 
 The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF.
 
-- **v0.15.0 - ADIF logging.** Write each completed QSO to an ADIF file on-device; show a log view in the FT8 screen. Upload to LOTW, QRZ, eQSL, or POTA.app via the web UI.
+- **v0.16.0 - ADIF logging.** Write each completed QSO to an ADIF file on-device; show a log view in the FT8 screen. Upload to LOTW, QRZ, eQSL, or POTA.app via the web UI.
 - **v1.0.0 - Standalone FT8 station.** All of the above polished + multi-day stability + cleaner UI.
 
 Alongside the FT8 path:
