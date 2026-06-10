@@ -4,18 +4,33 @@
 #include <stddef.h>
 #include "ft8_tx.h"
 
-// v0.13.0: FT8 QSO state machine — auto search-and-pounce.
+// v0.13.0: FT8 QSO state machine — auto search-and-pounce + CQ-run.
 //
 // Driven from two call sites:
-//   ft8_qso_start()   – LVGL task (core 0): arm TX1, enter WAIT_RPT
-//   ft8_qso_advance() – ft8_task  (core 1): scan decodes, arm TX2/TX3, timeout
+//   ft8_qso_start()       – LVGL task (core 0): arm TX1, enter WAIT_RPT (pounce)
+//   ft8_qso_start_cq()    – LVGL task (core 0): arm CQ, enter CQ (run)
+//   ft8_qso_advance()     – ft8_decode_task (core 1): after each RX slot, scan
+//                           decodes, decide the next message, time out / retry
+//   ft8_qso_on_tx_complete() – ft8_task (core 1): right after a burst ends,
+//                           re-arm the current outgoing message for the next
+//                           matching slot (CQ loop cadence + exchange retries)
+//
+// Two roles share one machine:
+//   POUNCE  (we answered their CQ): TX1 grid → WAIT_RPT → R-rpt → WAIT_RR73 → 73
+//   CQ-RUN  (they answered our CQ): CQ → answer → report → WAIT_ROGER → RR73
+//
+// The "current outgoing message" is re-armed every TX slot until the expected
+// reply is heard (progress) or QSO_TIMEOUT_SLOTS consecutive RX slots pass with
+// none (timeout). This is what keeps us patiently re-sending instead of going
+// silent after one transmission.
 
 typedef enum {
     FT8_QSO_IDLE = 0,
     FT8_QSO_CQ,          // CQ loop: re-arm CQ every TX slot until answered or cancelled
-    FT8_QSO_WAIT_RPT,    // TX1 armed/fired; listening for their signal report
-    FT8_QSO_WAIT_RR73,   // TX2 armed/fired; listening for RR73/73
-    FT8_QSO_WAIT_DONE,   // TX3 (73) armed/fired; wrapping up
+    FT8_QSO_WAIT_RPT,    // POUNCE: TX1 (grid) sent; listening for their signal report
+    FT8_QSO_WAIT_ROGER,  // CQ-RUN: our report sent; listening for their R<report>
+    FT8_QSO_WAIT_RR73,   // POUNCE: R<report> sent; listening for RR73/73
+    FT8_QSO_WAIT_DONE,   // final (73 or RR73) sent; wrapping up
     FT8_QSO_DONE,        // QSO complete  (shown for one slot, then auto-IDLE)
     FT8_QSO_TIMEOUT,     // no response within timeout  (sticky until next start)
 } ft8_qso_state_t;
@@ -23,27 +38,28 @@ typedef enum {
 void ft8_qso_init(void);
 
 // Start a continuous CQ loop: arm the CQ request immediately and re-arm it
-// after every TX slot that receives no reply. Stops when a station answers
-// (transitions into the normal WAIT_RR73/WAIT_DONE exchange), or when the
-// operator cancels via ft8_qso_abort().
+// after every TX slot. When a station answers, automatically send them a
+// signal report and run the exchange to completion. If the worked station
+// stops responding the machine returns to calling CQ (it does not give up
+// the frequency). Stops only when the operator cancels via ft8_qso_abort().
 bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len);
 
-// Arm TX1 and enter the QSO machine.
+// Arm TX1 and enter the QSO machine (pounce — we are answering their CQ).
 // tx1_req: the pre-built, pre-encoded TX1 request produced by ft8_tx_build_request().
 //   target_call and audio_freq_hz are read from it for the rest of the exchange.
-//   Passes it to ft8_tx_arm() — includes the Digi-mode pre-flight.
 // Returns false + err string if the arm is refused.
 bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len);
 
-// Called from ft8_task after each successful RX slot.
+// Called from the decode task after each successful RX slot.
 // slot_sec: UTC second the RX slot started (used to match decoded messages
 // to this slot and not stale ones from previous slots).
 void ft8_qso_advance(int64_t slot_sec);
 
-// Called by ft8_task immediately after ft8_tx_run() returns.
-// When in CQ loop mode, re-arms the CQ for the next matching slot so the
-// re-arm happens at T+12.7 s (TX end), not at T+19 s (after decode), which
-// would be too late for the capture task's slot-boundary check.
+// Called by ft8_task immediately after ft8_tx_run() returns. Re-arms the
+// current outgoing message for the next matching slot, so the re-arm happens
+// at T+12.7 s (TX end), not at T+19 s (after decode) which would be too late
+// for the capture task's slot-boundary check. Drives both the CQ loop cadence
+// and the exchange retry cadence.
 void ft8_qso_on_tx_complete(void);
 
 // Abort QSO and disarm any pending TX. No-op when IDLE.
@@ -51,3 +67,8 @@ void ft8_qso_abort(void);
 
 ft8_qso_state_t ft8_qso_get_state(void);
 void            ft8_qso_get_target(char *buf, size_t len);
+
+// True while a CQ-originated session is active (calling CQ or working the
+// station that answered). The decode-list UI uses this to hide other stations'
+// CQ rows so replies to us stand out. Always false for pounce sessions.
+bool ft8_qso_cq_filter_active(void);

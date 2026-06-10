@@ -20,10 +20,10 @@
 // TX slots: ft8_task runs ft8_tx_run() instead of capturing; no job is
 // queued for that slot (the radio is transmitting, not receiving).
 //
-// Parity-skip slots: when a TX is armed but the current slot has the
-// wrong parity, ft8_task skips the capture and returns to
-// wait_for_slot_boundary() so the correct parity slot is reached within
-// one loop iteration (~10 ms).
+// Every other slot is captured — including the parity opposite an armed TX.
+// A capture is exactly one slot long (15 s) and ends on the next boundary, so
+// the armed burst still fires on time, and capturing the opposite slot is the
+// only way to hear the station we're working (they transmit opposite us).
 
 #include "ft8_test.h"
 
@@ -312,17 +312,17 @@ static void ft8_task(void *arg)
         if (ft8_tx_should_run_this_slot(slot_sec, &txreq)) {
             ft8_status_set("TX: %s", txreq.display_text);
             ft8_tx_run(&txreq);   // blocks ~12.7 s; always restores RX before returning
-            ft8_qso_on_tx_complete();  // re-arm CQ immediately if in CQ loop mode
+            ft8_qso_on_tx_complete();  // re-arm the current outgoing message
             ft8_status_set("TX done — waiting for next slot");
             ft8_screen_view_request_refresh();
-        } else if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ARMED
-                   && ft8_qso_get_state() != FT8_QSO_CQ) {
-            // Wrong parity — skip the blocking capture so the loop reaches
-            // the correct parity boundary within one ~10 ms iteration.
-            // CQ loop is exempt: the opposite-parity slot must be captured
-            // to hear replies, even though the next CQ is already armed.
-            ft8_status_set("TX: waiting for matching slot...");
         } else {
+            // RX this slot. We capture every non-TX slot, including the
+            // parity opposite an armed TX: with ping-pong decode a capture is
+            // exactly one slot long (15 s) and ends right on the next
+            // boundary, so the armed burst still fires on time — and capturing
+            // the opposite slot is the only way to hear the station we're
+            // working (they transmit on the slot opposite ours). Skipping it
+            // would make CQ-replies and QSO responses invisible.
             float *buf = audio[buf_idx];
             buf_idx ^= 1;   // alternate buffers: 0→1→0→1...
 

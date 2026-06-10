@@ -1,20 +1,29 @@
-// v0.13.0: FT8 QSO state machine — auto search-and-pounce.
+// v0.13.0: FT8 QSO state machine — auto search-and-pounce + CQ-run.
 //
-// Message exchange we drive:
-//   TX1  <their_call> <my_call> <my_grid>        (reply to their CQ)
-//   RX2  <my_call>   <their_call> <report>        (their signal report to us)
-//   TX2  <their_call> <my_call> R<report>         (roger their report)
-//   RX3  <my_call>   <their_call> RR73|73         (they're done)
-//   TX3  <their_call> <my_call> 73                (sign off)
+// Two roles, one machine. The third field of a standard FT8 message decides
+// the flow:
 //
-// Short-circuit: if they send RR73 in RX2 (skipping the plain report), jump
-// straight to TX3.
+//   POUNCE (we answered their CQ)               CQ-RUN (they answered our CQ)
+//   ------------------------------------        --------------------------------
+//   TX1 <them> <me> <my_grid>                   CQ  CQ <me> <my_grid>
+//   RX  <me> <them> <report>                    RX  <me> <them> <their_grid|rpt>
+//   TX2 <them> <me> R<report>                   TX  <them> <me> <report>
+//   RX  <me> <them> RR73|73                     RX  <me> <them> R<report>
+//   TX3 <them> <me> 73                          TX  <them> <me> RR73
 //
-// Timeout: QSO_TIMEOUT_SLOTS consecutive missed RX slots → abort.
+// Patience: the "current outgoing message" (s_cur_req) is re-armed every TX
+// slot — by ft8_qso_on_tx_complete() right after each burst — until either the
+// expected reply is heard (progress: swap s_cur_req, reset the miss counter) or
+// QSO_TIMEOUT_SLOTS consecutive RX slots pass with no progress. So we keep
+// pushing the same call for several cycles rather than going silent after one
+// transmission. On timeout a CQ-originated QSO falls back to calling CQ again;
+// a pounce QSO goes to TIMEOUT (sticky).
 //
-// ft8_qso_start() takes a pre-built ft8_tx_request_t (already encoded by
-// ft8_tx_build_request) so we never re-encode TX1 — the modal already has
-// the validated, tone-encoded message.
+// Arming is deferred: ft8_qso_advance() runs in the decode task ~4 s into the
+// *next* slot, which is usually while our re-armed burst is already ACTIVE on
+// air — so advance() only updates state + s_cur_req, and on_tx_complete() (or
+// the idle fallback) does the actual ft8_tx_arm(). This avoids the
+// "arm refused, burst already in progress" race that previously left CQ stuck.
 
 #include "ft8_qso.h"
 #include "ft8_tx.h"
@@ -24,6 +33,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <time.h>
 
 #include "esp_log.h"
@@ -32,16 +42,27 @@
 
 static const char *TAG = "ft8_qso";
 
-#define QSO_TIMEOUT_SLOTS  2
+// How many consecutive RX slots with no expected reply before we give up on
+// the station we're working. ~4 cycles of patience (the user can wander off
+// and come back, fading, QRM, etc.).
+#define QSO_TIMEOUT_SLOTS  4
+
+// Clamp the (coarse, proxy) SNR we report to a sane FT8 range.
+#define RPT_MIN_DB  (-24)
+#define RPT_MAX_DB  (+15)
 
 static SemaphoreHandle_t  s_lock;
 static ft8_qso_state_t    s_state          = FT8_QSO_IDLE;
 static char               s_target[FT8_CALL_MAX_LEN];   // their callsign
 static char               s_my_call[FT8_CALL_MAX_LEN];  // our callsign (uppercased)
-static int                s_freq_hz;
-static int64_t            s_tx1_min_scan_utc; // don't scan before this (TX1 not fired yet)
+static int                s_freq_hz;                    // partner AF tone for our replies
+static int64_t            s_min_scan_utc;               // pounce: don't scan before TX1 fires
 static int                s_missed_slots;
-static ft8_tx_request_t   s_cq_req;                     // saved for CQ loop re-arm
+static bool               s_from_cq;                    // session started as CQ-run
+static ft8_tx_request_t   s_cur_req;                    // message we're currently sending
+static bool               s_have_cur;                   // s_cur_req valid
+static ft8_tx_request_t   s_cq_saved;                   // original CQ, to resume after a dropped QSO
+static bool               s_have_cq_saved;
 
 // ---------------------------------------------------------------------------
 
@@ -49,12 +70,55 @@ static inline bool slot_is_even(int64_t sec) { return ((sec / 15) % 2) == 0; }
 static inline void lock(void)   { xSemaphoreTake(s_lock, portMAX_DELAY); }
 static inline void unlock(void) { xSemaphoreGive(s_lock); }
 
+// Cache + uppercase the operator callsign for message scanning. Returns false
+// (with err) if no callsign is configured.
+static bool load_my_call(char *err, size_t err_len)
+{
+    qmx_settings_t s;
+    settings_load_all(&s);
+    if (!s.my_callsign[0]) {
+        if (err) snprintf(err, err_len, "Set your callsign first (Settings)");
+        return false;
+    }
+    size_t ci;
+    for (ci = 0; ci < sizeof(s_my_call) - 1 && s.my_callsign[ci]; ci++) {
+        char c = s.my_callsign[ci];
+        s_my_call[ci] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
+    }
+    s_my_call[ci] = '\0';
+    return true;
+}
+
+// "R-08" / "R+02" / "RRR" — they rogered our report (vs. repeating their grid,
+// which can also begin with 'R' for far-east locators like RE78).
+static bool is_roger_token(const char *t)
+{
+    if (t[0] != 'R') return false;
+    char c = t[1];
+    return c == '-' || c == '+' || c == 'R' || (c >= '0' && c <= '9');
+}
+
+// Format a coarse SNR into an FT8 report token: "-07", "+02", "-15".
+static void fmt_report(int snr_db, char *out, size_t len)
+{
+    if (snr_db < RPT_MIN_DB) snr_db = RPT_MIN_DB;
+    if (snr_db > RPT_MAX_DB) snr_db = RPT_MAX_DB;
+    snprintf(out, len, "%+03d", snr_db);
+}
+
+// Build "R<report>" for TX2. Their report is e.g. "-10"; pass through if it
+// already starts with 'R'.
+static void make_roger(const char *their_report, char *out, size_t len)
+{
+    if (their_report[0] == 'R') snprintf(out, len, "%s", their_report);
+    else                        snprintf(out, len, "R%s", their_report);
+}
+
 // Scan the ft8_screen table for a message FROM s_target TO s_my_call decoded
 // in slot_sec. Fills one of report_buf / *got_rr73 / *got_73.
-// Returns true if a matching message was found.
 static bool scan_for_response(int64_t slot_sec,
-                               char *report_buf, size_t report_cap,
-                               bool *got_rr73, bool *got_73)
+                              char *report_buf, size_t report_cap,
+                              bool *got_rr73, bool *got_73)
 {
     ft8_call_t snap[FT8_CALL_TABLE_SIZE];
     int n = 0;
@@ -64,7 +128,6 @@ static bool scan_for_response(int64_t slot_sec,
         if (strcmp(snap[i].call, s_target) != 0) continue;
         if (snap[i].last_utc != slot_sec) continue;
 
-        // Message format: "<call_to> <call_de> <extra>"
         char tok1[16], tok2[16], tok3[16];
         tok3[0] = '\0';
         if (sscanf(snap[i].last_text, "%15s %15s %15s", tok1, tok2, tok3) < 2) continue;
@@ -82,16 +145,15 @@ static bool scan_for_response(int64_t slot_sec,
     return false;
 }
 
-// Scan the ft8_screen table for any message addressed TO s_my_call decoded
-// in slot_sec — i.e. a reply to our CQ. Picks the entry with the best SNR
-// when multiple stations reply in the same slot.
-// Fills caller_buf, *caller_freq_out, and one of report_buf / *got_rr73 / *got_73.
-// Returns true if a usable reply was found.
+// Scan for any message addressed TO s_my_call in slot_sec — a reply to our CQ.
+// Picks the best-SNR caller when several answer at once. Fills caller / freq /
+// snr and one of report_buf / *got_rr73 / *got_73.
 static bool scan_for_reply_to_me(int64_t slot_sec,
-                                  char *caller_buf, size_t caller_cap,
-                                  int  *caller_freq_out,
-                                  char *report_buf,  size_t report_cap,
-                                  bool *got_rr73, bool *got_73)
+                                 char *caller_buf, size_t caller_cap,
+                                 int  *caller_freq_out,
+                                 int  *caller_snr_out,
+                                 char *report_buf,  size_t report_cap,
+                                 bool *got_rr73, bool *got_73)
 {
     ft8_call_t snap[FT8_CALL_TABLE_SIZE];
     int n = 0;
@@ -107,7 +169,7 @@ static bool scan_for_reply_to_me(int64_t slot_sec,
         if (sscanf(snap[i].last_text, "%15s %15s %15s", tok1, tok2, tok3) < 2) continue;
         if (strcmp(tok1, s_my_call) != 0) continue;  // not addressed to us
         if (strcmp(tok2, s_my_call) == 0) continue;  // avoid MYCALL MYCALL loops
-        if (!tok3[0]) continue;                       // no third token — not a valid reply
+        if (!tok3[0]) continue;                       // no third token
         if (snap[i].last_snr_db > best_snr) {
             best_snr = snap[i].last_snr_db;
             best_idx = i;
@@ -122,6 +184,7 @@ static bool scan_for_reply_to_me(int64_t slot_sec,
     strncpy(caller_buf, tok2, caller_cap - 1);
     caller_buf[caller_cap - 1] = '\0';
     if (caller_freq_out) *caller_freq_out = snap[best_idx].last_freq;
+    if (caller_snr_out)  *caller_snr_out  = snap[best_idx].last_snr_db;
     if (strcmp(tok3, "RR73") == 0) { *got_rr73 = true; return true; }
     if (strcmp(tok3, "73")   == 0) { *got_73   = true; return true; }
     strncpy(report_buf, tok3, report_cap - 1);
@@ -129,14 +192,110 @@ static bool scan_for_reply_to_me(int64_t slot_sec,
     return true;
 }
 
-// Build "R<report>" for TX2. Their report is e.g. "-10".
-// If it already starts with 'R' (e.g. "RRR"), pass it through.
-static void make_roger(const char *their_report, char *out, size_t len)
+// ---------------------------------------------------------------------------
+// Outgoing-message bookkeeping
+// ---------------------------------------------------------------------------
+
+// Make req the current outgoing message and move to st. Resets the miss
+// counter (this is only ever called on progress / start). Arming itself is
+// deferred to on_tx_complete() / the idle fallback.
+static void set_current(const ft8_tx_request_t *req, ft8_qso_state_t st)
 {
-    if (their_report[0] == 'R') {
-        snprintf(out, len, "%s", their_report);
+    lock();
+    if (req) { s_cur_req = *req; s_have_cur = true; }
+    s_state        = st;
+    s_missed_slots = 0;
+    unlock();
+}
+
+// Arm the current outgoing message for its next matching slot.
+//   - Repeating states (CQ / WAIT_RPT / WAIT_ROGER / WAIT_RR73): armed every TX
+//     cycle, so we keep calling / keep pushing the same message.
+//   - WAIT_DONE: the final 73/RR73 is armed exactly once (s_have_cur is then
+//     cleared) so we don't keep keying up after signing off.
+// Called from on_tx_complete() (every burst end) and, as a safety net, from
+// arm_current_if_idle() right after a state change.
+static void rearm_current(void)
+{
+    lock();
+    ft8_qso_state_t st = s_state;
+    bool have = s_have_cur;
+    ft8_tx_request_t req = s_cur_req;
+    bool one_shot  = (st == FT8_QSO_WAIT_DONE);
+    bool repeating = (st == FT8_QSO_CQ || st == FT8_QSO_WAIT_RPT ||
+                      st == FT8_QSO_WAIT_ROGER || st == FT8_QSO_WAIT_RR73);
+    if (have && one_shot) s_have_cur = false;   // final is sent once
+    unlock();
+
+    if (!have || (!one_shot && !repeating)) return;
+    char e[64];
+    if (!ft8_tx_arm(&req, e, sizeof(e)))
+        ESP_LOGW(TAG, "rearm_current failed: %s", e);
+}
+
+// Arm the current message now, but only if the TX engine is idle. Most of the
+// time advance() runs while our re-armed burst is ACTIVE (so this no-ops and
+// on_tx_complete() does the real arming); this just covers the gap when a
+// state change lands while the engine happens to be idle.
+static void arm_current_if_idle(void)
+{
+    if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_IDLE) rearm_current();
+}
+
+// Build the next exchange message (<target> <me> <extra>) and adopt it as the
+// current outgoing message, moving to state st. Parity is derived from slot_sec
+// (we transmit on the slot opposite the one we heard them in). Returns false
+// and leaves state unchanged if encoding fails.
+static bool send_next(ft8_tx_kind_t kind, const char *target, int freq,
+                      int64_t slot_sec, const char *extra, ft8_qso_state_t st)
+{
+    ft8_tx_request_t req;
+    char err[64];
+    if (!ft8_tx_build_request(kind, target, freq, slot_sec, extra,
+                              &req, err, sizeof(err))) {
+        ESP_LOGE(TAG, "send_next build failed (extra='%s'): %s", extra, err);
+        return false;
+    }
+    set_current(&req, st);
+    return true;
+}
+
+// No progress this RX slot. Count it; on the Nth, give up on this station —
+// resume CQ if we were running CQ, else go to sticky TIMEOUT.
+static void register_miss(const char *waiting_for)
+{
+    lock();
+    s_missed_slots++;
+    int  m       = s_missed_slots;
+    bool from_cq = s_from_cq;
+    char tgt[FT8_CALL_MAX_LEN];
+    strncpy(tgt, s_target, sizeof(tgt));
+    tgt[sizeof(tgt) - 1] = '\0';
+    unlock();
+
+    if (m < QSO_TIMEOUT_SLOTS) {
+        ft8_status_set("QSO %s: %s (%d/%d)...", tgt, waiting_for, m, QSO_TIMEOUT_SLOTS);
+        return;
+    }
+
+    if (from_cq && s_have_cq_saved) {
+        // Drop the half-finished QSO and go back to calling CQ on the frequency.
+        lock();
+        s_cur_req      = s_cq_saved;
+        s_have_cur     = true;
+        s_state        = FT8_QSO_CQ;
+        s_target[0]    = '\0';
+        s_missed_slots = 0;
+        unlock();
+        ft8_tx_disarm();
+        arm_current_if_idle();
+        ft8_status_set("QSO %s lost — back to CQ", tgt);
+        ESP_LOGI(TAG, "QSO %s timed out — resuming CQ", tgt);
     } else {
-        snprintf(out, len, "R%s", their_report);
+        lock(); s_state = FT8_QSO_TIMEOUT; unlock();
+        ft8_tx_disarm();
+        ft8_status_set("QSO %s: no response — timeout", tgt);
+        ESP_LOGW(TAG, "QSO %s timed out", tgt);
     }
 }
 
@@ -145,8 +304,11 @@ static void make_roger(const char *their_report, char *out, size_t len)
 void ft8_qso_init(void)
 {
     if (!s_lock) s_lock = xSemaphoreCreateMutex();
-    s_state     = FT8_QSO_IDLE;
-    s_target[0] = '\0';
+    s_state         = FT8_QSO_IDLE;
+    s_target[0]     = '\0';
+    s_have_cur      = false;
+    s_have_cq_saved = false;
+    s_from_cq       = false;
 }
 
 bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
@@ -155,22 +317,8 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
         if (err) snprintf(err, err_len, "No target callsign");
         return false;
     }
+    if (!load_my_call(err, err_len)) return false;
 
-    // Cache + uppercase our callsign for message scanning
-    qmx_settings_t s;
-    settings_load_all(&s);
-    if (!s.my_callsign[0]) {
-        if (err) snprintf(err, err_len, "Set your callsign first (Settings)");
-        return false;
-    }
-    size_t ci;
-    for (ci = 0; ci < sizeof(s_my_call) - 1 && s.my_callsign[ci]; ci++) {
-        char c = s.my_callsign[ci];
-        s_my_call[ci] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
-    }
-    s_my_call[ci] = '\0';
-
-    // Arm TX1 — includes Digi-mode pre-flight (~0-1 s)
     char arm_err[64];
     if (!ft8_tx_arm(tx1_req, arm_err, sizeof(arm_err))) {
         if (err) snprintf(err, err_len, "%s", arm_err);
@@ -185,18 +333,21 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     }
 
     lock();
-    s_state            = FT8_QSO_WAIT_RPT;
+    s_state         = FT8_QSO_WAIT_RPT;
     strncpy(s_target, tx1_req->target_call, sizeof(s_target) - 1);
     s_target[sizeof(s_target) - 1] = '\0';
-    s_freq_hz          = tx1_req->audio_freq_hz;
-    s_tx1_min_scan_utc = tx1_slot + 15;
-    s_missed_slots     = 0;
+    s_freq_hz       = tx1_req->audio_freq_hz;
+    s_min_scan_utc  = tx1_slot + 15;
+    s_missed_slots  = 0;
+    s_from_cq       = false;
+    s_cur_req       = *tx1_req;   // re-send TX1 each cycle until they reply
+    s_have_cur      = true;
+    s_have_cq_saved = false;
     unlock();
 
     ft8_status_set("QSO %s: TX1 sent — waiting for report", tx1_req->target_call);
-    ESP_LOGI(TAG, "started QSO: %s @ %d Hz, min_scan=%lld",
-             tx1_req->target_call, tx1_req->audio_freq_hz,
-             (long long)(tx1_slot + 15));
+    ESP_LOGI(TAG, "started QSO (pounce): %s @ %d Hz, min_scan=%lld",
+             tx1_req->target_call, tx1_req->audio_freq_hz, (long long)(tx1_slot + 15));
     return true;
 }
 
@@ -206,19 +357,7 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
         if (err) snprintf(err, err_len, "No CQ request");
         return false;
     }
-
-    qmx_settings_t s;
-    settings_load_all(&s);
-    if (!s.my_callsign[0]) {
-        if (err) snprintf(err, err_len, "Set your callsign first (Settings)");
-        return false;
-    }
-    size_t ci;
-    for (ci = 0; ci < sizeof(s_my_call) - 1 && s.my_callsign[ci]; ci++) {
-        char c = s.my_callsign[ci];
-        s_my_call[ci] = (c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
-    }
-    s_my_call[ci] = '\0';
+    if (!load_my_call(err, err_len)) return false;
 
     // CQ must alternate TX/RX every 30 s. If no parity preference was set,
     // lock to the parity of the first TX slot so re-arms always target the
@@ -238,228 +377,190 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
     }
 
     lock();
-    s_state        = FT8_QSO_CQ;
-    s_target[0]    = '\0';
-    s_freq_hz      = req_copy.audio_freq_hz;
-    s_cq_req       = req_copy;
-    s_missed_slots = 0;
+    s_state         = FT8_QSO_CQ;
+    s_target[0]     = '\0';
+    s_freq_hz       = req_copy.audio_freq_hz;
+    s_cur_req       = req_copy;
+    s_have_cur      = true;
+    s_cq_saved      = req_copy;
+    s_have_cq_saved = true;
+    s_from_cq       = true;
+    s_missed_slots  = 0;
     unlock();
 
-    ft8_status_set("CQ: armed — looping until answered");
+    ft8_status_set("CQ: calling — listening for answers");
     ESP_LOGI(TAG, "CQ loop started @ %d Hz", cq_req->audio_freq_hz);
     return true;
+}
+
+// Build + adopt our reply to a station that answered our CQ (CQ-run). They
+// sent their grid (or a report); we answer with a signal report and wait for
+// their roger. If they jumped straight to RR73/73, we just send 73.
+static void cqrun_answer(const char *caller, int caller_freq, int caller_snr,
+                         int64_t slot_sec, bool got_rr73, bool got_73)
+{
+    lock();
+    strncpy(s_target, caller, sizeof(s_target) - 1);
+    s_target[sizeof(s_target) - 1] = '\0';
+    s_freq_hz = caller_freq;
+    unlock();
+
+    bool ok;
+    if (got_rr73 || got_73) {
+        ok = send_next(FT8_TX_KIND_73, caller, caller_freq, slot_sec, "73",
+                       FT8_QSO_WAIT_DONE);
+        if (ok) ft8_status_set("QSO %s: sending 73", caller);
+    } else {
+        char rpt[8];
+        fmt_report(caller_snr, rpt, sizeof(rpt));
+        ok = send_next(FT8_TX_KIND_REPLY, caller, caller_freq, slot_sec, rpt,
+                       FT8_QSO_WAIT_ROGER);
+        if (ok) ft8_status_set("QSO %s: answered — sending report %s", caller, rpt);
+    }
+
+    if (!ok) {
+        // Couldn't build a valid reply — abandon this answer, keep calling CQ.
+        lock();
+        s_cur_req      = s_cq_saved;
+        s_state        = FT8_QSO_CQ;
+        s_target[0]    = '\0';
+        s_missed_slots = 0;
+        unlock();
+    }
+    arm_current_if_idle();
 }
 
 void ft8_qso_advance(int64_t slot_sec)
 {
     lock();
     ft8_qso_state_t st = s_state;
-    char   target[FT8_CALL_MAX_LEN];
-    int    freq    = s_freq_hz;
-    int64_t min_scan = s_tx1_min_scan_utc;
+    char    target[FT8_CALL_MAX_LEN];
+    int     freq     = s_freq_hz;
+    int64_t min_scan = s_min_scan_utc;
     strncpy(target, s_target, sizeof(target));
+    target[sizeof(target) - 1] = '\0';
     unlock();
 
     if (st == FT8_QSO_IDLE || st == FT8_QSO_TIMEOUT) return;
 
     if (st == FT8_QSO_DONE) {
-        // Shown for one slot, then auto-return to idle
-        lock(); s_state = FT8_QSO_IDLE; unlock();
+        lock(); s_state = FT8_QSO_IDLE; s_have_cur = false; unlock();
         ft8_status_set("Idle");
         return;
     }
 
     if (st == FT8_QSO_WAIT_DONE) {
-        // TX3 is armed; wait for it to fire (ft8_tx goes IDLE)
-        char dummy[4]; int dummy_secs;
-        ft8_tx_state_t tx_st = ft8_tx_get_status(dummy, sizeof(dummy), &dummy_secs);
-        if (tx_st == FT8_TX_IDLE) {
-            lock(); s_state = FT8_QSO_DONE; unlock();
+        // Final (73/RR73) armed or fired; once it leaves the air we're done.
+        if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_IDLE) {
+            lock(); s_state = FT8_QSO_DONE; s_have_cur = false; unlock();
             ft8_status_set("QSO %s: complete!", target);
             ESP_LOGI(TAG, "QSO with %s complete", target);
         }
         return;
     }
 
-    // CQ loop — scan for replies every RX slot; stop when someone replies.
-    // Re-arming is done by ft8_qso_on_tx_complete (called from ft8_task
-    // right after TX ends), so by the time we get here the next CQ is
-    // typically already ARMED.  We still handle the IDLE fallback in case
-    // on_tx_complete failed, and we always scan so a reply can cancel the
-    // pending CQ before it fires.
+    // ---- CQ: listen for anyone answering us --------------------------------
     if (st == FT8_QSO_CQ) {
         char caller[FT8_CALL_MAX_LEN] = {0};
         int  caller_freq = freq;
+        int  caller_snr  = 0;
         char report[8]   = {0};
-        bool got_rr73    = false;
-        bool got_73      = false;
-        bool found = scan_for_reply_to_me(slot_sec,
-                                          caller, sizeof(caller), &caller_freq,
-                                          report, sizeof(report),
-                                          &got_rr73, &got_73);
-        if (!found) {
-            // No reply — if the re-arm from on_tx_complete somehow didn't
-            // happen, fall back to re-arming here.
-            if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_IDLE) {
-                ft8_tx_request_t cq_copy;
-                lock(); cq_copy = s_cq_req; unlock();
-                char arm_err[64];
-                if (!ft8_tx_arm(&cq_copy, arm_err, sizeof(arm_err))) {
-                    ESP_LOGW(TAG, "CQ fallback re-arm failed: %s", arm_err);
-                    ft8_status_set("CQ: re-arm error");
-                }
-            }
-            return;
-        }
-
-        // Someone replied — cancel the pending CQ and start the exchange
-        ESP_LOGI(TAG, "CQ: reply from %s @ %d Hz, report='%s' rr73=%d 73=%d",
-                 caller, caller_freq, report, got_rr73, got_73);
-        ft8_tx_disarm();  // cancel the re-armed CQ (no-op if already ACTIVE)
-        lock();
-        strncpy(s_target, caller, sizeof(s_target) - 1);
-        s_target[sizeof(s_target) - 1] = '\0';
-        s_freq_hz = caller_freq;
-        unlock();
-
-        ft8_tx_request_t req;
-        char arm_err[64];
-        bool armed;
-        ft8_qso_state_t next_state;
-
-        if (got_rr73 || got_73) {
-            armed = ft8_tx_build_request(FT8_TX_KIND_73, caller, caller_freq,
-                                         slot_sec, "73", &req, arm_err, sizeof(arm_err))
-                 && ft8_tx_arm(&req, arm_err, sizeof(arm_err));
-            next_state = FT8_QSO_WAIT_DONE;
-            if (armed) ft8_status_set("QSO %s: sending 73", caller);
+        bool got_rr73 = false, got_73 = false;
+        if (scan_for_reply_to_me(slot_sec, caller, sizeof(caller),
+                                 &caller_freq, &caller_snr,
+                                 report, sizeof(report), &got_rr73, &got_73)) {
+            ESP_LOGI(TAG, "CQ: %s answered @ %d Hz snr=%d (rr73=%d 73=%d)",
+                     caller, caller_freq, caller_snr, got_rr73, got_73);
+            ft8_tx_disarm();   // cancel the re-armed CQ (no-op if already ACTIVE)
+            cqrun_answer(caller, caller_freq, caller_snr, slot_sec, got_rr73, got_73);
         } else {
-            char roger[8];
-            make_roger(report, roger, sizeof(roger));
-            armed = ft8_tx_build_request(FT8_TX_KIND_ROGER_RPT, caller, caller_freq,
-                                         slot_sec, roger, &req, arm_err, sizeof(arm_err))
-                 && ft8_tx_arm(&req, arm_err, sizeof(arm_err));
-            next_state = FT8_QSO_WAIT_RR73;
-            if (armed) ft8_status_set("QSO %s: heard %s — sending %s",
-                                      caller, report, roger);
-        }
-
-        if (armed) {
-            lock(); s_state = next_state; s_missed_slots = 0; unlock();
-        } else {
-            ESP_LOGE(TAG, "CQ: failed to arm response to %s: %s", caller, arm_err);
-            // Re-arm CQ and try again next round
-            ft8_tx_request_t cq_copy;
-            lock(); cq_copy = s_cq_req; unlock();
-            ft8_tx_arm(&cq_copy, arm_err, sizeof(arm_err));
-            ft8_status_set("CQ: TX error — retrying");
+            // No answer — on_tx_complete keeps the CQ armed; idle fallback only.
+            arm_current_if_idle();
         }
         return;
     }
 
-    // WAIT_RPT / WAIT_RR73 — TX1 must have fired before we start scanning
-    if (slot_sec < min_scan) return;
+    // ---- Exchange states: hear the partner on the opposite-parity slot -----
+    // (pounce hasn't fired TX1 yet → nothing to hear; don't scan early)
+    if (st == FT8_QSO_WAIT_RPT && slot_sec < min_scan) return;
 
-    char report[8]  = {0};
-    bool got_rr73   = false;
-    bool got_73     = false;
+    char report[8] = {0};
+    bool got_rr73 = false, got_73 = false;
     bool found = scan_for_response(slot_sec, report, sizeof(report), &got_rr73, &got_73);
 
     if (st == FT8_QSO_WAIT_RPT) {
-        if (!found) {
-            lock(); s_missed_slots++; int m = s_missed_slots; unlock();
-            ESP_LOGW(TAG, "WAIT_RPT: no response from %s (%d/%d)",
-                     target, m, QSO_TIMEOUT_SLOTS);
-            if (m >= QSO_TIMEOUT_SLOTS) {
-                lock(); s_state = FT8_QSO_TIMEOUT; unlock();
-                ft8_tx_disarm();
-                ft8_status_set("QSO %s: no response — timeout", target);
-            } else {
-                ft8_status_set("QSO %s: waiting for report (%d/%d)...",
-                               target, m, QSO_TIMEOUT_SLOTS);
-            }
-            return;
-        }
+        // POUNCE: we sent our grid; expect their signal report.
+        if (!found) { register_miss("waiting for report"); return; }
 
-        ft8_tx_request_t req;
-        char arm_err[64];
-        bool armed;
-        ft8_qso_state_t next_state;
-
+        bool ok;
         if (got_rr73 || got_73) {
-            // Skipped straight to sign-off — send 73
             ESP_LOGI(TAG, "WAIT_RPT: %s sent RR73/73 directly", target);
-            armed = ft8_tx_build_request(FT8_TX_KIND_73, target, freq,
-                                         slot_sec, "73", &req, arm_err, sizeof(arm_err))
-                 && ft8_tx_arm(&req, arm_err, sizeof(arm_err));
-            next_state = FT8_QSO_WAIT_DONE;
-            if (armed) ft8_status_set("QSO %s: sending 73", target);
+            ok = send_next(FT8_TX_KIND_73, target, freq, slot_sec, "73",
+                           FT8_QSO_WAIT_DONE);
+            if (ok) ft8_status_set("QSO %s: sending 73", target);
         } else {
             char roger[8];
             make_roger(report, roger, sizeof(roger));
-            ESP_LOGI(TAG, "WAIT_RPT: %s reported %s → TX2 %s", target, report, roger);
-            armed = ft8_tx_build_request(FT8_TX_KIND_ROGER_RPT, target, freq,
-                                         slot_sec, roger, &req, arm_err, sizeof(arm_err))
-                 && ft8_tx_arm(&req, arm_err, sizeof(arm_err));
-            next_state = FT8_QSO_WAIT_RR73;
-            if (armed) ft8_status_set("QSO %s: heard %s — sending %s",
-                                      target, report, roger);
+            ESP_LOGI(TAG, "WAIT_RPT: %s reported %s -> TX2 %s", target, report, roger);
+            ok = send_next(FT8_TX_KIND_ROGER_RPT, target, freq, slot_sec, roger,
+                           FT8_QSO_WAIT_RR73);
+            if (ok) ft8_status_set("QSO %s: heard %s — sending %s", target, report, roger);
         }
-
-        if (armed) {
-            lock(); s_state = next_state; s_missed_slots = 0; unlock();
-        } else {
-            ESP_LOGE(TAG, "failed to arm next TX: %s", arm_err);
+        if (!ok) {
             lock(); s_state = FT8_QSO_TIMEOUT; unlock();
-            ft8_status_set("QSO %s: TX error — %s", target, arm_err);
+            ft8_status_set("QSO %s: TX error", target);
         }
+        arm_current_if_idle();
+        return;
+    }
 
-    } else if (st == FT8_QSO_WAIT_RR73) {
-        if (!found || (!got_rr73 && !got_73)) {
-            lock(); s_missed_slots++; int m = s_missed_slots; unlock();
-            ESP_LOGW(TAG, "WAIT_RR73: no RR73 from %s (%d/%d)",
-                     target, m, QSO_TIMEOUT_SLOTS);
-            if (m >= QSO_TIMEOUT_SLOTS) {
-                lock(); s_state = FT8_QSO_TIMEOUT; unlock();
-                ft8_tx_disarm();
-                ft8_status_set("QSO %s: no RR73 — timeout", target);
-            } else {
-                ft8_status_set("QSO %s: waiting for RR73 (%d/%d)...",
-                               target, m, QSO_TIMEOUT_SLOTS);
-            }
+    if (st == FT8_QSO_WAIT_ROGER) {
+        // CQ-RUN: we sent a report; expect their R<report> (then we send RR73).
+        if (!found) { register_miss("waiting for roger"); return; }
+
+        if (got_rr73 || got_73) {
+            if (send_next(FT8_TX_KIND_73, target, freq, slot_sec, "73", FT8_QSO_WAIT_DONE))
+                ft8_status_set("QSO %s: sending 73", target);
+            arm_current_if_idle();
             return;
         }
-
-        ESP_LOGI(TAG, "WAIT_RR73: %s sent RR73/73 — arming TX3", target);
-        ft8_tx_request_t req;
-        char arm_err[64];
-        bool armed = ft8_tx_build_request(FT8_TX_KIND_73, target, freq,
-                                          slot_sec, "73", &req, arm_err, sizeof(arm_err))
-                  && ft8_tx_arm(&req, arm_err, sizeof(arm_err));
-        if (armed) {
-            lock(); s_state = FT8_QSO_WAIT_DONE; s_missed_slots = 0; unlock();
-            ft8_status_set("QSO %s: sending 73...", target);
-        } else {
-            ESP_LOGE(TAG, "failed to arm TX3: %s", arm_err);
-            lock(); s_state = FT8_QSO_TIMEOUT; unlock();
-            ft8_status_set("QSO %s: TX error — %s", target, arm_err);
+        if (is_roger_token(report)) {
+            if (send_next(FT8_TX_KIND_ROGER_RPT, target, freq, slot_sec, "RR73",
+                          FT8_QSO_WAIT_DONE))
+                ft8_status_set("QSO %s: rogered %s — sending RR73", target, report);
+            arm_current_if_idle();
+            return;
         }
+        // They repeated their grid/report (didn't get ours): keep sending our
+        // report, but count it so a dead exchange still times out.
+        register_miss("re-sending report");
+        return;
+    }
+
+    if (st == FT8_QSO_WAIT_RR73) {
+        // POUNCE: we sent R<report>; expect RR73/73 (then we send 73).
+        if (!found || (!got_rr73 && !got_73)) {
+            register_miss("waiting for RR73");
+            return;
+        }
+        ESP_LOGI(TAG, "WAIT_RR73: %s sent RR73/73 — arming TX3", target);
+        if (send_next(FT8_TX_KIND_73, target, freq, slot_sec, "73", FT8_QSO_WAIT_DONE))
+            ft8_status_set("QSO %s: sending 73", target);
+        else {
+            lock(); s_state = FT8_QSO_TIMEOUT; unlock();
+            ft8_status_set("QSO %s: TX error", target);
+        }
+        arm_current_if_idle();
+        return;
     }
 }
 
 void ft8_qso_on_tx_complete(void)
 {
-    lock();
-    ft8_qso_state_t st = s_state;
-    ft8_tx_request_t cq_copy = s_cq_req;
-    unlock();
-    if (st != FT8_QSO_CQ) return;
-    // Re-arm immediately so the next even-or-odd slot check in the capture
-    // task (which runs < 3 s from now) sees ARMED, not IDLE.
-    char arm_err[64];
-    if (!ft8_tx_arm(&cq_copy, arm_err, sizeof(arm_err))) {
-        ESP_LOGW(TAG, "CQ on_tx_complete re-arm failed: %s", arm_err);
-    }
+    // Re-arm whatever we're currently sending for its next matching slot. This
+    // gives the CQ loop its 30 s cadence and keeps exchange messages repeating
+    // until answered; the final 73/RR73 is armed once (see rearm_current).
+    rearm_current();
 }
 
 void ft8_qso_abort(void)
@@ -467,8 +568,12 @@ void ft8_qso_abort(void)
     lock();
     char target[FT8_CALL_MAX_LEN];
     strncpy(target, s_target, sizeof(target));
-    s_state     = FT8_QSO_IDLE;
-    s_target[0] = '\0';
+    target[sizeof(target) - 1] = '\0';
+    s_state         = FT8_QSO_IDLE;
+    s_target[0]     = '\0';
+    s_have_cur      = false;
+    s_have_cq_saved = false;
+    s_from_cq       = false;
     unlock();
     ft8_tx_disarm();
     if (target[0]) ft8_status_set("QSO %s: aborted", target);
@@ -488,4 +593,15 @@ void ft8_qso_get_target(char *buf, size_t len)
     strncpy(buf, s_target, len - 1);
     buf[len - 1] = '\0';
     unlock();
+}
+
+bool ft8_qso_cq_filter_active(void)
+{
+    lock();
+    ft8_qso_state_t st = s_state;
+    bool fc = s_from_cq;
+    unlock();
+    return fc && (st == FT8_QSO_CQ || st == FT8_QSO_WAIT_RPT ||
+                  st == FT8_QSO_WAIT_ROGER || st == FT8_QSO_WAIT_RR73 ||
+                  st == FT8_QSO_WAIT_DONE);
 }

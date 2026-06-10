@@ -570,11 +570,16 @@ static void rebuild_list(void)
     ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
     qsort(snap, n, sizeof(ft8_call_t), cmp_cq_then_snr);
 
-    int shown = n < MAX_ROWS ? n : MAX_ROWS;
-    for (int i = 0; i < shown; i++) {
-        update_row(i, &snap[i]);
+    // While we're running our own CQ, hide other stations' CQ rows so replies
+    // addressed to us aren't buried under unrelated CQ traffic.
+    bool hide_cq = ft8_qso_cq_filter_active();
+
+    int row = 0;
+    for (int i = 0; i < n && row < MAX_ROWS; i++) {
+        if (hide_cq && strncmp(snap[i].last_text, "CQ ", 3) == 0) continue;
+        update_row(row++, &snap[i]);
     }
-    for (int i = shown; i < MAX_ROWS; i++) {
+    for (int i = row; i < MAX_ROWS; i++) {
         hide_row(i);
     }
 
