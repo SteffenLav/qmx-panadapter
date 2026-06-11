@@ -204,8 +204,3 @@ POUNCE (we answered their CQ)          CQ-RUN (they answered our CQ)
 ## Next up (v0.16.0)
 
 ADIF logging: write each completed QSO to an ADIF file on-device; log view in FT8 screen; upload via web UI to LOTW/QRZ/eQSL/POTA.app.
-
-## Longer-term roadmap
-
-- **JS8 mode** — Normal submode alongside FT8. Same physical layer/timing as FT8 (`ft8_lib` already multi-protocol via `ftx_protocol_t`); needs new LDPC(174,87) tables, CRC-12, and `FrameDirected`/`FrameHeartbeat` message pack/unpack. ~5-7 sessions. See `docs/js8-feasibility.md`.
-- **RTTY mode** — 45.45 Bd Baudot/ITA2, motivated by the M5Stack Tab5 Keyboard accessory (I2C, not USB — coexists with the existing UAC+CDC-ACM USB host setup). Shares almost nothing with `ft8_lib`: new continuous dual-tone demod pipeline. RX-only ~3.5-4 sessions; full TX gated on a 22ms `TA<freq>;` CAT-timing bench test (vs FT8's proven 160ms). ~6.5-8.5 sessions total. See `docs/rtty-feasibility.md`.

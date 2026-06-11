@@ -803,6 +803,8 @@ Ideas that fit the project but aren't on the immediate path. Order is rough; app
 - **QMX (small) support.** Same UI, different USB endpoint config and band table. Should be mostly a build-flag matter; the 5-band QMX speaks the same CAT and UAC.
 - **Extended waterfall history.** PSRAM has plenty of room for several minutes of scrollback. Two-finger drag to scrub through history would be a natural UX fit.
 - **Touch-to-tune refinements.** Pinch-to-zoom span (sub-48 kHz windows), drag-to-pan inside the current 48 kHz.
+- **JS8 mode.** A second digital mode alongside FT8 — same physical layer/timing (`ft8_lib` is already multi-protocol), needs new LDPC(174,87) tables, CRC-12, and message pack/unpack for the CQ/exchange frame types. See `docs/js8-feasibility.md`.
+- **RTTY mode.** 45.45 baud Baudot/ITA2, motivated by the new M5Stack Tab5 Keyboard accessory. Shares almost nothing with `ft8_lib` — a new continuous dual-tone demod pipeline; TX reuses the QMX `TA` mechanism but at a much tighter (22 ms) cadence that needs bench-testing first. See `docs/rtty-feasibility.md`.
 
 ### Process
 
