@@ -62,6 +62,21 @@ The panadapter needs two USB connections:
 
 You can run the panadapter standalone once it's flashed — just power the Tab5 from any USB-C source (5V/2A or better) or the internal battery if present. The laptop is only needed for flashing, debugging, or capturing screenshots.
 
+## Taking screenshots
+
+Two ways to grab a pixel-exact snapshot of the 5" display:
+
+- **WiFi (recommended, ~7s)** — with the panadapter connected to your WiFi network, fetch `http://<tab5-ip>/ss.bmp` (IP shown in the bottom status bar, or via `/api/status`). Returns a 1280x720 16bpp BMP of the current screen, e.g.:
+  ```powershell
+  Invoke-WebRequest -Uri "http://192.168.1.213/ss.bmp" -OutFile screenshot.bmp
+  ```
+
+- **USB serial (~90-100s, no WiFi needed)** — long-press the hidden top-left 80x80 corner of the display for 1 second. The framebuffer is RLE-compressed and base64-streamed over the USB-Serial-JTAG console at 921600 baud. Stop `esp_idf_monitor` first (`Ctrl+T`, `Ctrl+X`), then run:
+  ```powershell
+  python tools/screenshot_decode.py COM3
+  ```
+  Saves a PNG to `~/Downloads`.
+
 ## Reporting hardware issues
 
 The M5Stack Tab5 ships in at least two hardware variants that look identical from the outside. This firmware currently supports the **ST7123 panel + ST7123 touch** variant (Tab5 v1.3 ECO2). If the panadapter doesn't work on your unit — display stays blank, frequency stuck at default, web UI shows "disconnected" — please flash the latest release and capture the boot log.
