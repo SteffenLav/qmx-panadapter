@@ -5,6 +5,11 @@
 
 void ui_init(lv_display_t *disp);
 
+// Restore the UI mode (Panadapter/FT8) persisted at the last toggle.
+// Call after ft8_screen_init()/ft8_status_init()/ft8_tx_init()/ft8_qso_init()
+// and audio/cat init have completed.
+void ui_apply_saved_mode(void);
+
 // Phase 4/5 hooks (stubs for now)
 void ui_update_frequency(uint32_t freq_hz);
 void ui_set_memory_label(const char *text);  /* active memory channel; pass NULL to clear */

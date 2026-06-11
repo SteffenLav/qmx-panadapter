@@ -554,6 +554,9 @@ static lv_obj_t *s_lbl_ifcal    = NULL;
 static lv_obj_t *s_slider_ifcal = NULL;
 static lv_obj_t *s_lbl_cwpitch = NULL;
 static lv_obj_t *s_dropdown_cmap = NULL;
+static lv_obj_t *s_slider_brightness = NULL;
+static uint8_t s_saved_ui_mode = UI_MODE_PANADAPTER;
+static lv_obj_t *s_lbl_brightness = NULL;
 static lv_obj_t *s_tune_tooltip  = NULL;  // freq label above finger during tap-to-tune
 static lv_obj_t *s_bw_label      = NULL;  // passband width in top bar
 static void drawer_preset_normal_cb(lv_event_t *e);
@@ -586,6 +589,7 @@ static void drawer_slider_ifcal_cb(lv_event_t *e)
 
 static void drawer_slider_cwpitch_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_cb(lv_event_t *e);
+static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
 bool ui_get_flat_mode(void);
 void ui_set_flat_mode(bool on);
@@ -984,6 +988,15 @@ void ui_init(lv_display_t *disp)
             s_zoom_factor = s.zoom_factor;
         ui_set_zoom(s_zoom_factor, 0);
         ESP_LOGI(TAG, "Zoom loaded from NVS: %.1f", (double)s_zoom_factor);
+        // Apply saved backlight brightness.
+        display_set_brightness(s.brightness_pct);
+        ESP_LOGI(TAG, "Brightness loaded from NVS: %u%%", (unsigned)s.brightness_pct);
+        // Last UI mode (Panadapter/FT8) is restored later by
+        // ui_apply_saved_mode(), called from main.c once the FT8/CAT/audio
+        // subsystems have been initialized (ft8_screen_view_show() and
+        // ft8_self_test() depend on mutexes set up by ft8_screen_init()
+        // etc., which haven't run yet at this point in boot).
+        s_saved_ui_mode = s.last_ui_mode;
     }
     // Floating freq tooltip shown above finger during tap-to-tune.
     s_tune_tooltip = lv_label_create(lv_screen_active());
@@ -2015,6 +2028,36 @@ static void drawer_build(void)
     lv_obj_align(s_slider_ifcal, LV_ALIGN_TOP_LEFT, 0, y);
     lv_obj_add_event_cb(s_slider_ifcal, drawer_slider_ifcal_cb, LV_EVENT_VALUE_CHANGED, NULL);
     y += 60;
+
+    // Display brightness section
+    lv_obj_t *bl_hdr = lv_label_create(s_drawer);
+    lv_label_set_text(bl_hdr, "Display");
+    lv_obj_set_style_text_color(bl_hdr, lv_color_hex(0xA0E0A0), 0);
+    lv_obj_set_style_text_font(bl_hdr, &lv_font_montserrat_24, 0);
+    lv_obj_align(bl_hdr, LV_ALIGN_TOP_LEFT, 0, y);
+    y += 40;
+    s_lbl_brightness = lv_label_create(s_drawer);
+    char blbuf[24];
+    uint8_t bl_pct = 100;
+    {
+        qmx_settings_t scfg4;
+        settings_load_all(&scfg4);
+        bl_pct = scfg4.brightness_pct;
+    }
+    snprintf(blbuf, sizeof(blbuf), "Brightness: %u%%", (unsigned)bl_pct);
+    lv_label_set_text(s_lbl_brightness, blbuf);
+    lv_obj_set_style_text_color(s_lbl_brightness, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(s_lbl_brightness, &lv_font_montserrat_24, 0);
+    lv_obj_align(s_lbl_brightness, LV_ALIGN_TOP_LEFT, 0, y);
+    y += 30;
+    s_slider_brightness = lv_slider_create(s_drawer);
+    lv_obj_set_size(s_slider_brightness, DRAWER_W - 32, 30);
+    lv_slider_set_range(s_slider_brightness, 10, 100);
+    lv_slider_set_value(s_slider_brightness, bl_pct, LV_ANIM_OFF);
+    lv_obj_align(s_slider_brightness, LV_ALIGN_TOP_LEFT, 0, y);
+    lv_obj_add_event_cb(s_slider_brightness, drawer_slider_brightness_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    y += 60;
+
     // Waterfall colour-map section
     lv_obj_t *cmap_hdr = lv_label_create(s_drawer);
     lv_label_set_text(cmap_hdr, "Waterfall colour map");
@@ -2033,6 +2076,7 @@ static void drawer_build(void)
         if (scfg.colormap_idx < 4) lv_dropdown_set_selected(s_dropdown_cmap, scfg.colormap_idx);
     }
     lv_obj_add_event_cb(s_dropdown_cmap, drawer_dropdown_cmap_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    y += 60;
 
     ESP_LOGI(TAG, "Settings drawer built (off-screen at x=%d)", DISPLAY_H_RES);
 }
@@ -2204,6 +2248,19 @@ static void drawer_slider_cwpitch_cb(lv_event_t *e)
     if (s_lbl_cwpitch) lv_label_set_text(s_lbl_cwpitch, buf);
 }
 
+static void drawer_slider_brightness_cb(lv_event_t *e)
+{
+    lv_obj_t *sl = lv_event_get_target(e);
+    int v = (int)lv_slider_get_value(sl);
+    display_set_brightness(v);
+    settings_set_brightness_pct((uint8_t)v);
+    if (s_lbl_brightness) {
+        char b[24];
+        snprintf(b, sizeof(b), "Brightness: %d%%", v);
+        lv_label_set_text(s_lbl_brightness, b);
+    }
+}
+
 static void drawer_dropdown_cmap_cb(lv_event_t *e)
 {
     lv_obj_t *dd = lv_event_get_target(e);
@@ -2227,6 +2284,27 @@ uint32_t ui_get_passband_width_hz(void) { return s_passband_width_hz; }
 // and the waterfall resumes.
 //
 // 4c.2 will add the LVGL screen switch alongside this.
+
+// Restore the UI mode persisted at the last toggle. Must be called from
+// main.c after ft8_screen_init()/ft8_status_init()/ft8_tx_init()/ft8_qso_init()
+// (and audio/cat init) have run -- ft8_screen_view_show() and ft8_self_test()
+// touch state set up by those.
+void ui_apply_saved_mode(void)
+{
+    if (s_saved_ui_mode != UI_MODE_FT8) {
+        ui_mode_set(UI_MODE_PANADAPTER);
+        return;
+    }
+    ui_mode_set(UI_MODE_FT8);
+    if (s_spectrum_obj)  lv_obj_add_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN);
+    if (s_label_bar)     lv_obj_add_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN);
+    if (s_waterfall_obj) lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN);
+    ft8_screen_view_show();
+    ft8_self_test();
+    ui_refresh_mode_button_label();
+    ESP_LOGI(TAG, "UI mode restored from NVS: FT8");
+}
+
 static void ui_refresh_mode_button_label(void)
 {
     if (!s_mode_btn_lbl) return;
@@ -2245,6 +2323,7 @@ static void drawer_mode_btn_cb(lv_event_t *e)
              cur  == UI_MODE_FT8 ? "FT8" : "Panadapter",
              next == UI_MODE_FT8 ? "FT8" : "Panadapter");
     ui_mode_set(next);
+    settings_set_last_ui_mode((uint8_t)next);
     // Swap visible widgets. Top/bottom bars stay visible in both modes.
     if (next == UI_MODE_FT8) {
         if (s_spectrum_obj)  lv_obj_add_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN);

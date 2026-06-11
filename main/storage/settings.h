@@ -24,6 +24,8 @@ typedef struct {
     char     my_grid[8];       // Maidenhead grid (6 chars + NUL, e.g. "JO45ab")
     int16_t  cw_cal_hz;        // CW LO trim (Hz), default -60, range +/-100
     float    zoom_factor;      // spectrum/waterfall zoom, 1.0=full, max 24.0
+    uint8_t  brightness_pct;   // LCD backlight brightness, 0..100, default 100
+    uint8_t  last_ui_mode;     // last UI mode: 0=Panadapter, 1=FT8 (default 0)
 } qmx_settings_t;
 
 // Initialise the settings module. Opens an NVS handle. Safe to call
@@ -64,6 +66,12 @@ void settings_set_my_grid(const char *grid);
 // waterfall. Clamped to +/-200 Hz, persisted to NVS (debounced flush).
 void settings_set_cw_cal_hz(int16_t hz);
 void settings_set_zoom_factor(float v);
+
+// LCD backlight brightness, 0..100 (debounced flush).
+void settings_set_brightness_pct(uint8_t pct);
+
+// Last UI mode: 0=Panadapter, 1=FT8 (debounced flush).
+void settings_set_last_ui_mode(uint8_t mode);
 
 // Force any pending writes to flash immediately. Call before reboot
 // if you want absolute certainty. Normally not needed.

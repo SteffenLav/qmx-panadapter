@@ -14,3 +14,6 @@ esp_err_t display_init(lv_display_t **out_disp);
 // Thread-safe LVGL access (wrappers around BSP)
 bool display_lock(uint32_t timeout_ms);
 void display_unlock(void);
+
+// Set LCD backlight brightness, 0..100 %.
+void display_set_brightness(int percent);

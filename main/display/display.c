@@ -24,6 +24,11 @@ void display_unlock(void)
     bsp_display_unlock();
 }
 
+void display_set_brightness(int percent)
+{
+    bsp_display_brightness_set(percent);
+}
+
 esp_err_t display_init(lv_display_t **out_disp)
 {
     ESP_LOGI(TAG, "Bringing up display via local M5Stack BSP");

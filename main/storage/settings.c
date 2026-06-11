@@ -28,6 +28,8 @@ static const char *TAG = "settings";
 #define KEY_COLORMAP   "colormap"
 #define KEY_CW_CAL     "cw_cal"
 #define KEY_ZOOM       "zoom"
+#define KEY_BRIGHTNESS "brightness"
+#define KEY_LAST_MODE  "last_mode"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -39,6 +41,8 @@ static const char *TAG = "settings";
 #define DEF_CW_CAL      (-60)
 #define DEF_ZOOM        (1.0f)
 #define DEF_COLORMAP    (0)  // Thermal
+#define DEF_BRIGHTNESS  (100)
+#define DEF_LAST_MODE   (0)
 
 // Debounce: how long we wait after the last change before flushing.
 #define DEBOUNCE_MS     500
@@ -58,6 +62,8 @@ static const char *TAG = "settings";
 #define DIRTY_MY_GRID   (1u << 11)
 #define DIRTY_CW_CAL    (1u << 12)
 #define DIRTY_ZOOM      (1u << 13)
+#define DIRTY_BRIGHTNESS (1u << 14)
+#define DIRTY_LAST_MODE  (1u << 15)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -145,6 +151,8 @@ static void flush_task(void *arg)
             nvs_set_u32(s_nvs, KEY_ZOOM, bits);
         }
         if (dirty_local & DIRTY_COLORMAP)  nvs_set_u8(s_nvs, KEY_COLORMAP, snap.colormap_idx);
+        if (dirty_local & DIRTY_BRIGHTNESS) nvs_set_u8(s_nvs, KEY_BRIGHTNESS, snap.brightness_pct);
+        if (dirty_local & DIRTY_LAST_MODE)  nvs_set_u8(s_nvs, KEY_LAST_MODE,  snap.last_ui_mode);
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
@@ -201,6 +209,8 @@ void settings_load_all(qmx_settings_t *out)
     out->cw_cal_hz   = DEF_CW_CAL;
     out->zoom_factor = DEF_ZOOM;
     out->colormap_idx = DEF_COLORMAP;
+    out->brightness_pct = DEF_BRIGHTNESS;
+    out->last_ui_mode = DEF_LAST_MODE;
 
     if (!s_ready) {
         ESP_LOGW(TAG, "load_all: NVS not ready, using defaults");
@@ -219,6 +229,8 @@ void settings_load_all(qmx_settings_t *out)
     nvs_get_i16(s_nvs, KEY_CW_CAL,   &out->cw_cal_hz);
     { uint32_t bits = 0; if (nvs_get_u32(s_nvs, KEY_ZOOM, &bits) == ESP_OK) memcpy(&out->zoom_factor, &bits, 4); }
     nvs_get_u8(s_nvs, KEY_COLORMAP, &out->colormap_idx);
+    nvs_get_u8(s_nvs, KEY_BRIGHTNESS, &out->brightness_pct);
+    nvs_get_u8(s_nvs, KEY_LAST_MODE, &out->last_ui_mode);
 
     // Strings: zero buffers first, then read length-bounded.
     out->wifi_ssid[0] = '\0';
@@ -372,6 +384,32 @@ void settings_set_colormap_idx(uint8_t idx)
     s_pending.colormap_idx = idx;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_COLORMAP);
+}
+
+void settings_set_brightness_pct(uint8_t pct)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.brightness_pct == pct) {
+        xSemaphoreGive(s_mutex);
+        return;
+    }
+    s_pending.brightness_pct = pct;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_BRIGHTNESS);
+}
+
+void settings_set_last_ui_mode(uint8_t mode)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.last_ui_mode == mode) {
+        xSemaphoreGive(s_mutex);
+        return;
+    }
+    s_pending.last_ui_mode = mode;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_LAST_MODE);
 }
 
 void settings_set_my_callsign(const char *call)

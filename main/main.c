@@ -114,8 +114,7 @@ void app_main(void)
     ft8_status_init();
     ft8_tx_init();
     ft8_qso_init();
-    // Step 4c.2: boot into panadapter mode. FT8 spawns on first
-    // toggle via the drawer Mode button (drawer_mode_btn_cb in ui.c).
-    ui_mode_set(UI_MODE_PANADAPTER);
+    // Restore last UI mode (Panadapter/FT8), persisted across reboots.
+    ui_apply_saved_mode();
 }
 

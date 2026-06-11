@@ -38,41 +38,50 @@ static const char *TAG = "ft8_view";
 
 // Column x-offsets / widths within the row.
 // Layout: SL | CALL | MESSAGE | COUNTRY | SNR | KM | BRG | HRD
-// SL = slot parity (E blue / O amber). CALL…KM shifted +24 to make room;
-// KM absorbs the 24 px taken from its right edge (BRG/HEARD unchanged).
+// SL = slot parity (E blue / O amber). CALL…KM shifted +10 px right;
+// KM absorbs the 10 px taken from its right edge (BRG/HEARD unchanged).
+// SNR/KM/BRG are shifted a further +15 px right with their widths held
+// fixed (COL_SNR_W/COL_KM_W/COL_BRG_W are constants, not derived from the
+// next column's X) so they move without growing or shrinking.
 #define COL_SLOT_X      6
 #define COL_SLOT_W      22
-#define COL_CALL_X      36
-#define COL_TEXT_X      174
-#define COL_COUNTRY_X   454
-#define COL_SNR_X       604
-#define COL_KM_X        694
-#define COL_BRG_X       770
+#define COL_CALL_X      46
+#define COL_TEXT_X      184
+#define COL_COUNTRY_X   479
+#define COL_SNR_X       629
+#define COL_KM_X        719
+#define COL_BRG_X       785
 #define COL_HEARD_X     880
 #define COL_RIGHT_EDGE  960
 #define ROW_H           36
 
 #define COL_CALL_W      (COL_TEXT_X    - COL_CALL_X    - 8)
-#define COL_MSG_W       (COL_COUNTRY_X - COL_TEXT_X    - 8)
-#define COL_COUNTRY_W   (COL_SNR_X     - COL_COUNTRY_X - 8)
-#define COL_SNR_W       (COL_KM_X      - COL_SNR_X     - 8)
-#define COL_KM_W        (COL_BRG_X     - COL_KM_X      - 8)
-#define COL_BRG_W       (COL_HEARD_X   - COL_BRG_X     - 8)
+#define COL_MSG_W       272
+#define COL_COUNTRY_W   157
+#define COL_SNR_W       82
+#define COL_KM_W        71
+#define COL_BRG_W       102
 #define COL_HEARD_W     (COL_RIGHT_EDGE - COL_HEARD_X  - 16)
 
 // Pool size: pre-allocated row container/label objects.
 // Combined with shared lv_style_t (below), per-row local styles drop
 // from ~42 to 1 (SNR colour).
 //
-// Row count: 20. The LVGL static pool (CONFIG_LV_MEM_SIZE_KILOBYTES)
-// was raised from 64 KB to 128 KB in sdkconfig to accommodate the
-// cumulative LVGL allocation of pre-built modals + drawer + 20-row
-// FT8 pool (~110 KB). Below 128 KB the allocator hit hard cliffs at
-// ~60 KB of cumulative LVGL objects, manifesting as NULL store
-// faults, lv_obj_create hangs, or lv_obj_allocate_spec_attr lockup.
-// The cost is 64 KB more internal SRAM consumed at link time
+// Row count: 40 (raised from 20 in v0.16.0 — the dual-buffer ping-pong
+// decode now produces a result every slot, and busy bands can yield
+// ~50 decodes/slot, so 20 visible rows lost too many signals).
+// The LVGL static pool (CONFIG_LV_MEM_SIZE_KILOBYTES) was raised from
+// 128 KB to 256 KB in sdkconfig to accommodate the larger cumulative
+// LVGL allocation of pre-built modals + drawer + 40-row FT8 pool
+// (~110 KB for 20 rows, so roughly ~220 KB for 40). Below 128 KB the
+// allocator hit hard cliffs at ~60 KB of cumulative LVGL objects,
+// manifesting as NULL store faults, lv_obj_create hangs, or
+// lv_obj_allocate_spec_attr lockup — verify via the boot-time
+// "row pool built (... heap_i -> ..., delta ...)" log and the
+// "Free PSRAM/free internal" log after this change.
+// The cost is additional internal SRAM consumed at link time
 // (the pool is a static .bss array in internal RAM).
-#define MAX_ROWS        20
+#define MAX_ROWS        40
 
 // Shared styles. These live in BSS, not on the heap, so the dozens
 // of label objects can share them via lv_obj_add_style() without
@@ -151,11 +160,14 @@ static volatile bool s_refresh_pending = false;
 //   - LV_EVENT_PRESS_LOST (LVGL scroll kick-in) → cancel, no action
 //
 // This prevents accidental station selection while scrolling the list.
-#define ROW_HOLD_SELECT_MS  400
+#define ROW_HOLD_SELECT_MS  700
 
 static int      s_row_hover         = -1;
 static uint32_t s_press_start_ms    = 0;
 static bool     s_in_selection_mode = false;  // true while scroll is locked for drag-select
+static lv_point_t s_press_start_pt  = {0, 0};
+static bool     s_scroll_detected   = false;  // true if finger moved enough to be a scroll, ever
+#define ROW_SCROLL_CANCEL_PX 12  // finger movement beyond this before the hold gate cancels selection
 
 static double s_user_lat = 0.0;
 static double s_user_lon = 0.0;
@@ -235,6 +247,10 @@ static int cmp_cq_then_snr(const void *a, const void *b)
 {
     const ft8_call_t *ca = (const ft8_call_t *)a;
     const ft8_call_t *cb = (const ft8_call_t *)b;
+    // Messages directed at us (red rows) always sort first, regardless of CQ.
+    bool a_me = s_my_call[0] && strstr(ca->last_text, s_my_call);
+    bool b_me = s_my_call[0] && strstr(cb->last_text, s_my_call);
+    if (a_me != b_me) return b_me ? 1 : -1;
     bool a_cq = (strncmp(ca->last_text, "CQ ", 3) == 0);
     bool b_cq = (strncmp(cb->last_text, "CQ ", 3) == 0);
     if (a_cq != b_cq) return b_cq ? 1 : -1;  // CQ rows first
@@ -353,19 +369,22 @@ static void row_activate(int idx)
 // Touch-and-drag row selection handler registered on every row for
 // PRESSED / PRESSING / RELEASED / PRESS_LOST:
 //
-//   PRESSED     - finger touches down: record timestamp, no highlight yet.
-//                 The hold gate (ROW_HOLD_SELECT_MS) prevents fast scroll
-//                 swipes from ever entering selection mode.
+//   PRESSED     - finger touches down: record timestamp + start point, no
+//                 highlight yet. The hold gate (ROW_HOLD_SELECT_MS) prevents
+//                 fast scroll swipes from ever entering selection mode.
 //
-//   PRESSING    - fires continuously while held. Selection mode only activates
-//                 once the finger has been down for ≥ ROW_HOLD_SELECT_MS; at
-//                 that point the row under the fingertip highlights and dragging
-//                 moves the highlight.
+//   PRESSING    - fires continuously while held. If the finger ever moves more
+//                 than ROW_SCROLL_CANCEL_PX from its start point, this touch is
+//                 a scroll/swipe and is permanently barred from entering
+//                 selection mode (even if held past the threshold afterwards).
+//                 Otherwise, once held ≥ ROW_HOLD_SELECT_MS, selection mode
+//                 activates: the row under the fingertip highlights, list
+//                 scroll locks, and dragging moves the highlight.
 //
 //   RELEASED    - finger lifts. Only opens the modal if selection mode was
-//                 active (held long enough AND a row is highlighted). A quick
-//                 swipe-and-release that never crossed the time threshold does
-//                 nothing — the list just scrolls naturally.
+//                 active (held long enough, no scroll motion, AND a row is
+//                 highlighted). A swipe, or a quick tap that never crossed the
+//                 time threshold, does nothing — the list just scrolls naturally.
 //
 //   PRESS_LOST  - LVGL detected a scroll gesture and stole the touch. Always
 //                 cancels selection silently, regardless of hold time.
@@ -377,12 +396,33 @@ static void row_touch_cb(lv_event_t *e)
         // Start the hold clock; don't highlight yet.
         s_press_start_ms    = lv_tick_get();
         s_in_selection_mode = false;
+        s_scroll_detected   = false;
         row_set_hover(-1);
+        lv_indev_t *indev = lv_indev_get_act();
+        if (indev) lv_indev_get_point(indev, &s_press_start_pt);
 
     } else if (code == LV_EVENT_PRESSING) {
-        // Only enter selection mode after ROW_HOLD_SELECT_MS of continuous hold.
+        lv_indev_t *indev = lv_indev_get_act();
+        lv_point_t pt = s_press_start_pt;
+        if (indev) lv_indev_get_point(indev, &pt);
+
+        if (!s_in_selection_mode && !s_scroll_detected) {
+            // If the finger has moved more than a few px before the hold
+            // gate fires, this is a scroll/swipe — never enter selection
+            // mode for this touch, even if held longer afterwards.
+            int32_t dx = pt.x - s_press_start_pt.x;
+            int32_t dy = pt.y - s_press_start_pt.y;
+            if (dx < 0) dx = -dx;
+            if (dy < 0) dy = -dy;
+            if (dx > ROW_SCROLL_CANCEL_PX || dy > ROW_SCROLL_CANCEL_PX) {
+                s_scroll_detected = true;
+            }
+        }
+
+        // Only enter selection mode after ROW_HOLD_SELECT_MS of continuous
+        // hold AND no scroll motion was ever detected during this touch.
         uint32_t held_ms = lv_tick_get() - s_press_start_ms;
-        if (held_ms >= ROW_HOLD_SELECT_MS) {
+        if (held_ms >= ROW_HOLD_SELECT_MS && !s_scroll_detected) {
             // Lock the list scroll the first time we cross the threshold so
             // that dragging the finger to a different row doesn't also scroll
             // the whole list.
@@ -390,14 +430,9 @@ static void row_touch_cb(lv_event_t *e)
                 s_in_selection_mode = true;
                 if (s_list) lv_obj_clear_flag(s_list, LV_OBJ_FLAG_SCROLLABLE);
             }
-            lv_indev_t *indev = lv_indev_get_act();
-            if (indev) {
-                lv_point_t pt;
-                lv_indev_get_point(indev, &pt);
-                int hover = screen_y_to_row(pt.y);
-                if (hover != s_row_hover)
-                    row_set_hover(hover);
-            }
+            int hover = screen_y_to_row(pt.y);
+            if (hover != s_row_hover)
+                row_set_hover(hover);
         }
 
     } else if (code == LV_EVENT_RELEASED) {
@@ -486,7 +521,7 @@ static void update_row(int i, const ft8_call_t *src)
     int snr = (int)src->last_snr_db;
     char b_snr[12], b_km[12], b_brg[12], b_heard[12];
     snprintf(b_snr,   sizeof(b_snr),   "%+d dB", snr);
-    snprintf(b_heard, sizeof(b_heard), "(%u)",  (unsigned)src->heard_count);
+    snprintf(b_heard, sizeof(b_heard), "%u",  (unsigned)src->heard_count);
 
     if (s_user_loc_valid && src->last_grid[0]) {
         double rlat = 0.0, rlon = 0.0;
@@ -594,6 +629,9 @@ static void t_refresh_cb(lv_timer_t *t)
 {
     (void)t;
     if (!s_refresh_pending) return;
+    // Don't reorder/reposition rows while the user is drag-selecting one —
+    // the row under their finger must stay put until they lift.
+    if (s_in_selection_mode) return;
     s_refresh_pending = false;
     rebuild_list();
 }

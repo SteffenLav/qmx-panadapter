@@ -199,7 +199,7 @@ POUNCE (we answered their CQ)          CQ-RUN (they answered our CQ)
 
 | Branch | What | State |
 |--------|------|-------|
-| `main` | v0.15.1 — FT8 capture-window UTC-anchor fix (decode death after ~3min); decode-list live-view aging (60s) | stable on ST7123 and ST7121 |
+| `main` | v0.15.2 — 40-row FT8 decode list (LV_MEM_SIZE_KILOBYTES 256), display brightness slider (settings drawer), persistent UI mode (Panadapter/FT8 survives reboot via `ui_apply_saved_mode()`) | stable on ST7123 and ST7121 |
 
 ## Next up (v0.16.0)
 
