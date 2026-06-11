@@ -360,7 +360,7 @@ If no credentials are configured at boot, WiFi stays idle (no retry storm) until
 
 ## Onboard FT8
 
-![FT8 RX in action on 20 m -- decode list with DXCC, distance, bearing, and SNR](docs/QMX-Panadapter_FT8_RX_v0.10.0-beta1.png)
+![FT8 RX in action on 20 m -- decode list with DXCC, distance, bearing, and SNR](docs/ss_test.png)
 
 *Live FT8 reception on 20 m at 14.074 MHz. Left pane: MODE / VFO / UTC / slot countdown / heard count / operator identity (callsign+grid). Right pane: scrollable decode list with CALL / MESSAGE / COUNTRY / SNR / KM / BRG / HRD columns. Country pulled from DXCC prefix lookup, KM and BRG computed great-circle from the operator's grid square to each decoded station's grid.*
 
