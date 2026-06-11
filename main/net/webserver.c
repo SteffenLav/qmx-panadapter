@@ -11,6 +11,8 @@
 #include "ui.h"               // ui_get_*, ui_set_zoom
 #include "dsp.h"              // dsp_get_peak_dbm_around_vfo
 #include "display/display.h"  // display_lock / display_unlock
+#include "screenshot/screenshot.h"  // screenshot_capture_rgb565
+#include "esp_heap_caps.h"
 #include <string.h>
 
 static const char *TAG = "webserver";
@@ -145,6 +147,64 @@ static esp_err_t cmd_handler(httpd_req_t *req)
     return ESP_OK;
 }
 
+// Minimal 16bpp BMP (BITMAPFILEHEADER + BITMAPINFOHEADER + BI_BITFIELDS masks)
+// wrapping the raw RGB565 framebuffer snapshot. Top-down (negative height) so
+// the LVGL row order can be sent as-is.
+static esp_err_t ss_bmp_handler(httpd_req_t *req)
+{
+    uint8_t *buf;
+    size_t size;
+    uint32_t w, h;
+    if (screenshot_capture_rgb565(&buf, &size, &w, &h) != ESP_OK) {
+        return httpd_resp_send_500(req);
+    }
+
+    uint8_t header[66] = {0};
+    header[0] = 'B';
+    header[1] = 'M';
+
+    uint32_t file_size = (uint32_t)(sizeof(header) + size);
+    uint32_t off_bits  = sizeof(header);
+    uint32_t info_size = 40;
+    int32_t  width     = (int32_t)w;
+    int32_t  height    = -(int32_t)h;  // negative = top-down DIB
+    uint16_t planes    = 1;
+    uint16_t bpp       = 16;
+    uint32_t comp      = 3;  // BI_BITFIELDS
+    uint32_t img_size  = (uint32_t)size;
+    uint32_t r_mask    = 0xF800;
+    uint32_t g_mask    = 0x07E0;
+    uint32_t b_mask    = 0x001F;
+
+    memcpy(&header[2],  &file_size, 4);
+    memcpy(&header[10], &off_bits,  4);
+    memcpy(&header[14], &info_size, 4);
+    memcpy(&header[18], &width,     4);
+    memcpy(&header[22], &height,    4);
+    memcpy(&header[26], &planes,    2);
+    memcpy(&header[28], &bpp,       2);
+    memcpy(&header[30], &comp,      4);
+    memcpy(&header[34], &img_size,  4);
+    memcpy(&header[54], &r_mask,    4);
+    memcpy(&header[58], &g_mask,    4);
+    memcpy(&header[62], &b_mask,    4);
+
+    httpd_resp_set_type(req, "image/bmp");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=ss.bmp");
+
+    esp_err_t err = httpd_resp_send_chunk(req, (const char *)header, sizeof(header));
+    if (err == ESP_OK) {
+        err = httpd_resp_send_chunk(req, (const char *)buf, size);
+    }
+    if (err == ESP_OK) {
+        err = httpd_resp_send_chunk(req, NULL, 0);
+    }
+
+    heap_caps_free(buf);
+    return err;
+}
+
 static const httpd_uri_t uri_root = {
     .uri = "/", .method = HTTP_GET, .handler = root_handler,
 };
@@ -153,6 +213,9 @@ static const httpd_uri_t uri_status = {
 };
 static const httpd_uri_t uri_cmd = {
     .uri = "/api/cmd", .method = HTTP_POST, .handler = cmd_handler,
+};
+static const httpd_uri_t uri_ss_bmp = {
+    .uri = "/ss.bmp", .method = HTTP_GET, .handler = ss_bmp_handler,
 };
 
 esp_err_t webserver_start(void)
@@ -176,6 +239,7 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_root);
     httpd_register_uri_handler(s_server, &uri_status);
     httpd_register_uri_handler(s_server, &uri_cmd);
+    httpd_register_uri_handler(s_server, &uri_ss_bmp);
     webserver_ws_start(s_server);
 
     ESP_LOGI(TAG, "HTTP server started");

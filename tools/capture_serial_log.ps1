@@ -4,8 +4,8 @@
 
 .DESCRIPTION
     No ESP-IDF install needed. Uses the .NET SerialPort class built into
-    Windows/PowerShell. Lists available COM ports, connects at 115200 baud
-    (ESP-IDF default console speed), and logs everything the device prints
+    Windows/PowerShell. Lists available COM ports, connects at 921600 baud
+    (console UART speed as of v0.16.0), and logs everything the device prints
     to a timestamped text file - including boot messages and any crash /
     "Guru Meditation Error" backtrace.
 
@@ -72,7 +72,7 @@ $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $logFile = Join-Path $PSScriptRoot "qmx_log_$timestamp.txt"
 
 Write-Host ""
-Write-Host "Logging '$portName' @ 115200 baud to:" -ForegroundColor Green
+Write-Host "Logging '$portName' @ 921600 baud to:" -ForegroundColor Green
 Write-Host "  $logFile"
 Write-Host ""
 Write-Host "Now power-cycle the Tab5 (unplug/replug power or press reset)." -ForegroundColor Yellow
@@ -83,7 +83,7 @@ Write-Host ""
     Out-File -FilePath $logFile -Encoding utf8
 
 while ($true) {
-    $port = New-Object System.IO.Ports.SerialPort $portName, 115200, ([System.IO.Ports.Parity]::None), 8, ([System.IO.Ports.StopBits]::One)
+    $port = New-Object System.IO.Ports.SerialPort $portName, 921600, ([System.IO.Ports.Parity]::None), 8, ([System.IO.Ports.StopBits]::One)
     $port.ReadTimeout = 1000
     # Leave DTR/RTS untouched (default false): the ESP32-P4 USB-Serial/JTAG
     # auto-reset-to-bootloader circuit watches these lines (same as esptool's

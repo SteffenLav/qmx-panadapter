@@ -40,6 +40,13 @@ CONFIG_COMPILER_OPTIMIZATION_PERF=y
 # Logging
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_COLORS=y
+
+# Console UART baud rate -- bumped from 115200 to 921600 (8x). Cuts
+# screenshot capture transfer time from ~3.5min to ~25s. idf.py monitor
+# and `qmx m` pick this up automatically from project_description.json;
+# tools/screenshot_decode.py and tools/capture_serial_log.ps1 must be
+# updated to match.
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=921600
 # Phase 2.1 - bump USB enum buffer for devices with large config descriptors (QMX has CDC + UAC)
 CONFIG_USB_HOST_CONTROL_TRANSFER_MAX_SIZE=2048
 

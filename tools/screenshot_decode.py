@@ -31,13 +31,36 @@ except ImportError:
     print("Pillow not installed. Run: pip install pyserial pillow", file=sys.stderr)
     sys.exit(1)
 
-BEGIN_RE = re.compile(rb"===SCREENSHOT_BEGIN w=(\d+) h=(\d+) fmt=(\w+) bytes=(\d+)===")
+BEGIN_RE = re.compile(rb"===SCREENSHOT_BEGIN w=(\d+) h=(\d+) fmt=(\w+) bytes=(\d+) raw=(\d+)===")
 END_MARK = b"===SCREENSHOT_END==="
 ABORT_MARK = b"===SCREENSHOT_ABORT==="
 B64_LINE_RE = re.compile(rb"^[A-Za-z0-9+/=]+$")
 
 # Save destination: %USERPROFILE%\Downloads on Windows, ~/Downloads elsewhere.
 SAVE_DIR = Path(os.path.expanduser("~")) / "Downloads"
+
+
+def packbits_decode(data: bytes, expected_len: int) -> bytes:
+    """Decode PackBits-style RLE: 0..127 -> literal run of n+1 bytes,
+    129..255 -> repeat next byte (257-n) times, 128 -> no-op."""
+    out = bytearray()
+    i = 0
+    n = len(data)
+    while i < n and len(out) < expected_len:
+        ctrl = data[i]
+        i += 1
+        if ctrl <= 127:
+            count = ctrl + 1
+            out.extend(data[i:i + count])
+            i += count
+        elif ctrl >= 129:
+            count = 257 - ctrl
+            if i >= n:
+                break
+            out.extend(bytes([data[i]]) * count)
+            i += 1
+        # ctrl == 128: no-op
+    return bytes(out)
 
 
 def rgb565_to_rgb888(raw: bytes, w: int, h: int) -> bytes:
@@ -57,7 +80,7 @@ def rgb565_to_rgb888(raw: bytes, w: int, h: int) -> bytes:
 
 def capture_one(ser):
     print("Waiting for screenshot... (long-press top-left of panadapter for 1 sec)")
-    w = h = fmt = expected_bytes = None
+    w = h = fmt = expected_bytes = raw_bytes = None
     b64_acc = bytearray()
     started = False
 
@@ -74,7 +97,8 @@ def capture_one(ser):
                 h = int(m.group(2))
                 fmt = m.group(3).decode()
                 expected_bytes = int(m.group(4))
-                print(f"BEGIN: {w}x{h} {fmt} {expected_bytes} bytes")
+                raw_bytes = int(m.group(5))
+                print(f"BEGIN: {w}x{h} {fmt} {expected_bytes} bytes (raw {raw_bytes})")
                 started = True
             continue
 
@@ -88,18 +112,31 @@ def capture_one(ser):
 
         if B64_LINE_RE.match(line):
             b64_acc.extend(line)
+        elif b"timing" in line or b"chunk" in line:
+            print(line.decode(errors="replace"), flush=True)
 
-    raw = base64.b64decode(bytes(b64_acc))
-    if len(raw) != expected_bytes:
-        print(f"WARNING: decoded {len(raw)} bytes, expected {expected_bytes} "
+    payload = base64.b64decode(bytes(b64_acc))
+    if len(payload) != expected_bytes:
+        print(f"WARNING: decoded {len(payload)} bytes, expected {expected_bytes} "
               f"(UART loss, padding with zeros)",
               file=sys.stderr)
-        if len(raw) < expected_bytes:
-            raw = raw + b"\x00" * (expected_bytes - len(raw))
+        if len(payload) < expected_bytes:
+            payload = payload + b"\x00" * (expected_bytes - len(payload))
         else:
-            raw = raw[:expected_bytes]
+            payload = payload[:expected_bytes]
 
-    if fmt != "rgb565":
+    if fmt == "rle565":
+        raw = packbits_decode(payload, raw_bytes)
+        if len(raw) != raw_bytes:
+            print(f"WARNING: RLE decoded {len(raw)} bytes, expected {raw_bytes} "
+                  f"(padding with zeros)", file=sys.stderr)
+            if len(raw) < raw_bytes:
+                raw = raw + b"\x00" * (raw_bytes - len(raw))
+            else:
+                raw = raw[:raw_bytes]
+    elif fmt == "rgb565":
+        raw = payload
+    else:
         print(f"Unknown format: {fmt}", file=sys.stderr)
         return False
 
@@ -122,7 +159,7 @@ def main():
         print(f"Usage: python {sys.argv[0]} <COMx> [baud]", file=sys.stderr)
         sys.exit(1)
     port = sys.argv[1]
-    baud = int(sys.argv[2]) if len(sys.argv) > 2 else 115200
+    baud = int(sys.argv[2]) if len(sys.argv) > 2 else 921600
 
     print(f"Opening {port} @ {baud}...")
     print(f"Saving to: {SAVE_DIR}")

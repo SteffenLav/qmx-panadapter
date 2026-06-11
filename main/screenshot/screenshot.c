@@ -7,6 +7,7 @@
 
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "bsp/esp-bsp.h"
@@ -44,11 +45,45 @@ static void b64_encode_chunk(const uint8_t *in, size_t in_len, char *out)
     out[o] = '\0';
 }
 
-static void dump_image(const uint8_t *data, size_t size,
+// PackBits-style RLE. Control byte 0..127 -> copy next (n+1) bytes literally.
+// Control byte 129..255 -> repeat next byte (257-n) times. 128 is unused.
+// Returns encoded length, or 0 if it would exceed out_cap.
+static size_t rle_encode(const uint8_t *in, size_t in_len, uint8_t *out, size_t out_cap)
+{
+    size_t i = 0, o = 0;
+    while (i < in_len) {
+        size_t run = 1;
+        while (i + run < in_len && in[i + run] == in[i] && run < 128) run++;
+
+        if (run >= 2) {
+            if (o + 2 > out_cap) return 0;
+            out[o++] = (uint8_t)(257 - run);
+            out[o++] = in[i];
+            i += run;
+        } else {
+            size_t lit_start = i;
+            size_t lit_len = 0;
+            while (i < in_len && lit_len < 128) {
+                size_t r = 1;
+                while (i + r < in_len && in[i + r] == in[i] && r < 128) r++;
+                if (r >= 2) break;
+                i++;
+                lit_len++;
+            }
+            if (o + 1 + lit_len > out_cap) return 0;
+            out[o++] = (uint8_t)(lit_len - 1);
+            memcpy(out + o, in + lit_start, lit_len);
+            o += lit_len;
+        }
+    }
+    return o;
+}
+
+static void dump_image(const uint8_t *data, size_t size, size_t raw_size,
                        uint32_t w, uint32_t h, const char *fmt)
 {
-    printf("\r\n===SCREENSHOT_BEGIN w=%lu h=%lu fmt=%s bytes=%u===\r\n",
-           (unsigned long)w, (unsigned long)h, fmt, (unsigned)size);
+    printf("\r\n===SCREENSHOT_BEGIN w=%lu h=%lu fmt=%s bytes=%u raw=%u===\r\n",
+           (unsigned long)w, (unsigned long)h, fmt, (unsigned)size, (unsigned)raw_size);
 
     const size_t RAW_PER_CHUNK = (B64_CHUNK_CHARS / 4) * 3;
     char *line = malloc(B64_CHUNK_CHARS + 1);
@@ -62,10 +97,17 @@ static void dump_image(const uint8_t *data, size_t size,
     size_t chunk_idx = 0;
     size_t total_chunks = (size + RAW_PER_CHUNK - 1) / RAW_PER_CHUNK;
 
+    int64_t t_start = esp_timer_get_time();
+    int64_t t_printf_total = 0;
+    int64_t t_delay_total = 0;
+
     while (sent < size) {
         size_t this_raw = (size - sent > RAW_PER_CHUNK) ? RAW_PER_CHUNK : (size - sent);
         b64_encode_chunk(data + sent, this_raw, line);
+
+        int64_t t0 = esp_timer_get_time();
         printf("%s\r\n", line);
+        t_printf_total += esp_timer_get_time() - t0;
 
         sent += this_raw;
         chunk_idx++;
@@ -76,10 +118,18 @@ static void dump_image(const uint8_t *data, size_t size,
                      (unsigned)sent, (unsigned)size);
         }
 
+        int64_t t1 = esp_timer_get_time();
         vTaskDelay(pdMS_TO_TICKS(5));
+        t_delay_total += esp_timer_get_time() - t1;
     }
 
     printf("===SCREENSHOT_END===\r\n");
+
+    int64_t t_total = esp_timer_get_time() - t_start;
+    ESP_LOGI(TAG, "timing: total=%lld ms, printf=%lld ms, delay=%lld ms, chunks=%u",
+             (long long)(t_total / 1000), (long long)(t_printf_total / 1000),
+             (long long)(t_delay_total / 1000), (unsigned)chunk_idx);
+
     free(line);
 }
 
@@ -99,10 +149,9 @@ static void zero_h_scroll_recursive(lv_obj_t *obj)
     }
 }
 
-static void long_press_cb(lv_event_t *e)
+esp_err_t screenshot_capture_rgb565(uint8_t **out_buf, size_t *out_size,
+                                     uint32_t *out_w, uint32_t *out_h)
 {
-    ESP_LOGI(TAG, "capture triggered");
-
     lv_obj_t *screen = lv_screen_active();
     lv_display_t *disp = lv_display_get_default();
     int32_t w = lv_display_get_horizontal_resolution(disp);
@@ -110,13 +159,10 @@ static void long_press_cb(lv_event_t *e)
     size_t bytes_per_px = 2;  // RGB565
     size_t buf_size = (size_t)w * (size_t)h * bytes_per_px;
 
-    ESP_LOGI(TAG, "allocating %u bytes in PSRAM for %ldx%ld snapshot",
-             (unsigned)buf_size, (long)w, (long)h);
-
     void *buf = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf) {
         ESP_LOGE(TAG, "heap_caps_malloc failed for %u bytes", (unsigned)buf_size);
-        return;
+        return ESP_ERR_NO_MEM;
     }
 
     lv_image_dsc_t dsc;
@@ -137,17 +183,45 @@ static void long_press_cb(lv_event_t *e)
     if (res != LV_RESULT_OK) {
         ESP_LOGE(TAG, "lv_snapshot_take_to_buf failed: %d", (int)res);
         heap_caps_free(buf);
+        return ESP_FAIL;
+    }
+
+    *out_buf = buf;
+    *out_size = dsc.data_size;
+    *out_w = dsc.header.w;
+    *out_h = dsc.header.h;
+    return ESP_OK;
+}
+
+static void long_press_cb(lv_event_t *e)
+{
+    ESP_LOGI(TAG, "capture triggered");
+
+    uint8_t *buf;
+    size_t raw_size;
+    uint32_t w, h;
+    if (screenshot_capture_rgb565(&buf, &raw_size, &w, &h) != ESP_OK) {
         return;
     }
 
     ESP_LOGI(TAG, "snapshot %lux%lu, %u bytes",
-             (unsigned long)dsc.header.w,
-             (unsigned long)dsc.header.h,
-             (unsigned)dsc.data_size);
+             (unsigned long)w, (unsigned long)h, (unsigned)raw_size);
 
-    dump_image((const uint8_t *)dsc.data, dsc.data_size,
-               dsc.header.w, dsc.header.h, "rgb565");
+    size_t comp_cap = raw_size + raw_size / 128 + 2;
+    uint8_t *comp = heap_caps_malloc(comp_cap, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    size_t comp_size = comp ? rle_encode(buf, raw_size, comp, comp_cap) : 0;
 
+    if (comp_size > 0 && comp_size < raw_size) {
+        ESP_LOGI(TAG, "RLE: %u -> %u bytes (%.1f%%)",
+                 (unsigned)raw_size, (unsigned)comp_size,
+                 100.0 * comp_size / raw_size);
+        dump_image(comp, comp_size, raw_size, w, h, "rle565");
+    } else {
+        ESP_LOGI(TAG, "RLE not beneficial, sending raw");
+        dump_image(buf, raw_size, raw_size, w, h, "rgb565");
+    }
+
+    if (comp) heap_caps_free(comp);
     heap_caps_free(buf);
     ESP_LOGI(TAG, "capture complete");
 }
