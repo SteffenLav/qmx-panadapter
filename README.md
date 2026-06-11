@@ -14,7 +14,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 > ## ⚠️ DEVELOPMENT FIRMWARE — FT8 TRANSMIT IS EXPERIMENTAL
 >
-> **v0.12.0+ includes real RF transmission.** When a TX request fires, the firmware sends
+> **v0.12.0 and onwards includes real RF transmission.** When a TX request fires, the firmware sends
 > `TX;` over CAT, walks 79 `TA<freq>;` symbols at 160 ms cadence, then sends `TA0; RX;`.
 > **Your radio will key up and put a signal on the air.**
 >
