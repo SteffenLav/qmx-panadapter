@@ -362,12 +362,12 @@ If no credentials are configured at boot, WiFi stays idle (no retry storm) until
 
 ![FT8 RX in action on 20 m -- decode list with DXCC, distance, bearing, and SNR](docs/ss_test.png)
 
-*Live FT8 reception on 20 m at 14.074 MHz. Left pane: MODE / VFO / UTC / slot countdown / heard count / operator identity (callsign+grid). Right pane: scrollable decode list with CALL / MESSAGE / COUNTRY / SNR / KM / BRG / HRD columns. Country pulled from DXCC prefix lookup, KM and BRG computed great-circle from the operator's grid square to each decoded station's grid.*
+*Live FT8 reception on 20 m at 14.074 MHz. Left pane: MODE / VFO / UTC / slot countdown with parity, TX EVEN/ODD slot preference, operator identity (callsign+grid), Call CQ button, and active-station/decode counts. Right pane: scrollable decode list with SL / CALL / MESSAGE / COUNTRY / SNR / KM / BRG / HRD columns. Country pulled from DXCC prefix lookup, KM and BRG computed great-circle from the operator's grid square to each decoded station's grid.*
 
 Switch the panadapter into FT8 mode via the **Mode: FT8** button in the settings drawer. The Tab5 then decodes the 15-second FT8 slots directly on the ESP32-P4 with no PC required.
 
 **What's shown.**
-- **Left info pane** - large MODE / VFO / UTC / slot countdown, plus heard count and operator identity (callsign + grid loaded from NVS).
+- **Left info pane** - large MODE / VFO / UTC / slot countdown with current parity (EVEN in blue, ODD in amber), **TX: EVEN** / **TX: ODD** CQ-parity preference buttons, "Active: N" station count, operator identity (callsign + grid loaded from NVS), a **Call CQ** button, and an "RX: N decoded (M candidates)" summary for the last slot.
 - **Right decode list** - scrollable table with columns SL / CALL / MESSAGE / COUNTRY / SNR / KM / BRG / HRD. CQ calls always appear at the top, sorted strongest-SNR first; all other rows follow sorted by SNR descending.
   - SL: slot parity — **E** (blue) = EVEN slot (:00/:30), **O** (amber) = ODD slot (:15/:45). Makes it easy to know which slot to transmit on in reply.
   - CALL: extracted remote callsign (handles `CQ DX K1ABC`, `CQ POTA K1ABC`, and standard `<base> <call> <grid>` formats).
