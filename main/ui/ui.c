@@ -227,6 +227,7 @@ static void band_label_clicked_cb(lv_event_t *e)
 static lv_obj_t *s_freq_popup   = NULL;
 static lv_obj_t *s_freq_display = NULL;
 static char      s_freq_buf[16] = "";
+static char      s_freq_disp[40] = "";
 static ui_freq_picker_cb_t s_freq_picker_cb = NULL;
 
 // Mode row on the freq keypad: DiGi / USB / LSB / CW. Selected mode is
@@ -259,31 +260,35 @@ static void freq_popup_close(void)
     if (s_freq_popup) { lv_obj_delete(s_freq_popup); s_freq_popup = NULL; s_freq_display = NULL; }
 }
 
+// Full rebuild of s_freq_disp from s_freq_buf (standard right-anchored
+// thousands grouping, e.g. "14074000" -> "14.074.000 Hz"). Called after any
+// key except Delete. Delete instead trims s_freq_disp by one character in
+// place (see freq_key_cb) so already-displayed digits/"." don't reflow.
 static void freq_popup_refresh_display(void)
 {
     if (!s_freq_display) return;
     if (!s_freq_buf[0]) {
+        s_freq_disp[0] = '\0';
         lv_label_set_text(s_freq_display, "Enter freq");
         return;
     }
     if (strchr(s_freq_buf, '.')) {
         // Still typing a raw "MHz.kHz.Hz"-style number for MHz/kHz conversion.
-        lv_label_set_text(s_freq_display, s_freq_buf);
+        strncpy(s_freq_disp, s_freq_buf, sizeof(s_freq_disp) - 1);
+        s_freq_disp[sizeof(s_freq_disp) - 1] = '\0';
+        lv_label_set_text(s_freq_display, s_freq_disp);
         return;
     }
     // Pure-digit Hz value (after MHz/kHz conversion or plain Hz entry):
-    // format with "." group separators every 3 digits, e.g. "1500000" ->
-    // "1.500.000 Hz".
+    // group every 3 digits from the right, e.g. "14074000" -> "14.074.000".
     size_t len = strlen(s_freq_buf);
-    char out[32];
     int oi = 0;
     for (size_t i = 0; i < len; i++) {
-        if (i > 0 && (len - i) % 3 == 0) out[oi++] = '.';
-        out[oi++] = s_freq_buf[i];
+        if (i > 0 && (len - i) % 3 == 0) s_freq_disp[oi++] = '.';
+        s_freq_disp[oi++] = s_freq_buf[i];
     }
-    out[oi] = '\0';
-    snprintf(out + oi, sizeof(out) - (size_t)oi, " Hz");
-    lv_label_set_text(s_freq_display, out);
+    s_freq_disp[oi] = '\0';
+    lv_label_set_text(s_freq_display, s_freq_disp);
 }
 
 static void freq_overlay_cb(lv_event_t *e)
@@ -368,9 +373,25 @@ static void freq_key_cb(lv_event_t *e)
             snprintf(s_freq_buf, sizeof(s_freq_buf), "%lu", (unsigned long)hz);
             break;
         }
-        case 'D':  // Delete (backspace)
-            if (len > 0) s_freq_buf[len - 1] = '\0';
-            break;
+        case 'D': {  // Delete (backspace)
+            // Trim the displayed string by one character in place, without
+            // reformatting/reflowing the rest.
+            size_t dlen = strlen(s_freq_disp);
+            if (dlen == 0) return;
+            char removed = s_freq_disp[dlen - 1];
+            s_freq_disp[dlen - 1] = '\0';
+            if (removed != '.') {
+                size_t blen = strlen(s_freq_buf);
+                if (blen > 0) s_freq_buf[blen - 1] = '\0';
+            }
+            lv_label_set_text(s_freq_display, s_freq_disp[0] ? s_freq_disp : "Enter freq");
+            return;
+        }
+        case 'A':  // long-press Delete: clear everything
+            s_freq_buf[0] = '\0';
+            s_freq_disp[0] = '\0';
+            lv_label_set_text(s_freq_display, "Enter freq");
+            return;
         case '.':
             // Allow at most 2 dots (3 groups: MHz.kHz.Hz)
             {
@@ -453,6 +474,10 @@ static void freq_popup_build(void)
         lv_obj_set_style_bg_color(btn, lv_color_hex(0x2A2A2A), 0);
         lv_obj_set_style_radius(btn, 6, 0);
         lv_obj_add_event_cb(btn, freq_key_cb, LV_EVENT_CLICKED, (void *)(intptr_t)keycodes[i]);
+        if (keycodes[i] == 'D') {
+            // Long-press Delete clears the whole entry.
+            lv_obj_add_event_cb(btn, freq_key_cb, LV_EVENT_LONG_PRESSED, (void *)(intptr_t)'A');
+        }
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, keys[i]);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
@@ -904,7 +929,7 @@ static int      s_last_tap_x        = -1;
 
 // Widget handles
 static lv_obj_t *s_freq_label = NULL;
-static lv_obj_t *s_smeter_label = NULL;
+static lv_obj_t *s_smeter_bar = NULL;
 static lv_obj_t *s_band_label = NULL;   // Phase 5.10D: dedicated band slot
 static lv_obj_t *s_mode_label = NULL;
 static lv_obj_t *s_spectrum_obj = NULL;
@@ -1052,16 +1077,72 @@ static void build_top_bar(lv_obj_t *parent)
     lv_label_set_text(s_freq_label, "Freq: 14.074.000 Hz");
     lv_obj_set_style_text_color(s_freq_label, lv_color_hex(0xFFD76B), 0);
     lv_obj_set_style_text_font(s_freq_label, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_freq_label, LV_ALIGN_CENTER, 60, 0);
+    lv_obj_align(s_freq_label, LV_ALIGN_CENTER, 30, 0);
     lv_obj_add_flag(s_freq_label, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(s_freq_label, 20);
     lv_obj_add_event_cb(s_freq_label, freq_label_clicked_cb, LV_EVENT_CLICKED, NULL);
 
-    s_smeter_label = lv_label_create(bar);
-    lv_label_set_text(s_smeter_label, "Signal: S0");
-    lv_obj_set_style_text_color(s_smeter_label, lv_color_hex(0x00FF00), 0);  // Phase 5.10D: match spectrum trace green
-    lv_obj_set_style_text_font(s_smeter_label, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_smeter_label, LV_ALIGN_CENTER, 320, 0);  // Phase 5.10D: centered in right half
+    // S-meter: a tick-labeled scale (S1/3/5/7/9/+20) with a moving bar
+    // below it, replacing the old "Signal: SX+Y" text label. Vertically
+    // centered in the 60px top bar.
+    {
+        const int smeter_w = 220;   // bar width; SMETER_MAX maps across this
+        const int smeter_h = 56;
+        const int smeter_off = 20;  // left margin so the "S1" label isn't clipped
+        lv_obj_t *smeter_cont = lv_obj_create(bar);
+        lv_obj_set_size(smeter_cont, smeter_w + 40 + smeter_off, smeter_h);  // extra width for label overhang
+        lv_obj_align(smeter_cont, LV_ALIGN_CENTER, 298, 4);
+        lv_obj_set_style_bg_opa(smeter_cont, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(smeter_cont, 0, 0);
+        lv_obj_set_style_pad_all(smeter_cont, 0, 0);
+        lv_obj_clear_flag(smeter_cont, LV_OBJ_FLAG_SCROLLABLE);
+
+        // Tick labels positioned by their value on the SMETER_MAX scale
+        // (S1=0, S9=48, +20=68 -- see smeter_value_for_units()).
+        static const struct { const char *txt; int value; } ticks[] = {
+            { "S1",  0 }, { "3", 12 }, { "5", 24 }, { "7", 36 },
+            { "9", 48 }, { "+20", 68 },
+        };
+        for (size_t i = 0; i < sizeof(ticks)/sizeof(ticks[0]); i++) {
+            lv_obj_t *lbl = lv_label_create(smeter_cont);
+            lv_label_set_text(lbl, ticks[i].txt);
+            lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
+            lv_obj_set_style_text_font(lbl, &lv_font_montserrat_22, 0);
+            lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+            lv_label_set_long_mode(lbl, LV_LABEL_LONG_CLIP);
+            const int lbl_w = 36;
+            lv_obj_set_size(lbl, lbl_w, LV_SIZE_CONTENT);
+            int tick_x = smeter_off + ticks[i].value * smeter_w / 68;
+            lv_obj_set_pos(lbl, tick_x - lbl_w / 2, 0);
+        }
+
+        // Small tick marks just above the bar at S1,S3..S9,+10,+20.
+        static const int tick_marks[] = { 0, 6, 12, 18, 24, 30, 36, 42, 48, 58, 68 };
+        for (size_t i = 0; i < sizeof(tick_marks)/sizeof(tick_marks[0]); i++) {
+            lv_obj_t *t = lv_obj_create(smeter_cont);
+            lv_obj_set_size(t, 2, 6);
+            lv_obj_set_pos(t, smeter_off + tick_marks[i] * smeter_w / 68, 26);
+            lv_obj_set_style_bg_color(t, lv_color_hex(0xFFFFFF), 0);
+            lv_obj_set_style_bg_opa(t, LV_OPA_COVER, 0);
+            lv_obj_set_style_border_width(t, 0, 0);
+            lv_obj_set_style_radius(t, 0, 0);
+            lv_obj_clear_flag(t, LV_OBJ_FLAG_SCROLLABLE);
+        }
+
+        // Moving level bar underneath the scale (half the original height).
+        s_smeter_bar = lv_bar_create(smeter_cont);
+        lv_obj_set_size(s_smeter_bar, smeter_w, 11);
+        lv_obj_set_pos(s_smeter_bar, smeter_off, 34);
+        lv_bar_set_range(s_smeter_bar, 0, 68);
+        lv_bar_set_value(s_smeter_bar, 0, LV_ANIM_OFF);
+        lv_obj_set_style_bg_color(s_smeter_bar, lv_color_hex(0x303030), 0);
+        lv_obj_set_style_bg_opa(s_smeter_bar, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(s_smeter_bar, 0, 0);
+        lv_obj_set_style_radius(s_smeter_bar, 3, 0);
+        lv_obj_set_style_bg_color(s_smeter_bar, lv_color_hex(0x00FF00), LV_PART_INDICATOR);
+        lv_obj_set_style_bg_opa(s_smeter_bar, LV_OPA_COVER, LV_PART_INDICATOR);
+        lv_obj_set_style_radius(s_smeter_bar, 3, LV_PART_INDICATOR);
+    }
 
     // Phase 5.10I: 80x80 burger, overflows downward into the spectrum.
     // Top bar stays at 60 px; clip content disabled so button can be larger.
@@ -1092,7 +1173,7 @@ static void build_top_bar(lv_obj_t *parent)
     lv_label_set_text(s_zoom_label, "Zoom: x1.0");
     lv_obj_set_style_text_color(s_zoom_label, lv_color_hex(0x606060), 0);
     lv_obj_set_style_text_font(s_zoom_label, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_zoom_label, LV_ALIGN_RIGHT_MID, -90, 0);
+    lv_obj_align(s_zoom_label, LV_ALIGN_RIGHT_MID, -70, 0);
     lv_obj_add_flag(s_zoom_label, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(s_zoom_label, 20);
     lv_obj_add_event_cb(s_zoom_label, zoom_label_clicked_cb, LV_EVENT_CLICKED, NULL);
@@ -1701,22 +1782,25 @@ static void compute_passband_edges_hz(int32_t *out_low, int32_t *out_high)
 }
 
 
+// Map S-units to the bar's 0..68 scale: S1=0, each S-unit below S9 is 6 dB
+// (S9=48), and above S9 each unit is 1 dB up to +20 (matches ui_update_smeter's
+// caller: s_units = 9 + dB above S9). Scale tick labels assume this mapping.
+static int smeter_value_for_units(int s_units)
+{
+    if (s_units <= 1) return 0;
+    if (s_units <= 9) return (s_units - 1) * 6;
+    int v = 48 + (s_units - 9);
+    return (v > 68) ? 68 : v;
+}
+
 void ui_update_smeter(int s_units)
 {
-    if (!s_smeter_label) return;
-    char buf[32];
+    if (!s_smeter_bar) return;
+    if (s_units < 0) s_units = 0;
     if (s_units > 108) s_units = 108;  // clamp at S9+99
-    if (s_units <= 0) {
-        snprintf(buf, sizeof(buf), "Signal: S0");
-    } else if (s_units <= 9) {
-        snprintf(buf, sizeof(buf), "Signal: S%d", s_units);
-    } else {
-        // S9+xx (over S9 is reported as +dB above S9)
-        snprintf(buf, sizeof(buf), "Signal: S9+%d", s_units - 9);
-    }
+    int value = smeter_value_for_units(s_units);
     if (display_lock(100)) {
-        lv_label_set_text(s_smeter_label, buf);
-        lv_obj_invalidate(s_smeter_label);
+        lv_bar_set_value(s_smeter_bar, value, LV_ANIM_ON);
         display_unlock();
     }
 }

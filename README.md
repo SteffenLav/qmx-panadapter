@@ -21,7 +21,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 > **You are solely responsible for operating legally** — correct licence class, operating
 > within your licence privileges, band plan compliance, no harmful interference.
 >
-> **What is NOT yet in place in v0.15.5:**
+> **What is NOT yet in place in v0.15.6:**
 > - No duty-cycle protection — back-to-back TX slots are not prevented by the firmware
 > - No ADIF logging — completed QSOs are not recorded anywhere
 > - No audio loopback verification — the firmware cannot confirm the transmitted waveform
@@ -105,7 +105,7 @@ The original mockup that drove the design ([panadapter-mockup-ideal.svg](docs/pa
 
 ## Status
 
-Working. All phases through 8 complete. Current release: **v0.15.5**. Includes: cold-boot reliability fix, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings (including last-used UI mode and display brightness), Hamlib rigctld bridge, onboard FT8 RX decoder with a 40-row live-view decode list and FFT-based SNR estimation, memory channels with a frequency/mode picker, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser) including a tap-to-enter frequency keypad, browser click-to-tune, zoom sync, band memory, QMX RTC time sync for no-WiFi (POTA) FT8 timing, **manual FT8 TX** (reply + CQ via CAT `TA;`), and a **full auto QSO engine** — search-and-pounce plus **CQ-run** (auto-answers callers, runs the exchange to completion with patient retry, then resumes CQ). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
+Working. All phases through 8 complete. Current release: **v0.15.6**. Includes: cold-boot reliability fix, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings (including last-used UI mode and display brightness), Hamlib rigctld bridge, onboard FT8 RX decoder with a 40-row live-view decode list and FFT-based SNR estimation, memory channels with a frequency/mode picker, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser) including a tap-to-enter frequency keypad, browser click-to-tune, zoom sync, band memory, QMX RTC time sync for no-WiFi (POTA) FT8 timing, **manual FT8 TX** (reply + CQ via CAT `TA;`), and a **full auto QSO engine** — search-and-pounce plus **CQ-run** (auto-answers callers, runs the exchange to completion with patient retry, then resumes CQ). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
 
 | Phase | What | Status |
 |-------|------|--------|
@@ -804,6 +804,10 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 - **CAT mode-set-on-Enter fix.** Selecting a mode in the frequency keypad and pressing Enter previously failed to change the QMX mode — `cat_set_frequency()` and `cat_set_mode()` share a 200 ms CAT TX rate-limiter, so the mode command sent immediately after the frequency command was silently dropped. Fixed with a short delay between the two CAT writes.
 - **Flat-spectrum floor reset on QMX power cycle.** With the QMX powered off and back on while the USB cable stays connected (no USB re-enumeration), the Flat Spectrum floor went stale and the display pegged at full-scale green until toggling Flat Spectrum off/on. `audio.c` now detects the silence/resume gap in the UAC audio stream directly and re-seeds the floor as soon as real samples resume — no cable unplug or mode toggle needed.
 - **S-meter fixed to track the actual VFO signal.** The S-meter was pegged around S6 almost continuously, even on a quiet band between FT8 cycles, because its peak-detection window was centered on the raw FFT's DC bin (bin 0) — dominated by constant DC/LO leakage — rather than the VFO, which sits at the +12 kHz IF offset. `dsp_get_peak_dbm_around_vfo()` now takes the IF-shifted VFO bin as its center, so the S-meter (and the web UI's `signal_dbm` field) reflects real signal strength.
+
+### Shipped in v0.15.6
+
+- **S-meter redesigned as a visual bar scale.** The top-bar "Signal: SX+Y" text label is replaced with a tick-labeled scale (S1, 3, 5, 7, 9, +10, +20) with small tick marks and a moving green bar beneath it, scaled 0–68 to match the existing S-unit mapping (6 dB/S-unit below S9, 1 dB/unit above, capped at +20). Tick labels use `montserrat_22` and are center-aligned over their tick marks. The freq label and zoom label were nudged to make room (`CENTER+30` / `RIGHT_MID-70`).
 
 ### Next up
 
