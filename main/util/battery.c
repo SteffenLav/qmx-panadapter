@@ -44,6 +44,15 @@ int battery_get_level(void)
     return (int)(((mv - BATTERY_MIN_MV) * 100) / (BATTERY_MAX_MV - BATTERY_MIN_MV));
 }
 
+int battery_get_mv(void)
+{
+    if (!s_initialised) return -1;
+
+    uint32_t mv;
+    if (ina226_read_bus_mv(&mv) != ESP_OK) return -1;
+    return (int)mv;
+}
+
 bool battery_is_charging(void)
 {
     if (!s_initialised) return false;

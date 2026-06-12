@@ -4,6 +4,7 @@
 #include "dsp.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -12,13 +13,13 @@
 #include "esp_heap_caps.h"
 #include "display.h"
 #include "cat.h"
-#include "screenshot.h"
 #include "settings.h"
 #include "wifi_config.h"
 #include "memory_modal.h"
 #include "identity_config.h"
 #include "iq_balance.h"
 #include "ui_mode.h"
+#include "ui_clock.h"
 #include "ft8_screen.h"
 #include "ft8_screen_view.h"
 #include "ft8_test.h"
@@ -131,7 +132,10 @@ static void band_popup_open(void)
     if (s_band_popup) { band_popup_close(); return; }
     int band_count = 0;
     const cat_band_entry_t *bands = cat_get_band_list(&band_count);
-    if (band_count == 0) return;
+    if (band_count == 0) {
+        ESP_LOGW("ui", "Band dropdown: no bands available (band_count=0)");
+        return;
+    }
 
     lv_obj_t *ov = lv_obj_create(lv_layer_top());
     lv_obj_set_size(ov, LV_HOR_RES, LV_VER_RES);
@@ -144,18 +148,39 @@ static void band_popup_open(void)
 
     int btn_h = 64;
     int panel_w = 140;
-    int panel_h = band_count * btn_h;
+    // Extra 32px margin: covers any flex gap/padding the theme adds between
+    // children, so the last row (15m) never gets clipped by the panel edge.
+    int panel_h = band_count * btn_h + 32;
+    // Fixed position just under the top bar, left-aligned under the band
+    // label. lv_obj_get_coords(s_band_label, ...) was unreliable here (the
+    // LVGL software-rotation pipeline can return stale/incorrect layout
+    // coords), causing the panel to think it had far less room than the
+    // ~660px actually available and clamp/scroll away entries (e.g. 15m).
+    int panel_x = 8;
+    int panel_y = TOP_BAR_H + 4;
+    int max_h = DISPLAY_V_RES - panel_y - 4;
+    bool needs_scroll = panel_h > max_h;
+    if (needs_scroll) panel_h = max_h;
+
     lv_obj_t *panel = lv_obj_create(ov);
     lv_obj_set_size(panel, panel_w, panel_h);
-    lv_area_t la;
-    lv_obj_get_coords(s_band_label, &la);
-    lv_obj_set_pos(panel, -8, 60);  // centered under band label
+    lv_obj_set_pos(panel, panel_x, panel_y);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0x1A1A1A), 0);
     lv_obj_set_style_border_color(panel, lv_color_hex(0x444444), 0);
     lv_obj_set_style_border_width(panel, 1, 0);
     lv_obj_set_style_pad_all(panel, 0, 0);
     lv_obj_set_style_radius(panel, 6, 0);
-    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_style_min_height(panel, 0, 0);
+    lv_obj_set_style_min_width(panel, 0, 0);
+    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(panel, 0, 0);
+    lv_obj_set_style_pad_column(panel, 0, 0);
+    if (needs_scroll) {
+        lv_obj_add_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_scroll_dir(panel, LV_DIR_VER);
+    } else {
+        lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    }
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
 
     uint32_t cur_hz = cat_get_frequency();
@@ -164,6 +189,9 @@ static void band_popup_open(void)
                        cur_hz <= bands[i].center_hz + 1000000);
         lv_obj_t *btn = lv_obj_create(panel);
         lv_obj_set_size(btn, panel_w, btn_h);
+        lv_obj_set_style_min_height(btn, 0, 0);
+        lv_obj_set_style_min_width(btn, 0, 0);
+        lv_obj_set_style_max_height(btn, btn_h, 0);
         lv_obj_set_style_bg_color(btn, active ? lv_color_hex(0x2A2A00) : lv_color_hex(0x1A1A1A), 0);
         lv_obj_set_style_border_width(btn, 0, 0);
         lv_obj_set_style_radius(btn, 0, 0);
@@ -186,6 +214,272 @@ static void band_label_clicked_cb(lv_event_t *e)
 {
     (void)e;
     band_popup_open();
+}
+
+// ---- Frequency entry keypad --------------------------------------------
+// Phone-style keypad for direct frequency entry. Type a plain decimal
+// number (e.g. "1.5" or "200.45"), then tap MHz or kHz to interpret that
+// number in the chosen unit and convert it to a Hz value in the display
+// (e.g. "1.5" + MHz -> 1500000, i.e. 1.500.000 Hz; "200.45" + kHz ->
+// 200450, i.e. 200.450 Hz). Tap Enter to send the displayed Hz value to
+// the QMX. No clamping/validation - the value is sent as-is via
+// cat_set_frequency().
+static lv_obj_t *s_freq_popup   = NULL;
+static lv_obj_t *s_freq_display = NULL;
+static char      s_freq_buf[16] = "";
+
+static void freq_popup_close(void)
+{
+    if (s_freq_popup) { lv_obj_delete(s_freq_popup); s_freq_popup = NULL; s_freq_display = NULL; }
+}
+
+static void freq_popup_refresh_display(void)
+{
+    if (!s_freq_display) return;
+    if (!s_freq_buf[0]) {
+        lv_label_set_text(s_freq_display, "Enter freq");
+        return;
+    }
+    if (strchr(s_freq_buf, '.')) {
+        // Still typing a raw "MHz.kHz.Hz"-style number for MHz/kHz conversion.
+        lv_label_set_text(s_freq_display, s_freq_buf);
+        return;
+    }
+    // Pure-digit Hz value (after MHz/kHz conversion or plain Hz entry):
+    // format with "." group separators every 3 digits, e.g. "1500000" ->
+    // "1.500.000 Hz".
+    size_t len = strlen(s_freq_buf);
+    char out[32];
+    int oi = 0;
+    for (size_t i = 0; i < len; i++) {
+        if (i > 0 && (len - i) % 3 == 0) out[oi++] = '.';
+        out[oi++] = s_freq_buf[i];
+    }
+    out[oi] = '\0';
+    snprintf(out + oi, sizeof(out) - (size_t)oi, " Hz");
+    lv_label_set_text(s_freq_display, out);
+}
+
+static void freq_overlay_cb(lv_event_t *e)
+{
+    (void)e;
+    freq_popup_close();
+}
+
+// Parse s_freq_buf ("MHz[.kHz[.Hz]]") into a frequency in Hz.
+static uint32_t freq_buf_to_hz(const char *buf)
+{
+    uint32_t groups[3] = {0, 0, 0};
+    int gi = 0;
+    const char *p = buf;
+    while (*p && gi < 3) {
+        if (*p == '.') {
+            gi++;
+        } else if (*p >= '0' && *p <= '9') {
+            groups[gi] = groups[gi] * 10 + (uint32_t)(*p - '0');
+        }
+        p++;
+    }
+    if (gi == 0) {
+        // No "." entered at all: treat the whole number as Hz directly.
+        return groups[0];
+    }
+    return groups[0] * 1000000UL + groups[1] * 1000UL + groups[2];
+}
+
+static void freq_key_cb(lv_event_t *e)
+{
+    char key = (char)(intptr_t)lv_event_get_user_data(e);
+    size_t len = strlen(s_freq_buf);
+
+    switch (key) {
+        case 'C':  // Cancel
+            freq_popup_close();
+            return;
+        case 'E': {  // Enter
+            if (s_freq_buf[0]) {
+                uint32_t target_hz = freq_buf_to_hz(s_freq_buf);
+                esp_err_t err = cat_set_frequency(target_hz);
+                ESP_LOGI("ui", "Freq keypad: '%s' -> %lu Hz (err=0x%x)",
+                         s_freq_buf, (unsigned long)target_hz, err);
+                if (err == ESP_OK) {
+                    ui_update_frequency(target_hz);
+                }
+            }
+            freq_popup_close();
+            return;
+        }
+        case 'M':   // MHz: interpret typed number as MHz -> Hz
+        case 'K': { // kHz: interpret typed number as kHz -> Hz
+            double val = s_freq_buf[0] ? atof(s_freq_buf) : 0.0;
+            double mult = (key == 'M') ? 1000000.0 : 1000.0;
+            uint32_t hz = (uint32_t)(val * mult + 0.5);
+            snprintf(s_freq_buf, sizeof(s_freq_buf), "%lu", (unsigned long)hz);
+            break;
+        }
+        case 'D':  // Delete (backspace)
+            if (len > 0) s_freq_buf[len - 1] = '\0';
+            break;
+        case '.':
+            // Allow at most 2 dots (3 groups: MHz.kHz.Hz)
+            {
+                int dots = 0;
+                for (const char *q = s_freq_buf; *q; q++) if (*q == '.') dots++;
+                if (dots >= 2) break;
+            }
+            if (len + 1 < sizeof(s_freq_buf)) { s_freq_buf[len] = '.'; s_freq_buf[len + 1] = '\0'; }
+            break;
+        default:  // digit
+            if (len + 1 < sizeof(s_freq_buf)) { s_freq_buf[len] = key; s_freq_buf[len + 1] = '\0'; }
+            break;
+    }
+    freq_popup_refresh_display();
+}
+
+static void freq_label_clicked_cb(lv_event_t *e);
+static void freq_popup_open(void)
+{
+    if (s_freq_popup) { freq_popup_close(); return; }
+
+    s_freq_buf[0] = '\0';
+
+    lv_obj_t *ov = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(ov, LV_HOR_RES, LV_VER_RES);
+    lv_obj_set_pos(ov, 0, 0);
+    lv_obj_set_style_bg_color(ov, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(ov, LV_OPA_50, 0);
+    lv_obj_set_style_border_width(ov, 0, 0);
+    lv_obj_clear_flag(ov, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(ov, freq_overlay_cb, LV_EVENT_CLICKED, NULL);
+    s_freq_popup = ov;
+
+    int panel_w = 360;
+    int panel_h = 500;
+    lv_obj_t *panel = lv_obj_create(ov);
+    lv_obj_set_size(panel, panel_w, panel_h);
+    lv_obj_align(panel, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0x1A1A1A), 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(0x444444), 0);
+    lv_obj_set_style_border_width(panel, 1, 0);
+    lv_obj_set_style_radius(panel, 10, 0);
+    lv_obj_set_style_pad_all(panel, 12, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    // Swallow taps on the panel so they don't fall through to the overlay
+    // (which would close the popup).
+    lv_obj_add_flag(panel, LV_OBJ_FLAG_CLICKABLE);
+
+    int content_w = panel_w - 2 * 12;
+
+    s_freq_display = lv_label_create(panel);
+    lv_label_set_text(s_freq_display, "Enter freq");
+    lv_obj_set_style_text_color(s_freq_display, lv_color_hex(0xFFD76B), 0);
+    lv_obj_set_style_text_font(s_freq_display, &lv_font_montserrat_32, 0);
+    lv_obj_set_size(s_freq_display, content_w, 48);
+    lv_obj_set_style_text_align(s_freq_display, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_freq_display, LV_ALIGN_TOP_MID, 0, 0);
+
+    // 3x4 keypad grid: 1 2 3 / 4 5 6 / 7 8 9 / . 0 <-
+    static const char *const keys[12] = {
+        "1", "2", "3",
+        "4", "5", "6",
+        "7", "8", "9",
+        ".", "0", LV_SYMBOL_LEFT,
+    };
+    static const char keycodes[12] = {
+        '1', '2', '3',
+        '4', '5', '6',
+        '7', '8', '9',
+        '.', '0', 'D',
+    };
+
+    int grid_top = 48 + 12;
+    int cols = 3, rows = 4;
+    int gap = 8;
+    int cell_w = (content_w - (cols - 1) * gap) / cols;
+    int cell_h = 64;
+
+    for (int i = 0; i < 12; i++) {
+        int col = i % cols;
+        int row = i / cols;
+        lv_obj_t *btn = lv_btn_create(panel);
+        lv_obj_set_size(btn, cell_w, cell_h);
+        lv_obj_set_pos(btn, col * (cell_w + gap), grid_top + row * (cell_h + gap));
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2A2A2A), 0);
+        lv_obj_set_style_radius(btn, 6, 0);
+        lv_obj_add_event_cb(btn, freq_key_cb, LV_EVENT_CLICKED, (void *)(intptr_t)keycodes[i]);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, keys[i]);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_center(lbl);
+    }
+
+    int btn_w = (content_w - gap) / 2;
+    int btn_h = 64;
+
+    // MHz / kHz row: interpret the typed decimal number as that unit and
+    // convert it to a Hz value shown in the display (e.g. "1.5" + MHz ->
+    // 1500000).
+    int unit_y = grid_top + rows * (cell_h + gap);
+
+    lv_obj_t *mhz_btn = lv_btn_create(panel);
+    lv_obj_set_size(mhz_btn, btn_w, btn_h);
+    lv_obj_set_pos(mhz_btn, 0, unit_y);
+    lv_obj_set_style_bg_color(mhz_btn, lv_color_hex(0x2A2A2A), 0);
+    lv_obj_set_style_radius(mhz_btn, 6, 0);
+    lv_obj_add_event_cb(mhz_btn, freq_key_cb, LV_EVENT_CLICKED, (void *)(intptr_t)'M');
+    lv_obj_t *mhz_lbl = lv_label_create(mhz_btn);
+    lv_label_set_text(mhz_lbl, "MHz");
+    lv_obj_set_style_text_font(mhz_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(mhz_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_center(mhz_lbl);
+
+    lv_obj_t *khz_btn = lv_btn_create(panel);
+    lv_obj_set_size(khz_btn, btn_w, btn_h);
+    lv_obj_set_pos(khz_btn, btn_w + gap, unit_y);
+    lv_obj_set_style_bg_color(khz_btn, lv_color_hex(0x2A2A2A), 0);
+    lv_obj_set_style_radius(khz_btn, 6, 0);
+    lv_obj_add_event_cb(khz_btn, freq_key_cb, LV_EVENT_CLICKED, (void *)(intptr_t)'K');
+    lv_obj_t *khz_lbl = lv_label_create(khz_btn);
+    lv_label_set_text(khz_lbl, "kHz");
+    lv_obj_set_style_text_font(khz_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(khz_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_center(khz_lbl);
+
+    // Cancel / Enter row
+    int btn_y = unit_y + btn_h + gap;
+
+    lv_obj_t *cancel_btn = lv_btn_create(panel);
+    lv_obj_set_size(cancel_btn, btn_w, btn_h);
+    lv_obj_set_pos(cancel_btn, 0, btn_y);
+    lv_obj_set_style_bg_color(cancel_btn, lv_color_hex(0x553333), 0);
+    lv_obj_set_style_radius(cancel_btn, 6, 0);
+    lv_obj_add_event_cb(cancel_btn, freq_key_cb, LV_EVENT_CLICKED, (void *)(intptr_t)'C');
+    lv_obj_t *cancel_lbl = lv_label_create(cancel_btn);
+    lv_label_set_text(cancel_lbl, "Cancel");
+    lv_obj_set_style_text_font(cancel_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(cancel_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_center(cancel_lbl);
+
+    lv_obj_t *enter_btn = lv_btn_create(panel);
+    lv_obj_set_size(enter_btn, btn_w, btn_h);
+    lv_obj_set_pos(enter_btn, btn_w + gap, btn_y);
+    lv_obj_set_style_bg_color(enter_btn, lv_color_hex(0x335533), 0);
+    lv_obj_set_style_radius(enter_btn, 6, 0);
+    lv_obj_add_event_cb(enter_btn, freq_key_cb, LV_EVENT_CLICKED, (void *)(intptr_t)'E');
+    lv_obj_t *enter_lbl = lv_label_create(enter_btn);
+    lv_label_set_text(enter_lbl, "Enter");
+    lv_obj_set_style_text_font(enter_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(enter_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_center(enter_lbl);
+
+    freq_popup_refresh_display();
+}
+
+static void freq_label_clicked_cb(lv_event_t *e)
+{
+    (void)e;
+    freq_popup_open();
 }
 
 // ---- BW preset popup --------------------------------------------------
@@ -532,9 +826,15 @@ static lv_obj_t *s_waterfall_obj = NULL;
 static lv_obj_t *s_label_bar = NULL;
 static lv_obj_t *s_status_label = NULL;  // legacy: single label, kept for compatibility (unused after Phase 5.13)
 static lv_obj_t *s_bot_left   = NULL;
-static lv_obj_t *s_bot_center = NULL;
-static lv_obj_t *s_bot_right  = NULL;
+static lv_obj_t *s_bot_center_suffix = NULL;
+static ui_clock_t s_bot_clock;
+static bool       s_bot_clock_valid = false;
+static lv_obj_t *s_bot_wifi_ssid = NULL;
+static ui_rssi_t s_bot_rssi;
+static bool       s_bot_rssi_valid = false;
+static lv_obj_t *s_bot_wifi_suffix = NULL;
 static lv_obj_t *s_bot_mem    = NULL;  /* active memory channel indicator */
+static lv_obj_t *s_bot_version = NULL; /* firmware version, between battery and clock */
 static lv_obj_t *s_burger_btn = NULL;  // Phase 5.10I: kept for foreground move after all UI built
 static lv_obj_t *s_switch_iq  = NULL;  // Phase B: IQ balance toggle in settings drawer
 static lv_obj_t *s_switch_flat = NULL; // Phase 5.12: flat-spectrum toggle in settings drawer
@@ -637,7 +937,10 @@ static void build_top_bar(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_band_label, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(s_band_label, &lv_font_montserrat_24, 0);
     lv_obj_align(s_band_label, LV_ALIGN_LEFT_MID, 8, 0);
-    lv_obj_set_ext_click_area(s_band_label, 20);
+    // Extend the band label's touch target well down into the spectrum
+    // area — there's no reason to support tap-to-tune in the top-left
+    // corner, so make it easy to hit the band selector instead.
+    lv_obj_set_ext_click_area(s_band_label, 110);
     lv_obj_add_flag(s_band_label, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_band_label, band_label_clicked_cb, LV_EVENT_CLICKED, NULL);
 
@@ -646,7 +949,7 @@ static void build_top_bar(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_mode_label, lv_color_hex(0xA0E0A0), 0);
     lv_obj_set_style_text_font(s_mode_label, &lv_font_montserrat_24, 0);
     lv_obj_align(s_mode_label, LV_ALIGN_LEFT_MID, 188, 0);
-    lv_obj_set_ext_click_area(s_mode_label, 20);
+    lv_obj_set_ext_click_area(s_mode_label, 90);
     lv_obj_add_flag(s_mode_label, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_mode_label, mode_label_clicked_cb, LV_EVENT_CLICKED, NULL);
 
@@ -655,15 +958,18 @@ static void build_top_bar(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_bw_label, lv_color_hex(0xC0C0FF), 0);
     lv_obj_set_style_text_font(s_bw_label, &lv_font_montserrat_24, 0);
     lv_obj_align(s_bw_label, LV_ALIGN_LEFT_MID, 355, 0);
-    lv_obj_set_ext_click_area(s_bw_label, 20);
+    lv_obj_set_ext_click_area(s_bw_label, 90);
     lv_obj_add_flag(s_bw_label, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_bw_label, bw_label_clicked_cb, LV_EVENT_CLICKED, NULL);
 
     s_freq_label = lv_label_create(bar);
-    lv_label_set_text(s_freq_label, "Center Freq: 14.074.000 Hz");
+    lv_label_set_text(s_freq_label, "Freq: 14.074.000 Hz");
     lv_obj_set_style_text_color(s_freq_label, lv_color_hex(0xFFD76B), 0);
     lv_obj_set_style_text_font(s_freq_label, &lv_font_montserrat_24, 0);
     lv_obj_align(s_freq_label, LV_ALIGN_CENTER, 60, 0);
+    lv_obj_add_flag(s_freq_label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(s_freq_label, 20);
+    lv_obj_add_event_cb(s_freq_label, freq_label_clicked_cb, LV_EVENT_CLICKED, NULL);
 
     s_smeter_label = lv_label_create(bar);
     lv_label_set_text(s_smeter_label, "Signal: S0");
@@ -914,11 +1220,27 @@ static void build_bottom_bar(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_bot_left, &lv_font_montserrat_24, 0);
     lv_obj_align(s_bot_left, LV_ALIGN_LEFT_MID, 8, 0);
 
-    s_bot_center = lv_label_create(bar);
-    lv_label_set_text(s_bot_center, "");
-    lv_obj_set_style_text_color(s_bot_center, lv_color_hex(0xC0C0C0), 0);
-    lv_obj_set_style_text_font(s_bot_center, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_bot_center, LV_ALIGN_CENTER, 0, 0);
+    // UTC clock, centered in the bottom bar. Built from fixed-width
+    // per-character cells (ui_clock) so digit-width changes in the
+    // proportional font don't make the clock bounce left/right.
+    {
+        const lv_font_t *font = &lv_font_montserrat_24;
+        const lv_coord_t cell_w = 15;
+        const lv_coord_t clock_w = 7 * cell_w;  // 6 digit cells + 2 half-width colon cells
+        const char *suffix = " UTC";
+        lv_coord_t suffix_w = lv_txt_get_width(suffix, strlen(suffix), font, 0);
+        lv_coord_t total_w = clock_w + suffix_w;
+        lv_coord_t x0 = (DISPLAY_H_RES - total_w) / 2;
+
+        ui_clock_init(&s_bot_clock, bar, x0, 0, font, lv_color_hex(0xC0C0C0), cell_w);
+        s_bot_clock_valid = true;
+
+        s_bot_center_suffix = lv_label_create(bar);
+        lv_label_set_text(s_bot_center_suffix, suffix);
+        lv_obj_set_style_text_color(s_bot_center_suffix, lv_color_hex(0xC0C0C0), 0);
+        lv_obj_set_style_text_font(s_bot_center_suffix, font, 0);
+        lv_obj_align(s_bot_center_suffix, LV_ALIGN_LEFT_MID, x0 + clock_w, 0);
+    }
 
     s_bot_mem = lv_label_create(bar);
     lv_label_set_text(s_bot_mem, "");
@@ -926,12 +1248,48 @@ static void build_bottom_bar(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_bot_mem, &lv_font_montserrat_24, 0);
     lv_obj_align(s_bot_mem, LV_ALIGN_CENTER, -300, 0);
 
-    s_bot_right = lv_label_create(bar);
-    lv_label_set_text(s_bot_right, "");
-    lv_obj_set_style_text_color(s_bot_right, lv_color_hex(0xC0C0C0), 0);
-    lv_obj_set_style_text_font(s_bot_right, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_align(s_bot_right, LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(s_bot_right, LV_ALIGN_RIGHT_MID, -8, 0);
+    // Firmware version, centered between the battery text and the UTC clock.
+    s_bot_version = lv_label_create(bar);
+    lv_label_set_text(s_bot_version, "");
+    lv_obj_set_style_text_color(s_bot_version, lv_color_hex(0xC0C0C0), 0);
+    lv_obj_set_style_text_font(s_bot_version, &lv_font_montserrat_24, 0);
+    lv_obj_align(s_bot_version, LV_ALIGN_CENTER, -250, 0);
+
+    // WiFi status: icon+SSID, RSSI, and IP at fixed x positions so the
+    // per-second-changing RSSI digits (glyph-width jitter, same issue as
+    // the UTC clock) can't shift the icon/SSID to their left. The SSID
+    // label is right-aligned in a generous box ending exactly where the
+    // RSSI cells start, so a longer SSID pushes the icon further left
+    // (rather than being clipped) while the RSSI position stays fixed.
+    {
+        const lv_font_t *font = &lv_font_montserrat_24;
+        const lv_coord_t cell_w = 14;
+        const lv_coord_t rssi_w = 3 * cell_w;
+        const lv_coord_t suffix_w = 260;   // "dBm  192.168.123.123"
+        const lv_coord_t ssid_w = 220;     // icon + SSID, right-aligned
+        const lv_coord_t x_rssi = DISPLAY_H_RES - 8 - rssi_w - suffix_w;
+        const lv_coord_t x0 = x_rssi - ssid_w;
+
+        s_bot_wifi_ssid = lv_label_create(bar);
+        lv_label_set_text(s_bot_wifi_ssid, "");
+        lv_obj_set_style_text_color(s_bot_wifi_ssid, lv_color_hex(0xC0C0C0), 0);
+        lv_obj_set_style_text_font(s_bot_wifi_ssid, font, 0);
+        lv_obj_set_pos(s_bot_wifi_ssid, x0, 0);
+        lv_obj_set_width(s_bot_wifi_ssid, ssid_w);
+        lv_label_set_long_mode(s_bot_wifi_ssid, LV_LABEL_LONG_DOT);
+        lv_obj_set_style_text_align(s_bot_wifi_ssid, LV_TEXT_ALIGN_RIGHT, 0);
+
+        ui_rssi_init(&s_bot_rssi, bar, x_rssi, 0, font, lv_color_hex(0xC0C0C0), cell_w);
+        s_bot_rssi_valid = true;
+
+        s_bot_wifi_suffix = lv_label_create(bar);
+        lv_label_set_text(s_bot_wifi_suffix, "");
+        lv_obj_set_style_text_color(s_bot_wifi_suffix, lv_color_hex(0xC0C0C0), 0);
+        lv_obj_set_style_text_font(s_bot_wifi_suffix, font, 0);
+        lv_obj_set_pos(s_bot_wifi_suffix, x0 + ssid_w + rssi_w, 0);
+        lv_obj_set_width(s_bot_wifi_suffix, suffix_w);
+        lv_label_set_long_mode(s_bot_wifi_suffix, LV_LABEL_LONG_DOT);
+    }
 }
 
 // ==== Public API ====
@@ -969,12 +1327,37 @@ void ui_init(lv_display_t *disp)
     // Phase 5.10I: ensure the oversized burger sits on top of everything
     if (s_burger_btn) lv_obj_move_foreground(s_burger_btn);
 
-    // Hidden 80x80 long-press screenshot region in top-left
-    screenshot_init(scr);
-    // Step 4c.2 fix: ensure the screenshot region stays on top of the
-    // FT8 container (which was created later and otherwise wins z-order
-    // wherever they overlap in the top 20 px).
-    lv_obj_move_foreground(screenshot_get_btn());
+    // Enlarged touch targets for every top-bar dropdown: each label's own
+    // ext_click_area doesn't win hit-testing against the spectrum's
+    // tap-to-tune handler (different parent/z-order), so add dedicated
+    // transparent overlay buttons on top of everything, each spanning the
+    // full 200px height from the top of the screen down into the spectrum.
+    // No tap-to-tune is needed in the top strip anyway.
+    {
+        static const struct {
+            int x, w;
+            lv_event_cb_t cb;
+        } hit_zones[] = {
+            { 0,    180, band_label_clicked_cb },  // Band
+            { 180,  165, mode_label_clicked_cb },  // Mode
+            { 345,  165, bw_label_clicked_cb   },  // BW
+            { 580,  280, freq_label_clicked_cb },  // Freq
+            { 1010, 185, zoom_label_clicked_cb },  // Zoom
+            { 1195, 85,  settings_button_cb    },  // Burger
+        };
+        for (size_t i = 0; i < sizeof(hit_zones) / sizeof(hit_zones[0]); i++) {
+            lv_obj_t *hit = lv_obj_create(scr);
+            lv_obj_set_size(hit, hit_zones[i].w, 200);
+            lv_obj_set_pos(hit, hit_zones[i].x, 0);
+            lv_obj_set_style_bg_opa(hit, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_border_width(hit, 0, 0);
+            lv_obj_clear_flag(hit, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(hit, hit_zones[i].cb, LV_EVENT_CLICKED, NULL);
+            lv_obj_move_foreground(hit);
+        }
+    }
+
     ESP_LOGI(TAG, "UI built: top=%dpx spectrum=%dpx labels=%dpx waterfall=%dpx bottom=%dpx",
              TOP_BAR_H, SPECTRUM_H, LABEL_BAR_H, WATERFALL_H, BOTTOM_BAR_H);
     // Load CW trim from NVS so bin shift is correct from first frame.
@@ -1094,7 +1477,7 @@ void ui_update_frequency(uint32_t freq_hz)
     uint32_t mhz = freq_hz / 1000000;
     uint32_t khz = (freq_hz / 1000) % 1000;
     uint32_t hz  = freq_hz % 1000;
-    snprintf(buf, sizeof(buf), "Center Freq: %lu.%03lu.%03lu Hz", mhz, khz, hz);
+    snprintf(buf, sizeof(buf), "Freq: %lu.%03lu.%03lu Hz", mhz, khz, hz);
     if (display_lock(20)) {
         lv_label_set_text(s_freq_label, buf);
         if (s_bot_mem) lv_label_set_text(s_bot_mem, "");  /* clear memory label on any freq change */
@@ -1145,6 +1528,16 @@ void ui_update_mode(const char *mode)
     } else {
         ESP_LOGW("ui", "ui_update_mode: display_lock timeout for '%s'", mode);
     }
+}
+
+// Cheap, side-effect-free band label refresh: derives the band name from
+// freq_hz and pushes it via ui_update_band(). Safe to call on every CAT FA
+// poll (unlike ui_update_frequency, which resets pan offset and is gated
+// on frequency change).
+void ui_refresh_band_label(uint32_t freq_hz)
+{
+    const char *band = band_from_freq(freq_hz);
+    if (band) ui_update_band(band);
 }
 
 void ui_update_band(const char *band)
@@ -1535,11 +1928,29 @@ void ui_set_bottom_left(const char *text)
     }
 }
 
-void ui_set_bottom_center(const char *text)
+void ui_set_bottom_version(const char *text)
 {
-    if (!s_bot_center) return;
+    if (!s_bot_version) return;
     if (display_lock(20)) {
-        lv_label_set_text(s_bot_center, text ? text : "");
+        lv_label_set_text(s_bot_version, text ? text : "");
+        display_unlock();
+    }
+}
+
+void ui_set_bottom_clock(int h, int m, int s, bool valid)
+{
+    if (!s_bot_clock_valid) return;
+    if (display_lock(20)) {
+        if (valid) {
+            ui_clock_set_time(&s_bot_clock, h, m, s);
+        } else {
+            lv_label_set_text(s_bot_clock.cells[0], "-");
+            lv_label_set_text(s_bot_clock.cells[1], "-");
+            lv_label_set_text(s_bot_clock.cells[3], "-");
+            lv_label_set_text(s_bot_clock.cells[4], "-");
+            lv_label_set_text(s_bot_clock.cells[6], "-");
+            lv_label_set_text(s_bot_clock.cells[7], "-");
+        }
         display_unlock();
     }
 }
@@ -1553,11 +1964,20 @@ void ui_set_memory_label(const char *text)
     }
 }
 
-void ui_set_bottom_right(const char *text)
+void ui_set_bottom_wifi(const char *icon_ssid, bool show_rssi, int rssi_dbm, const char *suffix)
 {
-    if (!s_bot_right) return;
+    if (!s_bot_wifi_ssid) return;
     if (display_lock(20)) {
-        lv_label_set_text(s_bot_right, text ? text : "");
+        lv_label_set_text(s_bot_wifi_ssid, icon_ssid ? icon_ssid : "");
+        if (s_bot_rssi_valid) {
+            if (show_rssi) {
+                ui_rssi_set(&s_bot_rssi, rssi_dbm);
+                for (int i = 0; i < 3; i++) lv_obj_clear_flag(s_bot_rssi.cells[i], LV_OBJ_FLAG_HIDDEN);
+            } else {
+                for (int i = 0; i < 3; i++) lv_obj_add_flag(s_bot_rssi.cells[i], LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+        lv_label_set_text(s_bot_wifi_suffix, suffix ? suffix : "");
         display_unlock();
     }
 }
@@ -1628,18 +2048,12 @@ static void touch_event_cb(lv_event_t *e)
         s_last_tap_us = now_us;
         s_last_tap_x  = (int)p.x;
         if (s_last_qmx_freq_hz == 0) return;  // no freq known yet, can't tune
-        // Phase 5.10D: deadzone under-and-left of the burger button.
-        // Burger is at top-right (~x=1216..1276, ~y=top bar). Block touches
-        // landing in a 180x80 region in the top-right of the spectrum so a
-        // wide finger pressing the button doesn't also retune.
-        if (p.x >= 1080 && p.y < 120) {  // Phase 5.10I: enlarged for 80x80 burger
-            ESP_LOGI("ui_touch", "RELEASED in burger deadzone (200x120) (x=%d y=%d) - ignored", (int)p.x, (int)p.y);
-            return;
-        }
-
-        // Screenshot button deadzone: top-left 80x80
-        if (p.x < 80 && p.y < 80) {
-            ESP_LOGI("ui_touch", "RELEASED in screenshot deadzone (80x80) (x=%d y=%d) - ignored", (int)p.x, (int)p.y);
+        // Top-bar dropdown deadzones: band/mode/BW/zoom/burger overlay
+        // buttons each span the full top 200px (see hit_zones in ui_init).
+        // Tap-to-tune isn't needed under those columns; the gap between BW
+        // and Zoom (x=510..1010) remains tunable.
+        if (p.y < 200 && (p.x < 510 || p.x >= 1010)) {
+            ESP_LOGI("ui_touch", "RELEASED in top-bar dropdown deadzone (x=%d y=%d) - ignored", (int)p.x, (int)p.y);
             return;
         }
 

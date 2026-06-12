@@ -3,6 +3,7 @@ idf_component_register(
         "main.c"
         "display/display.c"
         "ui/ui.c"
+        "ui/ui_clock.c"
         "ui/wifi_config.c"
         "ui/identity_config.c"
         "ui/memory_modal.c"

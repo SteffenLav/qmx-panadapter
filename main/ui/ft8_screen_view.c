@@ -1,5 +1,6 @@
 #include "ft8_screen_view.h"
 #include "ft8_screen.h"
+#include "ui_clock.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -129,7 +130,8 @@ static lv_obj_t *s_right_pane  = NULL;
 
 static lv_obj_t *s_lbl_mode     = NULL;
 static lv_obj_t *s_lbl_freq     = NULL;
-static lv_obj_t *s_lbl_utc      = NULL;
+static ui_clock_t s_clk_utc;
+static lv_obj_t *s_lbl_utc_suffix = NULL;
 static lv_obj_t *s_lbl_count    = NULL;
 static lv_obj_t *s_lbl_heard    = NULL;
 static lv_obj_t *s_lbl_me       = NULL;
@@ -645,12 +647,7 @@ static void t_clock_cb(lv_timer_t *t)
     struct tm utc;
     gmtime_r(&now, &utc);
 
-    if (s_lbl_utc) {
-        char b[16];
-        snprintf(b, sizeof(b), "%02d:%02d:%02d UTC",
-                 utc.tm_hour, utc.tm_min, utc.tm_sec);
-        lv_label_set_text(s_lbl_utc, b);
-    }
+    ui_clock_set_time(&s_clk_utc, utc.tm_hour, utc.tm_min, utc.tm_sec);
     if (s_lbl_count) {
         int sec_in_slot = (int)(now % 15);
         int remain = 15 - sec_in_slot;
@@ -855,11 +852,16 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_lbl_freq, &lv_font_montserrat_32, 0);
     lv_obj_set_pos(s_lbl_freq, 0, 80);
 
-    s_lbl_utc = lv_label_create(s_left_pane);
-    lv_label_set_text(s_lbl_utc, "--:--:-- UTC");
-    lv_obj_set_style_text_color(s_lbl_utc, lv_color_hex(0xA0FFA0), 0);
-    lv_obj_set_style_text_font(s_lbl_utc, &lv_font_montserrat_32, 0);
-    lv_obj_set_pos(s_lbl_utc, 0, 160);
+    {
+        const lv_font_t *font = &lv_font_montserrat_32;
+        const lv_coord_t cell_w = 22;
+        ui_clock_init(&s_clk_utc, s_left_pane, 0, 160, font, lv_color_hex(0xA0FFA0), cell_w);
+        s_lbl_utc_suffix = lv_label_create(s_left_pane);
+        lv_label_set_text(s_lbl_utc_suffix, " UTC");
+        lv_obj_set_style_text_color(s_lbl_utc_suffix, lv_color_hex(0xA0FFA0), 0);
+        lv_obj_set_style_text_font(s_lbl_utc_suffix, font, 0);
+        lv_obj_set_pos(s_lbl_utc_suffix, 7 * cell_w, 160);
+    }
 
     s_lbl_count = lv_label_create(s_left_pane);
     lv_label_set_text(s_lbl_count, "Slot: -- s");

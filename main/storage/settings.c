@@ -30,6 +30,7 @@ static const char *TAG = "settings";
 #define KEY_ZOOM       "zoom"
 #define KEY_BRIGHTNESS "brightness"
 #define KEY_LAST_MODE  "last_mode"
+#define KEY_LAST_TIME  "last_time"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -64,6 +65,7 @@ static const char *TAG = "settings";
 #define DIRTY_ZOOM      (1u << 13)
 #define DIRTY_BRIGHTNESS (1u << 14)
 #define DIRTY_LAST_MODE  (1u << 15)
+#define DIRTY_LAST_TIME  (1u << 16)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -153,6 +155,7 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_COLORMAP)  nvs_set_u8(s_nvs, KEY_COLORMAP, snap.colormap_idx);
         if (dirty_local & DIRTY_BRIGHTNESS) nvs_set_u8(s_nvs, KEY_BRIGHTNESS, snap.brightness_pct);
         if (dirty_local & DIRTY_LAST_MODE)  nvs_set_u8(s_nvs, KEY_LAST_MODE,  snap.last_ui_mode);
+        if (dirty_local & DIRTY_LAST_TIME)  nvs_set_u32(s_nvs, KEY_LAST_TIME, snap.last_unix_time);
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
@@ -189,6 +192,13 @@ void settings_init(void)
 
     s_ready = true;
 
+    // Seed s_pending from NVS so the setters' "unchanged, skip write" checks
+    // compare against the persisted value, not a zero-initialized struct.
+    // Without this, the first call to a setter in a session that happens to
+    // match the zero/default value (e.g. settings_set_last_ui_mode(0) when
+    // NVS already holds 1) is wrongly treated as a no-op and never written.
+    settings_load_all(&s_pending);
+
     // Spawn the debounced flush task. Low priority — IO, not real-time.
     xTaskCreate(flush_task, "settings_flush", 3072, NULL, 3, &s_flush_task);
     ESP_LOGI(TAG, "ready");
@@ -211,6 +221,7 @@ void settings_load_all(qmx_settings_t *out)
     out->colormap_idx = DEF_COLORMAP;
     out->brightness_pct = DEF_BRIGHTNESS;
     out->last_ui_mode = DEF_LAST_MODE;
+    out->last_unix_time = 0;
 
     if (!s_ready) {
         ESP_LOGW(TAG, "load_all: NVS not ready, using defaults");
@@ -231,6 +242,7 @@ void settings_load_all(qmx_settings_t *out)
     nvs_get_u8(s_nvs, KEY_COLORMAP, &out->colormap_idx);
     nvs_get_u8(s_nvs, KEY_BRIGHTNESS, &out->brightness_pct);
     nvs_get_u8(s_nvs, KEY_LAST_MODE, &out->last_ui_mode);
+    nvs_get_u32(s_nvs, KEY_LAST_TIME, &out->last_unix_time);
 
     // Strings: zero buffers first, then read length-bounded.
     out->wifi_ssid[0] = '\0';
@@ -408,8 +420,31 @@ void settings_set_last_ui_mode(uint8_t mode)
         return;
     }
     s_pending.last_ui_mode = mode;
+    s_dirty &= ~DIRTY_LAST_MODE;  // written synchronously below; nothing left for flush_task
     xSemaphoreGive(s_mutex);
-    mark_dirty(DIRTY_LAST_MODE);
+
+    // Write immediately rather than via the debounced flush task: a mode
+    // toggle is a rare, deliberate action, and if it's followed quickly by
+    // a reset (e.g. a firmware flash), the 500ms debounce window can lose
+    // it, leaving the device booting back into the mode the user just left.
+    nvs_set_u8(s_nvs, KEY_LAST_MODE, mode);
+    esp_err_t err = nvs_commit(s_nvs);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "nvs_commit (last_ui_mode) failed: 0x%x", err);
+    }
+}
+
+void settings_set_last_unix_time(uint32_t unix_sec)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.last_unix_time == unix_sec) {
+        xSemaphoreGive(s_mutex);
+        return;
+    }
+    s_pending.last_unix_time = unix_sec;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_LAST_TIME);
 }
 
 void settings_set_my_callsign(const char *call)

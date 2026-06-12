@@ -19,6 +19,7 @@
 #include "bsp/esp-bsp.h"
 #include "webserver.h"
 #include "rigctld_server.h"
+#include "cat.h"
 
 static const char *TAG = "wifi";
 
@@ -63,6 +64,17 @@ static void sntp_sync_cb(struct timeval *tv)
              tm_utc.tm_year + 1900, tm_utc.tm_mon + 1, tm_utc.tm_mday,
              tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec);
     xEventGroupSetBits(s_events, BIT_TIME_OK);
+
+    // Persist as a "last known date" anchor for the QMX-RTC time fallback
+    // (see cat_query_qmx_time), and push our UTC time-of-day to the QMX's
+    // onboard RTC so it stays correct for later no-WiFi (POTA) sessions.
+    settings_set_last_unix_time((uint32_t)tv->tv_sec);
+    if (cat_is_ready()) {
+        esp_err_t err = cat_set_qmx_time(tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to push time to QMX RTC: 0x%x", err);
+        }
+    }
 }
 
 // Event handlers -------------------------------------------------------

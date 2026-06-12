@@ -121,3 +121,29 @@ typedef struct {
  * @return pointer to static array of cat_band_entry_t
  */
 const cat_band_entry_t *cat_get_band_list(int *out_count);
+
+/**
+ * @brief Set the QMX's onboard real-time clock (time-of-day only, no date).
+ *
+ * Sends TM<hh><mm><ss>; (Kenwood/QMX-specific CAT command). Used to keep
+ * the QMX RTC in sync with UTC whenever this device has a good time
+ * source (SNTP), so the QMX RTC can later serve as a fallback time
+ * source for FT8 when there's no WiFi (e.g. POTA).
+ *
+ * @return ESP_OK on send, ESP_ERR_INVALID_ARG if hour/min/sec out of range,
+ *         ESP_ERR_INVALID_STATE if QMX not connected.
+ */
+esp_err_t cat_set_qmx_time(int hour, int min, int sec);
+
+/**
+ * @brief Query the QMX's onboard real-time clock (time-of-day only, no date).
+ *
+ * Sends "TM;" and blocks briefly (pausing the background poll loop) for
+ * the "TMhhmmss;" response. Used as a fallback UTC time-of-day source for
+ * FT8 slot alignment when SNTP/WiFi is unavailable.
+ *
+ * @return ESP_OK and out_hour/out_min/out_sec populated on success,
+ *         ESP_ERR_INVALID_STATE if QMX not connected/ready, ESP_FAIL on
+ *         a bad/missing response.
+ */
+esp_err_t cat_query_qmx_time(int *out_hour, int *out_min, int *out_sec);

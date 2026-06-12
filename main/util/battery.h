@@ -15,6 +15,9 @@ esp_err_t battery_init(i2c_master_bus_handle_t bus);
 // Battery state of charge, 0-100. Returns -1 if unknown / uninitialised.
 int battery_get_level(void);
 
+// Battery pack voltage in millivolts. Returns -1 if unknown / uninitialised.
+int battery_get_mv(void);
+
 // True when current is flowing into the battery (charging).
 bool battery_is_charging(void);
 

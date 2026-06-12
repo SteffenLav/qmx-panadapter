@@ -53,6 +53,8 @@ static char s_rx_buf[CAT_RX_BUFFER_SIZE];
 static size_t s_rx_len = 0;
 static char   s_mm_resp[64] = {0};  // last MM response, set by process_cat_message
 static size_t s_mm_resp_len = 0;
+static char   s_tm_resp[16] = {0};  // last TM response, set by process_cat_message
+static size_t s_tm_resp_len = 0;
 
 static uint32_t s_last_freq_hz = 0;
 static char s_last_mode_digit = 0;  // Phase 5.10: cached Kenwood mode digit
@@ -175,6 +177,15 @@ static void process_cat_message(const char *msg, size_t len)
                      (unsigned long)((freq_hz / 1000) % 1000));
             ui_update_frequency(freq_hz);
         }
+        // ui_update_frequency() above (pan reset, freq label, axis labels)
+        // is gated on freq change and must stay that way. But the Band
+        // label update nested inside it can be silently dropped on the
+        // very first FA response after link-up (UI init / display_lock
+        // race) - and since the VFO often doesn't move again, the gated
+        // path above never re-fires and "Band: ---" sticks forever.
+        // ui_refresh_band_label() is cheap (band_from_freq + label set,
+        // no side effects) so call it unconditionally every poll.
+        ui_refresh_band_label(freq_hz);
         return;
     }
 
@@ -212,6 +223,13 @@ static void process_cat_message(const char *msg, size_t len)
         }
         ui_update_passband_width(hz);
         s_cat_ready = true;
+        return;
+    }
+    // TM response: "TMhhmmss;" - 9 chars, real-time-clock time-of-day.
+    if (len == 9 && msg[0] == 'T' && msg[1] == 'M') {
+        s_tm_resp_len = len;
+        memcpy(s_tm_resp, msg, len);
+        s_tm_resp[len] = '\0';
         return;
     }
     // MM response: starts with "MM", ends with ";"
@@ -474,6 +492,26 @@ static void link_task(void *arg)
                     ESP_LOGW(TAG, "Failed to enable QMX IQ mode: 0x%x", terr);
                 }
             }
+            // One-shot inline FA/MD/FW round-trip right after link-up, so
+            // the top-bar Band/Mode/BW labels populate immediately instead
+            // of waiting for the CW-offset query + band-table scan below
+            // (7-10+ seconds) to finish before poll_task gets a chance to
+            // run. process_cat_message() (called via handle_rx) updates the
+            // UI directly as each response arrives.
+            {
+                static const char *const warmup_cmds[] = { "FA;", "MD;", "FW;" };
+                for (size_t wi = 0; wi < sizeof(warmup_cmds) / sizeof(warmup_cmds[0]); wi++) {
+                    const char *cmd = warmup_cmds[wi];
+                    esp_err_t werr = cdc_acm_host_data_tx_blocking(
+                        s_cdc_dev, (const uint8_t *)cmd, strlen(cmd), 200);
+                    if (werr != ESP_OK) {
+                        ESP_LOGW(TAG, "Warmup %s send failed: 0x%x", cmd, werr);
+                        break;
+                    }
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                }
+            }
+
             // Read CW offset from QMX menu (session value, EEPROM-persisted on QMX side)
             {
                 const char *cw_q = "MMCW|CW offset;";
@@ -498,42 +536,104 @@ static void link_task(void *arg)
                     ESP_LOGW(TAG, "Failed to query CW offset: 0x%x", cerr);
                 }
             }
-            // Query band list from QMX band config (up to 16 slots)
+            // Query band list from QMX band config (up to 16 slots).
+            // Right after CAT link-up (especially after a cold QMX power-on)
+            // the menu system can take a while to fully populate, so any
+            // individual MM query can come back empty/zero even for a slot
+            // that's genuinely configured. Give it time, then retry each
+            // slot before treating it as a real gap.
+            // This scan runs before poll_task starts, so the Band/Mode/BW
+            // top-bar labels stay "---" until it finishes. Diagnostic
+            // captures showed valid slots (0-5) always respond on the
+            // first try once the menu is ready; keep some margin but don't
+            // make the user stare at "---" for 10+ seconds.
+            vTaskDelay(pdMS_TO_TICKS(2000));
             {
                 s_band_count = 0;
+                int consecutive_empty = 0;
+                // Two diagnostic captures confirmed this QMX's band table has
+                // exactly 6 entries (60/40/30/20/17/15m, slots 0-5) and slots
+                // 6-15 are consistently empty. Stop after 2 consecutive empty
+                // slots instead of grinding through all 16 (was costing ~24s
+                // of scan time for nothing and delaying s_band_count's final
+                // value during which the dropdown could be opened mid-scan).
+                const int MAX_CONSECUTIVE_EMPTY = 2;
+                const int MAX_RETRIES = 8;
                 for (int bi = 0; bi < CAT_MAX_BANDS; bi++) {
-                    // Query band name
-                    char qname[48];
-                    snprintf(qname, sizeof(qname), "MMBand config.|Band name (m)[%d];", bi);
-                    s_rx_len = 0;
-                    esp_err_t be = cdc_acm_host_data_tx_blocking(
-                        s_cdc_dev, (const uint8_t *)qname, strlen(qname), 200);
-                    if (be != ESP_OK) break;
-                    vTaskDelay(pdMS_TO_TICKS(80));
-                    // "?;" means empty slot — stop
-                    if (s_mm_resp_len < 3 || strncmp(s_mm_resp, "MM", 2) != 0 ||
-                        strncmp(s_mm_resp, "MM?", 3) == 0) break;
-                    // Parse: MMxx; where xx is band name
+                    bool got_band = false;
                     char bname[8] = {0};
-                    int nlen = (int)s_mm_resp_len - 3;  // strip "MM" prefix and ";"
-                    if (nlen <= 0 || nlen >= (int)sizeof(bname)) break;
-                    snprintf(bname, sizeof(bname), "%.*s", nlen, s_mm_resp + 2);
-                    s_mm_resp_len = 0;
-                    // Query center frequency
-                    char qfreq[56];
-                    snprintf(qfreq, sizeof(qfreq), "MMBand config.|Frequency center[%d];", bi);
-                    be = cdc_acm_host_data_tx_blocking(
-                        s_cdc_dev, (const uint8_t *)qfreq, strlen(qfreq), 200);
-                    if (be != ESP_OK) break;
-                    vTaskDelay(pdMS_TO_TICKS(80));
-                    if (s_mm_resp_len < 3 || strncmp(s_mm_resp, "MM", 2) != 0) break;
-                    uint32_t cf = (uint32_t)atoi(s_mm_resp + 2);
-                    s_mm_resp_len = 0;
-                    if (cf == 0) break;
+                    uint32_t cf = 0;
+                    bool transport_error = false;
+
+                    for (int retry = 0; retry < MAX_RETRIES && !got_band; retry++) {
+                        if (retry > 0) vTaskDelay(pdMS_TO_TICKS(300));
+
+                        // Query band name
+                        char qname[48];
+                        snprintf(qname, sizeof(qname), "MMBand config.|Band name (m)[%d];", bi);
+                        s_rx_len = 0;
+                        s_mm_resp_len = 0;
+                        esp_err_t be = cdc_acm_host_data_tx_blocking(
+                            s_cdc_dev, (const uint8_t *)qname, strlen(qname), 200);
+                        if (be != ESP_OK) { transport_error = true; break; }
+                        for (int wi = 0; wi < 20 && s_mm_resp_len == 0; wi++) {
+                            vTaskDelay(pdMS_TO_TICKS(20));
+                        }
+                        if (s_mm_resp_len == 0) {
+                            ESP_LOGI(TAG, "Band[%d] name query: no response (retry %d)", bi, retry);
+                            continue;
+                        }
+                        if (s_mm_resp_len < 3 || strncmp(s_mm_resp, "MM", 2) != 0 ||
+                            strncmp(s_mm_resp, "MM?", 3) == 0) {
+                            ESP_LOGI(TAG, "Band[%d] name query: empty slot (len=%u, retry %d)", bi, (unsigned)s_mm_resp_len, retry);
+                            continue;
+                        }
+                        // Parse: MMxx; where xx is band name
+                        int nlen = (int)s_mm_resp_len - 3;  // strip "MM" prefix and ";"
+                        if (nlen <= 0 || nlen >= (int)sizeof(bname)) continue;
+                        snprintf(bname, sizeof(bname), "%.*s", nlen, s_mm_resp + 2);
+                        s_mm_resp_len = 0;
+
+                        // Query center frequency
+                        char qfreq[56];
+                        snprintf(qfreq, sizeof(qfreq), "MMBand config.|Frequency center[%d];", bi);
+                        be = cdc_acm_host_data_tx_blocking(
+                            s_cdc_dev, (const uint8_t *)qfreq, strlen(qfreq), 200);
+                        if (be != ESP_OK) { transport_error = true; break; }
+                        for (int wi = 0; wi < 20 && s_mm_resp_len == 0; wi++) {
+                            vTaskDelay(pdMS_TO_TICKS(20));
+                        }
+                        if (s_mm_resp_len == 0) {
+                            ESP_LOGI(TAG, "Band[%d] freq query: no response (retry %d)", bi, retry);
+                            continue;
+                        }
+                        if (s_mm_resp_len < 3 || strncmp(s_mm_resp, "MM", 2) != 0) {
+                            ESP_LOGI(TAG, "Band[%d] freq query: bad response (len=%u, retry %d)", bi, (unsigned)s_mm_resp_len, retry);
+                            continue;
+                        }
+                        cf = (uint32_t)atoi(s_mm_resp + 2);
+                        s_mm_resp_len = 0;
+                        if (cf == 0) {
+                            ESP_LOGI(TAG, "Band[%d] freq query: zero (retry %d)", bi, retry);
+                            continue;
+                        }
+                        got_band = true;
+                    }
+
+                    if (transport_error) break;
+
+                    if (!got_band) {
+                        consecutive_empty++;
+                        ESP_LOGI(TAG, "Band[%d]: no valid data after %d retries (%d consecutive)", bi, MAX_RETRIES, consecutive_empty);
+                        if (consecutive_empty >= MAX_CONSECUTIVE_EMPTY) break;
+                        continue;
+                    }
+
                     snprintf(s_band_list[s_band_count].name, sizeof(s_band_list[0].name), "%s", bname);
                     s_band_list[s_band_count].center_hz = cf;
                     ESP_LOGI(TAG, "Band[%d]: %sm @ %lu Hz", bi, bname, (unsigned long)cf);
                     s_band_count++;
+                    consecutive_empty = 0;
                 }
                 ESP_LOGI(TAG, "Band list: %d bands found", s_band_count);
             }
@@ -682,5 +782,46 @@ esp_err_t cat_set_passband_hz(uint32_t hz)
         return err;
     }
     ESP_LOGI(TAG, "Sent: %s (passband %lu Hz)", cmd, (unsigned long)hz);
+    return ESP_OK;
+}
+
+esp_err_t cat_set_qmx_time(int hour, int min, int sec)
+{
+    if (hour < 0 || hour > 23 || min < 0 || min > 59 || sec < 0 || sec > 59) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    return cat_send_raw_cmd("TM%02d%02d%02d;", hour, min, sec);
+}
+
+esp_err_t cat_query_qmx_time(int *out_hour, int *out_min, int *out_sec)
+{
+    if (!s_cdc_dev || !s_cat_ready) return ESP_ERR_INVALID_STATE;
+
+    cat_poll_set_paused(true);
+    s_tm_resp_len = 0;
+    esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"TM;", 3, 200);
+    if (err == ESP_OK) {
+        for (int i = 0; i < 10 && s_tm_resp_len == 0; i++) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+    }
+    cat_poll_set_paused(false);
+
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "TM; query TX failed: 0x%x", err);
+        return err;
+    }
+    if (s_tm_resp_len != 9 || strncmp(s_tm_resp, "TM", 2) != 0) {
+        ESP_LOGW(TAG, "No valid TM response (len=%u)", (unsigned)s_tm_resp_len);
+        return ESP_FAIL;
+    }
+    for (int i = 2; i < 8; i++) {
+        if (s_tm_resp[i] < '0' || s_tm_resp[i] > '9') return ESP_FAIL;
+    }
+    *out_hour = (s_tm_resp[2] - '0') * 10 + (s_tm_resp[3] - '0');
+    *out_min  = (s_tm_resp[4] - '0') * 10 + (s_tm_resp[5] - '0');
+    *out_sec  = (s_tm_resp[6] - '0') * 10 + (s_tm_resp[7] - '0');
+    if (*out_hour > 23 || *out_min > 59 || *out_sec > 59) return ESP_FAIL;
+    ESP_LOGI(TAG, "QMX RTC time: %02d:%02d:%02d", *out_hour, *out_min, *out_sec);
     return ESP_OK;
 }

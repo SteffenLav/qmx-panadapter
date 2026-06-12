@@ -118,6 +118,9 @@ void ft8_screen_init(void)
 static bool token_looks_like_grid(const char *t, size_t len)
 {
     if (len != 4 && len != 6) return false;
+    // "RR73" is a reserved FT8 roger/73 token, not a grid square, even
+    // though it syntactically matches AA00..RR99 (R is a valid field letter).
+    if (len == 4 && t[0] == 'R' && t[1] == 'R' && t[2] == '7' && t[3] == '3') return false;
     if (t[0] < 'A' || t[0] > 'R') return false;
     if (t[1] < 'A' || t[1] > 'R') return false;
     if (t[2] < '0' || t[2] > '9') return false;

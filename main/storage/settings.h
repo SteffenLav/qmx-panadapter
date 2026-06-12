@@ -26,6 +26,7 @@ typedef struct {
     float    zoom_factor;      // spectrum/waterfall zoom, 1.0=full, max 24.0
     uint8_t  brightness_pct;   // LCD backlight brightness, 0..100, default 100
     uint8_t  last_ui_mode;     // last UI mode: 0=Panadapter, 1=FT8 (default 0)
+    uint32_t last_unix_time;   // last UTC unix time seen from SNTP (0 = never synced)
 } qmx_settings_t;
 
 // Initialise the settings module. Opens an NVS handle. Safe to call
@@ -72,6 +73,11 @@ void settings_set_brightness_pct(uint8_t pct);
 
 // Last UI mode: 0=Panadapter, 1=FT8 (debounced flush).
 void settings_set_last_ui_mode(uint8_t mode);
+
+// Save last-known UTC unix time from SNTP (debounced flush). Used as a
+// "last known date" anchor so the QMX RTC time-of-day (no date) can be
+// turned into a full timestamp when SNTP is unavailable (e.g. POTA).
+void settings_set_last_unix_time(uint32_t unix_sec);
 
 // Force any pending writes to flash immediately. Call before reboot
 // if you want absolute certainty. Normally not needed.

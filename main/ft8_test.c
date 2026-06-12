@@ -30,6 +30,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <time.h>
 #include <sys/time.h>
 
 #include "esp_log.h"
@@ -47,6 +48,7 @@
 
 #include "dsp.h"
 #include "cat/cat.h"
+#include "storage/settings.h"
 #include "ui/ui_mode.h"
 #include "ui/ft8_screen.h"
 #include "ui/ft8_screen_view.h"
@@ -60,7 +62,7 @@ static const char *TAG = "ft8_test";
 #define SLOT_SAMPLES          180000      // 15 s × 12 kHz
 #define SLOT_TIMEOUT_MS       20000
 #define SNTP_WAIT_TIMEOUT_MS  30000
-#define CAT_WAIT_TIMEOUT_MS   60000
+#define CAT_STATUS_UPDATE_MS  5000
 #define DECODE_QUEUE_DEPTH    2           // one in-flight + one ready, never backs up
 
 #define EPOCH_SANE_MIN        1700000000  // 2023-11-14 — SNTP not synced if below this
@@ -100,17 +102,48 @@ static bool wait_for_sntp(uint32_t timeout_ms)
     return false;
 }
 
-static bool wait_for_cat_ready(uint32_t timeout_ms)
+// No-WiFi (POTA) fallback: derive UTC from the QMX's onboard RTC
+// (time-of-day only, "TM;") combined with the last date SNTP gave us
+// (persisted to NVS). A stale date is harmless for FT8 slot alignment —
+// 86400 s/day is an exact multiple of 15, so unix_sec % 15 is unaffected
+// by a date that's off by whole days.
+static bool set_time_from_qmx_rtc(void)
+{
+    int h, m, s;
+    if (cat_query_qmx_time(&h, &m, &s) != ESP_OK) return false;
+
+    qmx_settings_t cfg;
+    settings_load_all(&cfg);
+    int64_t anchor = (cfg.last_unix_time > EPOCH_SANE_MIN)
+                         ? (int64_t)cfg.last_unix_time
+                         : (int64_t)EPOCH_SANE_MIN;
+
+    int64_t day_start = (anchor / 86400) * 86400;
+    struct timeval tv = { .tv_sec = (time_t)(day_start + h * 3600 + m * 60 + s), .tv_usec = 0 };
+    settimeofday(&tv, NULL);
+    ESP_LOGI(TAG, "UTC time-of-day set from QMX RTC: %02d:%02d:%02d (date from last SNTP anchor)",
+             h, m, s);
+    return true;
+}
+
+// Blocks until the QMX CAT handshake completes. There is no timeout —
+// the QMX may be powered on well after the Tab5 (e.g. persistent FT8
+// mode restored at boot before the radio is switched on), so we just
+// keep waiting and periodically update the status line so the user
+// knows we're still looking.
+static void wait_for_cat_ready(void)
 {
     int64_t t0 = esp_timer_get_time();
-    while ((esp_timer_get_time() - t0) / 1000 < (int64_t)timeout_ms) {
-        if (cat_is_ready()) {
-            ESP_LOGI(TAG, "CAT ready (QMX handshake complete)");
-            return true;
+    int64_t last_update = t0;
+    while (!cat_is_ready()) {
+        int64_t now = esp_timer_get_time();
+        if ((now - last_update) / 1000 >= CAT_STATUS_UPDATE_MS) {
+            ft8_status_set("Waiting for QMX — check USB/power");
+            last_update = now;
         }
         vTaskDelay(pdMS_TO_TICKS(200));
     }
-    return false;
+    ESP_LOGI(TAG, "CAT ready (QMX handshake complete)");
 }
 
 // Block until the next 15 s slot boundary strictly after after_sec.
@@ -236,24 +269,23 @@ static void ft8_task(void *arg)
 {
     (void)arg;
 
+    ft8_status_set("Waiting for QMX...");
+    ESP_LOGI(TAG, "waiting for CAT (QMX USB + Q9 1; handshake)...");
+    wait_for_cat_ready();
+
     ft8_status_set("Waiting for SNTP sync...");
     ESP_LOGI(TAG, "waiting for SNTP...");
     if (!wait_for_sntp(SNTP_WAIT_TIMEOUT_MS)) {
-        ESP_LOGE(TAG, "SNTP did not sync within %d ms - check WiFi",
+        ESP_LOGW(TAG, "SNTP did not sync within %d ms - trying QMX RTC fallback",
                  SNTP_WAIT_TIMEOUT_MS);
-        ft8_status_set("SNTP timeout — check WiFi");
-        vTaskDelete(NULL);
-        return;
-    }
-
-    ft8_status_set("Waiting for QMX...");
-    ESP_LOGI(TAG, "waiting for CAT (QMX USB + Q9 1; handshake)...");
-    if (!wait_for_cat_ready(CAT_WAIT_TIMEOUT_MS)) {
-        ESP_LOGE(TAG, "CAT did not become ready within %d ms - check QMX USB",
-                 CAT_WAIT_TIMEOUT_MS);
-        ft8_status_set("QMX not found — check USB");
-        vTaskDelete(NULL);
-        return;
+        if (set_time_from_qmx_rtc()) {
+            ft8_status_set("Time from QMX RTC (no WiFi)");
+        } else {
+            ESP_LOGE(TAG, "No time source available (no SNTP, no QMX RTC) - check WiFi");
+            ft8_status_set("No time source — check WiFi");
+            vTaskDelete(NULL);
+            return;
+        }
     }
 
     // Two ping-pong audio buffers — one captures while the other decodes.

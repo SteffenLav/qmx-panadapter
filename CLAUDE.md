@@ -199,7 +199,7 @@ POUNCE (we answered their CQ)          CQ-RUN (they answered our CQ)
 
 | Branch | What | State |
 |--------|------|-------|
-| `main` | v0.15.2 — 40-row FT8 decode list (LV_MEM_SIZE_KILOBYTES 256), display brightness slider (settings drawer), persistent UI mode (Panadapter/FT8 survives reboot via `ui_apply_saved_mode()`) | stable on ST7123 and ST7121 |
+| `main` | v0.15.3 — top-bar Band/Mode/BW refresh fix + warmup round-trip, tap-to-enter frequency keypad, battery voltage + firmware version in bottom bar, RR73-as-grid fix, QMX RTC time sync for no-WiFi (POTA) FT8 timing, screenshot capture simplified | stable on ST7123 and ST7121 |
 
 ## Next up (v0.16.0)
 

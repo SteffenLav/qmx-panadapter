@@ -16,6 +16,7 @@ void ui_set_memory_label(const char *text);  /* active memory channel; pass NULL
 void ui_update_smeter(int s_units);
 void ui_update_mode(const char *mode);   // Phase 5.10: e.g. "USB", "CW"
 void ui_update_band(const char *band);   // Phase 5.10: e.g. "20m", "40m"
+void ui_refresh_band_label(uint32_t freq_hz);  // cheap, call every FA poll
 void ui_push_spectrum(const float *bins, int n_bins);   // Phase 4
 void ui_push_waterfall_row(const uint8_t *rgb565_row);  // Phase 5
 
@@ -33,8 +34,19 @@ int  ui_get_if_bin_shift(int n_bins);  // Total bin shift = (IF_OFFSET_HZ + if_c
 
 // Bottom status bar: 3-zone layout (left/center/right). Pass NULL or "" to clear.
 void ui_set_bottom_left(const char *text);
-void ui_set_bottom_center(const char *text);
-void ui_set_bottom_right(const char *text);
+
+// Bottom-bar firmware version, centered between the battery text and the UTC clock.
+void ui_set_bottom_version(const char *text);
+
+// Bottom-bar right zone: WiFi icon+SSID (or "off" text), optional RSSI
+// (rendered in jitter-free fixed-width digit cells), and a trailing
+// suffix (e.g. " -67dBm  192.168.1.5" minus the rssi number -> "dBm  192.168.1.5").
+// Pass show_rssi=false to hide the RSSI cells (disconnected).
+void ui_set_bottom_wifi(const char *icon_ssid, bool show_rssi, int rssi_dbm, const char *suffix);
+
+// Bottom-bar UTC clock (center). valid=false shows "--:--:-- UTC"
+// (pre-SNTP-sync placeholder); h/m/s ignored in that case.
+void ui_set_bottom_clock(int h, int m, int s, bool valid);
 void ui_set_flat_mode(bool on);
 
 // Phase 5.4: update dB label text (called by autoscale)
