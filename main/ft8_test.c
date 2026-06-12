@@ -30,6 +30,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <math.h>
 #include <time.h>
 #include <sys/time.h>
 
@@ -165,6 +166,66 @@ static int64_t wait_for_slot_boundary(int64_t after_sec)
 }
 
 // ---------------------------------------------------------------------------
+// SNR estimation
+// ---------------------------------------------------------------------------
+
+// WSJT-X reports SNR referenced to a 2500 Hz noise bandwidth.
+#define FT8_SNR_REF_BW_HZ      2500.0f
+// Empirical fudge factor — nudge this if a real WSJT-X comparison ever
+// becomes available; everything else here is derived from first principles.
+#define FT8_SNR_CAL_OFFSET_DB  15.0f
+
+// Estimate a message's SNR (dB, 2500 Hz reference bandwidth) directly from
+// the decoder's own FFT magnitude data — no external reference needed.
+//
+// Noise floor = mean power across the whole slot's waterfall (signals occupy
+// a small fraction of bins, so this tracks the noise floor closely).
+// Signal level = mean, over all 79 symbol blocks, of the strongest of the
+// 8 FT8 tone bins at the candidate's frequency/sub-bin alignment.
+static float ft8_estimate_snr_db(const monitor_t *mon, const ftx_candidate_t *cand)
+{
+    const ftx_waterfall_t *wf = &mon->wf;
+    int total = wf->num_blocks * wf->block_stride;
+    if (total <= 0) {
+        return 0.0f;
+    }
+
+    double noise_pwr_sum = 0;
+    for (int i = 0; i < total; ++i) {
+        noise_pwr_sum += powf(10.0f, WF_ELEM_MAG(wf->mag[i]) / 10.0f);
+    }
+    float noise_db = 10.0f * log10f((float)(noise_pwr_sum / total));
+
+    int base = ((cand->time_sub * wf->freq_osr) + cand->freq_sub) * wf->num_bins + cand->freq_offset;
+    double sig_pwr_sum = 0;
+    int sig_n = 0;
+    for (int block = 0; block < wf->num_blocks; ++block) {
+        float max_mag = -120.0f;
+        for (int tone = 0; tone < 8; ++tone) {
+            int idx = base + tone * wf->num_bins + block * wf->block_stride;
+            if (idx < 0 || idx >= total) {
+                continue;
+            }
+            float m = WF_ELEM_MAG(wf->mag[idx]);
+            if (m > max_mag) {
+                max_mag = m;
+            }
+        }
+        sig_pwr_sum += powf(10.0f, max_mag / 10.0f);
+        sig_n++;
+    }
+    if (sig_n == 0) {
+        return 0.0f;
+    }
+    float sig_db = 10.0f * log10f((float)(sig_pwr_sum / sig_n));
+
+    float bin_bw_hz = 6.25f / wf->freq_osr;
+    float bw_correction_db = 10.0f * log10f(FT8_SNR_REF_BW_HZ / bin_bw_hz);
+
+    return (sig_db - noise_db) - bw_correction_db + FT8_SNR_CAL_OFFSET_DB;
+}
+
+// ---------------------------------------------------------------------------
 // Decode pipeline — called only from ft8_decode_task
 // ---------------------------------------------------------------------------
 
@@ -193,9 +254,10 @@ static void decode_slot(float *audio, monitor_t *mon,
         ftx_message_offsets_t off;
         if (ftx_message_decode(&msg, NULL, text, &off) == FTX_MESSAGE_RC_OK) {
             n_decoded++;
-            ESP_LOGI(TAG, "decoded: '%s' (score=%d freq_off=%d)",
-                     text, cands[i].score, cands[i].freq_offset);
-            ft8_screen_record_decode(text, cands[i].score, cands[i].freq_offset, slot_sec);
+            int snr_db = (int)lroundf(ft8_estimate_snr_db(mon, &cands[i]));
+            ESP_LOGI(TAG, "decoded: '%s' (score=%d freq_off=%d snr=%d)",
+                     text, cands[i].score, cands[i].freq_offset, snr_db);
+            ft8_screen_record_decode(text, cands[i].score, snr_db, cands[i].freq_offset, slot_sec);
         }
     }
     int dec_ms = (int)((esp_timer_get_time() - t_start) / 1000) - mon_ms;

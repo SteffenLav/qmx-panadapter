@@ -24,7 +24,7 @@ typedef struct {
     char     last_grid[FT8_GRID_MAX_LEN];  // remote's grid (empty if unknown)
     int64_t  last_utc;
     int16_t  last_score;
-    int16_t  last_snr_db;  // approx SNR = score - 20 (rough calibration)
+    int16_t  last_snr_db;  // estimated SNR, dB, 2500 Hz ref bandwidth (see ft8_estimate_snr_db)
     int16_t  last_freq;
     uint16_t heard_count;
     bool     occupied;
@@ -34,7 +34,7 @@ void ft8_screen_init(void);
 
 // Called from ft8_task once per successfully decoded message.
 void ft8_screen_record_decode(const char *text,
-                              int score, int freq_off,
+                              int score, int snr_db, int freq_off,
                               int64_t utc_sec);
 
 // Snapshot occupied rows into out[0..max). count_out receives

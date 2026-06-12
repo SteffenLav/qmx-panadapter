@@ -162,7 +162,7 @@ static void extract_grid_from_text(const char *msg, char *out_grid, size_t cap)
 }
 
 void ft8_screen_record_decode(const char *text,
-                              int score, int freq_off,
+                              int score, int snr_db, int freq_off,
                               int64_t utc_sec)
 {
     char call[FT8_CALL_MAX_LEN];
@@ -187,7 +187,7 @@ void ft8_screen_record_decode(const char *text,
     e->last_text[n] = '\0';
     e->last_utc   = utc_sec;
     e->last_score = (int16_t)score;
-    e->last_snr_db = (int16_t)(score - 20);  // rough SNR proxy
+    e->last_snr_db = (int16_t)snr_db;
     e->last_freq  = (int16_t)freq_off;
     // Update grid if this message contains one (don't clobber prior grid
     // with empty when later messages omit it).

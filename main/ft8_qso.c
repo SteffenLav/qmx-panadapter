@@ -47,7 +47,7 @@ static const char *TAG = "ft8_qso";
 // and come back, fading, QRM, etc.).
 #define QSO_TIMEOUT_SLOTS  4
 
-// Clamp the (coarse, proxy) SNR we report to a sane FT8 range.
+// Clamp the SNR we report to a sane FT8 range.
 #define RPT_MIN_DB  (-24)
 #define RPT_MAX_DB  (+15)
 

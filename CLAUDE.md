@@ -181,7 +181,7 @@ POUNCE (we answered their CQ)          CQ-RUN (they answered our CQ)
 
 **Deferred arming (v0.15.0)**: `advance()` runs in the decode task ~4 s into the *next* slot — usually while our re-armed burst is already ACTIVE, when `ft8_tx_arm()` refuses. So advance() only updates state + `s_cur_req`; `rearm_current()` (from `on_tx_complete()`, or `arm_current_if_idle()` as a safety net) does the actual arm. WAIT_DONE arms the final exactly once then clears `s_have_cur`. This fixes the v0.14.0 bug where a CQ reply detected during the next CQ burst could never transition out of CQ.
 
-**Report value**: CQ-run sends a signal report built from the answering station's coarse proxy SNR (`fmt_report`, clamped −24..+15, e.g. `-07`). Not WSJT-X-calibrated.
+**Report value**: CQ-run sends a signal report built from the answering station's estimated SNR (`fmt_report`, clamped −24..+15, e.g. `-07`). SNR is computed in `ft8_estimate_snr_db()` (`ft8_test.c`) directly from the decoder's own FFT magnitudes — signal level (strongest of the 8 tone bins per symbol, averaged over the slot) minus the slot's mean noise floor, scaled from per-bin bandwidth to WSJT-X's 2500 Hz reference. Self-calibrating against the slot's own noise floor, but has no external ground truth; `FT8_SNR_CAL_OFFSET_DB` in `ft8_test.c` is a single tunable fudge factor if a real WSJT-X comparison ever becomes available.
 
 **CQ-row filtering**: `ft8_qso_cq_filter_active()` is true throughout a CQ-originated session; `rebuild_list()` in `ft8_screen_view.c` then hides other stations' `CQ ` rows so replies to us stand out.
 
