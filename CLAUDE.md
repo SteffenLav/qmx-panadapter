@@ -90,11 +90,16 @@ The v0.13.1 touch-driver fork (register-map tolerance, `max_touches` clamp) is h
 ### Audio task is polling, not event-driven
 `audio_task` runs on core 0 with `uac_host_device_read` + a drain loop. Event-driven reads caused noise-floor pumping (slow ~13 s cycle) due to truncated UAC chunks saturating the FFT input. Do not revert to event-driven.
 
+### QMX power cycle doesn't always re-enumerate USB (v0.15.5)
+With the USB cable left connected, power-cycling the QMX often does not trigger `AE_DISCONNECTED`/`AE_RX_CONNECTED` — the UAC device stays open, audio just goes silent for a few seconds then resumes. `process_rx()` in `audio.c` detects this directly: any poll with zero bytes/pairs sets `s_flat_reset_pending`, and the next poll with real samples calls `ui_flat_mode_reset()`. This is what re-seeds the flat-spectrum floor after a power cycle — the old approach (resetting on `AE_RX_CONNECTED` / CAT reconnect) never fired because no reconnect event occurs.
+
 ### Waterfall double-height buffer
 `1280 × 824` RGB565 canvas (2× waterfall height). Each tick writes the new row at `s_wf_head` and `s_wf_head + WATERFALL_H`, then moves the view pointer. Avoids `memmove` (~130 µs vs ~92 ms per tick).
 
 ### 12 kHz IF offset
 The QMX presents IQ with +12 kHz IF offset — the VFO signal lands at +12 kHz in baseband. Spectrum and waterfall shift bin selection by `n_bins/4` to center the VFO signal visually. Touch-to-tune math uses the raw CAT frequency, so no adjustment needed there.
+
+`dsp_get_peak_dbm_around_vfo()` (used for the S-meter and the web UI's `signal_dbm`) must be centered on this same IF-shifted bin (`ui_get_if_bin_shift(DSP_FFT_SIZE)`), not on raw bin 0 (DC). Before v0.15.5 it searched around DC, which is dominated by constant DC/LO leakage — the S-meter read a near-constant S6 regardless of actual signal.
 
 ### FT8 capture window must be UTC-boundary-capped, not fixed-sample-count (v0.15.1)
 `dsp_ft8_capture()` used to wait for a fixed 180000 samples (nominally 15.000 s @ 12 kHz). The QMX's USB audio clock isn't bit-exact 48 kHz, so 180000 samples actually take a hair over 15.000 s wall-clock — the capture window slides later by ~0.2–0.4 s every slot. After ~12–15 slots (~3 min) the FT8 signal falls outside ft8_lib's decoder time-search window: candidates stay high (~140) but decodes drop to 0. A mode-bounce (FT8 → Panadapter → FT8) "heals" it by resetting to a fresh UTC boundary — that was the tell that pinned this down.
@@ -199,7 +204,7 @@ POUNCE (we answered their CQ)          CQ-RUN (they answered our CQ)
 
 | Branch | What | State |
 |--------|------|-------|
-| `main` | v0.15.3 — top-bar Band/Mode/BW refresh fix + warmup round-trip, tap-to-enter frequency keypad, battery voltage + firmware version in bottom bar, RR73-as-grid fix, QMX RTC time sync for no-WiFi (POTA) FT8 timing, screenshot capture simplified | stable on ST7123 and ST7121 |
+| `main` | v0.15.5 — memory-button frequency/mode picker, wider freq keypad with mode row, CAT mode-set-on-Enter rate-limiter fix, flat-spectrum floor reset on QMX power cycle (USB stays connected), S-meter fixed to track the IF-shifted VFO bin instead of the DC bin; v0.15.4 FFT-based FT8 SNR estimation; v0.15.3 top-bar Band/Mode/BW refresh fix + warmup round-trip, tap-to-enter frequency keypad, battery voltage + firmware version in bottom bar, RR73-as-grid fix, QMX RTC time sync for no-WiFi (POTA) FT8 timing, screenshot capture simplified | stable on ST7123 and ST7121 |
 
 ## Next up (v0.16.0)
 

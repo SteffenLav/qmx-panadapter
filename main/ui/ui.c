@@ -227,6 +227,32 @@ static void band_label_clicked_cb(lv_event_t *e)
 static lv_obj_t *s_freq_popup   = NULL;
 static lv_obj_t *s_freq_display = NULL;
 static char      s_freq_buf[16] = "";
+static ui_freq_picker_cb_t s_freq_picker_cb = NULL;
+
+// Mode row on the freq keypad: DiGi / USB / LSB / CW. Selected mode is
+// highlighted yellow and travels with the typed frequency.
+static const char *const s_freq_modes[4] = {"DiGi", "USB", "LSB", "CW"};
+static lv_obj_t *s_freq_mode_btns[4];
+static char      s_freq_mode_sel[8] = "";
+
+static void freq_mode_highlight(void)
+{
+    for (int i = 0; i < 4; i++) {
+        if (!s_freq_mode_btns[i]) continue;
+        bool sel = (strcmp(s_freq_modes[i], s_freq_mode_sel) == 0);
+        // Dim yellow, same intensity as the Cancel/Enter buttons.
+        lv_obj_set_style_bg_color(s_freq_mode_btns[i],
+            sel ? lv_color_hex(0x55502A) : lv_color_hex(0x2A2A2A), 0);
+    }
+}
+
+static void freq_mode_cb(lv_event_t *e)
+{
+    const char *mode = (const char *)lv_event_get_user_data(e);
+    strncpy(s_freq_mode_sel, mode, sizeof(s_freq_mode_sel) - 1);
+    s_freq_mode_sel[sizeof(s_freq_mode_sel) - 1] = '\0';
+    freq_mode_highlight();
+}
 
 static void freq_popup_close(void)
 {
@@ -264,6 +290,11 @@ static void freq_overlay_cb(lv_event_t *e)
 {
     (void)e;
     freq_popup_close();
+    if (s_freq_picker_cb) {
+        ui_freq_picker_cb_t cb = s_freq_picker_cb;
+        s_freq_picker_cb = NULL;
+        cb(0, s_freq_mode_sel, false);
+    }
 }
 
 // Parse s_freq_buf ("MHz[.kHz[.Hz]]") into a frequency in Hz.
@@ -295,8 +326,21 @@ static void freq_key_cb(lv_event_t *e)
     switch (key) {
         case 'C':  // Cancel
             freq_popup_close();
+            if (s_freq_picker_cb) {
+                ui_freq_picker_cb_t cb = s_freq_picker_cb;
+                s_freq_picker_cb = NULL;
+                cb(0, s_freq_mode_sel, false);
+            }
             return;
         case 'E': {  // Enter
+            if (s_freq_picker_cb) {
+                uint32_t target_hz = s_freq_buf[0] ? freq_buf_to_hz(s_freq_buf) : 0;
+                ui_freq_picker_cb_t cb = s_freq_picker_cb;
+                s_freq_picker_cb = NULL;
+                freq_popup_close();
+                cb(target_hz, s_freq_mode_sel, true);
+                return;
+            }
             if (s_freq_buf[0]) {
                 uint32_t target_hz = freq_buf_to_hz(s_freq_buf);
                 esp_err_t err = cat_set_frequency(target_hz);
@@ -305,6 +349,13 @@ static void freq_key_cb(lv_event_t *e)
                 if (err == ESP_OK) {
                     ui_update_frequency(target_hz);
                 }
+            }
+            if (s_freq_mode_sel[0] && strcmp(s_freq_mode_sel, cat_get_mode_str()) != 0) {
+                // cat_set_frequency() above just consumed the 200ms CAT
+                // rate-limit slot; wait it out so this MD command isn't
+                // silently dropped.
+                vTaskDelay(pdMS_TO_TICKS(210));
+                cat_set_mode(s_freq_mode_sel);
             }
             freq_popup_close();
             return;
@@ -336,13 +387,8 @@ static void freq_key_cb(lv_event_t *e)
     freq_popup_refresh_display();
 }
 
-static void freq_label_clicked_cb(lv_event_t *e);
-static void freq_popup_open(void)
+static void freq_popup_build(void)
 {
-    if (s_freq_popup) { freq_popup_close(); return; }
-
-    s_freq_buf[0] = '\0';
-
     lv_obj_t *ov = lv_obj_create(lv_layer_top());
     lv_obj_set_size(ov, LV_HOR_RES, LV_VER_RES);
     lv_obj_set_pos(ov, 0, 0);
@@ -353,8 +399,8 @@ static void freq_popup_open(void)
     lv_obj_add_event_cb(ov, freq_overlay_cb, LV_EVENT_CLICKED, NULL);
     s_freq_popup = ov;
 
-    int panel_w = 360;
-    int panel_h = 500;
+    int panel_w = 504;  // 360 + 40%
+    int panel_h = 580;  // +80 for the new mode row
     lv_obj_t *panel = lv_obj_create(ov);
     lv_obj_set_size(panel, panel_w, panel_h);
     lv_obj_align(panel, LV_ALIGN_CENTER, 0, 0);
@@ -446,8 +492,26 @@ static void freq_popup_open(void)
     lv_obj_set_style_text_color(khz_lbl, lv_color_hex(0xFFFFFF), 0);
     lv_obj_center(khz_lbl);
 
+    // Mode row: DiGi / USB / LSB / CW. Tap to select; selection travels
+    // with the typed frequency (highlighted yellow).
+    int mode_y = unit_y + btn_h + gap;
+    int mode_w = (content_w - 3 * gap) / 4;
+    for (int i = 0; i < 4; i++) {
+        lv_obj_t *btn = lv_btn_create(panel);
+        lv_obj_set_size(btn, mode_w, btn_h);
+        lv_obj_set_pos(btn, i * (mode_w + gap), mode_y);
+        lv_obj_set_style_radius(btn, 6, 0);
+        lv_obj_add_event_cb(btn, freq_mode_cb, LV_EVENT_CLICKED, (void *)s_freq_modes[i]);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, s_freq_modes[i]);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+        lv_obj_center(lbl);
+        s_freq_mode_btns[i] = btn;
+    }
+    freq_mode_highlight();
+
     // Cancel / Enter row
-    int btn_y = unit_y + btn_h + gap;
+    int btn_y = mode_y + btn_h + gap;
 
     lv_obj_t *cancel_btn = lv_btn_create(panel);
     lv_obj_set_size(cancel_btn, btn_w, btn_h);
@@ -476,10 +540,32 @@ static void freq_popup_open(void)
     freq_popup_refresh_display();
 }
 
+static void freq_popup_open(void)
+{
+    if (s_freq_popup) { freq_popup_close(); return; }
+    s_freq_picker_cb = NULL;
+    uint32_t cur_hz = cat_get_frequency();
+    snprintf(s_freq_buf, sizeof(s_freq_buf), "%lu", (unsigned long)cur_hz);
+    const char *mode = cat_get_mode_str();
+    strncpy(s_freq_mode_sel, mode[0] ? mode : "", sizeof(s_freq_mode_sel) - 1);
+    s_freq_mode_sel[sizeof(s_freq_mode_sel) - 1] = '\0';
+    freq_popup_build();
+}
+
 static void freq_label_clicked_cb(lv_event_t *e)
 {
     (void)e;
     freq_popup_open();
+}
+
+void ui_freq_picker_open(uint32_t initial_hz, const char *initial_mode, ui_freq_picker_cb_t cb)
+{
+    if (s_freq_popup) freq_popup_close();
+    s_freq_picker_cb = cb;
+    snprintf(s_freq_buf, sizeof(s_freq_buf), "%lu", (unsigned long)initial_hz);
+    strncpy(s_freq_mode_sel, initial_mode && initial_mode[0] ? initial_mode : "", sizeof(s_freq_mode_sel) - 1);
+    s_freq_mode_sel[sizeof(s_freq_mode_sel) - 1] = '\0';
+    freq_popup_build();
 }
 
 // ---- BW preset popup --------------------------------------------------
@@ -2561,6 +2647,14 @@ static void drawer_apply_preset(int db_min, int db_max, float alpha)
 bool ui_get_flat_mode(void)
 {
     return s_flat_mode;
+}
+
+// Re-seed the flat-spectrum per-bin floor from the next frame. Called by
+// audio.c when the first real audio samples arrive after a UAC stream
+// (re)start, so a stale floor from before a QMX power cycle doesn't linger.
+void ui_flat_mode_reset(void)
+{
+    s_flat_ready = false;
 }
 
 void ui_set_flat_mode(bool on)

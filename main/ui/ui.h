@@ -48,6 +48,7 @@ void ui_set_bottom_wifi(const char *icon_ssid, bool show_rssi, int rssi_dbm, con
 // (pre-SNTP-sync placeholder); h/m/s ignored in that case.
 void ui_set_bottom_clock(int h, int m, int s, bool valid);
 void ui_set_flat_mode(bool on);
+void ui_flat_mode_reset(void);  // re-seed flat-spectrum floor on first audio after QMX (re)connect
 
 // Phase 5.4: update dB label text (called by autoscale)
 void ui_set_db_labels(float db_min, float db_max);
@@ -62,3 +63,11 @@ void ui_update_passband_width(uint32_t hz);
 const char *ui_get_mode_str(void);
 const char *ui_get_band_str(void);
 uint32_t ui_get_passband_width_hz(void);
+
+// Open the frequency entry keypad pre-filled with initial_hz and
+// initial_mode (one of "DiGi"/"USB"/"LSB"/"CW"), in "picker" mode: Enter
+// calls cb(typed_hz, selected_mode, true) without touching the QMX; Cancel
+// (or tap-outside) calls cb(0, selected_mode, false). Used by the memory
+// modal to confirm/edit a frequency + mode before naming a memory slot.
+typedef void (*ui_freq_picker_cb_t)(uint32_t freq_hz, const char *mode, bool accepted);
+void ui_freq_picker_open(uint32_t initial_hz, const char *initial_mode, ui_freq_picker_cb_t cb);

@@ -62,7 +62,8 @@ static esp_err_t status_handler(httpd_req_t *req)
     }
 
     float peak_dbm = -999.0f;
-    if (dsp_get_peak_dbm_around_vfo(64, &peak_dbm) == ESP_OK)
+    int vfo_bin = ((ui_get_if_bin_shift(DSP_FFT_SIZE) % DSP_FFT_SIZE) + DSP_FFT_SIZE) % DSP_FFT_SIZE;
+    if (dsp_get_peak_dbm_around_vfo(vfo_bin, 64, &peak_dbm) == ESP_OK)
         cJSON_AddNumberToObject(root, "signal_dbm", (double)peak_dbm);
     else
         cJSON_AddNullToObject(root, "signal_dbm");

@@ -25,7 +25,8 @@ static lv_obj_t *s_modal       = NULL;
 static lv_obj_t *s_panel       = NULL;
 static lv_obj_t *s_grid        = NULL;
 static lv_obj_t *s_cell_btn[MEM_SLOTS];
-static lv_obj_t *s_cell_lbl[MEM_SLOTS];
+static lv_obj_t *s_cell_lbl[MEM_SLOTS];   /* top line: memory name      */
+static lv_obj_t *s_cell_lbl2[MEM_SLOTS];  /* bottom line: mode + freq   */
 static bool      s_open        = false;
 
 /* Action menu for long-press occupied */
@@ -33,6 +34,10 @@ static lv_obj_t *s_action_panel = NULL;
 static lv_obj_t *s_action_ta    = NULL;  /* label edit textarea */
 static lv_obj_t *s_action_kb    = NULL;
 static int       s_action_idx   = -1;
+
+/* Frequency confirmed/edited via the freq keypad before naming a slot */
+static uint32_t  s_pending_freq_hz = 0;
+static char      s_pending_mode[8] = "";
 
 static void modal_close(void)
 {
@@ -47,37 +52,53 @@ static void close_btn_cb(lv_event_t *e)
     modal_close();
 }
 
+/* Format hz as "12.345.678 Hz" (dot every 3 digits from the right). */
+static void format_freq_hz(uint32_t hz, char *out, size_t out_sz)
+{
+    char digits[12];
+    snprintf(digits, sizeof(digits), "%lu", (unsigned long)hz);
+    size_t len = strlen(digits);
+
+    int oi = 0;
+    for (size_t i = 0; i < len && (size_t)oi < out_sz - 1; i++) {
+        if (i > 0 && (len - i) % 3 == 0) out[oi++] = '.';
+        if ((size_t)oi < out_sz - 1) out[oi++] = digits[i];
+    }
+    out[oi] = '\0';
+    snprintf(out + oi, out_sz - (size_t)oi, " Hz");
+}
+
 static void memory_modal_refresh(void)
 {
     for (int i = 0; i < MEM_SLOTS; i++) {
         mem_slot_t slot;
         mem_channels_get(i, &slot);
 
-        lv_obj_t *btn = s_cell_btn[i];
-        lv_obj_t *lbl = s_cell_lbl[i];
-        if (!btn || !lbl) continue;
+        lv_obj_t *btn  = s_cell_btn[i];
+        lv_obj_t *lbl  = s_cell_lbl[i];
+        lv_obj_t *lbl2 = s_cell_lbl2[i];
+        if (!btn || !lbl || !lbl2) continue;
 
         if (slot.occupied) {
-            uint32_t mhz = slot.freq_hz / 1000000UL;
-            uint32_t khz = (slot.freq_hz % 1000000UL) / 1000UL;
-            char buf[40];
-            if (slot.label[0]) {
-                snprintf(buf, sizeof(buf), "%lu.%03lu\n%s %s",
-                         (unsigned long)mhz, (unsigned long)khz,
-                         slot.mode, slot.label);
-            } else {
-                snprintf(buf, sizeof(buf), "%lu.%03lu\n%s",
-                         (unsigned long)mhz, (unsigned long)khz, slot.mode);
-            }
-            lv_label_set_text(lbl, buf);
+            char freq_str[20];
+            format_freq_hz(slot.freq_hz, freq_str, sizeof(freq_str));
+
+            char buf2[32];
+            snprintf(buf2, sizeof(buf2), "%s   %s", slot.mode, freq_str);
+
+            lv_label_set_text(lbl, slot.label[0] ? slot.label : freq_str);
+            lv_label_set_text(lbl2, slot.label[0] ? buf2 : slot.mode);
             lv_obj_set_style_bg_color(btn, lv_color_hex(0x1a3a5a), 0);
             lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
+            lv_obj_set_style_text_color(lbl2, lv_color_hex(0x8a96a3), 0);
         } else {
             char buf[8];
             snprintf(buf, sizeof(buf), "[%02d]", i + 1);
             lv_label_set_text(lbl, buf);
+            lv_label_set_text(lbl2, "");
             lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a2a2a), 0);
             lv_obj_set_style_text_color(lbl, lv_color_hex(0x606060), 0);
+            lv_obj_set_style_text_color(lbl2, lv_color_hex(0x606060), 0);
         }
     }
 }
@@ -126,18 +147,14 @@ static void action_save_cb(lv_event_t *e)
     mem_slot_t slot = {0};
     mem_channels_get(s_action_idx, &slot);
 
-    if (!slot.occupied) {
-        /* New slot: capture current VFO + mode */
-        uint32_t freq = cat_get_frequency();
-        const char *mode = cat_get_mode_str();
-        if (freq == 0) {
-            ESP_LOGW(TAG, "save: no freq from CAT");
-            return;
-        }
-        slot.freq_hz = freq;
-        slot.occupied = 1;
-        strncpy(slot.mode, mode[0] ? mode : "???", sizeof(slot.mode) - 1);
+    if (s_pending_freq_hz == 0) {
+        ESP_LOGW(TAG, "save: no freq");
+        return;
     }
+    slot.freq_hz = s_pending_freq_hz;
+    slot.occupied = 1;
+    strncpy(slot.mode, s_pending_mode[0] ? s_pending_mode : "???", sizeof(slot.mode) - 1);
+    slot.mode[sizeof(slot.mode) - 1] = '\0';
 
     /* Both new and edit: update label from textarea */
     const char *new_label = lv_textarea_get_text(s_action_ta);
@@ -184,16 +201,11 @@ static void cell_tap_cb(lv_event_t *e)
     modal_close();
 }
 
-static void cell_longpress_cb(lv_event_t *e)
+static void show_action_panel(int idx)
 {
-    lv_obj_t *btn = lv_event_get_target(e);
-    int idx = (int)(intptr_t)lv_obj_get_user_data(btn);
-    if (idx < 0 || idx >= MEM_SLOTS) return;
-
     mem_slot_t slot;
     mem_channels_get(idx, &slot);
 
-    s_action_idx = idx;
     lv_obj_t *ttl = lv_obj_get_child(s_action_panel, 0);
 
     if (slot.occupied) {
@@ -216,6 +228,46 @@ static void cell_longpress_cb(lv_event_t *e)
     lv_obj_clear_flag(s_action_kb, LV_OBJ_FLAG_HIDDEN);
     lv_keyboard_set_textarea(s_action_kb, s_action_ta);
     lv_obj_move_foreground(s_action_kb);
+}
+
+/* Called after the frequency keypad is confirmed/cancelled. */
+static void mem_freq_picker_cb(uint32_t freq_hz, const char *mode, bool accepted)
+{
+    if (!accepted || s_action_idx < 0) {
+        s_action_idx = -1;
+        return;
+    }
+    s_pending_freq_hz = freq_hz;
+    strncpy(s_pending_mode, mode && mode[0] ? mode : "???", sizeof(s_pending_mode) - 1);
+    s_pending_mode[sizeof(s_pending_mode) - 1] = '\0';
+    show_action_panel(s_action_idx);
+}
+
+static void cell_longpress_cb(lv_event_t *e)
+{
+    lv_obj_t *btn = lv_event_get_target(e);
+    int idx = (int)(intptr_t)lv_obj_get_user_data(btn);
+    if (idx < 0 || idx >= MEM_SLOTS) return;
+
+    mem_slot_t slot;
+    mem_channels_get(idx, &slot);
+    s_action_idx = idx;
+
+    /* Pre-fill the freq keypad: existing slot's freq+mode when editing, or
+     * the QMX's current VFO freq+mode when saving a new slot. The user can
+     * change either before naming the slot; the chosen freq+mode are
+     * carried through to action_save_cb via mem_freq_picker_cb. */
+    uint32_t initial_hz;
+    const char *mode;
+    if (slot.occupied) {
+        initial_hz = slot.freq_hz;
+        mode = slot.mode;
+    } else {
+        initial_hz = cat_get_frequency();
+        mode = cat_get_mode_str();
+    }
+
+    ui_freq_picker_open(initial_hz, mode, mem_freq_picker_cb);
 }
 
 static void modal_build(void)
@@ -284,11 +336,21 @@ static void modal_build(void)
 
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_long_mode(lbl, LV_LABEL_LONG_CLIP);
-        lv_obj_set_size(lbl, CELL_W - 8, CELL_H - 8);
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
+        lv_obj_set_size(lbl, CELL_W - 8, 26);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(0x606060), 0);
-        lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
+        lv_obj_align(lbl, LV_ALIGN_TOP_MID, 0, 2);
         s_cell_lbl[i] = lbl;
+
+        lv_obj_t *lbl2 = lv_label_create(btn);
+        lv_label_set_long_mode(lbl2, LV_LABEL_LONG_CLIP);
+        lv_obj_set_size(lbl2, CELL_W - 8, 24);
+        lv_obj_set_style_text_font(lbl2, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_align(lbl2, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_color(lbl2, lv_color_hex(0x606060), 0);
+        lv_obj_align(lbl2, LV_ALIGN_BOTTOM_MID, 0, -2);
+        s_cell_lbl2[i] = lbl2;
     }
 
     lv_obj_t *close_btn = lv_btn_create(s_panel);
@@ -367,18 +429,32 @@ static void modal_build(void)
     lv_obj_add_flag(s_action_panel, LV_OBJ_FLAG_HIDDEN);
 
     s_action_kb = lv_keyboard_create(s_modal);
-    static lv_style_t style_kb;
+    static lv_style_t style_kb_main;
+    static lv_style_t style_kb_items;
     static bool kb_inited = false;
     if (!kb_inited) {
-        lv_style_init(&style_kb);
-        lv_style_set_bg_color(&style_kb, lv_color_hex(0x303030));
-        lv_style_set_bg_opa(&style_kb, LV_OPA_COVER);
-        lv_style_set_text_color(&style_kb, lv_color_white());
-        lv_style_set_border_width(&style_kb, 1);
-        lv_style_set_border_color(&style_kb, lv_color_hex(0x505050));
+        /* Match the frequency keypad's look: dark panel, no border on keys,
+         * grey key fill, small radius, even gaps between keys. */
+        lv_style_init(&style_kb_main);
+        lv_style_set_bg_color(&style_kb_main, lv_color_hex(0x1A1A1A));
+        lv_style_set_bg_opa(&style_kb_main, LV_OPA_COVER);
+        lv_style_set_border_color(&style_kb_main, lv_color_hex(0x444444));
+        lv_style_set_border_width(&style_kb_main, 1);
+        lv_style_set_radius(&style_kb_main, 10);
+        lv_style_set_pad_all(&style_kb_main, 12);
+        lv_style_set_pad_row(&style_kb_main, 8);
+        lv_style_set_pad_column(&style_kb_main, 8);
+
+        lv_style_init(&style_kb_items);
+        lv_style_set_bg_color(&style_kb_items, lv_color_hex(0x2A2A2A));
+        lv_style_set_bg_opa(&style_kb_items, LV_OPA_COVER);
+        lv_style_set_text_color(&style_kb_items, lv_color_white());
+        lv_style_set_border_width(&style_kb_items, 0);
+        lv_style_set_radius(&style_kb_items, 6);
         kb_inited = true;
     }
-    lv_obj_add_style(s_action_kb, &style_kb, LV_PART_ITEMS);
+    lv_obj_add_style(s_action_kb, &style_kb_main, 0);
+    lv_obj_add_style(s_action_kb, &style_kb_items, LV_PART_ITEMS);
     lv_obj_set_size(s_action_kb, LV_PCT(100), 280);
     lv_obj_align(s_action_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_keyboard_set_mode(s_action_kb, LV_KEYBOARD_MODE_TEXT_UPPER);

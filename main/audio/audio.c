@@ -11,6 +11,7 @@
 
 #include "usb/uac_host.h"
 #include "iq_balance.h"
+#include "ui.h"
 
 static const char *TAG = "audio";
 
@@ -55,6 +56,11 @@ static int64_t s_period_start_us = 0;
 static uint32_t s_sample_freq = 0;
 static uint8_t  s_channels    = 0;
 static uint8_t  s_bit_res     = 0;
+
+// Set when the UAC stream (re)starts; cleared on the first batch of real
+// samples, at which point the flat-spectrum floor is re-seeded so a stale
+// floor from before a QMX power cycle doesn't linger.
+static volatile bool s_flat_reset_pending = false;
 
 // Consumer (stub DSP) stats
 // Forward decls
@@ -215,11 +221,24 @@ static void process_rx(void)
         first_read = false;
         esp_err_t err = uac_host_device_read(s_uac_dev, raw, sizeof(raw),
                                              &bytes_read, to);
-        if (err != ESP_OK || bytes_read == 0) return;
+        if (err != ESP_OK || bytes_read == 0) {
+            // No data this poll: the QMX may be mid power-cycle. Mark the
+            // flat-spectrum floor for re-seeding once real samples resume.
+            s_flat_reset_pending = true;
+            return;
+        }
 
         // Each stereo pair = 6 bytes (3B L + 3B R, little-endian signed 24-bit)
         size_t pairs = bytes_read / 6;
-        if (pairs == 0) return;
+        if (pairs == 0) {
+            s_flat_reset_pending = true;
+            return;
+        }
+
+        if (s_flat_reset_pending) {
+            s_flat_reset_pending = false;
+            ui_flat_mode_reset();
+        }
 
         int16_t local_peak_L = s_peak_left;
         int16_t local_peak_R = s_peak_right;
@@ -310,6 +329,7 @@ static esp_err_t open_and_start(uint8_t addr, uint8_t iface_num)
     s_peak_left = 0;
     s_peak_right = 0;
     s_dropped_this_period = 0;
+    s_flat_reset_pending = true;
 
     ESP_LOGI(TAG, "UAC stream started: %lu Hz, %u ch, %u-bit",
              (unsigned long)s_sample_freq, s_channels, s_bit_res);

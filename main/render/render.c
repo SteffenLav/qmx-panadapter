@@ -72,7 +72,8 @@ static void render_task(void *arg)
                 if (s_smeter_tick >= 6) {  // 30 Hz / 6 = 5 Hz
                     s_smeter_tick = 0;
                     float peak_dbm;
-                    if (dsp_get_peak_dbm_around_vfo(64, &peak_dbm) == ESP_OK) {
+                    int vfo_bin = ((ui_get_if_bin_shift(DSP_FFT_SIZE) % DSP_FFT_SIZE) + DSP_FFT_SIZE) % DSP_FFT_SIZE;
+                    if (dsp_get_peak_dbm_around_vfo(vfo_bin, 64, &peak_dbm) == ESP_OK) {
                         // S-unit conversion: S9 = -73 dBm, 6 dB per S-unit below.
                         // Above S9, we use S9+xx where xx = dbm - (-73).
                         int s_units;
