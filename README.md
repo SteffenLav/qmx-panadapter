@@ -21,13 +21,13 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 > **You are solely responsible for operating legally** — correct licence class, operating
 > within your licence privileges, band plan compliance, no harmful interference.
 >
-> **What is NOT yet in place in v0.15.3:**
+> **What is NOT yet in place in v0.15.4:**
 > - No duty-cycle protection — back-to-back TX slots are not prevented by the firmware
 > - No ADIF logging — completed QSOs are not recorded anywhere
 > - No audio loopback verification — the firmware cannot confirm the transmitted waveform
 > - No over-temperature or supply-voltage monitoring
 > - Multi-hour TX soak testing not yet completed
-> - SNR reporting in the decode list is a coarse proxy, not calibrated dB/2500 Hz like WSJT-X
+> - SNR reporting in the decode list is estimated from FFT magnitudes (signal vs. noise floor, scaled to 2500 Hz), but has no external ground-truth calibration against WSJT-X
 >
 > **Recommended first steps before going on-air:**
 > 1. Set the QMX to low PA voltage and connect a dummy load — not an antenna — for first tests
@@ -105,7 +105,7 @@ The original mockup that drove the design ([panadapter-mockup-ideal.svg](docs/pa
 
 ## Status
 
-Working. All phases through 8 complete. Current release: **v0.15.3**. Includes: cold-boot reliability fix, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings (including last-used UI mode and display brightness), Hamlib rigctld bridge, onboard FT8 RX decoder with a 40-row live-view decode list, memory channels, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser) including a tap-to-enter frequency keypad, browser click-to-tune, zoom sync, band memory, QMX RTC time sync for no-WiFi (POTA) FT8 timing, **manual FT8 TX** (reply + CQ via CAT `TA;`), and a **full auto QSO engine** — search-and-pounce plus **CQ-run** (auto-answers callers, runs the exchange to completion with patient retry, then resumes CQ). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
+Working. All phases through 8 complete. Current release: **v0.15.4**. Includes: cold-boot reliability fix, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings (including last-used UI mode and display brightness), Hamlib rigctld bridge, onboard FT8 RX decoder with a 40-row live-view decode list and FFT-based SNR estimation, memory channels, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser) including a tap-to-enter frequency keypad, browser click-to-tune, zoom sync, band memory, QMX RTC time sync for no-WiFi (POTA) FT8 timing, **manual FT8 TX** (reply + CQ via CAT `TA;`), and a **full auto QSO engine** — search-and-pounce plus **CQ-run** (auto-answers callers, runs the exchange to completion with patient retry, then resumes CQ). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
 
 | Phase | What | Status |
 |-------|------|--------|
