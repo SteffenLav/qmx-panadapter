@@ -27,7 +27,6 @@
 #include "esp_lcd_touch.h"
 
 static const char *TAG = "ui";
-static lv_obj_t *s_mode_btn_lbl = NULL;
 
 // Layout constants (1280x720)
 #define TOP_BAR_H       60
@@ -161,7 +160,7 @@ static void band_popup_open(void)
     // LVGL software-rotation pipeline can return stale/incorrect layout
     // coords), causing the panel to think it had far less room than the
     // ~660px actually available and clamp/scroll away entries (e.g. 15m).
-    int panel_x = 8;
+    int panel_x = -2;
     int panel_y = TOP_BAR_H + 4;
     int max_h = DISPLAY_V_RES - panel_y - 4;
     bool needs_scroll = panel_h > max_h;
@@ -853,7 +852,7 @@ static void zoom_popup_open(void)
     // Fixed position near the right edge, under the top bar. Avoid
     // lv_obj_get_coords(s_zoom_label, ...) - the LVGL software-rotation
     // pipeline can return stale/incorrect layout coords (see band_popup_open).
-    lv_obj_set_pos(panel, DISPLAY_H_RES - panel_w - 98, TOP_BAR_H + 4);
+    lv_obj_set_pos(panel, DISPLAY_H_RES - panel_w - 28, TOP_BAR_H + 4);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0x1A1A1A), 0);
     lv_obj_set_style_border_color(panel, lv_color_hex(0x444444), 0);
     lv_obj_set_style_border_width(panel, 1, 0);
@@ -935,6 +934,8 @@ void ui_set_zoom(float zoom, int pan_bins)
 
 // Forward declarations (Phase 6.1 - touch-to-tune)
 static void touch_event_cb(lv_event_t *e);
+static void left_edge_swipe_cb(lv_event_t *e);
+static void bottom_edge_swipe_cb(lv_event_t *e);
 static void settings_button_cb(lv_event_t *e);  // Phase 5.10D
 static void pinch_poll_cb(lv_timer_t *t);
 static void update_freq_axis_labels(uint32_t center_hz);
@@ -950,6 +951,7 @@ int16_t  ui_get_if_cal_hz(void)   { return s_cw_cal_hz; }
 // Touch-target cursor state (Phase 6.1)
 static int s_target_x = -1;
 static uint64_t s_target_until_us = 0;
+static int64_t s_target_freq_hz = 0;  // snapped absolute freq for the live cursor tooltip
 #define TARGET_DISPLAY_MS  600
 
 // Multi-touch / zoom+pan state
@@ -964,6 +966,29 @@ static uint64_t s_last_tap_us       = 0;   // for double-tap detection
 static int      s_last_tap_x        = -1;
 #define DOUBLE_TAP_MS   500
 #define DOUBLE_TAP_PX   120
+
+// Right-edge swipe-to-open-drawer (replaces the burger button)
+static bool s_edge_swipe_candidate  = false;
+static int  s_edge_swipe_start_x    = -1;
+#define EDGE_SWIPE_ZONE_PX   30   // touch must start within this many px of the right edge
+#define EDGE_SWIPE_MIN_DX    60   // must move left by at least this many px to open the drawer
+
+// Counter-swipe (drag right) closes the open drawer, either starting on the
+// drawer itself (drawer_touch_cb) or anywhere on the spectrum/waterfall
+// to its left (touch_event_cb, via s_screen_swipe_start_x).
+static int  s_drawer_swipe_start_x  = -1;
+static int  s_screen_swipe_start_x  = -1;
+#define DRAWER_SWIPE_MIN_DX  60
+
+// Left-edge swipe (drag right) toggles Panadapter <-> FT8 mode, and
+// bottom-edge swipe (drag up) opens the memory-channel modal. These use
+// dedicated always-on-top overlay strips (left_edge_swipe_cb /
+// bottom_edge_swipe_cb) so they work regardless of UI mode, unlike the
+// spectrum/waterfall-only gestures above.
+static int  s_left_edge_swipe_start_x   = -1;
+static int  s_bottom_edge_swipe_start_y = -1;
+#define BOTTOM_EDGE_ZONE_PX  60
+#define EDGE_SWIPE_MIN_DY    60
 // (s_last_qmx_freq_hz declared at top of file)
 
 // Widget handles
@@ -985,13 +1010,18 @@ static ui_rssi_t s_bot_rssi;
 static bool       s_bot_rssi_valid = false;
 static lv_obj_t *s_bot_wifi_suffix = NULL;
 static lv_obj_t *s_bot_version = NULL; /* firmware version, between battery and clock */
-static lv_obj_t *s_burger_btn = NULL;  // Phase 5.10I: kept for foreground move after all UI built
+static lv_obj_t *s_burger_btn = NULL;  // right-edge drawer grip handle (kept for foreground move after all UI built)
 static lv_obj_t *s_switch_iq  = NULL;  // Phase B: IQ balance toggle in settings drawer
 static lv_obj_t *s_switch_flat = NULL; // Phase 5.12: flat-spectrum toggle in settings drawer
 
 // Phase 5.10D Stage 2: settings drawer state
 static lv_obj_t *s_drawer = NULL;
 static bool s_drawer_open = false;
+// Scrim covers the screen area to the left of the open drawer: blocks touches
+// to underlying FT8/Panadapter content and supports a rightward swipe-to-close
+// gesture that works regardless of which content is hidden behind it.
+static lv_obj_t *s_drawer_scrim = NULL;
+static int s_drawer_scrim_swipe_start_x = -1;
 // Phase 5.10D Stage 2b: drawer widgets we need to keep handles to
 static lv_obj_t *s_slider_db_min = NULL;
 static lv_obj_t *s_slider_db_max = NULL;
@@ -1014,9 +1044,8 @@ static void drawer_preset_dx_cb(lv_event_t *e);
 static void drawer_preset_strong_cb(lv_event_t *e);
 static void drawer_wifi_btn_cb(lv_event_t *e);
 static void drawer_identity_btn_cb(lv_event_t *e);
-static void drawer_memories_btn_cb(lv_event_t *e);
-static void drawer_mode_btn_cb(lv_event_t *e);
-static void ui_refresh_mode_button_label(void);
+static void ui_show_memories(void);
+static void ui_toggle_mode(void);
 static void drawer_slider_db_min_cb(lv_event_t *e);
 static void drawer_slider_db_max_cb(lv_event_t *e);
 static void drawer_slider_alpha_cb(lv_event_t *e);
@@ -1039,6 +1068,7 @@ static void drawer_slider_ifcal_cb(lv_event_t *e)
 
 static void drawer_slider_cwpitch_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_cb(lv_event_t *e);
+static void drawer_dropdown_cmap_open_cb(lv_event_t *e);
 static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
 bool ui_get_flat_mode(void);
@@ -1048,7 +1078,8 @@ static void drawer_build(void);
 static void drawer_open(void);
 static void drawer_close(void);
 static void drawer_anim_x_cb(void *obj, int32_t v);
-static void drawer_close_button_cb(lv_event_t *e);
+static void drawer_touch_cb(lv_event_t *e);
+static void drawer_scrim_cb(lv_event_t *e);
 static void iq_balance_toggle_cb(lv_event_t *e);
 
 // Phase 5.5: static defaults -- manual Ref/Range, user-controlled later
@@ -1068,6 +1099,28 @@ static lv_obj_t *s_db_min_label = NULL;
 // Spectrum canvas (Phase 5.1)
 static lv_obj_t *s_spec_canvas = NULL;
 static uint8_t *s_spec_canvas_buf = NULL;
+
+// "Breathing" opacity animation for edge-swipe grip handles: fades between
+// near-invisible and the normal resting opacity so the user notices the
+// hidden swipe handles exist.
+static void grip_breathe_anim_cb(void *var, int32_t v)
+{
+    lv_obj_set_style_bg_opa((lv_obj_t *)var, (lv_opa_t)v, 0);
+}
+
+static void grip_start_breathing(lv_obj_t *grip)
+{
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, grip);
+    lv_anim_set_exec_cb(&a, grip_breathe_anim_cb);
+    lv_anim_set_values(&a, LV_OPA_10, LV_OPA_60);
+    lv_anim_set_time(&a, 1400);
+    lv_anim_set_playback_time(&a, 1400);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_start(&a);
+}
 
 // ==== Top bar ====
 static void build_top_bar(lv_obj_t *parent)
@@ -1107,7 +1160,7 @@ static void build_top_bar(lv_obj_t *parent)
     lv_label_set_text(s_bw_label, "BW: ---");
     lv_obj_set_style_text_color(s_bw_label, lv_color_hex(0xC0C0FF), 0);
     lv_obj_set_style_text_font(s_bw_label, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_bw_label, LV_ALIGN_LEFT_MID, 355, 0);
+    lv_obj_align(s_bw_label, LV_ALIGN_LEFT_MID, 350, 0);
     lv_obj_set_ext_click_area(s_bw_label, 90);
     lv_obj_add_flag(s_bw_label, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_bw_label, bw_label_clicked_cb, LV_EVENT_CLICKED, NULL);
@@ -1115,7 +1168,7 @@ static void build_top_bar(lv_obj_t *parent)
     s_freq_label = lv_label_create(bar);
     lv_label_set_text(s_freq_label, "Freq: 14.074.000 Hz");
     lv_obj_set_style_text_color(s_freq_label, lv_color_hex(0xFFD76B), 0);
-    lv_obj_set_style_text_font(s_freq_label, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_freq_label, &lv_font_montserrat_32, 0);
     lv_obj_align(s_freq_label, LV_ALIGN_CENTER, 30, 0);
     lv_obj_add_flag(s_freq_label, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(s_freq_label, 20);
@@ -1130,7 +1183,7 @@ static void build_top_bar(lv_obj_t *parent)
         const int smeter_off = 20;  // left margin so the "S1" label isn't clipped
         lv_obj_t *smeter_cont = lv_obj_create(bar);
         lv_obj_set_size(smeter_cont, smeter_w + 40 + smeter_off, smeter_h);  // extra width for label overhang
-        lv_obj_align(smeter_cont, LV_ALIGN_CENTER, 298, 4);
+        lv_obj_align(smeter_cont, LV_ALIGN_CENTER, 353, 4);
         lv_obj_set_style_bg_opa(smeter_cont, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(smeter_cont, 0, 0);
         lv_obj_set_style_pad_all(smeter_cont, 0, 0);
@@ -1183,36 +1236,29 @@ static void build_top_bar(lv_obj_t *parent)
         lv_obj_set_style_radius(s_smeter_bar, 3, LV_PART_INDICATOR);
     }
 
-    // Phase 5.10I: 80x80 burger, overflows downward into the spectrum.
-    // Top bar stays at 60 px; clip content disabled so button can be larger.
-    // Phase 5.10I: parent burger to the SCREEN, not the top bar.
-    // Avoids the top bar's clipping issue. Positioned absolutely so it
-    // straddles the top bar boundary and extends into the spectrum area.
-    s_burger_btn = lv_btn_create(parent);  /* parent = screen */
-    // Step 4c.2 polish: 60x60 (top-bar height), dim theme, flush in top-right.
-    // Visible region only; touch-to-tune deadzone is a separate coordinate
-    // filter in touch_event_cb and is unaffected by this resize.
-    lv_obj_set_size(s_burger_btn, 60, 60);
-    lv_obj_align(s_burger_btn, LV_ALIGN_TOP_RIGHT, 0, 0);
-    lv_obj_set_style_bg_color(s_burger_btn, lv_color_hex(0x202028), 0);
-    lv_obj_set_style_bg_opa(s_burger_btn, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_color(s_burger_btn, lv_color_hex(0x303030), 0);
-    lv_obj_set_style_border_width(s_burger_btn, 1, 0);
-    lv_obj_set_style_radius(s_burger_btn, 0, 0);
+    // Edge-swipe replaces the burger button: a slim grip on the right
+    // screen edge hints that the settings drawer lives off-screen there.
+    // Tapping the grip also opens the drawer (fallback for the swipe).
+    s_burger_btn = lv_obj_create(parent);  /* parent = screen; reused as the grip handle */
+    lv_obj_set_size(s_burger_btn, 4, 120);
+    lv_obj_align(s_burger_btn, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_style_bg_color(s_burger_btn, lv_color_hex(0xC0C0C0), 0);
+    lv_obj_set_style_bg_opa(s_burger_btn, LV_OPA_30, 0);
+    lv_obj_set_style_border_width(s_burger_btn, 0, 0);
+    lv_obj_set_style_radius(s_burger_btn, 5, 0);
     lv_obj_set_style_shadow_width(s_burger_btn, 0, 0);
+    lv_obj_set_style_pad_all(s_burger_btn, 0, 0);
+    lv_obj_clear_flag(s_burger_btn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_burger_btn, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_burger_btn, settings_button_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *blbl = lv_label_create(s_burger_btn);
-    lv_label_set_text(blbl, LV_SYMBOL_LIST);
-    lv_obj_set_style_text_color(blbl, lv_color_hex(0xC0C0C0), 0);
-    lv_obj_set_style_text_font(blbl, &lv_font_montserrat_24, 0);
-    lv_obj_center(blbl);
+    grip_start_breathing(s_burger_btn);
 
     // Zoom indicator: amber always.
     s_zoom_label = lv_label_create(bar);
     lv_label_set_text(s_zoom_label, "Zoom: x1.0");
     lv_obj_set_style_text_color(s_zoom_label, lv_color_hex(0xB060E0), 0);
     lv_obj_set_style_text_font(s_zoom_label, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_zoom_label, LV_ALIGN_RIGHT_MID, -70, 0);
+    lv_obj_align(s_zoom_label, LV_ALIGN_RIGHT_MID, 0, 0);
     lv_obj_add_flag(s_zoom_label, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_set_ext_click_area(s_zoom_label, 20);
     lv_obj_add_event_cb(s_zoom_label, zoom_label_clicked_cb, LV_EVENT_CLICKED, NULL);
@@ -1243,6 +1289,7 @@ static void build_spectrum(lv_obj_t *parent)
 
     s_spec_canvas = lv_canvas_create(s_spectrum_obj);
     lv_obj_add_flag(s_spectrum_obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_spectrum_obj, touch_event_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_spectrum_obj, touch_event_cb, LV_EVENT_PRESSING, NULL);
     lv_obj_add_event_cb(s_spectrum_obj, touch_event_cb, LV_EVENT_RELEASED, NULL);
     lv_canvas_set_buffer(s_spec_canvas, s_spec_canvas_buf,
@@ -1397,6 +1444,7 @@ static void build_waterfall(lv_obj_t *parent)
 
     s_wf_canvas = lv_canvas_create(s_waterfall_obj);
     lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_waterfall_obj, touch_event_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_waterfall_obj, touch_event_cb, LV_EVENT_PRESSING, NULL);
     lv_obj_add_event_cb(s_waterfall_obj, touch_event_cb, LV_EVENT_RELEASED, NULL);
     lv_canvas_set_buffer(s_wf_canvas, s_wf_canvas_buf,
@@ -1551,8 +1599,7 @@ void ui_init(lv_display_t *disp)
             { 180,  165, mode_label_clicked_cb },  // Mode
             { 345,  165, bw_label_clicked_cb   },  // BW
             { 580,  280, freq_label_clicked_cb },  // Freq
-            { 1010, 185, zoom_label_clicked_cb },  // Zoom
-            { 1195, 85,  settings_button_cb    },  // Burger
+            { 1090, 190, zoom_label_clicked_cb },  // Zoom
         };
         for (size_t i = 0; i < sizeof(hit_zones) / sizeof(hit_zones[0]); i++) {
             lv_obj_t *hit = lv_obj_create(scr);
@@ -1565,6 +1612,66 @@ void ui_init(lv_display_t *disp)
             lv_obj_add_event_cb(hit, hit_zones[i].cb, LV_EVENT_CLICKED, NULL);
             lv_obj_move_foreground(hit);
         }
+    }
+
+    // Left-edge and bottom-edge gesture strips: transparent overlays kept
+    // in the foreground in both Panadapter and FT8 modes (unlike the
+    // spectrum/waterfall canvases, which are hidden in FT8 mode).
+    // Left edge: swipe right to toggle Panadapter <-> FT8.
+    {
+        lv_obj_t *strip = lv_obj_create(scr);
+        lv_obj_set_size(strip, EDGE_SWIPE_ZONE_PX, DISPLAY_V_RES);
+        lv_obj_set_pos(strip, 0, 0);
+        lv_obj_set_style_bg_opa(strip, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(strip, 0, 0);
+        lv_obj_set_style_pad_all(strip, 0, 0);
+        lv_obj_clear_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(strip, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(strip, left_edge_swipe_cb, LV_EVENT_PRESSED, NULL);
+        lv_obj_add_event_cb(strip, left_edge_swipe_cb, LV_EVENT_RELEASED, NULL);
+        lv_obj_move_foreground(strip);
+
+        // Tiny grip handle indicator, vertically centered, flush with the
+        // screen's left edge.
+        lv_obj_t *grip = lv_obj_create(strip);
+        lv_obj_set_size(grip, 4, 120);
+        lv_obj_align(grip, LV_ALIGN_LEFT_MID, 0, 0);
+        lv_obj_set_style_bg_color(grip, lv_color_hex(0xC0C0C0), 0);
+        lv_obj_set_style_bg_opa(grip, LV_OPA_30, 0);
+        lv_obj_set_style_border_width(grip, 0, 0);
+        lv_obj_set_style_radius(grip, 5, 0);
+        lv_obj_set_style_shadow_width(grip, 0, 0);
+        lv_obj_clear_flag(grip, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(grip, LV_OBJ_FLAG_CLICKABLE);
+        grip_start_breathing(grip);
+    }
+    // Bottom edge: swipe up to open the memory-channel modal.
+    {
+        lv_obj_t *strip = lv_obj_create(scr);
+        lv_obj_set_size(strip, DISPLAY_H_RES, BOTTOM_EDGE_ZONE_PX);
+        lv_obj_set_pos(strip, 0, DISPLAY_V_RES - BOTTOM_EDGE_ZONE_PX);
+        lv_obj_set_style_bg_opa(strip, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(strip, 0, 0);
+        lv_obj_set_style_pad_all(strip, 0, 0);
+        lv_obj_clear_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(strip, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(strip, bottom_edge_swipe_cb, LV_EVENT_PRESSED, NULL);
+        lv_obj_add_event_cb(strip, bottom_edge_swipe_cb, LV_EVENT_RELEASED, NULL);
+        lv_obj_move_foreground(strip);
+
+        // Tiny grip handle indicator, horizontally centered, flush with the
+        // screen's bottom edge.
+        lv_obj_t *grip = lv_obj_create(strip);
+        lv_obj_set_size(grip, 120, 4);
+        lv_obj_align(grip, LV_ALIGN_BOTTOM_MID, 0, 0);
+        lv_obj_set_style_bg_color(grip, lv_color_hex(0xC0C0C0), 0);
+        lv_obj_set_style_bg_opa(grip, LV_OPA_30, 0);
+        lv_obj_set_style_border_width(grip, 0, 0);
+        lv_obj_set_style_radius(grip, 5, 0);
+        lv_obj_set_style_shadow_width(grip, 0, 0);
+        lv_obj_clear_flag(grip, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(grip, LV_OBJ_FLAG_CLICKABLE);
+        grip_start_breathing(grip);
     }
 
     ESP_LOGI(TAG, "UI built: top=%dpx spectrum=%dpx labels=%dpx waterfall=%dpx bottom=%dpx",
@@ -1680,6 +1787,11 @@ void ui_update_frequency(uint32_t freq_hz)
     s_last_qmx_freq_hz = freq_hz;
     // Reset pan to 0 on freq change — new center is the tuned freq.
     s_pan_offset_bins = 0;
+    // At zoom > x1, re-derive the passband-centered pan around the new VFO
+    // freq (and push it to the DSP zoom-FFT) — otherwise the zoom-FFT keeps
+    // centering on the old target while the overlay lines/labels above
+    // recompute using pan=0, knocking them out of sync with the spectrum.
+    recompute_zoom_pan();
     settings_set_last_vfo(freq_hz);
     if (!s_freq_label) return;
     char buf[32];
@@ -1928,6 +2040,27 @@ void ui_push_spectrum(const float *bins, int n_bins)
     // Clear canvas to black
     memset(px, 0, (size_t)DISPLAY_H_RES * SPECTRUM_H * 2);
 
+    // Passband band: a faint tint between the passband-edge lines, same hue
+    // as those lines but very low "opacity" (blended against the black
+    // background). Drawn first so the grid lines and spectrum curve overdraw it.
+    {
+        int32_t pb_low_hz, pb_high_hz;
+        compute_passband_edges_hz(&pb_low_hz, &pb_high_hz);
+        int32_t pan_hz_pb = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
+        int32_t span_hz_pb = (int32_t)(48000.0f / s_zoom_factor);
+        int edge_x_lo = (int)((int64_t)(pb_low_hz  - pan_hz_pb) * DISPLAY_H_RES / span_hz_pb) + DISPLAY_H_RES / 2;
+        int edge_x_hi = (int)((int64_t)(pb_high_hz - pan_hz_pb) * DISPLAY_H_RES / span_hz_pb) + DISPLAY_H_RES / 2;
+        if (edge_x_lo > edge_x_hi) { int t = edge_x_lo; edge_x_lo = edge_x_hi; edge_x_hi = t; }
+        if (edge_x_lo < 0) edge_x_lo = 0;
+        if (edge_x_hi >= DISPLAY_H_RES) edge_x_hi = DISPLAY_H_RES - 1;
+        const uint16_t band_color = 0x3188;  // ~25% of BW-label color (0xC0C0FF) over black
+        for (int x = edge_x_lo; x <= edge_x_hi; x++) {
+            for (int y = 0; y < SPECTRUM_H; y++) {
+                px[y * DISPLAY_H_RES + x] = band_color;
+            }
+        }
+    }
+
     // dB grid lines (Phase 5.3) - draw before spectrum so green overdraws on hits
     // Phase 5.12: suppressed in flat mode (dBm axis meaningless when shown as dB-above-floor)
     if (!s_flat_mode)
@@ -2042,7 +2175,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
         // Phase 5.10G: passband edges (2 px grey lines)
         int32_t pb_low_hz, pb_high_hz;
         compute_passband_edges_hz(&pb_low_hz, &pb_high_hz);
-        const uint16_t pb_color = 0x8410;  /* medium grey */
+        const uint16_t pb_color = 0xBDFF;  /* matches BW label color (0xC0C0FF) */
         for (int side = 0; side < 2; side++) {
             int32_t edge_hz = (side == 0) ? pb_low_hz : pb_high_hz;
             /* Edge frequency in Hz -> screen x, accounting for zoom and pan. */
@@ -2059,7 +2192,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
         // Amber VFO line: at 0 Hz relative to dial, shifted by pan like the
         // passband edges above so it tracks the actual tuned frequency
         // (no longer screen-center once zoom>x1 re-centers on the passband).
-        const uint16_t center_color = 0xFD00;
+        const uint16_t center_color = 0xFEAD;  /* matches Freq label color (0xFFD76B) */
         int32_t pan_hz_vfo = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
         int32_t span_hz_vfo = (int32_t)(48000.0f / s_zoom_factor);
         int cx = (int)((int64_t)(0 - pan_hz_vfo) * DISPLAY_H_RES / span_hz_vfo) + DISPLAY_H_RES / 2;
@@ -2082,15 +2215,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
             }
             // Update floating freq tooltip.
             if (s_tune_tooltip && s_last_qmx_freq_hz > 0) {
-                int dx_tt = tx - DISPLAY_H_RES / 2;
-                int32_t span_hz_tt = (int32_t)(48000.0f / s_zoom_factor);
-                int32_t pan_hz_tt  = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
-                int32_t off_hz = (int32_t)((int64_t)dx_tt * span_hz_tt / DISPLAY_H_RES) + pan_hz_tt;
-                // Snap to 10 Hz in CW mode so tooltip matches what will be tuned.
-                if (strstr(s_current_mode, "CW")) {
-                    off_hz = (off_hz + (off_hz >= 0 ? 5 : -5)) / 10 * 10;
-                }
-                int64_t tip_hz = (int64_t)s_last_qmx_freq_hz + off_hz;
+                int64_t tip_hz = s_target_freq_hz;
                 if (tip_hz > 0) {
                     char tbuf[24];
                     snprintf(tbuf, sizeof(tbuf), "%lu.%03lu.%03lu",
@@ -2280,9 +2405,44 @@ static void touch_event_cb(lv_event_t *e)
     // p.x is screen-x; matches canvas-x because spectrum/waterfall are full-width at x=0.
     if (p.x < 0 || p.x >= DISPLAY_H_RES) return;
 
+    if (code == LV_EVENT_PRESSED) {
+        // Touch-down near the right screen edge: track as a candidate for
+        // the swipe-to-open-drawer gesture instead of the tune cursor.
+        s_edge_swipe_candidate = (p.x >= DISPLAY_H_RES - EDGE_SWIPE_ZONE_PX);
+        s_edge_swipe_start_x   = (int)p.x;
+        // Track every touch-down x so a rightward swipe anywhere on the
+        // spectrum/waterfall can close the drawer when it's open.
+        s_screen_swipe_start_x = (int)p.x;
+        return;
+    }
     if (code == LV_EVENT_PRESSING) {
         if (s_pinch_active) return;  // pinch timer owns gesture
-        s_target_x = (int)p.x;
+        if (s_edge_swipe_candidate) return;  // edge-swipe owns this gesture
+        if (s_drawer_open) return;  // possible close-swipe owns this gesture
+        // Snap the live cursor to the same mode-aware grid used on release,
+        // so the line jumps from snap to snap and shows exactly where the
+        // freq will land.
+        {
+            int dx = (int)p.x - DISPLAY_H_RES / 2;
+            int32_t offset_hz = (int32_t)((int64_t)dx * UAC_SAMPLE_RATE / (int)(DISPLAY_H_RES * s_zoom_factor));
+            int32_t pan_hz = (int32_t)((int64_t)s_pan_offset_bins * UAC_SAMPLE_RATE / DSP_FFT_SIZE);
+            offset_hz += pan_hz;
+            int32_t snap = 10;
+            if (strstr(s_current_mode, "USB") || strstr(s_current_mode, "LSB")) snap = 250;
+            else if (strstr(s_current_mode, "FT") || strstr(s_current_mode, "DIG") || strstr(s_current_mode, "RTTY")
+                     || strstr(s_current_mode, "DiGi")) snap = 500;
+            else if (strstr(s_current_mode, "AM") || strstr(s_current_mode, "FM")) snap = 1000;
+            else if (strstr(s_current_mode, "CW")) snap = 10;
+            // Snap the absolute target frequency to the grid (e.g. ...200,
+            // 300, 400 Hz), not the touch offset — otherwise the grid is
+            // shifted by the VFO's own offset from a snap multiple.
+            int64_t target_hz = (int64_t)s_last_qmx_freq_hz + offset_hz;
+            int64_t rounded_target = ((target_hz + (target_hz >= 0 ? snap/2 : -snap/2)) / snap) * snap;
+            int32_t rounded = (int32_t)(rounded_target - (int64_t)s_last_qmx_freq_hz);
+            int32_t snapped_dx = (int32_t)((int64_t)(rounded - pan_hz) * (int)(DISPLAY_H_RES * s_zoom_factor) / UAC_SAMPLE_RATE);
+            s_target_x = DISPLAY_H_RES / 2 + snapped_dx;
+            s_target_freq_hz = rounded_target;
+        }
         s_target_until_us = esp_timer_get_time() + 200000;
         return;
     }
@@ -2290,6 +2450,26 @@ static void touch_event_cb(lv_event_t *e)
         // If releasing a pinch, clear pinch state and skip tune.
         if (s_pinch_active) {
             s_pinch_active = false;
+            return;
+        }
+        // Drawer is open: a rightward swipe anywhere on the spectrum or
+        // waterfall closes it, regardless of where it started.
+        if (s_drawer_open) {
+            int dx = (int)p.x - s_screen_swipe_start_x;
+            s_edge_swipe_candidate = false;
+            if (dx >= DRAWER_SWIPE_MIN_DX) {
+                drawer_close();
+            }
+            return;
+        }
+        // Edge-swipe release: open the drawer if dragged far enough left
+        // from the right edge, and skip tap-to-tune either way.
+        if (s_edge_swipe_candidate) {
+            int dx = s_edge_swipe_start_x - (int)p.x;
+            s_edge_swipe_candidate = false;
+            if (dx >= EDGE_SWIPE_MIN_DX) {
+                drawer_open();
+            }
             return;
         }
         // Double-tap: reset zoom+pan to 1.0/0.
@@ -2308,8 +2488,8 @@ static void touch_event_cb(lv_event_t *e)
         // Top-bar dropdown deadzones: band/mode/BW/zoom/burger overlay
         // buttons each span the full top 200px (see hit_zones in ui_init).
         // Tap-to-tune isn't needed under those columns; the gap between BW
-        // and Zoom (x=510..1010) remains tunable.
-        if (p.y < 200 && (p.x < 510 || p.x >= 1010)) {
+        // and Zoom (x=510..1090) remains tunable.
+        if (p.y < 200 && (p.x < 510 || p.x >= 1090)) {
             ESP_LOGI("ui_touch", "RELEASED in top-bar dropdown deadzone (x=%d y=%d) - ignored", (int)p.x, (int)p.y);
             return;
         }
@@ -2331,16 +2511,19 @@ static void touch_event_cb(lv_event_t *e)
             }
             offset_hz = snapped_hz;
         }
-        // Phase 5.10F: mode-aware snap. CW=10 Hz (precision), SSB=500 Hz
-        // (voice channels), FT8/data=100 Hz, AM/FM=1 kHz.
+        // Phase 5.10F: mode-aware snap. CW=10 Hz (precision), SSB=250 Hz
+        // (voice channels), FT8/data=500 Hz, AM/FM=1 kHz.
         int32_t snap = 10;
-        if (strstr(s_current_mode, "USB") || strstr(s_current_mode, "LSB")) snap = 500;
+        if (strstr(s_current_mode, "USB") || strstr(s_current_mode, "LSB")) snap = 250;
         else if (strstr(s_current_mode, "FT") || strstr(s_current_mode, "DIG") || strstr(s_current_mode, "RTTY")
-                 || strstr(s_current_mode, "DiGi")) snap = 100;
+                 || strstr(s_current_mode, "DiGi")) snap = 500;
         else if (strstr(s_current_mode, "AM") || strstr(s_current_mode, "FM")) snap = 1000;
         else if (strstr(s_current_mode, "CW")) snap = 10;
-        int32_t rounded = (offset_hz + (offset_hz >= 0 ? snap/2 : -snap/2)) / snap * snap;
-        int64_t target = (int64_t)s_last_qmx_freq_hz + rounded;
+        // Snap the absolute target frequency to the grid (matches the live
+        // cursor preview during PRESSING).
+        int64_t target_hz_unrounded = (int64_t)s_last_qmx_freq_hz + offset_hz;
+        int64_t target = ((target_hz_unrounded + (target_hz_unrounded >= 0 ? snap/2 : -snap/2)) / snap) * snap;
+        int32_t rounded = (int32_t)(target - (int64_t)s_last_qmx_freq_hz);
         if (target < 0) return;
         uint32_t target_hz = (uint32_t)target;
 
@@ -2356,6 +2539,56 @@ static void touch_event_cb(lv_event_t *e)
         }
         // Let the cursor linger briefly after release, then clear
         s_target_until_us = esp_timer_get_time() + 200000;
+    }
+}
+
+// Left-edge swipe (drag right) toggles Panadapter <-> FT8 mode. Lives on a
+// dedicated transparent overlay strip in the screen foreground so it works
+// in both modes, unlike the spectrum/waterfall handlers above which are
+// hidden in FT8 mode.
+static void left_edge_swipe_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_indev_t *indev = lv_event_get_indev(e);
+    if (!indev) return;
+
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+
+    if (code == LV_EVENT_PRESSED) {
+        s_left_edge_swipe_start_x = (int)p.x;
+        return;
+    }
+    if (code == LV_EVENT_RELEASED) {
+        if (s_left_edge_swipe_start_x >= 0 &&
+            (int)p.x - s_left_edge_swipe_start_x >= EDGE_SWIPE_MIN_DX) {
+            ui_toggle_mode();
+        }
+        s_left_edge_swipe_start_x = -1;
+    }
+}
+
+// Bottom-edge swipe (drag up) opens the memory-channel modal. Same
+// always-on-top overlay approach as left_edge_swipe_cb.
+static void bottom_edge_swipe_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_indev_t *indev = lv_event_get_indev(e);
+    if (!indev) return;
+
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+
+    if (code == LV_EVENT_PRESSED) {
+        s_bottom_edge_swipe_start_y = (int)p.y;
+        return;
+    }
+    if (code == LV_EVENT_RELEASED) {
+        if (s_bottom_edge_swipe_start_y >= 0 &&
+            s_bottom_edge_swipe_start_y - (int)p.y >= EDGE_SWIPE_MIN_DY) {
+            ui_show_memories();
+        }
+        s_bottom_edge_swipe_start_y = -1;
     }
 }
 
@@ -2407,10 +2640,90 @@ static void drawer_anim_x_cb(void *obj, int32_t v)
     lv_obj_set_x((lv_obj_t *)obj, v);
 }
 
-static void drawer_close_button_cb(lv_event_t *e)
+#define MODE_SLIDE_TIME_MS 250
+
+// Generic slide helper: animates obj's x from `from` to `to`.
+static void slide_x_anim(lv_obj_t *obj, int32_t from, int32_t to, lv_anim_ready_cb_t ready_cb)
 {
-    (void)e;
-    drawer_close();
+    if (!obj) return;
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, obj);
+    lv_anim_set_exec_cb(&a, drawer_anim_x_cb);
+    lv_anim_set_values(&a, from, to);
+    lv_anim_set_time(&a, MODE_SLIDE_TIME_MS);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    if (ready_cb) lv_anim_set_ready_cb(&a, ready_cb);
+    lv_anim_start(&a);
+}
+
+// Ready callback for widgets sliding out during a mode-toggle: hide and
+// reset x=0 so they're back in place (but hidden) for the next toggle.
+static void mode_slide_out_ready_cb(lv_anim_t *a)
+{
+    lv_obj_t *obj = (lv_obj_t *)a->var;
+    lv_obj_add_flag(obj, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_x(obj, 0);
+}
+
+// Ready callback for the FT8 container sliding out: use the proper hide API
+// (logs + sets HIDDEN), then reset x=0.
+static void ft8_slide_out_ready_cb(lv_anim_t *a)
+{
+    (void)a;
+    ft8_screen_view_hide();
+    lv_obj_t *ft8 = ft8_screen_view_get_container();
+    if (ft8) lv_obj_set_x(ft8, 0);
+}
+
+// Counter-swipe (drag right) on the drawer background closes it; replaces
+// the close-X button.
+static void drawer_touch_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_indev_t *indev = lv_event_get_indev(e);
+    if (!indev) return;
+
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+
+    if (code == LV_EVENT_PRESSED) {
+        s_drawer_swipe_start_x = (int)p.x;
+        return;
+    }
+    if (code == LV_EVENT_RELEASED) {
+        if (s_drawer_swipe_start_x >= 0 &&
+            (int)p.x - s_drawer_swipe_start_x >= DRAWER_SWIPE_MIN_DX) {
+            drawer_close();
+        }
+        s_drawer_swipe_start_x = -1;
+    }
+}
+
+// Counter-swipe (drag right) on the scrim closes the drawer. The scrim covers
+// the FT8/Panadapter area to the left of the drawer while it's open, so this
+// also restores the close-swipe in FT8 mode where s_spectrum_obj/s_waterfall_obj
+// are hidden and can't receive touch_event_cb's close-swipe logic.
+static void drawer_scrim_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_indev_t *indev = lv_event_get_indev(e);
+    if (!indev) return;
+
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+
+    if (code == LV_EVENT_PRESSED) {
+        s_drawer_scrim_swipe_start_x = (int)p.x;
+        return;
+    }
+    if (code == LV_EVENT_RELEASED) {
+        if (s_drawer_scrim_swipe_start_x >= 0 &&
+            (int)p.x - s_drawer_scrim_swipe_start_x >= DRAWER_SWIPE_MIN_DX) {
+            drawer_close();
+        }
+        s_drawer_scrim_swipe_start_x = -1;
+    }
 }
 
 static void iq_balance_toggle_cb(lv_event_t *e)
@@ -2428,6 +2741,21 @@ static void drawer_build(void)
     if (s_drawer) return;
 
     lv_obj_t *scr = lv_screen_active();
+
+    // Scrim: covers the area left of the drawer, blocks touches to underlying
+    // content, and closes the drawer on a rightward swipe.
+    s_drawer_scrim = lv_obj_create(scr);
+    lv_obj_set_size(s_drawer_scrim, DISPLAY_H_RES - DRAWER_W, DISPLAY_V_RES);
+    lv_obj_set_pos(s_drawer_scrim, 0, 0);
+    lv_obj_set_style_bg_opa(s_drawer_scrim, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_drawer_scrim, 0, 0);
+    lv_obj_set_style_radius(s_drawer_scrim, 0, 0);
+    lv_obj_set_style_pad_all(s_drawer_scrim, 0, 0);
+    lv_obj_set_scrollbar_mode(s_drawer_scrim, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_add_flag(s_drawer_scrim, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_drawer_scrim, drawer_scrim_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(s_drawer_scrim, drawer_scrim_cb, LV_EVENT_RELEASED, NULL);
+
     s_drawer = lv_obj_create(scr);
     lv_obj_set_size(s_drawer, DRAWER_W, DISPLAY_V_RES);
     // Park off-screen to the right
@@ -2443,22 +2771,15 @@ static void drawer_build(void)
     lv_obj_set_scroll_dir(s_drawer, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_drawer, LV_SCROLLBAR_MODE_AUTO);
 
-    // Title bar with "Settings" + close X
+    // Title bar with "Settings" (swipe right anywhere on the drawer to close)
     lv_obj_t *title = lv_label_create(s_drawer);
     lv_label_set_text(title, "Settings");
     lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    // Phase 5.10I: bigger close target (80x80 matching the burger)
-    lv_obj_t *close_btn = lv_btn_create(s_drawer);
-    lv_obj_set_size(close_btn, 80, 80);
-    lv_obj_align(close_btn, LV_ALIGN_TOP_RIGHT, 0, 0);
-    lv_obj_add_event_cb(close_btn, drawer_close_button_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *close_lbl = lv_label_create(close_btn);
-    lv_label_set_text(close_lbl, LV_SYMBOL_CLOSE);
-    lv_obj_set_style_text_font(close_lbl, &lv_font_montserrat_32, 0);  // Phase 5.10I: matching the burger
-    lv_obj_center(close_lbl);
+    lv_obj_add_event_cb(s_drawer, drawer_touch_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(s_drawer, drawer_touch_cb, LV_EVENT_RELEASED, NULL);
 
     // === Phase 5.10D Stage 2b: presets + sliders ===
     // v0.8.x layout: 520 wide drawer, _24pt fonts, IQ row moved below title,
@@ -2527,34 +2848,6 @@ static void drawer_build(void)
         y += btn_h + 16;
     }
 
-    // FT8/Panadapter mode toggle -- full width
-    {
-        lv_obj_t *btn = lv_btn_create(s_drawer);
-        lv_obj_set_size(btn, DRAWER_W - 32, 56);
-        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, y);
-        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2c4d6e), 0);
-        lv_obj_add_event_cb(btn, drawer_mode_btn_cb, LV_EVENT_CLICKED, NULL);
-        s_mode_btn_lbl = lv_label_create(btn);
-        lv_obj_set_style_text_font(s_mode_btn_lbl, &lv_font_montserrat_24, 0);
-        lv_obj_set_style_text_color(s_mode_btn_lbl, lv_color_hex(0xffffff), 0);
-        lv_obj_center(s_mode_btn_lbl);
-        ui_refresh_mode_button_label();
-        y += 72;
-    }
-    // Memory channels button -- full width
-    {
-        lv_obj_t *btn = lv_btn_create(s_drawer);
-        lv_obj_set_size(btn, DRAWER_W - 32, 56);
-        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, y);
-        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2c4d6e), 0);
-        lv_obj_add_event_cb(btn, drawer_memories_btn_cb, LV_EVENT_CLICKED, NULL);
-        lv_obj_t *lbl = lv_label_create(btn);
-        lv_label_set_text(lbl, "Memories");
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
-        lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
-        lv_obj_center(lbl);
-        y += 72;
-    }
     // WiFi configuration button -- full width
     {
         lv_obj_t *btn = lv_btn_create(s_drawer);
@@ -2563,7 +2856,7 @@ static void drawer_build(void)
         lv_obj_set_style_bg_color(btn, lv_color_hex(0x2c4d6e), 0);
         lv_obj_add_event_cb(btn, drawer_wifi_btn_cb, LV_EVENT_CLICKED, NULL);
         lv_obj_t *lbl = lv_label_create(btn);
-        lv_label_set_text(lbl, "WiFi");
+        lv_label_set_text(lbl, "WiFi setup");
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
         lv_obj_center(lbl);
@@ -2577,7 +2870,7 @@ static void drawer_build(void)
         lv_obj_set_style_bg_color(btn, lv_color_hex(0x2c4d6e), 0);
         lv_obj_add_event_cb(btn, drawer_identity_btn_cb, LV_EVENT_CLICKED, NULL);
         lv_obj_t *lbl = lv_label_create(btn);
-        lv_label_set_text(lbl, "Identity");
+        lv_label_set_text(lbl, "Callsign & Grid square");
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
         lv_obj_center(lbl);
@@ -2747,6 +3040,7 @@ static void drawer_build(void)
         if (scfg.colormap_idx < 4) lv_dropdown_set_selected(s_dropdown_cmap, scfg.colormap_idx);
     }
     lv_obj_add_event_cb(s_dropdown_cmap, drawer_dropdown_cmap_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(s_dropdown_cmap, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
     y += 60;
 
     ESP_LOGI(TAG, "Settings drawer built (off-screen at x=%d)", DISPLAY_H_RES);
@@ -2756,6 +3050,10 @@ static void drawer_open(void)
 {
     drawer_build();  // lazy build on first open
     if (!s_drawer || s_drawer_open) return;
+    if (s_drawer_scrim) {
+        lv_obj_clear_flag(s_drawer_scrim, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_drawer_scrim);
+    }
     lv_obj_move_foreground(s_drawer);
     lv_anim_t a;
     lv_anim_init(&a);
@@ -2772,6 +3070,7 @@ static void drawer_open(void)
 static void drawer_close(void)
 {
     if (!s_drawer || !s_drawer_open) return;
+    if (s_drawer_scrim) lv_obj_add_flag(s_drawer_scrim, LV_OBJ_FLAG_HIDDEN);
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, s_drawer);
@@ -2871,7 +3170,6 @@ static void drawer_preset_dx_cb(lv_event_t *e)      { (void)e; drawer_apply_pres
 static void drawer_preset_strong_cb(lv_event_t *e)  { (void)e; drawer_apply_preset(-110, -20, 0.20f); }
 static void drawer_wifi_btn_cb(lv_event_t *e)       { (void)e; wifi_config_modal_show(); }
 static void drawer_identity_btn_cb(lv_event_t *e)   { (void)e; identity_config_modal_show(); }
-static void drawer_memories_btn_cb(lv_event_t *e)   { (void)e; drawer_close(); memory_modal_show(); }
 
 static void drawer_slider_db_min_cb(lv_event_t *e)
 {
@@ -2948,6 +3246,15 @@ static void drawer_dropdown_cmap_cb(lv_event_t *e)
     settings_set_colormap_idx(idx);
 }
 
+static void drawer_dropdown_cmap_open_cb(lv_event_t *e)
+{
+    lv_obj_t *dd = lv_event_get_target(e);
+    lv_obj_t *list = lv_dropdown_get_list(dd);
+    if (list) {
+        lv_obj_set_style_text_font(list, &lv_font_montserrat_24, 0);
+    }
+}
+
 // ---- Phase 9 (v0.9.5): read-only getters for web JSON ------------------
 
 const char *ui_get_mode_str(void) { return s_current_mode; }
@@ -2980,22 +3287,13 @@ void ui_apply_saved_mode(void)
     if (s_waterfall_obj) lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN);
     ft8_screen_view_show();
     ft8_self_test();
-    ui_refresh_mode_button_label();
     ESP_LOGI(TAG, "UI mode restored from NVS: FT8");
 }
 
-static void ui_refresh_mode_button_label(void)
+// Toggle between Panadapter and FT8 mode. Triggered by a left-edge swipe
+// (drag right) on the spectrum/waterfall; replaces the drawer's mode button.
+static void ui_toggle_mode(void)
 {
-    if (!s_mode_btn_lbl) return;
-    ui_mode_t m = ui_mode_get();
-    lv_label_set_text(s_mode_btn_lbl,
-                      m == UI_MODE_FT8 ? "Mode: FT8 (tap for panadapter)"
-                                       : "Mode: Panadapter (tap for FT8)");
-}
-
-static void drawer_mode_btn_cb(lv_event_t *e)
-{
-    (void)e;
     ui_mode_t cur = ui_mode_get();
     ui_mode_t next = (cur == UI_MODE_FT8) ? UI_MODE_PANADAPTER : UI_MODE_FT8;
     ESP_LOGI(TAG, "Mode toggle: %s -> %s",
@@ -3003,23 +3301,42 @@ static void drawer_mode_btn_cb(lv_event_t *e)
              next == UI_MODE_FT8 ? "FT8" : "Panadapter");
     ui_mode_set(next);
     settings_set_last_ui_mode((uint8_t)next);
-    // Swap visible widgets. Top/bottom bars stay visible in both modes.
+
+    lv_obj_t *ft8 = ft8_screen_view_get_container();
+
+    // Swap visible widgets with a slide animation. Top/bottom bars stay
+    // visible in both modes (and unanimated).
     if (next == UI_MODE_FT8) {
-        if (s_spectrum_obj)  lv_obj_add_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN);
-        if (s_label_bar)     lv_obj_add_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN);
-        if (s_waterfall_obj) lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN);
+        if (ft8) {
+            lv_obj_set_x(ft8, -DISPLAY_H_RES);
+            lv_obj_clear_flag(ft8, LV_OBJ_FLAG_HIDDEN);
+        }
         ft8_screen_view_show();
         // Respawn the FT8 task; it self-deleted on previous exit.
         ft8_self_test();
+        slide_x_anim(ft8, -DISPLAY_H_RES, 0, NULL);
+        if (s_spectrum_obj)  slide_x_anim(s_spectrum_obj,  0, DISPLAY_H_RES, mode_slide_out_ready_cb);
+        if (s_label_bar)     slide_x_anim(s_label_bar,     0, DISPLAY_H_RES, mode_slide_out_ready_cb);
+        if (s_waterfall_obj) slide_x_anim(s_waterfall_obj, 0, DISPLAY_H_RES, mode_slide_out_ready_cb);
     } else {
-        ft8_screen_view_hide();
-        if (s_spectrum_obj)  lv_obj_clear_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN);
-        if (s_label_bar)     lv_obj_clear_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN);
-        if (s_waterfall_obj) lv_obj_clear_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN);
+        if (s_spectrum_obj)  { lv_obj_set_x(s_spectrum_obj,  -DISPLAY_H_RES); lv_obj_clear_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN); }
+        if (s_label_bar)     { lv_obj_set_x(s_label_bar,     -DISPLAY_H_RES); lv_obj_clear_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN); }
+        if (s_waterfall_obj) { lv_obj_set_x(s_waterfall_obj, -DISPLAY_H_RES); lv_obj_clear_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN); }
+        slide_x_anim(s_spectrum_obj,  -DISPLAY_H_RES, 0, NULL);
+        slide_x_anim(s_label_bar,     -DISPLAY_H_RES, 0, NULL);
+        slide_x_anim(s_waterfall_obj, -DISPLAY_H_RES, 0, NULL);
+        slide_x_anim(ft8, 0, DISPLAY_H_RES, ft8_slide_out_ready_cb);
     }
-    ui_refresh_mode_button_label();
-    // Close the drawer after toggling. UX nicety, and (4c.1 finding)
-    // an open drawer keeps LVGL busy enough to starve audio/fft tasks
-    // and stall the next FT8 capture.
+    // Close the drawer (if open) after toggling. UX nicety, and (4c.1
+    // finding) an open drawer keeps LVGL busy enough to starve audio/fft
+    // tasks and stall the next FT8 capture.
     drawer_close();
+}
+
+// Open the memory-channel modal. Triggered by a bottom-edge swipe (drag up)
+// on the spectrum/waterfall; replaces the drawer's "Memories" button.
+static void ui_show_memories(void)
+{
+    drawer_close();
+    memory_modal_show();
 }

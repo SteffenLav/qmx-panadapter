@@ -21,5 +21,9 @@ void ft8_screen_view_init(lv_obj_t *parent);
 void ft8_screen_view_show(void);
 void ft8_screen_view_hide(void);
 
+// Returns the FT8 screen's middle-band container, for slide animations
+// driven by ui.c. May return NULL before ft8_screen_view_init().
+lv_obj_t *ft8_screen_view_get_container(void);
+
 // Safe to call from any task. Just sets a volatile flag.
 void ft8_screen_view_request_refresh(void);

@@ -1242,6 +1242,11 @@ void ft8_screen_view_hide(void)
     ESP_LOGI(TAG, "hide");
 }
 
+lv_obj_t *ft8_screen_view_get_container(void)
+{
+    return s_container;
+}
+
 void ft8_screen_view_request_refresh(void)
 {
     s_refresh_pending = true;

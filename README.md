@@ -21,7 +21,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 > **You are solely responsible for operating legally** — correct licence class, operating
 > within your licence privileges, band plan compliance, no harmful interference.
 >
-> **What is NOT yet in place in v0.15.8:**
+> **What is NOT yet in place in v0.15.9:**
 > - No duty-cycle protection — back-to-back TX slots are not prevented by the firmware
 > - No ADIF logging — completed QSOs are not recorded anywhere
 > - No audio loopback verification — the firmware cannot confirm the transmitted waveform
@@ -100,7 +100,7 @@ The original mockup that drove the design ([panadapter-mockup-ideal.svg](docs/pa
 
 ## Status
 
-Working. All phases through 8 complete. Current release: **v0.15.8**. Includes: cold-boot reliability fix, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings (including last-used UI mode and display brightness), Hamlib rigctld bridge, onboard FT8 RX decoder with a 40-row live-view decode list and FFT-based SNR estimation, memory channels with a frequency/mode picker, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser) including a tap-to-enter frequency keypad, browser click-to-tune, zoom sync, band memory, QMX RTC time sync for no-WiFi (POTA) FT8 timing, **manual FT8 TX** (reply + CQ via CAT `TA;`), and a **full auto QSO engine** — search-and-pounce plus **CQ-run** (auto-answers callers, runs the exchange to completion with patient retry, then resumes CQ). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
+Working. All phases through 8 complete. Current release: **v0.15.9**. Includes: cold-boot reliability fix, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings (including last-used UI mode and display brightness), Hamlib rigctld bridge, onboard FT8 RX decoder with a 40-row live-view decode list and FFT-based SNR estimation, memory channels with a frequency/mode picker, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser) including a tap-to-enter frequency keypad, browser click-to-tune, zoom sync, band memory, QMX RTC time sync for no-WiFi (POTA) FT8 timing, **manual FT8 TX** (reply + CQ via CAT `TA;`), and a **full auto QSO engine** — search-and-pounce plus **CQ-run** (auto-answers callers, runs the exchange to completion with patient retry, then resumes CQ). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
 
 | Phase | What | Status |
 |-------|------|--------|
@@ -268,14 +268,33 @@ Bins are pre-shifted server-side: byte 2 is the leftmost device pixel, byte 1025
 
 ## Touch-to-tune
 
-- Touch anywhere on spectrum or waterfall → cyan cursor tracks your finger
-- Drag to position → cursor follows live
-- Lift -> CAT `FA` command sent; QMX retunes; spectrum re-centers on the tapped signal. Rounding is mode-aware (Phase 5.10F): USB/LSB snap to 500 Hz, CW to 10 Hz, FT8/digi to 100 Hz, AM/FM to 1 kHz
-- Center cursor (amber, fixed at x=640) marks where the QMX is currently tuned
+- Touch anywhere on spectrum or waterfall → cyan cursor appears
+- Drag to position → cursor **snaps from grid-point to grid-point** (not pixel-by-pixel) so you can see exactly which frequency will be tuned; the floating tooltip above the cursor shows that exact frequency. The grid is mode-aware: USB/LSB snap to 250 Hz, CW to 10 Hz, FT8/digi/RTTY to 500 Hz, AM/FM to 1 kHz. The snap grid is anchored to absolute frequency (e.g. ...200/300/400 Hz), not to wherever your finger started.
+- Lift -> CAT `FA` command sent for the snapped frequency; QMX retunes; spectrum re-centers on the tapped signal
+- Center cursor (amber) marks where the QMX is currently tuned; grey passband-edge lines and a faint passband tint mark the receiver's current filter passband
 
 CAT writes are internally rate-limited to one per 200 ms; rapid taps within that window are dropped silently.
 
+## Gestures
 
+All touch gestures available across the UI:
+
+| Gesture | Where | Effect |
+|---|---|---|
+| Tap | Spectrum / waterfall | Tune to tapped frequency (snapped — see Touch-to-tune above) |
+| Touch + drag | Spectrum / waterfall | Live cyan cursor snaps grid-to-grid, showing the frequency that will be tuned on release |
+| Double-tap | Spectrum / waterfall | Reset zoom and pan to x1.0 / centered |
+| Pinch (two fingers) | Spectrum / waterfall | Zoom x1.0–x24.0. Above x1, the view auto-centers on the current passband (not the dial) |
+| Two-finger drag | Spectrum / waterfall (when zoomed) | Pan the zoomed window |
+| Swipe left, starting near the **right edge** | Right edge strip | Opens the settings drawer |
+| Tap | Breathing grip handle on the right edge | Opens the settings drawer (alternative to the swipe) |
+| Swipe right | Open drawer, or anywhere on the spectrum/waterfall while the drawer is open | Closes the settings drawer |
+| Swipe right, starting near the **left edge** | Left edge strip | Toggles between Panadapter and FT8 screens |
+| Swipe up, starting near the **bottom edge** | Bottom edge strip | Opens the memory-channel picker modal |
+| Touch and hold (~400 ms) | FT8 decode list row | Enters row-selection mode (row highlights, list scroll locks); drag to move the highlight, lift to confirm |
+| Quick swipe (no hold) | FT8 decode list | Scrolls the list normally |
+
+**Edge-swipe handles** (right, left, bottom) are normally faint, slim grey bars flush with the screen edge. They "breathe" — slowly fading in and out — so they're easy to spot without cluttering the display.
 
 ## Top bar, S-meter, settings drawer (Phase 5.10)
 
@@ -287,20 +306,20 @@ Under the spectrum, the frequency axis labels show absolute MHz centered on the 
 
 **Waterfall auto-floor (Phase 5.10F).** The waterfall's "darkest color" level is no longer fixed; it tracks the running median of the spectrum once per second (EMA-smoothed, alpha 0.3, clamped -150 to -30 dBm). The dark background therefore follows actual band conditions instead of a hard-coded -130 dBm anchor. The spectrum trace stays user-controlled via the settings drawer (manual ref/range like commercial SDRs).
 
-**Mode-aware tune snap (Phase 5.10F).** Touch-to-tune rounding is mode-dependent: USB / LSB snap to 500 Hz (voice channel grid), CW to 10 Hz (precision), FT8 / digi / RTTY / FSK to 100 Hz, AM / FM to 1 kHz. The current mode is cached from CAT MD into `s_current_mode`.
+**Mode-aware tune snap (Phase 5.10F).** Touch-to-tune rounding is mode-dependent: USB / LSB snap to 250 Hz (voice channel grid), CW to 10 Hz (precision), FT8 / digi / RTTY / FSK to 500 Hz, AM / FM to 1 kHz. The current mode is cached from CAT MD into `s_current_mode`. The live drag cursor snaps to the same grid in real time — see [Gestures](#gestures).
 
 **Passband indicator (Phase 5.10G).** Two 2-px-wide medium-grey vertical lines mark the QMX receiver's current passband edges. Width comes from CAT FW polling (the QMX returns real values: 300 Hz for CW, 2500 Hz for USB/LSB, 3200 Hz for FSK). Falls back to per-mode defaults if FW reports nothing. Passband geometry is mode-aware: CW/AM/FM are symmetric around the VFO, USB extends from VFO+200 Hz to VFO+200+width, LSB is the mirror, FT8/digi follows USB.
 
 **Faster CAT + optimistic UI (Phase 5.10H).** CAT poll interval dropped from 200 ms to 50 ms so dial-spinning no longer skips. Touch-to-tune optimistically updates the on-screen frequency label immediately on a successful CAT write rather than waiting ~150 ms for the next FA poll to confirm.
 
-**Settings drawer (Phase 5.10D / Phase B).** The burger button on the top right opens a 520 px right-side settings drawer with a 250 ms slide-in animation. Contents:
+**Settings drawer (Phase 5.10D / Phase B).** A right-edge swipe (or a tap on the breathing grip handle on the right screen edge — see [Gestures](#gestures)) opens a 520 px right-side settings drawer with a 250 ms slide-in animation. Contents:
 - **IQ Balance toggle** (Phase B) — ON/OFF switch wired to `iq_balance_set_enabled()`; re-enabling resets the estimator so it converges from a clean state
 - **Presets** (HF Normal / HF DX / Strong Sig.) — each sets dB range and EMA smoothing in one tap
 - **WiFi** button — opens the credential modal (see WiFi section below)
 - **dB Range sliders** (Min and Max in dBm) — live updates `ui_set_db_range()`
 - **Smoothing slider** (EMA alpha, 0.05 to 1.00) — live updates `render_set_ema_alpha()` (the formerly hard-coded `SMOOTH_ALPHA` is now a runtime variable)
 
-**Bigger touch targets (Phase 5.10I).** The burger button is 80x80, parented to the screen so it overflows downward into the spectrum area without being clipped by the top bar. The drawer close X is also 80x80. Both icons use Montserrat 32 to fill the button size cleanly. A 200x120 deadzone in the top-right of the spectrum suppresses tunes that overlap the burger button.
+**Bigger touch targets (Phase 5.10I).** The drawer close X is 80x80 and uses Montserrat 32. A swipe right anywhere on the spectrum/waterfall closes an open drawer.
 
 ## I/Q balance correction (Phases A–C)
 
@@ -826,6 +845,15 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 - **Fixed an LVGL freeze on QMX power-up.** The passband re-centering above is driven by CAT mode/filter-width updates, which arrive on the CAT task; an early version of this called LVGL APIs directly from that task without the display lock, freezing the Tab5 when the QMX reported its mode after powering up. Fixed by separating the non-LVGL recompute (pan offset + DSP zoom reconfiguration) from the LVGL label update.
 - **Removed the bottom-bar memory-channel indicator.** Recalling a memory channel no longer shows a persistent "[M02] ..." label in the bottom bar.
 - **Fixed memory recall not changing mode.** `cell_tap_cb()` sent `cat_set_frequency()` then `cat_set_mode()` back-to-back; both share the 200 ms CAT TX rate-limiter, so the mode command was silently dropped and only the frequency changed. The mode command is now sent via a short one-shot timer after the frequency write's rate-limit window.
+
+### Shipped in v0.15.9
+
+- **Gesture-based navigation replaces the burger button.** The settings drawer, Panadapter/FT8 mode toggle, and memory-channel modal are now all opened by edge swipes instead of dedicated buttons, freeing up top-bar space and removing tune deadzones. A right-edge swipe (or a tap on the right-edge grip handle) opens the settings drawer; swiping right on the spectrum/waterfall or the open drawer closes it. A left-edge swipe right toggles between Panadapter and FT8. A bottom-edge swipe up opens the memory-channel modal, which now slides up/down instead of using a Close button (swipe down to dismiss). See the new [Gestures](#gestures) section for the full list.
+- **Breathing edge-swipe handles.** The slim grip handles on the right, left, and bottom screen edges now slowly pulse opacity (in and out, ~1.4 s cycle) so they're discoverable without being visually intrusive.
+- **Snap-to-grid live tune cursor.** While dragging on the spectrum/waterfall to tune, the cyan cursor and its frequency tooltip now jump between fixed grid points (e.g. ...200/300/400 Hz) instead of tracking the raw touch position — so you can see exactly which frequency will be tuned on release, before releasing. The grid is anchored to absolute frequency, not to the touch start position.
+- **Mode-aware snap steps updated.** USB/LSB now snap to 250 Hz (was 500 Hz) and FT8/digi/RTTY now snap to 500 Hz (was 100 Hz), for both the live drag cursor and the on-release tune.
+- **Fixed zoom>x1 overlay desync after retuning.** At zoom > x1, tuning to a new frequency (e.g. via touch-drag) left the passband-edge lines, VFO cursor, and frequency-axis labels positioned as if pan were reset to zero, while the spectrum/waterfall correctly re-centered on the new passband — the overlays would appear shifted to the right relative to the signal. `ui_update_frequency()` now re-derives the passband-centered pan after every frequency change.
+- **Top-bar / spectrum colour matching.** The spectrum's passband-edge lines now match the BW label's colour, and the VFO/center cursor line now matches the Freq label's colour. The translucent passband-tint band (drawn behind the spectrum curve) uses the same colour at ~25% opacity.
 
 ### Next up
 

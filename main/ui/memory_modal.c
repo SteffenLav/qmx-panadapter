@@ -4,6 +4,7 @@
 #include "mem_channels.h"
 #include "cat.h"
 #include "ui.h"
+#include "display.h"
 #include "esp_log.h"
 #include "lvgl.h"
 #include <stdio.h>
@@ -39,17 +40,60 @@ static int       s_action_idx   = -1;
 static uint32_t  s_pending_freq_hz = 0;
 static char      s_pending_mode[8] = "";
 
+#define MODAL_SLIDE_TIME_MS 250
+
+static int s_drag_start_y = -1;
+#define DRAG_CLOSE_MIN_DY 60
+
+static void modal_anim_y_cb(void *obj, int32_t v)
+{
+    lv_obj_set_y((lv_obj_t *)obj, v);
+}
+
+static void modal_close_ready_cb(lv_anim_t *a)
+{
+    (void)a;
+    lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_y(s_modal, 0);
+}
+
 static void modal_close(void)
 {
     if (!s_modal || !s_open) return;
-    lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     s_open = false;
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_modal);
+    lv_anim_set_exec_cb(&a, modal_anim_y_cb);
+    lv_anim_set_values(&a, 0, DISPLAY_V_RES);
+    lv_anim_set_time(&a, MODAL_SLIDE_TIME_MS);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in);
+    lv_anim_set_ready_cb(&a, modal_close_ready_cb);
+    lv_anim_start(&a);
 }
 
-static void close_btn_cb(lv_event_t *e)
+// Swipe down (drag down) anywhere on the modal background closes it,
+// replacing the Close button.
+static void modal_swipe_cb(lv_event_t *e)
 {
-    (void)e;
-    modal_close();
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_indev_t *indev = lv_event_get_indev(e);
+    if (!indev) return;
+
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+
+    if (code == LV_EVENT_PRESSED) {
+        s_drag_start_y = (int)p.y;
+        return;
+    }
+    if (code == LV_EVENT_RELEASED) {
+        if (s_drag_start_y >= 0 &&
+            (int)p.y - s_drag_start_y >= DRAG_CLOSE_MIN_DY) {
+            modal_close();
+        }
+        s_drag_start_y = -1;
+    }
 }
 
 /* Format hz as "12.345.678 Hz" (dot every 3 digits from the right). */
@@ -309,7 +353,7 @@ static void modal_build(void)
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
 
     int grid_w = COLS * CELL_W + (COLS - 1) * CELL_GAP;
-    int grid_h = PANEL_H - PAD * 2 - TITLE_H - 8 - 56 - 8;
+    int grid_h = PANEL_H - PAD * 2 - TITLE_H - 8;
     s_grid = lv_obj_create(s_panel);
     lv_obj_set_size(s_grid, grid_w, grid_h);
     lv_obj_align(s_grid, LV_ALIGN_TOP_MID, 0, TITLE_H + 8);
@@ -357,17 +401,21 @@ static void modal_build(void)
         s_cell_lbl2[i] = lbl2;
     }
 
-    lv_obj_t *close_btn = lv_btn_create(s_panel);
-    lv_obj_set_size(close_btn, grid_w, 48);
-    lv_obj_align(close_btn, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(close_btn, lv_color_hex(0x555555), 0);
-    lv_obj_set_style_radius(close_btn, 8, 0);
-    lv_obj_add_event_cb(close_btn, close_btn_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *close_lbl = lv_label_create(close_btn);
-    lv_label_set_text(close_lbl, "Close");
-    lv_obj_set_style_text_color(close_lbl, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(close_lbl, &lv_font_montserrat_24, 0);
-    lv_obj_center(close_lbl);
+    // Slim grip handle at the top of the panel: swipe down to close.
+    lv_obj_t *grip = lv_obj_create(s_panel);
+    lv_obj_set_size(grip, 120, 10);
+    lv_obj_align(grip, LV_ALIGN_TOP_MID, 0, -PAD + 4);
+    lv_obj_set_style_bg_color(grip, lv_color_hex(0xC0C0C0), 0);
+    lv_obj_set_style_bg_opa(grip, LV_OPA_30, 0);
+    lv_obj_set_style_border_width(grip, 0, 0);
+    lv_obj_set_style_radius(grip, 5, 0);
+    lv_obj_clear_flag(grip, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Swipe down anywhere on the modal background (outside the grid) closes it.
+    lv_obj_add_event_cb(s_modal, modal_swipe_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(s_modal, modal_swipe_cb, LV_EVENT_RELEASED, NULL);
+    lv_obj_add_event_cb(s_panel, modal_swipe_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(s_panel, modal_swipe_cb, LV_EVENT_RELEASED, NULL);
 
     /* Action panel for long-press */
     s_action_panel = lv_obj_create(s_panel);
@@ -480,8 +528,19 @@ void memory_modal_show(void)
     modal_build();
     if (s_open) return;
     memory_modal_refresh();
+    lv_obj_set_y(s_modal, DISPLAY_V_RES);
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_modal);
     s_open = true;
+
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_modal);
+    lv_anim_set_exec_cb(&a, modal_anim_y_cb);
+    lv_anim_set_values(&a, DISPLAY_V_RES, 0);
+    lv_anim_set_time(&a, MODAL_SLIDE_TIME_MS);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);
+
     ESP_LOGI(TAG, "shown");
 }
