@@ -813,8 +813,14 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 
 ### Shipped in v0.15.7
 
+- **FT8 frequency preset picker.** The frequency shown under "MODE: FT8" is now a button reading "Preset: 14.074 MHz" — tap it to open a popup listing the conventional FT8 dial frequencies (160m through 6m) for every band the connected QMX actually supports, and tap one to retune instantly. The touch target covers the full label and extends downward for an easy hit. Fixed a conflict where this tap could land on the top-bar Band dropdown instead — both popups now check the current UI mode before opening.
+- **FT8 slot countdown progress bar.** A small bar next to the EVEN/ODD slot countdown fills down over the 15-second slot, colour-matched to the parity (blue/amber), so you can see at a glance how much of the slot remains without reading the number.
+- **FT8 status text enlarged.** The persistent status line under "Call CQ" (capturing/decoding/TX/QSO state) is now a size larger and easier to read at a glance.
+- **Battery icon colour-coded.** The battery glyph in the bottom bar is pale green when full, pale yellow around half charge, and blinks pale red below 30% — the percentage/voltage text stays its normal grey.
+- **Zoom indicator always coloured.** "Zoom: x1.0" in the top bar is now purple/magenta at all zoom levels (previously greyed out at x1.0, which made it look disabled).
+- **Snappier frequency sync.** The top-bar Freq label now updates more promptly in step with the QMX VFO.
+- **Fixed tofu/square glyphs in FT8 status text.** A handful of FT8 status strings ("Waiting for QMX...", QSO state messages) used an em-dash character not present in the bundled font, which rendered as a square. Replaced with a plain hyphen.
 - **S-meter no longer freezes during FT8 capture.** The v0.15.5 fix kept the S-meter updating while FT8 mode was idle between captures, but per the "no slot-skip" design (v0.15.0) `s_ft8_active` is true almost continuously once FT8 is running, so that idle-branch refresh rarely got a chance to run — the S-meter would freeze the moment "RX: Capturing" appeared. The DC-blocker/window/FFT/dB/publish pipeline was factored into a shared `compute_and_publish_spectrum()` helper, now also invoked every ~10 iterations (~213 ms) from inside the active-capture branch, using the raw (un-mixed) I/Q samples so the spectrum stays aligned with the IF-shifted VFO bin the S-meter reads.
-- **FT8 frequency preset label reworded.** The clickable frequency label under "MODE: FT8" (opens the band-preset popup, added in v0.15.3/v0.15.4) now reads "Preset: 14.074 MHz" instead of the raw dotted-Hz format, making its purpose clearer at a glance. Same font size and colour as before.
 
 ### Next up
 
