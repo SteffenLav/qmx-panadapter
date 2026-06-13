@@ -70,6 +70,23 @@ const cat_band_entry_t *cat_get_band_list(int *out_count)
 static uint64_t s_last_tx_us = 0;   // for rate-limiting cat_set_frequency
 static volatile bool s_poll_paused = false;  // v0.12.0: cooperative pause for FT8 TX bursts
 
+// Pending SSB filter bandwidth (Hz) requested from the LVGL thread. The poll
+// task drains it on its next cycle so the write happens on the one thread that
+// owns the CDC pipe - writing MMSSB|Bandwidth= directly from the UI thread
+// raced the FA/MD/FW poll and the QMX got a garbled command (returned ?;),
+// which is why BW changes worked only intermittently. 0 = nothing pending.
+static volatile uint32_t s_pending_ssb_bw = 0;
+// Last SSB filter width the user set. While non-zero and we're in USB/LSB, the
+// FW; poll is dropped from the rotation - reading the filter makes the QMX
+// re-assert a stale active width and our setting reverts.
+static volatile uint32_t s_ssb_bw_pinned = 0;
+
+void cat_request_ssb_bandwidth(uint32_t hz)
+{
+    s_pending_ssb_bw = hz;
+    s_ssb_bw_pinned  = hz;
+}
+
 int cat_get_cw_offset_hz(void) { return s_cw_offset_hz; }
 esp_err_t cat_send_raw_cmd(const char *fmt, ...)
 {
@@ -450,18 +467,50 @@ static void poll_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
         }
-        // Phase 5.10G: 3-way rotation FA / MD / FW (passband width)
+        // Drain a pending SSB-filter write here (poll-task context owns the
+        // CDC pipe), so it can't interleave with a poll command and get a ?;.
+        // Target the committed "Filter RX" menu item - that's what FW; reads
+        // and what shows in the QMX SSB menu (the "Bandwidth" token is a live
+        // value that the QMX reverts). FW; will read the new width back.
+        uint32_t bw = s_pending_ssb_bw;
+        if (bw != 0) {
+            s_pending_ssb_bw = 0;
+            char mm[32];
+            // Two QMX SSB-filter items must agree or the live filter reverts:
+            //  - "Filter RX": the committed/stored value (persists, shows in
+            //    the QMX menu, but on its own doesn't reload the live filter).
+            //  - "Bandwidth": the live/active filter (applies immediately, but
+            //    on its own the QMX reverts it to the committed Filter RX).
+            // Write both to the same value: live applies AND there's nothing
+            // for the FW; poll to revert to. Result sticks and persists.
+            int n = snprintf(mm, sizeof(mm), "MMSSB|Filter RX=%lu;", (unsigned long)bw);
+            esp_err_t e1 = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)mm, n, 200);
+            vTaskDelay(pdMS_TO_TICKS(40));
+            n = snprintf(mm, sizeof(mm), "MMSSB|Bandwidth=%lu;", (unsigned long)bw);
+            esp_err_t e2 = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)mm, n, 200);
+            ESP_LOGI(TAG, "SSB filter -> %lu Hz (RX=%s, BW=%s)", (unsigned long)bw,
+                     e1 == ESP_OK ? "ok" : "fail", e2 == ESP_OK ? "ok" : "fail");
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        // Phase 5.10G: 3-way rotation FA / MD / FW (passband width).
+        // While an SSB filter is pinned and we're in USB/LSB, skip FW; - the
+        // QMX reverts the live filter whenever the filter is read back.
+        bool in_ssb = (s_last_mode_digit == '1' || s_last_mode_digit == '2');
+        bool skip_fw = (s_ssb_bw_pinned != 0 && in_ssb);
         const char *cmd;
         switch (phase) {
             case 0:  cmd = "FA;"; break;
             case 1:  cmd = "MD;"; break;
-            default: cmd = "FW;"; break;
+            default: cmd = skip_fw ? NULL : "FW;"; break;
         }
-        esp_err_t err = cdc_acm_host_data_tx_blocking(
-            s_cdc_dev, (const uint8_t *)cmd, 3, 200);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "%s send failed: 0x%x (radio likely disconnected)", cmd, err);
-            break;
+        if (cmd != NULL) {
+            esp_err_t err = cdc_acm_host_data_tx_blocking(
+                s_cdc_dev, (const uint8_t *)cmd, 3, 200);
+            if (err != ESP_OK) {
+                ESP_LOGW(TAG, "%s send failed: 0x%x (radio likely disconnected)", cmd, err);
+                break;
+            }
         }
         phase = (phase + 1) % 3;
         vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));

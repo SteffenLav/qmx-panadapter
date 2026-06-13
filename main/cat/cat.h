@@ -94,6 +94,15 @@ int cat_get_cw_offset_hz(void);
 esp_err_t cat_send_raw_cmd(const char *fmt, ...);
 
 /**
+ * @brief Request the QMX SSB receive filter bandwidth (Hz: 2500/2700/2900/3200).
+ *
+ * Thread-safe to call from the LVGL/UI thread. The actual MMSSB|Bandwidth=
+ * write is deferred to the poll task (which owns the CDC pipe), avoiding a
+ * command-interleave race with the FA/MD/FW poll that made BW changes flaky.
+ */
+void cat_request_ssb_bandwidth(uint32_t hz);
+
+/**
  * @brief Cooperatively pause/resume the background FA;/MD;/FW; poll loop.
  *
  * v0.12.0 (FT8 TX): while a TX burst owns the CDC-ACM link (sending

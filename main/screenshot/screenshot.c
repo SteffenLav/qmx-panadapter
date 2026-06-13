@@ -8,6 +8,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "bsp/esp-bsp.h"
+#include "ui.h"
 
 static const char *TAG = "SCREENSHOT";
 
@@ -56,6 +57,9 @@ esp_err_t screenshot_capture_rgb565(uint8_t **out_buf, size_t *out_size,
     lv_anim_delete_all();
     lv_result_t res = lv_snapshot_take_to_buf(screen, LV_COLOR_FORMAT_RGB565,
                                               &dsc, buf, buf_size);
+    // lv_anim_delete_all() also killed the infinite-repeat "breathing"
+    // animations on the edge-swipe grip handles; resume them now.
+    ui_restart_edge_grip_anims();
     bsp_display_unlock();
 
     if (res != LV_RESULT_OK) {

@@ -238,6 +238,26 @@ static char      s_freq_buf[16] = "";
 static char      s_freq_disp[40] = "";
 static ui_freq_picker_cb_t s_freq_picker_cb = NULL;
 
+// Keypad digit layout: false = phone (1 2 3 top), true = 10-key/calculator
+// (7 8 9 top). Toggled by the "10 Key"/"Phone" button. Persists per session.
+static bool      s_freq_calc_layout = false;
+static lv_obj_t *s_freq_digit_lbls[9];   // the nine digit-key labels (grid 0..8)
+static lv_obj_t *s_freq_layout_lbl = NULL;  // label on the layout-toggle button
+
+// Apply the current layout to the nine digit labels + the toggle button text.
+static void freq_apply_keypad_layout(void)
+{
+    static const char *const phone[9] = { "1","2","3","4","5","6","7","8","9" };
+    static const char *const calc[9]  = { "7","8","9","4","5","6","1","2","3" };
+    const char *const *L = s_freq_calc_layout ? calc : phone;
+    for (int i = 0; i < 9; i++) {
+        if (s_freq_digit_lbls[i]) lv_label_set_text(s_freq_digit_lbls[i], L[i]);
+    }
+    // Button shows the layout it will switch TO when pressed.
+    if (s_freq_layout_lbl) lv_label_set_text(s_freq_layout_lbl,
+                                             s_freq_calc_layout ? "Phone" : "10 Key");
+}
+
 // Mode row on the freq keypad: DiGi / USB / LSB / CW. Selected mode is
 // highlighted yellow and travels with the typed frequency.
 static const char *const s_freq_modes[4] = {"DiGi", "USB", "LSB", "CW"};
@@ -373,12 +393,20 @@ static void freq_key_cb(lv_event_t *e)
             freq_popup_close();
             return;
         }
-        case 'M':   // MHz: interpret typed number as MHz -> Hz
-        case 'K': { // kHz: interpret typed number as kHz -> Hz
-            double val = s_freq_buf[0] ? atof(s_freq_buf) : 0.0;
-            double mult = (key == 'M') ? 1000000.0 : 1000.0;
-            uint32_t hz = (uint32_t)(val * mult + 0.5);
-            snprintf(s_freq_buf, sizeof(s_freq_buf), "%lu", (unsigned long)hz);
+        case 'T':  // toggle keypad layout (phone <-> 10-key)
+            s_freq_calc_layout = !s_freq_calc_layout;
+            freq_apply_keypad_layout();
+            return;
+        case '#': {  // a digit key - read the digit from the button's own label
+                     // (labels move when the layout toggles, codes don't).
+            lv_obj_t *btn = lv_event_get_target(e);
+            lv_obj_t *lbl = btn ? lv_obj_get_child(btn, 0) : NULL;
+            const char *t = lbl ? lv_label_get_text(lbl) : NULL;
+            if (t && t[0] >= '0' && t[0] <= '9' &&
+                len + 1 < sizeof(s_freq_buf)) {
+                s_freq_buf[len] = t[0];
+                s_freq_buf[len + 1] = '\0';
+            }
             break;
         }
         case 'D': {  // Delete (backspace)
@@ -428,8 +456,13 @@ static void freq_popup_build(void)
     lv_obj_add_event_cb(ov, freq_overlay_cb, LV_EVENT_CLICKED, NULL);
     s_freq_popup = ov;
 
+    // The DiGi/USB/LSB/CW mode row is only useful for the Memory channel
+    // editor (which sets s_freq_picker_cb). The top-bar Freq keypad already
+    // has a mode selector in the top bar, so it omits the row (and is shorter).
+    bool show_mode = (s_freq_picker_cb != NULL);
+
     int panel_w = 504;  // 360 + 40%
-    int panel_h = 580;  // +80 for the new mode row
+    int panel_h = show_mode ? 580 : 508;  // 508 = 580 - mode row (64 + 8 gap)
     lv_obj_t *panel = lv_obj_create(ov);
     lv_obj_set_size(panel, panel_w, panel_h);
     lv_obj_align(panel, LV_ALIGN_CENTER, 0, 0);
@@ -453,7 +486,9 @@ static void freq_popup_build(void)
     lv_obj_set_style_text_align(s_freq_display, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_freq_display, LV_ALIGN_TOP_MID, 0, 0);
 
-    // 3x4 keypad grid: 1 2 3 / 4 5 6 / 7 8 9 / . 0 <-
+    // 3x4 keypad grid. The nine digit cells (0..8) carry code '#': the actual
+    // digit is read from the button's label at press time, so the layout
+    // toggle just relabels them. Bottom row is fixed: . 0 <-
     static const char *const keys[12] = {
         "1", "2", "3",
         "4", "5", "6",
@@ -461,9 +496,9 @@ static void freq_popup_build(void)
         ".", "0", LV_SYMBOL_LEFT,
     };
     static const char keycodes[12] = {
-        '1', '2', '3',
-        '4', '5', '6',
-        '7', '8', '9',
+        '#', '#', '#',
+        '#', '#', '#',
+        '#', '#', '#',
         '.', '0', 'D',
     };
 
@@ -491,60 +526,66 @@ static void freq_popup_build(void)
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
         lv_obj_center(lbl);
+        if (i < 9) s_freq_digit_lbls[i] = lbl;  // for layout toggle
     }
 
     int btn_w = (content_w - gap) / 2;
     int btn_h = 64;
 
-    // MHz / kHz row: interpret the typed decimal number as that unit and
-    // convert it to a Hz value shown in the display (e.g. "1.5" + MHz ->
-    // 1500000).
+    // Row: [10 Key / Phone layout toggle]  [Clear].
     int unit_y = grid_top + rows * (cell_h + gap);
 
-    lv_obj_t *mhz_btn = lv_btn_create(panel);
-    lv_obj_set_size(mhz_btn, btn_w, btn_h);
-    lv_obj_set_pos(mhz_btn, 0, unit_y);
-    lv_obj_set_style_bg_color(mhz_btn, lv_color_hex(0x2A2A2A), 0);
-    lv_obj_set_style_radius(mhz_btn, 6, 0);
-    lv_obj_add_event_cb(mhz_btn, freq_key_cb, LV_EVENT_CLICKED, (void *)(intptr_t)'M');
-    lv_obj_t *mhz_lbl = lv_label_create(mhz_btn);
-    lv_label_set_text(mhz_lbl, "MHz");
-    lv_obj_set_style_text_font(mhz_lbl, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(mhz_lbl, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_center(mhz_lbl);
+    lv_obj_t *layout_btn = lv_btn_create(panel);
+    lv_obj_set_size(layout_btn, btn_w, btn_h);
+    lv_obj_set_pos(layout_btn, 0, unit_y);
+    lv_obj_set_style_bg_color(layout_btn, lv_color_hex(0x2A2A2A), 0);
+    lv_obj_set_style_radius(layout_btn, 6, 0);
+    lv_obj_add_event_cb(layout_btn, freq_key_cb, LV_EVENT_CLICKED, (void *)(intptr_t)'T');
+    s_freq_layout_lbl = lv_label_create(layout_btn);
+    lv_label_set_text(s_freq_layout_lbl, "10 Key");
+    lv_obj_set_style_text_font(s_freq_layout_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(s_freq_layout_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_center(s_freq_layout_lbl);
 
-    lv_obj_t *khz_btn = lv_btn_create(panel);
-    lv_obj_set_size(khz_btn, btn_w, btn_h);
-    lv_obj_set_pos(khz_btn, btn_w + gap, unit_y);
-    lv_obj_set_style_bg_color(khz_btn, lv_color_hex(0x2A2A2A), 0);
-    lv_obj_set_style_radius(khz_btn, 6, 0);
-    lv_obj_add_event_cb(khz_btn, freq_key_cb, LV_EVENT_CLICKED, (void *)(intptr_t)'K');
-    lv_obj_t *khz_lbl = lv_label_create(khz_btn);
-    lv_label_set_text(khz_lbl, "kHz");
-    lv_obj_set_style_text_font(khz_lbl, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(khz_lbl, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_center(khz_lbl);
+    lv_obj_t *clear_btn = lv_btn_create(panel);
+    lv_obj_set_size(clear_btn, btn_w, btn_h);
+    lv_obj_set_pos(clear_btn, btn_w + gap, unit_y);
+    lv_obj_set_style_bg_color(clear_btn, lv_color_hex(0x2A2A2A), 0);
+    lv_obj_set_style_radius(clear_btn, 6, 0);
+    lv_obj_add_event_cb(clear_btn, freq_key_cb, LV_EVENT_CLICKED, (void *)(intptr_t)'A');
+    lv_obj_t *clear_lbl = lv_label_create(clear_btn);
+    lv_label_set_text(clear_lbl, "Clear");
+    lv_obj_set_style_text_font(clear_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(clear_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_center(clear_lbl);
 
-    // Mode row: DiGi / USB / LSB / CW. Tap to select; selection travels
-    // with the typed frequency (highlighted yellow).
+    // Reflect the persisted layout choice on the freshly-built digit keys.
+    freq_apply_keypad_layout();
+
+    // Mode row: DiGi / USB / LSB / CW. Only for the Memory channel editor;
+    // the top-bar keypad omits it (mode lives in the top bar there).
     int mode_y = unit_y + btn_h + gap;
-    int mode_w = (content_w - 3 * gap) / 4;
-    for (int i = 0; i < 4; i++) {
-        lv_obj_t *btn = lv_btn_create(panel);
-        lv_obj_set_size(btn, mode_w, btn_h);
-        lv_obj_set_pos(btn, i * (mode_w + gap), mode_y);
-        lv_obj_set_style_radius(btn, 6, 0);
-        lv_obj_add_event_cb(btn, freq_mode_cb, LV_EVENT_CLICKED, (void *)s_freq_modes[i]);
-        lv_obj_t *lbl = lv_label_create(btn);
-        lv_label_set_text(lbl, s_freq_modes[i]);
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
-        lv_obj_center(lbl);
-        s_freq_mode_btns[i] = btn;
+    if (show_mode) {
+        int mode_w = (content_w - 3 * gap) / 4;
+        for (int i = 0; i < 4; i++) {
+            lv_obj_t *btn = lv_btn_create(panel);
+            lv_obj_set_size(btn, mode_w, btn_h);
+            lv_obj_set_pos(btn, i * (mode_w + gap), mode_y);
+            lv_obj_set_style_radius(btn, 6, 0);
+            lv_obj_add_event_cb(btn, freq_mode_cb, LV_EVENT_CLICKED, (void *)s_freq_modes[i]);
+            lv_obj_t *lbl = lv_label_create(btn);
+            lv_label_set_text(lbl, s_freq_modes[i]);
+            lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+            lv_obj_center(lbl);
+            s_freq_mode_btns[i] = btn;
+        }
+        freq_mode_highlight();
+    } else {
+        for (int i = 0; i < 4; i++) s_freq_mode_btns[i] = NULL;
     }
-    freq_mode_highlight();
 
-    // Cancel / Enter row
-    int btn_y = mode_y + btn_h + gap;
+    // Cancel / Enter row - directly below the unit row when there's no mode row.
+    int btn_y = (show_mode ? mode_y + btn_h + gap : unit_y + btn_h + gap);
 
     lv_obj_t *cancel_btn = lv_btn_create(panel);
     lv_obj_set_size(cancel_btn, btn_w, btn_h);
@@ -577,8 +618,9 @@ static void freq_popup_open(void)
 {
     if (s_freq_popup) { freq_popup_close(); return; }
     s_freq_picker_cb = NULL;
-    uint32_t cur_hz = cat_get_frequency();
-    snprintf(s_freq_buf, sizeof(s_freq_buf), "%lu", (unsigned long)cur_hz);
+    // Top-bar Freq keypad opens with an empty field (type the new dial freq
+    // from scratch). Memory's picker (ui_freq_picker_open) pre-fills instead.
+    s_freq_buf[0] = '\0';
     const char *mode = cat_get_mode_str();
     strncpy(s_freq_mode_sel, mode[0] ? mode : "", sizeof(s_freq_mode_sel) - 1);
     s_freq_mode_sel[sizeof(s_freq_mode_sel) - 1] = '\0';
@@ -588,7 +630,6 @@ static void freq_popup_open(void)
 static void freq_label_clicked_cb(lv_event_t *e)
 {
     (void)e;
-    if (ui_mode_get() == UI_MODE_FT8) return;
     freq_popup_open();
 }
 
@@ -619,12 +660,15 @@ static void bw_preset_cb(lv_event_t *e)
     if (strcmp(mode, "CW") == 0 || strcmp(mode, "CW-R") == 0) {
         cat_send_raw_cmd("MMCW|CW passband=%lu;", (unsigned long)hz);
     } else {
-        cat_send_raw_cmd("MMSSB|Filter RX=%lu;", (unsigned long)hz);
-        // Force DSP reinit: switch to CW then back to trigger filter reload
-        vTaskDelay(pdMS_TO_TICKS(50));
-        cat_set_mode("CW");
-        vTaskDelay(pdMS_TO_TICKS(100));
-        cat_set_mode(mode);
+        // QMX Menu Manager: the SSB filter item is "Bandwidth" (NOT "Filter RX",
+        // which the QMX silently ignored — confirmed via a live MM query probe
+        // that only "MMSSB|Bandwidth;" answered, returning the current value).
+        // Defer the write to the poll task (it owns the CDC pipe) so it can't
+        // race the FA/MD/FW poll and get garbled into a ?; — that race was why
+        // BW changes only worked intermittently. Update the label optimistically;
+        // the FW poll confirms/corrects it within ~150 ms.
+        cat_request_ssb_bandwidth(hz);
+        ui_update_passband_width(hz);
     }
 }
 
@@ -639,14 +683,26 @@ static void bw_popup_open(void)
 {
     if (s_bw_popup) { bw_popup_close(); return; }
 
-    // BW only adjustable in CW mode via CAT
-    static const uint32_t cw_bw[]  = {50, 100, 150, 200, 250, 300, 400, 500};
-    static const char    *cw_lbl[] = {"50","100","150","200","250","300","400","500"};
+    // BW adjustable in CW/CW-R and USB/LSB modes via CAT
+    static const uint32_t cw_bw[]   = {50, 100, 150, 200, 250, 300, 400, 500};
+    static const char    *cw_lbl[]  = {"50","100","150","200","250","300","400","500"};
+    static const uint32_t ssb_bw[]  = {2500, 2700, 2900, 3200};
+    static const char    *ssb_lbl[] = {"2.5k","2.7k","2.9k","3.2k"};
     const char *cur_mode = cat_get_mode_str();
-    if (strcmp(cur_mode, "CW") != 0 && strcmp(cur_mode, "CW-R") != 0) return;
-    const uint32_t *bw_list = cw_bw;
-    const char **lbl_list = cw_lbl;
-    int n_bw = 8;
+    const uint32_t *bw_list;
+    const char **lbl_list;
+    int n_bw;
+    if (strcmp(cur_mode, "CW") == 0 || strcmp(cur_mode, "CW-R") == 0) {
+        bw_list = cw_bw;
+        lbl_list = cw_lbl;
+        n_bw = 8;
+    } else if (strcmp(cur_mode, "USB") == 0 || strcmp(cur_mode, "LSB") == 0) {
+        bw_list = ssb_bw;
+        lbl_list = ssb_lbl;
+        n_bw = 4;
+    } else {
+        return;
+    }
 
     lv_obj_t *ov = lv_obj_create(lv_layer_top());
     lv_obj_set_size(ov, LV_HOR_RES, LV_VER_RES);
@@ -1011,6 +1067,8 @@ static bool       s_bot_rssi_valid = false;
 static lv_obj_t *s_bot_wifi_suffix = NULL;
 static lv_obj_t *s_bot_version = NULL; /* firmware version, between battery and clock */
 static lv_obj_t *s_burger_btn = NULL;  // right-edge drawer grip handle (kept for foreground move after all UI built)
+static lv_obj_t *s_left_edge_grip = NULL;
+static lv_obj_t *s_bottom_edge_grip = NULL;
 static lv_obj_t *s_switch_iq  = NULL;  // Phase B: IQ balance toggle in settings drawer
 static lv_obj_t *s_switch_flat = NULL; // Phase 5.12: flat-spectrum toggle in settings drawer
 
@@ -1022,6 +1080,24 @@ static bool s_drawer_open = false;
 // gesture that works regardless of which content is hidden behind it.
 static lv_obj_t *s_drawer_scrim = NULL;
 static int s_drawer_scrim_swipe_start_x = -1;
+// FT8 mode only needs WiFi/Callsign+Grid/Brightness; everything else is
+// hidden and those three are restacked near the top. Each drawer section
+// lives in its own transparent container so it can be hidden/repositioned
+// as a unit. Indices below double as keys into s_drawer_sections[].
+#define DRAWER_SEC_IQ         0
+#define DRAWER_SEC_FLAT       1
+#define DRAWER_SEC_PRESETS    2
+#define DRAWER_SEC_WIFI       3
+#define DRAWER_SEC_IDENTITY   4
+#define DRAWER_SEC_DBRANGE    5
+#define DRAWER_SEC_SMOOTHING  6
+#define DRAWER_SEC_CW         7
+#define DRAWER_SEC_IFCAL      8
+#define DRAWER_SEC_BRIGHTNESS 9
+#define DRAWER_SEC_CMAP       10
+#define N_DRAWER_SECTIONS     11
+static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
+static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 // Phase 5.10D Stage 2b: drawer widgets we need to keep handles to
 static lv_obj_t *s_slider_db_min = NULL;
 static lv_obj_t *s_slider_db_max = NULL;
@@ -1075,6 +1151,7 @@ bool ui_get_flat_mode(void);
 void ui_set_flat_mode(bool on);
 static void drawer_apply_preset(int db_min, int db_max, float alpha);
 static void drawer_build(void);
+static void drawer_set_ft8_mode(bool ft8);
 static void drawer_open(void);
 static void drawer_close(void);
 static void drawer_anim_x_cb(void *obj, int32_t v);
@@ -1120,6 +1197,17 @@ static void grip_start_breathing(lv_obj_t *grip)
     lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
     lv_anim_start(&a);
+}
+
+// lv_anim_delete_all() (used by screenshot capture to freeze the UI for a
+// stable snapshot) wipes out the infinite-repeat breathing animations on the
+// edge-swipe grip handles too. Call this right after a snapshot to resume
+// breathing on all three grips.
+void ui_restart_edge_grip_anims(void)
+{
+    if (s_burger_btn) grip_start_breathing(s_burger_btn);
+    if (s_left_edge_grip) grip_start_breathing(s_left_edge_grip);
+    if (s_bottom_edge_grip) grip_start_breathing(s_bottom_edge_grip);
 }
 
 // ==== Top bar ====
@@ -1644,6 +1732,7 @@ void ui_init(lv_display_t *disp)
         lv_obj_clear_flag(grip, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_clear_flag(grip, LV_OBJ_FLAG_CLICKABLE);
         grip_start_breathing(grip);
+        s_left_edge_grip = grip;
     }
     // Bottom edge: swipe up to open the memory-channel modal.
     {
@@ -1672,6 +1761,7 @@ void ui_init(lv_display_t *disp)
         lv_obj_clear_flag(grip, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_clear_flag(grip, LV_OBJ_FLAG_CLICKABLE);
         grip_start_breathing(grip);
+        s_bottom_edge_grip = grip;
     }
 
     ESP_LOGI(TAG, "UI built: top=%dpx spectrum=%dpx labels=%dpx waterfall=%dpx bottom=%dpx",
@@ -1882,6 +1972,20 @@ void ui_update_band(const char *band)
     } else {
         ESP_LOGW("ui", "ui_update_band: display_lock timeout for '%s'", band);
     }
+}
+
+// Band/Mode/BW/Zoom top-bar controls open popups that don't apply in FT8
+// mode (frequency/mode/passband there are driven by the FT8 screen itself,
+// and zoom is a panadapter-only concept). The click handlers already ignore
+// taps while ui_mode == UI_MODE_FT8; this dims the labels too so it's
+// visually obvious they're inert.
+static void top_bar_set_ft8_dim(bool dim)
+{
+    lv_opa_t opa = dim ? LV_OPA_30 : LV_OPA_COVER;
+    if (s_band_label) lv_obj_set_style_text_opa(s_band_label, opa, 0);
+    if (s_mode_label) lv_obj_set_style_text_opa(s_mode_label, opa, 0);
+    if (s_bw_label)   lv_obj_set_style_text_opa(s_bw_label, opa, 0);
+    if (s_zoom_label) lv_obj_set_style_text_opa(s_zoom_label, opa, 0);
 }
 
 // Phase 5.10G: receive passband width from CAT (FW response) or
@@ -2735,6 +2839,27 @@ static void iq_balance_toggle_cb(lv_event_t *e)
     if (on) iq_balance_reset();
 }
 
+// Create a transparent, full-width, non-scrollable container for one
+// drawer section. Children are positioned relative to its (0,0) top-left,
+// same as they used to be positioned relative to s_drawer's top-left.
+// sec_idx records the container + its normal (Panadapter-mode) y so
+// drawer_set_ft8_mode() can hide/restack sections for FT8 mode.
+static lv_obj_t *drawer_section(int sec_idx, int y, int h)
+{
+    lv_obj_t *c = lv_obj_create(s_drawer);
+    lv_obj_set_size(c, DRAWER_W - 32, h);
+    lv_obj_align(c, LV_ALIGN_TOP_LEFT, 0, y);
+    lv_obj_set_style_bg_opa(c, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(c, 0, 0);
+    lv_obj_set_style_pad_all(c, 0, 0);
+    lv_obj_set_style_radius(c, 0, 0);
+    lv_obj_set_scrollbar_mode(c, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+    s_drawer_sections[sec_idx]   = c;
+    s_drawer_section_y[sec_idx]  = y;
+    return c;
+}
+
 // Build the drawer once. Hidden off-screen on the right initially.
 static void drawer_build(void)
 {
@@ -2788,14 +2913,15 @@ static void drawer_build(void)
 
     // IQ balance ON/OFF row -- full width, well clear of the close button
     {
-        lv_obj_t *iq_lbl = lv_label_create(s_drawer);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_IQ, y, 56);
+        lv_obj_t *iq_lbl = lv_label_create(sec);
         lv_label_set_text(iq_lbl, "IQ Balance");
         lv_obj_set_style_text_color(iq_lbl, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(iq_lbl, &lv_font_montserrat_24, 0);
-        lv_obj_align(iq_lbl, LV_ALIGN_TOP_LEFT, 0, y + 6);
-        s_switch_iq = lv_switch_create(s_drawer);
+        lv_obj_align(iq_lbl, LV_ALIGN_TOP_LEFT, 0, 6);
+        s_switch_iq = lv_switch_create(sec);
         lv_obj_set_size(s_switch_iq, 72, 36);
-        lv_obj_align(s_switch_iq, LV_ALIGN_TOP_RIGHT, 0, y);
+        lv_obj_align(s_switch_iq, LV_ALIGN_TOP_RIGHT, 0, 0);
         if (iq_balance_is_enabled()) lv_obj_add_state(s_switch_iq, LV_STATE_CHECKED);
         lv_obj_add_event_cb(s_switch_iq, iq_balance_toggle_cb, LV_EVENT_VALUE_CHANGED, NULL);
         y += 56;
@@ -2803,28 +2929,28 @@ static void drawer_build(void)
 
     // Phase 5.12: Flat Spectrum ON/OFF row
     {
-        lv_obj_t *flat_lbl = lv_label_create(s_drawer);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_FLAT, y, 56);
+        lv_obj_t *flat_lbl = lv_label_create(sec);
         lv_label_set_text(flat_lbl, "Flat Spectrum");
         lv_obj_set_style_text_color(flat_lbl, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(flat_lbl, &lv_font_montserrat_24, 0);
-        lv_obj_align(flat_lbl, LV_ALIGN_TOP_LEFT, 0, y + 6);
-        s_switch_flat = lv_switch_create(s_drawer);
+        lv_obj_align(flat_lbl, LV_ALIGN_TOP_LEFT, 0, 6);
+        s_switch_flat = lv_switch_create(sec);
         lv_obj_set_size(s_switch_flat, 72, 36);
-        lv_obj_align(s_switch_flat, LV_ALIGN_TOP_RIGHT, 0, y);
+        lv_obj_align(s_switch_flat, LV_ALIGN_TOP_RIGHT, 0, 0);
         if (ui_get_flat_mode()) lv_obj_add_state(s_switch_flat, LV_STATE_CHECKED);
         lv_obj_add_event_cb(s_switch_flat, drawer_switch_flat_cb, LV_EVENT_VALUE_CHANGED, NULL);
         y += 56;
     }
-    // Presets section header
-    lv_obj_t *presets_hdr = lv_label_create(s_drawer);
-    lv_label_set_text(presets_hdr, "Presets");
-    lv_obj_set_style_text_color(presets_hdr, lv_color_hex(0xA0E0A0), 0);
-    lv_obj_set_style_text_font(presets_hdr, &lv_font_montserrat_24, 0);
-    lv_obj_align(presets_hdr, LV_ALIGN_TOP_LEFT, 0, y);
-    y += 36;
-
-    // Three preset buttons, side-by-side in a single row
+    // Presets section: header + three buttons side-by-side
     {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_PRESETS, y, 108);
+        lv_obj_t *presets_hdr = lv_label_create(sec);
+        lv_label_set_text(presets_hdr, "Presets");
+        lv_obj_set_style_text_color(presets_hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(presets_hdr, &lv_font_montserrat_24, 0);
+        lv_obj_align(presets_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
         const char *preset_names[3] = { "HF Normal", "HF DX", "Strong Sig." };
         lv_event_cb_t preset_cbs[3] = {
             drawer_preset_normal_cb,
@@ -2836,23 +2962,24 @@ static void drawer_build(void)
         const int btn_w   = (row_w - 2 * gap) / 3;
         const int btn_h   = 56;
         for (int i = 0; i < 3; i++) {
-            lv_obj_t *btn = lv_btn_create(s_drawer);
+            lv_obj_t *btn = lv_btn_create(sec);
             lv_obj_set_size(btn, btn_w, btn_h);
-            lv_obj_align(btn, LV_ALIGN_TOP_LEFT, i * (btn_w + gap), y);
+            lv_obj_align(btn, LV_ALIGN_TOP_LEFT, i * (btn_w + gap), 36);
             lv_obj_add_event_cb(btn, preset_cbs[i], LV_EVENT_CLICKED, NULL);
             lv_obj_t *lbl = lv_label_create(btn);
             lv_label_set_text(lbl, preset_names[i]);
             lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
             lv_obj_center(lbl);
         }
-        y += btn_h + 16;
+        y += 108;
     }
 
     // WiFi configuration button -- full width
     {
-        lv_obj_t *btn = lv_btn_create(s_drawer);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WIFI, y, 72);
+        lv_obj_t *btn = lv_btn_create(sec);
         lv_obj_set_size(btn, DRAWER_W - 32, 56);
-        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, y);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
         lv_obj_set_style_bg_color(btn, lv_color_hex(0x2c4d6e), 0);
         lv_obj_add_event_cb(btn, drawer_wifi_btn_cb, LV_EVENT_CLICKED, NULL);
         lv_obj_t *lbl = lv_label_create(btn);
@@ -2864,9 +2991,10 @@ static void drawer_build(void)
     }
     // Operator identity button -- full width (callsign + grid for FT8 TX)
     {
-        lv_obj_t *btn = lv_btn_create(s_drawer);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_IDENTITY, y, 72);
+        lv_obj_t *btn = lv_btn_create(sec);
         lv_obj_set_size(btn, DRAWER_W - 32, 56);
-        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, y);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
         lv_obj_set_style_bg_color(btn, lv_color_hex(0x2c4d6e), 0);
         lv_obj_add_event_cb(btn, drawer_identity_btn_cb, LV_EVENT_CLICKED, NULL);
         lv_obj_t *lbl = lv_label_create(btn);
@@ -2877,173 +3005,191 @@ static void drawer_build(void)
         y += 72;
     }
 
-    // dB Range section header
-    lv_obj_t *db_hdr = lv_label_create(s_drawer);
-    lv_label_set_text(db_hdr, "dB Range");
-    lv_obj_set_style_text_color(db_hdr, lv_color_hex(0xA0E0A0), 0);
-    lv_obj_set_style_text_font(db_hdr, &lv_font_montserrat_24, 0);
-    lv_obj_align(db_hdr, LV_ALIGN_TOP_LEFT, 0, y);
-    y += 40;
+    // dB Range section
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_DBRANGE, y, 212);
+        lv_obj_t *db_hdr = lv_label_create(sec);
+        lv_label_set_text(db_hdr, "dB Range");
+        lv_obj_set_style_text_color(db_hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(db_hdr, &lv_font_montserrat_24, 0);
+        lv_obj_align(db_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    // dB min slider
-    s_lbl_db_min = lv_label_create(s_drawer);
-    lv_label_set_text(s_lbl_db_min, "Min: -130 dBm");
-    lv_obj_set_style_text_color(s_lbl_db_min, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_lbl_db_min, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_lbl_db_min, LV_ALIGN_TOP_LEFT, 0, y);
-    y += 30;
+        // dB min slider
+        s_lbl_db_min = lv_label_create(sec);
+        lv_label_set_text(s_lbl_db_min, "Min: -130 dBm");
+        lv_obj_set_style_text_color(s_lbl_db_min, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_db_min, &lv_font_montserrat_24, 0);
+        lv_obj_align(s_lbl_db_min, LV_ALIGN_TOP_LEFT, 0, 40);
 
-    s_slider_db_min = lv_slider_create(s_drawer);
-    lv_obj_set_size(s_slider_db_min, DRAWER_W - 32, 30);
-    lv_slider_set_range(s_slider_db_min, -150, -50);
-    lv_slider_set_value(s_slider_db_min, -130, LV_ANIM_OFF);
-    lv_obj_align(s_slider_db_min, LV_ALIGN_TOP_LEFT, 0, y);
-    lv_obj_add_event_cb(s_slider_db_min, drawer_slider_db_min_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    y += 52;
+        s_slider_db_min = lv_slider_create(sec);
+        lv_obj_set_size(s_slider_db_min, DRAWER_W - 32, 30);
+        lv_slider_set_range(s_slider_db_min, -150, -50);
+        lv_slider_set_value(s_slider_db_min, -130, LV_ANIM_OFF);
+        lv_obj_align(s_slider_db_min, LV_ALIGN_TOP_LEFT, 0, 70);
+        lv_obj_add_event_cb(s_slider_db_min, drawer_slider_db_min_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
-    // dB max slider
-    s_lbl_db_max = lv_label_create(s_drawer);
-    lv_label_set_text(s_lbl_db_max, "Max: -30 dBm");
-    lv_obj_set_style_text_color(s_lbl_db_max, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_lbl_db_max, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_lbl_db_max, LV_ALIGN_TOP_LEFT, 0, y);
-    y += 30;
+        // dB max slider
+        s_lbl_db_max = lv_label_create(sec);
+        lv_label_set_text(s_lbl_db_max, "Max: -30 dBm");
+        lv_obj_set_style_text_color(s_lbl_db_max, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_db_max, &lv_font_montserrat_24, 0);
+        lv_obj_align(s_lbl_db_max, LV_ALIGN_TOP_LEFT, 0, 122);
 
-    s_slider_db_max = lv_slider_create(s_drawer);
-    lv_obj_set_size(s_slider_db_max, DRAWER_W - 32, 30);
-    lv_slider_set_range(s_slider_db_max, -50, 10);
-    lv_slider_set_value(s_slider_db_max, -30, LV_ANIM_OFF);
-    lv_obj_align(s_slider_db_max, LV_ALIGN_TOP_LEFT, 0, y);
-    lv_obj_add_event_cb(s_slider_db_max, drawer_slider_db_max_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    y += 60;
+        s_slider_db_max = lv_slider_create(sec);
+        lv_obj_set_size(s_slider_db_max, DRAWER_W - 32, 30);
+        lv_slider_set_range(s_slider_db_max, -50, 10);
+        lv_slider_set_value(s_slider_db_max, -30, LV_ANIM_OFF);
+        lv_obj_align(s_slider_db_max, LV_ALIGN_TOP_LEFT, 0, 152);
+        lv_obj_add_event_cb(s_slider_db_max, drawer_slider_db_max_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        y += 212;
+    }
 
-    // Smoothing section header
-    lv_obj_t *sm_hdr = lv_label_create(s_drawer);
-    lv_label_set_text(sm_hdr, "Smoothing");
-    lv_obj_set_style_text_color(sm_hdr, lv_color_hex(0xA0E0A0), 0);
-    lv_obj_set_style_text_font(sm_hdr, &lv_font_montserrat_24, 0);
-    lv_obj_align(sm_hdr, LV_ALIGN_TOP_LEFT, 0, y);
-    y += 40;
+    // Smoothing section
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SMOOTHING, y, 130);
+        lv_obj_t *sm_hdr = lv_label_create(sec);
+        lv_label_set_text(sm_hdr, "Smoothing");
+        lv_obj_set_style_text_color(sm_hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(sm_hdr, &lv_font_montserrat_24, 0);
+        lv_obj_align(sm_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    s_lbl_alpha = lv_label_create(s_drawer);
-    lv_label_set_text(s_lbl_alpha, "Alpha: 0.40");
-    lv_obj_set_style_text_color(s_lbl_alpha, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_lbl_alpha, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_lbl_alpha, LV_ALIGN_TOP_LEFT, 0, y);
-    y += 30;
+        s_lbl_alpha = lv_label_create(sec);
+        lv_label_set_text(s_lbl_alpha, "Alpha: 0.40");
+        lv_obj_set_style_text_color(s_lbl_alpha, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_alpha, &lv_font_montserrat_24, 0);
+        lv_obj_align(s_lbl_alpha, LV_ALIGN_TOP_LEFT, 0, 40);
 
-    s_slider_alpha = lv_slider_create(s_drawer);
-    lv_obj_set_size(s_slider_alpha, DRAWER_W - 32, 30);
-    lv_slider_set_range(s_slider_alpha, 5, 100);   // = alpha 0.05..1.00
-    lv_slider_set_value(s_slider_alpha, 40, LV_ANIM_OFF);
-    lv_obj_align(s_slider_alpha, LV_ALIGN_TOP_LEFT, 0, y);
-    lv_obj_add_event_cb(s_slider_alpha, drawer_slider_alpha_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    y += 60;
-    // CW section header
-    lv_obj_t *cw_hdr = lv_label_create(s_drawer);
-    lv_label_set_text(cw_hdr, "CW");
-    lv_obj_set_style_text_color(cw_hdr, lv_color_hex(0xA0E0A0), 0);
-    lv_obj_set_style_text_font(cw_hdr, &lv_font_montserrat_24, 0);
-    lv_obj_align(cw_hdr, LV_ALIGN_TOP_LEFT, 0, y);
-    y += 40;
-    s_lbl_cwpitch = lv_label_create(s_drawer);
-    lv_label_set_text(s_lbl_cwpitch, "CW center: 700 Hz");
-    lv_obj_set_style_text_color(s_lbl_cwpitch, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_lbl_cwpitch, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_lbl_cwpitch, LV_ALIGN_TOP_LEFT, 0, y);
-    y += 30;
-    s_slider_cwpitch = lv_slider_create(s_drawer);
-    lv_obj_set_size(s_slider_cwpitch, DRAWER_W - 32, 30);
-    lv_slider_set_range(s_slider_cwpitch, 600, 800);
-    lv_slider_set_value(s_slider_cwpitch, (int)s_cw_pitch_hz, LV_ANIM_OFF);
-    lv_obj_align(s_slider_cwpitch, LV_ALIGN_TOP_LEFT, 0, y);
-    lv_obj_add_event_cb(s_slider_cwpitch, drawer_slider_cwpitch_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    char cwbuf[24];
-    snprintf(cwbuf, sizeof(cwbuf), "CW center: %u Hz", (unsigned)s_cw_pitch_hz);
-    lv_label_set_text(s_lbl_cwpitch, cwbuf);
-    y += 60;
+        s_slider_alpha = lv_slider_create(sec);
+        lv_obj_set_size(s_slider_alpha, DRAWER_W - 32, 30);
+        lv_slider_set_range(s_slider_alpha, 5, 100);   // = alpha 0.05..1.00
+        lv_slider_set_value(s_slider_alpha, 40, LV_ANIM_OFF);
+        lv_obj_align(s_slider_alpha, LV_ALIGN_TOP_LEFT, 0, 70);
+        lv_obj_add_event_cb(s_slider_alpha, drawer_slider_alpha_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        y += 130;
+    }
+
+    // CW section
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_CW, y, 130);
+        lv_obj_t *cw_hdr = lv_label_create(sec);
+        lv_label_set_text(cw_hdr, "CW");
+        lv_obj_set_style_text_color(cw_hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(cw_hdr, &lv_font_montserrat_24, 0);
+        lv_obj_align(cw_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        s_lbl_cwpitch = lv_label_create(sec);
+        lv_label_set_text(s_lbl_cwpitch, "CW center: 700 Hz");
+        lv_obj_set_style_text_color(s_lbl_cwpitch, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_cwpitch, &lv_font_montserrat_24, 0);
+        lv_obj_align(s_lbl_cwpitch, LV_ALIGN_TOP_LEFT, 0, 40);
+
+        s_slider_cwpitch = lv_slider_create(sec);
+        lv_obj_set_size(s_slider_cwpitch, DRAWER_W - 32, 30);
+        lv_slider_set_range(s_slider_cwpitch, 600, 800);
+        lv_slider_set_value(s_slider_cwpitch, (int)s_cw_pitch_hz, LV_ANIM_OFF);
+        lv_obj_align(s_slider_cwpitch, LV_ALIGN_TOP_LEFT, 0, 70);
+        lv_obj_add_event_cb(s_slider_cwpitch, drawer_slider_cwpitch_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        char cwbuf[24];
+        snprintf(cwbuf, sizeof(cwbuf), "CW center: %u Hz", (unsigned)s_cw_pitch_hz);
+        lv_label_set_text(s_lbl_cwpitch, cwbuf);
+        y += 130;
+    }
+
     // IF calibration section (per-unit QMX oscillator trim)
-    lv_obj_t *ifcal_hdr = lv_label_create(s_drawer);
-    lv_label_set_text(ifcal_hdr, "IF calibration");
-    lv_obj_set_style_text_color(ifcal_hdr, lv_color_hex(0xA0E0A0), 0);
-    lv_obj_set_style_text_font(ifcal_hdr, &lv_font_montserrat_24, 0);
-    lv_obj_align(ifcal_hdr, LV_ALIGN_TOP_LEFT, 0, y);
-    y += 40;
-    s_lbl_ifcal = lv_label_create(s_drawer);
-    char ifbuf[24];
     {
-        qmx_settings_t scfg2;
-        settings_load_all(&scfg2);
-        snprintf(ifbuf, sizeof(ifbuf), "CW trim: %+d Hz", (int)scfg2.cw_cal_hz);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_IFCAL, y, 130);
+        lv_obj_t *ifcal_hdr = lv_label_create(sec);
+        lv_label_set_text(ifcal_hdr, "IF calibration");
+        lv_obj_set_style_text_color(ifcal_hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(ifcal_hdr, &lv_font_montserrat_24, 0);
+        lv_obj_align(ifcal_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        s_lbl_ifcal = lv_label_create(sec);
+        char ifbuf[24];
+        {
+            qmx_settings_t scfg2;
+            settings_load_all(&scfg2);
+            snprintf(ifbuf, sizeof(ifbuf), "CW trim: %+d Hz", (int)scfg2.cw_cal_hz);
+        }
+        lv_label_set_text(s_lbl_ifcal, ifbuf);
+        lv_obj_set_style_text_color(s_lbl_ifcal, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_ifcal, &lv_font_montserrat_24, 0);
+        lv_obj_align(s_lbl_ifcal, LV_ALIGN_TOP_LEFT, 0, 40);
+
+        s_slider_ifcal = lv_slider_create(sec);
+        lv_obj_set_size(s_slider_ifcal, DRAWER_W - 32, 30);
+        lv_slider_set_range(s_slider_ifcal, -100, 100);
+        {
+            qmx_settings_t scfg3;
+            settings_load_all(&scfg3);
+            lv_slider_set_value(s_slider_ifcal, (int)scfg3.cw_cal_hz, LV_ANIM_OFF);
+        }
+        lv_obj_align(s_slider_ifcal, LV_ALIGN_TOP_LEFT, 0, 70);
+        lv_obj_add_event_cb(s_slider_ifcal, drawer_slider_ifcal_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        y += 130;
     }
-    lv_label_set_text(s_lbl_ifcal, ifbuf);
-    lv_obj_set_style_text_color(s_lbl_ifcal, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_lbl_ifcal, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_lbl_ifcal, LV_ALIGN_TOP_LEFT, 0, y);
-    y += 30;
-    s_slider_ifcal = lv_slider_create(s_drawer);
-    lv_obj_set_size(s_slider_ifcal, DRAWER_W - 32, 30);
-    lv_slider_set_range(s_slider_ifcal, -100, 100);
-    {
-        qmx_settings_t scfg3;
-        settings_load_all(&scfg3);
-        lv_slider_set_value(s_slider_ifcal, (int)scfg3.cw_cal_hz, LV_ANIM_OFF);
-    }
-    lv_obj_align(s_slider_ifcal, LV_ALIGN_TOP_LEFT, 0, y);
-    lv_obj_add_event_cb(s_slider_ifcal, drawer_slider_ifcal_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    y += 60;
 
     // Display brightness section
-    lv_obj_t *bl_hdr = lv_label_create(s_drawer);
-    lv_label_set_text(bl_hdr, "Display");
-    lv_obj_set_style_text_color(bl_hdr, lv_color_hex(0xA0E0A0), 0);
-    lv_obj_set_style_text_font(bl_hdr, &lv_font_montserrat_24, 0);
-    lv_obj_align(bl_hdr, LV_ALIGN_TOP_LEFT, 0, y);
-    y += 40;
-    s_lbl_brightness = lv_label_create(s_drawer);
-    char blbuf[24];
-    uint8_t bl_pct = 100;
     {
-        qmx_settings_t scfg4;
-        settings_load_all(&scfg4);
-        bl_pct = scfg4.brightness_pct;
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_BRIGHTNESS, y, 130);
+        lv_obj_t *bl_hdr = lv_label_create(sec);
+        lv_label_set_text(bl_hdr, "Display");
+        lv_obj_set_style_text_color(bl_hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(bl_hdr, &lv_font_montserrat_24, 0);
+        lv_obj_align(bl_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        s_lbl_brightness = lv_label_create(sec);
+        char blbuf[24];
+        uint8_t bl_pct = 100;
+        {
+            qmx_settings_t scfg4;
+            settings_load_all(&scfg4);
+            bl_pct = scfg4.brightness_pct;
+        }
+        snprintf(blbuf, sizeof(blbuf), "Brightness: %u%%", (unsigned)bl_pct);
+        lv_label_set_text(s_lbl_brightness, blbuf);
+        lv_obj_set_style_text_color(s_lbl_brightness, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_brightness, &lv_font_montserrat_24, 0);
+        lv_obj_align(s_lbl_brightness, LV_ALIGN_TOP_LEFT, 0, 40);
+
+        s_slider_brightness = lv_slider_create(sec);
+        lv_obj_set_size(s_slider_brightness, DRAWER_W - 32, 30);
+        lv_slider_set_range(s_slider_brightness, 10, 100);
+        lv_slider_set_value(s_slider_brightness, bl_pct, LV_ANIM_OFF);
+        lv_obj_align(s_slider_brightness, LV_ALIGN_TOP_LEFT, 0, 70);
+        lv_obj_add_event_cb(s_slider_brightness, drawer_slider_brightness_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        y += 130;
     }
-    snprintf(blbuf, sizeof(blbuf), "Brightness: %u%%", (unsigned)bl_pct);
-    lv_label_set_text(s_lbl_brightness, blbuf);
-    lv_obj_set_style_text_color(s_lbl_brightness, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_lbl_brightness, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_lbl_brightness, LV_ALIGN_TOP_LEFT, 0, y);
-    y += 30;
-    s_slider_brightness = lv_slider_create(s_drawer);
-    lv_obj_set_size(s_slider_brightness, DRAWER_W - 32, 30);
-    lv_slider_set_range(s_slider_brightness, 10, 100);
-    lv_slider_set_value(s_slider_brightness, bl_pct, LV_ANIM_OFF);
-    lv_obj_align(s_slider_brightness, LV_ALIGN_TOP_LEFT, 0, y);
-    lv_obj_add_event_cb(s_slider_brightness, drawer_slider_brightness_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    y += 60;
 
     // Waterfall colour-map section
-    lv_obj_t *cmap_hdr = lv_label_create(s_drawer);
-    lv_label_set_text(cmap_hdr, "Waterfall colour map");
-    lv_obj_set_style_text_color(cmap_hdr, lv_color_hex(0xA0E0A0), 0);
-    lv_obj_set_style_text_font(cmap_hdr, &lv_font_montserrat_24, 0);
-    lv_obj_align(cmap_hdr, LV_ALIGN_TOP_LEFT, 0, y);
-    y += 40;
-    s_dropdown_cmap = lv_dropdown_create(s_drawer);
-    lv_dropdown_set_options(s_dropdown_cmap, "Thermal\nViridis\nTurbo\nGrayscale");
-    lv_obj_set_size(s_dropdown_cmap, DRAWER_W - 32, 50);
-    lv_obj_align(s_dropdown_cmap, LV_ALIGN_TOP_LEFT, 0, y);
-    lv_obj_set_style_text_font(s_dropdown_cmap, &lv_font_montserrat_24, 0);
     {
-        qmx_settings_t scfg;
-        settings_load_all(&scfg);
-        if (scfg.colormap_idx < 4) lv_dropdown_set_selected(s_dropdown_cmap, scfg.colormap_idx);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_CMAP, y, 100);
+        lv_obj_t *cmap_hdr = lv_label_create(sec);
+        lv_label_set_text(cmap_hdr, "Waterfall colour map");
+        lv_obj_set_style_text_color(cmap_hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(cmap_hdr, &lv_font_montserrat_24, 0);
+        lv_obj_align(cmap_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        s_dropdown_cmap = lv_dropdown_create(sec);
+        lv_dropdown_set_options(s_dropdown_cmap, "Thermal\nViridis\nTurbo\nGrayscale");
+        lv_obj_set_size(s_dropdown_cmap, DRAWER_W - 32, 50);
+        lv_obj_align(s_dropdown_cmap, LV_ALIGN_TOP_LEFT, 0, 40);
+        lv_obj_set_style_text_font(s_dropdown_cmap, &lv_font_montserrat_24, 0);
+        {
+            qmx_settings_t scfg;
+            settings_load_all(&scfg);
+            if (scfg.colormap_idx < 4) lv_dropdown_set_selected(s_dropdown_cmap, scfg.colormap_idx);
+        }
+        lv_obj_add_event_cb(s_dropdown_cmap, drawer_dropdown_cmap_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(s_dropdown_cmap, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
+        y += 100;
     }
-    lv_obj_add_event_cb(s_dropdown_cmap, drawer_dropdown_cmap_cb, LV_EVENT_VALUE_CHANGED, NULL);
-    lv_obj_add_event_cb(s_dropdown_cmap, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
-    y += 60;
 
     ESP_LOGI(TAG, "Settings drawer built (off-screen at x=%d)", DISPLAY_H_RES);
+
+    // Apply current UI mode's section visibility (drawer is pre-built at
+    // boot before ui_apply_saved_mode() runs).
+    drawer_set_ft8_mode(ui_mode_get() == UI_MODE_FT8);
 }
 
 static void drawer_open(void)
@@ -3083,6 +3229,43 @@ static void drawer_close(void)
     ESP_LOGI(TAG, "Settings drawer closed");
 }
 
+// FT8 mode only needs WiFi setup, Callsign & Grid, and Display brightness;
+// everything else (IQ/flat toggles, presets, dB range, smoothing, CW,
+// IF calibration, colour map) is irrelevant there. Hide the rest and
+// restack the three kept sections near the top of the drawer. Called on
+// every mode switch (and once at boot via drawer_build()).
+static void drawer_set_ft8_mode(bool ft8)
+{
+    if (!s_drawer) return;
+    static const int keep[]   = { DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
+    static const int keep_h[] = { 72, 72, 130 };
+    const int n_keep = sizeof(keep) / sizeof(keep[0]);
+
+    for (int i = 0; i < N_DRAWER_SECTIONS; i++) {
+        if (!s_drawer_sections[i]) continue;
+        bool kept = false;
+        for (int k = 0; k < n_keep; k++) {
+            if (keep[k] == i) { kept = true; break; }
+        }
+        if (ft8 && !kept) {
+            lv_obj_add_flag(s_drawer_sections[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_clear_flag(s_drawer_sections[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    if (ft8) {
+        int y = 96;
+        for (int k = 0; k < n_keep; k++) {
+            lv_obj_set_pos(s_drawer_sections[keep[k]], 0, y);
+            y += keep_h[k];
+        }
+    } else {
+        for (int i = 0; i < N_DRAWER_SECTIONS; i++) {
+            if (s_drawer_sections[i]) lv_obj_set_pos(s_drawer_sections[i], 0, s_drawer_section_y[i]);
+        }
+    }
+}
 
 // === Phase 5.10D Stage 2b: drawer button + slider callbacks ===
 
@@ -3277,14 +3460,19 @@ uint32_t ui_get_passband_width_hz(void) { return s_passband_width_hz; }
 // touch state set up by those.
 void ui_apply_saved_mode(void)
 {
+    ESP_LOGI(TAG, "ui_apply_saved_mode: last_ui_mode from NVS = %u", (unsigned)s_saved_ui_mode);
     if (s_saved_ui_mode != UI_MODE_FT8) {
         ui_mode_set(UI_MODE_PANADAPTER);
+        drawer_set_ft8_mode(false);
+        ESP_LOGI(TAG, "UI mode restored from NVS: Panadapter");
         return;
     }
     ui_mode_set(UI_MODE_FT8);
     if (s_spectrum_obj)  lv_obj_add_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN);
     if (s_label_bar)     lv_obj_add_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN);
     if (s_waterfall_obj) lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN);
+    top_bar_set_ft8_dim(true);
+    drawer_set_ft8_mode(true);
     ft8_screen_view_show();
     ft8_self_test();
     ESP_LOGI(TAG, "UI mode restored from NVS: FT8");
@@ -3301,6 +3489,8 @@ static void ui_toggle_mode(void)
              next == UI_MODE_FT8 ? "FT8" : "Panadapter");
     ui_mode_set(next);
     settings_set_last_ui_mode((uint8_t)next);
+    top_bar_set_ft8_dim(next == UI_MODE_FT8);
+    drawer_set_ft8_mode(next == UI_MODE_FT8);
 
     lv_obj_t *ft8 = ft8_screen_view_get_container();
 

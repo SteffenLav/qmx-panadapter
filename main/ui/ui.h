@@ -74,3 +74,8 @@ uint32_t ui_get_passband_width_hz(void);
 // modal to confirm/edit a frequency + mode before naming a memory slot.
 typedef void (*ui_freq_picker_cb_t)(uint32_t freq_hz, const char *mode, bool accepted);
 void ui_freq_picker_open(uint32_t initial_hz, const char *initial_mode, ui_freq_picker_cb_t cb);
+
+// Restart the infinite-repeat "breathing" opacity animations on the
+// edge-swipe grip handles. lv_anim_delete_all() (screenshot capture) kills
+// these along with one-shot anims; call this after taking a snapshot.
+void ui_restart_edge_grip_anims(void);

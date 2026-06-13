@@ -21,7 +21,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 > **You are solely responsible for operating legally** — correct licence class, operating
 > within your licence privileges, band plan compliance, no harmful interference.
 >
-> **What is NOT yet in place in v0.15.9:**
+> **What is NOT yet in place in v0.15.10:**
 > - No duty-cycle protection — back-to-back TX slots are not prevented by the firmware
 > - No ADIF logging — completed QSOs are not recorded anywhere
 > - No audio loopback verification — the firmware cannot confirm the transmitted waveform
@@ -100,7 +100,7 @@ The original mockup that drove the design ([panadapter-mockup-ideal.svg](docs/pa
 
 ## Status
 
-Working. All phases through 8 complete. Current release: **v0.15.9**. Includes: cold-boot reliability fix, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings (including last-used UI mode and display brightness), Hamlib rigctld bridge, onboard FT8 RX decoder with a 40-row live-view decode list and FFT-based SNR estimation, memory channels with a frequency/mode picker, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser) including a tap-to-enter frequency keypad, browser click-to-tune, zoom sync, band memory, QMX RTC time sync for no-WiFi (POTA) FT8 timing, **manual FT8 TX** (reply + CQ via CAT `TA;`), and a **full auto QSO engine** — search-and-pounce plus **CQ-run** (auto-answers callers, runs the exchange to completion with patient retry, then resumes CQ). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
+Working. All phases through 8 complete. Current release: **v0.15.10**. Includes: cold-boot reliability fix, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings (including last-used UI mode and display brightness), Hamlib rigctld bridge, onboard FT8 RX decoder with a 40-row live-view decode list and FFT-based SNR estimation, memory channels with a frequency/mode picker, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser) including a tap-to-enter frequency keypad, browser click-to-tune, zoom sync, band memory, QMX RTC time sync for no-WiFi (POTA) FT8 timing, **manual FT8 TX** (reply + CQ via CAT `TA;`), and a **full auto QSO engine** — search-and-pounce plus **CQ-run** (auto-answers callers, runs the exchange to completion with patient retry, then resumes CQ). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
 
 | Phase | What | Status |
 |-------|------|--------|
@@ -855,6 +855,14 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 - **Fixed zoom>x1 overlay desync after retuning.** At zoom > x1, tuning to a new frequency (e.g. via touch-drag) left the passband-edge lines, VFO cursor, and frequency-axis labels positioned as if pan were reset to zero, while the spectrum/waterfall correctly re-centered on the new passband — the overlays would appear shifted to the right relative to the signal. `ui_update_frequency()` now re-derives the passband-centered pan after every frequency change.
 - **Top-bar / spectrum colour matching.** The spectrum's passband-edge lines now match the BW label's colour, and the VFO/center cursor line now matches the Freq label's colour. The translucent passband-tint band (drawn behind the spectrum curve) uses the same colour at ~25% opacity.
 
+### Shipped in v0.15.10
+
+- **Selectable SSB filter bandwidth (USB/LSB).** The BW dropdown now offers 2.5 / 2.7 / 2.9 / 3.2 kHz in USB and LSB (previously fixed at 2.7 kHz). The QMX exposes the SSB RX filter through its Menu Manager as two coupled items — a committed `Filter RX` (what shows in the radio menu and persists) and a live `Bandwidth` — and the Kenwood `FW;` poll re-asserts a stale width whenever it reads the filter back. The Tab5 now writes both items together and drops `FW;` from the poll while an SSB width is pinned, so a change applies immediately, sticks, and is reflected in the QMX menu. The old mode-bounce hack (which flashed CW/50 Hz on the top bar) is gone.
+- **Smooth, TX-aware FT8 slot countdown bar.** The 15 s slot bar now glides continuously to zero (sub-second tick) instead of stepping once per second, and turns **red** while a TX burst is on the air (otherwise the EVEN/ODD slot colour).
+- **Editable CQ message presets.** Long-press the FT8 **Call CQ** button to open a preset editor: three message fields with radio buttons (check the active one), an on-screen keyboard, and a `+ <call> <grid>` quick-insert that appends your identity. The Call CQ button label shows the selected message, and a short tap transmits it. Standard CQ constructions (`CQ DX OZ1LAV JO65FR`, `CQ POTA …`) and ≤13-char free text both encode via the general ft8_lib encoder. Presets persist to NVS.
+- **Frequency keypad rework.** The top-bar `Freq:` keypad now opens with an empty field (type the new dial frequency from scratch); the Memory channel editor still pre-fills the stored value. The old MHz/kHz unit keys are replaced by a **10 Key / Phone** layout toggle (swap the digit grid between phone and calculator arrangements) and a **Clear** key. The DiGi/USB/LSB/CW mode row now appears only in the Memory editor — the top-bar keypad relies on the top-bar mode selector.
+- **Instant settings reads.** `settings_load_all()` now returns the live staged state instead of re-reading NVS, so a value is reflected immediately after it's set rather than lagging the debounced flash flush (fixes the Call CQ label not updating right after Save).
+
 ### Next up
 
 The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF.
@@ -864,6 +872,7 @@ The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF
 
 Alongside the FT8 path:
 
+- **Tab5 speaker/headphone CW audio.** Decode and play the demodulated CW passband out of the Tab5's own speaker/headphone jack, so the operator can listen to CW without the QMX's audio path.
 - **DSP polish.** Noise reduction, auto-notch.
 - **Phase 6.3 - Native-orientation rendering** *(deferred)*. ~50% FPS recovery available if we render directly in the panel's native 720x1280 portrait coordinates so LVGL has no rotation step.
 

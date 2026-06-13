@@ -27,3 +27,7 @@ lv_obj_t *ft8_screen_view_get_container(void);
 
 // Safe to call from any task. Just sets a volatile flag.
 void ft8_screen_view_request_refresh(void);
+
+// Refresh the "Call CQ" button label to the currently-selected CQ preset.
+// Called by the CQ preset modal after a save. LVGL-thread only.
+void ft8_screen_view_refresh_cq_label(void);

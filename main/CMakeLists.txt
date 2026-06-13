@@ -11,6 +11,7 @@ idf_component_register(
         "ui/ft8_screen.c"
         "ui/ft8_screen_view.c"
         "ui/ft8_tx_modal.c"
+        "ui/ft8_cq_modal.c"
         "util/status.c"
         "util/maidenhead.c"
         "util/dxcc.c"

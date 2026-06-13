@@ -253,6 +253,38 @@ bool ft8_tx_build_request(ft8_tx_kind_t kind,
     return true;
 }
 
+bool ft8_tx_build_request_text(const char *message_text,
+                               int audio_freq_hz,
+                               ft8_tx_request_t *out_req,
+                               char *out_err, size_t out_err_len)
+{
+    if (out_err && out_err_len) out_err[0] = '\0';
+    if (!out_req) return false;
+    memset(out_req, 0, sizeof(*out_req));
+    if (!message_text || !message_text[0]) {
+        if (out_err) snprintf(out_err, out_err_len, "Empty message");
+        return false;
+    }
+
+    ftx_message_t msg;
+    ftx_message_rc_t rc = ftx_message_encode(&msg, NULL, message_text);
+    if (rc != FTX_MESSAGE_RC_OK) {
+        if (out_err) snprintf(out_err, out_err_len,
+                              "Can't encode '%s' (rc=%d)", message_text, (int)rc);
+        return false;
+    }
+
+    out_req->kind          = FT8_TX_KIND_CQ;
+    out_req->audio_freq_hz = audio_freq_hz;
+    out_req->use_parity    = false;
+    out_req->want_even_slot = false;
+    ft8_encode(msg.payload, out_req->tones);
+    strncpy(out_req->display_text, message_text, sizeof(out_req->display_text) - 1);
+
+    ESP_LOGI(TAG, "built text CQ: '%s' @ %d Hz", out_req->display_text, audio_freq_hz);
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // Arm / disarm / abort / status
 // ---------------------------------------------------------------------------

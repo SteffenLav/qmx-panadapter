@@ -1,11 +1,13 @@
 #include "ft8_screen_view.h"
 #include "ft8_screen.h"
+#include "ft8_cq_modal.h"
 #include "ui_clock.h"
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
+#include <sys/time.h>
 #include <stdbool.h>
 
 #include "esp_log.h"
@@ -138,7 +140,8 @@ static lv_obj_t *s_lbl_count    = NULL;
 static lv_obj_t *s_bar_slot     = NULL;  // tiny countdown bar beside s_lbl_count
 static lv_obj_t *s_lbl_heard    = NULL;
 static lv_obj_t *s_lbl_me       = NULL;
-static lv_obj_t *s_btn_cq       = NULL;  // "Call CQ" - opens the TX confirmation modal
+static lv_obj_t *s_btn_cq       = NULL;  // "Call CQ" - short tap TX, long-press edits presets
+static lv_obj_t *s_cq_lbl       = NULL;  // label inside s_btn_cq (shows the active CQ message)
 static lv_obj_t *s_lbl_tx       = NULL;  // TX state indicator: armed/active, tap to cancel/abort
 // CQ TX parity preference: -1=any slot, 0=EVEN only, 1=ODD only.
 // Shown as two small toggle buttons between the slot countdown and "Heard: N".
@@ -152,6 +155,7 @@ static row_widgets_t s_rows[MAX_ROWS];
 
 static lv_timer_t *s_t_refresh  = NULL;
 static lv_timer_t *s_t_clock    = NULL;
+static lv_timer_t *s_t_slotbar  = NULL;  // fast tick for smooth countdown bar
 static char         s_my_call[16] = {0};  /* operator callsign uppercased; refreshed by 1 Hz clock timer */
 
 static volatile bool s_refresh_pending = false;
@@ -641,6 +645,33 @@ static void t_refresh_cb(lv_timer_t *t)
     rebuild_list();
 }
 
+// Smoothly drive the 15 s slot countdown bar. Runs fast (~50 ms) and uses
+// sub-second time so the bar glides to 0 instead of snapping per second.
+// Bar range is 0..15000 (ms remaining). Also owns the bar colour: red while
+// a TX burst is ACTIVE, otherwise the EVEN/ODD slot colour.
+static void t_slotbar_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_bar_slot) return;
+    if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) return;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    // Position within the current 15 s slot, in milliseconds (0..15000).
+    int slot_ms = (int)(((int64_t)tv.tv_sec % 15) * 1000 + tv.tv_usec / 1000);
+    int remain_ms = 15000 - slot_ms;
+    if (remain_ms < 0) remain_ms = 0;
+    lv_bar_set_value(s_bar_slot, remain_ms, LV_ANIM_OFF);
+
+    lv_color_t col;
+    if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ACTIVE) {
+        col = lv_palette_main(LV_PALETTE_RED);
+    } else {
+        bool is_even = (((int64_t)tv.tv_sec / 15) % 2) == 0;
+        col = is_even ? lv_color_hex(0x40A0E0) : lv_color_hex(0xE09040);
+    }
+    lv_obj_set_style_bg_color(s_bar_slot, col, LV_PART_INDICATOR);
+}
+
 static void t_clock_cb(lv_timer_t *t)
 {
     (void)t;
@@ -662,10 +693,8 @@ static void t_clock_cb(lv_timer_t *t)
         // TX-armed amber (0xFFA040) or any other colour already in this view.
         lv_color_t slot_color = is_even ? lv_color_hex(0x40A0E0) : lv_color_hex(0xE09040);
         lv_obj_set_style_text_color(s_lbl_count, slot_color, 0);
-        if (s_bar_slot) {
-            lv_bar_set_value(s_bar_slot, remain, LV_ANIM_OFF);
-            lv_obj_set_style_bg_color(s_bar_slot, slot_color, LV_PART_INDICATOR);
-        }
+        // The bar's value AND colour are owned by t_slotbar_cb (fast tick) so
+        // it glides smoothly and can show TX-red without this 1 Hz tick fighting it.
     }
     if (s_lbl_freq) {
         uint32_t hz = cat_get_frequency();
@@ -777,8 +806,11 @@ static void cq_btn_cb(lv_event_t *e)
     // Auto-select the nearest clear 50-Hz slot to 1500 Hz; if the table is
     // empty (nothing decoded yet) ft8_find_clear_tone_hz() returns 1500 Hz.
     int cq_freq_hz = ft8_find_clear_tone_hz();
-    if (ft8_tx_build_request(FT8_TX_KIND_CQ, NULL, cq_freq_hz,
-                             0, NULL, &req, err, sizeof(err))) {
+
+    // Transmit the user's selected CQ preset (defaults to "CQ <call> <grid>").
+    char cq_text[28];
+    ft8_cq_get_active_text(cq_text, sizeof(cq_text));
+    if (ft8_tx_build_request_text(cq_text, cq_freq_hz, &req, err, sizeof(err))) {
         if (s_cq_parity >= 0) {
             req.use_parity     = true;
             req.want_even_slot = (s_cq_parity == 0);
@@ -791,9 +823,27 @@ static void cq_btn_cb(lv_event_t *e)
             }
         }
     } else {
-        ESP_LOGW(TAG, "build_request(CQ) failed: %s", err);
+        ESP_LOGW(TAG, "build_request(CQ '%s') failed: %s", cq_text, err);
         identity_config_modal_show();
     }
+}
+
+// Long-press "Call CQ" -> open the CQ preset editor.
+static void cq_btn_long_press_cb(lv_event_t *e)
+{
+    (void)e;
+    ESP_LOGI(TAG, "Call CQ long-pressed -> CQ preset editor");
+    ft8_cq_modal_show();
+}
+
+// Update the Call CQ button label to show the currently-selected CQ message.
+// Public so the preset modal can call it after a save.
+void ft8_screen_view_refresh_cq_label(void)
+{
+    if (!s_cq_lbl) return;
+    char txt[28];
+    ft8_cq_get_active_text(txt, sizeof(txt));
+    lv_label_set_text(s_cq_lbl, txt);
 }
 
 // v0.12.0: tap the TX state indicator to back out - cancels an ARMED
@@ -1036,16 +1086,16 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_pos(s_lbl_count, 0, 240);
 
     // Tiny countdown bar to the right of "EVEN/ODD  N s", counting down
-    // from full (start of slot) to empty (end of slot). Same colour as
-    // the slot label, updated alongside it in t_clock_cb (1 Hz).
+    // from full (start of slot) to empty (end of slot). Range is in ms so the
+    // fast t_slotbar_cb tick can glide it smoothly; colour set in t_clock_cb.
     s_bar_slot = lv_bar_create(s_left_pane);
     lv_obj_set_size(s_bar_slot, 140, 8);
     lv_obj_set_pos(s_bar_slot, 140, 251);
     lv_obj_set_style_radius(s_bar_slot, 2, 0);
     lv_obj_set_style_bg_color(s_bar_slot, lv_color_hex(0x303044), 0);
     lv_obj_set_style_border_width(s_bar_slot, 0, 0);
-    lv_bar_set_range(s_bar_slot, 0, 15);
-    lv_bar_set_value(s_bar_slot, 15, LV_ANIM_OFF);
+    lv_bar_set_range(s_bar_slot, 0, 15000);
+    lv_bar_set_value(s_bar_slot, 15000, LV_ANIM_OFF);
 
     // CQ TX parity preference: [TX: EVEN] [TX: ODD] toggle row.
     // Fits in the 60 px gap between the slot countdown (y=240, ~28 px tall)
@@ -1106,12 +1156,18 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_border_color(s_btn_cq, lv_color_hex(0x4caf50), 0);
     lv_obj_set_style_border_width(s_btn_cq, 2, 0);
     lv_obj_set_style_radius(s_btn_cq, 8, 0);
-    lv_obj_add_event_cb(s_btn_cq, cq_btn_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *cq_lbl = lv_label_create(s_btn_cq);
-    lv_label_set_text(cq_lbl, "Call CQ");
-    lv_obj_set_style_text_color(cq_lbl, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(cq_lbl, &lv_font_montserrat_24, 0);
-    lv_obj_center(cq_lbl);
+    // Short tap = transmit the selected preset; long-press = edit presets.
+    // SHORT_CLICKED (not CLICKED) so a long-press doesn't also fire a TX.
+    lv_obj_add_event_cb(s_btn_cq, cq_btn_cb, LV_EVENT_SHORT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_btn_cq, cq_btn_long_press_cb, LV_EVENT_LONG_PRESSED, NULL);
+    s_cq_lbl = lv_label_create(s_btn_cq);
+    lv_label_set_long_mode(s_cq_lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(s_cq_lbl, 270);
+    lv_obj_set_style_text_align(s_cq_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(s_cq_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(s_cq_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(s_cq_lbl);
+    ft8_screen_view_refresh_cq_label();  // show the active CQ message
 
     // TX state indicator - hidden while idle; amber/armed or red/active,
     // tap to cancel/abort. See t_clock_cb (1 Hz refresh: state, colour,
@@ -1187,6 +1243,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
 
     s_t_refresh = lv_timer_create(t_refresh_cb, 500, NULL);
     s_t_clock   = lv_timer_create(t_clock_cb,  1000, NULL);
+    s_t_slotbar = lv_timer_create(t_slotbar_cb,  50, NULL);
 
     // Ensure the freq touch overlay sits above later-added siblings
     // (UTC clock, slot bar, etc.) that partially overlap its hit area.

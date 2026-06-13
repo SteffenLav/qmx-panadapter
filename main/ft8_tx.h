@@ -98,6 +98,15 @@ bool ft8_tx_build_request(ft8_tx_kind_t kind,
                           ft8_tx_request_t *out_req,
                           char *out_err, size_t out_err_len);
 
+// Build a CQ-kind request from an arbitrary full message string (e.g. a
+// user-edited CQ preset like "CQ DX OZ1LAV JO65FR"). Uses the general
+// ft8_lib encoder, which accepts standard messages and <=13-char free text.
+// display_text is the verbatim message. On failure returns false + out_err.
+bool ft8_tx_build_request_text(const char *message_text,
+                               int audio_freq_hz,
+                               ft8_tx_request_t *out_req,
+                               char *out_err, size_t out_err_len);
+
 // Run the (blocking, ~1 s worst case) Digi-mode pre-flight and arm *req
 // for transmission on its next matching slot. Replaces any request that
 // is currently ARMED (most recent confirm wins). Refuses - returns false

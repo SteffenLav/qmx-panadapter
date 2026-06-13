@@ -31,6 +31,10 @@ static const char *TAG = "settings";
 #define KEY_BRIGHTNESS "brightness"
 #define KEY_LAST_MODE  "last_mode"
 #define KEY_LAST_TIME  "last_time"
+#define KEY_CQ_MSG0    "cq_msg0"
+#define KEY_CQ_MSG1    "cq_msg1"
+#define KEY_CQ_MSG2    "cq_msg2"
+#define KEY_CQ_SEL     "cq_sel"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -66,6 +70,10 @@ static const char *TAG = "settings";
 #define DIRTY_BRIGHTNESS (1u << 14)
 #define DIRTY_LAST_MODE  (1u << 15)
 #define DIRTY_LAST_TIME  (1u << 16)
+#define DIRTY_CQ_MSG0    (1u << 17)
+#define DIRTY_CQ_MSG1    (1u << 18)
+#define DIRTY_CQ_MSG2    (1u << 19)
+#define DIRTY_CQ_SEL     (1u << 20)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -104,6 +112,8 @@ static void nvs_set_float(const char *key, float v)
 {
     nvs_set_u32(s_nvs, key, float_to_u32(v));
 }
+
+static void load_from_nvs(qmx_settings_t *out);
 
 // ---- Flush task --------------------------------------------------------
 // Runs forever, wakes every 100 ms, writes to NVS once the dirty set is
@@ -156,6 +166,10 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_BRIGHTNESS) nvs_set_u8(s_nvs, KEY_BRIGHTNESS, snap.brightness_pct);
         if (dirty_local & DIRTY_LAST_MODE)  nvs_set_u8(s_nvs, KEY_LAST_MODE,  snap.last_ui_mode);
         if (dirty_local & DIRTY_LAST_TIME)  nvs_set_u32(s_nvs, KEY_LAST_TIME, snap.last_unix_time);
+        if (dirty_local & DIRTY_CQ_MSG0)    nvs_set_str(s_nvs, KEY_CQ_MSG0, snap.cq_msg[0]);
+        if (dirty_local & DIRTY_CQ_MSG1)    nvs_set_str(s_nvs, KEY_CQ_MSG1, snap.cq_msg[1]);
+        if (dirty_local & DIRTY_CQ_MSG2)    nvs_set_str(s_nvs, KEY_CQ_MSG2, snap.cq_msg[2]);
+        if (dirty_local & DIRTY_CQ_SEL)     nvs_set_u8(s_nvs, KEY_CQ_SEL, snap.cq_sel);
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
@@ -197,14 +211,17 @@ void settings_init(void)
     // Without this, the first call to a setter in a session that happens to
     // match the zero/default value (e.g. settings_set_last_ui_mode(0) when
     // NVS already holds 1) is wrongly treated as a no-op and never written.
-    settings_load_all(&s_pending);
+    load_from_nvs(&s_pending);
 
     // Spawn the debounced flush task. Low priority — IO, not real-time.
     xTaskCreate(flush_task, "settings_flush", 3072, NULL, 3, &s_flush_task);
     ESP_LOGI(TAG, "ready");
 }
 
-void settings_load_all(qmx_settings_t *out)
+// Read persisted values straight from NVS (defaults for anything unset).
+// Used to seed s_pending at init. Most callers should use settings_load_all(),
+// which returns the live staged state (includes not-yet-flushed changes).
+static void load_from_nvs(qmx_settings_t *out)
 {
     if (!out) return;
 
@@ -222,6 +239,10 @@ void settings_load_all(qmx_settings_t *out)
     out->brightness_pct = DEF_BRIGHTNESS;
     out->last_ui_mode = DEF_LAST_MODE;
     out->last_unix_time = 0;
+    out->cq_msg[0][0] = '\0';
+    out->cq_msg[1][0] = '\0';
+    out->cq_msg[2][0] = '\0';
+    out->cq_sel = 0;
 
     if (!s_ready) {
         ESP_LOGW(TAG, "load_all: NVS not ready, using defaults");
@@ -260,8 +281,31 @@ void settings_load_all(qmx_settings_t *out)
     sz = sizeof(out->my_grid);
     nvs_get_str(s_nvs, KEY_MY_GRID, out->my_grid, &sz);
 
+    // FT8 CQ presets
+    sz = sizeof(out->cq_msg[0]); nvs_get_str(s_nvs, KEY_CQ_MSG0, out->cq_msg[0], &sz);
+    sz = sizeof(out->cq_msg[1]); nvs_get_str(s_nvs, KEY_CQ_MSG1, out->cq_msg[1], &sz);
+    sz = sizeof(out->cq_msg[2]); nvs_get_str(s_nvs, KEY_CQ_MSG2, out->cq_msg[2], &sz);
+    nvs_get_u8(s_nvs, KEY_CQ_SEL, &out->cq_sel);
+    if (out->cq_sel > 2) out->cq_sel = 0;
+
     ESP_LOGI(TAG, "loaded: db=[%.1f..%.1f] ema=%.2f iq=%d",
              out->db_min, out->db_max, out->ema_alpha, out->iq_enabled);
+}
+
+void settings_load_all(qmx_settings_t *out)
+{
+    if (!out) return;
+    // Return the live staged state: it's seeded from NVS at init and updated
+    // by every setter, so it reflects changes immediately - even before the
+    // debounced flush writes them to flash. (Re-reading NVS here would return
+    // stale values for up to DEBOUNCE_MS after a set.)
+    if (s_ready && s_mutex) {
+        xSemaphoreTake(s_mutex, portMAX_DELAY);
+        *out = s_pending;
+        xSemaphoreGive(s_mutex);
+        return;
+    }
+    load_from_nvs(out);  // not initialised yet: defaults + whatever NVS has
 }
 
 static void mark_dirty(uint32_t bit)
@@ -473,6 +517,30 @@ void settings_set_my_grid(const char *grid)
     }
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_MY_GRID);
+}
+
+void settings_set_cq_msg(uint8_t idx, const char *text)
+{
+    if (!s_ready || idx > 2) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (text) {
+        strncpy(s_pending.cq_msg[idx], text, sizeof(s_pending.cq_msg[idx]) - 1);
+        s_pending.cq_msg[idx][sizeof(s_pending.cq_msg[idx]) - 1] = '\0';
+    } else {
+        s_pending.cq_msg[idx][0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(idx == 0 ? DIRTY_CQ_MSG0 : idx == 1 ? DIRTY_CQ_MSG1 : DIRTY_CQ_MSG2);
+}
+
+void settings_set_cq_sel(uint8_t idx)
+{
+    if (!s_ready || idx > 2) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.cq_sel == idx) { xSemaphoreGive(s_mutex); return; }
+    s_pending.cq_sel = idx;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CQ_SEL);
 }
 
 void settings_set_zoom_factor(float v)

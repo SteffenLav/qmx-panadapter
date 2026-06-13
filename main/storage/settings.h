@@ -27,6 +27,8 @@ typedef struct {
     uint8_t  brightness_pct;   // LCD backlight brightness, 0..100, default 100
     uint8_t  last_ui_mode;     // last UI mode: 0=Panadapter, 1=FT8 (default 0)
     uint32_t last_unix_time;   // last UTC unix time seen from SNTP (0 = never synced)
+    char     cq_msg[3][28];    // 3 user-editable CQ message presets (FT8 TX)
+    uint8_t  cq_sel;           // which CQ preset is active, 0..2 (default 0)
 } qmx_settings_t;
 
 // Initialise the settings module. Opens an NVS handle. Safe to call
@@ -61,6 +63,11 @@ void settings_set_colormap_idx(uint8_t idx);
 // transmitter (v0.11+) and shown in the FT8 view info pane.
 void settings_set_my_callsign(const char *call);
 void settings_set_my_grid(const char *grid);
+
+// FT8 CQ message presets. idx 0..2. Pass NULL/empty to clear a slot.
+// settings_set_cq_sel selects the active preset (0..2). Debounced flush.
+void settings_set_cq_msg(uint8_t idx, const char *text);
+void settings_set_cq_sel(uint8_t idx);
 
 // QMX IF offset calibration trim (Hz). Per-unit oscillator variance shifts
 // the +12 kHz IF injection; this trim corrects what users see on the spectrum/
