@@ -21,7 +21,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 > **You are solely responsible for operating legally** — correct licence class, operating
 > within your licence privileges, band plan compliance, no harmful interference.
 >
-> **What is NOT yet in place in v0.15.7:**
+> **What is NOT yet in place in v0.15.8:**
 > - No duty-cycle protection — back-to-back TX slots are not prevented by the firmware
 > - No ADIF logging — completed QSOs are not recorded anywhere
 > - No audio loopback verification — the firmware cannot confirm the transmitted waveform
@@ -806,16 +806,6 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 
 - **S-meter redesigned as a visual bar scale.** The top-bar "Signal: SX+Y" text label is replaced with a tick-labeled scale (S1, 3, 5, 7, 9, +10, +20) with small tick marks and a moving green bar beneath it, scaled 0–68 to match the existing S-unit mapping (6 dB/S-unit below S9, 1 dB/unit above, capped at +20). Tick labels use `montserrat_22` and are center-aligned over their tick marks. The freq label and zoom label were nudged to make room (`CENTER+30` / `RIGHT_MID-70`).
 
-### Shipped in v0.15.8
-
-- **Zoom-FFT passband centering.** At zoom > x1, the screen now centers on the **passband (bw)**, not the dial/VFO frequency — important for USB/LSB where the passband sits well off to one side of the VFO. The amber VFO cursor and the grey passband-edge lines are repositioned to match, and re-center automatically when the QMX reports a new mode or filter width via CAT (previously this only happened on a zoom change).
-- **Per-zoom-level waterfall floor, restricted to the passband.** The waterfall's auto-tracking noise-floor (median) is now recalculated at every zoom level, including x1, and sampled only from bins inside the passband — bins outside the passband run noticeably darker and were skewing the floor, hiding dim in-band signals (e.g. POTA stations in sunlight).
-- **Zoom-FFT now engages on boot.** A persisted zoom level > x1 previously came back up as plain magnification (no extra resolution) after a power cycle, because `ui_init()` applies the saved zoom before the DSP zoom-FFT config exists. The zoom is now re-applied after `dsp_init()`, so saved zoom levels get full zoom-FFT resolution from first boot.
-- **Smoother zoom-FFT spectrum/waterfall.** Added light EMA smoothing (alpha 0.6) across successive zoom-FFT frames — at high decimation each frame covers many more raw samples, so the display used to visibly jump between updates, especially noticeable at the lower effective fps of high zoom.
-- **Fixed an LVGL freeze on QMX power-up.** The passband re-centering above is driven by CAT mode/filter-width updates, which arrive on the CAT task; an early version of this called LVGL APIs directly from that task without the display lock, freezing the Tab5 when the QMX reported its mode after powering up. Fixed by separating the non-LVGL recompute (pan offset + DSP zoom reconfiguration) from the LVGL label update.
-- **Removed the bottom-bar memory-channel indicator.** Recalling a memory channel no longer shows a persistent "[M02] ..." label in the bottom bar.
-- **Fixed memory recall not changing mode.** `cell_tap_cb()` sent `cat_set_frequency()` then `cat_set_mode()` back-to-back; both share the 200 ms CAT TX rate-limiter, so the mode command was silently dropped and only the frequency changed. The mode command is now sent via a short one-shot timer after the frequency write's rate-limit window.
-
 ### Shipped in v0.15.7
 
 - **FT8 frequency preset picker.** The frequency shown under "MODE: FT8" is now a button reading "Preset: 14.074 MHz" — tap it to open a popup listing the conventional FT8 dial frequencies (160m through 6m) for every band the connected QMX actually supports, and tap one to retune instantly. The touch target covers the full label and extends downward for an easy hit. Fixed a conflict where this tap could land on the top-bar Band dropdown instead — both popups now check the current UI mode before opening.
@@ -826,6 +816,16 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 - **Snappier frequency sync.** The top-bar Freq label now updates more promptly in step with the QMX VFO.
 - **Fixed tofu/square glyphs in FT8 status text.** A handful of FT8 status strings ("Waiting for QMX...", QSO state messages) used an em-dash character not present in the bundled font, which rendered as a square. Replaced with a plain hyphen.
 - **S-meter no longer freezes during FT8 capture.** The v0.15.5 fix kept the S-meter updating while FT8 mode was idle between captures, but per the "no slot-skip" design (v0.15.0) `s_ft8_active` is true almost continuously once FT8 is running, so that idle-branch refresh rarely got a chance to run — the S-meter would freeze the moment "RX: Capturing" appeared. The DC-blocker/window/FFT/dB/publish pipeline was factored into a shared `compute_and_publish_spectrum()` helper, now also invoked every ~10 iterations (~213 ms) from inside the active-capture branch, using the raw (un-mixed) I/Q samples so the spectrum stays aligned with the IF-shifted VFO bin the S-meter reads.
+
+### Shipped in v0.15.8
+
+- **Zoom-FFT passband centering.** At zoom > x1, the screen now centers on the **passband (bw)**, not the dial/VFO frequency — important for USB/LSB where the passband sits well off to one side of the VFO. The amber VFO cursor and the grey passband-edge lines are repositioned to match, and re-center automatically when the QMX reports a new mode or filter width via CAT (previously this only happened on a zoom change).
+- **Per-zoom-level waterfall floor, restricted to the passband.** The waterfall's auto-tracking noise-floor (median) is now recalculated at every zoom level, including x1, and sampled only from bins inside the passband — bins outside the passband run noticeably darker and were skewing the floor, hiding dim in-band signals (e.g. POTA stations in sunlight).
+- **Zoom-FFT now engages on boot.** A persisted zoom level > x1 previously came back up as plain magnification (no extra resolution) after a power cycle, because `ui_init()` applies the saved zoom before the DSP zoom-FFT config exists. The zoom is now re-applied after `dsp_init()`, so saved zoom levels get full zoom-FFT resolution from first boot.
+- **Smoother zoom-FFT spectrum/waterfall.** Added light EMA smoothing (alpha 0.6) across successive zoom-FFT frames — at high decimation each frame covers many more raw samples, so the display used to visibly jump between updates, especially noticeable at the lower effective fps of high zoom.
+- **Fixed an LVGL freeze on QMX power-up.** The passband re-centering above is driven by CAT mode/filter-width updates, which arrive on the CAT task; an early version of this called LVGL APIs directly from that task without the display lock, freezing the Tab5 when the QMX reported its mode after powering up. Fixed by separating the non-LVGL recompute (pan offset + DSP zoom reconfiguration) from the LVGL label update.
+- **Removed the bottom-bar memory-channel indicator.** Recalling a memory channel no longer shows a persistent "[M02] ..." label in the bottom bar.
+- **Fixed memory recall not changing mode.** `cell_tap_cb()` sent `cat_set_frequency()` then `cat_set_mode()` back-to-back; both share the 200 ms CAT TX rate-limiter, so the mode command was silently dropped and only the frequency changed. The mode command is now sent via a short one-shot timer after the frequency write's rate-limit window.
 
 ### Next up
 
