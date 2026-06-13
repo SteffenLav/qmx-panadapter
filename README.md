@@ -284,7 +284,7 @@ CAT writes are internally rate-limited to one per 200 ms; rapid taps within that
 
 ## Top bar, S-meter, settings drawer (Phase 5.10)
 
-The top status bar reads `Band | Mode | Center Freq | Signal` left to right, with the frequency centered. Band and mode come from CAT (FA / MD / FW round-robin poll at 50 ms intervals = each field refreshes every ~150 ms). The band name is derived from the VFO frequency using widened ranges that cover the QMX's tunable region beyond the strict IARU edges. The Signal field shows S-units derived from `dsp_get_peak_dbm_around_vfo(64, ...)` (the peak dBm within +/-64 bins, about +/-3 kHz of the VFO) sampled at 5 Hz in the render task.
+The top status bar reads `Band | Mode | BW | Center Freq | Signal | Zoom` left to right, with the frequency centered. Band and mode come from CAT (FA / MD / FW round-robin poll at 50 ms intervals = each field refreshes every ~150 ms). The band name is derived from the VFO frequency using widened ranges that cover the QMX's tunable region beyond the strict IARU edges. The Signal field is a visual S-meter (v0.15.6): a tick-labeled scale (S1, 3, 5, 7, 9, +10, +20) with a moving green bar beneath it, driven by `dsp_get_peak_dbm_around_vfo(vfo_bin, ...)` — the peak dBm around the IF-shifted VFO bin — sampled at 5 Hz in the render task.
 
 Under the spectrum, the frequency axis labels show absolute MHz centered on the VFO (e.g. `13.988 / 13.994 / 14.000 / 14.006 / 14.012` at 48 kHz span), refreshed on every CAT freq update.
 
@@ -362,14 +362,14 @@ If no credentials are configured at boot, WiFi stays idle (no retry storm) until
 
 ## Onboard FT8
 
-![FT8 RX in action on 20 m -- decode list with DXCC, distance, bearing, and SNR](docs/ss_test.png)
+![FT8 RX in action on 20 m -- decode list with DXCC, distance, bearing, and SNR](docs/QMX-Panadapter_FT8_v0.15.7.png)
 
-*Live FT8 reception on 20 m at 14.074 MHz. Left pane: MODE / VFO / UTC / slot countdown with parity, TX EVEN/ODD slot preference, operator identity (callsign+grid), Call CQ button, and active-station/decode counts. Right pane: scrollable decode list with SL / CALL / MESSAGE / COUNTRY / SNR / KM / BRG / HRD columns. Country pulled from DXCC prefix lookup, KM and BRG computed great-circle from the operator's grid square to each decoded station's grid.*
+*Live FT8 reception on 20 m at 14.074 MHz (v0.15.7). Top bar: Band / Mode / BW, the visual S-meter, and Zoom. Left pane: MODE / the "Preset: 14.074 MHz" frequency button / UTC / slot countdown with parity and a slot-progress bar, TX EVEN/ODD slot preference, operator identity (callsign+grid), Call CQ button, and active-station/decode counts. Right pane: scrollable decode list with SL / CALL / MESSAGE / COUNTRY / SNR / KM / BRG / HRD columns. Country pulled from DXCC prefix lookup, KM and BRG computed great-circle from the operator's grid square to each decoded station's grid.*
 
 Switch the panadapter into FT8 mode via the **Mode: FT8** button in the settings drawer. The Tab5 then decodes the 15-second FT8 slots directly on the ESP32-P4 with no PC required.
 
 **What's shown.**
-- **Left info pane** - large MODE / VFO / UTC / slot countdown with current parity (EVEN in blue, ODD in amber), **TX: EVEN** / **TX: ODD** CQ-parity preference buttons, "Active: N" station count, operator identity (callsign + grid loaded from NVS), a **Call CQ** button, and an "RX: N decoded (M candidates)" summary for the last slot.
+- **Left info pane** - large MODE label, a **Preset: xx.xxx MHz** button (tap to pick a band's conventional FT8 dial frequency), UTC clock, slot countdown with current parity and a colour-matched progress bar (EVEN in blue, ODD in amber), **TX: EVEN** / **TX: ODD** CQ-parity preference buttons, "Active: N" station count, operator identity (callsign + grid loaded from NVS), a **Call CQ** button, and an "RX: N decoded (M candidates)" summary for the last slot.
 - **Right decode list** - scrollable table with columns SL / CALL / MESSAGE / COUNTRY / SNR / KM / BRG / HRD. CQ calls always appear at the top, sorted strongest-SNR first; all other rows follow sorted by SNR descending.
   - SL: slot parity — **E** (blue) = EVEN slot (:00/:30), **O** (amber) = ODD slot (:15/:45). Makes it easy to know which slot to transmit on in reply.
   - CALL: extracted remote callsign (handles `CQ DX K1ABC`, `CQ POTA K1ABC`, and standard `<base> <call> <grid>` formats).
