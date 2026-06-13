@@ -34,7 +34,7 @@ main/
   ft8_status.c            Mutex-protected status string written by ft8_task, read by LVGL timer
   render/render.c         30 Hz render task, EMA smoothing, dB scaling
   render/render_waterfall.c  Waterfall tick, double-height canvas scroll trick
-  screenshot/screenshot.c UART screenshot dump (hidden long-press, top-left 80×80)
+  screenshot/screenshot.c RGB565 framebuffer capture for the web UI's /ss.bmp endpoint
   util/fps.c              FPS counter
 ```
 

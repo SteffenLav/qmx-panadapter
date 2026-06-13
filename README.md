@@ -64,18 +64,13 @@ You can run the panadapter standalone once it's flashed — just power the Tab5 
 
 ## Taking screenshots
 
-Two ways to grab a pixel-exact snapshot of the 5" display:
+With the panadapter connected to your WiFi network, fetch `http://<tab5-ip>/ss.bmp` (IP shown in the bottom status bar, or via `/api/status`). Returns a pixel-exact 1280x720 16bpp BMP of the current screen, e.g.:
 
-- **WiFi (recommended, ~7s)** — with the panadapter connected to your WiFi network, fetch `http://<tab5-ip>/ss.bmp` (IP shown in the bottom status bar, or via `/api/status`). Returns a 1280x720 16bpp BMP of the current screen, e.g.:
-  ```powershell
-  Invoke-WebRequest -Uri "http://192.168.1.213/ss.bmp" -OutFile screenshot.bmp
-  ```
+```powershell
+Invoke-WebRequest -Uri "http://192.168.1.213/ss.bmp" -OutFile screenshot.bmp
+```
 
-- **USB serial (~90-100s, no WiFi needed)** — long-press the hidden top-left 80x80 corner of the display for 1 second. The framebuffer is RLE-compressed and base64-streamed over the USB-Serial-JTAG console at 921600 baud. Stop `esp_idf_monitor` first (`Ctrl+T`, `Ctrl+X`), then run:
-  ```powershell
-  python tools/screenshot_decode.py COM3
-  ```
-  Saves a PNG to `~/Downloads`.
+The earlier hidden-corner long-press / USB-serial capture path was removed in v0.15.3 — `/ss.bmp` over WiFi is now the only method.
 
 ## Reporting hardware issues
 
@@ -479,7 +474,7 @@ Reported by Ken (KF0AYY), whose unit needed about -55 Hz to land on centre.
     |   |-- audio/                  USB UAC + ring buffer
     |   |-- dsp/                    esp-dsp FFT, spectrum mutex, I/Q balance correction
     |   |-- render/                 10 Hz render task, smoothing, autoscale
-    |   |-- screenshot/             Long-press capture, base64 UART stream
+    |   |-- screenshot/             RGB565 framebuffer capture for /ss.bmp
     |   |-- storage/                NVS settings persistence (dB, EMA, IQ, WiFi creds)
     |   |-- wifi/                   esp_hosted STA + SNTP
     |   `-- util/                   Status bar (battery + WiFi)
