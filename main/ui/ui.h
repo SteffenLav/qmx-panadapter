@@ -12,7 +12,6 @@ void ui_apply_saved_mode(void);
 
 // Phase 4/5 hooks (stubs for now)
 void ui_update_frequency(uint32_t freq_hz);
-void ui_set_memory_label(const char *text);  /* active memory channel; pass NULL to clear */
 void ui_update_smeter(int s_units);
 void ui_update_mode(const char *mode);   // Phase 5.10: e.g. "USB", "CW"
 void ui_update_band(const char *band);   // Phase 5.10: e.g. "20m", "40m"
@@ -31,6 +30,9 @@ int16_t  ui_get_if_cal_hz(void);         // per-unit IF calibration trim in Hz
 int   ui_get_pan_offset_bins(void);     // current pan offset in FFT bins
 void  ui_set_zoom(float zoom, int pan_bins); // set zoom+pan, persists zoom to NVS
 int  ui_get_if_bin_shift(int n_bins);  // Total bin shift = (IF_OFFSET_HZ + if_cal_hz) -> bins
+
+// Passband edges in Hz, relative to VFO/dial (mode + CAT-width dependent).
+void ui_get_passband_edges_hz(int32_t *out_low, int32_t *out_high);
 
 // Bottom status bar: 3-zone layout (left/center/right). Pass NULL or "" to clear.
 void ui_set_bottom_left(const char *text);

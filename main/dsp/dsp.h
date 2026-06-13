@@ -55,3 +55,32 @@ esp_err_t dsp_find_peak_hz_around(int32_t center_hz, int32_t radius_hz, int32_t 
 // dst MUST point to 180000 floats in PSRAM (heap_caps_malloc).
 // Returns ESP_OK on success, ESP_ERR_TIMEOUT if no audio after timeout_ms.
 esp_err_t dsp_ft8_capture(float *dst_180000, uint32_t timeout_ms);
+
+// ---- Zoom-FFT (v0.16.0): real frequency-resolution increase at zoom > x1 ---
+// The fft_task mixes the pan-center down to DC, low-pass filters, decimates
+// by a power-of-two factor D in {1,2,4,8,16} (chosen as the largest such D
+// <= the requested zoom, so D divides DSP_FFT_SIZE evenly), accumulates
+// DSP_FFT_SIZE decimated complex samples and runs a second 1024-pt FFT.
+// The display then applies any *residual* zoom (zoom / D, in [1,2)) on top
+// of this already-higher-resolution spectrum using the existing
+// magnification math with center_bin = 0.
+//
+// if_bin_shift: ui_get_if_bin_shift(DSP_FFT_SIZE), passed in by the caller
+// (ui.c) to avoid a dsp<->ui include cycle.
+void dsp_set_zoom(float zoom_factor, int pan_offset_bins, int if_bin_shift);
+
+// Returns the currently active decimation factor D (1, 2, 4, 8, or 16).
+// D == 1 means zoom-FFT is inactive; the display should use the normal
+// dsp_get_spectrum() output with the existing zoom/pan math.
+int dsp_get_zoom_decim(void);
+
+// Residual zoom to apply on top of the zoom-FFT spectrum (zoom_factor / D).
+float dsp_get_zoom_residual(void);
+
+// Latest zoom-FFT spectrum (DSP_FFT_SIZE dB values, same layout as
+// dsp_get_spectrum: index 0 = DC = pan center, non-fftshifted), or NULL if
+// zoom-FFT is inactive (D==1) or no frame yet (accumulation still filling
+// after a zoom/pan change). Lock-free double-buffered: the returned pointer
+// stays valid and unmodified until the next call to this function from the
+// same caller (fft_task never writes to a buffer once it's been handed out).
+const float *dsp_get_zoom_spectrum(void);

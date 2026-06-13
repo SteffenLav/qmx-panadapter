@@ -170,6 +170,17 @@ static void action_save_cb(lv_event_t *e)
     memory_modal_refresh();
 }
 
+// cat_set_frequency()/cat_set_mode() share a 200ms TX rate-limiter; firing
+// both back-to-back drops the mode write silently. Send the mode on a
+// one-shot timer so it lands after the frequency write's rate-limit window.
+static char s_recall_mode[8] = "";
+
+static void recall_mode_timer_cb(lv_timer_t *t)
+{
+    if (s_recall_mode[0]) cat_set_mode(s_recall_mode);
+    lv_timer_del(t);
+}
+
 static void cell_tap_cb(lv_event_t *e)
 {
     if (s_action_idx >= 0) return;  /* suppress tap if long-press action panel is open */
@@ -185,18 +196,11 @@ static void cell_tap_cb(lv_event_t *e)
              idx, (unsigned long)slot.freq_hz, slot.mode, slot.label);
 
     cat_set_frequency(slot.freq_hz);
-    if (slot.mode[0]) cat_set_mode(slot.mode);
-    {
-        char mem_lbl[32];
-        if (slot.label[0]) {
-            snprintf(mem_lbl, sizeof(mem_lbl), "[M%02d] %s", idx + 1, slot.label);
-        } else {
-            uint32_t mhz = slot.freq_hz / 1000000UL;
-            uint32_t khz = (slot.freq_hz % 1000000UL) / 1000UL;
-            snprintf(mem_lbl, sizeof(mem_lbl), "[M%02d] %lu.%03lu %s",
-                     idx + 1, (unsigned long)mhz, (unsigned long)khz, slot.mode);
-        }
-        ui_set_memory_label(mem_lbl);
+    if (slot.mode[0]) {
+        strncpy(s_recall_mode, slot.mode, sizeof(s_recall_mode) - 1);
+        s_recall_mode[sizeof(s_recall_mode) - 1] = '\0';
+        lv_timer_t *t = lv_timer_create(recall_mode_timer_cb, 250, NULL);
+        lv_timer_set_repeat_count(t, 1);
     }
     modal_close();
 }

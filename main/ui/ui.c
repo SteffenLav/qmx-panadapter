@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -79,6 +80,10 @@ static lv_obj_t *s_zoom_popup  = NULL;  // zoom preset dropdown panel
 
 float ui_get_zoom_factor(void)    { return s_zoom_factor; }
 int   ui_get_pan_offset_bins(void){ return s_pan_offset_bins; }
+
+// Forward declaration: defined later, needed by ui_set_zoom() for
+// passband-centered zoom (and exported via ui_get_passband_edges_hz()).
+static void compute_passband_edges_hz(int32_t *out_low, int32_t *out_high);
 
 // ---- Band preset popup ------------------------------------------------
 // Per-band last-used frequency (session memory, not persisted).
@@ -836,17 +841,19 @@ static void zoom_popup_open(void)
     lv_obj_add_event_cb(ov, zoom_overlay_cb, LV_EVENT_CLICKED, NULL);
     s_zoom_popup = ov;
 
-    // Popup panel anchored below zoom label (right side, below top bar)
+    // Popup panel anchored below zoom label (right side, below top bar).
+    // Extra 32px margin: covers any flex gap/padding the theme adds between
+    // children, so the last row (x24) never gets clipped by the panel edge
+    // (same fix as band_popup_open).
     int btn_h = 64;
     int panel_w = 140;
-    int panel_h = N_ZOOM_PRESETS * btn_h;
+    int panel_h = N_ZOOM_PRESETS * btn_h + 64;
     lv_obj_t *panel = lv_obj_create(ov);
     lv_obj_set_size(panel, panel_w, panel_h);
-    // Center popup under zoom label using actual rendered coords
-    lv_area_t la;
-    lv_obj_get_coords(s_zoom_label, &la);
-    int label_cx = (la.x1 + la.x2) / 2;
-    lv_obj_set_pos(panel, label_cx - panel_w / 2, 60);
+    // Fixed position near the right edge, under the top bar. Avoid
+    // lv_obj_get_coords(s_zoom_label, ...) - the LVGL software-rotation
+    // pipeline can return stale/incorrect layout coords (see band_popup_open).
+    lv_obj_set_pos(panel, DISPLAY_H_RES - panel_w - 98, TOP_BAR_H + 4);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0x1A1A1A), 0);
     lv_obj_set_style_border_color(panel, lv_color_hex(0x444444), 0);
     lv_obj_set_style_border_width(panel, 1, 0);
@@ -879,13 +886,37 @@ static void zoom_popup_open(void)
     }
 }
 
+// Re-center the passband-centered pan offset (zoom > x1) and push it to the
+// DSP zoom-FFT. No LVGL calls - safe to call from non-LVGL tasks (e.g. the
+// CAT task, when mode/passband width changes).
+static void recompute_zoom_pan(void)
+{
+    if (s_zoom_factor <= 1.0f) return;
+    int32_t pb_low_hz, pb_high_hz;
+    compute_passband_edges_hz(&pb_low_hz, &pb_high_hz);
+    int32_t pb_center_hz = (pb_low_hz + pb_high_hz) / 2;
+    float bin_width_hz = (float)DSP_SAMPLE_RATE_HZ / (float)DSP_FFT_SIZE;
+    s_pan_offset_bins = (int)lroundf((float)pb_center_hz / bin_width_hz);
+    dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
+}
+
 void ui_set_zoom(float zoom, int pan_bins)
 {
     if (zoom < 1.0f)  zoom = 1.0f;
     if (zoom > 24.0f) zoom = 24.0f;
+    // Above x1, center the passband (not the VFO) on screen: pan to the
+    // passband's center-frequency bin offset from the VFO.
+    if (zoom > 1.0f) {
+        int32_t pb_low_hz, pb_high_hz;
+        compute_passband_edges_hz(&pb_low_hz, &pb_high_hz);
+        int32_t pb_center_hz = (pb_low_hz + pb_high_hz) / 2;
+        float bin_width_hz = (float)DSP_SAMPLE_RATE_HZ / (float)DSP_FFT_SIZE;
+        pan_bins = (int)lroundf((float)pb_center_hz / bin_width_hz);
+    }
     s_zoom_factor     = zoom;
     s_pan_offset_bins = pan_bins;
     settings_set_zoom_factor(zoom);
+    dsp_set_zoom(zoom, pan_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
     // Update zoom label
     if (s_zoom_label) {
         if (zoom <= 1.01f) {
@@ -953,7 +984,6 @@ static lv_obj_t *s_bot_wifi_ssid = NULL;
 static ui_rssi_t s_bot_rssi;
 static bool       s_bot_rssi_valid = false;
 static lv_obj_t *s_bot_wifi_suffix = NULL;
-static lv_obj_t *s_bot_mem    = NULL;  /* active memory channel indicator */
 static lv_obj_t *s_bot_version = NULL; /* firmware version, between battery and clock */
 static lv_obj_t *s_burger_btn = NULL;  // Phase 5.10I: kept for foreground move after all UI built
 static lv_obj_t *s_switch_iq  = NULL;  // Phase B: IQ balance toggle in settings drawer
@@ -1426,11 +1456,6 @@ static void build_bottom_bar(lv_obj_t *parent)
         lv_obj_align(s_bot_center_suffix, LV_ALIGN_LEFT_MID, x0 + clock_w, 0);
     }
 
-    s_bot_mem = lv_label_create(bar);
-    lv_label_set_text(s_bot_mem, "");
-    lv_obj_set_style_text_color(s_bot_mem, lv_color_hex(0xFFE080), 0);
-    lv_obj_set_style_text_font(s_bot_mem, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_bot_mem, LV_ALIGN_CENTER, -300, 0);
 
     // Firmware version, centered between the battery text and the UTC clock.
     s_bot_version = lv_label_create(bar);
@@ -1664,7 +1689,6 @@ void ui_update_frequency(uint32_t freq_hz)
     snprintf(buf, sizeof(buf), "Freq: %lu.%03lu.%03lu Hz", mhz, khz, hz);
     if (display_lock(100)) {
         lv_label_set_text(s_freq_label, buf);
-        if (s_bot_mem) lv_label_set_text(s_bot_mem, "");  /* clear memory label on any freq change */
         display_unlock();
     } else {
         ESP_LOGW("ui", "ui_update_frequency: freq label lock timeout");
@@ -1703,8 +1727,16 @@ void ui_update_mode(const char *mode)
 {
     // Phase 5.10F: cache for snap-step lookup in touch handler
     if (mode) {
+        bool changed = strncmp(s_current_mode, mode, sizeof(s_current_mode) - 1) != 0;
         strncpy(s_current_mode, mode, sizeof(s_current_mode) - 1);
         s_current_mode[sizeof(s_current_mode) - 1] = '\0';
+        // The passband (bw) shape is mode-dependent, so the passband-centered
+        // pan offset (zoom > x1) needs to be recomputed once the real mode is
+        // known from CAT - otherwise the freq/bw cursor lines stay where they
+        // were placed using the boot-time default mode.
+        if (changed) {
+            recompute_zoom_pan();
+        }
     }
     if (!s_mode_label || !mode) return;
     if (display_lock(100)) {
@@ -1744,10 +1776,17 @@ void ui_update_band(const char *band)
 // fallback to 0 = use per-mode defaults. Called by cat.c.
 void ui_update_passband_width(uint32_t hz)
 {
-    if (hz > 0 && hz != s_passband_width_hz) {
+    bool changed = (hz != s_passband_width_hz);
+    if (hz > 0 && changed) {
         ESP_LOGI("ui", "Passband width = %lu Hz (CAT FW)", (unsigned long)hz);
     }
     s_passband_width_hz = hz;
+    // Re-center the passband-centered pan (zoom > x1) now that the real
+    // width is known from CAT - keeps the freq/bw cursor lines in sync
+    // with the waterfall instead of frozen at the boot-time default.
+    if (changed) {
+        recompute_zoom_pan();
+    }
     if (s_bw_label && display_lock(20)) {
         char buf[20];
         if (hz >= 1000) snprintf(buf, sizeof(buf), "BW: %lu.%01lu kHz", (unsigned long)(hz/1000), (unsigned long)((hz%1000)/100));
@@ -1798,6 +1837,12 @@ static void compute_passband_edges_hz(int32_t *out_low, int32_t *out_high)
     }
     *out_low = low;
     *out_high = high;
+}
+
+// Exported wrapper for render_waterfall.c's noise-floor-within-passband calc.
+void ui_get_passband_edges_hz(int32_t *out_low, int32_t *out_high)
+{
+    compute_passband_edges_hz(out_low, out_high);
 }
 
 
@@ -1897,6 +1942,24 @@ void ui_push_spectrum(const float *bins, int n_bins)
         }
     }
 
+    int N = n_bins;
+
+    // v0.16.0 zoom-FFT: if a higher-resolution spectrum centered on the pan
+    // target is available (zoom >= x2), display that instead, applying only
+    // the residual zoom (zoom_factor / decim) on top of it. center_bin=0
+    // because the zoom-FFT already mixed the pan target to DC.
+    const float *use_bins = bins;
+    float eff_zoom = s_zoom_factor;
+    int center_bin;
+    const float *zoom_spec = (N == DSP_FFT_SIZE) ? dsp_get_zoom_spectrum() : NULL;
+    if (zoom_spec) {
+        use_bins = zoom_spec;
+        eff_zoom = dsp_get_zoom_residual();
+        center_bin = 0;
+    } else {
+        center_bin = ((ui_get_if_bin_shift(N) + s_pan_offset_bins) % N + N) % N;
+    }
+
     /* Phase 5.12: per-bin floor + smooth update, once per frame */
     if (s_flat_mode) {
         if (!s_flat_smooth) {
@@ -1907,13 +1970,13 @@ void ui_push_spectrum(const float *bins, int n_bins)
         if (s_flat_mode) {
             if (!s_flat_ready) {
                 float sum = 0.0f;
-                for (int b = 0; b < n_bins; b++) { s_flat_smooth[b] = bins[b]; sum += bins[b]; }
+                for (int b = 0; b < n_bins; b++) { s_flat_smooth[b] = use_bins[b]; sum += use_bins[b]; }
                 float avg = sum / (float)n_bins;
                 for (int b = 0; b < n_bins; b++) s_flat_floor[b] = avg;
                 s_flat_ready = true;
             } else {
                 for (int b = 0; b < n_bins; b++) {
-                    s_flat_smooth[b] += FLAT_SMOOTH_ALPHA * (bins[b] - s_flat_smooth[b]);
+                    s_flat_smooth[b] += FLAT_SMOOTH_ALPHA * (use_bins[b] - s_flat_smooth[b]);
                     float d = s_flat_smooth[b] - s_flat_floor[b];
                     float a = (d > 0.0f) ? FLAT_FLOOR_UP_ALPHA : FLAT_FLOOR_DOWN_ALPHA;
                     s_flat_floor[b] += a * d;
@@ -1922,14 +1985,10 @@ void ui_push_spectrum(const float *bins, int n_bins)
         }
     }
 
-    int N = n_bins;
     // Zoom+pan: window_bins = how many FFT bins span the display.
-    int window_bins = (int)((float)N / s_zoom_factor);
+    int window_bins = (int)((float)N / eff_zoom);
     if (window_bins < 4) window_bins = 4;
     if (window_bins > N) window_bins = N;
-    // center_bin: in the raw (non-fftshifted) FFT array, DC is at bin 0.
-    // The display center maps to the IF-shifted bin, adjusted for pan.
-    int center_bin = ((ui_get_if_bin_shift(N) + s_pan_offset_bins) % N + N) % N;
     int bin_start  = center_bin - window_bins / 2;
 
     for (int x = 0; x < DISPLAY_H_RES; x++) {
@@ -1954,7 +2013,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
             if (v > FLAT_RANGE_DB) v = FLAT_RANGE_DB;
             y_top = SPECTRUM_H - 1 - (int)(v * (SPECTRUM_H - 1) / FLAT_RANGE_DB);
         } else {
-            y_top = db_to_y(bins[bin]);
+            y_top = db_to_y(use_bins[bin]);
         }
         if (y_top < 0) y_top = 0;
         if (y_top >= SPECTRUM_H) y_top = SPECTRUM_H - 1;
@@ -1997,10 +2056,17 @@ void ui_push_spectrum(const float *bins, int n_bins)
             }
         }
 
+        // Amber VFO line: at 0 Hz relative to dial, shifted by pan like the
+        // passband edges above so it tracks the actual tuned frequency
+        // (no longer screen-center once zoom>x1 re-centers on the passband).
         const uint16_t center_color = 0xFD00;
-        int cx = DISPLAY_H_RES / 2;
-        for (int y = 0; y < SPECTRUM_H; y++) {
-            px[y * DISPLAY_H_RES + cx] = center_color;
+        int32_t pan_hz_vfo = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
+        int32_t span_hz_vfo = (int32_t)(48000.0f / s_zoom_factor);
+        int cx = (int)((int64_t)(0 - pan_hz_vfo) * DISPLAY_H_RES / span_hz_vfo) + DISPLAY_H_RES / 2;
+        if (cx >= 0 && cx < DISPLAY_H_RES) {
+            for (int y = 0; y < SPECTRUM_H; y++) {
+                px[y * DISPLAY_H_RES + cx] = center_color;
+            }
         }
     }
     // Target cursor: cyan 1-px vertical line at last touched x, ~600 ms
@@ -2151,15 +2217,6 @@ void ui_set_bottom_clock(int h, int m, int s, bool valid)
             lv_label_set_text(s_bot_clock.cells[6], "-");
             lv_label_set_text(s_bot_clock.cells[7], "-");
         }
-        display_unlock();
-    }
-}
-
-void ui_set_memory_label(const char *text)
-{
-    if (!s_bot_mem) return;
-    if (display_lock(20)) {
-        lv_label_set_text(s_bot_mem, text ? text : "");
         display_unlock();
     }
 }

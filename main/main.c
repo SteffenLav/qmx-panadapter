@@ -101,6 +101,12 @@ void app_main(void)
     // DISABLED pending C6 firmware investigation (see CLAUDE.md / git log).
     panadapter_wifi_start();
     ESP_ERROR_CHECK(dsp_init());
+    // ui_init() (above) applied the persisted zoom level via ui_set_zoom(),
+    // but dsp_set_zoom() is a no-op before dsp_init() creates its config
+    // mutex - re-apply now so a saved zoom > x1 engages the zoom-FFT
+    // (increased resolution) from first boot instead of staying in plain
+    // magnification mode until the user touches the zoom control.
+    ui_set_zoom(ui_get_zoom_factor(), ui_get_pan_offset_bins());
     ESP_ERROR_CHECK(render_init());
 
     ESP_LOGI(TAG, "Init complete - main task idle");

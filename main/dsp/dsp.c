@@ -47,6 +47,65 @@ static TaskHandle_t s_fft_task = NULL;
 static uint32_t s_frames_this_period = 0;
 static int64_t  s_period_start_us = 0;
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846f
+#endif
+
+// ----- v0.16.0 Zoom-FFT --------------------------------------------------
+#define ZOOM_FIR_LEN 31
+
+static SemaphoreHandle_t s_zoom_cfg_mtx  = NULL;
+
+// Config, written by dsp_set_zoom() (UI/LVGL task), read by fft_task.
+static volatile int   s_zoom_decim  = 1;   // 1, 2, 4, 8, 16
+static volatile float s_zoom_residual = 1.0f;
+static volatile float s_zoom_fshift_hz = 0.0f;
+static volatile int   s_zoom_gen    = 0;
+
+// Applied state, owned by fft_task only.
+static int   s_zoom_applied_gen   = -1;
+static float s_zoom_lpf_taps[ZOOM_FIR_LEN];
+static float s_zoom_fir_delay_i[ZOOM_FIR_LEN];
+static float s_zoom_fir_delay_q[ZOOM_FIR_LEN];
+static fir_f32_t s_zoom_fir_i;
+static fir_f32_t s_zoom_fir_q;
+static float s_zoom_rot_re, s_zoom_rot_im;     // per-sample NCO rotation
+static float s_zoom_phase_re, s_zoom_phase_im; // current NCO phase
+static float s_zoom_mix_i[DSP_FFT_SIZE];
+static float s_zoom_mix_q[DSP_FFT_SIZE];
+static float s_zoom_dec_i[DSP_FFT_SIZE];
+static float s_zoom_dec_q[DSP_FFT_SIZE];
+static float *s_zoom_acc      = NULL;  // interleaved I/Q, DSP_FFT_SIZE complex
+static float *s_zoom_workbuf  = NULL;  // interleaved I/Q, DSP_FFT_SIZE complex
+// Double-buffered published spectrum (dB, DSP_FFT_SIZE each). fft_task
+// writes into the non-ready buffer then flips s_zoom_ready_idx; readers
+// (LVGL/render task) take whichever buffer is currently marked ready
+// without copying or locking. Lock-free: a 32-bit aligned int read/write
+// is atomic on this target, and the writer never touches the ready buffer.
+static float *s_zoom_spectrum[2] = { NULL, NULL };
+static volatile int s_zoom_ready_idx = -1;
+static int    s_zoom_acc_idx  = 0;
+
+// Windowed-sinc lowpass, Hamming window. fc_norm = cutoff / sample_rate.
+static void zoom_design_lpf(float *taps, int n_taps, float fc_norm)
+{
+    int M = n_taps - 1;
+    float sum = 0.0f;
+    for (int i = 0; i <= M; i++) {
+        float k = (float)i - (float)M / 2.0f;
+        float sinc;
+        if (fabsf(k) < 1e-6f) {
+            sinc = 2.0f * fc_norm;
+        } else {
+            sinc = sinf(2.0f * (float)M_PI * fc_norm * k) / ((float)M_PI * k);
+        }
+        float w = 0.54f - 0.46f * cosf(2.0f * (float)M_PI * (float)i / (float)M);
+        taps[i] = sinc * w;
+        sum += taps[i];
+    }
+    for (int i = 0; i <= M; i++) taps[i] /= sum;
+}
+
 // ----- Step 3 v0.10 FT8 RX capture -----------------------------------------
 // 31-tap LPF: scipy.signal.firwin(31, 4500/24000, window='hamming')
 // Passband 0-3 kHz flat (<0.5 dB), -65 dB at 9 kHz (worst aliaser into
@@ -165,6 +224,18 @@ esp_err_t dsp_init(void)
 
     s_spectrum_mtx = xSemaphoreCreateMutex();
     if (!s_spectrum_mtx) return ESP_ERR_NO_MEM;
+
+    // v0.16.0 zoom-FFT buffers (PSRAM; only touched when zoom > x1).
+    s_zoom_acc        = heap_caps_malloc(DSP_FFT_SIZE * 2 * sizeof(float), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_zoom_workbuf    = heap_caps_malloc(DSP_FFT_SIZE * 2 * sizeof(float), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_zoom_spectrum[0] = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_zoom_spectrum[1] = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_zoom_acc || !s_zoom_workbuf || !s_zoom_spectrum[0] || !s_zoom_spectrum[1]) {
+        ESP_LOGE(TAG, "Failed to allocate zoom-FFT buffers");
+        return ESP_ERR_NO_MEM;
+    }
+    s_zoom_cfg_mtx = xSemaphoreCreateMutex();
+    if (!s_zoom_cfg_mtx) return ESP_ERR_NO_MEM;
 
     // ---- Self-test: same as Phase 4.1 — validate the FFT works at boot ----
     const int test_bin = 100;
@@ -377,6 +448,159 @@ static void compute_and_publish_spectrum(int16_t *samples, float *tmp_spectrum,
     log_stats(*last_min, *last_max, *last_mean);
 }
 
+static void zoom_run_fft(void)
+{
+    for (int i = 0; i < DSP_FFT_SIZE; i++) {
+        float w = s_window[i];
+        s_zoom_workbuf[2*i]     = s_zoom_acc[2*i]     * w;
+        s_zoom_workbuf[2*i + 1] = s_zoom_acc[2*i + 1] * w;
+    }
+    dsps_fft2r_fc32(s_zoom_workbuf, DSP_FFT_SIZE);
+    dsps_bit_rev_fc32(s_zoom_workbuf, DSP_FFT_SIZE);
+
+    // Write into the buffer that isn't currently published (index 0 the
+    // first time, when s_zoom_ready_idx is still -1).
+    int ridx = s_zoom_ready_idx;
+    int widx = (ridx == 0) ? 1 : 0;
+    float *out = s_zoom_spectrum[widx];
+    const float *prev = (ridx >= 0) ? s_zoom_spectrum[ridx] : NULL;
+
+    // Light EMA across successive zoom-FFT frames to take the edge off
+    // frame-to-frame jumps at high decimation (slower cadence). Too low an
+    // alpha smears/blurs the waterfall (signals visibly trail/fade), so
+    // keep this fairly high - it's a touch-up, not the main smoothing.
+    const float alpha = 0.6f;
+    const float floor_mag2 = 1e-12f;
+    for (int i = 0; i < DSP_FFT_SIZE; i++) {
+        float re = s_zoom_workbuf[2*i];
+        float im = s_zoom_workbuf[2*i + 1];
+        float mag2 = re*re + im*im;
+        if (mag2 < floor_mag2) mag2 = floor_mag2;
+        float db = 10.0f * log10f(mag2) + DSP_DB_CALIBRATION_OFFSET;
+        out[i] = prev ? (alpha * db + (1.0f - alpha) * prev[i]) : db;
+    }
+    s_zoom_ready_idx = widx;
+}
+
+// Mix the pan-center to DC, LPF + decimate by D, accumulate DSP_FFT_SIZE
+// decimated complex samples and run a second FFT. `samples` is the same
+// (already DC-blocked) buffer compute_and_publish_spectrum just used.
+static void zoom_process(const int16_t *samples)
+{
+    int D;
+    int gen;
+    float fshift;
+    if (xSemaphoreTake(s_zoom_cfg_mtx, 0) != pdTRUE) return;
+    D = s_zoom_decim;
+    gen = s_zoom_gen;
+    fshift = s_zoom_fshift_hz;
+    xSemaphoreGive(s_zoom_cfg_mtx);
+
+    if (D <= 1) {
+        s_zoom_ready_idx = -1;
+        s_zoom_applied_gen = -1;  // force re-init if D goes back up
+        return;
+    }
+
+    if (gen != s_zoom_applied_gen) {
+        float cutoff_norm = 0.45f / (float)D;
+        zoom_design_lpf(s_zoom_lpf_taps, ZOOM_FIR_LEN, cutoff_norm);
+        memset(s_zoom_fir_delay_i, 0, sizeof(s_zoom_fir_delay_i));
+        memset(s_zoom_fir_delay_q, 0, sizeof(s_zoom_fir_delay_q));
+        dsps_fird_init_f32(&s_zoom_fir_i, s_zoom_lpf_taps, s_zoom_fir_delay_i, ZOOM_FIR_LEN, D);
+        dsps_fird_init_f32(&s_zoom_fir_q, s_zoom_lpf_taps, s_zoom_fir_delay_q, ZOOM_FIR_LEN, D);
+
+        float omega = -2.0f * (float)M_PI * fshift / (float)DSP_SAMPLE_RATE_HZ;
+        s_zoom_rot_re = cosf(omega);
+        s_zoom_rot_im = sinf(omega);
+        s_zoom_phase_re = 1.0f;
+        s_zoom_phase_im = 0.0f;
+        s_zoom_acc_idx = 0;
+        s_zoom_ready_idx = -1;
+        s_zoom_applied_gen = gen;
+    }
+
+    for (int i = 0; i < DSP_FFT_SIZE; i++) {
+        float I = (float)samples[2*i];
+        float Q = (float)samples[2*i + 1];
+        float ri = s_zoom_phase_re, rq = s_zoom_phase_im;
+        s_zoom_mix_i[i] = I * ri - Q * rq;
+        s_zoom_mix_q[i] = I * rq + Q * ri;
+        float nr = ri * s_zoom_rot_re - rq * s_zoom_rot_im;
+        float nq = ri * s_zoom_rot_im + rq * s_zoom_rot_re;
+        s_zoom_phase_re = nr;
+        s_zoom_phase_im = nq;
+    }
+    // Periodic renormalization keeps the NCO phasor on the unit circle.
+    float mag2 = s_zoom_phase_re * s_zoom_phase_re + s_zoom_phase_im * s_zoom_phase_im;
+    if (mag2 < 0.95f || mag2 > 1.05f) {
+        float inv = 1.0f / sqrtf(mag2);
+        s_zoom_phase_re *= inv;
+        s_zoom_phase_im *= inv;
+    }
+
+    int n_out_target = DSP_FFT_SIZE / D;
+    int n_out_i = dsps_fird_f32(&s_zoom_fir_i, s_zoom_mix_i, s_zoom_dec_i, n_out_target);
+    int n_out_q = dsps_fird_f32(&s_zoom_fir_q, s_zoom_mix_q, s_zoom_dec_q, n_out_target);
+    int n_out = (n_out_i < n_out_q) ? n_out_i : n_out_q;
+
+    for (int i = 0; i < n_out; i++) {
+        if (s_zoom_acc_idx < DSP_FFT_SIZE) {
+            s_zoom_acc[2*s_zoom_acc_idx]     = s_zoom_dec_i[i];
+            s_zoom_acc[2*s_zoom_acc_idx + 1] = s_zoom_dec_q[i];
+            s_zoom_acc_idx++;
+        }
+        if (s_zoom_acc_idx >= DSP_FFT_SIZE) {
+            zoom_run_fft();
+            s_zoom_acc_idx = 0;
+        }
+    }
+}
+
+// Update the zoom-FFT configuration. Called from the UI/LVGL task on every
+// zoom/pan change; fft_task picks up the new generation on its next iteration.
+void dsp_set_zoom(float zoom_factor, int pan_offset_bins, int if_bin_shift)
+{
+    int D = 1;
+    if (zoom_factor >= 16.0f)      D = 16;
+    else if (zoom_factor >= 8.0f)  D = 8;
+    else if (zoom_factor >= 4.0f)  D = 4;
+    else if (zoom_factor >= 2.0f)  D = 2;
+    float residual = zoom_factor / (float)D;
+
+    const int N = DSP_FFT_SIZE;
+    int c = ((if_bin_shift + pan_offset_bins) % N + N) % N;
+    int signed_bin = (c >= N / 2) ? c - N : c;
+    float fshift_hz = (float)signed_bin * (float)DSP_SAMPLE_RATE_HZ / (float)N;
+
+    if (!s_zoom_cfg_mtx) return;
+    if (xSemaphoreTake(s_zoom_cfg_mtx, portMAX_DELAY) == pdTRUE) {
+        s_zoom_decim     = D;
+        s_zoom_residual  = residual;
+        s_zoom_fshift_hz = fshift_hz;
+        s_zoom_gen++;
+        xSemaphoreGive(s_zoom_cfg_mtx);
+    }
+}
+
+int dsp_get_zoom_decim(void)
+{
+    return s_zoom_decim;
+}
+
+float dsp_get_zoom_residual(void)
+{
+    return s_zoom_residual;
+}
+
+const float *dsp_get_zoom_spectrum(void)
+{
+    if (s_zoom_decim <= 1) return NULL;
+    int idx = s_zoom_ready_idx;
+    if (idx < 0) return NULL;
+    return s_zoom_spectrum[idx];
+}
+
 static void fft_task(void *arg)
 {
     // Local scratch buffers
@@ -496,5 +720,11 @@ static void fft_task(void *arg)
         // DC blocker, windowing, FFT, dB conversion, publish to s_spectrum
         // (normal panadapter path).
         compute_and_publish_spectrum(samples, tmp_spectrum, &last_min, &last_max, &last_mean);
+
+        // v0.16.0 zoom-FFT: mix/decimate/accumulate toward a second,
+        // higher-resolution FFT centered on the pan target. No-op when
+        // zoom <= x2 (s_zoom_decim == 1). Reuses `samples`, which
+        // compute_and_publish_spectrum already DC-blocked in place.
+        zoom_process(samples);
     }
 }

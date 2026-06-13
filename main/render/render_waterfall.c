@@ -4,8 +4,10 @@
 #include "esp_heap_caps.h"
 #include "ui.h"
 #include "display.h"
+#include "dsp.h"
 #include <string.h>
 #include <stdlib.h>
+#include <math.h>
 
 static const char *TAG = "render_wf";
 
@@ -133,15 +135,76 @@ void render_waterfall_tick(const float *spectrum, int n_bins)
 {
     if (!s_row || !spectrum || n_bins <= 0) return;
 
-    // Phase 5.10F: auto-track noise floor by EMA'd median, once per second.
+    uint16_t *row = (uint16_t *)s_row;
+
+    // Pixel x -> FFT bin, with fftshift:
+    //   x=0       -> bin n_bins/2  (most-negative freq)
+    //   x=WF_W/2  -> bin 0         (DC)
+    //   x=WF_W-1  -> bin n_bins/2 - 1 (most-positive freq, wraps to n_bins/2 - 1)
+    // For 1024 bins on 1280 px we have ~0.8 bins/px (slight oversample, fine for waterfall).
+    // Zoom+pan: mirror spectrum render path exactly. v0.16.0: if a
+    // higher-resolution zoom-FFT spectrum centered on the pan target is
+    // available (zoom >= x2), use that with center_bin=0 and only the
+    // residual zoom on top (see ui_push_spectrum for the rationale).
+    const float *use_spectrum = spectrum;
+    float wf_eff_zoom = ui_get_zoom_factor();
+    int wf_center;
+    const float *zoom_spec = (n_bins == DSP_FFT_SIZE) ? dsp_get_zoom_spectrum() : NULL;
+    if (zoom_spec) {
+        use_spectrum = zoom_spec;
+        wf_eff_zoom = dsp_get_zoom_residual();
+        wf_center = 0;
+    } else {
+        wf_center = ((ui_get_if_bin_shift(n_bins) + ui_get_pan_offset_bins()) % n_bins + n_bins) % n_bins;
+    }
+    int wf_window = (int)((float)n_bins / wf_eff_zoom);
+    if (wf_window < 4) wf_window = 4;
+    if (wf_window > n_bins) wf_window = n_bins;
+    int wf_start  = wf_center - wf_window / 2;
+
+    // Phase 5.10F / v0.16.0: auto-track noise floor by EMA'd median, once
+    // per second, over the bins actually visible on screen (wf_window of
+    // use_spectrum) rather than the full band. At high zoom the visible
+    // slice can be much dimmer (or hotter) than the full-band median, e.g.
+    // a weak signal in sunlight (POTA) - the floor needs to follow what's
+    // actually on screen so full dynamic range is used.
     static int64_t last_floor_us = 0;
     int64_t now_us = esp_timer_get_time();
     if (now_us - last_floor_us > 1000000) {
         last_floor_us = now_us;
-        static float scratch[2048];  /* big enough for N up to 2048 */
-        int n = n_bins;
+
+        // Restrict the median to bins within the passband ("bw"), not the
+        // whole visible window - outside-passband regions are darker and
+        // would otherwise mask dim in-band signals (e.g. POTA in sunlight).
+        const float bin_width_hz = (float)DSP_SAMPLE_RATE_HZ / (float)n_bins;
+        int32_t pb_low_hz, pb_high_hz;
+        ui_get_passband_edges_hz(&pb_low_hz, &pb_high_hz);
+
+        int pb_bin_lo, pb_bin_hi;
+        if (zoom_spec) {
+            // bin 0 of the zoom spectrum = DC = (if_bin_shift + pan_offset_bins).
+            // Passband edges are relative to the VFO (if_bin_shift), so shift
+            // by pan_offset_bins (in raw bins) before converting to zoom bins.
+            float zoom_bin_width_hz = bin_width_hz / (float)dsp_get_zoom_decim();
+            float pan_hz = (float)ui_get_pan_offset_bins() * bin_width_hz;
+            pb_bin_lo = (int)lroundf(((float)pb_low_hz  - pan_hz) / zoom_bin_width_hz);
+            pb_bin_hi = (int)lroundf(((float)pb_high_hz - pan_hz) / zoom_bin_width_hz);
+        } else {
+            int if_shift = ui_get_if_bin_shift(n_bins);
+            pb_bin_lo = if_shift + (int)lroundf((float)pb_low_hz  / bin_width_hz);
+            pb_bin_hi = if_shift + (int)lroundf((float)pb_high_hz / bin_width_hz);
+        }
+        if (pb_bin_hi < pb_bin_lo) { int t = pb_bin_lo; pb_bin_lo = pb_bin_hi; pb_bin_hi = t; }
+
+        static float scratch[DSP_FFT_SIZE];
+        int n = pb_bin_hi - pb_bin_lo + 1;
+        if (n < 1) n = 1;
         if (n > (int)(sizeof(scratch)/sizeof(scratch[0]))) n = sizeof(scratch)/sizeof(scratch[0]);
-        memcpy(scratch, spectrum, n * sizeof(float));
+        for (int i = 0; i < n; i++) {
+            int b = pb_bin_lo + i;
+            int bin = ((b % n_bins) + n_bins) % n_bins;
+            scratch[i] = use_spectrum[bin];
+        }
         qsort(scratch, n, sizeof(float), float_cmp);
         float median = scratch[n/2];
         /* EMA smoothing so the floor doesn't jump between samples */
@@ -153,24 +216,11 @@ void render_waterfall_tick(const float *spectrum, int n_bins)
         if (DB_MIN_DISPLAY > -30.0f)  DB_MIN_DISPLAY = -30.0f;
     }
 
-    uint16_t *row = (uint16_t *)s_row;
-
-    // Pixel x -> FFT bin, with fftshift:
-    //   x=0       -> bin n_bins/2  (most-negative freq)
-    //   x=WF_W/2  -> bin 0         (DC)
-    //   x=WF_W-1  -> bin n_bins/2 - 1 (most-positive freq, wraps to n_bins/2 - 1)
-    // For 1024 bins on 1280 px we have ~0.8 bins/px (slight oversample, fine for waterfall).
-    // Zoom+pan: mirror spectrum render path exactly.
-    int wf_window = (int)((float)n_bins / ui_get_zoom_factor());
-    if (wf_window < 4) wf_window = 4;
-    if (wf_window > n_bins) wf_window = n_bins;
-    int wf_center = ((ui_get_if_bin_shift(n_bins) + ui_get_pan_offset_bins()) % n_bins + n_bins) % n_bins;
-    int wf_start  = wf_center - wf_window / 2;
     for (int x = 0; x < WF_WIDTH; x++) {
         int b = wf_start + (int)((float)x * (float)wf_window / (float)WF_WIDTH);
         int bin = ((b % n_bins) + n_bins) % n_bins;
 
-        float db = spectrum[bin];
+        float db = use_spectrum[bin];
         // Match browser LUT mapping: noise floor -> idx 32, +31 dB above floor -> idx 255.
         // 30 dB above floor -> idx 255 (red). Tuned by eye.
         int idx = (int)((db - DB_MIN_DISPLAY) * (255.0f / 30.0f) + 32.0f);
