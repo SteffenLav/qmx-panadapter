@@ -11,6 +11,7 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "cat/cat.h"
+#include "display/display.h"
 #include "storage/settings.h"
 #include "util/maidenhead.h"
 #include "util/dxcc.h"
@@ -130,9 +131,11 @@ static lv_obj_t *s_right_pane  = NULL;
 
 static lv_obj_t *s_lbl_mode     = NULL;
 static lv_obj_t *s_lbl_freq     = NULL;
+static lv_obj_t *s_ft8_freq_hit = NULL;  // enlarged touch target over s_lbl_freq
 static ui_clock_t s_clk_utc;
 static lv_obj_t *s_lbl_utc_suffix = NULL;
 static lv_obj_t *s_lbl_count    = NULL;
+static lv_obj_t *s_bar_slot     = NULL;  // tiny countdown bar beside s_lbl_count
 static lv_obj_t *s_lbl_heard    = NULL;
 static lv_obj_t *s_lbl_me       = NULL;
 static lv_obj_t *s_btn_cq       = NULL;  // "Call CQ" - opens the TX confirmation modal
@@ -657,17 +660,20 @@ static void t_clock_cb(lv_timer_t *t)
         lv_label_set_text(s_lbl_count, b);
         // Steel blue for EVEN, warm orange for ODD - neither conflicts with the
         // TX-armed amber (0xFFA040) or any other colour already in this view.
-        lv_obj_set_style_text_color(s_lbl_count,
-            is_even ? lv_color_hex(0x40A0E0) : lv_color_hex(0xE09040), 0);
+        lv_color_t slot_color = is_even ? lv_color_hex(0x40A0E0) : lv_color_hex(0xE09040);
+        lv_obj_set_style_text_color(s_lbl_count, slot_color, 0);
+        if (s_bar_slot) {
+            lv_bar_set_value(s_bar_slot, remain, LV_ANIM_OFF);
+            lv_obj_set_style_bg_color(s_bar_slot, slot_color, LV_PART_INDICATOR);
+        }
     }
     if (s_lbl_freq) {
         uint32_t hz = cat_get_frequency();
-        char b[32];
+        char b[40];
         uint32_t mhz = hz / 1000000;
-        uint32_t khz = (hz / 1000) % 1000;
-        uint32_t rem = hz % 1000;
-        snprintf(b, sizeof(b), "%lu.%03lu.%03lu",
-                 (unsigned long)mhz, (unsigned long)khz, (unsigned long)rem);
+        uint32_t khz_frac = (hz / 1000) % 1000;
+        snprintf(b, sizeof(b), "Preset: %lu.%03lu MHz",
+                 (unsigned long)mhz, (unsigned long)khz_frac);
         lv_label_set_text(s_lbl_freq, b);
     }
 
@@ -815,6 +821,148 @@ static void tx_indicator_tap_cb(lv_event_t *e)
     }
 }
 
+// ---- FT8 frequency preset popup -----------------------------------------
+// Tapping the dial-frequency label opens a dropdown of conventional FT8 dial
+// frequencies for each band the QMX supports (from cat_get_band_list()).
+typedef struct {
+    const char *band;     // matches cat_band_entry_t.name, e.g. "40"
+    uint32_t    freq_hz;  // conventional FT8 dial frequency
+} ft8_band_freq_t;
+
+static const ft8_band_freq_t FT8_BAND_FREQS[] = {
+    { "160", 1840000  },
+    { "80",  3573000  },
+    { "60",  5357000  },
+    { "40",  7074000  },
+    { "30",  10136000 },
+    { "20",  14074000 },
+    { "17",  18100000 },
+    { "15",  21074000 },
+    { "12",  24915000 },
+    { "10",  28074000 },
+    { "6",   50313000 },
+};
+#define N_FT8_BAND_FREQS (sizeof(FT8_BAND_FREQS) / sizeof(FT8_BAND_FREQS[0]))
+
+static lv_obj_t *s_ft8_freq_popup = NULL;
+
+static void ft8_freq_popup_close(void)
+{
+    if (s_ft8_freq_popup) { lv_obj_delete(s_ft8_freq_popup); s_ft8_freq_popup = NULL; }
+}
+
+static void ft8_freq_preset_cb(lv_event_t *e)
+{
+    uint32_t freq_hz = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
+    ft8_freq_popup_close();
+    cat_set_frequency(freq_hz);
+}
+
+static void ft8_freq_overlay_cb(lv_event_t *e)
+{
+    (void)e;
+    ft8_freq_popup_close();
+}
+
+static void ft8_freq_label_clicked_cb(lv_event_t *e);
+
+static void ft8_freq_popup_open(void)
+{
+    if (s_ft8_freq_popup) { ft8_freq_popup_close(); return; }
+
+    int band_count = 0;
+    const cat_band_entry_t *bands = cat_get_band_list(&band_count);
+    if (band_count == 0) {
+        ESP_LOGW(TAG, "FT8 freq dropdown: no bands available (band_count=0)");
+        return;
+    }
+
+    lv_obj_t *ov = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(ov, LV_HOR_RES, LV_VER_RES);
+    lv_obj_set_pos(ov, 0, 0);
+    lv_obj_set_style_bg_opa(ov, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(ov, 0, 0);
+    lv_obj_clear_flag(ov, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(ov, ft8_freq_overlay_cb, LV_EVENT_CLICKED, NULL);
+    s_ft8_freq_popup = ov;
+
+    int btn_h = 56;
+    int panel_w = 220;
+    int panel_h = band_count * btn_h + 32;
+    int panel_x = 8;
+    int panel_y = MID_Y + 80;
+    int max_h = DISPLAY_V_RES - panel_y - 4;
+    bool needs_scroll = panel_h > max_h;
+    if (needs_scroll) panel_h = max_h;
+
+    lv_obj_t *panel = lv_obj_create(ov);
+    lv_obj_set_size(panel, panel_w, panel_h);
+    lv_obj_set_pos(panel, panel_x, panel_y);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0x1A1A1A), 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(0x444444), 0);
+    lv_obj_set_style_border_width(panel, 1, 0);
+    lv_obj_set_style_pad_all(panel, 0, 0);
+    lv_obj_set_style_radius(panel, 6, 0);
+    lv_obj_set_style_min_height(panel, 0, 0);
+    lv_obj_set_style_min_width(panel, 0, 0);
+    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+    lv_obj_set_style_pad_row(panel, 0, 0);
+    lv_obj_set_style_pad_column(panel, 0, 0);
+    if (needs_scroll) {
+        lv_obj_add_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_scroll_dir(panel, LV_DIR_VER);
+    } else {
+        lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    }
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+
+    uint32_t cur_hz = cat_get_frequency();
+    for (int i = 0; i < band_count; i++) {
+        // Find the FT8 dial frequency for this band, if we know one.
+        uint32_t ft8_hz = 0;
+        for (size_t j = 0; j < N_FT8_BAND_FREQS; j++) {
+            if (strcmp(bands[i].name, FT8_BAND_FREQS[j].band) == 0) {
+                ft8_hz = FT8_BAND_FREQS[j].freq_hz;
+                break;
+            }
+        }
+        if (ft8_hz == 0) continue;  // no known FT8 freq for this band
+
+        bool active = (cur_hz >= bands[i].center_hz - 1000000 &&
+                       cur_hz <= bands[i].center_hz + 1000000);
+        lv_obj_t *btn = lv_obj_create(panel);
+        lv_obj_set_size(btn, panel_w, btn_h);
+        lv_obj_set_style_min_height(btn, 0, 0);
+        lv_obj_set_style_min_width(btn, 0, 0);
+        lv_obj_set_style_max_height(btn, btn_h, 0);
+        lv_obj_set_style_bg_color(btn, active ? lv_color_hex(0x2A2A00) : lv_color_hex(0x1A1A1A), 0);
+        lv_obj_set_style_border_width(btn, 0, 0);
+        lv_obj_set_style_radius(btn, 0, 0);
+        lv_obj_set_style_pad_all(btn, 0, 0);
+        lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(btn, ft8_freq_preset_cb, LV_EVENT_CLICKED,
+                            (void *)(uintptr_t)ft8_hz);
+
+        char bstr[24];
+        snprintf(bstr, sizeof(bstr), "%sm  %lu.%03lu",
+                 bands[i].name,
+                 (unsigned long)(ft8_hz / 1000000),
+                 (unsigned long)((ft8_hz / 1000) % 1000));
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, bstr);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(lbl, active ? lv_color_hex(0xFFD700) : lv_color_hex(0xC0C0C0), 0);
+        lv_obj_center(lbl);
+    }
+}
+
+static void ft8_freq_label_clicked_cb(lv_event_t *e)
+{
+    (void)e;
+    ft8_freq_popup_open();
+}
+
 // ---------------- public API ----------------
 
 void ft8_screen_view_init(lv_obj_t *parent)
@@ -847,10 +995,28 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_pos(s_lbl_mode, 0, 0);
 
     s_lbl_freq = lv_label_create(s_left_pane);
-    lv_label_set_text(s_lbl_freq, "--.---.---");
+    lv_label_set_text(s_lbl_freq, "Preset: --.--- MHz");
     lv_obj_set_style_text_color(s_lbl_freq, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(s_lbl_freq, &lv_font_montserrat_32, 0);
     lv_obj_set_pos(s_lbl_freq, 0, 80);
+
+    // Tap to open a dropdown of conventional FT8 dial frequencies for the
+    // bands this QMX supports. A separate transparent overlay (rather than
+    // ext_click_area on the label itself) gives a generous touch target
+    // spanning the full frequency text and extending well below it, since
+    // ext_click_area only pads uniformly and the label's own width is just
+    // the text's natural width.
+    {
+        lv_obj_t *hit = lv_obj_create(s_left_pane);
+        lv_obj_set_size(hit, 288, 90);
+        lv_obj_set_pos(hit, 0, 80);
+        lv_obj_set_style_bg_opa(hit, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(hit, 0, 0);
+        lv_obj_clear_flag(hit, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(hit, ft8_freq_label_clicked_cb, LV_EVENT_CLICKED, NULL);
+        s_ft8_freq_hit = hit;
+    }
 
     {
         const lv_font_t *font = &lv_font_montserrat_32;
@@ -868,6 +1034,18 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_lbl_count, lv_color_hex(0xC0C0C0), 0);
     lv_obj_set_style_text_font(s_lbl_count, &lv_font_montserrat_24, 0);
     lv_obj_set_pos(s_lbl_count, 0, 240);
+
+    // Tiny countdown bar to the right of "EVEN/ODD  N s", counting down
+    // from full (start of slot) to empty (end of slot). Same colour as
+    // the slot label, updated alongside it in t_clock_cb (1 Hz).
+    s_bar_slot = lv_bar_create(s_left_pane);
+    lv_obj_set_size(s_bar_slot, 140, 8);
+    lv_obj_set_pos(s_bar_slot, 140, 251);
+    lv_obj_set_style_radius(s_bar_slot, 2, 0);
+    lv_obj_set_style_bg_color(s_bar_slot, lv_color_hex(0x303044), 0);
+    lv_obj_set_style_border_width(s_bar_slot, 0, 0);
+    lv_bar_set_range(s_bar_slot, 0, 15);
+    lv_bar_set_value(s_bar_slot, 15, LV_ANIM_OFF);
 
     // CQ TX parity preference: [TX: EVEN] [TX: ODD] toggle row.
     // Fits in the 60 px gap between the slot countdown (y=240, ~28 px tall)
@@ -940,7 +1118,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // countdown text) and tx_indicator_tap_cb (the tap action itself).
     s_lbl_tx = lv_label_create(s_left_pane);
     lv_label_set_text(s_lbl_tx, "");
-    lv_obj_set_style_text_font(s_lbl_tx, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_lbl_tx, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0x909090), 0);
     lv_label_set_long_mode(s_lbl_tx, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_lbl_tx, 288);
@@ -1009,6 +1187,10 @@ void ft8_screen_view_init(lv_obj_t *parent)
 
     s_t_refresh = lv_timer_create(t_refresh_cb, 500, NULL);
     s_t_clock   = lv_timer_create(t_clock_cb,  1000, NULL);
+
+    // Ensure the freq touch overlay sits above later-added siblings
+    // (UTC clock, slot bar, etc.) that partially overlap its hit area.
+    if (s_ft8_freq_hit) lv_obj_move_foreground(s_ft8_freq_hit);
 
     ESP_LOGI(TAG, "FT8 view built (container %dx%d at y=%d, hidden)",
              MID_W, MID_H, MID_Y);

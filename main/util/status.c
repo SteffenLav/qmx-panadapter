@@ -30,12 +30,27 @@ static const char *rssi_dot_prefix(int rssi, bool connected)
     return "";
 }
 
+// Pale green (full), pale yellow (~half), pale red (low, blinks off every
+// other second via blink_on).
+#define BATT_COLOR_FULL  0xA0FFA0
+#define BATT_COLOR_HALF  0xFFF0A0
+#define BATT_COLOR_LOW   0xFF9090
+
+static uint32_t battery_color(int level)
+{
+    if (level < 0)  return BATT_COLOR_HALF;
+    if (level < 30) return BATT_COLOR_LOW;
+    if (level < 60) return BATT_COLOR_HALF;
+    return BATT_COLOR_FULL;
+}
+
 static void status_task(void *arg)
 {
     (void)arg;
     char left[96];
     char ssid_buf[64];
     char suffix_buf[80];
+    bool blink_on = true;
 
     // We use coloured-text formatting in the right label only; the static label
     // style needs recolor enabled, but the runtime API lv_label_set_recolor()
@@ -44,21 +59,21 @@ static void status_task(void *arg)
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
 
-        // --- LEFT: battery icon + percentage (+ charge glyph) ---
+        // --- LEFT: battery icon (colored by level) + percentage text ---
         int  level    = battery_get_level();
         int  mv       = battery_get_mv();
         bool charging = battery_is_charging();
         if (level < 0) {
-            snprintf(left, sizeof(left), "%s --%%", LV_SYMBOL_BATTERY_EMPTY);
+            snprintf(left, sizeof(left), "--%%");
         } else if (mv < 0) {
-            snprintf(left, sizeof(left), "%s %d%%%s",
-                     battery_glyph(level), level,
+            snprintf(left, sizeof(left), "%d%%%s", level,
                      charging ? "  " LV_SYMBOL_CHARGE : "");
         } else {
-            snprintf(left, sizeof(left), "%s %d%% (%d.%dV)%s",
-                     battery_glyph(level), level, mv / 1000, (mv / 100) % 10,
+            snprintf(left, sizeof(left), "%d%% (%d.%dV)%s",
+                     level, mv / 1000, (mv / 100) % 10,
                      charging ? "  " LV_SYMBOL_CHARGE : "");
         }
+        const char *batt_icon = (level < 0) ? LV_SYMBOL_BATTERY_EMPTY : battery_glyph(level);
 
         // --- CENTER: UTC time HH:MM:SS ---
         time_t now = time(NULL);
@@ -81,7 +96,14 @@ static void status_task(void *arg)
             suffix_buf[0] = '\0';
         }
 
-        ui_set_bottom_left(left);
+        // Low battery: blink the icon (off every other second). Percentage
+        // text stays as-is.
+        blink_on = !blink_on;
+        if (level >= 0 && level < 30 && !blink_on) {
+            ui_set_bottom_battery("", battery_color(level), left);
+        } else {
+            ui_set_bottom_battery(batt_icon, battery_color(level), left);
+        }
         ui_set_bottom_clock(tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec, time_valid);
         ui_set_bottom_wifi(ssid_buf, show_rssi, rssi, suffix_buf);
     }

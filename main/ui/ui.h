@@ -34,6 +34,7 @@ int  ui_get_if_bin_shift(int n_bins);  // Total bin shift = (IF_OFFSET_HZ + if_c
 
 // Bottom status bar: 3-zone layout (left/center/right). Pass NULL or "" to clear.
 void ui_set_bottom_left(const char *text);
+void ui_set_bottom_battery(const char *icon, uint32_t icon_color_hex, const char *text);
 
 // Bottom-bar firmware version, centered between the battery text and the UTC clock.
 void ui_set_bottom_version(const char *text);

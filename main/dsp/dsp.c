@@ -312,6 +312,71 @@ static void log_stats(float min_db, float max_db, float mean_db)
              min_db, max_db, mean_db, (unsigned)frames);
 }
 
+// Shared DC-blocker/window/FFT/dB/publish path, used both for the normal
+// panadapter pipeline and periodically during FT8 capture to keep the
+// S-meter (dsp_get_peak_dbm_around_vfo reads s_spectrum) updating.
+static void compute_and_publish_spectrum(int16_t *samples, float *tmp_spectrum,
+                                          float *last_min, float *last_max, float *last_mean)
+{
+#if DSP_DC_BLOCKER
+    {
+        static float dc_state_I = 0.0f;
+        static float dc_state_Q = 0.0f;
+        const float alpha = 0.9869f;
+        for (int i = 0; i < DSP_FFT_SIZE; i++) {
+            float xI = (float)samples[2*i];
+            float xQ = (float)samples[2*i + 1];
+            float cI = xI + dc_state_I * alpha;
+            float cQ = xQ + dc_state_Q * alpha;
+            float yI = cI - dc_state_I;
+            float yQ = cQ - dc_state_Q;
+            dc_state_I = cI;
+            dc_state_Q = cQ;
+            samples[2*i]     = (int16_t)yI;
+            samples[2*i + 1] = (int16_t)yQ;
+        }
+    }
+#endif
+    for (int i = 0; i < DSP_FFT_SIZE; i++) {
+        float I = (float)samples[2*i];
+        float Q = (float)samples[2*i + 1];
+        float w = s_window[i];
+        s_workbuf[2*i]     = I * w;
+        s_workbuf[2*i + 1] = Q * w;
+    }
+
+    dsps_fft2r_fc32(s_workbuf, DSP_FFT_SIZE);
+    dsps_bit_rev_fc32(s_workbuf, DSP_FFT_SIZE);
+
+    const float floor_mag2 = 1e-12f;
+    float sum_db = 0.0f;
+    float min_db = +1e9f;
+    float max_db = -1e9f;
+    for (int i = 0; i < DSP_FFT_SIZE; i++) {
+        float re = s_workbuf[2*i];
+        float im = s_workbuf[2*i + 1];
+        float mag2 = re*re + im*im;
+        if (mag2 < floor_mag2) mag2 = floor_mag2;
+        float db = 10.0f * log10f(mag2) + DSP_DB_CALIBRATION_OFFSET;
+        tmp_spectrum[i] = db;
+        sum_db += db;
+        if (db < min_db) min_db = db;
+        if (db > max_db) max_db = db;
+    }
+    *last_min = min_db;
+    *last_max = max_db;
+    *last_mean = sum_db / (float)DSP_FFT_SIZE;
+
+    if (xSemaphoreTake(s_spectrum_mtx, pdMS_TO_TICKS(10)) == pdTRUE) {
+        memcpy(s_spectrum, tmp_spectrum, DSP_FFT_SIZE * sizeof(float));
+        s_have_spectrum = true;
+        xSemaphoreGive(s_spectrum_mtx);
+    }
+
+    s_frames_this_period++;
+    log_stats(*last_min, *last_max, *last_mean);
+}
+
 static void fft_task(void *arg)
 {
     // Local scratch buffers
@@ -396,86 +461,40 @@ static void fft_task(void *arg)
                 s_ft8_slow_works = 0;
                 s_ft8_last_log_us = now;
             }
+            // S-meter still needs fresh spectrum data during active FT8
+            // capture (s_ft8_active stays true almost continuously per the
+            // "no slot-skip" design, so the idle-branch refresh below rarely
+            // runs). samples[] here is the raw, un-mixed IQ (the fs/4 mixer
+            // above writes to s_ft8_mix_buf, not samples[]), so the spectrum
+            // stays IF-bin-aligned for dsp_get_peak_dbm_around_vfo(vfo_bin).
+            {
+                static int s_ft8_active_smeter_tick = 0;
+                if (++s_ft8_active_smeter_tick >= 10) {
+                    s_ft8_active_smeter_tick = 0;
+                    compute_and_publish_spectrum(samples, tmp_spectrum, &last_min, &last_max, &last_mean);
+                }
+            }
             continue;
         }
         // Step 4b v0.10: FT8 mode but no capture armed - drain and
         // discard. We MUST still consume samples here; audio.c is
         // single-consumer and a stalled fft_task would back-pressure
         // the ring buffer and corrupt the next capture.
+        //
+        // S-meter still needs fresh spectrum data while in FT8 mode (it's
+        // read from s_spectrum at 5 Hz by render_task), so every ~10
+        // iterations (~213 ms @ 48 kHz/1024) run the FFT below instead of
+        // discarding. The resulting spectrum/waterfall push in render_task
+        // is harmless - the panadapter canvases aren't visible in FT8 mode.
         if (ui_mode_get() == UI_MODE_FT8) {
-            continue;
-        }
-        // DC blocker (Phase 5.6): one-pole IIR per QUISK sound.c / Lyons UDSP 3rd ed. p.762
-        // ~100 Hz high-pass at Fs=48 kHz; removes any slow drift on I and Q channels.
-        // QMX has 12 kHz IF so there is no useful signal at DC anyway.
-#if DSP_DC_BLOCKER
-        {
-            static float dc_state_I = 0.0f;
-            static float dc_state_Q = 0.0f;
-            const float alpha = 0.9869f;  // omega = pi * 100 / (48000/2) -> alpha per QUISK formula
-            for (int i = 0; i < DSP_FFT_SIZE; i++) {
-                float xI = (float)samples[2*i];
-                float xQ = (float)samples[2*i + 1];
-                float cI = xI + dc_state_I * alpha;
-                float cQ = xQ + dc_state_Q * alpha;
-                float yI = cI - dc_state_I;
-                float yQ = cQ - dc_state_Q;
-                dc_state_I = cI;
-                dc_state_Q = cQ;
-                samples[2*i]     = (int16_t)yI;
-                samples[2*i + 1] = (int16_t)yQ;
+            static int s_ft8_smeter_tick = 0;
+            if (++s_ft8_smeter_tick < 10) {
+                continue;
             }
+            s_ft8_smeter_tick = 0;
         }
-#endif
-        // Apply window and pack into interleaved complex (I=real, Q=imag).
-        // samples[] is interleaved L,R,L,R,... where L = I, R = Q.
-        for (int i = 0; i < DSP_FFT_SIZE; i++) {
-            float I = (float)samples[2*i];
-            float Q = (float)samples[2*i + 1];
-            float w = s_window[i];
-            s_workbuf[2*i]     = I * w;
-            s_workbuf[2*i + 1] = Q * w;
-        }
-
-        // FFT in place
-        dsps_fft2r_fc32(s_workbuf, DSP_FFT_SIZE);
-        dsps_bit_rev_fc32(s_workbuf, DSP_FFT_SIZE);
-
-        // Magnitude² -> dB. Use 10*log10 since we keep mag squared.
-        // Floor to -120 dB to avoid log of zero on totally empty bins.
-        const float floor_mag2 = 1e-12f;  // ~-120 dB given normalized scale
-        float sum_db = 0.0f;
-        float min_db = +1e9f;
-        float max_db = -1e9f;
-        for (int i = 0; i < DSP_FFT_SIZE; i++) {
-            float re = s_workbuf[2*i];
-            float im = s_workbuf[2*i + 1];
-            float mag2 = re*re + im*im;
-            if (mag2 < floor_mag2) mag2 = floor_mag2;
-            // Normalize by FFT size and window gain factor to get repeatable
-            // dB scale across different input amplitudes / FFT sizes.
-            // For 16-bit input max=32768, mag2 max ~ (32768 * N * windowGain)^2
-            // We just take 10*log10 directly here; scaling can be tuned later.
-            float db = 10.0f * log10f(mag2) + DSP_DB_CALIBRATION_OFFSET;
-            tmp_spectrum[i] = db;
-            sum_db += db;
-            if (db < min_db) min_db = db;
-            if (db > max_db) max_db = db;
-        }
-        float mean_db = sum_db / (float)DSP_FFT_SIZE;
-        last_min = min_db;
-        last_max = max_db;
-        last_mean = mean_db;
-
-
-        // Publish under mutex
-        if (xSemaphoreTake(s_spectrum_mtx, pdMS_TO_TICKS(10)) == pdTRUE) {
-            memcpy(s_spectrum, tmp_spectrum, DSP_FFT_SIZE * sizeof(float));
-            s_have_spectrum = true;
-            xSemaphoreGive(s_spectrum_mtx);
-        }
-
-        s_frames_this_period++;
-        log_stats(last_min, last_max, last_mean);
+        // DC blocker, windowing, FFT, dB conversion, publish to s_spectrum
+        // (normal panadapter path).
+        compute_and_publish_spectrum(samples, tmp_spectrum, &last_min, &last_max, &last_mean);
     }
 }

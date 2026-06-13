@@ -213,6 +213,10 @@ static void band_popup_open(void)
 static void band_label_clicked_cb(lv_event_t *e)
 {
     (void)e;
+    // Top-bar dropdowns are inert in FT8 mode - their oversized hit-zones
+    // overlap the FT8 screen's own controls (e.g. the FT8 freq preset
+    // popup), which would otherwise win the tap.
+    if (ui_mode_get() == UI_MODE_FT8) return;
     band_popup_open();
 }
 
@@ -580,6 +584,7 @@ static void freq_popup_open(void)
 static void freq_label_clicked_cb(lv_event_t *e)
 {
     (void)e;
+    if (ui_mode_get() == UI_MODE_FT8) return;
     freq_popup_open();
 }
 
@@ -694,6 +699,7 @@ static void bw_popup_open(void)
 static void bw_label_clicked_cb(lv_event_t *e)
 {
     (void)e;
+    if (ui_mode_get() == UI_MODE_FT8) return;
     bw_popup_open();
 }
 
@@ -781,6 +787,7 @@ static void mode_popup_open(void)
 static void mode_label_clicked_cb(lv_event_t *e)
 {
     (void)e;
+    if (ui_mode_get() == UI_MODE_FT8) return;
     mode_popup_open();
 }
 
@@ -811,6 +818,7 @@ static const char *ZOOM_LABELS[]  = {"x1",  "x2",  "x4",  "x8",  "x16", "x24"};
 static void zoom_label_clicked_cb(lv_event_t *e)
 {
     (void)e;
+    if (ui_mode_get() == UI_MODE_FT8) return;
     zoom_popup_open();
 }
 
@@ -881,12 +889,12 @@ void ui_set_zoom(float zoom, int pan_bins)
     // Update zoom label
     if (s_zoom_label) {
         if (zoom <= 1.01f) {
-            lv_obj_set_style_text_color(s_zoom_label, lv_color_hex(0x606060), 0);
+            lv_obj_set_style_text_color(s_zoom_label, lv_color_hex(0xB060E0), 0);
             lv_label_set_text(s_zoom_label, "Zoom: x1.0");
         } else {
             char b[24];
             snprintf(b, sizeof(b), "Zoom: x%.1f", (double)zoom);
-            lv_obj_set_style_text_color(s_zoom_label, lv_color_hex(0xFFD700), 0);
+            lv_obj_set_style_text_color(s_zoom_label, lv_color_hex(0xB060E0), 0);
             lv_label_set_text(s_zoom_label, b);
         }
     }
@@ -937,6 +945,7 @@ static lv_obj_t *s_waterfall_obj = NULL;
 static lv_obj_t *s_label_bar = NULL;
 static lv_obj_t *s_status_label = NULL;  // legacy: single label, kept for compatibility (unused after Phase 5.13)
 static lv_obj_t *s_bot_left   = NULL;
+static lv_obj_t *s_bot_batt_icon = NULL;  /* battery glyph, colored by charge level */
 static lv_obj_t *s_bot_center_suffix = NULL;
 static ui_clock_t s_bot_clock;
 static bool       s_bot_clock_valid = false;
@@ -1168,10 +1177,10 @@ static void build_top_bar(lv_obj_t *parent)
     lv_obj_set_style_text_font(blbl, &lv_font_montserrat_24, 0);
     lv_obj_center(blbl);
 
-    // Zoom indicator: dim grey at x1.0, amber when zoomed in.
+    // Zoom indicator: amber always.
     s_zoom_label = lv_label_create(bar);
     lv_label_set_text(s_zoom_label, "Zoom: x1.0");
-    lv_obj_set_style_text_color(s_zoom_label, lv_color_hex(0x606060), 0);
+    lv_obj_set_style_text_color(s_zoom_label, lv_color_hex(0xB060E0), 0);
     lv_obj_set_style_text_font(s_zoom_label, &lv_font_montserrat_24, 0);
     lv_obj_align(s_zoom_label, LV_ALIGN_RIGHT_MID, -70, 0);
     lv_obj_add_flag(s_zoom_label, LV_OBJ_FLAG_CLICKABLE);
@@ -1381,11 +1390,19 @@ static void build_bottom_bar(lv_obj_t *parent)
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
     // 3-zone bottom bar: battery (left), UTC clock (center), WiFi (right).
+    // Battery icon is its own label so it can be colored by charge level
+    // independently of the percentage/voltage text.
+    s_bot_batt_icon = lv_label_create(bar);
+    lv_label_set_text(s_bot_batt_icon, "");
+    lv_obj_set_style_text_color(s_bot_batt_icon, lv_color_hex(0xC0C0C0), 0);
+    lv_obj_set_style_text_font(s_bot_batt_icon, &lv_font_montserrat_24, 0);
+    lv_obj_align(s_bot_batt_icon, LV_ALIGN_LEFT_MID, 8, 0);
+
     s_bot_left = lv_label_create(bar);
     lv_label_set_text(s_bot_left, "");
     lv_obj_set_style_text_color(s_bot_left, lv_color_hex(0xC0C0C0), 0);
     lv_obj_set_style_text_font(s_bot_left, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_bot_left, LV_ALIGN_LEFT_MID, 8, 0);
+    lv_obj_align(s_bot_left, LV_ALIGN_LEFT_MID, 44, 0);
 
     // UTC clock, centered in the bottom bar. Built from fixed-width
     // per-character cells (ui_clock) so digit-width changes in the
@@ -1645,10 +1662,12 @@ void ui_update_frequency(uint32_t freq_hz)
     uint32_t khz = (freq_hz / 1000) % 1000;
     uint32_t hz  = freq_hz % 1000;
     snprintf(buf, sizeof(buf), "Freq: %lu.%03lu.%03lu Hz", mhz, khz, hz);
-    if (display_lock(20)) {
+    if (display_lock(100)) {
         lv_label_set_text(s_freq_label, buf);
         if (s_bot_mem) lv_label_set_text(s_bot_mem, "");  /* clear memory label on any freq change */
         display_unlock();
+    } else {
+        ESP_LOGW("ui", "ui_update_frequency: freq label lock timeout");
     }
     // Phase 5.10: derive band and push to UI
     const char *band = band_from_freq(freq_hz);
@@ -2093,6 +2112,17 @@ void ui_set_bottom_left(const char *text)
 {
     if (!s_bot_left) return;
     if (display_lock(20)) {
+        lv_label_set_text(s_bot_left, text ? text : "");
+        display_unlock();
+    }
+}
+
+void ui_set_bottom_battery(const char *icon, uint32_t icon_color_hex, const char *text)
+{
+    if (!s_bot_batt_icon || !s_bot_left) return;
+    if (display_lock(20)) {
+        lv_label_set_text(s_bot_batt_icon, icon ? icon : "");
+        lv_obj_set_style_text_color(s_bot_batt_icon, lv_color_hex(icon_color_hex), 0);
         lv_label_set_text(s_bot_left, text ? text : "");
         display_unlock();
     }

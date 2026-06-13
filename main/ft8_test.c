@@ -1,4 +1,4 @@
-// ft8_test.c — Continuous FT8 slot loop with ping-pong decode.
+// ft8_test.c - Continuous FT8 slot loop with ping-pong decode.
 //
 // Two tasks cooperate so every 15-second FT8 slot is decoded:
 //
@@ -20,7 +20,7 @@
 // TX slots: ft8_task runs ft8_tx_run() instead of capturing; no job is
 // queued for that slot (the radio is transmitting, not receiving).
 //
-// Every other slot is captured — including the parity opposite an armed TX.
+// Every other slot is captured - including the parity opposite an armed TX.
 // A capture is exactly one slot long (15 s) and ends on the next boundary, so
 // the armed burst still fires on time, and capturing the opposite slot is the
 // only way to hear the station we're working (they transmit opposite us).
@@ -66,7 +66,7 @@ static const char *TAG = "ft8_test";
 #define CAT_STATUS_UPDATE_MS  5000
 #define DECODE_QUEUE_DEPTH    2           // one in-flight + one ready, never backs up
 
-#define EPOCH_SANE_MIN        1700000000  // 2023-11-14 — SNTP not synced if below this
+#define EPOCH_SANE_MIN        1700000000  // 2023-11-14 - SNTP not synced if below this
 
 // ---------------------------------------------------------------------------
 // Ping-pong decode queue
@@ -105,7 +105,7 @@ static bool wait_for_sntp(uint32_t timeout_ms)
 
 // No-WiFi (POTA) fallback: derive UTC from the QMX's onboard RTC
 // (time-of-day only, "TM;") combined with the last date SNTP gave us
-// (persisted to NVS). A stale date is harmless for FT8 slot alignment —
+// (persisted to NVS). A stale date is harmless for FT8 slot alignment -
 // 86400 s/day is an exact multiple of 15, so unix_sec % 15 is unaffected
 // by a date that's off by whole days.
 static bool set_time_from_qmx_rtc(void)
@@ -127,7 +127,7 @@ static bool set_time_from_qmx_rtc(void)
     return true;
 }
 
-// Blocks until the QMX CAT handshake completes. There is no timeout —
+// Blocks until the QMX CAT handshake completes. There is no timeout -
 // the QMX may be powered on well after the Tab5 (e.g. persistent FT8
 // mode restored at boot before the radio is switched on), so we just
 // keep waiting and periodically update the status line so the user
@@ -139,7 +139,7 @@ static void wait_for_cat_ready(void)
     while (!cat_is_ready()) {
         int64_t now = esp_timer_get_time();
         if ((now - last_update) / 1000 >= CAT_STATUS_UPDATE_MS) {
-            ft8_status_set("Waiting for QMX — check USB/power");
+            ft8_status_set("Waiting for QMX - check USB/power");
             last_update = now;
         }
         vTaskDelay(pdMS_TO_TICKS(200));
@@ -148,7 +148,7 @@ static void wait_for_cat_ready(void)
 }
 
 // Block until the next 15 s slot boundary strictly after after_sec.
-// Returns that slot's UTC second. No fixed arrival window — we return
+// Returns that slot's UTC second. No fixed arrival window - we return
 // the current slot if it's newer than after_sec, which handles the
 // case where the previous capture ran a little long and we land
 // 100+ ms into the new slot.
@@ -171,12 +171,12 @@ static int64_t wait_for_slot_boundary(int64_t after_sec)
 
 // WSJT-X reports SNR referenced to a 2500 Hz noise bandwidth.
 #define FT8_SNR_REF_BW_HZ      2500.0f
-// Empirical fudge factor — nudge this if a real WSJT-X comparison ever
+// Empirical fudge factor - nudge this if a real WSJT-X comparison ever
 // becomes available; everything else here is derived from first principles.
 #define FT8_SNR_CAL_OFFSET_DB  15.0f
 
 // Estimate a message's SNR (dB, 2500 Hz reference bandwidth) directly from
-// the decoder's own FFT magnitude data — no external reference needed.
+// the decoder's own FFT magnitude data - no external reference needed.
 //
 // Noise floor = mean power across the whole slot's waterfall (signals occupy
 // a small fraction of bins, so this tracks the noise floor closely).
@@ -226,7 +226,7 @@ static float ft8_estimate_snr_db(const monitor_t *mon, const ftx_candidate_t *ca
 }
 
 // ---------------------------------------------------------------------------
-// Decode pipeline — called only from ft8_decode_task
+// Decode pipeline - called only from ft8_decode_task
 // ---------------------------------------------------------------------------
 
 static void decode_slot(float *audio, monitor_t *mon,
@@ -344,13 +344,13 @@ static void ft8_task(void *arg)
             ft8_status_set("Time from QMX RTC (no WiFi)");
         } else {
             ESP_LOGE(TAG, "No time source available (no SNTP, no QMX RTC) - check WiFi");
-            ft8_status_set("No time source — check WiFi");
+            ft8_status_set("No time source - check WiFi");
             vTaskDelete(NULL);
             return;
         }
     }
 
-    // Two ping-pong audio buffers — one captures while the other decodes.
+    // Two ping-pong audio buffers - one captures while the other decodes.
     float *audio[2] = {
         heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM),
         heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM),
@@ -411,13 +411,13 @@ static void ft8_task(void *arg)
             ft8_status_set("TX: %s", txreq.display_text);
             ft8_tx_run(&txreq);   // blocks ~12.7 s; always restores RX before returning
             ft8_qso_on_tx_complete();  // re-arm the current outgoing message
-            ft8_status_set("TX done — waiting for next slot");
+            ft8_status_set("TX done - waiting for next slot");
             ft8_screen_view_request_refresh();
         } else {
             // RX this slot. We capture every non-TX slot, including the
             // parity opposite an armed TX: with ping-pong decode a capture is
             // exactly one slot long (15 s) and ends right on the next
-            // boundary, so the armed burst still fires on time — and capturing
+            // boundary, so the armed burst still fires on time - and capturing
             // the opposite slot is the only way to hear the station we're
             // working (they transmit on the slot opposite ours). Skipping it
             // would make CQ-replies and QSO responses invisible.
@@ -447,7 +447,7 @@ static void ft8_task(void *arg)
                 decode_job_t job = { buf, slot_sec, slot_idx, cap_ms, start_off_ms };
                 if (xQueueSend(s_decode_queue, &job, 0) != pdTRUE) {
                     // Should never happen: decode takes ~4 s, capture takes 15 s
-                    ESP_LOGW(TAG, "slot %d: decode queue full — slot dropped", slot_idx);
+                    ESP_LOGW(TAG, "slot %d: decode queue full - slot dropped", slot_idx);
                 }
             } else {
                 ft8_status_set("RX: capture error");
