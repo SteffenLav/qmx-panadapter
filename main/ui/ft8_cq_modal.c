@@ -6,6 +6,7 @@
 // keyboard), with a single-select radio column and three fields.
 
 #include "ft8_cq_modal.h"
+#include "ui_theme.h"
 #include "ft8_screen_view.h"
 #include "settings.h"
 #include "lvgl.h"
@@ -79,8 +80,13 @@ static void ta_focused_cb(lv_event_t *e)
     lv_obj_t *ta = lv_event_get_target(e);
     if (!s_keyboard) return;
     // Editing a field implies you want to use it: select its radio too.
+    // Also only one field shows the blinking cursor at a time.
     for (int i = 0; i < N_CQ; i++) {
-        if (s_ta[i] == ta) { s_sel = i; apply_radio_state(); break; }
+        if (s_ta[i] == ta) {
+            s_sel = i; apply_radio_state();
+        } else {
+            lv_obj_remove_state(s_ta[i], LV_STATE_FOCUSED);
+        }
     }
     lv_keyboard_set_textarea(s_keyboard, ta);
     lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
@@ -202,6 +208,7 @@ static void modal_build(void)
         lv_textarea_set_max_length(s_ta[i], 22);
         lv_textarea_set_placeholder_text(s_ta[i], "e.g. CQ DX OZ1LAV JO65FR");
         lv_obj_set_style_text_font(s_ta[i], &lv_font_montserrat_24, 0);
+        ui_theme_style_textarea(s_ta[i]);
         lv_obj_add_event_cb(s_ta[i], ta_focused_cb, LV_EVENT_FOCUSED, NULL);
 
         s_radio[i] = lv_checkbox_create(panel);
@@ -231,7 +238,7 @@ static void modal_build(void)
     lv_obj_t *add_btn = lv_btn_create(panel);
     lv_obj_set_size(add_btn, 380, 64);
     lv_obj_align(add_btn, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(add_btn, lv_color_hex(0x33445a), 0);
+    lv_obj_set_style_bg_color(add_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
     lv_obj_set_style_radius(add_btn, 8, 0);
     lv_obj_add_event_cb(add_btn, add_suffix_cb, LV_EVENT_CLICKED, NULL);
     s_add_lbl = lv_label_create(add_btn);
@@ -257,7 +264,7 @@ static void modal_build(void)
     static bool kb_btn_style_inited = false;
     if (!kb_btn_style_inited) {
         lv_style_init(&style_kb_btn);
-        lv_style_set_bg_color(&style_kb_btn, lv_color_hex(0x303030));
+        lv_style_set_bg_color(&style_kb_btn, lv_color_hex(UI_COLOR_KEY_BG));
         lv_style_set_bg_opa(&style_kb_btn, LV_OPA_COVER);
         lv_style_set_text_color(&style_kb_btn, lv_color_white());
         lv_style_set_border_width(&style_kb_btn, 1);
@@ -265,10 +272,12 @@ static void modal_build(void)
         kb_btn_style_inited = true;
     }
     lv_obj_add_style(s_keyboard, &style_kb_btn, LV_PART_ITEMS);
+    ui_theme_style_keyboard(s_keyboard);
     lv_obj_set_size(s_keyboard, LV_PCT(100), 280);
     lv_obj_align(s_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_keyboard_set_mode(s_keyboard, LV_KEYBOARD_MODE_TEXT_UPPER);
-    lv_obj_set_style_text_font(s_keyboard, &lv_font_montserrat_24, 0);
+    ui_theme_keyboard_attach_caps_cycle(s_keyboard);
+    lv_obj_set_style_text_font(s_keyboard, &lv_font_montserrat_28, 0);
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_keyboard, keyboard_event_cb, LV_EVENT_READY,  NULL);
     lv_obj_add_event_cb(s_keyboard, keyboard_event_cb, LV_EVENT_CANCEL, NULL);
@@ -311,6 +320,7 @@ void ft8_cq_modal_show(void)
         }
     }
     apply_radio_state();
+    ui_theme_focus_textarea(s_ta[0]);
 
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);

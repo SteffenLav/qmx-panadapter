@@ -7,6 +7,7 @@
 // future refactor (memory channels v2 also wants it).
 
 #include "identity_config.h"
+#include "ui_theme.h"
 #include "settings.h"
 #include "esp_log.h"
 #include <string.h>
@@ -62,6 +63,11 @@ static void ta_focused_cb(lv_event_t *e)
 {
     lv_obj_t *ta = lv_event_get_target(e);
     if (!s_keyboard) return;
+
+    // Only one field shows the blinking cursor at a time.
+    lv_obj_t *other = (ta == s_ta_call) ? s_ta_grid : s_ta_call;
+    lv_obj_remove_state(other, LV_STATE_FOCUSED);
+
     lv_keyboard_set_textarea(s_keyboard, ta);
     lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_keyboard);
@@ -111,7 +117,7 @@ static void modal_build(void)
 
     lv_obj_t *call_lbl = lv_label_create(s_panel);
     lv_label_set_text(call_lbl, "Callsign");
-    lv_obj_set_style_text_color(call_lbl, lv_color_hex(0xe0e0e0), 0);
+    lv_obj_set_style_text_color(call_lbl, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(call_lbl, &lv_font_montserrat_24, 0);
     lv_obj_align(call_lbl, LV_ALIGN_TOP_LEFT, 0, 56);
 
@@ -122,11 +128,12 @@ static void modal_build(void)
     lv_textarea_set_max_length(s_ta_call, 15);
     lv_textarea_set_placeholder_text(s_ta_call, "e.g. OZ1LAV");
     lv_obj_set_style_text_font(s_ta_call, &lv_font_montserrat_24, 0);
+    ui_theme_style_textarea(s_ta_call);
     lv_obj_add_event_cb(s_ta_call, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
 
     lv_obj_t *grid_lbl = lv_label_create(s_panel);
     lv_label_set_text(grid_lbl, "Maidenhead grid (4 or 6 chars)");
-    lv_obj_set_style_text_color(grid_lbl, lv_color_hex(0xe0e0e0), 0);
+    lv_obj_set_style_text_color(grid_lbl, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(grid_lbl, &lv_font_montserrat_24, 0);
     lv_obj_align(grid_lbl, LV_ALIGN_TOP_LEFT, 0, 160);
 
@@ -137,6 +144,7 @@ static void modal_build(void)
     lv_textarea_set_max_length(s_ta_grid, 6);
     lv_textarea_set_placeholder_text(s_ta_grid, "e.g. JO45 or JO45ab");
     lv_obj_set_style_text_font(s_ta_grid, &lv_font_montserrat_24, 0);
+    ui_theme_style_textarea(s_ta_grid);
     lv_obj_add_event_cb(s_ta_grid, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
 
     lv_obj_t *cancel_btn = lv_btn_create(s_panel);
@@ -172,7 +180,7 @@ static void modal_build(void)
     static bool kb_btn_style_inited = false;
     if (!kb_btn_style_inited) {
         lv_style_init(&style_kb_btn);
-        lv_style_set_bg_color(&style_kb_btn, lv_color_hex(0x303030));
+        lv_style_set_bg_color(&style_kb_btn, lv_color_hex(UI_COLOR_KEY_BG));
         lv_style_set_bg_opa(&style_kb_btn, LV_OPA_COVER);
         lv_style_set_text_color(&style_kb_btn, lv_color_white());
         lv_style_set_border_width(&style_kb_btn, 1);
@@ -180,11 +188,13 @@ static void modal_build(void)
         kb_btn_style_inited = true;
     }
     lv_obj_add_style(s_keyboard, &style_kb_btn, LV_PART_ITEMS);
+    ui_theme_style_keyboard(s_keyboard);
     lv_obj_set_size(s_keyboard, LV_PCT(100), 280);
     lv_obj_align(s_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     // UPPER mode by default - callsigns and grids are uppercase.
     lv_keyboard_set_mode(s_keyboard, LV_KEYBOARD_MODE_TEXT_UPPER);
-    lv_obj_set_style_text_font(s_keyboard, &lv_font_montserrat_24, 0);
+    ui_theme_keyboard_attach_caps_cycle(s_keyboard);
+    lv_obj_set_style_text_font(s_keyboard, &lv_font_montserrat_28, 0);
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_keyboard, keyboard_event_cb, LV_EVENT_READY,  NULL);
     lv_obj_add_event_cb(s_keyboard, keyboard_event_cb, LV_EVENT_CANCEL, NULL);
@@ -206,6 +216,7 @@ void identity_config_modal_show(void)
     settings_load_all(&s);
     lv_textarea_set_text(s_ta_call, s.my_callsign);
     lv_textarea_set_text(s_ta_grid, s.my_grid);
+    ui_theme_focus_textarea(s_ta_call);
 
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);

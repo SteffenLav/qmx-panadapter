@@ -21,7 +21,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 > **You are solely responsible for operating legally** — correct licence class, operating
 > within your licence privileges, band plan compliance, no harmful interference.
 >
-> **What is NOT yet in place in v0.15.11:**
+> **What is NOT yet in place in v0.15.12:**
 > - No duty-cycle protection — back-to-back TX slots are not prevented by the firmware
 > - No ADIF logging — completed QSOs are not recorded anywhere
 > - No audio loopback verification — the firmware cannot confirm the transmitted waveform
@@ -185,7 +185,7 @@ The original mockup that drove the design ([panadapter-mockup-ideal.svg](docs/pa
 
 ## Status
 
-Working. All phases through 8 complete. Current release: **v0.15.11**. Includes: cold-boot reliability fix, on-device diagnostic logging (web + serial) with QMX firmware readout, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings (including last-used UI mode and display brightness), Hamlib rigctld bridge, onboard FT8 RX decoder with a 40-row live-view decode list and FFT-based SNR estimation, memory channels with a frequency/mode picker, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser) including a tap-to-enter frequency keypad, browser click-to-tune, zoom sync, band memory, QMX RTC time sync for no-WiFi (POTA) FT8 timing, **manual FT8 TX** (reply + CQ via CAT `TA;`), and a **full auto QSO engine** — search-and-pounce plus **CQ-run** (auto-answers callers, runs the exchange to completion with patient retry, then resumes CQ). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
+Working. All phases through 8 complete. Current release: **v0.15.12**. Includes: cold-boot reliability fix, on-device diagnostic logging (web + serial) with QMX firmware readout, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings (including last-used UI mode and display brightness), Hamlib rigctld bridge, onboard FT8 RX decoder with a 40-row live-view decode list and FFT-based SNR estimation, memory channels with a frequency/mode picker, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser) including a tap-to-enter frequency keypad, browser click-to-tune, zoom sync, band memory, QMX RTC time sync for no-WiFi (POTA) FT8 timing, **manual FT8 TX** (reply + CQ via CAT `TA;`), and a **full auto QSO engine** — search-and-pounce plus **CQ-run** (auto-answers callers, runs the exchange to completion with patient retry, then resumes CQ). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
 
 | Phase | What | Status |
 |-------|------|--------|
@@ -959,6 +959,16 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 - **On-device diagnostic logging.** A **Diagnostic log** switch on the top row of the settings drawer (kept visible in FT8 mode too) captures all firmware log output — plus per-line CAT request/response traffic — into a 512 KB in-RAM ring, with a self-identifying header (Tab5 + QMX firmware versions, MAC/serial, chip rev, reset reason, uptime, heap, callsign/grid, WiFi + QMX connection state). Download it over WiFi at `http://<tab5-ip>/api/log` (or the "Diag log ↓" link in the web UI), or capture it over USB serial with `tools/capture_serial_log.ps1` (no WiFi needed). The CAT poll logging is de-duplicated (identical FA/MD/FW responses dropped, a heartbeat every 10 s) so the ring holds a whole session instead of ~70 s. See the [Quick start](#quick-start--get-it-working-in-5-minutes).
 - **QMX firmware version readout.** The Tab5 now queries the QMX firmware version via the `VN;` CAT command at link-up (e.g. `1_03_002QMX`) and surfaces it in the boot log, the diagnostic log header, and the web `/api/status` JSON (`qmx_fw`). (`ID;` only returns the emulated Kenwood model.)
 - **README Quick start.** A new top-of-file Quick start: cable/data-cable gotchas, one-finger edge-swipe navigation and top-bar taps, required settings, what works without the QMX connected, and how to send a diagnostic log.
+
+### Shipped in v0.15.12
+
+- **Sticky Panadapter/FT8 settings.** Switching to FT8 mode now remembers the Panadapter's band/mode/bandwidth/frequency/zoom and restores FT8's own last-used settings (or forces DiGi on first entry); switching back to Panadapter restores exactly what was left there. Frequency, mode, and filter-width writes are staged through `cat_set_frequency()`/`cat_set_mode()`/`cat_request_ssb_bandwidth()` on a short timer so the QMX has time to settle between writes.
+- **FT8 "Preset: xx.xxx MHz" swipe-down.** Swiping down from the top edge anywhere over the FT8 frequency preset label now opens the frequency dropdown, matching the Panadapter top-bar gesture. (The touch target is a screen-level overlay shown/hidden with the FT8 view, sized to win against the Band/Mode top-bar hit zones that previously claimed top-edge touches.)
+- **UI colour theme consolidation** (`ui/ui_theme.h`). Collapsed the "9 blues" of near-duplicate accent colours into a shared `UI_COLOR_PRIMARY`/`UI_COLOR_PRIMARY_BORDER` token, applied across the CQ preset editor, identity (callsign/grid) modal, memory channel modal, FT8 TX confirmation modal, and WiFi credentials modal. Shared helpers also standardise textarea/keyboard styling and add a blinking line-cursor on the focused field (only one field at a time).
+- **iPad-style keyboard shift cycle.** On-screen keyboards (CQ presets, identity, memory labels, WiFi password) now cycle abc → Abc → ABC on the shift key, shown via the shift key's own label, and use a larger montserrat_28 font for better readability.
+- **WiFi password show/hide.** The WiFi credentials modal gained an eye-icon button to toggle the password field between masked and plain text.
+- **Memory channel grid readability.** Memory modal cells are taller (64px) with larger labels (montserrat_22/20) for easier reading and tapping.
+- **Operator signature watermark.** A faint, vertical "Stef OZ1LAV" reads bottom-to-top near the bottom-right corner of the screen on every screen, drawn last (on top of the waterfall/bottom bar so it's actually visible) and non-clickable so it never intercepts the edge-swipe gestures beneath it.
 
 ### Next up
 

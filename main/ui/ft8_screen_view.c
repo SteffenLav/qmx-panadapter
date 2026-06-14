@@ -1,4 +1,5 @@
 #include "ft8_screen_view.h"
+#include "ui_theme.h"
 #include "ft8_screen.h"
 #include "ft8_cq_modal.h"
 #include "ui_clock.h"
@@ -219,9 +220,9 @@ static void styles_init(void)
     lv_style_set_x         (&s_style_col_slot, COL_SLOT_X);
     lv_style_set_y         (&s_style_col_slot, 6);
 
-    INIT_COL(s_style_col_call,    COL_CALL_X,    COL_CALL_W,    LV_TEXT_ALIGN_LEFT,  &lv_font_montserrat_24, 0xFFD700);
+    INIT_COL(s_style_col_call,    COL_CALL_X,    COL_CALL_W,    LV_TEXT_ALIGN_LEFT,  &lv_font_montserrat_24, UI_COLOR_ACCENT_GOLD);
     INIT_COL(s_style_col_msg,     COL_TEXT_X,    COL_MSG_W,     LV_TEXT_ALIGN_LEFT,  &lv_font_montserrat_24, 0xFFFFFF);
-    INIT_COL(s_style_col_country, COL_COUNTRY_X, COL_COUNTRY_W, LV_TEXT_ALIGN_LEFT,  &lv_font_montserrat_24, 0xC0C0C0);
+    INIT_COL(s_style_col_country, COL_COUNTRY_X, COL_COUNTRY_W, LV_TEXT_ALIGN_LEFT,  &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     // SNR base: no colour (per-row), font/pos/align/width are shared.
     lv_style_init(&s_style_col_snr);
     lv_style_set_text_font (&s_style_col_snr, &lv_font_montserrat_24);
@@ -230,9 +231,9 @@ static void styles_init(void)
     lv_style_set_x         (&s_style_col_snr, COL_SNR_X);
     lv_style_set_y         (&s_style_col_snr, 6);
 
-    INIT_COL(s_style_col_km,      COL_KM_X,      COL_KM_W,      LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, 0xC0C0C0);
-    INIT_COL(s_style_col_brg,     COL_BRG_X,     COL_BRG_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, 0xC0C0C0);
-    INIT_COL(s_style_col_heard,   COL_HEARD_X,   COL_HEARD_W,   LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, 0xC0C0C0);
+    INIT_COL(s_style_col_km,      COL_KM_X,      COL_KM_W,      LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
+    INIT_COL(s_style_col_brg,     COL_BRG_X,     COL_BRG_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
+    INIT_COL(s_style_col_heard,   COL_HEARD_X,   COL_HEARD_W,   LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     #undef INIT_COL
 
     // Column header bar.
@@ -246,7 +247,7 @@ static void styles_init(void)
     // Header label: smaller font, dim grey, top padding.
     lv_style_init(&s_style_header_label);
     lv_style_set_text_font (&s_style_header_label, &lv_font_montserrat_18);
-    lv_style_set_text_color(&s_style_header_label, lv_color_hex(0x808080));
+    lv_style_set_text_color(&s_style_header_label, lv_color_hex(UI_COLOR_TEXT_MUTED));
     lv_style_set_y         (&s_style_header_label, 5);
 }
 
@@ -284,7 +285,7 @@ static lv_color_t snr_color(int snr)
     if (snr >=  0)  return lv_color_hex(0x80FF80);
     if (snr >= -5)  return lv_color_hex(0xFFFFFF);
     if (snr >= -15) return lv_color_hex(0xFFA040);
-    return lv_color_hex(0x707070);
+    return lv_color_hex(UI_COLOR_TEXT_MUTED);
 }
 
 // Create one label, attach a shared style. No local styles needed.
@@ -314,7 +315,7 @@ static void row_set_hover(int new_idx)
     if (new_idx >= 0 && new_idx < MAX_ROWS
         && s_rows[new_idx].row
         && !lv_obj_has_flag(s_rows[new_idx].row, LV_OBJ_FLAG_HIDDEN)) {
-        lv_obj_set_style_bg_color(s_rows[new_idx].row, lv_color_hex(0x1050A0), 0);
+        lv_obj_set_style_bg_color(s_rows[new_idx].row, lv_color_hex(UI_COLOR_PRIMARY), 0);
         lv_obj_set_style_bg_opa(s_rows[new_idx].row, LV_OPA_70, 0);
     } else {
         s_row_hover = -1; // can't highlight a hidden / out-of-range row
@@ -555,7 +556,7 @@ static void update_row(int i, const ft8_call_t *src)
             r->prev_slot_parity = parity;
             lv_label_set_text(r->l_slot, parity ? "E" : "O");
             lv_obj_set_style_text_color(r->l_slot,
-                parity ? lv_color_hex(0x40A0E0)   /* steel blue = EVEN */
+                parity ? lv_color_hex(UI_COLOR_PRIMARY_BORDER)   /* steel blue = EVEN */
                        : lv_color_hex(0xE09040),  /* warm orange = ODD */
                 0);
         }
@@ -667,7 +668,7 @@ static void t_slotbar_cb(lv_timer_t *t)
         col = lv_palette_main(LV_PALETTE_RED);
     } else {
         bool is_even = (((int64_t)tv.tv_sec / 15) % 2) == 0;
-        col = is_even ? lv_color_hex(0x40A0E0) : lv_color_hex(0xE09040);
+        col = is_even ? lv_color_hex(UI_COLOR_PRIMARY_BORDER) : lv_color_hex(0xE09040);
     }
     lv_obj_set_style_bg_color(s_bar_slot, col, LV_PART_INDICATOR);
 }
@@ -691,7 +692,7 @@ static void t_clock_cb(lv_timer_t *t)
         lv_label_set_text(s_lbl_count, b);
         // Steel blue for EVEN, warm orange for ODD - neither conflicts with the
         // TX-armed amber (0xFFA040) or any other colour already in this view.
-        lv_color_t slot_color = is_even ? lv_color_hex(0x40A0E0) : lv_color_hex(0xE09040);
+        lv_color_t slot_color = is_even ? lv_color_hex(UI_COLOR_PRIMARY_BORDER) : lv_color_hex(0xE09040);
         lv_obj_set_style_text_color(s_lbl_count, slot_color, 0);
         // The bar's value AND colour are owned by t_slotbar_cb (fast tick) so
         // it glides smoothly and can show TX-red without this 1 Hz tick fighting it.
@@ -750,7 +751,7 @@ static void t_clock_cb(lv_timer_t *t)
             char status[96];
             ft8_status_get(status, sizeof(status));
             lv_label_set_text(s_lbl_tx, status[0] ? status : "Idle");
-            lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0x909090), 0);
+            lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
         }
         lv_obj_clear_flag(s_lbl_tx, LV_OBJ_FLAG_HIDDEN);
     }
@@ -767,7 +768,7 @@ static void update_parity_btns(void)
 {
     if (!s_btn_tx_even || !s_btn_tx_odd) return;
     lv_obj_set_style_bg_color(s_btn_tx_even,
-        s_cq_parity == 0 ? lv_color_hex(0x40A0E0)   // steel blue = EVEN
+        s_cq_parity == 0 ? lv_color_hex(UI_COLOR_PRIMARY_BORDER)   // steel blue = EVEN
                          : lv_color_hex(0x303044), 0);
     lv_obj_set_style_bg_color(s_btn_tx_odd,
         s_cq_parity == 1 ? lv_color_hex(0xE09040)   // warm orange = ODD
@@ -948,8 +949,8 @@ static void ft8_freq_popup_open(void)
     lv_obj_t *panel = lv_obj_create(ov);
     lv_obj_set_size(panel, panel_w, panel_h);
     lv_obj_set_pos(panel, panel_x, panel_y);
-    lv_obj_set_style_bg_color(panel, lv_color_hex(0x1A1A1A), 0);
-    lv_obj_set_style_border_color(panel, lv_color_hex(0x444444), 0);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(UI_COLOR_SURFACE), 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_set_style_border_width(panel, 1, 0);
     lv_obj_set_style_pad_all(panel, 0, 0);
     lv_obj_set_style_radius(panel, 6, 0);
@@ -985,7 +986,7 @@ static void ft8_freq_popup_open(void)
         lv_obj_set_style_min_height(btn, 0, 0);
         lv_obj_set_style_min_width(btn, 0, 0);
         lv_obj_set_style_max_height(btn, btn_h, 0);
-        lv_obj_set_style_bg_color(btn, active ? lv_color_hex(0x2A2A00) : lv_color_hex(0x1A1A1A), 0);
+        lv_obj_set_style_bg_color(btn, active ? lv_color_hex(0x2A2A00) : lv_color_hex(UI_COLOR_SURFACE), 0);
         lv_obj_set_style_border_width(btn, 0, 0);
         lv_obj_set_style_radius(btn, 0, 0);
         lv_obj_set_style_pad_all(btn, 0, 0);
@@ -1002,7 +1003,7 @@ static void ft8_freq_popup_open(void)
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, bstr);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
-        lv_obj_set_style_text_color(lbl, active ? lv_color_hex(0xFFD700) : lv_color_hex(0xC0C0C0), 0);
+        lv_obj_set_style_text_color(lbl, active ? lv_color_hex(UI_COLOR_ACCENT_GOLD) : lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
         lv_obj_center(lbl);
     }
 }
@@ -1040,7 +1041,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
 
     s_lbl_mode = lv_label_create(s_left_pane);
     lv_label_set_text(s_lbl_mode, "MODE: FT8");
-    lv_obj_set_style_text_color(s_lbl_mode, lv_color_hex(0xFFD700), 0);
+    lv_obj_set_style_text_color(s_lbl_mode, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
     lv_obj_set_style_text_font(s_lbl_mode, &lv_font_montserrat_48, 0);
     lv_obj_set_pos(s_lbl_mode, 0, 0);
 
@@ -1057,14 +1058,28 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // ext_click_area only pads uniformly and the label's own width is just
     // the text's natural width.
     {
-        lv_obj_t *hit = lv_obj_create(s_left_pane);
-        lv_obj_set_size(hit, 288, 90);
-        lv_obj_set_pos(hit, 0, 80);
+        // Created on `parent` (the screen), not s_left_pane, and reaching up
+        // to screen y=0: ui.c's top-bar hit zones (Band/Mode/etc, 200px tall
+        // at y=0) are also screen-level siblings and sit on top, so a touch
+        // starting at the true top edge of the screen - e.g. "swipe down
+        // from the top edge over Preset" - landed on the Band/Mode zones
+        // instead of ever reaching a hit area confined to the label's own
+        // y=80..170. Covering y=0..(MID_Y+170) here and re-foregrounding in
+        // ft8_screen_view_show() lets this hit area win against those zones.
+        lv_obj_t *hit = lv_obj_create(parent);
+        lv_obj_set_size(hit, 345, MID_Y + 170);
+        lv_obj_set_pos(hit, 0, 0);
         lv_obj_set_style_bg_opa(hit, LV_OPA_TRANSP, 0);
         lv_obj_set_style_border_width(hit, 0, 0);
         lv_obj_clear_flag(hit, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(hit, ft8_freq_label_clicked_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_flag(hit, LV_OBJ_FLAG_HIDDEN);  // shown only while FT8 is active
+        // PRESSED (not CLICKED) so a swipe/drag starting on this button
+        // still opens the dropdown - a swipe-down gesture starting here
+        // would otherwise be claimed as a drag/scroll and never fire
+        // CLICKED, leaving the touch area "owned" by the button but
+        // doing nothing.
+        lv_obj_add_event_cb(hit, ft8_freq_label_clicked_cb, LV_EVENT_PRESSED, NULL);
         s_ft8_freq_hit = hit;
     }
 
@@ -1081,7 +1096,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
 
     s_lbl_count = lv_label_create(s_left_pane);
     lv_label_set_text(s_lbl_count, "Slot: -- s");
-    lv_obj_set_style_text_color(s_lbl_count, lv_color_hex(0xC0C0C0), 0);
+    lv_obj_set_style_text_color(s_lbl_count, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(s_lbl_count, &lv_font_montserrat_24, 0);
     lv_obj_set_pos(s_lbl_count, 0, 240);
 
@@ -1133,7 +1148,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
 
     s_lbl_heard = lv_label_create(s_left_pane);
     lv_label_set_text(s_lbl_heard, "Active: 0");
-    lv_obj_set_style_text_color(s_lbl_heard, lv_color_hex(0xC0C0C0), 0);
+    lv_obj_set_style_text_color(s_lbl_heard, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(s_lbl_heard, &lv_font_montserrat_24, 0);
     lv_obj_set_pos(s_lbl_heard, 0, 304);
 
@@ -1175,7 +1190,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     s_lbl_tx = lv_label_create(s_left_pane);
     lv_label_set_text(s_lbl_tx, "");
     lv_obj_set_style_text_font(s_lbl_tx, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0x909090), 0);
+    lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_label_set_long_mode(s_lbl_tx, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_lbl_tx, 288);
     lv_obj_set_pos(s_lbl_tx, 0, 482);
@@ -1259,6 +1274,23 @@ void ft8_screen_view_show(void)
     lv_obj_clear_flag(s_container, LV_OBJ_FLAG_HIDDEN);
     s_refresh_pending = true;
 
+    // ui.c creates transparent top-bar hit zones (Band/Mode/BW/Freq/Zoom,
+    // each 200px tall at y=0) directly on the screen layer, as a sibling of
+    // s_ft8_freq_hit (now also created on the screen, see
+    // ft8_screen_view_init). Re-foreground it here so a touch starting at
+    // the true top edge of the screen over "Preset: xx.xxx MHz" - previously
+    // claimed by the Band/Mode hit zones - reaches the FT8 dropdown instead.
+    // NOTE: do NOT foreground s_container itself - it's a near-full-screen
+    // opaque pane (1280x644 at y=60) and would cover the left/right
+    // edge-swipe grip handles (both vertically centered at y=360, i.e.
+    // inside that span), which sit on scr as siblings created during
+    // ui_init. This was the cause of both grips vanishing when booting
+    // straight into FT8 mode (sticky mode, v0.16.0).
+    if (s_ft8_freq_hit) {
+        lv_obj_clear_flag(s_ft8_freq_hit, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_ft8_freq_hit);
+    }
+
     if (s_lbl_me) {
         qmx_settings_t s;
         settings_load_all(&s);
@@ -1296,6 +1328,7 @@ void ft8_screen_view_hide(void)
 {
     if (!s_container) return;
     lv_obj_add_flag(s_container, LV_OBJ_FLAG_HIDDEN);
+    if (s_ft8_freq_hit) lv_obj_add_flag(s_ft8_freq_hit, LV_OBJ_FLAG_HIDDEN);
     ESP_LOGI(TAG, "hide");
 }
 

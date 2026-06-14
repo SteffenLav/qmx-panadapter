@@ -3,6 +3,7 @@
 // disconnect/reconnect cycle. On Cancel: closes without changes.
 
 #include "wifi_config.h"
+#include "ui_theme.h"
 #include "wifi.h"
 #include "settings.h"
 #include "esp_log.h"
@@ -15,6 +16,7 @@ static lv_obj_t *s_modal       = NULL;  // root full-screen overlay
 static lv_obj_t *s_panel       = NULL;  // centred dialog panel
 static lv_obj_t *s_ta_ssid     = NULL;
 static lv_obj_t *s_ta_pass     = NULL;
+static lv_obj_t *s_show_lbl    = NULL;  // label inside the show/hide-password button
 static lv_obj_t *s_keyboard    = NULL;
 static bool      s_modal_open  = false;
 
@@ -46,11 +48,24 @@ static void cancel_btn_cb(lv_event_t *e)
     modal_close();
 }
 
+static void show_pass_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    bool hidden = lv_textarea_get_password_mode(s_ta_pass);
+    lv_textarea_set_password_mode(s_ta_pass, !hidden);
+    lv_label_set_text(s_show_lbl, hidden ? LV_SYMBOL_EYE_OPEN : LV_SYMBOL_EYE_CLOSE);
+}
+
 // Show keyboard on textarea focus, attach to the focused textarea.
 static void ta_focused_cb(lv_event_t *e)
 {
     lv_obj_t *ta = lv_event_get_target(e);
     if (!s_keyboard) return;
+
+    // Only one field shows the blinking cursor at a time.
+    lv_obj_t *other = (ta == s_ta_ssid) ? s_ta_pass : s_ta_ssid;
+    lv_obj_remove_state(other, LV_STATE_FOCUSED);
+
     lv_keyboard_set_textarea(s_keyboard, ta);
     lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_keyboard);
@@ -106,7 +121,7 @@ static void modal_build(void)
     // SSID label - larger
     lv_obj_t *ssid_lbl = lv_label_create(s_panel);
     lv_label_set_text(ssid_lbl, "SSID");
-    lv_obj_set_style_text_color(ssid_lbl, lv_color_hex(0xe0e0e0), 0);
+    lv_obj_set_style_text_color(ssid_lbl, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(ssid_lbl, &lv_font_montserrat_24, 0);
     lv_obj_align(ssid_lbl, LV_ALIGN_TOP_LEFT, 0, 56);
 
@@ -118,25 +133,44 @@ static void modal_build(void)
     lv_textarea_set_max_length(s_ta_ssid, 32);
     lv_textarea_set_placeholder_text(s_ta_ssid, "Network name");
     lv_obj_set_style_text_font(s_ta_ssid, &lv_font_montserrat_24, 0);
+    ui_theme_style_textarea(s_ta_ssid);
     lv_obj_add_event_cb(s_ta_ssid, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
 
     // Password label - larger
     lv_obj_t *pass_lbl = lv_label_create(s_panel);
     lv_label_set_text(pass_lbl, "Password");
-    lv_obj_set_style_text_color(pass_lbl, lv_color_hex(0xe0e0e0), 0);
+    lv_obj_set_style_text_color(pass_lbl, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(pass_lbl, &lv_font_montserrat_24, 0);
     lv_obj_align(pass_lbl, LV_ALIGN_TOP_LEFT, 0, 160);
 
     // Password textarea - larger font + taller, masked
     s_ta_pass = lv_textarea_create(s_panel);
-    lv_obj_set_size(s_ta_pass, 820, 60);
+    lv_obj_set_size(s_ta_pass, 700, 60);
     lv_obj_align(s_ta_pass, LV_ALIGN_TOP_LEFT, 0, 190);
     lv_textarea_set_one_line(s_ta_pass, true);
     lv_textarea_set_password_mode(s_ta_pass, true);
     lv_textarea_set_max_length(s_ta_pass, 64);
     lv_textarea_set_placeholder_text(s_ta_pass, "WPA2 password (leave empty for open network)");
     lv_obj_set_style_text_font(s_ta_pass, &lv_font_montserrat_24, 0);
+    ui_theme_style_textarea(s_ta_pass);
     lv_obj_add_event_cb(s_ta_pass, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
+
+    // Show/hide password toggle, right of the field - vertically centred
+    // against it via align_to so heights/paddings can't drift apart.
+    lv_obj_t *show_btn = lv_btn_create(s_panel);
+    lv_obj_set_size(show_btn, 100, 60);
+    lv_obj_set_style_pad_all(show_btn, 0, 0);
+    lv_obj_align_to(show_btn, s_ta_pass, LV_ALIGN_OUT_RIGHT_MID, 20, 0);
+    lv_obj_set_style_bg_color(show_btn, lv_color_hex(UI_COLOR_KEY_BG), 0);
+    lv_obj_set_style_border_color(show_btn, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_border_width(show_btn, 1, 0);
+    lv_obj_set_style_radius(show_btn, 8, 0);
+    lv_obj_add_event_cb(show_btn, show_pass_btn_cb, LV_EVENT_CLICKED, NULL);
+    s_show_lbl = lv_label_create(show_btn);
+    lv_label_set_text(s_show_lbl, LV_SYMBOL_EYE_CLOSE);
+    lv_obj_set_style_text_color(s_show_lbl, lv_color_hex(UI_COLOR_TEXT), 0);
+    lv_obj_set_style_text_font(s_show_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(s_show_lbl);
 
     // Cancel button - bigger, red-tinted for "destructive" semantics
     lv_obj_t *cancel_btn = lv_btn_create(s_panel);
@@ -175,7 +209,7 @@ static void modal_build(void)
     static bool kb_btn_style_inited = false;
     if (!kb_btn_style_inited) {
         lv_style_init(&style_kb_btn);
-        lv_style_set_bg_color(&style_kb_btn, lv_color_hex(0x303030));
+        lv_style_set_bg_color(&style_kb_btn, lv_color_hex(UI_COLOR_KEY_BG));
         lv_style_set_bg_opa(&style_kb_btn, LV_OPA_COVER);
         lv_style_set_text_color(&style_kb_btn, lv_color_white());
         lv_style_set_border_width(&style_kb_btn, 1);
@@ -183,10 +217,12 @@ static void modal_build(void)
         kb_btn_style_inited = true;
     }
     lv_obj_add_style(s_keyboard, &style_kb_btn, LV_PART_ITEMS);
+    ui_theme_style_keyboard(s_keyboard);
+    ui_theme_keyboard_attach_caps_cycle(s_keyboard);
     lv_obj_set_size(s_keyboard, LV_PCT(100), 280);
     lv_obj_align(s_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_keyboard_set_mode(s_keyboard, LV_KEYBOARD_MODE_TEXT_LOWER);
-    lv_obj_set_style_text_font(s_keyboard, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_keyboard, &lv_font_montserrat_28, 0);
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_keyboard, keyboard_event_cb, LV_EVENT_READY,  NULL);
     lv_obj_add_event_cb(s_keyboard, keyboard_event_cb, LV_EVENT_CANCEL, NULL);
@@ -209,6 +245,9 @@ void wifi_config_modal_show(void)
     settings_load_all(&s);
     lv_textarea_set_text(s_ta_ssid, s.wifi_ssid);
     lv_textarea_set_text(s_ta_pass, "");
+    lv_textarea_set_password_mode(s_ta_pass, true);
+    lv_label_set_text(s_show_lbl, LV_SYMBOL_EYE_CLOSE);
+    ui_theme_focus_textarea(s_ta_ssid);
 
     // Make sure keyboard starts hidden every time.
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);

@@ -9,6 +9,7 @@
 // arm-time failures (e.g. QMX won't confirm Digi mode).
 
 #include "ft8_tx_modal.h"
+#include "ui_theme.h"
 #include "ft8_tx.h"
 #include "ft8_qso.h"
 
@@ -161,7 +162,7 @@ static void modal_build(void)
 
     s_lbl_detail = lv_label_create(s_panel);
     lv_label_set_text(s_lbl_detail, "");
-    lv_obj_set_style_text_color(s_lbl_detail, lv_color_hex(0xa0a0a0), 0);
+    lv_obj_set_style_text_color(s_lbl_detail, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(s_lbl_detail, &lv_font_montserrat_24, 0);
     lv_obj_align(s_lbl_detail, LV_ALIGN_TOP_MID, 0, 130);
 
@@ -200,8 +201,8 @@ static void modal_build(void)
     s_btn_pounce = lv_btn_create(s_panel);
     lv_obj_set_size(s_btn_pounce, 220, 72);
     lv_obj_align(s_btn_pounce, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(s_btn_pounce, lv_color_hex(0x1a5a8a), 0);
-    lv_obj_set_style_border_color(s_btn_pounce, lv_color_hex(0x3090d0), 0);
+    lv_obj_set_style_bg_color(s_btn_pounce, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_border_color(s_btn_pounce, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
     lv_obj_set_style_border_width(s_btn_pounce, 2, 0);
     lv_obj_set_style_radius(s_btn_pounce, 8, 0);
     lv_obj_add_event_cb(s_btn_pounce, pounce_btn_cb, LV_EVENT_CLICKED, NULL);
