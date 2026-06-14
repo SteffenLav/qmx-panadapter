@@ -57,11 +57,11 @@ You need **two** USB connections, and the cable to the QMX is the one people get
 
 - The **Tab5's USB-A port is the host** — it drives the QMX. The QMX must be **powered on** and not stuck in its own bootloader/flash mode.
 - The **Tab5's USB-C port is power + dev console.** You can run standalone from any 5 V/2 A USB-C source or the internal battery once flashed — the laptop is only needed for flashing/diagnostics.
-- Turn the QMX on, then power the Tab5. Within a few seconds the top bar should populate **Band / Mode / BW** and the spectrum should come alive. (The Tab5 also reads and logs the **QMX firmware version** at this point.)
+- **Power up in this order:** turn the **Tab5 on first** and let the app finish loading, **then turn the QMX on.** Within a few seconds the top bar should populate **Band / Mode / BW** and the spectrum should come alive. (The Tab5 also reads and logs the **QMX firmware version** at this point.)
 
 ### 2. Find your way around — gestures & top bar
 
-There is **no menu button**. The whole app is driven by **one-finger edge swipes** and **taps on the top bar**. Learn these five and you can reach everything:
+There is **no menu button**. The whole app is driven by **one-finger swipes** and **taps on the top bar**. Learn this handful and you can reach everything:
 
 **One-finger swipes from a screen edge** (slim "breathing" grey handles hint where they are):
 
@@ -70,14 +70,16 @@ There is **no menu button**. The whole app is driven by **one-finger edge swipes
 | **Swipe right →** | **left edge** | Switch between **Panadapter** and **FT8** screens |
 | **Swipe left ←** | **right edge** | Open the **settings drawer** (tap the right-edge handle does the same) |
 | **Swipe up ↑** | **bottom edge** | Open the **memory-channel** picker |
+| **Swipe down ↓** | **a top-bar item** | Open that item's selector (Band / Mode / BW / Freq / Zoom) |
 | Swipe right → | anywhere, while the drawer is open | Close the settings drawer |
 
-**Tap the top bar** to change a setting directly (Panadapter screen) — the bar reads `Band | Mode | BW | Freq | Signal | Zoom`:
+The top-bar **swipe-down** drops a small chooser down from the bar, so the gesture matches the metaphor (a plain tap works too). The bar reads `Band | Mode | BW | Freq | Signal | Zoom`:
 
-- **Tap the frequency** → on-screen keypad to enter a frequency directly.
-- **Tap Mode** (USB/LSB/CW/DiGi) → mode popup → writes the new mode to the radio over CAT.
-- **Tap BW** → SSB filter-bandwidth popup (2.5 / 2.7 / 2.9 / 3.2 kHz in USB/LSB).
-- **Tap Zoom** → zoom presets (x1–x24); or **pinch with two fingers** on the spectrum/waterfall to zoom, two-finger drag to pan.
+- **Freq** → on-screen keypad to enter a frequency directly.
+- **Mode** (USB/LSB/CW/DiGi) → mode picker → writes the new mode to the radio over CAT.
+- **BW** → SSB filter-bandwidth picker (2.5 / 2.7 / 2.9 / 3.2 kHz in USB/LSB).
+- **Band** → band picker → jumps to one of your configured bands.
+- **Zoom** → zoom presets (x1–x24); or **pinch with two fingers** on the spectrum/waterfall to zoom, two-finger drag to pan.
 
 **Tap or drag on the spectrum/waterfall** tunes the radio (tap-to-tune); the cyan cursor snaps to a sensible per-mode grid.
 
@@ -375,6 +377,7 @@ All touch gestures available across the UI:
 | Swipe right | Open drawer, or anywhere on the spectrum/waterfall while the drawer is open | Closes the settings drawer |
 | Swipe right, starting near the **left edge** | Left edge strip | Toggles between Panadapter and FT8 screens |
 | Swipe up, starting near the **bottom edge** | Bottom edge strip | Opens the memory-channel picker modal |
+| Swipe down (or tap) | Top-bar item (Band / Mode / BW / Freq / Zoom) | Opens that item's selector — drops a chooser down from the bar |
 | Touch and hold (~400 ms) | FT8 decode list row | Enters row-selection mode (row highlights, list scroll locks); drag to move the highlight, lift to confirm |
 | Quick swipe (no hold) | FT8 decode list | Scrolls the list normally |
 
