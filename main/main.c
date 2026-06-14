@@ -28,12 +28,17 @@
 #include "ft8_tx.h"
 #include "ft8_status.h"
 #include "ft8_qso.h"
+#include "diag_log.h"
 
 static const char *TAG = "main";
 
 
 void app_main(void)
 {
+    // Install the diagnostic log capture hook first so the whole boot
+    // sequence is captured if diagnostic logging was left enabled. Capture
+    // only actually starts once diag_log_set_enabled(true) runs below.
+    diag_log_init();
 
     ESP_LOGI(TAG, "QMX+ Panadapter starting");
     ESP_LOGI(TAG, "PSRAM total: %zu MB",
@@ -57,6 +62,7 @@ void app_main(void)
     qmx_settings_t cfg;
     settings_load_all(&cfg);
     iq_balance_init(cfg.iq_enabled);  /* Restore IQ balance state from NVS */
+    diag_log_set_enabled(cfg.diag_log);  /* Restore diagnostic logging state from NVS */
 
     lv_display_t *disp = NULL;
     ESP_ERROR_CHECK(display_init(&disp));

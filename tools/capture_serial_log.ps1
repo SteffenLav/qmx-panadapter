@@ -28,6 +28,8 @@
 
 Add-Type -AssemblyName System.Core
 
+$SCRIPT_VERSION = "1.1"
+
 $ports = [System.IO.Ports.SerialPort]::GetPortNames() | Sort-Object
 if (-not $ports -or $ports.Count -eq 0) {
     Write-Host "No serial ports found." -ForegroundColor Red
@@ -79,8 +81,25 @@ Write-Host "Now power-cycle the Tab5 (unplug/replug power or press reset)." -For
 Write-Host "Let it run through 2-3 reboot cycles, then press Ctrl+C to stop."
 Write-Host ""
 
-"=== QMX Panadapter serial capture started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') ===" |
-    Out-File -FilePath $logFile -Encoding utf8
+# Session header: stamps how/where this log was captured so a returned .txt
+# is self-identifying about the PC side of the serial path (the firmware log
+# itself carries the device-side identity). Device telemetry follows below.
+$osCaption = $null
+try { $osCaption = (Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop).Caption } catch { }
+if (-not $osCaption) { $osCaption = [System.Environment]::OSVersion.VersionString }
+$portDesc = if ($descriptions.ContainsKey($portName)) { $descriptions[$portName] } else { "(no description)" }
+
+$header = @(
+    "=== QMX Panadapter serial capture ===",
+    "started:    $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss zzz')",
+    "script:     capture_serial_log.ps1 v$SCRIPT_VERSION",
+    "host PC:    $env:COMPUTERNAME  (user $env:USERNAME)",
+    "host OS:    $osCaption",
+    "powershell: $($PSVersionTable.PSVersion)  ($($PSVersionTable.PSEdition))",
+    "port:       $portName @ 921600 8N1  -  $portDesc",
+    "======================================"
+)
+$header | Out-File -FilePath $logFile -Encoding utf8
 
 while ($true) {
     $port = New-Object System.IO.Ports.SerialPort $portName, 921600, ([System.IO.Ports.Parity]::None), 8, ([System.IO.Ports.StopBits]::One)

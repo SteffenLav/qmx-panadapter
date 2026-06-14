@@ -21,7 +21,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 > **You are solely responsible for operating legally** — correct licence class, operating
 > within your licence privileges, band plan compliance, no harmful interference.
 >
-> **What is NOT yet in place in v0.15.10:**
+> **What is NOT yet in place in v0.15.11:**
 > - No duty-cycle protection — back-to-back TX slots are not prevented by the firmware
 > - No ADIF logging — completed QSOs are not recorded anywhere
 > - No audio loopback verification — the firmware cannot confirm the transmitted waveform
@@ -37,6 +37,83 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 > The QMX has a built-in CAT timeout (default 120 s) that returns it to RX if the Tab5 stops
 > sending commands — so a firmware crash cannot leave the radio transmitting indefinitely.
 > That is the only hardware safety net. **Use at your own risk.**
+
+---
+
+## Quick start — get it working in 5 minutes
+
+If you've just flashed the firmware (or received a flashed Tab5), here's the shortest path to a working panadapter.
+
+### 1. Connect the cables — this is where most problems happen
+
+You need **two** USB connections, and the cable to the QMX is the one people get wrong:
+
+| Connection | Port on Tab5 | Cable | Carries |
+|------------|--------------|-------|---------|
+| **Tab5 → QMX** | **USB-A** (host) | **USB-A → USB-C, must be a full DATA cable** | I/Q audio (UAC) + CAT (CDC-ACM) |
+| **Tab5 → power** | **USB-C** | Any USB-C power cable (5 V / 2 A+) | Power, and the serial console for diagnostics |
+
+> ⚠️ **The #1 failure is a charge-only cable.** Many USB-C cables (especially the thin ones bundled with phones/chargers) carry **power only — no data lines**. If you use one of those between the Tab5's USB-A port and the QMX, the Tab5 powers the QMX but sees **no audio and no CAT** — the spectrum stays flat and the top bar shows `Band: ---`. Use a cable you *know* does data (e.g. one that works for a USB stick or phone file transfer). If in doubt, swap the cable first.
+
+- The **Tab5's USB-A port is the host** — it drives the QMX. The QMX must be **powered on** and not stuck in its own bootloader/flash mode.
+- The **Tab5's USB-C port is power + dev console.** You can run standalone from any 5 V/2 A USB-C source or the internal battery once flashed — the laptop is only needed for flashing/diagnostics.
+- Turn the QMX on, then power the Tab5. Within a few seconds the top bar should populate **Band / Mode / BW** and the spectrum should come alive. (The Tab5 also reads and logs the **QMX firmware version** at this point.)
+
+### 2. Find your way around — gestures & top bar
+
+There is **no menu button**. The whole app is driven by **one-finger edge swipes** and **taps on the top bar**. Learn these five and you can reach everything:
+
+**One-finger swipes from a screen edge** (slim "breathing" grey handles hint where they are):
+
+| Swipe | From | Does |
+|-------|------|------|
+| **Swipe right →** | **left edge** | Switch between **Panadapter** and **FT8** screens |
+| **Swipe left ←** | **right edge** | Open the **settings drawer** (tap the right-edge handle does the same) |
+| **Swipe up ↑** | **bottom edge** | Open the **memory-channel** picker |
+| Swipe right → | anywhere, while the drawer is open | Close the settings drawer |
+
+**Tap the top bar** to change a setting directly (Panadapter screen) — the bar reads `Band | Mode | BW | Freq | Signal | Zoom`:
+
+- **Tap the frequency** → on-screen keypad to enter a frequency directly.
+- **Tap Mode** (USB/LSB/CW/DiGi) → mode popup → writes the new mode to the radio over CAT.
+- **Tap BW** → SSB filter-bandwidth popup (2.5 / 2.7 / 2.9 / 3.2 kHz in USB/LSB).
+- **Tap Zoom** → zoom presets (x1–x24); or **pinch with two fingers** on the spectrum/waterfall to zoom, two-finger drag to pan.
+
+**Tap or drag on the spectrum/waterfall** tunes the radio (tap-to-tune); the cyan cursor snaps to a sensible per-mode grid.
+
+> The edge handles are deliberately faint so they don't clutter the display — if you can't find one, just swipe in firmly from the very edge of the glass.
+
+### 3. Settings to fill in (open the drawer — swipe in from the right edge)
+
+The settings drawer slides in from the **right screen edge** (swipe in from the right, or tap the breathing grip handle). The **Diagnostic log** switch is on the top row (and stays there in FT8 mode too).
+
+- **Callsign & Grid square** — *required for FT8 transmit.* Tap the button, enter your callsign and Maidenhead grid (e.g. `JO45` or `JO45ab`), Save. Persisted across reboots.
+- **WiFi setup** — *optional but recommended.* Enter your SSID/password to get: accurate UTC time (needed for FT8 slot timing without relying on the QMX RTC), the browser web UI, and remote diagnostics. There is **no on/off toggle** — entering an SSID and saving *is* how WiFi is enabled. Leave it blank for pure POTA/portable use (FT8 timing then falls back to the QMX's onboard clock).
+- Everything else (dB range, smoothing, colour map, brightness, IF calibration, I/Q balance) is optional tuning — the defaults are sane.
+
+### 4. What works *without* the QMX connected
+
+The UI boots and runs even with no radio attached, so you can explore it — but anything that needs the radio will be inert:
+
+| Works without QMX | Needs the QMX connected (via the data cable) |
+|-------------------|----------------------------------------------|
+| UI, settings drawer, gestures, WiFi/web UI | Spectrum + waterfall (no I/Q = flat line) |
+| Entering callsign/grid, WiFi credentials | Top bar **Band / Mode / BW** (filled from CAT) |
+| Brightness, colour map, dB range | **Tap-to-tune** and the mode popup (CAT writes) |
+| | S-meter, FT8 decode/TX, QMX firmware readout |
+
+So if the spectrum is flat, the top bar shows `---`, the mode popup "won't take", and tap-to-tune does nothing — that's almost always **the radio not being seen over USB**, which loops back to *the cable* (or the QMX being off / in flash mode).
+
+### 5. Something not working? Send a diagnostic log
+
+If you hit a problem, the firmware can capture a full communication log to send for investigation:
+
+1. Open the settings drawer → flip **Diagnostic log** (top row) **ON**.
+2. Reproduce the problem (let it run a minute; power-cycle the QMX if the issue is about connection).
+3. Grab the log one of two ways:
+   - **Over WiFi:** browse to `http://<tab5-ip>/api/log` (or click **Diag log ↓** in the bottom bar of the web UI) — downloads `qmx-log.txt`.
+   - **Over USB (no WiFi needed):** capture the serial console with `tools/capture_serial_log.ps1` (see [Reporting hardware issues](#reporting-hardware-issues)).
+4. Send the `.txt` to the author. It includes the Tab5 firmware version, the **QMX firmware version**, and (while enabled) every CAT command sent/received — usually enough to pinpoint the issue.
 
 ---
 
@@ -92,6 +169,8 @@ I (xxxx) bsp_info: =====================
 
 Open an [issue](https://github.com/SteffenLav/qmx-panadapter/issues) with this block pasted in. The `panel` and `touch` lines tell us which hardware revision you have, which is the first thing we need to know.
 
+> **Reading `reset_reason` in a diagnostic log:** the [diagnostic log](#5-something-not-working-send-a-diagnostic-log) header prints a `reset_reason` field, but on this hardware a deliberate **reset-button / force power-off comes back as `panic/exception`** — not `external-pin`/`power-on`. So that value alone does *not* mean the firmware crashed. A genuine crash always prints a `Guru Meditation` register + backtrace dump immediately **before** the reboot; if there's no backtrace, the reset was just an abrupt power-off (the app has no clean-shutdown path, so every forced reset looks like this).
+
 ### History
 
 The original mockup that drove the design ([panadapter-mockup-ideal.svg](docs/panadapter-mockup-ideal.svg)) and the first real-world screenshot from v0.7 ([QMX-Panadapter_1st_snapshot.png](docs/QMX-Panadapter_1st_snapshot.png)) are kept in `docs/` for reference. The design notes including the expected hardware artifacts (DC spike, I/Q image) live in [docs/panadapter-display-design.md](docs/panadapter-display-design.md).
@@ -100,7 +179,7 @@ The original mockup that drove the design ([panadapter-mockup-ideal.svg](docs/pa
 
 ## Status
 
-Working. All phases through 8 complete. Current release: **v0.15.10**. Includes: cold-boot reliability fix, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings (including last-used UI mode and display brightness), Hamlib rigctld bridge, onboard FT8 RX decoder with a 40-row live-view decode list and FFT-based SNR estimation, memory channels with a frequency/mode picker, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser) including a tap-to-enter frequency keypad, browser click-to-tune, zoom sync, band memory, QMX RTC time sync for no-WiFi (POTA) FT8 timing, **manual FT8 TX** (reply + CQ via CAT `TA;`), and a **full auto QSO engine** — search-and-pounce plus **CQ-run** (auto-answers callers, runs the exchange to completion with patient retry, then resumes CQ). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
+Working. All phases through 8 complete. Current release: **v0.15.11**. Includes: cold-boot reliability fix, on-device diagnostic logging (web + serial) with QMX firmware readout, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings (including last-used UI mode and display brightness), Hamlib rigctld bridge, onboard FT8 RX decoder with a 40-row live-view decode list and FFT-based SNR estimation, memory channels with a frequency/mode picker, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser) including a tap-to-enter frequency keypad, browser click-to-tune, zoom sync, band memory, QMX RTC time sync for no-WiFi (POTA) FT8 timing, **manual FT8 TX** (reply + CQ via CAT `TA;`), and a **full auto QSO engine** — search-and-pounce plus **CQ-run** (auto-answers callers, runs the exchange to completion with patient retry, then resumes CQ). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
 
 | Phase | What | Status |
 |-------|------|--------|
@@ -232,11 +311,16 @@ The landing page mirrors the device screen in real time: spectrum trace updates 
 {
   "battery": { "level": 100, "charging": true },
   "wifi":    { "ssid": "BV50", "rssi": -44, "ip": "192.168.1.213" },
-  "freq_hz": 14074000
+  "freq_hz": 14074000,
+  "qmx_fw":  "1_03_002QMX"
 }
 ```
 
-Polled by the landing page at 1 Hz; safe to consume from any other client (monitoring scripts, home automation, etc.).
+Polled by the landing page at 1 Hz; safe to consume from any other client (monitoring scripts, home automation, etc.). `qmx_fw` is the QMX firmware version read via the `VN;` CAT command at link-up (empty until the radio answers).
+
+### `/api/log` — diagnostic log download
+
+Returns the captured diagnostic log (see [Quick start](#quick-start--get-it-working-in-5-minutes)) as `qmx-log.txt` when **Diagnostic log** is enabled in the settings drawer; otherwise a short hint. Linked as "Diag log ↓" in the web UI's bottom bar.
 
 ### `/ws` — binary spectrum WebSocket
 
@@ -854,6 +938,12 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 - **Mode-aware snap steps updated.** USB/LSB now snap to 250 Hz (was 500 Hz) and FT8/digi/RTTY now snap to 500 Hz (was 100 Hz), for both the live drag cursor and the on-release tune.
 - **Fixed zoom>x1 overlay desync after retuning.** At zoom > x1, tuning to a new frequency (e.g. via touch-drag) left the passband-edge lines, VFO cursor, and frequency-axis labels positioned as if pan were reset to zero, while the spectrum/waterfall correctly re-centered on the new passband — the overlays would appear shifted to the right relative to the signal. `ui_update_frequency()` now re-derives the passband-centered pan after every frequency change.
 - **Top-bar / spectrum colour matching.** The spectrum's passband-edge lines now match the BW label's colour, and the VFO/center cursor line now matches the Freq label's colour. The translucent passband-tint band (drawn behind the spectrum curve) uses the same colour at ~25% opacity.
+
+### Shipped in v0.15.11
+
+- **On-device diagnostic logging.** A **Diagnostic log** switch on the top row of the settings drawer (kept visible in FT8 mode too) captures all firmware log output — plus per-line CAT request/response traffic — into a 512 KB in-RAM ring, with a self-identifying header (Tab5 + QMX firmware versions, MAC/serial, chip rev, reset reason, uptime, heap, callsign/grid, WiFi + QMX connection state). Download it over WiFi at `http://<tab5-ip>/api/log` (or the "Diag log ↓" link in the web UI), or capture it over USB serial with `tools/capture_serial_log.ps1` (no WiFi needed). The CAT poll logging is de-duplicated (identical FA/MD/FW responses dropped, a heartbeat every 10 s) so the ring holds a whole session instead of ~70 s. See the [Quick start](#quick-start--get-it-working-in-5-minutes).
+- **QMX firmware version readout.** The Tab5 now queries the QMX firmware version via the `VN;` CAT command at link-up (e.g. `1_03_002QMX`) and surfaces it in the boot log, the diagnostic log header, and the web `/api/status` JSON (`qmx_fw`). (`ID;` only returns the emulated Kenwood model.)
+- **README Quick start.** A new top-of-file Quick start: cable/data-cable gotchas, one-finger edge-swipe navigation and top-bar taps, required settings, what works without the QMX connected, and how to send a diagnostic log.
 
 ### Shipped in v0.15.10
 

@@ -12,6 +12,7 @@
 #include "dsp.h"              // dsp_get_peak_dbm_around_vfo
 #include "display/display.h"  // display_lock / display_unlock
 #include "screenshot/screenshot.h"  // screenshot_capture_rgb565
+#include "diag_log.h"         // diag_log_size / diag_log_snapshot
 #include "esp_heap_caps.h"
 #include <string.h>
 
@@ -46,6 +47,7 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddStringToObject(wifi_obj, "ip",   wifi_get_ip());
 
     cJSON_AddNumberToObject(root, "freq_hz",     (double)cat_get_frequency());
+    cJSON_AddStringToObject(root, "qmx_fw",       cat_get_qmx_fw());
     cJSON_AddStringToObject(root, "mode",         ui_get_mode_str());
     cJSON_AddStringToObject(root, "band",         ui_get_band_str());
     // Apply mode defaults if CAT has not yet reported BW (matches Tab5 compute_passband_edges_hz)
@@ -206,6 +208,33 @@ static esp_err_t ss_bmp_handler(httpd_req_t *req)
     return err;
 }
 
+// GET /api/log — download the diagnostic ring buffer as a text file.
+// Empty (or capture disabled) returns a short hint instead of a blank file.
+static esp_err_t log_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=qmx-log.txt");
+
+    size_t n = diag_log_size();
+    if (n == 0) {
+        const char *hint =
+            "(diagnostic log empty)\n"
+            "Enable 'Diagnostic log' in the Tab5 settings drawer, reproduce the "
+            "issue, then reload this page.\n";
+        return httpd_resp_sendstr(req, hint);
+    }
+
+    char *buf = heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
+    if (!buf) buf = malloc(n);
+    if (!buf) return httpd_resp_send_500(req);
+
+    size_t got = diag_log_snapshot(buf, n);
+    esp_err_t err = httpd_resp_send(req, buf, got);
+    heap_caps_free(buf);
+    return err;
+}
+
 static const httpd_uri_t uri_root = {
     .uri = "/", .method = HTTP_GET, .handler = root_handler,
 };
@@ -218,6 +247,9 @@ static const httpd_uri_t uri_cmd = {
 static const httpd_uri_t uri_ss_bmp = {
     .uri = "/ss.bmp", .method = HTTP_GET, .handler = ss_bmp_handler,
 };
+static const httpd_uri_t uri_log = {
+    .uri = "/api/log", .method = HTTP_GET, .handler = log_handler,
+};
 
 esp_err_t webserver_start(void)
 {
@@ -226,7 +258,7 @@ esp_err_t webserver_start(void)
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.server_port     = 80;
     config.stack_size      = 12288;
-    config.max_uri_handlers = 8;
+    config.max_uri_handlers = 10;
     config.lru_purge_enable = true;
 
     ESP_LOGI(TAG, "Starting HTTP server on port %d", config.server_port);
@@ -241,6 +273,7 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_status);
     httpd_register_uri_handler(s_server, &uri_cmd);
     httpd_register_uri_handler(s_server, &uri_ss_bmp);
+    httpd_register_uri_handler(s_server, &uri_log);
     webserver_ws_start(s_server);
 
     ESP_LOGI(TAG, "HTTP server started");

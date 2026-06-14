@@ -18,6 +18,7 @@ idf_component_register(
         "util/battery.c"
         "util/ina226.c"
         "util/bsp_info.c"
+        "util/diag_log.c"
         "cat/cat.c"
         "audio/audio.c"
         "dsp/dsp.c"

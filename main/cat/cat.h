@@ -88,6 +88,11 @@ bool cat_is_ready(void);
  */
 int cat_get_cw_offset_hz(void);
 /**
+ * @brief QMX firmware version string from the VN; query (e.g. "1_03_002QMX").
+ * Returns an empty string until the radio has answered VN; after link-up.
+ */
+const char *cat_get_qmx_fw(void);
+/**
  * @brief Send a raw formatted CAT/MM command string to the QMX.
  * Uses printf-style format. Fire-and-forget, no response parsed.
  */

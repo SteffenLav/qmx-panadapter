@@ -15,6 +15,7 @@
 #include "bsp/m5stack_tab5.h"
 
 #include "ui.h"
+#include "diag_log.h"
 
 static const char *TAG = "cat";
 
@@ -55,6 +56,8 @@ static char   s_mm_resp[64] = {0};  // last MM response, set by process_cat_mess
 static size_t s_mm_resp_len = 0;
 static char   s_tm_resp[16] = {0};  // last TM response, set by process_cat_message
 static size_t s_tm_resp_len = 0;
+static char   s_qmx_fw[24] = {0};   // QMX firmware version from VN; (e.g. "1_03_002QMX")
+static uint64_t s_diag_poll_hb_us = 0;  // last diag poll-heartbeat timestamp
 
 static uint32_t s_last_freq_hz = 0;
 static char s_last_mode_digit = 0;  // Phase 5.10: cached Kenwood mode digit
@@ -88,6 +91,7 @@ void cat_request_ssb_bandwidth(uint32_t hz)
 }
 
 int cat_get_cw_offset_hz(void) { return s_cw_offset_hz; }
+const char *cat_get_qmx_fw(void) { return s_qmx_fw; }
 esp_err_t cat_send_raw_cmd(const char *fmt, ...)
 {
     if (!s_cdc_dev) return ESP_ERR_INVALID_STATE;
@@ -113,6 +117,7 @@ static bool handle_rx(const uint8_t *data, size_t data_len, void *user_arg);
 static void handle_cdc_event(const cdc_acm_host_dev_event_data_t *event, void *user_ctx);
 static esp_err_t try_open_qmx(void);
 static void process_cat_message(const char *msg, size_t len);
+static void diag_log_rx(const char *msg, size_t len);
 static void dump_audio_descriptors(void);
 
 esp_err_t cat_init(void)
@@ -167,11 +172,36 @@ static bool handle_rx(const uint8_t *data, size_t data_len, void *user_arg)
         s_rx_buf[s_rx_len++] = c;
         if (c == ';') {
             s_rx_buf[s_rx_len] = '\0';
+            diag_log_rx(s_rx_buf, s_rx_len);
             process_cat_message(s_rx_buf, s_rx_len);
             s_rx_len = 0;
         }
     }
     return true;
+}
+
+// Diagnostic RX logging with poll de-duplication. The FA/MD/FW poll responses
+// repeat every ~150 ms; logging each verbatim swamps the ring. Log them only
+// when the value changes (the per-field "Freq=/Mode=/Passband=" logs already
+// mark the real transitions); everything else — MM, VN, ID, ?;, garbles — is
+// logged in full since it's infrequent and high-value.
+static void diag_log_rx(const char *msg, size_t len)
+{
+    if (!diag_log_enabled()) return;
+    // Dedup routine poll responses (fixed short strings: FA…=14, MD…=4, FW…=7).
+    // A response longer than its cache slot is treated as non-routine (e.g. a
+    // garble) and always logged.
+    static char last_fa[16], last_md[8], last_fw[12];
+    char  *slot    = NULL;
+    size_t slot_sz = 0;
+    if      (len >= 2 && msg[0] == 'F' && msg[1] == 'A') { slot = last_fa; slot_sz = sizeof(last_fa); }
+    else if (len >= 2 && msg[0] == 'M' && msg[1] == 'D') { slot = last_md; slot_sz = sizeof(last_md); }
+    else if (len >= 2 && msg[0] == 'F' && msg[1] == 'W') { slot = last_fw; slot_sz = sizeof(last_fw); }
+    if (slot && len < slot_sz) {
+        if (strcmp(msg, slot) == 0) return;   // unchanged poll response — skip
+        memcpy(slot, msg, len + 1);           // cache new value (len+1 <= slot_sz)
+    }
+    ESP_LOGI(TAG, "RX<- %s", msg);
 }
 
 static void process_cat_message(const char *msg, size_t len)
@@ -263,6 +293,16 @@ static void process_cat_message(const char *msg, size_t len)
             ESP_LOGW(TAG, "QMX returned ?; (one or more poll commands unsupported)");
             warned = true;
         }
+        return;
+    }
+    // VN response: "VN<version>;" — QMX/QDX firmware version string, e.g.
+    // "VN1_03_002QMX;". Store the part between "VN" and the trailing ";".
+    if (len >= 4 && msg[0] == 'V' && msg[1] == 'N') {
+        size_t vlen = len - 3;  // drop "VN" prefix and ";" suffix
+        if (vlen >= sizeof(s_qmx_fw)) vlen = sizeof(s_qmx_fw) - 1;
+        memcpy(s_qmx_fw, msg + 2, vlen);
+        s_qmx_fw[vlen] = '\0';
+        ESP_LOGI(TAG, "QMX firmware: %s", s_qmx_fw);
         return;
     }
     if (len == 6 && msg[0] == 'I' && msg[1] == 'D') {
@@ -505,6 +545,18 @@ static void poll_task(void *arg)
             default: cmd = skip_fw ? NULL : "FW;"; break;
         }
         if (cmd != NULL) {
+            // Diagnostic: don't log every poll TX (FA/MD/FW every ~50ms swamps
+            // the ring). Emit a heartbeat every 10s so the log shows polling is
+            // alive; the de-duplicated RX side (diag_log_rx) shows actual value
+            // changes, and one-off writes (Sent:/SSB filter->/raw cmd) log fully.
+            if (diag_log_enabled()) {
+                uint64_t hb = esp_timer_get_time();
+                if (hb - s_diag_poll_hb_us > 10000000ULL) {
+                    s_diag_poll_hb_us = hb;
+                    ESP_LOGI(TAG, "poll heartbeat: FA/MD/FW cycling @ %dms (freq=%luHz mode=%s)",
+                             CAT_POLL_INTERVAL_MS, (unsigned long)s_last_freq_hz, cat_get_mode_str());
+                }
+            }
             esp_err_t err = cdc_acm_host_data_tx_blocking(
                 s_cdc_dev, (const uint8_t *)cmd, 3, 200);
             if (err != ESP_OK) {
@@ -558,6 +610,20 @@ static void link_task(void *arg)
                         break;
                     }
                     vTaskDelay(pdMS_TO_TICKS(100));
+                }
+            }
+
+            // Query QMX firmware version once (VN; -> "VN<ver>QMX;"). Useful
+            // for diagnostics and bug reports — different QMX firmware behaves
+            // differently (IQ output, TA TX, MMSSB filter tokens).
+            {
+                const char *vn_q = "VN;";
+                esp_err_t verr = cdc_acm_host_data_tx_blocking(
+                    s_cdc_dev, (const uint8_t *)vn_q, strlen(vn_q), 200);
+                if (verr == ESP_OK) {
+                    vTaskDelay(pdMS_TO_TICKS(100));  // response handled in process_cat_message
+                } else {
+                    ESP_LOGW(TAG, "Failed to query firmware version (VN): 0x%x", verr);
                 }
             }
 

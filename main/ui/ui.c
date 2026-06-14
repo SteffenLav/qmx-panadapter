@@ -19,6 +19,7 @@
 #include "memory_modal.h"
 #include "identity_config.h"
 #include "iq_balance.h"
+#include "diag_log.h"
 #include "ui_mode.h"
 #include "ui_clock.h"
 #include "ft8_screen.h"
@@ -1071,6 +1072,7 @@ static lv_obj_t *s_left_edge_grip = NULL;
 static lv_obj_t *s_bottom_edge_grip = NULL;
 static lv_obj_t *s_switch_iq  = NULL;  // Phase B: IQ balance toggle in settings drawer
 static lv_obj_t *s_switch_flat = NULL; // Phase 5.12: flat-spectrum toggle in settings drawer
+static lv_obj_t *s_switch_diag = NULL; // diagnostic comms-log toggle in settings drawer
 
 // Phase 5.10D Stage 2: settings drawer state
 static lv_obj_t *s_drawer = NULL;
@@ -1095,7 +1097,8 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_IFCAL      8
 #define DRAWER_SEC_BRIGHTNESS 9
 #define DRAWER_SEC_CMAP       10
-#define N_DRAWER_SECTIONS     11
+#define DRAWER_SEC_DIAG       11
+#define N_DRAWER_SECTIONS     12
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 // Phase 5.10D Stage 2b: drawer widgets we need to keep handles to
@@ -1147,6 +1150,7 @@ static void drawer_dropdown_cmap_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_open_cb(lv_event_t *e);
 static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
+static void drawer_switch_diag_cb(lv_event_t *e);
 bool ui_get_flat_mode(void);
 void ui_set_flat_mode(bool on);
 static void drawer_apply_preset(int db_min, int db_max, float alpha);
@@ -2911,6 +2915,25 @@ static void drawer_build(void)
     // presets 3-across in a single row to free vertical space.
     int y = 96;
 
+    // Diagnostic log ON/OFF row -- kept at the top for easy access. When on,
+    // the Tab5 captures all log output (incl. per-line CAT TX/RX) to a buffer
+    // downloadable from the web UI at http://<tab5-ip>/api/log, and streams it
+    // to the USB serial console.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_DIAG, y, 56);
+        lv_obj_t *diag_lbl = lv_label_create(sec);
+        lv_label_set_text(diag_lbl, "Diagnostic log");
+        lv_obj_set_style_text_color(diag_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(diag_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_align(diag_lbl, LV_ALIGN_TOP_LEFT, 0, 6);
+        s_switch_diag = lv_switch_create(sec);
+        lv_obj_set_size(s_switch_diag, 72, 36);
+        lv_obj_align(s_switch_diag, LV_ALIGN_TOP_RIGHT, 0, 0);
+        if (diag_log_enabled()) lv_obj_add_state(s_switch_diag, LV_STATE_CHECKED);
+        lv_obj_add_event_cb(s_switch_diag, drawer_switch_diag_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        y += 56;
+    }
+
     // IQ balance ON/OFF row -- full width, well clear of the close button
     {
         lv_obj_t *sec = drawer_section(DRAWER_SEC_IQ, y, 56);
@@ -3229,16 +3252,16 @@ static void drawer_close(void)
     ESP_LOGI(TAG, "Settings drawer closed");
 }
 
-// FT8 mode only needs WiFi setup, Callsign & Grid, and Display brightness;
-// everything else (IQ/flat toggles, presets, dB range, smoothing, CW,
-// IF calibration, colour map) is irrelevant there. Hide the rest and
-// restack the three kept sections near the top of the drawer. Called on
-// every mode switch (and once at boot via drawer_build()).
+// FT8 mode keeps the Diagnostic log toggle (top, always accessible), WiFi
+// setup, Callsign & Grid, and Display brightness; everything else (IQ/flat
+// toggles, presets, dB range, smoothing, CW, IF calibration, colour map) is
+// irrelevant there. Hide the rest and restack the kept sections near the top
+// of the drawer. Called on every mode switch (and once at boot via drawer_build()).
 static void drawer_set_ft8_mode(bool ft8)
 {
     if (!s_drawer) return;
-    static const int keep[]   = { DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
-    static const int keep_h[] = { 72, 72, 130 };
+    static const int keep[]   = { DRAWER_SEC_DIAG, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
+    static const int keep_h[] = { 56, 72, 72, 130 };
     const int n_keep = sizeof(keep) / sizeof(keep[0]);
 
     for (int i = 0; i < N_DRAWER_SECTIONS; i++) {
@@ -3346,6 +3369,15 @@ static void drawer_switch_flat_cb(lv_event_t *e)
             lv_obj_remove_flag(s_db_max_label, LV_OBJ_FLAG_HIDDEN);
         }
     }
+}
+
+static void drawer_switch_diag_cb(lv_event_t *e)
+{
+    lv_obj_t *sw = lv_event_get_target(e);
+    bool on = lv_obj_has_state(sw, LV_STATE_CHECKED);
+    diag_log_set_enabled(on);
+    settings_set_diag_log(on);
+    ESP_LOGI(TAG, "diagnostic logging: %s", on ? "ON" : "OFF");
 }
 
 static void drawer_preset_normal_cb(lv_event_t *e)  { (void)e; drawer_apply_preset(-130, -30, 0.40f); }
