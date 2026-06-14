@@ -44,6 +44,8 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 If you've just flashed the firmware (or received a flashed Tab5), here's the shortest path to a working panadapter.
 
+> ⚠️ **Before you connect anything — check your QMX firmware.** The panadapter needs the QMX/QMX+ running the **latest public firmware (1.03.002 or newer)** to work properly. You can read the version on the **QMX's own display right at power-on**. If it's older, update the QMX *first* — then continue below.
+
 ### 1. Connect the cables — this is where most problems happen
 
 You need **two** USB connections, and the cable to the QMX is the one people get wrong:
@@ -120,6 +122,8 @@ If you hit a problem, the firmware can capture a full communication log to send 
 ---
 
 ## Hardware setup
+
+> **QMX firmware requirement:** the QMX/QMX+ must run the latest public firmware (**1.03.002** or newer) for the panadapter to work properly. Check the version on the QMX display at power-on and update before connecting if needed.
 
 The panadapter needs two USB connections:
 
