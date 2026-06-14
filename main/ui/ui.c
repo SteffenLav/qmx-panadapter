@@ -3486,6 +3486,7 @@ bool ui_get_flat_mode(void)
 void ui_flat_mode_reset(void)
 {
     s_flat_ready = false;
+    render_waterfall_floor_reset();
 }
 
 void ui_set_flat_mode(bool on)

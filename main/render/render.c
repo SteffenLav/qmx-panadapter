@@ -28,6 +28,17 @@ static bool s_smoothed_init = false;
 // Phase 5.10D Stage 2: runtime-adjustable EMA smoothing
 static float s_ema_alpha = 0.4f;
 
+// v0.16.0: separate, more heavily smoothed spectrum fed only to the
+// waterfall. The spectrum trace wants responsiveness (alpha 0.4), but the
+// waterfall's per-bin noise floor tracker compares against a single frame -
+// with alpha 0.4 the frame-to-frame variance of pure noise routinely
+// exceeds the floor+6dB threshold, so noise bins light up as speckle even
+// when the floor tracking itself is correct. A slower EMA here reduces that
+// per-frame variance without affecting the spectrum trace's responsiveness.
+#define WF_EMA_ALPHA 0.15f
+static float *s_wf_smoothed = NULL;
+static bool s_wf_smoothed_init = false;
+
 void render_set_ema_alpha(float alpha)
 {
     if (alpha < 0.05f) alpha = 0.05f;
@@ -62,8 +73,19 @@ static void render_task(void *arg)
             }
 
 
-            // Push smoothed spectrum to UI and waterfall
+            // Push smoothed spectrum to UI
             ui_push_spectrum(s_smoothed, DSP_FFT_SIZE);
+
+            // Separate, more heavily smoothed spectrum for the waterfall only
+            if (!s_wf_smoothed_init) {
+                memcpy(s_wf_smoothed, s_scratch, DSP_FFT_SIZE * sizeof(float));
+                s_wf_smoothed_init = true;
+            } else {
+                for (int i = 0; i < DSP_FFT_SIZE; i++) {
+                    s_wf_smoothed[i] = WF_EMA_ALPHA * s_scratch[i]
+                                     + (1.0f - WF_EMA_ALPHA) * s_wf_smoothed[i];
+                }
+            }
 
             // Phase 5.10D: sample S-meter at ~5 Hz from spectrum peak around VFO
             {
@@ -87,7 +109,7 @@ static void render_task(void *arg)
                     }
                 }
             }
-            render_waterfall_tick(s_smoothed, DSP_FFT_SIZE);
+            render_waterfall_tick(s_wf_smoothed, DSP_FFT_SIZE);
         }
         // ESP_ERR_NOT_FOUND just means no spectrum yet (no audio); skip silently.
     }
@@ -112,6 +134,15 @@ esp_err_t render_init(void)
         return ESP_ERR_NO_MEM;
     }
     s_smoothed_init = false;
+
+    s_wf_smoothed = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),
+                                     MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (!s_wf_smoothed) {
+        ESP_LOGE(TAG, "Failed to alloc waterfall smoothing buffer");
+        return ESP_ERR_NO_MEM;
+    }
+    s_wf_smoothed_init = false;
+
     esp_err_t wferr = render_waterfall_init();
     if (wferr != ESP_OK) {
         return wferr;

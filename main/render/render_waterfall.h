@@ -13,3 +13,8 @@ void render_waterfall_tick(const float *spectrum, int n_bins);
 // Switch the active colour map. idx range: 0=Thermal 1=Viridis 2=Turbo 3=Grayscale.
 // Rebuilds the LUT in-place; visible on the next render tick.
 void render_waterfall_set_colormap(uint8_t idx);
+
+// Re-seed the per-bin noise-floor tracker from the next tick's spectrum.
+// Call when a stale floor (e.g. captured before the QMX was streaming)
+// would otherwise take many seconds to decay up to the real noise level.
+void render_waterfall_floor_reset(void);

@@ -1,12 +1,12 @@
 #include "render_waterfall.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "ui.h"
 #include "display.h"
 #include "dsp.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <math.h>
 
 static const char *TAG = "render_wf";
@@ -18,8 +18,27 @@ static const char *TAG = "render_wf";
 // color LUT always sits at "current noise level" regardless of band
 // conditions. Spectrum trace remains user-controlled via the drawer.
 #define DB_MIN_INITIAL  -130.0f  /* dBm, starting floor */
-static float DB_MIN_DISPLAY = DB_MIN_INITIAL;  /* updated from noise floor */
 #define DB_MAX_DISPLAY  -30.0f   /* dBm, matches ui.c spectrum range */
+
+// v0.16.0: per-bin adaptive noise-floor tracker. Replaces the old single
+// global DB_MIN_DISPLAY (passband median) so each part of the spectrum gets
+// its own black level - the QMX's filter rolloff means bins outside the
+// passband sit several dB hotter than the passband floor, and colorizing
+// them against the passband's black point made them look like speckled
+// noise. Asymmetric EMA per bin: fast attack when the current value is
+// below the tracked floor (follow the noise down quickly), slow decay when
+// above (so a steady signal doesn't get absorbed into the floor too fast).
+#define WF_FLOOR_ATTACK       0.05f  /* ~0.6 s time constant @ 30 Hz */
+#define WF_FLOOR_DECAY_FAST   0.05f  /* ~0.6 s, used briefly after (re)init */
+#define WF_FLOOR_DECAY_SLOW   0.0005f /* ~67 s, steady state - signals must
+                                          persist for minutes before they're
+                                          absorbed into the floor */
+#define WF_FLOOR_WARMUP_TICKS 90     /* ~3 s @ 30 Hz of fast decay after reset */
+static float s_floor_main[DSP_FFT_SIZE];
+static float s_floor_zoom[DSP_FFT_SIZE];
+static bool s_floor_main_init = false;
+static bool s_floor_zoom_init = false;
+static int s_floor_warmup = 0;
 
 // 256-entry RGB565 thermal LUT (matches browser palette):
 //  black -> dark blue -> teal -> green -> yellow -> red
@@ -101,6 +120,13 @@ static void build_lut(void)
     }
 }
 
+void render_waterfall_floor_reset(void)
+{
+    s_floor_main_init = false;
+    s_floor_zoom_init = false;
+    s_floor_warmup = 0;
+}
+
 void render_waterfall_set_colormap(uint8_t idx)
 {
     if (idx >= CMAP_COUNT) return;
@@ -124,7 +150,7 @@ esp_err_t render_waterfall_init(void)
     return ESP_OK;
 }
 
-// Comparator for qsort (used for median noise-floor estimate)
+// Comparator for qsort (one-time median seed of the floor array)
 static int float_cmp(const void *a, const void *b)
 {
     float fa = *(const float *)a, fb = *(const float *)b;
@@ -162,58 +188,45 @@ void render_waterfall_tick(const float *spectrum, int n_bins)
     if (wf_window > n_bins) wf_window = n_bins;
     int wf_start  = wf_center - wf_window / 2;
 
-    // Phase 5.10F / v0.16.0: auto-track noise floor by EMA'd median, once
-    // per second, over the bins actually visible on screen (wf_window of
-    // use_spectrum) rather than the full band. At high zoom the visible
-    // slice can be much dimmer (or hotter) than the full-band median, e.g.
-    // a weak signal in sunlight (POTA) - the floor needs to follow what's
-    // actually on screen so full dynamic range is used.
-    static int64_t last_floor_us = 0;
-    int64_t now_us = esp_timer_get_time();
-    if (now_us - last_floor_us > 1000000) {
-        last_floor_us = now_us;
-
-        // Restrict the median to bins within the passband ("bw"), not the
-        // whole visible window - outside-passband regions are darker and
-        // would otherwise mask dim in-band signals (e.g. POTA in sunlight).
-        const float bin_width_hz = (float)DSP_SAMPLE_RATE_HZ / (float)n_bins;
-        int32_t pb_low_hz, pb_high_hz;
-        ui_get_passband_edges_hz(&pb_low_hz, &pb_high_hz);
-
-        int pb_bin_lo, pb_bin_hi;
-        if (zoom_spec) {
-            // bin 0 of the zoom spectrum = DC = (if_bin_shift + pan_offset_bins).
-            // Passband edges are relative to the VFO (if_bin_shift), so shift
-            // by pan_offset_bins (in raw bins) before converting to zoom bins.
-            float zoom_bin_width_hz = bin_width_hz / (float)dsp_get_zoom_decim();
-            float pan_hz = (float)ui_get_pan_offset_bins() * bin_width_hz;
-            pb_bin_lo = (int)lroundf(((float)pb_low_hz  - pan_hz) / zoom_bin_width_hz);
-            pb_bin_hi = (int)lroundf(((float)pb_high_hz - pan_hz) / zoom_bin_width_hz);
-        } else {
-            int if_shift = ui_get_if_bin_shift(n_bins);
-            pb_bin_lo = if_shift + (int)lroundf((float)pb_low_hz  / bin_width_hz);
-            pb_bin_hi = if_shift + (int)lroundf((float)pb_high_hz / bin_width_hz);
-        }
-        if (pb_bin_hi < pb_bin_lo) { int t = pb_bin_lo; pb_bin_lo = pb_bin_hi; pb_bin_hi = t; }
-
+    // v0.16.0: per-bin noise-floor tracker, updated every tick. Use a
+    // separate floor array for the zoom spectrum vs the main spectrum,
+    // since the same array index means a different frequency in each, and
+    // the zoom-FFT spectrum has different dB characteristics (gain/
+    // averaging) than the main one. Reseed whichever array becomes active
+    // whenever we switch between zoomed and unzoomed - otherwise the
+    // inactive array's stale seed only has the slow steady-state decay to
+    // catch up, which takes ~1 min.
+    float *floor_arr = zoom_spec ? s_floor_zoom : s_floor_main;
+    bool *floor_init = zoom_spec ? &s_floor_zoom_init : &s_floor_main_init;
+    static bool s_prev_zoom_active = false;
+    bool zoom_active = (zoom_spec != NULL);
+    if (zoom_active != s_prev_zoom_active) {
+        *floor_init = false;
+    }
+    s_prev_zoom_active = zoom_active;
+    if (!*floor_init) {
+        // Seed every bin from one global median, not each bin's own value -
+        // a bin holding a steady signal would otherwise start with
+        // floor == signal and never show contrast. Quiet bins then attack
+        // down to their true per-bin floor during the warmup window;
+        // signal bins start well above the seed and stay bright.
         static float scratch[DSP_FFT_SIZE];
-        int n = pb_bin_hi - pb_bin_lo + 1;
-        if (n < 1) n = 1;
-        if (n > (int)(sizeof(scratch)/sizeof(scratch[0]))) n = sizeof(scratch)/sizeof(scratch[0]);
-        for (int i = 0; i < n; i++) {
-            int b = pb_bin_lo + i;
-            int bin = ((b % n_bins) + n_bins) % n_bins;
-            scratch[i] = use_spectrum[bin];
-        }
+        int n = n_bins < DSP_FFT_SIZE ? n_bins : DSP_FFT_SIZE;
+        memcpy(scratch, use_spectrum, n * sizeof(float));
         qsort(scratch, n, sizeof(float), float_cmp);
-        float median = scratch[n/2];
-        /* EMA smoothing so the floor doesn't jump between samples */
-        const float alpha = 0.3f;
-        /* Track median directly: floor lands at LUT idx 32 (dark blue), not 0. */
-        DB_MIN_DISPLAY = alpha * (median + 6.0f) + (1.0f - alpha) * DB_MIN_DISPLAY;
-        /* Sanity clamp */
-        if (DB_MIN_DISPLAY < -150.0f) DB_MIN_DISPLAY = -150.0f;
-        if (DB_MIN_DISPLAY > -30.0f)  DB_MIN_DISPLAY = -30.0f;
+        float median = scratch[n / 2];
+        for (int i = 0; i < DSP_FFT_SIZE; i++) {
+            floor_arr[i] = median;
+        }
+        *floor_init = true;
+        s_floor_warmup = WF_FLOOR_WARMUP_TICKS;
+    }
+    float decay = (s_floor_warmup > 0) ? WF_FLOOR_DECAY_FAST : WF_FLOOR_DECAY_SLOW;
+    if (s_floor_warmup > 0) s_floor_warmup--;
+    for (int i = 0; i < n_bins && i < DSP_FFT_SIZE; i++) {
+        float db = use_spectrum[i];
+        float diff = db - floor_arr[i];
+        floor_arr[i] += (diff < 0.0f ? WF_FLOOR_ATTACK : decay) * diff;
     }
 
     for (int x = 0; x < WF_WIDTH; x++) {
@@ -223,7 +236,8 @@ void render_waterfall_tick(const float *spectrum, int n_bins)
         float db = use_spectrum[bin];
         // Match browser LUT mapping: noise floor -> idx 32, +31 dB above floor -> idx 255.
         // 30 dB above floor -> idx 255 (red). Tuned by eye.
-        int idx = (int)((db - DB_MIN_DISPLAY) * (255.0f / 30.0f) + 32.0f);
+        float db_min_display = floor_arr[bin] + 6.0f;
+        int idx = (int)((db - db_min_display) * (255.0f / 30.0f) + 32.0f);
         if (idx < 0) idx = 0;
         if (idx > 255) idx = 255;
         row[x] = s_lut[idx];
