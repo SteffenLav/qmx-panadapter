@@ -968,7 +968,9 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 - **iPad-style keyboard shift cycle.** On-screen keyboards (CQ presets, identity, memory labels, WiFi password) now cycle abc → Abc → ABC on the shift key, shown via the shift key's own label, and use a larger montserrat_28 font for better readability.
 - **WiFi password show/hide.** The WiFi credentials modal gained an eye-icon button to toggle the password field between masked and plain text.
 - **Memory channel grid readability.** Memory modal cells are taller (64px) with larger labels (montserrat_22/20) for easier reading and tapping.
+- **Frequency keypad decimal handling.** Each `MHz.kHz.Hz` block is now capped at 3 digits and zero-filled on the right, so e.g. typing `1.5` gives 1.500 MHz (not 1.005 MHz) — digits land in the most-significant position of whichever block you're typing, matching how people actually read off a dial frequency. The popup overlay is darker (70% vs 50%), and the Cancel/Save buttons (renamed from "Enter") now use the shared danger/success colours with a visible border.
 - **Operator signature watermark.** A faint, vertical "Stef OZ1LAV" reads bottom-to-top near the bottom-right corner of the screen on every screen, drawn last (on top of the waterfall/bottom bar so it's actually visible) and non-clickable so it never intercepts the edge-swipe gestures beneath it.
+- **Frequency-axis polish.** A thin separator line now marks where the frequency-axis band meets the waterfall (matching the spectrum's dB grid-line colour), and the MHz tick labels are nudged up 3px for better alignment.
 
 ### Next up
 
