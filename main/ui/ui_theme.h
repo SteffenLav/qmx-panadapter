@@ -160,6 +160,16 @@ static inline uint32_t ui_theme_kb_find_shift_btn(lv_obj_t *kb)
     return shift_btn;
 }
 
+/* Sole VALUE_CHANGED handler for a caps-cycle keyboard (LVGL's built-in
+ * lv_keyboard_def_event_cb is removed in attach below, and we invoke it
+ * ourselves for normal keys). This ordering is the whole point: the built-in
+ * handler types ANY button label it doesn't recognise as a control key
+ * ("abc"/"ABC"/"1#"/symbols are recognised, nothing else is), so when the shift
+ * key shows the pending "Abc" label, the built-in handler would insert literal
+ * "Abc" into the field (the v0.15.12 keyboard bug: tapping Abc->ABC typed
+ * "Abc"). By driving the shift key entirely here and never passing it to the
+ * default handler, the label is never typed - regardless of field state
+ * (a delete-after-type fix would corrupt a max-length-full field). */
 static inline void ui_theme_kb_shift_cb(lv_event_t *e)
 {
     lv_obj_t *kb = lv_event_get_target(e);
@@ -168,42 +178,59 @@ static inline void ui_theme_kb_shift_cb(lv_event_t *e)
     int state = (int)((packed >> 1) & 0x3);
     uint32_t shift_btn = (uint32_t)(packed >> 3);
 
+    uint32_t btn_id = lv_buttonmatrix_get_selected_button(kb);
+    if (btn_id == LV_BUTTONMATRIX_BUTTON_NONE) return;
+
     lv_keyboard_mode_t mode = lv_keyboard_get_mode(kb);
-    if (mode != LV_KEYBOARD_MODE_TEXT_LOWER && mode != LV_KEYBOARD_MODE_TEXT_UPPER) {
-        /* "1#" number/special layout: a different map, where shift_btn's
-         * index might land on an unrelated key - strip any leftover gold-
-         * CHECKED bit and mark inactive so the text layout reinitialises
-         * (back to "abc") when we return to it. */
+    bool text_mode = (mode == LV_KEYBOARD_MODE_TEXT_LOWER ||
+                      mode == LV_KEYBOARD_MODE_TEXT_UPPER);
+
+    /* The shift key drives our 3-state cycle and must NEVER reach the default
+     * handler (which would type its "Abc" pending label). We do the mode +
+     * label change ourselves and stop here. */
+    if (text_mode && active && btn_id == shift_btn) {
+        ui_theme_kb_apply_state(kb, (state + 1) % 3, shift_btn);
+        return;
+    }
+
+    /* Every other key: let LVGL's built-in handler do its normal thing - type
+     * the character (in whatever mode we're in: upper while state 1/2),
+     * backspace, OK/ready, or switch to/from the 1# number layout. */
+    lv_keyboard_def_event_cb(e);
+
+    lv_keyboard_mode_t new_mode = lv_keyboard_get_mode(kb);
+    if (new_mode != LV_KEYBOARD_MODE_TEXT_LOWER &&
+        new_mode != LV_KEYBOARD_MODE_TEXT_UPPER) {
+        /* Switched to the 1# number/special layout (a different map where our
+         * shift index no longer applies): clear the gold pending highlight and
+         * mark inactive so the text layout reinitialises to "abc" on return. */
         lv_buttonmatrix_clear_button_ctrl_all(kb, LV_BUTTONMATRIX_CTRL_CHECKED);
         lv_obj_set_user_data(kb, (void *)(intptr_t)((shift_btn << 3) | 0u));
         return;
     }
 
     if (!active) {
-        /* Just switched back to the TEXT layout from the number pad -
-         * re-find the shift key in the fresh default map and reset to "abc". */
+        /* Just returned to the text layout from the number pad (the default
+         * handler processed the "abc" key): re-find the shift key in the fresh
+         * map and reset the cycle to lowercase. */
         ui_theme_kb_apply_state(kb, 0, ui_theme_kb_find_shift_btn(kb));
         return;
     }
 
-    uint32_t btn_id = lv_buttonmatrix_get_selected_button(kb);
-    if (btn_id == LV_BUTTONMATRIX_BUTTON_NONE) return;
-
-    if (btn_id == shift_btn) {
-        /* Shift pressed: advance the cycle. */
-        ui_theme_kb_apply_state(kb, (state + 1) % 3, shift_btn);
-    } else if (state == 1) {
-        /* Any other key consumes the pending single-shift - the key was
-         * already typed in upper case (mode was UPPER during state 1),
-         * just drop back to lowercase for subsequent keys. */
+    if (state == 1 && btn_id != shift_btn) {
+        /* Pending single-shift consumed by a normal key (the default handler
+         * just typed it in upper case): drop back to lowercase for the next. */
         ui_theme_kb_apply_state(kb, 0, shift_btn);
     }
 }
 
-/* Attach the iPad-style shift-cycle behaviour to a keyboard. Always starts
- * at "abc" (lowercase), regardless of the keyboard's mode before this call. */
+/* Attach the iPad-style shift-cycle behaviour to a keyboard. Removes LVGL's
+ * built-in VALUE_CHANGED handler and installs ours as the sole handler (which
+ * calls the built-in one explicitly for non-shift keys). Always starts at
+ * "abc" (lowercase), regardless of the keyboard's mode before this call. */
 static inline void ui_theme_keyboard_attach_caps_cycle(lv_obj_t *kb)
 {
+    lv_obj_remove_event_cb(kb, lv_keyboard_def_event_cb);
     ui_theme_kb_apply_state(kb, 0, ui_theme_kb_find_shift_btn(kb));
     lv_obj_add_event_cb(kb, ui_theme_kb_shift_cb, LV_EVENT_VALUE_CHANGED, NULL);
 }
