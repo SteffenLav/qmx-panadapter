@@ -21,7 +21,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 > **You are solely responsible for operating legally** — correct licence class, operating
 > within your licence privileges, band plan compliance, no harmful interference.
 >
-> **What is NOT yet in place in v0.15.12:**
+> **What is NOT yet in place in v0.15.14:**
 > - No duty-cycle protection — back-to-back TX slots are not prevented by the firmware
 > - No ADIF logging — completed QSOs are not recorded anywhere
 > - No audio loopback verification — the firmware cannot confirm the transmitted waveform
@@ -976,6 +976,10 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 
 - **FT8 decode fix — both time slots now decode.** On a busy band the decode list used to fill with stations from only one 15-second slot at a time (all-even or all-odd), flip back and forth, and periodically empty — so you missed roughly half of every exchange. Root cause: the per-signal SNR estimate recomputed the slot-wide noise floor (a power average over the decoder's entire waterfall) **for every decoded message**, so a busy slot spent 9–18 s — longer than the 15-second slot itself — just re-deriving the same number. That overran the slot and corrupted the **next** slot's audio capture, which is why it alternated. The noise floor is now computed **once per slot** and shared across all messages, cutting per-slot decode time from ~9–18 s to ~1–2 s. Both slots now decode cleanly and the total number of decodes roughly doubled. The capture pipeline was also hardened so a slow decode can never corrupt a capture again: a small pool of capture buffers with an in-use guard, plus a per-slot decode time budget as a safety net.
 - **Dynamic per-bin waterfall noise floor.** The waterfall now tracks the noise floor per frequency bin with an adaptive black level, so the background stays dark and even across the whole span (instead of a single global threshold that washed out quieter regions) while real signals still stand out.
+
+### Shipped in v0.15.14
+
+- **Keyboard fix — the shift key no longer types "Abc".** On the on-screen keyboards (callsign/grid, WiFi password, CQ presets, memory labels), cycling the shift key **abc → Abc → ABC** inserted a literal `Abc` into the field on the middle tap. The pending-shift `Abc` label isn't one of the control-key labels LVGL's built-in keyboard handler recognises, so it typed it. The keyboard helper now fully owns key handling and never lets the shift key reach the text field. Thanks to Michael KZ4LY for the report.
 
 ### Next up
 
