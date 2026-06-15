@@ -56,6 +56,10 @@ static char   s_mm_resp[64] = {0};  // last MM response, set by process_cat_mess
 static size_t s_mm_resp_len = 0;
 static char   s_tm_resp[16] = {0};  // last TM response, set by process_cat_message
 static size_t s_tm_resp_len = 0;
+static char   s_pc_resp[16] = {0};  // last PC (power output) response
+static size_t s_pc_resp_len = 0;
+static char   s_sw_resp[16] = {0};  // last SW (SWR) response
+static size_t s_sw_resp_len = 0;
 static char   s_qmx_fw[24] = {0};   // QMX firmware version from VN; (e.g. "1_03_002QMX")
 static uint64_t s_diag_poll_hb_us = 0;  // last diag poll-heartbeat timestamp
 
@@ -103,6 +107,35 @@ esp_err_t cat_send_raw_cmd(const char *fmt, ...)
     size_t len = strlen(buf);
     ESP_LOGI("cat", "raw cmd: %s", buf);
     return cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)buf, len, 200);
+}
+
+esp_err_t cat_query_power_swr(float *power_w, float *swr)
+{
+    if (!s_cdc_dev) return ESP_ERR_INVALID_STATE;
+
+    s_pc_resp_len = 0;
+    s_sw_resp_len = 0;
+
+    esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"PC;SW;", 6, 200);
+    if (err != ESP_OK) return err;
+
+    for (int wi = 0; wi < 20 && (s_pc_resp_len == 0 || s_sw_resp_len == 0); wi++) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
+    if (power_w) {
+        *power_w = (s_pc_resp_len >= 3) ? (float)atoi(s_pc_resp + 2) / 10.0f : -1.0f;
+    }
+    if (swr) {
+        // Bare "SW;" (len 3, nothing between prefix and terminator) means the
+        // radio was in Receive mode when queried - no valid reading.
+        *swr = (s_sw_resp_len > 3) ? (float)atoi(s_sw_resp + 2) / 100.0f : -1.0f;
+    }
+
+    ESP_LOGI(TAG, "PC;SW; -> pc='%s' sw='%s'", s_pc_resp, s_sw_resp);
+
+    if (s_pc_resp_len == 0 && s_sw_resp_len == 0) return ESP_ERR_TIMEOUT;
+    return ESP_OK;
 }
 
 void cat_poll_set_paused(bool paused)
@@ -284,6 +317,23 @@ static void process_cat_message(const char *msg, size_t len)
         s_mm_resp_len = len;
         memcpy(s_mm_resp, msg, len < sizeof(s_mm_resp) ? len : sizeof(s_mm_resp) - 1);
         s_mm_resp[len < sizeof(s_mm_resp) ? len : sizeof(s_mm_resp) - 1] = '\0';
+        return;
+    }
+    // PC response: "PCnn;" - power output in tenths of a watt, queried via
+    // cat_query_power_swr() during FT8 TX (radio must be keyed for a valid
+    // reading).
+    if (len >= 3 && msg[0] == 'P' && msg[1] == 'C') {
+        s_pc_resp_len = len < sizeof(s_pc_resp) ? len : sizeof(s_pc_resp) - 1;
+        memcpy(s_pc_resp, msg, s_pc_resp_len);
+        s_pc_resp[s_pc_resp_len] = '\0';
+        return;
+    }
+    // SW response: "SWnnn;" - SWR in hundredths, or bare "SW;" if the radio
+    // is in Receive mode (no valid reading). Queried via cat_query_power_swr().
+    if (len >= 3 && msg[0] == 'S' && msg[1] == 'W') {
+        s_sw_resp_len = len < sizeof(s_sw_resp) ? len : sizeof(s_sw_resp) - 1;
+        memcpy(s_sw_resp, msg, s_sw_resp_len);
+        s_sw_resp[s_sw_resp_len] = '\0';
         return;
     }
     // QMX returns "?;" for unsupported commands; we just log once.

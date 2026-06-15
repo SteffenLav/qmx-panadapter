@@ -145,6 +145,41 @@ static bool scan_for_response(int64_t slot_sec,
     return false;
 }
 
+// Returns true if `text` (a decoded message, e.g. "CQ POTA OZ1LAV JO45" or
+// "OZ1LAV W9XYZ -05") passes the CQ-run filter settings: matched against the
+// whole message so POTA/SOTA tags, grids, country prefixes etc. are usable,
+// not just the callsign.
+// Each filter field can hold multiple space- and/or comma-separated terms
+// (e.g. "POTA SOTA" or "JA, VK"); matches if `text` contains ANY of them.
+static bool ft8_filter_contains_any(const char *text, const char *terms)
+{
+    char buf[FT8_FILTER_TEXT_LEN];
+    strncpy(buf, terms, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    char *tok = strtok(buf, " ,");
+    while (tok) {
+        if (tok[0] && strstr(text, tok)) return true;
+        tok = strtok(NULL, " ,");
+    }
+    return false;
+}
+
+static bool ft8_filter_match(const char *text, const ft8_filters_t *f)
+{
+    bool incl_any_en = f->incl_en[0] || f->incl_en[1];
+    if (incl_any_en) {
+        bool ok = false;
+        for (int i = 0; i < 2; i++) {
+            if (f->incl_en[i] && f->incl_text[i][0] && ft8_filter_contains_any(text, f->incl_text[i])) { ok = true; break; }
+        }
+        if (!ok) return false;
+    }
+    for (int i = 0; i < 2; i++) {
+        if (f->excl_en[i] && f->excl_text[i][0] && ft8_filter_contains_any(text, f->excl_text[i])) return false;
+    }
+    return true;
+}
+
 // Scan for any message addressed TO s_my_call in slot_sec - a reply to our CQ.
 // Picks the best-SNR caller when several answer at once. Fills caller / freq /
 // snr and one of report_buf / *got_rr73 / *got_73.
@@ -159,6 +194,9 @@ static bool scan_for_reply_to_me(int64_t slot_sec,
     int n = 0;
     ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
 
+    qmx_settings_t qs;
+    settings_load_all(&qs);
+
     int     best_idx = -1;
     int16_t best_snr = INT16_MIN;
 
@@ -170,6 +208,7 @@ static bool scan_for_reply_to_me(int64_t slot_sec,
         if (strcmp(tok1, s_my_call) != 0) continue;  // not addressed to us
         if (strcmp(tok2, s_my_call) == 0) continue;  // avoid MYCALL MYCALL loops
         if (!tok3[0]) continue;                       // no third token
+        if (!ft8_filter_match(snap[i].last_text, &qs.ft8_filters)) continue;
         if (snap[i].last_snr_db > best_snr) {
             best_snr = snap[i].last_snr_db;
             best_idx = i;

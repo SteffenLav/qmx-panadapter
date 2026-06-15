@@ -7,6 +7,21 @@
 extern "C" {
 #endif
 
+// FT8 CQ-run reply filters: up to two "include" and two "exclude" terms,
+// each independently enabled, matched against the *whole* decoded message
+// text (so POTA/SOTA tags, country prefixes, grids etc. are all fair game,
+// not just the callsign). Plus two standalone toggles.
+#define FT8_FILTER_TEXT_LEN 16
+
+typedef struct {
+    bool incl_en[2];
+    char incl_text[2][FT8_FILTER_TEXT_LEN];
+    bool excl_en[2];
+    char excl_text[2][FT8_FILTER_TEXT_LEN];
+    bool excl_worked_before; // reserved for v0.16.0 ADIF log; UI present, not yet enforced
+    bool excl_plain_cq;      // hide bare "CQ ..." rows, show only replies to us
+} ft8_filters_t;
+
 // All persisted settings. Floats are stored as raw 32-bit bit-patterns
 // in NVS (NVS doesn't have a native float type).
 typedef struct {
@@ -31,6 +46,7 @@ typedef struct {
     uint8_t  cq_sel;           // which CQ preset is active, 0..2 (default 0)
     bool     diag_log;         // diagnostic comms logging on/off (default false)
     bool     onboarded;        // first-boot WiFi/identity prompts shown (default false)
+    ft8_filters_t ft8_filters;        // CQ-run reply include/exclude filters
 } qmx_settings_t;
 
 // Initialise the settings module. Opens an NVS handle. Safe to call
@@ -78,6 +94,9 @@ void settings_set_diag_log(bool v);
 // First-boot onboarding done: once true, the WiFi/identity prompts are never
 // shown again (debounced flush).
 void settings_set_onboarded(bool v);
+
+// FT8 CQ-run reply include/exclude filters (debounced flush).
+void settings_set_ft8_filters(const ft8_filters_t *f);
 
 // QMX IF offset calibration trim (Hz). Per-unit oscillator variance shifts
 // the +12 kHz IF injection; this trim corrects what users see on the spectrum/

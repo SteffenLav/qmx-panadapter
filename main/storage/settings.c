@@ -37,6 +37,7 @@ static const char *TAG = "settings";
 #define KEY_CQ_SEL     "cq_sel"
 #define KEY_DIAG_LOG   "diag_log"
 #define KEY_ONBOARDED  "onboarded"
+#define KEY_FT8_FILT   "ft8_filt"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -78,6 +79,7 @@ static const char *TAG = "settings";
 #define DIRTY_CQ_SEL     (1u << 20)
 #define DIRTY_DIAG_LOG   (1u << 21)
 #define DIRTY_ONBOARDED  (1u << 22)
+#define DIRTY_FT8_FILT   (1u << 23)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -176,6 +178,7 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_CQ_SEL)     nvs_set_u8(s_nvs, KEY_CQ_SEL, snap.cq_sel);
         if (dirty_local & DIRTY_DIAG_LOG)   nvs_set_u8(s_nvs, KEY_DIAG_LOG, snap.diag_log ? 1 : 0);
         if (dirty_local & DIRTY_ONBOARDED)  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap.onboarded ? 1 : 0);
+        if (dirty_local & DIRTY_FT8_FILT)   nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap.ft8_filters, sizeof(snap.ft8_filters));
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
@@ -251,6 +254,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->cq_sel = 0;
     out->diag_log = false;
     out->onboarded = false;
+    memset(&out->ft8_filters, 0, sizeof(out->ft8_filters));
 
     if (!s_ready) {
         ESP_LOGW(TAG, "load_all: NVS not ready, using defaults");
@@ -298,6 +302,9 @@ static void load_from_nvs(qmx_settings_t *out)
 
     if (nvs_get_u8(s_nvs, KEY_DIAG_LOG, &u8v) == ESP_OK) out->diag_log = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_ONBOARDED, &u8v) == ESP_OK) out->onboarded = (u8v != 0);
+
+    sz = sizeof(out->ft8_filters);
+    nvs_get_blob(s_nvs, KEY_FT8_FILT, &out->ft8_filters, &sz);
 
     ESP_LOGI(TAG, "loaded: db=[%.1f..%.1f] ema=%.2f iq=%d",
              out->db_min, out->db_max, out->ema_alpha, out->iq_enabled);
@@ -593,4 +600,13 @@ void settings_set_cw_cal_hz(int16_t hz)
     }
     s_pending.cw_cal_hz = hz;
     mark_dirty(DIRTY_CW_CAL);
+}
+
+void settings_set_ft8_filters(const ft8_filters_t *f)
+{
+    if (!s_ready || !f) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_pending.ft8_filters = *f;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_FT8_FILT);
 }

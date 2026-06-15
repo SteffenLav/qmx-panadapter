@@ -69,6 +69,19 @@ static ft8_tx_state_t    s_state = FT8_TX_IDLE;
 static ft8_tx_request_t  s_armed;                 // valid when s_state != IDLE
 static volatile bool     s_abort_requested = false;
 
+// Last PC;/SW; reading taken at the tail of a TX burst (see ft8_tx_run).
+static float    s_last_power_w = -1.0f;
+static float    s_last_swr     = -1.0f;
+static int64_t  s_last_pwr_swr_us = -1;  // esp_timer_get_time() at capture, -1 if never
+
+float ft8_tx_get_last_power_swr(float *power_w, float *swr)
+{
+    if (power_w) *power_w = s_last_power_w;
+    if (swr) *swr = s_last_swr;
+    if (s_last_pwr_swr_us < 0) return -1.0f;
+    return (float)(esp_timer_get_time() - s_last_pwr_swr_us) / 1e6f;
+}
+
 void ft8_tx_init(void)
 {
     if (!s_lock) {
@@ -519,6 +532,22 @@ void ft8_tx_run(const ft8_tx_request_t *req)
         // that must ALWAYS run: the radio must never be left transmitting.
         tx_cmd(t0, "TA%.0f;", (double)FT8_TX_KEYUP_TONE_HZ);
         vTaskDelay(pdMS_TO_TICKS(FT8_TX_ENVELOPE_SETTLE_MS));
+
+        // Query power/SWR while still keyed - SW; returns no reading once
+        // back in Receive mode. Do this for both normal and aborted bursts.
+        float power_w = -1.0f, swr = -1.0f;
+#if FT8_TX_SEND_LIVE
+        esp_err_t pswr_err = cat_query_power_swr(&power_w, &swr);
+        ESP_LOGI(TAG, "post-burst PC/SW query: err=0x%x power=%.1f swr=%.2f",
+                 pswr_err, (double)power_w, (double)swr);
+        if (power_w >= 0.0f && swr >= 0.0f) {
+            ESP_LOGI(TAG, "TX power=%.1fW SWR=%.2f", (double)power_w, (double)swr);
+            s_last_power_w = power_w;
+            s_last_swr = swr;
+            s_last_pwr_swr_us = esp_timer_get_time();
+        }
+#endif
+
         tx_cmd(t0, "RX;");
 
         cat_poll_set_paused(false);

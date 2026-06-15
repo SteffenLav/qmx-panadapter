@@ -140,6 +140,12 @@ void ft8_tx_request_abort(void);
 //               when IDLE/ACTIVE
 ft8_tx_state_t ft8_tx_get_status(char *text, size_t text_len, int *secs_until);
 
+// Returns the power (W) and SWR from the most recent TX burst's PC;/SW;
+// query, and how many seconds ago that burst completed (-1.0f if no burst
+// has completed yet). *power_w and *swr are -1.0f if no reading was ever
+// taken, or if that particular value was unavailable.
+float ft8_tx_get_last_power_swr(float *power_w, float *swr);
+
 // Scan the current heard-station table and return the audio frequency (Hz) of
 // the nearest unoccupied 50-Hz bin to FT8_TX_CQ_DEFAULT_FREQ_HZ (1500 Hz).
 // Safe to call from any task; takes the ft8_screen mutex internally via

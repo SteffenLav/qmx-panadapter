@@ -99,6 +99,19 @@ const char *cat_get_qmx_fw(void);
 esp_err_t cat_send_raw_cmd(const char *fmt, ...);
 
 /**
+ * @brief Query the QMX's instantaneous power output and SWR (PC; and SW;).
+ *
+ * Both readings are only valid while the radio is keyed (transmitting) - SW;
+ * returns no value in Receive mode. Blocks for the CAT round trip (up to
+ * ~400ms total). On success, *power_w and *swr are set to -1.0f if that
+ * particular reading was unavailable (e.g. SWR queried while not transmitting).
+ *
+ * @return ESP_OK if at least one reading was received, ESP_ERR_TIMEOUT if
+ *         neither responded, ESP_ERR_INVALID_STATE if CAT is not connected.
+ */
+esp_err_t cat_query_power_swr(float *power_w, float *swr);
+
+/**
  * @brief Request the QMX SSB receive filter bandwidth (Hz: 2500/2700/2900/3200).
  *
  * Thread-safe to call from the LVGL/UI thread. The actual MMSSB|Bandwidth=

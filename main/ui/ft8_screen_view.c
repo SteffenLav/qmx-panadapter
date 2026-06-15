@@ -2,7 +2,7 @@
 #include "ui_theme.h"
 #include "ft8_screen.h"
 #include "ft8_cq_modal.h"
-#include "ui_clock.h"
+#include "ft8_filter_modal.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -135,12 +135,9 @@ static lv_obj_t *s_right_pane  = NULL;
 static lv_obj_t *s_lbl_mode     = NULL;
 static lv_obj_t *s_lbl_freq     = NULL;
 static lv_obj_t *s_ft8_freq_hit = NULL;  // enlarged touch target over s_lbl_freq
-static ui_clock_t s_clk_utc;
-static lv_obj_t *s_lbl_utc_suffix = NULL;
 static lv_obj_t *s_lbl_count    = NULL;
 static lv_obj_t *s_bar_slot     = NULL;  // tiny countdown bar beside s_lbl_count
 static lv_obj_t *s_lbl_heard    = NULL;
-static lv_obj_t *s_lbl_me       = NULL;
 static lv_obj_t *s_btn_cq       = NULL;  // "Call CQ" - short tap TX, long-press edits presets
 static lv_obj_t *s_cq_lbl       = NULL;  // label inside s_btn_cq (shows the active CQ message)
 static lv_obj_t *s_lbl_tx       = NULL;  // TX state indicator: armed/active, tap to cancel/abort
@@ -149,6 +146,7 @@ static lv_obj_t *s_lbl_tx       = NULL;  // TX state indicator: armed/active, ta
 // Tap once to lock; tap the active button again to revert to "any".
 static lv_obj_t *s_btn_tx_even  = NULL;
 static lv_obj_t *s_btn_tx_odd   = NULL;
+static lv_obj_t *s_btn_filter   = NULL;  // "Filter" button — opens exclude-prefix modal
 static int        s_cq_parity   = -1;
 
 static lv_obj_t *s_list         = NULL;
@@ -608,6 +606,41 @@ static void hide_row(int i)
     if (s_row_hover == i) s_row_hover = -1;
 }
 
+// Returns true if `text` (a decoded message, e.g. "CQ POTA OZ1LAV JO45" or
+// "OZ1LAV W9XYZ -05") passes the CQ-run filter settings: matched against the
+// whole message so POTA/SOTA tags, grids, country prefixes etc. are usable,
+// not just the callsign.
+// Each filter field can hold multiple space- and/or comma-separated terms
+// (e.g. "POTA SOTA" or "JA, VK"); matches if `text` contains ANY of them.
+static bool ft8_filter_contains_any(const char *text, const char *terms)
+{
+    char buf[FT8_FILTER_TEXT_LEN];
+    strncpy(buf, terms, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    char *tok = strtok(buf, " ,");
+    while (tok) {
+        if (tok[0] && strstr(text, tok)) return true;
+        tok = strtok(NULL, " ,");
+    }
+    return false;
+}
+
+static bool ft8_filter_match(const char *text, const ft8_filters_t *f)
+{
+    bool incl_any_en = f->incl_en[0] || f->incl_en[1];
+    if (incl_any_en) {
+        bool ok = false;
+        for (int i = 0; i < 2; i++) {
+            if (f->incl_en[i] && f->incl_text[i][0] && ft8_filter_contains_any(text, f->incl_text[i])) { ok = true; break; }
+        }
+        if (!ok) return false;
+    }
+    for (int i = 0; i < 2; i++) {
+        if (f->excl_en[i] && f->excl_text[i][0] && ft8_filter_contains_any(text, f->excl_text[i])) return false;
+    }
+    return true;
+}
+
 static void rebuild_list(void)
 {
     static ft8_call_t snap[FT8_CALL_TABLE_SIZE];
@@ -615,13 +648,18 @@ static void rebuild_list(void)
     ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
     qsort(snap, n, sizeof(ft8_call_t), cmp_cq_then_snr);
 
+    qmx_settings_t qs;
+    settings_load_all(&qs);
+
     // While we're running our own CQ, hide other stations' CQ rows so replies
-    // addressed to us aren't buried under unrelated CQ traffic.
-    bool hide_cq = ft8_qso_cq_filter_active();
+    // addressed to us aren't buried under unrelated CQ traffic. The "exclude
+    // plain CQ" filter applies the same hide unconditionally.
+    bool hide_cq = ft8_qso_cq_filter_active() || qs.ft8_filters.excl_plain_cq;
 
     int row = 0;
     for (int i = 0; i < n && row < MAX_ROWS; i++) {
         if (hide_cq && strncmp(snap[i].last_text, "CQ ", 3) == 0) continue;
+        if (!ft8_filter_match(snap[i].last_text, &qs.ft8_filters)) continue;
         update_row(row++, &snap[i]);
     }
     for (int i = row; i < MAX_ROWS; i++) {
@@ -679,10 +717,7 @@ static void t_clock_cb(lv_timer_t *t)
     if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) return;
 
     time_t now = time(NULL);
-    struct tm utc;
-    gmtime_r(&now, &utc);
 
-    ui_clock_set_time(&s_clk_utc, utc.tm_hour, utc.tm_min, utc.tm_sec);
     if (s_lbl_count) {
         int sec_in_slot = (int)(now % 15);
         int remain = 15 - sec_in_slot;
@@ -715,6 +750,7 @@ static void t_clock_cb(lv_timer_t *t)
         ft8_tx_state_t tx_st = ft8_tx_get_status(tx_text, sizeof(tx_text), &secs_until);
         ft8_qso_state_t qso_st = ft8_qso_get_state();
         char b[96];
+        float tx_pwr_w, tx_pwr_swr, tx_pwr_age;
 
         if (tx_st == FT8_TX_ACTIVE) {
             // Red: transmitting right now (tap to abort)
@@ -747,11 +783,20 @@ static void t_clock_cb(lv_timer_t *t)
             lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0xFF6020), 0);
 
         } else {
-            // Dim white: ft8_status passthrough (RX state, decode count, etc.)
-            char status[96];
-            ft8_status_get(status, sizeof(status));
-            lv_label_set_text(s_lbl_tx, status[0] ? status : "Idle");
-            lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+            // Check for recent TX burst power/SWR reading (for debugging: show age + raw values)
+            tx_pwr_age = ft8_tx_get_last_power_swr(&tx_pwr_w, &tx_pwr_swr);
+            if (tx_pwr_age >= 0.0f && tx_pwr_age < 10.0f) {
+                snprintf(b, sizeof(b), "Last TX: %.1fW SWR%.2f [%ds]",
+                         (double)tx_pwr_w, (double)tx_pwr_swr, (int)tx_pwr_age);
+                lv_label_set_text(s_lbl_tx, b);
+                lv_obj_set_style_text_color(s_lbl_tx, lv_palette_main(LV_PALETTE_CYAN), 0);
+            } else {
+                // Dim white: ft8_status passthrough (RX state, decode count, etc.)
+                char status[96];
+                ft8_status_get(status, sizeof(status));
+                lv_label_set_text(s_lbl_tx, status[0] ? status : "Idle");
+                lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+            }
         }
         lv_obj_clear_flag(s_lbl_tx, LV_OBJ_FLAG_HIDDEN);
     }
@@ -797,6 +842,15 @@ static void tx_odd_btn_cb(lv_event_t *e)
 // 1500 Hz (scanning the current heard-station table via ft8_find_clear_tone_hz),
 // then opens the same confirmation modal a reply uses. parity/last_utc are
 // irrelevant for CQ (fires on the very next slot boundary).
+// Forward declaration — defined later in this file
+
+static void filter_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    ESP_LOGI(TAG, "Filter button tapped");
+    ft8_filter_modal_show();  // opens the exclude-prefix + future filters modal
+}
+
 static void cq_btn_cb(lv_event_t *e)
 {
     (void)e;
@@ -1083,29 +1137,20 @@ void ft8_screen_view_init(lv_obj_t *parent)
         s_ft8_freq_hit = hit;
     }
 
-    {
-        const lv_font_t *font = &lv_font_montserrat_32;
-        const lv_coord_t cell_w = 22;
-        ui_clock_init(&s_clk_utc, s_left_pane, 0, 160, font, lv_color_hex(0xA0FFA0), cell_w);
-        s_lbl_utc_suffix = lv_label_create(s_left_pane);
-        lv_label_set_text(s_lbl_utc_suffix, " UTC");
-        lv_obj_set_style_text_color(s_lbl_utc_suffix, lv_color_hex(0xA0FFA0), 0);
-        lv_obj_set_style_text_font(s_lbl_utc_suffix, font, 0);
-        lv_obj_set_pos(s_lbl_utc_suffix, 7 * cell_w, 160);
-    }
+    // UTC clock removed — it's in the center bottom bar already
 
     s_lbl_count = lv_label_create(s_left_pane);
     lv_label_set_text(s_lbl_count, "Slot: -- s");
     lv_obj_set_style_text_color(s_lbl_count, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(s_lbl_count, &lv_font_montserrat_24, 0);
-    lv_obj_set_pos(s_lbl_count, 0, 240);
+    lv_obj_set_pos(s_lbl_count, 0, 148);
 
     // Tiny countdown bar to the right of "EVEN/ODD  N s", counting down
     // from full (start of slot) to empty (end of slot). Range is in ms so the
     // fast t_slotbar_cb tick can glide it smoothly; colour set in t_clock_cb.
     s_bar_slot = lv_bar_create(s_left_pane);
     lv_obj_set_size(s_bar_slot, 140, 8);
-    lv_obj_set_pos(s_bar_slot, 140, 251);
+    lv_obj_set_pos(s_bar_slot, 140, 159);
     lv_obj_set_style_radius(s_bar_slot, 2, 0);
     lv_obj_set_style_bg_color(s_bar_slot, lv_color_hex(0x303044), 0);
     lv_obj_set_style_border_width(s_bar_slot, 0, 0);
@@ -1113,12 +1158,12 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_bar_set_value(s_bar_slot, 15000, LV_ANIM_OFF);
 
     // CQ TX parity preference: [TX: EVEN] [TX: ODD] toggle row.
-    // Fits in the 60 px gap between the slot countdown (y=240, ~28 px tall)
-    // and the heard count (y=304).  Dim grey when inactive; lights up in the
-    // same slot colours as s_lbl_count (steel blue / warm orange) when active.
+    // Double-height buttons below the slot countdown.  Dim grey when
+    // inactive; lights up in the same slot colours as s_lbl_count
+    // (steel blue / warm orange) when active.
     s_btn_tx_even = lv_btn_create(s_left_pane);
-    lv_obj_set_size(s_btn_tx_even, 136, 26);
-    lv_obj_set_pos(s_btn_tx_even, 0, 272);
+    lv_obj_set_size(s_btn_tx_even, 136, 52);
+    lv_obj_set_pos(s_btn_tx_even, 0, 180);
     lv_obj_set_style_bg_color(s_btn_tx_even, lv_color_hex(0x303044), 0);
     lv_obj_set_style_border_width(s_btn_tx_even, 0, 0);
     lv_obj_set_style_radius(s_btn_tx_even, 4, 0);
@@ -1131,8 +1176,8 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_center(even_lbl);
 
     s_btn_tx_odd = lv_btn_create(s_left_pane);
-    lv_obj_set_size(s_btn_tx_odd, 136, 26);
-    lv_obj_set_pos(s_btn_tx_odd, 148, 272);
+    lv_obj_set_size(s_btn_tx_odd, 136, 52);
+    lv_obj_set_pos(s_btn_tx_odd, 148, 180);
     lv_obj_set_style_bg_color(s_btn_tx_odd, lv_color_hex(0x303044), 0);
     lv_obj_set_style_border_width(s_btn_tx_odd, 0, 0);
     lv_obj_set_style_radius(s_btn_tx_odd, 4, 0);
@@ -1146,18 +1191,22 @@ void ft8_screen_view_init(lv_obj_t *parent)
 
     update_parity_btns();  // sync colours to s_cq_parity (persists on FT8 re-entry)
 
-    s_lbl_heard = lv_label_create(s_left_pane);
-    lv_label_set_text(s_lbl_heard, "Active: 0");
-    lv_obj_set_style_text_color(s_lbl_heard, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-    lv_obj_set_style_text_font(s_lbl_heard, &lv_font_montserrat_24, 0);
-    lv_obj_set_pos(s_lbl_heard, 0, 304);
+    // Filter button — opens modal for exclude-prefix, worked-before, etc.
+    s_btn_filter = lv_btn_create(s_left_pane);
+    lv_obj_set_size(s_btn_filter, 288, 60);
+    lv_obj_set_pos(s_btn_filter, 0, 270);
+    lv_obj_set_style_bg_color(s_btn_filter, lv_color_hex(UI_COLOR_PRIMARY), 0);  // pale blue
+    lv_obj_set_style_border_color(s_btn_filter, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
+    lv_obj_set_style_border_width(s_btn_filter, 2, 0);
+    lv_obj_set_style_radius(s_btn_filter, 8, 0);
+    lv_obj_add_event_cb(s_btn_filter, filter_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *filter_lbl = lv_label_create(s_btn_filter);
+    lv_label_set_text(filter_lbl, "Filter");
+    lv_obj_set_style_text_color(filter_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(filter_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(filter_lbl);
 
-    s_lbl_me = lv_label_create(s_left_pane);
-    lv_label_set_text(s_lbl_me, "");
-    lv_obj_set_style_text_color(s_lbl_me, lv_color_hex(0xA0FFA0), 0);
-    lv_obj_set_style_text_font(s_lbl_me, &lv_font_montserrat_24, 0);
-    lv_obj_set_pos(s_lbl_me, 0, 360);
-    lv_obj_add_flag(s_lbl_me, LV_OBJ_FLAG_HIDDEN);
+    // "ME:xxxx" label removed — callsign/grid now shown compactly under MODE
 
     // v0.12.0: "Call CQ" - opens the TX confirmation modal pre-filled with
     // a CQ message at the conventional default audio tone. Coloured the
@@ -1166,7 +1215,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // the two steps of the flow together visually.
     s_btn_cq = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_cq, 288, 60);
-    lv_obj_set_pos(s_btn_cq, 0, 410);
+    lv_obj_set_pos(s_btn_cq, 0, 340);
     lv_obj_set_style_bg_color(s_btn_cq, lv_color_hex(0x2e8b3a), 0);
     lv_obj_set_style_border_color(s_btn_cq, lv_color_hex(0x4caf50), 0);
     lv_obj_set_style_border_width(s_btn_cq, 2, 0);
@@ -1184,6 +1233,13 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_center(s_cq_lbl);
     ft8_screen_view_refresh_cq_label();  // show the active CQ message
 
+    // "Active: N" - own line directly below the Call CQ button.
+    s_lbl_heard = lv_label_create(s_left_pane);
+    lv_label_set_text(s_lbl_heard, "Active: 0");
+    lv_obj_set_style_text_color(s_lbl_heard, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_set_style_text_font(s_lbl_heard, &lv_font_montserrat_24, 0);
+    lv_obj_set_pos(s_lbl_heard, 0, 408);
+
     // TX state indicator - hidden while idle; amber/armed or red/active,
     // tap to cancel/abort. See t_clock_cb (1 Hz refresh: state, colour,
     // countdown text) and tx_indicator_tap_cb (the tap action itself).
@@ -1193,9 +1249,26 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_label_set_long_mode(s_lbl_tx, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_lbl_tx, 288);
-    lv_obj_set_pos(s_lbl_tx, 0, 482);
+    lv_obj_set_pos(s_lbl_tx, 0, 440);
     lv_obj_add_flag(s_lbl_tx, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_lbl_tx, tx_indicator_tap_cb, LV_EVENT_CLICKED, NULL);
+
+    // Placeholder for a future per-slot FT8 spectrum/waterfall strip.
+    {
+        lv_obj_t *box = lv_obj_create(s_left_pane);
+        lv_obj_set_size(box, 288, 50);
+        lv_obj_set_pos(box, 0, MID_H - 70);
+        lv_obj_set_style_bg_color(box, lv_color_hex(0x101018), 0);
+        lv_obj_set_style_border_color(box, lv_color_hex(0x404050), 0);
+        lv_obj_set_style_border_width(box, 2, 0);
+        lv_obj_set_style_radius(box, 8, 0);
+        lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_t *lbl = lv_label_create(box);
+        lv_label_set_text(lbl, "(future FT8 waterfall)");
+        lv_obj_set_style_text_color(lbl, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
+        lv_obj_center(lbl);
+    }
 
     // Right pane
     s_right_pane = lv_obj_create(s_container);
@@ -1291,28 +1364,16 @@ void ft8_screen_view_show(void)
         lv_obj_move_foreground(s_ft8_freq_hit);
     }
 
-    if (s_lbl_me) {
+    {
         qmx_settings_t s;
         settings_load_all(&s);
         if (s.my_callsign[0]) {
-            char buf[40];
-            if (s.my_grid[0]) {
-                snprintf(buf, sizeof(buf), "ME: %s %s", s.my_callsign, s.my_grid);
-            } else {
-                snprintf(buf, sizeof(buf), "ME: %s", s.my_callsign);
-            }
             /* refresh callsign cache for row colour scheme */
-            {
-                size_t ci;
-                for (ci = 0; ci < sizeof(s_my_call) - 1 && s.my_callsign[ci]; ci++)
-                    s_my_call[ci] = (s.my_callsign[ci] >= 'a' && s.my_callsign[ci] <= 'z')
-                                   ? (char)(s.my_callsign[ci] - 32) : s.my_callsign[ci];
-                s_my_call[ci] = 0;
-            }
-            lv_label_set_text(s_lbl_me, buf);
-            lv_obj_clear_flag(s_lbl_me, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(s_lbl_me, LV_OBJ_FLAG_HIDDEN);
+            size_t ci;
+            for (ci = 0; ci < sizeof(s_my_call) - 1 && s.my_callsign[ci]; ci++)
+                s_my_call[ci] = (s.my_callsign[ci] >= 'a' && s.my_callsign[ci] <= 'z')
+                               ? (char)(s.my_callsign[ci] - 32) : s.my_callsign[ci];
+            s_my_call[ci] = 0;
         }
         s_user_loc_valid = false;
         if (s.my_grid[0]) {
