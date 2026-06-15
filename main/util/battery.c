@@ -29,15 +29,20 @@ static bool s_initialised = false;
 // full charge) and LATCH "absent" once it swings more than any pack ever could.
 #define BATT_DET_WINDOW       5      // samples (~5 s at the 1 Hz status poll)
 #define BATT_DET_SPREAD_MV    1000   // window swing a real pack never shows
+#define BATT_DET_STABLE_REQ   15     // consecutive good windows (~15 s) before
+                                      // flipping absent -> present; avoids
+                                      // flicker right after unplugging, where
+                                      // the rail briefly looks stable again
+                                      // before settling into erratic swings
 
 static uint32_t s_det_win[BATT_DET_WINDOW];
 static int      s_det_count = 0;
 static int      s_det_head  = 0;
-static int      s_present   = -1;    // -1 unknown, 0 absent (latched), 1 present
+static int      s_present   = -1;    // -1 unknown, 0 absent, 1 present
+static int      s_stable_n  = 0;     // consecutive good windows while absent
 
 static void battery_track(uint32_t mv)
 {
-    if (s_present == 0) return;      // absent is latched (no runtime hot-plug)
     s_det_win[s_det_head] = mv;
     s_det_head = (s_det_head + 1) % BATT_DET_WINDOW;
     if (s_det_count < BATT_DET_WINDOW) s_det_count++;
@@ -49,17 +54,34 @@ static void battery_track(uint32_t mv)
         if (s_det_win[i] > hi) hi = s_det_win[i];
     }
     if (hi - lo > BATT_DET_SPREAD_MV) {
-        s_present = 0;               // erratic rail -> no pack; latch
-        ESP_LOGW(TAG, "no battery detected (rail swing %lu mV over window)",
-                 (unsigned long)(hi - lo));
+        s_stable_n = 0;
+        if (s_present != 0) {
+            s_present = 0;           // erratic rail -> no pack
+            ESP_LOGW(TAG, "no battery detected (rail swing %lu mV over window)",
+                     (unsigned long)(hi - lo));
+        }
     } else if (s_det_count >= BATT_DET_WINDOW) {
-        s_present = 1;               // stable across the full window -> pack present
+        if (s_present == 1) return;  // already present, nothing to do
+        if (s_present == -1) {
+            s_present = 1;           // stable across the full window at startup
+            ESP_LOGI(TAG, "battery present (rail stable, swing %lu mV)",
+                     (unsigned long)(hi - lo));
+            return;
+        }
+        // was absent: require a longer stable run before trusting it again
+        if (++s_stable_n >= BATT_DET_STABLE_REQ) {
+            s_present = 1;
+            s_stable_n = 0;
+            ESP_LOGI(TAG, "battery present (rail stable for %ds, swing %lu mV)",
+                     BATT_DET_STABLE_REQ, (unsigned long)(hi - lo));
+        }
     }
 }
 
-// false only once an absent pack has been positively detected (latched);
-// "unknown" (first few seconds) counts as present so we don't flash the
-// no-battery icon on a unit that does have one.
+// false only once an absent pack has been positively detected; "unknown"
+// (first few seconds) counts as present so we don't flash the no-battery
+// icon on a unit that does have one. Re-evaluated continuously so a battery
+// plugged in at runtime is picked up once the rail settles.
 bool battery_present(void)
 {
     return s_present != 0;
