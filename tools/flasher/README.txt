@@ -2,8 +2,13 @@
  QMX Panadapter - flashing the firmware onto an M5Stack Tab5
 ============================================================
 
-This folder is a self-contained, offline flasher. No developer
-tools, no Python, no internet needed.
+This is a one-click flasher/updater. It downloads the LATEST
+firmware from GitHub automatically and flashes it - so you don't
+have to find or download the right .bin yourself. No developer
+tools and no Python needed on Windows.
+
+(Offline? It also works without internet if a firmware .bin is
+sitting in this same folder - see "If it fails" below.)
 
 ------------------------------------------------------------
  WINDOWS - the easy way
@@ -14,8 +19,9 @@ tools, no Python, no internet needed.
 
  2. Double-click  flash.bat
 
- 3. Follow the prompt (press a key), wait for "SUCCESS", done.
-    The Tab5 restarts on the new firmware automatically.
+ 3. It fetches the latest firmware, then asks you to press a key.
+    Wait for "SUCCESS", done - the Tab5 restarts on the new
+    firmware automatically.
 
  That's it. Your saved settings (WiFi, callsign, grid, memories)
  are kept - this flasher does not erase them.
@@ -48,17 +54,29 @@ tools, no Python, no internet needed.
    be holding the COM port, then try again.
  - Unplug, replug, and re-run.
 
+ No internet (offline flashing):
+ - The flasher tries GitHub first. If it can't reach it, it falls
+   back to a qmx_panadapter_merged_*.bin in this same folder.
+ - So for offline use, just download that .bin once (from the
+   GitHub Releases page) and keep it next to flash.bat /
+   flash.command. It will be used automatically when offline.
+
 ------------------------------------------------------------
  FOR THE MAINTAINER (Steffen) - what to put in this folder
 ------------------------------------------------------------
 
- The release ZIP should contain, all in one folder:
+ The Windows ZIP should contain, all in one folder:
 
    flash.bat                              (this repo, Windows)
    flash.command                          (this repo, macOS/Linux)
    README.txt                             (this repo)
    esptool.exe                            (from the esptool release; Windows only)
-   qmx_panadapter_merged_vX.Y.Z.bin       (from the GitHub release)
+
+ The firmware .bin is NOT bundled - the flasher downloads the
+ latest release from GitHub itself. (Add a
+ qmx_panadapter_merged_*.bin to the folder only if you want an
+ offline-capable bundle; it's used as the fallback when there's
+ no internet.)
 
  Windows users need nothing installed (esptool.exe is bundled).
  macOS/Linux users install esptool once via pip3/brew (no standalone
@@ -68,6 +86,6 @@ tools, no Python, no internet needed.
    https://github.com/espressif/esptool/releases
    (esptool-vX.X.X-windows-amd64.zip -> copy esptool.exe here).
 
- flash.bat auto-detects the COM port and auto-picks the newest
- qmx_panadapter_merged_*.bin in the folder, so it needs no edits
- between releases - just drop in the new .bin.
+ The repo hardcoded for downloads is SteffenLav/qmx-panadapter
+ (REPO= in flash.bat / flash.command). No edits needed between
+ releases - it always pulls the newest published release.

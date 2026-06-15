@@ -25,15 +25,27 @@ if not defined ESPTOOL (
     goto :end
 )
 
-rem --- 2. find the firmware .bin in this folder (newest by file time, so a
-rem        leftover older .bin can't win on a lexical version-string sort) -----
+rem --- 2. get the firmware: download the latest GitHub release, falling back
+rem        to a local qmx_panadapter_merged_*.bin if there's no internet -------
+set "REPO=SteffenLav/qmx-panadapter"
+echo Checking GitHub for the latest firmware ^(needs internet^)...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; try { [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $ProgressPreference='SilentlyContinue'; $h=@{'User-Agent'='qmx-flasher'}; $r=Invoke-RestMethod -TimeoutSec 20 -Headers $h -Uri 'https://api.github.com/repos/%REPO%/releases/latest'; $a=$r.assets | Where-Object { $_.name -like 'qmx_panadapter_merged_*.bin' } | Select-Object -First 1; if(-not $a){ exit 2 }; Write-Host ('  latest release: ' + $r.tag_name + '  (' + $a.name + ')'); $out=(Join-Path '%~dp0' $a.name); $tmp=$out + '.part'; Invoke-WebRequest -TimeoutSec 180 -Headers $h -Uri $a.browser_download_url -OutFile $tmp; Move-Item -Force $tmp $out; Write-Host '  download OK.' } catch { exit 1 }"
+if errorlevel 1 (
+    echo   could not fetch from GitHub ^(offline?^) - looking for a local copy...
+)
+
+rem Pick the newest .bin in this folder: the freshly-downloaded latest, or a
+rem bundled local copy if the download was skipped. Newest by file time, so a
+rem leftover older .bin can't win on a lexical version-string sort.
 set "FW="
 for /f "delims=" %%F in ('dir /b /o-d "%~dp0qmx_panadapter_merged_*.bin" 2^>nul') do (
     if not defined FW set "FW=%~dp0%%F"
 )
 if not defined FW (
-    echo ERROR: No qmx_panadapter_merged_*.bin found in this folder.
-    echo Put this script in the same folder as the firmware .bin file.
+    echo(
+    echo ERROR: no firmware available.
+    echo   - Connect this PC to the internet so the latest can be downloaded, OR
+    echo   - put a qmx_panadapter_merged_*.bin in this folder for offline use.
     goto :end
 )
 
