@@ -1,0 +1,14 @@
+# Keep shell scripts LF even when checked out / zipped on Windows, so the
+# macOS/Linux flasher isn't broken by CRLF ("bad interpreter: ...^M").
+*.command  text eol=lf
+*.sh       text eol=lf
+
+# Windows batch/PowerShell scripts use CRLF.
+*.bat      text eol=crlf
+*.ps1      text eol=crlf
+
+# Firmware images and other binaries: never touch them.
+*.bin      binary
+*.elf      binary
+*.png      binary
+*.pdf      binary
