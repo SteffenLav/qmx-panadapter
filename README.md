@@ -44,6 +44,19 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 If you've just flashed the firmware (or received a flashed Tab5), here's the shortest path to a working panadapter.
 
+### Flash the firmware (no developer tools needed)
+
+Not running the panadapter yet? Use the one-click flasher in [`tools/flasher/`](tools/flasher) (also attached to each [release](https://github.com/SteffenLav/qmx-panadapter/releases)):
+
+1. Plug the Tab5 into your computer with a **USB-C data cable** — a charge-only cable will not work.
+2. Run the flasher:
+   - **Windows** — double-click `flash.bat`
+   - **macOS** — double-click `flash.command`  (needs esptool once: `brew install esptool` or `pip3 install esptool`)
+   - **Linux** — `bash flash.command`  (needs `pip3 install esptool`)
+3. It **downloads the latest firmware from GitHub and flashes it automatically** — wait for `SUCCESS`, and the Tab5 restarts on the new firmware.
+
+Your saved settings (WiFi, callsign, grid, memory channels) survive a re-flash — the flasher does not erase them. **No internet?** Put a `qmx_panadapter_merged_*.bin` (from the [releases page](https://github.com/SteffenLav/qmx-panadapter/releases)) next to the flasher and it uses that instead. Building from source instead? See [Build, flash, monitor](#build-flash-monitor).
+
 > ⚠️ **Before you connect anything — check your QMX firmware.** The panadapter needs the QMX/QMX+ running the **latest public firmware (1.03.002 or newer)** to work properly. You can read the version on the **QMX's own display right at power-on**. If it's older, update the QMX *first* — then continue below.
 
 ### 1. Connect the cables — this is where most problems happen
@@ -290,6 +303,8 @@ See the [Roadmap](#roadmap) at the bottom for what's next.
 - Windows 11 + PowerShell (other platforms work fine, just no `qmx` helper)
 
 ## Build, flash, monitor
+
+> Just want to *install* the firmware, not develop it? Use the one-click flasher in [`tools/flasher/`](tools/flasher) — no IDF, Python, or build needed. See [Flash the firmware](#flash-the-firmware-no-developer-tools-needed).
 
 Standard IDF flow:
 
