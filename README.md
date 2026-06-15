@@ -545,6 +545,21 @@ From there it's a full auto QSO engine, not just a repeating call:
 
 Tap **Cancel** in the TX status bar at any time to stop CQ-run.
 
+### Reply filter (CQ-run)
+
+Tap the **Filter** button in the left pane to open the reply filter editor. It controls which stations CQ-run will auto-answer and which rows show in the decode list:
+
+- **Include 1 / Include 2** — if either field has text, only messages containing one of its terms (space- or comma-separated, e.g. "POTA SOTA" or "JA, VK") are eligible for auto-reply. Matching is against the *whole* decoded message, not just the callsign, so this also catches POTA/SOTA tags, grid squares, country prefixes, `/P`/`/M` suffixes, etc.
+- **Exclude 1 / Exclude 2** — messages containing any of these terms are skipped, even if they'd otherwise match.
+- **Exclude plain CQ callers** — hides bare `CQ ...` rows from the decode list entirely, so only replies/exchanges remain visible.
+- **Exclude worked-before** — present in the UI but not yet enforced; will activate once the ADIF log lands in v0.16.0.
+
+Tap **Save** to persist the filters (NVS) and apply them immediately, or **Cancel** to discard changes.
+
+### TX power/SWR readout
+
+After each TX burst (FT8 or manual TA), while the QMX is still keyed, the Tab5 queries `PC;`/`SW;` for the instantaneous forward power and SWR and shows it briefly in the status line as `Last TX: X.XW SWRx.xx [Ns]`. Useful as a quick antenna-match sanity check without a separate meter.
+
 ### Slot parity display
 
 The slot countdown in the left pane shows the current slot parity:
