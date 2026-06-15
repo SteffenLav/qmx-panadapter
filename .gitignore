@@ -31,6 +31,10 @@ qmx_panadapter-*-merged.bin
 hunt.txt
 qmx_panadapter_v*.bin
 
+# Firmware that the flasher downloads into its folder at runtime (and any
+# local test/offline bins) - never commit firmware images into the repo.
+tools/flasher/*.bin
+
 # Third-party vendor manuals (QRP Labs copyright) — kept locally for reference,
 # not redistributed in this public MIT repo. See docs/qmx-reference/SOURCES.md
 # for what they are and where to download your own copy.
