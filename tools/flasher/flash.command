@@ -72,8 +72,24 @@ read -r -p "Press Enter to flash (or Ctrl+C to cancel)... "
 echo
 echo "Flashing - do NOT unplug the Tab5..."
 echo
-"${ESPTOOL}" --chip esp32p4 -b 460800 --before default_reset --after hard_reset write_flash 0x0 "${FW}"
-RC=$?
+
+# Try the likely USB-serial devices first, one quick connect attempt each, so
+# we hit the right one fast instead of waiting through long retries. Falls back
+# to esptool's own auto-detect if none of the usual device names are present.
+PORTS="$(ls /dev/cu.usbmodem* /dev/cu.usbserial* /dev/tty.usbmodem* /dev/ttyACM* /dev/ttyUSB* 2>/dev/null | sort)"
+RC=1
+if [ -n "${PORTS}" ]; then
+    for P in ${PORTS}; do
+        echo "  trying ${P} ..."
+        if "${ESPTOOL}" --chip esp32p4 -p "${P}" -b 460800 --connect-attempts 1 --before default_reset --after hard_reset write_flash 0x0 "${FW}"; then
+            RC=0
+            break
+        fi
+    done
+else
+    "${ESPTOOL}" --chip esp32p4 -b 460800 --connect-attempts 1 --before default_reset --after hard_reset write_flash 0x0 "${FW}"
+    RC=$?
+fi
 
 echo
 if [ "${RC}" -eq 0 ]; then
@@ -82,7 +98,7 @@ if [ "${RC}" -eq 0 ]; then
     echo "============================================================"
 else
     echo "============================================================"
-    echo "   FLASH FAILED  (exit code ${RC})"
+    echo "   FLASH FAILED - could not flash the Tab5 on any port."
     echo "   - Use a different USB-C cable - it must carry DATA, not"
     echo "     just power. Many cheap cables are charge-only."
     echo "   - Close any program using the serial port and try again."

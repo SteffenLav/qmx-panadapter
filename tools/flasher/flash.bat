@@ -62,17 +62,41 @@ pause
 echo(
 echo Flashing - do NOT unplug the Tab5...
 echo(
-"%ESPTOOL%" --chip esp32p4 -b 460800 --before default_reset --after hard_reset write_flash 0x0 "%FW%"
-set "RC=%errorlevel%"
+
+rem Try COM ports low-number-first (the Tab5 is usually on a low COM number),
+rem one quick connect attempt each, so we hit the right port fast and don't sit
+rem through long retries on the wrong ones. Falls back to esptool's own
+rem auto-detect if no ports could be listed.
+set "PORTS="
+set "PLIST=%TEMP%\qmx_ports_%RANDOM%.txt"
+powershell -NoProfile -Command "[System.IO.Ports.SerialPort]::GetPortNames() | Sort-Object Length,{ $_ } | Set-Content -Encoding ascii -LiteralPath '%PLIST%'"
+if exist "%PLIST%" (
+    for /f "usebackq delims=" %%P in ("%PLIST%") do set "PORTS=!PORTS! %%P"
+    del "%PLIST%" >nul 2>nul
+)
+
+set "RC=1"
+if defined PORTS (
+    for %%P in (!PORTS!) do (
+        if not "!RC!"=="0" (
+            echo   trying %%P ...
+            "%ESPTOOL%" --chip esp32p4 -p %%P -b 460800 --connect-attempts 1 --before default_reset --after hard_reset write_flash 0x0 "%FW%"
+            if not errorlevel 1 set "RC=0"
+        )
+    )
+) else (
+    "%ESPTOOL%" --chip esp32p4 -b 460800 --connect-attempts 1 --before default_reset --after hard_reset write_flash 0x0 "%FW%"
+    if not errorlevel 1 set "RC=0"
+)
 
 echo(
-if "%RC%"=="0" (
+if "!RC!"=="0" (
     echo ============================================================
     echo    SUCCESS - the Tab5 is restarting with the new firmware.
     echo ============================================================
 ) else (
     echo ============================================================
-    echo    FLASH FAILED  ^(exit code %RC%^)
+    echo    FLASH FAILED - could not flash the Tab5 on any COM port.
     echo    - Use a different USB-C cable - it must carry DATA, not
     echo      just power. Many cheap cables are charge-only.
     echo    - Close any program using the serial port and try again.
