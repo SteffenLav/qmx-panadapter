@@ -50,10 +50,10 @@ Not running the panadapter yet? Use the one-click flasher in [`tools/flasher/`](
 
 1. Plug the Tab5 into your computer with a **USB-C data cable** — a charge-only cable will not work.
 2. Run the flasher:
-   - **Windows** — double-click `flash.bat`
+   - **Windows** — double-click `flash.bat` (downloads esptool + firmware itself; nothing to install)
    - **macOS** — double-click `flash.command`  (needs esptool once: `brew install esptool` or `pip3 install esptool`)
    - **Linux** — `bash flash.command`  (needs `pip3 install esptool`)
-3. It **downloads the latest firmware from GitHub and flashes it automatically** — wait for `SUCCESS`, and the Tab5 restarts on the new firmware.
+3. It **downloads the latest firmware from GitHub and flashes it automatically** — wait for `SUCCESS`, and the Tab5 restarts on the new firmware. (On Windows the first run also fetches esptool, cached for next time.)
 
 Your saved settings (WiFi, callsign, grid, memory channels) survive a re-flash — the flasher does not erase them. **No internet?** Put a `qmx_panadapter_merged_*.bin` (from the [releases page](https://github.com/SteffenLav/qmx-panadapter/releases)) next to the flasher and it uses that instead. Building from source instead? See [Build, flash, monitor](#build-flash-monitor).
 

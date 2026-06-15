@@ -8,19 +8,27 @@ echo    QMX Panadapter firmware flasher  ^(M5Stack Tab5^)
 echo ============================================================
 echo(
 
-rem --- 1. locate esptool.exe: prefer one next to this script, else PATH ------
+rem --- 1. get esptool: bundled beside script > on PATH > previously cached >
+rem        auto-download the Windows build from Espressif's GitHub releases ----
 set "ESPTOOL="
-if exist "%~dp0esptool.exe" (
-    set "ESPTOOL=%~dp0esptool.exe"
-) else (
+if exist "%~dp0esptool.exe" set "ESPTOOL=%~dp0esptool.exe"
+if not defined ESPTOOL (
     where esptool.exe >nul 2>nul && set "ESPTOOL=esptool.exe"
 )
 if not defined ESPTOOL (
-    echo ERROR: esptool.exe was not found.
+    for /f "delims=" %%E in ('dir /b /s "%~dp0esptool\esptool.exe" 2^>nul') do set "ESPTOOL=%%E"
+)
+if not defined ESPTOOL (
+    echo esptool not found - downloading it from GitHub ^(one time, needs internet^)...
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; try { [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $ProgressPreference='SilentlyContinue'; $h=@{'User-Agent'='qmx-flasher'}; $r=Invoke-RestMethod -TimeoutSec 30 -Headers $h -Uri 'https://api.github.com/repos/espressif/esptool/releases/latest'; $a=$r.assets | Where-Object { $_.name -like 'esptool*' -and $_.name -like '*.zip' -and ($_.name -like '*amd64*' -or $_.name -like '*win64*') } | Select-Object -First 1; if(-not $a){ exit 3 }; $zip=(Join-Path $env:TEMP $a.name); Invoke-WebRequest -TimeoutSec 300 -Headers $h -Uri $a.browser_download_url -OutFile $zip; $dest=(Join-Path '%~dp0' 'esptool'); if(Test-Path $dest){ Remove-Item -Recurse -Force $dest }; Expand-Archive -LiteralPath $zip -DestinationPath $dest -Force; Remove-Item $zip -Force } catch { exit 1 }"
+    for /f "delims=" %%E in ('dir /b /s "%~dp0esptool\esptool.exe" 2^>nul') do set "ESPTOOL=%%E"
+)
+if not defined ESPTOOL (
     echo(
-    echo Put esptool.exe in this same folder. Download the Windows build from:
-    echo    https://github.com/espressif/esptool/releases
-    echo ^(grab esptool-vX.X.X-windows-amd64.zip, unzip, copy esptool.exe here^)
+    echo ERROR: could not obtain esptool.
+    echo   - You need internet on the FIRST run so it can be downloaded, OR
+    echo   - put esptool.exe next to this script yourself, from:
+    echo     https://github.com/espressif/esptool/releases
     echo(
     goto :end
 )
@@ -80,12 +88,12 @@ if defined PORTS (
     for %%P in (!PORTS!) do (
         if not "!RC!"=="0" (
             echo   trying %%P ...
-            "%ESPTOOL%" --chip esp32p4 -p %%P -b 460800 --connect-attempts 1 --before default_reset --after hard_reset write_flash 0x0 "%FW%"
+            "%ESPTOOL%" --chip esp32p4 -p %%P -b 460800 --connect-attempts 1 write_flash 0x0 "%FW%"
             if not errorlevel 1 set "RC=0"
         )
     )
 ) else (
-    "%ESPTOOL%" --chip esp32p4 -b 460800 --connect-attempts 1 --before default_reset --after hard_reset write_flash 0x0 "%FW%"
+    "%ESPTOOL%" --chip esp32p4 -b 460800 --connect-attempts 1 write_flash 0x0 "%FW%"
     if not errorlevel 1 set "RC=0"
 )
 

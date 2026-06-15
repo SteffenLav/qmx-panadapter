@@ -34,6 +34,8 @@ qmx_panadapter_v*.bin
 # Firmware that the flasher downloads into its folder at runtime (and any
 # local test/offline bins) - never commit firmware images into the repo.
 tools/flasher/*.bin
+# esptool the flasher auto-downloads + extracts on first run (Windows).
+tools/flasher/esptool/
 
 # Third-party vendor manuals (QRP Labs copyright) — kept locally for reference,
 # not redistributed in this public MIT repo. See docs/qmx-reference/SOURCES.md

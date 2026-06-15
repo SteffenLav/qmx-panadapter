@@ -2,13 +2,14 @@
  QMX Panadapter - flashing the firmware onto an M5Stack Tab5
 ============================================================
 
-This is a one-click flasher/updater. It downloads the LATEST
-firmware from GitHub automatically and flashes it - so you don't
-have to find or download the right .bin yourself. No developer
-tools and no Python needed on Windows.
+This is a one-click flasher/updater. On Windows it downloads
+everything it needs - the flashing tool (esptool) AND the latest
+firmware - straight from GitHub, then flashes it. Nothing to
+install, no developer tools, no Python. You just need internet
+the first time.
 
-(Offline? It also works without internet if a firmware .bin is
-sitting in this same folder - see "If it fails" below.)
+(Offline? It still works if esptool and a firmware .bin are
+already in this folder from a previous run - see "If it fails".)
 
 ------------------------------------------------------------
  WINDOWS - the easy way
@@ -19,9 +20,11 @@ sitting in this same folder - see "If it fails" below.)
 
  2. Double-click  flash.bat
 
- 3. It fetches the latest firmware, then asks you to press a key.
-    Wait for "SUCCESS", done - the Tab5 restarts on the new
-    firmware automatically.
+ 3. On the first run it downloads esptool and the latest firmware
+    (a few seconds), then asks you to press a key. Wait for
+    "SUCCESS", done - the Tab5 restarts on the new firmware.
+    (esptool is cached in an "esptool" subfolder, so later runs
+    only download the firmware.)
 
  That's it. Your saved settings (WiFi, callsign, grid, memories)
  are kept - this flasher does not erase them.
@@ -55,8 +58,11 @@ sitting in this same folder - see "If it fails" below.)
  - Unplug, replug, and re-run.
 
  No internet (offline flashing):
- - The flasher tries GitHub first. If it can't reach it, it falls
-   back to a qmx_panadapter_merged_*.bin in this same folder.
- - So for offline use, just download that .bin once (from the
-   GitHub Releases page) and keep it next to flash.bat /
-   flash.command. It will be used automatically when offline.
+ - The FIRST run on Windows needs internet to fetch esptool. After
+   that, esptool is cached in the "esptool" subfolder and reused.
+ - For the firmware: the flasher tries GitHub first; if it can't
+   reach it, it falls back to a qmx_panadapter_merged_*.bin sitting
+   in this folder.
+ - So to flash fully offline, run it online once (to cache esptool),
+   then keep a qmx_panadapter_merged_*.bin next to it - both will be
+   used automatically with no internet.
