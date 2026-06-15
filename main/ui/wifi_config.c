@@ -19,6 +19,7 @@ static lv_obj_t *s_ta_pass     = NULL;
 static lv_obj_t *s_show_lbl    = NULL;  // label inside the show/hide-password button
 static lv_obj_t *s_keyboard    = NULL;
 static bool      s_modal_open  = false;
+static void    (*s_on_close)(void) = NULL;  // one-shot, fired when the modal closes
 
 static void modal_close(void)
 {
@@ -26,6 +27,11 @@ static void modal_close(void)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     s_modal_open = false;
     ESP_LOGI(TAG, "Modal closed");
+    if (s_on_close) {
+        void (*cb)(void) = s_on_close;
+        s_on_close = NULL;   // fire once, whether closed via Save or Cancel
+        cb();
+    }
 }
 
 static void save_btn_cb(lv_event_t *e)
@@ -233,6 +239,12 @@ static void modal_build(void)
 void wifi_config_modal_init(void)
 {
     modal_build();
+}
+
+void wifi_config_modal_show_then(void (*on_close)(void))
+{
+    s_on_close = on_close;
+    wifi_config_modal_show();
 }
 
 void wifi_config_modal_show(void)

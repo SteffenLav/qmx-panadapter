@@ -19,6 +19,7 @@
 #include "wifi_config.h"
 #include "memory_modal.h"
 #include "identity_config.h"
+#include "onboarding.h"
 #include "iq_balance.h"
 #include "diag_log.h"
 #include "ui_mode.h"
@@ -1164,6 +1165,7 @@ static lv_obj_t *s_label_bar = NULL;
 static lv_obj_t *s_status_label = NULL;  // legacy: single label, kept for compatibility (unused after Phase 5.13)
 static lv_obj_t *s_bot_left   = NULL;
 static lv_obj_t *s_bot_batt_icon = NULL;  /* battery glyph, colored by charge level */
+static lv_obj_t *s_bot_batt_slash = NULL; /* red diagonal stroke over the glyph when no pack is attached */
 static lv_obj_t *s_bot_center_suffix = NULL;
 static ui_clock_t s_bot_clock;
 static bool       s_bot_clock_valid = false;
@@ -1678,6 +1680,18 @@ static void build_bottom_bar(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_bot_batt_icon, &lv_font_montserrat_24, 0);
     lv_obj_align(s_bot_batt_icon, LV_ALIGN_LEFT_MID, 8, 0);
 
+    // Red diagonal stroke drawn over the battery glyph, shown only when no pack
+    // is attached (see ui_set_bottom_battery_absent / battery_present). The
+    // points array must persist for the line's lifetime, hence static.
+    static lv_point_precise_t batt_slash_pts[2] = { {0, 22}, {22, 2} };
+    s_bot_batt_slash = lv_line_create(bar);
+    lv_line_set_points(s_bot_batt_slash, batt_slash_pts, 2);
+    lv_obj_set_style_line_color(s_bot_batt_slash, lv_color_hex(0xFF5050), 0);
+    lv_obj_set_style_line_width(s_bot_batt_slash, 3, 0);
+    lv_obj_set_style_line_rounded(s_bot_batt_slash, true, 0);
+    lv_obj_align(s_bot_batt_slash, LV_ALIGN_LEFT_MID, 8, 0);
+    lv_obj_add_flag(s_bot_batt_slash, LV_OBJ_FLAG_HIDDEN);
+
     s_bot_left = lv_label_create(bar);
     lv_label_set_text(s_bot_left, "");
     lv_obj_set_style_text_color(s_bot_left, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
@@ -1813,6 +1827,7 @@ void ui_init(lv_display_t *disp)
     wifi_config_modal_init();
     memory_modal_init();
     identity_config_modal_init();
+    onboarding_init();   // builds the first-boot WiFi prompt + schedules the one-time flow
 
     // Pre-build the settings drawer at boot for the same reason. Drawer is
     // smaller than each modal (~30-50 objects) but still hit the cliff when
@@ -2578,6 +2593,22 @@ void ui_set_bottom_battery(const char *icon, uint32_t icon_color_hex, const char
         lv_label_set_text(s_bot_batt_icon, icon ? icon : "");
         lv_obj_set_style_text_color(s_bot_batt_icon, lv_color_hex(icon_color_hex), 0);
         lv_label_set_text(s_bot_left, text ? text : "");
+        if (s_bot_batt_slash) lv_obj_add_flag(s_bot_batt_slash, LV_OBJ_FLAG_HIDDEN);
+        display_unlock();
+    }
+}
+
+// No battery pack attached: a static red battery glyph with a diagonal stroke
+// through it, and no percentage/voltage text. Latched by battery_present(), so
+// it's set once and "left" — no flicker.
+void ui_set_bottom_battery_absent(void)
+{
+    if (!s_bot_batt_icon || !s_bot_left) return;
+    if (display_lock(20)) {
+        lv_label_set_text(s_bot_batt_icon, LV_SYMBOL_BATTERY_EMPTY);
+        lv_obj_set_style_text_color(s_bot_batt_icon, lv_color_hex(0xFF5050), 0);
+        lv_label_set_text(s_bot_left, "");
+        if (s_bot_batt_slash) lv_obj_clear_flag(s_bot_batt_slash, LV_OBJ_FLAG_HIDDEN);
         display_unlock();
     }
 }

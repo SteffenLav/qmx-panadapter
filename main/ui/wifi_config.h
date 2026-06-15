@@ -18,6 +18,11 @@ void wifi_config_modal_init(void);
 // changes). Safe to call repeatedly; no-op if already open.
 void wifi_config_modal_show(void);
 
+// Same as wifi_config_modal_show(), but invokes on_close() once when the modal
+// is dismissed (Save or Cancel). Used by the first-boot onboarding flow to
+// chain into the callsign/grid prompt after the WiFi step. Pass NULL for none.
+void wifi_config_modal_show_then(void (*on_close)(void));
+
 #ifdef __cplusplus
 }
 #endif

@@ -96,13 +96,20 @@ static void status_task(void *arg)
             suffix_buf[0] = '\0';
         }
 
-        // Low battery: blink the icon (off every other second). Percentage
-        // text stays as-is.
-        blink_on = !blink_on;
-        if (level >= 0 && level < 30 && !blink_on) {
-            ui_set_bottom_battery("", battery_color(level), left);
+        // No battery pack attached (cheaper SKU run from USB): show a static
+        // struck-through battery and skip the level/blink logic, so the icon
+        // doesn't flicker empty<->full on the erratic rail voltage.
+        if (!battery_present()) {
+            ui_set_bottom_battery_absent();
         } else {
-            ui_set_bottom_battery(batt_icon, battery_color(level), left);
+            // Low battery: blink the icon (off every other second). Percentage
+            // text stays as-is.
+            blink_on = !blink_on;
+            if (level >= 0 && level < 30 && !blink_on) {
+                ui_set_bottom_battery("", battery_color(level), left);
+            } else {
+                ui_set_bottom_battery(batt_icon, battery_color(level), left);
+            }
         }
         ui_set_bottom_clock(tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec, time_valid);
         ui_set_bottom_wifi(ssid_buf, show_rssi, rssi, suffix_buf);

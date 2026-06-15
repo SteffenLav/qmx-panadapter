@@ -30,6 +30,7 @@ typedef struct {
     char     cq_msg[3][28];    // 3 user-editable CQ message presets (FT8 TX)
     uint8_t  cq_sel;           // which CQ preset is active, 0..2 (default 0)
     bool     diag_log;         // diagnostic comms logging on/off (default false)
+    bool     onboarded;        // first-boot WiFi/identity prompts shown (default false)
 } qmx_settings_t;
 
 // Initialise the settings module. Opens an NVS handle. Safe to call
@@ -73,6 +74,10 @@ void settings_set_cq_sel(uint8_t idx);
 // Diagnostic comms logging on/off (debounced flush). Persisted so a
 // boot-time problem can be captured across the reset after enabling it.
 void settings_set_diag_log(bool v);
+
+// First-boot onboarding done: once true, the WiFi/identity prompts are never
+// shown again (debounced flush).
+void settings_set_onboarded(bool v);
 
 // QMX IF offset calibration trim (Hz). Per-unit oscillator variance shifts
 // the +12 kHz IF injection; this trim corrects what users see on the spectrum/

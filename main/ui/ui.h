@@ -37,6 +37,8 @@ void ui_get_passband_edges_hz(int32_t *out_low, int32_t *out_high);
 // Bottom status bar: 3-zone layout (left/center/right). Pass NULL or "" to clear.
 void ui_set_bottom_left(const char *text);
 void ui_set_bottom_battery(const char *icon, uint32_t icon_color_hex, const char *text);
+// Show a static struck-through red battery (no pack attached); no text, no flicker.
+void ui_set_bottom_battery_absent(void);
 
 // Bottom-bar firmware version, centered between the battery text and the UTC clock.
 void ui_set_bottom_version(const char *text);

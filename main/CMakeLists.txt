@@ -6,6 +6,7 @@ idf_component_register(
         "ui/ui_clock.c"
         "ui/wifi_config.c"
         "ui/identity_config.c"
+        "ui/onboarding.c"
         "ui/memory_modal.c"
         "ui/ui_mode.c"
         "ui/ft8_screen.c"

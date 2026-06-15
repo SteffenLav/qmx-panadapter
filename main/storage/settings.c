@@ -36,6 +36,7 @@ static const char *TAG = "settings";
 #define KEY_CQ_MSG2    "cq_msg2"
 #define KEY_CQ_SEL     "cq_sel"
 #define KEY_DIAG_LOG   "diag_log"
+#define KEY_ONBOARDED  "onboarded"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -76,6 +77,7 @@ static const char *TAG = "settings";
 #define DIRTY_CQ_MSG2    (1u << 19)
 #define DIRTY_CQ_SEL     (1u << 20)
 #define DIRTY_DIAG_LOG   (1u << 21)
+#define DIRTY_ONBOARDED  (1u << 22)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -173,6 +175,7 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_CQ_MSG2)    nvs_set_str(s_nvs, KEY_CQ_MSG2, snap.cq_msg[2]);
         if (dirty_local & DIRTY_CQ_SEL)     nvs_set_u8(s_nvs, KEY_CQ_SEL, snap.cq_sel);
         if (dirty_local & DIRTY_DIAG_LOG)   nvs_set_u8(s_nvs, KEY_DIAG_LOG, snap.diag_log ? 1 : 0);
+        if (dirty_local & DIRTY_ONBOARDED)  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap.onboarded ? 1 : 0);
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
@@ -247,6 +250,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->cq_msg[2][0] = '\0';
     out->cq_sel = 0;
     out->diag_log = false;
+    out->onboarded = false;
 
     if (!s_ready) {
         ESP_LOGW(TAG, "load_all: NVS not ready, using defaults");
@@ -293,6 +297,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (out->cq_sel > 2) out->cq_sel = 0;
 
     if (nvs_get_u8(s_nvs, KEY_DIAG_LOG, &u8v) == ESP_OK) out->diag_log = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_ONBOARDED, &u8v) == ESP_OK) out->onboarded = (u8v != 0);
 
     ESP_LOGI(TAG, "loaded: db=[%.1f..%.1f] ema=%.2f iq=%d",
              out->db_min, out->db_max, out->ema_alpha, out->iq_enabled);
@@ -557,6 +562,16 @@ void settings_set_diag_log(bool v)
     s_pending.diag_log = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_DIAG_LOG);
+}
+
+void settings_set_onboarded(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.onboarded == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.onboarded = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_ONBOARDED);
 }
 
 void settings_set_zoom_factor(float v)

@@ -21,6 +21,11 @@ int battery_get_mv(void);
 // True when current is flowing into the battery (charging).
 bool battery_is_charging(void);
 
+// False only once a missing pack has been positively detected (latched after a
+// few seconds of erratic rail voltage). True otherwise, including the first
+// seconds before a verdict. Drives the "no battery" icon in the status bar.
+bool battery_present(void);
+
 #ifdef __cplusplus
 }
 #endif
