@@ -24,9 +24,19 @@ tools, no Python, no internet needed.
  Mac / Linux
 ------------------------------------------------------------
 
- Install esptool once  (pip install esptool)  then run:
+ Install esptool once:   pip3 install esptool
+    (or on macOS with Homebrew:  brew install esptool)
 
-    esptool --chip esp32p4 -b 460800 write_flash 0x0 qmx_panadapter_merged_*.bin
+ Then:
+    macOS - double-click  flash.command
+    Linux - run           bash flash.command
+
+ If the serial port is denied on Linux, add yourself to the
+ dialout group once:   sudo usermod -aG dialout $USER
+ (log out and back in afterwards).
+
+ If macOS won't run it ("cannot be opened"), in Terminal:
+    chmod +x flash.command       (once, then double-click again)
 
 ------------------------------------------------------------
  If it fails
@@ -44,10 +54,15 @@ tools, no Python, no internet needed.
 
  The release ZIP should contain, all in one folder:
 
-   flash.bat                              (this repo)
+   flash.bat                              (this repo, Windows)
+   flash.command                          (this repo, macOS/Linux)
    README.txt                             (this repo)
-   esptool.exe                            (from the esptool release)
+   esptool.exe                            (from the esptool release; Windows only)
    qmx_panadapter_merged_vX.Y.Z.bin       (from the GitHub release)
+
+ Windows users need nothing installed (esptool.exe is bundled).
+ macOS/Linux users install esptool once via pip3/brew (no standalone
+ binary to bundle there).
 
  esptool.exe: download the Windows build from
    https://github.com/espressif/esptool/releases
