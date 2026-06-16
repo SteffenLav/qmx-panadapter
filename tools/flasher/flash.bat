@@ -88,12 +88,12 @@ if defined PORTS (
     for %%P in (!PORTS!) do (
         if not "!RC!"=="0" (
             echo   trying %%P ...
-            "%ESPTOOL%" --chip esp32p4 -p %%P -b 460800 --connect-attempts 1 write_flash 0x0 "%FW%"
+            "%ESPTOOL%" --chip esp32p4 -p %%P -b 460800 --connect-attempts 1 write-flash 0x0 "%FW%"
             if not errorlevel 1 set "RC=0"
         )
     )
 ) else (
-    "%ESPTOOL%" --chip esp32p4 -b 460800 --connect-attempts 1 write_flash 0x0 "%FW%"
+    "%ESPTOOL%" --chip esp32p4 -b 460800 --connect-attempts 1 write-flash 0x0 "%FW%"
     if not errorlevel 1 set "RC=0"
 )
 
