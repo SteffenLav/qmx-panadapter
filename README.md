@@ -21,7 +21,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 > **You are solely responsible for operating legally** — correct licence class, operating
 > within your licence privileges, band plan compliance, no harmful interference.
 >
-> **What is NOT yet in place in v0.15.15:**
+> **What is NOT yet in place in v0.15.16:**
 > - No duty-cycle protection — back-to-back TX slots are not prevented by the firmware
 > - No ADIF logging — completed QSOs are not recorded anywhere
 > - No audio loopback verification — the firmware cannot confirm the transmitted waveform
@@ -46,7 +46,7 @@ If you've just flashed the firmware (or received a flashed Tab5), here's the sho
 
 ### Flash the firmware (no developer tools needed)
 
-Not running the panadapter yet? Use the one-click flasher in [`tools/flasher/`](tools/flasher) (also attached to each [release](https://github.com/SteffenLav/qmx-panadapter/releases)):
+Not running the panadapter yet? Use the one-click flasher in [`tools/QMX-Panadapter flasher/`](tools/QMX-Panadapter%20flasher) (also attached to each [release](https://github.com/SteffenLav/qmx-panadapter/releases)):
 
 1. Plug the Tab5 into your computer with a **USB-C data cable** — a charge-only cable will not work.
 2. Run the flasher:
@@ -198,7 +198,7 @@ The original mockup that drove the design ([panadapter-mockup-ideal.svg](docs/pa
 
 ## Status
 
-Working. All phases through 8 complete. Current release: **v0.15.15**. Includes: cold-boot reliability fix, on-device diagnostic logging (web + serial) with QMX firmware readout, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings (including last-used UI mode and display brightness), Hamlib rigctld bridge, onboard FT8 RX decoder with a 40-row live-view decode list and FFT-based SNR estimation, memory channels with a frequency/mode picker, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser) including a tap-to-enter frequency keypad, browser click-to-tune, zoom sync, band memory, QMX RTC time sync for no-WiFi (POTA) FT8 timing, **manual FT8 TX** (reply + CQ via CAT `TA;`), and a **full auto QSO engine** — search-and-pounce plus **CQ-run** (auto-answers callers, runs the exchange to completion with patient retry, then resumes CQ). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
+Working. All phases through 8 complete. Current release: **v0.15.16**. Includes: cold-boot reliability fix, on-device diagnostic logging (web + serial) with QMX firmware readout, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings (including last-used UI mode and display brightness), Hamlib rigctld bridge, onboard FT8 RX decoder with a 40-row live-view decode list and FFT-based SNR estimation, memory channels with a frequency/mode picker, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser) including a tap-to-enter frequency keypad, browser click-to-tune with mouse-wheel tuning, zoom sync, band memory, QMX RTC time sync for no-WiFi (POTA) FT8 timing, **manual FT8 TX** (reply + CQ via CAT `TA;`), a **full auto QSO engine** — search-and-pounce plus **CQ-run** (auto-answers callers, runs the exchange to completion with patient retry, then resumes CQ), and a fully redesigned **browser web UI** matching the Tab5 display (graphical S-meter, live VFO, European-format freq axis with tick marks, mode-aware mouse-wheel tuning). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
 
 | Phase | What | Status |
 |-------|------|--------|
@@ -283,6 +283,14 @@ Working. All phases through 8 complete. Current release: **v0.15.15**. Includes:
 | -     | FT8 decode list live view — entries age out after 60 s of silence (v0.15.1) | done |
 | -     | S-meter keeps updating during active FT8 capture (v0.15.7) | done |
 | -     | FT8 freq preset label reworded to "Preset: xx.xxx MHz" (v0.15.7) | done |
+| -     | Browser web UI overhaul: top bar (Band/Mode/BW/Zoom + centred VFO + graphical S-meter), bottom bar (battery/fw/UTC clock/WiFi/IP/diag), European Hz format everywhere (v0.15.16) | done |
+| -     | Browser freq axis: 5 labels with major tick marks (getBoundingClientRect aligned) + 3 sub-ticks between each pair (v0.15.16) | done |
+| -     | Browser mouse-wheel tuning with mode-aware snap (SSB 500 Hz, DiGi 100 Hz, AM/FM 1 kHz) (v0.15.16) | done |
+| -     | Browser CW amber VFO line placed at passband centre (dial + CW pitch), not raw dial (v0.15.16) | done |
+| -     | Browser S-meter label clamping removed: S1 and +20 properly centred over end ticks (v0.15.16) | done |
+| -     | WS frame byte[1] carries zoom decimation factor for browser residual-zoom rendering (v0.15.16) | done |
+| -     | /api/status extended: battery.mv, flat_mode, utc_epoch, tab5_fw, signal_dbm (v0.15.16) | done |
+| -     | Flasher renamed tools/flasher → tools/QMX-Panadapter flasher; flash.command executable bit restored (v0.15.16) | done |
 
 See the [Roadmap](#roadmap) at the bottom for what's next.
 
@@ -304,7 +312,7 @@ See the [Roadmap](#roadmap) at the bottom for what's next.
 
 ## Build, flash, monitor
 
-> Just want to *install* the firmware, not develop it? Use the one-click flasher in [`tools/flasher/`](tools/flasher) — no IDF, Python, or build needed. See [Flash the firmware](#flash-the-firmware-no-developer-tools-needed).
+> Just want to *install* the firmware, not develop it? Use the one-click flasher in [`tools/QMX-Panadapter flasher/`](tools/QMX-Panadapter%20flasher) — no IDF, Python, or build needed. See [Flash the firmware](#flash-the-firmware-no-developer-tools-needed).
 
 Standard IDF flow:
 
@@ -330,14 +338,24 @@ The landing page mirrors the device screen in real time: spectrum trace updates 
 
 ```json
 {
-  "battery": { "level": 100, "charging": true },
-  "wifi":    { "ssid": "BV50", "rssi": -44, "ip": "192.168.1.213" },
-  "freq_hz": 14074000,
-  "qmx_fw":  "1_03_002QMX"
+  "battery":     { "level": 100, "mv": 8320, "charging": true },
+  "wifi":        { "ssid": "BV50", "rssi": -44, "ip": "192.168.1.213" },
+  "freq_hz":     14074000,
+  "mode":        "USB",
+  "band":        "20m",
+  "passband_hz": 2700,
+  "signal_dbm":  -87.4,
+  "zoom":        1.0,
+  "pan_bins":    0,
+  "flat_mode":   false,
+  "utc_epoch":   1750000000,
+  "tab5_fw":     "v0.15.16",
+  "qmx_fw":      "1_03_002QMX",
+  "bands":       [{"name":"20m","center_hz":14074000}, ...]
 }
 ```
 
-Polled by the landing page at 1 Hz; safe to consume from any other client (monitoring scripts, home automation, etc.). `qmx_fw` is the QMX firmware version read via the `VN;` CAT command at link-up (empty until the radio answers).
+Polled by the landing page at 1 Hz; safe to consume from any other client (monitoring scripts, home automation, etc.). `qmx_fw` is the QMX firmware version read via the `VN;` CAT command at link-up (empty until the radio answers). `signal_dbm` is the peak dBm in a ±64-bin window around the IF-shifted VFO bin (null if the DSP has no data yet).
 
 ### `/api/log` — diagnostic log download
 
@@ -350,7 +368,7 @@ Single-client endpoint. Each binary frame is 1026 bytes:
 | Bytes | Meaning |
 |-------|---------|
 | `0`   | Frame type: `0x01` = spectrum |
-| `1`   | Reserved (always 0 for now) |
+| `1`   | Zoom decimation factor (1 = base 1024-bin spectrum, >1 = zoom-FFT with that decimation; browser applies residual zoom) |
 | `2–1025` | 1024 unsigned bytes, each one bin, quantised −130 dBm (q=0) to −30 dBm (q=255) |
 
 Bins are pre-shifted server-side: byte 2 is the leftmost device pixel, byte 1025 the rightmost. The 12 kHz QMX IF offset is already applied, so the QMX dial frequency lands at the visual centre. Push rate is ~10 fps; a new connection refuses if a session is already active.
@@ -1016,15 +1034,36 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 - **CQ-run reply filter modal.** A new "Filter" button on the FT8 screen opens an include/exclude filter editor for the CQ-run auto-reply picker and the live decode list. Two "include" and two "exclude" fields, each independently toggled, are matched against the *whole* decoded message text — not just the callsign — so POTA/SOTA tags, grids, country prefixes, `/P`/`/M` suffixes etc. are all fair game. Each field accepts multiple space- and/or comma-separated terms (e.g. "POTA SOTA" or "JA, VK"), matching if the message contains ANY of them. Also adds standalone "Exclude plain CQ callers" (hide bare `CQ ...` rows, show only replies/exchanges) and a placeholder "Exclude worked-before" toggle (UI present now, enforcement lands with the v0.16.0 ADIF log). Settings persist as a single NVS blob.
 - **TX power/SWR readout.** After each FT8 TX burst, while still keyed, the radio is queried via `PC;`/`SW;` for instantaneous power output and SWR. The result is shown briefly in the FT8 status line ("Last TX: X.XW SWRx.xx [Ns]").
 
+### Shipped in v0.15.16
+
+- **Browser web UI overhaul.** The built-in web panadapter now closely matches the Tab5 display:
+  - **Top bar**: Band / Mode / BW / Zoom pills (left), VFO frequency in large amber centered, graphical S-meter (S1–S9+20 tick scale with live bar) between VFO and Flat/fps buttons (right)
+  - **Bottom bar**: Battery % + voltage, Tab5 firmware version, UTC live clock (1 s tick from server epoch), WiFi SSID + RSSI, IP address, Diag log download link — equal-spaced flex layout
+  - **Frequency axis**: 5 labels (L2 / L1 / centre / R1 / R2) with major tick marks aligned to actual label pixel centres + 3 sub-ticks between each pair
+  - **Mouse-wheel tuning** with mode-aware snap: SSB 500 Hz, DiGi 100 Hz, AM/FM 1 kHz, CW 10 Hz
+  - **European dot-separated Hz format** everywhere: `14.074.000 Hz`
+  - **Optimistic VFO update** on click-to-tune and mouse-wheel (no poll lag)
+  - **CW mode amber VFO line** drawn at dial + CW pitch offset (passband centre), matching the spectrum, waterfall and passband backdrop
+  - **S-meter** labels S1 and +20 properly centred over end tick marks
+- **`/api/status` extended.** New fields: `battery.mv` (millivolts), `flat_mode` (bool), `utc_epoch` (Unix timestamp), `tab5_fw` (firmware version string), `signal_dbm` (peak dBm around IF-shifted VFO bin).
+- **WS frame byte[1] = zoom decimation factor.** Tells the browser whether the 1024 bins come from the base spectrum (decim=1) or from the zoom-FFT (decim>1), so residual zoom can be applied correctly.
+- **Flasher renamed and fixed.** `tools/flasher/` is now `tools/QMX-Panadapter flasher/` to match the release zip name; `flash.command` had its executable bit restored after it was lost during the folder rename (caused a macOS "no appropriate access privileges" error on double-click).
+
 ### Next up
 
 The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF.
 
-- **v0.16.0 - ADIF logging.** Write each completed QSO to an ADIF file on-device; show a log view in the FT8 screen. Upload to LOTW, QRZ, eQSL, or POTA.app via the web UI.
+- **v0.16.0 - ADIF logging.** Write each completed QSO to an ADIF file on-device; show a log view in the FT8 screen. Upload to LOTW, QRZ, eQSL, or POTA.app via the web UI. Activates the existing "Exclude worked-before" filter toggle.
+- **v0.16.0 - SWR-protection auto-reset.** If SWR protection trips during or after an FT8 burst (detected via the TX power/SWR CAT query), automatically cycle `TX;`/`RX;` to clear it instead of leaving the radio stuck. Inspired by qFT8; requires QMX firmware 1.03.000+.
+- **v0.16.0 - TX clash/sequence warning.** Extend `ft8_find_clear_tone_hz()`'s occupied-bin bitmask to flag when our chosen TX tone collides with another active station, surfaced as a warning on the decode list/waterfall.
+- **v0.16.0 - "Worked before / new zone" highlighting.** Colour-code the FT8 decode list by whether that callsign has already been confirmed (once the ADIF log exists). High value for POTA/SOTA activators chasing new contacts.
 - **v1.0.0 - Standalone FT8 station.** All of the above polished + multi-day stability + cleaner UI.
 
 Alongside the FT8 path:
 
+- **FT8 filter: "Include only CQ callers" toggle.** Requested by field users: a mode that shows *only* stations calling CQ (opposite of the existing "Exclude plain CQ callers"), useful when scanning for stations to work without exchange-traffic noise.
+- **FT8 QSO: manual message override.** A one-tap button to force the next outgoing message (e.g. re-send the report, or jump straight to 73) instead of following the automatic state-machine sequence — useful on a busy 20m band where the auto-engine can fall a slot behind.
+- **Browser/Tab5 waterfall frequency alignment.** ~650 Hz offset between the browser waterfall and the Tab5 display, reported in the field. Under investigation.
 - **Tab5 speaker/headphone CW audio.** Decode and play the demodulated CW passband out of the Tab5's own speaker/headphone jack, so the operator can listen to CW without the QMX's audio path.
 - **DSP polish.** Noise reduction, auto-notch.
 - **Phase 6.3 - Native-orientation rendering** *(deferred)*. ~50% FPS recovery available if we render directly in the panel's native 720x1280 portrait coordinates so LVGL has no rotation step.
