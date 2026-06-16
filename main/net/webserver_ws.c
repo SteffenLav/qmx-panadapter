@@ -1,10 +1,12 @@
 #include "webserver_ws.h"
 
+#include <string.h>
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#include "cat.h"
 #include "dsp.h"
 
 #define WS_FRAME_TYPE_SPECTRUM  0x01
@@ -75,12 +77,10 @@ static void ws_push_task(void *arg)
     s_ws_frame.payload = s_payload;
     s_ws_frame.len     = WS_FRAME_LEN;
     s_payload[0] = WS_FRAME_TYPE_SPECTRUM;
-    s_payload[1] = 0;
 
-    const int   N        = DSP_FFT_SIZE;
-    const int   half     = N / 2;
-    const int   if_shift = (WS_IF_OFFSET_HZ * N) / DSP_SAMPLE_RATE_HZ;
-    const float scale    = 255.0f / (WS_DB_MAX - WS_DB_MIN);
+    const int   N     = DSP_FFT_SIZE;
+    const int   half  = N / 2;
+    const float scale = 255.0f / (WS_DB_MAX - WS_DB_MIN);
 
     TickType_t last   = xTaskGetTickCount();
     uint32_t   sent   = 0;
@@ -96,13 +96,40 @@ static void ws_push_task(void *arg)
             continue;
         }
 
-        if (dsp_get_spectrum(s_spec) != ESP_OK) continue;
+        // Select spectrum source. When zoom-FFT is active the DSP has already
+        // mixed the zoom center down to DC; only an fftshift is needed and the
+        // browser gets higher-resolution bins. When inactive (or not ready yet),
+        // fall back to the base 1024-bin spectrum with a full IF shift.
+        int decim = dsp_get_zoom_decim();
+        const float *spec_data = NULL;
+        int if_shift = 0;
 
-        // Match ui_push_spectrum: fftshift + IF offset -> wire byte 0 == leftmost device pixel.
+        if (decim > 1) {
+            spec_data = dsp_get_zoom_spectrum();  // NULL if accumulation still filling
+        }
+        if (spec_data == NULL) {
+            decim = 1;
+            if (dsp_get_spectrum(s_spec) != ESP_OK) continue;
+            spec_data = s_spec;
+            // CW mode: add CW pitch on top of base 12 kHz IF so the browser
+            // centers on the audio tone, matching the Tab5 display.
+            int total_if_hz = WS_IF_OFFSET_HZ;
+            const char *mode = cat_get_mode_str();
+            if (mode && strcmp(mode, "CW") == 0) {
+                total_if_hz += cat_get_cw_offset_hz();
+            }
+            if_shift = (total_if_hz * N + DSP_SAMPLE_RATE_HZ / 2) / DSP_SAMPLE_RATE_HZ;
+        }
+
+        // byte[1] carries the decimation factor so the browser can apply
+        // residual zoom instead of full zoom when rendering zoom-FFT data.
+        s_payload[1] = (uint8_t)decim;
+
+        // fftshift (+ IF shift for base spectrum path)
         for (int i = 0; i < N; i++) {
             int bin = (i < half) ? (i + half) : (i - half);
-            bin = (bin + if_shift) % N;
-            float db = s_spec[bin];
+            if (if_shift) bin = ((bin + if_shift) % N + N) % N;
+            float db = spec_data[bin];
             if (db < WS_DB_MIN) db = WS_DB_MIN;
             else if (db > WS_DB_MAX) db = WS_DB_MAX;
             int q = (int)((db - WS_DB_MIN) * scale + 0.5f);

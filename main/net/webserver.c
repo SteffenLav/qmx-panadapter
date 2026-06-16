@@ -14,7 +14,9 @@
 #include "screenshot/screenshot.h"  // screenshot_capture_rgb565
 #include "diag_log.h"         // diag_log_size / diag_log_snapshot
 #include "esp_heap_caps.h"
+#include "esp_app_desc.h"
 #include <string.h>
+#include <time.h>
 
 static const char *TAG = "webserver";
 
@@ -39,6 +41,7 @@ static esp_err_t status_handler(httpd_req_t *req)
 
     cJSON *batt = cJSON_AddObjectToObject(root, "battery");
     cJSON_AddNumberToObject(batt, "level",    battery_get_level());
+    cJSON_AddNumberToObject(batt, "mv",       battery_get_mv());
     cJSON_AddBoolToObject  (batt, "charging", battery_is_charging());
 
     cJSON *wifi_obj = cJSON_AddObjectToObject(root, "wifi");
@@ -74,6 +77,10 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "pan_bins",    (double)ui_get_pan_offset_bins());
     cJSON_AddNumberToObject(root, "cw_pitch_hz", (double)ui_get_cw_pitch_hz());
     cJSON_AddNumberToObject(root, "if_cal_hz",   (double)ui_get_if_cal_hz());
+    cJSON_AddBoolToObject  (root, "flat_mode",   ui_get_flat_mode());
+    cJSON_AddNumberToObject(root, "utc_epoch",   (double)time(NULL));
+    const esp_app_desc_t *app = esp_app_get_description();
+    cJSON_AddStringToObject(root, "tab5_fw",     app ? app->version : "");
 
     int band_count = 0;
     const cat_band_entry_t *bands = cat_get_band_list(&band_count);
@@ -129,7 +136,14 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         if (mode) cat_set_mode(mode);
     } else if (action && strcmp(action, "set_bw") == 0) {
         cJSON *item = cJSON_GetObjectItem(root, "hz");
-        if (cJSON_IsNumber(item)) cat_set_passband_hz((uint32_t)item->valuedouble);
+        if (cJSON_IsNumber(item)) {
+            uint32_t bw = (uint32_t)item->valuedouble;
+            if (bw >= 1000) {
+                cat_request_ssb_bandwidth(bw);  // uses the three-write recipe for SSB
+            } else {
+                cat_set_passband_hz(bw);
+            }
+        }
     } else if (action && strcmp(action, "set_zoom") == 0) {
         cJSON *item = cJSON_GetObjectItem(root, "zoom");
         if (cJSON_IsNumber(item)) {

@@ -417,16 +417,22 @@ static void ft8_task(void *arg)
     ESP_LOGI(TAG, "waiting for CAT (QMX USB + Q9 1; handshake)...");
     wait_for_cat_ready();
 
-    ft8_status_set("Waiting for SNTP sync...");
-    ESP_LOGI(TAG, "waiting for SNTP...");
-    if (!wait_for_sntp(SNTP_WAIT_TIMEOUT_MS)) {
-        ESP_LOGW(TAG, "SNTP did not sync within %d ms - trying QMX RTC fallback",
+    // QMX GPS/RTC has priority over SNTP: try it first. On a QMX+ the RTC is
+    // GPS-disciplined and more accurate than NTP; on a plain QMX it holds the
+    // last NTP-synced time pushed by sntp_sync_cb. Either way it is a reliable
+    // source for FT8 slot alignment and works without WiFi (POTA).
+    ft8_status_set("Getting time from QMX...");
+    if (set_time_from_qmx_rtc()) {
+        ft8_status_set("Time from QMX GPS/RTC");
+        ESP_LOGI(TAG, "time set from QMX RTC/GPS");
+    } else {
+        // QMX RTC unavailable (TM; not supported or no response) - fall back to SNTP.
+        ft8_status_set("Waiting for SNTP sync...");
+        ESP_LOGW(TAG, "QMX RTC query failed - waiting for SNTP (up to %d ms)",
                  SNTP_WAIT_TIMEOUT_MS);
-        if (set_time_from_qmx_rtc()) {
-            ft8_status_set("Time from QMX RTC (no WiFi)");
-        } else {
-            ESP_LOGE(TAG, "No time source available (no SNTP, no QMX RTC) - check WiFi");
-            ft8_status_set("No time source - check WiFi");
+        if (!wait_for_sntp(SNTP_WAIT_TIMEOUT_MS)) {
+            ESP_LOGE(TAG, "No time source (no QMX GPS/RTC, no SNTP) - check WiFi/QMX");
+            ft8_status_set("No time source - check WiFi/QMX");
             vTaskDelete(NULL);
             return;
         }

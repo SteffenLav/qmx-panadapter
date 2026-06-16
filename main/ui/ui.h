@@ -52,6 +52,7 @@ void ui_set_bottom_wifi(const char *icon_ssid, bool show_rssi, int rssi_dbm, con
 // Bottom-bar UTC clock (center). valid=false shows "--:--:-- UTC"
 // (pre-SNTP-sync placeholder); h/m/s ignored in that case.
 void ui_set_bottom_clock(int h, int m, int s, bool valid);
+bool ui_get_flat_mode(void);
 void ui_set_flat_mode(bool on);
 void ui_flat_mode_reset(void);  // re-seed flat-spectrum floor on first audio after QMX (re)connect
 
