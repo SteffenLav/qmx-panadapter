@@ -21,7 +21,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 > **You are solely responsible for operating legally** — correct licence class, operating
 > within your licence privileges, band plan compliance, no harmful interference.
 >
-> **What is NOT yet in place in v0.15.16:**
+> **What is NOT yet in place in v0.15.17:**
 > - No duty-cycle protection — back-to-back TX slots are not prevented by the firmware
 > - No ADIF logging — completed QSOs are not recorded anywhere
 > - No audio loopback verification — the firmware cannot confirm the transmitted waveform
@@ -198,7 +198,7 @@ The original mockup that drove the design ([panadapter-mockup-ideal.svg](docs/pa
 
 ## Status
 
-Working. All phases through 8 complete. Current release: **v0.15.16**. Includes: cold-boot reliability fix, on-device diagnostic logging (web + serial) with QMX firmware readout, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings (including last-used UI mode and display brightness), Hamlib rigctld bridge, onboard FT8 RX decoder with a 40-row live-view decode list and FFT-based SNR estimation, memory channels with a frequency/mode picker, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser) including a tap-to-enter frequency keypad, browser click-to-tune with mouse-wheel tuning, zoom sync, band memory, QMX RTC time sync for no-WiFi (POTA) FT8 timing, **manual FT8 TX** (reply + CQ via CAT `TA;`), a **full auto QSO engine** — search-and-pounce plus **CQ-run** (auto-answers callers, runs the exchange to completion with patient retry, then resumes CQ), and a fully redesigned **browser web UI** matching the Tab5 display (graphical S-meter, live VFO, European-format freq axis with tick marks, mode-aware mouse-wheel tuning). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
+Working. All phases through 8 complete. Current release: **v0.15.17**. Includes: cold-boot reliability fix, on-device diagnostic logging (web + serial) with QMX firmware readout, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings (including last-used UI mode and display brightness), Hamlib rigctld bridge, onboard FT8 RX decoder with a 40-row live-view decode list and FFT-based SNR estimation, memory channels with a frequency/mode picker, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser) including a tap-to-enter frequency keypad, browser click-to-tune with mouse-wheel tuning, zoom sync, band memory, **global Tab5 RTC time sync** (supercap-backed RX8130CE clock, synced from QMX/SNTP/manual with correct priority ordering), **manual FT8 TX** (reply + CQ via CAT `TA;`), a **full auto QSO engine** — search-and-pounce plus **CQ-run** (auto-answers callers, runs the exchange to completion with patient retry, then resumes CQ), **FT8 QSO override buttons** (force re-send/RR73/73 mid-exchange), **SWR auto-reset** (cycles TX;/RX; on SWR trip), **CQ-only filter** in the decode list, and a fully redesigned **browser web UI** matching the Tab5 display (graphical S-meter, live VFO, European-format freq axis with tick marks, mode-aware mouse-wheel tuning). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
 
 | Phase | What | Status |
 |-------|------|--------|
@@ -291,6 +291,10 @@ Working. All phases through 8 complete. Current release: **v0.15.16**. Includes:
 | -     | WS frame byte[1] carries zoom decimation factor for browser residual-zoom rendering (v0.15.16) | done |
 | -     | /api/status extended: battery.mv, flat_mode, utc_epoch, tab5_fw, signal_dbm (v0.15.16) | done |
 | -     | Flasher renamed tools/flasher → tools/QMX-Panadapter flasher; flash.command executable bit restored (v0.15.16) | done |
+| -     | Global Tab5 RTC time sync: RX8130CE supercap driver, time_sync orchestrator, QMX > RTC > SNTP > manual priority (v0.15.17) | done |
+| -     | FT8 QSO override buttons: Re-send / RR73 / 73 visible during active exchange (v0.15.17) | done |
+| -     | FT8 filter "Show only CQ callers" toggle (incl_cq_only) in filter modal (v0.15.17) | done |
+| -     | SWR auto-reset: TX;/RX; latch clear when SWR > 4.0 after TX burst (v0.15.17) | done |
 
 See the [Roadmap](#roadmap) at the bottom for what's next.
 
@@ -1096,21 +1100,25 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 - **WS frame byte[1] = zoom decimation factor.** Tells the browser whether the 1024 bins come from the base spectrum (decim=1) or from the zoom-FFT (decim>1), so residual zoom can be applied correctly.
 - **Flasher renamed and fixed.** `tools/flasher/` is now `tools/QMX-Panadapter flasher/` to match the release zip name; `flash.command` had its executable bit restored after it was lost during the folder rename (caused a macOS "no appropriate access privileges" error on double-click).
 
+### Shipped in v0.15.17 — 2026-06-17 UTC
+
+- **Global Tab5 RTC time sync.** The Tab5's onboard RX8130CE supercap-backed RTC (I2C 0x32, ~30–40 h retention) is now initialised at every boot regardless of operating mode. Priority chain (highest first): (1) QMX/QMX+ clock — treated as potentially GPS-disciplined, always applied and records a 5-minute dominance window; (2) Tab5 RTC — applied immediately at boot before QMX/SNTP are available; (3) SNTP/WiFi — always writes to RTC + NVS, but skips `settimeofday()` when QMX has synced within the last 5 min so a GPS-locked QMX is not overridden; (4) QMX crystal (same code path as GPS, used when offline); (5) manual input for rare POTA sessions without WiFi or QMX clock (`time_sync_set_manual()`). A background task (`time_sync_task`) waits for CAT, queries `TM;` once at connect, then polls every 5 minutes to catch GPS lock events. Two bug fixes baked in: VBLF=0 alone is insufficient — uninitialised RTC chips have VBLF=0 but garbage BCD registers (e.g. year = 2085); all fields are now range-validated before the clock is trusted. NVS `last_unix_time` anchors are checked against both a lower bound (2023-11-14) and an upper bound (2040-01-01) to prevent a poisoned NVS value from propagating across reboots.
+- **FT8 QSO override buttons.** During an active auto-QSO exchange (WAIT_RPT, WAIT_ROGER, WAIT_RR73), three buttons appear in the FT8 left pane: **Re-send** (amber — re-arms the current outgoing message immediately), **RR73** (blue — forces the RR73 message, skipping the report step), and **73** (green — fires the 73 sign-off and ends the QSO). Useful on a busy band where the auto-engine falls a slot behind or the state machine needs a manual nudge.
+- **FT8 filter "Show only CQ callers".** New toggle in the CQ-run reply filter modal: when enabled, the decode list shows *only* rows where the station is calling CQ — useful when scanning for stations to work without exchange-traffic noise filling the list.
+- **SWR auto-reset.** After each FT8 TX burst, if the post-burst `SW;` readback shows SWR > 4.0 (indicating the QMX SWR-protection latch tripped), the firmware automatically cycles `TX;` / 150 ms / `RX;` to clear the latch — so the radio is ready for the next TX slot without operator intervention. Requires QMX firmware 1.03.000+.
+
 ### Next up
 
 The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF.
 
 - **v0.16.0 - ADIF logging.** Write each completed QSO to an ADIF file on-device; show a log view in the FT8 screen. Upload to LOTW, QRZ, eQSL, or POTA.app via the web UI. Activates the existing "Exclude worked-before" filter toggle.
-- **v0.16.0 - SWR-protection auto-reset.** If SWR protection trips during or after an FT8 burst (detected via the TX power/SWR CAT query), automatically cycle `TX;`/`RX;` to clear it instead of leaving the radio stuck. Inspired by qFT8; requires QMX firmware 1.03.000+.
 - **v0.16.0 - TX clash/sequence warning.** Extend `ft8_find_clear_tone_hz()`'s occupied-bin bitmask to flag when our chosen TX tone collides with another active station, surfaced as a warning on the decode list/waterfall.
 - **v0.16.0 - "Worked before / new zone" highlighting.** Colour-code the FT8 decode list by whether that callsign has already been confirmed (once the ADIF log exists). High value for POTA/SOTA activators chasing new contacts.
 - **v1.0.0 - Standalone FT8 station.** All of the above polished + multi-day stability + cleaner UI.
 
 Alongside the FT8 path:
 
-- **FT8 filter: "Include only CQ callers" toggle.** Requested by field users: a mode that shows *only* stations calling CQ (opposite of the existing "Exclude plain CQ callers"), useful when scanning for stations to work without exchange-traffic noise.
-- **FT8 QSO: manual message override.** A one-tap button to force the next outgoing message (e.g. re-send the report, or jump straight to 73) instead of following the automatic state-machine sequence — useful on a busy 20m band where the auto-engine can fall a slot behind.
-- **Browser/Tab5 waterfall frequency alignment.** ~650 Hz offset between the browser waterfall and the Tab5 display, reported in the field. Under investigation.
+- **Manual time-set UI.** `time_sync_set_manual()` is implemented but has no settings-drawer entry point yet. Add a "Set Time" field for rare POTA sessions where both QMX and WiFi are unavailable.
 - **Tab5 speaker/headphone CW audio.** Decode and play the demodulated CW passband out of the Tab5's own speaker/headphone jack, so the operator can listen to CW without the QMX's audio path.
 - **DSP polish.** Noise reduction, auto-notch.
 - **Phase 6.3 - Native-orientation rendering** *(deferred)*. ~50% FPS recovery available if we render directly in the panel's native 720x1280 portrait coordinates so LVGL has no rotation step.
