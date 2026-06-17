@@ -636,6 +636,18 @@ The left pane shows a persistent status line below the slot countdown. Priority 
 
 Tapping the amber/red line cancels or aborts the current TX; tapping the orange line clears a timed-out QSO.
 
+### QSO override buttons
+
+During an active auto-QSO exchange (any state between sending your first reply and the final 73), **three buttons appear in the left pane** below the status line:
+
+| Button | Colour | What it does |
+|--------|--------|--------------|
+| **Re-send** | Amber | Re-arms the *current* outgoing message immediately — fires it on the next TX slot without waiting for the normal state-machine timeout. Use this when you suspect the other station missed your last transmission. |
+| **RR73** | Blue | Skips straight to the RR73 message, regardless of which exchange step you're on. Use this when you can see the other station sent a valid report but the engine hasn't transitioned yet. |
+| **73** | Green | Fires the 73 sign-off immediately and closes the QSO. Use this to end an exchange cleanly when the other station has already sent RR73 but the engine is waiting another slot to confirm. |
+
+The buttons are **only visible while an auto-QSO is in progress** (WAIT_RPT / WAIT_ROGER / WAIT_RR73 states). They disappear when the QSO completes or is cancelled. These are deliberate operator nudges — the auto-engine handles the normal case; these exist for the busy-band edge cases where a slot gets missed and you don't want to wait through the full 4-slot timeout.
+
 ### How it works (for the technically curious)
 
 The QMX `TA<freq.f>;` command sets the transmitted audio tone directly in decimal Hz. The Tab5 pre-encodes the 79-symbol FT8 message at confirmation time using `ft8_lib` (the same library used for RX), then at slot time sends one `TA` command per symbol every 160 ms, using `esp_timer_get_time()` absolute timestamps to avoid drift. TX runs inside the existing 15-second slot loop — a slot is either RX or TX, never both, which is also correct behaviour (while keyed up, the QMX's USB audio captures its own TX output, not the air).
