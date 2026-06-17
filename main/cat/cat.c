@@ -77,6 +77,11 @@ const cat_band_entry_t *cat_get_band_list(int *out_count)
 static uint64_t s_last_tx_us = 0;   // for rate-limiting cat_set_frequency
 static volatile bool s_poll_paused = false;  // v0.12.0: cooperative pause for FT8 TX bursts
 
+// Pending mode digit (Kenwood MD digit '1'-'9') requested from the LVGL thread.
+// 0 = nothing pending. Drained by the poll task to avoid a CDC race.
+static volatile char s_pending_mode_digit = 0;
+static char hamlib_mode_to_digit(const char *mode);  // forward declaration
+
 // Pending SSB filter bandwidth (Hz) requested from the LVGL thread. The poll
 // task drains it on its next cycle so the write happens on the one thread that
 // owns the CDC pipe - writing MMSSB|Bandwidth= directly from the UI thread
@@ -87,6 +92,11 @@ static volatile uint32_t s_pending_ssb_bw = 0;
 // FW; poll is dropped from the rotation - reading the filter makes the QMX
 // re-assert a stale active width and our setting reverts.
 static volatile uint32_t s_ssb_bw_pinned = 0;
+
+void cat_request_mode(const char *mode)
+{
+    s_pending_mode_digit = hamlib_mode_to_digit(mode);
+}
 
 void cat_request_ssb_bandwidth(uint32_t hz)
 {
@@ -562,6 +572,16 @@ static void poll_task(void *arg)
         // Target the committed "Filter RX" menu item - that's what FW; reads
         // and what shows in the QMX SSB menu (the "Bandwidth" token is a live
         // value that the QMX reverts). FW; will read the new width back.
+        char md = s_pending_mode_digit;
+        if (md != 0) {
+            s_pending_mode_digit = 0;
+            char cmd[8];
+            cmd[0] = 'M'; cmd[1] = 'D'; cmd[2] = md; cmd[3] = ';'; cmd[4] = 0;
+            esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd, 4, 200);
+            ESP_LOGI(TAG, "mode -> MD%c; (%s)", md, err == ESP_OK ? "ok" : "fail");
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
         uint32_t bw = s_pending_ssb_bw;
         if (bw != 0) {
             s_pending_ssb_bw = 0;

@@ -38,6 +38,7 @@ static const char *TAG = "settings";
 #define KEY_DIAG_LOG   "diag_log"
 #define KEY_ONBOARDED  "onboarded"
 #define KEY_FT8_FILT   "ft8_filt"
+#define KEY_WIFI_ENABLED "wifi_en"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -50,7 +51,8 @@ static const char *TAG = "settings";
 #define DEF_ZOOM        (1.0f)
 #define DEF_COLORMAP    (0)  // Thermal
 #define DEF_BRIGHTNESS  (100)
-#define DEF_LAST_MODE   (0)
+#define DEF_LAST_MODE     (0)
+#define DEF_WIFI_ENABLED  (true)
 
 // Debounce: how long we wait after the last change before flushing.
 #define DEBOUNCE_MS     500
@@ -78,8 +80,9 @@ static const char *TAG = "settings";
 #define DIRTY_CQ_MSG2    (1u << 19)
 #define DIRTY_CQ_SEL     (1u << 20)
 #define DIRTY_DIAG_LOG   (1u << 21)
-#define DIRTY_ONBOARDED  (1u << 22)
-#define DIRTY_FT8_FILT   (1u << 23)
+#define DIRTY_ONBOARDED    (1u << 22)
+#define DIRTY_FT8_FILT     (1u << 23)
+#define DIRTY_WIFI_ENABLED (1u << 24)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -178,7 +181,8 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_CQ_SEL)     nvs_set_u8(s_nvs, KEY_CQ_SEL, snap.cq_sel);
         if (dirty_local & DIRTY_DIAG_LOG)   nvs_set_u8(s_nvs, KEY_DIAG_LOG, snap.diag_log ? 1 : 0);
         if (dirty_local & DIRTY_ONBOARDED)  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap.onboarded ? 1 : 0);
-        if (dirty_local & DIRTY_FT8_FILT)   nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap.ft8_filters, sizeof(snap.ft8_filters));
+        if (dirty_local & DIRTY_FT8_FILT)     nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap.ft8_filters, sizeof(snap.ft8_filters));
+        if (dirty_local & DIRTY_WIFI_ENABLED) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap.wifi_enabled ? 1 : 0);
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
@@ -254,6 +258,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->cq_sel = 0;
     out->diag_log = false;
     out->onboarded = false;
+    out->wifi_enabled = DEF_WIFI_ENABLED;
     memset(&out->ft8_filters, 0, sizeof(out->ft8_filters));
 
     if (!s_ready) {
@@ -300,8 +305,9 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_u8(s_nvs, KEY_CQ_SEL, &out->cq_sel);
     if (out->cq_sel > 2) out->cq_sel = 0;
 
-    if (nvs_get_u8(s_nvs, KEY_DIAG_LOG, &u8v) == ESP_OK) out->diag_log = (u8v != 0);
-    if (nvs_get_u8(s_nvs, KEY_ONBOARDED, &u8v) == ESP_OK) out->onboarded = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_DIAG_LOG,    &u8v) == ESP_OK) out->diag_log    = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_ONBOARDED,  &u8v) == ESP_OK) out->onboarded  = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_WIFI_ENABLED, &u8v) == ESP_OK) out->wifi_enabled = (u8v != 0);
 
     sz = sizeof(out->ft8_filters);
     nvs_get_blob(s_nvs, KEY_FT8_FILT, &out->ft8_filters, &sz);
@@ -609,4 +615,13 @@ void settings_set_ft8_filters(const ft8_filters_t *f)
     s_pending.ft8_filters = *f;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_FT8_FILT);
+}
+
+void settings_set_wifi_enabled(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_pending.wifi_enabled = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WIFI_ENABLED);
 }

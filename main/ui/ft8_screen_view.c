@@ -753,22 +753,32 @@ static void t_clock_cb(lv_timer_t *t)
         int  secs_until = 0;
         ft8_tx_state_t tx_st = ft8_tx_get_status(tx_text, sizeof(tx_text), &secs_until);
         ft8_qso_state_t qso_st = ft8_qso_get_state();
-        char b[96];
+        char b[128];
         float tx_pwr_w, tx_pwr_swr, tx_pwr_age;
+
+        bool clash = (tx_st != FT8_TX_IDLE) && ft8_tx_is_clashing();
 
         if (tx_st == FT8_TX_ACTIVE) {
             // Red: transmitting right now (tap to abort)
-            snprintf(b, sizeof(b), "TRANSMITTING: %s\n(tap to abort)", tx_text);
+            if (clash)
+                snprintf(b, sizeof(b), "TRANSMITTING: %s\n(tap to abort) ⚠ FREQ BUSY", tx_text);
+            else
+                snprintf(b, sizeof(b), "TRANSMITTING: %s\n(tap to abort)", tx_text);
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx, lv_palette_main(LV_PALETTE_RED), 0);
 
         } else if (tx_st == FT8_TX_ARMED) {
-            // Amber: burst scheduled (tap to cancel)
+            // Amber (no clash) or red-orange (clash): burst scheduled (tap to cancel)
             bool tx_even = (((int64_t)now + secs_until) / 15) % 2 == 0;
-            snprintf(b, sizeof(b), "TX armed: %s\n-> %s slot, ~%ds (tap to cancel)",
-                     tx_text, tx_even ? "EVEN" : "ODD", secs_until);
+            if (clash)
+                snprintf(b, sizeof(b), "⚠ FREQ BUSY\nTX armed: %s\n-> %s slot, ~%ds (tap to cancel)",
+                         tx_text, tx_even ? "EVEN" : "ODD", secs_until);
+            else
+                snprintf(b, sizeof(b), "TX armed: %s\n-> %s slot, ~%ds (tap to cancel)",
+                         tx_text, tx_even ? "EVEN" : "ODD", secs_until);
             lv_label_set_text(s_lbl_tx, b);
-            lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0xFFA040), 0);
+            lv_obj_set_style_text_color(s_lbl_tx,
+                clash ? lv_color_hex(0xFF4010) : lv_color_hex(0xFFA040), 0);
 
         } else if (qso_st == FT8_QSO_DONE) {
             // Bright green: QSO complete
@@ -1134,7 +1144,10 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_bg_color(s_left_pane, lv_color_hex(0x101018), 0);
     lv_obj_set_style_border_width(s_left_pane, 0, 0);
     lv_obj_set_style_radius(s_left_pane, 0, 0);
-    lv_obj_set_style_pad_all(s_left_pane, 16, 0);
+    lv_obj_set_style_pad_top(s_left_pane, 8, 0);     // #4: 50% less space over MODE: FT8
+    lv_obj_set_style_pad_bottom(s_left_pane, 16, 0);
+    lv_obj_set_style_pad_left(s_left_pane, 16, 0);
+    lv_obj_set_style_pad_right(s_left_pane, 16, 0);
     lv_obj_clear_flag(s_left_pane, LV_OBJ_FLAG_SCROLLABLE);
 
     s_lbl_mode = lv_label_create(s_left_pane);
@@ -1147,7 +1160,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_label_set_text(s_lbl_freq, "Preset: --.--- MHz");
     lv_obj_set_style_text_color(s_lbl_freq, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(s_lbl_freq, &lv_font_montserrat_32, 0);
-    lv_obj_set_pos(s_lbl_freq, 0, 80);
+    lv_obj_set_pos(s_lbl_freq, 0, 67);  // #1: 50% less space under MODE: FT8
 
     // Tap to open a dropdown of conventional FT8 dial frequencies for the
     // bands this QMX supports. A separate transparent overlay (rather than
@@ -1187,14 +1200,14 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_label_set_text(s_lbl_count, "Slot: -- s");
     lv_obj_set_style_text_color(s_lbl_count, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(s_lbl_count, &lv_font_montserrat_24, 0);
-    lv_obj_set_pos(s_lbl_count, 0, 148);
+    lv_obj_set_pos(s_lbl_count, 0, 120);  // #2: 50% less space under Preset label
 
     // Tiny countdown bar to the right of "EVEN/ODD  N s", counting down
     // from full (start of slot) to empty (end of slot). Range is in ms so the
     // fast t_slotbar_cb tick can glide it smoothly; colour set in t_clock_cb.
     s_bar_slot = lv_bar_create(s_left_pane);
     lv_obj_set_size(s_bar_slot, 140, 8);
-    lv_obj_set_pos(s_bar_slot, 140, 159);
+    lv_obj_set_pos(s_bar_slot, 140, 131);
     lv_obj_set_style_radius(s_bar_slot, 2, 0);
     lv_obj_set_style_bg_color(s_bar_slot, lv_color_hex(0x303044), 0);
     lv_obj_set_style_border_width(s_bar_slot, 0, 0);
@@ -1207,7 +1220,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // (steel blue / warm orange) when active.
     s_btn_tx_even = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_tx_even, 136, 52);
-    lv_obj_set_pos(s_btn_tx_even, 0, 180);
+    lv_obj_set_pos(s_btn_tx_even, 0, 152);
     lv_obj_set_style_bg_color(s_btn_tx_even, lv_color_hex(0x303044), 0);
     lv_obj_set_style_border_width(s_btn_tx_even, 0, 0);
     lv_obj_set_style_radius(s_btn_tx_even, 4, 0);
@@ -1221,7 +1234,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
 
     s_btn_tx_odd = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_tx_odd, 136, 52);
-    lv_obj_set_pos(s_btn_tx_odd, 148, 180);
+    lv_obj_set_pos(s_btn_tx_odd, 148, 152);
     lv_obj_set_style_bg_color(s_btn_tx_odd, lv_color_hex(0x303044), 0);
     lv_obj_set_style_border_width(s_btn_tx_odd, 0, 0);
     lv_obj_set_style_radius(s_btn_tx_odd, 4, 0);
@@ -1238,7 +1251,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // Filter button — opens modal for exclude-prefix, worked-before, etc.
     s_btn_filter = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_filter, 288, 60);
-    lv_obj_set_pos(s_btn_filter, 0, 270);
+    lv_obj_set_pos(s_btn_filter, 0, 214);  // #3: 75% less space over Filter button
     lv_obj_set_style_bg_color(s_btn_filter, lv_color_hex(UI_COLOR_PRIMARY), 0);  // pale blue
     lv_obj_set_style_border_color(s_btn_filter, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
     lv_obj_set_style_border_width(s_btn_filter, 2, 0);
@@ -1259,7 +1272,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // the two steps of the flow together visually.
     s_btn_cq = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_cq, 288, 60);
-    lv_obj_set_pos(s_btn_cq, 0, 340);
+    lv_obj_set_pos(s_btn_cq, 0, 284);
     lv_obj_set_style_bg_color(s_btn_cq, lv_color_hex(0x2e8b3a), 0);
     lv_obj_set_style_border_color(s_btn_cq, lv_color_hex(0x4caf50), 0);
     lv_obj_set_style_border_width(s_btn_cq, 2, 0);
@@ -1282,7 +1295,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_label_set_text(s_lbl_heard, "Active: 0");
     lv_obj_set_style_text_color(s_lbl_heard, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(s_lbl_heard, &lv_font_montserrat_24, 0);
-    lv_obj_set_pos(s_lbl_heard, 0, 408);
+    lv_obj_set_pos(s_lbl_heard, 0, 352);
 
     // TX state indicator - hidden while idle; amber/armed or red/active,
     // tap to cancel/abort. See t_clock_cb (1 Hz refresh: state, colour,
@@ -1293,7 +1306,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_label_set_long_mode(s_lbl_tx, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_lbl_tx, 288);
-    lv_obj_set_pos(s_lbl_tx, 0, 440);
+    lv_obj_set_pos(s_lbl_tx, 0, 384);
     lv_obj_add_flag(s_lbl_tx, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_lbl_tx, tx_indicator_tap_cb, LV_EVENT_CLICKED, NULL);
 

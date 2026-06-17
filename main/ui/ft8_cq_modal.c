@@ -78,7 +78,6 @@ static void radio_clicked_cb(lv_event_t *e)
 static void ta_focused_cb(lv_event_t *e)
 {
     lv_obj_t *ta = lv_event_get_target(e);
-    if (!s_keyboard) return;
     // Editing a field implies you want to use it: select its radio too.
     // Also only one field shows the blinking cursor at a time.
     for (int i = 0; i < N_CQ; i++) {
@@ -88,6 +87,7 @@ static void ta_focused_cb(lv_event_t *e)
             lv_obj_remove_state(s_ta[i], LV_STATE_FOCUSED);
         }
     }
+    if (!s_keyboard) return;
     lv_keyboard_set_textarea(s_keyboard, ta);
     lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_keyboard);
@@ -185,20 +185,26 @@ static void modal_build(void)
     lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
 
-    // Radio-button look: round indicator on a checkbox.
-    static lv_style_t style_radio_ind;
-    static bool radio_style_inited = false;
-    if (!radio_style_inited) {
-        lv_style_init(&style_radio_ind);
-        lv_style_set_radius(&style_radio_ind, LV_RADIUS_CIRCLE);
-        lv_style_set_pad_all(&style_radio_ind, 8);  // bigger touch target
-        radio_style_inited = true;
+    // Square themed checkbox indicator — same style as filter modal / drawer.
+    static lv_style_t style_ind;
+    static lv_style_t style_ind_chk;
+    static bool styles_inited = false;
+    if (!styles_inited) {
+        lv_style_init(&style_ind);
+        lv_style_set_bg_color(&style_ind, lv_color_hex(UI_COLOR_SURFACE_RAISED));
+        lv_style_set_border_color(&style_ind, lv_color_hex(UI_COLOR_BORDER));
+        lv_style_set_border_width(&style_ind, 2);
+        lv_style_set_pad_all(&style_ind, 8);
+        lv_style_init(&style_ind_chk);
+        lv_style_set_bg_color(&style_ind_chk, lv_color_hex(UI_COLOR_PRIMARY));
+        lv_style_set_border_color(&style_ind_chk, lv_color_hex(UI_COLOR_PRIMARY_BORDER));
+        styles_inited = true;
     }
 
     for (int i = 0; i < N_CQ; i++) {
         int y = 56 + i * 72;
 
-        // Text area first, so the radio can be vertically centred against it.
+        // Text area first, so the checkbox can be vertically centred against it.
         s_ta[i] = lv_textarea_create(panel);
         lv_obj_set_size(s_ta[i], 900, 60);
         lv_obj_align(s_ta[i], LV_ALIGN_TOP_LEFT, 80, y);
@@ -213,9 +219,9 @@ static void modal_build(void)
 
         s_radio[i] = lv_checkbox_create(panel);
         lv_checkbox_set_text(s_radio[i], "");
-        lv_obj_add_style(s_radio[i], &style_radio_ind, LV_PART_INDICATOR);
-        lv_obj_set_style_text_font(s_radio[i], &lv_font_montserrat_24, 0);
-        // Centre the radio on the text field's vertical midline.
+        lv_obj_add_style(s_radio[i], &style_ind,     LV_PART_INDICATOR);
+        lv_obj_add_style(s_radio[i], &style_ind_chk, LV_PART_INDICATOR | LV_STATE_CHECKED);
+        // Centre the checkbox on the text field's vertical midline.
         lv_obj_align_to(s_radio[i], s_ta[i], LV_ALIGN_OUT_LEFT_MID, -16, 0);
         lv_obj_add_event_cb(s_radio[i], radio_clicked_cb, LV_EVENT_CLICKED,
                             (void *)(intptr_t)i);
@@ -275,8 +281,8 @@ static void modal_build(void)
     ui_theme_style_keyboard(s_keyboard);
     lv_obj_set_size(s_keyboard, LV_PCT(100), 280);
     lv_obj_align(s_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_keyboard_set_mode(s_keyboard, LV_KEYBOARD_MODE_TEXT_UPPER);
-    ui_theme_keyboard_attach_caps_cycle(s_keyboard);
+    // Start in ABC (caps-lock) — CQ messages are always uppercase.
+    ui_theme_keyboard_attach_caps_cycle_upper(s_keyboard);
     lv_obj_set_style_text_font(s_keyboard, &lv_font_montserrat_28, 0);
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_keyboard, keyboard_event_cb, LV_EVENT_READY,  NULL);

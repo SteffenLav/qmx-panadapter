@@ -21,7 +21,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 > **You are solely responsible for operating legally** — correct licence class, operating
 > within your licence privileges, band plan compliance, no harmful interference.
 >
-> **What is NOT yet in place in v0.15.17:**
+> **What is NOT yet in place in v0.15.18:**
 > - No duty-cycle protection — back-to-back TX slots are not prevented by the firmware
 > - No ADIF logging — completed QSOs are not recorded anywhere
 > - No audio loopback verification — the firmware cannot confirm the transmitted waveform
@@ -295,6 +295,9 @@ Working. All phases through 8 complete. Current release: **v0.15.17**. Includes:
 | -     | FT8 QSO override buttons: Re-send / RR73 / 73 visible during active exchange (v0.15.17) | done |
 | -     | FT8 filter "Show only CQ callers" toggle (incl_cq_only) in filter modal (v0.15.17) | done |
 | -     | SWR auto-reset: TX;/RX; latch clear when SWR > 4.0 after TX burst (v0.15.17) | done |
+| -     | TX clash warning: ft8_tx_is_clashing() flags ⚠ FREQ BUSY when armed tone is occupied (v0.15.18) | done |
+| -     | WiFi on/off toggle: "WiFi initiated" checkbox in settings drawer, NVS-persisted (v0.15.18) | done |
+| -     | Show-password redesigned as checkbox; cat_request_mode() deferred CAT write; drawer checkbox styling (v0.15.18) | done |
 
 See the [Roadmap](#roadmap) at the bottom for what's next.
 
@@ -1107,12 +1110,20 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 - **FT8 filter "Show only CQ callers".** New toggle in the CQ-run reply filter modal: when enabled, the decode list shows *only* rows where the station is calling CQ — useful when scanning for stations to work without exchange-traffic noise filling the list.
 - **SWR auto-reset.** After each FT8 TX burst, if the post-burst `SW;` readback shows SWR > 4.0 (indicating the QMX SWR-protection latch tripped), the firmware automatically cycles `TX;` / 150 ms / `RX;` to clear the latch — so the radio is ready for the next TX slot without operator intervention. Requires QMX firmware 1.03.000+.
 
+### Shipped in v0.15.18 — 2026-06-17 UTC
+
+- **TX clash warning.** `ft8_tx_is_clashing()` scans the live heard-station table against the armed TX tone (±1 bin / ~50 Hz guard). When a collision is detected the ARMED/ACTIVE FT8 status label turns red-orange and shows "⚠ FREQ BUSY" instead of the normal amber — a visual heads-up before the burst fires so you can retune to a clear slot.
+- **WiFi on/off toggle.** A "WiFi initiated" checkbox in the settings drawer WiFi section lets you disable WiFi entirely (NVS-persisted, default on). Useful for POTA/field sessions where WiFi is unavailable or unwanted — no WiFi startup, no SNTP, time comes from QMX or RTC only.
+- **Deferred CAT mode write.** `cat_request_mode()` queues a mode change through the poll task via a `volatile` flag, the same pattern as the SSB bandwidth deferral — prevents a CDC pipe race when mode and frequency changes are triggered close together from the LVGL thread.
+- **Show-password redesigned.** The WiFi modal's show/hide password control changes from an eye-icon button alongside the field to a "Show password" checkbox below it. The password textarea also widens to fill the full panel width.
+- **Drawer checkbox styling.** The IQ balance, flat-spectrum, and diagnostic-log drawer controls are converted from LVGL switches to themed square checkboxes via a shared `make_drawer_checkbox()` helper — consistent visual language with the new WiFi toggle.
+- **FT8 left-pane spacing.** Tighter padding (`pad_top(8)` instead of `pad_all(16)`) and upward nudges for the freq label and slot-countdown bar make better use of the narrow left pane.
+
 ### Next up
 
 The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF.
 
 - **v0.16.0 - ADIF logging.** Write each completed QSO to an ADIF file on-device; show a log view in the FT8 screen. Upload to LOTW, QRZ, eQSL, or POTA.app via the web UI. Activates the existing "Exclude worked-before" filter toggle.
-- **v0.16.0 - TX clash/sequence warning.** Extend `ft8_find_clear_tone_hz()`'s occupied-bin bitmask to flag when our chosen TX tone collides with another active station, surfaced as a warning on the decode list/waterfall.
 - **v0.16.0 - "Worked before / new zone" highlighting.** Colour-code the FT8 decode list by whether that callsign has already been confirmed (once the ADIF log exists). High value for POTA/SOTA activators chasing new contacts.
 - **v1.0.0 - Standalone FT8 station.** All of the above polished + multi-day stability + cleaner UI.
 

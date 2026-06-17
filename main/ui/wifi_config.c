@@ -14,10 +14,10 @@ static const char *TAG = "wifi_config";
 // Modal state - lazily created on first show.
 static lv_obj_t *s_modal       = NULL;  // root full-screen overlay
 static lv_obj_t *s_panel       = NULL;  // centred dialog panel
-static lv_obj_t *s_ta_ssid     = NULL;
-static lv_obj_t *s_ta_pass     = NULL;
-static lv_obj_t *s_show_lbl    = NULL;  // label inside the show/hide-password button
-static lv_obj_t *s_keyboard    = NULL;
+static lv_obj_t *s_ta_ssid       = NULL;
+static lv_obj_t *s_ta_pass       = NULL;
+static lv_obj_t *s_cb_show_pass  = NULL;  // "Show password" checkbox
+static lv_obj_t *s_keyboard      = NULL;
 static bool      s_modal_open  = false;
 static void    (*s_on_close)(void) = NULL;  // one-shot, fired when the modal closes
 
@@ -54,18 +54,17 @@ static void cancel_btn_cb(lv_event_t *e)
     modal_close();
 }
 
-static void show_pass_btn_cb(lv_event_t *e)
+static void show_pass_cb(lv_event_t *e)
 {
-    (void)e;
-    bool hidden = lv_textarea_get_password_mode(s_ta_pass);
-    lv_textarea_set_password_mode(s_ta_pass, !hidden);
-    lv_label_set_text(s_show_lbl, hidden ? LV_SYMBOL_EYE_OPEN : LV_SYMBOL_EYE_CLOSE);
+    bool show = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    lv_textarea_set_password_mode(s_ta_pass, !show);
 }
 
 // Show keyboard on textarea focus, attach to the focused textarea.
 static void ta_focused_cb(lv_event_t *e)
 {
     lv_obj_t *ta = lv_event_get_target(e);
+
     if (!s_keyboard) return;
 
     // Only one field shows the blinking cursor at a time.
@@ -149,9 +148,9 @@ static void modal_build(void)
     lv_obj_set_style_text_font(pass_lbl, &lv_font_montserrat_24, 0);
     lv_obj_align(pass_lbl, LV_ALIGN_TOP_LEFT, 0, 160);
 
-    // Password textarea - larger font + taller, masked
+    // Password textarea - full width, masked
     s_ta_pass = lv_textarea_create(s_panel);
-    lv_obj_set_size(s_ta_pass, 700, 60);
+    lv_obj_set_size(s_ta_pass, 820, 60);
     lv_obj_align(s_ta_pass, LV_ALIGN_TOP_LEFT, 0, 190);
     lv_textarea_set_one_line(s_ta_pass, true);
     lv_textarea_set_password_mode(s_ta_pass, true);
@@ -161,22 +160,28 @@ static void modal_build(void)
     ui_theme_style_textarea(s_ta_pass);
     lv_obj_add_event_cb(s_ta_pass, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
 
-    // Show/hide password toggle, right of the field - vertically centred
-    // against it via align_to so heights/paddings can't drift apart.
-    lv_obj_t *show_btn = lv_btn_create(s_panel);
-    lv_obj_set_size(show_btn, 100, 60);
-    lv_obj_set_style_pad_all(show_btn, 0, 0);
-    lv_obj_align_to(show_btn, s_ta_pass, LV_ALIGN_OUT_RIGHT_MID, 20, 0);
-    lv_obj_set_style_bg_color(show_btn, lv_color_hex(UI_COLOR_KEY_BG), 0);
-    lv_obj_set_style_border_color(show_btn, lv_color_hex(UI_COLOR_BORDER), 0);
-    lv_obj_set_style_border_width(show_btn, 1, 0);
-    lv_obj_set_style_radius(show_btn, 8, 0);
-    lv_obj_add_event_cb(show_btn, show_pass_btn_cb, LV_EVENT_CLICKED, NULL);
-    s_show_lbl = lv_label_create(show_btn);
-    lv_label_set_text(s_show_lbl, LV_SYMBOL_EYE_CLOSE);
-    lv_obj_set_style_text_color(s_show_lbl, lv_color_hex(UI_COLOR_TEXT), 0);
-    lv_obj_set_style_text_font(s_show_lbl, &lv_font_montserrat_24, 0);
-    lv_obj_center(s_show_lbl);
+    // "Show password" checkbox below the password field.
+    static lv_style_t s_ind, s_ind_chk;
+    static bool show_styles_inited = false;
+    if (!show_styles_inited) {
+        lv_style_init(&s_ind);
+        lv_style_set_bg_color(&s_ind, lv_color_hex(UI_COLOR_KEY_BG));
+        lv_style_set_border_color(&s_ind, lv_color_hex(UI_COLOR_BORDER));
+        lv_style_set_border_width(&s_ind, 2);
+        lv_style_set_pad_all(&s_ind, 6);
+        lv_style_init(&s_ind_chk);
+        lv_style_set_bg_color(&s_ind_chk, lv_color_hex(UI_COLOR_PRIMARY));
+        lv_style_set_border_color(&s_ind_chk, lv_color_hex(UI_COLOR_PRIMARY_BORDER));
+        show_styles_inited = true;
+    }
+    s_cb_show_pass = lv_checkbox_create(s_panel);
+    lv_checkbox_set_text(s_cb_show_pass, "Show password");
+    lv_obj_add_style(s_cb_show_pass, &s_ind,     LV_PART_INDICATOR);
+    lv_obj_add_style(s_cb_show_pass, &s_ind_chk, LV_PART_INDICATOR | LV_STATE_CHECKED);
+    lv_obj_set_style_text_color(s_cb_show_pass, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_set_style_text_font(s_cb_show_pass, &lv_font_montserrat_24, 0);
+    lv_obj_align(s_cb_show_pass, LV_ALIGN_TOP_LEFT, 0, 262);
+    lv_obj_add_event_cb(s_cb_show_pass, show_pass_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     // Cancel button - bigger, red-tinted for "destructive" semantics
     lv_obj_t *cancel_btn = lv_btn_create(s_panel);
@@ -258,7 +263,7 @@ void wifi_config_modal_show(void)
     lv_textarea_set_text(s_ta_ssid, s.wifi_ssid);
     lv_textarea_set_text(s_ta_pass, "");
     lv_textarea_set_password_mode(s_ta_pass, true);
-    lv_label_set_text(s_show_lbl, LV_SYMBOL_EYE_CLOSE);
+    if (s_cb_show_pass) lv_obj_remove_state(s_cb_show_pass, LV_STATE_CHECKED);
     ui_theme_focus_textarea(s_ta_ssid);
 
     // Make sure keyboard starts hidden every time.

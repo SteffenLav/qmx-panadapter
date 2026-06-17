@@ -154,6 +154,13 @@ float ft8_tx_get_last_power_swr(float *power_w, float *swr);
 // Heap-allocates a temporary snapshot buffer; returns the default on OOM.
 int ft8_find_clear_tone_hz(void);
 
+// Returns true if the currently ARMED or ACTIVE request's tone frequency
+// clashes with another heard station's bin (±1 guard slot).
+// For a REPLY request, the intended target station is excluded from the check
+// (they are expected to be at that frequency). Returns false when IDLE or if
+// the decode table is empty.  Safe to call from any task at 1 Hz or less.
+bool ft8_tx_is_clashing(void);
+
 // ---- Consumed only by ft8_task's slot loop (ft8_test.c) --------------------
 
 // True if a request is currently ARMED and its required parity matches this

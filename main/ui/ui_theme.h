@@ -235,4 +235,14 @@ static inline void ui_theme_keyboard_attach_caps_cycle(lv_obj_t *kb)
     lv_obj_add_event_cb(kb, ui_theme_kb_shift_cb, LV_EVENT_VALUE_CHANGED, NULL);
 }
 
+/* Same as above but starts in the ABC (caps-lock) state. Use for fields
+ * where input is always uppercase: callsigns, Maidenhead grids, FT8 CQ
+ * messages. The user can still tap the shift key to cycle down to Abc/abc. */
+static inline void ui_theme_keyboard_attach_caps_cycle_upper(lv_obj_t *kb)
+{
+    lv_obj_remove_event_cb(kb, lv_keyboard_def_event_cb);
+    ui_theme_kb_apply_state(kb, 2, ui_theme_kb_find_shift_btn(kb));
+    lv_obj_add_event_cb(kb, ui_theme_kb_shift_cb, LV_EVENT_VALUE_CHANGED, NULL);
+}
+
 #endif /* UI_THEME_H */

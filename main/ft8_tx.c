@@ -188,6 +188,46 @@ int ft8_find_clear_tone_hz(void)
     return FT8_TX_CQ_DEFAULT_FREQ_HZ;
 }
 
+bool ft8_tx_is_clashing(void)
+{
+    // Grab the armed freq and target call under the lock, then release before
+    // calling ft8_screen_get_all() (which takes its own mutex).
+    lock();
+    if (s_state == FT8_TX_IDLE) { unlock(); return false; }
+    int our_hz      = s_armed.audio_freq_hz;
+    ft8_tx_kind_t kind = s_armed.kind;
+    char target[FT8_CALL_MAX_LEN];
+    strncpy(target, s_armed.target_call, sizeof(target) - 1);
+    target[sizeof(target) - 1] = '\0';
+    unlock();
+
+    ft8_call_t *calls = malloc(FT8_CALL_TABLE_SIZE * sizeof(ft8_call_t));
+    if (!calls) return false;
+    int n = 0;
+    ft8_screen_get_all(calls, FT8_CALL_TABLE_SIZE, &n);
+
+    const int n_slots = (FT8_AUDIO_SCAN_MAX_HZ - FT8_AUDIO_SCAN_MIN_HZ) / FT8_AUDIO_SLOT_HZ;
+    int our_bin = (our_hz - FT8_AUDIO_SCAN_MIN_HZ) / FT8_AUDIO_SLOT_HZ;
+
+    bool clash = false;
+    if (our_bin >= 0 && our_bin < n_slots) {
+        for (int i = 0; i < n; i++) {
+            // For a REPLY, the target station IS expected at this frequency —
+            // skip them. A second station at the same bin (pile-up) is still a clash.
+            if (kind == FT8_TX_KIND_REPLY && target[0] &&
+                strncmp(calls[i].call, target, sizeof(calls[i].call)) == 0)
+                continue;
+            int their_bin = ((int)calls[i].last_freq - FT8_AUDIO_SCAN_MIN_HZ) / FT8_AUDIO_SLOT_HZ;
+            if (abs(their_bin - our_bin) <= 1) {
+                clash = true;
+                break;
+            }
+        }
+    }
+    free(calls);
+    return clash;
+}
+
 // ---------------------------------------------------------------------------
 // Message building
 // ---------------------------------------------------------------------------

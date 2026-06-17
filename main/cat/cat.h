@@ -112,6 +112,18 @@ esp_err_t cat_send_raw_cmd(const char *fmt, ...);
 esp_err_t cat_query_power_swr(float *power_w, float *swr);
 
 /**
+ * @brief Request a mode change (deferred to the poll task).
+ *
+ * Thread-safe to call from the LVGL/UI thread. The MD<digit>; command is
+ * queued and sent by the poll task on its next cycle, avoiding a race with
+ * the FA/MD/FW poll on the shared CDC pipe. Any subsequent call before the
+ * poll drains it overwrites the previous request (last write wins).
+ *
+ * @param mode  Hamlib mode string (e.g. "USB", "LSB", "CW", "DiGi")
+ */
+void cat_request_mode(const char *mode);
+
+/**
  * @brief Request the QMX SSB receive filter bandwidth (Hz: 2500/2700/2900/3200).
  *
  * Thread-safe to call from the LVGL/UI thread. The actual MMSSB|Bandwidth=

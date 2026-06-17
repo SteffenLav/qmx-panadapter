@@ -266,6 +266,7 @@ static void freq_apply_keypad_layout(void)
 static const char *const s_freq_modes[4] = {"DiGi", "USB", "LSB", "CW"};
 static lv_obj_t *s_freq_mode_btns[4];
 static char      s_freq_mode_sel[8] = "";
+static bool      s_freq_mode_changed = false;  // set by freq_mode_cb, cleared on open
 
 static void freq_mode_highlight(void)
 {
@@ -283,6 +284,7 @@ static void freq_mode_cb(lv_event_t *e)
     const char *mode = (const char *)lv_event_get_user_data(e);
     strncpy(s_freq_mode_sel, mode, sizeof(s_freq_mode_sel) - 1);
     s_freq_mode_sel[sizeof(s_freq_mode_sel) - 1] = '\0';
+    s_freq_mode_changed = true;
     freq_mode_highlight();
 }
 
@@ -404,12 +406,11 @@ static void freq_key_cb(lv_event_t *e)
                     ui_update_frequency(target_hz);
                 }
             }
-            if (s_freq_mode_sel[0] && strcmp(s_freq_mode_sel, cat_get_mode_str()) != 0) {
-                // cat_set_frequency() above just consumed the 200ms CAT
-                // rate-limit slot; wait it out so this MD command isn't
-                // silently dropped.
-                vTaskDelay(pdMS_TO_TICKS(210));
-                cat_set_mode(s_freq_mode_sel);
+            if (s_freq_mode_changed && s_freq_mode_sel[0]) {
+                // Deferred to the poll task so it doesn't race the FA write
+                // above on the shared CDC pipe, and so no vTaskDelay is
+                // needed in the LVGL event callback.
+                cat_request_mode(s_freq_mode_sel);
             }
             freq_popup_close();
             return;
@@ -649,6 +650,7 @@ static void freq_popup_open(void)
     // Top-bar Freq keypad opens with an empty field (type the new dial freq
     // from scratch). Memory's picker (ui_freq_picker_open) pre-fills instead.
     s_freq_buf[0] = '\0';
+    s_freq_mode_changed = false;
     const char *mode = cat_get_mode_str();
     strncpy(s_freq_mode_sel, mode[0] ? mode : "", sizeof(s_freq_mode_sel) - 1);
     s_freq_mode_sel[sizeof(s_freq_mode_sel) - 1] = '\0';
@@ -804,7 +806,8 @@ static void mode_preset_cb(lv_event_t *e)
 {
     const char *mode = (const char *)lv_event_get_user_data(e);
     mode_popup_close();
-    cat_set_mode(mode);
+    cat_request_mode(mode);
+    ui_update_mode(mode);  // optimistic update; CAT MD; poll will confirm
 }
 
 static void mode_overlay_cb(lv_event_t *e)
@@ -1177,9 +1180,10 @@ static lv_obj_t *s_bot_version = NULL; /* firmware version, between battery and 
 static lv_obj_t *s_burger_btn = NULL;  // right-edge drawer grip handle (kept for foreground move after all UI built)
 static lv_obj_t *s_left_edge_grip = NULL;
 static lv_obj_t *s_bottom_edge_grip = NULL;
-static lv_obj_t *s_switch_iq  = NULL;  // Phase B: IQ balance toggle in settings drawer
-static lv_obj_t *s_switch_flat = NULL; // Phase 5.12: flat-spectrum toggle in settings drawer
-static lv_obj_t *s_switch_diag = NULL; // diagnostic comms-log toggle in settings drawer
+static lv_obj_t *s_switch_iq       = NULL;  // IQ balance checkbox in settings drawer
+static lv_obj_t *s_switch_flat     = NULL;  // flat-spectrum checkbox in settings drawer
+static lv_obj_t *s_switch_diag     = NULL;  // diagnostic log checkbox in settings drawer
+static lv_obj_t *s_check_wifi_en   = NULL;  // WiFi initiated checkbox in settings drawer
 
 // Phase 5.10D Stage 2: settings drawer state
 static lv_obj_t *s_drawer = NULL;
@@ -1258,6 +1262,7 @@ static void drawer_dropdown_cmap_open_cb(lv_event_t *e);
 static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
 static void drawer_switch_diag_cb(lv_event_t *e);
+static void drawer_switch_wifi_en_cb(lv_event_t *e);
 bool ui_get_flat_mode(void);
 void ui_set_flat_mode(bool on);
 static void drawer_apply_preset(int db_min, int db_max, float alpha);
@@ -3034,6 +3039,35 @@ static void iq_balance_toggle_cb(lv_event_t *e)
 // same as they used to be positioned relative to s_drawer's top-left.
 // sec_idx records the container + its normal (Panadapter-mode) y so
 // drawer_set_ft8_mode() can hide/restack sections for FT8 mode.
+// Themed square checkbox for drawer toggle rows. Indicator styled to match
+// the ft8_filter_modal (square, dark bg, primary-blue when checked, fat
+// padding for touch). Caller positions with lv_obj_align after this returns.
+static lv_obj_t *make_drawer_checkbox(lv_obj_t *parent, bool checked,
+                                       lv_event_cb_t cb, void *user_data)
+{
+    static lv_style_t s_ind;
+    static lv_style_t s_ind_chk;
+    static bool styles_inited = false;
+    if (!styles_inited) {
+        lv_style_init(&s_ind);
+        lv_style_set_bg_color(&s_ind, lv_color_hex(UI_COLOR_SURFACE_RAISED));
+        lv_style_set_border_color(&s_ind, lv_color_hex(UI_COLOR_BORDER));
+        lv_style_set_border_width(&s_ind, 2);
+        lv_style_set_pad_all(&s_ind, 8);
+        lv_style_init(&s_ind_chk);
+        lv_style_set_bg_color(&s_ind_chk, lv_color_hex(UI_COLOR_PRIMARY));
+        lv_style_set_border_color(&s_ind_chk, lv_color_hex(UI_COLOR_PRIMARY_BORDER));
+        styles_inited = true;
+    }
+    lv_obj_t *cbx = lv_checkbox_create(parent);
+    lv_checkbox_set_text(cbx, "");
+    lv_obj_add_style(cbx, &s_ind,     LV_PART_INDICATOR);
+    lv_obj_add_style(cbx, &s_ind_chk, LV_PART_INDICATOR | LV_STATE_CHECKED);
+    if (checked) lv_obj_add_state(cbx, LV_STATE_CHECKED);
+    if (cb) lv_obj_add_event_cb(cbx, cb, LV_EVENT_VALUE_CHANGED, user_data);
+    return cbx;
+}
+
 static lv_obj_t *drawer_section(int sec_idx, int y, int h)
 {
     lv_obj_t *c = lv_obj_create(s_drawer);
@@ -3111,12 +3145,9 @@ static void drawer_build(void)
         lv_label_set_text(diag_lbl, "Diagnostic log");
         lv_obj_set_style_text_color(diag_lbl, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(diag_lbl, &lv_font_montserrat_24, 0);
-        lv_obj_align(diag_lbl, LV_ALIGN_TOP_LEFT, 0, 6);
-        s_switch_diag = lv_switch_create(sec);
-        lv_obj_set_size(s_switch_diag, 72, 36);
-        lv_obj_align(s_switch_diag, LV_ALIGN_TOP_RIGHT, 0, 0);
-        if (diag_log_enabled()) lv_obj_add_state(s_switch_diag, LV_STATE_CHECKED);
-        lv_obj_add_event_cb(s_switch_diag, drawer_switch_diag_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_align(diag_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
+        s_switch_diag = make_drawer_checkbox(sec, diag_log_enabled(), drawer_switch_diag_cb, NULL);
+        lv_obj_align(s_switch_diag, LV_ALIGN_TOP_RIGHT, 0, 6);
         y += 56;
     }
 
@@ -3127,12 +3158,9 @@ static void drawer_build(void)
         lv_label_set_text(iq_lbl, "IQ Balance");
         lv_obj_set_style_text_color(iq_lbl, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(iq_lbl, &lv_font_montserrat_24, 0);
-        lv_obj_align(iq_lbl, LV_ALIGN_TOP_LEFT, 0, 6);
-        s_switch_iq = lv_switch_create(sec);
-        lv_obj_set_size(s_switch_iq, 72, 36);
-        lv_obj_align(s_switch_iq, LV_ALIGN_TOP_RIGHT, 0, 0);
-        if (iq_balance_is_enabled()) lv_obj_add_state(s_switch_iq, LV_STATE_CHECKED);
-        lv_obj_add_event_cb(s_switch_iq, iq_balance_toggle_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_align(iq_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
+        s_switch_iq = make_drawer_checkbox(sec, iq_balance_is_enabled(), iq_balance_toggle_cb, NULL);
+        lv_obj_align(s_switch_iq, LV_ALIGN_TOP_RIGHT, 0, 6);
         y += 56;
     }
 
@@ -3143,12 +3171,9 @@ static void drawer_build(void)
         lv_label_set_text(flat_lbl, "Flat Spectrum");
         lv_obj_set_style_text_color(flat_lbl, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(flat_lbl, &lv_font_montserrat_24, 0);
-        lv_obj_align(flat_lbl, LV_ALIGN_TOP_LEFT, 0, 6);
-        s_switch_flat = lv_switch_create(sec);
-        lv_obj_set_size(s_switch_flat, 72, 36);
-        lv_obj_align(s_switch_flat, LV_ALIGN_TOP_RIGHT, 0, 0);
-        if (ui_get_flat_mode()) lv_obj_add_state(s_switch_flat, LV_STATE_CHECKED);
-        lv_obj_add_event_cb(s_switch_flat, drawer_switch_flat_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_align(flat_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
+        s_switch_flat = make_drawer_checkbox(sec, ui_get_flat_mode(), drawer_switch_flat_cb, NULL);
+        lv_obj_align(s_switch_flat, LV_ALIGN_TOP_RIGHT, 0, 6);
         y += 56;
     }
     // Presets section: header + three buttons side-by-side
@@ -3183,12 +3208,28 @@ static void drawer_build(void)
         y += 108;
     }
 
-    // WiFi configuration button -- full width
+    // WiFi section: "WiFi initiated" toggle + "WiFi setup" button
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_WIFI, y, 72);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WIFI, y, 128);
+
+        // "WiFi initiated" checkbox row
+        lv_obj_t *wifi_en_lbl = lv_label_create(sec);
+        lv_label_set_text(wifi_en_lbl, "WiFi initiated");
+        lv_obj_set_style_text_color(wifi_en_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(wifi_en_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_align(wifi_en_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
+        {
+            qmx_settings_t _cfg;
+            settings_load_all(&_cfg);
+            s_check_wifi_en = make_drawer_checkbox(sec, _cfg.wifi_enabled,
+                                                   drawer_switch_wifi_en_cb, NULL);
+        }
+        lv_obj_align(s_check_wifi_en, LV_ALIGN_TOP_RIGHT, 0, 6);
+
+        // WiFi setup button
         lv_obj_t *btn = lv_btn_create(sec);
         lv_obj_set_size(btn, DRAWER_W - 32, 56);
-        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 64);
         lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
         lv_obj_add_event_cb(btn, drawer_wifi_btn_cb, LV_EVENT_CLICKED, NULL);
         lv_obj_t *lbl = lv_label_create(btn);
@@ -3196,7 +3237,7 @@ static void drawer_build(void)
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
         lv_obj_center(lbl);
-        y += 72;
+        y += 128;
     }
     // Operator identity button -- full width (callsign + grid for FT8 TX)
     {
@@ -3447,7 +3488,7 @@ static void drawer_set_ft8_mode(bool ft8)
 {
     if (!s_drawer) return;
     static const int keep[]   = { DRAWER_SEC_DIAG, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
-    static const int keep_h[] = { 56, 72, 72, 130 };
+    static const int keep_h[] = { 56, 128, 72, 130 };
     const int n_keep = sizeof(keep) / sizeof(keep[0]);
 
     for (int i = 0; i < N_DRAWER_SECTIONS; i++) {
@@ -3565,6 +3606,13 @@ static void drawer_switch_diag_cb(lv_event_t *e)
     diag_log_set_enabled(on);
     settings_set_diag_log(on);
     ESP_LOGI(TAG, "diagnostic logging: %s", on ? "ON" : "OFF");
+}
+
+static void drawer_switch_wifi_en_cb(lv_event_t *e)
+{
+    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_set_wifi_enabled(on);
+    ESP_LOGI(TAG, "WiFi boot-initiation: %s", on ? "ON" : "OFF");
 }
 
 static void drawer_preset_normal_cb(lv_event_t *e)  { (void)e; drawer_apply_preset(-130, -30, 0.40f); }

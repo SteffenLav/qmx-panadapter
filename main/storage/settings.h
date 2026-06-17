@@ -47,6 +47,7 @@ typedef struct {
     uint8_t  cq_sel;           // which CQ preset is active, 0..2 (default 0)
     bool     diag_log;         // diagnostic comms logging on/off (default false)
     bool     onboarded;        // first-boot WiFi/identity prompts shown (default false)
+    bool     wifi_enabled;     // initiate WiFi at boot (default true)
     ft8_filters_t ft8_filters;        // CQ-run reply include/exclude filters
 } qmx_settings_t;
 
@@ -98,6 +99,11 @@ void settings_set_onboarded(bool v);
 
 // FT8 CQ-run reply include/exclude filters (debounced flush).
 void settings_set_ft8_filters(const ft8_filters_t *f);
+
+// WiFi boot-initiation toggle (debounced flush). When false the radio stays
+// idle at boot even if credentials are stored; the user can re-enable from
+// the settings drawer.
+void settings_set_wifi_enabled(bool v);
 
 // QMX IF offset calibration trim (Hz). Per-unit oscillator variance shifts
 // the +12 kHz IF injection; this trim corrects what users see on the spectrum/

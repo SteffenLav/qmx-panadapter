@@ -62,6 +62,7 @@ static void cancel_btn_cb(lv_event_t *e)
 static void ta_focused_cb(lv_event_t *e)
 {
     lv_obj_t *ta = lv_event_get_target(e);
+
     if (!s_keyboard) return;
 
     // Only one field shows the blinking cursor at a time.
@@ -191,9 +192,8 @@ static void modal_build(void)
     ui_theme_style_keyboard(s_keyboard);
     lv_obj_set_size(s_keyboard, LV_PCT(100), 280);
     lv_obj_align(s_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
-    // UPPER mode by default - callsigns and grids are uppercase.
-    lv_keyboard_set_mode(s_keyboard, LV_KEYBOARD_MODE_TEXT_UPPER);
-    ui_theme_keyboard_attach_caps_cycle(s_keyboard);
+    // Start in ABC (caps-lock) — callsigns and grids are always uppercase.
+    ui_theme_keyboard_attach_caps_cycle_upper(s_keyboard);
     lv_obj_set_style_text_font(s_keyboard, &lv_font_montserrat_28, 0);
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_keyboard, keyboard_event_cb, LV_EVENT_READY,  NULL);

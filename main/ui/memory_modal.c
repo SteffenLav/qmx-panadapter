@@ -160,6 +160,7 @@ static void action_cancel_cb(lv_event_t *e)
 static void action_ta_focused_cb(lv_event_t *e)
 {
     (void)e;
+
     if (!s_action_kb) return;
     lv_keyboard_set_textarea(s_action_kb, s_action_ta);
     lv_obj_clear_flag(s_action_kb, LV_OBJ_FLAG_HIDDEN);

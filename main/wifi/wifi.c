@@ -200,10 +200,12 @@ static void wifi_task(void *arg)
     // suspenders against the double-add crash above) and saves power. WiFi is
     // brought up later from panadapter_wifi_reconnect() when the user saves
     // credentials in the settings drawer.
-    if (s_ssid[0] != '\0') {
+    if (s_ssid[0] != '\0' && cfg.wifi_enabled) {
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg));
         ESP_ERROR_CHECK(esp_wifi_start());
         s_wifi_started = true;
+    } else if (s_ssid[0] != '\0') {
+        ESP_LOGW(TAG, "WiFi credentials present but WiFi boot-initiation disabled");
     } else {
         ESP_LOGW(TAG, "no WiFi credentials configured; WiFi idle until configured");
     }
