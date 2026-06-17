@@ -73,6 +73,13 @@ echo
 echo "Flashing - do NOT unplug the Tab5..."
 echo
 
+# Detect esptool version: v5+ uses write-flash (hyphen); older uses write_flash
+if "${ESPTOOL}" version 2>/dev/null | grep -qE 'v[5-9]\.'; then
+    WRITE_FLASH="write-flash"
+else
+    WRITE_FLASH="write_flash"
+fi
+
 # Try the likely USB-serial devices first, one quick connect attempt each, so
 # we hit the right one fast instead of waiting through long retries. Falls back
 # to esptool's own auto-detect if none of the usual device names are present.
@@ -81,13 +88,13 @@ RC=1
 if [ -n "${PORTS}" ]; then
     for P in ${PORTS}; do
         echo "  trying ${P} ..."
-        if "${ESPTOOL}" --chip esp32p4 -p "${P}" -b 460800 --connect-attempts 1 write-flash 0x0 "${FW}"; then
+        if "${ESPTOOL}" --chip esp32p4 -p "${P}" -b 460800 --connect-attempts 1 "${WRITE_FLASH}" 0x0 "${FW}"; then
             RC=0
             break
         fi
     done
 else
-    "${ESPTOOL}" --chip esp32p4 -b 460800 --connect-attempts 1 write-flash 0x0 "${FW}"
+    "${ESPTOOL}" --chip esp32p4 -b 460800 --connect-attempts 1 "${WRITE_FLASH}" 0x0 "${FW}"
     RC=$?
 fi
 

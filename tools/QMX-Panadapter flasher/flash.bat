@@ -83,17 +83,22 @@ if exist "%PLIST%" (
     del "%PLIST%" >nul 2>nul
 )
 
+rem Detect esptool version: v5+ uses write-flash (hyphen); older uses write_flash
+set "WRITE_FLASH=write_flash"
+"%ESPTOOL%" version 2>&1 | findstr /r "v[5-9]\." >nul 2>nul
+if not errorlevel 1 set "WRITE_FLASH=write-flash"
+
 set "RC=1"
 if defined PORTS (
     for %%P in (!PORTS!) do (
         if not "!RC!"=="0" (
             echo   trying %%P ...
-            "%ESPTOOL%" --chip esp32p4 -p %%P -b 460800 --connect-attempts 1 write-flash 0x0 "%FW%"
+            "%ESPTOOL%" --chip esp32p4 -p %%P -b 460800 --connect-attempts 1 !WRITE_FLASH! 0x0 "%FW%"
             if not errorlevel 1 set "RC=0"
         )
     )
 ) else (
-    "%ESPTOOL%" --chip esp32p4 -b 460800 --connect-attempts 1 write-flash 0x0 "%FW%"
+    "%ESPTOOL%" --chip esp32p4 -b 460800 --connect-attempts 1 !WRITE_FLASH! 0x0 "%FW%"
     if not errorlevel 1 set "RC=0"
 )
 
