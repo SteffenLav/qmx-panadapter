@@ -141,6 +141,9 @@ static lv_obj_t *s_lbl_heard    = NULL;
 static lv_obj_t *s_btn_cq       = NULL;  // "Call CQ" - short tap TX, long-press edits presets
 static lv_obj_t *s_cq_lbl       = NULL;  // label inside s_btn_cq (shows the active CQ message)
 static lv_obj_t *s_lbl_tx       = NULL;  // TX state indicator: armed/active, tap to cancel/abort
+static lv_obj_t *s_btn_override_resend = NULL;  // manual QSO override: re-send current msg
+static lv_obj_t *s_btn_override_rr73   = NULL;  // manual QSO override: force RR73
+static lv_obj_t *s_btn_override_73     = NULL;  // manual QSO override: force 73
 // CQ TX parity preference: -1=any slot, 0=EVEN only, 1=ODD only.
 // Shown as two small toggle buttons between the slot countdown and "Heard: N".
 // Tap once to lock; tap the active button again to revert to "any".
@@ -659,6 +662,7 @@ static void rebuild_list(void)
     int row = 0;
     for (int i = 0; i < n && row < MAX_ROWS; i++) {
         if (hide_cq && strncmp(snap[i].last_text, "CQ ", 3) == 0) continue;
+        if (qs.ft8_filters.incl_cq_only && strncmp(snap[i].last_text, "CQ ", 3) != 0) continue;
         if (!ft8_filter_match(snap[i].last_text, &qs.ft8_filters)) continue;
         update_row(row++, &snap[i]);
     }
@@ -799,6 +803,22 @@ static void t_clock_cb(lv_timer_t *t)
             }
         }
         lv_obj_clear_flag(s_lbl_tx, LV_OBJ_FLAG_HIDDEN);
+
+        // Show manual override buttons only during active QSO exchange.
+        if (s_btn_override_resend) {
+            bool show = (qso_st == FT8_QSO_WAIT_RPT ||
+                         qso_st == FT8_QSO_WAIT_ROGER ||
+                         qso_st == FT8_QSO_WAIT_RR73);
+            if (show) {
+                lv_obj_clear_flag(s_btn_override_resend, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_clear_flag(s_btn_override_rr73,   LV_OBJ_FLAG_HIDDEN);
+                lv_obj_clear_flag(s_btn_override_73,      LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(s_btn_override_resend, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_btn_override_rr73,   LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_btn_override_73,      LV_OBJ_FLAG_HIDDEN);
+            }
+        }
     }
 
     // Rebuild the decode list every second so stations that have gone stale
@@ -849,6 +869,30 @@ static void filter_btn_cb(lv_event_t *e)
     (void)e;
     ESP_LOGI(TAG, "Filter button tapped");
     ft8_filter_modal_show();  // opens the exclude-prefix + future filters modal
+}
+
+static void override_resend_cb(lv_event_t *e)
+{
+    (void)e;
+    char err[64];
+    if (!ft8_qso_override_next(FT8_TX_KIND_REPLY, err, sizeof(err)))
+        ESP_LOGW(TAG, "Re-send override failed: %s", err);
+}
+
+static void override_rr73_cb(lv_event_t *e)
+{
+    (void)e;
+    char err[64];
+    if (!ft8_qso_override_next(FT8_TX_KIND_ROGER_RPT, err, sizeof(err)))
+        ESP_LOGW(TAG, "RR73 override failed: %s", err);
+}
+
+static void override_73_cb(lv_event_t *e)
+{
+    (void)e;
+    char err[64];
+    if (!ft8_qso_override_next(FT8_TX_KIND_73, err, sizeof(err)))
+        ESP_LOGW(TAG, "73 override failed: %s", err);
 }
 
 static void cq_btn_cb(lv_event_t *e)
@@ -1253,21 +1297,32 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_add_flag(s_lbl_tx, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_lbl_tx, tx_indicator_tap_cb, LV_EVENT_CLICKED, NULL);
 
-    // Placeholder for a future per-slot FT8 spectrum/waterfall strip.
+    // Manual QSO override buttons — Re-send / RR73 / 73.
+    // Hidden when IDLE/CQ/DONE; shown during active exchange (WAIT_RPT/ROGER/RR73).
     {
-        lv_obj_t *box = lv_obj_create(s_left_pane);
-        lv_obj_set_size(box, 288, 50);
-        lv_obj_set_pos(box, 0, MID_H - 70);
-        lv_obj_set_style_bg_color(box, lv_color_hex(0x101018), 0);
-        lv_obj_set_style_border_color(box, lv_color_hex(0x404050), 0);
-        lv_obj_set_style_border_width(box, 2, 0);
-        lv_obj_set_style_radius(box, 8, 0);
-        lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_t *lbl = lv_label_create(box);
-        lv_label_set_text(lbl, "(future FT8 waterfall)");
-        lv_obj_set_style_text_color(lbl, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_20, 0);
-        lv_obj_center(lbl);
+        const int bw = 91, bh = 44, gap = 3, by = 540;
+        struct { const char *lbl; uint32_t col; lv_event_cb_t cb; lv_obj_t **ptr; } btns[] = {
+            { "Re-send", 0x604010, override_resend_cb, &s_btn_override_resend },
+            { "RR73",    0x1a5090, override_rr73_cb,   &s_btn_override_rr73   },
+            { "73",      0x1e6028, override_73_cb,     &s_btn_override_73     },
+        };
+        for (int j = 0; j < 3; j++) {
+            lv_obj_t *b = lv_btn_create(s_left_pane);
+            lv_obj_set_size(b, bw, bh);
+            lv_obj_set_pos(b, j * (bw + gap), by);
+            lv_obj_set_style_bg_color(b, lv_color_hex(btns[j].col), 0);
+            lv_obj_set_style_radius(b, 4, 0);
+            lv_obj_set_style_border_width(b, 0, 0);
+            lv_obj_set_style_pad_all(b, 0, 0);
+            lv_obj_add_event_cb(b, btns[j].cb, LV_EVENT_CLICKED, NULL);
+            lv_obj_t *l = lv_label_create(b);
+            lv_label_set_text(l, btns[j].lbl);
+            lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
+            lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+            lv_obj_center(l);
+            lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
+            *btns[j].ptr = b;
+        }
     }
 
     // Right pane

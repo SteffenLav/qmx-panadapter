@@ -66,6 +66,7 @@
 #include "ui/ft8_screen_view.h"
 #include "ft8_tx.h"
 #include "ft8_qso.h"
+#include "time_sync.h"
 #include "ft8_status.h"
 
 static const char *TAG = "ft8_test";
@@ -159,18 +160,7 @@ static bool set_time_from_qmx_rtc(void)
 {
     int h, m, s;
     if (cat_query_qmx_time(&h, &m, &s) != ESP_OK) return false;
-
-    qmx_settings_t cfg;
-    settings_load_all(&cfg);
-    int64_t anchor = (cfg.last_unix_time > EPOCH_SANE_MIN)
-                         ? (int64_t)cfg.last_unix_time
-                         : (int64_t)EPOCH_SANE_MIN;
-
-    int64_t day_start = (anchor / 86400) * 86400;
-    struct timeval tv = { .tv_sec = (time_t)(day_start + h * 3600 + m * 60 + s), .tv_usec = 0 };
-    settimeofday(&tv, NULL);
-    ESP_LOGI(TAG, "UTC time-of-day set from QMX RTC: %02d:%02d:%02d (date from last SNTP anchor)",
-             h, m, s);
+    time_sync_notify_qmx(h, m, s);
     return true;
 }
 

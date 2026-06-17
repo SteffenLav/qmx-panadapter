@@ -65,6 +65,14 @@ void ft8_qso_on_tx_complete(void);
 // Abort QSO and disarm any pending TX. No-op when IDLE.
 void ft8_qso_abort(void);
 
+// Manually override the next outgoing message during an active exchange.
+//   FT8_TX_KIND_REPLY    → re-arm the current message unchanged (re-send)
+//   FT8_TX_KIND_ROGER_RPT → force-send RR73 and advance to WAIT_DONE
+//   FT8_TX_KIND_73        → force-send 73 and advance to WAIT_DONE
+// Only valid during WAIT_RPT / WAIT_ROGER / WAIT_RR73. Returns false + err
+// if there is no active exchange or the arm is refused.
+bool ft8_qso_override_next(ft8_tx_kind_t kind, char *err, size_t err_len);
+
 ft8_qso_state_t ft8_qso_get_state(void);
 void            ft8_qso_get_target(char *buf, size_t len);
 

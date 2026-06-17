@@ -29,6 +29,7 @@
 #include "ft8_status.h"
 #include "ft8_qso.h"
 #include "diag_log.h"
+#include "time_sync.h"
 
 static const char *TAG = "main";
 
@@ -75,6 +76,10 @@ void app_main(void)
 
     // Initialise INA226 battery monitor (shares main I2C bus with PI4IO)
     battery_init(bsp_i2c_get_handle());
+
+    // Init RX8130CE supercap RTC and apply stored time to system clock.
+    // Spawns the periodic QMX time-sync background task.
+    time_sync_init(bsp_i2c_get_handle());
 
     ui_init(disp);
 

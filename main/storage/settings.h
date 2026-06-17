@@ -20,6 +20,7 @@ typedef struct {
     char excl_text[2][FT8_FILTER_TEXT_LEN];
     bool excl_worked_before; // reserved for v0.16.0 ADIF log; UI present, not yet enforced
     bool excl_plain_cq;      // hide bare "CQ ..." rows, show only replies to us
+    bool incl_cq_only;       // show ONLY "CQ ..." rows (display filter; does not affect auto-reply)
 } ft8_filters_t;
 
 // All persisted settings. Floats are stored as raw 32-bit bit-patterns

@@ -550,6 +550,17 @@ void ft8_tx_run(const ft8_tx_request_t *req)
 
         tx_cmd(t0, "RX;");
 
+#if FT8_TX_SEND_LIVE
+        if (power_w >= 0.0f && swr > 4.0f) {
+            ESP_LOGW(TAG, "SWR protection trip (SWR=%.2f) — cycling TX/RX to clear latch",
+                     (double)swr);
+            cat_send_raw_cmd("TX;");
+            vTaskDelay(pdMS_TO_TICKS(150));
+            cat_send_raw_cmd("RX;");
+            ESP_LOGI(TAG, "SWR latch clear cycle done");
+        }
+#endif
+
         cat_poll_set_paused(false);
 
         ESP_LOGI(TAG, "TX burst %s: '%s' (%lld ms on-air)",

@@ -602,6 +602,58 @@ void ft8_qso_on_tx_complete(void)
     rearm_current();
 }
 
+bool ft8_qso_override_next(ft8_tx_kind_t kind, char *err, size_t err_len)
+{
+    lock();
+    ft8_qso_state_t st = s_state;
+    char target[FT8_CALL_MAX_LEN];
+    strncpy(target, s_target, sizeof(target) - 1);
+    target[sizeof(target) - 1] = '\0';
+    int  freq      = s_freq_hz;
+    bool have_cur  = s_have_cur;
+    bool use_par   = s_cur_req.use_parity;
+    bool want_even = s_cur_req.want_even_slot;
+    ft8_tx_request_t cur_copy = s_cur_req;
+    unlock();
+
+    if (st != FT8_QSO_WAIT_RPT && st != FT8_QSO_WAIT_ROGER && st != FT8_QSO_WAIT_RR73) {
+        if (err) snprintf(err, err_len, "No active QSO exchange");
+        return false;
+    }
+
+    if (kind == FT8_TX_KIND_REPLY) {
+        if (!have_cur) {
+            if (err) snprintf(err, err_len, "No current message");
+            return false;
+        }
+        char arm_err[64];
+        bool ok = ft8_tx_arm(&cur_copy, arm_err, sizeof(arm_err));
+        if (!ok && err) snprintf(err, err_len, "%s", arm_err);
+        ESP_LOGI(TAG, "QSO override: re-send '%s'", cur_copy.display_text);
+        return ok;
+    }
+
+    const char *extra = (kind == FT8_TX_KIND_73) ? "73" : "RR73";
+    ft8_tx_request_t req;
+    char build_err[64];
+    if (!ft8_tx_build_request(kind, target, freq, (int64_t)time(NULL), extra,
+                               &req, build_err, sizeof(build_err))) {
+        if (err) snprintf(err, err_len, "%s", build_err);
+        return false;
+    }
+    if (have_cur && use_par) {
+        req.use_parity     = true;
+        req.want_even_slot = want_even;
+    }
+
+    ft8_tx_disarm();
+    set_current(&req, FT8_QSO_WAIT_DONE);
+    arm_current_if_idle();
+    ft8_status_set("QSO %s: manual %s", target, extra);
+    ESP_LOGI(TAG, "QSO override: %s -> %s, WAIT_DONE", target, extra);
+    return true;
+}
+
 void ft8_qso_abort(void)
 {
     lock();

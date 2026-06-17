@@ -38,6 +38,8 @@ idf_component_register(
         "ft8_tx.c"
         "ft8_status.c"
         "ft8_qso.c"
+        "rtc/rtc.c"
+        "time_sync/time_sync.c"
     INCLUDE_DIRS
         "."
         "display"
@@ -51,6 +53,8 @@ idf_component_register(
         "storage"
         "wifi"
         "net"
+        "rtc"
+        "time_sync"
     REQUIRES
         esp_lcd
         esp_timer

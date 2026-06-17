@@ -26,6 +26,7 @@ static lv_obj_t *s_cb_excl[2]  = { NULL, NULL };
 static lv_obj_t *s_ta_excl[2]  = { NULL, NULL };
 static lv_obj_t *s_cb_worked_before = NULL;
 static lv_obj_t *s_cb_plain_cq      = NULL;
+static lv_obj_t *s_cb_incl_cq_only  = NULL;
 
 static bool      s_open = false;
 
@@ -76,6 +77,7 @@ static void save_btn_cb(lv_event_t *e)
     }
     f.excl_worked_before = lv_obj_has_state(s_cb_worked_before, LV_STATE_CHECKED);
     f.excl_plain_cq      = lv_obj_has_state(s_cb_plain_cq, LV_STATE_CHECKED);
+    f.incl_cq_only       = lv_obj_has_state(s_cb_incl_cq_only, LV_STATE_CHECKED);
 
     settings_set_ft8_filters(&f);
     ESP_LOGI(TAG, "saved filters: incl=[%d:'%s' %d:'%s'] excl=[%d:'%s' %d:'%s'] wb=%d cq=%d",
@@ -165,7 +167,7 @@ static void modal_build(void)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *panel = lv_obj_create(s_modal);
-    lv_obj_set_size(panel, 1040, 420);
+    lv_obj_set_size(panel, 1040, 460);
     lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 18);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
@@ -205,6 +207,11 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_cb_plain_cq, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(s_cb_plain_cq, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_align(s_cb_plain_cq, LV_ALIGN_TOP_LEFT, 460, 330);
+
+    s_cb_incl_cq_only = make_checkbox(panel, "Show only CQ callers");
+    lv_obj_set_style_text_font(s_cb_incl_cq_only, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(s_cb_incl_cq_only, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_align(s_cb_incl_cq_only, LV_ALIGN_TOP_LEFT, 0, 374);
 
     // --- Save / Cancel, spread vertically down the right edge so the
     // keyboard never covers them and they're easy to tell apart by feel ---
@@ -286,6 +293,7 @@ void ft8_filter_modal_show(void)
     }
     apply_checkbox_state(s_cb_worked_before, f->excl_worked_before);
     apply_checkbox_state(s_cb_plain_cq, f->excl_plain_cq);
+    apply_checkbox_state(s_cb_incl_cq_only, f->incl_cq_only);
 
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);

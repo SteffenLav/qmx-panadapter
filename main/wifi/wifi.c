@@ -20,6 +20,7 @@
 #include "webserver.h"
 #include "rigctld_server.h"
 #include "cat.h"
+#include "time_sync.h"
 
 static const char *TAG = "wifi";
 
@@ -65,10 +66,11 @@ static void sntp_sync_cb(struct timeval *tv)
              tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec);
     xEventGroupSetBits(s_events, BIT_TIME_OK);
 
-    // Persist as a "last known date" anchor for the QMX-RTC time fallback
-    // (see cat_query_qmx_time), and push our UTC time-of-day to the QMX's
-    // onboard RTC so it stays correct for later no-WiFi (POTA) sessions.
-    settings_set_last_unix_time((uint32_t)tv->tv_sec);
+    // Write to the Tab5 supercap RTC, persist NVS anchor, update system clock.
+    time_sync_notify_sntp(tv->tv_sec);
+
+    // Push UTC time-of-day to the QMX's onboard RTC so it stays correct
+    // for later no-WiFi (POTA) sessions.
     if (cat_is_ready()) {
         esp_err_t err = cat_set_qmx_time(tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec);
         if (err != ESP_OK) {
