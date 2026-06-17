@@ -21,9 +21,8 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 > **You are solely responsible for operating legally** — correct licence class, operating
 > within your licence privileges, band plan compliance, no harmful interference.
 >
-> **What is NOT yet in place in v0.15.18:**
+> **What is NOT yet in place in v0.16.0:**
 > - No duty-cycle protection — back-to-back TX slots are not prevented by the firmware
-> - No ADIF logging — completed QSOs are not recorded anywhere
 > - No audio loopback verification — the firmware cannot confirm the transmitted waveform
 > - No over-temperature or supply-voltage monitoring
 > - Multi-hour TX soak testing not yet completed
@@ -105,7 +104,7 @@ The top-bar **swipe-down** drops a small chooser down from the bar, so the gestu
 The settings drawer slides in from the **right screen edge** (swipe in from the right, or tap the breathing grip handle). The **Diagnostic log** switch is on the top row (and stays there in FT8 mode too).
 
 - **Callsign & Grid square** — *required for FT8 transmit.* Tap the button, enter your callsign and Maidenhead grid (e.g. `JO45` or `JO45ab`), Save. Persisted across reboots.
-- **WiFi setup** — *optional but recommended.* Enter your SSID/password to get: accurate UTC time (needed for FT8 slot timing without relying on the QMX RTC), the browser web UI, and remote diagnostics. There is **no on/off toggle** — entering an SSID and saving *is* how WiFi is enabled. Leave it blank for pure POTA/portable use (FT8 timing then falls back to the QMX's onboard clock).
+- **WiFi setup** — *optional but recommended.* Enter your SSID/password to get: accurate UTC time (needed for FT8 slot timing), the browser web UI, and remote diagnostics. The **WiFi initiated** checkbox (just below the WiFi section in the drawer) is an on/off master switch — uncheck it for pure POTA/portable use (FT8 timing then falls back to the QMX's onboard clock or the Tab5's supercap RTC). Credentials persist across reboots; leave blank to skip WiFi entirely.
 - Everything else (dB range, smoothing, colour map, brightness, IF calibration, I/Q balance) is optional tuning — the defaults are sane.
 
 ### 4. What works *without* the QMX connected
@@ -198,7 +197,7 @@ The original mockup that drove the design ([panadapter-mockup-ideal.svg](docs/pa
 
 ## Status
 
-Working. All phases through 8 complete. Current release: **v0.15.18**. Includes: cold-boot reliability fix, on-device diagnostic logging (web + serial) with QMX firmware readout, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings (including last-used UI mode and display brightness), Hamlib rigctld bridge, onboard FT8 RX decoder with a 40-row live-view decode list and FFT-based SNR estimation, memory channels with a frequency/mode picker, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser) including a tap-to-enter frequency keypad, browser click-to-tune with mouse-wheel tuning, zoom sync, band memory, **global Tab5 RTC time sync** (supercap-backed RX8130CE clock, synced from QMX/SNTP/manual with correct priority ordering), **manual FT8 TX** (reply + CQ via CAT `TA;`), a **full auto QSO engine** — search-and-pounce plus **CQ-run** (auto-answers callers, runs the exchange to completion with patient retry, then resumes CQ), **FT8 QSO override buttons** (force re-send/RR73/73 mid-exchange), **SWR auto-reset** (cycles TX;/RX; on SWR trip), **CQ-only filter** in the decode list, **TX clash warning** (⚠ FREQ BUSY when armed tone is occupied), **WiFi on/off toggle**, and a fully redesigned **browser web UI** matching the Tab5 display (graphical S-meter, live VFO, European-format freq axis with tick marks, mode-aware mouse-wheel tuning). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
+Working. All phases through 8 complete. Current release: **v0.16.0**. Includes: cold-boot reliability fix, on-device diagnostic logging (web + serial) with QMX firmware readout, I/Q balance correction, WiFi STA with on-screen credential entry, web UI with live spectrum + waterfall, flat-spectrum mode, hardware-revision diagnostics, persistent settings (including last-used UI mode and display brightness), Hamlib rigctld bridge, onboard FT8 RX decoder with a 40-row live-view decode list and FFT-based SNR estimation, memory channels with a frequency/mode picker, pinch-zoom + pan, top-bar quick-access controls (Tab5 + browser) including a tap-to-enter frequency keypad, browser click-to-tune with mouse-wheel tuning, zoom sync, band memory, **global Tab5 RTC time sync** (supercap-backed RX8130CE clock, synced from QMX/SNTP/manual with correct priority ordering), **manual FT8 TX** (reply + CQ via CAT `TA;`), a **full auto QSO engine** — search-and-pounce plus **CQ-run** (auto-answers callers, runs the exchange to completion with patient retry, then resumes CQ), **FT8 QSO override buttons** (force re-send/RR73/73 mid-exchange), **SWR auto-reset** (cycles TX;/RX; on SWR trip), **CQ-only filter** in the decode list, **TX clash warning** (⚠ FREQ BUSY when armed tone is occupied), **WiFi on/off toggle**, a fully redesigned **browser web UI** matching the Tab5 display (graphical S-meter, live VFO, European-format freq axis with tick marks, mode-aware mouse-wheel tuning), and **ADIF QSO logging** (every completed FT8 QSO written to `/spiffs/qso.adi`, downloadable from the web UI, worked-call cache for the "Exclude worked-before" filter). See the [TX warning](#️-development-firmware--ft8-transmit-is-experimental) above before transmitting.
 
 | Phase | What | Status |
 |-------|------|--------|
@@ -298,6 +297,10 @@ Working. All phases through 8 complete. Current release: **v0.15.18**. Includes:
 | -     | TX clash warning: ft8_tx_is_clashing() flags ⚠ FREQ BUSY when armed tone is occupied (v0.15.18) | done |
 | -     | WiFi on/off toggle: "WiFi initiated" checkbox in settings drawer, NVS-persisted (v0.15.18) | done |
 | -     | Show-password redesigned as checkbox; cat_request_mode() deferred CAT write; drawer checkbox styling (v0.15.18) | done |
+| -     | ADIF QSO logging: /spiffs/qso.adi, web download + clear, worked-call cache, "Exclude worked-before" (v0.16.0) | done |
+| -     | SNTP-authoritative time sync: QMX TM; only applied when SNTP stale >10 min (v0.16.0) | done |
+| -     | FT8 pounce + CQ-run TX frequency fixes: both now use ft8_find_clear_tone_hz() correctly (v0.16.0) | done |
+| -     | TX power calibration: PC; divisor corrected (watts×5, not ×10) (v0.16.0) | done |
 
 See the [Roadmap](#roadmap) at the bottom for what's next.
 
@@ -532,11 +535,39 @@ Switch the panadapter into FT8 mode via the **Mode: FT8** button in the settings
 
 **Known limitations.**
 - SNR is a coarse proxy from the LDPC decoder score, not a calibrated dB value relative to 2500 Hz noise BW like WSJT-X.
-- No ADIF logging yet (planned for v0.16.0).
 - Mode switching between Panadapter and FT8 currently discards panadapter state (waterfall history, IQ balance estimator). Accepted trade-off.
-- Long sessions (multi-hour) not yet soaked end-to-end, though FT8 RX now runs continuously without the ~3-minute decode die-off seen pre-v0.15.1 -- please open an issue if you see reboots while in FT8 mode.
+- Long sessions (multi-hour) not yet soaked end-to-end, though FT8 RX now runs continuously without the ~3-minute decode die-off seen pre-v0.15.1 — please open an issue if you see reboots while in FT8 mode.
 
-FT8 reception requires accurate UTC time, which the Tab5 gets from SNTP -- WiFi must be configured first.
+FT8 reception requires accurate UTC time. The Tab5 gets this from SNTP when WiFi is configured; without WiFi it falls back to the QMX's onboard clock or the supercap-backed Tab5 RTC — accurate enough for FT8 slot timing in the field.
+
+## QSO logging (ADIF)
+
+Every completed FT8 QSO — whether from a pounce reply or a CQ-run exchange — is automatically written to an ADIF v3.1.4 file stored on the Tab5's internal flash at `/spiffs/qso.adi`. The log survives reboots and re-flashes (the flasher does not erase SPIFFS).
+
+**Downloading the log.** In the web UI bottom bar, a **"N QSOs ↓"** link appears once the first QSO is logged. Clicking it downloads `qso.adi` directly to your browser. You can then import it into any logging software (WSJT-X, Log4OM, DXKeeper, …) or upload to LoTW, QRZ, eQSL, or POTA.app.
+
+**What's in each record.**
+
+| ADIF field | Content |
+|------------|---------|
+| CALL | Their callsign |
+| FREQ | Dial frequency in MHz (3 d.p., e.g. `14.074`) |
+| BAND | Amateur band (e.g. `20M`) |
+| MODE | `FT8` |
+| SUBMODE | `FT8` (required by LoTW TQSL and eQSL for digital mode credit) |
+| RST_SENT | Signal report sent (our SNR estimate, e.g. `-07`; `599` if unavailable) |
+| RST_RCVD | Signal report received |
+| QSO_DATE | UTC date `YYYYMMDD` |
+| TIME_ON | UTC time `HHMMSS` |
+| MY_CALL | Your callsign (from **Identity** in the settings drawer) |
+| MY_GRIDSQUARE | Your grid (from **Identity**) |
+| GRIDSQUARE | Their grid (from the decoded FT8 message) |
+
+**Clearing the log.** From the web UI: `GET /api/adif/clear` (or add a Clear button — this endpoint is already there, ready for a UI button in a future release). This wipes the file and resets the worked-call cache.
+
+**"Exclude worked-before" filter.** The ADIF log powers the filter-modal toggle of the same name. When enabled, any callsign already in the log is hidden from the decode list and skipped by CQ-run auto-replies, so you don't work the same station twice in the same session (or across sessions if you don't clear the log).
+
+> **First-time setup:** the log is empty on a fresh SPIFFS (or after Clear). Your **callsign and grid** must be set in the settings drawer (**Identity** button) for them to appear in logged records — set these before your first QSO.
 
 ## FT8 TX & auto QSO (v0.12.0–v0.15.0) ⚠️ experimental — read the warning above
 
@@ -577,7 +608,7 @@ Tap the **Filter** button in the left pane to open the reply filter editor. It c
 - **Include 1 / Include 2** — if either field has text, only messages containing one of its terms (space- or comma-separated, e.g. "POTA SOTA" or "JA, VK") are eligible for auto-reply. Matching is against the *whole* decoded message, not just the callsign, so this also catches POTA/SOTA tags, grid squares, country prefixes, `/P`/`/M` suffixes, etc.
 - **Exclude 1 / Exclude 2** — messages containing any of these terms are skipped, even if they'd otherwise match.
 - **Exclude plain CQ callers** — hides bare `CQ ...` rows from the decode list entirely, so only replies/exchanges remain visible.
-- **Exclude worked-before** — present in the UI but not yet enforced; will activate once the ADIF log lands in v0.16.0.
+- **Exclude worked-before** — hides stations already in your ADIF log from the decode list and from CQ-run auto-replies. Requires a callsign set in **Identity** and at least one completed QSO in the log.
 
 Tap **Save** to persist the filters (NVS) and apply them immediately, or **Cancel** to discard changes.
 
@@ -611,7 +642,6 @@ The QMX `TA<freq.f>;` command sets the transmitted audio tone directly in decima
 
 ### Known limitations
 
-- No ADIF logging — completed QSOs are not recorded anywhere (planned for v0.16.0)
 - No duty-cycle protection — the firmware will not refuse consecutive TX slots
 - SNR in the decode list is a coarse proxy, not calibrated to WSJT-X dB/2500 Hz
 - TX code has not been soaked across multi-hour sessions
@@ -1085,7 +1115,7 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 
 ### Shipped in v0.15.15 — 2026-06-15 22:35 UTC
 
-- **CQ-run reply filter modal.** A new "Filter" button on the FT8 screen opens an include/exclude filter editor for the CQ-run auto-reply picker and the live decode list. Two "include" and two "exclude" fields, each independently toggled, are matched against the *whole* decoded message text — not just the callsign — so POTA/SOTA tags, grids, country prefixes, `/P`/`/M` suffixes etc. are all fair game. Each field accepts multiple space- and/or comma-separated terms (e.g. "POTA SOTA" or "JA, VK"), matching if the message contains ANY of them. Also adds standalone "Exclude plain CQ callers" (hide bare `CQ ...` rows, show only replies/exchanges) and a placeholder "Exclude worked-before" toggle (UI present now, enforcement lands with the v0.16.0 ADIF log). Settings persist as a single NVS blob.
+- **CQ-run reply filter modal.** A new "Filter" button on the FT8 screen opens an include/exclude filter editor for the CQ-run auto-reply picker and the live decode list. Two "include" and two "exclude" fields, each independently toggled, are matched against the *whole* decoded message text — not just the callsign — so POTA/SOTA tags, grids, country prefixes, `/P`/`/M` suffixes etc. are all fair game. Each field accepts multiple space- and/or comma-separated terms (e.g. "POTA SOTA" or "JA, VK"), matching if the message contains ANY of them. Also adds standalone "Exclude plain CQ callers" (hide bare `CQ ...` rows, show only replies/exchanges) and "Exclude worked-before" (active as of v0.16.0 once the ADIF log is populated). Settings persist as a single NVS blob.
 - **TX power/SWR readout.** After each FT8 TX burst, while still keyed, the radio is queried via `PC;`/`SW;` for instantaneous power output and SWR. The result is shown briefly in the FT8 status line ("Last TX: X.XW SWRx.xx [Ns]").
 
 ### Shipped in v0.15.16 — 2026-06-16 18:56 UTC
