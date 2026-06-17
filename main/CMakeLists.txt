@@ -38,6 +38,7 @@ idf_component_register(
         "ft8_tx.c"
         "ft8_status.c"
         "ft8_qso.c"
+        "adif/adif_log.c"
         "rtc/rtc.c"
         "time_sync/time_sync.c"
     INCLUDE_DIRS
@@ -55,6 +56,7 @@ idf_component_register(
         "net"
         "rtc"
         "time_sync"
+        "adif"
     REQUIRES
         esp_lcd
         esp_timer
@@ -74,6 +76,7 @@ idf_component_register(
         esp_http_server
         json
         ft8_lib
+        spiffs
     PRIV_REQUIRES
         esp_app_format
     EMBED_TXTFILES

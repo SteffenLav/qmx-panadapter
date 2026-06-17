@@ -3124,7 +3124,7 @@ static void drawer_build(void)
     lv_obj_t *title = lv_label_create(s_drawer);
     lv_label_set_text(title, "Settings");
     lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
 
     lv_obj_add_event_cb(s_drawer, drawer_touch_cb, LV_EVENT_PRESSED, NULL);
@@ -3144,7 +3144,7 @@ static void drawer_build(void)
         lv_obj_t *diag_lbl = lv_label_create(sec);
         lv_label_set_text(diag_lbl, "Diagnostic log");
         lv_obj_set_style_text_color(diag_lbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(diag_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(diag_lbl, &lv_font_montserrat_28, 0);
         lv_obj_align(diag_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
         s_switch_diag = make_drawer_checkbox(sec, diag_log_enabled(), drawer_switch_diag_cb, NULL);
         lv_obj_align(s_switch_diag, LV_ALIGN_TOP_RIGHT, 0, 6);
@@ -3157,7 +3157,7 @@ static void drawer_build(void)
         lv_obj_t *iq_lbl = lv_label_create(sec);
         lv_label_set_text(iq_lbl, "IQ Balance");
         lv_obj_set_style_text_color(iq_lbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(iq_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(iq_lbl, &lv_font_montserrat_28, 0);
         lv_obj_align(iq_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
         s_switch_iq = make_drawer_checkbox(sec, iq_balance_is_enabled(), iq_balance_toggle_cb, NULL);
         lv_obj_align(s_switch_iq, LV_ALIGN_TOP_RIGHT, 0, 6);
@@ -3170,7 +3170,7 @@ static void drawer_build(void)
         lv_obj_t *flat_lbl = lv_label_create(sec);
         lv_label_set_text(flat_lbl, "Flat Spectrum");
         lv_obj_set_style_text_color(flat_lbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(flat_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(flat_lbl, &lv_font_montserrat_28, 0);
         lv_obj_align(flat_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
         s_switch_flat = make_drawer_checkbox(sec, ui_get_flat_mode(), drawer_switch_flat_cb, NULL);
         lv_obj_align(s_switch_flat, LV_ALIGN_TOP_RIGHT, 0, 6);
@@ -3182,7 +3182,7 @@ static void drawer_build(void)
         lv_obj_t *presets_hdr = lv_label_create(sec);
         lv_label_set_text(presets_hdr, "Presets");
         lv_obj_set_style_text_color(presets_hdr, lv_color_hex(0xA0E0A0), 0);
-        lv_obj_set_style_text_font(presets_hdr, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(presets_hdr, &lv_font_montserrat_28, 0);
         lv_obj_align(presets_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
 
         const char *preset_names[3] = { "HF Normal", "HF DX", "Strong Sig." };
@@ -3202,7 +3202,7 @@ static void drawer_build(void)
             lv_obj_add_event_cb(btn, preset_cbs[i], LV_EVENT_CLICKED, NULL);
             lv_obj_t *lbl = lv_label_create(btn);
             lv_label_set_text(lbl, preset_names[i]);
-            lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+            lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
             lv_obj_center(lbl);
         }
         y += 108;
@@ -3216,7 +3216,7 @@ static void drawer_build(void)
         lv_obj_t *wifi_en_lbl = lv_label_create(sec);
         lv_label_set_text(wifi_en_lbl, "WiFi initiated");
         lv_obj_set_style_text_color(wifi_en_lbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(wifi_en_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(wifi_en_lbl, &lv_font_montserrat_28, 0);
         lv_obj_align(wifi_en_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
         {
             qmx_settings_t _cfg;
@@ -3234,7 +3234,7 @@ static void drawer_build(void)
         lv_obj_add_event_cb(btn, drawer_wifi_btn_cb, LV_EVENT_CLICKED, NULL);
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, "WiFi setup");
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
         lv_obj_center(lbl);
         y += 128;
@@ -3249,7 +3249,7 @@ static void drawer_build(void)
         lv_obj_add_event_cb(btn, drawer_identity_btn_cb, LV_EVENT_CLICKED, NULL);
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, "Callsign & Grid square");
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
         lv_obj_center(lbl);
         y += 72;
@@ -3261,14 +3261,14 @@ static void drawer_build(void)
         lv_obj_t *db_hdr = lv_label_create(sec);
         lv_label_set_text(db_hdr, "dB Range");
         lv_obj_set_style_text_color(db_hdr, lv_color_hex(0xA0E0A0), 0);
-        lv_obj_set_style_text_font(db_hdr, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(db_hdr, &lv_font_montserrat_28, 0);
         lv_obj_align(db_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
 
         // dB min slider
         s_lbl_db_min = lv_label_create(sec);
         lv_label_set_text(s_lbl_db_min, "Min: -130 dBm");
         lv_obj_set_style_text_color(s_lbl_db_min, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(s_lbl_db_min, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(s_lbl_db_min, &lv_font_montserrat_28, 0);
         lv_obj_align(s_lbl_db_min, LV_ALIGN_TOP_LEFT, 0, 40);
 
         s_slider_db_min = lv_slider_create(sec);
@@ -3282,7 +3282,7 @@ static void drawer_build(void)
         s_lbl_db_max = lv_label_create(sec);
         lv_label_set_text(s_lbl_db_max, "Max: -30 dBm");
         lv_obj_set_style_text_color(s_lbl_db_max, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(s_lbl_db_max, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(s_lbl_db_max, &lv_font_montserrat_28, 0);
         lv_obj_align(s_lbl_db_max, LV_ALIGN_TOP_LEFT, 0, 122);
 
         s_slider_db_max = lv_slider_create(sec);
@@ -3300,13 +3300,13 @@ static void drawer_build(void)
         lv_obj_t *sm_hdr = lv_label_create(sec);
         lv_label_set_text(sm_hdr, "Smoothing");
         lv_obj_set_style_text_color(sm_hdr, lv_color_hex(0xA0E0A0), 0);
-        lv_obj_set_style_text_font(sm_hdr, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(sm_hdr, &lv_font_montserrat_28, 0);
         lv_obj_align(sm_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
 
         s_lbl_alpha = lv_label_create(sec);
         lv_label_set_text(s_lbl_alpha, "Alpha: 0.40");
         lv_obj_set_style_text_color(s_lbl_alpha, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(s_lbl_alpha, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(s_lbl_alpha, &lv_font_montserrat_28, 0);
         lv_obj_align(s_lbl_alpha, LV_ALIGN_TOP_LEFT, 0, 40);
 
         s_slider_alpha = lv_slider_create(sec);
@@ -3324,13 +3324,13 @@ static void drawer_build(void)
         lv_obj_t *cw_hdr = lv_label_create(sec);
         lv_label_set_text(cw_hdr, "CW");
         lv_obj_set_style_text_color(cw_hdr, lv_color_hex(0xA0E0A0), 0);
-        lv_obj_set_style_text_font(cw_hdr, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(cw_hdr, &lv_font_montserrat_28, 0);
         lv_obj_align(cw_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
 
         s_lbl_cwpitch = lv_label_create(sec);
         lv_label_set_text(s_lbl_cwpitch, "CW center: 700 Hz");
         lv_obj_set_style_text_color(s_lbl_cwpitch, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(s_lbl_cwpitch, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(s_lbl_cwpitch, &lv_font_montserrat_28, 0);
         lv_obj_align(s_lbl_cwpitch, LV_ALIGN_TOP_LEFT, 0, 40);
 
         s_slider_cwpitch = lv_slider_create(sec);
@@ -3351,7 +3351,7 @@ static void drawer_build(void)
         lv_obj_t *ifcal_hdr = lv_label_create(sec);
         lv_label_set_text(ifcal_hdr, "IF calibration");
         lv_obj_set_style_text_color(ifcal_hdr, lv_color_hex(0xA0E0A0), 0);
-        lv_obj_set_style_text_font(ifcal_hdr, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(ifcal_hdr, &lv_font_montserrat_28, 0);
         lv_obj_align(ifcal_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
 
         s_lbl_ifcal = lv_label_create(sec);
@@ -3363,7 +3363,7 @@ static void drawer_build(void)
         }
         lv_label_set_text(s_lbl_ifcal, ifbuf);
         lv_obj_set_style_text_color(s_lbl_ifcal, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(s_lbl_ifcal, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(s_lbl_ifcal, &lv_font_montserrat_28, 0);
         lv_obj_align(s_lbl_ifcal, LV_ALIGN_TOP_LEFT, 0, 40);
 
         s_slider_ifcal = lv_slider_create(sec);
@@ -3385,7 +3385,7 @@ static void drawer_build(void)
         lv_obj_t *bl_hdr = lv_label_create(sec);
         lv_label_set_text(bl_hdr, "Display");
         lv_obj_set_style_text_color(bl_hdr, lv_color_hex(0xA0E0A0), 0);
-        lv_obj_set_style_text_font(bl_hdr, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(bl_hdr, &lv_font_montserrat_28, 0);
         lv_obj_align(bl_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
 
         s_lbl_brightness = lv_label_create(sec);
@@ -3399,7 +3399,7 @@ static void drawer_build(void)
         snprintf(blbuf, sizeof(blbuf), "Brightness: %u%%", (unsigned)bl_pct);
         lv_label_set_text(s_lbl_brightness, blbuf);
         lv_obj_set_style_text_color(s_lbl_brightness, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(s_lbl_brightness, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(s_lbl_brightness, &lv_font_montserrat_28, 0);
         lv_obj_align(s_lbl_brightness, LV_ALIGN_TOP_LEFT, 0, 40);
 
         s_slider_brightness = lv_slider_create(sec);
@@ -3417,14 +3417,14 @@ static void drawer_build(void)
         lv_obj_t *cmap_hdr = lv_label_create(sec);
         lv_label_set_text(cmap_hdr, "Waterfall colour map");
         lv_obj_set_style_text_color(cmap_hdr, lv_color_hex(0xA0E0A0), 0);
-        lv_obj_set_style_text_font(cmap_hdr, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(cmap_hdr, &lv_font_montserrat_28, 0);
         lv_obj_align(cmap_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
 
         s_dropdown_cmap = lv_dropdown_create(sec);
         lv_dropdown_set_options(s_dropdown_cmap, "Thermal\nViridis\nTurbo\nGrayscale");
         lv_obj_set_size(s_dropdown_cmap, DRAWER_W - 32, 50);
         lv_obj_align(s_dropdown_cmap, LV_ALIGN_TOP_LEFT, 0, 40);
-        lv_obj_set_style_text_font(s_dropdown_cmap, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(s_dropdown_cmap, &lv_font_montserrat_28, 0);
         {
             qmx_settings_t scfg;
             settings_load_all(&scfg);
@@ -3701,7 +3701,7 @@ static void drawer_dropdown_cmap_open_cb(lv_event_t *e)
     lv_obj_t *dd = lv_event_get_target(e);
     lv_obj_t *list = lv_dropdown_get_list(dd);
     if (list) {
-        lv_obj_set_style_text_font(list, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(list, &lv_font_montserrat_28, 0);
     }
 }
 

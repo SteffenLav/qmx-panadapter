@@ -30,6 +30,7 @@
 #include "ft8_qso.h"
 #include "diag_log.h"
 #include "time_sync.h"
+#include "adif/adif_log.h"
 
 static const char *TAG = "main";
 
@@ -60,6 +61,7 @@ void app_main(void)
 
     settings_init();
     mem_channels_init();
+    adif_log_init();
     qmx_settings_t cfg;
     settings_load_all(&cfg);
     iq_balance_init(cfg.iq_enabled);  /* Restore IQ balance state from NVS */

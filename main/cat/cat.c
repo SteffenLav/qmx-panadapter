@@ -134,7 +134,9 @@ esp_err_t cat_query_power_swr(float *power_w, float *swr)
     }
 
     if (power_w) {
-        *power_w = (s_pc_resp_len >= 3) ? (float)atoi(s_pc_resp + 2) / 10.0f : -1.0f;
+        // QMX PC; encodes power as value = watts × 5 (not × 10 like standard Kenwood).
+        // Empirically confirmed: raw/10 gives half the real power shown on the radio.
+        *power_w = (s_pc_resp_len >= 3) ? (float)atoi(s_pc_resp + 2) / 5.0f : -1.0f;
     }
     if (swr) {
         // Bare "SW;" (len 3, nothing between prefix and terminator) means the
@@ -868,6 +870,12 @@ esp_err_t cat_set_frequency(uint32_t freq_hz)
     }
     ESP_LOGI(TAG, "Sent: %s (target %lu Hz)", cmd, (unsigned long)freq_hz);
     return ESP_OK;
+}
+
+esp_err_t cat_set_frequency_forced(uint32_t freq_hz)
+{
+    s_last_tx_us = 0;  // bypass the 200 ms rate-limiter for deliberate user writes
+    return cat_set_frequency(freq_hz);
 }
 
 uint32_t cat_get_frequency(void)

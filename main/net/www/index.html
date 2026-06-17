@@ -216,6 +216,7 @@
     <div class="bot-fill"></div>
     <span id="ip"></span>
     <a href="/api/log" download="qmx-log.txt">Diag &#8595;</a>
+    <span id="qso-count" style="display:none"> &bull; <a href="/api/adif" download="qso.adi" id="adif-link">0 QSOs &#8595;</a></span>
   </div>
 
 <script>
@@ -495,6 +496,16 @@ async function tick() {
       (wifi && wifi.ssid) ? ("📶 " + wifi.ssid + " " + wifi.rssi + " dBm")
                           : "📶 --";
     document.getElementById("ip").textContent = (wifi && wifi.ip) || "--";
+
+    /* QSO count + ADIF download link */
+    const qsoCount = s.qso_count || 0;
+    const qsoEl = document.getElementById("qso-count");
+    if (qsoCount > 0) {
+      document.getElementById("adif-link").textContent = qsoCount + " QSO" + (qsoCount === 1 ? "" : "s") + " ↓";
+      qsoEl.style.display = "";
+    } else {
+      qsoEl.style.display = "none";
+    }
 
     /* Bottom-center: UTC clock (tick immediately, interval keeps it running) */
     serverUtcAtTick = s.utc_epoch || 0;

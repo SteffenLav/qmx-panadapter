@@ -30,6 +30,8 @@
 #include "ft8_status.h"
 #include "ui/ft8_screen.h"
 #include "storage/settings.h"
+#include "adif/adif_log.h"
+#include "cat/cat.h"
 
 #include <string.h>
 #include <stdio.h>
@@ -63,6 +65,11 @@ static ft8_tx_request_t   s_cur_req;                    // message we're current
 static bool               s_have_cur;                   // s_cur_req valid
 static ft8_tx_request_t   s_cq_saved;                   // original CQ, to resume after a dropped QSO
 static bool               s_have_cq_saved;
+// Signal reports captured during the exchange for ADIF logging.
+// Pounce: rst_rcvd = what they told us; rst_sent = "599" (we echo their report, not our own).
+// CQ-run: rst_sent = our report of their signal; rst_rcvd = "599".
+static char               s_rst_sent[8];
+static char               s_rst_rcvd[8];
 
 // ---------------------------------------------------------------------------
 
@@ -137,8 +144,7 @@ static bool scan_for_response(int64_t slot_sec,
         if (strcmp(tok3, "RR73") == 0) { *got_rr73 = true; return true; }
         if (strcmp(tok3, "73")   == 0) { *got_73   = true; return true; }
         if (tok3[0] != '\0') {
-            strncpy(report_buf, tok3, report_cap - 1);
-            report_buf[report_cap - 1] = '\0';
+            snprintf(report_buf, report_cap, "%s", tok3);
             return true;
         }
     }
@@ -220,14 +226,12 @@ static bool scan_for_reply_to_me(int64_t slot_sec,
     char tok1[16], tok2[16], tok3[16];
     tok3[0] = '\0';
     sscanf(snap[best_idx].last_text, "%15s %15s %15s", tok1, tok2, tok3);
-    strncpy(caller_buf, tok2, caller_cap - 1);
-    caller_buf[caller_cap - 1] = '\0';
+    snprintf(caller_buf, caller_cap, "%s", tok2);
     if (caller_freq_out) *caller_freq_out = snap[best_idx].last_freq;
     if (caller_snr_out)  *caller_snr_out  = snap[best_idx].last_snr_db;
     if (strcmp(tok3, "RR73") == 0) { *got_rr73 = true; return true; }
     if (strcmp(tok3, "73")   == 0) { *got_73   = true; return true; }
-    strncpy(report_buf, tok3, report_cap - 1);
-    report_buf[report_cap - 1] = '\0';
+    snprintf(report_buf, report_cap, "%s", tok3);
     return true;
 }
 
@@ -348,6 +352,8 @@ void ft8_qso_init(void)
     s_have_cur      = false;
     s_have_cq_saved = false;
     s_from_cq       = false;
+    s_rst_sent[0]   = '\0';
+    s_rst_rcvd[0]   = '\0';
 }
 
 bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
@@ -382,6 +388,9 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     s_cur_req       = *tx1_req;   // re-send TX1 each cycle until they reply
     s_have_cur      = true;
     s_have_cq_saved = false;
+    // Pounce: we receive their report (RST_RCVD); we never give our own (RST_SENT = "599").
+    strncpy(s_rst_sent, "599", sizeof(s_rst_sent));
+    s_rst_rcvd[0] = '\0';
     unlock();
 
     ft8_status_set("QSO %s: TX1 sent - waiting for report", tx1_req->target_call);
@@ -425,6 +434,9 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
     s_have_cq_saved = true;
     s_from_cq       = true;
     s_missed_slots  = 0;
+    // CQ-run: we give our report (RST_SENT set in cqrun_answer); they never give theirs (RST_RCVD = "599").
+    s_rst_sent[0] = '\0';
+    strncpy(s_rst_rcvd, "599", sizeof(s_rst_rcvd));
     unlock();
 
     ft8_status_set("CQ: calling - listening for answers");
@@ -438,24 +450,34 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
 static void cqrun_answer(const char *caller, int caller_freq, int caller_snr,
                          int64_t slot_sec, bool got_rr73, bool got_73)
 {
+    // Stay on our own CQ tone for the entire exchange — the answering station
+    // uses their own separate tone; switching to caller_freq would put us on
+    // their (occupied) frequency and trigger a false clash warning.
     lock();
     strncpy(s_target, caller, sizeof(s_target) - 1);
     s_target[sizeof(s_target) - 1] = '\0';
-    s_freq_hz = caller_freq;
+    int our_freq = s_freq_hz;   // already set to our CQ tone in ft8_qso_start_cq()
     unlock();
 
     bool ok;
     if (got_rr73 || got_73) {
-        ok = send_next(FT8_TX_KIND_73, caller, caller_freq, slot_sec, "73",
+        ok = send_next(FT8_TX_KIND_73, caller, our_freq, slot_sec, "73",
                        FT8_QSO_WAIT_DONE);
         if (ok) ft8_status_set("QSO %s: sending 73", caller);
     } else {
         char rpt[8];
         fmt_report(caller_snr, rpt, sizeof(rpt));
-        ok = send_next(FT8_TX_KIND_REPLY, caller, caller_freq, slot_sec, rpt,
+        ok = send_next(FT8_TX_KIND_REPLY, caller, our_freq, slot_sec, rpt,
                        FT8_QSO_WAIT_ROGER);
-        if (ok) ft8_status_set("QSO %s: answered - sending report %s", caller, rpt);
+        if (ok) {
+            strncpy(s_rst_sent, rpt, sizeof(s_rst_sent) - 1);
+            s_rst_sent[sizeof(s_rst_sent) - 1] = '\0';
+            ft8_status_set("QSO %s: answered - sending report %s", caller, rpt);
+        }
     }
+
+    ESP_LOGI(TAG, "cqrun_answer: %s (their_freq=%d Hz, our_freq=%d Hz)",
+             caller, caller_freq, our_freq);
 
     if (!ok) {
         // Couldn't build a valid reply - abandon this answer, keep calling CQ.
@@ -494,6 +516,35 @@ void ft8_qso_advance(int64_t slot_sec)
             lock(); s_state = FT8_QSO_DONE; s_have_cur = false; unlock();
             ft8_status_set("QSO %s: complete!", target);
             ESP_LOGI(TAG, "QSO with %s complete", target);
+
+            // Build and save the ADIF record.
+            qmx_settings_t qs;
+            settings_load_all(&qs);
+
+            // Look up their grid from the ft8_screen decode table.
+            ft8_call_t snap[FT8_CALL_TABLE_SIZE];
+            int snap_n = 0;
+            char their_grid[FT8_GRID_MAX_LEN] = {0};
+            ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &snap_n);
+            for (int i = 0; i < snap_n; i++) {
+                if (strcmp(snap[i].call, target) == 0 && snap[i].last_grid[0]) {
+                    strncpy(their_grid, snap[i].last_grid, sizeof(their_grid) - 1);
+                    break;
+                }
+            }
+
+            adif_qso_t qso = {
+                .their_call = target,
+                .my_call    = s_my_call,
+                .my_grid    = qs.my_grid,
+                .their_grid = their_grid,
+                .freq_hz    = cat_get_frequency(),
+                .mode       = "FT8",
+                .rst_sent   = s_rst_sent,
+                .rst_rcvd   = s_rst_rcvd,
+                .qso_time   = time(NULL),
+            };
+            adif_log_record(&qso);
         }
         return;
     }
@@ -543,7 +594,12 @@ void ft8_qso_advance(int64_t slot_sec)
             ESP_LOGI(TAG, "WAIT_RPT: %s reported %s -> TX2 %s", target, report, roger);
             ok = send_next(FT8_TX_KIND_ROGER_RPT, target, freq, slot_sec, roger,
                            FT8_QSO_WAIT_RR73);
-            if (ok) ft8_status_set("QSO %s: heard %s - sending %s", target, report, roger);
+            if (ok) {
+                // Capture their report of our signal (RST_RCVD for pounce).
+                strncpy(s_rst_rcvd, report, sizeof(s_rst_rcvd) - 1);
+                s_rst_rcvd[sizeof(s_rst_rcvd) - 1] = '\0';
+                ft8_status_set("QSO %s: heard %s - sending %s", target, report, roger);
+            }
         }
         if (!ok) {
             lock(); s_state = FT8_QSO_TIMEOUT; unlock();

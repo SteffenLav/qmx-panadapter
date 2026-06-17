@@ -14,6 +14,7 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "cat/cat.h"
+#include "ui.h"
 #include "display/display.h"
 #include "storage/settings.h"
 #include "util/maidenhead.h"
@@ -363,12 +364,17 @@ static void row_activate(int idx)
         ESP_LOGW(TAG, "row activate: '%s' no longer in heard table - ignoring", call);
         return;
     }
-    ESP_LOGI(TAG, "row activate: reply to %s (freq=%d Hz, last_utc=%lld)",
-             match->call, (int)match->last_freq, (long long)match->last_utc);
+    // Pick a clear audio slot for our reply — not the CQ station's own tone
+    // (that's theirs). ft8_find_clear_tone_hz() scans the heard-station table
+    // and returns the nearest unoccupied 50 Hz slot to 1500 Hz.
+    int reply_freq_hz = ft8_find_clear_tone_hz();
+
+    ESP_LOGI(TAG, "row activate: reply to %s (their_freq=%d Hz -> our_freq=%d Hz, last_utc=%lld)",
+             match->call, (int)match->last_freq, reply_freq_hz, (long long)match->last_utc);
 
     ft8_tx_request_t req;
     char err[64];
-    if (ft8_tx_build_request(FT8_TX_KIND_REPLY, match->call, match->last_freq,
+    if (ft8_tx_build_request(FT8_TX_KIND_REPLY, match->call, reply_freq_hz,
                              match->last_utc, NULL, &req, err, sizeof(err))) {
         ft8_tx_modal_show(&req);
     } else {
@@ -1014,7 +1020,19 @@ static void ft8_freq_preset_cb(lv_event_t *e)
 {
     uint32_t freq_hz = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
     ft8_freq_popup_close();
-    cat_set_frequency(freq_hz);
+    // Force bypasses the 200 ms rate-limiter so a deliberate preset tap always
+    // goes through even if the sticky-settings restore just fired a freq write.
+    if (cat_set_frequency_forced(freq_hz) == ESP_OK) {
+        // Optimistically update both labels without waiting for the FA poll.
+        ui_update_frequency(freq_hz);           // top-bar "Freq:" label
+        if (s_lbl_freq) {
+            char b[40];
+            snprintf(b, sizeof(b), "Preset: %lu.%03lu MHz",
+                     (unsigned long)(freq_hz / 1000000),
+                     (unsigned long)((freq_hz / 1000) % 1000));
+            lv_label_set_text(s_lbl_freq, b);
+        }
+    }
 }
 
 static void ft8_freq_overlay_cb(lv_event_t *e)

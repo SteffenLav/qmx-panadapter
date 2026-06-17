@@ -16,13 +16,14 @@ static const char *TAG = "time_sync";
 #define EPOCH_SANE_MIN  1700000000LL  // 2023-11-14
 #define EPOCH_SANE_MAX  2208988800LL  // 2040-01-01 — anything beyond is garbage
 
-// When QMX has synced within this window, SNTP defers to it on the system clock
-// (QMX may be GPS-disciplined, priority 1 > SNTP priority 3).
-// SNTP still writes through to the RTC hardware for backup regardless.
-#define QMX_DOMINATES_SNTP_MS  (5LL * 60 * 1000)
+// SNTP is considered "fresh" within this window. While fresh, QMX TM; time
+// is not applied to the system clock — SNTP is authoritative when WiFi is up.
+// Outside the window (no WiFi / POTA field use), QMX takes over as fallback.
+#define SNTP_FRESH_MS  (10LL * 60 * 1000)
 
-// Timestamp (esp_timer ms) of the last accepted QMX sync; 0 = never.
-static int64_t s_last_qmx_sync_ms = 0;
+// Timestamps of the last accepted sync from each source; 0 = never.
+static int64_t s_last_qmx_sync_ms  = 0;
+static int64_t s_last_sntp_sync_ms = 0;
 
 static bool epoch_is_sane(int64_t t)
 {
@@ -46,16 +47,15 @@ static time_t get_date_anchor(void)
 }
 
 // Sync priorities (highest first):
-//   1. QMX GPS-disciplined  (TIME_QUAL_QMX_GPS — needs GPS lock detection, TODO)
-//   2. Tab5 RTC             (applied at boot from rtc_apply_to_system)
-//   3. SNTP                 (TIME_QUAL_SNTP — defers to QMX when recently active)
-//   4. QMX any clock        (TIME_QUAL_QMX — always updates; SNTP defers to it)
-//   5. Manual               (always applied)
+//   1. SNTP                 — always wins when WiFi is up; authoritative internet time
+//   2. Tab5 RTC             — applied at boot from rtc_apply_to_system before SNTP/QMX
+//   3. QMX TM;              — offline fallback only: applied when SNTP hasn't synced
+//                             within SNTP_FRESH_MS (covers no-WiFi / POTA use)
+//   4. Manual               — always applied (rare POTA with no QMX GPS or SNTP)
 //
-// GPS detection: the QMX CAT protocol does not expose a GPS lock status command.
-// Until that detection is implemented, all QMX TM; time is treated as potentially
-// GPS-disciplined and trusted above SNTP. SNTP only sets the system clock when QMX
-// has not synced in the last 5 minutes.
+// Non-GPS QMX: the QMX internal RTC drifts freely and has no GPS discipline.
+// Trusting it above SNTP would break FT8 timing whenever the QMX clock is off.
+// QMX TM; is therefore only used when SNTP has not synced recently.
 
 static void write_to_rtc_and_nvs(time_t utc, const char *source)
 {
@@ -83,47 +83,38 @@ static void apply_and_persist(time_t utc, const char *source)
              tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec);
 }
 
-// Priority 3: SNTP.
-// Always writes through to the RTC hardware + NVS (keeps backup accurate).
-// Only updates the system clock if QMX has not synced recently — QMX may be
-// GPS-disciplined (priority 1) and should not be overridden by SNTP (priority 3).
+// Priority 1: SNTP — always authoritative. Sets system clock, RTC, and NVS.
 void time_sync_notify_sntp(time_t utc)
 {
-    struct tm tm_utc;
-    gmtime_r(&utc, &tm_utc);
-
-    int64_t now_ms = esp_timer_get_time() / 1000;
-    bool qmx_recent = s_last_qmx_sync_ms > 0 &&
-                      (now_ms - s_last_qmx_sync_ms) < QMX_DOMINATES_SNTP_MS;
-
-    write_to_rtc_and_nvs(utc, "SNTP");
-
-    if (!qmx_recent) {
-        struct timeval tv = { .tv_sec = utc, .tv_usec = 0 };
-        settimeofday(&tv, NULL);
-        ESP_LOGI(TAG, "Time set from SNTP: %04d-%02d-%02d %02d:%02d:%02d UTC",
-                 tm_utc.tm_year + 1900, tm_utc.tm_mon + 1, tm_utc.tm_mday,
-                 tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec);
-    } else {
-        ESP_LOGI(TAG, "SNTP sync %04d-%02d-%02d %02d:%02d:%02d UTC — RTC updated; "
-                      "system clock kept (QMX synced %llds ago)",
-                 tm_utc.tm_year + 1900, tm_utc.tm_mon + 1, tm_utc.tm_mday,
-                 tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec,
-                 (long long)(now_ms - s_last_qmx_sync_ms) / 1000);
-    }
+    apply_and_persist(utc, "SNTP");
+    s_last_sntp_sync_ms = esp_timer_get_time() / 1000;
 }
 
-// Priority 4 (or 1 when GPS-disciplined): QMX TM; time-of-day.
-// Reconstructs full UTC from the best available date anchor, applies to
-// system clock and RTC, records the sync timestamp so SNTP defers to us.
+// Priority 3: QMX TM; time-of-day — offline fallback only.
+// Applied to the system clock only when SNTP has not synced within SNTP_FRESH_MS.
+// Reconstructs full UTC from the best available date anchor (system clock, NVS, or
+// compile-time floor). Always tracks s_last_qmx_sync_ms for diagnostic purposes.
 void time_sync_notify_qmx(int h, int m, int s)
 {
     time_t anchor = get_date_anchor();
     int64_t day_start = ((int64_t)anchor / 86400) * 86400;
     time_t utc = (time_t)(day_start + h * 3600 + m * 60 + s);
 
+    int64_t now_ms     = esp_timer_get_time() / 1000;
+    bool sntp_fresh    = s_last_sntp_sync_ms > 0 &&
+                         (now_ms - s_last_sntp_sync_ms) < SNTP_FRESH_MS;
+
+    s_last_qmx_sync_ms = now_ms;
+
+    if (sntp_fresh) {
+        struct tm tm_utc;
+        gmtime_r(&utc, &tm_utc);
+        ESP_LOGD(TAG, "QMX TM; %02d:%02d:%02d — SNTP fresh (%llds ago), skipping",
+                 h, m, s, (long long)(now_ms - s_last_sntp_sync_ms) / 1000);
+        return;
+    }
+
     apply_and_persist(utc, "QMX");
-    s_last_qmx_sync_ms = esp_timer_get_time() / 1000;
 }
 
 // Priority 5 (last resort): manual entry from user (rare POTA offline use).

@@ -1119,12 +1119,21 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 - **Drawer checkbox styling.** The IQ balance, flat-spectrum, and diagnostic-log drawer controls are converted from LVGL switches to themed square checkboxes via a shared `make_drawer_checkbox()` helper — consistent visual language with the new WiFi toggle.
 - **FT8 left-pane spacing.** Tighter padding (`pad_top(8)` instead of `pad_all(16)`) and upward nudges for the freq label and slot-countdown bar make better use of the narrow left pane.
 
+### Shipped in v0.16.0 — 2026-06-18 UTC
+
+- **ADIF QSO logging.** Every completed FT8 QSO is automatically written to an ADIF v3.1.4 file (`/spiffs/qso.adi`) on the Tab5's internal flash. The file includes CALL, FREQ (MHz, 3 d.p.), BAND, MODE, SUBMODE (FT8 — required by LoTW TQSL and eQSL for digital credit), RST_SENT, RST_RCVD, QSO_DATE, TIME_ON, MY_CALL, MY_GRIDSQUARE, and GRIDSQUARE. The total QSO count appears in the web UI bottom bar as a download link ("N QSOs ↓") that streams the file directly. A `/api/adif/clear` endpoint lets you wipe the log from the web UI. An in-memory worked-call cache (loaded from the file at boot) powers the "Exclude worked-before" filter toggle (already present in the filter modal since v0.15.15).
+- **FT8 time sync fix — SNTP is now authoritative.** The previous sync priority treated every QMX `TM;` response as potentially GPS-disciplined, so a non-GPS QMX clock could override a fresh SNTP fix and corrupt FT8 slot timing. The new rule: SNTP always applies to the system clock; QMX time is only applied when SNTP has not synced within the last 10 minutes (e.g. field operation without WiFi). This means a WiFi-connected unit always uses internet time and the non-GPS QMX is only a fallback.
+- **FT8 pounce TX frequency fix.** Tapping a CQ station to answer them previously used *their* TX tone as our TX tone — immediately flagged as "FREQ BUSY" (occupied by the station you just clicked). The panadapter now calls `ft8_find_clear_tone_hz()` at click time to pick a free slot, the same way CQ-run does.
+- **FT8 CQ-run TX frequency fix.** When a station answered our CQ, the QSO engine overwrote our CQ tone with the caller's tone and sent subsequent messages (report, RR73) on their occupied frequency. Our CQ tone is now held fixed for the entire exchange; only the target callsign changes.
+- **TX power reading corrected (×2 fix).** The `PC;` CAT response encodes power as `value = watts × 5` (not × 10 as originally assumed). The "Last TX" readout now shows the correct wattage.
+- **Settings drawer font enlarged.** Section labels and control labels in the settings drawer use montserrat_28 (was montserrat_24) for easier reading at arm's length.
+
 ### Next up
 
 The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF.
 
-- **v0.16.0 - ADIF logging.** Write each completed QSO to an ADIF file on-device; show a log view in the FT8 screen. Upload to LOTW, QRZ, eQSL, or POTA.app via the web UI. Activates the existing "Exclude worked-before" filter toggle.
-- **v0.16.0 - "Worked before / new zone" highlighting.** Colour-code the FT8 decode list by whether that callsign has already been confirmed (once the ADIF log exists). High value for POTA/SOTA activators chasing new contacts.
+- **v0.16.x - "Worked before" highlighting.** Colour-code the FT8 decode list rows by whether that callsign is already in the ADIF log. High value for POTA/SOTA activators chasing new contacts.
+- **v0.16.x - ADIF upload.** Upload the QSO log to LoTW, QRZ, eQSL, or POTA.app via the web UI or direct HTTP POST.
 - **v1.0.0 - Standalone FT8 station.** All of the above polished + multi-day stability + cleaner UI.
 
 Alongside the FT8 path:

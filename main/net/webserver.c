@@ -13,6 +13,7 @@
 #include "display/display.h"  // display_lock / display_unlock
 #include "screenshot/screenshot.h"  // screenshot_capture_rgb565
 #include "diag_log.h"         // diag_log_size / diag_log_snapshot
+#include "adif/adif_log.h"    // adif_log_count / adif_log_file_path / adif_log_clear
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
 #include <string.h>
@@ -79,6 +80,7 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "if_cal_hz",   (double)ui_get_if_cal_hz());
     cJSON_AddBoolToObject  (root, "flat_mode",   ui_get_flat_mode());
     cJSON_AddNumberToObject(root, "utc_epoch",   (double)time(NULL));
+    cJSON_AddNumberToObject(root, "qso_count",   (double)adif_log_count());
     const esp_app_desc_t *app = esp_app_get_description();
     cJSON_AddStringToObject(root, "tab5_fw",     app ? app->version : "");
 
@@ -249,6 +251,44 @@ static esp_err_t log_handler(httpd_req_t *req)
     return err;
 }
 
+// GET /api/adif — download the ADIF QSO log from SPIFFS.
+static esp_err_t adif_get_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=qso.adi");
+
+    FILE *f = fopen(adif_log_file_path(), "r");
+    if (!f) {
+        return httpd_resp_sendstr(req,
+            "<ADIF_VER:5>3.1.4 <PROGRAMID:13>QMX-Panadapter <EOH>\n");
+    }
+
+    char buf[1024];
+    size_t n;
+    esp_err_t err = ESP_OK;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0 && err == ESP_OK)
+        err = httpd_resp_send_chunk(req, buf, (ssize_t)n);
+    fclose(f);
+    httpd_resp_send_chunk(req, NULL, 0);
+    return err;
+}
+
+// POST /api/adif/clear — erase all logged QSOs.
+static esp_err_t adif_clear_handler(httpd_req_t *req)
+{
+    adif_log_clear();
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+static const httpd_uri_t uri_adif_get = {
+    .uri = "/api/adif", .method = HTTP_GET, .handler = adif_get_handler,
+};
+static const httpd_uri_t uri_adif_clear = {
+    .uri = "/api/adif/clear", .method = HTTP_POST, .handler = adif_clear_handler,
+};
+
 static const httpd_uri_t uri_root = {
     .uri = "/", .method = HTTP_GET, .handler = root_handler,
 };
@@ -288,6 +328,8 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_cmd);
     httpd_register_uri_handler(s_server, &uri_ss_bmp);
     httpd_register_uri_handler(s_server, &uri_log);
+    httpd_register_uri_handler(s_server, &uri_adif_get);
+    httpd_register_uri_handler(s_server, &uri_adif_clear);
     webserver_ws_start(s_server);
 
     ESP_LOGI(TAG, "HTTP server started");

@@ -24,6 +24,13 @@ esp_err_t cat_init(void);
  */
 esp_err_t cat_set_frequency(uint32_t freq_hz);
 
+/**
+ * @brief Same as cat_set_frequency() but bypasses the 200 ms rate-limiter.
+ *
+ * Use for deliberate user actions (e.g. preset taps) where the write must
+ * go through even if another write just happened (e.g. sticky-settings restore).
+ */
+esp_err_t cat_set_frequency_forced(uint32_t freq_hz);
 
 /**
  * @brief Get the most recently observed VFO frequency.

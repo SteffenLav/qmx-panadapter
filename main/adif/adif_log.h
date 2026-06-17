@@ -1,0 +1,39 @@
+#pragma once
+#include <stdbool.h>
+#include <stdint.h>
+#include <time.h>
+
+// Completed QSO record passed to adif_log_record().
+typedef struct {
+    const char *their_call;   // Their callsign (required)
+    const char *my_call;      // Our callsign
+    const char *my_grid;      // Our Maidenhead grid (4 or 6 char), may be NULL/empty
+    const char *their_grid;   // Their grid (may be NULL/empty)
+    uint32_t    freq_hz;      // VFO frequency in Hz
+    const char *mode;         // "FT8"
+    const char *rst_sent;     // Signal report sent (e.g. "-07" or "599")
+    const char *rst_rcvd;     // Signal report received (e.g. "-10" or "599")
+    time_t      qso_time;     // UTC unix timestamp at QSO completion
+} adif_qso_t;
+
+// Mount SPIFFS and prepare the ADIF log file. Loads the worked-call cache.
+// Call once at boot after NVS is initialised (does not depend on WiFi/CAT).
+void adif_log_init(void);
+
+// Append one completed QSO to the ADIF file.
+// Thread-safe. Blocks briefly while writing (~1-2 ms on SPIFFS).
+void adif_log_record(const adif_qso_t *qso);
+
+// Number of QSOs in the log (in-memory counter, no I/O).
+int adif_log_count(void);
+
+// Absolute path to the ADIF file on SPIFFS (e.g. "/spiffs/qso.adi").
+const char *adif_log_file_path(void);
+
+// True if `call` appears in any previously logged QSO.
+// Uses an in-memory cache (up to ADIF_WORKED_CACHE entries) loaded at init.
+// O(n) linear scan — fine for the cache size used.
+bool adif_log_contains_call(const char *call);
+
+// Erase all logged QSOs and reset the worked-call cache.
+void adif_log_clear(void);
