@@ -4,29 +4,34 @@
 
 // Global time-sync orchestrator.
 //
-// Priority (highest first):
-//   1. QMX/QMX+ GPS-derived time (via TM; CAT query) — re-syncs on GPS lock events
-//   2. SNTP/WiFi
-//   3. Manual input (rare POTA use via time_sync_set_manual)
+// Sync priorities (highest first):
+//   1. QMX/QMX+ GPS-disciplined time (TM; when GPS locked — re-syncs on GPS lock events)
+//   2. Tab5 RX8130CE RTC (supercap-backed, applied immediately at boot)
+//   3. SNTP/WiFi (accurate, but defers to QMX when QMX has recently synced)
+//   4. QMX/QMX+ any clock (crystal oscillator, used when offline / no GPS)
+//   5. Manual input (rare POTA use via time_sync_set_manual)
 //
-// Any accepted sync writes through to the Tab5's RX8130CE supercap RTC so the
-// clock survives a power-off (30-40 h retention). The system clock (settimeofday)
-// is always updated too.
+// GPS lock detection: the QMX CAT protocol does not expose a GPS status command.
+// Until detected, all QMX TM; time is treated as potentially GPS-disciplined —
+// SNTP does not override the system clock when QMX has synced in the last 5 min.
+// Any accepted sync writes through to the RX8130CE so the clock persists across
+// power-off (30-40 h supercap retention).
 //
 // Call time_sync_init() once after display_init() (I2C bus must be up).
 
-// Init: bring up RTC, apply to system clock if valid, spawn periodic QMX sync task.
+// Init: bring up RTC (priority 2), apply to system clock if valid, spawn sync task.
 void time_sync_init(i2c_master_bus_handle_t bus);
 
-// Called from the SNTP callback with the validated UTC epoch.
-// Writes to RTC and updates the NVS date anchor.
+// Priority 3: called from the SNTP callback with the validated UTC epoch.
+// Always writes to RTC + NVS; only updates system clock when QMX has not synced
+// in the last 5 minutes (so QMX GPS time, if active, is not overridden by SNTP).
 void time_sync_notify_sntp(time_t utc);
 
-// Called whenever a QMX time-of-day is available (H:M:S, no date).
-// Reconstructs full UTC from the current date (RTC or NVS anchor), writes to
-// RTC, and sets the system clock.
+// Priority 4 (or 1 when GPS-disciplined): called when a QMX TM; response is available.
+// Reconstructs full UTC from the best date anchor. Always updates system clock + RTC.
+// Records a timestamp so SNTP defers to QMX for the next 5 minutes.
 void time_sync_notify_qmx(int h, int m, int s);
 
-// Manual override: full date + time in UTC. For rare POTA sessions where
+// Priority 5: manual override — full UTC date+time. For rare POTA sessions where
 // QMX has no GPS and WiFi is unavailable.
 void time_sync_set_manual(int year, int mon, int mday, int h, int m, int s);

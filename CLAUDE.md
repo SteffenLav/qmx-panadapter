@@ -181,7 +181,14 @@ Opt-in field-diagnostics capture for remote bug reports. Toggle: **Diagnostic lo
 
 **QMX time-of-day only (no date):** `time_sync_notify_qmx(h, m, s)` reconstructs full UTC from the best available date anchor: system clock (if sane), NVS `last_unix_time`, or `EPOCH_SANE_MIN` (2023-11-14) as last resort. Both bounds are checked — stale anchors in the past AND garbage future values (>2040) are rejected. Date doesn't matter for FT8 (86400 % 15 == 0, so any day base gives the correct slot parity). NVS is only updated when the computed epoch is within sane bounds, preventing NVS poisoning from a garbage anchor.
 
-**Sync priority (highest first):** QMX/GPS via `TM;` → SNTP (writes to RTC + NVS) → manual (`time_sync_set_manual()`, for rare POTA offline use). Each accepted sync writes through to the RX8130CE so the clock persists across power-off.
+**Sync priority (highest first):**
+1. QMX GPS-disciplined (`time_sync_notify_qmx()` — GPS lock not yet detectable via CAT, so all QMX TM; is treated as potentially GPS)
+2. Tab5 RTC — applied immediately at boot before QMX/SNTP are up
+3. SNTP — writes to RTC + NVS always; only updates system clock when QMX has NOT synced in the last 5 min (avoids SNTP overriding a GPS-locked QMX)
+4. QMX any clock — same code path as #1; periodic 5-min poll maintains time-of-day when offline
+5. Manual — `time_sync_set_manual()`, always applies (rare POTA offline use)
+
+GPS lock detection: the QMX CAT protocol has no GPS status command. Until one is identified, all QMX TM; responses are treated as potentially GPS-disciplined. SNTP defers to QMX (`QMX_DOMINATES_SNTP_MS = 5 min` in `time_sync.c`). Each accepted sync writes through to the RX8130CE so the clock persists across power-off.
 
 **ft8_test.c** `set_time_from_qmx_rtc()` delegates to `time_sync_notify_qmx()` — no separate logic.
 
