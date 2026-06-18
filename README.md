@@ -120,7 +120,7 @@ Swipe in from the **left edge** to switch to the FT8 screen. The Tab5 starts dec
 
 1. Tap the **Preset** button and pick your band's conventional FT8 dial frequency (e.g. 14.074 MHz for 20 m).
 2. Watch the decode list fill. CQ stations appear at the top sorted by SNR; exchanges and replies below.
-3. To reply to a station: **hold your finger on their row** for ~400 ms until it highlights, then lift. A confirmation modal shows the exact message before anything is armed.
+3. To reply to a station: **hold your finger on their row** for ~250 ms. A dim highlight appears after ~80 ms so you can see which row you're targeting before the gate fires. Lift — a confirmation modal shows the exact message before anything is armed.
 4. Tap **Auto Pounce** to hand the full QSO to the auto-engine (works through report → RR73 → 73 with patient retry), or **Transmit** for a single manual message.
 5. To call CQ: tap **Call CQ**. The engine picks a clear audio slot, fires CQ, automatically answers the first caller, runs the full exchange, logs the QSO, and resumes calling CQ.
 
@@ -348,8 +348,7 @@ The Tab5 transmits FT8 via the QMX's `TA<freq>;` CAT command — no PC audio pat
 
 ### Replying to a station
 
-1. In the decode list, **hold your finger on a row** for ~400 ms until it highlights blue.
-2. Drag up or down to land on the right row if needed — list scroll locks while selecting.
+1. In the decode list, **hold your finger on a row** for ~250 ms. A dim highlight appears after ~80 ms so you can see which row you're targeting. List scroll locks once the gate fires; drag up or down to land on the right row.
 3. **Lift** — a confirmation modal shows the exact message that will go on air, the audio frequency, and the target slot parity.
 4. Tap **Auto Pounce** to hand the full QSO to the auto-engine, or **Transmit** for a single manual message.
 5. Tap **Cancel** (in the modal, or the armed indicator in the left pane) to disarm without transmitting.
@@ -404,7 +403,7 @@ During an active auto-QSO exchange (any state between first reply and final 73),
 
 | Button | What it does |
 |--------|--------------|
-| **Re-send** (amber) | Re-arms the current outgoing message immediately — use when you think the other station missed your last transmission |
+| **Re-send / &lt;field&gt;** (amber) | Re-arms the current outgoing message immediately. The label shows what will go out — e.g. **Re-send / JO45** when waiting for their report, **Re-send / -07** when waiting for RR73 |
 | **RR73** (blue) | Skips straight to RR73, bypassing the report step |
 | **73** (green) | Fires the 73 sign-off and closes the QSO immediately |
 
@@ -481,7 +480,7 @@ Each accepted sync writes through to the RX8130CE so the clock persists across p
 | Swipe → | Open drawer, or spectrum while drawer open | Close settings drawer |
 | Swipe ↑ from bottom edge | Bottom edge strip | Open memory channel picker |
 | Tap or swipe ↓ | Top-bar item (Band/Mode/BW/Freq/Zoom) | Open that item's selector |
-| Touch and hold ~400 ms | FT8 decode list row | Enter row-selection mode (scroll locks, drag moves highlight) |
+| Touch and hold ~250 ms | FT8 decode list row | Dim preview at ~80 ms; full selection at 250 ms (scroll locks, drag moves highlight, lift to confirm) |
 | Quick swipe | FT8 decode list | Scroll the list normally |
 
 ### Per-unit IF calibration
