@@ -455,11 +455,20 @@ The Tab5 needs accurate UTC for FT8 slot timing. Sources in priority order (high
 | **SNTP (WiFi)** | Always authoritative when WiFi is up — sets system clock, Tab5 RTC, and NVS |
 | **Tab5 RTC** | RX8130CE supercap-backed (~30–40 h retention) — applied at boot before QMX or WiFi are available |
 | **QMX `TM;`** | Applied only when SNTP has not synced within the last 10 minutes (field/POTA with no WiFi) |
-| **Manual** | `time_sync_set_manual()` always applies — for rare POTA sessions with neither WiFi nor QMX clock (no UI entry point yet, on the roadmap) |
+| **FT8 signal timing** | Sub-second correction from decoded signal phase — applied via the **Sync Time** modal (see below) |
+| **Manual** | Full HH:MM override in the **Sync Time** modal — for rare POTA sessions with neither WiFi nor QMX clock |
 
 Each accepted sync writes through to the RX8130CE so the clock persists across power-off. The Tab5 also polls `TM;` every 5 minutes in the background to catch QMX GPS lock events.
 
 **For POTA / no-WiFi use:** uncheck **WiFi initiated** in the settings drawer. Time comes from the QMX on USB connect (or the supercap RTC if the Tab5 was recently synced). FT8 slot timing will be accurate from either source.
+
+### FT8 time calibration modal
+
+On the FT8 screen, tap **Filter** → **Sync Time** to open the time calibration modal. It shows three large boxes: **\[HH\] : \[MM\] : \[SS\]**.
+
+- **HH / MM** — pre-filled from the current UTC clock. Tap either box to edit it with a numpad. Use this for rare POTA situations where neither WiFi nor the QMX clock is available.
+- **SS** — auto-syncs continuously from decoded FT8 signals. Each time a slot decodes, the decoder measures the exact sub-second offset between the incoming signal and where it should fall on the UTC boundary; the SS box updates to show the corrected seconds value and the offset (e.g. **FT8 +120 ms** or **FT8 ok** when under a threshold). A blue frame means it is actively tracking; tap SS to lock it.
+- **Apply** — if only SS was synced (HH and MM untouched), `time_sync_apply_correction_ms()` nudges the system clock by the measured sub-second offset and writes through to the RTC. If HH or MM was edited, `time_sync_set_manual()` sets the full time. The bottom bar shows **UTC(FT8)** after an FT8-derived correction, or **UTC(manual)** after a full manual set.
 
 ---
 
