@@ -115,6 +115,19 @@ typedef struct {
 static QueueHandle_t  s_decode_queue = NULL;
 static volatile bool  s_ft8_running  = false;
 
+// Timing error from the last decoded slot: positive = system clock is fast.
+// Written by ft8_decode_task; read by the LVGL UI (ft8_time_modal).
+// volatile int is sufficient — single writer, single reader, display hint only.
+static volatile int  s_last_timing_ms    = 0;
+static volatile bool s_last_timing_valid = false;
+
+bool ft8_get_last_timing_ms(int *out_ms)
+{
+    if (!s_last_timing_valid) return false;
+    *out_ms = s_last_timing_ms;
+    return true;
+}
+
 // Capture buffer pool. Allocated in ft8_task. A buffer is owned by capture
 // from the moment it's claimed (s_buf_busy[i]=true) until the decoder releases
 // it (=false) after fully consuming it. Capture is the only allocator and the
@@ -332,6 +345,17 @@ static void decode_slot(float *audio, monitor_t *mon,
     }
     int n_skipped = n_cand - n_attempted;  // candidates left undecoded when the budget ran out
     int dec_ms = (int)((esp_timer_get_time() - t_start) / 1000) - mon_ms;
+
+    // Timing measurement: derive system-clock error from the strongest candidate's
+    // sync position. Only valid after at least one successful decode so we know
+    // the candidate is a genuine FT8 signal (not a false sync hit).
+    // SR=12000, block_size=1920 samples/symbol, time_osr=2 → subblock=960 samples.
+    // Positive result = clock is fast; negative = clock is slow.
+    if (n_decoded > 0 && n_cand > 0) {
+        float sig_ms = (cands[0].time_offset * 1920 + cands[0].time_sub * 960) / 12.0f;
+        s_last_timing_ms    = (int)roundf((float)start_off_ms + sig_ms);
+        s_last_timing_valid = true;
+    }
 
     size_t heap_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024;
     size_t heap_p = heap_caps_get_free_size(MALLOC_CAP_SPIRAM)   / 1024;

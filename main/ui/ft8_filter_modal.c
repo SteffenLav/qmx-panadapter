@@ -8,6 +8,7 @@
 // filters can be active at once).
 
 #include "ft8_filter_modal.h"
+#include "ft8_time_modal.h"
 #include "ui_theme.h"
 #include "settings.h"
 #include "lvgl.h"
@@ -92,6 +93,13 @@ static void cancel_btn_cb(lv_event_t *e)
 {
     (void)e;
     modal_close();
+}
+
+static void sync_time_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    modal_close();
+    ft8_time_modal_show();
 }
 
 // Plain (non-exclusive) checkbox with a themed square indicator. Extra
@@ -214,31 +222,31 @@ static void modal_build(void)
     lv_obj_set_style_text_color(s_cb_incl_cq_only, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_align(s_cb_incl_cq_only, LV_ALIGN_TOP_LEFT, 0, 374);
 
-    // --- Save / Cancel, spread vertically down the right edge so the
-    // keyboard never covers them and they're easy to tell apart by feel ---
-    lv_obj_t *save_btn = lv_btn_create(panel);
-    lv_obj_set_size(save_btn, 180, 64);
-    lv_obj_align(save_btn, LV_ALIGN_TOP_RIGHT, 0, 80);
-    lv_obj_set_style_bg_color(save_btn, lv_color_hex(0x2e8b3a), 0);
-    lv_obj_set_style_radius(save_btn, 8, 0);
-    lv_obj_add_event_cb(save_btn, save_btn_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *save_lbl = lv_label_create(save_btn);
-    lv_label_set_text(save_lbl, "Save");
-    lv_obj_set_style_text_color(save_lbl, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(save_lbl, &lv_font_montserrat_24, 0);
-    lv_obj_center(save_lbl);
-
-    lv_obj_t *cancel_btn = lv_btn_create(panel);
-    lv_obj_set_size(cancel_btn, 180, 64);
-    lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_RIGHT, 0, -90);
-    lv_obj_set_style_bg_color(cancel_btn, lv_color_hex(0x962020), 0);
-    lv_obj_set_style_radius(cancel_btn, 8, 0);
-    lv_obj_add_event_cb(cancel_btn, cancel_btn_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *cancel_lbl = lv_label_create(cancel_btn);
-    lv_label_set_text(cancel_lbl, "Cancel");
-    lv_obj_set_style_text_color(cancel_lbl, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(cancel_lbl, &lv_font_montserrat_24, 0);
-    lv_obj_center(cancel_lbl);
+    // --- Save / Cancel / Sync Time on the right edge, evenly distributed.
+    // Panel inner h = 460-40 = 420 px. Three buttons h=64: total 192 px.
+    // Remaining 228 px / 4 gaps = 57 px each → y = 57 / 178 / 299.
+    {
+        struct { const char *lbl; uint32_t col; lv_event_cb_t cb; } btns[3] = {
+            { "Save",      0x2e8b3a, save_btn_cb      },
+            { "Cancel",    0x962020, cancel_btn_cb     },
+            { "Sync Time", UI_COLOR_PRIMARY, sync_time_btn_cb },
+        };
+        for (int i = 0; i < 3; i++) {
+            lv_obj_t *b = lv_btn_create(panel);
+            lv_obj_set_size(b, 180, 64);
+            lv_obj_align(b, LV_ALIGN_TOP_RIGHT, 0, 57 + i * (64 + 57));
+            lv_obj_set_style_bg_color(b, lv_color_hex(btns[i].col), 0);
+            lv_obj_set_style_radius(b, 8, 0);
+            lv_obj_set_style_border_width(b, 0, 0);
+            lv_obj_set_style_pad_all(b, 0, 0);
+            lv_obj_add_event_cb(b, btns[i].cb, LV_EVENT_CLICKED, NULL);
+            lv_obj_t *l = lv_label_create(b);
+            lv_label_set_text(l, btns[i].lbl);
+            lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
+            lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+            lv_obj_center(l);
+        }
+    }
 
     s_keyboard = lv_keyboard_create(s_modal);
     static lv_style_t style_kb_btn;

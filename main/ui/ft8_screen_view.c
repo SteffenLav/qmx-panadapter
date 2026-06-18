@@ -29,6 +29,7 @@
 #include "ft8_status.h"
 #include "ft8_tx_modal.h"
 #include "identity_config.h"
+#include "adif/adif_log.h"
 
 static const char *TAG = "ft8_view";
 
@@ -143,6 +144,7 @@ static lv_obj_t *s_btn_cq       = NULL;  // "Call CQ" - short tap TX, long-press
 static lv_obj_t *s_cq_lbl       = NULL;  // label inside s_btn_cq (shows the active CQ message)
 static lv_obj_t *s_lbl_tx       = NULL;  // TX state indicator: armed/active, tap to cancel/abort
 static lv_obj_t *s_btn_override_resend = NULL;  // manual QSO override: re-send current msg
+static lv_obj_t *s_lbl_resend          = NULL;  // label inside s_btn_override_resend (updated per-state)
 static lv_obj_t *s_btn_override_rr73   = NULL;  // manual QSO override: force RR73
 static lv_obj_t *s_btn_override_73     = NULL;  // manual QSO override: force 73
 // CQ TX parity preference: -1=any slot, 0=EVEN only, 1=ODD only.
@@ -167,19 +169,24 @@ static volatile bool s_refresh_pending = false;
 //
 // A hold-time gate distinguishes "swipe to scroll" from "hold to select":
 //   - Finger lifts before ROW_HOLD_SELECT_MS  → no action (was a swipe/tap)
+//   - Finger held ≥ ROW_PREVIEW_MS            → dim preview highlight shows
+//       which row is targeted (no scroll lock yet — list still scrollable)
 //   - Finger held ≥ ROW_HOLD_SELECT_MS        → selection mode active:
-//       row highlights; dragging shifts highlight; lifting opens the modal
+//       full highlight, scroll locked; dragging shifts highlight; lifting opens modal
 //   - LV_EVENT_PRESS_LOST (LVGL scroll kick-in) → cancel, no action
 //
-// This prevents accidental station selection while scrolling the list.
-#define ROW_HOLD_SELECT_MS  700
+// ROW_SCROLL_CANCEL_PX is generous (20 px) so slight hand-jitter in field
+// conditions doesn't abort the hold before the gate fires.
+#define ROW_HOLD_SELECT_MS   250   // hold this long to enter selection mode
+#define ROW_PREVIEW_MS        80   // show dim highlight this many ms into the hold
+#define ROW_SCROLL_CANCEL_PX  20   // finger movement beyond this cancels selection
 
 static int      s_row_hover         = -1;
+static int      s_row_preview       = -1;  // dim pre-activation highlight
 static uint32_t s_press_start_ms    = 0;
 static bool     s_in_selection_mode = false;  // true while scroll is locked for drag-select
 static lv_point_t s_press_start_pt  = {0, 0};
 static bool     s_scroll_detected   = false;  // true if finger moved enough to be a scroll, ever
-#define ROW_SCROLL_CANCEL_PX 12  // finger movement beyond this before the hold gate cancels selection
 
 static double s_user_lat = 0.0;
 static double s_user_lon = 0.0;
@@ -302,11 +309,35 @@ static lv_obj_t *make_label_styled(lv_obj_t *row, const lv_style_t *style)
     return lbl;
 }
 
-// Set / clear the hover highlight on a row.  Always clears the previous row
-// first.  Silently ignores hidden rows (sets s_row_hover = -1 instead).
+// Dim "about to select" highlight — shown between ROW_PREVIEW_MS and
+// ROW_HOLD_SELECT_MS so the user sees which row is targeted before the
+// hold gate fires.  List is still scrollable while preview is active.
+static void row_clear_preview(void)
+{
+    if (s_row_preview >= 0 && s_row_preview < MAX_ROWS && s_rows[s_row_preview].row)
+        lv_obj_set_style_bg_opa(s_rows[s_row_preview].row, LV_OPA_0, 0);
+    s_row_preview = -1;
+}
+
+static void row_set_preview(int idx)
+{
+    if (idx == s_row_preview) return;
+    row_clear_preview();
+    if (idx >= 0 && idx < MAX_ROWS
+        && s_rows[idx].row
+        && !lv_obj_has_flag(s_rows[idx].row, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_set_style_bg_color(s_rows[idx].row, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_set_style_bg_opa(s_rows[idx].row, LV_OPA_30, 0);
+        s_row_preview = idx;
+    }
+}
+
+// Set / clear the full selection highlight on a row.  Always clears the
+// previous row and any preview highlight first.
 static void row_set_hover(int new_idx)
 {
     if (new_idx == s_row_hover) return;
+    row_clear_preview();
     // Clear previous highlight
     if (s_row_hover >= 0 && s_row_hover < MAX_ROWS && s_rows[s_row_hover].row)
         lv_obj_set_style_bg_opa(s_rows[s_row_hover].row, LV_OPA_0, 0);
@@ -320,7 +351,7 @@ static void row_set_hover(int new_idx)
         lv_obj_set_style_bg_color(s_rows[new_idx].row, lv_color_hex(UI_COLOR_PRIMARY), 0);
         lv_obj_set_style_bg_opa(s_rows[new_idx].row, LV_OPA_70, 0);
     } else {
-        s_row_hover = -1; // can't highlight a hidden / out-of-range row
+        s_row_hover = -1;
     }
 }
 
@@ -424,32 +455,35 @@ static void row_touch_cb(lv_event_t *e)
         if (indev) lv_indev_get_point(indev, &pt);
 
         if (!s_in_selection_mode && !s_scroll_detected) {
-            // If the finger has moved more than a few px before the hold
-            // gate fires, this is a scroll/swipe — never enter selection
-            // mode for this touch, even if held longer afterwards.
+            // If the finger has moved more than ROW_SCROLL_CANCEL_PX before
+            // the hold gate fires, this is a scroll/swipe — cancel any preview
+            // and permanently bar selection for this touch.
             int32_t dx = pt.x - s_press_start_pt.x;
             int32_t dy = pt.y - s_press_start_pt.y;
             if (dx < 0) dx = -dx;
             if (dy < 0) dy = -dy;
             if (dx > ROW_SCROLL_CANCEL_PX || dy > ROW_SCROLL_CANCEL_PX) {
                 s_scroll_detected = true;
+                row_clear_preview();
             }
         }
 
-        // Only enter selection mode after ROW_HOLD_SELECT_MS of continuous
-        // hold AND no scroll motion was ever detected during this touch.
         uint32_t held_ms = lv_tick_get() - s_press_start_ms;
-        if (held_ms >= ROW_HOLD_SELECT_MS && !s_scroll_detected) {
-            // Lock the list scroll the first time we cross the threshold so
-            // that dragging the finger to a different row doesn't also scroll
-            // the whole list.
-            if (!s_in_selection_mode) {
-                s_in_selection_mode = true;
-                if (s_list) lv_obj_clear_flag(s_list, LV_OBJ_FLAG_SCROLLABLE);
+        if (!s_scroll_detected) {
+            int cur_row = screen_y_to_row(pt.y);
+            if (held_ms >= ROW_HOLD_SELECT_MS) {
+                // Full selection mode: lock scroll so dragging moves the highlight.
+                if (!s_in_selection_mode) {
+                    s_in_selection_mode = true;
+                    if (s_list) lv_obj_clear_flag(s_list, LV_OBJ_FLAG_SCROLLABLE);
+                }
+                if (cur_row != s_row_hover)
+                    row_set_hover(cur_row);
+            } else if (held_ms >= ROW_PREVIEW_MS) {
+                // Dim preview: user sees which row they're targeting before
+                // the hold gate fires.  List is still scrollable at this point.
+                row_set_preview(cur_row);
             }
-            int hover = screen_y_to_row(pt.y);
-            if (hover != s_row_hover)
-                row_set_hover(hover);
         }
 
     } else if (code == LV_EVENT_RELEASED) {
@@ -467,6 +501,7 @@ static void row_touch_cb(lv_event_t *e)
 
     } else if (code == LV_EVENT_PRESS_LOST) {
         row_set_hover(-1);
+        row_clear_preview();
         // Restore scroll if we somehow get PRESS_LOST while in selection mode.
         if (s_in_selection_mode && s_list)
             lv_obj_add_flag(s_list, LV_OBJ_FLAG_SCROLLABLE);
@@ -577,17 +612,20 @@ static void update_row(int i, const ft8_call_t *src)
     set_text_if_changed(r->l_brg,     r->prev_brg,     sizeof(r->prev_brg),     b_brg);
     set_text_if_changed(r->l_heard,   r->prev_heard,   sizeof(r->prev_heard),   b_heard);
 
-    /* Ken's colour scheme: RED=own call heard, GREEN=CQ, WHITE=other */
+    /* Colour scheme: RED=own call heard, GREY=worked before, GREEN=CQ, WHITE=other */
     {
         int8_t col = 0; /* other / white */
         if (s_my_call[0] && strstr(src->last_text, s_my_call)) {
-            col = 2; /* own call in message -> red */
+            col = 2; /* own call in message -> red (highest priority) */
+        } else if (adif_log_contains_call(src->call)) {
+            col = 3; /* already in ADIF log -> dim grey */
         } else if (strncmp(src->last_text, "CQ ", 3) == 0) {
             col = 1; /* CQ -> green */
         }
         if (col != r->prev_color) {
             r->prev_color = col;
             lv_color_t c = (col == 2) ? lv_palette_main(LV_PALETTE_RED)
+                         : (col == 3) ? lv_color_hex(0x808080)   /* worked: dim grey */
                          : (col == 1) ? lv_palette_main(LV_PALETTE_GREEN)
                          :              lv_color_white();
             lv_obj_set_style_text_color(r->l_call, c, 0);
@@ -826,10 +864,31 @@ static void t_clock_cb(lv_timer_t *t)
                          qso_st == FT8_QSO_WAIT_ROGER ||
                          qso_st == FT8_QSO_WAIT_RR73);
             if (show) {
+                // Update "Re-send" label to show what will actually be re-sent
+                // e.g. "Re-send\nJO45" in WAIT_RPT, "Re-send\n-07" in WAIT_ROGER
+                if (s_lbl_resend) {
+                    char extra[16] = {0};
+                    ft8_qso_get_cur_extra(extra, sizeof(extra));
+                    if (extra[0]) {
+                        lv_label_set_text_fmt(s_lbl_resend, "Re-send\n%s", extra);
+                        lv_obj_set_style_text_font(s_lbl_resend, &lv_font_montserrat_18, 0);
+                    } else {
+                        lv_label_set_text(s_lbl_resend, "Re-send");
+                        lv_obj_set_style_text_font(s_lbl_resend, &lv_font_montserrat_20, 0);
+                    }
+                    lv_obj_center(s_lbl_resend);
+                }
                 lv_obj_clear_flag(s_btn_override_resend, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_clear_flag(s_btn_override_rr73,   LV_OBJ_FLAG_HIDDEN);
                 lv_obj_clear_flag(s_btn_override_73,      LV_OBJ_FLAG_HIDDEN);
             } else {
+                // Reset to plain "Re-send" so if no extra is available on next show it
+                // doesn't display stale content from the previous exchange.
+                if (s_lbl_resend) {
+                    lv_label_set_text(s_lbl_resend, "Re-send");
+                    lv_obj_set_style_text_font(s_lbl_resend, &lv_font_montserrat_20, 0);
+                    lv_obj_center(s_lbl_resend);
+                }
                 lv_obj_add_flag(s_btn_override_resend, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_btn_override_rr73,   LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_btn_override_73,      LV_OBJ_FLAG_HIDDEN);
@@ -1290,7 +1349,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // the two steps of the flow together visually.
     s_btn_cq = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_cq, 288, 60);
-    lv_obj_set_pos(s_btn_cq, 0, 284);
+    lv_obj_set_pos(s_btn_cq, 0, 278);
     lv_obj_set_style_bg_color(s_btn_cq, lv_color_hex(0x2e8b3a), 0);
     lv_obj_set_style_border_color(s_btn_cq, lv_color_hex(0x4caf50), 0);
     lv_obj_set_style_border_width(s_btn_cq, 2, 0);
@@ -1313,7 +1372,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_label_set_text(s_lbl_heard, "Active: 0");
     lv_obj_set_style_text_color(s_lbl_heard, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(s_lbl_heard, &lv_font_montserrat_24, 0);
-    lv_obj_set_pos(s_lbl_heard, 0, 352);
+    lv_obj_set_pos(s_lbl_heard, 0, 346);
 
     // TX state indicator - hidden while idle; amber/armed or red/active,
     // tap to cancel/abort. See t_clock_cb (1 Hz refresh: state, colour,
@@ -1324,14 +1383,14 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_label_set_long_mode(s_lbl_tx, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_lbl_tx, 288);
-    lv_obj_set_pos(s_lbl_tx, 0, 384);
+    lv_obj_set_pos(s_lbl_tx, 0, 380);
     lv_obj_add_flag(s_lbl_tx, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_lbl_tx, tx_indicator_tap_cb, LV_EVENT_CLICKED, NULL);
 
     // Manual QSO override buttons — Re-send / RR73 / 73.
     // Hidden when IDLE/CQ/DONE; shown during active exchange (WAIT_RPT/ROGER/RR73).
     {
-        const int bw = 91, bh = 44, gap = 3, by = 540;
+        const int bw = 91, bh = 44, gap = 3, by = 560;
         struct { const char *lbl; uint32_t col; lv_event_cb_t cb; lv_obj_t **ptr; } btns[] = {
             { "Re-send", 0x604010, override_resend_cb, &s_btn_override_resend },
             { "RR73",    0x1a5090, override_rr73_cb,   &s_btn_override_rr73   },
@@ -1353,6 +1412,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
             lv_obj_center(l);
             lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
             *btns[j].ptr = b;
+            if (j == 0) s_lbl_resend = l;
         }
     }
 

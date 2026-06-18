@@ -5,11 +5,18 @@
 #ifndef FT8_TEST_H
 #define FT8_TEST_H
 
+#include <stdbool.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 void ft8_self_test(void);
+
+// Returns the clock timing error (ms) measured from the strongest FT8 candidate
+// in the last successfully decoded slot. Positive = system clock is fast.
+// Returns false if no valid measurement is available yet.
+bool ft8_get_last_timing_ms(int *out_ms);
 
 #ifdef __cplusplus
 }

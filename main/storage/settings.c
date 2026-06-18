@@ -39,6 +39,7 @@ static const char *TAG = "settings";
 #define KEY_ONBOARDED  "onboarded"
 #define KEY_FT8_FILT   "ft8_filt"
 #define KEY_WIFI_ENABLED "wifi_en"
+#define KEY_QMX_GPS      "qmx_gps"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -83,6 +84,7 @@ static const char *TAG = "settings";
 #define DIRTY_ONBOARDED    (1u << 22)
 #define DIRTY_FT8_FILT     (1u << 23)
 #define DIRTY_WIFI_ENABLED (1u << 24)
+#define DIRTY_QMX_GPS      (1u << 25)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -183,6 +185,7 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_ONBOARDED)  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap.onboarded ? 1 : 0);
         if (dirty_local & DIRTY_FT8_FILT)     nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap.ft8_filters, sizeof(snap.ft8_filters));
         if (dirty_local & DIRTY_WIFI_ENABLED) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap.wifi_enabled ? 1 : 0);
+        if (dirty_local & DIRTY_QMX_GPS)      nvs_set_u8(s_nvs, KEY_QMX_GPS,      snap.qmx_gps      ? 1 : 0);
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
@@ -259,6 +262,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->diag_log = false;
     out->onboarded = false;
     out->wifi_enabled = DEF_WIFI_ENABLED;
+    out->qmx_gps = false;
     memset(&out->ft8_filters, 0, sizeof(out->ft8_filters));
 
     if (!s_ready) {
@@ -308,6 +312,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_DIAG_LOG,    &u8v) == ESP_OK) out->diag_log    = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_ONBOARDED,  &u8v) == ESP_OK) out->onboarded  = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_WIFI_ENABLED, &u8v) == ESP_OK) out->wifi_enabled = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_QMX_GPS,      &u8v) == ESP_OK) out->qmx_gps      = (u8v != 0);
 
     sz = sizeof(out->ft8_filters);
     nvs_get_blob(s_nvs, KEY_FT8_FILT, &out->ft8_filters, &sz);
@@ -624,4 +629,13 @@ void settings_set_wifi_enabled(bool v)
     s_pending.wifi_enabled = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_WIFI_ENABLED);
+}
+
+void settings_set_qmx_gps(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_pending.qmx_gps = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_QMX_GPS);
 }

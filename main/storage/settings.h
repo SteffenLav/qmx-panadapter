@@ -48,6 +48,7 @@ typedef struct {
     bool     diag_log;         // diagnostic comms logging on/off (default false)
     bool     onboarded;        // first-boot WiFi/identity prompts shown (default false)
     bool     wifi_enabled;     // initiate WiFi at boot (default true)
+    bool     qmx_gps;         // QMX/QMX+ has GPS discipline — skip Tab5→QMX time push
     ft8_filters_t ft8_filters;        // CQ-run reply include/exclude filters
 } qmx_settings_t;
 
@@ -104,6 +105,11 @@ void settings_set_ft8_filters(const ft8_filters_t *f);
 // idle at boot even if credentials are stored; the user can re-enable from
 // the settings drawer.
 void settings_set_wifi_enabled(bool v);
+
+// QMX/QMX+ GPS discipline flag (debounced flush). When true the Tab5 will
+// NOT push its clock to the QMX after a sync, because the GPS is more
+// accurate than anything the Tab5 has (SNTP, FT8, manual).
+void settings_set_qmx_gps(bool v);
 
 // QMX IF offset calibration trim (Hz). Per-unit oscillator variance shifts
 // the +12 kHz IF injection; this trim corrects what users see on the spectrum/

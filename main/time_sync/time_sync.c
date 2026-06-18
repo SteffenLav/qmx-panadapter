@@ -22,12 +22,39 @@ static const char *TAG = "time_sync";
 #define SNTP_FRESH_MS  (10LL * 60 * 1000)
 
 // Timestamps of the last accepted sync from each source; 0 = never.
-static int64_t s_last_qmx_sync_ms  = 0;
-static int64_t s_last_sntp_sync_ms = 0;
+static int64_t           s_last_qmx_sync_ms  = 0;
+static int64_t           s_last_sntp_sync_ms = 0;
+static time_sync_source_t s_source           = TIME_SOURCE_NONE;
+
+time_sync_source_t time_sync_get_source(void) { return s_source; }
 
 static bool epoch_is_sane(int64_t t)
 {
     return t > EPOCH_SANE_MIN && t < EPOCH_SANE_MAX;
+}
+
+// Push UTC time-of-day to the QMX's onboard RTC so it stays in sync for
+// no-WiFi (POTA) sessions. Skipped when the QMX has GPS discipline (it has
+// better time than anything the Tab5 carries). Never called when the QMX is
+// the *source* of the sync — only when Tab5 has a better clock.
+static void push_to_qmx(time_t utc)
+{
+    if (!cat_is_ready()) return;
+    qmx_settings_t cfg;
+    settings_load_all(&cfg);
+    if (cfg.qmx_gps) {
+        ESP_LOGD(TAG, "QMX GPS flag set — skipping Tab5→QMX time push");
+        return;
+    }
+    struct tm tm_utc;
+    gmtime_r(&utc, &tm_utc);
+    esp_err_t err = cat_set_qmx_time(tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "Tab5→QMX time push failed: 0x%x", err);
+    } else {
+        ESP_LOGI(TAG, "Tab5→QMX time push: %02d:%02d:%02d UTC",
+                 tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec);
+    }
 }
 
 // Return a date anchor (UTC epoch of some recent day) from the best available
@@ -88,6 +115,8 @@ void time_sync_notify_sntp(time_t utc)
 {
     apply_and_persist(utc, "SNTP");
     s_last_sntp_sync_ms = esp_timer_get_time() / 1000;
+    s_source = TIME_SOURCE_SNTP;
+    push_to_qmx(utc);
 }
 
 // Priority 3: QMX TM; time-of-day — offline fallback only.
@@ -115,6 +144,23 @@ void time_sync_notify_qmx(int h, int m, int s)
     }
 
     apply_and_persist(utc, "QMX");
+    s_source = TIME_SOURCE_QMX;
+}
+
+// FT8-signal-derived correction. delta_ms > 0 means clock is fast.
+void time_sync_apply_correction_ms(int delta_ms)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    int64_t us = (int64_t)tv.tv_sec * 1000000LL + tv.tv_usec - (int64_t)delta_ms * 1000LL;
+    tv.tv_sec  = (time_t)(us / 1000000LL);
+    tv.tv_usec = (suseconds_t)(us % 1000000LL);
+    if (tv.tv_usec < 0) { tv.tv_sec--; tv.tv_usec += 1000000; }
+    settimeofday(&tv, NULL);
+    write_to_rtc_and_nvs(tv.tv_sec, "FT8");
+    s_source = TIME_SOURCE_FT8;
+    ESP_LOGI(TAG, "FT8 timing correction: %+d ms", delta_ms);
+    push_to_qmx(tv.tv_sec);
 }
 
 // Priority 5 (last resort): manual entry from user (rare POTA offline use).
@@ -136,6 +182,23 @@ void time_sync_set_manual(int year, int mon, int mday, int h, int m, int s)
         return;
     }
     apply_and_persist(utc, "manual");
+    s_source = TIME_SOURCE_MANUAL;
+    push_to_qmx(utc);
+}
+
+void time_sync_mark_ft8(void)
+{
+    s_source = TIME_SOURCE_FT8;
+}
+
+void time_sync_mark_qmx(void)
+{
+    s_source = TIME_SOURCE_QMX;
+}
+
+void time_sync_push_to_qmx(void)
+{
+    push_to_qmx(time(NULL));
 }
 
 // Background task: initial QMX sync at CAT connect, then every 5 minutes.
@@ -153,6 +216,9 @@ static void time_sync_task(void *arg)
     }
 
     if (cat_is_ready()) {
+        // Push Tab5 clock → QMX on first connect so QMX RTC is correct from the start.
+        push_to_qmx(time(NULL));
+
         int h, m, s;
         if (cat_query_qmx_time(&h, &m, &s) == ESP_OK) {
             time_sync_notify_qmx(h, m, s);
@@ -180,7 +246,9 @@ void time_sync_init(i2c_master_bus_handle_t bus)
     if (rtc_init(bus) != ESP_OK) {
         ESP_LOGW(TAG, "RTC init failed — supercap RTC not available");
     } else if (rtc_is_valid()) {
-        if (!rtc_apply_to_system()) {
+        if (rtc_apply_to_system()) {
+            s_source = TIME_SOURCE_RTC;
+        } else {
             ESP_LOGW(TAG, "RTC read failed despite valid flag");
         }
     } else {

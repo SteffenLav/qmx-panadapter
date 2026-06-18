@@ -221,7 +221,9 @@ Do not call `AI1;` on the QMX CAT port — it partially executes (enables auto-i
 
 ### Touch-drag row selection (ft8_screen_view.c)
 
-- `ROW_HOLD_SELECT_MS = 400` — finger must be held ≥ 400 ms before selection mode activates.
+- `ROW_PREVIEW_MS = 80` — dim highlight appears after 80 ms so user sees which row is targeted.
+- `ROW_HOLD_SELECT_MS = 250` — finger held ≥ 250 ms enters full selection mode (scroll locks, drag moves highlight).
+- `ROW_SCROLL_CANCEL_PX = 20` — movement beyond 20 px before the gate fires cancels selection (generous for field/glove use).
 - On threshold crossing: `lv_obj_clear_flag(s_list, LV_OBJ_FLAG_SCROLLABLE)` locks list scroll so drag moves the highlight rather than scrolling.
 - On `RELEASED` or `PRESS_LOST`: `lv_obj_add_flag(s_list, LV_OBJ_FLAG_SCROLLABLE)` restores scroll unconditionally.
 - `screen_y_to_row(abs_y)`: maps absolute screen Y to row index accounting for `s_list` coords and `lv_obj_get_scroll_y()`.

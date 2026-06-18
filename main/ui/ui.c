@@ -1710,8 +1710,9 @@ static void build_bottom_bar(lv_obj_t *parent)
         const lv_font_t *font = &lv_font_montserrat_24;
         const lv_coord_t cell_w = 15;
         const lv_coord_t clock_w = 7 * cell_w;  // 6 digit cells + 2 half-width colon cells
-        const char *suffix = " UTC";
-        lv_coord_t suffix_w = lv_txt_get_width(suffix, strlen(suffix), font, 0);
+        // Size x0 using the widest suffix so the clock stays centered when NTP is active.
+        const char *sizing_suffix = " UTC(NTP)";
+        lv_coord_t suffix_w = lv_txt_get_width(sizing_suffix, strlen(sizing_suffix), font, 0);
         lv_coord_t total_w = clock_w + suffix_w;
         lv_coord_t x0 = (DISPLAY_H_RES - total_w) / 2;
 
@@ -1719,7 +1720,7 @@ static void build_bottom_bar(lv_obj_t *parent)
         s_bot_clock_valid = true;
 
         s_bot_center_suffix = lv_label_create(bar);
-        lv_label_set_text(s_bot_center_suffix, suffix);
+        lv_label_set_text(s_bot_center_suffix, " UTC");  // updated each second by status_task
         lv_obj_set_style_text_color(s_bot_center_suffix, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
         lv_obj_set_style_text_font(s_bot_center_suffix, font, 0);
         lv_obj_align(s_bot_center_suffix, LV_ALIGN_LEFT_MID, x0 + clock_w, 0);
@@ -2627,7 +2628,7 @@ void ui_set_bottom_version(const char *text)
     }
 }
 
-void ui_set_bottom_clock(int h, int m, int s, bool valid)
+void ui_set_bottom_clock(int h, int m, int s, bool valid, const char *suffix)
 {
     if (!s_bot_clock_valid) return;
     if (display_lock(20)) {
@@ -2641,6 +2642,8 @@ void ui_set_bottom_clock(int h, int m, int s, bool valid)
             lv_label_set_text(s_bot_clock.cells[6], "-");
             lv_label_set_text(s_bot_clock.cells[7], "-");
         }
+        if (s_bot_center_suffix && suffix)
+            lv_label_set_text(s_bot_center_suffix, suffix);
         display_unlock();
     }
 }
@@ -3614,6 +3617,7 @@ static void drawer_switch_wifi_en_cb(lv_event_t *e)
     settings_set_wifi_enabled(on);
     ESP_LOGI(TAG, "WiFi boot-initiation: %s", on ? "ON" : "OFF");
 }
+
 
 static void drawer_preset_normal_cb(lv_event_t *e)  { (void)e; drawer_apply_preset(-130, -30, 0.40f); }
 static void drawer_preset_dx_cb(lv_event_t *e)      { (void)e; drawer_apply_preset(-130, -50, 0.60f); }

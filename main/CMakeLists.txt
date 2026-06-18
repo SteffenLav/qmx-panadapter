@@ -14,6 +14,7 @@ idf_component_register(
         "ui/ft8_tx_modal.c"
         "ui/ft8_cq_modal.c"
         "ui/ft8_filter_modal.c"
+        "ui/ft8_time_modal.c"
         "util/status.c"
         "util/maidenhead.c"
         "util/dxcc.c"

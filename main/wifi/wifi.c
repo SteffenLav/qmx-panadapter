@@ -19,7 +19,6 @@
 #include "bsp/esp-bsp.h"
 #include "webserver.h"
 #include "rigctld_server.h"
-#include "cat.h"
 #include "time_sync.h"
 
 static const char *TAG = "wifi";
@@ -66,17 +65,9 @@ static void sntp_sync_cb(struct timeval *tv)
              tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec);
     xEventGroupSetBits(s_events, BIT_TIME_OK);
 
-    // Write to the Tab5 supercap RTC, persist NVS anchor, update system clock.
+    // Write to the Tab5 supercap RTC, persist NVS anchor, update system clock,
+    // and push to QMX (unless QMX GPS flag is set).
     time_sync_notify_sntp(tv->tv_sec);
-
-    // Push UTC time-of-day to the QMX's onboard RTC so it stays correct
-    // for later no-WiFi (POTA) sessions.
-    if (cat_is_ready()) {
-        esp_err_t err = cat_set_qmx_time(tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec);
-        if (err != ESP_OK) {
-            ESP_LOGW(TAG, "Failed to push time to QMX RTC: 0x%x", err);
-        }
-    }
 }
 
 // Event handlers -------------------------------------------------------
@@ -132,6 +123,33 @@ static void on_ip_event(void *arg, esp_event_base_t base,
     }
 }
 
+// Ensure the STA netif exists exactly once before calling esp_wifi_start().
+//
+// On newer ESP-Hosted / C6 firmware the hosted layer auto-creates WIFI_STA_DEF
+// and registers the default STA event handler when the SDIO link comes up
+// (~1.4 s after wifi_task starts).  If we call esp_netif_create_default_wifi_sta()
+// before that, we end up with TWO copies of the default handler; the second
+// copy then calls esp_netif_start() on an already-started netif the next time
+// WIFI_EVENT_STA_START fires → lwip netif_add() assert → crash.
+//
+// The guard check must therefore run AFTER the C6 link is established, not at
+// task-init time (which is too early).  We poll for up to ~2 s: on new firmware
+// the auto-create appears within 1-2 s; on old firmware nothing auto-creates
+// so we fall through and create the netif ourselves.
+static void ensure_sta_netif(void)
+{
+    for (int i = 0; i < 20 && esp_netif_get_handle_from_ifkey("WIFI_STA_DEF") == NULL; i++) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    s_sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (s_sta_netif == NULL) {
+        s_sta_netif = esp_netif_create_default_wifi_sta();
+        ESP_LOGI(TAG, "STA netif created (ESP-Hosted did not auto-create)");
+    } else {
+        ESP_LOGI(TAG, "STA netif auto-created by ESP-Hosted; reusing");
+    }
+}
+
 // Init runs in its own task so app_main is not blocked --------------
 static void wifi_task(void *arg)
 {
@@ -153,22 +171,6 @@ static void wifi_task(void *arg)
     // ESP-IDF core init (event loop, default STA netif).
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-
-    // Boot-loop fix (newer M5Stack Tab5 / C6 firmware): on newer ESP-Hosted
-    // builds the hosted layer auto-creates the default "WIFI_STA_DEF" netif and
-    // registers the default STA event handlers once the C6 link comes up.
-    // Calling esp_netif_create_default_wifi_sta() again then registers a SECOND
-    // copy of wifi_default_action_sta_start, so a single WIFI_EVENT_STA_START
-    // runs the start action twice -> esp_netif_start_api() (no double-add guard)
-    // -> lwip netif_add() asserts "netif already added" (netif.c:420) -> panic
-    // and endless reboot. Older C6 firmware doesn't auto-create, so this never
-    // bit on the dev bench. Only create the netif if one isn't already present.
-    s_sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (s_sta_netif == NULL) {
-        s_sta_netif = esp_netif_create_default_wifi_sta();
-    } else {
-        ESP_LOGW(TAG, "STA netif already exists (ESP-Hosted auto-created); reusing");
-    }
 
     wifi_init_config_t wcfg = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&wcfg));
@@ -202,6 +204,7 @@ static void wifi_task(void *arg)
     // credentials in the settings drawer.
     if (s_ssid[0] != '\0' && cfg.wifi_enabled) {
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_cfg));
+        ensure_sta_netif();
         ESP_ERROR_CHECK(esp_wifi_start());
         s_wifi_started = true;
     } else if (s_ssid[0] != '\0') {
@@ -313,6 +316,7 @@ void panadapter_wifi_reconnect(const char *ssid, const char *pass)
         // left idle). Bring it up now; esp_wifi_start() raises STA_START and
         // the event handler issues the connect.
         ESP_LOGI(TAG, "starting WiFi for the first time this boot");
+        ensure_sta_netif();
         ESP_ERROR_CHECK(esp_wifi_start());
         s_wifi_started = true;
     } else {

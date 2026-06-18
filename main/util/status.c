@@ -1,6 +1,7 @@
 #include "status.h"
 #include "battery.h"
 #include "wifi.h"
+#include "time_sync.h"
 #include <stdio.h>
 #include <stdbool.h>
 #include <time.h>
@@ -75,11 +76,21 @@ static void status_task(void *arg)
         }
         const char *batt_icon = (level < 0) ? LV_SYMBOL_BATTERY_EMPTY : battery_glyph(level);
 
-        // --- CENTER: UTC time HH:MM:SS ---
+        // --- CENTER: UTC time HH:MM:SS + time-source indicator ---
         time_t now = time(NULL);
         struct tm tm_utc;
         gmtime_r(&now, &tm_utc);
-        bool time_valid = tm_utc.tm_year > 100;  // sane only after SNTP sync (year > 2000)
+        bool time_valid = tm_utc.tm_year > 100;  // sane only after sync (year > 2000)
+
+        const char *clk_suffix;
+        switch (time_sync_get_source()) {
+            case TIME_SOURCE_SNTP:   clk_suffix = " UTC(NTP)"; break;
+            case TIME_SOURCE_QMX:    clk_suffix = " UTC(QMX)"; break;
+            case TIME_SOURCE_RTC:    clk_suffix = " UTC(RTC)"; break;
+            case TIME_SOURCE_MANUAL: clk_suffix = " UTC(MAN)"; break;
+            case TIME_SOURCE_FT8:    clk_suffix = " UTC(FT8)"; break;
+            default:                 clk_suffix = " UTC";      break;
+        }
 
         // --- RIGHT: WiFi symbol + SSID, then jitter-free RSSI, then "dBm  IP" ---
         const char *ssid = wifi_get_ssid();
@@ -111,7 +122,7 @@ static void status_task(void *arg)
                 ui_set_bottom_battery(batt_icon, battery_color(level), left);
             }
         }
-        ui_set_bottom_clock(tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec, time_valid);
+        ui_set_bottom_clock(tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec, time_valid, clk_suffix);
         ui_set_bottom_wifi(ssid_buf, show_rssi, rssi, suffix_buf);
     }
 }

@@ -742,6 +742,18 @@ void ft8_qso_get_target(char *buf, size_t len)
     unlock();
 }
 
+void ft8_qso_get_cur_extra(char *buf, size_t len)
+{
+    if (!buf || !len) return;
+    lock();
+    if (s_have_cur && s_cur_req.extra_field[0])
+        strncpy(buf, s_cur_req.extra_field, len - 1);
+    else
+        buf[0] = '\0';
+    buf[len - 1] = '\0';
+    unlock();
+}
+
 bool ft8_qso_cq_filter_active(void)
 {
     lock();

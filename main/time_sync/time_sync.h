@@ -2,6 +2,19 @@
 #include <time.h>
 #include "driver/i2c_master.h"
 
+// Which source last disciplined the system clock.
+typedef enum {
+    TIME_SOURCE_NONE,    // no sync yet (boot state)
+    TIME_SOURCE_RTC,     // Tab5 RX8130CE supercap RTC
+    TIME_SOURCE_QMX,     // QMX TM; (offline / POTA fallback)
+    TIME_SOURCE_SNTP,    // internet NTP via WiFi
+    TIME_SOURCE_MANUAL,  // manual entry
+    TIME_SOURCE_FT8,     // derived from FT8 signal timing (sub-second precision)
+} time_sync_source_t;
+
+// Returns the source that last applied a time update.
+time_sync_source_t time_sync_get_source(void);
+
 // Global time-sync orchestrator.
 //
 // Sync priorities (highest first):
@@ -35,3 +48,21 @@ void time_sync_notify_qmx(int h, int m, int s);
 // Priority 5: manual override — full UTC date+time. For rare POTA sessions where
 // QMX has no GPS and WiFi is unavailable.
 void time_sync_set_manual(int year, int mon, int mday, int h, int m, int s);
+
+// Apply a sub-second correction derived from FT8 signal timing.
+// delta_ms > 0: system clock is fast by that many ms (time is subtracted).
+// delta_ms < 0: system clock is slow (time is added). Writes through to RTC+NVS.
+void time_sync_apply_correction_ms(int delta_ms);
+
+// Mark the time source as FT8 without changing the clock value.
+void time_sync_mark_ft8(void);
+
+// Mark the time source as QMX without changing the clock value.
+void time_sync_mark_qmx(void);
+
+// Push the current system clock to the QMX's onboard RTC right now.
+// Respects the qmx_gps NVS flag — no-op when GPS discipline is active.
+// Call whenever the Tab5 has a good time and the QMX should be updated
+// (e.g. after the "Set and Sync" modal saves in NTP mode, where the
+// system clock itself did not change so push_to_qmx wasn't triggered).
+void time_sync_push_to_qmx(void);

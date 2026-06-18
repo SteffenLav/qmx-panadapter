@@ -75,6 +75,9 @@ bool ft8_qso_override_next(ft8_tx_kind_t kind, char *err, size_t err_len);
 
 ft8_qso_state_t ft8_qso_get_state(void);
 void            ft8_qso_get_target(char *buf, size_t len);
+// Extra field of the current outgoing message (grid / report / R-report / RR73 / 73).
+// Empty string when IDLE or no message is armed.
+void            ft8_qso_get_cur_extra(char *buf, size_t len);
 
 // True while a CQ-originated session is active (calling CQ or working the
 // station that answered). The decode-list UI uses this to hide other stations'
