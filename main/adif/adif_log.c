@@ -228,6 +228,33 @@ bool adif_log_contains_call(const char *call)
     return found;
 }
 
+bool adif_log_get_record(int idx, char *out, size_t out_sz)
+{
+    if (!s_mounted || idx < 0 || !out || out_sz == 0) return false;
+
+    FILE *f = fopen(FILE_PATH, "r");
+    if (!f) return false;
+
+    char line[1024];
+    bool found = false;
+    int  rec_idx = -1;  // -1 = header line not yet consumed
+    while (fgets(line, sizeof(line), f)) {
+        if (rec_idx < 0) { rec_idx = 0; continue; }  // skip the <EOH> header line
+        if (rec_idx == idx) {
+            size_t len = strlen(line);
+            while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = '\0';
+            strncpy(out, line, out_sz - 1);
+            out[out_sz - 1] = '\0';
+            found = true;
+            break;
+        }
+        rec_idx++;
+    }
+
+    fclose(f);
+    return found;
+}
+
 void adif_log_clear(void)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);

@@ -40,6 +40,8 @@ idf_component_register(
         "ft8_status.c"
         "ft8_qso.c"
         "adif/adif_log.c"
+        "adif/qrz_upload.c"
+        "adif/eqsl_upload.c"
         "rtc/rtc.c"
         "time_sync/time_sync.c"
     INCLUDE_DIRS
@@ -75,6 +77,8 @@ idf_component_register(
         esp_event
         lwip
         esp_http_server
+        esp_http_client
+        mbedtls
         json
         ft8_lib
         spiffs

@@ -14,6 +14,9 @@
 #include "screenshot/screenshot.h"  // screenshot_capture_rgb565
 #include "diag_log.h"         // diag_log_size / diag_log_snapshot
 #include "adif/adif_log.h"    // adif_log_count / adif_log_file_path / adif_log_clear
+#include "adif/qrz_upload.h"  // qrz_upload_pending
+#include "adif/eqsl_upload.h" // eqsl_upload_pending
+#include "settings.h"          // settings_load_all / settings_set_qrz_api_key
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
 #include <string.h>
@@ -81,6 +84,12 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddBoolToObject  (root, "flat_mode",   ui_get_flat_mode());
     cJSON_AddNumberToObject(root, "utc_epoch",   (double)time(NULL));
     cJSON_AddNumberToObject(root, "qso_count",   (double)adif_log_count());
+    {
+        qmx_settings_t cfg;
+        settings_load_all(&cfg);
+        cJSON_AddBoolToObject(root, "qrz_key_set", cfg.qrz_api_key[0] != '\0');
+        cJSON_AddBoolToObject(root, "eqsl_creds_set", cfg.eqsl_user[0] != '\0' && cfg.eqsl_pswd[0] != '\0');
+    }
     const esp_app_desc_t *app = esp_app_get_description();
     cJSON_AddStringToObject(root, "tab5_fw",     app ? app->version : "");
 
@@ -289,6 +298,112 @@ static const httpd_uri_t uri_adif_clear = {
     .uri = "/api/adif/clear", .method = HTTP_POST, .handler = adif_clear_handler,
 };
 
+// POST /api/qrz_key — body is the raw API key text (no JSON wrapper, the web
+// UI just sends the plain key string from a prompt()).
+static esp_err_t qrz_key_handler(httpd_req_t *req)
+{
+    char buf[48];
+    int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (len < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body");
+        return ESP_FAIL;
+    }
+    buf[len] = '\0';
+    settings_set_qrz_api_key(buf);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+// POST /api/qrz_upload — uploads every ADIF record logged since the last
+// successful QRZ upload. Blocks on the network for the whole batch (this
+// handler runs on the httpd worker task, not the LVGL thread, so it's safe
+// to block here).
+static esp_err_t qrz_upload_handler(httpd_req_t *req)
+{
+    qrz_upload_result_t result;
+    qrz_upload_pending(&result);
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return httpd_resp_send_500(req);
+    cJSON_AddNumberToObject(root, "uploaded", result.uploaded);
+    cJSON_AddNumberToObject(root, "failed",   result.failed);
+    cJSON_AddStringToObject(root, "error",    result.error);
+
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) return httpd_resp_send_500(req);
+
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_send(req, out, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(out);
+    return err;
+}
+
+static const httpd_uri_t uri_qrz_key = {
+    .uri = "/api/qrz_key", .method = HTTP_POST, .handler = qrz_key_handler,
+};
+static const httpd_uri_t uri_qrz_upload = {
+    .uri = "/api/qrz_upload", .method = HTTP_POST, .handler = qrz_upload_handler,
+};
+
+// POST /api/eqsl_creds — JSON body {"user":"...","pswd":"..."}. eQSL has no
+// API-key scheme, so unlike QRZ this needs two fields.
+static esp_err_t eqsl_creds_handler(httpd_req_t *req)
+{
+    char buf[160];
+    int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (len < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body");
+        return ESP_FAIL;
+    }
+    buf[len] = '\0';
+
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad json");
+        return ESP_FAIL;
+    }
+    const char *user = cJSON_GetStringValue(cJSON_GetObjectItem(root, "user"));
+    const char *pswd = cJSON_GetStringValue(cJSON_GetObjectItem(root, "pswd"));
+    settings_set_eqsl_user(user);
+    settings_set_eqsl_pswd(pswd);
+    cJSON_Delete(root);
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+// POST /api/eqsl_upload — uploads every ADIF record logged since the last
+// successful eQSL upload, in batches. Blocks on the network for the whole
+// run (httpd worker task, not the LVGL thread - safe to block here).
+static esp_err_t eqsl_upload_handler(httpd_req_t *req)
+{
+    eqsl_upload_result_t result;
+    eqsl_upload_pending(&result);
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return httpd_resp_send_500(req);
+    cJSON_AddNumberToObject(root, "uploaded", result.uploaded);
+    cJSON_AddNumberToObject(root, "failed",   result.failed);
+    cJSON_AddStringToObject(root, "error",    result.error);
+
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) return httpd_resp_send_500(req);
+
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_send(req, out, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(out);
+    return err;
+}
+
+static const httpd_uri_t uri_eqsl_creds = {
+    .uri = "/api/eqsl_creds", .method = HTTP_POST, .handler = eqsl_creds_handler,
+};
+static const httpd_uri_t uri_eqsl_upload = {
+    .uri = "/api/eqsl_upload", .method = HTTP_POST, .handler = eqsl_upload_handler,
+};
+
 static const httpd_uri_t uri_root = {
     .uri = "/", .method = HTTP_GET, .handler = root_handler,
 };
@@ -312,7 +427,7 @@ esp_err_t webserver_start(void)
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.server_port     = 80;
     config.stack_size      = 12288;
-    config.max_uri_handlers = 10;
+    config.max_uri_handlers = 14;
     config.lru_purge_enable = true;
 
     ESP_LOGI(TAG, "Starting HTTP server on port %d", config.server_port);
@@ -330,6 +445,10 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_log);
     httpd_register_uri_handler(s_server, &uri_adif_get);
     httpd_register_uri_handler(s_server, &uri_adif_clear);
+    httpd_register_uri_handler(s_server, &uri_qrz_key);
+    httpd_register_uri_handler(s_server, &uri_qrz_upload);
+    httpd_register_uri_handler(s_server, &uri_eqsl_creds);
+    httpd_register_uri_handler(s_server, &uri_eqsl_upload);
     webserver_ws_start(s_server);
 
     ESP_LOGI(TAG, "HTTP server started");

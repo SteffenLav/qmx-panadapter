@@ -1,6 +1,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>
 #include <time.h>
 
 // Completed QSO record passed to adif_log_record().
@@ -37,3 +38,9 @@ bool adif_log_contains_call(const char *call);
 
 // Erase all logged QSOs and reset the worked-call cache.
 void adif_log_clear(void);
+
+// Read the idx-th completed QSO record (0-based, in log order) as a single
+// ADIF line with no trailing newline. Returns false if idx is out of range
+// or the file can't be read. out must be sized generously - a record line
+// is normally well under 256 bytes.
+bool adif_log_get_record(int idx, char *out, size_t out_sz);

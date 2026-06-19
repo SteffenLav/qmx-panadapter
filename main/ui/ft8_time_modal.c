@@ -28,6 +28,7 @@
 #include <time.h>
 #include <sys/time.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <math.h>
 
 #include "esp_log.h"
@@ -73,6 +74,8 @@ static lv_obj_t   *s_lbl_ss   = NULL;
 static lv_obj_t   *s_hint_ss  = NULL;  // dynamic FT8 status below SS digits
 static lv_obj_t   *s_numpad   = NULL;
 static lv_timer_t *s_timer    = NULL;
+static lv_timer_t *s_flash_timer    = NULL;  // one-shot: reverts the SS flash
+static uint32_t    s_seen_timing_seq = 0;    // last ft8_get_timing_seq() we reacted to
 
 // ---------------------------------------------------------------------------
 // Colours
@@ -84,6 +87,8 @@ static lv_timer_t *s_timer    = NULL;
 #define BOX_BORDER_SS_FT8  0x1a5090   // SS FT8 sync (blue)
 #define BOX_BORDER_SS_NTP  0x1a7030   // SS NTP sync (green)
 #define BOX_BORDER_SS_QMX  0xb0b0b0   // SS QMX sync (white-ish)
+#define BOX_BORDER_SS_FLASH 0x60c0ff  // brief bright flash on a new FT8 sync
+#define SS_FLASH_MS         30        // flash duration
 
 static void refresh_box_styles(void)
 {
@@ -105,6 +110,28 @@ static void refresh_box_styles(void)
     lv_obj_set_style_border_color(s_box_ss, lv_color_hex(ss_border), 0);
     lv_obj_set_style_border_width(s_box_ss, 3, 0);
     lv_obj_set_style_text_color(s_lbl_ss, lv_color_hex(ss_digit), 0);
+}
+
+// One-shot timer callback: ends the brief "new sync" flash by restoring the
+// normal SS border. Deletes itself - lv_timer_create(..., SS_FLASH_MS, ...) has
+// no built-in one-shot mode, so we just don't reset the repeat count.
+static void flash_revert_cb(lv_timer_t *t)
+{
+    refresh_box_styles();
+    lv_timer_del(t);
+    s_flash_timer = NULL;
+}
+
+// Briefly widen/brighten the SS border to mark a new FT8 sync. Called from the
+// 1 Hz timer_cb when it notices ft8_get_timing_seq() advanced - the flash itself
+// only lasts SS_FLASH_MS, well under the polling period, so it reads as a quick
+// pulse rather than a state change.
+static void flash_ss_sync(void)
+{
+    if (s_flash_timer) { lv_timer_del(s_flash_timer); s_flash_timer = NULL; }
+    lv_obj_set_style_border_color(s_box_ss, lv_color_hex(BOX_BORDER_SS_FLASH), 0);
+    lv_obj_set_style_border_width(s_box_ss, 6, 0);
+    s_flash_timer = lv_timer_create(flash_revert_cb, SS_FLASH_MS, NULL);
 }
 
 static void update_box_label(int field)
@@ -252,6 +279,7 @@ static void ss_tap_cb(lv_event_t *e)
         // Back to FT8 — HH/MM revert to system clock on next timer tick
         s_ss_err_ms = 0;
         ft8_get_last_timing_ms(&s_ss_err_ms);
+        s_seen_timing_seq = ft8_get_timing_seq();  // don't flash for an old sync
     }
 
     refresh_box_styles();
@@ -365,16 +393,31 @@ static void timer_cb(lv_timer_t *t)
         if (s_ss_mode == SS_SYNC_FT8) {
             if (ft8_get_last_timing_ms(&err_ms)) s_ss_err_ms = err_ms;
             err_ms = s_ss_err_ms;
+
+            uint32_t seq = ft8_get_timing_seq();
+            if (seq != s_seen_timing_seq) {
+                s_seen_timing_seq = seq;
+                flash_ss_sync();
+            }
         }
-        int64_t corrected_ms = (int64_t)now * 1000LL - (int64_t)err_ms;
-        time_t corrected = (time_t)(corrected_ms / 1000LL);
+        // Sub-second precision matters here: time(NULL)/now above is truncated
+        // to whole seconds, so it's missing up to 999 ms of the real wall-clock
+        // fraction. Subtracting a precise err_ms from that truncated value can
+        // throw the result a full second off (e.g. real time 12.9s, now=12,
+        // err_ms=+700 -> 12000-700=11300 -> sec 11, when the true corrected
+        // second is 12). Use gettimeofday() for the microsecond-accurate "now"
+        // instead, matching what time_sync_apply_correction_ms does on Save.
+        struct timeval tv_now; gettimeofday(&tv_now, NULL);
+        int64_t now_us = (int64_t)tv_now.tv_sec * 1000000LL + tv_now.tv_usec;
+        int64_t corrected_us = now_us - (int64_t)err_ms * 1000LL;
+        time_t corrected = (time_t)(corrected_us / 1000000LL);
         struct tm tc; gmtime_r(&corrected, &tc);
         s_ss_display = tc.tm_sec;
         char b[4]; snprintf(b, sizeof(b), "%02d", s_ss_display);
         lv_label_set_text(s_lbl_ss, b);
 
         lv_label_set_text(s_hint_ss,
-            s_ss_mode == SS_SYNC_FT8 ? "SS  now syncing..." : "SS  NTP sync");
+            s_ss_mode == SS_SYNC_FT8 ? "Flash: FT8 synced..." : "SS  NTP sync");
     }
 }
 
@@ -568,7 +611,7 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_lbl_ss, &lv_font_montserrat_48, 0);
     lv_obj_align(s_lbl_ss, LV_ALIGN_CENTER, 0, -12);
     s_hint_ss = lv_label_create(s_box_ss);
-    lv_label_set_text(s_hint_ss, "SS  now syncing...");
+    lv_label_set_text(s_hint_ss, "Flash: FT8 synced...");
     lv_obj_set_style_text_color(s_hint_ss, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(s_hint_ss, &lv_font_montserrat_18, 0);
     lv_obj_align(s_hint_ss, LV_ALIGN_BOTTOM_MID, 0, -6);
@@ -608,7 +651,12 @@ static void modal_build(void)
 
     build_numpad(s_panel);
 
-    s_timer = lv_timer_create(timer_cb, 1000, NULL);
+    // 200ms, not 1000ms: timer_cb is idempotent (just recomputes from the live
+    // clock + last measurement each call), and polling 5x/sec instead of 1x/sec
+    // cuts up to 800ms off how long a freshly-landed FT8 sync takes to show up
+    // as the SS flash. The remaining latency is the decode pipeline itself
+    // (full 15s slot capture, then ~1-3s decode) - structural, not fixable here.
+    s_timer = lv_timer_create(timer_cb, 200, NULL);
     lv_timer_pause(s_timer);
 }
 
@@ -634,12 +682,13 @@ void ft8_time_modal_show(void)
     s_ss_display = tm.tm_sec;
     s_ss_err_ms  = 0;
     ft8_get_last_timing_ms(&s_ss_err_ms);
+    s_seen_timing_seq = ft8_get_timing_seq();  // don't flash for an old sync
 
     char b[4];
     snprintf(b, sizeof(b), "%02d", s_hh_val);    lv_label_set_text(s_lbl_hh, b);
     snprintf(b, sizeof(b), "%02d", s_mm_val);    lv_label_set_text(s_lbl_mm, b);
     snprintf(b, sizeof(b), "%02d", s_ss_display); lv_label_set_text(s_lbl_ss, b);
-    lv_label_set_text(s_hint_ss, "SS  now syncing...");
+    lv_label_set_text(s_hint_ss, "Flash: FT8 synced...");
 
     lv_obj_add_flag(s_numpad, LV_OBJ_FLAG_HIDDEN);
     refresh_box_styles();

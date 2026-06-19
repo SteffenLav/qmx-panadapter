@@ -118,14 +118,23 @@ static volatile bool  s_ft8_running  = false;
 // Timing error from the last decoded slot: positive = system clock is fast.
 // Written by ft8_decode_task; read by the LVGL UI (ft8_time_modal).
 // volatile int is sufficient — single writer, single reader, display hint only.
-static volatile int  s_last_timing_ms    = 0;
-static volatile bool s_last_timing_valid = false;
+static volatile int      s_last_timing_ms    = 0;
+static volatile bool     s_last_timing_valid = false;
+// Bumped every time s_last_timing_ms is updated from a genuine decode, so
+// the UI can detect "a new sync just happened" even though it polls at 1 Hz
+// while decodes land roughly every 15 s.
+static volatile uint32_t s_timing_seq        = 0;
 
 bool ft8_get_last_timing_ms(int *out_ms)
 {
     if (!s_last_timing_valid) return false;
     *out_ms = s_last_timing_ms;
     return true;
+}
+
+uint32_t ft8_get_timing_seq(void)
+{
+    return s_timing_seq;
 }
 
 // Capture buffer pool. Allocated in ft8_task. A buffer is owned by capture
@@ -251,6 +260,44 @@ static float ft8_estimate_noise_db(const monitor_t *mon)
     return 10.0f * log10f((float)(noise_pwr_sum / total));
 }
 
+// Max FT8 candidates considered per slot (matches the cands[] buffer in
+// decode_slot) - also the upper bound on the timing-sample array.
+#define FT8_MAX_CANDIDATES    140
+
+// Timing samples within this many ms of the median are treated as "in sync"
+// and averaged; anything further out is a false sync / mis-decode outlier and
+// is dropped. 60 ms is a bit under half an FT8 symbol period (160 ms), wide
+// enough to cover normal propagation/clock jitter between genuine stations
+// while still rejecting a sync hit that landed on the wrong symbol entirely.
+#define FT8_TIMING_OUTLIER_MS 60.0f
+
+// Robust average of per-candidate timing samples: sorts a (small) working
+// copy, takes the median, then means only the samples within
+// FT8_TIMING_OUTLIER_MS of it. A single false-decode outlier no longer
+// swings the result - that was the cause of the "SS run-away" in the
+// time-sync modal, since one bad sample would sit there (held until the next
+// decode) looking like a wild jump.
+static float robust_mean_timing_ms(float *vals, int n)
+{
+    for (int i = 1; i < n; i++) {
+        float key = vals[i];
+        int j = i - 1;
+        while (j >= 0 && vals[j] > key) { vals[j + 1] = vals[j]; j--; }
+        vals[j + 1] = key;
+    }
+    float median = (n % 2) ? vals[n / 2] : (vals[n / 2 - 1] + vals[n / 2]) * 0.5f;
+
+    double sum = 0;
+    int    cnt = 0;
+    for (int i = 0; i < n; i++) {
+        if (fabsf(vals[i] - median) <= FT8_TIMING_OUTLIER_MS) {
+            sum += vals[i];
+            cnt++;
+        }
+    }
+    return cnt > 0 ? (float)(sum / cnt) : median;
+}
+
 // Estimate a message's SNR (dB, 2500 Hz reference bandwidth) given the slot's
 // precomputed noise floor (see ft8_estimate_noise_db). Cheap: only the signal
 // loop over 79 symbol blocks × 8 tone bins at the candidate's alignment.
@@ -309,11 +356,17 @@ static void decode_slot(float *audio, monitor_t *mon,
     }
     int mon_ms = (int)((esp_timer_get_time() - t_start) / 1000);
 
-    ftx_candidate_t cands[140];
-    int n_cand = ftx_find_candidates(&mon->wf, 140, cands, 10);
+    ftx_candidate_t cands[FT8_MAX_CANDIDATES];
+    int n_cand = ftx_find_candidates(&mon->wf, FT8_MAX_CANDIDATES, cands, 10);
 
     int n_decoded = 0;
     int n_attempted = 0;
+    // One timing sample per successfully decoded candidate this slot (only
+    // candidates that survived LDPC + CRC are trustworthy as timing
+    // references - see robust_mean_timing_ms above for why cands[0]
+    // unconditionally was wrong).
+    float timing_ms_arr[FT8_MAX_CANDIDATES];
+    int   n_timing = 0;
     // Slot noise floor for SNR: computed once, lazily on the first decode, then
     // reused for every message in the slot. Lazy so 0-decode slots never pay
     // for it. (Hoisting this out of the per-message path is the core fix for the
@@ -336,6 +389,11 @@ static void decode_slot(float *audio, monitor_t *mon,
         ftx_message_offsets_t off;
         if (ftx_message_decode(&msg, NULL, text, &off) == FTX_MESSAGE_RC_OK) {
             n_decoded++;
+            // SR=12000, block_size=1920 samples/symbol, time_osr=2 → subblock=960
+            // samples. start_off_ms anchors this candidate's sync position back to
+            // the UTC slot boundary, same as every other candidate this slot.
+            timing_ms_arr[n_timing++] =
+                (float)start_off_ms + (cands[i].time_offset * 1920 + cands[i].time_sub * 960) / 12.0f;
             if (!noise_valid) { slot_noise_db = ft8_estimate_noise_db(mon); noise_valid = true; }
             int snr_db = (int)lroundf(ft8_estimate_snr_db(mon, &cands[i], slot_noise_db));
             ESP_LOGI(TAG, "decoded: '%s' (score=%d freq_off=%d snr=%d)",
@@ -346,15 +404,16 @@ static void decode_slot(float *audio, monitor_t *mon,
     int n_skipped = n_cand - n_attempted;  // candidates left undecoded when the budget ran out
     int dec_ms = (int)((esp_timer_get_time() - t_start) / 1000) - mon_ms;
 
-    // Timing measurement: derive system-clock error from the strongest candidate's
-    // sync position. Only valid after at least one successful decode so we know
-    // the candidate is a genuine FT8 signal (not a false sync hit).
-    // SR=12000, block_size=1920 samples/symbol, time_osr=2 → subblock=960 samples.
-    // Positive result = clock is fast; negative = clock is slow.
-    if (n_decoded > 0 && n_cand > 0) {
-        float sig_ms = (cands[0].time_offset * 1920 + cands[0].time_sub * 960) / 12.0f;
-        s_last_timing_ms    = (int)roundf((float)start_off_ms + sig_ms);
+    // Timing measurement: derive system-clock error as a robust (outlier-
+    // rejecting) average across every candidate that decoded this slot, not
+    // just one. Genuine FT8 stations should all land within a symbol or so of
+    // each other once start_off_ms is backed out; averaging the agreeing
+    // majority smooths out per-station jitter and fully drops any one-off bad
+    // sync. Positive result = clock is fast; negative = clock is slow.
+    if (n_timing > 0) {
+        s_last_timing_ms    = (int)roundf(robust_mean_timing_ms(timing_ms_arr, n_timing));
         s_last_timing_valid = true;
+        s_timing_seq++;
     }
 
     size_t heap_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024;

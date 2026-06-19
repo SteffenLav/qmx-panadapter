@@ -624,12 +624,22 @@ static void update_row(int i, const ft8_call_t *src)
         }
         if (col != r->prev_color) {
             r->prev_color = col;
-            lv_color_t c = (col == 2) ? lv_palette_main(LV_PALETTE_RED)
+            // Own-call rows are inverted (red fill + white text) instead of plain
+            // red-on-black: field feedback (Ken KF0AYY, comparing against DXFT8)
+            // found plain red text on the dark background hard to read at a
+            // glance. Every other colour stays plain text on the row's normal
+            // black background.
+            bool inverted = (col == 2);
+            lv_color_t c = inverted     ? lv_color_white()
                          : (col == 3) ? lv_color_hex(0x808080)   /* worked: dim grey */
                          : (col == 1) ? lv_palette_main(LV_PALETTE_GREEN)
                          :              lv_color_white();
             lv_obj_set_style_text_color(r->l_call, c, 0);
             lv_obj_set_style_text_color(r->l_msg,  c, 0);
+            lv_obj_set_style_bg_color(r->l_call, lv_palette_main(LV_PALETTE_RED), 0);
+            lv_obj_set_style_bg_color(r->l_msg,  lv_palette_main(LV_PALETTE_RED), 0);
+            lv_obj_set_style_bg_opa(r->l_call, inverted ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+            lv_obj_set_style_bg_opa(r->l_msg,  inverted ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
         }
     }
     if (src->last_snr_db != r->prev_snr_db) {
@@ -871,10 +881,10 @@ static void t_clock_cb(lv_timer_t *t)
                     ft8_qso_get_cur_extra(extra, sizeof(extra));
                     if (extra[0]) {
                         lv_label_set_text_fmt(s_lbl_resend, "Re-send\n%s", extra);
-                        lv_obj_set_style_text_font(s_lbl_resend, &lv_font_montserrat_18, 0);
+                        lv_obj_set_style_text_font(s_lbl_resend, &lv_font_montserrat_20, 0);
                     } else {
                         lv_label_set_text(s_lbl_resend, "Re-send");
-                        lv_obj_set_style_text_font(s_lbl_resend, &lv_font_montserrat_20, 0);
+                        lv_obj_set_style_text_font(s_lbl_resend, &lv_font_montserrat_24, 0);
                     }
                     lv_obj_center(s_lbl_resend);
                 }
@@ -886,7 +896,7 @@ static void t_clock_cb(lv_timer_t *t)
                 // doesn't display stale content from the previous exchange.
                 if (s_lbl_resend) {
                     lv_label_set_text(s_lbl_resend, "Re-send");
-                    lv_obj_set_style_text_font(s_lbl_resend, &lv_font_montserrat_20, 0);
+                    lv_obj_set_style_text_font(s_lbl_resend, &lv_font_montserrat_24, 0);
                     lv_obj_center(s_lbl_resend);
                 }
                 lv_obj_add_flag(s_btn_override_resend, LV_OBJ_FLAG_HIDDEN);
@@ -1389,17 +1399,27 @@ void ft8_screen_view_init(lv_obj_t *parent)
 
     // Manual QSO override buttons — Re-send / RR73 / 73.
     // Hidden when IDLE/CQ/DONE; shown during active exchange (WAIT_RPT/ROGER/RR73).
+    // Sized to fill the left pane's full usable width (288px after padding)
+    // and given more height - the original 91x44 buttons were cramped for
+    // big-finger field use.
     {
-        const int bw = 91, bh = 44, gap = 3, by = 560;
-        struct { const char *lbl; uint32_t col; lv_event_cb_t cb; lv_obj_t **ptr; } btns[] = {
-            { "Re-send", 0x604010, override_resend_cb, &s_btn_override_resend },
-            { "RR73",    0x1a5090, override_rr73_cb,   &s_btn_override_rr73   },
-            { "73",      0x1e6028, override_73_cb,     &s_btn_override_73     },
+        // Re-send carries more text ("Re-send" + a second line like "JO45"/"-07")
+        // than RR73/73, so it gets 20% more width (110px vs the uniform 92px) and
+        // the other two shrink to 83px each - still sums to the full 288px pane
+        // width with the same 6px gaps: 110 + 6 + 83 + 6 + 83 = 288.
+        const int bh = 64, gap = 6, by = 540;
+        const int bw_resend = 110, bw_other = 83;
+        int x = 0;
+        struct { const char *lbl; uint32_t col; lv_event_cb_t cb; lv_obj_t **ptr; int w; } btns[] = {
+            { "Re-send", 0x604010, override_resend_cb, &s_btn_override_resend, bw_resend },
+            { "RR73",    0x1a5090, override_rr73_cb,   &s_btn_override_rr73,   bw_other  },
+            { "73",      0x1e6028, override_73_cb,     &s_btn_override_73,     bw_other  },
         };
         for (int j = 0; j < 3; j++) {
             lv_obj_t *b = lv_btn_create(s_left_pane);
-            lv_obj_set_size(b, bw, bh);
-            lv_obj_set_pos(b, j * (bw + gap), by);
+            lv_obj_set_size(b, btns[j].w, bh);
+            lv_obj_set_pos(b, x, by);
+            x += btns[j].w + gap;
             lv_obj_set_style_bg_color(b, lv_color_hex(btns[j].col), 0);
             lv_obj_set_style_radius(b, 4, 0);
             lv_obj_set_style_border_width(b, 0, 0);
@@ -1408,7 +1428,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
             lv_obj_t *l = lv_label_create(b);
             lv_label_set_text(l, btns[j].lbl);
             lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
-            lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+            lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
             lv_obj_center(l);
             lv_obj_add_flag(b, LV_OBJ_FLAG_HIDDEN);
             *btns[j].ptr = b;

@@ -10,7 +10,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Beta — v0.16.1.** FT8 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
+> **Beta — v0.16.2.** FT8 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
 
 ---
 
@@ -233,7 +233,7 @@ Open by swiping in from the right edge, or tapping the right grip handle. The dr
 
 With the Tab5 on WiFi, open `http://<tab5-ip>` in any modern browser. The IP is shown in the bottom status bar on the Tab5.
 
-The browser panadapter is a full-featured view in its own right — not just a window onto the Tab5. On a larger monitor you get more spectrum history, a bigger waterfall canvas, and mouse controls that are faster than touch for precise tuning. It shows live spectrum at ≈10 fps via WebSocket, full waterfall history (~50 s), the same thermal palette and floor maths, a graphical S-meter, and a top bar with Band / Mode / BW / Zoom controls. The bottom bar shows battery percentage + voltage, firmware version, a live UTC clock, WiFi SSID + RSSI, and IP address.
+The browser panadapter is a full-featured view in its own right — not just a window onto the Tab5. On a larger monitor you get more spectrum history, a bigger waterfall canvas, and mouse controls that are faster than touch for precise tuning. It shows live spectrum at ≈10 fps via WebSocket, full waterfall history (~50 s), the same thermal palette and floor maths, a graphical S-meter, and a top bar with Band / Mode / BW / Zoom controls. The bottom bar shows battery percentage + voltage, firmware version, a live UTC clock, and WiFi SSID + RSSI. To its right: download/upload buttons (ADIF, QRZ, eQSL — see [QSO logging](#qso-logging-adif)), **Diag ↓** for the diagnostic log, and **Tab5Shot** which opens a live `/ss.bmp` screenshot in a new tab.
 
 **Click or drag to tune.** Click or drag on the spectrum or waterfall — a cyan cursor appears with a live frequency readout and commits on release.
 
@@ -243,7 +243,9 @@ The browser panadapter is a full-featured view in its own right — not just a w
 
 **Zoom sync.** The browser renders the same zoomed window as the Tab5.
 
-**ADIF log download.** Once you have logged at least one completed FT8 QSO, a **"N QSOs ↓"** link appears in the bottom-right corner of the web UI. Clicking it downloads your `qso.adi` file directly. The link is only shown when the log contains data — it disappears after clearing the log with `/api/adif/clear`.
+**ADIF log download.** Once you have logged at least one completed FT8 QSO, a **"N QSOs ↓"** link appears in the bottom bar of the web UI. Clicking it downloads your `qso.adi` file directly. The link is only shown when the log contains data — it disappears after clearing the log with `/api/adif/clear`.
+
+**QRZ / eQSL upload.** Two more buttons appear alongside the ADIF link once you have logged QSOs — see [QSO logging](#qso-logging-adif) for the full picture.
 
 ### Endpoints
 
@@ -255,6 +257,10 @@ The browser panadapter is a full-featured view in its own right — not just a w
 | `/api/log` | GET | Diagnostic log download (`qmx-log.txt`) |
 | `/api/adif` | GET | ADIF QSO log download (`qso.adi`) |
 | `/api/adif/clear` | GET | Wipe ADIF log and worked-call cache |
+| `/api/qrz_key` | POST | Save QRZ Logbook API key (body = raw key text) |
+| `/api/qrz_upload` | POST | Upload pending QSOs to QRZ Logbook; returns `{uploaded, failed, error}` |
+| `/api/eqsl_creds` | POST | Save eQSL username/password (JSON body `{"user","pswd"}`) |
+| `/api/eqsl_upload` | POST | Upload pending QSOs to eQSL (batched); returns `{uploaded, failed, error}` |
 | `/ss.bmp` | GET | 1280×720 RGB565 BMP screenshot |
 | `/ws` | WS | Binary spectrum stream (~10 fps) |
 
@@ -273,12 +279,15 @@ The browser panadapter is a full-featured view in its own right — not just a w
   "pan_bins":    0,
   "flat_mode":   false,
   "utc_epoch":   1750000000,
-  "tab5_fw":     "v0.16.1",
+  "qso_count":   12,
+  "qrz_key_set": false,
+  "eqsl_creds_set": false,
+  "tab5_fw":     "v0.16.2",
   "qmx_fw":      "1_03_002QMX"
 }
 ```
 
-Polled at 1 Hz by the landing page; safe to consume from monitoring scripts, home automation, etc. `qmx_fw` is read from the QMX via the `VN;` CAT command at link-up (empty until the radio responds). `signal_dbm` is the peak dBm around the IF-shifted VFO bin (null if DSP has no data yet).
+Polled at 1 Hz by the landing page; safe to consume from monitoring scripts, home automation, etc. `qmx_fw` is read from the QMX via the `VN;` CAT command at link-up (empty until the radio responds). `signal_dbm` is the peak dBm around the IF-shifted VFO bin (null if DSP has no data yet). `qrz_key_set` / `eqsl_creds_set` tell the web UI whether to prompt for credentials before the next upload.
 
 ### `/ws` — binary spectrum WebSocket
 
@@ -331,6 +340,8 @@ Swipe in from the **left edge** to switch to the FT8 screen. The Tab5 decodes 15
 | HRD | Times decoded since last appearance |
 
 CQ calls always appear at the top sorted strongest-SNR first; all other rows follow by SNR descending.
+
+**Row colour scheme** (CALL + MESSAGE columns): **white** for ordinary traffic, **green** for plain `CQ` calls, **dim grey** for callsigns already in your ADIF log (see [Reply filter](#reply-filter) for hiding them entirely), and **inverted red fill + white text** for any message containing your own callsign — your highest-priority rows literally pop off the screen instead of relying on red-on-black text, which field testing found hard to read at a glance.
 
 **Live view.** Stations not re-decoded within 60 seconds drop off the list automatically, even while the band is quiet. The count reads "Active: N" — who's on frequency *now*, not a cumulative history.
 
@@ -421,7 +432,11 @@ Long-press the **Call CQ** button to open the preset editor. Three message slots
 
 Every completed FT8 QSO — pounce or CQ-run — is automatically written to an ADIF v3.1.4 file at `/spiffs/qso.adi` on the Tab5's internal flash. The log survives reboots and re-flashes.
 
-**Download.** The web UI bottom bar shows **"N QSOs ↓"** once the first QSO is logged. Clicking it downloads `qso.adi` for import into any logging software (WSJT-X, Log4OM, DXKeeper, …) or upload to LoTW, QRZ, eQSL, POTA.app.
+**Download.** The web UI bottom bar shows **"N QSOs ↓"** once the first QSO is logged. Clicking it downloads `qso.adi` for import into any logging software (WSJT-X, Log4OM, DXKeeper, …) or for LoTW/POTA.app, which the Tab5 can't upload to directly (see below).
+
+**Upload to QRZ Logbook / eQSL — directly from the Tab5.** Two more buttons appear next to the ADIF download link once you've logged a QSO: **"QRZ ↑"** and **"eQSL ↑"**. Tap either the first time and it prompts for credentials (QRZ: API key from *Logbook Data → API Key* on qrz.com; eQSL: your username and password — eQSL has no API-key scheme) and saves them on the Tab5, not just in the browser. Every tap after that uploads everything logged since the last successful upload — no need to re-enter credentials, and no risk of duplicate uploads, since the Tab5 tracks how far it's gotten into the log. If a record is rejected (bad credentials, quota, etc.) the run stops and reports the reason rather than skipping past it; fix the cause and tap again to resume from where it left off. eQSL accepts a whole batch of QSOs per request; QRZ's API takes one at a time, so a big log takes one HTTP round trip per QSO.
+
+LoTW and POTA.app have no equivalent built-in path — LoTW requires a certificate-based TQSL signing step, and POTA.app has no upload API at all (browser login or email only). Use the ADIF download above for both.
 
 **Fields in each record:**
 
@@ -467,7 +482,7 @@ Each accepted sync writes through to the RX8130CE so the clock persists across p
 On the FT8 screen, tap **Filter** → **Sync Time** to open the time calibration modal. It shows three large boxes: **\[HH\] : \[MM\] : \[SS\]**.
 
 - **HH / MM** — pre-filled from the current UTC clock. Tap either box to edit it with a numpad. Use this for rare POTA situations where neither WiFi nor the QMX clock is available.
-- **SS** — auto-syncs continuously from decoded FT8 signals. Each time a slot decodes, the decoder measures the exact sub-second offset between the incoming signal and where it should fall on the UTC boundary; the SS box updates to show the corrected seconds value and the offset (e.g. **FT8 +120 ms** or **FT8 ok** when under a threshold). A blue frame means it is actively tracking; tap SS to lock it.
+- **SS** — auto-syncs continuously from decoded FT8 signals. Each slot, every successfully decoded station contributes a timing sample; a robust outlier-rejecting average (median ± a tolerance window) across all of them sets the correction, so one bad decode can't throw off the reading. The box border flashes bright blue for ~30 ms each time a fresh measurement lands — a visual heartbeat that sync is active — and the hint below reads **"Flash: FT8 synced..."**. A blue frame means it is actively tracking; tap SS to lock it.
 - **Apply** — if only SS was synced (HH and MM untouched), `time_sync_apply_correction_ms()` nudges the system clock by the measured sub-second offset and writes through to the RTC. If HH or MM was edited, `time_sync_set_manual()` sets the full time. The bottom bar shows **UTC(FT8)** after an FT8-derived correction, or **UTC(manual)** after a full manual set.
 
 ---
@@ -537,7 +552,7 @@ I (xxxx) bsp_info: panel:    ST7123 (inferred from touch)
 I (xxxx) bsp_info: touch:    ST7123 @ 0x55
 I (xxxx) bsp_info: heap:     230.5 kB internal free, 28.80 MB PSRAM free
 I (xxxx) bsp_info: idf:      v5.4.4
-I (xxxx) bsp_info: firmware: v0.16.1
+I (xxxx) bsp_info: firmware: v0.16.2
 I (xxxx) bsp_info: =====================
 ```
 
@@ -620,6 +635,8 @@ No calibration step needed; the estimator converges on ambient band noise within
 
 **SSB filter bandwidth needs three coordinated writes.** `MMSSB|Filter RX=<hz>;` commits the value (persists, shows in QMX menu); `MMSSB|Bandwidth=<hz>;` applies it live; `FW;` polling must be suspended while the width is pinned because reading the filter makes the QMX revert it. Dead ends: `FW<nnnn>;` CAT set returns `?;`; re-asserting the same mode digit does not reload the filter; `Bandwidth` write alone reverts on the next poll.
 
+**HTTPS needs mbedtls allocating from PSRAM, not internal RAM.** The QRZ/eQSL upload features (v0.16.2) are this firmware's first-ever outbound HTTPS connections — SNTP, the only prior network client, is UDP. With the default `CONFIG_MBEDTLS_MEM_ALLOC_MODE=MBEDTLS_INTERNAL_MEM_ALLOC`, the TLS handshake's 16 KB+ buffers competed for the ~200 KB internal DRAM already under pressure from USB host/audio/FFT/LVGL and every connection failed with `ESP_ERR_HTTP_CONNECT`. Fixed by switching to `MBEDTLS_EXTERNAL_MEM_ALLOC` in `sdkconfig`, which moves those buffers into the 28 MB of free PSRAM instead.
+
 ### Project layout
 
 ```
@@ -638,6 +655,8 @@ main/
   ft8_qso.c                 Auto QSO state machine
   ft8_status.c              Mutex-protected FT8 status string
   adif/adif_log.c           ADIF QSO logging
+  adif/qrz_upload.c         QRZ Logbook API upload (one record per request)
+  adif/eqsl_upload.c        eQSL.cc upload (batched, multiple records per request)
   rtc/rtc.c                 RX8130CE supercap RTC driver
   time_sync/time_sync.c     Time sync orchestrator
   render/render.c           30 Hz render task, EMA smoothing
@@ -654,13 +673,20 @@ main/
 
 ## Roadmap
 
+### Shipped in v0.16.2
+
+- **QRZ Logbook + eQSL upload**, directly from the web UI — see [QSO logging](#qso-logging-adif). The only ADIF destination still requiring a manual download is LoTW (certificate-based, no simple API) and POTA.app (no upload API at all — confirmed against their own docs).
+- **FT8 sync precision fix.** The SS timing readout is now a robust, outlier-rejecting average across every station decoded in a slot (median ± tolerance), instead of trusting a single candidate that could occasionally be a false sync hit — this was the cause of an intermittent "run-away" reading some users saw. A sub-second rounding bug (truncating the current second before applying the correction) that could throw the displayed SS off by up to a full second is also fixed. The SS box now flashes briefly on every fresh measurement.
+- **FT8 decode list — own-call rows inverted** (red fill + white text) instead of red-on-black, for readability in bright field conditions.
+- **QSO override buttons (Re-send/RR73/73) enlarged** to use the full left-pane width, easier to hit with field gloves.
+- **Freq keypad layout (10-key/Phone) now persists** across reboots.
+- Web UI: bottom bar IP address removed (unused), button row reordered with room for future upload buttons, all action buttons (ADIF/QRZ/eQSL/Diag/Tab5Shot) restyled to match the amber-hover top-bar pills, new **Tab5Shot** button (`/ss.bmp` in a new tab), S-meter scale labels enlarged and brightened, WiFi indicator switched from an emoji to a crisp SVG icon.
+
 ### Next up
 
 The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF upload.
 
-- **v0.16.x — "Worked before" highlighting.** Colour-code FT8 decode list rows by whether the callsign is already in the ADIF log — high value for POTA/SOTA activators chasing new contacts. `adif_log_contains_call()` is implemented and ready; needs wiring into `rebuild_list()`.
-- **v0.16.x — ADIF upload.** HTTP POST to LoTW TQSL, QRZ, eQSL, or POTA.app from the web UI.
-- **v0.16.x — Manual time-set UI.** Settings drawer entry point for `time_sync_set_manual()` — for rare POTA sessions with neither WiFi nor QMX clock.
+- **LoTW upload.** Needs its own design — certificate-based via TQSL, not a simple HTTP API like QRZ/eQSL.
 - **v1.0.0 — Stable release.** Multi-day FT8 soak complete, polished UI, beta label gone.
 
 ### Longer term

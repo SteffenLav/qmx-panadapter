@@ -137,8 +137,16 @@
   .bot-fill { flex: 1; min-width: 0; }
   #clock { color: var(--accent); font-weight: 700; font-size: 1.6rem;
            white-space: nowrap; font-variant-numeric: tabular-nums; }
-  #bot a { color: var(--fg); text-decoration: none; white-space: nowrap; margin-left: 1.2rem; }
-  #bot a:hover { text-decoration: underline; }
+  /* Bottom-bar action buttons (ADIF/QRZ/Diag/Tab5Shot) - same look + hover
+     behaviour as the top-left Band/Mode/BW/Zoom pills: amber frame on hover. */
+  .bot-btn {
+    display: inline-block;
+    background: #1f2937; border: 1px solid transparent; border-radius: 4px;
+    padding: 0.15rem 0.5rem; margin-left: 0.6rem;
+    color: var(--fg); text-decoration: none; white-space: nowrap;
+    cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
+  }
+  .bot-btn:hover { border-color: var(--accent); }
   .dim { color: var(--dim); font-size: 0.75rem; white-space: nowrap; }
 
   @media (max-width: 600px) {
@@ -212,11 +220,22 @@
     <div class="bot-fill"></div>
     <span id="clock">--:--:-- UTC</span>
     <div class="bot-fill"></div>
-    <span id="wifi">📶 --</span>
+    <span id="wifi-wrap" style="white-space:nowrap;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5"
+           stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:0.3rem;">
+        <path d="M5 12.55a11 11 0 0 1 14.08 0"></path>
+        <path d="M1.42 9a16 16 0 0 1 21.16 0"></path>
+        <path d="M8.53 16.11a6 6 0 0 1 6.95 0"></path>
+        <line x1="12" y1="20" x2="12" y2="20"></line>
+      </svg>
+      <span id="wifi">--</span>
+    </span>
     <div class="bot-fill"></div>
-    <span id="ip"></span>
-    <a href="/api/log" download="qmx-log.txt">Diag &#8595;</a>
-    <span id="qso-count" style="display:none"> &bull; <a href="/api/adif" download="qso.adi" id="adif-link">0 QSOs &#8595;</a></span>
+    <a href="/api/adif" download="qso.adi" id="adif-link" class="bot-btn" style="display:none">0 QSOs &#8595;</a>
+    <a href="#" id="qrz-link" class="bot-btn" style="display:none">QRZ &#8593;</a>
+    <a href="#" id="eqsl-link" class="bot-btn" style="display:none">eQSL &#8593;</a>
+    <a href="/api/log" download="qmx-log.txt" class="bot-btn">Diag &#8595;</a>
+    <a href="/ss.bmp" target="_blank" class="bot-btn">Tab5Shot</a>
   </div>
 
 <script>
@@ -237,6 +256,8 @@ let lastBands      = [];   // [{name, center_hz}]
 let firstStatus    = true;
 let serverUtcAtTick = 0;   // server epoch (s) at last /api/status
 let localAtTick     = 0;   // Date.now()/1000 when that response arrived
+let qrzKeySet        = false;
+let eqslCredsSet     = false;
 
 const SPEC_W     = 1024;
 const HZ_PER_BIN = 48000 / SPEC_W;   // 46.875 Hz/bin
@@ -299,6 +320,69 @@ function closeAllDropdowns() {
 }
 
 document.getElementById("overlay").addEventListener("click", closeAllDropdowns);
+
+/* QRZ Logbook upload — prompts for an API key the first time (saved on the
+   Tab5, not just this browser), then uploads every QSO logged since the
+   last successful upload. */
+document.getElementById("qrz-link").addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!qrzKeySet) {
+    const key = prompt("Enter your QRZ Logbook API key (Logbook Data -> API Key on qrz.com):");
+    if (!key) return;
+    await fetch("/api/qrz_key", { method: "POST", body: key.trim() });
+    qrzKeySet = true;
+  }
+  const link = document.getElementById("qrz-link");
+  const prevText = link.textContent;
+  link.textContent = "Uploading…";
+  try {
+    const r = await fetch("/api/qrz_upload", { method: "POST" });
+    const j = await r.json();
+    if (j.failed) {
+      alert("QRZ upload stopped: " + j.error + "\n" + j.uploaded + " uploaded before the error.");
+    } else {
+      alert("QRZ upload: " + j.uploaded + " QSO" + (j.uploaded === 1 ? "" : "s") + " uploaded.");
+    }
+  } catch (err) {
+    alert("QRZ upload failed: " + err);
+  } finally {
+    link.textContent = prevText;
+  }
+});
+
+/* eQSL upload — prompts for username+password the first time (saved on the
+   Tab5), then uploads every QSO logged since the last successful upload.
+   Unlike QRZ, eQSL has no API key - it's plain username/password. */
+document.getElementById("eqsl-link").addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!eqslCredsSet) {
+    const user = prompt("Enter your eQSL.cc username (callsign):");
+    if (!user) return;
+    const pswd = prompt("Enter your eQSL.cc password:");
+    if (!pswd) return;
+    await fetch("/api/eqsl_creds", {
+      method: "POST",
+      body: JSON.stringify({ user: user.trim(), pswd: pswd.trim() }),
+    });
+    eqslCredsSet = true;
+  }
+  const link = document.getElementById("eqsl-link");
+  const prevText = link.textContent;
+  link.textContent = "Uploading…";
+  try {
+    const r = await fetch("/api/eqsl_upload", { method: "POST" });
+    const j = await r.json();
+    if (j.failed) {
+      alert("eQSL upload stopped: " + j.error + "\n" + j.uploaded + " uploaded before the error.");
+    } else {
+      alert("eQSL upload: " + j.uploaded + " QSO" + (j.uploaded === 1 ? "" : "s") + " uploaded.");
+    }
+  } catch (err) {
+    alert("eQSL upload failed: " + err);
+  } finally {
+    link.textContent = prevText;
+  }
+});
 
 function positionDropdown(pillId, ddId) {
   const pill = document.getElementById(pillId);
@@ -493,18 +577,26 @@ async function tick() {
     /* Bottom-right: WiFi + IP */
     const wifi = s.wifi;
     document.getElementById("wifi").textContent =
-      (wifi && wifi.ssid) ? ("📶 " + wifi.ssid + " " + wifi.rssi + " dBm")
-                          : "📶 --";
-    document.getElementById("ip").textContent = (wifi && wifi.ip) || "--";
+      (wifi && wifi.ssid) ? (wifi.ssid + " " + wifi.rssi + " dBm")
+                          : "--";
 
-    /* QSO count + ADIF download link */
+    /* QSO count + ADIF/QRZ/eQSL buttons - all hidden until there's at least
+       one QSO logged (nothing to download/upload otherwise). */
     const qsoCount = s.qso_count || 0;
-    const qsoEl = document.getElementById("qso-count");
+    const adifLink = document.getElementById("adif-link");
+    const qrzLink  = document.getElementById("qrz-link");
+    const eqslLink = document.getElementById("eqsl-link");
+    qrzKeySet    = !!s.qrz_key_set;
+    eqslCredsSet = !!s.eqsl_creds_set;
     if (qsoCount > 0) {
-      document.getElementById("adif-link").textContent = qsoCount + " QSO" + (qsoCount === 1 ? "" : "s") + " ↓";
-      qsoEl.style.display = "";
+      adifLink.textContent = qsoCount + " QSO" + (qsoCount === 1 ? "" : "s") + " ↓";
+      adifLink.style.display = "";
+      qrzLink.style.display  = "";
+      eqslLink.style.display = "";
     } else {
-      qsoEl.style.display = "none";
+      adifLink.style.display = "none";
+      qrzLink.style.display  = "none";
+      eqslLink.style.display = "none";
     }
 
     /* Bottom-center: UTC clock (tick immediately, interval keeps it running) */
@@ -814,17 +906,17 @@ function drawSmeter(dbm) {
     { d:  -85, l: "S7" }, { d:  -73, l: "S9" },
     { d:  -63, l: "+10"}, { d:  -53, l: "+20"},
   ];
-  ctx.font      = "bold 10px ui-monospace, monospace";
-  ctx.fillStyle = "#c0d4dd";
+  ctx.font      = "bold 13px ui-monospace, monospace";
+  ctx.fillStyle = "#ffffff";
   ticks.forEach(t => {
     const x = bx + Math.round((t.d - DB_MIN) / RANGE * bw);
     // Tick mark
     ctx.fillStyle = "#7a9aaa";
     ctx.fillRect(x, barY - 6, 1, 6);
     // Label — centered on tick, only clamp left edge so +20 stays true-centered
-    ctx.fillStyle = "#c0d4dd";
+    ctx.fillStyle = "#ffffff";
     const tw = ctx.measureText(t.l).width;
-    ctx.fillText(t.l, x - tw * 0.5, barY - 8);
+    ctx.fillText(t.l, x - tw * 0.5, barY - 9);
   });
 }
 

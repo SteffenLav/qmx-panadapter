@@ -40,6 +40,12 @@ static const char *TAG = "settings";
 #define KEY_FT8_FILT   "ft8_filt"
 #define KEY_WIFI_ENABLED "wifi_en"
 #define KEY_QMX_GPS      "qmx_gps"
+#define KEY_FREQ_KP_CALC "freq_kp_calc"
+#define KEY_QRZ_KEY      "qrz_key"
+#define KEY_QRZ_UPLOADED "qrz_upl_n"
+#define KEY_EQSL_USER    "eqsl_user"
+#define KEY_EQSL_PSWD    "eqsl_pswd"
+#define KEY_EQSL_UPLOADED "eqsl_upl_n"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -85,6 +91,12 @@ static const char *TAG = "settings";
 #define DIRTY_FT8_FILT     (1u << 23)
 #define DIRTY_WIFI_ENABLED (1u << 24)
 #define DIRTY_QMX_GPS      (1u << 25)
+#define DIRTY_FREQ_KP_CALC (1u << 26)
+#define DIRTY_QRZ_KEY      (1u << 27)
+#define DIRTY_QRZ_UPLOADED (1u << 28)
+#define DIRTY_EQSL_USER     (1u << 29)
+#define DIRTY_EQSL_PSWD     (1u << 30)
+#define DIRTY_EQSL_UPLOADED (1u << 31)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -186,6 +198,12 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_FT8_FILT)     nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap.ft8_filters, sizeof(snap.ft8_filters));
         if (dirty_local & DIRTY_WIFI_ENABLED) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap.wifi_enabled ? 1 : 0);
         if (dirty_local & DIRTY_QMX_GPS)      nvs_set_u8(s_nvs, KEY_QMX_GPS,      snap.qmx_gps      ? 1 : 0);
+        if (dirty_local & DIRTY_FREQ_KP_CALC) nvs_set_u8(s_nvs, KEY_FREQ_KP_CALC, snap.freq_kp_calc ? 1 : 0);
+        if (dirty_local & DIRTY_QRZ_KEY)      nvs_set_str(s_nvs, KEY_QRZ_KEY, snap.qrz_api_key);
+        if (dirty_local & DIRTY_QRZ_UPLOADED) nvs_set_u32(s_nvs, KEY_QRZ_UPLOADED, snap.qrz_uploaded_n);
+        if (dirty_local & DIRTY_EQSL_USER)     nvs_set_str(s_nvs, KEY_EQSL_USER, snap.eqsl_user);
+        if (dirty_local & DIRTY_EQSL_PSWD)     nvs_set_str(s_nvs, KEY_EQSL_PSWD, snap.eqsl_pswd);
+        if (dirty_local & DIRTY_EQSL_UPLOADED) nvs_set_u32(s_nvs, KEY_EQSL_UPLOADED, snap.eqsl_uploaded_n);
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
@@ -263,6 +281,12 @@ static void load_from_nvs(qmx_settings_t *out)
     out->onboarded = false;
     out->wifi_enabled = DEF_WIFI_ENABLED;
     out->qmx_gps = false;
+    out->freq_kp_calc = false;
+    out->qrz_api_key[0] = '\0';
+    out->qrz_uploaded_n = 0;
+    out->eqsl_user[0] = '\0';
+    out->eqsl_pswd[0] = '\0';
+    out->eqsl_uploaded_n = 0;
     memset(&out->ft8_filters, 0, sizeof(out->ft8_filters));
 
     if (!s_ready) {
@@ -313,6 +337,18 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_ONBOARDED,  &u8v) == ESP_OK) out->onboarded  = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_WIFI_ENABLED, &u8v) == ESP_OK) out->wifi_enabled = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_QMX_GPS,      &u8v) == ESP_OK) out->qmx_gps      = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_FREQ_KP_CALC, &u8v) == ESP_OK) out->freq_kp_calc = (u8v != 0);
+    out->qrz_api_key[0] = '\0';
+    sz = sizeof(out->qrz_api_key);
+    nvs_get_str(s_nvs, KEY_QRZ_KEY, out->qrz_api_key, &sz);
+    nvs_get_u32(s_nvs, KEY_QRZ_UPLOADED, &out->qrz_uploaded_n);
+    out->eqsl_user[0] = '\0';
+    sz = sizeof(out->eqsl_user);
+    nvs_get_str(s_nvs, KEY_EQSL_USER, out->eqsl_user, &sz);
+    out->eqsl_pswd[0] = '\0';
+    sz = sizeof(out->eqsl_pswd);
+    nvs_get_str(s_nvs, KEY_EQSL_PSWD, out->eqsl_pswd, &sz);
+    nvs_get_u32(s_nvs, KEY_EQSL_UPLOADED, &out->eqsl_uploaded_n);
 
     sz = sizeof(out->ft8_filters);
     nvs_get_blob(s_nvs, KEY_FT8_FILT, &out->ft8_filters, &sz);
@@ -638,4 +674,76 @@ void settings_set_qmx_gps(bool v)
     s_pending.qmx_gps = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_QMX_GPS);
+}
+
+void settings_set_freq_kp_calc(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.freq_kp_calc == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.freq_kp_calc = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_FREQ_KP_CALC);
+}
+
+void settings_set_qrz_api_key(const char *key)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (key) {
+        strncpy(s_pending.qrz_api_key, key, sizeof(s_pending.qrz_api_key) - 1);
+        s_pending.qrz_api_key[sizeof(s_pending.qrz_api_key) - 1] = '\0';
+    } else {
+        s_pending.qrz_api_key[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_QRZ_KEY);
+}
+
+void settings_set_qrz_uploaded_n(uint32_t n)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.qrz_uploaded_n == n) { xSemaphoreGive(s_mutex); return; }
+    s_pending.qrz_uploaded_n = n;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_QRZ_UPLOADED);
+}
+
+void settings_set_eqsl_user(const char *user)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (user) {
+        strncpy(s_pending.eqsl_user, user, sizeof(s_pending.eqsl_user) - 1);
+        s_pending.eqsl_user[sizeof(s_pending.eqsl_user) - 1] = '\0';
+    } else {
+        s_pending.eqsl_user[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_EQSL_USER);
+}
+
+void settings_set_eqsl_pswd(const char *pswd)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (pswd) {
+        strncpy(s_pending.eqsl_pswd, pswd, sizeof(s_pending.eqsl_pswd) - 1);
+        s_pending.eqsl_pswd[sizeof(s_pending.eqsl_pswd) - 1] = '\0';
+    } else {
+        s_pending.eqsl_pswd[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_EQSL_PSWD);
+}
+
+void settings_set_eqsl_uploaded_n(uint32_t n)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.eqsl_uploaded_n == n) { xSemaphoreGive(s_mutex); return; }
+    s_pending.eqsl_uploaded_n = n;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_EQSL_UPLOADED);
 }

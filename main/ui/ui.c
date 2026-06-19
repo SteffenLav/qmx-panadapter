@@ -417,6 +417,7 @@ static void freq_key_cb(lv_event_t *e)
         }
         case 'T':  // toggle keypad layout (phone <-> 10-key)
             s_freq_calc_layout = !s_freq_calc_layout;
+            settings_set_freq_kp_calc(s_freq_calc_layout);
             freq_apply_keypad_layout();
             return;
         case '#': {  // a digit key - read the digit from the button's own label
@@ -1952,6 +1953,8 @@ void ui_init(lv_display_t *disp)
         settings_load_all(&s);
         s_cw_cal_hz = s.cw_cal_hz;
         ESP_LOGI(TAG, "CW trim loaded from NVS: %d Hz", (int)s_cw_cal_hz);
+        s_freq_calc_layout = s.freq_kp_calc;
+        ESP_LOGI(TAG, "Freq keypad layout loaded from NVS: %s", s_freq_calc_layout ? "10-key" : "phone");
         // Load zoom from NVS; pan always resets to 0 on boot.
         if (s.zoom_factor >= 1.0f && s.zoom_factor <= 24.0f)
             s_zoom_factor = s.zoom_factor;

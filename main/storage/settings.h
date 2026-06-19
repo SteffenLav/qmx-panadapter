@@ -49,6 +49,12 @@ typedef struct {
     bool     onboarded;        // first-boot WiFi/identity prompts shown (default false)
     bool     wifi_enabled;     // initiate WiFi at boot (default true)
     bool     qmx_gps;         // QMX/QMX+ has GPS discipline — skip Tab5→QMX time push
+    bool     freq_kp_calc;    // freq keypad digit layout: false=phone, true=10-key/calc
+    char     qrz_api_key[40]; // QRZ Logbook API key (GUID-format, set via web UI)
+    uint32_t qrz_uploaded_n;  // count of ADIF records already uploaded to QRZ
+    char     eqsl_user[16];   // eQSL.cc username (callsign), set via web UI
+    char     eqsl_pswd[32];   // eQSL.cc password
+    uint32_t eqsl_uploaded_n; // count of ADIF records already uploaded to eQSL
     ft8_filters_t ft8_filters;        // CQ-run reply include/exclude filters
 } qmx_settings_t;
 
@@ -110,6 +116,28 @@ void settings_set_wifi_enabled(bool v);
 // NOT push its clock to the QMX after a sync, because the GPS is more
 // accurate than anything the Tab5 has (SNTP, FT8, manual).
 void settings_set_qmx_gps(bool v);
+
+// Freq keypad digit layout: false=phone (1 2 3 top), true=10-key/calculator
+// (7 8 9 top). Persisted (debounced flush) so it survives a reboot.
+void settings_set_freq_kp_calc(bool v);
+
+// QRZ Logbook API key, set via the web UI (debounced flush). Pass NULL or
+// empty to clear.
+void settings_set_qrz_api_key(const char *key);
+
+// Count of ADIF records already uploaded to QRZ (offset into the log file
+// for the next upload batch). Debounced flush.
+void settings_set_qrz_uploaded_n(uint32_t n);
+
+// eQSL.cc credentials, set via the web UI (debounced flush). Pass NULL or
+// empty to clear. eQSL has no API-key scheme - username+password is the only
+// auth eQSL's real-time interface supports.
+void settings_set_eqsl_user(const char *user);
+void settings_set_eqsl_pswd(const char *pswd);
+
+// Count of ADIF records already uploaded to eQSL (offset into the log file
+// for the next upload batch). Debounced flush.
+void settings_set_eqsl_uploaded_n(uint32_t n);
 
 // QMX IF offset calibration trim (Hz). Per-unit oscillator variance shifts
 // the +12 kHz IF injection; this trim corrects what users see on the spectrum/
