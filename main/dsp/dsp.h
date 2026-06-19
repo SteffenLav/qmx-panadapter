@@ -56,6 +56,18 @@ esp_err_t dsp_find_peak_hz_around(int32_t center_hz, int32_t radius_hz, int32_t 
 // Returns ESP_OK on success, ESP_ERR_TIMEOUT if no audio after timeout_ms.
 esp_err_t dsp_ft8_capture(float *dst_180000, uint32_t timeout_ms);
 
+// Incremental capture (v0.18 fast-decode): arm / poll / finalize variant of
+// dsp_ft8_capture, letting the caller run the FT8 STFT block-by-block during
+// the slot instead of after. Usage per slot:
+//   dsp_ft8_capture_begin(scratch, 180000);
+//   while (...) { int n = dsp_ft8_capture_progress(); process new whole blocks; delay; }
+//   dsp_ft8_capture_finish(ms_to_boundary);   // disarms + zero-pads the tail
+// dst MUST point to >= target_samples floats in PSRAM and stay valid until
+// finish() returns. progress() returns the decimated-12 kHz sample count so far.
+esp_err_t dsp_ft8_capture_begin(float *dst, uint32_t target_samples);
+int       dsp_ft8_capture_progress(void);
+esp_err_t dsp_ft8_capture_finish(uint32_t timeout_ms);
+
 // ---- Zoom-FFT (v0.16.0): real frequency-resolution increase at zoom > x1 ---
 // The fft_task mixes the pan-center down to DC, low-pass filters, decimates
 // by a power-of-two factor D in {1,2,4,8,16} (chosen as the largest such D

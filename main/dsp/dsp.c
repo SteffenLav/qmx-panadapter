@@ -124,7 +124,7 @@ static float       s_ft8_fir_delay[31];
 static fir_f32_t   s_ft8_fir;
 static SemaphoreHandle_t s_ft8_done_sem = NULL;
 static float *s_ft8_dst    = NULL;
-static int    s_ft8_idx    = 0;
+static volatile int s_ft8_idx    = 0;   // advanced by fft_task; polled cross-task by the FT8 capture caller
 static int    s_ft8_target = 0;
 static volatile bool s_ft8_active = false;
 static float s_ft8_mix_buf[DSP_FFT_SIZE];
@@ -138,9 +138,17 @@ static uint64_t s_ft8_work_us = 0;
 static uint32_t s_ft8_slow_reads = 0;
 static uint32_t s_ft8_slow_works = 0;
 
-esp_err_t dsp_ft8_capture(float *dst_180000, uint32_t timeout_ms)
+// Incremental capture API (v0.18 fast-decode). Splits the old one-shot
+// dsp_ft8_capture into arm / poll-progress / finalize so the caller can run
+// the FT8 STFT (monitor_process) block-by-block *during* the slot instead of
+// batching it after capture completes. The audio producer (fft_task FT8 branch)
+// is unchanged — it still mixes, decimates and appends decimated 12 kHz samples
+// to s_ft8_dst, advancing s_ft8_idx.
+
+// Arm capture: dst MUST point to >= target_samples floats in PSRAM.
+esp_err_t dsp_ft8_capture_begin(float *dst, uint32_t target_samples)
 {
-    if (!dst_180000) return ESP_ERR_INVALID_ARG;
+    if (!dst) return ESP_ERR_INVALID_ARG;
     if (!s_ft8_done_sem) {
         s_ft8_done_sem = xSemaphoreCreateBinary();
         if (!s_ft8_done_sem) return ESP_ERR_NO_MEM;
@@ -155,15 +163,29 @@ esp_err_t dsp_ft8_capture(float *dst_180000, uint32_t timeout_ms)
         return e;
     }
     xSemaphoreTake(s_ft8_done_sem, 0);  // drain stale
-    s_ft8_dst    = dst_180000;
+    s_ft8_dst    = dst;
     s_ft8_idx    = 0;
-    s_ft8_target = 180000;
+    s_ft8_target = (int)target_samples;
     __sync_synchronize();
     s_ft8_active = true;
-    // timeout_ms is the time until the next UTC slot boundary: the caller caps
-    // each capture there so the 15 s window stays anchored to the FT8 timing
-    // grid. Whichever comes first — 180000 samples, or the boundary — ends the
-    // capture.
+    return ESP_OK;
+}
+
+// Number of decimated 12 kHz samples committed to dst so far. Cross-task read
+// of a volatile, monotonically-increasing counter — safe to poll.
+int dsp_ft8_capture_progress(void)
+{
+    __sync_synchronize();
+    return s_ft8_idx;
+}
+
+// Finalize: wait up to timeout_ms for the target sample count, then disarm and
+// zero-pad any shortfall (the slot's dead air after the FT8 signal).
+// timeout_ms is the time until the next UTC slot boundary: the caller caps each
+// capture there so the 15 s window stays anchored to the FT8 timing grid.
+// Returns ESP_ERR_TIMEOUT only on a genuine audio failure (zero samples).
+esp_err_t dsp_ft8_capture_finish(uint32_t timeout_ms)
+{
     BaseType_t ok = xSemaphoreTake(s_ft8_done_sem, pdMS_TO_TICKS(timeout_ms));
     s_ft8_active = false;
     __sync_synchronize();
@@ -180,13 +202,21 @@ esp_err_t dsp_ft8_capture(float *dst_180000, uint32_t timeout_ms)
             return ESP_ERR_TIMEOUT;     // genuine audio failure
         }
         if (got < s_ft8_target) {
-            memset(&dst_180000[got], 0,
+            memset(&s_ft8_dst[got], 0,
                    (size_t)(s_ft8_target - got) * sizeof(float));
         }
         ESP_LOGD(TAG, "FT8 capture cut at boundary: %d/%d samples (padded)",
                  got, s_ft8_target);
     }
     return ESP_OK;
+}
+
+// One-shot capture: arm + finalize. Retained for any non-streaming caller.
+esp_err_t dsp_ft8_capture(float *dst_180000, uint32_t timeout_ms)
+{
+    esp_err_t e = dsp_ft8_capture_begin(dst_180000, 180000);
+    if (e != ESP_OK) return e;
+    return dsp_ft8_capture_finish(timeout_ms);
 }
 // ----- end Step 3 v0.10 FT8 RX capture --------------------------------------
 
