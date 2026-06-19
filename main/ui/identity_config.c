@@ -176,6 +176,9 @@ static void modal_build(void)
     lv_obj_set_style_text_font(save_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(save_lbl);
 
+    // Physical keyboard: Enter -> Save, Esc -> Cancel.
+    ui_kbd_set_buttons(save_btn, cancel_btn);
+
     s_keyboard = lv_keyboard_create(s_modal);
     static lv_style_t style_kb_btn;
     static bool kb_btn_style_inited = false;

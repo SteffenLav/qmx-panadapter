@@ -44,6 +44,7 @@ idf_component_register(
         "adif/eqsl_upload.c"
         "rtc/rtc.c"
         "time_sync/time_sync.c"
+        "keyboard/tab5_keyboard.c"
     INCLUDE_DIRS
         "."
         "display"
@@ -60,6 +61,7 @@ idf_component_register(
         "rtc"
         "time_sync"
         "adif"
+        "keyboard"
     REQUIRES
         esp_lcd
         esp_timer

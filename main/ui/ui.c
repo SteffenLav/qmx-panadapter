@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -14,6 +15,7 @@
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
 #include "display.h"
+#include "tab5_keyboard.h"
 #include "cat.h"
 #include "settings.h"
 #include "wifi_config.h"
@@ -374,9 +376,8 @@ static bool freq_buf_group_full(const char *buf)
     return seg_digits >= 3;
 }
 
-static void freq_key_cb(lv_event_t *e)
+static void freq_apply_key(char key, lv_obj_t *target_btn)
 {
-    char key = (char)(intptr_t)lv_event_get_user_data(e);
     size_t len = strlen(s_freq_buf);
 
     switch (key) {
@@ -422,7 +423,7 @@ static void freq_key_cb(lv_event_t *e)
             return;
         case '#': {  // a digit key - read the digit from the button's own label
                      // (labels move when the layout toggles, codes don't).
-            lv_obj_t *btn = lv_event_get_target(e);
+            lv_obj_t *btn = target_btn;
             lv_obj_t *lbl = btn ? lv_obj_get_child(btn, 0) : NULL;
             const char *t = lbl ? lv_label_get_text(lbl) : NULL;
             if (t && t[0] >= '0' && t[0] <= '9' &&
@@ -469,6 +470,16 @@ static void freq_key_cb(lv_event_t *e)
     }
     freq_popup_refresh_display();
 }
+
+static void freq_key_cb(lv_event_t *e)
+{
+    char key = (char)(intptr_t)lv_event_get_user_data(e);
+    freq_apply_key(key, lv_event_get_target(e));
+}
+
+// True while the frequency-entry keypad overlay is open. Used by the physical
+// keyboard bridge to route digits into the keypad instead of a textarea.
+static bool freq_keypad_is_open(void) { return s_freq_popup != NULL; }
 
 static void freq_popup_build(void)
 {
@@ -3818,4 +3829,125 @@ static void ui_show_memories(void)
 {
     drawer_close();
     memory_modal_show();
+}
+
+// ---- Physical (Tab5 snap-on) keyboard bridge ----
+// s_kbd_ta is the textarea the physical keyboard types into. It is written on
+// the LVGL thread (textarea focus/defocus/delete events) and read on the
+// keyboard poll task. Both accesses are serialised by display_lock(): the
+// focus/delete events run inside lv_timer_handler (which holds the lock) and
+// kbd_text_cb takes the lock before reading it — so the pointer can never be
+// used after the textarea is freed.
+static lv_obj_t *s_kbd_ta = NULL;
+
+// Save/Cancel buttons of the currently-open modal, registered via
+// ui_kbd_set_buttons() so Enter/Esc can trigger them. Auto-cleared when the
+// buttons are deleted (modal closed) by kbd_btn_deleted_cb.
+static lv_obj_t *s_kbd_save_btn   = NULL;
+static lv_obj_t *s_kbd_cancel_btn = NULL;
+
+void ui_kbd_note_focus(lv_obj_t *ta)
+{
+    s_kbd_ta = ta;
+}
+
+void ui_kbd_note_unfocus(lv_obj_t *ta)
+{
+    if (s_kbd_ta == ta) s_kbd_ta = NULL;
+}
+
+static void kbd_btn_deleted_cb(lv_event_t *e)
+{
+    lv_obj_t *b = (lv_obj_t *)lv_event_get_target(e);
+    if (s_kbd_save_btn   == b) s_kbd_save_btn   = NULL;
+    if (s_kbd_cancel_btn == b) s_kbd_cancel_btn = NULL;
+}
+
+void ui_kbd_set_buttons(lv_obj_t *save_btn, lv_obj_t *cancel_btn)
+{
+    s_kbd_save_btn   = save_btn;
+    s_kbd_cancel_btn = cancel_btn;
+    if (save_btn)   lv_obj_add_event_cb(save_btn,   kbd_btn_deleted_cb, LV_EVENT_DELETE, NULL);
+    if (cancel_btn) lv_obj_add_event_cb(cancel_btn, kbd_btn_deleted_cb, LV_EVENT_DELETE, NULL);
+}
+
+// Move focus to the next textarea sharing the active field's parent (the modal
+// panel), wrapping around. Sending LV_EVENT_FOCUSED updates s_kbd_ta via the
+// theme focus hook and runs the modal's own focus handler (cursor, on-screen
+// keyboard binding) so physical and touch focus stay consistent.
+static void kbd_focus_next_field(void)
+{
+    lv_obj_t *cur = s_kbd_ta;
+    if (!cur) return;
+    lv_obj_t *parent = lv_obj_get_parent(cur);
+    if (!parent) return;
+    uint32_t n = lv_obj_get_child_count(parent);
+    uint32_t cur_idx = 0;
+    for (uint32_t i = 0; i < n; i++) {
+        if (lv_obj_get_child(parent, i) == cur) { cur_idx = i; break; }
+    }
+    for (uint32_t k = 1; k <= n; k++) {
+        lv_obj_t *o = lv_obj_get_child(parent, (cur_idx + k) % n);
+        if (o && lv_obj_check_type(o, &lv_textarea_class)) {
+            lv_obj_remove_state(cur, LV_STATE_FOCUSED);
+            lv_obj_add_state(o, LV_STATE_FOCUSED);
+            lv_obj_send_event(o, LV_EVENT_FOCUSED, NULL);
+            break;
+        }
+    }
+}
+
+// Runs on the keyboard poll task. The keyboard sends ordinary keys as a single
+// character (e.g. "a", "5", ".", " "), but special keys arrive spelled out as a
+// multi-char NAME token. Casing is inconsistent from the firmware ("ENTER" but
+// "esc"/"backspace"), so all token matches are case-insensitive. Modifier keys
+// (Shift/Fn/Sym/Ctrl/Alt) emit no event — the keyboard MCU applies them.
+static void kbd_text_cb(const char *text, void *arg)
+{
+    (void)arg;
+    if (!text || !text[0]) return;
+    if (!display_lock(50)) return;
+
+    size_t n = strlen(text);
+    char c = (n == 1) ? text[0] : 0;
+
+    // The frequency keypad has no textarea — route keys straight into it.
+    if (freq_keypad_is_open()) {
+        if (c && ((c >= '0' && c <= '9') || c == '.')) freq_apply_key(c, NULL);
+        else if (!strcasecmp(text, "backspace") || !strcasecmp(text, "del")) freq_apply_key('D', NULL);
+        else if (!strcasecmp(text, "enter"))  freq_apply_key('E', NULL);  // set frequency
+        else if (!strcasecmp(text, "esc"))    freq_apply_key('C', NULL);  // cancel
+        display_unlock();
+        return;
+    }
+
+    lv_obj_t *ta = s_kbd_ta;
+
+    // Enter/Esc act on the modal's Save/Cancel buttons and work even when no
+    // textarea is focused (e.g. the time-set modal, which has no text field).
+    if (!c && !strcasecmp(text, "enter")) {
+        if (s_kbd_save_btn) lv_obj_send_event(s_kbd_save_btn, LV_EVENT_CLICKED, NULL);
+    } else if (!c && !strcasecmp(text, "esc")) {
+        if (s_kbd_cancel_btn) lv_obj_send_event(s_kbd_cancel_btn, LV_EVENT_CLICKED, NULL);
+    } else if (ta) {
+        // Everything else edits the focused textarea.
+        if (c) {
+            unsigned char u = (unsigned char)c;
+            if (u == 0x08 || u == 0x7F)  lv_textarea_delete_char(ta);  // safety
+            else if (u >= 0x20)          lv_textarea_add_char(ta, u);  // incl. space
+        } else if (!strcasecmp(text, "backspace") || !strcasecmp(text, "del")) {
+            lv_textarea_delete_char(ta);
+        } else if (!strcasecmp(text, "left"))  { lv_textarea_cursor_left(ta);  }
+        else if (!strcasecmp(text, "right")) { lv_textarea_cursor_right(ta); }
+        else if (!strcasecmp(text, "up"))    { lv_textarea_cursor_up(ta);    }
+        else if (!strcasecmp(text, "down"))  { lv_textarea_cursor_down(ta);  }
+        else if (!strcasecmp(text, "tab"))   { kbd_focus_next_field(); }
+        else { ESP_LOGD("ui", "kbd: unmapped key \"%s\"", text); }
+    }
+    display_unlock();
+}
+
+void ui_kbd_bridge_init(void)
+{
+    tab5_keyboard_set_text_cb(kbd_text_cb, NULL);
 }

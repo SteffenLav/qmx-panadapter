@@ -618,8 +618,9 @@ static void modal_build(void)
 
     // Apply + Cancel — right under the boxes (y = BY+BH+8 = 70+116+8 = 194)
     const int ABY = BY + BH + 8;
+    lv_obj_t *save_b = lv_btn_create(s_panel);
     {
-        lv_obj_t *b = lv_btn_create(s_panel);
+        lv_obj_t *b = save_b;
         lv_obj_set_size(b, 292, 61);
         lv_obj_set_pos(b, 0, ABY);
         lv_obj_set_style_bg_color(b, lv_color_hex(0x1e6028), 0);
@@ -633,8 +634,9 @@ static void modal_build(void)
         lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
         lv_obj_center(l);
     }
+    lv_obj_t *cancel_b = lv_btn_create(s_panel);
     {
-        lv_obj_t *b = lv_btn_create(s_panel);
+        lv_obj_t *b = cancel_b;
         lv_obj_set_size(b, 292, 61);
         lv_obj_set_pos(b, 308, ABY);
         lv_obj_set_style_bg_color(b, lv_color_hex(0x962020), 0);
@@ -648,6 +650,8 @@ static void modal_build(void)
         lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
         lv_obj_center(l);
     }
+    // Physical keyboard: Enter -> Save, Esc -> Cancel.
+    ui_kbd_set_buttons(save_b, cancel_b);
 
     build_numpad(s_panel);
 

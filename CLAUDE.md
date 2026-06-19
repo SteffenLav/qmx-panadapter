@@ -46,6 +46,7 @@ main/
   screenshot/screenshot.c RGB565 framebuffer capture for the web UI's /ss.bmp endpoint
   util/fps.c              FPS counter
   util/diag_log.c         Opt-in ESP_LOG ring-buffer capture (web /api/log + serial)
+  keyboard/tab5_keyboard.c  Optional Tab5 snap-on keyboard (STM32 I2C slave 0x6D, String mode); UI bridge lives in ui.c
   storage/settings.c      NVS-backed settings (debounced flush task)
   wifi/wifi.c             C6 co-processor WiFi bring-up + SNTP, QMX RTC push
   net/webserver.c         HTTP server: /, /api/status, /api/cmd, /ss.bmp, /api/log
@@ -169,6 +170,23 @@ Opt-in field-diagnostics capture for remote bug reports. Toggle: **Diagnostic lo
 - Ring concurrency: short spinlock for appends (lines come from a 256-byte stack buffer, so the critical section is tiny); the snapshot copies **without** the lock (head/count grabbed under it) to avoid a long interrupts-off window — worst case a few oldest bytes garble mid-copy, acceptable for a diagnostic dump. Never take a blocking lock in the vprintf hook (runs pre-scheduler and from arbitrary contexts).
 - The switch is on the **top row** of the settings drawer (`DRAWER_SEC_DIAG`) and is also kept visible in **FT8 mode** (added to the `keep[]` list in `drawer_set_ft8_mode`).
 - **`reset_reason` is ambiguous on this hardware.** The header logs `esp_reset_reason()`, but a deliberate reset-button force-off on the Tab5 comes back as `panic/exception`, not `external-pin`/`power-on`. So that value alone does **not** prove a software crash. The reliable tell for a genuine crash is a `Guru Meditation` / register+backtrace dump in the log immediately *before* the reboot — if there's no backtrace, treat `panic/exception` as "abrupt reset" (there is no app-level clean-shutdown path, so any forced power-off looks like this).
+
+## Tab5 snap-on keyboard (optional)
+
+The M5Stack Tab5 70-key snap-on keyboard (SKU A164) is an **STM32F030C8T6 acting as an I2C slave at 0x6D on its own bus: SDA=GPIO0, SCL=GPIO1** (a C port of M5Stack's `M5Tab5-Keyboard-UserDemo`; reference copy + protocol notes in `docs/tab5-keyboard-ref/`). It is **not** the TCA8418 at 0x34 that an earlier abandoned attempt assumed — that bug was looking at the wrong chip on a bus (SYS GPIO31/32, EXT GPIO53/54) that the keyboard isn't even on.
+
+`keyboard/tab5_keyboard.c` creates a dedicated I2C master on **port 1** (the EXT controller, otherwise unused by us — SYS is port 0), probes 0x6D, and on success puts the keyboard in **String mode** (`reg 0x10 = 2`): the STM32 does the keymap + shift/symbol-layer handling and returns ready ASCII, so we never need a row/col→char table. A 50 ms poll task (no GPIO50 IRQ in v1) reads `INT_STA (0x01)` bit2, then drains events from `EVENT_NUM (0x02)` / `CHAR_EVENT_LEN (0x40)` / `CHAR_EVENT_BASE (0x50)`. If no keyboard answers, it scans the bus, logs the result, and disables itself — harmless on units with no keyboard.
+
+**Special keys arrive as a spelled-out NAME token, not a control code** (`esc`, `tab`, `left`/`right`/`up`/`down`, `del`, `enter`, `backspace`) — and **casing is inconsistent** from the firmware (`ENTER` upper, `esc`/`backspace` lower), so all token matches use `strcasecmp`. Discriminator in `kbd_text_cb` (ui.c): `strlen==1` → literal character; otherwise → named-key lookup (unknown names are ignored, never typed). Modifier keys (Shift/Fn/Sym/Ctrl/Alt) emit **no event** — applied inside the MCU.
+
+UI bridge (in `ui.c`, runs on the keyboard task — takes `display_lock()` before any LVGL call):
+- char → `lv_textarea_add_char` on the focused field; backspace/del → delete; arrows → cursor move.
+- **tab** → `kbd_focus_next_field()` cycles textareas sharing the active field's parent panel (no per-modal wiring).
+- **enter** → click the modal's Save button; **esc** → click Cancel. Each modal registers these via `ui_kbd_set_buttons(save,cancel)` (declared in `ui_theme.h`, auto-cleared on button `LV_EVENT_DELETE`); wired in all six modals (wifi/identity/cq/filter/time/memory). Enter/Esc work even with no field focused (the time-set modal has no textarea).
+- Focus tracking (`s_kbd_ta`) is centralised in `ui_theme_style_textarea()` (FOCUSED/DEFOCUSED/DELETE events), so every styled textarea is a keyboard target automatically.
+- **Freq keypad** has no textarea: when `freq_keypad_is_open()`, digits/`.` route to `freq_apply_key()`, backspace→'D', enter→'E' (set freq), esc→'C' (cancel).
+
+`KB_DEBUG_BYTES` in `tab5_keyboard.c` (default 0) logs every event's raw payload — flip to 1 to discover tokens for any new special keys.
 
 ## RTC and time sync (v0.15.17)
 

@@ -6,6 +6,13 @@
 #include <ctype.h>
 #include <stdint.h>
 
+/* Physical-keyboard bridge hooks (implemented in ui.c). Declared here so the
+ * textarea-styling helper below can register focus tracking without every
+ * modal needing to know about the keyboard. */
+void ui_kbd_note_focus(lv_obj_t *ta);
+void ui_kbd_note_unfocus(lv_obj_t *ta);
+void ui_kbd_set_buttons(lv_obj_t *save_btn, lv_obj_t *cancel_btn);
+
 /*
  * Shared colour tokens for the panadapter UI. Goal: collapse the many
  * near-duplicate greys/blues that accumulated as screens were added
@@ -51,8 +58,26 @@
 
 /* Textareas and keyboards default to LVGL's light theme (near-white)
  * unless explicitly restyled - these helpers apply the dark theme. */
+/* Route a textarea's focus lifecycle to the physical-keyboard bridge so typed
+ * characters land in whichever field the user last tapped. FOCUSED makes this
+ * textarea the keyboard target; DEFOCUSED/DELETE clear it (DELETE prevents the
+ * keyboard task from touching a freed object). */
+static inline void ui_theme_ta_kbd_focus_cb(lv_event_t *e)
+{
+    lv_obj_t *ta = (lv_obj_t *)lv_event_get_target(e);
+    if (lv_event_get_code(e) == LV_EVENT_FOCUSED) {
+        ui_kbd_note_focus(ta);
+    } else {
+        ui_kbd_note_unfocus(ta);
+    }
+}
+
 static inline void ui_theme_style_textarea(lv_obj_t *ta)
 {
+    lv_obj_add_event_cb(ta, ui_theme_ta_kbd_focus_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_add_event_cb(ta, ui_theme_ta_kbd_focus_cb, LV_EVENT_DEFOCUSED, NULL);
+    lv_obj_add_event_cb(ta, ui_theme_ta_kbd_focus_cb, LV_EVENT_DELETE, NULL);
+
     lv_obj_set_style_bg_color(ta, lv_color_hex(UI_COLOR_KEY_BG), 0);
     lv_obj_set_style_bg_opa(ta, LV_OPA_COVER, 0);
     lv_obj_set_style_text_color(ta, lv_color_hex(UI_COLOR_TEXT), 0);

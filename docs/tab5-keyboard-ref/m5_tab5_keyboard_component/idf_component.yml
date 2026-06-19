@@ -1,0 +1,17 @@
+description: "M5Stack Tab5 Keyboard Library"
+url: "https://github.com/m5stack"
+repository: "https://github.com/m5stack"
+maintainers:
+  - "M5Stack"
+license: MIT
+tags:
+  - "m5stack"
+  - "keyboard"
+  - "i2c"
+dependencies:
+  idf:
+    version: ">=4.4"
+  espressif/i2c_bus:
+    version: "^1.0.0"
+    public: true
+version: 0.1.0

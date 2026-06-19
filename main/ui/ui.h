@@ -82,3 +82,21 @@ void ui_freq_picker_open(uint32_t initial_hz, const char *initial_mode, ui_freq_
 // edge-swipe grip handles. lv_anim_delete_all() (screenshot capture) kills
 // these along with one-shot anims; call this after taking a snapshot.
 void ui_restart_edge_grip_anims(void);
+
+// ---- Physical (Tab5 snap-on) keyboard bridge ----
+// Track which textarea the physical keyboard should type into. Called from
+// the textarea FOCUSED/DEFOCUSED/DELETE events wired up in
+// ui_theme_style_textarea(); not normally called directly.
+void ui_kbd_note_focus(lv_obj_t *ta);
+void ui_kbd_note_unfocus(lv_obj_t *ta);
+
+// Register the open modal's Save and Cancel buttons so the physical keyboard's
+// Enter key clicks Save (commit + close) and Esc clicks Cancel. Either may be
+// NULL. Auto-cleared when the buttons are deleted (modal closed). Call once
+// after the modal's buttons are created.
+void ui_kbd_set_buttons(lv_obj_t *save_btn, lv_obj_t *cancel_btn);
+
+// Register the physical keyboard's text callback (installs an internal handler
+// that applies typed characters to the focused textarea on the LVGL thread).
+// Call once after the UI is built.
+void ui_kbd_bridge_init(void);

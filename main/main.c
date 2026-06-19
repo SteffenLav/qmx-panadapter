@@ -29,6 +29,7 @@
 #include "ft8_status.h"
 #include "ft8_qso.h"
 #include "diag_log.h"
+#include "tab5_keyboard.h"
 #include "time_sync.h"
 #include "adif/adif_log.h"
 
@@ -84,6 +85,14 @@ void app_main(void)
     time_sync_init(bsp_i2c_get_handle());
 
     ui_init(disp);
+
+    // Physical Tab5 snap-on keyboard (optional). Probes I2C 0x6D on GPIO0/1;
+    // if present, switches it to String mode and types into the focused
+    // textarea. Silently disabled (with a bus scan logged) if not attached.
+    ui_kbd_bridge_init();
+    if (tab5_keyboard_init() == ESP_OK) {
+        ESP_LOGI(TAG, "Tab5 physical keyboard ready");
+    }
 
     // Apply persisted settings to UI / render pipeline.
     ui_set_db_range(cfg.db_min, cfg.db_max);

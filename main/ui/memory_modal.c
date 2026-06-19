@@ -482,6 +482,9 @@ static void modal_build(void)
     lv_obj_set_style_text_font(save_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(save_lbl);
 
+    // Physical keyboard: Enter -> Save, Esc -> Cancel (label-edit action panel).
+    ui_kbd_set_buttons(act_save, act_cancel);
+
     lv_obj_add_flag(s_action_panel, LV_OBJ_FLAG_HIDDEN);
 
     s_action_kb = lv_keyboard_create(s_modal);

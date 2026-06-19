@@ -231,6 +231,7 @@ static void modal_build(void)
             { "Cancel",    0x962020, cancel_btn_cb     },
             { "Sync Time", UI_COLOR_PRIMARY, sync_time_btn_cb },
         };
+        lv_obj_t *save_b = NULL, *cancel_b = NULL;
         for (int i = 0; i < 3; i++) {
             lv_obj_t *b = lv_btn_create(panel);
             lv_obj_set_size(b, 180, 64);
@@ -245,7 +246,11 @@ static void modal_build(void)
             lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
             lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
             lv_obj_center(l);
+            if (i == 0) save_b = b;
+            else if (i == 1) cancel_b = b;
         }
+        // Physical keyboard: Enter -> Save, Esc -> Cancel.
+        ui_kbd_set_buttons(save_b, cancel_b);
     }
 
     s_keyboard = lv_keyboard_create(s_modal);
