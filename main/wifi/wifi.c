@@ -40,6 +40,15 @@ static bool s_wifi_started = false;
 static char s_ssid[33] = {0};
 static char s_pass[65] = {0};
 
+// WiFi scan state (for the SSID picker). Results are written in the
+// WIFI_EVENT_SCAN_DONE handler (event-loop task) and read by the UI via
+// panadapter_wifi_scan_get(); s_scan_state is set last so a reader that sees
+// DONE also sees a complete s_scan[] / s_scan_n.
+#define WIFI_SCAN_MAX 24
+static wifi_scan_ap_t s_scan[WIFI_SCAN_MAX];
+static volatile int s_scan_n = 0;
+static volatile wifi_scan_state_t s_scan_state = WIFI_SCAN_IDLE;
+
 // Tab5 SDIO pin drive-strength quirk -----------------------------------
 // Matches N6HAN's qrp_companion and M5Stack factory demo: SDIO between P4
 // and the C6 co-processor needs the LOWEST drive capability or the link
@@ -81,6 +90,30 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
         }
         ESP_LOGI(TAG, "STA started, connecting to '%s'", s_ssid);
         esp_wifi_connect();
+    } else if (id == WIFI_EVENT_SCAN_DONE) {
+        static wifi_ap_record_t recs[WIFI_SCAN_MAX];
+        uint16_t num = WIFI_SCAN_MAX;
+        if (esp_wifi_scan_get_ap_records(&num, recs) != ESP_OK) {
+            s_scan_state = WIFI_SCAN_FAILED;
+            return;
+        }
+        int n = 0;
+        for (uint16_t i = 0; i < num && n < WIFI_SCAN_MAX; i++) {
+            if (recs[i].ssid[0] == '\0') continue;  // hidden SSID
+            bool dup = false;
+            for (int j = 0; j < n; j++) {
+                if (strcmp(s_scan[j].ssid, (char *)recs[i].ssid) == 0) { dup = true; break; }
+            }
+            if (dup) continue;
+            strncpy(s_scan[n].ssid, (char *)recs[i].ssid, sizeof(s_scan[n].ssid) - 1);
+            s_scan[n].ssid[sizeof(s_scan[n].ssid) - 1] = '\0';
+            s_scan[n].rssi   = recs[i].rssi;
+            s_scan[n].locked = (recs[i].authmode != WIFI_AUTH_OPEN);
+            n++;
+        }
+        s_scan_n = n;
+        s_scan_state = WIFI_SCAN_DONE;  // set last
+        ESP_LOGI(TAG, "scan done: %d AP(s)", n);
     } else if (id == WIFI_EVENT_STA_DISCONNECTED) {
         wifi_event_sta_disconnected_t *e = (wifi_event_sta_disconnected_t *)data;
         xEventGroupClearBits(s_events, BIT_CONNECTED);
@@ -324,4 +357,49 @@ void panadapter_wifi_reconnect(const char *ssid, const char *pass)
         esp_wifi_disconnect();
         esp_wifi_connect();
     }
+}
+
+// ---- WiFi scan (SSID picker) -----------------------------------------
+// Runs the (potentially slow) radio bring-up + scan kick-off off the LVGL
+// thread. ensure_sta_netif() polls for up to ~2 s, and esp_wifi_start() can
+// block, so neither may run on the UI task.
+static void wifi_scan_task(void *arg)
+{
+    (void)arg;
+    if (!s_wifi_started) {
+        ensure_sta_netif();
+        if (esp_wifi_start() != ESP_OK) {
+            s_scan_state = WIFI_SCAN_FAILED;
+            vTaskDelete(NULL);
+            return;
+        }
+        s_wifi_started = true;
+    }
+    s_scan_n = 0;
+    wifi_scan_config_t scan_cfg = { 0 };  // active scan, all channels
+    if (esp_wifi_scan_start(&scan_cfg, false) != ESP_OK) {
+        s_scan_state = WIFI_SCAN_FAILED;
+    }
+    vTaskDelete(NULL);
+}
+
+void panadapter_wifi_scan_start(void)
+{
+    if (s_scan_state == WIFI_SCAN_RUNNING) return;  // already scanning
+    s_scan_state = WIFI_SCAN_RUNNING;
+    xTaskCreate(wifi_scan_task, "wifi_scan", 4096, NULL, 5, NULL);
+}
+
+wifi_scan_state_t panadapter_wifi_scan_state(void)
+{
+    return s_scan_state;
+}
+
+int panadapter_wifi_scan_get(wifi_scan_ap_t *out, int max)
+{
+    if (!out || max <= 0 || s_scan_state != WIFI_SCAN_DONE) return 0;
+    int n = s_scan_n;
+    if (n > max) n = max;
+    memcpy(out, s_scan, n * sizeof(wifi_scan_ap_t));
+    return n;
 }

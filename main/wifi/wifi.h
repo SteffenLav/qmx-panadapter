@@ -1,6 +1,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,6 +33,33 @@ const char *wifi_get_ip(void);
 
 // Returns true once SNTP has set the system time at least once.
 bool wifi_time_is_valid(void);
+
+// ---- WiFi scan (for the SSID picker) ----------------------------------
+// One scanned access point.
+typedef struct {
+    char    ssid[33];
+    int8_t  rssi;     // dBm
+    bool    locked;   // true if not an open network
+} wifi_scan_ap_t;
+
+typedef enum {
+    WIFI_SCAN_IDLE = 0,
+    WIFI_SCAN_RUNNING,
+    WIFI_SCAN_DONE,
+    WIFI_SCAN_FAILED,
+} wifi_scan_state_t;
+
+// Kick off an asynchronous scan of nearby APs. Brings the radio up first if
+// needed (offloaded to a task — safe to call from the LVGL thread; returns
+// immediately). Poll panadapter_wifi_scan_state() for completion.
+void panadapter_wifi_scan_start(void);
+
+// Current scan state.
+wifi_scan_state_t panadapter_wifi_scan_state(void);
+
+// Copy up to `max` scan results (deduplicated, strongest first) into `out`.
+// Returns the number copied. Valid once the state is WIFI_SCAN_DONE.
+int panadapter_wifi_scan_get(wifi_scan_ap_t *out, int max);
 
 #ifdef __cplusplus
 }

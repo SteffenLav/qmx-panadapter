@@ -8,6 +8,7 @@
 #include "settings.h"
 #include "esp_log.h"
 #include <string.h>
+#include <stdio.h>
 
 static const char *TAG = "wifi_config";
 
@@ -16,14 +17,19 @@ static lv_obj_t *s_modal       = NULL;  // root full-screen overlay
 static lv_obj_t *s_panel       = NULL;  // centred dialog panel
 static lv_obj_t *s_ta_ssid       = NULL;
 static lv_obj_t *s_ta_pass       = NULL;
-static lv_obj_t *s_cb_show_pass  = NULL;  // "Show password" checkbox
+static lv_obj_t *s_eye_btn       = NULL;  // password show/hide eye-icon button
+static lv_obj_t *s_eye_lbl       = NULL;  // its icon label
+static bool      s_pass_shown    = false;
 static lv_obj_t *s_keyboard      = NULL;
 static bool      s_modal_open  = false;
 static void    (*s_on_close)(void) = NULL;  // one-shot, fired when the modal closes
 
+static void scan_list_hide(void);  // fwd decl (defined with the SSID picker below)
+
 static void modal_close(void)
 {
     if (!s_modal || !s_modal_open) return;
+    scan_list_hide();
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     s_modal_open = false;
     ESP_LOGI(TAG, "Modal closed");
@@ -54,10 +60,14 @@ static void cancel_btn_cb(lv_event_t *e)
     modal_close();
 }
 
-static void show_pass_cb(lv_event_t *e)
+// Eye-icon button: toggle password visibility. Open eye = currently shown,
+// crossed eye = currently masked.
+static void eye_btn_cb(lv_event_t *e)
 {
-    bool show = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
-    lv_textarea_set_password_mode(s_ta_pass, !show);
+    (void)e;
+    s_pass_shown = !s_pass_shown;
+    lv_textarea_set_password_mode(s_ta_pass, !s_pass_shown);
+    if (s_eye_lbl) lv_label_set_text(s_eye_lbl, s_pass_shown ? LV_SYMBOL_EYE_OPEN : LV_SYMBOL_EYE_CLOSE);
 }
 
 // Show keyboard on textarea focus, attach to the focused textarea.
@@ -83,6 +93,109 @@ static void keyboard_event_cb(lv_event_t *e)
     if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL) {
         lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     }
+}
+
+// ---- SSID scan picker -------------------------------------------------
+// Tapping "Scan" runs a WiFi scan and shows the results as a tappable list;
+// picking one fills the SSID field with the exact-case beacon name (so the
+// case-sensitivity trap can't bite). Manual entry still works.
+// The picker is one bordered "window" (s_scan_panel) holding a title, the
+// scrollable AP list, and a red Cancel — so it reads as a single dialog. Panel
+// is content-sized (flex column) and stays centred.
+static lv_obj_t *s_scan_panel  = NULL;
+static lv_obj_t *s_scan_title  = NULL;
+static lv_obj_t *s_scan_list   = NULL;   // scrollable AP list inside the panel
+static lv_obj_t *s_scan_cancel = NULL;
+static lv_timer_t *s_scan_timer = NULL;        // polls for scan results
+static lv_timer_t *s_scan_close_timer = NULL;  // one-shot close after a pick
+static wifi_scan_ap_t s_aps[24];
+static int s_aps_n = 0;
+
+static void scan_list_hide(void)
+{
+    if (s_scan_timer)       { lv_timer_del(s_scan_timer);       s_scan_timer = NULL; }
+    if (s_scan_close_timer) { lv_timer_del(s_scan_close_timer); s_scan_close_timer = NULL; }
+    if (s_scan_panel) lv_obj_add_flag(s_scan_panel, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void scan_close_cb(lv_event_t *e) { (void)e; scan_list_hide(); }
+
+// One-shot: close the picker a moment after a row is picked, so the selection
+// highlight is visible first.
+static void scan_close_timer_cb(lv_timer_t *t)
+{
+    lv_timer_del(t);
+    s_scan_close_timer = NULL;
+    scan_list_hide();
+}
+
+static void scan_item_cb(lv_event_t *e)
+{
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    lv_obj_t *btn = (lv_obj_t *)lv_event_get_target(e);
+    if (idx >= 0 && idx < s_aps_n) {
+        lv_textarea_set_text(s_ta_ssid, s_aps[idx].ssid);  // exact case from beacon
+    }
+    // Strong selection confirmation: turn the picked row solid blue with a
+    // check mark, then close shortly after so it's clearly seen.
+    if (btn) {
+        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_text_color(btn, lv_color_hex(0xffffff), 0);
+        lv_obj_t *ck = lv_label_create(btn);
+        lv_label_set_text(ck, LV_SYMBOL_OK);
+        lv_obj_set_style_text_color(ck, lv_color_hex(0xffffff), 0);
+        lv_obj_set_style_text_font(ck, &lv_font_montserrat_24, 0);
+        lv_obj_align(ck, LV_ALIGN_RIGHT_MID, -4, 0);
+    }
+    if (!s_scan_close_timer) s_scan_close_timer = lv_timer_create(scan_close_timer_cb, 260, NULL);
+}
+
+// Rebuild the AP list (the title is set separately).
+static void scan_list_render(const char *title)
+{
+    if (s_scan_title) lv_label_set_text(s_scan_title, title);
+    lv_obj_clean(s_scan_list);
+    for (int i = 0; i < s_aps_n; i++) {
+        char label[64];
+        snprintf(label, sizeof(label), "%.32s  %ddBm", s_aps[i].ssid, s_aps[i].rssi);
+        lv_obj_t *btn = lv_list_add_button(s_scan_list, LV_SYMBOL_WIFI, label);
+        lv_obj_set_style_text_font(btn, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_KEY_BG), 0);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
+        lv_obj_set_style_text_color(btn, lv_color_hex(UI_COLOR_TEXT), 0);
+        // Pressed feedback while the finger is down.
+        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), LV_STATE_PRESSED);
+        lv_obj_add_event_cb(btn, scan_item_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
+    }
+}
+
+static void scan_poll_cb(lv_timer_t *t)
+{
+    wifi_scan_state_t st = panadapter_wifi_scan_state();
+    if (st == WIFI_SCAN_DONE) {
+        s_aps_n = panadapter_wifi_scan_get(s_aps, (int)(sizeof(s_aps) / sizeof(s_aps[0])));
+        scan_list_render(s_aps_n ? "Select a network:" : "No networks found");
+        lv_timer_del(t);
+        s_scan_timer = NULL;
+    } else if (st == WIFI_SCAN_FAILED) {
+        s_aps_n = 0;
+        scan_list_render("Scan failed - type SSID manually");
+        lv_timer_del(t);
+        s_scan_timer = NULL;
+    }
+}
+
+static void scan_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_keyboard) lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
+    s_aps_n = 0;
+    scan_list_render("Scanning for networks...");
+    lv_obj_clear_flag(s_scan_panel, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_scan_panel);
+    panadapter_wifi_scan_start();
+    if (!s_scan_timer) s_scan_timer = lv_timer_create(scan_poll_cb, 400, NULL);
 }
 
 // Build the modal once. Hidden initially.
@@ -130,9 +243,10 @@ static void modal_build(void)
     lv_obj_set_style_text_font(ssid_lbl, &lv_font_montserrat_24, 0);
     lv_obj_align(ssid_lbl, LV_ALIGN_TOP_LEFT, 0, 56);
 
-    // SSID textarea - larger font + taller
+    // SSID textarea - larger font + taller. Narrowed to make room for the
+    // Scan button on its right.
     s_ta_ssid = lv_textarea_create(s_panel);
-    lv_obj_set_size(s_ta_ssid, 820, 60);
+    lv_obj_set_size(s_ta_ssid, 640, 60);
     lv_obj_align(s_ta_ssid, LV_ALIGN_TOP_LEFT, 0, 86);
     lv_textarea_set_one_line(s_ta_ssid, true);
     lv_textarea_set_max_length(s_ta_ssid, 32);
@@ -140,6 +254,19 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_ta_ssid, &lv_font_montserrat_24, 0);
     ui_theme_style_textarea(s_ta_ssid);
     lv_obj_add_event_cb(s_ta_ssid, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
+
+    // Scan button - opens the SSID picker (avoids typing a case-sensitive SSID).
+    lv_obj_t *scan_btn = lv_btn_create(s_panel);
+    lv_obj_set_size(scan_btn, 172, 60);
+    lv_obj_align(scan_btn, LV_ALIGN_TOP_LEFT, 656, 86);
+    lv_obj_set_style_bg_color(scan_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_radius(scan_btn, 8, 0);
+    lv_obj_add_event_cb(scan_btn, scan_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *scan_lbl = lv_label_create(scan_btn);
+    lv_label_set_text(scan_lbl, LV_SYMBOL_WIFI " Scan");
+    lv_obj_set_style_text_color(scan_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(scan_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(scan_lbl);
 
     // Password label - larger
     lv_obj_t *pass_lbl = lv_label_create(s_panel);
@@ -150,7 +277,7 @@ static void modal_build(void)
 
     // Password textarea - full width, masked
     s_ta_pass = lv_textarea_create(s_panel);
-    lv_obj_set_size(s_ta_pass, 820, 60);
+    lv_obj_set_size(s_ta_pass, 640, 60);
     lv_obj_align(s_ta_pass, LV_ALIGN_TOP_LEFT, 0, 190);
     lv_textarea_set_one_line(s_ta_pass, true);
     lv_textarea_set_password_mode(s_ta_pass, true);
@@ -160,28 +287,22 @@ static void modal_build(void)
     ui_theme_style_textarea(s_ta_pass);
     lv_obj_add_event_cb(s_ta_pass, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
 
-    // "Show password" checkbox below the password field.
-    static lv_style_t s_ind, s_ind_chk;
-    static bool show_styles_inited = false;
-    if (!show_styles_inited) {
-        lv_style_init(&s_ind);
-        lv_style_set_bg_color(&s_ind, lv_color_hex(UI_COLOR_KEY_BG));
-        lv_style_set_border_color(&s_ind, lv_color_hex(UI_COLOR_BORDER));
-        lv_style_set_border_width(&s_ind, 2);
-        lv_style_set_pad_all(&s_ind, 6);
-        lv_style_init(&s_ind_chk);
-        lv_style_set_bg_color(&s_ind_chk, lv_color_hex(UI_COLOR_PRIMARY));
-        lv_style_set_border_color(&s_ind_chk, lv_color_hex(UI_COLOR_PRIMARY_BORDER));
-        show_styles_inited = true;
-    }
-    s_cb_show_pass = lv_checkbox_create(s_panel);
-    lv_checkbox_set_text(s_cb_show_pass, "Show password");
-    lv_obj_add_style(s_cb_show_pass, &s_ind,     LV_PART_INDICATOR);
-    lv_obj_add_style(s_cb_show_pass, &s_ind_chk, LV_PART_INDICATOR | LV_STATE_CHECKED);
-    lv_obj_set_style_text_color(s_cb_show_pass, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-    lv_obj_set_style_text_font(s_cb_show_pass, &lv_font_montserrat_24, 0);
-    lv_obj_align(s_cb_show_pass, LV_ALIGN_TOP_LEFT, 0, 262);
-    lv_obj_add_event_cb(s_cb_show_pass, show_pass_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    // Password show/hide eye-icon button — directly under the Scan button,
+    // mirroring the SSID+Scan row above (the password field is shortened to
+    // 640 to make room, same as the SSID field).
+    s_eye_btn = lv_btn_create(s_panel);
+    lv_obj_set_size(s_eye_btn, 172, 60);
+    lv_obj_align(s_eye_btn, LV_ALIGN_TOP_LEFT, 656, 190);
+    lv_obj_set_style_bg_color(s_eye_btn, lv_color_hex(UI_COLOR_KEY_BG), 0);
+    lv_obj_set_style_border_color(s_eye_btn, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_border_width(s_eye_btn, 1, 0);
+    lv_obj_set_style_radius(s_eye_btn, 8, 0);
+    lv_obj_add_event_cb(s_eye_btn, eye_btn_cb, LV_EVENT_CLICKED, NULL);
+    s_eye_lbl = lv_label_create(s_eye_btn);
+    lv_label_set_text(s_eye_lbl, LV_SYMBOL_EYE_CLOSE);  // masked by default
+    lv_obj_set_style_text_color(s_eye_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(s_eye_lbl, &lv_font_montserrat_28, 0);
+    lv_obj_center(s_eye_lbl);
 
     // Cancel button - bigger, red-tinted for "destructive" semantics
     lv_obj_t *cancel_btn = lv_btn_create(s_panel);
@@ -241,6 +362,56 @@ static void modal_build(void)
     lv_obj_add_event_cb(s_keyboard, keyboard_event_cb, LV_EVENT_READY,  NULL);
     lv_obj_add_event_cb(s_keyboard, keyboard_event_cb, LV_EVENT_CANCEL, NULL);
 
+    // SSID picker "window": one bordered panel (title + scrollable AP list +
+    // Cancel), content-sized as a flex column, centred. Same grey-on-dark look
+    // as this WiFi window. Hidden until Scan is tapped.
+    s_scan_panel = lv_obj_create(s_modal);
+    lv_obj_set_width(s_scan_panel, 700);
+    lv_obj_set_height(s_scan_panel, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_height(s_scan_panel, 672, 0);
+    lv_obj_set_align(s_scan_panel, LV_ALIGN_CENTER);  // stays centred as it resizes
+    lv_obj_set_style_bg_color(s_scan_panel, lv_color_hex(UI_COLOR_SURFACE), 0);
+    lv_obj_set_style_bg_opa(s_scan_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_scan_panel, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_border_width(s_scan_panel, 2, 0);
+    lv_obj_set_style_radius(s_scan_panel, 10, 0);
+    lv_obj_set_style_pad_all(s_scan_panel, 16, 0);
+    lv_obj_set_flex_flow(s_scan_panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(s_scan_panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(s_scan_panel, 12, 0);
+    lv_obj_clear_flag(s_scan_panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_scan_panel, LV_OBJ_FLAG_HIDDEN);
+
+    // Title (white, larger than the rows).
+    s_scan_title = lv_label_create(s_scan_panel);
+    lv_label_set_text(s_scan_title, "Select a network:");
+    lv_obj_set_style_text_color(s_scan_title, lv_color_hex(UI_COLOR_TEXT), 0);
+    lv_obj_set_style_text_font(s_scan_title, &lv_font_montserrat_28, 0);
+
+    // Scrollable AP list, transparent so the panel surface shows through;
+    // rows are styled grey in scan_list_render().
+    s_scan_list = lv_list_create(s_scan_panel);
+    lv_obj_set_width(s_scan_list, LV_PCT(100));
+    lv_obj_set_height(s_scan_list, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_height(s_scan_list, 480, 0);
+    lv_obj_set_style_bg_opa(s_scan_list, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_scan_list, 0, 0);
+    lv_obj_set_style_pad_all(s_scan_list, 0, 0);
+
+    // Red Cancel, inside the panel.
+    s_scan_cancel = lv_btn_create(s_scan_panel);
+    lv_obj_set_size(s_scan_cancel, 240, 72);
+    lv_obj_set_style_bg_color(s_scan_cancel, lv_color_hex(0x962020), 0);
+    lv_obj_set_style_border_color(s_scan_cancel, lv_color_hex(0xc04040), 0);
+    lv_obj_set_style_border_width(s_scan_cancel, 2, 0);
+    lv_obj_set_style_radius(s_scan_cancel, 8, 0);
+    lv_obj_add_event_cb(s_scan_cancel, scan_close_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *sc_lbl = lv_label_create(s_scan_cancel);
+    lv_label_set_text(sc_lbl, "Cancel");
+    lv_obj_set_style_text_color(sc_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(sc_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(sc_lbl);
+
     ESP_LOGI(TAG, "Modal built");
 }
 
@@ -266,7 +437,8 @@ void wifi_config_modal_show(void)
     lv_textarea_set_text(s_ta_ssid, s.wifi_ssid);
     lv_textarea_set_text(s_ta_pass, "");
     lv_textarea_set_password_mode(s_ta_pass, true);
-    if (s_cb_show_pass) lv_obj_remove_state(s_cb_show_pass, LV_STATE_CHECKED);
+    s_pass_shown = false;
+    if (s_eye_lbl) lv_label_set_text(s_eye_lbl, LV_SYMBOL_EYE_CLOSE);
     ui_theme_focus_textarea(s_ta_ssid);
 
     // Make sure keyboard starts hidden every time.
