@@ -10,7 +10,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Beta — v0.16.2.** FT8 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
+> **Beta — v0.17.0.** FT8 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
 
 ---
 
@@ -282,7 +282,7 @@ The browser panadapter is a full-featured view in its own right — not just a w
   "qso_count":   12,
   "qrz_key_set": false,
   "eqsl_creds_set": false,
-  "tab5_fw":     "v0.16.2",
+  "tab5_fw":     "v0.17.0",
   "qmx_fw":      "1_03_002QMX"
 }
 ```
@@ -552,7 +552,7 @@ I (xxxx) bsp_info: panel:    ST7123 (inferred from touch)
 I (xxxx) bsp_info: touch:    ST7123 @ 0x55
 I (xxxx) bsp_info: heap:     230.5 kB internal free, 28.80 MB PSRAM free
 I (xxxx) bsp_info: idf:      v5.4.4
-I (xxxx) bsp_info: firmware: v0.16.2
+I (xxxx) bsp_info: firmware: v0.17.0
 I (xxxx) bsp_info: =====================
 ```
 
@@ -673,14 +673,12 @@ main/
 
 ## Roadmap
 
-### Shipped in v0.16.2
+### Shipped in v0.17.0
 
-- **QRZ Logbook + eQSL upload**, directly from the web UI — see [QSO logging](#qso-logging-adif). The only ADIF destination still requiring a manual download is LoTW (certificate-based, no simple API) and POTA.app (no upload API at all — confirmed against their own docs).
-- **FT8 sync precision fix.** The SS timing readout is now a robust, outlier-rejecting average across every station decoded in a slot (median ± tolerance), instead of trusting a single candidate that could occasionally be a false sync hit — this was the cause of an intermittent "run-away" reading some users saw. A sub-second rounding bug (truncating the current second before applying the correction) that could throw the displayed SS off by up to a full second is also fixed. The SS box now flashes briefly on every fresh measurement.
-- **FT8 decode list — own-call rows inverted** (red fill + white text) instead of red-on-black, for readability in bright field conditions.
-- **QSO override buttons (Re-send/RR73/73) enlarged** to use the full left-pane width, easier to hit with field gloves.
-- **Freq keypad layout (10-key/Phone) now persists** across reboots.
-- Web UI: bottom bar IP address removed (unused), button row reordered with room for future upload buttons, all action buttons (ADIF/QRZ/eQSL/Diag/Tab5Shot) restyled to match the amber-hover top-bar pills, new **Tab5Shot** button (`/ss.bmp` in a new tab), S-meter scale labels enlarged and brightened, WiFi indicator switched from an emoji to a crisp SVG icon.
+- **Physical keyboard support.** The M5Stack Tab5 snap-on keyboard (SKU A164) now works for all on-screen text entry — WiFi SSID/password, callsign/grid, CQ messages, filter terms, memory labels, and the frequency keypad. Typed characters go to the focused field; **Tab** jumps between fields, **Enter** saves & closes the dialog, **Esc** cancels, **Backspace** and the arrow keys work as expected. It's auto-detected at boot and simply does nothing if no keyboard is attached.
+- **WiFi network scan + picker.** A **Scan** button in WiFi setup lists the nearby networks; tap one and the SSID field fills in with the exact name from the network itself — no typing, and no chance of a case mismatch (WiFi names are case-sensitive). Manual entry still works.
+- **Boot reliability fix.** Closed a rare start-up crash (a display-layout race during UI construction) that could make some units — particularly newer ST7121 hardware — reset once or twice before booting cleanly. The screen now comes up first time, every time.
+- **Password show/hide eye button** restored (replacing the checkbox), tucked under the Scan button.
 
 ### Next up
 
