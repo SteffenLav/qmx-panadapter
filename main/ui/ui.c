@@ -1854,7 +1854,14 @@ void ui_init(lv_display_t *disp)
 
     ft8_screen_view_init(scr);
 
-    display_unlock();
+    // NOTE: do NOT unlock here. The LVGL lock is held until the very end of
+    // ui_init (see display_unlock() before the return). lv_display_refr_timer
+    // runs on the esp_lvgl_port LVGL task and will walk a half-constructed
+    // widget tree if we unlock mid-build — that raced the widget creation
+    // below and crashed in lv_obj_style get_prop_core (NULL style deref) on
+    // units whose refresh timing landed in the window (intermittent boot
+    // crash, e.g. Roy's ST7121 — boots 1-2 panic, boot 3 survives). All
+    // widget construction in this function must stay under the lock.
 
     // Phase 5.10I: ensure the oversized burger sits on top of everything
     if (s_burger_btn) lv_obj_move_foreground(s_burger_btn);
@@ -1997,6 +2004,9 @@ void ui_init(lv_display_t *disp)
     ESP_LOGI(TAG, "Touch handle: %s", s_tp ? "OK" : "NULL");
     // Pinch/pan polling timer: 50 ms, reads raw touch driver directly.
     lv_timer_create(pinch_poll_cb, 50, NULL);
+
+    // Whole UI is now built — release the lock taken at the top of ui_init.
+    display_unlock();
 }
 
 // Pinch/pan polling timer callback. Runs on LVGL task (core 0) every 50 ms.
