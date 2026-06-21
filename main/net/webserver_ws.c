@@ -51,17 +51,21 @@ static esp_err_t ws_uri_handler(httpd_req_t *req)
         return ESP_OK;
     }
 
-    if (s_session_active) {
-        ESP_LOGW(TAG, "Another client already connected; refusing");
-        return ESP_FAIL;
-    }
-
     int fd = httpd_req_to_sockfd(req);
     if (fd < 0) {
         ESP_LOGE(TAG, "httpd_req_to_sockfd failed");
         return ESP_FAIL;
     }
 
+    // Single-client, but LAST CONNECTION WINS rather than refusing. An ungraceful
+    // client disconnect (tab reload, Wi-Fi blip, device reboot) can leave a
+    // half-open socket that keeps "accepting" async sends, so the old session
+    // never frees via the send-failure path - refusing the reconnect then strands
+    // the browser on "reconnecting" forever while HTTP still works. Taking over
+    // the slot makes reconnects always succeed; the stale fd is simply abandoned.
+    if (s_session_active && s_ws_fd != fd) {
+        ESP_LOGW(TAG, "New client fd=%d takes over stale fd=%d", fd, s_ws_fd);
+    }
     s_ws_fd = fd;
     s_session_active = true;
     ESP_LOGI(TAG, "Client connected, fd=%d -- push task takes over", fd);

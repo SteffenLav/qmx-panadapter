@@ -1040,6 +1040,15 @@ function drawSpectrumFlat(bytes) {
   const isCW_f = (lastMode || "").toUpperCase().indexOf("CW") >= 0;
   const vfoX = Math.round(freqToPixelX(isCW_f ? lastFreqHz + lastCwPitchHz : lastFreqHz, W));
   sctx.fillStyle = "#ffb95a"; sctx.fillRect(vfoX-1, 0, 2, H);
+
+  /* dB-above-floor scale labels at the gridlines (right edge) */
+  sctx.fillStyle = "#9aa7b4"; sctx.font = "11px system-ui,sans-serif"; sctx.textAlign = "right";
+  for (const dbAbove of [10, 20, 30, 40]) {
+    const q = dbAbove * 2.55;
+    const y = H - 1 - Math.round(q * (H-1) / SPEC_RANGE_Q);
+    if (y > 8 && y < H - 2) sctx.fillText("+" + dbAbove + " dB", W - 3, y - 2);
+  }
+  sctx.textAlign = "left";
 }
 
 /* Spectrum — raw mode */
@@ -1090,6 +1099,15 @@ function drawSpectrumRaw(bytes) {
   const isCW_r = (lastMode || "").toUpperCase().indexOf("CW") >= 0;
   const vfoX = Math.round(freqToPixelX(isCW_r ? lastFreqHz + lastCwPitchHz : lastFreqHz, W));
   sctx.fillStyle = "#ffb95a"; sctx.fillRect(vfoX-1, 0, 2, H);
+
+  /* dBm scale labels at the gridlines (right edge) */
+  sctx.fillStyle = "#9aa7b4"; sctx.font = "11px system-ui,sans-serif"; sctx.textAlign = "right";
+  for (const db of [-40, -60, -80, -100, -120]) {
+    const q = (db + 130) * 255 / 100;
+    const y = H - 1 - Math.round(q * (H-1) / 255);
+    if (y > 8 && y < H - 2) sctx.fillText(db + " dBm", W - 3, y - 2);
+  }
+  sctx.textAlign = "left";
 }
 
 /* Waterfall */
