@@ -1,4 +1,5 @@
 #include "audio.h"
+#include "dsp.h"
 
 #include <string.h>
 #include "freertos/FreeRTOS.h"
@@ -273,6 +274,11 @@ static void process_rx(void)
         if (sent != pdTRUE) {
             s_dropped_this_period += pairs;
         }
+
+        // CW audio out: forward every decoded I/Q sample to the CW demodulator
+        // in real time (no-op unless CW audio is enabled). Must be here, not in
+        // the snapshot fft_task, which only consumes ~1/3 of the samples.
+        dsp_cw_forward(decoded, pairs);
         // Loop back for another non-blocking drain read.
     }
 }

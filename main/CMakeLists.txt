@@ -24,6 +24,7 @@ idf_component_register(
         "util/diag_log.c"
         "cat/cat.c"
         "audio/audio.c"
+        "audio/cw_audio.c"
         "dsp/dsp.c"
         "dsp/iq_balance.c"
         "render/render.c"

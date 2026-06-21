@@ -5,6 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "freertos/ringbuf.h"
 #include "esp_log.h"
 
 // Phase 5.6: enable DC blocker on I/Q stream before FFT (standard SDR hygiene)
@@ -45,6 +46,19 @@ static bool s_have_spectrum = false;
 
 static TaskHandle_t s_fft_task = NULL;
 static uint32_t s_frames_this_period = 0;
+
+// ---- CW audio out: real-time I/Q forward ring -------------------------------
+// Producer = audio.c process_rx (every decoded USB sample); consumer =
+// cw_audio_task. BYTEBUF so variable-size producer chunks stream contiguously
+// and the consumer reads fixed pair counts with continuous fs/4 mixer phase.
+// ~125 ms of 48 kHz stereo int16 in INTERNAL RAM. Internal (not PSRAM) is
+// deliberate: the producer (core 0) and consumer (core 1) both hit this ring
+// every sample; in PSRAM that cross-core traffic contends with process_rx's
+// own PSRAM writes and halves the UAC drain rate. Internal RAM has no such
+// penalty.
+#define CW_RING_BYTES (24 * 1024)
+static RingbufHandle_t s_cw_ring    = NULL;
+static volatile bool   s_cw_forward = false;
 static int64_t  s_period_start_us = 0;
 
 #ifndef M_PI
@@ -633,6 +647,53 @@ const float *dsp_get_zoom_spectrum(void)
     int idx = s_zoom_ready_idx;
     if (idx < 0) return NULL;
     return s_zoom_spectrum[idx];
+}
+
+// ---- CW audio out: real-time forward-ring API -------------------------
+void dsp_cw_forward_enable(bool en)
+{
+    if (en && s_cw_ring == NULL) {
+        // BYTEBUF ring in INTERNAL RAM (see CW_RING_BYTES note re: PSRAM
+        // cross-core contention throttling the UAC drain).
+        s_cw_ring = xRingbufferCreateWithCaps(
+            CW_RING_BYTES, RINGBUF_TYPE_BYTEBUF,
+            MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        if (s_cw_ring == NULL) {
+            ESP_LOGE(TAG, "cw_ring alloc failed");
+            return;
+        }
+        ESP_LOGI(TAG, "cw_ring created (%d bytes)", CW_RING_BYTES);
+    }
+    s_cw_forward = en;
+}
+
+// Producer: called by audio.c for every decoded chunk. Best-effort (0-tick);
+// if the consumer is briefly behind, the oldest unread audio is the loss.
+void dsp_cw_forward(const int16_t *pairs, size_t n_pairs)
+{
+    if (!s_cw_forward || s_cw_ring == NULL || pairs == NULL || n_pairs == 0) return;
+    xRingbufferSend(s_cw_ring, pairs, n_pairs * 2 * sizeof(int16_t), 0);
+}
+
+// Consumer: fill up to n_pairs (loops over BYTEBUF wrap). Returns pairs read.
+size_t dsp_cw_read(int16_t *dst, size_t n_pairs, uint32_t timeout_ms)
+{
+    if (s_cw_ring == NULL || dst == NULL || n_pairs == 0) return 0;
+    size_t want_bytes = n_pairs * 2 * sizeof(int16_t);
+    size_t got_bytes  = 0;
+    uint8_t *d = (uint8_t *)dst;
+    // First read blocks up to timeout; the wrap remainder is non-blocking.
+    while (got_bytes < want_bytes) {
+        size_t chunk = 0;
+        uint32_t to = (got_bytes == 0) ? timeout_ms : 0;
+        void *item = xRingbufferReceiveUpTo(s_cw_ring, &chunk, pdMS_TO_TICKS(to),
+                                            want_bytes - got_bytes);
+        if (item == NULL) break;
+        memcpy(d + got_bytes, item, chunk);
+        vRingbufferReturnItem(s_cw_ring, item);
+        got_bytes += chunk;
+    }
+    return got_bytes / (2 * sizeof(int16_t));
 }
 
 static void fft_task(void *arg)

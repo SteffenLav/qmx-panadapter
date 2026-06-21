@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include "esp_err.h"
 
 // FFT configuration constants (visible to consumers like the renderer in Phase 5)
@@ -67,6 +68,18 @@ esp_err_t dsp_ft8_capture(float *dst_180000, uint32_t timeout_ms);
 esp_err_t dsp_ft8_capture_begin(float *dst, uint32_t target_samples);
 int       dsp_ft8_capture_progress(void);
 esp_err_t dsp_ft8_capture_finish(uint32_t timeout_ms);
+
+// ---- CW audio out (v0.18+): forward raw I/Q to the CW demodulator ----------
+// The CW demodulator needs EVERY I/Q sample in real time. fft_task is a
+// snapshot consumer (~15 windows/s, lets the rest overflow) so it is NOT a
+// usable audio source. Instead audio.c's real-time producer (process_rx) calls
+// dsp_cw_forward() for every decoded chunk into an internal PSRAM byte ring;
+// cw_audio_task drains it with dsp_cw_read(). Zero cost when forwarding is off.
+void   dsp_cw_forward_enable(bool en);                       // consumer enables/disables
+void   dsp_cw_forward(const int16_t *pairs, size_t n_pairs); // producer (audio.c); no-op if off
+// Read up to n_pairs interleaved int16 stereo pairs into dst (dst holds
+// n_pairs*2 int16). Returns pairs actually read (0 on timeout).
+size_t dsp_cw_read(int16_t *dst, size_t n_pairs, uint32_t timeout_ms);
 
 // ---- Zoom-FFT (v0.16.0): real frequency-resolution increase at zoom > x1 ---
 // The fft_task mixes the pan-center down to DC, low-pass filters, decimates

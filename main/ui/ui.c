@@ -17,6 +17,7 @@
 #include "display.h"
 #include "tab5_keyboard.h"
 #include "cat.h"
+#include "cw_audio.h"
 #include "settings.h"
 #include "wifi_config.h"
 #include "memory_modal.h"
@@ -1254,7 +1255,8 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_BRIGHTNESS 9
 #define DRAWER_SEC_CMAP       10
 #define DRAWER_SEC_DIAG       11
-#define N_DRAWER_SECTIONS     12
+#define DRAWER_SEC_CWAUDIO    12
+#define N_DRAWER_SECTIONS     13
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 // Phase 5.10D Stage 2b: drawer widgets we need to keep handles to
@@ -1272,6 +1274,9 @@ static lv_obj_t *s_dropdown_cmap = NULL;
 static lv_obj_t *s_slider_brightness = NULL;
 static uint8_t s_saved_ui_mode = UI_MODE_PANADAPTER;
 static lv_obj_t *s_lbl_brightness = NULL;
+static lv_obj_t *s_check_cwaudio = NULL;
+static lv_obj_t *s_slider_cwaudio_vol = NULL;
+static lv_obj_t *s_lbl_cwaudio_vol = NULL;
 static lv_obj_t *s_tune_tooltip  = NULL;  // freq label above finger during tap-to-tune
 static lv_obj_t *s_bw_label      = NULL;  // passband width in top bar
 static void drawer_preset_normal_cb(lv_event_t *e);
@@ -1308,6 +1313,8 @@ static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
 static void drawer_switch_diag_cb(lv_event_t *e);
 static void drawer_switch_wifi_en_cb(lv_event_t *e);
+static void drawer_check_cwaudio_cb(lv_event_t *e);
+static void drawer_slider_cwaudio_vol_cb(lv_event_t *e);
 bool ui_get_flat_mode(void);
 void ui_set_flat_mode(bool on);
 static void drawer_apply_preset(int db_min, int db_max, float alpha);
@@ -3484,6 +3491,45 @@ static void drawer_build(void)
         y += 130;
     }
 
+    // CW Audio section: play demodulated CW on the Tab5 speaker/headphone
+    // (only active in CW/CW-R mode). Header row carries the on/off checkbox;
+    // a volume slider sits below.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_CWAUDIO, y, 130);
+        lv_obj_t *ca_hdr = lv_label_create(sec);
+        lv_label_set_text(ca_hdr, "CW Audio");
+        lv_obj_set_style_text_color(ca_hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(ca_hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(ca_hdr, LV_ALIGN_TOP_LEFT, 0, 4);
+
+        // Initial state from NVS, not cw_audio_is_enabled()/get_volume():
+        // the drawer is built during ui_init, BEFORE cw_audio_init() loads
+        // those module statics, so the accessors would read stale defaults.
+        qmx_settings_t cacfg;
+        settings_load_all(&cacfg);
+
+        s_check_cwaudio = make_drawer_checkbox(sec, cacfg.cw_audio_en,
+                                               drawer_check_cwaudio_cb, NULL);
+        lv_obj_align(s_check_cwaudio, LV_ALIGN_TOP_RIGHT, 0, 0);
+
+        s_lbl_cwaudio_vol = lv_label_create(sec);
+        char cavbuf[24];
+        snprintf(cavbuf, sizeof(cavbuf), "Volume: %u", (unsigned)cacfg.cw_audio_vol);
+        lv_label_set_text(s_lbl_cwaudio_vol, cavbuf);
+        lv_obj_set_style_text_color(s_lbl_cwaudio_vol, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_cwaudio_vol, &lv_font_montserrat_28, 0);
+        lv_obj_align(s_lbl_cwaudio_vol, LV_ALIGN_TOP_LEFT, 0, 44);
+
+        s_slider_cwaudio_vol = lv_slider_create(sec);
+        lv_obj_set_size(s_slider_cwaudio_vol, DRAWER_W - 32, 30);
+        lv_slider_set_range(s_slider_cwaudio_vol, 0, 100);
+        lv_slider_set_value(s_slider_cwaudio_vol, (int)cacfg.cw_audio_vol, LV_ANIM_OFF);
+        lv_obj_align(s_slider_cwaudio_vol, LV_ALIGN_TOP_LEFT, 0, 74);
+        lv_obj_add_event_cb(s_slider_cwaudio_vol, drawer_slider_cwaudio_vol_cb,
+                            LV_EVENT_VALUE_CHANGED, NULL);
+        y += 130;
+    }
+
     // IF calibration section (per-unit QMX oscillator trim)
     {
         lv_obj_t *sec = drawer_section(DRAWER_SEC_IFCAL, y, 130);
@@ -3754,6 +3800,26 @@ static void drawer_switch_wifi_en_cb(lv_event_t *e)
     bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
     settings_set_wifi_enabled(on);
     ESP_LOGI(TAG, "WiFi boot-initiation: %s", on ? "ON" : "OFF");
+}
+
+static void drawer_check_cwaudio_cb(lv_event_t *e)
+{
+    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    cw_audio_set_enabled(on);
+    ESP_LOGI(TAG, "CW audio: %s", on ? "ON" : "OFF");
+}
+
+static void drawer_slider_cwaudio_vol_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!s_slider_cwaudio_vol) return;
+    int v = (int)lv_slider_get_value(s_slider_cwaudio_vol);
+    cw_audio_set_volume((uint8_t)v);
+    if (s_lbl_cwaudio_vol) {
+        char b[24];
+        snprintf(b, sizeof(b), "Volume: %d", v);
+        lv_label_set_text(s_lbl_cwaudio_vol, b);
+    }
 }
 
 

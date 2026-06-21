@@ -15,6 +15,7 @@
 #include "bsp_info.h"
 #include "cat.h"
 #include "audio.h"
+#include "cw_audio.h"
 #include "dsp.h"
 #include "render.h"
 #include "render_waterfall.h"
@@ -100,6 +101,11 @@ void app_main(void)
     render_set_ema_alpha(cfg.ema_alpha);
     status_bar_start();
 
+    // Open the CW-audio output path (I2S/ES8388) BEFORE the USB host starts,
+    // so I2S can grab its DMA-capable RAM before the UAC stream consumes the
+    // pool. No-op unless CW audio is persisted-enabled.
+    cw_audio_preopen();
+
     ESP_ERROR_CHECK(bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true));
     ESP_LOGI(TAG, "USB host started");
 
@@ -130,6 +136,11 @@ void app_main(void)
     // magnification mode until the user touches the zoom control.
     ui_set_zoom(ui_get_zoom_factor(), ui_get_pan_offset_bins());
     ESP_ERROR_CHECK(render_init());
+
+    // CW audio out: demodulate CW from the I/Q and play it on the Tab5
+    // speaker/headphone. Idle (no CPU, codec released) unless enabled and the
+    // radio is in CW/CW-R. Needs dsp_init() (forward ring) and settings.
+    cw_audio_init();
 
     ESP_LOGI(TAG, "Init complete - main task idle");
     // Spawn FT8 self-test on a dedicated task (32 KB stack, core 1).

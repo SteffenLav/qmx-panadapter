@@ -55,6 +55,8 @@ typedef struct {
     char     eqsl_user[16];   // eQSL.cc username (callsign), set via web UI
     char     eqsl_pswd[32];   // eQSL.cc password
     uint32_t eqsl_uploaded_n; // count of ADIF records already uploaded to eQSL
+    bool     cw_audio_en;     // CW sidetone audio on Tab5 speaker/headphone (default false)
+    uint8_t  cw_audio_vol;    // CW audio output volume 0..100 (default 60)
     ft8_filters_t ft8_filters;        // CQ-run reply include/exclude filters
 } qmx_settings_t;
 
@@ -106,6 +108,11 @@ void settings_set_onboarded(bool v);
 
 // FT8 CQ-run reply include/exclude filters (debounced flush).
 void settings_set_ft8_filters(const ft8_filters_t *f);
+
+// CW audio output: enable the on-device CW sidetone (speaker/headphone), and
+// its volume 0..100 (debounced flush).
+void settings_set_cw_audio_en(bool v);
+void settings_set_cw_audio_vol(uint8_t v);
 
 // WiFi boot-initiation toggle (debounced flush). When false the radio stays
 // idle at boot even if credentials are stored; the user can re-enable from

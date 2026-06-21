@@ -46,6 +46,8 @@ static const char *TAG = "settings";
 #define KEY_EQSL_USER    "eqsl_user"
 #define KEY_EQSL_PSWD    "eqsl_pswd"
 #define KEY_EQSL_UPLOADED "eqsl_upl_n"
+#define KEY_CW_AUD_EN    "cw_aud_en"
+#define KEY_CW_AUD_VOL   "cw_aud_vol"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -60,6 +62,8 @@ static const char *TAG = "settings";
 #define DEF_BRIGHTNESS  (100)
 #define DEF_LAST_MODE     (0)
 #define DEF_WIFI_ENABLED  (true)
+#define DEF_CW_AUD_EN     (false)
+#define DEF_CW_AUD_VOL    (60)
 
 // Debounce: how long we wait after the last change before flushing.
 #define DEBOUNCE_MS     500
@@ -97,12 +101,14 @@ static const char *TAG = "settings";
 #define DIRTY_EQSL_USER     (1u << 29)
 #define DIRTY_EQSL_PSWD     (1u << 30)
 #define DIRTY_EQSL_UPLOADED (1u << 31)
+#define DIRTY_CW_AUD_EN     (1ull << 32)
+#define DIRTY_CW_AUD_VOL    (1ull << 33)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
 static nvs_handle_t     s_nvs            = 0;
 static SemaphoreHandle_t s_mutex         = NULL;
-static uint32_t         s_dirty          = 0;
+static uint64_t         s_dirty          = 0;
 static qmx_settings_t   s_pending;       // staged values awaiting flush
 static TickType_t       s_last_change_tick = 0;
 static TaskHandle_t     s_flush_task     = NULL;
@@ -149,7 +155,7 @@ static void flush_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(100));
         if (!s_ready) continue;
 
-        uint32_t dirty_local = 0;
+        uint64_t dirty_local = 0;
         qmx_settings_t snap;
         bool do_flush = false;
 
@@ -204,12 +210,14 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_EQSL_USER)     nvs_set_str(s_nvs, KEY_EQSL_USER, snap.eqsl_user);
         if (dirty_local & DIRTY_EQSL_PSWD)     nvs_set_str(s_nvs, KEY_EQSL_PSWD, snap.eqsl_pswd);
         if (dirty_local & DIRTY_EQSL_UPLOADED) nvs_set_u32(s_nvs, KEY_EQSL_UPLOADED, snap.eqsl_uploaded_n);
+        if (dirty_local & DIRTY_CW_AUD_EN)  nvs_set_u8(s_nvs, KEY_CW_AUD_EN,  snap.cw_audio_en ? 1 : 0);
+        if (dirty_local & DIRTY_CW_AUD_VOL) nvs_set_u8(s_nvs, KEY_CW_AUD_VOL, snap.cw_audio_vol);
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "nvs_commit failed: 0x%x", err);
         } else {
-            ESP_LOGI(TAG, "flushed dirty=0x%lx", (unsigned long)dirty_local);
+            ESP_LOGI(TAG, "flushed dirty=0x%llx", (unsigned long long)dirty_local);
         }
     }
 }
@@ -287,6 +295,8 @@ static void load_from_nvs(qmx_settings_t *out)
     out->eqsl_user[0] = '\0';
     out->eqsl_pswd[0] = '\0';
     out->eqsl_uploaded_n = 0;
+    out->cw_audio_en  = DEF_CW_AUD_EN;
+    out->cw_audio_vol = DEF_CW_AUD_VOL;
     memset(&out->ft8_filters, 0, sizeof(out->ft8_filters));
 
     if (!s_ready) {
@@ -350,6 +360,9 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_str(s_nvs, KEY_EQSL_PSWD, out->eqsl_pswd, &sz);
     nvs_get_u32(s_nvs, KEY_EQSL_UPLOADED, &out->eqsl_uploaded_n);
 
+    if (nvs_get_u8(s_nvs, KEY_CW_AUD_EN, &u8v) == ESP_OK) out->cw_audio_en = (u8v != 0);
+    nvs_get_u8(s_nvs, KEY_CW_AUD_VOL, &out->cw_audio_vol);
+
     sz = sizeof(out->ft8_filters);
     nvs_get_blob(s_nvs, KEY_FT8_FILT, &out->ft8_filters, &sz);
 
@@ -373,7 +386,7 @@ void settings_load_all(qmx_settings_t *out)
     load_from_nvs(out);  // not initialised yet: defaults + whatever NVS has
 }
 
-static void mark_dirty(uint32_t bit)
+static void mark_dirty(uint64_t bit)
 {
     if (!s_ready) return;
     if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE) {
@@ -529,7 +542,9 @@ void settings_set_last_ui_mode(uint8_t mode)
         return;
     }
     s_pending.last_ui_mode = mode;
-    s_dirty &= ~DIRTY_LAST_MODE;  // written synchronously below; nothing left for flush_task
+    // 64-bit mask: ~(1u<<15) is a 32-bit value that would zero-extend and clear
+    // the upper dirty bits (e.g. cw_audio, bits 32/33). Cast keeps them intact.
+    s_dirty &= ~((uint64_t)DIRTY_LAST_MODE);  // written synchronously below; nothing left for flush_task
     xSemaphoreGive(s_mutex);
 
     // Write immediately rather than via the debounced flush task: a mode
@@ -684,6 +699,27 @@ void settings_set_freq_kp_calc(bool v)
     s_pending.freq_kp_calc = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_FREQ_KP_CALC);
+}
+
+void settings_set_cw_audio_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.cw_audio_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.cw_audio_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CW_AUD_EN);
+}
+
+void settings_set_cw_audio_vol(uint8_t v)
+{
+    if (!s_ready) return;
+    if (v > 100) v = 100;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.cw_audio_vol == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.cw_audio_vol = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CW_AUD_VOL);
 }
 
 void settings_set_qrz_api_key(const char *key)
