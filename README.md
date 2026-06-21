@@ -10,7 +10,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Beta — v0.17.0.** FT8 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
+> **Beta — v0.18.0.** FT8 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
 
 ---
 
@@ -43,7 +43,7 @@ Use the one-click flasher in [`tools/QMX-Panadapter flasher/`](tools/QMX-Panadap
 1. Plug the Tab5 into your computer with a **USB-C data cable** — charge-only cables will not work.
 2. Run the flasher:
    - **Windows** — double-click `flash.bat` (downloads esptool + firmware automatically; nothing to install)
-   - **macOS** — double-click `flash.command` (needs esptool once: `brew install esptool` or `pip3 install esptool`)
+   - **macOS** — double-click `flash.command` (needs esptool once — `brew install esptool` recommended; `pip3 install esptool` often fails on recent macOS with an "externally-managed-environment" error). If macOS blocks the script, right-click → **Open**, or run `bash flash.command` in Terminal (no `chmod` needed).
    - **Linux** — `bash flash.command` (needs `pip3 install esptool`)
 3. Wait for `SUCCESS`. The Tab5 restarts on the new firmware.
 
@@ -282,7 +282,7 @@ The browser panadapter is a full-featured view in its own right — not just a w
   "qso_count":   12,
   "qrz_key_set": false,
   "eqsl_creds_set": false,
-  "tab5_fw":     "v0.17.0",
+  "tab5_fw":     "v0.18.0",
   "qmx_fw":      "1_03_002QMX"
 }
 ```
@@ -552,7 +552,7 @@ I (xxxx) bsp_info: panel:    ST7123 (inferred from touch)
 I (xxxx) bsp_info: touch:    ST7123 @ 0x55
 I (xxxx) bsp_info: heap:     230.5 kB internal free, 28.80 MB PSRAM free
 I (xxxx) bsp_info: idf:      v5.4.4
-I (xxxx) bsp_info: firmware: v0.17.0
+I (xxxx) bsp_info: firmware: v0.18.0
 I (xxxx) bsp_info: =====================
 ```
 
@@ -672,6 +672,17 @@ main/
 ---
 
 ## Roadmap
+
+### Shipped in v0.18.0
+
+- **Faster FT8 decode — replies land in time on busy bands.** The spectrogram is now built continuously *while* the slot is captured (instead of all at once after it ends), and decoding runs across both ESP32-P4 cores. The decode finishes early enough that a reply or report can go out on the *immediate* next slot rather than slipping a full 15 s cycle — the lag several operators reported on busy 20 m. The decoder still uses the same proven ft8_lib; this is about timing, not a different algorithm. A slightly lower candidate threshold also nets a few more weak-signal decodes, mainly on quiet bands.
+- **dBm scale on the spectrum.** A labelled dB scale is back on the panadapter — absolute dBm in normal mode, dB-above-noise-floor in flat mode — and is now drawn on the browser spectrum too, which never had it.
+- **Memory channels fixed.** Saving a channel could store a corrupted frequency (e.g. 14.020 MHz saved as 140 Hz) and refuse to recall; channels now store and recall the full frequency. *(Ian G4LXX)*
+- **Tap-to-tune direction fixed.** Tapping the right of the panadapter to tune up could jump *down* in the far-right (aliased) quarter of the display; taps now always tune in the direction you tap. *(Ian G4LXX)*
+- **Band switching fixed.** If you'd parked a band outside its legal allocation you couldn't switch back to it until a reboot; the band button now falls back to the band centre only when the remembered spot is out of band — otherwise it still returns you to where you were. *(Ian G4LXX)*
+- **Web reconnect fixed.** The browser spectrum could get stuck on "reconnecting" after a reload or network blip while the rest of the page kept working; the WebSocket now hands the session to the newest connection, so it always reconnects.
+- **WiFi reliability on new Tab5 units.** Hardened the C6/ESP-Hosted bring-up against a duplicate STA-start that could assert on some newer units. *(Roy)*
+- **macOS flasher guidance.** Clearer help for the common Mac snags — `brew install esptool` (pip3 often fails on recent macOS), the Gatekeeper "unidentified developer" prompt, and running `bash flash.command` to avoid the chmod/permission hurdle. *(John K7JFW)*
 
 ### Shipped in v0.17.0
 

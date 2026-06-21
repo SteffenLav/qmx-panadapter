@@ -33,19 +33,36 @@ already in this folder from a previous run - see "If it fails".)
  Mac / Linux
 ------------------------------------------------------------
 
- Install esptool once:   pip3 install esptool
-    (or on macOS with Homebrew:  brew install esptool)
+ You need esptool installed once:
 
- Then:
+    macOS - brew install esptool      (recommended)
+    Linux - pip3 install esptool
+
+ NOTE for macOS: "pip3 install esptool" often FAILS on recent
+ macOS with an "externally-managed-environment" error, even with
+ Python installed. If that happens, use Homebrew instead
+ (brew install esptool) or:  pipx install esptool
+
+ Then run the flasher:
     macOS - double-click  flash.command
     Linux - run           bash flash.command
+
+ The simplest, trouble-free way on a Mac is to open Terminal in
+ this folder and run:   bash flash.command
+ (That needs no "chmod" and sidesteps the security prompt below.)
+
+ macOS security prompt: the first time, macOS may block the script
+ ("unidentified developer" / "cannot be opened"). Either:
+    - Right-click flash.command -> Open -> Open  (trusts it once), or
+    - System Settings -> Privacy & Security -> "Open Anyway".
+
+ "permission denied"? The download stripped the run permission.
+ Just use   bash flash.command   (no fix needed), or once run:
+    chmod +x flash.command       (then double-click again)
 
  If the serial port is denied on Linux, add yourself to the
  dialout group once:   sudo usermod -aG dialout $USER
  (log out and back in afterwards).
-
- If macOS won't run it ("cannot be opened"), in Terminal:
-    chmod +x flash.command       (once, then double-click again)
 
 ------------------------------------------------------------
  If it fails

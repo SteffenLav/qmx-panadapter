@@ -21,8 +21,12 @@ else
     echo "ERROR: esptool is not installed."
     echo
     echo "Install it once, then run this again:"
-    echo "    pip3 install esptool        (any OS with Python)"
-    echo "    brew install esptool        (macOS with Homebrew)"
+    echo "    macOS:  brew install esptool      (recommended)"
+    echo "    Linux:  pip3 install esptool"
+    echo
+    echo "Note: on recent macOS 'pip3 install esptool' often fails with"
+    echo "'externally-managed-environment' even when Python is installed."
+    echo "Use Homebrew (brew install esptool) or:  pipx install esptool"
     echo
     read -r -p "Press Enter to close..."
     exit 1
