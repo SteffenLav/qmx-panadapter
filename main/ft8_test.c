@@ -81,6 +81,22 @@ static const char *TAG = "ft8_test";
 // decode_slot) - also the upper bound on each worker's timing-sample array.
 #define FT8_MAX_CANDIDATES    140
 
+// Minimum Costas sync score for a candidate to be attempted. ft8_lib's demo
+// uses 10; we lower it to 5 to attempt weaker candidates, spending the per-slot
+// headroom freed by Stages 1+2 on a few more real decodes (most low-score
+// candidates fail LDPC harmlessly).
+#define FT8_FIND_MIN_SCORE    5
+
+// Reply-on-the-immediate-slot window. A reply is decoded from the slot we hear
+// the partner in, but that decode only finishes ~1-2 s into the NEXT (our-TX)
+// slot - normally too late to arm in time, so the reply slips a full 15 s cycle.
+// While capturing a slot, ft8_task polls for a freshly-armed reply during this
+// opening window and, if one lands, aborts the (discardable) RX capture and
+// fires the burst on THIS slot. A burst started this late is still inside
+// ft8_lib's time-search range (~-1.6..+3.2 s) so the partner still decodes it.
+// WSJT-X gets here by decoding in the 2.36 s dead-air gap; this is our equivalent.
+#define FT8_REPLY_TX_WINDOW_MS 2500
+
 // Monitor pool depth. Capture claims a free monitor each slot (holding it for
 // the whole 15 s while it streams the STFT in) and the decoder releases it when
 // done. At most TWO are ever in use - one capturing, one decoding - and decode
@@ -468,7 +484,11 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
     int64_t t_start = esp_timer_get_time();
 
     ftx_candidate_t cands[FT8_MAX_CANDIDATES];
-    int n_cand = ftx_find_candidates(&mon->wf, FT8_MAX_CANDIDATES, cands, 10);
+    // Deeper search: min sync score 10 -> 5 surfaces weaker candidates to attempt.
+    // Stages 1+2 freed ~4 s of per-slot headroom, so the extra (mostly-failing)
+    // LDPC attempts are affordable and net a few more real weak-signal decodes;
+    // strongest-first ordering + FT8_DECODE_BUDGET_MS still protect the busiest slots.
+    int n_cand = ftx_find_candidates(&mon->wf, FT8_MAX_CANDIDATES, cands, FT8_FIND_MIN_SCORE);
 
     // Slot noise floor for SNR: one powf sweep over the whole waterfall, shared
     // by every message (hoisting this out of the per-message path was the
@@ -785,6 +805,8 @@ static void ft8_task(void *arg)
             int     n_blocks  = SLOT_SAMPLES / blk;      // 93 full symbol blocks
             int     processed = 0;
             int64_t stft_us   = 0;
+            ft8_tx_request_t late_txreq;
+            bool    late_tx   = false;
             if (e == ESP_OK) {
                 while (processed < n_blocks) {
                     int avail = dsp_ft8_capture_progress();
@@ -795,23 +817,47 @@ static void ft8_task(void *arg)
                         processed++;
                     }
                     if (avail >= SLOT_SAMPLES) break;                                  // whole slot in
-                    if ((int)((esp_timer_get_time() - t0) / 1000) >= ms_to_boundary) break;  // boundary
+                    int into_slot_ms = (int)((esp_timer_get_time() - t0) / 1000);
+                    if (into_slot_ms >= ms_to_boundary) break;                          // boundary
+                    // Reply-on-the-immediate-slot: if the prior slot's decode just
+                    // armed a reply matching THIS slot's parity, fire it now instead
+                    // of waiting a full cycle. See FT8_REPLY_TX_WINDOW_MS. Safe -
+                    // should_run only returns a legitimately-armed, correct-parity
+                    // request, so this can never misfire a spurious/wrong-parity TX.
+                    if (into_slot_ms <= FT8_REPLY_TX_WINDOW_MS &&
+                        ft8_tx_should_run_this_slot(slot_sec, &late_txreq)) {
+                        late_tx = true;
+                        break;
+                    }
                     vTaskDelay(pdMS_TO_TICKS(15));
                 }
-                // Disarm + zero-pad the dead-air tail, then FFT any remaining
-                // whole blocks (late in-flight samples or zero-pad -> noise).
+                // Disarm capture (stop the dsp FT8 branch writing) before we
+                // either queue the decode or switch to TX on this slot.
                 e = dsp_ft8_capture_finish(60);
+            }
+
+            if (late_tx) {
+                // Abort this slot's RX - we're transmitting the freshly-armed reply
+                // on it. Discard the partial capture (we don't RX our own TX slot).
+                s_buf_busy[bi] = false;
+                ESP_LOGI(TAG, "slot %d: reply armed mid-slot (+%dms) - TX on immediate slot: %s",
+                         slot_idx, (int)((esp_timer_get_time() - t0) / 1000), late_txreq.display_text);
+                ft8_status_set("TX: %s", late_txreq.display_text);
+                ft8_tx_run(&late_txreq);          // blocks ~12.7 s; always restores RX
+                ft8_qso_on_tx_complete();
+                ft8_status_set("TX done - waiting for next slot");
+                ft8_screen_view_request_refresh();
+            } else if (e == ESP_OK) {
+                // FFT any remaining whole blocks (late in-flight samples or the
+                // zero-padded dead-air tail -> noise), then queue the decode.
                 while ((processed + 1) * blk <= SLOT_SAMPLES) {
                     int64_t ts = esp_timer_get_time();
                     monitor_process(mon, &s_cap_scratch[processed * blk]);
                     stft_us += esp_timer_get_time() - ts;
                     processed++;
                 }
-            }
-            int cap_ms  = (int)((esp_timer_get_time() - t0) / 1000);
-            int stft_ms = (int)(stft_us / 1000);
-
-            if (e == ESP_OK) {
+                int cap_ms  = (int)((esp_timer_get_time() - t0) / 1000);
+                int stft_ms = (int)(stft_us / 1000);
                 decode_job_t job = { bi, slot_sec, slot_idx, cap_ms, stft_ms, start_off_ms };
                 if (xQueueSend(s_decode_queue, &job, 0) != pdTRUE) {
                     // Shouldn't happen (queue depth == pool size), but if it
