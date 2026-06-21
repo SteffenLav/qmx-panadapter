@@ -372,8 +372,10 @@ esp_err_t dsp_find_peak_hz_around(int32_t center_hz, int32_t radius_hz, int32_t 
     if (radius_bins < 1) radius_bins = 1;
 
     // Search [center_bin - radius_bins, center_bin + radius_bins], wrapping mod N.
+    // Track the peak's offset (in bins) FROM the search center, not its absolute
+    // bin, so the result is always within ±radius_hz of the tapped position.
     float peak_db = -1e9f;
-    int   peak_bin = center_bin;
+    int   peak_d  = 0;
     float sum_db = 0.0f;
     int   count = 0;
     for (int d = -radius_bins; d <= radius_bins; d++) {
@@ -381,7 +383,7 @@ esp_err_t dsp_find_peak_hz_around(int32_t center_hz, int32_t radius_hz, int32_t 
         float v = s_spectrum[b];
         sum_db += v;
         count++;
-        if (v > peak_db) { peak_db = v; peak_bin = b; }
+        if (v > peak_db) { peak_db = v; peak_d = d; }
     }
     float mean_db = (count > 0) ? (sum_db / (float)count) : -120.0f;
     xSemaphoreGive(s_spectrum_mtx);
@@ -392,11 +394,13 @@ esp_err_t dsp_find_peak_hz_around(int32_t center_hz, int32_t radius_hz, int32_t 
         return ESP_OK;
     }
 
-    // Unwrap peak_bin back into a signed bin offset (-N/2 .. +N/2), then to Hz from dial.
-    int signed_bin = peak_bin;
-    if (signed_bin >= N / 2) signed_bin -= N;
-    int32_t peak_hz_baseband = (int32_t)(signed_bin * bin_width + 0.5f * (signed_bin >= 0 ? 1.0f : -1.0f));
-    *out_hz = peak_hz_baseband - 12000;
+    // Return the peak relative to the tapped position. The old code unwrapped the
+    // peak's *absolute* bin to a signed frequency, which aliased once
+    // center_hz+12 kHz crossed the +24 kHz Nyquist edge (taps in the right ~quarter
+    // of the 48 kHz display) — wrapping to a large NEGATIVE frequency, so a tap to
+    // the RIGHT tuned DOWN (reported by Ian G4LXX). Offsetting from center_hz keeps
+    // the snap inside ±radius_hz by construction, so direction is always preserved.
+    *out_hz = center_hz + (int32_t)lroundf((float)peak_d * bin_width);
     return ESP_OK;
 }
 

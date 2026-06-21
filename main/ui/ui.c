@@ -112,21 +112,48 @@ static void band_popup_close(void)
     if (s_band_popup) { lv_obj_delete(s_band_popup); s_band_popup = NULL; }
 }
 
+// Standard HF amateur band edges (widest common allocation), used only to
+// validate a *recalled* per-band frequency. Returns false for an unrecognized
+// band center (then we recall unconditionally, preserving old behavior).
+static bool legal_band_edges(uint32_t center_hz, uint32_t *lo, uint32_t *hi)
+{
+    static const struct { uint32_t lo, hi; } E[] = {
+        {1800000, 2000000},  {3500000, 4000000},   {5250000, 5450000},
+        {7000000, 7300000},  {10100000, 10150000}, {14000000, 14350000},
+        {18068000, 18168000},{21000000, 21450000}, {24890000, 24990000},
+        {28000000, 29700000},{50000000, 54000000},
+    };
+    for (size_t i = 0; i < sizeof(E) / sizeof(E[0]); i++) {
+        if (center_hz >= E[i].lo && center_hz <= E[i].hi) {
+            if (lo) *lo = E[i].lo;
+            if (hi) *hi = E[i].hi;
+            return true;
+        }
+    }
+    return false;
+}
+
 static void band_preset_cb(lv_event_t *e)
 {
     uint32_t center_hz = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
     band_popup_close();
-    // Use last-visited frequency on this band if we have one.
-    int band_count = 0;
-    const cat_band_entry_t *bands = cat_get_band_list(&band_count);
+    // Recall the last-visited (NVS-persisted) frequency on this band - KEEP this,
+    // it's a deliberate per-band-memory feature. Fall back to the always-legal
+    // band center ONLY when the remembered spot was parked OUTSIDE the legal
+    // allocation: the QMX rejects an out-of-band recall, which made the band look
+    // "locked out" (couldn't switch back) until reboot (Ian G4LXX).
     uint32_t target = center_hz;
-    for (int i = 0; i < band_count; i++) {
-        if (bands[i].center_hz == center_hz && s_band_last_hz[i] != 0) {
-            target = s_band_last_hz[i];
-            break;
+    uint32_t last   = ui_band_last_hz(center_hz);
+    if (last != 0) {
+        uint32_t lo, hi;
+        if (legal_band_edges(center_hz, &lo, &hi)) {
+            if (last >= lo && last <= hi) target = last;   // in band -> recall
+            // out of band -> leave target = center
+        } else {
+            target = last;                                  // unknown band -> recall as before
         }
     }
-    cat_set_frequency(target);
+    cat_set_frequency_forced(target);
 }
 
 static void band_overlay_cb(lv_event_t *e)
@@ -679,7 +706,13 @@ void ui_freq_picker_open(uint32_t initial_hz, const char *initial_mode, ui_freq_
 {
     if (s_freq_popup) freq_popup_close();
     s_freq_picker_cb = cb;
-    snprintf(s_freq_buf, sizeof(s_freq_buf), "%lu", (unsigned long)initial_hz);
+    // Pre-fill in the keypad's dotted "MHz.kHz.Hz" form that freq_buf_to_hz()
+    // round-trips. A plain "%lu" Hz string has no dots, and freq_buf_to_hz caps a
+    // dotless value at 3 digits - so e.g. 14020000 was read back as 140, breaking
+    // memory-channel save/recall (reported by Ian G4LXX). Dotted groups parse exactly.
+    unsigned long hz = (unsigned long)initial_hz;
+    snprintf(s_freq_buf, sizeof(s_freq_buf), "%lu.%03lu.%03lu",
+             hz / 1000000UL, (hz / 1000UL) % 1000UL, hz % 1000UL);
     strncpy(s_freq_mode_sel, initial_mode && initial_mode[0] ? initial_mode : "", sizeof(s_freq_mode_sel) - 1);
     s_freq_mode_sel[sizeof(s_freq_mode_sel) - 1] = '\0';
     freq_popup_build();
@@ -1301,6 +1334,19 @@ static uint8_t *s_wf_canvas_buf = NULL;
 static lv_obj_t *s_db_max_label = NULL;
 static lv_obj_t *s_db_min_label = NULL;
 
+// dBm scale (v0.18.0): labeled gridlines down the right edge of the spectrum.
+// Normal mode = absolute dBm; flat mode = relative dB above the noise floor.
+// The gridlines are drawn per-frame into the canvas (see ui_push_spectrum);
+// these overlay labels persist and are repositioned on range/mode change.
+#define DB_SCALE_MAX_LBLS 5
+static lv_obj_t *s_db_scale_lbl[DB_SCALE_MAX_LBLS] = {0};
+// Evenly-spaced dBm ticks, each label centered on its gridline. The old -30/-130
+// corner labels are hidden (see update_db_scale) so the scale reads as one clean
+// right-edge column rather than bunching the corners against -40/-120.
+static const float s_grid_dbm[5]  = { -40.0f, -60.0f, -80.0f, -100.0f, -120.0f };
+static const int   s_grid_flat[3] = { 10, 20, 30 };  // dB above floor
+static void update_db_scale(void);   // positions/labels the gridline values
+
 // Spectrum canvas (Phase 5.1)
 static lv_obj_t *s_spec_canvas = NULL;
 static uint8_t *s_spec_canvas_buf = NULL;
@@ -1520,7 +1566,7 @@ static void build_spectrum(lv_obj_t *parent)
     lv_obj_set_style_bg_color(s_db_max_label, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_db_max_label, LV_OPA_70, 0);
     lv_obj_set_style_pad_all(s_db_max_label, 3, 0);
-    lv_obj_align(s_db_max_label, LV_ALIGN_TOP_LEFT, 4, 2);
+    lv_obj_align(s_db_max_label, LV_ALIGN_TOP_RIGHT, -4, 2);
 
     s_db_min_label = lv_label_create(s_spectrum_obj);
     lv_label_set_text(s_db_min_label, "");
@@ -1529,7 +1575,7 @@ static void build_spectrum(lv_obj_t *parent)
     lv_obj_set_style_bg_color(s_db_min_label, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_db_min_label, LV_OPA_70, 0);
     lv_obj_set_style_pad_all(s_db_min_label, 3, 0);
-    lv_obj_align(s_db_min_label, LV_ALIGN_BOTTOM_LEFT, 4, -2);
+    lv_obj_align(s_db_min_label, LV_ALIGN_BOTTOM_RIGHT, -4, -2);
 
     // Phase 5.5: show static defaults immediately (no autoscale to update them)
     char buf_max[16], buf_min[16];
@@ -1537,6 +1583,20 @@ static void build_spectrum(lv_obj_t *parent)
     snprintf(buf_min, sizeof(buf_min), "%.0f dBm", (double)DB_MIN_DISPLAY);
     lv_label_set_text(s_db_max_label, buf_max);
     lv_label_set_text(s_db_min_label, buf_min);
+
+    // dBm scale labels: small right-edge labels at each gridline (v0.18.0).
+    for (int i = 0; i < DB_SCALE_MAX_LBLS; i++) {
+        lv_obj_t *l = lv_label_create(s_spectrum_obj);
+        lv_label_set_text(l, "");
+        lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_bg_color(l, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(l, LV_OPA_50, 0);
+        lv_obj_set_style_pad_all(l, 2, 0);
+        lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN);
+        s_db_scale_lbl[i] = l;
+    }
+    update_db_scale();
 }
 
 // ==== Label band (Phase 5.3): black strip between spectrum and waterfall with offset ticks ====
@@ -2309,6 +2369,7 @@ void ui_set_db_labels(float db_min, float db_max)
     if (display_lock(20)) {
         lv_label_set_text(s_db_max_label, buf_max);
         lv_label_set_text(s_db_min_label, buf_min);
+        update_db_scale();   // reposition the right-edge gridline labels for the new range
         display_unlock();
     }
 }
@@ -2334,6 +2395,46 @@ static float *s_flat_smooth = NULL;
 static float *s_flat_floor  = NULL;
 static bool   s_flat_ready  = false;
 static bool   s_flat_mode   = true;  /* TODO: drawer toggle + NVS */
+
+// Reposition + relabel the right-edge dBm scale for the current mode/range.
+// Cheap; called on init, dB-range change, and flat-mode toggle (NOT per frame).
+// Lock-free: every caller already holds the display lock (LVGL event ctx /
+// ui_init / inside ui_set_db_labels' lock).
+static void update_db_scale(void)
+{
+    if (!s_db_scale_lbl[0]) return;
+    int n = 0;
+    char txt[12];
+    if (s_flat_mode) {
+        int cnt = (int)(sizeof(s_grid_flat) / sizeof(s_grid_flat[0]));
+        for (int i = 0; i < cnt && i < DB_SCALE_MAX_LBLS; i++) {
+            int v = s_grid_flat[i];
+            int y = SPECTRUM_H - 1 - (int)((float)v * (float)(SPECTRUM_H - 1) / FLAT_RANGE_DB);
+            snprintf(txt, sizeof(txt), (i == 0) ? "+%d dB" : "+%d", v);
+            lv_label_set_text(s_db_scale_lbl[i], txt);
+            lv_obj_align(s_db_scale_lbl[i], LV_ALIGN_TOP_RIGHT, -4, y - 12);
+            lv_obj_clear_flag(s_db_scale_lbl[i], LV_OBJ_FLAG_HIDDEN);
+            n++;
+        }
+    } else {
+        int cnt = (int)(sizeof(s_grid_dbm) / sizeof(s_grid_dbm[0]));
+        for (int i = 0; i < cnt && i < DB_SCALE_MAX_LBLS; i++) {
+            int y = db_to_y(s_grid_dbm[i]);
+            snprintf(txt, sizeof(txt), (i == 0) ? "%d dBm" : "%d", (int)s_grid_dbm[i]);
+            lv_label_set_text(s_db_scale_lbl[i], txt);
+            lv_obj_align(s_db_scale_lbl[i], LV_ALIGN_TOP_RIGHT, -4, y - 12);
+            lv_obj_clear_flag(s_db_scale_lbl[i], LV_OBJ_FLAG_HIDDEN);
+            n++;
+        }
+    }
+    for (int i = n; i < DB_SCALE_MAX_LBLS; i++) {
+        lv_obj_add_flag(s_db_scale_lbl[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    // Superseded by this evenly-centered right-edge scale: keep the old corner
+    // range labels hidden so the dBm column reads cleanly in both modes.
+    if (s_db_max_label) lv_obj_add_flag(s_db_max_label, LV_OBJ_FLAG_HIDDEN);
+    if (s_db_min_label) lv_obj_add_flag(s_db_min_label, LV_OBJ_FLAG_HIDDEN);
+}
 
 void ui_push_spectrum(const float *bins, int n_bins)
 {
@@ -2369,13 +2470,24 @@ void ui_push_spectrum(const float *bins, int n_bins)
         }
     }
 
-    // dB grid lines (Phase 5.3) - draw before spectrum so green overdraws on hits
-    // Phase 5.12: suppressed in flat mode (dBm axis meaningless when shown as dB-above-floor)
-    if (!s_flat_mode)
+    // dB grid lines (Phase 5.3) - draw before spectrum so green overdraws on hits.
+    // v0.18.0: drawn in BOTH modes - absolute dBm in normal, relative dB-above-floor
+    // in flat - to match the right-edge scale labels (see update_db_scale).
     {
-        const float grid_dbs[5] = { -120.0f, -100.0f, -80.0f, -60.0f, -40.0f };
-        for (int g = 0; g < 5; g++) {
-            int gy = db_to_y(grid_dbs[g]);
+        int gys[5];
+        int gn = 0;
+        if (s_flat_mode) {
+            int cnt = (int)(sizeof(s_grid_flat) / sizeof(s_grid_flat[0]));
+            for (int g = 0; g < cnt; g++) {
+                gys[gn++] = SPECTRUM_H - 1 -
+                    (int)((float)s_grid_flat[g] * (float)(SPECTRUM_H - 1) / FLAT_RANGE_DB);
+            }
+        } else {
+            int cnt = (int)(sizeof(s_grid_dbm) / sizeof(s_grid_dbm[0]));
+            for (int g = 0; g < cnt; g++) gys[gn++] = db_to_y(s_grid_dbm[g]);
+        }
+        for (int g = 0; g < gn; g++) {
+            int gy = gys[g];
             if (gy >= 0 && gy < SPECTRUM_H) {
                 uint16_t *row = px + gy * DISPLAY_H_RES;
                 for (int x = 0; x < DISPLAY_H_RES; x++) row[x] = grid_color;
@@ -3606,6 +3718,7 @@ void ui_set_flat_mode(bool on)
             lv_obj_remove_flag(s_db_max_label, LV_OBJ_FLAG_HIDDEN);
         }
     }
+    update_db_scale();   // switch the right-edge scale between dBm and dB-above-floor
 }
 
 static void drawer_switch_flat_cb(lv_event_t *e)
@@ -3624,6 +3737,7 @@ static void drawer_switch_flat_cb(lv_event_t *e)
             lv_obj_remove_flag(s_db_max_label, LV_OBJ_FLAG_HIDDEN);
         }
     }
+    update_db_scale();   // switch the right-edge scale between dBm and dB-above-floor
 }
 
 static void drawer_switch_diag_cb(lv_event_t *e)
