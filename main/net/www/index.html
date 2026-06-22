@@ -235,6 +235,9 @@
     <a href="#" id="qrz-link" class="bot-btn" style="display:none">QRZ &#8593;</a>
     <a href="#" id="eqsl-link" class="bot-btn" style="display:none">eQSL &#8593;</a>
     <a href="/api/log" download="qmx-log.txt" class="bot-btn">Diag &#8595;</a>
+    <a href="/api/config" download="qmx-config.txt" class="bot-btn" title="Download all settings + memory channels as an editable text file">Config &#8595;</a>
+    <a href="#" id="cfg-up-link" class="bot-btn" title="Upload an edited config file (merges; restart to apply)">Config &#8593;</a>
+    <input type="file" id="cfg-up-file" accept=".txt,text/plain" style="display:none">
     <a href="/ss.bmp" target="_blank" class="bot-btn">Tab5Shot</a>
   </div>
 
@@ -383,6 +386,35 @@ document.getElementById("eqsl-link").addEventListener("click", async (e) => {
     link.textContent = prevText;
   }
 });
+
+/* Config restore: pick an edited qmx-config.txt and POST it to /api/config.
+   Merge semantics on the device (only keys/sections in the file change). */
+(function () {
+  const link = document.getElementById("cfg-up-link");
+  const file = document.getElementById("cfg-up-file");
+  if (!link || !file) return;
+  link.addEventListener("click", function (e) { e.preventDefault(); file.click(); });
+  file.addEventListener("change", async function () {
+    const f = file.files[0];
+    if (!f) return;
+    if (!confirm('Apply "' + f.name + '" to the Tab5?\nIt MERGES into the current config (only the values in the file change).\nMost settings take effect after a restart.')) {
+      file.value = ""; return;
+    }
+    const prev = link.textContent;
+    link.textContent = "Config …";
+    try {
+      const text = await f.text();
+      const r = await fetch("/api/config", { method: "POST", headers: { "Content-Type": "text/plain" }, body: text });
+      const j = await r.json();
+      alert("Config applied: " + j.applied + " item(s).\nRestart the Tab5 for all settings to take effect (memory channels are live now).");
+    } catch (err) {
+      alert("Config upload failed: " + err);
+    } finally {
+      link.textContent = prev;
+      file.value = "";
+    }
+  });
+})();
 
 function positionDropdown(pillId, ddId) {
   const pill = document.getElementById(pillId);

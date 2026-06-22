@@ -17,6 +17,7 @@
 #include "adif/qrz_upload.h"  // qrz_upload_pending
 #include "adif/eqsl_upload.h" // eqsl_upload_pending
 #include "settings.h"          // settings_load_all / settings_set_qrz_api_key
+#include "config_io.h"         // config_io_export / config_io_import
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
 #include <string.h>
@@ -404,6 +405,61 @@ static const httpd_uri_t uri_eqsl_upload = {
     .uri = "/api/eqsl_upload", .method = HTTP_POST, .handler = eqsl_upload_handler,
 };
 
+// GET /api/config — download all settings + memory channels as an editable
+// INI text file (qmx-config.txt). Includes secrets (wifi_pass/qrz/eqsl) so it
+// works as a full backup; the file is the user's to keep private.
+static esp_err_t config_get_handler(httpd_req_t *req)
+{
+    size_t len = 0;
+    char *body = config_io_export(&len);
+    if (!body) return httpd_resp_send_500(req);
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=qmx-config.txt");
+    esp_err_t err = httpd_resp_send(req, body, len);
+    free(body);
+    return err;
+}
+
+// POST /api/config — upload an INI config file; merge it into NVS.
+static esp_err_t config_post_handler(httpd_req_t *req)
+{
+    int total = req->content_len;
+    if (total <= 0 || total > 32768) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad/empty body");
+        return ESP_FAIL;
+    }
+    char *body = malloc(total + 1);
+    if (!body) return httpd_resp_send_500(req);
+    int got = 0;
+    while (got < total) {
+        int r = httpd_req_recv(req, body + got, total - got);
+        if (r <= 0) { free(body); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "recv failed"); return ESP_FAIL; }
+        got += r;
+    }
+    body[got] = '\0';
+
+    int applied = config_io_import(body);   // mutates body in place
+    free(body);
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return httpd_resp_send_500(req);
+    cJSON_AddNumberToObject(root, "applied", applied);
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) return httpd_resp_send_500(req);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_send(req, out, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(out);
+    return err;
+}
+
+static const httpd_uri_t uri_config_get = {
+    .uri = "/api/config", .method = HTTP_GET, .handler = config_get_handler,
+};
+static const httpd_uri_t uri_config_post = {
+    .uri = "/api/config", .method = HTTP_POST, .handler = config_post_handler,
+};
+
 static const httpd_uri_t uri_root = {
     .uri = "/", .method = HTTP_GET, .handler = root_handler,
 };
@@ -427,7 +483,7 @@ esp_err_t webserver_start(void)
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.server_port     = 80;
     config.stack_size      = 12288;
-    config.max_uri_handlers = 14;
+    config.max_uri_handlers = 16;
     config.lru_purge_enable = true;
 
     ESP_LOGI(TAG, "Starting HTTP server on port %d", config.server_port);
@@ -449,6 +505,8 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_qrz_upload);
     httpd_register_uri_handler(s_server, &uri_eqsl_creds);
     httpd_register_uri_handler(s_server, &uri_eqsl_upload);
+    httpd_register_uri_handler(s_server, &uri_config_get);
+    httpd_register_uri_handler(s_server, &uri_config_post);
     webserver_ws_start(s_server);
 
     ESP_LOGI(TAG, "HTTP server started");

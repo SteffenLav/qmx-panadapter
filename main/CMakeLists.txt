@@ -31,6 +31,7 @@ idf_component_register(
         "render/render_waterfall.c"
         "screenshot/screenshot.c"
         "storage/settings.c"
+        "storage/config_io.c"
         "storage/mem_channels.c"
         "wifi/wifi.c"
         "net/webserver.c"
