@@ -422,42 +422,7 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 - **Panadapter ⇄ FT8 settings stick again — and FT8 is always DiGi.** Each mode reliably remembers its own frequency across switches, and entering FT8 now always forces the radio into DiGi instead of inheriting whatever mode (e.g. CW) the panadapter was on.
 - **Reboot on fast mode-toggle fixed.** Quickly flipping Panadapter↔FT8 could spawn a second FT8 task that clobbered a shared decode queue and reset the unit; now guarded against a double-spawn. The CAT poll also rides out a transient USB hiccup instead of quietly stopping (which had frozen the on-screen frequency).
 
-### Next up
-
-The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF.
-
-- **v0.16.x - "Worked before" highlighting.** Colour-code the FT8 decode list rows by whether that callsign is already in the ADIF log. High value for POTA/SOTA activators chasing new contacts.
-- **v0.16.x - ADIF upload.** Upload the QSO log to LoTW, QRZ, eQSL, or POTA.app via the web UI or direct HTTP POST.
-- **v1.0.0 - Standalone FT8 station.** All of the above polished + multi-day stability + cleaner UI.
-
-Alongside the FT8 path:
-
-- **Manual time-set UI.** `time_sync_set_manual()` is implemented but has no settings-drawer entry point yet. Add a "Set Time" field for rare POTA sessions where both QMX and WiFi are unavailable.
-- **Tab5 speaker/headphone CW audio.** Decode and play the demodulated CW passband out of the Tab5's own speaker/headphone jack, so the operator can listen to CW without the QMX's audio path.
-- **DSP polish.** Noise reduction, auto-notch.
-- **Phase 6.3 - Native-orientation rendering** *(deferred)*. ~50% FPS recovery available if we render directly in the panel's native 720x1280 portrait coordinates so LVGL has no rotation step.
-
-### Longer term
-
-Ideas that fit the project but aren't on the immediate path. Order is rough; appetite and curiosity will decide.
-
-- **Flat-mode tunables in the drawer.** Currently the per-bin floor parameters (`FLAT_FLOOR_BIAS_DB`, `FLAT_RANGE_DB`, smoothing alphas) are compile-time constants. Sliders in the settings drawer plus NVS persistence would let people tune the look without rebuilding.
-- **CW decoder.** A Goertzel-based decoder on the demodulated CW passband, with text scrolling under the spectrum. The QMX itself already does this internally; question is whether to mirror its output via CAT or run a parallel decoder on the Tab5.
-- **QMX (small) support.** Same UI, different USB endpoint config and band table. Should be mostly a build-flag matter; the 5-band QMX speaks the same CAT and UAC.
-- **Extended waterfall history.** PSRAM has plenty of room for several minutes of scrollback. Two-finger drag to scrub through history would be a natural UX fit.
-- **Touch-to-tune refinements.** Pinch-to-zoom span (sub-48 kHz windows), drag-to-pan inside the current 48 kHz.
-- **JS8 mode.** A second digital mode alongside FT8 — same physical layer/timing (`ft8_lib` is already multi-protocol), needs new LDPC(174,87) tables, CRC-12, and message pack/unpack for the CQ/exchange frame types. See `docs/js8-feasibility.md`.
-- **RTTY mode.** 45.45 baud Baudot/ITA2, motivated by the new M5Stack Tab5 Keyboard accessory. Shares almost nothing with `ft8_lib` — a new continuous dual-tone demod pipeline; TX reuses the QMX `TA` mechanism but at a much tighter (22 ms) cadence that needs bench-testing first. See `docs/rtty-feasibility.md`.
-
-### Process
-
-This Roadmap section is the source of truth for what's shipped, in progress, and being considered. It is updated as part of every release:
-
-1. Before tagging, the Shipped section gets a new sub-section for the version.
-2. Items completed in that release are removed from Next up and Longer term.
-3. Features promised in chats, issues, or external feedback are logged into Longer term at minimum, with rough placement.
-
-The README is committed alongside the code change for the release. No release is tagged without this update. This is a hard gate alongside the existing requirement that the panadapter must boot cleanly at every commit.
-
 ---
+
+*This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
 
