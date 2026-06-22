@@ -25,6 +25,17 @@
 esp_err_t dsp_init(void);
 
 /**
+ * @brief Select the FFT analysis window (affects spectrum + waterfall sharpness).
+ *
+ * 0 = Blackman-Harris (default; lowest spectral leakage, widest main lobe so
+ *     signals look a touch fatter), 1 = Hann (narrowest main lobe -> sharpest
+ *     signals, slightly higher side-lobe haze), 2 = Nuttall (middle ground).
+ * Rebuilds the window in place; the change is visible on the next FFT frame.
+ * Safe to call after dsp_init() at any time.
+ */
+void dsp_set_window(uint8_t idx);
+
+/**
  * @brief Get a snapshot of the latest spectrum.
  *
  * @param[out] dst       Destination array of DSP_FFT_SIZE floats (dB units)

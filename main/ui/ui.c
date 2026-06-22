@@ -1268,7 +1268,9 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_CMAP       10
 #define DRAWER_SEC_DIAG       11
 #define DRAWER_SEC_CWAUDIO    12
-#define N_DRAWER_SECTIONS     13
+#define DRAWER_SEC_WATERFALL  13
+#define DRAWER_SEC_FLIP       14
+#define N_DRAWER_SECTIONS     15
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 // Phase 5.10D Stage 2b: drawer widgets we need to keep handles to
@@ -1286,9 +1288,17 @@ static lv_obj_t *s_dropdown_cmap = NULL;
 static lv_obj_t *s_slider_brightness = NULL;
 static uint8_t s_saved_ui_mode = UI_MODE_PANADAPTER;
 static lv_obj_t *s_lbl_brightness = NULL;
+static lv_obj_t *s_check_flip = NULL;  // 180-degree display flip checkbox
 static lv_obj_t *s_check_cwaudio = NULL;
 static lv_obj_t *s_slider_cwaudio_vol = NULL;
 static lv_obj_t *s_lbl_cwaudio_vol = NULL;
+static lv_obj_t *s_slider_wf_black = NULL;
+static lv_obj_t *s_lbl_wf_black = NULL;
+static lv_obj_t *s_slider_wf_contrast = NULL;
+static lv_obj_t *s_lbl_wf_contrast = NULL;
+static lv_obj_t *s_slider_wf_blend = NULL;
+static lv_obj_t *s_lbl_wf_blend = NULL;
+static lv_obj_t *s_dropdown_wf_window = NULL;
 static lv_obj_t *s_tune_tooltip  = NULL;  // freq label above finger during tap-to-tune
 static lv_obj_t *s_bw_label      = NULL;  // passband width in top bar
 static void drawer_preset_normal_cb(lv_event_t *e);
@@ -1322,11 +1332,16 @@ static void drawer_slider_cwpitch_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_open_cb(lv_event_t *e);
 static void drawer_slider_brightness_cb(lv_event_t *e);
+static void drawer_check_flip_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
 static void drawer_switch_diag_cb(lv_event_t *e);
 static void drawer_switch_wifi_en_cb(lv_event_t *e);
 static void drawer_check_cwaudio_cb(lv_event_t *e);
 static void drawer_slider_cwaudio_vol_cb(lv_event_t *e);
+static void drawer_slider_wf_black_cb(lv_event_t *e);
+static void drawer_slider_wf_contrast_cb(lv_event_t *e);
+static void drawer_slider_wf_blend_cb(lv_event_t *e);
+static void drawer_dropdown_wf_window_cb(lv_event_t *e);
 bool ui_get_flat_mode(void);
 void ui_set_flat_mode(bool on);
 static void drawer_apply_preset(int db_min, int db_max, float alpha);
@@ -2130,6 +2145,9 @@ static void pinch_poll_cb(lv_timer_t *t)
     int window_bins = (int)((float)N / new_zoom);
     if (window_bins < 4) window_bins = 4;
     int pan_delta_px   = mid_x - s_pinch_mid_x;  // positive = fingers moved right = view moves right = lower freqs
+    // Raw panel coords aren't re-mapped by LVGL; when the display is flipped
+    // 180 deg the landscape x is mirrored, so the pan direction inverts.
+    if (display_is_flipped()) pan_delta_px = -pan_delta_px;
     int pan_delta_bins = (pan_delta_px * window_bins) / DISPLAY_H_RES;
     int new_pan = s_pinch_start_pan + pan_delta_bins;
     int max_pan = (N - window_bins) / 2;
@@ -3282,7 +3300,7 @@ static void drawer_build(void)
     lv_obj_t *title = lv_label_create(s_drawer);
     lv_label_set_text(title, "Settings");
     lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_48, 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
 
     lv_obj_add_event_cb(s_drawer, drawer_touch_cb, LV_EVENT_PRESSED, NULL);
@@ -3292,6 +3310,22 @@ static void drawer_build(void)
     // v0.8.x layout: 520 wide drawer, _24pt fonts, IQ row moved below title,
     // presets 3-across in a single row to free vertical space.
     int y = 96;
+
+    // Flip 180 degrees (upside-down mounting) -- kept at the very top. The
+    // checkbox sits mid-row (just after the label) rather than at the right
+    // edge so it is not toggled by accident while reaching for the drawer edge.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_FLIP, y, 56);
+        lv_obj_t *flip_lbl = lv_label_create(sec);
+        lv_label_set_text(flip_lbl, "Flip 180\xC2\xB0");
+        lv_obj_set_style_text_color(flip_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(flip_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(flip_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
+        s_check_flip = make_drawer_checkbox(sec, display_is_flipped(),
+                                            drawer_check_flip_cb, NULL);
+        lv_obj_align(s_check_flip, LV_ALIGN_TOP_MID, 0, 6);
+        y += 56;
+    }
 
     // Diagnostic log ON/OFF row -- kept at the top for easy access. When on,
     // the Tab5 captures all log output (incl. per-line CAT TX/RX) to a buffer
@@ -3632,6 +3666,81 @@ static void drawer_build(void)
         y += 100;
     }
 
+    // Waterfall colorisation section: black level / contrast / per-bin floor
+    // blend / FFT window. All slide live - changes scroll in from the top of
+    // the waterfall as you drag.
+    {
+        qmx_settings_t wcfg;
+        settings_load_all(&wcfg);
+
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WATERFALL, y, 384);
+        lv_obj_t *wf_hdr = lv_label_create(sec);
+        lv_label_set_text(wf_hdr, "Waterfall");
+        lv_obj_set_style_text_color(wf_hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(wf_hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(wf_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        char wbuf[28];
+
+        // Black level
+        s_lbl_wf_black = lv_label_create(sec);
+        snprintf(wbuf, sizeof(wbuf), "Black level: %d dB", (int)(wcfg.wf_black_db + 0.5f));
+        lv_label_set_text(s_lbl_wf_black, wbuf);
+        lv_obj_set_style_text_color(s_lbl_wf_black, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_wf_black, &lv_font_montserrat_28, 0);
+        lv_obj_align(s_lbl_wf_black, LV_ALIGN_TOP_LEFT, 0, 40);
+        s_slider_wf_black = lv_slider_create(sec);
+        lv_obj_set_size(s_slider_wf_black, DRAWER_W - 32, 30);
+        lv_slider_set_range(s_slider_wf_black, 0, 30);
+        lv_slider_set_value(s_slider_wf_black, (int)(wcfg.wf_black_db + 0.5f), LV_ANIM_OFF);
+        lv_obj_align(s_slider_wf_black, LV_ALIGN_TOP_LEFT, 0, 72);
+        lv_obj_add_event_cb(s_slider_wf_black, drawer_slider_wf_black_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+        // Contrast (dB span)
+        s_lbl_wf_contrast = lv_label_create(sec);
+        snprintf(wbuf, sizeof(wbuf), "Contrast: %d dB", (int)(wcfg.wf_contrast_db + 0.5f));
+        lv_label_set_text(s_lbl_wf_contrast, wbuf);
+        lv_obj_set_style_text_color(s_lbl_wf_contrast, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_wf_contrast, &lv_font_montserrat_28, 0);
+        lv_obj_align(s_lbl_wf_contrast, LV_ALIGN_TOP_LEFT, 0, 112);
+        s_slider_wf_contrast = lv_slider_create(sec);
+        lv_obj_set_size(s_slider_wf_contrast, DRAWER_W - 32, 30);
+        lv_slider_set_range(s_slider_wf_contrast, 10, 80);
+        lv_slider_set_value(s_slider_wf_contrast, (int)(wcfg.wf_contrast_db + 0.5f), LV_ANIM_OFF);
+        lv_obj_align(s_slider_wf_contrast, LV_ALIGN_TOP_LEFT, 0, 144);
+        lv_obj_add_event_cb(s_slider_wf_contrast, drawer_slider_wf_contrast_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+        // Per-bin floor blend (0 = global floor, 100 = full per-bin)
+        s_lbl_wf_blend = lv_label_create(sec);
+        snprintf(wbuf, sizeof(wbuf), "Adaptive floor: %d%%", (int)wcfg.wf_floor_blend);
+        lv_label_set_text(s_lbl_wf_blend, wbuf);
+        lv_obj_set_style_text_color(s_lbl_wf_blend, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_wf_blend, &lv_font_montserrat_28, 0);
+        lv_obj_align(s_lbl_wf_blend, LV_ALIGN_TOP_LEFT, 0, 184);
+        s_slider_wf_blend = lv_slider_create(sec);
+        lv_obj_set_size(s_slider_wf_blend, DRAWER_W - 32, 30);
+        lv_slider_set_range(s_slider_wf_blend, 0, 100);
+        lv_slider_set_value(s_slider_wf_blend, (int)wcfg.wf_floor_blend, LV_ANIM_OFF);
+        lv_obj_align(s_slider_wf_blend, LV_ALIGN_TOP_LEFT, 0, 216);
+        lv_obj_add_event_cb(s_slider_wf_blend, drawer_slider_wf_blend_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+        // FFT window
+        lv_obj_t *win_lbl = lv_label_create(sec);
+        lv_label_set_text(win_lbl, "FFT window");
+        lv_obj_set_style_text_color(win_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(win_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(win_lbl, LV_ALIGN_TOP_LEFT, 0, 264);
+        s_dropdown_wf_window = lv_dropdown_create(sec);
+        lv_dropdown_set_options(s_dropdown_wf_window, "Blackman-Harris\nHann (sharp)\nNuttall");
+        lv_obj_set_size(s_dropdown_wf_window, DRAWER_W - 32, 50);
+        lv_obj_align(s_dropdown_wf_window, LV_ALIGN_TOP_LEFT, 0, 300);
+        lv_obj_set_style_text_font(s_dropdown_wf_window, &lv_font_montserrat_28, 0);
+        if (wcfg.wf_window <= 2) lv_dropdown_set_selected(s_dropdown_wf_window, wcfg.wf_window);
+        lv_obj_add_event_cb(s_dropdown_wf_window, drawer_dropdown_wf_window_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(s_dropdown_wf_window, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
+        y += 384;
+    }
+
     ESP_LOGI(TAG, "Settings drawer built (off-screen at x=%d)", DISPLAY_H_RES);
 
     // Apply current UI mode's section visibility (drawer is pre-built at
@@ -3684,8 +3793,8 @@ static void drawer_close(void)
 static void drawer_set_ft8_mode(bool ft8)
 {
     if (!s_drawer) return;
-    static const int keep[]   = { DRAWER_SEC_DIAG, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
-    static const int keep_h[] = { 56, 128, 72, 130 };
+    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_DIAG, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
+    static const int keep_h[] = { 56, 56, 128, 72, 130 };
     const int n_keep = sizeof(keep) / sizeof(keep[0]);
 
     for (int i = 0; i < N_DRAWER_SECTIONS; i++) {
@@ -3908,6 +4017,14 @@ static void drawer_slider_brightness_cb(lv_event_t *e)
     }
 }
 
+static void drawer_check_flip_cb(lv_event_t *e)
+{
+    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    display_set_flipped(on);
+    settings_set_display_flip(on);
+    ESP_LOGI(TAG, "Display flip 180: %s", on ? "ON" : "OFF");
+}
+
 static void drawer_dropdown_cmap_cb(lv_event_t *e)
 {
     lv_obj_t *dd = lv_event_get_target(e);
@@ -3924,6 +4041,51 @@ static void drawer_dropdown_cmap_open_cb(lv_event_t *e)
         lv_obj_set_style_text_font(list, &lv_font_montserrat_28, 0);
     }
 }
+
+static void drawer_slider_wf_black_cb(lv_event_t *e)
+{
+    int v = (int)lv_slider_get_value(lv_event_get_target(e));
+    render_waterfall_set_black_level((float)v);
+    settings_set_wf_black_db((float)v);
+    if (s_lbl_wf_black) {
+        char b[28];
+        snprintf(b, sizeof(b), "Black level: %d dB", v);
+        lv_label_set_text(s_lbl_wf_black, b);
+    }
+}
+
+static void drawer_slider_wf_contrast_cb(lv_event_t *e)
+{
+    int v = (int)lv_slider_get_value(lv_event_get_target(e));
+    render_waterfall_set_contrast_db((float)v);
+    settings_set_wf_contrast_db((float)v);
+    if (s_lbl_wf_contrast) {
+        char b[28];
+        snprintf(b, sizeof(b), "Contrast: %d dB", v);
+        lv_label_set_text(s_lbl_wf_contrast, b);
+    }
+}
+
+static void drawer_slider_wf_blend_cb(lv_event_t *e)
+{
+    int v = (int)lv_slider_get_value(lv_event_get_target(e));
+    render_waterfall_set_floor_blend((float)v / 100.0f);
+    settings_set_wf_floor_blend((uint8_t)v);
+    if (s_lbl_wf_blend) {
+        char b[28];
+        snprintf(b, sizeof(b), "Adaptive floor: %d%%", v);
+        lv_label_set_text(s_lbl_wf_blend, b);
+    }
+}
+
+static void drawer_dropdown_wf_window_cb(lv_event_t *e)
+{
+    uint8_t idx = (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e));
+    dsp_set_window(idx);
+    settings_set_wf_window(idx);
+}
+
+
 
 // ---- Phase 9 (v0.9.5): read-only getters for web JSON ------------------
 

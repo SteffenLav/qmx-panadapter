@@ -18,3 +18,12 @@ void render_waterfall_set_colormap(uint8_t idx);
 // Call when a stale floor (e.g. captured before the QMX was streaming)
 // would otherwise take many seconds to decay up to the real noise level.
 void render_waterfall_floor_reset(void);
+
+// Live waterfall colorisation controls (Waterfall drawer). Each takes effect
+// on the next render tick, so a slider drag is visible immediately.
+//  - black level: dB above the floor that maps to LUT black (0..30, default 9)
+//  - contrast span: dB that fill the colour ramp to red (10..80, default 45)
+//  - floor blend: 0 = global floor only, 1 = full per-bin adaptive floor
+void render_waterfall_set_black_level(float db);
+void render_waterfall_set_contrast_db(float db);
+void render_waterfall_set_floor_blend(float blend);

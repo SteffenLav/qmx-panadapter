@@ -430,6 +430,21 @@ A stability patch — the headline fix is an idle reboot that hit anyone running
 - **Web UI no longer freezes / needs manual reconnects.** Two coupled bugs: stale WebSocket sockets were abandoned without being closed, so a few freeze→reconnect cycles exhausted the LWIP socket table (`accept: ENFILE`) and the server stopped accepting connections; and a single transient send stall tore the whole session down. Now stale sockets are closed explicitly, transient stalls are ridden out instead of dropping you, TIME_WAIT is shortened so slots free quickly, the socket pool is larger, and the TCP window is bigger to smooth delivery. The waterfall/spectrum stream holds a steady 10 fps.
 - **Bandwidth (BW) now changes from the web UI.** Picking a BW in the browser did nothing in CW mode — the web path sent a Kenwood `FW` filter command, which the QMX rejects (`?;`). It now sends the correct menu-manager command for CW (`MMCW|CW passband=`) and the three-write recipe for SSB, both routed through the CAT poll task (no command-race), and the BW value updates on both the Tab5 and the web pill.
 
+### Shipped in v0.18.3 — 2026-06-22 UTC
+
+Display ergonomics — waterfall tuning controls, an upside-down mounting flip, and a bigger Settings heading.
+
+- **Waterfall display controls (new "Waterfall" drawer section).** Four live controls, all NVS-persisted, all visible immediately as new rows scroll in:
+  - **Black level** (0–30 dB above each bin's noise floor that maps to black; default 9) — raise it to gate out near-noise haze and sharpen signal edges.
+  - **Contrast** (10–80 dB span filling the colour ramp; default 45) — widen it so strong signals stop saturating into a fat blob and keep their shape.
+  - **Adaptive floor** (0–100% blend between the per-bin adaptive floor and a single global floor; default 100) — dial back, or fully off, the per-bin tracker that can fatten signals.
+  - **FFT window** (Blackman-Harris / Hann / Nuttall) — Hann gives the narrowest, sharpest signals; Blackman-Harris the cleanest skirts.
+  The two mapping defaults moved from the old hardcoded +6 dB / 30 dB to +9 dB / 45 dB, which is already clearer on strong signals. This replaces the old compile-time-only flat-mode constants.
+- **Flip display 180° (upside-down mounting).** A **Flip 180°** toggle at the very top of the settings drawer rotates the whole landscape view — for choosing which side the cables exit / aligning with the mount's edge features. Spectrum, waterfall, top bar and touch all follow automatically (pinch-zoom pan direction is corrected for the flipped case). Persists across reboots. The checkbox sits mid-row, not at the drawer edge, so it isn't toggled by accident when reaching for the drawer.
+- **Larger "Settings" heading** for readability at arm's length.
+
+*Also investigated but not shipped:* software I/Q image rejection (both a frequency-domain per-bin canceller and a manual by-eye null). Reverted — the ghost users were seeing is a **sample-rate alias** spaced exactly 48 kHz (the QMX's USB-audio rate) from the real signal, which is a QMX-side anti-aliasing characteristic and cannot be removed in the Tab5's DSP. True opposite-sideband I/Q images (within the window) remain handled by the existing adaptive I/Q balance.
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*

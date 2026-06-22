@@ -99,6 +99,7 @@ void app_main(void)
     ui_set_db_range(cfg.db_min, cfg.db_max);
     ui_set_db_labels(cfg.db_min, cfg.db_max);
     render_set_ema_alpha(cfg.ema_alpha);
+    display_set_flipped(cfg.display_flip);  // restore upside-down mounting orientation
     status_bar_start();
 
     // Open the CW-audio output path (I2S/ES8388) BEFORE the USB host starts,
@@ -136,6 +137,12 @@ void app_main(void)
     // magnification mode until the user touches the zoom control.
     ui_set_zoom(ui_get_zoom_factor(), ui_get_pan_offset_bins());
     ESP_ERROR_CHECK(render_init());
+
+    // Apply persisted waterfall colorisation + FFT window (Waterfall drawer).
+    render_waterfall_set_black_level(cfg.wf_black_db);
+    render_waterfall_set_contrast_db(cfg.wf_contrast_db);
+    render_waterfall_set_floor_blend((float)cfg.wf_floor_blend / 100.0f);
+    dsp_set_window(cfg.wf_window);
 
     // CW audio out: demodulate CW from the I/Q and play it on the Tab5
     // speaker/headphone. Idle (no CPU, codec released) unless enabled and the

@@ -17,3 +17,8 @@ void display_unlock(void);
 
 // Set LCD backlight brightness, 0..100 %.
 void display_set_brightness(int percent);
+
+// Flip the landscape view 180 degrees for upside-down mounting (false = normal,
+// true = flipped). Persisted by the caller; safe to call at boot or at runtime.
+void display_set_flipped(bool flipped);
+bool display_is_flipped(void);

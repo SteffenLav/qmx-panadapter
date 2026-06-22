@@ -718,7 +718,6 @@ The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF
 - **QMX (small) support.** Same UI, different USB endpoint config and band table.
 - **JS8 / RTTY modes.** See `docs/js8-feasibility.md` and `docs/rtty-feasibility.md`.
 - **DSP polish.** Noise reduction, auto-notch.
-- **Flat-mode tunables in the drawer.** The per-bin floor parameters are compile-time constants; sliders + NVS persistence would let operators tune the display without rebuilding.
 
 ---
 

@@ -57,6 +57,11 @@ typedef struct {
     uint32_t eqsl_uploaded_n; // count of ADIF records already uploaded to eQSL
     bool     cw_audio_en;     // CW sidetone audio on Tab5 speaker/headphone (default false)
     uint8_t  cw_audio_vol;    // CW audio output volume 0..100 (default 60)
+    float    wf_black_db;     // waterfall black level: dB above floor -> black (default 9)
+    float    wf_contrast_db;  // waterfall contrast: dB span filling the colour ramp (default 45)
+    uint8_t  wf_floor_blend;  // waterfall per-bin floor blend 0..100% (0=global, default 100)
+    uint8_t  wf_window;       // FFT window: 0=Blackman-Harris 1=Hann 2=Nuttall (default 0)
+    bool     display_flip;    // landscape flipped 180 deg for upside-down mounting (default false)
     ft8_filters_t ft8_filters;        // CQ-run reply include/exclude filters
 } qmx_settings_t;
 
@@ -113,6 +118,17 @@ void settings_set_ft8_filters(const ft8_filters_t *f);
 // its volume 0..100 (debounced flush).
 void settings_set_cw_audio_en(bool v);
 void settings_set_cw_audio_vol(uint8_t v);
+
+// Waterfall colorisation (debounced flush). Black level and contrast are in
+// dB; floor blend is 0..100 (% per-bin vs global floor); window is the FFT
+// analysis window index (0=Blackman-Harris 1=Hann 2=Nuttall).
+void settings_set_wf_black_db(float db);
+void settings_set_wf_contrast_db(float db);
+void settings_set_wf_floor_blend(uint8_t pct);
+void settings_set_wf_window(uint8_t idx);
+
+// Display 180-degree flip for upside-down mounting (debounced flush).
+void settings_set_display_flip(bool v);
 
 // WiFi boot-initiation toggle (debounced flush). When false the radio stays
 // idle at boot even if credentials are stored; the user can re-enable from

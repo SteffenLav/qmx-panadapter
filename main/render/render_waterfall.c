@@ -40,6 +40,23 @@ static bool s_floor_main_init = false;
 static bool s_floor_zoom_init = false;
 static int s_floor_warmup = 0;
 
+// v0.18.3: user-adjustable colorisation, live from the Waterfall drawer.
+// Each is read every tick so a slider drag is visible as the new rows scroll
+// in immediately.
+//  - black level: dB above each bin's floor that maps to LUT black. Higher =>
+//    more of the near-noise leakage is gated to black => crisper signals.
+//  - contrast span: dB above (floor+black) that maps to full-scale red. Wider
+//    => strong signals stop saturating into a fat blob and keep their shape.
+//  - floor blend: 0 = single global floor (the pre-v0.16.0 look, no per-bin
+//    smear), 1 = full per-bin adaptive floor. Lets the user dial back exactly
+//    the per-bin tracker that fattens signals, or turn it off entirely.
+#define WF_BLACK_DB_DEFAULT    9.0f
+#define WF_CONTRAST_DB_DEFAULT 45.0f
+#define WF_FLOOR_BLEND_DEFAULT 1.0f
+static float s_wf_black_db    = WF_BLACK_DB_DEFAULT;
+static float s_wf_contrast_db = WF_CONTRAST_DB_DEFAULT;
+static float s_wf_floor_blend = WF_FLOOR_BLEND_DEFAULT;
+
 // 256-entry RGB565 thermal LUT (matches browser palette):
 //  black -> dark blue -> teal -> green -> yellow -> red
 // Built at init from 6 anchor colors with linear interpolation.
@@ -125,6 +142,27 @@ void render_waterfall_floor_reset(void)
     s_floor_main_init = false;
     s_floor_zoom_init = false;
     s_floor_warmup = 0;
+}
+
+void render_waterfall_set_black_level(float db)
+{
+    if (db < 0.0f)  db = 0.0f;
+    if (db > 30.0f) db = 30.0f;
+    s_wf_black_db = db;
+}
+
+void render_waterfall_set_contrast_db(float db)
+{
+    if (db < 10.0f) db = 10.0f;   // avoid div-by-tiny / everything saturates
+    if (db > 80.0f) db = 80.0f;
+    s_wf_contrast_db = db;
+}
+
+void render_waterfall_set_floor_blend(float blend)
+{
+    if (blend < 0.0f) blend = 0.0f;
+    if (blend > 1.0f) blend = 1.0f;
+    s_wf_floor_blend = blend;
 }
 
 void render_waterfall_set_colormap(uint8_t idx)
@@ -223,21 +261,34 @@ void render_waterfall_tick(const float *spectrum, int n_bins)
     }
     float decay = (s_floor_warmup > 0) ? WF_FLOOR_DECAY_FAST : WF_FLOOR_DECAY_SLOW;
     if (s_floor_warmup > 0) s_floor_warmup--;
+    // Track a single global floor (mean of the per-bin floors) alongside the
+    // per-bin array, so the floor-blend control can cross-fade between them.
+    float floor_sum = 0.0f;
+    int   floor_cnt = 0;
     for (int i = 0; i < n_bins && i < DSP_FFT_SIZE; i++) {
         float db = use_spectrum[i];
         float diff = db - floor_arr[i];
         floor_arr[i] += (diff < 0.0f ? WF_FLOOR_ATTACK : decay) * diff;
+        floor_sum += floor_arr[i];
+        floor_cnt++;
     }
+    float floor_global = (floor_cnt > 0) ? (floor_sum / (float)floor_cnt)
+                                         : floor_arr[0];
 
     for (int x = 0; x < WF_WIDTH; x++) {
         int b = wf_start + (int)((float)x * (float)wf_window / (float)WF_WIDTH);
         int bin = ((b % n_bins) + n_bins) % n_bins;
 
         float db = use_spectrum[bin];
-        // Match browser LUT mapping: noise floor -> idx 32, +31 dB above floor -> idx 255.
-        // 30 dB above floor -> idx 255 (red). Tuned by eye.
-        float db_min_display = floor_arr[bin] + 6.0f;
-        int idx = (int)((db - db_min_display) * (255.0f / 30.0f) + 32.0f);
+        // Blend each bin's own adaptive floor with the single global floor
+        // (blend=1 -> per-bin, blend=0 -> global), then map:
+        //   floor+black -> LUT black (idx 32), +contrast dB above that -> red.
+        // black level gates near-noise leakage; contrast span sets how many dB
+        // fill the colour ramp (wider = strong signals don't bloom). All three
+        // are live from the Waterfall drawer.
+        float eff_floor = floor_global + (floor_arr[bin] - floor_global) * s_wf_floor_blend;
+        float db_min_display = eff_floor + s_wf_black_db;
+        int idx = (int)((db - db_min_display) * (255.0f / s_wf_contrast_db) + 32.0f);
         if (idx < 0) idx = 0;
         if (idx > 255) idx = 255;
         row[x] = s_lut[idx];

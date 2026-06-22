@@ -13,6 +13,7 @@
 static const char *TAG = "display";
 
 static lv_display_t *s_disp = NULL;
+static bool s_flipped = false;   // false = normal landscape (90), true = upside-down (270)
 
 bool display_lock(uint32_t timeout_ms)
 {
@@ -27,6 +28,30 @@ void display_unlock(void)
 void display_set_brightness(int percent)
 {
     bsp_display_brightness_set(percent);
+}
+
+// Flip the landscape orientation 180 degrees (for upside-down mounting / which
+// side the cables exit). Normal = LV_DISPLAY_ROTATION_90, flipped = _270. All
+// widgets live in the same 1280x720 logical space, so LVGL re-maps the layout
+// and ordinary touch automatically; only the raw-coord pinch handler in ui.c
+// needs to know (via display_is_flipped). The lvgl_port lock is recursive, so
+// this is safe both at boot (app_main) and from a drawer callback (LVGL task).
+void display_set_flipped(bool flipped)
+{
+    if (!s_disp) return;
+    s_flipped = flipped;
+    if (display_lock(1000)) {
+        lv_display_set_rotation(s_disp,
+            flipped ? LV_DISPLAY_ROTATION_270 : LV_DISPLAY_ROTATION_90);
+        lv_obj_invalidate(lv_screen_active());
+        display_unlock();
+    }
+    ESP_LOGI(TAG, "Display rotation: %s", flipped ? "270 (flipped 180)" : "90 (normal)");
+}
+
+bool display_is_flipped(void)
+{
+    return s_flipped;
 }
 
 esp_err_t display_init(lv_display_t **out_disp)

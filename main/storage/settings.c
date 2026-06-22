@@ -48,6 +48,11 @@ static const char *TAG = "settings";
 #define KEY_EQSL_UPLOADED "eqsl_upl_n"
 #define KEY_CW_AUD_EN    "cw_aud_en"
 #define KEY_CW_AUD_VOL   "cw_aud_vol"
+#define KEY_WF_BLACK     "wf_black"
+#define KEY_WF_CONTRAST  "wf_contr"
+#define KEY_WF_BLEND     "wf_blend"
+#define KEY_WF_WINDOW    "wf_window"
+#define KEY_DISP_FLIP    "disp_flip"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -64,6 +69,10 @@ static const char *TAG = "settings";
 #define DEF_WIFI_ENABLED  (true)
 #define DEF_CW_AUD_EN     (false)
 #define DEF_CW_AUD_VOL    (60)
+#define DEF_WF_BLACK      (9.0f)
+#define DEF_WF_CONTRAST   (45.0f)
+#define DEF_WF_BLEND      (100)
+#define DEF_WF_WINDOW     (0)
 
 // Debounce: how long we wait after the last change before flushing.
 #define DEBOUNCE_MS     500
@@ -103,6 +112,11 @@ static const char *TAG = "settings";
 #define DIRTY_EQSL_UPLOADED (1u << 31)
 #define DIRTY_CW_AUD_EN     (1ull << 32)
 #define DIRTY_CW_AUD_VOL    (1ull << 33)
+#define DIRTY_WF_BLACK      (1ull << 34)
+#define DIRTY_WF_CONTRAST   (1ull << 35)
+#define DIRTY_WF_BLEND      (1ull << 36)
+#define DIRTY_WF_WINDOW     (1ull << 37)
+#define DIRTY_DISP_FLIP     (1ull << 38)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -212,6 +226,11 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_EQSL_UPLOADED) nvs_set_u32(s_nvs, KEY_EQSL_UPLOADED, snap.eqsl_uploaded_n);
         if (dirty_local & DIRTY_CW_AUD_EN)  nvs_set_u8(s_nvs, KEY_CW_AUD_EN,  snap.cw_audio_en ? 1 : 0);
         if (dirty_local & DIRTY_CW_AUD_VOL) nvs_set_u8(s_nvs, KEY_CW_AUD_VOL, snap.cw_audio_vol);
+        if (dirty_local & DIRTY_WF_BLACK)    nvs_set_float(KEY_WF_BLACK,    snap.wf_black_db);
+        if (dirty_local & DIRTY_WF_CONTRAST) nvs_set_float(KEY_WF_CONTRAST, snap.wf_contrast_db);
+        if (dirty_local & DIRTY_WF_BLEND)    nvs_set_u8(s_nvs, KEY_WF_BLEND,  snap.wf_floor_blend);
+        if (dirty_local & DIRTY_WF_WINDOW)   nvs_set_u8(s_nvs, KEY_WF_WINDOW, snap.wf_window);
+        if (dirty_local & DIRTY_DISP_FLIP)   nvs_set_u8(s_nvs, KEY_DISP_FLIP, snap.display_flip ? 1 : 0);
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
@@ -297,6 +316,11 @@ static void load_from_nvs(qmx_settings_t *out)
     out->eqsl_uploaded_n = 0;
     out->cw_audio_en  = DEF_CW_AUD_EN;
     out->cw_audio_vol = DEF_CW_AUD_VOL;
+    out->wf_black_db    = DEF_WF_BLACK;
+    out->wf_contrast_db = DEF_WF_CONTRAST;
+    out->wf_floor_blend = DEF_WF_BLEND;
+    out->wf_window      = DEF_WF_WINDOW;
+    out->display_flip   = false;
     memset(&out->ft8_filters, 0, sizeof(out->ft8_filters));
 
     if (!s_ready) {
@@ -362,6 +386,14 @@ static void load_from_nvs(qmx_settings_t *out)
 
     if (nvs_get_u8(s_nvs, KEY_CW_AUD_EN, &u8v) == ESP_OK) out->cw_audio_en = (u8v != 0);
     nvs_get_u8(s_nvs, KEY_CW_AUD_VOL, &out->cw_audio_vol);
+
+    if (nvs_get_float(KEY_WF_BLACK,    &fv)) out->wf_black_db    = fv;
+    if (nvs_get_float(KEY_WF_CONTRAST, &fv)) out->wf_contrast_db = fv;
+    nvs_get_u8(s_nvs, KEY_WF_BLEND,  &out->wf_floor_blend);
+    nvs_get_u8(s_nvs, KEY_WF_WINDOW, &out->wf_window);
+    if (out->wf_floor_blend > 100) out->wf_floor_blend = 100;
+    if (out->wf_window > 2)        out->wf_window = 0;
+    if (nvs_get_u8(s_nvs, KEY_DISP_FLIP, &u8v) == ESP_OK) out->display_flip = (u8v != 0);
 
     sz = sizeof(out->ft8_filters);
     nvs_get_blob(s_nvs, KEY_FT8_FILT, &out->ft8_filters, &sz);
@@ -782,4 +814,54 @@ void settings_set_eqsl_uploaded_n(uint32_t n)
     s_pending.eqsl_uploaded_n = n;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_EQSL_UPLOADED);
+}
+
+void settings_set_wf_black_db(float db)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_pending.wf_black_db = db;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WF_BLACK);
+}
+
+void settings_set_wf_contrast_db(float db)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_pending.wf_contrast_db = db;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WF_CONTRAST);
+}
+
+void settings_set_wf_floor_blend(uint8_t pct)
+{
+    if (!s_ready) return;
+    if (pct > 100) pct = 100;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wf_floor_blend == pct) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wf_floor_blend = pct;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WF_BLEND);
+}
+
+void settings_set_wf_window(uint8_t idx)
+{
+    if (!s_ready) return;
+    if (idx > 2) idx = 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wf_window == idx) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wf_window = idx;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WF_WINDOW);
+}
+
+void settings_set_display_flip(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.display_flip == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.display_flip = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_DISP_FLIP);
 }

@@ -27,6 +27,8 @@
 
 #include "dsps_fft2r.h"
 #include "dsps_wind_blackman_harris.h"
+#include "dsps_wind_hann.h"
+#include "dsps_wind_nuttall.h"
 #include "dsps_fir.h"
 
 #include "audio.h"
@@ -38,6 +40,38 @@ static const char *TAG = "dsp";
 
 // Buffers
 static float *s_window   = NULL;
+// FFT analysis window. 0=Blackman-Harris (default, lowest leakage, widest
+// main lobe), 1=Hann (narrowest main lobe -> sharpest signals, higher
+// skirts), 2=Nuttall (middle ground). Switchable at runtime from the
+// Waterfall drawer; rebuilds s_window in place.
+static uint8_t s_window_type = 0;
+
+// Build the analysis window into s_window. Built into a scratch buffer then
+// memcpy'd so the dsp task (which reads s_window without a lock) never sees a
+// half-initialised window - worst case it reads one frame across the memcpy,
+// a harmless single-frame blip.
+static void dsp_build_window(uint8_t type)
+{
+    if (!s_window) return;
+    static float scratch[DSP_FFT_SIZE];
+    switch (type) {
+    case 1:  dsps_wind_hann_f32(scratch, DSP_FFT_SIZE);            break;
+    case 2:  dsps_wind_nuttall_f32(scratch, DSP_FFT_SIZE);         break;
+    case 0:
+    default: dsps_wind_blackman_harris_f32(scratch, DSP_FFT_SIZE); type = 0; break;
+    }
+    memcpy(s_window, scratch, DSP_FFT_SIZE * sizeof(float));
+    s_window_type = type;
+}
+
+void dsp_set_window(uint8_t idx)
+{
+    if (idx > 2) idx = 0;
+    if (idx == s_window_type) return;
+    dsp_build_window(idx);
+    ESP_LOGI(TAG, "FFT window -> %s",
+             idx == 1 ? "Hann" : idx == 2 ? "Nuttall" : "Blackman-Harris");
+}
 static float *s_workbuf  = NULL;
 static float *s_spectrum = NULL;
 
@@ -255,8 +289,8 @@ esp_err_t dsp_init(void)
              (int)(DSP_FFT_SIZE * 2 * sizeof(float)),
              (int)(DSP_FFT_SIZE * sizeof(float)));
 
-    dsps_wind_blackman_harris_f32(s_window, DSP_FFT_SIZE);
-    ESP_LOGI(TAG, "Blackman-Harris window computed");
+    dsp_build_window(s_window_type);
+    ESP_LOGI(TAG, "Analysis window computed (type %u)", (unsigned)s_window_type);
 
     esp_err_t err = dsps_fft2r_init_fc32(NULL, DSP_FFT_SIZE);
     if (err != ESP_OK) {
