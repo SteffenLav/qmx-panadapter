@@ -50,3 +50,21 @@ flash_monitor.txt
 
 # Serial console captures from capture_serial_log.ps1 (debug artifacts)
 tools/qmx_log_*.txt
+
+# Auto-memory store + exports (per-machine, not shared through the repo)
+memory/
+*memory-export*.zip
+
+# Logs
+*.log
+
+# Flasher release artifacts in the current flasher folder (note the space in
+# the path). Merged firmware images, the auto-downloaded esptool, and the
+# versioned flasher zips are all release artifacts — never commit them.
+tools/QMX-Panadapter flasher/*.bin
+tools/QMX-Panadapter flasher/esptool/
+tools/QMX-Panadapter flasher.zip
+tools/QMX-Panadapter-flasher-*.zip
+
+# Local SWR capture helper + its output
+tools/_swr*.ps1
