@@ -403,6 +403,25 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 - **Intermittent boot crash fixed (LVGL thread-safety).** `ui_init()` took the LVGL lock but released it after `ft8_screen_view_init()`, then kept creating widgets (top-bar hit-zones, edge gesture strips, signature, tooltip, pinch timer) **unlocked**, racing the `esp_lvgl_port` refresh timer (`lv_display_refr_timer` → `lv_obj_update_layout` → `get_prop_core`, NULL style deref). Latent on all units; hardware whose refresh timing hit the window crashed once or twice before booting (reported on newer ST7121 units, root-caused from a field serial log via addr2line). Fixed by holding the lock across the whole of `ui_init()`.
 - **Password show/hide eye-icon button** restored (replacing the v0.15.18 checkbox), positioned under the Scan button; the password field was shortened to match the SSID field width.
 
+### Shipped in v0.18.0 — 2026-06-21 UTC
+
+- **Faster FT8 decode — replies land in time on busy bands.** The spectrogram is now built continuously *while* the slot is captured (instead of all at once after it ends), and decoding runs across both ESP32-P4 cores. The decode finishes early enough that a reply or report can go out on the *immediate* next slot rather than slipping a full 15 s cycle — the lag several operators reported on busy 20 m. The decoder still uses the same proven ft8_lib; this is about timing, not a different algorithm. A slightly lower candidate threshold also nets a few more weak-signal decodes, mainly on quiet bands.
+- **dBm scale on the spectrum.** A labelled dB scale is back on the panadapter — absolute dBm in normal mode, dB-above-noise-floor in flat mode — and is now drawn on the browser spectrum too, which never had it.
+- **Memory channels fixed.** Saving a channel could store a corrupted frequency (e.g. 14.020 MHz saved as 140 Hz) and refuse to recall; channels now store and recall the full frequency. *(Ian G4LXX)*
+- **Tap-to-tune direction fixed.** Tapping the right of the panadapter to tune up could jump *down* in the far-right (aliased) quarter of the display; taps now always tune in the direction you tap. *(Ian G4LXX)*
+- **Band switching fixed.** If you'd parked a band outside its legal allocation you couldn't switch back to it until a reboot; the band button now falls back to the band centre only when the remembered spot is out of band — otherwise it still returns you to where you were. *(Ian G4LXX)*
+- **Web reconnect fixed.** The browser spectrum could get stuck on "reconnecting" after a reload or network blip while the rest of the page kept working; the WebSocket now hands the session to the newest connection, so it always reconnects.
+- **WiFi reliability on new Tab5 units.** Hardened the C6/ESP-Hosted bring-up against a duplicate STA-start that could assert on some newer units. *(Roy)*
+- **macOS flasher guidance.** Clearer help for the common Mac snags — `brew install esptool` (pip3 often fails on recent macOS), the Gatekeeper "unidentified developer" prompt, and running `bash flash.command` to avoid the chmod/permission hurdle. *(John K7JFW)*
+
+### Shipped in v0.18.1 — 2026-06-22 UTC
+
+- **Config backup / restore / edit (web UI).** New **Config ↓ / Config ↑** buttons in the browser bottom bar download and upload all settings *and* memory channels as one editable text file (`qmx-config.txt`, with `[settings]`/`[cq]`/`[ft8_filters]`/`[memories]` sections). Back it up before a clean flash and restore in seconds, edit everything in a text editor instead of on the touchscreen, or share just the `[memories]` section as a band plan with another operator. Import merges (only the keys present change). The file holds secrets (wifi_pass/qrz/eqsl) in clear text = full backup; strip those before sharing.
+- **Clean / erase-all flash option.** The flasher now asks *normal or clean* just before writing. A clean flash wipes the whole chip first (`esptool write_flash -e`) — clearing a stuck stored state (e.g. WiFi that refuses to turn on). It erases **all** saved settings, so back up with Config ↓ first.
+- **Memory channel recall fixed.** Recalling a channel could leave the Tab5 display frozen on the old frequency — and block band changes afterwards — while the QMX actually retuned. Recall now moves the display immediately and applies the saved mode reliably (through the CAT poll task, so it can't be dropped by the rate-limiter). *(Ian G4LXX)*
+- **Panadapter ⇄ FT8 settings stick again — and FT8 is always DiGi.** Each mode reliably remembers its own frequency across switches, and entering FT8 now always forces the radio into DiGi instead of inheriting whatever mode (e.g. CW) the panadapter was on.
+- **Reboot on fast mode-toggle fixed.** Quickly flipping Panadapter↔FT8 could spawn a second FT8 task that clobbered a shared decode queue and reset the unit; now guarded against a double-spawn. The CAT poll also rides out a transient USB hiccup instead of quietly stopping (which had frozen the on-screen frequency).
+
 ### Next up
 
 The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF.
