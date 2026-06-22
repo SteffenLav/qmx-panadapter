@@ -65,10 +65,40 @@ echo   1. Plug the Tab5 into this PC with a USB-C DATA cable
 echo      ^(a charge-only cable will NOT work^).
 echo   2. Close any serial monitor, Arduino IDE, or other app using the port.
 echo(
+echo ------------------------------------------------------------
+echo  FLASH TYPE
+echo ------------------------------------------------------------
+echo A NORMAL flash keeps all your saved settings.
+echo(
+echo A CLEAN flash WIPES the whole chip first.  *** WARNING ***
+echo   *** ALL of the following will be PERMANENTLY ERASED: ***
+echo       - your WiFi network name AND password
+echo       - your callsign and Maidenhead grid
+echo       - ALL saved memory channels
+echo       - your logged QSOs ^(the ADIF log^)
+echo   This cannot be undone - you will re-enter everything.
+echo   Only use it if something is stuck or corrupted
+echo   (e.g. WiFi will not turn on no matter what).
+echo ------------------------------------------------------------
+set "ERASEOPT="
+set "CLEAN="
+set /p "CLEAN=Type E for a CLEAN/ERASE flash, or just Enter for a normal flash: "
+if /i "!CLEAN:~0,1!"=="e" set "ERASEOPT=-e"
+if /i "!CLEAN:~0,1!"=="y" set "ERASEOPT=-e"
+if defined ERASEOPT (
+    echo(
+    echo   *** CLEAN FLASH SELECTED - WiFi credentials, callsign/grid, and ALL
+    echo       memory channels WILL BE ERASED. Press Ctrl+C now to cancel. ***
+)
+echo(
 pause
 
 echo(
-echo Flashing - do NOT unplug the Tab5...
+if defined ERASEOPT (
+    echo Erasing + flashing - do NOT unplug the Tab5 ^(the full erase adds a bit^)...
+) else (
+    echo Flashing - do NOT unplug the Tab5...
+)
 echo(
 
 rem Try COM ports low-number-first (the Tab5 is usually on a low COM number),
@@ -93,12 +123,12 @@ if defined PORTS (
     for %%P in (!PORTS!) do (
         if not "!RC!"=="0" (
             echo   trying %%P ...
-            "%ESPTOOL%" --chip esp32p4 -p %%P -b 460800 --connect-attempts 1 !WRITE_FLASH! 0x0 "%FW%"
+            "%ESPTOOL%" --chip esp32p4 -p %%P -b 460800 --connect-attempts 1 !WRITE_FLASH! !ERASEOPT! 0x0 "%FW%"
             if not errorlevel 1 set "RC=0"
         )
     )
 ) else (
-    "%ESPTOOL%" --chip esp32p4 -b 460800 --connect-attempts 1 !WRITE_FLASH! 0x0 "%FW%"
+    "%ESPTOOL%" --chip esp32p4 -b 460800 --connect-attempts 1 !WRITE_FLASH! !ERASEOPT! 0x0 "%FW%"
     if not errorlevel 1 set "RC=0"
 )
 

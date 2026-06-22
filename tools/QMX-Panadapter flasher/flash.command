@@ -71,6 +71,32 @@ echo "  1. Plug the Tab5 into this computer with a USB-C DATA cable"
 echo "     (a charge-only cable will NOT work)."
 echo "  2. Close any serial monitor or other app using the port."
 echo
+echo "------------------------------------------------------------"
+echo " FLASH TYPE"
+echo "------------------------------------------------------------"
+echo "A NORMAL flash keeps all your saved settings."
+echo
+echo "A CLEAN flash WIPES the whole chip first.  *** WARNING: ***"
+echo "    ALL of the following will be PERMANENTLY ERASED:"
+echo "      - your WiFi network name AND password"
+echo "      - your callsign and Maidenhead grid"
+echo "      - ALL saved memory channels"
+echo "      - your logged QSOs (the ADIF log)"
+echo "    This cannot be undone - you will re-enter everything."
+echo "    Only use it if something is stuck or corrupted"
+echo "    (e.g. WiFi will not turn on no matter what)."
+echo "------------------------------------------------------------"
+ERASE_OPT=""
+read -r -p "Type E for a CLEAN/ERASE flash, or just Enter for a normal flash: " CLEAN
+case "${CLEAN}" in
+    [Ee]*|[Yy]*)
+        ERASE_OPT="-e"
+        echo
+        echo "  *** CLEAN FLASH SELECTED - WiFi credentials, callsign/grid, and ALL"
+        echo "      memory channels WILL BE ERASED. Press Ctrl+C now to cancel. ***"
+        ;;
+esac
+echo
 read -r -p "Press Enter to flash (or Ctrl+C to cancel)... "
 
 echo
@@ -92,13 +118,13 @@ RC=1
 if [ -n "${PORTS}" ]; then
     for P in ${PORTS}; do
         echo "  trying ${P} ..."
-        if "${ESPTOOL}" --chip esp32p4 -p "${P}" -b 460800 --connect-attempts 1 "${WRITE_FLASH}" 0x0 "${FW}"; then
+        if "${ESPTOOL}" --chip esp32p4 -p "${P}" -b 460800 --connect-attempts 1 "${WRITE_FLASH}" ${ERASE_OPT} 0x0 "${FW}"; then
             RC=0
             break
         fi
     done
 else
-    "${ESPTOOL}" --chip esp32p4 -b 460800 --connect-attempts 1 "${WRITE_FLASH}" 0x0 "${FW}"
+    "${ESPTOOL}" --chip esp32p4 -b 460800 --connect-attempts 1 "${WRITE_FLASH}" ${ERASE_OPT} 0x0 "${FW}"
     RC=$?
 fi
 

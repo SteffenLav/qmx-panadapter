@@ -65,6 +65,34 @@ already in this folder from a previous run - see "If it fails".)
  (log out and back in afterwards).
 
 ------------------------------------------------------------
+ Normal flash vs CLEAN flash (erase all settings)
+------------------------------------------------------------
+
+ Both flashers now ask, just before flashing:
+
+    "Type E for a CLEAN/ERASE flash, or just Enter for a
+     normal flash"
+
+ - NORMAL (just press Enter): updates the firmware and KEEPS
+   all your saved settings (WiFi, callsign, grid, memories).
+   This is what you want almost every time.
+
+ - CLEAN (type E, then Enter): wipes the whole chip first, so
+   *** ALL saved settings are PERMANENTLY ERASED ***:
+     - your WiFi network name AND password
+     - your callsign and Maidenhead grid
+     - ALL saved memory channels
+     - your logged QSOs (the ADIF log)
+   You will have to re-enter everything afterwards, and any
+   un-uploaded QSOs are gone. This cannot be undone.
+
+ Only use CLEAN if something is stuck or corrupted - for
+ example if WiFi refuses to turn on no matter what you do, or
+ settings behave oddly. The clean flash clears the stored
+ settings so the radio starts fresh. (A clean flash also takes
+ a little longer, because it erases the entire chip first.)
+
+------------------------------------------------------------
  If it fails
 ------------------------------------------------------------
 
