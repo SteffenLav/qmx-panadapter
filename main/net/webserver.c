@@ -151,9 +151,9 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         if (cJSON_IsNumber(item)) {
             uint32_t bw = (uint32_t)item->valuedouble;
             if (bw >= 1000) {
-                cat_request_ssb_bandwidth(bw);  // uses the three-write recipe for SSB
+                cat_request_ssb_bandwidth(bw);  // SSB: three-write recipe via poll task
             } else {
-                cat_set_passband_hz(bw);
+                cat_request_cw_passband(bw);    // CW: MMCW menu item (Kenwood FW is rejected)
             }
         }
     } else if (action && strcmp(action, "set_zoom") == 0) {
@@ -485,6 +485,10 @@ esp_err_t webserver_start(void)
     config.stack_size      = 12288;
     config.max_uri_handlers = 16;
     config.lru_purge_enable = true;
+    // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
+    // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
+    // session can be LRU-purged instead of bouncing new connects off ENFILE.
+    config.max_open_sockets = 10;
 
     ESP_LOGI(TAG, "Starting HTTP server on port %d", config.server_port);
     esp_err_t err = httpd_start(&s_server, &config);

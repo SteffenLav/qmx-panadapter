@@ -738,7 +738,7 @@ static void bw_preset_cb(lv_event_t *e)
     bw_popup_close();
     const char *mode = cat_get_mode_str();
     if (strcmp(mode, "CW") == 0 || strcmp(mode, "CW-R") == 0) {
-        cat_send_raw_cmd("MMCW|CW passband=%lu;", (unsigned long)hz);
+        cat_request_cw_passband(hz);  // deferred MMCW write via poll task
     } else {
         // QMX Menu Manager: the SSB filter item is "Bandwidth" (NOT "Filter RX",
         // which the QMX silently ignored — confirmed via a live MM query probe

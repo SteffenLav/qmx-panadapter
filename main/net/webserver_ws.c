@@ -62,9 +62,13 @@ static esp_err_t ws_uri_handler(httpd_req_t *req)
     // half-open socket that keeps "accepting" async sends, so the old session
     // never frees via the send-failure path - refusing the reconnect then strands
     // the browser on "reconnecting" forever while HTTP still works. Taking over
-    // the slot makes reconnects always succeed; the stale fd is simply abandoned.
-    if (s_session_active && s_ws_fd != fd) {
-        ESP_LOGW(TAG, "New client fd=%d takes over stale fd=%d", fd, s_ws_fd);
+    // the slot makes reconnects always succeed; the stale fd is closed explicitly
+    // (NOT just abandoned) so its LWIP socket is freed - otherwise repeated
+    // freeze/reconnect cycles leak sockets until accept() fails with ENFILE
+    // (LWIP_MAX_SOCKETS exhausted) and the server stops accepting connections.
+    if (s_session_active && s_ws_fd != fd && s_ws_fd >= 0) {
+        ESP_LOGW(TAG, "New client fd=%d takes over stale fd=%d (closing stale)", fd, s_ws_fd);
+        httpd_sess_trigger_close(s_server ? s_server : req->handle, s_ws_fd);
     }
     s_ws_fd = fd;
     s_session_active = true;
@@ -89,6 +93,15 @@ static void ws_push_task(void *arg)
     TickType_t last   = xTaskGetTickCount();
     uint32_t   sent   = 0;
     TickType_t fps_at = last;
+    int        fail_streak = 0;   // consecutive async-send failures
+
+    // Tolerate a short burst of transient send failures (EAGAIN: the TCP send
+    // buffer is momentarily full, common when the C6 link is briefly congested)
+    // before tearing the session down. Killing on the first failure made the
+    // browser "freeze then need a manual reconnect"; skipping the frame and
+    // retrying rides through the hiccup. Only a sustained failure (dead socket)
+    // closes the session.
+    const int  MAX_FAIL_STREAK = 15;  // ~1.5 s at 100 ms/frame
 
     for (;;) {
         vTaskDelayUntil(&last, pdMS_TO_TICKS(WS_PUSH_PERIOD_MS));
@@ -142,12 +155,21 @@ static void ws_push_task(void *arg)
 
         esp_err_t err = httpd_ws_send_frame_async(s_server, s_ws_fd, &s_ws_frame);
         if (err != ESP_OK) {
-            ESP_LOGW(TAG, "async send failed fd=%d: %s; closing session",
-                     s_ws_fd, esp_err_to_name(err));
+            if (++fail_streak < MAX_FAIL_STREAK) {
+                // Transient: skip this frame, keep the session, retry next tick.
+                continue;
+            }
+            ESP_LOGW(TAG, "async send failed fd=%d: %s (%d in a row); closing session",
+                     s_ws_fd, esp_err_to_name(err), fail_streak);
+            // Close the socket so its LWIP slot is freed (see takeover note above).
+            int dead = s_ws_fd;
             s_session_active = false;
             s_ws_fd = -1;
+            fail_streak = 0;
+            if (s_server && dead >= 0) httpd_sess_trigger_close(s_server, dead);
             continue;
         }
+        fail_streak = 0;
 
         sent++;
         TickType_t now = xTaskGetTickCount();

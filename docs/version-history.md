@@ -422,6 +422,14 @@ The long-planned manual FT8 TX path. **Read the [development warning](#️-devel
 - **Panadapter ⇄ FT8 settings stick again — and FT8 is always DiGi.** Each mode reliably remembers its own frequency across switches, and entering FT8 now always forces the radio into DiGi instead of inheriting whatever mode (e.g. CW) the panadapter was on.
 - **Reboot on fast mode-toggle fixed.** Quickly flipping Panadapter↔FT8 could spawn a second FT8 task that clobbered a shared decode queue and reset the unit; now guarded against a double-spawn. The CAT poll also rides out a transient USB hiccup instead of quietly stopping (which had frozen the on-screen frequency).
 
+### Shipped in v0.18.2 — 2026-06-22 UTC
+
+A stability patch — the headline fix is an idle reboot that hit anyone running with WiFi and the web UI open.
+
+- **Idle reboot fixed (the big one).** Units left running with WiFi up and a browser connected to the web UI would reset after a few minutes of "idle" — caught on a serial capture as an internal-RAM exhaustion in the WiFi co-processor's SDIO receive path. The ESP-Hosted SDIO driver was running in *streaming* mode, which re-allocates a fresh internal DMA buffer for each larger burst; with the Tab5's tight internal RAM, sustained WiFi receive eventually couldn't get one and asserted. Switched the SDIO RX path to a recycled fixed-size buffer pool (`RX_NONE`), so after warm-up there are no runtime DMA allocations to fail. Soaked 13+ minutes with a browser connected vs. crashes at under 4½ minutes before. *(Caught via serial backtrace.)*
+- **Web UI no longer freezes / needs manual reconnects.** Two coupled bugs: stale WebSocket sockets were abandoned without being closed, so a few freeze→reconnect cycles exhausted the LWIP socket table (`accept: ENFILE`) and the server stopped accepting connections; and a single transient send stall tore the whole session down. Now stale sockets are closed explicitly, transient stalls are ridden out instead of dropping you, TIME_WAIT is shortened so slots free quickly, the socket pool is larger, and the TCP window is bigger to smooth delivery. The waterfall/spectrum stream holds a steady 10 fps.
+- **Bandwidth (BW) now changes from the web UI.** Picking a BW in the browser did nothing in CW mode — the web path sent a Kenwood `FW` filter command, which the QMX rejects (`?;`). It now sends the correct menu-manager command for CW (`MMCW|CW passband=`) and the three-write recipe for SSB, both routed through the CAT poll task (no command-race), and the BW value updates on both the Tab5 and the web pill.
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*

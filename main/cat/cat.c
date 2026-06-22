@@ -92,16 +92,34 @@ static volatile uint32_t s_pending_ssb_bw = 0;
 // FW; poll is dropped from the rotation - reading the filter makes the QMX
 // re-assert a stale active width and our setting reverts.
 static volatile uint32_t s_ssb_bw_pinned = 0;
+// CW filter width pending write, drained by the poll task as "MMCW|CW passband=".
+// Same poll-task ownership as SSB: a direct cross-thread write (e.g. from the
+// web/httpd thread) would race the FA/MD/FW poll and garble into ?;. CW commits
+// cleanly on its own so no pin is needed - the FW; poll reads the new width back.
+static volatile uint32_t s_pending_cw_passband = 0;
 
 void cat_request_mode(const char *mode)
 {
     s_pending_mode_digit = hamlib_mode_to_digit(mode);
 }
 
+void cat_request_cw_passband(uint32_t hz)
+{
+    s_pending_cw_passband = hz;
+    ui_update_passband_width(hz);  // optimistic; FW; poll confirms within ~150 ms
+}
+
 void cat_request_ssb_bandwidth(uint32_t hz)
 {
     s_pending_ssb_bw = hz;
     s_ssb_bw_pinned  = hz;
+    // Drive the BW label optimistically from the requested value. While a width
+    // is pinned, FW; is dropped from the poll (it makes the QMX revert the live
+    // filter), so no FW response ever arrives to refresh the label via
+    // ui_update_passband_width(). The touch path updated the label itself; the
+    // web path did not, so a web BW change applied to the radio but never showed
+    // on the Tab5. Doing it here covers every caller (touch, web, mode restore).
+    ui_update_passband_width(hz);
 }
 
 int cat_get_cw_offset_hz(void) { return s_cw_offset_hz; }
@@ -603,6 +621,17 @@ static void poll_task(void *arg)
             esp_err_t e2 = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)mm, n, 200);
             ESP_LOGI(TAG, "SSB filter -> %lu Hz (RX=%s, BW=%s)", (unsigned long)bw,
                      e1 == ESP_OK ? "ok" : "fail", e2 == ESP_OK ? "ok" : "fail");
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        uint32_t cwbw = s_pending_cw_passband;
+        if (cwbw != 0) {
+            s_pending_cw_passband = 0;
+            char mm[32];
+            int n = snprintf(mm, sizeof(mm), "MMCW|CW passband=%lu;", (unsigned long)cwbw);
+            esp_err_t e = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)mm, n, 200);
+            ESP_LOGI(TAG, "CW passband -> %lu Hz (%s)", (unsigned long)cwbw,
+                     e == ESP_OK ? "ok" : "fail");
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
         }

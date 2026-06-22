@@ -139,6 +139,13 @@ void cat_request_mode(const char *mode);
  */
 void cat_request_ssb_bandwidth(uint32_t hz);
 
+/*
+ * Request a CW filter width (Hz). Deferred to the poll task as
+ * "MMCW|CW passband=<hz>;" - the QMX rejects a Kenwood FW<nnnn>; set with ?;,
+ * so the menu-manager item is the only thing that works. Thread-safe.
+ */
+void cat_request_cw_passband(uint32_t hz);
+
 /**
  * @brief Cooperatively pause/resume the background FA;/MD;/FW; poll loop.
  *
