@@ -139,6 +139,11 @@ typedef struct {
 
 static QueueHandle_t  s_decode_queue = NULL;
 static volatile bool  s_ft8_running  = false;
+// True for the whole lifetime of one ft8_task (capture) instance. A fast
+// Panadapter<->FT8 toggle could otherwise spawn a SECOND ft8_task before the
+// first finished tearing down; the two clobber the shared s_decode_queue and
+// one decode task ends up calling xQueueReceive(NULL) -> assert/reboot.
+static volatile bool  s_ft8_task_alive = false;
 
 // Timing error from the last decoded slot: positive = system clock is fast.
 // Written by ft8_decode_task; read by the LVGL UI (ft8_time_modal).
@@ -598,7 +603,9 @@ static void ft8_decode_task(void *arg)
 
     while (true) {
         decode_job_t job;
-        if (xQueueReceive(s_decode_queue, &job, pdMS_TO_TICKS(500)) != pdTRUE) {
+        QueueHandle_t q = s_decode_queue;
+        if (q == NULL) break;   // queue torn down (shutdown) — exit cleanly, never xQueueReceive(NULL)
+        if (xQueueReceive(q, &job, pdMS_TO_TICKS(500)) != pdTRUE) {
             if (!s_ft8_running) break;
             continue;
         }
@@ -630,6 +637,7 @@ static void ft8_decode_task(void *arg)
 static void ft8_task(void *arg)
 {
     (void)arg;
+    s_ft8_task_alive = true;
 
     ft8_status_set("Waiting for QMX...");
     ESP_LOGI(TAG, "waiting for CAT (QMX USB + Q9 1; handshake)...");
@@ -712,6 +720,7 @@ static void ft8_task(void *arg)
     if (!s_decode_queue) {
         ESP_LOGE(TAG, "failed to create decode queue");
         free_capture_pool();
+        s_ft8_task_alive = false;
         vTaskDelete(NULL);
         return;
     }
@@ -729,6 +738,7 @@ static void ft8_task(void *arg)
         vQueueDelete(s_decode_queue);
         s_decode_queue = NULL;
         free_capture_pool();
+        s_ft8_task_alive = false;
         vTaskDelete(NULL);
         return;
     }
@@ -890,6 +900,7 @@ static void ft8_task(void *arg)
     free_capture_pool();
 
     ESP_LOGI(TAG, "ft8_task exiting; processed %d slots", slot_idx);
+    s_ft8_task_alive = false;
     vTaskDelete(NULL);
 }
 
@@ -899,6 +910,15 @@ static void ft8_task(void *arg)
 
 void ft8_self_test(void)
 {
+    // Single-instance guard: never spawn a second ft8_task while one is still
+    // alive (e.g. a fast Panadapter<->FT8 toggle before the previous capture
+    // task finished its slot/teardown). Two instances clobber the shared
+    // s_decode_queue and crash one decode task on xQueueReceive(NULL). The
+    // surviving task keeps serving FT8 (its loop re-checks ui_mode each slot).
+    if (s_ft8_task_alive) {
+        ESP_LOGW(TAG, "ft8_self_test: an FT8 task is still alive; not spawning a second");
+        return;
+    }
     BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
         ft8_task, "ft8", 65536, NULL,
         tskIDLE_PRIORITY + 1, NULL, 1,

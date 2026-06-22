@@ -155,6 +155,10 @@ static void band_preset_cb(lv_event_t *e)
         }
     }
     cat_set_frequency_forced(target);
+    // Optimistically move the display (don't rely solely on the FA poll, which
+    // can lag or be briefly garbled after a CDC write) so the band button always
+    // visibly retunes the Tab5 immediately.
+    ui_update_frequency(target);
 }
 
 static void band_overlay_cb(lv_event_t *e)
@@ -1108,7 +1112,12 @@ static void restore_apply_step(int step)
         if (s_restore_pending.freq_hz) cat_set_frequency(s_restore_pending.freq_hz);
         break;
     case 1:
-        if (s_restore_pending.mode[0]) cat_set_mode(s_restore_pending.mode);
+        // Deliver via the poll task, NOT a direct LVGL-thread cat_set_mode():
+        // the direct write shares the 200 ms TX rate-limiter and was being
+        // dropped, which left a restored mode (e.g. FT8's DiGi) unapplied so
+        // the radio stayed in the previous mode. cat_request_mode is retried
+        // by the poll task and can't be rate-limit-dropped.
+        if (s_restore_pending.mode[0]) cat_request_mode(s_restore_pending.mode);
         break;
     case 2:
         if (s_restore_pending.passband_hz) {
@@ -1149,7 +1158,10 @@ static void ui_restore_snapshot(const ui_mode_snapshot_t *snap)
 static void ui_save_snapshot(ui_mode_snapshot_t *snap)
 {
     snap->valid           = true;
-    snap->freq_hz         = cat_get_frequency();
+    // Use the UI's freshest commanded freq, not cat_get_frequency() (= last
+    // FA poll): right after a keypad/recall/band retune the poll hasn't caught
+    // up yet, and a quick mode toggle would otherwise snapshot the stale value.
+    snap->freq_hz         = s_last_qmx_freq_hz ? s_last_qmx_freq_hz : cat_get_frequency();
     strncpy(snap->mode, s_current_mode, sizeof(snap->mode) - 1);
     snap->mode[sizeof(snap->mode) - 1] = '\0';
     snap->passband_hz     = s_passband_width_hz;
@@ -3949,8 +3961,9 @@ void ui_apply_saved_mode(void)
     top_bar_set_ft8_dim(true);
     drawer_set_ft8_mode(true);
     // FT8 is a digital mode - force the radio into DiGi regardless of
-    // whatever mode (e.g. CW) was active in Panadapter mode.
-    if (strcmp(cat_get_mode_str(), "DiGi") != 0) cat_set_mode("DIGI");
+    // whatever mode (e.g. CW) was active in Panadapter mode. Via the poll task
+    // (reliable, retried) rather than a rate-limit-droppable direct write.
+    cat_request_mode("DIGI");
     ft8_screen_view_show();
     ft8_self_test();
     ESP_LOGI(TAG, "UI mode restored from NVS: FT8");
@@ -3983,10 +3996,12 @@ static void ui_toggle_mode(void)
         // where FT8 was left (or just force DiGi on the very first entry).
         ui_save_snapshot(&s_pan_snapshot);
         if (s_ft8_snapshot.valid) {
-            ui_restore_snapshot(&s_ft8_snapshot);
-        } else if (strcmp(cat_get_mode_str(), "DiGi") != 0) {
-            cat_set_mode("DIGI");
+            ui_restore_snapshot(&s_ft8_snapshot);   // restores FT8's freq/zoom
         }
+        // FT8 is ALWAYS DiGi. Force it on every entry via the poll task
+        // (reliable, retried) — the snapshot restore's mode step can lose the
+        // race, which left FT8 stuck in the panadapter's mode (e.g. CW).
+        cat_request_mode("DIGI");
         ft8_screen_view_show();
         // Respawn the FT8 task; it self-deleted on previous exit.
         ft8_self_test();
@@ -3998,6 +4013,10 @@ static void ui_toggle_mode(void)
         // Sticky settings: remember where FT8 was left, restore where
         // Panadapter was left (band/mode/bw/freq/zoom).
         ui_save_snapshot(&s_ft8_snapshot);
+        // FT8 is always DiGi — never let the panadapter's mode (CW/SSB/...) be
+        // captured into the FT8 snapshot and carried back on the next FT8 entry.
+        strncpy(s_ft8_snapshot.mode, "DiGi", sizeof(s_ft8_snapshot.mode) - 1);
+        s_ft8_snapshot.mode[sizeof(s_ft8_snapshot.mode) - 1] = '\0';
         ui_restore_snapshot(&s_pan_snapshot);
         if (s_spectrum_obj)  { lv_obj_set_x(s_spectrum_obj,  -DISPLAY_H_RES); lv_obj_clear_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN); }
         if (s_label_bar)     { lv_obj_set_x(s_label_bar,     -DISPLAY_H_RES); lv_obj_clear_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN); }
