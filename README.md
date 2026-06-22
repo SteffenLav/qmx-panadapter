@@ -10,7 +10,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Beta — v0.18.0.** FT8 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
+> **Beta — v0.18.1.** FT8 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
 
 ---
 
@@ -45,11 +45,17 @@ Use the one-click flasher in [`tools/QMX-Panadapter flasher/`](tools/QMX-Panadap
    - **Windows** — double-click `flash.bat` (downloads esptool + firmware automatically; nothing to install)
    - **macOS** — double-click `flash.command` (needs esptool once — `brew install esptool` recommended; `pip3 install esptool` often fails on recent macOS with an "externally-managed-environment" error). If macOS blocks the script, right-click → **Open**, or run `bash flash.command` in Terminal (no `chmod` needed).
    - **Linux** — `bash flash.command` (needs `pip3 install esptool`)
-3. Wait for `SUCCESS`. The Tab5 restarts on the new firmware.
+3. The flasher asks **normal or clean** (see below) — just press **Enter** for a normal flash.
+4. Wait for `SUCCESS`. The Tab5 restarts on the new firmware.
 
 The flasher downloads the latest release from GitHub automatically. **No internet?** Put a `qmx_panadapter_merged_*.bin` from the [releases page](https://github.com/SteffenLav/qmx-panadapter/releases) next to the flasher and it uses that instead.
 
-Your saved settings (WiFi credentials, callsign, grid, memory channels) survive a re-flash — the flasher does not erase them.
+**Normal vs clean flash.** Just before flashing, the flasher asks:
+
+> *Type E for a CLEAN/ERASE flash, or just Enter for a normal flash*
+
+- **Normal (press Enter)** — updates the firmware and **keeps** all your saved settings (WiFi, callsign, grid, memory channels, ADIF log). This is what you want almost every time.
+- **Clean (type E)** — wipes the whole chip first, so **every saved setting is permanently erased**: WiFi name *and* password, callsign/grid, all memory channels, and the logged QSOs. Use it only if something is stuck or corrupted (e.g. WiFi refuses to turn on no matter what). Back up first with **Config ↓** (below) so you can restore in seconds afterwards.
 
 Building from source? See [Build from source](#build-from-source).
 
@@ -233,7 +239,7 @@ Open by swiping in from the right edge, or tapping the right grip handle. The dr
 
 With the Tab5 on WiFi, open `http://<tab5-ip>` in any modern browser. The IP is shown in the bottom status bar on the Tab5.
 
-The browser panadapter is a full-featured view in its own right — not just a window onto the Tab5. On a larger monitor you get more spectrum history, a bigger waterfall canvas, and mouse controls that are faster than touch for precise tuning. It shows live spectrum at ≈10 fps via WebSocket, full waterfall history (~50 s), the same thermal palette and floor maths, a graphical S-meter, and a top bar with Band / Mode / BW / Zoom controls. The bottom bar shows battery percentage + voltage, firmware version, a live UTC clock, and WiFi SSID + RSSI. To its right: download/upload buttons (ADIF, QRZ, eQSL — see [QSO logging](#qso-logging-adif)), **Diag ↓** for the diagnostic log, and **Tab5Shot** which opens a live `/ss.bmp` screenshot in a new tab.
+The browser panadapter is a full-featured view in its own right — not just a window onto the Tab5. On a larger monitor you get more spectrum history, a bigger waterfall canvas, and mouse controls that are faster than touch for precise tuning. It shows live spectrum at ≈10 fps via WebSocket, full waterfall history (~50 s), the same thermal palette and floor maths, a graphical S-meter, and a top bar with Band / Mode / BW / Zoom controls. The bottom bar shows battery percentage + voltage, firmware version, a live UTC clock, and WiFi SSID + RSSI. To its right: download/upload buttons (ADIF, QRZ, eQSL — see [QSO logging](#qso-logging-adif)), **Diag ↓** for the diagnostic log, **Config ↓ / Config ↑** to back up / restore / edit all settings (see [Config backup, restore & edit](#config-backup-restore--edit)), and **Tab5Shot** which opens a live `/ss.bmp` screenshot in a new tab.
 
 **Click or drag to tune.** Click or drag on the spectrum or waterfall — a cyan cursor appears with a live frequency readout and commits on release.
 
@@ -246,6 +252,25 @@ The browser panadapter is a full-featured view in its own right — not just a w
 **ADIF log download.** Once you have logged at least one completed FT8 QSO, a **"N QSOs ↓"** link appears in the bottom bar of the web UI. Clicking it downloads your `qso.adi` file directly. The link is only shown when the log contains data — it disappears after clearing the log with `/api/adif/clear`.
 
 **QRZ / eQSL upload.** Two more buttons appear alongside the ADIF link once you have logged QSOs — see [QSO logging](#qso-logging-adif) for the full picture.
+
+### Config backup, restore & edit
+
+The **Config ↓ / Config ↑** buttons in the bottom bar let you save every setting to a plain text file, edit it on your PC, restore it, or share parts of it.
+
+- **Config ↓** downloads `qmx-config.txt` — a human-readable [INI-style](https://en.wikipedia.org/wiki/INI_file) file with everything the Tab5 remembers, grouped into sections:
+  - `[settings]` — callsign, grid, WiFi SSID/password, CW pitch, IF trim, IQ balance, flat-spectrum, zoom, colour map, brightness, dB range, EMA, diag-log/GPS toggles, keypad layout, QRZ key, eQSL user/pass.
+  - `[cq]` — the three FT8 CQ-message presets and which is active.
+  - `[ft8_filters]` — the CQ-run include/exclude filter terms and toggles.
+  - `[memories]` — the 32 memory channels, one per line: `slot = freq_hz, mode, label`.
+- **Config ↑** picks an edited file and **merges** it back: only the keys and sections present in the file are changed — everything else is left as-is. Unknown keys are ignored (so a file from a newer firmware still loads). Memory channels apply immediately; other settings take effect after a restart.
+
+Three things you can do with it:
+
+1. **Back up before a clean flash.** Hit **Config ↓** first, do the clean/erase flash, then **Config ↑** to restore everything in seconds — instead of re-typing it all on glass.
+2. **Edit in a text editor instead of on the touchscreen.** Faster for callsign, grid, CQ messages, or punching in a batch of memory channels.
+3. **Share a band plan.** Copy just the `[memories]` section into a message — another operator pastes it into their file and uploads it to get the same channels (their other settings untouched).
+
+> The downloaded file contains your **WiFi password** and **QRZ/eQSL credentials in clear text** (so it works as a full backup). Keep it private; strip those lines before sharing a file with anyone.
 
 ### Endpoints
 
@@ -261,6 +286,8 @@ The browser panadapter is a full-featured view in its own right — not just a w
 | `/api/qrz_upload` | POST | Upload pending QSOs to QRZ Logbook; returns `{uploaded, failed, error}` |
 | `/api/eqsl_creds` | POST | Save eQSL username/password (JSON body `{"user","pswd"}`) |
 | `/api/eqsl_upload` | POST | Upload pending QSOs to eQSL (batched); returns `{uploaded, failed, error}` |
+| `/api/config` | GET | Download all settings + memory channels as editable INI (`qmx-config.txt`) |
+| `/api/config` | POST | Upload an INI config; merges into NVS; returns `{applied}` |
 | `/ss.bmp` | GET | 1280×720 RGB565 BMP screenshot |
 | `/ws` | WS | Binary spectrum stream (~10 fps) |
 
@@ -282,7 +309,7 @@ The browser panadapter is a full-featured view in its own right — not just a w
   "qso_count":   12,
   "qrz_key_set": false,
   "eqsl_creds_set": false,
-  "tab5_fw":     "v0.18.0",
+  "tab5_fw":     "v0.18.1",
   "qmx_fw":      "1_03_002QMX"
 }
 ```
@@ -552,7 +579,7 @@ I (xxxx) bsp_info: panel:    ST7123 (inferred from touch)
 I (xxxx) bsp_info: touch:    ST7123 @ 0x55
 I (xxxx) bsp_info: heap:     230.5 kB internal free, 28.80 MB PSRAM free
 I (xxxx) bsp_info: idf:      v5.4.4
-I (xxxx) bsp_info: firmware: v0.18.0
+I (xxxx) bsp_info: firmware: v0.18.1
 I (xxxx) bsp_info: =====================
 ```
 
@@ -673,6 +700,13 @@ main/
 
 ## Roadmap
 
+### Shipped in v0.17.0
+
+- **Physical keyboard support.** The M5Stack Tab5 snap-on keyboard (SKU A164) now works for all on-screen text entry — WiFi SSID/password, callsign/grid, CQ messages, filter terms, memory labels, and the frequency keypad. Typed characters go to the focused field; **Tab** jumps between fields, **Enter** saves & closes the dialog, **Esc** cancels, **Backspace** and the arrow keys work as expected. It's auto-detected at boot and simply does nothing if no keyboard is attached.
+- **WiFi network scan + picker.** A **Scan** button in WiFi setup lists the nearby networks; tap one and the SSID field fills in with the exact name from the network itself — no typing, and no chance of a case mismatch (WiFi names are case-sensitive). Manual entry still works.
+- **Boot reliability fix.** Closed a rare start-up crash (a display-layout race during UI construction) that could make some units — particularly newer ST7121 hardware — reset once or twice before booting cleanly. The screen now comes up first time, every time.
+- **Password show/hide eye button** restored (replacing the checkbox), tucked under the Scan button.
+
 ### Shipped in v0.18.0
 
 - **Faster FT8 decode — replies land in time on busy bands.** The spectrogram is now built continuously *while* the slot is captured (instead of all at once after it ends), and decoding runs across both ESP32-P4 cores. The decode finishes early enough that a reply or report can go out on the *immediate* next slot rather than slipping a full 15 s cycle — the lag several operators reported on busy 20 m. The decoder still uses the same proven ft8_lib; this is about timing, not a different algorithm. A slightly lower candidate threshold also nets a few more weak-signal decodes, mainly on quiet bands.
@@ -684,12 +718,13 @@ main/
 - **WiFi reliability on new Tab5 units.** Hardened the C6/ESP-Hosted bring-up against a duplicate STA-start that could assert on some newer units. *(Roy)*
 - **macOS flasher guidance.** Clearer help for the common Mac snags — `brew install esptool` (pip3 often fails on recent macOS), the Gatekeeper "unidentified developer" prompt, and running `bash flash.command` to avoid the chmod/permission hurdle. *(John K7JFW)*
 
-### Shipped in v0.17.0
+### Shipped in v0.18.1
 
-- **Physical keyboard support.** The M5Stack Tab5 snap-on keyboard (SKU A164) now works for all on-screen text entry — WiFi SSID/password, callsign/grid, CQ messages, filter terms, memory labels, and the frequency keypad. Typed characters go to the focused field; **Tab** jumps between fields, **Enter** saves & closes the dialog, **Esc** cancels, **Backspace** and the arrow keys work as expected. It's auto-detected at boot and simply does nothing if no keyboard is attached.
-- **WiFi network scan + picker.** A **Scan** button in WiFi setup lists the nearby networks; tap one and the SSID field fills in with the exact name from the network itself — no typing, and no chance of a case mismatch (WiFi names are case-sensitive). Manual entry still works.
-- **Boot reliability fix.** Closed a rare start-up crash (a display-layout race during UI construction) that could make some units — particularly newer ST7121 hardware — reset once or twice before booting cleanly. The screen now comes up first time, every time.
-- **Password show/hide eye button** restored (replacing the checkbox), tucked under the Scan button.
+- **Config backup / restore / edit (web UI).** New **Config ↓ / Config ↑** buttons in the browser bottom bar download and upload all settings *and* memory channels as one editable text file. Back it up before a clean flash and restore in seconds, edit everything in a text editor instead of on the touchscreen, or share just the `[memories]` section as a band plan with another operator. See [Config backup, restore & edit](#config-backup-restore--edit).
+- **Clean / erase-all flash option.** The flasher now asks *normal or clean* just before writing. A clean flash wipes the whole chip first — clearing a stuck stored state (e.g. WiFi that refuses to turn on). It erases **all** saved settings, so back up with Config ↓ first. See [Step 1](#step-1--flash-the-tab5-firmware).
+- **Memory channel recall fixed.** Recalling a channel could leave the Tab5 display frozen on the old frequency — and block band changes afterwards — while the QMX actually retuned. Recall now moves the display immediately and applies the saved mode reliably (through the CAT poll task, so it can't be dropped). *(Ian G4LXX)*
+- **Panadapter ⇄ FT8 settings stick again — and FT8 is always DiGi.** Each mode reliably remembers its own frequency across switches, and entering FT8 now always forces the radio into DiGi instead of inheriting whatever mode (e.g. CW) the panadapter was on.
+- **Reboot on fast mode-toggle fixed.** Quickly flipping Panadapter↔FT8 could spawn a second FT8 task that clobbered a shared decode queue and reset the unit; now guarded against a double-spawn. The CAT poll also rides out a transient USB hiccup instead of quietly stopping (which had frozen the on-screen frequency).
 
 ### Next up
 
