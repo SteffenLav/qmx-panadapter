@@ -1315,6 +1315,7 @@ static lv_obj_t *s_check_flip = NULL;  // 180-degree display flip checkbox
 static lv_obj_t *s_check_snap = NULL;  // snap-to-peak tap-to-tune checkbox
 static lv_obj_t *s_check_cwaudio = NULL;
 static lv_obj_t *s_slider_cwaudio_vol = NULL;
+static int       s_cwaudio_lock_vol = 0;   // value the (disabled) CW-audio slider snaps back to
 static lv_obj_t *s_lbl_cwaudio_vol = NULL;
 static lv_obj_t *s_slider_wf_black = NULL;
 static lv_obj_t *s_lbl_wf_black = NULL;
@@ -2325,7 +2326,7 @@ static void pinch_poll_cb(lv_timer_t *t)
         // Centre points at a lower freq as content slides right. 1× spans the
         // whole 48 kHz across the screen (~37.5 Hz/px); no clamp on how far you
         // can drag (into the void), only the landing freq is band-limited.
-        const float hz_per_px = (float)UAC_SAMPLE_RATE / (float)DISPLAY_H_RES;
+        const float hz_per_px = (float)DSP_SAMPLE_RATE_HZ / (float)DISPLAY_H_RES;
         int64_t tgt = s_stroll_start_hz - (int64_t)lroundf((float)off * hz_per_px);
         uint32_t lo, hi;
         if (legal_band_edges(s_stroll_start_hz, &lo, &hi)) {
@@ -3492,6 +3493,44 @@ static lv_obj_t *drawer_section(int sec_idx, int y, int h)
     return c;
 }
 
+// Brief centered toast message (auto-hides). Runs on the LVGL task (callers are
+// LVGL event handlers, which already hold the display lock).
+static lv_obj_t  *s_toast       = NULL;
+static lv_timer_t *s_toast_timer = NULL;
+
+static void toast_hide_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (s_toast) lv_obj_add_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
+    s_toast_timer = NULL;   // one-shot timer auto-deletes after firing
+}
+
+static void ui_toast(const char *msg)
+{
+    if (!s_toast) {
+        s_toast = lv_label_create(lv_screen_active());
+        lv_obj_set_style_bg_color(s_toast, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(s_toast, LV_OPA_80, 0);
+        lv_obj_set_style_text_color(s_toast, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_toast, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_pad_all(s_toast, 18, 0);
+        lv_obj_set_style_radius(s_toast, 10, 0);
+        lv_obj_set_style_border_width(s_toast, 1, 0);
+        lv_obj_set_style_border_color(s_toast, lv_color_hex(UI_COLOR_BORDER), 0);
+        lv_obj_remove_flag(s_toast, LV_OBJ_FLAG_CLICKABLE);  // never intercept touches
+    }
+    lv_label_set_text(s_toast, msg);
+    lv_obj_align(s_toast, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_move_foreground(s_toast);   // above the open drawer
+    lv_obj_remove_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
+    if (s_toast_timer) {
+        lv_timer_reset(s_toast_timer);
+    } else {
+        s_toast_timer = lv_timer_create(toast_hide_cb, 1500, NULL);
+        lv_timer_set_repeat_count(s_toast_timer, 1);
+    }
+}
+
 // Build the drawer once. Hidden off-screen on the right initially.
 static void drawer_build(void)
 {
@@ -3797,7 +3836,7 @@ static void drawer_build(void)
         lv_obj_t *sec = drawer_section(DRAWER_SEC_CWAUDIO, y, 130);
         lv_obj_t *ca_hdr = lv_label_create(sec);
         lv_label_set_text(ca_hdr, "CW Audio");
-        lv_obj_set_style_text_color(ca_hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_color(ca_hdr, lv_color_hex(0x707070), 0);  // greyed: shelved/WIP
         lv_obj_set_style_text_font(ca_hdr, &lv_font_montserrat_28, 0);
         lv_obj_align(ca_hdr, LV_ALIGN_TOP_LEFT, 0, 4);
 
@@ -3807,15 +3846,17 @@ static void drawer_build(void)
         qmx_settings_t cacfg;
         settings_load_all(&cacfg);
 
-        s_check_cwaudio = make_drawer_checkbox(sec, cacfg.cw_audio_en,
+        s_cwaudio_lock_vol = (int)cacfg.cw_audio_vol;  // value the slider snaps back to
+        s_check_cwaudio = make_drawer_checkbox(sec, false,  // forced off (WIP)
                                                drawer_check_cwaudio_cb, NULL);
         lv_obj_align(s_check_cwaudio, LV_ALIGN_TOP_RIGHT, 0, 0);
+        lv_obj_set_style_opa(s_check_cwaudio, LV_OPA_50, 0);  // greyed: shelved/WIP
 
         s_lbl_cwaudio_vol = lv_label_create(sec);
         char cavbuf[24];
         snprintf(cavbuf, sizeof(cavbuf), "Volume: %u", (unsigned)cacfg.cw_audio_vol);
         lv_label_set_text(s_lbl_cwaudio_vol, cavbuf);
-        lv_obj_set_style_text_color(s_lbl_cwaudio_vol, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_color(s_lbl_cwaudio_vol, lv_color_hex(0x707070), 0);  // greyed: WIP
         lv_obj_set_style_text_font(s_lbl_cwaudio_vol, &lv_font_montserrat_28, 0);
         lv_obj_align(s_lbl_cwaudio_vol, LV_ALIGN_TOP_LEFT, 0, 44);
 
@@ -3824,6 +3865,7 @@ static void drawer_build(void)
         lv_slider_set_range(s_slider_cwaudio_vol, 0, 100);
         lv_slider_set_value(s_slider_cwaudio_vol, (int)cacfg.cw_audio_vol, LV_ANIM_OFF);
         lv_obj_align(s_slider_cwaudio_vol, LV_ALIGN_TOP_LEFT, 0, 74);
+        lv_obj_set_style_opa(s_slider_cwaudio_vol, LV_OPA_50, 0);  // greyed: shelved/WIP
         lv_obj_add_event_cb(s_slider_cwaudio_vol, drawer_slider_cwaudio_vol_cb,
                             LV_EVENT_VALUE_CHANGED, NULL);
         y += 130;
@@ -4202,24 +4244,21 @@ static void drawer_switch_wifi_en_cb(lv_event_t *e)
     ESP_LOGI(TAG, "WiFi boot-initiation: %s", on ? "ON" : "OFF");
 }
 
+// CW Audio is shelved (works but breaks up on the current USB-audio pipeline),
+// so its drawer controls are greyed out and inert: a tap or drag just snaps the
+// control back and shows a "Work in progress" toast instead of doing anything.
 static void drawer_check_cwaudio_cb(lv_event_t *e)
 {
-    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
-    cw_audio_set_enabled(on);
-    ESP_LOGI(TAG, "CW audio: %s", on ? "ON" : "OFF");
+    lv_obj_remove_state(lv_event_get_target(e), LV_STATE_CHECKED);  // stay off
+    ui_toast("Work in progress....");
 }
 
 static void drawer_slider_cwaudio_vol_cb(lv_event_t *e)
 {
-    (void)e;
-    if (!s_slider_cwaudio_vol) return;
-    int v = (int)lv_slider_get_value(s_slider_cwaudio_vol);
-    cw_audio_set_volume((uint8_t)v);
-    if (s_lbl_cwaudio_vol) {
-        char b[24];
-        snprintf(b, sizeof(b), "Volume: %d", v);
-        lv_label_set_text(s_lbl_cwaudio_vol, b);
+    if (s_slider_cwaudio_vol) {
+        lv_slider_set_value(s_slider_cwaudio_vol, s_cwaudio_lock_vol, LV_ANIM_OFF);  // snap back
     }
+    ui_toast("Work in progress....");
 }
 
 
