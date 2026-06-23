@@ -447,12 +447,24 @@ Display ergonomics — waterfall tuning controls, an upside-down mounting flip, 
 
 ### Shipped in v0.18.4 — 2026-06-23 UTC
 
-A two-part FT8 decode fix that makes replies land on the right tone and arrive a full cycle sooner on busy bands.
+Band-navigation upgrades, an FT8 decode fix, and a one-finger tuning gesture. (The auto-answer "robot" is built but **shelved** in this release — see the end.)
+
+**FT8 decode**
 
 - **Decoded tones are now recorded in real Hz.** Each decode's frequency was being stored as the decoder's internal coarse FFT-bin index (6.25 Hz per bin, measured relative to the start of the search window) rather than an actual audio frequency. Everything downstream treats that value as Hz — the reply tone the radio transmits on, the "find a clear frequency" CQ scan, and the busy-frequency clash warning — so all three were off by roughly 200 Hz plus a large scale error. Now converted to true audio Hz (using ft8_lib's own formula), so a station decoded at 1500 Hz is replied to at 1500 Hz. Verified on-air: 45 decodes across a busy 20 m, every one landing in the normal 200–2900 Hz FT8 passband, each station stable at the same frequency every cycle.
-- **The station you're working decodes first.** While you're mid-exchange with someone, the slot's candidate list is reordered so their known tone is decoded before everyone else's. On a crowded band the decoder could otherwise spend the whole opening reply window working through dozens of unrelated signals, pushing your reply a full 15-second cycle late. This makes the existing reply-on-the-immediate-slot path actually fire on time when the band is full. (Pounce exchanges only.)
+- **The station you're working decodes first.** While you're mid-exchange, the slot's candidate list is reordered so the partner's known tone is decoded before everyone else's. On a crowded band the decoder could otherwise spend the whole opening reply window working through unrelated signals, pushing your reply a full 15-second cycle late. This makes the existing reply-on-the-immediate-slot path fire on time when the band is full. (Pounce exchanges only.)
+- **Band-aware "worked-before" filter.** The "Exclude worked-before" FT8 filter now keys off callsign **and band**, so a station you've worked on 20 m is still offered as new on 40 m.
 
-This release is the RX/decode half of the in-development band-navigation/robot branch, pulled forward on its own — none of the live-TX auto-answer ("robot") code is included.
+**Band navigation & tuning**
+
+- **Band-plan strip.** A thin colour strip below the frequency axis shows the CW / Digi / Phone segments of the current band with a marker tracking your VFO. A **Band-plan region** selector (Auto / Region 1 / 2 / 3) in the settings drawer shifts the segment boundaries to your IARU region.
+- **One-finger pan ("stroll").** Drag the spectrum/waterfall horizontally with one finger to slide across the band; a live centre-frequency readout shows where you'll land and the radio retunes on release, clamped to the band edges. (Replaces the older two-finger drag; two fingers stays pinch-zoom.)
+- **Snap-to-signal toggle.** A **Snap to signal** switch in the drawer (default on): tap near a signal and the VFO jumps to the strongest nearby peak; turn it off to tune exactly where you touched. Includes a fix so snapping works in **CW** — the search window now centres on the CW offset instead of the bare 12 kHz IF, where it previously missed the carrier (most visibly when zoomed in).
+
+**Shelved / work-in-progress**
+
+- **CW Audio** (demodulated CW to the Tab5 speaker) remains greyed out — it works but breaks up on the current USB-audio pipeline.
+- **Auto-answer "robot"** (unattended CQ answering) is complete but **not yet on-air soaked**, and it keys the radio for real, so it ships **disabled**: the Filter-modal toggle is greyed and inert (tap → "Work in progress" toast) and the engine is hard-disabled in firmware, so it cannot transmit in this release.
 
 ---
 
