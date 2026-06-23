@@ -445,6 +445,15 @@ Display ergonomics — waterfall tuning controls, an upside-down mounting flip, 
 
 *Also investigated but not shipped:* software I/Q image rejection (both a frequency-domain per-bin canceller and a manual by-eye null). Reverted — the ghost users were seeing is a **sample-rate alias** spaced exactly 48 kHz (the QMX's USB-audio rate) from the real signal, which is a QMX-side anti-aliasing characteristic and cannot be removed in the Tab5's DSP. True opposite-sideband I/Q images (within the window) remain handled by the existing adaptive I/Q balance.
 
+### Shipped in v0.18.4 — 2026-06-23 UTC
+
+A two-part FT8 decode fix that makes replies land on the right tone and arrive a full cycle sooner on busy bands.
+
+- **Decoded tones are now recorded in real Hz.** Each decode's frequency was being stored as the decoder's internal coarse FFT-bin index (6.25 Hz per bin, measured relative to the start of the search window) rather than an actual audio frequency. Everything downstream treats that value as Hz — the reply tone the radio transmits on, the "find a clear frequency" CQ scan, and the busy-frequency clash warning — so all three were off by roughly 200 Hz plus a large scale error. Now converted to true audio Hz (using ft8_lib's own formula), so a station decoded at 1500 Hz is replied to at 1500 Hz. Verified on-air: 45 decodes across a busy 20 m, every one landing in the normal 200–2900 Hz FT8 passband, each station stable at the same frequency every cycle.
+- **The station you're working decodes first.** While you're mid-exchange with someone, the slot's candidate list is reordered so their known tone is decoded before everyone else's. On a crowded band the decoder could otherwise spend the whole opening reply window working through dozens of unrelated signals, pushing your reply a full 15-second cycle late. This makes the existing reply-on-the-immediate-slot path actually fire on time when the band is full. (Pounce exchanges only.)
+
+This release is the RX/decode half of the in-development band-navigation/robot branch, pulled forward on its own — none of the live-TX auto-answer ("robot") code is included.
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
