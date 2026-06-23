@@ -31,10 +31,16 @@ int adif_log_count(void);
 // Absolute path to the ADIF file on SPIFFS (e.g. "/spiffs/qso.adi").
 const char *adif_log_file_path(void);
 
-// True if `call` appears in any previously logged QSO.
+// True if `call` appears in any previously logged QSO (ANY band).
 // Uses an in-memory cache (up to ADIF_WORKED_CACHE entries) loaded at init.
 // O(n) linear scan — fine for the cache size used.
 bool adif_log_contains_call(const char *call);
+
+// True if `call` was previously logged ON THE BAND that contains freq_hz.
+// The same station on a different band is NOT "worked before" (it's a new
+// band-slot), so the auto-answer worked-before filter uses this, not the
+// any-band variant above. freq_hz is mapped to an ADIF band internally.
+bool adif_log_contains_call_on_band(const char *call, uint32_t freq_hz);
 
 // Erase all logged QSOs and reset the worked-call cache.
 void adif_log_clear(void);

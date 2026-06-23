@@ -28,6 +28,8 @@ static lv_obj_t *s_ta_excl[2]  = { NULL, NULL };
 static lv_obj_t *s_cb_worked_before = NULL;
 static lv_obj_t *s_cb_plain_cq      = NULL;
 static lv_obj_t *s_cb_incl_cq_only  = NULL;
+static lv_obj_t *s_cb_robot         = NULL;  // auto-answer enable
+static lv_obj_t *s_dd_robot_pri     = NULL;  // priority dropdown
 
 static bool      s_open = false;
 
@@ -80,6 +82,8 @@ static void save_btn_cb(lv_event_t *e)
     f.excl_worked_before = lv_obj_has_state(s_cb_worked_before, LV_STATE_CHECKED);
     f.excl_plain_cq      = lv_obj_has_state(s_cb_plain_cq, LV_STATE_CHECKED);
     f.incl_cq_only       = lv_obj_has_state(s_cb_incl_cq_only, LV_STATE_CHECKED);
+    f.robot_en           = lv_obj_has_state(s_cb_robot, LV_STATE_CHECKED);
+    f.robot_priority     = (uint8_t)lv_dropdown_get_selected(s_dd_robot_pri);
 
     settings_set_ft8_filters(&f);
     ESP_LOGI(TAG, "saved filters: incl=[%d:'%s' %d:'%s'] excl=[%d:'%s' %d:'%s'] wb=%d cq=%d",
@@ -176,8 +180,8 @@ static void modal_build(void)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *panel = lv_obj_create(s_modal);
-    lv_obj_set_size(panel, 1040, 460);
-    lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 18);
+    lv_obj_set_size(panel, 1040, 540);
+    lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 14);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(panel, lv_color_hex(0x555555), 0);
@@ -222,9 +226,28 @@ static void modal_build(void)
     lv_obj_set_style_text_color(s_cb_incl_cq_only, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_align(s_cb_incl_cq_only, LV_ALIGN_TOP_LEFT, 0, 374);
 
+    // --- Robot (auto-answer) row -------------------------------------
+    s_cb_robot = make_checkbox(panel, "Auto-answer CQ (robot)");
+    lv_obj_set_style_text_font(s_cb_robot, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(s_cb_robot, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_align(s_cb_robot, LV_ALIGN_TOP_LEFT, 0, 426);
+
+    lv_obj_t *pri_lbl = lv_label_create(panel);
+    lv_label_set_text(pri_lbl, "Priority:");
+    lv_obj_set_style_text_font(pri_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(pri_lbl, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_align(pri_lbl, LV_ALIGN_TOP_LEFT, 420, 432);
+
+    // Order MUST match ft8_robot_priority_t (STRONGEST=0, WEAKEST=1, DISTANT=2).
+    s_dd_robot_pri = lv_dropdown_create(panel);
+    lv_dropdown_set_options(s_dd_robot_pri, "Strongest\nWeakest\nMost distant");
+    lv_obj_set_width(s_dd_robot_pri, 280);
+    lv_obj_align(s_dd_robot_pri, LV_ALIGN_TOP_LEFT, 540, 422);
+    lv_obj_set_style_text_font(s_dd_robot_pri, &lv_font_montserrat_24, 0);
+
     // --- Save / Cancel / Sync Time on the right edge, evenly distributed.
-    // Panel inner h = 460-40 = 420 px. Three buttons h=64: total 192 px.
-    // Remaining 228 px / 4 gaps = 57 px each → y = 57 / 178 / 299.
+    // Panel inner h = 540-40 = 500 px. Three buttons h=64: total 192 px.
+    // Remaining 308 px / 4 gaps = 77 px each → y = 77 / 218 / 359.
     {
         struct { const char *lbl; uint32_t col; lv_event_cb_t cb; } btns[3] = {
             { "Save",      0x2e8b3a, save_btn_cb      },
@@ -235,7 +258,7 @@ static void modal_build(void)
         for (int i = 0; i < 3; i++) {
             lv_obj_t *b = lv_btn_create(panel);
             lv_obj_set_size(b, 180, 64);
-            lv_obj_align(b, LV_ALIGN_TOP_RIGHT, 0, 57 + i * (64 + 57));
+            lv_obj_align(b, LV_ALIGN_TOP_RIGHT, 0, 77 + i * (64 + 77));
             lv_obj_set_style_bg_color(b, lv_color_hex(btns[i].col), 0);
             lv_obj_set_style_radius(b, 8, 0);
             lv_obj_set_style_border_width(b, 0, 0);
@@ -308,6 +331,9 @@ void ft8_filter_modal_show(void)
     apply_checkbox_state(s_cb_worked_before, f->excl_worked_before);
     apply_checkbox_state(s_cb_plain_cq, f->excl_plain_cq);
     apply_checkbox_state(s_cb_incl_cq_only, f->incl_cq_only);
+    apply_checkbox_state(s_cb_robot, f->robot_en);
+    lv_dropdown_set_selected(s_dd_robot_pri,
+                             f->robot_priority <= FT8_ROBOT_PRI_DISTANT ? f->robot_priority : 0);
 
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);

@@ -53,6 +53,8 @@ static const char *TAG = "settings";
 #define KEY_WF_BLEND     "wf_blend"
 #define KEY_WF_WINDOW    "wf_window"
 #define KEY_DISP_FLIP    "disp_flip"
+#define KEY_SNAP_PEAK    "snap_peak"
+#define KEY_BP_REGION    "bp_region"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -117,6 +119,8 @@ static const char *TAG = "settings";
 #define DIRTY_WF_BLEND      (1ull << 36)
 #define DIRTY_WF_WINDOW     (1ull << 37)
 #define DIRTY_DISP_FLIP     (1ull << 38)
+#define DIRTY_SNAP_PEAK     (1ull << 39)
+#define DIRTY_BP_REGION     (1ull << 40)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -231,6 +235,8 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_WF_BLEND)    nvs_set_u8(s_nvs, KEY_WF_BLEND,  snap.wf_floor_blend);
         if (dirty_local & DIRTY_WF_WINDOW)   nvs_set_u8(s_nvs, KEY_WF_WINDOW, snap.wf_window);
         if (dirty_local & DIRTY_DISP_FLIP)   nvs_set_u8(s_nvs, KEY_DISP_FLIP, snap.display_flip ? 1 : 0);
+        if (dirty_local & DIRTY_SNAP_PEAK)   nvs_set_u8(s_nvs, KEY_SNAP_PEAK, snap.snap_to_peak ? 1 : 0);
+        if (dirty_local & DIRTY_BP_REGION)   nvs_set_u8(s_nvs, KEY_BP_REGION, snap.bandplan_region);
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
@@ -321,6 +327,8 @@ static void load_from_nvs(qmx_settings_t *out)
     out->wf_floor_blend = DEF_WF_BLEND;
     out->wf_window      = DEF_WF_WINDOW;
     out->display_flip   = false;
+    out->snap_to_peak   = true;   // on by default (legacy behaviour)
+    out->bandplan_region = 0;     // 0 = auto (derive from grid)
     memset(&out->ft8_filters, 0, sizeof(out->ft8_filters));
 
     if (!s_ready) {
@@ -394,6 +402,8 @@ static void load_from_nvs(qmx_settings_t *out)
     if (out->wf_floor_blend > 100) out->wf_floor_blend = 100;
     if (out->wf_window > 2)        out->wf_window = 0;
     if (nvs_get_u8(s_nvs, KEY_DISP_FLIP, &u8v) == ESP_OK) out->display_flip = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_SNAP_PEAK, &u8v) == ESP_OK) out->snap_to_peak = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_BP_REGION, &u8v) == ESP_OK) out->bandplan_region = (u8v <= 3) ? u8v : 0;
 
     sz = sizeof(out->ft8_filters);
     nvs_get_blob(s_nvs, KEY_FT8_FILT, &out->ft8_filters, &sz);
@@ -864,4 +874,25 @@ void settings_set_display_flip(bool v)
     s_pending.display_flip = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_DISP_FLIP);
+}
+
+void settings_set_snap_to_peak(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.snap_to_peak == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.snap_to_peak = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_SNAP_PEAK);
+}
+
+void settings_set_bandplan_region(uint8_t v)
+{
+    if (!s_ready) return;
+    if (v > 3) v = 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.bandplan_region == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.bandplan_region = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_BP_REGION);
 }

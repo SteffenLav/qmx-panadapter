@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "ft8_tx.h"
+#include "storage/settings.h"   // ft8_filters_t
 
 // v0.13.0: FT8 QSO state machine — auto search-and-pounce + CQ-run.
 //
@@ -83,3 +84,21 @@ void            ft8_qso_get_cur_extra(char *buf, size_t len);
 // station that answered). The decode-list UI uses this to hide other stations'
 // CQ rows so replies to us stand out. Always false for pounce sessions.
 bool ft8_qso_cq_filter_active(void);
+
+// True when we're mid pounce-exchange and know exactly which audio tone the
+// partner's next message will arrive on (their own tone — they reply on the
+// same AF the whole exchange, standard FT8 convention). *freq_hz_out is set
+// to that tone. False for CQ-run (the caller's tone differs from ours and
+// isn't tracked after the initial answer) and outside WAIT_RPT/WAIT_ROGER/
+// WAIT_RR73 — those callers should fall back to no frequency hint.
+// Used by ft8_test.c to decode the message we're actually waiting for FIRST,
+// so a busy band can't push our own QSO's reply past the reply-on-immediate-
+// slot window (FT8_REPLY_TX_WINDOW_MS).
+bool ft8_qso_get_priority_freq(int *freq_hz_out);
+
+// True if a decoded message text passes the operator's include/exclude term
+// filters (the same ft8_filters_t used by CQ-run auto-reply). Exposed so the
+// robot (ft8_robot.c) applies the exact same matching as the manual paths.
+// Note: this covers only the term filters; worked-before / plain-CQ toggles
+// are enforced by the caller.
+bool ft8_filter_match(const char *text, const ft8_filters_t *f);

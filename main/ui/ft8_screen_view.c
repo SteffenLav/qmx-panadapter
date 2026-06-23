@@ -617,8 +617,8 @@ static void update_row(int i, const ft8_call_t *src)
         int8_t col = 0; /* other / white */
         if (s_my_call[0] && strstr(src->last_text, s_my_call)) {
             col = 2; /* own call in message -> red (highest priority) */
-        } else if (adif_log_contains_call(src->call)) {
-            col = 3; /* already in ADIF log -> dim grey */
+        } else if (adif_log_contains_call_on_band(src->call, cat_get_frequency())) {
+            col = 3; /* worked before on THIS band -> dim grey */
         } else if (strncmp(src->last_text, "CQ ", 3) == 0) {
             col = 1; /* CQ -> green */
         }

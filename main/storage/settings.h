@@ -13,14 +13,25 @@ extern "C" {
 // not just the callsign). Plus two standalone toggles.
 #define FT8_FILTER_TEXT_LEN 16
 
+// How the robot ranks eligible CQ callers when several pass the filters in the
+// same slot. (Stored as uint8_t robot_priority.)
+typedef enum {
+    FT8_ROBOT_PRI_STRONGEST = 0,  // highest SNR first (best chance of completing)
+    FT8_ROBOT_PRI_WEAKEST   = 1,  // lowest SNR first (help the weak ones / ragchew DX hunt)
+    FT8_ROBOT_PRI_DISTANT   = 2,  // greatest great-circle distance from our grid (DX)
+} ft8_robot_priority_t;
+
 typedef struct {
     bool incl_en[2];
     char incl_text[2][FT8_FILTER_TEXT_LEN];
     bool excl_en[2];
     char excl_text[2][FT8_FILTER_TEXT_LEN];
-    bool excl_worked_before; // reserved for v0.16.0 ADIF log; UI present, not yet enforced
+    bool excl_worked_before; // skip callers already in the ADIF log (enforced since the robot landed)
     bool excl_plain_cq;      // hide bare "CQ ..." rows, show only replies to us
     bool incl_cq_only;       // show ONLY "CQ ..." rows (display filter; does not affect auto-reply)
+    // --- Robot (auto-answer) — appended; old NVS blobs read back 0 (=off, STRONGEST) ---
+    bool    robot_en;        // auto-answer CQ callers with no tap (default off)
+    uint8_t robot_priority;  // ft8_robot_priority_t: which caller to pick first
 } ft8_filters_t;
 
 // All persisted settings. Floats are stored as raw 32-bit bit-patterns
@@ -62,6 +73,8 @@ typedef struct {
     uint8_t  wf_floor_blend;  // waterfall per-bin floor blend 0..100% (0=global, default 100)
     uint8_t  wf_window;       // FFT window: 0=Blackman-Harris 1=Hann 2=Nuttall (default 0)
     bool     display_flip;    // landscape flipped 180 deg for upside-down mounting (default false)
+    bool     snap_to_peak;    // tap-to-tune snaps to the strongest nearby signal (default true)
+    uint8_t  bandplan_region; // band-plan strip region: 0=auto(from grid) 1=R1 2=R2 3=R3
     ft8_filters_t ft8_filters;        // CQ-run reply include/exclude filters
 } qmx_settings_t;
 
@@ -129,6 +142,15 @@ void settings_set_wf_window(uint8_t idx);
 
 // Display 180-degree flip for upside-down mounting (debounced flush).
 void settings_set_display_flip(bool v);
+
+// Tap-to-tune snap-to-strongest-signal on/off (debounced flush). When false a
+// tap tunes exactly where you touched (after the mode grid-snap), with no pull
+// toward the nearest peak.
+void settings_set_snap_to_peak(bool v);
+
+// Band-plan strip region (debounced flush): 0=auto (derive from grid), 1=R1,
+// 2=R2, 3=R3.
+void settings_set_bandplan_region(uint8_t v);
 
 // WiFi boot-initiation toggle (debounced flush). When false the radio stays
 // idle at boot even if credentials are stored; the user can re-enable from
