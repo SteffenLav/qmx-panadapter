@@ -9,6 +9,7 @@
 #include <string.h>
 #include <strings.h>
 #include <math.h>
+#include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -1189,15 +1190,23 @@ static float    s_pinch_start_zoom  = 1.0f;
 static int      s_pinch_start_dist  = 0;
 static int      s_pinch_start_pan   = 0;   // pan at pinch start
 static int      s_pinch_mid_x       = 0;   // midpoint x at pinch start
-// 1× "stroll the band" (Flex-style): at 1× there's nothing to FFT-pan, so a
-// two-finger horizontal slide physically drags the whole scope + waterfall
-// under the finger (sliding their canvases, even off-screen into black), with
-// the band-plan marker + a freq readout previewing where the centre points.
-// Nothing retunes until the finger lifts; on release the radio tunes to that
-// centre and the view repopulates. State for the drag.
+// One-finger swipe: horizontal pan (stroll the band) under the finger.
+// Band-plan marker + freq readout preview. Settles on finger lift.
+// Only activates if finger moves > PAN_THRESHOLD_PX; otherwise it's a hold-for-tune.
 static bool     s_stroll_active     = false;
+static int      s_pan_start_x       = 0;    // x position when one-finger pan starts being tracked
 static int64_t  s_stroll_start_hz   = 0;    // VFO freq when the drag began
 static int64_t  s_stroll_target_hz  = 0;    // previewed centre while dragging
+static bool     s_tune_mode_locked  = false; // once 250ms passes without panning, lock into tune mode
+#define PAN_THRESHOLD_PX 70                 // must move this far to activate pan (vs hold-for-tune) — avoids touch sensor jitter
+// Passband fade-in after pan settles
+static uint64_t s_passband_fade_start_us = 0;  // when passband fade began, 0 if not fading
+static bool s_hide_passband_now = false;       // immediately hide on pan settle, before fade kicks in
+#define PASSBAND_FADE_DELAY_MS 1000         // delay before fade starts
+#define PASSBAND_FADE_DURATION_MS 1000      // fade-in duration (after delay)
+// One-finger hold for tune: only tunes if held still >= TUNE_HOLD_MS.
+static uint64_t s_touch_down_us     = 0;    // timestamp of last PRESSED event
+#define TUNE_HOLD_MS    250                 // hold still for this long to trigger tune
 static uint64_t s_last_tap_us       = 0;   // for double-tap detection
 static int      s_last_tap_x        = -1;
 #define DOUBLE_TAP_MS   500
@@ -1800,7 +1809,9 @@ static void build_bandplan_strip(lv_obj_t *parent)
 {
     s_bandplan_obj = lv_obj_create(parent);
     lv_obj_set_size(s_bandplan_obj, DISPLAY_H_RES, BANDPLAN_H);
-    lv_obj_align(s_bandplan_obj, LV_ALIGN_TOP_LEFT, 0, TOP_BAR_H + SPECTRUM_H + LABEL_BAR_H);
+    // Position at the bottom, just above the bottom bar — a fixed reference strip
+    // Screen height is 720 (landscape 1280×720), so band-plan sits at y=662 (720-36-22)
+    lv_obj_set_pos(s_bandplan_obj, 0, 720 - BOTTOM_BAR_H - BANDPLAN_H);
     lv_obj_set_style_bg_color(s_bandplan_obj, lv_color_hex(0x101418), 0);
     lv_obj_set_style_bg_opa(s_bandplan_obj, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_bandplan_obj, 0, 0);
@@ -1879,7 +1890,8 @@ static void build_waterfall(lv_obj_t *parent)
 {
     s_waterfall_obj = lv_obj_create(parent);
     lv_obj_set_size(s_waterfall_obj, DISPLAY_H_RES, WATERFALL_H);
-    lv_obj_align(s_waterfall_obj, LV_ALIGN_TOP_LEFT, 0, TOP_BAR_H + SPECTRUM_H + LABEL_BAR_H + BANDPLAN_H);
+    // Waterfall starts right after label bar (band-plan now floats at bottom, built later)
+    lv_obj_align(s_waterfall_obj, LV_ALIGN_TOP_LEFT, 0, TOP_BAR_H + SPECTRUM_H + LABEL_BAR_H);
     lv_obj_set_style_bg_color(s_waterfall_obj, lv_color_hex(0x000010), 0);
     lv_obj_set_style_border_width(s_waterfall_obj, 0, 0);
     lv_obj_set_style_radius(s_waterfall_obj, 0, 0);
@@ -2053,7 +2065,7 @@ static void build_signature(lv_obj_t *scr)
 
     lv_coord_t margin = 4;
     lv_coord_t cx = DISPLAY_H_RES - margin - h / 2;
-    lv_coord_t cy = DISPLAY_V_RES - 35 - w / 2;
+    lv_coord_t cy = DISPLAY_V_RES - 75 - w / 2;
     lv_obj_set_pos(lbl, cx - w / 2, cy - h / 2);
 }
 
@@ -2069,9 +2081,9 @@ void ui_init(lv_display_t *disp)
     build_top_bar(scr);
     build_spectrum(scr);
     build_label_bar(scr);
-    build_bandplan_strip(scr);
     build_waterfall(scr);
     build_bottom_bar(scr);
+    build_bandplan_strip(scr);  // Build last so it floats on top, visible above waterfall
 
     // Pre-build modals at boot, when internal heap is at maximum (~199 KB free).
     // This avoids the fragmentation cliff that breaks modal_build() at runtime
@@ -2265,15 +2277,29 @@ static void pinch_poll_cb(lv_timer_t *t)
     if (!s_tp) return;
     esp_lcd_touch_read_data(s_tp);
     uint8_t npts = s_tp->data.points;
-    if (npts < 2) {
+
+    // No fingers: settle any active gesture.
+    if (npts < 1) {
         if (s_pinch_active) {
             ESP_LOGI("pinch", "Pinch end: zoom=%.1f pan=%d", (double)s_zoom_factor, s_pan_offset_bins);
             s_pinch_active = false;
         }
         if (s_stroll_active) {
-            // Finger lifted: settle on the dragged-to centre. Snap the canvases
-            // back to centre, then retune — new FFT data repopulates the view.
+            // Hide passband IMMEDIATELY at pan settle, before any canvas updates
+            s_hide_passband_now = true;
+            s_passband_fade_start_us = esp_timer_get_time();
+
             uint32_t tgt = (uint32_t)s_stroll_target_hz;
+            uint32_t lo, hi;
+            if (!legal_band_edges(tgt, &lo, &hi) || tgt < lo || tgt > hi) {
+                ESP_LOGI("pinch", "stroll settle: out of bounds %lu, rejecting", (unsigned long)tgt);
+                stroll_apply_offset(0);
+                if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+                s_stroll_active = false;
+                s_pan_start_x = 0;  // Reset for next touch
+                s_tune_mode_locked = false;
+                return;
+            }
             stroll_apply_offset(0);
             if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
             if (tgt > 0 && tgt != s_last_qmx_freq_hz) {
@@ -2281,51 +2307,77 @@ static void pinch_poll_cb(lv_timer_t *t)
                          (unsigned long)s_last_qmx_freq_hz, (unsigned long)tgt);
                 cat_set_frequency(tgt);
                 ui_update_frequency(tgt);
+                // Clear waterfall on pan
+                if (s_wf_canvas_buf) {
+                    size_t wf_size = (size_t)DISPLAY_H_RES * WATERFALL_H * 2;  // circular buffer has 2× height
+                    memset(s_wf_canvas_buf, 0, wf_size * 2);
+                }
+                ESP_LOGI("pinch", "Waterfall processed, passband fade started");
             }
             s_stroll_active = false;
+            s_tune_mode_locked = false;
         }
+        // Always reset these flags when all fingers lift
+        s_pan_start_x = 0;
+        s_tune_mode_locked = false;
         return;
     }
-    // Two fingers detected. Under sw_rotate+LV_DISPLAY_ROTATION_90,
-    // raw panel coords are portrait (720x1280). Landscape x = panel y.
+
+    // Under sw_rotate+LV_DISPLAY_ROTATION_90, raw panel coords are portrait (720x1280). Landscape x = panel y.
     int lx0 = (int)s_tp->data.coords[0].y;
-    int lx1 = (int)s_tp->data.coords[1].y;
-    int dist = lx1 - lx0;
-    if (dist < 0) dist = -dist;
-    if (dist < 4) dist = 4;
-    int mid_x = (lx0 + lx1) / 2;
-    if (!s_pinch_active) {
-        s_pinch_active     = true;
-        s_pinch_start_dist = dist;
-        s_pinch_start_zoom = s_zoom_factor;
-        s_pinch_start_pan  = s_pan_offset_bins;
-        s_pinch_mid_x      = mid_x;
-        ESP_LOGI("pinch", "Pinch start: dist=%d zoom=%.1f", dist, (double)s_zoom_factor);
-        return;
-    }
-    // Update zoom from spread ratio.
-    float new_zoom = s_pinch_start_zoom * (float)dist / (float)s_pinch_start_dist;
-    if (new_zoom < 1.0f)  new_zoom = 1.0f;
-    if (new_zoom > 24.0f) new_zoom = 24.0f;
 
-    // At (effectively) 1× there is no FFT to pan, so a two-finger horizontal
-    // slide physically drags the whole scope + waterfall under the finger
-    // (Flex-style) — even off-screen into black — and previews the centre on
-    // the band-plan strip. Nothing retunes until the finger lifts (see the
-    // npts<2 branch). Panadapter mode only; FT8 runs on fixed band presets.
-    if (new_zoom <= 1.08f && ui_mode_get() != UI_MODE_FT8 && s_last_qmx_freq_hz != 0) {
+    // One finger: horizontal swipe = pan (stroll), but only if moved past threshold.
+    if (npts == 1) {
         if (!s_stroll_active) {
-            s_stroll_active    = true;
-            s_stroll_start_hz  = (int64_t)s_last_qmx_freq_hz;
-            s_stroll_target_hz = (int64_t)s_last_qmx_freq_hz;
-        }
-        int off = mid_x - s_pinch_mid_x;             // total drag from gesture start
-        if (display_is_flipped()) off = -off;
-        stroll_apply_offset(off);                    // slide scope+waterfall+scale
+            // Initialize pan start position on first call.
+            if (s_pan_start_x == 0) {
+                s_pan_start_x = lx0;
+                s_tune_mode_locked = false;  // Reset on new touch
+                return;
+            }
+            // Check if user is moving: activate pan only if FAST movement (>20px before 250ms).
+            int movement = s_pan_start_x - lx0;
+            if (movement < 0) movement = -movement;
 
-        // Centre points at a lower freq as content slides right. 1× spans the
-        // whole 48 kHz across the screen (~37.5 Hz/px); no clamp on how far you
-        // can drag (into the void), only the landing freq is band-limited.
+            uint64_t now_us = esp_timer_get_time();
+            uint64_t hold_us = now_us - s_touch_down_us;
+
+            // Log gesture state for tuning
+            static uint64_t last_log_us = 0;
+            if (now_us - last_log_us > 100000) {  // Log every 100ms max
+                ESP_LOGI("pinch", "GESTURE: movement=%dpx hold=%" PRIu64 "ms threshold=%d (locked=%s active=%s)",
+                         movement, hold_us / 1000, PAN_THRESHOLD_PX,
+                         s_tune_mode_locked ? "yes" : "no",
+                         s_stroll_active ? "yes" : "no");
+                last_log_us = now_us;
+            }
+
+            // Pan activates ONLY if fast movement (>70px) AND within first 250ms
+            if (movement >= PAN_THRESHOLD_PX && hold_us < (uint64_t)TUNE_HOLD_MS * 1000 && !s_tune_mode_locked) {
+                // User is swiping FAST: activate pan immediately.
+                s_stroll_active    = true;
+                s_stroll_start_hz  = (int64_t)s_last_qmx_freq_hz;
+                s_stroll_target_hz = (int64_t)s_last_qmx_freq_hz;
+                s_pinch_mid_x      = lx0;
+                s_target_x = -1;  // Clear cyan line when pan activates
+                if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+                ESP_LOGI("pinch", "*** PAN ACTIVATED: movement=%dpx (threshold=%d) hold=%" PRIu64 "ms ***",
+                         movement, PAN_THRESHOLD_PX, hold_us / 1000);
+            }
+            // Lock into TUNE mode after 250ms without panning
+            else if (hold_us >= (uint64_t)TUNE_HOLD_MS * 1000 && !s_stroll_active) {
+                s_tune_mode_locked = true;
+                ESP_LOGI("pinch", "*** TUNE MODE LOCKED: hold=%" PRIu64 "ms movement=%dpx ***", hold_us / 1000, movement);
+            }
+            // If no movement yet, let touch_event_cb handle tune preview with cyan cursor.
+            return;
+        }
+        // Already panning: continue with full tracking.
+        s_target_x = -1;  // Keep cyan line suppressed while panning
+        int off = s_pinch_mid_x - lx0;
+        if (display_is_flipped()) off = -off;
+        stroll_apply_offset(off);
+
         const float hz_per_px = (float)DSP_SAMPLE_RATE_HZ / (float)DISPLAY_H_RES;
         int64_t tgt = s_stroll_start_hz - (int64_t)lroundf((float)off * hz_per_px);
         uint32_t lo, hi;
@@ -2335,8 +2387,6 @@ static void pinch_poll_cb(lv_timer_t *t)
         }
         s_stroll_target_hz = tgt;
 
-        // Glide the band-plan marker + show a centre freq readout so you always
-        // know where you'll land.
         update_bandplan_strip((uint32_t)tgt);
         if (s_tune_tooltip) {
             char b[24];
@@ -2345,14 +2395,34 @@ static void pinch_poll_cb(lv_timer_t *t)
             lv_obj_align(s_tune_tooltip, LV_ALIGN_TOP_MID, 0, TOP_BAR_H + 6);
             lv_obj_clear_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
         }
-        s_target_until_us = 0;
         return;
     }
-    if (s_stroll_active) {                 // spread into a zoom — abandon the drag
-        stroll_apply_offset(0);
-        if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
-        s_stroll_active = false;
+
+    // Two or more fingers: zoom only (spread detection).
+    int lx1 = (int)s_tp->data.coords[1].y;
+    int dist = lx1 - lx0;
+    if (dist < 0) dist = -dist;
+    if (dist < 4) dist = 4;
+    int mid_x = (lx0 + lx1) / 2;
+
+    if (!s_pinch_active) {
+        s_pinch_active     = true;
+        s_pinch_start_dist = dist;
+        s_pinch_start_zoom = s_zoom_factor;
+        s_pinch_start_pan  = s_pan_offset_bins;
+        s_pinch_mid_x      = mid_x;
+        ESP_LOGI("pinch", "Pinch start: dist=%d zoom=%.1f", dist, (double)s_zoom_factor);
+        if (s_stroll_active) {                 // switched from 1-finger to 2-finger — abandon the pan
+            stroll_apply_offset(0);
+            if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+            s_stroll_active = false;
+        }
+        return;
     }
+    // Update zoom from spread ratio.
+    float new_zoom = s_pinch_start_zoom * (float)dist / (float)s_pinch_start_dist;
+    if (new_zoom < 1.0f)  new_zoom = 1.0f;
+    if (new_zoom > 24.0f) new_zoom = 24.0f;
 
     // Update pan from midpoint shift.
     int N = DSP_FFT_SIZE;
@@ -2701,6 +2771,43 @@ void ui_push_spectrum(const float *bins, int n_bins)
     // Clear canvas to black
     memset(px, 0, (size_t)DISPLAY_H_RES * SPECTRUM_H * 2);
 
+    // Calculate passband fade opacity (1sec delay + 1sec fade) - applies to band fill, edges, and center line
+    uint64_t now_us = esp_timer_get_time();
+    float fade_opacity = 1.0f;  // 0 = invisible, 1 = full opacity
+
+    // Hide passband during pan and after pan settles
+    if (s_stroll_active) {
+        // While dragging: hide immediately so user doesn't see it move
+        fade_opacity = 0.0f;
+    } else if (s_hide_passband_now) {
+        // Just after pan settles: stay hidden
+        fade_opacity = 0.0f;
+        s_hide_passband_now = false;  // Clear flag so fade logic takes over next frame
+    } else if (s_passband_fade_start_us > 0) {
+        // Pan completed: apply fade-in (1sec delay + 1sec fade)
+        uint64_t elapsed_us = now_us - s_passband_fade_start_us;
+        uint64_t delay_us = (uint64_t)PASSBAND_FADE_DELAY_MS * 1000;
+        uint64_t fade_duration_us = (uint64_t)PASSBAND_FADE_DURATION_MS * 1000;
+
+        if (elapsed_us < delay_us) {
+            // Still in delay period: don't show anything
+            fade_opacity = 0.0f;  // Invisible
+        } else if (elapsed_us < delay_us + fade_duration_us) {
+            // In fade period: interpolate opacity from 0 to full
+            fade_opacity = (float)(elapsed_us - delay_us) / (float)fade_duration_us;
+        } else {
+            // Fade complete
+            s_passband_fade_start_us = 0;
+            fade_opacity = 1.0f;
+        }
+    }
+
+    // Apply fade_opacity to label bar (frequency scale labels)
+    if (s_label_bar) {
+        uint8_t opa = (uint8_t)lroundf(fade_opacity * 255.0f);
+        lv_obj_set_style_opa(s_label_bar, opa, 0);
+    }
+
     // Passband band: a faint tint between the passband-edge lines, same hue
     // as those lines but very low "opacity" (blended against the black
     // background). Drawn first so the grid lines and spectrum curve overdraw it.
@@ -2714,7 +2821,17 @@ void ui_push_spectrum(const float *bins, int n_bins)
         if (edge_x_lo > edge_x_hi) { int t = edge_x_lo; edge_x_lo = edge_x_hi; edge_x_hi = t; }
         if (edge_x_lo < 0) edge_x_lo = 0;
         if (edge_x_hi >= DISPLAY_H_RES) edge_x_hi = DISPLAY_H_RES - 1;
-        const uint16_t band_color = 0x3188;  // ~25% of BW-label color (0xC0C0FF) over black
+        uint16_t band_color = 0x3188;  // ~25% of BW-label color (0xC0C0FF) over black
+        // Apply fade opacity to band fill
+        if (fade_opacity < 1.0f) {
+            uint16_t r = (band_color >> 11) & 0x1F;
+            uint16_t g = (band_color >> 5) & 0x3F;
+            uint16_t b = band_color & 0x1F;
+            r = (uint16_t)(r * fade_opacity);
+            g = (uint16_t)(g * fade_opacity);
+            b = (uint16_t)(b * fade_opacity);
+            band_color = (r << 11) | (g << 5) | b;
+        }
         for (int x = edge_x_lo; x <= edge_x_hi; x++) {
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + x] = band_color;
@@ -2844,10 +2961,24 @@ void ui_push_spectrum(const float *bins, int n_bins)
 
     // Center cursor: amber 1-px vertical line at canvas center (where QMX is tuned)
     {
-        // Phase 5.10G: passband edges (2 px grey lines)
+        // Phase 5.10G: passband edges (2 px grey lines) with fade-in after pan
         int32_t pb_low_hz, pb_high_hz;
         compute_passband_edges_hz(&pb_low_hz, &pb_high_hz);
-        const uint16_t pb_color = 0xBDFF;  /* matches BW label color (0xC0C0FF) */
+        uint16_t pb_color = 0xBDFF;  /* matches BW label color (0xC0C0FF) */
+
+        // Apply fade opacity to passband color (fade_opacity calculated at top of function)
+        uint16_t faded_pb_color = pb_color;
+        if (fade_opacity < 1.0f) {
+            uint16_t r = (pb_color >> 11) & 0x1F;
+            uint16_t g = (pb_color >> 5) & 0x3F;
+            uint16_t b = pb_color & 0x1F;
+            r = (uint16_t)(r * fade_opacity);
+            g = (uint16_t)(g * fade_opacity);
+            b = (uint16_t)(b * fade_opacity);
+            faded_pb_color = (r << 11) | (g << 5) | b;
+        }
+
+        // Draw passband edges with fade
         for (int side = 0; side < 2; side++) {
             int32_t edge_hz = (side == 0) ? pb_low_hz : pb_high_hz;
             /* Edge frequency in Hz -> screen x, accounting for zoom and pan. */
@@ -2856,15 +2987,26 @@ void ui_push_spectrum(const float *bins, int n_bins)
             int edge_x = (int)((int64_t)(edge_hz - pan_hz) * DISPLAY_H_RES / span_hz_pb) + DISPLAY_H_RES / 2;
             if (edge_x < 0 || edge_x >= DISPLAY_H_RES) continue;
             for (int y = 0; y < SPECTRUM_H; y++) {
-                px[y * DISPLAY_H_RES + edge_x] = pb_color;
-                if (edge_x + 1 < DISPLAY_H_RES) px[y * DISPLAY_H_RES + edge_x + 1] = pb_color;
+                px[y * DISPLAY_H_RES + edge_x] = faded_pb_color;
+                if (edge_x + 1 < DISPLAY_H_RES) px[y * DISPLAY_H_RES + edge_x + 1] = faded_pb_color;
             }
         }
 
         // Amber VFO line: at 0 Hz relative to dial, shifted by pan like the
         // passband edges above so it tracks the actual tuned frequency
         // (no longer screen-center once zoom>x1 re-centers on the passband).
-        const uint16_t center_color = 0xFEA0;  /* matches Freq label color (UI_COLOR_ACCENT_GOLD) */
+        uint16_t center_color = 0xFEA0;  /* matches Freq label color (UI_COLOR_ACCENT_GOLD) */
+        // Apply fade opacity to center line
+        if (fade_opacity < 1.0f) {
+            uint16_t r = (center_color >> 11) & 0x1F;
+            uint16_t g = (center_color >> 5) & 0x3F;
+            uint16_t b = center_color & 0x1F;
+            r = (uint16_t)(r * fade_opacity);
+            g = (uint16_t)(g * fade_opacity);
+            b = (uint16_t)(b * fade_opacity);
+            center_color = (r << 11) | (g << 5) | b;
+        }
+
         int32_t pan_hz_vfo = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
         int32_t span_hz_vfo = (int32_t)(48000.0f / s_zoom_factor);
         int cx = (int)((int64_t)(0 - pan_hz_vfo) * DISPLAY_H_RES / span_hz_vfo) + DISPLAY_H_RES / 2;
@@ -2875,7 +3017,8 @@ void ui_push_spectrum(const float *bins, int n_bins)
         }
     }
     // Target cursor: cyan 1-px vertical line at last touched x, ~600 ms
-    if (s_target_x >= 0) {
+    // NEVER draw during pan mode (s_stroll_active)
+    if (s_target_x >= 0 && !s_stroll_active) {
         uint64_t now = esp_timer_get_time();
         if (now < s_target_until_us) {
             const uint16_t target_color = 0x07FF;
@@ -2885,7 +3028,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
                     px[y * DISPLAY_H_RES + tx] = target_color;
                 }
             }
-            // Update floating freq tooltip.
+            // Update floating freq tooltip — keep visible while in TUNE mode.
             if (s_tune_tooltip && s_last_qmx_freq_hz > 0) {
                 int64_t tip_hz = s_target_freq_hz;
                 if (tip_hz > 0) {
@@ -2895,13 +3038,18 @@ void ui_push_spectrum(const float *bins, int n_bins)
                         (unsigned long)((tip_hz / 1000) % 1000),
                         (unsigned long)(tip_hz % 1000));
                     lv_label_set_text(s_tune_tooltip, tbuf);
-                    // Position above finger, clamped to screen.
-                    int tip_x = tx - 50;
-                    if (tip_x < 0) tip_x = 0;
-                    if (tip_x > DISPLAY_H_RES - 120) tip_x = DISPLAY_H_RES - 120;
-                    int tip_y = TOP_BAR_H + 4;
-                    lv_obj_set_pos(s_tune_tooltip, tip_x, tip_y);
+                    // Position label directly above cyan line, centered on it.
+                    // Clamp tx to keep label on-screen, then position with offset from the cyan x.
+                    int clamped_tx = tx;
+                    if (clamped_tx < 40) clamped_tx = 40;
+                    if (clamped_tx > DISPLAY_H_RES - 40) clamped_tx = DISPLAY_H_RES - 40;
+                    lv_obj_set_x(s_tune_tooltip, clamped_tx);
+                    lv_obj_set_y(s_tune_tooltip, TOP_BAR_H + 4);
+                    // Center the label horizontally on the cyan line using alignment
+                    lv_obj_align(s_tune_tooltip, LV_ALIGN_TOP_MID, clamped_tx - DISPLAY_H_RES/2, TOP_BAR_H + 4);
                     lv_obj_clear_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+                    // Keep label visible as long as we're in TUNE mode (not panning)
+                    s_target_until_us = esp_timer_get_time() + 200000;
                 }
             }
         } else {
@@ -2958,7 +3106,8 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row)
 
     // Overlay cyan cursor on the newest waterfall row only.
     // Drawing on all rows would permanently burn cyan into old rows.
-    if (s_target_x >= 0 && esp_timer_get_time() < s_target_until_us) {
+    // NEVER draw during pan mode (s_stroll_active)
+    if (s_target_x >= 0 && !s_stroll_active && esp_timer_get_time() < s_target_until_us) {
         const uint16_t cyan = 0x07FF;
         uint16_t *row0 = (uint16_t *)(s_wf_canvas_buf + s_wf_head * row_bytes);
         int tx = s_target_x;
@@ -3096,6 +3245,8 @@ static void touch_event_cb(lv_event_t *e)
     if (p.x < 0 || p.x >= DISPLAY_H_RES) return;
 
     if (code == LV_EVENT_PRESSED) {
+        // Record touch-down time for hold-delay tune detection.
+        s_touch_down_us = esp_timer_get_time();
         // Touch-down near the right screen edge: track as a candidate for
         // the swipe-to-open-drawer gesture instead of the tune cursor.
         s_edge_swipe_candidate = (p.x >= DISPLAY_H_RES - EDGE_SWIPE_ZONE_PX);
@@ -3107,6 +3258,7 @@ static void touch_event_cb(lv_event_t *e)
     }
     if (code == LV_EVENT_PRESSING) {
         if (s_pinch_active) return;  // pinch timer owns gesture
+        if (s_stroll_active) return;  // pan gesture owns this — don't show tune cursor during pan
         if (s_edge_swipe_candidate) return;  // edge-swipe owns this gesture
         if (s_drawer_open) return;  // possible close-swipe owns this gesture
         // Snap the live cursor to the same mode-aware grid used on release,
@@ -3137,6 +3289,10 @@ static void touch_event_cb(lv_event_t *e)
         return;
     }
     if (code == LV_EVENT_RELEASED) {
+        // Clear cyan line and label immediately on finger lift
+        s_target_x = -1;
+        if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+
         // If releasing a pinch, clear pinch state and skip tune.
         if (s_pinch_active) {
             s_pinch_active = false;
@@ -3170,6 +3326,17 @@ static void touch_event_cb(lv_event_t *e)
             ESP_LOGI("ui_touch", "Double-tap: reset zoom+pan");
             ui_set_zoom(1.0f, 0);
             s_last_tap_x = -1;
+            return;
+        }
+        // If it was a pan gesture (one-finger swipe), don't tune.
+        if (s_stroll_active) {
+            ESP_LOGI("ui_touch", "RELEASED from pan gesture — no tune");
+            return;
+        }
+        // Hold-delay tune: only tune if held still >= TUNE_HOLD_MS.
+        uint64_t hold_us = now_us - s_touch_down_us;
+        if (hold_us < (uint64_t)TUNE_HOLD_MS * 1000) {
+            ESP_LOGI("ui_touch", "RELEASED too quickly (%" PRIu64 " ms) — no tune", hold_us / 1000);
             return;
         }
         s_last_tap_us = now_us;
