@@ -9,6 +9,7 @@
 #include <string.h>
 #include <strings.h>
 #include <math.h>
+#include <inttypes.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -19,6 +20,7 @@
 #include "cat.h"
 #include "cw_audio.h"
 #include "settings.h"
+#include "bandplan.h"
 #include "wifi_config.h"
 #include "memory_modal.h"
 #include "identity_config.h"
@@ -40,6 +42,7 @@ static const char *TAG = "ui";
 #define BOTTOM_BAR_H    36
 #define SPECTRUM_H      200
 #define LABEL_BAR_H     32  /* Phase 5.10C: room for Montserrat 18 labels under tick marks */
+#define BANDPLAN_H      22  /* coarse CW/Digi/Phone band-plan strip under the freq axis */
 // Phase 5.10E: QMX I/Q has a 12 kHz IF offset -- the signal at the QMX's
 // tuned frequency lands at +12 kHz in the baseband. We compensate by
 // shifting the displayed spectrum left by 12 kHz so the tuned signal
@@ -51,15 +54,24 @@ static const char *TAG = "ui";
 // Updated by drawer slider; used by ui_get_if_bin_shift() helper.
 static int16_t s_cw_cal_hz = 0;  // loaded from NVS at boot, default -60
 
-int ui_get_if_bin_shift(int n_bins)
+// Baseband frequency (Hz) the QMX dial maps to: +12 kHz IF always, plus the
+// QMX CW LO offset + per-unit trim in CW mode. This is the pre-bin total the
+// display centers on; snap-to-peak passes it to dsp_find_peak_hz_around so the
+// peak search window stays centered on the tap in CW (not 640 Hz off).
+int ui_get_if_offset_hz(void)
 {
-    // IF_OFFSET_HZ (12 kHz) always. In CW mode add QMX CW LO offset + per-unit trim.
-    // Integer math, rounded to nearest bin via half-step add when positive,
-    // half-step subtract when negative.
     int total_hz = IF_OFFSET_HZ;
     const char *m = cat_get_mode_str();
     if (m && strcmp(m, "CW") == 0)
         total_hz += cat_get_cw_offset_hz() + (int)s_cw_cal_hz;
+    return total_hz;
+}
+
+int ui_get_if_bin_shift(int n_bins)
+{
+    // Integer math, rounded to nearest bin via half-step add when positive,
+    // half-step subtract when negative.
+    int total_hz = ui_get_if_offset_hz();
     int sign = (total_hz < 0) ? -1 : 1;
     int abs_hz = (total_hz < 0) ? -total_hz : total_hz;
     int shift = ((abs_hz * n_bins) + 24000) / 48000;  // +24000 = round to nearest
@@ -1067,7 +1079,7 @@ void ui_set_zoom(float zoom, int pan_bins)
     }
 }
 
-#define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - LABEL_BAR_H - BOTTOM_BAR_H)
+#define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - LABEL_BAR_H - BANDPLAN_H - BOTTOM_BAR_H)
 
 // Forward declarations (Phase 6.1 - touch-to-tune)
 static void touch_event_cb(lv_event_t *e);
@@ -1081,6 +1093,7 @@ static char s_current_mode[8] = "USB";  // Phase 5.10F: latest CAT mode for snap
 static char s_current_band[8] = "---";  // Phase 9 (v0.9.5): cached band string for web JSON
 static uint32_t s_passband_width_hz = 0;  // Phase 5.10G: 0 = use mode default; else from CAT FW
 static uint16_t s_cw_pitch_hz = 700;  // CW sidetone offset (Hz); applied to touch-tune in CW modes
+static bool s_snap_to_peak = true;    // tap-to-tune snaps to strongest nearby signal (NVS-backed)
 
 // ---- Sticky per-mode settings (v0.16.0) --------------------------------
 // Snapshot of freq/mode/passband/zoom taken on leaving a mode, restored
@@ -1186,6 +1199,23 @@ static float    s_pinch_start_zoom  = 1.0f;
 static int      s_pinch_start_dist  = 0;
 static int      s_pinch_start_pan   = 0;   // pan at pinch start
 static int      s_pinch_mid_x       = 0;   // midpoint x at pinch start
+// One-finger swipe: horizontal pan (stroll the band) under the finger.
+// Band-plan marker + freq readout preview. Settles on finger lift.
+// Only activates if finger moves > PAN_THRESHOLD_PX; otherwise it's a hold-for-tune.
+static bool     s_stroll_active     = false;
+static int      s_pan_start_x       = 0;    // x position when one-finger pan starts being tracked
+static int64_t  s_stroll_start_hz   = 0;    // VFO freq when the drag began
+static int64_t  s_stroll_target_hz  = 0;    // previewed centre while dragging
+static bool     s_tune_mode_locked  = false; // once 250ms passes without panning, lock into tune mode
+#define PAN_THRESHOLD_PX 70                 // must move this far to activate pan (vs hold-for-tune) — avoids touch sensor jitter
+// Passband fade-in after pan settles
+static uint64_t s_passband_fade_start_us = 0;  // when passband fade began, 0 if not fading
+static bool s_hide_passband_now = false;       // immediately hide on pan settle, before fade kicks in
+#define PASSBAND_FADE_DELAY_MS 1000         // delay before fade starts
+#define PASSBAND_FADE_DURATION_MS 1000      // fade-in duration (after delay)
+// One-finger hold for tune: only tunes if held still >= TUNE_HOLD_MS.
+static uint64_t s_touch_down_us     = 0;    // timestamp of last PRESSED event
+#define TUNE_HOLD_MS    250                 // hold still for this long to trigger tune
 static uint64_t s_last_tap_us       = 0;   // for double-tap detection
 static int      s_last_tap_x        = -1;
 #define DOUBLE_TAP_MS   500
@@ -1222,6 +1252,14 @@ static lv_obj_t *s_band_label = NULL;   // Phase 5.10D: dedicated band slot
 static lv_obj_t *s_mode_label = NULL;
 static lv_obj_t *s_spectrum_obj = NULL;
 static lv_obj_t *s_waterfall_obj = NULL;
+// Band-plan strip: a coloured CW/Digi/Phone reference bar for the current band,
+// drawn full-band (proportional) with a marker at the VFO position. Up to 6
+// segments per band (coarse plan); a small pool of reusable child rects+labels.
+#define BANDPLAN_MAX_SEG 6
+static lv_obj_t *s_bandplan_obj  = NULL;
+static lv_obj_t *s_bp_seg[BANDPLAN_MAX_SEG];
+static lv_obj_t *s_bp_seg_lbl[BANDPLAN_MAX_SEG];
+static lv_obj_t *s_bp_marker     = NULL;
 static lv_obj_t *s_label_bar = NULL;
 static lv_obj_t *s_status_label = NULL;  // legacy: single label, kept for compatibility (unused after Phase 5.13)
 static lv_obj_t *s_bot_left   = NULL;
@@ -1270,7 +1308,9 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_CWAUDIO    12
 #define DRAWER_SEC_WATERFALL  13
 #define DRAWER_SEC_FLIP       14
-#define N_DRAWER_SECTIONS     15
+#define DRAWER_SEC_SNAP       15
+#define DRAWER_SEC_BPREGION   16
+#define N_DRAWER_SECTIONS     17
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 // Phase 5.10D Stage 2b: drawer widgets we need to keep handles to
@@ -1285,12 +1325,15 @@ static lv_obj_t *s_lbl_ifcal    = NULL;
 static lv_obj_t *s_slider_ifcal = NULL;
 static lv_obj_t *s_lbl_cwpitch = NULL;
 static lv_obj_t *s_dropdown_cmap = NULL;
+static lv_obj_t *s_dropdown_bpregion = NULL;  // band-plan region picker
 static lv_obj_t *s_slider_brightness = NULL;
 static uint8_t s_saved_ui_mode = UI_MODE_PANADAPTER;
 static lv_obj_t *s_lbl_brightness = NULL;
 static lv_obj_t *s_check_flip = NULL;  // 180-degree display flip checkbox
+static lv_obj_t *s_check_snap = NULL;  // snap-to-peak tap-to-tune checkbox
 static lv_obj_t *s_check_cwaudio = NULL;
 static lv_obj_t *s_slider_cwaudio_vol = NULL;
+static int       s_cwaudio_lock_vol = 0;   // value the (disabled) CW-audio slider snaps back to
 static lv_obj_t *s_lbl_cwaudio_vol = NULL;
 static lv_obj_t *s_slider_wf_black = NULL;
 static lv_obj_t *s_lbl_wf_black = NULL;
@@ -1331,6 +1374,7 @@ static void drawer_slider_ifcal_cb(lv_event_t *e)
 static void drawer_slider_cwpitch_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_open_cb(lv_event_t *e);
+static void drawer_dropdown_bpregion_cb(lv_event_t *e);
 static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_check_flip_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
@@ -1703,6 +1747,121 @@ static void build_label_bar(lv_obj_t *parent)
     }
 }
 
+// ==== Band-plan strip: coarse CW/Digi/Phone reference for the current band ====
+// Full-band proportional (NOT aligned to the zoomed spectrum's scale): it's a
+// "where am I in the band" reference that's always readable, with a marker line
+// at the VFO. Region comes from settings (auto = derived from the grid square).
+static void update_bandplan_strip(uint32_t freq_hz)
+{
+    if (!s_bandplan_obj) return;
+
+    qmx_settings_t s;
+    settings_load_all(&s);
+    bandplan_region_t reg =
+        bandplan_effective_region((bandplan_region_t)s.bandplan_region, s.my_grid);
+
+    const bp_seg_t *segs = NULL;
+    int n = bandplan_get_segments(freq_hz, reg, &segs);
+    if (n <= 0 || n > BANDPLAN_MAX_SEG) {
+        // Not inside a known amateur band — hide the whole strip's contents.
+        for (int i = 0; i < BANDPLAN_MAX_SEG; i++) {
+            lv_obj_add_flag(s_bp_seg[i],     LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_bp_seg_lbl[i], LV_OBJ_FLAG_HIDDEN);
+        }
+        if (s_bp_marker) lv_obj_add_flag(s_bp_marker, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+
+    uint32_t band_lo = segs[0].lo_hz;
+    uint32_t band_hi = segs[n - 1].hi_hz;
+    double   span    = (double)(band_hi - band_lo);
+    if (span < 1.0) span = 1.0;
+    const int W = DISPLAY_H_RES;
+
+    for (int i = 0; i < BANDPLAN_MAX_SEG; i++) {
+        if (i >= n) {
+            lv_obj_add_flag(s_bp_seg[i],     LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_bp_seg_lbl[i], LV_OBJ_FLAG_HIDDEN);
+            continue;
+        }
+        int x0 = (int)((double)(segs[i].lo_hz - band_lo) / span * W);
+        int x1 = (int)((double)(segs[i].hi_hz - band_lo) / span * W);
+        int w  = x1 - x0; if (w < 1) w = 1;
+        lv_obj_set_pos(s_bp_seg[i], x0, 0);
+        lv_obj_set_size(s_bp_seg[i], w, BANDPLAN_H);
+        lv_obj_set_style_bg_color(s_bp_seg[i],
+                                  lv_color_hex(bandplan_seg_color(segs[i].type)), 0);
+        lv_obj_clear_flag(s_bp_seg[i], LV_OBJ_FLAG_HIDDEN);
+
+        // Label only when the block is wide enough to hold the text legibly.
+        if (w >= 56) {
+            lv_label_set_text(s_bp_seg_lbl[i], bandplan_seg_label(segs[i].type));
+            lv_obj_set_pos(s_bp_seg_lbl[i], x0, 0);
+            lv_obj_set_size(s_bp_seg_lbl[i], w, BANDPLAN_H);
+            lv_obj_clear_flag(s_bp_seg_lbl[i], LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_bp_seg_lbl[i], LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
+    if (s_bp_marker) {
+        int mx = (int)((double)((int64_t)freq_hz - band_lo) / span * W);
+        if (mx < 0)     mx = 0;
+        if (mx > W - 3) mx = W - 3;
+        lv_obj_set_pos(s_bp_marker, mx, 0);
+        lv_obj_clear_flag(s_bp_marker, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_bp_marker);
+    }
+}
+
+static void build_bandplan_strip(lv_obj_t *parent)
+{
+    s_bandplan_obj = lv_obj_create(parent);
+    lv_obj_set_size(s_bandplan_obj, DISPLAY_H_RES, BANDPLAN_H);
+    // Position at the bottom, just above the bottom bar — a fixed reference strip
+    // Screen height is 720 (landscape 1280×720), so band-plan sits at y=662 (720-36-22)
+    lv_obj_set_pos(s_bandplan_obj, 0, 720 - BOTTOM_BAR_H - BANDPLAN_H);
+    lv_obj_set_style_bg_color(s_bandplan_obj, lv_color_hex(0x101418), 0);
+    lv_obj_set_style_bg_opa(s_bandplan_obj, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_bandplan_obj, 0, 0);
+    lv_obj_set_style_radius(s_bandplan_obj, 0, 0);
+    lv_obj_set_style_pad_all(s_bandplan_obj, 0, 0);
+    lv_obj_clear_flag(s_bandplan_obj, LV_OBJ_FLAG_SCROLLABLE);
+
+    for (int i = 0; i < BANDPLAN_MAX_SEG; i++) {
+        lv_obj_t *seg = lv_obj_create(s_bandplan_obj);
+        lv_obj_set_size(seg, 1, BANDPLAN_H);
+        lv_obj_set_pos(seg, 0, 0);
+        lv_obj_set_style_bg_opa(seg, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(seg, 0, 0);
+        lv_obj_set_style_radius(seg, 0, 0);
+        lv_obj_set_style_pad_all(seg, 0, 0);
+        lv_obj_clear_flag(seg, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(seg, LV_OBJ_FLAG_HIDDEN);
+        s_bp_seg[i] = seg;
+
+        lv_obj_t *lbl = lv_label_create(s_bandplan_obj);
+        lv_label_set_text(lbl, "");
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0x101010), 0);  // dark text on bright block
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_pad_top(lbl, 1, 0);
+        lv_obj_add_flag(lbl, LV_OBJ_FLAG_HIDDEN);
+        s_bp_seg_lbl[i] = lbl;
+    }
+
+    // VFO position marker: a thin bright vertical line on top of the blocks.
+    s_bp_marker = lv_obj_create(s_bandplan_obj);
+    lv_obj_set_size(s_bp_marker, 3, BANDPLAN_H);
+    lv_obj_set_style_bg_color(s_bp_marker, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_bg_opa(s_bp_marker, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_bp_marker, 0, 0);
+    lv_obj_set_style_radius(s_bp_marker, 0, 0);
+    lv_obj_set_style_pad_all(s_bp_marker, 0, 0);
+    lv_obj_clear_flag(s_bp_marker, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_bp_marker, LV_OBJ_FLAG_HIDDEN);
+}
+
 // Phase 5.10C: rewrite the 5 tick labels with absolute MHz centered on VFO.
 // At 48 kHz span, ticks are at -24/-12/0/+12/+24 kHz. Format as 7.000 / 14.012 etc.
 static void update_freq_axis_labels(uint32_t center_hz)
@@ -1740,6 +1899,7 @@ static void build_waterfall(lv_obj_t *parent)
 {
     s_waterfall_obj = lv_obj_create(parent);
     lv_obj_set_size(s_waterfall_obj, DISPLAY_H_RES, WATERFALL_H);
+    // Waterfall starts right after label bar (band-plan now floats at bottom, built later)
     lv_obj_align(s_waterfall_obj, LV_ALIGN_TOP_LEFT, 0, TOP_BAR_H + SPECTRUM_H + LABEL_BAR_H);
     lv_obj_set_style_bg_color(s_waterfall_obj, lv_color_hex(0x000010), 0);
     lv_obj_set_style_border_width(s_waterfall_obj, 0, 0);
@@ -1914,7 +2074,7 @@ static void build_signature(lv_obj_t *scr)
 
     lv_coord_t margin = 4;
     lv_coord_t cx = DISPLAY_H_RES - margin - h / 2;
-    lv_coord_t cy = DISPLAY_V_RES - 35 - w / 2;
+    lv_coord_t cy = DISPLAY_V_RES - 75 - w / 2;
     lv_obj_set_pos(lbl, cx - w / 2, cy - h / 2);
 }
 
@@ -1932,6 +2092,7 @@ void ui_init(lv_display_t *disp)
     build_label_bar(scr);
     build_waterfall(scr);
     build_bottom_bar(scr);
+    build_bandplan_strip(scr);  // Build last so it floats on top, visible above waterfall
 
     // Pre-build modals at boot, when internal heap is at maximum (~199 KB free).
     // This avoids the fragmentation cliff that breaks modal_build() at runtime
@@ -2067,6 +2228,8 @@ void ui_init(lv_display_t *disp)
         ESP_LOGI(TAG, "CW trim loaded from NVS: %d Hz", (int)s_cw_cal_hz);
         s_freq_calc_layout = s.freq_kp_calc;
         ESP_LOGI(TAG, "Freq keypad layout loaded from NVS: %s", s_freq_calc_layout ? "10-key" : "phone");
+        s_snap_to_peak = s.snap_to_peak;
+        ESP_LOGI(TAG, "Snap-to-peak loaded from NVS: %s", s_snap_to_peak ? "on" : "off");
         // Load zoom from NVS; pan always resets to 0 on boot.
         if (s.zoom_factor >= 1.0f && s.zoom_factor <= 24.0f)
             s_zoom_factor = s.zoom_factor;
@@ -2106,27 +2269,151 @@ void ui_init(lv_display_t *disp)
 // Pinch/pan polling timer callback. Runs on LVGL task (core 0) every 50 ms.
 // Reads raw touch driver coords directly so two-finger gestures are detected
 // independently of LVGL single-pointer event routing.
+// Slide the scope + waterfall (+freq scale) horizontally by off px, or snap
+// them back (off=0). The VFO cursor / passband / curve are painted into
+// s_spec_canvas, so they ride along for free. Parents clip, so off-screen
+// content just reveals black — exactly the "drag into the void" feel.
+static void stroll_apply_offset(int off)
+{
+    if (s_spec_canvas) lv_obj_set_x(s_spec_canvas, off);
+    if (s_wf_canvas)   lv_obj_set_x(s_wf_canvas,   off);
+    if (s_label_bar)   lv_obj_set_x(s_label_bar,   off);
+}
+
 static void pinch_poll_cb(lv_timer_t *t)
 {
     (void)t;
     if (!s_tp) return;
     esp_lcd_touch_read_data(s_tp);
     uint8_t npts = s_tp->data.points;
-    if (npts < 2) {
+
+    // No fingers: settle any active gesture.
+    if (npts < 1) {
         if (s_pinch_active) {
             ESP_LOGI("pinch", "Pinch end: zoom=%.1f pan=%d", (double)s_zoom_factor, s_pan_offset_bins);
             s_pinch_active = false;
         }
+        if (s_stroll_active) {
+            // Hide passband IMMEDIATELY at pan settle, before any canvas updates
+            s_hide_passband_now = true;
+            s_passband_fade_start_us = esp_timer_get_time();
+
+            uint32_t tgt = (uint32_t)s_stroll_target_hz;
+            uint32_t lo, hi;
+            if (!legal_band_edges(tgt, &lo, &hi) || tgt < lo || tgt > hi) {
+                ESP_LOGI("pinch", "stroll settle: out of bounds %lu, rejecting", (unsigned long)tgt);
+                stroll_apply_offset(0);
+                if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+                s_stroll_active = false;
+                s_pan_start_x = 0;  // Reset for next touch
+                s_tune_mode_locked = false;
+                return;
+            }
+            stroll_apply_offset(0);
+            if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+            if (tgt > 0 && tgt != s_last_qmx_freq_hz) {
+                ESP_LOGI("pinch", "stroll settle: %lu -> %lu Hz",
+                         (unsigned long)s_last_qmx_freq_hz, (unsigned long)tgt);
+                cat_set_frequency(tgt);
+                ui_update_frequency(tgt);
+                // Clear waterfall on pan
+                if (s_wf_canvas_buf) {
+                    size_t wf_size = (size_t)DISPLAY_H_RES * WATERFALL_H * 2;  // circular buffer has 2× height
+                    memset(s_wf_canvas_buf, 0, wf_size * 2);
+                }
+                ESP_LOGI("pinch", "Waterfall processed, passband fade started");
+            }
+            s_stroll_active = false;
+            s_tune_mode_locked = false;
+        }
+        // Always reset these flags when all fingers lift
+        s_pan_start_x = 0;
+        s_tune_mode_locked = false;
         return;
     }
-    // Two fingers detected. Under sw_rotate+LV_DISPLAY_ROTATION_90,
-    // raw panel coords are portrait (720x1280). Landscape x = panel y.
+
+    // Under sw_rotate+LV_DISPLAY_ROTATION_90, raw panel coords are portrait (720x1280). Landscape x = panel y.
     int lx0 = (int)s_tp->data.coords[0].y;
+
+    // One finger: horizontal swipe = pan (stroll), but only if moved past threshold.
+    if (npts == 1) {
+        if (!s_stroll_active) {
+            // Initialize pan start position on first call.
+            if (s_pan_start_x == 0) {
+                s_pan_start_x = lx0;
+                s_tune_mode_locked = false;  // Reset on new touch
+                return;
+            }
+            // Check if user is moving: activate pan only if FAST movement (>20px before 250ms).
+            int movement = s_pan_start_x - lx0;
+            if (movement < 0) movement = -movement;
+
+            uint64_t now_us = esp_timer_get_time();
+            uint64_t hold_us = now_us - s_touch_down_us;
+
+            // Log gesture state for tuning
+            static uint64_t last_log_us = 0;
+            if (now_us - last_log_us > 100000) {  // Log every 100ms max
+                ESP_LOGI("pinch", "GESTURE: movement=%dpx hold=%" PRIu64 "ms threshold=%d (locked=%s active=%s)",
+                         movement, hold_us / 1000, PAN_THRESHOLD_PX,
+                         s_tune_mode_locked ? "yes" : "no",
+                         s_stroll_active ? "yes" : "no");
+                last_log_us = now_us;
+            }
+
+            // Pan activates ONLY if fast movement (>70px) AND within first 250ms
+            if (movement >= PAN_THRESHOLD_PX && hold_us < (uint64_t)TUNE_HOLD_MS * 1000 && !s_tune_mode_locked) {
+                // User is swiping FAST: activate pan immediately.
+                s_stroll_active    = true;
+                s_stroll_start_hz  = (int64_t)s_last_qmx_freq_hz;
+                s_stroll_target_hz = (int64_t)s_last_qmx_freq_hz;
+                s_pinch_mid_x      = lx0;
+                s_target_x = -1;  // Clear cyan line when pan activates
+                if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+                ESP_LOGI("pinch", "*** PAN ACTIVATED: movement=%dpx (threshold=%d) hold=%" PRIu64 "ms ***",
+                         movement, PAN_THRESHOLD_PX, hold_us / 1000);
+            }
+            // Lock into TUNE mode after 250ms without panning
+            else if (hold_us >= (uint64_t)TUNE_HOLD_MS * 1000 && !s_stroll_active) {
+                s_tune_mode_locked = true;
+                ESP_LOGI("pinch", "*** TUNE MODE LOCKED: hold=%" PRIu64 "ms movement=%dpx ***", hold_us / 1000, movement);
+            }
+            // If no movement yet, let touch_event_cb handle tune preview with cyan cursor.
+            return;
+        }
+        // Already panning: continue with full tracking.
+        s_target_x = -1;  // Keep cyan line suppressed while panning
+        int off = s_pinch_mid_x - lx0;
+        if (display_is_flipped()) off = -off;
+        stroll_apply_offset(off);
+
+        const float hz_per_px = (float)DSP_SAMPLE_RATE_HZ / (float)DISPLAY_H_RES;
+        int64_t tgt = s_stroll_start_hz - (int64_t)lroundf((float)off * hz_per_px);
+        uint32_t lo, hi;
+        if (legal_band_edges(s_stroll_start_hz, &lo, &hi)) {
+            if (tgt < (int64_t)lo) tgt = lo;
+            if (tgt > (int64_t)hi) tgt = hi;
+        }
+        s_stroll_target_hz = tgt;
+
+        update_bandplan_strip((uint32_t)tgt);
+        if (s_tune_tooltip) {
+            char b[24];
+            snprintf(b, sizeof(b), "%.3f MHz", (double)tgt / 1e6);
+            lv_label_set_text(s_tune_tooltip, b);
+            lv_obj_align(s_tune_tooltip, LV_ALIGN_TOP_MID, 0, TOP_BAR_H + 6);
+            lv_obj_clear_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
+    }
+
+    // Two or more fingers: zoom only (spread detection).
     int lx1 = (int)s_tp->data.coords[1].y;
     int dist = lx1 - lx0;
     if (dist < 0) dist = -dist;
     if (dist < 4) dist = 4;
     int mid_x = (lx0 + lx1) / 2;
+
     if (!s_pinch_active) {
         s_pinch_active     = true;
         s_pinch_start_dist = dist;
@@ -2134,12 +2421,18 @@ static void pinch_poll_cb(lv_timer_t *t)
         s_pinch_start_pan  = s_pan_offset_bins;
         s_pinch_mid_x      = mid_x;
         ESP_LOGI("pinch", "Pinch start: dist=%d zoom=%.1f", dist, (double)s_zoom_factor);
+        if (s_stroll_active) {                 // switched from 1-finger to 2-finger — abandon the pan
+            stroll_apply_offset(0);
+            if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+            s_stroll_active = false;
+        }
         return;
     }
     // Update zoom from spread ratio.
     float new_zoom = s_pinch_start_zoom * (float)dist / (float)s_pinch_start_dist;
     if (new_zoom < 1.0f)  new_zoom = 1.0f;
     if (new_zoom > 24.0f) new_zoom = 24.0f;
+
     // Update pan from midpoint shift.
     int N = DSP_FFT_SIZE;
     int window_bins = (int)((float)N / new_zoom);
@@ -2202,6 +2495,7 @@ void ui_update_frequency(uint32_t freq_hz)
     // Phase 5.10C: refresh the frequency axis labels under the spectrum
     if (display_lock(100)) {
         update_freq_axis_labels(freq_hz);
+        update_bandplan_strip(freq_hz);   // colour strip + VFO marker for the new band
         display_unlock();
     } else {
         ESP_LOGW("ui", "ui_update_frequency: axis label lock timeout");
@@ -2486,6 +2780,43 @@ void ui_push_spectrum(const float *bins, int n_bins)
     // Clear canvas to black
     memset(px, 0, (size_t)DISPLAY_H_RES * SPECTRUM_H * 2);
 
+    // Calculate passband fade opacity (1sec delay + 1sec fade) - applies to band fill, edges, and center line
+    uint64_t now_us = esp_timer_get_time();
+    float fade_opacity = 1.0f;  // 0 = invisible, 1 = full opacity
+
+    // Hide passband during pan and after pan settles
+    if (s_stroll_active) {
+        // While dragging: hide immediately so user doesn't see it move
+        fade_opacity = 0.0f;
+    } else if (s_hide_passband_now) {
+        // Just after pan settles: stay hidden
+        fade_opacity = 0.0f;
+        s_hide_passband_now = false;  // Clear flag so fade logic takes over next frame
+    } else if (s_passband_fade_start_us > 0) {
+        // Pan completed: apply fade-in (1sec delay + 1sec fade)
+        uint64_t elapsed_us = now_us - s_passband_fade_start_us;
+        uint64_t delay_us = (uint64_t)PASSBAND_FADE_DELAY_MS * 1000;
+        uint64_t fade_duration_us = (uint64_t)PASSBAND_FADE_DURATION_MS * 1000;
+
+        if (elapsed_us < delay_us) {
+            // Still in delay period: don't show anything
+            fade_opacity = 0.0f;  // Invisible
+        } else if (elapsed_us < delay_us + fade_duration_us) {
+            // In fade period: interpolate opacity from 0 to full
+            fade_opacity = (float)(elapsed_us - delay_us) / (float)fade_duration_us;
+        } else {
+            // Fade complete
+            s_passband_fade_start_us = 0;
+            fade_opacity = 1.0f;
+        }
+    }
+
+    // Apply fade_opacity to label bar (frequency scale labels)
+    if (s_label_bar) {
+        uint8_t opa = (uint8_t)lroundf(fade_opacity * 255.0f);
+        lv_obj_set_style_opa(s_label_bar, opa, 0);
+    }
+
     // Passband band: a faint tint between the passband-edge lines, same hue
     // as those lines but very low "opacity" (blended against the black
     // background). Drawn first so the grid lines and spectrum curve overdraw it.
@@ -2499,7 +2830,17 @@ void ui_push_spectrum(const float *bins, int n_bins)
         if (edge_x_lo > edge_x_hi) { int t = edge_x_lo; edge_x_lo = edge_x_hi; edge_x_hi = t; }
         if (edge_x_lo < 0) edge_x_lo = 0;
         if (edge_x_hi >= DISPLAY_H_RES) edge_x_hi = DISPLAY_H_RES - 1;
-        const uint16_t band_color = 0x3188;  // ~25% of BW-label color (0xC0C0FF) over black
+        uint16_t band_color = 0x3188;  // ~25% of BW-label color (0xC0C0FF) over black
+        // Apply fade opacity to band fill
+        if (fade_opacity < 1.0f) {
+            uint16_t r = (band_color >> 11) & 0x1F;
+            uint16_t g = (band_color >> 5) & 0x3F;
+            uint16_t b = band_color & 0x1F;
+            r = (uint16_t)(r * fade_opacity);
+            g = (uint16_t)(g * fade_opacity);
+            b = (uint16_t)(b * fade_opacity);
+            band_color = (r << 11) | (g << 5) | b;
+        }
         for (int x = edge_x_lo; x <= edge_x_hi; x++) {
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + x] = band_color;
@@ -2629,10 +2970,24 @@ void ui_push_spectrum(const float *bins, int n_bins)
 
     // Center cursor: amber 1-px vertical line at canvas center (where QMX is tuned)
     {
-        // Phase 5.10G: passband edges (2 px grey lines)
+        // Phase 5.10G: passband edges (2 px grey lines) with fade-in after pan
         int32_t pb_low_hz, pb_high_hz;
         compute_passband_edges_hz(&pb_low_hz, &pb_high_hz);
-        const uint16_t pb_color = 0xBDFF;  /* matches BW label color (0xC0C0FF) */
+        uint16_t pb_color = 0xBDFF;  /* matches BW label color (0xC0C0FF) */
+
+        // Apply fade opacity to passband color (fade_opacity calculated at top of function)
+        uint16_t faded_pb_color = pb_color;
+        if (fade_opacity < 1.0f) {
+            uint16_t r = (pb_color >> 11) & 0x1F;
+            uint16_t g = (pb_color >> 5) & 0x3F;
+            uint16_t b = pb_color & 0x1F;
+            r = (uint16_t)(r * fade_opacity);
+            g = (uint16_t)(g * fade_opacity);
+            b = (uint16_t)(b * fade_opacity);
+            faded_pb_color = (r << 11) | (g << 5) | b;
+        }
+
+        // Draw passband edges with fade
         for (int side = 0; side < 2; side++) {
             int32_t edge_hz = (side == 0) ? pb_low_hz : pb_high_hz;
             /* Edge frequency in Hz -> screen x, accounting for zoom and pan. */
@@ -2641,15 +2996,26 @@ void ui_push_spectrum(const float *bins, int n_bins)
             int edge_x = (int)((int64_t)(edge_hz - pan_hz) * DISPLAY_H_RES / span_hz_pb) + DISPLAY_H_RES / 2;
             if (edge_x < 0 || edge_x >= DISPLAY_H_RES) continue;
             for (int y = 0; y < SPECTRUM_H; y++) {
-                px[y * DISPLAY_H_RES + edge_x] = pb_color;
-                if (edge_x + 1 < DISPLAY_H_RES) px[y * DISPLAY_H_RES + edge_x + 1] = pb_color;
+                px[y * DISPLAY_H_RES + edge_x] = faded_pb_color;
+                if (edge_x + 1 < DISPLAY_H_RES) px[y * DISPLAY_H_RES + edge_x + 1] = faded_pb_color;
             }
         }
 
         // Amber VFO line: at 0 Hz relative to dial, shifted by pan like the
         // passband edges above so it tracks the actual tuned frequency
         // (no longer screen-center once zoom>x1 re-centers on the passband).
-        const uint16_t center_color = 0xFEA0;  /* matches Freq label color (UI_COLOR_ACCENT_GOLD) */
+        uint16_t center_color = 0xFEA0;  /* matches Freq label color (UI_COLOR_ACCENT_GOLD) */
+        // Apply fade opacity to center line
+        if (fade_opacity < 1.0f) {
+            uint16_t r = (center_color >> 11) & 0x1F;
+            uint16_t g = (center_color >> 5) & 0x3F;
+            uint16_t b = center_color & 0x1F;
+            r = (uint16_t)(r * fade_opacity);
+            g = (uint16_t)(g * fade_opacity);
+            b = (uint16_t)(b * fade_opacity);
+            center_color = (r << 11) | (g << 5) | b;
+        }
+
         int32_t pan_hz_vfo = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
         int32_t span_hz_vfo = (int32_t)(48000.0f / s_zoom_factor);
         int cx = (int)((int64_t)(0 - pan_hz_vfo) * DISPLAY_H_RES / span_hz_vfo) + DISPLAY_H_RES / 2;
@@ -2660,7 +3026,8 @@ void ui_push_spectrum(const float *bins, int n_bins)
         }
     }
     // Target cursor: cyan 1-px vertical line at last touched x, ~600 ms
-    if (s_target_x >= 0) {
+    // NEVER draw during pan mode (s_stroll_active)
+    if (s_target_x >= 0 && !s_stroll_active) {
         uint64_t now = esp_timer_get_time();
         if (now < s_target_until_us) {
             const uint16_t target_color = 0x07FF;
@@ -2670,7 +3037,7 @@ void ui_push_spectrum(const float *bins, int n_bins)
                     px[y * DISPLAY_H_RES + tx] = target_color;
                 }
             }
-            // Update floating freq tooltip.
+            // Update floating freq tooltip — keep visible while in TUNE mode.
             if (s_tune_tooltip && s_last_qmx_freq_hz > 0) {
                 int64_t tip_hz = s_target_freq_hz;
                 if (tip_hz > 0) {
@@ -2680,13 +3047,18 @@ void ui_push_spectrum(const float *bins, int n_bins)
                         (unsigned long)((tip_hz / 1000) % 1000),
                         (unsigned long)(tip_hz % 1000));
                     lv_label_set_text(s_tune_tooltip, tbuf);
-                    // Position above finger, clamped to screen.
-                    int tip_x = tx - 50;
-                    if (tip_x < 0) tip_x = 0;
-                    if (tip_x > DISPLAY_H_RES - 120) tip_x = DISPLAY_H_RES - 120;
-                    int tip_y = TOP_BAR_H + 4;
-                    lv_obj_set_pos(s_tune_tooltip, tip_x, tip_y);
+                    // Position label directly above cyan line, centered on it.
+                    // Clamp tx to keep label on-screen, then position with offset from the cyan x.
+                    int clamped_tx = tx;
+                    if (clamped_tx < 40) clamped_tx = 40;
+                    if (clamped_tx > DISPLAY_H_RES - 40) clamped_tx = DISPLAY_H_RES - 40;
+                    lv_obj_set_x(s_tune_tooltip, clamped_tx);
+                    lv_obj_set_y(s_tune_tooltip, TOP_BAR_H + 4);
+                    // Center the label horizontally on the cyan line using alignment
+                    lv_obj_align(s_tune_tooltip, LV_ALIGN_TOP_MID, clamped_tx - DISPLAY_H_RES/2, TOP_BAR_H + 4);
                     lv_obj_clear_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+                    // Keep label visible as long as we're in TUNE mode (not panning)
+                    s_target_until_us = esp_timer_get_time() + 200000;
                 }
             }
         } else {
@@ -2743,7 +3115,8 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row)
 
     // Overlay cyan cursor on the newest waterfall row only.
     // Drawing on all rows would permanently burn cyan into old rows.
-    if (s_target_x >= 0 && esp_timer_get_time() < s_target_until_us) {
+    // NEVER draw during pan mode (s_stroll_active)
+    if (s_target_x >= 0 && !s_stroll_active && esp_timer_get_time() < s_target_until_us) {
         const uint16_t cyan = 0x07FF;
         uint16_t *row0 = (uint16_t *)(s_wf_canvas_buf + s_wf_head * row_bytes);
         int tx = s_target_x;
@@ -2881,6 +3254,8 @@ static void touch_event_cb(lv_event_t *e)
     if (p.x < 0 || p.x >= DISPLAY_H_RES) return;
 
     if (code == LV_EVENT_PRESSED) {
+        // Record touch-down time for hold-delay tune detection.
+        s_touch_down_us = esp_timer_get_time();
         // Touch-down near the right screen edge: track as a candidate for
         // the swipe-to-open-drawer gesture instead of the tune cursor.
         s_edge_swipe_candidate = (p.x >= DISPLAY_H_RES - EDGE_SWIPE_ZONE_PX);
@@ -2892,6 +3267,7 @@ static void touch_event_cb(lv_event_t *e)
     }
     if (code == LV_EVENT_PRESSING) {
         if (s_pinch_active) return;  // pinch timer owns gesture
+        if (s_stroll_active) return;  // pan gesture owns this — don't show tune cursor during pan
         if (s_edge_swipe_candidate) return;  // edge-swipe owns this gesture
         if (s_drawer_open) return;  // possible close-swipe owns this gesture
         // Snap the live cursor to the same mode-aware grid used on release,
@@ -2922,6 +3298,10 @@ static void touch_event_cb(lv_event_t *e)
         return;
     }
     if (code == LV_EVENT_RELEASED) {
+        // Clear cyan line and label immediately on finger lift
+        s_target_x = -1;
+        if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+
         // If releasing a pinch, clear pinch state and skip tune.
         if (s_pinch_active) {
             s_pinch_active = false;
@@ -2957,6 +3337,17 @@ static void touch_event_cb(lv_event_t *e)
             s_last_tap_x = -1;
             return;
         }
+        // If it was a pan gesture (one-finger swipe), don't tune.
+        if (s_stroll_active) {
+            ESP_LOGI("ui_touch", "RELEASED from pan gesture — no tune");
+            return;
+        }
+        // Hold-delay tune: only tune if held still >= TUNE_HOLD_MS.
+        uint64_t hold_us = now_us - s_touch_down_us;
+        if (hold_us < (uint64_t)TUNE_HOLD_MS * 1000) {
+            ESP_LOGI("ui_touch", "RELEASED too quickly (%" PRIu64 " ms) — no tune", hold_us / 1000);
+            return;
+        }
         s_last_tap_us = now_us;
         s_last_tap_x  = (int)p.x;
         if (s_last_qmx_freq_hz == 0) return;  // no freq known yet, can't tune
@@ -2977,12 +3368,22 @@ static void touch_event_cb(lv_event_t *e)
         // Add pan offset in Hz (pan_bins -> Hz)
         int32_t pan_hz = (int32_t)((int64_t)s_pan_offset_bins * UAC_SAMPLE_RATE / DSP_FFT_SIZE);
         offset_hz += pan_hz;
-        // Snap to strongest bin within +/-700 Hz of touch (handler falls through if no peak).
+        // Snap to the strongest bin near the tap. The search radius scales with
+        // zoom so it stays a roughly constant ~19 px window on screen: ±700 Hz
+        // at 1×, tighter as you zoom in so you pick ONE CW carrier out of a
+        // crowded band instead of grabbing a neighbour.
+        //
+        // Previously this was gated to zoom ≤ 1.5× ("tap is precise enough when
+        // zoomed") — but that's exactly the zoomed-in CW case where snapping is
+        // most wanted, so for CW ops who live zoomed-in it effectively never ran.
+        int32_t snap_radius_hz = (int32_t)(700.0f / s_zoom_factor);
+        if (snap_radius_hz < 60) snap_radius_hz = 60;   // keep ≥ ~1 FFT bin to search
         int32_t snapped_hz = offset_hz;
-        // Only snap to peak when not zoomed in — at high zoom the tap is precise enough.
-        if (s_zoom_factor <= 1.5f && dsp_find_peak_hz_around(offset_hz, 700, &snapped_hz) == ESP_OK) {
+        if (s_snap_to_peak &&
+            dsp_find_peak_hz_around(offset_hz, snap_radius_hz, ui_get_if_offset_hz(), &snapped_hz) == ESP_OK) {
             if (snapped_hz != offset_hz) {
-                ESP_LOGI("ui_touch", "snap-to-peak: %ld -> %ld Hz", (long)offset_hz, (long)snapped_hz);
+                ESP_LOGI("ui_touch", "snap-to-peak (r=%ldHz z=%.1f): %ld -> %ld Hz",
+                         (long)snap_radius_hz, s_zoom_factor, (long)offset_hz, (long)snapped_hz);
             }
             offset_hz = snapped_hz;
         }
@@ -3210,6 +3611,14 @@ static void iq_balance_toggle_cb(lv_event_t *e)
     if (on) iq_balance_reset();
 }
 
+static void drawer_check_snap_cb(lv_event_t *e)
+{
+    lv_obj_t *cb = lv_event_get_target(e);
+    s_snap_to_peak = lv_obj_has_state(cb, LV_STATE_CHECKED);
+    settings_set_snap_to_peak(s_snap_to_peak);
+    ESP_LOGI(TAG, "snap-to-peak %s", s_snap_to_peak ? "enabled" : "disabled");
+}
+
 // Create a transparent, full-width, non-scrollable container for one
 // drawer section. Children are positioned relative to its (0,0) top-left,
 // same as they used to be positioned relative to s_drawer's top-left.
@@ -3258,6 +3667,44 @@ static lv_obj_t *drawer_section(int sec_idx, int y, int h)
     s_drawer_sections[sec_idx]   = c;
     s_drawer_section_y[sec_idx]  = y;
     return c;
+}
+
+// Brief centered toast message (auto-hides). Runs on the LVGL task (callers are
+// LVGL event handlers, which already hold the display lock).
+static lv_obj_t  *s_toast       = NULL;
+static lv_timer_t *s_toast_timer = NULL;
+
+static void toast_hide_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (s_toast) lv_obj_add_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
+    s_toast_timer = NULL;   // one-shot timer auto-deletes after firing
+}
+
+void ui_toast(const char *msg)
+{
+    if (!s_toast) {
+        s_toast = lv_label_create(lv_screen_active());
+        lv_obj_set_style_bg_color(s_toast, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(s_toast, LV_OPA_80, 0);
+        lv_obj_set_style_text_color(s_toast, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_toast, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_pad_all(s_toast, 18, 0);
+        lv_obj_set_style_radius(s_toast, 10, 0);
+        lv_obj_set_style_border_width(s_toast, 1, 0);
+        lv_obj_set_style_border_color(s_toast, lv_color_hex(UI_COLOR_BORDER), 0);
+        lv_obj_remove_flag(s_toast, LV_OBJ_FLAG_CLICKABLE);  // never intercept touches
+    }
+    lv_label_set_text(s_toast, msg);
+    lv_obj_align(s_toast, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_move_foreground(s_toast);   // above the open drawer
+    lv_obj_remove_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
+    if (s_toast_timer) {
+        lv_timer_reset(s_toast_timer);
+    } else {
+        s_toast_timer = lv_timer_create(toast_hide_cb, 1500, NULL);
+        lv_timer_set_repeat_count(s_toast_timer, 1);
+    }
 }
 
 // Build the drawer once. Hidden off-screen on the right initially.
@@ -3366,6 +3813,27 @@ static void drawer_build(void)
         lv_obj_align(flat_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
         s_switch_flat = make_drawer_checkbox(sec, ui_get_flat_mode(), drawer_switch_flat_cb, NULL);
         lv_obj_align(s_switch_flat, LV_ALIGN_TOP_RIGHT, 0, 6);
+        y += 56;
+    }
+
+    // Snap-to-peak ON/OFF row: when on, tap-to-tune pulls onto the strongest
+    // nearby signal (zoom-scaled window); when off the tap tunes exactly where
+    // you touched (after the mode grid-snap).
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SNAP, y, 56);
+        lv_obj_t *snap_lbl = lv_label_create(sec);
+        lv_label_set_text(snap_lbl, "Snap to signal");
+        lv_obj_set_style_text_color(snap_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(snap_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(snap_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
+        // Load fresh: drawer_build() runs before the boot-time NVS load below,
+        // so read the saved value here for a correct initial checkbox state
+        // (and sync the cached flag the touch handler uses).
+        qmx_settings_t scfg_snap;
+        settings_load_all(&scfg_snap);
+        s_snap_to_peak = scfg_snap.snap_to_peak;
+        s_check_snap = make_drawer_checkbox(sec, s_snap_to_peak, drawer_check_snap_cb, NULL);
+        lv_obj_align(s_check_snap, LV_ALIGN_TOP_RIGHT, 0, 6);
         y += 56;
     }
     // Presets section: header + three buttons side-by-side
@@ -3544,7 +4012,7 @@ static void drawer_build(void)
         lv_obj_t *sec = drawer_section(DRAWER_SEC_CWAUDIO, y, 130);
         lv_obj_t *ca_hdr = lv_label_create(sec);
         lv_label_set_text(ca_hdr, "CW Audio");
-        lv_obj_set_style_text_color(ca_hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_color(ca_hdr, lv_color_hex(0x707070), 0);  // greyed: shelved/WIP
         lv_obj_set_style_text_font(ca_hdr, &lv_font_montserrat_28, 0);
         lv_obj_align(ca_hdr, LV_ALIGN_TOP_LEFT, 0, 4);
 
@@ -3554,15 +4022,17 @@ static void drawer_build(void)
         qmx_settings_t cacfg;
         settings_load_all(&cacfg);
 
-        s_check_cwaudio = make_drawer_checkbox(sec, cacfg.cw_audio_en,
+        s_cwaudio_lock_vol = (int)cacfg.cw_audio_vol;  // value the slider snaps back to
+        s_check_cwaudio = make_drawer_checkbox(sec, false,  // forced off (WIP)
                                                drawer_check_cwaudio_cb, NULL);
         lv_obj_align(s_check_cwaudio, LV_ALIGN_TOP_RIGHT, 0, 0);
+        lv_obj_set_style_opa(s_check_cwaudio, LV_OPA_50, 0);  // greyed: shelved/WIP
 
         s_lbl_cwaudio_vol = lv_label_create(sec);
         char cavbuf[24];
         snprintf(cavbuf, sizeof(cavbuf), "Volume: %u", (unsigned)cacfg.cw_audio_vol);
         lv_label_set_text(s_lbl_cwaudio_vol, cavbuf);
-        lv_obj_set_style_text_color(s_lbl_cwaudio_vol, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_color(s_lbl_cwaudio_vol, lv_color_hex(0x707070), 0);  // greyed: WIP
         lv_obj_set_style_text_font(s_lbl_cwaudio_vol, &lv_font_montserrat_28, 0);
         lv_obj_align(s_lbl_cwaudio_vol, LV_ALIGN_TOP_LEFT, 0, 44);
 
@@ -3571,6 +4041,7 @@ static void drawer_build(void)
         lv_slider_set_range(s_slider_cwaudio_vol, 0, 100);
         lv_slider_set_value(s_slider_cwaudio_vol, (int)cacfg.cw_audio_vol, LV_ANIM_OFF);
         lv_obj_align(s_slider_cwaudio_vol, LV_ALIGN_TOP_LEFT, 0, 74);
+        lv_obj_set_style_opa(s_slider_cwaudio_vol, LV_OPA_50, 0);  // greyed: shelved/WIP
         lv_obj_add_event_cb(s_slider_cwaudio_vol, drawer_slider_cwaudio_vol_cb,
                             LV_EVENT_VALUE_CHANGED, NULL);
         y += 130;
@@ -3663,6 +4134,32 @@ static void drawer_build(void)
         }
         lv_obj_add_event_cb(s_dropdown_cmap, drawer_dropdown_cmap_cb, LV_EVENT_VALUE_CHANGED, NULL);
         lv_obj_add_event_cb(s_dropdown_cmap, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
+        y += 100;
+    }
+
+    // Band-plan region: drives the coloured CW/Digi/Phone strip under the freq
+    // axis. "Auto" derives the region from the operator's grid square.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_BPREGION, y, 100);
+        lv_obj_t *hdr = lv_label_create(sec);
+        lv_label_set_text(hdr, "Band-plan region");
+        lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        s_dropdown_bpregion = lv_dropdown_create(sec);
+        lv_dropdown_set_options(s_dropdown_bpregion,
+                                "Auto (from grid)\nRegion 1 (EU/AF)\nRegion 2 (Americas)\nRegion 3 (Asia/Pac)");
+        lv_obj_set_size(s_dropdown_bpregion, DRAWER_W - 32, 50);
+        lv_obj_align(s_dropdown_bpregion, LV_ALIGN_TOP_LEFT, 0, 40);
+        lv_obj_set_style_text_font(s_dropdown_bpregion, &lv_font_montserrat_28, 0);
+        {
+            qmx_settings_t bcfg;
+            settings_load_all(&bcfg);
+            if (bcfg.bandplan_region <= 3) lv_dropdown_set_selected(s_dropdown_bpregion, bcfg.bandplan_region);
+        }
+        lv_obj_add_event_cb(s_dropdown_bpregion, drawer_dropdown_bpregion_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(s_dropdown_bpregion, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
         y += 100;
     }
 
@@ -3923,24 +4420,21 @@ static void drawer_switch_wifi_en_cb(lv_event_t *e)
     ESP_LOGI(TAG, "WiFi boot-initiation: %s", on ? "ON" : "OFF");
 }
 
+// CW Audio is shelved (works but breaks up on the current USB-audio pipeline),
+// so its drawer controls are greyed out and inert: a tap or drag just snaps the
+// control back and shows a "Work in progress" toast instead of doing anything.
 static void drawer_check_cwaudio_cb(lv_event_t *e)
 {
-    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
-    cw_audio_set_enabled(on);
-    ESP_LOGI(TAG, "CW audio: %s", on ? "ON" : "OFF");
+    lv_obj_remove_state(lv_event_get_target(e), LV_STATE_CHECKED);  // stay off
+    ui_toast("Work in progress....");
 }
 
 static void drawer_slider_cwaudio_vol_cb(lv_event_t *e)
 {
-    (void)e;
-    if (!s_slider_cwaudio_vol) return;
-    int v = (int)lv_slider_get_value(s_slider_cwaudio_vol);
-    cw_audio_set_volume((uint8_t)v);
-    if (s_lbl_cwaudio_vol) {
-        char b[24];
-        snprintf(b, sizeof(b), "Volume: %d", v);
-        lv_label_set_text(s_lbl_cwaudio_vol, b);
+    if (s_slider_cwaudio_vol) {
+        lv_slider_set_value(s_slider_cwaudio_vol, s_cwaudio_lock_vol, LV_ANIM_OFF);  // snap back
     }
+    ui_toast("Work in progress....");
 }
 
 
@@ -4042,6 +4536,15 @@ static void drawer_dropdown_cmap_open_cb(lv_event_t *e)
     }
 }
 
+static void drawer_dropdown_bpregion_cb(lv_event_t *e)
+{
+    uint8_t idx = (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e));  // 0=Auto 1=R1 2=R2 3=R3
+    settings_set_bandplan_region(idx);
+    // Refresh the strip right away for the current VFO.
+    if (s_last_qmx_freq_hz) update_bandplan_strip(s_last_qmx_freq_hz);
+    ESP_LOGI(TAG, "band-plan region set: %u", idx);
+}
+
 static void drawer_slider_wf_black_cb(lv_event_t *e)
 {
     int v = (int)lv_slider_get_value(lv_event_get_target(e));
@@ -4119,6 +4622,7 @@ void ui_apply_saved_mode(void)
     ui_mode_set(UI_MODE_FT8);
     if (s_spectrum_obj)  lv_obj_add_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN);
     if (s_label_bar)     lv_obj_add_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN);
+    if (s_bandplan_obj)  lv_obj_add_flag(s_bandplan_obj,  LV_OBJ_FLAG_HIDDEN);
     if (s_waterfall_obj) lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN);
     top_bar_set_ft8_dim(true);
     drawer_set_ft8_mode(true);
@@ -4170,6 +4674,7 @@ static void ui_toggle_mode(void)
         slide_x_anim(ft8, -DISPLAY_H_RES, 0, NULL);
         if (s_spectrum_obj)  slide_x_anim(s_spectrum_obj,  0, DISPLAY_H_RES, mode_slide_out_ready_cb);
         if (s_label_bar)     slide_x_anim(s_label_bar,     0, DISPLAY_H_RES, mode_slide_out_ready_cb);
+        if (s_bandplan_obj)  slide_x_anim(s_bandplan_obj,  0, DISPLAY_H_RES, mode_slide_out_ready_cb);
         if (s_waterfall_obj) slide_x_anim(s_waterfall_obj, 0, DISPLAY_H_RES, mode_slide_out_ready_cb);
     } else {
         // Sticky settings: remember where FT8 was left, restore where
@@ -4182,9 +4687,11 @@ static void ui_toggle_mode(void)
         ui_restore_snapshot(&s_pan_snapshot);
         if (s_spectrum_obj)  { lv_obj_set_x(s_spectrum_obj,  -DISPLAY_H_RES); lv_obj_clear_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN); }
         if (s_label_bar)     { lv_obj_set_x(s_label_bar,     -DISPLAY_H_RES); lv_obj_clear_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN); }
+        if (s_bandplan_obj)  { lv_obj_set_x(s_bandplan_obj,  -DISPLAY_H_RES); lv_obj_clear_flag(s_bandplan_obj,  LV_OBJ_FLAG_HIDDEN); }
         if (s_waterfall_obj) { lv_obj_set_x(s_waterfall_obj, -DISPLAY_H_RES); lv_obj_clear_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN); }
         slide_x_anim(s_spectrum_obj,  -DISPLAY_H_RES, 0, NULL);
         slide_x_anim(s_label_bar,     -DISPLAY_H_RES, 0, NULL);
+        slide_x_anim(s_bandplan_obj,  -DISPLAY_H_RES, 0, NULL);
         slide_x_anim(s_waterfall_obj, -DISPLAY_H_RES, 0, NULL);
         slide_x_anim(ft8, 0, DISPLAY_H_RES, ft8_slide_out_ready_cb);
     }

@@ -66,7 +66,9 @@ static bool               s_have_cur;                   // s_cur_req valid
 static ft8_tx_request_t   s_cq_saved;                   // original CQ, to resume after a dropped QSO
 static bool               s_have_cq_saved;
 // Signal reports captured during the exchange for ADIF logging.
-// Pounce: rst_rcvd = what they told us; rst_sent = "599" (we echo their report, not our own).
+// Pounce: rst_rcvd = what they told us; rst_sent = our own locally-measured SNR
+//   of them (the protocol never has us transmit a numeric report of them - TX2
+//   just rogers their report back - so this is synthesized like WSJT-X does).
 // CQ-run: rst_sent = our report of their signal; rst_rcvd = "599".
 static char               s_rst_sent[8];
 static char               s_rst_rcvd[8];
@@ -122,10 +124,13 @@ static void make_roger(const char *their_report, char *out, size_t len)
 }
 
 // Scan the ft8_screen table for a message FROM s_target TO s_my_call decoded
-// in slot_sec. Fills one of report_buf / *got_rr73 / *got_73.
+// in slot_sec. Fills one of report_buf / *got_rr73 / *got_73, and *snr_db_out
+// with OUR locally-measured SNR of their signal (independent of any numeric
+// report token in the text) - this is the pounce-side equivalent of the SNR
+// cqrun_answer() already captures for CQ-run, used as RST_SENT.
 static bool scan_for_response(int64_t slot_sec,
                               char *report_buf, size_t report_cap,
-                              bool *got_rr73, bool *got_73)
+                              bool *got_rr73, bool *got_73, int *snr_db_out)
 {
     ft8_call_t snap[FT8_CALL_TABLE_SIZE];
     int n = 0;
@@ -141,6 +146,7 @@ static bool scan_for_response(int64_t slot_sec,
         if (strcmp(tok1, s_my_call) != 0) continue; // not addressed to us
         if (strcmp(tok2, s_target)  != 0) continue; // not from them
 
+        if (snr_db_out) *snr_db_out = snap[i].last_snr_db;
         if (strcmp(tok3, "RR73") == 0) { *got_rr73 = true; return true; }
         if (strcmp(tok3, "73")   == 0) { *got_73   = true; return true; }
         if (tok3[0] != '\0') {
@@ -170,7 +176,7 @@ static bool ft8_filter_contains_any(const char *text, const char *terms)
     return false;
 }
 
-static bool ft8_filter_match(const char *text, const ft8_filters_t *f)
+bool ft8_filter_match(const char *text, const ft8_filters_t *f)
 {
     bool incl_any_en = f->incl_en[0] || f->incl_en[1];
     if (incl_any_en) {
@@ -215,6 +221,12 @@ static bool scan_for_reply_to_me(int64_t slot_sec,
         if (strcmp(tok2, s_my_call) == 0) continue;  // avoid MYCALL MYCALL loops
         if (!tok3[0]) continue;                       // no third token
         if (!ft8_filter_match(snap[i].last_text, &qs.ft8_filters)) continue;
+        // Worked-before: tok2 is the answering station's callsign. If we've
+        // logged them already ON THIS BAND and the operator enabled the filter,
+        // ignore their answer so the CQ keeps running for someone new (same rule
+        // the robot applies to CQ callers). Band-aware: a new band is a new slot.
+        if (qs.ft8_filters.excl_worked_before &&
+            adif_log_contains_call_on_band(tok2, cat_get_frequency())) continue;
         if (snap[i].last_snr_db > best_snr) {
             best_snr = snap[i].last_snr_db;
             best_idx = i;
@@ -576,11 +588,21 @@ void ft8_qso_advance(int64_t slot_sec)
 
     char report[8] = {0};
     bool got_rr73 = false, got_73 = false;
-    bool found = scan_for_response(slot_sec, report, sizeof(report), &got_rr73, &got_73);
+    int  snr_db   = 0;
+    bool found = scan_for_response(slot_sec, report, sizeof(report), &got_rr73, &got_73, &snr_db);
 
     if (st == FT8_QSO_WAIT_RPT) {
         // POUNCE: we sent our grid; expect their signal report.
         if (!found) { register_miss("waiting for report"); return; }
+
+        // RST_SENT for ADIF: the protocol never has us transmit a numeric
+        // report of THEM (TX2 just rogers their report back), so log our own
+        // locally-measured SNR of their signal - same convention cqrun_answer()
+        // already uses for the CQ-run direction. Previously hardcoded "599".
+        char our_rpt[8];
+        fmt_report(snr_db, our_rpt, sizeof(our_rpt));
+        strncpy(s_rst_sent, our_rpt, sizeof(s_rst_sent) - 1);
+        s_rst_sent[sizeof(s_rst_sent) - 1] = '\0';
 
         bool ok;
         if (got_rr73 || got_73) {

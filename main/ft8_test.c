@@ -66,6 +66,7 @@
 #include "ui/ft8_screen_view.h"
 #include "ft8_tx.h"
 #include "ft8_qso.h"
+#include "ft8_robot.h"
 #include "time_sync.h"
 #include "ft8_status.h"
 
@@ -601,6 +602,11 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
         (unsigned)heap_i, (unsigned)heap_p);
 
     ft8_qso_advance(slot_sec);
+    // Robot auto-answer: runs after advance() (so the existing machine reacts
+    // first); self-gates to IDLE, so it only acts when no QSO is in progress.
+    // Its ft8_qso_start() arms a reply for the next slot, which reply-on-
+    // immediate-slot then fires — same fast path as a human-started pounce.
+    ft8_robot_tick(slot_sec);
     ft8_screen_view_request_refresh();
 }
 

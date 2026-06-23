@@ -19,6 +19,10 @@ void ui_refresh_band_label(uint32_t freq_hz);  // cheap, call every FA poll
 void ui_push_spectrum(const float *bins, int n_bins);   // Phase 4
 void ui_push_waterfall_row(const uint8_t *rgb565_row);  // Phase 5
 
+// Brief centered auto-hiding toast (1.5 s). Runs on the LVGL task — call only
+// from the LVGL/UI thread. Used for "Work in progress…." on shelved controls.
+void ui_toast(const char *msg);
+
 // Phase 5.4: runtime-set spectrum display range (autoscale)
 void ui_set_db_range(float db_min, float db_max);
 void ui_set_cw_pitch_hz(uint16_t hz);  // CW sidetone offset, persisted to NVS
@@ -30,6 +34,7 @@ int16_t  ui_get_if_cal_hz(void);         // per-unit IF calibration trim in Hz
 int   ui_get_pan_offset_bins(void);     // current pan offset in FFT bins
 void  ui_set_zoom(float zoom, int pan_bins); // set zoom+pan, persists zoom to NVS
 int  ui_get_if_bin_shift(int n_bins);  // Total bin shift = (IF_OFFSET_HZ + if_cal_hz) -> bins
+int  ui_get_if_offset_hz(void);        // Baseband Hz the dial maps to (12 kHz, +CW LO offset+trim in CW)
 
 // Passband edges in Hz, relative to VFO/dial (mode + CAT-width dependent).
 void ui_get_passband_edges_hz(int32_t *out_low, int32_t *out_high);

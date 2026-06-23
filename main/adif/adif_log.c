@@ -28,11 +28,18 @@ static SemaphoreHandle_t s_lock;
 static int               s_count   = 0;
 static bool              s_mounted = false;
 
-// Worked-call cache: unique callsigns from every logged QSO.
+// Worked-call cache: unique (callsign, band) pairs from every logged QSO.
+// Band-aware so the same station on a new band counts as NOT worked before
+// (a fresh band-slot). ADIF_BAND_MAX fits "160M" + NUL.
 #define ADIF_WORKED_CACHE 1024
 #define ADIF_CALL_MAX     16
-static char s_worked[ADIF_WORKED_CACHE][ADIF_CALL_MAX];
-static int  s_worked_count = 0;
+#define ADIF_BAND_MAX     6
+typedef struct {
+    char call[ADIF_CALL_MAX];
+    char band[ADIF_BAND_MAX];
+} worked_entry_t;
+static worked_entry_t s_worked[ADIF_WORKED_CACHE];
+static int            s_worked_count = 0;
 
 // ---------------------------------------------------------------------------
 
@@ -59,18 +66,43 @@ static void write_field(FILE *f, const char *name, const char *value)
     fprintf(f, "<%s:%zu>%s", name, strlen(value), value);
 }
 
-// Add a callsign to the worked cache (deduplicates, ignores overflow).
-static void cache_add(const char *call)
+// Add a (callsign, band) pair to the worked cache (deduplicates on the pair,
+// ignores overflow). band may be NULL/"" (e.g. an out-of-band log entry).
+static void cache_add(const char *call, const char *band)
 {
     if (!call || !call[0]) return;
+    if (!band) band = "";
     for (int i = 0; i < s_worked_count; i++) {
-        if (strcmp(s_worked[i], call) == 0) return;  // already present
+        if (strcmp(s_worked[i].call, call) == 0 &&
+            strcmp(s_worked[i].band, band) == 0) return;  // already present
     }
     if (s_worked_count < ADIF_WORKED_CACHE) {
-        strncpy(s_worked[s_worked_count], call, ADIF_CALL_MAX - 1);
-        s_worked[s_worked_count][ADIF_CALL_MAX - 1] = '\0';
+        strncpy(s_worked[s_worked_count].call, call, ADIF_CALL_MAX - 1);
+        s_worked[s_worked_count].call[ADIF_CALL_MAX - 1] = '\0';
+        strncpy(s_worked[s_worked_count].band, band, ADIF_BAND_MAX - 1);
+        s_worked[s_worked_count].band[ADIF_BAND_MAX - 1] = '\0';
         s_worked_count++;
     }
+}
+
+// Extract an ADIF field value (<FIELD:len>value) from a single record line.
+// Returns false if the field is absent or doesn't fit. The "<FIELD:" tag is
+// '<'-anchored, so "CALL" never matches inside "MY_CALL", etc.
+static bool adif_extract_field(const char *line, const char *field,
+                               char *out, size_t out_sz)
+{
+    char tag[24];
+    int  tl = snprintf(tag, sizeof(tag), "<%s:", field);
+    const char *p = strstr(line, tag);
+    if (!p) return false;
+    p += tl;
+    int len = atoi(p);
+    const char *close = strchr(p, '>');
+    if (!close || len <= 0 || (size_t)len >= out_sz) return false;
+    int copy = (len < (int)out_sz - 1) ? len : (int)out_sz - 1;
+    memcpy(out, close + 1, copy);
+    out[copy] = '\0';
+    return true;
 }
 
 // Scan the ADIF file and populate s_count + s_worked cache.
@@ -82,22 +114,15 @@ static void load_from_file(void)
     char line[512];
     int  count = 0;
 
+    // One record per line, terminated by <EOR>. Extract CALL + BAND together
+    // and cache the pair (the header line has no <EOR> and is skipped).
     while (fgets(line, sizeof(line), f)) {
-        if (strstr(line, "<EOR>")) count++;
-
-        // Extract <CALL:N>value
-        char *p = line;
-        while ((p = strstr(p, "<CALL:")) != NULL) {
-            p += 6;  // skip "<CALL:"
-            int len = atoi(p);
-            char *close = strchr(p, '>');
-            if (!close || len <= 0 || len >= ADIF_CALL_MAX) { p++; continue; }
-            char call[ADIF_CALL_MAX];
-            int  copy = (len < ADIF_CALL_MAX - 1) ? len : ADIF_CALL_MAX - 1;
-            memcpy(call, close + 1, copy);
-            call[copy] = '\0';
-            cache_add(call);
-            p = close + 1 + len;
+        if (!strstr(line, "<EOR>")) continue;
+        count++;
+        char call[ADIF_CALL_MAX], band[ADIF_BAND_MAX];
+        if (adif_extract_field(line, "CALL", call, sizeof(call))) {
+            if (!adif_extract_field(line, "BAND", band, sizeof(band))) band[0] = '\0';
+            cache_add(call, band);
         }
     }
 
@@ -193,7 +218,7 @@ void adif_log_record(const adif_qso_t *qso)
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_count++;
-    cache_add(qso->their_call);
+    cache_add(qso->their_call, freq_to_band(qso->freq_hz));
     xSemaphoreGive(s_lock);
 
     ESP_LOGI(TAG, "Logged QSO #%d: %s @ %.4f MHz (%s/%s)",
@@ -222,7 +247,22 @@ bool adif_log_contains_call(const char *call)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     bool found = false;
     for (int i = 0; i < s_worked_count && !found; i++) {
-        if (strcmp(s_worked[i], call) == 0) found = true;
+        if (strcmp(s_worked[i].call, call) == 0) found = true;
+    }
+    xSemaphoreGive(s_lock);
+    return found;
+}
+
+bool adif_log_contains_call_on_band(const char *call, uint32_t freq_hz)
+{
+    if (!call || !call[0]) return false;
+    const char *band = freq_to_band(freq_hz);
+    if (!band[0]) return false;   // unknown band -> can't claim worked-before
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool found = false;
+    for (int i = 0; i < s_worked_count && !found; i++) {
+        if (strcmp(s_worked[i].call, call) == 0 &&
+            strcmp(s_worked[i].band, band) == 0) found = true;
     }
     xSemaphoreGive(s_lock);
     return found;

@@ -617,8 +617,8 @@ static void update_row(int i, const ft8_call_t *src)
         int8_t col = 0; /* other / white */
         if (s_my_call[0] && strstr(src->last_text, s_my_call)) {
             col = 2; /* own call in message -> red (highest priority) */
-        } else if (adif_log_contains_call(src->call)) {
-            col = 3; /* already in ADIF log -> dim grey */
+        } else if (adif_log_contains_call_on_band(src->call, cat_get_frequency())) {
+            col = 3; /* worked before on THIS band -> dim grey */
         } else if (strncmp(src->last_text, "CQ ", 3) == 0) {
             col = 1; /* CQ -> green */
         }
@@ -663,40 +663,10 @@ static void hide_row(int i)
     if (s_row_hover == i) s_row_hover = -1;
 }
 
-// Returns true if `text` (a decoded message, e.g. "CQ POTA OZ1LAV JO45" or
-// "OZ1LAV W9XYZ -05") passes the CQ-run filter settings: matched against the
-// whole message so POTA/SOTA tags, grids, country prefixes etc. are usable,
-// not just the callsign.
-// Each filter field can hold multiple space- and/or comma-separated terms
-// (e.g. "POTA SOTA" or "JA, VK"); matches if `text` contains ANY of them.
-static bool ft8_filter_contains_any(const char *text, const char *terms)
-{
-    char buf[FT8_FILTER_TEXT_LEN];
-    strncpy(buf, terms, sizeof(buf) - 1);
-    buf[sizeof(buf) - 1] = '\0';
-    char *tok = strtok(buf, " ,");
-    while (tok) {
-        if (tok[0] && strstr(text, tok)) return true;
-        tok = strtok(NULL, " ,");
-    }
-    return false;
-}
-
-static bool ft8_filter_match(const char *text, const ft8_filters_t *f)
-{
-    bool incl_any_en = f->incl_en[0] || f->incl_en[1];
-    if (incl_any_en) {
-        bool ok = false;
-        for (int i = 0; i < 2; i++) {
-            if (f->incl_en[i] && f->incl_text[i][0] && ft8_filter_contains_any(text, f->incl_text[i])) { ok = true; break; }
-        }
-        if (!ok) return false;
-    }
-    for (int i = 0; i < 2; i++) {
-        if (f->excl_en[i] && f->excl_text[i][0] && ft8_filter_contains_any(text, f->excl_text[i])) return false;
-    }
-    return true;
-}
+// ft8_filter_match() is the shared filter matcher declared in ft8_qso.h
+// (matches a decoded message against the CQ-run include/exclude terms). It was
+// promoted out of this file when the robot landed so ft8_qso.c, ft8_robot.c and
+// this view all share one implementation - use that one here.
 
 static void rebuild_list(void)
 {
