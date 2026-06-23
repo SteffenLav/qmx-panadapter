@@ -764,3 +764,24 @@ bool ft8_qso_cq_filter_active(void)
                   st == FT8_QSO_WAIT_ROGER || st == FT8_QSO_WAIT_RR73 ||
                   st == FT8_QSO_WAIT_DONE);
 }
+
+bool ft8_qso_get_priority_freq(int *freq_hz_out)
+{
+    lock();
+    ft8_qso_state_t st   = s_state;
+    bool             from_cq = s_from_cq;
+    int              freq    = s_freq_hz;
+    unlock();
+
+    // Pounce only (WAIT_RPT / WAIT_RR73 — WAIT_ROGER belongs to CQ-run, see the
+    // state table in ft8_qso.h). s_freq_hz is the partner's own tone there (we
+    // called THEM at it, and by FT8 convention they keep replying on it for the
+    // whole exchange). CQ-run's s_freq_hz is OUR tone, not theirs, so it's not
+    // a useful hint for who's replying to our report — skip it there.
+    if (from_cq) return false;
+    if (st != FT8_QSO_WAIT_RPT && st != FT8_QSO_WAIT_RR73)
+        return false;
+
+    if (freq_hz_out) *freq_hz_out = freq;
+    return true;
+}

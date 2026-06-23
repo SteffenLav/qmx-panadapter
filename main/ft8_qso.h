@@ -83,3 +83,10 @@ void            ft8_qso_get_cur_extra(char *buf, size_t len);
 // station that answered). The decode-list UI uses this to hide other stations'
 // CQ rows so replies to us stand out. Always false for pounce sessions.
 bool ft8_qso_cq_filter_active(void);
+
+// During a pounce exchange (WAIT_RPT / WAIT_RR73), returns true and writes the
+// partner's audio tone (Hz) to *freq_hz_out. decode_slot reorders the candidate
+// list to decode that tone first, so the reply is found early enough to fire on
+// the immediate slot (FT8_REPLY_TX_WINDOW_MS) even on a crowded band. Returns
+// false otherwise (idle, or CQ-run where s_freq_hz is our own tone).
+bool ft8_qso_get_priority_freq(int *freq_hz_out);

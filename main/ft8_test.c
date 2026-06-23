@@ -453,9 +453,19 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
                     (float)start_off_ms + (cands[i].time_offset * 1920 + cands[i].time_sub * 960) / 12.0f;
             }
             int snr_db = (int)lroundf(ft8_estimate_snr_db(mon, &cands[i], noise_db));
-            ESP_LOGI(TAG, "decoded: '%s' (score=%d freq_off=%d snr=%d)",
-                     text, cands[i].score, cands[i].freq_offset, snr_db);
-            ft8_screen_record_decode(text, cands[i].score, snr_db, cands[i].freq_offset, slot_sec);
+            // cands[i].freq_offset is a coarse FFT bin index RELATIVE TO mon->min_bin
+            // (6.25 Hz/bin - FT8 tone spacing), not an absolute audio Hz value. Every
+            // downstream consumer of ft8_call_t.last_freq (CQ clear-tone scan, TX
+            // clash detection, and the reply tone itself via
+            // ft8_tx_build_request's target_audio_freq_hz) treats it as Hz, so it
+            // must be converted here - same formula ft8_lib's own demo uses
+            // (decode_ft8.c: freq_hz = (min_bin + freq_offset + freq_sub/freq_osr) /
+            // symbol_period). Omitting this put every recorded/replied tone off by
+            // mon->min_bin*6.25 (200 Hz) plus a ~6.25x scale error.
+            int freq_hz = (int)lroundf((mon->min_bin + cands[i].freq_offset) / mon->symbol_period);
+            ESP_LOGI(TAG, "decoded: '%s' (score=%d freq=%dHz snr=%d)",
+                     text, cands[i].score, freq_hz, snr_db);
+            ft8_screen_record_decode(text, cands[i].score, snr_db, freq_hz, slot_sec);
         }
     }
 }
@@ -494,6 +504,33 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
     // LDPC attempts are affordable and net a few more real weak-signal decodes;
     // strongest-first ordering + FT8_DECODE_BUDGET_MS still protect the busiest slots.
     int n_cand = ftx_find_candidates(&mon->wf, FT8_MAX_CANDIDATES, cands, FT8_FIND_MIN_SCORE);
+
+    // "Let the others wait": if we're mid pounce-exchange, the message we
+    // actually need is the partner's, at a known tone — move any candidate
+    // near it to the FRONT of cands[] (still strongest-first within each
+    // partition) so it's one of the very first picks on whichever core
+    // reaches it, regardless of how many other (irrelevant) candidates a busy
+    // band produced. This is what lets the reply-on-immediate-slot window
+    // (FT8_REPLY_TX_WINDOW_MS) actually be hit on a crowded band instead of
+    // racing the full candidate list first.
+    int priority_freq_hz;
+    if (n_cand > 1 && ft8_qso_get_priority_freq(&priority_freq_hz)) {
+        ftx_candidate_t reordered[FT8_MAX_CANDIDATES];
+        int np = 0, nr = 0;
+        for (int i = 0; i < n_cand; i++) {
+            float hz = (mon->min_bin + cands[i].freq_offset) / mon->symbol_period;
+            if (fabsf(hz - (float)priority_freq_hz) <= 25.0f) {
+                reordered[np++] = cands[i];
+            }
+        }
+        for (int i = 0; i < n_cand; i++) {
+            float hz = (mon->min_bin + cands[i].freq_offset) / mon->symbol_period;
+            if (fabsf(hz - (float)priority_freq_hz) > 25.0f) {
+                reordered[np + nr++] = cands[i];
+            }
+        }
+        memcpy(cands, reordered, (size_t)n_cand * sizeof(cands[0]));
+    }
 
     // Slot noise floor for SNR: one powf sweep over the whole waterfall, shared
     // by every message (hoisting this out of the per-message path was the
