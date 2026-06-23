@@ -19,6 +19,10 @@ void ui_refresh_band_label(uint32_t freq_hz);  // cheap, call every FA poll
 void ui_push_spectrum(const float *bins, int n_bins);   // Phase 4
 void ui_push_waterfall_row(const uint8_t *rgb565_row);  // Phase 5
 
+// Brief centered auto-hiding toast (1.5 s). Runs on the LVGL task — call only
+// from the LVGL/UI thread. Used for "Work in progress…." on shelved controls.
+void ui_toast(const char *msg);
+
 // Phase 5.4: runtime-set spectrum display range (autoscale)
 void ui_set_db_range(float db_min, float db_max);
 void ui_set_cw_pitch_hz(uint16_t hz);  // CW sidetone offset, persisted to NVS

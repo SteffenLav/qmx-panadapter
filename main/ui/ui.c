@@ -3681,7 +3681,7 @@ static void toast_hide_cb(lv_timer_t *t)
     s_toast_timer = NULL;   // one-shot timer auto-deletes after firing
 }
 
-static void ui_toast(const char *msg)
+void ui_toast(const char *msg)
 {
     if (!s_toast) {
         s_toast = lv_label_create(lv_screen_active());

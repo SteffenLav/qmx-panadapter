@@ -10,6 +10,7 @@
 #include "ft8_filter_modal.h"
 #include "ft8_time_modal.h"
 #include "ui_theme.h"
+#include "ui.h"          // ui_toast() for the shelved-robot "Work in progress" popup
 #include "settings.h"
 #include "lvgl.h"
 #include "esp_log.h"
@@ -82,7 +83,7 @@ static void save_btn_cb(lv_event_t *e)
     f.excl_worked_before = lv_obj_has_state(s_cb_worked_before, LV_STATE_CHECKED);
     f.excl_plain_cq      = lv_obj_has_state(s_cb_plain_cq, LV_STATE_CHECKED);
     f.incl_cq_only       = lv_obj_has_state(s_cb_incl_cq_only, LV_STATE_CHECKED);
-    f.robot_en           = lv_obj_has_state(s_cb_robot, LV_STATE_CHECKED);
+    f.robot_en           = false;  // WIP: robot shelved this release — never persist on
     f.robot_priority     = (uint8_t)lv_dropdown_get_selected(s_dd_robot_pri);
 
     settings_set_ft8_filters(&f);
@@ -104,6 +105,18 @@ static void sync_time_btn_cb(lv_event_t *e)
     (void)e;
     modal_close();
     ft8_time_modal_show();
+}
+
+// The auto-answer robot is shelved (live TX, not yet on-air soaked), so its
+// controls are greyed and inert — same treatment as the CW Audio drawer
+// section. A tap on the checkbox or the priority dropdown just snaps the
+// control back to its disabled state and shows a "Work in progress" toast.
+static void robot_wip_cb(lv_event_t *e)
+{
+    lv_obj_remove_state(s_cb_robot, LV_STATE_CHECKED);   // stay off
+    lv_dropdown_set_selected(s_dd_robot_pri, 0);          // reset selection
+    (void)e;
+    ui_toast("Work in progress....");
 }
 
 // Plain (non-exclusive) checkbox with a themed square indicator. Extra
@@ -226,16 +239,22 @@ static void modal_build(void)
     lv_obj_set_style_text_color(s_cb_incl_cq_only, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_align(s_cb_incl_cq_only, LV_ALIGN_TOP_LEFT, 0, 374);
 
-    // --- Robot (auto-answer) row -------------------------------------
+    // --- Robot (auto-answer) row — SHELVED/WIP ------------------------
+    // Greyed and inert: live TX, not yet on-air soaked. Tap → snaps back +
+    // "Work in progress" toast (robot_wip_cb). The robot engine itself is
+    // hard-disabled in ft8_robot_tick, so it can never key the radio in this
+    // release regardless of NVS/config state.
     s_cb_robot = make_checkbox(panel, "Auto-answer CQ (robot)");
     lv_obj_set_style_text_font(s_cb_robot, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(s_cb_robot, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_set_style_text_color(s_cb_robot, lv_color_hex(0x707070), 0);  // greyed: WIP
     lv_obj_align(s_cb_robot, LV_ALIGN_TOP_LEFT, 0, 426);
+    lv_obj_set_style_opa(s_cb_robot, LV_OPA_50, 0);
+    lv_obj_add_event_cb(s_cb_robot, robot_wip_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     lv_obj_t *pri_lbl = lv_label_create(panel);
     lv_label_set_text(pri_lbl, "Priority:");
     lv_obj_set_style_text_font(pri_lbl, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(pri_lbl, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_set_style_text_color(pri_lbl, lv_color_hex(0x707070), 0);  // greyed: WIP
     lv_obj_align(pri_lbl, LV_ALIGN_TOP_LEFT, 420, 432);
 
     // Order MUST match ft8_robot_priority_t (STRONGEST=0, WEAKEST=1, DISTANT=2).
@@ -244,6 +263,8 @@ static void modal_build(void)
     lv_obj_set_width(s_dd_robot_pri, 280);
     lv_obj_align(s_dd_robot_pri, LV_ALIGN_TOP_LEFT, 540, 422);
     lv_obj_set_style_text_font(s_dd_robot_pri, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_opa(s_dd_robot_pri, LV_OPA_50, 0);  // greyed: WIP
+    lv_obj_add_event_cb(s_dd_robot_pri, robot_wip_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     // --- Save / Cancel / Sync Time on the right edge, evenly distributed.
     // Panel inner h = 540-40 = 500 px. Three buttons h=64: total 192 px.
@@ -331,7 +352,7 @@ void ft8_filter_modal_show(void)
     apply_checkbox_state(s_cb_worked_before, f->excl_worked_before);
     apply_checkbox_state(s_cb_plain_cq, f->excl_plain_cq);
     apply_checkbox_state(s_cb_incl_cq_only, f->incl_cq_only);
-    apply_checkbox_state(s_cb_robot, f->robot_en);
+    apply_checkbox_state(s_cb_robot, false);   // WIP: always shown unchecked
     lv_dropdown_set_selected(s_dd_robot_pri,
                              f->robot_priority <= FT8_ROBOT_PRI_DISTANT ? f->robot_priority : 0);
 
