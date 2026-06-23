@@ -54,15 +54,24 @@ static const char *TAG = "ui";
 // Updated by drawer slider; used by ui_get_if_bin_shift() helper.
 static int16_t s_cw_cal_hz = 0;  // loaded from NVS at boot, default -60
 
-int ui_get_if_bin_shift(int n_bins)
+// Baseband frequency (Hz) the QMX dial maps to: +12 kHz IF always, plus the
+// QMX CW LO offset + per-unit trim in CW mode. This is the pre-bin total the
+// display centers on; snap-to-peak passes it to dsp_find_peak_hz_around so the
+// peak search window stays centered on the tap in CW (not 640 Hz off).
+int ui_get_if_offset_hz(void)
 {
-    // IF_OFFSET_HZ (12 kHz) always. In CW mode add QMX CW LO offset + per-unit trim.
-    // Integer math, rounded to nearest bin via half-step add when positive,
-    // half-step subtract when negative.
     int total_hz = IF_OFFSET_HZ;
     const char *m = cat_get_mode_str();
     if (m && strcmp(m, "CW") == 0)
         total_hz += cat_get_cw_offset_hz() + (int)s_cw_cal_hz;
+    return total_hz;
+}
+
+int ui_get_if_bin_shift(int n_bins)
+{
+    // Integer math, rounded to nearest bin via half-step add when positive,
+    // half-step subtract when negative.
+    int total_hz = ui_get_if_offset_hz();
     int sign = (total_hz < 0) ? -1 : 1;
     int abs_hz = (total_hz < 0) ? -total_hz : total_hz;
     int shift = ((abs_hz * n_bins) + 24000) / 48000;  // +24000 = round to nearest
@@ -3371,7 +3380,7 @@ static void touch_event_cb(lv_event_t *e)
         if (snap_radius_hz < 60) snap_radius_hz = 60;   // keep ≥ ~1 FFT bin to search
         int32_t snapped_hz = offset_hz;
         if (s_snap_to_peak &&
-            dsp_find_peak_hz_around(offset_hz, snap_radius_hz, &snapped_hz) == ESP_OK) {
+            dsp_find_peak_hz_around(offset_hz, snap_radius_hz, ui_get_if_offset_hz(), &snapped_hz) == ESP_OK) {
             if (snapped_hz != offset_hz) {
                 ESP_LOGI("ui_touch", "snap-to-peak (r=%ldHz z=%.1f): %ld -> %ld Hz",
                          (long)snap_radius_hz, s_zoom_factor, (long)offset_hz, (long)snapped_hz);

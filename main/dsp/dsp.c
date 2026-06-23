@@ -394,7 +394,7 @@ esp_err_t dsp_get_peak_dbm_around_vfo(int center_bin, int half_width_bins, float
 }
 
 // Snap-to-peak — see dsp.h for contract.
-esp_err_t dsp_find_peak_hz_around(int32_t center_hz, int32_t radius_hz, int32_t *out_hz)
+esp_err_t dsp_find_peak_hz_around(int32_t center_hz, int32_t radius_hz, int32_t if_offset_hz, int32_t *out_hz)
 {
     if (!s_spectrum_mtx || !out_hz) return ESP_ERR_INVALID_ARG;
     if (radius_hz <= 0) { *out_hz = center_hz; return ESP_OK; }
@@ -409,13 +409,17 @@ esp_err_t dsp_find_peak_hz_around(int32_t center_hz, int32_t radius_hz, int32_t 
     }
 
     // Convert "Hz from dial" to "DSP bin index".
-    // DSP bin 0 = audio DC; QMX dial is at +12 kHz in baseband, so a touch at
-    // center_hz from dial maps to baseband freq (center_hz + 12000) Hz, which is
-    // bin (center_hz + 12000) / bin_width. Negative bins wrap to N - |bin|.
+    // DSP bin 0 = audio DC; the QMX dial maps to if_offset_hz in baseband (+12 kHz
+    // IF in SSB/data, +12 kHz + CW LO offset + trim in CW — the same value the
+    // display centers on). A touch at center_hz from dial maps to baseband freq
+    // (center_hz + if_offset_hz) Hz → bin (.../bin_width). Negative bins wrap to N - |bin|.
+    // Using the bare 12 kHz here in CW left the search window ~640 Hz off the tapped
+    // carrier, so snap silently failed in CW (worst when zoomed in, where the window
+    // is narrow). Passing the mode-aware offset keeps the window centered on the tap.
     const float bin_width = (float)DSP_SAMPLE_RATE_HZ / (float)DSP_FFT_SIZE;  // 46.875 Hz
     const int N = DSP_FFT_SIZE;
 
-    int center_bin = (int)((center_hz + 12000) / bin_width);  // truncation OK; we search a window
+    int center_bin = (int)((center_hz + if_offset_hz) / bin_width);  // truncation OK; we search a window
     int radius_bins = (int)(radius_hz / bin_width);
     if (radius_bins < 1) radius_bins = 1;
 
