@@ -102,10 +102,11 @@ void app_main(void)
     display_set_flipped(cfg.display_flip);  // restore upside-down mounting orientation
     status_bar_start();
 
-    // Open the CW-audio output path (I2S/ES8388) BEFORE the USB host starts,
-    // so I2S can grab its DMA-capable RAM before the UAC stream consumes the
-    // pool. No-op unless CW audio is persisted-enabled.
-    cw_audio_preopen();
+    // BAND-AID (v0.18.5): e07f114 (CW audio) introduced cw_audio_preopen() which
+    // degrades FT8 decode yield by 2-3x even when CW is disabled. Root cause under
+    // investigation (likely I2S/DMA contention with USB-audio pipeline). Disabled
+    // pending a proper fix. CW audio remains shelved until pipeline rework.
+    // cw_audio_preopen();
 
     ESP_ERROR_CHECK(bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true));
     ESP_LOGI(TAG, "USB host started");

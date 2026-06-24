@@ -275,10 +275,11 @@ static void process_rx(void)
             s_dropped_this_period += pairs;
         }
 
-        // CW audio out: forward every decoded I/Q sample to the CW demodulator
-        // in real time (no-op unless CW audio is enabled). Must be here, not in
-        // the snapshot fft_task, which only consumes ~1/3 of the samples.
-        dsp_cw_forward(decoded, pairs);
+        // BAND-AID (v0.18.5): e07f114 added dsp_cw_forward() in the audio hot path.
+        // Even as a no-op when CW disabled, it degrades FT8 decode by ~2-3x
+        // (avg 39→11 on fading band, likely due to call overhead on core-0 audio task).
+        // Disabled pending a proper fix. CW audio remains shelved.
+        // dsp_cw_forward(decoded, pairs);
         // Loop back for another non-blocking drain read.
     }
 }
