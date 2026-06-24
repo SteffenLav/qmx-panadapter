@@ -216,6 +216,17 @@ static void action_save_cb(lv_event_t *e)
     memory_modal_refresh();
 }
 
+// cat_set_frequency()/cat_set_mode() share a 200ms TX rate-limiter; firing
+// both back-to-back drops the mode write silently. Send the mode on a
+// one-shot timer so it lands after the frequency write's rate-limit window.
+static char s_recall_mode[8] = "";
+
+static void recall_mode_timer_cb(lv_timer_t *t)
+{
+    if (s_recall_mode[0]) cat_set_mode(s_recall_mode);
+    lv_timer_del(t);
+}
+
 static void cell_tap_cb(lv_event_t *e)
 {
     if (s_action_idx >= 0) return;  /* suppress tap if long-press action panel is open */
@@ -230,15 +241,13 @@ static void cell_tap_cb(lv_event_t *e)
     ESP_LOGI(TAG, "recall slot %d: %lu Hz %s '%s'",
              idx, (unsigned long)slot.freq_hz, slot.mode, slot.label);
 
-    cat_set_frequency_forced(slot.freq_hz);  // deliberate user action — bypass the 200ms rate-limiter so it always lands
-    // Optimistically move the Tab5 display now instead of waiting for the FA
-    // poll: the mode write below can briefly garble FA responses on the shared
-    // CDC pipe, so a poll-only update could leave the display frozen on the old
-    // freq (Ian G4LXX, v0.18.0). Same pattern the freq keypad already uses.
-    ui_update_frequency(slot.freq_hz);
-    // Mode via the poll task (deferred), NOT a direct LVGL-thread cat_set_mode:
-    // the old timer-driven cat_set_mode raced the FA/MD/FW poll on the CDC pipe.
-    if (slot.mode[0]) cat_request_mode(slot.mode);
+    cat_set_frequency(slot.freq_hz);
+    if (slot.mode[0]) {
+        strncpy(s_recall_mode, slot.mode, sizeof(s_recall_mode) - 1);
+        s_recall_mode[sizeof(s_recall_mode) - 1] = '\0';
+        lv_timer_t *t = lv_timer_create(recall_mode_timer_cb, 250, NULL);
+        lv_timer_set_repeat_count(t, 1);
+    }
     modal_close();
 }
 

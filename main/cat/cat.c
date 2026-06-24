@@ -577,7 +577,6 @@ static void poll_task(void *arg)
 {
     ESP_LOGI(TAG, "Poll task started (%d ms interval, alternating FA/MD)", CAT_POLL_INTERVAL_MS);
     int phase = 0;
-    int poll_fail = 0;   // consecutive poll-TX failures; one transient timeout must not kill the poll
     while (s_cdc_dev != NULL) {
         // v0.12.0: an FT8 TX burst owns the CDC-ACM link exclusively for its
         // ~12.7s duration (precise 160ms-cadence TA<freq>; sequence) - an
@@ -662,21 +661,9 @@ static void poll_task(void *arg)
             esp_err_t err = cdc_acm_host_data_tx_blocking(
                 s_cdc_dev, (const uint8_t *)cmd, 3, 200);
             if (err != ESP_OK) {
-                // A single transient TX timeout (e.g. CDC congestion during an
-                // FT8 mode toggle) must NOT kill the poll task — that froze
-                // cat_get_frequency() for the whole session and broke the
-                // Panadapter/FT8 sticky-freq persistence. Tolerate a burst;
-                // only give up after a sustained run (a real disconnect also
-                // NULLs s_cdc_dev, ending the loop via its condition).
-                if (++poll_fail >= 20) {
-                    ESP_LOGW(TAG, "%s send failed %dx: 0x%x — radio likely gone, poll exiting", cmd, poll_fail, err);
-                    break;
-                }
-                ESP_LOGW(TAG, "%s transient send fail: 0x%x (%d/20), retrying", cmd, err, poll_fail);
-                vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
-                continue;  // retry this phase; don't advance, don't exit
+                ESP_LOGW(TAG, "%s send failed: 0x%x (radio likely disconnected)", cmd, err);
+                break;
             }
-            poll_fail = 0;
         }
         phase = (phase + 1) % 3;
         vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
