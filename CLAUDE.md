@@ -319,3 +319,18 @@ Needed `esp_http_client` + `mbedtls` (cert bundle, already enabled via `CONFIG_M
 Response is an HTML page parsed for `"Result: x out of y records added"` (success) or an `"Error:"` string (stop the run, same "don't skip past it" logic as QRZ). Progress tracked the same way as QRZ: `eqsl_uploaded_n` in NVS, advanced only past batches eQSL actually accepted.
 
 Entry point: "eQSL ↑" link in the web UI bottom bar, next to "QRZ ↑". First tap prompts for username then password (two separate `prompt()` calls, since eQSL needs both), POSTs to `/api/eqsl_creds` (JSON body, saved server-side). `/api/status` gained `eqsl_creds_set`.
+
+## CW Audio (shelved — v0.18.5)
+
+`main/audio/cw_audio.c` — CW demodulation + I2S playback to the Tab5 speaker/headphone jack. Fully implemented and works end-to-end, but **disabled by default and disabled in v0.18.5 due to a regression**.
+
+**Why shelved**: e07f114 (v0.18.1) introduced CW audio infrastructure. Even when disabled (the default), the `cw_audio_preopen()` I2S/ES8388 initialization and the `dsp_cw_forward()` hot-path calls in the audio producer degrade the USB-audio pipeline throughput by 2–3×, suppressing FT8 decode yield from avg 39–45 to 11–15 messages per slot. The regression root-cause is I2S/DMA contention for internal DRAM with the UAC stream, likely exacerbated by core-0 audio-task overhead (even as a no-op when CW is off).
+
+**v0.18.5 band-aid**: Both `cw_audio_preopen()` and `dsp_cw_forward()` are disabled (commented out) to restore FT8 decode performance. CW audio UI remains greyed and non-functional.
+
+**Long-term fix pending**: 
+- Root-cause analysis of I2S/DMA/UAC contention
+- Pipeline redesign: either full-rate UAC + async resampling at lower priority, or spawn the CW demodulator on a dedicated core to avoid starving the audio producer
+- Re-enable and soak CW audio with measured FT8 yield verification on peak-band conditions
+
+Do not attempt to re-enable without addressing the pipeline contention — naive re-enabling will regress FT8 decode performance.

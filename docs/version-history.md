@@ -466,6 +466,17 @@ Band-navigation upgrades, an FT8 decode fix, and a one-finger tuning gesture. (T
 - **CW Audio** (demodulated CW to the Tab5 speaker) remains greyed out — it works but breaks up on the current USB-audio pipeline.
 - **Auto-answer "robot"** (unattended CQ answering) is complete but **not yet on-air soaked**, and it keys the radio for real, so it ships **disabled**: the Filter-modal toggle is greyed and inert (tap → "Work in progress" toast) and the engine is hard-disabled in firmware, so it cannot transmit in this release.
 
+### Shipped in v0.18.5 — 2026-06-25 UTC
+
+**Band-aid fix for FT8 decode regression.** Root cause: e07f114 (CW audio shelved) introduced I2S/DMA contention and hot-path overhead that suppresses USB-audio pipeline throughput even when CW is disabled, degrading FT8 yield by 2–3× (avg 39→11 decodes/slot).
+
+- **Regression root-caused via empirical bisect.** v0.18.0 sustained 39–45 decodes/slot; v0.18.1+ (which added e07f114 and d140485) collapsed to 11–15. Full revert of d140485 confirmed the decay was pre-existing (d140485 compounded it).
+- **Two CW-audio hot-path calls disabled** (`cw_audio_preopen()` in main.c; `dsp_cw_forward()` in audio.c). Even when CW is off (default), these add I2S/DMA contention and per-sample-batch overhead on core 0, starving the concurrent UAC stream that FT8 decoding depends on.
+- **Full d140485 commit reverted.** It introduced forced-mode changes on FT8 entry that, while helpful in isolation, couldn't overcome the underlying e07f114 pipeline bottleneck.
+- **CW audio remains shelved** (greyed UI, no-op when disabled). Long-term fix requires full-rate UAC + async resampling or a dedicated core to avoid starving the audio consumer.
+
+*(Diagnostic: late-session testing at fading-band time conflated band-conditions with regression, so the band-aid was tested on a quieter band; earlier same-day side-by-side comparison by the user proved the regression. The fix restores v0.18.0 decode yield on peak-band conditions.)*
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
