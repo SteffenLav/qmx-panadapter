@@ -21,6 +21,10 @@ WINDOWS USERS:
   4. Tab5 will reboot and show WiFi setup screen - normal!
 
 MAC USERS:
+  FIRST TIME ONLY: Install esptool via homebrew
+    Open Terminal and run:  brew install esptool
+
+  THEN: Run the recovery script
   1. Plug Tab5 into this Mac with a USB-C DATA cable
      (it will power on automatically)
   2. Open Terminal and run:  bash flash-recovery.command
