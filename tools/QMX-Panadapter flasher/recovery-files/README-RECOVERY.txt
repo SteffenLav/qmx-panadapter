@@ -15,18 +15,18 @@ IMPORTANT: Choose the script for YOUR operating system:
 
 WINDOWS USERS:
   1. Plug Tab5 into this PC with a USB-C DATA cable
-  2. Power ON the Tab5 (or press power button if it's off)
-  3. Double-click:  flash-recovery.bat
-  4. Wait for completion (3-5 minutes)
-  5. Tab5 will reboot and show WiFi setup screen - normal!
+     (it will power on automatically)
+  2. Double-click:  flash-recovery.bat
+  3. Wait for completion (3-5 minutes)
+  4. Tab5 will reboot and show WiFi setup screen - normal!
 
 MAC USERS:
   1. Plug Tab5 into this Mac with a USB-C DATA cable
-  2. Power ON the Tab5 (or press power button if it's off)
-  3. Open Terminal and run:  bash flash-recovery.command
+     (it will power on automatically)
+  2. Open Terminal and run:  bash flash-recovery.command
      (or right-click flash-recovery.command and select "Open")
-  4. Wait for completion (3-5 minutes)
-  5. Tab5 will reboot and show WiFi setup screen - normal!
+  3. Wait for completion (3-5 minutes)
+  4. Tab5 will reboot and show WiFi setup screen - normal!
 
 ⚠️  WARNING
 ===========

@@ -39,8 +39,8 @@ if not defined ESPTOOL (
 echo.
 echo Before continuing:
 echo   1. Plug Tab5 into this PC with a USB-C DATA cable
-echo   2. The Tab5 should be powered ON (or power it on now)
-echo   3. Close any serial monitor or other USB programs
+echo      (it will power on automatically)
+echo   2. Close any serial monitor or other USB programs
 echo.
 pause
 

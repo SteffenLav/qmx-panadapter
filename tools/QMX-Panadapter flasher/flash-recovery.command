@@ -58,8 +58,8 @@ fi
 echo ""
 echo "Before continuing:"
 echo "  1. Plug Tab5 into this Mac with a USB-C DATA cable"
-echo "  2. Tab5 should be powered ON"
-echo "  3. Close any serial monitor programs"
+echo "     (it will power on automatically)"
+echo "  2. Close any serial monitor programs"
 echo ""
 read -p "Press Enter when ready..." dummy
 
