@@ -1262,6 +1262,7 @@ static ui_rssi_t s_bot_rssi;
 static bool       s_bot_rssi_valid = false;
 static lv_obj_t *s_bot_wifi_suffix = NULL;
 static lv_obj_t *s_bot_version = NULL; /* firmware version, between battery and clock */
+static lv_obj_t *s_bot_diag_dot = NULL; /* red breathing dot, shown while diagnostic log is enabled */
 static lv_obj_t *s_burger_btn = NULL;  // right-edge drawer grip handle (kept for foreground move after all UI built)
 static lv_obj_t *s_left_edge_grip = NULL;
 static lv_obj_t *s_bottom_edge_grip = NULL;
@@ -1441,15 +1442,62 @@ static void grip_start_breathing(lv_obj_t *grip)
     lv_anim_start(&a);
 }
 
+// Same breathing technique as the edge grips, applied to the bottom-bar
+// diagnostic-log indicator: a small red dot that fades in/out for as long
+// as diag logging is capturing, so the operator has a glanceable reminder
+// it's running (and, e.g., draining the PSRAM ring) without opening the
+// settings drawer.
+static void diag_dot_breathe_anim_cb(void *var, int32_t v)
+{
+    lv_obj_set_style_bg_opa((lv_obj_t *)var, (lv_opa_t)v, 0);
+}
+
+static void diag_dot_start_breathing(void)
+{
+    if (!s_bot_diag_dot) return;
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_bot_diag_dot);
+    lv_anim_set_exec_cb(&a, diag_dot_breathe_anim_cb);
+    lv_anim_set_values(&a, LV_OPA_20, LV_OPA_COVER);
+    lv_anim_set_time(&a, 900);
+    lv_anim_set_playback_time(&a, 900);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_start(&a);
+}
+
+// Show/hide + start/stop the bottom-bar diag-log dot. Called once at boot
+// (main.c, after diag_log_set_enabled() restores the NVS state) and from the
+// drawer toggle, so the dot always reflects the live diag_log_enabled() state
+// regardless of how it was changed.
+void ui_set_diag_log_indicator(bool active)
+{
+    if (!s_bot_diag_dot) return;
+    if (display_lock(20)) {
+        if (active) {
+            lv_obj_clear_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);
+            diag_dot_start_breathing();
+        } else {
+            lv_anim_delete(s_bot_diag_dot, diag_dot_breathe_anim_cb);
+            lv_obj_add_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);
+        }
+        display_unlock();
+    }
+}
+
 // lv_anim_delete_all() (used by screenshot capture to freeze the UI for a
 // stable snapshot) wipes out the infinite-repeat breathing animations on the
 // edge-swipe grip handles too. Call this right after a snapshot to resume
-// breathing on all three grips.
+// breathing on all three grips (and the diag-log dot, if it's currently on).
 void ui_restart_edge_grip_anims(void)
 {
     if (s_burger_btn) grip_start_breathing(s_burger_btn);
     if (s_left_edge_grip) grip_start_breathing(s_left_edge_grip);
     if (s_bottom_edge_grip) grip_start_breathing(s_bottom_edge_grip);
+    if (s_bot_diag_dot && !lv_obj_has_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN)) {
+        diag_dot_start_breathing();
+    }
 }
 
 // ==== Top bar ====
@@ -1983,13 +2031,27 @@ static void build_bottom_bar(lv_obj_t *parent)
     }
 
 
+    // Diagnostic-log indicator: a small red dot, between the battery voltage
+    // text and the firmware version, that breathes (fades in/out) for as
+    // long as diag logging is enabled. Hidden otherwise. State driven by
+    // ui_set_diag_log_indicator(), called at boot and from the drawer toggle.
+    s_bot_diag_dot = lv_obj_create(bar);
+    lv_obj_remove_style_all(s_bot_diag_dot);
+    lv_obj_set_size(s_bot_diag_dot, 14, 14);
+    lv_obj_set_style_radius(s_bot_diag_dot, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(s_bot_diag_dot, lv_color_hex(0xFF3030), 0);
+    lv_obj_set_style_bg_opa(s_bot_diag_dot, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_bot_diag_dot, 0, 0);
+    lv_obj_clear_flag(s_bot_diag_dot, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(s_bot_diag_dot, LV_ALIGN_CENTER, -290, 0);
+    lv_obj_add_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);  // shown only while diag logging is on
+
     // Firmware version, centered between the battery text and the UTC clock.
     s_bot_version = lv_label_create(bar);
     lv_label_set_text(s_bot_version, "");
     lv_obj_set_style_text_color(s_bot_version, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(s_bot_version, &lv_font_montserrat_24, 0);
     lv_obj_align(s_bot_version, LV_ALIGN_CENTER, -250, 0);
-    lv_obj_add_flag(s_bot_version, LV_OBJ_FLAG_HIDDEN);  // Hide to prevent clock overlap
 
     // WiFi status: icon+SSID, RSSI, and IP at fixed x positions so the
     // per-second-changing RSSI digits (glyph-width jitter, same issue as
@@ -4418,6 +4480,7 @@ static void drawer_switch_diag_cb(lv_event_t *e)
     bool on = lv_obj_has_state(sw, LV_STATE_CHECKED);
     diag_log_set_enabled(on);
     settings_set_diag_log(on);
+    ui_set_diag_log_indicator(on);
     ESP_LOGI(TAG, "diagnostic logging: %s", on ? "ON" : "OFF");
 }
 

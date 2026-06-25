@@ -48,6 +48,12 @@ void ui_set_bottom_battery_absent(void);
 // Bottom-bar firmware version, centered between the battery text and the UTC clock.
 void ui_set_bottom_version(const char *text);
 
+// Bottom-bar diagnostic-log indicator: a small red dot between the battery
+// voltage and the firmware version that breathes while active=true, hidden
+// when false. Call at boot (after diag_log_set_enabled() restores NVS state)
+// and from the settings-drawer toggle.
+void ui_set_diag_log_indicator(bool active);
+
 // Bottom-bar right zone: WiFi icon+SSID (or "off" text), optional RSSI
 // (rendered in jitter-free fixed-width digit cells), and a trailing
 // suffix (e.g. " -67dBm  192.168.1.5" minus the rssi number -> "dBm  192.168.1.5").
