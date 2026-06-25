@@ -145,10 +145,25 @@ void app_main(void)
     render_waterfall_set_floor_blend((float)cfg.wf_floor_blend / 100.0f);
     dsp_set_window(cfg.wf_window);
 
-    // CW audio out: demodulate CW from the I/Q and play it on the Tab5
-    // speaker/headphone. Idle (no CPU, codec released) unless enabled and the
-    // radio is in CW/CW-R. Needs dsp_init() (forward ring) and settings.
-    cw_audio_init();
+    // BAND-AID EXTENDED (v0.18.6): cw_audio_init() spawns cw_audio_task at
+    // PRIORITY 6 on core 1 - higher than fft_task (4) and both FT8 tasks (1) -
+    // looping forever on a 120ms vTaskDelay even though cw_audio_preopen() is
+    // already disabled above (s_codec_ready can never become true, so the task
+    // does nothing but wake/check/sleep). The v0.18.5 band-aid disabled the two
+    // things CW audio actually DOES but missed this: a priority-6 "ghost" task
+    // preempting fft_task - the audio ring's sole consumer for BOTH panadapter
+    // and FT8 capture - ~125 times per 15s FT8 slot, for the entire session.
+    // Root-caused 2026-06-25 via empirical diff against v0.18.0 (which has no
+    // cw_audio.c at all) after the user found NO release after v0.18.0 matched
+    // its sustained decode yield, even with the v0.18.5 band-aid applied. Fits
+    // the "first slot decodes great, every slot after collapses" pattern from
+    // the v0.18.4 investigation: fresh-boot ring has no backlog yet; periodic
+    // high-priority preemption of fft_task lets the ring backlog grow, so each
+    // subsequent FT8 capture reads time-shifted audio that still syncs (sync
+    // detection tolerates jitter) but doesn't decode (LDPC needs exact symbol
+    // alignment). CW audio remains fully shelved - do not re-enable without
+    // also fixing this task's priority/cadence as part of the pipeline rework.
+    // cw_audio_init();
 
     ESP_LOGI(TAG, "Init complete - main task idle");
     // Spawn FT8 self-test on a dedicated task (32 KB stack, core 1).

@@ -320,17 +320,22 @@ Response is an HTML page parsed for `"Result: x out of y records added"` (succes
 
 Entry point: "eQSL ↑" link in the web UI bottom bar, next to "QRZ ↑". First tap prompts for username then password (two separate `prompt()` calls, since eQSL needs both), POSTs to `/api/eqsl_creds` (JSON body, saved server-side). `/api/status` gained `eqsl_creds_set`.
 
-## CW Audio (shelved — v0.18.5)
+## CW Audio (shelved — v0.18.5, extended v0.18.6)
 
-`main/audio/cw_audio.c` — CW demodulation + I2S playback to the Tab5 speaker/headphone jack. Fully implemented and works end-to-end, but **disabled by default and disabled in v0.18.5 due to a regression**.
+`main/audio/cw_audio.c` — CW demodulation + I2S playback to the Tab5 speaker/headphone jack. Fully implemented and works end-to-end, but **disabled by default and disabled since v0.18.5 due to a regression that wasn't fully closed until v0.18.6**.
 
-**Why shelved**: e07f114 (v0.18.1) introduced CW audio infrastructure. Even when disabled (the default), the `cw_audio_preopen()` I2S/ES8388 initialization and the `dsp_cw_forward()` hot-path calls in the audio producer degrade the USB-audio pipeline throughput by 2–3×, suppressing FT8 decode yield from avg 39–45 to 11–15 messages per slot. The regression root-cause is I2S/DMA contention for internal DRAM with the UAC stream, likely exacerbated by core-0 audio-task overhead (even as a no-op when CW is off).
+**v0.18.5 band-aid (incomplete)**: e07f114 (v0.18.1) introduced CW audio infrastructure. The v0.18.5 fix commented out `cw_audio_preopen()` (I2S/ES8388 init in `main.c`) and `dsp_cw_forward()` (hot-path call in `audio.c`'s producer) — the two things CW audio actually *does*. This was believed to restore FT8 decode yield to v0.18.0 levels (avg 39–45/slot) from the regressed 11–15/slot.
 
-**v0.18.5 band-aid**: Both `cw_audio_preopen()` and `dsp_cw_forward()` are disabled (commented out) to restore FT8 decode performance. CW audio UI remains greyed and non-functional.
+**v0.18.6 — the real fix**: it didn't. On 2026-06-25 the user reported that *no release after v0.18.0* sustained decode as well as v0.18.0 itself, even with the v0.18.5 band-aid applied — confirmed by re-testing multiple releases back to back. Root-caused by diffing every file in the audio/FFT/FT8 path against the v0.18.0 tag: **`cw_audio_init()` in `main.c` was never disabled** alongside `cw_audio_preopen()`. It unconditionally spawns `cw_audio_task` at **priority 6 on core 1** — higher than `fft_task` (4, the audio ring's sole consumer for *both* the panadapter spectrum and FT8 capture) and both FT8 tasks (1) — looping forever on a 120 ms `vTaskDelay`. Since `cw_audio_preopen()` was already disabled, `s_codec_ready` can never become true, so the task does nothing useful — it just wakes, checks three booleans, and sleeps. But that's still ~125 preemptions of `fft_task` per 15 s FT8 slot, for the entire session, on every release since v0.18.1.
 
-**Long-term fix pending**: 
-- Root-cause analysis of I2S/DMA/UAC contention
+This fits the "Rosetta stone" clue from the earlier v0.18.4 sparse-decode investigation (see memory `project_ft8_sparse_decode_investigation`): the *first* FT8 slot after a fresh USB re-enumeration (ring empty, no backlog) decoded great; every slot after collapsed. A priority-6 task preempting the ring's sole consumer every 120 ms lets ring backlog grow over a session, so later captures read time-shifted audio that still finds sync (sync detection tolerates jitter) but fails to decode (LDPC needs exact symbol alignment) — explaining the cliff after slot 1, and why no v0.18.1+ release matched v0.18.0 (none of them removed this task).
+
+**Fix**: `cw_audio_init()` is now also commented out in `main.c`, alongside `cw_audio_preopen()`. No functional loss — the codec can never open anyway with preopen disabled, so the task was pure overhead.
+
+**Long-term fix pending** (before re-enabling CW audio at all):
+- Root-cause analysis of the original I2S/DMA/UAC contention that motivated the v0.18.5 band-aid in the first place
+- Fix `cw_audio_task`'s priority/cadence so it can't preempt `fft_task` even when idle (e.g. lower priority than 4, or event-driven wake instead of a 120 ms poll)
 - Pipeline redesign: either full-rate UAC + async resampling at lower priority, or spawn the CW demodulator on a dedicated core to avoid starving the audio producer
-- Re-enable and soak CW audio with measured FT8 yield verification on peak-band conditions
+- Re-enable and soak CW audio with measured FT8 yield verification on peak-band conditions, sustained over a full session (not just the first slot)
 
-Do not attempt to re-enable without addressing the pipeline contention — naive re-enabling will regress FT8 decode performance.
+Do not attempt to re-enable without addressing both the original contention AND this task-priority issue — naive re-enabling will regress FT8 decode performance again, the same way it did for four releases.
