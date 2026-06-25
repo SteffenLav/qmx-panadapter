@@ -2043,7 +2043,11 @@ static void build_bottom_bar(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(s_bot_diag_dot, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_bot_diag_dot, 0, 0);
     lv_obj_clear_flag(s_bot_diag_dot, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align(s_bot_diag_dot, LV_ALIGN_CENTER, -290, 0);
+    // Tracks the right edge of the battery voltage text (s_bot_left), which
+    // changes width with its content - reposition_diag_dot() re-anchors it
+    // every time that text is updated, so it stays glued just to the right
+    // of "(X.XV)" instead of a fixed offset that drifts with text length.
+    lv_obj_align_to(s_bot_diag_dot, s_bot_left, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
     lv_obj_add_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);  // shown only while diag logging is on
 
     // Firmware version, centered between the battery text and the UTC clock.
@@ -3182,11 +3186,23 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row)
     display_unlock();
 }
 
+// Re-anchor the diag-log dot to the right edge of the battery voltage text
+// (s_bot_left), whose width changes with its content ("82%", "82% (4.1V)",
+// "82% (4.1V)  [charge glyph]", ...). Called after every s_bot_left update
+// so the dot stays glued just past "(X.XV)" instead of drifting.
+static void reposition_diag_dot(void)
+{
+    if (s_bot_diag_dot && s_bot_left) {
+        lv_obj_align_to(s_bot_diag_dot, s_bot_left, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
+    }
+}
+
 void ui_set_bottom_left(const char *text)
 {
     if (!s_bot_left) return;
     if (display_lock(20)) {
         lv_label_set_text(s_bot_left, text ? text : "");
+        reposition_diag_dot();
         display_unlock();
     }
 }
@@ -3199,6 +3215,7 @@ void ui_set_bottom_battery(const char *icon, uint32_t icon_color_hex, const char
         lv_obj_set_style_text_color(s_bot_batt_icon, lv_color_hex(icon_color_hex), 0);
         lv_label_set_text(s_bot_left, text ? text : "");
         if (s_bot_batt_slash) lv_obj_add_flag(s_bot_batt_slash, LV_OBJ_FLAG_HIDDEN);
+        reposition_diag_dot();
         display_unlock();
     }
 }
@@ -3214,6 +3231,7 @@ void ui_set_bottom_battery_absent(void)
         lv_obj_set_style_text_color(s_bot_batt_icon, lv_color_hex(0xFF5050), 0);
         lv_label_set_text(s_bot_left, "");
         if (s_bot_batt_slash) lv_obj_clear_flag(s_bot_batt_slash, LV_OBJ_FLAG_HIDDEN);
+        reposition_diag_dot();
         display_unlock();
     }
 }
