@@ -118,13 +118,13 @@ RC=1
 if [ -n "${PORTS}" ]; then
     for P in ${PORTS}; do
         echo "  trying ${P} ..."
-        if "${ESPTOOL}" --chip esp32p4 -p "${P}" -b 460800 --connect-attempts 1 "${WRITE_FLASH}" ${ERASE_OPT} 0x0 "${FW}"; then
+        if "${ESPTOOL}" --chip esp32p4 -p "${P}" -b 460800 --connect-attempts 1 "${WRITE_FLASH}" ${ERASE_OPT} 0x10000 "${FW}"; then
             RC=0
             break
         fi
     done
 else
-    "${ESPTOOL}" --chip esp32p4 -b 460800 --connect-attempts 1 "${WRITE_FLASH}" ${ERASE_OPT} 0x0 "${FW}"
+    "${ESPTOOL}" --chip esp32p4 -b 460800 --connect-attempts 1 "${WRITE_FLASH}" ${ERASE_OPT} 0x10000 "${FW}"
     RC=$?
 fi
 
