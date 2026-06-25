@@ -10,7 +10,11 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Beta — v0.18.1.** FT8 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
+> **Beta — v0.18.5.** FT8 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
+
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v0.18.5.pdf).
+
+<!-- USERGUIDE:START -->
 
 ---
 
@@ -108,7 +112,11 @@ Switch the QMX to any band and watch it come alive. This is the foundation of th
 
 **Tap or drag to tune.** Touch anywhere on the spectrum or waterfall to place the cyan cursor. Drag and it snaps to a mode-aware grid — 10 Hz steps in CW, 250 Hz in SSB, 500 Hz for FT8 — so you can land precisely on a signal before lifting your finger. Lift, and the QMX retunes.
 
+**Swipe fast to pan instead.** A quick horizontal swipe (rather than a held drag) slides the whole view left or right and retunes to wherever you let go — the fastest way to slide along a band. See [Touch-to-tune](#touch-to-tune) for exactly how the two gestures are told apart.
+
 **Zoom in on a crowded band.** Pinch with two fingers to zoom up to ×24. On a CW band at ×8 or higher you can resolve individual signals a few hundred Hz apart, read the spacing between callers, and pick your target before you tune. The frequency axis scales with you, down to Hz precision at high zoom. Double-tap anywhere to reset to the full 48 kHz view.
+
+**Find your place on the band.** The thin band-plan strip under the frequency axis colour-codes the CW/Digi/Phone segments around you — pick your IARU region (or leave it on Auto) in the settings drawer → **Band-plan region**.
 
 **Read your passband.** Two grey vertical lines on the spectrum mark your current filter edges. The BW label in the top bar shows the active width; tap it to choose 2.5 / 2.7 / 2.9 / 3.2 kHz in USB or LSB. A coloured tint fills the passband so you can always see exactly what slice of the band you're receiving.
 
@@ -154,11 +162,13 @@ Every completed QSO is written to an ADIF log downloadable from the web UI. See 
 
 ### Spectrum and waterfall
 
-The display is divided into a **200 px spectrum** (green curve with dim fill), an **18 px frequency axis**, a **412 px waterfall**, and a 30 px bottom bar. The full visible span is 48 kHz centred on the QMX VFO.
+The display is divided into a **60 px top bar**, a **200 px spectrum** (green curve with dim fill), a **32 px frequency axis**, a **22 px band-plan strip**, a **370 px waterfall**, and a **36 px bottom bar**. The full visible span is 48 kHz centred on the QMX VFO.
 
 The **spectrum** shows signal power in dBm (default range −130 to −30 dBm). Each frame is smoothed per-bin with an exponential moving average (EMA α = 0.4 by default, adjustable in the drawer), balancing visual stability against snappy response to CW signals and SSB attack transients.
 
 The **frequency axis** shows absolute MHz labels centred on the QMX VFO, refreshed on every CAT frequency update. At high zoom levels the labels resolve to kHz or Hz precision.
+
+**Band-plan strip.** A thin coloured bar directly under the frequency axis shows the coarse CW / Digi / Phone segments of the current band, with a marker for where the VFO sits within them. Pick which IARU region it reflects in the settings drawer → **Band-plan region** (Auto from your grid square, or a fixed Region 1 / 2 / 3).
 
 The **waterfall** runs newest row at the top in a thermal SDR palette (black → dark blue → teal → green → yellow → red). Four colour maps are available in the settings drawer: Thermal, Viridis, Turbo, and Grayscale.
 
@@ -169,6 +179,8 @@ The **waterfall** runs newest row at the top in a thermal SDR palette (black →
 ### Touch-to-tune
 
 Tap anywhere on the spectrum or waterfall to place the cyan tune cursor. Drag and the cursor snaps grid-point to grid-point — you can see exactly which frequency will be tuned before you lift. The snap grid is **mode-aware**:
+
+**Tune vs. pan — how your finger is read.** A quick horizontal swipe (more than ~70 px within 250 ms) pans the view instead of tuning — see [Zoom and pan](#zoom-and-pan). A slower touch-and-hold (250 ms without that much movement) locks into tune mode, after which dragging moves the snap cursor as described below. In short: swipe fast to pan, hold-then-drag to tune.
 
 | Mode | Snap step |
 |------|-----------|
@@ -181,7 +193,7 @@ The grid is anchored to absolute frequency (e.g. …200 / 300 / 400 Hz), not to 
 
 A floating frequency tooltip above the cursor shows the target frequency in real time while dragging. Lift → CAT `FA` command is sent; QMX retunes; spectrum re-centres.
 
-**Snap-to-strongest-bin.** At zoom ×1 a tap searches ±700 Hz around the touched position for the strongest spectrum bin and snaps to it — only when the peak exceeds the local mean by >3 dB, so touches on empty noise floor still tune to the raw position.
+**Snap-to-strongest-bin.** At zoom ×1 a tap searches ±700 Hz around the touched position for the strongest spectrum bin and snaps to it — only when the peak exceeds the local mean by >3 dB, so touches on empty noise floor still tune to the raw position. Toggle this in the settings drawer → **Snap to signal** (on by default); turn it off if you want taps to always tune to exactly where you touched.
 
 **Passband indicator.** Two grey vertical lines mark your current filter edges. A faint coloured tint fills the passband. The amber VFO marker shows where the QMX is tuned; in CW mode it sits at dial + CW pitch offset so it marks the actual received tone frequency, not the suppressed carrier.
 
@@ -189,10 +201,13 @@ A floating frequency tooltip above the cursor shows the target frequency in real
 
 | Gesture | Effect |
 |---------|--------|
+| One-finger fast horizontal swipe | Pan/"stroll" the view — retunes to the new centre frequency on release |
 | Pinch (two fingers) | Zoom ×1.0 – ×24.0 |
 | Two-finger drag | Pan the zoomed window |
 | Double-tap | Reset zoom and pan to ×1.0 / centred |
 | Top-bar Zoom → tap | Zoom preset: ×1 / ×2 / ×4 / ×8 / ×16 / ×24 |
+
+**One-finger pan (stroll).** A fast horizontal swipe — more than ~70 px of movement within the first 250 ms of touching down — slides the spectrum and waterfall under your finger in real time, with a live frequency tooltip, and retunes to wherever you release. This works at any zoom level alongside the two-finger pinch/pan above; it's the quickest way to slide along a band without lifting into a deliberate tune-drag.
 
 At zoom > ×1 the view **centres on the passband** (not the VFO dial), which matters for USB/LSB where the passband sits offset from the carrier. The passband lines and frequency axis track correctly at all zoom levels. Zoom level is persisted to NVS and restores with full zoom-FFT resolution on the next boot.
 
@@ -218,20 +233,42 @@ Memory slots show the label in large text and mode + frequency (dimmed) below. T
 
 Open by swiping in from the right edge, or tapping the right grip handle. The drawer is scrollable.
 
+Controls appear top to bottom in this order:
+
 | Control | What it does |
 |---------|--------------|
-| **Diagnostic log** | Captures all firmware log output to a 512 KB ring (top row — stays visible in FT8 mode) |
-| **Display brightness** | 10–100%, persisted |
-| **Flat spectrum** | Toggle flat/absolute display mode, persisted |
+| **Flip 180°** | Inverts the whole display and touch axes for upside-down mounting; centred checkbox so it isn't hit by accident, persisted |
+| **Diagnostic log** | Captures all firmware log output to a 512 KB ring (stays visible in FT8 mode) |
 | **IQ Balance** | Toggle adaptive I/Q image correction; re-enabling resets the estimator |
+| **Flat spectrum** | Toggle flat/absolute display mode, persisted |
+| **Snap to signal** | Toggle snap-to-strongest-bin on tap (see [Touch-to-tune](#touch-to-tune)); on by default |
 | **Presets** | HF Normal / HF DX / Strong Sig — sets dB range and smoothing in one tap |
-| **dB Range** | Min and Max sliders (dBm) |
-| **Smoothing** | EMA alpha 0.05–1.00 |
-| **Waterfall colour map** | Thermal / Viridis / Turbo / Grayscale, persisted |
-| **IF calibration** | ±200 Hz trim for per-unit LO variance (see [Per-unit IF calibration](#per-unit-if-calibration)) |
-| **CW pitch** | 400–1000 Hz sidetone offset; touch-to-tune in CW mode snaps to this offset, persisted |
 | **WiFi** | Opens credential modal; **WiFi initiated** checkbox enables/disables WiFi entirely |
 | **Identity** | Callsign + Maidenhead grid (required for FT8 TX; also drives KM/BRG columns) |
+| **dB Range** | Min and Max sliders (dBm) |
+| **Smoothing** | EMA alpha 0.05–1.00 |
+| **CW** | CW sidetone centre, 600–800 Hz; touch-to-tune in CW mode snaps to this offset, persisted |
+| **CW Audio** | *Currently disabled (greyed out).* Would play demodulated CW out the Tab5's speaker/headphone jack; shelved pending a USB-audio pipeline fix — see [CW Audio](#cw-audio-disabled) below |
+| **IF calibration** | ±100 Hz trim for per-unit LO variance (see [Per-unit IF calibration](#per-unit-if-calibration)) |
+| **Display** | Brightness, 10–100%, persisted |
+| **Waterfall colour map** | Thermal / Viridis / Turbo / Grayscale, persisted |
+| **Band-plan region** | Auto (from your grid square) / Region 1 (EU/AF) / Region 2 (Americas) / Region 3 (Asia/Pac) — drives the [band-plan strip](#spectrum-and-waterfall) |
+| **Waterfall** | Black level, Contrast, Adaptive floor blend, and FFT window — see [Waterfall colourisation](#waterfall-colourisation) below |
+
+### Waterfall colourisation
+
+Four live, NVS-persisted sliders/dropdown at the bottom of the settings drawer fine-tune how the waterfall maps signal to colour — changes scroll in from the top as you drag:
+
+| Control | Range | Default | Effect |
+|---------|-------|---------|--------|
+| **Black level** | 0–30 dB | 9 dB | How far above each bin's own noise floor a signal needs to be before it lifts off black |
+| **Contrast** | 10–80 dB | 45 dB | The dB span that fills the rest of the colour ramp above the black level |
+| **Adaptive floor** | 0–100% | 100% | Blend between a per-bin noise floor (100%) and one global mean floor across the band (0%) |
+| **FFT window** | Blackman-Harris / Hann (sharp) / Nuttall | Blackman-Harris | The FFT window function; Hann trades some sidelobe suppression for sharper peaks |
+
+### CW Audio (disabled)
+
+A **CW Audio** section appears in the drawer — greyed out, with its checkbox forced off — for a feature that plays demodulated CW out of the Tab5's own speaker/headphone jack while in CW/CW-R mode. It's shelved for now: enabling it was found to cut FT8 decode throughput by 2–3× even when not actively playing audio, most likely USB-audio/DMA contention, and a proper fix needs a redesigned audio path. The section stays visible (with a volume slider, also disabled) as a placeholder for when that lands.
 
 ---
 
@@ -309,7 +346,7 @@ Three things you can do with it:
   "qso_count":   12,
   "qrz_key_set": false,
   "eqsl_creds_set": false,
-  "tab5_fw":     "v0.18.1",
+  "tab5_fw":     "v0.18.5",
   "qmx_fw":      "1_03_002QMX"
 }
 ```
@@ -368,7 +405,7 @@ Swipe in from the **left edge** to switch to the FT8 screen. The Tab5 decodes 15
 
 CQ calls always appear at the top sorted strongest-SNR first; all other rows follow by SNR descending.
 
-**Row colour scheme** (CALL + MESSAGE columns): **white** for ordinary traffic, **green** for plain `CQ` calls, **dim grey** for callsigns already in your ADIF log (see [Reply filter](#reply-filter) for hiding them entirely), and **inverted red fill + white text** for any message containing your own callsign — your highest-priority rows literally pop off the screen instead of relying on red-on-black text, which field testing found hard to read at a glance.
+**Row colour scheme** (CALL + MESSAGE columns): **white** for ordinary traffic, **green** for plain `CQ` calls, **dim grey** for callsigns already worked **on the current band** (a station you worked on 20 m still shows normally on 40 m — see [Reply filter](#reply-filter) for hiding them entirely), and **inverted red fill + white text** for any message containing your own callsign — your highest-priority rows literally pop off the screen instead of relying on red-on-black text, which field testing found hard to read at a glance.
 
 **Live view.** Stations not re-decoded within 60 seconds drop off the list automatically, even while the band is quiet. The count reads "Active: N" — who's on frequency *now*, not a cumulative history.
 
@@ -418,7 +455,7 @@ Tap **Filter** in the left pane to open the filter editor. Controls which statio
 - **Include 1 / Include 2** — if either field has text, only messages containing one of its terms are eligible. Space- or comma-separated (e.g. `POTA SOTA` or `JA, VK`), matched against the *whole* decoded message text so POTA/SOTA tags, grid squares, country prefixes, `/P` suffixes etc. all work.
 - **Exclude 1 / Exclude 2** — messages containing any of these terms are skipped even if they'd otherwise match.
 - **Exclude plain CQ callers** — hides bare `CQ ...` rows so only replies and exchanges remain visible.
-- **Exclude worked-before** — hides callsigns already in your ADIF log from the list and from CQ-run auto-replies.
+- **Exclude worked-before** — hides callsigns already worked **on the current band** (per-band, from your ADIF log) from the list and from CQ-run auto-replies; the same station on a different band is treated as not worked.
 
 Tap **Save** to persist (NVS) and apply immediately.
 
@@ -521,7 +558,8 @@ On the FT8 screen, tap **Filter** → **Sync Time** to open the time calibration
 | Gesture | Where | Effect |
 |---------|-------|--------|
 | Tap | Spectrum / waterfall | Tune to tapped frequency (snapped) |
-| Touch + drag | Spectrum / waterfall | Cyan cursor snaps grid-to-grid; tunes on release |
+| Touch + drag (hold ~250 ms first) | Spectrum / waterfall | Cyan cursor snaps grid-to-grid; tunes on release |
+| Fast one-finger horizontal swipe | Spectrum / waterfall, any zoom | Pan/"stroll" the view; retunes to the new centre on release |
 | Double-tap | Spectrum / waterfall | Reset zoom and pan to ×1.0 / centred |
 | Pinch (two fingers) | Spectrum / waterfall | Zoom ×1.0–×24.0 |
 | Two-finger drag | Spectrum / waterfall (zoomed) | Pan the zoomed window |
@@ -536,7 +574,7 @@ On the FT8 screen, tap **Filter** → **Sync Time** to open the time calibration
 
 ### Per-unit IF calibration
 
-The QMX's +12 kHz IF injection varies slightly between units. If signals appear consistently shifted left or right of where the QMX is actually tuned, open the settings drawer → **IF calibration** slider (±200 Hz, 10 Hz steps, persisted to NVS). Default 0. Reported by Ken KF0AYY, whose unit needed about −55 Hz to centre correctly.
+The QMX's +12 kHz IF injection varies slightly between units. If signals appear consistently shifted left or right of where the QMX is actually tuned, open the settings drawer → **IF calibration** slider (±100 Hz, persisted to NVS). Default 0. Reported by Ken KF0AYY, whose unit needed about −55 Hz to centre correctly.
 
 ### Hardware
 
@@ -579,7 +617,7 @@ I (xxxx) bsp_info: panel:    ST7123 (inferred from touch)
 I (xxxx) bsp_info: touch:    ST7123 @ 0x55
 I (xxxx) bsp_info: heap:     230.5 kB internal free, 28.80 MB PSRAM free
 I (xxxx) bsp_info: idf:      v5.4.4
-I (xxxx) bsp_info: firmware: v0.18.1
+I (xxxx) bsp_info: firmware: v0.18.5
 I (xxxx) bsp_info: =====================
 ```
 
@@ -588,6 +626,8 @@ When opening a hardware issue, paste this block — the `panel` and `touch` line
 > **Note on `reset_reason`:** a deliberate reset-button force-off returns `panic/exception`, not `external-pin`/`power-on`. A genuine firmware crash always prints a `Guru Meditation` register + backtrace dump immediately *before* the reboot. No backtrace = abrupt power-off, not a crash.
 
 ---
+
+<!-- USERGUIDE:END -->
 
 ## Build from source
 
