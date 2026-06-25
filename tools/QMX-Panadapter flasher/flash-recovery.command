@@ -20,28 +20,22 @@ read -p "" dummy
 # Detect script directory
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
-# Find esptool
+# Find esptool - check PATH first (homebrew), then local
 ESPTOOL=""
-if [ -f "$SCRIPT_DIR/esptool" ]; then
-    ESPTOOL="$SCRIPT_DIR/esptool"
+if command -v esptool.py &> /dev/null; then
+    ESPTOOL="esptool.py"
 elif command -v esptool &> /dev/null; then
     ESPTOOL="esptool"
-elif command -v esptool.py &> /dev/null; then
-    ESPTOOL="esptool.py"
 fi
 
 if [ -z "$ESPTOOL" ]; then
     echo ""
-    echo "esptool not found. Downloading from GitHub..."
-
-    # Download esptool
-    TEMP_ZIP=$(mktemp /tmp/esptool.XXXXXX.zip)
-    curl -s https://api.github.com/repos/espressif/esptool/releases/latest \
-        | grep "browser_download_url.*macos" | head -1 | cut -d '"' -f 4 | xargs curl -L -o "$TEMP_ZIP"
-
-    unzip -q "$TEMP_ZIP" -d "$SCRIPT_DIR/esptool_tmp"
-    ESPTOOL="$SCRIPT_DIR/esptool_tmp/esptool.py"
-    rm "$TEMP_ZIP"
+    echo "ERROR: esptool not found in PATH"
+    echo ""
+    echo "Install via homebrew:"
+    echo "  brew install esptool"
+    echo ""
+    exit 1
 fi
 
 # Check for recovery files
@@ -69,7 +63,7 @@ echo " STEP 1: FULL CHIP ERASE"
 echo "════════════════════════════════════════════════════════════════"
 echo ""
 
-python3 "$ESPTOOL" --chip esp32p4 -p /dev/cu.usbserial-* -b 460800 erase_flash || {
+"$ESPTOOL" --chip esp32p4 -b 460800 erase_flash || {
     echo "ERROR: Erase failed. Check USB connection."
     exit 1
 }
@@ -80,7 +74,7 @@ echo " STEP 2: FLASHING BOOTLOADER + PARTITION TABLE + APP"
 echo "════════════════════════════════════════════════════════════════"
 echo ""
 
-python3 "$ESPTOOL" --chip esp32p4 -p /dev/cu.usbserial-* -b 460800 \
+"$ESPTOOL" --chip esp32p4 -b 460800 \
     write_flash \
     0x2000 "$SCRIPT_DIR/bootloader.bin" \
     0x10000 "$SCRIPT_DIR/qmx_panadapter_merged_v0.18.5-hotfix.bin" \
