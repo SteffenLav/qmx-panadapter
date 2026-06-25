@@ -1987,6 +1987,7 @@ static void build_bottom_bar(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_bot_version, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(s_bot_version, &lv_font_montserrat_24, 0);
     lv_obj_align(s_bot_version, LV_ALIGN_CENTER, -250, 0);
+    lv_obj_add_flag(s_bot_version, LV_OBJ_FLAG_HIDDEN);  // Hide to prevent clock overlap
 
     // WiFi status: icon+SSID, RSSI, and IP at fixed x positions so the
     // per-second-changing RSSI digits (glyph-width jitter, same issue as
