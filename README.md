@@ -748,6 +748,7 @@ The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF
 
 - **LoTW upload.** Needs its own design — certificate-based via TQSL, not a simple HTTP API like QRZ/eQSL.
 - **v1.0.0 — Stable release.** Multi-day FT8 soak complete, polished UI, beta label gone.
+- **FT8 decode-yield gap to v0.18.0 (open).** v0.18.6 fixed three real regressions and recovered some lost yield, but a same-night A/B still showed v0.18.0 decoding noticeably better. Next step: a same-time-of-day comparison against v0.18.0 to separate any remaining code issue from band-fading variance.
 
 ### Longer term
 
