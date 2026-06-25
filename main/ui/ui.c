@@ -1090,6 +1090,7 @@ static char s_current_band[8] = "---";  // Phase 9 (v0.9.5): cached band string 
 static uint32_t s_passband_width_hz = 0;  // Phase 5.10G: 0 = use mode default; else from CAT FW
 static uint16_t s_cw_pitch_hz = 700;  // CW sidetone offset (Hz); applied to touch-tune in CW modes
 static bool s_snap_to_peak = true;    // tap-to-tune snaps to strongest nearby signal (NVS-backed)
+static bool s_distance_in_miles = false;  // FT8 distance unit toggle (NVS-backed)
 
 // ---- Sticky per-mode settings (v0.16.0) --------------------------------
 // Snapshot of freq/mode/passband/zoom taken on leaving a mode, restored
@@ -1319,6 +1320,7 @@ static uint8_t s_saved_ui_mode = UI_MODE_PANADAPTER;
 static lv_obj_t *s_lbl_brightness = NULL;
 static lv_obj_t *s_check_flip = NULL;  // 180-degree display flip checkbox
 static lv_obj_t *s_check_snap = NULL;  // snap-to-peak tap-to-tune checkbox
+static lv_obj_t *s_check_distance_miles = NULL;  // FT8 distance unit (km/miles) checkbox
 static lv_obj_t *s_check_cwaudio = NULL;
 static lv_obj_t *s_slider_cwaudio_vol = NULL;
 static int       s_cwaudio_lock_vol = 0;   // value the (disabled) CW-audio slider snaps back to
@@ -3608,6 +3610,14 @@ static void drawer_check_snap_cb(lv_event_t *e)
     ESP_LOGI(TAG, "snap-to-peak %s", s_snap_to_peak ? "enabled" : "disabled");
 }
 
+static void drawer_check_distance_miles_cb(lv_event_t *e)
+{
+    lv_obj_t *cb = lv_event_get_target(e);
+    s_distance_in_miles = lv_obj_has_state(cb, LV_STATE_CHECKED);
+    settings_set_distance_in_miles(s_distance_in_miles);
+    ESP_LOGI(TAG, "FT8 distance unit: %s", s_distance_in_miles ? "miles" : "km");
+}
+
 // Create a transparent, full-width, non-scrollable container for one
 // drawer section. Children are positioned relative to its (0,0) top-left,
 // same as they used to be positioned relative to s_drawer's top-left.
@@ -3809,7 +3819,7 @@ static void drawer_build(void)
     // nearby signal (zoom-scaled window); when off the tap tunes exactly where
     // you touched (after the mode grid-snap).
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_SNAP, y, 56);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SNAP, y, 112);
         lv_obj_t *snap_lbl = lv_label_create(sec);
         lv_label_set_text(snap_lbl, "Snap to signal");
         lv_obj_set_style_text_color(snap_lbl, lv_color_hex(0xFFFFFF), 0);
@@ -3821,9 +3831,18 @@ static void drawer_build(void)
         qmx_settings_t scfg_snap;
         settings_load_all(&scfg_snap);
         s_snap_to_peak = scfg_snap.snap_to_peak;
+        s_distance_in_miles = scfg_snap.distance_in_miles;
         s_check_snap = make_drawer_checkbox(sec, s_snap_to_peak, drawer_check_snap_cb, NULL);
         lv_obj_align(s_check_snap, LV_ALIGN_TOP_RIGHT, 0, 6);
-        y += 56;
+
+        lv_obj_t *dist_lbl = lv_label_create(sec);
+        lv_label_set_text(dist_lbl, "Distance in miles");
+        lv_obj_set_style_text_color(dist_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(dist_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(dist_lbl, LV_ALIGN_TOP_LEFT, 0, 56);
+        s_check_distance_miles = make_drawer_checkbox(sec, s_distance_in_miles, drawer_check_distance_miles_cb, NULL);
+        lv_obj_align(s_check_distance_miles, LV_ALIGN_TOP_RIGHT, 0, 52);
+        y += 112;
     }
     // Presets section: header + three buttons side-by-side
     {

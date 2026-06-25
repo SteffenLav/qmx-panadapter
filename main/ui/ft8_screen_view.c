@@ -162,6 +162,7 @@ static lv_timer_t *s_t_refresh  = NULL;
 static lv_timer_t *s_t_clock    = NULL;
 static lv_timer_t *s_t_slotbar  = NULL;  // fast tick for smooth countdown bar
 static char         s_my_call[16] = {0};  /* operator callsign uppercased; refreshed by 1 Hz clock timer */
+static bool         s_distance_in_miles = false;  /* FT8 distance display unit; updated on settings change */
 
 static volatile bool s_refresh_pending = false;
 
@@ -580,7 +581,12 @@ static void update_row(int i, const ft8_call_t *src)
         if (maidenhead_to_latlon(src->last_grid, &rlat, &rlon)) {
             double km  = haversine_km(s_user_lat, s_user_lon, rlat, rlon);
             double brg = bearing_deg (s_user_lat, s_user_lon, rlat, rlon);
-            snprintf(b_km,  sizeof(b_km),  "%d",   (int)(km + 0.5));
+            if (s_distance_in_miles) {
+                double miles = km * 0.621371;
+                snprintf(b_km,  sizeof(b_km),  "%d",   (int)(miles + 0.5));
+            } else {
+                snprintf(b_km,  sizeof(b_km),  "%d",   (int)(km + 0.5));
+            }
             snprintf(b_brg, sizeof(b_brg), "%d°", (int)(brg + 0.5));
         } else {
             snprintf(b_km,  sizeof(b_km),  "--");
@@ -677,6 +683,7 @@ static void rebuild_list(void)
 
     qmx_settings_t qs;
     settings_load_all(&qs);
+    s_distance_in_miles = qs.distance_in_miles;
 
     // While we're running our own CQ, hide other stations' CQ rows so replies
     // addressed to us aren't buried under unrelated CQ traffic. The "exclude
