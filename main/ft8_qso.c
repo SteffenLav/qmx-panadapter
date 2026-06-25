@@ -472,13 +472,18 @@ static void cqrun_answer(const char *caller, int caller_freq, int caller_snr,
     unlock();
 
     bool ok;
+    char rpt[8];
+    fmt_report(caller_snr, rpt, sizeof(rpt));
+
     if (got_rr73 || got_73) {
         ok = send_next(FT8_TX_KIND_73, caller, our_freq, slot_sec, "73",
                        FT8_QSO_WAIT_DONE);
-        if (ok) ft8_status_set("QSO %s: sending 73", caller);
+        if (ok) {
+            strncpy(s_rst_sent, rpt, sizeof(s_rst_sent) - 1);
+            s_rst_sent[sizeof(s_rst_sent) - 1] = '\0';
+            ft8_status_set("QSO %s: sending 73 (their SNR %s)", caller, rpt);
+        }
     } else {
-        char rpt[8];
-        fmt_report(caller_snr, rpt, sizeof(rpt));
         ok = send_next(FT8_TX_KIND_REPLY, caller, our_freq, slot_sec, rpt,
                        FT8_QSO_WAIT_ROGER);
         if (ok) {
