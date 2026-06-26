@@ -163,6 +163,7 @@ static lv_timer_t *s_t_clock    = NULL;
 static lv_timer_t *s_t_slotbar  = NULL;  // fast tick for smooth countdown bar
 static char         s_my_call[16] = {0};  /* operator callsign uppercased; refreshed by 1 Hz clock timer */
 static bool         s_distance_in_miles = false;  /* FT8 distance display unit; updated on settings change */
+static lv_obj_t    *s_lbl_hdr_km = NULL;  /* "KM"/"MI" column header, re-labelled when the unit setting changes */
 
 static volatile bool s_refresh_pending = false;
 
@@ -683,6 +684,9 @@ static void rebuild_list(void)
 
     qmx_settings_t qs;
     settings_load_all(&qs);
+    if (s_distance_in_miles != qs.distance_in_miles && s_lbl_hdr_km) {
+        lv_label_set_text(s_lbl_hdr_km, qs.distance_in_miles ? "MI" : "KM");
+    }
     s_distance_in_miles = qs.distance_in_miles;
 
     // While we're running our own CQ, hide other stations' CQ rows so replies
@@ -1447,6 +1451,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
         lv_obj_set_width(lbl, cols[i].w);
         lv_obj_set_x(lbl, cols[i].x);
         lv_obj_set_style_text_align(lbl, cols[i].a, 0);
+        if (cols[i].x == COL_KM_X) s_lbl_hdr_km = lbl;
     }
 
     // Scrolling list container

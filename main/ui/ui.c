@@ -1275,6 +1275,7 @@ static bool       s_bot_rssi_valid = false;
 static lv_obj_t *s_bot_wifi_suffix = NULL;
 static lv_obj_t *s_bot_version = NULL; /* firmware version, between battery and clock */
 static lv_obj_t *s_bot_diag_dot = NULL; /* red breathing dot, shown while diagnostic log is enabled */
+static lv_obj_t *s_bot_diag_label = NULL; /* "Diag" text next to the dot, shown/hidden together with it */
 static lv_obj_t *s_burger_btn = NULL;  // right-edge drawer grip handle (kept for foreground move after all UI built)
 static lv_obj_t *s_left_edge_grip = NULL;
 static lv_obj_t *s_bottom_edge_grip = NULL;
@@ -1312,7 +1313,8 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_FLIP       14
 #define DRAWER_SEC_SNAP       15
 #define DRAWER_SEC_BPREGION   16
-#define N_DRAWER_SECTIONS     17
+#define DRAWER_SEC_DISTANCE   17  // FT8 distance unit (km/miles) - kept visible in FT8 mode
+#define N_DRAWER_SECTIONS     18
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 // Phase 5.10D Stage 2b: drawer widgets we need to keep handles to
@@ -1489,10 +1491,12 @@ void ui_set_diag_log_indicator(bool active)
     if (display_lock(20)) {
         if (active) {
             lv_obj_clear_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);
+            if (s_bot_diag_label) lv_obj_clear_flag(s_bot_diag_label, LV_OBJ_FLAG_HIDDEN);
             diag_dot_start_breathing();
         } else {
             lv_anim_delete(s_bot_diag_dot, diag_dot_breathe_anim_cb);
             lv_obj_add_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);
+            if (s_bot_diag_label) lv_obj_add_flag(s_bot_diag_label, LV_OBJ_FLAG_HIDDEN);
         }
         display_unlock();
     }
@@ -2059,8 +2063,17 @@ static void build_bottom_bar(lv_obj_t *parent)
     // changes width with its content - reposition_diag_dot() re-anchors it
     // every time that text is updated, so it stays glued just to the right
     // of "(X.XV)" instead of a fixed offset that drifts with text length.
-    lv_obj_align_to(s_bot_diag_dot, s_bot_left, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
+    lv_obj_align_to(s_bot_diag_dot, s_bot_left, LV_ALIGN_OUT_RIGHT_MID, 30, 0);
     lv_obj_add_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);  // shown only while diag logging is on
+
+    // "Diag" label next to the dot - same visibility lifecycle, re-anchored
+    // off the dot itself in reposition_diag_dot() so it tracks along with it.
+    s_bot_diag_label = lv_label_create(bar);
+    lv_label_set_text(s_bot_diag_label, "Diag");
+    lv_obj_set_style_text_color(s_bot_diag_label, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_set_style_text_font(s_bot_diag_label, &lv_font_montserrat_24, 0);
+    lv_obj_align_to(s_bot_diag_label, s_bot_diag_dot, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
+    lv_obj_add_flag(s_bot_diag_label, LV_OBJ_FLAG_HIDDEN);
 
     // Firmware version, centered between the battery text and the UTC clock.
     s_bot_version = lv_label_create(bar);
@@ -3215,7 +3228,10 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row)
 static void reposition_diag_dot(void)
 {
     if (s_bot_diag_dot && s_bot_left) {
-        lv_obj_align_to(s_bot_diag_dot, s_bot_left, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
+        lv_obj_align_to(s_bot_diag_dot, s_bot_left, LV_ALIGN_OUT_RIGHT_MID, 30, 0);
+    }
+    if (s_bot_diag_label && s_bot_diag_dot) {
+        lv_obj_align_to(s_bot_diag_label, s_bot_diag_dot, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
     }
 }
 
@@ -3921,7 +3937,7 @@ static void drawer_build(void)
     // nearby signal (zoom-scaled window); when off the tap tunes exactly where
     // you touched (after the mode grid-snap).
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_SNAP, y, 112);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SNAP, y, 56);
         lv_obj_t *snap_lbl = lv_label_create(sec);
         lv_label_set_text(snap_lbl, "Snap to signal");
         lv_obj_set_style_text_color(snap_lbl, lv_color_hex(0xFFFFFF), 0);
@@ -3933,18 +3949,28 @@ static void drawer_build(void)
         qmx_settings_t scfg_snap;
         settings_load_all(&scfg_snap);
         s_snap_to_peak = scfg_snap.snap_to_peak;
-        s_distance_in_miles = scfg_snap.distance_in_miles;
         s_check_snap = make_drawer_checkbox(sec, s_snap_to_peak, drawer_check_snap_cb, NULL);
         lv_obj_align(s_check_snap, LV_ALIGN_TOP_RIGHT, 0, 6);
+        y += 56;
+    }
 
+    // FT8 decode-list distance unit (km/miles). This is an FT8-screen-only
+    // setting, so it lives in its own section kept visible in FT8 mode (see
+    // drawer_set_ft8_mode's keep[] list) rather than buried in a
+    // panadapter-only section.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_DISTANCE, y, 56);
         lv_obj_t *dist_lbl = lv_label_create(sec);
         lv_label_set_text(dist_lbl, "Distance in miles");
         lv_obj_set_style_text_color(dist_lbl, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(dist_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(dist_lbl, LV_ALIGN_TOP_LEFT, 0, 56);
+        lv_obj_align(dist_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
+        qmx_settings_t scfg_dist;
+        settings_load_all(&scfg_dist);
+        s_distance_in_miles = scfg_dist.distance_in_miles;
         s_check_distance_miles = make_drawer_checkbox(sec, s_distance_in_miles, drawer_check_distance_miles_cb, NULL);
-        lv_obj_align(s_check_distance_miles, LV_ALIGN_TOP_RIGHT, 0, 52);
-        y += 112;
+        lv_obj_align(s_check_distance_miles, LV_ALIGN_TOP_RIGHT, 0, 6);
+        y += 56;
     }
     // Presets section: header + three buttons side-by-side
     {
@@ -4392,16 +4418,18 @@ static void drawer_close(void)
     ESP_LOGI(TAG, "Settings drawer closed");
 }
 
-// FT8 mode keeps the Diagnostic log toggle (top, always accessible), WiFi
-// setup, Callsign & Grid, and Display brightness; everything else (IQ/flat
-// toggles, presets, dB range, smoothing, CW, IF calibration, colour map) is
-// irrelevant there. Hide the rest and restack the kept sections near the top
-// of the drawer. Called on every mode switch (and once at boot via drawer_build()).
+// FT8 mode keeps the Diagnostic log toggle (top, always accessible), the
+// distance-unit (km/miles) toggle (only meaningful on the FT8 decode list),
+// WiFi setup, Callsign & Grid, and Display brightness; everything else
+// (IQ/flat toggles, presets, dB range, smoothing, CW, IF calibration, colour
+// map) is irrelevant there. Hide the rest and restack the kept sections near
+// the top of the drawer. Called on every mode switch (and once at boot via
+// drawer_build()).
 static void drawer_set_ft8_mode(bool ft8)
 {
     if (!s_drawer) return;
-    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_DIAG, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
-    static const int keep_h[] = { 56, 56, 128, 72, 130 };
+    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_DIAG, DRAWER_SEC_DISTANCE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
+    static const int keep_h[] = { 56, 56, 56, 128, 72, 130 };
     const int n_keep = sizeof(keep) / sizeof(keep[0]);
 
     for (int i = 0; i < N_DRAWER_SECTIONS; i++) {
@@ -4410,7 +4438,10 @@ static void drawer_set_ft8_mode(bool ft8)
         for (int k = 0; k < n_keep; k++) {
             if (keep[k] == i) { kept = true; break; }
         }
-        if (ft8 && !kept) {
+        // DRAWER_SEC_DISTANCE is FT8-only (the decode-list km/miles unit is
+        // meaningless in Panadapter mode), unlike the rest of keep[] which is
+        // shared between both modes - so it's hidden, not kept, when !ft8.
+        if ((ft8 && !kept) || (!ft8 && i == DRAWER_SEC_DISTANCE)) {
             lv_obj_add_flag(s_drawer_sections[i], LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_clear_flag(s_drawer_sections[i], LV_OBJ_FLAG_HIDDEN);
