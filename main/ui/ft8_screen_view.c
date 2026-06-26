@@ -689,6 +689,23 @@ static void rebuild_list(void)
     }
     s_distance_in_miles = qs.distance_in_miles;
 
+    // Keep the own-call cache (used for the red own-call row highlight) and
+    // grid-derived location live, not just refreshed on FT8 screen entry
+    // (ft8_screen_view_show()) - saving the callsign/grid via the CQ modal
+    // while already sitting on the FT8 screen never re-triggers show(), so
+    // the highlight would otherwise stay dead until a mode bounce.
+    if (qs.my_callsign[0]) {
+        size_t ci;
+        for (ci = 0; ci < sizeof(s_my_call) - 1 && qs.my_callsign[ci]; ci++)
+            s_my_call[ci] = (qs.my_callsign[ci] >= 'a' && qs.my_callsign[ci] <= 'z')
+                           ? (char)(qs.my_callsign[ci] - 32) : qs.my_callsign[ci];
+        s_my_call[ci] = 0;
+    }
+    s_user_loc_valid = false;
+    if (qs.my_grid[0]) {
+        s_user_loc_valid = maidenhead_to_latlon(qs.my_grid, &s_user_lat, &s_user_lon);
+    }
+
     // While we're running our own CQ, hide other stations' CQ rows so replies
     // addressed to us aren't buried under unrelated CQ traffic. The "exclude
     // plain CQ" filter applies the same hide unconditionally.
@@ -1512,24 +1529,9 @@ void ft8_screen_view_show(void)
         lv_obj_move_foreground(s_ft8_freq_hit);
     }
 
-    {
-        qmx_settings_t s;
-        settings_load_all(&s);
-        if (s.my_callsign[0]) {
-            /* refresh callsign cache for row colour scheme */
-            size_t ci;
-            for (ci = 0; ci < sizeof(s_my_call) - 1 && s.my_callsign[ci]; ci++)
-                s_my_call[ci] = (s.my_callsign[ci] >= 'a' && s.my_callsign[ci] <= 'z')
-                               ? (char)(s.my_callsign[ci] - 32) : s.my_callsign[ci];
-            s_my_call[ci] = 0;
-        }
-        s_user_loc_valid = false;
-        if (s.my_grid[0]) {
-            s_user_loc_valid = maidenhead_to_latlon(s.my_grid,
-                                                    &s_user_lat,
-                                                    &s_user_lon);
-        }
-    }
+    // Own-call cache and grid-derived location are kept live in rebuild_list()
+    // (runs every refresh cycle off the same settings_load_all() call), not
+    // just here on screen entry - see the comment there for why.
     ESP_LOGI(TAG, "show");
 }
 
