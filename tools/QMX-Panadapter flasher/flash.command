@@ -114,17 +114,21 @@ fi
 # we hit the right one fast instead of waiting through long retries. Falls back
 # to esptool's own auto-detect if none of the usual device names are present.
 PORTS="$(ls /dev/cu.usbmodem* /dev/cu.usbserial* /dev/tty.usbmodem* /dev/ttyACM* /dev/ttyUSB* 2>/dev/null | sort)"
+# qmx_panadapter_merged_*.bin is a FULL chip image (esptool merge_bin,
+# bootloader@0x2000 + partition-table@0x8000 + app@0x10000, padded from
+# absolute 0x0) - write it at 0x0, NOT 0x10000 (which would shift
+# bootloader/partition-table bytes into the app region and corrupt it).
 RC=1
 if [ -n "${PORTS}" ]; then
     for P in ${PORTS}; do
         echo "  trying ${P} ..."
-        if "${ESPTOOL}" --chip esp32p4 -p "${P}" -b 460800 --connect-attempts 1 "${WRITE_FLASH}" ${ERASE_OPT} 0x10000 "${FW}"; then
+        if "${ESPTOOL}" --chip esp32p4 -p "${P}" -b 460800 --connect-attempts 1 "${WRITE_FLASH}" ${ERASE_OPT} 0x0 "${FW}"; then
             RC=0
             break
         fi
     done
 else
-    "${ESPTOOL}" --chip esp32p4 -b 460800 --connect-attempts 1 "${WRITE_FLASH}" ${ERASE_OPT} 0x10000 "${FW}"
+    "${ESPTOOL}" --chip esp32p4 -b 460800 --connect-attempts 1 "${WRITE_FLASH}" ${ERASE_OPT} 0x0 "${FW}"
     RC=$?
 fi
 

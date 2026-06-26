@@ -123,14 +123,18 @@ if defined PORTS (
     for %%P in (!PORTS!) do (
         if not "!RC!"=="0" (
             echo   trying %%P ...
-            rem --- CRITICAL: write to correct partition addresses ---
-            rem --- 0x10000 = app partition, NOT 0x0 (which would corrupt bootloader) ---
-            "%ESPTOOL%" --chip esp32p4 -p %%P -b 460800 --connect-attempts 1 !WRITE_FLASH! !ERASEOPT! 0x10000 "%FW%"
+            rem --- CRITICAL: qmx_panadapter_merged_*.bin is a FULL chip image ---
+            rem --- (esptool merge_bin, bootloader@0x2000 + partition-table@0x8000 ---
+            rem --- + app@0x10000, padded from absolute 0x0) - write it at 0x0, ---
+            rem --- NOT 0x10000 (which would shift bootloader/partition-table ---
+            rem --- bytes into the app region and corrupt it). See ---
+            rem --- feedback_merged_bin_offset_bug in memory for the incident. ---
+            "%ESPTOOL%" --chip esp32p4 -p %%P -b 460800 --connect-attempts 1 !WRITE_FLASH! !ERASEOPT! 0x0 "%FW%"
             if not errorlevel 1 set "RC=0"
         )
     )
 ) else (
-    "%ESPTOOL%" --chip esp32p4 -b 460800 --connect-attempts 1 !WRITE_FLASH! !ERASEOPT! 0x10000 "%FW%"
+    "%ESPTOOL%" --chip esp32p4 -b 460800 --connect-attempts 1 !WRITE_FLASH! !ERASEOPT! 0x0 "%FW%"
     if not errorlevel 1 set "RC=0"
 )
 
