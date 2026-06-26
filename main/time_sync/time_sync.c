@@ -2,6 +2,7 @@
 #include "rtc.h"
 #include "settings.h"
 #include "cat.h"
+#include "wifi/wifi.h"
 
 #include <string.h>
 #include <sys/time.h>
@@ -16,9 +17,9 @@ static const char *TAG = "time_sync";
 #define EPOCH_SANE_MIN  1700000000LL  // 2023-11-14
 #define EPOCH_SANE_MAX  2208988800LL  // 2040-01-01 — anything beyond is garbage
 
-// SNTP is considered "fresh" within this window. While fresh, QMX TM; time
-// is not applied to the system clock — SNTP is authoritative when WiFi is up.
-// Outside the window (no WiFi / POTA field use), QMX takes over as fallback.
+// Fallback freshness window, used only when WiFi is down (see the bug note
+// on time_sync_notify_qmx() below for why this can no longer be the primary
+// "is SNTP still good" signal).
 #define SNTP_FRESH_MS  (10LL * 60 * 1000)
 
 // Timestamps of the last accepted sync from each source; 0 = never.
@@ -120,35 +121,54 @@ void time_sync_notify_sntp(time_t utc)
 }
 
 // Priority 3: QMX TM; time-of-day — offline fallback only.
-// Applied to the system clock only when SNTP has not synced within SNTP_FRESH_MS.
-// Reconstructs full UTC from the best available date anchor (system clock, NVS, or
-// compile-time floor). Always tracks s_last_qmx_sync_ms for diagnostic purposes.
-void time_sync_notify_qmx(int h, int m, int s)
+//
+// BUG (found 2026-06-26, field report): this used to gate purely on "SNTP
+// synced within the last SNTP_FRESH_MS (10 min)" — but ESP-IDF's SNTP client
+// (ESP_NETIF_SNTP_DEFAULT_CONFIG) only re-fires its callback roughly once an
+// hour once synced, so s_last_sntp_sync_ms stops updating ~1 minute after
+// boot and "looks stale" to this 10-minute check for the rest of every hour,
+// even though the network clock is perfectly healthy and WiFi never
+// dropped. Every 5-minute periodic QMX poll after that point would then
+// silently overwrite the system clock with the QMX's free-running,
+// non-GPS-disciplined RTC — caught live mid-QSO as the FT8 slot clock
+// jumping ~2 s off after a "Time set from QMX" log line, despite WiFi
+// staying connected throughout.
+//
+// Fix: trust WiFi connectivity + "has SNTP ever synced" (wifi_is_connected()
+// + wifi_time_is_valid(), which never resets while the STA interface stays
+// up) as the primary "is SNTP still authoritative" signal, matching the
+// documented priority ("SNTP always wins when WiFi is up"). The time-window
+// check is now only a fallback for the case WiFi itself is reported up but
+// the bits haven't been observed yet (startup race).
+bool time_sync_notify_qmx(int h, int m, int s)
 {
     time_t anchor = get_date_anchor();
     int64_t day_start = ((int64_t)anchor / 86400) * 86400;
     time_t utc = (time_t)(day_start + h * 3600 + m * 60 + s);
 
     int64_t now_ms     = esp_timer_get_time() / 1000;
-    bool sntp_fresh    = s_last_sntp_sync_ms > 0 &&
-                         (now_ms - s_last_sntp_sync_ms) < SNTP_FRESH_MS;
+    bool wifi_sntp_ok  = wifi_is_connected() && wifi_time_is_valid();
+    bool sntp_fresh    = wifi_sntp_ok ||
+                         (s_last_sntp_sync_ms > 0 &&
+                          (now_ms - s_last_sntp_sync_ms) < SNTP_FRESH_MS);
 
     s_last_qmx_sync_ms = now_ms;
 
     if (sntp_fresh) {
         struct tm tm_utc;
         gmtime_r(&utc, &tm_utc);
-        ESP_LOGD(TAG, "QMX TM; %02d:%02d:%02d — SNTP fresh (%llds ago), skipping",
-                 h, m, s, (long long)(now_ms - s_last_sntp_sync_ms) / 1000);
-        return;
+        ESP_LOGD(TAG, "QMX TM; %02d:%02d:%02d — SNTP fresh (WiFi up=%d), skipping",
+                 h, m, s, (int)wifi_sntp_ok);
+        return false;
     }
 
     apply_and_persist(utc, "QMX");
     s_source = TIME_SOURCE_QMX;
+    return true;
 }
 
 // FT8-signal-derived correction. delta_ms > 0 means clock is fast.
-void time_sync_apply_correction_ms(int delta_ms)
+static time_t apply_ft8_correction(int delta_ms)
 {
     struct timeval tv;
     gettimeofday(&tv, NULL);
@@ -160,7 +180,18 @@ void time_sync_apply_correction_ms(int delta_ms)
     write_to_rtc_and_nvs(tv.tv_sec, "FT8");
     s_source = TIME_SOURCE_FT8;
     ESP_LOGI(TAG, "FT8 timing correction: %+d ms", delta_ms);
-    push_to_qmx(tv.tv_sec);
+    return tv.tv_sec;
+}
+
+void time_sync_apply_correction_ms(int delta_ms)
+{
+    time_t utc = apply_ft8_correction(delta_ms);
+    push_to_qmx(utc);
+}
+
+void time_sync_apply_correction_ms_quiet(int delta_ms)
+{
+    apply_ft8_correction(delta_ms);
 }
 
 // Priority 5 (last resort): manual entry from user (rare POTA offline use).

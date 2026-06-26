@@ -257,11 +257,19 @@ static bool wait_for_sntp(uint32_t timeout_ms)
 // (persisted to NVS). A stale date is harmless for FT8 slot alignment -
 // 86400 s/day is an exact multiple of 15, so unix_sec % 15 is unaffected
 // by a date that's off by whole days.
-static bool set_time_from_qmx_rtc(void)
+//
+// Returns true if the CAT query itself succeeded (so ft8_task knows it has
+// SOME working time source and can proceed) - NOT whether the clock was
+// actually set from QMX. *out_applied (if non-NULL) reports that separately:
+// time_sync_notify_qmx() silently skips the apply when SNTP is already
+// authoritative, so the caller's status message must check this rather than
+// assume "query succeeded" means "time came from QMX".
+static bool set_time_from_qmx_rtc(bool *out_applied)
 {
     int h, m, s;
     if (cat_query_qmx_time(&h, &m, &s) != ESP_OK) return false;
-    time_sync_notify_qmx(h, m, s);
+    bool applied = time_sync_notify_qmx(h, m, s);
+    if (out_applied) *out_applied = applied;
     return true;
 }
 
@@ -345,6 +353,37 @@ static float ft8_estimate_noise_db(const monitor_t *mon)
 // enough to cover normal propagation/clock jitter between genuine stations
 // while still rejecting a sync hit that landed on the wrong symbol entirely.
 #define FT8_TIMING_OUTLIER_MS 60.0f
+
+// Auto-apply the per-slot robust timing average to the system clock instead
+// of requiring the operator to open the time-sync modal and tap Apply. This
+// is deliberately the population average of everyone currently decoded, not
+// absolute UTC truth - which is the more useful target for actually working
+// people: if the active stations you're trying to copy are collectively
+// offset from true time by some amount, matching THEM gets you in sync with
+// who you need to communicate with, where matching GPS/NTP exactly would not.
+// SNTP still sets the whole-second/date baseline (rare resyncs, ~hourly); this
+// nudges the sub-second placement every slot while FT8 is actively decoding,
+// and naturally yields to a fresh SNTP/QMX sync whenever one of those fires.
+//
+// Two guards keep this from chasing noise on a quiet band: require at least
+// FT8_AUTOSYNC_MIN_SAMPLES surviving the outlier rejection (more candidates =
+// more confidence the average reflects the on-air population, not one or two
+// marginal decodes), and skip corrections under FT8_AUTOSYNC_MIN_MS (not
+// worth an RTC/NVS write for a correction smaller than the sync measurement's
+// own noise floor).
+#define FT8_AUTOSYNC_MIN_SAMPLES 3
+#define FT8_AUTOSYNC_MIN_MS      15
+
+// Loop-filter gain: apply only this fraction of each slot's raw measurement,
+// not the full value. A single slot's robust mean is still a noisy estimator
+// of the population's true offset (only a handful of candidates, each good to
+// only tens of ms of sync precision) - field data showed the undamped version
+// bouncing between roughly +200 and -300 ms slot to slot with no convergence,
+// i.e. chasing measurement noise rather than tracking real drift. Applying a
+// fraction each cycle averages that noise down over several slots (same idea
+// as an NTP/PLL loop filter) while a genuine sustained offset still gets
+// corrected, just over a few cycles instead of in one noisy jump.
+#define FT8_AUTOSYNC_GAIN 0.3f
 
 // Robust average of per-candidate timing samples: sorts a (small) working
 // copy, takes the median, then means only the samples within
@@ -586,6 +625,24 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
         s_last_timing_ms    = (int)roundf(robust_mean_timing_ms(timing_ms_arr, n_timing));
         s_last_timing_valid = true;
         s_timing_seq++;
+
+        // Auto-sync: nudge the system clock to the on-air population average
+        // every slot, not just when the operator opens the time-sync modal
+        // and taps Apply. See FT8_AUTOSYNC_MIN_SAMPLES/_MS above for why both
+        // guards exist.
+        if (n_timing >= FT8_AUTOSYNC_MIN_SAMPLES &&
+            abs(s_last_timing_ms) >= FT8_AUTOSYNC_MIN_MS) {
+            // Apply only a damped fraction of the raw measurement - see
+            // FT8_AUTOSYNC_GAIN above. _quiet: skips the QMX CAT push, which
+            // is a blocking, non-poll-task-routed CDC write - unsafe to call
+            // from this hot path (would race the CAT poll task and stall
+            // decode). The periodic 5-min QMX poll / manual modal Apply
+            // already cover keeping the QMX's own RTC in the ballpark.
+            int damped_ms = (int)roundf(s_last_timing_ms * FT8_AUTOSYNC_GAIN);
+            if (damped_ms != 0) {
+                time_sync_apply_correction_ms_quiet(damped_ms);
+            }
+        }
     }
 
     int dec_ms = (int)((esp_timer_get_time() - t_start) / 1000);
@@ -686,14 +743,22 @@ static void ft8_task(void *arg)
     ESP_LOGI(TAG, "waiting for CAT (QMX USB + Q9 1; handshake)...");
     wait_for_cat_ready();
 
-    // QMX GPS/RTC has priority over SNTP: try it first. On a QMX+ the RTC is
-    // GPS-disciplined and more accurate than NTP; on a plain QMX it holds the
-    // last NTP-synced time pushed by sntp_sync_cb. Either way it is a reliable
-    // source for FT8 slot alignment and works without WiFi (POTA).
+    // Query the QMX's RTC first so we have a working time source even with
+    // no WiFi (POTA). Whether it's actually USED is decided inside
+    // time_sync_notify_qmx() - SNTP wins whenever WiFi is up and has
+    // synced, since the QMX's onboard RTC is no more accurate than that and
+    // (on a plain, non-GPS QMX) drifts freely. Report whichever source is
+    // truly authoritative, not just "the CAT query worked".
     ft8_status_set("Getting time from QMX...");
-    if (set_time_from_qmx_rtc()) {
-        ft8_status_set("Time from QMX GPS/RTC");
-        ESP_LOGI(TAG, "time set from QMX RTC/GPS");
+    bool applied_from_qmx = false;
+    if (set_time_from_qmx_rtc(&applied_from_qmx)) {
+        if (applied_from_qmx) {
+            ft8_status_set("Time from QMX GPS/RTC");
+            ESP_LOGI(TAG, "time set from QMX RTC/GPS");
+        } else {
+            ft8_status_set("Time from SNTP (WiFi)");
+            ESP_LOGI(TAG, "QMX RTC query OK but SNTP already authoritative - kept SNTP time");
+        }
     } else {
         // QMX RTC unavailable (TM; not supported or no response) - fall back to SNTP.
         ft8_status_set("Waiting for SNTP sync...");

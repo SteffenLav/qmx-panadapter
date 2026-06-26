@@ -40,10 +40,16 @@ void time_sync_init(i2c_master_bus_handle_t bus);
 // in the last 5 minutes (so QMX GPS time, if active, is not overridden by SNTP).
 void time_sync_notify_sntp(time_t utc);
 
-// Priority 4 (or 1 when GPS-disciplined): called when a QMX TM; response is available.
-// Reconstructs full UTC from the best date anchor. Always updates system clock + RTC.
-// Records a timestamp so SNTP defers to QMX for the next 5 minutes.
-void time_sync_notify_qmx(int h, int m, int s);
+// Priority 3 (offline/POTA fallback only - see time_sync.c for the real,
+// current priority logic; this header's numbering predates it and is stale).
+// Called when a QMX TM; response is available. Reconstructs full UTC from
+// the best date anchor. Returns true and updates system clock + RTC only
+// when SNTP is not currently authoritative (WiFi down, or never synced);
+// returns false (no-op) when SNTP/WiFi is healthy, since SNTP wins per the
+// documented priority. Callers that show a status message should check the
+// return value rather than assuming the query succeeding means the clock
+// changed.
+bool time_sync_notify_qmx(int h, int m, int s);
 
 // Priority 5: manual override — full UTC date+time. For rare POTA sessions where
 // QMX has no GPS and WiFi is unavailable.
@@ -51,8 +57,20 @@ void time_sync_set_manual(int year, int mon, int mday, int h, int m, int s);
 
 // Apply a sub-second correction derived from FT8 signal timing.
 // delta_ms > 0: system clock is fast by that many ms (time is subtracted).
-// delta_ms < 0: system clock is slow (time is added). Writes through to RTC+NVS.
+// delta_ms < 0: system clock is slow (time is added). Writes through to RTC+NVS,
+// and pushes the corrected time to the QMX over CAT (cat_set_qmx_time - a
+// direct, blocking, non-poll-task-routed CDC write, up to 200 ms).
+// Call only from a context that can tolerate that stall (e.g. UI button
+// handlers) - NEVER from the FT8 decode task or any other hot path, where it
+// would both block the caller and race the CAT poll task's own CDC writes.
+// Use time_sync_apply_correction_ms_quiet() from hot paths instead.
 void time_sync_apply_correction_ms(int delta_ms);
+
+// Same as time_sync_apply_correction_ms(), but skips the QMX CAT push - safe
+// to call from the FT8 decode task for continuous per-slot auto-sync. Still
+// updates the system clock + Tab5 RTC + NVS (RTC is a separate I2C bus from
+// CAT/CDC, so that write doesn't carry the same hazard).
+void time_sync_apply_correction_ms_quiet(int delta_ms);
 
 // Mark the time source as FT8 without changing the clock value.
 void time_sync_mark_ft8(void);
