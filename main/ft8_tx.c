@@ -137,10 +137,10 @@ static int seconds_until_slot(time_t now, bool match_parity, bool want_even)
 //
 // Heap-allocated internally to avoid ~11 KB of stack pressure in the LVGL
 // event-handler context where this is called (cq_btn_cb).
-int ft8_find_clear_tone_hz(void)
+int ft8_find_clear_tone_hz_near(int center_hz)
 {
     ft8_call_t *calls = malloc(FT8_CALL_TABLE_SIZE * sizeof(ft8_call_t));
-    if (!calls) return FT8_TX_CQ_DEFAULT_FREQ_HZ;
+    if (!calls) return center_hz;
 
     int n = 0;
     ft8_screen_get_all(calls, FT8_CALL_TABLE_SIZE, &n);
@@ -162,30 +162,36 @@ int ft8_find_clear_tone_hz(void)
     }
     free(calls);
 
-    // Walk outward from the centre bin (1500 Hz = bin 26) for the nearest
-    // clear slot.  Prefer the lower bin when both equidistant (—r first).
-    const int centre = (FT8_TX_CQ_DEFAULT_FREQ_HZ - FT8_AUDIO_SCAN_MIN_HZ)
-                       / FT8_AUDIO_SLOT_HZ;   // = (1500-200)/50 = 26
+    // Walk outward from the centre bin for the nearest clear slot. Prefer the
+    // lower bin when both equidistant (-r first).
+    int centre = (center_hz - FT8_AUDIO_SCAN_MIN_HZ) / FT8_AUDIO_SLOT_HZ;
+    if (centre < 0) centre = 0;
+    if (centre >= n_slots) centre = n_slots - 1;
     for (int r = 0; r <= n_slots / 2; r++) {
         int b1 = centre - r;
         if (b1 >= 0 && b1 < n_slots && !(occupied & (1ULL << b1))) {
             int freq = FT8_AUDIO_SCAN_MIN_HZ + b1 * FT8_AUDIO_SLOT_HZ;
-            ESP_LOGI(TAG, "CQ scan: clear at %d Hz (r=%d, %d stations heard)", freq, r, n);
+            ESP_LOGI(TAG, "clear-tone scan: clear at %d Hz (r=%d, %d stations heard)", freq, r, n);
             return freq;
         }
         if (r > 0) {
             int b2 = centre + r;
             if (b2 < n_slots && !(occupied & (1ULL << b2))) {
                 int freq = FT8_AUDIO_SCAN_MIN_HZ + b2 * FT8_AUDIO_SLOT_HZ;
-                ESP_LOGI(TAG, "CQ scan: clear at %d Hz (r=%d, %d stations heard)", freq, r, n);
+                ESP_LOGI(TAG, "clear-tone scan: clear at %d Hz (r=%d, %d stations heard)", freq, r, n);
                 return freq;
             }
         }
     }
 
-    ESP_LOGW(TAG, "CQ scan: all %d slots occupied - using default %d Hz",
-             n_slots, FT8_TX_CQ_DEFAULT_FREQ_HZ);
-    return FT8_TX_CQ_DEFAULT_FREQ_HZ;
+    ESP_LOGW(TAG, "clear-tone scan: all %d slots occupied - staying at %d Hz",
+             n_slots, center_hz);
+    return center_hz;
+}
+
+int ft8_find_clear_tone_hz(void)
+{
+    return ft8_find_clear_tone_hz_near(FT8_TX_CQ_DEFAULT_FREQ_HZ);
 }
 
 bool ft8_tx_is_clashing(void)

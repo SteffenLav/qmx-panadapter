@@ -315,6 +315,35 @@ static bool send_next(ft8_tx_kind_t kind, const char *target, int freq,
     return true;
 }
 
+// Another station has drifted onto our locked CQ tone since we started
+// calling (ft8_tx_is_clashing() true). Re-scan for the nearest still-clear
+// 50 Hz slot and move there instead of just flagging "FREQ BUSY" and
+// continuing to transmit over whoever is legitimately there. Only called
+// from the CQ no-answer path - never mid-exchange, where the partner is
+// tracking our specific tone.
+static void relocate_cq_tone_if_clashing(void)
+{
+    if (!ft8_tx_is_clashing()) return;
+
+    lock();
+    int old_freq = s_freq_hz;
+    unlock();
+
+    int new_freq = ft8_find_clear_tone_hz_near(old_freq);
+    if (new_freq == old_freq) return;   // band fully packed - nowhere clearer to go
+
+    lock();
+    s_freq_hz               = new_freq;
+    s_cur_req.audio_freq_hz = new_freq;
+    s_cq_saved.audio_freq_hz = new_freq;   // so a later QSO-timeout resume-CQ keeps the new tone
+    unlock();
+
+    ft8_tx_disarm();   // cancel the stale-frequency ARMED request
+    arm_current_if_idle();
+    ft8_status_set("CQ: moved off busy tone -> %d Hz", new_freq);
+    ESP_LOGI(TAG, "CQ tone clash at %d Hz - relocated to %d Hz", old_freq, new_freq);
+}
+
 // No progress this RX slot. Count it; on the Nth, give up on this station -
 // resume CQ if we were running CQ, else go to sticky TIMEOUT.
 static void register_miss(const char *waiting_for)
@@ -581,7 +610,11 @@ void ft8_qso_advance(int64_t slot_sec)
             ft8_tx_disarm();   // cancel the re-armed CQ (no-op if already ACTIVE)
             cqrun_answer(caller, caller_freq, caller_snr, slot_sec, got_rr73, got_73);
         } else {
-            // No answer - on_tx_complete keeps the CQ armed; idle fallback only.
+            // No answer - check whether someone has drifted onto our tone
+            // since we started calling, and move off it if so. Otherwise
+            // on_tx_complete keeps the CQ armed at the same tone; idle
+            // fallback only.
+            relocate_cq_tone_if_clashing();
             arm_current_if_idle();
         }
         return;

@@ -154,6 +154,13 @@ float ft8_tx_get_last_power_swr(float *power_w, float *swr);
 // Heap-allocates a temporary snapshot buffer; returns the default on OOM.
 int ft8_find_clear_tone_hz(void);
 
+// Same scan as ft8_find_clear_tone_hz(), but centred on an arbitrary
+// audio frequency instead of the fixed 1500 Hz CQ default - used to hop a
+// CQ that's been clashed onto its original tone to the nearest still-clear
+// slot, minimizing how far it moves. Returns center_hz unchanged when the
+// table is empty, on OOM, or when every bin is occupied.
+int ft8_find_clear_tone_hz_near(int center_hz);
+
 // Returns true if the currently ARMED or ACTIVE request's tone frequency
 // clashes with another heard station's bin (±1 guard slot).
 // For a REPLY request, the intended target station is excluded from the check
