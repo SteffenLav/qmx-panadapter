@@ -44,14 +44,54 @@ echo   3. Close any serial monitor or other USB programs
 echo.
 pause
 
+rem Try COM ports low-number-first (the Tab5 is usually on a low COM number),
+rem one quick connect attempt each, so we hit the right port fast instead of
+rem a hardcoded COM3 that may not match this PC. Falls back to esptool's own
+rem auto-detect if no ports could be listed. Same approach as the main
+rem flash.bat - recovery is exactly the moment you most need this to "just
+rem work", since the user already had something go wrong once.
+set "PORTS="
+set "PLIST=%TEMP%\qmx_recovery_ports_%RANDOM%.txt"
+powershell -NoProfile -Command "[System.IO.Ports.SerialPort]::GetPortNames() | Sort-Object Length,{ $_ } | Set-Content -Encoding ascii -LiteralPath '%PLIST%'"
+if exist "%PLIST%" (
+    for /f "usebackq delims=" %%P in ("%PLIST%") do set "PORTS=!PORTS! %%P"
+    del "%PLIST%" >nul 2>nul
+)
+
+rem Detect esptool version: v5+ uses hyphenated subcommands (write-flash,
+rem erase-flash); older uses underscores. See feedback_esptool_write_flash_hyphen.
+set "WRITE_FLASH=write_flash"
+set "ERASE_FLASH=erase_flash"
+"%ESPTOOL%" version 2>&1 | findstr /r "v[5-9]\." >nul 2>nul
+if not errorlevel 1 (
+    set "WRITE_FLASH=write-flash"
+    set "ERASE_FLASH=erase-flash"
+)
+
 echo.
 echo ============================================================
 echo  STEP 1: FULL CHIP ERASE
 echo ============================================================
 echo.
-"%ESPTOOL%" --chip esp32p4 -p COM3 -b 460800 erase_flash
-if errorlevel 1 (
-    echo ERROR: Erase failed. Check USB connection.
+
+set "RC=1"
+if defined PORTS (
+    for %%P in (!PORTS!) do (
+        if not "!RC!"=="0" (
+            echo   trying %%P ...
+            "%ESPTOOL%" --chip esp32p4 -p %%P -b 460800 --connect-attempts 1 !ERASE_FLASH!
+            if not errorlevel 1 set "RC=0"
+        )
+    )
+) else (
+    "%ESPTOOL%" --chip esp32p4 -b 460800 --connect-attempts 1 !ERASE_FLASH!
+    if not errorlevel 1 set "RC=0"
+)
+
+if not "!RC!"=="0" (
+    echo ERROR: Erase failed on every detected COM port. Check USB connection
+    echo ^(must be a DATA cable, not charge-only^) and that no other program
+    echo ^(serial monitor, etc.^) is using the port.
     pause
     goto :end
 )
@@ -81,14 +121,30 @@ if not exist "%BOOTLOADER%" (
 echo Flashing with correct bootloader layout...
 echo.
 
-"%ESPTOOL%" --chip esp32p4 -p COM3 -b 460800 ^
-  write_flash ^
-  0x2000 "%BOOTLOADER%" ^
-  0x10000 "%APP_BIN%" ^
-  0x8000 "%PARTITION%"
+set "RC=1"
+if defined PORTS (
+    for %%P in (!PORTS!) do (
+        if not "!RC!"=="0" (
+            echo   trying %%P ...
+            "%ESPTOOL%" --chip esp32p4 -p %%P -b 460800 --connect-attempts 1 ^
+              !WRITE_FLASH! ^
+              0x2000 "%BOOTLOADER%" ^
+              0x10000 "%APP_BIN%" ^
+              0x8000 "%PARTITION%"
+            if not errorlevel 1 set "RC=0"
+        )
+    )
+) else (
+    "%ESPTOOL%" --chip esp32p4 -b 460800 --connect-attempts 1 ^
+      !WRITE_FLASH! ^
+      0x2000 "%BOOTLOADER%" ^
+      0x10000 "%APP_BIN%" ^
+      0x8000 "%PARTITION%"
+    if not errorlevel 1 set "RC=0"
+)
 
-if errorlevel 1 (
-    echo ERROR: Flash failed
+if not "!RC!"=="0" (
+    echo ERROR: Flash failed on every detected COM port.
     pause
     goto :end
 )

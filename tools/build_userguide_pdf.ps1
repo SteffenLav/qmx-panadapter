@@ -44,11 +44,25 @@ foreach ($tool in @("pandoc", "pdftotext")) {
 
 $edge = Get-Command msedge -ErrorAction SilentlyContinue
 if (-not $edge) {
+    # The classic "Edge\Application\msedge.exe" path can be a stale stub on
+    # machines where Edge migrated to per-channel install folders (seen on
+    # this dev box: real binary under "EdgeCore\<version>\msedge.exe", with
+    # only pwahelper.exe left at the old path) - glob a few more patterns,
+    # newest version first, rather than relying on one fixed legacy path.
     $candidates = @(
         "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
         "C:\Program Files\Microsoft\Edge\Application\msedge.exe"
     )
     $found = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $found) {
+        $found = Get-ChildItem -Path @(
+            "C:\Program Files (x86)\Microsoft\EdgeCore",
+            "C:\Program Files\Microsoft\EdgeCore",
+            "C:\Program Files (x86)\Microsoft\Edge\Application",
+            "C:\Program Files\Microsoft\Edge\Application"
+        ) -Filter "msedge.exe" -Recurse -ErrorAction SilentlyContinue |
+            Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
+    }
     if (-not $found) { Write-Error "Microsoft Edge not found on this machine." }
     $edgePath = $found
 } else {

@@ -1,5 +1,7 @@
 #!/bin/bash
-set -e
+# NOTE: deliberately no "set -e" - the port-retry loop below expects
+# individual esptool attempts to fail (wrong port) without killing the whole
+# script before it gets to try the next one or print the proper error.
 
 clear
 cat << 'EOF'
@@ -63,16 +65,48 @@ echo "  3. Close any serial monitor programs"
 echo ""
 read -p "Press Enter when ready..." dummy
 
+# Detect esptool version: v5+ uses hyphenated subcommands (write-flash,
+# erase-flash); older uses underscores. See feedback_esptool_write_flash_hyphen.
+if "$ESPTOOL" version 2>/dev/null | grep -qE 'v[5-9]\.'; then
+    WRITE_FLASH="write-flash"
+    ERASE_FLASH="erase-flash"
+else
+    WRITE_FLASH="write_flash"
+    ERASE_FLASH="erase_flash"
+fi
+
+# Try the likely USB-serial devices first, one quick connect attempt each -
+# /dev/cu.usbserial-* alone was wrong for this hardware (the Tab5's
+# ESP32-P4 USB-Serial/JTAG typically enumerates as usbmodem, not usbserial,
+# on macOS). Falls back to esptool's own auto-detect if none match.
+PORTS="$(ls /dev/cu.usbmodem* /dev/cu.usbserial* /dev/tty.usbmodem* /dev/ttyACM* /dev/ttyUSB* 2>/dev/null | sort)"
+
 echo ""
 echo "════════════════════════════════════════════════════════════════"
 echo " STEP 1: FULL CHIP ERASE"
 echo "════════════════════════════════════════════════════════════════"
 echo ""
 
-python3 "$ESPTOOL" --chip esp32p4 -p /dev/cu.usbserial-* -b 460800 erase_flash || {
-    echo "ERROR: Erase failed. Check USB connection."
+RC=1
+if [ -n "${PORTS}" ]; then
+    for P in ${PORTS}; do
+        echo "  trying ${P} ..."
+        if "$ESPTOOL" --chip esp32p4 -p "${P}" -b 460800 --connect-attempts 1 "${ERASE_FLASH}"; then
+            RC=0
+            break
+        fi
+    done
+else
+    "$ESPTOOL" --chip esp32p4 -b 460800 --connect-attempts 1 "${ERASE_FLASH}"
+    RC=$?
+fi
+
+if [ "${RC}" -ne 0 ]; then
+    echo "ERROR: Erase failed on every detected port. Check USB connection"
+    echo "(must be a DATA cable, not charge-only) and that no other program"
+    echo "(serial monitor, etc.) is using the port."
     exit 1
-}
+fi
 
 echo ""
 echo "════════════════════════════════════════════════════════════════"
@@ -80,14 +114,30 @@ echo " STEP 2: FLASHING BOOTLOADER + PARTITION TABLE + APP"
 echo "════════════════════════════════════════════════════════════════"
 echo ""
 
-python3 "$ESPTOOL" --chip esp32p4 -p /dev/cu.usbserial-* -b 460800 \
-    write_flash \
-    0x2000 "$SCRIPT_DIR/bootloader.bin" \
-    0x10000 "$SCRIPT_DIR/qmx_panadapter_merged_v0.18.5-hotfix.bin" \
-    0x8000 "$SCRIPT_DIR/partition-table.bin"
+RC=1
+if [ -n "${PORTS}" ]; then
+    for P in ${PORTS}; do
+        echo "  trying ${P} ..."
+        if "$ESPTOOL" --chip esp32p4 -p "${P}" -b 460800 --connect-attempts 1 \
+            "${WRITE_FLASH}" \
+            0x2000 "$SCRIPT_DIR/bootloader.bin" \
+            0x10000 "$SCRIPT_DIR/qmx_panadapter_merged_v0.18.5-hotfix.bin" \
+            0x8000 "$SCRIPT_DIR/partition-table.bin"; then
+            RC=0
+            break
+        fi
+    done
+else
+    "$ESPTOOL" --chip esp32p4 -b 460800 --connect-attempts 1 \
+        "${WRITE_FLASH}" \
+        0x2000 "$SCRIPT_DIR/bootloader.bin" \
+        0x10000 "$SCRIPT_DIR/qmx_panadapter_merged_v0.18.5-hotfix.bin" \
+        0x8000 "$SCRIPT_DIR/partition-table.bin"
+    RC=$?
+fi
 
-if [ $? -ne 0 ]; then
-    echo "ERROR: Flash failed"
+if [ "${RC}" -ne 0 ]; then
+    echo "ERROR: Flash failed on every detected port"
     exit 1
 fi
 

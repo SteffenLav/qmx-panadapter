@@ -10,9 +10,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Beta — v0.18.5.** FT8 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
+> **Beta — v0.18.7.** FT8 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v0.18.5.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v0.18.7.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -346,7 +346,7 @@ Three things you can do with it:
   "qso_count":   12,
   "qrz_key_set": false,
   "eqsl_creds_set": false,
-  "tab5_fw":     "v0.18.5",
+  "tab5_fw":     "v0.18.7",
   "qmx_fw":      "1_03_002QMX"
 }
 ```
@@ -475,7 +475,7 @@ The left pane shows a persistent status line below the slot countdown:
 |--------|---------|
 | **Red** | `TRANSMITTING: <message>` — burst in progress; tap to abort |
 | **Amber** | `TX armed: <message> → EVEN/ODD, ~Ns` — waiting for slot; tap to cancel |
-| **Red-orange ⚠ FREQ BUSY** | Armed tone is occupied (±50 Hz guard) — retune to a clear slot |
+| **Red-orange ⚠ FREQ BUSY** | Armed tone is occupied (±50 Hz guard). During CQ-run this self-heals — the next cycle automatically hops to the nearest clear tone. Mid-exchange (replying to a specific station) the tone is locked to match them, so it just rides out until the exchange ends |
 | **Green** | QSO complete |
 | **Orange** | QSO timed out — tap to clear |
 | **Dim white** | FT8 engine status passthrough (capturing / decoding / symbol count / …) |
@@ -539,10 +539,10 @@ The Tab5 needs accurate UTC for FT8 slot timing. Sources in priority order (high
 
 | Source | When applied |
 |--------|-------------|
-| **SNTP (WiFi)** | Always authoritative when WiFi is up — sets system clock, Tab5 RTC, and NVS |
+| **SNTP (WiFi)** | Always authoritative whenever WiFi is connected and has synced at least once — sets system clock, Tab5 RTC, and NVS |
 | **Tab5 RTC** | RX8130CE supercap-backed (~30–40 h retention) — applied at boot before QMX or WiFi are available |
-| **QMX `TM;`** | Applied only when SNTP has not synced within the last 10 minutes (field/POTA with no WiFi) |
-| **FT8 signal timing** | Sub-second correction from decoded signal phase — applied via the **Sync Time** modal (see below) |
+| **QMX `TM;`** | Offline fallback only — applied when WiFi is down or has never synced (field/POTA with no WiFi) |
+| **FT8 signal timing** | Sub-second correction from the decoded signal population's average timing, auto-applied continuously every slot while FT8 is decoding (damped, so a noisy single slot can't yank the clock) — deliberately tracks who you're actually trying to work, not absolute GPS/NTP truth. A manual one-shot version is also available via the **Sync Time** modal (see below) |
 | **Manual** | Full HH:MM override in the **Sync Time** modal — for rare POTA sessions with neither WiFi nor QMX clock |
 
 Each accepted sync writes through to the RX8130CE so the clock persists across power-off. The Tab5 also polls `TM;` every 5 minutes in the background to catch QMX GPS lock events.
@@ -625,7 +625,7 @@ I (xxxx) bsp_info: panel:    ST7123 (inferred from touch)
 I (xxxx) bsp_info: touch:    ST7123 @ 0x55
 I (xxxx) bsp_info: heap:     230.5 kB internal free, 28.80 MB PSRAM free
 I (xxxx) bsp_info: idf:      v5.4.4
-I (xxxx) bsp_info: firmware: v0.18.5
+I (xxxx) bsp_info: firmware: v0.18.7
 I (xxxx) bsp_info: =====================
 ```
 
