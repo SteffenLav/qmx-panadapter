@@ -403,6 +403,21 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
         if (err) snprintf(err, err_len, "No target callsign");
         return false;
     }
+
+    // Refuse to clobber an exchange already in progress (CQ loop or any WAIT_*
+    // state) - a tap on a different row used to silently overwrite s_target /
+    // s_cur_req out from under the active exchange, leaving a stale message
+    // (e.g. their grid re-armed with a bogus "R" prefix mid-exchange). The
+    // operator must finish or ft8_qso_abort() the current one first.
+    char busy_target[FT8_CALL_MAX_LEN];
+    if (ft8_qso_is_busy(busy_target, sizeof(busy_target))) {
+        if (err) {
+            if (busy_target[0]) snprintf(err, err_len, "Busy: working %s", busy_target);
+            else                snprintf(err, err_len, "Busy: calling CQ");
+        }
+        return false;
+    }
+
     if (!load_my_call(err, err_len)) return false;
 
     char arm_err[64];
@@ -551,8 +566,31 @@ void ft8_qso_advance(int64_t slot_sec)
     if (st == FT8_QSO_IDLE || st == FT8_QSO_TIMEOUT) return;
 
     if (st == FT8_QSO_DONE) {
-        lock(); s_state = FT8_QSO_IDLE; s_have_cur = false; unlock();
-        ft8_status_set("Idle");
+        // A CQ-run QSO resumes calling CQ on the same tone instead of going
+        // idle - same as the QSO_TIMEOUT_SLOTS give-up path in register_miss(),
+        // just on the success side. Saves the operator from re-tapping Call CQ
+        // after every single contact during an activation.
+        lock();
+        bool resume = s_from_cq && s_have_cq_saved;
+        ft8_tx_request_t cq_req = s_cq_saved;
+        if (resume) {
+            s_cur_req      = cq_req;
+            s_have_cur     = true;
+            s_state        = FT8_QSO_CQ;
+            s_target[0]    = '\0';
+            s_missed_slots = 0;
+        } else {
+            s_state    = FT8_QSO_IDLE;
+            s_have_cur = false;
+        }
+        unlock();
+        if (resume) {
+            arm_current_if_idle();
+            ft8_status_set("CQ: calling - listening for answers");
+            ESP_LOGI(TAG, "QSO done - resuming CQ @ %d Hz", cq_req.audio_freq_hz);
+        } else {
+            ft8_status_set("Idle");
+        }
         return;
     }
 
@@ -800,6 +838,18 @@ void ft8_qso_get_target(char *buf, size_t len)
     strncpy(buf, s_target, len - 1);
     buf[len - 1] = '\0';
     unlock();
+}
+
+bool ft8_qso_is_busy(char *target_buf, size_t len)
+{
+    lock();
+    ft8_qso_state_t st = s_state;
+    if (target_buf && len) {
+        strncpy(target_buf, s_target, len - 1);
+        target_buf[len - 1] = '\0';
+    }
+    unlock();
+    return st != FT8_QSO_IDLE && st != FT8_QSO_DONE && st != FT8_QSO_TIMEOUT;
 }
 
 void ft8_qso_get_cur_extra(char *buf, size_t len)

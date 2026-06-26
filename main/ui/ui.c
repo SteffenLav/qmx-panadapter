@@ -10,6 +10,7 @@
 #include <strings.h>
 #include <math.h>
 #include <inttypes.h>
+#include <sys/time.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -29,6 +30,7 @@
 #include "diag_log.h"
 #include "ui_mode.h"
 #include "ui_clock.h"
+#include "time_sync.h"
 #include "ft8_screen.h"
 #include "ft8_screen_view.h"
 #include "ft8_test.h"
@@ -1095,6 +1097,7 @@ static uint32_t s_passband_width_hz = 0;  // Phase 5.10G: 0 = use mode default; 
 static uint16_t s_cw_pitch_hz = 700;  // CW sidetone offset (Hz); applied to touch-tune in CW modes
 static bool s_snap_to_peak = true;    // tap-to-tune snaps to strongest nearby signal (NVS-backed)
 static bool s_distance_in_miles = false;  // FT8 distance unit toggle (NVS-backed)
+static bool s_ft8_sync_lines = false;  // Panadapter: FT8-sync-vs-SNTP waterfall lines + 3x speed (NVS-backed)
 
 // ---- Sticky per-mode settings (v0.16.0) --------------------------------
 // Snapshot of freq/mode/passband/zoom taken on leaving a mode, restored
@@ -1314,7 +1317,8 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_SNAP       15
 #define DRAWER_SEC_BPREGION   16
 #define DRAWER_SEC_DISTANCE   17  // FT8 distance unit (km/miles) - kept visible in FT8 mode
-#define N_DRAWER_SECTIONS     18
+#define DRAWER_SEC_FT8SYNC    18  // panadapter-only: FT8 sync lines + 3x waterfall (diagnostic)
+#define N_DRAWER_SECTIONS     19
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 // Phase 5.10D Stage 2b: drawer widgets we need to keep handles to
@@ -1336,6 +1340,7 @@ static lv_obj_t *s_lbl_brightness = NULL;
 static lv_obj_t *s_check_flip = NULL;  // 180-degree display flip checkbox
 static lv_obj_t *s_check_snap = NULL;  // snap-to-peak tap-to-tune checkbox
 static lv_obj_t *s_check_distance_miles = NULL;  // FT8 distance unit (km/miles) checkbox
+static lv_obj_t *s_check_ft8_sync_lines = NULL;  // FT8 sync lines (3x waterfall) checkbox
 static lv_obj_t *s_check_cwaudio = NULL;
 static lv_obj_t *s_slider_cwaudio_vol = NULL;
 static int       s_cwaudio_lock_vol = 0;   // value the (disabled) CW-audio slider snaps back to
@@ -3205,6 +3210,60 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row)
                          s_wf_canvas_buf + s_wf_head * row_bytes,
                          DISPLAY_H_RES, WATERFALL_H, LV_COLOR_FORMAT_RGB565);
 
+    // FT8-sync-vs-SNTP-only slot-boundary overlay - panadapter-mode-only
+    // diagnostic, gated on the "FT8 sync lines" drawer checkbox
+    // (s_ft8_sync_lines). FT8 source = current system clock directly
+    // (apply_ft8_correction nudges it in place); SNTP-only = current clock
+    // + the cumulative FT8 offset removed, reconstructing what SNTP/QMX
+    // alone would say. Both lines freeze at their last value while FT8
+    // isn't actively decoding (ft8_task only runs in FT8 mode), which is
+    // expected - this compares the two clocks' phase, not live nudging.
+    //
+    // Edge-triggered on the 15 s slot INDEX (now_ms/15000), not a narrow
+    // "phase < tick period" window - the latter could miss a slot entirely
+    // if a render tick was ever delayed past the window by scheduling
+    // jitter, which looked like the line "disappearing" before reaching
+    // the bottom of the waterfall (it just never got drawn that slot, on
+    // an earlier version of this code). Tracking the slot index instead
+    // guarantees exactly one draw per slot, every slot, no matter how late
+    // the tick lands relative to the boundary.
+    if (ui_mode_get() == UI_MODE_PANADAPTER && s_ft8_sync_lines) {
+        static int64_t s_last_ft8_slot  = -1;
+        static int64_t s_last_sntp_slot = -1;
+        struct timeval tv_now;
+        gettimeofday(&tv_now, NULL);
+        int64_t now_ms  = (int64_t)tv_now.tv_sec * 1000 + tv_now.tv_usec / 1000;
+        int64_t sntp_ms = now_ms + time_sync_get_ft8_offset_ms();
+        int64_t ft8_slot  = now_ms  / 15000;
+        int64_t sntp_slot = sntp_ms / 15000;
+        bool ft8_hit  = (ft8_slot  != s_last_ft8_slot);
+        bool sntp_hit = (sntp_slot != s_last_sntp_slot);
+        s_last_ft8_slot  = ft8_slot;
+        s_last_sntp_slot = sntp_slot;
+        if (ft8_hit || sntp_hit) {
+            // Must write BOTH mirrored copies (head and head+WATERFALL_H) -
+            // the view window crosses from one to the other partway through
+            // this row's scroll life (that's the whole point of the
+            // double-buffer trick), and a row only written into one copy
+            // would vanish at that crossing point instead of riding all the
+            // way to the bottom. This was the actual cause of "lines
+            // disappear randomly" - not a timing/jitter issue at all.
+            uint16_t *row0a = (uint16_t *)(s_wf_canvas_buf + s_wf_head * row_bytes);
+            uint16_t *row0b = (uint16_t *)(s_wf_canvas_buf + (s_wf_head + WATERFALL_H) * row_bytes);
+            const uint16_t magenta = 0xF81F;
+            const uint16_t white   = 0xFFFF;
+            // Both can land on the same tick when well-synced - interleave
+            // pixels rather than letting one silently overwrite the other.
+            for (int x = 0; x < DISPLAY_H_RES; x++) {
+                uint16_t c = (ft8_hit && sntp_hit) ? ((x & 1) ? white : magenta)
+                           : ft8_hit               ? magenta
+                                                    : white;
+                row0a[x] = c;
+                row0b[x] = c;
+            }
+        }
+    }
+
     // Overlay cyan cursor on the newest waterfall row only.
     // Drawing on all rows would permanently burn cyan into old rows.
     // NEVER draw during pan mode (s_stroll_active)
@@ -3734,6 +3793,15 @@ static void drawer_check_distance_miles_cb(lv_event_t *e)
     s_distance_in_miles = lv_obj_has_state(cb, LV_STATE_CHECKED);
     settings_set_distance_in_miles(s_distance_in_miles);
     ESP_LOGI(TAG, "FT8 distance unit: %s", s_distance_in_miles ? "miles" : "km");
+}
+
+static void drawer_check_ft8_sync_lines_cb(lv_event_t *e)
+{
+    lv_obj_t *cb = lv_event_get_target(e);
+    s_ft8_sync_lines = lv_obj_has_state(cb, LV_STATE_CHECKED);
+    settings_set_ft8_sync_lines(s_ft8_sync_lines);
+    render_set_waterfall_2x(s_ft8_sync_lines);
+    ESP_LOGI(TAG, "FT8 sync lines: %s", s_ft8_sync_lines ? "on (3x waterfall)" : "off");
 }
 
 // Create a transparent, full-width, non-scrollable container for one
@@ -4372,6 +4440,27 @@ static void drawer_build(void)
         lv_obj_add_event_cb(s_dropdown_wf_window, drawer_dropdown_wf_window_cb, LV_EVENT_VALUE_CHANGED, NULL);
         lv_obj_add_event_cb(s_dropdown_wf_window, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
         y += 384;
+    }
+
+    // Diagnostic: FT8-sync-vs-SNTP waterfall slot-boundary lines (magenta =
+    // FT8-derived clock, white = SNTP/QMX-only clock with the FT8 nudges
+    // subtracted back out) + 3x waterfall scroll speed while watching them.
+    // Panadapter-only - not added to drawer_set_ft8_mode's keep[] list, so
+    // it auto-hides in FT8 mode like any other panadapter-only section.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_FT8SYNC, y, 56);
+        lv_obj_t *sync_lbl = lv_label_create(sec);
+        lv_label_set_text(sync_lbl, "FT8 sync lines (3x WF)");
+        lv_obj_set_style_text_color(sync_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(sync_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(sync_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
+        qmx_settings_t scfg_sync;
+        settings_load_all(&scfg_sync);
+        s_ft8_sync_lines = scfg_sync.ft8_sync_lines;
+        render_set_waterfall_2x(s_ft8_sync_lines);
+        s_check_ft8_sync_lines = make_drawer_checkbox(sec, s_ft8_sync_lines, drawer_check_ft8_sync_lines_cb, NULL);
+        lv_obj_align(s_check_ft8_sync_lines, LV_ALIGN_TOP_RIGHT, 0, 6);
+        y += 56;
     }
 
     ESP_LOGI(TAG, "Settings drawer built (off-screen at x=%d)", DISPLAY_H_RES);

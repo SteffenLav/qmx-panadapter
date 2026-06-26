@@ -27,7 +27,17 @@ static int64_t           s_last_qmx_sync_ms  = 0;
 static int64_t           s_last_sntp_sync_ms = 0;
 static time_sync_source_t s_source           = TIME_SOURCE_NONE;
 
+// Sum of every FT8-derived nudge (time_sync_apply_correction_ms*) applied
+// since the last hard sync (SNTP/QMX/manual/RTC), in ms, sign-matched to
+// apply_ft8_correction's delta_ms convention (positive = clock was fast,
+// time subtracted). Lets a caller reconstruct "what would the clock read
+// right now if FT8 had never nudged it" as current_time + this offset -
+// used only for the panadapter waterfall's FT8-vs-SNTP slot-line overlay
+// (debug/visualization, not used for any sync decision).
+static int64_t           s_ft8_cum_offset_ms = 0;
+
 time_sync_source_t time_sync_get_source(void) { return s_source; }
+int64_t time_sync_get_ft8_offset_ms(void) { return s_ft8_cum_offset_ms; }
 
 static bool epoch_is_sane(int64_t t)
 {
@@ -102,6 +112,7 @@ static void apply_and_persist(time_t utc, const char *source)
     struct timeval tv = { .tv_sec = utc, .tv_usec = 0 };
     settimeofday(&tv, NULL);
     write_to_rtc_and_nvs(utc, source);
+    s_ft8_cum_offset_ms = 0;  // hard sync: any prior FT8 nudge is now baked in
 
     struct tm tm_utc;
     gmtime_r(&utc, &tm_utc);
@@ -179,6 +190,7 @@ static time_t apply_ft8_correction(int delta_ms)
     settimeofday(&tv, NULL);
     write_to_rtc_and_nvs(tv.tv_sec, "FT8");
     s_source = TIME_SOURCE_FT8;
+    s_ft8_cum_offset_ms += delta_ms;
     ESP_LOGI(TAG, "FT8 timing correction: %+d ms", delta_ms);
     return tv.tv_sec;
 }

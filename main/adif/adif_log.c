@@ -88,8 +88,8 @@ static void cache_add(const char *call, const char *band)
 // Extract an ADIF field value (<FIELD:len>value) from a single record line.
 // Returns false if the field is absent or doesn't fit. The "<FIELD:" tag is
 // '<'-anchored, so "CALL" never matches inside "MY_CALL", etc.
-static bool adif_extract_field(const char *line, const char *field,
-                               char *out, size_t out_sz)
+bool adif_log_extract_field(const char *line, const char *field,
+                            char *out, size_t out_sz)
 {
     char tag[24];
     int  tl = snprintf(tag, sizeof(tag), "<%s:", field);
@@ -120,8 +120,8 @@ static void load_from_file(void)
         if (!strstr(line, "<EOR>")) continue;
         count++;
         char call[ADIF_CALL_MAX], band[ADIF_BAND_MAX];
-        if (adif_extract_field(line, "CALL", call, sizeof(call))) {
-            if (!adif_extract_field(line, "BAND", band, sizeof(band))) band[0] = '\0';
+        if (adif_log_extract_field(line, "CALL", call, sizeof(call))) {
+            if (!adif_log_extract_field(line, "BAND", band, sizeof(band))) band[0] = '\0';
             cache_add(call, band);
         }
     }

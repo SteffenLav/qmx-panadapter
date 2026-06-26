@@ -56,6 +56,7 @@ static const char *TAG = "settings";
 #define KEY_SNAP_PEAK    "snap_peak"
 #define KEY_BP_REGION    "bp_region"
 #define KEY_DISTANCE_MILES "dist_miles"
+#define KEY_FT8_SYNC_LINES "ft8_sync_ln"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -123,6 +124,7 @@ static const char *TAG = "settings";
 #define DIRTY_SNAP_PEAK     (1ull << 39)
 #define DIRTY_BP_REGION     (1ull << 40)
 #define DIRTY_DISTANCE_MILES (1ull << 41)
+#define DIRTY_FT8_SYNC_LINES (1ull << 42)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -240,6 +242,7 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_SNAP_PEAK)   nvs_set_u8(s_nvs, KEY_SNAP_PEAK, snap.snap_to_peak ? 1 : 0);
         if (dirty_local & DIRTY_BP_REGION)   nvs_set_u8(s_nvs, KEY_BP_REGION, snap.bandplan_region);
         if (dirty_local & DIRTY_DISTANCE_MILES) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap.distance_in_miles ? 1 : 0);
+        if (dirty_local & DIRTY_FT8_SYNC_LINES) nvs_set_u8(s_nvs, KEY_FT8_SYNC_LINES, snap.ft8_sync_lines ? 1 : 0);
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
@@ -408,6 +411,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_SNAP_PEAK, &u8v) == ESP_OK) out->snap_to_peak = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_BP_REGION, &u8v) == ESP_OK) out->bandplan_region = (u8v <= 3) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_DISTANCE_MILES, &u8v) == ESP_OK) out->distance_in_miles = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_FT8_SYNC_LINES, &u8v) == ESP_OK) out->ft8_sync_lines = (u8v != 0);
 
     sz = sizeof(out->ft8_filters);
     nvs_get_blob(s_nvs, KEY_FT8_FILT, &out->ft8_filters, &sz);
@@ -898,6 +902,16 @@ void settings_set_distance_in_miles(bool v)
     s_pending.distance_in_miles = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_DISTANCE_MILES);
+}
+
+void settings_set_ft8_sync_lines(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.ft8_sync_lines == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.ft8_sync_lines = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_FT8_SYNC_LINES);
 }
 
 void settings_set_bandplan_region(uint8_t v)

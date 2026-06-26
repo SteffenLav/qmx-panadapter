@@ -47,6 +47,14 @@ void render_set_ema_alpha(float alpha)
     ESP_LOGI("render", "EMA alpha = %.2f", (double)alpha);
 }
 
+static volatile bool s_wf_2x = false;
+
+void render_set_waterfall_2x(bool on)
+{
+    s_wf_2x = on;
+    ESP_LOGI("render", "waterfall 3x speed: %s", on ? "on" : "off");
+}
+
 
 
 // Phase 5.5: autoscale removed — static Ref/Range, manual control
@@ -110,6 +118,14 @@ static void render_task(void *arg)
                 }
             }
             render_waterfall_tick(s_wf_smoothed, DSP_FFT_SIZE);
+            // Fast mode: push 2 more rows immediately (same spectrum content -
+            // we don't have a fresher sample within this period) for 3x total
+            // waterfall scroll speed, without touching the spectrum/S-meter
+            // cadence above, which stays at the normal 10 Hz.
+            if (s_wf_2x) {
+                render_waterfall_tick(s_wf_smoothed, DSP_FFT_SIZE);
+                render_waterfall_tick(s_wf_smoothed, DSP_FFT_SIZE);
+            }
         }
         // ESP_ERR_NOT_FOUND just means no spectrum yet (no audio); skip silently.
     }

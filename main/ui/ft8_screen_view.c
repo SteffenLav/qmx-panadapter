@@ -30,6 +30,7 @@
 #include "ft8_tx_modal.h"
 #include "identity_config.h"
 #include "adif/adif_log.h"
+#include "adif_view_modal.h"
 
 static const char *TAG = "ft8_view";
 
@@ -162,6 +163,11 @@ static lv_timer_t *s_t_refresh  = NULL;
 static lv_timer_t *s_t_clock    = NULL;
 static lv_timer_t *s_t_slotbar  = NULL;  // fast tick for smooth countdown bar
 static char         s_my_call[16] = {0};  /* operator callsign uppercased; refreshed by 1 Hz clock timer */
+// Station currently mid-exchange in a CQ-run session (empty when none) -
+// refreshed once per rebuild_list() and consumed by update_row() so the
+// operator can tell, at a glance, who's actively being worked vs. who else
+// answered the CQ and is still waiting their turn in the list below.
+static char         s_qso_active_target[16] = {0};
 static bool         s_distance_in_miles = false;  /* FT8 distance display unit; updated on settings change */
 static lv_obj_t    *s_lbl_hdr_km = NULL;  /* "KM"/"MI" column header, re-labelled when the unit setting changes */
 
@@ -619,11 +625,14 @@ static void update_row(int i, const ft8_call_t *src)
     set_text_if_changed(r->l_brg,     r->prev_brg,     sizeof(r->prev_brg),     b_brg);
     set_text_if_changed(r->l_heard,   r->prev_heard,   sizeof(r->prev_heard),   b_heard);
 
-    /* Colour scheme: RED=own call heard, GREY=worked before, GREEN=CQ, WHITE=other */
+    /* Colour scheme: AMBER=actively working now, RED=own call heard,
+       GREY=worked before, GREEN=CQ, WHITE=other */
     {
         int8_t col = 0; /* other / white */
-        if (s_my_call[0] && strstr(src->last_text, s_my_call)) {
-            col = 2; /* own call in message -> red (highest priority) */
+        if (s_qso_active_target[0] && strcmp(src->call, s_qso_active_target) == 0) {
+            col = 4; /* the one station we're mid-exchange with -> amber (highest priority) */
+        } else if (s_my_call[0] && strstr(src->last_text, s_my_call)) {
+            col = 2; /* own call in message -> red */
         } else if (adif_log_contains_call_on_band(src->call, cat_get_frequency())) {
             col = 3; /* worked before on THIS band -> dim grey */
         } else if (strncmp(src->last_text, "CQ ", 3) == 0) {
@@ -631,20 +640,23 @@ static void update_row(int i, const ft8_call_t *src)
         }
         if (col != r->prev_color) {
             r->prev_color = col;
-            // Own-call rows are inverted (red fill + white text) instead of plain
-            // red-on-black: field feedback (Ken KF0AYY, comparing against DXFT8)
-            // found plain red text on the dark background hard to read at a
-            // glance. Every other colour stays plain text on the row's normal
-            // black background.
-            bool inverted = (col == 2);
-            lv_color_t c = inverted     ? lv_color_white()
-                         : (col == 3) ? lv_color_hex(0x808080)   /* worked: dim grey */
+            // Own-call and active-exchange rows are inverted (fill + white text)
+            // instead of plain colour-on-black: field feedback (Ken KF0AYY,
+            // comparing against DXFT8) found plain red text on the dark
+            // background hard to read at a glance. Every other colour stays
+            // plain text on the row's normal black background.
+            bool inverted = (col == 2 || col == 4);
+            lv_color_t fill = (col == 4) ? lv_color_hex(0xFFA040)   /* working now: amber */
+                                          : lv_palette_main(LV_PALETTE_RED);
+            lv_color_t c = (col == 4) ? lv_color_black()            /* amber fill needs dark text */
+                         : (col == 2) ? lv_color_white()            /* red fill needs light text */
+                         : (col == 3) ? lv_color_hex(0x808080)      /* worked: dim grey */
                          : (col == 1) ? lv_palette_main(LV_PALETTE_GREEN)
                          :              lv_color_white();
             lv_obj_set_style_text_color(r->l_call, c, 0);
             lv_obj_set_style_text_color(r->l_msg,  c, 0);
-            lv_obj_set_style_bg_color(r->l_call, lv_palette_main(LV_PALETTE_RED), 0);
-            lv_obj_set_style_bg_color(r->l_msg,  lv_palette_main(LV_PALETTE_RED), 0);
+            lv_obj_set_style_bg_color(r->l_call, fill, 0);
+            lv_obj_set_style_bg_color(r->l_msg,  fill, 0);
             lv_obj_set_style_bg_opa(r->l_call, inverted ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
             lv_obj_set_style_bg_opa(r->l_msg,  inverted ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
         }
@@ -710,6 +722,18 @@ static void rebuild_list(void)
     // addressed to us aren't buried under unrelated CQ traffic. The "exclude
     // plain CQ" filter applies the same hide unconditionally.
     bool hide_cq = ft8_qso_cq_filter_active() || qs.ft8_filters.excl_plain_cq;
+
+    // Who (if anyone) we're actively mid-exchange with right now, for the
+    // "currently working" row highlight - distinct from the broader own-call
+    // red highlight, which covers every station that's answered, not just
+    // the one we're presently giving a report / waiting on a roger from.
+    ft8_qso_state_t qso_st = ft8_qso_get_state();
+    if (qso_st == FT8_QSO_WAIT_ROGER || qso_st == FT8_QSO_WAIT_RR73 ||
+        qso_st == FT8_QSO_WAIT_DONE  || qso_st == FT8_QSO_WAIT_RPT) {
+        ft8_qso_get_target(s_qso_active_target, sizeof(s_qso_active_target));
+    } else {
+        s_qso_active_target[0] = '\0';
+    }
 
     int row = 0;
     for (int i = 0; i < n && row < MAX_ROWS; i++) {
@@ -1016,6 +1040,14 @@ static void cq_btn_long_press_cb(lv_event_t *e)
     (void)e;
     ESP_LOGI(TAG, "Call CQ long-pressed -> CQ preset editor");
     ft8_cq_modal_show();
+}
+
+// Long-press "Active: N" -> open the read-only ADIF log viewer.
+static void adif_log_long_press_cb(lv_event_t *e)
+{
+    (void)e;
+    ESP_LOGI(TAG, "Active label long-pressed -> ADIF log viewer");
+    adif_view_modal_show();
 }
 
 // Update the Call CQ button label to show the currently-selected CQ message.
@@ -1375,12 +1407,17 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_center(s_cq_lbl);
     ft8_screen_view_refresh_cq_label();  // show the active CQ message
 
-    // "Active: N" - own line directly below the Call CQ button.
+    // "Active: N" - own line directly below the Call CQ button. Long-press
+    // opens the on-device ADIF log viewer (read-only worked-station list) -
+    // a gesture rather than a new button, since the left pane has no spare
+    // width left for one.
     s_lbl_heard = lv_label_create(s_left_pane);
     lv_label_set_text(s_lbl_heard, "Active: 0");
     lv_obj_set_style_text_color(s_lbl_heard, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(s_lbl_heard, &lv_font_montserrat_24, 0);
     lv_obj_set_pos(s_lbl_heard, 0, 346);
+    lv_obj_add_flag(s_lbl_heard, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_lbl_heard, adif_log_long_press_cb, LV_EVENT_LONG_PRESSED, NULL);
 
     // TX state indicator - hidden while idle; amber/armed or red/active,
     // tap to cancel/abort. See t_clock_cb (1 Hz refresh: state, colour,

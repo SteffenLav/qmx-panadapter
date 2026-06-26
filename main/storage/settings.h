@@ -76,6 +76,7 @@ typedef struct {
     bool     snap_to_peak;    // tap-to-tune snaps to the strongest nearby signal (default true)
     uint8_t  bandplan_region; // band-plan strip region: 0=auto(from grid) 1=R1 2=R2 3=R3
     bool     distance_in_miles; // FT8 decode list: show distance in miles instead of km (default false)
+    bool     ft8_sync_lines;  // Panadapter: FT8-sync-vs-SNTP waterfall slot-boundary lines + 2x waterfall speed (default false)
     ft8_filters_t ft8_filters;        // CQ-run reply include/exclude filters
 } qmx_settings_t;
 
@@ -152,6 +153,11 @@ void settings_set_snap_to_peak(bool v);
 // FT8 distance display unit (debounced flush). When false show distance in km,
 // when true show distance in miles.
 void settings_set_distance_in_miles(bool v);
+
+// Panadapter-only diagnostic overlay (debounced flush): when true, draws the
+// FT8-sync-vs-SNTP-only waterfall slot-boundary marker lines and doubles the
+// waterfall scroll speed; when false, waterfall behaves exactly as before.
+void settings_set_ft8_sync_lines(bool v);
 
 // Band-plan strip region (debounced flush): 0=auto (derive from grid), 1=R1,
 // 2=R2, 3=R3.

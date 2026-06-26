@@ -10,6 +10,7 @@
 
 #include "ft8_tx_modal.h"
 #include "ui_theme.h"
+#include "ui.h"
 #include "ft8_tx.h"
 #include "ft8_qso.h"
 
@@ -91,6 +92,20 @@ static void transmit_btn_cb(lv_event_t *e)
 {
     (void)e;
     char err[64] = {0};
+    char busy_target[24];
+    // A one-off Transmit on a row would otherwise silently overwrite an
+    // already-armed exchange message (ft8_tx_arm only refuses a burst already
+    // ACTIVE on air, not one merely ARMED-and-waiting) - refuse the same way
+    // ft8_qso_start() does for Auto Pounce.
+    if (ft8_qso_is_busy(busy_target, sizeof(busy_target))) {
+        if (busy_target[0]) snprintf(err, sizeof(err), "Busy: working %s", busy_target);
+        else                 snprintf(err, sizeof(err), "Busy: calling CQ");
+        ESP_LOGW(TAG, "transmit refused: %s", err);
+        lv_label_set_text(s_lbl_error, err);
+        lv_obj_clear_flag(s_lbl_error, LV_OBJ_FLAG_HIDDEN);
+        ui_toast(err);
+        return;
+    }
     if (ft8_tx_arm(&s_pending_req, err, sizeof(err))) {
         ESP_LOGI(TAG, "armed via modal: '%s'", s_pending_req.display_text);
         modal_close();
@@ -114,6 +129,7 @@ static void pounce_btn_cb(lv_event_t *e)
         ESP_LOGW(TAG, "pounce refused: %s", err);
         lv_label_set_text(s_lbl_error, err[0] ? err : "Could not start auto pounce");
         lv_obj_clear_flag(s_lbl_error, LV_OBJ_FLAG_HIDDEN);
+        if (strstr(err, "Busy")) ui_toast(err);
     }
 }
 

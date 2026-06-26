@@ -1,5 +1,6 @@
 #pragma once
 #include <time.h>
+#include <stdint.h>
 #include "driver/i2c_master.h"
 
 // Which source last disciplined the system clock.
@@ -14,6 +15,14 @@ typedef enum {
 
 // Returns the source that last applied a time update.
 time_sync_source_t time_sync_get_source(void);
+
+// Sum of every FT8-derived nudge applied since the last hard sync
+// (SNTP/QMX/manual/RTC), in ms (positive = clock was running fast, time was
+// subtracted). current_time_ms + this value reconstructs "what time would
+// it be if FT8 auto-sync had never nudged the clock" - i.e. the SNTP/QMX-only
+// timeline. Used by the panadapter waterfall's FT8-vs-SNTP slot-boundary
+// overlay; not used for any sync decision itself.
+int64_t time_sync_get_ft8_offset_ms(void);
 
 // Global time-sync orchestrator.
 //
