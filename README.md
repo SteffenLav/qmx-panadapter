@@ -459,6 +459,14 @@ Tap **Filter** in the left pane to open the filter editor. Controls which statio
 
 Tap **Save** to persist (NVS) and apply immediately.
 
+### Auto-answer CQ (robot)
+
+**⚠ Transmits unattended — never leave it running unsupervised.** When enabled, the robot picks a CQ caller every slot (filtered the same way as above, plus a worked-before skip) and runs the full exchange itself — no per-QSO confirmation, no tap required. Pick a **Priority**: Strongest signal, Weakest signal, or Most distant grid. Same TX1→report→RR73→73→ADIF-log flow as a manually-tapped reply; you just aren't the one tapping. You remain responsible for everything it transmits under your callsign, same as any other unattended digital-mode software.
+
+### TX status indicator
+
+The left pane shows a persistent status line below the slot countdown:
+
 ### TX status indicator
 
 The left pane shows a persistent status line below the slot countdown:
@@ -694,7 +702,7 @@ No calibration step needed; the estimator converges on ambient band noise within
 
 **Patched components in `components/`.** `espressif__usb_host_uac/` has `create_background_task = true` — required for UAC and CDC-ACM to coexist on the same USB host. `espressif__esp_lcd_touch_st7123/` makes `FW_VERSION_REG` the only mandatory register read (ST7121 NACKs the others and also adds a `max_touches > 10` bounds clamp). Do not replace either with the registry version without re-applying the patches.
 
-**LVGL software rotation (~50% FPS cost).** The panel is natively portrait; landscape is achieved via `lv_display_set_rotation(LV_DISPLAY_ROTATION_90)`. Every flush goes through `rotate90_rgb565`. ~13 fps landscape vs ~22 fps portrait — acceptable for a panadapter. PPA hardware rotation conflicts with the USB host stack over DW-GDMA channels and silently kills UAC + CDC-ACM; do not set `CONFIG_LVGL_PORT_ENABLE_PPA=y`. Full native-portrait rendering (Phase 6.3) is on the longer-term roadmap.
+**LVGL software rotation (~50% FPS cost).** The panel is natively portrait; landscape is achieved via `lv_display_set_rotation(LV_DISPLAY_ROTATION_90)`. Every flush goes through `rotate90_rgb565`. ~13 fps landscape vs ~22 fps portrait — acceptable for a panadapter. PPA hardware rotation conflicts with the USB host stack over DW-GDMA channels and silently kills UAC + CDC-ACM; do not set `CONFIG_LVGL_PORT_ENABLE_PPA=y`. A full native-portrait rewrite would recover the lost FPS but isn't planned — accepted as a permanent trade-off.
 
 **IDLE watchdog disabled.** The LVGL rotation pipeline keeps CPU0 busy past the default watchdog window. `CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0/CPU1` are off; the app-task watchdog (30 s) is still active.
 
@@ -754,7 +762,6 @@ The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF
 - **CW decoder.** Goertzel-based, text scrolling under the spectrum. The QMX already does this internally — question is whether to mirror its output via CAT or run a parallel decoder on the Tab5.
 - **Tab5 speaker / headphone audio.** Demodulated CW/SSB passband audio out of the Tab5's own jack, so the operator can monitor without the QMX's audio path.
 - **Extended waterfall history.** PSRAM has room for several minutes of scrollback; two-finger drag to scrub through history.
-- **Phase 6.3 — Native-portrait rendering.** ~50% FPS recovery by rendering directly in the panel's native 720×1280 portrait coordinates, eliminating the LVGL rotation step. Significant UI rewrite; deferred.
 - **QMX (small) support.** Same UI, different USB endpoint config and band table.
 - **JS8 / RTTY modes.** See `docs/js8-feasibility.md` and `docs/rtty-feasibility.md`.
 - **FT4 mode** (requested by Roy). Lower-effort than JS8/RTTY: the vendored `ft8_lib` already fully parameterizes FT4 vs FT8 internally (`FTX_PROTOCOL_FT4` — Costas pattern, 4-tone Gray map, symbol period, LDPC(174,91) all already implemented, see `components/ft8_lib/ft8/constants.h` and the `wf->protocol == FTX_PROTOCOL_FT4` branches in `decode.c`), so decode/encode itself is essentially free. The app-level work is the slot/timing plumbing built around the FT8 assumption of a fixed 15 s slot: `ft8_test.c`'s capture/decode/TX slot loop, `ft8_qso.c`'s timeout-in-slots counters, the UI countdown bar, and CAT DigiMode forcing all need a parallel 7.5 s FT4 path (or a mode-aware slot-length parameter threaded through). Rough order of magnitude: a fraction of the RTTY/JS8 estimates in the feasibility docs above — no new DSP pipeline, no new UI screen, mainly a mode switch threaded through existing FT8 plumbing.

@@ -28,18 +28,16 @@
 | 2 | FT8 TX multi-day soak | ⚠️ Code ready | Testing only | Run validation soak |
 | **Groups.io Features** | | | | |
 | 3 | One-button TUNE | ⚠️ Verify needed | ? | Check message #172521 |
-| 4 | CW page w/ memory | ❌ Not started | Medium–Large | Clarify scope |
-| 5 | FT4 mode (Roy) | ❌ Not started | Low–Medium | ft8_lib already has FT4; needs slot-timing plumbing |
+| 4 | **CW page** (Phase 1: TX/memory, Phase 2: RX decode) | ❌ Not started | P1 Medium, P2 Large/cheap-if-CAT | Ship P1 (page + canned-msg TX) standalone; gate P2 on Goertzel-vs-CAT-mirror question |
+| 5 | FT4 mode (Roy) — *do before JS8/RTTY* | ❌ Not started | Low–Medium | ft8_lib already has FT4; generalizes the 15s slot-loop, which JS8 (10/15/30/60s variants) can then reuse |
 | **Shelved** | | | | |
-| 6 | CW Audio | ✋ Shelved (v0.18.5/.6) | Unblock needed | Fix priority/cadence of cw_audio_task, then I2S/DMA contention |
+| 6 | CW Audio (speaker output only) | ✋ Shelved (v0.18.5/.6) | Unblock needed | Fix priority/cadence of cw_audio_task, then I2S/DMA contention. Blocks #4-P2-decoder only if it ends up needing the I2S path — does NOT block a CAT-mirror decoder, only #8 below |
 | **Longer-Term Roadmap** | | | | |
-| 7 | CW decoder (Goertzel) | ❌ Not started | Large | New implementation |
-| 8 | Speaker/headphone audio | ❌ Not started (blocked) | Large | Unblock CW Audio first |
-| 9 | Extended waterfall history | ❌ Not started | Medium | New feature |
-| 10 | Phase 6.3 native-portrait | ⏸️ Designed | **Massive** | Sprint-plan rewrite |
-| 11 | QMX (small) support | ❌ Not started | Medium | New USB config |
-| 12 | JS8/RTTY modes | ❌ Not started | Large | Feasibility docs first |
-| 13 | DSP polish (NR, notch) | ❌ Not started | Medium | New algorithms |
+| 7 | Speaker/headphone audio | ❌ Not started (blocked) | Large | Unblock CW Audio (#6) first |
+| 8 | Extended waterfall history | ❌ Not started | Medium | New feature |
+| 9 | QMX (small) support | ❌ Not started | Medium | New USB config |
+| 10 | JS8/RTTY modes — *JS8 after FT4 (#5)* | ❌ Not started | Large | RTTY is a fully separate pipeline (feasibility doc); JS8 shares ft8_lib + benefits from FT4's slot-abstraction work |
+| 11 | DSP polish (NR, notch) | ❌ Not started | Medium | New algorithms |
 | **Closed/Shipped (since last update)** | | | | |
 | — | FT8 decode-yield gap to v0.18.0 | ✅ Closed 2026-06-26 | — | Controlled A/B: HEAD == v0.18.0, 15.38 dec/slot each |
 | — | RST_SENT in CQ-run | ✅ Shipped (v0.18.6) | — | — |
@@ -107,18 +105,20 @@ Means identical to two decimal places; no decode-collapse cliff in either run. *
 
 ---
 
-### CW page with memory support
-**Requested by:** Someone in thread (Jun 24-25)
+### CW page (merged: TX/memory + RX decode, two phases)
+**Requested by:** Someone in thread (Jun 24-25) — TX/memory half; the RX decode half was already on the longer-term roadmap separately and is folded in here since they're the two directions of the same feature.
 
-**Description:** Dedicated CW page (like the FT8 page) with ability to trigger/manage CW memory messages from the panadapter interface.
+**Description:** Dedicated CW page (like the FT8 page), with:
+- **Phase 1 — TX/memory (medium effort, ship first):** canned-message buttons triggering CW TX, reusing the existing `mem_channels.c` + CAT key-down plumbing (same pattern as FT8's CQ presets). No new DSP, no audio dependency — can ship standalone.
+- **Phase 2 — RX decode (effort depends on approach):** scrolling decoded text under the spectrum. Two options: (a) Goertzel-based tone tracker built from scratch (Large effort, new DSP code), or (b) mirror whatever the QMX itself already decodes internally via CAT (much cheaper — *check the CAT manual for a CW-decode query before committing to (a)*).
 
 **Priority:** Medium
 
-**Note:** Related to [[project_cw_audio_blocked]] — CW audio is currently shelved due to a priority/cadence issue in `cw_audio_task` (see Open Investigation above) plus the underlying I2S/DMA contention. Clarify scope: UI-only for manual CW memory triggering, or full CW demodulation/playback?
+**Dependency correction:** Phase 2's decoder does **not** need the shelved CW Audio path (`cw_audio_task`/I2S output) — it only needs RX audio samples, which already flow through the same ring buffer FT8 decode taps. CW Audio (#6) blocks **Tab5 speaker/headphone output** (item below) only, not text decode. Don't gate Phase 2 on unblocking #6 unless option (a) turns out to need something CW Audio currently owns.
 
 ---
 
-### FT4 mode
+### FT4 mode — scope before JS8/RTTY, not in isolation
 **Requested by:** Roy (Jun 26)
 
 **Description:** Add FT4 alongside FT8.
@@ -127,16 +127,19 @@ Means identical to two decimal places; no decode-collapse cliff in either run. *
 
 **Assessment:** Much lower effort than JS8/RTTY — the vendored `components/ft8_lib` already fully implements FT4 internally (`FTX_PROTOCOL_FT4` branches in `decode.c`; Costas pattern, 4-tone Gray map, symbol period, LDPC(174,91) all already in `ft8/constants.h`). Decode/encode core is essentially free. The real work is app-level slot-timing plumbing built around FT8's fixed 15 s slot: `ft8_test.c`'s capture/decode/TX loop, `ft8_qso.c`'s timeout-in-slots counters, the UI countdown bar, and CAT DigiMode forcing all need a parallel 7.5 s path. No new DSP pipeline or UI screen needed, unlike RTTY/JS8.
 
+**Run together with JS8/RTTY planning:** FT4 forces generalizing the hardcoded-15s slot machinery into a mode-aware parameter. JS8 (which also heavily reuses `ft8_lib`, per the JS8 feasibility doc, and itself has 10/15/30/60s variants) directly benefits from that same generalization. RTTY doesn't — it's a fully separate pipeline (no LDPC, no block structure) per `docs/rtty-feasibility.md`, so it stays independent. **Recommendation:** do FT4 first as the cheap trial run of the slot abstraction, then revisit JS8 with that abstraction already in place; treat RTTY as unrelated.
+
 **See:** `project_ft4_mode_request.md` in memory, README.md "Longer term" roadmap.
 
 ---
 
 ## 🔧 Known Issues / Shelved Work
 
-### CW Audio (shelved — v0.18.5, extended v0.18.6)
+### CW Audio — speaker/headphone output ONLY (shelved — v0.18.5, extended v0.18.6)
 - **Status:** Shelved — disabled to restore FT8 decode performance
+- **Scope correction:** this is the I2S-to-speaker output path only. It blocks "Tab5 speaker/headphone audio" below. It does **not** block a future CW text decoder (see "CW page" feature above) — decode only needs the RX audio ring buffer, which is unaffected.
 - **Root cause (v0.18.5):** `cw_audio_preopen()` (I2S/DMA init) and `dsp_cw_forward()` (hot-path call) degrade FT8 yield 2–3× even with CW audio off — disabled.
-- **Root cause (v0.18.6, found later):** `cw_audio_init()` was never disabled alongside `cw_audio_preopen()` — it spawned a priority-6 task on core 1 that kept preempting `fft_task` every 120 ms for the whole session. Now also disabled, recovering ~25% of lost yield — but the gap to v0.18.0 is still open (see Open Investigation above).
+- **Root cause (v0.18.6, found later):** `cw_audio_init()` was never disabled alongside `cw_audio_preopen()` — it spawned a priority-6 task on core 1 that kept preempting `fft_task` every 120 ms for the whole session. Now also disabled — and a controlled A/B on 2026-06-26 confirmed this fully restored yield to v0.18.0 levels (see Closed Investigation above).
 - **Fix needed before re-enabling:** root-cause the original I2S/DMA/UAC contention, AND fix `cw_audio_task`'s priority/cadence so it can't preempt `fft_task` even when idle, then soak-test FT8 yield over a full session.
 - **See:** `project_cw_audio_blocked.md` in memory system
 
@@ -145,20 +148,14 @@ Means identical to two decimal places; no decode-collapse cliff in either run. *
 ## 🚀 Longer-Term Roadmap (Post v1.0)
 
 ### Audio & Monitoring
-- **CW decoder** — Goertzel-based, text scrolling under spectrum. QMX already does this internally; question is mirror via CAT or parallel decoder on Tab5.
-- **Tab5 speaker/headphone audio** — Demodulated CW/SSB passband audio from Tab5's own jack, so operator can monitor without QMX audio path.
+- **CW decoder (RX)** — now Phase 2 of the merged "CW page" feature request above, not a standalone item.
+- **Tab5 speaker/headphone audio** — Demodulated CW/SSB passband audio from Tab5's own jack, so operator can monitor without QMX audio path. Blocked on unshelving CW Audio (#6) — see Known Issues above.
 - **Extended waterfall history** — PSRAM has room for several minutes of scrollback; two-finger drag to scrub through.
 
 ### Hardware & Modes
 - **QMX (small) support** — Same UI, different USB endpoint config and band table.
-- **JS8 / RTTY modes** — See feasibility docs in `docs/js8-feasibility.md` and `docs/rtty-feasibility.md`.
-- **FT4 mode** — See Feature Requests above (Roy).
-
-### UI & Performance
-- **Phase 6.3 — Native-portrait rendering** (~50% FPS recovery)
-  - Render directly in panel's native 720×1280 portrait coords (eliminate LVGL rotation step)
-  - Significant UI rewrite; deferred due to effort
-  - See [[project_phase63_status]] in memory system
+- **JS8 / RTTY modes** — See feasibility docs in `docs/js8-feasibility.md` and `docs/rtty-feasibility.md`. **JS8 benefits from doing FT4 first** (shared slot-abstraction work); RTTY is unrelated to either.
+- **FT4 mode** — See Feature Requests above (Roy); do before JS8.
 
 ### DSP & Signal Processing
 - **DSP polish** — Noise reduction, auto-notch
@@ -206,7 +203,6 @@ Red breathing dot moved net +30px right of the battery text; added a "Diag" text
 
 **Memory System:**
 - `feedback_groups_io_proper_method.md` — How to extract text from groups.io threads
-- `project_phase63_status.md` — Native-portrait UI rewrite (Phase 6.3)
 - `project_cw_audio_blocked.md` — CW Audio shelved (I2S/DMA contention)
 - `project_ft8_sparse_decode_investigation.md` — FT8 decode-yield investigation (closed 2026-06-26)
 - `project_ft4_mode_request.md` — Roy's FT4 request + effort assessment

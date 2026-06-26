@@ -320,6 +320,14 @@ Response is an HTML page parsed for `"Result: x out of y records added"` (succes
 
 Entry point: "eQSL ↑" link in the web UI bottom bar, next to "QRZ ↑". First tap prompts for username then password (two separate `prompt()` calls, since eQSL needs both), POSTs to `/api/eqsl_creds` (JSON body, saved server-side). `/api/status` gained `eqsl_creds_set`.
 
+## FT8 robot (auto-answer CQ) — LIVE, un-shelved 2026-06-26
+
+`main/ft8_robot.c`/`.h`. Was shipped SHELVED in v0.18.4 (the `feat/panadapter-bandnav-ft8-robot` branch's Step 6 — see `docs/version-history.md`) pending an on-air soak test that never got scheduled; the operator made the call to ship it un-soaked rather than wait further, accepting that hams are responsible for their own station regardless. `ft8_robot_tick()`'s hard `return` guard is removed; the implementation underneath was never touched while shelved.
+
+**What it does**: when `robot_en` is on and the QSO machine is IDLE, scans the live decode list each slot for CQ callers, applies the same include/exclude filters as CQ-run plus an enforced worked-before skip, ranks survivors by the chosen priority (Strongest SNR / Weakest SNR / Most distant grid), and hands the winner to the existing `ft8_qso_start()` machine — from there it's indistinguishable from a human-initiated pounce (TX1→report→RR73→73→ADIF log).
+
+**Disclaimer, by design not just documentation**: this keys the radio and runs full QSOs with zero per-exchange confirmation. The "Auto-answer CQ (robot)" row in the FT8 Filter modal carries a permanent on-screen warning (`LV_SYMBOL_WARNING " Transmits unattended - never leave running unsupervised"`) every time that row is visible, not a one-time dialog. The operator remains responsible for everything transmitted under their callsign while it's enabled — same as any other unattended FT8 software (WSJT-X's own robot mode, etc.).
+
 ## CW Audio (shelved — v0.18.5, extended v0.18.6)
 
 `main/audio/cw_audio.c` — CW demodulation + I2S playback to the Tab5 speaker/headphone jack. Fully implemented and works end-to-end, but **disabled by default; disabled since v0.18.5 due to a regression v0.18.6 partially, not fully, closed**.
