@@ -10,7 +10,7 @@
 #include "ft8_filter_modal.h"
 #include "ft8_time_modal.h"
 #include "ui_theme.h"
-#include "ui.h"          // ui_toast() for the shelved-robot "Work in progress" popup
+#include "ui.h"
 #include "settings.h"
 #include "lvgl.h"
 #include "esp_log.h"
@@ -31,6 +31,7 @@ static lv_obj_t *s_cb_plain_cq      = NULL;
 static lv_obj_t *s_cb_incl_cq_only  = NULL;
 static lv_obj_t *s_cb_robot         = NULL;  // auto-answer enable
 static lv_obj_t *s_dd_robot_pri     = NULL;  // priority dropdown
+static lv_obj_t *s_robot_warn       = NULL;  // "unattended TX" warning - shown only while s_cb_robot is checked
 
 static bool      s_open = false;
 
@@ -83,14 +84,14 @@ static void save_btn_cb(lv_event_t *e)
     f.excl_worked_before = lv_obj_has_state(s_cb_worked_before, LV_STATE_CHECKED);
     f.excl_plain_cq      = lv_obj_has_state(s_cb_plain_cq, LV_STATE_CHECKED);
     f.incl_cq_only       = lv_obj_has_state(s_cb_incl_cq_only, LV_STATE_CHECKED);
-    f.robot_en           = false;  // WIP: robot shelved this release — never persist on
+    f.robot_en           = lv_obj_has_state(s_cb_robot, LV_STATE_CHECKED);
     f.robot_priority     = (uint8_t)lv_dropdown_get_selected(s_dd_robot_pri);
 
     settings_set_ft8_filters(&f);
-    ESP_LOGI(TAG, "saved filters: incl=[%d:'%s' %d:'%s'] excl=[%d:'%s' %d:'%s'] wb=%d cq=%d",
+    ESP_LOGI(TAG, "saved filters: incl=[%d:'%s' %d:'%s'] excl=[%d:'%s' %d:'%s'] wb=%d cq=%d robot=%d",
              f.incl_en[0], f.incl_text[0], f.incl_en[1], f.incl_text[1],
              f.excl_en[0], f.excl_text[0], f.excl_en[1], f.excl_text[1],
-             f.excl_worked_before, f.excl_plain_cq);
+             f.excl_worked_before, f.excl_plain_cq, f.robot_en);
     modal_close();
 }
 
@@ -107,16 +108,36 @@ static void sync_time_btn_cb(lv_event_t *e)
     ft8_time_modal_show();
 }
 
-// The auto-answer robot is shelved (live TX, not yet on-air soaked), so its
-// controls are greyed and inert — same treatment as the CW Audio drawer
-// section. A tap on the checkbox or the priority dropdown just snaps the
-// control back to its disabled state and shows a "Work in progress" toast.
-static void robot_wip_cb(lv_event_t *e)
+// Only nag about unattended TX while the feature is actually enabled - no
+// reason to show the warning to operators who never touch this checkbox.
+static void robot_checked_cb(lv_event_t *e)
 {
-    lv_obj_remove_state(s_cb_robot, LV_STATE_CHECKED);   // stay off
-    lv_dropdown_set_selected(s_dd_robot_pri, 0);          // reset selection
     (void)e;
-    ui_toast("Work in progress....");
+    if (!s_robot_warn) return;
+    if (lv_obj_has_state(s_cb_robot, LV_STATE_CHECKED)) {
+        lv_obj_clear_flag(s_robot_warn, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(s_robot_warn, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+// LVGL creates a dropdown's option list lazily when it opens, so style it
+// here rather than at creation time (matches the existing pattern in ui.c's
+// drawer dropdowns) - sized to match the rest of the filter window's text
+// instead of the dropdown widget's smaller default list font.
+static void robot_pri_dropdown_open_cb(lv_event_t *e)
+{
+    lv_obj_t *dd = lv_event_get_target(e);
+    lv_obj_t *list = lv_dropdown_get_list(dd);
+    if (!list) return;
+    lv_obj_set_style_text_font(list, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_bg_color(list, lv_color_hex(UI_COLOR_KEY_BG), 0);
+    lv_obj_set_style_text_color(list, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_set_style_border_color(list, lv_color_hex(UI_COLOR_BORDER), 0);
+    // The bigger montserrat_24 font (above) needs a taller list than the
+    // dropdown's own default sizing gives it - the 3rd option ("Most
+    // distant") was getting clipped. Grow it 15px.
+    lv_obj_set_height(list, lv_obj_get_height(list) + 15);
 }
 
 // Plain (non-exclusive) checkbox with a themed square indicator. Extra
@@ -151,6 +172,32 @@ static lv_obj_t *make_checkbox(lv_obj_t *parent, const char *text)
     return cb;
 }
 
+// A textless checkbox plus a separate label object placed beside it.
+// Pixel-measured on real hardware: giving lv_checkbox_set_text() actual text
+// makes LVGL size that checkbox's indicator larger (41x41) than a textless
+// checkbox's indicator (31x32) - a style override on LV_PART_INDICATOR did
+// NOT fix this (measured no effect), so instead every checkbox in this modal
+// is now textless and uses this same code path as the rows next to the
+// textareas (which were already the smaller, correct size) - identical
+// construction guarantees identical rendered size, not just a style hint
+// that may or may not be honored.
+// NOTE: cb must be positioned (lv_obj_align) BEFORE the label is aligned
+// relative to it - lv_obj_align_to() resolves against the checkbox's
+// position at the time of the call, not wherever it ends up later. Doing
+// this in one helper that positions cb itself first avoids the ordering bug
+// (label aligning to cb's pre-positioned default, not its final spot).
+static lv_obj_t *make_labeled_checkbox(lv_obj_t *panel, const char *text, int x, int y, lv_obj_t **lbl_out)
+{
+    lv_obj_t *cb = make_checkbox(panel, "");
+    lv_obj_align(cb, LV_ALIGN_TOP_LEFT, x, y);
+    lv_obj_t *lbl = lv_label_create(panel);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+    lv_obj_align_to(lbl, cb, LV_ALIGN_OUT_RIGHT_MID, 8, 0);
+    if (lbl_out) *lbl_out = lbl;
+    return cb;
+}
+
 // One include/exclude row: a bare (textless) checkbox left of a one-line
 // textarea, vertically centred against it.
 static void make_filter_row(lv_obj_t *panel, int y, lv_obj_t **cb_out, lv_obj_t **ta_out,
@@ -168,6 +215,9 @@ static void make_filter_row(lv_obj_t *panel, int y, lv_obj_t **cb_out, lv_obj_t 
     lv_obj_add_event_cb(ta, ta_focused_cb, LV_EVENT_FOCUSED, NULL);
 
     // Extra gap so a finger on the checkbox can't also clip the textarea.
+    // No text on this one, so font doesn't matter here - make_checkbox()'s
+    // fixed indicator size keeps it the same size as the labeled checkboxes
+    // below regardless.
     lv_obj_t *cb = make_checkbox(panel, "");
     lv_obj_align_to(cb, ta, LV_ALIGN_OUT_LEFT_MID, -16, 0);
 
@@ -193,7 +243,7 @@ static void modal_build(void)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *panel = lv_obj_create(s_modal);
-    lv_obj_set_size(panel, 1040, 540);
+    lv_obj_set_size(panel, 1040, 590);   // +50 vs the pre-robot-warning height, see button y-math below
     lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 14);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
@@ -223,52 +273,49 @@ static void modal_build(void)
     make_filter_row(panel, 206, &s_cb_excl[0], &s_ta_excl[0], "e.g. R7 UA9");
     make_filter_row(panel, 268, &s_cb_excl[1], &s_ta_excl[1], "e.g. JA, VK");
 
-    // --- Other filters, side by side to save a line --------------------
-    s_cb_worked_before = make_checkbox(panel, "Exclude worked-before (v0.16.0)");
-    lv_obj_set_style_text_font(s_cb_worked_before, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(s_cb_worked_before, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-    lv_obj_align(s_cb_worked_before, LV_ALIGN_TOP_LEFT, 0, 330);
+    // --- Other filters, stacked in one left-aligned column --------------
+    lv_obj_t *lbl_worked_before, *lbl_plain_cq, *lbl_incl_cq_only, *lbl_robot;
 
-    s_cb_plain_cq = make_checkbox(panel, "Exclude plain CQ callers");
-    lv_obj_set_style_text_font(s_cb_plain_cq, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(s_cb_plain_cq, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-    lv_obj_align(s_cb_plain_cq, LV_ALIGN_TOP_LEFT, 460, 330);
+    s_cb_worked_before = make_labeled_checkbox(panel, "Exclude worked-before", 4, 330, &lbl_worked_before);
+    lv_obj_set_style_text_color(lbl_worked_before, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
-    s_cb_incl_cq_only = make_checkbox(panel, "Show only CQ callers");
-    lv_obj_set_style_text_font(s_cb_incl_cq_only, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(s_cb_incl_cq_only, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-    lv_obj_align(s_cb_incl_cq_only, LV_ALIGN_TOP_LEFT, 0, 374);
+    s_cb_plain_cq = make_labeled_checkbox(panel, "Exclude plain CQ callers", 4, 374, &lbl_plain_cq);
+    lv_obj_set_style_text_color(lbl_plain_cq, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
-    // --- Robot (auto-answer) row — SHELVED/WIP ------------------------
-    // Greyed and inert: live TX, not yet on-air soaked. Tap → snaps back +
-    // "Work in progress" toast (robot_wip_cb). The robot engine itself is
-    // hard-disabled in ft8_robot_tick, so it can never key the radio in this
-    // release regardless of NVS/config state.
-    s_cb_robot = make_checkbox(panel, "Auto-answer CQ (robot)");
-    lv_obj_set_style_text_font(s_cb_robot, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(s_cb_robot, lv_color_hex(0x707070), 0);  // greyed: WIP
-    lv_obj_align(s_cb_robot, LV_ALIGN_TOP_LEFT, 0, 426);
-    lv_obj_set_style_opa(s_cb_robot, LV_OPA_50, 0);
-    lv_obj_add_event_cb(s_cb_robot, robot_wip_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    s_cb_incl_cq_only = make_labeled_checkbox(panel, "Show only CQ callers", 4, 418, &lbl_incl_cq_only);
+    lv_obj_set_style_text_color(lbl_incl_cq_only, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
-    lv_obj_t *pri_lbl = lv_label_create(panel);
-    lv_label_set_text(pri_lbl, "Priority:");
-    lv_obj_set_style_text_font(pri_lbl, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(pri_lbl, lv_color_hex(0x707070), 0);  // greyed: WIP
-    lv_obj_align(pri_lbl, LV_ALIGN_TOP_LEFT, 420, 432);
+    // --- Robot (auto-answer) row — LIVE TX ---------------------------
+    // Unattended: when enabled, the robot picks a CQ caller (per the filters
+    // above + the chosen priority) and runs a full QSO with no per-exchange
+    // confirmation. See ft8_robot.h for the safety/scope notes. The warning
+    // label is only shown while the checkbox is checked - no need to nag
+    // operators who never turn this on.
+    s_cb_robot = make_labeled_checkbox(panel, "Auto-answer CQ with priority:", 4, 462, &lbl_robot);
+    lv_obj_set_style_text_color(lbl_robot, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
     // Order MUST match ft8_robot_priority_t (STRONGEST=0, WEAKEST=1, DISTANT=2).
     s_dd_robot_pri = lv_dropdown_create(panel);
     lv_dropdown_set_options(s_dd_robot_pri, "Strongest\nWeakest\nMost distant");
     lv_obj_set_width(s_dd_robot_pri, 280);
-    lv_obj_align(s_dd_robot_pri, LV_ALIGN_TOP_LEFT, 540, 422);
+    lv_obj_align_to(s_dd_robot_pri, lbl_robot, LV_ALIGN_OUT_RIGHT_MID, 12, 0);
     lv_obj_set_style_text_font(s_dd_robot_pri, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_opa(s_dd_robot_pri, LV_OPA_50, 0);  // greyed: WIP
-    lv_obj_add_event_cb(s_dd_robot_pri, robot_wip_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_set_style_bg_color(s_dd_robot_pri, lv_color_hex(UI_COLOR_KEY_BG), 0);
+    lv_obj_set_style_border_color(s_dd_robot_pri, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_text_color(s_dd_robot_pri, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_add_event_cb(s_dd_robot_pri, robot_pri_dropdown_open_cb, LV_EVENT_CLICKED, NULL);
+
+    s_robot_warn = lv_label_create(panel);
+    lv_label_set_text(s_robot_warn, LV_SYMBOL_WARNING " Transmits unattended - never leave running unsupervised");
+    lv_obj_set_style_text_font(s_robot_warn, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(s_robot_warn, lv_color_hex(0xFF8800), 0);
+    lv_obj_align(s_robot_warn, LV_ALIGN_TOP_LEFT, 4, 512);
+    lv_obj_add_event_cb(s_cb_robot, robot_checked_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     // --- Save / Cancel / Sync Time on the right edge, evenly distributed.
-    // Panel inner h = 540-40 = 500 px. Three buttons h=64: total 192 px.
-    // Remaining 308 px / 4 gaps = 77 px each → y = 77 / 218 / 359.
+    // Panel inner h = 590-40 = 550 px (grew +50 to fit the robot warning
+    // label). Three buttons h=64: total 192 px. Remaining 358 px / 4 gaps =
+    // ~89.5 px each → y = 90 / 243 / 396.
     {
         struct { const char *lbl; uint32_t col; lv_event_cb_t cb; } btns[3] = {
             { "Save",      0x2e8b3a, save_btn_cb      },
@@ -279,7 +326,7 @@ static void modal_build(void)
         for (int i = 0; i < 3; i++) {
             lv_obj_t *b = lv_btn_create(panel);
             lv_obj_set_size(b, 180, 64);
-            lv_obj_align(b, LV_ALIGN_TOP_RIGHT, 0, 77 + i * (64 + 77));
+            lv_obj_align(b, LV_ALIGN_TOP_RIGHT, 0, 90 + i * (64 + 89));
             lv_obj_set_style_bg_color(b, lv_color_hex(btns[i].col), 0);
             lv_obj_set_style_radius(b, 8, 0);
             lv_obj_set_style_border_width(b, 0, 0);
@@ -352,9 +399,13 @@ void ft8_filter_modal_show(void)
     apply_checkbox_state(s_cb_worked_before, f->excl_worked_before);
     apply_checkbox_state(s_cb_plain_cq, f->excl_plain_cq);
     apply_checkbox_state(s_cb_incl_cq_only, f->incl_cq_only);
-    apply_checkbox_state(s_cb_robot, false);   // WIP: always shown unchecked
+    apply_checkbox_state(s_cb_robot, f->robot_en);
     lv_dropdown_set_selected(s_dd_robot_pri,
                              f->robot_priority <= FT8_ROBOT_PRI_DISTANT ? f->robot_priority : 0);
+    if (s_robot_warn) {
+        if (f->robot_en) lv_obj_clear_flag(s_robot_warn, LV_OBJ_FLAG_HIDDEN);
+        else              lv_obj_add_flag(s_robot_warn, LV_OBJ_FLAG_HIDDEN);
+    }
 
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);

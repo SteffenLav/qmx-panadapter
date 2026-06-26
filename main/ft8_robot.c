@@ -65,15 +65,6 @@ static double rank_score(const ft8_call_t *c, ft8_robot_priority_t pri,
 
 void ft8_robot_tick(int64_t slot_sec)
 {
-    // === WIP: auto-answer robot shelved for this release ============
-    // Hard no-op so the live-TX path can NEVER fire — independent of robot_en
-    // in NVS or an imported config. The Filter-modal toggle is greyed + shows
-    // a "Work in progress" toast. Remove this guard (and un-grey the UI in
-    // ft8_filter_modal.c) once the robot has been on-air soaked. The dormant
-    // implementation below is retained intact.
-    (void)slot_sec;
-    return;
-
     qmx_settings_t qs;
     settings_load_all(&qs);
     const ft8_filters_t *f = &qs.ft8_filters;

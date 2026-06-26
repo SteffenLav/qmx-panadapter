@@ -17,6 +17,11 @@
 // Safety: only ever acts from IDLE (never interrupts a QSO in progress), keys
 // up only through the normal armed-TX path, and is opt-in (settings.robot_en,
 // default off).
+//
+// DISCLAIMER: this keys the radio and runs full QSOs with zero per-exchange
+// confirmation. Never leave it running unsupervised - the operator remains
+// responsible for everything it transmits under their callsign. The Filter
+// modal shows this warning every time the toggle is visible, not just once.
 
 // Called from ft8_qso_advance() after each RX slot's decode, with that slot's
 // UTC second. No-op unless robot is enabled AND the QSO machine is IDLE. When
