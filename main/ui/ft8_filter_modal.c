@@ -9,6 +9,7 @@
 
 #include "ft8_filter_modal.h"
 #include "ft8_time_modal.h"
+#include "ft8_screen_view.h"
 #include "ui_theme.h"
 #include "ui.h"
 #include "settings.h"
@@ -32,6 +33,9 @@ static lv_obj_t *s_cb_incl_cq_only  = NULL;
 static lv_obj_t *s_cb_robot         = NULL;  // auto-answer enable
 static lv_obj_t *s_dd_robot_pri     = NULL;  // priority dropdown
 static lv_obj_t *s_robot_warn       = NULL;  // "unattended TX" warning - shown only while s_cb_robot is checked
+static lv_obj_t *s_cb_field_day     = NULL;  // ARRL Field Day exchange mode enable
+static lv_obj_t *s_ta_fd_class      = NULL;  // e.g. "16A"
+static lv_obj_t *s_ta_fd_section    = NULL;  // e.g. "EMA"
 
 static bool      s_open = false;
 
@@ -45,6 +49,22 @@ static void ta_focused_cb(lv_event_t *e)
     lv_obj_t *ta = lv_event_get_target(e);
 
     if (!s_keyboard) return;
+    lv_obj_align(s_keyboard, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_keyboard_set_textarea(s_keyboard, ta);
+    lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_keyboard);
+}
+
+// Field Day class/section row sits near the bottom of the panel - the
+// bottom-anchored keyboard would cover it while typing, so these two fields
+// pop the keyboard at the TOP of the screen instead (everything else keeps
+// the normal bottom keyboard, since those rows are higher up and unaffected).
+static void ta_focused_top_cb(lv_event_t *e)
+{
+    lv_obj_t *ta = lv_event_get_target(e);
+
+    if (!s_keyboard) return;
+    lv_obj_align(s_keyboard, LV_ALIGN_TOP_MID, 0, 0);
     lv_keyboard_set_textarea(s_keyboard, ta);
     lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_keyboard);
@@ -88,6 +108,27 @@ static void save_btn_cb(lv_event_t *e)
     f.robot_priority     = (uint8_t)lv_dropdown_get_selected(s_dd_robot_pri);
 
     settings_set_ft8_filters(&f);
+
+    {
+        char cls[8], sect[8];
+        strncpy(cls, lv_textarea_get_text(s_ta_fd_class), sizeof(cls) - 1);
+        cls[sizeof(cls) - 1] = '\0';
+        to_upper_inplace(cls);
+        strncpy(sect, lv_textarea_get_text(s_ta_fd_section), sizeof(sect) - 1);
+        sect[sizeof(sect) - 1] = '\0';
+        to_upper_inplace(sect);
+        settings_set_field_day_en(lv_obj_has_state(s_cb_field_day, LV_STATE_CHECKED));
+        settings_set_fd_class(cls);
+        settings_set_fd_section(sect);
+        ESP_LOGI(TAG, "saved Field Day: en=%d class='%s' section='%s'",
+                 lv_obj_has_state(s_cb_field_day, LV_STATE_CHECKED), cls, sect);
+        // The Call CQ button label (and the CQ preset editor's FD hint, if
+        // open) shows the live "CQ FD ..." tag - it only reflects the saved
+        // setting on its next refresh, so without this it stayed stuck on
+        // whatever it showed before this save (e.g. still "CQ FD ..." after
+        // unchecking Field Day mode here).
+        ft8_screen_view_refresh_cq_label();
+    }
     ESP_LOGI(TAG, "saved filters: incl=[%d:'%s' %d:'%s'] excl=[%d:'%s' %d:'%s'] wb=%d cq=%d robot=%d",
              f.incl_en[0], f.incl_text[0], f.incl_en[1], f.incl_text[1],
              f.excl_en[0], f.excl_text[0], f.excl_en[1], f.excl_text[1],
@@ -243,7 +284,7 @@ static void modal_build(void)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *panel = lv_obj_create(s_modal);
-    lv_obj_set_size(panel, 1040, 590);   // +50 vs the pre-robot-warning height, see button y-math below
+    lv_obj_set_size(panel, 1040, 660);   // +70 vs the pre-Field-Day height, for the new row below the robot warning
     lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 14);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
@@ -311,6 +352,36 @@ static void modal_build(void)
     lv_obj_set_style_text_color(s_robot_warn, lv_color_hex(0xFF8800), 0);
     lv_obj_align(s_robot_warn, LV_ALIGN_TOP_LEFT, 4, 512);
     lv_obj_add_event_cb(s_cb_robot, robot_checked_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+    // --- ARRL Field Day exchange mode ---------------------------------
+    // When on, FT8 QSOs (manual and auto) exchange class+section instead of
+    // grid/signal report - see CLAUDE.md "FT8 robot" / ft8_qso.c. Class and
+    // section are short fixed-format fields, not free text.
+    lv_obj_t *lbl_fd;
+    s_cb_field_day = make_labeled_checkbox(panel, "ARRL Field Day mode:", 4, 552, &lbl_fd);
+    lv_obj_set_style_text_color(lbl_fd, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+
+    s_ta_fd_class = lv_textarea_create(panel);
+    lv_obj_set_size(s_ta_fd_class, 100, 50);
+    lv_obj_align_to(s_ta_fd_class, lbl_fd, LV_ALIGN_OUT_RIGHT_MID, 16, 0);
+    lv_textarea_set_one_line(s_ta_fd_class, true);
+    lv_textarea_set_max_length(s_ta_fd_class, 3);
+    lv_textarea_set_placeholder_text(s_ta_fd_class, "16A");
+    lv_obj_set_style_text_font(s_ta_fd_class, &lv_font_montserrat_24, 0);
+    ui_theme_style_textarea(s_ta_fd_class);
+    lv_obj_set_style_text_color(s_ta_fd_class, lv_color_hex(UI_COLOR_TEXT_MUTED), LV_PART_TEXTAREA_PLACEHOLDER);
+    lv_obj_add_event_cb(s_ta_fd_class, ta_focused_top_cb, LV_EVENT_FOCUSED, NULL);
+
+    s_ta_fd_section = lv_textarea_create(panel);
+    lv_obj_set_size(s_ta_fd_section, 140, 50);
+    lv_obj_align_to(s_ta_fd_section, s_ta_fd_class, LV_ALIGN_OUT_RIGHT_MID, 12, 0);
+    lv_textarea_set_one_line(s_ta_fd_section, true);
+    lv_textarea_set_max_length(s_ta_fd_section, 3);
+    lv_textarea_set_placeholder_text(s_ta_fd_section, "EMA");
+    lv_obj_set_style_text_font(s_ta_fd_section, &lv_font_montserrat_24, 0);
+    ui_theme_style_textarea(s_ta_fd_section);
+    lv_obj_set_style_text_color(s_ta_fd_section, lv_color_hex(UI_COLOR_TEXT_MUTED), LV_PART_TEXTAREA_PLACEHOLDER);
+    lv_obj_add_event_cb(s_ta_fd_section, ta_focused_top_cb, LV_EVENT_FOCUSED, NULL);
 
     // --- Save / Cancel / Sync Time on the right edge, evenly distributed.
     // Panel inner h = 590-40 = 550 px (grew +50 to fit the robot warning
@@ -406,6 +477,9 @@ void ft8_filter_modal_show(void)
         if (f->robot_en) lv_obj_clear_flag(s_robot_warn, LV_OBJ_FLAG_HIDDEN);
         else              lv_obj_add_flag(s_robot_warn, LV_OBJ_FLAG_HIDDEN);
     }
+    apply_checkbox_state(s_cb_field_day, s.field_day_en);
+    lv_textarea_set_text(s_ta_fd_class, s.fd_class);
+    lv_textarea_set_text(s_ta_fd_section, s.fd_section);
 
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);

@@ -1098,6 +1098,7 @@ static uint16_t s_cw_pitch_hz = 700;  // CW sidetone offset (Hz); applied to tou
 static bool s_snap_to_peak = true;    // tap-to-tune snaps to strongest nearby signal (NVS-backed)
 static bool s_distance_in_miles = false;  // FT8 distance unit toggle (NVS-backed)
 static bool s_ft8_sync_lines = false;  // Panadapter: FT8-sync-vs-SNTP waterfall lines + 3x speed (NVS-backed)
+static bool s_sim_mode_en = false;     // FT8 simulation mode toggle (NVS-backed)
 
 // ---- Sticky per-mode settings (v0.16.0) --------------------------------
 // Snapshot of freq/mode/passband/zoom taken on leaving a mode, restored
@@ -1318,7 +1319,8 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_BPREGION   16
 #define DRAWER_SEC_DISTANCE   17  // FT8 distance unit (km/miles) - kept visible in FT8 mode
 #define DRAWER_SEC_FT8SYNC    18  // panadapter-only: FT8 sync lines + 3x waterfall (diagnostic)
-#define N_DRAWER_SECTIONS     19
+#define DRAWER_SEC_SIMMODE    19  // FT8-only: phantom-station simulation mode (practice/testing, never keys the radio)
+#define N_DRAWER_SECTIONS     20
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 // Phase 5.10D Stage 2b: drawer widgets we need to keep handles to
@@ -1341,6 +1343,7 @@ static lv_obj_t *s_check_flip = NULL;  // 180-degree display flip checkbox
 static lv_obj_t *s_check_snap = NULL;  // snap-to-peak tap-to-tune checkbox
 static lv_obj_t *s_check_distance_miles = NULL;  // FT8 distance unit (km/miles) checkbox
 static lv_obj_t *s_check_ft8_sync_lines = NULL;  // FT8 sync lines (3x waterfall) checkbox
+static lv_obj_t *s_check_sim_mode = NULL;        // FT8 simulation mode checkbox
 static lv_obj_t *s_check_cwaudio = NULL;
 static lv_obj_t *s_slider_cwaudio_vol = NULL;
 static int       s_cwaudio_lock_vol = 0;   // value the (disabled) CW-audio slider snaps back to
@@ -1459,6 +1462,66 @@ static void grip_start_breathing(lv_obj_t *grip)
     lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
     lv_anim_start(&a);
+}
+
+// Full-screen breathing red bezel shown whenever FT8 simulation mode is on
+// (see ft8_sim.h) - an unmissable, glanceable reminder that nothing
+// transmitted right now is real, no matter which screen/modal is open.
+// Non-clickable (so it never steals touches) and explicitly re-foregrounded
+// every second (s_sim_border_keepalive_cb below) because later-built modals
+// (filter/CQ/identity/...) are also children of the same screen and would
+// otherwise end up drawn on top of it, hiding the border behind them.
+static lv_obj_t *s_sim_border = NULL;
+static bool      s_sim_border_active = false;
+
+static void sim_border_breathe_anim_cb(void *var, int32_t v)
+{
+    lv_obj_set_style_border_opa((lv_obj_t *)var, (lv_opa_t)v, 0);
+}
+
+static void sim_border_start_breathing(void)
+{
+    if (!s_sim_border) return;
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_sim_border);
+    lv_anim_set_exec_cb(&a, sim_border_breathe_anim_cb);
+    lv_anim_set_values(&a, LV_OPA_30, LV_OPA_COVER);
+    lv_anim_set_time(&a, 900);
+    lv_anim_set_playback_time(&a, 900);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_start(&a);
+}
+
+// Called once at drawer-build time (restores NVS state) and from the
+// drawer's own toggle callback, mirroring ui_set_diag_log_indicator().
+void ui_set_sim_mode_indicator(bool active)
+{
+    s_sim_border_active = active;
+    if (!s_sim_border) return;
+    if (display_lock(20)) {
+        if (active) {
+            lv_obj_clear_flag(s_sim_border, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(s_sim_border);
+            sim_border_start_breathing();
+        } else {
+            lv_anim_delete(s_sim_border, sim_border_breathe_anim_cb);
+            lv_obj_add_flag(s_sim_border, LV_OBJ_FLAG_HIDDEN);
+        }
+        display_unlock();
+    }
+}
+
+// 1 Hz keepalive: re-foregrounds the border (see comment above s_sim_border)
+// and is a second line of defense if its breathing animation is ever wiped
+// by lv_anim_delete_all() (e.g. the screenshot-capture freeze) without a
+// matching restart - cheap insurance, this only does anything while active.
+static void sim_border_keepalive_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_sim_border_active || !s_sim_border) return;
+    lv_obj_move_foreground(s_sim_border);
 }
 
 // Same breathing technique as the edge grips, applied to the bottom-bar
@@ -2304,6 +2367,22 @@ void ui_init(lv_display_t *disp)
     // opaque waterfall/bottom-bar in the bottom-right corner. Non-clickable,
     // so it never steals touches from the edge-swipe strips beneath it.
     build_signature(scr);
+
+    // FT8 simulation-mode breathing red bezel (see ui_set_sim_mode_indicator
+    // above). Built hidden; shown/animated once the drawer below restores
+    // the saved sim_mode_en state, and from the drawer toggle thereafter.
+    s_sim_border = lv_obj_create(scr);
+    lv_obj_set_size(s_sim_border, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_pos(s_sim_border, 0, 0);
+    lv_obj_set_style_bg_opa(s_sim_border, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_color(s_sim_border, lv_color_hex(0xFF0000), 0);
+    lv_obj_set_style_border_width(s_sim_border, 10, 0);
+    lv_obj_set_style_border_opa(s_sim_border, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(s_sim_border, 0, 0);
+    lv_obj_clear_flag(s_sim_border, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(s_sim_border, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_sim_border, LV_OBJ_FLAG_HIDDEN);
+    lv_timer_create(sim_border_keepalive_cb, 1000, NULL);
 
     ESP_LOGI(TAG, "UI built: top=%dpx spectrum=%dpx labels=%dpx waterfall=%dpx bottom=%dpx",
              TOP_BAR_H, SPECTRUM_H, LABEL_BAR_H, WATERFALL_H, BOTTOM_BAR_H);
@@ -3795,6 +3874,19 @@ static void drawer_check_distance_miles_cb(lv_event_t *e)
     ESP_LOGI(TAG, "FT8 distance unit: %s", s_distance_in_miles ? "miles" : "km");
 }
 
+// FT8 simulation mode: phantom-station practice (see ft8_sim.h). Pure
+// settings flip here - ft8_sim.c's own task polls this and ft8_tx.c's
+// interlock checks it directly, so there's nothing else to wire up at the
+// toggle site itself.
+static void drawer_check_sim_mode_cb(lv_event_t *e)
+{
+    lv_obj_t *cb = lv_event_get_target(e);
+    s_sim_mode_en = lv_obj_has_state(cb, LV_STATE_CHECKED);
+    settings_set_sim_mode_en(s_sim_mode_en);
+    ui_set_sim_mode_indicator(s_sim_mode_en);
+    ESP_LOGI(TAG, "FT8 simulation mode: %s", s_sim_mode_en ? "ON (radio not keyed)" : "off");
+}
+
 static void drawer_check_ft8_sync_lines_cb(lv_event_t *e)
 {
     lv_obj_t *cb = lv_event_get_target(e);
@@ -4038,6 +4130,24 @@ static void drawer_build(void)
         s_distance_in_miles = scfg_dist.distance_in_miles;
         s_check_distance_miles = make_drawer_checkbox(sec, s_distance_in_miles, drawer_check_distance_miles_cb, NULL);
         lv_obj_align(s_check_distance_miles, LV_ALIGN_TOP_RIGHT, 0, 6);
+        y += 56;
+    }
+    // FT8 simulation mode: phantom-station practice partner, real radio
+    // never keyed (see ft8_sim.h). FT8-only - same exclusive-to-FT8-mode
+    // pattern as DRAWER_SEC_DISTANCE above, not a Panadapter-mode setting.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SIMMODE, y, 56);
+        lv_obj_t *sim_lbl = lv_label_create(sec);
+        lv_label_set_text(sim_lbl, "FT8 Simulation Mode");
+        lv_obj_set_style_text_color(sim_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(sim_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(sim_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
+        qmx_settings_t scfg_sim;
+        settings_load_all(&scfg_sim);
+        s_sim_mode_en = scfg_sim.sim_mode_en;
+        s_check_sim_mode = make_drawer_checkbox(sec, s_sim_mode_en, drawer_check_sim_mode_cb, NULL);
+        lv_obj_align(s_check_sim_mode, LV_ALIGN_TOP_RIGHT, 0, 6);
+        ui_set_sim_mode_indicator(s_sim_mode_en);
         y += 56;
     }
     // Presets section: header + three buttons side-by-side
@@ -4517,8 +4627,8 @@ static void drawer_close(void)
 static void drawer_set_ft8_mode(bool ft8)
 {
     if (!s_drawer) return;
-    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_DIAG, DRAWER_SEC_DISTANCE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
-    static const int keep_h[] = { 56, 56, 56, 128, 72, 130 };
+    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_DIAG, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
+    static const int keep_h[] = { 56, 56, 56, 56, 128, 72, 130 };
     const int n_keep = sizeof(keep) / sizeof(keep[0]);
 
     for (int i = 0; i < N_DRAWER_SECTIONS; i++) {
@@ -4527,10 +4637,10 @@ static void drawer_set_ft8_mode(bool ft8)
         for (int k = 0; k < n_keep; k++) {
             if (keep[k] == i) { kept = true; break; }
         }
-        // DRAWER_SEC_DISTANCE is FT8-only (the decode-list km/miles unit is
-        // meaningless in Panadapter mode), unlike the rest of keep[] which is
-        // shared between both modes - so it's hidden, not kept, when !ft8.
-        if ((ft8 && !kept) || (!ft8 && i == DRAWER_SEC_DISTANCE)) {
+        // DRAWER_SEC_DISTANCE and DRAWER_SEC_SIMMODE are FT8-only (meaningless
+        // in Panadapter mode), unlike the rest of keep[] which is shared
+        // between both modes - so they're hidden, not kept, when !ft8.
+        if ((ft8 && !kept) || (!ft8 && (i == DRAWER_SEC_DISTANCE || i == DRAWER_SEC_SIMMODE))) {
             lv_obj_add_flag(s_drawer_sections[i], LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_clear_flag(s_drawer_sections[i], LV_OBJ_FLAG_HIDDEN);

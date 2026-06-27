@@ -15,6 +15,11 @@ typedef struct {
     const char *rst_sent;     // Signal report sent (e.g. "-07" or "599")
     const char *rst_rcvd;     // Signal report received (e.g. "-10" or "599")
     time_t      qso_time;     // UTC unix timestamp at QSO completion
+    // ARRL Field Day exchange (optional - NULL/empty when not a Field Day QSO).
+    const char *my_arrl_class;    // our class, e.g. "16A"
+    const char *my_arrl_section;  // our section, e.g. "EMA"
+    const char *their_arrl_class; // their class, e.g. "3A"
+    const char *their_arrl_section; // their section, e.g. "NNJ"
 } adif_qso_t;
 
 // Mount SPIFFS and prepare the ADIF log file. Loads the worked-call cache.

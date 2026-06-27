@@ -78,6 +78,10 @@ typedef struct {
     bool     distance_in_miles; // FT8 decode list: show distance in miles instead of km (default false)
     bool     ft8_sync_lines;  // Panadapter: FT8-sync-vs-SNTP waterfall slot-boundary lines + 2x waterfall speed (default false)
     ft8_filters_t ft8_filters;        // CQ-run reply include/exclude filters
+    bool     field_day_en;    // ARRL Field Day exchange mode: TX/RX class+section instead of grid/report (default false)
+    char     fd_class[4];     // Field Day class, e.g. "16A" (1-2 digit transmitter count + category letter)
+    char     fd_section[4];   // Field Day ARRL/RAC section abbreviation, e.g. "EMA"
+    bool     sim_mode_en;     // FT8 simulation mode: phantom stations, real radio never keyed (default false)
 } qmx_settings_t;
 
 // Initialise the settings module. Opens an NVS handle. Safe to call
@@ -162,6 +166,16 @@ void settings_set_ft8_sync_lines(bool v);
 // Band-plan strip region (debounced flush): 0=auto (derive from grid), 1=R1,
 // 2=R2, 3=R3.
 void settings_set_bandplan_region(uint8_t v);
+
+// ARRL Field Day exchange mode (debounced flush). When enabled, FT8 QSOs
+// exchange class+section (fd_class/fd_section) instead of grid/signal report.
+void settings_set_field_day_en(bool v);
+void settings_set_fd_class(const char *cls);
+void settings_set_fd_section(const char *section);
+
+// FT8 simulation mode (debounced flush): phantom-station practice mode -
+// see ft8_sim.h. The real QMX is never keyed while this is on.
+void settings_set_sim_mode_en(bool v);
 
 // WiFi boot-initiation toggle (debounced flush). When false the radio stays
 // idle at boot even if credentials are stored; the user can re-enable from

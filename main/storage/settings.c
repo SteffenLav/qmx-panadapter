@@ -57,6 +57,10 @@ static const char *TAG = "settings";
 #define KEY_BP_REGION    "bp_region"
 #define KEY_DISTANCE_MILES "dist_miles"
 #define KEY_FT8_SYNC_LINES "ft8_sync_ln"
+#define KEY_FIELD_DAY_EN   "fd_en"
+#define KEY_FD_CLASS       "fd_class"
+#define KEY_FD_SECTION     "fd_sect"
+#define KEY_SIM_MODE       "sim_mode"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -125,6 +129,10 @@ static const char *TAG = "settings";
 #define DIRTY_BP_REGION     (1ull << 40)
 #define DIRTY_DISTANCE_MILES (1ull << 41)
 #define DIRTY_FT8_SYNC_LINES (1ull << 42)
+#define DIRTY_FIELD_DAY_EN   (1ull << 43)
+#define DIRTY_FD_CLASS       (1ull << 44)
+#define DIRTY_FD_SECTION     (1ull << 45)
+#define DIRTY_SIM_MODE       (1ull << 46)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -243,6 +251,10 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_BP_REGION)   nvs_set_u8(s_nvs, KEY_BP_REGION, snap.bandplan_region);
         if (dirty_local & DIRTY_DISTANCE_MILES) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap.distance_in_miles ? 1 : 0);
         if (dirty_local & DIRTY_FT8_SYNC_LINES) nvs_set_u8(s_nvs, KEY_FT8_SYNC_LINES, snap.ft8_sync_lines ? 1 : 0);
+        if (dirty_local & DIRTY_FIELD_DAY_EN) nvs_set_u8(s_nvs, KEY_FIELD_DAY_EN, snap.field_day_en ? 1 : 0);
+        if (dirty_local & DIRTY_FD_CLASS)     nvs_set_str(s_nvs, KEY_FD_CLASS, snap.fd_class);
+        if (dirty_local & DIRTY_FD_SECTION)   nvs_set_str(s_nvs, KEY_FD_SECTION, snap.fd_section);
+        if (dirty_local & DIRTY_SIM_MODE)     nvs_set_u8(s_nvs, KEY_SIM_MODE, snap.sim_mode_en ? 1 : 0);
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
@@ -336,6 +348,10 @@ static void load_from_nvs(qmx_settings_t *out)
     out->snap_to_peak   = true;   // on by default (legacy behaviour)
     out->bandplan_region = 0;     // 0 = auto (derive from grid)
     memset(&out->ft8_filters, 0, sizeof(out->ft8_filters));
+    out->field_day_en = false;
+    out->fd_class[0]  = '\0';
+    out->fd_section[0] = '\0';
+    out->sim_mode_en = false;
 
     if (!s_ready) {
         ESP_LOGW(TAG, "load_all: NVS not ready, using defaults");
@@ -415,6 +431,16 @@ static void load_from_nvs(qmx_settings_t *out)
 
     sz = sizeof(out->ft8_filters);
     nvs_get_blob(s_nvs, KEY_FT8_FILT, &out->ft8_filters, &sz);
+
+    if (nvs_get_u8(s_nvs, KEY_FIELD_DAY_EN, &u8v) == ESP_OK) out->field_day_en = (u8v != 0);
+    out->fd_class[0] = '\0';
+    sz = sizeof(out->fd_class);
+    nvs_get_str(s_nvs, KEY_FD_CLASS, out->fd_class, &sz);
+    out->fd_section[0] = '\0';
+    sz = sizeof(out->fd_section);
+    nvs_get_str(s_nvs, KEY_FD_SECTION, out->fd_section, &sz);
+
+    if (nvs_get_u8(s_nvs, KEY_SIM_MODE, &u8v) == ESP_OK) out->sim_mode_en = (u8v != 0);
 
     ESP_LOGI(TAG, "loaded: db=[%.1f..%.1f] ema=%.2f iq=%d",
              out->db_min, out->db_max, out->ema_alpha, out->iq_enabled);
@@ -923,4 +949,52 @@ void settings_set_bandplan_region(uint8_t v)
     s_pending.bandplan_region = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_BP_REGION);
+}
+
+void settings_set_field_day_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.field_day_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.field_day_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_FIELD_DAY_EN);
+}
+
+void settings_set_fd_class(const char *cls)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (cls) {
+        strncpy(s_pending.fd_class, cls, sizeof(s_pending.fd_class) - 1);
+        s_pending.fd_class[sizeof(s_pending.fd_class) - 1] = '\0';
+    } else {
+        s_pending.fd_class[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_FD_CLASS);
+}
+
+void settings_set_fd_section(const char *section)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (section) {
+        strncpy(s_pending.fd_section, section, sizeof(s_pending.fd_section) - 1);
+        s_pending.fd_section[sizeof(s_pending.fd_section) - 1] = '\0';
+    } else {
+        s_pending.fd_section[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_FD_SECTION);
+}
+
+void settings_set_sim_mode_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.sim_mode_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.sim_mode_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_SIM_MODE);
 }

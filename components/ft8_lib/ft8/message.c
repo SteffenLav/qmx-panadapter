@@ -1,5 +1,6 @@
 #include "message.h"
 #include "text.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -45,6 +46,27 @@ static bool unpack58(uint64_t n58, const ftx_callsign_hash_interface_t* hash_if,
 
 static uint16_t packgrid(const char* grid4);
 static int unpackgrid(uint16_t igrid4, uint8_t ir, char* extra, ftx_field_t* extra_field_type);
+
+/// Write nbits (MSB-first) of value into payload starting at *bitpos, advancing *bitpos.
+static void bits_pack(uint8_t* payload, int* bitpos, uint32_t value, int nbits);
+/// Read nbits (MSB-first) from payload starting at *bitpos, advancing *bitpos.
+static uint32_t bits_unpack(const uint8_t* payload, int* bitpos, int nbits);
+
+// Standard ARRL/RAC Field Day section abbreviations, in the canonical order used by
+// WSJT-X's packjt77.f90 (data csec/.../) -- verified byte-for-byte against that source.
+// Index into this table (1-based) is what gets encoded as "isec" on the wire.
+#define ARRL_FD_NUM_SECTIONS 86
+static const char* const s_arrl_fd_sections[ARRL_FD_NUM_SECTIONS] = {
+    "AB", "AK", "AL", "AR", "AZ", "BC", "CO", "CT", "DE", "EB",
+    "EMA", "ENY", "EPA", "EWA", "GA", "GH", "IA", "ID", "IL", "IN",
+    "KS", "KY", "LA", "LAX", "NS", "MB", "MDC", "ME", "MI", "MN",
+    "MO", "MS", "MT", "NC", "ND", "NE", "NFL", "NH", "NL", "NLI",
+    "NM", "NNJ", "NNY", "TER", "NTX", "NV", "OH", "OK", "ONE", "ONN",
+    "ONS", "OR", "ORG", "PAC", "PR", "QC", "RI", "SB", "SC", "SCV",
+    "SD", "SDG", "SF", "SFL", "SJV", "SK", "SNJ", "STX", "SV", "TN",
+    "UT", "VA", "VI", "VT", "WCF", "WI", "WMA", "WNY", "WPA", "WTX",
+    "WV", "WWA", "WY", "DX", "PE", "NB"
+};
 
 /////////////////////////////////////////////////////////// Exported functions /////////////////////////////////////////////////////////////////
 
@@ -331,6 +353,88 @@ ftx_message_rc_t ftx_message_encode_nonstd(ftx_message_t* msg, ftx_callsign_hash
     return FTX_MESSAGE_RC_OK;
 }
 
+ftx_message_rc_t ftx_message_encode_arrl_fd(ftx_message_t* msg, ftx_callsign_hash_interface_t* hash_if, const char* call_to, const char* call_de, const char* extra)
+{
+    LOG(LOG_DEBUG, "ftx_message_encode_arrl_fd '%s' '%s' '%s'\n", call_to, call_de, extra);
+
+    char t1[8] = { 0 };
+    char t2[8] = { 0 };
+    char t3[8] = { 0 };
+    const char* pos = extra;
+    pos = copy_token(t1, sizeof(t1), pos);
+    pos = copy_token(t2, sizeof(t2), pos);
+    pos = copy_token(t3, sizeof(t3), pos);
+    (void)pos;
+
+    bool has_r = equals(t1, "R");
+    const char* class_str = has_r ? t2 : t1;
+    const char* section_str = has_r ? t3 : t2;
+
+    int class_len = strlen(class_str);
+    if (class_len < 2 || class_len > 3)
+        return FTX_MESSAGE_RC_ERROR_GRID;
+    char letter = class_str[class_len - 1];
+    if (!is_letter(letter))
+        return FTX_MESSAGE_RC_ERROR_GRID;
+    char numbuf[4] = { 0 };
+    for (int i = 0; i < class_len - 1; ++i)
+    {
+        if (!is_digit(class_str[i]))
+            return FTX_MESSAGE_RC_ERROR_GRID;
+        numbuf[i] = class_str[i];
+    }
+    int ntx = atoi(numbuf);
+    if (ntx < 1 || ntx > 32)
+        return FTX_MESSAGE_RC_ERROR_GRID;
+    int nclass = to_upper(letter) - 'A';
+
+    int section_len = strlen(section_str);
+    if (section_len < 2 || section_len > 3)
+        return FTX_MESSAGE_RC_ERROR_GRID;
+    int isec = -1;
+    for (int i = 0; i < ARRL_FD_NUM_SECTIONS; ++i)
+    {
+        if (equals(section_str, s_arrl_fd_sections[i]))
+        {
+            isec = i + 1;
+            break;
+        }
+    }
+    if (isec < 0)
+        return FTX_MESSAGE_RC_ERROR_GRID;
+
+    uint8_t ipa, ipb;
+    int32_t n28a = pack28(call_to, hash_if, &ipa);
+    int32_t n28b = pack28(call_de, hash_if, &ipb);
+    if (n28a < 0)
+        return FTX_MESSAGE_RC_ERROR_CALLSIGN1;
+    if (n28b < 0)
+        return FTX_MESSAGE_RC_ERROR_CALLSIGN2;
+    if (ipa != 0 || ipb != 0)
+        return FTX_MESSAGE_RC_ERROR_SUFFIX; // /P or /R suffixes are not supported in this message type
+
+    int intx = ntx - 1;
+    uint8_t n3 = 3;
+    if (intx >= 16)
+    {
+        n3 = 4;
+        intx -= 16;
+    }
+
+    memset(msg->payload, 0, FTX_PAYLOAD_LENGTH_BYTES);
+    int bitpos = 0;
+    bits_pack(msg->payload, &bitpos, (uint32_t)n28a, 28);
+    bits_pack(msg->payload, &bitpos, (uint32_t)n28b, 28);
+    bits_pack(msg->payload, &bitpos, has_r ? 1u : 0u, 1);
+    bits_pack(msg->payload, &bitpos, (uint32_t)intx, 4);
+    bits_pack(msg->payload, &bitpos, (uint32_t)nclass, 3);
+    bits_pack(msg->payload, &bitpos, (uint32_t)isec, 7);
+    bits_pack(msg->payload, &bitpos, (uint32_t)n3, 3);
+    bits_pack(msg->payload, &bitpos, 0u, 3); // i3 = 0
+
+    return FTX_MESSAGE_RC_OK;
+}
+
 ftx_message_rc_t ftx_message_encode_free(ftx_message_t* msg, const char* text)
 {
     uint8_t str_len = strlen(text);
@@ -390,7 +494,7 @@ ftx_message_rc_t ftx_message_decode(const ftx_message_t* msg, ftx_callsign_hash_
 {
     ftx_message_rc_t rc;
 
-    char buf[35]; // 13 + 13 + 6 (std/nonstd) / 14 (free text) / 19 (telemetry)
+    char buf[45]; // 13 + 13 + 6 (std/nonstd) / 14 (free text) / 19 (telemetry) / 17 (ARRL FD "R 32A WCF")
     char* field1 = buf;
     char* field2 = buf + 14;
     char* field3 = buf + 14 + 14;
@@ -410,6 +514,9 @@ ftx_message_rc_t ftx_message_decode(const ftx_message_t* msg, ftx_callsign_hash_
         break;
     case FTX_MESSAGE_TYPE_NONSTD_CALL:
         rc = ftx_message_decode_nonstd(msg, hash_if, field1, field2, field3, offsets->types);
+        break;
+    case FTX_MESSAGE_TYPE_ARRL_FD:
+        rc = ftx_message_decode_arrl_fd(msg, hash_if, field1, field2, field3, offsets->types);
         break;
     case FTX_MESSAGE_TYPE_FREE_TEXT:
         ftx_message_decode_free(msg, field1);
@@ -573,6 +680,45 @@ ftx_message_rc_t ftx_message_decode_nonstd(const ftx_message_t* msg, ftx_callsig
     strcpy(call_de, call_2);
     field_types[1] = FTX_FIELD_CALL;
     LOG(LOG_INFO, "Decoded non-standard (type %d) message [%s] [%s] [%s]\n", i3, call_to, call_de, extra);
+    return FTX_MESSAGE_RC_OK;
+}
+
+ftx_message_rc_t ftx_message_decode_arrl_fd(const ftx_message_t* msg, ftx_callsign_hash_interface_t* hash_if,
+    char* call_to, char* call_de, char* extra, ftx_field_t field_types[FTX_MAX_MESSAGE_FIELDS])
+{
+    int bitpos = 0;
+    uint32_t n28a = bits_unpack(msg->payload, &bitpos, 28);
+    uint32_t n28b = bits_unpack(msg->payload, &bitpos, 28);
+    uint32_t ir = bits_unpack(msg->payload, &bitpos, 1);
+    uint32_t intx = bits_unpack(msg->payload, &bitpos, 4);
+    uint32_t nclass = bits_unpack(msg->payload, &bitpos, 3);
+    uint32_t isec = bits_unpack(msg->payload, &bitpos, 7);
+    uint8_t n3 = ftx_message_get_n3(msg);
+
+    call_to[0] = call_de[0] = extra[0] = '\0';
+
+    if (unpack28(n28a, 0, 0, hash_if, call_to, &field_types[0]) < 0)
+        return FTX_MESSAGE_RC_ERROR_CALLSIGN1;
+    if (unpack28(n28b, 0, 0, hash_if, call_de, &field_types[1]) < 0)
+        return FTX_MESSAGE_RC_ERROR_CALLSIGN2;
+
+    if (isec < 1 || isec > ARRL_FD_NUM_SECTIONS)
+        return FTX_MESSAGE_RC_ERROR_GRID;
+
+    int ntx = (int)intx + 1;
+    if (n3 == 4)
+        ntx += 16;
+    char classbuf[16];
+    classbuf[0] = '\0';
+    snprintf(classbuf, sizeof(classbuf), "%d%c", ntx, (char)('A' + nclass));
+
+    if (ir)
+        snprintf(extra, 16, "R %s %s", classbuf, s_arrl_fd_sections[isec - 1]);
+    else
+        snprintf(extra, 16, "%s %s", classbuf, s_arrl_fd_sections[isec - 1]);
+    field_types[2] = FTX_FIELD_GRID;
+
+    LOG(LOG_INFO, "Decoded ARRL FD (type %d) message [%s] [%s] [%s]\n", n3, call_to, call_de, extra);
     return FTX_MESSAGE_RC_OK;
 }
 
@@ -1043,6 +1189,35 @@ static bool unpack58(uint64_t n58, const ftx_callsign_hash_interface_t* hash_if,
         return save_callsign(hash_if, callsign, NULL, NULL, NULL);
 
     return false;
+}
+
+static void bits_pack(uint8_t* payload, int* bitpos, uint32_t value, int nbits)
+{
+    for (int i = nbits - 1; i >= 0; --i)
+    {
+        int bit = (value >> i) & 1u;
+        int byte_idx = *bitpos / 8;
+        int bit_idx = 7 - (*bitpos % 8);
+        if (bit)
+            payload[byte_idx] |= (uint8_t)(1u << bit_idx);
+        else
+            payload[byte_idx] &= (uint8_t)~(1u << bit_idx);
+        (*bitpos)++;
+    }
+}
+
+static uint32_t bits_unpack(const uint8_t* payload, int* bitpos, int nbits)
+{
+    uint32_t value = 0;
+    for (int i = 0; i < nbits; ++i)
+    {
+        int byte_idx = *bitpos / 8;
+        int bit_idx = 7 - (*bitpos % 8);
+        int bit = (payload[byte_idx] >> bit_idx) & 1u;
+        value = (value << 1) | (uint32_t)bit;
+        (*bitpos)++;
+    }
+    return value;
 }
 
 static uint16_t packgrid(const char* grid4)

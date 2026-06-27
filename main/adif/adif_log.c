@@ -212,6 +212,23 @@ void adif_log_record(const adif_qso_t *qso)
     write_field(f, "MY_CALL",      qso->my_call);
     write_field(f, "MY_GRIDSQUARE", qso->my_grid);
     write_field(f, "GRIDSQUARE",   qso->their_grid);
+    if (qso->their_arrl_section && qso->their_arrl_section[0]) {
+        // Standard ADIF fields for a Field Day-style contest exchange.
+        // STX_STRING/SRX_STRING carry the literal "<class> <section>" text;
+        // ARRL_SECT/MY_ARRL_SECT carry just the section for loggers that
+        // parse it as an enum.
+        char stx[16], srx[16];
+        snprintf(stx, sizeof(stx), "%s %s",
+                 qso->my_arrl_class ? qso->my_arrl_class : "", qso->my_arrl_section ? qso->my_arrl_section : "");
+        snprintf(srx, sizeof(srx), "%s %s",
+                 qso->their_arrl_class ? qso->their_arrl_class : "", qso->their_arrl_section);
+        write_field(f, "CONTEST_ID",  "ARRL-FD");
+        write_field(f, "STX_STRING",  stx);
+        write_field(f, "SRX_STRING",  srx);
+        write_field(f, "ARRL_SECT",   qso->their_arrl_section);
+        if (qso->my_arrl_section && qso->my_arrl_section[0])
+            write_field(f, "MY_ARRL_SECT", qso->my_arrl_section);
+    }
     fprintf(f, "<EOR>\n");
 
     fclose(f);

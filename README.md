@@ -10,9 +10,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Beta — v0.18.7.** FT8 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
+> **Beta — v0.18.8.** FT8 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v0.18.7.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v0.18.8.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -138,7 +138,7 @@ Swipe in from the **left edge** to switch to the FT8 screen. The Tab5 starts dec
 4. Tap **Auto Pounce** to hand the full QSO to the auto-engine (works through report → RR73 → 73 with patient retry), or **Transmit** for a single manual message.
 5. To call CQ: tap **Call CQ**. The engine picks a clear audio slot, fires CQ, automatically answers the first caller, runs the full exchange, logs the QSO, and resumes calling CQ.
 
-Every completed QSO is written to an ADIF log downloadable from the web UI. See [FT8 Transmit](#ft8-transmit) for the full picture.
+Every completed QSO is written to an ADIF log downloadable from the web UI. See [FT8 Transmit](#ft8-transmit) for the full picture, including ARRL Field Day exchange mode and a no-radio-keyed practice/simulation mode.
 
 ### Step 7 — Something not working?
 
@@ -255,6 +255,8 @@ Controls appear top to bottom in this order:
 | **Band-plan region** | Auto (from your grid square) / Region 1 (EU/AF) / Region 2 (Americas) / Region 3 (Asia/Pac) — drives the [band-plan strip](#spectrum-and-waterfall) |
 | **Waterfall** | Black level, Contrast, Adaptive floor blend, and FFT window — see [Waterfall colourisation](#waterfall-colourisation) below |
 
+The drawer shows a different subset while on the FT8 screen (Flip 180°, Diagnostic log, WiFi, Identity, Display — plus two FT8-only controls not shown above: **Distance in miles** for the decode list's KM/MI column, and **FT8 Simulation Mode**, see [FT8 Simulation mode](#ft8-simulation-mode)).
+
 ### Waterfall colourisation
 
 Four live, NVS-persisted sliders/dropdown at the bottom of the settings drawer fine-tune how the waterfall maps signal to colour — changes scroll in from the top as you drag:
@@ -346,7 +348,7 @@ Three things you can do with it:
   "qso_count":   12,
   "qrz_key_set": false,
   "eqsl_creds_set": false,
-  "tab5_fw":     "v0.18.7",
+  "tab5_fw":     "v0.18.8",
   "qmx_fw":      "1_03_002QMX"
 }
 ```
@@ -463,9 +465,19 @@ Tap **Save** to persist (NVS) and apply immediately.
 
 **⚠ Transmits unattended — never leave it running unsupervised.** When enabled, the robot picks a CQ caller every slot (filtered the same way as above, plus a worked-before skip) and runs the full exchange itself — no per-QSO confirmation, no tap required. Pick a **Priority**: Strongest signal, Weakest signal, or Most distant grid. Same TX1→report→RR73→73→ADIF-log flow as a manually-tapped reply; you just aren't the one tapping. You remain responsible for everything it transmits under your callsign, same as any other unattended digital-mode software.
 
-### TX status indicator
+### ARRL Field Day mode
 
-The left pane shows a persistent status line below the slot countdown:
+A checkbox in the same Filter modal as above (with Class/Section text fields next to it) switches the FT8 exchange from grid/signal-report to ARRL Field Day's class+section format — e.g. `16A EMA` instead of a grid square, using the standard `WA9XYZ KA1ABC R 16A EMA`-style FT8 message type (the same one WSJT-X uses for FD). Pounce and CQ-run both follow the convention automatically: the initial grid-exchange message is unchanged, but the report-equivalent step carries class+section instead, with the receiving side echoing it back `R`-prefixed.
+
+While the mode is on, **Call CQ** automatically tags your CQ message `CQ FD <call> <grid>` (the same "CQ modifier" mechanism as `CQ POTA`/`CQ DX`) so other Field Day stations know to expect this exchange instead of a normal report — this overrides any other modifier on the active CQ preset for as long as the mode is enabled. The long-press CQ preset editor reflects this: while Field Day mode is on, the three presets are shown dimmed (their own modifier doesn't matter right now) and a live preview line shows exactly what will be transmitted.
+
+Completed Field Day QSOs log the standard ADIF contest fields (see the table below) alongside the usual call/freq/time fields, so they import cleanly into contest-logging software.
+
+### FT8 Simulation mode
+
+A **"FT8 Simulation Mode"** checkbox in the FT8 settings drawer (FT8 screen only) lets you practice a full QSO — pounce, CQ-run, and Field Day exchanges — without any real station and **without ever keying the QMX**. Two phantom stations (`W1AW`/FN31 and `K9ZZ`/EN52) periodically "call CQ": each one is a real FT8 message, synthesized to actual GFSK audio and decoded through the same on-device receive pipeline real RF goes through, then dropped into the normal decode list — tap one to pounce, or call CQ yourself and one will answer. When you transmit, the firmware detects it and schedules the phantom's reply on the correct next slot, reading whatever state the QSO machine is waiting on so the content (report, RR73, or class+section if Field Day mode is also on) always matches.
+
+While simulation mode is on, a **breathing red border** frames the whole screen as an unmissable reminder that nothing transmitted right now is real — the hard interlock lives in firmware (every CAT command that would key the radio is skipped, logged instead), not just in the UI. Completed simulated QSOs log to the same ADIF file as real ones (handy for testing the upload/Field-Day-field paths) — clear the log afterward if you don't want practice contacts mixed in with real ones.
 
 ### TX status indicator
 
@@ -526,6 +538,7 @@ LoTW and POTA.app have no equivalent built-in path — LoTW requires a certifica
 | MY_CALL | Your callsign (from Identity in the drawer) |
 | MY_GRIDSQUARE | Your grid |
 | GRIDSQUARE | Their grid (from the decoded FT8 message) |
+| CONTEST_ID, STX_STRING, SRX_STRING, ARRL_SECT, MY_ARRL_SECT | Field Day mode only: contest ID `ARRL-FD`, your/their literal `<class> <section>` exchange text, and their/your section alone |
 
 **Clear.** `GET /api/adif/clear` from the web UI wipes the file and resets the worked-call cache.
 
@@ -625,7 +638,7 @@ I (xxxx) bsp_info: panel:    ST7123 (inferred from touch)
 I (xxxx) bsp_info: touch:    ST7123 @ 0x55
 I (xxxx) bsp_info: heap:     230.5 kB internal free, 28.80 MB PSRAM free
 I (xxxx) bsp_info: idf:      v5.4.4
-I (xxxx) bsp_info: firmware: v0.18.7
+I (xxxx) bsp_info: firmware: v0.18.8
 I (xxxx) bsp_info: =====================
 ```
 
@@ -728,6 +741,7 @@ main/
   ft8_tx.c                  FT8 TX engine (build/arm/run/abort)
   ft8_test.c                FT8 slot loop (RX decode / TX burst)
   ft8_qso.c                 Auto QSO state machine
+  ft8_sim.c                 FT8 simulation mode: phantom-station practice QSOs
   ft8_status.c              Mutex-protected FT8 status string
   adif/adif_log.c           ADIF QSO logging
   adif/qrz_upload.c         QRZ Logbook API upload (one record per request)

@@ -54,6 +54,12 @@ void ui_set_bottom_version(const char *text);
 // and from the settings-drawer toggle.
 void ui_set_diag_log_indicator(bool active);
 
+// Full-screen breathing red bezel shown while FT8 simulation mode is on
+// (see ft8_sim.h) - an unmissable reminder that nothing transmitted right
+// now is real. Called from the FT8-drawer-only sim mode toggle and once at
+// drawer-build time to restore the saved NVS state.
+void ui_set_sim_mode_indicator(bool active);
+
 // Bottom-bar right zone: WiFi icon+SSID (or "off" text), optional RSSI
 // (rendered in jitter-free fixed-width digit cells), and a trailing
 // suffix (e.g. " -67dBm  192.168.1.5" minus the rssi number -> "dBm  192.168.1.5").

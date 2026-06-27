@@ -1,6 +1,6 @@
 # QMX Panadapter — Master Todo List + Status Assessment
 
-**Last updated:** 2026-06-26
+**Last updated:** 2026-06-27
 **Scope:** v1.0 release gates → open investigations → next-up → longer-term roadmap
 **Source:** CLAUDE.md + README.md + groups.io feature requests + this session
 **Assessment:** Code grep + git log + memory system
@@ -39,6 +39,8 @@
 | 10 | JS8/RTTY modes — *JS8 after FT4 (#5)* | ❌ Not started | Large | RTTY is a fully separate pipeline (feasibility doc); JS8 shares ft8_lib + benefits from FT4's slot-abstraction work |
 | 11 | DSP polish (NR, notch) | ❌ Not started | Medium | New algorithms |
 | **Closed/Shipped (since last update)** | | | | |
+| — | ARRL Field Day FT8 exchange mode | ✅ Shipped (v0.18.8) | — | Bit layout verified vs WSJT-X source; QSO machine, Filter-modal UI, CQ FD auto-tag, ADIF fields |
+| — | FT8 simulation mode (phantom stations) | ✅ Shipped (v0.18.8) | — | Real synth+decode pipeline, hard TX interlock, breathing red border |
 | — | FT8 decode-yield gap to v0.18.0 | ✅ Closed (v0.18.7) | — | Controlled A/B: HEAD == v0.18.0, 15.38 dec/slot each |
 | — | FT8 auto-answer robot | ✅ Un-shelved, live TX (v0.18.7) | — | Permanent on-screen "unattended" disclaimer |
 | — | CQ tone auto-relocation on clash | ✅ Shipped (v0.18.7) | — | Was just a warning before; now self-heals |
@@ -170,6 +172,12 @@ Means identical to two decimal places; no decode-collapse cliff in either run. *
 
 ## ✅ Shipped Since Last Update
 
+### ARRL Field Day FT8 exchange mode (v0.18.8)
+New `ftx_message_encode_arrl_fd`/`decode_arrl_fd` in `components/ft8_lib/ft8/message.c` (the message type was enumerated but never implemented, including upstream). Bit layout + 86-entry section table verified byte-for-byte against WSJT-X's `packjt77.f90`. `ft8_qso.c` carries class+section on the report-equivalent exchange step; Call CQ auto-tags `CQ FD <call> <grid>` (replacing any other modifier); ADIF gains `CONTEST_ID`/`STX_STRING`/`SRX_STRING`/`ARRL_SECT`/`MY_ARRL_SECT`. The CQ preset editor locks (dim + disabled + Cancel-only) while the mode is on, with a live always-accurate TX preview. See CLAUDE.md "ARRL Field Day mode" for the full technical writeup and `docs/version-history.md`'s v0.18.8 entry.
+
+### FT8 simulation mode (v0.18.8)
+New `ft8_sim.c`: two phantom stations (W1AW, K9ZZ) call CQ and reply via the real encode→GFSK-synthesis→decode pipeline, with reply content driven by `ft8_qso_get_state()` so the QSO machine can't tell a simulated contact from a real one. Hard TX interlock lives in `ft8_tx.c` (checks `sim_mode_en` directly, skips every `cat_*` call) so a connected QMX is never keyed. Breathing red full-screen border while active. FT8-drawer-only toggle. See CLAUDE.md "FT8 simulation mode".
+
 ### FT8 decode-yield gap to v0.18.0 (closed in v0.18.7)
 See "Closed Investigation" above — controlled A/B proved HEAD matches v0.18.0 exactly; the v0.18.6 fix set is sufficient.
 
@@ -207,6 +215,7 @@ Red breathing dot moved net +30px right of the battery text; added a "Diag" text
 
 | Version | Date | Items |
 |---------|------|-------|
+| v0.18.8 | Jun 27 | ARRL Field Day FT8 exchange mode (wire format + QSO machine + UI + ADIF); FT8 simulation mode (phantom stations, hard TX interlock, breathing border) |
 | v0.18.7 | Jun 26 | FT8 decode-yield gap CLOSED (controlled A/B); auto-answer robot un-shelved; CQ tone auto-relocation; SNTP/QMX time-priority fix + FT8 auto-sync; own-call highlight cache fix; Filter modal checkbox sizing; recovery-flasher port auto-detect |
 | v0.18.6 | Jun 26 | FT8 decode-yield investigation (cw_audio_init ghost task, d140485 restoration, opacity-set skip); RST_SENT fix; distance-in-miles; diag-log dot |
 | v0.18.5 | Jun 25 | CW audio band-aid (preopen/dsp_cw_forward disabled); FT8 double-spawn crash guard restored; bootloader-corruption hotfix + recovery tooling |

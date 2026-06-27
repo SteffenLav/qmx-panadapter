@@ -59,7 +59,8 @@ typedef struct {
                                               // optional for CQ (user TX preference)
     uint8_t  tones[FT8_NN];                  // pre-encoded tone indices (0..7)
     char     display_text[32];               // e.g. "K1ABC OZ1LAV JO45ab"
-    char     extra_field[8];                 // for ROGER_RPT: "R-10"; for 73: "73"
+    char     extra_field[16];                // for ROGER_RPT: "R-10"; for 73: "73";
+                                              // Field Day: "R 32A WCF" / "16A EMA"
 } ft8_tx_request_t;
 
 // Default base audio tone (Hz) for an originated CQ call - there's no
@@ -106,6 +107,20 @@ bool ft8_tx_build_request_text(const char *message_text,
                                int audio_freq_hz,
                                ft8_tx_request_t *out_req,
                                char *out_err, size_t out_err_len);
+
+// Build an ARRL Field Day exchange request (kind must be REPLY or ROGER_RPT -
+// the two messages that carry an explicit class+section instead of a
+// grid/report). class_section is the literal text to encode, e.g. "16A EMA"
+// (our own exchange, no R) or "R 3A NNJ" (acknowledging the other station's
+// exchange). Always uses ftx_message_encode_arrl_fd - never falls back to
+// grid. Same semantics/return value as ft8_tx_build_request() otherwise.
+bool ft8_tx_build_request_fd(ft8_tx_kind_t kind,
+                             const char *target_call,
+                             int target_audio_freq_hz,
+                             int64_t target_last_utc,
+                             const char *class_section,
+                             ft8_tx_request_t *out_req,
+                             char *out_err, size_t out_err_len);
 
 // Run the (blocking, ~1 s worst case) Digi-mode pre-flight and arm *req
 // for transmission on its next matching slot. Replaces any request that

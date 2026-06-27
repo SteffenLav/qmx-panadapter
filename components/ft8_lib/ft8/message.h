@@ -138,6 +138,12 @@ ftx_message_rc_t ftx_message_encode_std(ftx_message_t* msg, ftx_callsign_hash_in
 /// Pack Type 4 (One nonstandard call and one hashed call) message
 ftx_message_rc_t ftx_message_encode_nonstd(ftx_message_t* msg, ftx_callsign_hash_interface_t* hash_if, const char* call_to, const char* call_de, const char* extra);
 
+/// Pack Type 0.3/0.4 (ARRL Field Day exchange) message.
+/// \a extra is the third+ field exactly as transmitted, e.g. "16A EMA" or "R 16A EMA".
+/// Class is 1-2 digit transmitter count (1-32) followed by a single category letter (A-H).
+/// Section must match one of the 86 standard ARRL/RAC section abbreviations.
+ftx_message_rc_t ftx_message_encode_arrl_fd(ftx_message_t* msg, ftx_callsign_hash_interface_t* hash_if, const char* call_to, const char* call_de, const char* extra);
+
 /// Pack plain text, up to 13 characters
 ftx_message_rc_t ftx_message_encode_free(ftx_message_t* msg, const char* text);
 ftx_message_rc_t ftx_message_encode_telemetry(ftx_message_t* msg, const uint8_t* telemetry);
@@ -145,6 +151,9 @@ ftx_message_rc_t ftx_message_encode_telemetry(ftx_message_t* msg, const uint8_t*
 ftx_message_rc_t ftx_message_decode(const ftx_message_t* msg, ftx_callsign_hash_interface_t* hash_if, char* message, ftx_message_offsets_t* offsets);
 ftx_message_rc_t ftx_message_decode_std(const ftx_message_t* msg, ftx_callsign_hash_interface_t* hash_if, char* call_to, char* call_de, char* extra, ftx_field_t field_types[FTX_MAX_MESSAGE_FIELDS]);
 ftx_message_rc_t ftx_message_decode_nonstd(const ftx_message_t* msg, ftx_callsign_hash_interface_t* hash_if, char* call_to, char* call_de, char* extra, ftx_field_t field_types[FTX_MAX_MESSAGE_FIELDS]);
+/// Decode a Type 0.3/0.4 (ARRL Field Day) message. \a extra receives the class+section text,
+/// e.g. "16A EMA" or "R 16A EMA" (caller must provide at least 16 bytes).
+ftx_message_rc_t ftx_message_decode_arrl_fd(const ftx_message_t* msg, ftx_callsign_hash_interface_t* hash_if, char* call_to, char* call_de, char* extra, ftx_field_t field_types[FTX_MAX_MESSAGE_FIELDS]);
 void ftx_message_decode_free(const ftx_message_t* msg, char* text);
 void ftx_message_decode_telemetry_hex(const ftx_message_t* msg, char* telemetry_hex);
 void ftx_message_decode_telemetry(const ftx_message_t* msg, uint8_t* telemetry);

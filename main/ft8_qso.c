@@ -45,13 +45,18 @@
 static const char *TAG = "ft8_qso";
 
 // How many consecutive RX slots with no expected reply before we give up on
-// the station we're working. ~4 cycles of patience (the user can wander off
-// and come back, fading, QRM, etc.).
-#define QSO_TIMEOUT_SLOTS  4
+// the station we're working. ~6 cycles of patience (the user can wander off
+// and come back, fading, QRM, etc.). Bumped from 4 after a logged near-miss
+// (2026-06-26): an OH5KNL RR73 landed just 29s after a 4-slot timeout fired -
+// they needed one more cycle to successfully copy our report and reply.
+#define QSO_TIMEOUT_SLOTS  6
 
 // Clamp the SNR we report to a sane FT8 range.
 #define RPT_MIN_DB  (-24)
 #define RPT_MAX_DB  (+15)
+
+// ARRL Field Day exchange text, max len "32F WCF" + "R " prefix + NUL.
+#define FT8_FD_EXCH_LEN 20
 
 static SemaphoreHandle_t  s_lock;
 static ft8_qso_state_t    s_state          = FT8_QSO_IDLE;
@@ -72,6 +77,10 @@ static bool               s_have_cq_saved;
 // CQ-run: rst_sent = our report of their signal; rst_rcvd = "599".
 static char               s_rst_sent[8];
 static char               s_rst_rcvd[8];
+// ARRL Field Day: their class+section, captured when their roger/exchange
+// message is recognized (WAIT_RPT pounce path, WAIT_ROGER cqrun path). Empty
+// when the QSO isn't a Field Day exchange.
+static char               s_fd_their_exch[FT8_FD_EXCH_LEN];
 
 // ---------------------------------------------------------------------------
 
@@ -99,12 +108,42 @@ static bool load_my_call(char *err, size_t err_len)
 }
 
 // "R-08" / "R+02" / "RRR" - they rogered our report (vs. repeating their grid,
-// which can also begin with 'R' for far-east locators like RE78).
+// which can also begin with 'R' for far-east locators like RE78). Also covers
+// the ARRL Field Day roger form "R 16A EMA" (R followed by a space then their
+// class+section) - that combination of leading R + space never occurs in a
+// plain grid/report token, so no fd_mode gate is needed.
 static bool is_roger_token(const char *t)
 {
     if (t[0] != 'R') return false;
     char c = t[1];
-    return c == '-' || c == '+' || c == 'R' || (c >= '0' && c <= '9');
+    return c == '-' || c == '+' || c == 'R' || c == ' ' || (c >= '0' && c <= '9');
+}
+
+// Split a decoded message into its first two tokens (callsigns) and "rest"
+// (everything after, trimmed of leading spaces, verbatim - may itself
+// contain spaces, e.g. an ARRL Field Day "R 16A EMA" exchange). Replaces a
+// fixed 3-token sscanf, which truncated multi-word third fields.
+static bool split_msg3(const char *text, char *tok1, size_t cap1,
+                       char *tok2, size_t cap2, char *rest, size_t cap_rest)
+{
+    const char *p = text;
+    while (*p == ' ') p++;
+    const char *s1 = p;
+    while (*p && *p != ' ') p++;
+    size_t l1 = (size_t)(p - s1);
+    if (l1 == 0 || l1 >= cap1) return false;
+    memcpy(tok1, s1, l1); tok1[l1] = '\0';
+
+    while (*p == ' ') p++;
+    const char *s2 = p;
+    while (*p && *p != ' ') p++;
+    size_t l2 = (size_t)(p - s2);
+    if (l2 == 0 || l2 >= cap2) return false;
+    memcpy(tok2, s2, l2); tok2[l2] = '\0';
+
+    while (*p == ' ') p++;
+    snprintf(rest, cap_rest, "%s", p);
+    return true;
 }
 
 // Format a coarse SNR into an FT8 report token: "-07", "+02", "-15".
@@ -140,17 +179,16 @@ static bool scan_for_response(int64_t slot_sec,
         if (strcmp(snap[i].call, s_target) != 0) continue;
         if (snap[i].last_utc != slot_sec) continue;
 
-        char tok1[16], tok2[16], tok3[16];
-        tok3[0] = '\0';
-        if (sscanf(snap[i].last_text, "%15s %15s %15s", tok1, tok2, tok3) < 2) continue;
+        char tok1[16], tok2[16], rest[FT8_FD_EXCH_LEN];
+        if (!split_msg3(snap[i].last_text, tok1, sizeof(tok1), tok2, sizeof(tok2), rest, sizeof(rest))) continue;
         if (strcmp(tok1, s_my_call) != 0) continue; // not addressed to us
         if (strcmp(tok2, s_target)  != 0) continue; // not from them
 
         if (snr_db_out) *snr_db_out = snap[i].last_snr_db;
-        if (strcmp(tok3, "RR73") == 0) { *got_rr73 = true; return true; }
-        if (strcmp(tok3, "73")   == 0) { *got_73   = true; return true; }
-        if (tok3[0] != '\0') {
-            snprintf(report_buf, report_cap, "%s", tok3);
+        if (strcmp(rest, "RR73") == 0) { *got_rr73 = true; return true; }
+        if (strcmp(rest, "73")   == 0) { *got_73   = true; return true; }
+        if (rest[0] != '\0') {
+            snprintf(report_buf, report_cap, "%s", rest);
             return true;
         }
     }
@@ -214,12 +252,11 @@ static bool scan_for_reply_to_me(int64_t slot_sec,
 
     for (int i = 0; i < n; i++) {
         if (snap[i].last_utc != slot_sec) continue;
-        char tok1[16], tok2[16], tok3[16];
-        tok3[0] = '\0';
-        if (sscanf(snap[i].last_text, "%15s %15s %15s", tok1, tok2, tok3) < 2) continue;
+        char tok1[16], tok2[16], rest[FT8_FD_EXCH_LEN];
+        if (!split_msg3(snap[i].last_text, tok1, sizeof(tok1), tok2, sizeof(tok2), rest, sizeof(rest))) continue;
         if (strcmp(tok1, s_my_call) != 0) continue;  // not addressed to us
         if (strcmp(tok2, s_my_call) == 0) continue;  // avoid MYCALL MYCALL loops
-        if (!tok3[0]) continue;                       // no third token
+        if (!rest[0]) continue;                       // no third field
         if (!ft8_filter_match(snap[i].last_text, &qs.ft8_filters)) continue;
         // Worked-before: tok2 is the answering station's callsign. If we've
         // logged them already ON THIS BAND and the operator enabled the filter,
@@ -235,15 +272,14 @@ static bool scan_for_reply_to_me(int64_t slot_sec,
 
     if (best_idx < 0) return false;
 
-    char tok1[16], tok2[16], tok3[16];
-    tok3[0] = '\0';
-    sscanf(snap[best_idx].last_text, "%15s %15s %15s", tok1, tok2, tok3);
+    char tok1[16], tok2[16], rest[FT8_FD_EXCH_LEN];
+    split_msg3(snap[best_idx].last_text, tok1, sizeof(tok1), tok2, sizeof(tok2), rest, sizeof(rest));
     snprintf(caller_buf, caller_cap, "%s", tok2);
     if (caller_freq_out) *caller_freq_out = snap[best_idx].last_freq;
     if (caller_snr_out)  *caller_snr_out  = snap[best_idx].last_snr_db;
-    if (strcmp(tok3, "RR73") == 0) { *got_rr73 = true; return true; }
-    if (strcmp(tok3, "73")   == 0) { *got_73   = true; return true; }
-    snprintf(report_buf, report_cap, "%s", tok3);
+    if (strcmp(rest, "RR73") == 0) { *got_rr73 = true; return true; }
+    if (strcmp(rest, "73")   == 0) { *got_73   = true; return true; }
+    snprintf(report_buf, report_cap, "%s", rest);
     return true;
 }
 
@@ -309,6 +345,22 @@ static bool send_next(ft8_tx_kind_t kind, const char *target, int freq,
     if (!ft8_tx_build_request(kind, target, freq, slot_sec, extra,
                               &req, err, sizeof(err))) {
         ESP_LOGE(TAG, "send_next build failed (extra='%s'): %s", extra, err);
+        return false;
+    }
+    set_current(&req, st);
+    return true;
+}
+
+// Same as send_next(), but builds an ARRL Field Day (class+section) message
+// instead of the grid/report-based standard encoding.
+static bool send_next_fd(ft8_tx_kind_t kind, const char *target, int freq,
+                         int64_t slot_sec, const char *class_section, ft8_qso_state_t st)
+{
+    ft8_tx_request_t req;
+    char err[64];
+    if (!ft8_tx_build_request_fd(kind, target, freq, slot_sec, class_section,
+                                 &req, err, sizeof(err))) {
+        ESP_LOGE(TAG, "send_next_fd build failed (extra='%s'): %s", class_section, err);
         return false;
     }
     set_current(&req, st);
@@ -395,6 +447,7 @@ void ft8_qso_init(void)
     s_from_cq       = false;
     s_rst_sent[0]   = '\0';
     s_rst_rcvd[0]   = '\0';
+    s_fd_their_exch[0] = '\0';
 }
 
 bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
@@ -447,6 +500,7 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     // Pounce: we receive their report (RST_RCVD); we never give our own (RST_SENT = "599").
     strncpy(s_rst_sent, "599", sizeof(s_rst_sent));
     s_rst_rcvd[0] = '\0';
+    s_fd_their_exch[0] = '\0';
     unlock();
 
     ft8_status_set("QSO %s: TX1 sent - waiting for report", tx1_req->target_call);
@@ -493,6 +547,7 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
     // CQ-run: we give our report (RST_SENT set in cqrun_answer); they never give theirs (RST_RCVD = "599").
     s_rst_sent[0] = '\0';
     strncpy(s_rst_rcvd, "599", sizeof(s_rst_rcvd));
+    s_fd_their_exch[0] = '\0';
     unlock();
 
     ft8_status_set("CQ: calling - listening for answers");
@@ -515,6 +570,10 @@ static void cqrun_answer(const char *caller, int caller_freq, int caller_snr,
     int our_freq = s_freq_hz;   // already set to our CQ tone in ft8_qso_start_cq()
     unlock();
 
+    qmx_settings_t qs;
+    settings_load_all(&qs);
+    bool fd_mode = qs.field_day_en && qs.fd_class[0] && qs.fd_section[0];
+
     bool ok;
     char rpt[8];
     fmt_report(caller_snr, rpt, sizeof(rpt));
@@ -527,6 +586,14 @@ static void cqrun_answer(const char *caller, int caller_freq, int caller_snr,
             s_rst_sent[sizeof(s_rst_sent) - 1] = '\0';
             ft8_status_set("QSO %s: sending 73 (their SNR %s)", caller, rpt);
         }
+    } else if (fd_mode) {
+        // Field Day: our first reply carries our own class+section (no "R" -
+        // this is the first time we're sending it), not a numeric report.
+        char exch[FT8_FD_EXCH_LEN];
+        snprintf(exch, sizeof(exch), "%s %s", qs.fd_class, qs.fd_section);
+        ok = send_next_fd(FT8_TX_KIND_REPLY, caller, our_freq, slot_sec, exch,
+                          FT8_QSO_WAIT_ROGER);
+        if (ok) ft8_status_set("QSO %s: answered - sending %s", caller, exch);
     } else {
         ok = send_next(FT8_TX_KIND_REPLY, caller, our_freq, slot_sec, rpt,
                        FT8_QSO_WAIT_ROGER);
@@ -617,6 +684,24 @@ void ft8_qso_advance(int64_t slot_sec)
                 }
             }
 
+            // ARRL Field Day exchange (if any): their_exch is "<class> <section>";
+            // split off the section (last token) for the dedicated ADIF fields.
+            char their_fd_class[FT8_FD_EXCH_LEN] = {0}, their_fd_section[FT8_FD_EXCH_LEN] = {0};
+            lock();
+            bool have_fd_exch = s_fd_their_exch[0] != '\0';
+            char fd_exch_copy[FT8_FD_EXCH_LEN];
+            strncpy(fd_exch_copy, s_fd_their_exch, sizeof(fd_exch_copy) - 1);
+            fd_exch_copy[sizeof(fd_exch_copy) - 1] = '\0';
+            unlock();
+            if (have_fd_exch) {
+                char *sp = strrchr(fd_exch_copy, ' ');
+                if (sp) {
+                    *sp = '\0';
+                    snprintf(their_fd_class, sizeof(their_fd_class), "%s", fd_exch_copy);
+                    snprintf(their_fd_section, sizeof(their_fd_section), "%s", sp + 1);
+                }
+            }
+
             adif_qso_t qso = {
                 .their_call = target,
                 .my_call    = s_my_call,
@@ -627,8 +712,13 @@ void ft8_qso_advance(int64_t slot_sec)
                 .rst_sent   = s_rst_sent,
                 .rst_rcvd   = s_rst_rcvd,
                 .qso_time   = time(NULL),
+                .my_arrl_class      = have_fd_exch ? qs.fd_class   : NULL,
+                .my_arrl_section    = have_fd_exch ? qs.fd_section : NULL,
+                .their_arrl_class   = have_fd_exch ? their_fd_class   : NULL,
+                .their_arrl_section = have_fd_exch ? their_fd_section : NULL,
             };
             adif_log_record(&qso);
+            s_fd_their_exch[0] = '\0';
         }
         return;
     }
@@ -638,7 +728,7 @@ void ft8_qso_advance(int64_t slot_sec)
         char caller[FT8_CALL_MAX_LEN] = {0};
         int  caller_freq = freq;
         int  caller_snr  = 0;
-        char report[8]   = {0};
+        char report[FT8_FD_EXCH_LEN] = {0};
         bool got_rr73 = false, got_73 = false;
         if (scan_for_reply_to_me(slot_sec, caller, sizeof(caller),
                                  &caller_freq, &caller_snr,
@@ -662,13 +752,19 @@ void ft8_qso_advance(int64_t slot_sec)
     // (pounce hasn't fired TX1 yet → nothing to hear; don't scan early)
     if (st == FT8_QSO_WAIT_RPT && slot_sec < min_scan) return;
 
-    char report[8] = {0};
+    char report[FT8_FD_EXCH_LEN] = {0};
     bool got_rr73 = false, got_73 = false;
     int  snr_db   = 0;
     bool found = scan_for_response(slot_sec, report, sizeof(report), &got_rr73, &got_73, &snr_db);
 
+    qmx_settings_t qs_exch;
+    settings_load_all(&qs_exch);
+    bool fd_mode = qs_exch.field_day_en && qs_exch.fd_class[0] && qs_exch.fd_section[0];
+
     if (st == FT8_QSO_WAIT_RPT) {
-        // POUNCE: we sent our grid; expect their signal report.
+        // POUNCE: we sent our grid; expect their signal report (normal mode)
+        // or their class+section (Field Day - sent without "R", since this is
+        // their first FD-specific message to us).
         if (!found) { register_miss("waiting for report"); return; }
 
         // RST_SENT for ADIF: the protocol never has us transmit a numeric
@@ -686,6 +782,17 @@ void ft8_qso_advance(int64_t slot_sec)
             ok = send_next(FT8_TX_KIND_73, target, freq, slot_sec, "73",
                            FT8_QSO_WAIT_DONE);
             if (ok) ft8_status_set("QSO %s: sending 73", target);
+        } else if (fd_mode) {
+            // Their class+section (no R - this is their first FD message).
+            // Capture it for ADIF, then acknowledge with our own, R-prefixed.
+            strncpy(s_fd_their_exch, report, sizeof(s_fd_their_exch) - 1);
+            s_fd_their_exch[sizeof(s_fd_their_exch) - 1] = '\0';
+            char roger[FT8_FD_EXCH_LEN];
+            snprintf(roger, sizeof(roger), "R %s %s", qs_exch.fd_class, qs_exch.fd_section);
+            ESP_LOGI(TAG, "WAIT_RPT (FD): %s sent '%s' -> TX2 %s", target, report, roger);
+            ok = send_next_fd(FT8_TX_KIND_ROGER_RPT, target, freq, slot_sec, roger,
+                              FT8_QSO_WAIT_RR73);
+            if (ok) ft8_status_set("QSO %s: heard %s - sending %s", target, report, roger);
         } else {
             char roger[8];
             make_roger(report, roger, sizeof(roger));
@@ -718,6 +825,12 @@ void ft8_qso_advance(int64_t slot_sec)
             return;
         }
         if (is_roger_token(report)) {
+            if (report[1] == ' ') {
+                // Field Day ack "R <theirclass> <theirsection>" - capture their
+                // exchange for ADIF (strip the "R " prefix).
+                strncpy(s_fd_their_exch, report + 2, sizeof(s_fd_their_exch) - 1);
+                s_fd_their_exch[sizeof(s_fd_their_exch) - 1] = '\0';
+            }
             if (send_next(FT8_TX_KIND_ROGER_RPT, target, freq, slot_sec, "RR73",
                           FT8_QSO_WAIT_DONE))
                 ft8_status_set("QSO %s: rogered %s - sending RR73", target, report);

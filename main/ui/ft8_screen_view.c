@@ -154,6 +154,7 @@ static lv_obj_t *s_btn_override_73     = NULL;  // manual QSO override: force 73
 static lv_obj_t *s_btn_tx_even  = NULL;
 static lv_obj_t *s_btn_tx_odd   = NULL;
 static lv_obj_t *s_btn_filter   = NULL;  // "Filter" button — opens exclude-prefix modal
+static lv_obj_t *s_btn_adif     = NULL;  // "ADIF-log" button — opens the read-only ADIF viewer
 static int        s_cq_parity   = -1;
 
 static lv_obj_t *s_list         = NULL;
@@ -1042,11 +1043,11 @@ static void cq_btn_long_press_cb(lv_event_t *e)
     ft8_cq_modal_show();
 }
 
-// Long-press "Active: N" -> open the read-only ADIF log viewer.
-static void adif_log_long_press_cb(lv_event_t *e)
+// "ADIF-log" button -> open the read-only ADIF log viewer.
+static void adif_log_btn_cb(lv_event_t *e)
 {
     (void)e;
-    ESP_LOGI(TAG, "Active label long-pressed -> ADIF log viewer");
+    ESP_LOGI(TAG, "ADIF-log tapped -> ADIF log viewer");
     adif_view_modal_show();
 }
 
@@ -1365,9 +1366,13 @@ void ft8_screen_view_init(lv_obj_t *parent)
 
     update_parity_btns();  // sync colours to s_cq_parity (persists on FT8 re-entry)
 
-    // Filter button — opens modal for exclude-prefix, worked-before, etc.
+    // Filter / ADIF-log — side by side, each half the old full-width Filter
+    // button (140 px, 8 px gap). ADIF-log was a long-press on "Active: N"
+    // (field feedback: hard to land a long-press reliably) - a dedicated
+    // button is a much easier target. Same white text as Filter; ADIF-log
+    // gets a darker blue fill to read as the secondary of the pair.
     s_btn_filter = lv_btn_create(s_left_pane);
-    lv_obj_set_size(s_btn_filter, 288, 60);
+    lv_obj_set_size(s_btn_filter, 140, 60);
     lv_obj_set_pos(s_btn_filter, 0, 214);  // #3: 75% less space over Filter button
     lv_obj_set_style_bg_color(s_btn_filter, lv_color_hex(UI_COLOR_PRIMARY), 0);  // pale blue
     lv_obj_set_style_border_color(s_btn_filter, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
@@ -1379,6 +1384,20 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_color(filter_lbl, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(filter_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(filter_lbl);
+
+    s_btn_adif = lv_btn_create(s_left_pane);
+    lv_obj_set_size(s_btn_adif, 140, 60);
+    lv_obj_set_pos(s_btn_adif, 148, 214);
+    lv_obj_set_style_bg_color(s_btn_adif, lv_color_hex(0x163d5e), 0);  // darker blue
+    lv_obj_set_style_border_color(s_btn_adif, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
+    lv_obj_set_style_border_width(s_btn_adif, 2, 0);
+    lv_obj_set_style_radius(s_btn_adif, 8, 0);
+    lv_obj_add_event_cb(s_btn_adif, adif_log_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *adif_lbl = lv_label_create(s_btn_adif);
+    lv_label_set_text(adif_lbl, "ADIF-log");
+    lv_obj_set_style_text_color(adif_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(adif_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(adif_lbl);
 
     // "ME:xxxx" label removed — callsign/grid now shown compactly under MODE
 
@@ -1407,17 +1426,12 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_center(s_cq_lbl);
     ft8_screen_view_refresh_cq_label();  // show the active CQ message
 
-    // "Active: N" - own line directly below the Call CQ button. Long-press
-    // opens the on-device ADIF log viewer (read-only worked-station list) -
-    // a gesture rather than a new button, since the left pane has no spare
-    // width left for one.
+    // "Active: N" - own line directly below the Call CQ button.
     s_lbl_heard = lv_label_create(s_left_pane);
     lv_label_set_text(s_lbl_heard, "Active: 0");
     lv_obj_set_style_text_color(s_lbl_heard, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(s_lbl_heard, &lv_font_montserrat_24, 0);
     lv_obj_set_pos(s_lbl_heard, 0, 346);
-    lv_obj_add_flag(s_lbl_heard, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_lbl_heard, adif_log_long_press_cb, LV_EVENT_LONG_PRESSED, NULL);
 
     // TX state indicator - hidden while idle; amber/armed or red/active,
     // tap to cancel/abort. See t_clock_cb (1 Hz refresh: state, colour,

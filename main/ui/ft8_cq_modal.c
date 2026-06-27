@@ -24,8 +24,16 @@ static lv_obj_t *s_keyboard  = NULL;
 static lv_obj_t *s_ta[N_CQ]    = { NULL, NULL, NULL };
 static lv_obj_t *s_radio[N_CQ] = { NULL, NULL, NULL };
 static lv_obj_t *s_add_lbl   = NULL;  // "+ <call> <grid>" quick-insert button label
+static lv_obj_t *s_add_btn   = NULL;
+static lv_obj_t *s_save_btn  = NULL;
+static lv_obj_t *s_fd_hint   = NULL;  // Field Day status note - set in show()
 static int       s_sel       = 0;
 static bool      s_open      = false;
+// While true (Field Day mode on), the whole editor is locked - everything
+// except Cancel is both visually dimmed/disabled AND ignored by its handler,
+// so there's no path to edit/save/select a preset while it's in effect,
+// regardless of how LVGL's DISABLED state behaves for a given widget type.
+static bool      s_fd_locked = false;
 
 static void to_upper_inplace(char *s)
 {
@@ -44,18 +52,59 @@ static void build_default_cq(char *out, size_t len)
     }
 }
 
+// True if the (space-terminated) token at the start of `tok` contains a
+// digit - callsigns always do, CQ modifier tokens (POTA, SOTA, DX, ...)
+// never do.
+static bool token_has_digit(const char *tok)
+{
+    for (; *tok && *tok != ' '; tok++) {
+        if (*tok >= '0' && *tok <= '9') return true;
+    }
+    return false;
+}
+
+// Core Field Day tagging logic, shared between the real TX path
+// (ft8_cq_get_active_text, reading the saved preset) and the editor's live
+// preview (reading whatever is currently typed, unsaved) - one function, so
+// the preview can never drift out of sync with what actually gets sent.
+static void apply_fd_tag(const char *base, char *out, size_t len, bool field_day_en)
+{
+    // Not a "CQ" message (or "CQ" isn't a standalone token) - nothing to tag.
+    bool is_cq = (strncmp(base, "CQ", 2) == 0) && (base[2] == ' ' || base[2] == '\0');
+    if (!field_day_en || !is_cq) {
+        snprintf(out, len, "%s", base);
+        return;
+    }
+
+    // Field Day mode: force the standard "CQ FD ..." modifier (same
+    // mechanism as "CQ POTA"/"CQ SOTA"), REPLACING any other modifier the
+    // preset carries (DX/POTA/SOTA/...) - FD signalling takes priority for
+    // the whole-operation duration FD mode is on, and FT8's CQ format only
+    // has room for one modifier token.
+    const char *rest = base + 2;
+    while (*rest == ' ') rest++;
+    if (*rest && !token_has_digit(rest)) {
+        while (*rest && *rest != ' ') rest++;  // skip the existing modifier token
+        while (*rest == ' ') rest++;
+    }
+    if (*rest) snprintf(out, len, "CQ FD %s", rest);
+    else       snprintf(out, len, "CQ FD");
+}
+
 void ft8_cq_get_active_text(char *out, size_t len)
 {
     if (!out || !len) return;
     qmx_settings_t s;
     settings_load_all(&s);
     uint8_t sel = (s.cq_sel <= 2) ? s.cq_sel : 0;
+    char base[28];
     if (s.cq_msg[sel][0]) {
-        strncpy(out, s.cq_msg[sel], len - 1);
-        out[len - 1] = '\0';
+        strncpy(base, s.cq_msg[sel], sizeof(base) - 1);
+        base[sizeof(base) - 1] = '\0';
     } else {
-        build_default_cq(out, len);  // empty slot -> default CQ
+        build_default_cq(base, sizeof(base));  // empty slot -> default CQ
     }
+    apply_fd_tag(base, out, len, s.field_day_en);
 }
 
 // Reflect single-selection in the radio column.
@@ -68,15 +117,91 @@ static void apply_radio_state(void)
     }
 }
 
+// Live, always-accurate preview of what Call CQ will actually transmit for
+// whichever preset is currently selected, reading the textarea's *unsaved*
+// text so it tracks every keystroke and every preset switch. Bullet-proof by
+// construction: it calls the exact same apply_fd_tag() the real TX path
+// uses, so it can never show something different from what gets sent.
+static void update_fd_preview(void)
+{
+    if (!s_fd_hint) return;
+    qmx_settings_t s;
+    settings_load_all(&s);
+    if (!s.field_day_en) {
+        lv_label_set_text(s_fd_hint, "");
+        return;
+    }
+    if (s_sel < 0 || s_sel >= N_CQ || !s_ta[s_sel]) return;
+
+    char base[28];
+    const char *raw = lv_textarea_get_text(s_ta[s_sel]);
+    strncpy(base, raw ? raw : "", sizeof(base) - 1);
+    base[sizeof(base) - 1] = '\0';
+    to_upper_inplace(base);  // presets are saved upper-cased; match that
+
+    char tx[28];
+    apply_fd_tag(base, tx, sizeof(tx), true);
+
+    char line[128];
+    snprintf(line, sizeof(line),
+             LV_SYMBOL_WARNING " Field Day mode ON - any tag above is overridden. Will transmit: \"%s\"", tx);
+    lv_label_set_text(s_fd_hint, line);
+}
+
+// Lock the whole editor when Field Day mode is on: editing/selecting/saving
+// a preset is moot either way (FD always overrides whatever modifier is
+// there), so there is nothing useful to do here except back out. Every
+// widget below is both visually dimmed+disabled AND its handler short-
+// circuits via s_fd_locked - belt and suspenders, so there's no path to
+// sneak past LVGL's DISABLED state for a particular widget type. Cancel is
+// deliberately left untouched: it's the only thing you can do.
+static void apply_fd_dim(bool field_day_en)
+{
+    s_fd_locked = field_day_en;
+    lv_opa_t opa = field_day_en ? LV_OPA_50 : LV_OPA_COVER;
+    for (int i = 0; i < N_CQ; i++) {
+        if (s_ta[i]) {
+            lv_obj_set_style_opa(s_ta[i], opa, 0);
+            if (field_day_en) lv_obj_add_state(s_ta[i], LV_STATE_DISABLED);
+            else              lv_obj_remove_state(s_ta[i], LV_STATE_DISABLED);
+        }
+        if (s_radio[i]) {
+            lv_obj_set_style_opa(s_radio[i], opa, 0);
+            if (field_day_en) lv_obj_add_state(s_radio[i], LV_STATE_DISABLED);
+            else              lv_obj_remove_state(s_radio[i], LV_STATE_DISABLED);
+        }
+    }
+    if (s_add_btn) {
+        lv_obj_set_style_opa(s_add_btn, opa, 0);
+        if (field_day_en) lv_obj_add_state(s_add_btn, LV_STATE_DISABLED);
+        else               lv_obj_remove_state(s_add_btn, LV_STATE_DISABLED);
+    }
+    if (s_save_btn) {
+        lv_obj_set_style_opa(s_save_btn, opa, 0);
+        if (field_day_en) lv_obj_add_state(s_save_btn, LV_STATE_DISABLED);
+        else               lv_obj_remove_state(s_save_btn, LV_STATE_DISABLED);
+    }
+}
+
 static void radio_clicked_cb(lv_event_t *e)
 {
+    if (s_fd_locked) return;
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     s_sel = idx;
     apply_radio_state();
+    update_fd_preview();
+}
+
+static void ta_value_changed_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_fd_locked) return;
+    update_fd_preview();
 }
 
 static void ta_focused_cb(lv_event_t *e)
 {
+    if (s_fd_locked) return;
     lv_obj_t *ta = lv_event_get_target(e);
     // Editing a field implies you want to use it: select its radio too.
     // Also only one field shows the blinking cursor at a time.
@@ -87,6 +212,7 @@ static void ta_focused_cb(lv_event_t *e)
             lv_obj_remove_state(s_ta[i], LV_STATE_FOCUSED);
         }
     }
+    update_fd_preview();
     if (!s_keyboard) return;
     lv_keyboard_set_textarea(s_keyboard, ta);
     lv_obj_clear_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
@@ -114,6 +240,7 @@ static void modal_close(void)
 static void add_suffix_cb(lv_event_t *e)
 {
     (void)e;
+    if (s_fd_locked) return;
     if (s_sel < 0 || s_sel >= N_CQ || !s_ta[s_sel]) return;
     qmx_settings_t s;
     settings_load_all(&s);
@@ -132,6 +259,7 @@ static void add_suffix_cb(lv_event_t *e)
 static void save_btn_cb(lv_event_t *e)
 {
     (void)e;
+    if (s_fd_locked) return;  // Cancel is the only button that works while locked
     for (int i = 0; i < N_CQ; i++) {
         char buf[28] = {0};
         const char *raw = s_ta[i] ? lv_textarea_get_text(s_ta[i]) : NULL;
@@ -169,7 +297,7 @@ static void modal_build(void)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *panel = lv_obj_create(s_modal);
-    lv_obj_set_size(panel, 1040, 380);
+    lv_obj_set_size(panel, 1040, 424);   // +44 vs pre-Field-Day-hint height
     lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 18);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
@@ -184,6 +312,15 @@ static void modal_build(void)
     lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    // Field Day status note - text/visibility set in show() from live
+    // settings, since this modal can be reopened without rebuilding it.
+    s_fd_hint = lv_label_create(panel);
+    lv_obj_set_width(s_fd_hint, 1000);
+    lv_label_set_long_mode(s_fd_hint, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(s_fd_hint, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_text_color(s_fd_hint, lv_color_hex(0xFF8800), 0);
+    lv_obj_align(s_fd_hint, LV_ALIGN_TOP_LEFT, 0, 40);
 
     // Square themed checkbox indicator — same style as filter modal / drawer.
     static lv_style_t style_ind;
@@ -202,7 +339,7 @@ static void modal_build(void)
     }
 
     for (int i = 0; i < N_CQ; i++) {
-        int y = 56 + i * 72;
+        int y = 100 + i * 72;
 
         // Text area first, so the checkbox can be vertically centred against it.
         s_ta[i] = lv_textarea_create(panel);
@@ -216,6 +353,7 @@ static void modal_build(void)
         lv_obj_set_style_text_font(s_ta[i], &lv_font_montserrat_24, 0);
         ui_theme_style_textarea(s_ta[i]);
         lv_obj_add_event_cb(s_ta[i], ta_focused_cb, LV_EVENT_FOCUSED, NULL);
+        lv_obj_add_event_cb(s_ta[i], ta_value_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
         s_radio[i] = lv_checkbox_create(panel);
         lv_checkbox_set_text(s_radio[i], "");
@@ -241,32 +379,33 @@ static void modal_build(void)
 
     // Quick-insert: append "<call> <grid>" to the active field. Label is set
     // dynamically in show() from the saved identity.
-    lv_obj_t *add_btn = lv_btn_create(panel);
-    lv_obj_set_size(add_btn, 380, 64);
-    lv_obj_align(add_btn, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(add_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
-    lv_obj_set_style_radius(add_btn, 8, 0);
-    lv_obj_add_event_cb(add_btn, add_suffix_cb, LV_EVENT_CLICKED, NULL);
-    s_add_lbl = lv_label_create(add_btn);
+    s_add_btn = lv_btn_create(panel);
+    lv_obj_set_size(s_add_btn, 380, 64);
+    lv_obj_align(s_add_btn, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(s_add_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_radius(s_add_btn, 8, 0);
+    lv_obj_add_event_cb(s_add_btn, add_suffix_cb, LV_EVENT_CLICKED, NULL);
+    s_add_lbl = lv_label_create(s_add_btn);
     lv_label_set_text(s_add_lbl, "+ Call Grid");
     lv_obj_set_style_text_color(s_add_lbl, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(s_add_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(s_add_lbl);
 
-    lv_obj_t *save_btn = lv_btn_create(panel);
-    lv_obj_set_size(save_btn, 220, 64);
-    lv_obj_align(save_btn, LV_ALIGN_BOTTOM_RIGHT, -40, 0);
-    lv_obj_set_style_bg_color(save_btn, lv_color_hex(0x2e8b3a), 0);
-    lv_obj_set_style_radius(save_btn, 8, 0);
-    lv_obj_add_event_cb(save_btn, save_btn_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *save_lbl = lv_label_create(save_btn);
+    s_save_btn = lv_btn_create(panel);
+    lv_obj_set_size(s_save_btn, 220, 64);
+    lv_obj_align(s_save_btn, LV_ALIGN_BOTTOM_RIGHT, -40, 0);
+    lv_obj_set_style_bg_color(s_save_btn, lv_color_hex(0x2e8b3a), 0);
+    lv_obj_set_style_radius(s_save_btn, 8, 0);
+    lv_obj_add_event_cb(s_save_btn, save_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *save_lbl = lv_label_create(s_save_btn);
     lv_label_set_text(save_lbl, "Save");
     lv_obj_set_style_text_color(save_lbl, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(save_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(save_lbl);
 
-    // Physical keyboard: Enter -> Save, Esc -> Cancel.
-    ui_kbd_set_buttons(save_btn, cancel_btn);
+    // Physical keyboard: Enter -> Save, Esc -> Cancel. (save_btn_cb itself
+    // still checks s_fd_locked, so Enter can't bypass the lock either.)
+    ui_kbd_set_buttons(s_save_btn, cancel_btn);
 
     s_keyboard = lv_keyboard_create(s_modal);
     static lv_style_t style_kb_btn;
@@ -330,6 +469,12 @@ void ft8_cq_modal_show(void)
     }
     apply_radio_state();
     ui_theme_focus_textarea(s_ta[0]);
+
+    // Field Day mode: dim the presets (their modifier word is overridden
+    // either way) and show a live, always-accurate preview of what Call CQ
+    // will actually transmit for the active preset.
+    apply_fd_dim(s.field_day_en);
+    update_fd_preview();
 
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);

@@ -56,6 +56,7 @@
 #include "ft8/message.h"
 #include "ft8/decode.h"
 #include "ft8/constants.h"
+#include "ft8/encode.h"
 #include "common/monitor.h"
 
 #include "dsp.h"
@@ -1011,6 +1012,346 @@ static void ft8_task(void *arg)
     ESP_LOGI(TAG, "ft8_task exiting; processed %d slots", slot_idx);
     s_ft8_task_alive = false;
     vTaskDelete(NULL);
+}
+
+// ---------------------------------------------------------------------------
+// ARRL Field Day end-to-end self-test: encode -> GFSK audio synthesis ->
+// the REAL on-device STFT/candidate-search/LDPC decode pipeline -> decode.
+// Heap-allocated port of ft8_lib's own gen_ft8.c demo synthesizer (synth_gfsk/
+// gfsk_pulse) - the original uses ~620 KB of stack-allocated VLAs, which is
+// fine on a PC demo but would blow any ESP32 task stack, so every array here
+// is heap_caps_malloc'd (PSRAM) instead. This is the closest thing to "did we
+// just hear a real Field Day station" without an actual second radio: it
+// exercises the exact same monitor_process/ftx_find_candidates/
+// ftx_decode_candidate code path that runs on live RF, just fed a synthetic
+// (noise-free) waveform instead of USB audio.
+// ---------------------------------------------------------------------------
+
+#define FD_E2E_GFSK_BT     2.0f          // FT8 GFSK shaping bandwidth factor
+#define FD_E2E_GFSK_K      5.336446f     // pi * sqrt(2 / log(2))
+
+static bool synth_gfsk_heap(const uint8_t *symbols, int n_sym, float f0,
+                            float symbol_bt, float symbol_period,
+                            int signal_rate, float *signal)
+{
+    int n_spsym = (int)(0.5f + signal_rate * symbol_period);
+    int n_wave  = n_sym * n_spsym;
+    float dphi_peak = 2.0f * (float)M_PI / n_spsym;  // hmod = 1.0
+
+    float *dphi  = heap_caps_malloc((size_t)(n_wave + 2 * n_spsym) * sizeof(float), MALLOC_CAP_SPIRAM);
+    float *pulse = heap_caps_malloc((size_t)(3 * n_spsym) * sizeof(float), MALLOC_CAP_SPIRAM);
+    if (!dphi || !pulse) {
+        if (dphi) heap_caps_free(dphi);
+        if (pulse) heap_caps_free(pulse);
+        return false;
+    }
+
+    for (int i = 0; i < n_wave + 2 * n_spsym; i++) {
+        dphi[i] = 2.0f * (float)M_PI * f0 / signal_rate;
+    }
+
+    for (int i = 0; i < 3 * n_spsym; i++) {
+        float t = i / (float)n_spsym - 1.5f;
+        float arg1 = FD_E2E_GFSK_K * symbol_bt * (t + 0.5f);
+        float arg2 = FD_E2E_GFSK_K * symbol_bt * (t - 0.5f);
+        pulse[i] = (erff(arg1) - erff(arg2)) / 2.0f;
+    }
+
+    for (int i = 0; i < n_sym; i++) {
+        int ib = i * n_spsym;
+        for (int j = 0; j < 3 * n_spsym; j++) {
+            dphi[j + ib] += dphi_peak * symbols[i] * pulse[j];
+        }
+    }
+    for (int j = 0; j < 2 * n_spsym; j++) {
+        dphi[j]                  += dphi_peak * pulse[j + n_spsym] * symbols[0];
+        dphi[j + n_sym * n_spsym] += dphi_peak * pulse[j] * symbols[n_sym - 1];
+    }
+
+    float phi = 0;
+    for (int k = 0; k < n_wave; k++) {
+        signal[k] = sinf(phi);
+        phi = fmodf(phi + dphi[k + n_spsym], 2.0f * (float)M_PI);
+    }
+    int n_ramp = n_spsym / 8;
+    for (int i = 0; i < n_ramp; i++) {
+        float env = (1.0f - cosf(2.0f * (float)M_PI * i / (2 * n_ramp))) / 2.0f;
+        signal[i] *= env;
+        signal[n_wave - 1 - i] *= env;
+    }
+
+    heap_caps_free(dphi);
+    heap_caps_free(pulse);
+    return true;
+}
+
+// Runs on its own task (see ft8_arrl_fd_e2e_selftest() below) - the
+// FFT/monitor machinery needs a large stack (same as ft8_task's 65536 bytes),
+// far more than the "main" task's 8 KB (CONFIG_ESP_MAIN_TASK_STACK_SIZE).
+// Running this directly in app_main's call stack caused an immediate stack
+// protection fault.
+static void ft8_arrl_fd_e2e_selftest_task(void *arg)
+{
+    (void)arg;
+    const char *call_to = "K1ABC";
+    const char *call_de = "OZ1LAV";
+    const char *extra   = "R 16A EMA";
+    const float tone_hz = 1500.0f;
+
+    ftx_message_t msg;
+    if (ftx_message_encode_arrl_fd(&msg, NULL, call_to, call_de, extra) != FTX_MESSAGE_RC_OK) {
+        ESP_LOGE(TAG, "FD e2e selftest: FAIL (encode)");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    uint8_t tones[FT8_NN];
+    ft8_encode(msg.payload, tones);
+
+    int n_spsym = (int)(0.5f + SR_HZ * FT8_SYMBOL_PERIOD);  // 1920
+    int n_wave  = FT8_NN * n_spsym;                          // 151680 (~12.64 s)
+
+    float *signal = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
+    if (!signal) {
+        ESP_LOGE(TAG, "FD e2e selftest: FAIL (signal alloc)");
+        vTaskDelete(NULL);
+        return;
+    }
+    memset(signal, 0, SLOT_SAMPLES * sizeof(float));
+
+    // Start ~0.5s in, like a real capture's burst-within-slot framing.
+    int start = (int)(0.5f * SR_HZ);
+    if (start + n_wave > SLOT_SAMPLES) start = 0;
+    bool synth_ok = synth_gfsk_heap(tones, FT8_NN, tone_hz, FD_E2E_GFSK_BT,
+                                    FT8_SYMBOL_PERIOD, SR_HZ, signal + start);
+    if (!synth_ok) {
+        ESP_LOGE(TAG, "FD e2e selftest: FAIL (synth alloc)");
+        heap_caps_free(signal);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    const monitor_config_t cfg = {
+        .f_min = 200.0f, .f_max = 3000.0f, .sample_rate = SR_HZ,
+        .time_osr = 2, .freq_osr = 2, .protocol = FTX_PROTOCOL_FT8,
+    };
+    monitor_t *mon = heap_caps_malloc(sizeof(monitor_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!mon) {
+        ESP_LOGE(TAG, "FD e2e selftest: FAIL (monitor alloc)");
+        heap_caps_free(signal);
+        vTaskDelete(NULL);
+        return;
+    }
+    monitor_init(mon, &cfg);
+
+    int blk = mon->block_size;
+    int n_blocks = SLOT_SAMPLES / blk;
+    for (int i = 0; i < n_blocks; i++) {
+        monitor_process(mon, &signal[i * blk]);
+    }
+
+    ftx_candidate_t cands[FT8_MAX_CANDIDATES];
+    int n_cand = ftx_find_candidates(&mon->wf, FT8_MAX_CANDIDATES, cands, FT8_FIND_MIN_SCORE);
+
+    bool found = false;
+    for (int i = 0; i < n_cand; i++) {
+        ftx_message_t dec_msg;
+        ftx_decode_status_t st;
+        if (!ftx_decode_candidate(&mon->wf, &cands[i], FT8_LDPC_MAX_ITERS, &dec_msg, &st)) continue;
+        if (ftx_message_get_type(&dec_msg) != FTX_MESSAGE_TYPE_ARRL_FD) continue;
+
+        char dec_to[16], dec_de[16], dec_extra[20];
+        ftx_field_t ft[FTX_MAX_MESSAGE_FIELDS];
+        if (ftx_message_decode_arrl_fd(&dec_msg, NULL, dec_to, dec_de, dec_extra, ft) != FTX_MESSAGE_RC_OK) continue;
+
+        bool ok = strcmp(dec_to, call_to) == 0 && strcmp(dec_de, call_de) == 0 && strcmp(dec_extra, extra) == 0;
+        ESP_LOGI(TAG, "FD e2e selftest: candidate -> '%s' '%s' '%s' (score=%d, match=%d)",
+                 dec_to, dec_de, dec_extra, cands[i].score, ok);
+        if (ok) { found = true; break; }
+    }
+
+    if (found) {
+        ESP_LOGI(TAG, "FD e2e selftest: PASS - full encode->GFSK-audio->STFT->LDPC->decode "
+                       "pipeline round-tripped '%s' '%s' '%s' (%d candidate(s) total)",
+                 call_to, call_de, extra, n_cand);
+    } else {
+        ESP_LOGE(TAG, "FD e2e selftest: FAIL - %d candidate(s) found, none matched", n_cand);
+    }
+
+    monitor_free(mon);
+    heap_caps_free(mon);
+    heap_caps_free(signal);
+    vTaskDelete(NULL);
+}
+
+bool ft8_synth_and_decode(const ftx_message_t *msg, float tone_hz,
+                          char *out_text, size_t out_len,
+                          int *out_snr_db, int *out_score)
+{
+    if (!msg || !out_text || !out_len) return false;
+
+    uint8_t tones[FT8_NN];
+    ft8_encode(msg->payload, tones);
+
+    int n_spsym = (int)(0.5f + SR_HZ * FT8_SYMBOL_PERIOD);
+    int n_wave  = FT8_NN * n_spsym;
+
+    float *signal = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
+    if (!signal) return false;
+    memset(signal, 0, SLOT_SAMPLES * sizeof(float));
+
+    int start = (int)(0.5f * SR_HZ);
+    if (start + n_wave > SLOT_SAMPLES) start = 0;
+    if (!synth_gfsk_heap(tones, FT8_NN, tone_hz, FD_E2E_GFSK_BT, FT8_SYMBOL_PERIOD, SR_HZ, signal + start)) {
+        heap_caps_free(signal);
+        return false;
+    }
+
+    const monitor_config_t cfg = {
+        .f_min = 200.0f, .f_max = 3000.0f, .sample_rate = SR_HZ,
+        .time_osr = 2, .freq_osr = 2, .protocol = FTX_PROTOCOL_FT8,
+    };
+    monitor_t *mon = heap_caps_malloc(sizeof(monitor_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!mon) {
+        heap_caps_free(signal);
+        return false;
+    }
+    monitor_init(mon, &cfg);
+
+    int blk = mon->block_size;
+    int n_blocks = SLOT_SAMPLES / blk;
+    for (int i = 0; i < n_blocks; i++) {
+        monitor_process(mon, &signal[i * blk]);
+    }
+
+    ftx_candidate_t cands[FT8_MAX_CANDIDATES];
+    int n_cand = ftx_find_candidates(&mon->wf, FT8_MAX_CANDIDATES, cands, FT8_FIND_MIN_SCORE);
+
+    bool found = false;
+    float noise_db = 0.0f;
+    bool have_noise = false;
+    for (int i = 0; i < n_cand; i++) {
+        ftx_message_t dec_msg;
+        ftx_decode_status_t st;
+        if (!ftx_decode_candidate(&mon->wf, &cands[i], FT8_LDPC_MAX_ITERS, &dec_msg, &st)) continue;
+        ftx_message_offsets_t off;
+        if (ftx_message_decode(&dec_msg, NULL, out_text, &off) != FTX_MESSAGE_RC_OK) continue;
+
+        if (out_score) *out_score = cands[i].score;
+        if (out_snr_db) {
+            if (!have_noise) { noise_db = ft8_estimate_noise_db(mon); have_noise = true; }
+            *out_snr_db = (int)lroundf(ft8_estimate_snr_db(mon, &cands[i], noise_db));
+        }
+        found = true;
+        break;
+    }
+
+    monitor_free(mon);
+    heap_caps_free(mon);
+    heap_caps_free(signal);
+    return found;
+}
+
+// Quick check that ft8_synth_and_decode() also round-trips a plain STANDARD
+// message (not just ARRL FD) - the FT8 simulation mode's phantom CQ stations
+// use this exact path with ordinary "CQ <call> <grid>" text, so this is the
+// fastest way to confirm/rule out the synth+decode pipeline itself as the
+// cause if sim mode silently does nothing.
+static void ft8_sim_synth_selftest_task(void *arg)
+{
+    (void)arg;
+    ftx_message_t msg;
+    if (ftx_message_encode_std(&msg, NULL, "CQ", "W1AW", "FN31") != FTX_MESSAGE_RC_OK) {
+        ESP_LOGE(TAG, "sim synth selftest: FAIL (encode)");
+        vTaskDelete(NULL);
+        return;
+    }
+    char text[FTX_MAX_MESSAGE_LENGTH];
+    int snr = 0, score = 0;
+    if (ft8_synth_and_decode(&msg, 800.0f, text, sizeof(text), &snr, &score)) {
+        bool ok = (strcmp(text, "CQ W1AW FN31") == 0);
+        ESP_LOGI(TAG, "sim synth selftest: %s decoded='%s' snr=%d score=%d",
+                 ok ? "PASS" : "FAIL (mismatch)", text, snr, score);
+    } else {
+        ESP_LOGE(TAG, "sim synth selftest: FAIL (no candidate decoded)");
+    }
+    vTaskDelete(NULL);
+}
+
+void ft8_sim_synth_selftest(void)
+{
+    BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
+        ft8_sim_synth_selftest_task, "sim_synth_test", 65536, NULL,
+        tskIDLE_PRIORITY + 1, NULL, 1,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (rc != pdPASS) {
+        ESP_LOGE(TAG, "sim synth selftest: failed to spawn task (rc=%d)", (int)rc);
+    }
+}
+
+void ft8_arrl_fd_e2e_selftest(void)
+{
+    BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
+        ft8_arrl_fd_e2e_selftest_task, "fd_e2e_test", 65536, NULL,
+        tskIDLE_PRIORITY + 1, NULL, 1,
+        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (rc != pdPASS) {
+        ESP_LOGE(TAG, "FD e2e selftest: failed to spawn test task (rc=%d)", (int)rc);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ARRL Field Day encode/decode round-trip self-test
+// ---------------------------------------------------------------------------
+
+void ft8_arrl_fd_selftest(void)
+{
+    struct { const char *call_to, *call_de, *extra; } cases[] = {
+        { "WA9XYZ", "KA1ABC", "R 16A EMA" },
+        { "WA9XYZ", "KA1ABC", "R 32A EMA" },
+        { "K1ABC",  "W2DEF",  "3A NNJ" },
+        { "AA1AA",  "BB2BB",  "1A DX" },
+        { "AA1AA",  "BB2BB",  "32F TER" },
+        { "AA1AA",  "BB2BB",  "16A WCF" },
+        { "AA1AA",  "BB2BB",  "17A WCF" },
+    };
+    int n_pass = 0;
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        ftx_message_t msg;
+        ftx_message_rc_t rc = ftx_message_encode_arrl_fd(&msg, NULL, cases[i].call_to, cases[i].call_de, cases[i].extra);
+        if (rc != FTX_MESSAGE_RC_OK) {
+            ESP_LOGE(TAG, "ARRL FD selftest FAIL (encode rc=%d): '%s' '%s' '%s'",
+                     (int)rc, cases[i].call_to, cases[i].call_de, cases[i].extra);
+            continue;
+        }
+        if (ftx_message_get_type(&msg) != FTX_MESSAGE_TYPE_ARRL_FD) {
+            ESP_LOGE(TAG, "ARRL FD selftest FAIL (wrong type): '%s' '%s' '%s'",
+                     cases[i].call_to, cases[i].call_de, cases[i].extra);
+            continue;
+        }
+        char dec_to[16], dec_de[16], dec_extra[20];
+        ftx_field_t field_types[FTX_MAX_MESSAGE_FIELDS];
+        rc = ftx_message_decode_arrl_fd(&msg, NULL, dec_to, dec_de, dec_extra, field_types);
+        bool ok = (rc == FTX_MESSAGE_RC_OK) &&
+                  strcmp(dec_to, cases[i].call_to) == 0 &&
+                  strcmp(dec_de, cases[i].call_de) == 0 &&
+                  strcmp(dec_extra, cases[i].extra) == 0;
+        if (ok) {
+            n_pass++;
+            ESP_LOGI(TAG, "ARRL FD selftest PASS: '%s' '%s' '%s'",
+                     cases[i].call_to, cases[i].call_de, cases[i].extra);
+        } else {
+            ESP_LOGE(TAG, "ARRL FD selftest FAIL (roundtrip): sent '%s' '%s' '%s' -> got '%s' '%s' '%s' (rc=%d)",
+                     cases[i].call_to, cases[i].call_de, cases[i].extra,
+                     dec_to, dec_de, dec_extra, (int)rc);
+        }
+    }
+    int n_total = (int)(sizeof(cases) / sizeof(cases[0]));
+    if (n_pass == n_total) {
+        ESP_LOGI(TAG, "ARRL FD selftest: ALL %d/%d PASSED", n_pass, n_total);
+    } else {
+        ESP_LOGE(TAG, "ARRL FD selftest: ONLY %d/%d PASSED", n_pass, n_total);
+    }
 }
 
 // ---------------------------------------------------------------------------
