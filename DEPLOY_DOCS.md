@@ -1,6 +1,6 @@
 # Deploying the MkDocs Site
 
-The QMX Panadapter documentation is built with **MkDocs** and deployed to **qmxpanadapter.lav.dk**.
+The QMX Panadapter documentation is built with **MkDocs** and deployed to **tab5.lav.dk**.
 
 ## Prerequisites
 
@@ -32,13 +32,13 @@ This generates the static site in the `site/` directory. You can copy this folde
 
 ```bash
 mkdocs build
-scp -r site/* user@your-server:/var/www/qmxpanadapter.lav.dk/
+scp -r site/* user@your-server:/var/www/tab5.lav.dk/
 ```
 
 Replace:
 - `user` — your SSH username
 - `your-server` — your web server hostname or IP
-- `/var/www/qmxpanadapter.lav.dk/` — path on your server (adjust to your setup)
+- `/var/www/tab5.lav.dk/` — path on your server (adjust to your setup)
 
 ### Option 2: Using mike (Versioned)
 
@@ -55,7 +55,7 @@ mike deploy 0.18.8 latest --update-aliases
 This creates a site structure like:
 
 ```
-qmxpanadapter.lav.dk/
+tab5.lav.dk/
   latest/          → symlink to current release
   0.18.8/
   0.18.7/
@@ -130,7 +130,7 @@ In your GitHub repository settings (**Settings → Secrets and variables → Act
 - **DEPLOY_HOST** — your server's hostname (e.g., `lav.dk`)
 - **DEPLOY_USER** — SSH username (e.g., `webmaster`)
 - **DEPLOY_KEY** — private SSH key (for passwordless deploy)
-- **DEPLOY_PATH** — server path (e.g., `/var/www/qmxpanadapter.lav.dk`)
+- **DEPLOY_PATH** — server path (e.g., `/var/www/tab5.lav.dk`)
 
 ### 3. Generate SSH Key (One-Time Setup)
 
@@ -151,9 +151,9 @@ Then copy the **private key** (`github_deploy`) to GitHub Secrets as `DEPLOY_KEY
 
 ```nginx
 server {
-    server_name qmxpanadapter.lav.dk;
+    server_name tab5.lav.dk;
     
-    root /var/www/qmxpanadapter.lav.dk;
+    root /var/www/tab5.lav.dk;
     index index.html;
     
     location / {
@@ -172,10 +172,10 @@ server {
 
 ```apache
 <VirtualHost *:80>
-    ServerName qmxpanadapter.lav.dk
-    DocumentRoot /var/www/qmxpanadapter.lav.dk
+    ServerName tab5.lav.dk
+    DocumentRoot /var/www/tab5.lav.dk
     
-    <Directory /var/www/qmxpanadapter.lav.dk>
+    <Directory /var/www/tab5.lav.dk>
         Options -MultiViews
         RewriteEngine On
         RewriteCond %{REQUEST_FILENAME} !-f
@@ -189,7 +189,7 @@ server {
 Use **Let's Encrypt** (free):
 
 ```bash
-sudo certbot certonly --webroot -w /var/www/qmxpanadapter.lav.dk -d qmxpanadapter.lav.dk
+sudo certbot certonly --webroot -w /var/www/tab5.lav.dk -d tab5.lav.dk
 ```
 
 Then update your Nginx/Apache config to use the certificate.
@@ -216,14 +216,14 @@ mkdocs build
 mkdocs serve
 
 # Upload to server (adjust SSH details)
-scp -r site/* user@qmxpanadapter.lav.dk:/var/www/
+scp -r site/* user@tab5.lav.dk:/var/www/
 ```
 
 ## Troubleshooting
 
 **Site doesn't appear after deploy?**
 
-1. Check files were uploaded: `ls -la /var/www/qmxpanadapter.lav.dk/`
+1. Check files were uploaded: `ls -la /var/www/tab5.lav.dk/`
 2. Check permissions: files should be readable by the web server user
 3. Check web server is running: `sudo systemctl restart nginx`
 4. Check firewall: port 80 and 443 should be open
@@ -245,7 +245,7 @@ scp -r site/* user@qmxpanadapter.lav.dk:/var/www/
 
 ## Next Steps
 
-- Set up the domain (`qmxpanadapter.lav.dk`) DNS to point to your server
+- Set up the domain (`tab5.lav.dk`) DNS to point to your server
 - Test the site locally (`mkdocs serve`)
 - Deploy to your server
 - Enable HTTPS (Let's Encrypt)

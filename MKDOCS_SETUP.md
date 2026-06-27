@@ -30,7 +30,7 @@ mkdocs serve
 
 Changes to files in `docs/mkdocs/` appear instantly.
 
-## 🌐 To Deploy to qmxpanadapter.lav.dk
+## 🌐 To Deploy to tab5.lav.dk
 
 ### Option 1: Manual Deploy (Quickest for Testing)
 
@@ -39,7 +39,7 @@ Changes to files in `docs/mkdocs/` appear instantly.
 mkdocs build
 
 # Upload to your server (adjust path/user/host)
-scp -r site/* user@lav.dk:/var/www/qmxpanadapter.lav.dk/
+scp -r site/* user@lav.dk:/var/www/tab5.lav.dk/
 ```
 
 ### Option 2: GitHub Actions (Fully Automated)
@@ -48,7 +48,7 @@ scp -r site/* user@lav.dk:/var/www/qmxpanadapter.lav.dk/
    - `DEPLOY_HOST` — your server hostname (e.g., `lav.dk`)
    - `DEPLOY_USER` — SSH username (e.g., `www-data`)
    - `DEPLOY_KEY` — private SSH key (for passwordless deploy)
-   - `DEPLOY_PATH` — server path (e.g., `/var/www/qmxpanadapter.lav.dk`)
+   - `DEPLOY_PATH` — server path (e.g., `/var/www/tab5.lav.dk`)
 
 2. **Every time you push to main**, GitHub Actions automatically:
    - Builds the site
@@ -140,8 +140,8 @@ Use Let's Encrypt (free):
 
 ```bash
 sudo certbot certonly --webroot \
-  -w /var/www/qmxpanadapter.lav.dk \
-  -d qmxpanadapter.lav.dk
+  -w /var/www/tab5.lav.dk \
+  -d tab5.lav.dk
 ```
 
 Then configure your web server (Nginx/Apache) to use the certificate. See **DEPLOY_DOCS.md** for examples.
