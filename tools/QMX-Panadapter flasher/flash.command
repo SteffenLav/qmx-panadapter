@@ -32,39 +32,25 @@ else
     exit 1
 fi
 
-# --- get firmware: download the latest GitHub release, else use a local copy -
-REPO="SteffenLav/qmx-panadapter"
-echo "Checking GitHub for the latest firmware (needs internet)..."
-URL="$(curl -fsSL --max-time 20 -H 'User-Agent: qmx-flasher' \
-       "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
-       | grep -o 'https://[^"]*qmx_panadapter_merged_[^"]*\.bin' | head -n 1)"
-if [ -n "${URL}" ]; then
-    NAME="$(basename "${URL}")"
-    echo "  latest: ${NAME}"
-    if curl -fSL --max-time 180 -H 'User-Agent: qmx-flasher' -o "${NAME}.part" "${URL}"; then
-        mv -f "${NAME}.part" "${NAME}"
-        echo "  download OK."
-    else
-        rm -f "${NAME}.part"
-        echo "  download failed - looking for a local copy..."
+# --- Verify firmware components are available -----
+for file in bootloader.bin partition-table.bin qmx_panadapter.bin; do
+    if [ ! -f "$file" ]; then
+        echo
+        echo "ERROR: $file not found."
+        echo "This flasher requires:"
+        echo "  - bootloader.bin"
+        echo "  - partition-table.bin"
+        echo "  - qmx_panadapter.bin"
+        echo
+        read -r -p "Press Enter to close..."
+        exit 1
     fi
-else
-    echo "  could not reach GitHub (offline?) - looking for a local copy..."
-fi
+done
 
-# Newest .bin in this folder: the freshly-downloaded latest, or a bundled copy.
-FW="$(ls -t qmx_panadapter_merged_*.bin 2>/dev/null | head -n 1)"
-if [ -z "${FW}" ]; then
-    echo
-    echo "ERROR: no firmware available."
-    echo "  - Connect to the internet so the latest can be downloaded, OR"
-    echo "  - put a qmx_panadapter_merged_*.bin in this folder for offline use."
-    echo
-    read -r -p "Press Enter to close..."
-    exit 1
-fi
-
-echo "Firmware found: ${FW}"
+echo "Firmware components found:"
+echo "  - bootloader.bin"
+echo "  - partition-table.bin"
+echo "  - qmx_panadapter.bin"
 echo
 echo "Before you continue:"
 echo "  1. Plug the Tab5 into this computer with a USB-C DATA cable"
@@ -114,21 +100,17 @@ fi
 # we hit the right one fast instead of waiting through long retries. Falls back
 # to esptool's own auto-detect if none of the usual device names are present.
 PORTS="$(ls /dev/cu.usbmodem* /dev/cu.usbserial* /dev/tty.usbmodem* /dev/ttyACM* /dev/ttyUSB* 2>/dev/null | sort)"
-# qmx_panadapter_merged_*.bin is a FULL chip image (esptool merge_bin,
-# bootloader@0x2000 + partition-table@0x8000 + app@0x10000, padded from
-# absolute 0x0) - write it at 0x0, NOT 0x10000 (which would shift
-# bootloader/partition-table bytes into the app region and corrupt it).
 RC=1
 if [ -n "${PORTS}" ]; then
     for P in ${PORTS}; do
         echo "  trying ${P} ..."
-        if "${ESPTOOL}" --chip esp32p4 -p "${P}" -b 460800 --connect-attempts 1 "${WRITE_FLASH}" ${ERASE_OPT} 0x0 "${FW}"; then
+        if "${ESPTOOL}" --chip esp32p4 -p "${P}" -b 460800 --connect-attempts 1 "${WRITE_FLASH}" ${ERASE_OPT} 0x2000 bootloader.bin 0x8000 partition-table.bin 0x10000 qmx_panadapter.bin; then
             RC=0
             break
         fi
     done
 else
-    "${ESPTOOL}" --chip esp32p4 -b 460800 --connect-attempts 1 "${WRITE_FLASH}" ${ERASE_OPT} 0x0 "${FW}"
+    "${ESPTOOL}" --chip esp32p4 -b 460800 --connect-attempts 1 "${WRITE_FLASH}" ${ERASE_OPT} 0x2000 bootloader.bin 0x8000 partition-table.bin 0x10000 qmx_panadapter.bin
     RC=$?
 fi
 

@@ -33,32 +33,33 @@ if not defined ESPTOOL (
     goto :end
 )
 
-rem --- 2. get the firmware: download the latest GitHub release, falling back
-rem        to a local qmx_panadapter_merged_*.bin if there's no internet -------
-set "REPO=SteffenLav/qmx-panadapter"
-echo Checking GitHub for the latest firmware ^(needs internet^)...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; try { [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12; $ProgressPreference='SilentlyContinue'; $h=@{'User-Agent'='qmx-flasher'}; $r=Invoke-RestMethod -TimeoutSec 20 -Headers $h -Uri 'https://api.github.com/repos/%REPO%/releases/latest'; $a=$r.assets | Where-Object { $_.name -like 'qmx_panadapter_merged_*.bin' } | Select-Object -First 1; if(-not $a){ exit 2 }; Write-Host ('  latest release: ' + $r.tag_name + '  (' + $a.name + ')'); $out=(Join-Path '%~dp0' $a.name); $tmp=$out + '.part'; Invoke-WebRequest -TimeoutSec 180 -Headers $h -Uri $a.browser_download_url -OutFile $tmp; Move-Item -Force $tmp $out; Write-Host '  download OK.' } catch { exit 1 }"
-if errorlevel 1 (
-    echo   could not fetch from GitHub ^(offline?^) - looking for a local copy...
-)
+rem --- 2. Verify firmware components are available -----
+set "BL=%~dp0bootloader.bin"
+set "PT=%~dp0partition-table.bin"
+set "APP=%~dp0qmx_panadapter.bin"
 
-rem Pick the newest .bin in this folder: the freshly-downloaded latest, or a
-rem bundled local copy if the download was skipped. Newest by file time, so a
-rem leftover older .bin can't win on a lexical version-string sort.
-set "FW="
-for /f "delims=" %%F in ('dir /b /o-d "%~dp0qmx_panadapter_merged_*.bin" 2^>nul') do (
-    if not defined FW set "FW=%~dp0%%F"
-)
-if not defined FW (
+if not exist "%BL%" (
     echo(
-    echo ERROR: no firmware available.
-    echo   - Connect this PC to the internet so the latest can be downloaded, OR
-    echo   - put a qmx_panadapter_merged_*.bin in this folder for offline use.
+    echo ERROR: bootloader.bin not found.
+    echo   This flasher requires:
+    echo     - bootloader.bin
+    echo     - partition-table.bin
+    echo     - qmx_panadapter.bin
+    goto :end
+)
+if not exist "%PT%" (
+    echo ERROR: partition-table.bin not found.
+    goto :end
+)
+if not exist "%APP%" (
+    echo ERROR: qmx_panadapter.bin not found.
     goto :end
 )
 
-for %%F in ("%FW%") do set "FWNAME=%%~nxF"
-echo Firmware found: !FWNAME!
+echo Firmware components found:
+echo   - bootloader.bin
+echo   - partition-table.bin
+echo   - qmx_panadapter.bin
 echo(
 echo Before you continue:
 echo   1. Plug the Tab5 into this PC with a USB-C DATA cable
@@ -123,18 +124,12 @@ if defined PORTS (
     for %%P in (!PORTS!) do (
         if not "!RC!"=="0" (
             echo   trying %%P ...
-            rem --- CRITICAL: qmx_panadapter_merged_*.bin is a FULL chip image ---
-            rem --- (esptool merge_bin, bootloader@0x2000 + partition-table@0x8000 ---
-            rem --- + app@0x10000, padded from absolute 0x0) - write it at 0x0, ---
-            rem --- NOT 0x10000 (which would shift bootloader/partition-table ---
-            rem --- bytes into the app region and corrupt it). See ---
-            rem --- feedback_merged_bin_offset_bug in memory for the incident. ---
-            "%ESPTOOL%" --chip esp32p4 -p %%P -b 460800 --connect-attempts 1 !WRITE_FLASH! !ERASEOPT! 0x0 "%FW%"
+            "%ESPTOOL%" --chip esp32p4 -p %%P -b 460800 --connect-attempts 1 !WRITE_FLASH! !ERASEOPT! 0x2000 "%BL%" 0x8000 "%PT%" 0x10000 "%APP%"
             if not errorlevel 1 set "RC=0"
         )
     )
 ) else (
-    "%ESPTOOL%" --chip esp32p4 -b 460800 --connect-attempts 1 !WRITE_FLASH! !ERASEOPT! 0x0 "%FW%"
+    "%ESPTOOL%" --chip esp32p4 -b 460800 --connect-attempts 1 !WRITE_FLASH! !ERASEOPT! 0x2000 "%BL%" 0x8000 "%PT%" 0x10000 "%APP%"
     if not errorlevel 1 set "RC=0"
 )
 
