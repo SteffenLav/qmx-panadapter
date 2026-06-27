@@ -51,6 +51,7 @@ static volatile uint32_t s_samples_this_period = 0;
 static volatile int16_t  s_peak_left  = 0;
 static volatile int16_t  s_peak_right = 0;
 static volatile uint32_t s_dropped_this_period = 0;
+static volatile uint32_t s_dropped_total = 0;   // running since boot (per-slot delta diag)
 static int64_t s_period_start_us = 0;
 
 // Discovered at runtime
@@ -128,6 +129,34 @@ size_t audio_read_samples(int16_t *dst, size_t max_pairs, uint32_t timeout_ms)
     memcpy(dst, item, got_bytes);
     vRingbufferReturnItem(s_ring, item);
     return got_bytes / (sizeof(int16_t) * 2);
+}
+
+size_t audio_flush_ring(void)
+{
+    if (!s_ring) return 0;
+    size_t discarded_bytes = 0;
+    // Drain in non-blocking bursts until empty. Single-consumer only (fft_task).
+    for (;;) {
+        size_t n = 0;
+        void *item = xRingbufferReceiveUpTo(s_ring, &n, 0, SAMPLE_RING_BYTES);
+        if (!item) break;
+        discarded_bytes += n;
+        vRingbufferReturnItem(s_ring, item);
+    }
+    return discarded_bytes / (sizeof(int16_t) * 2);
+}
+
+size_t audio_ring_backlog_pairs(void)
+{
+    if (!s_ring) return 0;
+    size_t free_bytes = xRingbufferGetCurFreeSize(s_ring);
+    size_t used = (free_bytes < SAMPLE_RING_BYTES) ? (SAMPLE_RING_BYTES - free_bytes) : 0;
+    return used / (sizeof(int16_t) * 2);
+}
+
+uint32_t audio_get_dropped_total(void)
+{
+    return s_dropped_total;
 }
 
 static void uac_lib_event_cb(uint8_t addr, uint8_t iface_num,
@@ -273,6 +302,7 @@ static void process_rx(void)
         BaseType_t sent = xRingbufferSend(s_ring, decoded, bytes_to_push, 0);
         if (sent != pdTRUE) {
             s_dropped_this_period += pairs;
+            s_dropped_total += pairs;
         }
 
         // BAND-AID (v0.18.5): e07f114 added dsp_cw_forward() in the audio hot path.

@@ -60,6 +60,7 @@
 #include "common/monitor.h"
 
 #include "dsp.h"
+#include "audio/audio.h"
 #include "cat/cat.h"
 #include "storage/settings.h"
 #include "ui/ui_mode.h"
@@ -81,6 +82,18 @@ static const char *TAG = "ft8_test";
 
 // Max FT8 candidates considered per slot (matches the cands[] buffer in
 // decode_slot) - also the upper bound on each worker's timing-sample array.
+//
+// MEASURED 2026-06-27: tried raising this 140 -> 300 because the per-slot
+// diagnostic showed cand PINNED at the ceiling every slot (>140 sync
+// candidates above FT8_FIND_MIN_SCORE exist on a busy band) with the decode
+// budget ~85% idle. A controlled before/after on 20 m showed it was a CLEAN
+// NEGATIVE: cand went to 300 (still pinned, so the band makes 300+ sync hits)
+// but decodes did NOT rise (mean 12.6 vs 14.8 — within band variance), while
+// decode CPU ~doubled (1.6s -> 3.0s). Candidates #141-300 are noise (score-5
+// sync false-positives that correctly fail LDPC); the real decodable signals
+// already live in the strongest ~140. So 140 is NOT clipping real signals and
+// raising it only burns core-1 CPU that then competes with the next slot's
+// capture STFT. Yield here is band-limited, not candidate-limited. Kept at 140.
 #define FT8_MAX_CANDIDATES    140
 
 // Minimum Costas sync score for a candidate to be attempted. ft8_lib's demo
@@ -137,6 +150,9 @@ typedef struct {
     int      stft_ms;   // STFT compute time, overlapped with capture (should be small)
     int      start_off_ms; // wall-clock at capture start minus the UTC slot
                            // boundary; should stay ~0, drift = the bug
+    int      arm_backlog;  // diag: audio-ring backlog (pairs) discarded at arm;
+                           // should stay small/flat — growth was the cliff bug
+    int      drop_delta;   // diag: ring-full sample drops during this slot
 } decode_job_t;
 
 static QueueHandle_t  s_decode_queue = NULL;
@@ -535,7 +551,8 @@ static void ft8_decode_worker_task(void *arg)
 // capture). Candidate search, then dual-core LDPC fan-out, merge, record,
 // advance the QSO state machine.
 static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
-                        int cap_ms, int stft_ms, int start_off_ms)
+                        int cap_ms, int stft_ms, int start_off_ms,
+                        int arm_backlog, int drop_delta)
 {
     int64_t t_start = esp_timer_get_time();
 
@@ -654,9 +671,11 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
     ft8_status_set("RX: %d decoded  (%d candidates)", n_decoded, n_cand);
     ESP_LOGI(TAG,
         "slot %d UTC %lld: off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d skip=%d "
-        "heap_i=%uKB heap_p=%uKB",
+        "backlog=%dpr drop=%dpr timing=%+dms heap_i=%uKB heap_p=%uKB",
         slot_idx, (long long)slot_sec, start_off_ms,
         cap_ms, stft_ms, dec_ms, n_cand, n_decoded, n_skipped,
+        arm_backlog, drop_delta,
+        s_last_timing_valid ? s_last_timing_ms : 0,
         (unsigned)heap_i, (unsigned)heap_p);
 
     ft8_qso_advance(slot_sec);
@@ -712,7 +731,8 @@ static void ft8_decode_task(void *arg)
         }
         if (job.mon_idx < 0) break;     // termination sentinel from capture task
         decode_slot(s_mon_pool[job.mon_idx], job.slot_sec, job.slot_idx,
-                    job.cap_ms, job.stft_ms, job.start_off_ms);
+                    job.cap_ms, job.stft_ms, job.start_off_ms,
+                    job.arm_backlog, job.drop_delta);
         s_buf_busy[job.mon_idx] = false;   // hand the monitor back to the pool
     }
 
@@ -920,6 +940,12 @@ static void ft8_task(void *arg)
             // the FT8 signal ends (~12.6 s in). The STFT cost overlaps capture
             // instead of being paid in the post-slot decode window.
             int64_t t0 = esp_timer_get_time();
+            // Diag: ring backlog about to be discarded by the arm-time flush
+            // (this is the accumulated latency that was time-shifting later
+            // captures), and a per-slot drop counter snapshot. Both logged in
+            // the per-slot decode line so the cliff is directly observable.
+            int arm_backlog = (int)audio_ring_backlog_pairs();
+            uint32_t drop_before = audio_get_dropped_total();
             esp_err_t e = dsp_ft8_capture_begin(s_cap_scratch, SLOT_SAMPLES);
             int     blk       = mon->block_size;        // 1920 @ 12 kHz
             int     n_blocks  = SLOT_SAMPLES / blk;      // 93 full symbol blocks
@@ -978,7 +1004,9 @@ static void ft8_task(void *arg)
                 }
                 int cap_ms  = (int)((esp_timer_get_time() - t0) / 1000);
                 int stft_ms = (int)(stft_us / 1000);
-                decode_job_t job = { bi, slot_sec, slot_idx, cap_ms, stft_ms, start_off_ms };
+                int drop_delta = (int)(audio_get_dropped_total() - drop_before);
+                decode_job_t job = { bi, slot_sec, slot_idx, cap_ms, stft_ms,
+                                     start_off_ms, arm_backlog, drop_delta };
                 if (xQueueSend(s_decode_queue, &job, 0) != pdTRUE) {
                     // Shouldn't happen (queue depth == pool size), but if it
                     // does, release the monitor so it isn't lost from the pool.

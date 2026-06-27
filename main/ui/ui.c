@@ -97,6 +97,21 @@ static int   s_pan_offset_bins = 0;
 static lv_obj_t *s_zoom_label  = NULL;  // top bar zoom indicator
 static lv_obj_t *s_zoom_popup  = NULL;  // zoom preset dropdown panel
 
+// Top-bar Band/Mode/BW/Freq/Zoom hit-zones (see hit_zones[] in ui_init): each
+// spans the full 200px screen top as a direct child of `scr`, foregrounded
+// above everything else built so far - including FT8's own decode-row list,
+// whose topmost rows sit under y=200 right beneath the top bar. Their click
+// callbacks already bail out for FT8 mode, but bailing in the callback only
+// stops the popup from opening - the hit-zone object still WINS the touch at
+// the screen's z-order level (LVGL hit-tests a parent's direct children in
+// reverse creation order and descends into the first match's subtree without
+// ever considering siblings), so it swallows the tap/long-press before it
+// can reach a row underneath. Clearing CLICKABLE in FT8 mode removes the
+// hit-zone from hit-testing entirely, letting the touch fall through to
+// whatever's actually underneath it (FT8 rows, the Preset button, etc).
+#define N_TOPBAR_HIT_ZONES 5
+static lv_obj_t *s_topbar_hit_zones[N_TOPBAR_HIT_ZONES] = {0};
+
 float ui_get_zoom_factor(void)    { return s_zoom_factor; }
 int   ui_get_pan_offset_bins(void){ return s_pan_offset_bins; }
 
@@ -718,6 +733,10 @@ static void freq_popup_open(void)
 static void freq_label_clicked_cb(lv_event_t *e)
 {
     (void)e;
+    // Top-bar Freq is display-only in FT8 mode - frequency selection there
+    // is via the FT8 screen's own Preset button, same FT8-mode bail pattern
+    // as band/bw/mode/zoom_label_clicked_cb above.
+    if (ui_mode_get() == UI_MODE_FT8) return;
     freq_popup_open();
 }
 
@@ -2298,6 +2317,7 @@ void ui_init(lv_display_t *disp)
             lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_add_event_cb(hit, hit_zones[i].cb, LV_EVENT_CLICKED, NULL);
             lv_obj_move_foreground(hit);
+            if (i < N_TOPBAR_HIT_ZONES) s_topbar_hit_zones[i] = hit;
         }
     }
 
@@ -2747,6 +2767,18 @@ static void top_bar_set_ft8_dim(bool dim)
     if (s_mode_label) lv_obj_set_style_text_opa(s_mode_label, opa, 0);
     if (s_bw_label)   lv_obj_set_style_text_opa(s_bw_label, opa, 0);
     if (s_zoom_label) lv_obj_set_style_text_opa(s_zoom_label, opa, 0);
+
+    // Also drop these hit-zones out of hit-testing entirely in FT8 mode -
+    // see s_topbar_hit_zones comment for why their callback's own FT8 bail
+    // isn't enough (the touch is still won/swallowed at the screen z-order
+    // level, blocking FT8's own controls underneath, e.g. decode rows 1-3
+    // and the Preset button, which both sit under y=200).
+    for (int i = 0; i < N_TOPBAR_HIT_ZONES; i++) {
+        lv_obj_t *hit = s_topbar_hit_zones[i];
+        if (!hit) continue;
+        if (dim) lv_obj_clear_flag(hit, LV_OBJ_FLAG_CLICKABLE);
+        else     lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
+    }
 }
 
 // Phase 5.10G: receive passband width from CAT (FW response) or

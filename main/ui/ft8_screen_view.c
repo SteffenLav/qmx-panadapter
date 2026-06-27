@@ -136,8 +136,8 @@ static lv_obj_t *s_left_pane   = NULL;
 static lv_obj_t *s_right_pane  = NULL;
 
 static lv_obj_t *s_lbl_mode     = NULL;
-static lv_obj_t *s_lbl_freq     = NULL;
-static lv_obj_t *s_ft8_freq_hit = NULL;  // enlarged touch target over s_lbl_freq
+static lv_obj_t *s_btn_freq     = NULL;  // "Preset: XX.XXX MHz" button (visual only)
+static lv_obj_t *s_btn_freq_hit = NULL;  // screen-level click target, see ft8_screen_view_init
 static lv_obj_t *s_lbl_count    = NULL;
 static lv_obj_t *s_bar_slot     = NULL;  // tiny countdown bar beside s_lbl_count
 static lv_obj_t *s_lbl_heard    = NULL;
@@ -813,14 +813,15 @@ static void t_clock_cb(lv_timer_t *t)
         // The bar's value AND colour are owned by t_slotbar_cb (fast tick) so
         // it glides smoothly and can show TX-red without this 1 Hz tick fighting it.
     }
-    if (s_lbl_freq) {
+    if (s_btn_freq) {
         uint32_t hz = cat_get_frequency();
         char b[40];
         uint32_t mhz = hz / 1000000;
         uint32_t khz_frac = (hz / 1000) % 1000;
         snprintf(b, sizeof(b), "Preset: %lu.%03lu MHz",
                  (unsigned long)mhz, (unsigned long)khz_frac);
-        lv_label_set_text(s_lbl_freq, b);
+        lv_obj_t *lbl = lv_obj_get_child(s_btn_freq, 0);
+        if (lbl) lv_label_set_text(lbl, b);
     }
 
     // Status / TX / QSO indicator — always visible.
@@ -1125,12 +1126,13 @@ static void ft8_freq_preset_cb(lv_event_t *e)
     if (cat_set_frequency_forced(freq_hz) == ESP_OK) {
         // Optimistically update both labels without waiting for the FA poll.
         ui_update_frequency(freq_hz);           // top-bar "Freq:" label
-        if (s_lbl_freq) {
+        if (s_btn_freq) {
             char b[40];
             snprintf(b, sizeof(b), "Preset: %lu.%03lu MHz",
                      (unsigned long)(freq_hz / 1000000),
                      (unsigned long)((freq_hz / 1000) % 1000));
-            lv_label_set_text(s_lbl_freq, b);
+            lv_obj_t *lbl = lv_obj_get_child(s_btn_freq, 0);
+            if (lbl) lv_label_set_text(lbl, b);
         }
     }
 }
@@ -1154,6 +1156,26 @@ static void ft8_freq_popup_open(void)
         return;
     }
 
+    // band_count (from CAT) includes bands with no known FT8 dial frequency,
+    // which get skipped (the `continue` below) and never render a row - so
+    // sizing the panel off band_count directly overshoots the real row
+    // count and forces a scroll that isn't actually needed. Pre-count the
+    // rows that will actually be drawn so the panel can be sized exactly,
+    // fitting all of them without scrolling, then centered vertically.
+    int visible_count = 0;
+    for (int i = 0; i < band_count; i++) {
+        for (size_t j = 0; j < N_FT8_BAND_FREQS; j++) {
+            if (strcmp(bands[i].name, FT8_BAND_FREQS[j].band) == 0) {
+                visible_count++;
+                break;
+            }
+        }
+    }
+    if (visible_count == 0) {
+        ESP_LOGW(TAG, "FT8 freq dropdown: no bands with known FT8 freq");
+        return;
+    }
+
     lv_obj_t *ov = lv_obj_create(lv_layer_top());
     lv_obj_set_size(ov, LV_HOR_RES, LV_VER_RES);
     lv_obj_set_pos(ov, 0, 0);
@@ -1163,14 +1185,17 @@ static void ft8_freq_popup_open(void)
     lv_obj_add_event_cb(ov, ft8_freq_overlay_cb, LV_EVENT_CLICKED, NULL);
     s_ft8_freq_popup = ov;
 
-    int btn_h = 56;
-    int panel_w = 220;
-    int panel_h = band_count * btn_h + 32;
-    int panel_x = 8;
-    int panel_y = MID_Y + 80;
-    int max_h = DISPLAY_V_RES - panel_y - 4;
-    bool needs_scroll = panel_h > max_h;
-    if (needs_scroll) panel_h = max_h;
+    int panel_w = 240;
+    int header_h = 40;
+    int avail_h = MID_H - 16;  // small top/bottom breathing margin
+    int btn_h = (avail_h - header_h) / visible_count;
+    if (btn_h > 64) btn_h = 64;  // don't grow absurdly tall for very few rows
+    if (btn_h < 40) btn_h = 40;  // floor for a usable touch target
+    int panel_h = visible_count * btn_h + header_h;
+    int panel_x = LEFT_W;
+    bool needs_scroll = panel_h > avail_h;  // safety net only, shouldn't trigger normally
+    if (needs_scroll) panel_h = avail_h;
+    int panel_y = MID_Y + (MID_H - panel_h) / 2;
 
     lv_obj_t *panel = lv_obj_create(ov);
     lv_obj_set_size(panel, panel_w, panel_h);
@@ -1185,13 +1210,26 @@ static void ft8_freq_popup_open(void)
     lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
     lv_obj_set_style_pad_row(panel, 0, 0);
     lv_obj_set_style_pad_column(panel, 0, 0);
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+
+    lv_obj_t *header = lv_obj_create(panel);
+    lv_obj_set_size(header, panel_w, header_h);
+    lv_obj_set_style_bg_color(header, lv_color_hex(0xFFDD00), 0);
+    lv_obj_set_style_border_width(header, 0, 0);
+    lv_obj_set_style_pad_all(header, 4, 0);
+
+    lv_obj_t *header_lbl = lv_label_create(header);
+    lv_label_set_text(header_lbl, "FT8");
+    lv_obj_set_style_text_font(header_lbl, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(header_lbl, lv_color_hex(0x000000), 0);
+    lv_obj_center(header_lbl);
+
     if (needs_scroll) {
         lv_obj_add_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_set_scroll_dir(panel, LV_DIR_VER);
     } else {
         lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
     }
-    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
 
     uint32_t cur_hz = cat_get_frequency();
     for (int i = 0; i < band_count; i++) {
@@ -1274,43 +1312,50 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_lbl_mode, &lv_font_montserrat_48, 0);
     lv_obj_set_pos(s_lbl_mode, 0, 0);
 
-    s_lbl_freq = lv_label_create(s_left_pane);
-    lv_label_set_text(s_lbl_freq, "Preset: --.--- MHz");
-    lv_obj_set_style_text_color(s_lbl_freq, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_text_font(s_lbl_freq, &lv_font_montserrat_32, 0);
-    lv_obj_set_pos(s_lbl_freq, 0, 67);  // #1: 50% less space under MODE: FT8
+    // s_btn_freq is purely visual (background/border/label). It is NOT a
+    // click target: it's nested under s_container/s_left_pane, while
+    // ui_init()'s top-bar Band/Mode/BW/Freq/Zoom hit-zones (hit_zones[] in
+    // ui.c) are direct children of the screen, created AFTER this and each
+    // explicitly lv_obj_move_foreground()'d. LVGL hit-tests direct children
+    // of a common parent in reverse creation order before ever descending
+    // into a sibling's subtree, so those screen-level hit-zones win every
+    // tap here regardless of any move_foreground() applied *inside*
+    // s_left_pane - moving s_btn_freq forward only reorders it among its
+    // own siblings, it can never out-rank a sibling of s_container itself.
+    // The real click target is s_btn_freq_hit below, a separate object
+    // created directly on `parent` (the screen) so it competes at the same
+    // tree level as those hit-zones and can be foregrounded over them.
+    s_btn_freq = lv_btn_create(s_left_pane);
+    lv_obj_set_size(s_btn_freq, 294, 60);
+    lv_obj_set_pos(s_btn_freq, 0, 55);
+    lv_obj_set_style_bg_color(s_btn_freq, lv_color_hex(UI_COLOR_SURFACE), 0);
+    lv_obj_set_style_border_width(s_btn_freq, 1, 0);
+    lv_obj_set_style_border_color(s_btn_freq, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_radius(s_btn_freq, 4, 0);
+    lv_obj_set_style_pad_all(s_btn_freq, 8, 0);
+    lv_obj_clear_flag(s_btn_freq, LV_OBJ_FLAG_CLICKABLE);
 
-    // Tap to open a dropdown of conventional FT8 dial frequencies for the
-    // bands this QMX supports. A separate transparent overlay (rather than
-    // ext_click_area on the label itself) gives a generous touch target
-    // spanning the full frequency text and extending well below it, since
-    // ext_click_area only pads uniformly and the label's own width is just
-    // the text's natural width.
-    {
-        // Created on `parent` (the screen), not s_left_pane, and reaching up
-        // to screen y=0: ui.c's top-bar hit zones (Band/Mode/etc, 200px tall
-        // at y=0) are also screen-level siblings and sit on top, so a touch
-        // starting at the true top edge of the screen - e.g. "swipe down
-        // from the top edge over Preset" - landed on the Band/Mode zones
-        // instead of ever reaching a hit area confined to the label's own
-        // y=80..170. Covering y=0..(MID_Y+170) here and re-foregrounding in
-        // ft8_screen_view_show() lets this hit area win against those zones.
-        lv_obj_t *hit = lv_obj_create(parent);
-        lv_obj_set_size(hit, 345, MID_Y + 170);
-        lv_obj_set_pos(hit, 0, 0);
-        lv_obj_set_style_bg_opa(hit, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(hit, 0, 0);
-        lv_obj_clear_flag(hit, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_flag(hit, LV_OBJ_FLAG_HIDDEN);  // shown only while FT8 is active
-        // PRESSED (not CLICKED) so a swipe/drag starting on this button
-        // still opens the dropdown - a swipe-down gesture starting here
-        // would otherwise be claimed as a drag/scroll and never fire
-        // CLICKED, leaving the touch area "owned" by the button but
-        // doing nothing.
-        lv_obj_add_event_cb(hit, ft8_freq_label_clicked_cb, LV_EVENT_PRESSED, NULL);
-        s_ft8_freq_hit = hit;
-    }
+    lv_obj_t *freq_lbl = lv_label_create(s_btn_freq);
+    lv_label_set_text(freq_lbl, "Preset: --.--- MHz");
+    lv_obj_set_style_text_color(freq_lbl, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_font(freq_lbl, &lv_font_montserrat_28, 0);
+    lv_obj_center(freq_lbl);
+
+    // Screen-level hit target, sized/positioned to exactly cover s_btn_freq's
+    // own screen rect: s_left_pane sits at screen (0, MID_Y) with pad_top=8/
+    // pad_left=16, s_btn_freq is offset (0,55) within that padded content
+    // box, so its screen rect is x:16..321, y:(MID_Y+8+55)..(+60) = +63..+123
+    // i.e. y:(MID_Y+63)..(MID_Y+123). Kept in sync manually with the
+    // s_btn_freq geometry above - if that ever moves, update this too.
+    s_btn_freq_hit = lv_obj_create(parent);
+    lv_obj_set_size(s_btn_freq_hit, 294, 60);
+    lv_obj_set_pos(s_btn_freq_hit, 16, MID_Y + 63);
+    lv_obj_set_style_bg_opa(s_btn_freq_hit, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_btn_freq_hit, 0, 0);
+    lv_obj_clear_flag(s_btn_freq_hit, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_btn_freq_hit, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_btn_freq_hit, LV_OBJ_FLAG_HIDDEN);  // shown only while FT8 is active
+    lv_obj_add_event_cb(s_btn_freq_hit, ft8_freq_label_clicked_cb, LV_EVENT_CLICKED, NULL);
 
     // UTC clock removed — it's in the center bottom bar already
 
@@ -1549,9 +1594,6 @@ void ft8_screen_view_init(lv_obj_t *parent)
     s_t_clock   = lv_timer_create(t_clock_cb,  1000, NULL);
     s_t_slotbar = lv_timer_create(t_slotbar_cb,  50, NULL);
 
-    // Ensure the freq touch overlay sits above later-added siblings
-    // (UTC clock, slot bar, etc.) that partially overlap its hit area.
-    if (s_ft8_freq_hit) lv_obj_move_foreground(s_ft8_freq_hit);
 
     ESP_LOGI(TAG, "FT8 view built (container %dx%d at y=%d, hidden)",
              MID_W, MID_H, MID_Y);
@@ -1563,21 +1605,20 @@ void ft8_screen_view_show(void)
     lv_obj_clear_flag(s_container, LV_OBJ_FLAG_HIDDEN);
     s_refresh_pending = true;
 
-    // ui.c creates transparent top-bar hit zones (Band/Mode/BW/Freq/Zoom,
-    // each 200px tall at y=0) directly on the screen layer, as a sibling of
-    // s_ft8_freq_hit (now also created on the screen, see
-    // ft8_screen_view_init). Re-foreground it here so a touch starting at
-    // the true top edge of the screen over "Preset: xx.xxx MHz" - previously
-    // claimed by the Band/Mode hit zones - reaches the FT8 dropdown instead.
-    // NOTE: do NOT foreground s_container itself - it's a near-full-screen
-    // opaque pane (1280x644 at y=60) and would cover the left/right
-    // edge-swipe grip handles (both vertically centered at y=360, i.e.
-    // inside that span), which sit on scr as siblings created during
-    // ui_init. This was the cause of both grips vanishing when booting
-    // straight into FT8 mode (sticky mode, v0.16.0).
-    if (s_ft8_freq_hit) {
-        lv_obj_clear_flag(s_ft8_freq_hit, LV_OBJ_FLAG_HIDDEN);
-        lv_obj_move_foreground(s_ft8_freq_hit);
+    // ui_init() foregrounds the top-bar Band/Mode/BW/Freq/Zoom hit-zones
+    // (each spanning the full 200px screen top, see hit_zones[] in ui.c) as
+    // direct children of the screen, created AFTER ft8_screen_view_init()
+    // builds s_container. Those hit-zones are screen-level siblings of
+    // s_container, not descendants of it, so no amount of move_foreground()
+    // *inside* s_container/s_left_pane can out-rank them - LVGL hit-tests a
+    // parent's direct children in reverse creation order and descends into
+    // the first match's subtree, so the hit-zones win every tap over the
+    // whole s_container branch regardless of internal z-order. s_btn_freq_hit
+    // is the real click target: also a direct child of the screen, so
+    // foregrounding IT here makes it outrank those hit-zones.
+    if (s_btn_freq_hit) {
+        lv_obj_clear_flag(s_btn_freq_hit, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_btn_freq_hit);
     }
 
     // Own-call cache and grid-derived location are kept live in rebuild_list()
@@ -1590,7 +1631,7 @@ void ft8_screen_view_hide(void)
 {
     if (!s_container) return;
     lv_obj_add_flag(s_container, LV_OBJ_FLAG_HIDDEN);
-    if (s_ft8_freq_hit) lv_obj_add_flag(s_ft8_freq_hit, LV_OBJ_FLAG_HIDDEN);
+    if (s_btn_freq_hit) lv_obj_add_flag(s_btn_freq_hit, LV_OBJ_FLAG_HIDDEN);
     ESP_LOGI(TAG, "hide");
 }
 
