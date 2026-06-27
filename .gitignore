@@ -65,6 +65,7 @@ tools/QMX-Panadapter flasher/*.bin
 tools/QMX-Panadapter flasher/esptool/
 tools/QMX-Panadapter flasher.zip
 tools/QMX-Panadapter-flasher-*.zip
+tools/QMX-Panadapter flasher/*.zip
 
 # Local SWR capture helper + its output
 tools/_swr*.ps1
