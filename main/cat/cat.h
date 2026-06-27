@@ -119,6 +119,18 @@ esp_err_t cat_send_raw_cmd(const char *fmt, ...);
 esp_err_t cat_query_power_swr(float *power_w, float *swr);
 
 /**
+ * @brief Non-blocking power/SWR query for live display during an FT8 TX burst.
+ *
+ * _send() fires "PC;SW;" without waiting (bounded ~50 ms CDC write); _read()
+ * parses whatever response has since arrived (no wait). Used by ft8_tx.c to get
+ * a current-burst reading mid-transmission without the ~600 ms blocking wait of
+ * cat_query_power_swr(), which would overrun FT8 symbol timing. Call _send()
+ * once after the PA settles, _read() several symbols later.
+ */
+esp_err_t cat_pwr_swr_async_send(void);
+esp_err_t cat_pwr_swr_async_read(float *power_w, float *swr);
+
+/**
  * @brief Request a mode change (deferred to the poll task).
  *
  * Thread-safe to call from the LVGL/UI thread. The MD<digit>; command is

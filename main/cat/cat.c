@@ -152,9 +152,13 @@ esp_err_t cat_query_power_swr(float *power_w, float *swr)
     }
 
     if (power_w) {
-        // QMX PC; encodes power as value = watts × 5 (not × 10 like standard Kenwood).
-        // Empirically confirmed: raw/10 gives half the real power shown on the radio.
-        *power_w = (s_pc_resp_len >= 3) ? (float)atoi(s_pc_resp + 2) / 5.0f : -1.0f;
+        // QMX PC; power scaling is firmware-dependent. Re-measured 2026-06-28
+        // on-air: raw/5 read 2x the real power, so it's raw/10 now (matches
+        // standard Kenwood ×10). The earlier raw/5 was calibrated against older
+        // QMX firmware (1_03); the 1_04 beta changed PC encoding (see memory
+        // reference_qmx_1_04_firmware). Keep this in sync with
+        // cat_pwr_swr_async_read() below.
+        *power_w = (s_pc_resp_len >= 3) ? (float)atoi(s_pc_resp + 2) / 10.0f : -1.0f;
     }
     if (swr) {
         // Bare "SW;" (len 3, nothing between prefix and terminator) means the
@@ -165,6 +169,34 @@ esp_err_t cat_query_power_swr(float *power_w, float *swr)
     ESP_LOGI(TAG, "PC;SW; -> pc='%s' sw='%s'", s_pc_resp, s_sw_resp);
 
     if (s_pc_resp_len == 0 && s_sw_resp_len == 0) return ESP_ERR_TIMEOUT;
+    return ESP_OK;
+}
+
+// Split, non-blocking variant of cat_query_power_swr() for LIVE display during
+// an FT8 burst. cat_query_power_swr() blocks up to ~600 ms waiting for the
+// response, which would overrun the 160 ms FT8 symbol timing and corrupt the
+// transmitted signal. Instead the caller fires _send() once (a ~ms CDC write,
+// bounded to 50 ms) right after a symbol, keeps transmitting, and _read()s the
+// async-captured response a few symbols later (pure buffer parse, no wait). The
+// RX path (process_cat_message) fills s_pc_resp/s_sw_resp regardless of who is
+// waiting, so the response lands on its own. The QMX answers PC;/SW; while
+// keyed, same as the unchanged end-of-burst query.
+esp_err_t cat_pwr_swr_async_send(void)
+{
+    if (!s_cdc_dev) return ESP_ERR_INVALID_STATE;
+    s_pc_resp_len = 0;
+    s_sw_resp_len = 0;
+    return cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"PC;SW;", 6, 50);
+}
+
+// Parse whatever response has arrived since the last _send(). Returns ESP_OK
+// with a valid reading once both PC; and SW; have answered; ESP_ERR_TIMEOUT
+// (and *power_w/*swr left at -1) if they haven't yet. Never blocks.
+esp_err_t cat_pwr_swr_async_read(float *power_w, float *swr)
+{
+    if (power_w) *power_w = (s_pc_resp_len >= 3) ? (float)atoi(s_pc_resp + 2) / 10.0f  : -1.0f;  // see cat_query_power_swr re: /10
+    if (swr)     *swr     = (s_sw_resp_len >  3) ? (float)atoi(s_sw_resp + 2) / 100.0f : -1.0f;
+    if (s_pc_resp_len == 0 || s_sw_resp_len == 0) return ESP_ERR_TIMEOUT;
     return ESP_OK;
 }
 

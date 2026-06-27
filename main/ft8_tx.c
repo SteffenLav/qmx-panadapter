@@ -638,6 +638,16 @@ void ft8_tx_run(const ft8_tx_request_t *req)
         int64_t t0 = esp_timer_get_time();
         tx_cmd(t0, sim, "TX;");   // key down - radio's own envelope shaping
 
+        // Live power/SWR: fire ONE non-blocking PC;SW; once the PA has settled
+        // (symbol 6 ≈ 1 s in), then read the async response a few symbols later
+        // (symbol 14). Both steps fit inside the 160 ms inter-symbol slack (the
+        // send is a ~ms CDC write bounded to 50 ms; the read just parses
+        // buffers), so symbol timing is undisturbed - unlike cat_query_power_swr()'s
+        // ~600 ms blocking wait, which is why that one only runs at burst end.
+        // Result populates s_last_* so the "TRANSMITTING:" line shows the CURRENT
+        // burst's reading from ~2 s in. Skipped in sim mode (no real link).
+        bool ps_sent = false, ps_have = false;
+
         bool aborted = false;
         for (int i = 0; i < FT8_NN; i++) {
             if (s_abort_requested) {
@@ -652,6 +662,23 @@ void ft8_tx_run(const ft8_tx_request_t *req)
             float freq = (float)req->audio_freq_hz + (float)req->tones[i] * FT8_TONE_SPACING_HZ;
             sleep_until(t0, (int64_t)i * FT8_SYMBOL_PERIOD_US);
             tx_cmd(t0, sim, "TA%.2f;", (double)freq);
+#if FT8_TX_SEND_LIVE
+            if (!sim) {
+                if (!ps_sent && i == 6) {
+                    cat_pwr_swr_async_send();
+                    ps_sent = true;
+                } else if (ps_sent && !ps_have && i >= 14) {
+                    float pw = -1.0f, sw = -1.0f;
+                    if (cat_pwr_swr_async_read(&pw, &sw) == ESP_OK && pw >= 0.0f && sw >= 0.0f) {
+                        s_last_power_w   = pw;
+                        s_last_swr       = sw;
+                        s_last_pwr_swr_us = esp_timer_get_time();
+                        ps_have = true;
+                        ESP_LOGI(TAG, "live TX power=%.1fW SWR=%.2f", (double)pw, (double)sw);
+                    }
+                }
+            }
+#endif
         }
 
         if (!aborted) {

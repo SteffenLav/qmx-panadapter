@@ -4390,7 +4390,15 @@ static void drawer_build(void)
         lv_obj_set_style_opa(s_slider_cwaudio_vol, LV_OPA_50, 0);  // greyed: shelved/WIP
         lv_obj_add_event_cb(s_slider_cwaudio_vol, drawer_slider_cwaudio_vol_cb,
                             LV_EVENT_VALUE_CHANGED, NULL);
-        y += 130;
+        // CW Audio is shelved (see cw_audio.c) and the greyed-out section was
+        // raising support questions, so it's hidden in BOTH modes now (it was
+        // already hidden in FT8). The widgets are still built — keeps the
+        // callbacks referenced and makes this trivially reversible — we just
+        // never show the section and don't advance y, so the next section
+        // (IF calibration) takes this slot and no empty gap is left behind.
+        // The permanent hide is enforced in drawer_set_ft8_mode().
+        lv_obj_add_flag(sec, LV_OBJ_FLAG_HIDDEN);
+        // y intentionally NOT advanced.
     }
 
     // IF calibration section (per-unit QMX oscillator trim)
@@ -4672,7 +4680,9 @@ static void drawer_set_ft8_mode(bool ft8)
         // DRAWER_SEC_DISTANCE and DRAWER_SEC_SIMMODE are FT8-only (meaningless
         // in Panadapter mode), unlike the rest of keep[] which is shared
         // between both modes - so they're hidden, not kept, when !ft8.
-        if ((ft8 && !kept) || (!ft8 && (i == DRAWER_SEC_DISTANCE || i == DRAWER_SEC_SIMMODE))) {
+        // DRAWER_SEC_CWAUDIO is shelved (cw_audio.c) and hidden in BOTH modes.
+        if ((ft8 && !kept) || (!ft8 && (i == DRAWER_SEC_DISTANCE || i == DRAWER_SEC_SIMMODE)) ||
+            i == DRAWER_SEC_CWAUDIO) {
             lv_obj_add_flag(s_drawer_sections[i], LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_clear_flag(s_drawer_sections[i], LV_OBJ_FLAG_HIDDEN);

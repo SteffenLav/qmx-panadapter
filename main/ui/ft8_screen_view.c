@@ -144,6 +144,7 @@ static lv_obj_t *s_lbl_heard    = NULL;
 static lv_obj_t *s_btn_cq       = NULL;  // "Call CQ" - short tap TX, long-press edits presets
 static lv_obj_t *s_cq_lbl       = NULL;  // label inside s_btn_cq (shows the active CQ message)
 static lv_obj_t *s_lbl_tx       = NULL;  // TX state indicator: armed/active, tap to cancel/abort
+static lv_obj_t *s_lbl_tx_pswr  = NULL;  // cyan live PWR/SWR line, shown only while ACTIVE (LVGL v9 has no in-label recolor)
 static lv_obj_t *s_btn_override_resend = NULL;  // manual QSO override: re-send current msg
 static lv_obj_t *s_lbl_resend          = NULL;  // label inside s_btn_override_resend (updated per-state)
 static lv_obj_t *s_btn_override_rr73   = NULL;  // manual QSO override: force RR73
@@ -832,18 +833,36 @@ static void t_clock_cb(lv_timer_t *t)
         ft8_tx_state_t tx_st = ft8_tx_get_status(tx_text, sizeof(tx_text), &secs_until);
         ft8_qso_state_t qso_st = ft8_qso_get_state();
         char b[128];
-        float tx_pwr_w, tx_pwr_swr, tx_pwr_age;
+
+        // Live PWR/SWR cyan line is shown ONLY while ACTIVE; hide by default so
+        // it vanishes the instant TX ends (QSO finish or cancel), by request.
+        if (s_lbl_tx_pswr) lv_obj_add_flag(s_lbl_tx_pswr, LV_OBJ_FLAG_HIDDEN);
 
         bool clash = (tx_st != FT8_TX_IDLE) && ft8_tx_is_clashing();
 
         if (tx_st == FT8_TX_ACTIVE) {
-            // Red: transmitting right now (tap to abort)
+            // Red: transmitting right now (tap to abort).
             if (clash)
                 snprintf(b, sizeof(b), "TRANSMITTING: %s\n(tap to abort) ⚠ FREQ BUSY", tx_text);
             else
                 snprintf(b, sizeof(b), "TRANSMITTING: %s\n(tap to abort)", tx_text);
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx, lv_palette_main(LV_PALETTE_RED), 0);
+
+            // Live PWR/SWR on a separate cyan label below. Populated by
+            // ft8_tx.c's mid-burst async query (~2 s into the burst); before
+            // that it carries the previous burst's reading, or nothing on the
+            // very first burst. Aligned under s_lbl_tx each tick so it follows
+            // the (variable-height) TRANSMITTING text.
+            float pw = -1.0f, sw = -1.0f;
+            (void)ft8_tx_get_last_power_swr(&pw, &sw);
+            if (s_lbl_tx_pswr && pw >= 0.0f && sw >= 0.0f) {
+                char pswr[40];
+                snprintf(pswr, sizeof(pswr), "PWR %.1fW  SWR %.2f", (double)pw, (double)sw);
+                lv_label_set_text(s_lbl_tx_pswr, pswr);
+                lv_obj_align_to(s_lbl_tx_pswr, s_lbl_tx, LV_ALIGN_OUT_BOTTOM_LEFT, 0, 4);
+                lv_obj_clear_flag(s_lbl_tx_pswr, LV_OBJ_FLAG_HIDDEN);
+            }
 
         } else if (tx_st == FT8_TX_ARMED) {
             // Amber (no clash) or red-orange (clash): burst scheduled (tap to cancel)
@@ -875,20 +894,15 @@ static void t_clock_cb(lv_timer_t *t)
             lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0xFF6020), 0);
 
         } else {
-            // Check for recent TX burst power/SWR reading (for debugging: show age + raw values)
-            tx_pwr_age = ft8_tx_get_last_power_swr(&tx_pwr_w, &tx_pwr_swr);
-            if (tx_pwr_age >= 0.0f && tx_pwr_age < 10.0f) {
-                snprintf(b, sizeof(b), "Last TX: %.1fW SWR%.2f [%ds]",
-                         (double)tx_pwr_w, (double)tx_pwr_swr, (int)tx_pwr_age);
-                lv_label_set_text(s_lbl_tx, b);
-                lv_obj_set_style_text_color(s_lbl_tx, lv_palette_main(LV_PALETTE_CYAN), 0);
-            } else {
-                // Dim white: ft8_status passthrough (RX state, decode count, etc.)
-                char status[96];
-                ft8_status_get(status, sizeof(status));
-                lv_label_set_text(s_lbl_tx, status[0] ? status : "Idle");
-                lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-            }
+            // Not transmitting and no QSO state to show: plain ft8_status
+            // passthrough (RX state, decode count, etc.). The TX power/SWR is
+            // shown ONLY on the live TRANSMITTING line above and is gone the
+            // moment TX ends (QSO finish or cancel) - no lingering "Last TX"
+            // readout, by request.
+            char status[96];
+            ft8_status_get(status, sizeof(status));
+            lv_label_set_text(s_lbl_tx, status[0] ? status : "Idle");
+            lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
         }
         lv_obj_clear_flag(s_lbl_tx, LV_OBJ_FLAG_HIDDEN);
 
@@ -1488,6 +1502,15 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_label_set_long_mode(s_lbl_tx, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_lbl_tx, 288);
     lv_obj_set_pos(s_lbl_tx, 0, 380);
+
+    // Live TX PWR/SWR line. Separate label (cyan) aligned just under s_lbl_tx:
+    // LVGL v9 dropped in-label recolor markup, so a distinct colour from the
+    // red "TRANSMITTING" text needs its own object. Hidden unless transmitting.
+    s_lbl_tx_pswr = lv_label_create(s_left_pane);
+    lv_label_set_text(s_lbl_tx_pswr, "");
+    lv_obj_set_style_text_font(s_lbl_tx_pswr, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(s_lbl_tx_pswr, lv_palette_main(LV_PALETTE_CYAN), 0);
+    lv_obj_add_flag(s_lbl_tx_pswr, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_lbl_tx, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(s_lbl_tx, tx_indicator_tap_cb, LV_EVENT_CLICKED, NULL);
 
