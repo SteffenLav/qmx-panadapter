@@ -175,12 +175,6 @@ static float *s_ft8_dst    = NULL;
 static volatile int s_ft8_idx    = 0;   // advanced by fft_task; polled cross-task by the FT8 capture caller
 static int    s_ft8_target = 0;
 static volatile bool s_ft8_active = false;
-// Set by dsp_ft8_capture_begin, consumed by fft_task on its next iteration:
-// flush the audio ring (discard accumulated latency) and THEN go active, so
-// every slot's sample[0] is genuinely fresh / boundary-aligned. The flush is
-// done by fft_task itself (the ring's sole consumer) to avoid a two-consumer
-// race with audio_flush_ring. See the FT8 first-slot-cliff investigation.
-static volatile bool s_ft8_arm_pending = false;
 static float s_ft8_mix_buf[DSP_FFT_SIZE];
 static float s_ft8_dec_buf[DSP_FFT_SIZE / 4];
 // Debug instrumentation: once-per-second log of FT8 branch activity.
@@ -221,12 +215,7 @@ esp_err_t dsp_ft8_capture_begin(float *dst, uint32_t target_samples)
     s_ft8_idx    = 0;
     s_ft8_target = (int)target_samples;
     __sync_synchronize();
-    // Don't go active here. Arm a pending flush: fft_task drains the ring on
-    // its next iteration (single-consumer-safe) and then sets s_ft8_active, so
-    // capture begins on fresh, boundary-aligned audio. The ~one-iteration
-    // (~21 ms) promotion delay is constant every slot (no accumulation) and
-    // well within the decoder's time-search window.
-    s_ft8_arm_pending = true;
+    s_ft8_active = true;
     return ESP_OK;
 }
 
@@ -755,20 +744,6 @@ static void fft_task(void *arg)
     float last_min = 0, last_max = 0, last_mean = 0;
 
     while (1) {
-        // FT8 capture arm: flush the audio ring once (on this consumer task, so
-        // no two-consumer race) to discard accumulated latency, then go active.
-        // Done before the read so no stale pre-boundary pairs land at
-        // s_ft8_dst[0]. This is the fix for the FT8 first-slot-cliff: without
-        // it, later captures inherit ring backlog and read time-shifted audio
-        // that syncs but won't LDPC-decode.
-        if (s_ft8_arm_pending) {
-            audio_flush_ring();
-            s_ft8_arm_pending = false;
-            s_ft8_active = true;
-            __sync_synchronize();
-            continue;
-        }
-
         // Block until we have a full FFT window of stereo pairs (1024 pairs).
         // audio_read_samples may return less than requested - loop until full.
         size_t got = 0;

@@ -131,21 +131,6 @@ size_t audio_read_samples(int16_t *dst, size_t max_pairs, uint32_t timeout_ms)
     return got_bytes / (sizeof(int16_t) * 2);
 }
 
-size_t audio_flush_ring(void)
-{
-    if (!s_ring) return 0;
-    size_t discarded_bytes = 0;
-    // Drain in non-blocking bursts until empty. Single-consumer only (fft_task).
-    for (;;) {
-        size_t n = 0;
-        void *item = xRingbufferReceiveUpTo(s_ring, &n, 0, SAMPLE_RING_BYTES);
-        if (!item) break;
-        discarded_bytes += n;
-        vRingbufferReturnItem(s_ring, item);
-    }
-    return discarded_bytes / (sizeof(int16_t) * 2);
-}
-
 size_t audio_ring_backlog_pairs(void)
 {
     if (!s_ring) return 0;
