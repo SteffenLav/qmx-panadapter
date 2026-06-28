@@ -128,17 +128,30 @@ foreach ($c in $chapters) {
         # Remove the top-level heading (# Title)
         $guideContent = $guideContent -replace '(?m)^# [^\n]+\n+', ''
 
-        # Extract and number subsections (### N. Subsection → ### C.N. Subsection)
+        # Extract and number subsections (### and #### both)
         $subsections = @()
-        $guideContent = [regex]::Replace($guideContent, '(?m)^### (\d+)\. ([^\n]+)$', {
+        $currentSubNum = 0
+        $guideContent = [regex]::Replace($guideContent, '(?m)^(###|####) (\d+)\. ([^\n]+)$', {
             param($match)
-            $subNum = [int]$match.Groups[1].Value
-            $subTitle = $match.Groups[2].Value
-            $subId = ($subTitle.ToLower() -replace '[^a-z0-9]+', '-' -replace '^-|-$', '').Substring(0, [Math]::Min(40, ($subTitle.ToLower() -replace '[^a-z0-9]+', '-' -replace '^-|-$', '').Length))
+            $level = $match.Groups[1].Value
+            $origNum = [int]$match.Groups[2].Value
+            $title = $match.Groups[3].Value
+            $subId = ($title.ToLower() -replace '[^a-z0-9]+', '-' -replace '^-|-$', '').Substring(0, [Math]::Min(40, ($title.ToLower() -replace '[^a-z0-9]+', '-' -replace '^-|-$', '').Length))
 
-            $subsections += @{ Num = $subNum; Title = $subTitle; Id = $subId }
-
-            "### $($c.Num).$subNum. $subTitle"
+            if ($level -eq '###') {
+                $currentSubNum = $origNum
+                $subsections += @{ Num = $origNum; Title = $title; Id = $subId }
+                "### $($c.Num).$origNum. $title"
+            } else {
+                # #### nested - number as C.S.N
+                if ($subsections.Count -gt 0) {
+                    if (-not ($subsections[-1].ContainsKey('Nested'))) {
+                        $subsections[-1]['Nested'] = @()
+                    }
+                    $subsections[-1].Nested += @{ Num = $origNum; Title = $title; Id = "$subId" }
+                }
+                "#### $($c.Num).$currentSubNum.$origNum. $title"
+            }
         })
 
         $allSubsections[$c.Id] = $subsections
@@ -170,6 +183,14 @@ foreach ($c in $chapters) {
         foreach ($sub in $allSubsections[$c.Id]) {
             $subId = "$($c.Id)-$($sub.Id)"
             $tocLines.Add("<div class=`"toc-row toc-subsection`"><a href=`"#$subId`">$($c.Num).$($sub.Num). $($sub.Title)</a><span class=`"toc-fill`"></span><span class=`"toc-page`">{{PAGE:$subId}}</span></div>")
+
+            # Add nested sub-subsections if they exist
+            if ($sub.ContainsKey('Nested') -and $sub.Nested.Count -gt 0) {
+                foreach ($nested in $sub.Nested) {
+                    $nestedId = "$subId-$($nested.Id)"
+                    $tocLines.Add("<div class=`"toc-row toc-subsubsection`"><a href=`"#$nestedId`">$($c.Num).$($sub.Num).$($nested.Num). $($nested.Title)</a><span class=`"toc-fill`"></span><span class=`"toc-page`">{{PAGE:$nestedId}}</span></div>")
+                }
+            }
         }
     }
 }
@@ -235,6 +256,8 @@ a { color: #0a5ba8; text-decoration: none; }
 .toc-chapter { margin: 7px 0 0 0; }
 .toc-subsection { margin: 2px 0 0 20px; }
 .toc-subsection a { font-size: 0.95em; }
+.toc-subsubsection { margin: 0px 0 0 40px; }
+.toc-subsubsection a { font-size: 0.90em; }
 .toc-row a { font-weight: 600; }
 .toc-fill { flex: 1; border-bottom: 1px dotted #999; margin: 0 6px; height: 0.6em; }
 .toc-page { min-width: 2em; text-align: right; color: #555; }
@@ -257,7 +280,7 @@ function Build-Pdf([string]$markdownText, [string]$outputPdfPath) {
         $htmlContent = $htmlContent -replace $pattern, $replacement
     }
 
-    # Fix subsection header IDs (C.N. Title → chapter-subsection-id)
+    # Fix subsection and nested subsection header IDs
     foreach ($c in $chapters) {
         if ($allSubsections.ContainsKey($c.Id)) {
             foreach ($sub in $allSubsections[$c.Id]) {
@@ -266,6 +289,17 @@ function Build-Pdf([string]$markdownText, [string]$outputPdfPath) {
                 $pattern = "<h3 id=`"[^`"]*`">\s*$escText\s*</h3>"
                 $replacement = "<h3 id=`"$subId`">$($c.Num).$($sub.Num). $($sub.Title)</h3>"
                 $htmlContent = $htmlContent -replace $pattern, $replacement
+
+                # Fix nested #### headers
+                if ($sub.ContainsKey('Nested') -and $sub.Nested.Count -gt 0) {
+                    foreach ($nested in $sub.Nested) {
+                        $escNestedText = [regex]::Escape("$($c.Num).$($sub.Num).$($nested.Num). $($nested.Title)")
+                        $nestedId = "$subId-$($nested.Id)"
+                        $nestedPattern = "<h4 id=`"[^`"]*`">\s*$escNestedText\s*</h4>"
+                        $nestedReplacement = "<h4 id=`"$nestedId`">$($c.Num).$($sub.Num).$($nested.Num). $($nested.Title)</h4>"
+                        $htmlContent = $htmlContent -replace $nestedPattern, $nestedReplacement
+                    }
+                }
             }
         }
     }
@@ -309,7 +343,7 @@ function Get-HeadingPages([string]$pdfPath, $entries) {
 
 $allEntries = $chapters + $appendices
 
-# Also collect subsection page numbers
+# Also collect subsection and nested subsection page numbers
 $allEntriesForPages = New-Object System.Collections.Generic.List[object]
 foreach ($e in $allEntries) {
     $allEntriesForPages.Add($e)
@@ -319,6 +353,14 @@ foreach ($c in $chapters) {
         foreach ($sub in $allSubsections[$c.Id]) {
             $subId = "$($c.Id)-$($sub.Id)"
             $allEntriesForPages.Add(@{ Id = $subId; Numbered = "$($c.Num).$($sub.Num). $($sub.Title)" })
+
+            # Also add nested subsections
+            if ($sub.ContainsKey('Nested') -and $sub.Nested.Count -gt 0) {
+                foreach ($nested in $sub.Nested) {
+                    $nestedId = "$subId-$($nested.Id)"
+                    $allEntriesForPages.Add(@{ Id = $nestedId; Numbered = "$($c.Num).$($sub.Num).$($nested.Num). $($nested.Title)" })
+                }
+            }
         }
     }
 }
