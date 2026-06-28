@@ -815,16 +815,38 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
 
     size_t heap_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024;
     size_t heap_p = heap_caps_get_free_size(MALLOC_CAP_SPIRAM)   / 1024;
+    // Low-water mark + largest contiguous block: the SDIO TX path needs an
+    // internal DMA buffer, so what matters for the transport_drv crash is the
+    // worst-case internal free and whether a single contiguous chunk survives.
+    size_t heap_i_min  = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024;
+    size_t heap_i_lblk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024;
 
     ft8_status_set("RX: %d decoded\n(%d candidates)", n_decoded, n_cand);
     ESP_LOGI(TAG,
         "slot %d UTC %lld: off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d skip=%d "
-        "backlog=%dpr drop=%dpr timing=%+dms heap_i=%uKB heap_p=%uKB",
+        "backlog=%dpr drop=%dpr timing=%+dms heap_i=%uKB(min=%uKB,lblk=%uKB) heap_p=%uKB",
         slot_idx, (long long)slot_sec, start_off_ms,
         cap_ms, stft_ms, dec_ms, n_cand, n_decoded, n_skipped,
         arm_backlog, drop_delta,
         s_last_timing_valid ? s_last_timing_ms : 0,
-        (unsigned)heap_i, (unsigned)heap_p);
+        (unsigned)heap_i, (unsigned)heap_i_min, (unsigned)heap_i_lblk, (unsigned)heap_p);
+
+    // When internal DRAM gets dangerously low, dump the full internal-heap
+    // breakdown so we can see the consumer/fragmentation picture right before
+    // the SDIO TX path (transport_drv_sta_tx -> copy_buff) starves and panics.
+    // Threshold chosen above the ~17 KB seen at the crash; logs at most once per
+    // crossing so it doesn't spam a healthy session.
+    static bool s_heap_warned = false;
+    if (heap_i < 40) {
+        if (!s_heap_warned) {
+            s_heap_warned = true;
+            ESP_LOGW(TAG, "=== INTERNAL DRAM LOW (%uKB free, %uKB largest block) — dumping internal heap ===",
+                     (unsigned)heap_i, (unsigned)heap_i_lblk);
+            heap_caps_print_heap_info(MALLOC_CAP_INTERNAL);
+        }
+    } else if (heap_i > 60) {
+        s_heap_warned = false;  // re-arm once we recover comfortably
+    }
 
     ft8_qso_advance(slot_sec);
     // Robot auto-answer: runs after advance() (so the existing machine reacts
