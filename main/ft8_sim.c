@@ -197,8 +197,17 @@ static void ft8_sim_task(void *arg)
 
         qmx_settings_t s;
         settings_load_all(&s);
-        if (!s.sim_mode_en) {
-            if (was_active) { ESP_LOGI(TAG, "sim mode OFF"); was_active = false; }
+        // FT8-only: this phantom-station simulator is hardcoded to FT8
+        // protocol (ft8_synth_and_decode() in ft8_test.c) and has no concept
+        // of the FT8/FT4 sub-mode, so injecting its fake traffic while the
+        // real receiver is running FT4 timing would be nonsensical (fake
+        // FT8-protocol QSOs appearing in a decode list whose real RX uses a
+        // different slot length entirely). The drawer checkbox is dimmed and
+        // locked while in FT4 (ui.c's apply_sim_mode_lock) as the primary
+        // guard; this is the backend half of that same belt-and-suspenders
+        // pattern, in case sim_mode_en is left on from a prior FT8 session.
+        if (!s.sim_mode_en || ft8_op_mode_get() != FT8_OP_MODE_FT8) {
+            if (was_active) { ESP_LOGI(TAG, "sim mode OFF (or FT4 active)"); was_active = false; }
             prev_tx_state = FT8_TX_IDLE;
             continue;
         }

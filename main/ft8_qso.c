@@ -37,6 +37,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <sys/time.h>
 
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -84,7 +85,43 @@ static char               s_fd_their_exch[FT8_FD_EXCH_LEN];
 
 // ---------------------------------------------------------------------------
 
-static inline bool slot_is_even(int64_t sec) { return ((sec / 15) % 2) == 0; }
+// Classify an already-truncated-to-whole-seconds slot_sec (e.g. a heard
+// station's ft8_call_t.last_utc). FT4's 7.5 s grid needs a different formula
+// from FT8's plain "/15" - see the long derivation at ft8_tx.c's own
+// slot_is_even() (the two are intentionally identical; kept as separate
+// static copies rather than shared across translation units, same as before
+// this fix). Briefly: floor(k*7.5) mod 15 is always exactly 0 (k even) or 7
+// (k odd), so the truncation loses no parity information.
+static inline bool slot_is_even(int64_t sec, ftx_protocol_t proto)
+{
+    if (proto == FTX_PROTOCOL_FT4) return (sec % 15) == 0;
+    return ((sec / 15) % 2) == 0;
+}
+
+// UTC slot_sec (matching exactly what ft8_test.c's slot loop will itself
+// produce as boundary_ms/1000) of the next slot boundary strictly in the
+// future, optionally constrained to a parity. Works in milliseconds
+// internally using proto's real period (15000 FT8 / 7500 FT4) so the result
+// is always a boundary the engine actually produces - unlike naively
+// stepping by a literal 15 in whole seconds, which for FT4 doesn't track the
+// real 7.5 s grid at all (the bug this replaces: ft8_qso_start()'s old
+// tx1_slot search could pick a "slot" that no real FT4 boundary ever lands
+// on, or mis-classify a boundary it did land on, so a parity-restricted
+// pounce/CQ-lock could silently target a slot that would never actually
+// fire or be scanned).
+static int64_t next_slot_sec(bool match_parity, bool want_even, ftx_protocol_t proto)
+{
+    int period_ms = (proto == FTX_PROTOCOL_FT4) ? 7500 : 15000;
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    int64_t now_ms  = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+    int64_t next_ms = (now_ms / period_ms) * period_ms + period_ms;
+    if (match_parity) {
+        while ((((next_ms / period_ms) % 2) == 0) != want_even) next_ms += period_ms;
+    }
+    return next_ms / 1000;
+}
+
 static inline void lock(void)   { xSemaphoreTake(s_lock, portMAX_DELAY); }
 static inline void unlock(void) { xSemaphoreGive(s_lock); }
 
@@ -479,12 +516,12 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
         return false;
     }
 
-    // Earliest valid RX slot to scan: one slot after TX1 fires.
-    int64_t now_sec  = (int64_t)time(NULL);
-    int64_t tx1_slot = (now_sec / 15) * 15 + 15;
-    if (tx1_req->use_parity) {
-        while (slot_is_even(tx1_slot) != tx1_req->want_even_slot) tx1_slot += 15;
-    }
+    // Earliest valid RX slot to scan: one slot after TX1 fires. Computed in
+    // ms internally (next_slot_sec) using tx1_req's own protocol period, so
+    // this lands on a boundary the engine will actually produce - see that
+    // function's comment for the FT4 bug this fixes.
+    int64_t tx1_slot = next_slot_sec(tx1_req->use_parity, tx1_req->want_even_slot,
+                                     tx1_req->protocol);
 
     lock();
     s_state         = FT8_QSO_WAIT_RPT;
@@ -522,10 +559,9 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
     // same slot type and the opposite slot stays free for RX.
     ft8_tx_request_t req_copy = *cq_req;
     if (!req_copy.use_parity) {
-        int64_t now_sec   = (int64_t)time(NULL);
-        int64_t next_slot = (now_sec / 15) * 15 + 15;
+        int64_t next_slot = next_slot_sec(false, false, req_copy.protocol);
         req_copy.use_parity     = true;
-        req_copy.want_even_slot = (((next_slot / 15) % 2) == 0);
+        req_copy.want_even_slot = slot_is_even(next_slot, req_copy.protocol);
     }
 
     char arm_err[64];

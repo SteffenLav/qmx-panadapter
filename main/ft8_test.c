@@ -816,7 +816,7 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
     size_t heap_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024;
     size_t heap_p = heap_caps_get_free_size(MALLOC_CAP_SPIRAM)   / 1024;
 
-    ft8_status_set("RX: %d decoded  (%d candidates)", n_decoded, n_cand);
+    ft8_status_set("RX: %d decoded\n(%d candidates)", n_decoded, n_cand);
     ESP_LOGI(TAG,
         "slot %d UTC %lld: off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d skip=%d "
         "backlog=%dpr drop=%dpr timing=%+dms heap_i=%uKB heap_p=%uKB",
@@ -1005,9 +1005,12 @@ static void ft8_task(void *arg)
         bool   is_ft4    = (s_pool_proto == (int)FTX_PROTOCOL_FT4);
         int    period_ms = is_ft4 ? FT4_SLOT_MS : FT8_SLOT_MS;
         int    slot_samples = period_ms * (SR_HZ / 1000);   // 90000 (FT4) / 180000 (FT8)
-        // FT4 TX is not implemented yet - only FT8 may key the radio. In FT4 we
-        // always RX so a tap can't transmit wrong-protocol tones on an FT4 freq.
-        bool   tx_allowed = !is_ft4;
+        // FT4 TX is now implemented (ft8_tx.c) but force-routed through the
+        // simulation interlock for ANY FT4 request - the 48 ms CAT cadence is
+        // unverified on real hardware, so ft8_tx_run()/ft8_tx_arm() never let
+        // an FT4 burst reach a connected QMX regardless of this slot loop's
+        // own gating. So the slot loop itself can simply try TX in both
+        // protocols; the real safety boundary lives in ft8_tx.c, not here.
 
         ESP_LOGI(TAG, "slot %d: waiting for next %s boundary...", slot_idx, is_ft4 ? "FT4" : "FT8");
         int64_t boundary_ms = wait_for_slot_boundary_ms(last_boundary_ms, period_ms);
@@ -1015,7 +1018,10 @@ static void ft8_task(void *arg)
         int64_t slot_sec = boundary_ms / 1000;   // whole-second slot id (record/aging)
 
         ft8_tx_request_t txreq;
-        if (tx_allowed && ft8_tx_should_run_this_slot(slot_sec, &txreq)) {
+        // Pass boundary_ms (exact, undistorted) not slot_sec - see the
+        // ft8_tx_should_run_this_slot doc comment for why the whole-second
+        // truncation breaks FT4 parity.
+        if (ft8_tx_should_run_this_slot(boundary_ms, &txreq)) {
             ft8_status_set("TX: %s", txreq.display_text);
             ft8_tx_run(&txreq);   // blocks ~12.7 s; always restores RX before returning
             ft8_qso_on_tx_complete();  // re-arm the current outgoing message
@@ -1100,9 +1106,13 @@ static void ft8_task(void *arg)
                     // of waiting a full cycle. See FT8_REPLY_TX_WINDOW_MS. Safe -
                     // should_run only returns a legitimately-armed, correct-parity
                     // request, so this can never misfire a spurious/wrong-parity TX.
-                    // FT4 never reaches here (tx_allowed=false -> no armed TX path yet).
-                    if (tx_allowed && into_slot_ms <= FT8_REPLY_TX_WINDOW_MS &&
-                        ft8_tx_should_run_this_slot(slot_sec, &late_txreq)) {
+                    // FT8-only: this optimization's timing/parity assumptions are
+                    // tuned to the 15 s FT8 grid and FT8 QSO automation isn't (yet)
+                    // mirrored for FT4 (FT4 currently only supports CQ, no
+                    // auto-reply) - so there's never a legitimate FT4 reply to catch
+                    // here anyway. Gate explicitly rather than rely on that.
+                    if (!is_ft4 && into_slot_ms <= FT8_REPLY_TX_WINDOW_MS &&
+                        ft8_tx_should_run_this_slot(boundary_ms, &late_txreq)) {
                         late_tx = true;
                         break;
                     }

@@ -60,6 +60,13 @@ void ui_set_diag_log_indicator(bool active);
 // drawer-build time to restore the saved NVS state.
 void ui_set_sim_mode_indicator(bool active);
 
+// Re-evaluate the breathing red border from both its sources (the drawer's
+// general sim-mode toggle AND the FT8/FT4 sub-mode, since FT4 TX is always
+// forced through the same interlock regardless of the toggle - see ft8_tx.c's
+// FT4 SAFETY note). Call this after either source changes, instead of
+// ui_set_sim_mode_indicator() directly.
+void ui_refresh_sim_mode_indicator(void);
+
 // Bottom-bar right zone: WiFi icon+SSID (or "off" text), optional RSSI
 // (rendered in jitter-free fixed-width digit cells), and a trailing
 // suffix (e.g. " -67dBm  192.168.1.5" minus the rssi number -> "dBm  192.168.1.5").

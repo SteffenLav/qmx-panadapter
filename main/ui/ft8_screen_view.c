@@ -863,11 +863,17 @@ static void t_clock_cb(lv_timer_t *t)
         bool clash = (tx_st != FT8_TX_IDLE) && ft8_tx_is_clashing();
 
         if (tx_st == FT8_TX_ACTIVE) {
-            // Red: transmitting right now (tap to abort).
+            // Red: transmitting right now (tap to abort). Each logical chunk
+            // gets its own explicit line - "TAP TO ABORT" is always the last
+            // line on its own, never sharing a line (and so never an
+            // auto-wrap break) with the message text above it. The message
+            // itself is still free to wrap across multiple lines if it's too
+            // long for the label width - only the boundary BETWEEN chunks is
+            // fixed, not the wrapping within a chunk.
             if (clash)
-                snprintf(b, sizeof(b), "TRANSMITTING: %s\n(tap to abort) ⚠ FREQ BUSY", tx_text);
+                snprintf(b, sizeof(b), "Transmitting:\n%s\nTAP TO ABORT\n⚠ FREQ BUSY", tx_text);
             else
-                snprintf(b, sizeof(b), "TRANSMITTING: %s\n(tap to abort)", tx_text);
+                snprintf(b, sizeof(b), "Transmitting:\n%s\nTAP TO ABORT", tx_text);
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx, lv_palette_main(LV_PALETTE_RED), 0);
 
@@ -888,12 +894,25 @@ static void t_clock_cb(lv_timer_t *t)
 
         } else if (tx_st == FT8_TX_ARMED) {
             // Amber (no clash) or red-orange (clash): burst scheduled (tap to cancel)
-            bool tx_even = (((int64_t)now + secs_until) / 15) % 2 == 0;
+            // Parity of the slot we're about to fire on, for display only.
+            // Computed with the same ms-precision/period-aware math as the
+            // engine's own firing decision (ft8_tx.c) - the old whole-second
+            // "/15" here had the same FT4 truncation bug as the parity check
+            // that used to make CQ fire in TX-TX-RX-RX pairs instead of
+            // alternating every slot, just for this cosmetic word instead of
+            // the actual TX decision.
+            struct timeval tv_armed;
+            gettimeofday(&tv_armed, NULL);
+            int64_t fire_ms = (int64_t)tv_armed.tv_sec * 1000 + tv_armed.tv_usec / 1000
+                             + (int64_t)secs_until * 1000;
+            bool tx_even = ((fire_ms / ft8_op_mode_slot_ms()) % 2) == 0;
+            // Same one-chunk-per-line rule as the ACTIVE branch above -
+            // "TAP TO CANCEL" is always its own trailing line.
             if (clash)
-                snprintf(b, sizeof(b), "⚠ FREQ BUSY\nTX armed: %s\n-> %s slot, ~%ds (tap to cancel)",
+                snprintf(b, sizeof(b), "TX armed:\n%s\n-> %s slot, ~%ds\nTAP TO CANCEL\n⚠ FREQ BUSY",
                          tx_text, tx_even ? "EVEN" : "ODD", secs_until);
             else
-                snprintf(b, sizeof(b), "TX armed: %s\n-> %s slot, ~%ds (tap to cancel)",
+                snprintf(b, sizeof(b), "TX armed:\n%s\n-> %s slot, ~%ds\nTAP TO CANCEL",
                          tx_text, tx_even ? "EVEN" : "ODD", secs_until);
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx,
@@ -911,7 +930,7 @@ static void t_clock_cb(lv_timer_t *t)
             // Orange-red: QSO timed out (tap to clear)
             char target[FT8_CALL_MAX_LEN];
             ft8_qso_get_target(target, sizeof(target));
-            snprintf(b, sizeof(b), "QSO %s: timeout\n(tap to clear)", target);
+            snprintf(b, sizeof(b), "QSO %s: timeout\nTAP TO CLEAR", target);
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0xFF6020), 0);
 
@@ -1190,6 +1209,11 @@ static void apply_freq_preset(uint32_t freq_hz, bool ft4)
     if (cat_set_frequency_forced(freq_hz) != ESP_OK) return;
 
     ft8_op_mode_set(ft4 ? FT8_OP_MODE_FT4 : FT8_OP_MODE_FT8);
+    // FT4 TX is always forced through the simulation interlock (see ft8_tx.c's
+    // FT4 SAFETY note) regardless of the drawer's general sim-mode toggle, so
+    // the breathing red border must track the sub-mode too, not just that
+    // checkbox.
+    ui_refresh_sim_mode_indicator();
     if (s_lbl_mode) {
         lv_label_set_text(s_lbl_mode, ft4 ? "MODE: FT4" : "MODE: FT8");
         lv_obj_set_style_text_color(s_lbl_mode,

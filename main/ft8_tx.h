@@ -25,12 +25,15 @@
 #include <stdint.h>
 #include <stddef.h>
 
-#include "ft8/constants.h"     // FT8_NN (79)
+#include "ft8/constants.h"     // FT8_NN (79), FT4_NN (105), ftx_protocol_t
 #include "ui/ft8_screen.h"     // FT8_CALL_MAX_LEN, ft8_call_t
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+// Largest tones[] needed by either protocol (FT4_NN=105 > FT8_NN=79).
+#define FT8_TX_MAX_NN  FT4_NN
 
 typedef enum {
     FT8_TX_IDLE = 0,    // nothing queued; ft8_task runs RX every slot
@@ -57,7 +60,13 @@ typedef struct {
     bool     use_parity;                     // if true, only fire when slot parity ==
                                               // want_even_slot; always true for REPLY,
                                               // optional for CQ (user TX preference)
-    uint8_t  tones[FT8_NN];                  // pre-encoded tone indices (0..7)
+    // Protocol this request was encoded for, captured at build time (from the
+    // FT8/FT4 sub-mode active right then) so a later mode flip between build
+    // and burst can never desync the tones[] encoding from the cadence used
+    // to send them - ft8_tx_run() always uses req->protocol, never re-reads
+    // the live ft8_op_mode_get() mid-burst.
+    ftx_protocol_t protocol;
+    uint8_t  tones[FT8_TX_MAX_NN];           // pre-encoded tone indices: 0..7 (FT8) / 0..3 (FT4)
     char     display_text[32];               // e.g. "K1ABC OZ1LAV JO45ab"
     char     extra_field[16];                // for ROGER_RPT: "R-10"; for 73: "73";
                                               // Field Day: "R 32A WCF" / "16A EMA"
@@ -191,17 +200,33 @@ bool ft8_tx_is_clashing(void);
 // radio). On true, *out receives a private copy of the request and the
 // engine transitions ARMED -> ACTIVE; the caller must then invoke
 // ft8_tx_run(out) to actually execute the burst for this slot.
-bool ft8_tx_should_run_this_slot(int64_t slot_start_unix_sec, ft8_tx_request_t *out);
+//
+// slot_start_ms is the UTC slot boundary in MILLISECONDS (ft8_test.c's
+// boundary_ms - an exact multiple of the active protocol's slot period),
+// NOT seconds. Parity is derived from this using the ARMED request's own
+// protocol period (15000 ms FT8 / 7500 ms FT4) - passing whole seconds here
+// would silently break FT4 parity (see the long comment at this function's
+// definition for why).
+bool ft8_tx_should_run_this_slot(int64_t slot_start_ms, ft8_tx_request_t *out);
 
-// Run one full CAT burst synchronously (~12.7 s on-air, blocks the calling
-// task throughout). Re-verifies Digi mode first (a cheap cached-string read,
-// not a CAT round trip - aborts cleanly *before* keying up if it has drifted
-// since arming, rather than risk a late corrective mode-switch desyncing the
-// burst start). Pauses the CAT poll loop for the duration, sends
-// TX; / 79x TA<freq>; / TA0; / RX;, resumes polling, and unconditionally
+// Run one full CAT burst synchronously (blocks the calling task throughout:
+// ~12.7 s for FT8, ~5 s for FT4). Re-verifies Digi mode first (a cheap
+// cached-string read, not a CAT round trip - aborts cleanly *before* keying
+// up if it has drifted since arming, rather than risk a late corrective
+// mode-switch desyncing the burst start). Pauses the CAT poll loop for the
+// duration, sends TX; / Nx TA<freq>; / TA0; / RX; (N = req->protocol's
+// symbol count, 79 FT8 / 105 FT4), resumes polling, and unconditionally
 // returns the engine to IDLE with the radio back in RX - whether the burst
 // completed normally, was aborted via ft8_tx_request_abort(), hit a send
 // error, or never started due to a mode-check failure.
+//
+// FT4 SAFETY: the 48 ms/symbol CAT cadence (vs FT8's 160 ms) has not been
+// verified on real QMX hardware - whether the radio's CAT parser/DDS keep up
+// is an open question. ft8_tx_run() and ft8_tx_arm() therefore force the
+// existing FT8-simulation-mode interlock (see ft8_sim.h) for ANY request
+// whose protocol is FT4, regardless of the operator's actual sim-mode
+// setting: no cat_* call of any kind reaches a connected QMX. Lift this only
+// after the cadence has been confirmed safe on-air.
 void ft8_tx_run(const ft8_tx_request_t *req);
 
 #ifdef __cplusplus

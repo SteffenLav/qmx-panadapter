@@ -1363,6 +1363,9 @@ static lv_obj_t *s_check_snap = NULL;  // snap-to-peak tap-to-tune checkbox
 static lv_obj_t *s_check_distance_miles = NULL;  // FT8 distance unit (km/miles) checkbox
 static lv_obj_t *s_check_ft8_sync_lines = NULL;  // FT8 sync lines (3x waterfall) checkbox
 static lv_obj_t *s_check_sim_mode = NULL;        // FT8 simulation mode checkbox
+static lv_obj_t *s_lbl_sim_mode   = NULL;        // its label (dimmed alongside the checkbox)
+static bool      s_sim_mode_locked = false;      // true while in FT4 - the phantom-station
+                                                  // simulator (ft8_sim.c) is FT8-only for now
 static lv_obj_t *s_check_cwaudio = NULL;
 static lv_obj_t *s_slider_cwaudio_vol = NULL;
 static int       s_cwaudio_lock_vol = 0;   // value the (disabled) CW-audio slider snaps back to
@@ -1376,6 +1379,7 @@ static lv_obj_t *s_lbl_wf_blend = NULL;
 static lv_obj_t *s_dropdown_wf_window = NULL;
 static lv_obj_t *s_tune_tooltip  = NULL;  // freq label above finger during tap-to-tune
 static lv_obj_t *s_bw_label      = NULL;  // passband width in top bar
+static void apply_sim_mode_lock(bool ft4);   // defined below, used by ui_refresh_sim_mode_indicator() above it
 static void drawer_preset_normal_cb(lv_event_t *e);
 static void drawer_preset_dx_cb(lv_event_t *e);
 static void drawer_preset_strong_cb(lv_event_t *e);
@@ -1530,6 +1534,24 @@ void ui_set_sim_mode_indicator(bool active)
         }
         display_unlock();
     }
+}
+
+// Re-evaluate and apply the breathing border from BOTH of its sources: the
+// drawer's general "FT8 Simulation Mode" toggle (s_sim_mode_en) AND the
+// FT8/FT4 sub-mode itself - FT4 TX is unconditionally forced through the same
+// simulation interlock regardless of this toggle (see ft8_tx.c's FT4 SAFETY
+// note), so the visual warning must follow that, not just the checkbox.
+// Also re-locks the checkbox itself (apply_sim_mode_lock) - the phantom-
+// station simulator it controls is FT8-only (see that function's comment),
+// so the two concerns share every call site and are kept together here.
+// Call this (instead of ui_set_sim_mode_indicator directly) anywhere either
+// source can change: the drawer checkbox callback, drawer build, and the
+// FT8/FT4 preset dropdown (ft8_screen_view.c's apply_freq_preset()).
+void ui_refresh_sim_mode_indicator(void)
+{
+    bool ft4 = (ft8_op_mode_get() == FT8_OP_MODE_FT4);
+    ui_set_sim_mode_indicator(s_sim_mode_en);
+    apply_sim_mode_lock(ft4);
 }
 
 // 1 Hz keepalive: re-foregrounds the border (see comment above s_sim_border)
@@ -2388,9 +2410,15 @@ void ui_init(lv_display_t *disp)
     // so it never steals touches from the edge-swipe strips beneath it.
     build_signature(scr);
 
-    // FT8 simulation-mode breathing red bezel (see ui_set_sim_mode_indicator
-    // above). Built hidden; shown/animated once the drawer below restores
-    // the saved sim_mode_en state, and from the drawer toggle thereafter.
+    // FT8/FT4 simulation-mode breathing red bezel (see ui_set_sim_mode_indicator
+    // above). Built hidden here, then synced below - drawer_build() and
+    // ft8_screen_view_init() both ran earlier in this function (boot-order:
+    // drawer pre-built at line ~2290, screen view at ~2292, this object only
+    // now) and already tried to apply the restored sim_mode_en / FT8-FT4
+    // sub-mode state via ui_refresh_sim_mode_indicator() - those calls early-
+    // returned because s_sim_border didn't exist yet, so the state was
+    // computed but never made visible. The call right after creation below
+    // re-applies it now that the object exists.
     s_sim_border = lv_obj_create(scr);
     lv_obj_set_size(s_sim_border, LV_PCT(100), LV_PCT(100));
     lv_obj_set_pos(s_sim_border, 0, 0);
@@ -2403,6 +2431,7 @@ void ui_init(lv_display_t *disp)
     lv_obj_clear_flag(s_sim_border, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_sim_border, LV_OBJ_FLAG_HIDDEN);
     lv_timer_create(sim_border_keepalive_cb, 1000, NULL);
+    ui_refresh_sim_mode_indicator();   // apply whatever drawer_build()/ft8_screen_view_init() already determined
 
     ESP_LOGI(TAG, "UI built: top=%dpx spectrum=%dpx labels=%dpx waterfall=%dpx bottom=%dpx",
              TOP_BAR_H, SPECTRUM_H, LABEL_BAR_H, WATERFALL_H, BOTTOM_BAR_H);
@@ -3906,16 +3935,40 @@ static void drawer_check_distance_miles_cb(lv_event_t *e)
     ESP_LOGI(TAG, "FT8 distance unit: %s", s_distance_in_miles ? "miles" : "km");
 }
 
+// Dim + lock the sim-mode checkbox while in FT4 - ft8_sim.c's phantom-station
+// simulator (W1AW/K9ZZ practice QSOs) is FT8-only: it's hardcoded to FT8
+// protocol internally (ft8_synth_and_decode()) and has no concept of the
+// FT8/FT4 sub-mode, so toggling it on while in FT4 used to inject fake
+// FT8-protocol phantom traffic into a decode list whose real receiver was
+// actually running FT4 timing - nonsensical. Rather than build a second,
+// FT4-specific phantom-station engine (a similarly-sized feature to the
+// original), the FT8 one is locked to FT8-only for now; see ft8_sim.c's own
+// op-mode gate for the belt-and-suspenders backend half of this.
+// Same dim+DISABLED+early-return-guard pattern as ft8_cq_modal.c's Field Day
+// lockout (apply_fd_dim) - don't rely on LVGL's DISABLED state alone.
+static void apply_sim_mode_lock(bool ft4)
+{
+    s_sim_mode_locked = ft4;
+    lv_opa_t opa = ft4 ? LV_OPA_50 : LV_OPA_COVER;
+    if (s_lbl_sim_mode) lv_obj_set_style_opa(s_lbl_sim_mode, opa, 0);
+    if (s_check_sim_mode) {
+        lv_obj_set_style_opa(s_check_sim_mode, opa, 0);
+        if (ft4) lv_obj_add_state(s_check_sim_mode, LV_STATE_DISABLED);
+        else     lv_obj_remove_state(s_check_sim_mode, LV_STATE_DISABLED);
+    }
+}
+
 // FT8 simulation mode: phantom-station practice (see ft8_sim.h). Pure
 // settings flip here - ft8_sim.c's own task polls this and ft8_tx.c's
 // interlock checks it directly, so there's nothing else to wire up at the
 // toggle site itself.
 static void drawer_check_sim_mode_cb(lv_event_t *e)
 {
+    if (s_sim_mode_locked) return;   // FT4 - see apply_sim_mode_lock()
     lv_obj_t *cb = lv_event_get_target(e);
     s_sim_mode_en = lv_obj_has_state(cb, LV_STATE_CHECKED);
     settings_set_sim_mode_en(s_sim_mode_en);
-    ui_set_sim_mode_indicator(s_sim_mode_en);
+    ui_refresh_sim_mode_indicator();
     ESP_LOGI(TAG, "FT8 simulation mode: %s", s_sim_mode_en ? "ON (radio not keyed)" : "off");
 }
 
@@ -4169,17 +4222,17 @@ static void drawer_build(void)
     // pattern as DRAWER_SEC_DISTANCE above, not a Panadapter-mode setting.
     {
         lv_obj_t *sec = drawer_section(DRAWER_SEC_SIMMODE, y, 56);
-        lv_obj_t *sim_lbl = lv_label_create(sec);
-        lv_label_set_text(sim_lbl, "FT8 Simulation Mode");
-        lv_obj_set_style_text_color(sim_lbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(sim_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(sim_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
+        s_lbl_sim_mode = lv_label_create(sec);
+        lv_label_set_text(s_lbl_sim_mode, "FT8 Simulation Mode");
+        lv_obj_set_style_text_color(s_lbl_sim_mode, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_sim_mode, &lv_font_montserrat_28, 0);
+        lv_obj_align(s_lbl_sim_mode, LV_ALIGN_TOP_LEFT, 0, 10);
         qmx_settings_t scfg_sim;
         settings_load_all(&scfg_sim);
         s_sim_mode_en = scfg_sim.sim_mode_en;
         s_check_sim_mode = make_drawer_checkbox(sec, s_sim_mode_en, drawer_check_sim_mode_cb, NULL);
         lv_obj_align(s_check_sim_mode, LV_ALIGN_TOP_RIGHT, 0, 6);
-        ui_set_sim_mode_indicator(s_sim_mode_en);
+        ui_refresh_sim_mode_indicator();   // also applies the FT4 lock (apply_sim_mode_lock)
         y += 56;
     }
     // Presets section: header + three buttons side-by-side
