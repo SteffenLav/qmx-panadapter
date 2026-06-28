@@ -72,21 +72,28 @@ See [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md
 
 ## Frequency Ranges
 
-The QMX/QMX+ operates across these HF bands:
+Band coverage depends on which radio you have:
+
+- **QMX+** — full **160 m through 6 m** coverage.
+- **QMX** — ships in fixed band-group builds (for example 80/60/40/30/20 m, or 60/40/30/20/17/15 m, or 20/17/15/12/10 m). A given QMX only covers the bands it was built for, not the whole range below.
+
+The panadapter works on whichever bands your radio supports:
 
 | Band | Frequency | Notes |
 |---|---|---|
-| **160 m** | 1.8–2.0 MHz | Panadapter span: 1.8–2.0 MHz |
-| **80 m** | 3.5–3.8 MHz | Panadapter span: 3.5–3.8 MHz |
-| **40 m** | 7.0–7.3 MHz | Panadapter span: 7.0–7.3 MHz |
+| **160 m** | 1.8–2.0 MHz | QMX+ only |
+| **80 m** | 3.5–3.8 MHz | — |
+| **60 m** | ~5.3–5.4 MHz | Channelised in many regions |
+| **40 m** | 7.0–7.3 MHz | — |
 | **30 m** | 10.1–10.15 MHz | SSB not available (CW/DiGi only) |
 | **20 m** | 14.0–14.35 MHz | Most FT8 activity |
 | **17 m** | 18.068–18.168 MHz | — |
 | **15 m** | 21.0–21.45 MHz | — |
 | **12 m** | 24.89–24.99 MHz | — |
 | **10 m** | 28.0–29.7 MHz | — |
+| **6 m** | 50–54 MHz | QMX+ only |
 
-The Tab5 panadapter shows a **4 MHz span** by default (tunable via zoom).
+The Tab5 panadapter shows roughly a **48 kHz span** (±24 kHz around the VFO) by default, narrowing as you zoom in. This is the full bandwidth of the QMX's 48 kHz IQ audio stream over USB.
 
 ## Power Consumption
 
@@ -100,16 +107,23 @@ The Tab5 panadapter shows a **4 MHz span** by default (tunable via zoom).
 | **FT8 TX** (5 W burst) | ~1.5 A | 1.5 h (peak) |
 | **WiFi + RX** | ~800 mA | 3 h |
 
-### QMX+
+### QMX / QMX+
 
 | State | Current | Notes |
 |---|---|---|
-| **Standby** | ~50 mA | RX audio is off |
-| **RX standby** | ~200 mA | RX active, no TX |
-| **TX** (5 W) | ~2.5 A | Depends on antenna SWR |
+| **Receive** | ~80 mA | At 12 V |
+| **Transmit** (5 W) | ~0.7 A @ 12 V<br>~1.0–1.1 A @ 9 V | A lower supply voltage draws more current for the same RF output |
 
-Running both devices on battery:
-- Tab5 2500 mAh + QMX 1500 mAh ≈ 2–3 hours of active FT8 operation
+Running both devices in the field: a Tab5 (2500 mAh internal) plus a small external battery for the QMX gives roughly 2–3 hours of active FT8 operation — the Tab5's display and CPU dominate the total draw, not the radio.
+
+### RF Power Output
+
+Both the QMX and QMX+ are **5 W-class** transmitters delivering roughly **3–5 W**, depending on band and supply voltage:
+
+- Output is highest (~5 W) on the lower bands and tapers off toward the higher bands.
+- The radio is built and tuned for either a **9 V** or **12 V** supply. Typical figures from QRP Labs: QMX ≈ 4–5 W at 9 V or 3–5 W at 12 V; QMX+ ≈ 3–5 W on either supply.
+
+Both radios are the same 5 W power class — the QMX+ differs by covering more bands (full 160 m–6 m), not by transmitting more power.
 
 ## Antennas
 
@@ -121,7 +135,7 @@ Recommended antennas:
 - **Vertical** (1/4 wave + radials) — omnidirectional
 - **Magnetic loop** (small, tuned) — RFI rejection, low noise
 
-Maximum power: **5 W (QMX+) or 2.5 W (QMX)** — a good antenna is critical at these power levels.
+Both are 5 W-class radios (≈3–5 W — see [RF Power Output](#rf-power-output) above) — a good antenna and low SWR matter at these QRP power levels.
 
 ---
 
