@@ -10,6 +10,7 @@
 #include "ft8_filter_modal.h"
 #include "ft8_time_modal.h"
 #include "ft8_screen_view.h"
+#include "ft8_test.h"
 #include "ui_theme.h"
 #include "ui.h"
 #include "settings.h"
@@ -36,6 +37,7 @@ static lv_obj_t *s_robot_warn       = NULL;  // "unattended TX" warning - shown 
 static lv_obj_t *s_cb_field_day     = NULL;  // ARRL Field Day exchange mode enable
 static lv_obj_t *s_ta_fd_class      = NULL;  // e.g. "16A"
 static lv_obj_t *s_ta_fd_section    = NULL;  // e.g. "EMA"
+static lv_obj_t *s_sync_time_btn    = NULL;  // "Sync Time" button (FT8-only; hidden in FT4)
 
 static bool      s_open = false;
 
@@ -410,6 +412,7 @@ static void modal_build(void)
             lv_obj_center(l);
             if (i == 0) save_b = b;
             else if (i == 1) cancel_b = b;
+            else if (i == 2) s_sync_time_btn = b;  // Store "Sync Time" button for mode-specific show/hide
         }
         // Physical keyboard: Enter -> Save, Esc -> Cancel.
         ui_kbd_set_buttons(save_b, cancel_b);
@@ -480,6 +483,15 @@ void ft8_filter_modal_show(void)
     apply_checkbox_state(s_cb_field_day, s.field_day_en);
     lv_textarea_set_text(s_ta_fd_class, s.fd_class);
     lv_textarea_set_text(s_ta_fd_section, s.fd_section);
+
+    // Hide "Sync Time" button in FT4 mode — sync is FT8-only (7.5 s vs 15 s slots)
+    if (s_sync_time_btn) {
+        if (ft8_op_mode_get() == FT8_OP_MODE_FT4) {
+            lv_obj_add_flag(s_sync_time_btn, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_clear_flag(s_sync_time_btn, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
 
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);

@@ -30,6 +30,7 @@
 | 3 | One-button TUNE | ⚠️ Verify needed | ? | Check message #172521 |
 | 4 | **CW page** (Phase 1: TX/memory, Phase 2: RX decode) | ❌ Not started | P1 Medium, P2 Large/cheap-if-CAT | Ship P1 (page + canned-msg TX) standalone; gate P2 on Goertzel-vs-CAT-mirror question |
 | 5 | FT4 mode (Roy) — *do before JS8/RTTY* | ✅ Shipped (v0.19.0) | — | RX engine + TX cadence verified on hardware; both modes live |
+| 5.5 | **FT4 time sync** | ❌ Not started | Medium | Implement 7.5s slot timing estim ation in `ft8_time_modal.c` (currently FT8-only); hide "Sync Time" button in FT4 mode until implemented |
 | **Shelved** | | | | |
 | 6 | CW Audio (speaker output only) | ✋ Shelved (v0.18.5/.6) | Unblock needed | Fix priority/cadence of cw_audio_task, then I2S/DMA contention. Blocks #4-P2-decoder only if it ends up needing the I2S path — does NOT block a CAT-mirror decoder, only #8 below |
 | **Longer-Term Roadmap** | | | | |
