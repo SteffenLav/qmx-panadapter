@@ -2,7 +2,7 @@
 
 The panadapter **keys the QMX and transmits full FT8/FT4 QSOs** — reply to CQ, run your own CQ, auto-answer (robot mode), or conduct a full exchange.
 
-## 1. FT8 vs FT4 — Which to Use?
+### 1. FT8 vs FT4 — Which to Use?
 
 Both modes transmit via the same CAT interface; the difference is **slot length and symbol rate**:
 
@@ -27,7 +27,7 @@ Both modes transmit via the same CAT interface; the difference is **slot length 
 
 ⚠️ **FT4 support is new (v0.19.0).** Full feature parity with FT8; time-sync from decoded signals is not yet available in FT4 mode (FT8-only for now).
 
-## 2. Switching Between FT8 and FT4
+### 2. Switching Between FT8 and FT4
 
 **In FT8 screen (left pane):**
 - Tap the **Preset** dropdown (shows current frequency/mode)
@@ -41,7 +41,7 @@ Both modes transmit via the same CAT interface; the difference is **slot length 
 
 Your **settings and decode list are sticky** — when you switch back to FT8 or FT4, the panadapter remembers your last frequency, bandwidth, and filter settings for each mode.
 
-## 3. Important Notes
+### 3. Important Notes
 
 **FT8 transmit is functional but not yet soaked for multi-hour sessions.** Known gaps:
 
@@ -58,7 +58,7 @@ Standard operating practice applies:
 
 The beta label goes away at v1.0.0 after multi-day soak testing.
 
-## 4. Modes of Transmission
+### 4. Modes of Transmission
 
 ### 1. Reply to a CQ
 
@@ -150,7 +150,7 @@ Enable **FT8 Simulation Mode** in the settings drawer to practice full QSO excha
 - QSOs are logged as real ADIF entries (you may want to delete practice contacts from your log afterward)
 - All other features (panadapter, web UI, settings) work normally
 
-## 5. ARRL Field Day Mode
+### 5. ARRL Field Day Mode
 
 During [ARRL Field Day](https://www.arrl.org/field-day), enable **Field Day mode** in the settings:
 
@@ -166,7 +166,7 @@ When FD mode is active:
 
 The full FD exchange is automatic — no manual mode switching needed.
 
-## 6. Message Status
+### 6. Message Status
 
 The FT8 left pane shows a **status label** indicating what's happening:
 
@@ -180,7 +180,7 @@ The FT8 left pane shows a **status label** indicating what's happening:
 
 Tap the status label to **abort** the current QSO (only works if ARMED or ACTIVE; once COMPLETE, it's logged).
 
-## 7. Power & SWR Readout
+### 7. Power & SWR Readout
 
 After each transmit burst, the status bar briefly shows:
 
@@ -196,7 +196,7 @@ Last TX: 5.2W SWRx1.25 [N=79]
 
 These readings are **informational only** — the panadapter does not enforce limits. Monitor your antenna system independently.
 
-## 8. CQ Presets
+### 8. CQ Presets
 
 You can save up to 3 custom CQ messages:
 
@@ -212,7 +212,7 @@ Presets persist across power cycles. Common modifiers:
 - **SOTA** — Summits on the Air activation
 - *(blank)* — standard CQ
 
-## 9. Frequency & Tone Control
+### 9. Frequency & Tone Control
 
 When a CQ is active, the panadapter holds your **CQ tone** (6.25 Hz audio frequency) fixed across slots. If another station lands on your tone during an exchange, you'll see a warning **⚠ FREQ BUSY** on the status label — but the QSO continues on the same tone (doesn't auto-relocate mid-exchange).
 
@@ -222,7 +222,7 @@ To tune to a different frequency while CQ is running:
 2. Enter a new frequency
 3. The CQ continues on the new frequency next slot
 
-## 10. ADIF Logging
+### 10. ADIF Logging
 
 Every completed QSO is **automatically logged to ADIF** on the Tab5's internal storage:
 
@@ -233,7 +233,7 @@ Every completed QSO is **automatically logged to ADIF** on the Tab5's internal s
 
 Download the log via the web UI (**ADIF ↓** button) or Settings → ADIF Log.
 
-## 11. Upload to QRZ & eQSL
+### 11. Upload to QRZ & eQSL
 
 Via the web UI:
 
@@ -243,7 +243,7 @@ Via the web UI:
 
 Logs are batched — each session records which QSOs have been uploaded, so re-running the upload skips already-submitted QSOs.
 
-## 12. Troubleshooting
+### 12. Troubleshooting
 
 **"QMX not responding to TX command"**
 
