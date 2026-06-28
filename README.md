@@ -851,6 +851,10 @@ The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF
 
 ---
 
+## Contributing
+
+This is a solo project — all coding is done by the author (OZ1LAV) at his own pace, and **pull requests are not being accepted right now**. Bug reports, feature requests, and field reports are very welcome, though, via [GitHub Issues](https://github.com/SteffenLav/qmx-panadapter/issues) or the [QRPLabs Groups.io thread](https://groups.io/g/QRPLabs/topic/119565643). See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
 ## License
 
 MIT (see LICENSE). Copyright © 2026 Steffen Lav (OZ1LAV).
