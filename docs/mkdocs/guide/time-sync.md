@@ -64,13 +64,45 @@ The panadapter can also **estimate UTC offset** from decoded FT8 signals:
 3. Estimate the RTC error (sub-second precision)
 4. Automatically adjust the system clock
 
-This is **optional** and enabled via a toggle in the Time Sync section. It's most useful when:
+This is **optional** and most useful when:
 
 - WiFi is unavailable
 - Your RTC is way off (e.g., you haven't set it in weeks)
 - You need sub-second precision
 
+**⚠️ FT8 mode only** — not yet available in FT4 mode.
+
+### Fine-Tune Time with "Sync Time" (FT8 Only)
+
+In **FT8 mode**, the Filter modal includes a **"Sync Time" button** that opens an interactive time-setting panel:
+
+1. Tap the **Filter** button (FT8 screen, left pane)
+2. Tap the **Sync Time** button (bottom right of the modal)
+3. A panel appears with three fields: **[HH] : [MM] : [SS]**
+   - **HH** / **MM** (hours/minutes) — tap to edit via numpad (0–23, 0–59)
+   - **SS** (seconds) — auto-syncs from FT8 signals (blue frame = actively syncing, grey = locked)
+4. Tap **Apply** to write the time to the RTC and system clock
+
+The **SS field** updates automatically from decoded FT8 messages — each decode gives a sub-second correction estimate. Tap **SS** to toggle between auto-syncing (blue) and locked (grey). While locked, seconds still count at the captured offset, so you don't lose precision after locking.
+
+**Use case:** You're operating portable without WiFi, your RTC is ~5 seconds off, and there's on-air FT8 activity. Set HH/MM manually, let SS auto-sync to the decoded signal timing for a few seconds, lock it, and you're done — FT8 timing is now precise.
+
 FT8-derived sync shows **SS (sub-second)** in the bottom bar when active.
+
+## Bottom Bar Time Display
+
+The center of the bottom bar shows the current UTC time and which source is active:
+
+| Indicator | Meaning | Updates |
+|---|---|---|
+| **UTC(NTP)** | WiFi + SNTP (most accurate) | ~1 hour |
+| **UTC(FT8)** | FT8-derived sub-second sync | Continuous (when decoding) |
+| **UTC(QMX)** | QMX GPS (if available) | Every 5 min |
+| **UTC(RTC)** | Tab5 supercap RTC | At boot |
+| **UTC(MAN)** | Manual time set | On-demand |
+| **UTC** | Fallback (no sync source) | — |
+
+The suffix tells you at a glance which time source the panadapter is currently using. **SNTP always wins if WiFi is up** — if you see `UTC(NTP)`, that's your most accurate source and you don't need to do anything. If WiFi drops and you're in the field, you'll see `UTC(FT8)` (if on-air FT8 is active) or `UTC(RTC)` (from the supercap-backed RTC you set before leaving home).
 
 ## Slot Timing
 
