@@ -492,15 +492,9 @@ bool ft8_tx_arm(const ft8_tx_request_t *req, char *out_err, size_t out_err_len)
     // Skipped entirely under the FT8 simulation-mode hard interlock (see
     // ft8_sim.h) - cat_set_mode() below is a real CAT write, and sim mode's
     // whole point is that NOTHING here touches a possibly-connected QMX.
-    // ALSO force-skipped for any FT4 request regardless of the operator's
-    // sim_mode_en setting: the 48 ms FT4 CAT cadence is unverified on real
-    // hardware (see ft8_tx.h's FT4 SAFETY note), so an FT4 burst must never
-    // reach the radio even if general sim mode happens to be off. Without
-    // this, a real cat_set_mode("FT8") write below would still escape to a
-    // connected QMX before ft8_tx_run()'s own forced-sim check ever runs.
     qmx_settings_t arm_sim_s;
     settings_load_all(&arm_sim_s);
-    bool sim = arm_sim_s.sim_mode_en || (req->protocol == FTX_PROTOCOL_FT4);
+    bool sim = arm_sim_s.sim_mode_en;
     const char *mode = sim ? "DiGi" : cat_get_mode_str();
     if (strcmp(mode, "DiGi") != 0) {
         ESP_LOGI(TAG, "arm: QMX mode is '%s' - switching to Digi...", mode);
@@ -695,14 +689,9 @@ void ft8_tx_run(const ft8_tx_request_t *req)
     // burst (not cached) so toggling the drawer switch mid-session takes
     // effect on the very next TX.
     //
-    // ALSO force-on for any FT4 request (req->protocol), independent of the
-    // operator's sim_mode_en setting - see the FT4 SAFETY note in ft8_tx.h.
-    // The 48 ms FT4 CAT cadence is unverified on real hardware, so an FT4
-    // burst must never reach the radio yet, full stop. ft8_tx_arm() applies
-    // the same forced-sim rule to its own DiGi-mode pre-flight write.
     qmx_settings_t sim_s;
     settings_load_all(&sim_s);
-    bool sim = sim_s.sim_mode_en || (req->protocol == FTX_PROTOCOL_FT4);
+    bool sim = sim_s.sim_mode_en;
 
     // Per-protocol timing/encoding, captured once from req->protocol (never
     // re-read from the live ft8_op_mode_get() mid-burst - see ft8_tx.h).
@@ -724,9 +713,9 @@ void ft8_tx_run(const ft8_tx_request_t *req)
     } else {
         ESP_LOGI(TAG, "TX burst starting (%s): '%s' base=%d Hz%s",
                  is_ft4 ? "FT4" : "FT8", req->display_text, req->audio_freq_hz,
-                 is_ft4 ? "  [FT4 - forced SIM, cadence unverified on-air]"
-                        : (sim ? "  [SIMULATION - radio not keyed]"
-                               : (FT8_TX_SEND_LIVE ? "" : "  [DRY RUN - logging only, radio not keyed]")));
+                 sim ? (is_ft4 ? "  [FT4 - simulation mode]"
+                               : "  [SIMULATION - radio not keyed]")
+                     : (FT8_TX_SEND_LIVE ? "" : "  [DRY RUN - logging only, radio not keyed]"));
 
         // Exclusive use of the CDC-ACM link for the whole burst - an
         // interleaved FA;/MD;/FW; poll mid-sequence could desync our timing

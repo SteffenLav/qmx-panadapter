@@ -220,13 +220,10 @@ bool ft8_tx_should_run_this_slot(int64_t slot_start_ms, ft8_tx_request_t *out);
 // completed normally, was aborted via ft8_tx_request_abort(), hit a send
 // error, or never started due to a mode-check failure.
 //
-// FT4 SAFETY: the 48 ms/symbol CAT cadence (vs FT8's 160 ms) has not been
-// verified on real QMX hardware - whether the radio's CAT parser/DDS keep up
-// is an open question. ft8_tx_run() and ft8_tx_arm() therefore force the
-// existing FT8-simulation-mode interlock (see ft8_sim.h) for ANY request
-// whose protocol is FT4, regardless of the operator's actual sim-mode
-// setting: no cat_* call of any kind reaches a connected QMX. Lift this only
-// after the cadence has been confirmed safe on-air.
+// FT4 is live as of v0.19.0 — the 48 ms/symbol CAT cadence has been verified
+// on real QMX hardware (burst timing verified: 105 symbols × 48 ms ≈ 5 s,
+// all commands sent cleanly with no timeouts or dropped tones). No forced-sim
+// interlock — FT4 TX operates identically to FT8.
 void ft8_tx_run(const ft8_tx_request_t *req);
 
 #ifdef __cplusplus
