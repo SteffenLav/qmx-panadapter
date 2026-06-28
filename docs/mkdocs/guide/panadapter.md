@@ -78,6 +78,25 @@ The **spectrum** shows real-time signal strength (green curve) across the tuned 
 - **Adaptive floor** — blend between per-bin and global noise floor (default 100%)
 - **FFT window** — Blackman-Harris, Hann, or Nuttall (default Blackman-Harris)
 
+## Display & Buffer Features
+
+### Spectrum Buffer Clear
+
+When you **switch modes** (Panadapter ↔ FT8 ↔ FT4) or **change bands**, the panadapter automatically **clears the waterfall and resets the spectrum baseline**. This prevents stale signals from interfering with your new band or mode view.
+
+- Waterfall clears completely (starts fresh)
+- Noise floor recalibrates
+- New baseline takes ~1 second to establish
+
+This happens transparently — you'll notice the waterfall momentarily clear and re-initialize, then populate with real-time data from the new band/mode.
+
+### Flat Spectrum Mode
+
+Toggle in settings. Shows dB scale relative to a **per-bin noise floor** (not absolute dBm), so weak signals stand out above the baseline even on a noisy band.
+
+- **Normal mode**: absolute dBm referenced to S9 = -73 dBm
+- **Flat mode**: relative dB above each bin's noise floor
+
 ## Frequency Keypad
 
 Tap the **frequency** on the top bar to open the keypad. Enter frequency in MHz format:

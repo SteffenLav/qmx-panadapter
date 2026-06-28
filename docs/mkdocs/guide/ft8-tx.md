@@ -1,6 +1,45 @@
-# FT8 Transmit
+# FT8 and FT4 Transmit
 
-The panadapter **keys the QMX and transmits full FT8 QSOs** — reply to CQ, run your own CQ, auto-answer (robot mode), or conduct a full exchange.
+The panadapter **keys the QMX and transmits full FT8/FT4 QSOs** — reply to CQ, run your own CQ, auto-answer (robot mode), or conduct a full exchange.
+
+## FT8 vs FT4 — Which to Use?
+
+Both modes transmit via the same CAT interface; the difference is **slot length and symbol rate**:
+
+| Feature | FT8 | FT4 |
+|---------|-----|-----|
+| **Slot length** | 15 seconds | 7.5 seconds |
+| **Symbols transmitted** | 79 | 105 |
+| **Symbol duration** | 160 ms | 48 ms |
+| **QSO time** (full exchange) | ~90 sec (6 slots) | ~45 sec (6 slots) |
+| **Use case** | Weak signal, SOTA/POTA | Busy bands, contests |
+| **Preset picker** | Panadapter mode → Freq dropdown | FT8 mode → Preset picker |
+
+**Choose FT4 when:**
+- The band is crowded (faster exchanges, less QRM)
+- You're in a contest (time is critical)
+- You want quicker pileup resolution
+
+**Choose FT8 when:**
+- Signal is marginal (longer decode window tolerates more QRN)
+- You're portable/POTA (less pressure to transmit fast)
+- You prefer the relaxed pace
+
+⚠️ **FT4 support is new (v0.19.0).** Full feature parity with FT8; time-sync from decoded signals is not yet available in FT4 mode (FT8-only for now).
+
+## Switching Between FT8 and FT4
+
+**In FT8 screen (left pane):**
+- Tap the **Preset** dropdown (shows current frequency/mode)
+- Select an FT4 frequency to switch to FT4
+- Select an FT8 frequency to switch back
+
+**In Panadapter screen:**
+- Tap the **Band preset dropdown** (top left)
+- Some bands have both FT8 and FT4 frequencies listed
+- Tap the FT4 variant to switch
+
+Your **settings and decode list are sticky** — when you switch back to FT8 or FT4, the panadapter remembers your last frequency, bandwidth, and filter settings for each mode.
 
 ## ⚠️ Important Notes
 
@@ -87,6 +126,30 @@ Each QSO takes **~90 seconds** (6 FT8 slots × 15 s/slot). If a station doesn't 
 
 A permanent on-screen warning appears whenever robot mode is available.
 
+### 4. FT8 Simulation Mode (Practice QSOs)
+
+⚠️ **For practice only** — no real stations involved, radio never keys up.
+
+Enable **FT8 Simulation Mode** in the settings drawer to practice full QSO exchanges with phantom stations (W1AW and K9ZZ) without transmitting on the air. Useful for:
+
+- Learning the full FT8 exchange sequence
+- Testing your setup without risking interference
+- Verifying ADIF logging works correctly
+- Practicing in a realistic environment
+
+**How it works:**
+- Two phantom stations periodically call CQ on their own schedule
+- You can reply, they respond, and complete a full QSO
+- Messages and timing are identical to real FT8 — the decoder runs actual GFSK synthesis
+- Every simulated QSO logs to ADIF with the phantom callsign
+
+**Visual indicator:** When simulation mode is active, a **10 px red border pulses around the entire screen** (breathing red frame). This is your visual reminder that you're in practice mode — if the red frame is gone, simulation is off and real stations are in play.
+
+**Important:** 
+- The QMX is **never keyed** in simulation mode, no matter what
+- QSOs are logged as real ADIF entries (you may want to delete practice contacts from your log afterward)
+- All other features (panadapter, web UI, settings) work normally
+
 ## ARRL Field Day Mode
 
 During [ARRL Field Day](https://www.arrl.org/field-day), enable **Field Day mode** in the settings:
@@ -122,12 +185,14 @@ Tap the status label to **abort** the current QSO (only works if ARMED or ACTIVE
 After each transmit burst, the status bar briefly shows:
 
 ```
-Last TX: 5.2W SWRx1.25 [N=78]
+Last TX: 5.2W SWRx1.25 [N=79]
 ```
 
 - **5.2W** — average output power measured via QMX `PC;` CAT command
 - **SWRx1.25** — SWR measured via QMX `SW;` CAT command (only valid during TX)
-- **[N=78]** — number of symbols transmitted (always 79 for FT8)
+- **[N=79]** — number of symbols transmitted
+  - FT8: always 79 symbols (~12.7 s at 160 ms/symbol)
+  - FT4: always 105 symbols (~5.0 s at 48 ms/symbol)
 
 These readings are **informational only** — the panadapter does not enforce limits. Monitor your antenna system independently.
 

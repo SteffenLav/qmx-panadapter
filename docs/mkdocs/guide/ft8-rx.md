@@ -1,10 +1,18 @@
-# FT8 Receive & Decode List
+# FT8/FT4 Receive & Decode List
 
-The panadapter includes a **full on-device FT8 decoder** with real-time spectrum waterfall and a live list of heard stations.
+The panadapter includes **on-device FT8 and FT4 decoders** with real-time spectrum waterfall and a live list of heard stations.
 
-## FT8 View
+## FT8 & FT4 View
 
-Swipe → from the left edge to toggle to FT8 view. You'll see:
+Swipe → from the left edge to toggle to FT8/FT4 view. The same decode list and waterfall work for both modes — switch modes via the **Preset** dropdown in the left pane (top).
+
+**FT4 notes:**
+- Decodes refresh faster (~15 ms vs 15 s for FT8) because slots are 7.5 seconds
+- Slot countdown shows 7.5 s instead of 15 s
+- All filtering, priority, and auto-reply features work identically in FT4
+- Time-sync from decoded signal timing (Sync Time button) is FT8-only for now
+
+You'll see:
 
 - **Decode list** (left pane) — all heard stations, sortable by signal strength, distance, or newest
 - **Waterfall** (right pane) — same real-time spectrum as panadapter mode
@@ -41,13 +49,20 @@ All filters persist across sessions. Toggle any filter on/off to enable or disab
 
 ## Decoding Performance
 
-On-device decoding runs at **~15–20 QSOs per FT8 slot** (15-second period) depending on band activity and hardware utilisation. This is sufficient for casual FT8 operation but not a full WSJT-X-equivalent decoder.
+On-device decoding runs at:
+
+- **FT8:** ~15–20 QSOs per 15-second slot
+- **FT4:** ~15–20 QSOs per 7.5-second slot (faster decode cadence, same per-slot throughput)
+
+This is sufficient for casual operation but not a full WSJT-X-equivalent decoder.
 
 **Why not faster?**
 
 - **Single CPU (core 0)** decodes ~1–2 QSOs/s (LDPC is computationally heavy)
 - **Real-time FFT** (waterfall) competes for CPU cycles
 - **USB audio streaming** needs constant servicing
+
+**FT4 advantage:** because FT4 slots are half as long (7.5 s vs 15 s), you get refresh feedback roughly twice as fast, which feels snappier on a crowded band even though the per-slot decode count is the same.
 
 The panadapter prioritises **receive latency** (decode every 15 s, not accumulate) over volume.
 
