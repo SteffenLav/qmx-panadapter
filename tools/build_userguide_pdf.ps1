@@ -267,7 +267,7 @@ a { color: #0a5ba8; text-decoration: none; }
 
 function Build-Pdf([string]$markdownText, [string]$outputPdfPath) {
     [System.IO.File]::WriteAllText($mdSlice, $markdownText, $utf8NoBom)
-    & pandoc $mdSlice -f gfm -t html5 --standalone --metadata pagetitle="QMX+ Panadapter User Guide $fwVersion" --css "$([System.IO.Path]::GetFileName($cssFile))" -o $htmlOut
+    & pandoc $mdSlice -f gfm -t html5 --standalone --toc --metadata pagetitle="QMX+ Panadapter User Guide $fwVersion" --css "$([System.IO.Path]::GetFileName($cssFile))" -o $htmlOut
     if ($LASTEXITCODE -ne 0) { Write-Error "pandoc conversion failed" }
 
     $htmlContent = Get-Content -Raw -Encoding UTF8 $htmlOut
