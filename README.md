@@ -778,7 +778,6 @@ The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF
 - **Extended waterfall history.** PSRAM has room for several minutes of scrollback; two-finger drag to scrub through history.
 - **QMX (small) support.** Same UI, different USB endpoint config and band table.
 - **JS8 / RTTY modes.** See `docs/js8-feasibility.md` and `docs/rtty-feasibility.md`.
-- **FT4 mode** (requested by Roy). Lower-effort than JS8/RTTY: the vendored `ft8_lib` already fully parameterizes FT4 vs FT8 internally (`FTX_PROTOCOL_FT4` — Costas pattern, 4-tone Gray map, symbol period, LDPC(174,91) all already implemented, see `components/ft8_lib/ft8/constants.h` and the `wf->protocol == FTX_PROTOCOL_FT4` branches in `decode.c`), so decode/encode itself is essentially free. The app-level work is the slot/timing plumbing built around the FT8 assumption of a fixed 15 s slot: `ft8_test.c`'s capture/decode/TX slot loop, `ft8_qso.c`'s timeout-in-slots counters, the UI countdown bar, and CAT DigiMode forcing all need a parallel 7.5 s FT4 path (or a mode-aware slot-length parameter threaded through). Rough order of magnitude: a fraction of the RTTY/JS8 estimates in the feasibility docs above — no new DSP pipeline, no new UI screen, mainly a mode switch threaded through existing FT8 plumbing.
 - **DSP polish.** Noise reduction, auto-notch.
 
 ---

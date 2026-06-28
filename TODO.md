@@ -29,7 +29,7 @@
 | **Groups.io Features** | | | | |
 | 3 | One-button TUNE | ⚠️ Verify needed | ? | Check message #172521 |
 | 4 | **CW page** (Phase 1: TX/memory, Phase 2: RX decode) | ❌ Not started | P1 Medium, P2 Large/cheap-if-CAT | Ship P1 (page + canned-msg TX) standalone; gate P2 on Goertzel-vs-CAT-mirror question |
-| 5 | FT4 mode (Roy) — *do before JS8/RTTY* | ❌ Not started | Low–Medium | ft8_lib already has FT4; generalizes the 15s slot-loop, which JS8 (10/15/30/60s variants) can then reuse |
+| 5 | FT4 mode (Roy) — *do before JS8/RTTY* | ✅ Shipped (v0.19.0) | — | RX engine + TX cadence verified on hardware; both modes live |
 | **Shelved** | | | | |
 | 6 | CW Audio (speaker output only) | ✋ Shelved (v0.18.5/.6) | Unblock needed | Fix priority/cadence of cw_audio_task, then I2S/DMA contention. Blocks #4-P2-decoder only if it ends up needing the I2S path — does NOT block a CAT-mirror decoder, only #8 below |
 | **Longer-Term Roadmap** | | | | |
@@ -171,6 +171,9 @@ Means identical to two decimal places; no decode-collapse cliff in either run. *
 ---
 
 ## ✅ Shipped Since Last Update
+
+### FT4 mode (v0.19.0)
+FT4 RX engine + TX live on hardware. RX was fully implemented and tested in v0.18.x (decoding at 0-3 per slot, 140 candidate pool). TX safety gate lifted after on-air verification: three consecutive FT4 CQ bursts fired cleanly, all ~105 TA commands sent at 48ms intervals (~5s on-air each), no dropped commands or timeouts. Power/SWR readings normal. FT4 now operates identically to FT8 at the app level; only protocol-aware timing differs (7.5s vs 15s slots).
 
 ### ARRL Field Day FT8 exchange mode (v0.18.8)
 New `ftx_message_encode_arrl_fd`/`decode_arrl_fd` in `components/ft8_lib/ft8/message.c` (the message type was enumerated but never implemented, including upstream). Bit layout + 86-entry section table verified byte-for-byte against WSJT-X's `packjt77.f90`. `ft8_qso.c` carries class+section on the report-equivalent exchange step; Call CQ auto-tags `CQ FD <call> <grid>` (replacing any other modifier); ADIF gains `CONTEST_ID`/`STX_STRING`/`SRX_STRING`/`ARRL_SECT`/`MY_ARRL_SECT`. The CQ preset editor locks (dim + disabled + Cancel-only) while the mode is on, with a live always-accurate TX preview. See CLAUDE.md "ARRL Field Day mode" for the full technical writeup and `docs/version-history.md`'s v0.18.8 entry.
