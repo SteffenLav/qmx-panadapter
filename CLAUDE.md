@@ -67,6 +67,9 @@ FT8 TX data flow: **ft8_screen_view (tap) → ft8_tx_modal (confirm) → ft8_tx_
 
 `components/espressif__esp_lcd_touch_st7123/` is a hand-patched fork fixing ST7121 compatibility (see **ST7121 has an incomplete register map** below). Do not replace with the registry version.
 
+### esp_hosted transport buffers → PSRAM (managed-component patch — must be re-applied)
+`managed_components/espressif__esp_hosted/host/port/include/os_wrapper.h` has a one-line patch in its `MEM_ALLOC` macro: `extra_heap_caps = MALLOC_CAP_SPIRAM` (was `0`). This routes the esp_hosted WiFi transport DMA pool (the per-packet TX/RX buffers that grow under WiFi bursts) into PSRAM instead of the scarce internal DRAM. **Without it the device reboots** under QMX+FT8 load when WiFi TX bursts (web UI / QRZ upload) exhaust internal DMA RAM → `transport_drv_sta_tx` → `assert(copy_buff)`. Safe on ESP32-P4: `SOC_SDMMC_PSRAM_DMA_CAPABLE == 1`, and the 1536-byte block is 64-byte aligned. `managed_components/` is **git-ignored** and is wiped by `idf.py fullclean` / a dependency refresh / the release process's `rm -r managed_components/`, so after any of those re-run `tools/patches/apply_esp_hosted_psram.ps1` (idempotent) before building. This is half of the upload/web-stability fix; the rest is in-repo: audio ring → PSRAM, `dsp_set_transfer_quiet()` (CPU-yield during transfers), and the WS-stream pause.
+
 ### LVGL software rotation (~50% FPS cost)
 The display panel is natively portrait; landscape is achieved via `lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_90)`. Every LVGL flush goes through `rotate90_rgb565`. FPS is ~13 landscape vs ~22 portrait. Acceptable for a panadapter.
 
