@@ -2,7 +2,7 @@
 
 The panadapter includes **on-device FT8 and FT4 decoders** with real-time spectrum waterfall and a live list of heard stations.
 
-## FT8 & FT4 View
+## 1. FT8 & FT4 View
 
 Swipe → from the left edge to toggle to FT8/FT4 view. The same decode list and waterfall work for both modes — switch modes via the **Preset** dropdown in the left pane (top).
 
@@ -19,7 +19,7 @@ You'll see:
 - **Call CQ button** — start a CQ (requires QMX on the air)
 - **Filter button** — include/exclude stations, prioritise by SNR/distance, show only CQ callers
 
-## Decode List
+## 2. Decode List
 
 The list shows every decoded FT8 message:
 
@@ -32,7 +32,7 @@ The list shows every decoded FT8 message:
 
 **Own call highlight** — your callsign is shown in **inverted colours** (red fill, white text) so you spot replies to you instantly.
 
-## Filtering & Priority
+## 3. Filtering & Priority
 
 Tap the **Filter** button to open the filter modal:
 
@@ -47,7 +47,7 @@ Tap the **Filter** button to open the filter modal:
 
 All filters persist across sessions. Toggle any filter on/off to enable or disable it without erasing the criteria.
 
-## Decoding Performance
+## 4. Decoding Performance
 
 On-device decoding runs at:
 
@@ -66,7 +66,7 @@ This is sufficient for casual operation but not a full WSJT-X-equivalent decoder
 
 The panadapter prioritises **receive latency** (decode every 15 s, not accumulate) over volume.
 
-## Real-Time Waterfall
+## 5. Real-Time Waterfall
 
 Unlike WSJT-X (which buffers a whole 15-second capture), the Tab5 **builds the waterfall on-the-fly** as audio arrives. You see CW and other traffic in real time, and FT8 stations appear instantly as their symbol blocks are decoded.
 
@@ -76,7 +76,7 @@ The waterfall also shows **non-FT8 activity**:
 - RTTY (FSK sidebands)
 - Interference (wideband noise)
 
-## Tap to Reply
+## 6. Tap to Reply
 
 Tap any FT8 row in the decode list to **prepare a reply**:
 
@@ -86,7 +86,7 @@ Tap any FT8 row in the decode list to **prepare a reply**:
 
 The reply always follows FT8 protocol (correct parity, proper message sequence) — you can't accidentally send a garbled or out-of-order message.
 
-## Auto-Reply (Robot Mode)
+## 7. Auto-Reply (Robot Mode)
 
 ⚠️ **Experimental** — enabled via a checkbox in the Filter modal.
 
@@ -94,13 +94,13 @@ When robot mode is on, the Tab5 **automatically replies to CQ** without waiting 
 
 **Important:** Robot mode **keys the QMX for real** — your signal goes on the air. Never leave it unattended unless you're confident in your filters and your station is in a safe state.
 
-## Search & Window
+## 8. Search & Window
 
 The decoder uses an **FFT-based search window** to find candidate tone blocks. The search is tuned for standard FT8 tone spacing (6.25 Hz per tone).
 
 **Frequency stability:** The QMX's USB audio clock isn't bit-exact 48 kHz, so decodes slide slowly over time. The panadapter **re-locks to UTC boundaries every 15 seconds** (the slot boundary), preventing long-term drift.
 
-## Time Sync for FT8
+## 9. Time Sync for FT8
 
 FT8 requires **UTC time accurate to ±1 second** for slot synchronisation. The panadapter gets time from:
 

@@ -2,7 +2,7 @@
 
 FT8 requires accurate UTC time — within ±1 second of the real thing. The panadapter syncs time from multiple sources in priority order.
 
-## Time Sources (Priority Order)
+## 1. Time Sources (Priority Order)
 
 1. **WiFi + SNTP** (if available) — most accurate, syncs every ~1 hour
 2. **Tab5 RTC** (if set) — persists across power cycles (±1 min accuracy)
@@ -11,7 +11,7 @@ FT8 requires accurate UTC time — within ±1 second of the real thing. The pana
 
 The panadapter **always uses SNTP if WiFi is up**. If WiFi drops, it falls back to the RTC, and finally manual time if neither is available.
 
-## Offline (POTA / Portable)
+## 2. Offline (POTA / Portable)
 
 If you're operating **without WiFi** (POTA, portable, SOTA):
 
@@ -22,7 +22,7 @@ If you're operating **without WiFi** (POTA, portable, SOTA):
 
 No internet needed — FT8 timing works offline.
 
-## WiFi + SNTP
+## 3. WiFi + SNTP
 
 When WiFi is active:
 
@@ -33,7 +33,7 @@ When WiFi is active:
 
 SNTP sync is **automatic** — you don't need to do anything. The bottom bar shows the current time (updates every second).
 
-## QMX Time Sync
+## 4. QMX Time Sync
 
 If your QMX has **internal GPS** (QMX+ models often do):
 
@@ -43,7 +43,7 @@ If your QMX has **internal GPS** (QMX+ models often do):
 
 This is **automatic backup only** — SNTP always takes precedence when WiFi is up.
 
-## Manual Time Set
+## 5. Manual Time Set
 
 To set time manually:
 
@@ -55,7 +55,7 @@ To set time manually:
 
 The time is set immediately and written to the RTC.
 
-## FT8-Derived Sync (Advanced)
+## 6. FT8-Derived Sync (Advanced)
 
 The panadapter can also **estimate UTC offset** from decoded FT8 signals:
 
@@ -89,7 +89,7 @@ The **SS field** updates automatically from decoded FT8 messages — each decode
 
 FT8-derived sync shows **SS (sub-second)** in the bottom bar when active.
 
-## Bottom Bar Time Display
+## 7. Bottom Bar Time Display
 
 The center of the bottom bar shows the current UTC time and which source is active:
 
@@ -104,7 +104,7 @@ The center of the bottom bar shows the current UTC time and which source is acti
 
 The suffix tells you at a glance which time source the panadapter is currently using. **SNTP always wins if WiFi is up** — if you see `UTC(NTP)`, that's your most accurate source and you don't need to do anything. If WiFi drops and you're in the field, you'll see `UTC(FT8)` (if on-air FT8 is active) or `UTC(RTC)` (from the supercap-backed RTC you set before leaving home).
 
-## Slot Timing
+## 8. Slot Timing
 
 FT8 operates on **15-second slot boundaries** aligned to UTC. The panadapter:
 
@@ -120,7 +120,7 @@ This alignment is **automatic** — you don't configure slots. But **time accura
 - ±1 s error → very few decodes, transmit often off-time
 - ±2 s error or worse → FT8 doesn't work
 
-## Time Sources Summary
+## 9. Time Sources Summary
 
 | Source | Accuracy | Updates | Works Offline? |
 |---|---|---|---|

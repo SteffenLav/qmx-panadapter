@@ -2,7 +2,7 @@
 
 The panadapter is your primary view — a real-time spectrum analyser and waterfall for the QMX.
 
-## Layout
+## 1. Layout
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -23,7 +23,7 @@ The panadapter is your primary view — a real-time spectrum analyser and waterf
 └─────────────────────────────────────────────────────────┘
 ```
 
-## Touch Controls
+## 2. Touch Controls
 
 ### Tap to Tune
 
@@ -53,7 +53,7 @@ Swipe ↑ from the bottom edge to open the memory picker. Each of your 10 per-ba
 
 Tap a channel to recall it. Long-press to **edit** (change name, frequency, or mode). Tap **Save** to store the current frequency/mode to a channel.
 
-## Top Bar
+## 3. Top Bar
 
 Tap any item to open its selector:
 
@@ -65,7 +65,7 @@ Tap any item to open its selector:
 | **S7** | S-meter. Shows received signal strength. Tap to reset peak hold. |
 | **1.0x** | Zoom level. Tap to choose preset (1x, 2x, 4x, 8x) or custom. |
 
-## Spectrum & Waterfall
+## 4. Spectrum & Waterfall
 
 The **spectrum** shows real-time signal strength (green curve) across the tuned band. The **waterfall** shows a rolling history of that spectrum, with colour indicating signal strength (SDR gradient: blue → green → yellow → red).
 
@@ -78,7 +78,7 @@ The **spectrum** shows real-time signal strength (green curve) across the tuned 
 - **Adaptive floor** — blend between per-bin and global noise floor (default 100%)
 - **FFT window** — Blackman-Harris, Hann, or Nuttall (default Blackman-Harris)
 
-## Display & Buffer Features
+## 5. Display & Buffer Features
 
 ### Spectrum Buffer Clear
 
@@ -97,7 +97,7 @@ Toggle in settings. Shows dB scale relative to a **per-bin noise floor** (not ab
 - **Normal mode**: absolute dBm referenced to S9 = -73 dBm
 - **Flat mode**: relative dB above each bin's noise floor
 
-## Frequency Keypad
+## 6. Frequency Keypad
 
 Tap the **frequency** on the top bar to open the keypad. Enter frequency in MHz format:
 
@@ -107,7 +107,7 @@ Tap the **frequency** on the top bar to open the keypad. Enter frequency in MHz 
 
 Layout switches between **10-Key** (phone dial) and **Phone** (QWERTY) via a toggle. Choose whichever is faster for you — the preference persists.
 
-## Memory Channels
+## 7. Memory Channels
 
 10 memory channels per band. Each stores frequency, mode, and name. Swipe up from the bottom edge to open the memory picker, or tap a memory channel name to recall it.
 
@@ -123,7 +123,7 @@ Layout switches between **10-Key** (phone dial) and **Phone** (QWERTY) via a tog
 3. Type a new name
 4. Tap **Save**
 
-## Band Presets
+## 8. Band Presets
 
 Tap the **band name** on the top bar to switch between configured bands. The band selector shows:
 
@@ -132,7 +132,7 @@ Tap the **band name** on the top bar to switch between configured bands. The ban
 
 Switching bands **remembers the last frequency you visited on each band**, so you can flip between 20m and 40m without losing your place.
 
-## Zoom & Pan
+## 9. Zoom & Pan
 
 The zoom level is displayed on the top bar (e.g., **2.0x**). Tap it to choose a preset:
 
@@ -144,7 +144,7 @@ The zoom level is displayed on the top bar (e.g., **2.0x**). Tap it to choose a 
 
 At zoom levels above 1.0x, the display **pans to keep the passband centered** when you change mode or bandwidth, so the active receive area stays on screen.
 
-## S-Meter
+## 10. S-Meter
 
 The S-meter (top-right of the top bar) shows received signal strength on a 0–68 scale:
 
@@ -153,7 +153,7 @@ The S-meter (top-right of the top bar) shows received signal strength on a 0–6
 
 Tap the S-meter to toggle peak-hold mode (shows the strongest signal heard in the last ~5 seconds). Tap again to reset.
 
-## Settings Drawer
+## 11. Settings Drawer
 
 Swipe ← from the right edge to open the settings drawer. Common panadapter controls:
 

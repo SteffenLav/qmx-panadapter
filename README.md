@@ -819,6 +819,38 @@ The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF
 
 ---
 
+## Glossary
+
+**Common terms and acronyms used in this guide:**
+
+| Term | Meaning |
+|------|---------|
+| **CAT** | Computer-Aided Transceiver — radio control protocol (Kenwood-style commands via serial/USB) |
+| **CDC-ACM** | Communications Device Class / Abstract Control Model — USB standard for serial ports |
+| **CQ** | General call to any station (not directed at anyone specific) |
+| **CW** | Continuous Wave — Morse code mode |
+| **DSP** | Digital Signal Processing — mathematical signal analysis and filtering |
+| **FFT** | Fast Fourier Transform — algorithm to convert time-domain audio into frequency spectrum |
+| **FT8 / FT4** | Digital modes for weak-signal HF communication (15-second vs 7.5-second slots) |
+| **GPIO** | General-Purpose Input/Output — microcontroller pins for digital signals |
+| **I2C / SPI** | Serial communication protocols for connecting peripherals (sensors, displays, etc.) |
+| **IQ** | In-phase / Quadrature — stereo representation of RF signals (real + imaginary parts) |
+| **LVGL** | Light and Versatile Graphics Library — open-source embedded UI toolkit used for the display |
+| **NVS** | Non-Volatile Storage — persistent memory on the ESP32 (survives power cycles) |
+| **PSRAM** | Pseudo-SRAM — extra RAM on the Tab5 (used for large buffers like waterfall history) |
+| **QMX / QMX+** | QRP Labs HF transceiver — the radio this panadapter controls and receives audio from |
+| **QSO** | Radio contact / conversation between two stations |
+| **RTC** | Real-Time Clock — battery-backed timer on the Tab5 (keeps time during power-off) |
+| **SNTP** | Simple Network Time Protocol — synchronizes system clock via WiFi/internet |
+| **SWR** | Standing Wave Ratio — antenna impedance matching metric (1.0 = perfect) |
+| **TX / RX** | Transmit / Receive — keying the radio and listening |
+| **UAC** | USB Audio Class — standard for streaming audio over USB |
+| **USB** | Universal Serial Bus — physical connector and protocol (carries both audio and CAT commands) |
+| **UTC** | Coordinated Universal Time — timezone-independent time standard for FT8 slot alignment |
+| **VFO** | Variable Frequency Oscillator — the radio's tuning dial / frequency setting |
+
+---
+
 ## License
 
 MIT (see LICENSE). Copyright © 2026 Steffen Lav (OZ1LAV).
