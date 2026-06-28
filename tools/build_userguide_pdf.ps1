@@ -251,23 +251,26 @@ p:has(+ table), p:has(+ pre), p:has(+ blockquote),
 p:has(+ p + table), p:has(+ p + pre), p:has(+ p + blockquote) { break-after: avoid; page-break-after: avoid; }
 blockquote { border-left: 4px solid #11324d; margin: 1em 0; padding: 0.2em 1em; background: #f7f9fb; }
 a { color: #0a5ba8; text-decoration: none; }
-.toc-section { font-weight: bold; color: #11324d; font-size: 1.1em; margin: 1.2em 0 0.4em 0; }
-.toc-row { display: flex; align-items: baseline; margin: 7px 0 0 0; break-inside: avoid; page-break-inside: avoid; }
-.toc-chapter { margin: 7px 0 0 0; }
-.toc-subsection { margin: 2px 0 0 20px; }
-.toc-subsection a { font-size: 0.95em; }
-.toc-subsubsection { margin: 0px 0 0 40px; }
-.toc-subsubsection a { font-size: 0.90em; }
-.toc-row a { font-weight: 600; }
-.toc-fill { flex: 1; border-bottom: 1px dotted #999; margin: 0 6px; height: 0.6em; }
-.toc-page { min-width: 2em; text-align: right; color: #555; }
-.toc-desc { color: #777; font-size: 0.85em; margin: -2px 0 4px 0; }
+.toc { column-count: 2; column-gap: 2em; break-inside: avoid; page-break-inside: avoid; }
+.toc-section { font-weight: bold; color: #11324d; font-size: 1.15em; margin: 1.4em 0 0.6em 0; column-span: all; }
+.toc-row { display: flex; align-items: baseline; margin: 0.35em 0; break-inside: avoid; page-break-inside: avoid; }
+.toc-chapter { margin: 0.7em 0 0.2em 0; }
+.toc-chapter a { font-weight: 700; font-size: 1em; color: #11324d; }
+.toc-subsection { margin: 0.25em 0 0 2.5em; }
+.toc-subsection a { font-weight: 600; font-size: 0.95em; color: #1a4d7a; }
+.toc-subsubsection { margin: 0em 0 0 5em; }
+.toc-subsubsection a { font-weight: 500; font-size: 0.88em; color: #2d5a8c; }
+.toc-row a { text-decoration: none; }
+.toc-row a:hover { text-decoration: underline; }
+.toc-fill { flex: 1; border-bottom: 1px dotted #bbb; margin: 0 0.4em; height: 0.5em; }
+.toc-page { min-width: 2.5em; text-align: right; color: #666; font-size: 0.9em; font-weight: 500; }
+.toc-desc { color: #888; font-size: 0.82em; margin: -0.15em 0 0.3em 2.5em; font-style: italic; }
 "@
 [System.IO.File]::WriteAllText($cssFile, $css, $utf8NoBom)
 
 function Build-Pdf([string]$markdownText, [string]$outputPdfPath) {
     [System.IO.File]::WriteAllText($mdSlice, $markdownText, $utf8NoBom)
-    & pandoc $mdSlice -f gfm -t html5 --standalone --toc --metadata pagetitle="QMX+ Panadapter User Guide $fwVersion" --css "$([System.IO.Path]::GetFileName($cssFile))" -o $htmlOut
+    & pandoc $mdSlice -f gfm -t html5 --standalone --metadata pagetitle="QMX+ Panadapter User Guide $fwVersion" --css "$([System.IO.Path]::GetFileName($cssFile))" -o $htmlOut
     if ($LASTEXITCODE -ne 0) { Write-Error "pandoc conversion failed" }
 
     $htmlContent = Get-Content -Raw -Encoding UTF8 $htmlOut
