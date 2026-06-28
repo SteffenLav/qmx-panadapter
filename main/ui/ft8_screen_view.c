@@ -767,10 +767,14 @@ static void t_refresh_cb(lv_timer_t *t)
     rebuild_list();
 }
 
-// Smoothly drive the 15 s slot countdown bar. Runs fast (~50 ms) and uses
+// Smoothly drive the slot countdown bar. Runs fast (~50 ms) and uses
 // sub-second time so the bar glides to 0 instead of snapping per second.
-// Bar range is 0..15000 (ms remaining). Also owns the bar colour: red while
-// a TX burst is ACTIVE, otherwise the EVEN/ODD slot colour.
+// Period is read each tick from ft8_op_mode_slot_ms() (15000 FT8 / 7500 FT4)
+// so this never drifts out of sync with the slot engine's actual period -
+// the bar's range (lv_bar_set_range) is kept in step alongside it below.
+// Also owns the bar colour: red while a TX burst is ACTIVE, otherwise the
+// EVEN/ODD slot colour (parity is still defined on the 15 s FT8 grid even
+// while displaying FT4's faster countdown - see the slot_sec note below).
 static void t_slotbar_cb(lv_timer_t *t)
 {
     (void)t;
@@ -778,9 +782,11 @@ static void t_slotbar_cb(lv_timer_t *t)
     if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) return;
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    // Position within the current 15 s slot, in milliseconds (0..15000).
-    int slot_ms = (int)(((int64_t)tv.tv_sec % 15) * 1000 + tv.tv_usec / 1000);
-    int remain_ms = 15000 - slot_ms;
+    int period_ms = ft8_op_mode_slot_ms();
+    lv_bar_set_range(s_bar_slot, 0, period_ms);
+    int64_t now_ms = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+    int slot_ms = (int)(now_ms % period_ms);
+    int remain_ms = period_ms - slot_ms;
     if (remain_ms < 0) remain_ms = 0;
     lv_bar_set_value(s_bar_slot, remain_ms, LV_ANIM_OFF);
 
@@ -788,6 +794,9 @@ static void t_slotbar_cb(lv_timer_t *t)
     if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ACTIVE) {
         col = lv_palette_main(LV_PALETTE_RED);
     } else {
+        // Slot parity (EVEN/ODD) is an FT8 protocol convention tied to the 15 s
+        // UTC grid - keep colouring off that grid regardless of which period
+        // the bar itself is counting down.
         bool is_even = (((int64_t)tv.tv_sec / 15) % 2) == 0;
         col = is_even ? lv_color_hex(UI_COLOR_PRIMARY_BORDER) : lv_color_hex(0xE09040);
     }
@@ -802,8 +811,20 @@ static void t_clock_cb(lv_timer_t *t)
     time_t now = time(NULL);
 
     if (s_lbl_count) {
-        int sec_in_slot = (int)(now % 15);
-        int remain = 15 - sec_in_slot;
+        // FT4's 7.5 s period isn't a whole number of seconds, so derive the
+        // countdown from the millisecond remainder (same math as the fast bar
+        // in t_slotbar_cb) rather than naively truncating period_ms/1000 -
+        // that would lose the half-second and drift the displayed number off
+        // the true grid over time. Rounded up to the nearest second for
+        // display. Parity stays on the FT8 15 s grid regardless of period.
+        struct timeval tv_now;
+        gettimeofday(&tv_now, NULL);
+        int period_ms = ft8_op_mode_slot_ms();
+        int64_t now_ms = (int64_t)tv_now.tv_sec * 1000 + tv_now.tv_usec / 1000;
+        int remain_ms = period_ms - (int)(now_ms % period_ms);
+        int remain = (remain_ms + 999) / 1000;
+        if (remain < 0) remain = 0;          // clamp: bounds the snprintf width below
+        if (remain > 15) remain = 15;
         bool is_even = (((int64_t)now / 15) % 2) == 0;
         char b[16];
         snprintf(b, sizeof(b), "%s  %d s", is_even ? "EVEN" : "ODD", remain);

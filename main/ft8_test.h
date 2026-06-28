@@ -80,6 +80,12 @@ typedef enum {
 void          ft8_op_mode_set(ft8_op_mode_t m);
 ft8_op_mode_t ft8_op_mode_get(void);
 
+// Slot period in ms for the current sub-mode (15000 FT8 / 7500 FT4). Single
+// source of truth for anything outside ft8_test.c that needs slot timing -
+// the countdown bar/label in ft8_screen_view.c, in particular - so it can
+// never drift out of sync with the slot engine's own period.
+int ft8_op_mode_slot_ms(void);
+
 #ifdef __cplusplus
 }
 #endif

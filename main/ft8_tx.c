@@ -5,6 +5,7 @@
 
 #include "ft8_tx.h"
 #include "ft8_status.h"
+#include "ft8_test.h"   // ft8_op_mode_get() - FT8/FT4 sub-mode
 
 #include <string.h>
 #include <stdio.h>
@@ -410,6 +411,15 @@ bool ft8_tx_arm(const ft8_tx_request_t *req, char *out_err, size_t out_err_len)
 {
     if (out_err && out_err_len) out_err[0] = '\0';
     if (!req) return false;
+
+    // FT4 TX is not implemented yet (the slot engine only keys the radio on the
+    // 15 s FT8 grid). Refuse to arm in FT4 mode rather than leave a request
+    // stuck ARMED forever - the slot loop's tx_allowed gate would never fire it.
+    if (ft8_op_mode_get() == FT8_OP_MODE_FT4) {
+        ESP_LOGW(TAG, "arm refused: FT4 TX not yet supported (RX-only in FT4)");
+        if (out_err) snprintf(out_err, out_err_len, "FT4 TX not yet supported");
+        return false;
+    }
 
     lock();
     bool already_active = (s_state == FT8_TX_ACTIVE);

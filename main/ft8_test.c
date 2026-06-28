@@ -75,8 +75,16 @@
 static const char *TAG = "ft8_test";
 
 #define SR_HZ                 12000
-#define SLOT_SAMPLES          180000      // 15 s × 12 kHz
+#define SLOT_SAMPLES          180000      // 15 s × 12 kHz (FT8 slot; also the
+                                          // scratch-buffer / max size - FT4's
+                                          // 7.5 s = 90000 samples fits inside)
 #define SLOT_TIMEOUT_MS       20000
+
+// Per-protocol slot length. FT8 = 15 s, FT4 = 7.5 s. The slot loop derives the
+// active sample count (period_ms × 12 samples/ms) and the UTC boundary grid
+// from these at runtime, keyed off the FT8/FT4 sub-mode (ft8_op_mode_get()).
+#define FT8_SLOT_MS           15000
+#define FT4_SLOT_MS           7500
 #define SNTP_WAIT_TIMEOUT_MS  30000
 #define CAT_STATUS_UPDATE_MS  5000
 
@@ -85,16 +93,34 @@ static const char *TAG = "ft8_test";
 // store is atomic on RV32, so volatile is sufficient for this advisory flag -
 // no mutex needed. See ft8_op_mode_set/get and the note in ft8_test.h.
 static volatile ft8_op_mode_t s_op_mode = FT8_OP_MODE_FT8;
+static volatile bool          s_op_mode_loaded = false;   // lazy NVS load, once
 
 void ft8_op_mode_set(ft8_op_mode_t m)
 {
     s_op_mode = m;
+    s_op_mode_loaded = true;   // a deliberate set always wins over the lazy load
+    settings_set_ft8_op_mode((uint8_t)m);   // sticky across reboot (debounced flush)
     ESP_LOGI(TAG, "operating sub-mode -> %s", m == FT8_OP_MODE_FT4 ? "FT4" : "FT8");
 }
 
 ft8_op_mode_t ft8_op_mode_get(void)
 {
+    // First call after boot: pull the persisted value before anyone (the
+    // preset dropdown, the slot loop) reads the flag, so a saved FT4
+    // selection survives a reboot without main.c needing to know this
+    // module exists.
+    if (!s_op_mode_loaded) {
+        s_op_mode_loaded = true;
+        qmx_settings_t cfg;
+        settings_load_all(&cfg);
+        s_op_mode = (cfg.ft8_op_mode == (uint8_t)FT8_OP_MODE_FT4) ? FT8_OP_MODE_FT4 : FT8_OP_MODE_FT8;
+    }
     return s_op_mode;
+}
+
+int ft8_op_mode_slot_ms(void)
+{
+    return (ft8_op_mode_get() == FT8_OP_MODE_FT4) ? FT4_SLOT_MS : FT8_SLOT_MS;
 }
 
 // Max FT8 candidates considered per slot (matches the cands[] buffer in
@@ -210,6 +236,10 @@ uint32_t ft8_get_timing_seq(void)
 // without a mutex.
 static monitor_t    *s_mon_pool[FT8_NUM_BUFFERS];
 static volatile bool s_buf_busy[FT8_NUM_BUFFERS];
+// Protocol the pool is currently built for. The monitor's waterfall/block sizes
+// are protocol-specific (FT8: 1920-sample blocks, 93/slot; FT4: 576, 156/slot),
+// so switching FT8<->FT4 rebuilds the pool. -1 = not yet built.
+static int           s_pool_proto = -1;   // ftx_protocol_t, or -1
 // Single reusable capture scratch buffer (decimated 12 kHz audio). Consumed by
 // the streaming STFT during capture; not needed once the waterfall is built, so
 // one buffer serves every slot (capture is strictly sequential).
@@ -235,6 +265,101 @@ static void free_capture_pool(void)
         }
     }
     if (s_cap_scratch) { heap_caps_free(s_cap_scratch); s_cap_scratch = NULL; }
+    s_pool_proto = -1;
+}
+
+// Map the FT8/FT4 sub-mode flag to a decoder protocol.
+static inline ftx_protocol_t proto_for_mode(void)
+{
+    return (ft8_op_mode_get() == FT8_OP_MODE_FT4) ? FTX_PROTOCOL_FT4
+                                                  : FTX_PROTOCOL_FT8;
+}
+
+// Free just the monitor objects (keep s_cap_scratch, which is protocol-agnostic
+// and sized for the larger FT8 slot). Used by the FT8<->FT4 rebuild path.
+static void free_monitor_objects(void)
+{
+    for (int i = 0; i < FT8_NUM_BUFFERS; i++) {
+        if (s_mon_pool[i]) {
+            monitor_free(s_mon_pool[i]);
+            heap_caps_free(s_mon_pool[i]);
+            s_mon_pool[i] = NULL;
+        }
+    }
+    s_pool_proto = -1;
+}
+
+// Allocate + monitor_init the pool for `proto`, relocating each STFT window to
+// PSRAM (see the long note inline). Returns false on any alloc failure (caller
+// frees). Sets s_pool_proto on success.
+static bool build_monitor_pool(ftx_protocol_t proto)
+{
+    const monitor_config_t cfg = {
+        .f_min       = 200.0f,
+        .f_max       = 3000.0f,
+        .sample_rate = SR_HZ,
+        .time_osr    = 2,
+        .freq_osr    = 2,
+        .protocol    = proto,
+    };
+    for (int i = 0; i < FT8_NUM_BUFFERS; i++) {
+        s_mon_pool[i] = heap_caps_malloc(sizeof(monitor_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        s_buf_busy[i] = false;
+        if (!s_mon_pool[i]) {
+            ESP_LOGE(TAG, "alloc for monitor %d/%d failed", i, FT8_NUM_BUFFERS);
+            return false;
+        }
+        monitor_init(s_mon_pool[i], &cfg);   // allocates the waterfall in PSRAM
+        // Relocate the STFT window (~15 KB) to PSRAM. monitor_init malloc()s it,
+        // and at <16 KB it lands in scarce INTERNAL RAM (the 16 KB PSRAM-spill
+        // threshold) - across the pool that starves internal heap (main runs at
+        // ~39 KB free in FT8; without this we drop to ~7 KB). The window is
+        // read-only in monitor_process, so PSRAM costs nothing on the hot path;
+        // last_frame stays internal since it's written every block.
+        {
+            monitor_t *m = s_mon_pool[i];
+            float *w = heap_caps_malloc((size_t)m->nfft * sizeof(float),
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (w) {
+                memcpy(w, m->window, (size_t)m->nfft * sizeof(float));
+                heap_caps_free(m->window);
+                m->window = w;
+            }
+        }
+    }
+    s_pool_proto = (int)proto;
+    ESP_LOGI(TAG, "monitor pool built for %s: block=%d samples, %d blocks/slot, %u KB waterfall each",
+             proto == FTX_PROTOCOL_FT4 ? "FT4" : "FT8",
+             s_mon_pool[0]->block_size, s_mon_pool[0]->wf.max_blocks,
+             (unsigned)((size_t)s_mon_pool[0]->wf.max_blocks * s_mon_pool[0]->wf.block_stride
+                        * sizeof(s_mon_pool[0]->wf.mag[0]) / 1024));
+    return true;
+}
+
+// Top-of-slot check: if the operator switched FT8<->FT4, rebuild the monitor
+// pool for the new protocol. We're about to free monitors the decoder may still
+// be reading, so first drain any in-flight decode (bounded wait on the busy
+// flags), then free + rebuild. On rebuild failure the pool is left empty and
+// the loop's find_free_buffer() simply skips slots until the next mode toggle.
+static void reinit_pool_if_mode_changed(void)
+{
+    ftx_protocol_t want = proto_for_mode();
+    if ((int)want == s_pool_proto) return;
+
+    ESP_LOGI(TAG, "sub-mode change -> rebuilding monitor pool for %s",
+             want == FTX_PROTOCOL_FT4 ? "FT4" : "FT8");
+    for (int guard = 0; guard < 400; guard++) {   // ~4 s ceiling
+        bool any_busy = false;
+        for (int i = 0; i < FT8_NUM_BUFFERS; i++) if (s_buf_busy[i]) any_busy = true;
+        if (!any_busy) break;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    free_monitor_objects();
+    if (!build_monitor_pool(want)) {
+        ESP_LOGE(TAG, "monitor pool rebuild for %s FAILED - freeing partial",
+                 want == FTX_PROTOCOL_FT4 ? "FT4" : "FT8");
+        free_monitor_objects();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -332,14 +457,19 @@ static void wait_for_cat_ready(void)
 // the current slot if it's newer than after_sec, which handles the
 // case where the previous capture ran a little long and we land
 // 100+ ms into the new slot.
-static int64_t wait_for_slot_boundary(int64_t after_sec)
+// Block until the next slot boundary strictly after `after_ms`, returning the
+// boundary as a UTC millisecond value (multiple of period_ms). Millisecond
+// resolution is required for FT4: its 7.5 s grid lands on half-seconds
+// (..., 22500, 30000, 37500 ms), which a whole-second test can't represent.
+static int64_t wait_for_slot_boundary_ms(int64_t after_ms, int period_ms)
 {
     while (1) {
         struct timeval tv;
         gettimeofday(&tv, NULL);
-        int64_t slot = (int64_t)(tv.tv_sec / 15) * 15;
-        if (slot > after_sec) {
-            return slot;
+        int64_t now_ms = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+        int64_t boundary = (now_ms / period_ms) * period_ms;
+        if (boundary > after_ms) {
+            return boundary;
         }
         vTaskDelay(1);  // ~10 ms at default tick rate
     }
@@ -665,7 +795,8 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
         // every slot, not just when the operator opens the time-sync modal
         // and taps Apply. See FT8_AUTOSYNC_MIN_SAMPLES/_MS above for why both
         // guards exist.
-        if (n_timing >= FT8_AUTOSYNC_MIN_SAMPLES &&
+        if (s_pool_proto == (int)FTX_PROTOCOL_FT8 &&
+            n_timing >= FT8_AUTOSYNC_MIN_SAMPLES &&
             abs(s_last_timing_ms) >= FT8_AUTOSYNC_MIN_MS) {
             // Apply only a damped fraction of the raw measurement - see
             // FT8_AUTOSYNC_GAIN above. _quiet: skips the QMX CAT push, which
@@ -810,24 +941,11 @@ static void ft8_task(void *arg)
         }
     }
 
-    // Capture scratch (decimated 12 kHz audio, reused every slot) + monitor pool.
-    // Each monitor's waterfall (~166 KB) spills to PSRAM automatically. Capture
-    // streams the STFT into the claimed monitor over the slot; the decoder reads
-    // its waterfall and releases it (see the file header). s_mon_pool/s_cap_scratch
-    // are zeroed statics, so a partial-alloc failure frees cleanly.
-    const monitor_config_t cfg = {
-        .f_min       = 200.0f,
-        .f_max       = 3000.0f,
-        .sample_rate = SR_HZ,
-        .time_osr    = 2,
-        .freq_osr    = 2,
-        // TODO(FT4 engine): when ft8_op_mode_get() == FT8_OP_MODE_FT4 this must
-        // be FTX_PROTOCOL_FT4, and the slot loop below (SLOT_SAMPLES, the 15 s
-        // UTC boundary, TX cadence, QSO timing) halved to 7.5 s. The op-mode
-        // flag is already wired from the preset dropdown; this is the single
-        // point the pending engine rework branches on.
-        .protocol    = FTX_PROTOCOL_FT8,
-    };
+    // Capture scratch (decimated 12 kHz audio, reused every slot) + monitor
+    // pool. The scratch is sized for the larger FT8 slot (180000) and shared by
+    // FT4 (90000, fits inside). The pool is built for the CURRENT sub-mode; the
+    // slot loop rebuilds it on an FT8<->FT4 toggle (reinit_pool_if_mode_changed).
+    // s_mon_pool/s_cap_scratch are zeroed statics, so a partial-alloc frees clean.
     s_cap_scratch = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
     if (!s_cap_scratch) {
         ESP_LOGE(TAG, "PSRAM alloc for capture scratch failed");
@@ -835,38 +953,13 @@ static void ft8_task(void *arg)
         vTaskDelete(NULL);
         return;
     }
-    for (int i = 0; i < FT8_NUM_BUFFERS; i++) {
-        s_mon_pool[i] = heap_caps_malloc(sizeof(monitor_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        s_buf_busy[i] = false;
-        if (!s_mon_pool[i]) {
-            ESP_LOGE(TAG, "alloc for monitor %d/%d failed", i, FT8_NUM_BUFFERS);
-            free_capture_pool();
-            vTaskDelete(NULL);
-            return;
-        }
-        monitor_init(s_mon_pool[i], &cfg);   // allocates the ~166 KB waterfall in PSRAM
-        // Relocate the STFT window (~15 KB) to PSRAM. monitor_init malloc()s it,
-        // and at <16 KB it lands in scarce INTERNAL RAM (the 16 KB PSRAM-spill
-        // threshold) - across the pool that starves internal heap (main runs at
-        // ~39 KB free in FT8; without this we drop to ~7 KB). The window is
-        // read-only in monitor_process, so PSRAM costs nothing on the hot path;
-        // last_frame stays internal since it's written every block.
-        {
-            monitor_t *m = s_mon_pool[i];
-            float *w = heap_caps_malloc((size_t)m->nfft * sizeof(float),
-                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-            if (w) {
-                memcpy(w, m->window, (size_t)m->nfft * sizeof(float));
-                heap_caps_free(m->window);   // IDF heap_caps_free handles the malloc'd block
-                m->window = w;
-            }
-        }
+    if (!build_monitor_pool(proto_for_mode())) {
+        ESP_LOGE(TAG, "initial monitor pool build failed");
+        free_capture_pool();
+        s_ft8_task_alive = false;
+        vTaskDelete(NULL);
+        return;
     }
-    ESP_LOGI(TAG, "monitor pool: %d x monitor_t (waterfall ~%u KB each); scratch %u KB",
-             FT8_NUM_BUFFERS,
-             (unsigned)((size_t)s_mon_pool[0]->wf.max_blocks * s_mon_pool[0]->wf.block_stride
-                        * sizeof(s_mon_pool[0]->wf.mag[0]) / 1024),
-             (unsigned)(SLOT_SAMPLES * sizeof(float) / 1024));
 
     s_decode_queue = xQueueCreate(DECODE_QUEUE_DEPTH, sizeof(decode_job_t));
     if (!s_decode_queue) {
@@ -900,15 +993,29 @@ static void ft8_task(void *arg)
     int slot_idx = 0;
     struct timeval tv_init;
     gettimeofday(&tv_init, NULL);
-    int64_t last_slot = (int64_t)(tv_init.tv_sec / 15) * 15;
+    int64_t now_ms_init   = (int64_t)tv_init.tv_sec * 1000 + tv_init.tv_usec / 1000;
+    int     period_ms_init = (proto_for_mode() == FTX_PROTOCOL_FT4) ? FT4_SLOT_MS : FT8_SLOT_MS;
+    int64_t last_boundary_ms = (now_ms_init / period_ms_init) * period_ms_init;
 
     while (ui_mode_get() == UI_MODE_FT8) {
-        ESP_LOGI(TAG, "slot %d: waiting for next FT8 boundary...", slot_idx);
-        int64_t slot_sec = wait_for_slot_boundary(last_slot);
-        last_slot = slot_sec;
+        // Rebuild the monitor pool if the operator toggled FT8<->FT4 since the
+        // last slot. Done at the top, before claiming a buffer, so the pool is
+        // settled for this whole slot.
+        reinit_pool_if_mode_changed();
+        bool   is_ft4    = (s_pool_proto == (int)FTX_PROTOCOL_FT4);
+        int    period_ms = is_ft4 ? FT4_SLOT_MS : FT8_SLOT_MS;
+        int    slot_samples = period_ms * (SR_HZ / 1000);   // 90000 (FT4) / 180000 (FT8)
+        // FT4 TX is not implemented yet - only FT8 may key the radio. In FT4 we
+        // always RX so a tap can't transmit wrong-protocol tones on an FT4 freq.
+        bool   tx_allowed = !is_ft4;
+
+        ESP_LOGI(TAG, "slot %d: waiting for next %s boundary...", slot_idx, is_ft4 ? "FT4" : "FT8");
+        int64_t boundary_ms = wait_for_slot_boundary_ms(last_boundary_ms, period_ms);
+        last_boundary_ms = boundary_ms;
+        int64_t slot_sec = boundary_ms / 1000;   // whole-second slot id (record/aging)
 
         ft8_tx_request_t txreq;
-        if (ft8_tx_should_run_this_slot(slot_sec, &txreq)) {
+        if (tx_allowed && ft8_tx_should_run_this_slot(slot_sec, &txreq)) {
             ft8_status_set("TX: %s", txreq.display_text);
             ft8_tx_run(&txreq);   // blocks ~12.7 s; always restores RX before returning
             ft8_qso_on_tx_complete();  // re-arm the current outgoing message
@@ -947,20 +1054,21 @@ static void ft8_task(void *arg)
             // the boundary doesn't accumulate.
             struct timeval tv_cap;
             gettimeofday(&tv_cap, NULL);
-            int start_off_ms = (int)((tv_cap.tv_sec - slot_sec) * 1000
-                                     + tv_cap.tv_usec / 1000);
-            // Cap the capture at the next UTC slot boundary so the 15 s window
-            // stays anchored to the FT8 grid. Without this the window slides
-            // ~0.2 s/slot (capture takes a touch over 15 s) and decoding dies
-            // after ~3 min; the finalize step zero-pads any shortfall.
-            int ms_to_boundary = 15000 - start_off_ms;
+            int64_t now_ms_cap = (int64_t)tv_cap.tv_sec * 1000 + tv_cap.tv_usec / 1000;
+            int start_off_ms = (int)(now_ms_cap - boundary_ms);
+            // Cap the capture at the next UTC slot boundary so the window stays
+            // anchored to the protocol's timing grid (period_ms = 15000 FT8 /
+            // 7500 FT4). Without this the window slides ~0.2 s/slot (capture
+            // takes a touch over a slot) and decoding dies after a few min; the
+            // finalize step zero-pads any shortfall.
+            int ms_to_boundary = period_ms - start_off_ms;
             if (ms_to_boundary < 2000)                  ms_to_boundary = 2000;
             if (ms_to_boundary > (int)SLOT_TIMEOUT_MS)  ms_to_boundary = SLOT_TIMEOUT_MS;
 
-            // Streaming STFT: arm capture, then FFT each 1920-sample symbol block
-            // the instant it lands, so the waterfall is fully built by the time
-            // the FT8 signal ends (~12.6 s in). The STFT cost overlaps capture
-            // instead of being paid in the post-slot decode window.
+            // Streaming STFT: arm capture, then FFT each symbol block (1920 @ FT8,
+            // 576 @ FT4) the instant it lands, so the waterfall is fully built by
+            // the time the signal ends. The STFT cost overlaps capture instead of
+            // being paid in the post-slot decode window.
             int64_t t0 = esp_timer_get_time();
             // Diag: ring backlog about to be discarded by the arm-time flush
             // (this is the accumulated latency that was time-shifting later
@@ -968,9 +1076,9 @@ static void ft8_task(void *arg)
             // the per-slot decode line so the cliff is directly observable.
             int arm_backlog = (int)audio_ring_backlog_pairs();
             uint32_t drop_before = audio_get_dropped_total();
-            esp_err_t e = dsp_ft8_capture_begin(s_cap_scratch, SLOT_SAMPLES);
-            int     blk       = mon->block_size;        // 1920 @ 12 kHz
-            int     n_blocks  = SLOT_SAMPLES / blk;      // 93 full symbol blocks
+            esp_err_t e = dsp_ft8_capture_begin(s_cap_scratch, slot_samples);
+            int     blk       = mon->block_size;        // 1920 (FT8) / 576 (FT4)
+            int     n_blocks  = slot_samples / blk;      // 93 (FT8) / 156 (FT4)
             int     processed = 0;
             int64_t stft_us   = 0;
             ft8_tx_request_t late_txreq;
@@ -984,7 +1092,7 @@ static void ft8_task(void *arg)
                         stft_us += esp_timer_get_time() - ts;
                         processed++;
                     }
-                    if (avail >= SLOT_SAMPLES) break;                                  // whole slot in
+                    if (avail >= slot_samples) break;                                  // whole slot in
                     int into_slot_ms = (int)((esp_timer_get_time() - t0) / 1000);
                     if (into_slot_ms >= ms_to_boundary) break;                          // boundary
                     // Reply-on-the-immediate-slot: if the prior slot's decode just
@@ -992,7 +1100,8 @@ static void ft8_task(void *arg)
                     // of waiting a full cycle. See FT8_REPLY_TX_WINDOW_MS. Safe -
                     // should_run only returns a legitimately-armed, correct-parity
                     // request, so this can never misfire a spurious/wrong-parity TX.
-                    if (into_slot_ms <= FT8_REPLY_TX_WINDOW_MS &&
+                    // FT4 never reaches here (tx_allowed=false -> no armed TX path yet).
+                    if (tx_allowed && into_slot_ms <= FT8_REPLY_TX_WINDOW_MS &&
                         ft8_tx_should_run_this_slot(slot_sec, &late_txreq)) {
                         late_tx = true;
                         break;
@@ -1018,7 +1127,7 @@ static void ft8_task(void *arg)
             } else if (e == ESP_OK) {
                 // FFT any remaining whole blocks (late in-flight samples or the
                 // zero-padded dead-air tail -> noise), then queue the decode.
-                while ((processed + 1) * blk <= SLOT_SAMPLES) {
+                while ((processed + 1) * blk <= slot_samples) {
                     int64_t ts = esp_timer_get_time();
                     monitor_process(mon, &s_cap_scratch[processed * blk]);
                     stft_us += esp_timer_get_time() - ts;

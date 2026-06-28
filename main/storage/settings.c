@@ -61,6 +61,7 @@ static const char *TAG = "settings";
 #define KEY_FD_CLASS       "fd_class"
 #define KEY_FD_SECTION     "fd_sect"
 #define KEY_SIM_MODE       "sim_mode"
+#define KEY_FT8_OP_MODE    "ft8_op_mode"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -133,6 +134,7 @@ static const char *TAG = "settings";
 #define DIRTY_FD_CLASS       (1ull << 44)
 #define DIRTY_FD_SECTION     (1ull << 45)
 #define DIRTY_SIM_MODE       (1ull << 46)
+#define DIRTY_FT8_OP_MODE    (1ull << 47)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -255,6 +257,7 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_FD_CLASS)     nvs_set_str(s_nvs, KEY_FD_CLASS, snap.fd_class);
         if (dirty_local & DIRTY_FD_SECTION)   nvs_set_str(s_nvs, KEY_FD_SECTION, snap.fd_section);
         if (dirty_local & DIRTY_SIM_MODE)     nvs_set_u8(s_nvs, KEY_SIM_MODE, snap.sim_mode_en ? 1 : 0);
+        if (dirty_local & DIRTY_FT8_OP_MODE)  nvs_set_u8(s_nvs, KEY_FT8_OP_MODE, snap.ft8_op_mode);
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
@@ -352,6 +355,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->fd_class[0]  = '\0';
     out->fd_section[0] = '\0';
     out->sim_mode_en = false;
+    out->ft8_op_mode = 0;     // FT8
 
     if (!s_ready) {
         ESP_LOGW(TAG, "load_all: NVS not ready, using defaults");
@@ -441,6 +445,7 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_str(s_nvs, KEY_FD_SECTION, out->fd_section, &sz);
 
     if (nvs_get_u8(s_nvs, KEY_SIM_MODE, &u8v) == ESP_OK) out->sim_mode_en = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_FT8_OP_MODE, &u8v) == ESP_OK) out->ft8_op_mode = u8v;
 
     ESP_LOGI(TAG, "loaded: db=[%.1f..%.1f] ema=%.2f iq=%d",
              out->db_min, out->db_max, out->ema_alpha, out->iq_enabled);
@@ -997,4 +1002,14 @@ void settings_set_sim_mode_en(bool v)
     s_pending.sim_mode_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_SIM_MODE);
+}
+
+void settings_set_ft8_op_mode(uint8_t v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.ft8_op_mode == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.ft8_op_mode = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_FT8_OP_MODE);
 }

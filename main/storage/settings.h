@@ -82,6 +82,7 @@ typedef struct {
     char     fd_class[4];     // Field Day class, e.g. "16A" (1-2 digit transmitter count + category letter)
     char     fd_section[4];   // Field Day ARRL/RAC section abbreviation, e.g. "EMA"
     bool     sim_mode_en;     // FT8 simulation mode: phantom stations, real radio never keyed (default false)
+    uint8_t  ft8_op_mode;     // FT8/FT4 sub-mode (ft8_op_mode_t: 0=FT8 1=FT4), default 0 - see ft8_test.h
 } qmx_settings_t;
 
 // Initialise the settings module. Opens an NVS handle. Safe to call
@@ -176,6 +177,7 @@ void settings_set_fd_section(const char *section);
 // FT8 simulation mode (debounced flush): phantom-station practice mode -
 // see ft8_sim.h. The real QMX is never keyed while this is on.
 void settings_set_sim_mode_en(bool v);
+void settings_set_ft8_op_mode(uint8_t v);
 
 // WiFi boot-initiation toggle (debounced flush). When false the radio stays
 // idle at boot even if credentials are stored; the user can re-enable from
