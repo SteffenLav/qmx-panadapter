@@ -60,7 +60,7 @@ The beta label goes away at v1.0.0 after multi-day soak testing.
 
 ### 4. Modes of Transmission
 
-### 1. Reply to a CQ
+#### 1. Reply to a CQ
 
 In FT8 view, tap a CQ row in the decode list. A confirmation modal appears:
 
