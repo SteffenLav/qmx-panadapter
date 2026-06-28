@@ -20,12 +20,36 @@
 #include "config_io.h"         // config_io_export / config_io_import
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
 #include <string.h>
 #include <time.h>
 
 static const char *TAG = "webserver";
 
 static httpd_handle_t s_server = NULL;
+
+// Background upload task: processes QRZ/eQSL uploads without blocking httpd.
+// Runs at priority 3 (below audio/FT8, above idle). Clients poll /api/upload_status
+// to check results instead of blocking the request handler.
+typedef enum { UPLOAD_QRZ, UPLOAD_EQSL } upload_kind_t;
+typedef struct {
+    upload_kind_t kind;
+} upload_request_t;
+
+static QueueHandle_t s_upload_queue = NULL;
+static TaskHandle_t  s_upload_task = NULL;
+
+// Last upload result (protected by static var, single slot - ok for occasional uploads)
+static struct {
+    upload_kind_t kind;
+    int uploaded;
+    int failed;
+    char error[80];
+    bool busy;
+} s_last_upload = {0};
+static SemaphoreHandle_t s_upload_mutex = NULL;
 
 // index.html is embedded as a null-terminated string via EMBED_TXTFILES.
 extern const char index_html_start[] asm("_binary_index_html_start");
@@ -315,29 +339,38 @@ static esp_err_t qrz_key_handler(httpd_req_t *req)
     return httpd_resp_sendstr(req, "{\"ok\":true}");
 }
 
-// POST /api/qrz_upload — uploads every ADIF record logged since the last
-// successful QRZ upload. Blocks on the network for the whole batch (this
-// handler runs on the httpd worker task, not the LVGL thread, so it's safe
-// to block here).
+// POST /api/qrz_upload — queues upload, returns 202 Accepted immediately.
+// Client polls /api/upload_status to check results.
 static esp_err_t qrz_upload_handler(httpd_req_t *req)
 {
-    qrz_upload_result_t result;
-    qrz_upload_pending(&result);
+    if (!s_upload_queue) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "upload task not ready");
+    }
 
-    cJSON *root = cJSON_CreateObject();
-    if (!root) return httpd_resp_send_500(req);
-    cJSON_AddNumberToObject(root, "uploaded", result.uploaded);
-    cJSON_AddNumberToObject(root, "failed",   result.failed);
-    cJSON_AddStringToObject(root, "error",    result.error);
+    xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+    if (s_last_upload.busy) {
+        xSemaphoreGive(s_upload_mutex);
+        httpd_resp_set_status(req, "423 Locked");
+        return httpd_resp_sendstr(req, "upload in progress");
+    }
+    s_last_upload.busy = true;
+    s_last_upload.kind = UPLOAD_QRZ;
+    s_last_upload.uploaded = 0;
+    s_last_upload.failed = 0;
+    s_last_upload.error[0] = '\0';
+    xSemaphoreGive(s_upload_mutex);
 
-    char *out = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-    if (!out) return httpd_resp_send_500(req);
+    upload_request_t up = { .kind = UPLOAD_QRZ };
+    if (!xQueueSend(s_upload_queue, &up, 0)) {
+        xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+        s_last_upload.busy = false;
+        xSemaphoreGive(s_upload_mutex);
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "queue full");
+    }
 
+    httpd_resp_set_status(req, "202 Accepted");
     httpd_resp_set_type(req, "application/json");
-    esp_err_t err = httpd_resp_send(req, out, HTTPD_RESP_USE_STRLEN);
-    cJSON_free(out);
-    return err;
+    return httpd_resp_sendstr(req, "{\"status\":\"uploading\"}");
 }
 
 static const httpd_uri_t uri_qrz_key = {
@@ -374,28 +407,38 @@ static esp_err_t eqsl_creds_handler(httpd_req_t *req)
     return httpd_resp_sendstr(req, "{\"ok\":true}");
 }
 
-// POST /api/eqsl_upload — uploads every ADIF record logged since the last
-// successful eQSL upload, in batches. Blocks on the network for the whole
-// run (httpd worker task, not the LVGL thread - safe to block here).
+// POST /api/eqsl_upload — queues upload, returns 202 Accepted immediately.
+// Client polls /api/upload_status to check results.
 static esp_err_t eqsl_upload_handler(httpd_req_t *req)
 {
-    eqsl_upload_result_t result;
-    eqsl_upload_pending(&result);
+    if (!s_upload_queue) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "upload task not ready");
+    }
 
-    cJSON *root = cJSON_CreateObject();
-    if (!root) return httpd_resp_send_500(req);
-    cJSON_AddNumberToObject(root, "uploaded", result.uploaded);
-    cJSON_AddNumberToObject(root, "failed",   result.failed);
-    cJSON_AddStringToObject(root, "error",    result.error);
+    xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+    if (s_last_upload.busy) {
+        xSemaphoreGive(s_upload_mutex);
+        httpd_resp_set_status(req, "423 Locked");
+        return httpd_resp_sendstr(req, "upload in progress");
+    }
+    s_last_upload.busy = true;
+    s_last_upload.kind = UPLOAD_EQSL;
+    s_last_upload.uploaded = 0;
+    s_last_upload.failed = 0;
+    s_last_upload.error[0] = '\0';
+    xSemaphoreGive(s_upload_mutex);
 
-    char *out = cJSON_PrintUnformatted(root);
-    cJSON_Delete(root);
-    if (!out) return httpd_resp_send_500(req);
+    upload_request_t up = { .kind = UPLOAD_EQSL };
+    if (!xQueueSend(s_upload_queue, &up, 0)) {
+        xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+        s_last_upload.busy = false;
+        xSemaphoreGive(s_upload_mutex);
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "queue full");
+    }
 
+    httpd_resp_set_status(req, "202 Accepted");
     httpd_resp_set_type(req, "application/json");
-    esp_err_t err = httpd_resp_send(req, out, HTTPD_RESP_USE_STRLEN);
-    cJSON_free(out);
-    return err;
+    return httpd_resp_sendstr(req, "{\"status\":\"uploading\"}");
 }
 
 static const httpd_uri_t uri_eqsl_creds = {
@@ -476,14 +519,107 @@ static const httpd_uri_t uri_log = {
     .uri = "/api/log", .method = HTTP_GET, .handler = log_handler,
 };
 
+// GET /api/upload_status — check result of last QRZ or eQSL upload
+static esp_err_t upload_status_handler(httpd_req_t *req)
+{
+    xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+    cJSON *root = cJSON_CreateObject();
+    if (!root) {
+        xSemaphoreGive(s_upload_mutex);
+        return httpd_resp_send_500(req);
+    }
+
+    cJSON_AddBoolToObject(root, "busy", s_last_upload.busy);
+    if (!s_last_upload.busy && s_last_upload.kind != 0) {
+        cJSON_AddStringToObject(root, "kind", s_last_upload.kind == UPLOAD_QRZ ? "qrz" : "eqsl");
+        cJSON_AddNumberToObject(root, "uploaded", s_last_upload.uploaded);
+        cJSON_AddNumberToObject(root, "failed",   s_last_upload.failed);
+        cJSON_AddStringToObject(root, "error",    s_last_upload.error);
+    }
+    xSemaphoreGive(s_upload_mutex);
+
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) return httpd_resp_send_500(req);
+
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t err = httpd_resp_send(req, out, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(out);
+    return err;
+}
+
+static const httpd_uri_t uri_upload_status = {
+    .uri = "/api/upload_status", .method = HTTP_GET, .handler = upload_status_handler,
+};
+
+// Background upload task — processes QRZ/eQSL uploads without blocking httpd.
+// Results stored in s_last_upload for polling via /api/upload_status.
+static void upload_task(void *arg)
+{
+    (void)arg;
+    upload_request_t up;
+
+    while (xQueueReceive(s_upload_queue, &up, portMAX_DELAY) == pdTRUE) {
+        if (up.kind == UPLOAD_QRZ) {
+            qrz_upload_result_t result;
+            qrz_upload_pending(&result);
+            xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+            s_last_upload.uploaded = result.uploaded;
+            s_last_upload.failed = result.failed;
+            strncpy(s_last_upload.error, result.error, sizeof(s_last_upload.error) - 1);
+            s_last_upload.error[sizeof(s_last_upload.error) - 1] = '\0';
+            s_last_upload.busy = false;
+            xSemaphoreGive(s_upload_mutex);
+        } else if (up.kind == UPLOAD_EQSL) {
+            eqsl_upload_result_t result;
+            eqsl_upload_pending(&result);
+            xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+            s_last_upload.uploaded = result.uploaded;
+            s_last_upload.failed = result.failed;
+            strncpy(s_last_upload.error, result.error, sizeof(s_last_upload.error) - 1);
+            s_last_upload.error[sizeof(s_last_upload.error) - 1] = '\0';
+            s_last_upload.busy = false;
+            xSemaphoreGive(s_upload_mutex);
+        }
+    }
+}
+
 esp_err_t webserver_start(void)
 {
     if (s_server != NULL) { ESP_LOGD(TAG, "Already running"); return ESP_OK; }
 
+    // Create background upload queue + task + mutex (priority 3: below audio/FT8, above idle)
+    if (!s_upload_mutex) {
+        s_upload_mutex = xSemaphoreCreateMutex();
+        if (!s_upload_mutex) {
+            ESP_LOGE(TAG, "Could not create upload mutex");
+            return ESP_FAIL;
+        }
+    }
+    if (!s_upload_queue) {
+        s_upload_queue = xQueueCreate(1, sizeof(upload_request_t));
+        if (!s_upload_queue) {
+            ESP_LOGE(TAG, "Could not create upload queue");
+            vSemaphoreDelete(s_upload_mutex);
+            s_upload_mutex = NULL;
+            return ESP_FAIL;
+        }
+    }
+    if (!s_upload_task) {
+        if (xTaskCreate(upload_task, "upload", 8192, NULL, 3, &s_upload_task) != pdPASS) {
+            ESP_LOGE(TAG, "Could not create upload task");
+            vQueueDelete(s_upload_queue);
+            s_upload_queue = NULL;
+            vSemaphoreDelete(s_upload_mutex);
+            s_upload_mutex = NULL;
+            return ESP_FAIL;
+        }
+    }
+
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.server_port     = 80;
     config.stack_size      = 12288;
-    config.max_uri_handlers = 16;
+    config.max_uri_handlers = 17;
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -507,6 +643,7 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_adif_clear);
     httpd_register_uri_handler(s_server, &uri_qrz_key);
     httpd_register_uri_handler(s_server, &uri_qrz_upload);
+    httpd_register_uri_handler(s_server, &uri_upload_status);
     httpd_register_uri_handler(s_server, &uri_eqsl_creds);
     httpd_register_uri_handler(s_server, &uri_eqsl_upload);
     httpd_register_uri_handler(s_server, &uri_config_get);
@@ -524,4 +661,17 @@ void webserver_stop(void)
     webserver_ws_stop();
     httpd_stop(s_server);
     s_server = NULL;
+
+    if (s_upload_task) {
+        vTaskDelete(s_upload_task);
+        s_upload_task = NULL;
+    }
+    if (s_upload_queue) {
+        vQueueDelete(s_upload_queue);
+        s_upload_queue = NULL;
+    }
+    if (s_upload_mutex) {
+        vSemaphoreDelete(s_upload_mutex);
+        s_upload_mutex = NULL;
+    }
 }
