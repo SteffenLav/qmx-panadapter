@@ -175,6 +175,15 @@ static float *s_ft8_dst    = NULL;
 static volatile int s_ft8_idx    = 0;   // advanced by fft_task; polled cross-task by the FT8 capture caller
 static int    s_ft8_target = 0;
 static volatile bool s_ft8_active = false;
+
+// Transfer-quiet: while an outbound network transfer (QRZ/eQSL upload) runs,
+// fft_task (priority 4) otherwise preempts the upload task (priority 3) every
+// audio window, starving the TLS handshake's crypto until it times out. When
+// set, fft_task drains the ring and idles, freeing the core for the transfer.
+// Stopping the FFT also stops FT8 capture/decode (they're fed from here).
+static volatile bool s_xfer_quiet = false;
+void dsp_set_transfer_quiet(bool quiet) { s_xfer_quiet = quiet; }
+
 static float s_ft8_mix_buf[DSP_FFT_SIZE];
 static float s_ft8_dec_buf[DSP_FFT_SIZE / 4];
 // Debug instrumentation: once-per-second log of FT8 branch activity.
@@ -744,6 +753,17 @@ static void fft_task(void *arg)
     float last_min = 0, last_max = 0, last_mean = 0;
 
     while (1) {
+        // While a network transfer is in flight, give up the CPU: drain a window
+        // from the ring (so it doesn't overflow) but skip all FFT/FT8 work, then
+        // sleep. This stops fft_task (pri 4) from preempting the upload (pri 3),
+        // and cascades to halt FT8 capture/decode. Resumes the instant the flag
+        // clears; the audio producer keeps the ring fresh meanwhile.
+        if (s_xfer_quiet) {
+            audio_read_samples(samples, DSP_FFT_SIZE, 10);
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
         // Block until we have a full FFT window of stereo pairs (1024 pairs).
         // audio_read_samples may return less than requested - loop until full.
         size_t got = 0;

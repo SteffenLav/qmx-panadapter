@@ -36,6 +36,16 @@ esp_err_t dsp_init(void);
 void dsp_set_window(uint8_t idx);
 
 /**
+ * @brief Quiet the FFT/FT8 processing during an outbound network transfer.
+ *
+ * When true, fft_task drains the audio ring but skips all FFT/FT8 work and
+ * sleeps, freeing the core so a QRZ/eQSL upload's TLS handshake isn't preempted
+ * (fft_task is priority 4, the upload task priority 3). Cascades to pause FT8
+ * capture/decode. Resumes instantly when cleared. Wrap transfers true/false.
+ */
+void dsp_set_transfer_quiet(bool quiet);
+
+/**
  * @brief Get a snapshot of the latest spectrum.
  *
  * @param[out] dst       Destination array of DSP_FFT_SIZE floats (dB units)

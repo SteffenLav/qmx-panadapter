@@ -24,6 +24,16 @@ esp_err_t webserver_ws_start(httpd_handle_t server);
  */
 void webserver_ws_stop(void);
 
+/**
+ * @brief Suspend/resume the spectrum push stream.
+ *
+ * While paused, the push task yields the WiFi TX path so an in-flight network
+ * transfer (QRZ/eQSL upload, ADIF/diag download) doesn't have to share the
+ * single SDIO->C6 link with the ~10 fps stream. Wrap transfers in
+ * set_paused(true)/set_paused(false). Safe to call from any task.
+ */
+void webserver_ws_set_paused(bool paused);
+
 #ifdef __cplusplus
 }
 #endif

@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"  // MALLOC_CAP_SPIRAM for xRingbufferCreateWithCaps
 
 #include "usb/uac_host.h"
 #include "iq_balance.h"
@@ -45,6 +46,25 @@ static TaskHandle_t s_audio_task = NULL;
 static QueueHandle_t s_evt_queue = NULL;
 static uac_host_device_handle_t s_uac_dev = NULL;
 static RingbufHandle_t s_ring = NULL;
+static uint8_t *s_ring_storage = NULL;   // where the ring's 64 KB landed (PSRAM vs internal)
+
+// Periodic heap watchdog: logs internal-DRAM free + largest contiguous block
+// (what the SDIO/USB DMA paths actually need) plus the sample-ring address, so
+// internal-RAM pressure is always visible on the serial console without needing
+// QMX connected or an FT8 slot to complete. Fires every 10 s.
+static esp_timer_handle_t s_heap_watchdog = NULL;
+static void heap_watchdog_cb(void *arg)
+{
+    (void)arg;
+    size_t i_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+    size_t i_min  = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+    size_t i_lblk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    size_t p_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    ESP_LOGW(TAG, "HEAP: int free=%uKB (min=%uKB lblk=%uKB)  psram free=%uKB  ring@%p[%s]",
+             (unsigned)(i_free / 1024), (unsigned)(i_min / 1024), (unsigned)(i_lblk / 1024),
+             (unsigned)(p_free / 1024), (void *)s_ring_storage,
+             (((uintptr_t)s_ring_storage >> 24) == 0x4F) ? "INTERNAL" : "PSRAM");
+}
 
 // Stats (touched from RX context, snapshot from task)
 static volatile uint32_t s_samples_this_period = 0;
@@ -79,7 +99,21 @@ esp_err_t audio_init(void)
     s_evt_queue = xQueueCreate(EVT_QUEUE_LEN, sizeof(audio_evt_t));
     if (!s_evt_queue) return ESP_ERR_NO_MEM;
 
-    s_ring = xRingbufferCreate(SAMPLE_RING_BYTES, RINGBUF_TYPE_BYTEBUF);
+    // Allocate the 64 KB sample ring from PSRAM, not the scarce internal DRAM
+    // that SDIO/USB host DMA depend on. This ring is CPU-accessed only (the
+    // UAC background task copies samples in via xRingbufferSend, the FFT task
+    // reads them out) — nothing DMAs into it directly — so a PSRAM backing is
+    // safe and PSRAM bandwidth (~hundreds of MB/s) dwarfs the ~190 KB/s rate.
+    // Frees ~64 KB internal, giving the WiFi-over-SDIO TX path the contiguous
+    // DMA headroom it was starving for (see transport_drv_sta_tx crash).
+    s_ring = xRingbufferCreateWithCaps(SAMPLE_RING_BYTES, RINGBUF_TYPE_BYTEBUF,
+                                       MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_ring) {
+        // Record WHERE the ring storage landed so the heap watchdog can report
+        // it: PSRAM on the P4 maps to 0x48000000+, internal SRAM to 0x4FF00000+.
+        StaticRingbuffer_t *st = NULL;
+        xRingbufferGetStaticBuffer(s_ring, &s_ring_storage, &st);
+    }
     if (!s_ring) {
         ESP_LOGE(TAG, "Failed to create sample ring buffer (%d bytes)",
                  SAMPLE_RING_BYTES);
@@ -92,6 +126,14 @@ esp_err_t audio_init(void)
     ESP_LOGI(TAG, "Sample ring buffer: %d bytes (~%lu ms @ 48k stereo int16)",
              SAMPLE_RING_BYTES,
              (unsigned long)(SAMPLE_RING_BYTES / 4 * 1000 / 48000));
+
+    // Start the periodic internal-heap watchdog (every 10 s).
+    const esp_timer_create_args_t wd_args = {
+        .callback = heap_watchdog_cb, .name = "heap_wd",
+    };
+    if (esp_timer_create(&wd_args, &s_heap_watchdog) == ESP_OK) {
+        esp_timer_start_periodic(s_heap_watchdog, 10 * 1000 * 1000);
+    }
 
     const uac_host_driver_config_t cfg = {
         .create_background_task = true,

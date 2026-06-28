@@ -267,22 +267,30 @@ static esp_err_t log_handler(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=qmx-log.txt");
 
+    // Pause the spectrum stream so this download has the WiFi TX path to itself.
+    webserver_ws_set_paused(true);
+
     size_t n = diag_log_size();
+    esp_err_t err;
     if (n == 0) {
         const char *hint =
             "(diagnostic log empty)\n"
             "Enable 'Diagnostic log' in the Tab5 settings drawer, reproduce the "
             "issue, then reload this page.\n";
-        return httpd_resp_sendstr(req, hint);
+        err = httpd_resp_sendstr(req, hint);
+    } else {
+        char *buf = heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
+        if (!buf) buf = malloc(n);
+        if (!buf) {
+            err = httpd_resp_send_500(req);
+        } else {
+            size_t got = diag_log_snapshot(buf, n);
+            err = httpd_resp_send(req, buf, got);
+            heap_caps_free(buf);
+        }
     }
 
-    char *buf = heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
-    if (!buf) buf = malloc(n);
-    if (!buf) return httpd_resp_send_500(req);
-
-    size_t got = diag_log_snapshot(buf, n);
-    esp_err_t err = httpd_resp_send(req, buf, got);
-    heap_caps_free(buf);
+    webserver_ws_set_paused(false);
     return err;
 }
 
@@ -293,10 +301,15 @@ static esp_err_t adif_get_handler(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=qso.adi");
 
+    // Pause the spectrum stream so this download has the WiFi TX path to itself.
+    webserver_ws_set_paused(true);
+
     FILE *f = fopen(adif_log_file_path(), "r");
     if (!f) {
-        return httpd_resp_sendstr(req,
+        esp_err_t err = httpd_resp_sendstr(req,
             "<ADIF_VER:5>3.1.4 <PROGRAMID:13>QMX-Panadapter <EOH>\n");
+        webserver_ws_set_paused(false);
+        return err;
     }
 
     char buf[1024];
@@ -306,6 +319,7 @@ static esp_err_t adif_get_handler(httpd_req_t *req)
         err = httpd_resp_send_chunk(req, buf, (ssize_t)n);
     fclose(f);
     httpd_resp_send_chunk(req, NULL, 0);
+    webserver_ws_set_paused(false);
     return err;
 }
 
@@ -561,6 +575,12 @@ static void upload_task(void *arg)
     upload_request_t up;
 
     while (xQueueReceive(s_upload_queue, &up, portMAX_DELAY) == pdTRUE) {
+        // Free the CPU + TX path for the outbound TLS connection for the whole
+        // upload. dsp_set_transfer_quiet stops fft_task (pri 4) preempting this
+        // upload task (pri 3) and cascades FT8 to idle; the WS pause yields the
+        // single SDIO->C6 link from the ~10 fps stream. Both resumed in all cases.
+        dsp_set_transfer_quiet(true);
+        webserver_ws_set_paused(true);
         if (up.kind == UPLOAD_QRZ) {
             qrz_upload_result_t result;
             qrz_upload_pending(&result);
@@ -582,6 +602,8 @@ static void upload_task(void *arg)
             s_last_upload.busy = false;
             xSemaphoreGive(s_upload_mutex);
         }
+        webserver_ws_set_paused(false);
+        dsp_set_transfer_quiet(false);
     }
 }
 

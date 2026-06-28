@@ -41,6 +41,18 @@ static httpd_ws_frame_t s_ws_frame;  // static, NOT stack-local
 
 static TaskHandle_t   s_push_task = NULL;
 
+// When a network transfer (QRZ/eQSL upload, ADIF/diag download) is in flight,
+// the push task suspends the ~10 fps spectrum stream so the transfer gets the
+// WiFi TX path to itself. The stream is bandwidth-heavy; sharing the single
+// SDIO->C6 link with an outbound TLS connect stalls both (the connect times
+// out, the WS sends back up with EAGAIN). Paused = behave like idle.
+static volatile bool s_ws_paused = false;
+
+void webserver_ws_set_paused(bool paused)
+{
+    s_ws_paused = paused;
+}
+
 // httpd worker has 1 task, so this URI handler runs in the only worker.
 // We must return ESP_OK quickly so subsequent /api/status requests can be served.
 static esp_err_t ws_uri_handler(httpd_req_t *req)
@@ -106,10 +118,12 @@ static void ws_push_task(void *arg)
     for (;;) {
         vTaskDelayUntil(&last, pdMS_TO_TICKS(WS_PUSH_PERIOD_MS));
 
-        if (!s_session_active || s_server == NULL || s_ws_fd < 0) {
-            // Idle: reset fps counter so we do not log stale stats on reconnect.
+        if (!s_session_active || s_server == NULL || s_ws_fd < 0 || s_ws_paused) {
+            // Idle (or paused for a transfer): reset fps counter so we do not
+            // log stale stats on reconnect, and yield the link to the transfer.
             sent = 0;
             fps_at = xTaskGetTickCount();
+            fail_streak = 0;   // don't carry a pre-pause streak into resume
             continue;
         }
 
