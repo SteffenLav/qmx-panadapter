@@ -41,3 +41,7 @@ void ft8_screen_record_decode(const char *text,
 // number written. Takes mutex internally. Insertion order;
 // caller may sort.
 void ft8_screen_get_all(ft8_call_t *out, int max, int *count_out);
+
+// Clear the entire decode table (on mode/band switch).
+// Takes mutex internally.
+void ft8_screen_clear(void);

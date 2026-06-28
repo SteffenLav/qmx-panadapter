@@ -1214,6 +1214,7 @@ static void apply_freq_preset(uint32_t freq_hz, bool ft4)
     // the breathing red border must track the sub-mode too, not just that
     // checkbox.
     ui_refresh_sim_mode_indicator();
+    ft8_screen_clear();  // flush stale decodes from previous mode/band
     if (s_lbl_mode) {
         lv_label_set_text(s_lbl_mode, ft4 ? "MODE: FT4" : "MODE: FT8");
         lv_obj_set_style_text_color(s_lbl_mode,

@@ -1110,6 +1110,7 @@ static void settings_button_cb(lv_event_t *e);  // Phase 5.10D
 static void pinch_poll_cb(lv_timer_t *t);
 static void update_freq_axis_labels(uint32_t center_hz);
 static uint32_t s_last_qmx_freq_hz = 0;  // updated by ui_update_frequency
+static int      s_last_band_idx = -1;    // track band changes for decode list clearing
 static char s_current_mode[8] = "USB";  // Phase 5.10F: latest CAT mode for snap-aware tuning
 static char s_current_band[8] = "---";  // Phase 9 (v0.9.5): cached band string for web JSON
 static uint32_t s_passband_width_hz = 0;  // Phase 5.10G: 0 = use mode default; else from CAT FW
@@ -2671,16 +2672,23 @@ static void update_freq_axis_labels(uint32_t center_hz);  // Phase 5.10C
 
 void ui_update_frequency(uint32_t freq_hz)
 {
-    // Update per-band session memory.
+    // Update per-band session memory and detect band changes.
     {
         int band_count = 0;
         const cat_band_entry_t *bands = cat_get_band_list(&band_count);
+        int current_band_idx = -1;
         for (int i = 0; i < band_count; i++) {
             if (freq_hz >= bands[i].center_hz - 1500000 &&
                 freq_hz <= bands[i].center_hz + 1500000) {
                 s_band_last_hz[i] = freq_hz;
+                current_band_idx = i;
                 break;
             }
+        }
+        // Band changed: flush decode list (stale signals from different band)
+        if (current_band_idx != s_last_band_idx) {
+            s_last_band_idx = current_band_idx;
+            ft8_screen_clear();
         }
     }
     s_last_qmx_freq_hz = freq_hz;

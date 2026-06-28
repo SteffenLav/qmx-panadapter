@@ -232,3 +232,14 @@ void ft8_screen_get_all(ft8_call_t *out, int max, int *count_out)
     if (s_mutex) xSemaphoreGive(s_mutex);
     if (count_out) *count_out = n;
 }
+
+void ft8_screen_clear(void)
+{
+    if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) {
+        ESP_LOGW(TAG, "clear: mutex timeout");
+        return;
+    }
+    memset(s_table, 0, sizeof(s_table));
+    ESP_LOGI(TAG, "decode list cleared");
+    if (s_mutex) xSemaphoreGive(s_mutex);
+}
