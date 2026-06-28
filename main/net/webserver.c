@@ -22,6 +22,7 @@
 #include "esp_app_desc.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/idf_additions.h"  // xTaskCreateWithCaps / vTaskDeleteWithCaps
 #include "freertos/queue.h"
 #include <string.h>
 #include <time.h>
@@ -606,7 +607,11 @@ esp_err_t webserver_start(void)
         }
     }
     if (!s_upload_task) {
-        if (xTaskCreate(upload_task, "upload", 8192, NULL, 3, &s_upload_task) != pdPASS) {
+        // Allocate the task stack from PSRAM (not the scarce internal DRAM that
+        // SDIO/USB DMA depend on). The upload task only does network/TLS work,
+        // never runs in ISR context, so a PSRAM stack is safe here.
+        if (xTaskCreateWithCaps(upload_task, "upload", 8192, NULL, 3, &s_upload_task,
+                                MALLOC_CAP_SPIRAM) != pdPASS) {
             ESP_LOGE(TAG, "Could not create upload task");
             vQueueDelete(s_upload_queue);
             s_upload_queue = NULL;
@@ -663,7 +668,9 @@ void webserver_stop(void)
     s_server = NULL;
 
     if (s_upload_task) {
-        vTaskDelete(s_upload_task);
+        // Created with xTaskCreateWithCaps -> must free the PSRAM stack with the
+        // matching deleter.
+        vTaskDeleteWithCaps(s_upload_task);
         s_upload_task = NULL;
     }
     if (s_upload_queue) {
