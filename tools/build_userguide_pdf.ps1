@@ -157,8 +157,8 @@ foreach ($c in $chapters) {
         $allSubsections[$c.Id] = $subsections
 
         # Append guide content after the chapter header
-        $insertPattern = "(?m)(^## $([regex]::Escape($numbered))$)"
-        $userGuidePart = [regex]::Replace($userGuidePart, $insertPattern, "`$1`n`n$([regex]::Escape($guideContent))")
+        # Use string replacement instead of regex to avoid escaping issues
+        $userGuidePart = $userGuidePart -replace "(?m)^## $([regex]::Escape($numbered))$", "## $numbered`n`n$guideContent"
     }
 }
 
