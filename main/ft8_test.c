@@ -80,6 +80,23 @@ static const char *TAG = "ft8_test";
 #define SNTP_WAIT_TIMEOUT_MS  30000
 #define CAT_STATUS_UPDATE_MS  5000
 
+// Operating sub-mode (FT8/FT4). Written from the LVGL thread (the preset
+// dropdown's FT4 column), read from the ft8_task slot loop. A single-word
+// store is atomic on RV32, so volatile is sufficient for this advisory flag -
+// no mutex needed. See ft8_op_mode_set/get and the note in ft8_test.h.
+static volatile ft8_op_mode_t s_op_mode = FT8_OP_MODE_FT8;
+
+void ft8_op_mode_set(ft8_op_mode_t m)
+{
+    s_op_mode = m;
+    ESP_LOGI(TAG, "operating sub-mode -> %s", m == FT8_OP_MODE_FT4 ? "FT4" : "FT8");
+}
+
+ft8_op_mode_t ft8_op_mode_get(void)
+{
+    return s_op_mode;
+}
+
 // Max FT8 candidates considered per slot (matches the cands[] buffer in
 // decode_slot) - also the upper bound on each worker's timing-sample array.
 //
@@ -804,6 +821,11 @@ static void ft8_task(void *arg)
         .sample_rate = SR_HZ,
         .time_osr    = 2,
         .freq_osr    = 2,
+        // TODO(FT4 engine): when ft8_op_mode_get() == FT8_OP_MODE_FT4 this must
+        // be FTX_PROTOCOL_FT4, and the slot loop below (SLOT_SAMPLES, the 15 s
+        // UTC boundary, TX cadence, QSO timing) halved to 7.5 s. The op-mode
+        // flag is already wired from the preset dropdown; this is the single
+        // point the pending engine rework branches on.
         .protocol    = FTX_PROTOCOL_FT8,
     };
     s_cap_scratch = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);

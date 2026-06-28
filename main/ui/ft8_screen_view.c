@@ -27,6 +27,7 @@
 #include "ft8_tx.h"
 #include "ft8_qso.h"
 #include "ft8_status.h"
+#include "ft8_test.h"   // ft8_op_mode_set() - FT8/FT4 sub-mode flag
 #include "ft8_tx_modal.h"
 #include "identity_config.h"
 #include "adif/adif_log.h"
@@ -1124,6 +1125,29 @@ static const ft8_band_freq_t FT8_BAND_FREQS[] = {
 };
 #define N_FT8_BAND_FREQS (sizeof(FT8_BAND_FREQS) / sizeof(FT8_BAND_FREQS[0]))
 
+// Conventional FT4 dial frequencies (USB). FT4 shares the QMX's USB/DiGi data
+// mode with FT8 (only the slot timing/protocol differ), so picking one of
+// these sets the dial + flips the Tab5 to FT4 but sends NO CAT mode change.
+// 160 m and 60 m have no standard FT4 frequency and are omitted. Note 40 m is
+// 7047.5 kHz - the value is exact; only the "MHz.kkk" preset label rounds it.
+static const ft8_band_freq_t FT4_BAND_FREQS[] = {
+    { "80",  3575000  },
+    { "40",  7047500  },
+    { "30",  10140000 },
+    { "20",  14080000 },
+    { "17",  18104000 },
+    { "15",  21140000 },
+    { "12",  24919000 },
+    { "10",  28180000 },
+    { "6",   50318000 },
+};
+#define N_FT4_BAND_FREQS (sizeof(FT4_BAND_FREQS) / sizeof(FT4_BAND_FREQS[0]))
+
+// Cyan accent used for everything FT4: the dropdown's FT4 column header and the
+// "MODE: FT4" label, so the two can never drift apart. FT8 keeps the gold
+// UI_COLOR_ACCENT_GOLD.
+#define FT4_ACCENT_HEX 0x00B4FF
+
 static lv_obj_t *s_ft8_freq_popup = NULL;
 
 static void ft8_freq_popup_close(void)
@@ -1131,24 +1155,47 @@ static void ft8_freq_popup_close(void)
     if (s_ft8_freq_popup) { lv_obj_delete(s_ft8_freq_popup); s_ft8_freq_popup = NULL; }
 }
 
-static void ft8_freq_preset_cb(lv_event_t *e)
+// Apply a tapped preset: retune the radio, set the FT8/FT4 sub-mode, and
+// update the two on-screen labels. FT4 and FT8 use the SAME radio data mode
+// (USB/DiGi), so this never sends a CAT mode change - only the Tab5-side
+// op-mode flag and the "MODE:" label move. (The 7.5 s FT4 slot engine is a
+// pending follow-up; for now FT4 retunes + relabels but still decodes/TXes on
+// FT8 timing - see ft8_op_mode_set() and the TODO in ft8_test.c.)
+static void apply_freq_preset(uint32_t freq_hz, bool ft4)
 {
-    uint32_t freq_hz = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
     ft8_freq_popup_close();
     // Force bypasses the 200 ms rate-limiter so a deliberate preset tap always
     // goes through even if the sticky-settings restore just fired a freq write.
-    if (cat_set_frequency_forced(freq_hz) == ESP_OK) {
-        // Optimistically update both labels without waiting for the FA poll.
-        ui_update_frequency(freq_hz);           // top-bar "Freq:" label
-        if (s_btn_freq) {
-            char b[40];
-            snprintf(b, sizeof(b), "Preset: %lu.%03lu MHz",
-                     (unsigned long)(freq_hz / 1000000),
-                     (unsigned long)((freq_hz / 1000) % 1000));
-            lv_obj_t *lbl = lv_obj_get_child(s_btn_freq, 0);
-            if (lbl) lv_label_set_text(lbl, b);
-        }
+    if (cat_set_frequency_forced(freq_hz) != ESP_OK) return;
+
+    ft8_op_mode_set(ft4 ? FT8_OP_MODE_FT4 : FT8_OP_MODE_FT8);
+    if (s_lbl_mode) {
+        lv_label_set_text(s_lbl_mode, ft4 ? "MODE: FT4" : "MODE: FT8");
+        lv_obj_set_style_text_color(s_lbl_mode,
+                                    ft4 ? lv_color_hex(FT4_ACCENT_HEX)
+                                        : lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
     }
+
+    // Optimistically update both labels without waiting for the FA poll.
+    ui_update_frequency(freq_hz);               // top-bar "Freq:" label
+    if (s_btn_freq) {
+        char b[40];
+        snprintf(b, sizeof(b), "Preset: %lu.%03lu MHz",
+                 (unsigned long)(freq_hz / 1000000),
+                 (unsigned long)((freq_hz / 1000) % 1000));
+        lv_obj_t *lbl = lv_obj_get_child(s_btn_freq, 0);
+        if (lbl) lv_label_set_text(lbl, b);
+    }
+}
+
+static void ft8_freq_preset_cb(lv_event_t *e)
+{
+    apply_freq_preset((uint32_t)(uintptr_t)lv_event_get_user_data(e), false);
+}
+
+static void ft4_freq_preset_cb(lv_event_t *e)
+{
+    apply_freq_preset((uint32_t)(uintptr_t)lv_event_get_user_data(e), true);
 }
 
 static void ft8_freq_overlay_cb(lv_event_t *e)
@@ -1159,45 +1206,33 @@ static void ft8_freq_overlay_cb(lv_event_t *e)
 
 static void ft8_freq_label_clicked_cb(lv_event_t *e);
 
-static void ft8_freq_popup_open(void)
+// Build one preset column (FT8 or FT4) into the overlay `ov` at screen x
+// `panel_x`, top-aligned at `top_y`. Renders only the bands that appear in the
+// live CAT band list AND have a known dial frequency in `table`, sizing the
+// panel to fit them without scrolling. `row_cb` (ft8_/ft4_freq_preset_cb) is
+// invoked with the chosen dial frequency on tap. Returns the panel height, or
+// 0 if no rows matched (nothing drawn).
+static int build_preset_column(lv_obj_t *ov, int panel_x, int top_y,
+                               const char *header_txt, uint32_t header_bg,
+                               const ft8_band_freq_t *table, size_t table_n,
+                               const cat_band_entry_t *bands, int band_count,
+                               uint32_t cur_hz, lv_event_cb_t row_cb,
+                               bool is_ft4_col)
 {
-    if (s_ft8_freq_popup) { ft8_freq_popup_close(); return; }
-
-    int band_count = 0;
-    const cat_band_entry_t *bands = cat_get_band_list(&band_count);
-    if (band_count == 0) {
-        ESP_LOGW(TAG, "FT8 freq dropdown: no bands available (band_count=0)");
-        return;
-    }
-
-    // band_count (from CAT) includes bands with no known FT8 dial frequency,
-    // which get skipped (the `continue` below) and never render a row - so
-    // sizing the panel off band_count directly overshoots the real row
-    // count and forces a scroll that isn't actually needed. Pre-count the
-    // rows that will actually be drawn so the panel can be sized exactly,
-    // fitting all of them without scrolling, then centered vertically.
+    // A row is "selected" only in the column matching the current sub-mode -
+    // so the gold highlight appears once across both columns, on the band the
+    // radio is actually on in the active mode.
+    bool col_is_active_mode = (is_ft4_col == (ft8_op_mode_get() == FT8_OP_MODE_FT4));
+    // Pre-count the rows that will actually be drawn (CAT reports bands we have
+    // no dial freq for; those are skipped) so the panel is sized exactly and
+    // doesn't force a needless scroll.
     int visible_count = 0;
     for (int i = 0; i < band_count; i++) {
-        for (size_t j = 0; j < N_FT8_BAND_FREQS; j++) {
-            if (strcmp(bands[i].name, FT8_BAND_FREQS[j].band) == 0) {
-                visible_count++;
-                break;
-            }
+        for (size_t j = 0; j < table_n; j++) {
+            if (strcmp(bands[i].name, table[j].band) == 0) { visible_count++; break; }
         }
     }
-    if (visible_count == 0) {
-        ESP_LOGW(TAG, "FT8 freq dropdown: no bands with known FT8 freq");
-        return;
-    }
-
-    lv_obj_t *ov = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(ov, LV_HOR_RES, LV_VER_RES);
-    lv_obj_set_pos(ov, 0, 0);
-    lv_obj_set_style_bg_opa(ov, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(ov, 0, 0);
-    lv_obj_clear_flag(ov, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(ov, ft8_freq_overlay_cb, LV_EVENT_CLICKED, NULL);
-    s_ft8_freq_popup = ov;
+    if (visible_count == 0) return 0;
 
     int panel_w = 240;
     int header_h = 40;
@@ -1206,14 +1241,12 @@ static void ft8_freq_popup_open(void)
     if (btn_h > 64) btn_h = 64;  // don't grow absurdly tall for very few rows
     if (btn_h < 40) btn_h = 40;  // floor for a usable touch target
     int panel_h = visible_count * btn_h + header_h;
-    int panel_x = LEFT_W;
     bool needs_scroll = panel_h > avail_h;  // safety net only, shouldn't trigger normally
     if (needs_scroll) panel_h = avail_h;
-    int panel_y = MID_Y + (MID_H - panel_h) / 2;
 
     lv_obj_t *panel = lv_obj_create(ov);
     lv_obj_set_size(panel, panel_w, panel_h);
-    lv_obj_set_pos(panel, panel_x, panel_y);
+    lv_obj_set_pos(panel, panel_x, top_y);
     lv_obj_set_style_bg_color(panel, lv_color_hex(UI_COLOR_SURFACE), 0);
     lv_obj_set_style_border_color(panel, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_set_style_border_width(panel, 1, 0);
@@ -1228,12 +1261,12 @@ static void ft8_freq_popup_open(void)
 
     lv_obj_t *header = lv_obj_create(panel);
     lv_obj_set_size(header, panel_w, header_h);
-    lv_obj_set_style_bg_color(header, lv_color_hex(0xFFDD00), 0);
+    lv_obj_set_style_bg_color(header, lv_color_hex(header_bg), 0);
     lv_obj_set_style_border_width(header, 0, 0);
     lv_obj_set_style_pad_all(header, 4, 0);
 
     lv_obj_t *header_lbl = lv_label_create(header);
-    lv_label_set_text(header_lbl, "FT8");
+    lv_label_set_text(header_lbl, header_txt);
     lv_obj_set_style_text_font(header_lbl, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(header_lbl, lv_color_hex(0x000000), 0);
     lv_obj_center(header_lbl);
@@ -1245,19 +1278,19 @@ static void ft8_freq_popup_open(void)
         lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
     }
 
-    uint32_t cur_hz = cat_get_frequency();
     for (int i = 0; i < band_count; i++) {
-        // Find the FT8 dial frequency for this band, if we know one.
-        uint32_t ft8_hz = 0;
-        for (size_t j = 0; j < N_FT8_BAND_FREQS; j++) {
-            if (strcmp(bands[i].name, FT8_BAND_FREQS[j].band) == 0) {
-                ft8_hz = FT8_BAND_FREQS[j].freq_hz;
+        // Find the dial frequency for this band in this column's table.
+        uint32_t dial_hz = 0;
+        for (size_t j = 0; j < table_n; j++) {
+            if (strcmp(bands[i].name, table[j].band) == 0) {
+                dial_hz = table[j].freq_hz;
                 break;
             }
         }
-        if (ft8_hz == 0) continue;  // no known FT8 freq for this band
+        if (dial_hz == 0) continue;  // band not in this column's table
 
-        bool active = (cur_hz >= bands[i].center_hz - 1000000 &&
+        bool active = col_is_active_mode &&
+                      (cur_hz >= bands[i].center_hz - 1000000 &&
                        cur_hz <= bands[i].center_hz + 1000000);
         lv_obj_t *btn = lv_obj_create(panel);
         lv_obj_set_size(btn, panel_w, btn_h);
@@ -1270,19 +1303,60 @@ static void ft8_freq_popup_open(void)
         lv_obj_set_style_pad_all(btn, 0, 0);
         lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(btn, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(btn, ft8_freq_preset_cb, LV_EVENT_CLICKED,
-                            (void *)(uintptr_t)ft8_hz);
+        lv_obj_add_event_cb(btn, row_cb, LV_EVENT_CLICKED,
+                            (void *)(uintptr_t)dial_hz);
 
         char bstr[24];
         snprintf(bstr, sizeof(bstr), "%sm  %lu.%03lu",
                  bands[i].name,
-                 (unsigned long)(ft8_hz / 1000000),
-                 (unsigned long)((ft8_hz / 1000) % 1000));
+                 (unsigned long)(dial_hz / 1000000),
+                 (unsigned long)((dial_hz / 1000) % 1000));
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, bstr);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(lbl, active ? lv_color_hex(UI_COLOR_ACCENT_GOLD) : lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
         lv_obj_center(lbl);
+    }
+    return panel_h;
+}
+
+static void ft8_freq_popup_open(void)
+{
+    if (s_ft8_freq_popup) { ft8_freq_popup_close(); return; }
+
+    int band_count = 0;
+    const cat_band_entry_t *bands = cat_get_band_list(&band_count);
+    if (band_count == 0) {
+        ESP_LOGW(TAG, "FT8 freq dropdown: no bands available (band_count=0)");
+        return;
+    }
+
+    lv_obj_t *ov = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(ov, LV_HOR_RES, LV_VER_RES);
+    lv_obj_set_pos(ov, 0, 0);
+    lv_obj_set_style_bg_opa(ov, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(ov, 0, 0);
+    lv_obj_clear_flag(ov, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(ov, ft8_freq_overlay_cb, LV_EVENT_CLICKED, NULL);
+    s_ft8_freq_popup = ov;
+
+    uint32_t cur_hz = cat_get_frequency();
+    const int top_y  = MID_Y + 8;          // both columns top-aligned
+    const int col_w  = 240;
+    const int col_gap = 20;
+
+    // FT8 column (gold header) at the left, FT4 column (cyan header) to its
+    // right. FT4 = same radio data mode, different slot timing (engine pending).
+    int h_ft8 = build_preset_column(ov, LEFT_W, top_y, "FT8", 0xFFDD00,
+                                    FT8_BAND_FREQS, N_FT8_BAND_FREQS,
+                                    bands, band_count, cur_hz, ft8_freq_preset_cb, false);
+    int h_ft4 = build_preset_column(ov, LEFT_W + col_w + col_gap, top_y, "FT4", FT4_ACCENT_HEX,
+                                    FT4_BAND_FREQS, N_FT4_BAND_FREQS,
+                                    bands, band_count, cur_hz, ft4_freq_preset_cb, true);
+
+    if (h_ft8 == 0 && h_ft4 == 0) {
+        ESP_LOGW(TAG, "FT8 freq dropdown: no bands with a known FT8/FT4 freq");
+        ft8_freq_popup_close();
     }
 }
 
@@ -1321,8 +1395,13 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_clear_flag(s_left_pane, LV_OBJ_FLAG_SCROLLABLE);
 
     s_lbl_mode = lv_label_create(s_left_pane);
-    lv_label_set_text(s_lbl_mode, "MODE: FT8");
-    lv_obj_set_style_text_color(s_lbl_mode, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+    // Reflect the current FT8/FT4 sub-mode flag (not always FT8) so the label
+    // stays truthful if the screen is rebuilt while FT4 is selected.
+    bool init_ft4 = (ft8_op_mode_get() == FT8_OP_MODE_FT4);
+    lv_label_set_text(s_lbl_mode, init_ft4 ? "MODE: FT4" : "MODE: FT8");
+    lv_obj_set_style_text_color(s_lbl_mode,
+                                init_ft4 ? lv_color_hex(FT4_ACCENT_HEX)
+                                         : lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
     lv_obj_set_style_text_font(s_lbl_mode, &lv_font_montserrat_48, 0);
     lv_obj_set_pos(s_lbl_mode, 0, 0);
 

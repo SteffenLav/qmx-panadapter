@@ -59,6 +59,27 @@ bool ft8_get_last_timing_ms(int *out_ms);
 // SS box) without needing a callback/notification mechanism.
 uint32_t ft8_get_timing_seq(void);
 
+// ---- Operating sub-mode (FT8 vs FT4) ------------------------------------
+// FT4 and FT8 share the QMX's USB/DiGi data mode and the same ft8_lib
+// primitives - they differ only in slot length (15 s vs 7.5 s), symbol rate,
+// and the monitor's protocol setting. This runtime flag is set from the FT8
+// screen's preset dropdown (the FT4-headed column) and is the hook the slot
+// engine reads.
+//
+// NOTE: the 7.5 s slot rework is NOT done yet. Selecting FT4 currently sets the
+// dial frequency + on-screen MODE label and stores this flag, but the
+// capture/decode/TX loop in ft8_test.c still runs FT8 timing - so FT4 signals
+// will not decode/transmit correctly until that follow-up lands. Wiring the
+// flag now is deliberate: it gives the engine work a single, already-plumbed
+// point to branch on. See the TODO at the monitor_config in ft8_task().
+typedef enum {
+    FT8_OP_MODE_FT8 = 0,
+    FT8_OP_MODE_FT4 = 1,
+} ft8_op_mode_t;
+
+void          ft8_op_mode_set(ft8_op_mode_t m);
+ft8_op_mode_t ft8_op_mode_get(void);
+
 #ifdef __cplusplus
 }
 #endif
