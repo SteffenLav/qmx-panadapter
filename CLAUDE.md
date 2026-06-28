@@ -233,7 +233,7 @@ Do not call `AI1;` on the QMX CAT port — it partially executes (enables auto-i
 
 `FT8_TX_SEND_LIVE = 1` in `ft8_tx.c` — this is live TX; the radio keys up for real.
 
-- **CAT burst sequence**: `TX;` → 79× `TA<freq>;` at 160 ms cadence (absolute `esp_timer_get_time()` targets, no drift) → `TA0;` → 5 ms settle → `RX;`. Always runs the tail even on abort or error.
+- **CAT burst sequence**: `TX;` → 79× `TA<freq>;` at 160 ms cadence (absolute `esp_timer_get_time()` targets, no drift) → `TA0;` → 5 ms settle → `RX;`. Always runs the tail even on abort or error. **FT4 uses 105× `TA<freq>;` at 48 ms cadence** (6.25 Hz tone spacing × symbol period), burst ~5 s on-air vs ~12.7 s FT8. CAT cadence verified on real QMX hardware (v0.19.0): all commands sent cleanly with no timeouts or dropped tones.
 - **Tone spacing**: 6.25 Hz per FT8 tone index (0–7). `freq = base_hz + tone * 6.25f`.
 - **Slot parity**: `((unix_sec / 15) % 2) == 0` → EVEN. Reply fires on the opposite parity from the heard slot. CQ fires on any slot unless `use_parity=true` + `want_even_slot` set.
 - **`cat_poll_set_paused(true/false)`** in `cat.c` — cooperative flag; TX burst holds this for its entire duration so the poll task doesn't interleave commands. Do **not** use `vTaskSuspend` — that can deadlock the CDC-ACM driver mutex.

@@ -18,6 +18,22 @@ Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapte
 
 ---
 
+## Features
+
+**Dual FT8/FT4 modes** — Full-featured digital mode station with both **FT8** (15-second slots, 79 symbols @ 160 ms cadence) and **FT4** (7.5-second slots, 105 symbols @ 48 ms cadence) onboard. RX decoding for both modes runs continuously; TX lets you reply to stations or call CQ. Both modes support auto-QSO workflows, ADIF logging, and the same panadapter view.
+
+**Real-time panadapter** — Spectrum and waterfall with tap-to-tune, pinch-zoom, and touch-drag one-finger navigation. 30 Hz refresh, 12 kHz IF offset compensation, flat-spectrum mode, adaptive waterfall floor, FFT window selection, and S-meter. Screenshot and spectrum export to web browser.
+
+**QMX CAT control** — Live frequency readout, mode switching (USB/LSB/CW/DiGi), SSB filter bandwidth control, passband indicator, and TX power/SWR readout. Round-trip CAT latency <50 ms. Band presets and per-band frequency recall.
+
+**ADIF logging** — Every QSO logs to onboard storage with QSO timestamp, callsign, frequency, mode, signal report, grid, and distance. Export to web UI or QRZ Logbook / eQSL for cloud backup.
+
+**Web UI** — Browser panadapter, remote control (tune, mode, bandwidth), QSO log viewer, config export/import, and diagnostic log download — all without leaving the radio room.
+
+**Offline capable** — WiFi optional. For POTA/SOTA use cases: Tab5 RTC keeps time across power-off, FT8/FT4 timing stays locked via internal oscillator + periodic QMX sync (no GPS required).
+
+---
+
 ## Contents
 
 - [Quick Guide](#quick-guide) — get on air in 10 minutes
@@ -94,6 +110,19 @@ Slim "breathing" grip handles on each edge show where to swipe — faint enough 
 The top bar reads **Band · Mode · BW · Freq · Signal · Zoom** left to right. Tap any item to open a selector — **Freq** opens the frequency keypad; **Mode** switches USB/LSB/CW/DiGi; **BW** selects SSB filter width (USB/LSB only); **Band** jumps to a configured band; **Zoom** selects a zoom preset.
 
 See the [full gesture table](#gestures) in the Reference section.
+
+### Step 3b — Choose FT8 or FT4 mode
+
+FT8 is available on all HF bands; FT4 is available on select bands with published frequencies (20 m, 30 m, 40 m, etc.). To switch between them:
+
+1. **In Panadapter mode:** Tap the **Mode** selector in the top bar, then choose **DiGi** (the digital mode group).
+2. **In FT8 screen:** Tap the **Preset** frequency button to open the band/mode picker — you'll see **two columns**: FT8 (gold header) on the left, FT4 (cyan header) on the right. Tap any frequency in the FT4 column to switch modes.
+
+The decode list, TX controls, and slot timing (countdown bar, which-parity-next) all adapt automatically to the active mode. Switching modes clears stale decodes from the previous mode so you don't work old QSOs.
+
+**When to use each mode:**
+- **FT8** — Most populated band in SOTA/POTA; longer decode window gives more time to prepare replies on slow links or weak signals.
+- **FT4** — Faster QSO cycle for busy bands (Field Day, major contests, 20 m pile-ups) and operators who prefer shorter waits between exchanges.
 
 ### Step 4 — Fill in your settings
 

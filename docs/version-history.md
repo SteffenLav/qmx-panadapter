@@ -537,6 +537,12 @@ Also new: the per-slot robust FT8 timing average (previously only applied via a 
 
 **Flasher safety re-verified, not re-touched.** Given this session's Field Day urgency involved a lot of rapid iterate-build-flash-test cycles, explicitly re-checked `flash.bat`/`flash.command` against the v0.18.7 fix (write the full-chip `merge_bin` image at `0x0`, not `0x10000` — see [[project_merged_bin_offset_bug]]): both scripts are unchanged and still correct, with the explanatory comment intact. No flasher changes shipped this release; the merged binary/flasher zip for this version were deliberately **not** built or published as part of this wrap-up — held until manual on-device flash verification, per the operator's explicit request given the flasher's prior bricking history.
 
+### Shipped in v0.19.0 — 2026-06-28 UTC
+
+**FT4 TX: safety gate lifted.** FT4 RX was fully implemented and tested since v0.18.x (decoding at 0-3 stations per slot, 140-candidate pool, sub-millisecond latency on mode switch via buffer clear). TX was gated behind an unverified CAT cadence concern (48 ms per symbol vs FT8's 160 ms). Three consecutive FT4 CQ bursts fired on real QMX hardware with all ~105 TA commands sent cleanly at 48 ms intervals (~5 s on-air each), zero dropped commands, zero timeouts. Power/SWR readings normal (5.8W @ 1.28, 5.7W @ 1.28, 0W @ 1.00 — power varies within a burst). Safety gate removed from `ft8_tx.c` (`ft8_tx_arm()` and `ft8_tx_run()`); log message updated to reflect FT4 is now live. FT4 now operates identically to FT8 at the app level — only protocol-aware timing differs (7.5 s slots, 6.25 Hz tone spacing, 105 symbols @ 48 ms each).
+
+**Buffer clear on mode/band switches.** When switching between FT8 and FT4 modes, or tuning to a different band within the same mode, the decode list now flushes stale decode entries. Prevents working old signals from a previous band/protocol context. New `ft8_screen_clear()` function (mutex-protected), called from `apply_freq_preset()` on mode switch and from `ui_update_frequency()` on band change (tracked via `s_last_band_idx`). Tested on hardware: builds clean, mode/band switches flush the list cleanly.
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
