@@ -76,7 +76,7 @@ If still flat after 10 seconds, proceed to [Collecting Diagnostics](#collecting-
 **Causes:**
 
 1. QMX firmware doesn't support Kenwood `TX;` command (v1.03.002+ only)
-2. CAT connection is dead (see [QMX loses CAT connection](#qmx-loses-cat-connection-after-1–2-minutes) above)
+2. CAT connection is dead (see [QMX loses CAT connection](#qmx-loses-cat-connection-after-12-minutes) above)
 3. Tab5 is in simulation mode (deliberate safety feature)
 4. QMX is stuck in a menu (rare)
 
@@ -167,7 +167,7 @@ If you're stuck, capture a **diagnostic log**:
 1. Settings → Diagnostic log → **on**
 2. Reproduce the issue (let it sit for 30 seconds)
 3. Settings → scroll down → **Download Diagnostic Log**
-4. Post the `.txt` file on [GitHub Issues](https://github.com/SteffenLav/qmx-panadapter/issues)
+4. Post the `.txt` file on [GitHub Issues](https://github.com/SteffenLav/qmx-panadapter/issues) or the [QRPLabs Groups.io thread](https://groups.io/g/QRPLabs/topic/119565643)
 
 ### From Serial Console (Offline)
 
@@ -176,7 +176,7 @@ If WiFi isn't working:
 1. Plug Tab5 into your computer with a **USB-C data cable**
 2. Run: `tools/capture_serial_log.ps1` (Windows) or equivalent
 3. Let it capture for 30 seconds while you reproduce the issue
-4. Post the log file on GitHub
+4. Post the log file on [GitHub Issues](https://github.com/SteffenLav/qmx-panadapter/issues) or the [QRPLabs Groups.io thread](https://groups.io/g/QRPLabs/topic/119565643)
 
 The log includes your firmware version, QMX firmware, callsign, grid, hardware revision, and all serial output from the system.
 
@@ -185,7 +185,7 @@ The log includes your firmware version, QMX firmware, callsign, grid, hardware r
 1. **Check the [Quick Start](../quick-start.md)** — most issues are covered there
 2. **Read [Settings](../guide/settings.md)** — verify your configuration
 3. **Enable Diagnostic log** — the log often reveals the root cause
-4. **Post on [GitHub Issues](https://github.com/SteffenLav/qmx-panadapter/issues)** — include:
+4. **Post on [GitHub Issues](https://github.com/SteffenLav/qmx-panadapter/issues) or the [QRPLabs Groups.io thread](https://groups.io/g/QRPLabs/topic/119565643)** — include:
    - Your symptoms (what you saw, what you expected)
    - Your hardware (Tab5 model, QMX/QMX+, antenna)
    - Your firmware versions (read from the About screen)

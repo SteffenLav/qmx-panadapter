@@ -53,7 +53,7 @@ The QMX menu-manager controls SSB filter via:
 - **`MMSSB|Bandwidth=<hz>;`** — apply live filter
 - Both must be set to the same value for a clean change
 
-See [CLAUDE.md](../../CLAUDE.md#ssb-filter-bandwidth-needs-three-coordinated-writes-the-hard-won-recipe) for the full recipe.
+See [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md#ssb-filter-bandwidth-needs-three-coordinated-writes-the-hard-won-recipe) for the full recipe.
 
 ## Cables
 

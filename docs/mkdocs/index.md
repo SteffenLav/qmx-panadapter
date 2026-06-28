@@ -20,18 +20,18 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 ## Status
 
-**v0.18.8 — Stable for all features except FT8 transmit, which is functional but un-soaked for multi-hour sessions.**
+**v0.19.0 — Stable for all features except FT8/FT4 transmit, which is functional but un-soaked for multi-hour sessions.**
 
 - All panadapter features (spectrum, waterfall, zoom, memory, web UI) are production-ready
-- FT8 receive and ADIF logging are stable
-- FT8 transmit works but lacks multi-hour soak testing and duty-cycle protection
+- FT8 and FT4 receive, plus ADIF logging, are stable
+- FT8 and FT4 transmit work but lack multi-hour soak testing and duty-cycle protection (FT4 TX is new in v0.19.0)
 - See [Version History](releases.md) for all changes
 
 ## Get Started
 
 **New user?** Start with the [Quick Start](quick-start.md) guide — 10 minutes to on-air.
 
-**Want the whole guide at once?** Download the [User Guide PDF](../QMX-Panadapter-UserGuide-v0.18.8.pdf) — a printable 40-page reference.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v0.19.0.pdf) — a printable 40-page reference.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

@@ -72,7 +72,7 @@ This is **optional** and most useful when:
 
 **⚠️ FT8 mode only** — not yet available in FT4 mode.
 
-### Fine-Tune Time with "Sync Time" (FT8 Only)
+#### Fine-Tune Time with "Sync Time" (FT8 Only)
 
 In **FT8 mode**, the Filter modal includes a **"Sync Time" button** that opens an interactive time-setting panel:
 
@@ -132,4 +132,4 @@ This alignment is **automatic** — you don't configure slots. But **time accura
 
 ---
 
-**Next:** Configure [Settings](settings.md) or troubleshoot [Time Sync Problems](../reference/troubleshooting.md#time-sync).
+**Next:** Configure [Settings](settings.md) or troubleshoot [Time Sync Problems](../reference/troubleshooting.md#time-is-wrong-ft8-doesnt-work).

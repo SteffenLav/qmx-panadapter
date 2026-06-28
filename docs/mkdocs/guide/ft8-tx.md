@@ -43,7 +43,7 @@ Your **settings and decode list are sticky** — when you switch back to FT8 or 
 
 ### 3. Important Notes
 
-**FT8 transmit is functional but not yet soaked for multi-hour sessions.** Known gaps:
+**FT8 and FT4 transmit are functional but not yet soaked for multi-hour sessions.** Known gaps:
 
 - No duty-cycle protection (you could transmit continuously if filters match poorly)
 - No audio loopback verification (can't confirm modulation before keying)
@@ -265,4 +265,4 @@ Logs are batched — each session records which QSOs have been uploaded, so re-r
 
 ---
 
-**Next:** Learn about [ADIF Logging](../reference/adif.md) or [Web UI](web-ui.md).
+**Next:** Set up [Time Sync](time-sync.md) for accurate FT8 timing, or explore the [Web UI](web-ui.md).

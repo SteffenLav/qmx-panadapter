@@ -16,7 +16,7 @@ Power the QMX on standalone and check the firmware version displayed on its scre
 
 ## Step 2: Flash the Tab5
 
-Download the latest flasher from the [Releases page](../../../releases):
+Download the latest flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases):
 
 === "Windows"
 
@@ -101,7 +101,7 @@ Swipe → from the left edge to switch to **FT8 view**. You'll see:
 - **Call CQ** button — transmit a CQ (requires QMX to be on the air)
 - **Reply** rows — tap a station to reply to their CQ
 
-⚠️ **FT8 transmit is beta** — functional but not yet soaked for multi-hour sessions. Use a dummy load for your first tests.
+⚠️ **FT8/FT4 transmit is beta** — functional but not yet soaked for multi-hour sessions (FT4 TX is new in v0.19.0). Use a dummy load for your first tests.
 
 ## Step 9: WiFi & Web UI (Optional)
 
@@ -128,7 +128,7 @@ If you set up WiFi:
 - See [Troubleshooting](reference/troubleshooting.md) for more
 
 **Still stuck?**
-- Enable the **Diagnostic log** in the settings drawer, then post your issue on [GitHub](https://github.com/SteffenLav/qmx-panadapter/issues)
+- Enable the **Diagnostic log** in the settings drawer, then report it on [GitHub Issues](https://github.com/SteffenLav/qmx-panadapter/issues) or the [QRPLabs Groups.io thread](https://groups.io/g/QRPLabs/topic/119565643)
 - Download the log via the web UI and include it with your report
 
 ---

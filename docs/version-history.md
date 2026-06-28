@@ -543,6 +543,17 @@ Also new: the per-slot robust FT8 timing average (previously only applied via a 
 
 **Buffer clear on mode/band switches.** When switching between FT8 and FT4 modes, or tuning to a different band within the same mode, the decode list now flushes stale decode entries. Prevents working old signals from a previous band/protocol context. New `ft8_screen_clear()` function (mutex-protected), called from `apply_freq_preset()` on mode switch and from `ui_update_frequency()` on band change (tracked via `s_last_band_idx`). Tested on hardware: builds clean, mode/band switches flush the list cleanly.
 
+### Shipped in v0.19.1 — 2026-06-28 UTC
+
+**New project homepage: [tab5.lav.dk](https://tab5.lav.dk).** There is now a dedicated website for the QMX Panadapter. It carries the full user guide, a quick-start, the hardware and troubleshooting reference, and a releases page — all as ordinary web pages you can read in a browser. If you'd rather not navigate a code-hosting site, this is the friendlier way in: open [tab5.lav.dk](https://tab5.lav.dk), read the guide, and follow the links to the download you need. GitHub remains the home of the source code and the actual release files (firmware and the one-click flasher); the website simply presents the same documentation in a more approachable form and points you to those downloads. Nothing about how you install or update the firmware changes — the site is purely a more comfortable front door.
+
+**WiFi/upload robustness under full load.** Uploading a logbook (QRZ or eQSL) from the web UI while the panadapter was actively receiving FT8 could previously reboot the device or drop its WiFi. Two independent causes were found and fixed:
+
+- **Reboot under load.** The WiFi stack's internal transmit buffers were drawn from a small pool of fast on-chip memory that the audio, FFT and display also depend on. Under a busy moment that pool could run dry and the device would reset. The fix moves the WiFi transmit buffers and the 64 KB audio capture ring into the large external PSRAM, leaving the on-chip memory free for the real-time signal path. Verified with 2.6 hours of continuous FT8 + web use, no resets.
+- **Upload stalling.** Even without a reset, the secure (HTTPS) connection to QRZ/eQSL could time out while FT8 decoding kept the processor busy. During an upload or a log/diagnostic download the panadapter now briefly steps the FFT/FT8 work aside so the transfer can complete, then resumes automatically. In practice one FT8 cycle is skipped during the transfer and recovers on its own. This is a deliberate, light-touch trade so that routine file handling works without having to stop anything by hand.
+
+Also adds a small always-on memory monitor to the diagnostic log for future field troubleshooting. No user-facing UI changes; settings, memories and logs are all preserved across the update.
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*

@@ -4,18 +4,16 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v0.18.8** — 2026-06-27
+**v0.19.1** — 2026-06-28
 
-- ARRL Field Day FT8 exchange mode (class + section in message, special TX sequence, ADIF logging)
-- FT8 simulation mode (practice QSOs with phantom stations, no radio keyed)
-- FT8 decode yield investigation closed (found and fixed 3 separate CPU contention issues)
-- Full writeup in [Version History Document](../docs/version-history.md)
+- New project homepage at [tab5.lav.dk](https://tab5.lav.dk) — the user guide and reference as plain web pages
+- Logbook uploads (QRZ / eQSL) and log downloads now work reliably while FT8 is running — no more reboots or dropped WiFi during a transfer
+- Full writeup in [Version History Document](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/version-history.md)
 
-### Installing v0.18.8
+### Installing v0.19.1
 
-1. Download `qmx_panadapter_merged_v0.18.8.bin` from [Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-2. Use the one-click flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases)
-3. Or follow [Build from Source](build/build.md)
+1. Use the one-click flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases)
+2. Or follow [Build from Source](build/build.md)
 
 ### Upgrading from Earlier Versions
 
@@ -26,6 +24,17 @@ Your settings (callsign, grid, WiFi, memory channels) are preserved during a nor
 3. Re-enter your settings on first boot
 
 ## Previous Releases
+
+### v0.19.0
+
+- FT4 transmit and receive (7.5-second slots, 105 symbols, 48 ms cadence) — CAT cadence verified on real QMX hardware
+- Per-mode sticky frequency/bandwidth/filter recall between FT8 and FT4
+
+### v0.18.8
+
+- ARRL Field Day FT8 exchange mode (class + section in message, special TX sequence, ADIF logging)
+- FT8 simulation mode (practice QSOs with phantom stations, no radio keyed)
+- FT8 decode yield investigation closed (found and fixed 3 separate CPU contention issues)
 
 ### v0.18.7
 
@@ -84,7 +93,7 @@ Your settings (callsign, grid, WiFi, memory channels) are preserved during a nor
 
 ### v0.15.x and Earlier
 
-See [Full Version History](../docs/version-history.md) in the docs folder for detailed notes on all earlier releases.
+See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/version-history.md) for detailed notes on all earlier releases.
 
 ## Roadmap
 
@@ -112,9 +121,9 @@ Pending:
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](../QMX-Panadapter-UserGuide-v0.18.8.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v0.19.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
-- **Technical Details:** [CLAUDE.md](../CLAUDE.md)
+- **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 
 ---
 

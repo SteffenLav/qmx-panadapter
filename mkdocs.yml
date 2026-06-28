@@ -32,10 +32,11 @@ nav:
     - Hardware: reference/hardware.md
     - Web API: reference/web-api.md
     - Troubleshooting: reference/troubleshooting.md
+    - Glossary: reference/glossary.md
   - For Builders:
     - Build from Source: build/build.md
     - Architecture: build/architecture.md
-    - Contributing: build/contributing.md
+    - Contributing & Feedback: build/contributing.md
   - Releases: releases.md
 
 plugins:

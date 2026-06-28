@@ -25,7 +25,7 @@ The panadapter is your primary view — a real-time spectrum analyser and waterf
 
 ### 2. Touch Controls
 
-### Tap to Tune
+#### Tap to Tune
 
 Tap anywhere on the spectrum or waterfall to jump to that frequency. The panadapter snaps to a frequency grid (resolution depends on zoom level) for easy tuning.
 
@@ -34,15 +34,15 @@ Tap anywhere on the spectrum or waterfall to jump to that frequency. The panadap
 - **Zoom 4.0x** — 2.5 kHz snap
 - **Zoom 8.0x** — 1 kHz snap
 
-### Pinch to Zoom
+#### Pinch to Zoom
 
 Use two fingers to pinch in (zoom out) or pinch out (zoom in). The display centers on the passband width — in USB/LSB modes, the passband center stays on screen even when the VFO is off to the side.
 
-### Pan (One-Finger Drag)
+#### Pan (One-Finger Drag)
 
 Drag horizontally with one finger to scroll the spectrum left/right. Release to tune to the new center frequency.
 
-### Memory Channels
+#### Memory Channels
 
 Swipe ↑ from the bottom edge to open the memory picker. Each of your 10 per-band memory channels stores:
 
@@ -80,7 +80,7 @@ The **spectrum** shows real-time signal strength (green curve) across the tuned 
 
 ### 5. Display & Buffer Features
 
-### Spectrum Buffer Clear
+#### Spectrum Buffer Clear
 
 When you **switch modes** (Panadapter ↔ FT8 ↔ FT4) or **change bands**, the panadapter automatically **clears the waterfall and resets the spectrum baseline**. This prevents stale signals from interfering with your new band or mode view.
 
@@ -90,7 +90,7 @@ When you **switch modes** (Panadapter ↔ FT8 ↔ FT4) or **change bands**, the 
 
 This happens transparently — you'll notice the waterfall momentarily clear and re-initialize, then populate with real-time data from the new band/mode.
 
-### Flat Spectrum Mode
+#### Flat Spectrum Mode
 
 Toggle in settings. Shows dB scale relative to a **per-bin noise floor** (not absolute dBm), so weak signals stand out above the baseline even on a noisy band.
 
