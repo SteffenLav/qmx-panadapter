@@ -31,7 +31,7 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 **New user?** Start with the [Quick Start](quick-start.md) guide — 10 minutes to on-air.
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v0.19.0.pdf) — a printable 40-page reference.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v0.19.1.pdf) — a printable 40-page reference.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

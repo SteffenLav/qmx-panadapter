@@ -14,9 +14,11 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 > **Beta — v0.19.1.** FT8/FT4 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8/FT4 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v0.19.0.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v0.19.1.pdf).
 
 <!-- USERGUIDE:START -->
+
+The full documentation also lives online at **[tab5.lav.dk](https://tab5.lav.dk)** — the user guide, quick-start, and reference as searchable, cross-linked web pages, kept in sync with every release.
 
 ---
 
