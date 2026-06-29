@@ -91,3 +91,11 @@ CONFIG_LV_MEM_SIZE_KILOBYTES=256
 # from SDIO/USB. With PSRAM placement, the pool is effectively
 # unlimited (28 MB free) and internal SRAM is preserved for DMA.
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# USB DWC DMA buffers → PSRAM (ESP32-P4 DWC DMA can access external RAM).
+# Without this, USB transfer descriptor lists and data buffers come from
+# internal SRAM. After WiFi connects and consumes ~100 KB, the heap is
+# fragmented to ~31 KB largest block — too small for USB EP alloc on
+# reconnect. Routing USB DMA to PSRAM fixes the "no audio/CAT after QMX
+# power-cycle" regression.
+CONFIG_USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM=y
