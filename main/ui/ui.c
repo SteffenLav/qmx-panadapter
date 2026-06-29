@@ -1299,8 +1299,8 @@ static ui_rssi_t s_bot_rssi;
 static bool       s_bot_rssi_valid = false;
 static lv_obj_t *s_bot_wifi_suffix = NULL;
 static lv_obj_t *s_bot_version = NULL; /* firmware version, between battery and clock */
-static lv_obj_t *s_bot_diag_dot = NULL; /* red breathing dot, shown while diagnostic log is enabled */
-static lv_obj_t *s_bot_diag_label = NULL; /* "Diag" text next to the dot, shown/hidden together with it */
+static lv_obj_t *s_bot_diag_dot = NULL; /* static green dot, shown while a microSD card is mounted */
+static lv_obj_t *s_bot_diag_label = NULL; /* "SD" text next to the dot, shown/hidden together with it */
 static lv_obj_t *s_burger_btn = NULL;  // right-edge drawer grip handle (kept for foreground move after all UI built)
 static lv_obj_t *s_left_edge_grip = NULL;
 static lv_obj_t *s_bottom_edge_grip = NULL;
@@ -1331,7 +1331,6 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_IFCAL      8
 #define DRAWER_SEC_BRIGHTNESS 9
 #define DRAWER_SEC_CMAP       10
-#define DRAWER_SEC_DIAG       11
 #define DRAWER_SEC_CWAUDIO    12
 #define DRAWER_SEC_WATERFALL  13
 #define DRAWER_SEC_FLIP       14
@@ -1566,34 +1565,17 @@ static void sim_border_keepalive_cb(lv_timer_t *t)
 }
 
 // Same breathing technique as the edge grips, applied to the bottom-bar
-// diagnostic-log indicator: a small red dot that fades in/out for as long
-// as diag logging is capturing, so the operator has a glanceable reminder
-// it's running (and, e.g., draining the PSRAM ring) without opening the
-// settings drawer.
-static void diag_dot_breathe_anim_cb(void *var, int32_t v)
-{
-    lv_obj_set_style_bg_opa((lv_obj_t *)var, (lv_opa_t)v, 0);
-}
+// SD-card-mounted indicator: a small static green dot shown whenever the
+// background SD archive mirror has a card mounted. Deliberately NOT
+// breathing/animated — that visual language is reserved for things needing
+// attention (TX armed, edge-swipe affordances, FT8 sim mode), whereas "a
+// card happens to be in the slot" is an ambient, usually-permanent state for
+// anyone who leaves a card in, not something to draw the eye to.
 
-static void diag_dot_start_breathing(void)
-{
-    if (!s_bot_diag_dot) return;
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, s_bot_diag_dot);
-    lv_anim_set_exec_cb(&a, diag_dot_breathe_anim_cb);
-    lv_anim_set_values(&a, LV_OPA_20, LV_OPA_COVER);
-    lv_anim_set_time(&a, 900);
-    lv_anim_set_playback_time(&a, 900);
-    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
-    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
-    lv_anim_start(&a);
-}
-
-// Show/hide + start/stop the bottom-bar SD-backup dot. Called from the
-// sd_archive background task whenever a card is mounted or removed, and once
-// at boot to sync the initial state. Takes the display lock since it runs off
-// the LVGL thread.
+// Show/hide the bottom-bar SD-mounted dot. Called from the sd_archive
+// background task whenever a card is mounted or removed, and once at boot to
+// sync the initial state. Takes the display lock since it runs off the LVGL
+// thread.
 void ui_set_sd_active(bool active)
 {
     if (!s_bot_diag_dot) return;
@@ -1601,9 +1583,7 @@ void ui_set_sd_active(bool active)
         if (active) {
             lv_obj_clear_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);
             if (s_bot_diag_label) lv_obj_clear_flag(s_bot_diag_label, LV_OBJ_FLAG_HIDDEN);
-            diag_dot_start_breathing();
         } else {
-            lv_anim_delete(s_bot_diag_dot, diag_dot_breathe_anim_cb);
             lv_obj_add_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);
             if (s_bot_diag_label) lv_obj_add_flag(s_bot_diag_label, LV_OBJ_FLAG_HIDDEN);
         }
@@ -1613,16 +1593,14 @@ void ui_set_sd_active(bool active)
 
 // lv_anim_delete_all() (used by screenshot capture to freeze the UI for a
 // stable snapshot) wipes out the infinite-repeat breathing animations on the
-// edge-swipe grip handles too. Call this right after a snapshot to resume
-// breathing on all three grips (and the diag-log dot, if it's currently on).
+// edge-swipe grip handles. Call this right after a snapshot to resume
+// breathing on all three grips. (The SD dot is no longer animated, so it
+// doesn't need resuming here.)
 void ui_restart_edge_grip_anims(void)
 {
     if (s_burger_btn) grip_start_breathing(s_burger_btn);
     if (s_left_edge_grip) grip_start_breathing(s_left_edge_grip);
     if (s_bottom_edge_grip) grip_start_breathing(s_bottom_edge_grip);
-    if (s_bot_diag_dot && !lv_obj_has_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN)) {
-        diag_dot_start_breathing();  // SD-backup dot
-    }
 }
 
 // ==== Top bar ====
@@ -2157,15 +2135,16 @@ static void build_bottom_bar(lv_obj_t *parent)
 
 
     // SD-backup indicator: a small red dot, between the battery voltage text
-    // and the firmware version, that breathes (fades in/out) while a microSD
-    // card is mounted and the device's files (diag log, ADIF, config) are
-    // being mirrored to it. Hidden when no card is present. State driven by
-    // ui_set_sd_active(), called from the sd_archive task on mount/unmount.
+    // and the firmware version, that lights up (static, not animated) while
+    // a microSD card is mounted and the device's files (diag log, ADIF,
+    // config) are being mirrored to it. Hidden when no card is present.
+    // State driven by ui_set_sd_active(), called from the sd_archive task
+    // on mount/unmount.
     s_bot_diag_dot = lv_obj_create(bar);
     lv_obj_remove_style_all(s_bot_diag_dot);
     lv_obj_set_size(s_bot_diag_dot, 14, 14);
     lv_obj_set_style_radius(s_bot_diag_dot, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(s_bot_diag_dot, lv_color_hex(0xFF3030), 0);
+    lv_obj_set_style_bg_color(s_bot_diag_dot, lv_color_hex(0x30D030), 0);
     lv_obj_set_style_bg_opa(s_bot_diag_dot, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(s_bot_diag_dot, 0, 0);
     lv_obj_clear_flag(s_bot_diag_dot, LV_OBJ_FLAG_SCROLLABLE);

@@ -56,7 +56,6 @@ typedef struct {
     uint32_t last_unix_time;   // last UTC unix time seen from SNTP (0 = never synced)
     char     cq_msg[3][28];    // 3 user-editable CQ message presets (FT8 TX)
     uint8_t  cq_sel;           // which CQ preset is active, 0..2 (default 0)
-    bool     diag_log;         // diagnostic comms logging on/off (default false)
     bool     onboarded;        // first-boot WiFi/identity prompts shown (default false)
     bool     wifi_enabled;     // initiate WiFi at boot (default true)
     bool     qmx_gps;         // QMX/QMX+ has GPS discipline — skip Tab5→QMX time push
@@ -123,9 +122,6 @@ void settings_set_my_grid(const char *grid);
 void settings_set_cq_msg(uint8_t idx, const char *text);
 void settings_set_cq_sel(uint8_t idx);
 
-// Diagnostic comms logging on/off (debounced flush). Persisted so a
-// boot-time problem can be captured across the reset after enabling it.
-void settings_set_diag_log(bool v);
 
 // First-boot onboarding done: once true, the WiFi/identity prompts are never
 // shown again (debounced flush).

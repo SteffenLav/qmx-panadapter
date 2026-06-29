@@ -54,7 +54,6 @@ char *config_io_export(size_t *out_len)
     APP("ema_alpha          = %.2f\n", (double)c.ema_alpha);
     APP("db_min             = %.0f\n", (double)c.db_min);
     APP("db_max             = %.0f\n", (double)c.db_max);
-    APP("diag_log           = %s\n", yn(c.diag_log));
     APP("qmx_gps            = %s\n", yn(c.qmx_gps));
     APP("freq_keypad_10key  = %s\n", yn(c.freq_kp_calc));
     APP("onboarded          = %s\n", yn(c.onboarded));
@@ -169,7 +168,6 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "ema_alpha"))         settings_set_ema_alpha((float)atof(val));
             else if (!strcasecmp(key, "db_min"))            settings_set_db_min((float)atof(val));
             else if (!strcasecmp(key, "db_max"))            settings_set_db_max((float)atof(val));
-            else if (!strcasecmp(key, "diag_log"))          settings_set_diag_log(to_bool(val));
             else if (!strcasecmp(key, "qmx_gps"))           settings_set_qmx_gps(to_bool(val));
             else if (!strcasecmp(key, "freq_keypad_10key")) settings_set_freq_kp_calc(to_bool(val));
             else if (!strcasecmp(key, "onboarded"))         settings_set_onboarded(to_bool(val));
