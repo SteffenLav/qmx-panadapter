@@ -131,9 +131,7 @@ static void status_task(void *arg)
 void status_bar_start(void)
 {
     ui_set_bottom_version(esp_app_get_description()->version);
-    // diag_log_set_enabled() (main.c) restores the NVS state before the
-    // bottom bar widgets exist, so sync the dot to that state here, now
-    // that ui_init() has run. Later changes go through the drawer toggle.
-    ui_set_diag_log_indicator(diag_log_enabled());
+    // The bottom-bar SD-backup dot is synced once in app_main (after ui_init)
+    // and driven live by the sd_archive task on mount/unmount.
     xTaskCreate(status_task, "status", 4096, NULL, 2, NULL);
 }

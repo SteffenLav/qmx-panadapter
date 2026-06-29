@@ -1,4 +1,5 @@
 #include "settings.h"
+#include "sd_archive.h"
 
 #include <string.h>
 #include <stdint.h>
@@ -264,6 +265,7 @@ static void flush_task(void *arg)
             ESP_LOGW(TAG, "nvs_commit failed: 0x%x", err);
         } else {
             ESP_LOGI(TAG, "flushed dirty=0x%llx", (unsigned long long)dirty_local);
+            sd_archive_mark_config_dirty();  // re-mirror config export to SD if a card is in
         }
     }
 }

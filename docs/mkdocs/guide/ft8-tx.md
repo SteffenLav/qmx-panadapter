@@ -53,7 +53,7 @@ Standard operating practice applies:
 
 1. **Use a dummy load** for your first tests
 2. **Monitor power and SWR** if you have a meter
-3. **Watch the displayed TX power** (should stabilise at ~5 W on QMX+)
+3. **Watch the displayed TX power** (typically ~3–5 W, depending on band and supply voltage)
 4. **Never leave auto-reply unattended** unless your station is attended
 
 The beta label goes away at v1.0.0 after multi-day soak testing.

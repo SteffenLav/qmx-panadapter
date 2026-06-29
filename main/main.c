@@ -31,6 +31,7 @@
 #include "ft8_qso.h"
 #include "ft8_sim.h"
 #include "diag_log.h"
+#include "sd_archive.h"
 #include "tab5_keyboard.h"
 #include "time_sync.h"
 #include "adif/adif_log.h"
@@ -41,12 +42,13 @@ static const char *TAG = "main";
 void app_main(void)
 {
     // Install the diagnostic log capture hook first so the whole boot
-    // sequence is captured if diagnostic logging was left enabled. Capture
-    // only actually starts once diag_log_set_enabled(true) runs below.
+    // sequence is captured. Diagnostic logging is always-on (no opt-in) — the
+    // session header is written once below, after settings come up.
     diag_log_init();
 
     ESP_LOGI(TAG, "QMX+ Panadapter starting");
-    ESP_LOGI(TAG, "PSRAM total: %zu MB",
+    ESP_LOGI(TAG, "HEAP boot: int=%uKB psram=%zuMB",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024,
              heap_caps_get_total_size(MALLOC_CAP_SPIRAM) / (1024 * 1024));
     // Initialise NVS (settings persistence). If the partition is full or
     // a new version invalidated it, erase and retry - never block boot.
@@ -65,10 +67,15 @@ void app_main(void)
     settings_init();
     mem_channels_init();
     adif_log_init();
+    // adif_log_init() mounted SPIFFS; now the diag log can persist to flash so
+    // it survives power-off with no SD card (POTA: log in the field, analyse
+    // at home). Background task, 256 KB rolling file, downloadable at
+    // /api/log/saved.
+    diag_log_persist_start();
     qmx_settings_t cfg;
     settings_load_all(&cfg);
     iq_balance_init(cfg.iq_enabled);  /* Restore IQ balance state from NVS */
-    diag_log_set_enabled(cfg.diag_log);  /* Restore diagnostic logging state from NVS */
+    diag_log_write_session_header();  /* always-on capture; stamp the session */
 
     lv_display_t *disp = NULL;
     ESP_ERROR_CHECK(display_init(&disp));
@@ -87,6 +94,14 @@ void app_main(void)
     time_sync_init(bsp_i2c_get_handle());
 
     ui_init(disp);
+
+    // Background microSD auto-archive: mirrors the diag log, ADIF, and config
+    // to a card if one is present (probes for it; no card-detect line). Started
+    // after ui_init so the SD mount never races display bring-up and the dot
+    // exists when the first mount callback fires.
+    sd_archive_init();
+    // Belt-and-suspenders: sync the dot in case a mount completed before this.
+    ui_set_sd_active(sd_archive_is_mounted());
 
     // Physical Tab5 snap-on keyboard (optional). Probes I2C 0x6D on GPIO0/1;
     // if present, switches it to String mode and types into the focused

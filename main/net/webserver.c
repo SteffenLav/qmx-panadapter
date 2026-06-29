@@ -14,6 +14,7 @@
 #include "screenshot/screenshot.h"  // screenshot_capture_rgb565
 #include "diag_log.h"         // diag_log_size / diag_log_snapshot
 #include "adif/adif_log.h"    // adif_log_count / adif_log_file_path / adif_log_clear
+#include "storage/sd_archive.h"  // sd_archive_is_mounted / sd_archive_save_screenshot
 #include "adif/qrz_upload.h"  // qrz_upload_pending
 #include "adif/eqsl_upload.h" // eqsl_upload_pending
 #include "settings.h"          // settings_load_all / settings_set_qrz_api_key
@@ -273,11 +274,9 @@ static esp_err_t log_handler(httpd_req_t *req)
     size_t n = diag_log_size();
     esp_err_t err;
     if (n == 0) {
-        const char *hint =
-            "(diagnostic log empty)\n"
-            "Enable 'Diagnostic log' in the Tab5 settings drawer, reproduce the "
-            "issue, then reload this page.\n";
-        err = httpd_resp_sendstr(req, hint);
+        // Always-on capture, so this is rare (only right after a clear before
+        // anything new is logged).
+        err = httpd_resp_sendstr(req, "(diagnostic log empty — reload after activity)\n");
     } else {
         char *buf = heap_caps_malloc(n, MALLOC_CAP_SPIRAM);
         if (!buf) buf = malloc(n);
@@ -287,11 +286,71 @@ static esp_err_t log_handler(httpd_req_t *req)
             size_t got = diag_log_snapshot(buf, n);
             err = httpd_resp_send(req, buf, got);
             heap_caps_free(buf);
+            // Reset the ring once it's been handed off successfully so each
+            // download is fresh since the last. The SD mirror keeps the full
+            // history regardless (its cursor survives a clear).
+            if (err == ESP_OK) diag_log_clear();
         }
     }
 
     webserver_ws_set_paused(false);
     return err;
+}
+
+// GET /api/log/saved — download the persisted diagnostic log. Unlike /api/log
+// (the live PSRAM ring, wiped on reboot), this survives power-off — the POTA
+// "log in the field, download at home" path. Prefers the SD card's full
+// qmx-log.txt when a card is mounted (read under the sd_archive lock so it
+// can't race the mirror task's writes); otherwise falls back to the smaller
+// flash-persisted copy (/spiffs/diag.log).
+static esp_err_t stream_file_chunks(httpd_req_t *req, const char *path, const char *empty_msg)
+{
+    FILE *f = fopen(path, "r");
+    if (!f) return httpd_resp_sendstr(req, empty_msg);
+    char buf[1024];
+    size_t n;
+    esp_err_t err = ESP_OK;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0 && err == ESP_OK)
+        err = httpd_resp_send_chunk(req, buf, (ssize_t)n);
+    fclose(f);
+    httpd_resp_send_chunk(req, NULL, 0);
+    return err;
+}
+
+static esp_err_t saved_log_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "text/plain; charset=utf-8");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=qmx-log-saved.txt");
+
+    // Prefer the card's full log when present.
+    if (sd_archive_is_mounted() && sd_archive_lock(2000)) {
+        esp_err_t err = stream_file_chunks(req, sd_archive_log_path(),
+                                           "(no diagnostic log on card yet)\n");
+        sd_archive_unlock();
+        return err;
+    }
+    // Fall back to the flash-persisted copy.
+    return stream_file_chunks(req, diag_log_persist_path(), "(no saved diagnostic log yet)\n");
+}
+
+// POST /api/sd/shot — save a screenshot to the microSD card (if mounted).
+// Returns {"saved":true,"path":"..."} or {"saved":false,"error":"..."}.
+static esp_err_t sd_shot_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/json");
+    char path[96] = {0};
+    esp_err_t err = sd_archive_save_screenshot(path, sizeof(path));
+
+    char body[160];
+    if (err == ESP_OK) {
+        snprintf(body, sizeof(body), "{\"saved\":true,\"path\":\"%s\"}", path);
+    } else {
+        const char *msg = (err == ESP_ERR_INVALID_STATE)
+                              ? "no SD card mounted" : "capture/write failed";
+        snprintf(body, sizeof(body), "{\"saved\":false,\"error\":\"%s\"}", msg);
+    }
+    return httpd_resp_sendstr(req, body);
 }
 
 // GET /api/adif — download the ADIF QSO log from SPIFFS.
@@ -533,6 +592,12 @@ static const httpd_uri_t uri_ss_bmp = {
 static const httpd_uri_t uri_log = {
     .uri = "/api/log", .method = HTTP_GET, .handler = log_handler,
 };
+static const httpd_uri_t uri_sd_shot = {
+    .uri = "/api/sd/shot", .method = HTTP_POST, .handler = sd_shot_handler,
+};
+static const httpd_uri_t uri_log_saved = {
+    .uri = "/api/log/saved", .method = HTTP_GET, .handler = saved_log_handler,
+};
 
 // GET /api/upload_status — check result of last QRZ or eQSL upload
 static esp_err_t upload_status_handler(httpd_req_t *req)
@@ -666,6 +731,8 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_cmd);
     httpd_register_uri_handler(s_server, &uri_ss_bmp);
     httpd_register_uri_handler(s_server, &uri_log);
+    httpd_register_uri_handler(s_server, &uri_log_saved);
+    httpd_register_uri_handler(s_server, &uri_sd_shot);
     httpd_register_uri_handler(s_server, &uri_adif_get);
     httpd_register_uri_handler(s_server, &uri_adif_clear);
     httpd_register_uri_handler(s_server, &uri_qrz_key);

@@ -28,6 +28,7 @@
 #include "onboarding.h"
 #include "iq_balance.h"
 #include "diag_log.h"
+#include "sd_archive.h"
 #include "ui_mode.h"
 #include "ui_clock.h"
 #include "time_sync.h"
@@ -1305,7 +1306,6 @@ static lv_obj_t *s_left_edge_grip = NULL;
 static lv_obj_t *s_bottom_edge_grip = NULL;
 static lv_obj_t *s_switch_iq       = NULL;  // IQ balance checkbox in settings drawer
 static lv_obj_t *s_switch_flat     = NULL;  // flat-spectrum checkbox in settings drawer
-static lv_obj_t *s_switch_diag     = NULL;  // diagnostic log checkbox in settings drawer
 static lv_obj_t *s_check_wifi_en   = NULL;  // WiFi initiated checkbox in settings drawer
 
 // Phase 5.10D Stage 2: settings drawer state
@@ -1415,7 +1415,6 @@ static void drawer_dropdown_bpregion_cb(lv_event_t *e);
 static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_check_flip_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
-static void drawer_switch_diag_cb(lv_event_t *e);
 static void drawer_switch_wifi_en_cb(lv_event_t *e);
 static void drawer_check_cwaudio_cb(lv_event_t *e);
 static void drawer_slider_cwaudio_vol_cb(lv_event_t *e);
@@ -1591,11 +1590,11 @@ static void diag_dot_start_breathing(void)
     lv_anim_start(&a);
 }
 
-// Show/hide + start/stop the bottom-bar diag-log dot. Called once at boot
-// (main.c, after diag_log_set_enabled() restores the NVS state) and from the
-// drawer toggle, so the dot always reflects the live diag_log_enabled() state
-// regardless of how it was changed.
-void ui_set_diag_log_indicator(bool active)
+// Show/hide + start/stop the bottom-bar SD-backup dot. Called from the
+// sd_archive background task whenever a card is mounted or removed, and once
+// at boot to sync the initial state. Takes the display lock since it runs off
+// the LVGL thread.
+void ui_set_sd_active(bool active)
 {
     if (!s_bot_diag_dot) return;
     if (display_lock(20)) {
@@ -1622,7 +1621,7 @@ void ui_restart_edge_grip_anims(void)
     if (s_left_edge_grip) grip_start_breathing(s_left_edge_grip);
     if (s_bottom_edge_grip) grip_start_breathing(s_bottom_edge_grip);
     if (s_bot_diag_dot && !lv_obj_has_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN)) {
-        diag_dot_start_breathing();
+        diag_dot_start_breathing();  // SD-backup dot
     }
 }
 
@@ -2157,10 +2156,11 @@ static void build_bottom_bar(lv_obj_t *parent)
     }
 
 
-    // Diagnostic-log indicator: a small red dot, between the battery voltage
-    // text and the firmware version, that breathes (fades in/out) for as
-    // long as diag logging is enabled. Hidden otherwise. State driven by
-    // ui_set_diag_log_indicator(), called at boot and from the drawer toggle.
+    // SD-backup indicator: a small red dot, between the battery voltage text
+    // and the firmware version, that breathes (fades in/out) while a microSD
+    // card is mounted and the device's files (diag log, ADIF, config) are
+    // being mirrored to it. Hidden when no card is present. State driven by
+    // ui_set_sd_active(), called from the sd_archive task on mount/unmount.
     s_bot_diag_dot = lv_obj_create(bar);
     lv_obj_remove_style_all(s_bot_diag_dot);
     lv_obj_set_size(s_bot_diag_dot, 14, 14);
@@ -2174,12 +2174,12 @@ static void build_bottom_bar(lv_obj_t *parent)
     // every time that text is updated, so it stays glued just to the right
     // of "(X.XV)" instead of a fixed offset that drifts with text length.
     lv_obj_align_to(s_bot_diag_dot, s_bot_left, LV_ALIGN_OUT_RIGHT_MID, 30, 0);
-    lv_obj_add_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);  // shown only while diag logging is on
+    lv_obj_add_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);  // shown only while a card is mounted
 
-    // "Diag" label next to the dot - same visibility lifecycle, re-anchored
+    // "SD" label next to the dot - same visibility lifecycle, re-anchored
     // off the dot itself in reposition_diag_dot() so it tracks along with it.
     s_bot_diag_label = lv_label_create(bar);
-    lv_label_set_text(s_bot_diag_label, "Diag");
+    lv_label_set_text(s_bot_diag_label, "SD");
     lv_obj_set_style_text_color(s_bot_diag_label, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(s_bot_diag_label, &lv_font_montserrat_24, 0);
     lv_obj_align_to(s_bot_diag_label, s_bot_diag_dot, LV_ALIGN_OUT_RIGHT_MID, 6, 0);
@@ -4144,21 +4144,10 @@ static void drawer_build(void)
         y += 56;
     }
 
-    // Diagnostic log ON/OFF row -- kept at the top for easy access. When on,
-    // the Tab5 captures all log output (incl. per-line CAT TX/RX) to a buffer
-    // downloadable from the web UI at http://<tab5-ip>/api/log, and streams it
-    // to the USB serial console.
-    {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_DIAG, y, 56);
-        lv_obj_t *diag_lbl = lv_label_create(sec);
-        lv_label_set_text(diag_lbl, "Diagnostic log");
-        lv_obj_set_style_text_color(diag_lbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(diag_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(diag_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
-        s_switch_diag = make_drawer_checkbox(sec, diag_log_enabled(), drawer_switch_diag_cb, NULL);
-        lv_obj_align(s_switch_diag, LV_ALIGN_TOP_RIGHT, 0, 6);
-        y += 56;
-    }
+    // (Diagnostic logging is now always-on — no toggle. It captures to a 5 MB
+    // PSRAM ring downloadable at /api/log and, when a microSD card is present,
+    // is mirrored to it continuously by sd_archive; the bottom-bar "SD" dot
+    // shows when that mirror is live.)
 
     // IQ balance ON/OFF row -- full width, well clear of the close button
     {
@@ -4718,7 +4707,7 @@ static void drawer_close(void)
     ESP_LOGI(TAG, "Settings drawer closed");
 }
 
-// FT8 mode keeps the Diagnostic log toggle (top, always accessible), the
+// FT8 mode keeps the Flip-display toggle (top), the
 // distance-unit (km/miles) toggle (only meaningful on the FT8 decode list),
 // WiFi setup, Callsign & Grid, and Display brightness; everything else
 // (IQ/flat toggles, presets, dB range, smoothing, CW, IF calibration, colour
@@ -4728,8 +4717,8 @@ static void drawer_close(void)
 static void drawer_set_ft8_mode(bool ft8)
 {
     if (!s_drawer) return;
-    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_DIAG, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
-    static const int keep_h[] = { 56, 56, 56, 56, 128, 72, 130 };
+    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
+    static const int keep_h[] = { 56, 56, 56, 128, 72, 130 };
     const int n_keep = sizeof(keep) / sizeof(keep[0]);
 
     for (int i = 0; i < N_DRAWER_SECTIONS; i++) {
@@ -4845,16 +4834,6 @@ static void drawer_switch_flat_cb(lv_event_t *e)
         }
     }
     update_db_scale();   // switch the right-edge scale between dBm and dB-above-floor
-}
-
-static void drawer_switch_diag_cb(lv_event_t *e)
-{
-    lv_obj_t *sw = lv_event_get_target(e);
-    bool on = lv_obj_has_state(sw, LV_STATE_CHECKED);
-    diag_log_set_enabled(on);
-    settings_set_diag_log(on);
-    ui_set_diag_log_indicator(on);
-    ESP_LOGI(TAG, "diagnostic logging: %s", on ? "ON" : "OFF");
 }
 
 static void drawer_switch_wifi_en_cb(lv_event_t *e)

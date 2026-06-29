@@ -49,6 +49,7 @@ main/
   util/diag_log.c         Opt-in ESP_LOG ring-buffer capture (web /api/log + serial)
   keyboard/tab5_keyboard.c  Optional Tab5 snap-on keyboard (STM32 I2C slave 0x6D, String mode); UI bridge lives in ui.c
   storage/settings.c      NVS-backed settings (debounced flush task)
+  storage/sd_archive.c    microSD auto-archive: mirrors diag log/ADIF/config to /sdcard (probe-mount, no CD line)
   wifi/wifi.c             C6 co-processor WiFi bring-up + SNTP, QMX RTC push
   net/webserver.c         HTTP server: /, /api/status, /api/cmd, /ss.bmp, /api/log
 ```
@@ -69,6 +70,19 @@ FT8 TX data flow: **ft8_screen_view (tap) → ft8_tx_modal (confirm) → ft8_tx_
 
 ### esp_hosted transport buffers → PSRAM (managed-component patch — must be re-applied)
 `managed_components/espressif__esp_hosted/host/port/include/os_wrapper.h` has a one-line patch in its `MEM_ALLOC` macro: `extra_heap_caps = MALLOC_CAP_SPIRAM` (was `0`). This routes the esp_hosted WiFi transport DMA pool (the per-packet TX/RX buffers that grow under WiFi bursts) into PSRAM instead of the scarce internal DRAM. **Without it the device reboots** under QMX+FT8 load when WiFi TX bursts (web UI / QRZ upload) exhaust internal DMA RAM → `transport_drv_sta_tx` → `assert(copy_buff)`. Safe on ESP32-P4: `SOC_SDMMC_PSRAM_DMA_CAPABLE == 1`, and the 1536-byte block is 64-byte aligned. `managed_components/` is **git-ignored** and is wiped by `idf.py fullclean` / a dependency refresh / the release process's `rm -r managed_components/`, so after any of those re-run `tools/patches/apply_esp_hosted_psram.ps1` (idempotent) before building. This is half of the upload/web-stability fix; the rest is in-repo: audio ring → PSRAM, `dsp_set_transfer_quiet()` (CPU-yield during transfers), and the WS-stream pause.
+
+### Diagnostic log persistence (RAM ring → flash → SD)
+The always-on diag log lives in a 5 MB PSRAM ring (`util/diag_log.c`) — wiped on power-off. Two persistence layers survive a reboot/battery-pull:
+- **Internal flash (always, no card needed)**: `diag_log_persist_start()` (called from `app_main` after `adif_log_init` mounts SPIFFS) runs a task appending the ring to `/spiffs/diag.log` (256 KB rolling, one rotation to `diag.0.log`), flushed+`fsync`'d every 30 s only when there are new bytes (low wear; SPIFFS is 1 MB, shared with the ADIF log). This is the POTA path: log in the field, download at home after power-off. Served at **`/api/log/saved`** (web UI "Diag(saved) ↓"). The live full-session ring is still at `/api/log` ("Diag ↓").
+- **microSD (full 5 MB+, when a card is in)**: see below.
+Both the SD and flash mirrors read the ring incrementally via `diag_log_total()`/`diag_log_read_from()` (separate monotonic cursors in `s_total` space; the `head == total % cap` invariant lets a total-position map straight to a ring index). **`fsync` is mandatory after writing an open log file** — `fflush` alone leaves the bytes in FatFs/SPIFFS buffers, so the file reads empty if the card is pulled / power cut before an `f_sync`/`f_close` (this bit the SD `qmx-log.txt`, which is held open and only appended).
+
+### microSD auto-archive + exFAT (IDF-tree patch — must be re-applied)
+`storage/sd_archive.c` mirrors the always-on diag log (`qmx-log.txt`, rotated at 5 MB), the ADIF log (`qso.adi`), and the config export (`qmx-config.txt`) to `/sdcard/qmx-panadapter/` whenever a FAT/exFAT card is present (it probes for a mount on a background task — the Tab5 routes **no card-detect line** to the SoC, so presence is found by retrying `bsp_sdcard_init`, and removal by a write failure). The bottom-bar red **"SD"** dot breathes while a card is mounted (`ui_set_sd_active()`). Screenshots save to `/sdcard/qmx-panadapter/screenshots/` via `POST /api/sd/shot` (web UI "SD Shot" link).
+
+Two config requirements, both **outside the default ESP-IDF FatFs config**:
+- **Long filenames**: `CONFIG_FATFS_LFN_HEAP=y` + `CONFIG_FATFS_MAX_LFN=255` + `CONFIG_FATFS_USE_LABEL=y` in `sdkconfig` (the default was `LFN_NONE`, i.e. 8.3 only — our paths like `qmx-panadapter/` and `qmx-config.txt` need LFN; `USE_LABEL` is required because the exFAT code path in `ff.c` references `FF_USE_LABEL` as a C expression, not just `#if`).
+- **exFAT** (large cards >32 GB are exFAT by default): ESP-IDF v5.4.4 hardcodes `#define FF_FS_EXFAT 0` in `$IDF_PATH/components/fatfs/src/ffconf.h` with **no Kconfig option** to flip it. `tools/patches/apply_fatfs_exfat.ps1` flips it to `1` (idempotent). Because this edits the **pinned IDF install tree** (not the project), it's wiped on IDF reinstall and must be re-applied per build machine — same model as `apply_esp_hosted_psram.ps1`. No compile guard ties exFAT to LFN, so it's harmless to other projects on this IDF (adds exFAT code; FAT still works). `FF_MIN_SS=MIN(512,4096)=512` so 512-byte-sector SD cards still mount despite `CONFIG_FATFS_SECTOR_4096`.
 
 ### LVGL software rotation (~50% FPS cost)
 The display panel is natively portrait; landscape is achieved via `lv_display_set_rotation(disp, LV_DISPLAY_ROTATION_90)`. Every LVGL flush goes through `rotate90_rgb565`. FPS is ~13 landscape vs ~22 portrait. Acceptable for a panadapter.

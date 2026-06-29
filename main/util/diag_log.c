@@ -3,8 +3,11 @@
 #include <string.h>
 #include <stdarg.h>
 #include <stdio.h>
+#include <unistd.h>     // fsync
+#include <errno.h>
 
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
@@ -43,9 +46,9 @@ static const char *reset_reason_str(esp_reset_reason_t r)
 // fact a remote bug report needs in one place, regardless of whether logging
 // was on from boot or toggled on later (radio/WiFi fields just read "no"
 // until those subsystems are up).
-static void write_header(void)
+void diag_log_write_session_header(void)
 {
-    ESP_LOGI(TAG, "==== diagnostic logging ENABLED ====");
+    ESP_LOGI(TAG, "==== diagnostic logging session start ====");
 
     const esp_app_desc_t *d = esp_app_get_description();
     if (d) {
@@ -95,17 +98,19 @@ static void write_header(void)
     ESP_LOGI(TAG, "==== (CAT TX/RX now logged per-line below) ====");
 }
 
-// 512 KB of rolling history, PSRAM-backed (the Tab5 has ~30 MB free, so this
-// is cheap). With the CAT poll logging de-duplicated (see cat.c — identical
-// FA/MD/FW poll responses are dropped, only changes + a heartbeat remain),
-// this holds a long session rather than the ~70 s the old 128 KB ring lasted
-// when every 50 ms poll was logged verbatim.
-#define DIAG_RING_CAP (512 * 1024)
+// 5 MB of rolling history, PSRAM-backed (the Tab5 has ~30 MB free, so this is
+// cheap). Now that capture is always-on (no opt-in) and the SD mirror persists
+// it off-chip, a generous ring keeps a long session's worth in RAM too. With
+// the CAT poll logging de-duplicated (see cat.c — identical FA/MD/FW poll
+// responses are dropped, only changes + a heartbeat remain), steady state is
+// ~0 lines/s so 5 MB holds many hours.
+#define DIAG_RING_CAP (5 * 1024 * 1024)
 
 static char        *s_ring   = NULL;
 static size_t       s_cap    = 0;
-static size_t       s_head   = 0;   // next write index (mod s_cap)
+static size_t       s_head   = 0;   // next write index (mod s_cap); == s_total % s_cap
 static size_t       s_count  = 0;   // bytes stored (<= s_cap)
+static uint64_t     s_total  = 0;   // monotonic bytes ever appended (never wraps)
 static portMUX_TYPE s_mux    = portMUX_INITIALIZER_UNLOCKED;
 static volatile bool s_enabled = false;
 static vprintf_like_t s_orig_vprintf = NULL;
@@ -128,6 +133,7 @@ static void ring_append(const char *buf, size_t len)
     s_head = (s_head + len) % s_cap;
     s_count += len;
     if (s_count > s_cap) s_count = s_cap;
+    s_total += len;
     portEXIT_CRITICAL(&s_mux);
 }
 
@@ -160,31 +166,15 @@ void diag_log_init(void)
         s_cap = DIAG_RING_CAP;
         s_head = 0;
         s_count = 0;
+        s_total = 0;
     } else {
         ESP_LOGW(TAG, "ring buffer alloc failed; capture disabled");
     }
     s_orig_vprintf = esp_log_set_vprintf(diag_vprintf);
-}
-
-void diag_log_set_enabled(bool on)
-{
-    s_enabled = on;
-    if (on) {
-        // Best-effort verbosity bump for the subsystems most useful to a
-        // remote investigation. Only takes effect on builds where the level
-        // is compiled in; our own gated CAT logging is INFO so it's captured
-        // regardless.
-        esp_log_level_set("cat",   ESP_LOG_DEBUG);
-        esp_log_level_set("audio", ESP_LOG_DEBUG);
-        esp_log_level_set("wifi",  ESP_LOG_DEBUG);
-
-        write_header();
-    } else {
-        ESP_LOGI(TAG, "==== diagnostic logging DISABLED ====");
-        esp_log_level_set("cat",   ESP_LOG_INFO);
-        esp_log_level_set("audio", ESP_LOG_INFO);
-        esp_log_level_set("wifi",  ESP_LOG_INFO);
-    }
+    // Always-on: capture from the very first boot log. The session header
+    // (diag_log_write_session_header) is written slightly later from app_main,
+    // once settings are up and the version/operator fields are valid.
+    s_enabled = (s_ring != NULL);
 }
 
 bool diag_log_enabled(void)
@@ -220,4 +210,125 @@ size_t diag_log_snapshot(char *dst, size_t cap)
     memcpy(dst, s_ring + start, first);
     if (n > first) memcpy(dst + first, s_ring, n - first);
     return n;
+}
+
+void diag_log_clear(void)
+{
+    portENTER_CRITICAL(&s_mux);
+    s_head  = 0;
+    s_count = 0;
+    // s_total is intentionally NOT reset — the SD mirror's read cursor lives
+    // in s_total space and must stay monotonic across a web-download clear.
+    portEXIT_CRITICAL(&s_mux);
+}
+
+uint64_t diag_log_total(void)
+{
+    portENTER_CRITICAL(&s_mux);
+    uint64_t t = s_total;
+    portEXIT_CRITICAL(&s_mux);
+    return t;
+}
+
+size_t diag_log_read_from(uint64_t from, char *dst, size_t cap, uint64_t *out_next)
+{
+    if (!s_ring || !dst || cap == 0) {
+        if (out_next) *out_next = from;
+        return 0;
+    }
+
+    // Snapshot the head/total under the lock, copy without it (the ring is up
+    // to 5 MB; a memcpy that large must never run with interrupts off). At our
+    // ~0 lines/s steady state the [from, total) span cannot be overwritten
+    // mid-copy, so this is safe in practice.
+    portENTER_CRITICAL(&s_mux);
+    uint64_t total = s_total;
+    size_t   count = s_count;
+    portEXIT_CRITICAL(&s_mux);
+
+    uint64_t oldest = total - (uint64_t)count;   // earliest total still retained
+    if (from < oldest) from = oldest;            // caller fell behind; skip lost bytes
+    if (from >= total) {
+        if (out_next) *out_next = total;
+        return 0;
+    }
+
+    uint64_t avail = total - from;
+    size_t   n     = (avail > (uint64_t)cap) ? cap : (size_t)avail;
+    // head == total % s_cap, so the byte at total-position P lives at P % s_cap.
+    size_t start = (size_t)(from % (uint64_t)s_cap);
+    size_t first = s_cap - start;
+    if (first > n) first = n;
+    memcpy(dst, s_ring + start, first);
+    if (n > first) memcpy(dst + first, s_ring, n - first);
+    if (out_next) *out_next = from + n;
+    return n;
+}
+
+// ---- Flash persistence -----------------------------------------------------
+// The PSRAM ring is wiped on power-off, so a field/POTA session's log would be
+// lost the moment the battery is disconnected unless a microSD card is in. To
+// guarantee the log survives power-off with NO card, a background task also
+// appends the ring to a small rolling file on the internal SPIFFS flash.
+//
+// Kept deliberately small (256 KB, one rotation) since SPIFFS (1 MB) is shared
+// with the ADIF QSO log, and flushed only every 30 s and only when there are
+// new bytes, so flash wear is proportional to actual log volume (≈0 at the
+// deduplicated steady state). Served to the web UI via /api/log/saved.
+#define DIAG_FLASH_PATH     "/spiffs/diag.log"
+#define DIAG_FLASH_PATH_0   "/spiffs/diag.0.log"
+#define DIAG_FLASH_MAX      (256 * 1024)
+#define DIAG_FLASH_FLUSH_MS 30000
+
+static uint64_t s_flash_cursor = 0;   // position in s_total space
+
+static void diag_persist_task(void *arg)
+{
+    (void)arg;
+    FILE *f = fopen(DIAG_FLASH_PATH, "a");
+    if (!f) {
+        ESP_LOGW(TAG, "flash-persist: cannot open %s (%s)", DIAG_FLASH_PATH, strerror(errno));
+        vTaskDelete(NULL);
+        return;
+    }
+    long pos = ftell(f);
+    size_t bytes = (pos > 0) ? (size_t)pos : 0;
+    static char buf[2048];
+
+    for (;;) {
+        bool wrote = false;
+        for (;;) {
+            uint64_t next = s_flash_cursor;
+            size_t got = diag_log_read_from(s_flash_cursor, buf, sizeof(buf), &next);
+            if (got == 0) break;
+            if (fwrite(buf, 1, got, f) != got) break;   // best-effort; retry next tick
+            s_flash_cursor = next;
+            bytes += got;
+            wrote = true;
+            if (bytes >= DIAG_FLASH_MAX) {              // rotate: keep one generation
+                fclose(f);
+                remove(DIAG_FLASH_PATH_0);
+                rename(DIAG_FLASH_PATH, DIAG_FLASH_PATH_0);
+                f = fopen(DIAG_FLASH_PATH, "w");
+                bytes = 0;
+                if (!f) {
+                    ESP_LOGW(TAG, "flash-persist: reopen after rotate failed (%s)", strerror(errno));
+                    vTaskDelete(NULL);
+                    return;
+                }
+            }
+        }
+        if (wrote) { fflush(f); fsync(fileno(f)); }     // commit to flash
+        vTaskDelay(pdMS_TO_TICKS(DIAG_FLASH_FLUSH_MS));
+    }
+}
+
+void diag_log_persist_start(void)
+{
+    xTaskCreate(diag_persist_task, "diag_persist", 4096, NULL, 2, NULL);
+}
+
+const char *diag_log_persist_path(void)
+{
+    return DIAG_FLASH_PATH;
 }

@@ -234,11 +234,14 @@
     <a href="/api/adif" download="qso.adi" id="adif-link" class="bot-btn" style="display:none">0 QSOs &#8595;</a>
     <a href="#" id="qrz-link" class="bot-btn" style="display:none">QRZ &#8593;</a>
     <a href="#" id="eqsl-link" class="bot-btn" style="display:none">eQSL &#8593;</a>
-    <a href="/api/log" download="qmx-log.txt" class="bot-btn">Diag &#8595;</a>
+    <a href="/api/log" download="qmx-log.txt" class="bot-btn" title="Live diagnostic log (full session, in RAM)">Diag &#8595;</a>
+    <a href="/api/log/saved" download="qmx-log-saved.txt" class="bot-btn" title="Persisted diagnostic log (full SD-card copy if a card is in, else the flash copy) - survives power-off, e.g. after a POTA session">Diag(saved) &#8595;</a>
     <a href="/api/config" download="qmx-config.txt" class="bot-btn" title="Download all settings + memory channels as an editable text file">Config &#8595;</a>
     <a href="#" id="cfg-up-link" class="bot-btn" title="Upload an edited config file (merges; restart to apply)">Config &#8593;</a>
     <input type="file" id="cfg-up-file" accept=".txt,text/plain" style="display:none">
     <a href="/ss.bmp" target="_blank" class="bot-btn">Tab5Shot</a>
+    <a href="#" class="bot-btn" title="Save a screenshot to the microSD card (if one is inserted)"
+       onclick="event.preventDefault();fetch('/api/sd/shot',{method:'POST'}).then(r=>r.json()).then(j=>alert(j.saved?('Saved to SD:\n'+j.path):('SD: '+j.error))).catch(()=>alert('SD save failed'));">SD Shot</a>
   </div>
 
 <script>

@@ -48,11 +48,11 @@ void ui_set_bottom_battery_absent(void);
 // Bottom-bar firmware version, centered between the battery text and the UTC clock.
 void ui_set_bottom_version(const char *text);
 
-// Bottom-bar diagnostic-log indicator: a small red dot between the battery
-// voltage and the firmware version that breathes while active=true, hidden
-// when false. Call at boot (after diag_log_set_enabled() restores NVS state)
-// and from the settings-drawer toggle.
-void ui_set_diag_log_indicator(bool active);
+// Bottom-bar SD-backup indicator: a small red dot (+ "SD" label) between the
+// battery voltage and the firmware version that breathes while a microSD card
+// is mounted and being mirrored (active=true), hidden when false. Driven by
+// the sd_archive task on mount/unmount, and once at boot to sync initial state.
+void ui_set_sd_active(bool active);
 
 // Full-screen breathing red bezel shown while FT8 simulation mode is on
 // (see ft8_sim.h) - an unmissable reminder that nothing transmitted right

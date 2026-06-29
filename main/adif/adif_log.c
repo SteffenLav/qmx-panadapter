@@ -13,6 +13,7 @@
 
 #include "esp_log.h"
 #include "esp_spiffs.h"
+#include "sd_archive.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
@@ -243,6 +244,8 @@ void adif_log_record(const adif_qso_t *qso)
              (double)qso->freq_hz / 1e6,
              qso->rst_sent ? qso->rst_sent : "?",
              qso->rst_rcvd ? qso->rst_rcvd : "?");
+
+    sd_archive_mark_adif_dirty();  // re-mirror the ADIF file to SD if a card is in
 }
 
 int adif_log_count(void)

@@ -35,6 +35,7 @@ idf_component_register(
         "storage/settings.c"
         "storage/config_io.c"
         "storage/mem_channels.c"
+        "storage/sd_archive.c"
         "wifi/wifi.c"
         "net/webserver.c"
         "net/webserver_ws.c"
@@ -94,4 +95,14 @@ idf_component_register(
         esp_app_format
     EMBED_TXTFILES
         "net/www/index.html"
+)
+
+# Route LVGL's 256 KB builtin tlsf pool from internal SRAM BSS to PSRAM.
+# LV_MEM_POOL_ALLOC is defined in lv_pool_shim.h and force-included into
+# every LVGL translation unit so lv_mem_core_builtin.c uses it instead of
+# the static work_mem_int[] BSS array.  This returns ~256 KB to IDF's
+# internal heap without changing the tlsf allocator or touching Kconfig.
+idf_component_get_property(lvgl_lib lvgl__lvgl COMPONENT_LIB)
+target_compile_options(${lvgl_lib} PRIVATE
+    "-include${CMAKE_CURRENT_SOURCE_DIR}/util/lv_pool_shim.h"
 )
