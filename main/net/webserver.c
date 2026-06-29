@@ -526,7 +526,7 @@ static esp_err_t config_post_handler(httpd_req_t *req)
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad/empty body");
         return ESP_FAIL;
     }
-    char *body = malloc(total + 1);
+    char *body = heap_caps_malloc(total + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!body) return httpd_resp_send_500(req);
     int got = 0;
     while (got < total) {

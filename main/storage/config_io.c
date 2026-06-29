@@ -7,6 +7,7 @@
 #include <stdbool.h>
 
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "settings.h"
 #include "mem_channels.h"
 
@@ -22,7 +23,10 @@ char *config_io_export(size_t *out_len)
     qmx_settings_t c;
     settings_load_all(&c);
 
-    char *buf = malloc(CFG_BUF_BYTES);
+    // Plain malloc() of 8 KB would be forced into internal RAM (below IDF's
+    // CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL threshold), which is the one scarce
+    // resource on this device — this buffer is just text, no DMA needed.
+    char *buf = heap_caps_malloc(CFG_BUF_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf) return NULL;
     int n = 0;
     int cap = CFG_BUF_BYTES;
