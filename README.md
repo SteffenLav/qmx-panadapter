@@ -12,9 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Beta — v0.19.1.** FT8/FT4 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8/FT4 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
+> **Beta — v0.19.2.** FT8/FT4 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8/FT4 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v0.19.1.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v0.19.2.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -58,7 +58,7 @@ The full documentation also lives online at **[tab5.lav.dk](https://tab5.lav.dk)
 
 ### Step 0 — Check your QMX firmware first
 
-Power the QMX on by itself and read the firmware version off its own display at boot. You need **1.03.002 or newer**. If yours is older, update the QMX *before* connecting the Tab5 — everything that follows depends on it. This takes 10 seconds to verify and saves hours of debugging.
+Power the QMX on by itself and read the firmware version off its own display at boot. You need **1.03.002**. If yours is older, update the QMX *before* connecting the Tab5 — everything that follows depends on it. This takes 10 seconds to verify and saves hours of debugging. The **1.04 beta** is not yet verified with the panadapter — stick with 1.03.002 for now if you want a known-good combination.
 
 ### Step 1 — Flash the Tab5 firmware
 
@@ -633,7 +633,7 @@ The QMX's +12 kHz IF injection varies slightly between units. If signals appear 
 ### Hardware
 
 - **M5Stack Tab5** — ESP32-P4 v1.3 (ECO2), ST7121 or ST7123 5" 720×1280 MIPI-DSI touch display, 32 MB PSRAM, ESP32-C6 co-processor for WiFi
-- **QRP Labs QMX or QMX+** — firmware 1.03.002 or newer required
+- **QRP Labs QMX or QMX+** — firmware 1.03.002 required (the 1.04 beta is not yet verified)
 - **USB-A → USB-C data cable** between Tab5 USB-A host port and QMX (full data, not charge-only)
 - **USB-C power supply** for the Tab5 (5 V / 2 A or better, or internal battery)
 
