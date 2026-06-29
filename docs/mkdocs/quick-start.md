@@ -12,7 +12,7 @@ Get your QMX Panadapter on air in 10 minutes.
 
 ## Step 1: Verify QMX Firmware
 
-Power the QMX on standalone and check the firmware version displayed on its screen. You need **v1.03.002 or newer**. If yours is older, update the QMX first — everything that follows depends on recent firmware.
+Power the QMX on standalone and check the firmware version displayed on its screen. You need **v1.03.002**. If yours is older, update the QMX first — everything that follows depends on recent firmware. The **v1.04 beta** is not yet verified with the panadapter — stick with v1.03.002 for now if you want a known-good combination.
 
 ## Step 2: Flash the Tab5
 
@@ -119,7 +119,7 @@ If you set up WiFi:
 - Restart both devices (Tab5 first, then QMX)
 
 **QMX doesn't appear?**
-- Check QMX firmware version (Step 1 above) — must be v1.03.002 or newer
+- Check QMX firmware version (Step 1 above) — should be v1.03.002
 - Try a different USB cable
 
 **WiFi won't connect?**
