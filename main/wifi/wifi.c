@@ -17,6 +17,7 @@
 #include "esp_private/wifi.h"      // esp_wifi_internal_reg_netstack_buf_cb, set_sta_ip
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "psram_task.h"
 #include "freertos/event_groups.h"
 #include "driver/gpio.h"
 #include "bsp/esp-bsp.h"
@@ -350,7 +351,7 @@ void panadapter_wifi_start(void)
 {
     if (s_events) return;  // idempotent
     s_events = xEventGroupCreate();
-    xTaskCreate(wifi_task, "wifi", 4096, NULL, 5, NULL);
+    psram_task_create(wifi_task, "wifi", 4096, NULL, 5, tskNO_AFFINITY);
 }
 
 bool wifi_is_connected(void)
@@ -471,7 +472,7 @@ void panadapter_wifi_scan_start(void)
 {
     if (s_scan_state == WIFI_SCAN_RUNNING) return;  // already scanning
     s_scan_state = WIFI_SCAN_RUNNING;
-    xTaskCreate(wifi_scan_task, "wifi_scan", 4096, NULL, 5, NULL);
+    psram_task_create(wifi_scan_task, "wifi_scan", 4096, NULL, 5, tskNO_AFFINITY);
 }
 
 wifi_scan_state_t panadapter_wifi_scan_state(void)

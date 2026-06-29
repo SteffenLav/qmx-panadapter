@@ -24,6 +24,7 @@ idf_component_register(
         "util/ina226.c"
         "util/bsp_info.c"
         "util/diag_log.c"
+        "util/psram_task.c"
         "cat/cat.c"
         "audio/audio.c"
         "audio/cw_audio.c"

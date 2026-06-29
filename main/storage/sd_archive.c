@@ -18,6 +18,7 @@
 #include "adif_log.h"
 #include "config_io.h"
 #include "ui.h"
+#include "psram_task.h"
 
 static const char *TAG = "sd_arch";
 
@@ -254,8 +255,8 @@ static void sd_archive_task(void *arg)
 void sd_archive_init(void)
 {
     s_sd_mutex = xSemaphoreCreateMutex();
-    xTaskCreatePinnedToCore(sd_archive_task, "sd_archive", 6144, NULL,
-                            2 /* low priority */, NULL, 0);
+    psram_task_create(sd_archive_task, "sd_archive", 6144, NULL,
+                       2 /* low priority */, 0);
 }
 
 bool sd_archive_is_mounted(void)        { return s_mounted; }

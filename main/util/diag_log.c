@@ -10,6 +10,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "psram_task.h"
 #include "esp_app_desc.h"
 #include "esp_mac.h"
 #include "esp_chip_info.h"
@@ -325,7 +326,7 @@ static void diag_persist_task(void *arg)
 
 void diag_log_persist_start(void)
 {
-    xTaskCreate(diag_persist_task, "diag_persist", 4096, NULL, 2, NULL);
+    psram_task_create(diag_persist_task, "diag_persist", 4096, NULL, 2, tskNO_AFFINITY);
 }
 
 const char *diag_log_persist_path(void)

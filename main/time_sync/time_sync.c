@@ -10,6 +10,7 @@
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "psram_task.h"
 
 static const char *TAG = "time_sync";
 
@@ -298,5 +299,5 @@ void time_sync_init(i2c_master_bus_handle_t bus)
         ESP_LOGI(TAG, "RTC not valid (supercap dead or first boot) — waiting for QMX/SNTP sync");
     }
 
-    xTaskCreate(time_sync_task, "time_sync", 3072, NULL, 4, NULL);
+    psram_task_create(time_sync_task, "time_sync", 3072, NULL, 4, tskNO_AFFINITY);
 }

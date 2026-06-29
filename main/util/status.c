@@ -9,6 +9,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "psram_task.h"
 #include "lvgl.h"
 #include "ui.h"
 #include "esp_app_desc.h"
@@ -133,5 +134,5 @@ void status_bar_start(void)
     ui_set_bottom_version(esp_app_get_description()->version);
     // The bottom-bar SD-backup dot is synced once in app_main (after ui_init)
     // and driven live by the sd_archive task on mount/unmount.
-    xTaskCreate(status_task, "status", 4096, NULL, 2, NULL);
+    psram_task_create(status_task, "status", 4096, NULL, 2, tskNO_AFFINITY);
 }

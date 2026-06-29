@@ -10,6 +10,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
+#include "psram_task.h"
 
 static const char *TAG = "settings";
 
@@ -304,7 +305,7 @@ void settings_init(void)
     load_from_nvs(&s_pending);
 
     // Spawn the debounced flush task. Low priority — IO, not real-time.
-    xTaskCreate(flush_task, "settings_flush", 3072, NULL, 3, &s_flush_task);
+    s_flush_task = psram_task_create(flush_task, "settings_flush", 3072, NULL, 3, tskNO_AFFINITY);
     ESP_LOGI(TAG, "ready");
 }
 
