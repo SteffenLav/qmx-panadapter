@@ -16,6 +16,7 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -196,10 +197,15 @@ static int seconds_until_slot(bool match_parity, bool want_even, ftx_protocol_t 
 // band), falls back to FT8_TX_CQ_DEFAULT_FREQ_HZ.
 //
 // Heap-allocated internally to avoid ~11 KB of stack pressure in the LVGL
-// event-handler context where this is called (cq_btn_cb).
+// event-handler context where this is called (cq_btn_cb). PSRAM, not plain
+// malloc: this fires every RX slot during CQ-tone-clash checking, and a
+// transient ~11 KB internal-RAM bite that often was a real contributor to
+// the WiFi co-processor link dying under load (see CLAUDE.md "config import
+// /export buffers" fix - same bug class).
 int ft8_find_clear_tone_hz_near(int center_hz)
 {
-    ft8_call_t *calls = malloc(FT8_CALL_TABLE_SIZE * sizeof(ft8_call_t));
+    ft8_call_t *calls = heap_caps_malloc(FT8_CALL_TABLE_SIZE * sizeof(ft8_call_t),
+                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!calls) return center_hz;
 
     int n = 0;
@@ -267,7 +273,10 @@ bool ft8_tx_is_clashing(void)
     target[sizeof(target) - 1] = '\0';
     unlock();
 
-    ft8_call_t *calls = malloc(FT8_CALL_TABLE_SIZE * sizeof(ft8_call_t));
+    // PSRAM: called every 1 s from the FT8 screen's clock timer while a TX is
+    // armed/active, far too frequent for an ~11 KB internal-RAM allocation.
+    ft8_call_t *calls = heap_caps_malloc(FT8_CALL_TABLE_SIZE * sizeof(ft8_call_t),
+                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!calls) return false;
     int n = 0;
     ft8_screen_get_all(calls, FT8_CALL_TABLE_SIZE, &n);
