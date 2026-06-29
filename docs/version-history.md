@@ -554,6 +554,16 @@ Also new: the per-slot robust FT8 timing average (previously only applied via a 
 
 Also adds a small always-on memory monitor to the diagnostic log for future field troubleshooting. No user-facing UI changes; settings, memories and logs are all preserved across the update.
 
+### Shipped in v0.19.2 — 2026-06-29 UTC
+
+**USB reconnect fix: QMX power-cycle/reconnect no longer breaks audio+CAT.** Root cause: once WiFi connects, internal SRAM fragments down to a ~31 KB largest free block; USB endpoint allocation for UAC (audio) and CDC-ACM (CAT) needs a contiguous DMA-capable internal block, so it could fail on a QMX reconnect or power-cycle that happened after WiFi was already up. First-boot connections always worked (heap still unfragmented at that point), which is why this symptom only showed up after a reconnect. Fixed by enabling `CONFIG_USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM=y` — the ESP32-P4's USB DMA engine can address PSRAM directly, so USB transfer buffers now go there instead of competing for scarce internal RAM.
+
+**microSD auto-archive.** When a FAT/exFAT microSD card is inserted, the diagnostic log, ADIF log, and a config export are now automatically mirrored to `/sdcard/qmx-panadapter/` in the background — no setup needed beyond having a card in. A red "SD" dot breathes in the bottom bar while a card is mounted. Screenshots can also be saved straight to the card from the web UI. Card presence is detected by probing (the Tab5's SD slot has no card-detect line), so insertion/removal is picked up within a few seconds either way.
+
+**Diagnostic log now always-on and persists across power loss.** Previously the diagnostic log was an opt-in switch and lived only in RAM (lost on power-off). It's now captured automatically from boot, and a rolling copy is also saved to internal flash, so a log from a field session is still available after a battery pull or power cycle — downloadable from the web UI ("Diag(saved) ↓") even with no SD card inserted. With a card inserted, the full session log is also mirrored to the SD card.
+
+**Smaller heap fixes.** Two unrelated memory-pressure fixes bundled in alongside the above: the SD card's sector-size setting was corrected for real-world cards (was causing mount failures on some cards), and LVGL's internal memory pool was moved from a fixed 256 KB block of scarce internal RAM into the much larger external PSRAM, freeing that RAM up for the rest of the system.
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
