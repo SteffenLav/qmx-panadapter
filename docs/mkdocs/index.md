@@ -10,8 +10,8 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 - **Spectrum & Waterfall** — Real-time 4800-sample/s FFT with adaptive noise floor, spectrum curve, and colour waterfall
 - **Touch Interface** — Tap-to-tune, pinch-zoom, one-finger pan, edge-swipe navigation
-- **FT8 Decoding** — Onboard decode with configurable filtering, worked-before exclusion, and priority ranking
-- **FT8 Transmit** — Reply to CQ, run CQ, auto-QSO (robot mode), full exchange, ARRL Field Day mode
+- **FT8 & FT4 Decoding** — Onboard decode for both modes with configurable filtering, worked-before exclusion, and priority ranking
+- **FT8 & FT4 Transmit** — Reply to CQ, run CQ, auto-QSO (robot mode), full exchange, ARRL Field Day mode
 - **ADIF Logging** — Every QSO logged locally, with QRZ Logbook and eQSL upload
 - **Web UI** — Remote spectrum, waterfall, and control from any browser on the LAN
 - **Offline Ready** — Tab5 RTC + SNTP sync; FT8 operates without WiFi (POTA/portable)
