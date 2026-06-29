@@ -8,7 +8,6 @@
 //                     crash's log survives the reboot that follows it.
 //   - qso.adi       : the ADIF QSO log (re-copied after each logged QSO)
 //   - qmx-config.txt: the full config/settings export (re-written on change)
-//   - screenshots/  : timestamped BMPs saved on demand
 //
 // The Tab5 routes no card-detect line to the SoC, so card presence is
 // discovered by periodically attempting a mount; removal is detected when a
@@ -18,8 +17,7 @@
 #pragma once
 
 #include <stdbool.h>
-#include <stddef.h>
-#include "esp_err.h"
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -44,12 +42,6 @@ void sd_archive_mark_config_dirty(void);
 const char *sd_archive_log_path(void);
 bool sd_archive_lock(uint32_t timeout_ms);
 void sd_archive_unlock(void);
-
-// Capture the current screen and save it as a timestamped BMP under
-// /sdcard/qmx-panadapter/screenshots/. On success returns ESP_OK and, if
-// out_path is non-NULL, copies the saved path into it. Returns an error if no
-// card is mounted or the capture/write failed. Safe to call from the web task.
-esp_err_t sd_archive_save_screenshot(char *out_path, size_t out_path_len);
 
 #ifdef __cplusplus
 }

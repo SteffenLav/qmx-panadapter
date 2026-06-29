@@ -2,7 +2,6 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <time.h>
 #include <errno.h>
 #include <unistd.h>     // fsync
 #include <sys/stat.h>
@@ -18,14 +17,12 @@
 #include "diag_log.h"
 #include "adif_log.h"
 #include "config_io.h"
-#include "screenshot.h"
 #include "ui.h"
 
 static const char *TAG = "sd_arch";
 
 #define SD_MOUNT_POINT   "/sdcard"
 #define SD_DIR           "/sdcard/qmx-panadapter"
-#define SD_SHOTS_DIR     "/sdcard/qmx-panadapter/screenshots"
 #define SD_LOG_PATH      "/sdcard/qmx-panadapter/qmx-log.txt"
 #define SD_LOG_PATH_1    "/sdcard/qmx-panadapter/qmx-log.1.txt"
 #define SD_ADIF_PATH     "/sdcard/qmx-panadapter/qso.adi"
@@ -181,7 +178,6 @@ static bool try_mount(void)
              (int)(pre_p - post_p));
 
     ensure_dir(SD_DIR);
-    ensure_dir(SD_SHOTS_DIR);
 
     // Open (append) the diag log. s_diag_cursor is NOT reset here: on the
     // first mount of the boot it's still 0, so read_from() (clamping to the
@@ -279,65 +275,3 @@ void sd_archive_unlock(void)
     if (s_sd_mutex) xSemaphoreGive(s_sd_mutex);
 }
 
-esp_err_t sd_archive_save_screenshot(char *out_path, size_t out_path_len)
-{
-    if (!s_mounted) return ESP_ERR_INVALID_STATE;
-
-    uint8_t *buf = NULL;
-    size_t size = 0;
-    uint32_t w = 0, h = 0;
-    esp_err_t err = screenshot_capture_rgb565(&buf, &size, &w, &h);
-    if (err != ESP_OK) return err;
-
-    // 66-byte BMP header, RGB565 BI_BITFIELDS, top-down (matches /ss.bmp).
-    uint8_t header[66] = {0};
-    header[0] = 'B'; header[1] = 'M';
-    uint32_t file_size = (uint32_t)(sizeof(header) + size);
-    uint32_t off_bits  = sizeof(header);
-    uint32_t info_size = 40;
-    int32_t  width     = (int32_t)w;
-    int32_t  height    = -(int32_t)h;     // negative = top-down DIB
-    uint16_t planes    = 1;
-    uint16_t bpp       = 16;
-    uint32_t comp      = 3;               // BI_BITFIELDS
-    uint32_t img_size  = (uint32_t)size;
-    uint32_t r_mask = 0xF800, g_mask = 0x07E0, b_mask = 0x001F;
-    memcpy(&header[2],  &file_size, 4);
-    memcpy(&header[10], &off_bits,  4);
-    memcpy(&header[14], &info_size, 4);
-    memcpy(&header[18], &width,     4);
-    memcpy(&header[22], &height,    4);
-    memcpy(&header[26], &planes,    2);
-    memcpy(&header[28], &bpp,       2);
-    memcpy(&header[30], &comp,      4);
-    memcpy(&header[34], &img_size,  4);
-    memcpy(&header[54], &r_mask,    4);
-    memcpy(&header[58], &g_mask,    4);
-    memcpy(&header[62], &b_mask,    4);
-
-    char path[96];
-    time_t now = time(NULL);
-    struct tm tm;
-    gmtime_r(&now, &tm);
-    snprintf(path, sizeof(path), "%s/shot-%04d%02d%02d-%02d%02d%02d.bmp",
-             SD_SHOTS_DIR, tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-             tm.tm_hour, tm.tm_min, tm.tm_sec);
-
-    FILE *f = fopen(path, "wb");
-    if (!f) {
-        heap_caps_free(buf);
-        return ESP_FAIL;
-    }
-    bool ok = (fwrite(header, 1, sizeof(header), f) == sizeof(header)) &&
-              (fwrite(buf, 1, size, f) == size);
-    if (fclose(f) != 0) ok = false;
-    heap_caps_free(buf);
-
-    if (!ok) return ESP_FAIL;
-    if (out_path && out_path_len) {
-        strncpy(out_path, path, out_path_len - 1);
-        out_path[out_path_len - 1] = '\0';
-    }
-    ESP_LOGI(TAG, "saved screenshot %s", path);
-    return ESP_OK;
-}

@@ -240,8 +240,6 @@
     <a href="#" id="cfg-up-link" class="bot-btn" title="Upload an edited config file (merges; restart to apply)">Config &#8593;</a>
     <input type="file" id="cfg-up-file" accept=".txt,text/plain" style="display:none">
     <a href="/ss.bmp" target="_blank" class="bot-btn">Tab5Shot</a>
-    <a href="#" class="bot-btn" title="Save a screenshot to the microSD card (if one is inserted)"
-       onclick="event.preventDefault();fetch('/api/sd/shot',{method:'POST'}).then(r=>r.json()).then(j=>alert(j.saved?('Saved to SD:\n'+j.path):('SD: '+j.error))).catch(()=>alert('SD save failed'));">SD Shot</a>
   </div>
 
 <script>

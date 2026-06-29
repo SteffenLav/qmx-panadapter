@@ -14,7 +14,7 @@
 #include "screenshot/screenshot.h"  // screenshot_capture_rgb565
 #include "diag_log.h"         // diag_log_size / diag_log_snapshot
 #include "adif/adif_log.h"    // adif_log_count / adif_log_file_path / adif_log_clear
-#include "storage/sd_archive.h"  // sd_archive_is_mounted / sd_archive_save_screenshot
+#include "storage/sd_archive.h"  // sd_archive_is_mounted / sd_archive_log_path / lock / unlock
 #include "adif/qrz_upload.h"  // qrz_upload_pending
 #include "adif/eqsl_upload.h" // eqsl_upload_pending
 #include "settings.h"          // settings_load_all / settings_set_qrz_api_key
@@ -334,25 +334,6 @@ static esp_err_t saved_log_handler(httpd_req_t *req)
     return stream_file_chunks(req, diag_log_persist_path(), "(no saved diagnostic log yet)\n");
 }
 
-// POST /api/sd/shot — save a screenshot to the microSD card (if mounted).
-// Returns {"saved":true,"path":"..."} or {"saved":false,"error":"..."}.
-static esp_err_t sd_shot_handler(httpd_req_t *req)
-{
-    httpd_resp_set_type(req, "application/json");
-    char path[96] = {0};
-    esp_err_t err = sd_archive_save_screenshot(path, sizeof(path));
-
-    char body[160];
-    if (err == ESP_OK) {
-        snprintf(body, sizeof(body), "{\"saved\":true,\"path\":\"%s\"}", path);
-    } else {
-        const char *msg = (err == ESP_ERR_INVALID_STATE)
-                              ? "no SD card mounted" : "capture/write failed";
-        snprintf(body, sizeof(body), "{\"saved\":false,\"error\":\"%s\"}", msg);
-    }
-    return httpd_resp_sendstr(req, body);
-}
-
 // GET /api/adif — download the ADIF QSO log from SPIFFS.
 static esp_err_t adif_get_handler(httpd_req_t *req)
 {
@@ -592,9 +573,6 @@ static const httpd_uri_t uri_ss_bmp = {
 static const httpd_uri_t uri_log = {
     .uri = "/api/log", .method = HTTP_GET, .handler = log_handler,
 };
-static const httpd_uri_t uri_sd_shot = {
-    .uri = "/api/sd/shot", .method = HTTP_POST, .handler = sd_shot_handler,
-};
 static const httpd_uri_t uri_log_saved = {
     .uri = "/api/log/saved", .method = HTTP_GET, .handler = saved_log_handler,
 };
@@ -732,7 +710,6 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_ss_bmp);
     httpd_register_uri_handler(s_server, &uri_log);
     httpd_register_uri_handler(s_server, &uri_log_saved);
-    httpd_register_uri_handler(s_server, &uri_sd_shot);
     httpd_register_uri_handler(s_server, &uri_adif_get);
     httpd_register_uri_handler(s_server, &uri_adif_clear);
     httpd_register_uri_handler(s_server, &uri_qrz_key);
