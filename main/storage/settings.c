@@ -37,7 +37,6 @@ static const char *TAG = "settings";
 #define KEY_CQ_MSG1    "cq_msg1"
 #define KEY_CQ_MSG2    "cq_msg2"
 #define KEY_CQ_SEL     "cq_sel"
-#define KEY_DIAG_LOG   "diag_log"
 #define KEY_ONBOARDED  "onboarded"
 #define KEY_FT8_FILT   "ft8_filt"
 #define KEY_WIFI_ENABLED "wifi_en"
@@ -110,7 +109,6 @@ static const char *TAG = "settings";
 #define DIRTY_CQ_MSG1    (1u << 18)
 #define DIRTY_CQ_MSG2    (1u << 19)
 #define DIRTY_CQ_SEL     (1u << 20)
-#define DIRTY_DIAG_LOG   (1u << 21)
 #define DIRTY_ONBOARDED    (1u << 22)
 #define DIRTY_FT8_FILT     (1u << 23)
 #define DIRTY_WIFI_ENABLED (1u << 24)
@@ -137,6 +135,25 @@ static const char *TAG = "settings";
 #define DIRTY_FD_SECTION     (1ull << 45)
 #define DIRTY_SIM_MODE       (1ull << 46)
 #define DIRTY_FT8_OP_MODE    (1ull << 47)
+
+// Bits that actually affect config_io_export()'s output (storage/config_io.c).
+// Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
+// continuous time-sync correction, ~every 15s) and DIRTY_LAST_MODE are NOT in
+// here on purpose: re-mirroring qmx-config.txt to the SD card produces an
+// identical file (those fields aren't part of the export), so doing it on
+// their account is pure waste — and worse, SD card I/O competes with the
+// WiFi co-processor's SDIO link for the same shared SDMMC host peripheral
+// (see CLAUDE.md "SD-card screenshot save REMOVED"), so an unnecessary
+// every-15-seconds SD write was a standing, unintentional trigger for that
+// same hazard. Keep this mask in sync with config_io_export()'s fields.
+#define DIRTY_CONFIG_EXPORT_MASK ( \
+    DIRTY_DB_MIN | DIRTY_DB_MAX | DIRTY_EMA_ALPHA | DIRTY_IQ_ENABLED | \
+    DIRTY_FLAT_MODE | DIRTY_WIFI_SSID | DIRTY_WIFI_PASS | DIRTY_CW_PITCH | \
+    DIRTY_COLORMAP | DIRTY_MY_CALL | DIRTY_MY_GRID | DIRTY_CW_CAL | \
+    DIRTY_ZOOM | DIRTY_BRIGHTNESS | DIRTY_CQ_MSG0 | DIRTY_CQ_MSG1 | \
+    DIRTY_CQ_MSG2 | DIRTY_CQ_SEL | DIRTY_ONBOARDED | DIRTY_FT8_FILT | \
+    DIRTY_WIFI_ENABLED | DIRTY_QMX_GPS | DIRTY_FREQ_KP_CALC | \
+    DIRTY_QRZ_KEY | DIRTY_EQSL_USER | DIRTY_EQSL_PSWD)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -233,7 +250,6 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_CQ_MSG1)    nvs_set_str(s_nvs, KEY_CQ_MSG1, snap.cq_msg[1]);
         if (dirty_local & DIRTY_CQ_MSG2)    nvs_set_str(s_nvs, KEY_CQ_MSG2, snap.cq_msg[2]);
         if (dirty_local & DIRTY_CQ_SEL)     nvs_set_u8(s_nvs, KEY_CQ_SEL, snap.cq_sel);
-        if (dirty_local & DIRTY_DIAG_LOG)   nvs_set_u8(s_nvs, KEY_DIAG_LOG, snap.diag_log ? 1 : 0);
         if (dirty_local & DIRTY_ONBOARDED)  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap.onboarded ? 1 : 0);
         if (dirty_local & DIRTY_FT8_FILT)     nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap.ft8_filters, sizeof(snap.ft8_filters));
         if (dirty_local & DIRTY_WIFI_ENABLED) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap.wifi_enabled ? 1 : 0);
@@ -266,7 +282,11 @@ static void flush_task(void *arg)
             ESP_LOGW(TAG, "nvs_commit failed: 0x%x", err);
         } else {
             ESP_LOGI(TAG, "flushed dirty=0x%llx", (unsigned long long)dirty_local);
-            sd_archive_mark_config_dirty();  // re-mirror config export to SD if a card is in
+            // Only re-mirror to SD if something that's actually IN the
+            // exported file changed — see DIRTY_CONFIG_EXPORT_MASK above.
+            if (dirty_local & DIRTY_CONFIG_EXPORT_MASK) {
+                sd_archive_mark_config_dirty();
+            }
         }
     }
 }
@@ -334,7 +354,6 @@ static void load_from_nvs(qmx_settings_t *out)
     out->cq_msg[1][0] = '\0';
     out->cq_msg[2][0] = '\0';
     out->cq_sel = 0;
-    out->diag_log = false;
     out->onboarded = false;
     out->wifi_enabled = DEF_WIFI_ENABLED;
     out->qmx_gps = false;
@@ -404,7 +423,6 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_u8(s_nvs, KEY_CQ_SEL, &out->cq_sel);
     if (out->cq_sel > 2) out->cq_sel = 0;
 
-    if (nvs_get_u8(s_nvs, KEY_DIAG_LOG,    &u8v) == ESP_OK) out->diag_log    = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_ONBOARDED,  &u8v) == ESP_OK) out->onboarded  = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_WIFI_ENABLED, &u8v) == ESP_OK) out->wifi_enabled = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_QMX_GPS,      &u8v) == ESP_OK) out->qmx_gps      = (u8v != 0);
@@ -705,16 +723,6 @@ void settings_set_cq_sel(uint8_t idx)
     s_pending.cq_sel = idx;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CQ_SEL);
-}
-
-void settings_set_diag_log(bool v)
-{
-    if (!s_ready) return;
-    xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (s_pending.diag_log == v) { xSemaphoreGive(s_mutex); return; }
-    s_pending.diag_log = v;
-    xSemaphoreGive(s_mutex);
-    mark_dirty(DIRTY_DIAG_LOG);
 }
 
 void settings_set_onboarded(bool v)
