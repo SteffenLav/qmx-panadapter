@@ -44,12 +44,11 @@ Drag horizontally with one finger to scroll the spectrum left/right. Release to 
 
 #### Memory Channels
 
-Swipe ↑ from the bottom edge to open the memory picker. Each of your 10 per-band memory channels stores:
+Swipe ↑ from the bottom edge to open the memory picker — a 4×8 grid of 32 channels, each free to hold any frequency/mode (not tied to a band). Each channel stores:
 
 - Frequency
 - Mode (USB, LSB, CW, DiGi)
-- Bandwidth
-- Last tuned time
+- Label (your own name for the channel)
 
 Tap a channel to recall it. Long-press to **edit** (change name, frequency, or mode). Tap **Save** to store the current frequency/mode to a channel.
 
@@ -109,7 +108,7 @@ Layout switches between **10-Key** (phone dial) and **Phone** (QWERTY) via a tog
 
 ### 7. Memory Channels
 
-10 memory channels per band. Each stores frequency, mode, and name. Swipe up from the bottom edge to open the memory picker, or tap a memory channel name to recall it.
+32 memory channels (4×8 grid), free to hold any frequency/mode — not tied to a band. Each stores frequency, mode, and name. Swipe up from the bottom edge to open the memory picker, or tap a memory channel name to recall it.
 
 **To save the current frequency:**
 1. Tune to the desired frequency

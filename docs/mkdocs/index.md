@@ -15,7 +15,7 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 - **ADIF Logging** — Every QSO logged locally, with QRZ Logbook and eQSL upload
 - **Web UI** — Remote spectrum, waterfall, and control from any browser on the LAN
 - **Offline Ready** — Tab5 RTC + SNTP sync; FT8 operates without WiFi (POTA/portable)
-- **Multi-frequency Memory** — 10 per-band memory channels, band-specific frequency/mode recall
+- **Multi-frequency Memory** — 32 memory channels (4×8 grid), any frequency/mode, not tied to a band
 - **Optional Keyboard** — M5Stack Tab5 snap-on keyboard (70-key) for text entry and one-hand navigation
 
 ## Status
