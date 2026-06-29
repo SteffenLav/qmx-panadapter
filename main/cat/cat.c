@@ -61,6 +61,8 @@ static size_t s_pc_resp_len = 0;
 static char   s_sw_resp[16] = {0};  // last SW (SWR) response
 static size_t s_sw_resp_len = 0;
 static char   s_qmx_fw[24] = {0};   // QMX firmware version from VN; (e.g. "1_03_002QMX")
+static char   s_q9_resp[16] = {0};  // last Q9 (IQ mode) response, e.g. "Q91;"
+static size_t s_q9_resp_len = 0;
 static uint64_t s_diag_poll_hb_us = 0;  // last diag poll-heartbeat timestamp
 
 static uint32_t s_last_freq_hz = 0;
@@ -417,6 +419,16 @@ static void process_cat_message(const char *msg, size_t len)
         ESP_LOGI(TAG, "QMX firmware: %s", s_qmx_fw);
         return;
     }
+    // Q9 response: "Q9n;" — IQ mode state, queried at link-up to confirm the
+    // Q9 1; enable command was actually accepted (the CDC write succeeding
+    // only proves the bytes reached the radio, not that it parsed them — see
+    // memory project_q9_iq_mode_verification).
+    if (len >= 3 && msg[0] == 'Q' && msg[1] == '9') {
+        s_q9_resp_len = len < sizeof(s_q9_resp) ? len : sizeof(s_q9_resp) - 1;
+        memcpy(s_q9_resp, msg, s_q9_resp_len);
+        s_q9_resp[s_q9_resp_len] = '\0';
+        return;
+    }
     if (len == 6 && msg[0] == 'I' && msg[1] == 'D') {
         ESP_LOGI(TAG, "Radio ID: %s", msg);
         return;
@@ -738,6 +750,31 @@ static void link_task(void *arg)
                 } else {
                     ESP_LOGW(TAG, "Failed to enable QMX IQ mode: 0x%x", terr);
                 }
+                // Readback: a successful CDC write only proves the bytes
+                // reached the radio, not that it accepted them. Query Q9;
+                // and check the radio actually reports IQ mode on — caught
+                // a real-world case (Dirk DK7CVD, 1_04 beta firmware) where
+                // the System Config screen showed IQ mode still off despite
+                // this write succeeding.
+                s_q9_resp_len = 0;
+                const char *iq_q = "Q9;";
+                esp_err_t qerr = cdc_acm_host_data_tx_blocking(
+                    s_cdc_dev, (const uint8_t *)iq_q, strlen(iq_q), 200);
+                if (qerr == ESP_OK) {
+                    for (int wi = 0; wi < 20 && s_q9_resp_len == 0; wi++) {
+                        vTaskDelay(pdMS_TO_TICKS(20));
+                    }
+                    if (s_q9_resp_len >= 3 && s_q9_resp[2] == '1') {
+                        ESP_LOGI(TAG, "QMX IQ mode confirmed ON (%s)", s_q9_resp);
+                    } else {
+                        ESP_LOGW(TAG, "QMX IQ mode NOT confirmed (raw='%s') — "
+                                 "panadapter may show mirrored/aliased spectrum; "
+                                 "check QMX System Config IQ Mode setting",
+                                 s_q9_resp_len ? s_q9_resp : "(no response)");
+                    }
+                } else {
+                    ESP_LOGW(TAG, "Failed to query QMX IQ mode state: 0x%x", qerr);
+                }
             }
             // One-shot inline FA/MD/FW round-trip right after link-up, so
             // the top-bar Band/Mode/BW labels populate immediately instead
@@ -905,9 +942,30 @@ static void link_task(void *arg)
                                 pdTRUE, pdFALSE, portMAX_DELAY);
             ESP_LOGW(TAG, "QMX gone, cleaning up");
             if (s_cdc_dev) {
-                cdc_acm_host_close(s_cdc_dev);
+                cdc_acm_dev_hdl_t dev = s_cdc_dev;
+                // Clear the handle FIRST so poll_task's "while (s_cdc_dev !=
+                // NULL)" check exits at its next iteration, then WAIT for it
+                // to actually exit before calling cdc_acm_host_close(). The
+                // v0.18.6 "tolerate 20 consecutive transient failures" poll
+                // retry can otherwise still be mid cdc_acm_host_data_tx_blocking()
+                // on this exact handle when we close it here — that race hit
+                // cdc_acm_host_close()'s usb_host_interface_release(), which
+                // returned ESP_ERR_INVALID_STATE into an ESP_ERROR_CHECK and
+                // aborted (Dirk DK7CVD, 2026-06-29 serial capture). 200 ms
+                // poll interval x 20 retries = up to ~4s worst case; the TX
+                // itself is bounded to 200ms, so poll_task notices the NULL
+                // and exits well before that in practice.
                 s_cdc_dev = NULL;
                 s_cat_ready = false;
+                int wait_ms = 0;
+                while (s_poll_task != NULL && wait_ms < 4000) {
+                    vTaskDelay(pdMS_TO_TICKS(20));
+                    wait_ms += 20;
+                }
+                if (s_poll_task != NULL) {
+                    ESP_LOGW(TAG, "poll_task did not exit within %dms, closing anyway", wait_ms);
+                }
+                cdc_acm_host_close(dev);
             }
         } else {
             vTaskDelay(pdMS_TO_TICKS(2000));

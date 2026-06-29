@@ -174,10 +174,18 @@ int ft8_op_mode_slot_ms(void)
 #define FT8_DECODE_BUDGET_MS  11000
 
 // Max LDPC/belief-propagation iterations per candidate. Lowered 60 -> 30
-// (v0.15.13): 30 is ample for FT8 (WSJT-X uses a similar range) and roughly
-// halves per-candidate cost, so more candidates fit inside the decode budget -
-// a net increase in decodes on busy slots.
-#define FT8_LDPC_MAX_ITERS    30
+// (v0.15.13), then 30 -> 15 (2026-06-29): bp_decode() only exits early on
+// success (errors==0) or the degenerate all-zero case - a failing candidate
+// (the majority on a busy band; cand=140 routinely hits FT8_MAX_CANDIDATES)
+// always burns the FULL iteration count. On a continuing QSO this dec_ms
+// tail eats into the ~15 s slot deadline for our own next reply (capture
+// alone already runs ~15.1 s to the UTC boundary, leaving ~0 margin before
+// dec_ms even starts) - every reply in a real QSO needed a resend because
+// decode of the partner's message kept finishing after our next TX had
+// already fired with stale content (see memory project_ft8_resend_timing).
+// Halving again trades a bit more weak-signal sensitivity for closing that
+// gap; re-measure decode rate on-air after this change, same as 60->30 was.
+#define FT8_LDPC_MAX_ITERS    15
 
 #define EPOCH_SANE_MIN        1700000000  // 2023-11-14 - SNTP not synced if below this
 
