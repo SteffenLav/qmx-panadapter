@@ -27,6 +27,7 @@
 
 #include "ft8_qso.h"
 #include "ft8_tx.h"
+#include "ft8_test.h"   // ft8_op_mode_get() - FT8/FT4 sub-mode, for ADIF MODE
 #include "ft8_status.h"
 #include "ui/ft8_screen.h"
 #include "storage/settings.h"
@@ -744,7 +745,7 @@ void ft8_qso_advance(int64_t slot_sec)
                 .my_grid    = qs.my_grid,
                 .their_grid = their_grid,
                 .freq_hz    = cat_get_frequency(),
-                .mode       = "FT8",
+                .mode       = (ft8_op_mode_get() == FT8_OP_MODE_FT4) ? "FT4" : "FT8",
                 .rst_sent   = s_rst_sent,
                 .rst_rcvd   = s_rst_rcvd,
                 .qso_time   = time(NULL),

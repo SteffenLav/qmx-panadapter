@@ -148,6 +148,15 @@ static void schedule_cq_answer(const char *my_call, int64_t our_slot)
     build_and_inject(my_call, ph->call, ph->grid, false, ph->tone_hz, reply_slot);
 }
 
+// Coarse SNR -> FT8 report token ("-07", "+02"), same convention as
+// ft8_qso.c's fmt_report() (duplicated here - that one is file-static).
+static void fmt_report(int snr_db, char *out, size_t len)
+{
+    if (snr_db < -24) snr_db = -24;
+    if (snr_db > 15)  snr_db = 15;
+    snprintf(out, len, "%+03d", snr_db);
+}
+
 // Our TX just addressed a known phantom directly (pounce reply, cqrun
 // report, roger, ...). `qso_state` is read AFTER ft8_qso.c armed this TX, so
 // it already reflects what we're now waiting for - that's what decides the
@@ -161,10 +170,15 @@ static void schedule_phantom_reply(ft8_sim_phantom_t *ph, const char *my_call,
 
     switch (qso_state) {
     case FT8_QSO_WAIT_RPT:
-        // Partner's first reply to our TX1 (pounce): grid normally, or our
-        // Field Day exchange (no "R" yet - this is their first FD message).
+        // Partner's first reply to our TX1 (pounce): a signal report of OUR
+        // signal (their grid was already given in their original CQ - it's
+        // not repeated here), or our Field Day exchange (no "R" yet - this
+        // is their first FD message). Previously sent ph->grid again, which
+        // ft8_qso.c's WAIT_RPT handler doesn't expect - it built a bogus
+        // "R<grid>" roger instead of a real report, and the malformed
+        // exchange manifested as a stuck loop (Ken KF0AYY field report).
         if (field_day_en) { snprintf(extra, sizeof(extra), "%s %s", ph->fd_class, ph->fd_section); use_fd = true; }
-        else                snprintf(extra, sizeof(extra), "%s", ph->grid);
+        else                fmt_report(-9, extra, sizeof(extra));
         break;
     case FT8_QSO_WAIT_RR73:
         // We sent R<report> / R<class+section>; partner closes with RR73.

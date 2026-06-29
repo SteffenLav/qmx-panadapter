@@ -20,11 +20,12 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 ## Status
 
-**v0.19.0 — Stable for all features except FT8/FT4 transmit, which is functional but un-soaked for multi-hour sessions.**
+**v0.19.1 — Stable for all features except FT8/FT4 transmit, which is functional but un-soaked for multi-hour sessions.**
 
 - All panadapter features (spectrum, waterfall, zoom, memory, web UI) are production-ready
 - FT8 and FT4 receive, plus ADIF logging, are stable
 - FT8 and FT4 transmit work but lack multi-hour soak testing and duty-cycle protection (FT4 TX is new in v0.19.0)
+- Logbook uploads (QRZ/eQSL) now work reliably while FT8 is running (fixed in v0.19.1)
 - See [Version History](releases.md) for all changes
 
 ## Get Started

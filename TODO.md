@@ -1,8 +1,8 @@
 # QMX Panadapter — Master Todo List + Status Assessment
 
-**Last updated:** 2026-06-27
-**Scope:** v1.0 release gates → open investigations → next-up → longer-term roadmap
-**Source:** CLAUDE.md + README.md + groups.io feature requests + this session
+**Last updated:** 2026-06-29
+**Scope:** v1.0 release gates → open investigations → feature requests → roadmap → full shipped history
+**Source:** CLAUDE.md + README.md + groups.io feature requests + session work
 **Assessment:** Code grep + git log + memory system
 
 ---
@@ -19,228 +19,88 @@
 
 ---
 
-## 📋 Quick Verdict Table
+## 📋 Master Table
 
-| # | Item | Status | Effort | Next Step |
+| # | Item | Status | Effort | Next Step / Notes |
 |----|------|--------|--------|-----------|
-| **v1.0 Gates** | | | | |
-| 1 | LoTW upload (TQSL) | ❌ Not started | Design→Code | Design architecture first |
-| 2 | FT8 TX multi-day soak | ⚠️ Code ready | Testing only | Run validation soak |
-| **Groups.io Features** | | | | |
-| 3 | One-button TUNE | ⚠️ Verify needed | ? | Check message #172521 |
-| 4 | **CW page** (Phase 1: TX/memory, Phase 2: RX decode) | ❌ Not started | P1 Medium, P2 Large/cheap-if-CAT | Ship P1 (page + canned-msg TX) standalone; gate P2 on Goertzel-vs-CAT-mirror question |
-| 5 | FT4 mode (Roy) — *do before JS8/RTTY* | ✅ Shipped (v0.19.0) | — | RX engine + TX cadence verified on hardware; both modes live |
-| 5.5 | **FT4 time sync** | ❌ Not started | Medium | Implement 7.5s slot timing estim ation in `ft8_time_modal.c` (currently FT8-only); hide "Sync Time" button in FT4 mode until implemented |
-| **Shelved** | | | | |
-| 6 | CW Audio (speaker output only) | ✋ Shelved (v0.18.5/.6) | Unblock needed | Fix priority/cadence of cw_audio_task, then I2S/DMA contention. Blocks #4-P2-decoder only if it ends up needing the I2S path — does NOT block a CAT-mirror decoder, only #8 below |
-| **Longer-Term Roadmap** | | | | |
-| 7 | Speaker/headphone audio | ❌ Not started (blocked) | Large | Unblock CW Audio (#6) first |
-| 8 | Extended waterfall history | ❌ Not started | Medium | New feature |
-| 9 | QMX (small) support | ❌ Not started | Medium | New USB config |
-| 10 | JS8/RTTY modes — *JS8 after FT4 (#5)* | ❌ Not started | Large | RTTY is a fully separate pipeline (feasibility doc); JS8 shares ft8_lib + benefits from FT4's slot-abstraction work |
-| 11 | DSP polish (NR, notch) | ❌ Not started | Medium | New algorithms |
-| **Closed/Shipped (since last update)** | | | | |
-| — | ARRL Field Day FT8 exchange mode | ✅ Shipped (v0.18.8) | — | Bit layout verified vs WSJT-X source; QSO machine, Filter-modal UI, CQ FD auto-tag, ADIF fields |
-| — | FT8 simulation mode (phantom stations) | ✅ Shipped (v0.18.8) | — | Real synth+decode pipeline, hard TX interlock, breathing red border |
-| — | FT8 decode-yield gap to v0.18.0 | ✅ Closed (v0.18.7) | — | Controlled A/B: HEAD == v0.18.0, 15.38 dec/slot each |
-| — | FT8 auto-answer robot | ✅ Un-shelved, live TX (v0.18.7) | — | Permanent on-screen "unattended" disclaimer |
-| — | CQ tone auto-relocation on clash | ✅ Shipped (v0.18.7) | — | Was just a warning before; now self-heals |
-| — | SNTP/QMX time priority bug + FT8 auto-sync | ✅ Shipped (v0.18.7) | — | — |
-| — | FT8 own-call highlight cache | ✅ Fixed (v0.18.7) | — | Was stale until a mode bounce |
-| — | FT8 Filter modal checkbox sizing | ✅ Fixed (v0.18.7) | — | — |
-| — | Recovery flasher port auto-detect | ✅ Fixed (v0.18.7) | — | Was hardcoded COM3 / wrong macOS glob |
-| — | RST_SENT in CQ-run | ✅ Shipped (v0.18.6) | — | — |
-| — | Distance in miles (FT8) | ✅ Feature in v0.18.6, bugs fixed in v0.18.7 | — | — |
+| **v1.0 Release Gates (2 blockers for stable release)** | | | | |
+| 1 | LoTW upload (TQSL) | ❌ Not started | Design→Code | Certificate-based via TQSL, not a simple HTTP API like QRZ/eQSL. QRZ+eQSL already shipped (v0.16.2); LoTW is the last logging target. mbedtls→PSRAM fix already unblocked outbound HTTPS, so the TLS issue QRZ hit won't recur — look elsewhere first if LoTW fails to connect. Design architecture first |
+| 2 | FT8 TX multi-day soak | ⚠️ Code ready, testing only | Testing only | No duty-cycle protection, no audio loopback verification, no over-temperature monitoring yet. All RX/panadapter/web/logging features already stable. Blocks dropping the "beta" label |
+| **Groups.io Feature Requests** | | | | |
+| 3 | One-button TUNE (WS1M/bammi, Jun 25) | ⚠️ Verify needed | ? | Single button to trigger external relay/tuner function. Possibly already discussed/handled in groups.io message #172521 — needs verification |
+| 4 | CW page — Phase 1: TX/memory (thread, Jun 24-25) | ❌ Not started | Medium | Canned-message buttons triggering CW TX, reusing existing `mem_channels.c` + CAT key-down plumbing (same pattern as FT8 CQ presets). No new DSP, no audio dependency — ship standalone |
+| 4b | CW page — Phase 2: RX decode | ❌ Not started | Large, or cheap if CAT-mirror works | Scrolling decoded CW text under the spectrum. Option (a) Goertzel tone tracker (new DSP, Large); option (b) mirror QMX's own internal decode via CAT (cheap — check CAT manual for a CW-decode query before committing to (a)). Does NOT need shelved CW Audio (#6) — only needs the RX ring buffer, already flowing for FT8 |
+| 5 | FT4 mode (Roy, Jun 26) | ✅ Shipped (v0.19.0) | — | RX engine + TX cadence verified on hardware; both modes live. Was the cheap trial run for generalizing the hardcoded-15s slot machinery — JS8 (#10) benefits from that same generalization |
+| 5.5 | FT4 time sync | ❌ Not started | Medium | 7.5s slot timing estimation in `ft8_time_modal.c` is currently FT8-only (15s). Hide "Sync Time" button in FT4 mode until implemented |
+| **Shelved Work** | | | | |
+| 6 | CW Audio (speaker/headphone output only) | ✋ Shelved (v0.18.5/.6) | Unblock needed | Disabled to restore FT8 decode performance. Root cause: `cw_audio_preopen()`+`dsp_cw_forward()` degraded yield 2–3× even with audio off (v0.18.5); `cw_audio_init()` also spawned a priority-6 ghost task on core 1 preempting `fft_task` ~125×/slot, found+disabled in v0.18.6, confirmed via controlled A/B to fully restore v0.18.0-level yield. Fix needed before re-enabling: root-cause the original I2S/DMA/UAC contention AND fix task priority/cadence, then soak-test a full session. Blocks #7 only — does NOT block CW Phase 2 decode (#4b) |
+| **Longer-Term Roadmap (Post v1.0)** | | | | |
+| 7 | Speaker/headphone audio (Tab5 jack) | ❌ Not started, blocked | Large | Demodulated CW/SSB passband audio from Tab5's own jack. Blocked on unshelving CW Audio (#6) |
+| 8 | Extended waterfall history | ❌ Not started | Medium | PSRAM has room for several minutes of scrollback; two-finger drag to scrub through |
+| 9 | QMX (small) support | ❌ Not started | Medium | Same UI, different USB endpoint config and band table |
+| 10 | JS8 mode | ❌ Not started | Large | Heavily reuses `ft8_lib` per feasibility doc; has 10/15/30/60s slot variants. Do after FT4 (#5) to reuse its slot-abstraction work. See `docs/js8-feasibility.md` |
+| 10b | RTTY mode | ❌ Not started | Large | Fully separate pipeline — no LDPC, no block structure. Unrelated to FT4/JS8 work. See `docs/rtty-feasibility.md` |
+| 11 | DSP polish (noise reduction, auto-notch) | ❌ Not started | Medium | New algorithms, no design started |
+| **Groups.io Feedback — Jun 29 (Ken KF0AYY, Dirk)** | | | | |
+| 12 | FT8 sim phantom sent grid instead of report at WAIT_RPT | ✅ Fixed (unreleased) | — | Fixed in `ft8_sim.c` — was sending `ph->grid` again instead of a signal report, contradicting `ft8_qso.c`'s own WAIT_RPT expectation. Caused Ken's "infinite grid loop" in Practice Mode. Built + verified, not yet flashed/released |
+| 13 | Persistent multi-target CQ pile-up list (Ken) | ❌ Not started | Large | Real architecture change — `ft8_qso.c` needs N-way exchange tracking (not just single `s_target`), plus a pile-up panel UI in `ft8_screen_view.c` (tap-to-focus, swipe-to-remove, auto-remove on RR73 sent). Scope properly before starting |
+| 14 | FT8 row touch-and-hold selection unreliable (Ken + Dirk, two reports) | 🔴 Identified bug | Medium | `ft8_screen_view.c`: list stays `LV_OBJ_FLAG_SCROLLABLE` for the first `ROW_HOLD_SELECT_MS` (250ms), so LVGL's native scroll/kinetic logic races our own gesture gate on the same touch. Consider Dirk's tap-then-confirm alternative instead of hold-to-select |
+| 15 | FT8 list scrolling "fights itself" (Dirk) | 🔴 Identified bug | Small–Medium | Same root cause as #14 — fix together |
+| 16 | FT8 decode misses / double-sends (Dirk) | ⚠️ Needs verification | — | Resend-until-acked every slot is normal FT8 behavior, not a bug by itself. Blocked on Dirk's diag log to check for a real decode-yield regression vs the v0.18.7 closed investigation |
+| 18 | I/Q image artifact after QMX+ menu visit, only clears on QMX power-cycle (Dirk, w/ screenshot) | 🔴 Identified likely cause | Medium | Screenshot shows a classic twin-mirrored-band I/Q image, not a QMX test tone. Likely cause: `iq_balance.c`'s fast-reconverge window only triggers on a zero-byte/silence reset detection (shared with the flat-spectrum-floor reset), which a menu visit may not produce if the audio stream doesn't actually go silent. Needs a broader "reconverge" trigger, not just the power-cycle workaround |
+| 21 | FT4 QSOs logged to ADIF as MODE=FT8 | ✅ Fixed (unreleased) | — | `ft8_qso.c:747` hardcoded `.mode = "FT8"` on every completed QSO regardless of actual sub-mode. Now reads `ft8_op_mode_get()` and logs "FT4" correctly. Built+verified, not yet flashed/released. Note found while tracing this: FT4 currently has no auto-reply/exchange logic at all (`ft8_test.c` — "FT4 currently only supports CQ, no auto-reply"), so real FT4 QSOs via the auto QSO machine aren't actually happening yet — worth flagging to whoever reported this |
+| **Closed Investigations** | | | | |
+| 19 | FT8 decode-yield gap to v0.18.0 | ✅ Closed (2026-06-26) | — | Three real regressions found+fixed since v0.18.0 (cw_audio ghost task, d140485 partial-revert restoration, unconditional opacity-set in `ui_push_spectrum()`). Controlled same-time-of-day A/B (chip-erased, 60-slot captures): v0.18.0 vs HEAD both 15.38 decodes/slot mean, HEAD tighter stddev (5.70 vs 6.65). Earlier "gap" was a band-fading confound, not a code regression. Full methodology in memory `project_ft8_sparse_decode_investigation` |
+| **Closed/Shipped — Full Version History** | | | | |
+| — | v0.19.1 — tab5.lav.dk homepage launch | ✅ Shipped | — | New project homepage as plain web pages (user guide + reference) |
+| — | v0.19.1 — Logbook upload/download reliability fix | ✅ Shipped | — | QRZ/eQSL uploads + log downloads now work reliably while FT8 is running — no more reboots or dropped WiFi during a transfer |
+| — | v0.19.0 — FT4 transmit + receive | ✅ Shipped | — | 7.5s slots, 105 symbols, 48ms cadence; CAT cadence verified on real hardware; see #5 above |
+| — | v0.18.8 — ARRL Field Day FT8 exchange mode | ✅ Shipped | — | `ftx_message_encode_arrl_fd`/`decode_arrl_fd` in `ft8_lib`; bit layout + 86-entry section table verified byte-for-byte vs WSJT-X `packjt77.f90`; `ft8_qso.c` integration; Filter-modal class/section UI with live TX preview; `CQ FD` auto-tag; ADIF fields |
+| — | v0.18.8 — FT8 simulation mode | ✅ Shipped | — | `ft8_sim.c`: two phantom stations (W1AW, K9ZZ) call CQ and reply via real encode→GFSK-synth→decode pipeline; hard TX interlock in `ft8_tx.c`; breathing red border while active |
+| — | v0.18.7 — FT8 decode-yield gap CLOSED | ✅ Shipped | — | See Closed Investigations #19 above |
+| — | v0.18.7 — FT8 auto-answer robot un-shelved | ✅ Shipped | — | Live TX, permanent on-screen "unattended" disclaimer |
+| — | v0.18.7 — CQ tone auto-relocation on clash | ✅ Shipped | — | Was just a warning before; `relocate_cq_tone_if_clashing()` now self-heals by hopping to the nearest clear slot |
+| — | v0.18.7 — SNTP/QMX time-priority bug fix + FT8 auto-sync | ✅ Shipped | — | 10-min SNTP-freshness check now gated on actual WiFi/SNTP validity; per-slot FT8 timing average auto-applies to system clock every slot |
+| — | v0.18.7 — FT8 own-call highlight cache fix | ✅ Shipped | — | Was stale until a mode bounce; now refreshed every cycle in `rebuild_list()` |
+| — | v0.18.7 — FT8 Filter modal checkbox sizing + Priority dropdown restyle | ✅ Shipped | — | All 8 checkboxes made textless+separate-label for uniform sizing |
+| — | v0.18.7 — Recovery flasher port auto-detection | ✅ Shipped | — | Was hardcoded COM3 / wrong macOS device glob (W7STF field report) |
+| — | v0.18.6 — FT8 decode-yield investigation | ✅ Shipped | — | `cw_audio_init()` ghost task found+disabled, `d140485` fix restoration, opacity-set skip — see #19 |
+| — | v0.18.6 — RST_SENT fix in CQ-run | ✅ Shipped | — | Responder sending RR73/73 immediately never set `s_rst_sent`; ADIF logged "599" instead of actual SNR |
+| — | v0.18.6 — Distance-in-miles toggle | ✅ Shipped (bugs fixed v0.18.7) | — | `distance_in_miles` setting + drawer checkbox; v0.18.7 fixed drawer-section placement + "KM"/"MI" header not flipping live |
+| — | v0.18.6 — Diag-log bottom-bar dot | ✅ Shipped | — | Red breathing dot + "Diag" label in bottom bar |
+| — | v0.18.5 — CW audio band-aid | ✅ Shipped | — | `cw_audio_preopen()`/`dsp_cw_forward()` disabled — see CW Audio shelved item #6 |
+| — | v0.18.5 — FT8 double-spawn crash guard restored | ✅ Shipped | — | Fast Panadapter↔FT8 toggle could spawn a second `ft8_task`, crashing on shared queue |
+| — | v0.18.5 — Bootloader-corruption hotfix + recovery tooling | ✅ Shipped | — | Hotfix flasher build wrote merged firmware to flash address 0x0 instead of 0x10000; recovery release + scripts shipped |
+| — | v0.18.4 — Band-plan strip + region selector | ✅ Shipped | — | CW/Digi/Phone colour strip tracking VFO; Auto/R1/R2/R3 region drawer selector |
+| — | v0.18.4 — One-finger pan/stroll | ✅ Shipped | — | Replaced two-finger stroll; one-finger horizontal drag slides scope+waterfall, retunes on release |
+| — | v0.18.4 — Snap-to-signal toggle + CW snap fix | ✅ Shipped | — | Drawer toggle for `dsp_find_peak_hz_around`; CW search now centres on IF offset, not bare 12kHz |
+| — | v0.18.4 — Band-aware worked-before (ADIF) | ✅ Shipped | — | Callsign+band worked-before tracking |
+| — | v0.18.4 — FT8 robot shelved (built, not soaked) | ✅ Shipped (shelved), later un-shelved v0.18.7 | — | See robot item above |
+| — | v0.18.3 — Waterfall drawer controls | ✅ Shipped | — | Live NVS-persisted black level, contrast, adaptive floor blend, FFT window selector |
+| — | v0.18.3 — Display 180° flip | ✅ Shipped | — | For upside-down mounting/cable routing; touch follows automatically |
+| — | v0.18.2 — WiFi idle reboot fix | ✅ Shipped | — | SDIO RX switched to RX_NONE recycled mempool; was exhausting internal DMA heap under sustained WiFi RX |
+| — | v0.18.2 — Web UI reconnect fixes | ✅ Shipped | — | Stale WS sockets now closed on takeover; tolerates transient send failures instead of tearing down the session |
+| — | v0.18.1 — Config backup/restore | ✅ Shipped | — | Web `/api/config` export/import of all settings + memory channels as editable INI text |
+| — | v0.18.1 — Clean-flash option | ✅ Shipped | — | Flasher prompts normal vs clean (full chip erase) flash |
+| — | v0.18.1 — Memory-recall crash fix | ✅ Shipped | — | Direct LVGL-thread CAT write raced the poll task; now optimistic display + deferred poll-task write |
+| — | v0.18.1 — Fast Panadapter↔FT8 toggle crash fix | ✅ Shipped | — | Single-instance guard for `ft8_task` spawn |
+| — | v0.18.0 — Streaming STFT decode + dual-core FT8 | ✅ Shipped | — | Waterfall built block-by-block during capture; core-0 helper decodes odd candidates in parallel |
+| — | v0.18.0 — Reply-on-immediate-slot | ✅ Shipped | — | Replies fire on the same slot instead of a cycle later, validated on-air |
+| — | v0.18.0 — dBm scale restored | ✅ Shipped | — | Right-edge centered labels, normal=dBm / flat=dB-above-floor |
+| — | v0.18.0 — Tap-to-tune + memory-channel freq fixes | ✅ Shipped | — | Fixed reversal aliasing past Nyquist; fixed dotless-string truncation bug |
 
 ---
 
-## 🎯 v1.0 Release Gates (2 blockers for stable release)
-
-The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF upload.
-
-### 1️⃣ LoTW Upload (TQSL)
-- **Status:** [ ] Not yet designed
-- **Blocker for:** v1.0.0 stable release
-- **Challenge:** Certificate-based via TQSL (not simple HTTP API like QRZ/eQSL)
-- **Reference:** See CLAUDE.md "Next up" + README.md Roadmap
-- **Note:** QRZ (v0.16.2) and eQSL (v0.16.2) already shipped; LoTW is the last logging target. The mbedtls→PSRAM fix already unblocked outbound HTTPS, so the TLS issue QRZ hit won't recur — look elsewhere first if LoTW fails to connect.
-
-### 2️⃣ FT8 TX Multi-day Soak
-- **Status:** [ ] Testing needed
-- **Blocker for:** v1.0.0 stable release + dropping "beta" label
-- **Testing scope:**
-  - Multi-hour/multi-day TX stability
-  - No duty-cycle protection yet
-  - No audio loopback verification
-  - No over-temperature monitoring
-- **Note:** All RX/panadapter/web/logging features already stable
-
----
-
-## ✅ Closed Investigation
-
-### FT8 decode-yield gap to v0.18.0 — CLOSED 2026-06-26
-**Status as of v0.18.6:** Three real regressions found and fixed since v0.18.0, but a same-night A/B still showed v0.18.0 decoding noticeably better — left as an open question.
-
-- Fix 1: `cw_audio_init()` (main.c) was spawning a priority-6 ghost task on core 1, preempting `fft_task` ~125×/slot — disabled.
-- Fix 2: restored 3/4 of a separately-validated fix (`d140485`) that the v0.18.1 emergency revert had thrown out (CAT poll resilience, DiGi-forcing routing, freshest-freq snapshots).
-- Fix 3: `ui_push_spectrum()` no longer does an unconditional LVGL opacity set every 10 Hz tick.
-
-**Resolution:** ran a controlled same-time-of-day A/B (midday, sunny high-pressure, 20m) — built v0.18.0 in a separate git worktree, full chip erase before each flash to eliminate NVS/state carryover, two back-to-back 15-minute (60-slot) captures.
-
-| | v0.18.0 | HEAD (all 3 fixes) |
-|---|---|---|
-| Mean decodes/slot | 15.38 | 15.38 |
-| Std dev | 6.65 | 5.70 |
-| First-half avg | 16.4 | 15.8 |
-| Second-half avg | 14.3 | 15.0 |
-
-Means identical to two decimal places; no decode-collapse cliff in either run. **Verdict: the v0.18.6 fix set fully closes the gap.** The earlier same-night A/B was comparing different few-minute windows as the band faded through the evening — a band-fading confound, not a code regression.
-
-- **See:** `project_ft8_sparse_decode_investigation` in memory for full methodology + data.
-
----
-
-## ✨ Feature Requests (from groups.io / Roy)
-
-### One-button TUNE feature
-**Requested by:** WS1M/bammi (Jun 25)
-
-**Description:** Single button to trigger external relay/radio tuner function for shack use.
-
-**Status:** Possibly already handled in groups.io message #172521 — needs verification if it's implemented or just discussed.
-
-**Priority:** Medium
-
----
-
-### CW page (merged: TX/memory + RX decode, two phases)
-**Requested by:** Someone in thread (Jun 24-25) — TX/memory half; the RX decode half was already on the longer-term roadmap separately and is folded in here since they're the two directions of the same feature.
-
-**Description:** Dedicated CW page (like the FT8 page), with:
-- **Phase 1 — TX/memory (medium effort, ship first):** canned-message buttons triggering CW TX, reusing the existing `mem_channels.c` + CAT key-down plumbing (same pattern as FT8's CQ presets). No new DSP, no audio dependency — can ship standalone.
-- **Phase 2 — RX decode (effort depends on approach):** scrolling decoded text under the spectrum. Two options: (a) Goertzel-based tone tracker built from scratch (Large effort, new DSP code), or (b) mirror whatever the QMX itself already decodes internally via CAT (much cheaper — *check the CAT manual for a CW-decode query before committing to (a)*).
-
-**Priority:** Medium
-
-**Dependency correction:** Phase 2's decoder does **not** need the shelved CW Audio path (`cw_audio_task`/I2S output) — it only needs RX audio samples, which already flow through the same ring buffer FT8 decode taps. CW Audio (#6) blocks **Tab5 speaker/headphone output** (item below) only, not text decode. Don't gate Phase 2 on unblocking #6 unless option (a) turns out to need something CW Audio currently owns.
-
----
-
-### FT4 mode — scope before JS8/RTTY, not in isolation
-**Requested by:** Roy (Jun 26)
-
-**Description:** Add FT4 alongside FT8.
-
-**Priority:** Low–Medium
-
-**Assessment:** Much lower effort than JS8/RTTY — the vendored `components/ft8_lib` already fully implements FT4 internally (`FTX_PROTOCOL_FT4` branches in `decode.c`; Costas pattern, 4-tone Gray map, symbol period, LDPC(174,91) all already in `ft8/constants.h`). Decode/encode core is essentially free. The real work is app-level slot-timing plumbing built around FT8's fixed 15 s slot: `ft8_test.c`'s capture/decode/TX loop, `ft8_qso.c`'s timeout-in-slots counters, the UI countdown bar, and CAT DigiMode forcing all need a parallel 7.5 s path. No new DSP pipeline or UI screen needed, unlike RTTY/JS8.
-
-**Run together with JS8/RTTY planning:** FT4 forces generalizing the hardcoded-15s slot machinery into a mode-aware parameter. JS8 (which also heavily reuses `ft8_lib`, per the JS8 feasibility doc, and itself has 10/15/30/60s variants) directly benefits from that same generalization. RTTY doesn't — it's a fully separate pipeline (no LDPC, no block structure) per `docs/rtty-feasibility.md`, so it stays independent. **Recommendation:** do FT4 first as the cheap trial run of the slot abstraction, then revisit JS8 with that abstraction already in place; treat RTTY as unrelated.
-
-**See:** `project_ft4_mode_request.md` in memory, README.md "Longer term" roadmap.
-
----
-
-## 🔧 Known Issues / Shelved Work
-
-### CW Audio — speaker/headphone output ONLY (shelved — v0.18.5, extended v0.18.6)
-- **Status:** Shelved — disabled to restore FT8 decode performance
-- **Scope correction:** this is the I2S-to-speaker output path only. It blocks "Tab5 speaker/headphone audio" below. It does **not** block a future CW text decoder (see "CW page" feature above) — decode only needs the RX audio ring buffer, which is unaffected.
-- **Root cause (v0.18.5):** `cw_audio_preopen()` (I2S/DMA init) and `dsp_cw_forward()` (hot-path call) degrade FT8 yield 2–3× even with CW audio off — disabled.
-- **Root cause (v0.18.6, found later):** `cw_audio_init()` was never disabled alongside `cw_audio_preopen()` — it spawned a priority-6 task on core 1 that kept preempting `fft_task` every 120 ms for the whole session. Now also disabled — and a controlled A/B on 2026-06-26 confirmed this fully restored yield to v0.18.0 levels (see Closed Investigation above).
-- **Fix needed before re-enabling:** root-cause the original I2S/DMA/UAC contention, AND fix `cw_audio_task`'s priority/cadence so it can't preempt `fft_task` even when idle, then soak-test FT8 yield over a full session.
-- **See:** `project_cw_audio_blocked.md` in memory system
-
----
-
-## 🚀 Longer-Term Roadmap (Post v1.0)
-
-### Audio & Monitoring
-- **CW decoder (RX)** — now Phase 2 of the merged "CW page" feature request above, not a standalone item.
-- **Tab5 speaker/headphone audio** — Demodulated CW/SSB passband audio from Tab5's own jack, so operator can monitor without QMX audio path. Blocked on unshelving CW Audio (#6) — see Known Issues above.
-- **Extended waterfall history** — PSRAM has room for several minutes of scrollback; two-finger drag to scrub through.
-
-### Hardware & Modes
-- **QMX (small) support** — Same UI, different USB endpoint config and band table.
-- **JS8 / RTTY modes** — See feasibility docs in `docs/js8-feasibility.md` and `docs/rtty-feasibility.md`. **JS8 benefits from doing FT4 first** (shared slot-abstraction work); RTTY is unrelated to either.
-- **FT4 mode** — See Feature Requests above (Roy); do before JS8.
-
-### DSP & Signal Processing
-- **DSP polish** — Noise reduction, auto-notch
-
----
-
-## ✅ Shipped Since Last Update
-
-### FT4 mode (v0.19.0)
-FT4 RX engine + TX live on hardware. RX was fully implemented and tested in v0.18.x (decoding at 0-3 per slot, 140 candidate pool). TX safety gate lifted after on-air verification: three consecutive FT4 CQ bursts fired cleanly, all ~105 TA commands sent at 48ms intervals (~5s on-air each), no dropped commands or timeouts. Power/SWR readings normal. FT4 now operates identically to FT8 at the app level; only protocol-aware timing differs (7.5s vs 15s slots).
-
-### ARRL Field Day FT8 exchange mode (v0.18.8)
-New `ftx_message_encode_arrl_fd`/`decode_arrl_fd` in `components/ft8_lib/ft8/message.c` (the message type was enumerated but never implemented, including upstream). Bit layout + 86-entry section table verified byte-for-byte against WSJT-X's `packjt77.f90`. `ft8_qso.c` carries class+section on the report-equivalent exchange step; Call CQ auto-tags `CQ FD <call> <grid>` (replacing any other modifier); ADIF gains `CONTEST_ID`/`STX_STRING`/`SRX_STRING`/`ARRL_SECT`/`MY_ARRL_SECT`. The CQ preset editor locks (dim + disabled + Cancel-only) while the mode is on, with a live always-accurate TX preview. See CLAUDE.md "ARRL Field Day mode" for the full technical writeup and `docs/version-history.md`'s v0.18.8 entry.
-
-### FT8 simulation mode (v0.18.8)
-New `ft8_sim.c`: two phantom stations (W1AW, K9ZZ) call CQ and reply via the real encode→GFSK-synthesis→decode pipeline, with reply content driven by `ft8_qso_get_state()` so the QSO machine can't tell a simulated contact from a real one. Hard TX interlock lives in `ft8_tx.c` (checks `sim_mode_en` directly, skips every `cat_*` call) so a connected QMX is never keyed. Breathing red full-screen border while active. FT8-drawer-only toggle. See CLAUDE.md "FT8 simulation mode".
-
-### FT8 decode-yield gap to v0.18.0 (closed in v0.18.7)
-See "Closed Investigation" above — controlled A/B proved HEAD matches v0.18.0 exactly; the v0.18.6 fix set is sufficient.
-
-### FT8 auto-answer robot un-shelved (v0.18.7)
-Feature-complete since v0.18.4 but held back pending an on-air soak test that kept getting deferred. Shipped live rather than waiting indefinitely — the Filter modal's "Auto-answer CQ with priority:" row is un-greyed, `robot_en` persists, and a permanent (not one-time) "⚠ Transmits unattended — never leave running unsupervised" warning shows whenever the checkbox is checked.
-
-### CQ tone auto-relocation on clash (v0.18.7)
-`ft8_tx_is_clashing()` used to just show "⚠ FREQ BUSY" and keep transmitting on the occupied tone. `ft8_qso.c`'s new `relocate_cq_tone_if_clashing()` now re-scans and hops to the nearest clear slot on every CQ no-answer cycle. Active exchanges still keep the tone locked to the partner, unchanged.
-
-### SNTP/QMX time priority bug + new FT8 auto-sync (v0.18.7)
-`time_sync_notify_qmx()`'s 10-minute SNTP-freshness check didn't match SNTP's real ~hourly resync cadence, letting the QMX's non-GPS RTC silently win every 5-minute poll even with WiFi healthy. Now gated on `wifi_is_connected() && wifi_time_is_valid()`. Also new: the per-slot FT8 timing average auto-applies to the system clock every slot (damped, ~30% gain per slot to avoid chasing noise) instead of only via a manual modal tap.
-
-### FT8 own-call highlight cache fix (v0.18.7)
-Was only refreshed on FT8-mode entry, so setting your callsign via the CQ modal while already on the FT8 screen left the highlight dead until a mode bounce. Now refreshed every cycle in `rebuild_list()`.
-
-### FT8 CQ-run RST_SENT bug (shipped v0.18.6)
-Responder sending RR73/73 immediately never set `s_rst_sent`, so ADIF logged "599" instead of their actual SNR. Fixed in `ft8_qso.c` `cqrun_answer()`.
-
-### FT8 distance-in-miles toggle (feature in v0.18.6, bugs fixed in v0.18.7)
-- v0.18.6: added `distance_in_miles` setting, drawer checkbox, conversion in `ft8_screen_view.c`.
-- v0.18.7: fixed two follow-on bugs — the checkbox was buried in the panadapter-only "Snap to signal" drawer section (now its own `DRAWER_SEC_DISTANCE` section, hidden in Panadapter mode, shown only in the FT8 drawer); the column header was hardcoded to "KM" and never flipped to "MI" (now updates live with the setting).
-
-### FT8 Filter modal checkbox sizing + Priority dropdown restyle (v0.18.7)
-Pixel-measured on hardware that giving a checkbox label text made its indicator ~30% bigger than a textless one. Fixed by making all 8 checkboxes textless with a separate label object, stacked in one left-aligned column. Priority dropdown got a darker background, matching text colour, and enough height that "Most distant" isn't clipped.
-
-### Recovery flasher port auto-detection (v0.18.7)
-`flash-recovery.bat`/`.command` hardcoded `COM3` / `/dev/cu.usbserial-*` — a field report (Samuel W7STF) hit this on a machine where the Tab5 was on COM12. Both now auto-detect the same way the main flashers do.
-
-### Bottom-bar diag-log indicator polish (v0.18.7)
-Red breathing dot moved net +30px right of the battery text; added a "Diag" text label next to it in the bottom bar's standard secondary text colour (not red).
-
----
-
-## 📋 Completed in v0.18.x Series
-
-| Version | Date | Items |
-|---------|------|-------|
-| v0.18.8 | Jun 27 | ARRL Field Day FT8 exchange mode (wire format + QSO machine + UI + ADIF); FT8 simulation mode (phantom stations, hard TX interlock, breathing border) |
-| v0.18.7 | Jun 26 | FT8 decode-yield gap CLOSED (controlled A/B); auto-answer robot un-shelved; CQ tone auto-relocation; SNTP/QMX time-priority fix + FT8 auto-sync; own-call highlight cache fix; Filter modal checkbox sizing; recovery-flasher port auto-detect |
-| v0.18.6 | Jun 26 | FT8 decode-yield investigation (cw_audio_init ghost task, d140485 restoration, opacity-set skip); RST_SENT fix; distance-in-miles; diag-log dot |
-| v0.18.5 | Jun 25 | CW audio band-aid (preopen/dsp_cw_forward disabled); FT8 double-spawn crash guard restored; bootloader-corruption hotfix + recovery tooling |
-| v0.18.4 | Jun 23 | Band-plan strip; one-finger pan/stroll; snap-to-signal toggle; band-aware worked-before; FT8 robot shelved |
-| v0.18.3 | Jun 22 | Waterfall drawer controls (black level/contrast/floor blend/FFT window); display 180° flip |
-| v0.18.2 | Jun 24 | WiFi idle reboot fix (SDIO RX mempool); web UI reconnect fixes |
-| v0.18.1 | Jun 23 | Config backup/restore; clean-flash option; memory recall crash fix; fast toggle crash fix |
-| v0.18.0 | Jun 22 | Streaming STFT decode; dual-core FT8; reply-on-immediate-slot; dBm scale restored; tap-to-tune fixes |
-
----
-
-## 🎓 Reference Links
+## 🎓 Reference Links (not tasks — supporting material)
 
 **Documentation:**
-- `README.md` Roadmap section — Next up, Longer term
-- `docs/version-history.md` — Full per-version changelog (v0.1.0 onward)
-- `docs/js8-feasibility.md` / `docs/rtty-feasibility.md` — Mode feasibility studies
+- `README.md` Roadmap section
+- `docs/version-history.md` — full per-version changelog (v0.1.0 onward)
+- `docs/js8-feasibility.md` / `docs/rtty-feasibility.md` — mode feasibility studies
 - `CLAUDE.md` "Branch state" + "Next up" — v1.0 gates, QRZ/eQSL details, CW Audio shelved analysis, FT8 decode-yield investigation
 
 **Memory System:**
-- `feedback_groups_io_proper_method.md` — How to extract text from groups.io threads
+- `feedback_groups_io_proper_method.md` — how to extract text from groups.io threads
 - `project_cw_audio_blocked.md` — CW Audio shelved (I2S/DMA contention)
 - `project_ft8_sparse_decode_investigation.md` — FT8 decode-yield investigation (closed 2026-06-26)
 - `project_ft4_mode_request.md` — Roy's FT4 request + effort assessment
