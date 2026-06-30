@@ -164,6 +164,16 @@ void ft8_tx_request_abort(void);
 //               when IDLE/ACTIVE
 ft8_tx_state_t ft8_tx_get_status(char *text, size_t text_len, int *secs_until);
 
+// Seconds until the next slot boundary matching the given parity preference,
+// for an ARMED (or about-to-be-armed) request's countdown. If match_parity is
+// true, keeps searching forward until the parity equals want_even (REPLY or
+// a parity-restricted CQ); pass match_parity=false for a plain CQ that fires
+// on the very next boundary. Works in milliseconds internally using proto's
+// own slot period (15000 ms FT8 / 7500 ms FT4) before rounding up to whole
+// seconds for display - do not duplicate this math elsewhere, FT4's 7.5 s
+// grid silently breaks a naive seconds/15 computation.
+int ft8_tx_seconds_until_slot(bool match_parity, bool want_even, ftx_protocol_t proto);
+
 // Returns the power (W) and SWR from the most recent TX burst's PC;/SW;
 // query, and how many seconds ago that burst completed (-1.0f if no burst
 // has completed yet). *power_w and *swr are -1.0f if no reading was ever

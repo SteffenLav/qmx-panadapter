@@ -178,16 +178,28 @@ static volatile bool s_refresh_pending = false;
 
 // Touch-and-drag row selection.
 //
-// A hold-time gate distinguishes "swipe to scroll" from "hold to select":
-//   - Finger lifts before ROW_HOLD_SELECT_MS  → no action (was a swipe/tap)
-//   - Finger held ≥ ROW_PREVIEW_MS            → dim preview highlight shows
-//       which row is targeted (no scroll lock yet — list still scrollable)
-//   - Finger held ≥ ROW_HOLD_SELECT_MS        → selection mode active:
-//       full highlight, scroll locked; dragging shifts highlight; lifting opens modal
+// Movement, not hold time, decides scroll vs. select - a deliberate tap
+// fires immediately on release, but a touch that strays into "this is a
+// scroll" territory (ROW_SCROLL_CANCEL_PX) is barred from ever selecting:
+//   - Finger moves > ROW_SCROLL_CANCEL_PX before the hold gate fires →
+//       this touch is a scroll/swipe, permanently barred from selecting
+//       for its whole lifetime (even if held past the gate afterwards) →
+//       list scrolls, no modal on release
+//   - Finger held ≥ ROW_PREVIEW_MS  → dim preview highlight shows which
+//       row is targeted (no scroll lock yet — list still scrollable)
+//   - Finger held ≥ ROW_HOLD_SELECT_MS → selection mode active: full
+//       highlight, scroll locked, dragging shifts the highlight to other
+//       rows; whatever's highlighted on release fires
+//   - Finger released WITHOUT having scrolled and WITHOUT having crossed
+//       ROW_HOLD_SELECT_MS (i.e. a quick tap, however brief) → fires
+//       immediately on the row under the release point. This is what lets
+//       a one-touch tap work at all - a 250ms-minimum hold before *every*
+//       tap fired (even ones that never moved) used to leave a row dimly
+//       highlighted with nothing happening on release.
 //   - LV_EVENT_PRESS_LOST (LVGL scroll kick-in) → cancel, no action
 //
 // ROW_SCROLL_CANCEL_PX is generous (20 px) so slight hand-jitter in field
-// conditions doesn't abort the hold before the gate fires.
+// conditions doesn't get misread as a scroll.
 #define ROW_HOLD_SELECT_MS   250   // hold this long to enter selection mode
 #define ROW_PREVIEW_MS        80   // show dim highlight this many ms into the hold
 #define ROW_SCROLL_CANCEL_PX  20   // finger movement beyond this cancels selection
@@ -448,21 +460,23 @@ void ft8_screen_view_nudge_confirm(int delta)
 // PRESSED / PRESSING / RELEASED / PRESS_LOST:
 //
 //   PRESSED     - finger touches down: record timestamp + start point, no
-//                 highlight yet. The hold gate (ROW_HOLD_SELECT_MS) prevents
-//                 fast scroll swipes from ever entering selection mode.
+//                 highlight yet.
 //
 //   PRESSING    - fires continuously while held. If the finger ever moves more
-//                 than ROW_SCROLL_CANCEL_PX from its start point, this touch is
-//                 a scroll/swipe and is permanently barred from entering
-//                 selection mode (even if held past the threshold afterwards).
+//                 than ROW_SCROLL_CANCEL_PX from its start point (before
+//                 selection mode locked scroll), this touch is a scroll/swipe
+//                 and is permanently barred from selecting, full stop.
 //                 Otherwise, once held ≥ ROW_HOLD_SELECT_MS, selection mode
 //                 activates: the row under the fingertip highlights, list
-//                 scroll locks, and dragging moves the highlight.
+//                 scroll locks, and dragging moves the highlight to other rows.
 //
-//   RELEASED    - finger lifts. Only opens the modal if selection mode was
-//                 active (held long enough, no scroll motion, AND a row is
-//                 highlighted). A swipe, or a quick tap that never crossed the
-//                 time threshold, does nothing — the list just scrolls naturally.
+//   RELEASED    - finger lifts. A scroll/swipe does nothing (list just
+//                 scrolled). A held-and-dragged touch (selection mode was
+//                 active) fires whatever row is currently highlighted. A
+//                 plain tap - never scrolled, never held long enough to lock
+//                 scroll - fires immediately on the row under the release
+//                 point, so a quick single tap reliably opens the confirm
+//                 modal instead of silently doing nothing.
 //
 //   PRESS_LOST  - LVGL detected a scroll gesture and stole the touch. Always
 //                 cancels selection silently, regardless of hold time.
@@ -517,17 +531,39 @@ static void row_touch_cb(lv_event_t *e)
         }
 
     } else if (code == LV_EVENT_RELEASED) {
-        uint32_t held_ms = lv_tick_get() - s_press_start_ms;
         int confirm = s_row_hover;
+        row_clear_preview();
         row_set_hover(-1);
         // Restore list scroll before anything else.
         if (s_in_selection_mode && s_list)
             lv_obj_add_flag(s_list, LV_OBJ_FLAG_SCROLLABLE);
+        bool was_selection_mode = s_in_selection_mode;
         s_in_selection_mode = false;
-        // Only fire if the hold gate was crossed AND a row was highlighted.
-        // A quick tap or swipe (held_ms < threshold) just lets the list scroll.
-        if (held_ms >= ROW_HOLD_SELECT_MS && confirm >= 0)
-            row_activate(confirm);
+
+        if (s_scroll_detected) {
+            // Moved enough to be a scroll/swipe - let the list scroll, no
+            // selection (and no longer a dimly-highlighted row left behind:
+            // row_clear_preview() above used to be skipped on this path,
+            // which is what made a brief touch look "stuck lit" with
+            // nothing happening on release).
+        } else if (was_selection_mode) {
+            // Held long enough to lock scroll, optionally dragged across
+            // rows - whatever's currently highlighted fires.
+            if (confirm >= 0) row_activate(confirm);
+        } else {
+            // A tap that never crossed the hold-to-drag gate, but also
+            // never moved far enough to be a scroll - fire immediately on
+            // release instead of silently doing nothing. Previously a
+            // deliberate single tap needed a 250ms hold to do anything;
+            // now any release on a row that wasn't a scroll opens the
+            // confirm modal right away, while a held-and-dragged touch
+            // still gets to reselect a different row before releasing.
+            lv_indev_t *indev = lv_indev_get_act();
+            lv_point_t pt = s_press_start_pt;
+            if (indev) lv_indev_get_point(indev, &pt);
+            int row = screen_y_to_row(pt.y);
+            if (row >= 0) row_activate(row);
+        }
 
     } else if (code == LV_EVENT_PRESS_LOST) {
         row_set_hover(-1);

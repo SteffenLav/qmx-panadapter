@@ -168,7 +168,7 @@ static inline bool slot_is_even(int64_t slot_start_unix_sec, ftx_protocol_t prot
 // (its 7.5 s grid doesn't divide evenly into seconds), which is exactly what
 // made an armed FT4 CQ's on-screen countdown still read like an FT8 cadence
 // even after the actual TX-firing parity was fixed.
-static int seconds_until_slot(bool match_parity, bool want_even, ftx_protocol_t proto)
+int ft8_tx_seconds_until_slot(bool match_parity, bool want_even, ftx_protocol_t proto)
 {
     int period_ms = (proto == FTX_PROTOCOL_FT4) ? 7500 : 15000;
     struct timeval tv;
@@ -582,7 +582,7 @@ ft8_tx_state_t ft8_tx_get_status(char *text, size_t text_len, int *secs_until)
         }
     }
     if (st == FT8_TX_ARMED) {
-        secs = seconds_until_slot(s_armed.use_parity,
+        secs = ft8_tx_seconds_until_slot(s_armed.use_parity,
                                   s_armed.want_even_slot,
                                   s_armed.protocol);
     }

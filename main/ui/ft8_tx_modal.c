@@ -27,6 +27,7 @@ static const char *TAG = "ft8_tx_modal";
 // Modal state - lazily created on first show (mirrors identity_config.c).
 static lv_obj_t   *s_modal         = NULL;
 static lv_obj_t   *s_panel         = NULL;
+static lv_obj_t   *s_lbl_title     = NULL;
 static lv_obj_t   *s_lbl_message   = NULL;
 static lv_obj_t   *s_lbl_detail    = NULL;
 static lv_obj_t   *s_lbl_countdown = NULL;
@@ -44,28 +45,20 @@ static bool        s_modal_open    = false;
 static ft8_tx_request_t s_pending_req;
 
 // Seconds from now until the next slot this request could fire in, *if*
-// armed right this instant. Mirrors ft8_tx.c's slot_is_even()/
-// seconds_until_slot() - kept as a small local duplicate rather than
-// exposing an internal helper across the module boundary, since this is
-// purely a UI preview: the request isn't armed yet (ft8_tx_get_status()
-// only knows about already-armed requests), and the *actual* fire time
-// will be fixed at the moment the operator taps Transmit, not now.
-static int seconds_until_fire(const ft8_tx_request_t *req)
-{
-    time_t now = time(NULL);
-    int64_t next = ((int64_t)now / 15) * 15 + 15;
-    // Advance until the slot parity matches, for both REPLY and parity-locked CQ.
-    if (req->use_parity) {
-        while ((((next / 15) % 2) == 0) != req->want_even_slot) next += 15;
-    }
-    int64_t delta = next - (int64_t)now;
-    return (delta < 0) ? 0 : (int)delta;
-}
-
+// armed right this instant - a UI preview, since the request isn't armed yet
+// (ft8_tx_get_status() only knows about already-armed requests) and the
+// *actual* fire time will be fixed at the moment the operator taps Transmit.
+// Calls ft8_tx_seconds_until_slot() directly instead of keeping a local copy
+// of its math - a prior local duplicate here drifted out of sync with the
+// real (FT4-aware, millisecond-precision) implementation in ft8_tx.c and
+// kept showing an FT8-cadence countdown for FT4 requests.
 static void update_countdown(void)
 {
+    int secs = ft8_tx_seconds_until_slot(s_pending_req.use_parity,
+                                         s_pending_req.want_even_slot,
+                                         s_pending_req.protocol);
     char b[32];
-    snprintf(b, sizeof(b), "Transmits in ~%d s", seconds_until_fire(&s_pending_req));
+    snprintf(b, sizeof(b), "Transmits in ~%d s", secs);
     lv_label_set_text(s_lbl_countdown, b);
 }
 
@@ -179,11 +172,11 @@ static void modal_build(void)
     lv_obj_set_style_pad_all(s_panel, 24, 0);
     lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
 
-    lv_obj_t *title = lv_label_create(s_panel);
-    lv_label_set_text(title, "Confirm FT8 Transmission");
-    lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
+    s_lbl_title = lv_label_create(s_panel);
+    lv_label_set_text(s_lbl_title, "Confirm FT8 Transmission");
+    lv_obj_set_style_text_color(s_lbl_title, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(s_lbl_title, &lv_font_montserrat_32, 0);
+    lv_obj_align(s_lbl_title, LV_ALIGN_TOP_MID, 0, 0);
 
     // The encoded message preview - the most important line in the dialog
     // (this is *exactly* what will go on-air; ft8_tx_build_request already
@@ -352,6 +345,8 @@ void ft8_tx_modal_show(const ft8_tx_request_t *req)
 
     s_pending_req = *req;   // private copy - caller's may go out of scope
 
+    lv_label_set_text(s_lbl_title, s_pending_req.protocol == FTX_PROTOCOL_FT4
+                       ? "Confirm FT4 Transmission" : "Confirm FT8 Transmission");
     lv_label_set_text(s_lbl_message, s_pending_req.display_text);
 
     char detail[80];
