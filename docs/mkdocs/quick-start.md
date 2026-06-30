@@ -70,6 +70,16 @@ On first boot you'll be prompted for:
 
 You can change these anytime by swiping right from the screen edge to open the settings drawer.
 
+## Step 5b: Optional — microSD Card
+
+Insert a microSD card into the Tab5's card slot at any time to enable automatic backup:
+
+- **Diagnostic log** — continuous rolling copy, survives power-off
+- **ADIF QSO log** — mirrored automatically after each new QSO
+- **Config export** — your settings, for easy transfer to another unit
+
+A green **SD** dot lights up in the bottom status bar when a card is detected and being mirrored. No setup required — just insert the card.
+
 ## Step 6: Navigate the Screen
 
 The entire app runs on **edge swipes and taps on the top bar**:

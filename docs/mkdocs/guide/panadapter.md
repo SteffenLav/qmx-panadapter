@@ -19,9 +19,19 @@ The panadapter is your primary view — a real-time spectrum analyser and waterf
 │ ░░░░░▓▓▓░░░░░░░░░░░░░░▓▓░░░░░░░░░░ │  Newest at top    │
 │ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │  SDR gradient     │
 ├─────────────────────────────────────────────────────────┤
-│ Battery 95%  FPS: 30              Waterfall            │  Status bar (30px)
+│ Battery 95%  FPS: 30   SD  v0.19.2   Waterfall        │  Status bar (30px)
 └─────────────────────────────────────────────────────────┘
 ```
+
+**Status bar indicators:**
+
+| Item | Meaning |
+|------|---------|
+| Battery % | Current battery charge level |
+| FPS | Render frame rate (target 30 fps) |
+| **SD** (green dot) | A microSD card is mounted and being mirrored. Files are written to `/qmx-panadapter/` on the card automatically — no setup needed. The dot is absent when no card is inserted |
+| Firmware version | Currently flashed firmware version |
+| Waterfall label | Active colour map name |
 
 ### 2. Touch Controls
 

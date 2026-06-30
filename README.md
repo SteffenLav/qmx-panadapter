@@ -4,11 +4,11 @@
 
 A standalone real-time panadapter — spectrum analyser and waterfall — for the [QRP Labs QMX/QMX+](https://www.qrp-labs.com/qmxp.html) HF transceiver, running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 with a 5" 720×1280 touch display).
 
-The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Tab5 connects to the QMX as a USB host, decodes the I/Q in real time on the ESP32-P4, and renders a touch-driven panadapter with tap-to-tune, pinch-zoom, onboard FT8 decoding and transmit, ADIF logging, and a matching browser web UI.
+The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Tab5 connects to the QMX as a USB host, decodes the I/Q in real time on the ESP32-P4, and renders a touch-driven panadapter with tap-to-tune, pinch-zoom, onboard FT8/FT4 decoding and transmit, ADIF logging, and a matching browser web UI.
 
 **Documentation:** [tab5.lav.dk](https://tab5.lav.dk) — the user guide, quick-start, and reference as plain web pages. A more approachable read than this page if you just want to set the device up; the source code and release downloads stay here on GitHub.
 
-![Panadapter on M5Stack Tab5 — QMX+ tuned to 14.074 MHz, FT8 traffic visible](docs/QMX-Panadapter_v0.9.2.png)
+![Panadapter on M5Stack Tab5 — QMX+ tuned to 14.074 MHz, FT8/FT4 traffic visible](docs/QMX-Panadapter_v0.9.2.png)
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
@@ -31,6 +31,8 @@ The full documentation also lives online at **[tab5.lav.dk](https://tab5.lav.dk)
 **QMX CAT control** — Live frequency readout, mode switching (USB/LSB/CW/DiGi), SSB filter bandwidth control, passband indicator, and TX power/SWR readout. Round-trip CAT latency <50 ms. Band presets and per-band frequency recall.
 
 **ADIF logging** — Every QSO logs to onboard storage with QSO timestamp, callsign, frequency, mode, signal report, grid, and distance. Export to web UI or QRZ Logbook / eQSL for cloud backup.
+
+**microSD auto-archive** — Insert a microSD card and the Tab5 automatically mirrors the diagnostic log, ADIF QSO log, and a config export to `/qmx-panadapter/` on the card. No setup required. A green **SD** dot in the bottom bar lights up when a card is mounted and being mirrored.
 
 **Web UI** — Browser panadapter, remote control (tune, mode, bandwidth), QSO log viewer, config export/import, and diagnostic log download — all without leaving the radio room.
 
@@ -135,7 +137,7 @@ The decode list, TX controls, and slot timing (countdown bar, which-parity-next)
 To open the settings drawer at any time: swipe in from the right edge, or tap the right grip handle.
 
 - **WiFi** — enter your SSID and password. Recommended for everyone: you get accurate UTC time (needed for FT8 slot timing), the browser web UI, and remote diagnostics. The **WiFi initiated** checkbox below the WiFi section is an on/off master switch — uncheck it for POTA or field use with no network.
-- **Identity** (callsign + grid square) — *only required for FT8 transmit*. Enter your callsign and Maidenhead grid (4 or 6 characters, e.g. `JO45` or `JO45ab`). The grid also drives the distance and bearing columns in the FT8 decode list.
+- **Identity** (callsign + grid square) — *only required for FT8/FT4 transmit*. Enter your callsign and Maidenhead grid (4 or 6 characters, e.g. `JO45` or `JO45ab`). The grid also drives the distance and bearing columns in the FT8 decode list.
 
 Everything else — dB range, smoothing, colour map, brightness, IQ balance — has sane defaults. Adjust if you want to, but you don't need to on first use.
 
@@ -143,7 +145,7 @@ Everything else — dB range, smoothing, colour map, brightness, IQ balance — 
 
 Switch the QMX to any band and watch it come alive. This is the foundation of the device regardless of which modes you operate.
 
-**Tap or drag to tune.** Touch anywhere on the spectrum or waterfall to place the cyan cursor. Drag and it snaps to a mode-aware grid — 10 Hz steps in CW, 250 Hz in SSB, 500 Hz for FT8 — so you can land precisely on a signal before lifting your finger. Lift, and the QMX retunes.
+**Tap or drag to tune.** Touch anywhere on the spectrum or waterfall to place the cyan cursor. Drag and it snaps to a mode-aware grid — 10 Hz steps in CW, 250 Hz in SSB, 500 Hz for FT8/FT4 — so you can land precisely on a signal before lifting your finger. Lift, and the QMX retunes.
 
 **Swipe fast to pan instead.** A quick horizontal swipe (rather than a held drag) slides the whole view left or right and retunes to wherever you let go — the fastest way to slide along a band. See [Touch-to-tune](#touch-to-tune) for exactly how the two gestures are told apart.
 
@@ -277,7 +279,7 @@ Controls appear top to bottom in this order:
 | **Snap to signal** | Toggle snap-to-strongest-bin on tap (see [Touch-to-tune](#touch-to-tune)); on by default |
 | **Presets** | HF Normal / HF DX / Strong Sig — sets dB range and smoothing in one tap |
 | **WiFi** | Opens credential modal; **WiFi initiated** checkbox enables/disables WiFi entirely |
-| **Identity** | Callsign + Maidenhead grid (required for FT8 TX; also drives KM/BRG columns) |
+| **Identity** | Callsign + Maidenhead grid (required for FT8/FT4 TX; also drives KM/BRG columns) |
 | **dB Range** | Min and Max sliders (dBm) |
 | **Smoothing** | EMA alpha 0.05–1.00 |
 | **CW** | CW sidetone centre, 600–800 Hz; touch-to-tune in CW mode snaps to this offset, persisted |

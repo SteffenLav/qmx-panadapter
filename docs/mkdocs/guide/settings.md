@@ -4,9 +4,9 @@ Swipe ← from the right edge to open the settings drawer. All settings are save
 
 ## Operator Info
 
-**Callsign** — Your amateur radio callsign (required for FT8 logging).
+**Callsign** — Your amateur radio callsign (required for FT8/FT4 logging).
 
-**Grid Square** — Your Maidenhead grid square (e.g., JO45; required for FT8 exchanges).
+**Grid Square** — Your Maidenhead grid square (e.g., JO45; required for FT8/FT4 exchanges).
 
 ## WiFi
 
@@ -85,6 +85,22 @@ Once connected, the settings show your **IP address** — use this to access the
 - USB serial: `tools/capture_serial_log.ps1`
 
 Useful for troubleshooting rare issues.
+
+## microSD Auto-Archive
+
+Insert a microSD card (FAT32 or exFAT, any size) and the Tab5 automatically mirrors three files to `/qmx-panadapter/` on the card:
+
+| File | Contents |
+|------|----------|
+| `qmx-log.txt` | Diagnostic log, rolling (rotated at 5 MB) |
+| `qso.adi` | ADIF QSO log, mirrored after each new entry |
+| `qmx-config.txt` | All settings exported as INI text |
+
+**No setup needed** — the Tab5 probes for a card on startup and whenever it can't reach one it expected. Insertion and removal are detected automatically.
+
+A **green SD dot** in the bottom status bar confirms a card is mounted and being mirrored. If no card is inserted, the dot is absent (not an error).
+
+> The diagnostic log is always-on regardless of whether an SD card is present. If no card is inserted, the log still persists to internal flash (see [Diagnostic Logging](#diagnostic-logging) below) and survives a power-off.
 
 ## ADIF & Logging
 
