@@ -56,6 +56,38 @@ void ui_kbd_set_buttons(lv_obj_t *save_btn, lv_obj_t *cancel_btn);
  * and 0x303030 across the on-screen keyboards and freq keypad). */
 #define UI_COLOR_KEY_BG         0x2a2a2a
 
+/* Per-mode colours, shared between the freq keypad's DiGi/USB/LSB/CW
+ * mode-select row and the memory-channel grid (so a channel's button
+ * colour matches what selecting that mode looks like in the freq pad).
+ * CW and DiGi are aligned exactly to the band-plan strip's CW/DIGI colours
+ * (util/bandplan.c bandplan_seg_color()) so the same mode reads as the same
+ * colour everywhere in the UI - keep these two in sync with that function
+ * if either changes. USB/LSB have no band-plan equivalent (the strip only
+ * has one "Phone" colour for both) so they're independent, chosen to be
+ * clearly distinct from CW/DiGi and from each other. All four (plus the
+ * band-plan strip's own colours) were dimmed ~30% from their original,
+ * too-bright values (2026-06-30 feedback). */
+#define UI_COLOR_MODE_DIGI 0xB37724  /* amber     — matches bandplan BP_DIGI */
+#define UI_COLOR_MODE_CW   0x2477B3  /* blue      — matches bandplan BP_CW */
+#define UI_COLOR_MODE_USB  0x8B3A2B  /* brick red/brown — was steel blue, too close to CW's blue */
+#define UI_COLOR_MODE_LSB  0x633079  /* purple */
+
+/* Map a mode string (as stored in mem_slot_t.mode / used by the freq pad's
+ * mode row) to its colour. Substring match so "DiGi"/"FT8"/"FT4"/"RTTY" all
+ * land on the DiGi colour without the caller having to enumerate every
+ * digital sub-mode name the QMX reports. Falls back to UI_COLOR_KEY_BG for
+ * anything unrecognized (AM/FM and not-yet-seen modes). */
+static inline uint32_t ui_theme_mode_color(const char *mode)
+{
+    if (!mode || !mode[0]) return UI_COLOR_KEY_BG;
+    if (strstr(mode, "DiGi") || strstr(mode, "DIGI") || strstr(mode, "FT8") ||
+        strstr(mode, "FT4")  || strstr(mode, "RTTY"))           return UI_COLOR_MODE_DIGI;
+    if (strstr(mode, "USB"))                                    return UI_COLOR_MODE_USB;
+    if (strstr(mode, "LSB"))                                    return UI_COLOR_MODE_LSB;
+    if (strstr(mode, "CW"))                                     return UI_COLOR_MODE_CW;
+    return UI_COLOR_KEY_BG;
+}
+
 /* Textareas and keyboards default to LVGL's light theme (near-white)
  * unless explicitly restyled - these helpers apply the dark theme. */
 /* Route a textarea's focus lifecycle to the physical-keyboard bridge so typed
@@ -267,6 +299,19 @@ static inline void ui_theme_keyboard_attach_caps_cycle_upper(lv_obj_t *kb)
 {
     lv_obj_remove_event_cb(kb, lv_keyboard_def_event_cb);
     ui_theme_kb_apply_state(kb, 2, ui_theme_kb_find_shift_btn(kb));
+    lv_obj_add_event_cb(kb, ui_theme_kb_shift_cb, LV_EVENT_VALUE_CHANGED, NULL);
+}
+
+/* Same as above but starts in the "Abc" pending-shift state: the first
+ * letter typed comes out capitalized, then it reverts to lowercase for the
+ * rest (matching how someone naturally starts a free-text label/name).
+ * Use for fields where a capitalized-first-word convention reads better
+ * than starting in either full lowercase or full caps-lock - e.g. the
+ * memory-channel label field. */
+static inline void ui_theme_keyboard_attach_caps_cycle_pending(lv_obj_t *kb)
+{
+    lv_obj_remove_event_cb(kb, lv_keyboard_def_event_cb);
+    ui_theme_kb_apply_state(kb, 1, ui_theme_kb_find_shift_btn(kb));
     lv_obj_add_event_cb(kb, ui_theme_kb_shift_cb, LV_EVENT_VALUE_CHANGED, NULL);
 }
 

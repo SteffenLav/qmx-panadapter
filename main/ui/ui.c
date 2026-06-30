@@ -164,6 +164,11 @@ static bool legal_band_edges(uint32_t center_hz, uint32_t *lo, uint32_t *hi)
     return false;
 }
 
+bool ui_validate_band_freq_hz(uint32_t hz, uint32_t *lo_out, uint32_t *hi_out)
+{
+    return legal_band_edges(hz, lo_out, hi_out);
+}
+
 static void band_preset_cb(lv_event_t *e)
 {
     uint32_t center_hz = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
@@ -348,9 +353,10 @@ static void freq_mode_highlight(void)
     for (int i = 0; i < 4; i++) {
         if (!s_freq_mode_btns[i]) continue;
         bool sel = (strcmp(s_freq_modes[i], s_freq_mode_sel) == 0);
-        // Dim yellow, same intensity as the Cancel/Enter buttons.
+        // Selected mode highlights in its own colour (same table the memory
+        // channel grid uses), unselected stays the neutral key background.
         lv_obj_set_style_bg_color(s_freq_mode_btns[i],
-            sel ? lv_color_hex(0x55502A) : lv_color_hex(UI_COLOR_KEY_BG), 0);
+            sel ? lv_color_hex(ui_theme_mode_color(s_freq_modes[i])) : lv_color_hex(UI_COLOR_KEY_BG), 0);
     }
 }
 
@@ -459,16 +465,21 @@ static void freq_apply_key(char key, lv_obj_t *target_btn)
             if (s_freq_picker_cb) {
                 ui_freq_picker_cb_t cb = s_freq_picker_cb;
                 s_freq_picker_cb = NULL;
-                cb(0, s_freq_mode_sel, false);
+                cb(0, s_freq_mode_sel, false);  // return value unused — Cancel always closes
             }
             return;
         case 'E': {  // Enter
             if (s_freq_picker_cb) {
                 uint32_t target_hz = s_freq_buf[0] ? freq_buf_to_hz(s_freq_buf) : 0;
-                ui_freq_picker_cb_t cb = s_freq_picker_cb;
-                s_freq_picker_cb = NULL;
-                freq_popup_close();
-                cb(target_hz, s_freq_mode_sel, true);
+                // Call the callback BEFORE closing — it may reject (e.g. an
+                // out-of-band frequency) by returning false, in which case the
+                // popup stays open exactly as the user left it instead of
+                // closing out from under them.
+                bool accept = s_freq_picker_cb(target_hz, s_freq_mode_sel, true);
+                if (accept) {
+                    s_freq_picker_cb = NULL;
+                    freq_popup_close();
+                }
                 return;
             }
             if (s_freq_buf[0]) {
@@ -814,9 +825,17 @@ void ui_freq_picker_open(uint32_t initial_hz, const char *initial_mode, ui_freq_
     // round-trips. A plain "%lu" Hz string has no dots, and freq_buf_to_hz caps a
     // dotless value at 3 digits - so e.g. 14020000 was read back as 140, breaking
     // memory-channel save/recall (reported by Ian G4LXX). Dotted groups parse exactly.
-    unsigned long hz = (unsigned long)initial_hz;
-    snprintf(s_freq_buf, sizeof(s_freq_buf), "%lu.%03lu.%03lu",
-             hz / 1000000UL, (hz / 1000UL) % 1000UL, hz % 1000UL);
+    // initial_hz == 0 means "nothing to pre-fill" (e.g. opening the picker for a
+    // new memory slot with no QMX connected, so cat_get_frequency() reads 0) -
+    // leave the buffer empty so the display shows the normal "Enter freq"
+    // placeholder instead of a misleading "0.000.000 Hz".
+    if (initial_hz == 0) {
+        s_freq_buf[0] = '\0';
+    } else {
+        unsigned long hz = (unsigned long)initial_hz;
+        snprintf(s_freq_buf, sizeof(s_freq_buf), "%lu.%03lu.%03lu",
+                 hz / 1000000UL, (hz / 1000UL) % 1000UL, hz % 1000UL);
+    }
     strncpy(s_freq_mode_sel, initial_mode && initial_mode[0] ? initial_mode : "", sizeof(s_freq_mode_sel) - 1);
     s_freq_mode_sel[sizeof(s_freq_mode_sel) - 1] = '\0';
     freq_popup_build();
@@ -2048,7 +2067,7 @@ static void build_bandplan_strip(lv_obj_t *parent)
 
         lv_obj_t *lbl = lv_label_create(s_bandplan_obj);
         lv_label_set_text(lbl, "");
-        lv_obj_set_style_text_color(lbl, lv_color_hex(0x101010), 0);  // dark text on bright block
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);  // bright white — segment colours were dimmed (2026-06-30), dark text no longer reads
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
         lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_pad_top(lbl, 1, 0);

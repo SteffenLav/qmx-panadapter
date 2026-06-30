@@ -30,6 +30,11 @@ void ui_set_cw_cal_hz(int16_t hz);     // CW LO trim (Hz), +/-100, persisted to 
 float    ui_get_zoom_factor(void);      // current zoom (1.0=full, max 24.0)
 uint16_t ui_get_cw_pitch_hz(void);
 uint32_t ui_band_last_hz(uint32_t center_hz); // 0 if never visited      // CW sidetone offset in Hz
+// True if hz falls inside a recognized HF amateur band's edges (lo/hi
+// receive that band's edges if non-NULL). False for anything out of band
+// or in a gap between bands - used to refuse saving an out-of-band memory
+// channel frequency.
+bool ui_validate_band_freq_hz(uint32_t hz, uint32_t *lo_out, uint32_t *hi_out);
 int16_t  ui_get_if_cal_hz(void);         // per-unit IF calibration trim in Hz
 int   ui_get_pan_offset_bins(void);     // current pan offset in FFT bins
 void  ui_set_zoom(float zoom, int pan_bins); // set zoom+pan, persists zoom to NVS
@@ -99,7 +104,13 @@ uint32_t ui_get_passband_width_hz(void);
 // calls cb(typed_hz, selected_mode, true) without touching the QMX; Cancel
 // (or tap-outside) calls cb(0, selected_mode, false). Used by the memory
 // modal to confirm/edit a frequency + mode before naming a memory slot.
-typedef void (*ui_freq_picker_cb_t)(uint32_t freq_hz, const char *mode, bool accepted);
+// Returns true to accept (closes the freq pad) or false to reject (the freq
+// pad stays open, exactly as the user left it, so they can correct the value
+// without losing their place - e.g. an out-of-band frequency). The return
+// value is only consulted when accepted==true (the user pressed Enter);
+// the accepted==false call (Cancel) always closes regardless of what's
+// returned.
+typedef bool (*ui_freq_picker_cb_t)(uint32_t freq_hz, const char *mode, bool accepted);
 void ui_freq_picker_open(uint32_t initial_hz, const char *initial_mode, ui_freq_picker_cb_t cb);
 
 // Restart the infinite-repeat "breathing" opacity animations on the

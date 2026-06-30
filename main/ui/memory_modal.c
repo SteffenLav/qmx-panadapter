@@ -1,5 +1,8 @@
 // Memory channels modal - 4x8 grid of frequency/mode/label slots.
-// Tap occupied = recall. Long-press occupied = Edit/Delete/Cancel.
+// Tap occupied = recall. Long-press + lift in place = Edit/Delete/Cancel.
+// Long-press + drag = move a channel to an empty slot, snaps on release.
+// Cell colour matches the mode (see ui_theme_mode_color), same palette the
+// freq keypad's DiGi/USB/LSB/CW mode row uses.
 #include "memory_modal.h"
 #include "ui_theme.h"
 #include "mem_channels.h"
@@ -10,6 +13,7 @@
 #include "lvgl.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 static const char *TAG = "mem_modal";
 
@@ -40,6 +44,19 @@ static int       s_action_idx   = -1;
 /* Frequency confirmed/edited via the freq keypad before naming a slot */
 static uint32_t  s_pending_freq_hz = 0;
 static char      s_pending_mode[8] = "";
+
+/* Long-press drag-to-move: a long press alone arms the gesture (button
+ * follows the finger once moved past DRAG_THRESHOLD_PX); lifting without
+ * having dragged opens the edit panel instead (old long-press behaviour,
+ * now deferred to release per groups.io item from Samuel/Dirk's general
+ * "long-press feels accidental" feedback class - see feedback_grep_the_bug_class
+ * pattern: row-select had the same press-vs-drag ambiguity, fixed the same way). */
+#define DRAG_THRESHOLD_PX 14
+static int       s_press_idx        = -1;   /* slot armed by LONG_PRESSED, -1 = none */
+static bool      s_press_dragging   = false;
+static lv_point_t s_press_start_pt;
+static lv_point_t s_press_orig_pos;          /* button's original grid x,y (its own slot) */
+static bool      s_skip_next_click  = false; /* swallow the CLICKED that follows a drag release */
 
 #define MODAL_SLIDE_TIME_MS 250
 
@@ -129,11 +146,11 @@ static void memory_modal_refresh(void)
             format_freq_hz(slot.freq_hz, freq_str, sizeof(freq_str));
 
             char buf2[32];
-            snprintf(buf2, sizeof(buf2), "%s   %s", slot.mode, freq_str);
+            snprintf(buf2, sizeof(buf2), "%s   %s", freq_str, slot.mode);
 
             lv_label_set_text(lbl, slot.label[0] ? slot.label : freq_str);
             lv_label_set_text(lbl2, slot.label[0] ? buf2 : slot.mode);
-            lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+            lv_obj_set_style_bg_color(btn, lv_color_hex(ui_theme_mode_color(slot.mode)), 0);
             lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
             lv_obj_set_style_text_color(lbl2, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
         } else {
@@ -197,6 +214,8 @@ static void action_save_cb(lv_event_t *e)
         ESP_LOGW(TAG, "save: no freq");
         return;
     }
+    // Band validation already happened in mem_freq_picker_cb, right when the
+    // freq pad was confirmed - s_pending_freq_hz can't reach here out of band.
     slot.freq_hz = s_pending_freq_hz;
     slot.occupied = 1;
     strncpy(slot.mode, s_pending_mode[0] ? s_pending_mode : "???", sizeof(slot.mode) - 1);
@@ -216,8 +235,11 @@ static void action_save_cb(lv_event_t *e)
     memory_modal_refresh();
 }
 
+static void open_edit_panel(int idx);  /* forward decl - defined below, also called from cell_tap_cb for empty slots */
+
 static void cell_tap_cb(lv_event_t *e)
 {
+    if (s_skip_next_click) { s_skip_next_click = false; return; }  /* a long-press/drag release already handled this gesture */
     if (s_action_idx >= 0) return;  /* suppress tap if long-press action panel is open */
     lv_obj_t *btn = lv_event_get_target(e);
     int idx = (int)(intptr_t)lv_obj_get_user_data(btn);
@@ -225,7 +247,13 @@ static void cell_tap_cb(lv_event_t *e)
 
     mem_slot_t slot;
     mem_channels_get(idx, &slot);
-    if (!slot.occupied) return;
+    if (!slot.occupied) {
+        // Empty slot: a plain tap is unambiguous (there's nothing to recall
+        // or drag), so skip the long-press requirement and go straight to
+        // the save-new-channel editor.
+        open_edit_panel(idx);
+        return;
+    }
 
     ESP_LOGI(TAG, "recall slot %d: %lu Hz %s '%s'",
              idx, (unsigned long)slot.freq_hz, slot.mode, slot.label);
@@ -270,25 +298,39 @@ static void show_action_panel(int idx)
     lv_obj_clear_flag(s_action_kb, LV_OBJ_FLAG_HIDDEN);
     lv_keyboard_set_textarea(s_action_kb, s_action_ta);
     lv_obj_move_foreground(s_action_kb);
+    // Reset the shift cycle to "Abc" (capitalize the next letter, then
+    // lowercase) at the start of every edit session, not just the first.
+    ui_theme_kb_apply_state(s_action_kb, 1, ui_theme_kb_find_shift_btn(s_action_kb));
 }
 
-/* Called after the frequency keypad is confirmed/cancelled. */
-static void mem_freq_picker_cb(uint32_t freq_hz, const char *mode, bool accepted)
+/* Called after the frequency keypad is confirmed/cancelled. Return value only
+ * matters for the accepted==true (Enter) case: true closes the freq pad and
+ * proceeds to the label editor, false rejects and leaves the freq pad open
+ * (with whatever the user typed still showing) so they can correct it. */
+static bool mem_freq_picker_cb(uint32_t freq_hz, const char *mode, bool accepted)
 {
     if (!accepted || s_action_idx < 0) {
         s_action_idx = -1;
-        return;
+        return true;  // Cancel always closes regardless of this return value
+    }
+    // Validate right here, as soon as the freq pad is confirmed - not after
+    // the user has also typed a label and tapped Save.
+    if (!ui_validate_band_freq_hz(freq_hz, NULL, NULL)) {
+        ESP_LOGW(TAG, "freq pad: %lu Hz is out of band, refusing", (unsigned long)freq_hz);
+        ui_toast("Out of band - not saved");
+        // Keep s_action_idx armed (don't reset to -1) so the next Enter
+        // attempt, once corrected, still targets the same slot.
+        return false;
     }
     s_pending_freq_hz = freq_hz;
     strncpy(s_pending_mode, mode && mode[0] ? mode : "???", sizeof(s_pending_mode) - 1);
     s_pending_mode[sizeof(s_pending_mode) - 1] = '\0';
     show_action_panel(s_action_idx);
+    return true;
 }
 
-static void cell_longpress_cb(lv_event_t *e)
+static void open_edit_panel(int idx)
 {
-    lv_obj_t *btn = lv_event_get_target(e);
-    int idx = (int)(intptr_t)lv_obj_get_user_data(btn);
     if (idx < 0 || idx >= MEM_SLOTS) return;
 
     mem_slot_t slot;
@@ -310,6 +352,122 @@ static void cell_longpress_cb(lv_event_t *e)
     }
 
     ui_freq_picker_open(initial_hz, mode, mem_freq_picker_cb);
+}
+
+/* Combined long-press / drag-to-move state machine, registered on
+ * LV_EVENT_LONG_PRESSED, LV_EVENT_PRESSING and LV_EVENT_RELEASED.
+ *
+ * LONG_PRESSED arms the gesture (records the start point + the button's
+ * own grid position) without acting yet. PRESSING then either does nothing
+ * (movement under DRAG_THRESHOLD_PX - still a candidate for "open edit on
+ * lift") or, once past the threshold, drags the button to follow the
+ * finger. RELEASED decides what actually happened: dragged -> try to move
+ * the slot's data to the dropped-on cell (only if that cell is empty;
+ * otherwise the drop is rejected and the button just snaps back); not
+ * dragged -> open the edit/save panel, same as the old immediate
+ * long-press behaviour just deferred to release.
+ *
+ * The button objects are permanently bound 1:1 to slot indices (set up
+ * once in modal_build), so a successful move never relocates the LVGL
+ * object itself - it snaps back to its own slot's position and
+ * memory_modal_refresh() repaints both the source (now empty) and
+ * destination (now occupied) cells from the underlying data. */
+static void cell_press_state_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *btn = lv_event_get_target(e);
+    int idx = (int)(intptr_t)lv_obj_get_user_data(btn);
+    if (idx < 0 || idx >= MEM_SLOTS) return;
+
+    if (code == LV_EVENT_LONG_PRESSED) {
+        s_press_idx = idx;
+        s_press_dragging = false;
+        lv_indev_t *indev = lv_indev_get_act();
+        if (indev) lv_indev_get_point(indev, &s_press_start_pt);
+        s_press_orig_pos.x = lv_obj_get_x(btn);
+        s_press_orig_pos.y = lv_obj_get_y(btn);
+        return;
+    }
+
+    if (code == LV_EVENT_PRESSING) {
+        if (s_press_idx != idx) return;
+        mem_slot_t slot;
+        mem_channels_get(idx, &slot);
+        if (!slot.occupied) return;  /* nothing to drag out of an empty slot */
+
+        lv_indev_t *indev = lv_indev_get_act();
+        if (!indev) return;
+        lv_point_t p;
+        lv_indev_get_point(indev, &p);
+        int ddx = (int)p.x - (int)s_press_start_pt.x;
+        int ddy = (int)p.y - (int)s_press_start_pt.y;
+
+        if (!s_press_dragging) {
+            if (abs(ddx) <= DRAG_THRESHOLD_PX && abs(ddy) <= DRAG_THRESHOLD_PX) return;
+            s_press_dragging = true;
+            lv_obj_move_foreground(btn);
+            lv_obj_set_style_border_color(btn, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+            lv_obj_set_style_border_width(btn, 3, 0);
+            // The grid's own scroll range is tiny (content fits the panel with
+            // a small margin) but disable it anyway while dragging so LVGL's
+            // scroll-vs-click arbitration can't steal the gesture mid-drag.
+            lv_obj_clear_flag(s_grid, LV_OBJ_FLAG_SCROLLABLE);
+        }
+
+        int nx = s_press_orig_pos.x + ddx;
+        int ny = s_press_orig_pos.y + ddy;
+        int max_x = (COLS - 1) * (CELL_W + CELL_GAP);
+        int max_y = (ROWS - 1) * (CELL_H + CELL_GAP);
+        if (nx < 0) nx = 0; else if (nx > max_x) nx = max_x;
+        if (ny < 0) ny = 0; else if (ny > max_y) ny = max_y;
+        lv_obj_set_pos(btn, nx, ny);
+        return;
+    }
+
+    if (code == LV_EVENT_RELEASED) {
+        if (s_press_idx != idx) return;
+        bool was_dragging = s_press_dragging;
+        s_press_idx = -1;
+        s_press_dragging = false;
+
+        if (was_dragging) {
+            lv_obj_set_style_border_color(btn, lv_color_hex(0x404040), 0);
+            lv_obj_set_style_border_width(btn, 1, 0);
+            lv_obj_add_flag(s_grid, LV_OBJ_FLAG_SCROLLABLE);
+
+            int cur_x = lv_obj_get_x(btn), cur_y = lv_obj_get_y(btn);
+            int col = (cur_x + (CELL_W + CELL_GAP) / 2) / (CELL_W + CELL_GAP);
+            int row = (cur_y + (CELL_H + CELL_GAP) / 2) / (CELL_H + CELL_GAP);
+            if (col < 0) col = 0; else if (col >= COLS) col = COLS - 1;
+            if (row < 0) row = 0; else if (row >= ROWS) row = ROWS - 1;
+            int target_idx = row * COLS + col;
+
+            // The button always snaps back to its own fixed grid slot - only
+            // the data may have moved (see function comment above).
+            lv_obj_set_pos(btn, s_press_orig_pos.x, s_press_orig_pos.y);
+
+            if (target_idx != idx) {
+                mem_slot_t tgt_slot;
+                mem_channels_get(target_idx, &tgt_slot);
+                if (!tgt_slot.occupied) {
+                    mem_slot_t src_slot;
+                    mem_channels_get(idx, &src_slot);
+                    mem_channels_set(target_idx, &src_slot);
+                    mem_channels_clear(idx);
+                    ESP_LOGI(TAG, "moved slot %d -> %d", idx, target_idx);
+                } else {
+                    ESP_LOGI(TAG, "drop on occupied slot %d rejected, snapped back", target_idx);
+                }
+            }
+            memory_modal_refresh();
+            s_skip_next_click = true;
+            return;
+        }
+
+        /* Long-press + lift in place, no drag: open the edit/save panel. */
+        open_edit_panel(idx);
+        s_skip_next_click = true;
+    }
 }
 
 static void modal_build(void)
@@ -372,8 +530,10 @@ static void modal_build(void)
         lv_obj_set_style_border_width(btn, 1, 0);
         lv_obj_set_style_pad_all(btn, 4, 0);
         lv_obj_set_user_data(btn, (void *)(intptr_t)i);
-        lv_obj_add_event_cb(btn, cell_tap_cb,      LV_EVENT_CLICKED,     NULL);
-        lv_obj_add_event_cb(btn, cell_longpress_cb, LV_EVENT_LONG_PRESSED, NULL);
+        lv_obj_add_event_cb(btn, cell_tap_cb,          LV_EVENT_CLICKED,      NULL);
+        lv_obj_add_event_cb(btn, cell_press_state_cb,  LV_EVENT_LONG_PRESSED, NULL);
+        lv_obj_add_event_cb(btn, cell_press_state_cb,  LV_EVENT_PRESSING,     NULL);
+        lv_obj_add_event_cb(btn, cell_press_state_cb,  LV_EVENT_RELEASED,     NULL);
         s_cell_btn[i] = btn;
 
         lv_obj_t *lbl = lv_label_create(btn);
@@ -508,8 +668,7 @@ static void modal_build(void)
     ui_theme_style_keyboard(s_action_kb);
     lv_obj_set_size(s_action_kb, LV_PCT(100), 280);
     lv_obj_align(s_action_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_keyboard_set_mode(s_action_kb, LV_KEYBOARD_MODE_TEXT_UPPER);
-    ui_theme_keyboard_attach_caps_cycle(s_action_kb);
+    ui_theme_keyboard_attach_caps_cycle_pending(s_action_kb);
     lv_obj_set_style_text_font(s_action_kb, &lv_font_montserrat_28, 0);
     lv_obj_add_flag(s_action_kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_action_kb, action_kb_cb, LV_EVENT_READY,  NULL);

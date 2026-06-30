@@ -118,12 +118,16 @@ int bandplan_get_segments(uint32_t freq_hz, bandplan_region_t region, const bp_s
     return 0;
 }
 
+// Dimmed ~30% from the original bright 0x33AAFF/0xFFAA33/0x33CC55 (too
+// bright against the waterfall, 2026-06-30 feedback). Kept in sync with
+// ui_theme.h's UI_COLOR_MODE_CW/UI_COLOR_MODE_DIGI - the memory-channel grid
+// and the freq pad's mode row use the same CW/DiGi colours as this strip.
 uint32_t bandplan_seg_color(bp_seg_type_t type)
 {
     switch (type) {
-        case BP_CW:    return 0x33AAFF;  // blue  — CW
-        case BP_DIGI:  return 0xFFAA33;  // amber — digital
-        case BP_PHONE: return 0x33CC55;  // green — phone/SSB
+        case BP_CW:    return 0x2477B3;  // blue  — CW
+        case BP_DIGI:  return 0xB37724;  // amber — digital
+        case BP_PHONE: return 0x248F3C;  // green — phone/SSB
         default:       return 0x808080;
     }
 }
