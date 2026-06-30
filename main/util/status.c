@@ -3,6 +3,7 @@
 #include "wifi.h"
 #include "time_sync.h"
 #include "diag_log.h"
+#include "ft8_test.h"
 #include <stdio.h>
 #include <stdbool.h>
 #include <time.h>
@@ -90,7 +91,12 @@ static void status_task(void *arg)
             case TIME_SOURCE_QMX:    clk_suffix = " UTC(QMX)"; break;
             case TIME_SOURCE_RTC:    clk_suffix = " UTC(RTC)"; break;
             case TIME_SOURCE_MANUAL: clk_suffix = " UTC(MAN)"; break;
-            case TIME_SOURCE_FT8:    clk_suffix = " UTC(FT8)"; break;
+            case TIME_SOURCE_FT8:
+                // Marked "FT8" historically, but the sync can come from either
+                // protocol's slot timing now that FT4's offset calc is fixed -
+                // label it by the sub-mode actually active, not the constant name.
+                clk_suffix = (ft8_op_mode_get() == FT8_OP_MODE_FT4) ? " UTC(FT4)" : " UTC(FT8)";
+                break;
             default:                 clk_suffix = " UTC";      break;
         }
 

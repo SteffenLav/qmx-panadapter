@@ -37,7 +37,7 @@ static lv_obj_t *s_robot_warn       = NULL;  // "unattended TX" warning - shown 
 static lv_obj_t *s_cb_field_day     = NULL;  // ARRL Field Day exchange mode enable
 static lv_obj_t *s_ta_fd_class      = NULL;  // e.g. "16A"
 static lv_obj_t *s_ta_fd_section    = NULL;  // e.g. "EMA"
-static lv_obj_t *s_sync_time_btn    = NULL;  // "Sync Time" button (FT8-only; hidden in FT4)
+static lv_obj_t *s_sync_time_btn    = NULL;  // "Sync Time" button (FT8 + FT4)
 
 static bool      s_open = false;
 
@@ -484,13 +484,12 @@ void ft8_filter_modal_show(void)
     lv_textarea_set_text(s_ta_fd_class, s.fd_class);
     lv_textarea_set_text(s_ta_fd_section, s.fd_section);
 
-    // Hide "Sync Time" button in FT4 mode — sync is FT8-only (7.5 s vs 15 s slots)
+    // "Sync Time" used to be hidden in FT4 mode because the timing-offset calc
+    // was silently wrong for FT4's block geometry; fixed 2026-06-30
+    // (decode_candidate_range() now reads mon->block_size/subblock_size
+    // instead of hardcoded FT8 constants), so it's shown in both modes now.
     if (s_sync_time_btn) {
-        if (ft8_op_mode_get() == FT8_OP_MODE_FT4) {
-            lv_obj_add_flag(s_sync_time_btn, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_clear_flag(s_sync_time_btn, LV_OBJ_FLAG_HIDDEN);
-        }
+        lv_obj_clear_flag(s_sync_time_btn, LV_OBJ_FLAG_HIDDEN);
     }
 
     lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);

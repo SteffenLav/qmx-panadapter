@@ -8,11 +8,11 @@
 //    Validated: HH 0-23, MM 0-59. Pre-filled from current UTC.
 //    "HH"/"MM" hint stays centred below the big digits.
 //
-//  SS  — live FT8-corrected seconds (syncs at each slot decode, ~15 s).
+//  SS  — live FT8/FT4-corrected seconds (syncs at each slot decode: ~15 s
+//    FT8, ~7.5 s FT4; whichever sub-mode is currently active).
 //    Blue frame = auto-syncing; grey frame = locked.
 //    Tap SS to toggle locked / auto. While locked, seconds still count
-//    at the captured offset — no FT8 drift after locking.
-//    Hint shows "FT8 +Xms" / "FT8 ok" / "no FT8" / "locked".
+//    at the captured offset — no drift after locking.
 //
 //  Apply: time_sync_apply_correction_ms (sub-second) when only SS
 //    correction is needed; time_sync_set_manual when HH or MM were edited.
@@ -35,6 +35,15 @@
 #include "lvgl.h"
 
 static const char *TAG = "ft8_time_modal";
+
+// SS_SYNC_FT8 is really "synced off whatever FT8/FT4 sub-mode is currently
+// decoding" - the timing-offset math itself is protocol-agnostic (see
+// ft8_test.c's decode_candidate_range fix, 2026-06-30), this just picks the
+// label to show the operator.
+static const char *active_proto_label(void)
+{
+    return (ft8_op_mode_get() == FT8_OP_MODE_FT4) ? "FT4" : "FT8";
+}
 
 // ---------------------------------------------------------------------------
 // State
@@ -71,7 +80,8 @@ static lv_obj_t   *s_box_ss   = NULL;
 static lv_obj_t   *s_lbl_hh   = NULL;
 static lv_obj_t   *s_lbl_mm   = NULL;
 static lv_obj_t   *s_lbl_ss   = NULL;
-static lv_obj_t   *s_hint_ss  = NULL;  // dynamic FT8 status below SS digits
+static lv_obj_t   *s_hint_ss  = NULL;  // dynamic FT8/FT4 status below SS digits
+static lv_obj_t   *s_hint_top = NULL;  // top one-line hint, mentions the active sub-mode
 static lv_obj_t   *s_numpad   = NULL;
 static lv_timer_t *s_timer    = NULL;
 static lv_timer_t *s_flash_timer    = NULL;  // one-shot: reverts the SS flash
@@ -311,7 +321,7 @@ static void apply_cb(lv_event_t *e)
             int err_ms = 0;
             if (!s_hh_edited && !s_mm_edited && ft8_get_last_timing_ms(&err_ms)) {
                 time_sync_apply_correction_ms(err_ms);
-                ESP_LOGI(TAG, "Applied FT8 correction: %+d ms", err_ms);
+                ESP_LOGI(TAG, "Applied %s correction: %+d ms", active_proto_label(), err_ms);
             } else {
                 time_sync_set_manual(tm.tm_year+1900, tm.tm_mon+1, tm.tm_mday,
                                      s_hh_val, s_mm_val, s_ss_display);
@@ -416,8 +426,13 @@ static void timer_cb(lv_timer_t *t)
         char b[4]; snprintf(b, sizeof(b), "%02d", s_ss_display);
         lv_label_set_text(s_lbl_ss, b);
 
-        lv_label_set_text(s_hint_ss,
-            s_ss_mode == SS_SYNC_FT8 ? "Flash: FT8 synced..." : "SS  NTP sync");
+        if (s_ss_mode == SS_SYNC_FT8) {
+            char hb[24];
+            snprintf(hb, sizeof(hb), "Flash: %s synced...", active_proto_label());
+            lv_label_set_text(s_hint_ss, hb);
+        } else {
+            lv_label_set_text(s_hint_ss, "SS  NTP sync");
+        }
     }
 }
 
@@ -537,14 +552,15 @@ static void modal_build(void)
     lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
 
-    // One-line hint
+    // One-line hint (text fixed up to the active FT8/FT4 sub-mode each time
+    // the modal is shown - see ft8_time_modal_show())
     lv_obj_t *hint = lv_label_create(s_panel);
-    lv_label_set_text(hint, "Tap HH/MM to edit. Tap SS to sync to FT8/NTP/QMX");
     lv_obj_set_style_text_color(hint, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_22, 0);
     lv_obj_set_style_text_align(hint, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(hint, 600);
     lv_obj_set_pos(hint, 0, 42);
+    s_hint_top = hint;
 
     // HH : MM : SS boxes — font_48 for digits, BY=85
     // Box w=182, colon gap 17 px → 3×182 + 2×17 = 580 ≤ 600 ✓
@@ -611,7 +627,7 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_lbl_ss, &lv_font_montserrat_48, 0);
     lv_obj_align(s_lbl_ss, LV_ALIGN_CENTER, 0, -12);
     s_hint_ss = lv_label_create(s_box_ss);
-    lv_label_set_text(s_hint_ss, "Flash: FT8 synced...");
+    lv_label_set_text(s_hint_ss, "Flash: synced...");
     lv_obj_set_style_text_color(s_hint_ss, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(s_hint_ss, &lv_font_montserrat_18, 0);
     lv_obj_align(s_hint_ss, LV_ALIGN_BOTTOM_MID, 0, -6);
@@ -692,7 +708,12 @@ void ft8_time_modal_show(void)
     snprintf(b, sizeof(b), "%02d", s_hh_val);    lv_label_set_text(s_lbl_hh, b);
     snprintf(b, sizeof(b), "%02d", s_mm_val);    lv_label_set_text(s_lbl_mm, b);
     snprintf(b, sizeof(b), "%02d", s_ss_display); lv_label_set_text(s_lbl_ss, b);
-    lv_label_set_text(s_hint_ss, "Flash: FT8 synced...");
+    char hb[24];
+    snprintf(hb, sizeof(hb), "Flash: %s synced...", active_proto_label());
+    lv_label_set_text(s_hint_ss, hb);
+    char tb[56];
+    snprintf(tb, sizeof(tb), "Tap HH/MM to edit. Tap SS to sync to %s/NTP/QMX", active_proto_label());
+    lv_label_set_text(s_hint_top, tb);
 
     lv_obj_add_flag(s_numpad, LV_OBJ_FLAG_HIDDEN);
     refresh_box_styles();

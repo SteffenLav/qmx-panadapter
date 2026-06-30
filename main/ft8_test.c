@@ -667,12 +667,16 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
         ftx_message_offsets_t off;
         if (ftx_message_decode(&msg, NULL, text, &off) == FTX_MESSAGE_RC_OK) {
             out->n_decoded++;
-            // SR=12000, block_size=1920 samples/symbol, time_osr=2 -> subblock=960
-            // samples. start_off_ms anchors this candidate's sync position back to
-            // the UTC slot boundary, same as every other candidate this slot.
+            // SR=12000. block_size/subblock_size come from mon itself rather than
+            // being hardcoded to FT8's 1920/960 - FT4 uses 576/288, and using the
+            // FT8 constants for FT4 candidates silently produced a ~3.3x-too-large
+            // (and wrongly-scaled) timing offset. start_off_ms anchors this
+            // candidate's sync position back to the UTC slot boundary, same as
+            // every other candidate this slot.
             if (out->n_timing < FT8_MAX_CANDIDATES) {
                 out->timing[out->n_timing++] =
-                    (float)start_off_ms + (cands[i].time_offset * 1920 + cands[i].time_sub * 960) / 12.0f;
+                    (float)start_off_ms +
+                    (cands[i].time_offset * mon->block_size + cands[i].time_sub * mon->subblock_size) / 12.0f;
             }
             int snr_db = (int)lroundf(ft8_estimate_snr_db(mon, &cands[i], noise_db));
             // cands[i].freq_offset is a coarse FFT bin index RELATIVE TO mon->min_bin
@@ -812,9 +816,11 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
         // Auto-sync: nudge the system clock to the on-air population average
         // every slot, not just when the operator opens the time-sync modal
         // and taps Apply. See FT8_AUTOSYNC_MIN_SAMPLES/_MS above for why both
-        // guards exist.
-        if (s_pool_proto == (int)FTX_PROTOCOL_FT8 &&
-            n_timing >= FT8_AUTOSYNC_MIN_SAMPLES &&
+        // guards exist. Previously FT8-only - the timing offset was
+        // protocol-scaled wrong for FT4 (see the mon->block_size fix above);
+        // now that it's computed from the real per-protocol block sizes, FT4
+        // is included too.
+        if (n_timing >= FT8_AUTOSYNC_MIN_SAMPLES &&
             abs(s_last_timing_ms) >= FT8_AUTOSYNC_MIN_MS) {
             // Apply only a damped fraction of the raw measurement - see
             // FT8_AUTOSYNC_GAIN above. _quiet: skips the QMX CAT push, which
