@@ -62,6 +62,7 @@ typedef struct {
     bool     freq_kp_calc;    // freq keypad digit layout: false=phone, true=10-key/calc
     int16_t  freq_kp_dx;      // freq keypad popup position: offset from screen center, px (default 0,0)
     int16_t  freq_kp_dy;
+    bool     freq_kp_small;   // freq keypad popup size: false=normal, true=small (pinch-to-resize, default false)
     char     qrz_api_key[40]; // QRZ Logbook API key (GUID-format, set via web UI)
     uint32_t qrz_uploaded_n;  // count of ADIF records already uploaded to QRZ
     char     eqsl_user[16];   // eQSL.cc username (callsign), set via web UI
@@ -84,6 +85,9 @@ typedef struct {
     char     fd_section[4];   // Field Day ARRL/RAC section abbreviation, e.g. "EMA"
     bool     sim_mode_en;     // FT8 simulation mode: phantom stations, real radio never keyed (default false)
     uint8_t  ft8_op_mode;     // FT8/FT4 sub-mode (ft8_op_mode_t: 0=FT8 1=FT4), default 0 - see ft8_test.h
+    uint32_t passband_width_hz; // last CAT-reported filter width (Hz), 0=unknown/use mode default. Persisted so the
+                                 // band-plan strip's passband indicator shows the real width immediately at boot
+                                 // instead of a generic default for the few seconds before the first real FW poll lands.
 } qmx_settings_t;
 
 // Initialise the settings module. Opens an NVS handle. Safe to call
@@ -177,6 +181,12 @@ void settings_set_fd_section(const char *section);
 void settings_set_sim_mode_en(bool v);
 void settings_set_ft8_op_mode(uint8_t v);
 
+// Last CAT-reported filter width in Hz (debounced flush). Restored at boot
+// so the band-plan strip's passband indicator is correct immediately
+// instead of showing a generic per-mode default for the first few seconds
+// after QMX link-up, until the real FW poll response arrives.
+void settings_set_passband_width_hz(uint32_t hz);
+
 // WiFi boot-initiation toggle (debounced flush). When false the radio stays
 // idle at boot even if credentials are stored; the user can re-enable from
 // the settings drawer.
@@ -197,6 +207,11 @@ void settings_set_freq_kp_calc(bool v);
 // DIRTY_CONFIG_EXPORT_MASK — purely cosmetic placement, not worth a SD-card
 // mirror write.
 void settings_set_freq_kp_pos(int16_t dx, int16_t dy);
+
+// Freq keypad popup size (debounced flush): false=normal, true=small
+// (toggled by pinch). Persists across power cycles like the position above,
+// also deliberately NOT part of DIRTY_CONFIG_EXPORT_MASK for the same reason.
+void settings_set_freq_kp_small(bool v);
 
 // QRZ Logbook API key, set via the web UI (debounced flush). Pass NULL or
 // empty to clear.

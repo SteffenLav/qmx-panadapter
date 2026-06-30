@@ -44,6 +44,8 @@ static const char *TAG = "settings";
 #define KEY_FREQ_KP_CALC "freq_kp_calc"
 #define KEY_FREQ_KP_DX   "freq_kp_dx"
 #define KEY_FREQ_KP_DY   "freq_kp_dy"
+#define KEY_FREQ_KP_SMALL "freq_kp_small"
+#define KEY_PASSBAND_HZ   "passband_hz"
 #define KEY_QRZ_KEY      "qrz_key"
 #define KEY_QRZ_UPLOADED "qrz_upl_n"
 #define KEY_EQSL_USER    "eqsl_user"
@@ -138,6 +140,8 @@ static const char *TAG = "settings";
 #define DIRTY_SIM_MODE       (1ull << 46)
 #define DIRTY_FT8_OP_MODE    (1ull << 47)
 #define DIRTY_FREQ_KP_POS    (1ull << 48)
+#define DIRTY_FREQ_KP_SMALL  (1ull << 49)
+#define DIRTY_PASSBAND_HZ    (1ull << 50)
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -262,6 +266,8 @@ static void flush_task(void *arg)
             nvs_set_i16(s_nvs, KEY_FREQ_KP_DX, snap.freq_kp_dx);
             nvs_set_i16(s_nvs, KEY_FREQ_KP_DY, snap.freq_kp_dy);
         }
+        if (dirty_local & DIRTY_FREQ_KP_SMALL) nvs_set_u8(s_nvs, KEY_FREQ_KP_SMALL, snap.freq_kp_small ? 1 : 0);
+        if (dirty_local & DIRTY_PASSBAND_HZ)   nvs_set_u32(s_nvs, KEY_PASSBAND_HZ, snap.passband_width_hz);
         if (dirty_local & DIRTY_QRZ_KEY)      nvs_set_str(s_nvs, KEY_QRZ_KEY, snap.qrz_api_key);
         if (dirty_local & DIRTY_QRZ_UPLOADED) nvs_set_u32(s_nvs, KEY_QRZ_UPLOADED, snap.qrz_uploaded_n);
         if (dirty_local & DIRTY_EQSL_USER)     nvs_set_str(s_nvs, KEY_EQSL_USER, snap.eqsl_user);
@@ -367,6 +373,8 @@ static void load_from_nvs(qmx_settings_t *out)
     out->freq_kp_calc = false;
     out->freq_kp_dx = 0;
     out->freq_kp_dy = 0;
+    out->freq_kp_small = false;
+    out->passband_width_hz = 0;
     out->qrz_api_key[0] = '\0';
     out->qrz_uploaded_n = 0;
     out->eqsl_user[0] = '\0';
@@ -440,6 +448,11 @@ static void load_from_nvs(qmx_settings_t *out)
         int16_t i16v;
         if (nvs_get_i16(s_nvs, KEY_FREQ_KP_DX, &i16v) == ESP_OK) out->freq_kp_dx = i16v;
         if (nvs_get_i16(s_nvs, KEY_FREQ_KP_DY, &i16v) == ESP_OK) out->freq_kp_dy = i16v;
+    }
+    if (nvs_get_u8(s_nvs, KEY_FREQ_KP_SMALL, &u8v) == ESP_OK) out->freq_kp_small = (u8v != 0);
+    {
+        uint32_t u32v;
+        if (nvs_get_u32(s_nvs, KEY_PASSBAND_HZ, &u32v) == ESP_OK) out->passband_width_hz = u32v;
     }
     out->qrz_api_key[0] = '\0';
     sz = sizeof(out->qrz_api_key);
@@ -816,6 +829,26 @@ void settings_set_freq_kp_pos(int16_t dx, int16_t dy)
     s_pending.freq_kp_dy = dy;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_FREQ_KP_POS);
+}
+
+void settings_set_freq_kp_small(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.freq_kp_small == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.freq_kp_small = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_FREQ_KP_SMALL);
+}
+
+void settings_set_passband_width_hz(uint32_t hz)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.passband_width_hz == hz) { xSemaphoreGive(s_mutex); return; }
+    s_pending.passband_width_hz = hz;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_PASSBAND_HZ);
 }
 
 void settings_set_cw_audio_en(bool v)

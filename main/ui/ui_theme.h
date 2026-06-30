@@ -31,6 +31,15 @@ void ui_kbd_set_buttons(lv_obj_t *save_btn, lv_obj_t *cancel_btn);
 #define UI_COLOR_SURFACE_RAISED 0x252b33
 #define UI_COLOR_BORDER         0x555555
 
+/* Full-screen modal scrim (the dark overlay behind every modal/popup panel).
+ * Was LV_OPA_70 (~70%) everywhere, too opaque to see anything behind a
+ * modal - dropped to ~40% (2026-06-30 feedback) so the spectrum/waterfall
+ * stays visible through it, particularly useful with the freq pad's small
+ * size (see ui.c freq_popup_build) where the whole point of shrinking it is
+ * to see what's behind. Single shared token so every modal's scrim moves
+ * together if this needs tuning again. */
+#define UI_OPA_MODAL_SCRIM      LV_OPA_40
+
 /* Primary action blue (drawer presets, FT8 pounce/transmit accents,
  * memory recall, CQ field add button, TX-slot parity buttons). */
 #define UI_COLOR_PRIMARY        0x2a6fb0

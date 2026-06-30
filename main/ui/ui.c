@@ -120,6 +120,12 @@ int   ui_get_pan_offset_bins(void){ return s_pan_offset_bins; }
 // passband-centered zoom (and exported via ui_get_passband_edges_hz()).
 static void compute_passband_edges_hz(int32_t *out_low, int32_t *out_high);
 
+// Forward declaration: defined later, needed by every zoom-changing call
+// site (zoom presets, snapshot restore, pinch, double-tap reset) to refresh
+// the band-plan strip's visible-span block whenever zoom/pan changes without
+// a VFO change to piggyback the refresh on.
+static void update_bandplan_strip(uint32_t freq_hz);
+
 // ---- Band preset popup ------------------------------------------------
 // Per-band last-used frequency (session memory, not persisted).
 // Index mirrors cat_get_band_list(). 0 = never visited, use center_hz.
@@ -311,6 +317,18 @@ static char      s_freq_buf[16] = "";
 static char      s_freq_disp[40] = "";
 static ui_freq_picker_cb_t s_freq_picker_cb = NULL;
 
+// Pinch-to-resize: pinch in shrinks the pad, spread returns it to normal -
+// a two-state snap, not continuous scaling (LVGL's built-in fonts are fixed
+// bitmap sizes, can't be scaled smoothly). Persisted (settings_set_freq_kp_small,
+// debounced flush) so it survives a power cycle. The point of shrinking it
+// is to be able to see the spectrum/waterfall behind it (groups.io item
+// #25b, Samuel W7STF), which only works combined with the lighter modal
+// scrim above.
+static bool      s_freq_kp_small = false;
+static bool      s_freq_kp_pinch_active = false;
+static int       s_freq_kp_pinch_start_dist = 0;
+static int       s_freq_kp_pinch_last_dist  = 0;
+
 // Popup position: offset from screen center, in px. Dragging the freq-display
 // label (the only non-button area of the panel) moves the whole popup; the
 // final offset is persisted on release so it reopens wherever it was last
@@ -403,17 +421,6 @@ static void freq_popup_refresh_display(void)
     }
     s_freq_disp[oi] = '\0';
     lv_label_set_text(s_freq_display, s_freq_disp);
-}
-
-static void freq_overlay_cb(lv_event_t *e)
-{
-    (void)e;
-    freq_popup_close();
-    if (s_freq_picker_cb) {
-        ui_freq_picker_cb_t cb = s_freq_picker_cb;
-        s_freq_picker_cb = NULL;
-        cb(0, s_freq_mode_sel, false);
-    }
 }
 
 // Parse s_freq_buf ("MHz[.kHz[.Hz]]") into a frequency in Hz.
@@ -565,6 +572,9 @@ static void freq_key_cb(lv_event_t *e)
 // keyboard bridge to route digits into the keypad instead of a textarea.
 static bool freq_keypad_is_open(void) { return s_freq_popup != NULL; }
 
+static void freq_kp_set_small(bool small);  // defined below freq_popup_build, needed by both the swipe cb here and pinch_poll_cb further down
+static void freq_kp_swipe_cb(lv_event_t *e);
+
 // Drag the freq-popup panel by its title label. PRESSED records the start
 // point + current offset; PRESSING applies the delta live; RELEASED persists
 // the final offset (debounced flush handles the actual NVS write, so a quick
@@ -607,10 +617,18 @@ static void freq_popup_build(void)
     lv_obj_set_size(ov, LV_HOR_RES, LV_VER_RES);
     lv_obj_set_pos(ov, 0, 0);
     lv_obj_set_style_bg_color(ov, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(ov, LV_OPA_70, 0);
+    lv_obj_set_style_bg_opa(ov, UI_OPA_MODAL_SCRIM, 0);
     lv_obj_set_style_border_width(ov, 0, 0);
     lv_obj_clear_flag(ov, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_event_cb(ov, freq_overlay_cb, LV_EVENT_CLICKED, NULL);
+    // No tap-outside-to-close: with the lighter scrim + small size now making
+    // it easy to see/reach past the pad to the spectrum behind it, an
+    // accidental background tap used to silently cancel the whole entry.
+    // Cancel/Enter are the only ways out now.
+    // Swipe up/down on the scrim (not the panel itself, so it can't be
+    // confused with a button tap) resizes the pad, in addition to the pinch
+    // gesture (pinch_poll_cb) - not a replacement for it.
+    lv_obj_add_event_cb(ov, freq_kp_swipe_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(ov, freq_kp_swipe_cb, LV_EVENT_RELEASED, NULL);
     s_freq_popup = ov;
 
     // The DiGi/USB/LSB/CW mode row is only useful for the Memory channel
@@ -618,12 +636,29 @@ static void freq_popup_build(void)
     // has a mode selector in the top bar, so it omits the row (and is shorter).
     bool show_mode = (s_freq_picker_cb != NULL);
 
-    int panel_w = 504;  // 360 + 40%
-    int panel_h = show_mode ? 580 : 508;  // 508 = 580 - mode row (64 + 8 gap)
+    // Two discrete sizes (pinch toggles between them, see pinch_poll_cb) -
+    // not continuous scaling, since LVGL's built-in fonts are fixed bitmap
+    // sizes. Every other geometry value (cell sizes, gaps, fonts) derives
+    // from these few so the layout stays internally consistent at both sizes.
+    bool small = s_freq_kp_small;
+    int panel_w  = small ? 332 : 504;
+    int gap      = small ? 6   : 8;
+    int cell_h   = small ? 46  : 64;   // also used for the unit/mode/cancel-enter rows
+    int disp_h   = small ? 36  : 48;   // freq-display label height
+    int top_pad  = small ? 8   : 12;   // gap between the display label and the digit grid
+    const lv_font_t *font_disp = small ? &lv_font_montserrat_22 : &lv_font_montserrat_32;
+    const lv_font_t *font_key  = small ? &lv_font_montserrat_18 : &lv_font_montserrat_24;
+
+    int grid_top = disp_h + top_pad;
+    int cols = 3, rows = 4;
+    int unit_y  = grid_top + rows * (cell_h + gap);
+    int mode_y  = unit_y + cell_h + gap;
+    int btn_y   = (show_mode ? mode_y + cell_h + gap : unit_y + cell_h + gap);
+    int panel_h = btn_y + cell_h + 2 * 12;  // +2*12 = top/bottom panel padding (unscaled, see pad_all below)
 
     // Clamp the persisted offset so the panel is always fully on-screen, even
-    // if it was last saved at a different panel height (show_mode toggles
-    // panel_h) or the offset is stale/corrupt.
+    // if it was last saved at a different panel size (show_mode/small both
+    // affect panel_w/panel_h) or the offset is stale/corrupt.
     int max_dx = (DISPLAY_H_RES - panel_w) / 2;
     int max_dy = (DISPLAY_V_RES - panel_h) / 2;
     if (s_freq_kp_dx > max_dx) s_freq_kp_dx = max_dx;
@@ -650,8 +685,8 @@ static void freq_popup_build(void)
     s_freq_display = lv_label_create(panel);
     lv_label_set_text(s_freq_display, "Enter freq");
     lv_obj_set_style_text_color(s_freq_display, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
-    lv_obj_set_style_text_font(s_freq_display, &lv_font_montserrat_32, 0);
-    lv_obj_set_size(s_freq_display, content_w, 48);
+    lv_obj_set_style_text_font(s_freq_display, font_disp, 0);
+    lv_obj_set_size(s_freq_display, content_w, disp_h);
     lv_obj_set_style_text_align(s_freq_display, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_freq_display, LV_ALIGN_TOP_MID, 0, 0);
     // Drag handle: this label is the only non-button area of the panel, so
@@ -677,11 +712,7 @@ static void freq_popup_build(void)
         '.', '0', 'D',
     };
 
-    int grid_top = 48 + 12;
-    int cols = 3, rows = 4;
-    int gap = 8;
     int cell_w = (content_w - (cols - 1) * gap) / cols;
-    int cell_h = 64;
 
     for (int i = 0; i < 12; i++) {
         int col = i % cols;
@@ -698,17 +729,16 @@ static void freq_popup_build(void)
         }
         lv_obj_t *lbl = lv_label_create(btn);
         lv_label_set_text(lbl, keys[i]);
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(lbl, font_key, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
         lv_obj_center(lbl);
         if (i < 9) s_freq_digit_lbls[i] = lbl;  // for layout toggle
     }
 
     int btn_w = (content_w - gap) / 2;
-    int btn_h = 64;
+    int btn_h = cell_h;
 
     // Row: [10 Key / Phone layout toggle]  [Clear].
-    int unit_y = grid_top + rows * (cell_h + gap);
 
     lv_obj_t *layout_btn = lv_btn_create(panel);
     lv_obj_set_size(layout_btn, btn_w, btn_h);
@@ -718,7 +748,7 @@ static void freq_popup_build(void)
     lv_obj_add_event_cb(layout_btn, freq_key_cb, LV_EVENT_CLICKED, (void *)(intptr_t)'T');
     s_freq_layout_lbl = lv_label_create(layout_btn);
     lv_label_set_text(s_freq_layout_lbl, "10 Key");
-    lv_obj_set_style_text_font(s_freq_layout_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_freq_layout_lbl, font_key, 0);
     lv_obj_set_style_text_color(s_freq_layout_lbl, lv_color_hex(0xFFFFFF), 0);
     lv_obj_center(s_freq_layout_lbl);
 
@@ -730,7 +760,7 @@ static void freq_popup_build(void)
     lv_obj_add_event_cb(clear_btn, freq_key_cb, LV_EVENT_CLICKED, (void *)(intptr_t)'A');
     lv_obj_t *clear_lbl = lv_label_create(clear_btn);
     lv_label_set_text(clear_lbl, "Clear");
-    lv_obj_set_style_text_font(clear_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(clear_lbl, font_key, 0);
     lv_obj_set_style_text_color(clear_lbl, lv_color_hex(0xFFFFFF), 0);
     lv_obj_center(clear_lbl);
 
@@ -739,7 +769,6 @@ static void freq_popup_build(void)
 
     // Mode row: DiGi / USB / LSB / CW. Only for the Memory channel editor;
     // the top-bar keypad omits it (mode lives in the top bar there).
-    int mode_y = unit_y + btn_h + gap;
     if (show_mode) {
         int mode_w = (content_w - 3 * gap) / 4;
         for (int i = 0; i < 4; i++) {
@@ -750,7 +779,7 @@ static void freq_popup_build(void)
             lv_obj_add_event_cb(btn, freq_mode_cb, LV_EVENT_CLICKED, (void *)s_freq_modes[i]);
             lv_obj_t *lbl = lv_label_create(btn);
             lv_label_set_text(lbl, s_freq_modes[i]);
-            lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+            lv_obj_set_style_text_font(lbl, font_key, 0);
             lv_obj_center(lbl);
             s_freq_mode_btns[i] = btn;
         }
@@ -760,7 +789,6 @@ static void freq_popup_build(void)
     }
 
     // Cancel / Enter row - directly below the unit row when there's no mode row.
-    int btn_y = (show_mode ? mode_y + btn_h + gap : unit_y + btn_h + gap);
 
     lv_obj_t *cancel_btn = lv_btn_create(panel);
     lv_obj_set_size(cancel_btn, btn_w, btn_h);
@@ -772,7 +800,7 @@ static void freq_popup_build(void)
     lv_obj_add_event_cb(cancel_btn, freq_key_cb, LV_EVENT_CLICKED, (void *)(intptr_t)'C');
     lv_obj_t *cancel_lbl = lv_label_create(cancel_btn);
     lv_label_set_text(cancel_lbl, "Cancel");
-    lv_obj_set_style_text_font(cancel_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(cancel_lbl, font_key, 0);
     lv_obj_set_style_text_color(cancel_lbl, lv_color_hex(0xFFFFFF), 0);
     lv_obj_center(cancel_lbl);
 
@@ -786,11 +814,62 @@ static void freq_popup_build(void)
     lv_obj_add_event_cb(enter_btn, freq_key_cb, LV_EVENT_CLICKED, (void *)(intptr_t)'E');
     lv_obj_t *enter_lbl = lv_label_create(enter_btn);
     lv_label_set_text(enter_lbl, "Save");
-    lv_obj_set_style_text_font(enter_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(enter_lbl, font_key, 0);
     lv_obj_set_style_text_color(enter_lbl, lv_color_hex(0xFFFFFF), 0);
     lv_obj_center(enter_lbl);
 
     freq_popup_refresh_display();
+}
+
+// Shared by the pinch gesture (pinch_poll_cb) and the swipe gesture
+// (freq_kp_swipe_cb) below: rebuilds the popup at the new size if it
+// actually changed, and persists the choice.
+static void freq_kp_set_small(bool small)
+{
+    if (small == s_freq_kp_small) return;
+    s_freq_kp_small = small;
+    settings_set_freq_kp_small(s_freq_kp_small);  // debounced flush, persists across power cycles
+    // Rebuild in place: freq_popup_close() doesn't touch
+    // s_freq_picker_cb/s_freq_buf/s_freq_mode_sel, so the typed digits, mode
+    // selection and (for the Memory picker) the armed callback all survive
+    // the rebuild.
+    freq_popup_close();
+    freq_popup_build();
+}
+
+// Swipe up/down on the scrim resizes the pad - in addition to the pinch
+// gesture (pinch_poll_cb), not a replacement for it. Tracked the same way
+// as freq_kp_drag_cb (PRESSED records the start point, RELEASED checks the
+// total delta) rather than LVGL's built-in LV_EVENT_GESTURE: that event
+// never fired here in testing - lv_indev_scroll_handler() runs before
+// gesture detection each frame and apparently claims scroll_obj before our
+// non-scrollable scrim ever gets a chance, since indev_gesture() bails
+// immediately whenever scroll_obj is set. PRESSED/PRESSING/RELEASED don't
+// have that gate, and this is the same proven pattern already moving the
+// pad around.
+#define FREQ_KP_SWIPE_MIN_DY 60
+static lv_point_t s_freq_kp_swipe_start_pt;
+static bool       s_freq_kp_swiping = false;
+
+static void freq_kp_swipe_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_indev_t *indev = lv_indev_get_act();
+    if (!indev) return;
+
+    if (code == LV_EVENT_PRESSED) {
+        lv_indev_get_point(indev, &s_freq_kp_swipe_start_pt);
+        s_freq_kp_swiping = true;
+        return;
+    }
+    if (code == LV_EVENT_RELEASED) {
+        if (!s_freq_kp_swiping) return;
+        s_freq_kp_swiping = false;
+        lv_point_t p; lv_indev_get_point(indev, &p);
+        int dy = (int)p.y - (int)s_freq_kp_swipe_start_pt.y;
+        if (dy <= -FREQ_KP_SWIPE_MIN_DY)      freq_kp_set_small(false);  // swipe up = bigger
+        else if (dy >= FREQ_KP_SWIPE_MIN_DY)  freq_kp_set_small(true);   // swipe down = smaller
+    }
 }
 
 static void freq_popup_open(void)
@@ -1062,6 +1141,7 @@ static void zoom_preset_cb(lv_event_t *e)
     float z = *(float *)lv_event_get_user_data(e);
     zoom_popup_close();
     ui_set_zoom(z, 0);
+    update_bandplan_strip(cat_get_frequency());
 }
 
 static void zoom_overlay_cb(lv_event_t *e)
@@ -1274,6 +1354,7 @@ static void ui_restore_snapshot(const ui_mode_snapshot_t *snap)
     lv_timer_set_repeat_count(t, 2);
 
     ui_set_zoom(snap->zoom_factor, snap->pan_offset_bins);
+    update_bandplan_strip(snap->freq_hz);
 }
 
 // Capture the current freq/mode/passband/zoom into a snapshot for the
@@ -1351,7 +1432,13 @@ static int  s_screen_swipe_start_x  = -1;
 // spectrum/waterfall-only gestures above.
 static int  s_left_edge_swipe_start_x   = -1;
 static int  s_bottom_edge_swipe_start_y = -1;
-#define BOTTOM_EDGE_ZONE_PX  60
+// Was 60px - tall enough to overlap the band-plan strip just above the
+// bottom bar (BANDPLAN_H=22, sitting directly on top of it), and since this
+// zone is built after (and move_foreground()'d above) the band-plan strip,
+// it silently stole every touch in that overlap, blocking the band-plan
+// drag-to-tune gesture entirely. Capped to BOTTOM_BAR_H so the swipe-up
+// zone exactly matches the bottom bar's own row and nothing more.
+#define BOTTOM_EDGE_ZONE_PX  BOTTOM_BAR_H
 #define EDGE_SWIPE_MIN_DY    60
 // (s_last_qmx_freq_hz declared at top of file)
 
@@ -1369,7 +1456,33 @@ static lv_obj_t *s_waterfall_obj = NULL;
 static lv_obj_t *s_bandplan_obj  = NULL;
 static lv_obj_t *s_bp_seg[BANDPLAN_MAX_SEG];
 static lv_obj_t *s_bp_seg_lbl[BANDPLAN_MAX_SEG];
-static lv_obj_t *s_bp_marker     = NULL;
+static lv_obj_t *s_bp_span       = NULL;  // translucent block: the slice of the band currently visible on the spectrum/waterfall
+static lv_obj_t *s_bp_passband   = NULL;  // brighter sub-block inside the span: the actual filter passband, mirrors the spectrum's own passband tint
+static lv_obj_t *s_bp_marker     = NULL;  // thin bright line: exact VFO/dial frequency, drawn inside the span
+
+// Band-plan strip drag-to-tune: self-contained (own PRESSED/PRESSING/RELEASED
+// handling in touch_event_cb, own frequency math here) rather than reusing
+// the spectrum's pan/stroll gesture, and deliberately NOT routed through
+// pinch_poll_cb's raw-coordinate touch poll. Two reasons: (1) the band-plan
+// strip's drag should map screen width to the FULL BAND span (coarse
+// jump-around-the-band tuning), not the spectrum's zoomed visible span -
+// genuinely different math, not just a different trigger; (2) pinch_poll_cb
+// has no concept of which on-screen object a touch started on (it just
+// polls raw coordinates), so without an explicit exclusion it kept also
+// running its own pan/tune logic for the same touch, fighting the band-plan
+// drag (user report, 2026-06-30: "overlap from top due to the pinch/drag to
+// tune"). s_touch_on_bandplan is that exclusion - set in touch_event_cb's
+// PRESSED, checked first thing in touch_event_cb's other branches AND at
+// the top of pinch_poll_cb, so a touch that starts on the band-plan strip
+// never reaches the spectrum gesture code at all.
+static bool      s_touch_on_bandplan   = false;
+static bool      s_bp_dragging         = false;
+static lv_point_t s_bp_drag_start_pt;
+static int64_t   s_bp_drag_start_freq  = 0;
+static uint32_t  s_bp_drag_band_lo     = 0;
+static uint32_t  s_bp_drag_band_hi     = 0;
+static int64_t   s_bp_drag_target_hz   = 0;
+#define BP_DRAG_THRESHOLD_PX 8
 static lv_obj_t *s_label_bar = NULL;
 static lv_obj_t *s_status_label = NULL;  // legacy: single label, kept for compatibility (unused after Phase 5.13)
 static lv_obj_t *s_bot_left   = NULL;
@@ -1993,6 +2106,8 @@ static void update_bandplan_strip(uint32_t freq_hz)
             lv_obj_add_flag(s_bp_seg[i],     LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_bp_seg_lbl[i], LV_OBJ_FLAG_HIDDEN);
         }
+        if (s_bp_span)     lv_obj_add_flag(s_bp_span, LV_OBJ_FLAG_HIDDEN);
+        if (s_bp_passband) lv_obj_add_flag(s_bp_passband, LV_OBJ_FLAG_HIDDEN);
         if (s_bp_marker) lv_obj_add_flag(s_bp_marker, LV_OBJ_FLAG_HIDDEN);
         return;
     }
@@ -2018,15 +2133,70 @@ static void update_bandplan_strip(uint32_t freq_hz)
                                   lv_color_hex(bandplan_seg_color(segs[i].type)), 0);
         lv_obj_clear_flag(s_bp_seg[i], LV_OBJ_FLAG_HIDDEN);
 
-        // Label only when the block is wide enough to hold the text legibly.
-        if (w >= 56) {
-            lv_label_set_text(s_bp_seg_lbl[i], bandplan_seg_label(segs[i].type));
-            lv_obj_set_pos(s_bp_seg_lbl[i], x0, 0);
-            lv_obj_set_size(s_bp_seg_lbl[i], w, BANDPLAN_H);
+        // Label only when the block is wide enough to hold the text legibly,
+        // and never while actively dragging the strip (touch_event_cb hides
+        // it for the duration and fades it back in on release - don't
+        // fight that here every tick).
+        lv_label_set_text(s_bp_seg_lbl[i], bandplan_seg_label(segs[i].type));
+        lv_obj_set_pos(s_bp_seg_lbl[i], x0, 0);
+        lv_obj_set_size(s_bp_seg_lbl[i], w, BANDPLAN_H);
+        if (w >= 56 && !s_bp_dragging) {
             lv_obj_clear_flag(s_bp_seg_lbl[i], LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_add_flag(s_bp_seg_lbl[i], LV_OBJ_FLAG_HIDDEN);
         }
+    }
+
+    // Visible-span highlight: the slice of this band currently shown on the
+    // spectrum/waterfall (depends on zoom + pan), same formula as the freq
+    // axis labels (update_freq_axis_labels) so the two stay in lockstep.
+    // Concept mirrors the spectrum's own passband tint - "here's the window
+    // you're actually looking at" - just for the whole band instead of the
+    // filter passband.
+    if (s_bp_span) {
+        int32_t span_hz = (int32_t)(48000.0f / s_zoom_factor);
+        int32_t pan_hz  = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
+        int64_t center  = (int64_t)freq_hz + pan_hz;
+        int64_t vis_lo  = center - span_hz / 2;
+        int64_t vis_hi  = center + span_hz / 2;
+        int sx0 = (int)((double)(vis_lo - (int64_t)band_lo) / span * W);
+        int sx1 = (int)((double)(vis_hi - (int64_t)band_lo) / span * W);
+        if (sx0 < 0) sx0 = 0;
+        if (sx1 > W) sx1 = W;
+        int sw = sx1 - sx0;
+        if (sw < 1) sw = 1;
+        lv_obj_set_pos(s_bp_span, sx0, 0);
+        lv_obj_set_size(s_bp_span, sw, BANDPLAN_H);
+        lv_obj_clear_flag(s_bp_span, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_bp_span);
+    }
+
+    // Passband sub-block: the actual filter passband (mode + CAT-width
+    // dependent), same edges compute_passband_edges_hz() gives the spectrum's
+    // own tint - drawing it here too means the strip and the spectrum show
+    // the identical shape, just at band scale vs. screen scale.
+    if (s_bp_passband) {
+        int32_t pb_lo_hz, pb_hi_hz;
+        compute_passband_edges_hz(&pb_lo_hz, &pb_hi_hz);
+        int64_t abs_lo = (int64_t)freq_hz + pb_lo_hz;
+        int64_t abs_hi = (int64_t)freq_hz + pb_hi_hz;
+        int px0 = (int)((double)(abs_lo - (int64_t)band_lo) / span * W);
+        int px1 = (int)((double)(abs_hi - (int64_t)band_lo) / span * W);
+        if (px0 < 0) px0 = 0;
+        if (px1 > W) px1 = W;
+        int pw = px1 - px0;
+        // A real passband (e.g. 2.7 kHz) against a full HF band (e.g. 350 kHz
+        // on 20m) is genuinely only ~10px wide at this strip's 1280px scale -
+        // technically correct but easy to miss next to the much wider span
+        // block. Floor it to a legible minimum, same idea as the VFO
+        // marker's fixed 3px width below.
+        if (pw < 6) pw = 6;
+        lv_obj_set_pos(s_bp_passband, px0, 0);
+        lv_obj_set_size(s_bp_passband, pw, BANDPLAN_H);
+        // Never while actively dragging - hidden for the duration, faded
+        // back in on release (see the seg-label comment above).
+        if (!s_bp_dragging) lv_obj_clear_flag(s_bp_passband, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_bp_passband);
     }
 
     if (s_bp_marker) {
@@ -2052,6 +2222,16 @@ static void build_bandplan_strip(lv_obj_t *parent)
     lv_obj_set_style_radius(s_bandplan_obj, 0, 0);
     lv_obj_set_style_pad_all(s_bandplan_obj, 0, 0);
     lv_obj_clear_flag(s_bandplan_obj, LV_OBJ_FLAG_SCROLLABLE);
+    // Same touch handling as the spectrum/waterfall: grab-and-drag the strip
+    // (the visible-span block specifically, but touching anywhere on the
+    // strip works, same as tapping anywhere on the spectrum) to retune,
+    // using the existing pan/stroll gesture machinery in pinch_poll_cb - not
+    // a separate implementation. A plain tap (no drag) tunes there directly,
+    // same as the spectrum.
+    lv_obj_add_flag(s_bandplan_obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_bandplan_obj, touch_event_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(s_bandplan_obj, touch_event_cb, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(s_bandplan_obj, touch_event_cb, LV_EVENT_RELEASED, NULL);
 
     for (int i = 0; i < BANDPLAN_MAX_SEG; i++) {
         lv_obj_t *seg = lv_obj_create(s_bandplan_obj);
@@ -2062,6 +2242,13 @@ static void build_bandplan_strip(lv_obj_t *parent)
         lv_obj_set_style_radius(seg, 0, 0);
         lv_obj_set_style_pad_all(seg, 0, 0);
         lv_obj_clear_flag(seg, LV_OBJ_FLAG_SCROLLABLE);
+        // lv_obj_create() defaults to CLICKABLE, which would otherwise
+        // intercept hit-testing and swallow the touch before it ever reaches
+        // s_bandplan_obj's own PRESSED/PRESSING/RELEASED handlers below
+        // (LVGL doesn't bubble events to the parent by default) - clear it
+        // on every child so the whole strip is draggable, not just gaps
+        // between segments.
+        lv_obj_clear_flag(seg, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_flag(seg, LV_OBJ_FLAG_HIDDEN);
         s_bp_seg[i] = seg;
 
@@ -2071,9 +2258,42 @@ static void build_bandplan_strip(lv_obj_t *parent)
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
         lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_pad_top(lbl, 1, 0);
+        lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);  // let touches fall through to s_bandplan_obj
         lv_obj_add_flag(lbl, LV_OBJ_FLAG_HIDDEN);
         s_bp_seg_lbl[i] = lbl;
     }
+
+    // Visible-span highlight: translucent white block over whatever portion
+    // of the band the spectrum/waterfall currently shows. Sits below the VFO
+    // marker line (built next) in z-order - move_foreground() calls in
+    // update_bandplan_strip() put span first, then marker, so the marker
+    // always ends up on top.
+    s_bp_span = lv_obj_create(s_bandplan_obj);
+    lv_obj_set_size(s_bp_span, 1, BANDPLAN_H);
+    lv_obj_set_pos(s_bp_span, 0, 0);
+    lv_obj_set_style_bg_color(s_bp_span, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_bg_opa(s_bp_span, LV_OPA_30, 0);
+    lv_obj_set_style_border_width(s_bp_span, 0, 0);
+    lv_obj_set_style_radius(s_bp_span, 0, 0);
+    lv_obj_set_style_pad_all(s_bp_span, 0, 0);
+    lv_obj_clear_flag(s_bp_span, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(s_bp_span, LV_OBJ_FLAG_CLICKABLE);  // let touches fall through to s_bandplan_obj - see seg loop comment above
+    lv_obj_add_flag(s_bp_span, LV_OBJ_FLAG_HIDDEN);
+
+    // Passband sub-block: light grey, sits on top of the (dimmer) span block
+    // so it still reads clearly without competing for attention the way the
+    // gold accent colour did (2026-06-30 feedback).
+    s_bp_passband = lv_obj_create(s_bandplan_obj);
+    lv_obj_set_size(s_bp_passband, 1, BANDPLAN_H);
+    lv_obj_set_pos(s_bp_passband, 0, 0);
+    lv_obj_set_style_bg_color(s_bp_passband, lv_color_hex(0xB0B0B0), 0);
+    lv_obj_set_style_bg_opa(s_bp_passband, LV_OPA_80, 0);
+    lv_obj_set_style_border_width(s_bp_passband, 0, 0);
+    lv_obj_set_style_radius(s_bp_passband, 0, 0);
+    lv_obj_set_style_pad_all(s_bp_passband, 0, 0);
+    lv_obj_clear_flag(s_bp_passband, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(s_bp_passband, LV_OBJ_FLAG_CLICKABLE);  // let touches fall through to s_bandplan_obj
+    lv_obj_add_flag(s_bp_passband, LV_OBJ_FLAG_HIDDEN);
 
     // VFO position marker: a thin bright vertical line on top of the blocks.
     s_bp_marker = lv_obj_create(s_bandplan_obj);
@@ -2084,6 +2304,7 @@ static void build_bandplan_strip(lv_obj_t *parent)
     lv_obj_set_style_radius(s_bp_marker, 0, 0);
     lv_obj_set_style_pad_all(s_bp_marker, 0, 0);
     lv_obj_clear_flag(s_bp_marker, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(s_bp_marker, LV_OBJ_FLAG_CLICKABLE);  // let touches fall through to s_bandplan_obj
     lv_obj_add_flag(s_bp_marker, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -2509,6 +2730,8 @@ void ui_init(lv_display_t *disp)
         ESP_LOGI(TAG, "Freq keypad layout loaded from NVS: %s", s_freq_calc_layout ? "10-key" : "phone");
         s_freq_kp_dx = s.freq_kp_dx;
         s_freq_kp_dy = s.freq_kp_dy;
+        s_freq_kp_small = s.freq_kp_small;
+        s_passband_width_hz = s.passband_width_hz;  // band-plan passband indicator shows the real width from boot, not a generic default
         s_snap_to_peak = s.snap_to_peak;
         ESP_LOGI(TAG, "Snap-to-peak loaded from NVS: %s", s_snap_to_peak ? "on" : "off");
         // Load zoom from NVS; pan always resets to 0 on boot.
@@ -2565,8 +2788,56 @@ static void pinch_poll_cb(lv_timer_t *t)
 {
     (void)t;
     if (!s_tp) return;
+
+    // The band-plan strip's own drag-to-tune (touch_event_cb) owns the touch
+    // session entirely while active - this function reads raw touch data
+    // unconditionally with no idea which on-screen object a touch started
+    // on, so without this it kept also running spectrum pan/zoom/tune logic
+    // for the same touch and fighting the band-plan drag (user report,
+    // 2026-06-30). The exclusion has to live here too, not just in
+    // touch_event_cb, because that's a separate code path entirely.
+    if (s_touch_on_bandplan) return;
+
     esp_lcd_touch_read_data(s_tp);
     uint8_t npts = s_tp->data.points;
+
+    // While the freq pad is open, raw touch handling belongs to it alone -
+    // a two-finger pinch toggles its size; nothing else from this function
+    // (spectrum pan/zoom) should fire underneath a popup the user can't
+    // even see past. This also closes a latent bug: before this branch
+    // existed, pinching while the freq pad was open silently zoomed the
+    // hidden spectrum behind it.
+    if (freq_keypad_is_open()) {
+        if (npts < 2) {
+            if (s_freq_kp_pinch_active) {
+                // Fingers lifted below 2: decide shrink/grow from the last
+                // tracked spread vs the spread at gesture start. A snap, not
+                // smooth scaling - see s_freq_kp_small's comment for why.
+                // +-20% is a dead zone so a near-stationary 2-finger tap
+                // (no real pinch intent) doesn't toggle the size by accident.
+                s_freq_kp_pinch_active = false;
+                if (s_freq_kp_pinch_start_dist > 0) {
+                    float ratio = (float)s_freq_kp_pinch_last_dist / (float)s_freq_kp_pinch_start_dist;
+                    bool want_small = s_freq_kp_small;
+                    if (ratio < 0.8f) want_small = true;
+                    else if (ratio > 1.2f) want_small = false;
+                    freq_kp_set_small(want_small);
+                }
+            }
+            return;
+        }
+        int lx0 = (int)s_tp->data.coords[0].y;
+        int lx1 = (int)s_tp->data.coords[1].y;
+        int dist = lx1 - lx0;
+        if (dist < 0) dist = -dist;
+        if (dist < 4) dist = 4;
+        if (!s_freq_kp_pinch_active) {
+            s_freq_kp_pinch_active = true;
+            s_freq_kp_pinch_start_dist = dist;
+        }
+        s_freq_kp_pinch_last_dist = dist;
+        return;
+    }
 
     // No fingers: settle any active gesture.
     if (npts < 1) {
@@ -2678,6 +2949,19 @@ static void pinch_poll_cb(lv_timer_t *t)
         s_stroll_target_hz = tgt;
 
         update_bandplan_strip((uint32_t)tgt);
+        // Live top-bar "Freq: ..." text during the drag - display only, no
+        // CAT write (that stays deferred to release, same as before, so a
+        // fast drag can't flood the QMX with frequency writes). Real VFO
+        // commit + ui_update_frequency() (which also updates this label)
+        // still happens only on settle, in the npts<1 branch below.
+        if (s_freq_label) {
+            char fb[32];
+            uint32_t t = (uint32_t)tgt;
+            snprintf(fb, sizeof(fb), "Freq: %lu.%03lu.%03lu Hz",
+                     (unsigned long)(t / 1000000), (unsigned long)((t / 1000) % 1000),
+                     (unsigned long)(t % 1000));
+            lv_label_set_text(s_freq_label, fb);
+        }
         if (s_tune_tooltip) {
             char b[24];
             snprintf(b, sizeof(b), "%.3f MHz", (double)tgt / 1e6);
@@ -2728,6 +3012,11 @@ static void pinch_poll_cb(lv_timer_t *t)
     if (new_pan < -max_pan) new_pan = -max_pan;
     if (new_pan >  max_pan) new_pan =  max_pan;
     ui_set_zoom(new_zoom, new_pan);
+    // Live-update the band-plan visible-span block as the pinch tracks -
+    // ui_set_zoom() doesn't touch it itself (most of its other callers
+    // already refresh the strip via ui_update_frequency right after), but
+    // a pinch changes zoom continuously without any VFO change to piggyback on.
+    update_bandplan_strip(s_last_qmx_freq_hz);
     s_target_until_us = 0;  // suppress tune cursor during pinch
 }
 
@@ -2843,6 +3132,28 @@ void ui_refresh_band_label(uint32_t freq_hz)
     if (band) ui_update_band(band);
 }
 
+// Same rationale as ui_refresh_band_label above, for the band-plan strip:
+// update_bandplan_strip() is normally only reached through the
+// freq-changed-gated ui_update_frequency(), so if that very first call after
+// QMX link-up races display_lock and gets dropped during early boot, the
+// strip can stay blank forever if the VFO never moves again. Cheap
+// (repositions a handful of LVGL objects), safe to call on every CAT FA poll.
+//
+// Unlike update_bandplan_strip()'s other callers (ui_update_frequency, the
+// touch/pinch handlers), this one is reached from cat.c's poll_task - a
+// different FreeRTOS task from the LVGL thread - so it must take the
+// display lock itself rather than assuming the caller already holds it.
+// Without this it showed correctly right after connect, then visibly
+// degraded a few seconds later: classic unsynchronized-LVGL-call corruption
+// racing the properly-locked calls from the LVGL thread.
+void ui_refresh_bandplan_strip(uint32_t freq_hz)
+{
+    if (display_lock(100)) {
+        update_bandplan_strip(freq_hz);
+        display_unlock();
+    }
+}
+
 void ui_update_band(const char *band)
 {
     if (!s_band_label || !band) return;
@@ -2890,6 +3201,11 @@ void ui_update_passband_width(uint32_t hz)
     bool changed = (hz != s_passband_width_hz);
     if (hz > 0 && changed) {
         ESP_LOGI("ui", "Passband width = %lu Hz (CAT FW)", (unsigned long)hz);
+        // Persist so the band-plan strip's passband indicator shows the
+        // real width immediately at next boot instead of a generic
+        // per-mode default for the few seconds before the first real FW
+        // poll response lands.
+        settings_set_passband_width_hz(hz);
     }
     s_passband_width_hz = hz;
     // Re-center the passband-centered pan (zoom > x1) now that the real
@@ -3634,7 +3950,126 @@ static void touch_event_cb(lv_event_t *e)
     // p.x is screen-x; matches canvas-x because spectrum/waterfall are full-width at x=0.
     if (p.x < 0 || p.x >= DISPLAY_H_RES) return;
 
+    // Band-plan strip: self-contained drag-to-tune, fully separate from the
+    // spectrum gesture code below - see s_touch_on_bandplan's comment.
+    if (code == LV_EVENT_PRESSED && lv_event_get_target(e) == s_bandplan_obj) {
+        s_touch_on_bandplan = true;
+        s_bp_dragging = false;
+        s_bp_drag_start_pt = p;
+        s_bp_drag_start_freq = (int64_t)s_last_qmx_freq_hz;
+        s_bp_drag_target_hz = s_bp_drag_start_freq;
+
+        qmx_settings_t s;
+        settings_load_all(&s);
+        bandplan_region_t reg =
+            bandplan_effective_region((bandplan_region_t)s.bandplan_region, s.my_grid);
+        const bp_seg_t *segs = NULL;
+        int n = bandplan_get_segments(s_last_qmx_freq_hz, reg, &segs);
+        if (n > 0) {
+            s_bp_drag_band_lo = segs[0].lo_hz;
+            s_bp_drag_band_hi = segs[n - 1].hi_hz;
+        } else {
+            // Outside a known band (shouldn't normally happen - the strip
+            // is hidden then - but guard anyway): disable drag this press.
+            s_bp_drag_band_lo = s_bp_drag_band_hi = 0;
+        }
+        return;
+    }
+    if (s_touch_on_bandplan) {
+        if (code == LV_EVENT_PRESSING) {
+            if (s_bp_drag_band_hi <= s_bp_drag_band_lo) return;  // no valid band captured at press
+            int dx = (int)p.x - (int)s_bp_drag_start_pt.x;
+            if (!s_bp_dragging) {
+                if (dx > -BP_DRAG_THRESHOLD_PX && dx < BP_DRAG_THRESHOLD_PX) return;
+                s_bp_dragging = true;
+                // Same "hide immediately while dragging" concept as the
+                // spectrum's own 1-finger pan (s_stroll_active drives the
+                // freq-axis label fade + the spectrum's own passband tint
+                // in the render loop) - driving that same flag here gets
+                // that fade for free. The band-plan strip's own passband
+                // block + CW/Digi/Phone text labels are separate LVGL
+                // objects, hidden directly here and faded back in with a
+                // matching lv_obj_fade_in() on release.
+                s_stroll_active = true;
+                if (s_bp_passband) lv_obj_add_flag(s_bp_passband, LV_OBJ_FLAG_HIDDEN);
+                for (int i = 0; i < BANDPLAN_MAX_SEG; i++) {
+                    if (s_bp_seg_lbl[i]) lv_obj_add_flag(s_bp_seg_lbl[i], LV_OBJ_FLAG_HIDDEN);
+                }
+            }
+            double hz_per_px = (double)(s_bp_drag_band_hi - s_bp_drag_band_lo) / (double)DISPLAY_H_RES;
+            int64_t target = s_bp_drag_start_freq + (int64_t)lround((double)dx * hz_per_px);
+            if (target < (int64_t)s_bp_drag_band_lo) target = (int64_t)s_bp_drag_band_lo;
+            if (target > (int64_t)s_bp_drag_band_hi) target = (int64_t)s_bp_drag_band_hi;
+            s_bp_drag_target_hz = target;
+
+            update_bandplan_strip((uint32_t)target);
+            // Live top-bar "Freq: ..." text during the drag - display only,
+            // no CAT write (deferred to release, same reasoning as the
+            // spectrum's own pan gesture: a fast drag must not flood the
+            // QMX with frequency writes).
+            if (s_freq_label) {
+                char fb[32];
+                uint32_t t = (uint32_t)target;
+                snprintf(fb, sizeof(fb), "Freq: %lu.%03lu.%03lu Hz",
+                         (unsigned long)(t / 1000000), (unsigned long)((t / 1000) % 1000),
+                         (unsigned long)(t % 1000));
+                lv_label_set_text(s_freq_label, fb);
+            }
+            return;
+        }
+        if (code == LV_EVENT_RELEASED) {
+            bool was_dragging = s_bp_dragging;
+            if (s_bp_dragging && s_bp_drag_band_hi > s_bp_drag_band_lo) {
+                uint32_t tgt = (uint32_t)s_bp_drag_target_hz;
+                cat_set_frequency_forced(tgt);  // deliberate user action — bypass the 200ms rate-limiter so it always lands
+                ui_update_frequency(tgt);
+            }
+            // A plain tap (never exceeded the drag threshold): jump straight
+            // to the tapped position in the band, same "tap anywhere to go
+            // there" feel as the spectrum's own tap-to-tune.
+            else if (s_bp_drag_band_hi > s_bp_drag_band_lo) {
+                double hz_per_px = (double)(s_bp_drag_band_hi - s_bp_drag_band_lo) / (double)DISPLAY_H_RES;
+                int64_t tap_hz = (int64_t)s_bp_drag_band_lo + (int64_t)lround((double)p.x * hz_per_px);
+                if (tap_hz < (int64_t)s_bp_drag_band_lo) tap_hz = (int64_t)s_bp_drag_band_lo;
+                if (tap_hz > (int64_t)s_bp_drag_band_hi) tap_hz = (int64_t)s_bp_drag_band_hi;
+                cat_set_frequency_forced((uint32_t)tap_hz);
+                ui_update_frequency((uint32_t)tap_hz);
+            }
+            s_touch_on_bandplan = false;
+            s_bp_dragging = false;
+            if (was_dragging) {
+                // Same hide-now-then-fade-in timing as the spectrum's own
+                // pan settle (s_hide_passband_now / s_passband_fade_start_us
+                // drive the freq-axis label + spectrum passband-tint fade in
+                // the render loop). update_bandplan_strip() already ran
+                // (inside ui_update_frequency() above, while s_bp_dragging
+                // was still true) and positioned the strip's passband/
+                // labels at their final spot but left them HIDDEN - fade
+                // them in from here now that the position is correct.
+                s_stroll_active = false;
+                s_hide_passband_now = true;
+                s_passband_fade_start_us = esp_timer_get_time();
+                if (s_bp_passband && !lv_obj_has_flag(s_bp_passband, LV_OBJ_FLAG_HIDDEN)) {
+                    lv_obj_set_style_opa(s_bp_passband, LV_OPA_TRANSP, 0);
+                    lv_obj_fade_in(s_bp_passband, PASSBAND_FADE_DURATION_MS, PASSBAND_FADE_DELAY_MS);
+                }
+                for (int i = 0; i < BANDPLAN_MAX_SEG; i++) {
+                    if (s_bp_seg_lbl[i] && !lv_obj_has_flag(s_bp_seg_lbl[i], LV_OBJ_FLAG_HIDDEN)) {
+                        lv_obj_set_style_opa(s_bp_seg_lbl[i], LV_OPA_TRANSP, 0);
+                        lv_obj_fade_in(s_bp_seg_lbl[i], PASSBAND_FADE_DURATION_MS, PASSBAND_FADE_DELAY_MS);
+                    }
+                }
+            }
+            return;
+        }
+        return;  // any other event code while a bandplan touch session is active: ignore
+    }
+
     if (code == LV_EVENT_PRESSED) {
+        // Defensive: a new touch on the spectrum/waterfall always means
+        // this isn't a band-plan-strip touch session, even if a previous
+        // one somehow never reached RELEASED (e.g. PRESS_LOST).
+        s_touch_on_bandplan = false;
         // Record touch-down time for hold-delay tune detection.
         s_touch_down_us = esp_timer_get_time();
         // Touch-down near the right screen edge: track as a candidate for
@@ -3715,6 +4150,7 @@ static void touch_event_cb(lv_event_t *e)
             abs((int)p.x - s_last_tap_x) < DOUBLE_TAP_PX) {
             ESP_LOGI("ui_touch", "Double-tap: reset zoom+pan");
             ui_set_zoom(1.0f, 0);
+            update_bandplan_strip(s_last_qmx_freq_hz);
             s_last_tap_x = -1;
             return;
         }

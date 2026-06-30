@@ -289,7 +289,7 @@ static void modal_build(void)
     lv_obj_set_size(s_modal, LV_PCT(100), LV_PCT(100));
     lv_obj_set_pos(s_modal, 0, 0);
     lv_obj_set_style_bg_color(s_modal, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(s_modal, LV_OPA_70, 0);
+    lv_obj_set_style_bg_opa(s_modal, UI_OPA_MODAL_SCRIM, 0);
     lv_obj_set_style_border_width(s_modal, 0, 0);
     lv_obj_set_style_radius(s_modal, 0, 0);
     lv_obj_set_style_pad_all(s_modal, 0, 0);

@@ -330,6 +330,7 @@ static void process_cat_message(const char *msg, size_t len)
         // ui_refresh_band_label() is cheap (band_from_freq + label set,
         // no side effects) so call it unconditionally every poll.
         ui_refresh_band_label(freq_hz);
+        ui_refresh_bandplan_strip(freq_hz);
         return;
     }
 
