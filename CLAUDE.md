@@ -194,8 +194,22 @@ Kenwood-style. Round-robin poll: `FA` (freq) / `MD` (mode) / `FW` (passband widt
 ### QMX firmware version via `VN;`
 `VN;` returns `VN<version>QMX;` (e.g. `VN1_03_002QMX;`) — the QMX/QDX firmware version, same string as the firmware filename without the dot. Queried once at CAT link-up (`process_cat_message` parses it into `s_qmx_fw`; `cat_get_qmx_fw()` exposes it). Surfaced in the boot/diagnostic log (`QMX firmware: ...`), the diag-log enable header (`qmx_fw=...`), and the web `/api/status` JSON (`qmx_fw`). Note `ID;` returns only the emulated Kenwood model (`ID020;` = TS-480), **not** the QMX firmware — use `VN;` for that. Confirmed on hardware (dev bench QMX is on `1_03_002`).
 
-### QMX `1_04` beta firmware is unverified — `1_03_002`/`1_04_002` is the known-good combo
-Not tested at all against `1_04` beta. Known relevant CAT changes (from the qrp-labs.com changelog, not yet handled in code): `MD8;` is repurposed as a Tune-mode indicator (our Kenwood mode table maps raw digit 8 to `"?"` — cosmetic, not a crash, but unrecognized); `PC;` returns 3 digits at ≥10W (already re-calibrated, see `cat_query_power_swr()`/`cat_pwr_swr_async_read()` in `cat.c`); `MU;` (forced menu reload) and `PS`/`KD` are unimplemented. A field report (Dirk DK7CVD) showed IQ mode reading as disabled in the QMX's own System Config menu on `1_04` despite our `Q9 1;` write reporting success at the CDC layer — see the readback fix below. Until verified, recommend `1_03_002` for a known-good combination; the quick-start guide reflects this.
+### QMX `1_04` beta firmware — still unverified against real hardware, but the changelog is now fully pulled (2026-06-30)
+Not tested at all against a real `1_04` unit — `1_03_002` remains the recommended/known-good firmware in the quick-start guide. Full changelog re-pulled from qrp-labs.com/qmx on 2026-06-30 (three beta releases so far: `1_04_000` 08-May-2026 QMX+-only, `1_04_001` 12-Jun-2026, `1_04_002` 18-Jun-2026 — all still BETA, no GA release yet). This is TODO item #22.
+
+**CAT changes relevant to our code, not yet handled:**
+- `MD8;` enters SWR Tune mode (`MD0;` exits) — our Kenwood mode table maps raw digit 8 to `"?"`, cosmetic-only gap, not a crash
+- `MD` command expanded to include AM (mode 5), added in `1_04_001` — our mode table doesn't recognize it either
+- `MU;` forces a complete config menu reload — unimplemented on our side, not currently needed for anything we do
+- `PS`/`KD`/`TR`/`RR` (power-supply status, key-down get/set, tune/RIT rate) — all unimplemented, no current use case
+- `PC;` already re-calibrated for the 3-digit-at-≥10W change (`cat_query_power_swr()`/`cat_pwr_swr_async_read()` in `cat.c`)
+- `AI` (Auto Info) gained proper modes (Old/Extended/Both) in `1_04_000` — **do not test this blind.** `Do not call AI1; on the QMX CAT port` above is about the *current shipping firmware's* broken behavior (corrupts FA polling for the session); if `1_04`'s AI rework actually fixed that, it'd be worth knowing, but only verify against a real `1_04` unit, never assume it's fixed from the changelog alone
+
+**Possibly relevant to existing workarounds:** `1_04_001` changelog states "CAT MU command and MM loaded previously saved state" was corrected — this *might* interact with our hard-won SSB-filter-bandwidth dance (`MMSSB|Filter RX=`/`MMSSB|Bandwidth=`/`FW;`-suppression, see below), since that workaround exists specifically because reading the filter via CAT made the QMX re-assert a stale value. Don't assume this fixes anything without testing — flag it as a thing to re-check once `1_04` hardware is available, not a reason to simplify the workaround now.
+
+A field report (Dirk DK7CVD) showed IQ mode reading as disabled in the QMX's own System Config menu on `1_04` despite our `Q9 1;` write reporting success at the CDC layer — addressed from our side by the `Q9;` readback fix below, but the root cause on the QMX side is still unverified.
+
+**What's new in `1_04` beyond CAT** (AM RX mode, "Virtual U3S" — an independent QRSS/WSPR beacon mode running inside the QMX, LCD grid-editing UI, SSB "Symmetric phase" quality improvement, fullscreen CW practice decode) is QMX-native firmware functionality, not something our panadapter currently surfaces or needs to react to — noted here in case any of it implies a future CAT surface we'd want to expose (e.g. AM mode support, if/when `1_04` GAs).
 
 ### `Q9 1;` (IQ mode enable) write success ≠ the QMX actually accepting it
 A successful `cdc_acm_host_data_tx_blocking()` only proves the USB bytes reached the radio, not that the QMX parsed/applied them. `link_task` (`cat.c`, right after `Q9 1;`) now also sends `Q9;` and waits up to ~400 ms for the readback, logging "QMX IQ mode confirmed ON" or a warning with the raw response if it doesn't read back `1`. Without this we had zero way to distinguish "IQ mode is on" from "the write silently did nothing" — exactly what happened in the field case above.
