@@ -105,7 +105,8 @@ static void ws_push_task(void *arg)
     TickType_t last   = xTaskGetTickCount();
     uint32_t   sent   = 0;
     TickType_t fps_at = last;
-    int        fail_streak = 0;   // consecutive async-send failures
+    int        fail_streak    = 0;   // consecutive async-send failures
+    TickType_t fail_streak_at = 0;   // tick of the first failure in the streak
 
     // Tolerate a short burst of transient send failures (EAGAIN: the TCP send
     // buffer is momentarily full, common when the C6 link is briefly congested)
@@ -113,7 +114,18 @@ static void ws_push_task(void *arg)
     // browser "freeze then need a manual reconnect"; skipping the frame and
     // retrying rides through the hiccup. Only a sustained failure (dead socket)
     // closes the session.
-    const int  MAX_FAIL_STREAK = 15;  // ~1.5 s at 100 ms/frame
+    //
+    // MAX_FAIL_STREAK alone assumes each failed attempt costs ~100ms (the
+    // nominal push period) - field-observed wrong: with a stale-but-not-yet-
+    // reset socket (e.g. the browser's own network dropped without a clean
+    // TCP close), httpd_ws_send_frame_async() itself can block for several
+    // seconds per call, so 15 failures took ~33s wall-clock instead of the
+    // assumed ~1.5s - a 30+ second frozen page before the existing recovery
+    // even kicked in. MAX_FAIL_STREAK_MS is a wall-clock backstop: force-close
+    // once a streak has been open this long, regardless of how many discrete
+    // attempts that represents.
+    const int  MAX_FAIL_STREAK    = 15;     // ~1.5 s at 100 ms/frame, the fast path
+    const int  MAX_FAIL_STREAK_MS = 5000;   // hard ceiling regardless of attempt count
 
     for (;;) {
         vTaskDelayUntil(&last, pdMS_TO_TICKS(WS_PUSH_PERIOD_MS));
@@ -124,6 +136,7 @@ static void ws_push_task(void *arg)
             sent = 0;
             fps_at = xTaskGetTickCount();
             fail_streak = 0;   // don't carry a pre-pause streak into resume
+            fail_streak_at = 0;
             continue;
         }
 
@@ -169,21 +182,26 @@ static void ws_push_task(void *arg)
 
         esp_err_t err = httpd_ws_send_frame_async(s_server, s_ws_fd, &s_ws_frame);
         if (err != ESP_OK) {
-            if (++fail_streak < MAX_FAIL_STREAK) {
+            TickType_t now_fail = xTaskGetTickCount();
+            if (++fail_streak == 1) fail_streak_at = now_fail;
+            uint32_t streak_ms = (uint32_t)(now_fail - fail_streak_at) * portTICK_PERIOD_MS;
+            if (fail_streak < MAX_FAIL_STREAK && streak_ms < (uint32_t)MAX_FAIL_STREAK_MS) {
                 // Transient: skip this frame, keep the session, retry next tick.
                 continue;
             }
-            ESP_LOGW(TAG, "async send failed fd=%d: %s (%d in a row); closing session",
-                     s_ws_fd, esp_err_to_name(err), fail_streak);
+            ESP_LOGW(TAG, "async send failed fd=%d: %s (%d in a row, %ums); closing session",
+                     s_ws_fd, esp_err_to_name(err), fail_streak, (unsigned)streak_ms);
             // Close the socket so its LWIP slot is freed (see takeover note above).
             int dead = s_ws_fd;
             s_session_active = false;
             s_ws_fd = -1;
             fail_streak = 0;
+            fail_streak_at = 0;
             if (s_server && dead >= 0) httpd_sess_trigger_close(s_server, dead);
             continue;
         }
         fail_streak = 0;
+        fail_streak_at = 0;
 
         sent++;
         TickType_t now = xTaskGetTickCount();
