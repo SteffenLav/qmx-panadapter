@@ -13,6 +13,7 @@
 #include "ui_theme.h"
 #include "ui.h"
 #include "adif/adif_log.h"
+#include "util/dxcc.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -32,6 +33,20 @@ static lv_obj_t *s_title  = NULL;
 static lv_obj_t *s_list   = NULL;
 static bool      s_open   = false;
 
+// Fixed column widths (px) for the vertically-aligned QSO table. Proportional
+// fonts mean padding a single string with spaces (the old approach) never
+// actually lines columns up - each row is built as its own flex-row of
+// individually-sized labels instead. Sum + 6 gaps fits inside the panel's
+// 728px content width (760 panel - 16px pad_all * 2) with ~38px to spare.
+#define COL_CALL_W   110
+#define COL_CTRY_W   150
+#define COL_MODE_W    60
+#define COL_BAND_W    55
+#define COL_DATE_W    75
+#define COL_TIME_W    60
+#define COL_RST_W    120
+#define COL_GAP       10
+
 static void modal_close(void)
 {
     if (!s_modal || !s_open) return;
@@ -45,28 +60,83 @@ static void close_btn_cb(lv_event_t *e)
     modal_close();
 }
 
-// Build one display line from a raw ADIF record line, e.g.
-// "KK4DUP  06-26 14:08  20M  S-08 R599"
-static void format_row(const char *line, char *out, size_t out_sz)
+// One flex-row container per table row (header or data) - children are
+// individually-width-set labels, which is what actually makes columns line
+// up with a proportional font (string padding with spaces does not).
+static lv_obj_t *make_row(lv_obj_t *parent)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(row, 0, 0);
+    lv_obj_set_style_pad_all(row, 0, 0);
+    lv_obj_set_style_pad_column(row, COL_GAP, 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_START);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    return row;
+}
+
+static void add_col(lv_obj_t *row, const char *text, int w,
+                     const lv_font_t *font, uint32_t color)
+{
+    lv_obj_t *lbl = lv_label_create(row);
+    lv_label_set_text(lbl, text);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);   // ellipsize, never wrap a column
+    lv_obj_set_width(lbl, w);
+    lv_obj_set_style_text_font(lbl, font, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(color), 0);
+}
+
+static void add_header_row(lv_obj_t *parent)
+{
+    lv_obj_t *row = make_row(parent);
+    lv_obj_set_style_pad_bottom(row, 6, 0);
+    add_col(row, "Call",    COL_CALL_W, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Country", COL_CTRY_W, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Mode",    COL_MODE_W, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Band",    COL_BAND_W, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Date",    COL_DATE_W, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Time",    COL_TIME_W, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Report",  COL_RST_W,  &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+}
+
+// Build one QSO's row from a raw ADIF record line - callsign, DXCC country
+// (looked up from the callsign, not stored in the ADIF file), mode (FT8/FT4),
+// band, date, time, and the sent/received signal reports.
+static void build_qso_row(lv_obj_t *parent, const char *line)
 {
     char call[20] = "?", date[9] = "", time_on[7] = "", band[8] = "",
-         rst_sent[8] = "599", rst_rcvd[8] = "599";
+         mode[8] = "FT8", rst_sent[8] = "599", rst_rcvd[8] = "599";
 
     adif_log_extract_field(line, "CALL",     call,     sizeof(call));
     adif_log_extract_field(line, "QSO_DATE", date,     sizeof(date));
     adif_log_extract_field(line, "TIME_ON",  time_on,  sizeof(time_on));
     adif_log_extract_field(line, "BAND",     band,     sizeof(band));
+    adif_log_extract_field(line, "MODE",     mode,     sizeof(mode));
     adif_log_extract_field(line, "RST_SENT", rst_sent, sizeof(rst_sent));
     adif_log_extract_field(line, "RST_RCVD", rst_rcvd, sizeof(rst_rcvd));
 
     // date is "YYYYMMDD", time_on is "HHMMSS" (or "HHMM") - slice down to
-    // "MM-DD HH:MM" for a compact row; fall back to the raw text if short.
+    // "MM-DD" / "HH:MM" for a compact column.
     char mmdd[6] = "--/--", hhmm[6] = "--:--";
     if (strlen(date) >= 8) snprintf(mmdd, sizeof(mmdd), "%.2s-%.2s", date + 4, date + 6);
     if (strlen(time_on) >= 4) snprintf(hhmm, sizeof(hhmm), "%.2s:%.2s", time_on, time_on + 2);
 
-    snprintf(out, out_sz, "%-10s %s %s  %-4s S%s R%s",
-             call, mmdd, hhmm, band[0] ? band : "--", rst_sent, rst_rcvd);
+    const char *country = dxcc_lookup(call);
+    char rst[24];
+    snprintf(rst, sizeof(rst), "S:%s R:%s", rst_sent, rst_rcvd);
+
+    lv_obj_t *row = make_row(parent);
+    add_col(row, call,                    COL_CALL_W, &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, country ? country : "-", COL_CTRY_W, &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, mode,                    COL_MODE_W, &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, band[0] ? band : "--",   COL_BAND_W, &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, mmdd,                    COL_DATE_W, &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, hhmm,                    COL_TIME_W, &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, rst,                     COL_RST_W,  &lv_font_montserrat_24, UI_COLOR_TEXT);
 }
 
 // Rebuild the list from the live ADIF log, newest record first.
@@ -82,26 +152,19 @@ static void list_render(void)
     lv_obj_clean(s_list);
 
     if (total == 0) {
-        lv_obj_t *btn = lv_list_add_button(s_list, LV_SYMBOL_CLOSE, "No QSOs logged yet");
-        lv_obj_set_style_text_font(btn, &lv_font_montserrat_24, 0);
-        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_KEY_BG), 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-        lv_obj_set_style_text_color(btn, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+        lv_obj_t *lbl = lv_label_create(s_list);
+        lv_label_set_text(lbl, "No QSOs logged yet");
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
         return;
     }
 
     int shown = (total < ADIF_VIEW_MAX_ROWS) ? total : ADIF_VIEW_MAX_ROWS;
-    char line[1024], row[64];
+    char line[1024];
     for (int i = 0; i < shown; i++) {
         int idx = total - 1 - i;   // newest first
         if (!adif_log_get_record(idx, line, sizeof(line))) continue;
-        format_row(line, row, sizeof(row));
-        lv_obj_t *btn = lv_list_add_button(s_list, LV_SYMBOL_OK, row);
-        lv_obj_set_style_text_font(btn, &lv_font_montserrat_24, 0);
-        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_KEY_BG), 0);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, 0);
-        lv_obj_set_style_text_color(btn, lv_color_hex(UI_COLOR_TEXT), 0);
-        lv_obj_clear_flag(btn, LV_OBJ_FLAG_CLICKABLE);  // read-only - no tap action
+        build_qso_row(s_list, line);
     }
     ESP_LOGI(TAG, "ADIF viewer: showing %d of %d logged QSOs", shown, total);
 }
@@ -144,13 +207,24 @@ static void modal_build(void)
     lv_obj_set_style_text_color(s_title, lv_color_hex(UI_COLOR_TEXT), 0);
     lv_obj_set_style_text_font(s_title, &lv_font_montserrat_28, 0);
 
-    s_list = lv_list_create(s_panel);
+    // Header row sits outside the scrollable list (a sibling, not a child) so
+    // column titles stay pinned in place while the QSO rows scroll under it.
+    add_header_row(s_panel);
+
+    // Plain flex-column container, not lv_list - lv_list_add_button() forces
+    // a single icon+label per row, which is exactly what items #1/#2 of this
+    // change removed (no per-row layout control, and a checkmark icon that
+    // implied an action when this view is read-only).
+    s_list = lv_obj_create(s_panel);
     lv_obj_set_width(s_list, LV_PCT(100));
     lv_obj_set_height(s_list, LV_SIZE_CONTENT);
     lv_obj_set_style_max_height(s_list, 480, 0);
     lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
     lv_obj_set_style_pad_all(s_list, 0, 0);
+    lv_obj_set_flex_flow(s_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(s_list, 8, 0);
+    lv_obj_set_scroll_dir(s_list, LV_DIR_VER);
 
     lv_obj_t *close_btn = lv_btn_create(s_panel);
     lv_obj_set_size(close_btn, 240, 72);
