@@ -325,6 +325,28 @@ function closeAllDropdowns() {
 
 document.getElementById("overlay").addEventListener("click", closeAllDropdowns);
 
+/* POST /api/qrz_upload and /api/eqsl_upload both queue the upload and
+   return 202 immediately (kicked off as a background task so the FFT/WS
+   quiet-down + SD-archive-lock window can hold for the whole transfer) -
+   the real uploaded/failed/error counts only show up later via
+   /api/upload_status. Poll that until busy clears, then report the actual
+   result instead of reading fields that were never on the kickoff response. */
+async function pollUploadStatus(label) {
+  for (;;) {
+    await new Promise((res) => setTimeout(res, 700));
+    const r = await fetch("/api/upload_status");
+    const j = await r.json();
+    if (!j.busy) {
+      if (j.failed) {
+        alert(label + " upload stopped: " + j.error + "\n" + j.uploaded + " uploaded before the error.");
+      } else {
+        alert(label + " upload: " + j.uploaded + " QSO" + (j.uploaded === 1 ? "" : "s") + " uploaded.");
+      }
+      return;
+    }
+  }
+}
+
 /* QRZ Logbook upload — prompts for an API key the first time (saved on the
    Tab5, not just this browser), then uploads every QSO logged since the
    last successful upload. */
@@ -340,13 +362,8 @@ document.getElementById("qrz-link").addEventListener("click", async (e) => {
   const prevText = link.textContent;
   link.textContent = "Uploading…";
   try {
-    const r = await fetch("/api/qrz_upload", { method: "POST" });
-    const j = await r.json();
-    if (j.failed) {
-      alert("QRZ upload stopped: " + j.error + "\n" + j.uploaded + " uploaded before the error.");
-    } else {
-      alert("QRZ upload: " + j.uploaded + " QSO" + (j.uploaded === 1 ? "" : "s") + " uploaded.");
-    }
+    await fetch("/api/qrz_upload", { method: "POST" });
+    await pollUploadStatus("QRZ");
   } catch (err) {
     alert("QRZ upload failed: " + err);
   } finally {
@@ -374,13 +391,8 @@ document.getElementById("eqsl-link").addEventListener("click", async (e) => {
   const prevText = link.textContent;
   link.textContent = "Uploading…";
   try {
-    const r = await fetch("/api/eqsl_upload", { method: "POST" });
-    const j = await r.json();
-    if (j.failed) {
-      alert("eQSL upload stopped: " + j.error + "\n" + j.uploaded + " uploaded before the error.");
-    } else {
-      alert("eQSL upload: " + j.uploaded + " QSO" + (j.uploaded === 1 ? "" : "s") + " uploaded.");
-    }
+    await fetch("/api/eqsl_upload", { method: "POST" });
+    await pollUploadStatus("eQSL");
   } catch (err) {
     alert("eQSL upload failed: " + err);
   } finally {
