@@ -173,19 +173,28 @@ int ft8_op_mode_slot_ms(void)
 // behind indefinitely; ~11 s leaves ~4 s/slot of headroom to catch up.
 #define FT8_DECODE_BUDGET_MS  11000
 
-// Max LDPC/belief-propagation iterations per candidate. Lowered 60 -> 30
-// (v0.15.13), then 30 -> 15 (2026-06-29): bp_decode() only exits early on
-// success (errors==0) or the degenerate all-zero case - a failing candidate
-// (the majority on a busy band; cand=140 routinely hits FT8_MAX_CANDIDATES)
-// always burns the FULL iteration count. On a continuing QSO this dec_ms
-// tail eats into the ~15 s slot deadline for our own next reply (capture
-// alone already runs ~15.1 s to the UTC boundary, leaving ~0 margin before
-// dec_ms even starts) - every reply in a real QSO needed a resend because
-// decode of the partner's message kept finishing after our next TX had
-// already fired with stale content (see memory project_ft8_resend_timing).
-// Halving again trades a bit more weak-signal sensitivity for closing that
-// gap; re-measure decode rate on-air after this change, same as 60->30 was.
+// Max LDPC/belief-propagation iterations per candidate, FT8 only. Lowered
+// 60 -> 30 (v0.15.13), then 30 -> 15 (2026-06-29): bp_decode() only exits
+// early on success (errors==0) or the degenerate all-zero case - a failing
+// candidate (the majority on a busy band; cand=140 routinely hits
+// FT8_MAX_CANDIDATES) always burns the FULL iteration count. On a
+// continuing QSO this dec_ms tail eats into the ~15 s slot deadline for our
+// own next reply (capture alone already runs ~15.1 s to the UTC boundary,
+// leaving ~0 margin before dec_ms even starts) - every reply in a real QSO
+// needed a resend because decode of the partner's message kept finishing
+// after our next TX had already fired with stale content. Halving again
+// trades a bit more weak-signal sensitivity for closing that gap.
+//
+// 2026-06-30: this constant was being applied to FT4 too (decode_slot()
+// doesn't distinguish protocol) and it badly hurt FT4 decode - confirmed by
+// field report immediately after release. FT4's slot is half FT8's (7.5 s
+// vs 15 s) so the resend-timing pressure that motivated the FT8 cut doesn't
+// even apply the same way, and FT4's LDPC code (different parity matrix)
+// apparently needs more headroom to converge than FT8's. Split into a
+// separate FT4 constant restored to the pre-cut value; decode_candidate_range()
+// picks the right one off s_pool_proto at decode time.
 #define FT8_LDPC_MAX_ITERS    15
+#define FT4_LDPC_MAX_ITERS    30
 
 #define EPOCH_SANE_MIN        1700000000  // 2023-11-14 - SNTP not synced if below this
 
@@ -645,6 +654,7 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
     out->n_decoded   = 0;
     out->n_attempted = 0;
     out->n_timing    = 0;
+    int max_iters = (s_pool_proto == (int)FTX_PROTOCOL_FT4) ? FT4_LDPC_MAX_ITERS : FT8_LDPC_MAX_ITERS;
     for (int i = start; i < n_cand; i += step) {
         if ((int)((esp_timer_get_time() - t_start_us) / 1000) >= FT8_DECODE_BUDGET_MS) {
             break;
@@ -652,7 +662,7 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
         out->n_attempted++;
         ftx_message_t msg;
         ftx_decode_status_t st;
-        if (!ftx_decode_candidate(&mon->wf, &cands[i], FT8_LDPC_MAX_ITERS, &msg, &st)) continue;
+        if (!ftx_decode_candidate(&mon->wf, &cands[i], max_iters, &msg, &st)) continue;
         char text[FTX_MAX_MESSAGE_LENGTH];
         ftx_message_offsets_t off;
         if (ftx_message_decode(&msg, NULL, text, &off) == FTX_MESSAGE_RC_OK) {

@@ -386,6 +386,11 @@ static int screen_y_to_row(lv_coord_t abs_y)
 // table snapshot and open the TX confirmation modal.
 // Rows are repopulated every 500 ms by rebuild_list() and are NOT
 // permanently bound to a callsign, so we re-resolve here from the live table.
+// Index of the row last passed to row_activate() - lets the TX confirm
+// modal's up/down nudge buttons (ft8_screen_view_nudge_confirm()) know what
+// to move relative to. -1 until the first activation.
+static int s_confirmed_row_idx = -1;
+
 static void row_activate(int idx)
 {
     if (idx < 0 || idx >= MAX_ROWS) return;
@@ -394,6 +399,8 @@ static void row_activate(int idx)
 
     const char *call = lv_label_get_text(r->l_call);
     if (!call || !call[0]) return;
+
+    s_confirmed_row_idx = idx;
 
     static ft8_call_t snap[FT8_CALL_TABLE_SIZE];
     int n = 0;
@@ -423,6 +430,18 @@ static void row_activate(int idx)
         ESP_LOGW(TAG, "build_request(reply to %s) failed: %s", match->call, err);
         identity_config_modal_show();
     }
+}
+
+void ft8_screen_view_nudge_confirm(int delta)
+{
+    if (s_confirmed_row_idx < 0) return;
+    int idx = s_confirmed_row_idx + delta;
+    if (idx < 0 || idx >= MAX_ROWS || !s_rows[idx].row
+        || lv_obj_has_flag(s_rows[idx].row, LV_OBJ_FLAG_HIDDEN)) {
+        ui_toast(delta > 0 ? "No row below" : "No row above");
+        return;
+    }
+    row_activate(idx);
 }
 
 // Touch-and-drag row selection handler registered on every row for

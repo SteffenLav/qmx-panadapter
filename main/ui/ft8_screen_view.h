@@ -31,3 +31,11 @@ void ft8_screen_view_request_refresh(void);
 // Refresh the "Call CQ" button label to the currently-selected CQ preset.
 // Called by the CQ preset modal after a save. LVGL-thread only.
 void ft8_screen_view_refresh_cq_label(void);
+
+// Re-activates the row adjacent (delta = +1 down / -1 up) to the one last
+// confirmed via row_activate(), re-resolving and re-opening the TX
+// confirmation modal for it. Lets the operator correct a mis-selected row
+// from the confirm modal itself instead of re-doing the hold-and-drag
+// gesture. No-op (silent) if there's no adjacent visible row or nothing was
+// ever confirmed this session. LVGL-thread only.
+void ft8_screen_view_nudge_confirm(int delta);

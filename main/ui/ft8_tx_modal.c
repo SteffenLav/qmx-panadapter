@@ -13,6 +13,7 @@
 #include "ui.h"
 #include "ft8_tx.h"
 #include "ft8_qso.h"
+#include "ft8_screen_view.h"
 
 #include <stdio.h>
 #include <stdint.h>
@@ -31,6 +32,8 @@ static lv_obj_t   *s_lbl_detail    = NULL;
 static lv_obj_t   *s_lbl_countdown = NULL;
 static lv_obj_t   *s_lbl_error     = NULL;
 static lv_obj_t   *s_btn_pounce    = NULL;  // "Auto Pounce" (REPLY only)
+static lv_obj_t   *s_btn_nudge_up  = NULL;  // re-target the row above (REPLY only)
+static lv_obj_t   *s_btn_nudge_dn  = NULL;  // re-target the row below (REPLY only)
 static lv_timer_t *s_timer         = NULL;
 static bool        s_modal_open    = false;
 
@@ -133,6 +136,21 @@ static void pounce_btn_cb(lv_event_t *e)
     }
 }
 
+// Re-target the confirm dialog to the row above/below the one currently
+// shown, without closing/reopening the modal. ft8_screen_view re-resolves
+// the row and calls back into ft8_tx_modal_show() with the fresh request.
+static void nudge_up_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    ft8_screen_view_nudge_confirm(-1);
+}
+
+static void nudge_dn_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    ft8_screen_view_nudge_confirm(+1);
+}
+
 static void modal_build(void)
 {
     if (s_modal) return;
@@ -188,6 +206,43 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_lbl_countdown, &lv_font_montserrat_24, 0);
     lv_obj_align(s_lbl_countdown, LV_ALIGN_TOP_MID, 0, 174);
 
+    // Row nudge — moves the confirm target up/down one row in the decode
+    // list, for when the hold-and-drag gesture caught the wrong station.
+    // Pinned to the top and bottom of the panel's right column (not stacked
+    // tight together) so they're easy to tell apart and hit at speed - the
+    // panel has plenty of unused height in that column since the message/
+    // detail/countdown text is centered, not full-width.
+    s_btn_nudge_up = lv_btn_create(s_panel);
+    lv_obj_set_size(s_btn_nudge_up, 100, 100);
+    lv_obj_align(s_btn_nudge_up, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(s_btn_nudge_up, lv_color_hex(0x2a2f37), 0);
+    lv_obj_set_style_border_color(s_btn_nudge_up, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_border_width(s_btn_nudge_up, 2, 0);
+    lv_obj_set_style_radius(s_btn_nudge_up, 8, 0);
+    lv_obj_add_event_cb(s_btn_nudge_up, nudge_up_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *nudge_up_lbl = lv_label_create(s_btn_nudge_up);
+    lv_label_set_text(nudge_up_lbl, LV_SYMBOL_UP);
+    lv_obj_set_style_text_color(nudge_up_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(nudge_up_lbl, &lv_font_montserrat_32, 0);
+    lv_obj_center(nudge_up_lbl);
+
+    // Bottom-anchored (not top-anchored + fixed offset) so it stays clear of
+    // the Cancel/Auto Pounce/Transmit row (72 px tall) regardless of panel
+    // height - 66 px clearance above that row.
+    s_btn_nudge_dn = lv_btn_create(s_panel);
+    lv_obj_set_size(s_btn_nudge_dn, 100, 100);
+    lv_obj_align(s_btn_nudge_dn, LV_ALIGN_BOTTOM_RIGHT, 0, -138);
+    lv_obj_set_style_bg_color(s_btn_nudge_dn, lv_color_hex(0x2a2f37), 0);
+    lv_obj_set_style_border_color(s_btn_nudge_dn, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_border_width(s_btn_nudge_dn, 2, 0);
+    lv_obj_set_style_radius(s_btn_nudge_dn, 8, 0);
+    lv_obj_add_event_cb(s_btn_nudge_dn, nudge_dn_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *nudge_dn_lbl = lv_label_create(s_btn_nudge_dn);
+    lv_label_set_text(nudge_dn_lbl, LV_SYMBOL_DOWN);
+    lv_obj_set_style_text_color(nudge_dn_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(nudge_dn_lbl, &lv_font_montserrat_32, 0);
+    lv_obj_center(nudge_dn_lbl);
+
     s_lbl_error = lv_label_create(s_panel);
     lv_label_set_text(s_lbl_error, "");
     lv_obj_set_style_text_color(s_lbl_error, lv_palette_main(LV_PALETTE_RED), 0);
@@ -196,6 +251,43 @@ static void modal_build(void)
     lv_obj_set_width(s_lbl_error, 800);
     lv_obj_align(s_lbl_error, LV_ALIGN_TOP_MID, 0, 224);
     lv_obj_add_flag(s_lbl_error, LV_OBJ_FLAG_HIDDEN);
+
+    // Legend explaining what the two send buttons actually do - sits in the
+    // free space between the error line and the bottom button row. Color
+    // swatches match each button's own color so the association is visual,
+    // not just textual.
+    lv_obj_t *swatch_tx = lv_obj_create(s_panel);
+    lv_obj_set_size(swatch_tx, 24, 24);
+    lv_obj_set_style_radius(swatch_tx, 12, 0);
+    lv_obj_set_style_bg_color(swatch_tx, lv_color_hex(0x2e8b3a), 0);
+    lv_obj_set_style_border_width(swatch_tx, 0, 0);
+    lv_obj_clear_flag(swatch_tx, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(swatch_tx, LV_ALIGN_TOP_LEFT, 0, 234);
+
+    lv_obj_t *lbl_tx_legend = lv_label_create(s_panel);
+    lv_label_set_text(lbl_tx_legend, "Sends this message once, right now.");
+    lv_obj_set_style_text_color(lbl_tx_legend, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_set_style_text_font(lbl_tx_legend, &lv_font_montserrat_28, 0);
+    lv_obj_align(lbl_tx_legend, LV_ALIGN_TOP_LEFT, 34, 230);
+
+    lv_obj_t *swatch_pounce = lv_obj_create(s_panel);
+    lv_obj_set_size(swatch_pounce, 24, 24);
+    lv_obj_set_style_radius(swatch_pounce, 12, 0);
+    lv_obj_set_style_bg_color(swatch_pounce, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_border_width(swatch_pounce, 0, 0);
+    lv_obj_clear_flag(swatch_pounce, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_align(swatch_pounce, LV_ALIGN_TOP_LEFT, 0, 278);
+
+    // Kept short enough to stay on one line at this font/width - the prior
+    // longer phrasing could wrap to 2 lines and run into the button row
+    // below, leaving less than the required 30px clearance.
+    lv_obj_t *lbl_pounce_legend = lv_label_create(s_panel);
+    lv_label_set_text(lbl_pounce_legend, "Sends it, then auto-replies until the QSO is done.");
+    lv_obj_set_style_text_color(lbl_pounce_legend, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_set_style_text_font(lbl_pounce_legend, &lv_font_montserrat_28, 0);
+    lv_label_set_long_mode(lbl_pounce_legend, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(lbl_pounce_legend, 760);
+    lv_obj_align(lbl_pounce_legend, LV_ALIGN_TOP_LEFT, 34, 274);
 
     // Bottom row: [Cancel]  [Auto Pounce]  [Transmit]
     // Cancel — always visible
@@ -279,14 +371,21 @@ void ft8_tx_modal_show(const ft8_tx_request_t *req)
     lv_label_set_text(s_lbl_error, "");
     lv_obj_add_flag(s_lbl_error, LV_OBJ_FLAG_HIDDEN);
 
-    // Auto Pounce only makes sense for a REPLY (we're working someone else's CQ).
-    // Hide it for CQ kind (we *are* the caller).
+    // Auto Pounce and row-nudge only make sense for a REPLY (we're working
+    // someone else's CQ, picked from a decode-list row). Hide both for CQ
+    // kind (we *are* the caller — there's no row to nudge between).
+    bool is_reply = (s_pending_req.kind == FT8_TX_KIND_REPLY);
     if (s_btn_pounce) {
-        if (s_pending_req.kind == FT8_TX_KIND_REPLY) {
-            lv_obj_clear_flag(s_btn_pounce, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(s_btn_pounce, LV_OBJ_FLAG_HIDDEN);
-        }
+        if (is_reply) lv_obj_clear_flag(s_btn_pounce, LV_OBJ_FLAG_HIDDEN);
+        else          lv_obj_add_flag(s_btn_pounce, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_btn_nudge_up) {
+        if (is_reply) lv_obj_clear_flag(s_btn_nudge_up, LV_OBJ_FLAG_HIDDEN);
+        else          lv_obj_add_flag(s_btn_nudge_up, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_btn_nudge_dn) {
+        if (is_reply) lv_obj_clear_flag(s_btn_nudge_dn, LV_OBJ_FLAG_HIDDEN);
+        else          lv_obj_add_flag(s_btn_nudge_dn, LV_OBJ_FLAG_HIDDEN);
     }
 
     update_countdown();   // populate immediately - don't wait up to 1s for the first tick
