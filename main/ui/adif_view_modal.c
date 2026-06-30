@@ -33,14 +33,12 @@ static lv_obj_t *s_title  = NULL;
 static lv_obj_t *s_list   = NULL;
 static bool      s_open   = false;
 
-// 8 columns, each given equal flex-grow share of the row's width (Call,
-// Country, Mode, Band, Date, Time, Sent, Rcvd) - proportional fonts mean
-// padding a single string with spaces (the old approach) never actually
-// lines columns up, and fixed-px widths needed hand-tuning per column. Each
-// row is its own flex-row of grow=1 labels, so columns always split the
-// panel's width evenly regardless of panel size.
-#define ADIF_NUM_COLS  8
-#define COL_GAP        10
+// 8 columns (Call, Country, Mode, Band, Date, Time, Sent, Rcvd), each a
+// weighted flex-grow share of the row's width rather than a fixed px value -
+// proportional fonts mean padding a single string with spaces (the old
+// approach) never actually lines columns up. Weights (see COL_GROW_* below)
+// give Call/Country more room than the narrow fixed-format columns.
+#define COL_GAP  10
 
 static void modal_close(void)
 {
@@ -74,17 +72,23 @@ static lv_obj_t *make_row(lv_obj_t *parent)
     return row;
 }
 
-// flex_grow=1 + width=0 is the standard LVGL pattern for "split remaining
-// row width evenly" - every column gets the same share regardless of panel
-// size, so widening the modal later never needs per-column retuning again.
-static void add_col(lv_obj_t *row, const char *text,
+// flex_grow + width=0 splits the row's width by weight instead of a fixed
+// px value - still resizes cleanly if the panel width ever changes again,
+// but lets wide-content columns (Call, Country) claim more of it than
+// narrow ones (Mode/Band/Date/Time/Sent/Rcvd, all <=5 chars of content).
+// Weights mirror typical content length, not character-count exactly.
+#define COL_GROW_CALL  2
+#define COL_GROW_CTRY  3
+#define COL_GROW_NARROW 1
+
+static void add_col(lv_obj_t *row, const char *text, int grow,
                      const lv_font_t *font, uint32_t color)
 {
     lv_obj_t *lbl = lv_label_create(row);
     lv_label_set_text(lbl, text);
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);   // ellipsize, never wrap a column
     lv_obj_set_width(lbl, 0);
-    lv_obj_set_flex_grow(lbl, 1);
+    lv_obj_set_flex_grow(lbl, grow);
     lv_obj_set_style_text_font(lbl, font, 0);
     lv_obj_set_style_text_color(lbl, lv_color_hex(color), 0);
 }
@@ -93,14 +97,14 @@ static void add_header_row(lv_obj_t *parent)
 {
     lv_obj_t *row = make_row(parent);
     lv_obj_set_style_pad_bottom(row, 6, 0);
-    add_col(row, "Call",    &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
-    add_col(row, "Country", &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
-    add_col(row, "Mode",    &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
-    add_col(row, "Band",    &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
-    add_col(row, "Date",    &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
-    add_col(row, "Time",    &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
-    add_col(row, "Sent",    &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
-    add_col(row, "Rcvd",    &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Call",    COL_GROW_CALL,   &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Country", COL_GROW_CTRY,   &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Mode",    COL_GROW_NARROW, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Band",    COL_GROW_NARROW, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Date",    COL_GROW_NARROW, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Time",    COL_GROW_NARROW, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Sent",    COL_GROW_NARROW, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Rcvd",    COL_GROW_NARROW, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
 }
 
 // Build one QSO's row from a raw ADIF record line - callsign, DXCC country
@@ -136,14 +140,14 @@ static void build_qso_row(lv_obj_t *parent, const char *line, bool even_row)
         lv_obj_set_style_pad_top(row, 4, 0);
         lv_obj_set_style_pad_bottom(row, 4, 0);
     }
-    add_col(row, call,                    &lv_font_montserrat_24, UI_COLOR_TEXT);
-    add_col(row, country ? country : "-", &lv_font_montserrat_24, UI_COLOR_TEXT);
-    add_col(row, mode,                    &lv_font_montserrat_24, UI_COLOR_TEXT);
-    add_col(row, band[0] ? band : "--",   &lv_font_montserrat_24, UI_COLOR_TEXT);
-    add_col(row, mmdd,                    &lv_font_montserrat_24, UI_COLOR_TEXT);
-    add_col(row, hhmm,                    &lv_font_montserrat_24, UI_COLOR_TEXT);
-    add_col(row, rst_sent,                &lv_font_montserrat_24, UI_COLOR_TEXT);
-    add_col(row, rst_rcvd,                &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, call,                    COL_GROW_CALL,   &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, country ? country : "-", COL_GROW_CTRY,   &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, mode,                    COL_GROW_NARROW, &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, band[0] ? band : "--",   COL_GROW_NARROW, &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, mmdd,                    COL_GROW_NARROW, &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, hhmm,                    COL_GROW_NARROW, &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, rst_sent,                COL_GROW_NARROW, &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, rst_rcvd,                COL_GROW_NARROW, &lv_font_montserrat_24, UI_COLOR_TEXT);
 }
 
 // Rebuild the list from the live ADIF log, newest record first.
