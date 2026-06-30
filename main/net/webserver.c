@@ -655,7 +655,20 @@ static void upload_task(void *arg)
             s_last_upload.busy = false;
             xSemaphoreGive(s_upload_mutex);
         }
+        // Stagger the resume - releasing the SD lock, the WS pause, and the
+        // DSP quiet all at once (as this used to) means the SD archive
+        // task's pent-up write (it was locked out for the whole upload,
+        // typically with a fresh ADIF-dirty flag from the very QSO that
+        // triggered the upload) fires at the *exact instant* the WS stream
+        // and FFT/FT8 also slam back to full activity - a worse concurrent
+        // SDMMC/WiFi burst than steady-state operation, right at the
+        // release point. Field-reproduced: WiFi died 4-5s after the upload
+        // popup, not during the upload itself, which is exactly the gap
+        // between the old simultaneous release and the SD task's next
+        // write actually landing. Release SD first and give it a moment to
+        // do that write while WS/DSP are still quiet, then resume those.
         if (sd_locked) sd_archive_unlock();
+        vTaskDelay(pdMS_TO_TICKS(1500));
         webserver_ws_set_paused(false);
         dsp_set_transfer_quiet(false);
     }

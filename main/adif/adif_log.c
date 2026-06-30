@@ -13,6 +13,7 @@
 
 #include "esp_log.h"
 #include "esp_spiffs.h"
+#include "esp_heap_caps.h"
 #include "sd_archive.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -141,6 +142,54 @@ static void write_header(FILE *f)
         "<EOH>\n");
 }
 
+// One-time migration (2026-06-30): a prior version wrote a redundant
+// SUBMODE field duplicating MODE for every FT8/FT4 QSO (see the write_field
+// call site below) - QRZ's logbook import rejects records with that pairing
+// ("Undefined message or mode"). Fixing the write side alone isn't enough:
+// the QRZ upload always resumes from the first not-yet-uploaded record, so
+// one already-logged bad record permanently blocks every future upload
+// attempt at that exact same QSO, no matter how many newer records are
+// clean. Strips the bad field from any existing record still carrying it,
+// in place, before the upload offset (qrz_uploaded_n) ever points at one.
+static void repair_legacy_submode_field(void)
+{
+    FILE *f = fopen(FILE_PATH, "rb");
+    if (!f) return;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz <= 0) { fclose(f); return; }
+    char *buf = heap_caps_malloc((size_t)sz + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) { fclose(f); return; }
+    size_t n = fread(buf, 1, (size_t)sz, f);
+    fclose(f);
+    buf[n] = '\0';
+
+    static const char *bad_fields[] = { "<SUBMODE:3>FT8", "<SUBMODE:3>FT4" };
+    bool changed = false;
+    for (size_t b = 0; b < sizeof(bad_fields) / sizeof(bad_fields[0]); b++) {
+        const char *needle = bad_fields[b];
+        size_t nlen = strlen(needle);
+        char *p;
+        while ((p = strstr(buf, needle)) != NULL) {
+            memmove(p, p + nlen, strlen(p + nlen) + 1);   // shift left, incl. NUL
+            changed = true;
+        }
+    }
+    if (changed) {
+        FILE *out = fopen(FILE_PATH, "wb");
+        if (out) {
+            fwrite(buf, 1, strlen(buf), out);
+            fclose(out);
+            ESP_LOGI(TAG, "repaired legacy duplicate-SUBMODE field(s) in %s", FILE_PATH);
+            sd_archive_mark_adif_dirty();   // re-mirror the repaired file to SD too
+        } else {
+            ESP_LOGW(TAG, "could not rewrite %s for SUBMODE repair", FILE_PATH);
+        }
+    }
+    free(buf);
+}
+
 // ---------------------------------------------------------------------------
 
 void adif_log_init(void)
@@ -176,6 +225,7 @@ void adif_log_init(void)
         else ESP_LOGE(TAG, "Cannot create %s", FILE_PATH);
     } else {
         fclose(f);
+        repair_legacy_submode_field();
         load_from_file();
     }
 }
@@ -204,8 +254,13 @@ void adif_log_record(const adif_qso_t *qso)
     write_field(f, "CALL",         qso->their_call);
     write_field(f, "FREQ",         freq_str);
     write_field(f, "BAND",         freq_to_band(qso->freq_hz));
+    // FT8 and FT4 are both standalone leaf-level ADIF MODE values (not
+    // submodes of MFSK), so no SUBMODE field belongs here. A prior version
+    // wrote SUBMODE as a duplicate of MODE (e.g. MODE=FT4 SUBMODE=FT4) -
+    // QRZ's logbook import rejected at least FT4 records with this pairing
+    // ("Undefined message or mode"), most likely because its MODE/SUBMODE
+    // validation table has no self-referential entry for either mode.
     write_field(f, "MODE",         qso->mode ? qso->mode : "FT8");
-    write_field(f, "SUBMODE",      qso->mode ? qso->mode : "FT8");
     write_field(f, "RST_SENT",     (qso->rst_sent && qso->rst_sent[0]) ? qso->rst_sent : "599");
     write_field(f, "RST_RCVD",     (qso->rst_rcvd && qso->rst_rcvd[0]) ? qso->rst_rcvd : "599");
     write_field(f, "QSO_DATE",     date_str);
