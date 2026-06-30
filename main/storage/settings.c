@@ -42,6 +42,8 @@ static const char *TAG = "settings";
 #define KEY_WIFI_ENABLED "wifi_en"
 #define KEY_QMX_GPS      "qmx_gps"
 #define KEY_FREQ_KP_CALC "freq_kp_calc"
+#define KEY_FREQ_KP_DX   "freq_kp_dx"
+#define KEY_FREQ_KP_DY   "freq_kp_dy"
 #define KEY_QRZ_KEY      "qrz_key"
 #define KEY_QRZ_UPLOADED "qrz_upl_n"
 #define KEY_EQSL_USER    "eqsl_user"
@@ -135,6 +137,7 @@ static const char *TAG = "settings";
 #define DIRTY_FD_SECTION     (1ull << 45)
 #define DIRTY_SIM_MODE       (1ull << 46)
 #define DIRTY_FT8_OP_MODE    (1ull << 47)
+#define DIRTY_FREQ_KP_POS    (1ull << 48)
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -255,6 +258,10 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_WIFI_ENABLED) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap.wifi_enabled ? 1 : 0);
         if (dirty_local & DIRTY_QMX_GPS)      nvs_set_u8(s_nvs, KEY_QMX_GPS,      snap.qmx_gps      ? 1 : 0);
         if (dirty_local & DIRTY_FREQ_KP_CALC) nvs_set_u8(s_nvs, KEY_FREQ_KP_CALC, snap.freq_kp_calc ? 1 : 0);
+        if (dirty_local & DIRTY_FREQ_KP_POS) {
+            nvs_set_i16(s_nvs, KEY_FREQ_KP_DX, snap.freq_kp_dx);
+            nvs_set_i16(s_nvs, KEY_FREQ_KP_DY, snap.freq_kp_dy);
+        }
         if (dirty_local & DIRTY_QRZ_KEY)      nvs_set_str(s_nvs, KEY_QRZ_KEY, snap.qrz_api_key);
         if (dirty_local & DIRTY_QRZ_UPLOADED) nvs_set_u32(s_nvs, KEY_QRZ_UPLOADED, snap.qrz_uploaded_n);
         if (dirty_local & DIRTY_EQSL_USER)     nvs_set_str(s_nvs, KEY_EQSL_USER, snap.eqsl_user);
@@ -358,6 +365,8 @@ static void load_from_nvs(qmx_settings_t *out)
     out->wifi_enabled = DEF_WIFI_ENABLED;
     out->qmx_gps = false;
     out->freq_kp_calc = false;
+    out->freq_kp_dx = 0;
+    out->freq_kp_dy = 0;
     out->qrz_api_key[0] = '\0';
     out->qrz_uploaded_n = 0;
     out->eqsl_user[0] = '\0';
@@ -427,6 +436,11 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_WIFI_ENABLED, &u8v) == ESP_OK) out->wifi_enabled = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_QMX_GPS,      &u8v) == ESP_OK) out->qmx_gps      = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_FREQ_KP_CALC, &u8v) == ESP_OK) out->freq_kp_calc = (u8v != 0);
+    {
+        int16_t i16v;
+        if (nvs_get_i16(s_nvs, KEY_FREQ_KP_DX, &i16v) == ESP_OK) out->freq_kp_dx = i16v;
+        if (nvs_get_i16(s_nvs, KEY_FREQ_KP_DY, &i16v) == ESP_OK) out->freq_kp_dy = i16v;
+    }
     out->qrz_api_key[0] = '\0';
     sz = sizeof(out->qrz_api_key);
     nvs_get_str(s_nvs, KEY_QRZ_KEY, out->qrz_api_key, &sz);
@@ -791,6 +805,17 @@ void settings_set_freq_kp_calc(bool v)
     s_pending.freq_kp_calc = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_FREQ_KP_CALC);
+}
+
+void settings_set_freq_kp_pos(int16_t dx, int16_t dy)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.freq_kp_dx == dx && s_pending.freq_kp_dy == dy) { xSemaphoreGive(s_mutex); return; }
+    s_pending.freq_kp_dx = dx;
+    s_pending.freq_kp_dy = dy;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_FREQ_KP_POS);
 }
 
 void settings_set_cw_audio_en(bool v)

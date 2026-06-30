@@ -300,10 +300,21 @@ static void band_label_clicked_cb(lv_event_t *e)
 // the QMX. No clamping/validation - the value is sent as-is via
 // cat_set_frequency().
 static lv_obj_t *s_freq_popup   = NULL;
+static lv_obj_t *s_freq_panel   = NULL;
 static lv_obj_t *s_freq_display = NULL;
 static char      s_freq_buf[16] = "";
 static char      s_freq_disp[40] = "";
 static ui_freq_picker_cb_t s_freq_picker_cb = NULL;
+
+// Popup position: offset from screen center, in px. Dragging the freq-display
+// label (the only non-button area of the panel) moves the whole popup; the
+// final offset is persisted on release so it reopens wherever it was last
+// left, instead of always re-centering (groups.io item #25, Samuel W7STF).
+static int16_t   s_freq_kp_dx = 0;
+static int16_t   s_freq_kp_dy = 0;
+static bool      s_freq_kp_dragging = false;
+static lv_point_t s_freq_kp_drag_start_pt;
+static int16_t   s_freq_kp_drag_start_dx, s_freq_kp_drag_start_dy;
 
 // Keypad digit layout: false = phone (1 2 3 top), true = 10-key/calculator
 // (7 8 9 top). Toggled by the "10 Key"/"Phone" button. Persists per session.
@@ -354,7 +365,7 @@ static void freq_mode_cb(lv_event_t *e)
 
 static void freq_popup_close(void)
 {
-    if (s_freq_popup) { lv_obj_delete(s_freq_popup); s_freq_popup = NULL; s_freq_display = NULL; }
+    if (s_freq_popup) { lv_obj_delete(s_freq_popup); s_freq_popup = NULL; s_freq_display = NULL; s_freq_panel = NULL; }
 }
 
 // Full rebuild of s_freq_disp from s_freq_buf (standard right-anchored
@@ -543,6 +554,42 @@ static void freq_key_cb(lv_event_t *e)
 // keyboard bridge to route digits into the keypad instead of a textarea.
 static bool freq_keypad_is_open(void) { return s_freq_popup != NULL; }
 
+// Drag the freq-popup panel by its title label. PRESSED records the start
+// point + current offset; PRESSING applies the delta live; RELEASED persists
+// the final offset (debounced flush handles the actual NVS write, so a quick
+// drag doesn't wear the flash).
+static void freq_kp_drag_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (!s_freq_panel) return;
+
+    if (code == LV_EVENT_PRESSED) {
+        lv_indev_t *indev = lv_indev_get_act();
+        lv_indev_get_point(indev, &s_freq_kp_drag_start_pt);
+        s_freq_kp_drag_start_dx = s_freq_kp_dx;
+        s_freq_kp_drag_start_dy = s_freq_kp_dy;
+        s_freq_kp_dragging = true;
+        return;
+    }
+    if (code == LV_EVENT_PRESSING) {
+        if (!s_freq_kp_dragging) return;
+        lv_indev_t *indev = lv_indev_get_act();
+        lv_point_t p; lv_indev_get_point(indev, &p);
+        int dx = s_freq_kp_drag_start_dx + ((int)p.x - (int)s_freq_kp_drag_start_pt.x);
+        int dy = s_freq_kp_drag_start_dy + ((int)p.y - (int)s_freq_kp_drag_start_pt.y);
+        lv_obj_align(s_freq_panel, LV_ALIGN_CENTER, dx, dy);
+        s_freq_kp_dx = (int16_t)dx;
+        s_freq_kp_dy = (int16_t)dy;
+        return;
+    }
+    if (code == LV_EVENT_RELEASED) {
+        if (!s_freq_kp_dragging) return;
+        s_freq_kp_dragging = false;
+        settings_set_freq_kp_pos(s_freq_kp_dx, s_freq_kp_dy);
+        return;
+    }
+}
+
 static void freq_popup_build(void)
 {
     lv_obj_t *ov = lv_obj_create(lv_layer_top());
@@ -562,9 +609,20 @@ static void freq_popup_build(void)
 
     int panel_w = 504;  // 360 + 40%
     int panel_h = show_mode ? 580 : 508;  // 508 = 580 - mode row (64 + 8 gap)
+
+    // Clamp the persisted offset so the panel is always fully on-screen, even
+    // if it was last saved at a different panel height (show_mode toggles
+    // panel_h) or the offset is stale/corrupt.
+    int max_dx = (DISPLAY_H_RES - panel_w) / 2;
+    int max_dy = (DISPLAY_V_RES - panel_h) / 2;
+    if (s_freq_kp_dx > max_dx) s_freq_kp_dx = max_dx;
+    if (s_freq_kp_dx < -max_dx) s_freq_kp_dx = -max_dx;
+    if (s_freq_kp_dy > max_dy) s_freq_kp_dy = max_dy;
+    if (s_freq_kp_dy < -max_dy) s_freq_kp_dy = -max_dy;
+
     lv_obj_t *panel = lv_obj_create(ov);
     lv_obj_set_size(panel, panel_w, panel_h);
-    lv_obj_align(panel, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(panel, LV_ALIGN_CENTER, s_freq_kp_dx, s_freq_kp_dy);
     lv_obj_set_style_bg_color(panel, lv_color_hex(UI_COLOR_SURFACE), 0);
     lv_obj_set_style_border_color(panel, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_set_style_border_width(panel, 1, 0);
@@ -574,6 +632,7 @@ static void freq_popup_build(void)
     // Swallow taps on the panel so they don't fall through to the overlay
     // (which would close the popup).
     lv_obj_add_flag(panel, LV_OBJ_FLAG_CLICKABLE);
+    s_freq_panel = panel;
 
     int content_w = panel_w - 2 * 12;
 
@@ -584,6 +643,12 @@ static void freq_popup_build(void)
     lv_obj_set_size(s_freq_display, content_w, 48);
     lv_obj_set_style_text_align(s_freq_display, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_align(s_freq_display, LV_ALIGN_TOP_MID, 0, 0);
+    // Drag handle: this label is the only non-button area of the panel, so
+    // it doubles as the "title bar" for repositioning the whole popup.
+    lv_obj_add_flag(s_freq_display, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_freq_display, freq_kp_drag_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(s_freq_display, freq_kp_drag_cb, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(s_freq_display, freq_kp_drag_cb, LV_EVENT_RELEASED, NULL);
 
     // 3x4 keypad grid. The nine digit cells (0..8) carry code '#': the actual
     // digit is read from the button's label at press time, so the layout
@@ -2423,6 +2488,8 @@ void ui_init(lv_display_t *disp)
         ESP_LOGI(TAG, "CW trim loaded from NVS: %d Hz", (int)s_cw_cal_hz);
         s_freq_calc_layout = s.freq_kp_calc;
         ESP_LOGI(TAG, "Freq keypad layout loaded from NVS: %s", s_freq_calc_layout ? "10-key" : "phone");
+        s_freq_kp_dx = s.freq_kp_dx;
+        s_freq_kp_dy = s.freq_kp_dy;
         s_snap_to_peak = s.snap_to_peak;
         ESP_LOGI(TAG, "Snap-to-peak loaded from NVS: %s", s_snap_to_peak ? "on" : "off");
         // Load zoom from NVS; pan always resets to 0 on boot.

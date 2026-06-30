@@ -60,6 +60,8 @@ typedef struct {
     bool     wifi_enabled;     // initiate WiFi at boot (default true)
     bool     qmx_gps;         // QMX/QMX+ has GPS discipline — skip Tab5→QMX time push
     bool     freq_kp_calc;    // freq keypad digit layout: false=phone, true=10-key/calc
+    int16_t  freq_kp_dx;      // freq keypad popup position: offset from screen center, px (default 0,0)
+    int16_t  freq_kp_dy;
     char     qrz_api_key[40]; // QRZ Logbook API key (GUID-format, set via web UI)
     uint32_t qrz_uploaded_n;  // count of ADIF records already uploaded to QRZ
     char     eqsl_user[16];   // eQSL.cc username (callsign), set via web UI
@@ -188,6 +190,13 @@ void settings_set_qmx_gps(bool v);
 // Freq keypad digit layout: false=phone (1 2 3 top), true=10-key/calculator
 // (7 8 9 top). Persisted (debounced flush) so it survives a reboot.
 void settings_set_freq_kp_calc(bool v);
+
+// Freq keypad popup position: offset (dx, dy) in pixels from screen center,
+// where it last sat after being dragged. Debounced flush (a drag-release
+// writes once, not per-pixel during the drag). Deliberately NOT part of
+// DIRTY_CONFIG_EXPORT_MASK — purely cosmetic placement, not worth a SD-card
+// mirror write.
+void settings_set_freq_kp_pos(int16_t dx, int16_t dy);
 
 // QRZ Logbook API key, set via the web UI (debounced flush). Pass NULL or
 // empty to clear.
