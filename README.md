@@ -12,9 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Beta — v0.19.2.** FT8/FT4 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8/FT4 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
+> **Beta — v0.19.3.** FT8/FT4 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8/FT4 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v0.19.2.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v0.19.3.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -661,6 +661,10 @@ The QMX's +12 kHz IF injection varies slightly between units. If signals appear 
 
 If the spectrum is flat and the top bar shows `---`, that is almost always the radio not being seen over USB — which loops back to the cable (or the QMX being off / in flash mode).
 
+### Spectrum signal shifted / mirrored, tunable across the whole 48 kHz window
+
+This means the QMX never confirmed IQ mode for the session — without it the radio streams plain (non-IQ) audio instead of a centred baseband, so the signal appears at the wrong place and slides across the full 48 kHz window as you tune. As of v0.19.3 the Tab5 retries the IQ-mode handshake automatically at connect (up to 4 attempts) and this resolves itself almost every time; if it still fails after all retries, a red banner appears across the top of the screen telling you so immediately, instead of leaving you to figure it out from a shifted waterfall. If you see the banner, power-cycle the QMX (forces a fresh handshake on reconnect) or check the QMX's own **System Config → IQ Mode** setting.
+
 ### Reporting hardware issues
 
 Near the top of the boot log you will see:
@@ -673,7 +677,7 @@ I (xxxx) bsp_info: panel:    ST7123 (inferred from touch)
 I (xxxx) bsp_info: touch:    ST7123 @ 0x55
 I (xxxx) bsp_info: heap:     230.5 kB internal free, 28.80 MB PSRAM free
 I (xxxx) bsp_info: idf:      v5.4.4
-I (xxxx) bsp_info: firmware: v0.18.8
+I (xxxx) bsp_info: firmware: v0.19.3
 I (xxxx) bsp_info: =====================
 ```
 

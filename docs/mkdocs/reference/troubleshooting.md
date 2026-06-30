@@ -21,6 +21,20 @@
 
 If still flat after 10 seconds, proceed to [Collecting Diagnostics](#collecting-diagnostics).
 
+### Spectrum signal is shifted/mirrored, or slides across the whole window as you tune
+
+**Symptoms:** The signal isn't where it should be — it appears shifted, and turning the QMX's own VFO knob slides it across the *entire* 48 kHz window instead of just nudging it. Audio is often silent until you tune the signal back into the visible range.
+
+**Cause:** The QMX never confirmed IQ mode for this session. Without it, the radio streams plain (non-IQ) audio instead of a properly centred baseband, which produces exactly this symptom.
+
+**Fix (v0.19.3+):**
+
+1. The panadapter automatically retries the IQ-mode handshake up to 4 times at connect, so this usually resolves itself within a second of the QMX showing up — no action needed.
+2. If it still happens, a **red banner appears across the top of the screen** telling you immediately. When you see it:
+   - Power-cycle the QMX (forces a fresh handshake on reconnect), **or**
+   - Check the QMX's own **System Config → IQ Mode** setting is enabled
+3. On firmware older than v0.19.3, this failure was silent — only visible in the diagnostic log as `QMX IQ mode NOT confirmed`. Updating is the simplest fix.
+
 ### QMX loses CAT connection after 1–2 minutes
 
 **Symptoms:** Frequency/mode/BW stop updating, FT8 can't transmit.
