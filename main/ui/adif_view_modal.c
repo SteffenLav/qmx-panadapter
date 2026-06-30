@@ -33,21 +33,14 @@ static lv_obj_t *s_title  = NULL;
 static lv_obj_t *s_list   = NULL;
 static bool      s_open   = false;
 
-// Fixed column widths (px) for the vertically-aligned QSO table. Proportional
-// fonts mean padding a single string with spaces (the old approach) never
-// actually lines columns up - each row is built as its own flex-row of
-// individually-sized labels instead. Time and Report were too narrow for
-// their content at montserrat_24 and visibly wrapped; widened both and
-// widened the panel (760 -> 900) to match. Sum + 6 gaps = 790px, fits inside
-// the panel's 868px content width (900 panel - 16px pad_all * 2).
-#define COL_CALL_W   110
-#define COL_CTRY_W   150
-#define COL_MODE_W    60
-#define COL_BAND_W    55
-#define COL_DATE_W    75
-#define COL_TIME_W   100
-#define COL_RST_W    180
-#define COL_GAP       10
+// 8 columns, each given equal flex-grow share of the row's width (Call,
+// Country, Mode, Band, Date, Time, Sent, Rcvd) - proportional fonts mean
+// padding a single string with spaces (the old approach) never actually
+// lines columns up, and fixed-px widths needed hand-tuning per column. Each
+// row is its own flex-row of grow=1 labels, so columns always split the
+// panel's width evenly regardless of panel size.
+#define ADIF_NUM_COLS  8
+#define COL_GAP        10
 
 static void modal_close(void)
 {
@@ -81,13 +74,17 @@ static lv_obj_t *make_row(lv_obj_t *parent)
     return row;
 }
 
-static void add_col(lv_obj_t *row, const char *text, int w,
+// flex_grow=1 + width=0 is the standard LVGL pattern for "split remaining
+// row width evenly" - every column gets the same share regardless of panel
+// size, so widening the modal later never needs per-column retuning again.
+static void add_col(lv_obj_t *row, const char *text,
                      const lv_font_t *font, uint32_t color)
 {
     lv_obj_t *lbl = lv_label_create(row);
     lv_label_set_text(lbl, text);
     lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);   // ellipsize, never wrap a column
-    lv_obj_set_width(lbl, w);
+    lv_obj_set_width(lbl, 0);
+    lv_obj_set_flex_grow(lbl, 1);
     lv_obj_set_style_text_font(lbl, font, 0);
     lv_obj_set_style_text_color(lbl, lv_color_hex(color), 0);
 }
@@ -96,19 +93,22 @@ static void add_header_row(lv_obj_t *parent)
 {
     lv_obj_t *row = make_row(parent);
     lv_obj_set_style_pad_bottom(row, 6, 0);
-    add_col(row, "Call",    COL_CALL_W, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
-    add_col(row, "Country", COL_CTRY_W, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
-    add_col(row, "Mode",    COL_MODE_W, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
-    add_col(row, "Band",    COL_BAND_W, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
-    add_col(row, "Date",    COL_DATE_W, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
-    add_col(row, "Time",    COL_TIME_W, &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
-    add_col(row, "Report",  COL_RST_W,  &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Call",    &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Country", &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Mode",    &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Band",    &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Date",    &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Time",    &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Sent",    &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
+    add_col(row, "Rcvd",    &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED);
 }
 
 // Build one QSO's row from a raw ADIF record line - callsign, DXCC country
 // (looked up from the callsign, not stored in the ADIF file), mode (FT8/FT4),
-// band, date, time, and the sent/received signal reports.
-static void build_qso_row(lv_obj_t *parent, const char *line)
+// band, date, time, and the sent/received signal reports as two separate
+// columns. even_row alternates the row background (zebra striping) so long
+// lists stay easy to read across.
+static void build_qso_row(lv_obj_t *parent, const char *line, bool even_row)
 {
     char call[20] = "?", date[9] = "", time_on[7] = "", band[8] = "",
          mode[8] = "FT8", rst_sent[8] = "599", rst_rcvd[8] = "599";
@@ -128,17 +128,22 @@ static void build_qso_row(lv_obj_t *parent, const char *line)
     if (strlen(time_on) >= 4) snprintf(hhmm, sizeof(hhmm), "%.2s:%.2s", time_on, time_on + 2);
 
     const char *country = dxcc_lookup(call);
-    char rst[24];
-    snprintf(rst, sizeof(rst), "S:%s R:%s", rst_sent, rst_rcvd);
 
     lv_obj_t *row = make_row(parent);
-    add_col(row, call,                    COL_CALL_W, &lv_font_montserrat_24, UI_COLOR_TEXT);
-    add_col(row, country ? country : "-", COL_CTRY_W, &lv_font_montserrat_24, UI_COLOR_TEXT);
-    add_col(row, mode,                    COL_MODE_W, &lv_font_montserrat_24, UI_COLOR_TEXT);
-    add_col(row, band[0] ? band : "--",   COL_BAND_W, &lv_font_montserrat_24, UI_COLOR_TEXT);
-    add_col(row, mmdd,                    COL_DATE_W, &lv_font_montserrat_24, UI_COLOR_TEXT);
-    add_col(row, hhmm,                    COL_TIME_W, &lv_font_montserrat_24, UI_COLOR_TEXT);
-    add_col(row, rst,                     COL_RST_W,  &lv_font_montserrat_24, UI_COLOR_TEXT);
+    if (even_row) {
+        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(row, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
+        lv_obj_set_style_pad_top(row, 4, 0);
+        lv_obj_set_style_pad_bottom(row, 4, 0);
+    }
+    add_col(row, call,                    &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, country ? country : "-", &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, mode,                    &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, band[0] ? band : "--",   &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, mmdd,                    &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, hhmm,                    &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, rst_sent,                &lv_font_montserrat_24, UI_COLOR_TEXT);
+    add_col(row, rst_rcvd,                &lv_font_montserrat_24, UI_COLOR_TEXT);
 }
 
 // Rebuild the list from the live ADIF log, newest record first.
@@ -166,7 +171,7 @@ static void list_render(void)
     for (int i = 0; i < shown; i++) {
         int idx = total - 1 - i;   // newest first
         if (!adif_log_get_record(idx, line, sizeof(line))) continue;
-        build_qso_row(s_list, line);
+        build_qso_row(s_list, line, (i % 2) == 1);
     }
     ESP_LOGI(TAG, "ADIF viewer: showing %d of %d logged QSOs", shown, total);
 }
