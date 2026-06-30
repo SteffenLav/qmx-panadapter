@@ -36,15 +36,17 @@ static bool      s_open   = false;
 // Fixed column widths (px) for the vertically-aligned QSO table. Proportional
 // fonts mean padding a single string with spaces (the old approach) never
 // actually lines columns up - each row is built as its own flex-row of
-// individually-sized labels instead. Sum + 6 gaps fits inside the panel's
-// 728px content width (760 panel - 16px pad_all * 2) with ~38px to spare.
+// individually-sized labels instead. Time and Report were too narrow for
+// their content at montserrat_24 and visibly wrapped; widened both and
+// widened the panel (760 -> 900) to match. Sum + 6 gaps = 790px, fits inside
+// the panel's 868px content width (900 panel - 16px pad_all * 2).
 #define COL_CALL_W   110
 #define COL_CTRY_W   150
 #define COL_MODE_W    60
 #define COL_BAND_W    55
 #define COL_DATE_W    75
-#define COL_TIME_W    60
-#define COL_RST_W    120
+#define COL_TIME_W   100
+#define COL_RST_W    180
 #define COL_GAP       10
 
 static void modal_close(void)
@@ -187,7 +189,7 @@ static void modal_build(void)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 
     s_panel = lv_obj_create(s_modal);
-    lv_obj_set_width(s_panel, 760);
+    lv_obj_set_width(s_panel, 900);
     lv_obj_set_height(s_panel, LV_SIZE_CONTENT);
     lv_obj_set_style_max_height(s_panel, 660, 0);
     lv_obj_set_align(s_panel, LV_ALIGN_CENTER);
