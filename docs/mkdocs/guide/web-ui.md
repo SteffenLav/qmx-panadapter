@@ -65,8 +65,12 @@ Bottom bar offers several downloads:
 ## Upload Functions
 
 - **Config ↑** — restore settings from a backup file
-- **QRZ ↑** — upload ADIF to QRZ Logbook (requires API key)
-- **eQSL ↑** — upload ADIF to eQSL (requires username/password)
+- **QRZ ↑** — upload ADIF to QRZ Logbook (requires API key on first use, saved for future sessions)
+- **eQSL ↑** — upload ADIF to eQSL (requires username/password on first use, saved)
+
+Uploads work **while FT8 or FT4 is actively running** — the panadapter briefly pauses the FFT and SD-archive activity during the HTTPS transfer, then resumes automatically. A result is shown once the upload completes, reporting how many QSOs were sent.
+
+Each upload remembers where it left off — re-uploading skips QSOs that were already sent in a previous session.
 
 ## Network Requirements
 
@@ -81,6 +85,7 @@ Bottom bar offers several downloads:
 - **Real-time chat** — no operator messaging
 - **Export formats** — ADIF only (import to EQSL, WSJT-X, etc. yourself)
 - **Latency** — ~200 ms typical (WiFi dependent)
+- **Stale connection recovery** — if the browser's network drops without a clean disconnect (e.g., putting a laptop to sleep), the web view may freeze briefly before recovering. Recovery is automatic and capped at ~5 seconds.
 
 ---
 

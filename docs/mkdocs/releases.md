@@ -6,8 +6,16 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 **v0.19.3** — 2026-06-30
 
-- QMX IQ-mode handshake now retries automatically (up to 4 attempts) instead of silently giving up after one try — fixes a confusing bug where the spectrum could appear shifted/mirrored and tunable across the whole 48 kHz window for an entire session
-- A red banner now appears across the top of the screen in the rare case the handshake still fails after all retries, instead of only a log line
+- **QMX IQ-mode handshake retried automatically** — a silent failure at connect could leave the whole session running without I/Q data, making the spectrum appear shifted and tunable across the whole 48 kHz window; now retried up to 4 times, and a red on-screen banner flags it if all attempts fail
+- **Band-plan strip**: tracks actual zoom/pan live, now shows the filter passband at band scale, and supports drag-to-tune and tap-to-jump directly on the strip
+- **Memory channel drag-to-move**: long-press and drag to relocate a saved channel to any empty slot; tapping an empty slot opens the editor directly; out-of-band frequencies rejected immediately; mode/colour improvements
+- **Frequency entry popup**: drag to reposition anywhere on screen, position remembered across reboots; resizable (pinch or swipe up/down); background dimming lightened so the spectrum stays visible
+- **ADIF log viewer rebuilt**: genuine column alignment (was space-padded and never lined up), sticky header, Country and Mode columns added, Sent/Rcvd reports split, zebra-striped rows
+- **FT8/FT4 TX confirm dialog**: up/down nudge buttons to re-target the adjacent row without redoing the selection gesture; quick-tap now works directly; FT4 countdown and title corrected for 7.5-second slots
+- **FT4 clock-sync fix**: timing-offset calculation was silently using FT8's block geometry for FT4 decodes (~3.3× wrong); fixed, and the manual "Sync Time" function restored in FT4 mode
+- **FT4 decode quality restored**: the FT8-specific iteration-count reduction (v0.18.x) had been unintentionally applied to FT4 as well; FT4 now uses its own budget
+- **QRZ/eQSL uploads more reliable**: SD auto-archive task now paused during uploads (was still able to collide on a shared hardware bus); upload result popup no longer always reads "undefined"; one legacy log field that caused QRZ to permanently reject uploads past a certain QSO is cleaned up automatically
+- **Web UI**: stale-connection freeze capped at 5 seconds instead of potentially 30
 - Full writeup in [Version History Document](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/version-history.md)
 
 ### Installing v0.19.3

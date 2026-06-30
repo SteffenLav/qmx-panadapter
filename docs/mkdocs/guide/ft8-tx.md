@@ -25,7 +25,7 @@ Both modes transmit via the same CAT interface; the difference is **slot length 
 - You're portable/POTA (less pressure to transmit fast)
 - You prefer the relaxed pace
 
-⚠️ **FT4 support is new (v0.19.0).** Full feature parity with FT8; time-sync from decoded signals is not yet available in FT4 mode (FT8-only for now).
+FT4 has full feature parity with FT8, including time-sync from decoded signals (fixed in v0.19.3 — the time-sync modal shows "FT4" when appropriate and the bottom-bar clock correctly reads `UTC(FT4)` while in FT4 mode).
 
 ### 2. Switching Between FT8 and FT4
 
@@ -65,23 +65,28 @@ The beta label goes away at v1.0.0 after multi-day soak testing.
 In FT8 view, tap a CQ row in the decode list. A confirmation modal appears:
 
 ```
-┌──────────────────────────┐
-│ About to transmit:       │
-│                          │
-│  TX1: K9ZZ OZ1LAV JO45   │
-│                          │
-│ [Auto Pounce]  [Cancel]  │
-│ [Transmit]               │
-└──────────────────────────┘
+┌──────────────────────────────┐
+│ Confirm FT8 Transmission     │
+│ ▲  K9ZZ EN52  -07  2138 Hz  │ ← nudge up
+│ ►  W1AW FN31  -12  1406 Hz  │ ← selected row
+│ ▼  SV1ENG JN37 -09 1869 Hz  │ ← nudge down
+│                              │
+│  TX1: W1AW OZ1LAV JO45      │
+│                              │
+│  [▲ Nudge up]  [▼ Nudge down]│
+│  [Auto Pounce]    [Cancel]   │
+│  [Transmit ●]                │
+└──────────────────────────────┘
 ```
 
-Review the message (callsign, your grid), then:
-
-- **Transmit** — send the reply immediately (next FT8 slot)
-- **Auto Pounce** — automatically handle the full exchange (reply + wait for report + TX report back + wait for RR73 + TX 73)
+- **Transmit** (green) — send the reply on the next correct slot
+- **Auto Pounce** (blue) — handle the entire exchange automatically (TX1 → wait for report → TX2 → wait for RR73 → TX3 73)
+- **▲ / ▼ Nudge** — move the target to the row above or below, without closing the modal and redoing the selection gesture
 - **Cancel** — abort
 
-The reply follows **correct FT8 parity** — if you're replying to an even slot, you transmit on the odd slot, and vice versa.
+**A quick tap is enough** — you do not need to hold a row before releasing. Hold-and-drag still works for selecting across rows in a busy list.
+
+The reply follows **correct FT8/FT4 parity** — if you're replying to an even slot, you transmit on the odd slot, and vice versa. For FT4 the countdown timer correctly counts down in 7.5-second slot increments, not 15-second FT8 ones.
 
 ### 2. Call CQ
 
@@ -238,10 +243,12 @@ Download the log via the web UI (**ADIF ↓** button) or Settings → ADIF Log.
 Via the web UI:
 
 1. Click **QRZ ↑** or **eQSL ↑** in the bottom bar
-2. Enter your API key (QRZ) or username/password (eQSL)
-3. Click **Upload**
+2. Enter your API key (QRZ) or username/password (eQSL) when first prompted — credentials are saved for future sessions
+3. Click again to upload
 
-Logs are batched — each session records which QSOs have been uploaded, so re-running the upload skips already-submitted QSOs.
+Logs are batched — each upload session records which QSOs have been sent, so re-running skips already-submitted entries.
+
+Uploads work **while FT8 or FT4 is actively running** — the panadapter briefly steps the FFT and SD-archive activity aside for the duration of the HTTPS transfer, then resumes automatically. You typically miss one FT8 slot and won't notice. A progress result is shown once the upload completes.
 
 ### 12. Troubleshooting
 

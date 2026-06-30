@@ -7,10 +7,10 @@ The panadapter includes **on-device FT8 and FT4 decoders** with real-time spectr
 Swipe → from the left edge to toggle to FT8/FT4 view. The same decode list and waterfall work for both modes — switch modes via the **Preset** dropdown in the left pane (top).
 
 **FT4 notes:**
-- Decodes refresh faster (~15 ms vs 15 s for FT8) because slots are 7.5 seconds
+- Decodes refresh roughly twice as fast as FT8 because slots are 7.5 seconds
 - Slot countdown shows 7.5 s instead of 15 s
 - All filtering, priority, and auto-reply features work identically in FT4
-- Time-sync from decoded signal timing (Sync Time button) is FT8-only for now
+- Time-sync from decoded signal timing works in both FT4 and FT8 (the bottom-bar clock shows `UTC(FT4)` when synced from an FT4 decode)
 
 You'll see:
 

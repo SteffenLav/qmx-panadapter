@@ -104,7 +104,22 @@ A **green SD dot** in the bottom status bar confirms a card is mounted and being
 
 ## ADIF & Logging
 
-**ADIF Log** — View, edit, or clear the QSO log.
+**ADIF Log** — View the QSO log on-device. The viewer shows a proper column table:
+
+| Column | Content |
+|--------|---------|
+| Call | Callsign |
+| Country | DXCC entity (looked up from the callsign prefix) |
+| Mode | FT8 or FT4 |
+| Band | Band (20m, 40m, …) |
+| Date | UTC date |
+| Time | UTC time |
+| Sent | Your signal report (SNR) |
+| Rcvd | Their signal report (SNR) |
+
+A sticky header row stays pinned while you scroll. Even-numbered rows are lightly shaded so long logs stay easy to scan.
+
+Tap **Clear** to erase the log (irreversible). Use the web UI to download the full ADIF file for import into WSJT-X, EQSL, or any other logging software.
 
 **Exclude Worked Before** — When FT8 filtering, skip stations you've already logged QSOs with (requires you to import your own prior ADIF log first).
 

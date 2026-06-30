@@ -30,6 +30,7 @@ The panadapter is your primary view — a real-time spectrum analyser and waterf
 | Battery % | Current battery charge level |
 | FPS | Render frame rate (target 30 fps) |
 | **SD** (green dot) | A microSD card is mounted and being mirrored. Files are written to `/qmx-panadapter/` on the card automatically — no setup needed. The dot is absent when no card is inserted |
+| `UTC(FT8)` / `UTC(FT4)` | Time was last synchronised from a decoded FT8 or FT4 signal |
 | Firmware version | Currently flashed firmware version |
 | Waterfall label | Active colour map name |
 
@@ -52,6 +53,21 @@ Use two fingers to pinch in (zoom out) or pinch out (zoom in). The display cente
 
 Drag horizontally with one finger to scroll the spectrum left/right. Release to tune to the new center frequency.
 
+#### Band-Plan Strip
+
+Below the frequency axis is a thin coloured strip showing where you are within the band at a glance. Each colour zone marks the conventional segment (CW, Digi, Phone) for your selected region (auto / ITU Region 1/2/3, set in settings).
+
+The **visible-span block** inside the strip shows the exact portion of the band the spectrum and waterfall are currently displaying — it narrows as you zoom in and shifts as you pan.
+
+A **passband sub-block** inside the visible-span block mirrors the current filter width at band scale (grey tint), so you can see how your passband sits within the CW/Digi/Phone zones.
+
+**Tune directly from the strip:**
+
+- **Tap** anywhere on the strip to jump to that frequency
+- **Drag** to scrub along the band — the frequency label updates live and the QMX retunes on release
+
+The strip updates live as you zoom, pan, or change bands.
+
 #### Memory Channels
 
 Swipe ↑ from the bottom edge to open the memory picker — a 4×8 grid of 32 channels, each free to hold any frequency/mode (not tied to a band). Each channel stores:
@@ -60,7 +76,17 @@ Swipe ↑ from the bottom edge to open the memory picker — a 4×8 grid of 32 c
 - Mode (USB, LSB, CW, DiGi)
 - Label (your own name for the channel)
 
-Tap a channel to recall it. Long-press to **edit** (change name, frequency, or mode). Tap **Save** to store the current frequency/mode to a channel.
+Each button shows the mode colour (CW = green, DiGi = teal, USB = brick red, LSB = purple) so you can tell mode at a glance without reading the label.
+
+**Recall:** Tap a filled channel to immediately retune to it.
+
+**Tap an empty slot** to create a new channel there directly — the frequency keypad opens straight away.
+
+**Long-press + drag a filled channel** to move it to a different empty slot — no editing needed, the data follows your finger. Release on an empty slot to drop.
+
+**Long-press in place** to open the editor (change name, frequency, or mode).
+
+Entering a frequency outside the legal amateur band edges is rejected immediately with an error — the pad stays open so you can correct it without starting over.
 
 ### 3. Top Bar
 
@@ -116,21 +142,34 @@ Tap the **frequency** on the top bar to open the keypad. Enter frequency in MHz 
 
 Layout switches between **10-Key** (phone dial) and **Phone** (QWERTY) via a toggle. Choose whichever is faster for you — the preference persists.
 
+**Resize the keypad:** Pinch it or swipe up/down on it to toggle between the normal and a compact layout. Your choice is remembered across reboots. The compact layout reveals more of the spectrum behind it.
+
+**Reposition the keypad:** Drag it by the **"Enter freq"** title label (the only non-button area at the top of the panel) to move it anywhere on screen, clamped to stay fully visible. The position is remembered so it reopens exactly where you left it.
+
+The background behind the keypad is intentionally semi-transparent (40% dim) so the spectrum and waterfall stay visible while you're entering a frequency.
+
+**Cancel and Enter are the only exits** — tapping outside the keypad does nothing, so an accidental background touch cannot silently discard what you were typing.
+
 ### 7. Memory Channels
 
-32 memory channels (4×8 grid), free to hold any frequency/mode — not tied to a band. Each stores frequency, mode, and name. Swipe up from the bottom edge to open the memory picker, or tap a memory channel name to recall it.
+32 memory channels (4×8 grid), free to hold any frequency/mode — not tied to a band. Each stores frequency, mode, and name. Swipe up from the bottom edge to open the memory picker.
 
-**To save the current frequency:**
-1. Tune to the desired frequency
-2. Swipe ↑ to open memory picker
-3. Tap an empty or unwanted channel
-4. Tap **Save** to overwrite it
+Mode is shown in colour on each button — CW (green), DiGi (teal), USB (brick red), LSB (purple) — so the grid is scannable at a glance without reading every label.
 
-**To edit a channel name:**
-1. Swipe ↑ to open memory picker
-2. Long-press a channel
-3. Type a new name
-4. Tap **Save**
+**To recall a channel:** Tap it. The QMX retunes immediately.
+
+**To create a new channel (empty slot):** Tap the empty slot — the frequency keypad opens directly. No long-press needed.
+
+**To edit an existing channel:** Long-press it in place. Change the name, frequency, or mode, then tap **Save**.
+
+**To move a channel to a different slot:** Long-press and drag it to any empty slot. Release to drop. Only the data moves — the grid positions stay fixed.
+
+**To save the current QMX frequency/mode to a slot:**
+1. Swipe ↑ to open the memory picker
+2. Long-press the slot you want to overwrite
+3. The current frequency/mode pre-fills the editor — adjust the label if you like, then tap **Save**
+
+**Out-of-band frequencies are rejected immediately** — if you enter a frequency outside a recognised amateur band, the keypad stays open so you can correct it rather than silently saving a wrong value.
 
 ### 8. Band Presets
 

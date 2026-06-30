@@ -97,8 +97,11 @@ You'll see faint "breathing" grip handles on the edges — they show you where t
 
 You're now receiving. The **spectrum** shows signal strength across the band, and the **waterfall** scrolls down showing signal activity over time.
 
-- **Tap the spectrum** to tune to that frequency
-- **Pinch and drag** to zoom in/out
+- **Tap the spectrum or waterfall** to tune to that frequency
+- **Pinch** to zoom in/out; **one-finger horizontal drag** to pan and retune
+- **Tap the coloured band-plan strip** (below the frequency axis) to jump to a frequency, or **drag along it** to scrub through the band
+- **Tap the Freq label** on the top bar to open the frequency keypad — drag the "Enter freq" title bar to reposition it, pinch or swipe up/down to resize it
+- **Swipe ↑ from the bottom edge** to open memory channels — tap an empty slot to create one, long-press a filled slot to edit it, long-press and drag to move a channel to a different slot
 - **Tap Band** to switch between your configured bands
 - **Tap Mode** to switch USB/LSB/CW/DiGi
 
