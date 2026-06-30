@@ -621,9 +621,19 @@ static void upload_task(void *arg)
         // Free the CPU + TX path for the outbound TLS connection for the whole
         // upload. dsp_set_transfer_quiet stops fft_task (pri 4) preempting this
         // upload task (pri 3) and cascades FT8 to idle; the WS pause yields the
-        // single SDIO->C6 link from the ~10 fps stream. Both resumed in all cases.
+        // single SDIO->C6 link from the ~10 fps stream. The SD archive lock
+        // blocks the SD-mirror task's periodic FatFs writes (diag log every
+        // ~3s, plus an ADIF mirror right after the QSO that's usually what
+        // triggered this upload) - both that traffic and the WiFi C6 link
+        // share one physical SDMMC host on the ESP32-P4, and overlapping
+        // SDMMC activity on both slots during a sustained HTTPS upload has
+        // corrupted the WiFi RPC link permanently (no auto-recovery) in the
+        // field. Best-effort: if the SD task is wedged the upload still
+        // proceeds, just without this protection. All three resumed/released
+        // in every case below.
         dsp_set_transfer_quiet(true);
         webserver_ws_set_paused(true);
+        bool sd_locked = sd_archive_lock(5000);
         if (up.kind == UPLOAD_QRZ) {
             qrz_upload_result_t result;
             qrz_upload_pending(&result);
@@ -645,6 +655,7 @@ static void upload_task(void *arg)
             s_last_upload.busy = false;
             xSemaphoreGive(s_upload_mutex);
         }
+        if (sd_locked) sd_archive_unlock();
         webserver_ws_set_paused(false);
         dsp_set_transfer_quiet(false);
     }
