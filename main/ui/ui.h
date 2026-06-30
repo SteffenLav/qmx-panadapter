@@ -60,6 +60,13 @@ void ui_set_bottom_version(const char *text);
 // the sd_archive task on mount/unmount, and once at boot to sync initial state.
 void ui_set_sd_active(bool active);
 
+// Persistent top-of-screen red banner shown whenever the QMX never confirmed
+// IQ mode (see cat_get_iq_mode_confirmed()) - without it the spectrum will
+// appear mirrored/shifted. Called from cat.c's link_task after the Q9 1;/Q9;
+// retry loop at connect time; cleared automatically once a later attempt
+// confirms IQ mode (e.g. on reconnect/power-cycle).
+void ui_set_iq_mode_warning(bool active);
+
 // Full-screen breathing red bezel shown while FT8 simulation mode is on
 // (see ft8_sim.h) - an unmissable reminder that nothing transmitted right
 // now is real. Called from the FT8-drawer-only sim mode toggle and once at

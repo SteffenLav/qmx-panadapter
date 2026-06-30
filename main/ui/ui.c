@@ -1761,6 +1761,43 @@ static void sim_border_keepalive_cb(lv_timer_t *t)
     lv_obj_move_foreground(s_sim_border);
 }
 
+// Persistent top-of-screen banner shown whenever the QMX never confirmed IQ
+// mode after the cat.c link-up retry loop (see cat_get_iq_mode_confirmed()).
+// Without IQ mode the QMX streams plain (non-IQ) audio, which makes the
+// panadapter appear mirrored/shifted and tunable across the whole 48 kHz
+// window with the VFO knob - a real field report (Dirk DK7CVD, 2026-06-30)
+// burned a long session confused by this because the only signal was a log
+// line nobody could see live. Unmissable but not screen-blocking (unlike the
+// sim-mode border): a thin red strip across the top with explicit text and a
+// suggested fix, cleared automatically the moment a later attempt confirms
+// IQ mode (e.g. on reconnect/power-cycle). Same re-foreground-every-second
+// pattern as s_sim_border, for the same reason (later modals are screen
+// children and would otherwise cover it).
+static lv_obj_t *s_iq_warn_banner = NULL;
+static bool      s_iq_warn_active = false;
+
+void ui_set_iq_mode_warning(bool active)
+{
+    s_iq_warn_active = active;
+    if (!s_iq_warn_banner) return;
+    if (display_lock(20)) {
+        if (active) {
+            lv_obj_clear_flag(s_iq_warn_banner, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(s_iq_warn_banner);
+        } else {
+            lv_obj_add_flag(s_iq_warn_banner, LV_OBJ_FLAG_HIDDEN);
+        }
+        display_unlock();
+    }
+}
+
+static void iq_warn_banner_keepalive_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_iq_warn_active || !s_iq_warn_banner) return;
+    lv_obj_move_foreground(s_iq_warn_banner);
+}
+
 // Same breathing technique as the edge grips, applied to the bottom-bar
 // SD-card-mounted indicator: a small static green dot shown whenever the
 // background SD archive mirror has a card mounted. Deliberately NOT
@@ -2717,6 +2754,29 @@ void ui_init(lv_display_t *disp)
     lv_obj_add_flag(s_sim_border, LV_OBJ_FLAG_HIDDEN);
     lv_timer_create(sim_border_keepalive_cb, 1000, NULL);
     ui_refresh_sim_mode_indicator();   // apply whatever drawer_build()/ft8_screen_view_init() already determined
+
+    // IQ-mode-not-confirmed warning banner (see ui_set_iq_mode_warning above).
+    // Hidden by default; cat.c's link_task shows/hides it once the QMX has
+    // (or hasn't) confirmed IQ mode at connect time.
+    s_iq_warn_banner = lv_obj_create(scr);
+    lv_obj_set_size(s_iq_warn_banner, LV_PCT(100), 40);
+    lv_obj_set_pos(s_iq_warn_banner, 0, 0);
+    lv_obj_set_style_bg_color(s_iq_warn_banner, lv_color_hex(0xC02020), 0);
+    lv_obj_set_style_bg_opa(s_iq_warn_banner, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_iq_warn_banner, 0, 0);
+    lv_obj_set_style_radius(s_iq_warn_banner, 0, 0);
+    lv_obj_clear_flag(s_iq_warn_banner, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(s_iq_warn_banner, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_iq_warn_banner, LV_OBJ_FLAG_HIDDEN);
+    {
+        lv_obj_t *lbl = lv_label_create(s_iq_warn_banner);
+        lv_label_set_text(lbl, LV_SYMBOL_WARNING " QMX IQ mode not confirmed - spectrum may be "
+                           "mirrored/shifted. Power-cycle the QMX or check System Config > IQ Mode.");
+        lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_22, 0);
+        lv_obj_center(lbl);
+    }
+    lv_timer_create(iq_warn_banner_keepalive_cb, 1000, NULL);
 
     ESP_LOGI(TAG, "UI built: top=%dpx spectrum=%dpx labels=%dpx waterfall=%dpx bottom=%dpx",
              TOP_BAR_H, SPECTRUM_H, LABEL_BAR_H, WATERFALL_H, BOTTOM_BAR_H);

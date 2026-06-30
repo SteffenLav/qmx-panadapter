@@ -2,6 +2,10 @@
 build/
 managed_components/
 
+# mkdocs build output (root-level `mkdocs build` target — published to
+# tab5.lav.dk by manual FTP, never committed)
+/site/
+
 # ESP-IDF generated files
 sdkconfig.old
 dependencies.lock

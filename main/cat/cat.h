@@ -100,6 +100,13 @@ int cat_get_cw_offset_hz(void);
  */
 const char *cat_get_qmx_fw(void);
 /**
+ * @brief True once the QMX has confirmed IQ mode is ON (Q9; readback == 1)
+ * for the current connection. False if not yet connected or if the
+ * Q9 1; / Q9; handshake never confirmed after retrying at link-up -
+ * in that state the spectrum will appear mirrored/shifted.
+ */
+bool cat_get_iq_mode_confirmed(void);
+/**
  * @brief Send a raw formatted CAT/MM command string to the QMX.
  * Uses printf-style format. Fire-and-forget, no response parsed.
  */

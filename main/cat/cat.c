@@ -63,6 +63,7 @@ static size_t s_sw_resp_len = 0;
 static char   s_qmx_fw[24] = {0};   // QMX firmware version from VN; (e.g. "1_03_002QMX")
 static char   s_q9_resp[16] = {0};  // last Q9 (IQ mode) response, e.g. "Q91;"
 static size_t s_q9_resp_len = 0;
+static volatile bool s_iq_mode_confirmed = false;  // true once Q9; readback confirms IQ mode ON
 static uint64_t s_diag_poll_hb_us = 0;  // last diag poll-heartbeat timestamp
 
 static uint32_t s_last_freq_hz = 0;
@@ -126,6 +127,7 @@ void cat_request_ssb_bandwidth(uint32_t hz)
 
 int cat_get_cw_offset_hz(void) { return s_cw_offset_hz; }
 const char *cat_get_qmx_fw(void) { return s_qmx_fw; }
+bool cat_get_iq_mode_confirmed(void) { return s_iq_mode_confirmed; }
 esp_err_t cat_send_raw_cmd(const char *fmt, ...)
 {
     if (!s_cdc_dev) return ESP_ERR_INVALID_STATE;
@@ -742,40 +744,74 @@ static void link_task(void *arg)
             // Phase 5.10J: enable QMX IQ mode for this session. Q9 1; is
             // session-only (not written to EEPROM), so the user's normal
             // QMX state is restored automatically on disconnect/power-cycle.
+            //
+            // Retried up to IQ_MODE_MAX_ATTEMPTS times: a field report (Dirk
+            // DK7CVD, 2026-06-30) showed the single-shot handshake silently
+            // leaving IQ mode off on a real connect (Q9; readback timed out -
+            // "(no response)"), which is indistinguishable from a transient
+            // USB/CDC hiccup right after enumeration. Without IQ mode the QMX
+            // streams plain (non-IQ) audio: the panadapter shows the signal
+            // shifted/mirrored, tunable across the whole 48 kHz window with
+            // the VFO knob, audio only present once retuned back into range -
+            // exactly Dirk's symptom. Previously this only logged a warning
+            // and gave up, silently degrading the session until a manual QMX
+            // power-cycle. If all attempts fail, s_iq_mode_confirmed stays
+            // false and ui_set_iq_mode_warning() raises a persistent on-screen
+            // banner so the user isn't left guessing why the spectrum looks
+            // wrong.
             {
-                const char *iq_on = "Q9 1;";
-                esp_err_t terr = cdc_acm_host_data_tx_blocking(
-                    s_cdc_dev, (const uint8_t *)iq_on, 5, 200);
-                if (terr == ESP_OK) {
-                    ESP_LOGI(TAG, "QMX IQ mode enabled (Q9 1;)");
-                } else {
-                    ESP_LOGW(TAG, "Failed to enable QMX IQ mode: 0x%x", terr);
-                }
-                // Readback: a successful CDC write only proves the bytes
-                // reached the radio, not that it accepted them. Query Q9;
-                // and check the radio actually reports IQ mode on — caught
-                // a real-world case (Dirk DK7CVD, 1_04 beta firmware) where
-                // the System Config screen showed IQ mode still off despite
-                // this write succeeding.
-                s_q9_resp_len = 0;
-                const char *iq_q = "Q9;";
-                esp_err_t qerr = cdc_acm_host_data_tx_blocking(
-                    s_cdc_dev, (const uint8_t *)iq_q, strlen(iq_q), 200);
-                if (qerr == ESP_OK) {
-                    for (int wi = 0; wi < 20 && s_q9_resp_len == 0; wi++) {
-                        vTaskDelay(pdMS_TO_TICKS(20));
-                    }
-                    if (s_q9_resp_len >= 3 && s_q9_resp[2] == '1') {
-                        ESP_LOGI(TAG, "QMX IQ mode confirmed ON (%s)", s_q9_resp);
+                s_iq_mode_confirmed = false;
+                const int IQ_MODE_MAX_ATTEMPTS = 4;
+                for (int attempt = 1; attempt <= IQ_MODE_MAX_ATTEMPTS; attempt++) {
+                    const char *iq_on = "Q9 1;";
+                    esp_err_t terr = cdc_acm_host_data_tx_blocking(
+                        s_cdc_dev, (const uint8_t *)iq_on, 5, 200);
+                    if (terr == ESP_OK) {
+                        ESP_LOGI(TAG, "QMX IQ mode enabled (Q9 1;) attempt %d/%d",
+                                 attempt, IQ_MODE_MAX_ATTEMPTS);
                     } else {
-                        ESP_LOGW(TAG, "QMX IQ mode NOT confirmed (raw='%s') — "
-                                 "panadapter may show mirrored/aliased spectrum; "
-                                 "check QMX System Config IQ Mode setting",
-                                 s_q9_resp_len ? s_q9_resp : "(no response)");
+                        ESP_LOGW(TAG, "Failed to enable QMX IQ mode (attempt %d/%d): 0x%x",
+                                 attempt, IQ_MODE_MAX_ATTEMPTS, terr);
                     }
-                } else {
-                    ESP_LOGW(TAG, "Failed to query QMX IQ mode state: 0x%x", qerr);
+                    // Readback: a successful CDC write only proves the bytes
+                    // reached the radio, not that it accepted them. Query Q9;
+                    // and check the radio actually reports IQ mode on - caught
+                    // a real-world case (Dirk DK7CVD, 1_04 beta firmware) where
+                    // the System Config screen showed IQ mode still off despite
+                    // this write succeeding.
+                    s_q9_resp_len = 0;
+                    const char *iq_q = "Q9;";
+                    esp_err_t qerr = cdc_acm_host_data_tx_blocking(
+                        s_cdc_dev, (const uint8_t *)iq_q, strlen(iq_q), 200);
+                    if (qerr == ESP_OK) {
+                        for (int wi = 0; wi < 20 && s_q9_resp_len == 0; wi++) {
+                            vTaskDelay(pdMS_TO_TICKS(20));
+                        }
+                        if (s_q9_resp_len >= 3 && s_q9_resp[2] == '1') {
+                            ESP_LOGI(TAG, "QMX IQ mode confirmed ON (%s) on attempt %d/%d",
+                                     s_q9_resp, attempt, IQ_MODE_MAX_ATTEMPTS);
+                            s_iq_mode_confirmed = true;
+                            break;
+                        } else {
+                            ESP_LOGW(TAG, "QMX IQ mode NOT confirmed (attempt %d/%d, raw='%s')",
+                                     attempt, IQ_MODE_MAX_ATTEMPTS,
+                                     s_q9_resp_len ? s_q9_resp : "(no response)");
+                        }
+                    } else {
+                        ESP_LOGW(TAG, "Failed to query QMX IQ mode state (attempt %d/%d): 0x%x",
+                                 attempt, IQ_MODE_MAX_ATTEMPTS, qerr);
+                    }
+                    if (attempt < IQ_MODE_MAX_ATTEMPTS) {
+                        vTaskDelay(pdMS_TO_TICKS(300));
+                    }
                 }
+                if (!s_iq_mode_confirmed) {
+                    ESP_LOGE(TAG, "QMX IQ mode NOT confirmed after %d attempts — "
+                             "panadapter will show mirrored/aliased spectrum; "
+                             "check QMX System Config IQ Mode setting or power-cycle the QMX",
+                             IQ_MODE_MAX_ATTEMPTS);
+                }
+                ui_set_iq_mode_warning(!s_iq_mode_confirmed);
             }
             // One-shot inline FA/MD/FW round-trip right after link-up, so
             // the top-bar Band/Mode/BW labels populate immediately instead
