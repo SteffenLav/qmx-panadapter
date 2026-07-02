@@ -602,6 +602,24 @@ Fixed two ways:
 
 **Tab5 crash investigation opened, not yet resolved.** While investigating the above, Dirk's diagnostic log also showed 4 unrelated `panic/exception` resets in a single session — a real firmware crash, not a power-button reset. The diagnostic log can't capture the actual fault (panics bypass the logging hook entirely, by design — see CLAUDE.md's diagnostic-logging notes), so root-causing this needs a continuous serial capture (`tools/capture_serial_log.ps1`) from the field next time it happens. Tracked as TODO item #27b; no fix shipped this release pending that data.
 
+### Shipped in v0.19.4 — 2026-07-03 UTC
+
+This release is almost entirely about making **FT4 actually usable**. FT4 shipped in v0.19.0, but in practice it decoded poorly, kept resetting itself, and couldn't reliably complete a QSO. Four separate faults were stacked on top of each other — each one hiding the next — and all four are now fixed. On the bench, FT4 went from "no answers, lots of signal, confusing display" to completing and logging a real QSO.
+
+**FT4 decode reliability — the big one.** The FT8/FT4 engine uses two capture buffers so it can decode one time-slot while receiving the next. On this hardware the internal memory is very tight, and one of those two buffers ended up with its FFT workspace in slow memory instead of fast memory — so *every other slot* ran its analysis about 10× too slowly and decoded nothing. FT8's longer 15-second slots mostly hid it; FT4's tight 7.5-second slots did not. Both buffers now share a single FFT workspace pinned to fast memory, which also frees up scarce internal memory as a bonus. Result: steady decoding on every slot instead of every other one.
+
+**"FT8 stuck — resetting audio" no longer fires during normal operation.** A safety watchdog meant to recover a genuinely wedged receiver was mis-triggering on any quiet moment — including the middle of a QSO — and its recovery action wipes the decode list and briefly resets the receiver, which is exactly what was causing the "screen goes almost empty and slowly fills back in" you may have seen, and what was timing out otherwise-good contacts. It's now much harder to trigger and never fires while you're transmitting or mid-QSO.
+
+**Slot clock no longer jumps around in FT4.** The Tab5 gently nudges its clock toward the collective timing of the stations on air (so you stay in sync with the people you're actually working). That nudge had no upper limit per slot, and FT4's noisier measurements were yanking the clock by up to ~¼ second every slot — enough to make the on-screen slot countdown visibly jump. The per-slot adjustment is now capped, so a genuine drift is still tracked smoothly but no single noisy reading can shift the clock visibly.
+
+**FT4 EVEN/ODD indicator now correct.** The slot countdown and the EVEN/ODD markers were computed on FT8's 15-second grid even in FT4, so they flipped only every *other* FT4 slot (showing E E O O instead of E O E O) and disagreed with when the radio actually transmitted. All the slot-parity indicators now use the active mode's real slot length.
+
+**QMX IQ-mode confirmation hardened again.** Following up the v0.19.3 handshake-retry fix, the IQ-mode readback could be fooled by the QMX's own command echo arriving at the wrong moment and report "confirmed" when IQ mode was actually still off (which streams non-IQ audio → 140 candidates, 0 decodes). The readback now waits for that echo to clear before checking, so the confirmation is trustworthy.
+
+**Frequency keypad is now see-through.** The on-screen frequency entry pad (opened from the top bar) is now translucent, so the live panadapter stays visible behind it while you type. The Memory-channel version of the pad is left solid as before.
+
+**Settings drawer tidy-up.** Removed two rarely-used items — **Snap to signal** (tap-to-tune now always tunes exactly where you touch) and the **FT8 sync lines** diagnostic — and moved **Band-plan region** directly under the Callsign & Grid button (its "Auto" setting is derived from your grid square, so they belong together). Also closed an empty gap that sat between Flat Spectrum and Presets.
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*

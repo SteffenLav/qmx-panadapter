@@ -53,9 +53,9 @@ Once connected, the settings show your **IP address** — use this to access the
 
 ## Panadapter & Zoom
 
-**Snap to Peak** — Auto-tune to the strongest signal when you tap the spectrum (on by default).
-
 **Distance in Miles** — Show FT8 distances in miles instead of km (off by default).
+
+**Band-plan region** — Sets which region's band plan drives the coloured CW/Digi/Phone strip under the frequency axis. **Auto** derives it from your grid square; you can also force Region 1/2/3.
 
 **Band Presets** — Add or remove custom bands. Standard bands (160–10 m) are always available.
 
