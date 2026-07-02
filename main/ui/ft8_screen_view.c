@@ -662,9 +662,16 @@ static void update_row(int i, const ft8_call_t *src)
         snprintf(b_brg, sizeof(b_brg), "--");
     }
 
-    /* E (blue) / O (amber) slot parity indicator */
+    /* E (blue) / O (amber) slot parity indicator, on the ACTIVE protocol's
+     * grid (7.5 s FT4 / 15 s FT8). last_utc is whole seconds (boundary_ms/1000),
+     * so an odd FT4 slot's .5 s got truncated - round to the nearest slot index
+     * (+period/2 before the divide) to recover it. Hardcoding /15 flipped parity
+     * only every OTHER FT4 slot (the "E E O O" bug) and disagreed with the TX
+     * engine, which already uses ft8_op_mode_slot_ms(). */
     {
-        int8_t parity = ((src->last_utc / 15) % 2) == 0 ? 1 : 0; /* 1=even 0=odd */
+        int per_ms = ft8_op_mode_slot_ms();
+        int64_t sidx = ((int64_t)src->last_utc * 1000 + per_ms / 2) / per_ms;
+        int8_t parity = (sidx % 2) == 0 ? 1 : 0; /* 1=even 0=odd */
         if (parity != r->prev_slot_parity) {
             r->prev_slot_parity = parity;
             lv_label_set_text(r->l_slot, parity ? "E" : "O");
@@ -828,8 +835,8 @@ static void t_refresh_cb(lv_timer_t *t)
 // so this never drifts out of sync with the slot engine's actual period -
 // the bar's range (lv_bar_set_range) is kept in step alongside it below.
 // Also owns the bar colour: red while a TX burst is ACTIVE, otherwise the
-// EVEN/ODD slot colour (parity is still defined on the 15 s FT8 grid even
-// while displaying FT4's faster countdown - see the slot_sec note below).
+// EVEN/ODD slot colour, computed on the ACTIVE protocol's grid (7.5 s FT4 /
+// 15 s FT8) so it matches the slot engine and TX parity.
 static void t_slotbar_cb(lv_timer_t *t)
 {
     (void)t;
@@ -849,10 +856,11 @@ static void t_slotbar_cb(lv_timer_t *t)
     if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ACTIVE) {
         col = lv_palette_main(LV_PALETTE_RED);
     } else {
-        // Slot parity (EVEN/ODD) is an FT8 protocol convention tied to the 15 s
-        // UTC grid - keep colouring off that grid regardless of which period
-        // the bar itself is counting down.
-        bool is_even = (((int64_t)tv.tv_sec / 15) % 2) == 0;
+        // Slot parity (EVEN/ODD) on the ACTIVE protocol's grid (7.5 s FT4 /
+        // 15 s FT8) - must match the slot engine and TX parity (ft8_tx also
+        // uses ft8_op_mode_slot_ms), or the colour flips every OTHER FT4 slot
+        // (the "E E O O" bug the countdown showed).
+        bool is_even = ((now_ms / period_ms) % 2) == 0;
         col = is_even ? lv_color_hex(UI_COLOR_PRIMARY_BORDER) : lv_color_hex(0xE09040);
     }
     lv_obj_set_style_bg_color(s_bar_slot, col, LV_PART_INDICATOR);
@@ -863,15 +871,13 @@ static void t_clock_cb(lv_timer_t *t)
     (void)t;
     if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) return;
 
-    time_t now = time(NULL);
-
     if (s_lbl_count) {
         // FT4's 7.5 s period isn't a whole number of seconds, so derive the
         // countdown from the millisecond remainder (same math as the fast bar
         // in t_slotbar_cb) rather than naively truncating period_ms/1000 -
         // that would lose the half-second and drift the displayed number off
         // the true grid over time. Rounded up to the nearest second for
-        // display. Parity stays on the FT8 15 s grid regardless of period.
+        // display. Parity is on the active protocol's grid (see t_slotbar_cb).
         struct timeval tv_now;
         gettimeofday(&tv_now, NULL);
         int period_ms = ft8_op_mode_slot_ms();
@@ -880,7 +886,7 @@ static void t_clock_cb(lv_timer_t *t)
         int remain = (remain_ms + 999) / 1000;
         if (remain < 0) remain = 0;          // clamp: bounds the snprintf width below
         if (remain > 15) remain = 15;
-        bool is_even = (((int64_t)now / 15) % 2) == 0;
+        bool is_even = ((now_ms / period_ms) % 2) == 0;
         char b[16];
         snprintf(b, sizeof(b), "%s  %d s", is_even ? "EVEN" : "ODD", remain);
         lv_label_set_text(s_lbl_count, b);
