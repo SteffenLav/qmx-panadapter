@@ -775,10 +775,17 @@ static void link_task(void *arg)
                     }
                     // Readback: a successful CDC write only proves the bytes
                     // reached the radio, not that it accepted them. Query Q9;
-                    // and check the radio actually reports IQ mode on - caught
-                    // a real-world case (Dirk DK7CVD, 1_04 beta firmware) where
-                    // the System Config screen showed IQ mode still off despite
-                    // this write succeeding.
+                    // and check the radio actually reports IQ mode on.
+                    //
+                    // The QMX echoes every write back ("Q91;") asynchronously.
+                    // Without the delay below that echo arrives DURING the wait
+                    // loop for the real Q9; response and triggers a false
+                    // "confirmed ON" — IQ mode never actually turns on, leaving
+                    // the FT8 decoder with non-IQ audio (140 candidates, 0
+                    // decodes), cleared only by a QMX power cycle.
+                    // Wait long enough for the write echo to arrive and be
+                    // consumed, THEN flush and send the real query.
+                    vTaskDelay(pdMS_TO_TICKS(150));
                     s_q9_resp_len = 0;
                     const char *iq_q = "Q9;";
                     esp_err_t qerr = cdc_acm_host_data_tx_blocking(

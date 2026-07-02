@@ -86,7 +86,7 @@ The entire app runs on **edge swipes and taps on the top bar**:
 
 | Action | Does |
 |---|---|
-| Swipe → from **left edge** | Toggle Panadapter ↔ FT8 view |
+| Swipe → from **left edge** | Toggle Panadapter ↔ FT8/FT4 view |
 | Swipe ← from **right edge** | Open settings drawer |
 | Swipe ↑ from **bottom edge** | Open memory channel picker |
 | Tap any **top bar item** | Open that item's selector (Freq, Mode, BW, etc.) |
