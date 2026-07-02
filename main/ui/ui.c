@@ -1299,9 +1299,9 @@ static char s_current_mode[8] = "USB";  // Phase 5.10F: latest CAT mode for snap
 static char s_current_band[8] = "---";  // Phase 9 (v0.9.5): cached band string for web JSON
 static uint32_t s_passband_width_hz = 0;  // Phase 5.10G: 0 = use mode default; else from CAT FW
 static uint16_t s_cw_pitch_hz = 700;  // CW sidetone offset (Hz); applied to touch-tune in CW modes
-static bool s_snap_to_peak = true;    // tap-to-tune snaps to strongest nearby signal (NVS-backed)
+static const bool s_snap_to_peak = false;  // snap-to-signal removed (drawer toggle gone); tap tunes exactly where touched
 static bool s_distance_in_miles = false;  // FT8 distance unit toggle (NVS-backed)
-static bool s_ft8_sync_lines = false;  // Panadapter: FT8-sync-vs-SNTP waterfall lines + 3x speed (NVS-backed)
+static const bool s_ft8_sync_lines = false;  // FT8 sync-line diagnostic removed (drawer toggle gone); overlay/3x-WF never engage
 static bool s_sim_mode_en = false;     // FT8 simulation mode toggle (NVS-backed)
 
 // ---- Sticky per-mode settings (v0.16.0) --------------------------------
@@ -1575,9 +1575,7 @@ static lv_obj_t *s_slider_brightness = NULL;
 static uint8_t s_saved_ui_mode = UI_MODE_PANADAPTER;
 static lv_obj_t *s_lbl_brightness = NULL;
 static lv_obj_t *s_check_flip = NULL;  // 180-degree display flip checkbox
-static lv_obj_t *s_check_snap = NULL;  // snap-to-peak tap-to-tune checkbox
 static lv_obj_t *s_check_distance_miles = NULL;  // FT8 distance unit (km/miles) checkbox
-static lv_obj_t *s_check_ft8_sync_lines = NULL;  // FT8 sync lines (3x waterfall) checkbox
 static lv_obj_t *s_check_sim_mode = NULL;        // FT8 simulation mode checkbox
 static lv_obj_t *s_lbl_sim_mode   = NULL;        // its label (dimmed alongside the checkbox)
 static bool      s_sim_mode_locked = false;      // true while in FT4 - the phantom-station
@@ -2811,8 +2809,6 @@ void ui_init(lv_display_t *disp)
         s_freq_kp_dy = s.freq_kp_dy;
         s_freq_kp_small = s.freq_kp_small;
         s_passband_width_hz = s.passband_width_hz;  // band-plan passband indicator shows the real width from boot, not a generic default
-        s_snap_to_peak = s.snap_to_peak;
-        ESP_LOGI(TAG, "Snap-to-peak loaded from NVS: %s", s_snap_to_peak ? "on" : "off");
         // Load zoom from NVS; pan always resets to 0 on boot.
         if (s.zoom_factor >= 1.0f && s.zoom_factor <= 24.0f)
             s_zoom_factor = s.zoom_factor;
@@ -4507,14 +4503,6 @@ static void iq_balance_toggle_cb(lv_event_t *e)
     if (on) iq_balance_reset();
 }
 
-static void drawer_check_snap_cb(lv_event_t *e)
-{
-    lv_obj_t *cb = lv_event_get_target(e);
-    s_snap_to_peak = lv_obj_has_state(cb, LV_STATE_CHECKED);
-    settings_set_snap_to_peak(s_snap_to_peak);
-    ESP_LOGI(TAG, "snap-to-peak %s", s_snap_to_peak ? "enabled" : "disabled");
-}
-
 static void drawer_check_distance_miles_cb(lv_event_t *e)
 {
     lv_obj_t *cb = lv_event_get_target(e);
@@ -4558,15 +4546,6 @@ static void drawer_check_sim_mode_cb(lv_event_t *e)
     settings_set_sim_mode_en(s_sim_mode_en);
     ui_refresh_sim_mode_indicator();
     ESP_LOGI(TAG, "FT8 simulation mode: %s", s_sim_mode_en ? "ON (radio not keyed)" : "off");
-}
-
-static void drawer_check_ft8_sync_lines_cb(lv_event_t *e)
-{
-    lv_obj_t *cb = lv_event_get_target(e);
-    s_ft8_sync_lines = lv_obj_has_state(cb, LV_STATE_CHECKED);
-    settings_set_ft8_sync_lines(s_ft8_sync_lines);
-    render_set_waterfall_2x(s_ft8_sync_lines);
-    ESP_LOGI(TAG, "FT8 sync lines: %s", s_ft8_sync_lines ? "on (3x waterfall)" : "off");
 }
 
 // Create a transparent, full-width, non-scrollable container for one
@@ -4768,63 +4747,6 @@ static void drawer_build(void)
         y += 56;
     }
 
-    // Snap-to-peak ON/OFF row: when on, tap-to-tune pulls onto the strongest
-    // nearby signal (zoom-scaled window); when off the tap tunes exactly where
-    // you touched (after the mode grid-snap).
-    {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_SNAP, y, 56);
-        lv_obj_t *snap_lbl = lv_label_create(sec);
-        lv_label_set_text(snap_lbl, "Snap to signal");
-        lv_obj_set_style_text_color(snap_lbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(snap_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(snap_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
-        // Load fresh: drawer_build() runs before the boot-time NVS load below,
-        // so read the saved value here for a correct initial checkbox state
-        // (and sync the cached flag the touch handler uses).
-        qmx_settings_t scfg_snap;
-        settings_load_all(&scfg_snap);
-        s_snap_to_peak = scfg_snap.snap_to_peak;
-        s_check_snap = make_drawer_checkbox(sec, s_snap_to_peak, drawer_check_snap_cb, NULL);
-        lv_obj_align(s_check_snap, LV_ALIGN_TOP_RIGHT, 0, 6);
-        y += 56;
-    }
-
-    // FT8 decode-list distance unit (km/miles). This is an FT8-screen-only
-    // setting, so it lives in its own section kept visible in FT8 mode (see
-    // drawer_set_ft8_mode's keep[] list) rather than buried in a
-    // panadapter-only section.
-    {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_DISTANCE, y, 56);
-        lv_obj_t *dist_lbl = lv_label_create(sec);
-        lv_label_set_text(dist_lbl, "Distance in miles");
-        lv_obj_set_style_text_color(dist_lbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(dist_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(dist_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
-        qmx_settings_t scfg_dist;
-        settings_load_all(&scfg_dist);
-        s_distance_in_miles = scfg_dist.distance_in_miles;
-        s_check_distance_miles = make_drawer_checkbox(sec, s_distance_in_miles, drawer_check_distance_miles_cb, NULL);
-        lv_obj_align(s_check_distance_miles, LV_ALIGN_TOP_RIGHT, 0, 6);
-        y += 56;
-    }
-    // FT8 simulation mode: phantom-station practice partner, real radio
-    // never keyed (see ft8_sim.h). FT8-only - same exclusive-to-FT8-mode
-    // pattern as DRAWER_SEC_DISTANCE above, not a Panadapter-mode setting.
-    {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_SIMMODE, y, 56);
-        s_lbl_sim_mode = lv_label_create(sec);
-        lv_label_set_text(s_lbl_sim_mode, "FT8 Simulation Mode");
-        lv_obj_set_style_text_color(s_lbl_sim_mode, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(s_lbl_sim_mode, &lv_font_montserrat_28, 0);
-        lv_obj_align(s_lbl_sim_mode, LV_ALIGN_TOP_LEFT, 0, 10);
-        qmx_settings_t scfg_sim;
-        settings_load_all(&scfg_sim);
-        s_sim_mode_en = scfg_sim.sim_mode_en;
-        s_check_sim_mode = make_drawer_checkbox(sec, s_sim_mode_en, drawer_check_sim_mode_cb, NULL);
-        lv_obj_align(s_check_sim_mode, LV_ALIGN_TOP_RIGHT, 0, 6);
-        ui_refresh_sim_mode_indicator();   // also applies the FT4 lock (apply_sim_mode_lock)
-        y += 56;
-    }
     // Presets section: header + three buttons side-by-side
     {
         lv_obj_t *sec = drawer_section(DRAWER_SEC_PRESETS, y, 108);
@@ -4902,6 +4824,33 @@ static void drawer_build(void)
         lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
         lv_obj_center(lbl);
         y += 72;
+    }
+
+    // Band-plan region: drives the coloured CW/Digi/Phone strip under the freq
+    // axis. "Auto" derives the region from the operator's grid square. Placed
+    // right under Callsign & Grid since "Auto" depends on the grid square.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_BPREGION, y, 100);
+        lv_obj_t *hdr = lv_label_create(sec);
+        lv_label_set_text(hdr, "Band-plan region");
+        lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        s_dropdown_bpregion = lv_dropdown_create(sec);
+        lv_dropdown_set_options(s_dropdown_bpregion,
+                                "Auto (from grid)\nRegion 1 (EU/AF)\nRegion 2 (Americas)\nRegion 3 (Asia/Pac)");
+        lv_obj_set_size(s_dropdown_bpregion, DRAWER_W - 32, 50);
+        lv_obj_align(s_dropdown_bpregion, LV_ALIGN_TOP_LEFT, 0, 40);
+        lv_obj_set_style_text_font(s_dropdown_bpregion, &lv_font_montserrat_28, 0);
+        {
+            qmx_settings_t bcfg;
+            settings_load_all(&bcfg);
+            if (bcfg.bandplan_region <= 3) lv_dropdown_set_selected(s_dropdown_bpregion, bcfg.bandplan_region);
+        }
+        lv_obj_add_event_cb(s_dropdown_bpregion, drawer_dropdown_bpregion_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(s_dropdown_bpregion, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
+        y += 100;
     }
 
     // dB Range section
@@ -5134,32 +5083,6 @@ static void drawer_build(void)
         y += 100;
     }
 
-    // Band-plan region: drives the coloured CW/Digi/Phone strip under the freq
-    // axis. "Auto" derives the region from the operator's grid square.
-    {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_BPREGION, y, 100);
-        lv_obj_t *hdr = lv_label_create(sec);
-        lv_label_set_text(hdr, "Band-plan region");
-        lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
-        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
-        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
-
-        s_dropdown_bpregion = lv_dropdown_create(sec);
-        lv_dropdown_set_options(s_dropdown_bpregion,
-                                "Auto (from grid)\nRegion 1 (EU/AF)\nRegion 2 (Americas)\nRegion 3 (Asia/Pac)");
-        lv_obj_set_size(s_dropdown_bpregion, DRAWER_W - 32, 50);
-        lv_obj_align(s_dropdown_bpregion, LV_ALIGN_TOP_LEFT, 0, 40);
-        lv_obj_set_style_text_font(s_dropdown_bpregion, &lv_font_montserrat_28, 0);
-        {
-            qmx_settings_t bcfg;
-            settings_load_all(&bcfg);
-            if (bcfg.bandplan_region <= 3) lv_dropdown_set_selected(s_dropdown_bpregion, bcfg.bandplan_region);
-        }
-        lv_obj_add_event_cb(s_dropdown_bpregion, drawer_dropdown_bpregion_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        lv_obj_add_event_cb(s_dropdown_bpregion, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
-        y += 100;
-    }
-
     // Waterfall colorisation section: black level / contrast / per-bin floor
     // blend / FFT window. All slide live - changes scroll in from the top of
     // the waterfall as you drag.
@@ -5235,24 +5158,44 @@ static void drawer_build(void)
         y += 384;
     }
 
-    // Diagnostic: FT8-sync-vs-SNTP waterfall slot-boundary lines (magenta =
-    // FT8-derived clock, white = SNTP/QMX-only clock with the FT8 nudges
-    // subtracted back out) + 3x waterfall scroll speed while watching them.
-    // Panadapter-only - not added to drawer_set_ft8_mode's keep[] list, so
-    // it auto-hides in FT8 mode like any other panadapter-only section.
+    // FT8-only sections built LAST so they never leave a gap in Panadapter
+    // mode (where they're hidden): the !ft8 layout uses each section's fixed
+    // build-order y, so a hidden section mid-list would show as empty space.
+    // At the end they sit below the last visible Panadapter section (off the
+    // bottom), and drawer_set_ft8_mode() restacks them at the top in FT8 mode.
+
+    // FT8 decode-list distance unit (km/miles). FT8-screen-only; kept visible
+    // in FT8 mode via drawer_set_ft8_mode's keep[] list.
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_FT8SYNC, y, 56);
-        lv_obj_t *sync_lbl = lv_label_create(sec);
-        lv_label_set_text(sync_lbl, "FT8 sync lines (3x WF)");
-        lv_obj_set_style_text_color(sync_lbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(sync_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(sync_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
-        qmx_settings_t scfg_sync;
-        settings_load_all(&scfg_sync);
-        s_ft8_sync_lines = scfg_sync.ft8_sync_lines;
-        render_set_waterfall_2x(s_ft8_sync_lines);
-        s_check_ft8_sync_lines = make_drawer_checkbox(sec, s_ft8_sync_lines, drawer_check_ft8_sync_lines_cb, NULL);
-        lv_obj_align(s_check_ft8_sync_lines, LV_ALIGN_TOP_RIGHT, 0, 6);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_DISTANCE, y, 56);
+        lv_obj_t *dist_lbl = lv_label_create(sec);
+        lv_label_set_text(dist_lbl, "Distance in miles");
+        lv_obj_set_style_text_color(dist_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(dist_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(dist_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
+        qmx_settings_t scfg_dist;
+        settings_load_all(&scfg_dist);
+        s_distance_in_miles = scfg_dist.distance_in_miles;
+        s_check_distance_miles = make_drawer_checkbox(sec, s_distance_in_miles, drawer_check_distance_miles_cb, NULL);
+        lv_obj_align(s_check_distance_miles, LV_ALIGN_TOP_RIGHT, 0, 6);
+        y += 56;
+    }
+    // FT8 simulation mode: phantom-station practice partner, real radio
+    // never keyed (see ft8_sim.h). FT8-only - same exclusive-to-FT8-mode
+    // pattern as DRAWER_SEC_DISTANCE above, not a Panadapter-mode setting.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SIMMODE, y, 56);
+        s_lbl_sim_mode = lv_label_create(sec);
+        lv_label_set_text(s_lbl_sim_mode, "FT8 Simulation Mode");
+        lv_obj_set_style_text_color(s_lbl_sim_mode, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_sim_mode, &lv_font_montserrat_28, 0);
+        lv_obj_align(s_lbl_sim_mode, LV_ALIGN_TOP_LEFT, 0, 10);
+        qmx_settings_t scfg_sim;
+        settings_load_all(&scfg_sim);
+        s_sim_mode_en = scfg_sim.sim_mode_en;
+        s_check_sim_mode = make_drawer_checkbox(sec, s_sim_mode_en, drawer_check_sim_mode_cb, NULL);
+        lv_obj_align(s_check_sim_mode, LV_ALIGN_TOP_RIGHT, 0, 6);
+        ui_refresh_sim_mode_indicator();   // also applies the FT4 lock (apply_sim_mode_lock)
         y += 56;
     }
 
