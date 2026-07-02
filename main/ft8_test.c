@@ -61,6 +61,7 @@
 
 #include "dsp.h"
 #include "audio/audio.h"
+#include "dsp/iq_balance.h"
 #include "cat/cat.h"
 #include "storage/settings.h"
 #include "ui/ui_mode.h"
@@ -71,6 +72,7 @@
 #include "ft8_robot.h"
 #include "time_sync.h"
 #include "ft8_status.h"
+#include "ui/ui.h"
 
 static const char *TAG = "ft8_test";
 
@@ -165,6 +167,14 @@ int ft8_op_mode_slot_ms(void)
 // ~9 KB internal free; 2 restores comfortable headroom.
 #define FT8_NUM_BUFFERS       2
 #define DECODE_QUEUE_DEPTH    FT8_NUM_BUFFERS
+
+// Stuck-pipeline watchdog: consecutive idle-RX slots with candidates-but-zero-
+// decodes before a soft audio+IQ reset. A genuinely wedged pipeline stays
+// wedged forever, so a long run costs nothing to wait out; a merely quiet band
+// recovers within a slot or two. Was 2 (far too twitchy - fired on any brief
+// lull, and its reset empties the decode list + reconverges IQ, which glitched
+// the display and disrupted in-progress QSOs).
+#define FT8_STUCK_RESET_SLOTS 8
 
 // Wall-clock budget for one slot's decode (monitor_process + candidate loop,
 // measured from the top of decode_slot). Candidates are processed strongest
@@ -262,6 +272,20 @@ static int           s_pool_proto = -1;   // ftx_protocol_t, or -1
 // one buffer serves every slot (capture is strictly sequential).
 static float        *s_cap_scratch = NULL;
 
+// Shared kiss-FFT scratch, reused by EVERY monitor's STFT (monitor_process).
+// monitor_process is called only from the capture task, one monitor at a time,
+// strictly sequentially (captures never overlap; decode works on the pre-built
+// waterfall and never touches the FFT), so a single shared config is race-free.
+// Sharing exists to force the hot FFT buffer into fast INTERNAL SRAM: with the
+// per-monitor buffers monitor_init allocates, only the first won the scarce-
+// internal-RAM lottery and the second spilled to PSRAM, making its STFT ~10x
+// slower (measured) and collapsing decode on every slot that landed on it -
+// especially in FT4, whose tight 7.5 s slot can't absorb a 4.9 s STFT. One
+// shared buffer also halves the pool's internal-RAM footprint.
+static void         *s_shared_fft_work = NULL;
+static kiss_fftr_cfg s_shared_fft_cfg  = NULL;
+static bool          s_shared_fft_internal = false;  // diag: did it land internal?
+
 // Return the index of a free pool monitor, or -1 if all are in flight.
 static int find_free_buffer(void)
 {
@@ -271,16 +295,31 @@ static int find_free_buffer(void)
     return -1;
 }
 
+// Release the shared FFT scratch (once). Callers must first NULL each monitor's
+// fft_work so monitor_free() doesn't also try to free it (double-free).
+static void free_shared_fft(void)
+{
+    if (s_shared_fft_work) { free(s_shared_fft_work); s_shared_fft_work = NULL; }
+    s_shared_fft_cfg = NULL;
+    s_shared_fft_internal = false;
+}
+
 // Free the monitor pool + capture scratch (idempotent; safe on partial alloc).
 static void free_capture_pool(void)
 {
     for (int i = 0; i < FT8_NUM_BUFFERS; i++) {
         if (s_mon_pool[i]) {
+            // Only detach the shared FFT (freed once below). If a partial build
+            // left this monitor with its OWN per-monitor fft_work (shared not
+            // set up yet), leave it so monitor_free() frees it - no leak.
+            if (s_mon_pool[i]->fft_work == s_shared_fft_work)
+                s_mon_pool[i]->fft_work = NULL;
             monitor_free(s_mon_pool[i]);
             heap_caps_free(s_mon_pool[i]);
             s_mon_pool[i] = NULL;
         }
     }
+    free_shared_fft();
     if (s_cap_scratch) { heap_caps_free(s_cap_scratch); s_cap_scratch = NULL; }
     s_pool_proto = -1;
 }
@@ -298,11 +337,16 @@ static void free_monitor_objects(void)
 {
     for (int i = 0; i < FT8_NUM_BUFFERS; i++) {
         if (s_mon_pool[i]) {
+            if (s_mon_pool[i]->fft_work == s_shared_fft_work)
+                s_mon_pool[i]->fft_work = NULL;  // shared - freed once below
             monitor_free(s_mon_pool[i]);
             heap_caps_free(s_mon_pool[i]);
             s_mon_pool[i] = NULL;
         }
     }
+    // The shared FFT is nfft-specific, so a protocol rebuild must drop it too;
+    // build_monitor_pool() allocates a fresh one for the new protocol.
+    free_shared_fft();
     s_pool_proto = -1;
 }
 
@@ -344,12 +388,42 @@ static bool build_monitor_pool(ftx_protocol_t proto)
             }
         }
     }
+
+    // Build ONE shared kiss-FFT config in internal SRAM and repoint every
+    // monitor at it (see s_shared_fft_work comment). Try internal first; if the
+    // fragmented internal heap can't hold it right now, fall back to PSRAM -
+    // that's symmetric and no worse than the old spilled buffer, and it can
+    // never fail the pool build.
+    size_t fft_work_size = 0;
+    kiss_fftr_alloc(s_mon_pool[0]->nfft, 0, NULL, &fft_work_size);
+    s_shared_fft_work = heap_caps_malloc(fft_work_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    s_shared_fft_internal = (s_shared_fft_work != NULL);
+    if (!s_shared_fft_work) {
+        s_shared_fft_work = heap_caps_malloc(fft_work_size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    }
+    if (!s_shared_fft_work) {
+        ESP_LOGE(TAG, "shared FFT scratch alloc (%u B) failed", (unsigned)fft_work_size);
+        return false;
+    }
+    size_t chk = fft_work_size;
+    s_shared_fft_cfg = kiss_fftr_alloc(s_mon_pool[0]->nfft, 0, s_shared_fft_work, &chk);
+    for (int i = 0; i < FT8_NUM_BUFFERS; i++) {
+        // Drop the per-monitor FFT scratch monitor_init created (allocated with
+        // plain malloc, so free() it) and point at the shared one.
+        free(s_mon_pool[i]->fft_work);
+        s_mon_pool[i]->fft_work = s_shared_fft_work;
+        s_mon_pool[i]->fft_cfg  = s_shared_fft_cfg;
+    }
+
     s_pool_proto = (int)proto;
     ESP_LOGI(TAG, "monitor pool built for %s: block=%d samples, %d blocks/slot, %u KB waterfall each",
              proto == FTX_PROTOCOL_FT4 ? "FT4" : "FT8",
              s_mon_pool[0]->block_size, s_mon_pool[0]->wf.max_blocks,
              (unsigned)((size_t)s_mon_pool[0]->wf.max_blocks * s_mon_pool[0]->wf.block_stride
                         * sizeof(s_mon_pool[0]->wf.mag[0]) / 1024));
+    ESP_LOGI(TAG, "shared FFT scratch: %u B in %s (nfft=%d) - all %d monitors share it",
+             (unsigned)fft_work_size, s_shared_fft_internal ? "INTERNAL" : "PSRAM",
+             s_mon_pool[0]->nfft, FT8_NUM_BUFFERS);
     return true;
 }
 
@@ -565,6 +639,18 @@ static float ft8_estimate_noise_db(const monitor_t *mon)
 // as an NTP/PLL loop filter) while a genuine sustained offset still gets
 // corrected, just over a few cycles instead of in one noisy jump.
 #define FT8_AUTOSYNC_GAIN 0.3f
+
+// Hard clamp on the per-slot clock nudge, applied AFTER the gain. The gain
+// alone assumes the raw measurement is only mildly noisy (it was tuned on FT8,
+// whose raw offsets sit around ±200-300 ms) - but FT4's tighter slot and fewer
+// decodes/slot throw much larger raw values (field data: ±800-950 ms), and 30%
+// of that is still a ~250 ms single-slot jump, enough to visibly shift the slot
+// countdown/parity on screen. Clamping the applied step keeps the deliberate
+// "track the on-air population's collective offset" behaviour (a genuine
+// sustained offset is still followed, just approached a few ms per slot over
+// several slots) while guaranteeing no single noisy slot can yank the clock far
+// enough to be seen. This is the "no big fluctuations" guarantee.
+#define FT8_AUTOSYNC_MAX_STEP_MS 20
 
 // Robust average of per-candidate timing samples: sorts a (small) working
 // copy, takes the median, then means only the samples within
@@ -829,6 +915,11 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
             // decode). The periodic 5-min QMX poll / manual modal Apply
             // already cover keeping the QMX's own RTC in the ballpark.
             int damped_ms = (int)roundf(s_last_timing_ms * FT8_AUTOSYNC_GAIN);
+            // Clamp the per-slot step so a noisy slot can't visibly jump the
+            // clock (see FT8_AUTOSYNC_MAX_STEP_MS). A sustained collective
+            // offset is still tracked, a few ms per slot.
+            if (damped_ms >  FT8_AUTOSYNC_MAX_STEP_MS) damped_ms =  FT8_AUTOSYNC_MAX_STEP_MS;
+            if (damped_ms < -FT8_AUTOSYNC_MAX_STEP_MS) damped_ms = -FT8_AUTOSYNC_MAX_STEP_MS;
             if (damped_ms != 0) {
                 time_sync_apply_correction_ms_quiet(damped_ms);
             }
@@ -845,7 +936,7 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
     size_t heap_i_min  = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL) / 1024;
     size_t heap_i_lblk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024;
 
-    ft8_status_set("RX: %d decoded\n(%d candidates)", n_decoded, n_cand);
+    ft8_status_set("RX: %d decoded", n_decoded);
     ESP_LOGI(TAG,
         "slot %d UTC %lld: off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d skip=%d "
         "backlog=%dpr drop=%dpr timing=%+dms heap_i=%uKB(min=%uKB,lblk=%uKB) heap_p=%uKB",
@@ -870,6 +961,44 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
         }
     } else if (heap_i > 60) {
         s_heap_warned = false;  // re-arm once we recover comfortably
+    }
+
+    // Stuck-decoder watchdog: cand>20 with dec=0 was meant to catch a corrupted
+    // audio pipeline (bad UAC samples, IQ mode dropout, ring-buffer glitch) and
+    // soft-reset it (IQ reconverge + floor reseed) instead of needing a QMX
+    // power cycle. Two caveats learned the hard way:
+    //  - cand is ~always 140 (noise false-positives hit the search cap every
+    //    slot), so the real trigger is just "N consecutive zero-decode RX
+    //    slots" - which a merely quiet band produces legitimately. Hence the
+    //    long FT8_STUCK_RESET_SLOTS run before acting (was 2 = far too twitchy).
+    //  - the reset empties the decode list and briefly de-syncs IQ, so it must
+    //    NOT fire mid-QSO or while transmitting: sparse RX is normal then (own
+    //    TX desenses RX; the partner may be the only station on our tone), and
+    //    a reset there disrupts the exchange - it was actively timing out real
+    //    QSOs. Skip entirely (and reset the counter) whenever TX or a QSO is in
+    //    progress.
+    // Counter is static (persists across slots; this is the decode task, one
+    // instance, no concurrency concern).
+    {
+        static int s_stuck_slots = 0;
+        bool tx_or_qso = (ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE) ||
+                         (ft8_qso_get_state() != FT8_QSO_IDLE);
+        if (tx_or_qso) {
+            s_stuck_slots = 0;   // sparse RX is expected here; never reset mid-exchange
+        } else if (n_cand > 20 && n_decoded == 0) {
+            s_stuck_slots++;
+            if (s_stuck_slots >= FT8_STUCK_RESET_SLOTS) {
+                ESP_LOGW(TAG, "ft8: %d consecutive zero-decode idle RX slots "
+                         "(cand=%d) — soft-resetting audio+IQ",
+                         s_stuck_slots, n_cand);
+                s_stuck_slots = 0;
+                iq_balance_reset();
+                audio_request_reset();
+                ui_toast("FT8 stuck — resetting audio");
+            }
+        } else {
+            s_stuck_slots = 0;
+        }
     }
 
     ft8_qso_advance(slot_sec);

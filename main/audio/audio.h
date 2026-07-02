@@ -30,3 +30,12 @@ size_t audio_ring_backlog_pairs(void);
 
 /** @brief Running total of stereo pairs dropped on ring-full since boot. */
 uint32_t audio_get_dropped_total(void);
+
+/**
+ * @brief Request a soft audio reset on the next live sample batch.
+ *
+ * Sets the same flag the UAC stream-restart path sets, causing
+ * ui_flat_mode_reset() to fire when the next non-empty audio poll
+ * arrives.  Safe to call from any task.
+ */
+void audio_request_reset(void);

@@ -186,6 +186,11 @@ uint32_t audio_get_dropped_total(void)
     return s_dropped_total;
 }
 
+void audio_request_reset(void)
+{
+    s_flat_reset_pending = true;
+}
+
 static void uac_lib_event_cb(uint8_t addr, uint8_t iface_num,
                              const uac_host_driver_event_t event, void *arg)
 {
