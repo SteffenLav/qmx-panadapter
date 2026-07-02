@@ -611,16 +611,33 @@ static void freq_kp_drag_cb(lv_event_t *e)
     }
 }
 
+// 40% opaque (60% see-through) - applied to the panel and every key so the
+// whole pad reads as one uniformly translucent surface, not a solid panel
+// with see-through gaps between opaque buttons.
+#define FREQ_KP_OPA LV_OPA_40
+
 static void freq_popup_build(void)
 {
+    // The DiGi/USB/LSB/CW mode row is only useful for the Memory channel
+    // editor (which sets s_freq_picker_cb). The top-bar Freq keypad already
+    // has a mode selector in the top bar, so it omits the row (and is shorter).
+    // Reused below to keep the Memory channel editor's pad untouched (solid,
+    // scrim-dimmed background like every other modal) while the top-bar
+    // keypad gets the translucent, spectrum-stays-visible treatment.
+    bool show_mode = (s_freq_picker_cb != NULL);
+    lv_opa_t kp_opa = show_mode ? LV_OPA_COVER : FREQ_KP_OPA;
+
     lv_obj_t *ov = lv_obj_create(lv_layer_top());
     lv_obj_set_size(ov, LV_HOR_RES, LV_VER_RES);
     lv_obj_set_pos(ov, 0, 0);
     lv_obj_set_style_bg_color(ov, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(ov, UI_OPA_MODAL_SCRIM, 0);
+    // Memory channel editor keeps the normal modal scrim; the top-bar
+    // keypad has none - the live panadapter stays fully visible behind it,
+    // and the panel/keys carry the translucency instead (see below).
+    lv_obj_set_style_bg_opa(ov, show_mode ? UI_OPA_MODAL_SCRIM : LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(ov, 0, 0);
     lv_obj_clear_flag(ov, LV_OBJ_FLAG_SCROLLABLE);
-    // No tap-outside-to-close: with the lighter scrim + small size now making
+    // No tap-outside-to-close: with no scrim + small size now making
     // it easy to see/reach past the pad to the spectrum behind it, an
     // accidental background tap used to silently cancel the whole entry.
     // Cancel/Enter are the only ways out now.
@@ -630,11 +647,6 @@ static void freq_popup_build(void)
     lv_obj_add_event_cb(ov, freq_kp_swipe_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(ov, freq_kp_swipe_cb, LV_EVENT_RELEASED, NULL);
     s_freq_popup = ov;
-
-    // The DiGi/USB/LSB/CW mode row is only useful for the Memory channel
-    // editor (which sets s_freq_picker_cb). The top-bar Freq keypad already
-    // has a mode selector in the top bar, so it omits the row (and is shorter).
-    bool show_mode = (s_freq_picker_cb != NULL);
 
     // Two discrete sizes (pinch toggles between them, see pinch_poll_cb) -
     // not continuous scaling, since LVGL's built-in fonts are fixed bitmap
@@ -670,6 +682,7 @@ static void freq_popup_build(void)
     lv_obj_set_size(panel, panel_w, panel_h);
     lv_obj_align(panel, LV_ALIGN_CENTER, s_freq_kp_dx, s_freq_kp_dy);
     lv_obj_set_style_bg_color(panel, lv_color_hex(UI_COLOR_SURFACE), 0);
+    lv_obj_set_style_bg_opa(panel, kp_opa, 0);  // translucent - spectrum stays faintly visible through the pad (opaque in Memory mode)
     lv_obj_set_style_border_color(panel, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_set_style_border_width(panel, 1, 0);
     lv_obj_set_style_radius(panel, 10, 0);
@@ -721,6 +734,7 @@ static void freq_popup_build(void)
         lv_obj_set_size(btn, cell_w, cell_h);
         lv_obj_set_pos(btn, col * (cell_w + gap), grid_top + row * (cell_h + gap));
         lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_KEY_BG), 0);
+        lv_obj_set_style_bg_opa(btn, kp_opa, 0);
         lv_obj_set_style_radius(btn, 6, 0);
         lv_obj_add_event_cb(btn, freq_key_cb, LV_EVENT_CLICKED, (void *)(intptr_t)keycodes[i]);
         if (keycodes[i] == 'D') {
@@ -744,6 +758,7 @@ static void freq_popup_build(void)
     lv_obj_set_size(layout_btn, btn_w, btn_h);
     lv_obj_set_pos(layout_btn, 0, unit_y);
     lv_obj_set_style_bg_color(layout_btn, lv_color_hex(UI_COLOR_KEY_BG), 0);
+    lv_obj_set_style_bg_opa(layout_btn, kp_opa, 0);
     lv_obj_set_style_radius(layout_btn, 6, 0);
     lv_obj_add_event_cb(layout_btn, freq_key_cb, LV_EVENT_CLICKED, (void *)(intptr_t)'T');
     s_freq_layout_lbl = lv_label_create(layout_btn);
@@ -756,6 +771,7 @@ static void freq_popup_build(void)
     lv_obj_set_size(clear_btn, btn_w, btn_h);
     lv_obj_set_pos(clear_btn, btn_w + gap, unit_y);
     lv_obj_set_style_bg_color(clear_btn, lv_color_hex(UI_COLOR_KEY_BG), 0);
+    lv_obj_set_style_bg_opa(clear_btn, kp_opa, 0);
     lv_obj_set_style_radius(clear_btn, 6, 0);
     lv_obj_add_event_cb(clear_btn, freq_key_cb, LV_EVENT_CLICKED, (void *)(intptr_t)'A');
     lv_obj_t *clear_lbl = lv_label_create(clear_btn);
@@ -775,6 +791,7 @@ static void freq_popup_build(void)
             lv_obj_t *btn = lv_btn_create(panel);
             lv_obj_set_size(btn, mode_w, btn_h);
             lv_obj_set_pos(btn, i * (mode_w + gap), mode_y);
+            lv_obj_set_style_bg_opa(btn, kp_opa, 0);
             lv_obj_set_style_radius(btn, 6, 0);
             lv_obj_add_event_cb(btn, freq_mode_cb, LV_EVENT_CLICKED, (void *)s_freq_modes[i]);
             lv_obj_t *lbl = lv_label_create(btn);
@@ -794,6 +811,7 @@ static void freq_popup_build(void)
     lv_obj_set_size(cancel_btn, btn_w, btn_h);
     lv_obj_set_pos(cancel_btn, 0, btn_y);
     lv_obj_set_style_bg_color(cancel_btn, lv_color_hex(UI_COLOR_DANGER), 0);
+    lv_obj_set_style_bg_opa(cancel_btn, kp_opa, 0);
     lv_obj_set_style_border_color(cancel_btn, lv_color_hex(UI_COLOR_DANGER_BORDER), 0);
     lv_obj_set_style_border_width(cancel_btn, 2, 0);
     lv_obj_set_style_radius(cancel_btn, 6, 0);
@@ -808,6 +826,7 @@ static void freq_popup_build(void)
     lv_obj_set_size(enter_btn, btn_w, btn_h);
     lv_obj_set_pos(enter_btn, btn_w + gap, btn_y);
     lv_obj_set_style_bg_color(enter_btn, lv_color_hex(UI_COLOR_SUCCESS), 0);
+    lv_obj_set_style_bg_opa(enter_btn, kp_opa, 0);
     lv_obj_set_style_border_color(enter_btn, lv_color_hex(UI_COLOR_SUCCESS_BORDER), 0);
     lv_obj_set_style_border_width(enter_btn, 2, 0);
     lv_obj_set_style_radius(enter_btn, 6, 0);
@@ -4614,6 +4633,17 @@ static void toast_hide_cb(lv_timer_t *t)
 
 void ui_toast(const char *msg)
 {
+    // Unlike every other ui_toast() call site (touch/button handlers already
+    // running on the LVGL thread), ft8_test.c's stuck-decoder watchdog calls
+    // this from the FT8 decode task. bsp_display_lock() is a recursive mutex,
+    // so taking it here is a no-op for the already-locked LVGL-thread callers
+    // and makes the cross-thread one safe too - without it, an unlocked LVGL
+    // call from a foreign task can corrupt LVGL's object/animation lists and
+    // wedge the calling task forever (observed: the decode task never
+    // returned, so it never released its capture buffer, and RX got stuck on
+    // "decoder catching up..." permanently).
+    if (!display_lock(100)) return;
+
     if (!s_toast) {
         s_toast = lv_label_create(lv_screen_active());
         lv_obj_set_style_bg_color(s_toast, lv_color_hex(0x000000), 0);
@@ -4636,6 +4666,8 @@ void ui_toast(const char *msg)
         s_toast_timer = lv_timer_create(toast_hide_cb, 1500, NULL);
         lv_timer_set_repeat_count(s_toast_timer, 1);
     }
+
+    display_unlock();
 }
 
 // Build the drawer once. Hidden off-screen on the right initially.
