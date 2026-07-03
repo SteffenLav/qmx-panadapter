@@ -646,6 +646,8 @@ Both are **invisible on the current 1_03_002 firmware** — they only appear whe
 
 **Memory recall in FT8/FT4.** Memory channels that aren't in the DiGi (data) mode are now greyed out and can't be recalled while you're in FT8/FT4 — recalling one would have knocked the radio out of data mode. They can still be edited and rearranged.
 
+**FT4 no longer shows a false "stuck" message on a quiet band.** In FT4 mode a status pop-up reading "FT8 stuck — resetting audio" could appear when nothing was being decoded. Two problems, both fixed: it said "FT8" even in FT4, and the watchdog behind it (which resets the audio pipeline only after a long run with candidates but zero decodes) triggered after just ~60 s in FT4 versus ~120 s in FT8. Because FT4 is far less populated than FT8, an empty decode list is routine there, so it was crying wolf on a merely quiet band. It now waits the same ~2 minutes in both modes and names the correct mode. (Reported by Samuel W7STF.)
+
 **Antenna Tune window.** The AM-mode and SWR-Tune support added in the previous update got its interface finalised: Antenna Tune is now its own window (opened from the settings drawer) with a bigger title and a live SWR/power readout, and the transient "transmitting"/"exited" pop-ups were removed since the on-screen state already makes it obvious.
 
 **Documentation:** confirmed and recorded that AM mode has no selectable receive bandwidth — the QMX firmware uses one fixed wide filter for AM (and digital modes), so the "3.2 kHz" shown in AM is simply what the radio reports, not something adjustable. Only SSB and CW have selectable filter widths.

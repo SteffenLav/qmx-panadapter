@@ -38,6 +38,7 @@
 
 #include "ft8_test.h"
 
+#include <stdio.h>
 #include <string.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -170,11 +171,18 @@ int ft8_op_mode_slot_ms(void)
 
 // Stuck-pipeline watchdog: consecutive idle-RX slots with candidates-but-zero-
 // decodes before a soft audio+IQ reset. A genuinely wedged pipeline stays
-// wedged forever, so a long run costs nothing to wait out; a merely quiet band
-// recovers within a slot or two. Was 2 (far too twitchy - fired on any brief
-// lull, and its reset empties the decode list + reconverges IQ, which glitched
-// the display and disrupted in-progress QSOs).
-#define FT8_STUCK_RESET_SLOTS 8
+// wedged forever, so a long dwell costs nothing to wait out; a merely quiet band
+// recovers within a slot or two. Was 2 slots (far too twitchy - fired on any
+// brief lull, and its reset empties the decode list + reconverges IQ, which
+// glitched the display and disrupted in-progress QSOs).
+//
+// Expressed as WALL-CLOCK time, not a fixed slot count, so it dwells the same
+// ~120 s in both FT8 (15 s slots -> 8 slots) and FT4 (7.5 s slots -> 16 slots).
+// A fixed 8-slot count fired after only ~60 s in FT4 - and since FT4 is far less
+// populated than FT8, a blank decode list is routine there, so it produced a
+// spurious "stuck" toast on a merely quiet FT4 band (W7STF field report,
+// 2026-07-03). The effective per-mode threshold is FT8_STUCK_RESET_MS / slot_ms.
+#define FT8_STUCK_RESET_MS 120000
 
 // Wall-clock budget for one slot's decode (monitor_process + candidate loop,
 // measured from the top of decode_slot). Candidates are processed strongest
@@ -980,7 +988,7 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
     //  - cand is ~always 140 (noise false-positives hit the search cap every
     //    slot), so the real trigger is just "N consecutive zero-decode RX
     //    slots" - which a merely quiet band produces legitimately. Hence the
-    //    long FT8_STUCK_RESET_SLOTS run before acting (was 2 = far too twitchy).
+    //    long dwell (FT8_STUCK_RESET_MS) before acting (was 2 = far too twitchy).
     //  - the reset empties the decode list and briefly de-syncs IQ, so it must
     //    NOT fire mid-QSO or while transmitting: sparse RX is normal then (own
     //    TX desenses RX; the partner may be the only station on our tone), and
@@ -991,20 +999,24 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
     // instance, no concurrency concern).
     {
         static int s_stuck_slots = 0;
+        const char *proto = (ft8_op_mode_get() == FT8_OP_MODE_FT4) ? "FT4" : "FT8";
+        int stuck_thresh = FT8_STUCK_RESET_MS / ft8_op_mode_slot_ms();  // 8 FT8 / 16 FT4
         bool tx_or_qso = (ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE) ||
                          (ft8_qso_get_state() != FT8_QSO_IDLE);
         if (tx_or_qso) {
             s_stuck_slots = 0;   // sparse RX is expected here; never reset mid-exchange
         } else if (n_cand > 20 && n_decoded == 0) {
             s_stuck_slots++;
-            if (s_stuck_slots >= FT8_STUCK_RESET_SLOTS) {
-                ESP_LOGW(TAG, "ft8: %d consecutive zero-decode idle RX slots "
+            if (s_stuck_slots >= stuck_thresh) {
+                ESP_LOGW(TAG, "%s: %d consecutive zero-decode idle RX slots "
                          "(cand=%d) — soft-resetting audio+IQ",
-                         s_stuck_slots, n_cand);
+                         proto, s_stuck_slots, n_cand);
                 s_stuck_slots = 0;
                 iq_balance_reset();
                 audio_request_reset();
-                ui_toast("FT8 stuck — resetting audio");
+                char tb[48];
+                snprintf(tb, sizeof(tb), "%s stuck — resetting audio", proto);
+                ui_toast(tb);
             }
         } else {
             s_stuck_slots = 0;
