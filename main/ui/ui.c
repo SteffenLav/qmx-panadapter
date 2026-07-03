@@ -230,20 +230,23 @@ static void band_popup_open(void)
     s_band_popup = ov;
 
     int btn_h = 64;
-    int panel_w = 140;
-    // Extra 32px margin: covers any flex gap/padding the theme adds between
-    // children, so the last row (15m) never gets clipped by the panel edge.
-    int panel_h = band_count * btn_h + 32;
-    // Fixed position just under the top bar, left-aligned under the band
-    // label. lv_obj_get_coords(s_band_label, ...) was unreliable here (the
-    // LVGL software-rotation pipeline can return stale/incorrect layout
-    // coords), causing the panel to think it had far less room than the
-    // ~660px actually available and clamp/scroll away entries (e.g. 15m).
+    int col_w = 140;
+    // QMX+ can report up to 11 configured bands — too many for a single
+    // vertical list (it scrolled / clipped the lower entries). Lay them out in
+    // up to two side-by-side columns (first `rows` down column 0, the rest down
+    // column 1) so every band is visible at once without scrolling. A standard
+    // QMX with only ~6 bands stays a single column.
+    int cols    = (band_count > 6) ? 2 : 1;
+    int rows    = (band_count + cols - 1) / cols;   // ceil: e.g. 11 -> 6
+    int panel_w = cols * col_w;
+    int panel_h = rows * btn_h + 8;
+    // Fixed position just under the top bar, left-aligned under the band label.
+    // lv_obj_get_coords(s_band_label, ...) was unreliable here (the LVGL
+    // software-rotation pipeline can return stale/incorrect layout coords).
     int panel_x = -2;
     int panel_y = TOP_BAR_H + 4;
     int max_h = DISPLAY_V_RES - panel_y - 4;
-    bool needs_scroll = panel_h > max_h;
-    if (needs_scroll) panel_h = max_h;
+    if (panel_h > max_h) panel_h = max_h;   // 6 rows * 64 = 384 < ~656, so no clamp in practice
 
     lv_obj_t *panel = lv_obj_create(ov);
     lv_obj_set_size(panel, panel_w, panel_h);
@@ -255,28 +258,24 @@ static void band_popup_open(void)
     lv_obj_set_style_radius(panel, 6, 0);
     lv_obj_set_style_min_height(panel, 0, 0);
     lv_obj_set_style_min_width(panel, 0, 0);
-    lv_obj_set_flex_align(panel, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
-    lv_obj_set_style_pad_row(panel, 0, 0);
-    lv_obj_set_style_pad_column(panel, 0, 0);
-    if (needs_scroll) {
-        lv_obj_add_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_set_scroll_dir(panel, LV_DIR_VER);
-    } else {
-        lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
-    }
-    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
 
     uint32_t cur_hz = cat_get_frequency();
     for (int i = 0; i < band_count; i++) {
         bool active = (cur_hz >= bands[i].center_hz - 1000000 &&
                        cur_hz <= bands[i].center_hz + 1000000);
+        int col = i / rows;   // first `rows` bands in column 0, remainder in column 1
+        int row = i % rows;
         lv_obj_t *btn = lv_obj_create(panel);
-        lv_obj_set_size(btn, panel_w, btn_h);
+        lv_obj_set_size(btn, col_w, btn_h);
+        lv_obj_set_pos(btn, col * col_w, row * btn_h);
         lv_obj_set_style_min_height(btn, 0, 0);
         lv_obj_set_style_min_width(btn, 0, 0);
-        lv_obj_set_style_max_height(btn, btn_h, 0);
         lv_obj_set_style_bg_color(btn, active ? lv_color_hex(0x2A2A00) : lv_color_hex(UI_COLOR_SURFACE), 0);
-        lv_obj_set_style_border_width(btn, 0, 0);
+        // 1px divider between the two columns: a left border on column-1 buttons.
+        lv_obj_set_style_border_color(btn, lv_color_hex(UI_COLOR_BORDER), 0);
+        lv_obj_set_style_border_width(btn, (col > 0) ? 1 : 0, 0);
+        lv_obj_set_style_border_side(btn, LV_BORDER_SIDE_LEFT, 0);
         lv_obj_set_style_radius(btn, 0, 0);
         lv_obj_set_style_pad_all(btn, 0, 0);
         lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
@@ -1306,7 +1305,6 @@ static char s_current_mode[8] = "USB";  // Phase 5.10F: latest CAT mode for snap
 static char s_current_band[8] = "---";  // Phase 9 (v0.9.5): cached band string for web JSON
 static uint32_t s_passband_width_hz = 0;  // Phase 5.10G: 0 = use mode default; else from CAT FW
 static uint16_t s_cw_pitch_hz = 700;  // CW sidetone offset (Hz); applied to touch-tune in CW modes
-static const bool s_snap_to_peak = false;  // snap-to-signal removed (drawer toggle gone); tap tunes exactly where touched
 static bool s_distance_in_miles = false;  // FT8 distance unit toggle (NVS-backed)
 static const bool s_ft8_sync_lines = false;  // FT8 sync-line diagnostic removed (drawer toggle gone); overlay/3x-WF never engage
 static bool s_sim_mode_en = false;     // FT8 simulation mode toggle (NVS-backed)
@@ -1485,6 +1483,7 @@ static lv_obj_t *s_bp_seg_lbl[BANDPLAN_MAX_SEG];
 static lv_obj_t *s_bp_span       = NULL;  // translucent block: the slice of the band currently visible on the spectrum/waterfall
 static lv_obj_t *s_bp_passband   = NULL;  // brighter sub-block inside the span: the actual filter passband, mirrors the spectrum's own passband tint
 static lv_obj_t *s_bp_marker     = NULL;  // thin bright line: exact VFO/dial frequency, drawn inside the span
+static lv_obj_t *s_bp_knob       = NULL;  // bordered box framing the marker so it reads as a grab-and-slide slider handle
 
 // Band-plan strip drag-to-tune: self-contained (own PRESSED/PRESSING/RELEASED
 // handling in touch_event_cb, own frequency math here) rather than reusing
@@ -1668,6 +1667,8 @@ static float DB_MAX_DISPLAY = -30.0f;  /* dBm, headroom for S9+40 */
 
 static lv_obj_t *s_wf_canvas = NULL;
 static uint8_t *s_wf_canvas_buf = NULL;
+static lv_obj_t *s_wf_cursor = NULL;  // cyan tune cursor OVERLAY over the waterfall (not drawn into the
+                                      // bitmap — that trailed as rows scrolled); a single current-position line
 
 // Spectrum dB labels (Phase 5.4)
 static lv_obj_t *s_db_max_label = NULL;
@@ -2181,6 +2182,7 @@ static void update_bandplan_strip(uint32_t freq_hz)
         if (s_bp_span)     lv_obj_add_flag(s_bp_span, LV_OBJ_FLAG_HIDDEN);
         if (s_bp_passband) lv_obj_add_flag(s_bp_passband, LV_OBJ_FLAG_HIDDEN);
         if (s_bp_marker) lv_obj_add_flag(s_bp_marker, LV_OBJ_FLAG_HIDDEN);
+        if (s_bp_knob) lv_obj_add_flag(s_bp_knob, LV_OBJ_FLAG_HIDDEN);
         return;
     }
 
@@ -2241,6 +2243,15 @@ static void update_bandplan_strip(uint32_t freq_hz)
         lv_obj_set_size(s_bp_span, sw, BANDPLAN_H);
         lv_obj_clear_flag(s_bp_span, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_bp_span);
+
+        // Handle frame: outline the whole currently-visible slice of the band
+        // (this same span rect), so the framed box the user slides along the
+        // strip is exactly the window shown on the spectrum/waterfall.
+        if (s_bp_knob) {
+            lv_obj_set_pos(s_bp_knob, sx0, 0);
+            lv_obj_set_size(s_bp_knob, sw, BANDPLAN_H);
+            lv_obj_clear_flag(s_bp_knob, LV_OBJ_FLAG_HIDDEN);
+        }
     }
 
     // Passband sub-block: the actual filter passband (mode + CAT-width
@@ -2278,6 +2289,12 @@ static void update_bandplan_strip(uint32_t freq_hz)
         lv_obj_set_pos(s_bp_marker, mx, 0);
         lv_obj_clear_flag(s_bp_marker, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_bp_marker);
+    }
+
+    // Raise the visible-window frame above everything else (span/passband/
+    // marker) so its border reads clearly as the slide handle.
+    if (s_bp_knob && !lv_obj_has_flag(s_bp_knob, LV_OBJ_FLAG_HIDDEN)) {
+        lv_obj_move_foreground(s_bp_knob);
     }
 }
 
@@ -2344,7 +2361,7 @@ static void build_bandplan_strip(lv_obj_t *parent)
     lv_obj_set_size(s_bp_span, 1, BANDPLAN_H);
     lv_obj_set_pos(s_bp_span, 0, 0);
     lv_obj_set_style_bg_color(s_bp_span, lv_color_hex(0xFFFFFF), 0);
-    lv_obj_set_style_bg_opa(s_bp_span, LV_OPA_30, 0);
+    lv_obj_set_style_bg_opa(s_bp_span, LV_OPA_10, 0);  // near-transparent fill: read the band colours through it (the frame marks the window)
     lv_obj_set_style_border_width(s_bp_span, 0, 0);
     lv_obj_set_style_radius(s_bp_span, 0, 0);
     lv_obj_set_style_pad_all(s_bp_span, 0, 0);
@@ -2378,6 +2395,24 @@ static void build_bandplan_strip(lv_obj_t *parent)
     lv_obj_clear_flag(s_bp_marker, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(s_bp_marker, LV_OBJ_FLAG_CLICKABLE);  // let touches fall through to s_bandplan_obj
     lv_obj_add_flag(s_bp_marker, LV_OBJ_FLAG_HIDDEN);
+
+    // Handle frame around the currently-visible slice of the band: a bordered
+    // rounded box sized/positioned to match s_bp_span each update, so the framed
+    // box the user slides is the same window shown on the spectrum/waterfall
+    // (visibility request). Transparent fill so the band colours + marker line
+    // show through; touches fall through to s_bandplan_obj, so drag-to-tune is
+    // unchanged. Size here is a placeholder — update_bandplan_strip() sets it.
+    s_bp_knob = lv_obj_create(s_bandplan_obj);
+    lv_obj_set_size(s_bp_knob, 26, BANDPLAN_H);
+    lv_obj_set_style_bg_opa(s_bp_knob, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_color(s_bp_knob, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_border_opa(s_bp_knob, LV_OPA_60, 0);  // softened so the frame doesn't read as a solid white block
+    lv_obj_set_style_border_width(s_bp_knob, 2, 0);
+    lv_obj_set_style_radius(s_bp_knob, 5, 0);
+    lv_obj_set_style_pad_all(s_bp_knob, 0, 0);
+    lv_obj_clear_flag(s_bp_knob, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(s_bp_knob, LV_OBJ_FLAG_CLICKABLE);  // let touches fall through to s_bandplan_obj
+    lv_obj_add_flag(s_bp_knob, LV_OBJ_FLAG_HIDDEN);
 }
 
 // Phase 5.10C: rewrite the 5 tick labels with absolute MHz centered on VFO.
@@ -2446,6 +2481,22 @@ static void build_waterfall(lv_obj_t *parent)
 
     // Initialize entire 2x buffer to black (waterfall starts empty)
     memset(s_wf_canvas_buf, 0, (size_t)DISPLAY_H_RES * WATERFALL_H * 2 * 2);    lv_obj_invalidate(s_wf_canvas);
+
+    // Tune-cursor overlay: a thin full-height cyan line drawn ON TOP of the
+    // waterfall (not into its bitmap, which would trail as rows scroll). LVGL
+    // repaints it at the current x each frame, so it shows only the actual
+    // position, never the path taken. Non-clickable so touches fall through to
+    // the waterfall's own tune handler. Hidden until a tune drag is active.
+    s_wf_cursor = lv_obj_create(s_waterfall_obj);
+    lv_obj_set_size(s_wf_cursor, 2, WATERFALL_H);
+    lv_obj_set_style_bg_color(s_wf_cursor, lv_color_hex(0x00FFFF), 0);
+    lv_obj_set_style_bg_opa(s_wf_cursor, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_wf_cursor, 0, 0);
+    lv_obj_set_style_radius(s_wf_cursor, 0, 0);
+    lv_obj_set_style_pad_all(s_wf_cursor, 0, 0);
+    lv_obj_clear_flag(s_wf_cursor, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(s_wf_cursor, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_wf_cursor, LV_OBJ_FLAG_HIDDEN);
 }
 
 // ==== Bottom status bar ====
@@ -3757,6 +3808,14 @@ void ui_push_spectrum(const float *bins, int n_bins)
                     px[y * DISPLAY_H_RES + tx] = target_color;
                 }
             }
+            // Waterfall cursor overlay: driven here (same 30 Hz pass, same
+            // s_target_x) so it stays glued to the spectrum line above rather
+            // than lagging on the slower waterfall-row cadence.
+            if (s_wf_cursor && tx >= 0 && tx < DISPLAY_H_RES) {
+                lv_obj_set_x(s_wf_cursor, tx);
+                lv_obj_clear_flag(s_wf_cursor, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_move_foreground(s_wf_cursor);
+            }
             // Update floating freq tooltip — keep visible while in TUNE mode.
             if (s_tune_tooltip && s_last_qmx_freq_hz > 0) {
                 int64_t tip_hz = s_target_freq_hz;
@@ -3784,9 +3843,11 @@ void ui_push_spectrum(const float *bins, int n_bins)
         } else {
             s_target_x = -1;
             if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+            if (s_wf_cursor) lv_obj_add_flag(s_wf_cursor, LV_OBJ_FLAG_HIDDEN);
         }
-    } else if (s_tune_tooltip) {
-        lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
+        if (s_wf_cursor) lv_obj_add_flag(s_wf_cursor, LV_OBJ_FLAG_HIDDEN);
     }
     lv_obj_invalidate(s_spec_canvas);
     // Update freq axis labels every frame so zoom/pan changes are reflected.
@@ -3887,18 +3948,10 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row)
         }
     }
 
-    // Overlay cyan cursor on the newest waterfall row only.
-    // Drawing on all rows would permanently burn cyan into old rows.
-    // NEVER draw during pan mode (s_stroll_active)
-    if (s_target_x >= 0 && !s_stroll_active && esp_timer_get_time() < s_target_until_us) {
-        const uint16_t cyan = 0x07FF;
-        uint16_t *row0 = (uint16_t *)(s_wf_canvas_buf + s_wf_head * row_bytes);
-        int tx = s_target_x;
-        if (tx >= 0 && tx < DISPLAY_H_RES) {
-            row0[tx] = cyan;
-            if (tx + 1 < DISPLAY_H_RES) row0[tx + 1] = cyan;
-        }
-    }
+    // NOTE: the tune cursor is NOT positioned here. The waterfall row cadence
+    // is slower than the spectrum's 30 Hz redraw, which made the waterfall line
+    // visibly lag the spectrum line. Both cyan overlays are now driven together
+    // from ui_push_spectrum() off the same s_target_x so they stay glued.
     lv_obj_invalidate(s_wf_canvas);
     display_unlock();
 }
@@ -4092,6 +4145,7 @@ static void touch_event_cb(lv_event_t *e)
             }
             double hz_per_px = (double)(s_bp_drag_band_hi - s_bp_drag_band_lo) / (double)DISPLAY_H_RES;
             int64_t target = s_bp_drag_start_freq + (int64_t)lround((double)dx * hz_per_px);
+            target = ((target + 500) / 1000) * 1000;   // snap centre to whole kHz (xx.xxx.000 Hz)
             if (target < (int64_t)s_bp_drag_band_lo) target = (int64_t)s_bp_drag_band_lo;
             if (target > (int64_t)s_bp_drag_band_hi) target = (int64_t)s_bp_drag_band_hi;
             s_bp_drag_target_hz = target;
@@ -4122,8 +4176,14 @@ static void touch_event_cb(lv_event_t *e)
             // to the tapped position in the band, same "tap anywhere to go
             // there" feel as the spectrum's own tap-to-tune.
             else if (s_bp_drag_band_hi > s_bp_drag_band_lo) {
+                // Use the clean touch-DOWN x, not the release x: touch controllers
+                // report a small coordinate jump at lift-off, which nudged the
+                // frequency right as the finger left the glass (same fix as the
+                // spectrum tune — the drag path already uses the last stable
+                // PRESSING value via s_bp_drag_target_hz).
                 double hz_per_px = (double)(s_bp_drag_band_hi - s_bp_drag_band_lo) / (double)DISPLAY_H_RES;
-                int64_t tap_hz = (int64_t)s_bp_drag_band_lo + (int64_t)lround((double)p.x * hz_per_px);
+                int64_t tap_hz = (int64_t)s_bp_drag_band_lo + (int64_t)lround((double)s_bp_drag_start_pt.x * hz_per_px);
+                tap_hz = ((tap_hz + 500) / 1000) * 1000;   // snap centre to whole kHz (xx.xxx.000 Hz)
                 if (tap_hz < (int64_t)s_bp_drag_band_lo) tap_hz = (int64_t)s_bp_drag_band_lo;
                 if (tap_hz > (int64_t)s_bp_drag_band_hi) tap_hz = (int64_t)s_bp_drag_band_hi;
                 cat_set_frequency_forced((uint32_t)tap_hz);
@@ -4271,56 +4331,25 @@ static void touch_event_cb(lv_event_t *e)
             return;
         }
 
-        // Compute target frequency from final touch position.
-        // When zoomed in, each pixel covers fewer Hz; pan shifts the center.
-        int dx = (int)p.x - DISPLAY_H_RES / 2;
-        // Effective Hz per pixel = (sample_rate / zoom) / display_width
-        int32_t offset_hz = (int32_t)((int64_t)dx * UAC_SAMPLE_RATE / (int)(DISPLAY_H_RES * s_zoom_factor));
-        // Add pan offset in Hz (pan_bins -> Hz)
-        int32_t pan_hz = (int32_t)((int64_t)s_pan_offset_bins * UAC_SAMPLE_RATE / DSP_FFT_SIZE);
-        offset_hz += pan_hz;
-        // Snap to the strongest bin near the tap. The search radius scales with
-        // zoom so it stays a roughly constant ~19 px window on screen: ±700 Hz
-        // at 1×, tighter as you zoom in so you pick ONE CW carrier out of a
-        // crowded band instead of grabbing a neighbour.
-        //
-        // Previously this was gated to zoom ≤ 1.5× ("tap is precise enough when
-        // zoomed") — but that's exactly the zoomed-in CW case where snapping is
-        // most wanted, so for CW ops who live zoomed-in it effectively never ran.
-        int32_t snap_radius_hz = (int32_t)(700.0f / s_zoom_factor);
-        if (snap_radius_hz < 60) snap_radius_hz = 60;   // keep ≥ ~1 FFT bin to search
-        int32_t snapped_hz = offset_hz;
-        if (s_snap_to_peak &&
-            dsp_find_peak_hz_around(offset_hz, snap_radius_hz, ui_get_if_offset_hz(), &snapped_hz) == ESP_OK) {
-            if (snapped_hz != offset_hz) {
-                ESP_LOGI("ui_touch", "snap-to-peak (r=%ldHz z=%.1f): %ld -> %ld Hz",
-                         (long)snap_radius_hz, s_zoom_factor, (long)offset_hz, (long)snapped_hz);
-            }
-            offset_hz = snapped_hz;
+        // Commit the frequency the live cyan cursor last settled on during the
+        // press (s_target_freq_hz, already mode-snapped in the PRESSING branch),
+        // NOT a fresh recompute from the release point. Touch controllers report
+        // a small coordinate jump at lift-off, so recomputing from the release x
+        // made the frequency twitch right as the finger left the glass. The
+        // cursor value is exactly what the user aimed at and watched settle, so
+        // commit that ("what you see is what you get") and disregard the lift.
+        if (s_target_freq_hz <= 0) {
+            ESP_LOGI("ui_touch", "RELEASED with no live cursor value — no tune");
+            return;
         }
-        // Phase 5.10F: mode-aware snap. CW=10 Hz (precision), SSB=250 Hz
-        // (voice channels), FT8/data=500 Hz, AM/FM=1 kHz.
-        int32_t snap = 10;
-        if (strstr(s_current_mode, "USB") || strstr(s_current_mode, "LSB")) snap = 250;
-        else if (strstr(s_current_mode, "FT") || strstr(s_current_mode, "DIG") || strstr(s_current_mode, "RTTY")
-                 || strstr(s_current_mode, "DiGi")) snap = 500;
-        else if (strstr(s_current_mode, "AM") || strstr(s_current_mode, "FM")) snap = 1000;
-        else if (strstr(s_current_mode, "CW")) snap = 10;
-        // Snap the absolute target frequency to the grid (matches the live
-        // cursor preview during PRESSING).
-        int64_t target_hz_unrounded = (int64_t)s_last_qmx_freq_hz + offset_hz;
-        int64_t target = ((target_hz_unrounded + (target_hz_unrounded >= 0 ? snap/2 : -snap/2)) / snap) * snap;
-        int32_t rounded = (int32_t)(target - (int64_t)s_last_qmx_freq_hz);
-        if (target < 0) return;
-        uint32_t target_hz = (uint32_t)target;
+        uint32_t target_hz = (uint32_t)s_target_freq_hz;
 
         esp_err_t err = cat_set_frequency(target_hz);
-        ESP_LOGI("ui_touch", "RELEASED x=%d dx=%d off=%ld tgt=%lu err=0x%x",
-                 (int)p.x, dx, (long)rounded, (unsigned long)target_hz, err);
-        // Phase 5.10H: optimistically update the on-screen freq label
-        // immediately so the user sees their target before the CAT FA
-        // poll confirms (~300 ms later). If the QMX rejects the tune,
-        // the next CAT FA will correct the display.
+        ESP_LOGI("ui_touch", "RELEASED tune -> %lu Hz (cursor value; release x=%d ignored) err=0x%x",
+                 (unsigned long)target_hz, (int)p.x, err);
+        // Optimistically update the on-screen freq label immediately so the user
+        // sees their target before the CAT FA poll confirms (~300 ms later). If
+        // the QMX rejects the tune, the next CAT FA corrects the display.
         if (err == ESP_OK) {
             ui_update_frequency(target_hz);
         }
@@ -5225,6 +5254,26 @@ static void drawer_build(void)
         y += 56;
     }
 
+    // Common tweaks for every drawer slider (all horizontal, 30 px tall):
+    //  - LV_OBJ_FLAG_ADV_HITTEST: only the knob grabs touches, so a press/drag
+    //    on the track or scale no longer hijacks the drawer's up/down
+    //    swipe-scroll gesture (they were conflicting).
+    //  - pad_hor = 15 (= knob radius, height/2): the knob is drawn `height`
+    //    wide and centred on the indicator end with no bounds clamping, so at
+    //    min/max it overhung by 15 px and showed as half a knob. Insetting the
+    //    indicator by the knob radius keeps the whole knob on-screen at both
+    //    ends. (See position_knob() in lv_slider.c.)
+    lv_obj_t *drawer_sliders[] = {
+        s_slider_db_min, s_slider_db_max, s_slider_alpha, s_slider_cwpitch,
+        s_slider_cwaudio_vol, s_slider_ifcal, s_slider_brightness,
+        s_slider_wf_black, s_slider_wf_contrast, s_slider_wf_blend,
+    };
+    for (size_t i = 0; i < sizeof(drawer_sliders) / sizeof(drawer_sliders[0]); i++) {
+        if (!drawer_sliders[i]) continue;
+        lv_obj_add_flag(drawer_sliders[i], LV_OBJ_FLAG_ADV_HITTEST);
+        lv_obj_set_style_pad_hor(drawer_sliders[i], 15, LV_PART_MAIN);
+    }
+
     ESP_LOGI(TAG, "Settings drawer built (off-screen at x=%d)", DISPLAY_H_RES);
 
     // Apply current UI mode's section visibility (drawer is pre-built at
@@ -5236,6 +5285,11 @@ static void drawer_open(void)
 {
     drawer_build();  // lazy build on first open
     if (!s_drawer || s_drawer_open) return;
+    // Always open scrolled to the top so the "Settings" title is visible.
+    // Restacking sections for FT8 mode (drawer_set_ft8_mode) can leave the
+    // scroll position part-way down, which looked like an empty drawer whose
+    // content had to be swiped back down into view.
+    lv_obj_scroll_to_y(s_drawer, 0, LV_ANIM_OFF);
     if (s_drawer_scrim) {
         lv_obj_clear_flag(s_drawer_scrim, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_drawer_scrim);
@@ -5442,7 +5496,7 @@ static void drawer_slider_cwaudio_vol_cb(lv_event_t *e)
 static void drawer_preset_normal_cb(lv_event_t *e)  { (void)e; drawer_apply_preset(-130, -30, 0.40f); }
 static void drawer_preset_dx_cb(lv_event_t *e)      { (void)e; drawer_apply_preset(-130, -50, 0.60f); }
 static void drawer_preset_strong_cb(lv_event_t *e)  { (void)e; drawer_apply_preset(-110, -20, 0.20f); }
-static void drawer_wifi_btn_cb(lv_event_t *e)       { (void)e; wifi_config_modal_show(); }
+static void drawer_wifi_btn_cb(lv_event_t *e)       { (void)e; drawer_close(); wifi_config_modal_show(); }
 static void drawer_identity_btn_cb(lv_event_t *e)   { (void)e; identity_config_modal_show(); }
 
 static void drawer_slider_db_min_cb(lv_event_t *e)
@@ -5664,6 +5718,23 @@ static void ui_toggle_mode(void)
         ui_save_snapshot(&s_pan_snapshot);
         if (s_ft8_snapshot.valid) {
             ui_restore_snapshot(&s_ft8_snapshot);   // restores FT8's freq/zoom
+        } else {
+            // First FT8 entry this boot: apply the persisted FT8/FT4 preset
+            // frequency rather than inheriting the panadapter's current VFO
+            // (which showed up as an "odd" non-FT8 frequency). Seed the snapshot
+            // so later mode toggles stay on it.
+            qmx_settings_t fs;
+            settings_load_all(&fs);
+            uint32_t f = fs.ft8_freq_hz ? fs.ft8_freq_hz : 14074000;
+            cat_set_frequency_forced(f);
+            ui_update_frequency(f);
+            s_ft8_snapshot.valid           = true;
+            s_ft8_snapshot.freq_hz         = f;
+            strncpy(s_ft8_snapshot.mode, "DiGi", sizeof(s_ft8_snapshot.mode) - 1);
+            s_ft8_snapshot.mode[sizeof(s_ft8_snapshot.mode) - 1] = '\0';
+            s_ft8_snapshot.passband_hz     = 0;
+            s_ft8_snapshot.zoom_factor     = 1.0f;
+            s_ft8_snapshot.pan_offset_bins = 0;
         }
         // FT8 is ALWAYS DiGi. Force it on every entry via the poll task
         // (reliable, retried) — the snapshot restore's mode step can lose the

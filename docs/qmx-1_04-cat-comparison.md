@@ -145,6 +145,27 @@ what `FW;` returns in AM** — if it's something unexpected, the passband-width 
 could show garbage; no fixed passband overlay was added since the correct value isn't
 known yet. Check on first real 1_04 contact.
 
+**AM bandwidth is NOT selectable — do not add an AM BW menu (settled 2026-07-04, from the
+manuals).** Field question: "why is AM fixed at 3.2 kHz, should there be other BWs?" Answer,
+straight from the 1_04_001 manuals:
+- `FW:` (CAT manual) is **get-only** — *"Returns 3200 in Digi mode, and 0300 for CW mode."*
+  There is no `FW` Set. So the 3.2k the UI shows in AM is just the radio reporting the upper
+  edge of its filter; it is not a value we (or the user) can change via `FW`.
+- The "150–3200 Hz" figure is **one fixed filter, not a range**: the operation manual calls it
+  the *"default 150-3200 Hz wide filter used for Digital modes"* (§CW Filters, the `None`
+  option description). AM uses that same single wide audio filter.
+- The QMX exposes selectable RX bandwidths **only** for SSB (2500/2700/2900/3200 via
+  `MMSSB|Bandwidth`) and CW (the 54-filter set via `MMCW`). **Digi and AM have no filter
+  selection at all** — no `MMAM|…` filter item exists, and the SSB filter menu is SSB-only.
+
+Therefore `bw_popup_open()` in `ui.c` correctly returns without a menu for AM (and Digi) —
+there is nothing to pick. The only *unverified* angle is whether writing `MMSSB|Bandwidth=`
+while in AM would narrow the AM audio anyway; the manual gives no indication it does, so
+don't add it speculatively — it'd need a bench test and might just return `?;`. The AM
+passband *overlay* is drawn symmetric (±1600 Hz from FW=3200), which is cosmetically not
+ideal for AM (really ±audio-BW around the carrier) — a display-only tweak if ever wanted,
+unrelated to the (non-existent) BW selection.
+
 Not worth pursuing now: `KD` (nothing our TX path lacks), `TR`/`RR` (knob ergonomics,
 radio-side), `LC`/`TB` (LCD mirror / CW-decode text — cute, no demand).
 

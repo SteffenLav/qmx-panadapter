@@ -8,6 +8,7 @@
 #include "mem_channels.h"
 #include "cat.h"
 #include "ui.h"
+#include "ui_mode.h"   // ui_mode_get() / UI_MODE_FT8 — restrict recall to DiGi in FT8/FT4
 #include "display.h"
 #include "esp_log.h"
 #include "lvgl.h"
@@ -130,6 +131,18 @@ static void format_freq_hz(uint32_t hz, char *out, size_t out_sz)
     snprintf(out + oi, out_sz - (size_t)oi, " Hz");
 }
 
+// In FT8/FT4 mode the QMX must stay in its DiGi data mode, so recalling a
+// non-DiGi memory (CW, USB, ...) makes no sense — it would knock the radio out
+// of data mode mid-session. Such slots are greyed out in the grid and their
+// recall (tap) is blocked. Both FT8 and FT4 run under UI_MODE_FT8. Editing,
+// deleting and drag-moving those slots is still allowed.
+static bool mem_recall_blocked(const mem_slot_t *slot)
+{
+    return slot->occupied &&
+           ui_mode_get() == UI_MODE_FT8 &&
+           strcmp(slot->mode, "DiGi") != 0;
+}
+
 static void memory_modal_refresh(void)
 {
     for (int i = 0; i < MEM_SLOTS; i++) {
@@ -150,9 +163,19 @@ static void memory_modal_refresh(void)
 
             lv_label_set_text(lbl, slot.label[0] ? slot.label : freq_str);
             lv_label_set_text(lbl2, slot.label[0] ? buf2 : slot.mode);
-            lv_obj_set_style_bg_color(btn, lv_color_hex(ui_theme_mode_color(slot.mode)), 0);
-            lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
-            lv_obj_set_style_text_color(lbl2, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+            if (mem_recall_blocked(&slot)) {
+                // Not recallable in FT8/FT4 (non-DiGi): grey it right out so it
+                // reads as unavailable; the tap is also blocked in cell_tap_cb.
+                lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_KEY_BG), 0);
+                lv_obj_set_style_text_color(lbl, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+                lv_obj_set_style_text_color(lbl2, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+                lv_obj_set_style_opa(btn, LV_OPA_40, 0);
+            } else {
+                lv_obj_set_style_bg_color(btn, lv_color_hex(ui_theme_mode_color(slot.mode)), 0);
+                lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
+                lv_obj_set_style_text_color(lbl2, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+                lv_obj_set_style_opa(btn, LV_OPA_COVER, 0);
+            }
         } else {
             char buf[8];
             snprintf(buf, sizeof(buf), "[%02d]", i + 1);
@@ -161,6 +184,7 @@ static void memory_modal_refresh(void)
             lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_KEY_BG), 0);
             lv_obj_set_style_text_color(lbl, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
             lv_obj_set_style_text_color(lbl2, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+            lv_obj_set_style_opa(btn, LV_OPA_COVER, 0);
         }
     }
 }
@@ -252,6 +276,14 @@ static void cell_tap_cb(lv_event_t *e)
         // or drag), so skip the long-press requirement and go straight to
         // the save-new-channel editor.
         open_edit_panel(idx);
+        return;
+    }
+
+    if (mem_recall_blocked(&slot)) {
+        // Non-DiGi memory tapped while the FT8/FT4 screen is up — recalling it
+        // would drop the radio out of data mode. Refuse (the cell is greyed).
+        ESP_LOGI(TAG, "recall slot %d blocked in FT8/FT4 (mode '%s' != DiGi)", idx, slot.mode);
+        ui_toast("FT8/FT4: only DiGi memories can be recalled");
         return;
     }
 

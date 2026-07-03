@@ -39,6 +39,12 @@ static int s_retry_count = 0;
 static esp_netif_t *s_sta_netif = NULL;
 static bool s_wifi_started = false;
 
+// Set true when the user turns WiFi OFF via the live toggle
+// (panadapter_wifi_set_enabled(false)). While set, the STA_DISCONNECTED
+// handler must NOT auto-reconnect — otherwise a user-requested stop would be
+// fought by the retry loop and the radio would come straight back up.
+static volatile bool s_wifi_user_disabled = false;
+
 // True when WE created the STA netif (without IDF's default, un-guarded event
 // handlers) and therefore drive its start/connect/disconnect lifecycle from
 // on_wifi_event()/on_ip_event(). False when we reused an ESP-Hosted
@@ -180,6 +186,10 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
         wifi_event_sta_disconnected_t *e = (wifi_event_sta_disconnected_t *)data;
         xEventGroupClearBits(s_events, BIT_CONNECTED);
         webserver_stop();
+        if (s_wifi_user_disabled) {
+            ESP_LOGI(TAG, "Disconnected (WiFi turned off by user); not reconnecting");
+            return;
+        }
         s_retry_count++;
         if (s_retry_count <= MAX_FAST_RETRIES) {
             ESP_LOGW(TAG, "Disconnected (reason=%d) retry %d/%d",
@@ -398,14 +408,12 @@ bool wifi_time_is_valid(void)
     if (!s_events) return false;
     return (xEventGroupGetBits(s_events) & BIT_TIME_OK) != 0;
 }
-void panadapter_wifi_reconnect(const char *ssid, const char *pass)
+void panadapter_wifi_update_credentials(const char *ssid, const char *pass)
 {
     if (!ssid || ssid[0] == '\0') {
-        ESP_LOGW(TAG, "reconnect: empty SSID, ignoring");
+        ESP_LOGW(TAG, "update_credentials: empty SSID, ignoring");
         return;
     }
-    ESP_LOGI(TAG, "reconnect: switching to '%s'", ssid);
-
     // Update live creds.
     strncpy(s_ssid, ssid, sizeof(s_ssid) - 1);
     s_ssid[sizeof(s_ssid) - 1] = '\0';
@@ -415,19 +423,35 @@ void panadapter_wifi_reconnect(const char *ssid, const char *pass)
     } else {
         s_pass[0] = '\0';
     }
-
     // Persist.
     settings_set_wifi_ssid(s_ssid);
     settings_set_wifi_pass(s_pass);
-
-    // Reset retry counter so fast retries get a fresh budget.
-    s_retry_count = 0;
-
+    // Push into the driver config so a later connect/start uses them. Valid
+    // even before esp_wifi_start() — esp_wifi_init() always ran at boot.
     wifi_config_t sta_cfg = { 0 };
     memcpy(sta_cfg.sta.ssid, s_ssid, sizeof(sta_cfg.sta.ssid));
     memcpy(sta_cfg.sta.password, s_pass, sizeof(sta_cfg.sta.password));
     sta_cfg.sta.threshold.authmode = WIFI_AUTH_OPEN;
     esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
+    ESP_LOGI(TAG, "credentials updated for '%s' (connection state unchanged)", s_ssid);
+}
+
+void panadapter_wifi_reconnect(const char *ssid, const char *pass)
+{
+    if (!ssid || ssid[0] == '\0') {
+        ESP_LOGW(TAG, "reconnect: empty SSID, ignoring");
+        return;
+    }
+    ESP_LOGI(TAG, "reconnect: switching to '%s'", ssid);
+
+    // Explicit intent to connect — clear any prior "user turned WiFi off"
+    // state so the connect below isn't suppressed by the STA_DISCONNECTED guard.
+    s_wifi_user_disabled = false;
+
+    panadapter_wifi_update_credentials(ssid, pass);
+
+    // Reset retry counter so fast retries get a fresh budget.
+    s_retry_count = 0;
 
     if (!s_wifi_started) {
         // First credentials this boot (booted with no SSID, so the radio was
@@ -442,6 +466,52 @@ void panadapter_wifi_reconnect(const char *ssid, const char *pass)
         esp_wifi_disconnect();
         esp_wifi_connect();
     }
+}
+
+// Live WiFi on/off. Runs off the LVGL thread because ensure_sta_netif() can
+// poll for up to ~2 s and esp_wifi_start()/stop() can block. esp_wifi_init()
+// always ran at boot (in wifi_task, regardless of the enabled flag), so the
+// radio is initialised and can be started/stopped here even if boot left it
+// idle.
+static void wifi_set_enabled_task(void *arg)
+{
+    bool en = (bool)(intptr_t)arg;
+    if (en) {
+        s_wifi_user_disabled = false;
+        s_retry_count = 0;
+        if (s_ssid[0] == '\0') {
+            ESP_LOGW(TAG, "enable: no SSID configured; nothing to connect to");
+        } else if (!s_wifi_started) {
+            ESP_LOGI(TAG, "enable: starting WiFi");
+            ensure_sta_netif();
+            if (esp_wifi_start() == ESP_OK) s_wifi_started = true;
+            else ESP_LOGE(TAG, "enable: esp_wifi_start failed");
+        } else {
+            ESP_LOGI(TAG, "enable: reconnecting");
+            esp_wifi_connect();
+        }
+    } else {
+        // Disconnect only — deliberately NOT esp_wifi_stop(). Leaving the radio
+        // "started" keeps the netif in place, so re-enabling is a plain
+        // esp_wifi_connect() (the well-trodden retry path) instead of a
+        // stop→start→netif-re-add cycle, which is the fragile path this driver
+        // has a long crash history with (see ensure_sta_netif / s_netif_started).
+        // The s_wifi_user_disabled guard in on_wifi_event() suppresses the
+        // auto-reconnect loop, and STA_DISCONNECTED already stops the webserver,
+        // so this is functionally "off": no association, no traffic, no retries.
+        s_wifi_user_disabled = true;
+        esp_wifi_disconnect();
+        ESP_LOGI(TAG, "disable: WiFi disconnected (radio left started for fast re-enable)");
+    }
+    vTaskDelete(NULL);
+}
+
+void panadapter_wifi_set_enabled(bool enabled)
+{
+    settings_set_wifi_enabled(enabled);   // persist the boot preference regardless
+    if (!s_events) return;                // subsystem not up yet; NVS flag applies at boot
+    psram_task_create(wifi_set_enabled_task, "wifi_en", 4096,
+                      (void *)(intptr_t)enabled, 5, tskNO_AFFINITY);
 }
 
 // ---- WiFi scan (SSID picker) -----------------------------------------

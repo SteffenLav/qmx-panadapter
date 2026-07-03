@@ -89,7 +89,7 @@ static void action_btn_cb(lv_event_t *e)
     (void)e;
     if (s_active) {
         cat_request_mode(s_prior_mode);
-        do_stop("Tune exited");
+        do_stop(NULL);  // status label + button already show the exit; no toast
         return;
     }
     const char *cur = cat_get_mode_str();
@@ -101,7 +101,8 @@ static void action_btn_cb(lv_event_t *e)
     cat_tune_poll_set_active(true);
     if (s_action_lbl) lv_label_set_text(s_action_lbl, "Stop Tune");
     if (s_action_btn) lv_obj_set_style_bg_color(s_action_btn, lv_color_hex(0xB03020), 0);
-    ui_toast(LV_SYMBOL_WARNING " QMX transmitting - Tune mode");
+    // No toast: the red "Stop Tune" button + the on-screen warning line +
+    // the live SWR/power readout already make "transmitting" unmistakable.
     if (!s_timer) s_timer = lv_timer_create(status_timer_cb, 500, NULL);
 }
 
@@ -148,14 +149,14 @@ static void modal_build(void)
     lv_obj_t *title = lv_label_create(s_panel);
     lv_label_set_text(title, "Antenna Tune");
     lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_48, 0);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
 
     lv_obj_t *warn = lv_label_create(s_panel);
     lv_label_set_text(warn, LV_SYMBOL_WARNING " Transmits a tune carrier while active");
     lv_obj_set_style_text_color(warn, lv_color_hex(0xFFA040), 0);
     lv_obj_set_style_text_font(warn, &lv_font_montserrat_24, 0);
-    lv_obj_align(warn, LV_ALIGN_TOP_MID, 0, 48);
+    lv_obj_align(warn, LV_ALIGN_TOP_MID, 0, 64);
 
     s_status_lbl = lv_label_create(s_panel);
     lv_obj_set_style_text_color(s_status_lbl, lv_color_hex(0xffffff), 0);

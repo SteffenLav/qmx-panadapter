@@ -45,6 +45,7 @@ typedef struct {
     char  wifi_ssid[33];   // WiFi SSID (32 chars + NUL, IEEE max)
     char  wifi_pass[65];   // WiFi password (64 chars + NUL, WPA2 max)
     uint32_t last_vfo_hz; // last QMX VFO frequency in Hz (0 = unknown)
+    uint32_t ft8_freq_hz; // last FT8/FT4 preset frequency in Hz (persisted so FT8 mode doesn't inherit the panadapter's VFO; default 14074000)
     uint16_t cw_pitch_hz;  // CW sidetone offset in Hz (default 700)
     uint8_t  colormap_idx; // waterfall colour map: 0=Thermal 1=Viridis 2=Turbo 3=Grayscale
     char     my_callsign[16];  // operator callsign for FT8 (15 chars + NUL)
@@ -113,6 +114,8 @@ void settings_set_wifi_pass(const char *pass);
 
 // Save last-known VFO frequency (debounced flush; same wear profile as the sliders).
 void settings_set_last_vfo(uint32_t hz);
+// Save last FT8/FT4 preset frequency (debounced flush).
+void settings_set_ft8_freq_hz(uint32_t hz);
 // Save CW sidetone pitch in Hz (debounced flush).
 void settings_set_cw_pitch_hz(uint16_t hz);
 // Save waterfall colour-map index (debounced flush).

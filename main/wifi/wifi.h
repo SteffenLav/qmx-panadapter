@@ -18,6 +18,23 @@ void panadapter_wifi_start(void);
 // before panadapter_wifi_start (credentials will be picked up at boot).
 void panadapter_wifi_reconnect(const char *ssid, const char *pass);
 
+// Persist WiFi credentials (NVS + live driver config) WITHOUT changing the
+// connection state — no connect, no disconnect, and the on/off preference is
+// left untouched. Use this when saving credentials while WiFi is meant to
+// stay off, so a subsequent enable picks them up. (panadapter_wifi_reconnect
+// is the "save AND connect now" variant.)
+void panadapter_wifi_update_credentials(const char *ssid, const char *pass);
+
+// Live WiFi on/off toggle. Persists the wifi_enabled preference to NVS AND
+// takes effect immediately (offloaded to a task — safe from the LVGL thread):
+//   enable  → brings the radio up and connects using the stored credentials
+//             (starts it if this boot left it idle, else re-issues connect).
+//   disable → disconnects, stops the radio, and suppresses the auto-reconnect
+//             retry loop until re-enabled.
+// A no-op beyond the NVS write if the WiFi subsystem hasn't been started yet
+// (the persisted flag is then honoured at boot).
+void panadapter_wifi_set_enabled(bool enabled);
+
 // Returns true once the station has an IP address.
 bool wifi_is_connected(void);
 

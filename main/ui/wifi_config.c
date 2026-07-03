@@ -59,8 +59,17 @@ static void save_btn_cb(lv_event_t *e)
         ESP_LOGW(TAG, "SSID empty, ignoring Save");
         return;
     }
-    ESP_LOGI(TAG, "Save: SSID='%s' (pass %d chars)", ssid, (int)strlen(pass));
-    panadapter_wifi_reconnect(ssid, pass);
+    ESP_LOGI(TAG, "Save: SSID='%s' (pass %d chars), wifi=%s",
+             ssid, (int)strlen(pass), s_wifi_on ? "on" : "off");
+    // The on/off icon in this modal is the authority on whether WiFi should be
+    // up. If it's ON, save + connect. If it's OFF, only persist the credentials
+    // (the icon's live toggle already put the radio in the off state) — otherwise
+    // Save would force WiFi back on right after the user turned it off.
+    if (s_wifi_on) {
+        panadapter_wifi_reconnect(ssid, pass);
+    } else {
+        panadapter_wifi_update_credentials(ssid, pass);
+    }
     modal_close();
 }
 
@@ -80,23 +89,22 @@ static void eye_btn_cb(lv_event_t *e)
     if (s_eye_lbl) lv_label_set_text(s_eye_lbl, s_pass_shown ? LV_SYMBOL_EYE_OPEN : LV_SYMBOL_EYE_CLOSE);
 }
 
-// WiFi on/off icon button. This is the same "wifi_enabled" setting the old
-// drawer checkbox wrote - a boot-time preference only (wifi.c's wifi_task
-// reads it once at startup to decide whether to call esp_wifi_start() at
-// all; there is no live radio-on/off path today), just relocated here and
-// re-skinned as an icon instead of a labeled checkbox. Toggling it while
-// already connected does not disconnect/reconnect live - it takes effect on
-// the next boot, same as before.
+// WiFi on/off icon button. Writes the same "wifi_enabled" setting the old
+// drawer checkbox wrote, but now via panadapter_wifi_set_enabled(), which
+// both persists the boot preference AND applies the change LIVE (turning the
+// radio on connects immediately; turning it off stops it and suppresses
+// auto-reconnect) — the old drawer checkbox was boot-time-only, which made
+// toggling it back on appear to do nothing until a reboot.
 static void wifi_toggle_btn_cb(lv_event_t *e)
 {
     (void)e;
     s_wifi_on = !s_wifi_on;
-    settings_set_wifi_enabled(s_wifi_on);
+    panadapter_wifi_set_enabled(s_wifi_on);   // persists + applies live
     if (s_wifi_slash) {
         if (s_wifi_on) lv_obj_add_flag(s_wifi_slash, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_clear_flag(s_wifi_slash, LV_OBJ_FLAG_HIDDEN);
     }
-    ESP_LOGI(TAG, "WiFi boot-initiation: %s", s_wifi_on ? "ON" : "OFF");
+    ESP_LOGI(TAG, "WiFi toggled: %s", s_wifi_on ? "ON" : "OFF");
 }
 
 // Show keyboard on textarea focus, attach to the focused textarea.
@@ -386,13 +394,14 @@ static void modal_build(void)
     lv_obj_center(s_wifi_icon_lbl);
     // Diagonal red slash drawn over the icon when off - same technique as
     // the bottom-bar battery-absent indicator (ui.c s_bot_batt_slash), since
-    // LVGL has no built-in "WiFi with a slash" glyph. Static points array:
-    // must persist for the line's lifetime.
-    static lv_point_precise_t wifi_slash_pts[2] = { {0, 32}, {32, 0} };
+    // LVGL has no built-in "WiFi with a slash" glyph. Runs top-left ->
+    // bottom-right ("\"). Static points array: must persist for the line's
+    // lifetime.
+    static lv_point_precise_t wifi_slash_pts[2] = { {0, 0}, {34, 34} };
     s_wifi_slash = lv_line_create(s_wifi_btn);
     lv_line_set_points(s_wifi_slash, wifi_slash_pts, 2);
     lv_obj_set_style_line_color(s_wifi_slash, lv_color_hex(0xFF5050), 0);
-    lv_obj_set_style_line_width(s_wifi_slash, 3, 0);
+    lv_obj_set_style_line_width(s_wifi_slash, 5, 0);
     lv_obj_set_style_line_rounded(s_wifi_slash, true, 0);
     lv_obj_center(s_wifi_slash);
 
@@ -493,11 +502,16 @@ void wifi_config_modal_show(void)
     modal_build();  // no-op if already built (idempotent via s_modal guard)
     if (s_modal_open) return;
 
-    // Pre-fill SSID from current settings; leave password blank.
+    // Pre-fill SSID AND password from current settings. Pre-filling the
+    // password (masked) is what makes credentials "stick": Save reads the
+    // field verbatim, so a blank field would overwrite the stored password
+    // with an empty string every time the modal is opened and saved (this
+    // was the "WiFi forgets my password / reason=210 can't join" bug). To
+    // set an open network, clear the field explicitly.
     qmx_settings_t s;
     settings_load_all(&s);
     lv_textarea_set_text(s_ta_ssid, s.wifi_ssid);
-    lv_textarea_set_text(s_ta_pass, "");
+    lv_textarea_set_text(s_ta_pass, s.wifi_pass);
     lv_textarea_set_password_mode(s_ta_pass, true);
     s_pass_shown = false;
     if (s_eye_lbl) lv_label_set_text(s_eye_lbl, LV_SYMBOL_EYE_CLOSE);

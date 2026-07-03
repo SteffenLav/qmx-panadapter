@@ -1269,6 +1269,11 @@ static void apply_freq_preset(uint32_t freq_hz, bool ft4)
     // goes through even if the sticky-settings restore just fired a freq write.
     if (cat_set_frequency_forced(freq_hz) != ESP_OK) return;
 
+    // Persist the chosen FT8/FT4 frequency so it survives a reboot and FT8 mode
+    // never opens on the panadapter's inherited (non-FT8) VFO. (The FT4/FT8
+    // sub-mode itself is already persisted via ft8_op_mode_set() below.)
+    settings_set_ft8_freq_hz(freq_hz);
+
     ft8_op_mode_set(ft4 ? FT8_OP_MODE_FT4 : FT8_OP_MODE_FT8);
     // FT4 TX is always forced through the simulation interlock (see ft8_tx.c's
     // FT4 SAFETY note) regardless of the drawer's general sim-mode toggle, so

@@ -26,6 +26,7 @@ static const char *TAG = "settings";
 #define KEY_MY_GRID     "my_grid"
 #define KEY_WIFI_PASS   "wifi_pass"
 #define KEY_LAST_VFO   "last_vfo"
+#define KEY_FT8_FREQ   "ft8_freq"
 #define KEY_CW_PITCH   "cw_pitch"
 #define KEY_COLORMAP   "colormap"
 #define KEY_CW_CAL     "cw_cal"
@@ -142,6 +143,7 @@ static const char *TAG = "settings";
 #define DIRTY_FREQ_KP_POS    (1ull << 48)
 #define DIRTY_FREQ_KP_SMALL  (1ull << 49)
 #define DIRTY_PASSBAND_HZ    (1ull << 50)
+#define DIRTY_FT8_FREQ       (1ull << 51)
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -243,6 +245,7 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_MY_GRID)    nvs_set_str(s_nvs, KEY_MY_GRID,   snap.my_grid);
         if (dirty_local & DIRTY_WIFI_PASS)  nvs_set_str(s_nvs, KEY_WIFI_PASS, snap.wifi_pass);
         if (dirty_local & DIRTY_LAST_VFO)  nvs_set_u32(s_nvs, KEY_LAST_VFO, snap.last_vfo_hz);
+        if (dirty_local & DIRTY_FT8_FREQ)  nvs_set_u32(s_nvs, KEY_FT8_FREQ, snap.ft8_freq_hz);
         if (dirty_local & DIRTY_CW_PITCH)  nvs_set_u16(s_nvs, KEY_CW_PITCH, snap.cw_pitch_hz);
         if (dirty_local & DIRTY_CW_CAL)    nvs_set_i16(s_nvs, KEY_CW_CAL,   snap.cw_cal_hz);
         if (dirty_local & DIRTY_ZOOM) {
@@ -356,6 +359,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->iq_enabled = DEF_IQ_ENABLED;
     out->flat_mode  = DEF_FLAT_MODE;
     out->last_vfo_hz = 0;
+    out->ft8_freq_hz = 14074000;   // 20m FT8 — sane default so FT8 never opens on an inherited odd VFO
     out->cw_pitch_hz = DEF_CW_PITCH;
     out->cw_cal_hz   = DEF_CW_CAL;
     out->zoom_factor = DEF_ZOOM;
@@ -409,6 +413,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_IQ_ENABLED, &u8v) == ESP_OK) out->iq_enabled = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_FLAT_MODE,  &u8v) == ESP_OK) out->flat_mode  = (u8v != 0);
     nvs_get_u32(s_nvs, KEY_LAST_VFO, &out->last_vfo_hz);
+    nvs_get_u32(s_nvs, KEY_FT8_FREQ, &out->ft8_freq_hz);
     nvs_get_u16(s_nvs, KEY_CW_PITCH, &out->cw_pitch_hz);
     nvs_get_i16(s_nvs, KEY_CW_CAL,   &out->cw_cal_hz);
     { uint32_t bits = 0; if (nvs_get_u32(s_nvs, KEY_ZOOM, &bits) == ESP_OK) memcpy(&out->zoom_factor, &bits, 4); }
@@ -621,6 +626,19 @@ void settings_set_last_vfo(uint32_t hz)
     s_pending.last_vfo_hz = hz;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_LAST_VFO);
+}
+
+void settings_set_ft8_freq_hz(uint32_t hz)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.ft8_freq_hz == hz) {
+        xSemaphoreGive(s_mutex);
+        return;  // unchanged, skip the dirty/flush cycle
+    }
+    s_pending.ft8_freq_hz = hz;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_FT8_FREQ);
 }
 
 void settings_set_cw_pitch_hz(uint16_t hz)

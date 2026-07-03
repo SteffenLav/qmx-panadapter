@@ -1001,6 +1001,16 @@ static void link_task(void *arg)
                         continue;
                     }
 
+                    // The QMX/QMX+ menu can report an "11" (11m/CB) slot that
+                    // isn't a real amateur band on this radio — omit it from the
+                    // picker even though the firmware hands it to us (operator
+                    // request, confirmed never present in the QMX/QMX+ config).
+                    if (strcmp(bname, "11") == 0) {
+                        ESP_LOGI(TAG, "Band[%d]: skipping '11m' (reported by QMX, not a real band here)", bi);
+                        consecutive_empty = 0;   // valid slot response, just filtered — don't count as empty
+                        continue;
+                    }
+
                     snprintf(s_band_list[s_band_count].name, sizeof(s_band_list[0].name), "%s", bname);
                     s_band_list[s_band_count].center_hz = cf;
                     ESP_LOGI(TAG, "Band[%d]: %sm @ %lu Hz", bi, bname, (unsigned long)cf);

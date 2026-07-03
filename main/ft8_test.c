@@ -480,8 +480,14 @@ typedef struct {
     decode_result_t        *result;
 } worker_job_t;
 
-static QueueHandle_t     s_worker_queue = NULL;  // carries worker_job_t*
-static SemaphoreHandle_t s_worker_done  = NULL;
+static QueueHandle_t     s_worker_queue  = NULL;  // carries worker_job_t*
+static SemaphoreHandle_t s_worker_done   = NULL;
+static SemaphoreHandle_t s_worker_exited = NULL;  // worker gives this just before vTaskDelete(NULL);
+                                                  // the decode task JOINS on it before freeing the
+                                                  // queue/semaphore and returning (freeing its stack).
+                                                  // Without the join, a worker still holding a job
+                                                  // pointer into the decode task's stack faulted on
+                                                  // freed memory ("Load address misaligned").
 
 // ---------------------------------------------------------------------------
 // Boot-time gating helpers
@@ -799,6 +805,10 @@ static void ft8_decode_worker_task(void *arg)
         xSemaphoreGive(s_worker_done);
     }
     ESP_LOGI(TAG, "decode worker exiting");
+    // Signal the join BEFORE self-deleting: after this the worker touches
+    // nothing shared (queue/semaphore/job), so the decode task can safely
+    // free them once it sees this.
+    if (s_worker_exited) xSemaphoreGive(s_worker_exited);
     vTaskDelete(NULL);
 }
 
@@ -1024,9 +1034,10 @@ static void ft8_decode_task(void *arg)
     // worker uses its spare cycles without ever starving audio. If the spawn
     // fails we drop the queue and decode_slot falls back to single-core.
     TaskHandle_t worker = NULL;
-    s_worker_queue = xQueueCreate(1, sizeof(worker_job_t *));
-    s_worker_done  = xSemaphoreCreateBinary();
-    if (s_worker_queue && s_worker_done) {
+    s_worker_queue  = xQueueCreate(1, sizeof(worker_job_t *));
+    s_worker_done   = xSemaphoreCreateBinary();
+    s_worker_exited = xSemaphoreCreateBinary();
+    if (s_worker_queue && s_worker_done && s_worker_exited) {
         BaseType_t wrc = xTaskCreatePinnedToCoreWithCaps(
             ft8_decode_worker_task, "ft8_dec0", 32768, NULL,
             tskIDLE_PRIORITY + 2, &worker, 0,
@@ -1037,8 +1048,9 @@ static void ft8_decode_task(void *arg)
         }
     }
     if (!worker) {
-        if (s_worker_queue) { vQueueDelete(s_worker_queue); s_worker_queue = NULL; }
-        if (s_worker_done)  { vSemaphoreDelete(s_worker_done); s_worker_done = NULL; }
+        if (s_worker_queue)  { vQueueDelete(s_worker_queue); s_worker_queue = NULL; }
+        if (s_worker_done)   { vSemaphoreDelete(s_worker_done); s_worker_done = NULL; }
+        if (s_worker_exited) { vSemaphoreDelete(s_worker_exited); s_worker_exited = NULL; }
     }
 
     ESP_LOGI(TAG, "decode task ready (core %d, dual-core=%s)",
@@ -1059,15 +1071,25 @@ static void ft8_decode_task(void *arg)
         s_buf_busy[job.mon_idx] = false;   // hand the monitor back to the pool
     }
 
-    // Stop the core-0 worker (blocked on its queue): send a NULL sentinel, let
-    // it self-delete, then tear down the queue/semaphore.
-    if (worker && s_worker_queue) {
+    // Stop the core-0 worker (blocked on its queue): send a NULL sentinel, then
+    // JOIN — wait for the worker to actually reach vTaskDelete (it gives
+    // s_worker_exited first) before deleting the queue/semaphore and returning.
+    // The old code waited a FIXED 50 ms, which was not enough if the worker was
+    // still holding a job pointer into this task's stack: freeing the stack out
+    // from under it caused a "Load address misaligned" panic on FT8 exit. The
+    // worker is idle here (decode_slot always joins on s_worker_done before
+    // returning), so this normally returns in well under a millisecond; the
+    // generous bound only guards a pathological in-flight decode.
+    if (worker && s_worker_queue && s_worker_exited) {
         worker_job_t *sentinel = NULL;
         xQueueSend(s_worker_queue, &sentinel, pdMS_TO_TICKS(1000));
-        vTaskDelay(pdMS_TO_TICKS(50));
+        if (xSemaphoreTake(s_worker_exited, pdMS_TO_TICKS(12000)) != pdTRUE) {
+            ESP_LOGW(TAG, "worker join timed out — deleting shared state anyway");
+        }
     }
-    if (s_worker_queue) { vQueueDelete(s_worker_queue); s_worker_queue = NULL; }
-    if (s_worker_done)  { vSemaphoreDelete(s_worker_done); s_worker_done = NULL; }
+    if (s_worker_queue)  { vQueueDelete(s_worker_queue); s_worker_queue = NULL; }
+    if (s_worker_done)   { vSemaphoreDelete(s_worker_done); s_worker_done = NULL; }
+    if (s_worker_exited) { vSemaphoreDelete(s_worker_exited); s_worker_exited = NULL; }
 
     ESP_LOGI(TAG, "decode task exiting");
     if (notify_target) xTaskNotify(notify_target, 1, eSetBits);
