@@ -42,7 +42,7 @@ until the items in §5 are verified on real 1_04 hardware.
 
 | Cmd | 1_03_000 manual | 1_04_001 manual | Impact on our code |
 |---|---|---|---|
-| **MD** | Set/Get: `3` (CW), `6` (FSK), `7` (CWR), `9` (FSR) *(manual predates SSB; real 1_03_002 also does 1/2 LSB/USB)* | Set/Get: `1` LSB, `2` USB, `3` CW, **`5` AM (new, 1_04_001)**, `6` FSK, `7` CWR, **`8` SWR Tune (new — `MD8;` enters Tune, `MD0;` exits)**, `9` FSR. Note: **no `4` (FM)** — QMX has no FM | Our `kw_modes[]` table in `cat.c` already labels `5`→"AM" ✓. Digit `8` currently displays `"?"` — cosmetic; should become `"TUNE"`. `MD0;` as a *set* (exit tune) is new — our mode-write path never sends 0, fine |
+| **MD** | Set/Get: `3` (CW), `6` (FSK), `7` (CWR), `9` (FSR) *(manual predates SSB; real 1_03_002 also does 1/2 LSB/USB)* | Set/Get: `1` LSB, `2` USB, `3` CW, **`5` AM (new, 1_04_001)**, `6` FSK, `7` CWR, **`8` SWR Tune (new)**, `9` FSR. Note: **no `4` (FM)** — QMX has no FM | Our `kw_modes[]` table in `cat.c` already labels `5`→"AM" ✓. Digit `8` currently displays `"?"` — now shows `"TUNE"` (shipped). ⚠️ **How to *exit* Tune via CAT is NOT documented**: the manual's own Set list for `MD` is `1,2,3,5,6,7,8,9` — `0` never appears in it. The "`MD0;` exits" claim in earlier project notes traces to the original changelog summary, not the manual body — treat it as unverified until tested on hardware. The safe fallback is setting `MD` back to whatever digit was active before Tune was entered |
 | **PC** | "power output in tenths of a watt", e.g. `PC45;` = 4.5 W | Same manual text, but the changelog adds: **returns 3 digits when power ≥ 10 W** | Already handled — `cat_query_power_swr()`/`cat_pwr_swr_async_read()` were re-calibrated for the 3-digit case (see CLAUDE.md) ✓ |
 | **MM** (semantics) | MM Set stores to EEPROM; when the new value takes effect is undocumented | New **"MM Effect"** config parameter (System config → CAT config): **"Immediate"** = every MM Set auto-reloads config and takes effect at once; **"On demand"** = takes effect only on menu enter/exit or on `MU;` | Directly relevant to the hard-won SSB-filter recipe (§4.3). Also `1_04_001` changelog: "CAT MU command and MM loaded previously saved state" bug was fixed |
 
@@ -103,11 +103,15 @@ feature but stays untouchable until hardware-verified.
 ## 4. Opportunities — the "nice new features" ranked
 
 ### 4.1 One-button TUNE (TODO #3) — best value, small effort
-`MD8;` enter / `MD0;` exit, poll `SW;` while keyed for a live SWR readout on screen.
-Design sketch: a TUNE button (panadapter top bar or drawer) → `cat_request_mode('8')` via
-the existing poll-task deferral, live SWR label from `PC;SW;`, auto-exit `MD0;` on tap or
-timeout. Gate the button on `cat_get_qmx_fw()` reporting `1_04`+ so 1_03 users never see it.
-**Blocked only on hardware verification.**
+`MD8;` enters Tune; exit mechanism is **not documented** (§1.2) — restore the mode digit
+that was active before entering is the safe design, not a bare `MD0;`. Design sketch: a
+dedicated TUNE button (not folded into the USB/LSB/CW/DiGi mode popup — it keys the radio
+continuously, so it needs the same confirm-and-visible-ACTIVE-state treatment as FT8
+TX/robot mode, not casual one-tap access) → `cat_request_mode("TUNE")` via the existing
+poll-task deferral, live SWR/power label from `PC;SW;` polled faster while active, an
+auto-timeout safety net, and exit restores the prior mode digit. Gate on `cat_get_qmx_fw()`
+reporting `1_04`+ so 1_03 users never see it. **Blocked on hardware verification of the
+exit path and of what `FW;`/other polls return while in Tune.**
 
 ### 4.2 `AI2` event-driven state push — biggest architectural win, highest risk
 `AI2` makes the QMX push an `IF;` frame on every freq/mode/TX-state change. That could
@@ -152,9 +156,12 @@ Run against a real `1_04_002` unit, in this order — each item independent:
    `MMCW|CW offset;`, `MMBand config.|Band name (m)[0];` all still resolve (no `?;`).
 4. **`FW;` revert behaviour** — set a width, resume FW polling, see if it still snaps back.
    Then test "MM Effect = Immediate" + single `Filter RX` write (§4.3 hypothesis).
-5. **`MD8;`/`MD0;`** — enter/exit SWR Tune via CAT; confirm `SW;` returns live values while
-   tuning; confirm our poll parser tolerates `MD8` responses (should show "TUNE" after the
-   cosmetic fix).
+5. **`MD8;` Tune** — enter via CAT; confirm `SW;`/`PC;` return live values while tuning;
+   confirm our poll parser tolerates `MD8` responses (shows "TUNE", shipped already). Then
+   find the actual exit path — try `MD0;` (unverified, may be rejected with `?;` since the
+   manual's Set list never lists 0), then fall back to setting the prior mode digit
+   (e.g. `MD3;` if CW was active before) and confirm that both exits the radio's own Tune
+   UI and doesn't leave it transmitting.
 6. **`AI` modes** — last, on an expendable session: `AI2;`, watch for unsolicited `IF;`
    frames, then `AI0;` and confirm normal polling still works. If anything corrupts,
    power-cycle and record it — that alone decides whether §4.2 is viable.
