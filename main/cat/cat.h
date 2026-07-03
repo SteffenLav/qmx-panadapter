@@ -100,6 +100,15 @@ int cat_get_cw_offset_hz(void);
  */
 const char *cat_get_qmx_fw(void);
 /**
+ * @brief Check whether the connected QMX's firmware is at least major.minor.patch.
+ *
+ * Parses cat_get_qmx_fw() (e.g. "1_04_002QMX"). Returns false if no firmware
+ * string has been captured yet (not connected, or VN; hasn't answered) - the
+ * safe default for gating a 1_04+-only feature. See
+ * docs/qmx-1_04-cat-comparison.md.
+ */
+bool cat_qmx_fw_at_least(int major, int minor, int patch);
+/**
  * @brief True once the QMX has confirmed IQ mode is ON (Q9; readback == 1)
  * for the current connection. False if not yet connected or if the
  * Q9 1; / Q9; handshake never confirmed after retrying at link-up -
@@ -136,6 +145,16 @@ esp_err_t cat_query_power_swr(float *power_w, float *swr);
  */
 esp_err_t cat_pwr_swr_async_send(void);
 esp_err_t cat_pwr_swr_async_read(float *power_w, float *swr);
+
+/**
+ * @brief Enable/disable a live power/SWR poll step for QMX SWR Tune mode.
+ *
+ * When active, the background poll task adds a "PC;SW;" step to its FA/MD/FW
+ * rotation so cat_pwr_swr_async_read() has a fresh reading while the radio is
+ * transmitting a tune carrier (MD8;, 1_04+ firmware only). Disable as soon as
+ * Tune mode is exited so the extra poll step stops.
+ */
+void cat_tune_poll_set_active(bool active);
 
 /**
  * @brief Request a mode change (deferred to the poll task).

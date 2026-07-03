@@ -251,6 +251,7 @@
 let lastFreqHz     = 0;
 let lastPassbandHz = 0;
 let lastMode       = "USB";
+let lastQmxFw      = "";
 let lastCwPitchHz  = 700;
 let lastIfCalHz    = 0;
 let lastZoom       = 1.0;
@@ -474,8 +475,21 @@ function buildBandDropdown() {
   });
 }
 
+// True if lastQmxFw (e.g. "1_04_002QMX") is known and >= major.minor.patch.
+// Mirrors cat_qmx_fw_at_least() in cat.c - used to gate AM mode selection,
+// only accepted by QMX firmware 1_04+. See docs/qmx-1_04-cat-comparison.md.
+function qmxFwAtLeast(major, minor, patch) {
+  const m = /^(\d+)_(\d+)_(\d+)/.exec(lastQmxFw || "");
+  if (!m) return false;
+  const maj = parseInt(m[1], 10), min = parseInt(m[2], 10), pat = parseInt(m[3], 10);
+  if (maj !== major) return maj > major;
+  if (min !== minor) return min > minor;
+  return pat >= patch;
+}
+
 function buildModeDropdown() {
   const modes = ["USB", "LSB", "CW", "DiGi"];
+  if (qmxFwAtLeast(1, 4, 0)) modes.push("AM");
   const dd = document.getElementById("dd-mode");
   dd.innerHTML = "";
   modes.forEach(m => {
@@ -584,6 +598,7 @@ async function tick() {
     lastFreqHz     = s.freq_hz     || 0;
     lastPassbandHz = s.passband_hz || 0;
     lastMode       = s.mode        || "USB";
+    lastQmxFw      = s.qmx_fw      || "";
     lastCwPitchHz  = s.cw_pitch_hz || 700;
     lastIfCalHz    = s.if_cal_hz   || 0;
     lastZoom       = s.zoom        || 1.0;

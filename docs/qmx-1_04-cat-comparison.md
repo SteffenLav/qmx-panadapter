@@ -102,16 +102,19 @@ feature but stays untouchable until hardware-verified.
 
 ## 4. Opportunities — the "nice new features" ranked
 
-### 4.1 One-button TUNE (TODO #3) — best value, small effort
-`MD8;` enters Tune; exit mechanism is **not documented** (§1.2) — restore the mode digit
-that was active before entering is the safe design, not a bare `MD0;`. Design sketch: a
-dedicated TUNE button (not folded into the USB/LSB/CW/DiGi mode popup — it keys the radio
-continuously, so it needs the same confirm-and-visible-ACTIVE-state treatment as FT8
-TX/robot mode, not casual one-tap access) → `cat_request_mode("TUNE")` via the existing
-poll-task deferral, live SWR/power label from `PC;SW;` polled faster while active, an
-auto-timeout safety net, and exit restores the prior mode digit. Gate on `cat_get_qmx_fw()`
-reporting `1_04`+ so 1_03 users never see it. **Blocked on hardware verification of the
-exit path and of what `FW;`/other polls return while in Tune.**
+### 4.1 One-button TUNE (TODO #3) — IMPLEMENTED 2026-07-03, pending hardware verification
+Shipped as a dedicated drawer button (`DRAWER_SEC_TUNE` in `ui.c`), gated on
+`cat_qmx_fw_at_least(1, 4, 0)` — invisible on `1_03_002`. Deliberately NOT folded into the
+USB/LSB/CW/DiGi mode popup: Tune keys the radio continuously, so it gets the same
+confirm-and-visible-ACTIVE-state treatment as FT8 TX/robot mode. Entering sends
+`cat_request_mode("TUNE")` (→ `MD8;`) through the existing poll-task deferral; a live
+SWR/power label polls `PC;SW;` via a new 4th poll-task phase
+(`cat_tune_poll_set_active()`), active only during Tune. Exit restores the mode that was
+active before Tune was entered (see §1.2 — NOT a bare `MD0;`, which the manual never
+documents as valid), backed by a 60 s auto-timeout and continued `MD;` polling so an exit
+via the radio's own front panel is also picked up. **Still needs real hardware to confirm:
+does restoring the prior mode digit actually exit the radio's own Tune UI cleanly, and
+what do `FW;`/other polls return while Tune is active?** — see the checklist in §5.
 
 ### 4.2 `AI2` event-driven state push — biggest architectural win, highest risk
 `AI2` makes the QMX push an `IF;` frame on every freq/mode/TX-state change. That could
@@ -134,9 +137,13 @@ simplification on `VN;`).
 `PS0;` is a clean remote shutdown. Nice for POTA (shut the radio down from the Tab5/web
 UI before packing up). One deferred write via the poll task + a confirm dialog.
 
-### 4.5 AM mode surfacing — small
-Once AM's `FW;` behaviour is known: add AM to the mode selector and a fixed passband
-overlay. Zero urgency (experimental mode, RX-only).
+### 4.5 AM mode surfacing — IMPLEMENTED 2026-07-03, pending hardware verification
+Added to both mode selectors (touch popup in `ui.c`, web dropdown in `index.html`), gated
+the same way as Tune. The CAT-layer mapping already existed (`hamlib_mode_to_digit`,
+digit 5) — the only real gap was that neither selector offered it. **Still unverified:
+what `FW;` returns in AM** — if it's something unexpected, the passband-width label/overlay
+could show garbage; no fixed passband overlay was added since the correct value isn't
+known yet. Check on first real 1_04 contact.
 
 Not worth pursuing now: `KD` (nothing our TX path lacks), `TR`/`RR` (knob ergonomics,
 radio-side), `LC`/`TB` (LCD mirror / CW-decode text — cute, no demand).
@@ -156,12 +163,15 @@ Run against a real `1_04_002` unit, in this order — each item independent:
    `MMCW|CW offset;`, `MMBand config.|Band name (m)[0];` all still resolve (no `?;`).
 4. **`FW;` revert behaviour** — set a width, resume FW polling, see if it still snaps back.
    Then test "MM Effect = Immediate" + single `Filter RX` write (§4.3 hypothesis).
-5. **`MD8;` Tune** — enter via CAT; confirm `SW;`/`PC;` return live values while tuning;
-   confirm our poll parser tolerates `MD8` responses (shows "TUNE", shipped already). Then
-   find the actual exit path — try `MD0;` (unverified, may be rejected with `?;` since the
-   manual's Set list never lists 0), then fall back to setting the prior mode digit
-   (e.g. `MD3;` if CW was active before) and confirm that both exits the radio's own Tune
-   UI and doesn't leave it transmitting.
+5. **`MD8;` Tune** — the "Antenna Tune" drawer button (implemented 2026-07-03) should
+   appear automatically once `VN;` confirms `1_04`+. Tap it, confirm the radio actually
+   enters Tune and transmits, confirm the live SWR/power label updates, then tap "Stop
+   Tune" and confirm the radio returns cleanly to the mode it was in before (this is the
+   real unknown — our code restores the prior mode digit rather than sending a bare
+   `MD0;`, since the manual's Set list never lists 0; if that DOESN'T cleanly exit Tune on
+   real hardware, this needs a different exit mechanism entirely). Also let the 60 s
+   auto-timeout fire once on purpose to confirm it recovers cleanly. Separately confirm AM
+   in the mode selector — Set works, and check what `FW;` reports once in AM.
 6. **`AI` modes** — last, on an expendable session: `AI2;`, watch for unsolicited `IF;`
    frames, then `AI0;` and confirm normal polling still works. If anything corrupts,
    power-cycle and record it — that alone decides whether §4.2 is viable.

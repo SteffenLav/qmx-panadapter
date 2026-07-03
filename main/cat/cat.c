@@ -3,6 +3,7 @@
 #include <string.h>
 #include <stdarg.h>
 #include <stdlib.h>
+#include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -128,6 +129,21 @@ void cat_request_ssb_bandwidth(uint32_t hz)
 int cat_get_cw_offset_hz(void) { return s_cw_offset_hz; }
 const char *cat_get_qmx_fw(void) { return s_qmx_fw; }
 bool cat_get_iq_mode_confirmed(void) { return s_iq_mode_confirmed; }
+
+bool cat_qmx_fw_at_least(int major, int minor, int patch)
+{
+    if (s_qmx_fw[0] == '\0') return false;
+    int maj = 0, min = 0, pat = 0;
+    if (sscanf(s_qmx_fw, "%d_%d_%d", &maj, &min, &pat) != 3) return false;
+    if (maj != major) return maj > major;
+    if (min != minor) return min > minor;
+    return pat >= patch;
+}
+
+// Extra "PC;SW;" poll step for a live readout while QMX SWR Tune mode (MD8;,
+// 1_04+) is transmitting. See cat_tune_poll_set_active() in cat.h.
+static volatile bool s_tune_poll_active = false;
+void cat_tune_poll_set_active(bool active) { s_tune_poll_active = active; }
 esp_err_t cat_send_raw_cmd(const char *fmt, ...)
 {
     if (!s_cdc_dev) return ESP_ERR_INVALID_STATE;
@@ -422,6 +438,10 @@ static void process_cat_message(const char *msg, size_t len)
         memcpy(s_qmx_fw, msg + 2, vlen);
         s_qmx_fw[vlen] = '\0';
         ESP_LOGI(TAG, "QMX firmware: %s", s_qmx_fw);
+        // Re-evaluate 1_04+-gated drawer sections (AM mode, Tune button) now
+        // that the version is known - the drawer may already have been built
+        // (lazy, first-open) before VN; answered.
+        ui_notify_qmx_fw_known();
         return;
     }
     // Q9 response: "Q9n;" — IQ mode state, queried at link-up to confirm the
@@ -684,16 +704,24 @@ static void poll_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
         }
-        // Phase 5.10G: 3-way rotation FA / MD / FW (passband width).
+        // Phase 5.10G: 3-way rotation FA / MD / FW (passband width). A 4th
+        // phase (PC;SW;) is added while cat_tune_poll_set_active(true) - live
+        // power/SWR readout during QMX SWR Tune mode (1_04+, see
+        // docs/qmx-1_04-cat-comparison.md). MD; stays in rotation during Tune
+        // so an exit via the radio's own front panel is still picked up.
         // While an SSB filter is pinned and we're in USB/LSB, skip FW; - the
         // QMX reverts the live filter whenever the filter is read back.
         bool in_ssb = (s_last_mode_digit == '1' || s_last_mode_digit == '2');
         bool skip_fw = (s_ssb_bw_pinned != 0 && in_ssb);
+        bool tune_poll = s_tune_poll_active;
+        int n_phases = tune_poll ? 4 : 3;
         const char *cmd;
+        size_t cmd_len;
         switch (phase) {
-            case 0:  cmd = "FA;"; break;
-            case 1:  cmd = "MD;"; break;
-            default: cmd = skip_fw ? NULL : "FW;"; break;
+            case 0:  cmd = "FA;"; cmd_len = 3; break;
+            case 1:  cmd = "MD;"; cmd_len = 3; break;
+            case 2:  cmd = skip_fw ? NULL : "FW;"; cmd_len = 3; break;
+            default: cmd = "PC;SW;"; cmd_len = 6; break;  // only reached when tune_poll
         }
         if (cmd != NULL) {
             // Diagnostic: don't log every poll TX (FA/MD/FW every ~50ms swamps
@@ -709,7 +737,7 @@ static void poll_task(void *arg)
                 }
             }
             esp_err_t err = cdc_acm_host_data_tx_blocking(
-                s_cdc_dev, (const uint8_t *)cmd, 3, 200);
+                s_cdc_dev, (const uint8_t *)cmd, cmd_len, 200);
             if (err != ESP_OK) {
                 // A single transient TX timeout (e.g. CDC congestion during an
                 // FT8 mode toggle) must NOT kill the poll task - that froze
@@ -727,7 +755,7 @@ static void poll_task(void *arg)
             }
             poll_fail = 0;
         }
-        phase = (phase + 1) % 3;
+        phase = (phase + 1) % n_phases;
         vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
     }
     ESP_LOGI(TAG, "Poll task exiting");
@@ -1065,8 +1093,10 @@ const char *cat_get_mode_str(void)
 {
     char d = s_last_mode_digit;
     if (d < '1' || d > '9') return "";
+    // Keep in sync with the identical table in process_cat_message()'s MD
+    // response handler above.
     static const char *kw_modes[] = {
-        "?", "LSB", "USB", "CW", "FM", "AM", "DiGi", "CW-R", "?", "DiGi-R"
+        "?", "LSB", "USB", "CW", "FM", "AM", "DiGi", "CW-R", "TUNE", "DiGi-R"
     };
     return kw_modes[d - '0'];
 }
@@ -1096,6 +1126,11 @@ static char hamlib_mode_to_digit(const char *mode)
     if (strcmp(buf, "CW")     == 0) return '3';
     if (strcmp(buf, "FM")     == 0) return '4';
     if (strcmp(buf, "AM")     == 0) return '5';
+    // SWR Tune mode (1_04+ only, MD8;) - see docs/qmx-1_04-cat-comparison.md.
+    // Exit is via cat_request_mode() with the mode string that was active
+    // before Tune was entered, NOT a bare "MD0;" - the CAT manual's Set list
+    // for MD never lists 0 as a valid value.
+    if (strcmp(buf, "TUNE")   == 0) return '8';
     // Digital soundcard family all map to mode 6 (DiGi/FSK)
     if (strcmp(buf, "FSK")    == 0 ||
         strcmp(buf, "DIGI")   == 0 ||

@@ -20,6 +20,16 @@ static lv_obj_t *s_ta_pass       = NULL;
 static lv_obj_t *s_eye_btn       = NULL;  // password show/hide eye-icon button
 static lv_obj_t *s_eye_lbl       = NULL;  // its icon label
 static bool      s_pass_shown    = false;
+static lv_obj_t *s_wifi_btn      = NULL;  // WiFi on/off icon button (replaces the old
+                                          // drawer "WiFi initiated" checkbox)
+static lv_obj_t *s_wifi_icon_lbl = NULL;  // the WiFi glyph itself
+static lv_obj_t *s_wifi_slash    = NULL;  // diagonal red line, shown only when off -
+                                          // LVGL has no built-in "WiFi with a slash"
+                                          // glyph, so this mirrors the same
+                                          // draw-a-line-over-the-icon technique already
+                                          // used for the bottom-bar battery-absent
+                                          // indicator (see s_bot_batt_slash in ui.c)
+static bool      s_wifi_on       = false;
 static lv_obj_t *s_keyboard      = NULL;
 static bool      s_modal_open  = false;
 static void    (*s_on_close)(void) = NULL;  // one-shot, fired when the modal closes
@@ -68,6 +78,25 @@ static void eye_btn_cb(lv_event_t *e)
     s_pass_shown = !s_pass_shown;
     lv_textarea_set_password_mode(s_ta_pass, !s_pass_shown);
     if (s_eye_lbl) lv_label_set_text(s_eye_lbl, s_pass_shown ? LV_SYMBOL_EYE_OPEN : LV_SYMBOL_EYE_CLOSE);
+}
+
+// WiFi on/off icon button. This is the same "wifi_enabled" setting the old
+// drawer checkbox wrote - a boot-time preference only (wifi.c's wifi_task
+// reads it once at startup to decide whether to call esp_wifi_start() at
+// all; there is no live radio-on/off path today), just relocated here and
+// re-skinned as an icon instead of a labeled checkbox. Toggling it while
+// already connected does not disconnect/reconnect live - it takes effect on
+// the next boot, same as before.
+static void wifi_toggle_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    s_wifi_on = !s_wifi_on;
+    settings_set_wifi_enabled(s_wifi_on);
+    if (s_wifi_slash) {
+        if (s_wifi_on) lv_obj_add_flag(s_wifi_slash, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_clear_flag(s_wifi_slash, LV_OBJ_FLAG_HIDDEN);
+    }
+    ESP_LOGI(TAG, "WiFi boot-initiation: %s", s_wifi_on ? "ON" : "OFF");
 }
 
 // Show keyboard on textarea focus, attach to the focused textarea.
@@ -304,10 +333,16 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_eye_lbl, &lv_font_montserrat_28, 0);
     lv_obj_center(s_eye_lbl);
 
+    // Bottom row: Cancel, Save, and the WiFi on/off toggle share this row now
+    // (2026-07-04) - the toggle sits in the Eye button's column (x=656, same
+    // 172x60 size), which used to be Save's territory, so Cancel and Save
+    // both shifted left to fit all three across the panel width without
+    // overlapping.
+
     // Cancel button - bigger, red-tinted for "destructive" semantics
     lv_obj_t *cancel_btn = lv_btn_create(s_panel);
     lv_obj_set_size(cancel_btn, 240, 72);
-    lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_LEFT, 80, 0);
+    lv_obj_align(cancel_btn, LV_ALIGN_BOTTOM_LEFT, 40, 0);
     lv_obj_set_style_bg_color(cancel_btn, lv_color_hex(0x962020), 0);
     lv_obj_set_style_border_color(cancel_btn, lv_color_hex(0xc04040), 0);
     lv_obj_set_style_border_width(cancel_btn, 2, 0);
@@ -322,7 +357,7 @@ static void modal_build(void)
     // Save button - bigger, brighter green
     lv_obj_t *save_btn = lv_btn_create(s_panel);
     lv_obj_set_size(save_btn, 240, 72);
-    lv_obj_align(save_btn, LV_ALIGN_BOTTOM_RIGHT, -80, 0);
+    lv_obj_align(save_btn, LV_ALIGN_BOTTOM_LEFT, 360, 0);
     lv_obj_set_style_bg_color(save_btn, lv_color_hex(0x2e8b3a), 0);
     lv_obj_set_style_border_color(save_btn, lv_color_hex(0x4caf50), 0);
     lv_obj_set_style_border_width(save_btn, 2, 0);
@@ -333,6 +368,33 @@ static void modal_build(void)
     lv_obj_set_style_text_color(save_lbl, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(save_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(save_lbl);
+
+    // WiFi on/off toggle - same column and size as the Eye button above it
+    // (x=656, 172x60), bottom-aligned to share the Cancel/Save row.
+    s_wifi_btn = lv_btn_create(s_panel);
+    lv_obj_set_size(s_wifi_btn, 172, 60);
+    lv_obj_align(s_wifi_btn, LV_ALIGN_BOTTOM_LEFT, 656, 0);
+    lv_obj_set_style_bg_color(s_wifi_btn, lv_color_hex(UI_COLOR_KEY_BG), 0);
+    lv_obj_set_style_border_color(s_wifi_btn, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_border_width(s_wifi_btn, 1, 0);
+    lv_obj_set_style_radius(s_wifi_btn, 8, 0);
+    lv_obj_add_event_cb(s_wifi_btn, wifi_toggle_btn_cb, LV_EVENT_CLICKED, NULL);
+    s_wifi_icon_lbl = lv_label_create(s_wifi_btn);
+    lv_label_set_text(s_wifi_icon_lbl, LV_SYMBOL_WIFI);
+    lv_obj_set_style_text_color(s_wifi_icon_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(s_wifi_icon_lbl, &lv_font_montserrat_28, 0);
+    lv_obj_center(s_wifi_icon_lbl);
+    // Diagonal red slash drawn over the icon when off - same technique as
+    // the bottom-bar battery-absent indicator (ui.c s_bot_batt_slash), since
+    // LVGL has no built-in "WiFi with a slash" glyph. Static points array:
+    // must persist for the line's lifetime.
+    static lv_point_precise_t wifi_slash_pts[2] = { {0, 32}, {32, 0} };
+    s_wifi_slash = lv_line_create(s_wifi_btn);
+    lv_line_set_points(s_wifi_slash, wifi_slash_pts, 2);
+    lv_obj_set_style_line_color(s_wifi_slash, lv_color_hex(0xFF5050), 0);
+    lv_obj_set_style_line_width(s_wifi_slash, 3, 0);
+    lv_obj_set_style_line_rounded(s_wifi_slash, true, 0);
+    lv_obj_center(s_wifi_slash);
 
     // Physical keyboard: Enter -> Save, Esc -> Cancel.
     ui_kbd_set_buttons(save_btn, cancel_btn);
@@ -439,6 +501,15 @@ void wifi_config_modal_show(void)
     lv_textarea_set_password_mode(s_ta_pass, true);
     s_pass_shown = false;
     if (s_eye_lbl) lv_label_set_text(s_eye_lbl, LV_SYMBOL_EYE_CLOSE);
+
+    // Sync the WiFi on/off icon from the persisted setting every time the
+    // modal opens (there's no other UI surface for it now that the drawer
+    // checkbox is gone).
+    s_wifi_on = s.wifi_enabled;
+    if (s_wifi_slash) {
+        if (s_wifi_on) lv_obj_add_flag(s_wifi_slash, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_clear_flag(s_wifi_slash, LV_OBJ_FLAG_HIDDEN);
+    }
     ui_theme_focus_textarea(s_ta_ssid);
 
     // Make sure keyboard starts hidden every time.

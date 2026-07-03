@@ -23,6 +23,7 @@
 #include "settings.h"
 #include "bandplan.h"
 #include "wifi_config.h"
+#include "tune_modal.h"
 #include "memory_modal.h"
 #include "identity_config.h"
 #include "onboarding.h"
@@ -1087,8 +1088,14 @@ static void mode_popup_open(void)
 {
     if (s_mode_popup) { mode_popup_close(); return; }
 
-    static const char *modes[] = {"USB", "LSB", "CW", "DiGi"};
-    int n_modes = 4;
+    // AM is only offered once the connected QMX confirms 1_04+ firmware
+    // (VN;) - older firmware rejects MD5; with "?;". See
+    // docs/qmx-1_04-cat-comparison.md.
+    static const char *modes_std[] = {"USB", "LSB", "CW", "DiGi"};
+    static const char *modes_am[]  = {"USB", "LSB", "CW", "DiGi", "AM"};
+    bool show_am = cat_qmx_fw_at_least(1, 4, 0);
+    const char **modes = show_am ? modes_am : modes_std;
+    int n_modes = show_am ? 5 : 4;
 
     lv_obj_t *ov = lv_obj_create(lv_layer_top());
     lv_obj_set_size(ov, LV_HOR_RES, LV_VER_RES);
@@ -1522,7 +1529,9 @@ static lv_obj_t *s_left_edge_grip = NULL;
 static lv_obj_t *s_bottom_edge_grip = NULL;
 static lv_obj_t *s_switch_iq       = NULL;  // IQ balance checkbox in settings drawer
 static lv_obj_t *s_switch_flat     = NULL;  // flat-spectrum checkbox in settings drawer
-static lv_obj_t *s_check_wifi_en   = NULL;  // WiFi initiated checkbox in settings drawer
+static lv_obj_t *s_tune_entry_btn  = NULL;  // "Antenna Tune" button in the WiFi drawer
+                                            // section, opens tune_modal.c (replaces the
+                                            // old "WiFi initiated" checkbox slot)
 
 // Phase 5.10D Stage 2: settings drawer state
 static lv_obj_t *s_drawer = NULL;
@@ -1550,7 +1559,9 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_CWAUDIO    12
 #define DRAWER_SEC_WATERFALL  13
 #define DRAWER_SEC_FLIP       14
-#define DRAWER_SEC_SNAP       15
+// 15 free (was DRAWER_SEC_SNAP, dead since v0.19.4; briefly DRAWER_SEC_TUNE
+// until Antenna Tune moved into its own tune_modal.c window, 2026-07-04 -
+// its drawer entry point is now just a button inside DRAWER_SEC_WIFI)
 #define DRAWER_SEC_BPREGION   16
 #define DRAWER_SEC_DISTANCE   17  // FT8 distance unit (km/miles) - kept visible in FT8 mode
 #define DRAWER_SEC_FT8SYNC    18  // panadapter-only: FT8 sync lines + 3x waterfall (diagnostic)
@@ -1584,6 +1595,7 @@ static lv_obj_t *s_check_cwaudio = NULL;
 static lv_obj_t *s_slider_cwaudio_vol = NULL;
 static int       s_cwaudio_lock_vol = 0;   // value the (disabled) CW-audio slider snaps back to
 static lv_obj_t *s_lbl_cwaudio_vol = NULL;
+
 static lv_obj_t *s_slider_wf_black = NULL;
 static lv_obj_t *s_lbl_wf_black = NULL;
 static lv_obj_t *s_slider_wf_contrast = NULL;
@@ -1628,7 +1640,7 @@ static void drawer_dropdown_bpregion_cb(lv_event_t *e);
 static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_check_flip_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
-static void drawer_switch_wifi_en_cb(lv_event_t *e);
+static void drawer_tune_entry_btn_cb(lv_event_t *e);
 static void drawer_check_cwaudio_cb(lv_event_t *e);
 static void drawer_slider_cwaudio_vol_cb(lv_event_t *e);
 static void drawer_slider_wf_black_cb(lv_event_t *e);
@@ -1813,6 +1825,12 @@ static void iq_warn_banner_keepalive_cb(lv_timer_t *t)
     (void)t;
     if (!s_iq_warn_active || !s_iq_warn_banner) return;
     lv_obj_move_foreground(s_iq_warn_banner);
+}
+
+void ui_notify_qmx_fw_known(void)
+{
+    if (!s_drawer) return;  // not built yet - drawer_build() will see the current firmware string
+    drawer_set_ft8_mode(ui_mode_get() == UI_MODE_FT8);
 }
 
 // Same breathing technique as the edge grips, applied to the bottom-bar
@@ -2628,6 +2646,7 @@ void ui_init(lv_display_t *disp)
     // This avoids the fragmentation cliff that breaks modal_build() at runtime
     // (~70 KB free post-services). Modals are show/hide singletons.
     wifi_config_modal_init();
+    tune_modal_init();
     memory_modal_init();
     identity_config_modal_init();
     onboarding_init();   // builds the first-boot WiFi prompt + schedules the one-time flow
@@ -4779,23 +4798,30 @@ static void drawer_build(void)
         y += 108;
     }
 
-    // WiFi section: "WiFi initiated" toggle + "WiFi setup" button
+    // WiFi section: "Antenna Tune" button (top, 1_04+ firmware only - see
+    // docs/qmx-1_04-cat-comparison.md) + "WiFi setup" button (below,
+    // unchanged position). The old "WiFi initiated" checkbox that used to
+    // occupy the top slot moved into the WiFi setup window itself as an
+    // icon button (2026-07-04) - see wifi_config.c.
     {
         lv_obj_t *sec = drawer_section(DRAWER_SEC_WIFI, y, 128);
 
-        // "WiFi initiated" checkbox row
-        lv_obj_t *wifi_en_lbl = lv_label_create(sec);
-        lv_label_set_text(wifi_en_lbl, "WiFi initiated");
-        lv_obj_set_style_text_color(wifi_en_lbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(wifi_en_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(wifi_en_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
-        {
-            qmx_settings_t _cfg;
-            settings_load_all(&_cfg);
-            s_check_wifi_en = make_drawer_checkbox(sec, _cfg.wifi_enabled,
-                                                   drawer_switch_wifi_en_cb, NULL);
-        }
-        lv_obj_align(s_check_wifi_en, LV_ALIGN_TOP_RIGHT, 0, 6);
+        // Antenna Tune button - same style/colour as WiFi setup and
+        // Callsign & Grid square below. Hidden entirely (not greyed) on
+        // firmware that doesn't confirm 1_04+, same pattern as the shelved
+        // CW Audio section - see drawer_set_ft8_mode() and
+        // ui_notify_qmx_fw_known() for what shows/hides it.
+        s_tune_entry_btn = lv_btn_create(sec);
+        lv_obj_set_size(s_tune_entry_btn, DRAWER_W - 32, 56);
+        lv_obj_align(s_tune_entry_btn, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_set_style_bg_color(s_tune_entry_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_add_event_cb(s_tune_entry_btn, drawer_tune_entry_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_flag(s_tune_entry_btn, LV_OBJ_FLAG_HIDDEN);  // shown once firmware confirms 1_04+
+        lv_obj_t *tune_entry_lbl = lv_label_create(s_tune_entry_btn);
+        lv_label_set_text(tune_entry_lbl, "Antenna Tune");
+        lv_obj_set_style_text_font(tune_entry_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(tune_entry_lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_center(tune_entry_lbl);
 
         // WiFi setup button
         lv_obj_t *btn = lv_btn_create(sec);
@@ -5257,6 +5283,18 @@ static void drawer_set_ft8_mode(bool ft8)
     static const int keep_h[] = { 56, 56, 56, 128, 72, 130 };
     const int n_keep = sizeof(keep) / sizeof(keep[0]);
 
+    // Antenna Tune entry button lives inside DRAWER_SEC_WIFI (always shown in
+    // both modes), so it's gated independently of the per-section loop
+    // below: hidden entirely (not greyed) unless Panadapter mode AND the
+    // connected QMX confirms 1_04+ firmware, same pattern as the shelved CW
+    // Audio section. WiFi setup stays in its usual slot either way - see the
+    // drawer_build() WiFi section for both buttons' fixed positions.
+    if (s_tune_entry_btn) {
+        bool tune_ok = !ft8 && cat_qmx_fw_at_least(1, 4, 0);
+        if (tune_ok) lv_obj_clear_flag(s_tune_entry_btn, LV_OBJ_FLAG_HIDDEN);
+        else lv_obj_add_flag(s_tune_entry_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+
     for (int i = 0; i < N_DRAWER_SECTIONS; i++) {
         if (!s_drawer_sections[i]) continue;
         bool kept = false;
@@ -5372,11 +5410,15 @@ static void drawer_switch_flat_cb(lv_event_t *e)
     update_db_scale();   // switch the right-edge scale between dBm and dB-above-floor
 }
 
-static void drawer_switch_wifi_en_cb(lv_event_t *e)
+// Antenna Tune entry point: closes the drawer and opens tune_modal.c's own
+// window, per an explicit request that this button behave differently from
+// the WiFi setup/Identity buttons above (which open their modal on top of
+// the still-open drawer).
+static void drawer_tune_entry_btn_cb(lv_event_t *e)
 {
-    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
-    settings_set_wifi_enabled(on);
-    ESP_LOGI(TAG, "WiFi boot-initiation: %s", on ? "ON" : "OFF");
+    (void)e;
+    drawer_close();
+    tune_modal_show();
 }
 
 // CW Audio is shelved (works but breaks up on the current USB-audio pipeline),

@@ -67,6 +67,13 @@ void ui_set_sd_active(bool active);
 // confirms IQ mode (e.g. on reconnect/power-cycle).
 void ui_set_iq_mode_warning(bool active);
 
+// Called from cat.c's VN; response handler once the QMX firmware version is
+// known, so the drawer can reveal 1_04+-gated sections (AM mode, Tune button)
+// even if it was already built (lazy, first-open) before VN; answered. No-op
+// if the drawer hasn't been built yet - drawer_build() will see the current
+// firmware string directly.
+void ui_notify_qmx_fw_known(void);
+
 // Full-screen breathing red bezel shown while FT8 simulation mode is on
 // (see ft8_sim.h) - an unmissable reminder that nothing transmitted right
 // now is real. Called from the FT8-drawer-only sim mode toggle and once at
