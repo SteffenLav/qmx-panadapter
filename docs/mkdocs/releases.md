@@ -6,8 +6,9 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 **v0.19.5** — 2026-07-04
 
-Interaction polish across the panadapter, plus two real bug fixes — including a crash on leaving FT8 mode.
+**AM mode and Antenna Tune for QMX firmware 1_04_002** (field-verified on a real QMX+), plus interaction polish across the panadapter and two real bug fixes — including a crash on leaving FT8 mode.
 
+- **AM mode + Antenna Tune (QMX 1_04+ firmware only)**: if your radio runs the 1_04 beta firmware, **AM** is now selectable from the mode popup and the web UI, and a new **Antenna Tune** window (from the settings drawer) puts the radio into SWR Tune mode with a live SWR/power readout and returns to your previous mode when you stop. Both are invisible on the stable 1_03_002 firmware — no change for anyone still on it
 - **FT8 mode-exit crash fixed**: leaving FT8 could occasionally reboot the Tab5. The dual-core decoder was tearing down its shared workspace before its second-CPU helper had finished; it now waits for the helper to fully stop first
 - **WiFi on/off works live, and stops forgetting your password**: the on/off icon (now inside the WiFi setup window) applies immediately instead of only on the next reboot; the window also pre-fills your stored password so pressing Save no longer wipes it (which had left the radio unable to rejoin a secured network)
 - **FT8/FT4 remembers its frequency** across reboots and panadapter↔FT8 switches (default 14.074 MHz) instead of inheriting whatever the panadapter was last on

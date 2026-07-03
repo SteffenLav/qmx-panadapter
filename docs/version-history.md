@@ -622,7 +622,13 @@ This release is almost entirely about making **FT4 actually usable**. FT4 shippe
 
 ### Shipped in v0.19.5 — 2026-07-04 UTC
 
-A round of interaction polish across the panadapter, plus two real bug fixes — including a crash on leaving FT8 mode.
+Headline: **AM mode and Antenna Tune for QMX firmware 1_04_002** (field-verified on a real QMX+). Plus a round of interaction polish across the panadapter and two real bug fixes — including a crash on leaving FT8 mode.
+
+**AM mode + Antenna Tune (QMX 1_04+ firmware only).** If your QMX/QMX+ runs the 1_04 beta firmware (reported over CAT), two new controls appear:
+- **AM** is now selectable from the touch mode popup and the web UI mode dropdown.
+- **Antenna Tune** — a dedicated window (from the settings drawer) that puts the radio into SWR Tune mode with a live SWR/power readout, and cleanly returns to your previous mode when you stop. It keys the radio continuously while active, so it gets a deliberate Start/Stop window (with a 60-second safety auto-timeout) rather than one-tap access.
+
+Both are **invisible on the current 1_03_002 firmware** — they only appear when the connected radio reports 1_04 or newer, so there's zero change for everyone on the stable firmware. (AM has a single fixed receive filter on the QMX side; see the note at the end of this entry.)
 
 **FT8 mode-exit crash fixed.** Leaving FT8 mode could occasionally reboot the Tab5 (a genuine crash, caught on a serial capture). The dual-core FT8 decoder has a helper running on the second CPU; on exit, the main decoder was tearing down the shared workspace after only a fixed short delay instead of waiting for the helper to actually finish, so the helper could briefly read memory that had just been freed. It now waits for the helper to fully stop first. If you saw a reboot when switching out of FT8, this was very likely it.
 

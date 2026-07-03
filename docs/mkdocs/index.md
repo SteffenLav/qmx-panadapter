@@ -26,7 +26,7 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 - All panadapter features (spectrum, waterfall, zoom, memory, web UI) are production-ready
 - FT8 and FT4 receive, plus ADIF logging, are stable — FT4 decode reliability was fixed in v0.19.4 (it previously decoded only every other slot)
 - FT8 and FT4 transmit work but lack multi-hour soak testing and duty-cycle protection (FT4 TX is new in v0.19.0)
-- A crash on leaving FT8 mode was fixed in v0.19.5; WiFi on/off now applies live and no longer wipes a saved password; FT8/FT4 remembers its own frequency
+- v0.19.5 adds **AM mode and Antenna Tune for QMX 1_04+ firmware** (invisible on the stable 1_03_002); fixes a crash on leaving FT8 mode; WiFi on/off now applies live and no longer wipes a saved password; FT8/FT4 remembers its own frequency
 - Logbook uploads (QRZ/eQSL) now work reliably while FT8 is running (fixed in v0.19.1); USB reconnect and disconnect-race crashes fixed in v0.19.2; QMX IQ-mode handshake now retries automatically instead of silently failing (fixed in v0.19.3, hardened in v0.19.4)
 - See [Version History](releases.md) for all changes
 
