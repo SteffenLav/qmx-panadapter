@@ -11,6 +11,7 @@ Swipe → from the left edge to toggle to FT8/FT4 view. The same decode list and
 - Slot countdown shows 7.5 s instead of 15 s
 - All filtering, priority, and auto-reply features work identically in FT4
 - Time-sync from decoded signal timing works in both FT4 and FT8 (the bottom-bar clock shows `UTC(FT4)` when synced from an FT4 decode)
+- **v0.19.4 made FT4 reliable**: a memory-placement fault previously killed decoding on every other slot (FT8's longer slots mostly hid it), the EVEN/ODD slot markers were on the wrong 15-second grid, and the slot clock could visibly jump between slots — all fixed; if FT4 seemed deaf or erratic on an earlier version, update the firmware
 
 You'll see:
 

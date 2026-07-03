@@ -4,21 +4,20 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v0.19.3** — 2026-06-30
+**v0.19.4** — 2026-07-03
 
-- **QMX IQ-mode handshake retried automatically** — a silent failure at connect could leave the whole session running without I/Q data, making the spectrum appear shifted and tunable across the whole 48 kHz window; now retried up to 4 times, and a red on-screen banner flags it if all attempts fail
-- **Band-plan strip**: tracks actual zoom/pan live, now shows the filter passband at band scale, and supports drag-to-tune and tap-to-jump directly on the strip
-- **Memory channel drag-to-move**: long-press and drag to relocate a saved channel to any empty slot; tapping an empty slot opens the editor directly; out-of-band frequencies rejected immediately; mode/colour improvements
-- **Frequency entry popup**: drag to reposition anywhere on screen, position remembered across reboots; resizable (pinch or swipe up/down); background dimming lightened so the spectrum stays visible
-- **ADIF log viewer rebuilt**: genuine column alignment (was space-padded and never lined up), sticky header, Country and Mode columns added, Sent/Rcvd reports split, zebra-striped rows
-- **FT8/FT4 TX confirm dialog**: up/down nudge buttons to re-target the adjacent row without redoing the selection gesture; quick-tap now works directly; FT4 countdown and title corrected for 7.5-second slots
-- **FT4 clock-sync fix**: timing-offset calculation was silently using FT8's block geometry for FT4 decodes (~3.3× wrong); fixed, and the manual "Sync Time" function restored in FT4 mode
-- **FT4 decode quality restored**: the FT8-specific iteration-count reduction (v0.18.x) had been unintentionally applied to FT4 as well; FT4 now uses its own budget
-- **QRZ/eQSL uploads more reliable**: SD auto-archive task now paused during uploads (was still able to collide on a shared hardware bus); upload result popup no longer always reads "undefined"; one legacy log field that caused QRZ to permanently reject uploads past a certain QSO is cleaned up automatically
-- **Web UI**: stale-connection freeze capped at 5 seconds instead of potentially 30
+This release is almost entirely about making **FT4 actually usable** — four stacked faults, each hiding the next, all fixed. On the bench, FT4 went from "lots of signal, no answers, confusing display" to completing and logging a real QSO.
+
+- **FT4 decode reliability — the big one**: one of the two capture buffers had its FFT workspace land in slow memory, so *every other slot* analysed ~10× too slowly and decoded nothing. FT8's 15-second slots mostly hid it; FT4's 7.5-second slots did not. Both buffers now share one fast-memory workspace — steady decoding on every slot (and more free internal memory as a bonus)
+- **"FT8 stuck — resetting audio" no longer fires during normal operation**: a recovery watchdog was mis-triggering on any quiet moment — including mid-QSO — wiping the decode list and timing out otherwise-good contacts; it's now much harder to trigger and never fires while transmitting or mid-QSO
+- **Slot clock no longer jumps around in FT4**: the on-air clock nudge is now capped per slot, so genuine drift is still tracked but a single noisy reading can't visibly shift the slot countdown
+- **FT4 EVEN/ODD indicator fixed**: slot-parity markers were computed on FT8's 15-second grid, showing E E O O instead of E O E O; all parity indicators now use the active mode's real slot length
+- **QMX IQ-mode confirmation hardened**: the readback could be fooled by the QMX's own command echo and report "confirmed" while IQ mode was actually off; it now waits for the echo to clear first
+- **Frequency keypad is now see-through** — the live panadapter stays visible behind it while you type
+- **Settings drawer tidy-up**: removed the rarely-used **Snap to signal** (taps now always tune exactly where you touch) and **FT8 sync lines** items, and moved **Band-plan region** directly under Callsign & Grid
 - Full writeup in [Version History Document](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/version-history.md)
 
-### Installing v0.19.3
+### Installing v0.19.4
 
 1. Use the one-click flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases)
 2. Or follow [Build from Source](build/build.md)
@@ -32,6 +31,17 @@ Your settings (callsign, grid, WiFi, memory channels) are preserved during a nor
 3. Re-enter your settings on first boot
 
 ## Previous Releases
+
+### v0.19.3
+
+- QMX IQ-mode handshake retried automatically (up to 4 attempts), with a red on-screen banner if all attempts fail — a silent failure could leave a whole session without I/Q data (spectrum shifted, tunable across the full 48 kHz window)
+- Band-plan strip: tracks zoom/pan live, shows the filter passband at band scale, drag-to-tune and tap-to-jump directly on the strip
+- Memory channel drag-to-move; tap an empty slot to create; out-of-band frequencies rejected immediately
+- Frequency entry popup: draggable, resizable (pinch/swipe), position remembered across reboots
+- ADIF log viewer rebuilt: real column alignment, sticky header, Country and Mode columns, Sent/Rcvd split, zebra rows
+- FT8/FT4 TX confirm dialog: up/down nudge buttons; FT4 countdown and title corrected for 7.5-second slots
+- FT4 clock-sync fix (timing offset was using FT8's block geometry, ~3.3× wrong) and FT4 decode-quality fix (FT8's iteration cut no longer applied to FT4)
+- QRZ/eQSL uploads more reliable (SD auto-archive paused during uploads); web UI stale-connection freeze capped at 5 s
 
 ### v0.19.2
 
@@ -134,7 +144,6 @@ Pending:
 
 ### Future Additions
 
-- FT4 mode (slot-timing plumbing; protocol already in ft8_lib)
 - CW audio (shelved since v0.18.5 due to CPU contention; needs pipeline redesign)
 - Offline maps (grid squares, distance visualization)
 - Video tutorials & regional quick-start guides
@@ -143,7 +152,7 @@ Pending:
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v0.19.3.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v0.19.4.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

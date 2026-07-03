@@ -73,15 +73,16 @@ Once connected, the settings show your **IP address** — use this to access the
 
 ## Audio & DSP
 
-**IQ Balance** — Adaptive I/Q phase correction (usually on). Reduces image rejection.
+**IQ Balance** — Adaptive I/Q phase correction (usually on). Suppresses mirror-image signals.
 
-**CW Audio** — CW demodulation + speaker output (currently shelved; off by default).
+**CW Audio** — CW demodulation + speaker output. Currently shelved and hidden from the drawer pending a USB-audio pipeline fix.
 
 ## Diagnostic Logging
 
-**Diagnostic Log** — Enable to capture **all** ESP_LOG output to a 512 KB ring buffer. Download via:
-- Web UI: **Diag log ↓** button
-- Settings: **Download Diagnostic Log**
+The diagnostic log is **always on** — there is nothing to enable. All firmware log output is captured to a 5 MB memory ring, with a rolling copy persisted to internal flash (survives a reboot or power-off) and, if a microSD card is inserted, mirrored continuously to the card. Download via:
+
+- Web UI: **Diag ↓** (live session log) or **Diag(saved) ↓** (the flash-persisted copy from before the last reboot)
+- microSD card: `/qmx-panadapter/qmx-log.txt`
 - USB serial: `tools/capture_serial_log.ps1`
 
 Useful for troubleshooting rare issues.
@@ -100,7 +101,7 @@ Insert a microSD card (FAT32 or exFAT, any size) and the Tab5 automatically mirr
 
 A **green SD dot** in the bottom status bar confirms a card is mounted and being mirrored. If no card is inserted, the dot is absent (not an error).
 
-> The diagnostic log is always-on regardless of whether an SD card is present. If no card is inserted, the log still persists to internal flash (see [Diagnostic Logging](#diagnostic-logging) below) and survives a power-off.
+> The diagnostic log is always-on regardless of whether an SD card is present. If no card is inserted, the log still persists to internal flash (see [Diagnostic Logging](#diagnostic-logging) above) and survives a power-off.
 
 ## ADIF & Logging
 

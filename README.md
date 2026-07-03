@@ -98,7 +98,7 @@ You need **two** USB connections, and the cable to the QMX is the one people get
 
 **Power-on order matters.** Turn the **Tab5 on first** and let it finish loading, then turn the **QMX on**. Within a few seconds the top bar should populate Band / Mode / BW and the spectrum should come alive.
 
-Once flashed you can power the Tab5 from any 5 V/2 A USB-C source or the internal battery — the laptop is only needed for flashing. For diagnostics the Tab5 also outputs a serial log over the USB-C data connection (useful if WiFi is not available), but for most users the built-in **Diagnostic log** toggle in the settings drawer is the easier path — see [Step 7](#step-7----something-not-working).
+Once flashed you can power the Tab5 from any 5 V/2 A USB-C source or the internal battery — the laptop is only needed for flashing. For diagnostics the Tab5 also outputs a serial log over the USB-C data connection (useful if WiFi is not available), but for most users the built-in **diagnostic log** — always on, nothing to enable — is the easier path — see [Step 7](#step-7----something-not-working).
 
 ### Step 3 — Find your way around
 
@@ -184,10 +184,11 @@ Every completed QSO is written to an ADIF log downloadable from the web UI. See 
 
 **For anything else:**
 
-1. Open the settings drawer → flip **Diagnostic log** ON (top row).
+1. The diagnostic log is **always on** — nothing to enable.
 2. Reproduce the problem (let it run a minute; power-cycle the QMX if the issue is about connection).
 3. Grab the log:
-   - **Over WiFi:** browse to `http://<tab5-ip>/api/log` or click **Diag log ↓** in the web UI bottom bar — downloads `qmx-log.txt`.
+   - **Over WiFi:** browse to `http://<tab5-ip>/api/log` or click **Diag ↓** in the web UI bottom bar — downloads `qmx-log.txt`. After a reboot/power-loss, **Diag(saved) ↓** (`/api/log/saved`) has the copy persisted to flash from before the reboot.
+   - **microSD:** if a card is inserted, the log is mirrored continuously to `/qmx-panadapter/qmx-log.txt` on the card.
    - **Over USB (no WiFi needed):** capture the serial console with `tools/capture_serial_log.ps1`.
 4. Open an [issue](https://github.com/SteffenLav/qmx-panadapter/issues) and attach the log. It includes Tab5 and QMX firmware versions plus every CAT command exchanged — usually enough to pinpoint the problem immediately.
 
@@ -228,7 +229,7 @@ The grid is anchored to absolute frequency (e.g. …200 / 300 / 400 Hz), not to 
 
 A floating frequency tooltip above the cursor shows the target frequency in real time while dragging. Lift → CAT `FA` command is sent; QMX retunes; spectrum re-centres.
 
-**Snap-to-strongest-bin.** At zoom ×1 a tap searches ±700 Hz around the touched position for the strongest spectrum bin and snaps to it — only when the peak exceeds the local mean by >3 dB, so touches on empty noise floor still tune to the raw position. Toggle this in the settings drawer → **Snap to signal** (on by default); turn it off if you want taps to always tune to exactly where you touched.
+Taps always tune to exactly where you touched (snapped to the mode-aware grid above). The old **Snap to signal** option — which hunted for the strongest bin near your tap — was removed in v0.19.4; predictable tuning won.
 
 **Passband indicator.** Two grey vertical lines mark your current filter edges. A faint coloured tint fills the passband. The amber VFO marker shows where the QMX is tuned; in CW mode it sits at dial + CW pitch offset so it marks the actual received tone frequency, not the suppressed carrier.
 
@@ -273,24 +274,23 @@ Controls appear top to bottom in this order:
 | Control | What it does |
 |---------|--------------|
 | **Flip 180°** | Inverts the whole display and touch axes for upside-down mounting; centred checkbox so it isn't hit by accident, persisted |
-| **Diagnostic log** | Captures all firmware log output to a 512 KB ring (stays visible in FT8 mode) |
 | **IQ Balance** | Toggle adaptive I/Q image correction; re-enabling resets the estimator |
 | **Flat spectrum** | Toggle flat/absolute display mode, persisted |
-| **Snap to signal** | Toggle snap-to-strongest-bin on tap (see [Touch-to-tune](#touch-to-tune)); on by default |
 | **Presets** | HF Normal / HF DX / Strong Sig — sets dB range and smoothing in one tap |
 | **WiFi** | Opens credential modal; **WiFi initiated** checkbox enables/disables WiFi entirely |
 | **Identity** | Callsign + Maidenhead grid (required for FT8/FT4 TX; also drives KM/BRG columns) |
+| **Band-plan region** | Auto (from your grid square) / Region 1 (EU/AF) / Region 2 (Americas) / Region 3 (Asia/Pac) — drives the [band-plan strip](#spectrum-and-waterfall); sits right under Identity since Auto derives from your grid |
 | **dB Range** | Min and Max sliders (dBm) |
 | **Smoothing** | EMA alpha 0.05–1.00 |
 | **CW** | CW sidetone centre, 600–800 Hz; touch-to-tune in CW mode snaps to this offset, persisted |
-| **CW Audio** | *Currently disabled (greyed out).* Would play demodulated CW out the Tab5's speaker/headphone jack; shelved pending a USB-audio pipeline fix — see [CW Audio](#cw-audio-disabled) below |
 | **IF calibration** | ±100 Hz trim for per-unit LO variance (see [Per-unit IF calibration](#per-unit-if-calibration)) |
 | **Display** | Brightness, 10–100%, persisted |
 | **Waterfall colour map** | Thermal / Viridis / Turbo / Grayscale, persisted |
-| **Band-plan region** | Auto (from your grid square) / Region 1 (EU/AF) / Region 2 (Americas) / Region 3 (Asia/Pac) — drives the [band-plan strip](#spectrum-and-waterfall) |
 | **Waterfall** | Black level, Contrast, Adaptive floor blend, and FFT window — see [Waterfall colourisation](#waterfall-colourisation) below |
 
-The drawer shows a different subset while on the FT8 screen (Flip 180°, Diagnostic log, WiFi, Identity, Display — plus two FT8-only controls not shown above: **Distance in miles** for the decode list's KM/MI column, and **FT8 Simulation Mode**, see [FT8 Simulation mode](#ft8-simulation-mode)).
+The drawer was decluttered in v0.19.4: the **Snap to signal** and **FT8 sync lines** toggles were removed (taps now always tune where you touch), and **Band-plan region** moved up next to Identity. The shelved **CW Audio** control is hidden entirely until the feature is re-enabled — see [CW Audio](#cw-audio-disabled).
+
+The drawer shows a different subset while on the FT8 screen (Flip 180°, WiFi, Identity, Display — plus two FT8-only controls not shown above: **Distance in miles** for the decode list's KM/MI column, and **FT8 Simulation Mode**, see [FT8 Simulation mode](#ft8-simulation-mode)).
 
 ### Waterfall colourisation
 
@@ -332,7 +332,7 @@ The browser panadapter is a full-featured view in its own right — not just a w
 The **Config ↓ / Config ↑** buttons in the bottom bar let you save every setting to a plain text file, edit it on your PC, restore it, or share parts of it.
 
 - **Config ↓** downloads `qmx-config.txt` — a human-readable [INI-style](https://en.wikipedia.org/wiki/INI_file) file with everything the Tab5 remembers, grouped into sections:
-  - `[settings]` — callsign, grid, WiFi SSID/password, CW pitch, IF trim, IQ balance, flat-spectrum, zoom, colour map, brightness, dB range, EMA, diag-log/GPS toggles, keypad layout, QRZ key, eQSL user/pass.
+  - `[settings]` — callsign, grid, WiFi SSID/password, CW pitch, IF trim, IQ balance, flat-spectrum, zoom, colour map, brightness, dB range, EMA, GPS toggle, keypad layout, QRZ key, eQSL user/pass.
   - `[cq]` — the three FT8 CQ-message presets and which is active.
   - `[ft8_filters]` — the CQ-run include/exclude filter terms and toggles.
   - `[memories]` — the 32 memory channels, one per line: `slot = freq_hz, mode, label`.
@@ -354,6 +354,7 @@ Three things you can do with it:
 | `/api/status` | GET | JSON status (see below) |
 | `/api/cmd` | POST | Send Band/Mode/BW/Zoom commands |
 | `/api/log` | GET | Diagnostic log download (`qmx-log.txt`) |
+| `/api/log/saved` | GET | Flash-persisted diagnostic log from before the last reboot/power-off |
 | `/api/adif` | GET | ADIF QSO log download (`qso.adi`) |
 | `/api/adif/clear` | GET | Wipe ADIF log and worked-call cache |
 | `/api/qrz_key` | POST | Save QRZ Logbook API key (body = raw key text) |

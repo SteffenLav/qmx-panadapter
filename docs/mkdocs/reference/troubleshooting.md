@@ -64,7 +64,7 @@ If still flat after 10 seconds, proceed to [Collecting Diagnostics](#collecting-
 2. Try your **2.4 GHz WiFi network** instead (if you have dual-band)
 3. Forget the network and reconnect: Settings → WiFi → tap network name → Forget → re-add
 4. Restart Tab5
-5. If still failing, enable **Diagnostic log** and see [Collecting Diagnostics](#collecting-diagnostics)
+5. If still failing, grab the always-on **diagnostic log** — see [Collecting Diagnostics](#collecting-diagnostics)
 
 ### FT8 decoding is slow or stops
 
@@ -81,7 +81,7 @@ If still flat after 10 seconds, proceed to [Collecting Diagnostics](#collecting-
 1. **Turn WiFi off** temporarily and see if decodes improve
 2. Restart the panadapter (go Panadapter → settings → About → Reset)
 3. Check USB cable is firmly connected
-4. Enable Diagnostic log and capture a session; post your log on GitHub
+4. Download the diagnostic log (web UI **Diag ↓**) after a session and post it on GitHub
 
 ### FT8 transmit doesn't key the QMX
 
@@ -169,18 +169,20 @@ For POTA/portable operation without WiFi:
 **Fix:**
 
 1. Re-enter your settings
-2. If they disappear again, enable Diagnostic log and report on GitHub
+2. If they disappear again, download the diagnostic log (web UI **Diag ↓**) and report on GitHub
 3. As a last resort: export your config via web UI (Config ↓), then do a full factory reset, then re-import
 
 ## Collecting Diagnostics
 
 If you're stuck, capture a **diagnostic log**:
 
-### From Tab5 (Wireless)
+### From the Web UI (Wireless)
 
-1. Settings → Diagnostic log → **on**
-2. Reproduce the issue (let it sit for 30 seconds)
-3. Settings → scroll down → **Download Diagnostic Log**
+The diagnostic log is **always on** — nothing to enable.
+
+1. Reproduce the issue (let it sit for 30 seconds)
+2. In the web UI bottom bar, click **Diag ↓** to download the live session log — or **Diag(saved) ↓** for the copy persisted from before the last reboot (useful if the device crashed or was power-cycled)
+3. Alternatively, if a microSD card is inserted, pull `/qmx-panadapter/qmx-log.txt` from the card
 4. Post the `.txt` file on [GitHub Issues](https://github.com/SteffenLav/qmx-panadapter/issues) or the [QRPLabs Groups.io thread](https://groups.io/g/QRPLabs/topic/119565643)
 
 ### From Serial Console (Offline)
@@ -198,7 +200,7 @@ The log includes your firmware version, QMX firmware, callsign, grid, hardware r
 
 1. **Check the [Quick Start](../quick-start.md)** — most issues are covered there
 2. **Read [Settings](../guide/settings.md)** — verify your configuration
-3. **Enable Diagnostic log** — the log often reveals the root cause
+3. **Download the diagnostic log** (always on) — it often reveals the root cause
 4. **Post on [GitHub Issues](https://github.com/SteffenLav/qmx-panadapter/issues) or the [QRPLabs Groups.io thread](https://groups.io/g/QRPLabs/topic/119565643)** — include:
    - Your symptoms (what you saw, what you expected)
    - Your hardware (Tab5 model, QMX/QMX+, antenna)

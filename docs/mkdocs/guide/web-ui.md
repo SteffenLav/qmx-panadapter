@@ -59,7 +59,7 @@ Bottom bar offers several downloads:
 
 - **ADIF ↓** — QSO log as an ADIF file (import into WSJT-X, EQSL, etc.)
 - **Config ↓** — all settings as a text file (backup or transfer to another Tab5)
-- **Diag log ↓** — diagnostic log for troubleshooting
+- **Diag ↓** — live diagnostic log for troubleshooting (always on, nothing to enable); **Diag(saved) ↓** — the copy persisted to flash from before the last reboot/power-off
 - **Tab5 Screenshot** — current display as PNG
 
 ## Upload Functions
