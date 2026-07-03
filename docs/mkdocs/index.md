@@ -21,11 +21,12 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 ## Status
 
-**v0.19.4 — Stable for all features except FT8/FT4 transmit, which is functional but un-soaked for multi-hour sessions.**
+**v0.19.5 — Stable for all features except FT8/FT4 transmit, which is functional but un-soaked for multi-hour sessions.**
 
 - All panadapter features (spectrum, waterfall, zoom, memory, web UI) are production-ready
 - FT8 and FT4 receive, plus ADIF logging, are stable — FT4 decode reliability was fixed in v0.19.4 (it previously decoded only every other slot)
 - FT8 and FT4 transmit work but lack multi-hour soak testing and duty-cycle protection (FT4 TX is new in v0.19.0)
+- A crash on leaving FT8 mode was fixed in v0.19.5; WiFi on/off now applies live and no longer wipes a saved password; FT8/FT4 remembers its own frequency
 - Logbook uploads (QRZ/eQSL) now work reliably while FT8 is running (fixed in v0.19.1); USB reconnect and disconnect-race crashes fixed in v0.19.2; QMX IQ-mode handshake now retries automatically instead of silently failing (fixed in v0.19.3, hardened in v0.19.4)
 - See [Version History](releases.md) for all changes
 
@@ -33,7 +34,7 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 **New user?** Start with the [Quick Start](quick-start.md) guide — 10 minutes to on-air.
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v0.19.4.pdf) — a printable 40-page reference.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v0.19.5.pdf) — a printable 40-page reference.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

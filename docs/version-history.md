@@ -620,6 +620,30 @@ This release is almost entirely about making **FT4 actually usable**. FT4 shippe
 
 **Settings drawer tidy-up.** Removed two rarely-used items — **Snap to signal** (tap-to-tune now always tunes exactly where you touch) and the **FT8 sync lines** diagnostic — and moved **Band-plan region** directly under the Callsign & Grid button (its "Auto" setting is derived from your grid square, so they belong together). Also closed an empty gap that sat between Flat Spectrum and Presets.
 
+### Shipped in v0.19.5 — 2026-07-04 UTC
+
+A round of interaction polish across the panadapter, plus two real bug fixes — including a crash on leaving FT8 mode.
+
+**FT8 mode-exit crash fixed.** Leaving FT8 mode could occasionally reboot the Tab5 (a genuine crash, caught on a serial capture). The dual-core FT8 decoder has a helper running on the second CPU; on exit, the main decoder was tearing down the shared workspace after only a fixed short delay instead of waiting for the helper to actually finish, so the helper could briefly read memory that had just been freed. It now waits for the helper to fully stop first. If you saw a reboot when switching out of FT8, this was very likely it.
+
+**WiFi on/off actually works now, and stops forgetting your password.** The WiFi on/off control (now an icon button inside the WiFi setup window) took effect only on the next reboot, so toggling it appeared to do nothing. It now applies immediately — off disconnects and stays off, on reconnects right away. Separately, the WiFi window used to blank the password field every time it opened, so pressing Save re-saved an *empty* password and the radio then couldn't rejoin a secured network. The field now pre-fills your stored password (masked), and Save respects the on/off toggle instead of always forcing a reconnect.
+
+**FT8/FT4 remembers its frequency.** FT8 mode now keeps its own frequency across reboots and across switching back and forth to the panadapter, instead of sometimes opening on whatever unrelated frequency the panadapter was last on. Picking any FT8 or FT4 band preset saves it; a fresh boot into FT8 returns to that frequency (default 14.074 MHz).
+
+**Band picker shows all bands at once.** On radios with many configured bands (QMX+), the band list is now laid out in two side-by-side columns so every band is visible without scrolling. A spurious "11m" entry that some radios report but don't actually have is now filtered out.
+
+**Band-plan strip improvements.** The current-position indicator is now a framed, see-through window showing exactly the slice of the band on screen — drag it along the strip to tune, and the centre now always lands on a whole kHz. The 6 m band, which previously showed a blank strip, now has its band-plan segments. A tiny finger movement on lift no longer nudges the frequency.
+
+**Point-to-tune is steadier.** Tapping/dragging on the spectrum or waterfall to tune now commits exactly where the cyan cursor last settled, ignoring the small finger-jump that happens as you lift off. The cyan guide line now also runs cleanly through the waterfall (following your finger, with no leftover trail) and stays glued to the spectrum line above it.
+
+**Settings drawer sliders.** Sliders now respond only when you grab the knob, so a swipe up/down over a slider scrolls the drawer instead of accidentally moving the slider. Sliders pushed fully to one end now show the whole knob instead of clipping half of it. The **Settings** heading is always visible at the top when the drawer opens (it could previously open scrolled part-way down, looking empty). The **WiFi setup** button now closes the drawer when opened, matching the other full-screen windows.
+
+**Memory recall in FT8/FT4.** Memory channels that aren't in the DiGi (data) mode are now greyed out and can't be recalled while you're in FT8/FT4 — recalling one would have knocked the radio out of data mode. They can still be edited and rearranged.
+
+**Antenna Tune window.** The AM-mode and SWR-Tune support added in the previous update got its interface finalised: Antenna Tune is now its own window (opened from the settings drawer) with a bigger title and a live SWR/power readout, and the transient "transmitting"/"exited" pop-ups were removed since the on-screen state already makes it obvious.
+
+**Documentation:** confirmed and recorded that AM mode has no selectable receive bandwidth — the QMX firmware uses one fixed wide filter for AM (and digital modes), so the "3.2 kHz" shown in AM is simply what the radio reports, not something adjustable. Only SSB and CW have selectable filter widths.
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*

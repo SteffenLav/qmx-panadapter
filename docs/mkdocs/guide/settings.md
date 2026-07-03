@@ -10,11 +10,13 @@ Swipe ← from the right edge to open the settings drawer. All settings are save
 
 ## WiFi
 
-**WiFi On/Off** — Enable or disable WiFi. Useful for field operation (no WiFi overhead, extended battery life).
+Tap **WiFi setup** in the settings drawer to open the WiFi window.
+
+**WiFi On/Off** — the WiFi icon button in the WiFi window (shown with a diagonal red slash when off). Toggling it takes effect immediately — off disconnects and stays off; on reconnects right away. Turning WiFi off is useful for field operation (no WiFi overhead, extended battery life).
 
 **SSID** — Your WiFi network name. Tap **Scan** to list nearby networks and pick one.
 
-**Password** — Your WiFi password. Tap the eye icon to show/hide it.
+**Password** — Your WiFi password (pre-filled with your saved password; tap the eye icon to show/hide it). Tap **Save** to store it and connect.
 
 Once connected, the settings show your **IP address** — use this to access the web UI from a browser.
 

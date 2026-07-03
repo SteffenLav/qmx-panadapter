@@ -4,20 +4,22 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v0.19.4** — 2026-07-03
+**v0.19.5** — 2026-07-04
 
-This release is almost entirely about making **FT4 actually usable** — four stacked faults, each hiding the next, all fixed. On the bench, FT4 went from "lots of signal, no answers, confusing display" to completing and logging a real QSO.
+Interaction polish across the panadapter, plus two real bug fixes — including a crash on leaving FT8 mode.
 
-- **FT4 decode reliability — the big one**: one of the two capture buffers had its FFT workspace land in slow memory, so *every other slot* analysed ~10× too slowly and decoded nothing. FT8's 15-second slots mostly hid it; FT4's 7.5-second slots did not. Both buffers now share one fast-memory workspace — steady decoding on every slot (and more free internal memory as a bonus)
-- **"FT8 stuck — resetting audio" no longer fires during normal operation**: a recovery watchdog was mis-triggering on any quiet moment — including mid-QSO — wiping the decode list and timing out otherwise-good contacts; it's now much harder to trigger and never fires while transmitting or mid-QSO
-- **Slot clock no longer jumps around in FT4**: the on-air clock nudge is now capped per slot, so genuine drift is still tracked but a single noisy reading can't visibly shift the slot countdown
-- **FT4 EVEN/ODD indicator fixed**: slot-parity markers were computed on FT8's 15-second grid, showing E E O O instead of E O E O; all parity indicators now use the active mode's real slot length
-- **QMX IQ-mode confirmation hardened**: the readback could be fooled by the QMX's own command echo and report "confirmed" while IQ mode was actually off; it now waits for the echo to clear first
-- **Frequency keypad is now see-through** — the live panadapter stays visible behind it while you type
-- **Settings drawer tidy-up**: removed the rarely-used **Snap to signal** (taps now always tune exactly where you touch) and **FT8 sync lines** items, and moved **Band-plan region** directly under Callsign & Grid
+- **FT8 mode-exit crash fixed**: leaving FT8 could occasionally reboot the Tab5. The dual-core decoder was tearing down its shared workspace before its second-CPU helper had finished; it now waits for the helper to fully stop first
+- **WiFi on/off works live, and stops forgetting your password**: the on/off icon (now inside the WiFi setup window) applies immediately instead of only on the next reboot; the window also pre-fills your stored password so pressing Save no longer wipes it (which had left the radio unable to rejoin a secured network)
+- **FT8/FT4 remembers its frequency** across reboots and panadapter↔FT8 switches (default 14.074 MHz) instead of inheriting whatever the panadapter was last on
+- **Band picker shows all bands at once**: two side-by-side columns on radios with many bands (QMX+); a spurious "11m" entry some radios report but don't have is filtered out
+- **Band-plan strip**: the position indicator is now a see-through framed window (drag it to tune, centre snaps to a whole kHz); the 6 m band now has band-plan segments; a tiny finger movement on lift no longer nudges the frequency
+- **Point-to-tune steadier**: commits exactly where the cyan cursor settled, ignoring the small finger-jump on lift-off; the cyan guide line now runs cleanly through the waterfall (no trail) and stays glued to the spectrum line
+- **Settings drawer**: sliders respond only when you grab the knob (a swipe over one scrolls the drawer instead), the whole knob is visible at the ends, the **Settings** title is always visible on open, and **WiFi setup** closes the drawer when opened
+- **Memory recall in FT8/FT4**: memories not in the DiGi (data) mode are greyed out and can't be recalled (would knock the radio out of data mode); still editable
+- **Antenna Tune** is now its own window (from the settings drawer) with a bigger title and a live SWR/power readout
 - Full writeup in [Version History Document](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/version-history.md)
 
-### Installing v0.19.4
+### Installing v0.19.5
 
 1. Use the one-click flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases)
 2. Or follow [Build from Source](build/build.md)
@@ -31,6 +33,12 @@ Your settings (callsign, grid, WiFi, memory channels) are preserved during a nor
 3. Re-enter your settings on first boot
 
 ## Previous Releases
+
+### v0.19.4
+
+- FT4 usability — four stacked faults fixed: a capture buffer's FFT workspace in slow memory (every other slot decoded nothing), a mis-firing stuck-decoder watchdog wiping the list mid-QSO, an uncapped per-slot clock nudge, and slot-parity computed on FT8's grid in FT4
+- QMX IQ-mode confirmation hardened (readback no longer fooled by the command echo)
+- See-through frequency keypad; settings-drawer declutter (removed Snap-to-signal + FT8 sync lines, moved Band-plan region)
 
 ### v0.19.3
 
@@ -152,7 +160,7 @@ Pending:
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v0.19.4.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v0.19.5.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 
