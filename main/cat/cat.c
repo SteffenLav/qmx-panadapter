@@ -337,7 +337,9 @@ static void process_cat_message(const char *msg, size_t len)
     }
 
     // MD response: "MDn;" — Kenwood mode digit. QMX uses:
-    // 1=LSB, 2=USB, 3=CW, 4=FM, 5=AM, 6=FSK, 7=CW-R, 9=FSK-R
+    // 1=LSB, 2=USB, 3=CW, 5=AM (1_04+), 6=FSK, 7=CW-R, 8=SWR Tune (1_04+),
+    // 9=FSK-R. Digit 4 (FM) never occurs on a QMX but is kept for Kenwood
+    // compatibility. See docs/qmx-1_04-cat-comparison.md.
     if (len == 4 && msg[0] == 'M' && msg[1] == 'D') {
         char d = msg[2];
         if (d < '1' || d > '9') {
@@ -345,7 +347,7 @@ static void process_cat_message(const char *msg, size_t len)
             return;
         }
         static const char *kw_modes[] = {
-            "?", "LSB", "USB", "CW", "FM", "AM", "DiGi", "CW-R", "?", "DiGi-R"
+            "?", "LSB", "USB", "CW", "FM", "AM", "DiGi", "CW-R", "TUNE", "DiGi-R"
         };
         const char *mode_str = kw_modes[d - '0'];
         if (d != s_last_mode_digit) {

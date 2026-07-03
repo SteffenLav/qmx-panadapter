@@ -45,6 +45,8 @@ tools/flasher/esptool/
 # not redistributed in this public MIT repo. See docs/qmx-reference/SOURCES.md
 # for what they are and where to download your own copy.
 docs/qmx-reference/*.pdf
+# pdftotext extracts of the same vendor manuals (derived content, same policy)
+docs/qmx-reference/*.txt
 
 # Local dev session log captures (idf.py output redirected to file)
 build_flash*.txt

@@ -1,11 +1,18 @@
 # QMX vendor reference manuals
 
-This folder is a local cache for two QRP Labs vendor PDFs used as authoritative
+This folder is a local cache for QRP Labs vendor PDFs used as authoritative
 references while building FT8 features (decode calibration, and the v0.12.0
 Manual FT8 TX work in particular):
 
 - `QMX_CAT_programming_manual_1.03.000.pdf` — QMX CAT Programming Manual, firmware 1.03_000
 - `QMX_operation_manual_1.03.002.pdf` — QMX Operating Manual, firmware 1_03_002
+- `QMX_CAT_manual_1.04.001.pdf` — QMX CAT Programming Manual, firmware 1_04_001 (covers all
+  1_04 CAT changes; 1_04_002 added no CAT changes). Added 2026-07-03 for the 1_03↔1_04
+  comparison in `docs/qmx-1_04-cat-comparison.md`.
+- `QMX_operation_manual_1.04.001.pdf` — QMX Operating Manual, firmware 1_04_001 (same purpose)
+
+`cat_103.txt` / `cat_104.txt` are local `pdftotext -layout` extracts of the two CAT
+manuals (also gitignored) — regenerate with `pdftotext -layout <pdf> <txt>` if missing.
 
 **These PDFs are not committed to the repo** (see `.gitignore`). They are
 copyrighted vendor documentation (© QRP Labs / Hans Summers G0UPL), and this is

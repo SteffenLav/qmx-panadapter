@@ -194,12 +194,12 @@ Kenwood-style. Round-robin poll: `FA` (freq) / `MD` (mode) / `FW` (passband widt
 ### QMX firmware version via `VN;`
 `VN;` returns `VN<version>QMX;` (e.g. `VN1_03_002QMX;`) — the QMX/QDX firmware version, same string as the firmware filename without the dot. Queried once at CAT link-up (`process_cat_message` parses it into `s_qmx_fw`; `cat_get_qmx_fw()` exposes it). Surfaced in the boot/diagnostic log (`QMX firmware: ...`), the diag-log enable header (`qmx_fw=...`), and the web `/api/status` JSON (`qmx_fw`). Note `ID;` returns only the emulated Kenwood model (`ID020;` = TS-480), **not** the QMX firmware — use `VN;` for that. Confirmed on hardware (dev bench QMX is on `1_03_002`).
 
-### QMX `1_04` beta firmware — still unverified against real hardware, but the changelog is now fully pulled (2026-06-30)
-Not tested at all against a real `1_04` unit — `1_03_002` remains the recommended/known-good firmware in the quick-start guide. Full changelog re-pulled from qrp-labs.com/qmx on 2026-06-30 (three beta releases so far: `1_04_000` 08-May-2026 QMX+-only, `1_04_001` 12-Jun-2026, `1_04_002` 18-Jun-2026 — all still BETA, no GA release yet). This is TODO item #22.
+### QMX `1_04` beta firmware — still unverified against real hardware; full 1:1 CAT comparison done (2026-07-03)
+Not tested at all against a real `1_04` unit — `1_03_002` remains the recommended/known-good firmware in the quick-start guide. **The complete 1_03_002↔1_04_002 comparison lives in `docs/qmx-1_04-cat-comparison.md`** (command-by-command CAT diff from the actual vendor manuals — both cached in `docs/qmx-reference/`, gitignored — plus our-code impact map, ranked feature opportunities, and the hardware verification checklist). Three beta releases so far: `1_04_000` 08-May-2026 QMX+-only, `1_04_001` 12-Jun-2026, `1_04_002` 18-Jun-2026 (no CAT changes vs `_001`; forces a Factory Reset on install) — all still BETA, no GA release yet. This is TODO item #22. Summary below; the doc is authoritative.
 
 **CAT changes relevant to our code, not yet handled:**
 - `MD8;` enters SWR Tune mode (`MD0;` exits) — our Kenwood mode table maps raw digit 8 to `"?"`, cosmetic-only gap, not a crash
-- `MD` command expanded to include AM (mode 5), added in `1_04_001` — our mode table doesn't recognize it either
+- `MD` command expanded to include AM (mode 5), added in `1_04_001` — our mode table already labels digit 5 as "AM" (an earlier version of this note claimed otherwise; `kw_modes[]` in `cat.c` has handled 1–9 including AM all along)
 - `MU;` forces a complete config menu reload — unimplemented on our side, not currently needed for anything we do
 - `PS`/`KD`/`TR`/`RR` (power-supply status, key-down get/set, tune/RIT rate) — all unimplemented, no current use case
 - `PC;` already re-calibrated for the 3-digit-at-≥10W change (`cat_query_power_swr()`/`cat_pwr_swr_async_read()` in `cat.c`)
