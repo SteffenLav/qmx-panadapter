@@ -68,6 +68,11 @@ static const char *TAG = "settings";
 #define KEY_FD_SECTION     "fd_sect"
 #define KEY_SIM_MODE       "sim_mode"
 #define KEY_FT8_OP_MODE    "ft8_op_mode"
+#define KEY_CHARGE_LIM_EN  "chg_lim_en"
+#define KEY_CHARGE_LIM_PCT "chg_lim_pct"
+#define KEY_RESMON_EN      "resmon_en"
+#define KEY_RESMON_DX      "resmon_dx"
+#define KEY_RESMON_DY      "resmon_dy"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -88,6 +93,8 @@ static const char *TAG = "settings";
 #define DEF_WF_CONTRAST   (45.0f)
 #define DEF_WF_BLEND      (100)
 #define DEF_WF_WINDOW     (0)
+#define DEF_CHARGE_LIM_EN  (false)
+#define DEF_CHARGE_LIM_PCT (80)
 
 // Debounce: how long we wait after the last change before flushing.
 #define DEBOUNCE_MS     500
@@ -144,6 +151,10 @@ static const char *TAG = "settings";
 #define DIRTY_FREQ_KP_SMALL  (1ull << 49)
 #define DIRTY_PASSBAND_HZ    (1ull << 50)
 #define DIRTY_FT8_FREQ       (1ull << 51)
+#define DIRTY_CHARGE_LIM_EN  (1ull << 52)
+#define DIRTY_CHARGE_LIM_PCT (1ull << 53)
+#define DIRTY_RESMON_EN      (1ull << 54)
+#define DIRTY_RESMON_POS     (1ull << 55)
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -292,6 +303,13 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_FD_SECTION)   nvs_set_str(s_nvs, KEY_FD_SECTION, snap.fd_section);
         if (dirty_local & DIRTY_SIM_MODE)     nvs_set_u8(s_nvs, KEY_SIM_MODE, snap.sim_mode_en ? 1 : 0);
         if (dirty_local & DIRTY_FT8_OP_MODE)  nvs_set_u8(s_nvs, KEY_FT8_OP_MODE, snap.ft8_op_mode);
+        if (dirty_local & DIRTY_CHARGE_LIM_EN)  nvs_set_u8(s_nvs, KEY_CHARGE_LIM_EN,  snap.charge_limit_en ? 1 : 0);
+        if (dirty_local & DIRTY_CHARGE_LIM_PCT) nvs_set_u8(s_nvs, KEY_CHARGE_LIM_PCT, snap.charge_limit_pct);
+        if (dirty_local & DIRTY_RESMON_EN)  nvs_set_u8(s_nvs, KEY_RESMON_EN, snap.resmon_en ? 1 : 0);
+        if (dirty_local & DIRTY_RESMON_POS) {
+            nvs_set_i16(s_nvs, KEY_RESMON_DX, snap.resmon_dx);
+            nvs_set_i16(s_nvs, KEY_RESMON_DY, snap.resmon_dy);
+        }
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
@@ -399,6 +417,11 @@ static void load_from_nvs(qmx_settings_t *out)
     out->fd_section[0] = '\0';
     out->sim_mode_en = false;
     out->ft8_op_mode = 0;     // FT8
+    out->charge_limit_en  = DEF_CHARGE_LIM_EN;
+    out->charge_limit_pct = DEF_CHARGE_LIM_PCT;
+    out->resmon_en = false;
+    out->resmon_dx = 0;
+    out->resmon_dy = 0;
 
     if (!s_ready) {
         ESP_LOGW(TAG, "load_all: NVS not ready, using defaults");
@@ -499,6 +522,12 @@ static void load_from_nvs(qmx_settings_t *out)
 
     if (nvs_get_u8(s_nvs, KEY_SIM_MODE, &u8v) == ESP_OK) out->sim_mode_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_FT8_OP_MODE, &u8v) == ESP_OK) out->ft8_op_mode = u8v;
+    if (nvs_get_u8(s_nvs, KEY_CHARGE_LIM_EN, &u8v) == ESP_OK) out->charge_limit_en = (u8v != 0);
+    nvs_get_u8(s_nvs, KEY_CHARGE_LIM_PCT, &out->charge_limit_pct);
+    if (out->charge_limit_pct < 50 || out->charge_limit_pct > 100) out->charge_limit_pct = DEF_CHARGE_LIM_PCT;
+    if (nvs_get_u8(s_nvs, KEY_RESMON_EN, &u8v) == ESP_OK) out->resmon_en = (u8v != 0);
+    nvs_get_i16(s_nvs, KEY_RESMON_DX, &out->resmon_dx);
+    nvs_get_i16(s_nvs, KEY_RESMON_DY, &out->resmon_dy);
 
     ESP_LOGI(TAG, "loaded: db=[%.1f..%.1f] ema=%.2f iq=%d",
              out->db_min, out->db_max, out->ema_alpha, out->iq_enabled);
@@ -1002,16 +1031,6 @@ void settings_set_display_flip(bool v)
     mark_dirty(DIRTY_DISP_FLIP);
 }
 
-void settings_set_snap_to_peak(bool v)
-{
-    if (!s_ready) return;
-    xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (s_pending.snap_to_peak == v) { xSemaphoreGive(s_mutex); return; }
-    s_pending.snap_to_peak = v;
-    xSemaphoreGive(s_mutex);
-    mark_dirty(DIRTY_SNAP_PEAK);
-}
-
 void settings_set_distance_in_miles(bool v)
 {
     if (!s_ready) return;
@@ -1020,16 +1039,6 @@ void settings_set_distance_in_miles(bool v)
     s_pending.distance_in_miles = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_DISTANCE_MILES);
-}
-
-void settings_set_ft8_sync_lines(bool v)
-{
-    if (!s_ready) return;
-    xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (s_pending.ft8_sync_lines == v) { xSemaphoreGive(s_mutex); return; }
-    s_pending.ft8_sync_lines = v;
-    xSemaphoreGive(s_mutex);
-    mark_dirty(DIRTY_FT8_SYNC_LINES);
 }
 
 void settings_set_bandplan_region(uint8_t v)
@@ -1099,4 +1108,47 @@ void settings_set_ft8_op_mode(uint8_t v)
     s_pending.ft8_op_mode = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_FT8_OP_MODE);
+}
+
+void settings_set_charge_limit_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.charge_limit_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.charge_limit_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CHARGE_LIM_EN);
+}
+
+void settings_set_charge_limit_pct(uint8_t pct)
+{
+    if (!s_ready) return;
+    if (pct < 50) pct = 50;
+    if (pct > 100) pct = 100;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.charge_limit_pct == pct) { xSemaphoreGive(s_mutex); return; }
+    s_pending.charge_limit_pct = pct;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CHARGE_LIM_PCT);
+}
+
+void settings_set_resmon_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.resmon_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.resmon_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_RESMON_EN);
+}
+
+void settings_set_resmon_pos(int16_t dx, int16_t dy)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.resmon_dx == dx && s_pending.resmon_dy == dy) { xSemaphoreGive(s_mutex); return; }
+    s_pending.resmon_dx = dx;
+    s_pending.resmon_dy = dy;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_RESMON_POS);
 }

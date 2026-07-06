@@ -4,6 +4,10 @@
 #include "time_sync.h"
 #include "diag_log.h"
 #include "ft8_test.h"
+#include "settings.h"
+#include "bsp/m5stack_tab5.h"
+#include "sd_archive.h"
+#include "esp_heap_caps.h"
 #include <stdio.h>
 #include <stdbool.h>
 #include <time.h>
@@ -14,6 +18,28 @@
 #include "lvgl.h"
 #include "ui.h"
 #include "esp_app_desc.h"
+#include "esp_log.h"
+
+static const char *TAG = "status";
+
+// SD free/max is only re-queried every SD_POLL_INTERVAL_S (not every 1Hz
+// tick) - it touches the physical SDMMC host that WiFi's SDIO link also
+// shares, and this project has been bitten three times before by exactly
+// that class of hazard (see CLAUDE.md's SD/WiFi SDMMC notes). Free space
+// doesn't change fast enough to need second-by-second polling anyway.
+#define SD_POLL_INTERVAL_S 20
+static uint64_t s_sd_free_b = 0, s_sd_total_b = 0;
+static bool     s_sd_ok = false;
+static int      s_sd_poll_countdown = 0;  // 0 = poll on the next tick
+
+// Battery care: when settings.charge_limit_en is on, cut charging once the
+// pack reaches charge_limit_pct and resume it once the level has dropped
+// CHARGE_LIMIT_HYSTERESIS_PCT points below that, so it doesn't rapid-cycle
+// right at the threshold. s_charge_cutoff_active latches the cutoff so the
+// GPIO write (bsp_set_charge_en) only happens on the transition edges, not
+// every tick.
+#define CHARGE_LIMIT_HYSTERESIS_PCT 5
+static bool s_charge_cutoff_active = false;
 
 // Pick an LVGL battery glyph based on charge level (0-100).
 static const char *battery_glyph(int level)
@@ -67,6 +93,69 @@ static void status_task(void *arg)
         int  level    = battery_get_level();
         int  mv       = battery_get_mv();
         bool charging = battery_is_charging();
+
+        qmx_settings_t cfg;
+        settings_load_all(&cfg);
+
+        // Battery care: stop charging at a user-set percentage.
+        if (battery_present()) {
+            if (cfg.charge_limit_en) {
+                if (!s_charge_cutoff_active && level >= (int)cfg.charge_limit_pct) {
+                    bsp_set_charge_en(false);
+                    s_charge_cutoff_active = true;
+                    ESP_LOGI(TAG, "battery care: charging stopped at %d%% (limit %u%%)",
+                             level, (unsigned)cfg.charge_limit_pct);
+                } else if (s_charge_cutoff_active &&
+                           level < (int)cfg.charge_limit_pct - CHARGE_LIMIT_HYSTERESIS_PCT) {
+                    bsp_set_charge_en(true);
+                    s_charge_cutoff_active = false;
+                    ESP_LOGI(TAG, "battery care: charging resumed at %d%% (limit %u%%)",
+                             level, (unsigned)cfg.charge_limit_pct);
+                }
+            } else if (s_charge_cutoff_active) {
+                // Feature turned off mid-cutoff - restore normal charging.
+                bsp_set_charge_en(true);
+                s_charge_cutoff_active = false;
+            }
+        }
+
+        // Resource-monitor overlay: only bother formatting when it's shown -
+        // the drawer's own snprintf can wait, this one runs unconditionally
+        // every second so skip the work when nobody's watching it. The
+        // "< 16KB" crash-risk line is a static reminder of this project's own
+        // documented failure floor (see CLAUDE.md's internal-RAM-exhaustion
+        // history), not a live value.
+        if (cfg.resmon_en) {
+            size_t ram_free   = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            size_t ram_min    = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+            size_t psram_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+            size_t psram_max  = heap_caps_get_total_size(MALLOC_CAP_SPIRAM);
+
+            if (s_sd_poll_countdown <= 0) {
+                s_sd_ok = sd_archive_get_free_bytes(&s_sd_free_b, &s_sd_total_b);
+                s_sd_poll_countdown = SD_POLL_INTERVAL_S;
+            }
+            s_sd_poll_countdown--;
+
+            char rbuf[220];
+            int n = snprintf(rbuf, sizeof(rbuf),
+                     "RAM min/free: %u/%u KB\n"
+                     "WiFi & USB crash risk < 16KB\n"
+                     "PSRAM free/max: %u/%u MB\n",
+                     (unsigned)(ram_min / 1024), (unsigned)(ram_free / 1024),
+                     (unsigned)(psram_free / (1024 * 1024)), (unsigned)(psram_max / (1024 * 1024)));
+            if (n > 0 && (size_t)n < sizeof(rbuf)) {
+                if (s_sd_ok) {
+                    snprintf(rbuf + n, sizeof(rbuf) - n, "SD free/max: %.0f/%.0f GB",
+                             (double)s_sd_free_b / (1024.0 * 1024.0 * 1024.0),
+                             (double)s_sd_total_b / (1024.0 * 1024.0 * 1024.0));
+                } else {
+                    snprintf(rbuf + n, sizeof(rbuf) - n, "SD free/max: no card");
+                }
+            }
+            ui_set_resource_monitor_text(rbuf);
+        }
+
         if (level < 0) {
             snprintf(left, sizeof(left), "--%%");
         } else if (mv < 0) {

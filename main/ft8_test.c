@@ -1755,3 +1755,8 @@ void ft8_self_test(void)
         ESP_LOGE(TAG, "failed to spawn ft8_task (rc=%d)", (int)rc);
     }
 }
+
+bool ft8_task_is_alive(void)
+{
+    return s_ft8_task_alive;
+}

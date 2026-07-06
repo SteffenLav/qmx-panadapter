@@ -95,6 +95,7 @@ idf_component_register(
         spiffs
     PRIV_REQUIRES
         esp_app_format
+        fatfs
     EMBED_TXTFILES
         "net/www/index.html"
 )

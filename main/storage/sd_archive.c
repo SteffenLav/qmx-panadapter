@@ -11,6 +11,7 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_vfs_fat.h"
 
 #include "bsp/m5stack_tab5.h"   // bsp_sdcard_init / bsp_sdcard_deinit
 
@@ -269,6 +270,25 @@ bool sd_archive_lock(uint32_t timeout_ms)
 {
     if (!s_sd_mutex) return false;
     return xSemaphoreTake(s_sd_mutex, pdMS_TO_TICKS(timeout_ms)) == pdTRUE;
+}
+
+// Free/total space on the mounted card, for the resource-monitor overlay.
+// Best-effort: takes sd_archive_lock() so this read-only query can't land
+// mid-write against the archive task's own FatFs bursts, same as the QRZ/
+// eQSL upload quiet-window pattern. Returns false if no card is mounted or
+// the lock can't be acquired quickly (never blocks the caller waiting on a
+// wedged card).
+bool sd_archive_get_free_bytes(uint64_t *out_free, uint64_t *out_total)
+{
+    if (!s_mounted) return false;
+    if (!sd_archive_lock(50)) return false;
+    uint64_t total = 0, free_b = 0;
+    esp_err_t err = esp_vfs_fat_info(SD_MOUNT_POINT, &total, &free_b);
+    sd_archive_unlock();
+    if (err != ESP_OK) return false;
+    if (out_free)  *out_free  = free_b;
+    if (out_total) *out_total = total;
+    return true;
 }
 
 void sd_archive_unlock(void)

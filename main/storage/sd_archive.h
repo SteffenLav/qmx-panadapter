@@ -43,6 +43,11 @@ const char *sd_archive_log_path(void);
 bool sd_archive_lock(uint32_t timeout_ms);
 void sd_archive_unlock(void);
 
+// Free/total bytes on the mounted card. Returns false if no card is mounted
+// (out params left untouched) or the archive task's lock couldn't be
+// acquired quickly - never blocks. Safe from any task.
+bool sd_archive_get_free_bytes(uint64_t *out_free, uint64_t *out_total);
+
 #ifdef __cplusplus
 }
 #endif

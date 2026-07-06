@@ -1296,7 +1296,8 @@ void ui_set_zoom(float zoom, int pan_bins)
 static void touch_event_cb(lv_event_t *e);
 static void left_edge_swipe_cb(lv_event_t *e);
 static void bottom_edge_swipe_cb(lv_event_t *e);
-static void settings_button_cb(lv_event_t *e);  // Phase 5.10D
+static void right_edge_swipe_cb(lv_event_t *e);
+static void resmon_drag_cb(lv_event_t *e);
 static void pinch_poll_cb(lv_timer_t *t);
 static void update_freq_axis_labels(uint32_t center_hz);
 static uint32_t s_last_qmx_freq_hz = 0;  // updated by ui_update_frequency
@@ -1436,9 +1437,9 @@ static int      s_last_tap_x        = -1;
 #define DOUBLE_TAP_MS   500
 #define DOUBLE_TAP_PX   120
 
-// Right-edge swipe-to-open-drawer (replaces the burger button)
-static bool s_edge_swipe_candidate  = false;
-static int  s_edge_swipe_start_x    = -1;
+// Right-edge swipe-to-open-drawer. Lives on a dedicated always-on-top
+// overlay strip (right_edge_swipe_cb, added alongside left/bottom below)
+// so it works in every UI mode, not just Panadapter.
 #define EDGE_SWIPE_ZONE_PX   30   // touch must start within this many px of the right edge
 #define EDGE_SWIPE_MIN_DX    60   // must move left by at least this many px to open the drawer
 
@@ -1456,6 +1457,7 @@ static int  s_screen_swipe_start_x  = -1;
 // spectrum/waterfall-only gestures above.
 static int  s_left_edge_swipe_start_x   = -1;
 static int  s_bottom_edge_swipe_start_y = -1;
+static int  s_right_edge_swipe_start_x  = -1;
 // Was 60px - tall enough to overlap the band-plan strip just above the
 // bottom bar (BANDPLAN_H=22, sitting directly on top of it), and since this
 // zone is built after (and move_foreground()'d above) the band-plan strip,
@@ -1509,7 +1511,6 @@ static uint32_t  s_bp_drag_band_hi     = 0;
 static int64_t   s_bp_drag_target_hz   = 0;
 #define BP_DRAG_THRESHOLD_PX 8
 static lv_obj_t *s_label_bar = NULL;
-static lv_obj_t *s_status_label = NULL;  // legacy: single label, kept for compatibility (unused after Phase 5.13)
 static lv_obj_t *s_bot_left   = NULL;
 static lv_obj_t *s_bot_batt_icon = NULL;  /* battery glyph, colored by charge level */
 static lv_obj_t *s_bot_batt_slash = NULL; /* red diagonal stroke over the glyph when no pack is attached */
@@ -1526,6 +1527,29 @@ static lv_obj_t *s_bot_diag_label = NULL; /* "SD" text next to the dot, shown/hi
 static lv_obj_t *s_burger_btn = NULL;  // right-edge drawer grip handle (kept for foreground move after all UI built)
 static lv_obj_t *s_left_edge_grip = NULL;
 static lv_obj_t *s_bottom_edge_grip = NULL;
+// The gesture strips themselves (not just their visual grips) - built first
+// in ui_init so touch handlers are live from the earliest possible frame,
+// then re-foregrounded one final time at the end of ui_init once every
+// other widget (modals/drawer/FT8 view/signature) has been built, so they
+// stay hit-testable on top regardless of build order in between.
+static lv_obj_t *s_left_edge_strip   = NULL;
+static lv_obj_t *s_bottom_edge_strip = NULL;
+static lv_obj_t *s_right_edge_strip  = NULL;
+
+// Resource-monitor floating overlay: a small, draggable, semi-transparent
+// panel showing live memory/SD-space figures, toggled from the drawer.
+// Built once at boot (like the other pre-built modals/overlays) and shown/
+// hidden via LV_OBJ_FLAG_HIDDEN rather than created/destroyed, so it works
+// in both Panadapter and FT8 mode without a rebuild.
+static lv_obj_t *s_resmon_panel = NULL;
+static lv_obj_t *s_resmon_lbl   = NULL;
+static int16_t   s_resmon_dx = 0;
+static int16_t   s_resmon_dy = 0;
+static bool      s_resmon_dragging = false;
+static lv_point_t s_resmon_drag_start_pt;
+static int16_t   s_resmon_drag_start_dx, s_resmon_drag_start_dy;
+#define RESMON_PANEL_W 260
+#define RESMON_PANEL_H 168
 static lv_obj_t *s_switch_iq       = NULL;  // IQ balance checkbox in settings drawer
 static lv_obj_t *s_switch_flat     = NULL;  // flat-spectrum checkbox in settings drawer
 static lv_obj_t *s_tune_entry_btn  = NULL;  // "Antenna Tune" button in the WiFi drawer
@@ -1555,12 +1579,13 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_IFCAL      8
 #define DRAWER_SEC_BRIGHTNESS 9
 #define DRAWER_SEC_CMAP       10
+#define DRAWER_SEC_RESMON     11  // resource-monitor floating overlay toggle (slot was unused)
 #define DRAWER_SEC_CWAUDIO    12
 #define DRAWER_SEC_WATERFALL  13
 #define DRAWER_SEC_FLIP       14
-// 15 free (was DRAWER_SEC_SNAP, dead since v0.19.4; briefly DRAWER_SEC_TUNE
-// until Antenna Tune moved into its own tune_modal.c window, 2026-07-04 -
-// its drawer entry point is now just a button inside DRAWER_SEC_WIFI)
+#define DRAWER_SEC_CHARGE     15  // battery care: stop-charging-at-% (was DRAWER_SEC_SNAP,
+                                   // dead since v0.19.4; briefly DRAWER_SEC_TUNE until Antenna
+                                   // Tune moved into its own tune_modal.c window, 2026-07-04)
 #define DRAWER_SEC_BPREGION   16
 #define DRAWER_SEC_DISTANCE   17  // FT8 distance unit (km/miles) - kept visible in FT8 mode
 #define DRAWER_SEC_FT8SYNC    18  // panadapter-only: FT8 sync lines + 3x waterfall (diagnostic)
@@ -1585,6 +1610,9 @@ static lv_obj_t *s_slider_brightness = NULL;
 static uint8_t s_saved_ui_mode = UI_MODE_PANADAPTER;
 static lv_obj_t *s_lbl_brightness = NULL;
 static lv_obj_t *s_check_flip = NULL;  // 180-degree display flip checkbox
+static lv_obj_t *s_check_charge_limit = NULL;   // battery-care enable checkbox
+static lv_obj_t *s_lbl_charge_limit_pct = NULL; // "Stop charging at: NN%" label
+static lv_obj_t *s_slider_charge_limit_pct = NULL;
 static lv_obj_t *s_check_distance_miles = NULL;  // FT8 distance unit (km/miles) checkbox
 static lv_obj_t *s_check_sim_mode = NULL;        // FT8 simulation mode checkbox
 static lv_obj_t *s_lbl_sim_mode   = NULL;        // its label (dimmed alongside the checkbox)
@@ -1638,6 +1666,9 @@ static void drawer_dropdown_cmap_open_cb(lv_event_t *e);
 static void drawer_dropdown_bpregion_cb(lv_event_t *e);
 static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_check_flip_cb(lv_event_t *e);
+static void drawer_check_charge_limit_cb(lv_event_t *e);
+static void drawer_slider_charge_limit_pct_cb(lv_event_t *e);
+static void drawer_check_resmon_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
 static void drawer_tune_entry_btn_cb(lv_event_t *e);
 static void drawer_check_cwaudio_cb(lv_event_t *e);
@@ -1987,9 +2018,12 @@ static void build_top_bar(lv_obj_t *parent)
         lv_obj_set_style_radius(s_smeter_bar, 3, LV_PART_INDICATOR);
     }
 
-    // Edge-swipe replaces the burger button: a slim grip on the right
-    // screen edge hints that the settings drawer lives off-screen there.
-    // Tapping the grip also opens the drawer (fallback for the swipe).
+    // Slim grip on the right screen edge, purely a visual hint that the
+    // settings drawer lives off-screen there. Non-clickable by design -
+    // opening the drawer is swipe-only (right_edge_swipe_cb, on its own
+    // always-on-top overlay strip below), same as the left/bottom grips.
+    // LVGL skips non-clickable objects during hit-testing, so touches here
+    // fall through to that strip underneath.
     s_burger_btn = lv_obj_create(parent);  /* parent = screen; reused as the grip handle */
     lv_obj_set_size(s_burger_btn, 4, 120);
     lv_obj_align(s_burger_btn, LV_ALIGN_RIGHT_MID, 0, 0);
@@ -2000,8 +2034,7 @@ static void build_top_bar(lv_obj_t *parent)
     lv_obj_set_style_shadow_width(s_burger_btn, 0, 0);
     lv_obj_set_style_pad_all(s_burger_btn, 0, 0);
     lv_obj_clear_flag(s_burger_btn, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(s_burger_btn, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_burger_btn, settings_button_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_clear_flag(s_burger_btn, LV_OBJ_FLAG_CLICKABLE);
     grip_start_breathing(s_burger_btn);
 
     // Zoom indicator: amber always.
@@ -2677,6 +2710,134 @@ static void build_signature(lv_obj_t *scr)
     lv_obj_set_pos(lbl, cx - w / 2, cy - h / 2);
 }
 
+// Edge-swipe gesture strips (left/bottom/right - transparent overlays kept
+// in the foreground in both Panadapter and FT8 modes, unlike the
+// spectrum/waterfall canvases which are hidden in FT8 mode). Built as the
+// very first thing in ui_init, before any other widget, so the touch
+// handlers are live from the earliest possible frame after boot - field
+// reports described swipe sometimes not responding right after power-on,
+// then working reliably from then on, which pointed at initialization
+// ordering rather than the gesture logic itself. ui_init re-foregrounds
+// these one more time after every other widget is built (see the
+// s_left_edge_strip/s_bottom_edge_strip/s_right_edge_strip re-foreground
+// calls further down) so early construction can't leave them buried under
+// later z-order.
+static void build_edge_swipe_strips(lv_obj_t *scr)
+{
+    // Left edge: swipe right to toggle Panadapter <-> FT8.
+    {
+        lv_obj_t *strip = lv_obj_create(scr);
+        lv_obj_set_size(strip, EDGE_SWIPE_ZONE_PX, DISPLAY_V_RES);
+        lv_obj_set_pos(strip, 0, 0);
+        lv_obj_set_style_bg_opa(strip, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(strip, 0, 0);
+        lv_obj_set_style_pad_all(strip, 0, 0);
+        lv_obj_clear_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(strip, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(strip, left_edge_swipe_cb, LV_EVENT_PRESSED, NULL);
+        lv_obj_add_event_cb(strip, left_edge_swipe_cb, LV_EVENT_RELEASED, NULL);
+        lv_obj_move_foreground(strip);
+        s_left_edge_strip = strip;
+
+        // Tiny grip handle indicator, vertically centered, flush with the
+        // screen's left edge.
+        lv_obj_t *grip = lv_obj_create(strip);
+        lv_obj_set_size(grip, 4, 120);
+        lv_obj_align(grip, LV_ALIGN_LEFT_MID, 0, 0);
+        lv_obj_set_style_bg_color(grip, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_set_style_bg_opa(grip, LV_OPA_30, 0);
+        lv_obj_set_style_border_width(grip, 0, 0);
+        lv_obj_set_style_radius(grip, 5, 0);
+        lv_obj_set_style_shadow_width(grip, 0, 0);
+        lv_obj_clear_flag(grip, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(grip, LV_OBJ_FLAG_CLICKABLE);
+        grip_start_breathing(grip);
+        s_left_edge_grip = grip;
+    }
+    // Bottom edge: swipe up to open the memory-channel modal.
+    {
+        lv_obj_t *strip = lv_obj_create(scr);
+        lv_obj_set_size(strip, DISPLAY_H_RES, BOTTOM_EDGE_ZONE_PX);
+        lv_obj_set_pos(strip, 0, DISPLAY_V_RES - BOTTOM_EDGE_ZONE_PX);
+        lv_obj_set_style_bg_opa(strip, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(strip, 0, 0);
+        lv_obj_set_style_pad_all(strip, 0, 0);
+        lv_obj_clear_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(strip, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(strip, bottom_edge_swipe_cb, LV_EVENT_PRESSED, NULL);
+        lv_obj_add_event_cb(strip, bottom_edge_swipe_cb, LV_EVENT_RELEASED, NULL);
+        lv_obj_move_foreground(strip);
+        s_bottom_edge_strip = strip;
+
+        // Tiny grip handle indicator, horizontally centered, flush with the
+        // screen's bottom edge.
+        lv_obj_t *grip = lv_obj_create(strip);
+        lv_obj_set_size(grip, 120, 4);
+        lv_obj_align(grip, LV_ALIGN_BOTTOM_MID, 0, 0);
+        lv_obj_set_style_bg_color(grip, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_set_style_bg_opa(grip, LV_OPA_30, 0);
+        lv_obj_set_style_border_width(grip, 0, 0);
+        lv_obj_set_style_radius(grip, 5, 0);
+        lv_obj_set_style_shadow_width(grip, 0, 0);
+        lv_obj_clear_flag(grip, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(grip, LV_OBJ_FLAG_CLICKABLE);
+        grip_start_breathing(grip);
+        s_bottom_edge_grip = grip;
+    }
+    // Right edge: swipe left to open the settings drawer, in every mode.
+    // No grip child here - s_burger_btn (built later, in build_top_bar,
+    // non-clickable) is the visual indicator at the same screen edge/
+    // position; this strip just supplies the actual gesture handling.
+    {
+        lv_obj_t *strip = lv_obj_create(scr);
+        lv_obj_set_size(strip, EDGE_SWIPE_ZONE_PX, DISPLAY_V_RES);
+        lv_obj_set_pos(strip, DISPLAY_H_RES - EDGE_SWIPE_ZONE_PX, 0);
+        lv_obj_set_style_bg_opa(strip, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(strip, 0, 0);
+        lv_obj_set_style_pad_all(strip, 0, 0);
+        lv_obj_clear_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(strip, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(strip, right_edge_swipe_cb, LV_EVENT_PRESSED, NULL);
+        lv_obj_add_event_cb(strip, right_edge_swipe_cb, LV_EVENT_RELEASED, NULL);
+        lv_obj_move_foreground(strip);
+        s_right_edge_strip = strip;
+    }
+}
+
+// Small, semi-transparent, draggable panel showing live memory/SD-space
+// figures (see util/status.c's status_task, which formats the text via
+// ui_set_resource_monitor_text once a second). Built once at boot, hidden by
+// default - shown/hidden by the drawer checkbox, never destroyed/rebuilt, so
+// it survives Panadapter<->FT8 mode switches the same way the edge-swipe
+// strips and burger grip do.
+static void build_resource_monitor(lv_obj_t *scr)
+{
+    lv_obj_t *panel = lv_obj_create(scr);
+    lv_obj_set_size(panel, LV_SIZE_CONTENT, LV_SIZE_CONTENT);  // snug around the label text
+    lv_obj_set_pos(panel, 90, 100);  // default: clear of the left edge-swipe grip and top bar
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(panel, LV_OPA_60, 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_border_width(panel, 1, 0);
+    lv_obj_set_style_radius(panel, 8, 0);
+    lv_obj_set_style_pad_all(panel, 8, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(panel, LV_OBJ_FLAG_HIDDEN);  // off until the drawer checkbox enables it
+    lv_obj_add_flag(panel, LV_OBJ_FLAG_CLICKABLE);  // whole panel is the drag handle
+    lv_obj_add_event_cb(panel, resmon_drag_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(panel, resmon_drag_cb, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(panel, resmon_drag_cb, LV_EVENT_RELEASED, NULL);
+    s_resmon_panel = panel;
+
+    lv_obj_t *lbl = lv_label_create(panel);
+    lv_label_set_text(lbl, "");
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0xA0E0A0), 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
+    lv_obj_set_pos(lbl, 0, 0);
+    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);  // clicks fall through to the panel (drag)
+    s_resmon_lbl = lbl;
+}
+
 void ui_init(lv_display_t *disp)
 {
     display_lock(portMAX_DELAY);
@@ -2685,6 +2846,12 @@ void ui_init(lv_display_t *disp)
     lv_obj_set_style_bg_color(scr, lv_color_hex(0x000000), 0);
     lv_obj_set_style_pad_all(scr, 0, 0);
     lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Built first, before anything else, so the swipe gesture handlers are
+    // live from the very first frame after boot (see build_edge_swipe_strips
+    // for why).
+    build_edge_swipe_strips(scr);
+    build_resource_monitor(scr);
 
     build_top_bar(scr);
     build_spectrum(scr);
@@ -2752,67 +2919,16 @@ void ui_init(lv_display_t *disp)
         }
     }
 
-    // Left-edge and bottom-edge gesture strips: transparent overlays kept
-    // in the foreground in both Panadapter and FT8 modes (unlike the
-    // spectrum/waterfall canvases, which are hidden in FT8 mode).
-    // Left edge: swipe right to toggle Panadapter <-> FT8.
-    {
-        lv_obj_t *strip = lv_obj_create(scr);
-        lv_obj_set_size(strip, EDGE_SWIPE_ZONE_PX, DISPLAY_V_RES);
-        lv_obj_set_pos(strip, 0, 0);
-        lv_obj_set_style_bg_opa(strip, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(strip, 0, 0);
-        lv_obj_set_style_pad_all(strip, 0, 0);
-        lv_obj_clear_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(strip, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(strip, left_edge_swipe_cb, LV_EVENT_PRESSED, NULL);
-        lv_obj_add_event_cb(strip, left_edge_swipe_cb, LV_EVENT_RELEASED, NULL);
-        lv_obj_move_foreground(strip);
-
-        // Tiny grip handle indicator, vertically centered, flush with the
-        // screen's left edge.
-        lv_obj_t *grip = lv_obj_create(strip);
-        lv_obj_set_size(grip, 4, 120);
-        lv_obj_align(grip, LV_ALIGN_LEFT_MID, 0, 0);
-        lv_obj_set_style_bg_color(grip, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-        lv_obj_set_style_bg_opa(grip, LV_OPA_30, 0);
-        lv_obj_set_style_border_width(grip, 0, 0);
-        lv_obj_set_style_radius(grip, 5, 0);
-        lv_obj_set_style_shadow_width(grip, 0, 0);
-        lv_obj_clear_flag(grip, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_clear_flag(grip, LV_OBJ_FLAG_CLICKABLE);
-        grip_start_breathing(grip);
-        s_left_edge_grip = grip;
-    }
-    // Bottom edge: swipe up to open the memory-channel modal.
-    {
-        lv_obj_t *strip = lv_obj_create(scr);
-        lv_obj_set_size(strip, DISPLAY_H_RES, BOTTOM_EDGE_ZONE_PX);
-        lv_obj_set_pos(strip, 0, DISPLAY_V_RES - BOTTOM_EDGE_ZONE_PX);
-        lv_obj_set_style_bg_opa(strip, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(strip, 0, 0);
-        lv_obj_set_style_pad_all(strip, 0, 0);
-        lv_obj_clear_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(strip, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(strip, bottom_edge_swipe_cb, LV_EVENT_PRESSED, NULL);
-        lv_obj_add_event_cb(strip, bottom_edge_swipe_cb, LV_EVENT_RELEASED, NULL);
-        lv_obj_move_foreground(strip);
-
-        // Tiny grip handle indicator, horizontally centered, flush with the
-        // screen's bottom edge.
-        lv_obj_t *grip = lv_obj_create(strip);
-        lv_obj_set_size(grip, 120, 4);
-        lv_obj_align(grip, LV_ALIGN_BOTTOM_MID, 0, 0);
-        lv_obj_set_style_bg_color(grip, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-        lv_obj_set_style_bg_opa(grip, LV_OPA_30, 0);
-        lv_obj_set_style_border_width(grip, 0, 0);
-        lv_obj_set_style_radius(grip, 5, 0);
-        lv_obj_set_style_shadow_width(grip, 0, 0);
-        lv_obj_clear_flag(grip, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_clear_flag(grip, LV_OBJ_FLAG_CLICKABLE);
-        grip_start_breathing(grip);
-        s_bottom_edge_grip = grip;
-    }
+    // Edge-swipe gesture strips are built first (see build_edge_swipe_strips,
+    // called at the very top of ui_init) and re-foregrounded here, now that
+    // every other widget - top-bar hit zones, modals, drawer, FT8 view,
+    // signature - has been built after them.
+    if (s_left_edge_strip)   lv_obj_move_foreground(s_left_edge_strip);
+    if (s_bottom_edge_strip) lv_obj_move_foreground(s_bottom_edge_strip);
+    if (s_right_edge_strip)  lv_obj_move_foreground(s_right_edge_strip);
+    // Same reasoning for the resource-monitor overlay - it needs to stay
+    // draggable/hit-testable regardless of what's built after it.
+    if (s_resmon_panel)      lv_obj_move_foreground(s_resmon_panel);
 
     // Operator signature watermark - created last so it draws on top of the
     // opaque waterfall/bottom-bar in the bottom-right corner. Non-clickable,
@@ -2878,6 +2994,24 @@ void ui_init(lv_display_t *disp)
         s_freq_kp_dx = s.freq_kp_dx;
         s_freq_kp_dy = s.freq_kp_dy;
         s_freq_kp_small = s.freq_kp_small;
+        // Resource-monitor overlay: restore position and shown/hidden state.
+        // The panel is content-sized (LV_SIZE_CONTENT) and still holds its
+        // empty boot-time label here, so RESMON_PANEL_W/H are only a rough
+        // sanity bound against a corrupt/stale NVS value landing off-screen -
+        // the live drag clamp (resmon_drag_cb) uses the panel's real size.
+        {
+            int dx = s.resmon_dx, dy = s.resmon_dy;
+            if (dx < 0) dx = 0;
+            if (dy < 0) dy = 0;
+            if (dx > DISPLAY_H_RES - RESMON_PANEL_W) dx = DISPLAY_H_RES - RESMON_PANEL_W;
+            if (dy > DISPLAY_V_RES - RESMON_PANEL_H) dy = DISPLAY_V_RES - RESMON_PANEL_H;
+            s_resmon_dx = (int16_t)dx;
+            s_resmon_dy = (int16_t)dy;
+            if (s_resmon_panel) {
+                lv_obj_set_pos(s_resmon_panel, dx, dy);
+                if (s.resmon_en) lv_obj_clear_flag(s_resmon_panel, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
         s_passband_width_hz = s.passband_width_hz;  // band-plan passband indicator shows the real width from boot, not a generic default
         // Load zoom from NVS; pan always resets to 0 on boot.
         if (s.zoom_factor >= 1.0f && s.zoom_factor <= 24.0f)
@@ -3980,6 +4114,18 @@ void ui_set_bottom_left(const char *text)
     }
 }
 
+// Resource-monitor overlay text (see build_resource_monitor). Cheap no-op if
+// the panel was never toggled on - status_task only bothers formatting the
+// string when settings.resmon_en is true.
+void ui_set_resource_monitor_text(const char *text)
+{
+    if (!s_resmon_lbl) return;
+    if (display_lock(20)) {
+        lv_label_set_text(s_resmon_lbl, text ? text : "");
+        display_unlock();
+    }
+}
+
 void ui_set_bottom_battery(const char *icon, uint32_t icon_color_hex, const char *text)
 {
     if (!s_bot_batt_icon || !s_bot_left) return;
@@ -4052,16 +4198,6 @@ void ui_set_bottom_wifi(const char *icon_ssid, bool show_rssi, int rssi_dbm, con
             }
         }
         lv_label_set_text(s_bot_wifi_suffix, suffix ? suffix : "");
-        display_unlock();
-    }
-}
-
-void ui_set_fps_text(const char *text)
-{
-    (void)text;  // legacy no-op; status.c now uses zone setters
-    if (!s_status_label) return;
-    if (display_lock(20)) {
-        lv_label_set_text(s_status_label, text);
         display_unlock();
     }
 }
@@ -4226,10 +4362,6 @@ static void touch_event_cb(lv_event_t *e)
         s_touch_on_bandplan = false;
         // Record touch-down time for hold-delay tune detection.
         s_touch_down_us = esp_timer_get_time();
-        // Touch-down near the right screen edge: track as a candidate for
-        // the swipe-to-open-drawer gesture instead of the tune cursor.
-        s_edge_swipe_candidate = (p.x >= DISPLAY_H_RES - EDGE_SWIPE_ZONE_PX);
-        s_edge_swipe_start_x   = (int)p.x;
         // Track every touch-down x so a rightward swipe anywhere on the
         // spectrum/waterfall can close the drawer when it's open.
         s_screen_swipe_start_x = (int)p.x;
@@ -4238,7 +4370,6 @@ static void touch_event_cb(lv_event_t *e)
     if (code == LV_EVENT_PRESSING) {
         if (s_pinch_active) return;  // pinch timer owns gesture
         if (s_stroll_active) return;  // pan gesture owns this — don't show tune cursor during pan
-        if (s_edge_swipe_candidate) return;  // edge-swipe owns this gesture
         if (s_drawer_open) return;  // possible close-swipe owns this gesture
         // Snap the live cursor to the same mode-aware grid used on release,
         // so the line jumps from snap to snap and shows exactly where the
@@ -4281,19 +4412,8 @@ static void touch_event_cb(lv_event_t *e)
         // waterfall closes it, regardless of where it started.
         if (s_drawer_open) {
             int dx = (int)p.x - s_screen_swipe_start_x;
-            s_edge_swipe_candidate = false;
             if (dx >= DRAWER_SWIPE_MIN_DX) {
                 drawer_close();
-            }
-            return;
-        }
-        // Edge-swipe release: open the drawer if dragged far enough left
-        // from the right edge, and skip tap-to-tune either way.
-        if (s_edge_swipe_candidate) {
-            int dx = s_edge_swipe_start_x - (int)p.x;
-            s_edge_swipe_candidate = false;
-            if (dx >= EDGE_SWIPE_MIN_DX) {
-                drawer_open();
             }
             return;
         }
@@ -4408,6 +4528,77 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
     }
 }
 
+// Right-edge swipe (drag left) opens the settings drawer. Same always-on-top
+// overlay approach as left_edge_swipe_cb/bottom_edge_swipe_cb, so it works
+// in every UI mode (Panadapter, FT8/4, future CW/...) - deliberately
+// swipe-only, no tap fallback, to keep this gesture uniform across modes.
+static void right_edge_swipe_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_indev_t *indev = lv_event_get_indev(e);
+    if (!indev) return;
+
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+
+    if (code == LV_EVENT_PRESSED) {
+        s_right_edge_swipe_start_x = (int)p.x;
+        return;
+    }
+    if (code == LV_EVENT_RELEASED) {
+        if (s_right_edge_swipe_start_x >= 0 &&
+            s_right_edge_swipe_start_x - (int)p.x >= EDGE_SWIPE_MIN_DX) {
+            drawer_open();
+        }
+        s_right_edge_swipe_start_x = -1;
+    }
+}
+
+// Drag the whole resource-monitor panel (it has no buttons, so the entire
+// surface is the drag handle). Same PRESSED-records-start/PRESSING-applies-
+// delta/RELEASED-persists pattern as freq_kp_drag_cb, but anchored top-left
+// instead of centered.
+static void resmon_drag_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (!s_resmon_panel) return;
+
+    if (code == LV_EVENT_PRESSED) {
+        lv_indev_t *indev = lv_indev_get_act();
+        lv_indev_get_point(indev, &s_resmon_drag_start_pt);
+        s_resmon_drag_start_dx = s_resmon_dx;
+        s_resmon_drag_start_dy = s_resmon_dy;
+        s_resmon_dragging = true;
+        return;
+    }
+    if (code == LV_EVENT_PRESSING) {
+        if (!s_resmon_dragging) return;
+        lv_indev_t *indev = lv_indev_get_act();
+        lv_point_t p; lv_indev_get_point(indev, &p);
+        int dx = s_resmon_drag_start_dx + ((int)p.x - (int)s_resmon_drag_start_pt.x);
+        int dy = s_resmon_drag_start_dy + ((int)p.y - (int)s_resmon_drag_start_pt.y);
+        // Content-sized panel (LV_SIZE_CONTENT) - clamp against its actual
+        // current width/height, not a fixed constant, since it grows/shrinks
+        // with the live text.
+        int w = (int)lv_obj_get_width(s_resmon_panel);
+        int h = (int)lv_obj_get_height(s_resmon_panel);
+        if (dx < 0) dx = 0;
+        if (dy < 0) dy = 0;
+        if (dx > DISPLAY_H_RES - w) dx = DISPLAY_H_RES - w;
+        if (dy > DISPLAY_V_RES - h) dy = DISPLAY_V_RES - h;
+        lv_obj_set_pos(s_resmon_panel, dx, dy);
+        s_resmon_dx = (int16_t)dx;
+        s_resmon_dy = (int16_t)dy;
+        return;
+    }
+    if (code == LV_EVENT_RELEASED) {
+        if (!s_resmon_dragging) return;
+        s_resmon_dragging = false;
+        settings_set_resmon_pos(s_resmon_dx, s_resmon_dy);
+        return;
+    }
+}
+
 void ui_set_cw_pitch_hz(uint16_t hz)
 {
     if (hz < 300 || hz > 1200) return;  // sanity clamp
@@ -4439,16 +4630,6 @@ void ui_set_cw_pitch_hz(uint16_t hz)
 
 
 
-// Phase 5.10D Stage 2: burger menu click -- toggle settings drawer
-static void settings_button_cb(lv_event_t *e)
-{
-    (void)e;
-    if (s_drawer_open) {
-        drawer_close();
-    } else {
-        drawer_open();
-    }
-}
 
 // Animate x position. Used for slide-in/out.
 static void drawer_anim_x_cb(void *obj, int32_t v)
@@ -4761,6 +4942,58 @@ static void drawer_build(void)
         s_check_flip = make_drawer_checkbox(sec, display_is_flipped(),
                                             drawer_check_flip_cb, NULL);
         lv_obj_align(s_check_flip, LV_ALIGN_TOP_MID, 0, 6);
+        y += 56;
+    }
+
+    // Battery care: stop charging once the pack reaches a configurable
+    // percentage (enforced in util/status.c's 1Hz task via bsp_set_charge_en,
+    // with a hysteresis resume) to reduce long-term wear from sitting at
+    // 100% on a permanently-plugged-in unit.
+    {
+        qmx_settings_t ccfg;
+        settings_load_all(&ccfg);
+
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_CHARGE, y, 136);
+        lv_obj_t *chg_lbl = lv_label_create(sec);
+        lv_label_set_text(chg_lbl, "Battery care");
+        lv_obj_set_style_text_color(chg_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(chg_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(chg_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
+        s_check_charge_limit = make_drawer_checkbox(sec, ccfg.charge_limit_en,
+                                                     drawer_check_charge_limit_cb, NULL);
+        lv_obj_align(s_check_charge_limit, LV_ALIGN_TOP_RIGHT, 0, 6);
+
+        char cbuf[28];
+        s_lbl_charge_limit_pct = lv_label_create(sec);
+        snprintf(cbuf, sizeof(cbuf), "Stop charging at: %u%%", (unsigned)ccfg.charge_limit_pct);
+        lv_label_set_text(s_lbl_charge_limit_pct, cbuf);
+        lv_obj_set_style_text_color(s_lbl_charge_limit_pct, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_charge_limit_pct, &lv_font_montserrat_28, 0);
+        lv_obj_align(s_lbl_charge_limit_pct, LV_ALIGN_TOP_LEFT, 0, 56);
+        s_slider_charge_limit_pct = lv_slider_create(sec);
+        lv_obj_set_size(s_slider_charge_limit_pct, DRAWER_W - 32, 30);
+        lv_slider_set_range(s_slider_charge_limit_pct, 50, 100);
+        lv_slider_set_value(s_slider_charge_limit_pct, ccfg.charge_limit_pct, LV_ANIM_OFF);
+        lv_obj_align(s_slider_charge_limit_pct, LV_ALIGN_TOP_LEFT, 0, 96);
+        lv_obj_add_event_cb(s_slider_charge_limit_pct, drawer_slider_charge_limit_pct_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        y += 136;
+    }
+
+    // Resource monitor: a small draggable overlay (see build_resource_monitor)
+    // showing live memory/SD-space figures - drag it anywhere on screen and
+    // watch the numbers move as you use WiFi/FT8/uploads.
+    {
+        qmx_settings_t rcfg;
+        settings_load_all(&rcfg);
+
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_RESMON, y, 56);
+        lv_obj_t *rm_lbl = lv_label_create(sec);
+        lv_label_set_text(rm_lbl, "Resource monitor");
+        lv_obj_set_style_text_color(rm_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(rm_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(rm_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
+        lv_obj_t *chk = make_drawer_checkbox(sec, rcfg.resmon_en, drawer_check_resmon_cb, NULL);
+        lv_obj_align(chk, LV_ALIGN_TOP_RIGHT, 0, 6);
         y += 56;
     }
 
@@ -5333,8 +5566,10 @@ static void drawer_close(void)
 static void drawer_set_ft8_mode(bool ft8)
 {
     if (!s_drawer) return;
-    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
-    static const int keep_h[] = { 56, 56, 56, 128, 72, 130 };
+    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_CHARGE, DRAWER_SEC_RESMON, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
+    // Heights must line up 1:1 with keep[] above (same order) - each is the
+    // height passed to that section's own drawer_section(ID, y, height) call.
+    static const int keep_h[] = { 56, 136, 56, 56, 56, 128, 72, 130 };
     const int n_keep = sizeof(keep) / sizeof(keep[0]);
 
     // Antenna Tune entry button lives inside DRAWER_SEC_WIFI (always shown in
@@ -5572,6 +5807,35 @@ static void drawer_check_flip_cb(lv_event_t *e)
     display_set_flipped(on);
     settings_set_display_flip(on);
     ESP_LOGI(TAG, "Display flip 180: %s", on ? "ON" : "OFF");
+}
+
+static void drawer_check_charge_limit_cb(lv_event_t *e)
+{
+    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_set_charge_limit_en(on);
+    ESP_LOGI(TAG, "Battery care: %s", on ? "ON" : "OFF");
+}
+
+static void drawer_check_resmon_cb(lv_event_t *e)
+{
+    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_set_resmon_en(on);
+    if (s_resmon_panel) {
+        if (on) lv_obj_clear_flag(s_resmon_panel, LV_OBJ_FLAG_HIDDEN);
+        else    lv_obj_add_flag(s_resmon_panel, LV_OBJ_FLAG_HIDDEN);
+    }
+    ESP_LOGI(TAG, "Resource monitor: %s", on ? "ON" : "OFF");
+}
+
+static void drawer_slider_charge_limit_pct_cb(lv_event_t *e)
+{
+    int v = (int)lv_slider_get_value(lv_event_get_target(e));
+    settings_set_charge_limit_pct((uint8_t)v);
+    if (s_lbl_charge_limit_pct) {
+        char b[28];
+        snprintf(b, sizeof(b), "Stop charging at: %d%%", v);
+        lv_label_set_text(s_lbl_charge_limit_pct, b);
+    }
 }
 
 static void drawer_dropdown_cmap_cb(lv_event_t *e)

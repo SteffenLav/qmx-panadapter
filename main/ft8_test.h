@@ -16,6 +16,14 @@ extern "C" {
 
 void ft8_self_test(void);
 
+// True while an ft8_task capture-loop instance is running. Lets a caller
+// distinguish "still alive, don't respawn" from "actually dead, needs a
+// respawn" - see ft8_screen_view.c's periodic respawn-watchdog check for why
+// this matters: a lingering task from a fast Panadapter<->FT8 toggle can exit
+// on its own well after ft8_self_test() already decided not to spawn a
+// replacement, leaving the FT8 view up with nothing running behind it.
+bool ft8_task_is_alive(void);
+
 // One-shot ARRL Field Day message encode/decode round-trip check (pure bit
 // math, no audio/radio involved). Logs PASS/FAIL per case at boot so a bad
 // flash is caught immediately rather than discovered live on the air.

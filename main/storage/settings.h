@@ -89,6 +89,11 @@ typedef struct {
     uint32_t passband_width_hz; // last CAT-reported filter width (Hz), 0=unknown/use mode default. Persisted so the
                                  // band-plan strip's passband indicator shows the real width immediately at boot
                                  // instead of a generic default for the few seconds before the first real FW poll lands.
+    bool     charge_limit_en;   // battery care: stop charging at charge_limit_pct (default false)
+    uint8_t  charge_limit_pct;  // stop-charging threshold, 50..100 (default 80)
+    bool     resmon_en;         // resource-monitor floating overlay shown (default false)
+    int16_t  resmon_dx;         // its position: offset from screen top-left, px (default 0,0)
+    int16_t  resmon_dy;
 } qmx_settings_t;
 
 // Initialise the settings module. Opens an NVS handle. Safe to call
@@ -155,19 +160,9 @@ void settings_set_wf_window(uint8_t idx);
 // Display 180-degree flip for upside-down mounting (debounced flush).
 void settings_set_display_flip(bool v);
 
-// Tap-to-tune snap-to-strongest-signal on/off (debounced flush). When false a
-// tap tunes exactly where you touched (after the mode grid-snap), with no pull
-// toward the nearest peak.
-void settings_set_snap_to_peak(bool v);
-
 // FT8 distance display unit (debounced flush). When false show distance in km,
 // when true show distance in miles.
 void settings_set_distance_in_miles(bool v);
-
-// Panadapter-only diagnostic overlay (debounced flush): when true, draws the
-// FT8-sync-vs-SNTP-only waterfall slot-boundary marker lines and doubles the
-// waterfall scroll speed; when false, waterfall behaves exactly as before.
-void settings_set_ft8_sync_lines(bool v);
 
 // Band-plan strip region (debounced flush): 0=auto (derive from grid), 1=R1,
 // 2=R2, 3=R3.
@@ -250,6 +245,20 @@ void settings_set_last_ui_mode(uint8_t mode);
 // "last known date" anchor so the QMX RTC time-of-day (no date) can be
 // turned into a full timestamp when SNTP is unavailable (e.g. POTA).
 void settings_set_last_unix_time(uint32_t unix_sec);
+
+// Battery care (debounced flush): when enabled, charging is cut once the
+// battery reaches charge_limit_pct and resumed with a hysteresis gap below
+// it, to avoid holding the pack at 100% indefinitely (long-term battery
+// wear). charge_limit_pct is clamped to 50..100.
+void settings_set_charge_limit_en(bool v);
+void settings_set_charge_limit_pct(uint8_t pct);
+
+// Resource-monitor floating overlay: shown/hidden, and its dragged position
+// (offset in pixels from the screen's top-left, debounced flush). Position
+// is deliberately NOT part of DIRTY_CONFIG_EXPORT_MASK - purely cosmetic
+// placement, same as the freq keypad's position.
+void settings_set_resmon_en(bool v);
+void settings_set_resmon_pos(int16_t dx, int16_t dy);
 
 // Force any pending writes to flash immediately. Call before reboot
 // if you want absolute certainty. Normally not needed.

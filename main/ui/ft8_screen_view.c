@@ -871,6 +871,18 @@ static void t_clock_cb(lv_timer_t *t)
     (void)t;
     if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) return;
 
+    // Respawn watchdog: the FT8 view is visible (we're past the guard above),
+    // but a lingering ft8_task from a fast Panadapter<->FT8 toggle can exit
+    // on its own well after the toggle handler already decided "one's alive,
+    // don't spawn a replacement" (see ft8_self_test()'s comment). Nothing else
+    // ever notices that exit, so the view is left showing a stale status
+    // forever with no task behind it. Checking here, once a second, closes
+    // that gap regardless of the exact timing that caused it.
+    if (!ft8_task_is_alive()) {
+        ESP_LOGW(TAG, "t_clock_cb: FT8 view visible but no ft8_task alive - respawning");
+        ft8_self_test();
+    }
+
     if (s_lbl_count) {
         // FT4's 7.5 s period isn't a whole number of seconds, so derive the
         // countdown from the millisecond remainder (same math as the fast bar
