@@ -127,6 +127,15 @@
   }
   #fa-labels #fC { color: var(--accent); font-weight: 600; }
 
+  /* ---- FT8/FT4 placeholder (shown instead of spec/freqaxis/wf when the
+     Tab5 is not in Panadapter mode - see #ft8-notice toggle in tick()) ---- */
+  #ft8-notice {
+    display: none; align-items: center; justify-content: center;
+    text-align: center; line-height: 1.6;
+    background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+    color: var(--dim); font-size: 0.95rem; padding: 1rem;
+  }
+
   /* ---- Bottom status row ---- */
   #bot {
     display: flex; align-items: center;
@@ -213,6 +222,8 @@
 
   <div id="wf-wrap"><canvas id="waterfall" width="1024" height="600"></canvas><canvas id="wf-cursor" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></canvas><div class="tune-overlay" id="wf-overlay"></div></div>
 
+  <div id="ft8-notice">Tab5 is in FT8/FT4 mode — spectrum &amp; waterfall are shown only in Panadapter mode.<br>Use the buttons below to download logs/config or upload QSOs.</div>
+
   <div id="bot">
     <span id="batt">🔋 --</span>
     <div class="bot-fill"></div>
@@ -258,6 +269,7 @@ let lastZoom       = 1.0;
 let lastPanBins    = 0;
 let lastZoomDecim  = 1;  // zoom-FFT decimation factor from WS frame header byte[1]
 let lastBands      = [];   // [{name, center_hz}]
+let lastScreen     = "panadapter";  // "panadapter" | "ft8" - which screen the Tab5 is showing
 let firstStatus    = true;
 let serverUtcAtTick = 0;   // server epoch (s) at last /api/status
 let localAtTick     = 0;   // Date.now()/1000 when that response arrived
@@ -604,6 +616,23 @@ async function tick() {
     lastZoom       = s.zoom        || 1.0;
     lastPanBins    = s.pan_bins    || 0;
     lastBands      = s.bands       || [];
+
+    /* Spectrum/waterfall are Panadapter-only - the Tab5 pauses the WS stream
+       server-side while in FT8/FT4 (ft8_screen_view.c), so mirror that here:
+       swap the canvases for a notice pointing at the buttons below. */
+    const screen = s.screen || "panadapter";
+    if (screen !== lastScreen) {
+      lastScreen = screen;
+      const isFt8 = (screen === "ft8");
+      document.getElementById("spec-wrap").style.display = isFt8 ? "none" : "";
+      document.getElementById("freqaxis").style.display  = isFt8 ? "none" : "";
+      document.getElementById("wf-wrap").style.display    = isFt8 ? "none" : "";
+      document.getElementById("ft8-notice").style.display = isFt8 ? "flex" : "none";
+      if (isFt8) {
+        fpsEl.textContent = "FT8 mode";
+        fpsEl.classList.remove("bad");
+      }
+    }
 
     /* Sync flat mode from device on first connect */
     if (firstStatus && s.flat_mode !== undefined) {

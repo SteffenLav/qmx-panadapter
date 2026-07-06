@@ -21,6 +21,11 @@ void ft8_screen_view_init(lv_obj_t *parent);
 void ft8_screen_view_show(void);
 void ft8_screen_view_hide(void);
 
+// True while the FT8 screen is the visible one (vs. Panadapter). Used by the
+// web server to know which screen is live, e.g. to gate the spectrum WS
+// stream to Panadapter mode only. Safe to call from any task (plain bool read).
+bool ft8_screen_view_is_active(void);
+
 // Returns the FT8 screen's middle-band container, for slide animations
 // driven by ui.c. May return NULL before ft8_screen_view_init().
 lv_obj_t *ft8_screen_view_get_container(void);

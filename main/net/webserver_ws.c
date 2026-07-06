@@ -239,7 +239,12 @@ esp_err_t webserver_ws_start(httpd_handle_t server)
     }
 
     if (s_push_task == NULL) {
-        BaseType_t ok = xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 5, &s_push_task);
+        // Priority kept below fft_task's 4 (dsp.c) - fft_task is the audio ring
+        // buffer's sole consumer for both the panadapter spectrum and FT8
+        // capture. At priority 5 this task could preempt it every 100 ms
+        // whenever a browser tab is open, the same hazard class that
+        // regressed FT8 decode yield via cw_audio_task (see CLAUDE.md).
+        BaseType_t ok = xTaskCreate(ws_push_task, "ws_push", 4096, NULL, 3, &s_push_task);
         if (ok != pdPASS) {
             ESP_LOGE(TAG, "xTaskCreate ws_push failed");
             s_server = NULL;

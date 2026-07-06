@@ -17,6 +17,8 @@
 #include "esp_vfs_fat.h"
 #include "usb/usb_host.h"
 #include "sd_pwr_ctrl_by_on_chip_ldo.h"
+#include "driver/sdspi_host.h"
+#include "driver/spi_common.h"
 #include "freertos/task.h"
 #include "sdmmc_cmd.h"
 #include "esp_lcd_st7703.h"
@@ -545,18 +547,53 @@ void bsp_reset_tp()
 #define BSP_LDO_PROBE_SD_CHAN       4
 #define BSP_LDO_PROBE_SD_VOLTAGE_MV 3300
 
-#define SDMMC_BUS_WIDTH (4)            // SDIO 4 çº¿æ¨¡å¼
-#define GPIO_SDMMC_DET  (GPIO_NUM_NC)  // SDIO å¡æ£€æµ‹
-// M5Stack-Tab5-P4
-#define GPIO_SDMMC_CLK (GPIO_NUM_43)  // SDIO æ—¶é’Ÿ
-#define GPIO_SDMMC_CMD (GPIO_NUM_44)  // SDIO å‘½ä»¤
-#define GPIO_SDMMC_D0  (GPIO_NUM_39)  // SDIO æ•°æ® 0
-#define GPIO_SDMMC_D1  (GPIO_NUM_40)  // SDIO æ•°æ® 1
-#define GPIO_SDMMC_D2  (GPIO_NUM_41)  // SDIO æ•°æ® 2
-#define GPIO_SDMMC_D3  (GPIO_NUM_42)  // SDIO æ•°æ® 3
+// M5Stack-Tab5-P4 SD card lines. Driven in SPI mode (see below), NOT 4-bit
+// SDMMC mode -- see the SPI-mode rationale comment above bsp_sdcard_init().
+#define GPIO_SDMMC_DET  (GPIO_NUM_NC)  // no card-detect line on this board
+#define GPIO_SDMMC_CLK (GPIO_NUM_43)  // SCLK
+#define GPIO_SDMMC_CMD (GPIO_NUM_44)  // MOSI (was SDIO CMD)
+#define GPIO_SDMMC_D0  (GPIO_NUM_39)  // MISO (was SDIO D0)
+#define GPIO_SDMMC_D1  (GPIO_NUM_40)  // unused in SPI mode (was SDIO D1)
+#define GPIO_SDMMC_D2  (GPIO_NUM_41)  // unused in SPI mode (was SDIO D2)
+#define GPIO_SDMMC_D3  (GPIO_NUM_42)  // CS (was SDIO D3)
+
+#define BSP_SD_SPI_HOST SPI2_HOST  // dedicated SPI bus -- not shared with anything else on this board
 
 static sdmmc_card_t* card;
 
+// SD CARD IS DRIVEN IN SPI MODE, NOT 4-BIT SDMMC MODE -- DO NOT "OPTIMIZE"
+// THIS BACK TO esp_vfs_fat_sdmmc_mount()/SDMMC_HOST_SLOT_0.
+//
+// Root cause (found 2026-07-06 from a live serial capture + code read, not
+// speculation): the ESP32-P4 has ONE physical SDMMC/SDIO hardware peripheral
+// shared between its two logical "slots". slot 0 (this SD card) and slot 1
+// (ESP-Hosted's WiFi link to the C6 co-processor, see wifi.c / managed_components
+// /espressif__esp_hosted) use different GPIO pins but the SAME underlying
+// hardware block (shared clock generator + DMA engine), and nothing in either
+// driver coordinates access between them -- they are two independent
+// subsystems with zero shared lock. storage/sd_archive.c's background probe
+// (retries bsp_sdcard_init() every 10 s whenever no card is mounted, since
+// this board has no card-detect line) sends a real SD command sequence
+// (sdmmc_init_ocr's CMD1/send_op_cond, ~100 ms) over that shared block on
+// every retry -- with a card mounted, ongoing FatFs read/write traffic does
+// the same thing far more often. Any of that racing against concurrent
+// ESP-Hosted WiFi SDIO traffic can corrupt a length field the C6 reports back,
+// producing `H_SDIO_DRV: sdio_get_len_from_slave: Len from slave[X] exceeds
+// max [1536]` followed by every subsequent WiFi status RPC (0x126,
+// WifiStaGetApInfo) timing out forever -- a permanent wedge with no
+// auto-recovery, confirmed reproducible with or without a card actually
+// mounted (the bare failed-probe command sequence alone is enough).
+//
+// Moving the SD card to SPI mode uses the SPI2 controller instead -- a
+// genuinely separate hardware peripheral from the SDMMC/SDIO block, so SD
+// card activity and WiFi SDIO traffic can no longer contend for the same
+// internal state machine at all. This eliminates the race at the root
+// instead of narrowing its timing window. Trade-off: SPI-mode SD throughput
+// is well below 4-bit SDMMC's, but this card is only used for background
+// mirroring of the diag log / ADIF / config (storage/sd_archive.c) -- small,
+// infrequent writes, not a bulk-storage role -- so the slowdown is not
+// user-visible. SPI2_HOST is unused by anything else on this board (display
+// is MIPI-DSI, touch is I2C, audio/CAT are USB), so no bus contention there.
 esp_err_t bsp_sdcard_init(char* mount_point, size_t max_files)
 {
     esp_err_t ret_val = ESP_OK;
@@ -565,17 +602,9 @@ esp_err_t bsp_sdcard_init(char* mount_point, size_t max_files)
         return ESP_ERR_INVALID_STATE;
     }
 
-    /**
-     * @brief Use settings defined above to initialize SD card and mount FAT filesystem.
-     *   Note: esp_vfs_fat_sdmmc/sdspi_mount is all-in-one convenience functions.
-     *   Please check its source code and implement error recovery when developing
-     *   production applications.
-     *
-     */
-    sdmmc_host_t host = SDMMC_HOST_DEFAULT();
-    host.slot         = SDMMC_HOST_SLOT_0;  //
-    // host.slot = SDMMC_HOST_SLOT_1; //
-    host.max_freq_khz                   = SDMMC_FREQ_HIGHSPEED;
+    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    host.slot         = BSP_SD_SPI_HOST;
+
     sd_pwr_ctrl_ldo_config_t ldo_config = {
         .ldo_chan_id = BSP_LDO_PROBE_SD_CHAN,  // `LDO_VO4` is used as the SDMMC IO power
     };
@@ -590,33 +619,30 @@ esp_err_t bsp_sdcard_init(char* mount_point, size_t max_files)
     }
     host.pwr_ctrl_handle = pwr_ctrl_handle;
 
-    /**
-     * @brief This initializes the slot without card detect (CD) and write protect (WP) signals.
-     *   Modify slot_config.gpio_cd and slot_config.gpio_wp if your board has these signals.
-     *
-     */
-    sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
-    slot_config.width               = SDMMC_BUS_WIDTH;
-    slot_config.clk                 = GPIO_SDMMC_CLK;
-    slot_config.cmd                 = GPIO_SDMMC_CMD;
-    slot_config.d0                  = GPIO_SDMMC_D0;
-    slot_config.d1                  = GPIO_SDMMC_D1;
-    slot_config.d2                  = GPIO_SDMMC_D2;
-    slot_config.d3                  = GPIO_SDMMC_D3;
-    // slot_config.cd = GPIO_SDMMC_DET;
-    // slot_config.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
+    spi_bus_config_t bus_cfg = {
+        .mosi_io_num     = GPIO_SDMMC_CMD,
+        .miso_io_num     = GPIO_SDMMC_D0,
+        .sclk_io_num     = GPIO_SDMMC_CLK,
+        .quadwp_io_num   = -1,
+        .quadhd_io_num   = -1,
+        .max_transfer_sz = 4000,
+    };
+    ret_val = spi_bus_initialize(BSP_SD_SPI_HOST, &bus_cfg, SDSPI_DEFAULT_DMA);
+    if (ret_val != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize SPI bus for SD card (%s)", esp_err_to_name(ret_val));
+        return ret_val;
+    }
 
-    /**
-     * @brief Options for mounting the filesystem.
-     *   If format_if_mount_failed is set to true, SD card will be partitioned and
-     *   formatted in case when mounting fails.
-     */
+    sdspi_device_config_t slot_config = SDSPI_DEVICE_CONFIG_DEFAULT();
+    slot_config.gpio_cs = GPIO_SDMMC_D3;
+    slot_config.host_id = BSP_SD_SPI_HOST;
+
     esp_vfs_fat_sdmmc_mount_config_t mount_config = {
         .format_if_mount_failed = false, .max_files = max_files, .allocation_unit_size = 16 * 1024};
 
-    ret_val = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
+    ret_val = esp_vfs_fat_sdspi_mount(mount_point, &host, &slot_config, &mount_config, &card);
 
-    /* Check for SDMMC mount result. */
+    /* Check for SDSPI mount result. */
     if (ret_val != ESP_OK) {
         if (ret_val == ESP_FAIL) {
             ESP_LOGE(TAG,
@@ -628,6 +654,7 @@ esp_err_t bsp_sdcard_init(char* mount_point, size_t max_files)
                      "Make sure SD card lines have pull-up resistors in place.",
                      esp_err_to_name(ret_val));
         }
+        spi_bus_free(BSP_SD_SPI_HOST);
         return ret_val;
     }
 
@@ -645,6 +672,8 @@ esp_err_t bsp_sdcard_deinit(char* mount_point)
 
     /* Unmount an SD card from the FAT filesystem and release resources acquired */
     esp_err_t ret_val = esp_vfs_fat_sdcard_unmount(mount_point, card);
+
+    spi_bus_free(BSP_SD_SPI_HOST);
 
     // ret_val = sd_pwr_ctrl_del_on_chip_ldo(card->host.pwr_ctrl_handle);
     // if (ret_val != ESP_OK) {

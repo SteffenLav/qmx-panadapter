@@ -32,6 +32,7 @@
 #include "identity_config.h"
 #include "adif/adif_log.h"
 #include "adif_view_modal.h"
+#include "net/webserver_ws.h"  // webserver_ws_set_paused() - pause spectrum stream off Panadapter
 
 static const char *TAG = "ft8_view";
 
@@ -175,6 +176,7 @@ static bool         s_distance_in_miles = false;  /* FT8 distance display unit; 
 static lv_obj_t    *s_lbl_hdr_km = NULL;  /* "KM"/"MI" column header, re-labelled when the unit setting changes */
 
 static volatile bool s_refresh_pending = false;
+static volatile bool s_active = false;  // true while the FT8 screen is showing (vs. Panadapter)
 
 // Touch-and-drag row selection.
 //
@@ -1830,6 +1832,12 @@ void ft8_screen_view_show(void)
     if (!s_container) return;
     lv_obj_clear_flag(s_container, LV_OBJ_FLAG_HIDDEN);
     s_refresh_pending = true;
+    s_active = true;
+    // FT8 mode has no spectrum to show and the tightest slot-timing budget in
+    // the firmware - the web UI's 10 fps WS stream competes for the same
+    // WiFi link as everything else, so pause it here the same way an
+    // upload does (webserver_ws_set_paused). Resumed in hide() below.
+    webserver_ws_set_paused(true);
 
     // ui_init() foregrounds the top-bar Band/Mode/BW/Freq/Zoom hit-zones
     // (each spanning the full 200px screen top, see hit_zones[] in ui.c) as
@@ -1858,12 +1866,19 @@ void ft8_screen_view_hide(void)
     if (!s_container) return;
     lv_obj_add_flag(s_container, LV_OBJ_FLAG_HIDDEN);
     if (s_btn_freq_hit) lv_obj_add_flag(s_btn_freq_hit, LV_OBJ_FLAG_HIDDEN);
+    s_active = false;
+    webserver_ws_set_paused(false);  // back to Panadapter - resume the WS spectrum stream
     ESP_LOGI(TAG, "hide");
 }
 
 lv_obj_t *ft8_screen_view_get_container(void)
 {
     return s_container;
+}
+
+bool ft8_screen_view_is_active(void)
+{
+    return s_active;
 }
 
 void ft8_screen_view_request_refresh(void)

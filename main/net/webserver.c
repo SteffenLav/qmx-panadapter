@@ -9,6 +9,7 @@
 #include "wifi.h"             // wifi_get_ssid, wifi_get_rssi_dbm, wifi_get_ip
 #include "cat.h"              // cat_get_frequency, cat_get_band_list, cat_set_*
 #include "ui.h"               // ui_get_*, ui_set_zoom
+#include "ft8_screen_view.h"  // ft8_screen_view_is_active
 #include "dsp.h"              // dsp_get_peak_dbm_around_vfo
 #include "display/display.h"  // display_lock / display_unlock
 #include "screenshot/screenshot.h"  // screenshot_capture_rgb565
@@ -84,6 +85,7 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "qmx_fw",       cat_get_qmx_fw());
     cJSON_AddStringToObject(root, "mode",         ui_get_mode_str());
     cJSON_AddStringToObject(root, "band",         ui_get_band_str());
+    cJSON_AddStringToObject(root, "screen",       ft8_screen_view_is_active() ? "ft8" : "panadapter");
     // Apply mode defaults if CAT has not yet reported BW (matches Tab5 compute_passband_edges_hz)
     {
         uint32_t bw = ui_get_passband_width_hz();
