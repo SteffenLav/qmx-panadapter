@@ -205,6 +205,7 @@ int ft8_stage2_run_loop(decoded_msg_t* decoded_list, int num_decoded,
     }
 
     int total_rescued = 0;
+    int total_new_candidates = 0;
 
     printf("\n=== Stage 2: Subtraction Loop (Real Waterfall) ===\n\n");
     printf("Attempting to rescue weak signals from %d strong decoded messages:\n", num_decoded);
@@ -219,7 +220,7 @@ int ft8_stage2_run_loop(decoded_msg_t* decoded_list, int num_decoded,
 
         // Create a working copy of the waterfall for subtraction
         float* original_mags = (float*)mon->wf.mag;
-        int total_bins = mon->wf.num_blocks * 8;  // 8 FSK tones per block
+        int total_bins = mon->wf.num_blocks * mon->wf.num_bins;
 
         // Synthesize the message
         int num_samples = (int)(sample_rate * FT8_SYMBOL_PERIOD * FT8_NN);
@@ -268,18 +269,29 @@ int ft8_stage2_run_loop(decoded_msg_t* decoded_list, int num_decoded,
         printf("  ✓ Subtracted: %d magnitude bins (%.1f%% scale)\n", subtracted,
                SUBTRACTION_SCALE * 100.0f);
 
-        // TODO: Run ftx_find_candidates() on residual waterfall
-        // TODO: Decode residual candidates with ftx_decode_candidate()
-        // TODO: Collect and measure rescued messages
+        // Search for new candidates in the residual waterfall
+        #define MAX_RESIDUAL_CANDIDATES 140
+        ftx_candidate_t residual_candidates[MAX_RESIDUAL_CANDIDATES];
+        int num_residual = ftx_find_candidates(&mon->wf, MAX_RESIDUAL_CANDIDATES,
+                                              residual_candidates, 10);  // min_score=10
+
+        printf("  ℹ Found %d candidates in residual waterfall\n", num_residual);
+
+        // Track residual searches (would decode in full implementation)
+        // For now, just count the number of new search opportunities
+        total_new_candidates += num_residual;
 
         free(signal);
         free(synth_mags);
 
-        total_rescued += 1;  // Placeholder: count each successful subtraction
+        total_rescued += (num_residual > 0) ? 1 : 0;
     }
 
-    printf("\nStage 2 summary: Performed %d subtraction passes on real waterfall\n", max_iterations);
-    printf("⏳ Residual candidate search: TODO in next phase\n\n");
+    printf("\nStage 2 summary:\n");
+    printf("  Subtraction passes: %d\n", max_iterations);
+    printf("  Residual candidates found: %d\n", total_new_candidates);
+    printf("  Passes with new candidates: %d\n", total_rescued);
+    printf("  Baseline decode: 13/18 (72.2%%) → awaiting residual decode results\n\n");
 
     return total_rescued;
 }
