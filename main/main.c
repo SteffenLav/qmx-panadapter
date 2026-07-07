@@ -38,7 +38,6 @@
 
 static const char *TAG = "main";
 
-
 void app_main(void)
 {
     // Install the diagnostic log capture hook first so the whole boot
