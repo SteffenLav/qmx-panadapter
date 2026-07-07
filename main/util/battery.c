@@ -99,16 +99,38 @@ esp_err_t battery_init(i2c_master_bus_handle_t bus)
     return ESP_OK;
 }
 
+int battery_mv_to_level(int mv)
+{
+    if (mv <= BATTERY_MIN_MV) return 0;
+    if (mv >= BATTERY_MAX_MV) return 100;
+    return (int)(((mv - BATTERY_MIN_MV) * 100) / (BATTERY_MAX_MV - BATTERY_MIN_MV));
+}
+
+// Compensates a real, confirmed-on-hardware artifact: the INA226 reads the
+// pack's TERMINAL voltage, which while charge current is actually flowing
+// sits ~200 mV (~10 percentage points on this pack's linear map) above the
+// true resting voltage, due to the pack's own internal resistance
+// (V_terminal = V_true + I_charge * R_internal). Left uncompensated this
+// makes every consumer - the status-bar %/icon, the web API, and (most
+// importantly) util/status.c's charge-limit cutoff decision - see a reading
+// that jumps ~10 points the instant charging starts and drops back the
+// instant it stops, rather than the battery's true, slowly-changing SoC.
+// Reported and reproduced on real hardware (2026-07-07): a charge-limit set
+// close to the true resting level got stuck permanently just below it (the
+// inflated reading crossed the limit before any real charging happened, then
+// relaxed back below limit-hysteresis and never resumed); a limit further
+// away oscillated rapidly instead of charging smoothly up to it. Applying
+// this compensation centrally here (not just in the charge-limit decision)
+// also fixes the visual jump the user sees on the displayed %/voltage.
+#define CHARGE_IR_DROP_MV 200
+
 int battery_get_level(void)
 {
     if (!s_initialised) return -1;
 
-    uint32_t mv;
-    if (ina226_read_bus_mv(&mv) != ESP_OK) return -1;
-
-    if (mv <= BATTERY_MIN_MV) return 0;
-    if (mv >= BATTERY_MAX_MV) return 100;
-    return (int)(((mv - BATTERY_MIN_MV) * 100) / (BATTERY_MAX_MV - BATTERY_MIN_MV));
+    int mv = battery_get_mv();
+    if (mv < 0) return -1;
+    return battery_mv_to_level(mv);
 }
 
 int battery_get_mv(void)
@@ -117,7 +139,12 @@ int battery_get_mv(void)
 
     uint32_t mv;
     if (ina226_read_bus_mv(&mv) != ESP_OK) return -1;
-    battery_track(mv);   // feed the no-battery detector (called every status poll)
+    battery_track(mv);   // feed the no-battery detector with the RAW reading (called every status poll)
+
+    if (battery_is_charging()) {
+        int32_t compensated = (int32_t)mv - CHARGE_IR_DROP_MV;
+        return compensated > 0 ? compensated : 0;
+    }
     return (int)mv;
 }
 

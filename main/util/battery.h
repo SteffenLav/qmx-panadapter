@@ -15,6 +15,11 @@ esp_err_t battery_init(i2c_master_bus_handle_t bus);
 // Battery state of charge, 0-100. Returns -1 if unknown / uninitialised.
 int battery_get_level(void);
 
+// Pure mV->percent conversion (same linear map battery_get_level() uses),
+// exposed so callers can apply it to an ADJUSTED voltage - see
+// util/status.c's charge-limit IR-drop compensation for why.
+int battery_mv_to_level(int mv);
+
 // Battery pack voltage in millivolts. Returns -1 if unknown / uninitialised.
 int battery_get_mv(void);
 

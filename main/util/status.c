@@ -37,7 +37,10 @@ static int      s_sd_poll_countdown = 0;  // 0 = poll on the next tick
 // CHARGE_LIMIT_HYSTERESIS_PCT points below that, so it doesn't rapid-cycle
 // right at the threshold. s_charge_cutoff_active latches the cutoff so the
 // GPIO write (bsp_set_charge_en) only happens on the transition edges, not
-// every tick.
+// every tick. `level`/`mv` below are already IR-drop compensated by
+// battery_get_level()/battery_get_mv() while charging - see the long
+// comment there for why this decision (and the displayed %/icon/voltage)
+// needs to track true resting SoC, not momentarily-loaded terminal voltage.
 #define CHARGE_LIMIT_HYSTERESIS_PCT 5
 static bool s_charge_cutoff_active = false;
 
@@ -97,7 +100,11 @@ static void status_task(void *arg)
         qmx_settings_t cfg;
         settings_load_all(&cfg);
 
-        // Battery care: stop charging at a user-set percentage.
+        // Battery care: stop charging at a user-set percentage. Uses
+        // level_for_limit (IR-drop compensated while actively charging - see
+        // CHARGE_IR_DROP_MV above), NOT the raw displayed level, so the
+        // decision tracks true SoC instead of the momentarily-loaded
+        // terminal voltage.
         if (battery_present()) {
             if (cfg.charge_limit_en) {
                 if (!s_charge_cutoff_active && level >= (int)cfg.charge_limit_pct) {
