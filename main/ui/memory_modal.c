@@ -25,6 +25,13 @@ static const char *TAG = "mem_modal";
 #define CELL_W       282
 #define CELL_H        64
 #define CELL_GAP       6
+
+// The last cell is a permanent wastebin, not a 32nd storage slot: drag any
+// occupied channel's button onto it to delete that channel (with a "poof"
+// animation). Always takes over this cell regardless of whether it happens
+// to hold data from before this feature existed (deliberate simplicity -
+// see memory project_memory_channel_defaults_and_wastebin for the tradeoff).
+#define MEM_TRASH_IDX (MEM_SLOTS - 1)
 #define COLS           4
 #define ROWS           8
 
@@ -67,6 +74,188 @@ static int s_drag_start_y = -1;
 static void modal_anim_y_cb(void *obj, int32_t v)
 {
     lv_obj_set_y((lv_obj_t *)obj, v);
+}
+
+// Forward decls: the real drag-to-trash delete animation and the grid
+// repaint function, both defined further down. The demo block (below) is
+// defined early in the file but needs both - play_trash_delete_anim so the
+// "sacrifice" channel disappears exactly the same way a user's own
+// drag-to-trash would, and memory_modal_refresh to show the freshly-seeded
+// bait channel before animating it.
+static void play_trash_delete_anim(lv_obj_t *btn);
+static void memory_modal_refresh(void);
+
+// One-time "look, these can be moved (and deleted)" intro: cell 13 visits
+// cell 06 then cell 01 then returns home; then cell 15 does the same; then
+// (if slot 23 is free) a temporary "Waste-land" channel seeded just for this
+// demo slides into the wastebin and is deleted for real, teaching that
+// gesture too. Three acts total, ~1s pause between each. The first two acts
+// are purely cosmetic (slide LVGL objects, never touch channel data); the
+// third genuinely creates then deletes slot 23's data, self-cleaning by
+// design. Gated by mem_channels_demo_shown()/mem_channels_mark_demo_shown()
+// to play at most once ever per device, on whichever visit to this page
+// happens first.
+#define DEMO_LEG_MS        550
+#define DEMO_PAUSE_MS     1000
+#define MEM_WASTELAND_IDX   22   // slot 23, 1-based - demo-only, never a permanent default
+static const int s_demo_tour_slots[] = { 12, 14 };  // "13" then "15", 0-based
+static int       s_demo_seq_pos  = -1;   // -1 = not running; index into s_demo_tour_slots while touring
+static int       s_demo_btn_idx  = -1;   // slot whose button is currently touring
+static lv_point_t s_demo_home;           // that button's own grid position
+static bool      s_demo_bait_placed = false;  // true if slot 23 got seeded for this demo run's third act
+
+static void demo_anim_x_cb(void *obj, int32_t v)
+{
+    lv_obj_set_x((lv_obj_t *)obj, v);
+}
+
+static void cell_grid_xy(int idx, int *x, int *y)
+{
+    *x = (idx % COLS) * (CELL_W + CELL_GAP);
+    *y = (idx / COLS) * (CELL_H + CELL_GAP);
+}
+
+static void demo_move_to(lv_obj_t *btn, int x, int y, uint32_t delay_ms,
+                          void (*ready_cb)(lv_anim_t *))
+{
+    lv_anim_t ax, ay;
+    lv_anim_init(&ax);
+    lv_anim_set_var(&ax, btn);
+    lv_anim_set_exec_cb(&ax, demo_anim_x_cb);
+    lv_anim_set_values(&ax, lv_obj_get_x(btn), x);
+    lv_anim_set_time(&ax, DEMO_LEG_MS);
+    lv_anim_set_delay(&ax, delay_ms);
+    lv_anim_set_path_cb(&ax, lv_anim_path_ease_in_out);
+    lv_anim_start(&ax);
+
+    lv_anim_init(&ay);
+    lv_anim_set_var(&ay, btn);
+    lv_anim_set_exec_cb(&ay, modal_anim_y_cb);
+    lv_anim_set_values(&ay, lv_obj_get_y(btn), y);
+    lv_anim_set_time(&ay, DEMO_LEG_MS);
+    lv_anim_set_delay(&ay, delay_ms);
+    lv_anim_set_path_cb(&ay, lv_anim_path_ease_in_out);
+    if (ready_cb) lv_anim_set_ready_cb(&ay, ready_cb);
+    lv_anim_start(&ay);
+}
+
+static void demo_start_next_button(void);
+static void demo_leg1_done_cb(lv_anim_t *a);
+static void demo_leg2_done_cb(lv_anim_t *a);
+
+static void demo_leg3_done_cb(lv_anim_t *a)
+{
+    (void)a;
+    lv_obj_t *btn = s_cell_btn[s_demo_btn_idx];
+    lv_obj_set_style_border_color(btn, lv_color_hex(0x404040), 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    s_demo_btn_idx = -1;
+    s_demo_seq_pos++;
+    demo_start_next_button();
+}
+
+static void demo_leg2_done_cb(lv_anim_t *a)
+{
+    (void)a;
+    demo_move_to(s_cell_btn[s_demo_btn_idx], s_demo_home.x, s_demo_home.y, 0, demo_leg3_done_cb);
+}
+
+static void demo_leg1_done_cb(lv_anim_t *a)
+{
+    (void)a;
+    int x, y;
+    cell_grid_xy(0, &x, &y);   // cell "01"
+    demo_move_to(s_cell_btn[s_demo_btn_idx], x, y, 0, demo_leg2_done_cb);
+}
+
+// Third act: the seeded "Waste-land" bait has arrived at the trash cell's
+// position - hand off to the real delete animation (fade + clear + snap
+// back + refresh), exactly as a genuine user drag-to-trash would use.
+// Nothing further to chain afterward, so the demo sequence just ends here.
+static void demo_wasteland_arrived_cb(lv_anim_t *a)
+{
+    (void)a;
+    lv_obj_t *btn = s_cell_btn[MEM_WASTELAND_IDX];
+    // Match the manual drag-to-trash path: clear the "actively moving" gold
+    // border before handing off to the delete animation (memory_modal_refresh
+    // also resets this defensively once the fade completes, but this mirrors
+    // cell_press_state_cb's own pattern at the equivalent handoff point).
+    lv_obj_set_style_border_color(btn, lv_color_hex(0x404040), 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    play_trash_delete_anim(btn);
+    s_demo_btn_idx = -1;
+    s_demo_seq_pos = -1;
+}
+
+static void demo_start_next_button(void)
+{
+    int n = (int)(sizeof(s_demo_tour_slots) / sizeof(s_demo_tour_slots[0]));
+
+    if (s_demo_seq_pos < n) {
+        int idx = s_demo_tour_slots[s_demo_seq_pos];
+        s_demo_btn_idx = idx;
+        lv_obj_t *btn = s_cell_btn[idx];
+        s_demo_home.x = (lv_coord_t)lv_obj_get_x(btn);
+        s_demo_home.y = (lv_coord_t)lv_obj_get_y(btn);
+
+        lv_obj_move_foreground(btn);
+        lv_obj_set_style_border_color(btn, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+        lv_obj_set_style_border_width(btn, 3, 0);
+
+        int x, y;
+        cell_grid_xy(5, &x, &y);   // cell "06"
+        // First leg of the whole sequence waits for the modal's own
+        // slide-in to finish (MODAL_SLIDE_TIME_MS) plus a short beat, so it
+        // doesn't fight that animation visually; every later leg uses the
+        // full DEMO_PAUSE_MS instead.
+        uint32_t delay = (s_demo_seq_pos == 0) ? (MODAL_SLIDE_TIME_MS + 200) : DEMO_PAUSE_MS;
+        demo_move_to(btn, x, y, delay, demo_leg1_done_cb);
+        return;
+    }
+
+    if (s_demo_seq_pos == n && s_demo_bait_placed) {
+        s_demo_seq_pos++;   // consume this slot so we can't re-enter it
+        s_demo_btn_idx = MEM_WASTELAND_IDX;
+        lv_obj_t *btn = s_cell_btn[MEM_WASTELAND_IDX];
+        lv_obj_move_foreground(btn);
+        lv_obj_set_style_border_color(btn, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+        lv_obj_set_style_border_width(btn, 3, 0);
+
+        int x, y;
+        cell_grid_xy(MEM_TRASH_IDX, &x, &y);
+        demo_move_to(btn, x, y, DEMO_PAUSE_MS, demo_wasteland_arrived_cb);
+        return;
+    }
+
+    s_demo_seq_pos = -1;  // sequence fully complete
+}
+
+// Called once from memory_modal_show(). See the block comment above.
+static void maybe_play_move_demo(void)
+{
+    if (mem_channels_demo_shown()) return;
+    mem_channels_mark_demo_shown();
+
+    // Seed the "Waste-land" bait channel for the third act, but only if
+    // slot 23 doesn't already hold real user data - same non-destructive
+    // rule as the permanent default channels in mem_channels.c. If it's
+    // occupied, the demo just skips the third act (2 legs instead of 3).
+    mem_slot_t existing;
+    mem_channels_get(MEM_WASTELAND_IDX, &existing);
+    s_demo_bait_placed = false;
+    if (!existing.occupied) {
+        mem_slot_t bait = { 0 };
+        bait.freq_hz = 21190000;
+        strncpy(bait.mode, "DiGi", sizeof(bait.mode) - 1);
+        strncpy(bait.label, "Waste-land", sizeof(bait.label) - 1);
+        bait.occupied = 1;
+        mem_channels_set(MEM_WASTELAND_IDX, &bait);
+        s_demo_bait_placed = true;
+        memory_modal_refresh();   // show the freshly-seeded bait before animating it
+    }
+
+    s_demo_seq_pos = 0;
+    demo_start_next_button();
 }
 
 static void modal_close_ready_cb(lv_anim_t *a)
@@ -146,6 +335,22 @@ static bool mem_recall_blocked(const mem_slot_t *slot)
 static void memory_modal_refresh(void)
 {
     for (int i = 0; i < MEM_SLOTS; i++) {
+        if (i == MEM_TRASH_IDX) {
+            // Always the wastebin icon, regardless of any underlying slot
+            // data - see MEM_TRASH_IDX's comment.
+            lv_obj_t *btn  = s_cell_btn[i];
+            lv_obj_t *lbl  = s_cell_lbl[i];
+            lv_obj_t *lbl2 = s_cell_lbl2[i];
+            if (!btn || !lbl || !lbl2) continue;
+            lv_label_set_text(lbl, LV_SYMBOL_TRASH);
+            lv_label_set_text(lbl2, "");
+            lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_KEY_BG), 0);
+            lv_obj_set_style_border_color(btn, lv_color_hex(0x404040), 0);
+            lv_obj_set_style_text_color(lbl, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+            lv_obj_set_style_opa(btn, LV_OPA_COVER, 0);
+            continue;
+        }
+
         mem_slot_t slot;
         mem_channels_get(i, &slot);
 
@@ -153,6 +358,16 @@ static void memory_modal_refresh(void)
         lv_obj_t *lbl  = s_cell_lbl[i];
         lv_obj_t *lbl2 = s_cell_lbl2[i];
         if (!btn || !lbl || !lbl2) continue;
+
+        // Always reset to the normal border before the occupied/empty
+        // branches below - a button that arrives here via the wastebin
+        // (dragged manually, or animated by the demo) may still have its
+        // gold "actively moving" border set from cell_press_state_cb or
+        // demo_start_next_button, and neither branch below otherwise touches
+        // border style, so a stray highlight would linger forever on what's
+        // now an ordinary (usually empty) cell.
+        lv_obj_set_style_border_color(btn, lv_color_hex(0x404040), 0);
+        lv_obj_set_style_border_width(btn, 1, 0);
 
         if (slot.occupied) {
             char freq_str[20];
@@ -178,7 +393,7 @@ static void memory_modal_refresh(void)
             }
         } else {
             char buf[8];
-            snprintf(buf, sizeof(buf), "[%02d]", i + 1);
+            snprintf(buf, sizeof(buf), "%02d", i + 1);
             lv_label_set_text(lbl, buf);
             lv_label_set_text(lbl2, "");
             lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_KEY_BG), 0);
@@ -268,6 +483,7 @@ static void cell_tap_cb(lv_event_t *e)
     lv_obj_t *btn = lv_event_get_target(e);
     int idx = (int)(intptr_t)lv_obj_get_user_data(btn);
     if (idx < 0 || idx >= MEM_SLOTS) return;
+    if (idx == MEM_TRASH_IDX) return;  /* not a real slot - tap does nothing */
 
     mem_slot_t slot;
     mem_channels_get(idx, &slot);
@@ -404,6 +620,57 @@ static void open_edit_panel(int idx)
  * object itself - it snaps back to its own slot's position and
  * memory_modal_refresh() repaints both the source (now empty) and
  * destination (now occupied) cells from the underlying data. */
+
+// Wastebin delete animation: fade the dropped-on-trash button out in place
+// (wherever it currently sits, near the trash cell), then clear its data
+// and restore it. Opacity-only - an earlier version also animated
+// transform_scale_x/y down to 0 and froze the LVGL/UI thread solid on real
+// hardware (no crash, no backtrace - background tasks kept running fine,
+// only rendering/touch stopped responding), most likely a degenerate case
+// in LVGL's transform-matrix rendering at scale exactly 0. Opacity alone is
+// a code path already exercised elsewhere in this codebase with no issues;
+// do not reintroduce a scale/zoom transform here without confirming
+// LVGL handles scale=0 safely first (test on a throwaway object, off the
+// main UI thread's critical path, before wiring it back into this modal).
+// Reads idx/home position back out of the button object itself (user_data +
+// cell_grid_xy) rather than any shared drag-state variable, so it stays
+// correct even if a new press/drag gesture starts on a different button
+// before this ~350ms animation finishes.
+#define TRASH_ANIM_MS 350
+
+static void trash_anim_opa_cb(void *obj, int32_t v)
+{
+    lv_obj_set_style_opa((lv_obj_t *)obj, (lv_opa_t)v, 0);
+}
+
+static void trash_anim_done_cb(lv_anim_t *a)
+{
+    lv_obj_t *btn = (lv_obj_t *)a->var;
+    int idx = (int)(intptr_t)lv_obj_get_user_data(btn);
+    mem_channels_clear(idx);
+    ESP_LOGI(TAG, "slot %d deleted via wastebin", idx);
+
+    lv_obj_set_style_opa(btn, LV_OPA_COVER, 0);
+    int x, y;
+    cell_grid_xy(idx, &x, &y);
+    lv_obj_set_pos(btn, x, y);
+
+    memory_modal_refresh();
+}
+
+static void play_trash_delete_anim(lv_obj_t *btn)
+{
+    lv_anim_t a_opa;
+    lv_anim_init(&a_opa);
+    lv_anim_set_var(&a_opa, btn);
+    lv_anim_set_exec_cb(&a_opa, trash_anim_opa_cb);
+    lv_anim_set_values(&a_opa, LV_OPA_COVER, LV_OPA_TRANSP);
+    lv_anim_set_time(&a_opa, TRASH_ANIM_MS);
+    lv_anim_set_path_cb(&a_opa, lv_anim_path_ease_in);
+    lv_anim_set_ready_cb(&a_opa, trash_anim_done_cb);
+    lv_anim_start(&a_opa);
+}
+
 static void cell_press_state_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -412,6 +679,7 @@ static void cell_press_state_cb(lv_event_t *e)
     if (idx < 0 || idx >= MEM_SLOTS) return;
 
     if (code == LV_EVENT_LONG_PRESSED) {
+        if (idx == MEM_TRASH_IDX) return;  /* the wastebin is a drop target only, never a drag source */
         s_press_idx = idx;
         s_press_dragging = false;
         lv_indev_t *indev = lv_indev_get_act();
@@ -473,6 +741,16 @@ static void cell_press_state_cb(lv_event_t *e)
             if (col < 0) col = 0; else if (col >= COLS) col = COLS - 1;
             if (row < 0) row = 0; else if (row >= ROWS) row = ROWS - 1;
             int target_idx = row * COLS + col;
+
+            if (target_idx == MEM_TRASH_IDX) {
+                // Dropped on the wastebin: delete with a "poof" animation
+                // instead of the normal snap-back-and-move below. The
+                // animation's own completion callback clears the data,
+                // restores the button's appearance, and snaps it back home.
+                play_trash_delete_anim(btn);
+                s_skip_next_click = true;
+                return;
+            }
 
             // The button always snaps back to its own fixed grid slot - only
             // the data may have moved (see function comment above).
@@ -585,6 +863,14 @@ static void modal_build(void)
         lv_obj_set_style_text_color(lbl2, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
         lv_obj_align(lbl2, LV_ALIGN_BOTTOM_MID, 0, -2);
         s_cell_lbl2[i] = lbl2;
+
+        if (i == MEM_TRASH_IDX) {
+            // Bigger icon, centered (overriding the top-aligned two-line
+            // layout every other cell uses) and nudged up 15px per request -
+            // lbl2 stays blank (set in memory_modal_refresh) and unused here.
+            lv_obj_set_style_text_font(lbl, &lv_font_montserrat_48, 0);
+            lv_obj_align(lbl, LV_ALIGN_CENTER, 0, -7);
+        }
     }
 
     // Slim grip handle at the top of the panel: swipe down to close.
@@ -732,6 +1018,8 @@ void memory_modal_show(void)
     lv_anim_set_time(&a, MODAL_SLIDE_TIME_MS);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
     lv_anim_start(&a);
+
+    maybe_play_move_demo();
 
     ESP_LOGI(TAG, "shown");
 }

@@ -26,6 +26,12 @@ void mem_channels_set(int idx, const mem_slot_t *slot);
 /* Mark slot idx empty and persist. */
 void mem_channels_clear(int idx);
 
+/* True once the user has been shown the one-time "these can be moved"
+ * intro animation on the Memory page. Persisted so it plays at most once
+ * ever per device, regardless of how many times the page is reopened. */
+bool mem_channels_demo_shown(void);
+void mem_channels_mark_demo_shown(void);
+
 #ifdef __cplusplus
 }
 #endif

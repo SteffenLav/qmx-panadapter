@@ -8,13 +8,62 @@
 #include <string.h>
 
 static const char *TAG = "mem_channels";
-#define PART  "user_nvs"
-#define NS    "qmx"
-#define KEY   "mem_slots"
+#define PART       "user_nvs"
+#define NS         "qmx"
+#define KEY        "mem_slots"
+#define KEY_SEEDED "mem_seeded"
+#define KEY_DEMO   "mem_demo_shown"
 
 static mem_slot_t   s_slots[MEM_SLOTS];
 static nvs_handle_t s_nvs  = 0;
 static bool         s_ready = false;
+
+// Factory-default channels shipped from the developer's own working set
+// (slots 13/14/15/16, 1-based as shown in the UI -> 0-based idx 12-15
+// here), so first-time users land on a populated, explorable grid instead
+// of 32 blank cells. Applied at most ONCE ever per device (see
+// KEY_SEEDED below) and only into whichever of these 4 slots are still
+// empty - never overwrites a slot the user (or an earlier firmware) has
+// already put something in.
+typedef struct { int idx; uint32_t freq_hz; const char *mode; const char *label; } mem_default_t;
+static const mem_default_t DEFAULT_SLOTS[] = {
+    { 12, 14080000, "DiGi", "Steffen" },
+    { 13, 45856000, "USB",  "Pia"     },
+    { 14,  7074000, "LSB",  "Johane"  },
+    { 15,  3560000, "CW",   "Astrid"  },
+};
+
+static void seed_defaults_if_needed(void)
+{
+    uint8_t seeded = 0;
+    if (nvs_get_u8(s_nvs, KEY_SEEDED, &seeded) == ESP_OK && seeded) return;  // already ran, ever
+
+    int n_applied = 0;
+    for (size_t i = 0; i < sizeof(DEFAULT_SLOTS) / sizeof(DEFAULT_SLOTS[0]); i++) {
+        const mem_default_t *d = &DEFAULT_SLOTS[i];
+        if (s_slots[d->idx].occupied) continue;   // don't clobber existing data
+        mem_slot_t slot = { 0 };
+        slot.freq_hz = d->freq_hz;
+        strncpy(slot.mode, d->mode, sizeof(slot.mode) - 1);
+        strncpy(slot.label, d->label, sizeof(slot.label) - 1);
+        slot.occupied = 1;
+        s_slots[d->idx] = slot;
+        n_applied++;
+    }
+    if (n_applied > 0) {
+        esp_err_t werr = nvs_set_blob(s_nvs, KEY, s_slots, sizeof(s_slots));
+        if (werr == ESP_OK) werr = nvs_commit(s_nvs);
+        if (werr != ESP_OK) ESP_LOGW(TAG, "default-slot save failed: 0x%x", werr);
+    }
+    ESP_LOGI(TAG, "seeded %d/%d default memory channel(s)",
+             n_applied, (int)(sizeof(DEFAULT_SLOTS) / sizeof(DEFAULT_SLOTS[0])));
+
+    // Mark done regardless of how many were actually applied (even 0) - this
+    // must never re-check on a later boot, or a slot the user deliberately
+    // cleared afterward would get silently re-seeded.
+    nvs_set_u8(s_nvs, KEY_SEEDED, 1);
+    nvs_commit(s_nvs);
+}
 
 void mem_channels_init(void)
 {
@@ -37,6 +86,21 @@ void mem_channels_init(void)
         ESP_LOGI(TAG, "loaded %d/%d channels", n, MEM_SLOTS);
     }
     s_ready = true;
+    seed_defaults_if_needed();
+}
+
+bool mem_channels_demo_shown(void)
+{
+    if (!s_ready) return true;  // NVS unavailable - default to "shown" so it can't wedge into repeating
+    uint8_t v = 0;
+    return nvs_get_u8(s_nvs, KEY_DEMO, &v) == ESP_OK && v != 0;
+}
+
+void mem_channels_mark_demo_shown(void)
+{
+    if (!s_ready) return;
+    nvs_set_u8(s_nvs, KEY_DEMO, 1);
+    nvs_commit(s_nvs);
 }
 
 bool mem_channels_get(int idx, mem_slot_t *out)
