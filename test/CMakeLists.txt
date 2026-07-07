@@ -7,6 +7,7 @@ set(FT8_LIB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../components/ft8_lib")
 # Source files
 set(SOURCES
     ft8_test_harness.c
+    ft8_stage2.c
     ${FT8_LIB_DIR}/ft8/decode.c
     ${FT8_LIB_DIR}/ft8/encode.c
     ${FT8_LIB_DIR}/ft8/ldpc.c

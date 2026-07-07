@@ -77,6 +77,10 @@ typedef struct {
     uint8_t symbols[FT8_NN];  // Decoded symbols (0-7) for Stage 2 reconstruction
 } decoded_msg_t;
 
+// Forward declaration for Stage 2 subtraction
+int ft8_stage2_run_loop(decoded_msg_t* decoded_list, int num_decoded,
+                       float base_freq_hz, int num_samples, int sample_rate);
+
 typedef struct {
     char text[128];  // Expected message text
     float snr_db;    // Documented SNR in dB (from .txt file)
@@ -264,36 +268,46 @@ void decode_and_capture(const monitor_t* mon, struct tm* tm_slot_start)
 }
 
 // Compare measured SNR vs documented SNR (calibration)
-/// Stage 2 proof-of-concept: Print captured symbols to verify Path A worked
-void test_stage2_concept(void)
+/// Stage 2: Run subtraction loop to attempt rescuing weak signals
+void test_stage2_concept(int num_samples, int sample_rate)
 {
-    printf("\n=== Stage 2: Symbol Capture Verification ===\n\n");
+    printf("\n=== Stage 2: Subtraction-Pass Decoder (Phase B) ===\n");
 
     if (num_decoded == 0) {
-        printf("No decoded messages to verify\n");
+        printf("No decoded messages to subtract\n");
         return;
     }
 
-    // Print symbols for the first decoded message as a sample
-    printf("Sample symbols from first decoded message: '%s'\n", decoded_list[0].text);
+    // Print verification of symbol capture (first message as sample)
+    printf("\nSymbol Capture Verification:\n");
+    printf("First decoded message: '%s'\n", decoded_list[0].text);
     printf("Symbols (tone 0-7): ");
     for (int i = 0; i < FT8_NN; i++) {
-        if (i > 0 && i % 20 == 0) printf("\n                    ");
+        if (i > 0 && i % 20 == 0) printf("\n                   ");
         printf("%d", decoded_list[0].symbols[i]);
     }
-    printf("\n\n");
+    printf("\n");
 
-    printf("✓ Path A implementation complete:\n");
-    printf("  • ftx_decode_status_t now stores uint8_t symbols[FT8_NN]\n");
-    printf("  • ft8_extract_symbols() captures most-likely tones during decode\n");
-    printf("  • Test harness now saves symbols for Stage 2 reconstruction\n\n");
+    // Run Stage 2 subtraction loop
+    // Use the first decoded message's frequency as base (would normally use candidate's freq_offset)
+    float base_freq_hz = 1500.0f;  // Default FT8 tone spacing center
 
-    printf("✓ Next steps (Session 2):\n");
-    printf("  1. Implement GFSK synthesis using captured symbols\n");
-    printf("  2. Add waterfall magnitude conversion (FFT-based)\n");
-    printf("  3. Implement magnitude-domain subtraction\n");
-    printf("  4. Run candidate search on residual waterfall\n");
-    printf("  5. Measure improvement on 5 unmatched weak signals\n\n");
+    int rescued = ft8_stage2_run_loop(decoded_list, num_decoded, base_freq_hz,
+                                     num_samples, sample_rate);
+
+    printf("\nPhase B Status:\n");
+    printf("✓ GFSK synthesis: implemented (synthesize_gfsk)\n");
+    printf("✓ Symbol capture: working (%d messages with symbols)\n", num_decoded);
+    printf("⏳ Waterfall conversion: simplified (full FFT implementation pending)\n");
+    printf("⏳ Subtraction & residual search: scaffolding in place\n");
+    printf("⏳ Final integration: next phase\n\n");
+
+    printf("5 Target weak signals to rescue:\n");
+    printf("  • LZ1CWK DC8VA RR73 (-14 dB)\n");
+    printf("  • CQ EA1HTF IN52 (-24 dB, weakest)\n");
+    printf("  • YO7CGS A41ZZ -11 (-15 dB)\n");
+    printf("  • R2ATW IZ0VLL -16 (-6 dB)\n");
+    printf("  • CQ DX Z33Z (-1 dB)\n\n");
 }
 
 void analyze_snr_calibration(decoded_msg_t* decoded, int num_decoded, expected_msg_t* expected, int num_expected)
@@ -536,7 +550,7 @@ int main(int argc, char** argv)
     printf("\n=== SNR Calibration ===\n");
     analyze_snr_calibration(decoded_list, num_decoded, expected, num_expected);
 
-    test_stage2_concept();
+    test_stage2_concept(num_samples, sample_rate);
 
     monitor_free(&mon);
     return 0;
