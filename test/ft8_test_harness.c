@@ -75,10 +75,14 @@ typedef struct {
     int score;       // Sync score (for ranking)
     float snr_db;    // Measured SNR in dB
     uint8_t symbols[FT8_NN];  // Decoded symbols (0-7) for Stage 2 reconstruction
+    ftx_candidate_t cand;     // Candidate position (time/freq offset) for subtraction
+    uint32_t hash;            // Message hash (for residual dedup vs baseline decodes)
 } decoded_msg_t;
 
-// Forward declaration for Stage 2 subtraction (real waterfall integration)
+// Forward declarations for Stage 2 residual subtraction/decode (see ft8_stage2.c)
 int ft8_stage2_run_loop(decoded_msg_t* decoded_list, int num_decoded,
+                       monitor_t* mon, int sample_rate);
+void ft8_stage2_scale_sweep(decoded_msg_t* decoded_list, int num_decoded,
                        monitor_t* mon, int sample_rate);
 
 typedef struct {
@@ -262,48 +266,26 @@ void decode_and_capture(const monitor_t* mon, struct tm* tm_slot_start)
             decoded_list[num_decoded].score = cand->score;
             decoded_list[num_decoded].snr_db = status.snr_db;
             memcpy(decoded_list[num_decoded].symbols, status.symbols, sizeof(status.symbols));
+            decoded_list[num_decoded].cand = *cand;         // position for Stage 2 subtraction
+            decoded_list[num_decoded].hash = message.hash;  // for residual dedup
             num_decoded++;
         }
     }
 }
 
-// Compare measured SNR vs documented SNR (calibration)
-/// Stage 2: Run subtraction loop to attempt rescuing weak signals
+/// Stage 2: Run residual subtraction + decode to attempt rescuing weak signals
 void test_stage2_concept(monitor_t* mon, int sample_rate)
 {
-    printf("\n=== Stage 2: Subtraction-Pass Decoder (Phase B) ===\n");
-
     if (num_decoded == 0) {
-        printf("No decoded messages to subtract\n");
+        printf("\n=== Stage 2 ===\nNo baseline decodes to subtract; skipping.\n");
         return;
     }
 
-    // Print verification of symbol capture (first message as sample)
-    printf("\nSymbol Capture Verification:\n");
-    printf("First decoded message: '%s'\n", decoded_list[0].text);
-    printf("Symbols (tone 0-7): ");
-    for (int i = 0; i < FT8_NN; i++) {
-        if (i > 0 && i % 20 == 0) printf("\n                   ");
-        printf("%d", decoded_list[0].symbols[i]);
-    }
-    printf("\n");
+    // Task 1: subtract all baseline decodes, re-search + re-decode the residual
+    ft8_stage2_run_loop(decoded_list, num_decoded, mon, sample_rate);
 
-    // Run Stage 2 subtraction loop with real monitor waterfall
-    int rescued = ft8_stage2_run_loop(decoded_list, num_decoded, mon, sample_rate);
-
-    printf("\nPhase B Status:\n");
-    printf("✓ GFSK synthesis: implemented (synthesize_gfsk)\n");
-    printf("✓ Symbol capture: working (%d messages with symbols)\n", num_decoded);
-    printf("⏳ Waterfall conversion: simplified (full FFT implementation pending)\n");
-    printf("⏳ Subtraction & residual search: scaffolding in place\n");
-    printf("⏳ Final integration: next phase\n\n");
-
-    printf("5 Target weak signals to rescue:\n");
-    printf("  • LZ1CWK DC8VA RR73 (-14 dB)\n");
-    printf("  • CQ EA1HTF IN52 (-24 dB, weakest)\n");
-    printf("  • YO7CGS A41ZZ -11 (-15 dB)\n");
-    printf("  • R2ATW IZ0VLL -16 (-6 dB)\n");
-    printf("  • CQ DX Z33Z (-1 dB)\n\n");
+    // Task 2: scale-factor tuning sweep
+    ft8_stage2_scale_sweep(decoded_list, num_decoded, mon, sample_rate);
 }
 
 void analyze_snr_calibration(decoded_msg_t* decoded, int num_decoded, expected_msg_t* expected, int num_expected)
