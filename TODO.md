@@ -1,6 +1,6 @@
 # QMX Panadapter — Master Todo List + Status Assessment
 
-**Last updated:** 2026-07-03
+**Last updated:** 2026-07-07
 **Scope:** v1.0 release gates → open investigations → feature requests → roadmap → full shipped history
 **Source:** CLAUDE.md + README.md + groups.io feature requests + session work
 **Assessment:** Code grep + git log + memory system
@@ -58,6 +58,7 @@
 | 10 | JS8 mode | ❌ Not started | Large | Heavily reuses `ft8_lib` per feasibility doc; has 10/15/30/60s slot variants. Do after FT4 (#5) to reuse its slot-abstraction work. See `docs/js8-feasibility.md` |
 | 10b | RTTY mode | ❌ Not started | Large | Fully separate pipeline — no LDPC, no block structure. Unrelated to FT4/JS8 work. See `docs/rtty-feasibility.md` |
 | 11 | DSP polish (noise reduction, auto-notch) | ❌ Not started | Medium | New algorithms, no design started |
+| 31 | FT8 weak-signal rescue — Stage 2 residual subtraction (offline research, **NOT released**) | ⏸️ Research done, modest gain proven; next lever identified | Large (next phase) | **Offline test-harness only** (`test/ft8_stage2.c` + `ft8_test_harness.c`), on a **local-only branch — NOT on GitHub** (2026-07-07). Rewrote the residual decoder to operate on the real `uint8_t` waterfall (notch each decoded signal's tone cells toward the local noise floor). **Correction:** the prior session's "700 candidates / mask removal proven" was a `uint8`↔`float` **heap-corruption artifact** (140 = MAX_CANDIDATES ceiling from a corrupted waterfall), not real unmasking. Real result: rescues +1 on websdr_test1 (13/18→14/18, `CQ DX Z33Z KN11`), +1–2 ground-truth-verified decodes on 4/8 test files; a `scale=0.00` control proves the gain is the subtraction (not a wider heap); optimal scale 0.80–0.95 (1.00 over-notches). **Ceiling of magnitude-domain notching:** cannot recover deeply-weak (<~−6 dB) co-located signals — 4/5 websdr_test1 targets stay unrescued. **Next lever = coherent time-domain subtraction** (re-synth each decoded signal's complex waveform — GFSK synth already exists in `ft8_stage2.c` — phase-align, subtract from audio, re-STFT; the WSJT-X approach). Findings: `docs/ft8-stage2-findings.md`; memory `stage2_complete_checkpoint`. Local commit `2dcfcee` (unpushed) |
 | **Closed Investigations** | | | | |
 | 19 | FT8 decode-yield gap to v0.18.0 | ✅ Closed (2026-06-26) | — | Three real regressions found+fixed since v0.18.0 (cw_audio ghost task, d140485 partial-revert restoration, unconditional opacity-set in `ui_push_spectrum()`). Controlled same-time-of-day A/B (chip-erased, 60-slot captures): v0.18.0 vs HEAD both 15.38 decodes/slot mean, HEAD tighter stddev (5.70 vs 6.65). Earlier "gap" was a band-fading confound, not a code regression. Full methodology in memory `project_ft8_sparse_decode_investigation` |
 | **Closed/Shipped — Full Version History** | | | | |
