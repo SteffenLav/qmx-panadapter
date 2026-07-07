@@ -192,6 +192,11 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                 display_unlock();
             }
         }
+    } else if (action && strcmp(action, "resmon") == 0) {
+        // Hidden developer-only toggle for the resource-monitor overlay. No web
+        // UI element references this — it's meant to be fired from the browser
+        // console/bookmarklet on the dev's PC.
+        ui_resource_monitor_toggle();
     } else {
         cJSON_Delete(root);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "unknown action");

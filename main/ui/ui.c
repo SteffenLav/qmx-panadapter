@@ -1668,7 +1668,6 @@ static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_check_flip_cb(lv_event_t *e);
 static void drawer_check_charge_limit_cb(lv_event_t *e);
 static void drawer_slider_charge_limit_pct_cb(lv_event_t *e);
-static void drawer_check_resmon_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
 static void drawer_tune_entry_btn_cb(lv_event_t *e);
 static void drawer_check_cwaudio_cb(lv_event_t *e);
@@ -4126,6 +4125,29 @@ void ui_set_resource_monitor_text(const char *text)
     }
 }
 
+// Dev-only: toggle the resource-monitor overlay. Deliberately NOT exposed in the
+// settings drawer (it's a developer diagnostic, not a user feature) — the only
+// trigger is the hidden `{"action":"resmon"}` web command in cmd_handler, driven
+// from a PC browser. Persists via settings_set_resmon_en so it survives reboot
+// on the dev's own unit; users' units default to off and have no way to turn it
+// on. Reads + flips the hidden flag entirely under display_lock.
+void ui_resource_monitor_toggle(void)
+{
+    if (!s_resmon_panel) return;
+    if (display_lock(50)) {
+        bool turn_on = lv_obj_has_flag(s_resmon_panel, LV_OBJ_FLAG_HIDDEN);
+        if (turn_on) {
+            lv_obj_clear_flag(s_resmon_panel, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(s_resmon_panel);
+        } else {
+            lv_obj_add_flag(s_resmon_panel, LV_OBJ_FLAG_HIDDEN);
+        }
+        display_unlock();
+        settings_set_resmon_en(turn_on);
+        ESP_LOGI(TAG, "Resource monitor (dev cmd): %s", turn_on ? "ON" : "OFF");
+    }
+}
+
 void ui_set_bottom_battery(const char *icon, uint32_t icon_color_hex, const char *text)
 {
     if (!s_bot_batt_icon || !s_bot_left) return;
@@ -4979,23 +5001,10 @@ static void drawer_build(void)
         y += 136;
     }
 
-    // Resource monitor: a small draggable overlay (see build_resource_monitor)
-    // showing live memory/SD-space figures - drag it anywhere on screen and
-    // watch the numbers move as you use WiFi/FT8/uploads.
-    {
-        qmx_settings_t rcfg;
-        settings_load_all(&rcfg);
-
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_RESMON, y, 56);
-        lv_obj_t *rm_lbl = lv_label_create(sec);
-        lv_label_set_text(rm_lbl, "Resource monitor");
-        lv_obj_set_style_text_color(rm_lbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(rm_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(rm_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
-        lv_obj_t *chk = make_drawer_checkbox(sec, rcfg.resmon_en, drawer_check_resmon_cb, NULL);
-        lv_obj_align(chk, LV_ALIGN_TOP_RIGHT, 0, 6);
-        y += 56;
-    }
+    // Resource monitor: developer-only diagnostic overlay — deliberately NOT a
+    // drawer toggle (would invite user confusion/discussion for no user benefit).
+    // The overlay is still built (build_resource_monitor) but stays hidden;
+    // enable it via the hidden `{"action":"resmon"}` web command (ui_resource_monitor_toggle).
 
     // (Diagnostic logging is now always-on — no toggle. It captures to a 5 MB
     // PSRAM ring downloadable at /api/log and, when a microSD card is present,
@@ -5566,10 +5575,10 @@ static void drawer_close(void)
 static void drawer_set_ft8_mode(bool ft8)
 {
     if (!s_drawer) return;
-    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_CHARGE, DRAWER_SEC_RESMON, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
+    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_CHARGE, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
     // Heights must line up 1:1 with keep[] above (same order) - each is the
     // height passed to that section's own drawer_section(ID, y, height) call.
-    static const int keep_h[] = { 56, 136, 56, 56, 56, 128, 72, 130 };
+    static const int keep_h[] = { 56, 136, 56, 56, 128, 72, 130 };
     const int n_keep = sizeof(keep) / sizeof(keep[0]);
 
     // Antenna Tune entry button lives inside DRAWER_SEC_WIFI (always shown in
@@ -5814,17 +5823,6 @@ static void drawer_check_charge_limit_cb(lv_event_t *e)
     bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
     settings_set_charge_limit_en(on);
     ESP_LOGI(TAG, "Battery care: %s", on ? "ON" : "OFF");
-}
-
-static void drawer_check_resmon_cb(lv_event_t *e)
-{
-    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
-    settings_set_resmon_en(on);
-    if (s_resmon_panel) {
-        if (on) lv_obj_clear_flag(s_resmon_panel, LV_OBJ_FLAG_HIDDEN);
-        else    lv_obj_add_flag(s_resmon_panel, LV_OBJ_FLAG_HIDDEN);
-    }
-    ESP_LOGI(TAG, "Resource monitor: %s", on ? "ON" : "OFF");
 }
 
 static void drawer_slider_charge_limit_pct_cb(lv_event_t *e)
