@@ -54,6 +54,10 @@ void ui_set_bottom_battery_absent(void);
 // Bottom-bar firmware version, centered between the battery text and the UTC clock.
 void ui_set_bottom_version(const char *text);
 
+// Resource-monitor floating overlay text (see build_resource_monitor in
+// ui.c). No-op if the panel object doesn't exist yet or was never toggled on.
+void ui_set_resource_monitor_text(const char *text);
+
 // Bottom-bar SD-backup indicator: a small red dot (+ "SD" label) between the
 // battery voltage and the firmware version that breathes while a microSD card
 // is mounted and being mirrored (active=true), hidden when false. Driven by

@@ -1,3 +1,4 @@
+#define _GNU_SOURCE  // Enable stpcpy
 #include "message.h"
 #include "text.h"
 #include <stdio.h>
@@ -1276,7 +1277,8 @@ static int unpackgrid(uint16_t igrid4, uint8_t ir, char* extra, ftx_field_t* ext
         if (ir > 0)
         {
             // In case of ir=1 add an "R " before grid
-            dst = stpcpy(dst, "R ");
+            strcpy(dst, "R ");
+            dst += 2;
         }
 
         uint16_t n = igrid4;

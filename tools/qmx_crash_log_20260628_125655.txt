@@ -1,0 +1,1455 @@
+﻿=== QMX Serial Monitor - Started 06/28/2026 12:56:55 ===
+[0;32mI (127543) wifi: online; UTC 2026-06-28 10:56:49[0m
+[0;32mI (157543) wifi: online; UTC 2026-06-28 10:57:19[0m
+[0;32mI (160428) audio: Lib event: RX_CONNECTED addr=1 iface=3[0m
+[0;32mI (160429) audio: Lib event: TX_CONNECTED addr=1 iface=4 (ignored)[0m
+[0;32mI (160430) audio: Device opened (addr=1 iface=3)[0m
+[0;32mI (160435) audio: Alt 1: channels=2, 24-bit, first_rate=48000 Hz[0m
+[0;32mI (160442) uac-host: Resume Interface 3-1[0m
+[0;32mI (160447) audio: UAC stream started: 48000 Hz, 2 ch, 24-bit[0m
+[0;32mI (160700) ws: tx 0.0 fps[0m
+[0;32mI (162059) cat: QMX CDC opened[0m
+[0;32mI (162060) cat: QMX configured: 38400 baud, 8N1[0m
+[0;32mI (162060) cat: === Dumping QMX descriptors ===[0m
+*** Device descriptor ***
+bLength 18
+bDescriptorType 1
+bcdUSB 2.00
+bDeviceClass 0xef
+bDeviceSubClass 0x2
+bDeviceProtocol 0x1
+bMaxPacketSize0 64
+idVendor 0x483
+idProduct 0xa34c
+bcdDevice 1.00
+iManufacturer 1
+iProduct 2
+iSerialNumber 0
+bNumConfigurations 1
+*** Configuration descriptor ***
+bLength 9
+bDescriptorType 2
+wTotalLength 268
+bNumInterfaces 5
+bConfigurationValue 1
+iConfiguration 0
+bmAttributes 0xc0
+bMaxPower 0mA
+*** Interface Association Descriptor ***
+bLength 8
+bDescriptorType 11
+bFirstInterface 0
+bInterfaceCount 2
+bFunctionClass 0x2
+bFunctionSubClass 0x2
+bFunctionProtocol 0x1
+iFunction 0
+	*** Interface descriptor ***
+	bLength 9
+	bDescriptorType 4
+	bInterfaceNumber 0
+	bAlternateSetting 0
+	bNumEndpoints 1
+	bInterfaceClass 0x2
+	bInterfaceSubClass 0x2
+	bInterfaceProtocol 0x1
+	iInterface 0
+	*** CDC Header Descriptor ***
+	bcdCDC: 1.10
+	*** CDC Call Descriptor ***
+	bmCapabilities: 0x00
+	bDataInterface: 1
+	*** CDC ACM Descriptor ***
+	bmCapabilities: 0x02
+	*** CDC Union Descriptor ***
+	bControlInterface: 0
+	bSubordinateInterface[0]: 1
+		*** Endpoint descriptor ***
+		bLength 7
+		bDescriptorType 5
+		bEndpointAddress 0x82	EP 2 IN
+		bmAttributes 0x3	INT
+		wMaxPacketSize 8
+		bInterval 16
+	*** Interface descriptor ***
+	bLength 9
+	bDescriptorType 4
+	bInterfaceNumber 1
+	bAlternateSetting 0
+	bNumEndpoints 2
+	bInterfaceClass 0xa
+	bInterfaceSubClass 0x0
+	bInterfaceProtocol 0x0
+	iInterface 0
+		*** Endpoint descriptor ***
+		bLength 7
+		bDescriptorType 5
+		bEndpointAddress 0x1	EP 1 OUT
+		bmAttributes 0x2	BULK
+		wMaxPacketSize 64
+		bInterval 0
+		*** Endpoint descriptor ***
+		bLength 7
+		bDescriptorType 5
+		bEndpointAddress 0x81	EP 1 IN
+		bmAttributes 0x2	BULK
+		wMaxPacketSize 64
+		bInterval 0
+*** Interface Association Descriptor ***
+bLength 8
+bDescriptorType 11
+bFirstInterface 2
+bInterfaceCount 3
+bFunctionClass 0x1
+bFunctionSubClass 0x1
+bFunctionProtocol 0x0
+iFunction 0
+	*** Interface descriptor ***
+	bLength 9
+	bDescriptorType 4
+	bInterfaceNumber 2
+	bAlternateSetting 0
+	bNumEndpoints 0
+	bInterfaceClass 0x1
+	bInterfaceSubClass 0x1
+	bInterfaceProtocol 0x0
+	iInterface 0
+	*** CDC Call Descriptor ***
+	bmCapabilities: 0x00
+	bDataInterface: 1
+	*** CDC ACM Descriptor ***
+	bmCapabilities: 0x01
+	*** CDC Union Descriptor ***
+	bControlInterface: 2
+	bSubordinateInterface[0]: 1
+[0;33mW (162271) cdc_acm_parsing: Unsupported CDC specific descriptor[0m
+	*** CDC ACM Descriptor ***
+	bmCapabilities: 0x04
+	*** CDC Union Descriptor ***
+	bControlInterface: 5
+	bSubordinateInterface[0]: 4
+[0;33mW (162289) cdc_acm_parsing: Unsupported CDC specific descriptor[0m
+	*** Interface descriptor ***
+	bLength 9
+	bDescriptorType 4
+	bInterfaceNumber 3
+	bAlternateSetting 0
+	bNumEndpoints 0
+	bInterfaceClass 0x1
+	bInterfaceSubClass 0x2
+	bInterfaceProtocol 0x0
+	iInterface 0
+	*** Interface descriptor ***
+	bLength 9
+	bDescriptorType 4
+	bInterfaceNumber 3
+	bAlternateSetting 1
+	bNumEndpoints 1
+	bInterfaceClass 0x1
+	bInterfaceSubClass 0x2
+	bInterfaceProtocol 0x0
+	iInterface 0
+	*** CDC Call Descriptor ***
+	bmCapabilities: 0x03
+	bDataInterface: 1
+	*** CDC ACM Descriptor ***
+	bmCapabilities: 0x01
+		*** Endpoint descriptor ***
+		bLength 9
+		bDescriptorType 5
+		bEndpointAddress 0x83	EP 3 IN
+[0;32mI (162352) cat: Radio ID: ID020;[0m
+		bmAttributes 0x5	ISOC
+		wMaxPacketSize 300
+		bInterval 1
+	*** Interface descriptor ***
+	bLength 9
+	bDescriptorType 4
+	bInterfaceNumber 4
+	bAlternateSetting 0
+	bNumEndpoints 0
+	bInterfaceClass 0x1
+	bInterfaceSubClass 0x2
+	bInterfaceProtocol 0x0
+	iInterface 0
+	*** Interface descriptor ***
+	bLength 9
+	bDescriptorType 4
+	bInterfaceNumber 4
+	bAlternateSetting 1
+	bNumEndpoints 1
+	bInterfaceClass 0x1
+	bInterfaceSubClass 0x2
+	bInterfaceProtocol 0x0
+	iInterface 0
+	*** CDC Call Descriptor ***
+	bmCapabilities: 0x04
+	bDataInterface: 1
+	*** CDC ACM Descriptor ***
+	bmCapabilities: 0x01
+		*** Endpoint descriptor ***
+		bLength 9
+		bDescriptorType 5
+		bEndpointAddress 0x3	EP 3 OUT
+		bmAttributes 0x1	ISOC
+		wMaxPacketSize 300
+		bInterval 1
+[0;32mI (162422) cat: === End descriptor dump ===[0m
+[0;32mI (162427) cat: QMX IQ mode enabled (Q9 1;)[0m
+[0;32mI (162432) cat: Freq = 14080000 Hz (14.080 MHz)[0m
+[0;32mI (162532) cat: Mode = DiGi (raw 6)[0m
+[0;32mI (162632) ui: Passband width = 3200 Hz (CAT FW)[0m
+[0;32mI (162732) cat: QMX firmware: 1_03_002QMX[0m
+[0;32mI (162754) ft8_test: CAT ready (QMX handshake complete)[0m
+[0;32mI (162754) cat: background poll PAUSED (TX burst owns the link)[0m
+[0;32mI (162776) cat: background poll resumed[0m
+[0;32mI (162776) cat: QMX RTC time: 00:00:07[0m
+[0;32mI (162776) ft8_test: QMX RTC query OK but SNTP already authoritative - kept SNTP time[0m
+Block size = 576
+Subblock size = 288
+N_FFT = 1152
+Block size = 576
+Subblock size = 288
+N_FFT = 1152
+[0;32mI (162821) ft8_test: monitor pool built for FT4: block=576 samples, 156 blocks/slot, 82 KB waterfall each[0m
+[0;32mI (162822) ft8_test: decode task ready (core 1, dual-core=yes)[0m
+[0;32mI (162822) ft8_test: decode worker ready (core 0)[0m
+[0;32mI (162828) ft8_test: entering continuous slot loop (pooled, time-budgeted decode)[0m
+[0;32mI (162841) ft8_test: slot 0: waiting for next FT4 boundary...[0m
+[0;32mI (162932) cat: QMX CW offset: 625 Hz[0m
+[0;32mI (164972) cat: Band[0]: 60m @ 5357000 Hz[0m
+[0;32mI (165012) cat: Band[1]: 40m @ 7074000 Hz[0m
+[0;32mI (165052) cat: Band[2]: 30m @ 10136000 Hz[0m
+[0;32mI (165092) cat: Band[3]: 20m @ 14074000 Hz[0m
+[0;32mI (165132) cat: Band[4]: 17m @ 18104600 Hz[0m
+[0;32mI (165172) cat: Band[5]: 15m @ 21094600 Hz[0m
+[0;32mI (165213) cat: Band[6] freq query: zero (retry 0)[0m
+[0;32mI (165553) cat: Band[6] freq query: zero (retry 1)[0m
+[0;32mI (165700) ws: tx 10.0 fps[0m
+[0;32mI (165893) cat: Band[6] freq query: zero (retry 2)[0m
+[0;32mI (166233) cat: Band[6] freq query: zero (retry 3)[0m
+[0;32mI (166573) cat: Band[6] freq query: zero (retry 4)[0m
+[0;32mI (166915) cat: Band[6] freq query: zero (retry 5)[0m
+[0;32mI (167255) cat: Band[6] freq query: zero (retry 6)[0m
+[0;32mI (167355) cat: raw cmd: TM105729;[0m
+[0;32mI (167355) time_sync: Tab5???QMX time push: 10:57:29 UTC[0m
+[0;32mI (167355) cat: background poll PAUSED (TX burst owns the link)[0m
+[0;32mI (167380) cat: background poll resumed[0m
+[0;32mI (167380) cat: QMX RTC time: 10:57:29[0m
+[0;32mI (167595) cat: Band[6] freq query: zero (retry 7)[0m
+[0;32mI (167595) cat: Band[6]: no valid data after 8 retries (1 consecutive)[0m
+[0;32mI (167637) cat: Band[7] freq query: zero (retry 0)[0m
+[0;32mI (167977) cat: Band[7] freq query: zero (retry 1)[0m
+[0;32mI (168259) dsp: FT8 br: 1 iters 256 smp idx=256/90000  read_avg=0us work_avg=253us  slow_r=0 slow_w=0[0m
+[0;32mI (168317) cat: Band[7] freq query: zero (retry 2)[0m
+[0;32mI (168657) cat: Band[7] freq query: zero (retry 3)[0m
+[0;32mI (168997) cat: Band[7] freq query: zero (retry 4)[0m
+[0;32mI (169277) dsp: FT8 br: 48 iters 12288 smp idx=12544/90000  read_avg=20959us work_avg=251us  slow_r=2 slow_w=0[0m
+[0;32mI (169337) cat: Band[7] freq query: zero (retry 5)[0m
+[0;32mI (169677) cat: Band[7] freq query: zero (retry 6)[0m
+[0;32mI (170017) cat: Band[7] freq query: zero (retry 7)[0m
+[0;32mI (170017) cat: Band[7]: no valid data after 8 retries (2 consecutive)[0m
+[0;32mI (170019) cat: Band list: 6 bands found[0m
+[0;32mI (170023) cat: Poll task started (50 ms interval, alternating FA/MD)[0m
+[0;32mI (170031) cat: mode -> MD6; (ok)[0m
+[0;32mI (170286) dsp: FT8 br: 47 iters 12032 smp idx=24576/90000  read_avg=21212us work_avg=251us  slow_r=1 slow_w=0[0m
+[0;32mI (170700) ws: tx 10.0 fps[0m
+[0;32mI (171295) dsp: FT8 br: 47 iters 12032 smp idx=36608/90000  read_avg=21214us work_avg=255us  slow_r=1 slow_w=0[0m
+[0;32mI (172312) dsp: FT8 br: 48 iters 12288 smp idx=48896/90000  read_avg=20928us work_avg=258us  slow_r=2 slow_w=0[0m
+[0;32mI (173336) dsp: FT8 br: 47 iters 12032 smp idx=60928/90000  read_avg=21531us work_avg=254us  slow_r=2 slow_w=0[0m
+[0;32mI (174336) dsp: FT8 br: 47 iters 12032 smp idx=72960/90000  read_avg=21030us work_avg=246us  slow_r=3 slow_w=0[0m
+[0;32mI (175357) dsp: FT8 br: 48 iters 12288 smp idx=85248/90000  read_avg=21022us work_avg=250us  slow_r=0 slow_w=0[0m
+[0;32mI (175700) ws: tx 10.0 fps[0m
+[0;32mI (175798) ft8_test: slot 1: waiting for next FT4 boundary...[0m
+[0;32mI (176027) ft8_test: decoded: 'W2MMD DL9LA R-01' (score=27 freq=2333Hz snr=-3)[0m
+[0;32mI (176028) ft8_screen: NEW  call=DL9LA      heard=1 score=27 freq=2333 text='W2MMD DL9LA R-01'[0m
+[0;32mI (176029) ft8_test: decoded: 'CQ FD RZ1OA LP04' (score=16 freq=896Hz snr=-8)[0m
+[0;32mI (176041) ft8_screen: NEW  call=RZ1OA      heard=1 score=16 freq=896 text='CQ FD RZ1OA LP04'[0m
+[0;32mI (176069) ft8_test: decoded: 'KX1G G7GEE R-07' (score=15 freq=1146Hz snr=-9)[0m
+[0;32mI (176070) ft8_screen: NEW  call=G7GEE      heard=1 score=15 freq=1146 text='KX1G G7GEE R-07'[0m
+[0;32mI (176075) ft8_test: decoded: 'W2MMD DL9LA R-01' (score=13 freq=2333Hz snr=-3)[0m
+[0;32mI (176083) ft8_screen: UPD  call=DL9LA      heard=2 score=13 freq=2333 text='W2MMD DL9LA R-01'[0m
+[0;32mI (176381) dsp: FT8 br: 47 iters 12032 smp idx=6912/90000  read_avg=21522us work_avg=263us  slow_r=3 slow_w=0[0m
+[0;32mI (177002) ft8_test: slot 0 UTC 1782644250: off=+0ms cap=7532ms stft=4713ms dec=1214ms cand=140 dec=4 skip=0 backlog=0pr drop=0pr timing=+267ms heap_i=22KB heap_p=24139KB[0m
+[0;32mI (177391) dsp: FT8 br: 46 iters 11776 smp idx=18688/90000  read_avg=21665us work_avg=289us  slow_r=3 slow_w=0[0m
+[0;32mI (178393) dsp: FT8 br: 47 iters 12032 smp idx=30720/90000  read_avg=21070us work_avg=249us  slow_r=2 slow_w=0[0m
+[0;32mI (179401) dsp: FT8 br: 47 iters 12032 smp idx=42752/90000  read_avg=21198us work_avg=252us  slow_r=5 slow_w=0[0m
+[0;32mI (180413) dsp: FT8 br: 47 iters 12032 smp idx=54784/90000  read_avg=21276us work_avg=250us  slow_r=2 slow_w=0[0m
+[0;32mI (180700) ws: tx 10.0 fps[0m
+[0;32mI (181417) dsp: FT8 br: 47 iters 12032 smp idx=66816/90000  read_avg=21101us work_avg=258us  slow_r=1 slow_w=0[0m
+[0;32mI (182421) dsp: FT8 br: 48 iters 12288 smp idx=79104/90000  read_avg=20661us work_avg=255us  slow_r=1 slow_w=0[0m
+[0;32mI (183370) ft8_test: slot 2: waiting for next FT4 boundary...[0m
+[0;32mI (183448) dsp: FT8 br: 44 iters 11264 smp idx=768/90000  read_avg=23084us work_avg=260us  slow_r=4 slow_w=0[0m
+[0;32mI (183665) ft8_test: decoded: 'ON4WZ G4CFS IO91' (score=17 freq=2521Hz snr=-7)[0m
+[0;32mI (183666) ft8_screen: NEW  call=G4CFS      heard=1 score=17 freq=2521 text='ON4WZ G4CFS IO91'[0m
+[0;32mI (183696) ft8_test: decoded: 'CQ DD1UN JN49' (score=13 freq=1854Hz snr=-7)[0m
+[0;32mI (183696) ft8_screen: NEW  call=DD1UN      heard=1 score=13 freq=1854 text='CQ DD1UN JN49'[0m
+[0;32mI (183715) ft8_test: decoded: 'CQ DD1UN JN49' (score=11 freq=1875Hz snr=-3)[0m
+[0;32mI (183715) ft8_screen: UPD  call=DD1UN      heard=2 score=11 freq=1875 text='CQ DD1UN JN49'[0m
+[0;32mI (184461) dsp: FT8 br: 47 iters 12032 smp idx=12800/90000  read_avg=21283us work_avg=272us  slow_r=2 slow_w=0[0m
+[0;32mI (185051) ft8_test: slot 1 UTC 1782644257: off=+44ms cap=7560ms stft=1100ms dec=1692ms cand=140 dec=3 skip=0 backlog=0pr drop=0pr timing=+764ms heap_i=22KB heap_p=24139KB[0m
+[0;32mI (185487) dsp: FT8 br: 47 iters 12032 smp idx=24832/90000  read_avg=21575us work_avg=249us  slow_r=2 slow_w=0[0m
+[0;32mI (185700) ws: tx 10.0 fps[0m
+[0;32mI (186487) dsp: FT8 br: 46 iters 11776 smp idx=36608/90000  read_avg=21483us work_avg=257us  slow_r=3 slow_w=0[0m
+[0;32mI (187510) dsp: FT8 br: 48 iters 12288 smp idx=48896/90000  read_avg=21062us work_avg=250us  slow_r=2 slow_w=0[0m
+[0;32mI (187543) wifi: online; UTC 2026-06-28 10:57:49[0m
+[0;32mI (188523) dsp: FT8 br: 48 iters 12288 smp idx=61184/90000  read_avg=20838us work_avg=272us  slow_r=0 slow_w=0[0m
+[0;32mI (189546) dsp: FT8 br: 48 iters 12288 smp idx=73472/90000  read_avg=21048us work_avg=261us  slow_r=2 slow_w=0[0m
+[0;32mI (190555) dsp: FT8 br: 46 iters 11776 smp idx=85248/90000  read_avg=21684us work_avg=248us  slow_r=2 slow_w=0[0m
+[0;32mI (190701) ws: tx 10.0 fps[0m
+[0;32mI (191000) ft8_test: slot 3: waiting for next FT4 boundary...[0m
+[0;32mI (191566) dsp: FT8 br: 40 iters 10240 smp idx=6912/90000  read_avg=25015us work_avg=252us  slow_r=1 slow_w=0[0m
+[0;32mI (192187) ft8_test: slot 2 UTC 1782644265: off=+115ms cap=7620ms stft=5473ms dec=1196ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=+764ms heap_i=23KB heap_p=24139KB[0m
+[0;32mI (192566) dsp: FT8 br: 47 iters 12032 smp idx=18944/90000  read_avg=21019us work_avg=259us  slow_r=0 slow_w=0[0m
+[0;32mI (193584) dsp: FT8 br: 47 iters 12032 smp idx=30976/90000  read_avg=21408us work_avg=252us  slow_r=2 slow_w=0[0m
+[0;32mI (194603) dsp: FT8 br: 48 iters 12288 smp idx=43264/90000  read_avg=20963us work_avg=266us  slow_r=1 slow_w=0[0m
+[0;32mI (195607) dsp: FT8 br: 47 iters 12032 smp idx=55296/90000  read_avg=21097us work_avg=264us  slow_r=0 slow_w=0[0m
+[0;32mI (195800) ws: tx 10.0 fps[0m
+[0;32mI (196619) dsp: FT8 br: 48 iters 12288 smp idx=67584/90000  read_avg=20821us work_avg=260us  slow_r=2 slow_w=0[0m
+[0;32mI (197624) dsp: FT8 br: 47 iters 12032 smp idx=79616/90000  read_avg=21128us work_avg=253us  slow_r=5 slow_w=0[0m
+[0;32mI (198384) ft8_test: slot 4: waiting for next FT4 boundary...[0m
+[0;32mI (198626) dsp: FT8 br: 42 iters 10752 smp idx=2816/90000  read_avg=23611us work_avg=250us  slow_r=1 slow_w=0[0m
+[0;32mI (198712) ft8_test: decoded: 'ON4WZ G4CFS IO91' (score=22 freq=2521Hz snr=-7)[0m
+[0;32mI (198712) ft8_screen: UPD  call=G4CFS      heard=2 score=22 freq=2521 text='ON4WZ G4CFS IO91'[0m
+[0;32mI (198712) ft8_test: decoded: 'ON4WZ G4CFS IO91' (score=18 freq=2521Hz snr=-7)[0m
+[0;32mI (198743) ft8_screen: UPD  call=G4CFS      heard=3 score=18 freq=2521 text='ON4WZ G4CFS IO91'[0m
+[0;32mI (198743) ft8_test: decoded: 'CQ 9A4AA JN75' (score=14 freq=375Hz snr=-8)[0m
+[0;32mI (198760) ft8_screen: NEW  call=9A4AA      heard=1 score=14 freq=375 text='CQ 9A4AA JN75'[0m
+[0;32mI (199640) dsp: FT8 br: 47 iters 12032 smp idx=14848/90000  read_avg=21305us work_avg=266us  slow_r=3 slow_w=0[0m
+[0;32mI (200143) ft8_test: slot 3 UTC 1782644272: off=+245ms cap=7373ms stft=1098ms dec=1768ms cand=140 dec=3 skip=0 backlog=0pr drop=0pr timing=+165ms heap_i=22KB heap_p=24139KB[0m
+[0;32mI (200659) dsp: FT8 br: 48 iters 12288 smp idx=27136/90000  read_avg=20970us work_avg=259us  slow_r=4 slow_w=0[0m
+[0;32mI (200800) ws: tx 10.0 fps[0m
+[0;32mI (201685) dsp: FT8 br: 47 iters 12032 smp idx=39168/90000  read_avg=21563us work_avg=261us  slow_r=3 slow_w=0[0m
+[0;32mI (202706) dsp: FT8 br: 47 iters 12032 smp idx=51200/90000  read_avg=21477us work_avg=248us  slow_r=3 slow_w=0[0m
+[0;32mI (203726) dsp: FT8 br: 48 iters 12288 smp idx=63488/90000  read_avg=20999us work_avg=258us  slow_r=1 slow_w=0[0m
+[0;32mI (204738) dsp: FT8 br: 47 iters 12032 smp idx=75520/90000  read_avg=21276us work_avg=250us  slow_r=5 slow_w=0[0m
+[0;32mI (205759) dsp: FT8 br: 47 iters 12032 smp idx=87552/90000  read_avg=21468us work_avg=252us  slow_r=4 slow_w=0[0m
+[0;32mI (205800) ws: tx 10.0 fps[0m
+[0;32mI (206006) ft8_test: slot 5: waiting for next FT4 boundary...[0m
+[0;32mI (206777) dsp: FT8 br: 42 iters 10752 smp idx=9472/90000  read_avg=23969us work_avg=270us  slow_r=3 slow_w=0[0m
+[0;32mI (207197) ft8_test: slot 4 UTC 1782644280: off=+129ms cap=7611ms stft=5502ms dec=1200ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=+165ms heap_i=22KB heap_p=24139KB[0m
+[0;32mI (207802) dsp: FT8 br: 48 iters 12288 smp idx=21760/90000  read_avg=21099us work_avg=253us  slow_r=3 slow_w=0[0m
+[0;32mI (208813) dsp: FT8 br: 47 iters 12032 smp idx=33792/90000  read_avg=21260us work_avg=257us  slow_r=2 slow_w=0[0m
+[0;32mI (209814) dsp: FT8 br: 47 iters 12032 smp idx=45824/90000  read_avg=21039us work_avg=249us  slow_r=0 slow_w=0[0m
+[0;32mI (210800) ws: tx 10.0 fps[0m
+[0;32mI (210830) dsp: FT8 br: 47 iters 12032 smp idx=57856/90000  read_avg=21360us work_avg=256us  slow_r=2 slow_w=0[0m
+[0;32mI (211850) dsp: FT8 br: 48 iters 12288 smp idx=70144/90000  read_avg=20993us work_avg=255us  slow_r=1 slow_w=0[0m
+[0;32mI (212870) dsp: FT8 br: 48 iters 12288 smp idx=82432/90000  read_avg=21005us work_avg=246us  slow_r=2 slow_w=0[0m
+[0;32mI (213380) ft8_test: slot 6: waiting for next FT4 boundary...[0m
+[0;32mI (213709) ft8_test: decoded: 'ON4WZ G4CFS IO91' (score=18 freq=2521Hz snr=-5)[0m
+[0;32mI (213709) ft8_screen: UPD  call=G4CFS      heard=4 score=18 freq=2521 text='ON4WZ G4CFS IO91'[0m
+[0;32mI (213723) ft8_test: decoded: 'ON4WZ G4CFS IO91' (score=14 freq=2521Hz snr=-5)[0m
+[0;32mI (213723) ft8_screen: UPD  call=G4CFS      heard=5 score=14 freq=2521 text='ON4WZ G4CFS IO91'[0m
+[0;32mI (213765) ft8_test: decoded: 'ON4WZ G4CFS IO91' (score=13 freq=2521Hz snr=-5)[0m
+[0;32mI (213766) ft8_screen: UPD  call=G4CFS      heard=6 score=13 freq=2521 text='ON4WZ G4CFS IO91'[0m
+[0;32mI (213894) dsp: FT8 br: 45 iters 11520 smp idx=6144/90000  read_avg=22489us work_avg=257us  slow_r=2 slow_w=0[0m
+[0;32mI (214914) dsp: FT8 br: 48 iters 12288 smp idx=18432/90000  read_avg=20969us work_avg=286us  slow_r=2 slow_w=0[0m
+[0;32mI (215096) ft8_test: slot 5 UTC 1782644287: off=+251ms cap=7363ms stft=1103ms dec=1725ms cand=140 dec=3 skip=0 backlog=0pr drop=0pr timing=+251ms heap_i=23KB heap_p=24139KB[0m
+[0;32mI (215800) ws: tx 10.0 fps[0m
+[0;32mI (215938) dsp: FT8 br: 48 iters 12288 smp idx=30720/90000  read_avg=21091us work_avg=245us  slow_r=3 slow_w=0[0m
+[0;32mI (216951) dsp: FT8 br: 47 iters 12032 smp idx=42752/90000  read_avg=21282us work_avg=268us  slow_r=1 slow_w=0[0m
+[0;32mI (217543) wifi: online; UTC 2026-06-28 10:58:19[0m
+[0;32mI (217967) dsp: FT8 br: 48 iters 12288 smp idx=55040/90000  read_avg=20881us work_avg=280us  slow_r=3 slow_w=0[0m
+[0;32mI (218985) dsp: FT8 br: 47 iters 12032 smp idx=67072/90000  read_avg=21415us work_avg=249us  slow_r=2 slow_w=0[0m
+[0;32mI (219986) dsp: FT8 br: 47 iters 12032 smp idx=79104/90000  read_avg=21039us work_avg=258us  slow_r=2 slow_w=0[0m
+[0;32mI (220800) ws: tx 10.0 fps[0m
+[0;32mI (220968) ft8_test: slot 7: waiting for next FT4 boundary...[0m
+[0;32mI (221001) dsp: FT8 br: 39 iters 9984 smp idx=512/90000  read_avg=25757us work_avg=254us  slow_r=3 slow_w=0[0m
+[0;32mI (222014) dsp: FT8 br: 47 iters 12032 smp idx=12544/90000  read_avg=21310us work_avg=253us  slow_r=3 slow_w=0[0m
+[0;32mI (222155) ft8_test: slot 6 UTC 1782644295: off=+125ms cap=7577ms stft=5505ms dec=1196ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=+251ms heap_i=22KB heap_p=24139KB[0m
+[0;32mI (223027) dsp: FT8 br: 47 iters 12032 smp idx=24576/90000  read_avg=21282us work_avg=269us  slow_r=1 slow_w=0[0m
+[0;32mI (224055) dsp: FT8 br: 47 iters 12032 smp idx=36608/90000  read_avg=21620us work_avg=254us  slow_r=2 slow_w=0[0m
+[0;32mI (225069) dsp: FT8 br: 48 iters 12288 smp idx=48896/90000  read_avg=20869us work_avg=247us  slow_r=1 slow_w=0[0m
+[0;32mI (225800) ws: tx 10.0 fps[0m
+[0;32mI (226091) dsp: FT8 br: 47 iters 12032 smp idx=60928/90000  read_avg=21501us work_avg=252us  slow_r=2 slow_w=0[0m
+[0;32mI (227101) dsp: FT8 br: 47 iters 12032 smp idx=72960/90000  read_avg=21232us work_avg=256us  slow_r=4 slow_w=0[0m
+[0;32mI (228121) dsp: FT8 br: 47 iters 12032 smp idx=84992/90000  read_avg=21450us work_avg=247us  slow_r=3 slow_w=0[0m
+[0;32mI (228396) ft8_test: slot 8: waiting for next FT4 boundary...[0m
+[0;32mI (228725) ft8_test: decoded: 'ON4WZ G4CFS IO91' (score=15 freq=2521Hz snr=-4)[0m
+[0;32mI (228725) ft8_screen: UPD  call=G4CFS      heard=7 score=15 freq=2521 text='ON4WZ G4CFS IO91'[0m
+[0;32mI (229142) dsp: FT8 br: 45 iters 11520 smp idx=8960/90000  read_avg=22430us work_avg=260us  slow_r=6 slow_w=0[0m
+[0;32mI (230111) ft8_test: slot 7 UTC 1782644302: off=+213ms cap=7417ms stft=1091ms dec=1724ms cand=140 dec=1 skip=0 backlog=0pr drop=0pr timing=+213ms heap_i=22KB heap_p=24139KB[0m
+[0;32mI (230149) dsp: FT8 br: 46 iters 11776 smp idx=20736/90000  read_avg=21636us work_avg=261us  slow_r=2 slow_w=0[0m
+[0;32mI (230800) ws: tx 10.0 fps[0m
+[0;32mI (231159) dsp: FT8 br: 47 iters 12032 smp idx=32768/90000  read_avg=21231us work_avg=247us  slow_r=3 slow_w=0[0m
+[0;32mI (232168) dsp: FT8 br: 46 iters 11776 smp idx=44544/90000  read_avg=21684us work_avg=252us  slow_r=2 slow_w=0[0m
+[0;32mI (233185) dsp: FT8 br: 47 iters 12032 smp idx=56576/90000  read_avg=21383us work_avg=254us  slow_r=5 slow_w=0[0m
+[0;32mI (234187) dsp: FT8 br: 47 iters 12032 smp idx=68608/90000  read_avg=21067us work_avg=254us  slow_r=1 slow_w=0[0m
+[0;32mI (235189) dsp: FT8 br: 47 iters 12032 smp idx=80640/90000  read_avg=21058us work_avg=259us  slow_r=4 slow_w=0[0m
+[0;32mI (235800) ws: tx 10.0 fps[0m
+[0;32mI (236013) ft8_test: slot 9: waiting for next FT4 boundary...[0m
+[0;32mI (236215) dsp: FT8 br: 40 iters 10240 smp idx=2560/90000  read_avg=25376us work_avg=260us  slow_r=1 slow_w=0[0m
+[0;32mI (237214) ft8_test: slot 8 UTC 1782644310: off=+141ms cap=7606ms stft=5499ms dec=1211ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=+213ms heap_i=22KB heap_p=24139KB[0m
+[0;32mI (237237) dsp: FT8 br: 47 iters 12032 smp idx=14592/90000  read_avg=21504us work_avg=256us  slow_r=4 slow_w=0[0m
+[0;32mI (238249) dsp: FT8 br: 47 iters 12032 smp idx=26624/90000  read_avg=21271us work_avg=249us  slow_r=2 slow_w=0[0m
+[0;32mI (239256) dsp: FT8 br: 47 iters 12032 smp idx=38656/90000  read_avg=21168us work_avg=254us  slow_r=2 slow_w=0[0m
+[0;32mI (240268) dsp: FT8 br: 47 iters 12032 smp idx=50688/90000  read_avg=21289us work_avg=258us  slow_r=2 slow_w=0[0m
+[0;32mI (240800) ws: tx 10.0 fps[0m
+[0;32mI (241277) dsp: FT8 br: 48 iters 12288 smp idx=62976/90000  read_avg=20749us work_avg=263us  slow_r=1 slow_w=0[0m
+[0;32mI (242301) dsp: FT8 br: 47 iters 12032 smp idx=75008/90000  read_avg=21538us work_avg=248us  slow_r=2 slow_w=0[0m
+[0;32mI (243307) dsp: FT8 br: 47 iters 12032 smp idx=87040/90000  read_avg=21158us work_avg=247us  slow_r=2 slow_w=0[0m
+[0;32mI (243389) ft8_test: slot 10: waiting for next FT4 boundary...[0m
+[0;32mI (243685) ft8_test: decoded: 'ON4WZ G4CFS IO91' (score=23 freq=2521Hz snr=-2)[0m
+[0;32mI (243686) ft8_screen: UPD  call=G4CFS      heard=8 score=23 freq=2521 text='ON4WZ G4CFS IO91'[0m
+[0;32mI (243690) ft8_test: decoded: 'ON4WZ G4CFS IO91' (score=15 freq=2521Hz snr=-2)[0m
+[0;32mI (243699) ft8_screen: UPD  call=G4CFS      heard=9 score=15 freq=2521 text='ON4WZ G4CFS IO91'[0m
+[0;32mI (244317) dsp: FT8 br: 43 iters 11008 smp idx=11008/90000  read_avg=23237us work_avg=251us  slow_r=2 slow_w=0[0m
+[0;32mI (245078) ft8_test: slot 9 UTC 1782644317: off=+258ms cap=7365ms stft=1091ms dec=1699ms cand=140 dec=2 skip=0 backlog=0pr drop=0pr timing=+98ms heap_i=23KB heap_p=24139KB[0m
+[0;32mI (245339) dsp: FT8 br: 48 iters 12288 smp idx=23296/90000  read_avg=21029us work_avg=258us  slow_r=1 slow_w=0[0m
+[0;32mI (245800) ws: tx 10.0 fps[0m
+[0;32mI (246359) dsp: FT8 br: 47 iters 12032 smp idx=35328/90000  read_avg=21451us work_avg=256us  slow_r=4 slow_w=0[0m
+[0;32mI (247359) dsp: FT8 br: 47 iters 12032 smp idx=47360/90000  read_avg=21024us work_avg=255us  slow_r=2 slow_w=0[0m
+[0;32mI (247543) wifi: online; UTC 2026-06-28 10:58:49[0m
+[0;32mI (248361) dsp: FT8 br: 47 iters 12032 smp idx=59392/90000  read_avg=21057us work_avg=258us  slow_r=3 slow_w=0[0m
+[0;32mI (249384) dsp: FT8 br: 48 iters 12288 smp idx=71680/90000  read_avg=21034us work_avg=264us  slow_r=2 slow_w=0[0m
+[0;32mI (250404) dsp: FT8 br: 48 iters 12288 smp idx=83968/90000  read_avg=20996us work_avg=263us  slow_r=0 slow_w=0[0m
+[0;32mI (250800) ws: tx 10.0 fps[0m
+[0;32mI (250971) ft8_test: slot 11: waiting for next FT4 boundary...[0m
+[0;32mI (251202) ft8_test: decoded: 'CQ FD RZ1OA LP04' (score=18 freq=896Hz snr=-2)[0m
+[0;32mI (251202) ft8_test: decoded: 'NJ2AR DL9LA JN68' (score=27 freq=1083Hz snr=-6)[0m
+[0;32mI (251203) ft8_screen: NEW  call=RZ1OA      heard=1 score=18 freq=896 text='CQ FD RZ1OA LP04'[0m
+[0;32mI (251216) ft8_screen: NEW  call=DL9LA      heard=1 score=27 freq=1083 text='NJ2AR DL9LA JN68'[0m
+[0;32mI (251225) ft8_test: decoded: 'WB2BIN M3ZHR JO01' (score=18 freq=1625Hz snr=-10)[0m
+[0;32mI (251234) ft8_screen: NEW  call=M3ZHR      heard=1 score=18 freq=1625 text='WB2BIN M3ZHR JO01'[0m
+[0;32mI (251226) ft8_test: decoded: 'CQ FD RZ1OA LP04' (score=18 freq=896Hz snr=-2)[0m
+[0;32mI (251251) ft8_screen: UPD  call=RZ1OA      heard=2 score=18 freq=896 text='CQ FD RZ1OA LP04'[0m
+[0;32mI (251262) ft8_test: decoded: 'CQ FD RZ1OA LP04' (score=17 freq=896Hz snr=-2)[0m
+[0;32mI (251244) ft8_test: decoded: 'CQ FD RZ1OA LP04' (score=17 freq=896Hz snr=-2)[0m
+[0;32mI (251268) ft8_screen: UPD  call=RZ1OA      heard=3 score=17 freq=896 text='CQ FD RZ1OA LP04'[0m
+[0;32mI (251285) ft8_screen: UPD  call=RZ1OA      heard=4 score=17 freq=896 text='CQ FD RZ1OA LP04'[0m
+[0;32mI (251287) ft8_test: decoded: 'NJ2AR DL9LA JN68' (score=16 freq=1083Hz snr=-6)[0m
+[0;32mI (251302) ft8_screen: UPD  call=DL9LA      heard=2 score=16 freq=1083 text='NJ2AR DL9LA JN68'[0m
+[0;32mI (251341) ft8_test: decoded: 'WB2BIN M3ZHR JO01' (score=11 freq=1625Hz snr=-11)[0m
+[0;32mI (251341) ft8_screen: UPD  call=M3ZHR      heard=2 score=11 freq=1625 text='WB2BIN M3ZHR JO01'[0m
+[0;32mI (251427) dsp: FT8 br: 41 iters 10496 smp idx=5632/90000  read_avg=24693us work_avg=255us  slow_r=2 slow_w=0[0m
+[0;32mI (252210) ft8_test: slot 10 UTC 1782644325: off=+134ms cap=7571ms stft=5468ms dec=1249ms cand=140 dec=8 skip=0 backlog=0pr drop=0pr timing=+14ms heap_i=22KB heap_p=24139KB[0m
+[0;32mI (252431) dsp: FT8 br: 45 iters 11520 smp idx=17152/90000  read_avg=22061us work_avg=251us  slow_r=4 slow_w=0[0m
+[0;32mI (253440) dsp: FT8 br: 48 iters 12288 smp idx=29440/90000  read_avg=20754us work_avg=265us  slow_r=1 slow_w=0[0m
+[0;32mI (254457) dsp: FT8 br: 47 iters 12032 smp idx=41472/90000  read_avg=21392us work_avg=248us  slow_r=2 slow_w=0[0m
+[0;32mI (255469) dsp: FT8 br: 48 iters 12288 smp idx=53760/90000  read_avg=20816us work_avg=265us  slow_r=4 slow_w=0[0m
+[0;32mI (255800) ws: tx 10.0 fps[0m
+[0;32mI (256485) dsp: FT8 br: 48 iters 12288 smp idx=66048/90000  read_avg=20909us work_avg=257us  slow_r=3 slow_w=0[0m
+[0;32mI (257488) dsp: FT8 br: 47 iters 12032 smp idx=78080/90000  read_avg=21071us work_avg=269us  slow_r=3 slow_w=0[0m
+[0;32mI (258383) ft8_test: slot 12: waiting for next FT4 boundary...[0m
+[0;32mI (258499) dsp: FT8 br: 44 iters 11264 smp idx=1536/90000  read_avg=22709us work_avg=264us  slow_r=1 slow_w=0[0m
+[0;32mI (258690) ft8_test: decoded: 'ON4WZ G4CFS IO91' (score=22 freq=2521Hz snr=-3)[0m
+[0;32mI (258690) ft8_test: decoded: 'ON4WZ G4CFS IO91' (score=15 freq=2521Hz snr=-3)[0m
+[0;32mI (258691) ft8_screen: UPD  call=G4CFS      heard=10 score=22 freq=2521 text='ON4WZ G4CFS IO91'[0m
+[0;32mI (258708) ft8_screen: UPD  call=G4CFS      heard=11 score=15 freq=2521 text='ON4WZ G4CFS IO91'[0m
+[0;32mI (258727) ft8_test: decoded: 'PD0KS I7DGX JN71' (score=14 freq=1021Hz snr=-8)[0m
+[0;32mI (258728) ft8_screen: NEW  call=I7DGX      heard=1 score=14 freq=1021 text='PD0KS I7DGX JN71'[0m
+[0;32mI (258763) ft8_test: decoded: 'PD0KS I7DGX JN71' (score=13 freq=1042Hz snr=-6)[0m
+[0;32mI (258763) ft8_screen: UPD  call=I7DGX      heard=2 score=13 freq=1042 text='PD0KS I7DGX JN71'[0m
+[0;32mI (259506) dsp: FT8 br: 46 iters 11776 smp idx=13312/90000  read_avg=21630us work_avg=263us  slow_r=2 slow_w=0[0m
+[0;32mI (260065) ft8_test: slot 11 UTC 1782644332: off=+216ms cap=7401ms stft=1089ms dec=1691ms cand=140 dec=4 skip=0 backlog=0pr drop=0pr timing=+296ms heap_i=22KB heap_p=24139KB[0m
+[0;32mI (260531) dsp: FT8 br: 48 iters 12288 smp idx=25600/90000  read_avg=21097us work_avg=254us  slow_r=1 slow_w=0[0m
+[0;32mI (260800) ws: tx 10.0 fps[0m
+[0;32mI (261543) dsp: FT8 br: 47 iters 12032 smp idx=37632/90000  read_avg=21284us work_avg=250us  slow_r=1 slow_w=0[0m
+[0;32mI (262564) dsp: FT8 br: 48 iters 12288 smp idx=49920/90000  read_avg=21010us work_avg=255us  slow_r=3 slow_w=0[0m
+[0;32mI (263570) dsp: FT8 br: 47 iters 12032 smp idx=61952/90000  read_avg=21154us work_avg=254us  slow_r=3 slow_w=0[0m
+[0;32mI (264590) dsp: FT8 br: 48 iters 12288 smp idx=74240/90000  read_avg=20989us work_avg=260us  slow_r=2 slow_w=0[0m
+[0;32mI (265601) dsp: FT8 br: 47 iters 12032 smp idx=86272/90000  read_avg=21248us work_avg=261us  slow_r=4 slow_w=0[0m
+[0;32mI (265800) ws: tx 10.0 fps[0m
+[0;32mI (265969) ft8_test: slot 13: waiting for next FT4 boundary...[0m
+[0;32mI (266197) ft8_test: decoded: 'CQ FD RZ1OA LP04' (score=23 freq=896Hz snr=-3)[0m
+[0;32mI (266198) ft8_screen: UPD  call=RZ1OA      heard=5 score=23 freq=896 text='CQ FD RZ1OA LP04'[0m
+[0;32mI (266198) ft8_test: decoded: 'NJ2AR DL9LA JN68' (score=26 freq=1083Hz snr=0)[0m
+[0;32mI (266211) ft8_screen: UPD  call=DL9LA      heard=3 score=26 freq=1083 text='NJ2AR DL9LA JN68'[0m
+[0;32mI (266205) ft8_test: decoded: 'NJ2AR DL9LA JN68' (score=16 freq=1083Hz snr=-1)[0m
+[0;32mI (266222) ft8_test: decoded: 'CQ FD RZ1OA LP04' (score=20 freq=896Hz snr=-3)[0m
+[0;32mI (266228) ft8_screen: UPD  call=DL9LA      heard=4 score=16 freq=1083 text='NJ2AR DL9LA JN68'[0m
+[0;32mI (266257) ft8_screen: UPD  call=RZ1OA      heard=6 score=20 freq=896 text='CQ FD RZ1OA LP04'[0m
+[0;32mI (266259) ft8_test: decoded: 'NJ2AR DL9LA JN68' (score=16 freq=1083Hz snr=0)[0m
+[0;32mI (266263) ft8_screen: UPD  call=DL9LA      heard=5 score=16 freq=1083 text='NJ2AR DL9LA JN68'[0m
+[0;32mI (266299) ft8_test: decoded: 'CQ FD RZ1OA LP04' (score=11 freq=896Hz snr=-3)[0m
+[0;32mI (266300) ft8_screen: UPD  call=RZ1OA      heard=7 score=11 freq=896 text='CQ FD RZ1OA LP04'[0m
+[0;32mI (266612) dsp: FT8 br: 41 iters 10496 smp idx=7936/90000  read_avg=24406us work_avg=251us  slow_r=1 slow_w=0[0m
+[0;32mI (267197) ft8_test: slot 12 UTC 1782644340: off=+128ms cap=7575ms stft=5464ms dec=1238ms cand=140 dec=6 skip=0 backlog=0pr drop=0pr timing=+48ms heap_i=23KB heap_p=24139KB[0m
+[0;32mI (267613) dsp: FT8 br: 44 iters 11264 smp idx=19200/90000  read_avg=22496us work_avg=256us  slow_r=3 slow_w=0[0m
+[0;32mI (268616) dsp: FT8 br: 47 iters 12032 smp idx=31232/90000  read_avg=21083us work_avg=254us  slow_r=3 slow_w=0[0m
+[0;32mI (269634) dsp: FT8 br: 48 iters 12288 smp idx=43520/90000  read_avg=20945us work_avg=260us  slow_r=3 slow_w=0[0m
+[0;32mI (270658) dsp: FT8 br: 48 iters 12288 smp idx=55808/90000  read_avg=21069us work_avg=258us  slow_r=3 slow_w=0[0m
+[0;32mI (270800) ws: tx 10.0 fps[0m
+[0;32mI (271681) dsp: FT8 br: 48 iters 12288 smp idx=68096/90000  read_avg=21073us work_avg=249us  slow_r=2 slow_w=0[0m
+[0;32mI (272692) dsp: FT8 br: 47 iters 12032 smp idx=80128/90000  read_avg=21262us work_avg=245us  slow_r=2 slow_w=0[0m
+[0;32mI (273387) ft8_test: slot 14: waiting for next FT4 boundary...[0m
+[0;32mI (273715) dsp: FT8 br: 46 iters 11776 smp idx=4096/90000  read_avg=21991us work_avg=245us  slow_r=4 slow_w=0[0m
+[0;32mI (274724) dsp: FT8 br: 48 iters 12288 smp idx=16384/90000  read_avg=20756us work_avg=268us  slow_r=1 slow_w=0[0m
+[0;32mI (275126) ft8_test: slot 13 UTC 1782644347: off=+214ms cap=7407ms stft=1087ms dec=1748ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=+48ms heap_i=22KB heap_p=24139KB[0m
+[0;32mI (275738) dsp: FT8 br: 47 iters 12032 smp idx=28416/90000  read_avg=21307us work_avg=265us  slow_r=2 slow_w=0[0m
+[0;32mI (275800) ws: tx 10.0 fps[0m
+[0;32mI (276742) dsp: FT8 br: 47 iters 12032 smp idx=40448/90000  read_avg=21109us work_avg=254us  slow_r=1 slow_w=0[0m
+[0;32mI (277543) wifi: online; UTC 2026-06-28 10:59:19[0m
+[0;32mI (277743) dsp: FT8 br: 47 iters 12032 smp idx=52480/90000  read_avg=21044us work_avg=252us  slow_r=3 slow_w=0[0m
+[0;32mI (278766) dsp: FT8 br: 47 iters 12032 smp idx=64512/90000  read_avg=21491us work_avg=263us  slow_r=4 slow_w=0[0m
+[0;32mI (279781) dsp: FT8 br: 48 iters 12288 smp idx=76800/90000  read_avg=20881us work_avg=277us  slow_r=2 slow_w=0[0m
+[0;32mI (280788) dsp: FT8 br: 47 iters 12032 smp idx=88832/90000  read_avg=21164us work_avg=259us  slow_r=2 slow_w=0[0m
+[0;32mI (280800) ws: tx 10.0 fps[0m
+[0;32mI (280951) ft8_test: slot 15: waiting for next FT4 boundary...[0m
+[0;32mI (281186) ft8_test: decoded: 'NJ2AR DL9LA JN68' (score=25 freq=1083Hz snr=-2)[0m
+[0;32mI (281187) ft8_screen: UPD  call=DL9LA      heard=6 score=25 freq=1083 text='NJ2AR DL9LA JN68'[0m
+[0;32mI (281188) ft8_test: decoded: 'CQ FD RZ1OA LP04' (score=19 freq=896Hz snr=-9)[0m
+[0;32mI (281194) ft8_test: decoded: 'NJ2AR DL9LA JN68' (score=17 freq=1083Hz snr=-2)[0m
+[0;32mI (281201) ft8_screen: UPD  call=RZ1OA      heard=8 score=19 freq=896 text='CQ FD RZ1OA LP04'[0m
+[0;32mI (281218) ft8_screen: UPD  call=DL9LA      heard=7 score=17 freq=1083 text='NJ2AR DL9LA JN68'[0m
+[0;32mI (281230) ft8_test: decoded: 'NJ2AR DL9LA JN68' (score=15 freq=1083Hz snr=-2)[0m
+[0;32mI (281235) ft8_screen: UPD  call=DL9LA      heard=8 score=15 freq=1083 text='NJ2AR DL9LA JN68'[0m
+[0;32mI (281248) ft8_test: decoded: 'CQ FD RZ1OA LP04' (score=14 freq=896Hz snr=-9)[0m
+[0;32mI (281253) ft8_screen: UPD  call=RZ1OA      heard=9 score=14 freq=896 text='CQ FD RZ1OA LP04'[0m
+[0;32mI (281809) dsp: FT8 br: 42 iters 10752 smp idx=10240/90000  read_avg=24058us work_avg=249us  slow_r=3 slow_w=0[0m
+[0;32mI (282181) ft8_test: slot 14 UTC 1782644355: off=+132ms cap=7552ms stft=5530ms dec=1240ms cand=140 dec=5 skip=0 backlog=0pr drop=0pr timing=+52ms heap_i=23KB heap_p=24139KB[0m
+[0;32mI (282809) dsp: FT8 br: 47 iters 12032 smp idx=22272/90000  read_avg=21019us work_avg=262us  slow_r=0 slow_w=0[0m
+[0;32mI (283821) dsp: FT8 br: 47 iters 12032 smp idx=34304/90000  read_avg=21279us work_avg=248us  slow_r=2 slow_w=0[0m
+[0;32mI (284828) dsp: FT8 br: 47 iters 12032 smp idx=46336/90000  read_avg=21148us work_avg=275us  slow_r=2 slow_w=0[0m
+[0;32mI (285800) ws: tx 10.0 fps[0m
+[0;32mI (285853) dsp: FT8 br: 48 iters 12288 smp idx=58624/90000  read_avg=21077us work_avg=270us  slow_r=3 slow_w=0[0m
+[0;32mI (286869) dsp: FT8 br: 47 iters 12032 smp idx=70656/90000  read_avg=21361us work_avg=263us  slow_r=2 slow_w=0[0m
+[0;32mI (287875) dsp: FT8 br: 47 iters 12032 smp idx=82688/90000  read_avg=21120us work_avg=272us  slow_r=0 slow_w=0[0m
+[0;32mI (288378) ft8_test: slot 16: waiting for next FT4 boundary...[0m
+[0;32mI (288695) ft8_test: decoded: 'ON4WZ G4CFS IO91' (score=19 freq=2521Hz snr=-7)[0m
+[0;32mI (288696) ft8_screen: UPD  call=G4CFS      heard=12 score=19 freq=2521 text='ON4WZ G4CFS IO91'[0m
+[0;32mI (288696) ft8_test: decoded: 'ON4WZ G4CFS IO91' (score=15 freq=2521Hz snr=-7)[0m
+[0;32mI (288710) ft8_screen: UPD  call=G4CFS      heard=13 score=15 freq=2521 text='ON4WZ G4CFS IO91'[0m
+[0;32mI (288760) ft8_test: decoded: 'PD0KS I7DGX JN71' (score=12 freq=1021Hz snr=-8)[0m
+[0;32mI (288761) ft8_screen: UPD  call=I7DGX      heard=3 score=12 freq=1021 text='PD0KS I7DGX JN71'[0m
+[0;32mI (288888) dsp: FT8 br: 44 iters 11264 smp idx=6144/90000  read_avg=22776us work_avg=253us  slow_r=2 slow_w=0[0m
+[0;32mI (289907) dsp: FT8 br: 46 iters 11776 smp idx=17920/90000  read_avg=21905us work_avg=252us  slow_r=4 slow_w=0[0m
+[0;32mI (290057) ft8_test: slot 15 UTC 1782644362: off=+196ms cap=7416ms stft=1096ms dec=1689ms cand=140 dec=3 skip=0 backlog=0pr drop=0pr timing=+276ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (290800) ws: tx 10.0 fps[0m
+[0;32mI (290922) dsp: FT8 br: 47 iters 12032 smp idx=29952/90000  read_avg=21329us work_avg=266us  slow_r=2 slow_w=0[0m
+[0;32mI (291957) dsp: FT8 br: 49 iters 12544 smp idx=42496/90000  read_avg=20878us work_avg=250us  slow_r=4 slow_w=0[0m
+[0;32mI (292959) dsp: FT8 br: 47 iters 12032 smp idx=54528/90000  read_avg=21059us work_avg=252us  slow_r=1 slow_w=0[0m
+[0;32mI (293976) dsp: FT8 br: 46 iters 11776 smp idx=66304/90000  read_avg=21846us work_avg=262us  slow_r=2 slow_w=0[0m
+[0;32mI (294995) dsp: FT8 br: 48 iters 12288 smp idx=78592/90000  read_avg=20975us work_avg=257us  slow_r=1 slow_w=0[0m
+[0;32mI (295801) ws: tx 10.0 fps[0m
+[0;32mI (295992) ft8_test: slot 17: waiting for next FT4 boundary...[0m
+[0;32mI (295996) dsp: FT8 br: 41 iters 10496 smp idx=256/90000  read_avg=24147us work_avg=263us  slow_r=1 slow_w=0[0m
+[0;32mI (297008) dsp: FT8 br: 46 iters 11776 smp idx=12032/90000  read_avg=21749us work_avg=250us  slow_r=4 slow_w=0[0m
+[0;32mI (297184) ft8_test: slot 16 UTC 1782644370: off=+123ms cap=7603ms stft=5478ms dec=1201ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=+276ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (298012) dsp: FT8 br: 47 iters 12032 smp idx=24064/90000  read_avg=21113us work_avg=245us  slow_r=5 slow_w=0[0m
+[0;32mI (299021) dsp: FT8 br: 47 iters 12032 smp idx=36096/90000  read_avg=21215us work_avg=254us  slow_r=1 slow_w=0[0m
+[0;32mI (300042) dsp: FT8 br: 48 iters 12288 smp idx=48384/90000  read_avg=21009us work_avg=261us  slow_r=0 slow_w=0[0m
+[0;32mI (300900) ws: tx 10.0 fps[0m
+[0;32mI (301057) dsp: FT8 br: 47 iters 12032 smp idx=60416/90000  read_avg=21340us work_avg=254us  slow_r=1 slow_w=0[0m
+[0;32mI (302068) dsp: FT8 br: 47 iters 12032 smp idx=72448/90000  read_avg=21262us work_avg=246us  slow_r=2 slow_w=0[0m
+[0;32mI (303088) dsp: FT8 br: 48 iters 12288 smp idx=84736/90000  read_avg=20988us work_avg=261us  slow_r=0 slow_w=0[0m
+[0;32mI (303385) ft8_test: slot 18: waiting for next FT4 boundary...[0m
+[0;32mI (303740) ft8_test: decoded: 'ON4WZ G4CFS IO91' (score=15 freq=2521Hz snr=-6)[0m
+[0;32mI (303741) ft8_screen: UPD  call=G4CFS      heard=14 score=15 freq=2521 text='ON4WZ G4CFS IO91'[0m
+[0;32mI (304097) dsp: FT8 br: 45 iters 11520 smp idx=8704/90000  read_avg=22176us work_avg=248us  slow_r=2 slow_w=0[0m
+[0;32mI (305106) ft8_test: slot 17 UTC 1782644377: off=+237ms cap=7383ms stft=1088ms dec=1730ms cand=140 dec=1 skip=0 backlog=0pr drop=0pr timing=+157ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (305117) dsp: FT8 br: 47 iters 12032 smp idx=20736/90000  read_avg=21447us work_avg=254us  slow_r=3 slow_w=0[0m
+[0;32mI (305900) ws: tx 10.0 fps[0m
+[0;32mI (306135) dsp: FT8 br: 46 iters 11776 smp idx=32512/90000  read_avg=21876us work_avg=251us  slow_r=3 slow_w=0[0m
+[0;32mI (306475) pinch: GESTURE: movement=137px hold=304958ms threshold=70 (locked=no active=no)[0m
+[0;32mI (306475) pinch: *** TUNE MODE LOCKED: hold=304958ms movement=137px ***[0m
+[0;32mI (306516) pinch: *** TUNE MODE LOCKED: hold=304999ms movement=312px ***[0m
+[0;32mI (306552) ui: Settings drawer open[0m
+[0;32mI (307163) dsp: FT8 br: 38 iters 9728 smp idx=42240/90000  read_avg=26792us work_avg=258us  slow_r=5 slow_w=0[0m
+[0;32mI (307543) wifi: online; UTC 2026-06-28 10:59:49[0m
+[0;32mI (308188) dsp: FT8 br: 48 iters 12288 smp idx=54528/90000  read_avg=21096us work_avg=256us  slow_r=3 slow_w=0[0m
+[0;32mI (308588) pinch: GESTURE: movement=16px hold=307072ms threshold=70 (locked=no active=no)[0m
+[0;32mI (308589) pinch: *** TUNE MODE LOCKED: hold=307072ms movement=16px ***[0m
+[0;32mI (308640) pinch: *** TUNE MODE LOCKED: hold=307124ms movement=79px ***[0m
+[0;32mI (308692) pinch: GESTURE: movement=173px hold=307175ms threshold=70 (locked=yes active=no)[0m
+[0;32mI (308693) pinch: *** TUNE MODE LOCKED: hold=307175ms movement=173px ***[0m
+[0;32mI (308742) pinch: *** TUNE MODE LOCKED: hold=307225ms movement=282px ***[0m
+[0;32mI (308794) pinch: GESTURE: movement=432px hold=307277ms threshold=70 (locked=yes active=no)[0m
+[0;32mI (308795) pinch: *** TUNE MODE LOCKED: hold=307277ms movement=432px ***[0m
+[0;32mI (308845) pinch: *** TUNE MODE LOCKED: hold=307329ms movement=631px ***[0m
+[0;32mI (308887) pinch: *** TUNE MODE LOCKED: hold=307371ms movement=631px ***[0m
+[0;32mI (308915) ui: Settings drawer closed[0m
+[0;32mI (309208) dsp: FT8 br: 38 iters 9728 smp idx=64256/90000  read_avg=26571us work_avg=260us  slow_r=5 slow_w=0[0m
+[0;32mI (310175) pinch: GESTURE: movement=122px hold=308658ms threshold=70 (locked=no active=no)[0m
+[0;32mI (310175) pinch: *** TUNE MODE LOCKED: hold=308658ms movement=122px ***[0m
+[0;32mI (310217) pinch: *** TUNE MODE LOCKED: hold=308700ms movement=225px ***[0m
+[0;32mI (310222) dsp: FT8 br: 47 iters 12032 smp idx=76288/90000  read_avg=21334us work_avg=249us  slow_r=2 slow_w=0[0m
+[0;32mI (310246) ui: Settings drawer open[0m
+[0;32mI (310900) ws: tx 10.0 fps[0m
+[0;32mI (311399) ft8_test: slot 19: waiting for next FT4 boundary...[0m
+[0;32mI (311404) dsp: FT8 br: 19 iters 4864 smp idx=256/90000  read_avg=61945us work_avg=268us  slow_r=6 slow_w=0[0m
+[0;32mI (312006) pinch: GESTURE: movement=13px hold=310489ms threshold=70 (locked=no active=no)[0m
+[0;32mI (312007) pinch: *** TUNE MODE LOCKED: hold=310489ms movement=13px ***[0m
+[0;32mI (312055) pinch: *** TUNE MODE LOCKED: hold=310538ms movement=73px ***[0m
+[0;32mI (312104) pinch: *** TUNE MODE LOCKED: hold=310588ms movement=154px ***[0m
+[0;32mI (312169) pinch: GESTURE: movement=297px hold=310652ms threshold=70 (locked=yes active=no)[0m
+[0;32mI (312169) pinch: *** TUNE MODE LOCKED: hold=310652ms movement=297px ***[0m
+[0;32mI (312219) pinch: *** TUNE MODE LOCKED: hold=310702ms movement=411px ***[0m
+[0;32mI (312276) pinch: GESTURE: movement=578px hold=310759ms threshold=70 (locked=yes active=no)[0m
+[0;32mI (312277) pinch: *** TUNE MODE LOCKED: hold=310759ms movement=578px ***[0m
+[0;32mI (312326) pinch: *** TUNE MODE LOCKED: hold=310809ms movement=657px ***[0m
+[0;32mI (312374) ui: Settings drawer closed[0m
+[0;32mI (312513) dsp: FT8 br: 46 iters 11776 smp idx=12032/90000  read_avg=23854us work_avg=257us  slow_r=3 slow_w=0[0m
+[0;32mI (312864) ft8_test: slot 18 UTC 1782644385: off=+131ms cap=8003ms stft=5513ms dec=1474ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=+157ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (313533) dsp: FT8 br: 42 iters 10752 smp idx=22784/90000  read_avg=24015us work_avg=264us  slow_r=5 slow_w=0[0m
+[0;32mI (314558) dsp: FT8 br: 48 iters 12288 smp idx=35072/90000  read_avg=21096us work_avg=260us  slow_r=2 slow_w=0[0m
+[0;32mI (315537) pinch: GESTURE: movement=0px hold=314020ms threshold=70 (locked=no active=no)[0m
+[0;32mI (315538) pinch: *** TUNE MODE LOCKED: hold=314020ms movement=0px ***[0m
+[0;32mI (315571) dsp: FT8 br: 48 iters 12288 smp idx=47360/90000  read_avg=20860us work_avg=250us  slow_r=2 slow_w=0[0m
+[0;32mI (315586) pinch: *** TUNE MODE LOCKED: hold=314069ms movement=3px ***[0m
+[0;32mI (315632) pinch: *** TUNE MODE LOCKED: hold=314115ms movement=8px ***[0m
+[0;32mI (315901) ws: tx 10.0 fps[0m
+[0;32mI (316591) dsp: FT8 br: 41 iters 10496 smp idx=57856/90000  read_avg=24613us work_avg=247us  slow_r=2 slow_w=0[0m
+[0;32mI (317603) dsp: FT8 br: 47 iters 12032 smp idx=69888/90000  read_avg=21272us work_avg=266us  slow_r=5 slow_w=0[0m
+[0;32mI (317946) pinch: GESTURE: movement=0px hold=316429ms threshold=70 (locked=no active=no)[0m
+[0;32mI (317947) pinch: *** TUNE MODE LOCKED: hold=316429ms movement=0px ***[0m
+[0;32mI (317993) pinch: *** TUNE MODE LOCKED: hold=316476ms movement=8px ***[0m
+[0;32mI (318044) cat: Sent: FA00018100000; (target 18100000 Hz)[0m
+[0;32mI (318044) ft8_test: operating sub-mode -> FT8[0m
+[0;32mI (318169) cat: Freq = 18100000 Hz (18.100 MHz)[0m
+[0;32mI (318486) ft8_test: sub-mode change -> rebuilding monitor pool for FT8[0m
+[0;32mI (318618) settings: flushed dirty=0x800000000040[0m
+[0;32mI (319624) ft8_test: slot 19 UTC 1782644392: off=+644ms cap=7076ms stft=1082ms dec=1147ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=+157ms heap_i=20KB heap_p=24139KB[0m
+Block size = 1920
+Subblock size = 960
+N_FFT = 3840
+Block size = 1920
+Subblock size = 960
+N_FFT = 3840
+[0;32mI (319748) ft8_test: monitor pool built for FT8: block=1920 samples, 93 blocks/slot, 163 KB waterfall each[0m
+[0;32mI (319748) ft8_test: slot 20: waiting for next FT8 boundary...[0m
+[0;32mI (319758) dsp: FT8 br: 29 iters 7424 smp idx=256/180000  read_avg=74062us work_avg=246us  slow_r=4 slow_w=0[0m
+[0;32mI (320780) dsp: FT8 br: 48 iters 12288 smp idx=12544/180000  read_avg=21036us work_avg=252us  slow_r=3 slow_w=0[0m
+[0;32mI (321000) ws: tx 10.0 fps[0m
+[0;32mI (321806) dsp: FT8 br: 48 iters 12288 smp idx=24832/180000  read_avg=21120us work_avg=254us  slow_r=0 slow_w=0[0m
+[0;32mI (322813) dsp: FT8 br: 48 iters 12288 smp idx=37120/180000  read_avg=20718us work_avg=265us  slow_r=1 slow_w=0[0m
+[0;32mI (323819) dsp: FT8 br: 47 iters 12032 smp idx=49152/180000  read_avg=21157us work_avg=243us  slow_r=1 slow_w=0[0m
+[0;32mI (324824) dsp: FT8 br: 47 iters 12032 smp idx=61184/180000  read_avg=21119us work_avg=260us  slow_r=1 slow_w=0[0m
+[0;32mI (325826) dsp: FT8 br: 47 iters 12032 smp idx=73216/180000  read_avg=21080us work_avg=248us  slow_r=3 slow_w=0[0m
+[0;32mI (326000) ws: tx 10.0 fps[0m
+[0;32mI (326852) dsp: FT8 br: 48 iters 12288 smp idx=85504/180000  read_avg=21109us work_avg=252us  slow_r=4 slow_w=0[0m
+[0;32mI (327109) pinch: GESTURE: movement=0px hold=325592ms threshold=70 (locked=no active=no)[0m
+[0;32mI (327110) pinch: *** TUNE MODE LOCKED: hold=325592ms movement=0px ***[0m
+[0;32mI (327173) pinch: *** TUNE MODE LOCKED: hold=325656ms movement=4px ***[0m
+[0;32mI (327867) dsp: FT8 br: 41 iters 10496 smp idx=96000/180000  read_avg=24490us work_avg=266us  slow_r=2 slow_w=0[0m
+[0;32mI (328775) pinch: GESTURE: movement=0px hold=327258ms threshold=70 (locked=no active=no)[0m
+[0;32mI (328776) pinch: *** TUNE MODE LOCKED: hold=327258ms movement=0px ***[0m
+[0;32mI (328825) pinch: *** TUNE MODE LOCKED: hold=327308ms movement=0px ***[0m
+[0;32mI (328878) pinch: GESTURE: movement=0px hold=327361ms threshold=70 (locked=yes active=no)[0m
+[0;32mI (328879) pinch: *** TUNE MODE LOCKED: hold=327361ms movement=0px ***[0m
+[0;32mI (328891) dsp: FT8 br: 48 iters 12288 smp idx=108288/180000  read_avg=21092us work_avg=245us  slow_r=1 slow_w=0[0m
+[0;32mI (328928) pinch: *** TUNE MODE LOCKED: hold=327411ms movement=0px ***[0m
+[0;32mI (328968) cat: Sent: FA00014074000; (target 14074000 Hz)[0m
+[0;32mI (328969) ft8_test: operating sub-mode -> FT8[0m
+[0;32mI (329193) cat: Freq = 14074000 Hz (14.074 MHz)[0m
+[0;32mI (329520) settings: flushed dirty=0x40[0m
+[0;32mI (329906) dsp: FT8 br: 42 iters 10752 smp idx=119040/180000  read_avg=23913us work_avg=260us  slow_r=2 slow_w=0[0m
+[0;32mI (330919) dsp: FT8 br: 48 iters 12288 smp idx=131328/180000  read_avg=20856us work_avg=246us  slow_r=3 slow_w=0[0m
+[0;32mI (331000) ws: tx 10.0 fps[0m
+[0;32mI (331945) dsp: FT8 br: 48 iters 12288 smp idx=143616/180000  read_avg=21127us work_avg=247us  slow_r=2 slow_w=0[0m
+[0;32mI (332947) dsp: FT8 br: 46 iters 11776 smp idx=155392/180000  read_avg=21534us work_avg=249us  slow_r=6 slow_w=0[0m
+[0;32mI (333541) ft8_test: slot 21: waiting for next FT8 boundary...[0m
+[0;32mI (333972) dsp: FT8 br: 39 iters 9984 smp idx=5376/180000  read_avg=26012us work_avg=258us  slow_r=3 slow_w=0[0m
+[0;32mI (334989) dsp: FT8 br: 46 iters 11776 smp idx=17152/180000  read_avg=21850us work_avg=259us  slow_r=4 slow_w=0[0m
+[0;32mI (335020) ft8_test: slot 20 UTC 1782644400: off=+1499ms cap=13776ms stft=1682ms dec=1489ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=+157ms heap_i=26KB heap_p=23879KB[0m
+[0;32mI (335999) dsp: FT8 br: 48 iters 12288 smp idx=29440/180000  read_avg=20803us work_avg=247us  slow_r=4 slow_w=0[0m
+[0;32mI (336000) ws: tx 10.0 fps[0m
+[0;32mI (337006) dsp: FT8 br: 46 iters 11776 smp idx=41216/180000  read_avg=21618us work_avg=265us  slow_r=4 slow_w=0[0m
+[0;32mI (337543) wifi: online; UTC 2026-06-28 11:00:19[0m
+[0;32mI (338013) dsp: FT8 br: 47 iters 12032 smp idx=53248/180000  read_avg=21179us work_avg=247us  slow_r=1 slow_w=0[0m
+[0;32mI (339024) dsp: FT8 br: 47 iters 12032 smp idx=65280/180000  read_avg=21259us work_avg=249us  slow_r=0 slow_w=0[0m
+[0;32mI (340037) dsp: FT8 br: 48 iters 12288 smp idx=77568/180000  read_avg=20858us work_avg=248us  slow_r=2 slow_w=0[0m
+[0;32mI (341000) ws: tx 10.0 fps[0m
+[0;32mI (341044) dsp: FT8 br: 47 iters 12032 smp idx=89600/180000  read_avg=21177us work_avg=247us  slow_r=2 slow_w=0[0m
+[0;32mI (342064) dsp: FT8 br: 47 iters 12032 smp idx=101632/180000  read_avg=21455us work_avg=245us  slow_r=3 slow_w=0[0m
+[0;32mI (343069) dsp: FT8 br: 47 iters 12032 smp idx=113664/180000  read_avg=21124us work_avg=257us  slow_r=4 slow_w=0[0m
+[0;32mI (344087) dsp: FT8 br: 48 iters 12288 smp idx=125952/180000  read_avg=20949us work_avg=259us  slow_r=2 slow_w=0[0m
+[0;32mI (345110) dsp: FT8 br: 48 iters 12288 smp idx=138240/180000  read_avg=21068us work_avg=245us  slow_r=5 slow_w=0[0m
+[0;32mI (346000) ws: tx 10.0 fps[0m
+[0;32mI (346133) dsp: FT8 br: 48 iters 12288 smp idx=150528/180000  read_avg=21059us work_avg=255us  slow_r=4 slow_w=0[0m
+[0;32mI (347140) dsp: FT8 br: 47 iters 12032 smp idx=162560/180000  read_avg=21168us work_avg=252us  slow_r=2 slow_w=0[0m
+[0;32mI (348156) dsp: FT8 br: 48 iters 12288 smp idx=174848/180000  read_avg=20921us work_avg=247us  slow_r=4 slow_w=0[0m
+[0;32mI (348374) ft8_test: slot 22: waiting for next FT8 boundary...[0m
+[0;32mI (348921) ft8_test: decoded: 'SP6FCQ IZ4AIF R+08' (score=28 freq=1244Hz snr=-2)[0m
+[0;32mI (348921) ft8_screen: NEW  call=IZ4AIF     heard=1 score=28 freq=1244 text='SP6FCQ IZ4AIF R+08'[0m
+[0;32mI (348922) ft8_test: decoded: '<...> IZ3EAW JN55' (score=23 freq=556Hz snr=-6)[0m
+[0;32mI (348929) ft8_test: decoded: 'GB26KDR <...> 73' (score=23 freq=1569Hz snr=-2)[0m
+[0;32mI (348935) ft8_screen: NEW  call=IZ3EAW     heard=1 score=23 freq=556 text='<...> IZ3EAW JN55'[0m
+[0;32mI (348955) ft8_screen: NEW  call=<...>      heard=1 score=23 freq=1569 text='GB26KDR <...> 73'[0m
+[0;32mI (348956) ft8_test: decoded: 'RC2N DL1R JN58' (score=23 freq=1781Hz snr=-2)[0m
+[0;32mI (348978) ft8_screen: NEW  call=DL1R       heard=1 score=23 freq=1781 text='RC2N DL1R JN58'[0m
+[0;32mI (348963) ft8_test: decoded: 'KC1VXF SP3WBW -15' (score=23 freq=706Hz snr=-5)[0m
+[0;32mI (348980) ft8_test: decoded: 'UB8CPH EW1MN KO33' (score=22 freq=1494Hz snr=-7)[0m
+[0;32mI (348987) ft8_screen: NEW  call=SP3WBW     heard=1 score=23 freq=706 text='KC1VXF SP3WBW -15'[0m
+[0;32mI (349004) ft8_screen: NEW  call=EW1MN      heard=1 score=22 freq=1494 text='UB8CPH EW1MN KO33'[0m
+[0;32mI (349005) ft8_test: decoded: 'CQ R1BED KP50' (score=22 freq=1388Hz snr=-4)[0m
+[0;32mI (349016) ft8_test: decoded: 'SP6FCQ IZ4AIF R+08' (score=19 freq=1250Hz snr=0)[0m
+[0;32mI (349021) ft8_screen: NEW  call=R1BED      heard=1 score=22 freq=1388 text='CQ R1BED KP50'[0m
+[0;32mI (349038) ft8_screen: UPD  call=IZ4AIF     heard=2 score=19 freq=1250 text='SP6FCQ IZ4AIF R+08'[0m
+[0;32mI (349062) ft8_test: decoded: 'WX4E OK2TS R-14' (score=18 freq=825Hz snr=-8)[0m
+[0;32mI (349062) ft8_screen: NEW  call=OK2TS      heard=1 score=18 freq=825 text='WX4E OK2TS R-14'[0m
+[0;32mI (349067) ft8_test: decoded: 'KC1VXF SP3WBW -15' (score=18 freq=706Hz snr=-5)[0m
+[0;32mI (349070) ft8_test: decoded: 'UB8CPH EW1MN KO33' (score=18 freq=1488Hz snr=-10)[0m
+[0;32mI (349077) ft8_screen: UPD  call=SP3WBW     heard=2 score=18 freq=706 text='KC1VXF SP3WBW -15'[0m
+[0;32mI (349093) ft8_screen: UPD  call=EW1MN      heard=2 score=18 freq=1488 text='UB8CPH EW1MN KO33'[0m
+[0;32mI (349103) ft8_test: decoded: '<...> IZ3EAW JN55' (score=18 freq=556Hz snr=-7)[0m
+[0;32mI (349104) ft8_test: decoded: '<...> IZ3EAW JN55' (score=18 freq=556Hz snr=-6)[0m
+[0;32mI (349110) ft8_screen: UPD  call=IZ3EAW     heard=2 score=18 freq=556 text='<...> IZ3EAW JN55'[0m
+[0;32mI (349127) ft8_screen: UPD  call=IZ3EAW     heard=3 score=18 freq=556 text='<...> IZ3EAW JN55'[0m
+[0;32mI (349130) ft8_test: decoded: 'SP6FCQ IZ4AIF R+08' (score=18 freq=1244Hz snr=-2)[0m
+[0;32mI (349145) ft8_screen: UPD  call=IZ4AIF     heard=3 score=18 freq=1244 text='SP6FCQ IZ4AIF R+08'[0m
+[0;32mI (349137) ft8_test: decoded: 'UB8CPH EW1MN KO33' (score=17 freq=1494Hz snr=-7)[0m
+[0;32mI (349160) dsp: FT8 br: 44 iters 11264 smp idx=9472/180000  read_avg=22567us work_avg=250us  slow_r=1 slow_w=0[0m
+[0;32mI (349162) ft8_screen: UPD  call=EW1MN      heard=3 score=17 freq=1494 text='UB8CPH EW1MN KO33'[0m
+[0;32mI (349158) ft8_test: decoded: 'CQ LZ1ZF KN22' (score=17 freq=875Hz snr=-8)[0m
+[0;32mI (349190) ft8_screen: NEW  call=LZ1ZF      heard=1 score=17 freq=875 text='CQ LZ1ZF KN22'[0m
+[0;32mI (349183) ft8_test: decoded: 'UB8CPH EW1MN KO33' (score=16 freq=1488Hz snr=-10)[0m
+[0;32mI (349207) ft8_screen: UPD  call=EW1MN      heard=4 score=16 freq=1488 text='UB8CPH EW1MN KO33'[0m
+[0;32mI (349204) ft8_test: decoded: 'GB26KDR <...> 73' (score=16 freq=1569Hz snr=-2)[0m
+[0;32mI (349224) ft8_screen: UPD  call=<...>      heard=2 score=16 freq=1569 text='GB26KDR <...> 73'[0m
+[0;32mI (349235) ft8_test: decoded: 'CQ R1BED KP50' (score=16 freq=1388Hz snr=-4)[0m
+[0;32mI (349241) ft8_screen: UPD  call=R1BED      heard=2 score=16 freq=1388 text='CQ R1BED KP50'[0m
+[0;32mI (349272) ft8_test: decoded: '<...> IZ3EAW JN55' (score=14 freq=556Hz snr=-6)[0m
+[0;32mI (349273) ft8_screen: UPD  call=IZ3EAW     heard=4 score=14 freq=556 text='<...> IZ3EAW JN55'[0m
+[0;32mI (349303) ft8_test: decoded: 'GB26KDR <...> 73' (score=13 freq=1569Hz snr=-2)[0m
+[0;32mI (349303) ft8_screen: UPD  call=<...>      heard=3 score=13 freq=1569 text='GB26KDR <...> 73'[0m
+[0;32mI (349312) ft8_test: decoded: 'WX4E OK2TS R-14' (score=13 freq=819Hz snr=-11)[0m
+[0;32mI (349317) ft8_screen: UPD  call=OK2TS      heard=2 score=13 freq=819 text='WX4E OK2TS R-14'[0m
+[0;32mI (349388) ft8_test: decoded: 'RA2FU PD9JPV JO22' (score=12 freq=1900Hz snr=-10)[0m
+[0;32mI (349388) ft8_screen: NEW  call=PD9JPV     heard=1 score=12 freq=1900 text='RA2FU PD9JPV JO22'[0m
+[0;32mI (349399) ft8_test: decoded: 'KC1VXF SP3WBW -15' (score=12 freq=706Hz snr=-5)[0m
+[0;32mI (349402) ft8_screen: UPD  call=SP3WBW     heard=3 score=12 freq=706 text='KC1VXF SP3WBW -15'[0m
+[0;32mI (349432) ft8_test: decoded: 'RA2FU PD9JPV JO22' (score=11 freq=1906Hz snr=-6)[0m
+[0;32mI (349432) ft8_screen: UPD  call=PD9JPV     heard=2 score=11 freq=1906 text='RA2FU PD9JPV JO22'[0m
+[0;32mI (349572) ft8_test: decoded: 'KC1VXF SP3WBW -15' (score=11 freq=706Hz snr=-5)[0m
+[0;32mI (349572) ft8_screen: UPD  call=SP3WBW     heard=4 score=11 freq=706 text='KC1VXF SP3WBW -15'[0m
+[0;32mI (350123) time_sync: FT8 timing correction: +153 ms[0m
+[0;32mI (350123) ft8_test: slot 21 UTC 1782644415: off=+286ms cap=14822ms stft=722ms dec=1759ms cand=140 dec=26 skip=0 backlog=0pr drop=0pr timing=+510ms heap_i=26KB heap_p=23879KB[0m
+[0;32mI (350180) dsp: FT8 br: 45 iters 11520 smp idx=20992/180000  read_avg=22404us work_avg=250us  slow_r=2 slow_w=0[0m
+[0;32mI (350721) settings: flushed dirty=0x10000[0m
+[0;32mI (351000) ws: tx 10.0 fps[0m
+[0;32mI (351187) dsp: FT8 br: 46 iters 11776 smp idx=32768/180000  read_avg=21631us work_avg=267us  slow_r=3 slow_w=0[0m
+[0;32mI (352194) dsp: FT8 br: 47 iters 12032 smp idx=44800/180000  read_avg=21178us work_avg=251us  slow_r=5 slow_w=0[0m
+[0;32mI (353201) dsp: FT8 br: 47 iters 12032 smp idx=56832/180000  read_avg=21169us work_avg=257us  slow_r=3 slow_w=0[0m
+[0;32mI (354226) dsp: FT8 br: 48 iters 12288 smp idx=69120/180000  read_avg=21090us work_avg=259us  slow_r=4 slow_w=0[0m
+[0;32mI (355260) dsp: FT8 br: 47 iters 12032 smp idx=81152/180000  read_avg=21740us work_avg=262us  slow_r=3 slow_w=0[0m
+[0;32mI (356000) ws: tx 10.0 fps[0m
+[0;32mI (356035) pinch: GESTURE: movement=0px hold=354518ms threshold=70 (locked=no active=no)[0m
+[0;32mI (356036) pinch: *** TUNE MODE LOCKED: hold=354518ms movement=0px ***[0m
+[0;32mI (356083) pinch: *** TUNE MODE LOCKED: hold=354566ms movement=0px ***[0m
+[0;32mI (356138) pinch: GESTURE: movement=0px hold=354621ms threshold=70 (locked=yes active=no)[0m
+[0;32mI (356139) pinch: *** TUNE MODE LOCKED: hold=354621ms movement=0px ***[0m
+[0;32mI (356349) dsp: FT8 br: 45 iters 11520 smp idx=92672/180000  read_avg=23934us work_avg=255us  slow_r=5 slow_w=0[0m
+[0;32mI (357359) dsp: FT8 br: 40 iters 10240 smp idx=102912/180000  read_avg=25008us work_avg=248us  slow_r=6 slow_w=0[0m
+[0;32mI (357810) pinch: GESTURE: movement=0px hold=356293ms threshold=70 (locked=no active=no)[0m
+[0;32mI (357811) pinch: *** TUNE MODE LOCKED: hold=356293ms movement=0px ***[0m
+[0;32mI (357859) pinch: *** TUNE MODE LOCKED: hold=356342ms movement=0px ***[0m
+[0;32mI (357913) pinch: GESTURE: movement=5px hold=356396ms threshold=70 (locked=yes active=no)[0m
+[0;32mI (357914) pinch: *** TUNE MODE LOCKED: hold=356396ms movement=5px ***[0m
+[0;32mI (357967) pinch: *** TUNE MODE LOCKED: hold=356450ms movement=11px ***[0m
+[0;32mI (358041) pinch: GESTURE: movement=14px hold=356524ms threshold=70 (locked=yes active=no)[0m
+[0;32mI (358042) pinch: *** TUNE MODE LOCKED: hold=356524ms movement=14px ***[0m
+[0;32mI (358056) cat: Sent: FA00014080000; (target 14080000 Hz)[0m
+[0;32mI (358056) ft8_test: operating sub-mode -> FT4[0m
+[0;32mI (358183) cat: Freq = 14080000 Hz (14.080 MHz)[0m
+[0;32mI (358370) dsp: FT8 br: 42 iters 10752 smp idx=113664/180000  read_avg=23823us work_avg=246us  slow_r=3 slow_w=0[0m
+[0;32mI (358622) settings: flushed dirty=0x800000000040[0m
+[0;32mI (359392) dsp: FT8 br: 46 iters 11776 smp idx=125440/180000  read_avg=21972us work_avg=250us  slow_r=2 slow_w=0[0m
+[0;32mI (360415) dsp: FT8 br: 46 iters 11776 smp idx=137216/180000  read_avg=21989us work_avg=246us  slow_r=6 slow_w=0[0m
+[0;32mI (361000) ws: tx 10.0 fps[0m
+[0;32mI (361434) dsp: FT8 br: 48 iters 12288 smp idx=149504/180000  read_avg=20985us work_avg=244us  slow_r=2 slow_w=0[0m
+[0;32mI (362438) dsp: FT8 br: 46 iters 11776 smp idx=161280/180000  read_avg=21572us work_avg=255us  slow_r=4 slow_w=0[0m
+[0;32mI (363433) ft8_test: sub-mode change -> rebuilding monitor pool for FT4[0m
+[0;32mI (364880) ft8_test: slot 22 UTC 1782644430: off=+119ms cap=15048ms stft=1815ms dec=1457ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=+510ms heap_i=27KB heap_p=23879KB[0m
+Block size = 576
+Subblock size = 288
+N_FFT = 1152
+Block size = 576
+Subblock size = 288
+N_FFT = 1152
+[0;32mI (364929) ft8_test: monitor pool built for FT4: block=576 samples, 156 blocks/slot, 82 KB waterfall each[0m
+[0;32mI (364929) ft8_test: slot 23: waiting for next FT4 boundary...[0m
+[0;32mI (364950) dsp: FT8 br: 40 iters 10240 smp idx=256/90000  read_avg=62547us work_avg=247us  slow_r=2 slow_w=0[0m
+[0;32mI (365970) dsp: FT8 br: 48 iters 12288 smp idx=12544/90000  read_avg=21002us work_avg=250us  slow_r=2 slow_w=0[0m
+[0;32mI (366000) ws: tx 10.0 fps[0m
+[0;32mI (366989) dsp: FT8 br: 47 iters 12032 smp idx=24576/90000  read_avg=21426us work_avg=252us  slow_r=2 slow_w=0[0m
+[0;32mI (367543) wifi: online; UTC 2026-06-28 11:00:49[0m
+[0;32mI (367993) dsp: FT8 br: 47 iters 12032 smp idx=36608/90000  read_avg=21118us work_avg=244us  slow_r=5 slow_w=0[0m
+[0;32mI (369004) dsp: FT8 br: 47 iters 12032 smp idx=48640/90000  read_avg=21247us work_avg=251us  slow_r=1 slow_w=0[0m
+[0;32mI (370007) dsp: FT8 br: 47 iters 12032 smp idx=60672/90000  read_avg=21089us work_avg=261us  slow_r=2 slow_w=0[0m
+[0;32mI (371000) ws: tx 10.0 fps[0m
+[0;32mI (371969) ft8_test: slot 24: waiting for next FT4 boundary...[0m
+[0;32mI (371979) dsp: FT8 br: 46 iters 11776 smp idx=256/90000  read_avg=42622us work_avg=247us  slow_r=3 slow_w=0[0m
+[0;32mI (372994) dsp: FT8 br: 47 iters 12032 smp idx=12288/90000  read_avg=21336us work_avg=257us  slow_r=2 slow_w=0[0m
+[0;32mI (373173) ft8_test: slot 23 UTC 1782644445: off=+1527ms cap=7023ms stft=4686ms dec=1213ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=+510ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (374014) dsp: FT8 br: 47 iters 12032 smp idx=24320/90000  read_avg=21445us work_avg=254us  slow_r=1 slow_w=0[0m
+[0;32mI (375016) dsp: FT8 br: 47 iters 12032 smp idx=36352/90000  read_avg=21052us work_avg=268us  slow_r=0 slow_w=0[0m
+[0;32mI (376000) ws: tx 10.0 fps[0m
+[0;32mI (376028) dsp: FT8 br: 47 iters 12032 smp idx=48384/90000  read_avg=21251us work_avg=269us  slow_r=0 slow_w=0[0m
+[0;32mI (377033) dsp: FT8 br: 47 iters 12032 smp idx=60416/90000  read_avg=21130us work_avg=262us  slow_r=0 slow_w=0[0m
+[0;32mI (378056) dsp: FT8 br: 48 iters 12288 smp idx=72704/90000  read_avg=21043us work_avg=258us  slow_r=3 slow_w=0[0m
+[0;32mI (378640) ft8_test: slot 25: waiting for next FT4 boundary...[0m
+[0;32mI (379077) dsp: FT8 br: 39 iters 9984 smp idx=5120/90000  read_avg=25917us work_avg=264us  slow_r=1 slow_w=0[0m
+[0;32mI (380094) dsp: FT8 br: 47 iters 12032 smp idx=17152/90000  read_avg=21363us work_avg=276us  slow_r=3 slow_w=0[0m
+[0;32mI (380338) ft8_test: slot 24 UTC 1782644452: off=+1061ms cap=6659ms stft=1081ms dec=1707ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=+510ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (381000) ws: tx 10.0 fps[0m
+[0;32mI (381119) dsp: FT8 br: 47 iters 12032 smp idx=29184/90000  read_avg=21564us work_avg=250us  slow_r=1 slow_w=0[0m
+[0;32mI (382122) dsp: FT8 br: 46 iters 11776 smp idx=40960/90000  read_avg=21552us work_avg=255us  slow_r=2 slow_w=0[0m
+[0;32mI (383124) dsp: FT8 br: 46 iters 11776 smp idx=52736/90000  read_avg=21535us work_avg=247us  slow_r=3 slow_w=0[0m
+[0;32mI (384131) dsp: FT8 br: 46 iters 11776 smp idx=64512/90000  read_avg=21640us work_avg=246us  slow_r=5 slow_w=0[0m
+[0;32mI (385140) dsp: FT8 br: 47 iters 12032 smp idx=76544/90000  read_avg=21214us work_avg=255us  slow_r=3 slow_w=0[0m
+[0;32mI (386000) ws: tx 10.0 fps[0m
+[0;32mI (386254) ft8_test: slot 26: waiting for next FT4 boundary...[0m
+[0;32mI (386263) dsp: FT8 br: 40 iters 10240 smp idx=256/90000  read_avg=27813us work_avg=249us  slow_r=3 slow_w=0[0m
+[0;32mI (387272) dsp: FT8 br: 47 iters 12032 smp idx=12288/90000  read_avg=21216us work_avg=256us  slow_r=5 slow_w=0[0m
+[0;32mI (387456) ft8_test: slot 25 UTC 1782644460: off=+232ms cap=7603ms stft=5477ms dec=1212ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=+510ms heap_i=18KB heap_p=24139KB[0m
+[0;32mI (388272) dsp: FT8 br: 46 iters 11776 smp idx=24064/90000  read_avg=21492us work_avg=249us  slow_r=3 slow_w=0[0m
+[0;32mI (389293) dsp: FT8 br: 48 iters 12288 smp idx=36352/90000  read_avg=21003us work_avg=269us  slow_r=3 slow_w=0[0m
+[0;32mI (390309) dsp: FT8 br: 47 iters 12032 smp idx=48384/90000  read_avg=21375us work_avg=246us  slow_r=1 slow_w=0[0m
+[0;32mI (391000) ws: tx 10.0 fps[0m
+[0;32mI (391324) dsp: FT8 br: 48 iters 12288 smp idx=60672/90000  read_avg=20881us work_avg=263us  slow_r=0 slow_w=0[0m
+[0;32mI (392338) dsp: FT8 br: 47 iters 12032 smp idx=72704/90000  read_avg=21316us work_avg=256us  slow_r=1 slow_w=0[0m
+[0;32mI (393359) dsp: FT8 br: 48 iters 12288 smp idx=84992/90000  read_avg=21017us work_avg=257us  slow_r=2 slow_w=0[0m
+[0;32mI (393547) ft8_test: slot 27: waiting for next FT4 boundary...[0m
+[0;32mI (393879) ft8_test: decoded: 'KC4SCO G7GEE IO83' (score=18 freq=583Hz snr=-8)[0m
+[0;32mI (393879) ft8_screen: NEW  call=G7GEE      heard=1 score=18 freq=583 text='KC4SCO G7GEE IO83'[0m
+[0;32mI (394363) dsp: FT8 br: 38 iters 9728 smp idx=8448/90000  read_avg=26152us work_avg=251us  slow_r=4 slow_w=0[0m
+[0;32mI (395295) ft8_test: slot 26 UTC 1782644467: off=+346ms cap=7282ms stft=1093ms dec=1758ms cand=140 dec=1 skip=0 backlog=0pr drop=0pr timing=-1174ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (395371) dsp: FT8 br: 46 iters 11776 smp idx=20224/90000  read_avg=21663us work_avg=258us  slow_r=2 slow_w=0[0m
+[0;32mI (396000) ws: tx 10.0 fps[0m
+[0;32mI (396373) dsp: FT8 br: 47 iters 12032 smp idx=32256/90000  read_avg=21031us work_avg=290us  slow_r=1 slow_w=0[0m
+[0;32mI (397383) dsp: FT8 br: 47 iters 12032 smp idx=44288/90000  read_avg=21224us work_avg=263us  slow_r=0 slow_w=0[0m
+[0;32mI (397543) wifi: online; UTC 2026-06-28 11:01:19[0m
+[0;32mI (398390) dsp: FT8 br: 48 iters 12288 smp idx=56576/90000  read_avg=20729us work_avg=248us  slow_r=2 slow_w=0[0m
+[0;32mI (399403) dsp: FT8 br: 47 iters 12032 smp idx=68608/90000  read_avg=21296us work_avg=257us  slow_r=1 slow_w=0[0m
+[0;32mI (400425) dsp: FT8 br: 48 iters 12288 smp idx=80896/90000  read_avg=21027us work_avg=264us  slow_r=3 slow_w=0[0m
+[0;32mI (401000) ws: tx 10.0 fps[0m
+[0;32mI (401208) ft8_test: slot 28: waiting for next FT4 boundary...[0m
+[0;32mI (401436) dsp: FT8 br: 37 iters 9472 smp idx=2816/90000  read_avg=27066us work_avg=262us  slow_r=1 slow_w=0[0m
+[0;32mI (402401) ft8_test: slot 27 UTC 1782644475: off=+140ms cap=7649ms stft=5517ms dec=1202ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-1174ms heap_i=18KB heap_p=24139KB[0m
+[0;32mI (402441) dsp: FT8 br: 47 iters 12032 smp idx=14848/90000  read_avg=21125us work_avg=254us  slow_r=3 slow_w=0[0m
+[0;32mI (403444) dsp: FT8 br: 47 iters 12032 smp idx=26880/90000  read_avg=21080us work_avg=258us  slow_r=1 slow_w=0[0m
+[0;32mI (404460) dsp: FT8 br: 48 iters 12288 smp idx=39168/90000  read_avg=20916us work_avg=250us  slow_r=2 slow_w=0[0m
+[0;32mI (405472) dsp: FT8 br: 47 iters 12032 smp idx=51200/90000  read_avg=21273us work_avg=256us  slow_r=1 slow_w=0[0m
+[0;32mI (406000) ws: tx 10.0 fps[0m
+[0;32mI (406486) dsp: FT8 br: 47 iters 12032 smp idx=63232/90000  read_avg=21327us work_avg=250us  slow_r=2 slow_w=0[0m
+[0;32mI (407500) dsp: FT8 br: 48 iters 12288 smp idx=75520/90000  read_avg=20863us work_avg=263us  slow_r=2 slow_w=0[0m
+[0;32mI (408544) ft8_test: slot 29: waiting for next FT4 boundary...[0m
+[0;32mI (408547) dsp: FT8 br: 46 iters 11776 smp idx=256/90000  read_avg=22505us work_avg=256us  slow_r=5 slow_w=0[0m
+[0;32mI (408885) ft8_test: decoded: 'W2GSA G7GEE IO83' (score=19 freq=604Hz snr=-6)[0m
+[0;32mI (408886) ft8_screen: UPD  call=G7GEE      heard=2 score=19 freq=604 text='W2GSA G7GEE IO83'[0m
+[0;32mI (408893) ft8_test: decoded: 'ON4WZ G4CFS IO91' (score=18 freq=2521Hz snr=-9)[0m
+[0;32mI (408899) ft8_screen: NEW  call=G4CFS      heard=1 score=18 freq=2521 text='ON4WZ G4CFS IO91'[0m
+[0;32mI (409072) ft8_test: decoded: 'W2GSA G7GEE IO83' (score=10 freq=604Hz snr=-6)[0m
+[0;32mI (409072) ft8_screen: UPD  call=G7GEE      heard=3 score=10 freq=604 text='W2GSA G7GEE IO83'[0m
+[0;32mI (409569) dsp: FT8 br: 47 iters 12032 smp idx=12288/90000  read_avg=21476us work_avg=268us  slow_r=4 slow_w=0[0m
+[0;32mI (410276) ft8_test: slot 28 UTC 1782644482: off=+300ms cap=7325ms stft=1094ms dec=1741ms cand=140 dec=3 skip=0 backlog=0pr drop=0pr timing=-900ms heap_i=21KB heap_p=24139KB[0m
+[0;32mI (410585) dsp: FT8 br: 48 iters 12288 smp idx=24576/90000  read_avg=20899us work_avg=260us  slow_r=3 slow_w=0[0m
+[0;32mI (411000) ws: tx 10.0 fps[0m
+[0;32mI (411585) dsp: FT8 br: 47 iters 12032 smp idx=36608/90000  read_avg=21014us work_avg=262us  slow_r=0 slow_w=0[0m
+[0;32mI (412598) dsp: FT8 br: 47 iters 12032 smp idx=48640/90000  read_avg=21304us work_avg=256us  slow_r=0 slow_w=0[0m
+[0;32mI (413603) dsp: FT8 br: 47 iters 12032 smp idx=60672/90000  read_avg=21107us work_avg=271us  slow_r=2 slow_w=0[0m
+[0;32mI (414626) dsp: FT8 br: 48 iters 12288 smp idx=72960/90000  read_avg=21055us work_avg=257us  slow_r=2 slow_w=0[0m
+[0;32mI (415640) dsp: FT8 br: 48 iters 12288 smp idx=85248/90000  read_avg=20857us work_avg=266us  slow_r=2 slow_w=0[0m
+[0;32mI (416000) ws: tx 10.0 fps[0m
+[0;32mI (416125) ft8_test: slot 30: waiting for next FT4 boundary...[0m
+[0;32mI (416363) ft8_test: decoded: 'N9BCN RZ1OA R 1D DX' (score=24 freq=896Hz snr=-4)[0m
+[0;32mI (416363) ft8_test: decoded: 'N9BCN RZ1OA R 1D DX' (score=22 freq=896Hz snr=-4)[0m
+[0;32mI (416363) ft8_screen: NEW  call=RZ1OA      heard=1 score=24 freq=896 text='N9BCN RZ1OA R 1D DX'[0m
+[0;32mI (416377) ft8_screen: UPD  call=RZ1OA      heard=2 score=22 freq=896 text='N9BCN RZ1OA R 1D DX'[0m
+[0;32mI (416379) ft8_test: decoded: 'VA3DO DL9LA 73' (score=21 freq=1396Hz snr=-3)[0m
+[0;32mI (416388) ft8_test: decoded: 'VA3DO DL9LA 73' (score=20 freq=1396Hz snr=-3)[0m
+[0;32mI (416395) ft8_screen: NEW  call=DL9LA      heard=1 score=21 freq=1396 text='VA3DO DL9LA 73'[0m
+[0;32mI (416412) ft8_screen: UPD  call=DL9LA      heard=2 score=20 freq=1396 text='VA3DO DL9LA 73'[0m
+[0;32mI (416659) dsp: FT8 br: 40 iters 10240 smp idx=6144/90000  read_avg=25224us work_avg=254us  slow_r=2 slow_w=0[0m
+[0;32mI (417383) ft8_test: slot 29 UTC 1782644490: off=+136ms cap=7570ms stft=5516ms dec=1268ms cand=140 dec=4 skip=0 backlog=0pr drop=0pr timing=-384ms heap_i=21KB heap_p=24139KB[0m
+[0;32mI (417662) dsp: FT8 br: 47 iters 12032 smp idx=18176/90000  read_avg=21081us work_avg=252us  slow_r=3 slow_w=0[0m
+[0;32mI (418685) dsp: FT8 br: 47 iters 12032 smp idx=30208/90000  read_avg=21512us work_avg=259us  slow_r=2 slow_w=0[0m
+[0;32mI (419697) dsp: FT8 br: 47 iters 12032 smp idx=42240/90000  read_avg=21271us work_avg=258us  slow_r=1 slow_w=0[0m
+[0;32mI (420720) dsp: FT8 br: 48 iters 12288 smp idx=54528/90000  read_avg=21064us work_avg=248us  slow_r=3 slow_w=0[0m
+[0;32mI (421000) ws: tx 10.0 fps[0m
+[0;32mI (421731) dsp: FT8 br: 46 iters 11776 smp idx=66304/90000  read_avg=21726us work_avg=249us  slow_r=3 slow_w=0[0m
+[0;32mI (422736) dsp: FT8 br: 47 iters 12032 smp idx=78336/90000  read_avg=21116us work_avg=269us  slow_r=2 slow_w=0[0m
+[0;32mI (423537) ft8_test: slot 31: waiting for next FT4 boundary...[0m
+[0;32mI (423741) dsp: FT8 br: 43 iters 11008 smp idx=2560/90000  read_avg=23118us work_avg=250us  slow_r=2 slow_w=0[0m
+[0;32mI (424762) dsp: FT8 br: 47 iters 12032 smp idx=14592/90000  read_avg=21458us work_avg=266us  slow_r=3 slow_w=0[0m
+[0;32mI (425262) ft8_test: slot 30 UTC 1782644497: off=+217ms cap=7402ms stft=1088ms dec=1734ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-384ms heap_i=17KB heap_p=24139KB[0m
+[0;32mI (425781) dsp: FT8 br: 48 iters 12288 smp idx=26880/90000  read_avg=20980us work_avg=248us  slow_r=3 slow_w=0[0m
+[0;32mI (426001) ws: tx 10.0 fps[0m
+[0;32mI (426781) dsp: FT8 br: 47 iters 12032 smp idx=38912/90000  read_avg=21011us work_avg=265us  slow_r=3 slow_w=0[0m
+[0;32mI (427543) wifi: online; UTC 2026-06-28 11:01:49[0m
+[0;32mI (427792) dsp: FT8 br: 47 iters 12032 smp idx=50944/90000  read_avg=21245us work_avg=254us  slow_r=2 slow_w=0[0m
+[0;32mI (428794) dsp: FT8 br: 47 iters 12032 smp idx=62976/90000  read_avg=21067us work_avg=260us  slow_r=1 slow_w=0[0m
+[0;32mI (429819) dsp: FT8 br: 47 iters 12032 smp idx=75008/90000  read_avg=21561us work_avg=247us  slow_r=7 slow_w=0[0m
+[0;32mI (430820) dsp: FT8 br: 46 iters 11776 smp idx=86784/90000  read_avg=21507us work_avg=247us  slow_r=3 slow_w=0[0m
+[0;32mI (431100) ws: tx 10.0 fps[0m
+[0;32mI (431131) ft8_test: slot 32: waiting for next FT4 boundary...[0m
+[0;32mI (431820) dsp: FT8 br: 38 iters 9728 smp idx=7936/90000  read_avg=26056us work_avg=269us  slow_r=2 slow_w=0[0m
+[0;32mI (432312) ft8_test: slot 31 UTC 1782644505: off=+129ms cap=7583ms stft=5498ms dec=1191ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-384ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (432826) dsp: FT8 br: 47 iters 12032 smp idx=19968/90000  read_avg=21149us work_avg=253us  slow_r=5 slow_w=0[0m
+[0;32mI (433839) dsp: FT8 br: 48 iters 12288 smp idx=32256/90000  read_avg=20848us work_avg=253us  slow_r=1 slow_w=0[0m
+[0;32mI (434853) dsp: FT8 br: 47 iters 12032 smp idx=44288/90000  read_avg=21333us work_avg=251us  slow_r=2 slow_w=0[0m
+[0;32mI (435867) dsp: FT8 br: 48 iters 12288 smp idx=56576/90000  read_avg=20871us work_avg=248us  slow_r=1 slow_w=0[0m
+[0;32mI (436100) ws: tx 10.0 fps[0m
+[0;32mI (436893) dsp: FT8 br: 48 iters 12288 smp idx=68864/90000  read_avg=21122us work_avg=250us  slow_r=3 slow_w=0[0m
+[0;32mI (437916) dsp: FT8 br: 47 iters 12032 smp idx=80896/90000  read_avg=21500us work_avg=269us  slow_r=2 slow_w=0[0m
+[0;32mI (438543) ft8_test: slot 33: waiting for next FT4 boundary...[0m
+[0;32mI (438872) ft8_test: decoded: 'ON4WZ G4CFS IO91' (score=16 freq=2521Hz snr=-10)[0m
+[0;32mI (438872) ft8_screen: UPD  call=G4CFS      heard=2 score=16 freq=2521 text='ON4WZ G4CFS IO91'[0m
+[0;32mI (438879) ft8_test: decoded: 'CQ GB1500M' (score=13 freq=1208Hz snr=-10)[0m
+[0;32mI (438886) ft8_screen: NEW  call=GB1500M    heard=1 score=13 freq=1208 text='CQ GB1500M'[0m
+[0;32mI (438937) dsp: FT8 br: 45 iters 11520 smp idx=4864/90000  read_avg=22431us work_avg=252us  slow_r=3 slow_w=0[0m
+[0;32mI (439960) dsp: FT8 br: 46 iters 11776 smp idx=16640/90000  read_avg=21979us work_avg=262us  slow_r=2 slow_w=0[0m
+[0;32mI (440274) ft8_test: slot 32 UTC 1782644512: off=+223ms cap=7401ms stft=1082ms dec=1740ms cand=140 dec=2 skip=0 backlog=0pr drop=0pr timing=-257ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (440975) dsp: FT8 br: 48 iters 12288 smp idx=28928/90000  read_avg=20891us work_avg=254us  slow_r=2 slow_w=0[0m
+[0;32mI (441100) ws: tx 10.0 fps[0m
+[0;32mI (441989) dsp: FT8 br: 47 iters 12032 smp idx=40960/90000  read_avg=21323us work_avg=247us  slow_r=2 slow_w=0[0m
+[0;32mI (443012) dsp: FT8 br: 47 iters 12032 smp idx=52992/90000  read_avg=21509us work_avg=256us  slow_r=4 slow_w=0[0m
+[0;32mI (444035) dsp: FT8 br: 48 iters 12288 smp idx=65280/90000  read_avg=21047us work_avg=264us  slow_r=4 slow_w=0[0m
+[0;32mI (445055) dsp: FT8 br: 47 iters 12032 smp idx=77312/90000  read_avg=21458us work_avg=252us  slow_r=3 slow_w=0[0m
+[0;32mI (446100) ws: tx 10.0 fps[0m
+[0;32mI (446152) ft8_test: slot 34: waiting for next FT4 boundary...[0m
+[0;32mI (446159) dsp: FT8 br: 43 iters 11008 smp idx=256/90000  read_avg=25410us work_avg=254us  slow_r=3 slow_w=0[0m
+[0;32mI (447171) dsp: FT8 br: 47 iters 12032 smp idx=12288/90000  read_avg=21284us work_avg=249us  slow_r=2 slow_w=0[0m
+[0;32mI (447329) ft8_test: slot 33 UTC 1782644520: off=+135ms cap=7598ms stft=5498ms dec=1186ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-257ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (448181) dsp: FT8 br: 47 iters 12032 smp idx=24320/90000  read_avg=21229us work_avg=258us  slow_r=2 slow_w=0[0m
+[0;32mI (449207) dsp: FT8 br: 47 iters 12032 smp idx=36352/90000  read_avg=21582us work_avg=246us  slow_r=2 slow_w=0[0m
+[0;32mI (450213) dsp: FT8 br: 47 iters 12032 smp idx=48384/90000  read_avg=21135us work_avg=267us  slow_r=0 slow_w=0[0m
+[0;32mI (451100) ws: tx 10.0 fps[0m
+[0;32mI (451237) dsp: FT8 br: 47 iters 12032 smp idx=60416/90000  read_avg=21523us work_avg=263us  slow_r=0 slow_w=0[0m
+[0;32mI (452255) dsp: FT8 br: 48 iters 12288 smp idx=72704/90000  read_avg=20972us work_avg=245us  slow_r=2 slow_w=0[0m
+[0;32mI (453259) dsp: FT8 br: 47 iters 12032 smp idx=84736/90000  read_avg=21105us work_avg=250us  slow_r=3 slow_w=0[0m
+[0;32mI (453544) ft8_test: slot 35: waiting for next FT4 boundary...[0m
+[0;32mI (454283) dsp: FT8 br: 46 iters 11776 smp idx=8960/90000  read_avg=21998us work_avg=257us  slow_r=4 slow_w=0[0m
+[0;32mI (455281) ft8_test: slot 34 UTC 1782644527: off=+244ms cap=7381ms stft=1089ms dec=1746ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-257ms heap_i=21KB heap_p=24139KB[0m
+[0;32mI (455306) dsp: FT8 br: 47 iters 12032 smp idx=20992/90000  read_avg=21520us work_avg=248us  slow_r=4 slow_w=0[0m
+[0;32mI (456100) ws: tx 10.0 fps[0m
+[0;32mI (456321) dsp: FT8 br: 48 iters 12288 smp idx=33280/90000  read_avg=20897us work_avg=246us  slow_r=3 slow_w=0[0m
+[0;32mI (457337) dsp: FT8 br: 47 iters 12032 smp idx=45312/90000  read_avg=21353us work_avg=262us  slow_r=3 slow_w=0[0m
+[0;32mI (457543) wifi: online; UTC 2026-06-28 11:02:19[0m
+[0;32mI (458340) dsp: FT8 br: 47 iters 12032 smp idx=57344/90000  read_avg=21087us work_avg=252us  slow_r=0 slow_w=0[0m
+[0;32mI (459346) dsp: FT8 br: 46 iters 11776 smp idx=69120/90000  read_avg=21620us work_avg=251us  slow_r=3 slow_w=0[0m
+[0;32mI (460369) dsp: FT8 br: 48 iters 12288 smp idx=81408/90000  read_avg=21066us work_avg=248us  slow_r=3 slow_w=0[0m
+[0;32mI (461100) ws: tx 10.0 fps[0m
+[0;32mI (461128) ft8_test: slot 36: waiting for next FT4 boundary...[0m
+[0;32mI (461363) ft8_test: decoded: '<...> I7DGX JN71' (score=17 freq=1208Hz snr=-9)[0m
+[0;32mI (461364) ft8_screen: NEW  call=I7DGX      heard=1 score=17 freq=1208 text='<...> I7DGX JN71'[0m
+[0;32mI (461372) dsp: FT8 br: 41 iters 10496 smp idx=3072/90000  read_avg=24196us work_avg=258us  slow_r=2 slow_w=0[0m
+[0;32mI (462315) ft8_test: slot 35 UTC 1782644535: off=+136ms cap=7573ms stft=5501ms dec=1196ms cand=140 dec=1 skip=0 backlog=0pr drop=0pr timing=+56ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (462389) dsp: FT8 br: 47 iters 12032 smp idx=15104/90000  read_avg=21376us work_avg=269us  slow_r=2 slow_w=0[0m
+[0;32mI (463390) dsp: FT8 br: 46 iters 11776 smp idx=26880/90000  read_avg=21503us work_avg=253us  slow_r=4 slow_w=0[0m
+[0;32mI (464409) dsp: FT8 br: 48 iters 12288 smp idx=39168/90000  read_avg=20981us work_avg=246us  slow_r=2 slow_w=0[0m
+[0;32mI (465423) dsp: FT8 br: 47 iters 12032 smp idx=51200/90000  read_avg=21320us work_avg=254us  slow_r=2 slow_w=0[0m
+[0;32mI (466100) ws: tx 10.0 fps[0m
+[0;32mI (466457) dsp: FT8 br: 48 iters 12288 smp idx=63488/90000  read_avg=21272us work_avg=259us  slow_r=3 slow_w=0[0m
+[0;32mI (467380) cat: background poll PAUSED (TX burst owns the link)[0m
+[0;32mI (467400) cat: background poll resumed[0m
+[0;32mI (467400) cat: QMX RTC time: 11:02:29[0m
+[0;32mI (467469) dsp: FT8 br: 48 iters 12288 smp idx=75776/90000  read_avg=20845us work_avg=246us  slow_r=2 slow_w=0[0m
+[0;32mI (468533) ft8_test: slot 37: waiting for next FT4 boundary...[0m
+[0;32mI (468540) dsp: FT8 br: 47 iters 12032 smp idx=256/90000  read_avg=22540us work_avg=249us  slow_r=2 slow_w=0[0m
+[0;32mI (468878) ft8_test: decoded: 'W1M DL9LA 73' (score=26 freq=1875Hz snr=-5)[0m
+[0;32mI (468878) ft8_screen: UPD  call=DL9LA      heard=3 score=26 freq=1875 text='W1M DL9LA 73'[0m
+[0;32mI (468960) ft8_test: decoded: 'W2GSA G7GEE IO83' (score=11 freq=604Hz snr=-10)[0m
+[0;32mI (468960) ft8_screen: NEW  call=G7GEE      heard=1 score=11 freq=604 text='W2GSA G7GEE IO83'[0m
+[0;32mI (468996) ft8_test: decoded: 'W1M DL9LA 73' (score=11 freq=1875Hz snr=-5)[0m
+[0;32mI (468996) ft8_screen: UPD  call=DL9LA      heard=4 score=11 freq=1875 text='W1M DL9LA 73'[0m
+[0;32mI (469559) dsp: FT8 br: 47 iters 12032 smp idx=12288/90000  read_avg=21418us work_avg=263us  slow_r=5 slow_w=0[0m
+[0;32mI (470272) ft8_test: slot 36 UTC 1782644542: off=+220ms cap=7395ms stft=1089ms dec=1748ms cand=140 dec=3 skip=0 backlog=0pr drop=0pr timing=-820ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (470581) dsp: FT8 br: 47 iters 12032 smp idx=24320/90000  read_avg=21486us work_avg=256us  slow_r=3 slow_w=0[0m
+[0;32mI (471100) ws: tx 10.0 fps[0m
+[0;32mI (471588) dsp: FT8 br: 47 iters 12032 smp idx=36352/90000  read_avg=21175us work_avg=247us  slow_r=3 slow_w=0[0m
+[0;32mI (472590) dsp: FT8 br: 47 iters 12032 smp idx=48384/90000  read_avg=21066us work_avg=254us  slow_r=1 slow_w=0[0m
+[0;32mI (473597) dsp: FT8 br: 47 iters 12032 smp idx=60416/90000  read_avg=21161us work_avg=266us  slow_r=1 slow_w=0[0m
+[0;32mI (474599) dsp: FT8 br: 47 iters 12032 smp idx=72448/90000  read_avg=21046us work_avg=269us  slow_r=4 slow_w=0[0m
+[0;32mI (475610) dsp: FT8 br: 47 iters 12032 smp idx=84480/90000  read_avg=21260us work_avg=249us  slow_r=1 slow_w=0[0m
+[0;32mI (476100) ws: tx 10.0 fps[0m
+[0;32mI (476134) ft8_test: slot 38: waiting for next FT4 boundary...[0m
+[0;32mI (476624) dsp: FT8 br: 40 iters 10240 smp idx=5888/90000  read_avg=25095us work_avg=251us  slow_r=2 slow_w=0[0m
+[0;32mI (477318) ft8_test: slot 37 UTC 1782644550: off=+125ms cap=7591ms stft=5502ms dec=1193ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-820ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (477638) dsp: FT8 br: 48 iters 12288 smp idx=18176/90000  read_avg=20876us work_avg=252us  slow_r=0 slow_w=0[0m
+[0;32mI (478660) dsp: FT8 br: 47 iters 12032 smp idx=30208/90000  read_avg=21493us work_avg=255us  slow_r=2 slow_w=0[0m
+[0;32mI (479680) dsp: FT8 br: 47 iters 12032 smp idx=42240/90000  read_avg=21444us work_avg=252us  slow_r=2 slow_w=0[0m
+[0;32mI (480687) dsp: FT8 br: 47 iters 12032 smp idx=54272/90000  read_avg=21170us work_avg=246us  slow_r=5 slow_w=0[0m
+[0;32mI (481100) ws: tx 10.0 fps[0m
+[0;32mI (481696) dsp: FT8 br: 47 iters 12032 smp idx=66304/90000  read_avg=21207us work_avg=262us  slow_r=1 slow_w=0[0m
+[0;32mI (482715) dsp: FT8 br: 48 iters 12288 smp idx=78592/90000  read_avg=20968us work_avg=264us  slow_r=2 slow_w=0[0m
+[0;32mI (483545) ft8_test: slot 39: waiting for next FT4 boundary...[0m
+[0;32mI (483727) dsp: FT8 br: 42 iters 10752 smp idx=2048/90000  read_avg=23844us work_avg=250us  slow_r=3 slow_w=0[0m
+[0;32mI (483889) ft8_test: decoded: '<...> GB1500M RR73' (score=13 freq=1208Hz snr=-8)[0m
+[0;32mI (483889) ft8_screen: UPD  call=GB1500M    heard=2 score=13 freq=1208 text='<...> GB1500M RR73'[0m
+[0;32mI (484728) dsp: FT8 br: 47 iters 12032 smp idx=14080/90000  read_avg=21049us work_avg=250us  slow_r=2 slow_w=0[0m
+[0;32mI (485256) ft8_test: slot 38 UTC 1782644557: off=+226ms cap=7400ms stft=1095ms dec=1720ms cand=140 dec=1 skip=0 backlog=0pr drop=0pr timing=-94ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (485731) dsp: FT8 br: 46 iters 11776 smp idx=25856/90000  read_avg=21551us work_avg=258us  slow_r=1 slow_w=0[0m
+[0;32mI (486100) ws: tx 10.0 fps[0m
+[0;32mI (486750) dsp: FT8 br: 48 iters 12288 smp idx=38144/90000  read_avg=20946us work_avg=281us  slow_r=3 slow_w=0[0m
+[0;32mI (487543) wifi: online; UTC 2026-06-28 11:02:49[0m
+[0;32mI (487773) dsp: FT8 br: 48 iters 12288 smp idx=50432/90000  read_avg=21051us work_avg=258us  slow_r=2 slow_w=0[0m
+[0;32mI (488778) dsp: FT8 br: 47 iters 12032 smp idx=62464/90000  read_avg=21122us work_avg=259us  slow_r=4 slow_w=0[0m
+[0;32mI (489800) dsp: FT8 br: 47 iters 12032 smp idx=74496/90000  read_avg=21502us work_avg=246us  slow_r=4 slow_w=0[0m
+[0;32mI (490825) dsp: FT8 br: 46 iters 11776 smp idx=86272/90000  read_avg=22028us work_avg=249us  slow_r=4 slow_w=0[0m
+[0;32mI (491100) ws: tx 10.0 fps[0m
+[0;32mI (491186) ft8_test: slot 40: waiting for next FT4 boundary...[0m
+[0;32mI (491416) ft8_test: decoded: 'GB1500M <...> 73' (score=22 freq=1208Hz snr=-12)[0m
+[0;32mI (491416) ft8_screen: NEW  call=<...>      heard=1 score=22 freq=1208 text='GB1500M <...> 73'[0m
+[0;32mI (491424) ft8_test: decoded: 'GB1500M <...> 73' (score=13 freq=1229Hz snr=-9)[0m
+[0;32mI (491430) ft8_screen: UPD  call=<...>      heard=2 score=13 freq=1229 text='GB1500M <...> 73'[0m
+[0;32mI (491838) dsp: FT8 br: 38 iters 9728 smp idx=7680/90000  read_avg=26405us work_avg=250us  slow_r=4 slow_w=0[0m
+[0;32mI (492390) ft8_test: slot 39 UTC 1782644565: off=+137ms cap=7630ms stft=5490ms dec=1214ms cand=140 dec=2 skip=0 backlog=0pr drop=0pr timing=+57ms heap_i=18KB heap_p=24139KB[0m
+[0;32mI (492852) dsp: FT8 br: 48 iters 12288 smp idx=19968/90000  read_avg=20869us work_avg=262us  slow_r=1 slow_w=0[0m
+[0;32mI (493866) dsp: FT8 br: 47 iters 12032 smp idx=32000/90000  read_avg=21322us work_avg=246us  slow_r=3 slow_w=0[0m
+[0;32mI (494885) dsp: FT8 br: 48 iters 12288 smp idx=44288/90000  read_avg=20975us work_avg=250us  slow_r=2 slow_w=0[0m
+[0;32mI (495889) dsp: FT8 br: 46 iters 11776 smp idx=56064/90000  read_avg=21570us work_avg=255us  slow_r=4 slow_w=0[0m
+[0;32mI (496100) ws: tx 10.0 fps[0m
+[0;32mI (496910) dsp: FT8 br: 47 iters 12032 smp idx=68096/90000  read_avg=21480us work_avg=245us  slow_r=4 slow_w=0[0m
+[0;32mI (497921) dsp: FT8 br: 47 iters 12032 smp idx=80128/90000  read_avg=21262us work_avg=248us  slow_r=1 slow_w=0[0m
+[0;32mI (498549) ft8_test: slot 41: waiting for next FT4 boundary...[0m
+[0;32mI (498936) dsp: FT8 br: 43 iters 11008 smp idx=4608/90000  read_avg=23349us work_avg=260us  slow_r=3 slow_w=0[0m
+[0;32mI (499941) dsp: FT8 br: 47 iters 12032 smp idx=16640/90000  read_avg=21121us work_avg=255us  slow_r=1 slow_w=0[0m
+[0;32mI (500272) ft8_test: slot 40 UTC 1782644572: off=+278ms cap=7352ms stft=1103ms dec=1732ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=+57ms heap_i=22KB heap_p=24139KB[0m
+[0;32mI (500956) dsp: FT8 br: 47 iters 12032 smp idx=28672/90000  read_avg=21329us work_avg=255us  slow_r=1 slow_w=0[0m
+[0;32mI (501100) ws: tx 10.0 fps[0m
+[0;32mI (501964) dsp: FT8 br: 46 iters 11776 smp idx=40448/90000  read_avg=21674us work_avg=249us  slow_r=2 slow_w=0[0m
+[0;32mI (502966) dsp: FT8 br: 46 iters 11776 smp idx=52224/90000  read_avg=21528us work_avg=251us  slow_r=3 slow_w=0[0m
+[0;32mI (503968) dsp: FT8 br: 48 iters 12288 smp idx=64512/90000  read_avg=20630us work_avg=250us  slow_r=3 slow_w=0[0m
+[0;32mI (504975) dsp: FT8 br: 46 iters 11776 smp idx=76288/90000  read_avg=21621us work_avg=270us  slow_r=3 slow_w=0[0m
+[0;32mI (505983) dsp: FT8 br: 48 iters 12288 smp idx=88576/90000  read_avg=20741us work_avg=249us  slow_r=1 slow_w=0[0m
+[0;32mI (506100) ws: tx 10.0 fps[0m
+[0;32mI (506152) ft8_test: slot 42: waiting for next FT4 boundary...[0m
+[0;32mI (506993) dsp: FT8 br: 39 iters 9984 smp idx=9984/90000  read_avg=25649us work_avg=260us  slow_r=2 slow_w=0[0m
+[0;32mI (507328) ft8_test: slot 41 UTC 1782644580: off=+141ms cap=7592ms stft=5502ms dec=1186ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=+57ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (508012) dsp: FT8 br: 48 iters 12288 smp idx=22272/90000  read_avg=20958us work_avg=267us  slow_r=3 slow_w=0[0m
+[0;32mI (509036) dsp: FT8 br: 47 iters 12032 smp idx=34304/90000  read_avg=21538us work_avg=248us  slow_r=3 slow_w=0[0m
+[0;32mI (510051) dsp: FT8 br: 48 iters 12288 smp idx=46592/90000  read_avg=20884us work_avg=258us  slow_r=2 slow_w=0[0m
+[0;32mI (511063) dsp: FT8 br: 47 iters 12032 smp idx=58624/90000  read_avg=21275us work_avg=263us  slow_r=1 slow_w=0[0m
+[0;32mI (511101) ws: tx 10.0 fps[0m
+[0;32mI (512067) dsp: FT8 br: 48 iters 12288 smp idx=70912/90000  read_avg=20669us work_avg=243us  slow_r=1 slow_w=0[0m
+[0;32mI (513081) dsp: FT8 br: 47 iters 12032 smp idx=82944/90000  read_avg=21324us work_avg=249us  slow_r=2 slow_w=0[0m
+[0;32mI (513544) ft8_test: slot 43: waiting for next FT4 boundary...[0m
+[0;32mI (513905) ft8_test: decoded: 'DL1BJL G4CFS +01' (score=12 freq=2521Hz snr=-8)[0m
+[0;32mI (513906) ft8_screen: NEW  call=G4CFS      heard=1 score=12 freq=2521 text='DL1BJL G4CFS +01'[0m
+[0;32mI (514095) dsp: FT8 br: 45 iters 11520 smp idx=6656/90000  read_avg=22279us work_avg=254us  slow_r=3 slow_w=0[0m
+[0;32mI (515101) dsp: FT8 br: 46 iters 11776 smp idx=18432/90000  read_avg=21619us work_avg=251us  slow_r=2 slow_w=0[0m
+[0;32mI (515235) ft8_test: slot 42 UTC 1782644587: off=+244ms cap=7381ms stft=1102ms dec=1700ms cand=140 dec=1 skip=0 backlog=0pr drop=0pr timing=-316ms heap_i=22KB heap_p=24139KB[0m
+[0;32mI (516118) dsp: FT8 br: 47 iters 12032 smp idx=30464/90000  read_avg=21375us work_avg=267us  slow_r=2 slow_w=0[0m
+[0;32mI (516200) ws: tx 10.0 fps[0m
+[0;32mI (517122) dsp: FT8 br: 47 iters 12032 smp idx=42496/90000  read_avg=21101us work_avg=255us  slow_r=2 slow_w=0[0m
+[0;32mI (517543) wifi: online; UTC 2026-06-28 11:03:19[0m
+[0;32mI (518123) dsp: FT8 br: 47 iters 12032 smp idx=54528/90000  read_avg=21050us work_avg=248us  slow_r=4 slow_w=0[0m
+[0;32mI (519134) dsp: FT8 br: 46 iters 11776 smp idx=66304/90000  read_avg=21727us work_avg=250us  slow_r=2 slow_w=0[0m
+[0;32mI (520147) dsp: FT8 br: 48 iters 12288 smp idx=78592/90000  read_avg=20834us work_avg=276us  slow_r=1 slow_w=0[0m
+[0;32mI (521145) ft8_test: slot 44: waiting for next FT4 boundary...[0m
+[0;32mI (521155) dsp: FT8 br: 41 iters 10496 smp idx=256/90000  read_avg=24311us work_avg=256us  slow_r=2 slow_w=0[0m
+[0;32mI (521200) ws: tx 10.0 fps[0m
+[0;32mI (522158) dsp: FT8 br: 46 iters 11776 smp idx=12032/90000  read_avg=21532us work_avg=270us  slow_r=3 slow_w=0[0m
+[0;32mI (522359) ft8_test: slot 43 UTC 1782644595: off=+136ms cap=7591ms stft=5477ms dec=1223ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-316ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (523168) dsp: FT8 br: 48 iters 12288 smp idx=24320/90000  read_avg=20800us work_avg=248us  slow_r=2 slow_w=0[0m
+[0;32mI (524177) dsp: FT8 br: 47 iters 12032 smp idx=36352/90000  read_avg=21212us work_avg=256us  slow_r=1 slow_w=0[0m
+[0;32mI (525188) dsp: FT8 br: 47 iters 12032 smp idx=48384/90000  read_avg=21255us work_avg=252us  slow_r=2 slow_w=0[0m
+[0;32mI (526200) ws: tx 10.0 fps[0m
+[0;32mI (526207) dsp: FT8 br: 47 iters 12032 smp idx=60416/90000  read_avg=21431us work_avg=249us  slow_r=1 slow_w=0[0m
+[0;32mI (527233) dsp: FT8 br: 48 iters 12288 smp idx=72704/90000  read_avg=21114us work_avg=258us  slow_r=0 slow_w=0[0m
+[0;32mI (528242) dsp: FT8 br: 47 iters 12032 smp idx=84736/90000  read_avg=21222us work_avg=247us  slow_r=2 slow_w=0[0m
+[0;32mI (528534) ft8_test: slot 45: waiting for next FT4 boundary...[0m
+[0;32mI (528883) ft8_test: decoded: 'DL1BJL G4CFS +01' (score=21 freq=2521Hz snr=-10)[0m
+[0;32mI (528883) ft8_screen: UPD  call=G4CFS      heard=2 score=21 freq=2521 text='DL1BJL G4CFS +01'[0m
+[0;32mI (529265) dsp: FT8 br: 46 iters 11776 smp idx=8960/90000  read_avg=21989us work_avg=249us  slow_r=3 slow_w=0[0m
+[0;32mI (530266) ft8_test: slot 44 UTC 1782644602: off=+237ms cap=7378ms stft=1080ms dec=1741ms cand=140 dec=1 skip=0 backlog=0pr drop=0pr timing=-323ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (530286) dsp: FT8 br: 47 iters 12032 smp idx=20992/90000  read_avg=21464us work_avg=258us  slow_r=3 slow_w=0[0m
+[0;32mI (531200) ws: tx 10.0 fps[0m
+[0;32mI (531307) dsp: FT8 br: 47 iters 12032 smp idx=33024/90000  read_avg=21476us work_avg=248us  slow_r=3 slow_w=0[0m
+[0;32mI (532316) dsp: FT8 br: 48 iters 12288 smp idx=45312/90000  read_avg=20755us work_avg=265us  slow_r=2 slow_w=0[0m
+[0;32mI (533341) dsp: FT8 br: 48 iters 12288 smp idx=57600/90000  read_avg=21104us work_avg=250us  slow_r=1 slow_w=0[0m
+[0;32mI (534359) dsp: FT8 br: 47 iters 12032 smp idx=69632/90000  read_avg=21406us work_avg=253us  slow_r=2 slow_w=0[0m
+[0;32mI (535377) dsp: FT8 br: 47 iters 12032 smp idx=81664/90000  read_avg=21411us work_avg=248us  slow_r=4 slow_w=0[0m
+[0;32mI (536125) ft8_test: slot 46: waiting for next FT4 boundary...[0m
+[0;32mI (536200) ws: tx 10.0 fps[0m
+[0;32mI (536360) ft8_test: decoded: 'CQ FD RZ1OA LP04' (score=18 freq=813Hz snr=-4)[0m
+[0;32mI (536360) ft8_screen: NEW  call=RZ1OA      heard=1 score=18 freq=813 text='CQ FD RZ1OA LP04'[0m
+[0;32mI (536378) dsp: FT8 br: 40 iters 10240 smp idx=3072/90000  read_avg=24757us work_avg=265us  slow_r=5 slow_w=0[0m
+[0;32mI (536404) ft8_test: decoded: 'CQ FD RZ1OA LP04' (score=13 freq=813Hz snr=-4)[0m
+[0;32mI (536404) ft8_screen: UPD  call=RZ1OA      heard=2 score=13 freq=813 text='CQ FD RZ1OA LP04'[0m
+[0;32mI (537314) ft8_test: slot 45 UTC 1782644610: off=+126ms cap=7581ms stft=5514ms dec=1198ms cand=140 dec=2 skip=0 backlog=0pr drop=0pr timing=-274ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (537384) dsp: FT8 br: 47 iters 12032 smp idx=15104/90000  read_avg=21140us work_avg=251us  slow_r=4 slow_w=0[0m
+[0;32mI (538409) dsp: FT8 br: 49 iters 12544 smp idx=27648/90000  read_avg=20668us work_avg=255us  slow_r=3 slow_w=0[0m
+[0;32mI (539413) dsp: FT8 br: 47 iters 12032 smp idx=39680/90000  read_avg=21118us work_avg=246us  slow_r=4 slow_w=0[0m
+[0;32mI (540425) dsp: FT8 br: 47 iters 12032 smp idx=51712/90000  read_avg=21282us work_avg=256us  slow_r=2 slow_w=0[0m
+[0;32mI (541200) ws: tx 10.0 fps[0m
+[0;32mI (541455) dsp: FT8 br: 47 iters 12032 smp idx=63744/90000  read_avg=21659us work_avg=250us  slow_r=4 slow_w=0[0m
+[0;32mI (542461) dsp: FT8 br: 48 iters 12288 smp idx=76032/90000  read_avg=20706us work_avg=256us  slow_r=3 slow_w=0[0m
+[0;32mI (543466) dsp: FT8 br: 47 iters 12032 smp idx=88064/90000  read_avg=21114us work_avg=267us  slow_r=2 slow_w=0[0m
+[0;32mI (543531) ft8_test: slot 47: waiting for next FT4 boundary...[0m
+[0;32mI (543840) ft8_test: decoded: 'DL1BJL G4CFS +01' (score=18 freq=2521Hz snr=-5)[0m
+[0;32mI (543840) ft8_test: decoded: 'DL1BJL G4CFS +01' (score=22 freq=2521Hz snr=-5)[0m
+[0;32mI (543840) ft8_screen: UPD  call=G4CFS      heard=3 score=18 freq=2521 text='DL1BJL G4CFS +01'[0m
+[0;32mI (543860) ft8_screen: UPD  call=G4CFS      heard=4 score=22 freq=2521 text='DL1BJL G4CFS +01'[0m
+[0;32mI (543869) ft8_test: decoded: 'CQ GB1500M' (score=18 freq=1208Hz snr=-8)[0m
+[0;32mI (543874) ft8_screen: NEW  call=GB1500M    heard=1 score=18 freq=1208 text='CQ GB1500M'[0m
+[0;32mI (543930) ft8_test: decoded: 'CQ GB1500M' (score=12 freq=1229Hz snr=-6)[0m
+[0;32mI (543930) ft8_screen: UPD  call=GB1500M    heard=2 score=12 freq=1229 text='CQ GB1500M'[0m
+[0;32mI (544479) dsp: FT8 br: 44 iters 11264 smp idx=11264/90000  read_avg=22749us work_avg=259us  slow_r=1 slow_w=0[0m
+[0;32mI (545241) ft8_test: slot 46 UTC 1782644617: off=+217ms cap=7395ms stft=1082ms dec=1719ms cand=140 dec=4 skip=0 backlog=0pr drop=0pr timing=-103ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (545494) dsp: FT8 br: 48 iters 12288 smp idx=23552/90000  read_avg=20897us work_avg=254us  slow_r=2 slow_w=0[0m
+[0;32mI (546200) ws: tx 10.0 fps[0m
+[0;32mI (546507) dsp: FT8 br: 47 iters 12032 smp idx=35584/90000  read_avg=21296us work_avg=256us  slow_r=1 slow_w=0[0m
+[0;32mI (547532) dsp: FT8 br: 48 iters 12288 smp idx=47872/90000  read_avg=21112us work_avg=249us  slow_r=4 slow_w=0[0m
+[0;32mI (547543) wifi: online; UTC 2026-06-28 11:03:49[0m
+[0;32mI (548553) dsp: FT8 br: 48 iters 12288 smp idx=60160/90000  read_avg=20974us work_avg=294us  slow_r=1 slow_w=0[0m
+[0;32mI (549585) dsp: FT8 br: 48 iters 12288 smp idx=72448/90000  read_avg=21241us work_avg=252us  slow_r=3 slow_w=0[0m
+[0;32mI (550597) dsp: FT8 br: 48 iters 12288 smp idx=84736/90000  read_avg=20841us work_avg=249us  slow_r=1 slow_w=0[0m
+[0;32mI (551113) ft8_test: slot 48: waiting for next FT4 boundary...[0m
+[0;32mI (551200) ws: tx 10.0 fps[0m
+[0;32mI (551623) dsp: FT8 br: 42 iters 10752 smp idx=6144/90000  read_avg=24174us work_avg=248us  slow_r=2 slow_w=0[0m
+[0;32mI (552304) ft8_test: slot 47 UTC 1782644625: off=+123ms cap=7571ms stft=5497ms dec=1200ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-103ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (552643) dsp: FT8 br: 48 iters 12288 smp idx=18432/90000  read_avg=20989us work_avg=252us  slow_r=3 slow_w=0[0m
+[0;32mI (553652) dsp: FT8 br: 48 iters 12288 smp idx=30720/90000  read_avg=20762us work_avg=258us  slow_r=1 slow_w=0[0m
+[0;32mI (554654) dsp: FT8 br: 46 iters 11776 smp idx=42496/90000  read_avg=21548us work_avg=246us  slow_r=0 slow_w=0[0m
+[0;32mI (555664) dsp: FT8 br: 48 iters 12288 smp idx=54784/90000  read_avg=20781us work_avg=260us  slow_r=2 slow_w=0[0m
+[0;32mI (556200) ws: tx 10.0 fps[0m
+[0;32mI (556669) dsp: FT8 br: 47 iters 12032 smp idx=66816/90000  read_avg=21116us work_avg=255us  slow_r=0 slow_w=0[0m
+[0;32mI (557674) dsp: FT8 br: 46 iters 11776 smp idx=78592/90000  read_avg=21602us work_avg=249us  slow_r=3 slow_w=0[0m
+[0;32mI (558538) ft8_test: slot 49: waiting for next FT4 boundary...[0m
+[0;32mI (558682) dsp: FT8 br: 44 iters 11264 smp idx=1792/90000  read_avg=22661us work_avg=245us  slow_r=1 slow_w=0[0m
+[0;32mI (558866) ft8_test: decoded: 'CQ G8BKE IO90' (score=19 freq=1042Hz snr=-10)[0m
+[0;32mI (558866) ft8_screen: NEW  call=G8BKE      heard=1 score=19 freq=1042 text='CQ G8BKE IO90'[0m
+[0;32mI (558867) ft8_test: decoded: 'DL1BJL G4CFS RR73' (score=22 freq=2521Hz snr=-5)[0m
+[0;32mI (558873) ft8_test: decoded: 'DL1BJL G4CFS RR73' (score=15 freq=2521Hz snr=-4)[0m
+[0;32mI (558880) ft8_screen: UPD  call=G4CFS      heard=5 score=22 freq=2521 text='DL1BJL G4CFS RR73'[0m
+[0;32mI (558897) ft8_screen: UPD  call=G4CFS      heard=6 score=15 freq=2521 text='DL1BJL G4CFS RR73'[0m
+[0;32mI (558903) ft8_test: decoded: 'DL1BJL G4CFS RR73' (score=18 freq=2521Hz snr=-5)[0m
+[0;32mI (558909) ft8_test: decoded: 'CQ GB1500M' (score=14 freq=1229Hz snr=-9)[0m
+[0;32mI (558915) ft8_screen: UPD  call=G4CFS      heard=7 score=18 freq=2521 text='DL1BJL G4CFS RR73'[0m
+[0;32mI (558955) ft8_screen: UPD  call=GB1500M    heard=3 score=14 freq=1229 text='CQ GB1500M'[0m
+[0;32mI (558975) ft8_test: decoded: 'CQ GB1500M' (score=14 freq=1208Hz snr=-10)[0m
+[0;32mI (558975) ft8_screen: UPD  call=GB1500M    heard=4 score=14 freq=1208 text='CQ GB1500M'[0m
+[0;32mI (559694) dsp: FT8 br: 47 iters 12032 smp idx=13824/90000  read_avg=21280us work_avg=254us  slow_r=1 slow_w=0[0m
+[0;32mI (560310) ft8_test: slot 48 UTC 1782644632: off=+206ms cap=7413ms stft=1095ms dec=1782ms cand=140 dec=6 skip=0 backlog=0pr drop=0pr timing=-167ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (560706) dsp: FT8 br: 47 iters 12032 smp idx=25856/90000  read_avg=21274us work_avg=257us  slow_r=3 slow_w=0[0m
+[0;32mI (561200) ws: tx 10.0 fps[0m
+[0;32mI (561710) dsp: FT8 br: 47 iters 12032 smp idx=37888/90000  read_avg=21106us work_avg=254us  slow_r=0 slow_w=0[0m
+[0;32mI (562714) dsp: FT8 br: 47 iters 12032 smp idx=49920/90000  read_avg=21120us work_avg=246us  slow_r=2 slow_w=0[0m
+[0;32mI (563716) dsp: FT8 br: 46 iters 11776 smp idx=61696/90000  read_avg=21529us work_avg=246us  slow_r=2 slow_w=0[0m
+[0;32mI (564717) dsp: FT8 br: 47 iters 12032 smp idx=73728/90000  read_avg=21053us work_avg=245us  slow_r=4 slow_w=0[0m
+[0;32mI (565728) dsp: FT8 br: 47 iters 12032 smp idx=85760/90000  read_avg=21250us work_avg=258us  slow_r=2 slow_w=0[0m
+[0;32mI (566141) ft8_test: slot 50: waiting for next FT4 boundary...[0m
+[0;32mI (566200) ws: tx 10.0 fps[0m
+[0;32mI (566743) dsp: FT8 br: 42 iters 10752 smp idx=7424/90000  read_avg=23913us work_avg=253us  slow_r=3 slow_w=0[0m
+[0;32mI (567331) ft8_test: slot 49 UTC 1782644640: off=+130ms cap=7592ms stft=5490ms dec=1199ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-167ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (567748) dsp: FT8 br: 47 iters 12032 smp idx=19456/90000  read_avg=21098us work_avg=277us  slow_r=0 slow_w=0[0m
+[0;32mI (568761) dsp: FT8 br: 47 iters 12032 smp idx=31488/90000  read_avg=21302us work_avg=259us  slow_r=3 slow_w=0[0m
+[0;32mI (569774) dsp: FT8 br: 47 iters 12032 smp idx=43520/90000  read_avg=21296us work_avg=255us  slow_r=2 slow_w=0[0m
+[0;32mI (570781) dsp: FT8 br: 47 iters 12032 smp idx=55552/90000  read_avg=21168us work_avg=256us  slow_r=2 slow_w=0[0m
+[0;32mI (571200) ws: tx 10.0 fps[0m
+[0;32mI (571790) dsp: FT8 br: 47 iters 12032 smp idx=67584/90000  read_avg=21207us work_avg=259us  slow_r=2 slow_w=0[0m
+[0;32mI (572815) dsp: FT8 br: 48 iters 12288 smp idx=79872/90000  read_avg=21105us work_avg=251us  slow_r=2 slow_w=0[0m
+[0;32mI (573541) ft8_test: slot 51: waiting for next FT4 boundary...[0m
+[0;32mI (573826) dsp: FT8 br: 43 iters 11008 smp idx=3328/90000  read_avg=23242us work_avg=271us  slow_r=2 slow_w=0[0m
+[0;32mI (573858) ft8_test: decoded: 'CQ G8BKE IO90' (score=17 freq=1042Hz snr=-8)[0m
+[0;32mI (573859) ft8_screen: UPD  call=G8BKE      heard=2 score=17 freq=1042 text='CQ G8BKE IO90'[0m
+[0;32mI (574858) dsp: FT8 br: 48 iters 12288 smp idx=15616/90000  read_avg=21234us work_avg=253us  slow_r=3 slow_w=0[0m
+[0;32mI (575254) ft8_test: slot 50 UTC 1782644647: off=+233ms cap=7389ms stft=1102ms dec=1723ms cand=140 dec=1 skip=0 backlog=0pr drop=0pr timing=-807ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (575861) dsp: FT8 br: 48 iters 12288 smp idx=27904/90000  read_avg=20639us work_avg=263us  slow_r=0 slow_w=0[0m
+[0;32mI (576200) ws: tx 10.0 fps[0m
+[0;32mI (576873) dsp: FT8 br: 47 iters 12032 smp idx=39936/90000  read_avg=21264us work_avg=270us  slow_r=2 slow_w=0[0m
+[0;32mI (577546) wifi: online; UTC 2026-06-28 11:04:19[0m
+[0;32mI (577896) dsp: FT8 br: 47 iters 12032 smp idx=51968/90000  read_avg=21511us work_avg=250us  slow_r=2 slow_w=0[0m
+[0;32mI (578899) dsp: FT8 br: 47 iters 12032 smp idx=64000/90000  read_avg=21080us work_avg=254us  slow_r=4 slow_w=0[0m
+[0;32mI (579905) dsp: FT8 br: 48 iters 12288 smp idx=76288/90000  read_avg=20717us work_avg=247us  slow_r=0 slow_w=0[0m
+[0;32mI (580919) dsp: FT8 br: 46 iters 11776 smp idx=88064/90000  read_avg=21794us work_avg=248us  slow_r=2 slow_w=0[0m
+[0;32mI (581130) ft8_test: slot 52: waiting for next FT4 boundary...[0m
+[0;32mI (581200) ws: tx 10.0 fps[0m
+[0;32mI (581937) dsp: FT8 br: 42 iters 10752 smp idx=9984/90000  read_avg=23978us work_avg=261us  slow_r=4 slow_w=0[0m
+[0;32mI (582324) ft8_test: slot 51 UTC 1782644655: off=+133ms cap=7578ms stft=5483ms dec=1203ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-807ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (582939) dsp: FT8 br: 46 iters 11776 smp idx=21760/90000  read_avg=21519us work_avg=259us  slow_r=0 slow_w=0[0m
+[0;32mI (583954) dsp: FT8 br: 47 iters 12032 smp idx=33792/90000  read_avg=21359us work_avg=246us  slow_r=1 slow_w=0[0m
+[0;32mI (584966) dsp: FT8 br: 47 iters 12032 smp idx=45824/90000  read_avg=21279us work_avg=245us  slow_r=2 slow_w=0[0m
+[0;32mI (585973) dsp: FT8 br: 46 iters 11776 smp idx=57600/90000  read_avg=21636us work_avg=256us  slow_r=3 slow_w=0[0m
+[0;32mI (586200) ws: tx 10.0 fps[0m
+[0;32mI (586990) dsp: FT8 br: 48 iters 12288 smp idx=69888/90000  read_avg=20932us work_avg=249us  slow_r=3 slow_w=0[0m
+[0;32mI (587996) dsp: FT8 br: 46 iters 11776 smp idx=81664/90000  read_avg=21611us work_avg=257us  slow_r=1 slow_w=0[0m
+[0;32mI (588544) ft8_test: slot 53: waiting for next FT4 boundary...[0m
+[0;32mI (589008) dsp: FT8 br: 45 iters 11520 smp idx=5632/90000  read_avg=22231us work_avg=248us  slow_r=2 slow_w=0[0m
+[0;32mI (590019) dsp: FT8 br: 46 iters 11776 smp idx=17408/90000  read_avg=21709us work_avg=277us  slow_r=2 slow_w=0[0m
+[0;32mI (590242) ft8_test: slot 52 UTC 1782644662: off=+222ms cap=7403ms stft=1093ms dec=1708ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-807ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (591021) dsp: FT8 br: 47 iters 12032 smp idx=29440/90000  read_avg=21074us work_avg=247us  slow_r=3 slow_w=0[0m
+[0;32mI (591202) ws: tx 10.0 fps[0m
+[0;32mI (592038) dsp: FT8 br: 47 iters 12032 smp idx=41472/90000  read_avg=21377us work_avg=258us  slow_r=5 slow_w=0[0m
+[0;32mI (593041) dsp: FT8 br: 47 iters 12032 smp idx=53504/90000  read_avg=21088us work_avg=255us  slow_r=5 slow_w=0[0m
+[0;32mI (594059) dsp: FT8 br: 47 iters 12032 smp idx=65536/90000  read_avg=21400us work_avg=249us  slow_r=2 slow_w=0[0m
+[0;32mI (595076) dsp: FT8 br: 48 iters 12288 smp idx=77824/90000  read_avg=20923us work_avg=275us  slow_r=2 slow_w=0[0m
+[0;32mI (596133) ft8_test: slot 54: waiting for next FT4 boundary...[0m
+[0;32mI (596134) dsp: FT8 br: 44 iters 11264 smp idx=256/90000  read_avg=23787us work_avg=251us  slow_r=2 slow_w=0[0m
+[0;32mI (596300) ws: tx 10.0 fps[0m
+[0;32mI (597160) dsp: FT8 br: 48 iters 12288 smp idx=12544/90000  read_avg=21130us work_avg=253us  slow_r=1 slow_w=0[0m
+[0;32mI (597323) ft8_test: slot 53 UTC 1782644670: off=+136ms cap=7578ms stft=5496ms dec=1200ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-807ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (598165) dsp: FT8 br: 46 iters 11776 smp idx=24320/90000  read_avg=21583us work_avg=256us  slow_r=1 slow_w=0[0m
+[0;32mI (599167) dsp: FT8 br: 47 iters 12032 smp idx=36352/90000  read_avg=21059us work_avg=260us  slow_r=0 slow_w=0[0m
+[0;32mI (600180) dsp: FT8 br: 47 iters 12032 smp idx=48384/90000  read_avg=21289us work_avg=261us  slow_r=1 slow_w=0[0m
+[0;32mI (601188) dsp: FT8 br: 47 iters 12032 smp idx=60416/90000  read_avg=21185us work_avg=262us  slow_r=1 slow_w=0[0m
+[0;32mI (601300) ws: tx 10.0 fps[0m
+[0;32mI (602196) dsp: FT8 br: 47 iters 12032 smp idx=72448/90000  read_avg=21197us work_avg=246us  slow_r=4 slow_w=0[0m
+[0;32mI (603220) dsp: FT8 br: 46 iters 11776 smp idx=84224/90000  read_avg=22017us work_avg=246us  slow_r=6 slow_w=0[0m
+[0;32mI (603537) ft8_test: slot 55: waiting for next FT4 boundary...[0m
+[0;32mI (604237) dsp: FT8 br: 46 iters 11776 smp idx=8704/90000  read_avg=21862us work_avg=249us  slow_r=4 slow_w=0[0m
+[0;32mI (605242) dsp: FT8 br: 47 iters 12032 smp idx=20736/90000  read_avg=21123us work_avg=261us  slow_r=0 slow_w=0[0m
+[0;32mI (605280) ft8_test: slot 54 UTC 1782644677: off=+225ms cap=7393ms stft=1089ms dec=1752ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-807ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (606243) dsp: FT8 br: 46 iters 11776 smp idx=32512/90000  read_avg=21488us work_avg=267us  slow_r=3 slow_w=0[0m
+[0;32mI (606300) ws: tx 10.0 fps[0m
+[0;32mI (607249) dsp: FT8 br: 47 iters 12032 smp idx=44544/90000  read_avg=21154us work_avg=255us  slow_r=0 slow_w=0[0m
+[0;32mI (607547) wifi: online; UTC 2026-06-28 11:04:49[0m
+[0;32mI (608259) dsp: FT8 br: 47 iters 12032 smp idx=56576/90000  read_avg=21233us work_avg=250us  slow_r=3 slow_w=0[0m
+[0;32mI (609264) dsp: FT8 br: 47 iters 12032 smp idx=68608/90000  read_avg=21131us work_avg=252us  slow_r=1 slow_w=0[0m
+[0;32mI (610266) dsp: FT8 br: 47 iters 12032 smp idx=80640/90000  read_avg=21070us work_avg=251us  slow_r=3 slow_w=0[0m
+[0;32mI (611133) ft8_test: slot 56: waiting for next FT4 boundary...[0m
+[0;32mI (611275) dsp: FT8 br: 41 iters 10496 smp idx=1792/90000  read_avg=24348us work_avg=256us  slow_r=2 slow_w=0[0m
+[0;32mI (611300) ws: tx 10.0 fps[0m
+[0;32mI (612293) dsp: FT8 br: 47 iters 12032 smp idx=13824/90000  read_avg=21390us work_avg=268us  slow_r=1 slow_w=0[0m
+[0;32mI (612322) ft8_test: slot 55 UTC 1782644685: off=+129ms cap=7585ms stft=5530ms dec=1199ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-807ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (613313) dsp: FT8 br: 48 iters 12288 smp idx=26112/90000  read_avg=20976us work_avg=273us  slow_r=2 slow_w=0[0m
+[0;32mI (614321) dsp: FT8 br: 47 iters 12032 smp idx=38144/90000  read_avg=21199us work_avg=249us  slow_r=1 slow_w=0[0m
+[0;32mI (615346) dsp: FT8 br: 48 iters 12288 smp idx=50432/90000  read_avg=21104us work_avg=253us  slow_r=2 slow_w=0[0m
+[0;32mI (616300) ws: tx 10.0 fps[0m
+[0;32mI (616361) dsp: FT8 br: 47 iters 12032 smp idx=62464/90000  read_avg=21314us work_avg=276us  slow_r=2 slow_w=0[0m
+[0;32mI (617386) dsp: FT8 br: 48 iters 12288 smp idx=74752/90000  read_avg=21094us work_avg=264us  slow_r=2 slow_w=0[0m
+[0;32mI (618390) dsp: FT8 br: 46 iters 11776 smp idx=86528/90000  read_avg=21566us work_avg=254us  slow_r=2 slow_w=0[0m
+[0;32mI (618539) ft8_test: slot 57: waiting for next FT4 boundary...[0m
+[0;32mI (619393) dsp: FT8 br: 44 iters 11264 smp idx=10240/90000  read_avg=22533us work_avg=261us  slow_r=2 slow_w=0[0m
+[0;32mI (620251) ft8_test: slot 56 UTC 1782644692: off=+225ms cap=7396ms stft=1090ms dec=1721ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-807ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (620404) dsp: FT8 br: 47 iters 12032 smp idx=22272/90000  read_avg=21264us work_avg=249us  slow_r=1 slow_w=0[0m
+[0;32mI (621300) ws: tx 10.0 fps[0m
+[0;32mI (621424) dsp: FT8 br: 48 iters 12288 smp idx=34560/90000  read_avg=20998us work_avg=246us  slow_r=2 slow_w=0[0m
+[0;32mI (622426) dsp: FT8 br: 45 iters 11520 smp idx=46080/90000  read_avg=22014us work_avg=251us  slow_r=2 slow_w=0[0m
+[0;32mI (623429) dsp: FT8 br: 47 iters 12032 smp idx=58112/90000  read_avg=21093us work_avg=249us  slow_r=2 slow_w=0[0m
+[0;32mI (624438) dsp: FT8 br: 47 iters 12032 smp idx=70144/90000  read_avg=21216us work_avg=251us  slow_r=3 slow_w=0[0m
+[0;32mI (625454) dsp: FT8 br: 47 iters 12032 smp idx=82176/90000  read_avg=21374us work_avg=247us  slow_r=1 slow_w=0[0m
+[0;32mI (626161) ft8_test: slot 58: waiting for next FT4 boundary...[0m
+[0;32mI (626300) ws: tx 10.0 fps[0m
+[0;32mI (626463) dsp: FT8 br: 39 iters 9984 smp idx=3584/90000  read_avg=25612us work_avg=252us  slow_r=3 slow_w=0[0m
+[0;32mI (627329) ft8_test: slot 57 UTC 1782644700: off=+131ms cap=7611ms stft=5498ms dec=1178ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-807ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (627482) dsp: FT8 br: 47 iters 12032 smp idx=15616/90000  read_avg=21401us work_avg=280us  slow_r=5 slow_w=0[0m
+[0;32mI (628496) dsp: FT8 br: 48 iters 12288 smp idx=27904/90000  read_avg=20872us work_avg=250us  slow_r=2 slow_w=0[0m
+[0;32mI (629513) dsp: FT8 br: 47 iters 12032 smp idx=39936/90000  read_avg=21373us work_avg=265us  slow_r=3 slow_w=0[0m
+[0;32mI (630537) dsp: FT8 br: 48 iters 12288 smp idx=52224/90000  read_avg=21080us work_avg=257us  slow_r=1 slow_w=0[0m
+[0;32mI (631300) ws: tx 10.0 fps[0m
+[0;32mI (631538) dsp: FT8 br: 46 iters 11776 smp idx=64000/90000  read_avg=21509us work_avg=250us  slow_r=1 slow_w=0[0m
+[0;32mI (632541) dsp: FT8 br: 47 iters 12032 smp idx=76032/90000  read_avg=21090us work_avg=245us  slow_r=4 slow_w=0[0m
+[0;32mI (633540) ft8_test: slot 59: waiting for next FT4 boundary...[0m
+[0;32mI (633562) dsp: FT8 br: 45 iters 11520 smp idx=256/90000  read_avg=22429us work_avg=253us  slow_r=3 slow_w=0[0m
+[0;32mI (634576) dsp: FT8 br: 46 iters 11776 smp idx=12032/90000  read_avg=21786us work_avg=265us  slow_r=4 slow_w=0[0m
+[0;32mI (635242) ft8_test: slot 58 UTC 1782644707: off=+253ms cap=7368ms stft=1092ms dec=1711ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-807ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (635595) dsp: FT8 br: 47 iters 12032 smp idx=24064/90000  read_avg=21410us work_avg=255us  slow_r=3 slow_w=0[0m
+[0;32mI (636300) ws: tx 10.0 fps[0m
+[0;32mI (636596) dsp: FT8 br: 46 iters 11776 smp idx=35840/90000  read_avg=21520us work_avg=252us  slow_r=4 slow_w=0[0m
+[0;32mI (637547) wifi: online; UTC 2026-06-28 11:05:19[0m
+[0;32mI (637614) dsp: FT8 br: 48 iters 12288 smp idx=48128/90000  read_avg=20949us work_avg=256us  slow_r=2 slow_w=0[0m
+[0;32mI (638628) dsp: FT8 br: 47 iters 12032 smp idx=60160/90000  read_avg=21327us work_avg=248us  slow_r=2 slow_w=0[0m
+[0;32mI (639644) dsp: FT8 br: 47 iters 12032 smp idx=72192/90000  read_avg=21363us work_avg=252us  slow_r=2 slow_w=0[0m
+[0;32mI (640671) dsp: FT8 br: 48 iters 12288 smp idx=84480/90000  read_avg=21123us work_avg=272us  slow_r=0 slow_w=0[0m
+[0;32mI (641172) ft8_test: slot 60: waiting for next FT4 boundary...[0m
+[0;32mI (641300) ws: tx 10.0 fps[0m
+[0;32mI (641682) dsp: FT8 br: 39 iters 9984 smp idx=6144/90000  read_avg=25674us work_avg=249us  slow_r=4 slow_w=0[0m
+[0;32mI (642357) ft8_test: slot 59 UTC 1782644715: off=+132ms cap=7620ms stft=5473ms dec=1196ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-807ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (642706) dsp: FT8 br: 48 iters 12288 smp idx=18432/90000  read_avg=21088us work_avg=251us  slow_r=3 slow_w=0[0m
+[0;32mI (643714) dsp: FT8 br: 46 iters 11776 smp idx=30208/90000  read_avg=21662us work_avg=251us  slow_r=0 slow_w=0[0m
+[0;32mI (644736) dsp: FT8 br: 47 iters 12032 smp idx=42240/90000  read_avg=21465us work_avg=270us  slow_r=2 slow_w=0[0m
+[0;32mI (645743) dsp: FT8 br: 47 iters 12032 smp idx=54272/90000  read_avg=21165us work_avg=260us  slow_r=0 slow_w=0[0m
+[0;32mI (646300) ws: tx 10.0 fps[0m
+[0;32mI (646746) dsp: FT8 br: 46 iters 11776 smp idx=66048/90000  read_avg=21562us work_avg=250us  slow_r=1 slow_w=0[0m
+[0;32mI (647765) dsp: FT8 br: 47 iters 12032 smp idx=78080/90000  read_avg=21419us work_avg=247us  slow_r=4 slow_w=0[0m
+[0;32mI (648552) ft8_test: slot 61: waiting for next FT4 boundary...[0m
+[0;32mI (648790) dsp: FT8 br: 43 iters 11008 smp idx=2816/90000  read_avg=23600us work_avg=247us  slow_r=5 slow_w=0[0m
+[0;32mI (649790) dsp: FT8 br: 47 iters 12032 smp idx=14848/90000  read_avg=21028us work_avg=252us  slow_r=1 slow_w=0[0m
+[0;32mI (650256) ft8_test: slot 60 UTC 1782644722: off=+264ms cap=7368ms stft=1090ms dec=1715ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-807ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (650799) dsp: FT8 br: 47 iters 12032 smp idx=26880/90000  read_avg=21198us work_avg=266us  slow_r=1 slow_w=0[0m
+[0;32mI (651300) ws: tx 10.0 fps[0m
+[0;32mI (651805) dsp: FT8 br: 47 iters 12032 smp idx=38912/90000  read_avg=21143us work_avg=254us  slow_r=0 slow_w=0[0m
+[0;32mI (652837) dsp: FT8 br: 47 iters 12032 smp idx=50944/90000  read_avg=21709us work_avg=249us  slow_r=2 slow_w=0[0m
+[0;32mI (653857) dsp: FT8 br: 48 iters 12288 smp idx=63232/90000  read_avg=21007us work_avg=247us  slow_r=3 slow_w=0[0m
+[0;32mI (654871) dsp: FT8 br: 47 iters 12032 smp idx=75264/90000  read_avg=21315us work_avg=257us  slow_r=1 slow_w=0[0m
+[0;32mI (655890) dsp: FT8 br: 48 iters 12288 smp idx=87552/90000  read_avg=20961us work_avg=264us  slow_r=2 slow_w=0[0m
+[0;32mI (656149) ft8_test: slot 62: waiting for next FT4 boundary...[0m
+[0;32mI (656300) ws: tx 10.0 fps[0m
+[0;32mI (656383) ft8_test: decoded: 'CQ FD RZ1OA LP04' (score=18 freq=813Hz snr=-5)[0m
+[0;32mI (656383) ft8_screen: NEW  call=RZ1OA      heard=1 score=18 freq=813 text='CQ FD RZ1OA LP04'[0m
+[0;32mI (656383) ft8_test: decoded: 'WB2BIN DL9LA JN68' (score=18 freq=1625Hz snr=-5)[0m
+[0;32mI (656391) ft8_test: decoded: 'CQ FD RZ1OA LP04' (score=15 freq=813Hz snr=-5)[0m
+[0;32mI (656397) ft8_screen: NEW  call=DL9LA      heard=1 score=18 freq=1625 text='WB2BIN DL9LA JN68'[0m
+[0;32mI (656415) ft8_screen: UPD  call=RZ1OA      heard=2 score=15 freq=813 text='CQ FD RZ1OA LP04'[0m
+[0;32mI (656902) dsp: FT8 br: 40 iters 10240 smp idx=8960/90000  read_avg=25048us work_avg=252us  slow_r=7 slow_w=0[0m
+[0;32mI (657388) ft8_test: slot 61 UTC 1782644730: off=+144ms cap=7586ms stft=5475ms dec=1248ms cand=140 dec=3 skip=0 backlog=0pr drop=0pr timing=-336ms heap_i=21KB heap_p=24139KB[0m
+[0;32mI (657914) dsp: FT8 br: 48 iters 12288 smp idx=21248/90000  read_avg=20826us work_avg=257us  slow_r=1 slow_w=0[0m
+[0;32mI (658931) dsp: FT8 br: 48 iters 12288 smp idx=33536/90000  read_avg=20925us work_avg=248us  slow_r=2 slow_w=0[0m
+[0;32mI (659949) dsp: FT8 br: 47 iters 12032 smp idx=45568/90000  read_avg=21425us work_avg=249us  slow_r=2 slow_w=0[0m
+[0;32mI (660954) dsp: FT8 br: 46 iters 11776 smp idx=57344/90000  read_avg=21592us work_avg=259us  slow_r=2 slow_w=0[0m
+[0;32mI (661300) ws: tx 10.0 fps[0m
+[0;32mI (661965) dsp: FT8 br: 48 iters 12288 smp idx=69632/90000  read_avg=20795us work_avg=258us  slow_r=1 slow_w=0[0m
+[0;32mI (662974) dsp: FT8 br: 46 iters 11776 smp idx=81408/90000  read_avg=21679us work_avg=249us  slow_r=4 slow_w=0[0m
+[0;32mI (663534) ft8_test: slot 63: waiting for next FT4 boundary...[0m
+[0;32mI (663976) dsp: FT8 br: 44 iters 11264 smp idx=5376/90000  read_avg=22511us work_avg=269us  slow_r=2 slow_w=0[0m
+[0;32mI (664984) dsp: FT8 br: 47 iters 12032 smp idx=17408/90000  read_avg=21187us work_avg=256us  slow_r=1 slow_w=0[0m
+[0;32mI (665250) ft8_test: slot 62 UTC 1782644737: off=+241ms cap=7374ms stft=1088ms dec=1725ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-336ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (665993) dsp: FT8 br: 48 iters 12288 smp idx=29696/90000  read_avg=20774us work_avg=249us  slow_r=2 slow_w=0[0m
+[0;32mI (666300) ws: tx 10.0 fps[0m
+[0;32mI (666994) dsp: FT8 br: 46 iters 11776 smp idx=41472/90000  read_avg=21508us work_avg=251us  slow_r=4 slow_w=0[0m
+[0;32mI (667551) wifi: online; UTC 2026-06-28 11:05:49[0m
+[0;32mI (668004) dsp: FT8 br: 47 iters 12032 smp idx=53504/90000  read_avg=21238us work_avg=254us  slow_r=1 slow_w=0[0m
+[0;32mI (669018) dsp: FT8 br: 48 iters 12288 smp idx=65792/90000  read_avg=20863us work_avg=258us  slow_r=2 slow_w=0[0m
+[0;32mI (670022) dsp: FT8 br: 47 iters 12032 smp idx=77824/90000  read_avg=21105us work_avg=253us  slow_r=1 slow_w=0[0m
+[0;32mI (671128) ft8_test: slot 64: waiting for next FT4 boundary...[0m
+[0;32mI (671129) dsp: FT8 br: 46 iters 11776 smp idx=256/90000  read_avg=23821us work_avg=245us  slow_r=5 slow_w=0[0m
+[0;32mI (671300) ws: tx 10.0 fps[0m
+[0;32mI (671366) ft8_test: decoded: 'WW5G DL9LA JN68' (score=27 freq=2104Hz snr=-8)[0m
+[0;32mI (671366) ft8_screen: UPD  call=DL9LA      heard=2 score=27 freq=2104 text='WW5G DL9LA JN68'[0m
+[0;32mI (671389) ft8_test: decoded: 'N8SL RZ1OA RR73' (score=13 freq=813Hz snr=-3)[0m
+[0;32mI (671389) ft8_screen: UPD  call=RZ1OA      heard=3 score=13 freq=813 text='N8SL RZ1OA RR73'[0m
+[0;32mI (671476) ft8_test: decoded: 'N8SL RZ1OA RR73' (score=11 freq=813Hz snr=-4)[0m
+[0;32mI (671477) ft8_screen: UPD  call=RZ1OA      heard=4 score=11 freq=813 text='N8SL RZ1OA RR73'[0m
+[0;32mI (672133) dsp: FT8 br: 46 iters 11776 smp idx=12032/90000  read_avg=21555us work_avg=264us  slow_r=0 slow_w=0[0m
+[0;32mI (672319) ft8_test: slot 63 UTC 1782644745: off=+126ms cap=7583ms stft=5494ms dec=1201ms cand=140 dec=3 skip=0 backlog=0pr drop=0pr timing=-274ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (673141) dsp: FT8 br: 47 iters 12032 smp idx=24064/90000  read_avg=21186us work_avg=261us  slow_r=1 slow_w=0[0m
+[0;32mI (674150) dsp: FT8 br: 47 iters 12032 smp idx=36096/90000  read_avg=21223us work_avg=254us  slow_r=1 slow_w=0[0m
+[0;32mI (675166) dsp: FT8 br: 47 iters 12032 smp idx=48128/90000  read_avg=21344us work_avg=263us  slow_r=2 slow_w=0[0m
+[0;32mI (676185) dsp: FT8 br: 48 iters 12288 smp idx=60416/90000  read_avg=20961us work_avg=266us  slow_r=2 slow_w=0[0m
+[0;32mI (676300) ws: tx 10.0 fps[0m
+[0;32mI (677193) dsp: FT8 br: 47 iters 12032 smp idx=72448/90000  read_avg=21205us work_avg=245us  slow_r=3 slow_w=0[0m
+[0;32mI (678217) dsp: FT8 br: 46 iters 11776 smp idx=84224/90000  read_avg=22015us work_avg=246us  slow_r=5 slow_w=0[0m
+[0;32mI (678541) ft8_test: slot 65: waiting for next FT4 boundary...[0m
+[0;32mI (678889) ft8_test: decoded: 'N8BC G3UAS 1D DX' (score=23 freq=2313Hz snr=-10)[0m
+[0;32mI (678890) ft8_screen: NEW  call=G3UAS      heard=1 score=23 freq=2313 text='N8BC G3UAS 1D DX'[0m
+[0;32mI (678912) ft8_test: decoded: 'K9RN G7GEE IO83' (score=15 freq=1375Hz snr=-9)[0m
+[0;32mI (678912) ft8_screen: NEW  call=G7GEE      heard=1 score=15 freq=1375 text='K9RN G7GEE IO83'[0m
+[0;32mI (678966) ft8_test: decoded: 'K9RN G7GEE IO83' (score=14 freq=1375Hz snr=-8)[0m
+[0;32mI (678967) ft8_screen: UPD  call=G7GEE      heard=2 score=14 freq=1375 text='K9RN G7GEE IO83'[0m
+[0;32mI (679224) dsp: FT8 br: 45 iters 11520 smp idx=8448/90000  read_avg=22130us work_avg=247us  slow_r=4 slow_w=0[0m
+[0;32mI (680259) dsp: FT8 br: 48 iters 12288 smp idx=20736/90000  read_avg=21276us work_avg=275us  slow_r=3 slow_w=0[0m
+[0;32mI (680274) ft8_test: slot 64 UTC 1782644752: off=+220ms cap=7402ms stft=1087ms dec=1742ms cand=140 dec=3 skip=0 backlog=0pr drop=0pr timing=-820ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (681282) dsp: FT8 br: 47 iters 12032 smp idx=32768/90000  read_avg=21506us work_avg=258us  slow_r=4 slow_w=0[0m
+[0;32mI (681300) ws: tx 10.0 fps[0m
+[0;32mI (682302) dsp: FT8 br: 47 iters 12032 smp idx=44800/90000  read_avg=21466us work_avg=247us  slow_r=6 slow_w=0[0m
+[0;32mI (683324) dsp: FT8 br: 47 iters 12032 smp idx=56832/90000  read_avg=21493us work_avg=247us  slow_r=3 slow_w=0[0m
+[0;32mI (684336) dsp: FT8 br: 48 iters 12288 smp idx=69120/90000  read_avg=20825us work_avg=257us  slow_r=1 slow_w=0[0m
+[0;32mI (685345) dsp: FT8 br: 47 iters 12032 smp idx=81152/90000  read_avg=21220us work_avg=256us  slow_r=2 slow_w=0[0m
+[0;32mI (686143) ft8_test: slot 66: waiting for next FT4 boundary...[0m
+[0;32mI (686300) ws: tx 10.0 fps[0m
+[0;32mI (686368) dsp: FT8 br: 41 iters 10496 smp idx=2816/90000  read_avg=24690us work_avg=248us  slow_r=3 slow_w=0[0m
+[0;32mI (687319) ft8_test: slot 65 UTC 1782644760: off=+133ms cap=7591ms stft=5524ms dec=1186ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-820ms heap_i=19KB heap_p=24139KB[0m
+[0;32mI (687368) dsp: FT8 br: 47 iters 12032 smp idx=14848/90000  read_avg=21026us work_avg=250us  slow_r=3 slow_w=0[0m
+[0;32mI (688373) dsp: FT8 br: 46 iters 11776 smp idx=26624/90000  read_avg=21590us work_avg=259us  slow_r=1 slow_w=0[0m
+[0;32mI (689392) dsp: FT8 br: 49 iters 12544 smp idx=39168/90000  read_avg=20538us work_avg=259us  slow_r=1 slow_w=0[0m
+[0;32mI (690398) dsp: FT8 br: 46 iters 11776 smp idx=50944/90000  read_avg=21621us work_avg=249us  slow_r=2 slow_w=0[0m
+[0;32mI (691300) ws: tx 10.0 fps[0m
+[0;32mI (691400) dsp: FT8 br: 46 iters 11776 smp idx=62720/90000  read_avg=21541us work_avg=250us  slow_r=3 slow_w=0[0m
+[0;32mI (692416) dsp: FT8 br: 47 iters 12032 smp idx=74752/90000  read_avg=21354us work_avg=252us  slow_r=3 slow_w=0[0m
+[0;32mI (693424) dsp: FT8 br: 47 iters 12032 smp idx=86784/90000  read_avg=21191us work_avg=255us  slow_r=1 slow_w=0[0m
+[0;32mI (693544) ft8_test: slot 67: waiting for next FT4 boundary...[0m
+[0;32mI (693900) ft8_test: decoded: 'K9RN G7GEE IO83' (score=14 freq=1375Hz snr=-6)[0m
+[0;32mI (693900) ft8_screen: UPD  call=G7GEE      heard=3 score=14 freq=1375 text='K9RN G7GEE IO83'[0m
+[0;32mI (694442) dsp: FT8 br: 45 iters 11520 smp idx=11008/90000  read_avg=22357us work_avg=266us  slow_r=2 slow_w=0[0m
+[0;32mI (695283) ft8_test: slot 66 UTC 1782644767: off=+235ms cap=7391ms stft=1085ms dec=1748ms cand=140 dec=1 skip=0 backlog=0pr drop=0pr timing=-805ms heap_i=17KB heap_p=24139KB[0m
+[0;32mI (695459) dsp: FT8 br: 47 iters 12032 smp idx=23040/90000  read_avg=21378us work_avg=261us  slow_r=2 slow_w=0[0m
+[0;32mI (696301) ws: tx 10.0 fps[0m
+[0;32mI (696467) dsp: FT8 br: 47 iters 12032 smp idx=35072/90000  read_avg=21184us work_avg=256us  slow_r=3 slow_w=0[0m
+[0;32mI (697476) dsp: FT8 br: 47 iters 12032 smp idx=47104/90000  read_avg=21219us work_avg=259us  slow_r=5 slow_w=0[0m
+[0;32mI (697551) wifi: online; UTC 2026-06-28 11:06:19[0m
+[0;32mI (698487) dsp: FT8 br: 46 iters 11776 smp idx=58880/90000  read_avg=21728us work_avg=246us  slow_r=1 slow_w=0[0m
+[0;32mI (699499) dsp: FT8 br: 47 iters 12032 smp idx=70912/90000  read_avg=21268us work_avg=262us  slow_r=3 slow_w=0[0m
+[0;32mI (700506) dsp: FT8 br: 47 iters 12032 smp idx=82944/90000  read_avg=21177us work_avg=245us  slow_r=4 slow_w=0[0m
+[0;32mI (701144) ft8_test: slot 68: waiting for next FT4 boundary...[0m
+[0;32mI (701392) ft8_test: decoded: 'N3FMC RZ1OA R 1D DX' (score=14 freq=813Hz snr=-5)[0m
+[0;32mI (701392) ft8_screen: UPD  call=RZ1OA      heard=5 score=14 freq=813 text='N3FMC RZ1OA R 1D DX'[0m
+[0;32mI (701400) ws: tx 10.0 fps[0m
+[0;32mI (701510) dsp: FT8 br: 40 iters 10240 smp idx=4352/90000  read_avg=24841us work_avg=256us  slow_r=1 slow_w=0[0m
+[0;32mI (702162) ft8_test: decoded: 'N8SL DL9LA JN68' (score=8 freq=1917Hz snr=-7)[0m
+[0;32mI (702162) ft8_screen: UPD  call=DL9LA      heard=3 score=8 freq=1917 text='N8SL DL9LA JN68'[0m
+[0;32mI (702334) ft8_test: slot 67 UTC 1782644775: off=+136ms cap=7590ms stft=5522ms dec=1199ms cand=140 dec=2 skip=0 backlog=0pr drop=0pr timing=-384ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (702518) dsp: FT8 br: 48 iters 12288 smp idx=16640/90000  read_avg=20746us work_avg=253us  slow_r=1 slow_w=0[0m
+[0;32mI (703530) dsp: FT8 br: 46 iters 11776 smp idx=28416/90000  read_avg=21734us work_avg=267us  slow_r=1 slow_w=0[0m
+[0;32mI (704543) dsp: FT8 br: 47 iters 12032 smp idx=40448/90000  read_avg=21301us work_avg=249us  slow_r=1 slow_w=0[0m
+[0;32mI (705563) dsp: FT8 br: 48 iters 12288 smp idx=52736/90000  read_avg=20996us work_avg=251us  slow_r=4 slow_w=0[0m
+[0;32mI (706400) ws: tx 10.0 fps[0m
+[0;32mI (706582) dsp: FT8 br: 47 iters 12032 smp idx=64768/90000  read_avg=21433us work_avg=251us  slow_r=1 slow_w=0[0m
+[0;32mI (707592) dsp: FT8 br: 47 iters 12032 smp idx=76800/90000  read_avg=21230us work_avg=258us  slow_r=3 slow_w=0[0m
+[0;32mI (708550) ft8_test: slot 69: waiting for next FT4 boundary...[0m
+[0;32mI (708596) dsp: FT8 br: 43 iters 11008 smp idx=512/90000  read_avg=23091us work_avg=248us  slow_r=2 slow_w=0[0m
+[0;32mI (709183) ft8_test: decoded: 'K9RN G7GEE IO83' (score=10 freq=1375Hz snr=-7)[0m
+[0;32mI (709184) ft8_screen: UPD  call=G7GEE      heard=4 score=10 freq=1375 text='K9RN G7GEE IO83'[0m
+[0;32mI (709621) dsp: FT8 br: 49 iters 12544 smp idx=13056/90000  read_avg=20665us work_avg=258us  slow_r=3 slow_w=0[0m
+[0;32mI (710276) ft8_test: slot 68 UTC 1782644782: off=+236ms cap=7395ms stft=1092ms dec=1735ms cand=140 dec=1 skip=0 backlog=0pr drop=0pr timing=-884ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (710636) dsp: FT8 br: 46 iters 11776 smp idx=24832/90000  read_avg=21813us work_avg=255us  slow_r=3 slow_w=0[0m
+[0;32mI (711400) ws: tx 10.0 fps[0m
+[0;32mI (711646) dsp: FT8 br: 46 iters 11776 smp idx=36608/90000  read_avg=21703us work_avg=258us  slow_r=1 slow_w=0[0m
+[0;32mI (712659) dsp: FT8 br: 48 iters 12288 smp idx=48896/90000  read_avg=20842us work_avg=255us  slow_r=0 slow_w=0[0m
+[0;32mI (713668) dsp: FT8 br: 46 iters 11776 smp idx=60672/90000  read_avg=21671us work_avg=256us  slow_r=2 slow_w=0[0m
+[0;32mI (714685) dsp: FT8 br: 46 iters 11776 smp idx=72448/90000  read_avg=21862us work_avg=252us  slow_r=3 slow_w=0[0m
+[0;32mI (715711) dsp: FT8 br: 48 iters 12288 smp idx=84736/90000  read_avg=21114us work_avg=262us  slow_r=3 slow_w=0[0m
+[0;32mI (716190) ft8_test: slot 70: waiting for next FT4 boundary...[0m
+[0;32mI (716400) ws: tx 10.0 fps[0m
+[0;32mI (716714) dsp: FT8 br: 36 iters 9216 smp idx=6144/90000  read_avg=27590us work_avg=266us  slow_r=3 slow_w=0[0m
+[0;32mI (717382) ft8_test: slot 69 UTC 1782644790: off=+142ms cap=7629ms stft=5497ms dec=1202ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-884ms heap_i=21KB heap_p=24139KB[0m
+[0;32mI (717718) dsp: FT8 br: 46 iters 11776 smp idx=17920/90000  read_avg=21573us work_avg=252us  slow_r=2 slow_w=0[0m
+[0;32mI (718721) dsp: FT8 br: 47 iters 12032 smp idx=29952/90000  read_avg=21082us work_avg=256us  slow_r=1 slow_w=0[0m
+[0;32mI (719733) dsp: FT8 br: 46 iters 11776 smp idx=41728/90000  read_avg=21747us work_avg=253us  slow_r=2 slow_w=0[0m
+[0;32mI (720748) dsp: FT8 br: 47 iters 12032 smp idx=53760/90000  read_avg=21331us work_avg=263us  slow_r=1 slow_w=0[0m
+[0;32mI (721400) ws: tx 10.0 fps[0m
+[0;32mI (721769) dsp: FT8 br: 47 iters 12032 smp idx=65792/90000  read_avg=21459us work_avg=253us  slow_r=4 slow_w=0[0m
+[0;32mI (722772) dsp: FT8 br: 47 iters 12032 smp idx=77824/90000  read_avg=21091us work_avg=248us  slow_r=3 slow_w=0[0m
+[0;32mI (723558) ft8_test: slot 71: waiting for next FT4 boundary...[0m
+[0;32mI (723788) dsp: FT8 br: 44 iters 11264 smp idx=2816/90000  read_avg=22848us work_avg=247us  slow_r=3 slow_w=0[0m
+[0;32mI (724798) dsp: FT8 br: 46 iters 11776 smp idx=14592/90000  read_avg=21706us work_avg=259us  slow_r=3 slow_w=0[0m
+[0;32mI (725274) ft8_test: slot 70 UTC 1782644797: off=+282ms cap=7356ms stft=1086ms dec=1727ms cand=140 dec=0 skip=0 backlog=0pr drop=0pr timing=-884ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (725807) dsp: FT8 br: 48 iters 12288 smp idx=26880/90000  read_avg=20746us work_avg=272us  slow_r=1 slow_w=0[0m
+[0;32mI (726400) ws: tx 10.0 fps[0m
+[0;32mI (726821) dsp: FT8 br: 46 iters 11776 smp idx=38656/90000  read_avg=21791us work_avg=248us  slow_r=3 slow_w=0[0m
+[0;32mI (727551) wifi: online; UTC 2026-06-28 11:06:49[0m
+[0;32mI (727831) dsp: FT8 br: 47 iters 12032 smp idx=50688/90000  read_avg=21243us work_avg=248us  slow_r=4 slow_w=0[0m
+[0;32mI (728857) dsp: FT8 br: 48 iters 12288 smp idx=62976/90000  read_avg=21119us work_avg=257us  slow_r=4 slow_w=0[0m
+[0;32mI (729865) dsp: FT8 br: 47 iters 12032 smp idx=75008/90000  read_avg=21195us work_avg=247us  slow_r=5 slow_w=0[0m
+[0;32mI (730879) dsp: FT8 br: 47 iters 12032 smp idx=87040/90000  read_avg=21288us work_avg=276us  slow_r=1 slow_w=0[0m
+[0;32mI (731151) ft8_test: slot 72: waiting for next FT4 boundary...[0m
+[0;32mI (731386) ft8_test: decoded: 'N8SL DL9LA JN68' (score=15 freq=1917Hz snr=-7)[0m
+[0;32mI (731386) ft8_screen: UPD  call=DL9LA      heard=4 score=15 freq=1917 text='N8SL DL9LA JN68'[0m
+[0;32mI (731400) ws: tx 10.0 fps[0m
+[0;32mI (731886) dsp: FT8 br: 38 iters 9728 smp idx=8704/90000  read_avg=26234us work_avg=278us  slow_r=2 slow_w=0[0m
+[0;32mI (732344) ft8_test: slot 71 UTC 1782644805: off=+150ms cap=7582ms stft=5501ms dec=1202ms cand=140 dec=1 skip=0 backlog=0pr drop=0pr timing=-650ms heap_i=21KB heap_p=24139KB[0m
+[0;32mI (732892) dsp: FT8 br: 48 iters 12288 smp idx=20992/90000  read_avg=20669us work_avg=289us  slow_r=1 slow_w=0[0m
+[0;32mI (733917) dsp: FT8 br: 47 iters 12032 smp idx=33024/90000  read_avg=21549us work_avg=261us  slow_r=1 slow_w=0[0m
+[0;32mI (734927) dsp: FT8 br: 47 iters 12032 smp idx=45056/90000  read_avg=21231us work_avg=257us  slow_r=1 slow_w=0[0m
+[0;32mI (735961) dsp: FT8 br: 48 iters 12288 smp idx=57344/90000  read_avg=21282us work_avg=253us  slow_r=3 slow_w=0[0m
+[0;32mI (736400) ws: tx 10.0 fps[0m
+[0;32mI (736968) dsp: FT8 br: 48 iters 12288 smp idx=69632/90000  read_avg=20741us work_avg=251us  slow_r=0 slow_w=0[0m
+[0;32mI (737994) dsp: FT8 br: 48 iters 12288 smp idx=81920/90000  read_avg=21118us work_avg=246us  slow_r=4 slow_w=0[0m
+[0;32mI (738534) ft8_test: slot 73: waiting for next FT4 boundary...[0m
+[0;32mI (738841) ft8_test: decoded: 'DL9LA G4CFS +02' (score=17 freq=2521Hz snr=-5)[0m
+[0;32mI (738841) ft8_screen: NEW  call=G4CFS      heard=1 score=17 freq=2521 text='DL9LA G4CFS +02'[0m
+[0;32mI (738841) ft8_test: decoded: 'DL9LA G4CFS +02' (score=20 freq=2521Hz snr=-5)[0m
+[0;32mI (738856) ft8_screen: UPD  call=G4CFS      heard=2 score=20 freq=2521 text='DL9LA G4CFS +02'[0m
+[0;32mI (739019) dsp: FT8 br: 44 iters 11264 smp idx=5632/90000  read_avg=23041us work_avg=259us  slow_r=2 slow_w=0[0m
+[0;32mI (740042) dsp: FT8 br: 48 iters 12288 smp idx=17920/90000  read_avg=21059us work_avg=252us  slow_r=0 slow_w=0[0m
+[0;32mI (740253) ft8_test: slot 72 UTC 1782644812: off=+243ms cap=7373ms stft=1096ms dec=1728ms cand=140 dec=2 skip=0 backlog=0pr drop=0pr timing=-317ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (741062) dsp: FT8 br: 47 iters 12032 smp idx=29952/90000  read_avg=21448us work_avg=253us  slow_r=2 slow_w=0[0m
+[0;32mI (741400) ws: tx 10.0 fps[0m
+[0;32mI (742063) dsp: FT8 br: 47 iters 12032 smp idx=41984/90000  read_avg=21034us work_avg=262us  slow_r=0 slow_w=0[0m
+[0;32mI (743084) dsp: FT8 br: 47 iters 12032 smp idx=54016/90000  read_avg=21472us work_avg=250us  slow_r=2 slow_w=0[0m
+[0;32mI (744085) dsp: FT8 br: 47 iters 12032 smp idx=66048/90000  read_avg=21037us work_avg=260us  slow_r=1 slow_w=0[0m
+[0;32mI (745097) dsp: FT8 br: 47 iters 12032 smp idx=78080/90000  read_avg=21286us work_avg=249us  slow_r=5 slow_w=0[0m
+[0;32mI (746139) ft8_test: slot 74: waiting for next FT4 boundary...[0m
+[0;32mI (746146) dsp: FT8 br: 43 iters 11008 smp idx=256/90000  read_avg=24127us work_avg=257us  slow_r=1 slow_w=0[0m
+[0;32mI (746386) ft8_test: decoded: 'K9RN G7GEE IO83' (score=15 freq=1375Hz snr=-7)[0m
+[0;32mI (746387) ft8_screen: UPD  call=G7GEE      heard=5 score=15 freq=1375 text='K9RN G7GEE IO83'[0m
+[0;32mI (746400) ws: tx 10.0 fps[0m
+[0;32mI (747158) dsp: FT8 br: 47 iters 12032 smp idx=12288/90000  read_avg=21279us work_avg=253us  slow_r=1 slow_w=0[0m
+[0;32mI (747332) ft8_test: slot 73 UTC 1782644820: off=+126ms cap=7594ms stft=5479ms dec=1202ms cand=140 dec=1 skip=0 backlog=0pr drop=0pr timing=-674ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (748159) dsp: FT8 br: 47 iters 12032 smp idx=24320/90000  read_avg=21046us work_avg=248us  slow_r=3 slow_w=0[0m
+[0;32mI (749161) dsp: FT8 br: 46 iters 11776 smp idx=36096/90000  read_avg=21527us work_avg=249us  slow_r=2 slow_w=0[0m
+[0;32mI (750167) dsp: FT8 br: 47 iters 12032 smp idx=48128/90000  read_avg=21154us work_avg=255us  slow_r=1 slow_w=0[0m
+[0;32mI (751178) dsp: FT8 br: 48 iters 12288 smp idx=60416/90000  read_avg=20813us work_avg=253us  slow_r=0 slow_w=0[0m
+[0;32mI (751401) ws: tx 10.0 fps[0m
+[0;32mI (752187) dsp: FT8 br: 47 iters 12032 smp idx=72448/90000  read_avg=21216us work_avg=250us  slow_r=1 slow_w=0[0m
+[0;32mI (753202) dsp: FT8 br: 48 iters 12288 smp idx=84736/90000  read_avg=20907us work_avg=246us  slow_r=2 slow_w=0[0m
+[0;32mI (753536) ft8_test: slot 75: waiting for next FT4 boundary...[0m
+[0;32mI (753883) ft8_test: decoded: 'DL9LA G4CFS +02' (score=20 freq=2521Hz snr=-3)[0m
+[0;32mI (753883) ft8_screen: UPD  call=G4CFS      heard=3 score=20 freq=2521 text='DL9LA G4CFS +02'[0m
+[0;32mI (753889) ft8_test: decoded: 'DL9LA G4CFS +02' (score=14 freq=2521Hz snr=-3)[0m
+[0;32mI (753897) ft8_screen: UPD  call=G4CFS      heard=4 score=14 freq=2521 text='DL9LA G4CFS +02'[0m
+[0;32mI (753912) ft8_test: decoded: 'DL9LA G4CFS +02' (score=14 freq=2521Hz snr=-3)[0m
+[0;32mI (753914) ft8_screen: UPD  call=G4CFS      heard=5 score=14 freq=2521 text='DL9LA G4CFS +02'[0m
+[0;32mI (754222) dsp: FT8 br: 45 iters 11520 smp idx=8192/90000  read_avg=22412us work_avg=251us  slow_r=5 slow_w=0[0m
+[0;32mI (755234) dsp: FT8 br: 46 iters 11776 smp idx=19968/90000  read_avg=21743us work_avg=251us  slow_r=2 slow_w=0[0m
+[0;32mI (755248) ft8_test: slot 74 UTC 1782644827: off=+231ms cap=7386ms stft=1105ms dec=1721ms cand=140 dec=3 skip=0 backlog=0pr drop=0pr timing=-249ms heap_i=20KB heap_p=24139KB[0m
+[0;32mI (756245) dsp: FT8 br: 47 iters 12032 smp idx=32000/90000  read_avg=21266us work_avg=248us  slow_r=2 slow_w=0[0m
+[0;32mI (756500) ws: tx 10.0 fps[0m
+[0;32mI (757260) dsp: FT8 br: 48 iters 12288 smp idx=44288/90000  read_avg=20887us work_avg=255us  slow_r=2 slow_w=0[0m
+[0;32mI (757551) wifi: online; UTC 2026-06-28 11:07:19[0m
+[0;32mI (758266) dsp: FT8 br: 46 iters 11776 smp idx=56064/90000  read_avg=21613us work_avg=257us  slow_r=1 slow_w=0[0m
+[0;32mI (759268) dsp: FT8 br: 47 iters 12032 smp idx=68096/90000  read_avg=21074us work_avg=246us  slow_r=3 slow_w=0[0m
+[0;32mI (760285) dsp: FT8 br: 48 iters 12288 smp idx=80384/90000  read_avg=20928us work_avg=258us  slow_r=3 slow_w=0[0m

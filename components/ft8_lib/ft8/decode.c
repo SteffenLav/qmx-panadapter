@@ -5,9 +5,61 @@
 
 #include <stdbool.h>
 #include <math.h>
+#include <stdio.h>
+#include <time.h>
+#include <string.h>
 
 // #define LOG_LEVEL LOG_DEBUG
 // #include "debug.h"
+
+// Stage 1 diagnostic logging
+static FILE* g_diag_log = NULL;
+static char g_current_filename[256] = "unknown";
+
+void diag_set_filename(const char* filename) {
+    if (filename) {
+        strncpy(g_current_filename, filename, sizeof(g_current_filename) - 1);
+        g_current_filename[sizeof(g_current_filename) - 1] = 0;
+    }
+}
+
+static void diag_log_open(void) {
+    if (!g_diag_log) {
+        g_diag_log = fopen("stage1_diag.csv", "a");
+        if (g_diag_log) {
+            // Check if file is empty (first write)
+            fseek(g_diag_log, 0, SEEK_END);
+            if (ftell(g_diag_log) == 0) {
+                // Write header
+                fprintf(g_diag_log, "timestamp,file,candidate,snr_db,freq_offset,single_symbol_errors,fallback_triggered,multi_symbol_errors,final_result,message\n");
+            }
+            fflush(g_diag_log);
+        }
+    }
+}
+
+static void diag_log_candidate(int cand_idx, float snr_db, float freq_offset,
+                                int single_errors, int fallback_trigg, int multi_errors, int final_result, const char* message) {
+    diag_log_open();
+    if (!g_diag_log) return;
+
+    time_t now = time(NULL);
+    struct tm* tm_info = localtime(&now);
+    char time_str[32];
+    strftime(time_str, sizeof(time_str), "%Y-%m-%d %H:%M:%S", tm_info);
+
+    fprintf(g_diag_log, "%s,%s,%d,%.1f,%.2f,%d,%d,%d,%d,%s\n",
+            time_str, g_current_filename, cand_idx, snr_db, freq_offset,
+            single_errors, fallback_trigg, multi_errors, final_result, message ? message : "");
+    fflush(g_diag_log);
+}
+
+void diag_log_close(void) {
+    if (g_diag_log) {
+        fclose(g_diag_log);
+        g_diag_log = NULL;
+    }
+}
 
 // Lookup table for y = 10*log10(1 + 10^(x/10)), where
 //   y - increase in signal level dB when adding a weaker independent signal
@@ -48,6 +100,8 @@ static void ftx_normalize_logl(float* log174);
 static void ft4_extract_symbol(const WF_ELEM_T* wf, float* logl);
 static void ft8_extract_symbol(const WF_ELEM_T* wf, float* logl);
 static void ft8_decode_multi_symbols(const WF_ELEM_T* wf, int num_bins, int n_syms, int bit_idx, float* log174);
+static void ft8_decode_multi_symbols_pair(const WF_ELEM_T* wf1, const WF_ELEM_T* wf2,
+                                          int num_bins, int bit_idx, float* log174);
 
 static const WF_ELEM_T* get_cand_mag(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate)
 {
@@ -303,6 +357,60 @@ static void ft8_extract_likelihood(const ftx_waterfall_t* wf, const ftx_candidat
     }
 }
 
+// Second-chance likelihood extraction: uses multi-symbol (n_syms=2) instead of single-symbol.
+// Only called if single-symbol bp_decode fails. Pairs consecutive data symbols to improve
+// coherent detection on weak/fading signals.
+static void ft8_extract_likelihood_multi(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, float* log174)
+{
+    const WF_ELEM_T* mag = get_cand_mag(wf, cand);
+    const int num_bins = 8;  // FSK tones per symbol
+
+    // Process pairs of consecutive data symbols (every 2 symbols, or every 6 bits)
+    // FT8_ND = 59 data symbols; process in pairs: (0,1), (2,3), ..., (58, [skip if odd])
+    for (int k = 0; k < FT8_ND; k += 2)
+    {
+        int sym_idx_1 = k + ((k < 29) ? 7 : 14);
+        int sym_idx_2 = (k + 1) + (((k + 1) < 29) ? 7 : 14);
+        int bit_idx = 3 * k;
+
+        // Check time boundaries for first symbol
+        int block_1 = cand->time_offset + sym_idx_1;
+        if ((block_1 < 0) || (block_1 >= wf->num_blocks))
+        {
+            log174[bit_idx + 0] = 0;
+            log174[bit_idx + 1] = 0;
+            log174[bit_idx + 2] = 0;
+        }
+        else if (k + 1 >= FT8_ND)
+        {
+            // Last symbol (odd count): just use single-symbol
+            ft8_extract_symbol(mag + (sym_idx_1 * wf->block_stride), log174 + bit_idx);
+        }
+        else
+        {
+            // Check time boundaries for second symbol
+            int block_2 = cand->time_offset + sym_idx_2;
+            if ((block_2 < 0) || (block_2 >= wf->num_blocks))
+            {
+                log174[bit_idx + 0] = 0;
+                log174[bit_idx + 1] = 0;
+                log174[bit_idx + 2] = 0;
+                log174[bit_idx + 3] = 0;
+                log174[bit_idx + 4] = 0;
+                log174[bit_idx + 5] = 0;
+            }
+            else
+            {
+                // Extract using 2-symbol coherent demodulation
+                // Pass mag with proper stride added for correct 2-symbol access
+                ft8_decode_multi_symbols_pair(mag + (sym_idx_1 * wf->block_stride),
+                                              mag + (sym_idx_2 * wf->block_stride),
+                                              num_bins, bit_idx, log174);
+            }
+        }
+    }
+}
+
 static void ftx_normalize_logl(float* log174)
 {
     // Compute the variance of log174
@@ -324,8 +432,115 @@ static void ftx_normalize_logl(float* log174)
     }
 }
 
+// Estimate SNR from candidate's signal and noise floor
+static float estimate_snr_db(const ftx_waterfall_t* wf, const ftx_candidate_t* cand)
+{
+    const WF_ELEM_T* mag = get_cand_mag(wf, cand);
+    const int num_bins = 8;  // FSK tones per symbol
+
+    // Collect signal power from the candidate's FSK tones (first 10 symbols)
+    float signal_sum = 0.0f;
+    int signal_count = 0;
+
+    // Sample signal from the 8 FSK tone bins across multiple symbols
+    for (int sym = 0; sym < 10 && sym < wf->num_blocks - cand->time_offset; ++sym) {
+        const WF_ELEM_T* block = mag + sym * wf->block_stride;
+        for (int bin = 0; bin < num_bins; ++bin) {
+            float magnitude_db = WF_ELEM_MAG(block[bin]);
+            // Convert from dB back to linear for averaging
+            float magnitude_linear = powf(10.0f, magnitude_db / 10.0f);
+            signal_sum += magnitude_linear;
+            signal_count++;
+        }
+    }
+
+    if (signal_count == 0) return -99.0f;
+    float signal_avg_linear = signal_sum / signal_count;
+    float signal_avg_db = 10.0f * log10f(signal_avg_linear + 1e-6f);
+
+    // Estimate noise floor from bins between the FSK tones (non-signal bins)
+    float noise_sum = 0.0f;
+    int noise_count = 0;
+
+    // Sample between the FSK tones (bins 4-7 in a typical 8-bin FSK window)
+    // These are unlikely to contain strong signal
+    for (int sym = 0; sym < 10 && sym < wf->num_blocks - cand->time_offset; ++sym) {
+        const WF_ELEM_T* block = mag + sym * wf->block_stride;
+        // Sample the "gaps" between expected FSK tones
+        for (int bin = 50; bin < wf->num_bins && bin < 150; bin += 3) {
+            float magnitude_db = WF_ELEM_MAG(block[bin]);
+            float magnitude_linear = powf(10.0f, magnitude_db / 10.0f);
+            noise_sum += magnitude_linear;
+            noise_count++;
+        }
+    }
+
+    if (noise_count == 0) {
+        noise_sum = signal_avg_linear * 0.1f;  // Rough estimate: noise ~10% of signal
+        noise_count = 1;
+    }
+
+    float noise_avg_linear = noise_sum / noise_count;
+    float noise_avg_db = 10.0f * log10f(noise_avg_linear + 1e-6f);
+
+    // SNR = signal - noise (in dB)
+    float snr_db = signal_avg_db - noise_avg_db;
+
+    // Clamp to reasonable range
+    if (snr_db < -30.0f) snr_db = -30.0f;
+    if (snr_db > 30.0f) snr_db = 30.0f;
+
+    return snr_db;
+}
+
+// Extract most-likely symbols (0-7) from the waterfall magnitudes
+// Populates the FT8_ND data symbols in the symbol array
+// Costas sync symbols (1, 3, 5) are set to 0 as placeholder
+static void ft8_extract_symbols(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, uint8_t* symbols)
+{
+    const WF_ELEM_T* mag = get_cand_mag(wf, cand);
+
+    // Initialize all 79 symbols to 0
+    memset(symbols, 0, FT8_NN);
+
+    // Go over FT8_ND data symbols and extract the most-likely tone (0-7) at each position
+    for (int k = 0; k < FT8_ND; ++k)
+    {
+        // Accounting for Costas sync symbols (7 or 14 total skipped)
+        int sym_idx = k + ((k < 29) ? 7 : 14);
+
+        // Check for time boundaries
+        int block = cand->time_offset + sym_idx;
+        if ((block < 0) || (block >= wf->num_blocks))
+        {
+            symbols[sym_idx] = 0;  // Out of bounds, use 0
+            continue;
+        }
+
+        // Find the tone with maximum magnitude at this symbol position
+        const WF_ELEM_T* symbol_mag = mag + (sym_idx * wf->block_stride);
+        float max_mag = WF_ELEM_MAG(symbol_mag[0]);
+        uint8_t max_tone = 0;
+
+        for (int tone = 1; tone < 8; ++tone)
+        {
+            float tone_mag = WF_ELEM_MAG(symbol_mag[tone]);
+            if (tone_mag > max_mag)
+            {
+                max_mag = tone_mag;
+                max_tone = tone;
+            }
+        }
+
+        symbols[sym_idx] = max_tone;
+    }
+}
+
 bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand, int max_iterations, ftx_message_t* message, ftx_decode_status_t* status)
 {
+    // Estimate SNR early
+    status->snr_db = estimate_snr_db(wf, cand);
+
     float log174[FTX_LDPC_N]; // message bits encoded as likelihood
     if (wf->protocol == FTX_PROTOCOL_FT4)
     {
@@ -342,8 +557,30 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
     bp_decode(log174, max_iterations, plain174, &status->ldpc_errors);
     // ldpc_decode(log174, max_iterations, plain174, &status->ldpc_errors);
 
+    int single_symbol_errors = status->ldpc_errors;
+    int fallback_triggered = 0;
+    int multi_symbol_errors = 0;
+
+    // Save the original LLRs before multi-symbol extraction
+    float log174_single[FTX_LDPC_N];
+    if ((status->ldpc_errors > 0) && (wf->protocol == FTX_PROTOCOL_FT8)) {
+        memcpy(log174_single, log174, sizeof(log174_single));
+    }
+
+    // Second-chance decode: if single-symbol failed, retry with multi-symbol (FT8 only)
+    if ((status->ldpc_errors > 0) && (wf->protocol == FTX_PROTOCOL_FT8)) {
+        fallback_triggered = 1;
+        ft8_extract_likelihood_multi(wf, cand, log174);
+        ftx_normalize_logl(log174);
+        bp_decode(log174, max_iterations, plain174, &status->ldpc_errors);
+        multi_symbol_errors = status->ldpc_errors;
+    }
+
     if (status->ldpc_errors > 0)
     {
+        // Log the failure
+        diag_log_candidate(cand->score, 0.0f, cand->freq_offset,
+                          single_symbol_errors, fallback_triggered, multi_symbol_errors, 0, "FAIL");
         return false;
     }
 
@@ -360,6 +597,9 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
 
     if (status->crc_extracted != status->crc_calculated)
     {
+        // Log CRC failure
+        diag_log_candidate(cand->score, 0.0f, cand->freq_offset,
+                          single_symbol_errors, fallback_triggered, multi_symbol_errors, 0, "CRC_FAIL");
         return false;
     }
 
@@ -368,8 +608,8 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
 
     if (wf->protocol == FTX_PROTOCOL_FT4)
     {
-        // '[..] for FT4 only, in order to avoid transmitting a long string of zeros when sending CQ messages,
-        // the assembled 77-bit message is bitwise exclusive-OR’ed with [a] pseudorandom sequence before computing the CRC and FEC parity bits'
+        // ‘[..] for FT4 only, in order to avoid transmitting a long string of zeros when sending CQ messages,
+        // the assembled 77-bit message is bitwise exclusive-OR’ed with [a] pseudorandom sequence before computing the CRC and FEC parity bits’
         for (int i = 0; i < 10; ++i)
         {
             message->payload[i] = a91[i] ^ kFT4_XOR_sequence[i];
@@ -382,6 +622,13 @@ bool ftx_decode_candidate(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
             message->payload[i] = a91[i];
         }
     }
+
+    // Extract most-likely symbols for Stage 2 reconstruction
+    ft8_extract_symbols(wf, cand, status->symbols);
+
+    // Log successful decode
+    diag_log_candidate(cand->score, 0.0f, cand->freq_offset,
+                      single_symbol_errors, fallback_triggered, multi_symbol_errors, 1, "SUCCESS");
 
     // LOG(LOG_DEBUG, "Decoded message (CRC %04x), trying to unpack...\n", status->crc_extracted);
     return true;
@@ -508,6 +755,50 @@ static void ft8_extract_symbol(const WF_ELEM_T* wf, float* logl)
 }
 
 // Compute unnormalized log likelihood log(p(1) / p(0)) of bits corresponding to several FSK symbols at once
+// Helper: decode 2 consecutive symbols via coherent demodulation
+static void ft8_decode_multi_symbols_pair(const WF_ELEM_T* wf1, const WF_ELEM_T* wf2,
+                                          int num_bins, int bit_idx, float* log174)
+{
+    const int n_bits = 6;  // 2 symbols * 3 bits per symbol
+    const int n_tones = 64;  // 2^6
+
+    float s2[n_tones];
+
+    // Compute sum of magnitude pairs for all 64 tone combinations
+    for (int j = 0; j < n_tones; ++j)
+    {
+        int j1 = j & 0x07;      // Lower 3 bits = tones for symbol 1
+        int j2 = (j >> 3) & 0x07;  // Upper 3 bits = tones for symbol 2
+
+        s2[j] = WF_ELEM_MAG(wf1[kFT8_Gray_map[j1]]) + WF_ELEM_MAG(wf2[kFT8_Gray_map[j2]]);
+    }
+
+    // Extract bit significance
+    for (int i = 0; i < n_bits; ++i)
+    {
+        if (bit_idx + i >= FTX_LDPC_N)
+        {
+            break;
+        }
+
+        uint16_t mask = (n_tones >> (i + 1));
+        float max_zero = -1000, max_one = -1000;
+        for (int n = 0; n < n_tones; ++n)
+        {
+            if (n & mask)
+            {
+                max_one = max2(max_one, s2[n]);
+            }
+            else
+            {
+                max_zero = max2(max_zero, s2[n]);
+            }
+        }
+
+        log174[bit_idx + i] = max_one - max_zero;
+    }
+}
+
 static void ft8_decode_multi_symbols(const WF_ELEM_T* wf, int num_bins, int n_syms, int bit_idx, float* log174)
 {
     const int n_bits = 3 * n_syms;

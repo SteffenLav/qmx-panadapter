@@ -64,10 +64,12 @@ typedef struct
 {
     float freq;
     float time;
+    float snr_db;            ///< Estimated SNR in dB (measured from signal and noise floor)
     int ldpc_errors;         ///< Number of LDPC errors during decoding
     uint16_t crc_extracted;  ///< CRC value recovered from the message
     uint16_t crc_calculated; ///< CRC value calculated over the payload
     // int unpack_status;       ///< Return value of the unpack routine
+    uint8_t symbols[FT8_NN]; ///< Decoded FT8 symbols (0-7) for Stage 2 reconstruction; populated on successful decode
 } ftx_decode_status_t;
 
 /// Localize top N candidates in frequency and time according to their sync strength (looking at Costas symbols)
@@ -88,6 +90,23 @@ int ftx_find_candidates(const ftx_waterfall_t* power, int num_candidates, ftx_ca
 /// @param[out] status ftx_decode_status_t structure that will be filled with the status of various decoding steps
 /// @return True if the decoding was successful, false otherwise (check status for details)
 bool ftx_decode_candidate(const ftx_waterfall_t* power, const ftx_candidate_t* cand, int max_iterations, ftx_message_t* message, ftx_decode_status_t* status);
+
+/// Set the current filename for diagnostic logging
+void diag_set_filename(const char* filename);
+
+/// Close the diagnostic log file (call at end of decode session)
+void diag_log_close(void);
+
+/// Stage 2: Reconstruct a decoded message's FSK signal and subtract from waterfall
+/// @param[in] power Waterfall data to subtract from
+/// @param[in] msg Decoded message (contains text/tones)
+/// @param[in] cand Candidate information (frequency and time offset)
+/// @param[in] scale Scale factor (0.0-1.0) for how much signal to subtract (default 0.9)
+/// @param[out] residual Output waterfall with signal subtracted (caller allocates memory)
+/// @return True if subtraction succeeded, false on allocation failure
+bool ftx_subtract_candidate(const ftx_waterfall_t* power, const ftx_message_t* msg,
+                           const ftx_candidate_t* cand, float scale,
+                           ftx_waterfall_t* residual);
 
 #ifdef __cplusplus
 }

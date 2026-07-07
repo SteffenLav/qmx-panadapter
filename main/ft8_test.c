@@ -177,12 +177,12 @@ int ft8_op_mode_slot_ms(void)
 // glitched the display and disrupted in-progress QSOs).
 //
 // Expressed as WALL-CLOCK time, not a fixed slot count, so it dwells the same
-// ~120 s in both FT8 (15 s slots -> 8 slots) and FT4 (7.5 s slots -> 16 slots).
+// ~600 s (10 min) in both FT8 (15 s slots -> 40 slots) and FT4 (7.5 s slots -> 80 slots).
 // A fixed 8-slot count fired after only ~60 s in FT4 - and since FT4 is far less
-// populated than FT8, a blank decode list is routine there, so it produced a
-// spurious "stuck" toast on a merely quiet FT4 band (W7STF field report,
-// 2026-07-03). The effective per-mode threshold is FT8_STUCK_RESET_MS / slot_ms.
-#define FT8_STUCK_RESET_MS 120000
+// populated than FT8, a blank decode list is routine there, so a spurious reset
+// on a merely quiet band is too common. Extended to 10 min to almost never fire
+// on normal band conditions. The effective per-mode threshold is FT8_STUCK_RESET_MS / slot_ms.
+#define FT8_STUCK_RESET_MS 600000
 
 // Wall-clock budget for one slot's decode (monitor_process + candidate loop,
 // measured from the top of decode_slot). Candidates are processed strongest
@@ -1014,9 +1014,6 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
                 s_stuck_slots = 0;
                 iq_balance_reset();
                 audio_request_reset();
-                char tb[48];
-                snprintf(tb, sizeof(tb), "%s stuck — resetting audio", proto);
-                ui_toast(tb);
             }
         } else {
             s_stuck_slots = 0;
