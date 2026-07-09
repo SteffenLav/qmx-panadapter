@@ -30,6 +30,32 @@ void display_set_brightness(int percent)
     bsp_display_brightness_set(percent);
 }
 
+// Call once, right after ui_init() returns (main.c) - see display_init()'s
+// comment on why the backlight starts at 0 instead of coming on immediately.
+//
+// Deliberately a plain blocking ramp (vTaskDelay loop) on the CALLER's task,
+// NOT an lv_anim_t. An lv_anim's steps are driven by the LVGL port's own
+// timer/task, which is simultaneously doing its heaviest work of the whole
+// session right here - the very first full-screen render (spectrum,
+// waterfall, every button). An earlier lv_anim version of this fade was
+// visibly coarse/jumpy and varied boot to boot (reported on real hardware,
+// 2026-07-08) - the animation timer was being starved by that render, not
+// running smoothly. Driving the brightness directly from app_main's own
+// task (which has nothing else to do at this exact point) sidesteps LVGL's
+// scheduler entirely, so the ramp is smooth and consistent regardless of
+// how busy the first render is.
+void display_fade_in_backlight(int target_percent)
+{
+    if (target_percent > 100) target_percent = 100;
+    if (target_percent < 0) target_percent = 0;
+    const int steps = 50;
+    const int total_ms = 500;
+    for (int i = 1; i <= steps; i++) {
+        bsp_display_brightness_set((i * target_percent) / steps);
+        vTaskDelay(pdMS_TO_TICKS(total_ms / steps));
+    }
+}
+
 // Flip the landscape orientation 180 degrees (for upside-down mounting / which
 // side the cables exit). Normal = LV_DISPLAY_ROTATION_90, flipped = _270. All
 // widgets live in the same 1280x720 logical space, so LVGL re-maps the layout
@@ -96,7 +122,15 @@ esp_err_t display_init(lv_display_t **out_disp)
         return ESP_FAIL;
     }
 
-    bsp_display_backlight_on();
+    // Start dark, not bsp_display_backlight_on() (=100% immediately): the
+    // panel powers up with garbage/white framebuffer content that's visible
+    // the instant the backlight is on, well before ui_init() has built
+    // anything or LVGL has flushed a real frame - a jarring white flash.
+    // display_fade_in_backlight() (called from main.c right after ui_init()
+    // returns, i.e. once the first real frame is queued) ramps this up to
+    // 100% over 250ms instead, so the app appears via a quick controlled
+    // fade rather than an instant flash-then-swap.
+    bsp_display_brightness_set(0);
 
     // Phase 6.2: rotate to landscape (panel is natively 720x1280 portrait)
     lv_display_set_rotation(s_disp, LV_DISPLAY_ROTATION_90);

@@ -617,6 +617,30 @@ static const httpd_uri_t uri_upload_status = {
     .uri = "/api/upload_status", .method = HTTP_GET, .handler = upload_status_handler,
 };
 
+// GET /api/signal — just the S-meter peak dBm around the VFO, nothing else.
+// Deliberately tiny so the web UI can poll it several times a second to make
+// its S-meter track like the Tab5's (which samples at 5 Hz), instead of the
+// once-per-second /api/status that undersamples dynamic signals and reads low.
+// Same dsp call + params as status_handler and render.c's Tab5 S-meter, so the
+// dBm value is identical — only the polling cadence differs.
+static esp_err_t signal_handler(httpd_req_t *req)
+{
+    float peak_dbm = -999.0f;
+    int vfo_bin = ((ui_get_if_bin_shift(DSP_FFT_SIZE) % DSP_FFT_SIZE) + DSP_FFT_SIZE) % DSP_FFT_SIZE;
+    char buf[32];
+    if (dsp_get_peak_dbm_around_vfo(vfo_bin, 64, &peak_dbm) == ESP_OK)
+        snprintf(buf, sizeof(buf), "{\"dbm\":%.1f}", (double)peak_dbm);
+    else
+        snprintf(buf, sizeof(buf), "{\"dbm\":null}");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    return httpd_resp_send(req, buf, HTTPD_RESP_USE_STRLEN);
+}
+
+static const httpd_uri_t uri_signal = {
+    .uri = "/api/signal", .method = HTTP_GET, .handler = signal_handler,
+};
+
 // Background upload task — processes QRZ/eQSL uploads without blocking httpd.
 // Results stored in s_last_upload for polling via /api/upload_status.
 static void upload_task(void *arg)
@@ -720,7 +744,7 @@ esp_err_t webserver_start(void)
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.server_port     = 80;
     config.stack_size      = 12288;
-    config.max_uri_handlers = 17;
+    config.max_uri_handlers = 18;
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -746,6 +770,7 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_qrz_key);
     httpd_register_uri_handler(s_server, &uri_qrz_upload);
     httpd_register_uri_handler(s_server, &uri_upload_status);
+    httpd_register_uri_handler(s_server, &uri_signal);
     httpd_register_uri_handler(s_server, &uri_eqsl_creds);
     httpd_register_uri_handler(s_server, &uri_eqsl_upload);
     httpd_register_uri_handler(s_server, &uri_config_get);

@@ -1245,6 +1245,9 @@ static const ft8_band_freq_t FT8_BAND_FREQS[] = {
 // these sets the dial + flips the Tab5 to FT4 but sends NO CAT mode change.
 // 160 m and 60 m have no standard FT4 frequency and are omitted. Note 40 m is
 // 7047.5 kHz - the value is exact; only the "MHz.kkk" preset label rounds it.
+// Wrapped in FT4_MODE_DISABLED (ft8_test.h) along with its only use site
+// below - kept, not deleted, pending a final decision on FT4's fate.
+#if !FT4_MODE_DISABLED
 static const ft8_band_freq_t FT4_BAND_FREQS[] = {
     { "80",  3575000  },
     { "40",  7047500  },
@@ -1257,6 +1260,7 @@ static const ft8_band_freq_t FT4_BAND_FREQS[] = {
     { "6",   50318000 },
 };
 #define N_FT4_BAND_FREQS (sizeof(FT4_BAND_FREQS) / sizeof(FT4_BAND_FREQS[0]))
+#endif
 
 // Cyan accent used for everything FT4: the dropdown's FT4 column header and the
 // "MODE: FT4" label, so the two can never drift apart. FT8 keeps the gold
@@ -1319,10 +1323,12 @@ static void ft8_freq_preset_cb(lv_event_t *e)
     apply_freq_preset((uint32_t)(uintptr_t)lv_event_get_user_data(e), false);
 }
 
+#if !FT4_MODE_DISABLED
 static void ft4_freq_preset_cb(lv_event_t *e)
 {
     apply_freq_preset((uint32_t)(uintptr_t)lv_event_get_user_data(e), true);
 }
+#endif
 
 static void ft8_freq_overlay_cb(lv_event_t *e)
 {
@@ -1468,17 +1474,24 @@ static void ft8_freq_popup_open(void)
 
     uint32_t cur_hz = cat_get_frequency();
     const int top_y  = MID_Y + 8;          // both columns top-aligned
-    const int col_w  = 240;
-    const int col_gap = 20;
 
     // FT8 column (gold header) at the left, FT4 column (cyan header) to its
-    // right. FT4 = same radio data mode, different slot timing (engine pending).
+    // right. FT4 = same radio data mode, different slot timing.
     int h_ft8 = build_preset_column(ov, LEFT_W, top_y, "FT8", 0xFFDD00,
                                     FT8_BAND_FREQS, N_FT8_BAND_FREQS,
                                     bands, band_count, cur_hz, ft8_freq_preset_cb, false);
-    int h_ft4 = build_preset_column(ov, LEFT_W + col_w + col_gap, top_y, "FT4", FT4_ACCENT_HEX,
-                                    FT4_BAND_FREQS, N_FT4_BAND_FREQS,
-                                    bands, band_count, cur_hz, ft4_freq_preset_cb, true);
+    // FT4 soft-disabled (see FT4_MODE_DISABLED in ft8_test.h) - skip building
+    // the column entirely so it's invisible, not just inert; ft8_op_mode_set()
+    // would coerce a tap to FT8 anyway, but a visible-but-nonfunctional
+    // column would look broken rather than "never there".
+    int h_ft4 = 0;
+#if !FT4_MODE_DISABLED
+    const int col_w  = 240;
+    const int col_gap = 20;
+    h_ft4 = build_preset_column(ov, LEFT_W + col_w + col_gap, top_y, "FT4", FT4_ACCENT_HEX,
+                                FT4_BAND_FREQS, N_FT4_BAND_FREQS,
+                                bands, band_count, cur_hz, ft4_freq_preset_cb, true);
+#endif
 
     if (h_ft8 == 0 && h_ft4 == 0) {
         ESP_LOGW(TAG, "FT8 freq dropdown: no bands with a known FT8/FT4 freq");

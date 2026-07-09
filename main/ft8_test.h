@@ -80,6 +80,18 @@ uint32_t ft8_get_timing_seq(void);
 // will not decode/transmit correctly until that follow-up lands. Wiring the
 // flag now is deliberate: it gives the engine work a single, already-plumbed
 // point to branch on. See the TODO at the monitor_config in ft8_task().
+// FT4 SOFT-DISABLE (2026-07-08): decided to omit FT4 from the app for now -
+// too resource-draining, and its tight 7.5 s slot/timing constraints make
+// for a very limited experience. This single flag is the entire on/off
+// switch: ft8_op_mode_set()/_get() (ft8_test.c) coerce every FT4 request
+// (from the UI or a persisted NVS value from before this change) to FT8,
+// and ft8_screen_view.c skips building the FT4 preset column entirely, so
+// it's not just inert but invisible ("as if it was never there"). No FT4
+// code was deleted - flip this back to 0 to fully re-enable, or use it as
+// the single point to find every gated call site before removing the FT4
+// code path for good, once that's a final decision rather than a pause.
+#define FT4_MODE_DISABLED 1
+
 typedef enum {
     FT8_OP_MODE_FT8 = 0,
     FT8_OP_MODE_FT4 = 1,

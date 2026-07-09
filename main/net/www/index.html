@@ -158,6 +158,54 @@
   .bot-btn:hover { border-color: var(--accent); }
   .dim { color: var(--dim); font-size: 0.75rem; white-space: nowrap; }
 
+  /* ---- Frequency keypad (tap the VFO to open) ---- */
+  #vfo.clickable-freq { cursor: pointer; border-radius: 4px;
+                        border: 1px solid transparent; padding: 0 0.3rem;
+                        /* make the tap reliable on touchscreens: no text-select,
+                           no 300ms double-tap-zoom delay, no grey flash */
+                        touch-action: manipulation;
+                        user-select: none; -webkit-user-select: none;
+                        -webkit-tap-highlight-color: transparent; }
+  #vfo.clickable-freq:hover { border-color: var(--accent); }
+  #fp-overlay {
+    display: none; position: fixed; inset: 0; z-index: 1100;
+    background: rgba(0,0,0,0.55);
+  }
+  #fp-overlay.open { display: block; }
+  #freqpad {
+    display: none; position: fixed; z-index: 1101;
+    top: 50%; left: 50%; transform: translate(-50%, -50%);
+    background: var(--card); border: 1px solid var(--accent);
+    border-radius: 10px; padding: 0.9rem;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.7);
+    width: min(92vw, 340px);
+  }
+  #freqpad.open { display: block; }
+  #fp-title { color: var(--dim); font-size: 0.85rem; text-align: center;
+              text-transform: uppercase; letter-spacing: 0.06em; }
+  #fp-display {
+    color: var(--accent); font-size: 1.9rem; font-weight: 700;
+    text-align: center; font-variant-numeric: tabular-nums;
+    margin: 0.5rem 0; white-space: nowrap; overflow: hidden;
+  }
+  #fp-hint { color: var(--dim); font-size: 0.7rem; text-align: center;
+             margin-bottom: 0.6rem; }
+  #fp-keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
+  #fp-keys button, #fp-actions button {
+    font-family: inherit; font-size: 1.4rem; font-weight: 600;
+    color: var(--fg); background: #1f2937;
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.7rem 0; cursor: pointer;
+    -webkit-tap-highlight-color: transparent; user-select: none;
+  }
+  #fp-keys button:hover, #fp-actions button:hover { border-color: var(--accent); }
+  #fp-keys button:active, #fp-actions button:active { background: #2a3347; }
+  #fp-actions { display: grid; grid-template-columns: 1fr 1fr;
+                gap: 0.5rem; margin-top: 0.5rem; }
+  #fp-cancel { color: var(--dim) !important; }
+  #fp-enter  { color: var(--bg) !important; background: var(--accent) !important;
+               border-color: var(--accent) !important; }
+
   @media (max-width: 600px) {
     #top { grid-template-columns: 1fr auto; }
     #top-right { display: none; }
@@ -172,6 +220,24 @@
 <body>
   <!-- click-away overlay -->
   <div id="overlay"></div>
+
+  <!-- frequency keypad modal (opened by tapping the VFO) -->
+  <div id="fp-overlay"></div>
+  <div id="freqpad">
+    <div id="fp-title">Enter frequency</div>
+    <div id="fp-display">---.---.--- Hz</div>
+    <div id="fp-hint">type the frequency in Hz, e.g. 14074000</div>
+    <div id="fp-keys">
+      <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
+      <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
+      <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
+      <button data-k="clear">C</button><button data-k="0">0</button><button data-k="back">&#9003;</button>
+    </div>
+    <div id="fp-actions">
+      <button id="fp-cancel" type="button">Cancel</button>
+      <button id="fp-enter" type="button">Set</button>
+    </div>
+  </div>
 
   <div id="top">
     <!-- left: Band / Mode / BW / Zoom -->
@@ -193,9 +259,9 @@
         <div class="dropdown" id="dd-zoom"></div>
       </div>
     </div>
-    <!-- center: VFO frequency -->
+    <!-- center: VFO frequency (tap to open the keypad) -->
     <div id="top-center">
-      <div id="vfo">---.---.--- Hz</div>
+      <div id="vfo" class="clickable-freq" title="Tap to enter a frequency">---.---.--- Hz</div>
     </div>
     <!-- right: spacer | S-meter | spacer | F | fps  ← equal gaps either side of S-meter -->
     <div id="top-right">
@@ -326,6 +392,19 @@ function sUnitsFromDbm(dbm) {
    Dropdown system
    ===================================================================== */
 let openDd = null;
+
+/* True while a pointer is pressed inside an open dropdown. The 1 Hz tick
+   rebuilds the open dropdown's buttons (dd.innerHTML=""), and if that lands
+   between mousedown and mouseup the clicked <button> is destroyed mid-click,
+   so the browser never fires the click — the user had to click twice. We skip
+   the rebuild while a press is active so the button survives to be clicked. */
+let ddPressActive = false;
+document.addEventListener("pointerdown", (e) => {
+  if (e.target.closest && e.target.closest(".dropdown")) ddPressActive = true;
+});
+const clearDdPress = () => { ddPressActive = false; };
+document.addEventListener("pointerup", clearDdPress);
+document.addEventListener("pointercancel", clearDdPress);
 
 function closeAllDropdowns() {
   if (openDd) {
@@ -473,11 +552,18 @@ async function sendCmd(payload) {
 function buildBandDropdown() {
   const dd = document.getElementById("dd-band");
   dd.innerHTML = "";
-  lastBands.forEach(b => {
+  /* Highlight only the NEAREST band to the current VFO, not every band within
+     1.5 MHz — 10m (28.1246) and 11m (27.245) are 0.88 MHz apart, so a fixed
+     threshold lit both yellow at once. */
+  let nearest = -1, best = Infinity;
+  lastBands.forEach((b, i) => {
+    const d = Math.abs(lastFreqHz - b.center_hz);
+    if (d < best) { best = d; nearest = i; }
+  });
+  lastBands.forEach((b, i) => {
     const btn = document.createElement("button");
     btn.textContent = b.name + "m";
-    const dist = Math.abs(lastFreqHz - b.center_hz);
-    if (dist < 1500000) btn.classList.add("active");
+    if (i === nearest && best < 1500000) btn.classList.add("active");
     btn.onclick = (e) => {
       e.stopPropagation();
       closeAllDropdowns();
@@ -579,6 +665,7 @@ function buildZoomDropdown() {
 /* Re-build open dropdown when state changes */
 function rebuildOpenDropdown() {
   if (!openDd) return;
+  if (ddPressActive) return;   // don't destroy the button under an in-progress click
   if (openDd === "band") buildBandDropdown();
   if (openDd === "mode") buildModeDropdown();
   if (openDd === "bw")   buildBwDropdown();
@@ -601,7 +688,10 @@ window.toggleDropdown = function(name) {
 /* =====================================================================
    /api/status @ 1 Hz
    ===================================================================== */
+let statusInFlight = false;
 async function tick() {
+  if (statusInFlight) return;   // never let /api/status requests pile up on a slow link
+  statusInFlight = true;
   try {
     const r = await fetch("/api/status", { cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);
@@ -647,6 +737,11 @@ async function tick() {
     document.getElementById("bw").textContent   = lastPassbandHz ? (lastPassbandHz + " Hz") : "--";
     document.getElementById("zoom").textContent = "x" + lastZoom.toFixed(1);
 
+    /* S-meter: driven straight off this 1 Hz status tick. A separate faster
+       /api/signal poller was tried but it piled extra connections onto this
+       device's fragile WiFi/httpd and jammed the whole web server, so it was
+       reverted — stability beats a snappier meter. (If a faster meter is ever
+       wanted, piggyback the dBm on the WS frame — zero extra connections.) */
     lastSignalDbm = s.signal_dbm ?? null;
     drawSmeter(lastSignalDbm);
 
@@ -698,6 +793,7 @@ async function tick() {
 
     rebuildOpenDropdown();
   } catch(e) { /* leave previous values */ }
+  finally { statusInFlight = false; }
 }
 
 function updateFreqAxis() {
@@ -765,6 +861,7 @@ function drawFreqAxisTicks() {
 
 tick();
 setInterval(tick, 1000);
+
 
 /* =====================================================================
    Click / drag to tune
@@ -1028,7 +1125,11 @@ function passbandBins() {
   const m = (lastMode || "").toUpperCase();
   let loHz, hiHz;
 
-  if (m.indexOf("CW") >= 0) {
+  /* Mirror compute_passband_edges_hz() in ui.c so the web matches the Tab5:
+     CW / AM / FM are centered on the carrier (double-sideband), LSB is below,
+     USB / DiGi / FT8 are above. AM used to fall into the USB branch here and
+     drew a one-sided USB-like passband instead of a centered one. */
+  if (m.indexOf("CW") >= 0 || m.indexOf("AM") >= 0 || m.indexOf("FM") >= 0) {
     loHz = -lastPassbandHz / 2;
     hiHz =  lastPassbandHz / 2;
   } else if (m.indexOf("LSB") >= 0) {
@@ -1335,6 +1436,65 @@ function handleWheel(e) {
 }
 document.getElementById("spec-overlay").addEventListener("wheel", handleWheel, { passive: false });
 document.getElementById("wf-overlay").addEventListener("wheel",  handleWheel, { passive: false });
+
+/* =====================================================================
+   Frequency keypad — tap the VFO to enter a frequency directly.
+   Digits accumulate into a MHz.kHz.Hz display; Set commits via
+   /api/cmd set_freq (same path as tap-to-tune). Mirrors the Tab5
+   panadapter freq keypad's dotted-Hz entry.
+   ===================================================================== */
+(function () {
+  const pad   = document.getElementById("freqpad");
+  const ovl   = document.getElementById("fp-overlay");
+  const disp  = document.getElementById("fp-display");
+  const vfoEl = document.getElementById("vfo");
+  let buf = "";
+  const MAX_DIGITS = 8;   // up to 6 m (50–54 MHz = 8 digits)
+
+  function render() {
+    disp.textContent = buf ? fmtHz(parseInt(buf, 10)) : "---.---.--- Hz";
+  }
+  function isOpen() { return pad.classList.contains("open"); }
+  function open()  { buf = ""; render(); ovl.classList.add("open"); pad.classList.add("open"); }
+  function close() { ovl.classList.remove("open"); pad.classList.remove("open"); }
+  function press(k) {
+    if      (k === "clear") buf = "";
+    else if (k === "back")  buf = buf.slice(0, -1);
+    else if (/^[0-9]$/.test(k)) { if (buf.length < MAX_DIGITS) buf += k; }
+    render();
+  }
+  function commit() {
+    const hz = parseInt(buf, 10);
+    if (hz > 0) {
+      sendCmd({ action: "set_freq", hz: hz });
+      lastFreqHz = hz;
+      document.getElementById("vfo").textContent = fmtHz(hz);
+      updateFreqAxis();
+    }
+    close();
+  }
+
+  vfoEl.addEventListener("click", open);
+  /* Explicit touch handler: on some touchscreens a plain-<div> tap never
+     synthesizes a click (text-selection / zoom gesture eats it). preventDefault
+     stops the ghost click so open() fires exactly once. */
+  vfoEl.addEventListener("touchend", (e) => { e.preventDefault(); open(); }, { passive: false });
+  ovl.addEventListener("click", close);
+  document.getElementById("fp-cancel").addEventListener("click", close);
+  document.getElementById("fp-enter").addEventListener("click", commit);
+  document.getElementById("fp-keys").addEventListener("click", (e) => {
+    const b = e.target.closest("button");
+    if (b) press(b.dataset.k);
+  });
+  /* Physical keyboard while the pad is open (desktop convenience) */
+  document.addEventListener("keydown", (e) => {
+    if (!isOpen()) return;
+    if      (/^[0-9]$/.test(e.key)) { press(e.key);  e.preventDefault(); }
+    else if (e.key === "Backspace") { press("back"); e.preventDefault(); }
+    else if (e.key === "Enter")     { commit();      e.preventDefault(); }
+    else if (e.key === "Escape")    { close();       e.preventDefault(); }
+  });
+})();
 
 connectWs();
 </script>

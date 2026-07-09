@@ -100,6 +100,9 @@ static volatile bool          s_op_mode_loaded = false;   // lazy NVS load, once
 
 void ft8_op_mode_set(ft8_op_mode_t m)
 {
+#if FT4_MODE_DISABLED
+    m = FT8_OP_MODE_FT8;   // see FT4_MODE_DISABLED's comment in ft8_test.h
+#endif
     s_op_mode = m;
     s_op_mode_loaded = true;   // a deliberate set always wins over the lazy load
     settings_set_ft8_op_mode((uint8_t)m);   // sticky across reboot (debounced flush)
@@ -117,6 +120,11 @@ ft8_op_mode_t ft8_op_mode_get(void)
         qmx_settings_t cfg;
         settings_load_all(&cfg);
         s_op_mode = (cfg.ft8_op_mode == (uint8_t)FT8_OP_MODE_FT4) ? FT8_OP_MODE_FT4 : FT8_OP_MODE_FT8;
+#if FT4_MODE_DISABLED
+        // A device that had FT4 selected before this change must not come
+        // back up in FT4 - see FT4_MODE_DISABLED's comment in ft8_test.h.
+        s_op_mode = FT8_OP_MODE_FT8;
+#endif
     }
     return s_op_mode;
 }

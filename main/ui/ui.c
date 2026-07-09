@@ -159,6 +159,7 @@ static bool legal_band_edges(uint32_t center_hz, uint32_t *lo, uint32_t *hi)
         {1800000, 2000000},  {3500000, 4000000},   {5250000, 5450000},
         {7000000, 7300000},  {10100000, 10150000}, {14000000, 14350000},
         {18068000, 18168000},{21000000, 21450000}, {24890000, 24990000},
+        {26900000, 27500000}, /* 11m/CB — QMX+ exposes it with no band limits */
         {28000000, 29700000},{50000000, 54000000},
     };
     for (size_t i = 0; i < sizeof(E) / sizeof(E[0]); i++) {
@@ -261,9 +262,18 @@ static void band_popup_open(void)
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
 
     uint32_t cur_hz = cat_get_frequency();
+    // Highlight only the single NEAREST band to the current VFO, not every band
+    // within a fixed +/-1 MHz window — 10m (28.1246) and 11m (27.245) are only
+    // 0.88 MHz apart, so the window lit both at once (operator report 2026-07-09).
+    int active_idx = -1;
+    uint32_t best_d = UINT32_MAX;
     for (int i = 0; i < band_count; i++) {
-        bool active = (cur_hz >= bands[i].center_hz - 1000000 &&
-                       cur_hz <= bands[i].center_hz + 1000000);
+        uint32_t d = (cur_hz > bands[i].center_hz) ? cur_hz - bands[i].center_hz
+                                                   : bands[i].center_hz - cur_hz;
+        if (d < best_d) { best_d = d; active_idx = i; }
+    }
+    for (int i = 0; i < band_count; i++) {
+        bool active = (i == active_idx);
         int col = i / rows;   // first `rows` bands in column 0, remainder in column 1
         int row = i % rows;
         lv_obj_t *btn = lv_obj_create(panel);
@@ -1858,6 +1868,55 @@ static void iq_warn_banner_keepalive_cb(lv_timer_t *t)
     lv_obj_move_foreground(s_iq_warn_banner);
 }
 
+// "Waiting for QMX" prompt: a breathing, screen-level message shown any time
+// cat_is_ready() is false (not just once at boot) - visible regardless of
+// which screen (Panadapter/FT8) is active, and re-appears if the QMX is
+// ever unplugged later, matching its own wording. One polling timer handles
+// show/hide AND the same re-foreground-every-second keepalive s_sim_border/
+// s_iq_warn_banner use (later-built modals are screen children too and
+// would otherwise cover it), since this is polled rather than event-driven
+// off cat.c.
+static lv_obj_t *s_qmx_wait_overlay = NULL;
+static lv_obj_t *s_qmx_wait_lbl     = NULL;
+
+static void qmx_wait_breathe_anim_cb(void *var, int32_t v)
+{
+    lv_obj_set_style_text_opa((lv_obj_t *)var, (lv_opa_t)v, 0);
+}
+
+static void qmx_wait_start_breathing(lv_obj_t *lbl)
+{
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, lbl);
+    lv_anim_set_exec_cb(&a, qmx_wait_breathe_anim_cb);
+    lv_anim_set_values(&a, LV_OPA_40, LV_OPA_COVER);
+    lv_anim_set_time(&a, 900);
+    lv_anim_set_playback_time(&a, 900);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_start(&a);
+}
+
+static void qmx_wait_poll_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_qmx_wait_overlay) return;
+    bool hidden = lv_obj_has_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
+    if (cat_is_ready()) {
+        if (!hidden) {
+            lv_anim_delete(s_qmx_wait_lbl, qmx_wait_breathe_anim_cb);
+            lv_obj_add_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
+    }
+    if (hidden) {
+        lv_obj_clear_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
+        qmx_wait_start_breathing(s_qmx_wait_lbl);
+    }
+    lv_obj_move_foreground(s_qmx_wait_overlay);  // keepalive against later modals
+}
+
 void ui_notify_qmx_fw_known(void)
 {
     if (!s_drawer) return;  // not built yet - drawer_build() will see the current firmware string
@@ -2445,6 +2504,26 @@ static void build_bandplan_strip(lv_obj_t *parent)
     lv_obj_clear_flag(s_bp_knob, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(s_bp_knob, LV_OBJ_FLAG_CLICKABLE);  // let touches fall through to s_bandplan_obj
     lv_obj_add_flag(s_bp_knob, LV_OBJ_FLAG_HIDDEN);
+
+    // Small left/right arrow hints so the knob reads as "slide me" at a
+    // glance. Edge-aligned (not fixed x) so they track update_bandplan_strip()
+    // resizing the knob every frame; non-clickable, same touch-passthrough
+    // reasoning as the knob itself.
+    lv_obj_t *arrow_l = lv_label_create(s_bp_knob);
+    lv_label_set_text(arrow_l, LV_SYMBOL_LEFT);
+    lv_obj_set_style_text_font(arrow_l, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(arrow_l, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_opa(arrow_l, LV_OPA_70, 0);
+    lv_obj_clear_flag(arrow_l, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(arrow_l, LV_ALIGN_LEFT_MID, 1, 0);
+
+    lv_obj_t *arrow_r = lv_label_create(s_bp_knob);
+    lv_label_set_text(arrow_r, LV_SYMBOL_RIGHT);
+    lv_obj_set_style_text_font(arrow_r, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(arrow_r, lv_color_hex(0xFFFFFF), 0);
+    lv_obj_set_style_text_opa(arrow_r, LV_OPA_70, 0);
+    lv_obj_clear_flag(arrow_r, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(arrow_r, LV_ALIGN_RIGHT_MID, -1, 0);
 }
 
 // Phase 5.10C: rewrite the 5 tick labels with absolute MHz centered on VFO.
@@ -2980,6 +3059,46 @@ void ui_init(lv_display_t *disp)
     }
     lv_timer_create(iq_warn_banner_keepalive_cb, 1000, NULL);
 
+    // "Waiting for QMX" prompt (see qmx_wait_poll_cb above). Full-screen,
+    // transparent background so it reads over whatever's underneath on any
+    // screen; starts hidden and the immediate poll right after creation
+    // shows it at once if the QMX genuinely isn't ready yet, rather than
+    // waiting up to 1s for the first timer tick.
+    s_qmx_wait_overlay = lv_obj_create(scr);
+    lv_obj_set_size(s_qmx_wait_overlay, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_pos(s_qmx_wait_overlay, 0, 0);
+    lv_obj_set_style_bg_opa(s_qmx_wait_overlay, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_qmx_wait_overlay, 0, 0);
+    lv_obj_set_style_radius(s_qmx_wait_overlay, 0, 0);
+    lv_obj_clear_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
+    {
+        // Single label, horizontal, not rotated: an earlier version applied
+        // transform_rotation to this (a 1200px-wide, multi-line WRAP label),
+        // which hung the LVGL render task solid on real hardware (2026-07-08)
+        // - LVGL 9 has to software-rotate the whole rendered text bitmap, and
+        // doing that for a large wrapped multi-line block (stacked on top of
+        // this whole display's own software 90-degree rotation) is far more
+        // expensive than the short single-line vertical watermark elsewhere
+        // in this file that this was modeled after. Do not re-add rotation
+        // to a large wrapped label without confirming render cost on hardware
+        // first. An earlier version also duplicated this as two offset
+        // labels for a poor-man's-bold effect; dropped as visually messy.
+        const char *txt = "Now turn on or reboot your QMX/+";
+        lv_obj_t *lbl = lv_label_create(s_qmx_wait_overlay);
+        lv_label_set_text(lbl, txt);
+        lv_obj_set_width(lbl, 1200);
+        lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
+        lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0x909090), 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_48, 0);
+        lv_obj_center(lbl);
+        s_qmx_wait_lbl = lbl;
+    }
+    qmx_wait_poll_cb(NULL);
+    lv_timer_create(qmx_wait_poll_cb, 1000, NULL);
+
     ESP_LOGI(TAG, "UI built: top=%dpx spectrum=%dpx labels=%dpx waterfall=%dpx bottom=%dpx",
              TOP_BAR_H, SPECTRUM_H, LABEL_BAR_H, WATERFALL_H, BOTTOM_BAR_H);
     // Load CW trim from NVS so bin shift is correct from first frame.
@@ -3017,9 +3136,14 @@ void ui_init(lv_display_t *disp)
             s_zoom_factor = s.zoom_factor;
         ui_set_zoom(s_zoom_factor, 0);
         ESP_LOGI(TAG, "Zoom loaded from NVS: %.1f", (double)s_zoom_factor);
-        // Apply saved backlight brightness.
-        display_set_brightness(s.brightness_pct);
-        ESP_LOGI(TAG, "Brightness loaded from NVS: %u%%", (unsigned)s.brightness_pct);
+        // Saved backlight brightness is NOT applied here - doing so mid-build
+        // would slam the backlight to full brightness before the rest of
+        // ui_init() finishes constructing widgets, defeating the deliberate
+        // start-dark-then-fade design in display.c (and turning any later
+        // hang/crash in ui_init() into a permanently-lit blank/white panel
+        // instead of a dark one). main.c reads the same NVS value and passes
+        // it to display_fade_in_backlight() once ui_init() has fully returned.
+        ESP_LOGI(TAG, "Brightness loaded from NVS: %u%% (applied after ui_init returns)", (unsigned)s.brightness_pct);
         // Last UI mode (Panadapter/FT8) is restored later by
         // ui_apply_saved_mode(), called from main.c once the FT8/CAT/audio
         // subsystems have been initialized (ft8_screen_view_show() and
@@ -3309,14 +3433,21 @@ void ui_update_frequency(uint32_t freq_hz)
         int band_count = 0;
         const cat_band_entry_t *bands = cat_get_band_list(&band_count);
         int current_band_idx = -1;
+        // Assign this frequency to the NEAREST band center within 1.5 MHz, not
+        // the first one within range. 10m (28.1246) and 11m (27.245) are only
+        // 0.88 MHz apart, so their +/-1.5 MHz windows overlap; the old
+        // first-match-wins loop misfiled a 10m tune into the 11m slot (11m is
+        // scanned first), so selecting 11m afterwards recalled the 10m frequency
+        // and appeared to "stay on 10m" (operator report, 2026-07-09).
+        // Nearest-center assignment resolves the overlap unambiguously.
+        uint32_t best_dist = 1500000u + 1u;
         for (int i = 0; i < band_count; i++) {
-            if (freq_hz >= bands[i].center_hz - 1500000 &&
-                freq_hz <= bands[i].center_hz + 1500000) {
-                s_band_last_hz[i] = freq_hz;
-                current_band_idx = i;
-                break;
-            }
+            uint32_t d = (freq_hz > bands[i].center_hz)
+                           ? freq_hz - bands[i].center_hz
+                           : bands[i].center_hz - freq_hz;
+            if (d <= 1500000u && d < best_dist) { best_dist = d; current_band_idx = i; }
         }
+        if (current_band_idx >= 0) s_band_last_hz[current_band_idx] = freq_hz;
         // Band changed: flush decode list (stale signals from different band)
         if (current_band_idx != s_last_band_idx) {
             s_last_band_idx = current_band_idx;
@@ -3370,6 +3501,7 @@ static const char *band_from_freq(uint32_t freq_hz)
     if (freq_hz >= 17900000 && freq_hz < 18500000) return "17m";
     if (freq_hz >= 21000000 && freq_hz < 21450000) return "15m";
     if (freq_hz >= 24890000 && freq_hz < 24990000) return "12m";
+    if (freq_hz >= 26900000 && freq_hz < 27500000) return "11m";  // QMX+ CB/11m
     if (freq_hz >= 28000000 && freq_hz < 29700000) return "10m";
     if (freq_hz >= 50000000 && freq_hz < 54000000) return "6m";
     return NULL;

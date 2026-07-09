@@ -93,6 +93,7 @@ void app_main(void)
     time_sync_init(bsp_i2c_get_handle());
 
     ui_init(disp);
+    display_fade_in_backlight(cfg.brightness_pct);  // reveal the app over 500ms instead of an instant flash
 
     // Background microSD auto-archive: mirrors the diag log, ADIF, and config
     // to a card if one is present (probes for it; no card-detect line). Started
