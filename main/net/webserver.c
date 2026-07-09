@@ -19,6 +19,7 @@
 #include "adif/qrz_upload.h"  // qrz_upload_pending
 #include "adif/eqsl_upload.h" // eqsl_upload_pending
 #include "settings.h"          // settings_load_all / settings_set_qrz_api_key
+#include "bandplan.h"          // bandplan_get_segments / _effective_region / _seg_color
 #include "config_io.h"         // config_io_export / config_io_import
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
@@ -118,6 +119,34 @@ static esp_err_t status_handler(httpd_req_t *req)
         settings_load_all(&cfg);
         cJSON_AddBoolToObject(root, "qrz_key_set", cfg.qrz_api_key[0] != '\0');
         cJSON_AddBoolToObject(root, "eqsl_creds_set", cfg.eqsl_user[0] != '\0' && cfg.eqsl_pswd[0] != '\0');
+
+        // Band-plan for the current band — whole-band strip on the web UI,
+        // mirrors update_bandplan_strip() in ui.c. Null if the VFO isn't inside
+        // a known amateur band (e.g. way off-band). Sent every status poll (no
+        // new endpoint/poller — the web httpd is fragile under extra load).
+        bandplan_region_t reg = bandplan_effective_region(
+            (bandplan_region_t)cfg.bandplan_region, cfg.my_grid);
+        const bp_seg_t *segs = NULL;
+        int nseg = bandplan_get_segments(cat_get_frequency(), reg, &segs);
+        if (nseg > 0 && segs) {
+            cJSON *bp = cJSON_AddObjectToObject(root, "bandplan");
+            cJSON_AddNumberToObject(bp, "lo", (double)segs[0].lo_hz);
+            cJSON_AddNumberToObject(bp, "hi", (double)segs[nseg - 1].hi_hz);
+            cJSON *sarr = cJSON_AddArrayToObject(bp, "segs");
+            for (int i = 0; i < nseg; i++) {
+                cJSON *sg = cJSON_CreateObject();
+                cJSON_AddNumberToObject(sg, "lo", (double)segs[i].lo_hz);
+                cJSON_AddNumberToObject(sg, "hi", (double)segs[i].hi_hz);
+                char cbuf[8];
+                snprintf(cbuf, sizeof(cbuf), "%06lX",
+                         (unsigned long)bandplan_seg_color(segs[i].type));
+                cJSON_AddStringToObject(sg, "c", cbuf);
+                cJSON_AddStringToObject(sg, "l", bandplan_seg_label(segs[i].type));
+                cJSON_AddItemToArray(sarr, sg);
+            }
+        } else {
+            cJSON_AddNullToObject(root, "bandplan");
+        }
     }
     const esp_app_desc_t *app = esp_app_get_description();
     cJSON_AddStringToObject(root, "tab5_fw",     app ? app->version : "");

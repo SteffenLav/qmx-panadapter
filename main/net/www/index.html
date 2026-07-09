@@ -29,8 +29,48 @@
   }
   body {
     display: grid;
-    grid-template-rows: auto 1fr auto 3fr auto;
+    grid-template-rows: auto 1fr auto 8px 3fr auto auto;
     gap: 0; padding: 0.3rem;
+  }
+  /* Explicit row assignment (not document-order auto-placement): the
+     screen-mode toggle in tick() sets several of these to display:none,
+     and relying on auto-placement to skip hidden items in row order got
+     fragile once there were more than 5 rows - pin each item to its own
+     row number so hiding one never shifts the others. */
+  #top          { grid-row: 1; }
+  #spec-wrap    { grid-row: 2; }
+  #freqaxis     { grid-row: 3; }
+  #split-handle { grid-row: 4; }
+  #wf-wrap      { grid-row: 5; }
+  #bandplan-wrap{ grid-row: 6; }
+  #bot          { grid-row: 7; }
+  /* Replaces the spec/freqaxis/handle/wf block (rows 2-5) when in FT8 mode. */
+  #ft8-notice   { grid-row: 2 / 6; }
+
+  /* ---- Band-plan strip (whole-band CW/Digi/Phone strip + draggable
+     visible-window knob, mirrors the Tab5's own bottom-of-screen strip,
+     which sits just above the bottom bar) ---- */
+  #bandplan-wrap { position: relative; height: 22px; margin-top: 0.3rem; display: none; }
+  #bandplan-wrap.show { display: block; }
+  #bandplan {
+    display: block; width: 100%; height: 100%;
+    border-radius: 4px; cursor: grab; touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #bandplan.dragging { cursor: grabbing; }
+
+  /* ---- Draggable split handle (spectrum/freqaxis vs waterfall) ---- */
+  #split-handle {
+    height: 8px; margin: 2px 0; border-radius: 3px;
+    background: var(--border); cursor: row-resize;
+    position: relative; touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #split-handle:hover, #split-handle.dragging { background: var(--accent); }
+  #split-handle::after {
+    content: ""; position: absolute; left: 50%; top: 50%;
+    transform: translate(-50%, -50%);
+    width: 36px; height: 3px; background: rgba(255,255,255,0.35); border-radius: 2px;
   }
 
   /* ---- Top status row ---- */
@@ -131,9 +171,9 @@
      Tab5 is not in Panadapter mode - see #ft8-notice toggle in tick()) ---- */
   #ft8-notice {
     display: none; align-items: center; justify-content: center;
-    text-align: center; line-height: 1.6;
+    text-align: center; line-height: 1.7;
     background: var(--card); border: 1px solid var(--border); border-radius: 6px;
-    color: var(--dim); font-size: 0.95rem; padding: 1rem;
+    color: var(--dim); font-size: 1.6rem; padding: 1rem;
   }
 
   /* ---- Bottom status row ---- */
@@ -168,8 +208,10 @@
                         -webkit-tap-highlight-color: transparent; }
   #vfo.clickable-freq:hover { border-color: var(--accent); }
   #fp-overlay {
+    /* Transparent click-catcher (not a dimming scrim) - closes the pad on an
+       outside click/tap without darkening the spectrum/waterfall behind it. */
     display: none; position: fixed; inset: 0; z-index: 1100;
-    background: rgba(0,0,0,0.55);
+    background: transparent;
   }
   #fp-overlay.open { display: block; }
   #freqpad {
@@ -182,7 +224,8 @@
   }
   #freqpad.open { display: block; }
   #fp-title { color: var(--dim); font-size: 0.85rem; text-align: center;
-              text-transform: uppercase; letter-spacing: 0.06em; }
+              text-transform: uppercase; letter-spacing: 0.06em;
+              cursor: move; touch-action: none; -webkit-tap-highlight-color: transparent; }
   #fp-display {
     color: var(--accent); font-size: 1.9rem; font-weight: 700;
     text-align: center; font-variant-numeric: tabular-nums;
@@ -228,9 +271,9 @@
     <div id="fp-display">---.---.--- Hz</div>
     <div id="fp-hint">type the frequency in Hz, e.g. 14074000</div>
     <div id="fp-keys">
-      <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
-      <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
       <button data-k="7">7</button><button data-k="8">8</button><button data-k="9">9</button>
+      <button data-k="4">4</button><button data-k="5">5</button><button data-k="6">6</button>
+      <button data-k="1">1</button><button data-k="2">2</button><button data-k="3">3</button>
       <button data-k="clear">C</button><button data-k="0">0</button><button data-k="back">&#9003;</button>
     </div>
     <div id="fp-actions">
@@ -286,7 +329,11 @@
     </div>
   </div>
 
+  <div id="split-handle" title="Drag to resize"></div>
+
   <div id="wf-wrap"><canvas id="waterfall" width="1024" height="600"></canvas><canvas id="wf-cursor" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;"></canvas><div class="tune-overlay" id="wf-overlay"></div></div>
+
+  <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
   <div id="ft8-notice">Tab5 is in FT8/FT4 mode — spectrum &amp; waterfall are shown only in Panadapter mode.<br>Use the buttons below to download logs/config or upload QSOs.</div>
 
@@ -341,6 +388,8 @@ let serverUtcAtTick = 0;   // server epoch (s) at last /api/status
 let localAtTick     = 0;   // Date.now()/1000 when that response arrived
 let qrzKeySet        = false;
 let eqslCredsSet     = false;
+let lastBandplan     = null;   // {lo, hi, segs:[{lo,hi,c,l}]} or null if off-band
+let bpDragging       = false;  // true once a bandplan-strip drag has crossed the threshold
 
 const SPEC_W     = 1024;
 const HZ_PER_BIN = 48000 / SPEC_W;   // 46.875 Hz/bin
@@ -706,6 +755,8 @@ async function tick() {
     lastZoom       = s.zoom        || 1.0;
     lastPanBins    = s.pan_bins    || 0;
     lastBands      = s.bands       || [];
+    lastBandplan   = s.bandplan    || null;
+    document.getElementById("bandplan-wrap").classList.toggle("show", !!lastBandplan);
 
     /* Spectrum/waterfall are Panadapter-only - the Tab5 pauses the WS stream
        server-side while in FT8/FT4 (ft8_screen_view.c), so mirror that here:
@@ -714,10 +765,12 @@ async function tick() {
     if (screen !== lastScreen) {
       lastScreen = screen;
       const isFt8 = (screen === "ft8");
-      document.getElementById("spec-wrap").style.display = isFt8 ? "none" : "";
-      document.getElementById("freqaxis").style.display  = isFt8 ? "none" : "";
-      document.getElementById("wf-wrap").style.display    = isFt8 ? "none" : "";
-      document.getElementById("ft8-notice").style.display = isFt8 ? "flex" : "none";
+      document.getElementById("spec-wrap").style.display     = isFt8 ? "none" : "";
+      document.getElementById("freqaxis").style.display      = isFt8 ? "none" : "";
+      document.getElementById("split-handle").style.display  = isFt8 ? "none" : "";
+      document.getElementById("wf-wrap").style.display       = isFt8 ? "none" : "";
+      document.getElementById("bandplan-wrap").style.display = isFt8 ? "none" : "";  // falls back to the .show-class-controlled default when cleared
+      document.getElementById("ft8-notice").style.display    = isFt8 ? "flex" : "none";
       if (isFt8) {
         fpsEl.textContent = "FT8 mode";
         fpsEl.classList.remove("bad");
@@ -790,6 +843,7 @@ async function tick() {
 
     /* Frequency axis: apply zoom, pan, and IF cal */
     updateFreqAxis();
+    if (!bpDragging) drawBandplan();  // don't fight an in-progress drag's preview
 
     rebuildOpenDropdown();
   } catch(e) { /* leave previous values */ }
@@ -802,10 +856,14 @@ function updateFreqAxis() {
   const spanHz   = 48000 / lastZoom;
   const halfSpan = spanHz / 2;
   const panHz    = lastPanBins * HZ_PER_BIN;
-  const isCW     = (lastMode || "").toUpperCase().indexOf("CW") >= 0;
-  const cwHz     = isCW ? lastCwPitchHz : 0;
-  /* Centre of the visible window (what the display is currently centred on) */
-  const centerHz = lastFreqHz + lastIfCalHz + cwHz + panHz;
+  /* Centre of the visible window - mirrors update_freq_axis_labels() in ui.c,
+     which is just dial frequency + pan, nothing else: the IF/CW-pitch offset
+     is a bin-domain shift the server already applies before the spectrum
+     bytes reach the browser (so the VFO signal lands at screen-centre), it
+     is NOT part of what the axis labels themselves should show. Adding
+     if_cal_hz/CW pitch here on top was double-counting that shift, which
+     made the centre label disagree with the actual VFO frequency. */
+  const centerHz = lastFreqHz + panHz;
 
   document.getElementById("fL2").textContent = fmtHz(centerHz - halfSpan);
   document.getElementById("fL1").textContent = fmtHz(centerHz - halfSpan / 2);
@@ -1028,8 +1086,13 @@ let specFlatten     = true;
 const SPEC_SMOOTH_ALPHA     = 0.25;
 const SPEC_FLOOR_UP_ALPHA   = 0.002;
 const SPEC_FLOOR_DOWN_ALPHA = 0.08;
-const SPEC_RANGE_Q          = 150;
-const SPEC_FLOOR_BIAS       = 12;
+/* Flat-mode range/bias, expressed in WS quantized-byte units (2.55 units/dB,
+   from the WS_DB_MIN/WS_DB_MAX -130..-30 dBm quantization in webserver_ws.c).
+   Must match the Tab5's own FLAT_RANGE_DB (30) / FLAT_FLOOR_BIAS_DB (6) in
+   ui.c - these used to be arbitrary web-only values (150 / 12, i.e. a ~58.8dB
+   range) that didn't match the Tab5's real fixed 30dB flat-mode range at all. */
+const SPEC_RANGE_Q          = 76.5;   // 30 dB * 2.55
+const SPEC_FLOOR_BIAS       = 15.3;   // 6 dB * 2.55
 
 function updateFlatBtn() {
   document.getElementById("flatbtn").classList.toggle("on", specFlatten);
@@ -1115,20 +1178,13 @@ function drawSmeter(dbm) {
   });
 }
 
-/* Passband bins — mirrors compute_passband_edges_hz() in ui.c.
-   Edges are in Hz relative to VFO centre (0 Hz = dial freq = canvas centre).
-   Zoom+pan shifts which bins are visible; we map edge Hz into canvas pixels
-   using the same formula as the Tab5 renderer:
-     x = (edgeHz - panHz) / spanHz * canvasW + canvasW/2  */
-function passbandBins() {
+/* Passband edges in Hz relative to VFO centre (0 Hz = dial freq).
+   Mirrors compute_passband_edges_hz() in ui.c: CW / AM / FM are centered on
+   the carrier (double-sideband), LSB is below, USB / DiGi / FT8 are above. */
+function computePassbandEdgesHz() {
   if (!lastPassbandHz) return null;
   const m = (lastMode || "").toUpperCase();
   let loHz, hiHz;
-
-  /* Mirror compute_passband_edges_hz() in ui.c so the web matches the Tab5:
-     CW / AM / FM are centered on the carrier (double-sideband), LSB is below,
-     USB / DiGi / FT8 are above. AM used to fall into the USB branch here and
-     drew a one-sided USB-like passband instead of a centered one. */
   if (m.indexOf("CW") >= 0 || m.indexOf("AM") >= 0 || m.indexOf("FM") >= 0) {
     loHz = -lastPassbandHz / 2;
     hiHz =  lastPassbandHz / 2;
@@ -1140,15 +1196,185 @@ function passbandBins() {
     loHz = 200;
     hiHz = 200 + lastPassbandHz;
   }
+  return { loHz, hiHz };
+}
+
+/* Passband bins — maps computePassbandEdgesHz()'s Hz-relative-to-VFO edges
+   into canvas pixels, using the same formula as the Tab5 renderer:
+     x = (edgeHz - panHz) / spanHz * canvasW + canvasW/2  */
+function passbandBins() {
+  const edges = computePassbandEdgesHz();
+  if (!edges) return null;
 
   /* Pan offset in Hz (positive pan_bins = spectrum shifts right = view shifts left) */
   const panHz  = lastPanBins * HZ_PER_BIN;
   const spanHz = 48000 / lastZoom;
   const W      = SPEC_W;
-  const loBin  = (loHz - panHz) / spanHz * W + W / 2;
-  const hiBin  = (hiHz - panHz) / spanHz * W + W / 2;
+  const loBin  = (edges.loHz - panHz) / spanHz * W + W / 2;
+  const hiBin  = (edges.hiHz - panHz) / spanHz * W + W / 2;
   return { loBin, hiBin };
 }
+
+/* =====================================================================
+   Band-plan strip — whole-band CW/Digi/Phone segments + a draggable
+   window knob showing the visible spectrum/waterfall span, mirroring
+   update_bandplan_strip() in main/ui/ui.c. previewHz overrides lastFreqHz
+   while a drag is in progress (same idea as ui.c passing `target` straight
+   into update_bandplan_strip() during a live drag, without touching the
+   committed VFO until release). */
+function drawBandplan(previewHz) {
+  const canvas = document.getElementById("bandplan");
+  if (!canvas || !lastBandplan) return;
+
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const rect = canvas.getBoundingClientRect();
+  const W = Math.round(rect.width * dpr), H = Math.round(rect.height * dpr);
+  if (W < 2 || H < 2) return;
+  if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, W, H);
+
+  const bp      = lastBandplan;
+  const bandLo  = bp.lo, bandHi = bp.hi;
+  const span    = Math.max(1, bandHi - bandLo);
+  const freqHz  = (previewHz !== undefined) ? previewHz : lastFreqHz;
+  const LABEL_MIN_FRAC = 56 / 1280;   // same visual threshold as the Tab5 (56px @ 1280px wide)
+
+  // CW/Digi/Phone segments, with a label once the block is wide enough.
+  const labelFontPx = Math.max(10, Math.round(H * 0.55));  // scales with strip height/dpr, not a fixed px size
+  ctx.textBaseline = "middle";
+  ctx.textAlign    = "center";
+  bp.segs.forEach(seg => {
+    const x0 = Math.round((seg.lo - bandLo) / span * W);
+    const x1 = Math.round((seg.hi - bandLo) / span * W);
+    const w  = Math.max(1, x1 - x0);
+    ctx.fillStyle = "#" + seg.c;
+    ctx.fillRect(x0, 0, w, H);
+    if (w / W >= LABEL_MIN_FRAC && !bpDragging) {
+      ctx.font      = "bold " + labelFontPx + "px ui-monospace, monospace";
+      ctx.fillStyle = "#ffffff";
+      ctx.fillText(seg.l, x0 + w / 2, Math.round(H / 2) + 1);
+    }
+  });
+  ctx.textAlign = "left";  // restore default in case anything else ever draws on this canvas
+
+  // Visible-span highlight: the slice of the band currently on the
+  // spectrum/waterfall (depends on zoom + pan), same formula as the
+  // frequency-axis labels so the two stay in lockstep.
+  const spanHz = 48000 / lastZoom;
+  const panHz  = lastPanBins * HZ_PER_BIN;
+  const center = freqHz + panHz;
+  let sx0 = Math.round((center - spanHz / 2 - bandLo) / span * W);
+  let sx1 = Math.round((center + spanHz / 2 - bandLo) / span * W);
+  sx0 = Math.max(0, sx0); sx1 = Math.min(W, sx1);
+  const sw = Math.max(1, sx1 - sx0);
+  ctx.fillStyle = "rgba(255,255,255,0.10)";
+  ctx.fillRect(sx0, 0, sw, H);
+
+  // Passband sub-block (filter passband, mode + width dependent) - hidden
+  // during a drag, same as the Tab5's own strip.
+  if (!bpDragging) {
+    const edges = computePassbandEdgesHz();
+    if (edges) {
+      let px0 = Math.round((freqHz + edges.loHz - bandLo) / span * W);
+      let px1 = Math.round((freqHz + edges.hiHz - bandLo) / span * W);
+      px0 = Math.max(0, px0); px1 = Math.min(W, px1);
+      let pw = px1 - px0;
+      if (pw < 6 * dpr) pw = 6 * dpr;
+      ctx.fillStyle = "rgba(176,176,176,0.8)";
+      ctx.fillRect(px0, 0, pw, H);
+    }
+  }
+
+  // VFO marker - thin bright line at the exact dial frequency.
+  const markerW = Math.max(1, Math.round(3 * dpr));
+  let mx = Math.round((freqHz - bandLo) / span * W);
+  mx = Math.max(0, Math.min(W - markerW, mx));
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(mx, 0, markerW, H);
+
+  // Knob frame around the visible-span block - reads as a grab-and-slide handle.
+  const lw = Math.max(1, Math.round(2 * dpr));
+  ctx.strokeStyle = "rgba(255,255,255,0.6)";
+  ctx.lineWidth = lw;
+  ctx.strokeRect(sx0 + lw / 2, lw / 2, Math.max(1, sw - lw), Math.max(1, H - lw));
+}
+
+/* Drag-to-tune on the band-plan strip - mirrors touch_event_cb's bandplan
+   branch in ui.c: a short move (< BP_DRAG_THRESHOLD_PX) is a plain tap that
+   jumps straight to that position; past the threshold it becomes a live
+   drag, previewed via drawBandplan(target) and only committed (sendCmd)
+   on release. Uses the touch-DOWN x for the tap case, not the release x -
+   same anti-jitter reasoning as the Tab5 (touch lift-off can report a
+   small coordinate jump). */
+(function () {
+  const canvas = document.getElementById("bandplan");
+  if (!canvas) return;
+  const BP_DRAG_THRESHOLD_PX = 8;
+
+  let active = false, startX = 0, startFreq = 0, targetHz = 0;
+
+  function clamp(hz) {
+    hz = Math.round(hz / 1000) * 1000;
+    return Math.max(lastBandplan.lo, Math.min(lastBandplan.hi, hz));
+  }
+
+  canvas.addEventListener("pointerdown", (e) => {
+    if (!lastBandplan) return;
+    active = true;
+    bpDragging = false;
+    startX = e.clientX;
+    startFreq = lastFreqHz;
+    targetHz = lastFreqHz;
+    canvas.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+
+  canvas.addEventListener("pointermove", (e) => {
+    if (!active || !lastBandplan) return;
+    const dx = e.clientX - startX;
+    if (!bpDragging) {
+      if (dx > -BP_DRAG_THRESHOLD_PX && dx < BP_DRAG_THRESHOLD_PX) return;
+      bpDragging = true;
+      canvas.classList.add("dragging");
+    }
+    const rectW  = canvas.getBoundingClientRect().width;
+    const hzPerPx = (lastBandplan.hi - lastBandplan.lo) / rectW;
+    targetHz = clamp(startFreq + dx * hzPerPx);
+    drawBandplan(targetHz);
+    document.getElementById("vfo").textContent = fmtHz(targetHz);
+  });
+
+  function commit(hz) {
+    sendCmd({ action: "set_freq", hz: hz });
+    lastFreqHz = hz;
+    document.getElementById("vfo").textContent = fmtHz(hz);
+    updateFreqAxis();
+    drawBandplan();
+  }
+
+  canvas.addEventListener("pointerup", (e) => {
+    if (!active) return;
+    active = false;
+    canvas.classList.remove("dragging");
+    if (!lastBandplan) { bpDragging = false; return; }
+    if (bpDragging) {
+      commit(targetHz);
+    } else {
+      const rect = canvas.getBoundingClientRect();
+      const hzPerPx = (lastBandplan.hi - lastBandplan.lo) / rect.width;
+      commit(clamp(lastBandplan.lo + (startX - rect.left) * hzPerPx));
+    }
+    bpDragging = false;
+  });
+
+  canvas.addEventListener("pointercancel", () => {
+    active = false;
+    bpDragging = false;
+    canvas.classList.remove("dragging");
+    drawBandplan();
+  });
+})();
 
 /* Returns {windowBins, centerBin} for the current zoom state.
    When zoom-FFT is active (lastZoomDecim > 1) the server has already mixed
@@ -1191,7 +1417,7 @@ function drawSpectrumFlat(bytes) {
   sctx.fillStyle = "#000"; sctx.fillRect(0, 0, W, H);
 
   sctx.fillStyle = "#1f2530";
-  for (const dbAbove of [10, 20, 30, 40]) {
+  for (const dbAbove of [10, 20, 30]) {
     const q = dbAbove * 2.55;
     const y = H - 1 - Math.round(q * (H-1) / SPEC_RANGE_Q);
     if (y >= 0 && y < H) sctx.fillRect(0, y, W, 1);
@@ -1242,7 +1468,7 @@ function drawSpectrumFlat(bytes) {
 
   /* dB-above-floor scale labels at the gridlines (right edge) */
   sctx.fillStyle = "#9aa7b4"; sctx.font = "11px system-ui,sans-serif"; sctx.textAlign = "right";
-  for (const dbAbove of [10, 20, 30, 40]) {
+  for (const dbAbove of [10, 20, 30]) {
     const q = dbAbove * 2.55;
     const y = H - 1 - Math.round(q * (H-1) / SPEC_RANGE_Q);
     if (y > 8 && y < H - 2) sctx.fillText("+" + dbAbove + " dB", W - 3, y - 2);
@@ -1378,10 +1604,12 @@ function refreshSizes() {
   if (resizeCanvas(wf, document.getElementById("wf-wrap")))
     { wfPxW=wf.width; wfPxH=wf.height; wfctx.fillStyle="#000"; wfctx.fillRect(0,0,wfPxW,wfPxH);
       wfcur.width=wfPxW; wfcur.height=wfPxH; }
+  if (lastBandplan) drawBandplan();
 }
 const ro=new ResizeObserver(refreshSizes);
 ro.observe(document.getElementById("spec-wrap"));
 ro.observe(document.getElementById("wf-wrap"));
+ro.observe(document.getElementById("bandplan-wrap"));
 refreshSizes();
 
 /* WebSocket */
@@ -1455,7 +1683,14 @@ document.getElementById("wf-overlay").addEventListener("wheel",  handleWheel, { 
     disp.textContent = buf ? fmtHz(parseInt(buf, 10)) : "---.---.--- Hz";
   }
   function isOpen() { return pad.classList.contains("open"); }
-  function open()  { buf = ""; render(); ovl.classList.add("open"); pad.classList.add("open"); }
+  function open()  {
+    buf = ""; render();
+    // Reset to CSS-centered position each time the pad opens - any drag from
+    // a previous session is discarded rather than persisted, same as a
+    // typical modal dialog.
+    pad.style.left = ""; pad.style.top = ""; pad.style.transform = "";
+    ovl.classList.add("open"); pad.classList.add("open");
+  }
   function close() { ovl.classList.remove("open"); pad.classList.remove("open"); }
   function press(k) {
     if      (k === "clear") buf = "";
@@ -1494,9 +1729,97 @@ document.getElementById("wf-overlay").addEventListener("wheel",  handleWheel, { 
     else if (e.key === "Enter")     { commit();      e.preventDefault(); }
     else if (e.key === "Escape")    { close();       e.preventDefault(); }
   });
+
+  /* Drag the pad by its title bar. The CSS default centers it via
+     top/left:50% + transform:translate(-50%,-50%); on drag start we snapshot
+     the current on-screen rect and switch to plain top/left pixels (transform
+     cleared) so the drag delta can just be added directly. open() resets the
+     inline styles each time so a stale drag position never persists. */
+  const title = document.getElementById("fp-title");
+  let dragging = false, startX = 0, startY = 0, origLeft = 0, origTop = 0;
+
+  title.addEventListener("pointerdown", (e) => {
+    const rect = pad.getBoundingClientRect();
+    pad.style.left = rect.left + "px";
+    pad.style.top  = rect.top + "px";
+    pad.style.transform = "none";
+    origLeft = rect.left; origTop = rect.top;
+    startX = e.clientX; startY = e.clientY;
+    dragging = true;
+    title.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+  title.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    let nx = origLeft + (e.clientX - startX);
+    let ny = origTop  + (e.clientY - startY);
+    nx = Math.max(0, Math.min(window.innerWidth  - pad.offsetWidth,  nx));
+    ny = Math.max(0, Math.min(window.innerHeight - pad.offsetHeight, ny));
+    pad.style.left = nx + "px";
+    pad.style.top  = ny + "px";
+  });
+  title.addEventListener("pointerup",     () => { dragging = false; });
+  title.addEventListener("pointercancel", () => { dragging = false; });
 })();
 
 connectWs();
+
+/* =====================================================================
+   Draggable split handle — resizes spectrum/freqaxis vs waterfall.
+   Grid rows: auto(top) 1fr(spec-wrap) auto(freqaxis) 8px(handle) Nfr(wf-wrap)
+   auto(bandplan) auto(bot). spec-wrap's fr weight is fixed at 1; only
+   wf-wrap's fr weight is adjusted by dragging and persisted, so the ratio
+   between the two panel heights survives a reload. Pure client-side, no
+   device round-trip. Rows are pinned via explicit `grid-row` (see the CSS),
+   so this template-rows string only needs to supply sizes in row order -
+   it doesn't matter which element ends up in which row.
+   ===================================================================== */
+(function () {
+  const handle   = document.getElementById("split-handle");
+  const specWrap = document.getElementById("spec-wrap");
+  const wfWrap   = document.getElementById("wf-wrap");
+  if (!handle || !specWrap || !wfWrap) return;
+
+  const MIN_PX = 60;
+  let wfFr = parseFloat(localStorage.getItem("wfFrRatio")) || 3;
+
+  function applyRatio(fr) {
+    wfFr = Math.max(0.3, Math.min(10, fr));
+    document.body.style.gridTemplateRows = "auto 1fr auto 8px " + wfFr.toFixed(3) + "fr auto auto";
+  }
+  applyRatio(wfFr);
+
+  let dragging = false, startY = 0, h1 = 0, h2 = 0;
+
+  function onPointerMove(e) {
+    const dy = e.clientY - startY;
+    let newH1 = h1 + dy, newH2 = h2 - dy;
+    if (newH1 < MIN_PX) { newH2 -= (MIN_PX - newH1); newH1 = MIN_PX; }
+    if (newH2 < MIN_PX) { newH1 -= (MIN_PX - newH2); newH2 = MIN_PX; }
+    if (newH1 < MIN_PX || newH2 < MIN_PX) return;  // window too small to split further
+    applyRatio(newH2 / newH1);
+  }
+
+  function endDrag() {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove("dragging");
+    localStorage.setItem("wfFrRatio", wfFr.toFixed(3));
+    window.removeEventListener("pointermove", onPointerMove);
+    window.removeEventListener("pointerup", endDrag);
+  }
+
+  handle.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    handle.classList.add("dragging");
+    startY = e.clientY;
+    h1 = specWrap.getBoundingClientRect().height;
+    h2 = wfWrap.getBoundingClientRect().height;
+    window.addEventListener("pointermove", onPointerMove);
+    window.addEventListener("pointerup", endDrag);
+    e.preventDefault();
+  });
+})();
 </script>
 </body>
 </html>
