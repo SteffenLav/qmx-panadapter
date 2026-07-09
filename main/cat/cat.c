@@ -599,21 +599,39 @@ static void poll_task(void *arg)
             esp_err_t err = cdc_acm_host_data_tx_blocking(
                 s_cdc_dev, (const uint8_t *)cmd, cmd_len, 200);
             if (err != ESP_OK) {
-                // A single transient TX timeout (e.g. CDC congestion during an
-                // FT8 mode toggle) must NOT kill the poll task - that froze
-                // cat_get_frequency() for the whole session and broke the
-                // Panadapter/FT8 sticky-freq persistence. Tolerate a burst;
-                // only give up after a sustained run (a real disconnect also
-                // NULLs s_cdc_dev, ending the loop via its condition).
-                if (++poll_fail >= 20) {
-                    ESP_LOGW(TAG, "%s send failed %dx: 0x%x — radio likely gone, poll exiting", cmd, poll_fail, err);
-                    break;
+                // A CDC TX failure burst must NEVER permanently kill the poll
+                // task. Root-caused 2026-07-10 (serial-log proven): opening any
+                // full-screen modal reliably injures the CDC link ~150-250ms
+                // later (every USB timeout in a capture followed a modal open,
+                // 4/4). Usually one transfer fails and the next recovers; but
+                // the old "20 consecutive fails -> break" heuristic could fire
+                // on a longer burst and EXIT the poll for the whole session -
+                // which froze cat_get_frequency() AND, once the poll stopped
+                // draining the link, cascaded into a full USB-host wedge
+                // (CAT + audio dead, frozen screen, power-cycle only).
+                //
+                // A REAL disconnect is signalled independently: the EVT_DEV_GONE
+                // handler NULLs s_cdc_dev, which ends this loop via its while
+                // condition. So we no longer self-exit on a failure count at
+                // all - we just keep retrying this phase until either the link
+                // recovers (next TX succeeds, poll_fail resets) or a genuine
+                // disconnect tears us down. After a sustained run we back the
+                // retry cadence off from 50ms to 500ms so a truly-gone radio
+                // (QMX power-cycle often fires NO disconnect event on this
+                // board - see audio.c) doesn't spin the CPU or flood the log.
+                poll_fail++;
+                if (poll_fail == 1 || (poll_fail % 20) == 0) {
+                    ESP_LOGW(TAG, "%s send fail: 0x%x (%d consecutive) — retrying, waiting for link to recover",
+                             cmd, err, poll_fail);
                 }
-                ESP_LOGW(TAG, "%s transient send fail: 0x%x (%d/20), retrying", cmd, err, poll_fail);
-                vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
-                continue;  // retry this phase; don't advance, don't exit
+                int backoff_ms = (poll_fail > 20) ? 500 : CAT_POLL_INTERVAL_MS;
+                vTaskDelay(pdMS_TO_TICKS(backoff_ms));
+                continue;  // retry this phase; never break on failure count
             }
-            poll_fail = 0;
+            if (poll_fail > 0) {
+                ESP_LOGI(TAG, "CAT link recovered after %d consecutive failures", poll_fail);
+                poll_fail = 0;
+            }
         }
         phase = (phase + 1) % n_phases;
         vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
