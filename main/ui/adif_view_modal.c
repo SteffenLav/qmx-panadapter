@@ -19,6 +19,8 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_heap_caps.h"
+#include "esp_timer.h"
 
 static const char *TAG = "adif_view_modal";
 
@@ -153,6 +155,8 @@ static void build_qso_row(lv_obj_t *parent, const char *line, bool even_row)
 // Rebuild the list from the live ADIF log, newest record first.
 static void list_render(void)
 {
+    int64_t t_start = esp_timer_get_time();
+
     int total = adif_log_count();
     if (s_title) {
         char t[48];
@@ -171,13 +175,55 @@ static void list_render(void)
     }
 
     int shown = (total < ADIF_VIEW_MAX_ROWS) ? total : ADIF_VIEW_MAX_ROWS;
-    char line[1024];
-    for (int i = 0; i < shown; i++) {
-        int idx = total - 1 - i;   // newest first
-        if (!adif_log_get_record(idx, line, sizeof(line))) continue;
-        build_qso_row(s_list, line, (i % 2) == 1);
+
+    // Single pass over the file instead of calling adif_log_get_record() once
+    // per row - that function re-opens the file AND re-scans from the top on
+    // every call, so the old per-row loop cost O(shown^2) total line reads
+    // (153 for just 17 rows) plus `shown` separate fopen/fclose pairs. Read
+    // every displayed record in one fopen/fgets pass into a PSRAM buffer
+    // instead (200 rows * 1024 B = 200 KB, trivial against tens of MB free).
+    char *lines = heap_caps_malloc((size_t)shown * 1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!lines) {
+        ESP_LOGE(TAG, "OOM allocating %d-row ADIF buffer", shown);
+        return;
     }
-    ESP_LOGI(TAG, "ADIF viewer: showing %d of %d logged QSOs", shown, total);
+
+    int64_t t_read_start = esp_timer_get_time();
+    FILE *f = fopen(adif_log_file_path(), "r");
+    int got = 0;
+    if (f) {
+        char raw[1024];
+        int rec_idx = -1;
+        int skip = total - shown;   // older records beyond the display cap
+        while (fgets(raw, sizeof(raw), f)) {
+            if (rec_idx < 0) { rec_idx = 0; continue; }   // skip the <EOH> header line
+            if (rec_idx >= skip) {
+                char *slot = lines + (size_t)(rec_idx - skip) * 1024;
+                strncpy(slot, raw, 1023);
+                slot[1023] = '\0';
+                got++;
+            }
+            rec_idx++;
+        }
+        fclose(f);
+    } else {
+        ESP_LOGW(TAG, "open %s failed", adif_log_file_path());
+    }
+    int64_t t_read_done = esp_timer_get_time();
+
+    // File order is oldest-first; walk backward for newest-first display.
+    for (int i = got - 1; i >= 0; i--) {
+        bool even_row = ((got - 1 - i) % 2) == 1;
+        build_qso_row(s_list, lines + (size_t)i * 1024, even_row);
+    }
+    heap_caps_free(lines);
+
+    int64_t t_done = esp_timer_get_time();
+    ESP_LOGI(TAG, "ADIF viewer: showing %d of %d logged QSOs (read=%lld ms, rows=%lld ms, total=%lld ms)",
+             got, total,
+             (long long)((t_read_done - t_read_start) / 1000),
+             (long long)((t_done - t_read_done) / 1000),
+             (long long)((t_done - t_start) / 1000));
 }
 
 static void modal_build(void)
