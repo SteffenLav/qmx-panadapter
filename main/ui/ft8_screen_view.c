@@ -26,6 +26,8 @@
 // info pane alongside "ME: <call> <grid>".
 #include "ft8_tx.h"
 #include "ft8_qso.h"
+#include "ft8_pileup.h"
+#include "ft8_pileup_modal.h"
 #include "ft8_status.h"
 #include "ft8_test.h"   // ft8_op_mode_set() - FT8/FT4 sub-mode flag
 #include "ft8_tx_modal.h"
@@ -157,7 +159,7 @@ static lv_obj_t *s_btn_override_73     = NULL;  // manual QSO override: force 73
 static lv_obj_t *s_btn_tx_even  = NULL;
 static lv_obj_t *s_btn_tx_odd   = NULL;
 static lv_obj_t *s_btn_filter   = NULL;  // "Filter" button — opens exclude-prefix modal
-static lv_obj_t *s_btn_adif     = NULL;  // "ADIF-log" button — opens the read-only ADIF viewer
+static lv_obj_t *s_btn_adif     = NULL;  // "ADIF-log" button - swaps to "Pileup" when ft8_pileup_count() > 0
 static int        s_cq_parity   = -1;
 
 static lv_obj_t *s_list         = NULL;
@@ -922,6 +924,18 @@ static void t_clock_cb(lv_timer_t *t)
         if (lbl) lv_label_set_text(lbl, b);
     }
 
+    // ADIF-log/Pileup dual-purpose button: swap label + colour to make an
+    // active pileup impossible to miss. adif_or_pileup_btn_cb() re-checks the
+    // count itself at tap time, so this is purely cosmetic - it can never
+    // cause a tap to open the wrong modal.
+    if (s_btn_adif) {
+        bool has_pileup = ft8_pileup_count() > 0;
+        lv_obj_t *lbl = lv_obj_get_child(s_btn_adif, 0);
+        if (lbl) lv_label_set_text(lbl, has_pileup ? "Pileup" : "ADIF-log");
+        lv_obj_set_style_bg_color(s_btn_adif,
+            lv_color_hex(has_pileup ? UI_COLOR_PRIMARY : 0x163d5e), 0);
+    }
+
     // Status / TX / QSO indicator — always visible.
     // Priority: ACTIVE (red) > ARMED (amber) > QSO state (cyan) > ft8_status (dim white).
     if (s_lbl_tx) {
@@ -1174,12 +1188,21 @@ static void cq_btn_long_press_cb(lv_event_t *e)
     ft8_cq_modal_show();
 }
 
-// "ADIF-log" button -> open the read-only ADIF log viewer.
-static void adif_log_btn_cb(lv_event_t *e)
+// Dual-purpose button: shows "ADIF-log" normally, swaps to "Pileup" whenever
+// ft8_pileup_count() > 0 (see t_clock_cb's 1 Hz label/colour refresh below) -
+// dispatches by the SAME check at tap time rather than trusting the label
+// text, so a pileup that clears in the instant between the last refresh and
+// this tap still opens the right one.
+static void adif_or_pileup_btn_cb(lv_event_t *e)
 {
     (void)e;
-    ESP_LOGI(TAG, "ADIF-log tapped -> ADIF log viewer");
-    adif_view_modal_show();
+    if (ft8_pileup_count() > 0) {
+        ESP_LOGI(TAG, "Pileup/ADIF-log button tapped -> pileup viewer");
+        ft8_pileup_modal_show();
+    } else {
+        ESP_LOGI(TAG, "Pileup/ADIF-log button tapped -> ADIF log viewer");
+        adif_view_modal_show();
+    }
 }
 
 // Update the Call CQ button label to show the currently-selected CQ message.
@@ -1669,7 +1692,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_border_color(s_btn_adif, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
     lv_obj_set_style_border_width(s_btn_adif, 2, 0);
     lv_obj_set_style_radius(s_btn_adif, 8, 0);
-    lv_obj_add_event_cb(s_btn_adif, adif_log_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_btn_adif, adif_or_pileup_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *adif_lbl = lv_label_create(s_btn_adif);
     lv_label_set_text(adif_lbl, "ADIF-log");
     lv_obj_set_style_text_color(adif_lbl, lv_color_hex(0xffffff), 0);

@@ -26,6 +26,7 @@
 // "arm refused, burst already in progress" race that previously left CQ stuck.
 
 #include "ft8_qso.h"
+#include "ft8_pileup.h"
 #include "ft8_tx.h"
 #include "ft8_test.h"   // ft8_op_mode_get() - FT8/FT4 sub-mode, for ADIF MODE
 #include "ft8_status.h"
@@ -511,39 +512,114 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
 
     if (!load_my_call(err, err_len)) return false;
 
+    // "Skip TX1" (settings drawer toggle): instead of exchanging grids first,
+    // jump straight to sending a signal report - the same message shape/state
+    // cqrun_answer() already uses for its own first reply (FT8_TX_KIND_REPLY
+    // with extra=report, landing in WAIT_ROGER). Their SNR/last-heard-slot come
+    // from the same ft8_screen snapshot scan_for_response() uses; if they've
+    // since aged out of the decode table (race with a stale row tap), fall
+    // back to the normal grid-based TX1 rather than risk a wrong-parity or
+    // bogus-report first message.
+    qmx_settings_t qs;
+    settings_load_all(&qs);
+
+    ft8_tx_request_t req_to_arm  = *tx1_req;
+    ft8_qso_state_t  start_state = FT8_QSO_WAIT_RPT;
+    char             first_rpt[8] = "599";
+    bool             skip_applied = false;
+
+    if (qs.ft8_filters.skip_tx1) {
+        ft8_call_t snap[FT8_CALL_TABLE_SIZE];
+        int n = 0;
+        ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+        int     snr = 0;
+        int64_t their_last_utc = 0;
+        bool    found_target = false;
+        for (int i = 0; i < n; i++) {
+            if (strcmp(snap[i].call, tx1_req->target_call) == 0) {
+                snr            = snap[i].last_snr_db;
+                their_last_utc = snap[i].last_utc;
+                found_target   = true;
+                break;
+            }
+        }
+        if (found_target) {
+            fmt_report(snr, first_rpt, sizeof(first_rpt));
+            char build_err[64];
+            if (ft8_tx_build_request(FT8_TX_KIND_REPLY, tx1_req->target_call,
+                                     tx1_req->audio_freq_hz, their_last_utc,
+                                     first_rpt, &req_to_arm, build_err, sizeof(build_err))) {
+                start_state  = FT8_QSO_WAIT_ROGER;
+                skip_applied = true;
+            } else {
+                ESP_LOGW(TAG, "skip_tx1: build failed (%s) - falling back to grid TX1", build_err);
+            }
+        } else {
+            ESP_LOGW(TAG, "skip_tx1: %s not in decode table - falling back to grid TX1",
+                     tx1_req->target_call);
+        }
+    }
+
     char arm_err[64];
-    if (!ft8_tx_arm(tx1_req, arm_err, sizeof(arm_err))) {
+    if (!ft8_tx_arm(&req_to_arm, arm_err, sizeof(arm_err))) {
         if (err) snprintf(err, err_len, "%s", arm_err);
         return false;
     }
 
-    // Earliest valid RX slot to scan: one slot after TX1 fires. Computed in
-    // ms internally (next_slot_sec) using tx1_req's own protocol period, so
-    // this lands on a boundary the engine will actually produce - see that
-    // function's comment for the FT4 bug this fixes.
-    int64_t tx1_slot = next_slot_sec(tx1_req->use_parity, tx1_req->want_even_slot,
-                                     tx1_req->protocol);
+    // Earliest valid RX slot to scan: one slot after our first message fires.
+    // Computed in ms internally (next_slot_sec) using the armed request's own
+    // protocol period, so this lands on a boundary the engine will actually
+    // produce - see that function's comment for the FT4 bug this fixes. Also
+    // gates the skip-TX1 WAIT_ROGER path the same way WAIT_RPT is gated below
+    // (see the ft8_qso_advance() early-return) - without it, a decode cycle
+    // landing between arming and the first burst actually firing would count
+    // as a missed roger before we've transmitted a single message.
+    int64_t tx1_slot = next_slot_sec(req_to_arm.use_parity, req_to_arm.want_even_slot,
+                                     req_to_arm.protocol);
 
     lock();
-    s_state         = FT8_QSO_WAIT_RPT;
+    s_state         = start_state;
     strncpy(s_target, tx1_req->target_call, sizeof(s_target) - 1);
     s_target[sizeof(s_target) - 1] = '\0';
-    s_freq_hz       = tx1_req->audio_freq_hz;
+    s_freq_hz       = req_to_arm.audio_freq_hz;
     s_min_scan_utc  = tx1_slot + 15;
     s_missed_slots  = 0;
     s_from_cq       = false;
-    s_cur_req       = *tx1_req;   // re-send TX1 each cycle until they reply
+    s_cur_req       = req_to_arm;   // re-send each cycle until they reply
     s_have_cur      = true;
     s_have_cq_saved = false;
-    // Pounce: we receive their report (RST_RCVD); we never give our own (RST_SENT = "599").
-    strncpy(s_rst_sent, "599", sizeof(s_rst_sent));
-    s_rst_rcvd[0] = '\0';
+    if (skip_applied) {
+        // We sent them a numeric report directly; they can never roger it with
+        // one of their own (the roger is just "R"+our-report-echoed-back), same
+        // convention cqrun_answer() uses for CQ-run's RST_RCVD.
+        strncpy(s_rst_sent, first_rpt, sizeof(s_rst_sent) - 1);
+        s_rst_sent[sizeof(s_rst_sent) - 1] = '\0';
+        strncpy(s_rst_rcvd, "599", sizeof(s_rst_rcvd) - 1);
+        s_rst_rcvd[sizeof(s_rst_rcvd) - 1] = '\0';
+    } else {
+        // Normal pounce: we receive their report (RST_RCVD); we never give our
+        // own numeric report in TX1/TX2 (RST_SENT = "599").
+        strncpy(s_rst_sent, "599", sizeof(s_rst_sent) - 1);
+        s_rst_sent[sizeof(s_rst_sent) - 1] = '\0';
+        s_rst_rcvd[0] = '\0';
+    }
     s_fd_their_exch[0] = '\0';
     unlock();
 
-    ft8_status_set("QSO %s: TX1 sent - waiting for report", tx1_req->target_call);
-    ESP_LOGI(TAG, "started QSO (pounce): %s @ %d Hz, min_scan=%lld",
-             tx1_req->target_call, tx1_req->audio_freq_hz, (long long)(tx1_slot + 15));
+    // We're committing to working them now - take them out of the pileup
+    // list (harmless no-op if they weren't in it, e.g. a direct tap on a
+    // still-live decode row rather than the pileup list itself).
+    ft8_pileup_remove(tx1_req->target_call);
+
+    if (skip_applied) {
+        ft8_status_set("QSO %s: sent report %s - waiting for roger", tx1_req->target_call, first_rpt);
+        ESP_LOGI(TAG, "started QSO (pounce, skip-TX1): %s @ %d Hz report=%s, min_scan=%lld",
+                 tx1_req->target_call, req_to_arm.audio_freq_hz, first_rpt, (long long)(tx1_slot + 15));
+    } else {
+        ft8_status_set("QSO %s: TX1 sent - waiting for report", tx1_req->target_call);
+        ESP_LOGI(TAG, "started QSO (pounce): %s @ %d Hz, min_scan=%lld",
+                 tx1_req->target_call, req_to_arm.audio_freq_hz, (long long)(tx1_slot + 15));
+    }
     return true;
 }
 
@@ -607,6 +683,11 @@ static void cqrun_answer(const char *caller, int caller_freq, int caller_snr,
     int our_freq = s_freq_hz;   // already set to our CQ tone in ft8_qso_start_cq()
     unlock();
 
+    // We're committing to working them now - take them out of the pileup
+    // list (harmless no-op if they were never in it, e.g. an unfiltered
+    // caller who answered on the very first slot of the CQ).
+    ft8_pileup_remove(caller);
+
     qmx_settings_t qs;
     settings_load_all(&qs);
     bool fd_mode = qs.field_day_en && qs.fd_class[0] && qs.fd_section[0];
@@ -656,13 +737,49 @@ static void cqrun_answer(const char *caller, int caller_freq, int caller_snr,
     arm_current_if_idle();
 }
 
+// Passive pileup capture: every station that addressed a message to us this
+// slot, other than whoever we're actively working right now, gets upserted
+// into the pileup list (ft8_pileup.c). Runs unconditionally regardless of
+// QSO state - a caller answering our CQ while we're already mid-exchange
+// with someone else is exactly the "gave up waiting" scenario the pileup
+// list exists for, and they'd otherwise never get tracked (advance()'s
+// per-state scans only ever look for messages FROM the current target). No
+// TX ever results from this - purely a background list update.
+static void capture_pileup_callers(int64_t slot_sec)
+{
+    if (!s_my_call[0]) return;   // nothing to scan for until identity is loaded
+
+    char cur_target[FT8_CALL_MAX_LEN];
+    lock();
+    strncpy(cur_target, s_target, sizeof(cur_target) - 1);
+    cur_target[sizeof(cur_target) - 1] = '\0';
+    unlock();
+
+    ft8_call_t snap[FT8_CALL_TABLE_SIZE];
+    int n = 0;
+    ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+
+    for (int i = 0; i < n; i++) {
+        if (snap[i].last_utc != slot_sec) continue;
+        char tok1[16], tok2[16], rest[FT8_FD_EXCH_LEN];
+        if (!split_msg3(snap[i].last_text, tok1, sizeof(tok1), tok2, sizeof(tok2), rest, sizeof(rest))) continue;
+        if (strcmp(tok1, s_my_call) != 0) continue;              // not addressed to us
+        if (strcmp(tok2, s_my_call) == 0) continue;              // avoid MYCALL MYCALL loops
+        if (cur_target[0] && strcmp(tok2, cur_target) == 0) continue;  // already our active partner
+        ft8_pileup_note_caller(tok2, snap[i].last_snr_db, snap[i].last_freq, slot_sec);
+    }
+}
+
 void ft8_qso_advance(int64_t slot_sec)
 {
+    capture_pileup_callers(slot_sec);
+
     lock();
     ft8_qso_state_t st = s_state;
     char    target[FT8_CALL_MAX_LEN];
     int     freq     = s_freq_hz;
     int64_t min_scan = s_min_scan_utc;
+    bool    from_cq  = s_from_cq;
     strncpy(target, s_target, sizeof(target));
     target[sizeof(target) - 1] = '\0';
     unlock();
@@ -786,8 +903,14 @@ void ft8_qso_advance(int64_t slot_sec)
     }
 
     // ---- Exchange states: hear the partner on the opposite-parity slot -----
-    // (pounce hasn't fired TX1 yet → nothing to hear; don't scan early)
-    if (st == FT8_QSO_WAIT_RPT && slot_sec < min_scan) return;
+    // (our first message hasn't fired yet -> nothing to hear; don't scan
+    // early). Normally only WAIT_RPT needs this (pounce hasn't sent TX1 yet),
+    // but a skip-TX1 pounce starts straight in WAIT_ROGER, so it needs the
+    // same guard - gated to !from_cq so CQ-run's own WAIT_ROGER (whose reply
+    // has always already fired by the time advance() can next run - see
+    // cqrun_answer()) is never affected.
+    if ((st == FT8_QSO_WAIT_RPT || (st == FT8_QSO_WAIT_ROGER && !from_cq)) &&
+        slot_sec < min_scan) return;
 
     char report[FT8_FD_EXCH_LEN] = {0};
     bool got_rr73 = false, got_73 = false;
@@ -1033,13 +1156,16 @@ bool ft8_qso_get_priority_freq(int *freq_hz_out)
     int              freq    = s_freq_hz;
     unlock();
 
-    // Pounce only (WAIT_RPT / WAIT_RR73 — WAIT_ROGER belongs to CQ-run, see the
-    // state table in ft8_qso.h). s_freq_hz is the partner's own tone there (we
-    // called THEM at it, and by FT8 convention they keep replying on it for the
-    // whole exchange). CQ-run's s_freq_hz is OUR tone, not theirs, so it's not
-    // a useful hint for who's replying to our report — skip it there.
+    // Pounce only (WAIT_RPT / WAIT_ROGER / WAIT_RR73 — WAIT_ROGER normally
+    // belongs to CQ-run, see the state table in ft8_qso.h, but a skip-TX1
+    // pounce starts straight in WAIT_ROGER too; the `from_cq` check above
+    // already excludes the real CQ-run case, so including it here only ever
+    // matches the skip-TX1 pounce). s_freq_hz is the partner's own tone there
+    // (we called THEM at it, and by FT8 convention they keep replying on it
+    // for the whole exchange). CQ-run's s_freq_hz is OUR tone, not theirs, so
+    // it's not a useful hint for who's replying to our report — skip it there.
     if (from_cq) return false;
-    if (st != FT8_QSO_WAIT_RPT && st != FT8_QSO_WAIT_RR73)
+    if (st != FT8_QSO_WAIT_RPT && st != FT8_QSO_WAIT_ROGER && st != FT8_QSO_WAIT_RR73)
         return false;
 
     if (freq_hz_out) *freq_hz_out = freq;

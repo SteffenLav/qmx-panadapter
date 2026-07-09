@@ -31,6 +31,7 @@ static lv_obj_t *s_ta_excl[2]  = { NULL, NULL };
 static lv_obj_t *s_cb_worked_before = NULL;
 static lv_obj_t *s_cb_plain_cq      = NULL;
 static lv_obj_t *s_cb_incl_cq_only  = NULL;
+static lv_obj_t *s_cb_skip_tx1      = NULL;  // pounce: skip grid, send report first
 static lv_obj_t *s_cb_robot         = NULL;  // auto-answer enable
 static lv_obj_t *s_dd_robot_pri     = NULL;  // priority dropdown
 static lv_obj_t *s_robot_warn       = NULL;  // "unattended TX" warning - shown only while s_cb_robot is checked
@@ -106,6 +107,7 @@ static void save_btn_cb(lv_event_t *e)
     f.excl_worked_before = lv_obj_has_state(s_cb_worked_before, LV_STATE_CHECKED);
     f.excl_plain_cq      = lv_obj_has_state(s_cb_plain_cq, LV_STATE_CHECKED);
     f.incl_cq_only       = lv_obj_has_state(s_cb_incl_cq_only, LV_STATE_CHECKED);
+    f.skip_tx1           = lv_obj_has_state(s_cb_skip_tx1, LV_STATE_CHECKED);
     f.robot_en           = lv_obj_has_state(s_cb_robot, LV_STATE_CHECKED);
     f.robot_priority     = (uint8_t)lv_dropdown_get_selected(s_dd_robot_pri);
 
@@ -131,10 +133,10 @@ static void save_btn_cb(lv_event_t *e)
         // unchecking Field Day mode here).
         ft8_screen_view_refresh_cq_label();
     }
-    ESP_LOGI(TAG, "saved filters: incl=[%d:'%s' %d:'%s'] excl=[%d:'%s' %d:'%s'] wb=%d cq=%d robot=%d",
+    ESP_LOGI(TAG, "saved filters: incl=[%d:'%s' %d:'%s'] excl=[%d:'%s' %d:'%s'] wb=%d cq=%d skip_tx1=%d robot=%d",
              f.incl_en[0], f.incl_text[0], f.incl_en[1], f.incl_text[1],
              f.excl_en[0], f.excl_text[0], f.excl_en[1], f.excl_text[1],
-             f.excl_worked_before, f.excl_plain_cq, f.robot_en);
+             f.excl_worked_before, f.excl_plain_cq, f.skip_tx1, f.robot_en);
     modal_close();
 }
 
@@ -286,8 +288,11 @@ static void modal_build(void)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *panel = lv_obj_create(s_modal);
-    lv_obj_set_size(panel, 1040, 660);   // +70 vs the pre-Field-Day height, for the new row below the robot warning
-    lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 14);
+    // Flush top-to-bottom of the 720 px screen: was 768 tall at a +14 offset
+    // (bottom edge at 782, overflowing the screen by 62 px) - shrunk to fit
+    // exactly by tightening the ARRL Field Day row's gap below (see y=625).
+    lv_obj_set_size(panel, 1040, 720);
+    lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(panel, lv_color_hex(0x555555), 0);
@@ -317,16 +322,24 @@ static void modal_build(void)
     make_filter_row(panel, 268, &s_cb_excl[1], &s_ta_excl[1], "e.g. JA, VK");
 
     // --- Other filters, stacked in one left-aligned column --------------
-    lv_obj_t *lbl_worked_before, *lbl_plain_cq, *lbl_incl_cq_only, *lbl_robot;
+    // 60 px row spacing (was 44) - big-finger touch clearance around the
+    // checkboxes was too tight to safely tap just one (field feedback).
+    lv_obj_t *lbl_worked_before, *lbl_plain_cq, *lbl_incl_cq_only, *lbl_skip_tx1, *lbl_robot;
 
     s_cb_worked_before = make_labeled_checkbox(panel, "Exclude worked-before", 4, 330, &lbl_worked_before);
     lv_obj_set_style_text_color(lbl_worked_before, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
-    s_cb_plain_cq = make_labeled_checkbox(panel, "Exclude plain CQ callers", 4, 374, &lbl_plain_cq);
+    s_cb_plain_cq = make_labeled_checkbox(panel, "Exclude plain CQ callers", 4, 390, &lbl_plain_cq);
     lv_obj_set_style_text_color(lbl_plain_cq, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
-    s_cb_incl_cq_only = make_labeled_checkbox(panel, "Show only CQ callers", 4, 418, &lbl_incl_cq_only);
+    s_cb_incl_cq_only = make_labeled_checkbox(panel, "Show only CQ callers", 4, 450, &lbl_incl_cq_only);
     lv_obj_set_style_text_color(lbl_incl_cq_only, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+
+    // Pounce shortcut: first TX is a signal report (skip the grid exchange),
+    // going straight into the roger/RR73 wait - see ft8_qso_start(). Does not
+    // affect CQ-run, which already answers with a report first by default.
+    s_cb_skip_tx1 = make_labeled_checkbox(panel, "Skip TX1 (send report first, no grid)", 4, 510, &lbl_skip_tx1);
+    lv_obj_set_style_text_color(lbl_skip_tx1, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
     // --- Robot (auto-answer) row — LIVE TX ---------------------------
     // Unattended: when enabled, the robot picks a CQ caller (per the filters
@@ -334,7 +347,7 @@ static void modal_build(void)
     // confirmation. See ft8_robot.h for the safety/scope notes. The warning
     // label is only shown while the checkbox is checked - no need to nag
     // operators who never turn this on.
-    s_cb_robot = make_labeled_checkbox(panel, "Auto-answer CQ with priority:", 4, 462, &lbl_robot);
+    s_cb_robot = make_labeled_checkbox(panel, "Auto-answer CQ with priority:", 4, 570, &lbl_robot);
     lv_obj_set_style_text_color(lbl_robot, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
     // Order MUST match ft8_robot_priority_t (STRONGEST=0, WEAKEST=1, DISTANT=2).
@@ -352,7 +365,7 @@ static void modal_build(void)
     lv_label_set_text(s_robot_warn, LV_SYMBOL_WARNING " Transmits unattended - never leave running unsupervised");
     lv_obj_set_style_text_font(s_robot_warn, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(s_robot_warn, lv_color_hex(0xFF8800), 0);
-    lv_obj_align(s_robot_warn, LV_ALIGN_TOP_LEFT, 4, 512);
+    lv_obj_align(s_robot_warn, LV_ALIGN_TOP_LEFT, 4, 612);
     lv_obj_add_event_cb(s_cb_robot, robot_checked_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     // --- ARRL Field Day exchange mode ---------------------------------
@@ -360,7 +373,7 @@ static void modal_build(void)
     // grid/signal report - see CLAUDE.md "FT8 robot" / ft8_qso.c. Class and
     // section are short fixed-format fields, not free text.
     lv_obj_t *lbl_fd;
-    s_cb_field_day = make_labeled_checkbox(panel, "ARRL Field Day mode:", 4, 552, &lbl_fd);
+    s_cb_field_day = make_labeled_checkbox(panel, "ARRL Field Day mode:", 4, 635, &lbl_fd);
     lv_obj_set_style_text_color(lbl_fd, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
     s_ta_fd_class = lv_textarea_create(panel);
@@ -386,9 +399,9 @@ static void modal_build(void)
     lv_obj_add_event_cb(s_ta_fd_section, ta_focused_top_cb, LV_EVENT_FOCUSED, NULL);
 
     // --- Save / Cancel / Sync Time on the right edge, evenly distributed.
-    // Panel inner h = 590-40 = 550 px (grew +50 to fit the robot warning
-    // label). Three buttons h=64: total 192 px. Remaining 358 px / 4 gaps =
-    // ~89.5 px each → y = 90 / 243 / 396.
+    // Panel inner h = 720-40 = 680 px (shrunk to fit the screen exactly - see
+    // the panel size comment above). Three buttons h=64: total 192 px.
+    // Remaining 488 px / 4 gaps = 122 px each → y = 122 / 308 / 494.
     {
         struct { const char *lbl; uint32_t col; lv_event_cb_t cb; } btns[3] = {
             { "Save",      0x2e8b3a, save_btn_cb      },
@@ -399,7 +412,7 @@ static void modal_build(void)
         for (int i = 0; i < 3; i++) {
             lv_obj_t *b = lv_btn_create(panel);
             lv_obj_set_size(b, 180, 64);
-            lv_obj_align(b, LV_ALIGN_TOP_RIGHT, 0, 90 + i * (64 + 89));
+            lv_obj_align(b, LV_ALIGN_TOP_RIGHT, 0, 122 + i * (64 + 122));
             lv_obj_set_style_bg_color(b, lv_color_hex(btns[i].col), 0);
             lv_obj_set_style_radius(b, 8, 0);
             lv_obj_set_style_border_width(b, 0, 0);
@@ -473,6 +486,7 @@ void ft8_filter_modal_show(void)
     apply_checkbox_state(s_cb_worked_before, f->excl_worked_before);
     apply_checkbox_state(s_cb_plain_cq, f->excl_plain_cq);
     apply_checkbox_state(s_cb_incl_cq_only, f->incl_cq_only);
+    apply_checkbox_state(s_cb_skip_tx1, f->skip_tx1);
     apply_checkbox_state(s_cb_robot, f->robot_en);
     lv_dropdown_set_selected(s_dd_robot_pri,
                              f->robot_priority <= FT8_ROBOT_PRI_DISTANT ? f->robot_priority : 0);

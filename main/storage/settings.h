@@ -32,6 +32,9 @@ typedef struct {
     // --- Robot (auto-answer) — appended; old NVS blobs read back 0 (=off, STRONGEST) ---
     bool    robot_en;        // auto-answer CQ callers with no tap (default off)
     uint8_t robot_priority;  // ft8_robot_priority_t: which caller to pick first
+    // --- Skip TX1 — appended; old NVS blobs read back 0 (=off) ---
+    bool    skip_tx1;        // pounce: first TX is a signal report (skip grid exchange),
+                              // straight into the roger/RR73 wait - see ft8_qso_start()
 } ft8_filters_t;
 
 // All persisted settings. Floats are stored as raw 32-bit bit-patterns

@@ -255,6 +255,11 @@ static void sd_archive_task(void *arg)
 
 void sd_archive_init(void)
 {
+#if SD_ARCHIVE_DISABLED
+    ESP_LOGW(TAG, "SD auto-archive soft-disabled (see SD_ARCHIVE_DISABLED in "
+                  "sd_archive.h) - shared-SDMMC/WiFi wedge not yet root-caused");
+    return;
+#endif
     s_sd_mutex = xSemaphoreCreateMutex();
     psram_task_create(sd_archive_task, "sd_archive", 6144, NULL,
                        2 /* low priority */, 0);

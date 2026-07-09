@@ -29,6 +29,7 @@
 #include "ft8_tx.h"
 #include "ft8_status.h"
 #include "ft8_qso.h"
+#include "ft8_pileup.h"
 #include "ft8_sim.h"
 #include "diag_log.h"
 #include "sd_archive.h"
@@ -192,6 +193,7 @@ void app_main(void)
     ft8_status_init();
     ft8_tx_init();
     ft8_qso_init();
+    ft8_pileup_init();
     ft8_sim_init();
     ft8_arrl_fd_selftest();
     ft8_sim_synth_selftest();
