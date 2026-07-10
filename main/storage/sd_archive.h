@@ -40,6 +40,17 @@ extern "C" {
 // memory project_sd_wedge_adif_repro_2026_07_09 for the specific repro this
 // time (settings flush -> SD mirror -> wedge within ~12s, no SD-card-side
 // error visible before the wedge signature appears).
+//
+// 2026-07-10: the WiFi *wedge* permanence was root-caused + fixed (the
+// esp_hosted SDIO oversize-length livelock now self-heals — see
+// tools/patches/apply_esp_hosted_sdio_recovery.ps1 and the SD-wedge section in
+// CLAUDE.md), so the card was briefly re-enabled (flag=0). But a live test
+// found a SEPARATE cost: with SD mounted, internal heap dropped to ~15 KB min /
+// 16 KB largest-block (vs ~45 KB with SD off), and FT8 decode collapsed into
+// zero-clusters on a busy band (cand=140, dec=0 — the internal-pinned decode
+// FFT/buffers starve). So SD-on is a WiFi-safe now but FT8-hostile trade: kept
+// DISABLED. Re-enabling would need the SD mount's internal-RAM cost reduced OR
+// the mount gated off while in FT8 mode.
 #define SD_ARCHIVE_DISABLED 1
 
 // Spawn the background archive task. Call once from app_main after settings,
