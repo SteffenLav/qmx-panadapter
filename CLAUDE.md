@@ -383,10 +383,10 @@ POUNCE (we answered their CQ)          CQ-RUN (they answered our CQ)
 
 ## Next up (path to v1.0)
 
-Two gates remain before v1.0.0 (a complete standalone FT8 station with TX, logging, and ADIF upload):
+One gate remains before v1.0.0 (a complete standalone FT8 station with TX, logging, and ADIF upload):
 
 1. **ADIF upload to LoTW (TQSL)** — the last logging target. QRZ and eQSL are shipped (see below). Certificate-based via TQSL, not a simple HTTP API, so it needs its own (harder) design before starting. The mbedtls→PSRAM fix (below) already unblocked outbound HTTPS, so the TLS-connection problem QRZ hit won't bite again — look elsewhere first if it fails to connect.
-2. **Multi-hour/multi-day FT8 TX soak.** The beta caveats (no duty-cycle protection, no audio loopback verification, no over-temperature monitoring, TX not yet soaked across long sessions) are the real blockers to dropping the beta label. All RX/panadapter/web/logging features are stable.
+**FT8 TX soak — DONE (operator's call, 2026-07-10).** Multi-session on-air TX proved stable and non-hanging, so TX is considered soaked in and is no longer a release gate. The former "beta caveats" (no duty-cycle protection, no audio loopback verification, no over-temperature monitoring) are inherent QMX-side operating characteristics, not firmware stability blockers, and per the operator's decision the user-facing TX warnings were removed in v0.20.0. All RX/panadapter/web/logging features are stable too — LoTW upload (above) is the sole remaining v1.0.0 gate.
 
 **POTA.app has no upload API at all** — confirmed against their own docs (`docs.pota.app/docs/activator_reference/submitting_logs.html`): submission is *only* via the authenticated "My Log Uploads" browser page or emailing the ADIF file to `help@parksontheair.com`. There's no key/credential scheme a device could call, so this isn't something firmware can integrate against — don't re-investigate this without a sign that POTA has added one. The practical workaround is already in place: download the ADIF via the web UI (`/api/adif`) and upload/email it manually. LoTW is certificate-based via TQSL, not a simple HTTP API, so it needs its own (harder) design before starting.
 

@@ -150,10 +150,9 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 Pending:
 
-1. **Re-enable FT4** — bring its memory use under control so it can be switched back on (disabled in v0.20.0)
-2. **Multi-hour FT8 TX soak** — confirm no duty-cycle crashes, no over-temp, clean shutdown
-3. **LoTW (TQSL) upload** — certificate-based API (harder than QRZ/eQSL)
-4. **Re-enable SD auto-archive** — cut the mount's internal-memory cost (or gate it off during FT8) so it no longer starves the decoder
+1. **LoTW (TQSL) upload** — certificate-based API (harder than QRZ/eQSL); the last gate before the beta label drops
+2. **Re-enable FT4** — bring its memory use under control so it can be switched back on (disabled in v0.20.0)
+3. **Re-enable SD auto-archive** — cut the mount's internal-memory cost (or gate it off during FT8) so it no longer starves the decoder
 
 ### Phase 6.3 (FPS Recovery)
 

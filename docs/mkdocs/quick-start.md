@@ -116,8 +116,6 @@ Swipe → from the left edge to switch to **FT8 view**. You'll see:
 - **Call CQ** button — transmit a CQ (requires QMX to be on the air)
 - **Reply** rows — tap a station to reply to their CQ
 
-⚠️ **FT8 transmit is beta** — functional but not yet soaked for multi-hour sessions. Use a dummy load for your first tests.
-
 > **⏸️ FT4 is temporarily disabled in v0.20.0** — it was exhausting the device's internal memory and crashing, so it's switched off this release. Fully reversible, and FT8 is unaffected.
 
 ## Step 9: WiFi & Web UI (Optional)

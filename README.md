@@ -12,7 +12,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Beta — v0.20.0.** A major robustness release: the WiFi drop-out now self-heals, the modal-open freeze and the FT8-exit crash are fixed, and the radio-control link rides out USB glitches. FT8 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8 RX, web UI, ADIF logging) are stable. **FT4 is temporarily disabled this release** (it was exhausting memory; reversible). The beta label goes away at v1.0.0.
+> **Beta — v0.20.0.** A major robustness release: the WiFi drop-out now self-heals, the modal-open freeze and the FT8-exit crash are fixed, and the radio-control link rides out USB glitches. Panadapter, FT8 receive **and transmit**, web UI, and ADIF logging are all stable. **FT4 is temporarily disabled this release** (it was exhausting memory; reversible). The one remaining step before v1.0.0 (and dropping the beta label) is LoTW / TQSL log upload.
 
 Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v0.20.0.pdf).
 
@@ -466,8 +466,6 @@ On a busy 20 m FT8 slot the decoder regularly yields 25–50 callsigns per slot.
 
 ## FT8 Transmit
 
-> **Known limitations (beta):** no duty-cycle protection (the firmware will not refuse consecutive TX slots), no audio loopback verification, multi-hour TX soak testing not yet completed. Use a dummy load for first tests; a power/SWR meter is useful but not required — the Tab5 reads `PC;`/`SW;` from the QMX after each burst and shows the result. The QMX has a built-in CAT timeout (120 s default) that returns it to RX if the Tab5 stops sending commands.
-
 The Tab5 transmits FT8 via the QMX's `TA<freq>;` CAT command — no PC audio path, no WSJT-X. The QMX does all DDS synthesis and envelope shaping; the Tab5 sends the 79 tone-frequency commands at 160 ms cadence, bracketed by `TX;` / `TA0;` / `RX;`.
 
 ### Replying to a station
@@ -833,7 +831,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF upload.
 
 - **LoTW upload.** Needs its own design — certificate-based via TQSL, not a simple HTTP API like QRZ/eQSL.
-- **v1.0.0 — Stable release.** Multi-day FT8 soak complete, polished UI, beta label gone.
+- **v1.0.0 — Stable release.** LoTW/TQSL upload added, polished UI, beta label gone. (FT8 TX is already soaked/stable, along with the whole panadapter / FT8-RX / web / logging stack.)
 
 ### Longer term
 

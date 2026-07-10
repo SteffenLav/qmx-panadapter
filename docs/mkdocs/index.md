@@ -21,13 +21,12 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 ## Status
 
-**v0.20.0 — A major robustness release. Stable for all features except FT8 transmit, which is functional but un-soaked for multi-hour sessions.**
+**v0.20.0 — A major robustness release. All features are stable; the Beta label remains only until LoTW / TQSL log upload lands (v1.0.0).**
 
 - **v0.20.0 headline — reliability**: the "WiFi dies after a few minutes" fault now **self-heals** instead of needing a reboot; opening a window no longer freezes the device; the radio-control (CAT) link rides out USB glitches; and the web UI pauses its stream while FT8 is running so decoding and WiFi stay steady
 - **FT4 is temporarily disabled in v0.20.0** — it was exhausting the device's internal memory and crashing. Fully reversible, and FT8 is unaffected
 - All panadapter features (spectrum, waterfall, zoom, memory, web UI) are production-ready
-- FT8 receive, plus ADIF logging, is stable
-- FT8 transmit works but lacks multi-hour soak testing and duty-cycle protection
+- FT8 receive **and transmit**, plus ADIF logging, are stable
 - Also in v0.20.0: FT8 pile-up list, "Skip TX1" quick pounce, 11 m/CB band, a memory-channel overhaul (example channels, first-run tour, drag-to-wastebin delete), battery-care charge limit, and a batch of web-UI improvements (whole-band plan strip, draggable split, better screenshots and frequency keypad)
 - Earlier fixes still in place: logbook uploads (QRZ/eQSL) reliable while FT8 runs (v0.19.1); USB reconnect + disconnect-race crashes (v0.19.2); QMX IQ-mode handshake auto-retry (v0.19.3–4); AM mode + Antenna Tune for QMX 1_04+ firmware (v0.19.5)
 - See [Version History](releases.md) for all changes

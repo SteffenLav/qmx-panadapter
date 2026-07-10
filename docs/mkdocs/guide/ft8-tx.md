@@ -43,24 +43,7 @@ FT4 has full feature parity with FT8, including time-sync from decoded signals (
 
 Your **settings and decode list are sticky** — when you switch back to FT8 or FT4, the panadapter remembers your last frequency, bandwidth, and filter settings for each mode.
 
-### 3. Important Notes
-
-**FT8 and FT4 transmit are functional but not yet soaked for multi-hour sessions.** Known gaps:
-
-- No duty-cycle protection (you could transmit continuously if filters match poorly)
-- No audio loopback verification (can't confirm modulation before keying)
-- No over-temperature monitoring
-
-Standard operating practice applies:
-
-1. **Use a dummy load** for your first tests
-2. **Monitor power and SWR** if you have a meter
-3. **Watch the displayed TX power** (typically ~3–5 W, depending on band and supply voltage)
-4. **Never leave auto-reply unattended** unless your station is attended
-
-The beta label goes away at v1.0.0 after multi-day soak testing.
-
-### 4. Modes of Transmission
+### 3. Modes of Transmission
 
 #### 1. Reply to a CQ
 
