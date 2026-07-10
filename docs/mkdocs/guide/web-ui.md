@@ -15,7 +15,7 @@ No installation, no configuration — just open and go.
 
 The web UI provides full remote control:
 
-- **Frequency** — tap to open numeric keypad, or click the spectrum to tune
+- **Frequency** — tap the VFO to open the numeric keypad (drag it by its title bar to reposition; toggle between a 10-key and a phone-style digit layout), or click the spectrum to tune
 - **Mode** — buttons for USB, LSB, CW, DiGi
 - **Bandwidth** — selectors for SSB filter width or CW passband
 - **Band** — jump between configured bands
@@ -30,15 +30,17 @@ The waterfall is **live-streamed** from the Tab5 every ~100 ms. You see the same
 
 Click anywhere on the spectrum to tune to that frequency. The waterfall updates continuously — no refresh needed.
 
+**Whole-band plan strip.** Along the bottom of the view (above the status bar) is a colour-coded CW/Digi/Phone strip spanning the entire current band, mirroring the one on the Tab5. A draggable "visible window" marks the slice currently on screen — drag it, or tap anywhere on the strip, to retune — and a marker shows the VFO position.
+
+**Adjustable split.** Drag the divider between the spectrum and the waterfall to give either one more room. Your chosen split is remembered in the browser.
+
+> **In FT8 or FT4 mode the live stream pauses.** The browser stops streaming the spectrum/waterfall and shows a notice plus the log and upload controls instead. This is deliberate — while you're operating digital modes the stream would compete with the on-device decoder and the WiFi link, so pausing it keeps FT8 decoding and WiFi noticeably steadier (new in v0.20.0). Switch the Tab5 back to Panadapter mode and the stream resumes automatically.
+
 ## FT8 Control
 
-From the web UI you can:
+When the Tab5 is in **FT8/FT4 mode**, the browser pauses the live spectrum stream (see [Spectrum Waterfall](#spectrum-waterfall) above) and instead shows a status notice plus the **log and upload controls** — download your ADIF, upload to QRZ/eQSL, grab the diagnostic log. Operate FT8 (watch the decode list, tap to reply, call CQ) **on the Tab5 itself**.
 
-- **View the live FT8 decode list** (read-only from web; use the Tab5 to reply)
-- **Monitor signal strength** (S-meter)
-- **Watch power/SWR readout** (post-transmit)
-
-FT8 transmit must be initiated from the Tab5 (safety feature — only one interface can key the QMX at a time).
+FT8 transmit can only be initiated from the Tab5 — a safety feature, since only one interface should key the QMX at a time.
 
 ## CAT Control (Advanced)
 
@@ -60,7 +62,7 @@ Bottom bar offers several downloads:
 - **ADIF ↓** — QSO log as an ADIF file (import into WSJT-X, EQSL, etc.)
 - **Config ↓** — all settings as a text file (backup or transfer to another Tab5)
 - **Diag ↓** — live diagnostic log for troubleshooting (always on, nothing to enable); **Diag(saved) ↓** — the copy persisted to flash from before the last reboot/power-off
-- **Tab5 Screenshot** — current display as PNG
+- **Tab5 Screenshot** — current display as PNG, now including any open pop-up (band/mode dropdown), not just the base screen
 
 ## Upload Functions
 

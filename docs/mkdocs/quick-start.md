@@ -12,7 +12,7 @@ Get your QMX Panadapter on air in 10 minutes.
 
 ## Step 1: Verify QMX Firmware
 
-Power the QMX on standalone and check the firmware version displayed on its screen. You need **v1.03.002**. If yours is older, update the QMX first — everything that follows depends on recent firmware. The **v1.04 beta** is not yet verified with the panadapter — stick with v1.03.002 for now if you want a known-good combination.
+Power the QMX on standalone and check the firmware version displayed on its screen. You need **v1.03.002 or newer**. If yours is older, update the QMX first — everything that follows depends on recent firmware. Both **v1.03.002** and the **v1.04.002 beta** work with the panadapter; on v1.04.002 you additionally get **AM mode** and an **Antenna Tune** button (SWR tune with a live power/SWR readout). Both stay hidden on v1.03.002, so either firmware is fine.
 
 ## Step 2: Flash the Tab5
 
@@ -56,8 +56,8 @@ You need **two USB connections**:
 
 ## Step 4: Power On
 
-1. **Tab5 first** — turn it on and wait for it to fully load
-2. **QMX second** — turn on the QMX
+1. **Tab5 first** — turn it on. The screen fades up gently from black as it loads.
+2. **QMX second** — turn on the QMX. Until the radio is connected, the Tab5 shows a full-screen **"turn on / reboot your QMX"** prompt — that's normal, not a fault, and it clears automatically once the QMX is talking.
 3. Within a few seconds the top bar should show Band / Mode / BW, and the spectrum should come alive
 
 ## Step 5: Fill in Your Settings
@@ -72,13 +72,15 @@ You can change these anytime by swiping right from the screen edge to open the s
 
 ## Step 5b: Optional — microSD Card
 
-Insert a microSD card into the Tab5's card slot at any time to enable automatic backup:
+> **⏸️ Automatic SD backup is disabled in v0.20.0** — mounting the card competes for memory with the FT8 decoder, so it's switched off this release (it returns once that cost is reduced). You can skip this step: your logs and settings live in the device's own storage regardless, and download the same way.
+
+When enabled, inserting a microSD card into the Tab5's card slot mirrors three things to the card automatically:
 
 - **Diagnostic log** — continuous rolling copy, survives power-off
 - **ADIF QSO log** — mirrored automatically after each new QSO
 - **Config export** — your settings, for easy transfer to another unit
 
-A green **SD** dot lights up in the bottom status bar when a card is detected and being mirrored. No setup required — just insert the card.
+A green **SD** dot in the bottom status bar confirms a card is mounted and being mirrored — it stays dark while the feature is disabled.
 
 ## Step 6: Navigate the Screen
 
@@ -99,9 +101,9 @@ You're now receiving. The **spectrum** shows signal strength across the band, an
 
 - **Tap the spectrum or waterfall** to tune to that frequency
 - **Pinch** to zoom in/out; **one-finger horizontal drag** to pan and retune
-- **Tap the coloured band-plan strip** (below the frequency axis) to jump to a frequency, or **drag along it** to scrub through the band
+- **Tap the coloured band-plan strip** (along the bottom, just above the status bar) to jump to a frequency, or **drag along it** to scrub through the band
 - **Tap the Freq label** on the top bar to open the frequency keypad — drag the "Enter freq" title bar to reposition it, pinch or swipe up/down to resize it
-- **Swipe ↑ from the bottom edge** to open memory channels — tap an empty slot to create one, long-press a filled slot to edit it, long-press and drag to move a channel to a different slot
+- **Swipe ↑ from the bottom edge** to open memory channels — tap an empty slot to create one, long-press a filled slot to edit it, long-press and drag to move a channel (or drag it onto the **wastebin** cell to delete it). A new device comes with a few example channels and plays a one-time tour of these gestures the first time you open the picker
 - **Tap Band** to switch between your configured bands
 - **Tap Mode** to switch USB/LSB/CW/DiGi
 
@@ -114,7 +116,9 @@ Swipe → from the left edge to switch to **FT8 view**. You'll see:
 - **Call CQ** button — transmit a CQ (requires QMX to be on the air)
 - **Reply** rows — tap a station to reply to their CQ
 
-⚠️ **FT8/FT4 transmit is beta** — functional but not yet soaked for multi-hour sessions (FT4 TX is new in v0.19.0). Use a dummy load for your first tests.
+⚠️ **FT8 transmit is beta** — functional but not yet soaked for multi-hour sessions. Use a dummy load for your first tests.
+
+> **⏸️ FT4 is temporarily disabled in v0.20.0** — it was exhausting the device's internal memory and crashing, so it's switched off this release. Fully reversible, and FT8 is unaffected.
 
 ## Step 9: WiFi & Web UI (Optional)
 
@@ -132,7 +136,7 @@ If you set up WiFi:
 - Restart both devices (Tab5 first, then QMX)
 
 **QMX doesn't appear?**
-- Check QMX firmware version (Step 1 above) — should be v1.03.002
+- Check QMX firmware version (Step 1 above) — should be v1.03.002 or newer (the v1.04.002 beta also works)
 - Try a different USB cable
 
 **WiFi won't connect?**

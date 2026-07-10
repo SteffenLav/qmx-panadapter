@@ -4,23 +4,25 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v0.19.5** — 2026-07-04
+**v0.20.0** — 2026-07-10
 
-**AM mode and Antenna Tune for QMX firmware 1_04_002** (field-verified on a real QMX+), plus interaction polish across the panadapter and two real bug fixes — including a crash on leaving FT8 mode.
+**A major robustness release.** Most of this update is about the device *staying up* — the WiFi drop-out, the freeze on opening a window, and the radio-link hiccups that field reports kept hitting are now fixed or self-healing. Plus a decision to pause FT4, keep the web UI out of FT8's way, and a batch of interface, band, memory and battery improvements.
 
-- **AM mode + Antenna Tune (QMX 1_04+ firmware only)**: if your radio runs the 1_04 beta firmware, **AM** is now selectable from the mode popup and the web UI, and a new **Antenna Tune** window (from the settings drawer) puts the radio into SWR Tune mode with a live SWR/power readout and returns to your previous mode when you stop. Both are invisible on the stable 1_03_002 firmware — no change for anyone still on it
-- **FT8 mode-exit crash fixed**: leaving FT8 could occasionally reboot the Tab5. The dual-core decoder was tearing down its shared workspace before its second-CPU helper had finished; it now waits for the helper to fully stop first
-- **WiFi on/off works live, and stops forgetting your password**: the on/off icon (now inside the WiFi setup window) applies immediately instead of only on the next reboot; the window also pre-fills your stored password so pressing Save no longer wipes it (which had left the radio unable to rejoin a secured network)
-- **FT8/FT4 remembers its frequency** across reboots and panadapter↔FT8 switches (default 14.074 MHz) instead of inheriting whatever the panadapter was last on
-- **Band picker shows all bands at once**: two side-by-side columns on radios with many bands (QMX+); a spurious "11m" entry some radios report but don't have is filtered out
-- **Band-plan strip**: the position indicator is now a see-through framed window (drag it to tune, centre snaps to a whole kHz); the 6 m band now has band-plan segments; a tiny finger movement on lift no longer nudges the frequency
-- **Point-to-tune steadier**: commits exactly where the cyan cursor settled, ignoring the small finger-jump on lift-off; the cyan guide line now runs cleanly through the waterfall (no trail) and stays glued to the spectrum line
-- **Settings drawer**: sliders respond only when you grab the knob (a swipe over one scrolls the drawer instead), the whole knob is visible at the ends, the **Settings** title is always visible on open, and **WiFi setup** closes the drawer when opened
-- **Memory recall in FT8/FT4**: memories not in the DiGi (data) mode are greyed out and can't be recalled (would knock the radio out of data mode); still editable
-- **Antenna Tune** is now its own window (from the settings drawer) with a bigger title and a live SWR/power readout
+- **WiFi no longer dies until you reboot**: the long-standing "WiFi stops after a few minutes (FT8 and CAT keep working), only a power-cycle brings it back" fault is fixed. A low-level lock-up in the link to the WiFi co-processor now recovers automatically (it drops one packet, which is simply re-sent) instead of wedging forever. Verified on hardware
+- **Opening a window no longer freezes the device**: the ADIF log / CQ editor / Filter / Sync-Time windows could occasionally hard-freeze the whole Tab5 (needing a power-cycle). Traced to the faint on-screen watermark forcing an expensive redraw; drawn a cheaper way now — looks identical, freeze gone
+- **The radio-control (CAT) link rides out USB glitches** instead of going dead for the rest of the session on a brief hiccup
+- **The web UI stays out of FT8's way**: switching to FT8/FT4 pauses the browser's live spectrum stream (it competed with FT8 for the radio link and CPU) and shows the log + upload controls instead — steadier decoding and a more stable WiFi link while operating digital modes
+- **SD card handling reworked for stability**: the microSD card now runs on its own dedicated bus instead of sharing one with WiFi. The automatic copy-to-card backup is **currently disabled** (mounting the card squeezes memory enough to hurt FT8 decoding) — your log and settings are unaffected, they always live in the device's own storage
+- **FT4 is temporarily switched off** this release — it was running the device out of memory and crashing. Fully reversible; FT8 is unaffected
+- **FT8 decode timing fixed**: each 15-second slot is now anchored to the exact time boundary, so the start of every signal is no longer clipped
+- **FT8 pile-up list**: stations that answer you mid-QSO are collected in a tappable "Pileup" list instead of vanishing; tap to work them, or ✕ to dismiss. Plus a "Skip TX1" option for quicker pounces
+- **11 m / CB band** support for QMX+, and the band picker no longer confuses 10 m and 11 m
+- **Interface**: smooth backlight fade-in at boot, a "turn on / reboot your QMX" prompt while waiting for the radio, and a memory-channel overhaul (example channels on first use, a one-time drag-and-delete tour, and a drag-to-wastebin delete)
+- **Battery care**: optional charge limit (stop at a set %, default 80 %) and an accurate charge reading while charging
+- **Web UI**: whole-band plan strip with a draggable window, a draggable spectrum/waterfall divider, screenshots that capture open pop-ups, and a nicer frequency keypad
 - Full writeup in [Version History Document](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/version-history.md)
 
-### Installing v0.19.5
+### Installing v0.20.0
 
 1. Use the one-click flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases)
 2. Or follow [Build from Source](build/build.md)
@@ -34,6 +36,12 @@ Your settings (callsign, grid, WiFi, memory channels) are preserved during a nor
 3. Re-enter your settings on first boot
 
 ## Previous Releases
+
+### v0.19.5
+
+- AM mode + Antenna Tune for QMX 1_04+ firmware (invisible on stable 1_03_002)
+- Fixed a crash on leaving FT8 mode; WiFi on/off now applies live and no longer wipes a saved password; FT8/FT4 remembers its own frequency
+- Band picker shows all bands in two columns; band-plan strip is a see-through framed window with 6 m segments; steadier point-to-tune; settings-drawer slider/scroll fixes; DiGi-gated memory recall in FT8/FT4
 
 ### v0.19.4
 
@@ -142,8 +150,10 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 Pending:
 
-1. **Multi-hour FT8 TX soak** — confirm no duty-cycle crashes, no over-temp, clean shutdown
-2. **LoTW (TQSL) upload** — certificate-based API (harder than QRZ/eQSL)
+1. **Re-enable FT4** — bring its memory use under control so it can be switched back on (disabled in v0.20.0)
+2. **Multi-hour FT8 TX soak** — confirm no duty-cycle crashes, no over-temp, clean shutdown
+3. **LoTW (TQSL) upload** — certificate-based API (harder than QRZ/eQSL)
+4. **Re-enable SD auto-archive** — cut the mount's internal-memory cost (or gate it off during FT8) so it no longer starves the decoder
 
 ### Phase 6.3 (FPS Recovery)
 
@@ -161,7 +171,7 @@ Pending:
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v0.19.5.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v0.20.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

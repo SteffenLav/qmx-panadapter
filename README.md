@@ -12,9 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Beta — v0.19.5.** FT8/FT4 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8/FT4 RX, web UI, ADIF logging) are stable. The beta label goes away at v1.0.0.
+> **Beta — v0.20.0.** A major robustness release: the WiFi drop-out now self-heals, the modal-open freeze and the FT8-exit crash are fixed, and the radio-control link rides out USB glitches. FT8 transmit is functional but not yet soaked across multi-hour sessions. Known gaps: no duty-cycle protection, no audio loopback verification, no over-temperature monitoring. Standard operating practice applies — dummy load for first tests, power/SWR meter if you have one. All other features (panadapter, FT8 RX, web UI, ADIF logging) are stable. **FT4 is temporarily disabled this release** (it was exhausting memory; reversible). The beta label goes away at v1.0.0.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v0.19.5.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v0.20.0.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -24,7 +24,7 @@ The full documentation also lives online at **[tab5.lav.dk](https://tab5.lav.dk)
 
 ## Features
 
-**Dual FT8/FT4 modes** — Full-featured digital mode station with both **FT8** (15-second slots, 79 symbols @ 160 ms cadence) and **FT4** (7.5-second slots, 105 symbols @ 48 ms cadence) onboard. RX decoding for both modes runs continuously; TX lets you reply to stations or call CQ. Both modes support auto-QSO workflows, ADIF logging, and the same panadapter view.
+**FT8 digital mode** — Full-featured FT8 station (15-second slots, 79 symbols @ 160 ms cadence): continuous on-device RX decoding, TX to reply or call CQ, auto-QSO workflows, ADIF logging — all in the same panadapter view. **FT4** (7.5-second slots, 105 symbols @ 48 ms cadence) is built in as well, but is **temporarily disabled in v0.20.0** — it was exhausting the device's internal memory (reversible, and FT8 is unaffected).
 
 **Real-time panadapter** — Spectrum and waterfall with tap-to-tune, pinch-zoom, and touch-drag one-finger navigation. 30 Hz refresh, 12 kHz IF offset compensation, flat-spectrum mode, adaptive waterfall floor, FFT window selection, and S-meter. Screenshot and spectrum export to web browser.
 
@@ -32,7 +32,7 @@ The full documentation also lives online at **[tab5.lav.dk](https://tab5.lav.dk)
 
 **ADIF logging** — Every QSO logs to onboard storage with QSO timestamp, callsign, frequency, mode, signal report, grid, and distance. Export to web UI or QRZ Logbook / eQSL for cloud backup.
 
-**microSD auto-archive** — Insert a microSD card and the Tab5 automatically mirrors the diagnostic log, ADIF QSO log, and a config export to `/qmx-panadapter/` on the card. No setup required. A green **SD** dot in the bottom bar lights up when a card is mounted and being mirrored.
+**microSD auto-archive** — Insert a microSD card and the Tab5 automatically mirrors the diagnostic log, ADIF QSO log, and a config export to `/qmx-panadapter/` on the card. No setup required. A green **SD** dot in the bottom bar lights up when a card is mounted and being mirrored. *(Temporarily disabled in v0.20.0 — mounting the card competes for internal memory with the FT8 decoder; your logs and settings live in the device's own storage regardless.)*
 
 **Web UI** — Browser panadapter, remote control (tune, mode, bandwidth), QSO log viewer, config export/import, and diagnostic log download — all without leaving the radio room.
 
@@ -60,7 +60,7 @@ The full documentation also lives online at **[tab5.lav.dk](https://tab5.lav.dk)
 
 ### Step 0 — Check your QMX firmware first
 
-Power the QMX on by itself and read the firmware version off its own display at boot. You need **1.03.002**. If yours is older, update the QMX *before* connecting the Tab5 — everything that follows depends on it. This takes 10 seconds to verify and saves hours of debugging. The **1.04 beta** is not yet verified with the panadapter — stick with 1.03.002 for now if you want a known-good combination.
+Power the QMX on by itself and read the firmware version off its own display at boot. You need **1.03.002 or newer**. If yours is older, update the QMX *before* connecting the Tab5 — everything that follows depends on it. This takes 10 seconds to verify and saves hours of debugging. Both **1.03.002** and the **1.04.002 beta** work with the panadapter; on 1.04.002 the Tab5 additionally offers **AM mode** and an **Antenna Tune** button (SWR tune with a live power/SWR readout) — both stay hidden on 1.03.002, so there's no downside either way.
 
 ### Step 1 — Flash the Tab5 firmware
 
@@ -119,6 +119,8 @@ See the [full gesture table](#gestures) in the Reference section.
 
 ### Step 3b — Choose FT8 or FT4 mode
 
+> **⏸️ FT4 is temporarily disabled in v0.20.0** — it was exhausting the device's internal memory and crashing, so it is switched off this release. Fully reversible, and **FT8 is unaffected**. The FT4 details in this section describe how it behaves when it is re-enabled.
+
 FT8 is available on all HF bands; FT4 is available on select bands with published frequencies (20 m, 30 m, 40 m, etc.). To switch between them:
 
 1. **In Panadapter mode:** Tap the **Mode** selector in the top bar, then choose **DiGi** (the digital mode group).
@@ -149,9 +151,11 @@ Switch the QMX to any band and watch it come alive. This is the foundation of th
 
 **Swipe fast to pan instead.** A quick horizontal swipe (rather than a held drag) slides the whole view left or right and retunes to wherever you let go — the fastest way to slide along a band. See [Touch-to-tune](#touch-to-tune) for exactly how the two gestures are told apart.
 
+**Or move precisely with the band-plan slider.** For a controlled move rather than a quick swipe, drag the framed "visible window" on the band-plan strip (along the bottom) to exactly where you want to be on the band — the spectrum, waterfall, and VFO all follow it, so you can place yourself precisely on a segment before you even tap a signal.
+
 **Zoom in on a crowded band.** Pinch with two fingers to zoom up to ×24. On a CW band at ×8 or higher you can resolve individual signals a few hundred Hz apart, read the spacing between callers, and pick your target before you tune. The frequency axis scales with you, down to Hz precision at high zoom. Double-tap anywhere to reset to the full 48 kHz view.
 
-**Find your place on the band.** The thin band-plan strip under the frequency axis colour-codes the CW/Digi/Phone segments around you — pick your IARU region (or leave it on Auto) in the settings drawer → **Band-plan region**.
+**Find your place on the band.** The thin band-plan strip along the bottom of the screen (just above the status bar) colour-codes the CW/Digi/Phone segments around you — pick your IARU region (or leave it on Auto) in the settings drawer → **Band-plan region**. The framed window on the strip is a **slider**: drag it (or tap anywhere on the strip) to move precisely to any spot on the band, and the spectrum, waterfall and VFO all follow along.
 
 **Read your passband.** Two grey vertical lines on the spectrum mark your current filter edges. The BW label in the top bar shows the active width; tap it to choose 2.5 / 2.7 / 2.9 / 3.2 kHz in USB or LSB. A coloured tint fills the passband so you can always see exactly what slice of the band you're receiving.
 
@@ -159,7 +163,9 @@ Switch the QMX to any band and watch it come alive. This is the foundation of th
 
 **Flat-spectrum mode.** Toggle **Flat spectrum** in the settings drawer to switch from absolute dBm to dB-above-local-noise-floor. Noise collapses to a calm baseline; real signals — including weak CW tones in the mud — pop sharply above it. Recommended on noisy bands.
 
-**Save your spots.** Swipe up from the bottom edge to open the memory channel picker. Long-press an empty slot to save the current frequency and mode with a label. Tap to recall — the QMX retunes instantly.
+**Save your spots.** Swipe up from the bottom edge to open the memory channel picker — a 4×8 grid of 32 channels. It doesn't greet you with blank cells: a fresh device arrives with a handful of **example channels already filled in**, and each one is **colour-coded by mode** (CW green, DiGi teal, USB brick-red, LSB purple) so you can read the whole grid at a glance without opening a single label. The very first time you open it, a quick **guided animation** walks you through the gestures — watch a channel slide to a new slot, then drop into the wastebin and vanish — so you learn "drag to move, drag to delete" in about ten seconds, once, and never again.
+
+Then it's yours: **tap** a channel to recall it (the QMX retunes instantly), **tap an empty slot** to store the current frequency/mode, **long-press** to edit, **drag** a channel to reorganise the grid, and **drag onto the wastebin** (bottom-right cell) to delete it.
 
 **Monitor from another room — or operate remotely.** Once WiFi is configured, open `http://<tab5-ip>` in any browser for a full-featured live panadapter with mouse-driven tuning, band/mode controls, and ADIF log download. The IP is shown in the bottom status bar. See [Web UI](#web-ui).
 
@@ -188,7 +194,7 @@ Every completed QSO is written to an ADIF log downloadable from the web UI. See 
 2. Reproduce the problem (let it run a minute; power-cycle the QMX if the issue is about connection).
 3. Grab the log:
    - **Over WiFi:** browse to `http://<tab5-ip>/api/log` or click **Diag ↓** in the web UI bottom bar — downloads `qmx-log.txt`. After a reboot/power-loss, **Diag(saved) ↓** (`/api/log/saved`) has the copy persisted to flash from before the reboot.
-   - **microSD:** if a card is inserted, the log is mirrored continuously to `/qmx-panadapter/qmx-log.txt` on the card.
+   - **microSD:** if a card is inserted, the log is mirrored continuously to `/qmx-panadapter/qmx-log.txt` on the card. *(SD mirroring is disabled in v0.20.0 — see the microSD note in Features; the always-on flash-persisted copy is unaffected.)*
    - **Over USB (no WiFi needed):** capture the serial console with `tools/capture_serial_log.ps1`.
 4. Open an [issue](https://github.com/SteffenLav/qmx-panadapter/issues) and attach the log. It includes Tab5 and QMX firmware versions plus every CAT command exchanged — usually enough to pinpoint the problem immediately.
 
@@ -198,13 +204,13 @@ Every completed QSO is written to an ADIF log downloadable from the web UI. See 
 
 ### Spectrum and waterfall
 
-The display is divided into a **60 px top bar**, a **200 px spectrum** (green curve with dim fill), a **32 px frequency axis**, a **22 px band-plan strip**, a **370 px waterfall**, and a **36 px bottom bar**. The full visible span is 48 kHz centred on the QMX VFO.
+The display is divided into a **60 px top bar**, a **200 px spectrum** (green curve with dim fill), a **32 px frequency axis**, a **370 px waterfall**, a **22 px band-plan strip**, and a **36 px bottom bar**. The full visible span is 48 kHz centred on the QMX VFO.
 
 The **spectrum** shows signal power in dBm (default range −130 to −30 dBm). Each frame is smoothed per-bin with an exponential moving average (EMA α = 0.4 by default, adjustable in the drawer), balancing visual stability against snappy response to CW signals and SSB attack transients.
 
 The **frequency axis** shows absolute MHz labels centred on the QMX VFO, refreshed on every CAT frequency update. At high zoom levels the labels resolve to kHz or Hz precision.
 
-**Band-plan strip.** A thin coloured bar directly under the frequency axis shows the coarse CW / Digi / Phone segments of the current band, with a marker for where the VFO sits within them. Pick which IARU region it reflects in the settings drawer → **Band-plan region** (Auto from your grid square, or a fixed Region 1 / 2 / 3).
+**Band-plan strip.** A thin coloured bar directly above the bottom status bar (below the waterfall) shows the coarse CW / Digi / Phone segments of the current band, with a marker for where the VFO sits within them. Pick which IARU region it reflects in the settings drawer → **Band-plan region** (Auto from your grid square, or a fixed Region 1 / 2 / 3).
 
 The **waterfall** runs newest row at the top in a thermal SDR palette (black → dark blue → teal → green → yellow → red). Four colour maps are available in the settings drawer: Thermal, Viridis, Turbo, and Grayscale.
 
@@ -223,7 +229,7 @@ Tap anywhere on the spectrum or waterfall to place the cyan tune cursor. Drag an
 | CW / CW-R | 10 Hz |
 | USB / LSB | 250 Hz |
 | FT8 / DiGi / RTTY | 500 Hz |
-| AM / FM | 1 kHz |
+| AM | 1 kHz |
 
 The grid is anchored to absolute frequency (e.g. …200 / 300 / 400 Hz), not to your touch start point, so the cursor always lands on the same set of grid points regardless of where your finger first touches.
 
@@ -260,10 +266,14 @@ Swipe up from the bottom edge (or tap the bottom grip handle) to open the 4×8 m
 | Action | How |
 |--------|-----|
 | Recall | Tap a slot — QMX retunes to stored frequency and mode |
-| Save | Long-press an empty slot — frequency/mode picker opens, then a label keyboard |
-| Edit / delete | Long-press an occupied slot |
+| Create | Tap an empty slot — the frequency/mode picker opens directly |
+| Edit | Long-press an occupied slot |
+| Move | Long-press and drag a filled slot onto an empty one — the data follows your finger |
+| Delete | Drag a filled slot onto the **wastebin** (bottom-right cell, channel 32) — it fades out |
 
 Memory slots show the label in large text and mode + frequency (dimmed) below. The frequency/mode picker pre-fills the current VFO and lets you edit both before naming.
+
+A new device ships with a few **example channels** already filled (rather than 32 blank cells), seeded only into empty slots so they never overwrite anything you've saved. The **first time** you open the picker, a brief one-time (~10 s) tour demonstrates the drag-to-move and drag-to-wastebin gestures, then never plays again.
 
 ### Settings drawer
 
@@ -285,10 +295,11 @@ Controls appear top to bottom in this order:
 | **CW** | CW sidetone centre, 600–800 Hz; touch-to-tune in CW mode snaps to this offset, persisted |
 | **IF calibration** | ±100 Hz trim for per-unit LO variance (see [Per-unit IF calibration](#per-unit-if-calibration)) |
 | **Display** | Brightness, 10–100%, persisted |
+| **Battery charge limit** | Optionally stop charging at a set percentage (default 80%) to reduce long-term pack wear; charging resumes automatically if the level later drops well below it (5% hysteresis). The displayed charge % now also compensates for the voltage rise while charging, so it no longer jumps around when plugged in |
 | **Waterfall colour map** | Thermal / Viridis / Turbo / Grayscale, persisted |
 | **Waterfall** | Black level, Contrast, Adaptive floor blend, and FFT window — see [Waterfall colourisation](#waterfall-colourisation) below |
 
-The drawer was decluttered in v0.19.4: the **Snap to signal** and **FT8 sync lines** toggles were removed (taps now always tune where you touch), and **Band-plan region** moved up next to Identity. The shelved **CW Audio** control is hidden entirely until the feature is re-enabled — see [CW Audio](#cw-audio-disabled).
+The drawer was decluttered in v0.19.4: the **Snap to signal** and **FT8 sync lines** toggles were removed (taps now always tune where you touch), and **Band-plan region** moved up next to Identity.
 
 The drawer shows a different subset while on the FT8 screen (Flip 180°, WiFi, Identity, Display — plus two FT8-only controls not shown above: **Distance in miles** for the decode list's KM/MI column, and **FT8 Simulation Mode**, see [FT8 Simulation mode](#ft8-simulation-mode)).
 
@@ -303,10 +314,6 @@ Four live, NVS-persisted sliders/dropdown at the bottom of the settings drawer f
 | **Adaptive floor** | 0–100% | 100% | Blend between a per-bin noise floor (100%) and one global mean floor across the band (0%) |
 | **FFT window** | Blackman-Harris / Hann (sharp) / Nuttall | Blackman-Harris | The FFT window function; Hann trades some sidelobe suppression for sharper peaks |
 
-### CW Audio (disabled)
-
-A **CW Audio** section appears in the drawer — greyed out, with its checkbox forced off — for a feature that plays demodulated CW out of the Tab5's own speaker/headphone jack while in CW/CW-R mode. It's shelved for now: enabling it was found to cut FT8 decode throughput by 2–3× even when not actively playing audio, most likely USB-audio/DMA contention, and a proper fix needs a redesigned audio path. The section stays visible (with a volume slider, also disabled) as a placeholder for when that lands.
-
 ---
 
 ## Web UI
@@ -315,9 +322,13 @@ With the Tab5 on WiFi, open `http://<tab5-ip>` in any modern browser. The IP is 
 
 The browser panadapter is a full-featured view in its own right — not just a window onto the Tab5. On a larger monitor you get more spectrum history, a bigger waterfall canvas, and mouse controls that are faster than touch for precise tuning. It shows live spectrum at ≈10 fps via WebSocket, full waterfall history (~50 s), the same thermal palette and floor maths, a graphical S-meter, and a top bar with Band / Mode / BW / Zoom controls. The bottom bar shows battery percentage + voltage, firmware version, a live UTC clock, and WiFi SSID + RSSI. To its right: download/upload buttons (ADIF, QRZ, eQSL — see [QSO logging](#qso-logging-adif)), **Diag ↓** for the diagnostic log, **Config ↓ / Config ↑** to back up / restore / edit all settings (see [Config backup, restore & edit](#config-backup-restore--edit)), and **Tab5Shot** which opens a live `/ss.bmp` screenshot in a new tab.
 
+**Whole-band plan strip & adjustable split (new in v0.20.0).** Along the bottom of the browser view (above the status bar), a colour-coded CW/Digi/Phone strip spans the entire band with a draggable "visible window" (drag or tap to retune) and a VFO marker, mirroring the Tab5's own strip. Drag the divider between the spectrum and the waterfall to give either more room — the split is remembered in the browser. **Tab5Shot** now captures any open pop-up (band/mode dropdown) too, and the frequency keypad is draggable with a standard 10-key layout.
+
+**In FT8/FT4 mode the live stream pauses (new in v0.20.0).** The browser stops streaming the spectrum/waterfall and shows a notice plus the log and upload controls instead. While you're operating digital modes the stream would compete with the on-device decoder and the WiFi link, so pausing it keeps FT8 decoding and WiFi noticeably steadier. Switch the Tab5 back to Panadapter mode and the stream resumes automatically.
+
 **Click or drag to tune.** Click or drag on the spectrum or waterfall — a cyan cursor appears with a live frequency readout and commits on release.
 
-**Mouse-wheel to pan or tune.** Rolling the mouse wheel over the spectrum or waterfall **pans** the view when zoomed in, letting you survey the band without touching the Tab5. At zoom ×1 the wheel **tunes** with mode-aware snap (CW 10 Hz, SSB 500 Hz, DiGi 100 Hz, AM/FM 1 kHz).
+**Mouse-wheel to pan or tune.** Rolling the mouse wheel over the spectrum or waterfall **pans** the view when zoomed in, letting you survey the band without touching the Tab5. At zoom ×1 the wheel **tunes** with mode-aware snap (CW 10 Hz, SSB 500 Hz, DiGi 100 Hz, AM 1 kHz).
 
 **Band / Mode / BW / Zoom** dropdown pills in the top bar send commands to the QMX via `/api/cmd` — the same effect as using the Tab5 top bar.
 
@@ -470,6 +481,18 @@ The reply is the standard FT8 exchange: `<their_call> <my_call> <my_grid>`. Slot
 
 **The auto-engine** works the full exchange: TX1 (grid) → wait for their report → TX2 (R+report) → wait for RR73/73 → TX3 (73) → DONE. At every step it re-sends the current message for up to 4 consecutive slots if the other station doesn't respond. If no reply comes after 4 slots, the QSO times out (orange status, tap to clear).
 
+**Skip TX1 (faster pounce).** With **Skip TX1** enabled in the Filter editor, a pounce opens with your signal report immediately instead of the grid exchange — saving one round trip. If the station has already aged out of the decode list, it falls back to the normal grid TX1 automatically.
+
+### Working a pile-up
+
+When you call CQ or work a run, more than one station may answer at once — and a caller who replies while you're mid-QSO with someone else used to vanish from the live decode list once they stopped transmitting. They're now held in a **Pileup** list so you don't lose them:
+
+- Whenever callers are waiting, the **ADIF-log** button on the FT8 screen becomes a **Pileup** button in a distinct colour, reverting once the list empties.
+- Tap **Pileup** to see everyone who has called you and isn't worked yet. Tap a station to work them (the same confirmation modal as a decode-list tap), or tap the **✕** to dismiss one.
+- A station is removed from the list automatically once you start a QSO with them.
+
+The tracker never transmits on its own — it only remembers callers; you choose who to work.
+
 ### Calling CQ — CQ-run mode
 
 Tap **Call CQ**. No confirmation modal. The engine:
@@ -494,6 +517,7 @@ Tap **Filter** in the left pane to open the filter editor. Controls which statio
 - **Exclude 1 / Exclude 2** — messages containing any of these terms are skipped even if they'd otherwise match.
 - **Exclude plain CQ callers** — hides bare `CQ ...` rows so only replies and exchanges remain visible.
 - **Exclude worked-before** — hides callsigns already worked **on the current band** (per-band, from your ADIF log) from the list and from CQ-run auto-replies; the same station on a different band is treated as not worked.
+- **Skip TX1** — when you pounce a station, open with your signal report instead of the grid exchange for a quicker QSO (falls back to the grid exchange if the station has aged out of the decode list).
 
 Tap **Save** to persist (NVS) and apply immediately.
 
@@ -636,7 +660,7 @@ The QMX's +12 kHz IF injection varies slightly between units. If signals appear 
 ### Hardware
 
 - **M5Stack Tab5** — ESP32-P4 v1.3 (ECO2), ST7121 or ST7123 5" 720×1280 MIPI-DSI touch display, 32 MB PSRAM, ESP32-C6 co-processor for WiFi
-- **QRP Labs QMX or QMX+** — firmware 1.03.002 required (the 1.04 beta is not yet verified)
+- **QRP Labs QMX or QMX+** — firmware 1.03.002 or newer (the 1.04.002 beta also works, and unlocks AM mode + Antenna Tune)
 - **USB-A → USB-C data cable** between Tab5 USB-A host port and QMX (full data, not charge-only)
 - **USB-C power supply** for the Tab5 (5 V / 2 A or better, or internal battery)
 
@@ -678,7 +702,7 @@ I (xxxx) bsp_info: panel:    ST7123 (inferred from touch)
 I (xxxx) bsp_info: touch:    ST7123 @ 0x55
 I (xxxx) bsp_info: heap:     230.5 kB internal free, 28.80 MB PSRAM free
 I (xxxx) bsp_info: idf:      v5.4.4
-I (xxxx) bsp_info: firmware: v0.19.5
+I (xxxx) bsp_info: firmware: v0.20.0
 I (xxxx) bsp_info: =====================
 ```
 
@@ -842,7 +866,7 @@ The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF
 | **CW** | Continuous Wave — Morse code mode |
 | **DSP** | Digital Signal Processing — mathematical signal analysis and filtering |
 | **FFT** | Fast Fourier Transform — algorithm to convert time-domain audio into frequency spectrum |
-| **FT8 / FT4** | Digital modes for weak-signal HF communication (15-second vs 7.5-second slots) |
+| **FT8 / FT4** | Digital modes for weak-signal HF communication (15-second vs 7.5-second slots). *FT4 is temporarily disabled in v0.20.0 (memory pressure; reversible) — FT8 is unaffected.* |
 | **GPIO** | General-Purpose Input/Output — microcontroller pins for digital signals |
 | **I2C / SPI** | Serial communication protocols for connecting peripherals (sensors, displays, etc.) |
 | **IQ** | In-phase / Quadrature — stereo representation of RF signals (real + imaginary parts) |

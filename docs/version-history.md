@@ -654,5 +654,68 @@ Both are **invisible on the current 1_03_002 firmware** — they only appear whe
 
 ---
 
+### Shipped in v0.20.0 — 2026-07-10 UTC
+
+Headline: **a big robustness pass.** This release is mostly about making the device *stay up* — the WiFi drop-out, the screen freeze on opening a window, and the radio-link hiccups that field reports kept hitting are all now fixed or self-healing. On top of that: a decision to pause FT4, a decision to keep the web UI out of the way while FT8 is running, and a batch of interface, band, memory and battery improvements.
+
+#### Reliability — the headline
+
+**WiFi no longer dies until you reboot.** The long-standing "WiFi stops after a few minutes (FT8 and CAT keep working), and only a power-cycle brings it back" fault is fixed. It was a low-level lock-up in the link to the WiFi co-processor: once a certain oversized data burst arrived, the driver gave up on it and got stuck repeating the same failure forever. The link now recovers from that condition automatically (it drops one packet, which TCP simply re-sends) instead of wedging. Verified on hardware — the recovery fired during a live session and WiFi carried on without a blip. This affects everyone who uses the web UI or QRZ/eQSL upload.
+
+**Opening a window no longer freezes the device.** Opening the ADIF log, CQ editor, Filter, or Sync-Time windows could occasionally hard-freeze the whole Tab5 — display, touch, and USB all dead, needing a power-cycle. It was traced (via a crash-log capture) to the faint on-screen operator watermark, which forced an expensive redraw whenever the screen fully repainted. The watermark is now drawn a cheaper way; it looks identical, and the freeze is gone.
+
+**The radio-control (CAT) link rides out USB glitches.** A brief USB hiccup used to be able to kill the CAT link for the rest of the session (frequency/mode readout would freeze). It now retries and recovers instead of giving up, and only tears down on a genuine radio disconnect.
+
+**The web UI stays out of FT8's way.** When you switch to FT8/FT4, the browser now pauses the live spectrum/waterfall stream and shows the log and upload controls instead — the streaming was competing with FT8 for the radio link and CPU. The streaming task was also de-prioritised so it can never interrupt audio capture. Net effect: steadier FT8 decoding and a more stable WiFi link while operating digital modes.
+
+**SD card handling reworked for stability.** The microSD card now runs on its own dedicated bus instead of sharing one with WiFi, which removes a whole class of SD-vs-WiFi conflicts and frees up scarce memory. The automatic SD backup (mirroring your log/config to the card) is **currently disabled** — with WiFi now recoverable it's safe from *that* angle, but a live test showed the card being mounted squeezes memory enough to hurt FT8 decoding, so it stays off until that cost is reduced. Your log and settings are unaffected — they always live in the device's own storage; only the extra copy-to-card is paused.
+
+**A dead FT8 capture task now restarts itself,** closing a gap where a fast Panadapter↔FT8 switch could leave FT8 running with nothing decoding behind it. And the web server is hardened against browser request pile-ups that could jam it.
+
+#### FT8
+
+**Decode timing fixed.** Each 15-second slot's recording is now anchored to the exact UTC boundary instead of starting slightly late, so the beginning of every signal (the part the decoder locks onto) is no longer clipped.
+
+**Pile-up list.** Stations that answer you while you're mid-QSO used to vanish from the list once they stopped transmitting. They're now collected in a tappable "Pileup" list — tap a caller to work them, or tap ✕ to dismiss. The ADIF-log button turns into the Pileup button (different colour) whenever anyone's waiting.
+
+**"Skip TX1" option** (Filter window) — start a pounce by sending your signal report straight away for a quicker QSO, with automatic fallback to the normal grid exchange if needed.
+
+**Filter window polish** — wider spacing between the checkboxes (easier to tap just one) and the panel no longer runs off the bottom of the screen.
+
+#### FT4 — paused
+
+**FT4 is temporarily switched off in this release.** It was running the device out of memory and crashing. Disabling it keeps things stable and is fully reversible; FT8 is unaffected. FT4 will return once its memory use is brought under control.
+
+#### Bands & tuning
+
+- **11 m / CB band** support for QMX+ (band label, band picker, band-plan strip, and per-band frequency memory all handle it now).
+- **Band-picker fix:** selecting a band now snaps to the nearest band centre, so 10 m and 11 m (which are close together) no longer get confused for each other.
+
+#### On-device interface
+
+- **Smooth backlight fade-in at boot** instead of a hard flash-on.
+- **"Turn on / reboot your QMX" full-screen prompt** while the radio isn't connected yet, so a blank-looking screen at power-up is self-explanatory.
+- **Memory channels overhaul:** the grid now ships with a few example channels so it isn't 32 blank cells on first use; a one-time ~10-second interactive tour shows that channels can be dragged and deleted; and there's a new **drag-to-wastebin** delete gesture.
+
+#### Web UI (browser)
+
+- **Whole-band plan strip** with colour-coded CW/Digi/Phone segments, a draggable "visible window" you can drag or tap to retune, and a VFO marker — mirroring the strip on the Tab5 itself.
+- **Draggable divider** between the spectrum and waterfall (your split is remembered).
+- **Screenshots now capture open pop-ups** (band/mode dropdowns), not just the base screen.
+- **Frequency keypad**: tap the VFO to open it, drag it around by its title bar, standard 10-key digit layout, and no more screen-dimming behind it.
+- **Fixes:** the centre frequency label no longer drifts off the true VFO; the flat-mode dB scale now matches the device exactly; the AM passband is drawn centred; the band dropdown reacts to a single click; and the FT8-mode notice text is now readable.
+
+#### Battery
+
+- **Battery-care charge limit** — optionally stop charging at a set percentage (default 80 %) to extend pack life.
+- **Accurate charge percentage while charging** — the reading no longer jumps around, and the charge limit no longer sticks early or oscillates, now that the voltage rise under charging current is compensated for.
+
+#### Under the hood
+
+- The ADIF log viewer opens much faster (it was re-reading the whole file once per visible row).
+- The developer resource-monitor overlay was removed from the settings drawer (it was only ever useful for debugging).
+
+---
+
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
 

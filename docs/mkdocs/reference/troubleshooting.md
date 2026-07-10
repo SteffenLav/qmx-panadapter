@@ -17,7 +17,7 @@
 1. Try a **different USB cable** — use one you know works for data (USB stick, phone file transfer, etc.)
 2. Power cycle the QMX (off 5 seconds, back on)
 3. Power cycle the Tab5
-4. Check QMX firmware version is v1.03.002
+4. Check QMX firmware version is v1.03.002 or newer (the v1.04.002 beta also works)
 
 If still flat after 10 seconds, proceed to [Collecting Diagnostics](#collecting-diagnostics).
 
@@ -43,7 +43,7 @@ If still flat after 10 seconds, proceed to [Collecting Diagnostics](#collecting-
 
 **Fix:**
 
-1. Verify QMX firmware is v1.03.002 (see Step 0 in [Quick Start](../quick-start.md); the v1.04 beta is not yet verified)
+1. Verify QMX firmware is v1.03.002 or newer (see Step 1 in [Quick Start](../quick-start.md); the v1.04.002 beta also works)
 2. Try a shorter/higher-quality USB cable
 3. Restart both devices
 
@@ -65,6 +65,12 @@ If still flat after 10 seconds, proceed to [Collecting Diagnostics](#collecting-
 3. Forget the network and reconnect: Settings → WiFi → tap network name → Forget → re-add
 4. Restart Tab5
 5. If still failing, grab the always-on **diagnostic log** — see [Collecting Diagnostics](#collecting-diagnostics)
+
+### WiFi connects, then stops working after a few minutes
+
+**Symptoms:** WiFi (web UI, uploads) worked at first, then went dead after some minutes — while FT8 and radio control kept working normally. On older firmware the only fix was a reboot.
+
+**This is fixed in v0.20.0.** The cause was a low-level lock-up in the link to the WiFi co-processor; the device now recovers from it automatically (dropping one packet, which is simply re-sent) instead of staying wedged. If you're on **v0.20.0 or later** and still see WiFi die permanently, it's a new issue — please capture the diagnostic log (below) and report it. If you're on an **earlier version**, update the firmware.
 
 ### FT8 decoding is slow or stops
 

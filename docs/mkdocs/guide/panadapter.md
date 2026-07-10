@@ -19,7 +19,7 @@ The panadapter is your primary view — a real-time spectrum analyser and waterf
 │ ░░░░░▓▓▓░░░░░░░░░░░░░░▓▓░░░░░░░░░░ │  Newest at top    │
 │ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │  SDR gradient     │
 ├─────────────────────────────────────────────────────────┤
-│ Battery 95%  FPS: 30   SD  v0.19.2   Waterfall        │  Status bar (30px)
+│ Battery 95%  FPS: 30   SD  v0.20.0   Waterfall        │  Status bar (30px)
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -29,7 +29,7 @@ The panadapter is your primary view — a real-time spectrum analyser and waterf
 |------|---------|
 | Battery % | Current battery charge level |
 | FPS | Render frame rate (target 30 fps) |
-| **SD** (green dot) | A microSD card is mounted and being mirrored. Files are written to `/qmx-panadapter/` on the card automatically — no setup needed. The dot is absent when no card is inserted |
+| **SD** (green dot) | A microSD card is mounted and being mirrored to `/qmx-panadapter/` on the card. **Note (v0.20.0): the automatic SD backup is temporarily disabled** — mounting the card competes for internal memory with the FT8 decoder, so it is off this release and the dot will not light even with a card inserted. Your diagnostic log, ADIF log and settings are unaffected; they always live in the device's own storage |
 | `UTC(FT8)` / `UTC(FT4)` | Time was last synchronised from a decoded FT8 or FT4 signal |
 | Firmware version | Currently flashed firmware version |
 | Waterfall label | Active colour map name |
@@ -55,7 +55,7 @@ Drag horizontally with one finger to scroll the spectrum left/right. Release to 
 
 #### Band-Plan Strip
 
-Below the frequency axis is a thin coloured strip showing where you are within the band at a glance. Each colour zone marks the conventional segment (CW, Digi, Phone) for your selected region (auto / ITU Region 1/2/3, set in settings).
+Along the bottom of the screen — just above the status bar, below the waterfall — is a thin coloured strip showing where you are within the band at a glance. Each colour zone marks the conventional segment (CW, Digi, Phone) for your selected region (auto / ITU Region 1/2/3, set in settings).
 
 The **visible-span block** inside the strip shows the exact portion of the band the spectrum and waterfall are currently displaying — it narrows as you zoom in and shifts as you pan.
 
@@ -119,6 +119,8 @@ The **spectrum** shows real-time signal strength (green curve) across the tuned 
 
 When you **switch modes** (Panadapter ↔ FT8 ↔ FT4) or **change bands**, the panadapter automatically **clears the waterfall and resets the spectrum baseline**. This prevents stale signals from interfering with your new band or mode view.
 
+> **⏸️ FT4 is temporarily disabled in v0.20.0** (it was exhausting memory and crashing; reversible, FT8 unaffected). See [FT8/FT4 Receive](ft8-rx.md).
+
 - Waterfall clears completely (starts fresh)
 - Noise floor recalibrates
 - New baseline takes ~1 second to establish
@@ -169,14 +171,23 @@ Mode is shown in colour on each button — CW (green), DiGi (teal), USB (brick r
 2. Long-press the slot you want to overwrite
 3. The current frequency/mode pre-fills the editor — adjust the label if you like, then tap **Save**
 
+**To delete a channel — drag it onto the wastebin:** the bottom-right cell (channel 32) is a **wastebin**. Long-press any filled channel and drag it onto the wastebin to delete it (it fades out). This is the way to clear a slot you no longer want.
+
+**Example channels on first use.** A brand-new device ships with a few example channels already filled in (rather than 32 blank cells), so the grid is explorable straight away. These only seed empty slots — they never overwrite anything you've saved.
+
+**First-run tour.** The very first time you open the memory picker, a brief (~10-second) one-time animation shows that channels can be **dragged** to move them and **dropped on the wastebin** to delete them. It plays once and never again.
+
 **Out-of-band frequencies are rejected immediately** — if you enter a frequency outside a recognised amateur band, the keypad stays open so you can correct it rather than silently saving a wrong value.
 
 ### 8. Band Presets
 
 Tap the **band name** on the top bar to switch between configured bands. The band selector shows:
 
-- **160m, 80m, 40m, 20m, 17m, 15m, 12m, 10m** — standard bands
+- **160m, 80m, 60m, 40m, 30m, 20m, 17m, 15m, 12m, 10m, 6m** — standard bands (whichever your radio has configured)
+- **11m** — the CB segment (26.9–27.5 MHz), shown on QMX+ radios that expose it
 - **Custom** — user-added bands (via settings)
+
+On radios with many configured bands (QMX+), the picker lays the bands out in **two side-by-side columns** so every band is visible without scrolling. Selecting a band jumps to the **nearest** band centre, so closely-spaced bands like 10 m and 11 m are no longer confused for one another.
 
 Switching bands **remembers the last frequency you visited on each band**, so you can flip between 20m and 40m without losing your place.
 

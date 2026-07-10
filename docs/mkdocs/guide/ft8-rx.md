@@ -2,6 +2,8 @@
 
 The panadapter includes **on-device FT8 and FT4 decoders** with real-time spectrum waterfall and a live list of heard stations.
 
+> **⏸️ FT4 is temporarily disabled in v0.20.0.** FT4 was exhausting the device's internal memory and crashing, so it is switched off this release while that is fixed. It is fully reversible and will return in a later update — **FT8 is unaffected**. The FT4-specific notes below describe how FT4 behaves when it is enabled.
+
 ### 1. FT8 & FT4 View
 
 Swipe → from the left edge to toggle to FT8/FT4 view. The same decode list and waterfall work for both modes — switch modes via the **Preset** dropdown in the left pane (top).
@@ -43,6 +45,7 @@ Tap the **Filter** button to open the filter modal:
 - **Exclude if contains** — hide any call matching these substrings
 - **Exclude worked before** — skip calls you've already logged QSOs with
 - **Show only CQ callers** — hide replies, show only CQ messages
+- **Skip TX1** — when you pounce a station, open with your signal report straight away instead of the grid exchange, for a quicker QSO (falls back to the normal grid exchange if the station has dropped out of the decode list)
 - **Auto-reply priority** — Strongest SNR, Weakest SNR, Most distant grid
 - **Robot mode** — auto-answer CQ (disabled by default; see [FT8 Transmit](ft8-tx.md))
 
@@ -86,6 +89,8 @@ Tap any FT8 row in the decode list to **prepare a reply**:
 3. Tap **Transmit** to send, or **Cancel** to abort
 
 The reply always follows FT8 protocol (correct parity, proper message sequence) — you can't accidentally send a garbled or out-of-order message.
+
+**Pile-up list.** If a station answers you while you're busy with another contact, they used to disappear from the list once they stopped transmitting. They're now remembered in a **Pileup** list — the **ADIF-log** button on the FT8 screen turns into a **Pileup** button (a different colour) whenever callers are waiting. Tap it to see who's called you, tap a station to work them, or tap the ✕ to dismiss one. See [FT8 Transmit](ft8-tx.md) for the full workflow.
 
 ### 7. Auto-Reply (Robot Mode)
 

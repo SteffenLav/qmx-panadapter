@@ -42,9 +42,13 @@ The frequency grid snaps based on zoom level (10 kHz at 1x, 1 kHz at 8x).
 | Action | Effect |
 |---|---|
 | **Tap channel** | Recall frequency, mode, and name |
-| **Long-press channel** | Edit name |
+| **Long-press channel** | Edit name/frequency/mode |
+| **Long-press + drag** | Move the channel to a different empty slot (data follows your finger) |
+| **Drag onto the wastebin** | Delete the channel — the bottom-right cell (channel 32) is a wastebin; drop a channel on it to remove it |
 | **Tap empty slot + Save** | Store current frequency to that slot |
 | **Tap occupied slot + Save** | Overwrite that channel |
+
+A new device ships with a few example channels, and the first time you open the picker a one-time (~10 s) tour demonstrates the drag-to-move and drag-to-delete gestures.
 
 ## Frequency Keypad
 

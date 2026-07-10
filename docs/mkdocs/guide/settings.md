@@ -40,6 +40,12 @@ Once connected, the settings show your **IP address** — use this to access the
 - **Normal** — absolute dBm scale
 - **Flat** — relative to per-bin noise floor (signals pop above baseline)
 
+## Battery Care
+
+**Charge Limit** — Optionally stop charging once the battery reaches a set percentage (default **80%**), to reduce long-term wear on the pack. Enable it and choose the target in the settings drawer; charging restarts automatically if the level later falls well below the target (5% hysteresis). Leave it off to always charge to 100%.
+
+**Accurate charge reading while charging** — the displayed battery percentage (and the charge-limit trigger) now compensate for the voltage rise that occurs while charging current is flowing. Previously this made the reading jump around while plugged in, and made the charge limit either stick just short of the target or oscillate; both are fixed.
+
 ## Waterfall Controls
 
 **Black Level (dB)** — How far above noise floor to show as black (default 9 dB). Lower = more colour detail.
@@ -57,11 +63,13 @@ Once connected, the settings show your **IP address** — use this to access the
 
 **Distance in Miles** — Show FT8 distances in miles instead of km (off by default).
 
-**Band-plan region** — Sets which region's band plan drives the coloured CW/Digi/Phone strip under the frequency axis. **Auto** derives it from your grid square; you can also force Region 1/2/3.
+**Band-plan region** — Sets which region's band plan drives the coloured CW/Digi/Phone strip along the bottom of the screen. **Auto** derives it from your grid square; you can also force Region 1/2/3.
 
 **Band Presets** — Add or remove custom bands. Standard bands (160–10 m) are always available.
 
 ## FT8 Settings
+
+> **⏸️ FT4 is temporarily disabled in v0.20.0** (it was exhausting internal memory and crashing; reversible, and FT8 is unaffected).
 
 **FT8 On/Off** — Globally enable/disable FT8 mode.
 
@@ -77,8 +85,6 @@ Once connected, the settings show your **IP address** — use this to access the
 
 **IQ Balance** — Adaptive I/Q phase correction (usually on). Suppresses mirror-image signals.
 
-**CW Audio** — CW demodulation + speaker output. Currently shelved and hidden from the drawer pending a USB-audio pipeline fix.
-
 ## Diagnostic Logging
 
 The diagnostic log is **always on** — there is nothing to enable. All firmware log output is captured to a 5 MB memory ring, with a rolling copy persisted to internal flash (survives a reboot or power-off) and, if a microSD card is inserted, mirrored continuously to the card. Download via:
@@ -90,6 +96,8 @@ The diagnostic log is **always on** — there is nothing to enable. All firmware
 Useful for troubleshooting rare issues.
 
 ## microSD Auto-Archive
+
+> **⏸️ Temporarily disabled in v0.20.0.** Mounting the SD card uses enough internal memory to hurt FT8 decoding, so the automatic archive is switched off this release — no card is mounted and the SD dot stays dark. Your diagnostic log, ADIF log and settings are unaffected; they always live in the device's own storage and download the same way. The description below applies to when the feature is re-enabled.
 
 Insert a microSD card (FAT32 or exFAT, any size) and the Tab5 automatically mirrors three files to `/qmx-panadapter/` on the card:
 

@@ -2,6 +2,8 @@
 
 The panadapter **keys the QMX and transmits full FT8/FT4 QSOs** — reply to CQ, run your own CQ, auto-answer (robot mode), or conduct a full exchange.
 
+> **⏸️ FT4 is temporarily disabled in v0.20.0.** It was exhausting the device's internal memory and crashing, so it is switched off this release while that is fixed — fully reversible, and **FT8 is unaffected**. FT4 transmit returns in a later update; the FT4-specific details on this page apply to when it is re-enabled.
+
 ### 1. FT8 vs FT4 — Which to Use?
 
 Both modes transmit via the same CAT interface; the difference is **slot length and symbol rate**:
@@ -87,6 +89,19 @@ In FT8 view, tap a CQ row in the decode list. A confirmation modal appears:
 **A quick tap is enough** — you do not need to hold a row before releasing. Hold-and-drag still works for selecting across rows in a busy list.
 
 The reply follows **correct FT8/FT4 parity** — if you're replying to an even slot, you transmit on the odd slot, and vice versa. For FT4 the countdown timer correctly counts down in 7.5-second slot increments, not 15-second FT8 ones.
+
+**Skip TX1 (faster pounce).** With **Skip TX1** enabled in the Filter modal, pouncing a station opens with your signal report straight away instead of the grid exchange — saving one round trip. If the station has already dropped out of the decode list, it falls back to the normal grid exchange automatically.
+
+#### Working a pile-up
+
+When you call CQ (or work a busy run), more than one station may answer at once — and a caller who replies while you're mid-QSO with someone else used to vanish from the live decode list as soon as they stopped transmitting. They are now kept in a **Pileup** list so you don't lose them:
+
+- Whenever one or more stations are waiting, the **ADIF-log** button on the FT8 screen becomes a **Pileup** button in a distinct colour, and reverts once the list empties.
+- Tap **Pileup** to see everyone who has called you and isn't worked yet.
+- Tap a station in the list to work them (the same confirmation modal as a decode-list tap), or tap the small **✕** to dismiss them without working them.
+- A station is removed from the list automatically once you start a QSO with them.
+
+The pile-up tracker never transmits on its own — it only remembers callers; you choose who to work.
 
 ### 2. Call CQ
 
@@ -255,7 +270,7 @@ Uploads work **while FT8 or FT4 is actively running** — the panadapter briefly
 **"QMX not responding to TX command"**
 
 - Check USB cable (must be data cable, not charge-only)
-- Verify QMX is in the correct mode (USB/LSB/CW, not AM/FM)
+- Verify QMX is in the correct mode (USB/LSB/CW/DiGi, not AM)
 - Try a manual `TX;` command via the web UI's CAT tab
 
 **"⚠ FREQ BUSY warning, but no other station is there"**
