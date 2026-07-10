@@ -669,7 +669,7 @@ static void freq_popup_build(void)
     int disp_h   = small ? 36  : 48;   // freq-display label height
     int top_pad  = small ? 8   : 12;   // gap between the display label and the digit grid
     const lv_font_t *font_disp = small ? &lv_font_montserrat_22 : &lv_font_montserrat_32;
-    const lv_font_t *font_key  = small ? &lv_font_montserrat_18 : &lv_font_montserrat_24;
+    const lv_font_t *font_key  = small ? &lv_font_montserrat_24 : &lv_font_montserrat_32;
 
     int grid_top = disp_h + top_pad;
     int cols = 3, rows = 4;
