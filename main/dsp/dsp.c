@@ -170,9 +170,27 @@ static const float s_ft8_lpf_taps[31] = {
 };
 static float       s_ft8_fir_delay[31];
 static fir_f32_t   s_ft8_fir;
-static SemaphoreHandle_t s_ft8_done_sem = NULL;
+
+// Continuous FT8 capture pre-ring (boundary-discard fix). The producer
+// (fft_task FT8 branch) mixes/decimates and appends decimated 12 kHz samples
+// here EVERY window while in FT8 mode — whether or not a slot capture is armed.
+// dsp_ft8_capture_begin() then backfills the boundary->arm gap out of this ring
+// so each slot's window starts at the UTC boundary regardless of when the
+// low-priority ft8_task woke up to arm it. Before this, the gap audio (the start
+// of every FT8 signal, incl. its Costas sync array) was discarded, so any slot
+// armed late (off=85-176 ms) decoded far fewer signals than the first (on-time)
+// slot. s_pre_head is a free-running absolute count (wrap-safe via unsigned
+// deltas; wraps only after ~25 days at 12 kHz).
+#define FT8_PRE_CAP   180000              // 15 s @ 12 kHz — one full FT8 slot of slack
+static float   *s_ft8_pre = NULL;
+static volatile uint32_t s_pre_head      = 0;   // abs count of decimated samples produced
+static uint32_t s_cap_read_head  = 0;   // abs ring pos the consumer has copied into dst
+static uint32_t s_cap_begin_head = 0;   // s_pre_head at begin() (no-audio detection)
+static bool     s_ft8_in_mode    = false;   // producer-side FT8-mode edge tracker
+static int      s_ft8_smeter_tick = 0;
+
 static float *s_ft8_dst    = NULL;
-static volatile int s_ft8_idx    = 0;   // advanced by fft_task; polled cross-task by the FT8 capture caller
+static volatile int s_ft8_idx    = 0;   // decimated samples copied into dst so far
 static int    s_ft8_target = 0;
 static volatile bool s_ft8_active = false;
 
@@ -190,88 +208,106 @@ static float s_ft8_dec_buf[DSP_FFT_SIZE / 4];
 static uint32_t s_ft8_iter_count = 0;
 static uint32_t s_ft8_total_n_out = 0;
 static int64_t  s_ft8_last_log_us = 0;
-static uint64_t s_ft8_read_us = 0;
-static uint64_t s_ft8_work_us = 0;
-static uint32_t s_ft8_slow_reads = 0;
-static uint32_t s_ft8_slow_works = 0;
 
-// Incremental capture API (v0.18 fast-decode). Splits the old one-shot
-// dsp_ft8_capture into arm / poll-progress / finalize so the caller can run
-// the FT8 STFT (monitor_process) block-by-block *during* the slot instead of
-// batching it after capture completes. The audio producer (fft_task FT8 branch)
-// is unchanged — it still mixes, decimates and appends decimated 12 kHz samples
-// to s_ft8_dst, advancing s_ft8_idx.
+// Incremental capture API (v0.18 fast-decode + boundary-discard fix). arm /
+// poll-progress / finalize so the caller runs the FT8 STFT (monitor_process)
+// block-by-block *during* the slot. The audio is now sourced from the
+// continuous pre-ring (see s_ft8_pre): begin() backfills the boundary->arm gap
+// and progress() drains newly-produced samples into dst, so the window is
+// anchored to the UTC boundary rather than to when ft8_task woke to arm.
 
-// Arm capture: dst MUST point to >= target_samples floats in PSRAM.
-esp_err_t dsp_ft8_capture_begin(float *dst, uint32_t target_samples)
+// Copy `n` decimated samples starting at absolute ring position `from_abs` into
+// s_ft8_dst[dst_off ..], handling the ring wrap.
+static void ft8_ring_copy_to_dst(uint32_t from_abs, uint32_t n, uint32_t dst_off)
 {
-    if (!dst) return ESP_ERR_INVALID_ARG;
-    if (!s_ft8_done_sem) {
-        s_ft8_done_sem = xSemaphoreCreateBinary();
-        if (!s_ft8_done_sem) return ESP_ERR_NO_MEM;
-    }
-    memset(s_ft8_fir_delay, 0, sizeof(s_ft8_fir_delay));
-    esp_err_t e = dsps_fird_init_f32(&s_ft8_fir,
-                                     (float *)s_ft8_lpf_taps,
-                                     s_ft8_fir_delay,
-                                     31, 4);
-    if (e != ESP_OK) {
-        ESP_LOGE(TAG, "dsps_fird_init_f32 failed: %d", e);
-        return e;
-    }
-    xSemaphoreTake(s_ft8_done_sem, 0);  // drain stale
+    uint32_t rpos  = from_abs % FT8_PRE_CAP;
+    uint32_t first = FT8_PRE_CAP - rpos;
+    if (first > n) first = n;
+    memcpy(&s_ft8_dst[dst_off], &s_ft8_pre[rpos], first * sizeof(float));
+    if (n > first)
+        memcpy(&s_ft8_dst[dst_off + first], &s_ft8_pre[0], (n - first) * sizeof(float));
+}
+
+// Arm capture. dst MUST point to >= target_samples floats in PSRAM and stay
+// valid until finish() returns. backfill_samples = how many decimated samples
+// back from "now" the UTC boundary was (start_off_ms * 12) — begin() prepends
+// that many from the pre-ring so the slot window starts at the boundary.
+esp_err_t dsp_ft8_capture_begin(float *dst, uint32_t target_samples,
+                                uint32_t backfill_samples)
+{
+    if (!dst || !s_ft8_pre) return ESP_ERR_INVALID_ARG;
     s_ft8_dst    = dst;
-    s_ft8_idx    = 0;
     s_ft8_target = (int)target_samples;
+
+    __sync_synchronize();
+    uint32_t head = s_pre_head;
+    uint32_t bf   = backfill_samples;
+    if (bf > head)           bf = head;            // no more than produced since entry
+    if (bf > FT8_PRE_CAP)    bf = FT8_PRE_CAP;     // no more than the ring holds
+    if (bf > target_samples) bf = target_samples;
+    if (bf > 0) ft8_ring_copy_to_dst(head - bf, bf, 0);
+    s_ft8_idx        = (int)bf;
+    s_cap_read_head  = head;            // live tracking continues from the boundary+gap
+    s_cap_begin_head = head;
     __sync_synchronize();
     s_ft8_active = true;
     return ESP_OK;
 }
 
-// Number of decimated 12 kHz samples committed to dst so far. Cross-task read
-// of a volatile, monotonically-increasing counter — safe to poll.
+// Drain any pre-ring samples produced since the last call into dst, then return
+// the decimated-12 kHz sample count committed to dst so far. Called from the
+// capture (consumer) task only.
 int dsp_ft8_capture_progress(void)
 {
+    if (!s_ft8_dst) return 0;
     __sync_synchronize();
+    uint32_t head  = s_pre_head;
+    uint32_t avail = head - s_cap_read_head;       // unsigned delta — wrap-safe
+    if (avail > FT8_PRE_CAP) {
+        // Producer lapped the consumer (ft8_task stalled > ~15 s). Pathological;
+        // drop the overrun rather than copy corrupted (overwritten) ring data.
+        ESP_LOGW(TAG, "FT8 pre-ring lapped (avail=%u) - consumer stalled", (unsigned)avail);
+        s_cap_read_head = head - FT8_PRE_CAP;
+        avail = FT8_PRE_CAP;
+    }
+    uint32_t space = (uint32_t)(s_ft8_target - s_ft8_idx);
+    uint32_t take  = (avail < space) ? avail : space;
+    if (take > 0) {
+        ft8_ring_copy_to_dst(s_cap_read_head, take, (uint32_t)s_ft8_idx);
+        s_ft8_idx       += (int)take;
+        s_cap_read_head += take;
+    }
     return s_ft8_idx;
 }
 
-// Finalize: wait up to timeout_ms for the target sample count, then disarm and
-// zero-pad any shortfall (the slot's dead air after the FT8 signal).
-// timeout_ms is the time until the next UTC slot boundary: the caller caps each
-// capture there so the 15 s window stays anchored to the FT8 timing grid.
-// Returns ESP_ERR_TIMEOUT only on a genuine audio failure (zero samples).
+// Finalize: final drain, disarm, zero-pad the tail (the slot's dead air after
+// the FT8 signal). The caller's streaming loop has already run to the UTC
+// boundary, so there is nothing to wait for here. Returns ESP_ERR_TIMEOUT only
+// on a genuine audio failure (nothing captured / producer never advanced).
 esp_err_t dsp_ft8_capture_finish(uint32_t timeout_ms)
 {
-    BaseType_t ok = xSemaphoreTake(s_ft8_done_sem, pdMS_TO_TICKS(timeout_ms));
+    (void)timeout_ms;
+    dsp_ft8_capture_progress();     // sweep up any last in-flight samples
     s_ft8_active = false;
     __sync_synchronize();
 
-    if (ok != pdTRUE) {
-        // Boundary reached before a full frame. This is the normal path (the
-        // QMX clock isn't bit-exact 48 kHz, so 180000 samples take a hair more
-        // than one slot). Let the FT8 branch finish any in-flight chunk, then
-        // zero-pad the tail — it's the slot's dead air, after the FT8 signal.
-        vTaskDelay(pdMS_TO_TICKS(20));
-        int got = s_ft8_idx;
-        if (got <= 0) {
-            ESP_LOGW(TAG, "FT8 capture: no audio in %lu ms", (unsigned long)timeout_ms);
-            return ESP_ERR_TIMEOUT;     // genuine audio failure
-        }
-        if (got < s_ft8_target) {
-            memset(&s_ft8_dst[got], 0,
-                   (size_t)(s_ft8_target - got) * sizeof(float));
-        }
-        ESP_LOGD(TAG, "FT8 capture cut at boundary: %d/%d samples (padded)",
-                 got, s_ft8_target);
+    int got = s_ft8_idx;
+    if (got <= 0 || s_pre_head == s_cap_begin_head) {
+        ESP_LOGW(TAG, "FT8 capture: no new audio this slot");
+        return ESP_ERR_TIMEOUT;     // genuine audio failure — skip decode
     }
+    if (got < s_ft8_target) {
+        memset(&s_ft8_dst[got], 0, (size_t)(s_ft8_target - got) * sizeof(float));
+    }
+    ESP_LOGD(TAG, "FT8 capture: %d/%d samples (padded tail)", got, s_ft8_target);
     return ESP_OK;
 }
 
-// One-shot capture: arm + finalize. Retained for any non-streaming caller.
+// One-shot capture: arm (no backfill) + finalize. Retained for any non-streaming
+// caller; not used by the live slot loop.
 esp_err_t dsp_ft8_capture(float *dst_180000, uint32_t timeout_ms)
 {
-    esp_err_t e = dsp_ft8_capture_begin(dst_180000, 180000);
+    esp_err_t e = dsp_ft8_capture_begin(dst_180000, 180000, 0);
     if (e != ESP_OK) return e;
     return dsp_ft8_capture_finish(timeout_ms);
 }
@@ -289,7 +325,10 @@ esp_err_t dsp_init(void)
                                  MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     s_spectrum = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),
                                   MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    if (!s_window || !s_workbuf || !s_spectrum) {
+    // Continuous FT8 capture pre-ring (PSRAM) — see s_ft8_pre.
+    s_ft8_pre = heap_caps_malloc(FT8_PRE_CAP * sizeof(float),
+                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_window || !s_workbuf || !s_spectrum || !s_ft8_pre) {
         ESP_LOGE(TAG, "Failed to allocate DSP buffers");
         return ESP_ERR_NO_MEM;
     }
@@ -777,16 +816,27 @@ static void fft_task(void *arg)
             got += r;
         }
 
-        // Step 3 v0.10: FT8 capture branch. fs/4 sign-flip mixer
-        // shifts QMX +12 kHz IF to DC, then /4 FIR decimator.
-        // Skip DC blocker / FFT / render push during capture.
-        if (s_ft8_active) {
-            static int64_t s_prev_work_end_us = 0;
-            int64_t t_read_done = esp_timer_get_time();
-            if (s_prev_work_end_us != 0) {
-                int64_t dt = t_read_done - s_prev_work_end_us;
-                s_ft8_read_us += dt;
-                if (dt > 30000) s_ft8_slow_reads++;
+        // FT8 continuous-capture branch. While in FT8 mode we ALWAYS mix the
+        // QMX +12 kHz IF to DC (fs/4 sign-flip), decimate /4, and append the
+        // decimated 12 kHz samples to the continuous pre-ring — whether or not a
+        // slot capture is currently armed. This closes the old boundary->arm
+        // discard gap (see s_ft8_pre): the low-priority ft8_task arms each slot's
+        // capture 85-176 ms after the UTC boundary, and this branch used to
+        // DISCARD that gap, throwing away the start of every FT8 signal (its
+        // Costas sync array), so late-armed slots decoded far fewer signals than
+        // the first, on-time slot. The gap audio now lives in the ring and
+        // dsp_ft8_capture_begin() backfills it. dsp_ft8_capture_progress()
+        // (consumer task) copies the ring into the caller's dst.
+        if (ui_mode_get() == UI_MODE_FT8) {
+            // FT8-mode entry edge: reset the decimation FIR + ring so a stale
+            // delay line / old sample counter can't leak into slot 0.
+            if (!s_ft8_in_mode) {
+                memset(s_ft8_fir_delay, 0, sizeof(s_ft8_fir_delay));
+                dsps_fird_init_f32(&s_ft8_fir, (float *)s_ft8_lpf_taps,
+                                   s_ft8_fir_delay, 31, 4);
+                s_pre_head       = 0;
+                s_cap_read_head  = 0;
+                s_ft8_in_mode    = true;
             }
             for (int i = 0; i < DSP_FFT_SIZE; i += 4) {
                 s_ft8_mix_buf[i + 0] =  (float)samples[2*(i+0)];      // +I
@@ -794,82 +844,42 @@ static void fft_task(void *arg)
                 s_ft8_mix_buf[i + 2] = -(float)samples[2*(i+2)];      // -I
                 s_ft8_mix_buf[i + 3] = -(float)samples[2*(i+3) + 1];  // -Q
             }
-            // NB: dsps_fird_f32's `len` is OUTPUT length, not input.
-            // For decim=4 and 1024 inputs, request 256 outputs.
-            int n_out = dsps_fird_f32(&s_ft8_fir,
-                                      s_ft8_mix_buf,
-                                      s_ft8_dec_buf,
-                                      DSP_FFT_SIZE / 4);
-            int writable = s_ft8_target - s_ft8_idx;
-            if (writable > 0 && n_out > 0) {
-                int copy = (n_out < writable) ? n_out : writable;
-                memcpy(&s_ft8_dst[s_ft8_idx],
-                       s_ft8_dec_buf,
-                       copy * sizeof(float));
-                s_ft8_idx += copy;
+            // NB: dsps_fird_f32's `len` is OUTPUT length: 256 out from 1024 in.
+            int n_out = dsps_fird_f32(&s_ft8_fir, s_ft8_mix_buf,
+                                      s_ft8_dec_buf, DSP_FFT_SIZE / 4);
+            if (n_out > 0 && s_ft8_pre) {
+                uint32_t pos   = s_pre_head % FT8_PRE_CAP;
+                uint32_t first = FT8_PRE_CAP - pos;
+                if (first > (uint32_t)n_out) first = (uint32_t)n_out;
+                memcpy(&s_ft8_pre[pos], s_ft8_dec_buf, first * sizeof(float));
+                if ((uint32_t)n_out > first)
+                    memcpy(&s_ft8_pre[0], &s_ft8_dec_buf[first],
+                           ((uint32_t)n_out - first) * sizeof(float));
+                __sync_synchronize();
+                s_pre_head += (uint32_t)n_out;
             }
-            if (s_ft8_idx >= s_ft8_target) {
-                xSemaphoreGive(s_ft8_done_sem);
-            }
-            int64_t t_work_end = esp_timer_get_time();
-            int64_t work_dt = t_work_end - t_read_done;
-            s_ft8_work_us += work_dt;
-            if (work_dt > 10000) s_ft8_slow_works++;
-            s_prev_work_end_us = t_work_end;
             s_ft8_iter_count++;
             s_ft8_total_n_out += n_out;
-            int64_t now = t_work_end;
+            int64_t now = esp_timer_get_time();
             if (now - s_ft8_last_log_us > 1000000) {
-                uint32_t n = s_ft8_iter_count ? s_ft8_iter_count : 1;
-                ESP_LOGI(TAG,
-                    "FT8 br: %u iters %u smp idx=%d/%d  read_avg=%uus work_avg=%uus  slow_r=%u slow_w=%u",
-                    (unsigned)s_ft8_iter_count,
-                    (unsigned)s_ft8_total_n_out,
-                    s_ft8_idx, s_ft8_target,
-                    (unsigned)(s_ft8_read_us / n),
-                    (unsigned)(s_ft8_work_us / n),
-                    (unsigned)s_ft8_slow_reads,
-                    (unsigned)s_ft8_slow_works);
+                ESP_LOGI(TAG, "FT8 cap: %u iters %u smp head=%u active=%d idx=%d/%d",
+                    (unsigned)s_ft8_iter_count, (unsigned)s_ft8_total_n_out,
+                    (unsigned)s_pre_head, (int)s_ft8_active, s_ft8_idx, s_ft8_target);
                 s_ft8_iter_count = 0;
                 s_ft8_total_n_out = 0;
-                s_ft8_read_us = 0;
-                s_ft8_work_us = 0;
-                s_ft8_slow_reads = 0;
-                s_ft8_slow_works = 0;
                 s_ft8_last_log_us = now;
             }
-            // S-meter still needs fresh spectrum data during active FT8
-            // capture (s_ft8_active stays true almost continuously per the
-            // "no slot-skip" design, so the idle-branch refresh below rarely
-            // runs). samples[] here is the raw, un-mixed IQ (the fs/4 mixer
-            // above writes to s_ft8_mix_buf, not samples[]), so the spectrum
-            // stays IF-bin-aligned for dsp_get_peak_dbm_around_vfo(vfo_bin).
-            {
-                static int s_ft8_active_smeter_tick = 0;
-                if (++s_ft8_active_smeter_tick >= 10) {
-                    s_ft8_active_smeter_tick = 0;
-                    compute_and_publish_spectrum(samples, tmp_spectrum, &last_min, &last_max, &last_mean);
-                }
+            // S-meter: every ~10th window, publish spectrum from the raw IQ
+            // samples[] (un-mixed — the fs/4 mixer wrote s_ft8_mix_buf, not
+            // samples[]), so it stays IF-bin-aligned for the VFO peak reader.
+            if (++s_ft8_smeter_tick >= 10) {
+                s_ft8_smeter_tick = 0;
+                compute_and_publish_spectrum(samples, tmp_spectrum, &last_min, &last_max, &last_mean);
             }
             continue;
         }
-        // Step 4b v0.10: FT8 mode but no capture armed - drain and
-        // discard. We MUST still consume samples here; audio.c is
-        // single-consumer and a stalled fft_task would back-pressure
-        // the ring buffer and corrupt the next capture.
-        //
-        // S-meter still needs fresh spectrum data while in FT8 mode (it's
-        // read from s_spectrum at 5 Hz by render_task), so every ~10
-        // iterations (~213 ms @ 48 kHz/1024) run the FFT below instead of
-        // discarding. The resulting spectrum/waterfall push in render_task
-        // is harmless - the panadapter canvases aren't visible in FT8 mode.
-        if (ui_mode_get() == UI_MODE_FT8) {
-            static int s_ft8_smeter_tick = 0;
-            if (++s_ft8_smeter_tick < 10) {
-                continue;
-            }
-            s_ft8_smeter_tick = 0;
-        }
+        // Not FT8 mode: mark exit so the next FT8 entry resets the FIR/ring.
+        s_ft8_in_mode = false;
         // DC blocker, windowing, FFT, dB conversion, publish to s_spectrum
         // (normal panadapter path).
         compute_and_publish_spectrum(samples, tmp_spectrum, &last_min, &last_max, &last_mean);

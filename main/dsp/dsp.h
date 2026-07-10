@@ -80,15 +80,19 @@ esp_err_t dsp_find_peak_hz_around(int32_t center_hz, int32_t radius_hz, int32_t 
 // Returns ESP_OK on success, ESP_ERR_TIMEOUT if no audio after timeout_ms.
 esp_err_t dsp_ft8_capture(float *dst_180000, uint32_t timeout_ms);
 
-// Incremental capture (v0.18 fast-decode): arm / poll / finalize variant of
-// dsp_ft8_capture, letting the caller run the FT8 STFT block-by-block during
-// the slot instead of after. Usage per slot:
-//   dsp_ft8_capture_begin(scratch, 180000);
+// Incremental capture (v0.18 fast-decode + boundary-discard fix): arm / poll /
+// finalize variant of dsp_ft8_capture. Audio is sourced from a continuous
+// pre-ring the producer fills every window while in FT8 mode, so the window is
+// anchored to the UTC boundary rather than to when the caller armed it. Usage:
+//   dsp_ft8_capture_begin(scratch, 180000, start_off_ms * 12);
 //   while (...) { int n = dsp_ft8_capture_progress(); process new whole blocks; delay; }
 //   dsp_ft8_capture_finish(ms_to_boundary);   // disarms + zero-pads the tail
+// backfill_samples = how many decimated samples back from "now" the UTC boundary
+// was (start_off_ms * 12), so begin() can prepend that gap from the pre-ring.
 // dst MUST point to >= target_samples floats in PSRAM and stay valid until
 // finish() returns. progress() returns the decimated-12 kHz sample count so far.
-esp_err_t dsp_ft8_capture_begin(float *dst, uint32_t target_samples);
+esp_err_t dsp_ft8_capture_begin(float *dst, uint32_t target_samples,
+                                uint32_t backfill_samples);
 int       dsp_ft8_capture_progress(void);
 esp_err_t dsp_ft8_capture_finish(uint32_t timeout_ms);
 

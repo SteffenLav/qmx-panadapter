@@ -1296,7 +1296,14 @@ static void ft8_task(void *arg)
             // the per-slot decode line so the cliff is directly observable.
             int arm_backlog = (int)audio_ring_backlog_pairs();
             uint32_t drop_before = audio_get_dropped_total();
-            esp_err_t e = dsp_ft8_capture_begin(s_cap_scratch, slot_samples);
+            // Backfill the boundary->arm gap from the continuous pre-ring: the
+            // slot's opening audio (incl. the Costas sync array) that arrived
+            // while this low-priority task was still getting scheduled. Anchors
+            // the capture window to the UTC boundary, not to wake time — the fix
+            // for the "great decodes only on the first slot" collapse.
+            uint32_t backfill = (start_off_ms > 0)
+                              ? (uint32_t)start_off_ms * (SR_HZ / 1000) : 0;
+            esp_err_t e = dsp_ft8_capture_begin(s_cap_scratch, slot_samples, backfill);
             int     blk       = mon->block_size;        // 1920 (FT8) / 576 (FT4)
             int     n_blocks  = slot_samples / blk;      // 93 (FT8) / 156 (FT4)
             int     processed = 0;
