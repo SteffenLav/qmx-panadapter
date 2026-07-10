@@ -4,6 +4,12 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v0.20.1** — 2026-07-10 (hot-fix)
+
+Fixes a crash introduced in v0.20.0: the Tab5 rebooted every time you **pounced a station** (an ~11 KB scratch table sat on a small task stack and overflowed it — now moved to PSRAM). Pouncing works normally again. **Everyone on v0.20.0 should update.** Nothing else changed — the full v0.20.0 feature list is below.
+
+---
+
 **v0.20.0** — 2026-07-10
 
 **A major robustness release.** Most of this update is about the device *staying up* — the WiFi drop-out, the freeze on opening a window, and the radio-link hiccups that field reports kept hitting are now fixed or self-healing. Plus a decision to pause FT4, keep the web UI out of FT8's way, and a batch of interface, band, memory and battery improvements.
@@ -22,7 +28,7 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **Web UI**: whole-band plan strip with a draggable window, a draggable spectrum/waterfall divider, screenshots that capture open pop-ups, and a nicer frequency keypad
 - Full writeup in [Version History Document](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/version-history.md)
 
-### Installing v0.20.0
+### Installing v0.20.1
 
 1. Use the one-click flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases)
 2. Or follow [Build from Source](build/build.md)
@@ -170,7 +176,7 @@ Pending:
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v0.20.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v0.20.1.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

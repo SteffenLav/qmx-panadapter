@@ -21,7 +21,7 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 ## Status
 
-**v0.20.0 — A major robustness release. All features are stable; the Beta label remains only until LoTW / TQSL log upload lands (v1.0.0).**
+**v0.20.1 — Robustness release + pounce-crash hot-fix. All features are stable; the Beta label remains only until LoTW / TQSL log upload lands (v1.0.0).**
 
 - **v0.20.0 headline — reliability**: the "WiFi dies after a few minutes" fault now **self-heals** instead of needing a reboot; opening a window no longer freezes the device; the radio-control (CAT) link rides out USB glitches; and the web UI pauses its stream while FT8 is running so decoding and WiFi stay steady
 - **FT4 is temporarily disabled in v0.20.0** — it was exhausting the device's internal memory and crashing. Fully reversible, and FT8 is unaffected
@@ -35,7 +35,7 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 **New user?** Start with the [Quick Start](quick-start.md) guide — 10 minutes to on-air.
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v0.20.0.pdf) — a printable 40-page reference.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v0.20.1.pdf) — a printable 40-page reference.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

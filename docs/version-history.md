@@ -717,5 +717,15 @@ Headline: **a big robustness pass.** This release is mostly about making the dev
 
 ---
 
+### Shipped in v0.20.1 — 2026-07-10 UTC
+
+Hot-fix for a crash introduced in v0.20.0 — **everyone on v0.20.0 should update.**
+
+**Fixed: the Tab5 rebooted every time you pounced a station.** The Skip-TX1 feature added in v0.20.0 put an ~11 KB scratch table on the stack inside the QSO-start routine, which runs on the display task's small (~8 KB) stack when you confirm a pounce — so it overflowed and triggered a "Stack protection fault" reboot on **every** pounce, whether or not you had Skip-TX1 switched on. The scratch table now lives in PSRAM instead. Pouncing (and Skip-TX1) work normally again — verified on-air. Reported by Dirk DK7CVD; reproduced and fixed the same day.
+
+Nothing else changed from v0.20.0.
+
+---
+
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
 

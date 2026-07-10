@@ -12,9 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Beta — v0.20.0.** A major robustness release: the WiFi drop-out now self-heals, the modal-open freeze and the FT8-exit crash are fixed, and the radio-control link rides out USB glitches. Panadapter, FT8 receive **and transmit**, web UI, and ADIF logging are all stable. **FT4 is temporarily disabled this release** (it was exhausting memory; reversible). The one remaining step before v1.0.0 (and dropping the beta label) is LoTW / TQSL log upload.
+> **Beta — v0.20.1.** A major robustness release: the WiFi drop-out now self-heals, the modal-open freeze and the FT8-exit crash are fixed, and the radio-control link rides out USB glitches. Panadapter, FT8 receive **and transmit**, web UI, and ADIF logging are all stable. **FT4 is temporarily disabled this release** (it was exhausting memory; reversible). The one remaining step before v1.0.0 (and dropping the beta label) is LoTW / TQSL log upload.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v0.20.0.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v0.20.1.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -700,7 +700,7 @@ I (xxxx) bsp_info: panel:    ST7123 (inferred from touch)
 I (xxxx) bsp_info: touch:    ST7123 @ 0x55
 I (xxxx) bsp_info: heap:     230.5 kB internal free, 28.80 MB PSRAM free
 I (xxxx) bsp_info: idf:      v5.4.4
-I (xxxx) bsp_info: firmware: v0.20.0
+I (xxxx) bsp_info: firmware: v0.20.1
 I (xxxx) bsp_info: =====================
 ```
 
