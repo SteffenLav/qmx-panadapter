@@ -42,6 +42,7 @@
 #include <sys/time.h>
 
 #include "esp_log.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
@@ -529,34 +530,49 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     bool             skip_applied = false;
 
     if (qs.ft8_filters.skip_tx1) {
-        ft8_call_t snap[FT8_CALL_TABLE_SIZE];
-        int n = 0;
-        ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
-        int     snr = 0;
-        int64_t their_last_utc = 0;
-        bool    found_target = false;
-        for (int i = 0; i < n; i++) {
-            if (strcmp(snap[i].call, tx1_req->target_call) == 0) {
-                snr            = snap[i].last_snr_db;
-                their_last_utc = snap[i].last_utc;
-                found_target   = true;
-                break;
+        // The decode-table snapshot is ~11 KB (FT8_CALL_TABLE_SIZE * sizeof(
+        // ft8_call_t)) and MUST NOT be a stack local here: ft8_qso_start() runs
+        // on the LVGL event-callback's small (~8 KB) task stack when a pounce is
+        // confirmed (pounce_btn_cb -> ft8_qso_start), and an ~11 KB stack frame
+        // overflows it at the prologue -> "Stack protection fault" crash on
+        // EVERY pounce, whether or not skip_tx1 is set (the frame is reserved
+        // unconditionally). Heap it in PSRAM instead. (Same rule as ft8_tx.c's
+        // ft8_find_clear_tone snapshot - see CLAUDE.md "Audit every malloc under
+        // ~16 KB ... it's silently going to internal RAM".)
+        ft8_call_t *snap = heap_caps_malloc(sizeof(ft8_call_t) * FT8_CALL_TABLE_SIZE,
+                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (snap) {
+            int n = 0;
+            ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+            int     snr = 0;
+            int64_t their_last_utc = 0;
+            bool    found_target = false;
+            for (int i = 0; i < n; i++) {
+                if (strcmp(snap[i].call, tx1_req->target_call) == 0) {
+                    snr            = snap[i].last_snr_db;
+                    their_last_utc = snap[i].last_utc;
+                    found_target   = true;
+                    break;
+                }
             }
-        }
-        if (found_target) {
-            fmt_report(snr, first_rpt, sizeof(first_rpt));
-            char build_err[64];
-            if (ft8_tx_build_request(FT8_TX_KIND_REPLY, tx1_req->target_call,
-                                     tx1_req->audio_freq_hz, their_last_utc,
-                                     first_rpt, &req_to_arm, build_err, sizeof(build_err))) {
-                start_state  = FT8_QSO_WAIT_ROGER;
-                skip_applied = true;
+            heap_caps_free(snap);
+            if (found_target) {
+                fmt_report(snr, first_rpt, sizeof(first_rpt));
+                char build_err[64];
+                if (ft8_tx_build_request(FT8_TX_KIND_REPLY, tx1_req->target_call,
+                                         tx1_req->audio_freq_hz, their_last_utc,
+                                         first_rpt, &req_to_arm, build_err, sizeof(build_err))) {
+                    start_state  = FT8_QSO_WAIT_ROGER;
+                    skip_applied = true;
+                } else {
+                    ESP_LOGW(TAG, "skip_tx1: build failed (%s) - falling back to grid TX1", build_err);
+                }
             } else {
-                ESP_LOGW(TAG, "skip_tx1: build failed (%s) - falling back to grid TX1", build_err);
+                ESP_LOGW(TAG, "skip_tx1: %s not in decode table - falling back to grid TX1",
+                         tx1_req->target_call);
             }
         } else {
-            ESP_LOGW(TAG, "skip_tx1: %s not in decode table - falling back to grid TX1",
-                     tx1_req->target_call);
+            ESP_LOGW(TAG, "skip_tx1: snapshot alloc failed - falling back to grid TX1");
         }
     }
 
