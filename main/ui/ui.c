@@ -2749,43 +2749,41 @@ static void build_bottom_bar(lv_obj_t *parent)
 
 // ==== Public API ====
 // Operator "engraved" signature - a faint vertical watermark near the
-// bottom-right corner, reading "Stef OZ1LAV" bottom-to-top (rotated 90 deg
-// CCW). Created last (after the edge-swipe strips) so it draws on top of
-// the opaque waterfall/bottom-bar that would otherwise hide it there - a
-// background-pinned label was tried first but ended up fully covered by
-// the waterfall canvas. Non-clickable, so it never intercepts touches
-// (LVGL skips non-clickable objects when hit-testing, falling through to
-// the edge-swipe strips/grips beneath it).
+// bottom-right corner, reading "Stef OZ1LAV" bottom-to-top. Created last
+// (after the edge-swipe strips) so it draws on top of the opaque
+// waterfall/bottom-bar that would otherwise hide it. Non-clickable, so it
+// never intercepts touches.
+//
+// Uses a PRE-ROTATED static image (g_watermark_img, main/ui/watermark_img.c,
+// an A8 alpha mask generated offline from Montserrat-Medium @28px rotated
+// 90 deg CCW), NOT a runtime lv_obj transform_rotation. WDT-backtrace
+// root-caused 2026-07-10: a rotated *label* forces LVGL to render to an
+// intermediate layer and blit it rotated, and that software layer blit
+// (img_draw_core, lv_draw_sw_img.c) hangs taskLVGL *forever* whenever the
+// whole screen is invalidated and it gets redrawn (e.g. any modal open) -
+// THE modal-open freeze (a permanent core-0 wedge: display+touch+USB all
+// die, power-cycle only; same transform-hang class as
+// project_lvgl_rotation_hang_boot). A plain static image draws through the
+// normal (non-layer, non-transform) image path LVGL uses for every icon,
+// so it looks identical to the old rotated text but can't hit that path.
+// Recolored from the A8 mask to the same faint blue, same opacity/position.
+extern const lv_image_dsc_t g_watermark_img;
+
 static void build_signature(lv_obj_t *scr)
 {
-    lv_obj_t *lbl = lv_label_create(scr);
-    lv_label_set_text(lbl, "Stef OZ1LAV");
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(lbl, lv_color_hex(0x355C8A), 0);
-    lv_obj_set_style_text_opa(lbl, LV_OPA_60, 0);
-    lv_obj_set_style_border_width(lbl, 0, 0);
-    lv_obj_set_style_bg_opa(lbl, LV_OPA_TRANSP, 0);
-    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_clear_flag(lbl, LV_OBJ_FLAG_SCROLLABLE);
-
-    // Rotate 90 deg CCW (2700 in LVGL's 0.1-deg clockwise units) about its
-    // own center. The rotation is purely visual - the object's hit-test box
-    // stays at its unrotated w x h, but it's non-clickable so that's moot.
-    // After rotation the visible glyphs occupy an h(wide) x w(tall) rect
-    // centered on the same point, so position that center so the rotated
-    // rect's right edge sits near the screen's right edge and its bottom
-    // edge sits 20px above the screen bottom.
-    lv_obj_update_layout(lbl);
-    lv_coord_t w = lv_obj_get_width(lbl);
-    lv_coord_t h = lv_obj_get_height(lbl);
-    lv_obj_set_style_transform_pivot_x(lbl, w / 2, 0);
-    lv_obj_set_style_transform_pivot_y(lbl, h / 2, 0);
-    lv_obj_set_style_transform_rotation(lbl, 2700, 0);
+    lv_obj_t *img = lv_image_create(scr);
+    lv_image_set_src(img, &g_watermark_img);
+    // A8 source -> recolor gives it the faint engraved-blue look; the old
+    // label used color 0x355C8A at text_opa 60%, matched here.
+    lv_obj_set_style_image_recolor(img, lv_color_hex(0x355C8A), 0);
+    lv_obj_set_style_image_recolor_opa(img, LV_OPA_COVER, 0);
+    lv_obj_set_style_image_opa(img, LV_OPA_60, 0);
+    lv_obj_clear_flag(img, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(img, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_coord_t margin = 4;
-    lv_coord_t cx = DISPLAY_H_RES - margin - h / 2;
-    lv_coord_t cy = DISPLAY_V_RES - 75 - w / 2;
-    lv_obj_set_pos(lbl, cx - w / 2, cy - h / 2);
+    lv_obj_set_pos(img, DISPLAY_H_RES - margin - g_watermark_img.header.w,
+                   DISPLAY_V_RES - 75 - g_watermark_img.header.h);
 }
 
 // Edge-swipe gesture strips (left/bottom/right - transparent overlays kept

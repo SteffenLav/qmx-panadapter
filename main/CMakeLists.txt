@@ -18,6 +18,7 @@ idf_component_register(
         "ui/ft8_time_modal.c"
         "ui/adif_view_modal.c"
         "ui/ft8_pileup_modal.c"
+        "ui/watermark_img.c"
         "util/status.c"
         "util/maidenhead.c"
         "util/bandplan.c"
