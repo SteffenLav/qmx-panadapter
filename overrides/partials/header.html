@@ -52,7 +52,13 @@
       {% include "partials/alternate.html" %}
     {% endif %}
     <!-- Buy me a coffee (OZ1LAV) — just left of the search field -->
-    <div class="bmc-header-btn" style="display:flex; align-items:center; margin:0 .3rem;">
+    <style>
+      /* The official BMC widget renders ~51px tall (nearly the whole top bar).
+         zoom scales it (and its layout box, so no leftover gap) down to about
+         the search-field height. Tweak the factor to taste. */
+      .bmc-header-btn { display:flex; align-items:center; margin:0 .2rem; zoom:0.72; }
+    </style>
+    <div class="bmc-header-btn">
       <script type="text/javascript"
               src="https://cdnjs.buymeacoffee.com/1.0.0/button.prod.min.js"
               data-name="bmc-button"
