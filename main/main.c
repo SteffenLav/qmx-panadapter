@@ -32,6 +32,7 @@
 #include "ft8_pileup.h"
 #include "ft8_sim.h"
 #include "diag_log.h"
+#include "factory_reset.h"
 #include "sd_archive.h"
 #include "tab5_keyboard.h"
 #include "time_sync.h"
@@ -45,6 +46,11 @@ void app_main(void)
     // sequence is captured. Diagnostic logging is always-on (no opt-in) — the
     // session header is written once below, after settings come up.
     diag_log_init();
+
+    // Apply any pending selective NVS reset requested from the web UI before a
+    // reboot. Must run before nvs_flash_init()/settings_init() open handles on
+    // the partitions we may be about to erase. No-op on a normal boot.
+    factory_reset_apply_pending();
 
     ESP_LOGI(TAG, "QMX+ Panadapter starting");
     ESP_LOGI(TAG, "HEAP boot: int=%uKB psram=%zuMB",

@@ -28,6 +28,7 @@ idf_component_register(
         "util/bsp_info.c"
         "util/diag_log.c"
         "util/psram_task.c"
+        "util/factory_reset.c"
         "cat/cat.c"
         "audio/audio.c"
         "audio/cw_audio.c"

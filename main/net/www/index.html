@@ -363,6 +363,8 @@
     <a href="/api/config" download="qmx-config.txt" class="bot-btn" title="Download all settings + memory channels as an editable text file">Config &#8595;</a>
     <a href="#" id="cfg-up-link" class="bot-btn" title="Upload an edited config file (merges; restart to apply)">Config &#8593;</a>
     <input type="file" id="cfg-up-file" accept=".txt,text/plain" style="display:none">
+    <a href="#" id="reset-settings-link" class="bot-btn" title="Reset all app settings + memory channels to defaults (keeps the QSO log and WiFi). Clears a stuck stored value without an esptool full-erase. Reboots.">Reset Settings</a>
+    <a href="#" id="reset-network-link" class="bot-btn" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
     <a href="/ss.bmp" target="_blank" class="bot-btn">Tab5Shot</a>
   </div>
 
@@ -568,6 +570,46 @@ document.getElementById("eqsl-link").addEventListener("click", async (e) => {
       file.value = "";
     }
   });
+})();
+
+/* Selective NVS reset: clears stuck persisted state without an esptool
+   full-chip erase. Two scopes, each preserving the other + the QSO log. */
+(function () {
+  function wireReset(id, action, confirmMsg) {
+    const link = document.getElementById(id);
+    if (!link) return;
+    link.addEventListener("click", async function (e) {
+      e.preventDefault();
+      if (!confirm(confirmMsg)) return;
+      const prev = link.textContent;
+      link.textContent = "Resetting …";
+      try {
+        await fetch("/api/cmd", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: action })
+        });
+        alert("Done — the Tab5 is rebooting.\nReconnect to its web UI in a few seconds.");
+      } catch (err) {
+        /* The device reboots mid-response, so a network error here is expected
+           and does NOT mean it failed. */
+        alert("The Tab5 is rebooting.\nReconnect to its web UI in a few seconds.");
+      } finally {
+        link.textContent = prev;
+      }
+    });
+  }
+  wireReset("reset-settings-link", "reset_settings",
+    "Reset ALL app settings and memory channels to defaults?\n\n" +
+    "• KEEPS your QSO log (ADIF) and WiFi.\n" +
+    "• Clears callsign, grid, FT8 frequency/filters, waterfall, etc.\n\n" +
+    "Tip: download Config ↓ first if you want a backup. The Tab5 reboots.");
+  wireReset("reset-network-link", "reset_network",
+    "Reset stored WiFi / network state?\n\n" +
+    "• KEEPS all app settings and your QSO log.\n" +
+    "• Clears saved WiFi credentials + system network state.\n" +
+    "• You'll need to set up WiFi again.\n\n" +
+    "Use this if WiFi is stuck or FT8 misbehaves after a normal flash. The Tab5 reboots.");
 })();
 
 function positionDropdown(pillId, ddId) {

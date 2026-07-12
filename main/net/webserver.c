@@ -19,6 +19,7 @@
 #include "adif/qrz_upload.h"  // qrz_upload_pending
 #include "adif/eqsl_upload.h" // eqsl_upload_pending
 #include "settings.h"          // settings_load_all / settings_set_qrz_api_key
+#include "factory_reset.h"     // factory_reset_request (web-triggered NVS reset)
 #include "bandplan.h"          // bandplan_get_segments / _effective_region / _seg_color
 #include "config_io.h"         // config_io_export / config_io_import
 #include "esp_heap_caps.h"
@@ -226,6 +227,24 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // UI element references this — it's meant to be fired from the browser
         // console/bookmarklet on the dev's PC.
         ui_resource_monitor_toggle();
+    } else if (action && strcmp(action, "reset_settings") == 0) {
+        // Clear all app settings + memory channels (erases user_nvs on the next
+        // boot), keeping the ADIF QSO log and WiFi. Replaces the esptool
+        // full-erase for clearing a stuck stored value. Reboots to apply.
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"ok\":true,\"rebooting\":true}", HTTPD_RESP_USE_STRLEN);
+        factory_reset_request(true, false);
+        return ESP_OK;
+    } else if (action && strcmp(action, "reset_network") == 0) {
+        // Clear WiFi/system NVS state (erases the default nvs partition on the
+        // next boot), keeping all app settings. Clears a stuck WiFi/link state
+        // that a normal reflash leaves in place. Reboots to apply.
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, "{\"ok\":true,\"rebooting\":true}", HTTPD_RESP_USE_STRLEN);
+        factory_reset_request(false, true);
+        return ESP_OK;
     } else {
         cJSON_Delete(root);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "unknown action");
