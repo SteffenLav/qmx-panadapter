@@ -64,6 +64,9 @@ static char   s_qmx_fw[24] = {0};   // QMX firmware version from VN; (e.g. "1_03
 static char   s_q9_resp[16] = {0};  // last Q9 (IQ mode) response, e.g. "Q91;"
 static size_t s_q9_resp_len = 0;
 static volatile bool s_iq_mode_confirmed = false;  // true once Q9; readback confirms IQ mode ON
+static char   s_q3_resp[16] = {0};  // last Q3 (VOX enable) response, e.g. "Q30;"
+static size_t s_q3_resp_len = 0;
+static volatile bool s_vox_disabled = false;  // true once Q3; readback confirms VOX OFF
 static uint64_t s_diag_poll_hb_us = 0;  // last diag poll-heartbeat timestamp
 
 static uint32_t s_last_freq_hz = 0;
@@ -128,6 +131,7 @@ void cat_request_ssb_bandwidth(uint32_t hz)
 int cat_get_cw_offset_hz(void) { return s_cw_offset_hz; }
 const char *cat_get_qmx_fw(void) { return s_qmx_fw; }
 bool cat_get_iq_mode_confirmed(void) { return s_iq_mode_confirmed; }
+bool cat_get_vox_disabled(void) { return s_vox_disabled; }
 
 bool cat_qmx_fw_at_least(int major, int minor, int patch)
 {
@@ -452,6 +456,14 @@ static void process_cat_message(const char *msg, size_t len)
         s_q9_resp[s_q9_resp_len] = '\0';
         return;
     }
+    // Q3 response: "Q3n;" — VOX enable state, queried at link-up to confirm
+    // VOX was disabled for the session (same write-echo caveat as Q9 above).
+    if (len >= 3 && msg[0] == 'Q' && msg[1] == '3') {
+        s_q3_resp_len = len < sizeof(s_q3_resp) ? len : sizeof(s_q3_resp) - 1;
+        memcpy(s_q3_resp, msg, s_q3_resp_len);
+        s_q3_resp[s_q3_resp_len] = '\0';
+        return;
+    }
     if (len == 6 && msg[0] == 'I' && msg[1] == 'D') {
         ESP_LOGI(TAG, "Radio ID: %s", msg);
         return;
@@ -727,6 +739,70 @@ static void link_task(void *arg)
                              IQ_MODE_MAX_ATTEMPTS);
                 }
                 ui_set_iq_mode_warning(!s_iq_mode_confirmed);
+            }
+            // Disable QMX VOX for this session (Q3 0;). The panadapter keys the
+            // radio purely over CAT (TX;/TA;/RX;), never with transmit audio, so
+            // VOX serves no purpose here. It is disabled defensively: with VOX on
+            // AND the QMX's SSB TX input set to the USB sound card, stray audio on
+            // the USB-audio OUT endpoint could key the radio - we never open that
+            // endpoint, but disabling VOX removes the hazard entirely. Users
+            // coming from audio-VOX FT8 apps (e.g. iFTX on iOS) typically have VOX
+            // ON, so this flips the setting they'd otherwise have to change by
+            // hand. Like Q9, Q3 is session-only (not written to EEPROM), so their
+            // saved VOX preference is restored on the next QMX power-cycle.
+            //
+            // Best-effort, unlike the IQ-mode handshake: a failure to disable VOX
+            // is non-critical (VOX-on can't misfire while we never feed TX audio),
+            // so there is no on-screen warning - just a couple of retries and a
+            // log line recording the state seen.
+            {
+                s_vox_disabled = false;
+                const int VOX_MAX_ATTEMPTS = 3;
+                for (int attempt = 1; attempt <= VOX_MAX_ATTEMPTS; attempt++) {
+                    const char *vox_off = "Q3 0;";
+                    esp_err_t terr = cdc_acm_host_data_tx_blocking(
+                        s_cdc_dev, (const uint8_t *)vox_off, 5, 200);
+                    if (terr != ESP_OK) {
+                        ESP_LOGW(TAG, "Failed to send VOX-off (Q3 0;) attempt %d/%d: 0x%x",
+                                 attempt, VOX_MAX_ATTEMPTS, terr);
+                    }
+                    // Same asynchronous write-echo hazard as Q9: the QMX echoes
+                    // the write back ("Q30;"), which would otherwise be misread as
+                    // the Q3; query response. Wait for the echo, then flush and
+                    // send the real query.
+                    vTaskDelay(pdMS_TO_TICKS(150));
+                    s_q3_resp_len = 0;
+                    const char *vox_q = "Q3;";
+                    esp_err_t qerr = cdc_acm_host_data_tx_blocking(
+                        s_cdc_dev, (const uint8_t *)vox_q, strlen(vox_q), 200);
+                    if (qerr == ESP_OK) {
+                        for (int w = 0; w < 20 && s_q3_resp_len == 0; w++) {
+                            vTaskDelay(pdMS_TO_TICKS(20));
+                        }
+                        if (s_q3_resp_len >= 3 && s_q3_resp[2] == '0') {
+                            ESP_LOGI(TAG, "QMX VOX confirmed OFF (%s) on attempt %d/%d",
+                                     s_q3_resp, attempt, VOX_MAX_ATTEMPTS);
+                            s_vox_disabled = true;
+                            break;
+                        } else {
+                            ESP_LOGW(TAG, "QMX VOX not yet OFF (attempt %d/%d, raw='%s')",
+                                     attempt, VOX_MAX_ATTEMPTS,
+                                     s_q3_resp_len ? s_q3_resp : "(no response)");
+                        }
+                    } else {
+                        ESP_LOGW(TAG, "Failed to query QMX VOX state (attempt %d/%d): 0x%x",
+                                 attempt, VOX_MAX_ATTEMPTS, qerr);
+                    }
+                    if (attempt < VOX_MAX_ATTEMPTS) {
+                        vTaskDelay(pdMS_TO_TICKS(200));
+                    }
+                }
+                if (!s_vox_disabled) {
+                    ESP_LOGW(TAG, "QMX VOX not confirmed OFF after %d attempts — "
+                             "harmless for panadapter use (we key via CAT, not audio), "
+                             "but disable VOX on the QMX if it keys unexpectedly",
+                             VOX_MAX_ATTEMPTS);
+                }
             }
             // One-shot inline FA/MD/FW round-trip right after link-up, so
             // the top-bar Band/Mode/BW labels populate immediately instead

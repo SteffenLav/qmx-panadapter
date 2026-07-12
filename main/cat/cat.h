@@ -116,6 +116,16 @@ bool cat_qmx_fw_at_least(int major, int minor, int patch);
  */
 bool cat_get_iq_mode_confirmed(void);
 /**
+ * @brief True once VOX has been confirmed OFF (Q3; readback == 0) for the
+ * current connection. The panadapter keys the QMX via CAT (TX;/TA;/RX;), never
+ * by transmit audio, so VOX is unnecessary and is disabled at link-up (Q3 0;,
+ * session-only, reverts on QMX power-cycle) to remove any accidental-keying
+ * risk from the USB-sound-card SSB TX path. Best-effort: unlike IQ mode, a
+ * failure here is non-critical (no on-screen warning) - VOX-on simply can't do
+ * harm as long as we never feed TX audio, which we don't.
+ */
+bool cat_get_vox_disabled(void);
+/**
  * @brief Send a raw formatted CAT/MM command string to the QMX.
  * Uses printf-style format. Fire-and-forget, no response parsed.
  */
