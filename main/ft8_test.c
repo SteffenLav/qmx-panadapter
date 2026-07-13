@@ -762,22 +762,6 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
     out->n_decoded   = 0;
     out->n_attempted = 0;
     out->n_timing    = 0;
-// TEMP (2026-07-13, FT4 cyan-flash investigation): skip the whole LDPC decode
-// pass so the dual-core PSRAM-hammering burst never happens, while capture and
-// streaming STFT run unchanged. If the full-screen cyan flash STOPS with this
-// set, the decode burst is confirmed as the trigger; if it persists, the burst
-// theory is dead. Remove after the test - never ship with this at 1.
-#define FT4_FLASH_TEST_NO_DECODE 0  // A/B done: flashes persisted at full rate with decode skipped - decode exonerated
-#if FT4_FLASH_TEST_NO_DECODE
-    if (s_pool_proto == (int)FTX_PROTOCOL_FT4) {
-        static bool s_warned = false;
-        if (!s_warned) {
-            ESP_LOGW("ft8_test", "FT4_FLASH_TEST_NO_DECODE active - FT4 decode skipped (diagnostic build)");
-            s_warned = true;
-        }
-        return;
-    }
-#endif
     int max_iters = (s_pool_proto == (int)FTX_PROTOCOL_FT4) ? FT4_LDPC_MAX_ITERS : FT8_LDPC_MAX_ITERS;
     for (int i = start; i < n_cand; i += step) {
         if ((int)((esp_timer_get_time() - t_start_us) / 1000) >= FT8_DECODE_BUDGET_MS) {

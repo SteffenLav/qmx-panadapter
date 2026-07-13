@@ -30,7 +30,6 @@ idf_component_register(
         "util/psram_task.c"
         "util/factory_reset.c"
         "util/cpu_stats.c"
-        "util/dsi_diag.c"
         "cat/cat.c"
         "audio/audio.c"
         "audio/cw_audio.c"
