@@ -5282,6 +5282,18 @@ static void drawer_build(void)
 
     // dB Range section
     {
+        // Initialise both sliders + labels from the STORED range, not hardcoded
+        // -130/-30. main.c applies cfg.db_min/db_max to the live spectrum at
+        // boot, but the drawer used to build these sliders at the fixed
+        // defaults, so they always *showed* -130/-30 regardless of the saved
+        // value - and because each slider's callback reads the OTHER slider's
+        // on-screen value, dragging one would then clobber the other back to
+        // the default. Reading the stored value here fixes both.
+        qmx_settings_t dbcfg;
+        settings_load_all(&dbcfg);
+        int db_min_v = (int)dbcfg.db_min;
+        int db_max_v = (int)dbcfg.db_max;
+
         lv_obj_t *sec = drawer_section(DRAWER_SEC_DBRANGE, y, 212);
         lv_obj_t *db_hdr = lv_label_create(sec);
         lv_label_set_text(db_hdr, "dB Range");
@@ -5289,9 +5301,12 @@ static void drawer_build(void)
         lv_obj_set_style_text_font(db_hdr, &lv_font_montserrat_28, 0);
         lv_obj_align(db_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
 
+        char dbbuf[24];
+
         // dB min slider
         s_lbl_db_min = lv_label_create(sec);
-        lv_label_set_text(s_lbl_db_min, "Min: -130 dBm");
+        snprintf(dbbuf, sizeof(dbbuf), "Min: %d dBm", db_min_v);
+        lv_label_set_text(s_lbl_db_min, dbbuf);
         lv_obj_set_style_text_color(s_lbl_db_min, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(s_lbl_db_min, &lv_font_montserrat_28, 0);
         lv_obj_align(s_lbl_db_min, LV_ALIGN_TOP_LEFT, 0, 40);
@@ -5299,13 +5314,14 @@ static void drawer_build(void)
         s_slider_db_min = lv_slider_create(sec);
         lv_obj_set_size(s_slider_db_min, DRAWER_W - 32, 30);
         lv_slider_set_range(s_slider_db_min, -150, -50);
-        lv_slider_set_value(s_slider_db_min, -130, LV_ANIM_OFF);
+        lv_slider_set_value(s_slider_db_min, db_min_v, LV_ANIM_OFF);
         lv_obj_align(s_slider_db_min, LV_ALIGN_TOP_LEFT, 0, 70);
         lv_obj_add_event_cb(s_slider_db_min, drawer_slider_db_min_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
         // dB max slider
         s_lbl_db_max = lv_label_create(sec);
-        lv_label_set_text(s_lbl_db_max, "Max: -30 dBm");
+        snprintf(dbbuf, sizeof(dbbuf), "Max: %d dBm", db_max_v);
+        lv_label_set_text(s_lbl_db_max, dbbuf);
         lv_obj_set_style_text_color(s_lbl_db_max, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(s_lbl_db_max, &lv_font_montserrat_28, 0);
         lv_obj_align(s_lbl_db_max, LV_ALIGN_TOP_LEFT, 0, 122);
@@ -5313,7 +5329,7 @@ static void drawer_build(void)
         s_slider_db_max = lv_slider_create(sec);
         lv_obj_set_size(s_slider_db_max, DRAWER_W - 32, 30);
         lv_slider_set_range(s_slider_db_max, -50, 10);
-        lv_slider_set_value(s_slider_db_max, -30, LV_ANIM_OFF);
+        lv_slider_set_value(s_slider_db_max, db_max_v, LV_ANIM_OFF);
         lv_obj_align(s_slider_db_max, LV_ALIGN_TOP_LEFT, 0, 152);
         lv_obj_add_event_cb(s_slider_db_max, drawer_slider_db_max_cb, LV_EVENT_VALUE_CHANGED, NULL);
         y += 212;
@@ -5328,8 +5344,20 @@ static void drawer_build(void)
         lv_obj_set_style_text_font(sm_hdr, &lv_font_montserrat_28, 0);
         lv_obj_align(sm_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
 
+        // Initialise from the stored EMA alpha, not a hardcoded 0.40 (same
+        // class of bug as the dB Range sliders above: main.c applies
+        // cfg.ema_alpha to the render pipeline at boot, but the slider used to
+        // build at 0.40 regardless of the saved value).
+        qmx_settings_t smcfg;
+        settings_load_all(&smcfg);
+        int alpha_v = (int)(smcfg.ema_alpha * 100.0f + 0.5f);
+        if (alpha_v < 5)   alpha_v = 5;
+        if (alpha_v > 100) alpha_v = 100;
+
         s_lbl_alpha = lv_label_create(sec);
-        lv_label_set_text(s_lbl_alpha, "Alpha: 0.40");
+        char albuf[24];
+        snprintf(albuf, sizeof(albuf), "Alpha: %.2f", (double)alpha_v / 100.0);
+        lv_label_set_text(s_lbl_alpha, albuf);
         lv_obj_set_style_text_color(s_lbl_alpha, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(s_lbl_alpha, &lv_font_montserrat_28, 0);
         lv_obj_align(s_lbl_alpha, LV_ALIGN_TOP_LEFT, 0, 40);
@@ -5337,7 +5365,7 @@ static void drawer_build(void)
         s_slider_alpha = lv_slider_create(sec);
         lv_obj_set_size(s_slider_alpha, DRAWER_W - 32, 30);
         lv_slider_set_range(s_slider_alpha, 5, 100);   // = alpha 0.05..1.00
-        lv_slider_set_value(s_slider_alpha, 40, LV_ANIM_OFF);
+        lv_slider_set_value(s_slider_alpha, alpha_v, LV_ANIM_OFF);
         lv_obj_align(s_slider_alpha, LV_ALIGN_TOP_LEFT, 0, 70);
         lv_obj_add_event_cb(s_slider_alpha, drawer_slider_alpha_cb, LV_EVENT_VALUE_CHANGED, NULL);
         y += 130;

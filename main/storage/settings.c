@@ -173,7 +173,9 @@ static const char *TAG = "settings";
     DIRTY_ZOOM | DIRTY_BRIGHTNESS | DIRTY_CQ_MSG0 | DIRTY_CQ_MSG1 | \
     DIRTY_CQ_MSG2 | DIRTY_CQ_SEL | DIRTY_ONBOARDED | DIRTY_FT8_FILT | \
     DIRTY_WIFI_ENABLED | DIRTY_QMX_GPS | DIRTY_FREQ_KP_CALC | \
-    DIRTY_QRZ_KEY | DIRTY_EQSL_USER | DIRTY_EQSL_PSWD)
+    DIRTY_QRZ_KEY | DIRTY_EQSL_USER | DIRTY_EQSL_PSWD | \
+    DIRTY_WF_BLACK | DIRTY_WF_CONTRAST | DIRTY_WF_BLEND | DIRTY_WF_WINDOW | \
+    DIRTY_DISP_FLIP | DIRTY_CW_AUD_VOL | DIRTY_CHARGE_LIM_EN | DIRTY_CHARGE_LIM_PCT)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
