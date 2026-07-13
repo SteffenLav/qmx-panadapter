@@ -9,6 +9,7 @@
 
 #include "dsp.h"
 #include "ui.h"
+#include "ui_mode.h"
 #include "render_waterfall.h"
 #include <string.h>
 
@@ -66,8 +67,31 @@ static void render_task(void *arg)
     while (1) {
         vTaskDelayUntil(&last, pdMS_TO_TICKS(RENDER_PERIOD_MS));
 
-        esp_err_t err = dsp_get_spectrum(s_scratch);
-        if (err == ESP_OK) {
+        // v0.19.3 (Tier 1): the spectrum + waterfall canvases are fully
+        // covered by the FT8 screen, but this loop used to keep drawing them
+        // at 10 Hz anyway — every canvas write invalidates the region, and
+        // every invalidation drags the whole flush + 90° software-rotation
+        // pipeline (the highest-priority CPU consumer on core 0) over pixels
+        // nobody can see, directly on top of audio_task and the ft8_dec0
+        // decode helper on the same core. Skip ALL canvas work while the FT8
+        // screen is up; only the S-meter below stays live (it is visible in
+        // the FT8 top bar — the v0.15.7 fix exists precisely to keep it
+        // running there). The web UI is unaffected: ws_push_task reads
+        // dsp_get_spectrum() itself, not this pipeline.
+        bool pan_visible = (ui_mode_get() != UI_MODE_FT8);
+        bool have_spectrum = false;
+
+        if (pan_visible) {
+            have_spectrum = (dsp_get_spectrum(s_scratch) == ESP_OK);
+            // ESP_ERR_NOT_FOUND just means no spectrum yet (no audio).
+        } else {
+            // Restart both EMAs from fresh data when the panadapter returns,
+            // instead of blending new frames into a minutes-old picture.
+            s_smoothed_init = false;
+            s_wf_smoothed_init = false;
+        }
+
+        if (have_spectrum) {
             // Phase 5.4: EMA smoothing
             if (!s_smoothed_init) {
                 // First frame: initialize smoothed with current values (no fade-in)
@@ -94,29 +118,35 @@ static void render_task(void *arg)
                                      + (1.0f - WF_EMA_ALPHA) * s_wf_smoothed[i];
                 }
             }
+        }
 
-            // Phase 5.10D: sample S-meter at ~5 Hz from spectrum peak around VFO
-            {
-                static int s_smeter_tick = 0;
-                s_smeter_tick++;
-                if (s_smeter_tick >= 6) {  // 30 Hz / 6 = 5 Hz
-                    s_smeter_tick = 0;
-                    float peak_dbm;
-                    int vfo_bin = ((ui_get_if_bin_shift(DSP_FFT_SIZE) % DSP_FFT_SIZE) + DSP_FFT_SIZE) % DSP_FFT_SIZE;
-                    if (dsp_get_peak_dbm_around_vfo(vfo_bin, 64, &peak_dbm) == ESP_OK) {
-                        // S-unit conversion: S9 = -73 dBm, 6 dB per S-unit below.
-                        // Above S9, we use S9+xx where xx = dbm - (-73).
-                        int s_units;
-                        if (peak_dbm >= -73.0f) {
-                            s_units = 9 + (int)((peak_dbm + 73.0f) + 0.5f);
-                        } else {
-                            s_units = 9 + (int)((peak_dbm + 73.0f) / 6.0f + 0.5f);
-                            if (s_units < 0) s_units = 0;
-                        }
-                        ui_update_smeter(s_units);
+        // Phase 5.10D: sample S-meter at ~5 Hz from spectrum peak around VFO.
+        // Runs in BOTH modes (dsp keeps publishing a spectrum every ~10 FFT
+        // iterations while FT8 captures, and dsp_get_peak_dbm_around_vfo()
+        // reads the DSP's own copy — it doesn't need s_scratch).
+        {
+            static int s_smeter_tick = 0;
+            s_smeter_tick++;
+            if (s_smeter_tick >= 6) {  // 10 Hz / 6 ≈ 1.7 Hz
+                s_smeter_tick = 0;
+                float peak_dbm;
+                int vfo_bin = ((ui_get_if_bin_shift(DSP_FFT_SIZE) % DSP_FFT_SIZE) + DSP_FFT_SIZE) % DSP_FFT_SIZE;
+                if (dsp_get_peak_dbm_around_vfo(vfo_bin, 64, &peak_dbm) == ESP_OK) {
+                    // S-unit conversion: S9 = -73 dBm, 6 dB per S-unit below.
+                    // Above S9, we use S9+xx where xx = dbm - (-73).
+                    int s_units;
+                    if (peak_dbm >= -73.0f) {
+                        s_units = 9 + (int)((peak_dbm + 73.0f) + 0.5f);
+                    } else {
+                        s_units = 9 + (int)((peak_dbm + 73.0f) / 6.0f + 0.5f);
+                        if (s_units < 0) s_units = 0;
                     }
+                    ui_update_smeter(s_units);
                 }
             }
+        }
+
+        if (have_spectrum) {
             render_waterfall_tick(s_wf_smoothed, DSP_FFT_SIZE);
             // Fast mode: push 2 more rows immediately (same spectrum content -
             // we don't have a fresher sample within this period) for 3x total
@@ -127,7 +157,6 @@ static void render_task(void *arg)
                 render_waterfall_tick(s_wf_smoothed, DSP_FFT_SIZE);
             }
         }
-        // ESP_ERR_NOT_FOUND just means no spectrum yet (no audio); skip silently.
     }
 }
 
