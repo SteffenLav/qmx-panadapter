@@ -21,6 +21,10 @@ typedef struct {
 // set) rather than skipping past it, since QRZ's reasons (bad key, quota,
 // etc.) usually apply to every subsequent record too - retrying the same
 // batch after fixing the cause will pick up where it left off.
+// EXCEPTION: a "duplicate" rejection is skipped and the batch continues -
+// the record is already in the QRZ logbook (typically after a reboot lost
+// the advanced cursor before the debounced NVS flush), so stopping on it
+// would block every newer record forever (field-hit 2026-07-13).
 bool qrz_upload_pending(qrz_upload_result_t *result);
 
 #ifdef __cplusplus

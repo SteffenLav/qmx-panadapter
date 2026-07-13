@@ -166,6 +166,7 @@ bool qrz_upload_pending(qrz_upload_result_t *result)
     }
 
     uint32_t n = start;
+    int skipped = 0;
     for (; (int)n < total; n++) {
         char record[512];
         if (!adif_log_get_record((int)n, record, sizeof(record))) {
@@ -181,6 +182,21 @@ bool qrz_upload_pending(qrz_upload_result_t *result)
             break;
         }
         if (!ok) {
+            // A DUPLICATE rejection means the record is already in the QRZ
+            // logbook - skip it and keep going. This happens whenever an
+            // earlier upload succeeded on QRZ's side but the device rebooted
+            // before the debounced NVS flush persisted the advanced
+            // qrz_uploaded_n cursor (field-hit 2026-07-13 after a day of
+            // dev reflashes): the cursor rolls back, the retry hits
+            // "duplicate" on record 0, and the old stop-on-first-rejection
+            // policy blocked every NEWER record behind it forever. All other
+            // rejections (bad key, quota, ...) still stop the batch, since
+            // those do apply to every subsequent record too.
+            if (strstr(reason, "duplicate") != NULL) {
+                ESP_LOGW(TAG, "QRZ record %u already in logbook (duplicate) - skipping", (unsigned)n);
+                skipped++;
+                continue;
+            }
             ESP_LOGW(TAG, "QRZ rejected record %u: %s", (unsigned)n, reason);
             snprintf(result->error, sizeof(result->error), "%s", reason);
             result->failed = 1;
@@ -193,6 +209,7 @@ bool qrz_upload_pending(qrz_upload_result_t *result)
     if (n > start) {
         settings_set_qrz_uploaded_n(n);
     }
-    ESP_LOGI(TAG, "upload batch: %d uploaded, %d failed", result->uploaded, result->failed);
+    ESP_LOGI(TAG, "upload batch: %d uploaded, %d duplicates skipped, %d failed",
+             result->uploaded, skipped, result->failed);
     return true;
 }
