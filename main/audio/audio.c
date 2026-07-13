@@ -13,6 +13,7 @@
 
 #include "usb/uac_host.h"
 #include "iq_balance.h"
+#include "psram_task.h"
 #include "ui.h"
 
 static const char *TAG = "audio";
@@ -52,18 +53,29 @@ static uint8_t *s_ring_storage = NULL;   // where the ring's 64 KB landed (PSRAM
 // (what the SDIO/USB DMA paths actually need) plus the sample-ring address, so
 // internal-RAM pressure is always visible on the serial console without needing
 // QMX connected or an FT8 slot to complete. Fires every 10 s.
-static esp_timer_handle_t s_heap_watchdog = NULL;
-static void heap_watchdog_cb(void *arg)
+//
+// Runs as a CORE-1-PINNED low-priority task, NOT an esp_timer callback
+// (2026-07-13, FT4 cyan-flash fix): heap_caps_get_largest_free_block() walks
+// every block of the internal heaps inside the heap spinlock — an
+// interrupts-off critical section. The esp_timer task lives on core 0, the
+// same core as the MIPI-DSI frame-restart ISR; a long-enough ints-off window
+// there makes the panel drop a frame and blank (full-screen cyan flash). On
+// core 1 the walk can't touch the display ISR. Same reasoning as
+// cpu_stats.c's core pin — keep both on core 1.
+static void heap_watchdog_task(void *arg)
 {
     (void)arg;
-    size_t i_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    size_t i_min  = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
-    size_t i_lblk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
-    size_t p_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    ESP_LOGW(TAG, "HEAP: int free=%uKB (min=%uKB lblk=%uKB)  psram free=%uKB  ring@%p[%s]",
-             (unsigned)(i_free / 1024), (unsigned)(i_min / 1024), (unsigned)(i_lblk / 1024),
-             (unsigned)(p_free / 1024), (void *)s_ring_storage,
-             (((uintptr_t)s_ring_storage >> 24) == 0x4F) ? "INTERNAL" : "PSRAM");
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(10000));
+        size_t i_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+        size_t i_min  = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+        size_t i_lblk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+        size_t p_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+        ESP_LOGW(TAG, "HEAP: int free=%uKB (min=%uKB lblk=%uKB)  psram free=%uKB  ring@%p[%s]",
+                 (unsigned)(i_free / 1024), (unsigned)(i_min / 1024), (unsigned)(i_lblk / 1024),
+                 (unsigned)(p_free / 1024), (void *)s_ring_storage,
+                 (((uintptr_t)s_ring_storage >> 24) == 0x4F) ? "INTERNAL" : "PSRAM");
+    }
 }
 
 // Stats (touched from RX context, snapshot from task)
@@ -127,19 +139,9 @@ esp_err_t audio_init(void)
              SAMPLE_RING_BYTES,
              (unsigned long)(SAMPLE_RING_BYTES / 4 * 1000 / 48000));
 
-    // Start the periodic internal-heap watchdog (every 10 s).
-    // TEMP (2026-07-13, FT4 cyan-flash investigation): disabled for an A/B -
-    // all observed flashes align (<±1.2 s) with the 10 s housekeeping tick,
-    // and this callback does four full heap walks (each an interrupts-off
-    // heap-spinlock critical section, one across the whole 32 MB PSRAM heap)
-    // in the high-priority esp_timer task. Re-enable after the test verdict.
-    const esp_timer_create_args_t wd_args = {
-        .callback = heap_watchdog_cb, .name = "heap_wd",
-    };
-    (void)wd_args;
-    if (0 && esp_timer_create(&wd_args, &s_heap_watchdog) == ESP_OK) {
-        esp_timer_start_periodic(s_heap_watchdog, 10 * 1000 * 1000);
-    }
+    // Start the periodic internal-heap watchdog (every 10 s, core 1 - see
+    // heap_watchdog_task's comment for why it must not run on core 0).
+    psram_task_create(heap_watchdog_task, "heap_wd", 3072, NULL, 1, 1);
 
     const uac_host_driver_config_t cfg = {
         .create_background_task = true,

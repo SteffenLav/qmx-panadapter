@@ -147,10 +147,18 @@ esp_err_t cpu_stats_init(void)
     }
 
     // Background housekeeping — PSRAM stack per project convention, lowest
-    // priority, unpinned (the sampling itself is a few µs; the snprintf work
-    // is not latency-sensitive).
+    // priority. PINNED TO CORE 1, not unpinned (2026-07-13, FT4 cyan-flash
+    // fix): uxTaskGetSystemState() holds the kernel lock (interrupts off on
+    // the calling core) while it byte-walks every task's stack for the
+    // watermark — several stacks are 64 KB and in PSRAM, so this is a
+    // multi-ms ints-off window every 10 s. When it landed on core 0 it
+    // delayed the MIPI-DSI frame-restart ISR (core 0) past the blanking
+    // window and the panel blanked for one frame (full-screen cyan flash,
+    // seen in FT4 where PSRAM contention makes the walk slowest). On core 1
+    // the window can't touch the display ISR; fft/decode there have seconds
+    // of slack against a rare ~ms stall.
     TaskHandle_t h = psram_task_create(cpu_stats_task, "cpu_stats", 4096,
-                                       NULL, 1, tskNO_AFFINITY);
+                                       NULL, 1, 1);
     if (!h) {
         ESP_LOGE(TAG, "task create failed; CPU stats disabled");
         return ESP_FAIL;
