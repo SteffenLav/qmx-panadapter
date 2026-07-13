@@ -92,6 +92,15 @@ CONFIG_LV_MEM_SIZE_KILOBYTES=256
 # unlimited (28 MB free) and internal SRAM is preserved for DMA.
 CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 
+# Per-task CPU usage accounting (util/cpu_stats.c): uxTaskGetSystemState with
+# run-time counters + per-task core ID. Costs one 32-bit counter read per
+# context switch (esp_timer based) — negligible; kept on permanently so any
+# field diag log contains per-core CPU numbers (the CW-audio ghost task and
+# the FT8-mode render waste were both invisible without these).
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_VTASKLIST_INCLUDE_COREID=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+
 # USB DWC DMA buffers → PSRAM (ESP32-P4 DWC DMA can access external RAM).
 # Without this, USB transfer descriptor lists and data buffers come from
 # internal SRAM. After WiFi connects and consumes ~100 KB, the heap is

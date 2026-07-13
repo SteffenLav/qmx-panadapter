@@ -33,6 +33,7 @@
 #include "ft8_sim.h"
 #include "diag_log.h"
 #include "factory_reset.h"
+#include "cpu_stats.h"
 #include "sd_archive.h"
 #include "tab5_keyboard.h"
 #include "time_sync.h"
@@ -187,6 +188,11 @@ void app_main(void)
     // alignment). CW audio remains fully shelved - do not re-enable without
     // also fixing this task's priority/cadence as part of the pipeline rework.
     // cw_audio_init();
+
+    // Tier 0 resource diagnostics: per-task per-core CPU% every 10 s into the
+    // diag log. Started last so the boot-time task churn above doesn't skew
+    // the first window.
+    cpu_stats_init();
 
     ESP_LOGI(TAG, "Init complete - main task idle");
     // Spawn FT8 self-test on a dedicated task (32 KB stack, core 1).
