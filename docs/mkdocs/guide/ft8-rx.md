@@ -2,7 +2,6 @@
 
 The panadapter includes **on-device FT8 and FT4 decoders** with real-time spectrum waterfall and a live list of heard stations.
 
-> **⏸️ FT4 is temporarily disabled in v0.20.0.** FT4 was exhausting the device's internal memory and crashing, so it is switched off this release while that is fixed. It is fully reversible and will return in a later update — **FT8 is unaffected**. The FT4-specific notes below describe how FT4 behaves when it is enabled.
 
 ### 1. FT8 & FT4 View
 

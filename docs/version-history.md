@@ -727,5 +727,32 @@ Nothing else changed from v0.20.0.
 
 ---
 
+### Shipped in v0.21.0 — 2026-07-13 UTC
+
+**FT4 is back**, the FT8/FT4 screen runs cooler, a nasty display glitch is gone, and QRZ uploads no longer get stuck.
+
+#### FT4 returns
+
+- **FT4 mode is re-enabled.** It was temporarily removed in v0.19.x because its faster 7.5-second cadence starved the processor on this hardware and could crash. The root cause is now fixed (see below), and FT4 has been verified end-to-end: it decodes every slot, and full FT4 *and* FT8 contacts were completed, logged, and uploaded during testing.
+
+#### Runs cooler in FT8/FT4
+
+- **The panadapter no longer draws itself while you're on the FT8/FT4 screen.** The spectrum and waterfall were still being rendered and rotated ~30 times a second even though the FT8 screen completely covers them — pure wasted work on the busiest processor core. Stopping it freed a large amount of headroom (the core went from nearly saturated to mostly idle in FT8/FT4 mode), which is exactly what let FT4 come back. The S-meter in the FT8 top bar keeps updating as before.
+
+#### Display glitch fixed
+
+- **Fixed: a full-screen flash ("blink to blank and back") that appeared every 15 seconds to a couple of minutes, mostly in FT4.** Two internal 10-second housekeeping tasks briefly blocked interrupts long enough to make the display controller drop a single frame. They've been rewritten to do their work without that stall. Verified: 10+ minutes of FT4 with zero flashes.
+
+#### Logging
+
+- **QRZ upload no longer gets stuck on already-uploaded contacts.** If a contact was already in your QRZ logbook, the upload used to stop dead at that record and never reach the newer contacts behind it. It now skips duplicates and continues, so newly logged contacts always get through. (Genuine errors like a bad API key still stop the batch, as before.)
+
+#### Maintenance & recovery
+
+- **New: reset settings from the web page**, without needing a computer or flashing tool. Two scoped choices — reset just the app settings, or just the Wi-Fi/network state — each with a confirmation step. Useful for clearing a stuck configuration in the field.
+- **The QMX's VOX is now switched off automatically** when the panadapter connects, the same way IQ mode is set up at link time — one less thing to configure on the radio.
+
+---
+
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
 

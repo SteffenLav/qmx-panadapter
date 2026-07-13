@@ -178,6 +178,17 @@ For POTA/portable operation without WiFi:
 2. If they disappear again, download the diagnostic log (web UI **Diag ↓**) and report on GitHub
 3. As a last resort: export your config via web UI (Config ↓), then do a full factory reset, then re-import
 
+### Clearing a stuck configuration (web-based reset, new in v0.21.0)
+
+**Symptoms:** the panadapter behaves as if a setting is wedged — e.g. WiFi won't come up no matter what, or a stored value seems stuck — and re-entering settings doesn't help.
+
+You can now reset from the web page, with no computer or flashing tool needed. In the web UI, use the reset control and pick the scope:
+
+- **Reset settings** — clears the app's stored settings (callsign, grid, filters, preferences) back to defaults. Your memory channels and logs are separate.
+- **Reset network** — clears just the Wi-Fi / network state, for when the connection is stuck.
+
+Each choice asks for confirmation first, then the device reboots and clears the selected storage on the way back up. Export your config first (**Config ↓**) if you want to restore it afterward.
+
 ## Collecting Diagnostics
 
 If you're stuck, capture a **diagnostic log**:

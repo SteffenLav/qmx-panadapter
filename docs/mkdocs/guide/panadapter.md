@@ -119,7 +119,6 @@ The **spectrum** shows real-time signal strength (green curve) across the tuned 
 
 When you **switch modes** (Panadapter ↔ FT8 ↔ FT4) or **change bands**, the panadapter automatically **clears the waterfall and resets the spectrum baseline**. This prevents stale signals from interfering with your new band or mode view.
 
-> **⏸️ FT4 is temporarily disabled in v0.20.0** (it was exhausting memory and crashing; reversible, FT8 unaffected). See [FT8/FT4 Receive](ft8-rx.md).
 
 - Waterfall clears completely (starts fresh)
 - Noise floor recalibrates

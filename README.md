@@ -12,9 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Beta — v0.20.1.** A major robustness release: the WiFi drop-out now self-heals, the modal-open freeze and the FT8-exit crash are fixed, and the radio-control link rides out USB glitches. Panadapter, FT8 receive **and transmit**, web UI, and ADIF logging are all stable. **FT4 is temporarily disabled this release** (it was exhausting memory; reversible). The one remaining step before v1.0.0 (and dropping the beta label) is LoTW / TQSL log upload.
+> **Beta — v0.21.0.** **FT4 is back** — the fix that freed up processor headroom (the panadapter no longer redraws itself behind the FT8/FT4 screen) is exactly what let it return, verified end-to-end. Also this release: a full-screen display flash in FT4 is fixed, QRZ uploads no longer get stuck on already-logged contacts, and you can now reset settings or Wi-Fi from the web page. Panadapter, FT8 **and FT4** receive/transmit, web UI, and ADIF logging are all stable. The one remaining step before v1.0.0 (and dropping the beta label) is LoTW / TQSL log upload.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v0.20.1.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v0.21.0.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -24,7 +24,7 @@ The full documentation also lives online at **[tab5.lav.dk](https://tab5.lav.dk)
 
 ## Features
 
-**FT8 digital mode** — Full-featured FT8 station (15-second slots, 79 symbols @ 160 ms cadence): continuous on-device RX decoding, TX to reply or call CQ, auto-QSO workflows, ADIF logging — all in the same panadapter view. **FT4** (7.5-second slots, 105 symbols @ 48 ms cadence) is built in as well, but is **temporarily disabled in v0.20.0** — it was exhausting the device's internal memory (reversible, and FT8 is unaffected).
+**FT8 digital mode** — Full-featured FT8 station (15-second slots, 79 symbols @ 160 ms cadence): continuous on-device RX decoding, TX to reply or call CQ, auto-QSO workflows, ADIF logging — all in the same panadapter view. **FT4** (7.5-second slots, 105 symbols @ 48 ms cadence) is fully supported too, re-enabled in v0.21.0 once the FT8/FT4 render gate freed the processor headroom its faster cadence needs.
 
 **Real-time panadapter** — Spectrum and waterfall with tap-to-tune, pinch-zoom, and touch-drag one-finger navigation. 30 Hz refresh, 12 kHz IF offset compensation, flat-spectrum mode, adaptive waterfall floor, FFT window selection, and S-meter. Screenshot and spectrum export to web browser.
 
@@ -118,8 +118,6 @@ The top bar reads **Band · Mode · BW · Freq · Signal · Zoom** left to right
 See the [full gesture table](#gestures) in the Reference section.
 
 ### Step 3b — Choose FT8 or FT4 mode
-
-> **⏸️ FT4 is temporarily disabled in v0.20.0** — it was exhausting the device's internal memory and crashing, so it is switched off this release. Fully reversible, and **FT8 is unaffected**. The FT4 details in this section describe how it behaves when it is re-enabled.
 
 FT8 is available on all HF bands; FT4 is available on select bands with published frequencies (20 m, 30 m, 40 m, etc.). To switch between them:
 
@@ -700,7 +698,7 @@ I (xxxx) bsp_info: panel:    ST7123 (inferred from touch)
 I (xxxx) bsp_info: touch:    ST7123 @ 0x55
 I (xxxx) bsp_info: heap:     230.5 kB internal free, 28.80 MB PSRAM free
 I (xxxx) bsp_info: idf:      v5.4.4
-I (xxxx) bsp_info: firmware: v0.20.1
+I (xxxx) bsp_info: firmware: v0.21.0
 I (xxxx) bsp_info: =====================
 ```
 
@@ -864,7 +862,7 @@ The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF
 | **CW** | Continuous Wave — Morse code mode |
 | **DSP** | Digital Signal Processing — mathematical signal analysis and filtering |
 | **FFT** | Fast Fourier Transform — algorithm to convert time-domain audio into frequency spectrum |
-| **FT8 / FT4** | Digital modes for weak-signal HF communication (15-second vs 7.5-second slots). *FT4 is temporarily disabled in v0.20.0 (memory pressure; reversible) — FT8 is unaffected.* |
+| **FT8 / FT4** | Digital modes for weak-signal HF communication (15-second vs 7.5-second slots). Both fully supported (FT4 re-enabled in v0.21.0). |
 | **GPIO** | General-Purpose Input/Output — microcontroller pins for digital signals |
 | **I2C / SPI** | Serial communication protocols for connecting peripherals (sensors, displays, etc.) |
 | **IQ** | In-phase / Quadrature — stereo representation of RF signals (real + imaginary parts) |

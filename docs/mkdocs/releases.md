@@ -4,31 +4,18 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v0.20.1** — 2026-07-10 (hot-fix)
+**v0.21.0** — 2026-07-13
 
-Fixes a crash introduced in v0.20.0: the Tab5 rebooted every time you **pounced a station** (an ~11 KB scratch table sat on a small task stack and overflowed it — now moved to PSRAM). Pouncing works normally again. **Everyone on v0.20.0 should update.** Nothing else changed — the full v0.20.0 feature list is below.
+**FT4 is back**, the FT8/FT4 screen runs cooler, a display glitch is fixed, and QRZ uploads no longer get stuck.
 
----
-
-**v0.20.0** — 2026-07-10
-
-**A major robustness release.** Most of this update is about the device *staying up* — the WiFi drop-out, the freeze on opening a window, and the radio-link hiccups that field reports kept hitting are now fixed or self-healing. Plus a decision to pause FT4, keep the web UI out of FT8's way, and a batch of interface, band, memory and battery improvements.
-
-- **WiFi no longer dies until you reboot**: the long-standing "WiFi stops after a few minutes (FT8 and CAT keep working), only a power-cycle brings it back" fault is fixed. A low-level lock-up in the link to the WiFi co-processor now recovers automatically (it drops one packet, which is simply re-sent) instead of wedging forever. Verified on hardware
-- **Opening a window no longer freezes the device**: the ADIF log / CQ editor / Filter / Sync-Time windows could occasionally hard-freeze the whole Tab5 (needing a power-cycle). Traced to the faint on-screen watermark forcing an expensive redraw; drawn a cheaper way now — looks identical, freeze gone
-- **The radio-control (CAT) link rides out USB glitches** instead of going dead for the rest of the session on a brief hiccup
-- **The web UI stays out of FT8's way**: switching to FT8/FT4 pauses the browser's live spectrum stream (it competed with FT8 for the radio link and CPU) and shows the log + upload controls instead — steadier decoding and a more stable WiFi link while operating digital modes
-- **SD card handling reworked for stability**: the microSD card now runs on its own dedicated bus instead of sharing one with WiFi. The automatic copy-to-card backup is **currently disabled** (mounting the card squeezes memory enough to hurt FT8 decoding) — your log and settings are unaffected, they always live in the device's own storage
-- **FT4 is temporarily switched off** this release — it was running the device out of memory and crashing. Fully reversible; FT8 is unaffected
-- **FT8 decode timing fixed**: each 15-second slot is now anchored to the exact time boundary, so the start of every signal is no longer clipped
-- **FT8 pile-up list**: stations that answer you mid-QSO are collected in a tappable "Pileup" list instead of vanishing; tap to work them, or ✕ to dismiss. Plus a "Skip TX1" option for quicker pounces
-- **11 m / CB band** support for QMX+, and the band picker no longer confuses 10 m and 11 m
-- **Interface**: smooth backlight fade-in at boot, a "turn on / reboot your QMX" prompt while waiting for the radio, and a memory-channel overhaul (example channels on first use, a one-time drag-and-delete tour, and a drag-to-wastebin delete)
-- **Battery care**: optional charge limit (stop at a set %, default 80 %) and an accurate charge reading while charging
-- **Web UI**: whole-band plan strip with a draggable window, a draggable spectrum/waterfall divider, screenshots that capture open pop-ups, and a nicer frequency keypad
+- **FT4 returns.** It was paused in v0.19.x because its faster 7.5-second cadence starved the processor and could crash. The fix: the panadapter no longer redraws its spectrum and waterfall while the FT8/FT4 screen completely covers them — pure wasted work that was tying up the busiest processor core ~30 times a second. That freed the headroom FT4 needs, and FT4 is now verified end-to-end — receive *and* transmit, contacts logged and uploaded. The S-meter in the FT8 top bar keeps updating as before
+- **Fixed: a full-screen flash** ("blink to blank and back") that appeared every 15 seconds to a couple of minutes, mostly in FT4. Two internal 10-second housekeeping tasks briefly stalled the display controller into dropping a frame; rewritten to avoid the stall. Verified: 10+ minutes of FT4 with zero flashes
+- **QRZ upload no longer gets stuck** on contacts already in your logbook — it skips duplicates and continues to the newer contacts instead of stopping dead. (Real errors like a bad API key still stop the batch)
+- **New: reset settings or Wi-Fi from the web page**, no computer or flashing tool needed — two scoped choices, each with a confirmation step, for clearing a stuck configuration in the field
+- **The QMX's VOX is switched off automatically** when the panadapter connects, same as IQ mode
 - Full writeup in [Version History Document](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/version-history.md)
 
-### Installing v0.20.1
+### Installing v0.21.0
 
 1. Use the one-click flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases)
 2. Or follow [Build from Source](build/build.md)
@@ -42,6 +29,14 @@ Your settings (callsign, grid, WiFi, memory channels) are preserved during a nor
 3. Re-enter your settings on first boot
 
 ## Previous Releases
+
+### v0.20.1 / v0.20.0
+
+- **Robustness release.** WiFi "dies after a few minutes" fault now self-heals instead of needing a reboot; opening a window no longer freezes the device; the radio-control (CAT) link rides out USB glitches; the web UI pauses its stream while FT8 runs
+- FT8 decode timing anchored to the exact slot boundary; FT8 pile-up list + "Skip TX1" quick pounce; 11 m/CB band; memory-channel overhaul; battery-care charge limit; web-UI whole-band plan strip, draggable split, better screenshots and keypad
+- microSD now on its own bus (SD auto-archive still off — it squeezed memory needed by FT8)
+- v0.20.1 hot-fix: fixed a reboot on every pounce (a scratch table overflowed a small task stack; moved to PSRAM)
+- *(FT4 was switched off across v0.20.x for the memory pressure now resolved in v0.21.0.)*
 
 ### v0.19.5
 
@@ -157,8 +152,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 Pending:
 
 1. **LoTW (TQSL) upload** — certificate-based API (harder than QRZ/eQSL); the last gate before the beta label drops
-2. **Re-enable FT4** — bring its memory use under control so it can be switched back on (disabled in v0.20.0)
-3. **Re-enable SD auto-archive** — cut the mount's internal-memory cost (or gate it off during FT8) so it no longer starves the decoder
+2. **Re-enable SD auto-archive** — cut the mount's internal-memory cost (or gate it off during FT8) so it no longer starves the decoder
 
 ### Phase 6.3 (FPS Recovery)
 
@@ -176,7 +170,7 @@ Pending:
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v0.20.1.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v0.21.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

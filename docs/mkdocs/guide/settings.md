@@ -69,7 +69,6 @@ Once connected, the settings show your **IP address** — use this to access the
 
 ## FT8 Settings
 
-> **⏸️ FT4 is temporarily disabled in v0.20.0** (it was exhausting internal memory and crashing; reversible, and FT8 is unaffected).
 
 **FT8 On/Off** — Globally enable/disable FT8 mode.
 

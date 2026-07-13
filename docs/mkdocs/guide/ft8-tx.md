@@ -2,7 +2,6 @@
 
 The panadapter **keys the QMX and transmits full FT8/FT4 QSOs** — reply to CQ, run your own CQ, auto-answer (robot mode), or conduct a full exchange.
 
-> **⏸️ FT4 is temporarily disabled in v0.20.0.** It was exhausting the device's internal memory and crashing, so it is switched off this release while that is fixed — fully reversible, and **FT8 is unaffected**. FT4 transmit returns in a later update; the FT4-specific details on this page apply to when it is re-enabled.
 
 ### 1. FT8 vs FT4 — Which to Use?
 

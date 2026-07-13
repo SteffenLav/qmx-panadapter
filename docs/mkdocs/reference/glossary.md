@@ -13,7 +13,7 @@ Common terms and acronyms used throughout this guide.
 | **DSP** | Digital Signal Processing — mathematical signal analysis and filtering |
 | **eQSL** | Electronic QSL — online service for confirming and exchanging QSO records |
 | **FFT** | Fast Fourier Transform — algorithm that converts time-domain audio into a frequency spectrum |
-| **FT8 / FT4** | Digital modes for weak-signal HF communication (15-second vs 7.5-second slots). *FT4 is temporarily disabled in v0.20.0 (memory pressure; reversible) — FT8 is unaffected.* |
+| **FT8 / FT4** | Digital modes for weak-signal HF communication (15-second vs 7.5-second slots). Both fully supported (FT4 re-enabled in v0.21.0). |
 | **GFSK** | Gaussian Frequency-Shift Keying — the modulation scheme FT8 and FT4 use |
 | **GPIO** | General-Purpose Input/Output — microcontroller pins for digital signals |
 | **I2C / SPI** | Serial communication protocols for connecting peripherals (sensors, displays, etc.) |
