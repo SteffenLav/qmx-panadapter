@@ -90,7 +90,7 @@ uint32_t ft8_get_timing_seq(void);
 // code was deleted - flip this back to 0 to fully re-enable, or use it as
 // the single point to find every gated call site before removing the FT4
 // code path for good, once that's a final decision rather than a pause.
-#define FT4_MODE_DISABLED 1
+#define FT4_MODE_DISABLED 0
 
 typedef enum {
     FT8_OP_MODE_FT8 = 0,
