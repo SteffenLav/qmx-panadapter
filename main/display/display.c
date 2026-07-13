@@ -9,6 +9,7 @@
 #include "bsp/m5stack_tab5.h"
 #include "bsp/display.h"
 #include "esp_lvgl_port.h"
+#include "hal/axi_icm_ll.h"
 
 static const char *TAG = "display";
 
@@ -121,6 +122,22 @@ esp_err_t display_init(lv_display_t **out_disp)
         ESP_LOGE(TAG, "bsp_display_start_with_config failed");
         return ESP_FAIL;
     }
+
+    // Raise the AXI arbitration priority of the DW-GDMA masters (the DMA that
+    // continuously streams the 1280x720 RGB565 framebuffer from PSRAM into the
+    // MIPI-DSI bridge). Every QoS field resets to 0, so out of the box the
+    // display fetch has NO precedence over CPU cache refills - and a sustained
+    // CPU burst over PSRAM (FT4 decode + streaming STFT + a full decode-list
+    // LVGL redraw, all PSRAM-resident) can crowd it out long enough to drop a
+    // frame: the panel blanks to a light cyan/blue for one frame and recovers
+    // ("full-screen cyan flash", seen mid-slot in FT4 every ~2-4 slots). The
+    // DSI fetch is bounded (~110 MB/s of the >600 MB/s PSRAM budget), so
+    // giving it near-top priority cannot starve the CPU - it just guarantees
+    // the panel never misses a fetch window. 12 of 15: high, but below max in
+    // case something ever genuinely needs the last word.
+    axi_icm_ll_set_dw_gdma_qos_arbiter_prio(0, 12, 12);
+    axi_icm_ll_set_dw_gdma_qos_arbiter_prio(1, 12, 12);
+    ESP_LOGI(TAG, "DSI DW-GDMA AXI QoS priority raised (12/15, rd+wr, both masters)");
 
     // Start dark, not bsp_display_backlight_on() (=100% immediately): the
     // panel powers up with garbage/white framebuffer content that's visible

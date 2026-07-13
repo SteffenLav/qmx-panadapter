@@ -128,10 +128,16 @@ esp_err_t audio_init(void)
              (unsigned long)(SAMPLE_RING_BYTES / 4 * 1000 / 48000));
 
     // Start the periodic internal-heap watchdog (every 10 s).
+    // TEMP (2026-07-13, FT4 cyan-flash investigation): disabled for an A/B -
+    // all observed flashes align (<±1.2 s) with the 10 s housekeeping tick,
+    // and this callback does four full heap walks (each an interrupts-off
+    // heap-spinlock critical section, one across the whole 32 MB PSRAM heap)
+    // in the high-priority esp_timer task. Re-enable after the test verdict.
     const esp_timer_create_args_t wd_args = {
         .callback = heap_watchdog_cb, .name = "heap_wd",
     };
-    if (esp_timer_create(&wd_args, &s_heap_watchdog) == ESP_OK) {
+    (void)wd_args;
+    if (0 && esp_timer_create(&wd_args, &s_heap_watchdog) == ESP_OK) {
         esp_timer_start_periodic(s_heap_watchdog, 10 * 1000 * 1000);
     }
 

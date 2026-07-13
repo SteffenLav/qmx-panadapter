@@ -56,6 +56,10 @@ extern "C" {
 #define BSP_LCD_MIPI_DSI_LANE_BITRATE_MBPS (730)  // 720*1280 RGB24 60Hz //(900) // 900Mbps
 
 #define BSP_MIPI_DSI_PHY_PWR_LDO_CHAN       (3)  // LDO_VO3 is connected to VDD_MIPI_DPHY
+// A/B-tested at 2600 mV during the FT4 cyan-flash investigation (2026-07-13):
+// no change in flash rate and no change in the background D-PHY contention
+// error rate (~25% of 10 ms polls in both cases) - the internal LDO_VO3 rail
+// is exonerated; back at nominal.
 #define BSP_MIPI_DSI_PHY_PWR_LDO_VOLTAGE_MV (2500)
 
 /**

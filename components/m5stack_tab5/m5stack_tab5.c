@@ -1463,6 +1463,10 @@ esp_err_t bsp_display_new_with_handles_to_st7121(const bsp_display_config_t* con
             .vsync_back_porch  = 24,
             .vsync_front_porch = 200,
         },
+        // use_dma2d was A/B-tested false during the FT4 cyan-flash
+        // investigation (2026-07-13): flashes persisted unchanged and the
+        // CPU-copy path visibly cost panadapter smoothness, so DMA2D is
+        // exonerated and stays on.
         .flags = { .use_dma2d = true },
     };
     st7121_vendor_config_t vendor_config = {
@@ -1545,6 +1549,8 @@ esp_err_t bsp_display_new_with_handles_to_st7123(const bsp_display_config_t* con
             },
         .flags =
             {
+                // DMA2D A/B-tested off and exonerated for the FT4 cyan flash
+                // (see the ST7121 config above) - keep it on.
                 .use_dma2d = true,
             },
     };

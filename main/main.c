@@ -34,6 +34,7 @@
 #include "diag_log.h"
 #include "factory_reset.h"
 #include "cpu_stats.h"
+#include "dsi_diag.h"
 #include "sd_archive.h"
 #include "tab5_keyboard.h"
 #include "time_sync.h"
@@ -192,7 +193,13 @@ void app_main(void)
     // Tier 0 resource diagnostics: per-task per-core CPU% every 10 s into the
     // diag log. Started last so the boot-time task churn above doesn't skew
     // the first window.
-    cpu_stats_init();
+    // TEMP (2026-07-13, FT4 cyan-flash investigation): cpu_stats disabled for
+    // an A/B — all observed flashes align (<±1.2 s) with the 10 s housekeeping
+    // tick, and cpu_stats' uxTaskGetSystemState() walks every task stack
+    // (incl. PSRAM ones) with the scheduler locked, every 10 s. Re-enable
+    // after the test verdict.
+    // cpu_stats_init();
+    dsi_diag_start();   // TEMP: FT4 cyan-flash investigation (util/dsi_diag.c)
 
     ESP_LOGI(TAG, "Init complete - main task idle");
     // Spawn FT8 self-test on a dedicated task (32 KB stack, core 1).
