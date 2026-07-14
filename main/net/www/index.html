@@ -1043,10 +1043,13 @@ async function tick() {
       }
     }
 
-    /* Sync flat mode from device on first connect */
+    /* Sync flat mode from device on first connect - ONLY when this browser has
+       no saved preference yet (localStorage wins once the user has toggled). */
     if (firstStatus && s.flat_mode !== undefined) {
-      specFlatten = !!s.flat_mode;
-      updateFlatBtn();
+      if (specFlattenSaved === null) {
+        specFlatten = !!s.flat_mode;
+        updateFlatBtn();
+      }
       firstStatus = false;
     }
 
@@ -1352,7 +1355,14 @@ const specFloor  = new Float32Array(SPEC_W);
 const specSmooth = new Float32Array(SPEC_W);
 let specFloorReady  = false;
 let specSmoothReady = false;
-let specFlatten     = true;
+/* Flat-spectrum view is the browser's own render choice (flat vs raw drawing
+   of the same WS bytes), so it persists per-browser in localStorage - same
+   pattern as wfFrRatio below. A fresh browser with no saved preference falls
+   back to the device's flat_mode on first /api/status (see the sync below).
+   NOT written to the device: driving the Tab5's flat_mode from the httpd task
+   would touch LVGL widgets off the display thread. */
+const specFlattenSaved = localStorage.getItem("specFlatten");   // "1" | "0" | null
+let specFlatten     = (specFlattenSaved !== null) ? (specFlattenSaved === "1") : true;
 
 const SPEC_SMOOTH_ALPHA     = 0.25;
 const SPEC_FLOOR_UP_ALPHA   = 0.002;
@@ -1368,12 +1378,15 @@ const SPEC_FLOOR_BIAS       = 15.3;   // 6 dB * 2.55
 function updateFlatBtn() {
   document.getElementById("flatbtn").classList.toggle("on", specFlatten);
 }
+function setFlatten(v) {
+  specFlatten = v;
+  localStorage.setItem("specFlatten", v ? "1" : "0");   // persist per-browser
+  updateFlatBtn();
+}
 updateFlatBtn();
-document.getElementById("flatbtn").addEventListener("click", () => {
-  specFlatten = !specFlatten; updateFlatBtn();
-});
+document.getElementById("flatbtn").addEventListener("click", () => setFlatten(!specFlatten));
 document.addEventListener("keypress", (e) => {
-  if (e.key === "f" || e.key === "F") { specFlatten = !specFlatten; updateFlatBtn(); }
+  if (e.key === "f" || e.key === "F") setFlatten(!specFlatten);
 });
 
 // Dev-only resource-monitor overlay toggle. keydown (not keypress) is
