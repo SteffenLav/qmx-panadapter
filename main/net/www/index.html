@@ -196,7 +196,31 @@
     cursor: pointer; user-select: none; -webkit-tap-highlight-color: transparent;
   }
   .bot-btn:hover { border-color: var(--accent); }
+  button.bot-btn { font: inherit; }
   .dim { color: var(--dim); font-size: 0.75rem; white-space: nowrap; }
+
+  /* Bottom-bar grouped menus (Log / Files / Reset) - declutter the row of
+     ~11 flat buttons into 3 that pop a small menu UPWARD (bar sits at the
+     bottom). The underlying <a> items keep their IDs so their handlers are
+     unchanged. */
+  .bot-menu-wrap { position: relative; display: inline-block; margin-left: 0.6rem; }
+  .bot-menu-wrap > .bot-btn { margin-left: 0; }
+  .bot-menu {
+    position: absolute; bottom: calc(100% + 4px); right: 0;
+    display: none; flex-direction: column; gap: 2px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+    padding: 4px; min-width: 170px; z-index: 50;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.55);
+  }
+  .bot-menu.open { display: flex; }
+  .bot-menu a {
+    display: block; background: #1f2937; border: 1px solid transparent;
+    border-radius: 4px; padding: 0.35rem 0.6rem; color: var(--fg);
+    text-decoration: none; white-space: nowrap; cursor: pointer;
+    font-size: 0.85rem;
+  }
+  .bot-menu a:hover { border-color: var(--accent); }
+  .bot-menu a.danger:hover { border-color: #ff6055; }
 
   /* ---- Frequency keypad (tap the VFO to open) ---- */
   #vfo.clickable-freq { cursor: pointer; border-radius: 4px;
@@ -355,18 +379,36 @@
       <span id="wifi">--</span>
     </span>
     <div class="bot-fill"></div>
-    <a href="/api/adif" download="qso.adi" id="adif-link" class="bot-btn" style="display:none">0 QSOs &#8595;</a>
-    <a href="#" id="qrz-link" class="bot-btn" style="display:none">QRZ &#8593;</a>
-    <a href="#" id="eqsl-link" class="bot-btn" style="display:none">eQSL &#8593;</a>
-    <a href="#" id="lotw-link" class="bot-btn" style="display:none" title="ARRL Logbook of the World. Once set up: signs pending QSOs on-device and uploads. Ctrl-click to re-run setup (e.g. after a certificate renewal).">LoTW setup</a>
-    <a href="/api/log" download="qmx-log.txt" class="bot-btn" title="Live diagnostic log (full session, in RAM)">Diag &#8595;</a>
-    <a href="/api/log/saved" download="qmx-log-saved.txt" class="bot-btn" title="Persisted diagnostic log (full SD-card copy if a card is in, else the flash copy) - survives power-off, e.g. after a POTA session">Diag(saved) &#8595;</a>
-    <a href="/api/config" download="qmx-config.txt" class="bot-btn" title="Download all settings + memory channels as an editable text file">Config &#8595;</a>
-    <a href="#" id="cfg-up-link" class="bot-btn" title="Upload an edited config file (merges; restart to apply)">Config &#8593;</a>
+    <!-- Grouped action menus (declutter: was ~11 flat buttons). Each opens a
+         small upward popup; the underlying <a> items keep their IDs so all
+         their existing handlers work unchanged. -->
+    <div class="bot-menu-wrap">
+      <button type="button" class="bot-btn" id="log-group-btn" style="display:none">Log &#9650;</button>
+      <div class="bot-menu" id="log-menu">
+        <a href="/api/adif" download="qso.adi" id="adif-link">Download ADIF</a>
+        <a href="#" id="qrz-link">QRZ upload &#8593;</a>
+        <a href="#" id="eqsl-link">eQSL upload &#8593;</a>
+        <a href="#" id="lotw-link" title="ARRL Logbook of the World. Once set up: signs pending QSOs on-device and uploads. Ctrl-click to re-run setup (e.g. after a certificate renewal).">LoTW setup</a>
+      </div>
+    </div>
+    <div class="bot-menu-wrap">
+      <button type="button" class="bot-btn" id="files-group-btn">Files &#9650;</button>
+      <div class="bot-menu" id="files-menu">
+        <a href="/api/config" download="qmx-config.txt" title="Download all settings + memory channels as an editable text file">Config download &#8595;</a>
+        <a href="#" id="cfg-up-link" title="Upload an edited config file (merges; restart to apply)">Config upload &#8593;</a>
+        <a href="/api/log" download="qmx-log.txt" title="Live diagnostic log (full session, in RAM)">Diag log &#8595;</a>
+        <a href="/api/log/saved" download="qmx-log-saved.txt" title="Persisted diag log (SD copy if a card is in, else flash) - survives power-off, e.g. POTA">Diag log (saved) &#8595;</a>
+        <a href="/ss.bmp" target="_blank">Tab5 screenshot</a>
+      </div>
+    </div>
+    <div class="bot-menu-wrap">
+      <button type="button" class="bot-btn" id="reset-group-btn">Reset &#9650;</button>
+      <div class="bot-menu" id="reset-menu">
+        <a href="#" id="reset-settings-link" class="danger" title="Reset all app settings + memory channels to defaults (keeps the QSO log and WiFi). Clears a stuck stored value without an esptool full-erase. Reboots.">Reset settings</a>
+        <a href="#" id="reset-network-link" class="danger" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
+      </div>
+    </div>
     <input type="file" id="cfg-up-file" accept=".txt,text/plain" style="display:none">
-    <a href="#" id="reset-settings-link" class="bot-btn" title="Reset all app settings + memory channels to defaults (keeps the QSO log and WiFi). Clears a stuck stored value without an esptool full-erase. Reboots.">Reset Settings</a>
-    <a href="#" id="reset-network-link" class="bot-btn" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
-    <a href="/ss.bmp" target="_blank" class="bot-btn">Tab5Shot</a>
   </div>
 
   <!-- LoTW one-time setup, two pages: (1) how to get the .p12 out of TQSL -
@@ -1089,25 +1131,21 @@ async function tick() {
     /* QSO count + ADIF/QRZ/eQSL buttons - all hidden until there's at least
        one QSO logged (nothing to download/upload otherwise). */
     const qsoCount = s.qso_count || 0;
+    const logGroupBtn = document.getElementById("log-group-btn");
     const adifLink = document.getElementById("adif-link");
-    const qrzLink  = document.getElementById("qrz-link");
-    const eqslLink = document.getElementById("eqsl-link");
     const lotwLink = document.getElementById("lotw-link");
     qrzKeySet    = !!s.qrz_key_set;
     eqslCredsSet = !!s.eqsl_creds_set;
     lotwReady    = !!s.lotw_ready;
     if (!lotwBusy) lotwLink.textContent = lotwReady ? "LoTW ↑" : "LoTW setup";
+    // The whole Log menu (ADIF/QRZ/eQSL/LoTW) only makes sense with QSOs logged,
+    // so the Log group button appears only then and carries the count.
     if (qsoCount > 0) {
-      adifLink.textContent = qsoCount + " QSO" + (qsoCount === 1 ? "" : "s") + " ↓";
-      adifLink.style.display = "";
-      qrzLink.style.display  = "";
-      eqslLink.style.display = "";
-      lotwLink.style.display = "";
+      adifLink.textContent = "Download ADIF (" + qsoCount + ")";
+      logGroupBtn.textContent = "Log (" + qsoCount + ") ▲";
+      logGroupBtn.style.display = "";
     } else {
-      adifLink.style.display = "none";
-      qrzLink.style.display  = "none";
-      eqslLink.style.display = "none";
-      lotwLink.style.display = "none";
+      logGroupBtn.style.display = "none";
     }
 
     /* Bottom-center: UTC clock (tick immediately, interval keeps it running) */
@@ -1388,6 +1426,38 @@ document.getElementById("flatbtn").addEventListener("click", () => setFlatten(!s
 document.addEventListener("keypress", (e) => {
   if (e.key === "f" || e.key === "F") setFlatten(!specFlatten);
 });
+
+/* Bottom-bar grouped menus (Log / Files / Reset). Each group button toggles
+   its popup; opening one closes the others; any click elsewhere closes all.
+   Selecting an item lets its own handler run, then the outside-click closes
+   the menu. */
+(function () {
+  const groups = [
+    ["log-group-btn",   "log-menu"],
+    ["files-group-btn", "files-menu"],
+    ["reset-group-btn", "reset-menu"],
+  ];
+  function closeAll(except) {
+    for (const [, id] of groups) {
+      if (id === except) continue;
+      const m = document.getElementById(id);
+      if (m) m.classList.remove("open");
+    }
+  }
+  for (const [btnId, menuId] of groups) {
+    const b = document.getElementById(btnId);
+    const m = document.getElementById(menuId);
+    if (!b || !m) continue;
+    b.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();   // don't let the document handler immediately re-close
+      const willOpen = !m.classList.contains("open");
+      closeAll(menuId);
+      m.classList.toggle("open", willOpen);
+    });
+  }
+  document.addEventListener("click", () => closeAll(null));
+})();
 
 // Dev-only resource-monitor overlay toggle. keydown (not keypress) is
 // needed to reliably see modifier-held combos in all browsers.
