@@ -10,6 +10,16 @@
 #include "dsp.h"
 
 #define WS_FRAME_TYPE_SPECTRUM  0x01
+// ~10 fps. NOTE (2026-07-14): halving this to 5 fps was tried as a fix for a
+// browser-stream stutter + a core-0-saturation reboot, on the theory that the
+// WS TX path (httpd_ws_send_frame_async → LWIP/esp_hosted, core 0) dominated
+// core 0. MEASURED WRONG: at 5 fps core-0 idle was unchanged (~12%). The real
+// core-0 load is the audio→FFT→render→LVGL-rotation pipeline, which is active
+// whenever the QMX streams audio (idle0 56%→12% coincides with USB-audio
+// connect, NOT with a browser connecting). The WS rate is a minor contributor;
+// reverted to 10 fps so the browser view isn't needlessly choppy. The core-0
+// saturation (with core 1 ~94% idle) is the thing to fix — by rebalancing to
+// core 1 / cutting the rotation cost — not here.
 #define WS_PUSH_PERIOD_MS       100        // ~10 fps
 #define WS_HEADER_LEN           2
 #define WS_PAYLOAD_LEN          DSP_FFT_SIZE
