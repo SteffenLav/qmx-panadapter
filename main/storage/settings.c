@@ -73,6 +73,7 @@ static const char *TAG = "settings";
 #define KEY_RESMON_EN      "resmon_en"
 #define KEY_RESMON_DX      "resmon_dx"
 #define KEY_RESMON_DY      "resmon_dy"
+#define KEY_DISP_SLEEP     "disp_sleep"
 #define KEY_LOTW_DXCC      "lotw_dxcc"
 #define KEY_LOTW_CQZ       "lotw_cqz"
 #define KEY_LOTW_ITUZ      "lotw_ituz"
@@ -163,6 +164,7 @@ static const char *TAG = "settings";
 #define DIRTY_LOTW_CQZ       (1ull << 57)
 #define DIRTY_LOTW_ITUZ      (1ull << 58)
 #define DIRTY_LOTW_UPLOADED  (1ull << 59)
+#define DIRTY_DISP_SLEEP     (1ull << 60)
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -184,7 +186,7 @@ static const char *TAG = "settings";
     DIRTY_QRZ_KEY | DIRTY_EQSL_USER | DIRTY_EQSL_PSWD | \
     DIRTY_WF_BLACK | DIRTY_WF_CONTRAST | DIRTY_WF_BLEND | DIRTY_WF_WINDOW | \
     DIRTY_DISP_FLIP | DIRTY_CW_AUD_VOL | DIRTY_CHARGE_LIM_EN | DIRTY_CHARGE_LIM_PCT | \
-    DIRTY_LOTW_DXCC | DIRTY_LOTW_CQZ | DIRTY_LOTW_ITUZ)
+    DIRTY_LOTW_DXCC | DIRTY_LOTW_CQZ | DIRTY_LOTW_ITUZ | DIRTY_DISP_SLEEP)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -321,6 +323,7 @@ static void flush_task(void *arg)
             nvs_set_i16(s_nvs, KEY_RESMON_DX, snap.resmon_dx);
             nvs_set_i16(s_nvs, KEY_RESMON_DY, snap.resmon_dy);
         }
+        if (dirty_local & DIRTY_DISP_SLEEP)    nvs_set_u8(s_nvs, KEY_DISP_SLEEP, snap.display_sleep_min);
         if (dirty_local & DIRTY_LOTW_DXCC)     nvs_set_str(s_nvs, KEY_LOTW_DXCC, snap.lotw_dxcc);
         if (dirty_local & DIRTY_LOTW_CQZ)      nvs_set_str(s_nvs, KEY_LOTW_CQZ,  snap.lotw_cqz);
         if (dirty_local & DIRTY_LOTW_ITUZ)     nvs_set_str(s_nvs, KEY_LOTW_ITUZ, snap.lotw_ituz);
@@ -437,6 +440,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->resmon_en = false;
     out->resmon_dx = 0;
     out->resmon_dy = 0;
+    out->display_sleep_min = 0;
     out->lotw_dxcc[0] = '\0';
     out->lotw_cqz[0] = '\0';
     out->lotw_ituz[0] = '\0';
@@ -547,6 +551,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_RESMON_EN, &u8v) == ESP_OK) out->resmon_en = (u8v != 0);
     nvs_get_i16(s_nvs, KEY_RESMON_DX, &out->resmon_dx);
     nvs_get_i16(s_nvs, KEY_RESMON_DY, &out->resmon_dy);
+    if (nvs_get_u8(s_nvs, KEY_DISP_SLEEP, &u8v) == ESP_OK) out->display_sleep_min = u8v;
     sz = sizeof(out->lotw_dxcc);
     nvs_get_str(s_nvs, KEY_LOTW_DXCC, out->lotw_dxcc, &sz);
     sz = sizeof(out->lotw_cqz);
@@ -1177,6 +1182,16 @@ void settings_set_resmon_pos(int16_t dx, int16_t dy)
     s_pending.resmon_dy = dy;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_RESMON_POS);
+}
+
+void settings_set_display_sleep_min(uint8_t minutes)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.display_sleep_min == minutes) { xSemaphoreGive(s_mutex); return; }
+    s_pending.display_sleep_min = minutes;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_DISP_SLEEP);
 }
 
 static void set_lotw_str(char *dst, size_t dst_sz, const char *v, uint64_t bit)

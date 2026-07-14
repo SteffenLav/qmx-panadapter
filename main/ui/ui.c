@@ -1600,7 +1600,8 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_DISTANCE   17  // FT8 distance unit (km/miles) - kept visible in FT8 mode
 #define DRAWER_SEC_FT8SYNC    18  // panadapter-only: FT8 sync lines + 3x waterfall (diagnostic)
 #define DRAWER_SEC_SIMMODE    19  // FT8-only: phantom-station simulation mode (practice/testing, never keys the radio)
-#define N_DRAWER_SECTIONS     20
+#define DRAWER_SEC_SLEEP      20  // display sleep: idle-timeout backlight-off (#34)
+#define N_DRAWER_SECTIONS     21
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 // Phase 5.10D Stage 2b: drawer widgets we need to keep handles to
@@ -1620,6 +1621,9 @@ static lv_obj_t *s_slider_brightness = NULL;
 static uint8_t s_saved_ui_mode = UI_MODE_PANADAPTER;
 static lv_obj_t *s_lbl_brightness = NULL;
 static lv_obj_t *s_check_flip = NULL;  // 180-degree display flip checkbox
+static lv_obj_t *s_dropdown_sleep = NULL;  // display-sleep idle timeout picker
+static uint8_t   s_sleep_timeout_min = 0;  // cached display-sleep setting, 0 = never
+static void sleep_poll_cb(lv_timer_t *t);  // defined with the sleep code above pinch_poll_cb
 static lv_obj_t *s_check_charge_limit = NULL;   // battery-care enable checkbox
 static lv_obj_t *s_lbl_charge_limit_pct = NULL; // "Stop charging at: NN%" label
 static lv_obj_t *s_slider_charge_limit_pct = NULL;
@@ -3166,6 +3170,14 @@ void ui_init(lv_display_t *disp)
     // Pinch/pan polling timer: 50 ms, reads raw touch driver directly.
     lv_timer_create(pinch_poll_cb, 50, NULL);
 
+    // Display sleep (#34): 1 Hz idle check against the persisted timeout.
+    {
+        qmx_settings_t scfg;
+        settings_load_all(&scfg);
+        s_sleep_timeout_min = scfg.display_sleep_min;
+        lv_timer_create(sleep_poll_cb, 1000, NULL);
+    }
+
     // Whole UI is now built — release the lock taken at the top of ui_init.
     display_unlock();
 }
@@ -3184,10 +3196,89 @@ static void stroll_apply_offset(int off)
     if (s_label_bar)   lv_obj_set_x(s_label_bar,   off);
 }
 
+// === Display sleep (#34, Samuel W7STF) =====================================
+// Idle-timeout backlight-off. Backlight only - rendering, FT8, CAT, WiFi and
+// the web UI all keep running; the 5" LCD backlight is what dominates idle
+// battery drain. Any touch wakes (and is swallowed - LVGL's indev is disabled
+// while asleep so a blind tap can't tune/click anything); a two-finger
+// double-tap blanks immediately (two-finger, per Samuel's suggestion, so it
+// can't collide with double-tap tuning).
+static const uint8_t k_sleep_min_opts[] = { 0, 1, 2, 5, 10, 30 };
+static bool     s_disp_asleep       = false;
+static bool     s_wake_pending      = false;  // touch seen while asleep; swallow until lift
+static uint64_t s_2f_down_us        = 0;      // two-finger session start (0 = none)
+static int      s_2f_dist0          = 0;      // finger spread at session start
+static int      s_2f_mid0           = 0;      // midpoint at session start
+static bool     s_2f_moved          = false;  // pinch/swipe, not a tap
+static uint64_t s_2f_last_tap_us    = 0;      // end time of the previous two-finger tap
+
+static void display_sleep_enter(void)
+{
+    if (s_disp_asleep) return;
+    s_disp_asleep = true;
+    s_wake_pending = false;
+    lv_indev_t *indev = lv_indev_get_next(NULL);
+    if (indev) lv_indev_enable(indev, false);
+    display_set_brightness(0);
+    ESP_LOGI(TAG, "display sleep: backlight off (touch to wake)");
+}
+
+static void display_sleep_wake(void)
+{
+    qmx_settings_t c;
+    settings_load_all(&c);
+    display_set_brightness(c.brightness_pct);
+    lv_indev_t *indev = lv_indev_get_next(NULL);
+    if (indev) lv_indev_enable(indev, true);
+    lv_display_trigger_activity(NULL);
+    s_disp_asleep = false;
+    s_wake_pending = false;
+    ESP_LOGI(TAG, "display sleep: woken by touch");
+}
+
+// 1 Hz idle check. lv_display_get_inactive_time() resets on any LVGL input
+// activity, so raw-gesture pans/pinches count too (the LVGL indev sees the
+// same touches pinch_poll_cb reads directly).
+static void sleep_poll_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (s_sleep_timeout_min == 0 || s_disp_asleep) return;
+    if (lv_display_get_inactive_time(NULL) >= (uint32_t)s_sleep_timeout_min * 60000u)
+        display_sleep_enter();
+}
+
+static void drawer_dropdown_sleep_cb(lv_event_t *e)
+{
+    lv_obj_t *dd = lv_event_get_target(e);
+    uint32_t idx = lv_dropdown_get_selected(dd);
+    if (idx >= sizeof(k_sleep_min_opts)) idx = 0;
+    s_sleep_timeout_min = k_sleep_min_opts[idx];
+    settings_set_display_sleep_min(s_sleep_timeout_min);
+}
+
 static void pinch_poll_cb(lv_timer_t *t)
 {
     (void)t;
     if (!s_tp) return;
+
+    // Asleep: this raw poll is the wake path (LVGL's indev is disabled).
+    // Restore the backlight the instant a finger lands, but keep the indev
+    // off until every finger lifts so the waking tap is fully swallowed -
+    // it must never reach whatever widget happens to be under it.
+    if (s_disp_asleep) {
+        esp_lcd_touch_read_data(s_tp);
+        if (s_tp->data.points >= 1) {
+            if (!s_wake_pending) {
+                qmx_settings_t c;
+                settings_load_all(&c);
+                display_set_brightness(c.brightness_pct);
+                s_wake_pending = true;
+            }
+        } else if (s_wake_pending) {
+            display_sleep_wake();
+        }
+        return;
+    }
 
     // The band-plan strip's own drag-to-tune (touch_event_cb) owns the touch
     // session entirely while active - this function reads raw touch data
@@ -3237,6 +3328,43 @@ static void pinch_poll_cb(lv_timer_t *t)
         }
         s_freq_kp_pinch_last_dist = dist;
         return;
+    }
+
+    // Two-finger DOUBLE-TAP -> sleep the display immediately. A "tap" is a
+    // two-finger session under 300 ms with no meaningful pinch (spread) or
+    // swipe (midpoint) movement - the stationary-tap dead zones below mean
+    // it can't be mistaken for a zoom, and vice versa a real pinch sets
+    // s_2f_moved and never counts. Second tap must land within 600 ms.
+    {
+        uint64_t now_us = esp_timer_get_time();
+        if (npts >= 2) {
+            int a = (int)s_tp->data.coords[0].y, b = (int)s_tp->data.coords[1].y;
+            int d = b - a; if (d < 0) d = -d;
+            int mid = (a + b) / 2;
+            if (s_2f_down_us == 0) {
+                s_2f_down_us = now_us;
+                s_2f_dist0 = d;
+                s_2f_mid0 = mid;
+                s_2f_moved = false;
+            } else {
+                int dd = d - s_2f_dist0;   if (dd < 0) dd = -dd;
+                int dm = mid - s_2f_mid0;  if (dm < 0) dm = -dm;
+                if (dd > 30 || dm > 30) s_2f_moved = true;
+            }
+        } else if (npts == 0 && s_2f_down_us != 0) {
+            uint64_t dur_us = now_us - s_2f_down_us;
+            s_2f_down_us = 0;
+            if (dur_us < 300000 && !s_2f_moved) {
+                if (s_2f_last_tap_us != 0 && now_us - s_2f_last_tap_us < 600000) {
+                    s_2f_last_tap_us = 0;
+                    display_sleep_enter();
+                    return;
+                }
+                s_2f_last_tap_us = now_us;
+            } else {
+                s_2f_last_tap_us = 0;
+            }
+        }
     }
 
     // No fingers: settle any active gesture.
@@ -5097,6 +5225,34 @@ static void drawer_build(void)
         y += 56;
     }
 
+    // Display sleep (#34): idle minutes before the backlight turns off.
+    // Touch wakes it; a two-finger double-tap blanks immediately. Kept in
+    // both Panadapter and FT8 modes (it's a device-level setting).
+    {
+        qmx_settings_t scfg;
+        settings_load_all(&scfg);
+
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SLEEP, y, 100);
+        lv_obj_t *hdr = lv_label_create(sec);
+        lv_label_set_text(hdr, "Display sleep (2-finger 2x tap = now)");
+        lv_obj_set_style_text_color(hdr, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        s_dropdown_sleep = lv_dropdown_create(sec);
+        lv_dropdown_set_options(s_dropdown_sleep,
+                                "Never\n1 min\n2 min\n5 min\n10 min\n30 min");
+        lv_obj_set_size(s_dropdown_sleep, DRAWER_W - 32, 50);
+        lv_obj_align(s_dropdown_sleep, LV_ALIGN_TOP_LEFT, 0, 40);
+        lv_obj_set_style_text_font(s_dropdown_sleep, &lv_font_montserrat_28, 0);
+        uint32_t sel = 0;
+        for (uint32_t i = 0; i < sizeof(k_sleep_min_opts); i++)
+            if (k_sleep_min_opts[i] == scfg.display_sleep_min) { sel = i; break; }
+        lv_dropdown_set_selected(s_dropdown_sleep, sel);
+        lv_obj_add_event_cb(s_dropdown_sleep, drawer_dropdown_sleep_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        y += 100;
+    }
+
     // Battery care: stop charging once the pack reaches a configurable
     // percentage (enforced in util/status.c's 1Hz task via bsp_set_charge_en,
     // with a hysteresis resume) to reduce long-term wear from sitting at
@@ -5733,10 +5889,10 @@ static void drawer_close(void)
 static void drawer_set_ft8_mode(bool ft8)
 {
     if (!s_drawer) return;
-    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_CHARGE, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
+    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_SLEEP, DRAWER_SEC_CHARGE, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
     // Heights must line up 1:1 with keep[] above (same order) - each is the
     // height passed to that section's own drawer_section(ID, y, height) call.
-    static const int keep_h[] = { 56, 136, 56, 56, 128, 72, 130 };
+    static const int keep_h[] = { 56, 100, 136, 56, 56, 128, 72, 130 };
     const int n_keep = sizeof(keep) / sizeof(keep[0]);
 
     // Antenna Tune entry button lives inside DRAWER_SEC_WIFI (always shown in

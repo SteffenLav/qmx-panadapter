@@ -64,6 +64,7 @@ char *config_io_export(size_t *out_len)
     APP("cw_audio_vol       = %u\n", (unsigned)c.cw_audio_vol);
     APP("charge_limit       = %s\n", yn(c.charge_limit_en));
     APP("charge_limit_pct   = %u\n", (unsigned)c.charge_limit_pct);
+    APP("display_sleep_min  = %u\n", (unsigned)c.display_sleep_min);
     APP("qmx_gps            = %s\n", yn(c.qmx_gps));
     APP("freq_keypad_10key  = %s\n", yn(c.freq_kp_calc));
     APP("onboarded          = %s\n", yn(c.onboarded));
@@ -200,6 +201,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "cw_audio_vol"))      settings_set_cw_audio_vol((uint8_t)atoi(val));
             else if (!strcasecmp(key, "charge_limit"))      settings_set_charge_limit_en(to_bool(val));
             else if (!strcasecmp(key, "charge_limit_pct"))  settings_set_charge_limit_pct((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "display_sleep_min")) settings_set_display_sleep_min((uint8_t)atoi(val));
             else if (!strcasecmp(key, "qmx_gps"))           settings_set_qmx_gps(to_bool(val));
             else if (!strcasecmp(key, "freq_keypad_10key")) settings_set_freq_kp_calc(to_bool(val));
             else if (!strcasecmp(key, "onboarded"))         settings_set_onboarded(to_bool(val));

@@ -94,6 +94,7 @@ typedef struct {
                                  // instead of a generic default for the few seconds before the first real FW poll lands.
     bool     charge_limit_en;   // battery care: stop charging at charge_limit_pct (default false)
     uint8_t  charge_limit_pct;  // stop-charging threshold, 50..100 (default 80)
+    uint8_t  display_sleep_min; // idle minutes before the backlight sleeps, 0 = never (default 0)
     bool     resmon_en;         // resource-monitor floating overlay shown (default false)
     int16_t  resmon_dx;         // its position: offset from screen top-left, px (default 0,0)
     int16_t  resmon_dy;
@@ -273,6 +274,10 @@ void settings_set_last_unix_time(uint32_t unix_sec);
 // wear). charge_limit_pct is clamped to 50..100.
 void settings_set_charge_limit_en(bool v);
 void settings_set_charge_limit_pct(uint8_t pct);
+
+// Display sleep: minutes of touch inactivity before the backlight turns off
+// (0 = never). Any touch wakes it; a two-finger double-tap sleeps immediately.
+void settings_set_display_sleep_min(uint8_t minutes);
 
 // Resource-monitor floating overlay: shown/hidden, and its dragged position
 // (offset in pixels from the screen's top-left, debounced flush). Position
