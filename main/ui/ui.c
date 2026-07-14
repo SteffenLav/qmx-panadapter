@@ -1677,6 +1677,7 @@ static void drawer_slider_ifcal_cb(lv_event_t *e)
 static void drawer_slider_cwpitch_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_open_cb(lv_event_t *e);
+static void drawer_dropdown_sleep_open_cb(lv_event_t *e);
 static void drawer_dropdown_bpregion_cb(lv_event_t *e);
 static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_check_flip_cb(lv_event_t *e);
@@ -5088,6 +5089,10 @@ static lv_obj_t *make_drawer_checkbox(lv_obj_t *parent, bool checked,
     lv_obj_add_style(cbx, &s_ind_chk, LV_PART_INDICATOR | LV_STATE_CHECKED);
     if (checked) lv_obj_add_state(cbx, LV_STATE_CHECKED);
     if (cb) lv_obj_add_event_cb(cbx, cb, LV_EVENT_VALUE_CHANGED, user_data);
+    // Expand the touch target well beyond the small visual box - the indicator
+    // is only ~30px, fiddly to hit on glass. ext_click_area grows the hittable
+    // region on all sides without changing how it looks.
+    lv_obj_set_ext_click_area(cbx, 28);
     return cbx;
 }
 
@@ -5194,12 +5199,33 @@ static void drawer_build(void)
     lv_obj_set_scroll_dir(s_drawer, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_drawer, LV_SCROLLBAR_MODE_AUTO);
 
-    // Title bar with "Settings" (swipe right anywhere on the drawer to close)
-    lv_obj_t *title = lv_label_create(s_drawer);
+    // Frozen "Settings" header: a floating opaque band that stays pinned at the
+    // top while the sections scroll underneath it. LV_OBJ_FLAG_FLOATING makes it
+    // ignore the parent's scroll; the opaque bg + bottom border make scrolled
+    // content vanish cleanly behind it. Moved to the foreground at the end of
+    // drawer_build() so it draws above the later-created (and thus higher
+    // z-order) sections. Not clickable, so the swipe-right-to-close still
+    // reaches s_drawer's touch handler.
+    lv_obj_t *hdr_bg = lv_obj_create(s_drawer);
+    lv_obj_set_size(hdr_bg, DRAWER_W - 32, 76);
+    lv_obj_align(hdr_bg, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_set_style_bg_color(hdr_bg, lv_color_hex(0x1c2128), 0);
+    lv_obj_set_style_bg_opa(hdr_bg, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(hdr_bg, 0, 0);
+    lv_obj_set_style_border_side(hdr_bg, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_width(hdr_bg, 1, 0);
+    lv_obj_set_style_border_color(hdr_bg, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_pad_all(hdr_bg, 0, 0);
+    lv_obj_add_flag(hdr_bg, LV_OBJ_FLAG_FLOATING);
+    lv_obj_clear_flag(hdr_bg, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(hdr_bg, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_scrollbar_mode(hdr_bg, LV_SCROLLBAR_MODE_OFF);
+
+    lv_obj_t *title = lv_label_create(hdr_bg);
     lv_label_set_text(title, "Settings");
     lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), 0);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_48, 0);
-    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_align(title, LV_ALIGN_LEFT_MID, 0, 0);
 
     lv_obj_add_event_cb(s_drawer, drawer_touch_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_drawer, drawer_touch_cb, LV_EVENT_RELEASED, NULL);
@@ -5257,10 +5283,9 @@ static void drawer_build(void)
             if (k_sleep_min_opts[i] == scfg.display_sleep_min) { sel = i; break; }
         lv_dropdown_set_selected(s_dropdown_sleep, sel);
         lv_obj_add_event_cb(s_dropdown_sleep, drawer_dropdown_sleep_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        // The open option-list is created lazily and defaults to a small font;
-        // style it to montserrat_28 to match the closed "Never" text (shared
-        // helper used by the colour-map/band-plan dropdowns).
-        lv_obj_add_event_cb(s_dropdown_sleep, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
+        // Style the lazily-created option list: montserrat_28 (match the closed
+        // "Never" text) and fully unfolded so all 6 options show without scroll.
+        lv_obj_add_event_cb(s_dropdown_sleep, drawer_dropdown_sleep_open_cb, LV_EVENT_CLICKED, NULL);
         y += 124;
     }
 
@@ -5841,6 +5866,10 @@ static void drawer_build(void)
         lv_obj_set_style_pad_hor(drawer_sliders[i], 15, LV_PART_MAIN);
     }
 
+    // Keep the frozen header above all the sections created after it (z-order
+    // follows creation order, so without this the sections would draw over it).
+    lv_obj_move_foreground(hdr_bg);
+
     ESP_LOGI(TAG, "Settings drawer built (off-screen at x=%d)", DISPLAY_H_RES);
 
     // Apply current UI mode's section visibility (drawer is pre-built at
@@ -6176,6 +6205,20 @@ static void drawer_dropdown_cmap_open_cb(lv_event_t *e)
     if (list) {
         lv_obj_set_style_text_font(list, &lv_font_montserrat_28, 0);
     }
+}
+
+// Sleep dropdown: montserrat_28 list font AND fully unfolded (all 6 options
+// shown at once, no scrolling). LVGL caps the option-list height by default,
+// which forces a scrollbar; remove the cap and size to content. The section
+// sits near the top of the drawer, so the ~300px list has room to open down.
+static void drawer_dropdown_sleep_open_cb(lv_event_t *e)
+{
+    lv_obj_t *dd = lv_event_get_target(e);
+    lv_obj_t *list = lv_dropdown_get_list(dd);
+    if (!list) return;
+    lv_obj_set_style_text_font(list, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_max_height(list, LV_COORD_MAX, 0);  // no cap -> no scroll
+    lv_obj_set_height(list, LV_SIZE_CONTENT);            // fit all options
 }
 
 static void drawer_dropdown_bpregion_cb(lv_event_t *e)
