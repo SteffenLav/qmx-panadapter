@@ -203,7 +203,7 @@
      ~11 flat buttons into 3 that pop a small menu UPWARD (bar sits at the
      bottom). The underlying <a> items keep their IDs so their handlers are
      unchanged. */
-  .bot-menu-wrap { position: relative; display: inline-block; margin-left: 0.6rem; }
+  .bot-menu-wrap { position: relative; display: inline-block; margin-left: 1.4rem; }
   .bot-menu-wrap > .bot-btn { margin-left: 0; }
   /* position:fixed (coords set in JS on open) so the popup escapes #bot's
      overflow:hidden, which would otherwise clip a menu popping above the bar. */
@@ -385,9 +385,9 @@
          small upward popup; the underlying <a> items keep their IDs so all
          their existing handlers work unchanged. -->
     <div class="bot-menu-wrap">
-      <button type="button" class="bot-btn" id="log-group-btn" style="display:none">Log &#9650;</button>
+      <button type="button" class="bot-btn" id="log-group-btn" style="display:none">QSO Log &#9650;</button>
       <div class="bot-menu" id="log-menu">
-        <a href="/api/adif" download="qso.adi" id="adif-link">Download ADIF</a>
+        <a href="/api/adif" download="qso.adi" id="adif-link">ADIF download &#8595;</a>
         <a href="#" id="qrz-link">QRZ upload &#8593;</a>
         <a href="#" id="eqsl-link">eQSL upload &#8593;</a>
         <a href="#" id="lotw-link" title="ARRL Logbook of the World. Once set up: signs pending QSOs on-device and uploads. Ctrl-click to re-run setup (e.g. after a certificate renewal).">LoTW setup</a>
@@ -398,13 +398,12 @@
       <div class="bot-menu" id="files-menu">
         <a href="/api/config" download="qmx-config.txt" title="Download all settings + memory channels as an editable text file">Config download &#8595;</a>
         <a href="#" id="cfg-up-link" title="Upload an edited config file (merges; restart to apply)">Config upload &#8593;</a>
-        <a href="/api/log" download="qmx-log.txt" title="Live diagnostic log (full session, in RAM)">Diag log &#8595;</a>
-        <a href="/api/log/saved" download="qmx-log-saved.txt" title="Persisted diag log (SD copy if a card is in, else flash) - survives power-off, e.g. POTA">Diag log (saved) &#8595;</a>
+        <a href="#" id="diag-both-link" title="Download BOTH diagnostic logs: live (RAM, full session) + saved (flash/SD copy that survives power-off, e.g. POTA)">Diagnostic log download &#8595;</a>
         <a href="/ss.bmp" target="_blank">Tab5 screenshot</a>
       </div>
     </div>
     <div class="bot-menu-wrap">
-      <button type="button" class="bot-btn" id="reset-group-btn">Reset &#9650;</button>
+      <button type="button" class="bot-btn" id="reset-group-btn">Miscellaneous &#9650;</button>
       <div class="bot-menu" id="reset-menu">
         <a href="#" id="reset-settings-link" class="danger" title="Reset all app settings + memory channels to defaults (keeps the QSO log and WiFi). Clears a stuck stored value without an esptool full-erase. Reboots.">Reset settings</a>
         <a href="#" id="reset-network-link" class="danger" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
@@ -1139,12 +1138,12 @@ async function tick() {
     qrzKeySet    = !!s.qrz_key_set;
     eqslCredsSet = !!s.eqsl_creds_set;
     lotwReady    = !!s.lotw_ready;
-    if (!lotwBusy) lotwLink.textContent = lotwReady ? "LoTW ↑" : "LoTW setup";
-    // The whole Log menu (ADIF/QRZ/eQSL/LoTW) only makes sense with QSOs logged,
-    // so the Log group button appears only then and carries the count.
+    if (!lotwBusy) lotwLink.textContent = lotwReady ? "LoTW upload ↑" : "LoTW setup";
+    // The whole QSO Log menu (ADIF/QRZ/eQSL/LoTW) only makes sense with QSOs
+    // logged, so the group button appears only then and carries the count.
     if (qsoCount > 0) {
-      adifLink.textContent = "Download ADIF (" + qsoCount + ")";
-      logGroupBtn.textContent = "Log (" + qsoCount + ") ▲";
+      adifLink.textContent = "ADIF download ↓ (" + qsoCount + ")";
+      logGroupBtn.textContent = "QSO Log (" + qsoCount + ") ▲";
       logGroupBtn.style.display = "";
     } else {
       logGroupBtn.style.display = "none";
@@ -1456,16 +1455,41 @@ document.addEventListener("keypress", (e) => {
       const willOpen = !m.classList.contains("open");
       closeAll(menuId);
       if (willOpen) {
-        // Anchor the fixed-position popup just above the button, right edges aligned.
-        const r = b.getBoundingClientRect();
-        m.style.right  = (window.innerWidth  - r.right) + "px";
+        // Show first so we can measure its width, then centre the fixed-position
+        // popup horizontally over the button and sit it just above the bar.
+        // Clamp to the viewport so an edge button's menu never runs off-screen.
+        m.classList.add("open");
+        const r  = b.getBoundingClientRect();
+        const mw = m.offsetWidth;
+        let left = r.left + r.width / 2 - mw / 2;
+        left = Math.max(6, Math.min(left, window.innerWidth - mw - 6));
+        m.style.left   = left + "px";
+        m.style.right  = "auto";
         m.style.bottom = (window.innerHeight - r.top + 4) + "px";
-        m.style.left   = "auto";
+      } else {
+        m.classList.remove("open");
       }
-      m.classList.toggle("open", willOpen);
     });
   }
   document.addEventListener("click", () => closeAll(null));
+
+  /* Diagnostic log: download BOTH the live (RAM, full session) and saved
+     (flash/SD, survives power-off) logs from one click. A single <a download>
+     can only fetch one file, so trigger two staggered downloads - browsers
+     allow multiple downloads from one user gesture (may prompt once). */
+  const diagBoth = document.getElementById("diag-both-link");
+  if (diagBoth) {
+    diagBoth.addEventListener("click", (e) => {
+      e.preventDefault();
+      const dl = (url, name) => {
+        const a = document.createElement("a");
+        a.href = url; a.download = name;
+        document.body.appendChild(a); a.click(); a.remove();
+      };
+      dl("/api/log", "qmx-log.txt");
+      setTimeout(() => dl("/api/log/saved", "qmx-log-saved.txt"), 600);
+    });
+  }
 })();
 
 // Dev-only resource-monitor overlay toggle. keydown (not keypress) is

@@ -5232,25 +5232,36 @@ static void drawer_build(void)
         qmx_settings_t scfg;
         settings_load_all(&scfg);
 
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_SLEEP, y, 100);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SLEEP, y, 124);
         lv_obj_t *hdr = lv_label_create(sec);
-        lv_label_set_text(hdr, "Display sleep (2-finger 2x tap = now)");
+        lv_label_set_text(hdr, "Display sleep");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
         lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        // Gesture hint on its own second line, smaller + dimmed (subtitle style).
+        lv_obj_t *hint = lv_label_create(sec);
+        lv_label_set_text(hint, "2-finger 2x tap = sleep now");
+        lv_obj_set_style_text_color(hint, lv_color_hex(0x909090), 0);
+        lv_obj_set_style_text_font(hint, &lv_font_montserrat_22, 0);
+        lv_obj_align(hint, LV_ALIGN_TOP_LEFT, 0, 36);
 
         s_dropdown_sleep = lv_dropdown_create(sec);
         lv_dropdown_set_options(s_dropdown_sleep,
                                 "Never\n1 min\n2 min\n5 min\n10 min\n30 min");
         lv_obj_set_size(s_dropdown_sleep, DRAWER_W - 32, 50);
-        lv_obj_align(s_dropdown_sleep, LV_ALIGN_TOP_LEFT, 0, 40);
+        lv_obj_align(s_dropdown_sleep, LV_ALIGN_TOP_LEFT, 0, 68);
         lv_obj_set_style_text_font(s_dropdown_sleep, &lv_font_montserrat_28, 0);
         uint32_t sel = 0;
         for (uint32_t i = 0; i < sizeof(k_sleep_min_opts); i++)
             if (k_sleep_min_opts[i] == scfg.display_sleep_min) { sel = i; break; }
         lv_dropdown_set_selected(s_dropdown_sleep, sel);
         lv_obj_add_event_cb(s_dropdown_sleep, drawer_dropdown_sleep_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        y += 100;
+        // The open option-list is created lazily and defaults to a small font;
+        // style it to montserrat_28 to match the closed "Never" text (shared
+        // helper used by the colour-map/band-plan dropdowns).
+        lv_obj_add_event_cb(s_dropdown_sleep, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
+        y += 124;
     }
 
     // Battery care: stop charging once the pack reaches a configurable
@@ -5892,7 +5903,7 @@ static void drawer_set_ft8_mode(bool ft8)
     static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_SLEEP, DRAWER_SEC_CHARGE, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
     // Heights must line up 1:1 with keep[] above (same order) - each is the
     // height passed to that section's own drawer_section(ID, y, height) call.
-    static const int keep_h[] = { 56, 100, 136, 56, 56, 128, 72, 130 };
+    static const int keep_h[] = { 56, 124, 136, 56, 56, 128, 72, 130 };
     const int n_keep = sizeof(keep) / sizeof(keep[0]);
 
     // Antenna Tune entry button lives inside DRAWER_SEC_WIFI (always shown in
