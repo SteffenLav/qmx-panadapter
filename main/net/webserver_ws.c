@@ -5,6 +5,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "lwip/sockets.h"   // setsockopt / SO_SNDTIMEO on the WS fd
 
 #include "cat.h"
 #include "dsp.h"
@@ -94,6 +95,22 @@ static esp_err_t ws_uri_handler(httpd_req_t *req)
     }
     s_ws_fd = fd;
     s_session_active = true;
+
+    // Bound how long a single WS send may block. On a weak/congested link
+    // (this board's esp_hosted WiFi, worse at low RSSI) a send into a full TCP
+    // window was serial-captured blocking ~3 s ("2 in a row, 6000ms"); because
+    // httpd is single-threaded, that froze the WHOLE web server — even
+    // /api/status — for seconds (the "big time freeze", 2026-07-14). A short
+    // SO_SNDTIMEO makes a stuck send fail fast with EAGAIN so the push task's
+    // fail-streak logic tears the session down and the httpd worker is freed in
+    // <0.5 s instead of blocking; the browser then reconnects cleanly. This
+    // bounds the freeze DURATION; it can't speed up a weak link (that's the
+    // -77 dBm signal), so brief blips/reconnects still happen when it congests.
+    {
+        struct timeval tv = { .tv_sec = 0, .tv_usec = 400000 };  // 400 ms
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    }
+
     ESP_LOGI(TAG, "Client connected, fd=%d -- push task takes over", fd);
     return ESP_OK;  // <-- frees httpd worker immediately
 }
