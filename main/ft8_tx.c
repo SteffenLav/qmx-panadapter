@@ -461,6 +461,25 @@ bool ft8_tx_build_request_text(const char *message_text,
         return false;
     }
 
+    // Defensive trim: a stray leading/trailing space makes ftx_message_encode
+    // fail (it breaks "CQ" detection), which silently aborts a TX. Trim into a
+    // local copy so every caller is protected regardless of where the text came
+    // from (field-hit: a CQ preset saved as " CQ JP ...", 2026-07-15).
+    char trimmed[32];   // matches out_req->display_text; FT8 messages are short
+    {
+        const char *p = message_text;
+        while (*p == ' ' || *p == '\t') p++;
+        strncpy(trimmed, p, sizeof(trimmed) - 1);
+        trimmed[sizeof(trimmed) - 1] = '\0';
+        size_t n = strlen(trimmed);
+        while (n > 0 && (trimmed[n - 1] == ' ' || trimmed[n - 1] == '\t')) trimmed[--n] = '\0';
+        if (!trimmed[0]) {
+            if (out_err) snprintf(out_err, out_err_len, "Empty message");
+            return false;
+        }
+        message_text = trimmed;
+    }
+
     ftx_message_t msg;
     ftx_message_rc_t rc = ftx_message_encode(&msg, ft8_hash_if(), message_text);
     if (rc != FTX_MESSAGE_RC_OK) {
@@ -475,7 +494,7 @@ bool ft8_tx_build_request_text(const char *message_text,
     out_req->want_even_slot = false;
     out_req->protocol      = cur_proto();
     encode_tones(msg.payload, out_req->tones, out_req->protocol);
-    strncpy(out_req->display_text, message_text, sizeof(out_req->display_text) - 1);
+    snprintf(out_req->display_text, sizeof(out_req->display_text), "%s", message_text);
 
     ESP_LOGI(TAG, "built text CQ: '%s' @ %d Hz", out_req->display_text, audio_freq_hz);
     return true;

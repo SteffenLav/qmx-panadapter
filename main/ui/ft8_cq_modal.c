@@ -40,6 +40,19 @@ static void to_upper_inplace(char *s)
     for (; *s; s++) *s = (char)toupper((unsigned char)*s);
 }
 
+// Strip leading/trailing spaces in place. A stray leading space breaks
+// ftx_message_encode's "CQ" detection, so a preset saved as " CQ JP ..."
+// silently failed to transmit and fell through to the identity modal
+// (field-hit on the 3rd preset, 2026-07-15).
+static void trim_inplace(char *s)
+{
+    char *p = s;
+    while (*p == ' ' || *p == '\t') p++;
+    if (p != s) memmove(s, p, strlen(p) + 1);
+    size_t n = strlen(s);
+    while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t')) s[--n] = '\0';
+}
+
 // Build "CQ <call> <grid>" from stored identity (or "CQ" if unset).
 static void build_default_cq(char *out, size_t len)
 {
@@ -104,6 +117,7 @@ void ft8_cq_get_active_text(char *out, size_t len)
     } else {
         build_default_cq(base, sizeof(base));  // empty slot -> default CQ
     }
+    trim_inplace(base);   // tolerate an already-stored leading/trailing space
     apply_fd_tag(base, out, len, s.field_day_en);
 }
 
@@ -263,7 +277,7 @@ static void save_btn_cb(lv_event_t *e)
     for (int i = 0; i < N_CQ; i++) {
         char buf[28] = {0};
         const char *raw = s_ta[i] ? lv_textarea_get_text(s_ta[i]) : NULL;
-        if (raw) { strncpy(buf, raw, sizeof(buf) - 1); to_upper_inplace(buf); }
+        if (raw) { strncpy(buf, raw, sizeof(buf) - 1); to_upper_inplace(buf); trim_inplace(buf); }
         settings_set_cq_msg((uint8_t)i, buf);
     }
     settings_set_cq_sel((uint8_t)s_sel);
