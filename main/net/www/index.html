@@ -205,11 +205,13 @@
      unchanged. */
   .bot-menu-wrap { position: relative; display: inline-block; margin-left: 0.6rem; }
   .bot-menu-wrap > .bot-btn { margin-left: 0; }
+  /* position:fixed (coords set in JS on open) so the popup escapes #bot's
+     overflow:hidden, which would otherwise clip a menu popping above the bar. */
   .bot-menu {
-    position: absolute; bottom: calc(100% + 4px); right: 0;
+    position: fixed; left: auto; right: 0; bottom: 3rem;
     display: none; flex-direction: column; gap: 2px;
     background: var(--card); border: 1px solid var(--border); border-radius: 6px;
-    padding: 4px; min-width: 170px; z-index: 50;
+    padding: 4px; min-width: 170px; z-index: 1000;
     box-shadow: 0 4px 14px rgba(0,0,0,0.55);
   }
   .bot-menu.open { display: flex; }
@@ -1453,6 +1455,13 @@ document.addEventListener("keypress", (e) => {
       e.stopPropagation();   // don't let the document handler immediately re-close
       const willOpen = !m.classList.contains("open");
       closeAll(menuId);
+      if (willOpen) {
+        // Anchor the fixed-position popup just above the button, right edges aligned.
+        const r = b.getBoundingClientRect();
+        m.style.right  = (window.innerWidth  - r.right) + "px";
+        m.style.bottom = (window.innerHeight - r.top + 4) + "px";
+        m.style.left   = "auto";
+      }
       m.classList.toggle("open", willOpen);
     });
   }
