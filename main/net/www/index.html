@@ -611,15 +611,35 @@ document.getElementById("eqsl-link").addEventListener("click", async (e) => {
 /* LoTW upload — first use opens the one-time cert-import dialog (see the
    #lotw-modal markup); after that each click signs pending QSOs on the Tab5
    and uploads the TQ8 to lotw.arrl.org. */
-function loadForge() {
-  if (window.forge) return Promise.resolve();
-  return new Promise((res, rej) => {
-    const s = document.createElement("script");
-    s.src = "/forge.min.js";
-    s.onload = res;
-    s.onerror = () => rej(new Error("couldn't load forge.min.js from the Tab5"));
-    document.head.appendChild(s);
-  });
+async function loadForge() {
+  if (window.forge) return;
+  // fetch() (not a <script> tag) so a stall gives a real error we can retry,
+  // not the opaque one-shot onerror. Callers pause the WS first (see pauseWs)
+  // so this ~73 KB transfer has the fragile link to itself; still retry a
+  // couple of times in case a frame was in flight. Inject the text once
+  // downloaded - forge's UMD wrapper sets window.forge.
+  let lastErr;
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 20000);
+      const r = await fetch("/forge.min.js", { cache: "force-cache", signal: ctl.signal });
+      clearTimeout(timer);
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const code = await r.text();
+      const s = document.createElement("script");
+      s.textContent = code;
+      document.head.appendChild(s);
+      if (!window.forge) throw new Error("forge did not initialise");
+      return;
+    } catch (e) {
+      lastErr = e;
+      if (attempt < 3) await new Promise(res => setTimeout(res, 800));
+    }
+  }
+  throw new Error("couldn't load the certificate library from the Tab5 (" +
+                  (lastErr && lastErr.message ? lastErr.message : "network") +
+                  "). Its WiFi link may be busy - try again.");
 }
 
 /* Parse the .p12 with forge (handles both TQSL's legacy RC2-40/3DES exports
@@ -660,15 +680,22 @@ async function lotwRunUpload() {
   const link = document.getElementById("lotw-link");
   lotwBusy = true;
   link.textContent = "Signing…";
+  pauseWs();   // give the fragile link to the TLS upload (server also quiets itself)
   try {
     await fetch("/api/lotw_upload", { method: "POST" });
     await pollUploadStatus("LoTW");
   } catch (err) {
     alert("LoTW upload failed: " + err);
   } finally {
+    resumeWs();
     lotwBusy = false;
     link.textContent = lotwReady ? "LoTW ↑" : "LoTW setup";
   }
+}
+
+function lotwCloseModal() {
+  document.getElementById("lotw-modal").style.display = "none";
+  resumeWs();
 }
 
 function lotwShowPage(n) {
@@ -680,6 +707,7 @@ function lotwOpenSetup() {
   document.getElementById("lotw-err").textContent = "";
   lotwShowPage(1);
   document.getElementById("lotw-modal").style.display = "";
+  pauseWs();   // quiet the spectrum stream for the whole setup (esp. the forge fetch)
 }
 
 document.getElementById("lotw-link").addEventListener("click", (e) => {
@@ -703,12 +731,8 @@ document.getElementById("lotw-havefile").addEventListener("click", () => {
 document.getElementById("lotw-back").addEventListener("click", () => {
   lotwShowPage(1);
 });
-document.getElementById("lotw-cancel1").addEventListener("click", () => {
-  document.getElementById("lotw-modal").style.display = "none";
-});
-document.getElementById("lotw-cancel").addEventListener("click", () => {
-  document.getElementById("lotw-modal").style.display = "none";
-});
+document.getElementById("lotw-cancel1").addEventListener("click", lotwCloseModal);
+document.getElementById("lotw-cancel").addEventListener("click", lotwCloseModal);
 
 document.getElementById("lotw-import").addEventListener("click", async () => {
   const errEl = document.getElementById("lotw-err");
@@ -731,10 +755,10 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
     });
     if (!r.ok) throw new Error("Tab5 rejected the import (HTTP " + r.status + ")");
     lotwReady = true;
-    document.getElementById("lotw-modal").style.display = "none";
+    lotwCloseModal();   // hides modal + resumes the WS stream
     const who = parsed.call ? " for " + parsed.call : "";
     if (confirm("LoTW certificate" + who + " imported. Upload the pending QSOs now?"))
-      lotwRunUpload();
+      lotwRunUpload();   // re-pauses/resumes the WS around the upload itself
   } catch (err) {
     errEl.textContent = String(err.message || err);
   } finally {
@@ -1861,6 +1885,22 @@ refreshSizes();
 
 /* WebSocket */
 let ws=null, frameCount=0, lastFpsAt=performance.now();
+let wsSuppressReconnect=false;
+
+/* Temporarily stop the spectrum WebSocket. This device's esp_hosted WiFi
+   link is fragile and low-throughput; the ~10 fps spectrum stream saturates
+   the uplink, and a large competing fetch (e.g. the 73 KB forge.min.js for
+   LoTW setup) then stalls and can wedge the single-threaded httpd entirely.
+   The upload path already quiets things server-side; pauseWs() does the
+   client half so a big fetch has the link to itself. */
+function pauseWs() {
+  wsSuppressReconnect = true;
+  if (ws) { try { ws.close(); } catch (e) {} ws = null; }
+}
+function resumeWs() {
+  wsSuppressReconnect = false;
+  if (!ws) connectWs();
+}
 
 function connectWs() {
   const url=(location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws";
@@ -1885,7 +1925,7 @@ function connectWs() {
       frameCount=0; lastFpsAt=now;
     }
   };
-  ws.onclose=()=>{ fpsEl.textContent="reconnecting"; fpsEl.classList.add("bad"); setTimeout(connectWs,2000); };
+  ws.onclose=()=>{ fpsEl.textContent="reconnecting"; fpsEl.classList.add("bad"); if(!wsSuppressReconnect) setTimeout(connectWs,2000); };
   ws.onerror=()=>{};
 }
 /* =====================================================================
