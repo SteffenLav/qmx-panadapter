@@ -358,7 +358,7 @@
     <a href="/api/adif" download="qso.adi" id="adif-link" class="bot-btn" style="display:none">0 QSOs &#8595;</a>
     <a href="#" id="qrz-link" class="bot-btn" style="display:none">QRZ &#8593;</a>
     <a href="#" id="eqsl-link" class="bot-btn" style="display:none">eQSL &#8593;</a>
-    <a href="#" id="lotw-link" class="bot-btn" style="display:none" title="Sign pending QSOs on-device and upload to ARRL Logbook of the World">LoTW &#8593;</a>
+    <a href="#" id="lotw-link" class="bot-btn" style="display:none" title="ARRL Logbook of the World. Once set up: signs pending QSOs on-device and uploads. Ctrl-click to re-run setup (e.g. after a certificate renewal).">LoTW setup</a>
     <a href="/api/log" download="qmx-log.txt" class="bot-btn" title="Live diagnostic log (full session, in RAM)">Diag &#8595;</a>
     <a href="/api/log/saved" download="qmx-log-saved.txt" class="bot-btn" title="Persisted diagnostic log (full SD-card copy if a card is in, else the flash copy) - survives power-off, e.g. after a POTA session">Diag(saved) &#8595;</a>
     <a href="/api/config" download="qmx-config.txt" class="bot-btn" title="Download all settings + memory channels as an editable text file">Config &#8595;</a>
@@ -369,35 +369,66 @@
     <a href="/ss.bmp" target="_blank" class="bot-btn">Tab5Shot</a>
   </div>
 
-  <!-- LoTW one-time setup: .p12 parsed in the BROWSER (forge.js, lazy-loaded);
-       only the extracted cert+key DER are POSTed to the Tab5. -->
+  <!-- LoTW one-time setup, two pages: (1) how to get the .p12 out of TQSL -
+       most users did this once, years ago - with a button straight to ARRL's
+       own step-by-step page; (2) the import form. The .p12 is parsed in the
+       BROWSER (forge.js, lazy-loaded); only the extracted cert+key DER are
+       POSTed to the Tab5 - the passphrase never leaves this page. -->
   <div id="lotw-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1000;">
-    <div style="max-width:500px; margin:6vh auto; background:#161616; border:1px solid #494949; border-radius:10px; padding:18px 22px; color:#ddd; font-size:14px; line-height:1.45;">
-      <h3 style="margin:0 0 10px; color:#ffa040;">LoTW setup (one-time)</h3>
-      <p style="margin:0 0 12px; color:#999;">
-        Export your callsign certificate from TQSL on your PC:
-        <i>Callsign Certificates &rarr; select your callsign &rarr; Save Callsign Certificate File</i>
-        (a <b>.p12</b> file). It is decoded here in your browser &mdash; the passphrase
-        never leaves this page; only the certificate and key reach the Tab5.
-      </p>
-      <label>Certificate file (.p12)<br>
-        <input type="file" id="lotw-p12" accept=".p12,.pfx" style="margin-top:4px"></label>
-      <br><br>
-      <label>.p12 passphrase<br>
-        <input type="password" id="lotw-pass" style="margin-top:4px; width:60%"></label>
-      <br><br>
-      <label>DXCC entity number
-        <input type="text" id="lotw-dxcc" inputmode="numeric" size="5" style="margin-left:6px"></label>
-      <span style="color:#888"> &mdash; same as your TQSL station location (e.g. Denmark&nbsp;=&nbsp;221, USA&nbsp;=&nbsp;291)</span>
-      <br><br>
-      <label>CQ zone <input type="text" id="lotw-cqz" inputmode="numeric" size="3" style="margin-left:4px"></label>
-      <label style="margin-left:16px">ITU zone <input type="text" id="lotw-ituz" inputmode="numeric" size="3" style="margin-left:4px"></label>
-      <span style="color:#888"> (optional)</span>
-      <div id="lotw-err" style="color:#ff6055; min-height:20px; margin-top:10px;"></div>
-      <div style="text-align:right; margin-top:8px;">
-        <button id="lotw-cancel" class="bot-btn" style="cursor:pointer">Cancel</button>
-        <button id="lotw-import" class="bot-btn" style="cursor:pointer; margin-left:12px">Import</button>
+    <div style="max-width:520px; margin:6vh auto; background:#161616; border:1px solid #494949; border-radius:10px; padding:18px 22px; color:#ddd; font-size:14px; line-height:1.5;">
+
+      <div id="lotw-page1">
+        <h3 style="margin:0 0 10px; color:#ffa040;">LoTW setup &mdash; step 1 of 2: your certificate file</h3>
+        <p style="margin:0 0 10px; color:#bbb;">
+          The Tab5 signs and uploads QSOs itself &mdash; it just needs a one-time copy of
+          your LoTW <b>callsign certificate</b> as a <b>.p12</b> file. You make that file
+          with TQSL on your PC (takes a minute):
+        </p>
+        <ol style="margin:0 0 10px 20px; padding:0; color:#bbb;">
+          <li>Start <b>TQSL</b> and open the <b>Callsign Certificates</b> tab.</li>
+          <li>Click your callsign, then <b>Save the Callsign Certificate</b>.</li>
+          <li>Pick a location, set a password when asked, and save the <b>.p12</b> file.</li>
+        </ol>
+        <p style="margin:0 0 12px; color:#888;">
+          <b>Next</b> opens ARRL's own illustrated instructions in a new tab and continues
+          to the import step. No LoTW account yet? Start at
+          <a href="https://lotw.arrl.org/lotw-help/getting-started/" target="_blank" rel="noopener" style="color:#ffa040;">ARRL's Getting Started guide</a>
+          first, then come back here.
+        </p>
+        <div style="text-align:right;">
+          <button id="lotw-cancel1" class="bot-btn" style="cursor:pointer">Cancel</button>
+          <button id="lotw-havefile" class="bot-btn" style="cursor:pointer; margin-left:12px" title="Skip the instructions - go straight to picking the file">I have my .p12</button>
+          <button id="lotw-next" class="bot-btn" style="cursor:pointer; margin-left:12px">Next &rarr;</button>
+        </div>
       </div>
+
+      <div id="lotw-page2" style="display:none;">
+        <h3 style="margin:0 0 10px; color:#ffa040;">LoTW setup &mdash; step 2 of 2: import it</h3>
+        <p style="margin:0 0 12px; color:#999;">
+          The file is decoded here in your browser &mdash; the passphrase never leaves
+          this page; only the certificate and key reach the Tab5.
+        </p>
+        <label>Certificate file (.p12)<br>
+          <input type="file" id="lotw-p12" accept=".p12,.pfx" style="margin-top:4px"></label>
+        <br><br>
+        <label>.p12 password (leave empty if you didn't set one)<br>
+          <input type="password" id="lotw-pass" style="margin-top:4px; width:60%"></label>
+        <br><br>
+        <label>DXCC entity number
+          <input type="text" id="lotw-dxcc" inputmode="numeric" size="5" style="margin-left:6px"></label>
+        <span style="color:#888"> &mdash; same as your TQSL station location (e.g. Denmark&nbsp;=&nbsp;221, USA&nbsp;=&nbsp;291)</span>
+        <br><br>
+        <label>CQ zone <input type="text" id="lotw-cqz" inputmode="numeric" size="3" style="margin-left:4px"></label>
+        <label style="margin-left:16px">ITU zone <input type="text" id="lotw-ituz" inputmode="numeric" size="3" style="margin-left:4px"></label>
+        <span style="color:#888"> (optional)</span>
+        <div id="lotw-err" style="color:#ff6055; min-height:20px; margin-top:10px;"></div>
+        <div style="text-align:right; margin-top:8px;">
+          <button id="lotw-back" class="bot-btn" style="cursor:pointer; float:left" title="Back to the instructions">&larr; Back</button>
+          <button id="lotw-cancel" class="bot-btn" style="cursor:pointer">Cancel</button>
+          <button id="lotw-import" class="bot-btn" style="cursor:pointer; margin-left:12px">Import</button>
+        </div>
+      </div>
+
     </div>
   </div>
 
@@ -623,9 +654,11 @@ async function lotwParseP12(file, pass) {
   return { cert: forge.util.encode64(certDer), key: forge.util.encode64(keyDer), call: call };
 }
 
+let lotwBusy = false;   // suppress the 1 Hz label refresh while "Signing…" shows
+
 async function lotwRunUpload() {
   const link = document.getElementById("lotw-link");
-  const prevText = link.textContent;
+  lotwBusy = true;
   link.textContent = "Signing…";
   try {
     await fetch("/api/lotw_upload", { method: "POST" });
@@ -633,17 +666,46 @@ async function lotwRunUpload() {
   } catch (err) {
     alert("LoTW upload failed: " + err);
   } finally {
-    link.textContent = prevText;
+    lotwBusy = false;
+    link.textContent = lotwReady ? "LoTW ↑" : "LoTW setup";
   }
+}
+
+function lotwShowPage(n) {
+  document.getElementById("lotw-page1").style.display = (n === 1) ? "" : "none";
+  document.getElementById("lotw-page2").style.display = (n === 2) ? "" : "none";
+}
+
+function lotwOpenSetup() {
+  document.getElementById("lotw-err").textContent = "";
+  lotwShowPage(1);
+  document.getElementById("lotw-modal").style.display = "";
 }
 
 document.getElementById("lotw-link").addEventListener("click", (e) => {
   e.preventDefault();
-  if (lotwReady) { lotwRunUpload(); return; }
-  document.getElementById("lotw-err").textContent = "";
-  document.getElementById("lotw-modal").style.display = "";
+  // Ctrl-click re-runs setup even when already configured - the certificate
+  // expires every ~3 years and the renewed one needs a fresh import.
+  if (lotwReady && !e.ctrlKey) { lotwRunUpload(); return; }
+  lotwOpenSetup();
 });
 
+/* Page 1 (how to get the .p12): Next opens ARRL's own step-by-step page
+   for "Save Callsign Certificate" in a new tab AND advances to the import
+   form; "I have my .p12" skips straight there. */
+document.getElementById("lotw-next").addEventListener("click", () => {
+  window.open("https://lotw.arrl.org/lotw-help/save-certificate/", "_blank", "noopener");
+  lotwShowPage(2);
+});
+document.getElementById("lotw-havefile").addEventListener("click", () => {
+  lotwShowPage(2);
+});
+document.getElementById("lotw-back").addEventListener("click", () => {
+  lotwShowPage(1);
+});
+document.getElementById("lotw-cancel1").addEventListener("click", () => {
+  document.getElementById("lotw-modal").style.display = "none";
+});
 document.getElementById("lotw-cancel").addEventListener("click", () => {
   document.getElementById("lotw-modal").style.display = "none";
 });
@@ -1007,6 +1069,7 @@ async function tick() {
     qrzKeySet    = !!s.qrz_key_set;
     eqslCredsSet = !!s.eqsl_creds_set;
     lotwReady    = !!s.lotw_ready;
+    if (!lotwBusy) lotwLink.textContent = lotwReady ? "LoTW ↑" : "LoTW setup";
     if (qsoCount > 0) {
       adifLink.textContent = qsoCount + " QSO" + (qsoCount === 1 ? "" : "s") + " ↓";
       adifLink.style.display = "";
