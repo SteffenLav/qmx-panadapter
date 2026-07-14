@@ -97,6 +97,12 @@ typedef struct {
     bool     resmon_en;         // resource-monitor floating overlay shown (default false)
     int16_t  resmon_dx;         // its position: offset from screen top-left, px (default 0,0)
     int16_t  resmon_dy;
+    // LoTW station-location fields (the cert + private key themselves live on
+    // SPIFFS via lotw_upload.c, not in NVS - they're multi-KB blobs).
+    char     lotw_dxcc[8];      // DXCC entity NUMBER as digits, e.g. "221" (required for upload)
+    char     lotw_cqz[4];       // CQ zone, e.g. "14" (optional, part of the QSO signature when set)
+    char     lotw_ituz[4];      // ITU zone, e.g. "18" (optional, ditto)
+    uint32_t lotw_uploaded_n;   // count of ADIF records already uploaded to LoTW
 } qmx_settings_t;
 
 // Initialise the settings module. Opens an NVS handle. Safe to call
@@ -231,6 +237,18 @@ void settings_set_eqsl_pswd(const char *pswd);
 // Count of ADIF records already uploaded to eQSL (offset into the log file
 // for the next upload batch). Debounced flush.
 void settings_set_eqsl_uploaded_n(uint32_t n);
+
+// LoTW station-location fields, set via the web UI's cert-import dialog
+// (debounced flush). DXCC is the entity number as a digit string; zones are
+// optional and become part of every QSO's signature when set - changing them
+// only affects QSOs signed after the change.
+void settings_set_lotw_dxcc(const char *dxcc);
+void settings_set_lotw_cqz(const char *cqz);
+void settings_set_lotw_ituz(const char *ituz);
+
+// Count of ADIF records already uploaded to LoTW (offset into the log file
+// for the next upload batch). Debounced flush.
+void settings_set_lotw_uploaded_n(uint32_t n);
 
 // QMX IF offset calibration trim (Hz). Per-unit oscillator variance shifts
 // the +12 kHz IF injection; this trim corrects what users see on the spectrum/

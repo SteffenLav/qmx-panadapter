@@ -358,6 +358,7 @@
     <a href="/api/adif" download="qso.adi" id="adif-link" class="bot-btn" style="display:none">0 QSOs &#8595;</a>
     <a href="#" id="qrz-link" class="bot-btn" style="display:none">QRZ &#8593;</a>
     <a href="#" id="eqsl-link" class="bot-btn" style="display:none">eQSL &#8593;</a>
+    <a href="#" id="lotw-link" class="bot-btn" style="display:none" title="Sign pending QSOs on-device and upload to ARRL Logbook of the World">LoTW &#8593;</a>
     <a href="/api/log" download="qmx-log.txt" class="bot-btn" title="Live diagnostic log (full session, in RAM)">Diag &#8595;</a>
     <a href="/api/log/saved" download="qmx-log-saved.txt" class="bot-btn" title="Persisted diagnostic log (full SD-card copy if a card is in, else the flash copy) - survives power-off, e.g. after a POTA session">Diag(saved) &#8595;</a>
     <a href="/api/config" download="qmx-config.txt" class="bot-btn" title="Download all settings + memory channels as an editable text file">Config &#8595;</a>
@@ -366,6 +367,38 @@
     <a href="#" id="reset-settings-link" class="bot-btn" title="Reset all app settings + memory channels to defaults (keeps the QSO log and WiFi). Clears a stuck stored value without an esptool full-erase. Reboots.">Reset Settings</a>
     <a href="#" id="reset-network-link" class="bot-btn" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
     <a href="/ss.bmp" target="_blank" class="bot-btn">Tab5Shot</a>
+  </div>
+
+  <!-- LoTW one-time setup: .p12 parsed in the BROWSER (forge.js, lazy-loaded);
+       only the extracted cert+key DER are POSTed to the Tab5. -->
+  <div id="lotw-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1000;">
+    <div style="max-width:500px; margin:6vh auto; background:#161616; border:1px solid #494949; border-radius:10px; padding:18px 22px; color:#ddd; font-size:14px; line-height:1.45;">
+      <h3 style="margin:0 0 10px; color:#ffa040;">LoTW setup (one-time)</h3>
+      <p style="margin:0 0 12px; color:#999;">
+        Export your callsign certificate from TQSL on your PC:
+        <i>Callsign Certificates &rarr; select your callsign &rarr; Save Callsign Certificate File</i>
+        (a <b>.p12</b> file). It is decoded here in your browser &mdash; the passphrase
+        never leaves this page; only the certificate and key reach the Tab5.
+      </p>
+      <label>Certificate file (.p12)<br>
+        <input type="file" id="lotw-p12" accept=".p12,.pfx" style="margin-top:4px"></label>
+      <br><br>
+      <label>.p12 passphrase<br>
+        <input type="password" id="lotw-pass" style="margin-top:4px; width:60%"></label>
+      <br><br>
+      <label>DXCC entity number
+        <input type="text" id="lotw-dxcc" inputmode="numeric" size="5" style="margin-left:6px"></label>
+      <span style="color:#888"> &mdash; same as your TQSL station location (e.g. Denmark&nbsp;=&nbsp;221, USA&nbsp;=&nbsp;291)</span>
+      <br><br>
+      <label>CQ zone <input type="text" id="lotw-cqz" inputmode="numeric" size="3" style="margin-left:4px"></label>
+      <label style="margin-left:16px">ITU zone <input type="text" id="lotw-ituz" inputmode="numeric" size="3" style="margin-left:4px"></label>
+      <span style="color:#888"> (optional)</span>
+      <div id="lotw-err" style="color:#ff6055; min-height:20px; margin-top:10px;"></div>
+      <div style="text-align:right; margin-top:8px;">
+        <button id="lotw-cancel" class="bot-btn" style="cursor:pointer">Cancel</button>
+        <button id="lotw-import" class="bot-btn" style="cursor:pointer; margin-left:12px">Import</button>
+      </div>
+    </div>
   </div>
 
 <script>
@@ -390,6 +423,7 @@ let serverUtcAtTick = 0;   // server epoch (s) at last /api/status
 let localAtTick     = 0;   // Date.now()/1000 when that response arrived
 let qrzKeySet        = false;
 let eqslCredsSet     = false;
+let lotwReady        = false;
 let lastBandplan     = null;   // {lo, hi, segs:[{lo,hi,c,l}]} or null if off-band
 let bpDragging       = false;  // true once a bandplan-strip drag has crossed the threshold
 
@@ -540,6 +574,110 @@ document.getElementById("eqsl-link").addEventListener("click", async (e) => {
     alert("eQSL upload failed: " + err);
   } finally {
     link.textContent = prevText;
+  }
+});
+
+/* LoTW upload — first use opens the one-time cert-import dialog (see the
+   #lotw-modal markup); after that each click signs pending QSOs on the Tab5
+   and uploads the TQ8 to lotw.arrl.org. */
+function loadForge() {
+  if (window.forge) return Promise.resolve();
+  return new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = "/forge.min.js";
+    s.onload = res;
+    s.onerror = () => rej(new Error("couldn't load forge.min.js from the Tab5"));
+    document.head.appendChild(s);
+  });
+}
+
+/* Parse the .p12 with forge (handles both TQSL's legacy RC2-40/3DES exports
+   and modern AES/PBES2 ones), pick the cert that matches the private key
+   (TQSL bundles CA certs too), and return single-line base64 DER for both. */
+async function lotwParseP12(file, pass) {
+  await loadForge();
+  const buf = new Uint8Array(await file.arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < buf.length; i += 32768)
+    bin += String.fromCharCode.apply(null, buf.subarray(i, i + 32768));
+  let p12;
+  try {
+    p12 = forge.pkcs12.pkcs12FromAsn1(forge.asn1.fromDer(bin), false, pass);
+  } catch (e) {
+    throw new Error("couldn't open the .p12 - wrong passphrase?");
+  }
+  let keyBags = p12.getBags({ bagType: forge.pki.oids.pkcs8ShroudedKeyBag })[forge.pki.oids.pkcs8ShroudedKeyBag] || [];
+  if (!keyBags.length)
+    keyBags = p12.getBags({ bagType: forge.pki.oids.keyBag })[forge.pki.oids.keyBag] || [];
+  if (!keyBags.length || !keyBags[0].key) throw new Error("no private key found in this .p12");
+  const key = keyBags[0].key;
+  const certBags = p12.getBags({ bagType: forge.pki.oids.certBag })[forge.pki.oids.certBag] || [];
+  const cert = certBags.map(b => b.cert).filter(c => c && c.publicKey && c.publicKey.n)
+    .find(c => c.publicKey.n.compareTo(key.n) === 0);
+  if (!cert) throw new Error("no certificate matching the private key in this .p12");
+  const keyDer  = forge.asn1.toDer(forge.pki.wrapRsaPrivateKey(forge.pki.privateKeyToAsn1(key))).getBytes();
+  const certDer = forge.asn1.toDer(forge.pki.certificateToAsn1(cert)).getBytes();
+  let call = "";   // LoTW callsign attribute, OID 1.3.6.1.4.1.12348.1.1
+  for (const a of cert.subject.attributes)
+    if (a.type === "1.3.6.1.4.1.12348.1.1") call = String(a.value);
+  return { cert: forge.util.encode64(certDer), key: forge.util.encode64(keyDer), call: call };
+}
+
+async function lotwRunUpload() {
+  const link = document.getElementById("lotw-link");
+  const prevText = link.textContent;
+  link.textContent = "Signing…";
+  try {
+    await fetch("/api/lotw_upload", { method: "POST" });
+    await pollUploadStatus("LoTW");
+  } catch (err) {
+    alert("LoTW upload failed: " + err);
+  } finally {
+    link.textContent = prevText;
+  }
+}
+
+document.getElementById("lotw-link").addEventListener("click", (e) => {
+  e.preventDefault();
+  if (lotwReady) { lotwRunUpload(); return; }
+  document.getElementById("lotw-err").textContent = "";
+  document.getElementById("lotw-modal").style.display = "";
+});
+
+document.getElementById("lotw-cancel").addEventListener("click", () => {
+  document.getElementById("lotw-modal").style.display = "none";
+});
+
+document.getElementById("lotw-import").addEventListener("click", async () => {
+  const errEl = document.getElementById("lotw-err");
+  errEl.textContent = "";
+  const file = document.getElementById("lotw-p12").files[0];
+  const pass = document.getElementById("lotw-pass").value;
+  const dxcc = document.getElementById("lotw-dxcc").value.trim();
+  const cqz  = document.getElementById("lotw-cqz").value.trim();
+  const ituz = document.getElementById("lotw-ituz").value.trim();
+  if (!file) { errEl.textContent = "Pick your .p12 file first."; return; }
+  if (!/^[0-9]{1,3}$/.test(dxcc)) { errEl.textContent = "DXCC entity number is required (digits only)."; return; }
+  const btn = document.getElementById("lotw-import");
+  btn.disabled = true;
+  btn.textContent = "Working…";
+  try {
+    const parsed = await lotwParseP12(file, pass);
+    const r = await fetch("/api/lotw_cert", {
+      method: "POST",
+      body: JSON.stringify({ cert: parsed.cert, key: parsed.key, dxcc: dxcc, cqz: cqz, ituz: ituz }),
+    });
+    if (!r.ok) throw new Error("Tab5 rejected the import (HTTP " + r.status + ")");
+    lotwReady = true;
+    document.getElementById("lotw-modal").style.display = "none";
+    const who = parsed.call ? " for " + parsed.call : "";
+    if (confirm("LoTW certificate" + who + " imported. Upload the pending QSOs now?"))
+      lotwRunUpload();
+  } catch (err) {
+    errEl.textContent = String(err.message || err);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Import";
   }
 });
 
@@ -865,17 +1003,21 @@ async function tick() {
     const adifLink = document.getElementById("adif-link");
     const qrzLink  = document.getElementById("qrz-link");
     const eqslLink = document.getElementById("eqsl-link");
+    const lotwLink = document.getElementById("lotw-link");
     qrzKeySet    = !!s.qrz_key_set;
     eqslCredsSet = !!s.eqsl_creds_set;
+    lotwReady    = !!s.lotw_ready;
     if (qsoCount > 0) {
       adifLink.textContent = qsoCount + " QSO" + (qsoCount === 1 ? "" : "s") + " ↓";
       adifLink.style.display = "";
       qrzLink.style.display  = "";
       eqslLink.style.display = "";
+      lotwLink.style.display = "";
     } else {
       adifLink.style.display = "none";
       qrzLink.style.display  = "none";
       eqslLink.style.display = "none";
+      lotwLink.style.display = "none";
     }
 
     /* Bottom-center: UTC clock (tick immediately, interval keeps it running) */

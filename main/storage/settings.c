@@ -73,6 +73,10 @@ static const char *TAG = "settings";
 #define KEY_RESMON_EN      "resmon_en"
 #define KEY_RESMON_DX      "resmon_dx"
 #define KEY_RESMON_DY      "resmon_dy"
+#define KEY_LOTW_DXCC      "lotw_dxcc"
+#define KEY_LOTW_CQZ       "lotw_cqz"
+#define KEY_LOTW_ITUZ      "lotw_ituz"
+#define KEY_LOTW_UPLOADED  "lotw_upl_n"
 
 // Defaults — must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
@@ -155,6 +159,10 @@ static const char *TAG = "settings";
 #define DIRTY_CHARGE_LIM_PCT (1ull << 53)
 #define DIRTY_RESMON_EN      (1ull << 54)
 #define DIRTY_RESMON_POS     (1ull << 55)
+#define DIRTY_LOTW_DXCC      (1ull << 56)
+#define DIRTY_LOTW_CQZ       (1ull << 57)
+#define DIRTY_LOTW_ITUZ      (1ull << 58)
+#define DIRTY_LOTW_UPLOADED  (1ull << 59)
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -175,7 +183,8 @@ static const char *TAG = "settings";
     DIRTY_WIFI_ENABLED | DIRTY_QMX_GPS | DIRTY_FREQ_KP_CALC | \
     DIRTY_QRZ_KEY | DIRTY_EQSL_USER | DIRTY_EQSL_PSWD | \
     DIRTY_WF_BLACK | DIRTY_WF_CONTRAST | DIRTY_WF_BLEND | DIRTY_WF_WINDOW | \
-    DIRTY_DISP_FLIP | DIRTY_CW_AUD_VOL | DIRTY_CHARGE_LIM_EN | DIRTY_CHARGE_LIM_PCT)
+    DIRTY_DISP_FLIP | DIRTY_CW_AUD_VOL | DIRTY_CHARGE_LIM_EN | DIRTY_CHARGE_LIM_PCT | \
+    DIRTY_LOTW_DXCC | DIRTY_LOTW_CQZ | DIRTY_LOTW_ITUZ)
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
@@ -312,6 +321,10 @@ static void flush_task(void *arg)
             nvs_set_i16(s_nvs, KEY_RESMON_DX, snap.resmon_dx);
             nvs_set_i16(s_nvs, KEY_RESMON_DY, snap.resmon_dy);
         }
+        if (dirty_local & DIRTY_LOTW_DXCC)     nvs_set_str(s_nvs, KEY_LOTW_DXCC, snap.lotw_dxcc);
+        if (dirty_local & DIRTY_LOTW_CQZ)      nvs_set_str(s_nvs, KEY_LOTW_CQZ,  snap.lotw_cqz);
+        if (dirty_local & DIRTY_LOTW_ITUZ)     nvs_set_str(s_nvs, KEY_LOTW_ITUZ, snap.lotw_ituz);
+        if (dirty_local & DIRTY_LOTW_UPLOADED) nvs_set_u32(s_nvs, KEY_LOTW_UPLOADED, snap.lotw_uploaded_n);
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
@@ -424,6 +437,10 @@ static void load_from_nvs(qmx_settings_t *out)
     out->resmon_en = false;
     out->resmon_dx = 0;
     out->resmon_dy = 0;
+    out->lotw_dxcc[0] = '\0';
+    out->lotw_cqz[0] = '\0';
+    out->lotw_ituz[0] = '\0';
+    out->lotw_uploaded_n = 0;
 
     if (!s_ready) {
         ESP_LOGW(TAG, "load_all: NVS not ready, using defaults");
@@ -530,6 +547,13 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_RESMON_EN, &u8v) == ESP_OK) out->resmon_en = (u8v != 0);
     nvs_get_i16(s_nvs, KEY_RESMON_DX, &out->resmon_dx);
     nvs_get_i16(s_nvs, KEY_RESMON_DY, &out->resmon_dy);
+    sz = sizeof(out->lotw_dxcc);
+    nvs_get_str(s_nvs, KEY_LOTW_DXCC, out->lotw_dxcc, &sz);
+    sz = sizeof(out->lotw_cqz);
+    nvs_get_str(s_nvs, KEY_LOTW_CQZ, out->lotw_cqz, &sz);
+    sz = sizeof(out->lotw_ituz);
+    nvs_get_str(s_nvs, KEY_LOTW_ITUZ, out->lotw_ituz, &sz);
+    nvs_get_u32(s_nvs, KEY_LOTW_UPLOADED, &out->lotw_uploaded_n);
 
     ESP_LOGI(TAG, "loaded: db=[%.1f..%.1f] ema=%.2f iq=%d",
              out->db_min, out->db_max, out->ema_alpha, out->iq_enabled);
@@ -1153,4 +1177,43 @@ void settings_set_resmon_pos(int16_t dx, int16_t dy)
     s_pending.resmon_dy = dy;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_RESMON_POS);
+}
+
+static void set_lotw_str(char *dst, size_t dst_sz, const char *v, uint64_t bit)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (v) {
+        strncpy(dst, v, dst_sz - 1);
+        dst[dst_sz - 1] = '\0';
+    } else {
+        dst[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(bit);
+}
+
+void settings_set_lotw_dxcc(const char *dxcc)
+{
+    set_lotw_str(s_pending.lotw_dxcc, sizeof(s_pending.lotw_dxcc), dxcc, DIRTY_LOTW_DXCC);
+}
+
+void settings_set_lotw_cqz(const char *cqz)
+{
+    set_lotw_str(s_pending.lotw_cqz, sizeof(s_pending.lotw_cqz), cqz, DIRTY_LOTW_CQZ);
+}
+
+void settings_set_lotw_ituz(const char *ituz)
+{
+    set_lotw_str(s_pending.lotw_ituz, sizeof(s_pending.lotw_ituz), ituz, DIRTY_LOTW_ITUZ);
+}
+
+void settings_set_lotw_uploaded_n(uint32_t n)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.lotw_uploaded_n == n) { xSemaphoreGive(s_mutex); return; }
+    s_pending.lotw_uploaded_n = n;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_LOTW_UPLOADED);
 }

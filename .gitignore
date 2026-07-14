@@ -80,3 +80,12 @@ site/
 
 # Local working notes / correspondence drafts — never publish (repo is public)
 scratchpad/
+
+# LoTW harness scratch output (test/lotw_harness.c regenerates all of it)
+test/*.exe
+test/hx_*
+test/v_*
+test/lotw_test_*.pem
+test/lotw_sample_tq8.txt
+test/device_tq8*
+.claude/

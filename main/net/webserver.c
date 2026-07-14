@@ -18,6 +18,7 @@
 #include "storage/sd_archive.h"  // sd_archive_is_mounted / sd_archive_log_path / lock / unlock
 #include "adif/qrz_upload.h"  // qrz_upload_pending
 #include "adif/eqsl_upload.h" // eqsl_upload_pending
+#include "adif/lotw_upload.h" // lotw_upload_pending / cert storage
 #include "settings.h"          // settings_load_all / settings_set_qrz_api_key
 #include "factory_reset.h"     // factory_reset_request (web-triggered NVS reset)
 #include "bandplan.h"          // bandplan_get_segments / _effective_region / _seg_color
@@ -38,7 +39,7 @@ static httpd_handle_t s_server = NULL;
 // Background upload task: processes QRZ/eQSL uploads without blocking httpd.
 // Runs at priority 3 (below audio/FT8, above idle). Clients poll /api/upload_status
 // to check results instead of blocking the request handler.
-typedef enum { UPLOAD_QRZ, UPLOAD_EQSL } upload_kind_t;
+typedef enum { UPLOAD_QRZ, UPLOAD_EQSL, UPLOAD_LOTW } upload_kind_t;
 typedef struct {
     upload_kind_t kind;
 } upload_request_t;
@@ -59,6 +60,13 @@ static SemaphoreHandle_t s_upload_mutex = NULL;
 // index.html is embedded as a null-terminated string via EMBED_TXTFILES.
 extern const char index_html_start[] asm("_binary_index_html_start");
 extern const char index_html_end[]   asm("_binary_index_html_end");
+
+// node-forge (BSD-3-Clause), pre-gzipped, embedded via EMBED_FILES. Served
+// with Content-Encoding: gzip for the web UI's browser-side p12 parsing -
+// the LoTW cert import. Loaded lazily by the page only when that dialog
+// opens, so it costs nothing on a normal page load.
+extern const uint8_t forge_js_gz_start[] asm("_binary_forge_min_js_gz_start");
+extern const uint8_t forge_js_gz_end[]   asm("_binary_forge_min_js_gz_end");
 
 static esp_err_t root_handler(httpd_req_t *req)
 {
@@ -120,6 +128,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         settings_load_all(&cfg);
         cJSON_AddBoolToObject(root, "qrz_key_set", cfg.qrz_api_key[0] != '\0');
         cJSON_AddBoolToObject(root, "eqsl_creds_set", cfg.eqsl_user[0] != '\0' && cfg.eqsl_pswd[0] != '\0');
+        cJSON_AddBoolToObject(root, "lotw_ready", lotw_cert_present() && cfg.lotw_dxcc[0] != '\0');
 
         // Band-plan for the current band — whole-band strip on the web UI,
         // mirrors update_bandplan_strip() in ui.c. Null if the VFO isn't inside
@@ -558,6 +567,132 @@ static const httpd_uri_t uri_eqsl_upload = {
     .uri = "/api/eqsl_upload", .method = HTTP_POST, .handler = eqsl_upload_handler,
 };
 
+// POST /api/lotw_cert — JSON {"cert":"<b64 DER>","key":"<b64 PKCS#8 DER>",
+// "dxcc":"221","cqz":"14","ituz":"18"}. The browser parsed the user's .p12
+// with forge.js and sends only the extracted DER - the p12 passphrase never
+// reaches the device. cert+key go to SPIFFS, station fields to NVS.
+static esp_err_t lotw_cert_handler(httpd_req_t *req)
+{
+    int total = req->content_len;
+    if (total <= 0 || total > 16384) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad/empty body");
+        return ESP_FAIL;
+    }
+    char *body = heap_caps_malloc(total + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!body) return httpd_resp_send_500(req);
+    int got = 0;
+    while (got < total) {
+        int r = httpd_req_recv(req, body + got, total - got);
+        if (r <= 0) { free(body); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "recv failed"); return ESP_FAIL; }
+        got += r;
+    }
+    body[got] = '\0';
+
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad json");
+        return ESP_FAIL;
+    }
+    const char *cert = cJSON_GetStringValue(cJSON_GetObjectItem(root, "cert"));
+    const char *key  = cJSON_GetStringValue(cJSON_GetObjectItem(root, "key"));
+    const char *dxcc = cJSON_GetStringValue(cJSON_GetObjectItem(root, "dxcc"));
+    const char *cqz  = cJSON_GetStringValue(cJSON_GetObjectItem(root, "cqz"));
+    const char *ituz = cJSON_GetStringValue(cJSON_GetObjectItem(root, "ituz"));
+    bool ok = true;
+    if (cert && key && cert[0] && key[0]) {
+        ok = lotw_store_cert_b64(cert) == ESP_OK &&
+             lotw_store_key_b64(key) == ESP_OK;
+    }
+    if (dxcc) settings_set_lotw_dxcc(dxcc);
+    if (cqz)  settings_set_lotw_cqz(cqz);
+    if (ituz) settings_set_lotw_ituz(ituz);
+    cJSON_Delete(root);
+
+    if (!ok) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "store failed");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+// POST /api/lotw_upload — queues upload, returns 202 Accepted immediately.
+static esp_err_t lotw_upload_handler(httpd_req_t *req)
+{
+    if (!s_upload_queue) {
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "upload task not ready");
+    }
+
+    xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+    if (s_last_upload.busy) {
+        xSemaphoreGive(s_upload_mutex);
+        httpd_resp_set_status(req, "423 Locked");
+        return httpd_resp_sendstr(req, "upload in progress");
+    }
+    s_last_upload.busy = true;
+    s_last_upload.kind = UPLOAD_LOTW;
+    s_last_upload.uploaded = 0;
+    s_last_upload.failed = 0;
+    s_last_upload.error[0] = '\0';
+    xSemaphoreGive(s_upload_mutex);
+
+    upload_request_t up = { .kind = UPLOAD_LOTW };
+    if (!xQueueSend(s_upload_queue, &up, 0)) {
+        xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+        s_last_upload.busy = false;
+        xSemaphoreGive(s_upload_mutex);
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "queue full");
+    }
+
+    httpd_resp_set_status(req, "202 Accepted");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"status\":\"uploading\"}");
+}
+
+// GET /api/lotw_tq8 — the full ADIF log signed into one downloadable .tq8
+// (all records, regardless of the upload cursor). Doubles as the offline
+// verification path: gunzip on a PC must yield a well-formed TQ8, and the
+// file can be hand-uploaded at lotw.arrl.org/lotw/upload.
+static esp_err_t lotw_tq8_handler(httpd_req_t *req)
+{
+    int consumed = 0, nsigned = 0;
+    size_t gz_len = 0;
+    char err[120] = "";
+    uint8_t *gz = lotw_build_tq8_gz(0, adif_log_count(),
+                                    &consumed, &nsigned, &gz_len,
+                                    err, sizeof err);
+    if (!gz) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, err[0] ? err : "no signable QSOs");
+        return ESP_FAIL;
+    }
+    httpd_resp_set_type(req, "application/octet-stream");
+    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=\"qmx_panadapter.tq8\"");
+    esp_err_t rc = httpd_resp_send(req, (const char *)gz, (ssize_t)gz_len);
+    free(gz);
+    return rc;
+}
+
+// GET /forge.min.js — embedded pre-gzipped node-forge for the p12 import.
+static esp_err_t forge_js_handler(httpd_req_t *req)
+{
+    httpd_resp_set_type(req, "application/javascript");
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    httpd_resp_set_hdr(req, "Cache-Control", "max-age=86400");
+    return httpd_resp_send(req, (const char *)forge_js_gz_start,
+                           forge_js_gz_end - forge_js_gz_start);
+}
+
+static const httpd_uri_t uri_lotw_cert = {
+    .uri = "/api/lotw_cert", .method = HTTP_POST, .handler = lotw_cert_handler,
+};
+static const httpd_uri_t uri_lotw_upload = {
+    .uri = "/api/lotw_upload", .method = HTTP_POST, .handler = lotw_upload_handler,
+};
+static const httpd_uri_t uri_lotw_tq8 = {
+    .uri = "/api/lotw_tq8", .method = HTTP_GET, .handler = lotw_tq8_handler,
+};
+static const httpd_uri_t uri_forge_js = {
+    .uri = "/forge.min.js", .method = HTTP_GET, .handler = forge_js_handler,
+};
+
 // GET /api/config — download all settings + memory channels as an editable
 // INI text file (qmx-config.txt). Includes secrets (wifi_pass/qrz/eqsl) so it
 // works as a full backup; the file is the user's to keep private.
@@ -644,7 +779,9 @@ static esp_err_t upload_status_handler(httpd_req_t *req)
 
     cJSON_AddBoolToObject(root, "busy", s_last_upload.busy);
     if (!s_last_upload.busy && s_last_upload.kind != 0) {
-        cJSON_AddStringToObject(root, "kind", s_last_upload.kind == UPLOAD_QRZ ? "qrz" : "eqsl");
+        cJSON_AddStringToObject(root, "kind",
+            s_last_upload.kind == UPLOAD_QRZ  ? "qrz" :
+            s_last_upload.kind == UPLOAD_LOTW ? "lotw" : "eqsl");
         cJSON_AddNumberToObject(root, "uploaded", s_last_upload.uploaded);
         cJSON_AddNumberToObject(root, "failed",   s_last_upload.failed);
         cJSON_AddStringToObject(root, "error",    s_last_upload.error);
@@ -733,6 +870,16 @@ static void upload_task(void *arg)
             s_last_upload.error[sizeof(s_last_upload.error) - 1] = '\0';
             s_last_upload.busy = false;
             xSemaphoreGive(s_upload_mutex);
+        } else if (up.kind == UPLOAD_LOTW) {
+            lotw_upload_result_t result;
+            lotw_upload_pending(&result);
+            xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+            s_last_upload.uploaded = result.uploaded;
+            s_last_upload.failed = result.failed;
+            strncpy(s_last_upload.error, result.error, sizeof(s_last_upload.error) - 1);
+            s_last_upload.error[sizeof(s_last_upload.error) - 1] = '\0';
+            s_last_upload.busy = false;
+            xSemaphoreGive(s_upload_mutex);
         }
         // Stagger the resume - releasing the SD lock, the WS pause, and the
         // DSP quiet all at once (as this used to) means the SD archive
@@ -792,7 +939,7 @@ esp_err_t webserver_start(void)
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.server_port     = 80;
     config.stack_size      = 12288;
-    config.max_uri_handlers = 18;
+    config.max_uri_handlers = 23;
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -821,6 +968,10 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_signal);
     httpd_register_uri_handler(s_server, &uri_eqsl_creds);
     httpd_register_uri_handler(s_server, &uri_eqsl_upload);
+    httpd_register_uri_handler(s_server, &uri_lotw_cert);
+    httpd_register_uri_handler(s_server, &uri_lotw_upload);
+    httpd_register_uri_handler(s_server, &uri_lotw_tq8);
+    httpd_register_uri_handler(s_server, &uri_forge_js);
     httpd_register_uri_handler(s_server, &uri_config_get);
     httpd_register_uri_handler(s_server, &uri_config_post);
     webserver_ws_start(s_server);

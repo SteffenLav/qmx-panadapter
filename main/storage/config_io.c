@@ -10,10 +10,11 @@
 #include "esp_heap_caps.h"
 #include "settings.h"
 #include "mem_channels.h"
+#include "adif/lotw_upload.h"   // lotw_read/store_cert/key_b64 for full backup
 
 static const char *TAG = "config_io";
 
-#define CFG_BUF_BYTES 8192   // settings + 32 memories fit comfortably
+#define CFG_BUF_BYTES 16384  // settings + 32 memories + LoTW cert/key base64 fit comfortably
 
 static const char *yn(bool b) { return b ? "true" : "false"; }
 
@@ -36,7 +37,8 @@ char *config_io_export(size_t *out_len)
     APP("# Edit values and re-upload, or share a single section (e.g. [memories]).\n");
     APP("# Lines starting with # are ignored; unknown keys are ignored. Upload\n");
     APP("# MERGES: only keys present here change. Most settings apply on restart.\n");
-    APP("# NOTE: wifi_pass / qrz_key / eqsl_pass are stored here in clear text.\n\n");
+    APP("# NOTE: wifi_pass / qrz_key / eqsl_pass / lotw_key are stored here in clear\n");
+    APP("# text - this file is a complete backup; keep it private.\n\n");
 
     APP("[settings]\n");
     APP("callsign           = %s\n", c.my_callsign);
@@ -68,6 +70,20 @@ char *config_io_export(size_t *out_len)
     APP("qrz_key            = %s\n", c.qrz_api_key);
     APP("eqsl_user          = %s\n", c.eqsl_user);
     APP("eqsl_pass          = %s\n", c.eqsl_pswd);
+    APP("lotw_dxcc          = %s\n", c.lotw_dxcc);
+    APP("lotw_cqz           = %s\n", c.lotw_cqz);
+    APP("lotw_ituz          = %s\n", c.lotw_ituz);
+    // LoTW callsign cert + private key, single-line base64 DER (full-backup
+    // decision: the config file already carries wifi/qrz/eqsl secrets in
+    // clear, and this makes a restore complete). Omitted when not imported.
+    {
+        char *cb = lotw_read_cert_b64();
+        char *kb = lotw_read_key_b64();
+        if (cb) APP("lotw_cert          = %s\n", cb);
+        if (kb) APP("lotw_key           = %s\n", kb);
+        free(cb);
+        free(kb);
+    }
 
     APP("\n[cq]\n");
     APP("active = %u\n", (unsigned)(c.cq_sel + 1));   // 1-based for the user
@@ -190,6 +206,11 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "qrz_key"))           settings_set_qrz_api_key(val);
             else if (!strcasecmp(key, "eqsl_user"))         settings_set_eqsl_user(val);
             else if (!strcasecmp(key, "eqsl_pass"))         settings_set_eqsl_pswd(val);
+            else if (!strcasecmp(key, "lotw_dxcc"))         settings_set_lotw_dxcc(val);
+            else if (!strcasecmp(key, "lotw_cqz"))          settings_set_lotw_cqz(val);
+            else if (!strcasecmp(key, "lotw_ituz"))         settings_set_lotw_ituz(val);
+            else if (!strcasecmp(key, "lotw_cert"))         lotw_store_cert_b64(val);
+            else if (!strcasecmp(key, "lotw_key"))          lotw_store_key_b64(val);
             else break;   // unknown key: ignore, don't count
             applied++;
             break;

@@ -57,6 +57,8 @@ idf_component_register(
         "adif/adif_log.c"
         "adif/qrz_upload.c"
         "adif/eqsl_upload.c"
+        "adif/lotw_tq8.c"
+        "adif/lotw_upload.c"
         "rtc/rtc.c"
         "time_sync/time_sync.c"
         "keyboard/tab5_keyboard.c"
@@ -104,6 +106,8 @@ idf_component_register(
         fatfs
     EMBED_TXTFILES
         "net/www/index.html"
+    EMBED_FILES
+        "net/www/forge.min.js.gz"
 )
 
 # Route LVGL's 256 KB builtin tlsf pool from internal SRAM BSS to PSRAM.
