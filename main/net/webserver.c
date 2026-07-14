@@ -603,6 +603,15 @@ static esp_err_t lotw_cert_handler(httpd_req_t *req)
     if (cert && key && cert[0] && key[0]) {
         ok = lotw_store_cert_b64(cert) == ESP_OK &&
              lotw_store_key_b64(key) == ESP_OK;
+        // A new certificate means everything previously uploaded was signed
+        // with a different key - rewind the cursor so the whole log is
+        // re-signed and re-sent. LoTW discards records whose cert it can't
+        // validate (field-hit 2026-07-14: a leftover bench test cert
+        // "uploaded" 22 QSOs that LoTW's processing would silently drop,
+        // then the advanced cursor blocked re-upload with the real cert),
+        // and genuine re-sends after a cert renewal are just harmless
+        // server-side duplicates.
+        if (ok) settings_set_lotw_uploaded_n(0);
     }
     if (dxcc) settings_set_lotw_dxcc(dxcc);
     if (cqz)  settings_set_lotw_cqz(cqz);
