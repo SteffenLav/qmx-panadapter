@@ -616,6 +616,15 @@ ft8_tx_state_t ft8_tx_get_status(char *text, size_t text_len, int *secs_until)
     return st;
 }
 
+bool ft8_tx_get_parity_lock(bool *want_even)
+{
+    lock();
+    bool locked = (s_state != FT8_TX_IDLE) && s_armed.use_parity;
+    if (locked && want_even) *want_even = s_armed.want_even_slot;
+    unlock();
+    return locked;
+}
+
 // ---------------------------------------------------------------------------
 // Slot-loop integration
 // ---------------------------------------------------------------------------

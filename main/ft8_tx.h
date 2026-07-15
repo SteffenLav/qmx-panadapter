@@ -164,6 +164,13 @@ void ft8_tx_request_abort(void);
 //               when IDLE/ACTIVE
 ft8_tx_state_t ft8_tx_get_status(char *text, size_t text_len, int *secs_until);
 
+// True while a request is ARMED or ACTIVE with a locked slot parity (CQ run /
+// QSO exchange), filling *want_even with that parity. Used by ft8_screen's
+// stale-row expiry: rows on our own TX parity can't be re-decoded while we
+// transmit over every slot we'd hear them in, so their aging is paused
+// instead of mass-expiring ~60 s into a run.
+bool ft8_tx_get_parity_lock(bool *want_even);
+
 // Seconds until the next slot boundary matching the given parity preference,
 // for an ARMED (or about-to-be-armed) request's countdown. If match_parity is
 // true, keeps searching forward until the parity equals want_even (REPLY or

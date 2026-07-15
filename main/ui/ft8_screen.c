@@ -8,6 +8,9 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
+#include "ft8_tx.h"    // ft8_tx_get_parity_lock() - pause aging on our TX parity
+#include "ft8_test.h"  // ft8_op_mode_slot_ms() - protocol slot grid for row parity
+
 static const char *TAG = "ft8_screen";
 
 // The decode list is a live picture of who is transmitting *now*, not a log.
@@ -220,6 +223,16 @@ void ft8_screen_get_all(ft8_call_t *out, int max, int *count_out)
     int n = 0;
     if (count_out) *count_out = 0;
     if (!out || max <= 0) return;
+    // While our own TX is parity-locked (CQ run / QSO exchange), rows whose
+    // last decode landed on OUR TX parity cannot be re-heard - we transmit
+    // over every slot we'd decode them in - so their silence carries no
+    // information and their aging clock pauses. Without this, every such
+    // station crosses the stale threshold together ~60 s into a run and the
+    // list visibly empties in one refresh tick. Queried BEFORE s_mutex so we
+    // never hold two locks at once (ft8_tx has its own).
+    bool tx_even  = false;
+    bool tx_lock  = ft8_tx_get_parity_lock(&tx_even);
+    int  per_ms   = ft8_op_mode_slot_ms();
     if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) {
         ESP_LOGW(TAG, "get_all: mutex timeout");
         return;
@@ -234,6 +247,17 @@ void ft8_screen_get_all(ft8_call_t *out, int max, int *count_out)
     for (int i = 0; i < FT8_CALL_TABLE_SIZE; i++) {
         if (!s_table[i].occupied) continue;
         if (now - s_table[i].last_utc > FT8_ROW_STALE_SEC) {
+            if (tx_lock) {
+                // Row parity on the active protocol's grid (same nearest-slot
+                // rounding as ft8_screen_view's E/O indicator).
+                int64_t sidx = ((int64_t)s_table[i].last_utc * 1000 + per_ms / 2) / per_ms;
+                bool row_even = (sidx % 2) == 0;
+                if (row_even == tx_even) {
+                    // Our TX parity: aging paused, keep the row visible.
+                    if (n < max) out[n++] = s_table[i];
+                    continue;
+                }
+            }
             s_table[i].occupied = false;   // station went quiet — drop it
             continue;
         }
