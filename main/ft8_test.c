@@ -71,6 +71,7 @@
 #include "ft8_tx.h"
 #include "ft8_qso.h"
 #include "ft8_robot.h"
+#include "ft8_hash.h"
 #include "time_sync.h"
 #include "ft8_status.h"
 #include "ui/ui.h"
@@ -166,6 +167,22 @@ int ft8_op_mode_slot_ms(void)
 // WSJT-X gets here by decoding in the 2.36 s dead-air gap; this is our equivalent.
 #define FT8_REPLY_TX_WINDOW_MS 2500
 
+// Hold-for-decode gate (the "everything goes twice" fix). During an active
+// QSO, the just-ended RX slot's decode is ALWAYS still running at the next
+// boundary (capture deliberately runs TO the boundary; decode then takes
+// ~1.5-1.9 s), so the partner's reply is found ~1.7 s AFTER our re-armed
+// previous message has already gone on-air - every exchange step used to be
+// transmitted twice. Instead of firing the ARMED request at the boundary, the
+// slot loop now waits (mid-capture, via the FT8_REPLY_TX_WINDOW_MS machinery
+// above) until ft8_qso_advance() has processed that decode and replaced the
+// armed content with the fresh message, then fires it in THIS slot - a burst
+// started ~2 s late is well inside every decoder's time-search range (see the
+// reply-window comment above; validated on-air at +1032 ms). If the decode
+// somehow hasn't landed by this deadline, fire whatever is armed - worst case
+// is exactly the old resend behaviour, never a skipped slot. Must be < the
+// FT8_REPLY_TX_WINDOW_MS poll cutoff or a late decode ends in NO TX at all.
+#define FT8_TX_HOLD_DEADLINE_MS 2300
+
 // Monitor pool depth. Capture claims a free monitor each slot (holding it for
 // the whole 15 s while it streams the STFT in) and the decoder releases it when
 // done. At most TWO are ever in use - one capturing, one decoding - and decode
@@ -243,6 +260,14 @@ typedef struct {
 
 static QueueHandle_t  s_decode_queue = NULL;
 static volatile bool  s_ft8_running  = false;
+// Hold-for-decode gate bookkeeping (see FT8_TX_HOLD_DEADLINE_MS). queued is
+// bumped by the capture task when it posts a decode_job_t; done is bumped by
+// the decode task after decode_slot() (and therefore ft8_qso_advance() + the
+// fresh re-arm inside it) has fully returned. queued != done means a decode
+// whose result could supersede the ARMED request is still in flight. One
+// writer each, single-word RV32 stores - volatile is sufficient.
+static volatile uint32_t s_decode_jobs_queued = 0;
+static volatile uint32_t s_decode_jobs_done   = 0;
 // True for the whole lifetime of one ft8_task (capture) instance. A fast
 // Panadapter<->FT8 toggle could otherwise spawn a SECOND ft8_task before the
 // first finished tearing down; the two clobber the shared s_decode_queue and
@@ -773,7 +798,7 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
         if (!ftx_decode_candidate(&mon->wf, &cands[i], max_iters, &msg, &st)) continue;
         char text[FTX_MAX_MESSAGE_LENGTH];
         ftx_message_offsets_t off;
-        if (ftx_message_decode(&msg, NULL, text, &off) == FTX_MESSAGE_RC_OK) {
+        if (ftx_message_decode(&msg, ft8_hash_if(), text, &off) == FTX_MESSAGE_RC_OK) {
             out->n_decoded++;
             // SR=12000. block_size/subblock_size come from mon itself rather than
             // being hardcoded to FT8's 1920/960 - FT4 uses 576/288, and using the
@@ -1086,6 +1111,10 @@ static void ft8_decode_task(void *arg)
                     job.cap_ms, job.stft_ms, job.start_off_ms,
                     job.arm_backlog, job.drop_delta);
         s_buf_busy[job.mon_idx] = false;   // hand the monitor back to the pool
+        // Open the hold-for-decode gate ONLY here, after decode_slot() has
+        // fully returned - by then ft8_qso_advance() has run and (on progress)
+        // replaced the ARMED request with the fresh message.
+        s_decode_jobs_done++;
     }
 
     // Stop the core-0 worker (blocked on its queue): send a NULL sentinel, then
@@ -1204,6 +1233,22 @@ static void ft8_task(void *arg)
 
     ESP_LOGI(TAG, "entering continuous slot loop (pooled, time-budgeted decode)");
 
+    // Callsign hash table: create (first FT8 entry only) and seed our own
+    // call. Nonstandard-call messages (i3=4) carry OUR call as a 12-bit hash
+    // - without our own call in the table, a special-call station's answer
+    // decodes as "<...> THEIRCALL" and is never recognised as addressed to us.
+    ft8_hash_init();
+    {
+        qmx_settings_t id_cfg;
+        settings_load_all(&id_cfg);
+        if (id_cfg.my_callsign[0]) ft8_hash_seed(id_cfg.my_callsign);
+    }
+
+    // Fresh gate state for this ft8_task instance (the counters are static and
+    // a previous instance may have torn down mid-flight).
+    s_decode_jobs_queued = 0;
+    s_decode_jobs_done   = 0;
+
     int slot_idx = 0;
     struct timeval tv_init;
     gettimeofday(&tv_init, NULL);
@@ -1232,10 +1277,25 @@ static void ft8_task(void *arg)
         int64_t slot_sec = boundary_ms / 1000;   // whole-second slot id (record/aging)
 
         ft8_tx_request_t txreq;
+        // Hold-for-decode gate (see FT8_TX_HOLD_DEADLINE_MS): a TX is due this
+        // slot, but the previous RX slot's decode is still in flight and the
+        // QSO machine is mid-exchange - the decode's result (the partner's
+        // reply) will replace the armed message ~1.7 s from now. Don't fire
+        // the stale one at the boundary; fall into the RX branch below and let
+        // the reply-on-immediate-slot poll fire the FRESH message once
+        // ft8_qso_advance() has run (or the deadline passes). FT8-only, same
+        // as the late-TX path itself.
+        bool hold_for_fresh = !is_ft4 &&
+                              (s_decode_jobs_done != s_decode_jobs_queued) &&
+                              ft8_qso_is_busy(NULL, 0) &&
+                              ft8_tx_slot_would_run(boundary_ms);
+        if (hold_for_fresh)
+            ESP_LOGI(TAG, "slot %d: TX due but previous slot still decoding - holding for fresh reply",
+                     slot_idx);
         // Pass boundary_ms (exact, undistorted) not slot_sec - see the
         // ft8_tx_should_run_this_slot doc comment for why the whole-second
         // truncation breaks FT4 parity.
-        if (ft8_tx_should_run_this_slot(boundary_ms, &txreq)) {
+        if (!hold_for_fresh && ft8_tx_should_run_this_slot(boundary_ms, &txreq)) {
             ft8_status_set("TX: %s", txreq.display_text);
             ft8_tx_run(&txreq);   // blocks ~12.7 s; always restores RX before returning
             ft8_qso_on_tx_complete();  // re-arm the current outgoing message
@@ -1332,7 +1392,17 @@ static void ft8_task(void *arg)
                     // mirrored for FT4 (FT4 currently only supports CQ, no
                     // auto-reply) - so there's never a legitimate FT4 reply to catch
                     // here anyway. Gate explicitly rather than rely on that.
+                    //
+                    // hold_for_fresh (set at the boundary): the ARMED request was
+                    // deliberately NOT fired at the boundary because the previous
+                    // slot's decode could supersede it. Keep holding until that
+                    // decode has fully landed (jobs_done catches up - by then
+                    // ft8_qso_advance() has replaced the armed content) or the
+                    // deadline passes (fire whatever is armed = old behaviour).
+                    bool decode_landed = (s_decode_jobs_done == s_decode_jobs_queued);
                     if (!is_ft4 && into_slot_ms <= FT8_REPLY_TX_WINDOW_MS &&
+                        (!hold_for_fresh || decode_landed ||
+                         into_slot_ms >= FT8_TX_HOLD_DEADLINE_MS) &&
                         ft8_tx_should_run_this_slot(boundary_ms, &late_txreq)) {
                         late_tx = true;
                         break;
@@ -1374,6 +1444,8 @@ static void ft8_task(void *arg)
                     // does, release the monitor so it isn't lost from the pool.
                     s_buf_busy[bi] = false;
                     ESP_LOGW(TAG, "slot %d: decode queue full - slot dropped", slot_idx);
+                } else {
+                    s_decode_jobs_queued++;   // hold-for-decode gate bookkeeping
                 }
             } else {
                 s_buf_busy[bi] = false;   // capture failed: release the monitor
@@ -1625,7 +1697,7 @@ bool ft8_synth_and_decode(const ftx_message_t *msg, float tone_hz,
         ftx_decode_status_t st;
         if (!ftx_decode_candidate(&mon->wf, &cands[i], FT8_LDPC_MAX_ITERS, &dec_msg, &st)) continue;
         ftx_message_offsets_t off;
-        if (ftx_message_decode(&dec_msg, NULL, out_text, &off) != FTX_MESSAGE_RC_OK) continue;
+        if (ftx_message_decode(&dec_msg, ft8_hash_if(), out_text, &off) != FTX_MESSAGE_RC_OK) continue;
 
         if (out_score) *out_score = cands[i].score;
         if (out_snr_db) {

@@ -31,6 +31,7 @@
 #include "ft8_qso.h"
 #include "ft8_pileup.h"
 #include "ft8_sim.h"
+#include "ft8_hash.h"
 #include "diag_log.h"
 #include "factory_reset.h"
 #include "cpu_stats.h"
@@ -208,6 +209,7 @@ void app_main(void)
     ft8_pileup_init();
     ft8_sim_init();
     ft8_arrl_fd_selftest();
+    ft8_hash_selftest();
     ft8_sim_synth_selftest();
     ft8_arrl_fd_e2e_selftest();
     // Restore last UI mode (Panadapter/FT8), persisted across reboots.

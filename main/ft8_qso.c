@@ -159,10 +159,24 @@ static bool is_roger_token(const char *t)
     return c == '-' || c == '+' || c == 'R' || c == ' ' || (c >= '0' && c <= '9');
 }
 
+// Strip the <angle brackets> ft8_lib puts around a hash-resolved callsign
+// ("<KN6LFB>" -> "KN6LFB") so token matching works on the bare call. An
+// unresolved hash decodes as "<...>" and becomes "...", which can never
+// match a real callsign - correct (we don't know who it is).
+static void strip_hash_brackets(char *tok)
+{
+    size_t n = strlen(tok);
+    if (n >= 2 && tok[0] == '<' && tok[n - 1] == '>') {
+        memmove(tok, tok + 1, n - 2);
+        tok[n - 2] = '\0';
+    }
+}
+
 // Split a decoded message into its first two tokens (callsigns) and "rest"
 // (everything after, trimmed of leading spaces, verbatim - may itself
 // contain spaces, e.g. an ARRL Field Day "R 16A EMA" exchange). Replaces a
 // fixed 3-token sscanf, which truncated multi-word third fields.
+// Hash brackets are stripped from both callsign tokens (see above).
 static bool split_msg3(const char *text, char *tok1, size_t cap1,
                        char *tok2, size_t cap2, char *rest, size_t cap_rest)
 {
@@ -183,6 +197,9 @@ static bool split_msg3(const char *text, char *tok1, size_t cap1,
 
     while (*p == ' ') p++;
     snprintf(rest, cap_rest, "%s", p);
+
+    strip_hash_brackets(tok1);
+    strip_hash_brackets(tok2);
     return true;
 }
 
@@ -296,7 +313,11 @@ static bool scan_for_reply_to_me(int64_t slot_sec,
         if (!split_msg3(snap[i].last_text, tok1, sizeof(tok1), tok2, sizeof(tok2), rest, sizeof(rest))) continue;
         if (strcmp(tok1, s_my_call) != 0) continue;  // not addressed to us
         if (strcmp(tok2, s_my_call) == 0) continue;  // avoid MYCALL MYCALL loops
-        if (!rest[0]) continue;                       // no third field
+        // Empty third field is ACCEPTED: a nonstandard-callsign answer
+        // ("<MYCALL> PJ4/K1ABC", i3=4) has no room for a grid - it's still a
+        // real answer to our CQ. Standard messages always carry a third
+        // field, so this only ever admits the nonstd case. cqrun_answer()
+        // doesn't need `rest` (it sends OUR measured report either way).
         if (!ft8_filter_match(snap[i].last_text, &qs.ft8_filters)) continue;
         // Worked-before: tok2 is the answering station's callsign. If we've
         // logged them already ON THIS BAND and the operator enabled the filter,
@@ -371,6 +392,19 @@ static void rearm_current(void)
 static void arm_current_if_idle(void)
 {
     if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_IDLE) rearm_current();
+}
+
+// QSO progressed: the ARMED request (if any) still carries the PREVIOUS
+// step's message - on_tx_complete() re-armed it right after our last burst.
+// Replace it with the fresh s_cur_req now, so the slot loop's hold-for-decode
+// gate (ft8_test.c) can fire the NEW message in this same slot instead of
+// re-sending the stale one (the "everything goes twice" bug). ft8_tx_arm()
+// overwrites an ARMED request but refuses an ACTIVE one, so if a burst is
+// already on-air this degrades to the old deferred-arming behaviour
+// (on_tx_complete() arms the fresh content after the burst).
+static void arm_current_replacing_armed(void)
+{
+    if (ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_ACTIVE) rearm_current();
 }
 
 // Build the next exchange message (<target> <me> <extra>) and adopt it as the
@@ -986,7 +1020,7 @@ void ft8_qso_advance(int64_t slot_sec)
             lock(); s_state = FT8_QSO_TIMEOUT; unlock();
             ft8_status_set("QSO %s: TX error", target);
         }
-        arm_current_if_idle();
+        arm_current_replacing_armed();
         return;
     }
 
@@ -997,7 +1031,7 @@ void ft8_qso_advance(int64_t slot_sec)
         if (got_rr73 || got_73) {
             if (send_next(FT8_TX_KIND_73, target, freq, slot_sec, "73", FT8_QSO_WAIT_DONE))
                 ft8_status_set("QSO %s: sending 73", target);
-            arm_current_if_idle();
+            arm_current_replacing_armed();
             return;
         }
         if (is_roger_token(report)) {
@@ -1010,7 +1044,7 @@ void ft8_qso_advance(int64_t slot_sec)
             if (send_next(FT8_TX_KIND_ROGER_RPT, target, freq, slot_sec, "RR73",
                           FT8_QSO_WAIT_DONE))
                 ft8_status_set("QSO %s: rogered %s - sending RR73", target, report);
-            arm_current_if_idle();
+            arm_current_replacing_armed();
             return;
         }
         // They repeated their grid/report (didn't get ours): keep sending our
@@ -1032,7 +1066,7 @@ void ft8_qso_advance(int64_t slot_sec)
             lock(); s_state = FT8_QSO_TIMEOUT; unlock();
             ft8_status_set("QSO %s: TX error", target);
         }
-        arm_current_if_idle();
+        arm_current_replacing_armed();
         return;
     }
 }

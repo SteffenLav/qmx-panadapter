@@ -72,6 +72,16 @@ static bool extract_remote_call(const char *msg, char *out_call, size_t cap)
     if (out_len >= cap) out_len = cap - 1;
     memcpy(out_call, t[pick], out_len);
     out_call[out_len] = '\0';
+
+    // A hash-resolved callsign arrives in <angle brackets> ("<PJ4/K9XYZ>",
+    // see ft8_hash.c) - strip them so the station table keys on the bare
+    // call and matches the QSO machine's target / worked-before / grid
+    // lookups. An unresolved "<...>" becomes "...", which matches nothing.
+    if (out_len >= 2 && out_call[0] == '<' && out_call[out_len - 1] == '>') {
+        memmove(out_call, out_call + 1, out_len - 2);
+        out_call[out_len - 2] = '\0';
+        out_len -= 2;
+    }
     return out_len > 0;
 }
 

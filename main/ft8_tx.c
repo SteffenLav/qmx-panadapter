@@ -4,6 +4,7 @@
 // synthesis + envelope shaping; we just feed it tone frequencies).
 
 #include "ft8_tx.h"
+#include "ft8_hash.h"
 #include "ft8_status.h"
 #include "ft8_test.h"   // ft8_op_mode_get() - FT8/FT4 sub-mode
 
@@ -349,7 +350,11 @@ bool ft8_tx_build_request(ft8_tx_kind_t kind,
     // Encode now — never at burst time. Errors surface here in the UI, not
     // mid-burst where there's nothing we can do about them.
     ftx_message_t msg;
-    ftx_message_rc_t rc = ftx_message_encode_std(&msg, NULL, call_to, s.my_callsign, third);
+    // hash_if: lets pack28 encode a NONSTANDARD target call (PJ4/K1ABC etc.)
+    // as its 22-bit hash instead of failing outright - the partner's decoder
+    // resolves their own hash trivially. NULL was why replying to special
+    // calls never even armed ("Can't encode message").
+    ftx_message_rc_t rc = ftx_message_encode_std(&msg, ft8_hash_if(), call_to, s.my_callsign, third);
     if (rc != FTX_MESSAGE_RC_OK) {
         if (out_err) snprintf(out_err, out_err_len,
                               "Can't encode message (rc=%d)", (int)rc);
@@ -417,7 +422,7 @@ bool ft8_tx_build_request_fd(ft8_tx_kind_t kind,
     strncpy(out_req->target_call, target_call, sizeof(out_req->target_call) - 1);
 
     ftx_message_t msg;
-    ftx_message_rc_t rc = ftx_message_encode_arrl_fd(&msg, NULL, target_call, s.my_callsign, class_section);
+    ftx_message_rc_t rc = ftx_message_encode_arrl_fd(&msg, ft8_hash_if(), target_call, s.my_callsign, class_section);
     if (rc != FTX_MESSAGE_RC_OK) {
         if (out_err) snprintf(out_err, out_err_len,
                               "Can't encode Field Day message (rc=%d)", (int)rc);
@@ -457,7 +462,7 @@ bool ft8_tx_build_request_text(const char *message_text,
     }
 
     ftx_message_t msg;
-    ftx_message_rc_t rc = ftx_message_encode(&msg, NULL, message_text);
+    ftx_message_rc_t rc = ftx_message_encode(&msg, ft8_hash_if(), message_text);
     if (rc != FTX_MESSAGE_RC_OK) {
         if (out_err) snprintf(out_err, out_err_len,
                               "Can't encode '%s' (rc=%d)", message_text, (int)rc);
@@ -633,6 +638,19 @@ bool ft8_tx_should_run_this_slot(int64_t slot_start_ms, ft8_tx_request_t *out)
                  (long long)slot_start_ms, out->display_text);
     }
     return fire;
+}
+
+bool ft8_tx_slot_would_run(int64_t slot_start_ms)
+{
+    // Same parity/state test as ft8_tx_should_run_this_slot(), minus the
+    // ARMED -> ACTIVE transition - a pure query for the hold-for-decode gate.
+    lock();
+    int period_ms = (s_armed.protocol == FTX_PROTOCOL_FT4) ? 7500 : 15000;
+    bool is_even = ((slot_start_ms / period_ms) % 2) == 0;
+    bool would = (s_state == FT8_TX_ARMED &&
+                  (!s_armed.use_parity || is_even == s_armed.want_even_slot));
+    unlock();
+    return would;
 }
 
 // ---------------------------------------------------------------------------

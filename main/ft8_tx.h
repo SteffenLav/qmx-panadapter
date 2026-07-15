@@ -219,6 +219,13 @@ bool ft8_tx_is_clashing(void);
 // definition for why).
 bool ft8_tx_should_run_this_slot(int64_t slot_start_ms, ft8_tx_request_t *out);
 
+// Side-effect-free peek of the same condition: true if an ARMED request's
+// parity matches this slot, WITHOUT transitioning ARMED -> ACTIVE. Used by
+// the slot loop's hold-for-decode gate (see ft8_test.c) to decide whether a
+// TX is due before committing to fire it - ft8_tx_should_run_this_slot()
+// can't be used for that probe because a true return claims the slot.
+bool ft8_tx_slot_would_run(int64_t slot_start_ms);
+
 // Run one full CAT burst synchronously (blocks the calling task throughout:
 // ~12.7 s for FT8, ~5 s for FT4). Re-verifies Digi mode first (a cheap
 // cached-string read, not a CAT round trip - aborts cleanly *before* keying
