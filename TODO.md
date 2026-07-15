@@ -1,6 +1,6 @@
 # QMX Panadapter — Master Todo List + Status Assessment
 
-**Last updated:** 2026-07-13
+**Last updated:** 2026-07-15
 **Scope:** v1.0 release gates → open investigations → feature requests → roadmap → full shipped history
 **Source:** CLAUDE.md + README.md + groups.io feature requests + session work
 **Assessment:** Code grep + git log + memory system
@@ -65,6 +65,7 @@
 | 6 | CW Audio (speaker/headphone output only) | ✋ Shelved (v0.18.5/.6) | Unblock needed | Disabled to restore FT8 decode performance. Root cause: `cw_audio_preopen()`+`dsp_cw_forward()` degraded yield 2–3× even with audio off (v0.18.5); `cw_audio_init()` also spawned a priority-6 ghost task on core 1 preempting `fft_task` ~125×/slot, found+disabled in v0.18.6, confirmed via controlled A/B to fully restore v0.18.0-level yield. Fix needed before re-enabling: root-cause the original I2S/DMA/UAC contention AND fix task priority/cadence, then soak-test a full session. Blocks #7 only — does NOT block CW Phase 2 decode (#4b) |
 | **Longer-Term Roadmap (Post v1.0)** | | | | |
 | 7 | Speaker/headphone audio (Tab5 jack) | ❌ Not started, blocked | Large | Demodulated CW/SSB passband audio from Tab5's own jack. Blocked on unshelving CW Audio (#6) |
+| 43 | Web-UI audio streaming + server mode (Sam W7STF, email 2026-07-15) | ⏸️ Designed — feasibility doc done, coding not started | Phase 1: 1–2 sessions + soak gate | **NOT blocked by #6/#7** — no I2S, no codec: the FT8 pre-ring in `dsp.c` is already a field-proven USB demodulator (fs/4 mix + 31-tap FIR + /4 decimate → 12 kHz); Phase 1 = run it in panadapter mode, µ-law encode, second binary frame type (0x02) on the existing `/ws` from the existing `ws_push_task` (prio 3, no new task), AudioWorklet player in `index.html`. ~96 kbps added to the ~82 kbps spectrum stream — release gate is an overnight WiFi-streaming soak (SDIO link is the scarce resource, not CPU; watch `SDIO RX oversize` recovery frequency). Phase 2: LSB/CW/AM + phasing demod (opposite-sideband rejection), server mode (= #34 display sleep + #39 render gate keyed on backlight-off). Compile-time server-only firmware fork REJECTED (maintenance tax; runtime mode equivalent). Sam's DNR wish = client-side WASM on the demodulated stream, any phase, zero P4 cost. Full design: `docs/web-audio-feasibility.md` |
 | 8 | Extended waterfall history | ❌ Not started | Medium | PSRAM has room for several minutes of scrollback; two-finger drag to scrub through |
 | 9 | QMX (small) support | ❌ Not started | Medium | Same UI, different USB endpoint config and band table |
 | 10 | JS8 mode | ❌ Not started | Large | Heavily reuses `ft8_lib` per feasibility doc; has 10/15/30/60s slot variants. Do after FT4 (#5) to reuse its slot-abstraction work. See `docs/js8-feasibility.md` |
