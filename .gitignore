@@ -85,6 +85,8 @@ scratchpad/
 test/*.exe
 test/hx_*
 test/v_*
+# Stage 1/2 offline decode-harness diagnostics (regenerated per run)
+test/stage1_diag.csv
 test/lotw_test_*.pem
 test/lotw_sample_tq8.txt
 test/device_tq8*
