@@ -78,7 +78,12 @@ static bool               s_have_cq_saved;
 // Pounce: rst_rcvd = what they told us; rst_sent = our own locally-measured SNR
 //   of them (the protocol never has us transmit a numeric report of them - TX2
 //   just rogers their report back - so this is synthesized like WSJT-X does).
-// CQ-run: rst_sent = our report of their signal; rst_rcvd = "599".
+// CQ-run: rst_sent = our report of their signal; rst_rcvd = the value in their
+//   numeric roger "R<rpt>" (or a direct report answer). The R-report is their
+//   own measurement of OUR signal, NOT an echo of the report we sent - proven
+//   on air 2026-07-15 (we sent -08, OS4K rogered R-06). "599" is only the
+//   fallback if the exchange completes without us ever hearing a numeric value
+//   (e.g. they jump straight to RR73 after a grid answer).
 static char               s_rst_sent[8];
 static char               s_rst_rcvd[8];
 // ARRL Field Day: their class+section, captured when their roger/exchange
@@ -639,9 +644,9 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     s_have_cur      = true;
     s_have_cq_saved = false;
     if (skip_applied) {
-        // We sent them a numeric report directly; they can never roger it with
-        // one of their own (the roger is just "R"+our-report-echoed-back), same
-        // convention cqrun_answer() uses for CQ-run's RST_RCVD.
+        // We sent them a numeric report directly. "599" is only the fallback:
+        // their roger "R<rpt>" carries their own measurement of us (not an
+        // echo of ours) and overwrites this in the WAIT_ROGER handler.
         strncpy(s_rst_sent, first_rpt, sizeof(s_rst_sent) - 1);
         s_rst_sent[sizeof(s_rst_sent) - 1] = '\0';
         strncpy(s_rst_rcvd, "599", sizeof(s_rst_rcvd) - 1);
@@ -707,7 +712,9 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
     s_have_cq_saved = true;
     s_from_cq       = true;
     s_missed_slots  = 0;
-    // CQ-run: we give our report (RST_SENT set in cqrun_answer); they never give theirs (RST_RCVD = "599").
+    // CQ-run: RST_SENT set in cqrun_answer. "599" is only the RST_RCVD
+    // fallback - their report answer (cqrun_answer) or numeric roger
+    // (WAIT_ROGER) overwrites it with their actual measurement of us.
     s_rst_sent[0] = '\0';
     strncpy(s_rst_rcvd, "599", sizeof(s_rst_rcvd));
     s_fd_their_exch[0] = '\0';
@@ -722,7 +729,8 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
 // sent their grid (or a report); we answer with a signal report and wait for
 // their roger. If they jumped straight to RR73/73, we just send 73.
 static void cqrun_answer(const char *caller, int caller_freq, int caller_snr,
-                         int64_t slot_sec, bool got_rr73, bool got_73)
+                         const char *report, int64_t slot_sec,
+                         bool got_rr73, bool got_73)
 {
     // Stay on our own CQ tone for the entire exchange — the answering station
     // uses their own separate tone; switching to caller_freq would put us on
@@ -732,6 +740,15 @@ static void cqrun_answer(const char *caller, int caller_freq, int caller_snr,
     s_target[sizeof(s_target) - 1] = '\0';
     int our_freq = s_freq_hz;   // already set to our CQ tone in ft8_qso_start_cq()
     unlock();
+
+    // If their answer carried a numeric report of us instead of a grid
+    // (OS4K opened with 'OZ1LAV OS4K -06'), that's RST_RCVD - capture it now
+    // so it's logged even if they later jump straight to RR73.
+    if (report && (report[0] == '+' || report[0] == '-') &&
+        report[1] >= '0' && report[1] <= '9') {
+        strncpy(s_rst_rcvd, report, sizeof(s_rst_rcvd) - 1);
+        s_rst_rcvd[sizeof(s_rst_rcvd) - 1] = '\0';
+    }
 
     // We're committing to working them now - take them out of the pileup
     // list (harmless no-op if they were never in it, e.g. an unfiltered
@@ -940,7 +957,7 @@ void ft8_qso_advance(int64_t slot_sec)
             ESP_LOGI(TAG, "CQ: %s answered @ %d Hz snr=%d (rr73=%d 73=%d)",
                      caller, caller_freq, caller_snr, got_rr73, got_73);
             ft8_tx_disarm();   // cancel the re-armed CQ (no-op if already ACTIVE)
-            cqrun_answer(caller, caller_freq, caller_snr, slot_sec, got_rr73, got_73);
+            cqrun_answer(caller, caller_freq, caller_snr, report, slot_sec, got_rr73, got_73);
         } else {
             // No answer - check whether someone has drifted onto our tone
             // since we started calling, and move off it if so. Otherwise
@@ -1040,6 +1057,15 @@ void ft8_qso_advance(int64_t slot_sec)
                 // exchange for ADIF (strip the "R " prefix).
                 strncpy(s_fd_their_exch, report + 2, sizeof(s_fd_their_exch) - 1);
                 s_fd_their_exch[sizeof(s_fd_their_exch) - 1] = '\0';
+            } else if (report[1] == '+' || report[1] == '-' ||
+                       (report[1] >= '0' && report[1] <= '9')) {
+                // Numeric roger "R<rpt>": the value is their own measurement of
+                // OUR signal, not an echo of the report we sent (we sent -08,
+                // OS4K rogered R-06 - live capture 2026-07-15). This is the
+                // RST_RCVD for a CQ-run/skip-TX1 QSO; without this it logged
+                // the "599" placeholder. Excludes "RRR" (no numeric value).
+                strncpy(s_rst_rcvd, report + 1, sizeof(s_rst_rcvd) - 1);
+                s_rst_rcvd[sizeof(s_rst_rcvd) - 1] = '\0';
             }
             if (send_next(FT8_TX_KIND_ROGER_RPT, target, freq, slot_sec, "RR73",
                           FT8_QSO_WAIT_DONE))
