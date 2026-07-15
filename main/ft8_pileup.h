@@ -6,7 +6,7 @@
 // and surfaced via ft8_pileup_modal.c so the operator can go back and work
 // someone who called during a busy CQ-run, even after they've stopped
 // transmitting and aged out of the live decode list (ft8_screen.c ages rows
-// out after FT8_ROW_STALE_SEC=60s; this list has no such expiry — an entry
+// out after FT8_ROW_STALE_SEC=120s; this list has no such expiry — an entry
 // only leaves when worked or manually dismissed, or gets evicted for space).
 //
 // Deliberately NOT automatic: nothing in this module ever arms a TX. Tapping
