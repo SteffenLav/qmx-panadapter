@@ -75,3 +75,8 @@ tools/QMX-Panadapter flasher/*.zip
 
 # Local SWR capture helper + its output
 tools/_swr*.ps1
+
+site/
+
+# Local working notes / correspondence drafts — never publish (repo is public)
+scratchpad/
