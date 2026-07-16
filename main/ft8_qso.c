@@ -211,6 +211,14 @@ static void fmt_report(int snr_db, char *out, size_t len)
     snprintf(out, len, "%+03d", snr_db);
 }
 
+// Public wrapper so UI code (ft8_pileup_modal.c) formats reports with the
+// exact same clamping/format convention instead of growing another private
+// copy (ft8_sim.c already has one - don't add a third).
+void ft8_qso_fmt_report(int snr_db, char *out, size_t len)
+{
+    fmt_report(snr_db, out, len);
+}
+
 // Build "R<report>" for TX2. Their report is e.g. "-10"; pass through if it
 // already starts with 'R'.
 static void make_roger(const char *their_report, char *out, size_t len)
@@ -563,7 +571,25 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     char             first_rpt[8] = "599";
     bool             skip_applied = false;
 
-    if (qs.ft8_filters.skip_tx1) {
+    // A REPLY whose third field is already a signal report ("+NN"/"-NN" in
+    // extra_field) was deliberately built report-first — the pileup modal
+    // does this, because a pileup entry called US (we're the CQ-side
+    // station, so grid TX1 would be the wrong role) and has usually aged
+    // out of the live decode table, meaning the skip_tx1 scan below would
+    // miss and silently fall back to grid (Ken KF0AYY field report,
+    // 2026-07-15). Honour it as-is, regardless of the skip_tx1 toggle:
+    // arm unchanged and start in WAIT_ROGER, exactly like cqrun_answer()'s
+    // first reply. Every other builder passes extra=NULL for REPLY (grid),
+    // so this can't misfire on a decode-list or robot pounce.
+    size_t pre_rpt_len = strnlen(tx1_req->extra_field, sizeof(tx1_req->extra_field));
+    if (tx1_req->kind == FT8_TX_KIND_REPLY &&
+        (tx1_req->extra_field[0] == '+' || tx1_req->extra_field[0] == '-') &&
+        pre_rpt_len < sizeof(first_rpt)) {
+        memcpy(first_rpt, tx1_req->extra_field, pre_rpt_len);
+        first_rpt[pre_rpt_len] = '\0';
+        start_state  = FT8_QSO_WAIT_ROGER;
+        skip_applied = true;
+    } else if (qs.ft8_filters.skip_tx1) {
         // The decode-table snapshot is ~11 KB (FT8_CALL_TABLE_SIZE * sizeof(
         // ft8_call_t)) and MUST NOT be a stack local here: ft8_qso_start() runs
         // on the LVGL event-callback's small (~8 KB) task stack when a pounce is

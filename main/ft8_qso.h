@@ -104,6 +104,11 @@ bool ft8_qso_cq_filter_active(void);
 // slot window (FT8_REPLY_TX_WINDOW_MS).
 bool ft8_qso_get_priority_freq(int *freq_hz_out);
 
+// Format a coarse SNR (dB) into an FT8 report token ("-07", "+02"), clamped
+// to the standard -24..+15 range. Same convention the QSO machine itself
+// uses for cqrun_answer()/skip-TX1 reports.
+void ft8_qso_fmt_report(int snr_db, char *out, size_t len);
+
 // True if a decoded message text passes the operator's include/exclude term
 // filters (the same ft8_filters_t used by CQ-run auto-reply). Exposed so the
 // robot (ft8_robot.c) applies the exact same matching as the manual paths.
