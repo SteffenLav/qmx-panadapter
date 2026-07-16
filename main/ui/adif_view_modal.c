@@ -52,6 +52,119 @@ static bool s_today_only = true;
 static int s_last_total = 0;
 static int s_last_today = 0;
 
+// --- Single-record delete (operator request 2026-07-16) --------------------
+// Long-press a QSO row -> selection mode (list scroll locks, dragging up/down
+// moves the highlight) -> release -> Delete/Cancel bar. Delete removes that
+// one record from the ADIF file (duplicates, botched entries). Each row
+// carries its 0-based file record index in lv_obj user_data.
+static lv_obj_t *s_del_bar     = NULL;   // confirm bar (hidden by default)
+static lv_obj_t *s_del_lbl     = NULL;   // "Delete <CALL> <date>?" text
+static lv_obj_t *s_sel_row     = NULL;   // currently highlighted row
+static int       s_sel_fidx    = -1;     // its file record index
+static bool      s_sel_active  = false;  // finger down in selection mode
+
+static void sel_highlight(lv_obj_t *row)
+{
+    if (s_sel_row == row) return;
+    if (s_sel_row) {
+        lv_obj_set_style_border_width(s_sel_row, 0, 0);
+        lv_obj_set_style_bg_color(s_sel_row, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
+        // (bg_opa of odd rows was transparent; harmless to leave the color -
+        // cancel/delete re-render the list anyway.)
+    }
+    s_sel_row  = row;
+    s_sel_fidx = row ? (int)(intptr_t)lv_obj_get_user_data(row) : -1;
+    if (row) {
+        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(row, lv_color_hex(0x5a1f1f), 0);
+        lv_obj_set_style_border_color(row, lv_color_hex(0xff5050), 0);
+        lv_obj_set_style_border_width(row, 2, 0);
+    }
+}
+
+static void del_bar_show(void)
+{
+    if (!s_del_bar || s_sel_fidx < 0) return;
+    char line[512], call[20] = "?", date[9] = "", rcvd[8] = "";
+    if (adif_log_get_record(s_sel_fidx, line, sizeof(line))) {
+        adif_log_extract_field(line, "CALL",     call, sizeof(call));
+        adif_log_extract_field(line, "QSO_DATE", date, sizeof(date));
+        adif_log_extract_field(line, "RST_RCVD", rcvd, sizeof(rcvd));
+    }
+    if (s_del_lbl)
+        lv_label_set_text_fmt(s_del_lbl, "Delete %s  %s  rcvd %s ?", call, date, rcvd);
+    lv_obj_clear_flag(s_del_bar, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_del_bar);
+}
+
+static void list_render(void);   // fwd (sel_reset re-renders)
+
+static void sel_reset(bool rerender)
+{
+    s_sel_row    = NULL;
+    s_sel_fidx   = -1;
+    s_sel_active = false;
+    if (s_del_bar) lv_obj_add_flag(s_del_bar, LV_OBJ_FLAG_HIDDEN);
+    if (s_list) lv_obj_add_flag(s_list, LV_OBJ_FLAG_SCROLLABLE);
+    if (rerender) list_render();
+}
+
+static void row_event_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    lv_obj_t *row = lv_event_get_current_target(e);
+
+    if (code == LV_EVENT_LONG_PRESSED) {
+        // Enter selection mode: lock the list's own scrolling so the drag
+        // moves the highlight instead of the list.
+        s_sel_active = true;
+        if (s_list) lv_obj_clear_flag(s_list, LV_OBJ_FLAG_SCROLLABLE);
+        if (s_del_bar) lv_obj_add_flag(s_del_bar, LV_OBJ_FLAG_HIDDEN);
+        sel_highlight(row);
+        return;
+    }
+    if (code == LV_EVENT_PRESSING && s_sel_active) {
+        // Move the highlight to whichever row is under the finger. Events
+        // keep coming to the originally pressed row, so hit-test siblings.
+        lv_indev_t *indev = lv_indev_get_act();
+        if (!indev || !s_list) return;
+        lv_point_t p;
+        lv_indev_get_point(indev, &p);
+        uint32_t n = lv_obj_get_child_count(s_list);
+        for (uint32_t i = 0; i < n; i++) {
+            lv_obj_t *r = lv_obj_get_child(s_list, i);
+            if (!lv_obj_has_flag(r, LV_OBJ_FLAG_CLICKABLE)) continue;  // data rows only
+            lv_area_t a;
+            lv_obj_get_coords(r, &a);
+            if (p.y >= a.y1 && p.y <= a.y2) { sel_highlight(r); break; }
+        }
+        return;
+    }
+    if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        if (!s_sel_active) return;
+        s_sel_active = false;
+        if (s_list) lv_obj_add_flag(s_list, LV_OBJ_FLAG_SCROLLABLE);
+        if (s_sel_row) del_bar_show();   // highlighted row stays; user decides
+        return;
+    }
+}
+
+static void del_confirm_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_sel_fidx >= 0) {
+        if (!adif_log_delete_record(s_sel_fidx))
+            ESP_LOGW(TAG, "delete record #%d failed", s_sel_fidx);
+    }
+    sel_reset(true);
+}
+
+static void del_cancel_cb(lv_event_t *e)
+{
+    (void)e;
+    sel_reset(true);
+}
+
 // Today's UTC date in ADIF QSO_DATE format ("YYYYMMDD"). QSOs are logged
 // with UTC dates, so the comparison must be UTC too - not local time.
 static void today_utc(char out[9])
@@ -74,6 +187,7 @@ static void today_utc(char out[9])
 static void modal_close(void)
 {
     if (!s_modal || !s_open) return;
+    sel_reset(false);   // drop any pending delete selection with the modal
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     s_open = false;
 }
@@ -143,7 +257,8 @@ static void add_header_row(lv_obj_t *parent)
 // band, date, time, and the sent/received signal reports as two separate
 // columns. even_row alternates the row background (zebra striping) so long
 // lists stay easy to read across.
-static void build_qso_row(lv_obj_t *parent, const char *line, bool even_row)
+static void build_qso_row(lv_obj_t *parent, const char *line, bool even_row,
+                          int file_idx)
 {
     char call[20] = "?", date[9] = "", time_on[7] = "", band[8] = "",
          mode[8] = "FT8", rst_sent[8] = "599", rst_rcvd[8] = "599";
@@ -171,6 +286,13 @@ static void build_qso_row(lv_obj_t *parent, const char *line, bool even_row)
         lv_obj_set_style_pad_top(row, 4, 0);
         lv_obj_set_style_pad_bottom(row, 4, 0);
     }
+    // Single-record delete: long-press selects, drag moves, release confirms.
+    lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_user_data(row, (void *)(intptr_t)file_idx);
+    lv_obj_add_event_cb(row, row_event_cb, LV_EVENT_LONG_PRESSED, NULL);
+    lv_obj_add_event_cb(row, row_event_cb, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(row, row_event_cb, LV_EVENT_RELEASED, NULL);
+    lv_obj_add_event_cb(row, row_event_cb, LV_EVENT_PRESS_LOST, NULL);
     add_col(row, call,                    COL_GROW_CALL,   &lv_font_montserrat_24, UI_COLOR_TEXT);
     add_col(row, country ? country : "-", COL_GROW_CTRY,   &lv_font_montserrat_24, UI_COLOR_TEXT);
     add_col(row, mode,                    COL_GROW_NARROW, &lv_font_montserrat_24, UI_COLOR_TEXT);
@@ -196,6 +318,11 @@ static void list_render(void)
 
     if (s_lbl_filter) lv_label_set_text(s_lbl_filter, s_today_only ? "All" : "Today");
     if (!s_list) return;
+    // The clean below destroys any selected row object - drop the reference
+    // (the confirm bar, if open, keys off the file index, which stays valid
+    // until an actual delete re-renders through sel_reset()).
+    s_sel_row    = NULL;
+    s_sel_active = false;
     lv_obj_clean(s_list);
 
     if (total == 0) {
@@ -220,8 +347,11 @@ static void list_render(void)
     // way). PSRAM: 200 rows * 1024 B = 200 KB max, trivial.
     int ring_cap = (total < ADIF_VIEW_MAX_ROWS) ? total : ADIF_VIEW_MAX_ROWS;
     char *lines = heap_caps_malloc((size_t)ring_cap * 1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!lines) {
+    int  *fidxs = heap_caps_malloc((size_t)ring_cap * sizeof(int), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!lines || !fidxs) {
         ESP_LOGE(TAG, "OOM allocating %d-row ADIF buffer", ring_cap);
+        if (lines) heap_caps_free(lines);
+        if (fidxs) heap_caps_free(fidxs);
         return;
     }
 
@@ -232,8 +362,10 @@ static void list_render(void)
     if (f) {
         char raw[1024];
         bool header_skipped = false;
+        int  rec = 0;   // 0-based file record index (counts ALL records)
         while (fgets(raw, sizeof(raw), f)) {
             if (!header_skipped) { header_skipped = true; continue; }   // <EOH> line
+            int this_rec = rec++;
             char date[9] = "";
             adif_log_extract_field(raw, "QSO_DATE", date, sizeof(date));
             bool is_today = (strcmp(date, today) == 0);
@@ -242,6 +374,7 @@ static void list_render(void)
             char *slot = lines + (size_t)(matched % ring_cap) * 1024;
             strncpy(slot, raw, 1023);
             slot[1023] = '\0';
+            fidxs[matched % ring_cap] = this_rec;   // file index rides along
             matched++;
         }
         fclose(f);
@@ -269,6 +402,7 @@ static void list_render(void)
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
         heap_caps_free(lines);
+        heap_caps_free(fidxs);
         return;
     }
 
@@ -278,9 +412,10 @@ static void list_render(void)
     for (int k = 0; k < shown; k++) {
         int idx = (matched - 1 - k) % ring_cap;
         bool even_row = (k % 2) == 1;
-        build_qso_row(s_list, lines + (size_t)idx * 1024, even_row);
+        build_qso_row(s_list, lines + (size_t)idx * 1024, even_row, fidxs[idx]);
     }
     heap_caps_free(lines);
+    heap_caps_free(fidxs);
 
     int64_t t_done = esp_timer_get_time();
     ESP_LOGI(TAG, "ADIF viewer: showing %d of %d logged QSOs (filter=%s today=%d, read=%lld ms, rows=%lld ms, total=%lld ms)",
@@ -393,6 +528,55 @@ static void modal_build(void)
     lv_obj_set_style_text_font(close_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(close_lbl);
     ui_kbd_set_buttons(NULL, close_btn);   // physical keyboard Esc -> Close
+
+    // Single-record delete confirm bar: floating overlay across the bottom of
+    // the panel (FLOATING = ignored by the flex layout, so nothing reflows),
+    // hidden until a row is long-press-selected and released.
+    s_del_bar = lv_obj_create(s_panel);
+    lv_obj_add_flag(s_del_bar, LV_OBJ_FLAG_FLOATING);
+    lv_obj_add_flag(s_del_bar, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_size(s_del_bar, LV_PCT(96), 92);
+    lv_obj_align(s_del_bar, LV_ALIGN_BOTTOM_MID, 0, -4);
+    lv_obj_set_style_bg_color(s_del_bar, lv_color_hex(0x30181a), 0);
+    lv_obj_set_style_bg_opa(s_del_bar, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_del_bar, lv_color_hex(0xff5050), 0);
+    lv_obj_set_style_border_width(s_del_bar, 2, 0);
+    lv_obj_set_style_radius(s_del_bar, 8, 0);
+    lv_obj_set_style_pad_all(s_del_bar, 10, 0);
+    lv_obj_clear_flag(s_del_bar, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_del_lbl = lv_label_create(s_del_bar);
+    lv_label_set_text(s_del_lbl, "");
+    lv_obj_set_style_text_font(s_del_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(s_del_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_align(s_del_lbl, LV_ALIGN_LEFT_MID, 4, 0);
+
+    lv_obj_t *b_cancel = lv_btn_create(s_del_bar);
+    lv_obj_set_size(b_cancel, 170, 60);
+    lv_obj_align(b_cancel, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_style_bg_color(b_cancel, lv_color_hex(0x2a2f37), 0);
+    lv_obj_set_style_border_color(b_cancel, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_border_width(b_cancel, 2, 0);
+    lv_obj_set_style_radius(b_cancel, 8, 0);
+    lv_obj_add_event_cb(b_cancel, del_cancel_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *lc = lv_label_create(b_cancel);
+    lv_label_set_text(lc, "Cancel");
+    lv_obj_set_style_text_color(lc, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(lc, &lv_font_montserrat_24, 0);
+    lv_obj_center(lc);
+
+    lv_obj_t *b_del = lv_btn_create(s_del_bar);
+    lv_obj_set_size(b_del, 170, 60);
+    lv_obj_align(b_del, LV_ALIGN_RIGHT_MID, -186, 0);
+    lv_obj_set_style_bg_color(b_del, lv_color_hex(0x962020), 0);
+    lv_obj_set_style_radius(b_del, 8, 0);
+    lv_obj_set_style_border_width(b_del, 0, 0);
+    lv_obj_add_event_cb(b_del, del_confirm_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *ld = lv_label_create(b_del);
+    lv_label_set_text(ld, "Delete");
+    lv_obj_set_style_text_color(ld, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(ld, &lv_font_montserrat_24, 0);
+    lv_obj_center(ld);
 }
 
 void adif_view_modal_init(void)

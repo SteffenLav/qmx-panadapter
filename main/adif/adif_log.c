@@ -15,6 +15,8 @@
 #include "esp_spiffs.h"
 #include "esp_heap_caps.h"
 #include "sd_archive.h"
+#include "settings.h"   // upload-cursor adjustment in adif_log_delete_record()
+#include <unistd.h>     // fsync
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
@@ -368,6 +370,61 @@ bool adif_log_get_record(int idx, char *out, size_t out_sz)
 
     fclose(f);
     return found;
+}
+
+bool adif_log_delete_record(int idx)
+{
+    if (!s_mounted || idx < 0) return false;
+
+    // Rewrite the file to a temp, skipping record idx (line-oriented: header
+    // first, then one record per line - same walk as adif_log_get_record).
+    const char *TMP_PATH = "/spiffs/qso.tmp";
+    FILE *in = fopen(FILE_PATH, "r");
+    if (!in) return false;
+    FILE *out = fopen(TMP_PATH, "w");
+    if (!out) { fclose(in); return false; }
+
+    char line[1024];
+    int  rec = -1;         // -1 = header line pending
+    bool removed = false;
+    while (fgets(line, sizeof(line), in)) {
+        if (rec < 0) { fputs(line, out); rec = 0; continue; }   // keep header
+        if (rec == idx) { removed = true; rec++; continue; }    // skip = delete
+        fputs(line, out);
+        rec++;
+    }
+    fclose(in);
+    fflush(out);
+    fsync(fileno(out));    // mandatory before rename - see CLAUDE.md fsync rule
+    fclose(out);
+
+    if (!removed) { remove(TMP_PATH); return false; }
+    remove(FILE_PATH);
+    if (rename(TMP_PATH, FILE_PATH) != 0) {
+        ESP_LOGE(TAG, "delete: rename %s -> %s failed", TMP_PATH, FILE_PATH);
+        return false;
+    }
+
+    // Upload cursors are counts into the record sequence: a deletion BELOW a
+    // cursor shifts every later record down one, so the cursor must follow.
+    // A deletion at/after the cursor is a not-yet-uploaded record - no shift.
+    qmx_settings_t qs;
+    settings_load_all(&qs);
+    if ((uint32_t)idx < qs.qrz_uploaded_n)  settings_set_qrz_uploaded_n(qs.qrz_uploaded_n - 1);
+    if ((uint32_t)idx < qs.eqsl_uploaded_n) settings_set_eqsl_uploaded_n(qs.eqsl_uploaded_n - 1);
+    if ((uint32_t)idx < qs.lotw_uploaded_n) settings_set_lotw_uploaded_n(qs.lotw_uploaded_n - 1);
+
+    // Rebuild count + worked cache from the rewritten file (the deleted
+    // record may have been the only QSO with that call/band).
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_count        = 0;
+    s_worked_count = 0;
+    xSemaphoreGive(s_lock);
+    load_from_file();
+
+    ESP_LOGI(TAG, "Deleted QSO record #%d (%d remain)", idx, s_count);
+    sd_archive_mark_adif_dirty();   // re-mirror the edited file to SD
+    return true;
 }
 
 void adif_log_clear(void)

@@ -50,6 +50,13 @@ bool adif_log_contains_call_on_band(const char *call, uint32_t freq_hz);
 // Erase all logged QSOs and reset the worked-call cache.
 void adif_log_clear(void);
 
+// Delete the idx-th QSO record (0-based, log order) - rewrites the file
+// without that line, decrements any QRZ/eQSL/LoTW upload cursor that had
+// already advanced past it (they are counts into the record sequence, so
+// later records would otherwise shift under them), and rebuilds the count +
+// worked-call cache. Returns false if idx is out of range or I/O fails.
+bool adif_log_delete_record(int idx);
+
 // Read the idx-th completed QSO record (0-based, in log order) as a single
 // ADIF line with no trailing newline. Returns false if idx is out of range
 // or the file can't be read. out must be sized generously - a record line
