@@ -1601,7 +1601,13 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_FT8SYNC    18  // panadapter-only: FT8 sync lines + 3x waterfall (diagnostic)
 #define DRAWER_SEC_SIMMODE    19  // FT8-only: phantom-station simulation mode (practice/testing, never keys the radio)
 #define DRAWER_SEC_SLEEP      20  // display sleep: idle-timeout backlight-off (#34)
-#define N_DRAWER_SECTIONS     21
+#define DRAWER_SEC_TUNE2      21  // Antenna Tune (1_04+ only) - own section right above
+                                   // WiFi setup; the panadapter layout closes its slot
+                                   // when hidden on <1_04 firmware and reopens it in
+                                   // place when the firmware qualifies (see
+                                   // drawer_set_ft8_mode's reflow)
+#define DRAWER_TUNE2_H        64  // its height = the shift applied when hidden
+#define N_DRAWER_SECTIONS     22
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 // Phase 5.10D Stage 2b: drawer widgets we need to keep handles to
@@ -3896,7 +3902,13 @@ static void update_db_scale(void)
             int y = SPECTRUM_H - 1 - (int)((float)v * (float)(SPECTRUM_H - 1) / FLAT_RANGE_DB);
             snprintf(txt, sizeof(txt), (i == 0) ? "+%d dB" : "+%d", v);
             lv_label_set_text(s_db_scale_lbl[i], txt);
-            lv_obj_align(s_db_scale_lbl[i], LV_ALIGN_TOP_RIGHT, -4, y - 12);
+            // Clamp fully inside the spectrum: a gridline near an edge used
+            // to center its label half off-canvas (top/bottom tick labels
+            // were half hidden - operator report 2026-07-16).
+            int ly = y - 12;
+            if (ly < 2) ly = 2;
+            if (ly > SPECTRUM_H - 26) ly = SPECTRUM_H - 26;
+            lv_obj_align(s_db_scale_lbl[i], LV_ALIGN_TOP_RIGHT, -4, ly);
             lv_obj_clear_flag(s_db_scale_lbl[i], LV_OBJ_FLAG_HIDDEN);
             n++;
         }
@@ -3906,7 +3918,11 @@ static void update_db_scale(void)
             int y = db_to_y(s_grid_dbm[i]);
             snprintf(txt, sizeof(txt), (i == 0) ? "%d dBm" : "%d", (int)s_grid_dbm[i]);
             lv_label_set_text(s_db_scale_lbl[i], txt);
-            lv_obj_align(s_db_scale_lbl[i], LV_ALIGN_TOP_RIGHT, -4, y - 12);
+            // Same edge clamp as the flat branch above.
+            int ly = y - 12;
+            if (ly < 2) ly = 2;
+            if (ly > SPECTRUM_H - 26) ly = SPECTRUM_H - 26;
+            lv_obj_align(s_db_scale_lbl[i], LV_ALIGN_TOP_RIGHT, -4, ly);
             lv_obj_clear_flag(s_db_scale_lbl[i], LV_OBJ_FLAG_HIDDEN);
             n++;
         }
@@ -5323,6 +5339,121 @@ static void drawer_build(void)
         y += 136;
     }
 
+    // Display brightness section (moved up under Battery care, operator
+    // request 2026-07-16 - the always-useful device controls group at top).
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_BRIGHTNESS, y, 130);
+        lv_obj_t *bl_hdr = lv_label_create(sec);
+        lv_label_set_text(bl_hdr, "Display");
+        lv_obj_set_style_text_color(bl_hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(bl_hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(bl_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        s_lbl_brightness = lv_label_create(sec);
+        char blbuf[24];
+        uint8_t bl_pct = 100;
+        {
+            qmx_settings_t scfg4;
+            settings_load_all(&scfg4);
+            bl_pct = scfg4.brightness_pct;
+        }
+        snprintf(blbuf, sizeof(blbuf), "Brightness: %u%%", (unsigned)bl_pct);
+        lv_label_set_text(s_lbl_brightness, blbuf);
+        lv_obj_set_style_text_color(s_lbl_brightness, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_brightness, &lv_font_montserrat_28, 0);
+        lv_obj_align(s_lbl_brightness, LV_ALIGN_TOP_LEFT, 0, 40);
+
+        s_slider_brightness = lv_slider_create(sec);
+        lv_obj_set_size(s_slider_brightness, DRAWER_W - 32, 30);
+        lv_slider_set_range(s_slider_brightness, 10, 100);
+        lv_slider_set_value(s_slider_brightness, bl_pct, LV_ANIM_OFF);
+        lv_obj_align(s_slider_brightness, LV_ALIGN_TOP_LEFT, 0, 70);
+        lv_obj_add_event_cb(s_slider_brightness, drawer_slider_brightness_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        y += 130;
+    }
+
+    // Antenna Tune (1_04+ firmware only): its own section so the layout can
+    // CLOSE this slot when the button is hidden on <1_04 firmware - it used
+    // to share the WiFi section at a fixed offset, leaving a button-sized
+    // hole above WiFi setup on 1_03. drawer_set_ft8_mode()'s panadapter
+    // branch shifts every section below this one up by DRAWER_TUNE2_H when
+    // the firmware doesn't qualify, and reopens the slot right here when it
+    // does (operator requirement: Tune lives above WiFi setup, nowhere else).
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_TUNE2, y, DRAWER_TUNE2_H);
+        s_tune_entry_btn = lv_btn_create(sec);
+        lv_obj_set_size(s_tune_entry_btn, DRAWER_W - 32, 56);
+        lv_obj_align(s_tune_entry_btn, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_set_style_bg_color(s_tune_entry_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_add_event_cb(s_tune_entry_btn, drawer_tune_entry_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_flag(s_tune_entry_btn, LV_OBJ_FLAG_HIDDEN);  // shown once firmware confirms 1_04+
+        lv_obj_t *tune_entry_lbl = lv_label_create(s_tune_entry_btn);
+        lv_label_set_text(tune_entry_lbl, "Antenna Tune");
+        lv_obj_set_style_text_font(tune_entry_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(tune_entry_lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_center(tune_entry_lbl);
+        y += DRAWER_TUNE2_H;
+    }
+
+    // WiFi setup button. Moved up under Battery care together with Callsign
+    // & Grid and Band-plan region (operator request 2026-07-16).
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WIFI, y, 72);
+        lv_obj_t *btn = lv_btn_create(sec);
+        lv_obj_set_size(btn, DRAWER_W - 32, 56);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_add_event_cb(btn, drawer_wifi_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, "WiFi setup");
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_center(lbl);
+        y += 72;
+    }
+    // Operator identity button -- full width (callsign + grid for FT8 TX)
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_IDENTITY, y, 72);
+        lv_obj_t *btn = lv_btn_create(sec);
+        lv_obj_set_size(btn, DRAWER_W - 32, 56);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_add_event_cb(btn, drawer_identity_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, "Callsign & Grid square");
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_center(lbl);
+        y += 72;
+    }
+
+    // Band-plan region: drives the coloured CW/Digi/Phone strip under the freq
+    // axis. "Auto" derives the region from the operator's grid square. Placed
+    // right under Callsign & Grid since "Auto" depends on the grid square.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_BPREGION, y, 100);
+        lv_obj_t *hdr = lv_label_create(sec);
+        lv_label_set_text(hdr, "Band-plan region");
+        lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        s_dropdown_bpregion = lv_dropdown_create(sec);
+        lv_dropdown_set_options(s_dropdown_bpregion,
+                                "Auto (from grid)\nRegion 1 (EU/AF)\nRegion 2 (Americas)\nRegion 3 (Asia/Pac)");
+        lv_obj_set_size(s_dropdown_bpregion, DRAWER_W - 32, 50);
+        lv_obj_align(s_dropdown_bpregion, LV_ALIGN_TOP_LEFT, 0, 40);
+        lv_obj_set_style_text_font(s_dropdown_bpregion, &lv_font_montserrat_28, 0);
+        {
+            qmx_settings_t bcfg;
+            settings_load_all(&bcfg);
+            if (bcfg.bandplan_region <= 3) lv_dropdown_set_selected(s_dropdown_bpregion, bcfg.bandplan_region);
+        }
+        lv_obj_add_event_cb(s_dropdown_bpregion, drawer_dropdown_bpregion_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(s_dropdown_bpregion, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
+        y += 100;
+    }
+
     // Resource monitor: developer-only diagnostic overlay — deliberately NOT a
     // drawer toggle (would invite user confusion/discussion for no user benefit).
     // The overlay is still built (build_resource_monitor) but stays hidden;
@@ -5389,87 +5520,6 @@ static void drawer_build(void)
             lv_obj_center(lbl);
         }
         y += 108;
-    }
-
-    // WiFi section: "Antenna Tune" button (top, 1_04+ firmware only - see
-    // docs/qmx-1_04-cat-comparison.md) + "WiFi setup" button (below,
-    // unchanged position). The old "WiFi initiated" checkbox that used to
-    // occupy the top slot moved into the WiFi setup window itself as an
-    // icon button (2026-07-04) - see wifi_config.c.
-    {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_WIFI, y, 128);
-
-        // Antenna Tune button - same style/colour as WiFi setup and
-        // Callsign & Grid square below. Hidden entirely (not greyed) on
-        // firmware that doesn't confirm 1_04+, same pattern as the shelved
-        // CW Audio section - see drawer_set_ft8_mode() and
-        // ui_notify_qmx_fw_known() for what shows/hides it.
-        s_tune_entry_btn = lv_btn_create(sec);
-        lv_obj_set_size(s_tune_entry_btn, DRAWER_W - 32, 56);
-        lv_obj_align(s_tune_entry_btn, LV_ALIGN_TOP_LEFT, 0, 0);
-        lv_obj_set_style_bg_color(s_tune_entry_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
-        lv_obj_add_event_cb(s_tune_entry_btn, drawer_tune_entry_btn_cb, LV_EVENT_CLICKED, NULL);
-        lv_obj_add_flag(s_tune_entry_btn, LV_OBJ_FLAG_HIDDEN);  // shown once firmware confirms 1_04+
-        lv_obj_t *tune_entry_lbl = lv_label_create(s_tune_entry_btn);
-        lv_label_set_text(tune_entry_lbl, "Antenna Tune");
-        lv_obj_set_style_text_font(tune_entry_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_set_style_text_color(tune_entry_lbl, lv_color_hex(0xffffff), 0);
-        lv_obj_center(tune_entry_lbl);
-
-        // WiFi setup button
-        lv_obj_t *btn = lv_btn_create(sec);
-        lv_obj_set_size(btn, DRAWER_W - 32, 56);
-        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 64);
-        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
-        lv_obj_add_event_cb(btn, drawer_wifi_btn_cb, LV_EVENT_CLICKED, NULL);
-        lv_obj_t *lbl = lv_label_create(btn);
-        lv_label_set_text(lbl, "WiFi setup");
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
-        lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
-        lv_obj_center(lbl);
-        y += 128;
-    }
-    // Operator identity button -- full width (callsign + grid for FT8 TX)
-    {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_IDENTITY, y, 72);
-        lv_obj_t *btn = lv_btn_create(sec);
-        lv_obj_set_size(btn, DRAWER_W - 32, 56);
-        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
-        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
-        lv_obj_add_event_cb(btn, drawer_identity_btn_cb, LV_EVENT_CLICKED, NULL);
-        lv_obj_t *lbl = lv_label_create(btn);
-        lv_label_set_text(lbl, "Callsign & Grid square");
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
-        lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
-        lv_obj_center(lbl);
-        y += 72;
-    }
-
-    // Band-plan region: drives the coloured CW/Digi/Phone strip under the freq
-    // axis. "Auto" derives the region from the operator's grid square. Placed
-    // right under Callsign & Grid since "Auto" depends on the grid square.
-    {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_BPREGION, y, 100);
-        lv_obj_t *hdr = lv_label_create(sec);
-        lv_label_set_text(hdr, "Band-plan region");
-        lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
-        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
-        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
-
-        s_dropdown_bpregion = lv_dropdown_create(sec);
-        lv_dropdown_set_options(s_dropdown_bpregion,
-                                "Auto (from grid)\nRegion 1 (EU/AF)\nRegion 2 (Americas)\nRegion 3 (Asia/Pac)");
-        lv_obj_set_size(s_dropdown_bpregion, DRAWER_W - 32, 50);
-        lv_obj_align(s_dropdown_bpregion, LV_ALIGN_TOP_LEFT, 0, 40);
-        lv_obj_set_style_text_font(s_dropdown_bpregion, &lv_font_montserrat_28, 0);
-        {
-            qmx_settings_t bcfg;
-            settings_load_all(&bcfg);
-            if (bcfg.bandplan_region <= 3) lv_dropdown_set_selected(s_dropdown_bpregion, bcfg.bandplan_region);
-        }
-        lv_obj_add_event_cb(s_dropdown_bpregion, drawer_dropdown_bpregion_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        lv_obj_add_event_cb(s_dropdown_bpregion, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
-        y += 100;
     }
 
     // dB Range section
@@ -5671,38 +5721,6 @@ static void drawer_build(void)
         }
         lv_obj_align(s_slider_ifcal, LV_ALIGN_TOP_LEFT, 0, 70);
         lv_obj_add_event_cb(s_slider_ifcal, drawer_slider_ifcal_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        y += 130;
-    }
-
-    // Display brightness section
-    {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_BRIGHTNESS, y, 130);
-        lv_obj_t *bl_hdr = lv_label_create(sec);
-        lv_label_set_text(bl_hdr, "Display");
-        lv_obj_set_style_text_color(bl_hdr, lv_color_hex(0xA0E0A0), 0);
-        lv_obj_set_style_text_font(bl_hdr, &lv_font_montserrat_28, 0);
-        lv_obj_align(bl_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
-
-        s_lbl_brightness = lv_label_create(sec);
-        char blbuf[24];
-        uint8_t bl_pct = 100;
-        {
-            qmx_settings_t scfg4;
-            settings_load_all(&scfg4);
-            bl_pct = scfg4.brightness_pct;
-        }
-        snprintf(blbuf, sizeof(blbuf), "Brightness: %u%%", (unsigned)bl_pct);
-        lv_label_set_text(s_lbl_brightness, blbuf);
-        lv_obj_set_style_text_color(s_lbl_brightness, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(s_lbl_brightness, &lv_font_montserrat_28, 0);
-        lv_obj_align(s_lbl_brightness, LV_ALIGN_TOP_LEFT, 0, 40);
-
-        s_slider_brightness = lv_slider_create(sec);
-        lv_obj_set_size(s_slider_brightness, DRAWER_W - 32, 30);
-        lv_slider_set_range(s_slider_brightness, 10, 100);
-        lv_slider_set_value(s_slider_brightness, bl_pct, LV_ANIM_OFF);
-        lv_obj_align(s_slider_brightness, LV_ALIGN_TOP_LEFT, 0, 70);
-        lv_obj_add_event_cb(s_slider_brightness, drawer_slider_brightness_cb, LV_EVENT_VALUE_CHANGED, NULL);
         y += 130;
     }
 
@@ -5929,20 +5947,18 @@ static void drawer_close(void)
 static void drawer_set_ft8_mode(bool ft8)
 {
     if (!s_drawer) return;
-    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_SLEEP, DRAWER_SEC_CHARGE, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_BRIGHTNESS };
+    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_SLEEP, DRAWER_SEC_CHARGE, DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY };
     // Heights must line up 1:1 with keep[] above (same order) - each is the
     // height passed to that section's own drawer_section(ID, y, height) call.
-    static const int keep_h[] = { 56, 124, 136, 56, 56, 128, 72, 130 };
+    static const int keep_h[] = { 56, 124, 136, 130, 56, 56, 128, 72 };
     const int n_keep = sizeof(keep) / sizeof(keep[0]);
 
-    // Antenna Tune entry button lives inside DRAWER_SEC_WIFI (always shown in
-    // both modes), so it's gated independently of the per-section loop
-    // below: hidden entirely (not greyed) unless Panadapter mode AND the
-    // connected QMX confirms 1_04+ firmware, same pattern as the shelved CW
-    // Audio section. WiFi setup stays in its usual slot either way - see the
-    // drawer_build() WiFi section for both buttons' fixed positions.
+    // Antenna Tune: shown only in Panadapter mode with confirmed 1_04+
+    // firmware. Its section sits right above WiFi setup; when hidden, the
+    // panadapter layout below closes its slot so no button-sized hole is
+    // left (and reopens it in place when the firmware qualifies).
+    bool tune_ok = !ft8 && cat_qmx_fw_at_least(1, 4, 0);
     if (s_tune_entry_btn) {
-        bool tune_ok = !ft8 && cat_qmx_fw_at_least(1, 4, 0);
         if (tune_ok) lv_obj_clear_flag(s_tune_entry_btn, LV_OBJ_FLAG_HIDDEN);
         else lv_obj_add_flag(s_tune_entry_btn, LV_OBJ_FLAG_HIDDEN);
     }
@@ -5957,8 +5973,10 @@ static void drawer_set_ft8_mode(bool ft8)
         // in Panadapter mode), unlike the rest of keep[] which is shared
         // between both modes - so they're hidden, not kept, when !ft8.
         // DRAWER_SEC_CWAUDIO is shelved (cw_audio.c) and hidden in BOTH modes.
+        // DRAWER_SEC_TUNE2 is hidden whenever the Tune button is (FT8 mode or
+        // <1_04 firmware).
         if ((ft8 && !kept) || (!ft8 && (i == DRAWER_SEC_DISTANCE || i == DRAWER_SEC_SIMMODE)) ||
-            i == DRAWER_SEC_CWAUDIO) {
+            i == DRAWER_SEC_CWAUDIO || (i == DRAWER_SEC_TUNE2 && !tune_ok)) {
             lv_obj_add_flag(s_drawer_sections[i], LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_clear_flag(s_drawer_sections[i], LV_OBJ_FLAG_HIDDEN);
@@ -5972,8 +5990,16 @@ static void drawer_set_ft8_mode(bool ft8)
             y += keep_h[k];
         }
     } else {
+        // Panadapter layout = build-time positions, minus the Antenna Tune
+        // slot when it's hidden: every section below it shifts up by its
+        // height so the drawer stays gap-free on 1_03 firmware.
+        int tune_y = s_drawer_section_y[DRAWER_SEC_TUNE2];
+        int shift  = tune_ok ? 0 : DRAWER_TUNE2_H;
         for (int i = 0; i < N_DRAWER_SECTIONS; i++) {
-            if (s_drawer_sections[i]) lv_obj_set_pos(s_drawer_sections[i], 0, s_drawer_section_y[i]);
+            if (!s_drawer_sections[i]) continue;
+            int yy = s_drawer_section_y[i];
+            if (yy > tune_y) yy -= shift;
+            lv_obj_set_pos(s_drawer_sections[i], 0, yy);
         }
     }
 }

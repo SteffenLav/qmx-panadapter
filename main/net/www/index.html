@@ -385,7 +385,7 @@
          small upward popup; the underlying <a> items keep their IDs so all
          their existing handlers work unchanged. -->
     <div class="bot-menu-wrap">
-      <button type="button" class="bot-btn" id="log-group-btn" style="display:none">QSO Log &#9650;</button>
+      <button type="button" class="bot-btn" id="log-group-btn" style="display:none">QSO Logs &#9650;</button>
       <div class="bot-menu" id="log-menu">
         <a href="/api/adif" download="qso.adi" id="adif-link">ADIF download &#8595;</a>
         <a href="#" id="qrz-link">QRZ upload &#8593;</a>
@@ -399,12 +399,12 @@
         <a href="/api/config" download="qmx-config.txt" title="Download all settings + memory channels as an editable text file">Config download &#8595;</a>
         <a href="#" id="cfg-up-link" title="Upload an edited config file (merges; restart to apply)">Config upload &#8593;</a>
         <a href="#" id="diag-both-link" title="Download BOTH diagnostic logs: live (RAM, full session) + saved (flash/SD copy that survives power-off, e.g. POTA)">Diagnostic download &#8595;</a>
-        <a href="/ss.bmp" target="_blank">Tab5 screenshot</a>
       </div>
     </div>
     <div class="bot-menu-wrap">
       <button type="button" class="bot-btn" id="reset-group-btn">Miscellaneous &#9650;</button>
       <div class="bot-menu" id="reset-menu">
+        <a href="/ss.bmp" target="_blank">Tab5 screenshot</a>
         <a href="#" id="reset-settings-link" class="danger" title="Reset all app settings + memory channels to defaults (keeps the QSO log and WiFi). Clears a stuck stored value without an esptool full-erase. Reboots.">Reset settings</a>
         <a href="#" id="reset-network-link" class="danger" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
       </div>
@@ -1115,7 +1115,7 @@ async function tick() {
     let battStr = "🔋 ";
     if (batt && batt.level >= 0) {
       battStr += batt.level + "%";
-      if (batt.mv > 0) battStr += " " + (batt.mv / 1000).toFixed(1) + "V";
+      if (batt.mv > 0) battStr += " (" + (batt.mv / 1000).toFixed(1) + "V)";
       if (batt.charging) battStr += " ⚡";
     } else {
       battStr += "--";
@@ -1143,7 +1143,7 @@ async function tick() {
     // logged, so the group button appears only then and carries the count.
     if (qsoCount > 0) {
       adifLink.textContent = "ADIF download ↓ (" + qsoCount + ")";
-      logGroupBtn.textContent = "QSO Log (" + qsoCount + ") ▲";
+      logGroupBtn.textContent = "QSO Logs (" + qsoCount + ") ▲";
       logGroupBtn.style.display = "";
     } else {
       logGroupBtn.style.display = "none";
