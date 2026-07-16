@@ -5,6 +5,8 @@
 #include "ft8_pileup.h"
 #include "ft8_tx.h"
 #include "ft8_tx_modal.h"
+#include "ft8_qso.h"            // ft8_qso_fmt_report()
+#include "storage/settings.h"   // Field Day mode check
 #include "ui_theme.h"
 #include "ui.h"
 #include "util/dxcc.h"
@@ -64,12 +66,36 @@ static void row_work_cb(lv_event_t *e)
     // Reply on our own clear tone, same as a live decode-list row tap -
     // their stored frequency/last-seen-slot only feed the parity calc.
     int reply_freq_hz = ft8_find_clear_tone_hz();
+
+    // A pileup entry called US, so reply the way cqrun_answer() does:
+    // report-first, never grid TX1 (that's the answering station's message -
+    // the wrong role here, and it's what actually went on-air before this
+    // fix: the station has usually aged out of the live decode table, so
+    // ft8_qso_start()'s skip-TX1 scan missed and fell back to grid; Ken
+    // KF0AYY field report, 2026-07-15). Building the report into the request
+    // here means the TX modal previews exactly what will transmit, and
+    // ft8_qso_start() sees the report-shaped extra_field and starts in
+    // WAIT_ROGER regardless of the Skip-TX1 toggle. The report is their SNR
+    // as heard when they called us - the message we're answering. Field Day
+    // mode keeps the grid TX1 path (the FD class+section exchange is sent at
+    // the report step by the QSO machine, same as a decode-list pounce).
+    qmx_settings_t qs;
+    settings_load_all(&qs);
+    bool fd_mode = qs.field_day_en && qs.fd_class[0] && qs.fd_section[0];
+    char rpt[8];
+    const char *extra = NULL;
+    if (!fd_mode) {
+        ft8_qso_fmt_report(match->snr_db, rpt, sizeof(rpt));
+        extra = rpt;
+    }
+
     ft8_tx_request_t req;
     char err[64];
     if (ft8_tx_build_request(FT8_TX_KIND_REPLY, match->call, reply_freq_hz,
-                             match->last_seen_utc, NULL, &req, err, sizeof(err))) {
-        ESP_LOGI(TAG, "pileup row work: %s (their_freq=%d Hz -> our_freq=%d Hz)",
-                 match->call, (int)match->freq_hz, reply_freq_hz);
+                             match->last_seen_utc, extra, &req, err, sizeof(err))) {
+        ESP_LOGI(TAG, "pileup row work: %s report=%s (their_freq=%d Hz -> our_freq=%d Hz)",
+                 match->call, extra ? extra : "(grid TX1, FD mode)",
+                 (int)match->freq_hz, reply_freq_hz);
         modal_close();
         ft8_tx_modal_show(&req);
     } else {
