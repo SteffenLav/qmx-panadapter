@@ -38,7 +38,7 @@ Click anywhere on the spectrum to tune to that frequency. The waterfall updates 
 
 ## FT8 Control
 
-When the Tab5 is in **FT8/FT4 mode**, the browser pauses the live spectrum stream (see [Spectrum Waterfall](#spectrum-waterfall) above) and instead shows a status notice plus the **log and upload controls** — download your ADIF, upload to QRZ/eQSL, grab the diagnostic log. Operate FT8 (watch the decode list, tap to reply, call CQ) **on the Tab5 itself**.
+When the Tab5 is in **FT8/FT4 mode**, the browser pauses the live spectrum stream (see [Spectrum Waterfall](#spectrum-waterfall) above) and instead shows a status notice plus the **log and upload controls** — download your ADIF, upload to QRZ/eQSL/LoTW, grab the diagnostic log. Operate FT8 (watch the decode list, tap to reply, call CQ) **on the Tab5 itself**.
 
 FT8 transmit can only be initiated from the Tab5 — a safety feature, since only one interface should key the QMX at a time.
 
@@ -55,20 +55,43 @@ MD2;       → sets USB mode
 
 This is for advanced troubleshooting — most users don't need it.
 
-## Download Links
+## Bottom Bar Menus
 
-Bottom bar offers several downloads:
+The bottom bar groups its actions into three popup menus, plus a battery indicator (e.g. `🔋 87% (8.0V)`):
 
-- **ADIF ↓** — QSO log as an ADIF file (import into WSJT-X, EQSL, etc.)
-- **Config ↓** — all settings as a text file (backup or transfer to another Tab5)
-- **Diag ↓** — live diagnostic log for troubleshooting (always on, nothing to enable); **Diag(saved) ↓** — the copy persisted to flash from before the last reboot/power-off
-- **Tab5 Screenshot** — current display as PNG, now including any open pop-up (band/mode dropdown), not just the base screen
+**QSO Logs (n) ▲** — only visible when QSOs exist; *n* is the QSO count:
 
-## Upload Functions
+- **ADIF download ↓** — QSO log as an ADIF file (import into WSJT-X, EQSL, etc.)
+- **QRZ upload ↑** — upload ADIF to QRZ Logbook (requires API key on first use, saved for future sessions)
+- **eQSL upload ↑** — upload ADIF to eQSL (requires username/password on first use, saved)
+- **LoTW setup** / **LoTW ↑** — upload ADIF to ARRL's Logbook of The World (see [LoTW Upload](#lotw-upload) below)
 
-- **Config ↑** — restore settings from a backup file
-- **QRZ ↑** — upload ADIF to QRZ Logbook (requires API key on first use, saved for future sessions)
-- **eQSL ↑** — upload ADIF to eQSL (requires username/password on first use, saved)
+**Files ▲**:
+
+- **Config download ↓** — all settings as a text file (backup or transfer to another Tab5)
+- **Config upload ↑** — restore settings from a backup file
+- **Diagnostic download ↓** — downloads **both** diagnostic logs: the live session log (always on, nothing to enable) and the flash-persisted copy from before the last reboot/power-off
+
+**Miscellaneous ▲**:
+
+- **Tab5 screenshot** — current display as PNG, including any open pop-up (band/mode dropdown), not just the base screen
+- **Reset settings** — clear stored settings back to defaults (see [Troubleshooting](../reference/troubleshooting.md))
+- **Reset WiFi** — clear just the WiFi/network state
+
+## LoTW Upload
+
+Uploading to ARRL's **Logbook of The World** requires an existing LoTW account and a callsign certificate (made with ARRL's TQSL program).
+
+**One-time setup:** open the **QSO Logs** menu → **LoTW setup**. A guided two-page window walks you through it:
+
+1. **Page 1** explains how to export your callsign certificate from the TQSL program on your PC (**Callsign Certificate → Save the Callsign Certificate**, which produces a `.p12` file), with a button that opens ARRL's own instructions.
+2. **Page 2** imports the `.p12` file, its passphrase, and your DXCC entity (plus optional CQ/ITU zones). The `.p12` is parsed **in the browser** — the passphrase never reaches the device.
+
+After setup the button reads **LoTW ↑**. Each click signs all not-yet-uploaded QSOs on the device with your certificate and uploads them to lotw.arrl.org.
+
+**Certificate renewal** — LoTW certificates expire roughly every 3 years. **Ctrl-click** the **LoTW ↑** button to re-run setup. Importing a certificate re-uploads the whole log (LoTW ignores duplicates).
+
+## Upload Behaviour
 
 Uploads work **while FT8 or FT4 is actively running** — the panadapter briefly pauses the FFT and SD-archive activity during the HTTPS transfer, then resumes automatically. A result is shown once the upload completes, reporting how many QSOs were sent.
 

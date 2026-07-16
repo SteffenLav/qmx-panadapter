@@ -35,6 +35,15 @@ Tap any item on the top bar to open its selector:
 
 The frequency grid snaps based on zoom level (10 kHz at 1x, 1 kHz at 8x).
 
+## Display Sleep
+
+| Gesture | Effect |
+|---|---|
+| **Tap** (screen asleep) | Wake the display — the wake tap is swallowed, so it can't tune or press anything |
+| **Two-finger double-tap** | Blank the display immediately |
+
+The idle timeout is set via the **Display sleep** dropdown in the settings drawer (see [Settings](../guide/settings.md)).
+
 ## Memory Channels
 
 **Swipe ↑** from bottom edge → open memory picker.
@@ -68,6 +77,14 @@ Enter frequency as `MHz.kHz.Hz` (e.g., `14.074` for 14.074 MHz).
 | **Tap row** | Reply to that CQ |
 | **Long-press row** | (reserved for future use) |
 | **Scroll** | List is scrollable; swipe up/down |
+
+## ADIF Log Viewer
+
+| Gesture | Effect |
+|---|---|
+| **Long-press row** | Highlight the QSO red and lock list scrolling |
+| **Drag up/down** (while highlighted) | Move the highlight to another row |
+| **Release** | A Delete/Cancel bar appears — **Delete** removes that one record |
 
 ## Filter Modal
 

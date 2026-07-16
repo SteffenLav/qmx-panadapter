@@ -12,7 +12,7 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 - **Touch Interface** — Tap-to-tune, pinch-zoom, one-finger pan, edge-swipe navigation
 - **FT8 & FT4 Decoding** — Onboard decode for both modes with configurable filtering, worked-before exclusion, and priority ranking
 - **FT8 & FT4 Transmit** — Reply to CQ, run CQ, auto-QSO (robot mode), full exchange, ARRL Field Day mode
-- **ADIF Logging** — Every QSO logged locally, with QRZ Logbook and eQSL upload
+- **ADIF Logging** — Every QSO logged locally, with QRZ Logbook, eQSL, **and ARRL LoTW** upload (LoTW QSOs are signed on the device with your own callsign certificate)
 - **microSD Auto-Archive** — Insert a card and the diagnostic log, ADIF log, and config are mirrored automatically; a green SD dot in the bottom bar confirms it's active
 - **Web UI** — Remote spectrum, waterfall, and control from any browser on the LAN
 - **Offline Ready** — Tab5 RTC + SNTP sync; FT8 operates without WiFi (POTA/portable)
@@ -21,20 +21,19 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 ## Status
 
-**v0.21.0 — FT4 is back. All features are stable; the Beta label remains only until LoTW / TQSL log upload lands (v1.0.0).**
+**v1.0.0 — the 1.0 release. The Beta label is gone: a complete, self-contained FT8/FT4 station with no PC in the loop.**
 
-- **v0.21.0 headline — FT4 returns**: the panadapter no longer redraws itself behind the FT8/FT4 screen, freeing the processor headroom FT4's faster 7.5-second cadence needs — FT4 is re-enabled and verified end-to-end (RX and TX)
-- **Fixed in v0.21.0**: a full-screen display flash in FT4; QRZ uploads getting stuck on already-logged contacts; plus you can now reset settings or Wi-Fi from the web page, and the QMX's VOX is switched off automatically at link time
+- **v1.0.0 headline — LoTW upload**: QSOs are signed on the device with your own ARRL callsign certificate and uploaded straight to Logbook of the World — completing the logbook trio (QRZ, eQSL, LoTW). Guided one-time setup from the web page
+- **Also new in v1.0.0**: the FT8 "every message sent twice" behaviour is fixed (exchanges take half the time); nonstandard callsigns (`<...>`) resolve; correct received reports in the log; broken QSOs resume where they stopped; Today/POTA view and single-record delete in the QSO log; display sleep (idle screen-off with tap-wake); reorganized settings drawer; web bottom bar decluttered into menus
 - All panadapter features (spectrum, waterfall, zoom, memory, web UI) are production-ready
-- FT8 **and FT4** receive/transmit, plus ADIF logging, are stable
-- v0.20.0 reliability work still in place: the "WiFi dies after a few minutes" fault self-heals; opening a window no longer freezes the device; the CAT link rides out USB glitches; FT8 pile-up list, "Skip TX1" quick pounce, 11 m/CB band, memory-channel overhaul, battery-care charge limit, and the web-UI improvements (whole-band plan strip, draggable split, better screenshots and frequency keypad)
+- FT8 **and FT4** receive/transmit, ADIF logging, and all three logbook uploads are stable
 - See [Version History](releases.md) for all changes
 
 ## Get Started
 
 **New user?** Start with the [Quick Start](quick-start.md) guide — 10 minutes to on-air.
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v0.21.0.pdf) — a printable 40-page reference.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.0.0.pdf) — a printable 40-page reference.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

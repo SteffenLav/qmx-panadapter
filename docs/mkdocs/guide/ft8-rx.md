@@ -34,6 +34,12 @@ The list shows every decoded FT8 message:
 
 **Own call highlight** — your callsign is shown in **inverted colours** (red fill, white text) so you spot replies to you instantly.
 
+**Stale entries** — the list is a live picture of who's on frequency now; stations not heard again within **2 minutes** drop off automatically.
+
+**During your own CQ run** — stations transmitting on *your* transmit slot (which you can't hear while transmitting) are hidden from the list and return when the run ends; other stations' CQ rows are hidden during a run as before.
+
+**Nonstandard callsigns** — special-event and compound calls now resolve to the full callsign instead of showing `<...>`, once the station has been heard in full.
+
 ### 3. Filtering & Priority
 
 Tap the **Filter** button to open the filter modal:

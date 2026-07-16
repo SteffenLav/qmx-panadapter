@@ -87,7 +87,7 @@ If still flat after 10 seconds, proceed to [Collecting Diagnostics](#collecting-
 1. **Turn WiFi off** temporarily and see if decodes improve
 2. Restart the panadapter (go Panadapter → settings → About → Reset)
 3. Check USB cable is firmly connected
-4. Download the diagnostic log (web UI **Diag ↓**) after a session and post it on GitHub
+4. Download the diagnostic log after a session (web UI **Files** menu → **Diagnostic download ↓**) and post it on GitHub
 
 ### FT8 transmit doesn't key the QMX
 
@@ -175,19 +175,19 @@ For POTA/portable operation without WiFi:
 **Fix:**
 
 1. Re-enter your settings
-2. If they disappear again, download the diagnostic log (web UI **Diag ↓**) and report on GitHub
-3. As a last resort: export your config via web UI (Config ↓), then do a full factory reset, then re-import
+2. If they disappear again, download the diagnostic log (web UI **Files** menu → **Diagnostic download ↓**) and report on GitHub
+3. As a last resort: export your config via the web UI (**Files** menu → **Config download ↓**), then do a full factory reset, then re-import
 
 ### Clearing a stuck configuration (web-based reset, new in v0.21.0)
 
 **Symptoms:** the panadapter behaves as if a setting is wedged — e.g. WiFi won't come up no matter what, or a stored value seems stuck — and re-entering settings doesn't help.
 
-You can now reset from the web page, with no computer or flashing tool needed. In the web UI, use the reset control and pick the scope:
+You can now reset from the web page, with no computer or flashing tool needed. In the web UI, open the **Miscellaneous** menu in the bottom bar and pick the scope:
 
 - **Reset settings** — clears the app's stored settings (callsign, grid, filters, preferences) back to defaults. Your memory channels and logs are separate.
-- **Reset network** — clears just the Wi-Fi / network state, for when the connection is stuck.
+- **Reset WiFi** — clears just the Wi-Fi / network state, for when the connection is stuck.
 
-Each choice asks for confirmation first, then the device reboots and clears the selected storage on the way back up. Export your config first (**Config ↓**) if you want to restore it afterward.
+Each choice asks for confirmation first, then the device reboots and clears the selected storage on the way back up. Export your config first (**Files** menu → **Config download ↓**) if you want to restore it afterward.
 
 ## Collecting Diagnostics
 
@@ -198,7 +198,7 @@ If you're stuck, capture a **diagnostic log**:
 The diagnostic log is **always on** — nothing to enable.
 
 1. Reproduce the issue (let it sit for 30 seconds)
-2. In the web UI bottom bar, click **Diag ↓** to download the live session log — or **Diag(saved) ↓** for the copy persisted from before the last reboot (useful if the device crashed or was power-cycled)
+2. In the web UI bottom bar, open the **Files** menu and click **Diagnostic download ↓** — it downloads both the live session log and the copy persisted from before the last reboot (useful if the device crashed or was power-cycled)
 3. Alternatively, if a microSD card is inserted, pull `/qmx-panadapter/qmx-log.txt` from the card
 4. Post the `.txt` file on [GitHub Issues](https://github.com/SteffenLav/qmx-panadapter/issues) or the [QRPLabs Groups.io thread](https://groups.io/g/QRPLabs/topic/119565643)
 

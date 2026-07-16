@@ -122,7 +122,7 @@ Swipe → from the left edge to switch to **FT8 view**. You'll see:
 If you set up WiFi:
 
 1. Open your browser to `http://<ip-address>` (Tab5 displays its IP in the settings)
-2. You'll see a remote spectrum, waterfall, and control panel
+2. You'll see a remote spectrum, waterfall, and control panel — plus QSO log downloads and uploads to QRZ, eQSL, and LoTW
 3. No installation or configuration needed — just open and go
 
 ## Troubleshooting
@@ -142,7 +142,7 @@ If you set up WiFi:
 - See [Troubleshooting](reference/troubleshooting.md) for more
 
 **Still stuck?**
-- The **diagnostic log is always on** — nothing to enable. Download it via the web UI (**Diag ↓** in the bottom bar; **Diag(saved) ↓** for the copy from before the last reboot), or pull `qmx-log.txt` from an inserted microSD card
+- The **diagnostic log is always on** — nothing to enable. Download it via the web UI: open the **Files** menu in the web page's bottom bar and click **Diagnostic download ↓** (downloads both the live log and the saved pre-reboot copy), or pull `qmx-log.txt` from an inserted microSD card
 - Report the issue on [GitHub Issues](https://github.com/SteffenLav/qmx-panadapter/issues) or the [QRPLabs Groups.io thread](https://groups.io/g/QRPLabs/topic/119565643) and attach the log
 
 ---

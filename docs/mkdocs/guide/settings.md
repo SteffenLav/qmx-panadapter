@@ -34,6 +34,8 @@ Once connected, the settings show your **IP address** — use this to access the
 
 **Flip 180°** — Invert the display for upside-down mounting or cable routing.
 
+**Display sleep** — Dropdown (Off / 1 / 2 / 5 / 10 / 30 min). After the chosen idle time the backlight turns off; FT8, the radio link, and the web UI keep running. Tap the screen to wake — the wake tap is swallowed, so it can't tune or press anything. A **two-finger double-tap** blanks the display immediately.
+
 **Brightness** — Screen brightness (0–100%).
 
 **Spectrum Mode** — 
@@ -88,7 +90,7 @@ Once connected, the settings show your **IP address** — use this to access the
 
 The diagnostic log is **always on** — there is nothing to enable. All firmware log output is captured to a 5 MB memory ring, with a rolling copy persisted to internal flash (survives a reboot or power-off) and, if a microSD card is inserted, mirrored continuously to the card. Download via:
 
-- Web UI: **Diag ↓** (live session log) or **Diag(saved) ↓** (the flash-persisted copy from before the last reboot)
+- Web UI: open the **Files** menu in the bottom bar and click **Diagnostic download ↓** (downloads both the live session log and the flash-persisted copy from before the last reboot)
 - microSD card: `/qmx-panadapter/qmx-log.txt`
 - USB serial: `tools/capture_serial_log.ps1`
 
@@ -128,6 +130,12 @@ A **green SD dot** in the bottom status bar confirms a card is mounted and being
 | Rcvd | Their signal report (SNR) |
 
 A sticky header row stays pinned while you scroll. Even-numbered rows are lightly shaded so long logs stay easy to scan.
+
+**Today/All filter** — the viewer opens on **Today** (falling back to All when nothing was logged today). The toggle button shows the view you *switch to* by pressing it; the title shows the current view with counts.
+
+**POTA activation counter** — in the Today view the title reads "Today: N (M total)" and turns **green** once today reaches 10 QSOs — a valid POTA activation.
+
+**Delete a single record** — **long-press** a QSO row: the row highlights red and list scrolling locks. Drag up/down to move the highlight, then release — a Delete/Cancel bar appears at the bottom. **Delete** removes just that one record (useful for duplicates).
 
 Tap **Clear** to erase the log (irreversible). Use the web UI to download the full ADIF file for import into WSJT-X, EQSL, or any other logging software.
 

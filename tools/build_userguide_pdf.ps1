@@ -56,8 +56,8 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 
 # --- extract firmware version from README ----
 $text = (Get-Content -Raw -Encoding UTF8 $readme) -replace "`r`n", "`n"
-$verMatch = [regex]::Match($text, '\*\*Beta\s+\W+\s*(v[\d.]+)\.\*\*')
-if (-not $verMatch.Success) { Write-Error "Could not find the version in README's beta banner line." }
+$verMatch = [regex]::Match($text, '\*\*(?:Beta|Release)\s+\W+\s*(v[\d.]+)\.\*\*')
+if (-not $verMatch.Success) { Write-Error "Could not find the version in README's banner line (expects '**Beta — vX.Y.Z.**' or '**Release — vX.Y.Z.**')." }
 $fwVersion = $verMatch.Groups[1].Value
 $pdfName   = "QMX-Panadapter-UserGuide-$fwVersion.pdf"
 $pdfOut    = Join-Path $docsDir $pdfName

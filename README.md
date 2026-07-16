@@ -12,9 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Beta — v0.21.0.** **FT4 is back** — the fix that freed up processor headroom (the panadapter no longer redraws itself behind the FT8/FT4 screen) is exactly what let it return, verified end-to-end. Also this release: a full-screen display flash in FT4 is fixed, QRZ uploads no longer get stuck on already-logged contacts, and you can now reset settings or Wi-Fi from the web page. Panadapter, FT8 **and FT4** receive/transmit, web UI, and ADIF logging are all stable. The one remaining step before v1.0.0 (and dropping the beta label) is LoTW / TQSL log upload.
+> **Release — v1.0.0.** **The beta label is gone.** The QMX Panadapter is a complete, self-contained FT8/FT4 station — receive, transmit, auto-QSO, ADIF logging, and upload to **all three major logbooks: QRZ, eQSL, and (new in this release) ARRL LoTW**, signed on the device with your own callsign certificate — no PC anywhere in the loop. Also in v1.0.0: the FT8 double-send is fixed (exchanges no longer take twice as long), nonstandard callsigns (`<...>`) now resolve, correct received reports in the log, broken QSOs resume where they stopped, a Today/POTA view and single-record delete in the QSO log, display sleep for battery life, and a reorganized settings drawer.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v0.21.0.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.0.0.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -826,10 +826,10 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-The path to v1.0 is a complete standalone FT8 station with TX, logging, and ADIF upload.
+**v1.0.0 is here** — the complete standalone FT8 station (TX, logging, and upload to QRZ / eQSL / LoTW) has shipped. Next on the bench:
 
-- **LoTW upload.** Needs its own design — certificate-based via TQSL, not a simple HTTP API like QRZ/eQSL.
-- **v1.0.0 — Stable release.** LoTW/TQSL upload added, polished UI, beta label gone. (FT8 TX is already soaked/stable, along with the whole panadapter / FT8-RX / web / logging stack.)
+- **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
+- **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).
 
 ### Longer term
 

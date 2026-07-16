@@ -4,18 +4,24 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v0.21.0** — 2026-07-13
+**v1.0.0** — 2026-07-16
 
-**FT4 is back**, the FT8/FT4 screen runs cooler, a display glitch is fixed, and QRZ uploads no longer get stuck.
+**The 1.0.** The beta label is gone: the QMX Panadapter is a complete, self-contained FT8/FT4 station — receive, transmit, auto-QSO, logging, and upload to **all three major logbooks** — with no PC anywhere in the loop.
 
-- **FT4 returns.** It was paused in v0.19.x because its faster 7.5-second cadence starved the processor and could crash. The fix: the panadapter no longer redraws its spectrum and waterfall while the FT8/FT4 screen completely covers them — pure wasted work that was tying up the busiest processor core ~30 times a second. That freed the headroom FT4 needs, and FT4 is now verified end-to-end — receive *and* transmit, contacts logged and uploaded. The S-meter in the FT8 top bar keeps updating as before
-- **Fixed: a full-screen flash** ("blink to blank and back") that appeared every 15 seconds to a couple of minutes, mostly in FT4. Two internal 10-second housekeeping tasks briefly stalled the display controller into dropping a frame; rewritten to avoid the stall. Verified: 10+ minutes of FT4 with zero flashes
-- **QRZ upload no longer gets stuck** on contacts already in your logbook — it skips duplicates and continues to the newer contacts instead of stopping dead. (Real errors like a bad API key still stop the batch)
-- **New: reset settings or Wi-Fi from the web page**, no computer or flashing tool needed — two scoped choices, each with a confirmation step, for clearing a stuck configuration in the field
-- **The QMX's VOX is switched off automatically** when the panadapter connects, same as IQ mode
+- **LoTW upload — the final piece.** QSOs are signed on the device with your own ARRL callsign certificate and uploaded directly to Logbook of the World. One-time guided setup from the web page (step-by-step TQSL certificate export, then import — your certificate passphrase never leaves your browser). Live-verified against lotw.arrl.org. Certificate renewal: Ctrl-click the LoTW button
+- **The FT8 "everything sent twice" behaviour is fixed.** Replies used to miss their own slot by ~2 seconds and go out again next cycle, doubling QSO duration; the transmitter now holds ~2 seconds for the fresh reply and fires it on the same slot. Field-verified on air
+- **Nonstandard callsigns work now**: special/compound calls (special-event stations, `PJ4/...`) no longer show as `<...>` once heard in full, and their answers to your CQ are recognized
+- **Correct received reports in the log**: the partner's `R-06`-style roger is their real measurement of your signal and is now logged as such — no more 599 placeholders from CQ runs. (Old 599 rows can be deleted — see next)
+- **QSO log viewer grows up**: a Today/All filter with a **POTA activation counter** (title turns green at 10 QSOs today), and **single-record delete** — long-press a row, drag to the right line, release, confirm. Deletions keep all three logbook upload positions consistent
+- **Broken QSOs resume**: if a station fades mid-exchange and comes back within a few minutes, the exchange continues where it stopped (automatically, or by tapping their row) instead of restarting from scratch
+- **Steadier decode list during CQ runs**: stations you can't currently hear (they transmit when you do) no longer vanish mid-run, and the list keeps entries for 2 minutes instead of 1
+- **Display sleep**: set an idle timeout and the screen turns off while everything keeps running (FT8, radio link, web UI). Tap to wake — the wake tap can't press anything. Two-finger double-tap blanks immediately. A real battery win for unattended and web-only use
+- **Reorganized settings drawer**: setup items (WiFi, callsign, band-plan region, brightness, battery care, display sleep) grouped at the top, display-tuning controls below
+- **Web page polish**: the bottom bar's many buttons are now three tidy menus (QSO Logs / Files / Miscellaneous); a congested WiFi link can no longer freeze the page for seconds
+- **A rare crash fixed**: a momentary USB glitch on the radio-control link could reboot the whole device; it now just retries
 - Full writeup in [Version History Document](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/version-history.md)
 
-### Installing v0.21.0
+### Installing v1.0.0
 
 1. Use the one-click flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases)
 2. Or follow [Build from Source](build/build.md)
@@ -29,6 +35,11 @@ Your settings (callsign, grid, WiFi, memory channels) are preserved during a nor
 3. Re-enter your settings on first boot
 
 ## Previous Releases
+
+### v0.21.0
+
+- **FT4 returned** — the panadapter no longer redraws itself behind the FT8/FT4 screen, freeing the processor headroom FT4's 7.5-second cadence needs; verified end-to-end (RX + TX)
+- Fixed a full-screen display flash (mostly in FT4); QRZ upload no longer gets stuck on already-logged contacts; reset settings or Wi-Fi from the web page; QMX VOX switched off automatically at link time
 
 ### v0.20.1 / v0.20.0
 
@@ -147,12 +158,11 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 ## Roadmap
 
-### v1.0.0 (Stable)
+### Next up (post-v1.0.0)
 
-Pending:
-
-1. **LoTW (TQSL) upload** — certificate-based API (harder than QRZ/eQSL); the last gate before the beta label drops
-2. **Re-enable SD auto-archive** — cut the mount's internal-memory cost (or gate it off during FT8) so it no longer starves the decoder
+1. **Web-UI audio streaming** — listen to the receiver in any browser on your LAN, demodulated on the Tab5. Already working in development; held for quality tuning and an overnight streaming soak
+2. **CW page** — canned-message CW TX memories, then decoded-CW display
+3. **Re-enable SD auto-archive** — cut the mount's internal-memory cost (or gate it off during FT8) so it no longer starves the decoder
 
 ### Phase 6.3 (FPS Recovery)
 
@@ -170,7 +180,7 @@ Pending:
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v0.21.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.0.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

@@ -272,6 +272,30 @@ Upload ADIF to eQSL.
 }
 ```
 
+### POST /api/lotw_cert
+
+Store the LoTW callsign certificate and key (extracted from the TQSL `.p12` in the browser during LoTW setup).
+
+### POST /api/lotw_upload
+
+Sign all pending QSOs with the stored certificate and upload them to lotw.arrl.org.
+
+**Response**:
+
+```json
+{
+  "uploaded": 5,
+  "failed": 0,
+  "error": null
+}
+```
+
+### GET /api/lotw_tq8
+
+Download the whole log as a signed `.tq8` file, for manual upload to LoTW or offline verification.
+
+**Response**: `.tq8` file (gzipped, signed)
+
 ## WebSocket (Streaming)
 
 The web UI uses WebSocket for **live spectrum streaming**:

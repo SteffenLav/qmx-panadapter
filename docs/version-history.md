@@ -752,6 +752,112 @@ Nothing else changed from v0.20.0.
 - **New: reset settings from the web page**, without needing a computer or flashing tool. Two scoped choices — reset just the app settings, or just the Wi-Fi/network state — each with a confirmation step. Useful for clearing a stuck configuration in the field.
 - **The QMX's VOX is now switched off automatically** when the panadapter connects, the same way IQ mode is set up at link time — one less thing to configure on the radio.
 
+## v1.0.0 — 2026-07-16 — The 1.0: a complete standalone FT8 station
+
+**The beta label is gone.** Every v1.0 release gate is met: the QMX Panadapter is now a
+complete, self-contained FT8/FT4 station — receive, transmit, auto-QSO, logging, and
+upload to **all three major logbooks (QRZ, eQSL, and now LoTW)** — with no PC in the loop.
+33 commits since v0.21.0.
+
+#### LoTW upload — the final v1.0 gate (live-verified)
+
+- **On-device TQ8 signing + upload to ARRL Logbook of the World**. Each QSO is
+  RSA-SHA1-signed with your own LoTW callsign certificate and uploaded directly to
+  lotw.arrl.org — no TQSL program, no PC. The TQ8 format was reverse-verified against
+  tqsllib's actual source code (the ARRL help pages are wrong in places), with a
+  host-side verification harness (`test/lotw_harness.c`).
+- **Guided 2-page web setup**: step-by-step TQSL certificate export instructions (with a
+  button straight to ARRL's own how-to page), then a browser-side .p12 import — the
+  certificate passphrase never reaches the device (parsed in-browser). Certificate
+  renewal: Ctrl-click the LoTW button to re-run setup.
+- **Live-verified 2026-07-14**: a real TQSL certificate imported, 22 QSOs signed
+  on-device and accepted by lotw.arrl.org.
+- Importing a (new) certificate rewinds the upload cursor so the whole log is re-signed
+  under the new key (server-side duplicates are harmless).
+
+#### FT8/FT4 exchange quality — the double-send is dead (field-verified on air)
+
+- **Hold-for-decode TX gate**: when a reply is due at the slot boundary but the previous
+  slot's decode is still in flight, the burst holds ~1.7 s for the fresh reply instead of
+  re-firing the stale message. The "every message sent twice" behaviour that doubled QSO
+  duration is gone. Field-verified across ~20 live cycles and multiple QSOs.
+- **Nonstandard-callsign support**: special/compound calls (`YR50NADIA`, `PJ4/...`) no
+  longer decode as `<...>` once heard in full, and their answers to your CQ are now
+  recognized. Verified live.
+- **RST_RCVD finally logged correctly in CQ runs**: the partner's numeric roger
+  (`R-06`) is their measurement of *your* signal — it is now captured as RST_RCVD
+  instead of logging the 599 placeholder.
+- **Broken QSOs can be resumed**: if a partner fades mid-exchange and the machine gives
+  up, a 5-minute resume record lets the exchange continue where it stopped — either
+  automatically when they are heard calling you again, or by re-pouncing their row. No
+  more starting over from grid TX1.
+- **Decode list behaviour during CQ runs**: stations on your own TX slot parity (which
+  you physically cannot hear while transmitting) no longer age out mid-run — and are
+  hidden from the list while the run is active, returning the moment it ends. The
+  "list suddenly empties a minute into my CQ" effect is gone. The stale window widened
+  60 → 120 s for less churn on marginal signals.
+- **Pileup replies send a signal report** (report-first, correct for the CQ-side role)
+  instead of a grid TX1 (Ken KF0AYY field report).
+- CQ presets with accidental leading/trailing whitespace no longer break encoding.
+
+#### ADIF log management on the device
+
+- **Today/All filter** in the log viewer with a **POTA activation counter** — the title
+  turns green at 10 QSOs today ("park is open"). Opens on Today; falls back to All when
+  today is empty.
+- **Single-record delete**: long-press a QSO row, drag to the right line, release →
+  Delete/Cancel. For duplicates and botched entries. Deletion keeps the QRZ/eQSL/LoTW
+  upload cursors consistent, rebuilds the worked-before cache, and re-mirrors to SD.
+
+#### Display sleep (Samuel W7STF)
+
+- Idle timeout (off/1/2/5/10/30 min) turns the backlight off — everything else (FT8,
+  CAT, WiFi, web UI) keeps running. A tap wakes the display (and is swallowed — it
+  cannot tune or press anything underneath); a **two-finger double-tap blanks
+  immediately**. The big battery win for web-UI-only and unattended use.
+
+#### Settings drawer & Tab5 UI
+
+- **Drawer regrouped**: device/setup items at the top (Flip 180° / Display sleep /
+  Battery care / Display brightness / Antenna Tune / WiFi setup / Callsign & Grid /
+  Band-plan region), display-tuning controls below with dB Range directly under
+  Presets. Frozen drawer header, bigger checkbox hit areas.
+- The Antenna Tune slot (1_04+ firmware only) now closes completely on 1_03 firmware —
+  no more button-sized hole above WiFi setup — and reopens in place when a 1_04 QMX
+  connects.
+- Spectrum right-edge scale labels (dBm and flat +dB) stay fully visible — the
+  top/bottom tick labels were half hidden at narrow dB ranges.
+- dB Range/Alpha drawer sliders now initialise from the stored values (they used to
+  show defaults and could clobber each other); waterfall/charge/flip settings included
+  in the config export.
+
+#### Web UI
+
+- **Bottom bar decluttered into menus**: QSO Logs (n) / Files / Miscellaneous popup
+  menus replace ~11 flat buttons. Tab5 screenshot lives under Miscellaneous.
+- LoTW setup pauses the spectrum stream so its one-time 73 KB library fetch cannot
+  stall the web server on a weak link; WebSocket sends are capped at 400 ms so a
+  congested link can no longer freeze the whole web UI for seconds.
+- Flat-spectrum (F) toggle persists across page reloads; battery voltage shown as
+  "(8.0V)".
+
+#### Stability
+
+- **USB bulk-error reboot fixed** (IDF patch #4): a transient USB transaction error on
+  the CAT pipe could assert-reboot the whole device (`hcd_dwc.c:2406`, serial-captured
+  live). The pinned IDF is patched to report a failed transfer instead — the CAT poll
+  simply retries. Builders: run `tools/patches/apply_hcd_bulk_error_recovery.ps1` after
+  any IDF reinstall (the 4th standing patch script).
+
+#### Notes for testers
+
+- The broken-QSO resume and CQ-run parity hiding shipped after bench verification but
+  before extended on-air soak — reports welcome.
+- Web-audio streaming (listen to the receiver in your browser — Sam W7STF's request) is
+  implemented and working on the bench but deliberately held out of v1.0.0 on a
+  development branch pending quality tuning and an overnight soak — it will follow in a
+  v1.1.x release.
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*

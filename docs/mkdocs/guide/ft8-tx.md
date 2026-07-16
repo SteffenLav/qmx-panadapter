@@ -80,7 +80,7 @@ When you call CQ (or work a busy run), more than one station may answer at once 
 
 - Whenever one or more stations are waiting, the **ADIF-log** button on the FT8 screen becomes a **Pileup** button in a distinct colour, and reverts once the list empties.
 - Tap **Pileup** to see everyone who has called you and isn't worked yet.
-- Tap a station in the list to work them (the same confirmation modal as a decode-list tap), or tap the small **✕** to dismiss them without working them.
+- Tap a station in the list to work them (the same confirmation modal as a decode-list tap), or tap the small **✕** to dismiss them without working them. Replies from the pile-up list open with a **signal report** directly — the correct opening for a station that has already called you.
 - A station is removed from the list automatically once you start a QSO with them.
 
 The pile-up tracker never transmits on its own — it only remembers callers; you choose who to work.
@@ -182,6 +182,8 @@ The FT8 left pane shows a **status label** indicating what's happening:
 
 Tap the status label to **abort** the current QSO (only works if ARMED or ACTIVE; once COMPLETE, it's logged).
 
+**Resume after timeout** — if a QSO times out because the partner faded, and they come back within ~5 minutes calling you, the exchange **resumes where it left off** automatically (or tap their row to resume manually) instead of restarting from scratch.
+
 ### 7. Power & SWR Readout
 
 After each transmit burst, the status bar briefly shows:
@@ -233,15 +235,17 @@ Every completed QSO is **automatically logged to ADIF** on the Tab5's internal s
 - **Duration** (QSO start to finish)
 - **Operator** (your callsign)
 
-Download the log via the web UI (**ADIF ↓** button) or Settings → ADIF Log.
+Download the log via the web UI (**QSO Logs** menu → **ADIF download ↓**) or Settings → ADIF Log.
 
-### 11. Upload to QRZ & eQSL
+### 11. Upload to QRZ, eQSL & LoTW
 
 Via the web UI:
 
-1. Click **QRZ ↑** or **eQSL ↑** in the bottom bar
-2. Enter your API key (QRZ) or username/password (eQSL) when first prompted — credentials are saved for future sessions
+1. Open the **QSO Logs** menu in the bottom bar and click **QRZ upload ↑**, **eQSL upload ↑**, or **LoTW setup** (reads **LoTW ↑** once configured)
+2. Enter your API key (QRZ), username/password (eQSL), or run the guided certificate setup (LoTW) when first prompted — credentials are saved for future sessions
 3. Click again to upload
+
+See [Web UI → LoTW Upload](web-ui.md#lotw-upload) for the LoTW certificate setup details.
 
 Logs are batched — each upload session records which QSOs have been sent, so re-running skips already-submitted entries.
 
