@@ -183,7 +183,9 @@ static void build_qso_row(lv_obj_t *parent, const char *line, bool even_row)
 
 // Rebuild the list from the live ADIF log, newest record first, honouring
 // the Today/All filter. Also refreshes the title counts and the toggle
-// button's label so all three always agree with what's on screen.
+// button's label. The button reads as an ACTION, not a state: it shows the
+// view you'll switch TO by pressing it (operator feedback 2026-07-16 -
+// "you press what you get"); the title text carries the current state.
 static void list_render(void)
 {
     int64_t t_start = esp_timer_get_time();
@@ -192,7 +194,7 @@ static void list_render(void)
     char today[9];
     today_utc(today);
 
-    if (s_lbl_filter) lv_label_set_text(s_lbl_filter, s_today_only ? "Today" : "All");
+    if (s_lbl_filter) lv_label_set_text(s_lbl_filter, s_today_only ? "All" : "Today");
     if (!s_list) return;
     lv_obj_clean(s_list);
 
@@ -345,7 +347,8 @@ static void modal_build(void)
     lv_obj_set_style_text_color(s_title, lv_color_hex(UI_COLOR_TEXT), 0);
     lv_obj_set_style_text_font(s_title, &lv_font_montserrat_28, 0);
 
-    // Today/All filter toggle - label shows the view currently on screen.
+    // Today/All filter toggle - the label is the ACTION (the view pressing
+    // it switches to); the title above shows the current view.
     lv_obj_t *btn_filter = lv_btn_create(hdr);
     lv_obj_set_size(btn_filter, 160, 56);
     lv_obj_set_style_bg_color(btn_filter, lv_color_hex(0x2a2f37), 0);
@@ -354,7 +357,7 @@ static void modal_build(void)
     lv_obj_set_style_radius(btn_filter, 8, 0);
     lv_obj_add_event_cb(btn_filter, filter_btn_cb, LV_EVENT_CLICKED, NULL);
     s_lbl_filter = lv_label_create(btn_filter);
-    lv_label_set_text(s_lbl_filter, "Today");
+    lv_label_set_text(s_lbl_filter, "All");   // action label; list_render() keeps it current
     lv_obj_set_style_text_color(s_lbl_filter, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(s_lbl_filter, &lv_font_montserrat_24, 0);
     lv_obj_center(s_lbl_filter);
