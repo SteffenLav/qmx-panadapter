@@ -483,6 +483,99 @@ static void relocate_cq_tone_if_clashing(void)
     ESP_LOGI(TAG, "CQ tone clash at %d Hz - relocated to %d Hz", old_freq, new_freq);
 }
 
+// --- Broken-QSO resume (operator request 2026-07-16) -----------------------
+// When an exchange is abandoned (timeout, or a manual abort mid-exchange) the
+// essentials are kept for QSO_RESUME_WINDOW_SEC so a partner who faded and
+// came back is CONTINUED where the exchange stopped - their R-report/RR73/73
+// picked up mid-flow - instead of restarted from TX1. Two triggers:
+// re-pouncing them by hand (ft8_qso_start), and automatically when a message
+// addressed to us from them decodes while we're not busy (ft8_qso_advance).
+// The auto path only ever re-engages a station the operator already chose to
+// work, within the window - not a new unattended-TX category.
+#define QSO_RESUME_WINDOW_SEC 300
+static char             s_resume_call[FT8_CALL_MAX_LEN];
+static ft8_qso_state_t  s_resume_state;
+static ft8_tx_request_t s_resume_req;       // the message we were repeating
+static bool             s_resume_have_req;
+static char             s_resume_rst_sent[8], s_resume_rst_rcvd[8];
+static char             s_resume_fd_exch[FT8_FD_EXCH_LEN];
+static bool             s_resume_from_cq;
+static int              s_resume_freq_hz;
+static int64_t          s_resume_at;        // time(NULL) at abandonment
+
+// Snapshot the current exchange as resumable. Call under lock(), BEFORE the
+// abandon path mutates state. Only exchange states are worth resuming.
+static void resume_record_save_locked(void)
+{
+    if (!s_target[0] || !s_have_cur) return;
+    if (s_state != FT8_QSO_WAIT_RPT && s_state != FT8_QSO_WAIT_ROGER &&
+        s_state != FT8_QSO_WAIT_RR73) return;
+    strncpy(s_resume_call, s_target, sizeof(s_resume_call) - 1);
+    s_resume_call[sizeof(s_resume_call) - 1] = '\0';
+    s_resume_state    = s_state;
+    s_resume_req      = s_cur_req;
+    s_resume_have_req = true;
+    memcpy(s_resume_rst_sent, s_rst_sent, sizeof(s_resume_rst_sent));
+    memcpy(s_resume_rst_rcvd, s_rst_rcvd, sizeof(s_resume_rst_rcvd));
+    memcpy(s_resume_fd_exch,  s_fd_their_exch, sizeof(s_resume_fd_exch));
+    s_resume_from_cq  = s_from_cq;
+    s_resume_freq_hz  = s_freq_hz;
+    s_resume_at       = (int64_t)time(NULL);
+}
+
+static bool resume_record_fresh(const char *call)
+{
+    if (!s_resume_call[0] || !s_resume_have_req || !call || !call[0]) return false;
+    if (strcmp(s_resume_call, call) != 0) return false;
+    return ((int64_t)time(NULL) - s_resume_at) <= QSO_RESUME_WINDOW_SEC;
+}
+
+// Restore the abandoned exchange and re-arm its last outgoing message; the
+// normal advance() flow then processes whatever the partner sends next (an
+// R-report/RR73 heard this very slot advances immediately). One-shot: the
+// record is consumed. Caller ensures the machine is idle/interruptible.
+static void resume_restore(void)
+{
+    lock();
+    strncpy(s_target, s_resume_call, sizeof(s_target) - 1);
+    s_target[sizeof(s_target) - 1] = '\0';
+    s_state        = s_resume_state;
+    s_cur_req      = s_resume_req;
+    s_have_cur     = true;
+    memcpy(s_rst_sent, s_resume_rst_sent, sizeof(s_rst_sent));
+    memcpy(s_rst_rcvd, s_resume_rst_rcvd, sizeof(s_rst_rcvd));
+    memcpy(s_fd_their_exch, s_resume_fd_exch, sizeof(s_fd_their_exch));
+    s_from_cq      = s_resume_from_cq;
+    s_freq_hz      = s_resume_freq_hz;
+    s_missed_slots = 0;
+    s_min_scan_utc = 0;             // partner is audible NOW - scan immediately
+    s_resume_call[0]  = '\0';
+    s_resume_have_req = false;
+    unlock();
+}
+
+// Did the abandoned partner transmit a message addressed to us THIS slot?
+// (Runs on the decode task - the ~11 KB stack snapshot is fine there, same
+// pattern as capture_pileup_callers.)
+static bool resume_comeback_heard(int64_t slot_sec)
+{
+    if (!s_my_call[0]) return false;
+    if (!resume_record_fresh(s_resume_call)) return false;
+    ft8_call_t snap[FT8_CALL_TABLE_SIZE];
+    int n = 0;
+    ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+    for (int i = 0; i < n; i++) {
+        if (snap[i].last_utc != slot_sec) continue;
+        char t1[16], t2[16], rest[FT8_FD_EXCH_LEN];
+        if (!split_msg3(snap[i].last_text, t1, sizeof(t1), t2, sizeof(t2),
+                        rest, sizeof(rest))) continue;
+        if (strcmp(t1, s_my_call) != 0) continue;
+        if (strcmp(t2, s_resume_call) != 0) continue;
+        return true;
+    }
+    return false;
+}
+
 // No progress this RX slot. Count it; on the Nth, give up on this station -
 // resume CQ if we were running CQ, else go to sticky TIMEOUT.
 static void register_miss(const char *waiting_for)
@@ -500,6 +593,12 @@ static void register_miss(const char *waiting_for)
         ft8_status_set("QSO %s: %s (%d/%d)...", tgt, waiting_for, m, QSO_TIMEOUT_SLOTS);
         return;
     }
+
+    // Remember the half-finished exchange so a comeback (manual re-pounce or
+    // the auto-resume scan in advance()) continues it instead of restarting.
+    lock();
+    resume_record_save_locked();
+    unlock();
 
     if (from_cq && s_have_cq_saved) {
         // Drop the half-finished QSO and go back to calling CQ on the frequency.
@@ -559,6 +658,23 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     }
 
     if (!load_my_call(err, err_len)) return false;
+
+    // RESUME: re-pouncing a partner we abandoned within the last few minutes
+    // continues the exchange where it stopped (re-arms the last message we
+    // were sending; their next R-report/RR73/73 advances normally) instead of
+    // restarting from TX1 - "just finish QSOs if they get broken up"
+    // (operator request 2026-07-16).
+    if (resume_record_fresh(tx1_req->target_call)) {
+        char who[FT8_CALL_MAX_LEN];
+        strncpy(who, s_resume_call, sizeof(who) - 1);
+        who[sizeof(who) - 1] = '\0';
+        resume_restore();
+        ft8_pileup_remove(who);
+        arm_current_if_idle();
+        ft8_status_set("QSO %s: resuming where we left off", who);
+        ESP_LOGI(TAG, "resume (manual): %s - continuing exchange", who);
+        return true;
+    }
 
     // "Skip TX1" (settings drawer toggle): instead of exchanging grids first,
     // jump straight to sending a signal report - the same message shape/state
@@ -867,6 +983,29 @@ void ft8_qso_advance(int64_t slot_sec)
 {
     capture_pileup_callers(slot_sec);
 
+    // Comeback auto-resume: a partner we abandoned recently decoded THIS slot
+    // with a message addressed to us, and we're not mid-exchange with anyone
+    // else - pick the QSO back up where it stopped. Restoring BEFORE the
+    // state snapshot below means the restored WAIT_* handler processes their
+    // message from this very slot (no extra cycle lost). An armed CQ is
+    // cancelled exactly like cqrun_answer() does for a fresh answer.
+    {
+        lock();
+        ft8_qso_state_t st0 = s_state;
+        unlock();
+        bool interruptible = (st0 == FT8_QSO_IDLE || st0 == FT8_QSO_DONE ||
+                              st0 == FT8_QSO_TIMEOUT || st0 == FT8_QSO_CQ);
+        if (interruptible && resume_comeback_heard(slot_sec)) {
+            char who[FT8_CALL_MAX_LEN];
+            strncpy(who, s_resume_call, sizeof(who) - 1);
+            who[sizeof(who) - 1] = '\0';
+            if (st0 == FT8_QSO_CQ) ft8_tx_disarm();
+            resume_restore();
+            ft8_status_set("QSO %s: partner came back - resuming", who);
+            ESP_LOGI(TAG, "resume (auto): %s heard again - continuing exchange", who);
+        }
+    }
+
     lock();
     ft8_qso_state_t st = s_state;
     char    target[FT8_CALL_MAX_LEN];
@@ -914,6 +1053,13 @@ void ft8_qso_advance(int64_t slot_sec)
             lock(); s_state = FT8_QSO_DONE; s_have_cur = false; unlock();
             ft8_status_set("QSO %s: complete!", target);
             ESP_LOGI(TAG, "QSO with %s complete", target);
+
+            // A completed QSO with this call supersedes any older resumable
+            // half-QSO - never auto-resume into a duplicate afterwards.
+            if (s_resume_call[0] && strcmp(s_resume_call, target) == 0) {
+                s_resume_call[0]  = '\0';
+                s_resume_have_req = false;
+            }
 
             // Build and save the ADIF record.
             qmx_settings_t qs;
@@ -1189,6 +1335,9 @@ void ft8_qso_abort(void)
     char target[FT8_CALL_MAX_LEN];
     strncpy(target, s_target, sizeof(target));
     target[sizeof(target) - 1] = '\0';
+    // A mid-exchange abort is resumable too (no-op for CQ/idle aborts - the
+    // save helper only records WAIT_* exchange states).
+    resume_record_save_locked();
     s_state         = FT8_QSO_IDLE;
     s_target[0]     = '\0';
     s_have_cur      = false;

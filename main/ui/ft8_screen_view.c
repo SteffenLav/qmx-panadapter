@@ -792,6 +792,18 @@ static void rebuild_list(void)
     // plain CQ" filter applies the same hide unconditionally.
     bool hide_cq = ft8_qso_cq_filter_active() || qs.ft8_filters.excl_plain_cq;
 
+    // Also hide stations whose last decode landed on OUR TX parity while the
+    // CQ run is active: we transmit over every slot we could hear them in, so
+    // they can't be worked right now - and since the parity-aging pause
+    // (06c8b9f) keeps their rows alive for the whole run (120 s window),
+    // they'd otherwise sit frozen in the list for minutes. Display-only: the
+    // table keeps them (the clash scan still sees their tones) and they
+    // reappear the moment the run ends. Operator request 2026-07-16.
+    bool cq_tx_even = false;
+    bool cq_hide_our_parity = ft8_qso_cq_filter_active() &&
+                              ft8_tx_get_parity_lock(&cq_tx_even);
+    int  cq_per_ms = ft8_op_mode_slot_ms();
+
     // Who (if anyone) we're actively mid-exchange with right now, for the
     // "currently working" row highlight - distinct from the broader own-call
     // red highlight, which covers every station that's answered, not just
@@ -807,6 +819,11 @@ static void rebuild_list(void)
     int row = 0;
     for (int i = 0; i < n && row < MAX_ROWS; i++) {
         if (hide_cq && strncmp(snap[i].last_text, "CQ ", 3) == 0) continue;
+        if (cq_hide_our_parity) {
+            // Same nearest-slot parity rounding as the per-row E/O indicator.
+            int64_t sidx = ((int64_t)snap[i].last_utc * 1000 + cq_per_ms / 2) / cq_per_ms;
+            if (((sidx % 2) == 0) == cq_tx_even) continue;
+        }
         if (qs.ft8_filters.incl_cq_only && strncmp(snap[i].last_text, "CQ ", 3) != 0) continue;
         if (!ft8_filter_match(snap[i].last_text, &qs.ft8_filters)) continue;
         update_row(row++, &snap[i]);
