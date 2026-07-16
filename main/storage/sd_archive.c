@@ -163,6 +163,19 @@ static void unmount(void)
 // Attempt to mount a card and set up the mirror. Returns true on success.
 static bool try_mount(void)
 {
+    // Largest-block instrumentation is gated to the FIRST attempt of the boot:
+    // heap_caps_get_largest_free_block() is a full heap walk, banned on any
+    // periodic path (multi-ms interrupts-off window -> panel cyan flash, see
+    // CLAUDE.md), and the no-card probe retries this function every 10 s. One
+    // walk at boot is the documented on-demand exception. free-size reads are
+    // O(1) counters and stay unconditional.
+    static bool s_lblk_instrumented = false;
+    bool   instr    = !s_lblk_instrumented;
+    size_t pre_lblk = 0;
+    if (instr) {
+        s_lblk_instrumented = true;
+        pre_lblk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+    }
     size_t pre_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     size_t pre_p = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     esp_err_t err = bsp_sdcard_init((char *)SD_MOUNT_POINT, 2);
@@ -175,9 +188,18 @@ static bool try_mount(void)
 
     size_t post_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     size_t post_p = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    ESP_LOGI(TAG, "SDMMC mount heap cost: internal -%u B (was %u, now %u), PSRAM -%d B",
-             (unsigned)(pre_i - post_i), (unsigned)pre_i, (unsigned)post_i,
-             (int)(pre_p - post_p));
+    if (instr) {
+        size_t post_lblk = heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL);
+        ESP_LOGI(TAG, "SD (SPI) mount heap cost: internal -%u B (%u -> %u), "
+                      "lblk %u -> %u, PSRAM -%d B",
+                 (unsigned)(pre_i - post_i), (unsigned)pre_i, (unsigned)post_i,
+                 (unsigned)pre_lblk, (unsigned)post_lblk,
+                 (int)(pre_p - post_p));
+    } else {
+        ESP_LOGI(TAG, "SD (SPI) mount heap cost: internal -%u B (%u -> %u), PSRAM -%d B",
+                 (unsigned)(pre_i - post_i), (unsigned)pre_i, (unsigned)post_i,
+                 (int)(pre_p - post_p));
+    }
 
     ensure_dir(SD_DIR);
 
@@ -246,6 +268,20 @@ static void sd_archive_task(void *arg)
             continue;
         }
 
+        // One-shot heap snapshot after the first complete mirror burst of the
+        // boot - separates "cost of the mount" (logged in try_mount) from
+        // "cost of the mirror machinery" (held-open log FILE, stdio buffers,
+        // FatFs LFN heap, ...). The lblk walk is the same on-demand exception
+        // as try_mount's; never runs again after this.
+        static bool s_mirror_heap_logged = false;
+        if (!s_mirror_heap_logged) {
+            s_mirror_heap_logged = true;
+            ESP_LOGI(TAG, "post-first-mirror heap: internal free=%u min=%u lblk=%u",
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                     (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+        }
+
         xSemaphoreGive(s_sd_mutex);
         vTaskDelay(pdMS_TO_TICKS(WORK_MS));
     }
@@ -257,7 +293,8 @@ void sd_archive_init(void)
 {
 #if SD_ARCHIVE_DISABLED
     ESP_LOGW(TAG, "SD auto-archive soft-disabled (see SD_ARCHIVE_DISABLED in "
-                  "sd_archive.h) - shared-SDMMC/WiFi wedge not yet root-caused");
+                  "sd_archive.h) - WiFi wedge is fixed (2026-07-10); kept off "
+                  "pending the mount's internal-RAM cost verification");
     return;
 #endif
     s_sd_mutex = xSemaphoreCreateMutex();

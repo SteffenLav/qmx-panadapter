@@ -51,7 +51,21 @@ extern "C" {
 // FFT/buffers starve). So SD-on is a WiFi-safe now but FT8-hostile trade: kept
 // DISABLED. Re-enabling would need the SD mount's internal-RAM cost reduced OR
 // the mount gated off while in FT8 mode.
-#define SD_ARCHIVE_DISABLED 1
+//
+// 2026-07-16: RE-ENABLE TEST (flag=0 on branch test/sd-archive-reenable). The
+// decode-starvation measurement above predates v0.21.0's Tier 0/1 work; the
+// current no-SD field baseline (Ken KF0AYY's 2026-07-15 POTA log) is 59-60 KB
+// internal free / min 45 KB / lblk 31 KB steady through a full FT8 session
+// with WiFi up — enough headroom that the old ~30 KB mount cost MIGHT now fit.
+// This build adds one-shot heap instrumentation at mount time (incl. largest
+// block) and after the first mirror burst, to finally itemize where the cost
+// lands. Test protocol: card in, busy band, 15-20 min FT8 with WiFi + web UI
+// open; watch the per-slot heap_i=(min=,lblk=) line and dec= counts. Ship
+// re-enabled if lblk stays >= ~24 KB and decode stays healthy; otherwise the
+// fallbacks are hunting the mount's internal allocations into PSRAM or gating
+// the mount to Panadapter mode (SPIFFS diag persistence already covers the
+// FT8 POTA field-log case since v0.19.x, so that trade is now acceptable).
+#define SD_ARCHIVE_DISABLED 0
 
 // Spawn the background archive task. Call once from app_main after settings,
 // ADIF, and config storage are initialised. Cheap; the task does the probing.
