@@ -1166,10 +1166,13 @@ void ft8_qso_advance(int64_t slot_sec)
         // their first FD-specific message to us).
         if (!found) { register_miss("waiting for report"); return; }
 
-        // RST_SENT for ADIF: the protocol never has us transmit a numeric
-        // report of THEM (TX2 just rogers their report back), so log our own
-        // locally-measured SNR of their signal - same convention cqrun_answer()
-        // already uses for the CQ-run direction. Previously hardcoded "599".
+        // Our own locally-measured SNR of their signal. This is what TX2's
+        // "R<report>" must carry - our measurement of THEM, NOT an echo of the
+        // report they sent us (fixed 2026-07-17: two field reports, Steve N0SZ
+        // + Jonathan KN6LFB, both saw us reply R<their-report> regardless of
+        // actual strength; skip-TX1 was already correct because it builds the
+        // report from this same SNR). Also the RST_SENT logged for ADIF, same
+        // convention cqrun_answer() uses for the CQ-run direction.
         char our_rpt[8];
         fmt_report(snr_db, our_rpt, sizeof(our_rpt));
         strncpy(s_rst_sent, our_rpt, sizeof(s_rst_sent) - 1);
@@ -1193,9 +1196,15 @@ void ft8_qso_advance(int64_t slot_sec)
                               FT8_QSO_WAIT_RR73);
             if (ok) ft8_status_set("QSO %s: heard %s - sending %s", target, report, roger);
         } else {
-            char roger[8];
-            make_roger(report, roger, sizeof(roger));
-            ESP_LOGI(TAG, "WAIT_RPT: %s reported %s -> TX2 %s", target, report, roger);
+            // TX2 = "R" + OUR measured report of them (our_rpt), not their
+            // report echoed back. `report` (their report of us) is captured
+            // as RST_RCVD only. roger[] sized generously so the inlined
+            // make_roger's "R%s" can't trip -Wformat-truncation on our_rpt's
+            // 8-byte bound (real content is tiny, e.g. "R-04").
+            char roger[16];
+            make_roger(our_rpt, roger, sizeof(roger));
+            ESP_LOGI(TAG, "WAIT_RPT: %s reported us %s, we heard them %s -> TX2 %s",
+                     target, report, our_rpt, roger);
             ok = send_next(FT8_TX_KIND_ROGER_RPT, target, freq, slot_sec, roger,
                            FT8_QSO_WAIT_RR73);
             if (ok) {
