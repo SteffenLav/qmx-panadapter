@@ -21,8 +21,9 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 ## Status
 
-**v1.0.0 — the 1.0 release. The Beta label is gone: a complete, self-contained FT8/FT4 station with no PC in the loop.**
+**v1.0.1 — the 1.0 release (plus a fast follow-up fix). The Beta label is gone: a complete, self-contained FT8/FT4 station with no PC in the loop.**
 
+- **v1.0.1**: fixes the signal report sent when you answer another station's CQ — it now reports *your* measurement of their signal, not an echo of the report they gave you
 - **v1.0.0 headline — LoTW upload**: QSOs are signed on the device with your own ARRL callsign certificate and uploaded straight to Logbook of the World — completing the logbook trio (QRZ, eQSL, LoTW). Guided one-time setup from the web page
 - **Also new in v1.0.0**: the FT8 "every message sent twice" behaviour is fixed (exchanges take half the time); nonstandard callsigns (`<...>`) resolve; correct received reports in the log; broken QSOs resume where they stopped; Today/POTA view and single-record delete in the QSO log; display sleep (idle screen-off with tap-wake); reorganized settings drawer; web bottom bar decluttered into menus
 - All panadapter features (spectrum, waterfall, zoom, memory, web UI) are production-ready
@@ -33,7 +34,7 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 **New user?** Start with the [Quick Start](quick-start.md) guide — 10 minutes to on-air.
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.0.0.pdf) — a printable 40-page reference.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.0.1.pdf) — a printable 40-page reference.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

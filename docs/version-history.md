@@ -858,6 +858,14 @@ upload to **all three major logbooks (QRZ, eQSL, and now LoTW)** — with no PC 
   development branch pending quality tuning and an overnight soak — it will follow in a
   v1.1.x release.
 
+## v1.0.1 — 2026-07-17 — Pounce report fix
+
+A point release fixing one bug reported within hours of v1.0.0 going out.
+
+- **When answering another station's CQ, the signal report you send back is now your own measurement of their signal** — not an echo of the report they sent you. On v1.0.0, if a station you were receiving at −4 gave you a −10, the reply went out as `R-10` regardless of how strong they actually were; it now correctly sends `R-04`. (Reported independently by Steve N0SZ and Jonathan KN6LFB.) The "Skip TX1" quick-pounce path was already correct — this only affected the normal grid-first pounce. Your received report is still logged correctly as RST_RCVD; only the transmitted report was wrong.
+
+Everything else is identical to v1.0.0.
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*

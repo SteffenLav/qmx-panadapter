@@ -12,9 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.0.0.** **The beta label is gone.** The QMX Panadapter is a complete, self-contained FT8/FT4 station — receive, transmit, auto-QSO, ADIF logging, and upload to **all three major logbooks: QRZ, eQSL, and (new in this release) ARRL LoTW**, signed on the device with your own callsign certificate — no PC anywhere in the loop. Also in v1.0.0: the FT8 double-send is fixed (exchanges no longer take twice as long), nonstandard callsigns (`<...>`) now resolve, correct received reports in the log, broken QSOs resume where they stopped, a Today/POTA view and single-record delete in the QSO log, display sleep for battery life, and a reorganized settings drawer.
+> **Release — v1.0.1.** **The beta label is gone.** The QMX Panadapter is a complete, self-contained FT8/FT4 station — receive, transmit, auto-QSO, ADIF logging, and upload to **all three major logbooks: QRZ, eQSL, and ARRL LoTW**, signed on the device with your own callsign certificate — no PC anywhere in the loop. The 1.0 release brought the FT8 double-send fix (exchanges no longer take twice as long), nonstandard-callsign (`<...>`) resolution, correct received reports in the log, broken-QSO resume, a Today/POTA view and single-record delete in the QSO log, display sleep, LoTW upload, and a reorganized settings drawer. **v1.0.1** fixes one bug found right after 1.0.0: when you answer someone's CQ, the report you send back is now *your* measurement of their signal, not an echo of the report they gave you.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.0.0.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.0.1.pdf).
 
 <!-- USERGUIDE:START -->
 

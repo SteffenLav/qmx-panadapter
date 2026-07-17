@@ -4,7 +4,24 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.0.0** — 2026-07-16
+**v1.0.1** — 2026-07-17
+
+A point release fixing one bug reported within hours of v1.0.0:
+
+- **When you answer another station's CQ, the report you send back is now your own measurement of their signal** — not an echo of the report they sent you. On v1.0.0, a station you heard at −4 who gave you a −10 got `R-10` back regardless of their real strength; it now correctly sends `R-04`. (Reported by Steve N0SZ and Jonathan KN6LFB.) The "Skip TX1" quick-pounce was already correct; your received report was always logged correctly — only the transmitted report was wrong. Everything else is identical to v1.0.0.
+
+### Installing v1.0.1
+
+1. Use the one-click flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases)
+2. Or follow [Build from Source](build/build.md)
+
+Your settings are preserved during a normal flash.
+
+---
+
+## Previous Releases
+
+### v1.0.0 — 2026-07-16
 
 **The 1.0.** The beta label is gone: the QMX Panadapter is a complete, self-contained FT8/FT4 station — receive, transmit, auto-QSO, logging, and upload to **all three major logbooks** — with no PC anywhere in the loop.
 
@@ -20,21 +37,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **Web page polish**: the bottom bar's many buttons are now three tidy menus (QSO Logs / Files / Miscellaneous); a congested WiFi link can no longer freeze the page for seconds
 - **A rare crash fixed**: a momentary USB glitch on the radio-control link could reboot the whole device; it now just retries
 - Full writeup in [Version History Document](https://github.com/SteffenLav/qmx-panadapter/blob/main/docs/version-history.md)
-
-### Installing v1.0.0
-
-1. Use the one-click flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases)
-2. Or follow [Build from Source](build/build.md)
-
-### Upgrading from Earlier Versions
-
-Your settings (callsign, grid, WiFi, memory channels) are preserved during a normal flash. If something seems stuck, use a **clean flash** to erase all settings:
-
-1. Run the flasher
-2. When prompted, type **E** for clean flash
-3. Re-enter your settings on first boot
-
-## Previous Releases
 
 ### v0.21.0
 
@@ -180,7 +182,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.0.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.0.1.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 
