@@ -34,7 +34,8 @@ static lv_obj_t *s_cb_incl_cq_only  = NULL;
 static lv_obj_t *s_cb_skip_tx1      = NULL;  // pounce: skip grid, send report first
 static lv_obj_t *s_cb_robot         = NULL;  // auto-answer enable
 static lv_obj_t *s_dd_robot_pri     = NULL;  // priority dropdown
-static lv_obj_t *s_robot_warn       = NULL;  // "unattended TX" warning - shown only while s_cb_robot is checked
+static lv_obj_t *s_cb_auto_pileup   = NULL;  // auto-work waiting pileup callers on QSO completion
+static lv_obj_t *s_robot_warn       = NULL;  // "unattended TX" warning - shown while robot OR auto-pileup is checked
 static lv_obj_t *s_cb_field_day     = NULL;  // ARRL Field Day exchange mode enable
 static lv_obj_t *s_ta_fd_class      = NULL;  // e.g. "16A"
 static lv_obj_t *s_ta_fd_section    = NULL;  // e.g. "EMA"
@@ -110,6 +111,7 @@ static void save_btn_cb(lv_event_t *e)
     f.skip_tx1           = lv_obj_has_state(s_cb_skip_tx1, LV_STATE_CHECKED);
     f.robot_en           = lv_obj_has_state(s_cb_robot, LV_STATE_CHECKED);
     f.robot_priority     = (uint8_t)lv_dropdown_get_selected(s_dd_robot_pri);
+    f.auto_pileup        = lv_obj_has_state(s_cb_auto_pileup, LV_STATE_CHECKED);
 
     settings_set_ft8_filters(&f);
 
@@ -133,10 +135,10 @@ static void save_btn_cb(lv_event_t *e)
         // unchecking Field Day mode here).
         ft8_screen_view_refresh_cq_label();
     }
-    ESP_LOGI(TAG, "saved filters: incl=[%d:'%s' %d:'%s'] excl=[%d:'%s' %d:'%s'] wb=%d cq=%d skip_tx1=%d robot=%d",
+    ESP_LOGI(TAG, "saved filters: incl=[%d:'%s' %d:'%s'] excl=[%d:'%s' %d:'%s'] wb=%d cq=%d skip_tx1=%d robot=%d pileup=%d",
              f.incl_en[0], f.incl_text[0], f.incl_en[1], f.incl_text[1],
              f.excl_en[0], f.excl_text[0], f.excl_en[1], f.excl_text[1],
-             f.excl_worked_before, f.excl_plain_cq, f.skip_tx1, f.robot_en);
+             f.excl_worked_before, f.excl_plain_cq, f.skip_tx1, f.robot_en, f.auto_pileup);
     modal_close();
 }
 
@@ -153,17 +155,22 @@ static void sync_time_btn_cb(lv_event_t *e)
     ft8_time_modal_show();
 }
 
-// Only nag about unattended TX while the feature is actually enabled - no
-// reason to show the warning to operators who never touch this checkbox.
+// Only nag about unattended TX while one of the auto-TX features (robot or
+// auto-work-pileup) is actually enabled - no reason to show it to operators
+// who never touch either checkbox. Shared by both checkboxes' handlers.
+static void update_unattended_warn(void)
+{
+    if (!s_robot_warn) return;
+    bool on = (s_cb_robot       && lv_obj_has_state(s_cb_robot,       LV_STATE_CHECKED)) ||
+              (s_cb_auto_pileup && lv_obj_has_state(s_cb_auto_pileup, LV_STATE_CHECKED));
+    if (on) lv_obj_clear_flag(s_robot_warn, LV_OBJ_FLAG_HIDDEN);
+    else    lv_obj_add_flag(s_robot_warn, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void robot_checked_cb(lv_event_t *e)
 {
     (void)e;
-    if (!s_robot_warn) return;
-    if (lv_obj_has_state(s_cb_robot, LV_STATE_CHECKED)) {
-        lv_obj_clear_flag(s_robot_warn, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(s_robot_warn, LV_OBJ_FLAG_HIDDEN);
-    }
+    update_unattended_warn();
 }
 
 // LVGL creates a dropdown's option list lazily when it opens, so style it
@@ -368,6 +375,17 @@ static void modal_build(void)
     lv_obj_align(s_robot_warn, LV_ALIGN_TOP_LEFT, 4, 612);
     lv_obj_add_event_cb(s_cb_robot, robot_checked_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
+    // --- Auto-work pileup row — LIVE TX (unattended) ------------------
+    // When on, finishing a QSO auto-pounces the strongest station still waiting
+    // in the pileup (someone who called during a busy exchange) instead of
+    // dropping back to CQ, draining the list unattended. Shares the robot's
+    // unattended-TX warning below. Placed in the right column so the packed
+    // left checkbox stack doesn't need a reflow.
+    lv_obj_t *lbl_auto_pileup;
+    s_cb_auto_pileup = make_labeled_checkbox(panel, "Auto-work pileup", 540, 450, &lbl_auto_pileup);
+    lv_obj_set_style_text_color(lbl_auto_pileup, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_add_event_cb(s_cb_auto_pileup, robot_checked_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
     // --- ARRL Field Day exchange mode ---------------------------------
     // When on, FT8 QSOs (manual and auto) exchange class+section instead of
     // grid/signal report - see CLAUDE.md "FT8 robot" / ft8_qso.c. Class and
@@ -490,10 +508,8 @@ void ft8_filter_modal_show(void)
     apply_checkbox_state(s_cb_robot, f->robot_en);
     lv_dropdown_set_selected(s_dd_robot_pri,
                              f->robot_priority <= FT8_ROBOT_PRI_DISTANT ? f->robot_priority : 0);
-    if (s_robot_warn) {
-        if (f->robot_en) lv_obj_clear_flag(s_robot_warn, LV_OBJ_FLAG_HIDDEN);
-        else              lv_obj_add_flag(s_robot_warn, LV_OBJ_FLAG_HIDDEN);
-    }
+    apply_checkbox_state(s_cb_auto_pileup, f->auto_pileup);
+    update_unattended_warn();   // shows the warning if robot OR auto-pileup is on
     apply_checkbox_state(s_cb_field_day, s.field_day_en);
     lv_textarea_set_text(s_ta_fd_class, s.fd_class);
     lv_textarea_set_text(s_ta_fd_section, s.fd_section);

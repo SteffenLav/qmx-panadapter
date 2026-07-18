@@ -35,6 +35,9 @@ typedef struct {
     // --- Skip TX1 — appended; old NVS blobs read back 0 (=off) ---
     bool    skip_tx1;        // pounce: first TX is a signal report (skip grid exchange),
                               // straight into the roger/RR73 wait - see ft8_qso_start()
+    // --- Auto-work pileup — appended; old NVS blobs read back 0 (=off) ---
+    bool    auto_pileup;     // on QSO completion, auto-pounce the strongest waiting
+                              // pileup caller instead of resuming CQ (unattended TX)
 } ft8_filters_t;
 
 // All persisted settings. Floats are stored as raw 32-bit bit-patterns

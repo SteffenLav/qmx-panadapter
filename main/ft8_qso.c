@@ -546,6 +546,12 @@ static bool             s_resume_from_cq;
 static int              s_resume_freq_hz;
 static int64_t          s_resume_at;        // time(NULL) at abandonment
 
+// True while we're draining the pileup (auto-work-pileup): the current QSO was
+// started by try_start_pileup_pounce(). Lets a timed-out pileup pounce advance
+// to the NEXT waiting station instead of going sticky. Cleared whenever any
+// non-pileup QSO starts (ft8_qso_start/_cq) or on a manual abort.
+static bool             s_pileup_active;
+
 // Snapshot the current exchange as resumable. Call under lock(), BEFORE the
 // abandon path mutates state. Only exchange states are worth resuming.
 static void resume_record_save_locked(void)
@@ -685,6 +691,11 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
         if (err) snprintf(err, err_len, "No target callsign");
         return false;
     }
+    // Any explicitly-started QSO (manual tap, robot) ends pileup-drain tracking;
+    // try_start_pileup_pounce() re-sets it right after this returns for the
+    // pileup case. Scopes the timed-out-pileup auto-advance to pileup pounces
+    // only, so a manual pounce timeout still goes sticky for the operator.
+    s_pileup_active = false;
 
     // Refuse to clobber an exchange already in progress (CQ loop or any WAIT_*
     // state) - a tap on a different row used to silently overwrite s_target /
@@ -897,6 +908,7 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
     s_have_cq_saved = true;
     s_from_cq       = true;
     s_missed_slots  = 0;
+    s_pileup_active = false;   // starting CQ is not part of a pileup drain
     // CQ-run: RST_SENT set in cqrun_answer. "599" is only the RST_RCVD
     // fallback - their report answer (cqrun_answer) or numeric roger
     // (WAIT_ROGER) overwrites it with their actual measurement of us.
@@ -1022,6 +1034,58 @@ static void capture_pileup_callers(int64_t slot_sec)
     }
 }
 
+// Auto-work-pileup: we've just finished (or timed out of) a QSO and the
+// operator enabled "Auto-work pileup". Pick the strongest waiting caller from
+// the pileup list and pounce them, exactly the way the robot answers a CQ - the
+// TX1 is built the same, and ft8_qso_start() then applies Skip-TX1, the resume
+// window, the busy-guard and identity checks centrally, so this inherits all of
+// them for free. Returns true if a pounce was started (state now WAIT_*), false
+// if disabled / nobody eligible / build refused (caller falls back to CQ/idle).
+// Strongest-SNR first: best chance of a clean completion, standard pileup order.
+static bool try_start_pileup_pounce(void)
+{
+    qmx_settings_t qs;
+    settings_load_all(&qs);
+    if (!qs.ft8_filters.auto_pileup)            return false;
+    if (!qs.my_callsign[0] || !qs.my_grid[0])   return false;
+
+    ft8_pileup_entry_t pile[FT8_PILEUP_MAX];
+    int n = ft8_pileup_get_all(pile, FT8_PILEUP_MAX);
+    if (n <= 0) return false;
+
+    int best = -1;
+    for (int i = 0; i < n; i++) {
+        if (!pile[i].call[0]) continue;
+        // Skip anyone already worked on this band if that filter is on - same
+        // rule the robot enforces, so auto-work never re-calls a logged station.
+        if (qs.ft8_filters.excl_worked_before &&
+            adif_log_contains_call_on_band(pile[i].call, cat_get_frequency())) continue;
+        if (best < 0 || pile[i].snr_db > pile[best].snr_db) best = i;
+    }
+    if (best < 0) return false;
+
+    // Reply on a clear tone (not their own), parity derived from the slot we last
+    // heard them call us in (parity is periodic, so a several-minute-old
+    // last_seen still gives the correct TX parity).
+    int reply_freq_hz = ft8_find_clear_tone_hz();
+    ft8_tx_request_t req;
+    char err[64];
+    if (!ft8_tx_build_request(FT8_TX_KIND_REPLY, pile[best].call, reply_freq_hz,
+                              pile[best].last_seen_utc, NULL, &req, err, sizeof(err))) {
+        ESP_LOGW(TAG, "auto-pileup build_request(%s) failed: %s", pile[best].call, err);
+        return false;
+    }
+    if (!ft8_qso_start(&req, err, sizeof(err))) {   // clears s_pileup_active
+        ESP_LOGW(TAG, "auto-pileup ft8_qso_start(%s) refused: %s", pile[best].call, err);
+        return false;
+    }
+    s_pileup_active = true;   // set AFTER ft8_qso_start (which clears it)
+    ESP_LOGI(TAG, "auto-pileup: working %s (snr=%d, %d waiting)",
+             pile[best].call, pile[best].snr_db, n);
+    ft8_status_set("Pileup: working %s", pile[best].call);
+    return true;
+}
+
 void ft8_qso_advance(int64_t slot_sec)
 {
     capture_pileup_callers(slot_sec);
@@ -1059,9 +1123,27 @@ void ft8_qso_advance(int64_t slot_sec)
     target[sizeof(target) - 1] = '\0';
     unlock();
 
-    if (st == FT8_QSO_IDLE || st == FT8_QSO_TIMEOUT) return;
+    if (st == FT8_QSO_TIMEOUT) {
+        // A pileup-initiated pounce that got no answer (the caller wandered off
+        // in the minutes since they called) would normally go sticky. Instead
+        // clear it and move to the next waiting station so one dead caller
+        // doesn't stall the whole drain. A human/robot pounce timeout is left
+        // sticky (s_pileup_active is false for those).
+        if (s_pileup_active) {
+            ft8_qso_abort();                       // TIMEOUT -> IDLE, clears s_pileup_active
+            if (try_start_pileup_pounce()) return; // next waiting station
+        }
+        return;
+    }
+    if (st == FT8_QSO_IDLE) return;
 
     if (st == FT8_QSO_DONE) {
+        // Auto-work pileup: before falling back to CQ/idle, work anyone still
+        // waiting in the pileup (they called us during a busy exchange). Drains
+        // strongest-first across successive completions; only when the list is
+        // empty do we resume CQ / go idle as before.
+        if (try_start_pileup_pounce()) return;
+        s_pileup_active = false;
         // A CQ-run QSO resumes calling CQ on the same tone instead of going
         // idle - same as the QSO_TIMEOUT_SLOTS give-up path in register_miss(),
         // just on the success side. Saves the operator from re-tapping Call CQ
@@ -1402,6 +1484,7 @@ void ft8_qso_abort(void)
     s_have_cur      = false;
     s_have_cq_saved = false;
     s_from_cq       = false;
+    s_pileup_active = false;   // an abort ends any pileup drain
     unlock();
     ft8_tx_disarm();
     if (target[0]) ft8_status_set("QSO %s: aborted", target);
