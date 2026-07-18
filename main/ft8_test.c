@@ -183,6 +183,25 @@ int ft8_op_mode_slot_ms(void)
 // FT8_REPLY_TX_WINDOW_MS poll cutoff or a late decode ends in NO TX at all.
 #define FT8_TX_HOLD_DEADLINE_MS 2300
 
+// Early-decode (the "reply at dt~=0" path, WSJT-X-style). All the hold/reply
+// machinery above ships the fresh reply ~1-2 s late for one reason: the
+// partner's decode doesn't even START until the 15 s boundary (capture runs to
+// the boundary, decode is then ~1.5-1.9 s). But the FT8 signal itself ends at
+// ~12.64 s - the last 2.36 s of every slot is dead air. So mid-QSO, where the
+// ONE station whose timing matters is our partner (who is dt~=0 and therefore
+// fully inside that 12.64 s), we cut the capture a hair past the signal and
+// queue the decode ~2 s early. The decode then finishes BEFORE the next
+// boundary, ft8_qso_advance() arms the fresh reply in time, and the normal
+// boundary TX path fires it at dt~=0 - no doubles, no cycle lost, and a low dt
+// for every receiving station. If a busy-band decode still overruns the
+// boundary the hold/reply machinery above catches it exactly as before (small
+// positive dt, never a skipped slot). FT8-only, and ONLY while
+// ft8_qso_is_busy() (an exchange or CQ-run) - plain monitoring keeps the
+// full-slot capture so band decode yield is untouched. RESERVE = time left
+// before the boundary for the decode to run; cut point = period - RESERVE
+// (13.2 s), still 0.56 s past the 12.64 s signal end.
+#define FT8_DECODE_RESERVE_MS 1800
+
 // Monitor pool depth. Capture claims a free monitor each slot (holding it for
 // the whole 15 s while it streams the STFT in) and the decoder releases it when
 // done. At most TWO are ever in use - one capturing, one decoding - and decode
@@ -1345,6 +1364,19 @@ static void ft8_task(void *arg)
             if (ms_to_boundary < 2000)                  ms_to_boundary = 2000;
             if (ms_to_boundary > (int)SLOT_TIMEOUT_MS)  ms_to_boundary = SLOT_TIMEOUT_MS;
 
+            // Early-decode cut point (see FT8_DECODE_RESERVE_MS). Mid-QSO, stop
+            // capturing ~2 s before the boundary so the decode runs and arms the
+            // fresh reply in time to fire at dt~=0. The capture buffer stays
+            // full-size (begin() got slot_samples); finish() zero-pads the tail
+            // we skipped, so the decoder still sees a normal 93-block waterfall.
+            // FT8-only; full-slot when just monitoring, for max band yield.
+            int cap_target = slot_samples;
+            if (!is_ft4 && ft8_qso_is_busy(NULL, 0)) {
+                int cut = (period_ms - FT8_DECODE_RESERVE_MS) * (SR_HZ / 1000);
+                if (cut > slot_samples) cut = slot_samples;   // reserve too small
+                if (cut < slot_samples) cap_target = cut;     // else: no early cut
+            }
+
             // Streaming STFT: arm capture, then FFT each symbol block (1920 @ FT8,
             // 576 @ FT4) the instant it lands, so the waterfall is fully built by
             // the time the signal ends. The STFT cost overlaps capture instead of
@@ -1379,7 +1411,7 @@ static void ft8_task(void *arg)
                         stft_us += esp_timer_get_time() - ts;
                         processed++;
                     }
-                    if (avail >= slot_samples) break;                                  // whole slot in
+                    if (avail >= cap_target) break;             // slot in (or early-decode cut)
                     int into_slot_ms = (int)((esp_timer_get_time() - t0) / 1000);
                     if (into_slot_ms >= ms_to_boundary) break;                          // boundary
                     // Reply-on-the-immediate-slot: if the prior slot's decode just
