@@ -454,6 +454,49 @@ static bool send_next_fd(ft8_tx_kind_t kind, const char *target, int freq,
     return true;
 }
 
+// The partner just repeated their previous message - they haven't copied our
+// report yet - but we re-heard them THIS slot with a fresh SNR. Like WSJT-X,
+// bring the report we keep re-sending (and the RST_SENT we'll log) up to that
+// newest measurement, so the value that finally gets through to them - and into
+// both stations' logs - is our most current reading, not the stale first one.
+// Only rebuilds/re-arms when the value actually changed, so an unchanged SNR
+// costs nothing. as_roger => TX2's "R<rpt>" (pounce, WAIT_RR73); otherwise a
+// bare "<rpt>" (CQ-run, WAIT_ROGER). Never called in Field Day mode - that
+// exchange is a fixed class+section, not a signal report.
+static void refresh_our_report(int fresh_snr, bool as_roger,
+                               const char *target, int freq, int64_t slot_sec)
+{
+    char fresh_rpt[8];
+    fmt_report(fresh_snr, fresh_rpt, sizeof(fresh_rpt));
+    if (strcmp(fresh_rpt, s_rst_sent) == 0) return;   // unchanged - nothing to do
+
+    char extra[16];
+    if (as_roger) make_roger(fresh_rpt, extra, sizeof(extra));
+    else          snprintf(extra, sizeof(extra), "%s", fresh_rpt);
+
+    ft8_tx_kind_t kind = as_roger ? FT8_TX_KIND_ROGER_RPT : FT8_TX_KIND_REPLY;
+    ft8_tx_request_t req;
+    char err[64];
+    if (!ft8_tx_build_request(kind, target, freq, slot_sec, extra,
+                              &req, err, sizeof(err))) {
+        ESP_LOGW(TAG, "report refresh build failed (extra='%s'): %s", extra, err);
+        return;
+    }
+    // Adopt as the current outgoing message WITHOUT touching s_state or
+    // s_missed_slots: this is a fresher report on the SAME step, not progress,
+    // so the QSO timeout must keep counting (set_current() would zero it).
+    lock();
+    s_cur_req  = req;
+    s_have_cur = true;
+    unlock();
+
+    strncpy(s_rst_sent, fresh_rpt, sizeof(s_rst_sent) - 1);
+    s_rst_sent[sizeof(s_rst_sent) - 1] = '\0';
+    ESP_LOGI(TAG, "report refreshed to %s (re-heard %s) - re-sending '%s'",
+             fresh_rpt, target, req.display_text);
+    arm_current_replacing_armed();
+}
+
 // Another station has drifted onto our locked CQ tone since we started
 // calling (ft8_tx_is_clashing() true). Re-scan for the nearest still-clear
 // 50 Hz slot and move there instead of just flagging "FREQ BUSY" and
@@ -1254,8 +1297,11 @@ void ft8_qso_advance(int64_t slot_sec)
             arm_current_replacing_armed();
             return;
         }
-        // They repeated their grid/report (didn't get ours): keep sending our
-        // report, but count it so a dead exchange still times out.
+        // They repeated their grid/report (didn't get ours). Before counting
+        // the miss, refresh our report to the SNR we measured THIS slot so the
+        // re-send - and the RST_SENT we log - carries our freshest reading, the
+        // way WSJT-X does. FD's fixed class+section is never refreshed.
+        if (!fd_mode) refresh_our_report(snr_db, false, target, freq, slot_sec);
         register_miss("re-sending report");
         return;
     }
@@ -1263,6 +1309,10 @@ void ft8_qso_advance(int64_t slot_sec)
     if (st == FT8_QSO_WAIT_RR73) {
         // POUNCE: we sent R<report>; expect RR73/73 (then we send 73).
         if (!found || (!got_rr73 && !got_73)) {
+            // Re-heard them repeating their report (found, but no RR73 yet):
+            // refresh our R<report> to this slot's fresh SNR before re-sending,
+            // same WSJT-X behaviour as the CQ-run WAIT_ROGER path above.
+            if (found && !fd_mode) refresh_our_report(snr_db, true, target, freq, slot_sec);
             register_miss("waiting for RR73");
             return;
         }
