@@ -2,8 +2,11 @@
 $portName = "COM3"
 $logFile  = "C:\dev\qmx-panadapter\scratchpad\ft8_monitor.log"
 
+# Append (do NOT truncate): keep one continuous history across every restart/
+# flash so a QSO captured before a reflash isn't lost. -Append creates the file
+# if it doesn't exist yet. Clear it manually when it gets too big.
 "=== FT8 monitor capture started $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') on $portName @921600 ===" |
-    Out-File -FilePath $logFile -Encoding utf8
+    Out-File -FilePath $logFile -Append -Encoding utf8
 
 while ($true) {
     $port = New-Object System.IO.Ports.SerialPort $portName, 921600, ([System.IO.Ports.Parity]::None), 8, ([System.IO.Ports.StopBits]::One)
