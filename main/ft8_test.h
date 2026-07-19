@@ -62,6 +62,12 @@ void ft8_sim_synth_selftest(void);
 // clock is fast. Returns false if no valid measurement is available yet.
 bool ft8_get_last_timing_ms(int *out_ms);
 
+// The REAL per-slot correction actually applied to the UTC clock (ms; 0 = none
+// applied this slot). This is the damped+clamped value, NOT the raw measurement
+// above - the time modal shows this so a noisy single-station measurement never
+// reads as a large clock jump. Returns false if no measurement yet.
+bool ft8_get_last_applied_ms(int *out_ms);
+
 // Increments each time ft8_get_last_timing_ms's value is refreshed from a new
 // decode. UI code can poll this to detect a new sync event (e.g. to flash the
 // SS box) without needing a callback/notification mechanism.

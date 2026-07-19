@@ -233,6 +233,14 @@ bool ft8_tx_should_run_this_slot(int64_t slot_start_ms, ft8_tx_request_t *out);
 // can't be used for that probe because a true return claims the slot.
 bool ft8_tx_slot_would_run(int64_t slot_start_ms);
 
+// DT-follow-partner: shift our TX burst by `ms` so it lands on an off-time
+// partner's beat (ft8_qso engages this when a QSO partner's timing is > a
+// threshold off the band consensus, auto-reverts to 0 when the QSO ends). The
+// offset is anchored to the slot boundary and clamped to keep the burst in-slot.
+// 0 = normal (transmit on the UTC/GPS boundary).
+void ft8_tx_set_follow_offset_ms(int ms);
+int  ft8_tx_get_follow_offset_ms(void);
+
 // Run one full CAT burst synchronously (blocks the calling task throughout:
 // ~12.7 s for FT8, ~5 s for FT4). Re-verifies Digi mode first (a cheap
 // cached-string read, not a CAT round trip - aborts cleanly *before* keying

@@ -116,6 +116,20 @@ float ft8_tx_get_last_power_swr(float *power_w, float *swr)
     return (float)(esp_timer_get_time() - s_last_pwr_swr_us) / 1e6f;
 }
 
+// DT-follow-partner offset (see ft8_tx_run). ft8_qso sets this to the partner's
+// timing offset (ms) when working a significantly off-time station, so our burst
+// lands on THEIR beat; 0 = normal (transmit on the UTC/GPS boundary). Clamped to
+// keep the burst inside the slot.
+#define FT8_FOLLOW_MAX_MS 2000
+static volatile int s_follow_offset_us = 0;
+void ft8_tx_set_follow_offset_ms(int ms)
+{
+    if (ms >  FT8_FOLLOW_MAX_MS) ms =  FT8_FOLLOW_MAX_MS;
+    if (ms < -FT8_FOLLOW_MAX_MS) ms = -FT8_FOLLOW_MAX_MS;
+    s_follow_offset_us = ms * 1000;
+}
+int ft8_tx_get_follow_offset_ms(void) { return s_follow_offset_us / 1000; }
+
 void ft8_tx_init(void)
 {
     if (!s_lock) {
@@ -781,6 +795,26 @@ void ft8_tx_run(const ft8_tx_request_t *req)
         if (!sim) cat_poll_set_paused(true);
 
         int64_t t0 = esp_timer_get_time();
+        // DT-follow-partner: shift the burst to land on the partner's beat when
+        // they're significantly off the band's timing (ft8_qso sets the offset).
+        // Anchored to the SLOT BOUNDARY (not "now"), so it's consistent whether
+        // we were triggered right at the boundary or mid-slot via the
+        // reply-on-immediate path; clamped to >= now (can't transmit into the
+        // past, so an "early" partner just gets the boundary). No-op when 0.
+        if (s_follow_offset_us != 0) {
+            struct timeval tv;
+            gettimeofday(&tv, NULL);
+            int64_t now_unix_us = (int64_t)tv.tv_sec * 1000000LL + tv.tv_usec;
+            int64_t period_us   = (int64_t)(is_ft4 ? 7500000 : 15000000);
+            int64_t boundary_esp = t0 - (now_unix_us % period_us);   // esp_timer at the boundary
+            int64_t target = boundary_esp + s_follow_offset_us;
+            if (target > t0) {
+                t0 = target;
+                ESP_LOGI(TAG, "DT-follow: burst shifted %+d ms to partner's beat",
+                         s_follow_offset_us / 1000);
+            }
+        }
+        sleep_until(t0, 0);       // wait for the (boundary+follow) start; no-op when follow==0
         tx_cmd(t0, sim, "TX;");   // key down - radio's own envelope shaping
 
         // Live power/SWR: fire ONE non-blocking PC;SW; once the PA has settled

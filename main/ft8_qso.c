@@ -232,6 +232,52 @@ static void make_roger(const char *their_report, char *out, size_t len)
     else                        snprintf(out, len, "R%s", their_report);
 }
 
+// --- DT-follow-partner (operator request 2026-07-19) -----------------------
+// When a QSO partner transmits significantly off the band's timing (a weak,
+// badly-clocked or deliberately-offset station), shift OUR TX to land on THEIR
+// beat (ft8_tx_set_follow_offset_ms) so they copy us better than a UTC burst
+// sitting at the edge of their decode window. The partner's raw slot DT minus
+// the band consensus (ft8_get_last_timing_ms) gives their true offset from the
+// band, and crucially cancels our common ~560 ms RX audio latency. Engaged/
+// updated each time we hear them, reset to 0 the moment the QSO ends. Works both
+// directions (we called them, or they answered our CQ). Threshold = operator's.
+#define DT_FOLLOW_THRESHOLD_MS 200
+
+static void clear_dt_follow(void)
+{
+    if (ft8_tx_get_follow_offset_ms() != 0) {
+        ft8_tx_set_follow_offset_ms(0);
+        ESP_LOGI(TAG, "DT-follow: back to UTC/GPS beat");
+    }
+}
+
+static void update_dt_follow(const char *target)
+{
+    if (!target || !target[0]) return;
+    int consensus;
+    if (!ft8_get_last_timing_ms(&consensus)) return;   // no band reference yet
+
+    ft8_call_t snap[FT8_CALL_TABLE_SIZE];
+    int n = 0;
+    ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+    for (int i = 0; i < n; i++) {
+        if (strcmp(snap[i].call, target) != 0) continue;
+        int excess = (int)snap[i].last_dt_ms - consensus;   // partner's offset from the band
+        if (excess > DT_FOLLOW_THRESHOLD_MS || excess < -DT_FOLLOW_THRESHOLD_MS) {
+            if (ft8_tx_get_follow_offset_ms() != excess) {
+                ft8_tx_set_follow_offset_ms(excess);
+                ft8_status_set("DT-follow %s: TX %+d ms", target, excess);
+                ESP_LOGI(TAG, "DT-follow %s: partner_dt=%d consensus=%d -> TX %+d ms",
+                         target, (int)snap[i].last_dt_ms, consensus, excess);
+            }
+        } else {
+            clear_dt_follow();   // partner is on the band's beat -> normal
+        }
+        return;
+    }
+    // target not in this snapshot -> keep the current offset; re-hear updates it.
+}
+
 // Scan the ft8_screen table for a message FROM s_target TO s_my_call decoded
 // in slot_sec. Fills one of report_buf / *got_rr73 / *got_73, and *snr_db_out
 // with OUR locally-measured SNR of their signal (independent of any numeric
@@ -649,6 +695,8 @@ static void register_miss(const char *waiting_for)
     resume_record_save_locked();
     unlock();
 
+    clear_dt_follow();   // QSO over - back to the UTC/GPS beat
+
     if (from_cq && s_have_cq_saved) {
         // Drop the half-finished QSO and go back to calling CQ on the frequency.
         lock();
@@ -696,6 +744,7 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     // pileup case. Scopes the timed-out-pileup auto-advance to pileup pounces
     // only, so a manual pounce timeout still goes sticky for the operator.
     s_pileup_active = false;
+    clear_dt_follow();   // fresh QSO - engages again when we hear this partner
 
     // Refuse to clobber an exchange already in progress (CQ loop or any WAIT_*
     // state) - a tap on a different row used to silently overwrite s_target /
@@ -909,6 +958,7 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
     s_from_cq       = true;
     s_missed_slots  = 0;
     s_pileup_active = false;   // starting CQ is not part of a pileup drain
+    clear_dt_follow();         // no partner yet - transmit CQ on the UTC/GPS beat
     // CQ-run: RST_SENT set in cqrun_answer. "599" is only the RST_RCVD
     // fallback - their report answer (cqrun_answer) or numeric roger
     // (WAIT_ROGER) overwrites it with their actual measurement of us.
@@ -937,6 +987,9 @@ static void cqrun_answer(const char *caller, int caller_freq, int caller_snr,
     s_target[sizeof(s_target) - 1] = '\0';
     int our_freq = s_freq_hz;   // already set to our CQ tone in ft8_qso_start_cq()
     unlock();
+
+    // A station just answered our CQ - if they're off the band's beat, follow it.
+    update_dt_follow(caller);
 
     // If their answer carried a numeric report of us instead of a grid
     // (OS4K opened with 'OZ1LAV OS4K -06'), that's RST_RCVD - capture it now
@@ -1178,6 +1231,7 @@ void ft8_qso_advance(int64_t slot_sec)
             lock(); s_state = FT8_QSO_DONE; s_have_cur = false; unlock();
             ft8_status_set("QSO %s: complete!", target);
             ESP_LOGI(TAG, "QSO with %s complete", target);
+            clear_dt_follow();   // QSO done - back to the UTC/GPS beat
 
             // A completed QSO with this call supersedes any older resumable
             // half-QSO - never auto-resume into a duplicate afterwards.
@@ -1280,6 +1334,10 @@ void ft8_qso_advance(int64_t slot_sec)
     bool got_rr73 = false, got_73 = false;
     int  snr_db   = 0;
     bool found = scan_for_response(slot_sec, report, sizeof(report), &got_rr73, &got_73, &snr_db);
+
+    // Heard the partner this slot -> update the DT-follow-partner TX offset to
+    // their current beat (engages only if they're >threshold off the band).
+    if (found) update_dt_follow(target);
 
     qmx_settings_t qs_exch;
     settings_load_all(&qs_exch);
@@ -1485,6 +1543,7 @@ void ft8_qso_abort(void)
     s_have_cq_saved = false;
     s_from_cq       = false;
     s_pileup_active = false;   // an abort ends any pileup drain
+    clear_dt_follow();         // ...and returns TX to the UTC/GPS beat
     unlock();
     ft8_tx_disarm();
     if (target[0]) ft8_status_set("QSO %s: aborted", target);
