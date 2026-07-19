@@ -4,7 +4,7 @@
 **Scope:** v1.0 release gates → open investigations → feature requests → roadmap → full shipped history
 **Source:** CLAUDE.md + README.md + groups.io feature requests + session work
 **Assessment:** Code grep + git log + memory system
-**Repo state:** v0.21.0 released 2026-07-13. `main` is **13 commits ahead of origin (unpushed)** carrying the v1.0.0 content; web-audio Phase 1 parked on branch `feat/web-audio-phase1`. All v1.0 gates met — release prep is the remaining work.
+**Repo state:** **v1.0.1 released 2026-07-17** (v1.0.0 on 2026-07-16 — beta label dropped, all v1.0 gates met). `main` is **12 commits ahead of origin (unpushed)**: the FT8 time-sync overhaul (GPS second-tick phase-lock + auto-detect, DT-follow-partner, RX-latency-aware FT8 sync), a QRZ upload-count fix, the ADIF-viewer crash fix + LVGL pool 256→1024 KB, drawer spacing / band-plan bottom-bar drag / slider-alignment UI fixes, and docs + TODO updates. Web-audio Phase 1 parked on branch `feat/web-audio-phase1`.
 
 ---
 
