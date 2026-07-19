@@ -108,3 +108,15 @@ CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
 # reconnect. Routing USB DMA to PSRAM fixes the "no audio/CAT after QMX
 # power-cycle" regression.
 CONFIG_USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM=y
+
+# UAC ISO pipeline depth (#51 root-cause fix): 8 URBs x 40 packets x 1 ms =
+# 320 ms of queued isochronous stream (was 3 x 3 = 9 ms). With only 9 ms of
+# hardware autonomy, ANY >9 ms pause of the completion/resubmission pump (the
+# level-1 USB interrupt + UAC bg task, both held off during the post-decode
+# LVGL/LDPC storm) left the IN endpoint with no queued transfer - the QMX's
+# audio was lost at the wire with zero error status (~170-350 ms every FT8
+# slot, measured). Deep queuing rides through pump pauses up to ~300 ms and
+# cuts completion-pump load 13x (25/s vs 328/s). Buffers are PSRAM (USB DWC
+# DMA in PSRAM since v0.19.2), ~165 KB total.
+CONFIG_UAC_NUM_ISOC_URBS=8
+CONFIG_UAC_NUM_PACKETS_PER_URB=40

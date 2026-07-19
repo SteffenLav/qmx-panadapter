@@ -1174,6 +1174,14 @@ fail:
  *
  * @param[in] transfer  Pointer to transfer data structure
  */
+// #51 fork instrumentation: per-second ISO RX transport counters (see the
+// stats log inside stream_rx_xfer_done). Single RX stream on this device, so
+// plain file-statics are fine.
+static uint32_t   s_rx_stat_xfers    = 0;
+static uint32_t   s_rx_stat_bytes    = 0;
+static uint32_t   s_rx_stat_bad_pkts = 0;
+static TickType_t s_rx_stat_last     = 0;
+
 static void stream_rx_xfer_done(usb_transfer_t *in_xfer)
 {
     assert(in_xfer);
@@ -1197,13 +1205,29 @@ static void stream_rx_xfer_done(usb_transfer_t *in_xfer)
         // if ringbuffer overflow (happens if user not read in above callback), the data will be dropped
         data_len = _ring_buffer_get_len(iface->ringbuf);
         if (data_len + in_xfer->actual_num_bytes > iface->ringbuf_size) {
-            ESP_LOGD(TAG, "RX Ringbuffer overflow");
+            // QMX-panadapter fork: this used to be an invisible LOG_DEBUG that
+            // silently discarded whole ISO transfers whenever the consumer fell
+            // one buffer behind - the uncounted audio-loss point behind FT8
+            // issue #51 (~200-650 ms of RF audio lost per slot, upstream of
+            // every app-level drop counter). Keep the drop (isochronous audio
+            // has no retry) but make it LOUD and countable: WARN at most 1/s
+            // with a cumulative byte count.
+            static uint32_t s_rx_ovf_bytes = 0;
+            static TickType_t s_rx_ovf_last_log = 0;
+            s_rx_ovf_bytes += in_xfer->actual_num_bytes;
+            TickType_t now_tick = xTaskGetTickCount();
+            if (now_tick - s_rx_ovf_last_log >= pdMS_TO_TICKS(1000)) {
+                ESP_LOGW(TAG, "RX ringbuffer overflow - dropped %u bytes total",
+                         (unsigned)s_rx_ovf_bytes);
+                s_rx_ovf_last_log = now_tick;
+            }
         } else {
             // else push data to ringbuffer
             for (int i = 0; i < in_xfer->num_isoc_packets; i++) {
                 if (in_xfer->isoc_packet_desc[i].status != USB_TRANSFER_STATUS_COMPLETED) {
                     // copy data to ringbuffer
                     ESP_LOGD(TAG, "Bad RX Isoc packet %d status %d", i, in_xfer->isoc_packet_desc[i].status);
+                    s_rx_stat_bad_pkts++;   // #51 fork instrumentation (see below)
                     continue;
                 }
                 int requested_num_bytes = in_xfer->isoc_packet_desc[i].num_bytes;
@@ -1211,8 +1235,32 @@ static void stream_rx_xfer_done(usb_transfer_t *in_xfer)
                 // in UAC, the actual_num_bytes may less than requested_num_bytes
                 // eg. the packet_size is 64, but the endpoint size is 100
                 assert(requested_num_bytes >= actual_num_bytes);
+                s_rx_stat_bytes += (uint32_t)actual_num_bytes;   // #51: wire-delivered bytes
                 // copy data to ringbuffer
                 _ring_buffer_push(iface->ringbuf, in_xfer->data_buffer + i * requested_num_bytes, actual_num_bytes, 0);
+            }
+        }
+        // #51 fork instrumentation: per-second ISO transport stats. Expect
+        // ~1000 xfers/s (1 ms service interval) and ~288000 B/s for the QMX's
+        // 48 kHz stereo 24-bit stream. During the post-decode storm the app
+        // measurably receives ~170-350 ms less audio per slot with every
+        // software buffer healthy - this line splits the remaining suspects:
+        //   fewer XFERS during the dip  -> transfers not resubmitted in time
+        //                                  (bg-task stall; scheduling)
+        //   normal xfers, BADPKT spike  -> DWC missed ISO service intervals
+        //                                  (hardware/DMA level, e.g. PSRAM bus)
+        //   normal xfers, fewer BYTES   -> device sent short packets
+        s_rx_stat_xfers++;
+        {
+            TickType_t nowt = xTaskGetTickCount();
+            if (nowt - s_rx_stat_last >= pdMS_TO_TICKS(1000)) {
+                ESP_LOGI(TAG, "RX xport: %u xfers %u B %u badpkt",
+                         (unsigned)s_rx_stat_xfers, (unsigned)s_rx_stat_bytes,
+                         (unsigned)s_rx_stat_bad_pkts);
+                s_rx_stat_xfers = 0;
+                s_rx_stat_bytes = 0;
+                s_rx_stat_bad_pkts = 0;
+                s_rx_stat_last = nowt;
             }
         }
         // Relaunch transfer

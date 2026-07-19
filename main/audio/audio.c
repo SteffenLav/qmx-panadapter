@@ -35,7 +35,15 @@ typedef struct {
 
 #define EVT_QUEUE_LEN          16
 #define RX_BUF_BYTES           19200
-#define INTERNAL_RX_BUF_BYTES  19200
+// UAC driver-internal ring: 288000 B = 1.0 s of 48 kHz stereo 24-bit audio
+// (#51 fix, was 19200 B = 66 ms). The post-decode storm (LVGL decode-list
+// rebuild + dual-core LDPC, PSRAM-bus heavy) slows the drain for hundreds of
+// ms every slot; at 66 ms of elasticity the driver overflowed and silently
+// discarded whole ISO transfers (~200-650 ms of RF audio per slot, measured
+// sample-exact via capture-window tiling), which destroyed each FT8 signal's
+// opening Costas array on every slot after the first. Buffer >16 KB allocates
+// from PSRAM (spill threshold), so the 280 KB costs nothing internal.
+#define INTERNAL_RX_BUF_BYTES  288000
 #define STATS_PERIOD_MS        1000
 
 // Ring buffer holds decoded int16 stereo pairs (4 bytes per pair).
@@ -169,8 +177,20 @@ esp_err_t audio_init(void)
     }
     ESP_LOGI(TAG, "UAC host driver installed");
 
+    // Priority 6 (#51 root-cause fix, was 3): audio_task is the only pump from
+    // the UAC driver's tiny internal buffer (19200 B = 66 ms of audio) into the
+    // sample ring. At priority 3 it sat BELOW taskLVGL (4, same core 0), and the
+    // post-decode FT8 decode-list rebuild ran hundreds of ms of solid pri-4 LVGL
+    // work - starving audio_task past the 66 ms elasticity, so the UAC driver
+    // silently discarded ~200-650 ms of audio EVERY slot (measured sample-exact:
+    // consecutive capture windows advanced ~174-177.5k samples instead of
+    // 180000). That hole destroyed each signal's opening Costas sync array ->
+    // sync scores collapsed 5-13 pts (SNR unchanged) -> decode yield fell from
+    // ~60/slot (slot 0/1, before any decode/UI storm exists) to a fraction.
+    // Nothing on this device outranks irreplaceable RF samples; the drain loop
+    // is a trivial memcpy, so pri 6 costs the UI nothing measurable.
     BaseType_t ok = xTaskCreatePinnedToCore(
-        audio_task, "audio_task", 4096, NULL, 3, &s_audio_task, 0);  // Phase 5.7: core 0 pri 3
+        audio_task, "audio_task", 4096, NULL, 6, &s_audio_task, 0);
     if (ok != pdPASS) return ESP_FAIL;
 
     return ESP_OK;
@@ -271,7 +291,10 @@ static void log_stats(void)
         ESP_LOGW(TAG, "RX %u pairs/s peak L=%d R=%d DROPPED=%u (ring full)",
                  (unsigned)pairs_per_sec, (int)pL, (int)pR, (unsigned)dropped);
     } else {
-        ESP_LOGD(TAG, "RX %u pairs/s peak L=%d R=%d",
+        // INFO (#51 instrumentation, was DEBUG): the USB-side delivery rate is
+        // the stage-2 loss probe - expect ~48000 pairs/s; a deficit here with
+        // drop=0 means the UAC driver discarded transfers upstream.
+        ESP_LOGI(TAG, "RX %u pairs/s peak L=%d R=%d",
                  (unsigned)pairs_per_sec, (int)pL, (int)pR);
     }
 }
