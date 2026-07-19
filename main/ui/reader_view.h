@@ -36,6 +36,10 @@ void reader_view_notify_loaded(bool from_cache);
 // A fetch is in progress / failed with no cache — sets the status line only.
 void reader_view_notify_status(const char *status);
 
+// The TOC cache file (/spiffs/reader_toc.json) now holds fresh content; ask the
+// LVGL thread to re-parse it and rebuild the contents list. Safe from any task.
+void reader_view_notify_toc_loaded(void);
+
 // "Firmware vX available" banner, from update_check.c. Pass NULL/empty version
 // to clear it. Safe from any task.
 void reader_view_set_update_available(const char *latest_version);

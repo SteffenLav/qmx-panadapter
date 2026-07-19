@@ -15,6 +15,7 @@
 #include "lvgl.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "cJSON.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -37,7 +38,15 @@ static const char *TAG = "reader_view";
 #define SLIDE_TIME_MS  220
 
 #define READER_CACHE_PATH  "/spiffs/reader.md"
+#define TOC_CACHE_PATH     "/spiffs/reader_toc.json"
 #define MD_MAX_BYTES       (96 * 1024)   // cache-file read cap
+
+// Table of contents (parsed from toc.json published by mkdocs_reader_export.py).
+#define TOC_MAX  64
+typedef struct { char title[48]; char path[96]; int level; } toc_entry_t;
+static toc_entry_t s_toc[TOC_MAX];
+static int  s_toc_n = 0;
+static char s_current_path[96] = "index.md";   // page currently shown
 
 // ---- LVGL objects (LVGL thread only) ----
 static lv_obj_t *s_overlay      = NULL;   // full-screen opaque page
@@ -46,6 +55,8 @@ static lv_obj_t *s_status_lbl   = NULL;   // header: right-aligned status
 static lv_obj_t *s_banner       = NULL;   // update-available bar (hidden unless set)
 static lv_obj_t *s_banner_lbl   = NULL;
 static lv_obj_t *s_body         = NULL;   // scrollable flex column of content
+static lv_obj_t *s_toc_btn      = NULL;   // header "Contents" button
+static lv_obj_t *s_toc_panel    = NULL;   // scrollable contents overlay (hidden unless open)
 static lv_timer_t *s_timer      = NULL;
 
 static bool s_active = false;
@@ -53,6 +64,7 @@ static bool s_active = false;
 // ---- Cross-task state (guarded by s_lock) ----
 static SemaphoreHandle_t s_lock = NULL;
 static volatile bool s_reload_pending = false;
+static volatile bool s_toc_reload_pending = false;
 static bool s_from_cache = false;
 static char s_status[64]  = {0};
 static char s_update_ver[24] = {0};
@@ -420,6 +432,134 @@ static void render_from_cache(void)
     heap_caps_free(buf);
 }
 
+// ============================ table of contents ============================
+
+// Parse /spiffs/reader_toc.json ({"pages":[{title,path,level}]}) into s_toc[].
+// LVGL thread only.
+static void parse_toc_file(void)
+{
+    s_toc_n = 0;
+    FILE *f = fopen(TOC_CACHE_PATH, "rb");
+    if (!f) return;
+    char *buf = heap_caps_malloc(16 * 1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) { fclose(f); return; }
+    size_t n = fread(buf, 1, 16 * 1024 - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+
+    cJSON *root = cJSON_Parse(buf);
+    heap_caps_free(buf);
+    if (!root) return;
+
+    cJSON *pages = cJSON_GetObjectItem(root, "pages");
+    if (cJSON_IsArray(pages)) {
+        int cnt = cJSON_GetArraySize(pages);
+        for (int i = 0; i < cnt && s_toc_n < TOC_MAX; i++) {
+            cJSON *p  = cJSON_GetArrayItem(pages, i);
+            cJSON *t  = cJSON_GetObjectItem(p, "title");
+            cJSON *pa = cJSON_GetObjectItem(p, "path");
+            cJSON *lv = cJSON_GetObjectItem(p, "level");
+            toc_entry_t *e = &s_toc[s_toc_n];
+            snprintf(e->title, sizeof(e->title), "%s",
+                     (cJSON_IsString(t) && t->valuestring) ? t->valuestring : "");
+            if (cJSON_IsString(pa) && pa->valuestring)
+                snprintf(e->path, sizeof(e->path), "%s", pa->valuestring);
+            else
+                e->path[0] = '\0';   // section header (no page)
+            e->level = cJSON_IsNumber(lv) ? lv->valueint : 0;
+            s_toc_n++;
+        }
+    }
+    cJSON_Delete(root);
+    ESP_LOGI(TAG, "toc: %d entries", s_toc_n);
+}
+
+static void navigate_to(const char *rel, const char *title_hint);
+
+// A contents row was tapped: user_data holds the s_toc index.
+static void toc_row_cb(lv_event_t *e)
+{
+    int i = (int)(intptr_t)lv_obj_get_user_data((lv_obj_t *)lv_event_get_target(e));
+    if (i < 0 || i >= s_toc_n) return;
+    navigate_to(s_toc[i].path, s_toc[i].title);
+}
+
+// Rebuild the contents panel from s_toc[]. LVGL thread only.
+static void rebuild_toc_panel(void)
+{
+    if (!s_toc_panel) return;
+    lv_obj_clean(s_toc_panel);
+    if (s_toc_n == 0) {
+        lv_obj_t *l = lv_label_create(s_toc_panel);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+        lv_label_set_text(l, "Contents unavailable (connect to WiFi to download).");
+        return;
+    }
+    for (int i = 0; i < s_toc_n; i++) {
+        toc_entry_t *e = &s_toc[i];
+        if (e->path[0] == '\0') {
+            // section header — not tappable
+            lv_obj_t *l = lv_label_create(s_toc_panel);
+            lv_obj_set_style_text_font(l, &lv_font_montserrat_22, 0);
+            lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+            lv_obj_set_style_pad_top(l, 14, 0);
+            lv_obj_set_style_pad_left(l, 8 + e->level * 24, 0);
+            lv_label_set_text(l, e->title);
+            continue;
+        }
+        lv_obj_t *row = lv_obj_create(s_toc_panel);
+        lv_obj_remove_style_all(row);
+        lv_obj_set_width(row, LV_PCT(100));
+        lv_obj_set_height(row, LV_SIZE_CONTENT);
+        lv_obj_set_style_pad_ver(row, 12, 0);
+        lv_obj_set_style_pad_left(row, 24 + e->level * 24, 0);
+        lv_obj_set_style_pad_right(row, 12, 0);
+        lv_obj_set_style_bg_color(row, lv_color_hex(UI_COLOR_SURFACE_RAISED), LV_STATE_PRESSED);
+        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, LV_STATE_PRESSED);
+        lv_obj_set_style_radius(row, 6, 0);
+        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_user_data(row, (void *)(intptr_t)i);
+        lv_obj_add_event_cb(row, toc_row_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *l = lv_label_create(row);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT), 0);
+        lv_label_set_text(l, e->title[0] ? e->title : e->path);
+    }
+}
+
+static void toc_panel_set_open(bool open)
+{
+    if (!s_toc_panel) return;
+    if (open) {
+        lv_obj_scroll_to_y(s_toc_panel, 0, LV_ANIM_OFF);
+        lv_obj_clear_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_toc_panel);
+    } else {
+        lv_obj_add_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+// Load and display a specific page. LVGL thread only.
+static void navigate_to(const char *rel, const char *title_hint)
+{
+    if (!rel || !rel[0]) return;
+    snprintf(s_current_path, sizeof(s_current_path), "%s", rel);
+    toc_panel_set_open(false);
+    lv_obj_clean(s_body);
+    add_label("Loading...", &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED, 0, 0);
+    if (s_title_lbl && title_hint) lv_label_set_text(s_title_lbl, title_hint);
+    lock(); strncpy(s_status, "Downloading...", sizeof(s_status) - 1); unlock();
+    reader_net_fetch(rel, false);
+}
+
+static void contents_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    bool hidden = s_toc_panel && lv_obj_has_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN);
+    toc_panel_set_open(hidden);
+}
+
 // ============================ LVGL timer ============================
 
 static void tick_cb(lv_timer_t *t)
@@ -427,14 +567,16 @@ static void tick_cb(lv_timer_t *t)
     (void)t;
     if (!s_active) return;
 
-    bool do_reload = false; bool from_cache = false;
+    bool do_reload = false; bool from_cache = false; bool do_toc = false;
     char status[64]; char ver[24];
     lock();
     if (s_reload_pending) { s_reload_pending = false; do_reload = true; from_cache = s_from_cache; }
+    if (s_toc_reload_pending) { s_toc_reload_pending = false; do_toc = true; }
     strncpy(status, s_status, sizeof(status)); status[sizeof(status)-1] = '\0';
     strncpy(ver, s_update_ver, sizeof(ver)); ver[sizeof(ver)-1] = '\0';
     unlock();
 
+    if (do_toc)    { parse_toc_file(); rebuild_toc_panel(); }
     if (do_reload) render_from_cache();
 
     if (s_status_lbl) {
@@ -445,7 +587,7 @@ static void tick_cb(lv_timer_t *t)
     if (s_banner) {
         if (ver[0]) {
             char msg[96];
-            snprintf(msg, sizeof(msg), LV_SYMBOL_DOWNLOAD "  Firmware %s available — see Releases on GitHub", ver);
+            snprintf(msg, sizeof(msg), LV_SYMBOL_DOWNLOAD "  Firmware %s available - see Releases on GitHub", ver);
             if (s_banner_lbl) lv_label_set_text(s_banner_lbl, msg);
             lv_obj_clear_flag(s_banner, LV_OBJ_FLAG_HIDDEN);
         } else {
@@ -482,10 +624,21 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_set_style_border_color(hdr, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
 
+    // "Contents" button (opens the TOC panel)
+    s_toc_btn = lv_button_create(hdr);
+    lv_obj_align(s_toc_btn, LV_ALIGN_LEFT_MID, 12, 0);
+    lv_obj_set_style_bg_color(s_toc_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_pad_hor(s_toc_btn, 14, 0);
+    lv_obj_set_style_pad_ver(s_toc_btn, 8, 0);
+    lv_obj_add_event_cb(s_toc_btn, contents_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *toc_btn_lbl = lv_label_create(s_toc_btn);
+    lv_obj_set_style_text_font(toc_btn_lbl, &lv_font_montserrat_20, 0);
+    lv_label_set_text(toc_btn_lbl, LV_SYMBOL_LIST "  Contents");
+
     s_title_lbl = lv_label_create(hdr);
     lv_obj_set_style_text_font(s_title_lbl, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(s_title_lbl, lv_color_hex(UI_COLOR_TEXT), 0);
-    lv_obj_align(s_title_lbl, LV_ALIGN_LEFT_MID, 20, 0);
+    lv_obj_align(s_title_lbl, LV_ALIGN_LEFT_MID, 200, 0);
     lv_label_set_text(s_title_lbl, "Documentation");
 
     s_status_lbl = lv_label_create(hdr);
@@ -525,6 +678,21 @@ void reader_view_init(lv_obj_t *parent)
 
     add_label("Loading documentation...", &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED, 0, 0);
 
+    // Contents panel: opaque scrollable overlay covering the body when open.
+    // Built after the body so it sits above it; hidden by default.
+    s_toc_panel = lv_obj_create(s_overlay);
+    lv_obj_remove_style_all(s_toc_panel);
+    lv_obj_set_size(s_toc_panel, SCR_W, SCR_H - HEADER_H);
+    lv_obj_set_pos(s_toc_panel, 0, HEADER_H);
+    lv_obj_set_style_bg_color(s_toc_panel, lv_color_hex(0x0a0d10), 0);
+    lv_obj_set_style_bg_opa(s_toc_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_hor(s_toc_panel, 40, 0);
+    lv_obj_set_style_pad_ver(s_toc_panel, 16, 0);
+    lv_obj_set_flex_flow(s_toc_panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scroll_dir(s_toc_panel, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_toc_panel, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_add_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN);
+
     s_timer = lv_timer_create(tick_cb, 250, NULL);
     ESP_LOGI(TAG, "init");
 }
@@ -552,10 +720,16 @@ void reader_view_show(void)
     s_active = true;
     slide(SCR_W, 0);
 
-    // Render whatever is cached immediately, then kick a refresh.
-    lock(); s_reload_pending = true; s_from_cache = true; strncpy(s_status, "Refreshing...", sizeof(s_status)-1); unlock();
-    reader_net_load_index();
-    ESP_LOGI(TAG, "show");
+    toc_panel_set_open(false);
+    // Render whatever is cached immediately (page + TOC), then kick a refresh of
+    // the current page and the contents list.
+    lock();
+    s_reload_pending = true; s_from_cache = true;
+    s_toc_reload_pending = true;
+    strncpy(s_status, "Refreshing...", sizeof(s_status)-1);
+    unlock();
+    reader_net_fetch(s_current_path, true);
+    ESP_LOGI(TAG, "show (page=%s)", s_current_path);
 }
 
 static void hide_done_cb(lv_anim_t *a)
@@ -599,6 +773,13 @@ void reader_view_notify_status(const char *status)
     lock();
     strncpy(s_status, status ? status : "", sizeof(s_status) - 1);
     s_status[sizeof(s_status) - 1] = '\0';
+    unlock();
+}
+
+void reader_view_notify_toc_loaded(void)
+{
+    lock();
+    s_toc_reload_pending = true;
     unlock();
 }
 
