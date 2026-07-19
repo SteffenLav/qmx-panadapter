@@ -255,7 +255,15 @@ int ft8_op_mode_slot_ms(void)
 // apparently needs more headroom to converge than FT8's. Split into a
 // separate FT4 constant restored to the pre-cut value; decode_candidate_range()
 // picks the right one off s_pool_proto at decode time.
-#define FT8_LDPC_MAX_ITERS    15
+// 2026-07-19 (#51): raised 15 -> 30. The 30->15 cut above was ONLY to shrink
+// dec_ms so a QSO reply decoded before our next TX fired — a problem since made
+// obsolete by the hold-for-decode TX gate (a4d8564), which holds the reply until
+// the decode lands regardless of dec_ms. Meanwhile the decode budget runs ~85%
+// idle (dec_ms ~1.8 s of an 11 s budget, dual-core split), so 15 iters was
+// leaving weak-signal decodes on the table for no remaining benefit. bp_decode()
+// only exits early on success, so marginal candidates that need 15-30 iterations
+// to converge were being abandoned at 15. Yield-motivated; measure decodes/slot.
+#define FT8_LDPC_MAX_ITERS    30
 #define FT4_LDPC_MAX_ITERS    30
 
 #define EPOCH_SANE_MIN        1700000000  // 2023-11-14 - SNTP not synced if below this
@@ -875,8 +883,8 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
             // symbol_period). Omitting this put every recorded/replied tone off by
             // mon->min_bin*6.25 (200 Hz) plus a ~6.25x scale error.
             int freq_hz = (int)lroundf((mon->min_bin + cands[i].freq_offset) / mon->symbol_period);
-            ESP_LOGI(TAG, "decoded: '%s' (score=%d freq=%dHz snr=%d)",
-                     text, cands[i].score, freq_hz, snr_db);
+            ESP_LOGI(TAG, "decoded: '%s' (score=%d freq=%dHz snr=%d dt=%d)",
+                     text, cands[i].score, freq_hz, snr_db, (int)lroundf(cand_dt_ms));
             ft8_screen_record_decode(text, cands[i].score, snr_db, freq_hz, slot_sec,
                                      (int)lroundf(cand_dt_ms));
         }
@@ -955,6 +963,38 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
     // v0.15.13 parity-skew fix). Computed eagerly before the fan-out so both
     // workers read it without synchronising.
     float noise_db = (n_cand > 0) ? ft8_estimate_noise_db(mon) : 0.0f;
+
+    // #51 instrumentation: per-slot waterfall + candidate-score statistics to
+    // discriminate the alternating-slot decode collapse (level vs alignment vs
+    // spectral). Byte-walk of the uint8 waterfall (~167 KB PSRAM, ~2 ms, plain
+    // task context - not an ints-off walk) + a small score histogram over the
+    // full candidate list. Remove once #51 is closed.
+    {
+        const ftx_waterfall_t *wf = &mon->wf;
+        size_t n_mag = (size_t)wf->num_blocks * wf->block_stride;
+        uint32_t msum = 0, n_sat = 0, n_zero = 0;
+        for (size_t k = 0; k < n_mag; k++) {
+            uint8_t v = wf->mag[k];
+            msum += v;
+            if (v >= 250) n_sat++;
+            else if (v == 0) n_zero++;
+        }
+        int smax = 0; long ssum = 0; int n10 = 0, n15 = 0, n20 = 0;
+        for (int i = 0; i < n_cand; i++) {
+            int sc = cands[i].score;
+            if (sc > smax) smax = sc;
+            ssum += sc;
+            if (sc >= 10) n10++;
+            if (sc >= 15) n15++;
+            if (sc >= 20) n20++;
+        }
+        ESP_LOGI(TAG, "slotdiag %d: noise=%.1f wf_mean=%.1f sat=%u zero=%u blocks=%d "
+                      "score max=%d mean=%.1f n10=%d n15=%d n20=%d",
+                 slot_idx, noise_db,
+                 n_mag ? (float)msum / (float)n_mag : 0.0f,
+                 (unsigned)n_sat, (unsigned)n_zero, wf->num_blocks,
+                 smax, n_cand ? (float)ssum / (float)n_cand : 0.0f, n10, n15, n20);
+    }
 
     // Fan out across both cores: the helper (core 0) takes odd candidates, we
     // take even. Both share the same const waterfall (read-only) and the

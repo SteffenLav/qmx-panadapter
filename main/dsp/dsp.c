@@ -251,6 +251,13 @@ esp_err_t dsp_ft8_capture_begin(float *dst, uint32_t target_samples,
     s_cap_begin_head = head;
     __sync_synchronize();
     s_ft8_active = true;
+    // #51 instrumentation: absolute window placement in pre-ring sample space.
+    // Consecutive `start` values should advance by exactly one slot of samples
+    // (180000 FT8 / 90000 FT4) if the windows tile the stream perfectly; an
+    // alternating short/long delta is a direct, sample-exact measure of the
+    // per-slot window misalignment under investigation. Remove when #51 closes.
+    ESP_LOGI(TAG, "FT8 arm: head=%u bf=%u start=%u",
+             (unsigned)head, (unsigned)bf, (unsigned)(head - bf));
     return ESP_OK;
 }
 
