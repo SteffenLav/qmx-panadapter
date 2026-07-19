@@ -4,13 +4,17 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.0.1** — 2026-07-17
+**v1.1.0** — 2026-07-19
 
-A point release fixing one bug reported within hours of v1.0.0:
+A years-old FT8 decode mystery finally solved, plus the microSD card promoted to a full station backup.
 
-- **When you answer another station's CQ, the report you send back is now your own measurement of their signal** — not an echo of the report they sent you. On v1.0.0, a station you heard at −4 who gave you a −10 got `R-10` back regardless of their real strength; it now correctly sends `R-04`. (Reported by Steve N0SZ and Jonathan KN6LFB.) The "Skip TX1" quick-pounce was already correct; your received report was always logged correctly — only the transmitted report was wrong. Everything else is identical to v1.0.0.
+- **FT8 now decodes at full rate every slot.** The panadapter used to hear 60+ stations in its first couple of slots and then collapse to a fraction for the rest of the session. Root cause: **~200–350 ms of the QMX's audio was being lost at the USB wire every slot** — silently, invisible to every error counter — which clipped the start of every signal. Fixed. It now sustains its full decode rate indefinitely (~16 unique stations/slot where it used to settle at ~6), and weak-signal decoding was deepened on top.
+- **microSD — full grab-and-go station backup.** Insert a card (a plain FAT32 32 GB card is ideal) and the Tab5 mirrors your whole station to it: the ADIF QSO log, all settings + memory channels, your LoTW signing certificate + key, the diagnostic log, and a README describing every file. A genuine PC-free POTA/SOTA backup. *(The card holds credentials in clear text, as any restorable backup must — keep it physically secure.)*
+- **GPS time sync is now automatic.** A GPS-disciplined QMX is detected on its own (no more "QMX has GPS" toggle) and the clock phase-locks to the GPS second (~10 ms). The bottom-bar clock shows `UTC(GPS)` when GPS is in charge. FT8-derived sync is now correctly an offline fallback only.
+- **Band-plan drag from the bottom bar.** Grab the band-plan slider anywhere along the bottom status bar and drag sideways to retune — a much bigger target than the thin strip. A vertical up-swipe there still opens memory channels.
+- **ADIF log viewer no longer crashes on larger logs**, the settings-drawer sliders and button spacing are tidied up, and FT4 is confirmed rock-solid even with the SD card mounted.
 
-### Installing v1.0.1
+### Installing v1.1.0
 
 1. Use the one-click flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases)
 2. Or follow [Build from Source](build/build.md)
@@ -20,6 +24,8 @@ Your settings are preserved during a normal flash.
 ---
 
 ## Previous Releases
+
+**v1.0.1** — 2026-07-17 — Point fix: when you answer a CQ, the report you send back is your own measurement of their signal, not an echo of theirs. (Reported by Steve N0SZ, Jonathan KN6LFB.)
 
 ### v1.0.0 — 2026-07-16
 
@@ -182,7 +188,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.0.1.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.1.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

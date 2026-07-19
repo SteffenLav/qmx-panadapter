@@ -866,6 +866,25 @@ A point release fixing one bug reported within hours of v1.0.0 going out.
 
 Everything else is identical to v1.0.0.
 
+## v1.1.0 — 2026-07-19 — FT8 decode collapse solved + SD station backup
+
+The headline is a years-old mystery finally root-caused and killed, plus the microSD card promoted from shelved to a full grab-and-go station backup.
+
+**FT8 decode — every slot now decodes like the first (#51).** The long-standing "the first FT8 slots hear 60+ stations, then it collapses to a fraction" behaviour is fixed. Root cause: the USB isochronous audio pipeline queued only **9 ms** of transfers (an untouched driver default), so every post-decode processing burst starved the pipe and **~170–350 ms of the QMX's audio was lost at the USB wire every slot** — with zero error status, invisible to every software counter. That hole clipped the opening sync of every signal, so weak decodes died and the yield sagged; only the very first slots (before any processing burst had happened) were pristine. Fixed by queuing 320 ms of audio. Measured result: **sustained ~16 unique decodes per slot, indefinitely** (previously ~6 steady-state), with no collapse. Belt-and-suspenders hardening shipped alongside (1 s driver audio buffer, higher audio-task priority, a now-visible+counted overflow warning), and FT8 weak-signal decoding was deepened (LDPC iterations restored 15→30 now that a separate timing constraint no longer needs them low) for a further ~⅓ more decodes.
+
+**microSD — full station backup (re-enabled + expanded).** The auto-archive, previously shelved (it was wrongly blamed for the FT8 collapse above — same root cause), is back and now mirrors your **whole station** to the card: the ADIF QSO log, a full config export (settings + memory channels), your **LoTW signing certificate + key**, the diagnostic log, and a self-describing `README.txt`. A genuine PC-free POTA/SOTA backup — pop the card into any computer to back up or move your setup. A plain **FAT32 32 GB** card needs no special handling. (The card holds credentials in clear text, as any restorable backup must — keep it physically secure; the on-card README says so.)
+
+**GPS time sync — automatic, and more precise.** The manual "QMX has GPS" toggle is gone; a GPS-disciplined QMX is now **detected automatically** (by comparing its second-tick against SNTP) and the clock **phase-locks to the GPS second boundary (~10 ms)** rather than a coarse whole-second set. The bottom-bar clock shows `UTC(GPS)` when GPS is the active source, and reflects the source *currently* in charge (`UTC(GPS)/UTC(NTP)/UTC(FT8)/UTC(FT4)`). FT8-derived time sync is now correctly an **offline fallback only** — it's ignored while SNTP/GPS is authoritative (the FT8 slot offset is receive-audio latency, not a clock error). A DT-follow-partner refinement shifts transmit onto a significantly off-time partner's beat during a QSO.
+
+**UI & navigation.**
+
+- **Band-plan drag from the bottom bar** — grab the band-plan slider handle anywhere along the bottom status bar and drag sideways to retune (a much taller target than the thin strip); a vertical up-swipe there still opens memory channels.
+- **ADIF log viewer no longer crashes on larger logs** — a real fault when the log grew (~40 QSOs) is fixed by enlarging the LVGL object pool; the viewer now shows ~11 rows and scrolls, with the Close button always on-screen.
+- **Settings drawer polish** — equal spacing between the Antenna Tune / WiFi / Callsign buttons (and the FT8-mode dead-gap removed); all sliders align flush-left with the buttons and the knob sits inside the track edge at maximum.
+- **FT4 confirmed solid with the SD card mounted** — the tightest-heap mode decodes without collapse.
+
+**Other fixes.** QRZ upload no longer displays "undefined QSOs uploaded" (a display-only count bug). Documentation across the manual + README corrected for all of the above (the microSD "disabled" notes, the removed GPS toggle, the new bottom-bar band-plan drag).
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*

@@ -21,20 +21,20 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 ## Status
 
-**v1.0.1 — the 1.0 release (plus a fast follow-up fix). The Beta label is gone: a complete, self-contained FT8/FT4 station with no PC in the loop.**
+**v1.1.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, and FT8 now decodes at full rate on every slot.**
 
-- **v1.0.1**: fixes the signal report sent when you answer another station's CQ — it now reports *your* measurement of their signal, not an echo of the report they gave you
-- **v1.0.0 headline — LoTW upload**: QSOs are signed on the device with your own ARRL callsign certificate and uploaded straight to Logbook of the World — completing the logbook trio (QRZ, eQSL, LoTW). Guided one-time setup from the web page
-- **Also new in v1.0.0**: the FT8 "every message sent twice" behaviour is fixed (exchanges take half the time); nonstandard callsigns (`<...>`) resolve; correct received reports in the log; broken QSOs resume where they stopped; Today/POTA view and single-record delete in the QSO log; display sleep (idle screen-off with tap-wake); reorganized settings drawer; web bottom bar decluttered into menus
-- All panadapter features (spectrum, waterfall, zoom, memory, web UI) are production-ready
-- FT8 **and FT4** receive/transmit, ADIF logging, and all three logbook uploads are stable
+- **v1.1.0 headline — FT8 decode collapse solved**: the panadapter used to hear 60+ stations in its first slots then collapse to a fraction; the cause was ~200–350 ms of QMX audio lost at the USB wire every slot (invisible to every counter). Fixed — it now sustains its full decode rate indefinitely
+- **microSD is now a full station backup**: insert a card and your QSO log, settings, and LoTW signing certificate are mirrored to it — a PC-free grab-and-go backup for POTA/SOTA
+- **GPS time sync is automatic** (~10 ms phase-lock, no toggle), plus a band-plan drag from the bottom bar, an ADIF-viewer crash fix, and settings-drawer polish
+- **v1.0.0 foundation — LoTW upload**: QSOs are signed on the device with your own ARRL certificate, completing the logbook trio (QRZ, eQSL, LoTW); plus the FT8 double-send fix, `<...>` callsign resolution, broken-QSO resume, Today/POTA log view, and display sleep
+- All panadapter features (spectrum, waterfall, zoom, memory, web UI) are production-ready; FT8 **and FT4** receive/transmit, ADIF logging, and all three logbook uploads are stable
 - See [Version History](releases.md) for all changes
 
 ## Get Started
 
 **New user?** Start with the [Quick Start](quick-start.md) guide — 10 minutes to on-air.
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.0.1.pdf) — a printable 40-page reference.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.1.0.pdf) — a printable 40-page reference.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 
