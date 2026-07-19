@@ -39,10 +39,10 @@ Two hard constraints shape everything below:
   to the audio consumers. More invasive; only worth it if the Reader should
   actively quiesce DSP.
 
-**Gesture design decision (open):** right-edge swipe already opens the settings
-drawer. Cleanest is to make the left-edge swipe *cycle* Panadapter → FT8 →
-Reader (→ future CW) instead of a 2-way toggle, with a small page-indicator.
-This scales to the "future CW decode page" the operator mentioned.
+**Gesture design — DECIDED:** left-edge swipe *cycles* Panadapter → FT8 →
+Reader (→ future CW) instead of the current 2-way toggle, with a small
+page-indicator. Right-edge swipe still opens the settings drawer. This scales to
+the "future CW decode page" and gives one consistent gesture for all pages.
 
 ### 1b. Fetching over the network  (~0.5 day)
 
@@ -57,11 +57,12 @@ a page body is the same machinery in reverse. Use a PSRAM-stack background task
 | Approach | Fidelity | Effort | Verdict |
 |---|---|---|---|
 | **A.** Fetch live HTML, strip tags → text | Low (layout lost, nav chrome leaks in) | 1–1.5 d | Fragile on-device HTML parsing of a Material theme; **not recommended** |
-| **B.** Purpose-built simplified feed from our own site + small markdown-subset renderer | Medium (clean headings, bold, lists, code, links-as-text) | 2–3 d | **RECOMMENDED** — we own the pipeline, no HTML parsing on-device |
+| **B.** Render the **mkdocs source `.md` files directly** with a small markdown-subset renderer | Medium (clean headings, bold, lists, code, links-as-text) | 2–3 d | **CHOSEN** — same files that build the site, no second copy to maintain, no HTML parsing on-device |
 | **C.** Server renders each page to a PNG; device just displays + scrolls | High (pixel-faithful) | needs a **dynamic server** | Our site is static (mkdocs → FTP, no compute), so no place to run headless-Chrome; images also heavy over this link. **Doesn't fit hosting** |
 
-**Recommendation: Approach B.** Render a *markdown subset* into a scrollable
-LVGL container:
+**DECIDED: Approach B, reading the real mkdocs source markdown** (no derived /
+stripped export — single source of truth, see 1d). Render a *markdown subset*
+into a scrollable LVGL container:
 
 - headings → the montserrat font sizes already built in `sdkconfig`
   (14/18/20/22/24/28/32)
@@ -73,18 +74,29 @@ LVGL container:
 
 Renderer is a few hundred lines of LVGL, no HTML engine, no fragile parsing.
 
-### 1d. Content pipeline on the site side  (~0.5 day)
+### 1d. Content pipeline on the site side — DECIDED: no second copy  (~0.5 day)
 
-Because we own tab5.lav.dk, emit a device-friendly variant alongside the normal
-mkdocs build so the device never parses themed HTML:
+**Hard requirement from the operator: do NOT maintain a separate stripped/derived
+version of the docs.** The Reader consumes the **same mkdocs *source* markdown
+files** that build tab5.lav.dk — single source of truth. The only site-side work
+is *publishing the raw `.md` tree* alongside the built HTML, not transforming it.
 
-- Add a small build step (mkdocs plugin/hook or a post-`mkdocs build` script) that
-  writes a stripped **markdown or plain-text** copy of each page — e.g.
-  `tab5.lav.dk/reader/index.md` (+ per-page files, or one concatenated file).
-- The operator's existing `mkdocs build` → FTP `site/` flow carries these along
-  automatically; no new manual step (see the release-process memory).
-- The device fetches one small file. Keep an index/manifest listing available
-  pages so the Reader can offer a table of contents.
+- The site source lives in `docs/mkdocs/` (repo) and builds to `site/` (the
+  themed HTML that gets FTP'd). Add a **trivial copy step** to the build/FTP flow
+  that mirrors the source `.md` tree to a public path, e.g. `site/md/…` →
+  `tab5.lav.dk/md/…`. One line in the release/mkdocs step; carried by the
+  existing FTP push (see the release-process memory). No content duplication.
+- **Table of contents = mkdocs `nav:`**, the same single source. The device
+  reads `mkdocs.yml`'s `nav` (or a tiny index derived from it at build time) to
+  get page order + titles that exactly match the site. No hand-maintained
+  manifest.
+- **Renderer must degrade gracefully on mkdocs/pymdownx syntax** it doesn't fully
+  support, since it's reading real source: YAML front-matter (skip), admonitions
+  (`!!! note` / `???`), `pymdownx.superfences`/tabbed blocks, tables, snippet
+  includes, and **relative image links** (see images = phase 2 below). Unknown
+  syntax falls back to readable plain text — never an error.
+- The device fetches per-page files on demand (small fetches suit the fragile
+  WiFi link) and caches them to SPIFFS.
 
 ### 1e. Offline caching  (folded into 1b/1c)
 
@@ -116,11 +128,11 @@ New module `main/net/update_check.c` (background task, low priority, PSRAM stack
 
 1. After WiFi is up (and only if WiFi is enabled), and then on a slow timer
    (once per 6–24 h), `GET`:
-   `https://api.github.com/repos/SteffenLav/qmx-panadapter/releases/latest`
+   `https://api.github.com/repos/SteffenLav/qmx-panadapter/releases?per_page=5`
+   - **DECIDED: pre-releases/betas count as updates** → use `/releases` (not
+     `/releases/latest`, which excludes them) and take the newest non-draft entry.
    - **Must send a `User-Agent` header** — GitHub returns 403 without one.
    - HTTPS via the same mbedtls cert bundle already used for uploads.
-   - `/releases/latest` excludes drafts and pre-releases → only stable releases
-     trigger a notice. (Use `/releases` and take `[0]` if betas should count.)
 2. Parse the JSON with cJSON (already a dependency). Fields of interest:
    - `tag_name`  → e.g. `"v1.0.2"` (the version to compare)
    - `name` / `body` → release title + **markdown release notes**
@@ -149,10 +161,13 @@ ship one).
   deliberate act via the flasher (matches the "confirm outward/irreversible
   actions" posture).
 
-### 2c. Lower-effort alternative (or fallback) — a static version file on tab5.lav.dk
+### 2c. DECIDED: static latest.json as a fallback (both sources)
 
-Since the operator already FTPs to tab5.lav.dk, an even simpler mechanism is a
-hand-or-build-maintained `tab5.lav.dk/latest.json`:
+GitHub API is the source of truth; a static `tab5.lav.dk/latest.json` is a
+zero-dependency **fallback** used only if the API call fails (offline GitHub,
+rate limit, DNS). To honour the "no extra manual step" principle, the release /
+mkdocs build step should **auto-emit** `latest.json` so it's never hand-bumped —
+FTP'd with everything else:
 
 ```json
 { "version": "v1.0.2", "url": "https://github.com/SteffenLav/qmx-panadapter/releases/tag/v1.0.2", "notes_url": "reader/whatsnew-v1.0.2.md" }
@@ -161,10 +176,10 @@ hand-or-build-maintained `tab5.lav.dk/latest.json`:
 - Pros: no GitHub API dependency or rate limit; served from the same host the
   Reader already talks to; fully under the operator's control (bump it in the
   same FTP push).
-- Cons: one more thing to remember to update at release time (could be emitted by
-  the release/mkdocs build step so it's automatic).
-- The two aren't exclusive: GitHub API as source of truth, static file as a
-  zero-dependency fallback if the API call fails.
+- Since it's the fallback (not primary), a slightly stale `latest.json` is
+  harmless — the API normally answers first.
+- Semver compare must tolerate the `vX.Y.Z.N` 4-part tags in history (e.g.
+  `v0.9.9.1`) and pre-release suffixes.
 
 ---
 
@@ -186,13 +201,24 @@ docs**, not a pixel mirror of the Material-themed site. For an at-the-rig
 reference on a 5" panel, text-forward is arguably better than the full desktop
 layout anyway.
 
-## Open decisions (need operator input before build)
+## Resolved decisions (operator, 2026-07-19)
 
-1. Gesture model: cycle left-swipe through pages, or a separate gesture for the
-   Reader?
-2. Content feed: per-page files + a table-of-contents manifest, or one
-   concatenated document?
-3. Update check: GitHub API, static `latest.json` on tab5.lav.dk, or both
-   (API primary + static fallback)?
-4. Do pre-release/beta tags count as "updates", or stable-only?
-5. Inline images in phase 1, or defer to phase 2?
+1. **Gesture:** left-swipe *cycles* Panadapter → FT8 → Reader → (future CW) with
+   a page indicator. Not a separate gesture.
+2. **Content feed:** the device reads the **actual mkdocs source `.md` files** —
+   no derived/stripped copy to maintain. Site-side work is just publishing the
+   raw `.md` tree (+ deriving the TOC from `mkdocs.yml` `nav`). Renderer degrades
+   gracefully on mkdocs/pymdownx syntax.
+3. **Update source:** **both** — GitHub Releases API primary, static
+   `latest.json` fallback (build-emitted, not hand-maintained).
+4. **Betas:** **pre-releases count** as updates → use `/releases`, take newest
+   non-draft.
+5. **Images:** deferred to **phase 2** (ship text-first). Because the Reader now
+   reads real source markdown, inline images are relative links to real assets on
+   tab5.lav.dk — phase 2 fetches + LVGL-decodes them into PSRAM.
+
+### Still to confirm at build time (not blockers)
+
+- Exact public path for the raw `.md` tree (`tab5.lav.dk/md/…` assumed).
+- Update-check interval (6 h vs 24 h) and where the "update available" notice
+  appears beyond the Reader header (optional bottom-bar dot).
