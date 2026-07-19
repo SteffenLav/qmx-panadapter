@@ -36,6 +36,29 @@ static const char *TAG = "adif_view_modal";
 #define POTA_ACTIVATION_QSOS 10
 #define COLOR_ACTIVATION_OK  0x4caf50
 
+// LVGL's object pool is a fixed tlsf arena (CONFIG_LV_MEM_SIZE_KILOBYTES,
+// PSRAM-backed via lv_pool_shim). Each QSO row is 9 objects (a flex container +
+// 8 column labels) costing ~2 KB, so a large enough log builds enough rows to
+// exhaust the pool - and LVGL does NOT null-check an allocation failure: it
+// dereferences a NULL object and the device panics (load-access fault,
+// field-observed 2026-07-19 at only 40 QSOs, because the FT8 screen already
+// consumes ~200 KB and only ~58 KB was free when the modal opened). The primary
+// fix is sizing the pool (1024 KB) to hold the full ADIF_VIEW_MAX_ROWS cap with
+// margin, so the whole log renders as before. This guard is a BACKSTOP: build
+// newest-first and stop before the pool runs low (showing a footer for the
+// remainder) so we degrade gracefully instead of crashing if the UI's headroom
+// is ever squeezed below what the cap needs. In normal operation it never fires.
+// The reserve exceeds the worst-case cost of one more row plus room for the
+// delete bar and the rest of the live UI.
+#define ADIF_VIEW_LVGL_RESERVE (48 * 1024)
+
+static size_t lvgl_free_bytes(void)
+{
+    lv_mem_monitor_t mon;
+    lv_mem_monitor(&mon);
+    return mon.free_size;
+}
+
 static lv_obj_t *s_modal      = NULL;
 static lv_obj_t *s_panel      = NULL;
 static lv_obj_t *s_title      = NULL;
@@ -409,17 +432,44 @@ static void list_render(void)
     // Newest-first display: the newest match sits at (matched-1) % ring_cap,
     // walk backward from there.
     int shown = (matched < ring_cap) ? matched : ring_cap;
+    int built = 0;
+    size_t lv_free_start = lvgl_free_bytes();   // LVGL pool headroom before rows
     for (int k = 0; k < shown; k++) {
+        // Budget guard (see ADIF_VIEW_LVGL_RESERVE): stop before the LVGL object
+        // pool runs low. Checked BEFORE building, since a row is 9 objects plus
+        // layout work and LVGL faults instead of failing gracefully. Newest-
+        // first, so what we drop is the oldest QSOs (still logged / downloadable).
+        if (lvgl_free_bytes() < ADIF_VIEW_LVGL_RESERVE) {
+            ESP_LOGW(TAG, "LVGL pool low (%u B free) - stopping ADIF render at %d of %d rows",
+                     (unsigned)lvgl_free_bytes(), built, shown);
+            break;
+        }
         int idx = (matched - 1 - k) % ring_cap;
         bool even_row = (k % 2) == 1;
         build_qso_row(s_list, lines + (size_t)idx * 1024, even_row, fidxs[idx]);
+        built++;
     }
     heap_caps_free(lines);
     heap_caps_free(fidxs);
 
+    // Couldn't show them all (memory budget or the ring cap) - say so plainly.
+    // The full log is always available via the web ADIF download; this on-device
+    // viewer is just a quick "did I work them / how close to 10" check.
+    if (built < matched) {
+        lv_obj_t *more = lv_label_create(s_list);
+        lv_label_set_text_fmt(more,
+            "Showing newest %d of %d - download the ADIF (web UI) for the full log",
+            built, matched);
+        lv_obj_set_style_text_font(more, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(more, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+        lv_obj_set_style_pad_top(more, 8, 0);
+        lv_obj_set_style_pad_bottom(more, 8, 0);
+    }
+
     int64_t t_done = esp_timer_get_time();
-    ESP_LOGI(TAG, "ADIF viewer: showing %d of %d logged QSOs (filter=%s today=%d, read=%lld ms, rows=%lld ms, total=%lld ms)",
-             shown, total, s_today_only ? "today" : "all", today_count,
+    ESP_LOGI(TAG, "ADIF viewer: showing %d of %d logged QSOs (filter=%s today=%d, LVGL pool %uKB->%uKB free, read=%lld ms, rows=%lld ms, total=%lld ms)",
+             built, total, s_today_only ? "today" : "all", today_count,
+             (unsigned)(lv_free_start / 1024), (unsigned)(lvgl_free_bytes() / 1024),
              (long long)((t_read_done - t_read_start) / 1000),
              (long long)((t_done - t_read_done) / 1000),
              (long long)((t_done - t_start) / 1000));
@@ -452,7 +502,10 @@ static void modal_build(void)
     s_panel = lv_obj_create(s_modal);
     lv_obj_set_width(s_panel, 900);
     lv_obj_set_height(s_panel, LV_SIZE_CONTENT);
-    lv_obj_set_style_max_height(s_panel, 660, 0);
+    // Chrome (title header + column header + Close button + paddings) is ~230 px;
+    // plus the list's 430 px cap that leaves ~660 and keeps Close on-screen (the
+    // panel is centred in a 720 px-tall display). If the list cap changes, revisit.
+    lv_obj_set_style_max_height(s_panel, 690, 0);
     lv_obj_set_align(s_panel, LV_ALIGN_CENTER);
     lv_obj_set_style_bg_color(s_panel, lv_color_hex(UI_COLOR_SURFACE), 0);
     lv_obj_set_style_bg_opa(s_panel, LV_OPA_COVER, 0);
@@ -508,7 +561,11 @@ static void modal_build(void)
     s_list = lv_obj_create(s_panel);
     lv_obj_set_width(s_list, LV_PCT(100));
     lv_obj_set_height(s_list, LV_SIZE_CONTENT);
-    lv_obj_set_style_max_height(s_list, 480, 0);
+    // ~11 rows visible, scroll for the rest. Deliberately bounded (not "as tall
+    // as it can be") so the panel - header + this list + the Close button - fits
+    // on-screen with Close fully visible. Must stay in step with the panel's
+    // max_height below (chrome ~230 px + this = the panel height).
+    lv_obj_set_style_max_height(s_list, 430, 0);
     lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
     lv_obj_set_style_pad_all(s_list, 0, 0);

@@ -83,7 +83,7 @@ CONFIG_HTTPD_WS_SUPPORT=y
 # LVGL memory pool -- bumped from 128 KB to 256 KB (v0.16.0) to accommodate
 # pre-built modals + drawer + 40-row FT8 pool (~220 KB cumulative, up from
 # ~110 KB at 20 rows). Pool is a .bss static array in internal SRAM.
-CONFIG_LV_MEM_SIZE_KILOBYTES=256
+CONFIG_LV_MEM_SIZE_KILOBYTES=1024
 
 
 # Move LVGL static memory pool to PSRAM (.ext_ram.bss). Without this,
