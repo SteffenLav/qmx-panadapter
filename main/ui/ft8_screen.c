@@ -15,12 +15,16 @@ static const char *TAG = "ft8_screen";
 
 // The decode list is a live picture of who is transmitting *now*, not a log.
 // A station that hasn't been re-decoded within this many seconds is expired
-// (you can't work a signal that's already gone). ~2 minutes keeps stations
-// that are actively calling/working (they transmit every 15-30 s) through
-// fades and their own QSO exchanges, while still dropping stations that have
-// left. Was 60 s; raised to 120 s by operator preference (2026-07-15) - the
-// shorter window churned too hard on marginal signals. Tunable.
-#define FT8_ROW_STALE_SEC   120
+// (you can't work a signal that's already gone). ~90 s keeps stations that are
+// actively calling/working (they transmit every 15-30 s) through fades and
+// their own QSO exchanges, while still dropping stations that have left.
+// History: 60 s -> 120 s (2026-07-15) because the short window churned on
+// marginal signals AND rows died mid-CQ-run; the CQ-run churn later got its
+// real fix (parity-aware aging pause, #46). 120 -> 90 (2026-07-19) once the
+// #51 ISO-pipeline fix restored ~16 unique decodes/slot: 120 s now keeps far
+// too large a crowd on screen, so 90 s tightens "Active" back to who is
+// genuinely here now. Tunable.
+#define FT8_ROW_STALE_SEC   90
 
 static ft8_call_t s_table[FT8_CALL_TABLE_SIZE];
 static SemaphoreHandle_t s_mutex = NULL;
