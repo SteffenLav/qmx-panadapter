@@ -182,15 +182,39 @@ static int leading_indent(const char *s)
 
 static const char *skip_ws(const char *s) { while (*s == ' ' || *s == '\t') s++; return s; }
 
+// Work buffers for render_markdown. Allocated from PSRAM per render, NOT on the
+// stack: render runs on the LVGL task (~8 KB stack) via the reader tick timer,
+// and ~6.4 KB of stack arrays here overflowed it the instant real content
+// rendered (Stack protection fault inside lv_label_create). Same rule as the
+// FT8 pounce path — keep kB-scale buffers off LVGL-thread stacks.
+#define MD_PARA_SZ     1024
+#define MD_CODE_SZ     4096
+#define MD_CLEANED_SZ  1024
+#define MD_TITLE_SZ    MD_CLEANED_SZ   // holds a cleaned heading line in full
+#define MD_LINE_SZ     (MD_CLEANED_SZ + 40)  // bullet/number prefix + cleaned text
+typedef struct {
+    char title[MD_TITLE_SZ];
+    char para[MD_PARA_SZ];
+    char code[MD_CODE_SZ];
+    char cleaned[MD_CLEANED_SZ];   // shared scratch for md_inline_clean output
+} md_scratch_t;
+
 // Render one markdown document (mutated in place: line terminators are consumed
 // by the walker) into the body container. `buf` is NUL-terminated.
 static void render_markdown(char *buf)
 {
     lv_obj_clean(s_body);
 
-    char title[256] = {0};
-    char para[1024];  size_t para_len = 0;   // accumulated paragraph text
-    char code[4096];  size_t code_len = 0;   // accumulated code-block text
+    md_scratch_t *S = heap_caps_malloc(sizeof(md_scratch_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!S) {
+        add_label("Out of memory rendering documentation.",
+                  &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED, 0, 0);
+        return;
+    }
+    char *title   = S->title;   title[0] = '\0';
+    char *para    = S->para;    size_t para_len = 0;   // accumulated paragraph text
+    char *code    = S->code;    size_t code_len = 0;   // accumulated code-block text
+    char *cleaned = S->cleaned;                        // reused per block (single-threaded)
     bool in_code = false;
     bool in_frontmatter = false;
     int  block_count = 0;
@@ -200,8 +224,7 @@ static void render_markdown(char *buf)
 
     #define FLUSH_PARA() do {                                              \
         if (para_len) {                                                    \
-            char cleaned[1024];                                           \
-            md_inline_clean(para, cleaned, sizeof(cleaned));               \
+            md_inline_clean(para, cleaned, MD_CLEANED_SZ);                 \
             add_label(cleaned, &lv_font_montserrat_20, UI_COLOR_TEXT,      \
                       block_count ? 10 : 0, 0);                            \
             block_count++; para_len = 0; para[0] = '\0';                   \
@@ -231,7 +254,7 @@ static void render_markdown(char *buf)
         }
         if (in_code) {
             size_t need = strlen(line) + 1;
-            if (code_len + need < sizeof(code)) { code_len += (size_t)snprintf(code + code_len, sizeof(code) - code_len, "%s\n", line); }
+            if (code_len + need < MD_CODE_SZ) { code_len += (size_t)snprintf(code + code_len, MD_CODE_SZ - code_len, "%s\n", line); }
             continue;
         }
 
@@ -249,8 +272,7 @@ static void render_markdown(char *buf)
             if (*h == ' ') {
                 FLUSH_PARA();
                 h = skip_ws(h);
-                char cleaned[256];
-                md_inline_clean(h, cleaned, sizeof(cleaned));
+                md_inline_clean(h, cleaned, MD_CLEANED_SZ);
                 const lv_font_t *f = (level == 1) ? &lv_font_montserrat_32 :
                                      (level == 2) ? &lv_font_montserrat_28 :
                                      (level == 3) ? &lv_font_montserrat_24 :
@@ -258,7 +280,7 @@ static void render_markdown(char *buf)
                 uint32_t col = (level <= 2) ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT;
                 add_label(cleaned, f, col, block_count ? 18 : 0, 0);
                 block_count++;
-                if (!title[0] && level == 1) { snprintf(title, sizeof(title), "%s", cleaned); }
+                if (!title[0] && level == 1) { snprintf(title, MD_TITLE_SZ, "%s", cleaned); }
                 continue;
             }
         }
@@ -302,8 +324,7 @@ static void render_markdown(char *buf)
         if (t[0] == '>') {
             FLUSH_PARA();
             const char *q = skip_ws(t + 1);
-            char cleaned[512];
-            md_inline_clean(q, cleaned, sizeof(cleaned));
+            md_inline_clean(q, cleaned, MD_CLEANED_SZ);
             lv_obj_t *l = add_label(cleaned, &lv_font_montserrat_20, UI_COLOR_TEXT_SECONDARY, 8, 16);
             if (l) {
                 lv_obj_set_style_border_side(l, LV_BORDER_SIDE_LEFT, 0);
@@ -326,17 +347,16 @@ static void render_markdown(char *buf)
             }
             if (bullet || numbered) {
                 FLUSH_PARA();
-                char cleaned[512];
                 if (bullet) {
-                    md_inline_clean(skip_ws(t + 1), cleaned, sizeof(cleaned));
-                    char withb[540]; snprintf(withb, sizeof(withb), "%s  %s", LV_SYMBOL_BULLET, cleaned);
+                    md_inline_clean(skip_ws(t + 1), cleaned, MD_CLEANED_SZ);
+                    char withb[MD_LINE_SZ]; snprintf(withb, sizeof(withb), "%s  %s", LV_SYMBOL_BULLET, cleaned);
                     add_label(withb, &lv_font_montserrat_20, UI_COLOR_TEXT, 4, 20 + indent * 8);
                 } else {
                     char num[8]; size_t k = 0;
                     for (const char *d = t; (isdigit((unsigned char)*d) || *d=='.'|| *d==')') && k < sizeof(num)-1; d++) num[k++] = *d;
                     num[k] = '\0';
-                    md_inline_clean(skip_ws(nptr + 1), cleaned, sizeof(cleaned));
-                    char withn[560]; snprintf(withn, sizeof(withn), "%s %s", num, cleaned);
+                    md_inline_clean(skip_ws(nptr + 1), cleaned, MD_CLEANED_SZ);
+                    char withn[MD_LINE_SZ]; snprintf(withn, sizeof(withn), "%s %s", num, cleaned);
                     add_label(withn, &lv_font_montserrat_20, UI_COLOR_TEXT, 4, 20 + indent * 8);
                 }
                 block_count++;
@@ -348,9 +368,8 @@ static void render_markdown(char *buf)
         // (Skip the |---|--- separator row.)
         if (t[0] == '|') {
             if (strspn(t, "|-: ") == strlen(t)) continue;  // separator row
-            // accumulate into code buffer style; simplest: render each row as mono line
-            char cleaned[512];
-            md_inline_clean(t, cleaned, sizeof(cleaned));
+            // simplest degrade: render each row as a monospace/preformatted line
+            md_inline_clean(t, cleaned, MD_CLEANED_SZ);
             add_code_block(cleaned);
             block_count++;
             continue;
@@ -360,7 +379,7 @@ static void render_markdown(char *buf)
         {
             const char *seg = skip_ws(line);
             size_t need = strlen(seg) + 1;
-            if (para_len + need < sizeof(para)) {
+            if (para_len + need < MD_PARA_SZ) {
                 if (para_len) para[para_len++] = ' ';
                 memcpy(para + para_len, seg, strlen(seg));
                 para_len += strlen(seg);
@@ -377,6 +396,7 @@ static void render_markdown(char *buf)
     if (s_title_lbl) lv_label_set_text(s_title_lbl, title[0] ? title : "Documentation");
     lv_obj_scroll_to_y(s_body, 0, LV_ANIM_OFF);
     ESP_LOGI(TAG, "rendered %d blocks", block_count);
+    heap_caps_free(S);   // title already copied into the label above
 }
 
 // Read the cache file and render it. LVGL thread only.
