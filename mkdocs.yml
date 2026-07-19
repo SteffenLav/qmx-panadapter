@@ -43,6 +43,13 @@ nav:
 plugins:
   - search
 
+# Post-build hook: mirror the raw source .md tree to site/md/, emit
+# site/md/toc.json (from nav) and site/latest.json (from the latest git tag)
+# for the on-device docs Reader + update check. See mkdocs_reader_export.py and
+# docs/reader-page-and-update-check-plan.md.
+hooks:
+  - mkdocs_reader_export.py
+
 markdown_extensions:
   - pymdownx.highlight
   - pymdownx.superfences
