@@ -611,6 +611,7 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(s_overlay, LV_OPA_COVER, 0);
     lv_obj_add_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_overlay, LV_OBJ_FLAG_CLICKABLE);   // swallow touches (inert) so gestures behind it can't fire
 
     // Header strip
     lv_obj_t *hdr = lv_obj_create(s_overlay);
@@ -624,9 +625,10 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_set_style_border_color(hdr, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
 
-    // "Contents" button (opens the TOC panel)
+    // "Contents" button (opens the TOC panel). Kept clear of the ~30 px
+    // left-edge exit-swipe strip so that strip doesn't steal its taps.
     s_toc_btn = lv_button_create(hdr);
-    lv_obj_align(s_toc_btn, LV_ALIGN_LEFT_MID, 12, 0);
+    lv_obj_align(s_toc_btn, LV_ALIGN_LEFT_MID, 44, 0);
     lv_obj_set_style_bg_color(s_toc_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
     lv_obj_set_style_pad_hor(s_toc_btn, 14, 0);
     lv_obj_set_style_pad_ver(s_toc_btn, 8, 0);
@@ -715,10 +717,12 @@ static void slide(int32_t from, int32_t to)
 void reader_view_show(void)
 {
     if (!s_overlay) return;
-    lv_obj_set_x(s_overlay, SCR_W);
+    // Left-edge swipe drags RIGHT, so the page enters from the LEFT and follows
+    // the finger (matches the Panadapter<->FT8 slide direction).
+    lv_obj_set_x(s_overlay, -SCR_W);
     lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
     s_active = true;
-    slide(SCR_W, 0);
+    slide(-SCR_W, 0);
 
     toc_panel_set_open(false);
     // Render whatever is cached immediately (page + TOC), then kick a refresh of
@@ -746,6 +750,8 @@ void reader_view_hide(void)
     lv_anim_init(&anim);
     lv_anim_set_var(&anim, s_overlay);
     lv_anim_set_exec_cb(&anim, anim_x_cb);
+    // Exit slides off to the RIGHT (revealing the Panadapter underneath),
+    // matching the FT8->Panadapter direction on the same rightward swipe.
     lv_anim_set_values(&anim, lv_obj_get_x(s_overlay), SCR_W);
     lv_anim_set_time(&anim, SLIDE_TIME_MS);
     lv_anim_set_path_cb(&anim, lv_anim_path_ease_in);

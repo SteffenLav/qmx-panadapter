@@ -1866,6 +1866,7 @@ static void sim_border_keepalive_cb(lv_timer_t *t)
         }
     }
     if (!s_sim_border_active || !s_sim_border) return;
+    if (reader_view_is_active()) return;   // don't draw over the docs Reader
     lv_obj_move_foreground(s_sim_border);
 }
 
@@ -1903,6 +1904,7 @@ static void iq_warn_banner_keepalive_cb(lv_timer_t *t)
 {
     (void)t;
     if (!s_iq_warn_active || !s_iq_warn_banner) return;
+    if (reader_view_is_active()) return;   // don't draw over the docs Reader
     lv_obj_move_foreground(s_iq_warn_banner);
 }
 
@@ -1941,6 +1943,16 @@ static void qmx_wait_poll_cb(lv_timer_t *t)
     (void)t;
     if (!s_qmx_wait_overlay) return;
     bool hidden = lv_obj_has_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
+    // Never show the "turn on your QMX" breathing overlay over the docs Reader —
+    // it's an operational cue irrelevant while reading, and its 1 Hz
+    // re-foreground would draw on top of the Reader page.
+    if (reader_view_is_active()) {
+        if (!hidden) {
+            lv_anim_delete(s_qmx_wait_lbl, qmx_wait_breathe_anim_cb);
+            lv_obj_add_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
+        }
+        return;
+    }
     if (cat_is_ready()) {
         if (!hidden) {
             lv_anim_delete(s_qmx_wait_lbl, qmx_wait_breathe_anim_cb);
@@ -6579,6 +6591,10 @@ static void ui_advance_page(void)
     if (reader_view_is_active()) {
         // Reader -> Panadapter: slide the overlay out; base is already Panadapter.
         reader_view_hide();
+        // Restore normal edge-strip z-order (drawer/memory gestures usable again).
+        if (s_left_edge_strip)   lv_obj_move_foreground(s_left_edge_strip);
+        if (s_bottom_edge_strip) lv_obj_move_foreground(s_bottom_edge_strip);
+        if (s_right_edge_strip)  lv_obj_move_foreground(s_right_edge_strip);
     } else if (ui_mode_get() == UI_MODE_PANADAPTER) {
         // Panadapter -> FT8 (animated swap).
         ui_set_base_mode(UI_MODE_FT8, true);
@@ -6587,6 +6603,15 @@ static void ui_advance_page(void)
         // then slide the Reader overlay in over it.
         ui_set_base_mode(UI_MODE_PANADAPTER, false);
         reader_view_show();
+        // The Reader must capture ALL touches so underlying gestures (top-bar
+        // Band/Mode/BW dropdowns, the drawer, the memory swipe) can't fire
+        // behind it. Raise the opaque overlay above every screen-level sibling,
+        // then put ONLY the left-edge strip back on top so a left->right swipe
+        // still exits. Right/bottom strips stay below -> their swipes hit the
+        // (inert) overlay instead of opening the drawer/memory.
+        lv_obj_t *rdr = reader_view_get_container();
+        if (rdr) lv_obj_move_foreground(rdr);
+        if (s_left_edge_strip) lv_obj_move_foreground(s_left_edge_strip);
     }
     // Close the drawer (if open) after switching. UX nicety, and (4c.1 finding)
     // an open drawer keeps LVGL busy enough to starve audio/fft tasks.
