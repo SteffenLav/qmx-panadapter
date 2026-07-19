@@ -624,6 +624,9 @@ static esp_err_t lotw_cert_handler(httpd_req_t *req)
     cJSON_Delete(root);
 
     if (!ok) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "store failed");
+    // Freshly imported cert/key -> re-mirror them to the SD backup (if a card
+    // is in). The NVS dxcc/cqz/ituz above already dirty the config mirror.
+    sd_archive_mark_lotw_dirty();
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, "{\"ok\":true}");
 }

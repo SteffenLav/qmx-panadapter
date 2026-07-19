@@ -12,6 +12,7 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_vfs_fat.h"
+#include "esp_app_desc.h"   // esp_app_get_description() for the README version stamp
 
 #include "bsp/m5stack_tab5.h"   // bsp_sdcard_init / bsp_sdcard_deinit
 
@@ -29,6 +30,15 @@ static const char *TAG = "sd_arch";
 #define SD_LOG_PATH_1    "/sdcard/qmx-panadapter/qmx-log.1.txt"
 #define SD_ADIF_PATH     "/sdcard/qmx-panadapter/qso.adi"
 #define SD_CONFIG_PATH   "/sdcard/qmx-panadapter/qmx-config.txt"
+#define SD_LOTW_CERT_PATH "/sdcard/qmx-panadapter/lotw_cert.b64"
+#define SD_LOTW_KEY_PATH  "/sdcard/qmx-panadapter/lotw_key.b64"
+#define SD_README_PATH    "/sdcard/qmx-panadapter/README.txt"
+
+// Source (SPIFFS) paths for the LoTW certificate + private key. Mirror of
+// lotw_upload.c's CERT_PATH/KEY_PATH — kept here to avoid a cross-module getter
+// for two stable, never-renamed paths (a compile check would be overkill).
+#define SRC_LOTW_CERT    "/spiffs/lotw_cert.b64"
+#define SRC_LOTW_KEY     "/spiffs/lotw_key.b64"
 
 #define SD_LOG_MAX_BYTES (5 * 1024 * 1024)   // rotate qmx-log.txt at 5 MB
 #define PROBE_MS          10000               // mount-probe cadence when no card
@@ -38,6 +48,7 @@ static const char *TAG = "sd_arch";
 static volatile bool s_mounted      = false;
 static volatile bool s_adif_dirty   = true;   // mirror once on first mount
 static volatile bool s_config_dirty = true;
+static volatile bool s_lotw_dirty   = true;   // LoTW cert+key: mount + on import
 
 // Diag-log mirror state (owned by the archive task).
 static uint64_t s_diag_cursor = 0;            // position in diag_log_total() space
@@ -87,6 +98,46 @@ static bool copy_file(const char *src, const char *dst)
     if (fclose(out) != 0) ok = false;
     if (ok) ESP_LOGI(TAG, "mirrored %s (%u bytes)", dst, (unsigned)total);
     return ok;
+}
+
+// Write a self-describing README so someone who pops the card into a PC knows
+// exactly what every file is — the card is meant to be a grab-and-go station
+// backup / transfer medium (POTA/SOTA, no PC needed). Rewritten each mount so
+// the version stamp stays current; tiny + one-shot, no measurable cost.
+static void write_readme(void)
+{
+    FILE *f = fopen(SD_README_PATH, "wb");
+    if (!f) { ESP_LOGW(TAG, "readme open failed: %s", strerror(errno)); return; }
+    const char *fw = "";
+    const esp_app_desc_t *app = esp_app_get_description();
+    if (app) fw = app->version;
+    fprintf(f,
+        "QMX Panadapter - station backup\r\n"
+        "===============================\r\n"
+        "Automatic mirror of your QMX Panadapter's data, written by the Tab5\r\n"
+        "whenever this card is inserted. Grab the card to back up or move your\r\n"
+        "whole station to another device - no PC required.\r\n"
+        "\r\n"
+        "Files in this folder (qmx-panadapter/):\r\n"
+        "  qso.adi         Your QSO log (ADIF). Import into any logger, or\r\n"
+        "                  upload to QRZ / eQSL / LoTW.\r\n"
+        "  qmx-config.txt  All settings + memory channels (editable INI text).\r\n"
+        "                  Restore a device via the web UI's 'Config' upload.\r\n"
+        "  lotw_cert.b64   Your LoTW (TQSL) signing certificate and\r\n"
+        "  lotw_key.b64    private key (base64 DER). Needed to sign QSOs for\r\n"
+        "                  LoTW after moving to / restoring another device.\r\n"
+        "  qmx-log.txt     Diagnostic log, newest session (rolling, for bug\r\n"
+        "  qmx-log.1.txt   reports); .1 is the previous segment after rotation.\r\n"
+        "\r\n"
+        "*** CONTAINS CREDENTIALS ***\r\n"
+        "qmx-config.txt stores your WiFi password and QRZ/eQSL logins in clear\r\n"
+        "text, and lotw_key.b64 is your LoTW PRIVATE KEY. Keep this card as\r\n"
+        "physically secure as you would a house key.\r\n"
+        "\r\n"
+        "Written by QMX Panadapter %s. Mirror is continuous while inserted.\r\n",
+        fw);
+    fclose(f);
+    ESP_LOGI(TAG, "wrote %s", SD_README_PATH);
 }
 
 static bool mirror_config(void)
@@ -196,6 +247,8 @@ static bool try_mount(void)
 
     s_adif_dirty = true;           // force a full mirror right after mounting
     s_config_dirty = true;
+    s_lotw_dirty = true;
+    write_readme();                // self-describing card (fresh version stamp)
     s_mounted = true;
     ui_set_sd_active(true);
     ESP_LOGI(TAG, "SD card mounted, mirroring to %s", SD_DIR);
@@ -207,6 +260,13 @@ static bool try_mount(void)
 static void sd_archive_task(void *arg)
 {
     (void)arg;
+    // #51-adjacent soak instrumentation (2026-07-19): per-burst SPI write time
+    // + a 30 s heartbeat so a WiFi wedge / SDIO-recovery event (both self-log)
+    // or an FT8 dec collapse can be correlated against actual SD write activity.
+    // The heap + FT8 dec impact is read off the existing per-slot ft8_test line.
+    int64_t s_hb_last_us   = esp_timer_get_time();
+    int     s_burst_max_ms = 0;
+    int     s_burst_cnt    = 0;
     for (;;) {
         // Hold the SD mutex for the whole work burst so a concurrent web
         // download of the SD log can't interleave FatFs I/O with ours.
@@ -220,6 +280,7 @@ static void sd_archive_task(void *arg)
             }
         }
 
+        int64_t burst_t0 = esp_timer_get_time();
         // Mirror diag (incremental), then ADIF/config if dirty. Any write
         // failure is taken as a card removal.
         bool ok = mirror_diag();
@@ -238,6 +299,17 @@ static void sd_archive_task(void *arg)
                 ok = false;
             }
         }
+        // LoTW cert + private key (base64 DER). Small + rarely change (only on
+        // cert import), so copied on mount and on sd_archive_mark_lotw_dirty().
+        // A missing source (no cert imported yet) is a no-op, not a card error.
+        if (ok && s_lotw_dirty) {
+            s_lotw_dirty = false;
+            if (!copy_file(SRC_LOTW_CERT, SD_LOTW_CERT_PATH) ||
+                !copy_file(SRC_LOTW_KEY,  SD_LOTW_KEY_PATH)) {
+                s_lotw_dirty = true;
+                ok = false;
+            }
+        }
 
         if (!ok) {
             unmount();
@@ -246,7 +318,22 @@ static void sd_archive_task(void *arg)
             continue;
         }
 
+        int burst_ms = (int)((esp_timer_get_time() - burst_t0) / 1000);
+        if (burst_ms > s_burst_max_ms) s_burst_max_ms = burst_ms;
+        s_burst_cnt++;
         xSemaphoreGive(s_sd_mutex);
+
+        // 30 s heartbeat: proves SD is alive + shows how hard it's writing, so
+        // any concurrent WiFi/FT8 disturbance in the log has an SD reference.
+        int64_t now_us = esp_timer_get_time();
+        if (now_us - s_hb_last_us >= 30000000) {
+            ESP_LOGI(TAG, "heartbeat: mounted diag_cursor=%llu bursts=%d max_burst=%dms",
+                     (unsigned long long)s_diag_cursor, s_burst_cnt, s_burst_max_ms);
+            s_hb_last_us   = now_us;
+            s_burst_max_ms = 0;
+            s_burst_cnt    = 0;
+        }
+
         vTaskDelay(pdMS_TO_TICKS(WORK_MS));
     }
 }
@@ -268,6 +355,7 @@ void sd_archive_init(void)
 bool sd_archive_is_mounted(void)        { return s_mounted; }
 void sd_archive_mark_adif_dirty(void)   { s_adif_dirty = true; }
 void sd_archive_mark_config_dirty(void) { s_config_dirty = true; }
+void sd_archive_mark_lotw_dirty(void)   { s_lotw_dirty = true; }
 
 const char *sd_archive_log_path(void)   { return SD_LOG_PATH; }
 

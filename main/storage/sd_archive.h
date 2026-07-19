@@ -51,7 +51,18 @@ extern "C" {
 // FFT/buffers starve). So SD-on is a WiFi-safe now but FT8-hostile trade: kept
 // DISABLED. Re-enabling would need the SD mount's internal-RAM cost reduced OR
 // the mount gated off while in FT8 mode.
-#define SD_ARCHIVE_DISABLED 1
+// 2026-07-19: RE-ENABLED (flag=0) for a fresh soak. The "SD mount starves FT8
+// decode into cand=140/dec=0 zero-clusters" verdict above was reached BEFORE
+// #51 was solved - and cand=140/dec=0 is the exact #51 signature (USB audio
+// lost at the wire, NOT internal-heap starvation of the decode buffers). #51
+// was root-caused + fixed 2026-07-19 (USB ISO pipeline depth 9 ms -> 320 ms),
+// so the old blocker is very plausibly gone. Test: enable, mount a card, run
+// FT8 on a busy band, read the existing per-slot log line - heap_i min/lblk
+// (real, SD-independent cost) AND dec= (the #51 collapse tell). If yield holds
+// (~16 uniq/slot) with SD mounted, SD is viable and this becomes a shipped
+// feature; if it still collapses with healthy heap, the internal-RAM cost is a
+// genuine separate issue (reduce mount footprint OR gate SD off in FT8 mode).
+#define SD_ARCHIVE_DISABLED 0
 
 // Spawn the background archive task. Call once from app_main after settings,
 // ADIF, and config storage are initialised. Cheap; the task does the probing.
@@ -65,6 +76,8 @@ bool sd_archive_is_mounted(void);
 // pass. Cheap and safe from any task, even before sd_archive_init().
 void sd_archive_mark_adif_dirty(void);
 void sd_archive_mark_config_dirty(void);
+// Re-mirror the LoTW certificate + private key to the card (call after import).
+void sd_archive_mark_lotw_dirty(void);
 
 // Full path to the mirrored diagnostic log on the card (valid only while
 // mounted). The web server reads this under sd_archive_lock()/_unlock() so its
