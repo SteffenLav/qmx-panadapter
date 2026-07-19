@@ -1534,6 +1534,14 @@ static lv_obj_t *s_bot_wifi_suffix = NULL;
 static lv_obj_t *s_bot_version = NULL; /* firmware version, between battery and clock */
 static lv_obj_t *s_bot_diag_dot = NULL; /* static green dot, shown while a microSD card is mounted */
 static lv_obj_t *s_bot_diag_label = NULL; /* "SD" text next to the dot, shown/hidden together with it */
+// Desired microSD-dot state, set by ui_set_sd_active() (called from the
+// sd_archive task) and reconciled on the LVGL thread in sim_border_keepalive_cb.
+// -1 = unknown/untouched, 0 = hide, 1 = show. The old code did the lv_obj flag
+// change directly under a 20 ms display_lock; the SD mounts once at boot while
+// the UI is busy, that single lock timed out, and with no retry the dot never
+// appeared for the whole session. Reconciling on an LVGL-thread timer is
+// lock-free and self-correcting within ~1 s.
+static volatile int8_t s_sd_want = -1;
 static lv_obj_t *s_burger_btn = NULL;  // right-edge drawer grip handle (kept for foreground move after all UI built)
 static lv_obj_t *s_left_edge_grip = NULL;
 static lv_obj_t *s_bottom_edge_grip = NULL;
@@ -1841,6 +1849,21 @@ void ui_refresh_sim_mode_indicator(void)
 static void sim_border_keepalive_cb(lv_timer_t *t)
 {
     (void)t;
+    // Reconcile the microSD-mounted bottom-bar dot here (LVGL thread, no lock
+    // needed) - ui_set_sd_active() only records the wanted state. See s_sd_want.
+    if (s_sd_want >= 0 && s_bot_diag_dot) {
+        bool want_show = (s_sd_want == 1);
+        bool is_hidden = lv_obj_has_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);
+        if (want_show == is_hidden) {                 // mismatch -> fix
+            if (want_show) {
+                lv_obj_clear_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);
+                if (s_bot_diag_label) lv_obj_clear_flag(s_bot_diag_label, LV_OBJ_FLAG_HIDDEN);
+            } else {
+                lv_obj_add_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);
+                if (s_bot_diag_label) lv_obj_add_flag(s_bot_diag_label, LV_OBJ_FLAG_HIDDEN);
+            }
+        }
+    }
     if (!s_sim_border_active || !s_sim_border) return;
     lv_obj_move_foreground(s_sim_border);
 }
@@ -1949,19 +1972,11 @@ void ui_notify_qmx_fw_known(void)
 // background task whenever a card is mounted or removed, and once at boot to
 // sync the initial state. Takes the display lock since it runs off the LVGL
 // thread.
+// Called from the sd_archive task (NOT the LVGL thread). Just record intent;
+// the LVGL-thread timer reconciles the actual widget (see s_sd_want).
 void ui_set_sd_active(bool active)
 {
-    if (!s_bot_diag_dot) return;
-    if (display_lock(20)) {
-        if (active) {
-            lv_obj_clear_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);
-            if (s_bot_diag_label) lv_obj_clear_flag(s_bot_diag_label, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);
-            if (s_bot_diag_label) lv_obj_add_flag(s_bot_diag_label, LV_OBJ_FLAG_HIDDEN);
-        }
-        display_unlock();
-    }
+    s_sd_want = active ? 1 : 0;
 }
 
 // lv_anim_delete_all() (used by screenshot capture to freeze the UI for a
