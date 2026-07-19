@@ -73,6 +73,25 @@ static void md_inline_clean(const char *src, char *dst, size_t dstsz)
     size_t o = 0;
     for (size_t i = 0; src[i] && o + 1 < dstsz; ) {
         char c = src[i];
+        // Fold common UTF-8 punctuation to ASCII — the montserrat fonts have no
+        // glyphs for em/en dashes, smart quotes, ellipsis, etc., so they'd show
+        // as tofu boxes. The site's real prose uses these heavily.
+        unsigned char uc = (unsigned char)c;
+        if (uc == 0xE2 && (unsigned char)src[i+1] == 0x80) {   // General Punctuation
+            unsigned char c3 = (unsigned char)src[i+2];
+            const char *rep;
+            switch (c3) {
+                case 0x93: case 0x94: case 0x90: case 0x91: case 0x92: rep = "-";   break; // dashes
+                case 0xa6:                                             rep = "...";  break; // ellipsis
+                case 0x98: case 0x99: case 0x9b:                       rep = "'";   break; // single quotes
+                case 0x9c: case 0x9d: case 0x9e:                       rep = "\"";  break; // double quotes
+                default:                                               rep = "";     break; // drop others
+            }
+            for (const char *r = rep; *r && o + 1 < dstsz; r++) dst[o++] = *r;
+            i += 3;
+            continue;
+        }
+        if (uc == 0xC2 && (unsigned char)src[i+1] == 0xA0) { dst[o++] = ' '; i += 2; continue; } // nbsp
         // image ![alt](url)
         if (c == '!' && src[i+1] == '[') {
             const char *close = strchr(src + i + 2, ']');
@@ -399,7 +418,7 @@ static void tick_cb(lv_timer_t *t)
     if (do_reload) render_from_cache();
 
     if (s_status_lbl) {
-        if (do_reload && from_cache && !status[0]) strncpy(status, "Offline — showing cached copy", sizeof(status)-1);
+        if (do_reload && from_cache && !status[0]) strncpy(status, "Offline - showing cached copy", sizeof(status)-1);
         lv_label_set_text(s_status_lbl, status);
     }
 
@@ -484,7 +503,7 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_set_scroll_dir(s_body, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_body, LV_SCROLLBAR_MODE_AUTO);
 
-    add_label("Loading documentation…", &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED, 0, 0);
+    add_label("Loading documentation...", &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED, 0, 0);
 
     s_timer = lv_timer_create(tick_cb, 250, NULL);
     ESP_LOGI(TAG, "init");
@@ -514,7 +533,7 @@ void reader_view_show(void)
     slide(SCR_W, 0);
 
     // Render whatever is cached immediately, then kick a refresh.
-    lock(); s_reload_pending = true; s_from_cache = true; strncpy(s_status, "Refreshing…", sizeof(s_status)-1); unlock();
+    lock(); s_reload_pending = true; s_from_cache = true; strncpy(s_status, "Refreshing...", sizeof(s_status)-1); unlock();
     reader_net_load_index();
     ESP_LOGI(TAG, "show");
 }

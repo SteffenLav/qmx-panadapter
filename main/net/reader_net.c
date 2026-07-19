@@ -67,7 +67,7 @@ static void fetch_task(void *arg)
         return;
     }
 
-    reader_view_notify_status("Downloading…");
+    reader_view_notify_status("Downloading...");
 
     char *body = heap_caps_malloc(DOCS_MAX_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!body) {
@@ -109,7 +109,7 @@ static void fetch_task(void *arg)
         reader_view_notify_status("");
         reader_view_notify_loaded(false);
     } else {
-        reader_view_notify_status("Download failed — showing cached copy");
+        reader_view_notify_status("Download failed - showing cached copy");
         reader_view_notify_loaded(true);
     }
 
