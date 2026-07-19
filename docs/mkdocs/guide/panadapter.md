@@ -19,7 +19,7 @@ The panadapter is your primary view — a real-time spectrum analyser and waterf
 │ ░░░░░▓▓▓░░░░░░░░░░░░░░▓▓░░░░░░░░░░ │  Newest at top    │
 │ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │  SDR gradient     │
 ├─────────────────────────────────────────────────────────┤
-│ Battery 95%  FPS: 30   SD  v0.20.0   Waterfall        │  Status bar (30px)
+│ Battery 95%  FPS: 30   SD  v1.1.0   Waterfall         │  Status bar (30px)
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -29,8 +29,8 @@ The panadapter is your primary view — a real-time spectrum analyser and waterf
 |------|---------|
 | Battery % | Current battery charge level |
 | FPS | Render frame rate (target 30 fps) |
-| **SD** (green dot) | A microSD card is mounted and being mirrored to `/qmx-panadapter/` on the card. **Note (v0.20.0): the automatic SD backup is temporarily disabled** — mounting the card competes for internal memory with the FT8 decoder, so it is off this release and the dot will not light even with a card inserted. Your diagnostic log, ADIF log and settings are unaffected; they always live in the device's own storage |
-| `UTC(FT8)` / `UTC(FT4)` | Time was last synchronised from a decoded FT8 or FT4 signal |
+| **SD** (green dot) | A microSD card is mounted and being mirrored to `/qmx-panadapter/` on the card — a full grab-and-go station backup (see [Settings](../guide/settings.md)) |
+| `UTC(GPS)` / `UTC(NTP)` / `UTC(FT8)` / `UTC(FT4)` | The time source **currently** in charge — GPS-disciplined QMX, WiFi/SNTP, or FT8/FT4 offline sync (RTC / manual show as `UTC(RTC)` / `UTC(MAN)`) |
 | Firmware version | Currently flashed firmware version |
 | Waterfall label | Active colour map name |
 
@@ -65,6 +65,8 @@ A **passband sub-block** inside the visible-span block mirrors the current filte
 
 - **Tap** anywhere on the strip to jump to that frequency
 - **Drag** to scrub along the band — the frequency label updates live and the QMX retunes on release
+
+**Drag from the bottom bar too.** The visible-span block acts as a slider handle that reaches *below* the thin strip: touch on or just under it — anywhere along the bottom status bar — and **drag sideways** to scrub the band, exactly like dragging the strip itself. This gives you a much taller grab target. It coexists with the memory-picker gesture on the same row: a **sideways** drag retunes the band-plan, while a **vertical up-swipe** still opens the memory picker.
 
 The strip updates live as you zoom, pan, or change bands.
 

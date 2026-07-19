@@ -4,12 +4,13 @@ FT8 requires accurate UTC time — within ±1 second of the real thing. The pana
 
 ### 1. Time Sources (Priority Order)
 
-1. **WiFi + SNTP** (if available) — most accurate, syncs every ~1 hour
-2. **Tab5 RTC** (if set) — persists across power cycles (±1 min accuracy)
-3. **QMX GPS** (if your QMX has GPS) — re-syncs the RTC every 5 minutes
-4. **Manual set** — you can enter time manually via the settings drawer
+1. **GPS-disciplined QMX** (auto-detected) — phase-locked to the GPS second, ~10 ms, works offline
+2. **WiFi + SNTP** (if available) — ~10 ms, re-syncs every ~1 hour
+3. **Tab5 RTC** (if set) — persists across power cycles (±1 min accuracy)
+4. **FT8/FT4-derived** — offline fallback only (ignored while GPS/SNTP is up)
+5. **Manual set** — enter time manually via the settings drawer
 
-The panadapter **always uses SNTP if WiFi is up**. If WiFi drops, it falls back to the RTC, and finally manual time if neither is available.
+GPS and SNTP are the two accurate sources and are used whenever present; if you're offline with neither, the panadapter falls back to the RTC (or FT8-derived / manual).
 
 ### 2. Offline (POTA / Portable)
 
@@ -33,15 +34,15 @@ When WiFi is active:
 
 SNTP sync is **automatic** — you don't need to do anything. The bottom bar shows the current time (updates every second).
 
-### 4. QMX Time Sync
+### 4. QMX GPS Time Sync (auto-detected)
 
-If your QMX has **internal GPS** (QMX+ models often do):
+If your QMX has **internal GPS** (QMX+ models often do), there is **nothing to enable** — the Tab5 detects it automatically:
 
-1. The panadapter queries the QMX for time via the `TM;` CAT command
-2. Uses that to verify the RTC is correct
-3. Re-syncs every 5 minutes while the QMX is connected
+1. At connect, it catches the QMX's `TM;` seconds *flip* (the true GPS second boundary) and compares it against SNTP.
+2. If they agree tightly, the QMX is flagged GPS-disciplined and the clock is **phase-locked to that second edge** (~10 ms, drift-free), not just set to the whole second. Re-locks every 5 minutes.
+3. If they don't agree (a non-GPS QMX with a free-running RTC), it's used only as a low-priority offline fallback.
 
-This is **automatic backup only** — SNTP always takes precedence when WiFi is up.
+The verdict is remembered across reboots. A GPS-disciplined QMX shows **UTC(GPS)** in the bottom bar and is a top-tier source (as good as SNTP); a non-GPS QMX shows **UTC(QMX)** and only helps when offline.
 
 ### 5. Manual Time Set
 
@@ -55,22 +56,17 @@ To set time manually:
 
 The time is set immediately and written to the RTC.
 
-### 6. FT8-Derived Sync (Advanced)
+### 6. FT8-Derived Sync (Offline Fallback)
 
-The panadapter can also **estimate UTC offset** from decoded FT8 signals:
+The panadapter can also **estimate the UTC offset** from decoded FT8/FT4 signal timing and nudge the clock:
 
-1. Decode several FT8 messages (requires on-air activity)
-2. Measure their signal timing relative to the 15-second slot boundary
-3. Estimate the RTC error (sub-second precision)
-4. Automatically adjust the system clock
+1. Decode several messages (requires on-air activity)
+2. Measure their timing relative to the slot boundary
+3. Estimate the error and apply a damped correction
 
-This is **optional** and most useful when:
+**This runs only as an offline fallback.** While SNTP or a GPS-disciplined QMX is available they are authoritative and FT8-derived sync is **ignored** — deliberately. The FT8 slot offset the device measures is dominated by ~½ second of one-way *receive audio latency* (QMX SDR + USB buffering), which is **not** a clock error; letting it pull the clock would actually drag your transmit timing late. So it only touches the clock when you're off-grid with no SNTP/GPS.
 
-- WiFi is unavailable
-- Your RTC is way off (e.g., you haven't set it in weeks)
-- You need sub-second precision
-
-**⚠️ FT8 mode only** — not yet available in FT4 mode.
+Most useful when: WiFi is unavailable, no GPS QMX, and your RTC has drifted.
 
 #### Fine-Tune Time with "Sync Time" (FT8 Only)
 
@@ -95,14 +91,15 @@ The center of the bottom bar shows the current UTC time and which source is acti
 
 | Indicator | Meaning | Updates |
 |---|---|---|
-| **UTC(NTP)** | WiFi + SNTP (most accurate) | ~1 hour |
-| **UTC(FT8)** | FT8-derived sub-second sync | Continuous (when decoding) |
-| **UTC(QMX)** | QMX GPS (if available) | Every 5 min |
+| **UTC(GPS)** | GPS-disciplined QMX, auto-detected, phase-locked to the GPS second (~10 ms) | Every 5 min |
+| **UTC(NTP)** | WiFi + SNTP | ~1 hour |
+| **UTC(FT4)** / **UTC(FT8)** | FT4/FT8-derived offline sync | Continuous (when decoding, offline only) |
 | **UTC(RTC)** | Tab5 supercap RTC | At boot |
 | **UTC(MAN)** | Manual time set | On-demand |
+| **UTC(QMX)** | Non-GPS QMX RTC fallback (offline only) | Every 5 min |
 | **UTC** | Fallback (no sync source) | — |
 
-The suffix tells you at a glance which time source the panadapter is currently using. **SNTP always wins if WiFi is up** — if you see `UTC(NTP)`, that's your most accurate source and you don't need to do anything. If WiFi drops and you're in the field, you'll see `UTC(FT8)` (if on-air FT8 is active) or `UTC(RTC)` (from the supercap-backed RTC you set before leaving home).
+The suffix tells you at a glance which source is **currently in charge** (the active authority, not merely the last one that wrote the clock). A GPS-disciplined QMX (`UTC(GPS)`) and WiFi/SNTP (`UTC(NTP)`) are both accurate — if you see either, you're set. If you're off-grid you'll see `UTC(FT8)`/`UTC(FT4)` (on-air digital activity), `UTC(QMX)` (non-GPS QMX clock), or `UTC(RTC)` (the supercap RTC you set before leaving home).
 
 ### 8. Slot Timing
 
@@ -124,11 +121,11 @@ This alignment is **automatic** — you don't configure slots. But **time accura
 
 | Source | Accuracy | Updates | Works Offline? |
 |---|---|---|---|
+| **QMX GPS** | ~10 ms (auto-detected, tick phase-lock) | every 5 min | Yes (if QMX has GPS) |
 | **SNTP** | ±10 ms | ~1 hour | No |
 | **RTC** | ±1 min | at boot | Yes (30–40 h) |
-| **QMX GPS** | ±100 ms | every 5 min | Yes (if QMX has GPS) |
 | **Manual** | ±1 sec | on-demand | Yes (until power cycle) |
-| **FT8-derived** | ±300 ms | continuous | Yes |
+| **FT8-derived** | offline fallback only | continuous | Yes |
 
 ---
 

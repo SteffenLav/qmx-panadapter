@@ -32,7 +32,7 @@ The full documentation also lives online at **[tab5.lav.dk](https://tab5.lav.dk)
 
 **ADIF logging** — Every QSO logs to onboard storage with QSO timestamp, callsign, frequency, mode, signal report, grid, and distance. Export to web UI or QRZ Logbook / eQSL for cloud backup.
 
-**microSD auto-archive** — Insert a microSD card and the Tab5 automatically mirrors the diagnostic log, ADIF QSO log, and a config export to `/qmx-panadapter/` on the card. No setup required. A green **SD** dot in the bottom bar lights up when a card is mounted and being mirrored. *(Temporarily disabled in v0.20.0 — mounting the card competes for internal memory with the FT8 decoder; your logs and settings live in the device's own storage regardless.)*
+**microSD station backup** — Insert a microSD card (a plain FAT32 32 GB card is ideal) and the Tab5 automatically mirrors your whole station to `/qmx-panadapter/` on the card: the ADIF QSO log, a full config export (settings + memory channels), your LoTW signing certificate + key, the diagnostic log, and a self-describing `README.txt`. No setup required — a green **SD** dot in the bottom bar lights when a card is mounted. A genuine grab-and-go backup for PC-free POTA/SOTA. *(The card holds credentials — WiFi password, QRZ/eQSL logins, LoTW private key — so keep it physically secure.)*
 
 **Web UI** — Browser panadapter, remote control (tune, mode, bandwidth), QSO log viewer, config export/import, and diagnostic log download — all without leaving the radio room.
 
@@ -153,7 +153,7 @@ Switch the QMX to any band and watch it come alive. This is the foundation of th
 
 **Zoom in on a crowded band.** Pinch with two fingers to zoom up to ×24. On a CW band at ×8 or higher you can resolve individual signals a few hundred Hz apart, read the spacing between callers, and pick your target before you tune. The frequency axis scales with you, down to Hz precision at high zoom. Double-tap anywhere to reset to the full 48 kHz view.
 
-**Find your place on the band.** The thin band-plan strip along the bottom of the screen (just above the status bar) colour-codes the CW/Digi/Phone segments around you — pick your IARU region (or leave it on Auto) in the settings drawer → **Band-plan region**. The framed window on the strip is a **slider**: drag it (or tap anywhere on the strip) to move precisely to any spot on the band, and the spectrum, waterfall and VFO all follow along.
+**Find your place on the band.** The thin band-plan strip along the bottom of the screen (just above the status bar) colour-codes the CW/Digi/Phone segments around you — pick your IARU region (or leave it on Auto) in the settings drawer → **Band-plan region**. The framed window on the strip is a **slider**: drag it (or tap anywhere on the strip) to move precisely to any spot on the band, and the spectrum, waterfall and VFO all follow along. You can also grab that slider from anywhere along the bottom status bar and drag sideways — a taller target — while a vertical up-swipe there still opens memory channels.
 
 **Read your passband.** Two grey vertical lines on the spectrum mark your current filter edges. The BW label in the top bar shows the active width; tap it to choose 2.5 / 2.7 / 2.9 / 3.2 kHz in USB or LSB. A coloured tint fills the passband so you can always see exactly what slice of the band you're receiving.
 
@@ -192,7 +192,7 @@ Every completed QSO is written to an ADIF log downloadable from the web UI. See 
 2. Reproduce the problem (let it run a minute; power-cycle the QMX if the issue is about connection).
 3. Grab the log:
    - **Over WiFi:** browse to `http://<tab5-ip>/api/log` or click **Diag ↓** in the web UI bottom bar — downloads `qmx-log.txt`. After a reboot/power-loss, **Diag(saved) ↓** (`/api/log/saved`) has the copy persisted to flash from before the reboot.
-   - **microSD:** if a card is inserted, the log is mirrored continuously to `/qmx-panadapter/qmx-log.txt` on the card. *(SD mirroring is disabled in v0.20.0 — see the microSD note in Features; the always-on flash-persisted copy is unaffected.)*
+   - **microSD:** if a card is inserted, the log is mirrored continuously to `/qmx-panadapter/qmx-log.txt` on the card (alongside the always-on flash-persisted copy).
    - **Over USB (no WiFi needed):** capture the serial console with `tools/capture_serial_log.ps1`.
 4. Open an [issue](https://github.com/SteffenLav/qmx-panadapter/issues) and attach the log. It includes Tab5 and QMX firmware versions plus every CAT command exchanged — usually enough to pinpoint the problem immediately.
 

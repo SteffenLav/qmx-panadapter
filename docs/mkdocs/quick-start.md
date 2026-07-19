@@ -70,17 +70,19 @@ On first boot you'll be prompted for:
 
 You can change these anytime by swiping right from the screen edge to open the settings drawer.
 
-## Step 5b: Optional — microSD Card
+## Step 5b: Optional — microSD Card (station backup)
 
-> **⏸️ Automatic SD backup is disabled in v0.20.0** — mounting the card competes for memory with the FT8 decoder, so it's switched off this release (it returns once that cost is reduced). You can skip this step: your logs and settings live in the device's own storage regardless, and download the same way.
+Insert a microSD card (a plain **FAT32 32 GB** card is ideal) into the Tab5's slot and it automatically mirrors your whole station to `/qmx-panadapter/` on the card — a **grab-and-go backup** you can pull into a PC or another Tab5, no computer needed in the field:
 
-When enabled, inserting a microSD card into the Tab5's card slot mirrors three things to the card automatically:
+- **ADIF QSO log** — mirrored after each new QSO
+- **Config export** — all settings + memory channels (restore via the web **Config** upload)
+- **LoTW certificate + key** — so a restored device can sign QSOs for LoTW
+- **Diagnostic log** — continuous rolling copy
+- **README.txt** — describes every file on the card
 
-- **Diagnostic log** — continuous rolling copy, survives power-off
-- **ADIF QSO log** — mirrored automatically after each new QSO
-- **Config export** — your settings, for easy transfer to another unit
+A green **SD** dot in the bottom status bar confirms a card is mounted and being mirrored (absent = no card, not an error).
 
-A green **SD** dot in the bottom status bar confirms a card is mounted and being mirrored — it stays dark while the feature is disabled.
+> ⚠️ The backup contains credentials (WiFi password, QRZ/eQSL logins, LoTW private key) — keep the card physically secure. Skipping this step is fine; your logs and settings always live in the device's own storage too.
 
 ## Step 6: Navigate the Screen
 
@@ -101,7 +103,7 @@ You're now receiving. The **spectrum** shows signal strength across the band, an
 
 - **Tap the spectrum or waterfall** to tune to that frequency
 - **Pinch** to zoom in/out; **one-finger horizontal drag** to pan and retune
-- **Tap the coloured band-plan strip** (along the bottom, just above the status bar) to jump to a frequency, or **drag along it** to scrub through the band
+- **Tap the coloured band-plan strip** (along the bottom, just above the status bar) to jump to a frequency, or **drag along it** to scrub through the band — you can also grab it from *anywhere on the bottom bar* and drag sideways (a vertical up-swipe there still opens memory channels)
 - **Tap the Freq label** on the top bar to open the frequency keypad — drag the "Enter freq" title bar to reposition it, pinch or swipe up/down to resize it
 - **Swipe ↑ from the bottom edge** to open memory channels — tap an empty slot to create one, long-press a filled slot to edit it, long-press and drag to move a channel (or drag it onto the **wastebin** cell to delete it). A new device comes with a few example channels and plays a one-time tour of these gestures the first time you open the picker
 - **Tap Band** to switch between your configured bands

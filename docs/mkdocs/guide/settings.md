@@ -26,9 +26,9 @@ Once connected, the settings show your **IP address** — use this to access the
 
 **Set Manual Time** — Manually enter UTC time (hours, minutes, seconds).
 
-**Use FT8-Derived Sync** — Estimate UTC offset from decoded FT8 signals (optional, for offline use).
+**FT8-Derived Sync** — Estimates the UTC offset from decoded FT8 signal timing. **Offline fallback only**: it is automatically ignored while SNTP or GPS is available (those are authoritative), and only nudges the clock when you're off-grid with no better source. See [Time Sync](../guide/time-sync.md).
 
-**Sync from QMX GPS** — If enabled and your QMX has GPS, sync the RTC every 5 minutes.
+**QMX GPS** — Detected **automatically**, no setting to toggle. If your QMX (typically a QMX+) is GPS-disciplined, the Tab5 recognises it at connect by comparing the QMX's own second-tick against SNTP, and then phase-locks to the GPS second boundary (~10 ms) as an offline time source. On a non-GPS QMX nothing happens. The bottom-bar clock shows **UTC(GPS)** when a GPS-disciplined QMX is the active source.
 
 ## Display
 
@@ -96,21 +96,23 @@ The diagnostic log is **always on** — there is nothing to enable. All firmware
 
 Useful for troubleshooting rare issues.
 
-## microSD Auto-Archive
+## microSD Auto-Archive — Station Backup
 
-> **⏸️ Temporarily disabled in v0.20.0.** Mounting the SD card uses enough internal memory to hurt FT8 decoding, so the automatic archive is switched off this release — no card is mounted and the SD dot stays dark. Your diagnostic log, ADIF log and settings are unaffected; they always live in the device's own storage and download the same way. The description below applies to when the feature is re-enabled.
-
-Insert a microSD card (FAT32 or exFAT, any size) and the Tab5 automatically mirrors three files to `/qmx-panadapter/` on the card:
+Insert a microSD card (FAT32 or exFAT, any size — a plain 32 GB FAT32 card is ideal) and the Tab5 automatically mirrors your whole station to `/qmx-panadapter/` on the card. It's a **grab-and-go backup**: pull the card into a PC (or another Tab5) to back up or move your setup — no computer needed in the field.
 
 | File | Contents |
 |------|----------|
-| `qmx-log.txt` | Diagnostic log, rolling (rotated at 5 MB) |
 | `qso.adi` | ADIF QSO log, mirrored after each new entry |
-| `qmx-config.txt` | All settings exported as INI text |
+| `qmx-config.txt` | All settings + memory channels, as INI text (restore via **Config** upload) |
+| `lotw_cert.b64`, `lotw_key.b64` | Your LoTW signing certificate + private key, so a restored device can sign for LoTW |
+| `qmx-log.txt` (+`.1`) | Diagnostic log, rolling (rotated at 5 MB) |
+| `README.txt` | A plain-text description of every file, written on each mount |
 
 **No setup needed** — the Tab5 probes for a card on startup and whenever it can't reach one it expected. Insertion and removal are detected automatically.
 
 A **green SD dot** in the bottom status bar confirms a card is mounted and being mirrored. If no card is inserted, the dot is absent (not an error).
+
+> **⚠️ The card holds credentials.** A full backup that can *restore* a station necessarily includes secrets: `qmx-config.txt` stores your WiFi password and QRZ/eQSL logins in clear text, and `lotw_key.b64` is your LoTW **private key**. Keep the card as physically secure as a house key. (The on-card `README.txt` repeats this warning.)
 
 > The diagnostic log is always-on regardless of whether an SD card is present. If no card is inserted, the log still persists to internal flash (see [Diagnostic Logging](#diagnostic-logging) above) and survives a power-off.
 

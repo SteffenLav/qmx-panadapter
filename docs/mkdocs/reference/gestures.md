@@ -35,6 +35,17 @@ Tap any item on the top bar to open its selector:
 
 The frequency grid snaps based on zoom level (10 kHz at 1x, 1 kHz at 8x).
 
+## Band-Plan Strip (Panadapter)
+
+The thin coloured strip just above the bottom status bar shows where you are within the band. The framed **visible-span block** on it is a slider handle you can drag to retune.
+
+| Gesture | Effect |
+|---|---|
+| **Tap** the strip | Jump to that frequency in the band |
+| **Drag** the strip sideways | Scrub along the band — frequency updates live, QMX retunes on release |
+| **Drag from the bottom bar** (sideways) | Same band scrub, grabbed on/under the slider handle *anywhere along the bottom status bar* — a taller, easier target |
+| **Swipe ↑** from the bottom bar | Still opens the memory picker (vertical = memory, sideways = band-plan — the two share the row) |
+
 ## Display Sleep
 
 | Gesture | Effect |
@@ -100,9 +111,8 @@ In FT8 view, tap **Filter** to open:
 
 ## Settings Drawer
 
-Swipe ← from right edge. The drawer contains:
+Swipe ← from right edge. The drawer is a single scrolling list of sections (they don't collapse — just scroll). It contains:
 
-- **Sections** — tap to expand/collapse
 - **Text fields** — tap to edit (opens keyboard if needed)
 - **Toggles** — tap to on/off
 - **Buttons** — tap to open modals (Config, Time, etc.)
