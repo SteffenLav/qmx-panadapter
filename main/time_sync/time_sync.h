@@ -13,8 +13,18 @@ typedef enum {
     TIME_SOURCE_FT8,     // derived from FT8 signal timing (sub-second precision)
 } time_sync_source_t;
 
-// Returns the source that last applied a time update.
+// Returns the source that last applied a time update (the last WRITER).
 time_sync_source_t time_sync_get_source(void);
+
+// The source actually MAINTAINING the clock now (the current authority), for the
+// UI label - GPS/SNTP when one is up, regardless of a stray one-off FT8/manual
+// nudge. Use this for display; time_sync_get_source() is the raw last-writer.
+time_sync_source_t time_sync_get_effective_source(void);
+
+// Auto-detected: is the connected QMX GPS-disciplined? Derived at CAT connect
+// from whether its tick agrees tightly with SNTP (no manual config). Drives the
+// GPS-primary behaviour + the UTC(GPS) vs UTC(QMX)/UTC(NTP) label.
+bool time_sync_qmx_gps_confirmed(void);
 
 // Sum of every FT8-derived nudge applied since the last hard sync
 // (SNTP/QMX/manual/RTC), in ms (positive = clock was running fast, time was
@@ -78,8 +88,10 @@ void time_sync_apply_correction_ms(int delta_ms);
 // Same as time_sync_apply_correction_ms(), but skips the QMX CAT push - safe
 // to call from the FT8 decode task for continuous per-slot auto-sync. Still
 // updates the system clock + Tab5 RTC + NVS (RTC is a separate I2C bus from
-// CAT/CDC, so that write doesn't carry the same hazard).
-void time_sync_apply_correction_ms_quiet(int delta_ms);
+// CAT/CDC, so that write doesn't carry the same hazard). Enforces the
+// FT8_LEASH_MS position bound and RETURNS the delta actually applied (after
+// leashing; 0 if the leash blocked it) - the caller shows this as the "nudge".
+int time_sync_apply_correction_ms_quiet(int delta_ms);
 
 // Mark the time source as FT8 without changing the clock value.
 void time_sync_mark_ft8(void);

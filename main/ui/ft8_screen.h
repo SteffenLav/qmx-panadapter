@@ -28,14 +28,18 @@ typedef struct {
     int16_t  last_freq;
     uint16_t heard_count;
     bool     occupied;
+    int16_t  last_dt_ms;   // this station's decoded slot-timing offset (ms), RAW
+                           // (includes our RX audio latency; the DT-follow logic
+                           // in ft8_qso subtracts the band consensus to cancel it)
 } ft8_call_t;
 
 void ft8_screen_init(void);
 
-// Called from ft8_task once per successfully decoded message.
+// Called from ft8_task once per successfully decoded message. dt_ms is the
+// candidate's slot-timing offset (raw, boundary-relative) - see last_dt_ms.
 void ft8_screen_record_decode(const char *text,
                               int score, int snr_db, int freq_off,
-                              int64_t utc_sec);
+                              int64_t utc_sec, int dt_ms);
 
 // Snapshot occupied rows into out[0..max). count_out receives
 // number written. Takes mutex internally. Insertion order;

@@ -296,8 +296,13 @@ static volatile bool  s_ft8_task_alive = false;
 // Timing error from the last decoded slot: positive = system clock is fast.
 // Written by ft8_decode_task; read by the LVGL UI (ft8_time_modal).
 // volatile int is sufficient — single writer, single reader, display hint only.
-static volatile int      s_last_timing_ms    = 0;
+static volatile int      s_last_timing_ms    = 0;   // RAW measured offset (noisy on low-decode slots)
 static volatile bool     s_last_timing_valid = false;
+// The REAL correction actually pushed to the UTC clock this slot (0 = none:
+// skipped because <MIN_SAMPLES decodes or <MIN_MS, or clamped to 0). This -
+// not the raw measurement above - is what the time modal shows as the "nudge",
+// so a +/-2 s single-station raw reading never looks like a 2 s clock jump.
+static volatile int      s_last_applied_ms   = 0;
 // Bumped every time s_last_timing_ms is updated from a genuine decode, so
 // the UI can detect "a new sync just happened" even though it polls at 1 Hz
 // while decodes land roughly every 15 s.
@@ -307,6 +312,14 @@ bool ft8_get_last_timing_ms(int *out_ms)
 {
     if (!s_last_timing_valid) return false;
     *out_ms = s_last_timing_ms;
+    return true;
+}
+
+// The real per-slot correction actually applied to the clock (see s_last_applied_ms).
+bool ft8_get_last_applied_ms(int *out_ms)
+{
+    if (!s_last_timing_valid) return false;
+    if (out_ms) *out_ms = s_last_applied_ms;
     return true;
 }
 
@@ -706,17 +719,15 @@ static float ft8_estimate_noise_db(const monitor_t *mon)
 // corrected, just over a few cycles instead of in one noisy jump.
 #define FT8_AUTOSYNC_GAIN 0.3f
 
-// Hard clamp on the per-slot clock nudge, applied AFTER the gain. The gain
-// alone assumes the raw measurement is only mildly noisy (it was tuned on FT8,
-// whose raw offsets sit around ±200-300 ms) - but FT4's tighter slot and fewer
-// decodes/slot throw much larger raw values (field data: ±800-950 ms), and 30%
-// of that is still a ~250 ms single-slot jump, enough to visibly shift the slot
-// countdown/parity on screen. Clamping the applied step keeps the deliberate
-// "track the on-air population's collective offset" behaviour (a genuine
-// sustained offset is still followed, just approached a few ms per slot over
-// several slots) while guaranteeing no single noisy slot can yank the clock far
-// enough to be seen. This is the "no big fluctuations" guarantee.
-#define FT8_AUTOSYNC_MAX_STEP_MS 20
+// (The former per-slot rate clamp FT8_AUTOSYNC_MAX_STEP_MS was removed 2026-07-18:
+// it was a RATE cap, which never prevents reaching an offset - only slows the
+// approach - and it fought legitimate convergence to the band consensus. Runaway
+// protection is now a POSITION leash in time_sync (FT8_LEASH_MS), bounding the
+// cumulative pull from the SNTP/GPS anchor instead of the per-slot step. NOTE:
+// FT4's noisier raw (±800-950 ms field data) × the 0.3 gain still allows a
+// ~250 ms single-slot step; that's within the 500 ms leash and self-corrects,
+// but if FT4 ever looks jumpy on screen, the fix is a LOWER FT4 gain (more
+// damping) - not a return to the arbitrary rate cap.)
 
 // Robust average of per-candidate timing samples: sorts a (small) working
 // copy, takes the median, then means only the samples within
@@ -806,6 +817,9 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
     out->n_decoded   = 0;
     out->n_attempted = 0;
     out->n_timing    = 0;
+    (void)start_off_ms;   // no longer added to the timing (backfill anchors the
+                          // buffer to the boundary); kept for the future robust
+                          // incomplete-backfill fix. See the timing calc below.
     int max_iters = (s_pool_proto == (int)FTX_PROTOCOL_FT4) ? FT4_LDPC_MAX_ITERS : FT8_LDPC_MAX_ITERS;
     for (int i = start; i < n_cand; i += step) {
         if ((int)((esp_timer_get_time() - t_start_us) / 1000) >= FT8_DECODE_BUDGET_MS) {
@@ -822,13 +836,33 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
             // SR=12000. block_size/subblock_size come from mon itself rather than
             // being hardcoded to FT8's 1920/960 - FT4 uses 576/288, and using the
             // FT8 constants for FT4 candidates silently produced a ~3.3x-too-large
-            // (and wrongly-scaled) timing offset. start_off_ms anchors this
-            // candidate's sync position back to the UTC slot boundary, same as
-            // every other candidate this slot.
+            // (and wrongly-scaled) timing offset.
+            //
+            // NOTE (2026-07-18): this candidate position is ALREADY relative to
+            // the UTC slot boundary, because dsp_ft8_capture_begin() backfills
+            // the boundary->arm gap from the pre-ring so buffer[0] == the
+            // boundary (the v0.20.0 boundary-anchoring change). It must therefore
+            // NOT be re-anchored with start_off_ms. It used to add start_off_ms -
+            // correct in the OLD no-backfill design where buffer[0] == arm time
+            // (a boundary-synced station then decoded at -start_off_ms, and the
+            // two cancelled to 0). With backfill that add became a DOUBLE-COUNT:
+            // since start_off_ms is always >= 0 (capture never arms before the
+            // boundary), every measurement gained a persistent + bias (mean
+            // ~+49 ms in field data) that the auto-sync integrated straight to
+            // the +500 ms leash - holding the clock, and our absolute TX timing,
+            // that far off true. Removing the term: on-air data shows the real
+            // per-slot boundary offset (timing - off) already averages ~0, i.e.
+            // the band is well synced, so the raw candidate position IS the
+            // correct measurement. (Edge case left unhandled: an incomplete
+            // backfill on a badly stalled slot with huge start_off_ms - rare, and
+            // those slots decode poorly anyway.)
+            // This candidate's boundary-relative slot timing (ms). Feeds both
+            // the slot's robust-mean auto-sync AND the per-station DT recorded
+            // below (for the DT-follow-partner feature - ft8_qso).
+            float cand_dt_ms = (cands[i].time_offset * mon->block_size +
+                                cands[i].time_sub * mon->subblock_size) / 12.0f;
             if (out->n_timing < FT8_MAX_CANDIDATES) {
-                out->timing[out->n_timing++] =
-                    (float)start_off_ms +
-                    (cands[i].time_offset * mon->block_size + cands[i].time_sub * mon->subblock_size) / 12.0f;
+                out->timing[out->n_timing++] = cand_dt_ms;
             }
             int snr_db = (int)lroundf(ft8_estimate_snr_db(mon, &cands[i], noise_db));
             // cands[i].freq_offset is a coarse FFT bin index RELATIVE TO mon->min_bin
@@ -843,7 +877,8 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
             int freq_hz = (int)lroundf((mon->min_bin + cands[i].freq_offset) / mon->symbol_period);
             ESP_LOGI(TAG, "decoded: '%s' (score=%d freq=%dHz snr=%d)",
                      text, cands[i].score, freq_hz, snr_db);
-            ft8_screen_record_decode(text, cands[i].score, snr_db, freq_hz, slot_sec);
+            ft8_screen_record_decode(text, cands[i].score, snr_db, freq_hz, slot_sec,
+                                     (int)lroundf(cand_dt_ms));
         }
     }
 }
@@ -967,7 +1002,7 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
     if (n_timing > 0) {
         s_last_timing_ms    = (int)roundf(robust_mean_timing_ms(timing_ms_arr, n_timing));
         s_last_timing_valid = true;
-        s_timing_seq++;
+        int applied_ms      = 0;   // real correction pushed to the clock this slot
 
         // Auto-sync: nudge the system clock to the on-air population average
         // every slot, not just when the operator opens the time-sync modal
@@ -978,22 +1013,21 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
         // is included too.
         if (n_timing >= FT8_AUTOSYNC_MIN_SAMPLES &&
             abs(s_last_timing_ms) >= FT8_AUTOSYNC_MIN_MS) {
-            // Apply only a damped fraction of the raw measurement - see
-            // FT8_AUTOSYNC_GAIN above. _quiet: skips the QMX CAT push, which
-            // is a blocking, non-poll-task-routed CDC write - unsafe to call
-            // from this hot path (would race the CAT poll task and stall
-            // decode). The periodic 5-min QMX poll / manual modal Apply
-            // already cover keeping the QMX's own RTC in the ballpark.
+            // Damped fraction of the raw measurement (FT8_AUTOSYNC_GAIN) - the
+            // running mean that tracks the on-air consensus. NO per-slot rate
+            // cap: the loop follows the band freely. The safety is the POSITION
+            // leash inside time_sync (FT8_LEASH_MS - bounded cumulative pull
+            // from the SNTP/GPS anchor), not an arbitrary ms/slot limit.
+            // _quiet skips the QMX CAT push (blocking CDC write, unsafe from
+            // this hot path) and RETURNS the delta actually applied after
+            // leashing - that (not the requested damped_ms) is the real nudge.
             int damped_ms = (int)roundf(s_last_timing_ms * FT8_AUTOSYNC_GAIN);
-            // Clamp the per-slot step so a noisy slot can't visibly jump the
-            // clock (see FT8_AUTOSYNC_MAX_STEP_MS). A sustained collective
-            // offset is still tracked, a few ms per slot.
-            if (damped_ms >  FT8_AUTOSYNC_MAX_STEP_MS) damped_ms =  FT8_AUTOSYNC_MAX_STEP_MS;
-            if (damped_ms < -FT8_AUTOSYNC_MAX_STEP_MS) damped_ms = -FT8_AUTOSYNC_MAX_STEP_MS;
             if (damped_ms != 0) {
-                time_sync_apply_correction_ms_quiet(damped_ms);
+                applied_ms = time_sync_apply_correction_ms_quiet(damped_ms);
             }
         }
+        s_last_applied_ms = applied_ms;   // real applied nudge (post-leash) - shown by the modal
+        s_timing_seq++;                   // bump after BOTH raw + applied are set
     }
 
     int dec_ms = (int)((esp_timer_get_time() - t_start) / 1000);
@@ -1009,11 +1043,12 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
     ft8_status_set("RX: %d decoded", n_decoded);
     ESP_LOGI(TAG,
         "slot %d UTC %lld: off=%+dms cap=%dms stft=%dms dec=%dms cand=%d dec=%d skip=%d "
-        "backlog=%dpr drop=%dpr timing=%+dms heap_i=%uKB(min=%uKB,lblk=%uKB) heap_p=%uKB",
+        "backlog=%dpr drop=%dpr timing=%+dms applied=%+dms heap_i=%uKB(min=%uKB,lblk=%uKB) heap_p=%uKB",
         slot_idx, (long long)slot_sec, start_off_ms,
         cap_ms, stft_ms, dec_ms, n_cand, n_decoded, n_skipped,
         arm_backlog, drop_delta,
         s_last_timing_valid ? s_last_timing_ms : 0,
+        s_last_timing_valid ? s_last_applied_ms : 0,
         (unsigned)heap_i, (unsigned)heap_i_min, (unsigned)heap_i_lblk, (unsigned)heap_p);
 
     // When internal DRAM gets dangerously low, dump the full internal-heap

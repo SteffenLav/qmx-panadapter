@@ -76,7 +76,7 @@ static void build_and_inject(const char *call_to, const char *call_de, const cha
         return;
     }
 
-    ft8_screen_record_decode(text, score, snr_db, (int)tone_hz, slot_sec);
+    ft8_screen_record_decode(text, score, snr_db, (int)tone_hz, slot_sec, 0);  // phantom = on-beat (dt 0)
     ESP_LOGI(TAG, "injected '%s' (snr=%d score=%d slot=%lld)", text, snr_db, score, (long long)slot_sec);
 }
 

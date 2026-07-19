@@ -5037,6 +5037,9 @@ static void drawer_check_distance_miles_cb(lv_event_t *e)
     ESP_LOGI(TAG, "FT8 distance unit: %s", s_distance_in_miles ? "miles" : "km");
 }
 
+// (The manual "QMX has GPS" checkbox was removed 2026-07-19 - GPS is now
+// auto-detected in time_sync.c from whether the QMX tick agrees with SNTP.)
+
 // Dim + lock the sim-mode checkbox while in FT4 - ft8_sim.c's phantom-station
 // simulator (W1AW/K9ZZ practice QSOs) is FT8-only: it's hardcoded to FT8
 // protocol internally (ft8_synth_and_decode()) and has no concept of the
@@ -5426,6 +5429,8 @@ static void drawer_build(void)
         lv_obj_center(lbl);
         y += 72;
     }
+
+    // (GPS is auto-detected now - no "QMX has GPS" section here anymore.)
 
     // Band-plan region: drives the coloured CW/Digi/Phone strip under the freq
     // axis. "Auto" derives the region from the operator's grid square. Placed

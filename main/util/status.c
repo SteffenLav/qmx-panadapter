@@ -182,9 +182,14 @@ static void status_task(void *arg)
         bool time_valid = tm_utc.tm_year > 100;  // sane only after sync (year > 2000)
 
         const char *clk_suffix;
-        switch (time_sync_get_source()) {
+        // Effective (current-authority) source, not the last one-off writer - so
+        // a stray manual/FT8 nudge doesn't leave the label stuck on FT8 while
+        // SNTP/GPS is really in charge.
+        switch (time_sync_get_effective_source()) {
             case TIME_SOURCE_SNTP:   clk_suffix = " UTC(NTP)"; break;
-            case TIME_SOURCE_QMX:    clk_suffix = " UTC(QMX)"; break;
+            // QMX source: GPS when auto-detected as GPS-disciplined, else the
+            // plain-QMX RTC (naive offline fallback).
+            case TIME_SOURCE_QMX:    clk_suffix = time_sync_qmx_gps_confirmed() ? " UTC(GPS)" : " UTC(QMX)"; break;
             case TIME_SOURCE_RTC:    clk_suffix = " UTC(RTC)"; break;
             case TIME_SOURCE_MANUAL: clk_suffix = " UTC(MAN)"; break;
             case TIME_SOURCE_FT8:

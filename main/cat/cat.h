@@ -248,3 +248,16 @@ esp_err_t cat_set_qmx_time(int hour, int min, int sec);
  *         a bad/missing response.
  */
 esp_err_t cat_query_qmx_time(int *out_hour, int *out_min, int *out_sec);
+
+/**
+ * GPS second-tick sync (for a GPS-disciplined QMX+). Rapidly polls TM; and
+ * catches the instant the seconds field ticks over - the true GPS second
+ * boundary - so the caller can phase-lock the clock to the GPS beat (~+/-one TM
+ * round-trip, drift-free) instead of the +/-1 s naive whole-second apply.
+ *
+ * @param out_flip_us esp_timer_get_time() at the moment the flipping TM
+ *        response landed; out_hour/min/sec are the NEW second at that flip.
+ * @return ESP_OK on a caught flip; ESP_ERR_INVALID_STATE if not ready or the
+ *         CDC pipe is busy (e.g. FT8 TX); ESP_ERR_TIMEOUT if no flip in ~1.3 s.
+ */
+esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *out_flip_us);

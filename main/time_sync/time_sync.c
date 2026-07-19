@@ -5,6 +5,7 @@
 #include "wifi/wifi.h"
 
 #include <string.h>
+#include <stdlib.h>   // labs()
 #include <sys/time.h>
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -23,10 +24,55 @@ static const char *TAG = "time_sync";
 // "is SNTP still good" signal).
 #define SNTP_FRESH_MS  (10LL * 60 * 1000)
 
+// AUTO-DETECT tolerance (ms). Online, we mark a QMX as GPS-disciplined only when
+// its tick agrees with SNTP this tightly - a real GPS second boundary lands
+// within ~tens of ms, while a non-GPS RTC (even one we push-set, which is only
+// whole-second accurate) is off by more, so this cleanly tells them apart and
+// removes any need to ask the operator. Detection runs ONCE per CAT connect, on
+// the QMX's OWN clock BEFORE we push ours into it (see time_sync_task) - so a
+// small QMX with an unset/stale RTC reads as "not GPS", the QMX+ as "GPS".
+#define QMX_GPS_CONFIRM_MS 300
+
+// FT8 auto-sync leash (OFFLINE only). When there is no SNTP/GPS reference, the
+// FT8 consensus tracker (ft8_test.c) is the only time source, and it nudges the
+// clock toward the on-air population timing each slot. This is the POSITION
+// bound on that: the cumulative pull from the boot-RTC/QMX anchor may not exceed
+// +/-this, so noise (or the ~560 ms RX-audio-latency chase, see
+// apply_ft8_correction) can't drag the clock arbitrarily far. When SNTP/GPS IS
+// up the FT8 auto-sync is disabled entirely (the clock stays on the accurate
+// reference), so this leash only applies offline.
+#define FT8_LEASH_MS      500
+
 // Timestamps of the last accepted sync from each source; 0 = never.
 static int64_t           s_last_qmx_sync_ms  = 0;
 static int64_t           s_last_sntp_sync_ms = 0;
 static time_sync_source_t s_source           = TIME_SOURCE_NONE;
+
+// AUTO-DETECTED: is the connected QMX GPS-disciplined? Derived at CAT connect
+// from whether its tick agrees tightly with SNTP (replaces the old manual
+// "QMX has GPS" checkbox). The NVS qmx_gps field now just PERSISTS this so an
+// offline/POTA session (no SNTP to re-verify) remembers the last verdict.
+static bool              s_qmx_gps_confirmed = false;
+
+static void set_qmx_gps_confirmed(bool v)
+{
+    if (v == s_qmx_gps_confirmed) return;
+    s_qmx_gps_confirmed = v;
+    settings_set_qmx_gps(v);   // persist for offline continuity
+    ESP_LOGI(TAG, "QMX GPS auto-detect: %s", v ? "CONFIRMED (GPS-disciplined)" : "not present");
+}
+
+bool time_sync_qmx_gps_confirmed(void) { return s_qmx_gps_confirmed; }
+
+// The source actually MAINTAINING the clock right now, for the UI label - not
+// the last one-off writer. A manual/FT8 nudge stamps s_source, but if SNTP or a
+// confirmed GPS is up they are the ongoing authority, so report that instead.
+time_sync_source_t time_sync_get_effective_source(void)
+{
+    if (s_qmx_gps_confirmed)                              return TIME_SOURCE_QMX;   // GPS
+    if (wifi_is_connected() && wifi_time_is_valid())      return TIME_SOURCE_SNTP;
+    return s_source;   // offline: FT8 / manual / RTC / naive-QMX
+}
 
 // Sum of every FT8-derived nudge (time_sync_apply_correction_ms*) applied
 // since the last hard sync (SNTP/QMX/manual/RTC), in ms, sign-matched to
@@ -52,10 +98,8 @@ static bool epoch_is_sane(int64_t t)
 static void push_to_qmx(time_t utc)
 {
     if (!cat_is_ready()) return;
-    qmx_settings_t cfg;
-    settings_load_all(&cfg);
-    if (cfg.qmx_gps) {
-        ESP_LOGD(TAG, "QMX GPS flag set — skipping Tab5→QMX time push");
+    if (s_qmx_gps_confirmed) {
+        ESP_LOGD(TAG, "QMX is GPS-disciplined — skipping Tab5→QMX time push");
         return;
     }
     struct tm tm_utc;
@@ -85,16 +129,34 @@ static time_t get_date_anchor(void)
     return (time_t)EPOCH_SANE_MIN;
 }
 
-// Sync priorities (highest first):
-//   1. SNTP                 — always wins when WiFi is up; authoritative internet time
-//   2. Tab5 RTC             — applied at boot from rtc_apply_to_system before SNTP/QMX
-//   3. QMX TM;              — offline fallback only: applied when SNTP hasn't synced
-//                             within SNTP_FRESH_MS (covers no-WiFi / POTA use)
-//   4. Manual               — always applied (rare POTA with no QMX GPS or SNTP)
+// Sync priorities (highest first). The QMX-GPS case (operator sets the qmx_gps
+// flag for a GPS-disciplined QMX+) REORDERS these - see time_sync_notify_qmx().
 //
-// Non-GPS QMX: the QMX internal RTC drifts freely and has no GPS discipline.
-// Trusting it above SNTP would break FT8 timing whenever the QMX clock is off.
-// QMX TM; is therefore only used when SNTP has not synced recently.
+//   Plain QMX (no GPS):
+//     1. SNTP        - wins when WiFi is up; authoritative internet time
+//     2. Tab5 RTC    - boot seed (rtc_apply_to_system) before SNTP/QMX
+//     3. QMX TM;     - offline fallback only (SNTP not fresh)
+//     4. Manual      - always applied (POTA, no QMX GPS or SNTP)
+//   The QMX internal RTC drifts freely with no GPS discipline, so trusting it
+//   above SNTP would break FT8 timing when it's off - hence fallback-only.
+//
+//   QMX+ with GPS (qmx_gps flag set):
+//     1. QMX-GPS (tick) - a primary standard that OUTRANKS SNTP. We don't take
+//                      the whole-second TM; value (that's +/-1 s); instead
+//                      cat_gps_tick_sync() catches the SECOND BOUNDARY (the flip
+//                      N->N+1) and apply_gps_tick() phase-locks the clock to it,
+//                      giving ~+/-25 ms, drift-free, WiFi-independent - better
+//                      than our SNTP. Re-locked every 5 min by time_sync_task.
+//     2. SNTP        - sanity reference: a genuine fix agrees with SNTP within
+//                      QMX_GPS_SANITY_S; a gross disagreement = "no fix", keep
+//                      SNTP (the only lock guard, since CAT has no lock readout).
+//
+// FT8 auto-sync (OFFLINE fallback only): when NO SNTP/GPS reference exists, a
+// continuous damped nudge toward the band consensus keeps FT8 timing usable.
+// When SNTP/GPS IS up it is DISABLED - the FT8 timing offset is dominated by
+// ~560 ms of one-way RX audio latency (not a clock error), and our CAT-based TX
+// has no matching latency, so letting it pull the clock only drags TX late.
+// See apply_ft8_correction().
 
 static void write_to_rtc_and_nvs(time_t utc, const char *source)
 {
@@ -154,57 +216,96 @@ void time_sync_notify_sntp(time_t utc)
 // the bits haven't been observed yet (startup race).
 bool time_sync_notify_qmx(int h, int m, int s)
 {
-    time_t anchor = get_date_anchor();
+    // Naive whole-second QMX fallback for a NON-GPS QMX (a GPS one is handled by
+    // the precise tick path - apply_gps_tick - and never reaches here, since
+    // qmx_sync_once only falls through to the naive query when the tick didn't
+    // apply). Offline fallback only: SNTP wins whenever it's fresh.
+    time_t  anchor    = get_date_anchor();
     int64_t day_start = ((int64_t)anchor / 86400) * 86400;
-    time_t utc = (time_t)(day_start + h * 3600 + m * 60 + s);
+    time_t  utc       = (time_t)(day_start + h * 3600 + m * 60 + s);
 
-    int64_t now_ms     = esp_timer_get_time() / 1000;
-    bool wifi_sntp_ok  = wifi_is_connected() && wifi_time_is_valid();
-    bool sntp_fresh    = wifi_sntp_ok ||
-                         (s_last_sntp_sync_ms > 0 &&
-                          (now_ms - s_last_sntp_sync_ms) < SNTP_FRESH_MS);
-
+    int64_t now_ms    = esp_timer_get_time() / 1000;
+    bool wifi_sntp_ok = wifi_is_connected() && wifi_time_is_valid();
+    bool sntp_fresh   = wifi_sntp_ok ||
+                        (s_last_sntp_sync_ms > 0 &&
+                         (now_ms - s_last_sntp_sync_ms) < SNTP_FRESH_MS);
     s_last_qmx_sync_ms = now_ms;
 
     if (sntp_fresh) {
-        struct tm tm_utc;
-        gmtime_r(&utc, &tm_utc);
-        ESP_LOGD(TAG, "QMX TM; %02d:%02d:%02d — SNTP fresh (WiFi up=%d), skipping",
+        ESP_LOGD(TAG, "QMX TM; %02d:%02d:%02d - SNTP fresh (WiFi up=%d), skipping",
                  h, m, s, (int)wifi_sntp_ok);
         return false;
     }
-
     apply_and_persist(utc, "QMX");
     s_source = TIME_SOURCE_QMX;
     return true;
 }
 
 // FT8-signal-derived correction. delta_ms > 0 means clock is fast.
-static time_t apply_ft8_correction(int delta_ms)
+// Apply an FT8-derived clock nudge. `leash` = enforce the FT8_LEASH_MS position
+// bound (auto-sync path); the manual-Apply path passes false so an operator
+// override always lands in full. *out_utc (if non-NULL) returns the resulting
+// clock. Returns the delta ACTUALLY applied (after leashing) - 0 if the leash
+// blocked it - which is what the modal/log show as the real "nudge".
+static int apply_ft8_correction(int delta_ms, bool leash, time_t *out_utc)
 {
+    int applied = delta_ms;
+
+    if (leash) {   // leash == the auto-sync path (manual Apply passes false)
+        bool ref_ok = (wifi_is_connected() && wifi_time_is_valid()) || s_qmx_gps_confirmed;
+        if (ref_ok) {
+            // A real absolute reference (SNTP or GPS) exists -> do NOT let FT8
+            // touch the clock. Root-caused 2026-07-18: the FT8 timing offset is
+            // dominated by ~560 ms of ONE-WAY RX audio latency (QMX SDR + USB
+            // buffering), NOT a clock error. Our FT8 TX is CAT tone-stepping
+            // (no audio pipeline, ~ms latency), so pulling the clock to zero
+            // that RX latency would drag our TX ~500 ms LATE while GPS/SNTP
+            // would keep it correct - exactly why cum pinned at the leash. So
+            // the FT8 auto-sync is now the OFFLINE fallback only; when a real
+            // reference is up, the clock stays on it.
+            if (out_utc) *out_utc = time(NULL);
+            return 0;
+        }
+        // Offline: FT8 is the only reference. Bound the cumulative pull to
+        // +/-FT8_LEASH_MS against the boot-RTC/QMX anchor so noise (or the same
+        // RX-latency chase) can't drag the clock arbitrarily far. Moving BACK
+        // toward the anchor is always allowed in full.
+        int64_t cum     = s_ft8_cum_offset_ms;
+        int64_t new_cum = cum + delta_ms;
+        if      (new_cum >  FT8_LEASH_MS) applied = (int)((int64_t)FT8_LEASH_MS  - cum);
+        else if (new_cum < -FT8_LEASH_MS) applied = (int)((int64_t)-FT8_LEASH_MS - cum);
+    }
+
+    if (applied == 0) {              // leash blocked it entirely - clock untouched
+        if (out_utc) *out_utc = time(NULL);
+        return 0;
+    }
+
     struct timeval tv;
     gettimeofday(&tv, NULL);
-    int64_t us = (int64_t)tv.tv_sec * 1000000LL + tv.tv_usec - (int64_t)delta_ms * 1000LL;
+    int64_t us = (int64_t)tv.tv_sec * 1000000LL + tv.tv_usec - (int64_t)applied * 1000LL;
     tv.tv_sec  = (time_t)(us / 1000000LL);
     tv.tv_usec = (suseconds_t)(us % 1000000LL);
     if (tv.tv_usec < 0) { tv.tv_sec--; tv.tv_usec += 1000000; }
     settimeofday(&tv, NULL);
     write_to_rtc_and_nvs(tv.tv_sec, "FT8");
     s_source = TIME_SOURCE_FT8;
-    s_ft8_cum_offset_ms += delta_ms;
-    ESP_LOGI(TAG, "FT8 timing correction: %+d ms", delta_ms);
-    return tv.tv_sec;
+    s_ft8_cum_offset_ms += applied;
+    ESP_LOGI(TAG, "FT8 timing correction: %+d ms (cum %+lld ms)", applied, (long long)s_ft8_cum_offset_ms);
+    if (out_utc) *out_utc = tv.tv_sec;
+    return applied;
 }
 
-void time_sync_apply_correction_ms(int delta_ms)
+void time_sync_apply_correction_ms(int delta_ms)   // manual Apply - never leashed
 {
-    time_t utc = apply_ft8_correction(delta_ms);
+    time_t utc;
+    apply_ft8_correction(delta_ms, false, &utc);
     push_to_qmx(utc);
 }
 
-void time_sync_apply_correction_ms_quiet(int delta_ms)
+int time_sync_apply_correction_ms_quiet(int delta_ms)   // auto-sync - leashed
 {
-    apply_ft8_correction(delta_ms);
+    return apply_ft8_correction(delta_ms, true, NULL);
 }
 
 // Priority 5 (last resort): manual entry from user (rare POTA offline use).
@@ -245,6 +346,94 @@ void time_sync_push_to_qmx(void)
     push_to_qmx(time(NULL));
 }
 
+// Phase-lock the system clock to a GPS second boundary caught by
+// cat_gps_tick_sync(): at flip_us (esp_timer), true UTC was exactly h:m:s.000.
+// Carry it forward by the elapsed micros so the SUB-SECOND phase is right - this
+// is what turns GPS-over-CAT from a +/-1 s whole-second guess into a genuine
+// +/-25 ms, drift-free reference (better than our SNTP), justifying GPS-primary.
+// Returns true if the tick was accepted and applied (a GPS-quality fix); false
+// if rejected (not GPS-disciplined). Online, "accepted" means a TIGHT agreement
+// with SNTP (QMX_GPS_CONFIRM_MS) - that tightness is exactly what distinguishes
+// a real GPS second boundary (~tens of ms) from a non-GPS RTC. Offline (no SNTP
+// to check), accept only for a QMX we already confirmed as GPS (persisted).
+static bool apply_gps_tick(int h, int m, int s, int64_t flip_us)
+{
+    time_t  anchor      = get_date_anchor();
+    int64_t day_start   = ((int64_t)anchor / 86400) * 86400;
+    int64_t utc_flip_us = ((int64_t)day_start + h * 3600 + m * 60 + s) * 1000000LL;  // .000 at flip
+    int64_t elapsed_us  = esp_timer_get_time() - flip_us;
+    int64_t utc_now_us  = utc_flip_us + elapsed_us;
+    time_t  utc_now     = (time_t)(utc_now_us / 1000000LL);
+
+    if (!epoch_is_sane((int64_t)utc_now)) {
+        ESP_LOGW(TAG, "GPS-tick time out of range - ignoring");
+        return false;
+    }
+
+    if (wifi_is_connected() && wifi_time_is_valid()) {
+        struct timeval sys;
+        gettimeofday(&sys, NULL);
+        int64_t sys_us = (int64_t)sys.tv_sec * 1000000LL + sys.tv_usec;
+        int64_t d_ms   = llabs(utc_now_us - sys_us) / 1000;
+        if (d_ms > 43200000) d_ms = 86400000 - d_ms;   // midnight-wrap safe
+        if (d_ms > QMX_GPS_CONFIRM_MS) {
+            ESP_LOGW(TAG, "QMX tick %02d:%02d:%02d off SNTP by %lldms - not GPS-disciplined",
+                     h, m, s, (long long)d_ms);
+            return false;
+        }
+    } else if (!s_qmx_gps_confirmed) {
+        return false;   // offline + never confirmed GPS -> don't trust a stray RTC
+    }
+
+    struct timeval tv = { .tv_sec = utc_now, .tv_usec = (suseconds_t)(utc_now_us % 1000000LL) };
+    settimeofday(&tv, NULL);
+    write_to_rtc_and_nvs(utc_now, "QMX-GPS");
+    s_ft8_cum_offset_ms = 0;
+    s_source = TIME_SOURCE_QMX;
+    ESP_LOGI(TAG, "Time set from QMX-GPS(tick): %02d:%02d:%02d.%03d UTC phase-locked (%lldms since flip)",
+             h, m, s, (int)(tv.tv_usec / 1000), (long long)(elapsed_us / 1000));
+    return true;
+}
+
+// True once we've made a real (online) GPS/not-GPS determination for the current
+// QMX. Reset by a reboot (static init) - so a QMX swap re-detects on next boot;
+// a hot-swap keeps the prior verdict until reboot (acceptable - swaps are rare).
+static bool s_qmx_detect_done = false;
+
+// One QMX time sync + one-time GPS auto-detection (replaces the manual flag).
+// Detection runs on the QMX's OWN clock and requires SNTP as ground truth; it
+// happens BEFORE any Tab5->QMX push (pushing a correct time into a non-GPS RTC
+// would masquerade as GPS). A GPS QMX's tick agrees tightly -> confirmed; a
+// small/unset QMX is far off -> rejected, and we push our time to set its RTC.
+static void qmx_sync_once(void)
+{
+    int h, m, s;
+    int64_t flip_us;
+    bool sntp_up = wifi_is_connected() && wifi_time_is_valid();
+
+    // --- One-time auto-detect (needs SNTP to compare against) ---
+    if (!s_qmx_detect_done && sntp_up) {
+        bool gps = (cat_gps_tick_sync(&h, &m, &s, &flip_us) == ESP_OK) &&
+                   apply_gps_tick(h, m, s, flip_us);   // tight-agreement test inside
+        set_qmx_gps_confirmed(gps);
+        s_qmx_detect_done = true;
+        if (!gps) push_to_qmx(time(NULL));   // non-GPS: set its own RTC (once)
+        if (gps)  return;                    // GPS confirmed + applied
+    }
+
+    // --- Steady state ---
+    if (s_qmx_gps_confirmed) {
+        if (cat_gps_tick_sync(&h, &m, &s, &flip_us) == ESP_OK &&
+            apply_gps_tick(h, m, s, flip_us))
+            return;   // re-locked to the GPS beat
+    }
+    // Not GPS (or tick missed, or offline-undetected): naive whole-second
+    // fallback - applies only when SNTP isn't fresh (see time_sync_notify_qmx).
+    if (cat_query_qmx_time(&h, &m, &s) == ESP_OK) {
+        time_sync_notify_qmx(h, m, s);
+    }
+}
+
 // Background task: initial QMX sync at CAT connect, then every 5 minutes.
 // Covers Panadapter mode; ft8_task handles its own initial sync in FT8 mode.
 static void time_sync_task(void *arg)
@@ -260,27 +449,18 @@ static void time_sync_task(void *arg)
     }
 
     if (cat_is_ready()) {
-        // Push Tab5 clock → QMX on first connect so QMX RTC is correct from the start.
-        push_to_qmx(time(NULL));
-
-        int h, m, s;
-        if (cat_query_qmx_time(&h, &m, &s) == ESP_OK) {
-            time_sync_notify_qmx(h, m, s);
-        } else {
-            ESP_LOGW(TAG, "Initial QMX TM; query failed");
-        }
+        // Auto-detect GPS + sync. qmx_sync_once() does the Tab5→QMX push itself,
+        // AFTER detecting on the QMX's own clock (so a push can't fake GPS).
+        qmx_sync_once();
     } else {
         ESP_LOGW(TAG, "CAT not ready after %ds — QMX time sync deferred to periodic", MAX_WAIT_S);
     }
 
-    // Re-sync every 5 minutes (catches GPS lock events on QMX)
+    // Re-sync every 5 minutes (re-locks to the GPS beat / catches GPS lock events)
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(300000));
         if (!cat_is_ready()) continue;
-        int h, m, s;
-        if (cat_query_qmx_time(&h, &m, &s) == ESP_OK) {
-            time_sync_notify_qmx(h, m, s);
-        }
+        qmx_sync_once();
     }
 }
 
@@ -298,6 +478,12 @@ void time_sync_init(i2c_master_bus_handle_t bus)
     } else {
         ESP_LOGI(TAG, "RTC not valid (supercap dead or first boot) — waiting for QMX/SNTP sync");
     }
+
+    // Seed the GPS verdict from the persisted auto-detection (for an offline
+    // boot with no SNTP to re-verify); a fresh online detection overrides it.
+    qmx_settings_t icfg;
+    settings_load_all(&icfg);
+    s_qmx_gps_confirmed = icfg.qmx_gps;
 
     psram_task_create(time_sync_task, "time_sync", 3072, NULL, 4, tskNO_AFFINITY);
 }

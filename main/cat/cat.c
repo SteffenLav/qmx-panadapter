@@ -56,6 +56,7 @@ static char   s_mm_resp[64] = {0};  // last MM response, set by process_cat_mess
 static size_t s_mm_resp_len = 0;
 static char   s_tm_resp[16] = {0};  // last TM response, set by process_cat_message
 static size_t s_tm_resp_len = 0;
+static volatile int64_t s_tm_resp_us = 0;  // esp_timer time the TM response landed (GPS-tick sync)
 static char   s_pc_resp[16] = {0};  // last PC (power output) response
 static size_t s_pc_resp_len = 0;
 static char   s_sw_resp[16] = {0};  // last SW (SWR) response
@@ -394,6 +395,7 @@ static void process_cat_message(const char *msg, size_t len)
     }
     // TM response: "TMhhmmss;" - 9 chars, real-time-clock time-of-day.
     if (len == 9 && msg[0] == 'T' && msg[1] == 'M') {
+        s_tm_resp_us  = esp_timer_get_time();   // stamp arrival for GPS-tick phase lock
         s_tm_resp_len = len;
         memcpy(s_tm_resp, msg, len);
         s_tm_resp[len] = '\0';
@@ -1189,4 +1191,61 @@ esp_err_t cat_query_qmx_time(int *out_hour, int *out_min, int *out_sec)
     if (*out_hour > 23 || *out_min > 59 || *out_sec > 59) return ESP_FAIL;
     ESP_LOGI(TAG, "QMX RTC time: %02d:%02d:%02d", *out_hour, *out_min, *out_sec);
     return ESP_OK;
+}
+
+// Parse the current TM response buffer into h/m/s. Returns false if not a valid
+// "TMhhmmss;" (9 chars, all digits, in range).
+static bool parse_tm_resp(int *h, int *m, int *s)
+{
+    if (s_tm_resp_len != 9 || strncmp(s_tm_resp, "TM", 2) != 0) return false;
+    for (int i = 2; i < 8; i++) if (s_tm_resp[i] < '0' || s_tm_resp[i] > '9') return false;
+    *h = (s_tm_resp[2]-'0')*10 + (s_tm_resp[3]-'0');
+    *m = (s_tm_resp[4]-'0')*10 + (s_tm_resp[5]-'0');
+    *s = (s_tm_resp[6]-'0')*10 + (s_tm_resp[7]-'0');
+    return (*h <= 23 && *m <= 59 && *s <= 59);
+}
+
+// GPS second-tick sync. Rapidly polls TM; and catches the instant the seconds
+// field ticks over (N -> N+1) - that flip is the true GPS second boundary. On
+// success returns the h/m/s AT the flip (the NEW second) and *out_flip_us = the
+// esp_timer time the flipping TM response LANDED (stamped in the RX handler, so
+// it carries no wait-loop polling granularity). The caller then phase-locks the
+// system clock to that beat instead of the naive whole-second apply, giving
+// roughly +/-(one TM round-trip) accuracy - drift-free and WiFi-independent.
+// Pauses the poll for the whole burst and blocks up to ~1.3 s (enough to span
+// one second boundary). ESP_OK only if a flip was caught. Bails if another op
+// already owns the CDC pipe (FT8 TX pauses the same poll flag).
+esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *out_flip_us)
+{
+    if (!s_cdc_dev || !s_cat_ready) return ESP_ERR_INVALID_STATE;
+    if (s_poll_paused)              return ESP_ERR_INVALID_STATE;  // FT8 TX / other op owns the pipe
+
+    cat_poll_set_paused(true);
+    int       prev_sec = -1;
+    esp_err_t result   = ESP_ERR_TIMEOUT;
+    int64_t   start    = esp_timer_get_time();
+
+    while (esp_timer_get_time() - start < 1300000) {   // ~1.3 s cap: spans any 1 s boundary
+        s_tm_resp_len = 0;
+        if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"TM;", 3, 100) != ESP_OK)
+            break;
+        // Wait briefly for the async RX handler to stamp + fill the response.
+        for (int i = 0; i < 25 && s_tm_resp_len == 0; i++) vTaskDelay(pdMS_TO_TICKS(2));
+        int h, m, s;
+        if (!parse_tm_resp(&h, &m, &s)) continue;
+        if (prev_sec >= 0 && s != prev_sec) {          // the tick
+            *out_hour = h; *out_min = m; *out_sec = s;
+            *out_flip_us = s_tm_resp_us;               // exact arrival of the flipping reading
+            result = ESP_OK;
+            break;
+        }
+        prev_sec = s;
+    }
+
+    cat_poll_set_paused(false);
+    if (result == ESP_OK)
+        ESP_LOGI(TAG, "GPS tick: %02d:%02d:%02d boundary caught", *out_hour, *out_min, *out_sec);
+    else
+        ESP_LOGW(TAG, "GPS tick: no second flip caught in 1.3 s (err=%d)", result);
+    return result;
 }

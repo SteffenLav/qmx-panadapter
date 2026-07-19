@@ -21,6 +21,7 @@
 #include "ui_theme.h"
 #include "ft8_test.h"
 #include "time_sync/time_sync.h"
+#include "storage/settings.h"   // qmx_gps flag for the active-source label
 #include "cat.h"
 
 #include <stdio.h>
@@ -43,6 +44,29 @@ static const char *TAG = "ft8_time_modal";
 static const char *active_proto_label(void)
 {
     return (ft8_op_mode_get() == FT8_OP_MODE_FT4) ? "FT4" : "FT8";
+}
+
+// The clock source actually in charge right now, as a short UI label. NTP/GPS
+// when a real reference is up (the FT8 auto-sync is DISABLED then - it only
+// runs as the offline fallback, since its offset is RX-audio-latency-biased);
+// FT8/FT4 only when it's genuinely the offline source.
+static const char *active_source_label(void)
+{
+    switch (time_sync_get_effective_source()) {   // current authority, not last writer
+        case TIME_SOURCE_SNTP:   return "NTP";
+        case TIME_SOURCE_QMX:    return time_sync_qmx_gps_confirmed() ? "GPS" : "QMX";
+        case TIME_SOURCE_FT8:    return active_proto_label();   // FT8 or FT4
+        case TIME_SOURCE_MANUAL: return "manual";
+        case TIME_SOURCE_RTC:    return "RTC";
+        default:                 return "--";
+    }
+}
+
+// Is FT8/FT4 slot timing ACTUALLY driving the clock right now? Only true
+// offline (no SNTP/GPS); the auto-sync is gated off when a real reference is up.
+static bool ft8_is_clock_source(void)
+{
+    return time_sync_get_source() == TIME_SOURCE_FT8;
 }
 
 // ---------------------------------------------------------------------------
@@ -84,8 +108,6 @@ static lv_obj_t   *s_hint_ss  = NULL;  // dynamic FT8/FT4 status below SS digits
 static lv_obj_t   *s_hint_top = NULL;  // top one-line hint, mentions the active sub-mode
 static lv_obj_t   *s_numpad   = NULL;
 static lv_timer_t *s_timer    = NULL;
-static lv_timer_t *s_flash_timer    = NULL;  // one-shot: reverts the SS flash
-static uint32_t    s_seen_timing_seq = 0;    // last ft8_get_timing_seq() we reacted to
 
 // ---------------------------------------------------------------------------
 // Colours
@@ -97,8 +119,6 @@ static uint32_t    s_seen_timing_seq = 0;    // last ft8_get_timing_seq() we rea
 #define BOX_BORDER_SS_FT8  0x1a5090   // SS FT8 sync (blue)
 #define BOX_BORDER_SS_NTP  0x1a7030   // SS NTP sync (green)
 #define BOX_BORDER_SS_QMX  0xb0b0b0   // SS QMX sync (white-ish)
-#define BOX_BORDER_SS_FLASH 0x60c0ff  // brief bright flash on a new FT8 sync
-#define SS_FLASH_MS         30        // flash duration
 
 static void refresh_box_styles(void)
 {
@@ -122,27 +142,6 @@ static void refresh_box_styles(void)
     lv_obj_set_style_text_color(s_lbl_ss, lv_color_hex(ss_digit), 0);
 }
 
-// One-shot timer callback: ends the brief "new sync" flash by restoring the
-// normal SS border. Deletes itself - lv_timer_create(..., SS_FLASH_MS, ...) has
-// no built-in one-shot mode, so we just don't reset the repeat count.
-static void flash_revert_cb(lv_timer_t *t)
-{
-    refresh_box_styles();
-    lv_timer_del(t);
-    s_flash_timer = NULL;
-}
-
-// Briefly widen/brighten the SS border to mark a new FT8 sync. Called from the
-// 1 Hz timer_cb when it notices ft8_get_timing_seq() advanced - the flash itself
-// only lasts SS_FLASH_MS, well under the polling period, so it reads as a quick
-// pulse rather than a state change.
-static void flash_ss_sync(void)
-{
-    if (s_flash_timer) { lv_timer_del(s_flash_timer); s_flash_timer = NULL; }
-    lv_obj_set_style_border_color(s_box_ss, lv_color_hex(BOX_BORDER_SS_FLASH), 0);
-    lv_obj_set_style_border_width(s_box_ss, 6, 0);
-    s_flash_timer = lv_timer_create(flash_revert_cb, SS_FLASH_MS, NULL);
-}
 
 static void update_box_label(int field)
 {
@@ -289,7 +288,6 @@ static void ss_tap_cb(lv_event_t *e)
         // Back to FT8 — HH/MM revert to system clock on next timer tick
         s_ss_err_ms = 0;
         ft8_get_last_timing_ms(&s_ss_err_ms);
-        s_seen_timing_seq = ft8_get_timing_seq();  // don't flash for an old sync
     }
 
     refresh_box_styles();
@@ -357,6 +355,15 @@ static void timer_cb(lv_timer_t *t)
     (void)t;
     if (!s_open) return;
 
+    // Keep the top hint's active-source label live (SNTP can sync, or we can go
+    // offline, while the modal is open).
+    if (s_hint_top) {
+        char tb[80];
+        snprintf(tb, sizeof(tb), "Clock: %s - tap HH/MM to set manually\n ",
+                 active_source_label());
+        lv_label_set_text(s_hint_top, tb);
+    }
+
     time_t now = time(NULL);
     struct tm tm; gmtime_r(&now, &tm);
 
@@ -403,12 +410,6 @@ static void timer_cb(lv_timer_t *t)
         if (s_ss_mode == SS_SYNC_FT8) {
             if (ft8_get_last_timing_ms(&err_ms)) s_ss_err_ms = err_ms;
             err_ms = s_ss_err_ms;
-
-            uint32_t seq = ft8_get_timing_seq();
-            if (seq != s_seen_timing_seq) {
-                s_seen_timing_seq = seq;
-                flash_ss_sync();
-            }
         }
         // Sub-second precision matters here: time(NULL)/now above is truncated
         // to whole seconds, so it's missing up to 999 ms of the real wall-clock
@@ -427,9 +428,22 @@ static void timer_cb(lv_timer_t *t)
         lv_label_set_text(s_lbl_ss, b);
 
         if (s_ss_mode == SS_SYNC_FT8) {
-            char hb[24];
-            snprintf(hb, sizeof(hb), "Flash: %s synced...", active_proto_label());
-            lv_label_set_text(s_hint_ss, hb);
+            if (ft8_is_clock_source()) {
+                // Offline: FT8/FT4 slot timing is genuinely driving the clock -
+                // show the REAL per-slot correction applied (ft8_get_last_applied_ms
+                // - damped, leashed), not the RX-latency-biased raw offset.
+                int applied = 0;
+                ft8_get_last_applied_ms(&applied);
+                char hb[32];
+                snprintf(hb, sizeof(hb), "%s nudge %+d ms", active_proto_label(), applied);
+                lv_label_set_text(s_hint_ss, hb);
+            } else {
+                // Online: the clock is on NTP/GPS and FT8 auto-sync is disabled
+                // (its offset is one-way RX-audio latency, not a clock error).
+                char hb[24];
+                snprintf(hb, sizeof(hb), "on %s (auto)", active_source_label());
+                lv_label_set_text(s_hint_ss, hb);
+            }
         } else {
             lv_label_set_text(s_hint_ss, "SS  NTP sync");
         }
@@ -627,7 +641,7 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_lbl_ss, &lv_font_montserrat_48, 0);
     lv_obj_align(s_lbl_ss, LV_ALIGN_CENTER, 0, -12);
     s_hint_ss = lv_label_create(s_box_ss);
-    lv_label_set_text(s_hint_ss, "Flash: synced...");
+    lv_label_set_text(s_hint_ss, "FT8 nudge --");
     lv_obj_set_style_text_color(s_hint_ss, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(s_hint_ss, &lv_font_montserrat_18, 0);
     lv_obj_align(s_hint_ss, LV_ALIGN_BOTTOM_MID, 0, -6);
@@ -673,8 +687,8 @@ static void modal_build(void)
 
     // 200ms, not 1000ms: timer_cb is idempotent (just recomputes from the live
     // clock + last measurement each call), and polling 5x/sec instead of 1x/sec
-    // cuts up to 800ms off how long a freshly-landed FT8 sync takes to show up
-    // as the SS flash. The remaining latency is the decode pipeline itself
+    // cuts up to 800ms off how long a freshly-landed FT8 nudge takes to show up
+    // in the readout. The remaining latency is the decode pipeline itself
     // (full 15s slot capture, then ~1-3s decode) - structural, not fixable here.
     s_timer = lv_timer_create(timer_cb, 200, NULL);
     lv_timer_pause(s_timer);
@@ -702,17 +716,26 @@ void ft8_time_modal_show(void)
     s_ss_display = tm.tm_sec;
     s_ss_err_ms  = 0;
     ft8_get_last_timing_ms(&s_ss_err_ms);
-    s_seen_timing_seq = ft8_get_timing_seq();  // don't flash for an old sync
 
     char b[4];
     snprintf(b, sizeof(b), "%02d", s_hh_val);    lv_label_set_text(s_lbl_hh, b);
     snprintf(b, sizeof(b), "%02d", s_mm_val);    lv_label_set_text(s_lbl_mm, b);
     snprintf(b, sizeof(b), "%02d", s_ss_display); lv_label_set_text(s_lbl_ss, b);
-    char hb[24];
-    snprintf(hb, sizeof(hb), "Flash: %s synced...", active_proto_label());
+    char hb[32];
+    if (ft8_is_clock_source()) {
+        int applied0 = 0;
+        ft8_get_last_applied_ms(&applied0);
+        snprintf(hb, sizeof(hb), "%s nudge %+d ms", active_proto_label(), applied0);
+    } else {
+        snprintf(hb, sizeof(hb), "on %s (auto)", active_source_label());
+    }
     lv_label_set_text(s_hint_ss, hb);
-    char tb[56];
-    snprintf(tb, sizeof(tb), "Tap HH/MM to edit. Tap SS to sync to %s/NTP/QMX", active_proto_label());
+    char tb[80];
+    // Source-aware, honest in every mode: NTP/GPS auto-manage the clock (nothing
+    // to do); FT8 only when offline; HH/MM is the manual override. Trailing "\n "
+    // leaves an empty line below for spacing.
+    snprintf(tb, sizeof(tb), "Clock: %s - tap HH/MM to set manually\n ",
+             active_source_label());
     lv_label_set_text(s_hint_top, tb);
 
     lv_obj_add_flag(s_numpad, LV_OBJ_FLAG_HIDDEN);
