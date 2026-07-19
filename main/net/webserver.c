@@ -39,7 +39,12 @@ static httpd_handle_t s_server = NULL;
 // Background upload task: processes QRZ/eQSL uploads without blocking httpd.
 // Runs at priority 3 (below audio/FT8, above idle). Clients poll /api/upload_status
 // to check results instead of blocking the request handler.
-typedef enum { UPLOAD_QRZ, UPLOAD_EQSL, UPLOAD_LOTW } upload_kind_t;
+// UPLOAD_NONE = 0 is the "no upload has run yet" sentinel: s_last_upload is
+// zero-initialised, so kind starts here. Real kinds MUST be non-zero - the
+// upload_status handler uses "kind != UPLOAD_NONE" to decide whether to emit
+// the result fields, and QRZ being 0 previously made a finished QRZ upload
+// look like "no result" (browser read uploaded=undefined -> "undefined QSOs").
+typedef enum { UPLOAD_NONE = 0, UPLOAD_QRZ, UPLOAD_EQSL, UPLOAD_LOTW } upload_kind_t;
 typedef struct {
     upload_kind_t kind;
 } upload_request_t;
@@ -787,7 +792,7 @@ static esp_err_t upload_status_handler(httpd_req_t *req)
     }
 
     cJSON_AddBoolToObject(root, "busy", s_last_upload.busy);
-    if (!s_last_upload.busy && s_last_upload.kind != 0) {
+    if (!s_last_upload.busy && s_last_upload.kind != UPLOAD_NONE) {
         cJSON_AddStringToObject(root, "kind",
             s_last_upload.kind == UPLOAD_QRZ  ? "qrz" :
             s_last_upload.kind == UPLOAD_LOTW ? "lotw" : "eqsl");
