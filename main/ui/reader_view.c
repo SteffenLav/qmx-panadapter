@@ -1,0 +1,572 @@
+// On-device docs Reader page — see reader_view.h and
+// docs/reader-page-and-update-check-plan.md.
+//
+// Renders a markdown *subset* (no HTML engine on this device) read from the
+// SPIFFS cache file that reader_net.c populates from tab5.lav.dk. The renderer
+// is deliberately forgiving: anything it doesn't understand (mkdocs/pymdownx
+// admonitions, tabbed blocks, snippet includes, front-matter, HTML) degrades to
+// readable plain text rather than erroring — because it reads the site's real
+// source markdown, not a purpose-stripped feed.
+
+#include "reader_view.h"
+#include "reader_net.h"
+#include "ui_theme.h"
+
+#include "lvgl.h"
+#include "esp_log.h"
+#include "esp_heap_caps.h"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+
+#include <stdio.h>
+#include <string.h>
+#include <ctype.h>
+#include <stdlib.h>
+
+static const char *TAG = "reader_view";
+
+// Logical landscape geometry (post-rotation), same convention as
+// ft8_screen_view.c which uses 1280x720 literals.
+#define SCR_W          1280
+#define SCR_H          720
+#define HEADER_H       56
+#define BANNER_H       34
+#define BODY_PAD_X     60
+#define BODY_PAD_Y     22
+#define SLIDE_TIME_MS  220
+
+#define READER_CACHE_PATH  "/spiffs/reader.md"
+#define MD_MAX_BYTES       (96 * 1024)   // cache-file read cap
+
+// ---- LVGL objects (LVGL thread only) ----
+static lv_obj_t *s_overlay      = NULL;   // full-screen opaque page
+static lv_obj_t *s_title_lbl    = NULL;   // header: page title
+static lv_obj_t *s_status_lbl   = NULL;   // header: right-aligned status
+static lv_obj_t *s_banner       = NULL;   // update-available bar (hidden unless set)
+static lv_obj_t *s_banner_lbl   = NULL;
+static lv_obj_t *s_body         = NULL;   // scrollable flex column of content
+static lv_timer_t *s_timer      = NULL;
+
+static bool s_active = false;
+
+// ---- Cross-task state (guarded by s_lock) ----
+static SemaphoreHandle_t s_lock = NULL;
+static volatile bool s_reload_pending = false;
+static bool s_from_cache = false;
+static char s_status[64]  = {0};
+static char s_update_ver[24] = {0};
+
+static void lock(void)   { if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY); }
+static void unlock(void) { if (s_lock) xSemaphoreGive(s_lock); }
+
+// ============================ markdown rendering ============================
+
+// Strip inline emphasis markers and reduce links to their visible text, so the
+// text drops cleanly into a plain LVGL label. (LVGL labels are single-font; we
+// don't attempt bold/italic runs in v1 — see the plan.)
+//   **x** __x__ *x* _x* `x`  -> x
+//   [text](url)              -> text
+//   ![alt](url)              -> "[image] alt"
+static void md_inline_clean(const char *src, char *dst, size_t dstsz)
+{
+    size_t o = 0;
+    for (size_t i = 0; src[i] && o + 1 < dstsz; ) {
+        char c = src[i];
+        // image ![alt](url)
+        if (c == '!' && src[i+1] == '[') {
+            const char *close = strchr(src + i + 2, ']');
+            if (close && close[1] == '(') {
+                const char *paren = strchr(close, ')');
+                if (paren) {
+                    o += (size_t)snprintf(dst + o, dstsz - o, "[image] ");
+                    for (const char *p = src + i + 2; p < close && o + 1 < dstsz; p++) dst[o++] = *p;
+                    i = (size_t)(paren - src) + 1;
+                    continue;
+                }
+            }
+        }
+        // link [text](url) -> text
+        if (c == '[') {
+            const char *close = strchr(src + i + 1, ']');
+            if (close && close[1] == '(') {
+                const char *paren = strchr(close, ')');
+                if (paren) {
+                    for (const char *p = src + i + 1; p < close && o + 1 < dstsz; p++) dst[o++] = *p;
+                    i = (size_t)(paren - src) + 1;
+                    continue;
+                }
+            }
+        }
+        // emphasis / code markers: drop them
+        if (c == '*' || c == '_' || c == '`') {
+            // collapse a run of the same marker (** __ ``) to nothing
+            char m = c;
+            while (src[i] == m) i++;
+            continue;
+        }
+        dst[o++] = c;
+        i++;
+    }
+    dst[o] = '\0';
+}
+
+// Append a text label to the body. width = 100% of the content area so text
+// wraps; caller picks font, colour, and top gap.
+static lv_obj_t *add_label(const char *text, const lv_font_t *font,
+                           uint32_t color, int top_gap, int left_indent)
+{
+    if (!s_body) return NULL;
+    lv_obj_t *l = lv_label_create(s_body);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(l, LV_PCT(100));
+    lv_obj_set_style_text_font(l, font, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
+    lv_obj_set_style_pad_top(l, top_gap, 0);
+    if (left_indent) lv_obj_set_style_pad_left(l, left_indent, 0);
+    lv_label_set_text(l, text && text[0] ? text : " ");
+    return l;
+}
+
+// A code / preformatted block: distinct background, smaller font, no emphasis
+// stripping (rendered verbatim).
+static void add_code_block(const char *text)
+{
+    if (!s_body) return;
+    lv_obj_t *box = lv_obj_create(s_body);
+    lv_obj_set_width(box, LV_PCT(100));
+    lv_obj_set_height(box, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(box, lv_color_hex(UI_COLOR_KEY_BG), 0);
+    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(box, 1, 0);
+    lv_obj_set_style_border_color(box, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_radius(box, 6, 0);
+    lv_obj_set_style_pad_all(box, 10, 0);
+    lv_obj_set_style_margin_top(box, 8, 0);
+    lv_obj_set_scrollbar_mode(box, LV_SCROLLBAR_MODE_OFF);
+
+    lv_obj_t *l = lv_label_create(box);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(l, LV_PCT(100));
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_label_set_text(l, text && text[0] ? text : " ");
+}
+
+// Number of leading spaces (tabs count as 4), used for list indent level.
+static int leading_indent(const char *s)
+{
+    int n = 0;
+    for (; *s == ' ' || *s == '\t'; s++) n += (*s == '\t') ? 4 : 1;
+    return n;
+}
+
+static const char *skip_ws(const char *s) { while (*s == ' ' || *s == '\t') s++; return s; }
+
+// Render one markdown document (mutated in place: line terminators are consumed
+// by the walker) into the body container. `buf` is NUL-terminated.
+static void render_markdown(char *buf)
+{
+    lv_obj_clean(s_body);
+
+    char title[256] = {0};
+    char para[1024];  size_t para_len = 0;   // accumulated paragraph text
+    char code[4096];  size_t code_len = 0;   // accumulated code-block text
+    bool in_code = false;
+    bool in_frontmatter = false;
+    int  block_count = 0;
+
+    char *p = buf;
+    bool first_line = true;
+
+    #define FLUSH_PARA() do {                                              \
+        if (para_len) {                                                    \
+            char cleaned[1024];                                           \
+            md_inline_clean(para, cleaned, sizeof(cleaned));               \
+            add_label(cleaned, &lv_font_montserrat_20, UI_COLOR_TEXT,      \
+                      block_count ? 10 : 0, 0);                            \
+            block_count++; para_len = 0; para[0] = '\0';                   \
+        } } while (0)
+
+    while (*p) {
+        // isolate one line [line, eol)
+        char *line = p;
+        char *eol = strchr(p, '\n');
+        if (eol) { *eol = '\0'; p = eol + 1; } else { p = line + strlen(line); }
+        // strip a trailing CR
+        size_t ll = strlen(line);
+        if (ll && line[ll-1] == '\r') line[--ll] = '\0';
+
+        // YAML front-matter: leading '---' fence at very top
+        if (first_line && strcmp(line, "---") == 0) { in_frontmatter = true; first_line = false; continue; }
+        first_line = false;
+        if (in_frontmatter) { if (strcmp(line, "---") == 0 || strcmp(line, "...") == 0) in_frontmatter = false; continue; }
+
+        const char *t = skip_ws(line);
+
+        // fenced code block ``` or ~~~ (pymdownx superfences: language/opts follow)
+        if (strncmp(t, "```", 3) == 0 || strncmp(t, "~~~", 3) == 0) {
+            if (in_code) { code[code_len] = '\0'; add_code_block(code); code_len = 0; block_count++; in_code = false; }
+            else         { FLUSH_PARA(); in_code = true; code_len = 0; }
+            continue;
+        }
+        if (in_code) {
+            size_t need = strlen(line) + 1;
+            if (code_len + need < sizeof(code)) { code_len += (size_t)snprintf(code + code_len, sizeof(code) - code_len, "%s\n", line); }
+            continue;
+        }
+
+        // skip mkdocs snippet includes and single-line HTML comments
+        if (strncmp(t, "--8<--", 6) == 0) continue;
+        if (strncmp(t, "<!--", 4) == 0 && strstr(t, "-->")) continue;
+
+        // blank line -> paragraph break
+        if (t[0] == '\0') { FLUSH_PARA(); continue; }
+
+        // headings
+        if (t[0] == '#') {
+            int level = 0; const char *h = t;
+            while (*h == '#' && level < 6) { level++; h++; }
+            if (*h == ' ') {
+                FLUSH_PARA();
+                h = skip_ws(h);
+                char cleaned[256];
+                md_inline_clean(h, cleaned, sizeof(cleaned));
+                const lv_font_t *f = (level == 1) ? &lv_font_montserrat_32 :
+                                     (level == 2) ? &lv_font_montserrat_28 :
+                                     (level == 3) ? &lv_font_montserrat_24 :
+                                                    &lv_font_montserrat_22;
+                uint32_t col = (level <= 2) ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT;
+                add_label(cleaned, f, col, block_count ? 18 : 0, 0);
+                block_count++;
+                if (!title[0] && level == 1) { snprintf(title, sizeof(title), "%s", cleaned); }
+                continue;
+            }
+        }
+
+        // horizontal rule
+        if (strcmp(t, "---") == 0 || strcmp(t, "***") == 0 || strcmp(t, "___") == 0) {
+            FLUSH_PARA();
+            lv_obj_t *hr = lv_obj_create(s_body);
+            lv_obj_set_size(hr, LV_PCT(100), 2);
+            lv_obj_set_style_bg_color(hr, lv_color_hex(UI_COLOR_BORDER), 0);
+            lv_obj_set_style_bg_opa(hr, LV_OPA_COVER, 0);
+            lv_obj_set_style_border_width(hr, 0, 0);
+            lv_obj_set_style_margin_top(hr, 12, 0);
+            lv_obj_set_style_margin_bottom(hr, 4, 0);
+            block_count++;
+            continue;
+        }
+
+        // mkdocs/pymdownx admonition marker: "!!! note \"Title\"" / "??? tip"
+        if (strncmp(t, "!!!", 3) == 0 || strncmp(t, "???", 3) == 0) {
+            FLUSH_PARA();
+            const char *rest = skip_ws(t + 3);
+            char head[120] = {0};
+            // pull the quoted title if present, else the admonition type word
+            const char *q = strchr(rest, '"');
+            if (q) {
+                const char *q2 = strchr(q + 1, '"');
+                size_t n = q2 ? (size_t)(q2 - q - 1) : strlen(q + 1);
+                if (n >= sizeof(head)) n = sizeof(head) - 1;
+                memcpy(head, q + 1, n); head[n] = '\0';
+            } else {
+                size_t n = 0; while (rest[n] && rest[n] != ' ' && n < sizeof(head)-1) { head[n] = (char)toupper((unsigned char)rest[n]); n++; }
+                head[n] = '\0';
+            }
+            add_label(head[0] ? head : "NOTE", &lv_font_montserrat_22, UI_COLOR_ACCENT_GOLD, 14, 0);
+            block_count++;
+            continue;   // the indented body lines that follow render as normal paragraphs
+        }
+
+        // block quote
+        if (t[0] == '>') {
+            FLUSH_PARA();
+            const char *q = skip_ws(t + 1);
+            char cleaned[512];
+            md_inline_clean(q, cleaned, sizeof(cleaned));
+            lv_obj_t *l = add_label(cleaned, &lv_font_montserrat_20, UI_COLOR_TEXT_SECONDARY, 8, 16);
+            if (l) {
+                lv_obj_set_style_border_side(l, LV_BORDER_SIDE_LEFT, 0);
+                lv_obj_set_style_border_width(l, 3, 0);
+                lv_obj_set_style_border_color(l, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
+            }
+            block_count++;
+            continue;
+        }
+
+        // list items: -, *, + or "N." / "N)"
+        {
+            int indent = leading_indent(line);
+            bool bullet = (t[0] == '-' || t[0] == '*' || t[0] == '+') && (t[1] == ' ');
+            bool numbered = isdigit((unsigned char)t[0]);
+            const char *nptr = t;
+            if (numbered) {
+                while (isdigit((unsigned char)*nptr)) nptr++;
+                numbered = (*nptr == '.' || *nptr == ')') && (nptr[1] == ' ');
+            }
+            if (bullet || numbered) {
+                FLUSH_PARA();
+                char cleaned[512];
+                if (bullet) {
+                    md_inline_clean(skip_ws(t + 1), cleaned, sizeof(cleaned));
+                    char withb[540]; snprintf(withb, sizeof(withb), "%s  %s", LV_SYMBOL_BULLET, cleaned);
+                    add_label(withb, &lv_font_montserrat_20, UI_COLOR_TEXT, 4, 20 + indent * 8);
+                } else {
+                    char num[8]; size_t k = 0;
+                    for (const char *d = t; (isdigit((unsigned char)*d) || *d=='.'|| *d==')') && k < sizeof(num)-1; d++) num[k++] = *d;
+                    num[k] = '\0';
+                    md_inline_clean(skip_ws(nptr + 1), cleaned, sizeof(cleaned));
+                    char withn[560]; snprintf(withn, sizeof(withn), "%s %s", num, cleaned);
+                    add_label(withn, &lv_font_montserrat_20, UI_COLOR_TEXT, 4, 20 + indent * 8);
+                }
+                block_count++;
+                continue;
+            }
+        }
+
+        // table rows: degrade a run of '|' lines into a preformatted block.
+        // (Skip the |---|--- separator row.)
+        if (t[0] == '|') {
+            if (strspn(t, "|-: ") == strlen(t)) continue;  // separator row
+            // accumulate into code buffer style; simplest: render each row as mono line
+            char cleaned[512];
+            md_inline_clean(t, cleaned, sizeof(cleaned));
+            add_code_block(cleaned);
+            block_count++;
+            continue;
+        }
+
+        // ordinary text: accumulate into the current paragraph (soft-wrap join)
+        {
+            const char *seg = skip_ws(line);
+            size_t need = strlen(seg) + 1;
+            if (para_len + need < sizeof(para)) {
+                if (para_len) para[para_len++] = ' ';
+                memcpy(para + para_len, seg, strlen(seg));
+                para_len += strlen(seg);
+                para[para_len] = '\0';
+            }
+        }
+    }
+
+    FLUSH_PARA();
+    if (in_code && code_len) { code[code_len] = '\0'; add_code_block(code); }
+
+    #undef FLUSH_PARA
+
+    if (s_title_lbl) lv_label_set_text(s_title_lbl, title[0] ? title : "Documentation");
+    lv_obj_scroll_to_y(s_body, 0, LV_ANIM_OFF);
+    ESP_LOGI(TAG, "rendered %d blocks", block_count);
+}
+
+// Read the cache file and render it. LVGL thread only.
+static void render_from_cache(void)
+{
+    FILE *f = fopen(READER_CACHE_PATH, "rb");
+    if (!f) {
+        lv_obj_clean(s_body);
+        add_label("No documentation cached yet.\n\nConnect to WiFi and swipe back "
+                  "into this page to download it from tab5.lav.dk.",
+                  &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED, 0, 0);
+        if (s_title_lbl) lv_label_set_text(s_title_lbl, "Documentation");
+        return;
+    }
+    char *buf = heap_caps_malloc(MD_MAX_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) { fclose(f); ESP_LOGW(TAG, "OOM rendering cache"); return; }
+    size_t n = fread(buf, 1, MD_MAX_BYTES - 1, f);
+    fclose(f);
+    buf[n] = '\0';
+    render_markdown(buf);
+    heap_caps_free(buf);
+}
+
+// ============================ LVGL timer ============================
+
+static void tick_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_active) return;
+
+    bool do_reload = false; bool from_cache = false;
+    char status[64]; char ver[24];
+    lock();
+    if (s_reload_pending) { s_reload_pending = false; do_reload = true; from_cache = s_from_cache; }
+    strncpy(status, s_status, sizeof(status)); status[sizeof(status)-1] = '\0';
+    strncpy(ver, s_update_ver, sizeof(ver)); ver[sizeof(ver)-1] = '\0';
+    unlock();
+
+    if (do_reload) render_from_cache();
+
+    if (s_status_lbl) {
+        if (do_reload && from_cache && !status[0]) strncpy(status, "Offline — showing cached copy", sizeof(status)-1);
+        lv_label_set_text(s_status_lbl, status);
+    }
+
+    if (s_banner) {
+        if (ver[0]) {
+            char msg[96];
+            snprintf(msg, sizeof(msg), LV_SYMBOL_DOWNLOAD "  Firmware %s available — see Releases on GitHub", ver);
+            if (s_banner_lbl) lv_label_set_text(s_banner_lbl, msg);
+            lv_obj_clear_flag(s_banner, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_banner, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+}
+
+// ============================ build / show / hide ============================
+
+void reader_view_init(lv_obj_t *parent)
+{
+    if (s_overlay) return;
+    s_lock = xSemaphoreCreateMutex();
+
+    s_overlay = lv_obj_create(parent);
+    lv_obj_remove_style_all(s_overlay);
+    lv_obj_set_size(s_overlay, SCR_W, SCR_H);
+    lv_obj_set_pos(s_overlay, SCR_W, 0);   // parked off-screen right
+    lv_obj_set_style_bg_color(s_overlay, lv_color_hex(0x0a0d10), 0);
+    lv_obj_set_style_bg_opa(s_overlay, LV_OPA_COVER, 0);
+    lv_obj_add_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_SCROLLABLE);
+
+    // Header strip
+    lv_obj_t *hdr = lv_obj_create(s_overlay);
+    lv_obj_remove_style_all(hdr);
+    lv_obj_set_size(hdr, SCR_W, HEADER_H);
+    lv_obj_set_pos(hdr, 0, 0);
+    lv_obj_set_style_bg_color(hdr, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
+    lv_obj_set_style_bg_opa(hdr, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_side(hdr, LV_BORDER_SIDE_BOTTOM, 0);
+    lv_obj_set_style_border_width(hdr, 1, 0);
+    lv_obj_set_style_border_color(hdr, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_title_lbl = lv_label_create(hdr);
+    lv_obj_set_style_text_font(s_title_lbl, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(s_title_lbl, lv_color_hex(UI_COLOR_TEXT), 0);
+    lv_obj_align(s_title_lbl, LV_ALIGN_LEFT_MID, 20, 0);
+    lv_label_set_text(s_title_lbl, "Documentation");
+
+    s_status_lbl = lv_label_create(hdr);
+    lv_obj_set_style_text_font(s_status_lbl, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(s_status_lbl, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+    lv_obj_align(s_status_lbl, LV_ALIGN_RIGHT_MID, -20, 0);
+    lv_label_set_text(s_status_lbl, "");
+
+    // Update-available banner (hidden until update_check reports one)
+    s_banner = lv_obj_create(s_overlay);
+    lv_obj_remove_style_all(s_banner);
+    lv_obj_set_size(s_banner, SCR_W, BANNER_H);
+    lv_obj_set_pos(s_banner, 0, HEADER_H);
+    lv_obj_set_style_bg_color(s_banner, lv_color_hex(0x5a4300), 0);
+    lv_obj_set_style_bg_opa(s_banner, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(s_banner, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_banner, LV_OBJ_FLAG_HIDDEN);
+    s_banner_lbl = lv_label_create(s_banner);
+    lv_obj_set_style_text_font(s_banner_lbl, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(s_banner_lbl, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+    lv_obj_align(s_banner_lbl, LV_ALIGN_LEFT_MID, 20, 0);
+    lv_label_set_text(s_banner_lbl, "");
+
+    // Scrollable body
+    s_body = lv_obj_create(s_overlay);
+    lv_obj_remove_style_all(s_body);
+    lv_obj_set_size(s_body, SCR_W, SCR_H - HEADER_H);
+    lv_obj_set_pos(s_body, 0, HEADER_H);
+    lv_obj_set_style_bg_opa(s_body, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_pad_left(s_body, BODY_PAD_X, 0);
+    lv_obj_set_style_pad_right(s_body, BODY_PAD_X, 0);
+    lv_obj_set_style_pad_top(s_body, BODY_PAD_Y, 0);
+    lv_obj_set_style_pad_bottom(s_body, BODY_PAD_Y * 2, 0);
+    lv_obj_set_flex_flow(s_body, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scroll_dir(s_body, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_body, LV_SCROLLBAR_MODE_AUTO);
+
+    add_label("Loading documentation…", &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED, 0, 0);
+
+    s_timer = lv_timer_create(tick_cb, 250, NULL);
+    ESP_LOGI(TAG, "init");
+}
+
+// Simple x-position animator for the slide.
+static void anim_x_cb(void *var, int32_t v) { lv_obj_set_x((lv_obj_t *)var, v); }
+
+static void slide(int32_t from, int32_t to)
+{
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_overlay);
+    lv_anim_set_exec_cb(&a, anim_x_cb);
+    lv_anim_set_values(&a, from, to);
+    lv_anim_set_time(&a, SLIDE_TIME_MS);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
+    lv_anim_start(&a);
+}
+
+void reader_view_show(void)
+{
+    if (!s_overlay) return;
+    lv_obj_set_x(s_overlay, SCR_W);
+    lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
+    s_active = true;
+    slide(SCR_W, 0);
+
+    // Render whatever is cached immediately, then kick a refresh.
+    lock(); s_reload_pending = true; s_from_cache = true; strncpy(s_status, "Refreshing…", sizeof(s_status)-1); unlock();
+    reader_net_load_index();
+    ESP_LOGI(TAG, "show");
+}
+
+static void hide_done_cb(lv_anim_t *a)
+{
+    (void)a;
+    if (s_overlay) lv_obj_add_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
+}
+
+void reader_view_hide(void)
+{
+    if (!s_overlay) return;
+    s_active = false;
+    lv_anim_t anim;
+    lv_anim_init(&anim);
+    lv_anim_set_var(&anim, s_overlay);
+    lv_anim_set_exec_cb(&anim, anim_x_cb);
+    lv_anim_set_values(&anim, lv_obj_get_x(s_overlay), SCR_W);
+    lv_anim_set_time(&anim, SLIDE_TIME_MS);
+    lv_anim_set_path_cb(&anim, lv_anim_path_ease_in);
+    lv_anim_set_ready_cb(&anim, hide_done_cb);
+    lv_anim_start(&anim);
+    ESP_LOGI(TAG, "hide");
+}
+
+bool reader_view_is_active(void) { return s_active; }
+lv_obj_t *reader_view_get_container(void) { return s_overlay; }
+
+// ---- cross-task notifications ----
+
+void reader_view_notify_loaded(bool from_cache)
+{
+    lock();
+    s_reload_pending = true;
+    s_from_cache = from_cache;
+    if (!from_cache) s_status[0] = '\0';   // fresh: clear "Refreshing…"
+    unlock();
+}
+
+void reader_view_notify_status(const char *status)
+{
+    lock();
+    strncpy(s_status, status ? status : "", sizeof(s_status) - 1);
+    s_status[sizeof(s_status) - 1] = '\0';
+    unlock();
+}
+
+void reader_view_set_update_available(const char *latest_version)
+{
+    lock();
+    strncpy(s_update_ver, latest_version ? latest_version : "", sizeof(s_update_ver) - 1);
+    s_update_ver[sizeof(s_update_ver) - 1] = '\0';
+    unlock();
+}

@@ -35,6 +35,7 @@
 #include "time_sync.h"
 #include "ft8_screen.h"
 #include "ft8_screen_view.h"
+#include "reader_view.h"
 #include "ft8_test.h"
 #include "esp_lcd_touch.h"
 
@@ -1670,7 +1671,7 @@ static void drawer_preset_strong_cb(lv_event_t *e);
 static void drawer_wifi_btn_cb(lv_event_t *e);
 static void drawer_identity_btn_cb(lv_event_t *e);
 static void ui_show_memories(void);
-static void ui_toggle_mode(void);
+static void ui_advance_page(void);
 static void drawer_slider_db_min_cb(lv_event_t *e);
 static void drawer_slider_db_max_cb(lv_event_t *e);
 static void drawer_slider_alpha_cb(lv_event_t *e);
@@ -2982,6 +2983,12 @@ void ui_init(lv_display_t *disp)
     drawer_build();
 
     ft8_screen_view_init(scr);
+
+    // Docs Reader page (third page of the left-swipe cycle). Built here, BEFORE
+    // the edge-swipe strips are re-foregrounded (below), so its full-screen
+    // overlay stays UNDER the always-on-top strips and the operator can always
+    // swipe back out of it. Starts hidden/parked off-screen.
+    reader_view_init(scr);
 
     // NOTE: do NOT unlock here. The LVGL lock is held until the very end of
     // ui_init (see display_unlock() before the return). lv_display_refr_timer
@@ -4815,7 +4822,7 @@ static void left_edge_swipe_cb(lv_event_t *e)
     if (code == LV_EVENT_RELEASED) {
         if (s_left_edge_swipe_start_x >= 0 &&
             (int)p.x - s_left_edge_swipe_start_x >= EDGE_SWIPE_MIN_DX) {
-            ui_toggle_mode();
+            ui_advance_page();
         }
         s_left_edge_swipe_start_x = -1;
     }
@@ -6470,15 +6477,18 @@ void ui_apply_saved_mode(void)
     ESP_LOGI(TAG, "UI mode restored from NVS: FT8");
 }
 
-// Toggle between Panadapter and FT8 mode. Triggered by a left-edge swipe
-// (drag right) on the spectrum/waterfall; replaces the drawer's mode button.
-static void ui_toggle_mode(void)
+// Switch the operating (base) mode between Panadapter and FT8. `animate` slides
+// the widgets across; when false the swap is instant (used when the change will
+// immediately be covered by the Reader overlay, so an animation would be
+// invisible). No-op if already in `next`. Top/bottom bars stay visible in both.
+static void ui_set_base_mode(ui_mode_t next, bool animate)
 {
     ui_mode_t cur = ui_mode_get();
-    ui_mode_t next = (cur == UI_MODE_FT8) ? UI_MODE_PANADAPTER : UI_MODE_FT8;
-    ESP_LOGI(TAG, "Mode toggle: %s -> %s",
+    if (next == cur) return;
+    ESP_LOGI(TAG, "Base mode: %s -> %s%s",
              cur  == UI_MODE_FT8 ? "FT8" : "Panadapter",
-             next == UI_MODE_FT8 ? "FT8" : "Panadapter");
+             next == UI_MODE_FT8 ? "FT8" : "Panadapter",
+             animate ? "" : " (instant)");
     ui_mode_set(next);
     settings_set_last_ui_mode((uint8_t)next);
     top_bar_set_ft8_dim(next == UI_MODE_FT8);
@@ -6486,11 +6496,9 @@ static void ui_toggle_mode(void)
 
     lv_obj_t *ft8 = ft8_screen_view_get_container();
 
-    // Swap visible widgets with a slide animation. Top/bottom bars stay
-    // visible in both modes (and unanimated).
     if (next == UI_MODE_FT8) {
         if (ft8) {
-            lv_obj_set_x(ft8, -DISPLAY_H_RES);
+            lv_obj_set_x(ft8, animate ? -DISPLAY_H_RES : 0);
             lv_obj_clear_flag(ft8, LV_OBJ_FLAG_HIDDEN);
         }
         // Sticky settings: remember where Panadapter was left, restore
@@ -6523,11 +6531,18 @@ static void ui_toggle_mode(void)
         ft8_screen_view_show();
         // Respawn the FT8 task; it self-deleted on previous exit.
         ft8_self_test();
-        slide_x_anim(ft8, -DISPLAY_H_RES, 0, NULL);
-        if (s_spectrum_obj)  slide_x_anim(s_spectrum_obj,  0, DISPLAY_H_RES, mode_slide_out_ready_cb);
-        if (s_label_bar)     slide_x_anim(s_label_bar,     0, DISPLAY_H_RES, mode_slide_out_ready_cb);
-        if (s_bandplan_obj)  slide_x_anim(s_bandplan_obj,  0, DISPLAY_H_RES, mode_slide_out_ready_cb);
-        if (s_waterfall_obj) slide_x_anim(s_waterfall_obj, 0, DISPLAY_H_RES, mode_slide_out_ready_cb);
+        if (animate) {
+            slide_x_anim(ft8, -DISPLAY_H_RES, 0, NULL);
+            if (s_spectrum_obj)  slide_x_anim(s_spectrum_obj,  0, DISPLAY_H_RES, mode_slide_out_ready_cb);
+            if (s_label_bar)     slide_x_anim(s_label_bar,     0, DISPLAY_H_RES, mode_slide_out_ready_cb);
+            if (s_bandplan_obj)  slide_x_anim(s_bandplan_obj,  0, DISPLAY_H_RES, mode_slide_out_ready_cb);
+            if (s_waterfall_obj) slide_x_anim(s_waterfall_obj, 0, DISPLAY_H_RES, mode_slide_out_ready_cb);
+        } else {
+            if (s_spectrum_obj)  { lv_obj_add_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN); lv_obj_set_x(s_spectrum_obj,  0); }
+            if (s_label_bar)     { lv_obj_add_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN); lv_obj_set_x(s_label_bar,     0); }
+            if (s_bandplan_obj)  { lv_obj_add_flag(s_bandplan_obj,  LV_OBJ_FLAG_HIDDEN); lv_obj_set_x(s_bandplan_obj,  0); }
+            if (s_waterfall_obj) { lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN); lv_obj_set_x(s_waterfall_obj, 0); }
+        }
     } else {
         // Sticky settings: remember where FT8 was left, restore where
         // Panadapter was left (band/mode/bw/freq/zoom).
@@ -6537,19 +6552,44 @@ static void ui_toggle_mode(void)
         strncpy(s_ft8_snapshot.mode, "DiGi", sizeof(s_ft8_snapshot.mode) - 1);
         s_ft8_snapshot.mode[sizeof(s_ft8_snapshot.mode) - 1] = '\0';
         ui_restore_snapshot(&s_pan_snapshot);
-        if (s_spectrum_obj)  { lv_obj_set_x(s_spectrum_obj,  -DISPLAY_H_RES); lv_obj_clear_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN); }
-        if (s_label_bar)     { lv_obj_set_x(s_label_bar,     -DISPLAY_H_RES); lv_obj_clear_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN); }
-        if (s_bandplan_obj)  { lv_obj_set_x(s_bandplan_obj,  -DISPLAY_H_RES); lv_obj_clear_flag(s_bandplan_obj,  LV_OBJ_FLAG_HIDDEN); }
-        if (s_waterfall_obj) { lv_obj_set_x(s_waterfall_obj, -DISPLAY_H_RES); lv_obj_clear_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN); }
-        slide_x_anim(s_spectrum_obj,  -DISPLAY_H_RES, 0, NULL);
-        slide_x_anim(s_label_bar,     -DISPLAY_H_RES, 0, NULL);
-        slide_x_anim(s_bandplan_obj,  -DISPLAY_H_RES, 0, NULL);
-        slide_x_anim(s_waterfall_obj, -DISPLAY_H_RES, 0, NULL);
-        slide_x_anim(ft8, 0, DISPLAY_H_RES, ft8_slide_out_ready_cb);
+        int start_x = animate ? -DISPLAY_H_RES : 0;
+        if (s_spectrum_obj)  { lv_obj_set_x(s_spectrum_obj,  start_x); lv_obj_clear_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN); }
+        if (s_label_bar)     { lv_obj_set_x(s_label_bar,     start_x); lv_obj_clear_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN); }
+        if (s_bandplan_obj)  { lv_obj_set_x(s_bandplan_obj,  start_x); lv_obj_clear_flag(s_bandplan_obj,  LV_OBJ_FLAG_HIDDEN); }
+        if (s_waterfall_obj) { lv_obj_set_x(s_waterfall_obj, start_x); lv_obj_clear_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN); }
+        if (animate) {
+            slide_x_anim(s_spectrum_obj,  -DISPLAY_H_RES, 0, NULL);
+            slide_x_anim(s_label_bar,     -DISPLAY_H_RES, 0, NULL);
+            slide_x_anim(s_bandplan_obj,  -DISPLAY_H_RES, 0, NULL);
+            slide_x_anim(s_waterfall_obj, -DISPLAY_H_RES, 0, NULL);
+            slide_x_anim(ft8, 0, DISPLAY_H_RES, ft8_slide_out_ready_cb);
+        } else {
+            ft8_screen_view_hide();
+            if (ft8) lv_obj_set_x(ft8, 0);
+        }
     }
-    // Close the drawer (if open) after toggling. UX nicety, and (4c.1
-    // finding) an open drawer keeps LVGL busy enough to starve audio/fft
-    // tasks and stall the next FT8 capture.
+}
+
+// Advance the left-swipe page cycle: Panadapter -> FT8 -> Reader -> Panadapter.
+// Reader is a full-screen overlay orthogonal to the base mode; entering it drops
+// the base to Panadapter (instant, hidden under the overlay) so leaving it is a
+// clean reveal. Triggered by a left-edge swipe (drag right).
+static void ui_advance_page(void)
+{
+    if (reader_view_is_active()) {
+        // Reader -> Panadapter: slide the overlay out; base is already Panadapter.
+        reader_view_hide();
+    } else if (ui_mode_get() == UI_MODE_PANADAPTER) {
+        // Panadapter -> FT8 (animated swap).
+        ui_set_base_mode(UI_MODE_FT8, true);
+    } else {
+        // FT8 -> Reader: drop to Panadapter base instantly (about to be covered),
+        // then slide the Reader overlay in over it.
+        ui_set_base_mode(UI_MODE_PANADAPTER, false);
+        reader_view_show();
+    }
+    // Close the drawer (if open) after switching. UX nicety, and (4c.1 finding)
+    // an open drawer keeps LVGL busy enough to starve audio/fft tasks.
     drawer_close();
 }
 

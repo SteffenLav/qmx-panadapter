@@ -23,6 +23,7 @@
 #include "dsp/iq_balance.h"
 #include "mem_channels.h"
 #include "wifi.h"
+#include "net/update_check.h"
 #include "iq_balance.h"
 #include "ui_mode.h"
 #include "ft8_screen.h"
@@ -214,5 +215,10 @@ void app_main(void)
     ft8_arrl_fd_e2e_selftest();
     // Restore last UI mode (Panadapter/FT8), persisted across reboots.
     ui_apply_saved_mode();
+
+    // Background firmware-update poller for the docs Reader page. Self-throttles
+    // (first check ~30 s after boot, then every 6 h) and no-ops while WiFi is
+    // down, so it's harmless on offline/POTA units.
+    update_check_start();
 }
 
