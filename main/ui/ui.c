@@ -1606,7 +1606,10 @@ static int s_drawer_scrim_swipe_start_x = -1;
                                    // when hidden on <1_04 firmware and reopens it in
                                    // place when the firmware qualifies (see
                                    // drawer_set_ft8_mode's reflow)
-#define DRAWER_TUNE2_H        64  // its height = the shift applied when hidden
+#define DRAWER_TUNE2_H        72  // its height = the shift applied when hidden. 72 (not 64)
+                                   // so the gap below the Antenna Tune button matches the
+                                   // WiFi setup / Callsign sections (also 72), i.e. an equal
+                                   // 16 px between Tune->WiFi and WiFi->Callsign buttons.
 #define N_DRAWER_SECTIONS     22
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
@@ -2852,7 +2855,9 @@ static void build_edge_swipe_strips(lv_obj_t *scr)
         lv_obj_clear_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(strip, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_add_event_cb(strip, bottom_edge_swipe_cb, LV_EVENT_PRESSED, NULL);
+        lv_obj_add_event_cb(strip, bottom_edge_swipe_cb, LV_EVENT_PRESSING, NULL);
         lv_obj_add_event_cb(strip, bottom_edge_swipe_cb, LV_EVENT_RELEASED, NULL);
+        lv_obj_add_event_cb(strip, bottom_edge_swipe_cb, LV_EVENT_PRESS_LOST, NULL);
         lv_obj_move_foreground(strip);
         s_bottom_edge_strip = strip;
 
@@ -4803,6 +4808,16 @@ static void left_edge_swipe_cb(lv_event_t *e)
 
 // Bottom-edge swipe (drag up) opens the memory-channel modal. Same
 // always-on-top overlay approach as left_edge_swipe_cb.
+// Bottom bar = two orthogonal gestures sharing the row (ported from the
+// Waveshare P4 build):
+//   vertical swipe UP -> memory-channel modal
+//   horizontal drag   -> band-plan retune (Panadapter mode only), grabbed from
+//                        on/under the band-plan slider head (the visible-window
+//                        knob) anywhere along the bottom bar.
+// This handler is a direction router: it decides from the first movement which
+// one is meant. The band-plan drag reuses the SAME module state as the strip's
+// own touch_event_cb drag (s_bp_drag_*), and sets s_touch_on_bandplan so the raw
+// pinch_poll_cb keeps its hands off - only one touch session runs at a time.
 static void bottom_edge_swipe_cb(lv_event_t *e)
 {
     lv_event_code_t code = lv_event_get_code(e);
@@ -4812,16 +4827,95 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
     lv_point_t p;
     lv_indev_get_point(indev, &p);
 
+    static int  be_start_x = -1;
+    static int  be_decided = 0;     // 0 undecided, 1 swipe-up, 2 band-plan drag
+    static bool be_bp_ok   = false; // a band was captured -> horizontal drag allowed
+
     if (code == LV_EVENT_PRESSED) {
         s_bottom_edge_swipe_start_y = (int)p.y;
+        be_start_x = (int)p.x;
+        be_decided = 0;
+        be_bp_ok   = false;
+        // Capture the band context (used only if this turns into a horizontal
+        // drag), gated on Panadapter mode with a visible band-plan strip AND on
+        // the finger landing on/near the slider HEAD (the visible-window knob) -
+        // grabbing empty bottom bar to pan felt arbitrary. The grip zone is the
+        // knob's x-extent plus a margin (the "expanded touch area" around it).
+        if (ui_mode_get() == UI_MODE_PANADAPTER && s_bandplan_obj &&
+            !lv_obj_has_flag(s_bandplan_obj, LV_OBJ_FLAG_HIDDEN) &&
+            s_bp_knob && !lv_obj_has_flag(s_bp_knob, LV_OBJ_FLAG_HIDDEN)) {
+            int knob_x0 = lv_obj_get_x(s_bp_knob);
+            int knob_x1 = knob_x0 + lv_obj_get_width(s_bp_knob);
+            int margin  = 40;   // expanded touch area on each side of the head
+            bool on_head = (int)p.x >= knob_x0 - margin && (int)p.x <= knob_x1 + margin;
+            if (on_head) {
+                qmx_settings_t s;
+                settings_load_all(&s);
+                bandplan_region_t reg =
+                    bandplan_effective_region((bandplan_region_t)s.bandplan_region, s.my_grid);
+                const bp_seg_t *segs = NULL;
+                int n = bandplan_get_segments(s_last_qmx_freq_hz, reg, &segs);
+                if (n > 0) {
+                    s_bp_drag_band_lo    = segs[0].lo_hz;
+                    s_bp_drag_band_hi    = segs[n - 1].hi_hz;
+                    s_bp_drag_start_pt   = p;
+                    s_bp_drag_start_freq = (int64_t)s_last_qmx_freq_hz;
+                    s_bp_drag_target_hz  = s_bp_drag_start_freq;
+                    be_bp_ok = true;
+                }
+            }
+        }
         return;
     }
-    if (code == LV_EVENT_RELEASED) {
-        if (s_bottom_edge_swipe_start_y >= 0 &&
-            s_bottom_edge_swipe_start_y - (int)p.y >= EDGE_SWIPE_MIN_DY) {
+
+    if (code == LV_EVENT_PRESSING) {
+        int dx = (int)p.x - be_start_x;
+        int dy = (int)p.y - s_bottom_edge_swipe_start_y;
+        int adx = dx < 0 ? -dx : dx;
+        int ady = dy < 0 ? -dy : dy;
+        if (be_decided == 0) {
+            if (dy <= -BP_DRAG_THRESHOLD_PX && ady >= adx) {
+                be_decided = 1;                 // mostly-up -> swipe
+            } else if (be_bp_ok && adx >= BP_DRAG_THRESHOLD_PX && adx > ady) {
+                be_decided = 2;                 // mostly-sideways -> band-plan drag
+                s_touch_on_bandplan = true;     // keep pinch_poll_cb off
+            }
+        }
+        if (be_decided == 2 && be_bp_ok) {
+            double hz_per_px = (double)(s_bp_drag_band_hi - s_bp_drag_band_lo) / (double)DISPLAY_H_RES;
+            int64_t target = s_bp_drag_start_freq + (int64_t)lround((double)dx * hz_per_px);
+            target = ((target + 500) / 1000) * 1000;              // snap centre to whole kHz
+            if (target < (int64_t)s_bp_drag_band_lo) target = (int64_t)s_bp_drag_band_lo;
+            if (target > (int64_t)s_bp_drag_band_hi) target = (int64_t)s_bp_drag_band_hi;
+            s_bp_drag_target_hz = target;
+            update_bandplan_strip((uint32_t)target);             // live strip position
+            if (s_freq_label) {                                  // live top-bar freq (display only)
+                char fb[32]; uint32_t t = (uint32_t)target;
+                snprintf(fb, sizeof(fb), "Freq: %lu.%03lu.%03lu Hz",
+                         (unsigned long)(t / 1000000), (unsigned long)((t / 1000) % 1000),
+                         (unsigned long)(t % 1000));
+                lv_label_set_text(s_freq_label, fb);
+            }
+        }
+        return;
+    }
+
+    if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
+        if (be_decided == 2 && be_bp_ok && s_bp_drag_band_hi > s_bp_drag_band_lo) {
+            uint32_t tgt = (uint32_t)s_bp_drag_target_hz;
+            cat_set_frequency_forced(tgt);   // deliberate user action - bypass the 200ms rate-limiter
+            ui_update_frequency(tgt);
+        } else if (be_decided == 1 && s_bottom_edge_swipe_start_y >= 0 &&
+                   s_bottom_edge_swipe_start_y - (int)p.y >= EDGE_SWIPE_MIN_DY) {
             ui_show_memories();
         }
+        // A pure tap (be_decided==0) does nothing - so reaching for the swipe
+        // grip can't accidentally retune.
+        s_touch_on_bandplan = false;
         s_bottom_edge_swipe_start_y = -1;
+        be_start_x = -1;
+        be_decided = 0;
+        be_bp_ok   = false;
     }
 }
 
@@ -5869,24 +5963,32 @@ static void drawer_build(void)
         y += 56;
     }
 
-    // Common tweaks for every drawer slider (all horizontal, 30 px tall):
+    // Common tweaks for every drawer slider (all horizontal, 30 px tall), ported
+    // from the Waveshare P4 build's slider fix:
     //  - LV_OBJ_FLAG_ADV_HITTEST: only the knob grabs touches, so a press/drag
-    //    on the track or scale no longer hijacks the drawer's up/down
-    //    swipe-scroll gesture (they were conflicting).
-    //  - pad_hor = 15 (= knob radius, height/2): the knob is drawn `height`
-    //    wide and centred on the indicator end with no bounds clamping, so at
-    //    min/max it overhung by 15 px and showed as half a knob. Insetting the
-    //    indicator by the knob radius keeps the whole knob on-screen at both
-    //    ends. (See position_knob() in lv_slider.c.)
+    //    on the track/scale no longer hijacks the drawer's up/down swipe-scroll.
+    //  - pad_left = 0: the indicator track starts flush at the section's left
+    //    edge, lining the slider up with the buttons/dropdowns (which start at
+    //    x=0). Previously pad_hor=15 inset BOTH sides, so every slider except the
+    //    battery-care one (which had no pad) sat 15 px right of the buttons.
+    //  - pad_right = 25 (~knob radius + margin): the knob is drawn `height` wide
+    //    and centred on the indicator end with no bounds clamping, so with no
+    //    right pad it overhangs the box edge (past the button right-alignment) at
+    //    max. Insetting the indicator on the right holds the max-value knob just
+    //    inside the edge. (See position_knob() in lv_slider.c.)
+    // s_slider_charge_limit_pct is now included too, so the battery-care knob
+    // gets the same max-value inset (it used to overhang the right edge).
     lv_obj_t *drawer_sliders[] = {
         s_slider_db_min, s_slider_db_max, s_slider_alpha, s_slider_cwpitch,
         s_slider_cwaudio_vol, s_slider_ifcal, s_slider_brightness,
         s_slider_wf_black, s_slider_wf_contrast, s_slider_wf_blend,
+        s_slider_charge_limit_pct,
     };
     for (size_t i = 0; i < sizeof(drawer_sliders) / sizeof(drawer_sliders[0]); i++) {
         if (!drawer_sliders[i]) continue;
         lv_obj_add_flag(drawer_sliders[i], LV_OBJ_FLAG_ADV_HITTEST);
-        lv_obj_set_style_pad_hor(drawer_sliders[i], 15, LV_PART_MAIN);
+        lv_obj_set_style_pad_left(drawer_sliders[i], 0, LV_PART_MAIN);
+        lv_obj_set_style_pad_right(drawer_sliders[i], 25, LV_PART_MAIN);
     }
 
     // Keep the frozen header above all the sections created after it (z-order
@@ -5955,7 +6057,9 @@ static void drawer_set_ft8_mode(bool ft8)
     static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_SLEEP, DRAWER_SEC_CHARGE, DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY };
     // Heights must line up 1:1 with keep[] above (same order) - each is the
     // height passed to that section's own drawer_section(ID, y, height) call.
-    static const int keep_h[] = { 56, 124, 136, 130, 56, 56, 128, 72 };
+    // (WiFi is 72, matching its drawer_section call - was mistakenly 128, which
+    //  left a 56 px dead gap between WiFi setup and Callsign in FT8 mode.)
+    static const int keep_h[] = { 56, 124, 136, 130, 56, 56, 72, 72 };
     const int n_keep = sizeof(keep) / sizeof(keep[0]);
 
     // Antenna Tune: shown only in Panadapter mode with confirmed 1_04+
