@@ -32,7 +32,7 @@ static const char *TAG = "reader_view";
 // ft8_screen_view.c which uses 1280x720 literals.
 #define SCR_W          1280
 #define SCR_H          720
-#define HEADER_H       88    // tall bar so the buttons are easy to hit
+#define HEADER_H       64    // modest bar; big touch handled by ext_click_area
 #define BANNER_H       34
 #define BODY_PAD_X     60
 #define BODY_PAD_Y     22
@@ -170,19 +170,20 @@ static int fold_seq(const char *s, const char **rep)
     return len;
 }
 
-// Fold UTF-8 punctuation/box-drawing to ASCII in place (output is always <= input
-// length for every mapping, so read/write cursors never cross). Used for code
-// and table blocks, which bypass md_inline_clean.
-static void fold_utf8_inplace(char *s)
+// Fold UTF-8 punctuation/box-drawing to ASCII into a SEPARATE bounded buffer.
+// (Must NOT be done in place: some folds EXPAND — e.g. an arrow "→" (3 bytes)
+// -> "(right)" (7) — so an in-place write would overrun the source. That bug
+// corrupted the heap. Used for verbatim code blocks, which bypass the
+// markdown-stripping md_inline_clean.)
+static void fold_copy(char *dst, size_t dstsz, const char *src)
 {
-    size_t r = 0, w = 0;
-    while (s[r]) {
-        const char *rep;
-        int adv = fold_seq(&s[r], &rep);
-        if (adv) { while (*rep) s[w++] = *rep++; r += (size_t)adv; }
-        else     { s[w++] = s[r++]; }
+    size_t o = 0;
+    for (size_t i = 0; src[i] && o + 1 < dstsz; ) {
+        const char *rep; int adv = fold_seq(&src[i], &rep);
+        if (adv) { while (*rep && o + 1 < dstsz) dst[o++] = *rep++; i += (size_t)adv; }
+        else     { dst[o++] = src[i++]; }
     }
-    s[w] = '\0';
+    dst[o] = '\0';
 }
 
 // Trim leading/trailing spaces/tabs in place; returns the trimmed start.
@@ -273,7 +274,8 @@ static lv_obj_t *add_label(const char *text, const lv_font_t *font,
 // bold face, so weight is conveyed by COLOUR). Folds UTF-8 punctuation and
 // reduces links/images to their visible text, same as md_inline_clean. Returns
 // the spangroup (so callers can add a left border etc.).
-#define RICH_CODE_COLOR  0x8fd98f
+#define RICH_CODE_COLOR  0x8fd98f   // green for `code`
+#define RICH_BOLD_COLOR  0x66c8ff   // light cyan for **bold** — distinct from gold headings
 static lv_obj_t *add_rich_span(lv_obj_t *parent, const char *src,
                                const lv_font_t *font, uint32_t base_color)
 {
@@ -290,7 +292,7 @@ static lv_obj_t *add_rich_span(lv_obj_t *parent, const char *src,
             lv_span_set_text(sp, seg);                                          \
             lv_style_t *st = lv_span_get_style(sp);                             \
             lv_style_set_text_font(st, font);                                   \
-            uint32_t col = code ? RICH_CODE_COLOR : (emph ? UI_COLOR_ACCENT_GOLD : base_color); \
+            uint32_t col = code ? RICH_CODE_COLOR : (emph ? RICH_BOLD_COLOR : base_color); \
             lv_style_set_text_color(st, lv_color_hex(col));                     \
             o = 0; }                                                            \
     } while (0)
@@ -369,7 +371,12 @@ static void add_code_block(const char *text)
     lv_obj_set_style_max_width(l, SCR_W - 2 * BODY_PAD_X - 24, 0);
     lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-    lv_label_set_text(l, text && text[0] ? text : " ");
+    // Fold UTF-8 -> ASCII into a PSRAM temp (fold can expand, so not in place);
+    // code is verbatim otherwise (no markdown stripping). Label copies the text.
+    size_t need = strlen(text ? text : "") * 4 + 16;
+    char *folded = heap_caps_malloc(need, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (folded) { fold_copy(folded, need, text ? text : ""); lv_label_set_text(l, folded[0] ? folded : " "); heap_caps_free(folded); }
+    else        { lv_label_set_text(l, text && text[0] ? text : " "); }
 }
 
 // Render a markdown table (accumulated rows, newline-separated, mutated in
@@ -379,7 +386,6 @@ static void add_code_block(const char *text)
 static void add_table_block(char *rows)
 {
     if (!s_body) return;
-    fold_utf8_inplace(rows);
 
     // Outer bordered box, full width, one flex-column of row containers. Each
     // row is a flex ROW of equal-width (flex-grow 1) cells, so columns line up
@@ -438,14 +444,15 @@ static void add_table_block(char *rows)
         }
 
         for (int c = 0; c < nc; c++) {
-            md_inline_clean(cells[c], cells[c], strlen(cells[c]) + 1);  // strip **bold** etc.
+            char cbuf[320];
+            md_inline_clean(cells[c], cbuf, sizeof(cbuf));   // fold + strip into a SEPARATE buffer
             lv_obj_t *cl = lv_label_create(rowc);
             lv_obj_set_flex_grow(cl, 1);                 // equal columns -> aligned
             lv_obj_set_width(cl, 0);                     // let flex-grow drive width
             lv_label_set_long_mode(cl, LV_LABEL_LONG_WRAP);
             lv_obj_set_style_text_font(cl, &lv_font_montserrat_22, 0);
             lv_obj_set_style_text_color(cl, lv_color_hex(rownum == 0 ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT), 0);
-            lv_label_set_text(cl, cells[c][0] ? cells[c] : " ");
+            lv_label_set_text(cl, cbuf[0] ? cbuf : " ");
         }
         rownum++;
     }
@@ -563,7 +570,7 @@ static void render_markdown(char *buf)
 
         // fenced code block ``` or ~~~ (pymdownx superfences: language/opts follow)
         if (strncmp(t, "```", 3) == 0 || strncmp(t, "~~~", 3) == 0) {
-            if (in_code) { code[code_len] = '\0'; fold_utf8_inplace(code); add_code_block(code); code_len = 0; block_count++; in_code = false; }
+            if (in_code) { code[code_len] = '\0'; add_code_block(code); code_len = 0; block_count++; in_code = false; }
             else         { FLUSH_PARA(); in_code = true; code_len = 0; }
             continue;
         }
@@ -717,7 +724,7 @@ static void render_markdown(char *buf)
     }
 
     FLUSH_PARA();
-    if (in_code && code_len)  { code[code_len] = '\0'; fold_utf8_inplace(code); add_code_block(code); }
+    if (in_code && code_len)  { code[code_len] = '\0'; add_code_block(code); }
     if (in_table && code_len) { code[code_len] = '\0'; add_table_block(code); }
 
     #undef FLUSH_PARA
@@ -982,7 +989,7 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_align(back_btn, LV_ALIGN_LEFT_MID, 44, 0);
     lv_obj_set_style_bg_color(back_btn, lv_color_hex(UI_COLOR_SURFACE), 0);
     lv_obj_set_style_pad_hor(back_btn, 18, 0);
-    lv_obj_set_height(back_btn, 64);
+    lv_obj_set_height(back_btn, 46);
     lv_obj_set_ext_click_area(back_btn, 40);   // big touch target, reaches below the bar
     lv_obj_add_event_cb(back_btn, back_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *back_lbl = lv_label_create(back_btn);
@@ -994,7 +1001,7 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_align(s_toc_btn, LV_ALIGN_LEFT_MID, 200, 0);
     lv_obj_set_style_bg_color(s_toc_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
     lv_obj_set_style_pad_hor(s_toc_btn, 18, 0);
-    lv_obj_set_height(s_toc_btn, 64);
+    lv_obj_set_height(s_toc_btn, 46);
     lv_obj_set_ext_click_area(s_toc_btn, 40);
     lv_obj_add_event_cb(s_toc_btn, contents_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *toc_btn_lbl = lv_label_create(s_toc_btn);
@@ -1014,7 +1021,7 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_align(s_save_btn, LV_ALIGN_RIGHT_MID, -16, 0);
     lv_obj_set_style_bg_color(s_save_btn, lv_color_hex(UI_COLOR_SUCCESS), 0);
     lv_obj_set_style_pad_hor(s_save_btn, 18, 0);
-    lv_obj_set_height(s_save_btn, 64);
+    lv_obj_set_height(s_save_btn, 46);
     lv_obj_set_ext_click_area(s_save_btn, 40);
     lv_obj_add_event_cb(s_save_btn, save_btn_cb, LV_EVENT_CLICKED, NULL);
     s_save_lbl = lv_label_create(s_save_btn);
