@@ -47,6 +47,13 @@ static const char *TAG = "reader_view";
 typedef struct { char title[48]; char path[96]; int level; } toc_entry_t;
 static toc_entry_t s_toc[TOC_MAX];
 static int  s_toc_n = 0;
+
+// Drag-to-pick state for the Contents list: the finger drags a highlight bar
+// over the page cells and releasing navigates to the highlighted one.
+static lv_obj_t *s_toc_cells[TOC_MAX];   // the clickable page cells (in draw order)
+static int       s_toc_cell_idx[TOC_MAX];// s_toc[] index for each cell
+static int       s_toc_cell_n = 0;
+static int       s_toc_hi = -1;          // currently highlighted cell (index into s_toc_cells)
 static char s_current_path[96] = "index.md";     // page currently shown
 static char s_page_title[64]   = "Documentation"; // title shown when TOC is closed
 
@@ -810,14 +817,6 @@ static void parse_toc_file(void)
 
 static void navigate_to(const char *rel, const char *title_hint);
 
-// A contents row was tapped: user_data holds the s_toc index.
-static void toc_row_cb(lv_event_t *e)
-{
-    int i = (int)(intptr_t)lv_obj_get_user_data((lv_obj_t *)lv_event_get_target(e));
-    if (i < 0 || i >= s_toc_n) return;
-    navigate_to(s_toc[i].path, s_toc[i].title);
-}
-
 // One TOC entry into column `col`. Style driven purely by nav depth (level):
 //   level 0  -> gold 32 px  (section headers AND top pages read identically)
 //   level >0 -> white 24 px (nested pages)
@@ -829,7 +828,9 @@ static void make_toc_entry(lv_obj_t *col, int i)
     const lv_font_t *font = top ? &lv_font_montserrat_32 : &lv_font_montserrat_24;
     uint32_t color = top ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT;
 
-    if (e->path[0] == '\0') {          // section header — not tappable
+    int indent = (e->level > 0) ? e->level * 24 : 0;   // nested pages indent under their section
+
+    if (e->path[0] == '\0') {          // section header
         lv_obj_t *l = lv_label_create(col);
         lv_obj_set_width(l, LV_PCT(100));
         lv_obj_set_style_text_font(l, font, 0);
@@ -839,18 +840,20 @@ static void make_toc_entry(lv_obj_t *col, int i)
         lv_label_set_text(l, e->title);
         return;
     }
+    // Page cell. Inert (not individually clickable) — the panel drives a
+    // drag-to-pick highlight and navigates on release. Registered in s_toc_cells.
     lv_obj_t *cell = lv_obj_create(col);
     lv_obj_remove_style_all(cell);
     lv_obj_set_width(cell, LV_PCT(100));
     lv_obj_set_height(cell, LV_SIZE_CONTENT);
-    lv_obj_set_style_pad_hor(cell, 10, 0);
-    lv_obj_set_style_pad_ver(cell, 6, 0);
-    lv_obj_set_style_bg_color(cell, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
-    lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_style_pad_left(cell, 10 + indent, 0);
+    lv_obj_set_style_pad_right(cell, 10, 0);
+    lv_obj_set_style_pad_ver(cell, 7, 0);
     lv_obj_set_style_radius(cell, 8, 0);
-    lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_user_data(cell, (void *)(intptr_t)i);
-    lv_obj_add_event_cb(cell, toc_row_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_style_bg_color(cell, lv_color_hex(0x33404d), 0);   // colour used when highlighted
+    lv_obj_set_style_bg_opa(cell, LV_OPA_TRANSP, 0);              // invisible until highlighted
+    lv_obj_clear_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+    if (s_toc_cell_n < TOC_MAX) { s_toc_cells[s_toc_cell_n] = cell; s_toc_cell_idx[s_toc_cell_n] = i; s_toc_cell_n++; }
     lv_obj_t *l = lv_label_create(cell);
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(l, LV_PCT(100));
@@ -868,6 +871,7 @@ static lv_obj_t *make_toc_column(int w)
     lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(c, 4, 0);
     lv_obj_set_scrollbar_mode(c, LV_SCROLLBAR_MODE_OFF);
+    lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICKABLE);   // let the panel receive the drag
     return c;
 }
 
@@ -879,6 +883,8 @@ static void rebuild_toc_panel(void)
 {
     if (!s_toc_panel) return;
     lv_obj_clean(s_toc_panel);
+    s_toc_cell_n = 0;
+    s_toc_hi = -1;
     if (s_toc_n == 0) {
         lv_obj_t *l = lv_label_create(s_toc_panel);
         lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
@@ -886,20 +892,63 @@ static void rebuild_toc_panel(void)
         lv_label_set_text(l, "Contents unavailable (connect to WiFi to download).");
         return;
     }
-    const int COL_W = (SCR_W - 2 * 40 - 40) / 2;   // two columns + centre gap in the padded panel
+    const int COL_W    = (SCR_W - 2 * 40 - 40) / 2;              // two columns + centre gap
+    const int USABLE_H = SCR_H - HEADER_H - 2 * 28 - 8;          // panel height without scrolling
 
-    // Estimate heights and pick the section boundary nearest half.
-    int total = 0;
-    for (int i = 0; i < s_toc_n; i++) total += (s_toc[i].level == 0) ? 52 : 40;
-    int acc = 0, split = s_toc_n;
-    for (int i = 0; i < s_toc_n; i++) {
-        if (i > 0 && s_toc[i].level == 0 && acc >= total / 2) { split = i; break; }
-        acc += (s_toc[i].level == 0) ? 52 : 40;
+    // Fill column 1 with WHOLE sections (a level-0 entry + its nested pages)
+    // until the next section wouldn't fit; that section starts column 2. Keeps
+    // sections intact and avoids vertical scrolling.
+    int col1_h = 0, split = s_toc_n, i = 0;
+    while (i < s_toc_n) {
+        int bstart = i, bh = 0;
+        do { bh += (s_toc[i].level == 0) ? 52 : 40; i++; } while (i < s_toc_n && s_toc[i].level != 0);
+        if (col1_h > 0 && col1_h + bh > USABLE_H) { split = bstart; break; }
+        col1_h += bh;
     }
 
     lv_obj_t *col1 = make_toc_column(COL_W);
     lv_obj_t *col2 = make_toc_column(COL_W);
-    for (int i = 0; i < s_toc_n; i++) make_toc_entry(i < split ? col1 : col2, i);
+    for (int j = 0; j < s_toc_n; j++) make_toc_entry(j < split ? col1 : col2, j);
+}
+
+// Highlight cell k (index into s_toc_cells), clearing the previous highlight.
+// k = -1 clears.
+static void toc_cell_highlight(int k)
+{
+    if (k == s_toc_hi) return;
+    if (s_toc_hi >= 0 && s_toc_hi < s_toc_cell_n)
+        lv_obj_set_style_bg_opa(s_toc_cells[s_toc_hi], LV_OPA_TRANSP, 0);
+    s_toc_hi = k;
+    if (k >= 0 && k < s_toc_cell_n)
+        lv_obj_set_style_bg_opa(s_toc_cells[k], LV_OPA_COVER, 0);
+}
+
+// Drag-to-pick: while pressed, highlight whichever page cell is under the
+// finger; on release, navigate to the highlighted one. Attached to the panel
+// (cells/columns are inert) so a finger can slide between entries.
+static void toc_drag_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_PRESSED || code == LV_EVENT_PRESSING) {
+        lv_indev_t *indev = lv_event_get_indev(e);
+        if (!indev) return;
+        lv_point_t p; lv_indev_get_point(indev, &p);
+        int hit = -1;
+        for (int k = 0; k < s_toc_cell_n; k++) {
+            lv_area_t a; lv_obj_get_coords(s_toc_cells[k], &a);
+            if (p.x >= a.x1 && p.x <= a.x2 && p.y >= a.y1 && p.y <= a.y2) { hit = k; break; }
+        }
+        toc_cell_highlight(hit);
+    } else if (code == LV_EVENT_RELEASED) {
+        int k = s_toc_hi;
+        toc_cell_highlight(-1);
+        if (k >= 0 && k < s_toc_cell_n) {
+            int ti = s_toc_cell_idx[k];
+            navigate_to(s_toc[ti].path, s_toc[ti].title);
+        }
+    } else if (code == LV_EVENT_PRESS_LOST) {
+        toc_cell_highlight(-1);
+    }
 }
 
 static void toc_panel_set_open(bool open)
@@ -1176,7 +1225,12 @@ void reader_view_init(lv_obj_t *parent)
     // section is never torn across columns, and reading order is preserved.
     lv_obj_set_flex_flow(s_toc_panel, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_column(s_toc_panel, 40, 0);   // gap between the two columns
-    lv_obj_set_scroll_dir(s_toc_panel, LV_DIR_VER);
+    lv_obj_clear_flag(s_toc_panel, LV_OBJ_FLAG_SCROLLABLE);   // fits without scrolling; drag = pick, not scroll
+    lv_obj_add_flag(s_toc_panel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_toc_panel, toc_drag_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(s_toc_panel, toc_drag_cb, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(s_toc_panel, toc_drag_cb, LV_EVENT_RELEASED, NULL);
+    lv_obj_add_event_cb(s_toc_panel, toc_drag_cb, LV_EVENT_PRESS_LOST, NULL);
     lv_obj_set_scrollbar_mode(s_toc_panel, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_add_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN);
 
