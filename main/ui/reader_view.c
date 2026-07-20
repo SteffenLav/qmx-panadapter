@@ -830,31 +830,36 @@ static void rebuild_toc_panel(void)
         lv_label_set_text(l, "Contents unavailable (connect to WiFi to download).");
         return;
     }
-    // Layout: TOP-LEVEL entries (level 0) span the full width and are gold —
-    // both the section headers (User Guide/Reference/...) AND the standalone
-    // top pages (Home/Quick Start/Releases), so they read at the same level.
-    // NESTED pages (level > 0) pack two-across in white. Tight spacing so the
-    // whole tree fits without scrolling.
+    // Everything is one column-width; the newspaper COLUMN_WRAP flow splits the
+    // list into two columns by height. Style is driven purely by the nav depth
+    // (toc.json `level`), so it follows whatever the source document defines:
+    //   level 0  -> top level: gold, 32 px  (section headers AND standalone top
+    //               pages like Home/Quick Start/Releases read identically)
+    //   level >0 -> nested: white, 24 px
+    const int COL_W = (SCR_W - 2 * 40 - 28) / 2;   // two columns within the padded panel
     for (int i = 0; i < s_toc_n; i++) {
         toc_entry_t *e = &s_toc[i];
         bool top = (e->level == 0);
+        const lv_font_t *font = top ? &lv_font_montserrat_32 : &lv_font_montserrat_24;
+        uint32_t color = top ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT;
+
         if (e->path[0] == '\0') {
-            // section header — full-width, not tappable
+            // section header — not tappable
             lv_obj_t *l = lv_label_create(s_toc_panel);
-            lv_obj_set_width(l, LV_PCT(100));
-            lv_obj_set_style_text_font(l, &lv_font_montserrat_32, 0);
-            lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
-            lv_obj_set_style_pad_top(l, 8, 0);
+            lv_obj_set_width(l, COL_W);
+            lv_obj_set_style_text_font(l, font, 0);
+            lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
+            lv_obj_set_style_pad_top(l, 10, 0);
             lv_label_set_text(l, e->title);
             continue;
         }
         lv_obj_t *cell = lv_obj_create(s_toc_panel);
         lv_obj_remove_style_all(cell);
-        lv_obj_set_width(cell, top ? LV_PCT(100) : LV_PCT(48));   // top pages full-width like headers
+        lv_obj_set_width(cell, COL_W);
         lv_obj_set_height(cell, LV_SIZE_CONTENT);
-        lv_obj_set_style_pad_all(cell, 9, 0);
+        lv_obj_set_style_pad_hor(cell, 10, 0);
+        lv_obj_set_style_pad_ver(cell, 6, 0);
         lv_obj_set_style_bg_color(cell, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
-        lv_obj_set_style_bg_opa(cell, LV_OPA_30, 0);
         lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, LV_STATE_PRESSED);
         lv_obj_set_style_radius(cell, 8, 0);
         lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
@@ -863,8 +868,8 @@ static void rebuild_toc_panel(void)
         lv_obj_t *l = lv_label_create(cell);
         lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
         lv_obj_set_width(l, LV_PCT(100));
-        lv_obj_set_style_text_font(l, top ? &lv_font_montserrat_28 : &lv_font_montserrat_24, 0);
-        lv_obj_set_style_text_color(l, lv_color_hex(top ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT), 0);
+        lv_obj_set_style_text_font(l, font, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
         lv_label_set_text(l, e->title[0] ? e->title : e->path);
     }
 }
@@ -1099,11 +1104,13 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_set_style_bg_color(s_toc_panel, lv_color_hex(0x0a0d10), 0);
     lv_obj_set_style_bg_opa(s_toc_panel, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_hor(s_toc_panel, 40, 0);
-    lv_obj_set_style_pad_ver(s_toc_panel, 16, 0);
-    lv_obj_set_flex_flow(s_toc_panel, LV_FLEX_FLOW_ROW_WRAP);   // 2-column grid
-    lv_obj_set_style_pad_column(s_toc_panel, 20, 0);
-    lv_obj_set_style_pad_row(s_toc_panel, 6, 0);               // tight so it fits without scrolling
-    lv_obj_set_scroll_dir(s_toc_panel, LV_DIR_VER);
+    lv_obj_set_style_pad_ver(s_toc_panel, 12, 0);
+    // Newspaper flow: items run DOWN the first column, then wrap to the second
+    // when they reach the bottom (COLUMN_WRAP), not left-to-right like a grid.
+    lv_obj_set_flex_flow(s_toc_panel, LV_FLEX_FLOW_COLUMN_WRAP);
+    lv_obj_set_style_pad_column(s_toc_panel, 28, 0);   // gap between the two columns
+    lv_obj_set_style_pad_row(s_toc_panel, 4, 0);       // gap between items in a column
+    lv_obj_set_scroll_dir(s_toc_panel, LV_DIR_HOR);    // extra columns scroll sideways if ever needed
     lv_obj_set_scrollbar_mode(s_toc_panel, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_add_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN);
 
