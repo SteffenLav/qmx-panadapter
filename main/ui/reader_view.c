@@ -74,6 +74,60 @@ static void unlock(void) { if (s_lock) xSemaphoreGive(s_lock); }
 
 // ============================ markdown rendering ============================
 
+// If `s` points at a UTF-8 sequence we fold to ASCII, return the number of input
+// bytes consumed and set *rep to the replacement; else return 0. Covers the
+// General Punctuation block (dashes/quotes/ellipsis/nbsp) and the Box Drawing
+// block (─│┌┐└┘├… -> -|+) — the montserrat fonts have glyphs for none of these,
+// so unfolded they render as tofu boxes (the ASCII-art layout diagrams in the
+// docs were the worst offender).
+static int fold_seq(const char *s, const char **rep)
+{
+    unsigned char c0 = (unsigned char)s[0];
+    unsigned char c1 = c0 ? (unsigned char)s[1] : 0;
+    unsigned char c2 = c1 ? (unsigned char)s[2] : 0;
+    if (c0 == 0xC2 && c1 == 0xA0) { *rep = " "; return 2; }        // nbsp
+    if (c0 == 0xE2 && c1 == 0x80) {                                // General Punctuation
+        switch (c2) {
+            case 0x90: case 0x91: case 0x92: case 0x93: case 0x94: *rep = "-";   return 3; // hyphen/dashes
+            case 0xa6:                                             *rep = "...";  return 3; // ellipsis
+            case 0x98: case 0x99: case 0x9b:                       *rep = "'";   return 3; // single quotes
+            case 0x9c: case 0x9d: case 0x9e:                       *rep = "\"";  return 3; // double quotes
+            default:                                               *rep = "";     return 3; // drop other punct
+        }
+    }
+    if (c0 == 0xE2 && (c1 == 0x94 || c1 == 0x95)) {               // Box Drawing
+        if      (c1 == 0x94 && (c2 == 0x80 || c2 == 0x81)) *rep = "-";
+        else if (c1 == 0x94 && (c2 == 0x82 || c2 == 0x83)) *rep = "|";
+        else                                               *rep = "+";
+        return 3;
+    }
+    return 0;
+}
+
+// Fold UTF-8 punctuation/box-drawing to ASCII in place (output is always <= input
+// length for every mapping, so read/write cursors never cross). Used for code
+// and table blocks, which bypass md_inline_clean.
+static void fold_utf8_inplace(char *s)
+{
+    size_t r = 0, w = 0;
+    while (s[r]) {
+        const char *rep;
+        int adv = fold_seq(&s[r], &rep);
+        if (adv) { while (*rep) s[w++] = *rep++; r += (size_t)adv; }
+        else     { s[w++] = s[r++]; }
+    }
+    s[w] = '\0';
+}
+
+// Trim leading/trailing spaces/tabs in place; returns the trimmed start.
+static char *trim(char *s)
+{
+    while (*s == ' ' || *s == '\t') s++;
+    char *e = s + strlen(s);
+    while (e > s && (e[-1] == ' ' || e[-1] == '\t')) *--e = '\0';
+    return s;
+}
+
 // Strip inline emphasis markers and reduce links to their visible text, so the
 // text drops cleanly into a plain LVGL label. (LVGL labels are single-font; we
 // don't attempt bold/italic runs in v1 — see the plan.)
@@ -85,25 +139,14 @@ static void md_inline_clean(const char *src, char *dst, size_t dstsz)
     size_t o = 0;
     for (size_t i = 0; src[i] && o + 1 < dstsz; ) {
         char c = src[i];
-        // Fold common UTF-8 punctuation to ASCII — the montserrat fonts have no
-        // glyphs for em/en dashes, smart quotes, ellipsis, etc., so they'd show
-        // as tofu boxes. The site's real prose uses these heavily.
-        unsigned char uc = (unsigned char)c;
-        if (uc == 0xE2 && (unsigned char)src[i+1] == 0x80) {   // General Punctuation
-            unsigned char c3 = (unsigned char)src[i+2];
-            const char *rep;
-            switch (c3) {
-                case 0x93: case 0x94: case 0x90: case 0x91: case 0x92: rep = "-";   break; // dashes
-                case 0xa6:                                             rep = "...";  break; // ellipsis
-                case 0x98: case 0x99: case 0x9b:                       rep = "'";   break; // single quotes
-                case 0x9c: case 0x9d: case 0x9e:                       rep = "\"";  break; // double quotes
-                default:                                               rep = "";     break; // drop others
-            }
+        // Fold UTF-8 punctuation/box-drawing to ASCII (no font glyphs otherwise).
+        const char *rep;
+        int adv = fold_seq(&src[i], &rep);
+        if (adv) {
             for (const char *r = rep; *r && o + 1 < dstsz; r++) dst[o++] = *r;
-            i += 3;
+            i += (size_t)adv;
             continue;
         }
-        if (uc == 0xC2 && (unsigned char)src[i+1] == 0xA0) { dst[o++] = ' '; i += 2; continue; } // nbsp
         // image ![alt](url)
         if (c == '!' && src[i+1] == '[') {
             const char *close = strchr(src + i + 2, ']');
@@ -179,9 +222,78 @@ static void add_code_block(const char *text)
     lv_obj_t *l = lv_label_create(box);
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(l, LV_PCT(100));
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_label_set_text(l, text && text[0] ? text : " ");
+}
+
+// Render a markdown table (accumulated rows, newline-separated, mutated in
+// place) as one bordered block: header row + data rows, cells separated, the
+// header and each row's first cell in gold (via LVGL label recolor). Far nicer
+// than the old one-bordered-box-per-row degrade. LVGL thread only.
+static void add_table_block(char *rows)
+{
+    if (!s_body) return;
+    fold_utf8_inplace(rows);
+
+    lv_obj_t *box = lv_obj_create(s_body);
+    lv_obj_set_width(box, LV_PCT(100));
+    lv_obj_set_height(box, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(box, lv_color_hex(UI_COLOR_SURFACE), 0);
+    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(box, 1, 0);
+    lv_obj_set_style_border_color(box, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_radius(box, 6, 0);
+    lv_obj_set_style_pad_all(box, 12, 0);
+    lv_obj_set_style_pad_row(box, 8, 0);
+    lv_obj_set_style_margin_top(box, 8, 0);
+    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scrollbar_mode(box, LV_SCROLLBAR_MODE_OFF);
+
+    char *out = heap_caps_malloc(1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!out) return;
+
+    int rownum = 0;
+    char *p = rows;
+    while (*p) {
+        char *line = p;
+        char *eol = strchr(p, '\n');
+        if (eol) { *eol = '\0'; p = eol + 1; } else { p = line + strlen(line); }
+        char *tt = trim(line);
+        if (!*tt) continue;
+        if (strspn(tt, "|-: ") == strlen(tt)) continue;   // header/body separator row
+
+        // split into cells on '|' (drop the outer pipes)
+        char *cells[10]; int nc = 0;
+        char *s = tt; if (*s == '|') s++;
+        char *tok = s;
+        while (nc < 10) {
+            char *bar = strchr(tok, '|');
+            if (bar) *bar = '\0';
+            cells[nc++] = trim(tok);
+            if (!bar) break;
+            tok = bar + 1;
+        }
+        if (nc > 0 && cells[nc-1][0] == '\0') nc--;   // trailing empty from closing '|'
+        if (nc == 0) continue;
+
+        size_t o = 0; out[0] = '\0';
+        for (int c = 0; c < nc && o < 1000; c++) {
+            const char *sep = (c < nc - 1) ? "     " : "";
+            o += (size_t)snprintf(out + o, 1024 - o, "%s%s", cells[c], sep);
+        }
+
+        // Header row in gold, data rows in white (LVGL 9 dropped per-run label
+        // recolor, so colour is whole-label).
+        lv_obj_t *l = lv_label_create(box);
+        lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(l, LV_PCT(100));
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_22, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(rownum == 0 ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT), 0);
+        lv_label_set_text(l, out);
+        rownum++;
+    }
+    heap_caps_free(out);
 }
 
 // Number of leading spaces (tabs count as 4), used for list indent level.
@@ -220,7 +332,7 @@ static void render_markdown(char *buf)
     md_scratch_t *S = heap_caps_malloc(sizeof(md_scratch_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!S) {
         add_label("Out of memory rendering documentation.",
-                  &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED, 0, 0);
+                  &lv_font_montserrat_24, UI_COLOR_TEXT_MUTED, 0, 0);
         return;
     }
     char *title   = S->title;   title[0] = '\0';
@@ -228,6 +340,7 @@ static void render_markdown(char *buf)
     char *code    = S->code;    size_t code_len = 0;   // accumulated code-block text
     char *cleaned = S->cleaned;                        // reused per block (single-threaded)
     bool in_code = false;
+    bool in_table = false;   // accumulating consecutive '|' rows into `code`
     bool in_frontmatter = false;
     int  block_count = 0;
 
@@ -237,8 +350,8 @@ static void render_markdown(char *buf)
     #define FLUSH_PARA() do {                                              \
         if (para_len) {                                                    \
             md_inline_clean(para, cleaned, MD_CLEANED_SZ);                 \
-            add_label(cleaned, &lv_font_montserrat_20, UI_COLOR_TEXT,      \
-                      block_count ? 10 : 0, 0);                            \
+            add_label(cleaned, &lv_font_montserrat_24, UI_COLOR_TEXT,      \
+                      block_count ? 14 : 0, 0);                            \
             block_count++; para_len = 0; para[0] = '\0';                   \
         } } while (0)
 
@@ -258,9 +371,17 @@ static void render_markdown(char *buf)
 
         const char *t = skip_ws(line);
 
+        // A table run ends the moment a non-'|' line arrives (blank line,
+        // heading, fence, prose, ...). Flush the accumulated rows as one block.
+        if (in_table && !in_code && t[0] != '|') {
+            code[code_len] = '\0';
+            add_table_block(code);
+            code_len = 0; in_table = false; block_count++;
+        }
+
         // fenced code block ``` or ~~~ (pymdownx superfences: language/opts follow)
         if (strncmp(t, "```", 3) == 0 || strncmp(t, "~~~", 3) == 0) {
-            if (in_code) { code[code_len] = '\0'; add_code_block(code); code_len = 0; block_count++; in_code = false; }
+            if (in_code) { code[code_len] = '\0'; fold_utf8_inplace(code); add_code_block(code); code_len = 0; block_count++; in_code = false; }
             else         { FLUSH_PARA(); in_code = true; code_len = 0; }
             continue;
         }
@@ -289,8 +410,8 @@ static void render_markdown(char *buf)
                                      (level == 2) ? &lv_font_montserrat_28 :
                                      (level == 3) ? &lv_font_montserrat_24 :
                                                     &lv_font_montserrat_22;
-                uint32_t col = (level <= 2) ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT;
-                add_label(cleaned, f, col, block_count ? 18 : 0, 0);
+                uint32_t col = (level <= 3) ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT;
+                add_label(cleaned, f, col, block_count ? 22 : 4, 0);
                 block_count++;
                 if (!title[0] && level == 1) { snprintf(title, MD_TITLE_SZ, "%s", cleaned); }
                 continue;
@@ -337,7 +458,7 @@ static void render_markdown(char *buf)
             FLUSH_PARA();
             const char *q = skip_ws(t + 1);
             md_inline_clean(q, cleaned, MD_CLEANED_SZ);
-            lv_obj_t *l = add_label(cleaned, &lv_font_montserrat_20, UI_COLOR_TEXT_SECONDARY, 8, 16);
+            lv_obj_t *l = add_label(cleaned, &lv_font_montserrat_22, UI_COLOR_TEXT_SECONDARY, 8, 16);
             if (l) {
                 lv_obj_set_style_border_side(l, LV_BORDER_SIDE_LEFT, 0);
                 lv_obj_set_style_border_width(l, 3, 0);
@@ -362,28 +483,27 @@ static void render_markdown(char *buf)
                 if (bullet) {
                     md_inline_clean(skip_ws(t + 1), cleaned, MD_CLEANED_SZ);
                     char withb[MD_LINE_SZ]; snprintf(withb, sizeof(withb), "%s  %s", LV_SYMBOL_BULLET, cleaned);
-                    add_label(withb, &lv_font_montserrat_20, UI_COLOR_TEXT, 4, 20 + indent * 8);
+                    add_label(withb, &lv_font_montserrat_24, UI_COLOR_TEXT, 6, 20 + indent * 8);
                 } else {
                     char num[8]; size_t k = 0;
                     for (const char *d = t; (isdigit((unsigned char)*d) || *d=='.'|| *d==')') && k < sizeof(num)-1; d++) num[k++] = *d;
                     num[k] = '\0';
                     md_inline_clean(skip_ws(nptr + 1), cleaned, MD_CLEANED_SZ);
                     char withn[MD_LINE_SZ]; snprintf(withn, sizeof(withn), "%s %s", num, cleaned);
-                    add_label(withn, &lv_font_montserrat_20, UI_COLOR_TEXT, 4, 20 + indent * 8);
+                    add_label(withn, &lv_font_montserrat_24, UI_COLOR_TEXT, 6, 20 + indent * 8);
                 }
                 block_count++;
                 continue;
             }
         }
 
-        // table rows: degrade a run of '|' lines into a preformatted block.
-        // (Skip the |---|--- separator row.)
+        // table rows: accumulate consecutive '|' lines; rendered as one block
+        // by add_table_block() when the run ends (see the flush at loop top).
         if (t[0] == '|') {
-            if (strspn(t, "|-: ") == strlen(t)) continue;  // separator row
-            // simplest degrade: render each row as a monospace/preformatted line
-            md_inline_clean(t, cleaned, MD_CLEANED_SZ);
-            add_code_block(cleaned);
-            block_count++;
+            if (!in_table) { FLUSH_PARA(); in_table = true; code_len = 0; }
+            size_t need = strlen(t) + 1;
+            if (code_len + need < MD_CODE_SZ)
+                code_len += (size_t)snprintf(code + code_len, MD_CODE_SZ - code_len, "%s\n", t);
             continue;
         }
 
@@ -401,7 +521,8 @@ static void render_markdown(char *buf)
     }
 
     FLUSH_PARA();
-    if (in_code && code_len) { code[code_len] = '\0'; add_code_block(code); }
+    if (in_code && code_len)  { code[code_len] = '\0'; fold_utf8_inplace(code); add_code_block(code); }
+    if (in_table && code_len) { code[code_len] = '\0'; add_table_block(code); }
 
     #undef FLUSH_PARA
 
@@ -419,7 +540,7 @@ static void render_from_cache(void)
         lv_obj_clean(s_body);
         add_label("No documentation cached yet.\n\nConnect to WiFi and swipe back "
                   "into this page to download it from tab5.lav.dk.",
-                  &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED, 0, 0);
+                  &lv_font_montserrat_24, UI_COLOR_TEXT_MUTED, 0, 0);
         if (s_title_lbl) lv_label_set_text(s_title_lbl, "Documentation");
         return;
     }
@@ -547,7 +668,7 @@ static void navigate_to(const char *rel, const char *title_hint)
     snprintf(s_current_path, sizeof(s_current_path), "%s", rel);
     toc_panel_set_open(false);
     lv_obj_clean(s_body);
-    add_label("Loading...", &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED, 0, 0);
+    add_label("Loading...", &lv_font_montserrat_24, UI_COLOR_TEXT_MUTED, 0, 0);
     if (s_title_lbl && title_hint) lv_label_set_text(s_title_lbl, title_hint);
     lock(); strncpy(s_status, "Downloading...", sizeof(s_status) - 1); unlock();
     reader_net_fetch(rel, false);
@@ -678,7 +799,7 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_set_scroll_dir(s_body, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_body, LV_SCROLLBAR_MODE_AUTO);
 
-    add_label("Loading documentation...", &lv_font_montserrat_20, UI_COLOR_TEXT_MUTED, 0, 0);
+    add_label("Loading documentation...", &lv_font_montserrat_24, UI_COLOR_TEXT_MUTED, 0, 0);
 
     // Contents panel: opaque scrollable overlay covering the body when open.
     // Built after the body so it sits above it; hidden by default.
