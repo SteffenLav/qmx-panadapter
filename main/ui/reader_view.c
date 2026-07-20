@@ -818,60 +818,88 @@ static void toc_row_cb(lv_event_t *e)
     navigate_to(s_toc[i].path, s_toc[i].title);
 }
 
-// Rebuild the contents panel from s_toc[]. LVGL thread only.
+// One TOC entry into column `col`. Style driven purely by nav depth (level):
+//   level 0  -> gold 32 px  (section headers AND top pages read identically)
+//   level >0 -> white 24 px (nested pages)
+// Header labels get the same left pad as page cells so their text left-aligns.
+static void make_toc_entry(lv_obj_t *col, int i)
+{
+    toc_entry_t *e = &s_toc[i];
+    bool top = (e->level == 0);
+    const lv_font_t *font = top ? &lv_font_montserrat_32 : &lv_font_montserrat_24;
+    uint32_t color = top ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT;
+
+    if (e->path[0] == '\0') {          // section header — not tappable
+        lv_obj_t *l = lv_label_create(col);
+        lv_obj_set_width(l, LV_PCT(100));
+        lv_obj_set_style_text_font(l, font, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
+        lv_obj_set_style_pad_top(l, 10, 0);
+        lv_obj_set_style_pad_left(l, 10, 0);   // align with the page cells' text
+        lv_label_set_text(l, e->title);
+        return;
+    }
+    lv_obj_t *cell = lv_obj_create(col);
+    lv_obj_remove_style_all(cell);
+    lv_obj_set_width(cell, LV_PCT(100));
+    lv_obj_set_height(cell, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_hor(cell, 10, 0);
+    lv_obj_set_style_pad_ver(cell, 6, 0);
+    lv_obj_set_style_bg_color(cell, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
+    lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, LV_STATE_PRESSED);
+    lv_obj_set_style_radius(cell, 8, 0);
+    lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_user_data(cell, (void *)(intptr_t)i);
+    lv_obj_add_event_cb(cell, toc_row_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *l = lv_label_create(cell);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(l, LV_PCT(100));
+    lv_obj_set_style_text_font(l, font, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
+    lv_label_set_text(l, e->title[0] ? e->title : e->path);
+}
+
+static lv_obj_t *make_toc_column(int w)
+{
+    lv_obj_t *c = lv_obj_create(s_toc_panel);
+    lv_obj_remove_style_all(c);
+    lv_obj_set_width(c, w);
+    lv_obj_set_height(c, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(c, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(c, 4, 0);
+    lv_obj_set_scrollbar_mode(c, LV_SCROLLBAR_MODE_OFF);
+    return c;
+}
+
+// Rebuild the contents panel from s_toc[]. Two side-by-side columns; entries are
+// split between them at a SECTION boundary (a level-0 entry) near the halfway
+// point, so a section is never torn across columns and reading order (col 1
+// top->bottom, then col 2) is preserved. LVGL thread only.
 static void rebuild_toc_panel(void)
 {
     if (!s_toc_panel) return;
     lv_obj_clean(s_toc_panel);
     if (s_toc_n == 0) {
         lv_obj_t *l = lv_label_create(s_toc_panel);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
         lv_label_set_text(l, "Contents unavailable (connect to WiFi to download).");
         return;
     }
-    // Everything is one column-width; the newspaper COLUMN_WRAP flow splits the
-    // list into two columns by height. Style is driven purely by the nav depth
-    // (toc.json `level`), so it follows whatever the source document defines:
-    //   level 0  -> top level: gold, 32 px  (section headers AND standalone top
-    //               pages like Home/Quick Start/Releases read identically)
-    //   level >0 -> nested: white, 24 px
-    const int COL_W = (SCR_W - 2 * 40 - 28) / 2;   // two columns within the padded panel
-    for (int i = 0; i < s_toc_n; i++) {
-        toc_entry_t *e = &s_toc[i];
-        bool top = (e->level == 0);
-        const lv_font_t *font = top ? &lv_font_montserrat_32 : &lv_font_montserrat_24;
-        uint32_t color = top ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT;
+    const int COL_W = (SCR_W - 2 * 40 - 40) / 2;   // two columns + centre gap in the padded panel
 
-        if (e->path[0] == '\0') {
-            // section header — not tappable
-            lv_obj_t *l = lv_label_create(s_toc_panel);
-            lv_obj_set_width(l, COL_W);
-            lv_obj_set_style_text_font(l, font, 0);
-            lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
-            lv_obj_set_style_pad_top(l, 10, 0);
-            lv_label_set_text(l, e->title);
-            continue;
-        }
-        lv_obj_t *cell = lv_obj_create(s_toc_panel);
-        lv_obj_remove_style_all(cell);
-        lv_obj_set_width(cell, COL_W);
-        lv_obj_set_height(cell, LV_SIZE_CONTENT);
-        lv_obj_set_style_pad_hor(cell, 10, 0);
-        lv_obj_set_style_pad_ver(cell, 6, 0);
-        lv_obj_set_style_bg_color(cell, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
-        lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, LV_STATE_PRESSED);
-        lv_obj_set_style_radius(cell, 8, 0);
-        lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_user_data(cell, (void *)(intptr_t)i);
-        lv_obj_add_event_cb(cell, toc_row_cb, LV_EVENT_CLICKED, NULL);
-        lv_obj_t *l = lv_label_create(cell);
-        lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-        lv_obj_set_width(l, LV_PCT(100));
-        lv_obj_set_style_text_font(l, font, 0);
-        lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
-        lv_label_set_text(l, e->title[0] ? e->title : e->path);
+    // Estimate heights and pick the section boundary nearest half.
+    int total = 0;
+    for (int i = 0; i < s_toc_n; i++) total += (s_toc[i].level == 0) ? 52 : 40;
+    int acc = 0, split = s_toc_n;
+    for (int i = 0; i < s_toc_n; i++) {
+        if (i > 0 && s_toc[i].level == 0 && acc >= total / 2) { split = i; break; }
+        acc += (s_toc[i].level == 0) ? 52 : 40;
     }
+
+    lv_obj_t *col1 = make_toc_column(COL_W);
+    lv_obj_t *col2 = make_toc_column(COL_W);
+    for (int i = 0; i < s_toc_n; i++) make_toc_entry(i < split ? col1 : col2, i);
 }
 
 static void toc_panel_set_open(bool open)
@@ -888,10 +916,17 @@ static void toc_panel_set_open(bool open)
     }
 }
 
-// Load and display a specific page. LVGL thread only.
-static void navigate_to(const char *rel, const char *title_hint)
+// Simple page-visit history so "Back" returns to the previous page.
+static char s_hist[16][96];
+static int  s_hist_n = 0;
+
+// Load and display a page. `push` records the page we're leaving onto the
+// history stack (Back replays it with push=false). LVGL thread only.
+static void load_page(const char *rel, const char *title_hint, bool push)
 {
     if (!rel || !rel[0]) return;
+    if (push && s_current_path[0] && strcmp(s_current_path, rel) != 0 && s_hist_n < 16)
+        snprintf(s_hist[s_hist_n++], sizeof(s_hist[0]), "%s", s_current_path);
     snprintf(s_current_path, sizeof(s_current_path), "%s", rel);
     toc_panel_set_open(false);
     lv_obj_clean(s_body);
@@ -899,6 +934,11 @@ static void navigate_to(const char *rel, const char *title_hint)
     if (title_hint) set_page_title(title_hint);
     lock(); strncpy(s_status, "Downloading...", sizeof(s_status) - 1); unlock();
     reader_net_fetch(rel, false);
+}
+
+static void navigate_to(const char *rel, const char *title_hint)
+{
+    load_page(rel, title_hint, true);
 }
 
 static void contents_btn_cb(lv_event_t *e)
@@ -916,8 +956,8 @@ static void save_btn_cb(lv_event_t *e)
     reader_net_save_offline();
 }
 
-// Back button: if the contents panel is open, close it first; otherwise close
-// the whole Reader (returns to whatever mode was showing underneath).
+// Back: close the contents panel if it's open; else go to the previous page in
+// history. (Leaving the manual is the separate Exit button.)
 static void back_btn_cb(lv_event_t *e)
 {
     (void)e;
@@ -925,6 +965,17 @@ static void back_btn_cb(lv_event_t *e)
         toc_panel_set_open(false);
         return;
     }
+    if (s_hist_n > 0) {
+        char prev[96];
+        snprintf(prev, sizeof(prev), "%s", s_hist[--s_hist_n]);
+        load_page(prev, NULL, false);   // don't re-push
+    }
+}
+
+// Exit: leave the Reader entirely (returns to whatever mode was underneath).
+static void exit_btn_cb(lv_event_t *e)
+{
+    (void)e;
     reader_view_hide();
 }
 
@@ -1011,7 +1062,7 @@ void reader_view_init(lv_obj_t *parent)
     s_title_lbl = lv_label_create(hdr);
     lv_obj_set_style_text_font(s_title_lbl, &lv_font_montserrat_32, 0);
     lv_obj_set_style_text_color(s_title_lbl, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
-    lv_obj_align(s_title_lbl, LV_ALIGN_LEFT_MID, 460, 0);
+    lv_obj_align(s_title_lbl, LV_ALIGN_LEFT_MID, 520, 0);
     lv_label_set_text(s_title_lbl, "Documentation");
 
     s_status_lbl = lv_label_create(hdr);
@@ -1027,7 +1078,8 @@ void reader_view_init(lv_obj_t *parent)
     // the body at the end of init so those extended areas win the touch.
     const int BTN_H = 46, BTN_Y = (HEADER_H - 46) / 2;
 
-    // Back (primary exit). Kept clear of the ~30 px left-edge exit-swipe strip.
+    // Back (previous page in history). Kept clear of the ~30 px left-edge
+    // exit-swipe strip.
     lv_obj_t *back_btn = lv_button_create(s_overlay);
     lv_obj_align(back_btn, LV_ALIGN_TOP_LEFT, 40, BTN_Y);
     lv_obj_set_style_bg_color(back_btn, lv_color_hex(UI_COLOR_SURFACE), 0);
@@ -1039,9 +1091,22 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_font(back_lbl, &lv_font_montserrat_24, 0);
     lv_label_set_text(back_lbl, LV_SYMBOL_LEFT "  Back");
 
-    // Contents (opens the TOC panel).
+    // Exit (leaves the Reader). Same style/padding as Back.
+    lv_obj_t *exit_btn = lv_button_create(s_overlay);
+    lv_obj_align(exit_btn, LV_ALIGN_TOP_LEFT, 190, BTN_Y);
+    lv_obj_set_style_bg_color(exit_btn, lv_color_hex(UI_COLOR_SURFACE), 0);
+    lv_obj_set_style_pad_hor(exit_btn, 20, 0);
+    lv_obj_set_height(exit_btn, BTN_H);
+    lv_obj_set_ext_click_area(exit_btn, 44);
+    lv_obj_add_event_cb(exit_btn, exit_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *exit_lbl = lv_label_create(exit_btn);
+    lv_obj_set_style_text_font(exit_lbl, &lv_font_montserrat_24, 0);
+    lv_label_set_text(exit_lbl, LV_SYMBOL_CLOSE "  Exit");
+
+    // Contents (opens the TOC panel). Same style/padding as Back/Exit, blue bg,
+    // no icon.
     s_toc_btn = lv_button_create(s_overlay);
-    lv_obj_align(s_toc_btn, LV_ALIGN_TOP_LEFT, 205, BTN_Y);
+    lv_obj_align(s_toc_btn, LV_ALIGN_TOP_LEFT, 330, BTN_Y);
     lv_obj_set_style_bg_color(s_toc_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
     lv_obj_set_style_pad_hor(s_toc_btn, 20, 0);
     lv_obj_set_height(s_toc_btn, BTN_H);
@@ -1049,7 +1114,7 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_add_event_cb(s_toc_btn, contents_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *toc_btn_lbl = lv_label_create(s_toc_btn);
     lv_obj_set_style_text_font(toc_btn_lbl, &lv_font_montserrat_24, 0);
-    lv_label_set_text(toc_btn_lbl, LV_SYMBOL_LIST "  Contents");
+    lv_label_set_text(toc_btn_lbl, "Contents");
 
     // Save offline (right end, SD only). Label flips to "Saved offline - update?"
     s_save_btn = lv_button_create(s_overlay);
@@ -1104,13 +1169,14 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_set_style_bg_color(s_toc_panel, lv_color_hex(0x0a0d10), 0);
     lv_obj_set_style_bg_opa(s_toc_panel, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_hor(s_toc_panel, 40, 0);
-    lv_obj_set_style_pad_ver(s_toc_panel, 12, 0);
-    // Newspaper flow: items run DOWN the first column, then wrap to the second
-    // when they reach the bottom (COLUMN_WRAP), not left-to-right like a grid.
-    lv_obj_set_flex_flow(s_toc_panel, LV_FLEX_FLOW_COLUMN_WRAP);
-    lv_obj_set_style_pad_column(s_toc_panel, 28, 0);   // gap between the two columns
-    lv_obj_set_style_pad_row(s_toc_panel, 4, 0);       // gap between items in a column
-    lv_obj_set_scroll_dir(s_toc_panel, LV_DIR_HOR);    // extra columns scroll sideways if ever needed
+    lv_obj_set_style_pad_top(s_toc_panel, 28, 0);      // air below the top bar
+    lv_obj_set_style_pad_bottom(s_toc_panel, 28, 0);   // air at the bottom
+    // Two side-by-side columns (a flex ROW of two flex-COLUMN containers). The
+    // entries are split between them at a SECTION boundary (see rebuild) so a
+    // section is never torn across columns, and reading order is preserved.
+    lv_obj_set_flex_flow(s_toc_panel, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(s_toc_panel, 40, 0);   // gap between the two columns
+    lv_obj_set_scroll_dir(s_toc_panel, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_toc_panel, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_add_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN);
 
@@ -1119,6 +1185,7 @@ void reader_view_init(lv_obj_t *parent)
     // instead of the body swallowing it.
     lv_obj_move_foreground(hdr);
     lv_obj_move_foreground(back_btn);
+    lv_obj_move_foreground(exit_btn);
     lv_obj_move_foreground(s_toc_btn);
     lv_obj_move_foreground(s_save_btn);
     if (s_banner) lv_obj_move_foreground(s_banner);
@@ -1153,6 +1220,7 @@ void reader_view_show(void)
     slide(-SCR_W, 0);
 
     toc_panel_set_open(false);
+    s_hist_n = 0;   // fresh navigation history each time the manual is opened
     // Render whatever is cached immediately (page + TOC), then kick a refresh of
     // the current page and the contents list.
     lock();
