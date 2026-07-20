@@ -16,5 +16,11 @@ void reader_net_load_index(void);
 
 // Fetch a specific docs page (relative path from toc.json, e.g.
 // "guide/panadapter.md"). `with_toc` also (re)fetches toc.json. Result written
-// to the SPIFFS cache, then reader_view is notified. No-op if busy.
+// to the SPIFFS cache, then reader_view is notified. When offline, falls back to
+// the SD manual mirror (if a card holds a saved copy). No-op if busy.
 void reader_net_fetch(const char *page_rel, bool with_toc);
+
+// Download the ENTIRE manual (toc + every page) to the microSD card for offline
+// use, on a background task. Progress is reported via reader_view's status line.
+// No-op if busy, WiFi is down, or no card is mounted. Safe from the LVGL thread.
+void reader_net_save_offline(void);

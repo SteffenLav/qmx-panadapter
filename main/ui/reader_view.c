@@ -11,6 +11,7 @@
 #include "reader_view.h"
 #include "reader_net.h"
 #include "ui_theme.h"
+#include "storage/sd_archive.h"
 
 #include "lvgl.h"
 #include "esp_log.h"
@@ -56,6 +57,7 @@ static lv_obj_t *s_banner       = NULL;   // update-available bar (hidden unless
 static lv_obj_t *s_banner_lbl   = NULL;
 static lv_obj_t *s_body         = NULL;   // scrollable flex column of content
 static lv_obj_t *s_toc_btn      = NULL;   // header "Contents" button
+static lv_obj_t *s_save_btn     = NULL;   // header "Save offline" button (SD only)
 static lv_obj_t *s_toc_panel    = NULL;   // scrollable contents overlay (hidden unless open)
 static lv_timer_t *s_timer      = NULL;
 
@@ -700,6 +702,13 @@ static void contents_btn_cb(lv_event_t *e)
     toc_panel_set_open(hidden);
 }
 
+// "Save offline" — download the whole manual to the SD card.
+static void save_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    reader_net_save_offline();
+}
+
 // Back button: if the contents panel is open, close it first; otherwise close
 // the whole Reader (returns to whatever mode was showing underneath).
 static void back_btn_cb(lv_event_t *e)
@@ -730,6 +739,12 @@ static void tick_cb(lv_timer_t *t)
 
     if (do_toc)    { parse_toc_file(); rebuild_toc_panel(); }
     if (do_reload) render_from_cache();
+
+    // "Save offline" is only meaningful with a card in the slot.
+    if (s_save_btn) {
+        if (sd_archive_is_mounted()) lv_obj_clear_flag(s_save_btn, LV_OBJ_FLAG_HIDDEN);
+        else                         lv_obj_add_flag(s_save_btn, LV_OBJ_FLAG_HIDDEN);
+    }
 
     if (s_status_lbl) {
         if (do_reload && from_cache && !status[0]) strncpy(status, "Offline - showing cached copy", sizeof(status)-1);
@@ -801,10 +816,23 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_font(toc_btn_lbl, &lv_font_montserrat_20, 0);
     lv_label_set_text(toc_btn_lbl, LV_SYMBOL_LIST "  Contents");
 
+    // "Save offline" button — mirrors the whole manual to SD. Shown only while a
+    // card is mounted (toggled in tick_cb).
+    s_save_btn = lv_button_create(hdr);
+    lv_obj_align(s_save_btn, LV_ALIGN_LEFT_MID, 340, 0);
+    lv_obj_set_style_bg_color(s_save_btn, lv_color_hex(UI_COLOR_SUCCESS), 0);
+    lv_obj_set_style_pad_hor(s_save_btn, 14, 0);
+    lv_obj_set_style_pad_ver(s_save_btn, 8, 0);
+    lv_obj_add_event_cb(s_save_btn, save_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *save_lbl = lv_label_create(s_save_btn);
+    lv_obj_set_style_text_font(save_lbl, &lv_font_montserrat_20, 0);
+    lv_label_set_text(save_lbl, LV_SYMBOL_SD_CARD "  Save offline");
+    lv_obj_add_flag(s_save_btn, LV_OBJ_FLAG_HIDDEN);
+
     s_title_lbl = lv_label_create(hdr);
     lv_obj_set_style_text_font(s_title_lbl, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(s_title_lbl, lv_color_hex(UI_COLOR_TEXT), 0);
-    lv_obj_align(s_title_lbl, LV_ALIGN_LEFT_MID, 360, 0);
+    lv_obj_align(s_title_lbl, LV_ALIGN_LEFT_MID, 560, 0);
     lv_label_set_text(s_title_lbl, "Documentation");
 
     s_status_lbl = lv_label_create(hdr);
