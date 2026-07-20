@@ -4,17 +4,17 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.1.0** — 2026-07-19
+**v1.2.0** — 2026-07-20
 
-A years-old FT8 decode mystery finally solved, plus the microSD card promoted to a full station backup.
+A built-in User Manual, right on the Tab5.
 
-- **FT8 now decodes at full rate every slot.** The panadapter used to hear 60+ stations in its first couple of slots and then collapse to a fraction for the rest of the session. Root cause: **~200–350 ms of the QMX's audio was being lost at the USB wire every slot** — silently, invisible to every error counter — which clipped the start of every signal. Fixed. It now sustains its full decode rate indefinitely (~16 unique stations/slot where it used to settle at ~6), and weak-signal decoding was deepened on top.
-- **microSD — full grab-and-go station backup.** Insert a card (a plain FAT32 32 GB card is ideal) and the Tab5 mirrors your whole station to it: the ADIF QSO log, all settings + memory channels, your LoTW signing certificate + key, the diagnostic log, and a README describing every file. A genuine PC-free POTA/SOTA backup. *(The card holds credentials in clear text, as any restorable backup must — keep it physically secure.)*
-- **GPS time sync is now automatic.** A GPS-disciplined QMX is detected on its own (no more "QMX has GPS" toggle) and the clock phase-locks to the GPS second (~10 ms). The bottom-bar clock shows `UTC(GPS)` when GPS is in charge. FT8-derived sync is now correctly an offline fallback only.
-- **Band-plan drag from the bottom bar.** Grab the band-plan slider anywhere along the bottom status bar and drag sideways to retune — a much bigger target than the thin strip. A vertical up-swipe there still opens memory channels.
-- **ADIF log viewer no longer crashes on larger logs**, the settings-drawer sliders and button spacing are tidied up, and FT4 is confirmed rock-solid even with the SD card mounted.
+- **On-device User Manual.** Open the Settings drawer and tap **User Manual** to read this whole guide on the Tab5 itself — no phone or laptop. It's a native reader (not a web browser): headings, **bold**, lists, tables, code blocks and a two-column **Contents** page. On the Contents page, just press and slide your finger down the list — a highlight bar follows — and lift to open that page. **Back** steps through the pages you've viewed; **Exit** leaves the manual.
+- **Reads the live docs.** It fetches the same documentation that builds this website, so it always matches what's published here.
+- **Offline copies to microSD.** With a card in the slot, tap **Save offline** and the whole manual is copied to the card — then it reads with no internet at all, ideal for POTA/SOTA. It uses WiFi when you're online and the card when you're not.
+- **Firmware update check.** The reader quietly checks GitHub for a newer release and shows a banner when one is available (it never flashes anything itself — that's always your choice).
+- **FT8 pileup fix.** A station you'd already worked — including one that answers late, a few cycles after a time-out — no longer stays stuck in the pileup list. *(Thanks to Dirk DK7CVD.)*
 
-### Installing v1.1.0
+### Installing v1.2.0
 
 1. Use the one-click flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases)
 2. Or follow [Build from Source](build/build.md)
@@ -24,6 +24,8 @@ Your settings are preserved during a normal flash.
 ---
 
 ## Previous Releases
+
+**v1.1.0** — 2026-07-19 — A years-old FT8 decode mystery solved: the panadapter used to hear 60+ stations in its first slots then collapse to a fraction; the cause was ~200–350 ms of QMX audio lost at the USB wire every slot (invisible to every counter). Fixed — full decode rate every slot now. Plus the microSD card promoted to a full grab-and-go station backup (QSO log + settings + LoTW cert/key), automatic GPS time sync (~10 ms, no toggle), a band-plan drag from the bottom bar, and an ADIF-viewer crash fix.
 
 **v1.0.1** — 2026-07-17 — Point fix: when you answer a CQ, the report you send back is your own measurement of their signal, not an echo of theirs. (Reported by Steve N0SZ, Jonathan KN6LFB.)
 

@@ -12,9 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.1.0.** A complete, self-contained FT8/FT4 station — receive, transmit, auto-QSO, ADIF logging, and upload to **all three major logbooks: QRZ, eQSL, and ARRL LoTW** — with no PC in the loop. The **headline of v1.1.0 is a years-old FT8 mystery finally solved**: the panadapter used to hear 60+ stations in its first slots and then collapse to a fraction — now it decodes at that full rate **every slot** (the root cause was ~200–350 ms of QMX audio being lost at the USB wire each slot, invisible to every counter). Also new: the **microSD card is now a full grab-and-go station backup** (QSO log + settings + LoTW cert/key), **GPS time sync is automatic** (~10 ms phase-lock, no toggle), a **band-plan drag from the bottom bar**, an ADIF-viewer crash fix, and settings-drawer polish. Built on the 1.0 foundation (FT8 double-send fix, `<...>` callsign resolution, broken-QSO resume, Today/POTA log view, display sleep, LoTW upload).
+> **Release — v1.2.0.** A complete, self-contained FT8/FT4 station — receive, transmit, auto-QSO, ADIF logging, and upload to **all three major logbooks: QRZ, eQSL, and ARRL LoTW** — with no PC in the loop. **New in v1.2.0: a built-in User Manual.** Open the Settings drawer and tap **User Manual** to read the full tab5.lav.dk documentation right on the Tab5 — a native markdown reader (headings, bold, tables, code, a two-column drag-to-pick Contents page) that fetches the same source the docs website is built from, caches it, and — with a microSD card in — mirrors the whole manual to the card for fully offline reading (**Save offline**). It also checks GitHub for firmware updates and flags one when available. Also fixed: a completed (or late-answered) station no longer lingers in the FT8 pileup. Built on the v1.1.0 foundation — the years-old FT8 decode-collapse solved (full decode rate **every slot**), microSD grab-and-go station backup, automatic GPS time sync — and the 1.0 station core (FT8 double-send fix, `<...>` callsign resolution, broken-QSO resume, Today/POTA log view, display sleep, LoTW upload).
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.1.0.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.2.0.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -826,10 +826,11 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.0.0 is here** — the complete standalone FT8 station (TX, logging, and upload to QRZ / eQSL / LoTW) has shipped. Next on the bench:
+**v1.2.0 is here** — the complete standalone FT8 station now carries its own on-device **User Manual** (Settings drawer → User Manual), with offline microSD copies and a firmware-update check. Next on the bench:
 
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).
+- **User Manual polish.** Inline images (phase 2 — currently text-only), and a longer soak of the microSD "Save offline" path on the fragile WiFi link.
 
 ### Longer term
 

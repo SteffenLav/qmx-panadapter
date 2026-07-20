@@ -113,12 +113,22 @@ In FT8 view, tap **Filter** to open:
 
 Swipe ← from right edge. The drawer is a single scrolling list of sections (they don't collapse — just scroll). It contains:
 
+- **User Manual** (top button) — opens this documentation on the Tab5 itself (see below)
 - **Text fields** — tap to edit (opens keyboard if needed)
 - **Toggles** — tap to on/off
 - **Buttons** — tap to open modals (Config, Time, etc.)
 - **Close** — swipe ← again or tap outside
 
 All changes are saved automatically.
+
+## User Manual (on-device docs)
+
+The **User Manual** button at the top of the settings drawer opens this whole guide right on the Tab5 — no phone or laptop needed. It downloads the documentation over WiFi and caches it, so it's there next time even offline.
+
+- **Contents** — a two-column list of every page. Press and slide your finger down it: a highlight bar tracks your finger, and lifting opens the highlighted page.
+- **Back** — returns to the previous page you viewed. **Exit** — leaves the manual (back to the panadapter/FT8 screen).
+- **Save offline** (only shown with a microSD card inserted) — copies the entire manual to the card, so it reads with zero internet afterwards (POTA/SOTA). When it's done the button reads "Saved offline".
+- If a newer firmware version is available on GitHub, a banner appears at the top — informational only; flashing is always your choice.
 
 ## Modals (Pop-up Dialogs)
 

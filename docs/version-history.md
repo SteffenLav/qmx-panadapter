@@ -885,6 +885,21 @@ The headline is a years-old mystery finally root-caused and killed, plus the mic
 
 **Other fixes.** QRZ upload no longer displays "undefined QSOs uploaded" (a display-only count bug). Documentation across the manual + README corrected for all of the above (the microSD "disabled" notes, the removed GPS toggle, the new bottom-bar band-plan drag).
 
+## v1.2.0 — 2026-07-20 — On-device User Manual
+
+**Headline: a built-in User Manual.** The full tab5.lav.dk documentation now reads on the Tab5 itself — open the Settings drawer and tap **User Manual**. It's a dedicated markdown reader (not a web browser — there's no HTML engine on this hardware): it fetches the *same* source markdown that builds the docs website over HTTPS, caches it, and renders it natively with headings, **bold** (shown in colour, since the font has no bold face), lists, tables, code blocks and quotes. A **Contents** page lays the whole guide out in two newspaper-style columns (sections kept intact) with **drag-to-pick** — slide your finger down the list and a highlight bar tracks it; lift to open that page. **Back** walks your page history, **Exit** leaves the manual.
+
+- **Reads the live docs** — one source of truth. Whatever you publish to tab5.lav.dk is what the Tab5 shows; the layout follows the site's nav structure automatically.
+- **microSD "Save offline"** — with a card in the slot, one tap mirrors the whole manual to the card so it reads with no internet at all (POTA/SOTA); the button then shows "Saved offline". Reads from WiFi when online, the card when offline.
+- **Automatic update check** — the reader checks GitHub for newer firmware releases (pre-releases included) and shows an "update available" banner; a static `latest.json` on tab5.lav.dk is a fallback. It only informs — flashing stays a deliberate act.
+- **Docs pipeline** — a small mkdocs build hook publishes the raw `.md` tree + a `toc.json` (from the nav) + `latest.json` alongside the built site, carried by the normal FTP; no second copy of the docs to maintain.
+
+**Also in v1.2.0:**
+
+- **FT8 pileup fix (Dirk DK7CVD):** a station stayed in the pileup list after you'd already worked them — including the nice case where they answer late, cycles after a time-out. The completed call is now dropped from the pileup at QSO completion, and a worked-before check stops a trailing 73/RR73 (or a late reply) from putting them back.
+
+Navigation is otherwise unchanged: the left-edge swipe is still the plain Panadapter ↔ FT8 toggle — the manual is a drawer destination, not part of the swipe stack.
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*

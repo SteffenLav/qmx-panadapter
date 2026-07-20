@@ -21,11 +21,11 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 ## Status
 
-**v1.1.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, and FT8 now decodes at full rate on every slot.**
+**v1.2.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, now with a built-in User Manual.**
 
-- **v1.1.0 headline — FT8 decode collapse solved**: the panadapter used to hear 60+ stations in its first slots then collapse to a fraction; the cause was ~200–350 ms of QMX audio lost at the USB wire every slot (invisible to every counter). Fixed — it now sustains its full decode rate indefinitely
-- **microSD is now a full station backup**: insert a card and your QSO log, settings, and LoTW signing certificate are mirrored to it — a PC-free grab-and-go backup for POTA/SOTA
-- **GPS time sync is automatic** (~10 ms phase-lock, no toggle), plus a band-plan drag from the bottom bar, an ADIF-viewer crash fix, and settings-drawer polish
+- **v1.2.0 headline — on-device User Manual**: Settings drawer → **User Manual** reads this whole guide on the Tab5 (a native reader — headings, bold, tables, a two-column drag-to-pick Contents page); with a microSD card it can **Save offline** for no-internet reading, and it flags a firmware update when one is available
+- **v1.1.0 — FT8 decode collapse solved**: the panadapter used to hear 60+ stations in its first slots then collapse to a fraction; the cause was ~200–350 ms of QMX audio lost at the USB wire every slot (invisible to every counter). Fixed — full decode rate every slot now
+- **microSD is a full station backup**: insert a card and your QSO log, settings, and LoTW signing certificate are mirrored to it — a PC-free grab-and-go backup for POTA/SOTA; **GPS time sync is automatic** (~10 ms phase-lock, no toggle)
 - **v1.0.0 foundation — LoTW upload**: QSOs are signed on the device with your own ARRL certificate, completing the logbook trio (QRZ, eQSL, LoTW); plus the FT8 double-send fix, `<...>` callsign resolution, broken-QSO resume, Today/POTA log view, and display sleep
 - All panadapter features (spectrum, waterfall, zoom, memory, web UI) are production-ready; FT8 **and FT4** receive/transmit, ADIF logging, and all three logbook uploads are stable
 - See [Version History](releases.md) for all changes
@@ -34,7 +34,7 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 **New user?** Start with the [Quick Start](quick-start.md) guide — 10 minutes to on-air.
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.1.0.pdf) — a printable 40-page reference.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.2.0.pdf) — a printable 40-page reference.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 
