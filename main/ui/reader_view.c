@@ -47,7 +47,8 @@ static const char *TAG = "reader_view";
 typedef struct { char title[48]; char path[96]; int level; } toc_entry_t;
 static toc_entry_t s_toc[TOC_MAX];
 static int  s_toc_n = 0;
-static char s_current_path[96] = "index.md";   // page currently shown
+static char s_current_path[96] = "index.md";     // page currently shown
+static char s_page_title[64]   = "Documentation"; // title shown when TOC is closed
 
 // ---- LVGL objects (LVGL thread only) ----
 static lv_obj_t *s_overlay      = NULL;   // full-screen opaque page
@@ -75,6 +76,15 @@ static volatile int s_save_state = 0;   // 0 idle, 1 saved-ok, 2 saved-failed
 
 static void lock(void)   { if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY); }
 static void unlock(void) { if (s_lock) xSemaphoreGive(s_lock); }
+
+// Set the current page's title. Reflected on the top bar only while the TOC
+// panel is closed (when it's open the bar shows "Contents").
+static void set_page_title(const char *t)
+{
+    snprintf(s_page_title, sizeof(s_page_title), "%s", (t && t[0]) ? t : "Documentation");
+    if (s_title_lbl && (!s_toc_panel || lv_obj_has_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN)))
+        lv_label_set_text(s_title_lbl, s_page_title);
+}
 
 // ============================ markdown rendering ============================
 
@@ -729,7 +739,7 @@ static void render_markdown(char *buf)
 
     #undef FLUSH_PARA
 
-    if (s_title_lbl) lv_label_set_text(s_title_lbl, title[0] ? title : "Documentation");
+    set_page_title(title);
     lv_obj_scroll_to_y(s_body, 0, LV_ANIM_OFF);
     ESP_LOGI(TAG, "rendered %d blocks", block_count);
     heap_caps_free(S);   // title already copied into the label above
@@ -744,7 +754,7 @@ static void render_from_cache(void)
         add_label("No documentation cached yet.\n\nConnect to WiFi and swipe back "
                   "into this page to download it from tab5.lav.dk.",
                   &lv_font_montserrat_24, UI_COLOR_TEXT_MUTED, 0, 0);
-        if (s_title_lbl) lv_label_set_text(s_title_lbl, "Documentation");
+        set_page_title("Documentation");
         return;
     }
     char *buf = heap_caps_malloc(MD_MAX_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -820,10 +830,11 @@ static void rebuild_toc_panel(void)
         lv_label_set_text(l, "Contents unavailable (connect to WiFi to download).");
         return;
     }
-    // Two-column layout: section headers span the full width (forcing a new
-    // row via flex-wrap); page cells take ~half so they pack two-across. All
-    // top-level entries (level 0 — Home / Quick Start / Releases and the
-    // section headers) are gold; nested pages are white.
+    // Layout: TOP-LEVEL entries (level 0) span the full width and are gold —
+    // both the section headers (User Guide/Reference/...) AND the standalone
+    // top pages (Home/Quick Start/Releases), so they read at the same level.
+    // NESTED pages (level > 0) pack two-across in white. Tight spacing so the
+    // whole tree fits without scrolling.
     for (int i = 0; i < s_toc_n; i++) {
         toc_entry_t *e = &s_toc[i];
         bool top = (e->level == 0);
@@ -833,15 +844,15 @@ static void rebuild_toc_panel(void)
             lv_obj_set_width(l, LV_PCT(100));
             lv_obj_set_style_text_font(l, &lv_font_montserrat_32, 0);
             lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
-            lv_obj_set_style_pad_top(l, 18, 0);
+            lv_obj_set_style_pad_top(l, 8, 0);
             lv_label_set_text(l, e->title);
             continue;
         }
         lv_obj_t *cell = lv_obj_create(s_toc_panel);
         lv_obj_remove_style_all(cell);
-        lv_obj_set_width(cell, LV_PCT(48));          // two per row
+        lv_obj_set_width(cell, top ? LV_PCT(100) : LV_PCT(48));   // top pages full-width like headers
         lv_obj_set_height(cell, LV_SIZE_CONTENT);
-        lv_obj_set_style_pad_all(cell, 14, 0);
+        lv_obj_set_style_pad_all(cell, 9, 0);
         lv_obj_set_style_bg_color(cell, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
         lv_obj_set_style_bg_opa(cell, LV_OPA_30, 0);
         lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, LV_STATE_PRESSED);
@@ -852,7 +863,7 @@ static void rebuild_toc_panel(void)
         lv_obj_t *l = lv_label_create(cell);
         lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
         lv_obj_set_width(l, LV_PCT(100));
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_font(l, top ? &lv_font_montserrat_28 : &lv_font_montserrat_24, 0);
         lv_obj_set_style_text_color(l, lv_color_hex(top ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT), 0);
         lv_label_set_text(l, e->title[0] ? e->title : e->path);
     }
@@ -865,8 +876,10 @@ static void toc_panel_set_open(bool open)
         lv_obj_scroll_to_y(s_toc_panel, 0, LV_ANIM_OFF);
         lv_obj_clear_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_toc_panel);
+        if (s_title_lbl) lv_label_set_text(s_title_lbl, "Contents");
     } else {
         lv_obj_add_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN);
+        if (s_title_lbl) lv_label_set_text(s_title_lbl, s_page_title);   // restore page title
     }
 }
 
@@ -878,7 +891,7 @@ static void navigate_to(const char *rel, const char *title_hint)
     toc_panel_set_open(false);
     lv_obj_clean(s_body);
     add_label("Loading...", &lv_font_montserrat_24, UI_COLOR_TEXT_MUTED, 0, 0);
-    if (s_title_lbl && title_hint) lv_label_set_text(s_title_lbl, title_hint);
+    if (title_hint) set_page_title(title_hint);
     lock(); strncpy(s_status, "Downloading...", sizeof(s_status) - 1); unlock();
     reader_net_fetch(rel, false);
 }
@@ -1089,7 +1102,7 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_set_style_pad_ver(s_toc_panel, 16, 0);
     lv_obj_set_flex_flow(s_toc_panel, LV_FLEX_FLOW_ROW_WRAP);   // 2-column grid
     lv_obj_set_style_pad_column(s_toc_panel, 20, 0);
-    lv_obj_set_style_pad_row(s_toc_panel, 12, 0);
+    lv_obj_set_style_pad_row(s_toc_panel, 6, 0);               // tight so it fits without scrolling
     lv_obj_set_scroll_dir(s_toc_panel, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_toc_panel, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_add_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN);
