@@ -1713,6 +1713,8 @@ bool ui_get_flat_mode(void);
 void ui_set_flat_mode(bool on);
 static void drawer_apply_preset(int db_min, int db_max, float alpha);
 static void drawer_build(void);
+void ui_open_user_manual(void);
+static void user_manual_cb(lv_event_t *e) { (void)e; ui_open_user_manual(); }
 static void drawer_set_ft8_mode(bool ft8);
 static void drawer_open(void);
 static void drawer_close(void);
@@ -5382,6 +5384,22 @@ static void drawer_build(void)
     // presets 3-across in a single row to free vertical space.
     int y = 96;
 
+    // User Manual — opens the on-device docs Reader (top of the drawer, above
+    // everything else). Full-width primary button.
+    {
+        lv_obj_t *btn = lv_button_create(s_drawer);
+        lv_obj_set_size(btn, DRAWER_W - 32, 60);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, y);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_set_style_radius(btn, 8, 0);
+        lv_obj_add_event_cb(btn, user_manual_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *l = lv_label_create(btn);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+        lv_label_set_text(l, LV_SYMBOL_FILE "  User Manual");
+        lv_obj_center(l);
+        y += 60 + 20;
+    }
+
     // Flip 180 degrees (upside-down mounting) -- kept at the very top. The
     // checkbox sits mid-row (just after the label) rather than at the right
     // edge so it is not toggled by accident while reaching for the drawer edge.
@@ -6582,39 +6600,36 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
     }
 }
 
-// Advance the left-swipe page cycle: Panadapter -> FT8 -> Reader -> Panadapter.
-// Reader is a full-screen overlay orthogonal to the base mode; entering it drops
-// the base to Panadapter (instant, hidden under the overlay) so leaving it is a
-// clean reveal. Triggered by a left-edge swipe (drag right).
+// Left-edge swipe (drag right): the normal Panadapter <-> FT8 toggle. If the
+// docs Reader overlay is open (launched from the Settings drawer, NOT part of
+// this swipe stack), the same swipe closes it instead — a convenient exit
+// alongside its Back button.
 static void ui_advance_page(void)
 {
     if (reader_view_is_active()) {
-        // Reader -> Panadapter: slide the overlay out; base is already Panadapter.
         reader_view_hide();
-        // Restore normal edge-strip z-order (drawer/memory gestures usable again).
-        if (s_left_edge_strip)   lv_obj_move_foreground(s_left_edge_strip);
-        if (s_bottom_edge_strip) lv_obj_move_foreground(s_bottom_edge_strip);
-        if (s_right_edge_strip)  lv_obj_move_foreground(s_right_edge_strip);
-    } else if (ui_mode_get() == UI_MODE_PANADAPTER) {
-        // Panadapter -> FT8 (animated swap).
-        ui_set_base_mode(UI_MODE_FT8, true);
     } else {
-        // FT8 -> Reader: drop to Panadapter base instantly (about to be covered),
-        // then slide the Reader overlay in over it.
-        ui_set_base_mode(UI_MODE_PANADAPTER, false);
-        reader_view_show();
-        // The Reader must capture ALL touches so underlying gestures (top-bar
-        // Band/Mode/BW dropdowns, the drawer, the memory swipe) can't fire
-        // behind it. Raise the opaque overlay above every screen-level sibling,
-        // then put ONLY the left-edge strip back on top so a left->right swipe
-        // still exits. Right/bottom strips stay below -> their swipes hit the
-        // (inert) overlay instead of opening the drawer/memory.
-        lv_obj_t *rdr = reader_view_get_container();
-        if (rdr) lv_obj_move_foreground(rdr);
-        if (s_left_edge_strip) lv_obj_move_foreground(s_left_edge_strip);
+        ui_set_base_mode(ui_mode_get() == UI_MODE_PANADAPTER ? UI_MODE_FT8
+                                                             : UI_MODE_PANADAPTER, true);
     }
     // Close the drawer (if open) after switching. UX nicety, and (4c.1 finding)
     // an open drawer keeps LVGL busy enough to starve audio/fft tasks.
+    drawer_close();
+}
+
+// Open the docs Reader as a full-screen overlay (from the Settings drawer's
+// "User Manual" button). It's orthogonal to the operating mode — whatever was
+// showing (Panadapter or FT8) stays underneath and returns when the Reader is
+// closed. The Reader must capture ALL touches so underlying gestures (top-bar
+// dropdowns, drawer, memory swipe) can't fire behind it: raise the opaque
+// overlay above every screen-level sibling, then put ONLY the left-edge strip
+// back on top so a left->right swipe (or the Back button) exits.
+void ui_open_user_manual(void)
+{
+    reader_view_show();
+    lv_obj_t *rdr = reader_view_get_container();
+    if (rdr) lv_obj_move_foreground(rdr);
+    if (s_left_edge_strip) lv_obj_move_foreground(s_left_edge_strip);
     drawer_close();
 }
 

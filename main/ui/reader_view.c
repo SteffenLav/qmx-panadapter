@@ -95,12 +95,27 @@ static int fold_seq(const char *s, const char **rep)
             default:                                               *rep = "";     return 3; // drop other punct
         }
     }
+    if (c0 == 0xE2 && c1 == 0x86) {                              // Arrows (subset)
+        switch (c2) {
+            case 0x90: *rep = "<-";  return 3;   // left
+            case 0x91: *rep = "^";   return 3;   // up
+            case 0x92: *rep = "->";  return 3;   // right
+            case 0x93: *rep = "v";   return 3;   // down
+            case 0x94: *rep = "<->"; return 3;   // left-right
+            default:   *rep = "->";  return 3;
+        }
+    }
     if (c0 == 0xE2 && (c1 == 0x94 || c1 == 0x95)) {               // Box Drawing
         if      (c1 == 0x94 && (c2 == 0x80 || c2 == 0x81)) *rep = "-";
         else if (c1 == 0x94 && (c2 == 0x82 || c2 == 0x83)) *rep = "|";
         else                                               *rep = "+";
         return 3;
     }
+    // Any other 3-byte E2/E3/EF symbol (checkmarks, bullets, misc symbols,
+    // fullwidth/CJK forms) or 4-byte emoji: no font glyph -> drop rather than
+    // render a tofu box.
+    if (c0 == 0xE2 || c0 == 0xE3 || c0 == 0xEF) { *rep = ""; return 3; }
+    if (c0 >= 0xF0)                              { *rep = ""; return 4; }
     return 0;
 }
 
@@ -276,6 +291,10 @@ static void add_table_block(char *rows)
         }
         if (nc > 0 && cells[nc-1][0] == '\0') nc--;   // trailing empty from closing '|'
         if (nc == 0) continue;
+
+        // Strip markdown emphasis (**bold** etc.) from each cell in place
+        // (md_inline_clean only ever shrinks, so same-buffer is safe).
+        for (int c = 0; c < nc; c++) md_inline_clean(cells[c], cells[c], strlen(cells[c]) + 1);
 
         size_t o = 0; out[0] = '\0';
         for (int c = 0; c < nc && o < 1000; c++) {
@@ -681,6 +700,18 @@ static void contents_btn_cb(lv_event_t *e)
     toc_panel_set_open(hidden);
 }
 
+// Back button: if the contents panel is open, close it first; otherwise close
+// the whole Reader (returns to whatever mode was showing underneath).
+static void back_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_toc_panel && !lv_obj_has_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN)) {
+        toc_panel_set_open(false);
+        return;
+    }
+    reader_view_hide();
+}
+
 // ============================ LVGL timer ============================
 
 static void tick_cb(lv_timer_t *t)
@@ -746,10 +777,22 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_set_style_border_color(hdr, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
 
-    // "Contents" button (opens the TOC panel). Kept clear of the ~30 px
-    // left-edge exit-swipe strip so that strip doesn't steal its taps.
+    // Back button (primary exit — the Reader is launched from the Settings
+    // drawer, not the swipe stack). Kept clear of the ~30 px left-edge
+    // exit-swipe strip so that strip doesn't steal its taps.
+    lv_obj_t *back_btn = lv_button_create(hdr);
+    lv_obj_align(back_btn, LV_ALIGN_LEFT_MID, 44, 0);
+    lv_obj_set_style_bg_color(back_btn, lv_color_hex(UI_COLOR_SURFACE), 0);
+    lv_obj_set_style_pad_hor(back_btn, 14, 0);
+    lv_obj_set_style_pad_ver(back_btn, 8, 0);
+    lv_obj_add_event_cb(back_btn, back_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *back_lbl = lv_label_create(back_btn);
+    lv_obj_set_style_text_font(back_lbl, &lv_font_montserrat_20, 0);
+    lv_label_set_text(back_lbl, LV_SYMBOL_LEFT "  Back");
+
+    // "Contents" button (opens the TOC panel).
     s_toc_btn = lv_button_create(hdr);
-    lv_obj_align(s_toc_btn, LV_ALIGN_LEFT_MID, 44, 0);
+    lv_obj_align(s_toc_btn, LV_ALIGN_LEFT_MID, 190, 0);
     lv_obj_set_style_bg_color(s_toc_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
     lv_obj_set_style_pad_hor(s_toc_btn, 14, 0);
     lv_obj_set_style_pad_ver(s_toc_btn, 8, 0);
@@ -761,7 +804,7 @@ void reader_view_init(lv_obj_t *parent)
     s_title_lbl = lv_label_create(hdr);
     lv_obj_set_style_text_font(s_title_lbl, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(s_title_lbl, lv_color_hex(UI_COLOR_TEXT), 0);
-    lv_obj_align(s_title_lbl, LV_ALIGN_LEFT_MID, 200, 0);
+    lv_obj_align(s_title_lbl, LV_ALIGN_LEFT_MID, 360, 0);
     lv_label_set_text(s_title_lbl, "Documentation");
 
     s_status_lbl = lv_label_create(hdr);
