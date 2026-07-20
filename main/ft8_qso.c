@@ -1083,6 +1083,11 @@ static void capture_pileup_callers(int64_t slot_sec)
         if (strcmp(tok1, s_my_call) != 0) continue;              // not addressed to us
         if (strcmp(tok2, s_my_call) == 0) continue;              // avoid MYCALL MYCALL loops
         if (cur_target[0] && strcmp(tok2, cur_target) == 0) continue;  // already our active partner
+        // Already worked on this band? Then their trailing 73/RR73 (or a late
+        // reply after we timed out and completed with someone else) must NOT
+        // put them back in the pileup - the whole reason Dirk saw a completed
+        // call linger. Same worked-before check the auto-pileup picker uses.
+        if (adif_log_contains_call_on_band(tok2, cat_get_frequency())) continue;
         ft8_pileup_note_caller(tok2, snap[i].last_snr_db, snap[i].last_freq, slot_sec);
     }
 }
@@ -1232,6 +1237,13 @@ void ft8_qso_advance(int64_t slot_sec)
             ft8_status_set("QSO %s: complete!", target);
             ESP_LOGI(TAG, "QSO with %s complete", target);
             clear_dt_follow();   // QSO done - back to the UTC/GPS beat
+            // Drop the just-worked station from the pileup. It was removed at
+            // qso_start, but the partner keeps addressing us through the
+            // exchange (report/RR73/73, and Dirk DK7CVD's late-reply case), and
+            // capture_pileup_callers no longer excludes them once s_target
+            // clears - so without this (plus the worked-before skip in capture)
+            // they'd reappear in the pileup right after a successful QSO.
+            ft8_pileup_remove(target);
 
             // A completed QSO with this call supersedes any older resumable
             // half-QSO - never auto-resume into a duplicate afterwards.
