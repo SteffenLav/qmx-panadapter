@@ -32,7 +32,7 @@ static const char *TAG = "reader_view";
 // ft8_screen_view.c which uses 1280x720 literals.
 #define SCR_W          1280
 #define SCR_H          720
-#define HEADER_H       56
+#define HEADER_H       88    // tall bar so the buttons are easy to hit
 #define BANNER_H       34
 #define BODY_PAD_X     60
 #define BODY_PAD_Y     22
@@ -115,11 +115,11 @@ static int fold_seq(const char *s, const char **rep)
         case 0x201C: case 0x201D: case 0x201E: case 0x201F: *rep = "\""; return len; // double quotes
         case 0x2026: *rep = "..."; return len;   // ellipsis
         case 0x2022: case 0x00B7: case 0x2219: *rep = "-"; return len;   // bullet/middot
-        case 0x2190: *rep = "<-";  return len;
-        case 0x2191: *rep = "^";   return len;
-        case 0x2192: *rep = "->";  return len;
-        case 0x2193: *rep = "v";   return len;
-        case 0x2194: *rep = "<->"; return len;
+        case 0x2190: *rep = "(left)";  return len;   // clear words - "^"/"v" were ambiguous
+        case 0x2191: *rep = "(up)";    return len;
+        case 0x2192: *rep = "(right)"; return len;
+        case 0x2193: *rep = "(down)";  return len;
+        case 0x2194: *rep = "(left/right)"; return len;
         case 0x21D2: *rep = "=>";  return len;
         case 0x00A9: *rep = "(c)"; return len;
         case 0x00AE: *rep = "(r)"; return len;
@@ -128,9 +128,10 @@ static int fold_seq(const char *s, const char **rep)
         case 0x00F7: *rep = "/";   return len;   // division
         case 0x00B1: *rep = "+/-"; return len;
         case 0x00B5: case 0x03BC: *rep = "u"; return len;   // micro / mu
-        case 0x2714: case 0x2713: *rep = "[x]"; return len; // check marks
-        case 0x2717: case 0x2718: case 0x2716: *rep = "[ ]"; return len; // ballot X
-        case 0x26A0: *rep = "!";   return len;   // warning sign
+        // Decorative emoji/symbols with no clean ASCII: drop rather than emit a
+        // stray-looking "!" or box (⚠ was rendering as a lone "!").
+        case 0x2714: case 0x2713: case 0x2717: case 0x2718: case 0x2716:
+        case 0x26A0: case 0x2705: case 0x274C: case 0xFE0F: *rep = ""; return len;
         default: break;
     }
     // Box Drawing U+2500-257F -> -|+
@@ -267,6 +268,81 @@ static lv_obj_t *add_label(const char *text, const lv_font_t *font,
     return l;
 }
 
+// Rich inline text via an lv_spangroup: renders **bold**/*em* runs in gold and
+// `code` runs in green within one wrapping block (the montserrat fonts have no
+// bold face, so weight is conveyed by COLOUR). Folds UTF-8 punctuation and
+// reduces links/images to their visible text, same as md_inline_clean. Returns
+// the spangroup (so callers can add a left border etc.).
+#define RICH_CODE_COLOR  0x8fd98f
+static lv_obj_t *add_rich_span(lv_obj_t *parent, const char *src,
+                               const lv_font_t *font, uint32_t base_color)
+{
+    if (!parent) return NULL;
+    lv_obj_t *sg = lv_spangroup_create(parent);
+    lv_spangroup_set_mode(sg, LV_SPAN_MODE_BREAK);   // wrap to width
+
+    char seg[1024]; size_t o = 0;
+    int emph = 0, code = 0;
+
+    #define FLUSH_SPAN() do {                                                   \
+        if (o) { seg[o] = '\0';                                                 \
+            lv_span_t *sp = lv_spangroup_new_span(sg);                          \
+            lv_span_set_text(sp, seg);                                          \
+            lv_style_t *st = lv_span_get_style(sp);                             \
+            lv_style_set_text_font(st, font);                                   \
+            uint32_t col = code ? RICH_CODE_COLOR : (emph ? UI_COLOR_ACCENT_GOLD : base_color); \
+            lv_style_set_text_color(st, lv_color_hex(col));                     \
+            o = 0; }                                                            \
+    } while (0)
+
+    for (size_t i = 0; src[i]; ) {
+        const char *rep; int adv = fold_seq(&src[i], &rep);
+        if (adv) { while (*rep && o + 1 < sizeof(seg)) seg[o++] = *rep++; i += (size_t)adv; continue; }
+        char c = src[i];
+        if (c == '`') { FLUSH_SPAN(); code = !code; i++; continue; }
+        if (c == '*' || c == '_') { FLUSH_SPAN(); emph = !emph; char m = c; while (src[i] == m) i++; continue; }
+        if (c == '!' && src[i+1] == '[') {                       // image ![alt](url)
+            const char *close = strchr(src + i + 2, ']');
+            if (close && close[1] == '(') {
+                const char *paren = strchr(close, ')');
+                if (paren) {
+                    const char *pfx = "[image] ";
+                    while (*pfx && o + 1 < sizeof(seg)) seg[o++] = *pfx++;
+                    for (const char *q = src + i + 2; q < close && o + 1 < sizeof(seg); q++) seg[o++] = *q;
+                    i = (size_t)(paren - src) + 1; continue;
+                }
+            }
+        }
+        if (c == '[') {                                          // link [text](url) -> text
+            const char *close = strchr(src + i + 1, ']');
+            if (close && close[1] == '(') {
+                const char *paren = strchr(close, ')');
+                if (paren) {
+                    for (const char *q = src + i + 1; q < close && o + 1 < sizeof(seg); q++) seg[o++] = *q;
+                    i = (size_t)(paren - src) + 1; continue;
+                }
+            }
+        }
+        if (o + 1 < sizeof(seg)) seg[o++] = c;
+        i++;
+    }
+    FLUSH_SPAN();
+    #undef FLUSH_SPAN
+    return sg;
+}
+
+// Rich text as a full-width body block (paragraph / quote).
+static lv_obj_t *add_rich(const char *src, const lv_font_t *font,
+                          uint32_t base_color, int top_gap, int left_indent)
+{
+    lv_obj_t *sg = add_rich_span(s_body, src, font, base_color);
+    if (!sg) return NULL;
+    lv_obj_set_width(sg, LV_PCT(100));
+    lv_obj_set_style_pad_top(sg, top_gap, 0);
+    if (left_indent) lv_obj_set_style_pad_left(sg, left_indent, 0);
+    return sg;
+}
+
 // A code / preformatted block: distinct background, smaller font, no emphasis
 // stripping (rendered verbatim).
 static void add_code_block(const char *text)
@@ -305,23 +381,22 @@ static void add_table_block(char *rows)
     if (!s_body) return;
     fold_utf8_inplace(rows);
 
+    // Outer bordered box, full width, one flex-column of row containers. Each
+    // row is a flex ROW of equal-width (flex-grow 1) cells, so columns line up
+    // vertically across rows and cell text wraps within its own column.
     lv_obj_t *box = lv_obj_create(s_body);
-    lv_obj_set_width(box, LV_SIZE_CONTENT);      // hug the widest row, not full screen
+    lv_obj_set_width(box, LV_PCT(100));
     lv_obj_set_height(box, LV_SIZE_CONTENT);
-    lv_obj_set_style_max_width(box, LV_PCT(100), 0);
     lv_obj_set_style_bg_color(box, lv_color_hex(UI_COLOR_SURFACE), 0);
     lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(box, 1, 0);
     lv_obj_set_style_border_color(box, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_set_style_radius(box, 6, 0);
-    lv_obj_set_style_pad_all(box, 12, 0);
-    lv_obj_set_style_pad_row(box, 8, 0);
+    lv_obj_set_style_pad_all(box, 4, 0);
+    lv_obj_set_style_pad_row(box, 0, 0);
     lv_obj_set_style_margin_top(box, 8, 0);
     lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scrollbar_mode(box, LV_SCROLLBAR_MODE_OFF);
-
-    char *out = heap_caps_malloc(1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!out) return;
 
     int rownum = 0;
     char *p = rows;
@@ -347,28 +422,33 @@ static void add_table_block(char *rows)
         if (nc > 0 && cells[nc-1][0] == '\0') nc--;   // trailing empty from closing '|'
         if (nc == 0) continue;
 
-        // Strip markdown emphasis (**bold** etc.) from each cell in place
-        // (md_inline_clean only ever shrinks, so same-buffer is safe).
-        for (int c = 0; c < nc; c++) md_inline_clean(cells[c], cells[c], strlen(cells[c]) + 1);
-
-        size_t o = 0; out[0] = '\0';
-        for (int c = 0; c < nc && o < 1000; c++) {
-            const char *sep = (c < nc - 1) ? "     " : "";
-            o += (size_t)snprintf(out + o, 1024 - o, "%s%s", cells[c], sep);
+        lv_obj_t *rowc = lv_obj_create(box);
+        lv_obj_remove_style_all(rowc);
+        lv_obj_set_width(rowc, LV_PCT(100));
+        lv_obj_set_height(rowc, LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(rowc, LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_column(rowc, 16, 0);
+        lv_obj_set_style_pad_ver(rowc, 8, 0);
+        lv_obj_set_style_pad_hor(rowc, 8, 0);
+        lv_obj_set_scrollbar_mode(rowc, LV_SCROLLBAR_MODE_OFF);
+        if (rownum > 0) {   // separator line under the header
+            lv_obj_set_style_border_side(rowc, LV_BORDER_SIDE_TOP, 0);
+            lv_obj_set_style_border_width(rowc, (rownum == 1) ? 1 : 0, 0);
+            lv_obj_set_style_border_color(rowc, lv_color_hex(UI_COLOR_BORDER), 0);
         }
 
-        // Header row in gold, data rows in white (LVGL 9 dropped per-run label
-        // recolor, so colour is whole-label).
-        lv_obj_t *l = lv_label_create(box);
-        lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-        lv_obj_set_width(l, LV_SIZE_CONTENT);
-        lv_obj_set_style_max_width(l, SCR_W - 2 * BODY_PAD_X - 28, 0);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_22, 0);
-        lv_obj_set_style_text_color(l, lv_color_hex(rownum == 0 ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT), 0);
-        lv_label_set_text(l, out);
+        for (int c = 0; c < nc; c++) {
+            md_inline_clean(cells[c], cells[c], strlen(cells[c]) + 1);  // strip **bold** etc.
+            lv_obj_t *cl = lv_label_create(rowc);
+            lv_obj_set_flex_grow(cl, 1);                 // equal columns -> aligned
+            lv_obj_set_width(cl, 0);                     // let flex-grow drive width
+            lv_label_set_long_mode(cl, LV_LABEL_LONG_WRAP);
+            lv_obj_set_style_text_font(cl, &lv_font_montserrat_22, 0);
+            lv_obj_set_style_text_color(cl, lv_color_hex(rownum == 0 ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT), 0);
+            lv_label_set_text(cl, cells[c][0] ? cells[c] : " ");
+        }
         rownum++;
     }
-    heap_caps_free(out);
 }
 
 // Number of leading spaces (tabs count as 4), used for list indent level.
@@ -419,12 +499,11 @@ static void add_list_item(const char *marker, const char *text, int indent)
     lv_obj_set_style_text_color(m, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
     lv_label_set_text(m, marker);
 
-    lv_obj_t *l = lv_label_create(row);
-    lv_obj_set_flex_grow(l, 1);
-    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-    lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT), 0);
-    lv_label_set_text(l, text && text[0] ? text : " ");
+    // Text as a rich span (so **bold** shows), flex-growing so wrapped lines
+    // hang under the text.
+    lv_obj_t *sg = add_rich_span(row, text && text[0] ? text : " ",
+                                 &lv_font_montserrat_24, UI_COLOR_TEXT);
+    if (sg) lv_obj_set_flex_grow(sg, 1);
 }
 
 // Render one markdown document (mutated in place: line terminators are consumed
@@ -453,9 +532,8 @@ static void render_markdown(char *buf)
 
     #define FLUSH_PARA() do {                                              \
         if (para_len) {                                                    \
-            md_inline_clean(para, cleaned, MD_CLEANED_SZ);                 \
-            add_label(cleaned, &lv_font_montserrat_24, UI_COLOR_TEXT,      \
-                      block_count ? 14 : 0, 0);                            \
+            add_rich(para, &lv_font_montserrat_24, UI_COLOR_TEXT,          \
+                     block_count ? 14 : 0, 0);                             \
             block_count++; para_len = 0; para[0] = '\0';                   \
         } } while (0)
 
@@ -522,8 +600,27 @@ static void render_markdown(char *buf)
             }
         }
 
-        // horizontal rule
-        if (strcmp(t, "---") == 0 || strcmp(t, "***") == 0 || strcmp(t, "___") == 0) {
+        // pymdownx content-tab marker:  === "Windows"   (renders as a gold
+        // sub-heading; the indented tab body follows as normal paragraphs).
+        if (strncmp(t, "===", 3) == 0) {
+            FLUSH_PARA();
+            const char *q = strchr(t, '"');
+            if (q) {
+                const char *q2 = strchr(q + 1, '"');
+                size_t n = q2 ? (size_t)(q2 - q - 1) : strlen(q + 1);
+                char head[80];
+                if (n >= sizeof(head)) n = sizeof(head) - 1;
+                memcpy(head, q + 1, n); head[n] = '\0';
+                add_label(head, &lv_font_montserrat_24, UI_COLOR_ACCENT_GOLD, 14, 0);
+                block_count++;
+            }
+            continue;   // no quoted title -> a bare === separator, just drop it
+        }
+
+        // horizontal rule (also folds long runs like ------ / ******)
+        if (strlen(t) >= 3 && (strspn(t, "-") == strlen(t) ||
+                               strspn(t, "*") == strlen(t) ||
+                               strspn(t, "_") == strlen(t))) {
             FLUSH_PARA();
             lv_obj_t *hr = lv_obj_create(s_body);
             lv_obj_set_size(hr, LV_PCT(100), 2);
@@ -560,9 +657,7 @@ static void render_markdown(char *buf)
         // block quote
         if (t[0] == '>') {
             FLUSH_PARA();
-            const char *q = skip_ws(t + 1);
-            md_inline_clean(q, cleaned, MD_CLEANED_SZ);
-            lv_obj_t *l = add_label(cleaned, &lv_font_montserrat_22, UI_COLOR_TEXT_SECONDARY, 8, 16);
+            lv_obj_t *l = add_rich(skip_ws(t + 1), &lv_font_montserrat_22, UI_COLOR_TEXT_SECONDARY, 8, 16);
             if (l) {
                 lv_obj_set_style_border_side(l, LV_BORDER_SIDE_LEFT, 0);
                 lv_obj_set_style_border_width(l, 3, 0);
@@ -586,14 +681,12 @@ static void render_markdown(char *buf)
                 FLUSH_PARA();
                 int lvl = indent / 2;   // ~2 leading spaces per nest level
                 if (bullet) {
-                    md_inline_clean(skip_ws(t + 1), cleaned, MD_CLEANED_SZ);
-                    add_list_item(LV_SYMBOL_BULLET, cleaned, lvl);
+                    add_list_item(LV_SYMBOL_BULLET, skip_ws(t + 1), lvl);   // raw (add_rich_span handles **bold**)
                 } else {
                     char num[8]; size_t k = 0;
                     for (const char *d = t; (isdigit((unsigned char)*d) || *d=='.'|| *d==')') && k < sizeof(num)-1; d++) num[k++] = *d;
                     num[k] = '\0';
-                    md_inline_clean(skip_ws(nptr + 1), cleaned, MD_CLEANED_SZ);
-                    add_list_item(num, cleaned, lvl);
+                    add_list_item(num, skip_ws(nptr + 1), lvl);
                 }
                 block_count++;
                 continue;
@@ -888,9 +981,9 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_t *back_btn = lv_button_create(hdr);
     lv_obj_align(back_btn, LV_ALIGN_LEFT_MID, 44, 0);
     lv_obj_set_style_bg_color(back_btn, lv_color_hex(UI_COLOR_SURFACE), 0);
-    lv_obj_set_style_pad_hor(back_btn, 16, 0);
-    lv_obj_set_style_pad_ver(back_btn, 12, 0);
-    lv_obj_set_ext_click_area(back_btn, 24);   // much bigger touch target
+    lv_obj_set_style_pad_hor(back_btn, 18, 0);
+    lv_obj_set_height(back_btn, 64);
+    lv_obj_set_ext_click_area(back_btn, 40);   // big touch target, reaches below the bar
     lv_obj_add_event_cb(back_btn, back_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *back_lbl = lv_label_create(back_btn);
     lv_obj_set_style_text_font(back_lbl, &lv_font_montserrat_20, 0);
@@ -900,9 +993,9 @@ void reader_view_init(lv_obj_t *parent)
     s_toc_btn = lv_button_create(hdr);
     lv_obj_align(s_toc_btn, LV_ALIGN_LEFT_MID, 200, 0);
     lv_obj_set_style_bg_color(s_toc_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
-    lv_obj_set_style_pad_hor(s_toc_btn, 16, 0);
-    lv_obj_set_style_pad_ver(s_toc_btn, 12, 0);
-    lv_obj_set_ext_click_area(s_toc_btn, 24);
+    lv_obj_set_style_pad_hor(s_toc_btn, 18, 0);
+    lv_obj_set_height(s_toc_btn, 64);
+    lv_obj_set_ext_click_area(s_toc_btn, 40);
     lv_obj_add_event_cb(s_toc_btn, contents_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *toc_btn_lbl = lv_label_create(s_toc_btn);
     lv_obj_set_style_text_font(toc_btn_lbl, &lv_font_montserrat_20, 0);
@@ -920,9 +1013,9 @@ void reader_view_init(lv_obj_t *parent)
     s_save_btn = lv_button_create(hdr);
     lv_obj_align(s_save_btn, LV_ALIGN_RIGHT_MID, -16, 0);
     lv_obj_set_style_bg_color(s_save_btn, lv_color_hex(UI_COLOR_SUCCESS), 0);
-    lv_obj_set_style_pad_hor(s_save_btn, 16, 0);
-    lv_obj_set_style_pad_ver(s_save_btn, 12, 0);
-    lv_obj_set_ext_click_area(s_save_btn, 24);
+    lv_obj_set_style_pad_hor(s_save_btn, 18, 0);
+    lv_obj_set_height(s_save_btn, 64);
+    lv_obj_set_ext_click_area(s_save_btn, 40);
     lv_obj_add_event_cb(s_save_btn, save_btn_cb, LV_EVENT_CLICKED, NULL);
     s_save_lbl = lv_label_create(s_save_btn);
     lv_obj_set_style_text_font(s_save_lbl, &lv_font_montserrat_20, 0);
@@ -980,6 +1073,12 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_set_scroll_dir(s_toc_panel, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_toc_panel, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_add_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN);
+
+    // Keep the header (and its buttons) above the body so the buttons' large
+    // ext_click_area — which reaches BELOW the bar — wins the touch there
+    // instead of the body swallowing it.
+    lv_obj_move_foreground(hdr);
+    if (s_banner) lv_obj_move_foreground(s_banner);
 
     s_timer = lv_timer_create(tick_cb, 250, NULL);
     ESP_LOGI(TAG, "init");
