@@ -40,6 +40,10 @@ void reader_view_notify_status(const char *status);
 // LVGL thread to re-parse it and rebuild the contents list. Safe from any task.
 void reader_view_notify_toc_loaded(void);
 
+// Result of an offline "Save to SD" run — flips the button label to "Saved
+// offline" (ok) or "Save failed". Safe from any task.
+void reader_view_notify_saved(bool ok);
+
 // "Firmware vX available" banner, from update_check.c. Pass NULL/empty version
 // to clear it. Safe from any task.
 void reader_view_set_update_available(const char *latest_version);

@@ -267,11 +267,9 @@ static void save_task(void *arg)
     dsp_set_transfer_quiet(false);
     webserver_ws_set_paused(false);
 
-    char done[64];
-    if (failed == 0) snprintf(done, sizeof(done), "Saved %d pages to SD", saved);
-    else             snprintf(done, sizeof(done), "Saved %d, %d failed", saved, failed);
-    ESP_LOGI(TAG, "offline save: %s", done);
-    reader_view_notify_status(done);
+    ESP_LOGI(TAG, "offline save: %d saved, %d failed", saved, failed);
+    reader_view_notify_status("");                 // no "Saved N pages" line
+    reader_view_notify_saved(saved > 0 && failed == 0);
 
     s_busy = false;
     vTaskDelete(NULL);

@@ -58,6 +58,7 @@ static lv_obj_t *s_banner_lbl   = NULL;
 static lv_obj_t *s_body         = NULL;   // scrollable flex column of content
 static lv_obj_t *s_toc_btn      = NULL;   // header "Contents" button
 static lv_obj_t *s_save_btn     = NULL;   // header "Save offline" button (SD only)
+static lv_obj_t *s_save_lbl     = NULL;   // its label (text toggles Save/Saved)
 static lv_obj_t *s_toc_panel    = NULL;   // scrollable contents overlay (hidden unless open)
 static lv_timer_t *s_timer      = NULL;
 
@@ -70,6 +71,7 @@ static volatile bool s_toc_reload_pending = false;
 static bool s_from_cache = false;
 static char s_status[64]  = {0};
 static char s_update_ver[24] = {0};
+static volatile int s_save_state = 0;   // 0 idle, 1 saved-ok, 2 saved-failed
 
 static void lock(void)   { if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY); }
 static void unlock(void) { if (s_lock) xSemaphoreGive(s_lock); }
@@ -82,43 +84,89 @@ static void unlock(void) { if (s_lock) xSemaphoreGive(s_lock); }
 // block (─│┌┐└┘├… -> -|+) — the montserrat fonts have glyphs for none of these,
 // so unfolded they render as tofu boxes (the ASCII-art layout diagrams in the
 // docs were the worst offender).
+// The montserrat fonts only carry ASCII + a handful of symbols (degree, the
+// LV_SYMBOL glyphs). EVERYTHING else renders as a tofu box, so we transliterate
+// what we can to ASCII and drop the rest. `s` points at a UTF-8 sequence; on a
+// non-ASCII lead byte, decode the codepoint and return (bytes-consumed, *rep).
+// Returns 0 for ASCII (caller copies the byte as-is).
 static int fold_seq(const char *s, const char **rep)
 {
     unsigned char c0 = (unsigned char)s[0];
-    unsigned char c1 = c0 ? (unsigned char)s[1] : 0;
-    unsigned char c2 = c1 ? (unsigned char)s[2] : 0;
-    if (c0 == 0xC2 && c1 == 0xA0) { *rep = " "; return 2; }        // nbsp
-    if (c0 == 0xE2 && c1 == 0x80) {                                // General Punctuation
-        switch (c2) {
-            case 0x90: case 0x91: case 0x92: case 0x93: case 0x94: *rep = "-";   return 3; // hyphen/dashes
-            case 0xa6:                                             *rep = "...";  return 3; // ellipsis
-            case 0x98: case 0x99: case 0x9b:                       *rep = "'";   return 3; // single quotes
-            case 0x9c: case 0x9d: case 0x9e:                       *rep = "\"";  return 3; // double quotes
-            default:                                               *rep = "";     return 3; // drop other punct
-        }
+    if (c0 < 0x80) return 0;   // ASCII
+
+    // decode length + codepoint
+    uint32_t cp; int len;
+    if      ((c0 & 0xE0) == 0xC0) { len = 2; cp = c0 & 0x1F; }
+    else if ((c0 & 0xF0) == 0xE0) { len = 3; cp = c0 & 0x0F; }
+    else if ((c0 & 0xF8) == 0xF0) { len = 4; cp = c0 & 0x07; }
+    else { *rep = ""; return 1; }   // stray continuation/invalid: drop 1 byte
+    for (int k = 1; k < len; k++) {
+        unsigned char cc = (unsigned char)s[k];
+        if ((cc & 0xC0) != 0x80) { *rep = ""; return k; }   // truncated: drop what we saw
+        cp = (cp << 6) | (cc & 0x3F);
     }
-    if (c0 == 0xE2 && c1 == 0x86) {                              // Arrows (subset)
-        switch (c2) {
-            case 0x90: *rep = "<-";  return 3;   // left
-            case 0x91: *rep = "^";   return 3;   // up
-            case 0x92: *rep = "->";  return 3;   // right
-            case 0x93: *rep = "v";   return 3;   // down
-            case 0x94: *rep = "<->"; return 3;   // left-right
-            default:   *rep = "->";  return 3;
-        }
+
+    switch (cp) {
+        case 0x00B0: *rep = "\xC2\xB0"; return len;   // ° — KEEP (font has it)
+        case 0x00A0: *rep = " ";        return len;   // nbsp
+        case 0x2010: case 0x2011: case 0x2012:
+        case 0x2013: case 0x2014: case 0x2015: *rep = "-";   return len; // hyphens/dashes
+        case 0x2018: case 0x2019: case 0x201A: case 0x201B: *rep = "'";  return len; // single quotes
+        case 0x201C: case 0x201D: case 0x201E: case 0x201F: *rep = "\""; return len; // double quotes
+        case 0x2026: *rep = "..."; return len;   // ellipsis
+        case 0x2022: case 0x00B7: case 0x2219: *rep = "-"; return len;   // bullet/middot
+        case 0x2190: *rep = "<-";  return len;
+        case 0x2191: *rep = "^";   return len;
+        case 0x2192: *rep = "->";  return len;
+        case 0x2193: *rep = "v";   return len;
+        case 0x2194: *rep = "<->"; return len;
+        case 0x21D2: *rep = "=>";  return len;
+        case 0x00A9: *rep = "(c)"; return len;
+        case 0x00AE: *rep = "(r)"; return len;
+        case 0x2122: *rep = "(tm)";return len;
+        case 0x00D7: *rep = "x";   return len;   // multiplication
+        case 0x00F7: *rep = "/";   return len;   // division
+        case 0x00B1: *rep = "+/-"; return len;
+        case 0x00B5: case 0x03BC: *rep = "u"; return len;   // micro / mu
+        case 0x2714: case 0x2713: *rep = "[x]"; return len; // check marks
+        case 0x2717: case 0x2718: case 0x2716: *rep = "[ ]"; return len; // ballot X
+        case 0x26A0: *rep = "!";   return len;   // warning sign
+        default: break;
     }
-    if (c0 == 0xE2 && (c1 == 0x94 || c1 == 0x95)) {               // Box Drawing
-        if      (c1 == 0x94 && (c2 == 0x80 || c2 == 0x81)) *rep = "-";
-        else if (c1 == 0x94 && (c2 == 0x82 || c2 == 0x83)) *rep = "|";
-        else                                               *rep = "+";
-        return 3;
+    // Box Drawing U+2500-257F -> -|+
+    if (cp >= 0x2500 && cp <= 0x257F) {
+        if      (cp == 0x2500 || cp == 0x2501) *rep = "-";
+        else if (cp == 0x2502 || cp == 0x2503) *rep = "|";
+        else                                   *rep = "+";
+        return len;
     }
-    // Any other 3-byte E2/E3/EF symbol (checkmarks, bullets, misc symbols,
-    // fullwidth/CJK forms) or 4-byte emoji: no font glyph -> drop rather than
-    // render a tofu box.
-    if (c0 == 0xE2 || c0 == 0xE3 || c0 == 0xEF) { *rep = ""; return 3; }
-    if (c0 >= 0xF0)                              { *rep = ""; return 4; }
-    return 0;
+    // Latin-1 accented letters -> unaccented base (avoids mangling names into
+    // tofu; a docs reader in a proportional font can't show the accents anyway)
+    static const struct { uint32_t lo, hi; char base; } acc[] = {
+        {0x00C0,0x00C5,'A'},{0x00C8,0x00CB,'E'},{0x00CC,0x00CF,'I'},
+        {0x00D2,0x00D6,'O'},{0x00D9,0x00DC,'U'},{0x00E0,0x00E5,'a'},
+        {0x00E8,0x00EB,'e'},{0x00EC,0x00EF,'i'},{0x00F2,0x00F6,'o'},
+        {0x00F9,0x00FC,'u'},
+    };
+    static char one[2] = {0,0};
+    for (unsigned i = 0; i < sizeof(acc)/sizeof(acc[0]); i++) {
+        if (cp >= acc[i].lo && cp <= acc[i].hi) { one[0] = acc[i].base; *rep = one; return len; }
+    }
+    switch (cp) {
+        case 0x00C7: one[0]='C'; *rep=one; return len;
+        case 0x00E7: one[0]='c'; *rep=one; return len;
+        case 0x00D1: one[0]='N'; *rep=one; return len;
+        case 0x00F1: one[0]='n'; *rep=one; return len;
+        case 0x00DD: case 0x00FD: case 0x00FF: one[0]='y'; *rep=one; return len;
+        case 0x00DF: *rep="ss"; return len;
+        case 0x00C6: *rep="AE"; return len;
+        case 0x00E6: *rep="ae"; return len;
+        case 0x00D8: one[0]='O'; *rep=one; return len;
+        case 0x00F8: one[0]='o'; *rep=one; return len;
+        default: break;
+    }
+    *rep = "";   // anything else: drop rather than render a tofu box
+    return len;
 }
 
 // Fold UTF-8 punctuation/box-drawing to ASCII in place (output is always <= input
@@ -224,9 +272,12 @@ static lv_obj_t *add_label(const char *text, const lv_font_t *font,
 static void add_code_block(const char *text)
 {
     if (!s_body) return;
+    // Box hugs its content (only as wide as the code needs), capped so a very
+    // long line wraps instead of overflowing the screen.
     lv_obj_t *box = lv_obj_create(s_body);
-    lv_obj_set_width(box, LV_PCT(100));
+    lv_obj_set_width(box, LV_SIZE_CONTENT);
     lv_obj_set_height(box, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_width(box, LV_PCT(100), 0);
     lv_obj_set_style_bg_color(box, lv_color_hex(UI_COLOR_KEY_BG), 0);
     lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(box, 1, 0);
@@ -238,7 +289,8 @@ static void add_code_block(const char *text)
 
     lv_obj_t *l = lv_label_create(box);
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(l, LV_PCT(100));
+    lv_obj_set_width(l, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_width(l, SCR_W - 2 * BODY_PAD_X - 24, 0);
     lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_label_set_text(l, text && text[0] ? text : " ");
@@ -254,8 +306,9 @@ static void add_table_block(char *rows)
     fold_utf8_inplace(rows);
 
     lv_obj_t *box = lv_obj_create(s_body);
-    lv_obj_set_width(box, LV_PCT(100));
+    lv_obj_set_width(box, LV_SIZE_CONTENT);      // hug the widest row, not full screen
     lv_obj_set_height(box, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_width(box, LV_PCT(100), 0);
     lv_obj_set_style_bg_color(box, lv_color_hex(UI_COLOR_SURFACE), 0);
     lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
     lv_obj_set_style_border_width(box, 1, 0);
@@ -308,7 +361,8 @@ static void add_table_block(char *rows)
         // recolor, so colour is whole-label).
         lv_obj_t *l = lv_label_create(box);
         lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
-        lv_obj_set_width(l, LV_PCT(100));
+        lv_obj_set_width(l, LV_SIZE_CONTENT);
+        lv_obj_set_style_max_width(l, SCR_W - 2 * BODY_PAD_X - 28, 0);
         lv_obj_set_style_text_font(l, &lv_font_montserrat_22, 0);
         lv_obj_set_style_text_color(l, lv_color_hex(rownum == 0 ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT), 0);
         lv_label_set_text(l, out);
@@ -343,6 +397,35 @@ typedef struct {
     char code[MD_CODE_SZ];
     char cleaned[MD_CLEANED_SZ];   // shared scratch for md_inline_clean output
 } md_scratch_t;
+
+// A list item: a flex row of [marker][text]. The text label flex-grows and
+// wraps within its own (indented) box, so wrapped lines hang under the text
+// rather than sliding back under the marker.
+static void add_list_item(const char *marker, const char *text, int indent)
+{
+    if (!s_body) return;
+    lv_obj_t *row = lv_obj_create(s_body);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, LV_PCT(100));
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_top(row, 6, 0);
+    lv_obj_set_style_pad_left(row, 8 + indent * 24, 0);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_scrollbar_mode(row, LV_SCROLLBAR_MODE_OFF);
+
+    lv_obj_t *m = lv_label_create(row);
+    lv_obj_set_width(m, 34);
+    lv_obj_set_style_text_font(m, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(m, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+    lv_label_set_text(m, marker);
+
+    lv_obj_t *l = lv_label_create(row);
+    lv_obj_set_flex_grow(l, 1);
+    lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT), 0);
+    lv_label_set_text(l, text && text[0] ? text : " ");
+}
 
 // Render one markdown document (mutated in place: line terminators are consumed
 // by the walker) into the body container. `buf` is NUL-terminated.
@@ -501,17 +584,16 @@ static void render_markdown(char *buf)
             }
             if (bullet || numbered) {
                 FLUSH_PARA();
+                int lvl = indent / 2;   // ~2 leading spaces per nest level
                 if (bullet) {
                     md_inline_clean(skip_ws(t + 1), cleaned, MD_CLEANED_SZ);
-                    char withb[MD_LINE_SZ]; snprintf(withb, sizeof(withb), "%s  %s", LV_SYMBOL_BULLET, cleaned);
-                    add_label(withb, &lv_font_montserrat_24, UI_COLOR_TEXT, 6, 20 + indent * 8);
+                    add_list_item(LV_SYMBOL_BULLET, cleaned, lvl);
                 } else {
                     char num[8]; size_t k = 0;
                     for (const char *d = t; (isdigit((unsigned char)*d) || *d=='.'|| *d==')') && k < sizeof(num)-1; d++) num[k++] = *d;
                     num[k] = '\0';
                     md_inline_clean(skip_ws(nptr + 1), cleaned, MD_CLEANED_SZ);
-                    char withn[MD_LINE_SZ]; snprintf(withn, sizeof(withn), "%s %s", num, cleaned);
-                    add_label(withn, &lv_font_montserrat_24, UI_COLOR_TEXT, 6, 20 + indent * 8);
+                    add_list_item(num, cleaned, lvl);
                 }
                 block_count++;
                 continue;
@@ -706,6 +788,7 @@ static void contents_btn_cb(lv_event_t *e)
 static void save_btn_cb(lv_event_t *e)
 {
     (void)e;
+    s_save_state = 0;   // back to "Save offline" while the run is in progress
     reader_net_save_offline();
 }
 
@@ -740,10 +823,17 @@ static void tick_cb(lv_timer_t *t)
     if (do_toc)    { parse_toc_file(); rebuild_toc_panel(); }
     if (do_reload) render_from_cache();
 
-    // "Save offline" is only meaningful with a card in the slot.
+    // "Save offline" is only meaningful with a card in the slot; its label
+    // reflects the last save's outcome.
     if (s_save_btn) {
         if (sd_archive_is_mounted()) lv_obj_clear_flag(s_save_btn, LV_OBJ_FLAG_HIDDEN);
         else                         lv_obj_add_flag(s_save_btn, LV_OBJ_FLAG_HIDDEN);
+        if (s_save_lbl) {
+            const char *txt = (s_save_state == 1) ? LV_SYMBOL_SD_CARD "  Saved offline"
+                            : (s_save_state == 2) ? LV_SYMBOL_SD_CARD "  Save failed"
+                                                  : LV_SYMBOL_SD_CARD "  Save offline";
+            if (strcmp(lv_label_get_text(s_save_lbl), txt) != 0) lv_label_set_text(s_save_lbl, txt);
+        }
     }
 
     if (s_status_lbl) {
@@ -798,8 +888,9 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_t *back_btn = lv_button_create(hdr);
     lv_obj_align(back_btn, LV_ALIGN_LEFT_MID, 44, 0);
     lv_obj_set_style_bg_color(back_btn, lv_color_hex(UI_COLOR_SURFACE), 0);
-    lv_obj_set_style_pad_hor(back_btn, 14, 0);
-    lv_obj_set_style_pad_ver(back_btn, 8, 0);
+    lv_obj_set_style_pad_hor(back_btn, 16, 0);
+    lv_obj_set_style_pad_ver(back_btn, 12, 0);
+    lv_obj_set_ext_click_area(back_btn, 24);   // much bigger touch target
     lv_obj_add_event_cb(back_btn, back_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *back_lbl = lv_label_create(back_btn);
     lv_obj_set_style_text_font(back_lbl, &lv_font_montserrat_20, 0);
@@ -807,38 +898,41 @@ void reader_view_init(lv_obj_t *parent)
 
     // "Contents" button (opens the TOC panel).
     s_toc_btn = lv_button_create(hdr);
-    lv_obj_align(s_toc_btn, LV_ALIGN_LEFT_MID, 190, 0);
+    lv_obj_align(s_toc_btn, LV_ALIGN_LEFT_MID, 200, 0);
     lv_obj_set_style_bg_color(s_toc_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
-    lv_obj_set_style_pad_hor(s_toc_btn, 14, 0);
-    lv_obj_set_style_pad_ver(s_toc_btn, 8, 0);
+    lv_obj_set_style_pad_hor(s_toc_btn, 16, 0);
+    lv_obj_set_style_pad_ver(s_toc_btn, 12, 0);
+    lv_obj_set_ext_click_area(s_toc_btn, 24);
     lv_obj_add_event_cb(s_toc_btn, contents_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *toc_btn_lbl = lv_label_create(s_toc_btn);
     lv_obj_set_style_text_font(toc_btn_lbl, &lv_font_montserrat_20, 0);
     lv_label_set_text(toc_btn_lbl, LV_SYMBOL_LIST "  Contents");
 
-    // "Save offline" button — mirrors the whole manual to SD. Shown only while a
-    // card is mounted (toggled in tick_cb).
-    s_save_btn = lv_button_create(hdr);
-    lv_obj_align(s_save_btn, LV_ALIGN_LEFT_MID, 340, 0);
-    lv_obj_set_style_bg_color(s_save_btn, lv_color_hex(UI_COLOR_SUCCESS), 0);
-    lv_obj_set_style_pad_hor(s_save_btn, 14, 0);
-    lv_obj_set_style_pad_ver(s_save_btn, 8, 0);
-    lv_obj_add_event_cb(s_save_btn, save_btn_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *save_lbl = lv_label_create(s_save_btn);
-    lv_obj_set_style_text_font(save_lbl, &lv_font_montserrat_20, 0);
-    lv_label_set_text(save_lbl, LV_SYMBOL_SD_CARD "  Save offline");
-    lv_obj_add_flag(s_save_btn, LV_OBJ_FLAG_HIDDEN);
-
     s_title_lbl = lv_label_create(hdr);
     lv_obj_set_style_text_font(s_title_lbl, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(s_title_lbl, lv_color_hex(UI_COLOR_TEXT), 0);
-    lv_obj_align(s_title_lbl, LV_ALIGN_LEFT_MID, 560, 0);
+    lv_obj_align(s_title_lbl, LV_ALIGN_LEFT_MID, 380, 0);
     lv_label_set_text(s_title_lbl, "Documentation");
+
+    // "Save offline" button at the RIGHT end (mirrors the manual to SD). Shown
+    // only while a card is mounted (toggled in tick_cb); its label flips to
+    // "Saved offline" on completion.
+    s_save_btn = lv_button_create(hdr);
+    lv_obj_align(s_save_btn, LV_ALIGN_RIGHT_MID, -16, 0);
+    lv_obj_set_style_bg_color(s_save_btn, lv_color_hex(UI_COLOR_SUCCESS), 0);
+    lv_obj_set_style_pad_hor(s_save_btn, 16, 0);
+    lv_obj_set_style_pad_ver(s_save_btn, 12, 0);
+    lv_obj_set_ext_click_area(s_save_btn, 24);
+    lv_obj_add_event_cb(s_save_btn, save_btn_cb, LV_EVENT_CLICKED, NULL);
+    s_save_lbl = lv_label_create(s_save_btn);
+    lv_obj_set_style_text_font(s_save_lbl, &lv_font_montserrat_20, 0);
+    lv_label_set_text(s_save_lbl, LV_SYMBOL_SD_CARD "  Save offline");
+    lv_obj_add_flag(s_save_btn, LV_OBJ_FLAG_HIDDEN);
 
     s_status_lbl = lv_label_create(hdr);
     lv_obj_set_style_text_font(s_status_lbl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(s_status_lbl, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-    lv_obj_align(s_status_lbl, LV_ALIGN_RIGHT_MID, -20, 0);
+    lv_obj_align(s_status_lbl, LV_ALIGN_RIGHT_MID, -260, 0);
     lv_label_set_text(s_status_lbl, "");
 
     // Update-available banner (hidden until update_check reports one)
@@ -979,6 +1073,11 @@ void reader_view_notify_toc_loaded(void)
     lock();
     s_toc_reload_pending = true;
     unlock();
+}
+
+void reader_view_notify_saved(bool ok)
+{
+    s_save_state = ok ? 1 : 2;   // picked up by tick_cb -> button label
 }
 
 void reader_view_set_update_available(const char *latest_version)

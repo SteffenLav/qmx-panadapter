@@ -6145,7 +6145,11 @@ static void drawer_set_ft8_mode(bool ft8)
     }
 
     if (ft8) {
-        int y = 96;
+        // Start below the always-present "User Manual" button (built at y=96,
+        // 60 tall + 20 gap = 176) — the panadapter build-time layout already
+        // starts its first section there, so keep the FT8 restack consistent or
+        // the reflow draws Flip 180 on top of the manual button.
+        int y = 176;
         for (int k = 0; k < n_keep; k++) {
             lv_obj_set_pos(s_drawer_sections[keep[k]], 0, y);
             y += keep_h[k];
