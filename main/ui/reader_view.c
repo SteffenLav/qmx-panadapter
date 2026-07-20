@@ -820,34 +820,40 @@ static void rebuild_toc_panel(void)
         lv_label_set_text(l, "Contents unavailable (connect to WiFi to download).");
         return;
     }
+    // Two-column layout: section headers span the full width (forcing a new
+    // row via flex-wrap); page cells take ~half so they pack two-across. All
+    // top-level entries (level 0 — Home / Quick Start / Releases and the
+    // section headers) are gold; nested pages are white.
     for (int i = 0; i < s_toc_n; i++) {
         toc_entry_t *e = &s_toc[i];
+        bool top = (e->level == 0);
         if (e->path[0] == '\0') {
-            // section header — not tappable
+            // section header — full-width, not tappable
             lv_obj_t *l = lv_label_create(s_toc_panel);
-            lv_obj_set_style_text_font(l, &lv_font_montserrat_22, 0);
+            lv_obj_set_width(l, LV_PCT(100));
+            lv_obj_set_style_text_font(l, &lv_font_montserrat_32, 0);
             lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
-            lv_obj_set_style_pad_top(l, 14, 0);
-            lv_obj_set_style_pad_left(l, 8 + e->level * 24, 0);
+            lv_obj_set_style_pad_top(l, 18, 0);
             lv_label_set_text(l, e->title);
             continue;
         }
-        lv_obj_t *row = lv_obj_create(s_toc_panel);
-        lv_obj_remove_style_all(row);
-        lv_obj_set_width(row, LV_PCT(100));
-        lv_obj_set_height(row, LV_SIZE_CONTENT);
-        lv_obj_set_style_pad_ver(row, 12, 0);
-        lv_obj_set_style_pad_left(row, 24 + e->level * 24, 0);
-        lv_obj_set_style_pad_right(row, 12, 0);
-        lv_obj_set_style_bg_color(row, lv_color_hex(UI_COLOR_SURFACE_RAISED), LV_STATE_PRESSED);
-        lv_obj_set_style_bg_opa(row, LV_OPA_COVER, LV_STATE_PRESSED);
-        lv_obj_set_style_radius(row, 6, 0);
-        lv_obj_add_flag(row, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_user_data(row, (void *)(intptr_t)i);
-        lv_obj_add_event_cb(row, toc_row_cb, LV_EVENT_CLICKED, NULL);
-        lv_obj_t *l = lv_label_create(row);
-        lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
-        lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT), 0);
+        lv_obj_t *cell = lv_obj_create(s_toc_panel);
+        lv_obj_remove_style_all(cell);
+        lv_obj_set_width(cell, LV_PCT(48));          // two per row
+        lv_obj_set_height(cell, LV_SIZE_CONTENT);
+        lv_obj_set_style_pad_all(cell, 14, 0);
+        lv_obj_set_style_bg_color(cell, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
+        lv_obj_set_style_bg_opa(cell, LV_OPA_30, 0);
+        lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, LV_STATE_PRESSED);
+        lv_obj_set_style_radius(cell, 8, 0);
+        lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_user_data(cell, (void *)(intptr_t)i);
+        lv_obj_add_event_cb(cell, toc_row_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *l = lv_label_create(cell);
+        lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(l, LV_PCT(100));
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(l, lv_color_hex(top ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT), 0);
         lv_label_set_text(l, e->title[0] ? e->title : e->path);
     }
 }
@@ -929,7 +935,7 @@ static void tick_cb(lv_timer_t *t)
         if (sd_archive_is_mounted()) lv_obj_clear_flag(s_save_btn, LV_OBJ_FLAG_HIDDEN);
         else                         lv_obj_add_flag(s_save_btn, LV_OBJ_FLAG_HIDDEN);
         if (s_save_lbl) {
-            const char *txt = (s_save_state == 1) ? LV_SYMBOL_SD_CARD "  Saved offline"
+            const char *txt = (s_save_state == 1) ? LV_SYMBOL_SD_CARD "  Saved offline - update?"
                             : (s_save_state == 2) ? LV_SYMBOL_SD_CARD "  Save failed"
                                                   : LV_SYMBOL_SD_CARD "  Save offline";
             if (strcmp(lv_label_get_text(s_save_lbl), txt) != 0) lv_label_set_text(s_save_lbl, txt);
@@ -982,58 +988,63 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_set_style_border_color(hdr, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Back button (primary exit — the Reader is launched from the Settings
-    // drawer, not the swipe stack). Kept clear of the ~30 px left-edge
-    // exit-swipe strip so that strip doesn't steal its taps.
-    lv_obj_t *back_btn = lv_button_create(hdr);
-    lv_obj_align(back_btn, LV_ALIGN_LEFT_MID, 44, 0);
-    lv_obj_set_style_bg_color(back_btn, lv_color_hex(UI_COLOR_SURFACE), 0);
-    lv_obj_set_style_pad_hor(back_btn, 18, 0);
-    lv_obj_set_height(back_btn, 46);
-    lv_obj_set_ext_click_area(back_btn, 40);   // big touch target, reaches below the bar
-    lv_obj_add_event_cb(back_btn, back_btn_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *back_lbl = lv_label_create(back_btn);
-    lv_obj_set_style_text_font(back_lbl, &lv_font_montserrat_20, 0);
-    lv_label_set_text(back_lbl, LV_SYMBOL_LEFT "  Back");
-
-    // "Contents" button (opens the TOC panel).
-    s_toc_btn = lv_button_create(hdr);
-    lv_obj_align(s_toc_btn, LV_ALIGN_LEFT_MID, 200, 0);
-    lv_obj_set_style_bg_color(s_toc_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
-    lv_obj_set_style_pad_hor(s_toc_btn, 18, 0);
-    lv_obj_set_height(s_toc_btn, 46);
-    lv_obj_set_ext_click_area(s_toc_btn, 40);
-    lv_obj_add_event_cb(s_toc_btn, contents_btn_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *toc_btn_lbl = lv_label_create(s_toc_btn);
-    lv_obj_set_style_text_font(toc_btn_lbl, &lv_font_montserrat_20, 0);
-    lv_label_set_text(toc_btn_lbl, LV_SYMBOL_LIST "  Contents");
-
+    // Title + status live IN the header bar (labels, non-interactive). Title is
+    // gold and H1-sized to match the document's main heading.
     s_title_lbl = lv_label_create(hdr);
-    lv_obj_set_style_text_font(s_title_lbl, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(s_title_lbl, lv_color_hex(UI_COLOR_TEXT), 0);
-    lv_obj_align(s_title_lbl, LV_ALIGN_LEFT_MID, 380, 0);
+    lv_obj_set_style_text_font(s_title_lbl, &lv_font_montserrat_32, 0);
+    lv_obj_set_style_text_color(s_title_lbl, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+    lv_obj_align(s_title_lbl, LV_ALIGN_LEFT_MID, 460, 0);
     lv_label_set_text(s_title_lbl, "Documentation");
-
-    // "Save offline" button at the RIGHT end (mirrors the manual to SD). Shown
-    // only while a card is mounted (toggled in tick_cb); its label flips to
-    // "Saved offline" on completion.
-    s_save_btn = lv_button_create(hdr);
-    lv_obj_align(s_save_btn, LV_ALIGN_RIGHT_MID, -16, 0);
-    lv_obj_set_style_bg_color(s_save_btn, lv_color_hex(UI_COLOR_SUCCESS), 0);
-    lv_obj_set_style_pad_hor(s_save_btn, 18, 0);
-    lv_obj_set_height(s_save_btn, 46);
-    lv_obj_set_ext_click_area(s_save_btn, 40);
-    lv_obj_add_event_cb(s_save_btn, save_btn_cb, LV_EVENT_CLICKED, NULL);
-    s_save_lbl = lv_label_create(s_save_btn);
-    lv_obj_set_style_text_font(s_save_lbl, &lv_font_montserrat_20, 0);
-    lv_label_set_text(s_save_lbl, LV_SYMBOL_SD_CARD "  Save offline");
-    lv_obj_add_flag(s_save_btn, LV_OBJ_FLAG_HIDDEN);
 
     s_status_lbl = lv_label_create(hdr);
     lv_obj_set_style_text_font(s_status_lbl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(s_status_lbl, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-    lv_obj_align(s_status_lbl, LV_ALIGN_RIGHT_MID, -260, 0);
+    lv_obj_align(s_status_lbl, LV_ALIGN_RIGHT_MID, -300, 0);
     lv_label_set_text(s_status_lbl, "");
+
+    // The three buttons are children of the full-screen OVERLAY, not the header
+    // bar. LVGL clips a child's hit area to its parent, so buttons inside the
+    // 64 px bar couldn't be tapped from just below it; parenting them to the
+    // overlay lets ext_click_area extend down past the bar. Foregrounded above
+    // the body at the end of init so those extended areas win the touch.
+    const int BTN_H = 46, BTN_Y = (HEADER_H - 46) / 2;
+
+    // Back (primary exit). Kept clear of the ~30 px left-edge exit-swipe strip.
+    lv_obj_t *back_btn = lv_button_create(s_overlay);
+    lv_obj_align(back_btn, LV_ALIGN_TOP_LEFT, 40, BTN_Y);
+    lv_obj_set_style_bg_color(back_btn, lv_color_hex(UI_COLOR_SURFACE), 0);
+    lv_obj_set_style_pad_hor(back_btn, 20, 0);
+    lv_obj_set_height(back_btn, BTN_H);
+    lv_obj_set_ext_click_area(back_btn, 44);
+    lv_obj_add_event_cb(back_btn, back_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *back_lbl = lv_label_create(back_btn);
+    lv_obj_set_style_text_font(back_lbl, &lv_font_montserrat_24, 0);
+    lv_label_set_text(back_lbl, LV_SYMBOL_LEFT "  Back");
+
+    // Contents (opens the TOC panel).
+    s_toc_btn = lv_button_create(s_overlay);
+    lv_obj_align(s_toc_btn, LV_ALIGN_TOP_LEFT, 205, BTN_Y);
+    lv_obj_set_style_bg_color(s_toc_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_pad_hor(s_toc_btn, 20, 0);
+    lv_obj_set_height(s_toc_btn, BTN_H);
+    lv_obj_set_ext_click_area(s_toc_btn, 44);
+    lv_obj_add_event_cb(s_toc_btn, contents_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *toc_btn_lbl = lv_label_create(s_toc_btn);
+    lv_obj_set_style_text_font(toc_btn_lbl, &lv_font_montserrat_24, 0);
+    lv_label_set_text(toc_btn_lbl, LV_SYMBOL_LIST "  Contents");
+
+    // Save offline (right end, SD only). Label flips to "Saved offline - update?"
+    s_save_btn = lv_button_create(s_overlay);
+    lv_obj_align(s_save_btn, LV_ALIGN_TOP_RIGHT, -16, BTN_Y);
+    lv_obj_set_style_bg_color(s_save_btn, lv_color_hex(UI_COLOR_SUCCESS), 0);
+    lv_obj_set_style_pad_hor(s_save_btn, 20, 0);
+    lv_obj_set_height(s_save_btn, BTN_H);
+    lv_obj_set_ext_click_area(s_save_btn, 44);
+    lv_obj_add_event_cb(s_save_btn, save_btn_cb, LV_EVENT_CLICKED, NULL);
+    s_save_lbl = lv_label_create(s_save_btn);
+    lv_obj_set_style_text_font(s_save_lbl, &lv_font_montserrat_24, 0);
+    lv_label_set_text(s_save_lbl, LV_SYMBOL_SD_CARD "  Save offline");
+    lv_obj_add_flag(s_save_btn, LV_OBJ_FLAG_HIDDEN);
 
     // Update-available banner (hidden until update_check reports one)
     s_banner = lv_obj_create(s_overlay);
@@ -1076,15 +1087,20 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(s_toc_panel, LV_OPA_COVER, 0);
     lv_obj_set_style_pad_hor(s_toc_panel, 40, 0);
     lv_obj_set_style_pad_ver(s_toc_panel, 16, 0);
-    lv_obj_set_flex_flow(s_toc_panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_flow(s_toc_panel, LV_FLEX_FLOW_ROW_WRAP);   // 2-column grid
+    lv_obj_set_style_pad_column(s_toc_panel, 20, 0);
+    lv_obj_set_style_pad_row(s_toc_panel, 12, 0);
     lv_obj_set_scroll_dir(s_toc_panel, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_toc_panel, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_add_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN);
 
-    // Keep the header (and its buttons) above the body so the buttons' large
+    // Keep the header bar and its buttons above the body so the buttons' large
     // ext_click_area — which reaches BELOW the bar — wins the touch there
     // instead of the body swallowing it.
     lv_obj_move_foreground(hdr);
+    lv_obj_move_foreground(back_btn);
+    lv_obj_move_foreground(s_toc_btn);
+    lv_obj_move_foreground(s_save_btn);
     if (s_banner) lv_obj_move_foreground(s_banner);
 
     s_timer = lv_timer_create(tick_cb, 250, NULL);
