@@ -106,6 +106,17 @@ static void transmit_btn_cb(lv_event_t *e)
     }
     if (ft8_tx_arm(&s_pending_req, err, sizeof(err))) {
         ESP_LOGI(TAG, "armed via modal: '%s'", s_pending_req.display_text);
+        // Track who we're manually working: keeps the partner out of the
+        // pileup capture mid-exchange and drives the amber "working" row
+        // highlight for hand-run QSOs (same look as an auto QSO).
+        if (s_pending_req.target_call[0])
+            ft8_qso_note_manual_target(s_pending_req.target_call);
+        // A manually-armed closing message (RR73/73) wraps up a hand-run QSO:
+        // seed the QSO machine's WAIT_DONE so the burst's completion logs the
+        // QSO to ADIF and drops the partner from the pileup - same wrap-up an
+        // auto QSO gets. No-op if a machine QSO is already active.
+        if (s_pending_req.kind == FT8_TX_KIND_73)
+            ft8_qso_notify_manual_final(s_pending_req.target_call);
         modal_close();
     } else {
         ESP_LOGW(TAG, "arm refused: %s", err);
@@ -373,12 +384,13 @@ void ft8_tx_modal_show(const ft8_tx_request_t *req)
     // Row-nudge makes sense for any reply built from a decode-list row (REPLY
     // kind); hide it for a CQ (we *are* the caller — no row to nudge between).
     bool is_reply = (s_pending_req.kind == FT8_TX_KIND_REPLY);
-    // Auto Pounce (the full auto-sequencer, which starts from TX1) only makes
-    // sense on a FRESH reply — i.e. a grid TX1 (REPLY with no extra field).
-    // With the intelligent-Transmit builder a mid-QSO row yields a REPLY
-    // carrying a report (extra_field set) or a ROGER_RPT/73 kind; Auto Pounce
-    // would mis-seed the state machine there, so offer only single Transmit.
-    bool is_fresh_pounce = is_reply && (s_pending_req.extra_field[0] == '\0');
+    // Auto Pounce (the full auto-sequencer) is offered for any REPLY-kind
+    // request: a grid TX1 (extra empty) starts in WAIT_RPT, and a report-first
+    // reply (extra = "+NN"/"-NN" - Skip-TX1 manual build, pileup modal, or a
+    // tapped their-grid row) is honoured as-is by ft8_qso_start() and starts
+    // in WAIT_ROGER. Only the later ladder steps (ROGER_RPT / 73 kinds) would
+    // mis-seed the state machine - those get single Transmit only.
+    bool is_fresh_pounce = is_reply;
     lv_obj_t *pounce_objs[] = { s_btn_pounce, s_pounce_swatch, s_pounce_legend };
     for (unsigned i = 0; i < sizeof(pounce_objs) / sizeof(pounce_objs[0]); i++) {
         if (!pounce_objs[i]) continue;

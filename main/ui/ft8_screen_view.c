@@ -812,13 +812,9 @@ static void rebuild_list(void)
     // "currently working" row highlight - distinct from the broader own-call
     // red highlight, which covers every station that's answered, not just
     // the one we're presently giving a report / waiting on a roger from.
-    ft8_qso_state_t qso_st = ft8_qso_get_state();
-    if (qso_st == FT8_QSO_WAIT_ROGER || qso_st == FT8_QSO_WAIT_RR73 ||
-        qso_st == FT8_QSO_WAIT_DONE  || qso_st == FT8_QSO_WAIT_RPT) {
-        ft8_qso_get_target(s_qso_active_target, sizeof(s_qso_active_target));
-    } else {
-        s_qso_active_target[0] = '\0';
-    }
+    // Covers both a machine QSO's target and a manually-stepped partner
+    // (ft8_qso_note_manual_target), so hand-run exchanges look the same.
+    ft8_qso_get_working_target(s_qso_active_target, sizeof(s_qso_active_target));
 
     int row = 0;
     for (int i = 0; i < n && row < MAX_ROWS; i++) {

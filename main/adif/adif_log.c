@@ -334,12 +334,19 @@ bool adif_log_contains_call_on_band(const char *call, uint32_t freq_hz)
 {
     if (!call || !call[0]) return false;
     const char *band = freq_to_band(freq_hz);
-    if (!band[0]) return false;   // unknown band -> can't claim worked-before
+    // Unknown band (freq 0: no QMX / CAT not up - e.g. FT8 simulation mode):
+    // fall back to a call-only match instead of returning false. Returning
+    // false made "Exclude worked before" silently pass EVERYONE whenever the
+    // frequency was unreadable - observed in sim mode as the same phantom
+    // being worked and logged back-to-back with the filter checked. Matching
+    // any band is the conservative direction for a filter whose job is
+    // avoiding duplicates.
+    bool any_band = (band[0] == '\0');
     xSemaphoreTake(s_lock, portMAX_DELAY);
     bool found = false;
     for (int i = 0; i < s_worked_count && !found; i++) {
         if (strcmp(s_worked[i].call, call) == 0 &&
-            strcmp(s_worked[i].band, band) == 0) found = true;
+            (any_band || strcmp(s_worked[i].band, band) == 0)) found = true;
     }
     xSemaphoreGive(s_lock);
     return found;

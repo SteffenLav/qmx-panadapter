@@ -74,6 +74,23 @@ static ft8_tx_request_t   s_cur_req;                    // message we're current
 static bool               s_have_cur;                   // s_cur_req valid
 static ft8_tx_request_t   s_cq_saved;                   // original CQ, to resume after a dropped QSO
 static bool               s_have_cq_saved;
+// Station being worked MANUALLY (step-by-step Transmit taps, no machine QSO).
+// Noted on every manual arm so (a) the pileup capture doesn't list our own
+// partner as a waiting caller mid-exchange, and (b) the decode list can show
+// the same amber "working" highlight a machine QSO gets. Expires after
+// MANUAL_TARGET_TTL_S of no manual activity; cleared on QSO completion.
+#define MANUAL_TARGET_TTL_S 300
+static char               s_manual_target[FT8_CALL_MAX_LEN];
+static int64_t            s_manual_target_ts;
+// Station we most recently COMPLETED a QSO with. Their trailing 73/RR73 (and
+// a late repeat) keeps addressing us for a while after completion - exempt
+// them from the pileup capture for a grace period so a finished contact never
+// re-enters the pileup (Dirk DK7CVD's lingering-call report), without the
+// blanket worked-before skip that also hid legitimate dupe callers whenever
+// the operator had "Exclude worked before" OFF.
+#define DONE_GRACE_TTL_S 180
+static char               s_last_done_call[FT8_CALL_MAX_LEN];
+static int64_t            s_last_done_ts;
 // Signal reports captured during the exchange for ADIF logging.
 // Pounce: rst_rcvd = what they told us; rst_sent = our own locally-measured SNR
 //   of them (the protocol never has us transmit a numeric report of them - TX2
@@ -272,6 +289,18 @@ bool ft8_qso_build_manual_reply(const ft8_call_t *heard, int reply_freq_hz,
     qmx_settings_t qs;
     settings_load_all(&qs);
     bool fd_mode = qs.field_day_en && qs.fd_class[0] && qs.fd_section[0];
+
+    // Skip-TX1 applies to the manual Transmit exactly like WSJT-X applies
+    // "Skip Tx1" to a double-click: a fresh CQ answer opens with our signal
+    // report instead of the grid. ft8_qso_start() already honours a
+    // report-carrying REPLY (arms unchanged, starts in WAIT_ROGER), so Auto
+    // Pounce from the same modal stays consistent. Field Day keeps grid TX1
+    // (the FD exchange replaces the report step entirely). Field-reported by
+    // the operator: Transmit on a CQ row sent TX1 despite Skip-TX1 checked.
+    if (!fd_mode && qs.ft8_filters.skip_tx1) {
+        fmt_report(heard->last_snr_db, extra_buf, sizeof(extra_buf));
+        extra = extra_buf;
+    }
 
     char tok1[16] = {0}, tok2[24] = {0}, rest[40] = {0};
     bool parsed = split_msg3(heard->last_text, tok1, sizeof(tok1),
@@ -1153,6 +1182,9 @@ static void capture_pileup_callers(int64_t slot_sec)
     cur_target[sizeof(cur_target) - 1] = '\0';
     unlock();
 
+    qmx_settings_t qs_cap;
+    settings_load_all(&qs_cap);
+
     ft8_call_t snap[FT8_CALL_TABLE_SIZE];
     int n = 0;
     ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
@@ -1164,11 +1196,29 @@ static void capture_pileup_callers(int64_t slot_sec)
         if (strcmp(tok1, s_my_call) != 0) continue;              // not addressed to us
         if (strcmp(tok2, s_my_call) == 0) continue;              // avoid MYCALL MYCALL loops
         if (cur_target[0] && strcmp(tok2, cur_target) == 0) continue;  // already our active partner
-        // Already worked on this band? Then their trailing 73/RR73 (or a late
-        // reply after we timed out and completed with someone else) must NOT
-        // put them back in the pileup - the whole reason Dirk saw a completed
-        // call linger. Same worked-before check the auto-pileup picker uses.
-        if (adif_log_contains_call_on_band(tok2, cat_get_frequency())) continue;
+        // Manually-worked partner (step-by-step Transmit, no machine QSO):
+        // their exchange messages address us every cycle, but they're being
+        // worked, not waiting - don't list them in the pileup. Same for the
+        // station we JUST completed with: their trailing 73/RR73 keeps
+        // addressing us after completion (Dirk DK7CVD's lingering-call case).
+        int64_t now_s = time(NULL);
+        lock();
+        bool exempt = (s_manual_target[0] &&
+                       strcmp(tok2, s_manual_target) == 0 &&
+                       (now_s - s_manual_target_ts) < MANUAL_TARGET_TTL_S) ||
+                      (s_last_done_call[0] &&
+                       strcmp(tok2, s_last_done_call) == 0 &&
+                       (now_s - s_last_done_ts) < DONE_GRACE_TTL_S);
+        unlock();
+        if (exempt) continue;
+        // Worked-before is only a pileup exclusion when the operator has
+        // asked for it ("Exclude worked before") - matching what the CQ-run
+        // answer picker does. The old unconditional skip silently hid
+        // legitimate dupe callers from the pileup while the machine was
+        // perfectly willing to WORK them (filter off) - inconsistent, and in
+        // sim practice sessions it emptied the pileup almost entirely.
+        if (qs_cap.ft8_filters.excl_worked_before &&
+            adif_log_contains_call_on_band(tok2, cat_get_frequency())) continue;
         ft8_pileup_note_caller(tok2, snap[i].last_snr_db, snap[i].last_freq, slot_sec);
     }
 }
@@ -1274,7 +1324,20 @@ void ft8_qso_advance(int64_t slot_sec)
         }
         return;
     }
-    if (st == FT8_QSO_IDLE) return;
+    if (st == FT8_QSO_IDLE) {
+        // Auto-work pileup from IDLE too: the drain used to trigger only at
+        // QSO completion/timeout, so checking the box mid-session with a
+        // pileup already waiting did nothing until the next QSO ended. Guards:
+        // TX must be fully idle (never steal a manually-armed transmission)
+        // and no fresh manual exchange in progress; try_start_pileup_pounce()
+        // itself gates on the setting, identity, and waiting callers.
+        char manual[FT8_CALL_MAX_LEN];
+        if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_IDLE &&
+            !ft8_qso_get_working_target(manual, sizeof(manual))) {
+            try_start_pileup_pounce();
+        }
+        return;
+    }
 
     if (st == FT8_QSO_DONE) {
         // Auto-work pileup: before falling back to CQ/idle, work anyone still
@@ -1325,6 +1388,17 @@ void ft8_qso_advance(int64_t slot_sec)
             // clears - so without this (plus the worked-before skip in capture)
             // they'd reappear in the pileup right after a successful QSO.
             ft8_pileup_remove(target);
+            // A manually-run exchange with this station is over too - stop
+            // exempting/highlighting them as "being worked". Start the
+            // just-completed grace instead (keeps their trailing 73 out of
+            // the pileup - see DONE_GRACE_TTL_S).
+            lock();
+            if (s_manual_target[0] && strcmp(s_manual_target, target) == 0)
+                s_manual_target[0] = '\0';
+            strncpy(s_last_done_call, target, sizeof(s_last_done_call) - 1);
+            s_last_done_call[sizeof(s_last_done_call) - 1] = '\0';
+            s_last_done_ts = time(NULL);
+            unlock();
 
             // A completed QSO with this call supersedes any older resumable
             // half-QSO - never auto-resume into a duplicate afterwards.
@@ -1563,6 +1637,31 @@ void ft8_qso_advance(int64_t slot_sec)
 
 void ft8_qso_on_tx_complete(void)
 {
+    // Clamp the scan gate to when our message ACTUALLY fired. s_min_scan_utc
+    // is predicted at start (next_slot_sec) assuming the burst waits for the
+    // next matching boundary - but the reply-window path (FT8_REPLY_TX_WINDOW_MS)
+    // can legally fire it mid-slot in the CURRENT slot, up to a full parity
+    // cycle earlier than predicted. The stale prediction then discards the
+    // partner's prompt reply as "too early" and we re-send TX1/the report once
+    // for nothing (hardware-observed: min_scan 30 s in the future, phantom's
+    // R-report in the very next slot ignored). We're called right after the
+    // burst, still inside its slot, so "now's slot + 1" is the true earliest
+    // slot a reply can arrive in. Only ever lowers the gate, never raises it.
+    lock();
+    if (s_state != FT8_QSO_IDLE && s_min_scan_utc > 0) {
+        int period_ms = (s_have_cur && s_cur_req.protocol == FTX_PROTOCOL_FT4) ? 7500 : 15000;
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        int64_t now_ms = (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+        int64_t earliest = ((now_ms / period_ms) * period_ms + period_ms) / 1000;
+        if (s_min_scan_utc > earliest) {
+            ESP_LOGI(TAG, "TX fired earlier than predicted - min_scan %lld -> %lld",
+                     (long long)s_min_scan_utc, (long long)earliest);
+            s_min_scan_utc = earliest;
+        }
+    }
+    unlock();
+
     // Re-arm whatever we're currently sending for its next matching slot. This
     // gives the CQ loop its 30 s cadence and keeps exchange messages repeating
     // until answered; the final 73/RR73 is armed once (see rearm_current).
@@ -1619,6 +1718,95 @@ bool ft8_qso_override_next(ft8_tx_kind_t kind, char *err, size_t err_len)
     ft8_status_set("QSO %s: manual %s", target, extra);
     ESP_LOGI(TAG, "QSO override: %s -> %s, WAIT_DONE", target, extra);
     return true;
+}
+
+void ft8_qso_note_manual_target(const char *target_call)
+{
+    if (!target_call || !target_call[0]) return;
+    lock();
+    strncpy(s_manual_target, target_call, sizeof(s_manual_target) - 1);
+    s_manual_target[sizeof(s_manual_target) - 1] = '\0';
+    s_manual_target_ts = time(NULL);
+    unlock();
+}
+
+bool ft8_qso_get_working_target(char *buf, size_t len)
+{
+    if (!buf || !len) return false;
+    buf[0] = '\0';
+    lock();
+    ft8_qso_state_t st = s_state;
+    if (st == FT8_QSO_WAIT_RPT || st == FT8_QSO_WAIT_ROGER ||
+        st == FT8_QSO_WAIT_RR73 || st == FT8_QSO_WAIT_DONE) {
+        strncpy(buf, s_target, len - 1);
+        buf[len - 1] = '\0';
+    } else if (s_manual_target[0] &&
+               (time(NULL) - s_manual_target_ts) < MANUAL_TARGET_TTL_S) {
+        strncpy(buf, s_manual_target, len - 1);
+        buf[len - 1] = '\0';
+    }
+    unlock();
+    return buf[0] != '\0';
+}
+
+void ft8_qso_notify_manual_final(const char *target_call)
+{
+    if (!target_call || !target_call[0]) return;
+
+    lock();
+    ft8_qso_state_t st = s_state;
+    unlock();
+    if (st != FT8_QSO_IDLE && st != FT8_QSO_DONE && st != FT8_QSO_TIMEOUT) {
+        return;   // a machine QSO is running - its own completion path logs
+    }
+
+    // Reports for the ADIF record, best-effort from the decode table:
+    // RST_SENT = our measured SNR of them (same value the manual builder puts
+    // in a report message); RST_RCVD = their numeric report of us if their
+    // last message carried one ("R-09"/"-09"), else the "599" fallback. In a
+    // manual grid-flow their report arrived a step earlier and isn't stored,
+    // so RR73-as-last-message falls back - acceptable for a hand-run QSO.
+    char rst_sent[8] = "599", rst_rcvd[8] = "599";
+    ft8_call_t *snap = heap_caps_malloc(
+        sizeof(ft8_call_t) * FT8_CALL_TABLE_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (snap) {   // PSRAM, never the LVGL task's small stack (~11 KB snapshot)
+        int n = 0;
+        ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+        for (int i = 0; i < n; i++) {
+            if (strcmp(snap[i].call, target_call) != 0) continue;
+            fmt_report(snap[i].last_snr_db, rst_sent, sizeof(rst_sent));
+            char t1[16], t2[16], rest[FT8_FD_EXCH_LEN];
+            if (split_msg3(snap[i].last_text, t1, sizeof(t1), t2, sizeof(t2),
+                           rest, sizeof(rest))) {
+                const char *rpt = (rest[0] == 'R' && (rest[1] == '+' || rest[1] == '-'))
+                                    ? rest + 1
+                                    : ((rest[0] == '+' || rest[0] == '-') ? rest : NULL);
+                if (rpt) snprintf(rst_rcvd, sizeof(rst_rcvd), "%.7s", rpt);
+            }
+            break;
+        }
+        free(snap);
+    }
+
+    lock();
+    s_state = FT8_QSO_WAIT_DONE;
+    strncpy(s_target, target_call, sizeof(s_target) - 1);
+    s_target[sizeof(s_target) - 1] = '\0';
+    s_from_cq       = false;
+    s_have_cur      = false;   // the final is already armed by the modal
+    s_have_cq_saved = false;
+    s_min_scan_utc  = 0;
+    s_missed_slots  = 0;
+    strncpy(s_rst_sent, rst_sent, sizeof(s_rst_sent) - 1);
+    s_rst_sent[sizeof(s_rst_sent) - 1] = '\0';
+    strncpy(s_rst_rcvd, rst_rcvd, sizeof(s_rst_rcvd) - 1);
+    s_rst_rcvd[sizeof(s_rst_rcvd) - 1] = '\0';
+    s_fd_their_exch[0] = '\0';
+    unlock();
+
+    ft8_status_set("QSO %s: sending final", target_call);
+    ESP_LOGI(TAG, "manual final to %s armed - WAIT_DONE (sent=%s rcvd=%s)",
+             target_call, rst_sent, rst_rcvd);
 }
 
 void ft8_qso_abort(void)
