@@ -624,11 +624,25 @@ static bool set_time_from_qmx_rtc(bool *out_applied)
 // mode restored at boot before the radio is switched on), so we just
 // keep waiting and periodically update the status line so the user
 // knows we're still looking.
+//
+// EXCEPTION: FT8 Simulation Mode needs no radio at all (phantom stations,
+// ft8_tx.c's interlock never keys anything), yet this wait sat ahead of the
+// entire slot loop - so with no QMX the sim could inject CQs (its own task)
+// but an armed pounce/CQ TX never fired: the loop that fires it was parked
+// right here showing "Waiting for QMX - check USB/power". Poll sim_mode_en
+// INSIDE the loop (not just once) so enabling sim while already waiting
+// unblocks immediately.
 static void wait_for_cat_ready(void)
 {
     int64_t t0 = esp_timer_get_time();
     int64_t last_update = t0;
     while (!cat_is_ready()) {
+        qmx_settings_t s;
+        settings_load_all(&s);
+        if (s.sim_mode_en) {
+            ESP_LOGI(TAG, "sim mode ON - not waiting for QMX (no radio needed)");
+            return;
+        }
         int64_t now = esp_timer_get_time();
         if ((now - last_update) / 1000 >= CAT_STATUS_UPDATE_MS) {
             ft8_status_set("Waiting for QMX - check USB/power");
@@ -1585,9 +1599,38 @@ static void ft8_task(void *arg)
                 }
             } else {
                 s_buf_busy[bi] = false;   // capture failed: release the monitor
-                ft8_status_set("RX: capture error");
-                ESP_LOGW(TAG, "slot %d UTC %lld: capture failed (%d)",
-                         slot_idx, (long long)slot_sec, e);
+                qmx_settings_t sim_chk;
+                settings_load_all(&sim_chk);
+                if (sim_chk.sim_mode_en) {
+                    // Sim mode with no QMX audio: capture timing out is the
+                    // NORMAL case, not an error. The phantom stations inject
+                    // decodes directly (ft8_sim.c -> ft8_screen_record_decode),
+                    // bypassing audio entirely - but ft8_qso_advance() normally
+                    // only runs from the decode task after a successful capture,
+                    // so without this the injected replies sat unread and the
+                    // QSO machine re-sent the same message forever. Run the
+                    // same end-of-slot bookkeeping decode_slot() would have.
+                    // Safe here: with no audio no decode job was queued for
+                    // this slot, so no decode-task advance() can race this one.
+                    ft8_status_set("SIM RX slot (no audio)");
+                    // Honor the Fast-pounce toggle's timing in sim: with the
+                    // early-decode cut OFF a real decode pass lands ~1.5-3.5 s
+                    // AFTER the boundary, and ft8_sim delays its phantom-reply
+                    // injection to match - so wait the same before consuming,
+                    // or the advance would scan before the reply exists. With
+                    // it ON both the injection and this advance run before /
+                    // at the boundary (the whole point of the toggle).
+                    if (!sim_chk.ft8_early_decode) vTaskDelay(pdMS_TO_TICKS(3500));
+                    ESP_LOGI(TAG, "slot %d UTC %lld: no audio (sim) - running QSO advance%s",
+                             slot_idx, (long long)slot_sec,
+                             sim_chk.ft8_early_decode ? "" : " (late, early-decode OFF)");
+                    ft8_qso_advance(slot_sec);
+                    ft8_screen_view_request_refresh();
+                } else {
+                    ft8_status_set("RX: capture error");
+                    ESP_LOGW(TAG, "slot %d UTC %lld: capture failed (%d)",
+                             slot_idx, (long long)slot_sec, e);
+                }
             }
         }
 

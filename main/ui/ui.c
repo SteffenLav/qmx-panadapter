@@ -35,6 +35,7 @@
 #include "time_sync.h"
 #include "ft8_screen.h"
 #include "ft8_screen_view.h"
+#include "../ft8_pileup.h"
 #include "reader_view.h"
 #include "ft8_test.h"
 #include "esp_lcd_touch.h"
@@ -1949,8 +1950,11 @@ static void qmx_wait_poll_cb(lv_timer_t *t)
     bool hidden = lv_obj_has_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
     // Never show the "turn on your QMX" breathing overlay over the docs Reader —
     // it's an operational cue irrelevant while reading, and its 1 Hz
-    // re-foreground would draw on top of the Reader page.
-    if (reader_view_is_active()) {
+    // re-foreground would draw on top of the Reader page. Same in FT8
+    // Simulation Mode: the simulator runs entirely on phantom stations and
+    // ft8_tx.c's interlock never keys a radio, so a QMX is not required —
+    // prompting for one is misleading (and the prompt covers the sim bezel).
+    if (reader_view_is_active() || s_sim_mode_en) {
         if (!hidden) {
             lv_anim_delete(s_qmx_wait_lbl, qmx_wait_breathe_anim_cb);
             lv_obj_add_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
@@ -6557,6 +6561,15 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
         if (ft8) {
             lv_obj_set_x(ft8, animate ? -DISPLAY_H_RES : 0);
             lv_obj_clear_flag(ft8, LV_OBJ_FLAG_HIDDEN);
+        }
+        // Simulation mode: re-entering FT8 starts a clean practice session -
+        // drop the stale phantom decode rows and pileup left from the last
+        // visit (they'd otherwise sit there looking live). Real-RX mode keeps
+        // both, as usual: rows age out naturally and pileup callers persist.
+        if (s_sim_mode_en) {
+            ft8_screen_clear();
+            ft8_pileup_clear();
+            ft8_screen_view_request_refresh();
         }
         // Sticky settings: remember where Panadapter was left, restore
         // where FT8 was left (or just force DiGi on the very first entry).
