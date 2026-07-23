@@ -1459,11 +1459,22 @@ static void ft8_task(void *arg)
             // (a hand-tapped Transmit/pounce that hasn't fired yet): both mean
             // the partner's next message must decode BEFORE the boundary so the
             // fresh reply can arm and fire at DT~0. The armed case is what lets
-            // a manual exchange land on-beat instead of a cycle late; it costs
-            // nothing on plain band-monitoring (no TX armed), so decode yield
-            // there is untouched.
+            // a manual exchange land on-beat instead of a cycle late.
+            //
+            // With ft8_early_decode ON (default) the cut ALSO runs during plain
+            // monitoring, so EVERY decode surfaces before the boundary the way
+            // WSJT-X does - this is what makes a COLD pounce (first reply to a
+            // fresh CQ) able to fire in its own slot instead of a cycle later.
+            // The trade-off is weak/late-station yield: capture stops at
+            // period-RESERVE (~13.2 s), so a station transmitting late enough
+            // that its tail lands past that point (our ~560 ms RX latency eats
+            // into the margin) can be clipped and miss decoding. Operator-
+            // toggleable so it can be turned off if a given band's yield suffers.
+            qmx_settings_t cut_cfg;
+            settings_load_all(&cut_cfg);
             bool want_early_cut = ft8_qso_is_busy(NULL, 0) ||
-                                  (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ARMED);
+                                  (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ARMED) ||
+                                  cut_cfg.ft8_early_decode;
             if (!is_ft4 && want_early_cut) {
                 int cut = (period_ms - FT8_DECODE_RESERVE_MS) * (SR_HZ / 1000);
                 if (cut > slot_samples) cut = slot_samples;   // reserve too small

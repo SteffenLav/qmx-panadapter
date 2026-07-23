@@ -1318,6 +1318,7 @@ static char s_current_band[8] = "---";  // Phase 9 (v0.9.5): cached band string 
 static uint32_t s_passband_width_hz = 0;  // Phase 5.10G: 0 = use mode default; else from CAT FW
 static uint16_t s_cw_pitch_hz = 700;  // CW sidetone offset (Hz); applied to touch-tune in CW modes
 static bool s_distance_in_miles = false;  // FT8 distance unit toggle (NVS-backed)
+static bool s_ft8_early_decode = true;    // FT8 fast-pounce early-decode toggle (NVS-backed)
 static const bool s_ft8_sync_lines = false;  // FT8 sync-line diagnostic removed (drawer toggle gone); overlay/3x-WF never engage
 static bool s_sim_mode_en = false;     // FT8 simulation mode toggle (NVS-backed)
 
@@ -1646,6 +1647,7 @@ static lv_obj_t *s_check_charge_limit = NULL;   // battery-care enable checkbox
 static lv_obj_t *s_lbl_charge_limit_pct = NULL; // "Stop charging at: NN%" label
 static lv_obj_t *s_slider_charge_limit_pct = NULL;
 static lv_obj_t *s_check_distance_miles = NULL;  // FT8 distance unit (km/miles) checkbox
+static lv_obj_t *s_check_ft8_early = NULL;       // FT8 fast-pounce early-decode checkbox
 static lv_obj_t *s_check_sim_mode = NULL;        // FT8 simulation mode checkbox
 static lv_obj_t *s_lbl_sim_mode   = NULL;        // its label (dimmed alongside the checkbox)
 static bool      s_sim_mode_locked = false;      // true while in FT4 - the phantom-station
@@ -5167,6 +5169,14 @@ static void drawer_check_distance_miles_cb(lv_event_t *e)
     ESP_LOGI(TAG, "FT8 distance unit: %s", s_distance_in_miles ? "miles" : "km");
 }
 
+static void drawer_check_ft8_early_cb(lv_event_t *e)
+{
+    lv_obj_t *cb = lv_event_get_target(e);
+    s_ft8_early_decode = lv_obj_has_state(cb, LV_STATE_CHECKED);
+    settings_set_ft8_early_decode(s_ft8_early_decode);
+    ESP_LOGI(TAG, "FT8 early-decode (fast pounce): %s", s_ft8_early_decode ? "on" : "off");
+}
+
 // (The manual "QMX has GPS" checkbox was removed 2026-07-19 - GPS is now
 // auto-detected in time_sync.c from whether the QMX tick agrees with SNTP.)
 
@@ -5983,7 +5993,7 @@ static void drawer_build(void)
     // FT8 decode-list distance unit (km/miles). FT8-screen-only; kept visible
     // in FT8 mode via drawer_set_ft8_mode's keep[] list.
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_DISTANCE, y, 56);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_DISTANCE, y, 112);
         lv_obj_t *dist_lbl = lv_label_create(sec);
         lv_label_set_text(dist_lbl, "Distance in miles");
         lv_obj_set_style_text_color(dist_lbl, lv_color_hex(0xFFFFFF), 0);
@@ -5994,7 +6004,20 @@ static void drawer_build(void)
         s_distance_in_miles = scfg_dist.distance_in_miles;
         s_check_distance_miles = make_drawer_checkbox(sec, s_distance_in_miles, drawer_check_distance_miles_cb, NULL);
         lv_obj_align(s_check_distance_miles, LV_ALIGN_TOP_RIGHT, 0, 6);
-        y += 56;
+
+        // Second row: fast-pounce early-decode. Surfaces decodes before the
+        // slot boundary so a hand-tapped reply/pounce fires in its own slot
+        // (WSJT-X-style) rather than a cycle late — at a small weak/late-station
+        // decode-yield cost, hence the toggle. Shares this FT8-only section.
+        lv_obj_t *early_lbl = lv_label_create(sec);
+        lv_label_set_text(early_lbl, "Fast pounce (early decode)");
+        lv_obj_set_style_text_color(early_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(early_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(early_lbl, LV_ALIGN_TOP_LEFT, 0, 66);
+        s_ft8_early_decode = scfg_dist.ft8_early_decode;
+        s_check_ft8_early = make_drawer_checkbox(sec, s_ft8_early_decode, drawer_check_ft8_early_cb, NULL);
+        lv_obj_align(s_check_ft8_early, LV_ALIGN_TOP_RIGHT, 0, 62);
+        y += 112;
     }
     // FT8 simulation mode: phantom-station practice partner, real radio
     // never keyed (see ft8_sim.h). FT8-only - same exclusive-to-FT8-mode
@@ -6111,7 +6134,7 @@ static void drawer_set_ft8_mode(bool ft8)
     // height passed to that section's own drawer_section(ID, y, height) call.
     // (WiFi is 72, matching its drawer_section call - was mistakenly 128, which
     //  left a 56 px dead gap between WiFi setup and Callsign in FT8 mode.)
-    static const int keep_h[] = { 56, 124, 136, 130, 56, 56, 72, 72 };
+    static const int keep_h[] = { 56, 124, 136, 130, 112, 56, 72, 72 };
     const int n_keep = sizeof(keep) / sizeof(keep[0]);
 
     // Antenna Tune: shown only in Panadapter mode with confirmed 1_04+
