@@ -85,6 +85,9 @@ typedef struct {
     bool     snap_to_peak;    // tap-to-tune snaps to the strongest nearby signal (default true)
     uint8_t  bandplan_region; // band-plan strip region: 0=auto(from grid) 1=R1 2=R2 3=R3
     bool     distance_in_miles; // FT8 decode list: show distance in miles instead of km (default false)
+    bool     ft8_early_decode; // FT8 monitoring: cut capture ~1.8 s early so decodes surface BEFORE the
+                               // slot boundary (WSJT-X-style), letting a cold pounce fire in the reply
+                               // slot at a decodable DT. Trades some weak/late-station yield (default true)
     bool     ft8_sync_lines;  // Panadapter: FT8-sync-vs-SNTP waterfall slot-boundary lines + 2x waterfall speed (default false)
     ft8_filters_t ft8_filters;        // CQ-run reply include/exclude filters
     bool     field_day_en;    // ARRL Field Day exchange mode: TX/RX class+section instead of grid/report (default false)
@@ -176,6 +179,11 @@ void settings_set_display_flip(bool v);
 // FT8 distance display unit (debounced flush). When false show distance in km,
 // when true show distance in miles.
 void settings_set_distance_in_miles(bool v);
+
+// FT8 early-decode / fast-pounce timing (debounced flush). When true, plain
+// monitoring cuts capture ~1.8 s early so decodes land before the slot
+// boundary and a hand-tapped reply can fire in its own slot at a decodable DT.
+void settings_set_ft8_early_decode(bool v);
 
 // Band-plan strip region (debounced flush): 0=auto (derive from grid), 1=R1,
 // 2=R2, 3=R3.

@@ -32,7 +32,9 @@ static lv_obj_t   *s_lbl_message   = NULL;
 static lv_obj_t   *s_lbl_detail    = NULL;
 static lv_obj_t   *s_lbl_countdown = NULL;
 static lv_obj_t   *s_lbl_error     = NULL;
-static lv_obj_t   *s_btn_pounce    = NULL;  // "Auto Pounce" (REPLY only)
+static lv_obj_t   *s_btn_pounce    = NULL;  // "Auto Pounce" (fresh-grid REPLY only)
+static lv_obj_t   *s_pounce_swatch = NULL;  // legend swatch, hidden with the button
+static lv_obj_t   *s_pounce_legend = NULL;  // legend text, hidden with the button
 static lv_obj_t   *s_btn_nudge_up  = NULL;  // re-target the row above (REPLY only)
 static lv_obj_t   *s_btn_nudge_dn  = NULL;  // re-target the row below (REPLY only)
 static lv_timer_t *s_timer         = NULL;
@@ -104,6 +106,17 @@ static void transmit_btn_cb(lv_event_t *e)
     }
     if (ft8_tx_arm(&s_pending_req, err, sizeof(err))) {
         ESP_LOGI(TAG, "armed via modal: '%s'", s_pending_req.display_text);
+        // Track who we're manually working: keeps the partner out of the
+        // pileup capture mid-exchange and drives the amber "working" row
+        // highlight for hand-run QSOs (same look as an auto QSO).
+        if (s_pending_req.target_call[0])
+            ft8_qso_note_manual_target(s_pending_req.target_call);
+        // A manually-armed closing message (RR73/73) wraps up a hand-run QSO:
+        // seed the QSO machine's WAIT_DONE so the burst's completion logs the
+        // QSO to ADIF and drops the partner from the pileup - same wrap-up an
+        // auto QSO gets. No-op if a machine QSO is already active.
+        if (s_pending_req.kind == FT8_TX_KIND_73)
+            ft8_qso_notify_manual_final(s_pending_req.target_call);
         modal_close();
     } else {
         ESP_LOGW(TAG, "arm refused: %s", err);
@@ -263,7 +276,8 @@ static void modal_build(void)
     lv_obj_set_style_text_font(lbl_tx_legend, &lv_font_montserrat_28, 0);
     lv_obj_align(lbl_tx_legend, LV_ALIGN_TOP_LEFT, 34, 230);
 
-    lv_obj_t *swatch_pounce = lv_obj_create(s_panel);
+    s_pounce_swatch = lv_obj_create(s_panel);
+    lv_obj_t *swatch_pounce = s_pounce_swatch;
     lv_obj_set_size(swatch_pounce, 24, 24);
     lv_obj_set_style_radius(swatch_pounce, 12, 0);
     lv_obj_set_style_bg_color(swatch_pounce, lv_color_hex(UI_COLOR_PRIMARY), 0);
@@ -274,7 +288,8 @@ static void modal_build(void)
     // Kept short enough to stay on one line at this font/width - the prior
     // longer phrasing could wrap to 2 lines and run into the button row
     // below, leaving less than the required 30px clearance.
-    lv_obj_t *lbl_pounce_legend = lv_label_create(s_panel);
+    s_pounce_legend = lv_label_create(s_panel);
+    lv_obj_t *lbl_pounce_legend = s_pounce_legend;
     lv_label_set_text(lbl_pounce_legend, "Sends it, then auto-replies until the QSO is done.");
     lv_obj_set_style_text_color(lbl_pounce_legend, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(lbl_pounce_legend, &lv_font_montserrat_28, 0);
@@ -366,13 +381,21 @@ void ft8_tx_modal_show(const ft8_tx_request_t *req)
     lv_label_set_text(s_lbl_error, "");
     lv_obj_add_flag(s_lbl_error, LV_OBJ_FLAG_HIDDEN);
 
-    // Auto Pounce and row-nudge only make sense for a REPLY (we're working
-    // someone else's CQ, picked from a decode-list row). Hide both for CQ
-    // kind (we *are* the caller — there's no row to nudge between).
+    // Row-nudge makes sense for any reply built from a decode-list row (REPLY
+    // kind); hide it for a CQ (we *are* the caller — no row to nudge between).
     bool is_reply = (s_pending_req.kind == FT8_TX_KIND_REPLY);
-    if (s_btn_pounce) {
-        if (is_reply) lv_obj_clear_flag(s_btn_pounce, LV_OBJ_FLAG_HIDDEN);
-        else          lv_obj_add_flag(s_btn_pounce, LV_OBJ_FLAG_HIDDEN);
+    // Auto Pounce (the full auto-sequencer) is offered for any REPLY-kind
+    // request: a grid TX1 (extra empty) starts in WAIT_RPT, and a report-first
+    // reply (extra = "+NN"/"-NN" - Skip-TX1 manual build, pileup modal, or a
+    // tapped their-grid row) is honoured as-is by ft8_qso_start() and starts
+    // in WAIT_ROGER. Only the later ladder steps (ROGER_RPT / 73 kinds) would
+    // mis-seed the state machine - those get single Transmit only.
+    bool is_fresh_pounce = is_reply;
+    lv_obj_t *pounce_objs[] = { s_btn_pounce, s_pounce_swatch, s_pounce_legend };
+    for (unsigned i = 0; i < sizeof(pounce_objs) / sizeof(pounce_objs[0]); i++) {
+        if (!pounce_objs[i]) continue;
+        if (is_fresh_pounce) lv_obj_clear_flag(pounce_objs[i], LV_OBJ_FLAG_HIDDEN);
+        else                 lv_obj_add_flag(pounce_objs[i], LV_OBJ_FLAG_HIDDEN);
     }
     if (s_btn_nudge_up) {
         if (is_reply) lv_obj_clear_flag(s_btn_nudge_up, LV_OBJ_FLAG_HIDDEN);

@@ -54,6 +54,10 @@ int ft8_pileup_get_all(ft8_pileup_entry_t *out, int max);
 // Current count - drives the FT8 screen's ADIF-log/Pileup button swap.
 int ft8_pileup_count(void);
 
+// Drop every tracked caller (e.g. FT8 re-entry in simulation mode, where the
+// stale phantom pileup from the previous visit is just confusing).
+void ft8_pileup_clear(void);
+
 #ifdef __cplusplus
 }
 #endif

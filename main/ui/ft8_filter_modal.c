@@ -372,7 +372,12 @@ static void modal_build(void)
     lv_label_set_text(s_robot_warn, LV_SYMBOL_WARNING " Transmits unattended - never leave running unsupervised");
     lv_obj_set_style_text_font(s_robot_warn, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(s_robot_warn, lv_color_hex(0xFF8800), 0);
-    lv_obj_align(s_robot_warn, LV_ALIGN_TOP_LEFT, 4, 612);
+    // Right column, in the free space directly above the "Auto-work pileup"
+    // row (540,450) - the old spot (4,612) sat right under the robot row and
+    // collided with the ARRL Field Day row at y=635 (operator report). Width-
+    // bounded so the wrapped text stays clear of the right-edge buttons.
+    lv_obj_set_width(s_robot_warn, 460);
+    lv_obj_align(s_robot_warn, LV_ALIGN_TOP_LEFT, 540, 372);
     lv_obj_add_event_cb(s_cb_robot, robot_checked_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
     // --- Auto-work pileup row — LIVE TX (unattended) ------------------
@@ -416,10 +421,11 @@ static void modal_build(void)
     lv_obj_set_style_text_color(s_ta_fd_section, lv_color_hex(UI_COLOR_TEXT_MUTED), LV_PART_TEXTAREA_PLACEHOLDER);
     lv_obj_add_event_cb(s_ta_fd_section, ta_focused_top_cb, LV_EVENT_FOCUSED, NULL);
 
-    // --- Save / Cancel / Sync Time on the right edge, evenly distributed.
-    // Panel inner h = 720-40 = 680 px (shrunk to fit the screen exactly - see
-    // the panel size comment above). Three buttons h=64: total 192 px.
-    // Remaining 488 px / 4 gaps = 122 px each → y = 122 / 308 / 494.
+    // --- Save / Cancel / Sync Time on the right edge, stacked at the top.
+    // Same placement as the Waveshare P4 port: Save lines up with the first
+    // include text field (y=38) and the three stack down 120 px apart - this
+    // frees the lower-right for the unattended-TX warning above the
+    // Auto-work-pileup row (was evenly distributed down the whole edge).
     {
         struct { const char *lbl; uint32_t col; lv_event_cb_t cb; } btns[3] = {
             { "Save",      0x2e8b3a, save_btn_cb      },
@@ -430,7 +436,7 @@ static void modal_build(void)
         for (int i = 0; i < 3; i++) {
             lv_obj_t *b = lv_btn_create(panel);
             lv_obj_set_size(b, 180, 64);
-            lv_obj_align(b, LV_ALIGN_TOP_RIGHT, 0, 122 + i * (64 + 122));
+            lv_obj_align(b, LV_ALIGN_TOP_RIGHT, 0, 38 + i * 120);
             lv_obj_set_style_bg_color(b, lv_color_hex(btns[i].col), 0);
             lv_obj_set_style_radius(b, 8, 0);
             lv_obj_set_style_border_width(b, 0, 0);

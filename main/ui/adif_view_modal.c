@@ -16,6 +16,7 @@
 #include "util/dxcc.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -65,6 +66,16 @@ static lv_obj_t *s_title      = NULL;
 static lv_obj_t *s_list       = NULL;
 static lv_obj_t *s_lbl_filter = NULL;   // label inside the Today/All toggle button
 static bool      s_open       = false;
+
+// "Delete test QSOs" (operator request 2026-07-23): FT8 Simulation Mode
+// contacts log with no CAT frequency (FREQ 0.000000 - a real contact always
+// carries one), which is how they're recognized here. The button only exists
+// while such records are present, so operators who never simulate never see
+// it. Two-tap confirm: first tap arms ("Sure?"), second within 5 s deletes.
+static lv_obj_t *s_btn_del_test  = NULL;
+static lv_obj_t *s_lbl_del_test  = NULL;
+static int       s_test_count    = 0;      // FREQ==0 records at last render
+static int64_t   s_del_test_arm_us = 0;    // 0 = not armed
 
 // Show only today's (UTC) QSOs - the POTA-activation view. Defaults to Today
 // on open; show() falls back to All when nothing was logged today (reviewing
@@ -351,6 +362,8 @@ static void list_render(void)
     if (total == 0) {
         s_last_total = 0;
         s_last_today = 0;
+        s_test_count = 0;
+        if (s_btn_del_test) lv_obj_add_flag(s_btn_del_test, LV_OBJ_FLAG_HIDDEN);
         if (s_title) {
             lv_label_set_text(s_title, "ADIF Log - 0 QSOs");
             lv_obj_set_style_text_color(s_title, lv_color_hex(UI_COLOR_TEXT), 0);
@@ -386,6 +399,7 @@ static void list_render(void)
         char raw[1024];
         bool header_skipped = false;
         int  rec = 0;   // 0-based file record index (counts ALL records)
+        s_test_count = 0;
         while (fgets(raw, sizeof(raw), f)) {
             if (!header_skipped) { header_skipped = true; continue; }   // <EOH> line
             int this_rec = rec++;
@@ -393,6 +407,11 @@ static void list_render(void)
             adif_log_extract_field(raw, "QSO_DATE", date, sizeof(date));
             bool is_today = (strcmp(date, today) == 0);
             if (is_today) today_count++;
+            // Simulation-mode records (FREQ 0) - counted regardless of the
+            // Today/All filter, drives the "Delete test QSOs" button.
+            char freq_s[16] = "";
+            if (adif_log_extract_field(raw, "FREQ", freq_s, sizeof(freq_s)) &&
+                atof(freq_s) < 0.001) s_test_count++;
             if (s_today_only && !is_today) continue;
             char *slot = lines + (size_t)(matched % ring_cap) * 1024;
             strncpy(slot, raw, 1023);
@@ -417,6 +436,19 @@ static void list_render(void)
         // Park is open: 10+ QSOs today = a valid POTA activation.
         lv_obj_set_style_text_color(s_title,
             lv_color_hex(today_count >= POTA_ACTIVATION_QSOS ? COLOR_ACTIVATION_OK : UI_COLOR_TEXT), 0);
+    }
+
+    // "Delete test QSOs" only exists while sim-mode records are in the log -
+    // operators who never simulate never see it.
+    if (s_btn_del_test) {
+        s_del_test_arm_us = 0;
+        if (s_test_count > 0) {
+            lv_obj_clear_flag(s_btn_del_test, LV_OBJ_FLAG_HIDDEN);
+            if (s_lbl_del_test)
+                lv_label_set_text_fmt(s_lbl_del_test, "Del %d test", s_test_count);
+        } else {
+            lv_obj_add_flag(s_btn_del_test, LV_OBJ_FLAG_HIDDEN);
+        }
     }
 
     if (matched == 0) {
@@ -473,6 +505,57 @@ static void list_render(void)
              (long long)((t_read_done - t_read_start) / 1000),
              (long long)((t_done - t_read_done) / 1000),
              (long long)((t_done - t_start) / 1000));
+}
+
+// Delete every FREQ==0 (simulation-mode) record. Two-tap confirm: the first
+// tap arms the button ("Sure?"), a second tap within 5 s deletes. Indices are
+// collected fresh at delete time (the list may have changed since render) and
+// removed HIGHEST-FIRST, since adif_log_delete_record() shifts every record
+// after the deleted one down by one slot.
+static void del_test_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    int64_t now = esp_timer_get_time();
+    if (s_del_test_arm_us == 0 || (now - s_del_test_arm_us) > 5000000) {
+        s_del_test_arm_us = now;
+        if (s_lbl_del_test) lv_label_set_text(s_lbl_del_test, "Sure?");
+        return;
+    }
+    s_del_test_arm_us = 0;
+
+    // Collect the file indices of all FREQ==0 records.
+    int cap = adif_log_count();
+    int *idxs = cap > 0 ? heap_caps_malloc((size_t)cap * sizeof(int),
+                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : NULL;
+    int n_test = 0;
+    if (idxs) {
+        FILE *f = fopen(adif_log_file_path(), "r");
+        if (f) {
+            char raw[1024];
+            bool header_skipped = false;
+            int  rec = 0;
+            while (fgets(raw, sizeof(raw), f) && n_test < cap) {
+                if (!header_skipped) { header_skipped = true; continue; }
+                int this_rec = rec++;
+                char freq_s[16] = "";
+                if (adif_log_extract_field(raw, "FREQ", freq_s, sizeof(freq_s)) &&
+                    atof(freq_s) < 0.001) idxs[n_test++] = this_rec;
+            }
+            fclose(f);
+        }
+    }
+
+    int deleted = 0;
+    for (int i = n_test - 1; i >= 0; i--) {           // highest-first
+        if (adif_log_delete_record(idxs[i])) deleted++;
+    }
+    if (idxs) heap_caps_free(idxs);
+
+    ESP_LOGI(TAG, "deleted %d test (sim-mode, FREQ=0) QSO record(s)", deleted);
+    char msg[48];
+    snprintf(msg, sizeof(msg), "Deleted %d test QSO%s", deleted, deleted == 1 ? "" : "s");
+    ui_toast(msg);
+    sel_reset(true);   // clears any row selection + re-renders (button hides itself)
 }
 
 static void filter_btn_cb(lv_event_t *e)
@@ -534,6 +617,23 @@ static void modal_build(void)
     lv_label_set_text(s_title, "ADIF Log");
     lv_obj_set_style_text_color(s_title, lv_color_hex(UI_COLOR_TEXT), 0);
     lv_obj_set_style_text_font(s_title, &lv_font_montserrat_28, 0);
+
+    // "Delete test QSOs" - only shown while sim-mode (FREQ 0) records exist;
+    // list_render() manages visibility + the count in the label. Sits between
+    // the title and the Today/All toggle in the same header strip.
+    s_btn_del_test = lv_btn_create(hdr);
+    lv_obj_set_size(s_btn_del_test, 190, 56);
+    lv_obj_set_style_bg_color(s_btn_del_test, lv_color_hex(0x7a4a10), 0);   // muted amber: caution
+    lv_obj_set_style_border_color(s_btn_del_test, lv_color_hex(0xb07020), 0);
+    lv_obj_set_style_border_width(s_btn_del_test, 2, 0);
+    lv_obj_set_style_radius(s_btn_del_test, 8, 0);
+    lv_obj_add_flag(s_btn_del_test, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_event_cb(s_btn_del_test, del_test_btn_cb, LV_EVENT_CLICKED, NULL);
+    s_lbl_del_test = lv_label_create(s_btn_del_test);
+    lv_label_set_text(s_lbl_del_test, "Del test");
+    lv_obj_set_style_text_color(s_lbl_del_test, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(s_lbl_del_test, &lv_font_montserrat_24, 0);
+    lv_obj_center(s_lbl_del_test);
 
     // Today/All filter toggle - the label is the ACTION (the view pressing
     // it switches to); the title above shows the current view.

@@ -62,6 +62,7 @@ static const char *TAG = "settings";
 #define KEY_SNAP_PEAK    "snap_peak"
 #define KEY_BP_REGION    "bp_region"
 #define KEY_DISTANCE_MILES "dist_miles"
+#define KEY_FT8_EARLY_DEC  "ft8_earlydec"
 #define KEY_FT8_SYNC_LINES "ft8_sync_ln"
 #define KEY_FIELD_DAY_EN   "fd_en"
 #define KEY_FD_CLASS       "fd_class"
@@ -165,6 +166,7 @@ static const char *TAG = "settings";
 #define DIRTY_LOTW_ITUZ      (1ull << 58)
 #define DIRTY_LOTW_UPLOADED  (1ull << 59)
 #define DIRTY_DISP_SLEEP     (1ull << 60)
+#define DIRTY_FT8_EARLY_DEC  (1ull << 61)
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -310,6 +312,7 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_SNAP_PEAK)   nvs_set_u8(s_nvs, KEY_SNAP_PEAK, snap.snap_to_peak ? 1 : 0);
         if (dirty_local & DIRTY_BP_REGION)   nvs_set_u8(s_nvs, KEY_BP_REGION, snap.bandplan_region);
         if (dirty_local & DIRTY_DISTANCE_MILES) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap.distance_in_miles ? 1 : 0);
+        if (dirty_local & DIRTY_FT8_EARLY_DEC) nvs_set_u8(s_nvs, KEY_FT8_EARLY_DEC, snap.ft8_early_decode ? 1 : 0);
         if (dirty_local & DIRTY_FT8_SYNC_LINES) nvs_set_u8(s_nvs, KEY_FT8_SYNC_LINES, snap.ft8_sync_lines ? 1 : 0);
         if (dirty_local & DIRTY_FIELD_DAY_EN) nvs_set_u8(s_nvs, KEY_FIELD_DAY_EN, snap.field_day_en ? 1 : 0);
         if (dirty_local & DIRTY_FD_CLASS)     nvs_set_str(s_nvs, KEY_FD_CLASS, snap.fd_class);
@@ -428,6 +431,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->wf_window      = DEF_WF_WINDOW;
     out->display_flip   = false;
     out->snap_to_peak   = true;   // on by default (legacy behaviour)
+    out->ft8_early_decode = true; // on by default (WSJT-X-style fast pounce timing)
     out->bandplan_region = 0;     // 0 = auto (derive from grid)
     memset(&out->ft8_filters, 0, sizeof(out->ft8_filters));
     out->field_day_en = false;
@@ -530,6 +534,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_SNAP_PEAK, &u8v) == ESP_OK) out->snap_to_peak = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_BP_REGION, &u8v) == ESP_OK) out->bandplan_region = (u8v <= 3) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_DISTANCE_MILES, &u8v) == ESP_OK) out->distance_in_miles = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_FT8_EARLY_DEC, &u8v) == ESP_OK) out->ft8_early_decode = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_FT8_SYNC_LINES, &u8v) == ESP_OK) out->ft8_sync_lines = (u8v != 0);
 
     sz = sizeof(out->ft8_filters);
@@ -1070,6 +1075,16 @@ void settings_set_distance_in_miles(bool v)
     s_pending.distance_in_miles = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_DISTANCE_MILES);
+}
+
+void settings_set_ft8_early_decode(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.ft8_early_decode == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.ft8_early_decode = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_FT8_EARLY_DEC);
 }
 
 void settings_set_bandplan_region(uint8_t v)

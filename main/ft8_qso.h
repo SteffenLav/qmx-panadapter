@@ -109,6 +109,39 @@ bool ft8_qso_get_priority_freq(int *freq_hz_out);
 // uses for cqrun_answer()/skip-TX1 reports.
 void ft8_qso_fmt_report(int snr_db, char *out, size_t len);
 
+// Build the correct NEXT manual-Transmit message for a tapped decode-list row,
+// derived from what that station last sent us relative to our own call (WSJT-X
+// double-click semantics): CQ/not-to-us -> TX1 grid; their grid -> our report;
+// their report -> R+our report; their R-report -> RR73; their RR73/73 -> 73.
+// The report value is OUR measured SNR of them (heard->last_snr_db), not an
+// echo. reply_freq_hz is the audio tone for our TX. *is_fresh_grid (optional)
+// is set true only for the TX1-grid case (where Auto Pounce still applies).
+// Returns false + err on identity/encode failure. LVGL thread only.
+bool ft8_qso_build_manual_reply(const ft8_call_t *heard, int reply_freq_hz,
+                                ft8_tx_request_t *out, bool *is_fresh_grid,
+                                char *err, size_t err_len);
+
+// A manually-built closing message (RR73/73 via the TX modal's Transmit, with
+// no machine QSO running) was just armed. Seeds the QSO machine's WAIT_DONE
+// state so the existing completion path runs once the burst leaves the air:
+// ADIF log entry, pileup removal, "QSO complete" status - the same wrap-up an
+// auto QSO gets. Without this a fully-manual exchange was never logged, so
+// worked-before knew nothing and the partner's trailing 73 re-entered the
+// pileup. No-op if a machine QSO is already in progress (its own path logs).
+// LVGL thread only.
+void ft8_qso_notify_manual_final(const char *target_call);
+
+// Note the station the operator is working MANUALLY (called on every manual
+// Transmit arm). Keeps the partner out of the pileup capture and lets the
+// decode list show the amber "working" highlight during a hand-run exchange.
+// Expires after ~5 min of no manual activity; cleared on QSO completion.
+void ft8_qso_note_manual_target(const char *target_call);
+
+// The station currently "being worked" for UI highlighting: the machine QSO's
+// target when an exchange is active, else a fresh manual target (see above).
+// Returns false (empty buf) if neither.
+bool ft8_qso_get_working_target(char *buf, size_t len);
+
 // True if a decoded message text passes the operator's include/exclude term
 // filters (the same ft8_filters_t used by CQ-run auto-reply). Exposed so the
 // robot (ft8_robot.c) applies the exact same matching as the manual paths.

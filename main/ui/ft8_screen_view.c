@@ -437,13 +437,17 @@ static void row_activate(int idx)
     ESP_LOGI(TAG, "row activate: reply to %s (their_freq=%d Hz -> our_freq=%d Hz, last_utc=%lld)",
              match->call, (int)match->last_freq, reply_freq_hz, (long long)match->last_utc);
 
+    // Intelligent Transmit: build the correct NEXT message for this row (grid /
+    // report / R-report / RR73 / 73) from what the station last sent us, so the
+    // Transmit button steps the QSO forward instead of always resending our
+    // grid. Auto Pounce (the full auto-sequencer) is still offered for a fresh
+    // CQ; the modal derives that from the request (see ft8_tx_modal_show).
     ft8_tx_request_t req;
     char err[64];
-    if (ft8_tx_build_request(FT8_TX_KIND_REPLY, match->call, reply_freq_hz,
-                             match->last_utc, NULL, &req, err, sizeof(err))) {
+    if (ft8_qso_build_manual_reply(match, reply_freq_hz, &req, NULL, err, sizeof(err))) {
         ft8_tx_modal_show(&req);
     } else {
-        ESP_LOGW(TAG, "build_request(reply to %s) failed: %s", match->call, err);
+        ESP_LOGW(TAG, "build manual reply to %s failed: %s", match->call, err);
         identity_config_modal_show();
     }
 }
@@ -808,13 +812,9 @@ static void rebuild_list(void)
     // "currently working" row highlight - distinct from the broader own-call
     // red highlight, which covers every station that's answered, not just
     // the one we're presently giving a report / waiting on a roger from.
-    ft8_qso_state_t qso_st = ft8_qso_get_state();
-    if (qso_st == FT8_QSO_WAIT_ROGER || qso_st == FT8_QSO_WAIT_RR73 ||
-        qso_st == FT8_QSO_WAIT_DONE  || qso_st == FT8_QSO_WAIT_RPT) {
-        ft8_qso_get_target(s_qso_active_target, sizeof(s_qso_active_target));
-    } else {
-        s_qso_active_target[0] = '\0';
-    }
+    // Covers both a machine QSO's target and a manually-stepped partner
+    // (ft8_qso_note_manual_target), so hand-run exchanges look the same.
+    ft8_qso_get_working_target(s_qso_active_target, sizeof(s_qso_active_target));
 
     int row = 0;
     for (int i = 0; i < n && row < MAX_ROWS; i++) {
@@ -946,11 +946,17 @@ static void t_clock_cb(lv_timer_t *t)
     // count itself at tap time, so this is purely cosmetic - it can never
     // cause a tap to open the wrong modal.
     if (s_btn_adif) {
+        static bool s_was_pileup = false;
         bool has_pileup = ft8_pileup_count() > 0;
         lv_obj_t *lbl = lv_obj_get_child(s_btn_adif, 0);
         if (lbl) lv_label_set_text(lbl, has_pileup ? "Pileup" : "ADIF-log");
         lv_obj_set_style_bg_color(s_btn_adif,
             lv_color_hex(has_pileup ? UI_COLOR_PRIMARY : 0x163d5e), 0);
+        // When the button first flips to "Pileup", teach the (otherwise
+        // hidden) hold-for-log gesture once, so the ADIF log never feels lost.
+        if (has_pileup && !s_was_pileup)
+            ui_toast("Pileup active - hold this button for the ADIF log");
+        s_was_pileup = has_pileup;
     }
 
     // Status / TX / QSO indicator — always visible.
@@ -1214,12 +1220,24 @@ static void adif_or_pileup_btn_cb(lv_event_t *e)
 {
     (void)e;
     if (ft8_pileup_count() > 0) {
-        ESP_LOGI(TAG, "Pileup/ADIF-log button tapped -> pileup viewer");
+        ESP_LOGI(TAG, "Pileup/ADIF-log button short-tapped -> pileup viewer");
         ft8_pileup_modal_show();
     } else {
-        ESP_LOGI(TAG, "Pileup/ADIF-log button tapped -> ADIF log viewer");
+        ESP_LOGI(TAG, "Pileup/ADIF-log button short-tapped -> ADIF log viewer");
         adif_view_modal_show();
     }
+}
+
+// Long-press ALWAYS opens the ADIF log, even while the button is showing
+// "Pileup". Without this a non-empty pile-up hid the on-device log entirely
+// (Roy KI0ER: "kept seeing Pileup, could not get back to ADIF-log") - the
+// short-press dispatches to whatever is timely, the hold is the guaranteed
+// path to the log.
+static void adif_long_press_cb(lv_event_t *e)
+{
+    (void)e;
+    ESP_LOGI(TAG, "Pileup/ADIF-log button long-pressed -> ADIF log viewer (always)");
+    adif_view_modal_show();
 }
 
 // Update the Call CQ button label to show the currently-selected CQ message.
@@ -1709,7 +1727,10 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_border_color(s_btn_adif, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
     lv_obj_set_style_border_width(s_btn_adif, 2, 0);
     lv_obj_set_style_radius(s_btn_adif, 8, 0);
-    lv_obj_add_event_cb(s_btn_adif, adif_or_pileup_btn_cb, LV_EVENT_CLICKED, NULL);
+    // SHORT_CLICKED (not CLICKED) so a long-press doesn't also fire the short
+    // action; long-press is the always-available ADIF-log path (see cbs above).
+    lv_obj_add_event_cb(s_btn_adif, adif_or_pileup_btn_cb, LV_EVENT_SHORT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_btn_adif, adif_long_press_cb, LV_EVENT_LONG_PRESSED, NULL);
     lv_obj_t *adif_lbl = lv_label_create(s_btn_adif);
     lv_label_set_text(adif_lbl, "ADIF-log");
     lv_obj_set_style_text_color(adif_lbl, lv_color_hex(0xffffff), 0);

@@ -21,6 +21,14 @@ void ft8_pileup_init(void)
     s_count = 0;
 }
 
+void ft8_pileup_clear(void)
+{
+    if (!s_lock) return;
+    lock();
+    s_count = 0;
+    unlock();
+}
+
 void ft8_pileup_note_caller(const char *call, int16_t snr_db, int16_t freq_hz,
                             int64_t last_seen_utc)
 {

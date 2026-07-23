@@ -165,7 +165,16 @@ int ft8_op_mode_slot_ms(void)
 // fires the burst on THIS slot. A burst started this late is still inside
 // ft8_lib's time-search range (~-1.6..+3.2 s) so the partner still decodes it.
 // WSJT-X gets here by decoding in the 2.36 s dead-air gap; this is our equivalent.
-#define FT8_REPLY_TX_WINDOW_MS 2500
+//
+// 2026-07-22: widened 2500 -> 2800 (Roy KI0ER field report - a hand-tapped
+// pounce/Transmit often lands just past 2.5 s and slipped a full 30 s cycle).
+// This is the hard ceiling: the decoder's own candidate time search is
+// -10..+19 blocks = DT -1.6..+3.0 s (ft8_lib decode.c), and the burst's first
+// tone fires ~TX-command latency after this window, so pushing past ~2.8 s
+// would start transmitting outside the range the far end can decode - strictly
+// worse than waiting for the next slot. Do NOT raise further without moving the
+// decoder's +19-block search bound too.
+#define FT8_REPLY_TX_WINDOW_MS 2800
 
 // Hold-for-decode gate (the "everything goes twice" fix). During an active
 // QSO, the just-ended RX slot's decode is ALWAYS still running at the next
@@ -615,11 +624,25 @@ static bool set_time_from_qmx_rtc(bool *out_applied)
 // mode restored at boot before the radio is switched on), so we just
 // keep waiting and periodically update the status line so the user
 // knows we're still looking.
+//
+// EXCEPTION: FT8 Simulation Mode needs no radio at all (phantom stations,
+// ft8_tx.c's interlock never keys anything), yet this wait sat ahead of the
+// entire slot loop - so with no QMX the sim could inject CQs (its own task)
+// but an armed pounce/CQ TX never fired: the loop that fires it was parked
+// right here showing "Waiting for QMX - check USB/power". Poll sim_mode_en
+// INSIDE the loop (not just once) so enabling sim while already waiting
+// unblocks immediately.
 static void wait_for_cat_ready(void)
 {
     int64_t t0 = esp_timer_get_time();
     int64_t last_update = t0;
     while (!cat_is_ready()) {
+        qmx_settings_t s;
+        settings_load_all(&s);
+        if (s.sim_mode_en) {
+            ESP_LOGI(TAG, "sim mode ON - not waiting for QMX (no radio needed)");
+            return;
+        }
         int64_t now = esp_timer_get_time();
         if ((now - last_update) / 1000 >= CAT_STATUS_UPDATE_MS) {
             ft8_status_set("Waiting for QMX - check USB/power");
@@ -1446,7 +1469,27 @@ static void ft8_task(void *arg)
             // we skipped, so the decoder still sees a normal 93-block waterfall.
             // FT8-only; full-slot when just monitoring, for max band yield.
             int cap_target = slot_samples;
-            if (!is_ft4 && ft8_qso_is_busy(NULL, 0)) {
+            // Early-cut whenever a QSO is running OR a reply is merely ARMED
+            // (a hand-tapped Transmit/pounce that hasn't fired yet): both mean
+            // the partner's next message must decode BEFORE the boundary so the
+            // fresh reply can arm and fire at DT~0. The armed case is what lets
+            // a manual exchange land on-beat instead of a cycle late.
+            //
+            // With ft8_early_decode ON (default) the cut ALSO runs during plain
+            // monitoring, so EVERY decode surfaces before the boundary the way
+            // WSJT-X does - this is what makes a COLD pounce (first reply to a
+            // fresh CQ) able to fire in its own slot instead of a cycle later.
+            // The trade-off is weak/late-station yield: capture stops at
+            // period-RESERVE (~13.2 s), so a station transmitting late enough
+            // that its tail lands past that point (our ~560 ms RX latency eats
+            // into the margin) can be clipped and miss decoding. Operator-
+            // toggleable so it can be turned off if a given band's yield suffers.
+            qmx_settings_t cut_cfg;
+            settings_load_all(&cut_cfg);
+            bool want_early_cut = ft8_qso_is_busy(NULL, 0) ||
+                                  (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ARMED) ||
+                                  cut_cfg.ft8_early_decode;
+            if (!is_ft4 && want_early_cut) {
                 int cut = (period_ms - FT8_DECODE_RESERVE_MS) * (SR_HZ / 1000);
                 if (cut > slot_samples) cut = slot_samples;   // reserve too small
                 if (cut < slot_samples) cap_target = cut;     // else: no early cut
@@ -1556,9 +1599,38 @@ static void ft8_task(void *arg)
                 }
             } else {
                 s_buf_busy[bi] = false;   // capture failed: release the monitor
-                ft8_status_set("RX: capture error");
-                ESP_LOGW(TAG, "slot %d UTC %lld: capture failed (%d)",
-                         slot_idx, (long long)slot_sec, e);
+                qmx_settings_t sim_chk;
+                settings_load_all(&sim_chk);
+                if (sim_chk.sim_mode_en) {
+                    // Sim mode with no QMX audio: capture timing out is the
+                    // NORMAL case, not an error. The phantom stations inject
+                    // decodes directly (ft8_sim.c -> ft8_screen_record_decode),
+                    // bypassing audio entirely - but ft8_qso_advance() normally
+                    // only runs from the decode task after a successful capture,
+                    // so without this the injected replies sat unread and the
+                    // QSO machine re-sent the same message forever. Run the
+                    // same end-of-slot bookkeeping decode_slot() would have.
+                    // Safe here: with no audio no decode job was queued for
+                    // this slot, so no decode-task advance() can race this one.
+                    ft8_status_set("SIM RX slot (no audio)");
+                    // Honor the Fast-pounce toggle's timing in sim: with the
+                    // early-decode cut OFF a real decode pass lands ~1.5-3.5 s
+                    // AFTER the boundary, and ft8_sim delays its phantom-reply
+                    // injection to match - so wait the same before consuming,
+                    // or the advance would scan before the reply exists. With
+                    // it ON both the injection and this advance run before /
+                    // at the boundary (the whole point of the toggle).
+                    if (!sim_chk.ft8_early_decode) vTaskDelay(pdMS_TO_TICKS(3500));
+                    ESP_LOGI(TAG, "slot %d UTC %lld: no audio (sim) - running QSO advance%s",
+                             slot_idx, (long long)slot_sec,
+                             sim_chk.ft8_early_decode ? "" : " (late, early-decode OFF)");
+                    ft8_qso_advance(slot_sec);
+                    ft8_screen_view_request_refresh();
+                } else {
+                    ft8_status_set("RX: capture error");
+                    ESP_LOGW(TAG, "slot %d UTC %lld: capture failed (%d)",
+                             slot_idx, (long long)slot_sec, e);
+                }
             }
         }
 
