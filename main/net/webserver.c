@@ -1,5 +1,6 @@
 #include "webserver.h"
 #include "webserver_ws.h"
+#include "filebrowser.h"      // filebrowser_register - microSD web file browser
 
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -956,7 +957,7 @@ esp_err_t webserver_start(void)
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.server_port     = 80;
     config.stack_size      = 12288;
-    config.max_uri_handlers = 23;
+    config.max_uri_handlers = 28;   // 21 API + WS + 5 file-browser + headroom
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -991,6 +992,7 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_forge_js);
     httpd_register_uri_handler(s_server, &uri_config_get);
     httpd_register_uri_handler(s_server, &uri_config_post);
+    filebrowser_register(s_server);   // /files + /api/files + /api/file
     webserver_ws_start(s_server);
 
     ESP_LOGI(TAG, "HTTP server started");

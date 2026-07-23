@@ -18,6 +18,7 @@
 #include "esp_heap_caps.h"
 #include "display.h"
 #include "tab5_keyboard.h"
+#include "usb_hid_mouse.h"
 #include "cat.h"
 #include "cw_audio.h"
 #include "settings.h"
@@ -2958,6 +2959,59 @@ static void build_resource_monitor(lv_obj_t *scr)
     lv_obj_set_pos(lbl, 0, 0);
     lv_obj_clear_flag(lbl, LV_OBJ_FLAG_CLICKABLE);  // clicks fall through to the panel (drag)
     s_resmon_lbl = lbl;
+}
+
+// ---- USB mouse pointer indev -------------------------------------------------
+// The USB HID layer (usb_hid_mouse.c) accumulates the cursor in LANDSCAPE space
+// (lx 0..1279, ly 0..719). LVGL auto-applies the display's ROTATION_90 transform
+// to indev points (lv_indev.c indev_pointer_proc: lx = ver_res-1 - iy, ly = ix),
+// so we feed the INVERSE here (point.x = ly, point.y = (W-1) - lx) to land the
+// cursor where the user expects. The cursor object is hidden until a mouse is
+// actually enumerated.
+static lv_obj_t *s_mouse_cursor = NULL;
+
+static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    (void)indev;
+    int lx, ly;
+    uint8_t b;
+    usb_hid_mouse_get(&lx, &ly, &b);
+
+    int32_t w = lv_display_get_horizontal_resolution(lv_display_get_default()); // 1280
+    data->point.x = ly;
+    data->point.y = (w - 1) - lx;
+    data->state = (b & 0x01) ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+
+    if (s_mouse_cursor) {
+        if (usb_hid_mouse_present()) lv_obj_remove_flag(s_mouse_cursor, LV_OBJ_FLAG_HIDDEN);
+        else                         lv_obj_add_flag(s_mouse_cursor, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
+void ui_mouse_init(void)
+{
+    display_lock(portMAX_DELAY);
+
+    lv_indev_t *mouse = lv_indev_create();
+    lv_indev_set_type(mouse, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_read_cb(mouse, mouse_read_cb);
+
+    // A small high-contrast circle cursor (no image asset needed): white fill
+    // with a dark ring, readable over both the green spectrum and the waterfall.
+    s_mouse_cursor = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(s_mouse_cursor, 20, 20);
+    lv_obj_set_style_radius(s_mouse_cursor, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_bg_color(s_mouse_cursor, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(s_mouse_cursor, LV_OPA_70, 0);
+    lv_obj_set_style_border_color(s_mouse_cursor, lv_color_black(), 0);
+    lv_obj_set_style_border_width(s_mouse_cursor, 2, 0);
+    lv_obj_set_style_pad_all(s_mouse_cursor, 0, 0);
+    lv_obj_remove_flag(s_mouse_cursor, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_remove_flag(s_mouse_cursor, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_mouse_cursor, LV_OBJ_FLAG_HIDDEN);   // shown when a mouse appears
+    lv_indev_set_cursor(mouse, s_mouse_cursor);
+
+    display_unlock();
 }
 
 void ui_init(lv_display_t *disp)

@@ -5,6 +5,11 @@
 
 void ui_init(lv_display_t *disp);
 
+// Create the LVGL pointer (mouse) input device + on-screen cursor. Call once,
+// after ui_init(). Reads USB HID mouse state (usb_hid_mouse.c); the cursor is
+// hidden until a mouse is actually present. Safe to call even with no mouse.
+void ui_mouse_init(void);
+
 // Restore the UI mode (Panadapter/FT8) persisted at the last toggle.
 // Call after ft8_screen_init()/ft8_status_init()/ft8_tx_init()/ft8_qso_init()
 // and audio/cat init have completed.

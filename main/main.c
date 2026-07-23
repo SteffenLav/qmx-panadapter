@@ -38,6 +38,7 @@
 #include "cpu_stats.h"
 #include "sd_archive.h"
 #include "tab5_keyboard.h"
+#include "usb_hid_mouse.h"
 #include "time_sync.h"
 #include "adif/adif_log.h"
 
@@ -103,6 +104,7 @@ void app_main(void)
     time_sync_init(bsp_i2c_get_handle());
 
     ui_init(disp);
+    ui_mouse_init();   // LVGL pointer indev + cursor for a USB mouse (hidden until one appears)
     display_fade_in_backlight(cfg.brightness_pct);  // reveal the app over 500ms instead of an instant flash
 
     // Background microSD auto-archive: mirrors the diag log, ADIF, and config
@@ -152,6 +154,11 @@ void app_main(void)
         ESP_LOGI(TAG, "No stored VFO (first boot or cleared NVS)");
     }
     ESP_ERROR_CHECK(cat_init());
+
+    // USB HID mouse (Phase 1: enumerate + log). Installs the HID host driver
+    // alongside the QMX's UAC+CDC-ACM on the same host; a mouse shares the port
+    // via a powered hub. No-op if no mouse/hub is present.
+    usb_hid_mouse_init();
 
     // WiFi+SNTP runs in a background task; doesn't block boot.
     // DISABLED pending C6 firmware investigation (see CLAUDE.md / git log).

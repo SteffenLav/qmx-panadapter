@@ -46,6 +46,8 @@ idf_component_register(
         "wifi/wifi.c"
         "net/webserver.c"
         "net/webserver_ws.c"
+        "net/filebrowser.c"
+        "usb_hid_mouse.c"
         "net/rigctld_server.c"
         "net/reader_net.c"
         "net/update_check.c"
