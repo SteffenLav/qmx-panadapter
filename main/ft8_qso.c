@@ -232,6 +232,87 @@ static void make_roger(const char *their_report, char *out, size_t len)
     else                        snprintf(out, len, "R%s", their_report);
 }
 
+// --- Intelligent manual "Transmit" (operator request 2026-07-22, Roy KI0ER)-
+// The plain Transmit button used to always fire TX1 (our grid) regardless of
+// what the tapped station last said, so a half-finished QSO could never be
+// nudged forward by hand. This derives the correct NEXT outgoing message
+// purely from the decoded row relative to our own call - exactly how WSJT-X's
+// double-click generates the next standard message - so Transmit advances the
+// sequence step by step:
+//
+//   their CQ / not-to-us   -> TX1 grid       "<them> <me> <grid>"
+//   <me> <them> <grid>     -> signal report  "<them> <me> <snr>"   (they answered our CQ)
+//   <me> <them> <rpt>      -> R + OUR report  "<them> <me> R<snr>"  (they reported us)
+//   <me> <them> R<rpt>     -> RR73            "<them> <me> RR73"
+//   <me> <them> RR73|73    -> 73              "<them> <me> 73"
+//
+// The R<snr>/report value is OUR locally-measured SNR of them (heard->last_snr_db),
+// never an echo of the number they sent us - the same convention the automatic
+// machine uses (see WAIT_RPT/cqrun_answer). Field Day mode keeps the plain TX1
+// build (its class+section exchange isn't mirrored here); Auto Pounce still
+// runs the full FD sequence. *is_fresh_grid, if non-NULL, is set true only for
+// the TX1-grid case - the one where "Auto Pounce" still makes sense.
+bool ft8_qso_build_manual_reply(const ft8_call_t *heard, int reply_freq_hz,
+                                ft8_tx_request_t *out, bool *is_fresh_grid,
+                                char *err, size_t err_len)
+{
+    if (is_fresh_grid) *is_fresh_grid = true;
+    if (err && err_len) err[0] = '\0';
+    if (!heard || !out) {
+        if (err && err_len) snprintf(err, err_len, "No station selected");
+        return false;
+    }
+    if (!load_my_call(err, err_len)) return false;   // populates s_my_call
+
+    ft8_tx_kind_t kind  = FT8_TX_KIND_REPLY;
+    const char   *extra = NULL;                      // NULL => my_grid (TX1)
+    char          extra_buf[16] = {0};
+    bool          fresh_grid = true;
+
+    qmx_settings_t qs;
+    settings_load_all(&qs);
+    bool fd_mode = qs.field_day_en && qs.fd_class[0] && qs.fd_section[0];
+
+    char tok1[16] = {0}, tok2[24] = {0}, rest[40] = {0};
+    bool parsed = split_msg3(heard->last_text, tok1, sizeof(tok1),
+                             tok2, sizeof(tok2), rest, sizeof(rest));
+
+    // Only advance the ladder when the message is addressed to us AND we're not
+    // in Field Day mode (its exchange uses class+section, handled by Pounce).
+    if (!fd_mode && parsed && s_my_call[0] &&
+        strcmp(tok1, s_my_call) == 0 && rest[0]) {
+        fresh_grid = false;
+        if (strcmp(rest, "RR73") == 0 || strcmp(rest, "73") == 0) {
+            kind = FT8_TX_KIND_73;                       // they signed off -> 73
+            snprintf(extra_buf, sizeof(extra_buf), "73");
+            extra = extra_buf;
+        } else if (is_roger_token(rest)) {
+            kind = FT8_TX_KIND_73;                       // they rogered us -> RR73
+            snprintf(extra_buf, sizeof(extra_buf), "RR73");
+            extra = extra_buf;
+        } else if (rest[0] == '-' || rest[0] == '+') {
+            char myrpt[8];                               // they reported us -> R<our rpt>
+            fmt_report(heard->last_snr_db, myrpt, sizeof(myrpt));
+            make_roger(myrpt, extra_buf, sizeof(extra_buf));
+            kind  = FT8_TX_KIND_ROGER_RPT;
+            extra = extra_buf;
+        } else {
+            fmt_report(heard->last_snr_db, extra_buf, sizeof(extra_buf)); // grid -> our report
+            kind  = FT8_TX_KIND_REPLY;
+            extra = extra_buf;
+        }
+    }
+
+    if (is_fresh_grid) *is_fresh_grid = fresh_grid;
+
+    ESP_LOGI(TAG, "manual reply to %s: heard '%s' -> %s%s",
+             heard->call, heard->last_text,
+             extra ? extra : "(grid)", fresh_grid ? " [fresh]" : "");
+
+    return ft8_tx_build_request(kind, heard->call, reply_freq_hz,
+                                heard->last_utc, extra, out, err, err_len);
+}
+
 // --- DT-follow-partner (operator request 2026-07-19) -----------------------
 // When a QSO partner transmits significantly off the band's timing (a weak,
 // badly-clocked or deliberately-offset station), shift OUR TX to land on THEIR

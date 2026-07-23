@@ -758,8 +758,8 @@ static void render_from_cache(void)
     FILE *f = fopen(READER_CACHE_PATH, "rb");
     if (!f) {
         lv_obj_clean(s_body);
-        add_label("No documentation cached yet.\n\nConnect to WiFi and swipe back "
-                  "into this page to download it from tab5.lav.dk.",
+        add_label("Downloading documentation from tab5.lav.dk...\n\nThis needs WiFi. "
+                  "If it doesn't appear shortly, check WiFi and swipe out and back in.",
                   &lv_font_montserrat_24, UI_COLOR_TEXT_MUTED, 0, 0);
         set_page_title("Documentation");
         return;

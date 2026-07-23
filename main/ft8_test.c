@@ -165,7 +165,16 @@ int ft8_op_mode_slot_ms(void)
 // fires the burst on THIS slot. A burst started this late is still inside
 // ft8_lib's time-search range (~-1.6..+3.2 s) so the partner still decodes it.
 // WSJT-X gets here by decoding in the 2.36 s dead-air gap; this is our equivalent.
-#define FT8_REPLY_TX_WINDOW_MS 2500
+//
+// 2026-07-22: widened 2500 -> 2800 (Roy KI0ER field report - a hand-tapped
+// pounce/Transmit often lands just past 2.5 s and slipped a full 30 s cycle).
+// This is the hard ceiling: the decoder's own candidate time search is
+// -10..+19 blocks = DT -1.6..+3.0 s (ft8_lib decode.c), and the burst's first
+// tone fires ~TX-command latency after this window, so pushing past ~2.8 s
+// would start transmitting outside the range the far end can decode - strictly
+// worse than waiting for the next slot. Do NOT raise further without moving the
+// decoder's +19-block search bound too.
+#define FT8_REPLY_TX_WINDOW_MS 2800
 
 // Hold-for-decode gate (the "everything goes twice" fix). During an active
 // QSO, the just-ended RX slot's decode is ALWAYS still running at the next
@@ -1446,7 +1455,16 @@ static void ft8_task(void *arg)
             // we skipped, so the decoder still sees a normal 93-block waterfall.
             // FT8-only; full-slot when just monitoring, for max band yield.
             int cap_target = slot_samples;
-            if (!is_ft4 && ft8_qso_is_busy(NULL, 0)) {
+            // Early-cut whenever a QSO is running OR a reply is merely ARMED
+            // (a hand-tapped Transmit/pounce that hasn't fired yet): both mean
+            // the partner's next message must decode BEFORE the boundary so the
+            // fresh reply can arm and fire at DT~0. The armed case is what lets
+            // a manual exchange land on-beat instead of a cycle late; it costs
+            // nothing on plain band-monitoring (no TX armed), so decode yield
+            // there is untouched.
+            bool want_early_cut = ft8_qso_is_busy(NULL, 0) ||
+                                  (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ARMED);
+            if (!is_ft4 && want_early_cut) {
                 int cut = (period_ms - FT8_DECODE_RESERVE_MS) * (SR_HZ / 1000);
                 if (cut > slot_samples) cut = slot_samples;   // reserve too small
                 if (cut < slot_samples) cap_target = cut;     // else: no early cut

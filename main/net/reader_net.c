@@ -127,12 +127,29 @@ static void fetch_task(void *arg)
     (void)arg;
 
     if (!wifi_is_connected()) {
-        // Offline: prefer the SD manual mirror, else whatever's in SPIFFS cache.
-        if (sd_page_to_cache(s_job_path)) reader_view_notify_loaded(false);
-        else                              reader_view_notify_loaded(true);
-        s_busy = false;
-        vTaskDelete(NULL);
-        return;
+        // WiFi may simply not be up YET: on the first manual-open right after
+        // boot the STA is often still associating / waiting on DHCP, so an
+        // instant bail showed "No documentation cached - connect to WiFi" even
+        // on a WiFi-configured unit, only curable by a reboot (Roy KI0ER field
+        // report). Wait briefly for the link to come up while the reader is
+        // still on screen, then fetch normally - no reboot or re-swipe needed.
+        const int MAX_WAIT_S = 30;
+        int waited = 0;
+        while (!wifi_is_connected() && waited < MAX_WAIT_S && reader_view_is_active()) {
+            if (waited == 0) reader_view_notify_status("Waiting for WiFi...");
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            waited++;
+        }
+        if (!wifi_is_connected()) {
+            // Still offline (or the operator left the page): fall back to the SD
+            // manual mirror, else whatever's cached in SPIFFS.
+            if (sd_page_to_cache(s_job_path)) reader_view_notify_loaded(false);
+            else                              reader_view_notify_loaded(true);
+            s_busy = false;
+            vTaskDelete(NULL);
+            return;
+        }
+        // Link came up during the wait — fall through and download normally.
     }
 
     reader_view_notify_status("Downloading...");
