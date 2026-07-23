@@ -63,10 +63,12 @@ In FT8 view, tap a CQ row in the decode list. A confirmation modal appears:
 └──────────────────────────────┘
 ```
 
-- **Transmit** (green) — send the reply on the next correct slot
+- **Transmit** (green) — send this one message on the next correct slot
 - **Auto Pounce** (blue) — handle the entire exchange automatically (TX1 → wait for report → TX2 → wait for RR73 → TX3 73)
 - **▲ / ▼ Nudge** — move the target to the row above or below, without closing the modal and redoing the selection gesture
 - **Cancel** — abort
+
+**Transmit is intelligent (v1.3.0)** — it builds the correct *next* message from what that station last sent, exactly like a WSJT-X double-click: their CQ → your grid (or your report, with Skip TX1 on), their grid → your report, their report → `R`+your report, their `R`-report → `RR73`, their `RR73`/`73` → `73`. You can run a whole QSO one Transmit tap at a time — and sending the closing `RR73`/`73` **logs the QSO to ADIF** just like an automatic contact. Auto Pounce is offered on any first reply; once you're mid-exchange with a station, its rows offer Transmit only.
 
 **A quick tap is enough** — you do not need to hold a row before releasing. Hold-and-drag still works for selecting across rows in a busy list.
 
@@ -80,10 +82,12 @@ When you call CQ (or work a busy run), more than one station may answer at once 
 
 - Whenever one or more stations are waiting, the **ADIF-log** button on the FT8 screen becomes a **Pileup** button in a distinct colour, and reverts once the list empties.
 - Tap **Pileup** to see everyone who has called you and isn't worked yet.
+- **Hold the button to open the ADIF log** — the log stays reachable even while the button reads "Pileup" (a one-time hint appears the first time it flips).
 - Tap a station in the list to work them (the same confirmation modal as a decode-list tap), or tap the small **✕** to dismiss them without working them. Replies from the pile-up list open with a **signal report** directly — the correct opening for a station that has already called you.
-- A station is removed from the list automatically once you start a QSO with them.
+- A station is removed from the list automatically once you start a QSO with them, and a just-completed contact's trailing 73 can't put them back.
+- Stations you've worked before still appear in the pileup unless **Exclude worked-before** is checked — the pileup follows the same rule as the auto-answer.
 
-The pile-up tracker never transmits on its own — it only remembers callers; you choose who to work.
+The pile-up tracker never transmits on its own — it only remembers callers; you choose who to work. If you'd rather it *did*, check **Auto-work pileup** in the Filter modal: the strongest waiting caller is pounced automatically when your current QSO completes — or immediately, if you enable it with callers already waiting and nothing else in progress. It carries the same unattended-TX warning as the robot.
 
 ### 2. Call CQ
 
@@ -130,26 +134,28 @@ A permanent on-screen warning appears whenever robot mode is available.
 
 ### 4. FT8 Simulation Mode (Practice QSOs)
 
-⚠️ **For practice only** — no real stations involved, radio never keys up.
+⚠️ **For practice only** — no real stations involved, radio never keys up. Since v1.3.0 the simulator needs **no QMX connected at all** — no radio, no antenna, zero RF.
 
-Enable **FT8 Simulation Mode** in the settings drawer to practice full QSO exchanges with phantom stations (W1AW and K9ZZ) without transmitting on the air. Useful for:
+Enable **FT8 Simulation Mode** in the settings drawer to practice everything: manual step-by-step Transmit, Auto Pounce, CQ-runs, pileups, and Field Day exchanges. Useful for:
 
 - Learning the full FT8 exchange sequence
 - Testing your setup without risking interference
 - Verifying ADIF logging works correctly
-- Practicing in a realistic environment
+- Practicing the pileup tools on a genuine pileup
 
 **How it works:**
-- Two phantom stations periodically call CQ on their own schedule
-- You can reply, they respond, and complete a full QSO
-- Messages and timing are identical to real FT8 — the decoder runs actual GFSK synthesis
-- Every simulated QSO logs to ADIF with the phantom callsign
+- **Six phantom stations** (three US, three DX) call CQ on their own tones — every message is real FT8, synthesized to actual GFSK audio and decoded through the same receive pipeline real RF uses
+- Tap a CQ to pounce (auto or fully manual — they answer either), or **Call CQ** yourself and **four phantoms answer at once**, building a real pileup
+- Phantoms are **patient like real operators**: each repeats its message every cycle, up to four times, before giving up and going back to CQing; one you're working stops CQing; one you've worked stops answering your CQs (toggle sim off/on to reset)
+- Their replies match **what you actually transmitted** — grid gets a report, a report gets a roger, `RR73` gets a courtesy `73`
+- The **Fast pounce** toggle is honoured, so you can watch what it changes: decodes surface just before the slot boundary with it on, just after with it off
+- Swiping to the Panadapter and back clears the phantom rows and pileup for a fresh session
 
 **Visual indicator:** When simulation mode is active, a **10 px red border pulses around the entire screen** (breathing red frame). This is your visual reminder that you're in practice mode — if the red frame is gone, simulation is off and real stations are in play.
 
-**Important:** 
+**Important:**
 - The QMX is **never keyed** in simulation mode, no matter what
-- QSOs are logged as real ADIF entries (you may want to delete practice contacts from your log afterward)
+- QSOs are logged as real ADIF entries — deliberately, so the logging/upload paths get exercised too. When you're done, the ADIF viewer shows a **"Del N test"** button (only while practice contacts exist — they're recognized by their missing frequency): two taps deletes them all
 - All other features (panadapter, web UI, settings) work normally
 
 ### 5. ARRL Field Day Mode

@@ -76,7 +76,11 @@ Once connected, the settings show your **IP address** — use this to access the
 
 **Field Day Mode** — ARRL Field Day mode (on/off, class, section).
 
-**Simulation Mode** — Practice QSOs with phantom stations without keying a real QMX (red breathing border on screen).
+**Simulation Mode** — Practice QSOs with six phantom stations — no QMX needed at all, radio never keyed (red breathing border on screen). See [FT8 Transmit](ft8-tx.md#4-ft8-simulation-mode-practice-qsos).
+
+**Fast pounce (early decode)** — On by default. Decodes surface ~1.8 s *before* the slot boundary (WSJT-X style), so a fresh CQ can be answered in the very next slot and mid-QSO replies land on the beat. Trade-off: the capture window closes early, so a station transmitting late in the slot can occasionally be missed. ⚠️ *Not yet A/B-verified on a live band — if your decodes-per-slot drop with it on, turn it off and please report your numbers.*
+
+**Distance in miles** — Show the decode list's distance column in miles instead of kilometres.
 
 **FT8 Filters** — Include/exclude stations, set auto-reply priority, enable robot mode (see [FT8 Receive](ft8-rx.md) for details).
 

@@ -13,6 +13,7 @@
 - **Battery**: 2500 mAh Li-poly (~4 hours panadapter, ~6 hours idle)
 - **RTC**: Epson RX8130CE + 70 mF supercap (30–40 h time retention)
 - **Optional Keyboard**: M5Stack SKU A164 (STM32F030, I2C slave @ 0x6D)
+- **Optional USB mouse** (v1.3.0): plug into the USB-A port — a cursor appears and clicks drive every control. *The mouse and the QMX cannot share the port: a USB hub doesn't help, because the ESP32-P4's USB host lacks the Transaction Translator a high-speed hub needs for full/low-speed devices. Use the mouse for setup, log review and manual reading with the radio unplugged.*
 
 ## QRP Labs QMX / QMX+
 

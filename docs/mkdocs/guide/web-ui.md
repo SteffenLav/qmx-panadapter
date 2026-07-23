@@ -70,6 +70,7 @@ The bottom bar groups its actions into three popup menus, plus a battery indicat
 
 - **Config download ↓** — all settings as a text file (backup or transfer to another Tab5)
 - **Config upload ↑** — restore settings from a backup file
+- **SD Files** — opens the **microSD file browser** (`http://<tab5-ip>/files`, new in v1.3.0): browse the card from your computer without pulling it — download logs, config backups and the offline manual; upload files; delete
 - **Diagnostic download ↓** — downloads **both** diagnostic logs: the live session log (always on, nothing to enable) and the flash-persisted copy from before the last reboot/power-off
 
 **Miscellaneous ▲**:

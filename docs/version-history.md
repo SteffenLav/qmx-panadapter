@@ -900,6 +900,42 @@ The headline is a years-old mystery finally root-caused and killed, plus the mic
 
 Navigation is otherwise unchanged: the left-edge swipe is still the plain Panadapter ↔ FT8 toggle — the manual is a drawer destination, not part of the swipe stack.
 
+## v1.3.0 — 2026-07-23 — Intelligent Transmit, faster replies, a real practice simulator
+
+This release is built around field feedback from **Roy KI0ER** (groups.io) — smarter manual FT8 operation and faster reply timing — plus a completely overhauled practice simulator, a USB mouse, and a web file browser for the microSD card.
+
+**Intelligent Transmit (the headline).** Tapping a decoded row's **Transmit** now sends the correct *next* message for that station, derived from what they last sent — exactly like a WSJT-X double-click: their CQ → your grid (or your report with Skip-TX1 on, which the manual path now honours too), their grid → your report, their report → `R`+your report, their `R`-report → `RR73`, their `RR73`/`73` → `73`. The report is always **your live measurement of them**, never an echo. **Auto Pounce** appears on any first-reply (including report-first pileup rows); mid-QSO rows get Transmit only. And a fully hand-stepped QSO is now a *real* QSO: sending your manual `RR73`/`73` **logs it to ADIF** (it previously vanished — no log entry, and the partner's trailing 73 haunted the pileup), the partner shows the amber "working" highlight while you step, and they're kept out of your own pileup mid-exchange.
+
+**Reply timing.** The mid-slot reply window widened 2.5 → 2.8 s (the decoder's practical DT ceiling), and a merely-ARMED hand reply now also rides the early-decode cut — so a manual exchange lands on the beat instead of a cycle late. A subtle real bug fell out of testing: a pounce whose first message fired mid-slot kept its "don't scan yet" gate at the *predicted* slot up to 30 s later and discarded the partner's prompt reply — every exchange step repeated once for nothing. Fixed.
+
+**Full cold-pounce — "Fast pounce (early decode)", new toggle, default ON.** Decodes now surface *before* the slot boundary during plain monitoring (WSJT-X style), so answering a fresh CQ can transmit **in the very next slot** instead of waiting a full cycle. ⚠️ **Honest caveat: this specific feature has not yet been A/B-verified on a live band** (no antenna at the development QTH until mid-August). The trade-off is known in principle — capture stops ~1.8 s early, so a *late-transmitting* station's tail can be clipped and its decode lost. If your decodes-per-slot drop noticeably with it ON, **turn it off** (FT8 settings drawer, under "Distance in miles") and please report what you saw — your before/after numbers are exactly the field data we need.
+
+**Pileup / ADIF-log lockout fixed (Roy's report).** While the button shows "Pileup" the on-device ADIF log was unreachable. Now: short-press opens whatever is timely (pileup viewer / log), **long-press always opens the ADIF log**, and a one-time hint teaches the gesture when the button first flips. Pileup behaviour is also now *consistent* with your filters: worked-before stations are excluded from the pileup only when "Exclude worked before" is checked (matching whether the machine would answer them), a just-completed contact's trailing 73 is grace-period-filtered, and **Auto-work pileup** now also starts draining when checked mid-session with callers already waiting (previously only on QSO completion).
+
+**User Manual on a fresh boot.** Opening the manual before WiFi has associated now shows "Waiting for WiFi…" and proceeds when it connects — it no longer demands a reboot.
+
+**FT8 Simulation Mode — now a real practice band.** The simulator was rebuilt end-to-end and **no longer needs the QMX at all** (no radio, no antenna, zero RF — the TX interlock is unchanged):
+
+- **6 phantom stations** (3 US, 3 DX) instead of 2; **4 answer your CQ in the same slot** — a genuine pileup for practicing the pileup tools.
+- Phantoms behave like real operators: they **repeat each message every cycle (up to 4×) until you respond**, then give up and go back to CQing; a phantom you're working stops CQing; a worked phantom stops answering your CQs for the session.
+- They reply to **whatever you actually transmitted** — auto QSOs, Auto Pounce, and fully manual step-by-step Transmit all get answered correctly.
+- The **Fast pounce toggle is honoured in sim**: replies surface just before the boundary with it ON, and after the boundary (with matching slower consumption) when OFF — you can *see* what the toggle does.
+- Re-entering FT8 mode clears the phantom decode rows and pileup for a fresh session, and the "connect your QMX" prompt stays hidden while simulating.
+- **"Delete test QSOs"** — practice contacts log like real ones (deliberately: it exercises the whole logging path). The ADIF viewer now shows a **"Del N test"** button *only when* simulation records exist (they're recognizable by their missing frequency); two taps wipes them all. Operators who never simulate never see it.
+
+**USB mouse support.** Plug a USB mouse into the Tab5's USB-A port and a cursor appears — clicks drive every menu, button and drawer. **Limitation:** the mouse and the QMX can't share the port simultaneously (a USB hub needs a Transaction Translator the ESP-IDF USB host doesn't implement), so this is for setup, log review, and manual reading with the radio unplugged. Bluetooth mouse support is the eventual path to mouse-while-operating.
+
+**Web microSD file browser.** The web UI's bottom bar gained **Files → SD Files** — browse the microSD card from any computer's browser: download your logs and config, upload files, delete — without pulling the card. All card access respects the same SD/WiFi coexistence discipline as the auto-archive.
+
+**Filter modal layout.** Save / Cancel / Sync Time moved to a tidy stack at the top right; the unattended-TX warning moved out from under the ARRL Field Day row into clear space by the Auto-work pileup option.
+
+**Also fixed en route:** worked-before checks with an unreadable frequency (no CAT) no longer silently pass everyone; the FT8 engine no longer requires a connected QMX just to run its slot loop in simulation.
+
+#### Notes for testers
+
+- **Fast pounce (cold-pounce early decode) ships on-air-untested** — see the caveat above. The toggle is your safety valve; reports with decode-per-slot numbers (ON vs OFF, same band/time) are gold.
+- A single unexplained heap-assert reboot (`tlsf_free` double-free, ~28 s after boot) was observed **once** during this release's bench testing and never reproduced. If your Tab5 spontaneously reboots shortly after power-on, please grab the saved diagnostic log (web UI → "Diag(saved) ↓") and report it.
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
