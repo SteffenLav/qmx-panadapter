@@ -31,23 +31,24 @@ void bsp_info_log(void)
     size_t free_internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     size_t free_psram    = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
 
-    const char *touch_name = "unknown";
-    const char *panel_name = "unknown";
+    // Panel/touch names come from the BSP's cached detection result (which
+    // read the touch FW-version register during display bring-up) — NOT from
+    // an address probe. ST7121 and ST7123 share I2C 0x55, so a bare probe
+    // cannot tell them apart; this block used to hardcode "ST7123" for every
+    // unit answering at 0x55, contradicting the driver's own ST7121 detection
+    // two lines up in the same boot log (reported by Paul VE3PIK, v1.2.0).
+    // The probe below is kept purely to report WHICH ADDRESS answered.
+    const char *touch_name = bsp_touch_controller_name();
+    const char *panel_name = bsp_display_panel_name();
     uint8_t     touch_addr = 0;
 
     i2c_master_bus_handle_t bus = bsp_i2c_get_handle();
     if (bus != NULL) {
         if (i2c_master_probe(bus, ST7123_TOUCH_ADDR, I2C_PROBE_TIMEOUT_MS) == ESP_OK) {
-            touch_name = "ST7123";
-            panel_name = "ST7123";
             touch_addr = ST7123_TOUCH_ADDR;
         } else if (i2c_master_probe(bus, GT911_TOUCH_ADDR, I2C_PROBE_TIMEOUT_MS) == ESP_OK) {
-            touch_name = "GT911";
-            panel_name = "ILI9881C";
             touch_addr = GT911_TOUCH_ADDR;
         } else if (i2c_master_probe(bus, GT911_TOUCH_ADDR_ALT, I2C_PROBE_TIMEOUT_MS) == ESP_OK) {
-            touch_name = "GT911";
-            panel_name = "ILI9881C";
             touch_addr = GT911_TOUCH_ADDR_ALT;
         }
     }
@@ -55,7 +56,7 @@ void bsp_info_log(void)
     ESP_LOGI(TAG, "=== TAB5 BSP INFO ===");
     ESP_LOGI(TAG, "chip:     %s rev v%u.%u", family, (unsigned)major, (unsigned)minor);
     ESP_LOGI(TAG, "psram:    %u MB", (unsigned)(psram_bytes / (1024u * 1024u)));
-    ESP_LOGI(TAG, "panel:    %s (inferred from touch)", panel_name);
+    ESP_LOGI(TAG, "panel:    %s (from hardware detection)", panel_name);
     if (touch_addr != 0) {
         ESP_LOGI(TAG, "touch:    %s @ 0x%02X", touch_name, touch_addr);
     } else {

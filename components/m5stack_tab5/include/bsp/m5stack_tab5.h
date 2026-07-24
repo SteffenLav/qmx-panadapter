@@ -122,6 +122,16 @@ esp_err_t bsp_i2c_deinit(void);
  */
 i2c_master_bus_handle_t bsp_i2c_get_handle(void);
 
+/**
+ * @brief Names of the DETECTED display panel / touch controller, for diagnostics.
+ *
+ * Read the cached hardware-detection result only (never re-probe the bus —
+ * a second detection probe after display bring-up breaks touch init).
+ * "unknown" if called before display initialization has run the detection.
+ */
+const char *bsp_display_panel_name(void);
+const char *bsp_touch_controller_name(void);
+
 esp_err_t bsp_i2c_scan();
 
 esp_err_t bsp_ext_i2c_init(void);

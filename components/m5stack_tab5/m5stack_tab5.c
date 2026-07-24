@@ -1098,6 +1098,33 @@ static bsp_display_type_t bsp_detect_display_type(void)
     return s_detected_display_type;
 }
 
+// Names for the DETECTED hardware, for diagnostics (bsp_info.c). These read
+// only the cached detection result and never re-probe: bsp_detect_display_type()
+// must not run a second time per boot (a probe after the 800 ms DISPON delay
+// dirties the bus and breaks touch init). Returns "unknown" if called before
+// display bring-up has run the detection. Reported by Paul VE3PIK: bsp_info
+// used to identify the touch IC by a bare 0x55 address probe, which cannot
+// tell ST7121 from ST7123, so its block said ST7123 on every ST7121 unit.
+const char *bsp_display_panel_name(void)
+{
+    switch (s_detected_display_type) {
+        case BSP_DISPLAY_TYPE_ST7121:       return "ST7121";
+        case BSP_DISPLAY_TYPE_ST7123:       return "ST7123";
+        case BSP_DISPLAY_TYPE_ST7703_GT911: return "ST7703";
+        default:                            return "unknown";
+    }
+}
+
+const char *bsp_touch_controller_name(void)
+{
+    switch (s_detected_display_type) {
+        case BSP_DISPLAY_TYPE_ST7121:       return "ST7121";
+        case BSP_DISPLAY_TYPE_ST7123:       return "ST7123";
+        case BSP_DISPLAY_TYPE_ST7703_GT911: return "GT911";
+        default:                            return "unknown";
+    }
+}
+
 //==================================================================================
 // lcd st7703 1280x720  gt911
 //==================================================================================
