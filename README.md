@@ -12,9 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.3.0.** A complete, self-contained FT8/FT4 station — receive, transmit, auto-QSO, ADIF logging, and upload to **all three major logbooks: QRZ, eQSL, and ARRL LoTW** — with no PC in the loop. **New in v1.3.0 (built on Roy KI0ER's field feedback): intelligent Transmit** — tapping a decoded row now sends the correct *next* message for that station, WSJT-X double-click style, and a fully hand-stepped QSO logs to ADIF like any other; **faster replies** (wider mid-slot reply window, hand-armed exchanges land on the beat); a **"Fast pounce (early decode)" toggle** that surfaces decodes before the slot boundary so answering a fresh CQ can transmit in the very next slot (*on by default; not yet A/B-verified on a live band — turn it off if your decode counts drop, and please report*); the **pileup no longer locks you out of the ADIF log** (long-press always opens it); a rebuilt **FT8 practice simulator** that needs no radio at all — six patient phantom stations, real pileups, and a "Delete test QSOs" cleanup button; **USB mouse** support (with the QMX unplugged — a USB hub can't serve both on this hardware); and a **web file browser** for the microSD card (download logs/config, upload, delete — no card-pulling). Built on the v1.2.0 on-device User Manual, the v1.1.0 decode-collapse fix + microSD station backup + GPS time sync, and the 1.0 station core (auto-QSO, `<...>` callsign resolution, broken-QSO resume, Today/POTA log view, display sleep, LoTW upload).
+> **Release — v1.3.1.** A complete, self-contained FT8/FT4 station — receive, transmit, auto-QSO, ADIF logging, and upload to **all three major logbooks: QRZ, eQSL, and ARRL LoTW** — with no PC in the loop. **New in v1.3.1: DT and HZ columns in the decode list** (each station's slot-timing offset and audio tone — Roy KI0ER's request), country shown as a compact 3-letter code, a boot-diagnostics fix for ST7121 units (Paul VE3PIK), and a round of UI alignment polish (FT8 left pane grid, settings drawer, QMX prompt placement). **From v1.3.0 (built on Roy KI0ER's field feedback): intelligent Transmit** — tapping a decoded row now sends the correct *next* message for that station, WSJT-X double-click style, and a fully hand-stepped QSO logs to ADIF like any other; **faster replies** (wider mid-slot reply window, hand-armed exchanges land on the beat); a **"Fast pounce (early decode)" toggle** that surfaces decodes before the slot boundary so answering a fresh CQ can transmit in the very next slot (*on by default; not yet A/B-verified on a live band — turn it off if your decode counts drop, and please report*); the **pileup no longer locks you out of the ADIF log** (long-press always opens it); a rebuilt **FT8 practice simulator** that needs no radio at all — six patient phantom stations, real pileups, and a "Delete test QSOs" cleanup button; **USB mouse** support (with the QMX unplugged — a USB hub can't serve both on this hardware); and a **web file browser** for the microSD card (download logs/config, upload, delete — no card-pulling). Built on the v1.2.0 on-device User Manual, the v1.1.0 decode-collapse fix + microSD station backup + GPS time sync, and the 1.0 station core (auto-QSO, `<...>` callsign resolution, broken-QSO resume, Today/POTA log view, display sleep, LoTW upload).
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.3.0.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.3.1.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -450,8 +450,10 @@ Swipe in from the **left edge** to switch to the FT8 screen. The Tab5 decodes 15
 | SL | Slot parity: **E** (blue, :00/:30) or **O** (amber, :15/:45) |
 | CALL | Extracted callsign |
 | MESSAGE | Full decoded FT8 message text |
-| COUNTRY | DXCC entity from prefix lookup (~190 entities) |
+| CTY | DXCC entity as a 3-letter code (ISO alpha-3 where it exists; ~190 entities) |
 | SNR | FFT-based estimate, colour-banded: green ≥0 / white −5..−1 / orange −15..−6 / grey <−15 |
+| DT | Slot-timing offset in seconds, relative to the band — an on-time station reads ~0.0 |
+| HZ | The station's audio tone (its offset within the FT8 passband) |
 | KM | Great-circle distance from your grid |
 | BRG | Bearing from your grid |
 | HRD | Times decoded since last appearance |
@@ -844,7 +846,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.3.0 is here** — smarter manual FT8 operation from Roy KI0ER's field feedback: an **intelligent Transmit button** (sends the correct next message, WSJT-X double-click style), faster reply timing, a **cold-pounce early-decode toggle**, the pileup/ADIF-log lockout fixed, a fully rebuilt **practice simulator** that needs no radio at all, **USB mouse** support (radio unplugged), and a **web file browser** for the microSD card. Next on the bench:
+**v1.3.1 is here** — DT and HZ columns in the decode list, 3-letter country codes, a boot-diagnostics fix for ST7121 units, and UI alignment polish — on top of v1.3.0's smarter manual FT8 operation from Roy KI0ER's field feedback (**intelligent Transmit**, faster reply timing, the **cold-pounce early-decode toggle**, the pileup/ADIF-log lockout fix, the no-radio **practice simulator**, **USB mouse** support, and the **web file browser** for the microSD card). Next on the bench:
 
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).

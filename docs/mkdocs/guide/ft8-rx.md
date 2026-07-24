@@ -27,10 +27,16 @@ The list shows every decoded FT8 message:
 
 | Column | Meaning |
 |---|---|
-| **Callsign** | Their call, or `CQ` if they're calling CQ |
-| **Report** | SNR (signal-to-noise) or grid square they're sending you |
-| **Grid** | Their grid square (estimated from signal geometry) |
-| **Time** | When the message was decoded (slot boundary) |
+| **SL** | Slot parity: **E** (blue) or **O** (amber) |
+| **CALL** | Their callsign |
+| **MESSAGE** | The full decoded message text |
+| **CTY** | Country as a 3-letter code (from the callsign prefix) |
+| **SNR** | Signal-to-noise estimate, colour-banded by strength |
+| **DT** | Slot-timing offset in seconds, relative to the band — an on-time station reads ~0.0 (v1.3.1) |
+| **HZ** | The station's audio tone within the FT8 passband (v1.3.1) |
+| **KM / MI** | Great-circle distance from your grid |
+| **BRG** | Bearing from your grid |
+| **HRD** | Times decoded since last appearance |
 
 **Own call highlight** — your callsign is shown in **inverted colours** (red fill, white text) so you spot replies to you instantly.
 

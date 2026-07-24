@@ -936,6 +936,29 @@ This release is built around field feedback from **Roy KI0ER** (groups.io) — s
 - **Fast pounce (cold-pounce early decode) ships on-air-untested** — see the caveat above. The toggle is your safety valve; reports with decode-per-slot numbers (ON vs OFF, same band/time) are gold.
 - A single unexplained heap-assert reboot (`tlsf_free` double-free, ~28 s after boot) was observed **once** during this release's bench testing and never reproduced. If your Tab5 spontaneously reboots shortly after power-on, please grab the saved diagnostic log (web UI → "Diag(saved) ↓") and report it.
 
+## v1.3.1 — 2026-07-24 — DT + HZ columns, UI polish, diagnostics fix
+
+A small follow-up release: two decode-list columns requested by Roy KI0ER the day v1.3.0 shipped, a batch of visual alignment work, and a diagnostics fix reported (with root-cause analysis) by Paul VE3PIK.
+
+**Decode list: DT and HZ columns (Roy KI0ER).** Two new columns after SNR:
+
+- **DT** — the station's slot-timing offset in seconds, shown relative to the band as a whole, so an on-time station reads ~0.0 and an off-time one shows its true offset (the same at-a-glance number WSJT-X users watch).
+- **HZ** — the station's audio tone, i.e. where it sits in the FT8 passband. (Your own transmit tone is shown in the TX confirmation dialog, and the firmware picks a clear tone automatically.)
+
+The width comes from the country column: full entity names are replaced by **3-letter codes** (ISO alpha-3 where the entity has one — USA, DEU, JPN — and a recognizable tag for ham-only entities like HAW or SAR). SL, CALL and MESSAGE keep their positions; KM/MI, BRG and HRD remain.
+
+**Diagnostics: the boot log's "TAB5 BSP INFO" block now reports the hardware that was actually detected** (Paul VE3PIK, with the fix approach). It used to identify the touch controller by a bare I2C address probe — but ST7121 and ST7123 share the same address, so the block said "ST7123" on every ST7121 unit, contradicting the driver's own correct detection two lines earlier in the same log. It now reports the driver's cached detection result (and the older GT911 variant's panel is named ST7703, consistently with the rest of the firmware).
+
+**UI polish:**
+
+- The breathing "Now turn on or reboot your QMX/+" prompt no longer overlaps the FT8 screen's left pane (position is now mode-aware: offset right in FT8, centered in Panadapter).
+- FT8 left pane aligned to a uniform grid: all boxes share the same right edge, equal 8 px spacing between the TX/Filter/Call-CQ buttons, and the same corner radius throughout.
+- Settings drawer cleanup: dropdowns are sized to their content (no more full-width white bars) with a light-grey background, slider tracks are half as thick (knob unchanged), and the Display section header is gone — the label now reads "Display brightness".
+
+#### Notes for testers
+
+- The v1.3.0 notes still apply: **Fast pounce (early decode)** remains on-air-unverified — ON/OFF decodes-per-slot comparisons are welcome — and the one-off boot-time reboot is still being watched for.
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*

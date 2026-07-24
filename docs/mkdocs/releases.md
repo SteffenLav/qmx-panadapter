@@ -4,6 +4,25 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.3.1** — 2026-07-24
+
+A small follow-up: two decode-list columns requested by Roy KI0ER, a diagnostics fix from Paul VE3PIK's report, and UI alignment polish.
+
+- **DT and HZ columns** in the decode list (after SNR): each station's slot-timing offset in seconds — an on-time station reads ~0.0, an off-time one shows its true offset — and its audio tone within the FT8 passband. The country column becomes a compact **3-letter code** to make room.
+- **Boot diagnostics fixed for ST7121 units**: the "TAB5 BSP INFO" block used to say "ST7123" on every unit (the two chips share an I2C address); it now reports the hardware the driver actually detected. *(Reported with the fix approach by Paul VE3PIK.)*
+- **UI polish**: the "turn on your QMX" prompt no longer overlaps the FT8 left pane; the FT8 left-pane buttons align to a uniform grid; settings-drawer dropdowns are content-sized with a light-grey background and the slider tracks are half as thick.
+
+### Installing v1.3.1
+
+1. Use the one-click flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases)
+2. Or follow [Build from Source](build/build.md)
+
+Your settings are preserved during a normal flash.
+
+---
+
+## Previous Releases
+
 **v1.3.0** — 2026-07-23
 
 Smarter manual FT8 operation — built around field feedback from **Roy KI0ER** — plus a rebuilt practice simulator, USB mouse support, and a web file browser for the microSD card.
@@ -16,17 +35,6 @@ Smarter manual FT8 operation — built around field feedback from **Roy KI0ER** 
 - **USB mouse.** Plug a mouse into the USB-A port — a cursor appears and clicks drive everything. *(Limitation: the mouse and QMX can't share the port, and a USB hub can't bridge them on this hardware — so it's for setup, log review and manual reading with the radio unplugged.)*
 - **microSD file browser.** **Files → SD Files** in the web page opens a browser for the card — download logs and backups, upload, delete — without pulling the card out.
 - **User Manual on a fresh boot** now waits for WiFi instead of asking for a reboot.
-
-### Installing v1.3.0
-
-1. Use the one-click flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases)
-2. Or follow [Build from Source](build/build.md)
-
-Your settings are preserved during a normal flash.
-
----
-
-## Previous Releases
 
 **v1.2.0** — 2026-07-20 — A built-in **User Manual on the Tab5 itself** (Settings drawer → User Manual): native markdown reader with a drag-to-pick two-column Contents page, offline copies to microSD (**Save offline**), and a quiet GitHub firmware-update check. Plus the FT8 pileup fix: a worked (or late-answering) station no longer lingers in the pileup. *(Thanks to Dirk DK7CVD.)*
 

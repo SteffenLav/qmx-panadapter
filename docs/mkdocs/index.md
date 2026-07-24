@@ -21,9 +21,10 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 ## Status
 
-**v1.3.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, now with smarter manual operation.**
+**v1.3.1 — a complete, self-contained FT8/FT4 station with no PC in the loop.**
 
-- **v1.3.0 headline — intelligent Transmit & faster replies** (from Roy KI0ER's field feedback): tapping a decoded station sends the correct *next* message WSJT-X-double-click style, hand-run QSOs log to ADIF, replies land on the beat, and a new **Fast pounce** toggle surfaces decodes before the slot boundary so a fresh CQ can be answered in the very next slot *(on by default; not yet verified on a live band — turn it off if your decode counts drop, and please report)*. Plus a rebuilt no-radio-needed **practice simulator**, **USB mouse** support (radio unplugged), and a **web file browser** for the microSD card
+- **v1.3.1 — DT + HZ decode-list columns** (each station's slot-timing offset and audio tone, Roy KI0ER's request), 3-letter country codes, an ST7121 boot-diagnostics fix (Paul VE3PIK), and UI alignment polish
+- **v1.3.0 — intelligent Transmit & faster replies** (from Roy KI0ER's field feedback): tapping a decoded station sends the correct *next* message WSJT-X-double-click style, hand-run QSOs log to ADIF, replies land on the beat, and a new **Fast pounce** toggle surfaces decodes before the slot boundary so a fresh CQ can be answered in the very next slot *(on by default; not yet verified on a live band — turn it off if your decode counts drop, and please report)*. Plus a rebuilt no-radio-needed **practice simulator**, **USB mouse** support (radio unplugged), and a **web file browser** for the microSD card
 - **v1.2.0 — on-device User Manual**: Settings drawer → **User Manual** reads this whole guide on the Tab5 (a native reader with a drag-to-pick Contents page); with a microSD card it can **Save offline**, and it flags a firmware update when one is available
 - **v1.1.0 — FT8 decode collapse solved**: full decode rate every slot (was ~200–350 ms of QMX audio lost at the USB wire per slot); **microSD is a full station backup** and **GPS time sync is automatic**
 - **v1.0.0 foundation — LoTW upload**: QSOs are signed on the device with your own ARRL certificate, completing the logbook trio (QRZ, eQSL, LoTW); plus the FT8 double-send fix, `<...>` callsign resolution, broken-QSO resume, Today/POTA log view, and display sleep
@@ -34,7 +35,7 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 **New user?** Start with the [Quick Start](quick-start.md) guide — 10 minutes to on-air.
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.3.0.pdf) — a printable 40-page reference.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.3.1.pdf) — a printable 40-page reference.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 
