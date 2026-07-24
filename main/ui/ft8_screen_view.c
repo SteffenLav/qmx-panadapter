@@ -279,9 +279,11 @@ static void styles_init(void)
     lv_style_set_y         (&s_style_col_snr, 6);
 
     INIT_COL(s_style_col_dt,      COL_DT_X,      COL_DT_W,      LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
-    INIT_COL(s_style_col_hz,      COL_HZ_X,      COL_HZ_W,      LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
-    INIT_COL(s_style_col_km,      COL_KM_X,      COL_KM_W,      LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
-    INIT_COL(s_style_col_brg,     COL_BRG_X,     COL_BRG_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
+    // HZ/KM/BRG values sit +10 px right of their (unchanged) header labels so
+    // the numbers center under the right-aligned headings (operator request).
+    INIT_COL(s_style_col_hz,      COL_HZ_X  + 10, COL_HZ_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
+    INIT_COL(s_style_col_km,      COL_KM_X  + 10, COL_KM_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
+    INIT_COL(s_style_col_brg,     COL_BRG_X + 10, COL_BRG_W,    LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     INIT_COL(s_style_col_heard,   COL_HEARD_X,   COL_HEARD_W,   LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     #undef INIT_COL
 
