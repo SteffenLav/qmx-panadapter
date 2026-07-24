@@ -5574,34 +5574,30 @@ static void drawer_build(void)
     // Display brightness section (moved up under Battery care, operator
     // request 2026-07-16 - the always-useful device controls group at top).
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_BRIGHTNESS, y, 130);
-        lv_obj_t *bl_hdr = lv_label_create(sec);
-        lv_label_set_text(bl_hdr, "Display");
-        lv_obj_set_style_text_color(bl_hdr, lv_color_hex(0xA0E0A0), 0);
-        lv_obj_set_style_text_font(bl_hdr, &lv_font_montserrat_28, 0);
-        lv_obj_align(bl_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
-
+        // No "Display" section header (dropped 2026-07-24, operator request):
+        // the value label itself says "Display brightness".
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_BRIGHTNESS, y, 96);
         s_lbl_brightness = lv_label_create(sec);
-        char blbuf[24];
+        char blbuf[32];
         uint8_t bl_pct = 100;
         {
             qmx_settings_t scfg4;
             settings_load_all(&scfg4);
             bl_pct = scfg4.brightness_pct;
         }
-        snprintf(blbuf, sizeof(blbuf), "Brightness: %u%%", (unsigned)bl_pct);
+        snprintf(blbuf, sizeof(blbuf), "Display brightness: %u%%", (unsigned)bl_pct);
         lv_label_set_text(s_lbl_brightness, blbuf);
         lv_obj_set_style_text_color(s_lbl_brightness, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(s_lbl_brightness, &lv_font_montserrat_28, 0);
-        lv_obj_align(s_lbl_brightness, LV_ALIGN_TOP_LEFT, 0, 40);
+        lv_obj_align(s_lbl_brightness, LV_ALIGN_TOP_LEFT, 0, 10);
 
         s_slider_brightness = lv_slider_create(sec);
         lv_obj_set_size(s_slider_brightness, DRAWER_W - 32, 30);
         lv_slider_set_range(s_slider_brightness, 10, 100);
         lv_slider_set_value(s_slider_brightness, bl_pct, LV_ANIM_OFF);
-        lv_obj_align(s_slider_brightness, LV_ALIGN_TOP_LEFT, 0, 70);
+        lv_obj_align(s_slider_brightness, LV_ALIGN_TOP_LEFT, 0, 40);
         lv_obj_add_event_cb(s_slider_brightness, drawer_slider_brightness_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        y += 130;
+        y += 96;
     }
 
     // Antenna Tune (1_04+ firmware only): its own section so the layout can
@@ -6126,6 +6122,44 @@ static void drawer_build(void)
     //    inside the edge. (See position_knob() in lv_slider.c.)
     // s_slider_charge_limit_pct is now included too, so the battery-care knob
     // gets the same max-value inset (it used to overhang the right edge).
+    // Common tweaks for every drawer dropdown (operator request 2026-07-24):
+    //  - width LV_SIZE_CONTENT (selected text + arrow), left-aligned as before
+    //    - the full-drawer-width boxes looked like empty bars
+    //  - light-grey background instead of the theme's white (too bright on the
+    //    dark drawer), applied to the closed box AND the option list
+    lv_obj_t *drawer_dropdowns[] = {
+        s_dropdown_sleep, s_dropdown_bpregion, s_dropdown_cmap, s_dropdown_wf_window,
+    };
+    for (size_t i = 0; i < sizeof(drawer_dropdowns) / sizeof(drawer_dropdowns[0]); i++) {
+        lv_obj_t *dd = drawer_dropdowns[i];
+        if (!dd) continue;
+        // Width = the longest option line + arrow/padding. NOT LV_SIZE_CONTENT:
+        // an lv_dropdown's internal label is sized FROM the object width, so
+        // content-sizing collapses the box to just the arrow (hw-observed).
+        {
+            const char *opts = lv_dropdown_get_options(dd);
+            const lv_font_t *font = lv_obj_get_style_text_font(dd, LV_PART_MAIN);
+            int32_t widest = 0;
+            const char *line = opts;
+            while (line && *line) {
+                const char *nl = strchr(line, '\n');
+                size_t len = nl ? (size_t)(nl - line) : strlen(line);
+                char buf[48];
+                if (len >= sizeof(buf)) len = sizeof(buf) - 1;
+                memcpy(buf, line, len);
+                buf[len] = '\0';
+                lv_point_t sz;
+                lv_text_get_size(&sz, buf, font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+                if (sz.x > widest) widest = sz.x;
+                line = nl ? nl + 1 : NULL;
+            }
+            lv_obj_set_width(dd, widest + 70);   // text + arrow + h-padding
+        }
+        lv_obj_set_style_bg_color(dd, lv_color_hex(0xC8C8C8), LV_PART_MAIN);
+        lv_obj_t *list = lv_dropdown_get_list(dd);
+        if (list) lv_obj_set_style_bg_color(list, lv_color_hex(0xC8C8C8), LV_PART_MAIN);
+    }
+
     lv_obj_t *drawer_sliders[] = {
         s_slider_db_min, s_slider_db_max, s_slider_alpha, s_slider_cwpitch,
         s_slider_cwaudio_vol, s_slider_ifcal, s_slider_brightness,
@@ -6137,6 +6171,14 @@ static void drawer_build(void)
         lv_obj_add_flag(drawer_sliders[i], LV_OBJ_FLAG_ADV_HITTEST);
         lv_obj_set_style_pad_left(drawer_sliders[i], 0, LV_PART_MAIN);
         lv_obj_set_style_pad_right(drawer_sliders[i], 25, LV_PART_MAIN);
+        // Half-thickness track, same-size knob (operator request 2026-07-24):
+        // the 30 px tracks dominated the drawer. Height 30 -> 14; translate_y
+        // re-centres the thinner track on the old track's centre line so the
+        // spacing to the header text above is unchanged; an explicit knob pad
+        // rebuilds the knob to ~the old diameter (14 + 2*14 = 42 px).
+        lv_obj_set_height(drawer_sliders[i], 14);
+        lv_obj_set_style_translate_y(drawer_sliders[i], 8, LV_PART_MAIN);
+        lv_obj_set_style_pad_all(drawer_sliders[i], 14, LV_PART_KNOB);
     }
 
     // Keep the frozen header above all the sections created after it (z-order
@@ -6445,8 +6487,8 @@ static void drawer_slider_brightness_cb(lv_event_t *e)
     display_set_brightness(v);
     settings_set_brightness_pct((uint8_t)v);
     if (s_lbl_brightness) {
-        char b[24];
-        snprintf(b, sizeof(b), "Brightness: %d%%", v);
+        char b[32];
+        snprintf(b, sizeof(b), "Display brightness: %d%%", v);
         lv_label_set_text(s_lbl_brightness, b);
     }
 }
