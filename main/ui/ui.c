@@ -3198,12 +3198,14 @@ void ui_init(lv_display_t *disp)
         const char *txt = "Now turn on or reboot your QMX/+";
         lv_obj_t *lbl = lv_label_create(s_qmx_wait_overlay);
         lv_label_set_text(lbl, txt);
-        lv_obj_set_width(lbl, 1200);
+        lv_obj_set_width(lbl, 1040);
         lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
         lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(0x909090), 0);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_48, 0);
-        lv_obj_center(lbl);
+        // Centered +120 px right (box narrowed to stay on-screen): a plain
+        // screen-center put the text over the FT8 screen's 320 px left pane.
+        lv_obj_align(lbl, LV_ALIGN_CENTER, 120, 0);
         s_qmx_wait_lbl = lbl;
     }
     qmx_wait_poll_cb(NULL);
