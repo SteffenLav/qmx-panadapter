@@ -19,6 +19,11 @@ extern "C" {
 //   - No date-range exceptions (e.g. former entities).
 const char *dxcc_lookup(const char *callsign);
 
+// Same lookup, returning a compact 3-letter code (ISO 3166-1 alpha-3 where
+// the entity has one, a recognizable 3-letter tag otherwise) for the decode
+// list's narrow CTY column. NULL if the callsign has no match.
+const char *dxcc_lookup_alpha3(const char *callsign);
+
 #ifdef __cplusplus
 }
 #endif

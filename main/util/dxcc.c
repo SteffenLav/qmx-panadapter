@@ -329,6 +329,97 @@ static void normalise_call(const char *in, char *out, size_t cap)
     out[n] = '\0';
 }
 
+// Entity name -> 3-letter code for the decode list's compact CTY column
+// (Roy KI0ER: full names ate the width needed for DT + Hz columns).
+// ISO 3166-1 alpha-3 wherever the entity maps to a country; ham entities
+// without an ISO code get a recognizable 3-letter tag (HAW, SAR, MKR, ...).
+// Keyed on the exact name strings in TBL - keep the two tables in step.
+typedef struct { const char *name; const char *a3; } dxcc_a3_row_t;
+static const dxcc_a3_row_t A3[] = {
+    { "USA", "USA" }, { "Hawaii", "HAW" }, { "Alaska", "ALK" },
+    { "Puerto Rico", "PRI" }, { "Canada", "CAN" }, { "Mexico", "MEX" },
+    { "Bahamas", "BHS" }, { "Cuba", "CUB" }, { "Haiti", "HTI" },
+    { "Dom. Rep.", "DOM" }, { "Grenada", "GRD" }, { "St. Lucia", "LCA" },
+    { "Dominica", "DMA" }, { "St. Vincent", "VCT" }, { "Guadeloupe", "GLP" },
+    { "Martinique", "MTQ" }, { "Antigua", "ATG" }, { "Belize", "BLZ" },
+    { "St. Kitts", "KNA" }, { "Br. Caribbean", "VP2" }, { "Turks&Caic.", "TCA" },
+    { "Bermuda", "BMU" }, { "Cayman Is.", "CYM" }, { "Barbados", "BRB" },
+    { "Trinidad", "TTO" }, { "Colombia", "COL" }, { "Venezuela", "VEN" },
+    { "Costa Rica", "CRI" }, { "Guatemala", "GTM" }, { "Nicaragua", "NIC" },
+    { "Panama", "PAN" }, { "Honduras", "HND" }, { "El Salvador", "SLV" },
+    { "Argentina", "ARG" }, { "Brazil", "BRA" }, { "Chile", "CHL" },
+    { "Peru", "PER" }, { "Ecuador", "ECU" }, { "Bolivia", "BOL" },
+    { "Paraguay", "PRY" }, { "Uruguay", "URY" }, { "Curacao", "CUW" },
+    { "England", "ENG" }, { "Scotland", "SCT" }, { "Wales", "WLS" },
+    { "N. Ireland", "NIR" }, { "Jersey", "JEY" }, { "Guernsey", "GGY" },
+    { "Isle of Man", "IMN" }, { "Ireland", "IRL" }, { "Germany", "DEU" },
+    { "France", "FRA" }, { "Corsica", "COR" }, { "Italy", "ITA" },
+    { "Sardinia", "SAR" }, { "Sicily", "SIC" }, { "Spain", "ESP" },
+    { "Balearic Is.", "BAL" }, { "Canary Is.", "CNY" }, { "Ceuta&Mel.", "CEU" },
+    { "Portugal", "PRT" }, { "Madeira", "MAD" }, { "Azores", "AZO" },
+    { "Netherlands", "NLD" }, { "Belgium", "BEL" }, { "Luxembourg", "LUX" },
+    { "Switzerland", "CHE" }, { "Liechtenstein", "LIE" }, { "Austria", "AUT" },
+    { "Czech Rep.", "CZE" }, { "Slovakia", "SVK" }, { "Hungary", "HUN" },
+    { "Poland", "POL" }, { "Romania", "ROU" }, { "Bulgaria", "BGR" },
+    { "Greece", "GRC" }, { "Crete", "CRT" }, { "Dodecanese", "DOD" },
+    { "Mt. Athos", "ATH" }, { "Cyprus", "CYP" }, { "Turkey", "TUR" },
+    { "Azerbaijan", "AZE" }, { "Armenia", "ARM" }, { "Georgia", "GEO" },
+    { "Slovenia", "SVN" }, { "Croatia", "HRV" }, { "Bosnia-H.", "BIH" },
+    { "Serbia", "SRB" }, { "Montenegro", "MNE" }, { "N. Macedon.", "MKD" },
+    { "Albania", "ALB" }, { "Denmark", "DNK" }, { "Faroe Is.", "FRO" },
+    { "Greenland", "GRL" }, { "Finland", "FIN" }, { "Market Reef", "MKR" },
+    { "Aland Is.", "ALA" }, { "Norway", "NOR" }, { "Svalbard", "SJM" },
+    { "Jan Mayen", "JMY" }, { "Sweden", "SWE" }, { "Iceland", "ISL" },
+    { "Russia", "RUS" }, { "Russia EU", "RUS" }, { "Russia AS", "RUS" },
+    { "Ukraine", "UKR" }, { "Belarus", "BLR" }, { "Moldova", "MDA" },
+    { "Lithuania", "LTU" }, { "Latvia", "LVA" }, { "Estonia", "EST" },
+    { "Japan", "JPN" }, { "South Korea", "KOR" }, { "North Korea", "PRK" },
+    { "Taiwan", "TWN" }, { "China", "CHN" }, { "Hong Kong", "HKG" },
+    { "Macao", "MAC" }, { "India", "IND" }, { "Sri Lanka", "LKA" },
+    { "Bangladesh", "BGD" }, { "Pakistan", "PAK" }, { "Afghanistan", "AFG" },
+    { "Iran", "IRN" }, { "Iraq", "IRQ" }, { "Saudi Arab.", "SAU" },
+    { "Oman", "OMN" }, { "UAE", "ARE" }, { "Qatar", "QAT" },
+    { "Bahrain", "BHR" }, { "Israel", "ISR" }, { "Lebanon", "LBN" },
+    { "Syria", "SYR" }, { "Jordan", "JOR" }, { "Kuwait", "KWT" },
+    { "Indonesia", "IDN" }, { "Malaysia", "MYS" }, { "Singapore", "SGP" },
+    { "Thailand", "THA" }, { "Philippines", "PHL" }, { "Vietnam", "VNM" },
+    { "Cambodia", "KHM" }, { "Laos", "LAO" }, { "Myanmar", "MMR" },
+    { "Kazakhstan", "KAZ" }, { "Turkmenistan", "TKM" }, { "Kyrgyzstan", "KGZ" },
+    { "Tajikistan", "TJK" }, { "Uzbekistan", "UZB" }, { "Mongolia", "MNG" },
+    { "Morocco", "MAR" }, { "Algeria", "DZA" }, { "Tunisia", "TUN" },
+    { "Libya", "LBY" }, { "Egypt", "EGY" }, { "Sudan", "SDN" },
+    { "Kenya", "KEN" }, { "Tanzania", "TZA" }, { "Mauritius", "MUS" },
+    { "Rodrigues", "ROD" }, { "Agalega", "AGA" }, { "Reunion", "REU" },
+    { "Madagascar", "MDG" }, { "Mauritania", "MRT" }, { "Senegal", "SEN" },
+    { "Chad", "TCD" }, { "Ivory Coast", "CIV" }, { "Benin", "BEN" },
+    { "Mali", "MLI" }, { "Gabon", "GAB" }, { "Cameroon", "CMR" },
+    { "Congo", "COG" }, { "DR Congo", "COD" }, { "Rwanda", "RWA" },
+    { "Burundi", "BDI" }, { "Nigeria", "NGA" }, { "Togo", "TGO" },
+    { "Uganda", "UGA" }, { "Lesotho", "LSO" }, { "Malawi", "MWI" },
+    { "Botswana", "BWA" }, { "Namibia", "NAM" }, { "South Africa", "ZAF" },
+    { "Eswatini", "SWZ" }, { "Mozambique", "MOZ" }, { "Angola", "AGO" },
+    { "Zimbabwe", "ZWE" }, { "Zambia", "ZMB" }, { "Brunei", "BRN" },
+    { "Liberia", "LBR" }, { "Jamaica", "JAM" },
+    { "Australia", "AUS" }, { "New Zealand", "NZL" }, { "Cook Is.", "COK" },
+    { "New Caledonia", "NCL" }, { "Fr. Polynesia", "PYF" }, { "Wallis & F.", "WLF" },
+    { "Fiji", "FJI" }, { "Vanuatu", "VUT" }, { "Solomon I.", "SLB" },
+    { "Tuvalu", "TUV" }, { "Kiribati", "KIR" }, { "Palau", "PLW" },
+    { "Micronesia", "FSM" }, { "Marshall I.", "MHL" }, { "Am. Samoa", "ASM" },
+    { "Samoa", "WSM" }, { "Tonga", "TON" }, { "Papua N.G.", "PNG" },
+    { "Niue", "NIU" },
+};
+static const int A3_N = (int)(sizeof(A3) / sizeof(A3[0]));
+
+const char *dxcc_lookup_alpha3(const char *callsign)
+{
+    const char *name = dxcc_lookup(callsign);
+    if (!name) return NULL;
+    for (int i = 0; i < A3_N; i++) {
+        if (strcmp(A3[i].name, name) == 0) return A3[i].a3;
+    }
+    return NULL;   // TBL entry with no A3 mapping - keep the tables in step
+}
+
 const char *dxcc_lookup(const char *callsign)
 {
     if (!callsign) return NULL;

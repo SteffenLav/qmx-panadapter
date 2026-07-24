@@ -49,30 +49,35 @@ static const char *TAG = "ft8_view";
 #define RIGHT_W          (MID_W - LEFT_W)
 
 // Column x-offsets / widths within the row.
-// Layout: SL | CALL | MESSAGE | COUNTRY | SNR | KM | BRG | HRD
-// SL = slot parity (E blue / O amber). CALL…KM shifted +10 px right;
-// KM absorbs the 10 px taken from its right edge (BRG/HEARD unchanged).
-// SNR/KM/BRG are shifted a further +15 px right with their widths held
-// fixed (COL_SNR_W/COL_KM_W/COL_BRG_W are constants, not derived from the
-// next column's X) so they move without growing or shrinking.
+// Layout: SL | CALL | MESSAGE | CTY | SNR | DT | HZ | KM | BRG | HRD
+// SL = slot parity (E blue / O amber). SL/CALL/MESSAGE are unchanged from
+// the pre-v1.3.1 layout; the country column shrank from full entity names
+// (157 px) to 3-letter codes (dxcc_lookup_alpha3), which - together with a
+// tighter SNR (no " dB" suffix) - freed the width for two new columns
+// (Roy KI0ER request): DT (slot-timing offset, seconds, band-consensus-
+// relative so on-time stations read ~0.0) and HZ (the station's audio tone).
 #define COL_SLOT_X      6
 #define COL_SLOT_W      22
 #define COL_CALL_X      46
 #define COL_TEXT_X      184
 #define COL_COUNTRY_X   479
-#define COL_SNR_X       629
-#define COL_KM_X        719
-#define COL_BRG_X       785
-#define COL_HEARD_X     880
+#define COL_SNR_X       537
+#define COL_DT_X        599
+#define COL_HZ_X        669
+#define COL_KM_X        739
+#define COL_BRG_X       817
+#define COL_HEARD_X     885
 #define COL_RIGHT_EDGE  960
 #define ROW_H           36
 
 #define COL_CALL_W      (COL_TEXT_X    - COL_CALL_X    - 8)
 #define COL_MSG_W       272
-#define COL_COUNTRY_W   157
-#define COL_SNR_W       82
-#define COL_KM_W        71
-#define COL_BRG_W       102
+#define COL_COUNTRY_W   52
+#define COL_SNR_W       56
+#define COL_DT_W        64
+#define COL_HZ_W        64
+#define COL_KM_W        72
+#define COL_BRG_W       62
 #define COL_HEARD_W     (COL_RIGHT_EDGE - COL_HEARD_X  - 16)
 
 // Pool size: pre-allocated row container/label objects.
@@ -105,6 +110,8 @@ static lv_style_t s_style_col_call;     // CALL column (amber, left)
 static lv_style_t s_style_col_msg;      // MESSAGE column (white, left)
 static lv_style_t s_style_col_country;  // COUNTRY (dim, left)
 static lv_style_t s_style_col_snr;      // SNR base (font/pos/align), colour set per-row
+static lv_style_t s_style_col_dt;       // DT (dim, right)
+static lv_style_t s_style_col_hz;       // HZ (dim, right)
 static lv_style_t s_style_col_km;       // KM (dim, right)
 static lv_style_t s_style_col_brg;      // BRG (dim, right)
 static lv_style_t s_style_col_heard;    // HRD (dim, right)
@@ -119,6 +126,8 @@ typedef struct {
     lv_obj_t *l_msg;
     lv_obj_t *l_country;
     lv_obj_t *l_snr;
+    lv_obj_t *l_dt;
+    lv_obj_t *l_hz;
     lv_obj_t *l_km;
     lv_obj_t *l_brg;
     lv_obj_t *l_heard;
@@ -127,6 +136,8 @@ typedef struct {
     char prev_msg[40];
     char prev_country[24];
     char prev_snr[12];
+    char prev_dt[12];
+    char prev_hz[12];
     char prev_km[12];
     char prev_brg[12];
     char prev_heard[12];
@@ -267,6 +278,8 @@ static void styles_init(void)
     lv_style_set_x         (&s_style_col_snr, COL_SNR_X);
     lv_style_set_y         (&s_style_col_snr, 6);
 
+    INIT_COL(s_style_col_dt,      COL_DT_X,      COL_DT_W,      LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
+    INIT_COL(s_style_col_hz,      COL_HZ_X,      COL_HZ_W,      LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     INIT_COL(s_style_col_km,      COL_KM_X,      COL_KM_W,      LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     INIT_COL(s_style_col_brg,     COL_BRG_X,     COL_BRG_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     INIT_COL(s_style_col_heard,   COL_HEARD_X,   COL_HEARD_W,   LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
@@ -615,6 +628,8 @@ static void build_row(int i)
     r->l_msg     = make_label_styled(r->row, &s_style_col_msg);
     r->l_country = make_label_styled(r->row, &s_style_col_country);
     r->l_snr     = make_label_styled(r->row, &s_style_col_snr);
+    r->l_dt      = make_label_styled(r->row, &s_style_col_dt);
+    r->l_hz      = make_label_styled(r->row, &s_style_col_hz);
     r->l_km      = make_label_styled(r->row, &s_style_col_km);
     r->l_brg     = make_label_styled(r->row, &s_style_col_brg);
     r->l_heard   = make_label_styled(r->row, &s_style_col_heard);
@@ -641,13 +656,26 @@ static void update_row(int i, const ft8_call_t *src)
     row_widgets_t *r = &s_rows[i];
     if (!r->row) return;
 
-    const char *country = dxcc_lookup(src->call);
+    const char *country = dxcc_lookup_alpha3(src->call);
     if (!country) country = "--";
 
     int snr = (int)src->last_snr_db;
-    char b_snr[12], b_km[12], b_brg[12], b_heard[12];
-    snprintf(b_snr,   sizeof(b_snr),   "%+d dB", snr);
+    char b_snr[12], b_dt[12], b_hz[12], b_km[12], b_brg[12], b_heard[12];
+    snprintf(b_snr,   sizeof(b_snr),   "%+d", snr);
     snprintf(b_heard, sizeof(b_heard), "%u",  (unsigned)src->heard_count);
+
+    // DT: the station's slot-timing offset in seconds, relative to the band
+    // consensus - the consensus carries our common RX audio latency, so
+    // subtracting it makes an on-time station read ~0.0 (the WSJT-X-style
+    // number Roy KI0ER asked for) and an off-time one show its true offset.
+    // Falls back to the raw value while no consensus exists yet (first slot).
+    {
+        int consensus = 0;
+        (void)ft8_get_last_timing_ms(&consensus);
+        snprintf(b_dt, sizeof(b_dt), "%+.1f",
+                 ((int)src->last_dt_ms - consensus) / 1000.0f);
+    }
+    snprintf(b_hz, sizeof(b_hz), "%d", (int)src->last_freq);
 
     if (s_user_loc_valid && src->last_grid[0]) {
         double rlat = 0.0, rlon = 0.0;
@@ -694,6 +722,8 @@ static void update_row(int i, const ft8_call_t *src)
     set_text_if_changed(r->l_msg,     r->prev_msg,     sizeof(r->prev_msg),     src->last_text);
     set_text_if_changed(r->l_country, r->prev_country, sizeof(r->prev_country), country);
     set_text_if_changed(r->l_snr,     r->prev_snr,     sizeof(r->prev_snr),     b_snr);
+    set_text_if_changed(r->l_dt,      r->prev_dt,      sizeof(r->prev_dt),      b_dt);
+    set_text_if_changed(r->l_hz,      r->prev_hz,      sizeof(r->prev_hz),      b_hz);
     set_text_if_changed(r->l_km,      r->prev_km,      sizeof(r->prev_km),      b_km);
     set_text_if_changed(r->l_brg,     r->prev_brg,     sizeof(r->prev_brg),     b_brg);
     set_text_if_changed(r->l_heard,   r->prev_heard,   sizeof(r->prev_heard),   b_heard);
@@ -1849,17 +1879,19 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_add_style(hdr, &s_style_header, 0);
     lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
 
-    struct { const char *t; int x; int w; lv_text_align_t a; } cols[8] = {
+    struct { const char *t; int x; int w; lv_text_align_t a; } cols[10] = {
         { "SL",      COL_SLOT_X,    COL_SLOT_W,    LV_TEXT_ALIGN_LEFT  },
         { "CALL",    COL_CALL_X,    COL_CALL_W,    LV_TEXT_ALIGN_LEFT  },
         { "MESSAGE", COL_TEXT_X,    COL_MSG_W,     LV_TEXT_ALIGN_LEFT  },
-        { "COUNTRY", COL_COUNTRY_X, COL_COUNTRY_W, LV_TEXT_ALIGN_LEFT  },
+        { "CTY",     COL_COUNTRY_X, COL_COUNTRY_W, LV_TEXT_ALIGN_LEFT  },
         { "SNR",     COL_SNR_X,     COL_SNR_W,     LV_TEXT_ALIGN_RIGHT },
+        { "DT",      COL_DT_X,      COL_DT_W,      LV_TEXT_ALIGN_RIGHT },
+        { "HZ",      COL_HZ_X,      COL_HZ_W,      LV_TEXT_ALIGN_RIGHT },
         { "KM",      COL_KM_X,      COL_KM_W,      LV_TEXT_ALIGN_RIGHT },
         { "BRG",     COL_BRG_X,     COL_BRG_W,     LV_TEXT_ALIGN_RIGHT },
         { "HRD",     COL_HEARD_X,   COL_HEARD_W,   LV_TEXT_ALIGN_RIGHT },
     };
-    for (int i = 0; i < 8; i++) {
+    for (int i = 0; i < 10; i++) {
         lv_obj_t *lbl = lv_label_create(hdr);
         lv_obj_add_style(lbl, &s_style_header_label, 0);
         lv_label_set_text(lbl, cols[i].t);
