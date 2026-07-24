@@ -1648,12 +1648,12 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // created directly on `parent` (the screen) so it competes at the same
     // tree level as those hit-zones and can be foregrounded over them.
     s_btn_freq = lv_btn_create(s_left_pane);
-    lv_obj_set_size(s_btn_freq, 294, 60);
+    lv_obj_set_size(s_btn_freq, 288, 60);
     lv_obj_set_pos(s_btn_freq, 0, 55);
     lv_obj_set_style_bg_color(s_btn_freq, lv_color_hex(UI_COLOR_SURFACE), 0);
     lv_obj_set_style_border_width(s_btn_freq, 1, 0);
     lv_obj_set_style_border_color(s_btn_freq, lv_color_hex(UI_COLOR_BORDER), 0);
-    lv_obj_set_style_radius(s_btn_freq, 4, 0);
+    lv_obj_set_style_radius(s_btn_freq, 8, 0);
     lv_obj_set_style_pad_all(s_btn_freq, 8, 0);
     lv_obj_clear_flag(s_btn_freq, LV_OBJ_FLAG_CLICKABLE);
 
@@ -1670,7 +1670,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // i.e. y:(MID_Y+63)..(MID_Y+123). Kept in sync manually with the
     // s_btn_freq geometry above - if that ever moves, update this too.
     s_btn_freq_hit = lv_obj_create(parent);
-    lv_obj_set_size(s_btn_freq_hit, 294, 60);
+    lv_obj_set_size(s_btn_freq_hit, 288, 60);
     lv_obj_set_pos(s_btn_freq_hit, 16, MID_Y + 63);
     lv_obj_set_style_bg_opa(s_btn_freq_hit, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_btn_freq_hit, 0, 0);
@@ -1704,11 +1704,11 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // inactive; lights up in the same slot colours as s_lbl_count
     // (steel blue / warm orange) when active.
     s_btn_tx_even = lv_btn_create(s_left_pane);
-    lv_obj_set_size(s_btn_tx_even, 136, 52);
+    lv_obj_set_size(s_btn_tx_even, 140, 52);
     lv_obj_set_pos(s_btn_tx_even, 0, 152);
     lv_obj_set_style_bg_color(s_btn_tx_even, lv_color_hex(0x303044), 0);
     lv_obj_set_style_border_width(s_btn_tx_even, 0, 0);
-    lv_obj_set_style_radius(s_btn_tx_even, 4, 0);
+    lv_obj_set_style_radius(s_btn_tx_even, 8, 0);
     lv_obj_set_style_pad_all(s_btn_tx_even, 0, 0);
     lv_obj_add_event_cb(s_btn_tx_even, tx_even_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *even_lbl = lv_label_create(s_btn_tx_even);
@@ -1718,11 +1718,11 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_center(even_lbl);
 
     s_btn_tx_odd = lv_btn_create(s_left_pane);
-    lv_obj_set_size(s_btn_tx_odd, 136, 52);
+    lv_obj_set_size(s_btn_tx_odd, 140, 52);
     lv_obj_set_pos(s_btn_tx_odd, 148, 152);
     lv_obj_set_style_bg_color(s_btn_tx_odd, lv_color_hex(0x303044), 0);
     lv_obj_set_style_border_width(s_btn_tx_odd, 0, 0);
-    lv_obj_set_style_radius(s_btn_tx_odd, 4, 0);
+    lv_obj_set_style_radius(s_btn_tx_odd, 8, 0);
     lv_obj_set_style_pad_all(s_btn_tx_odd, 0, 0);
     lv_obj_add_event_cb(s_btn_tx_odd, tx_odd_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *odd_lbl = lv_label_create(s_btn_tx_odd);
@@ -1740,7 +1740,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // gets a darker blue fill to read as the secondary of the pair.
     s_btn_filter = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_filter, 140, 60);
-    lv_obj_set_pos(s_btn_filter, 0, 214);  // #3: 75% less space over Filter button
+    lv_obj_set_pos(s_btn_filter, 0, 212);  // 8 px below the TX row (uniform grid gap)
     lv_obj_set_style_bg_color(s_btn_filter, lv_color_hex(UI_COLOR_PRIMARY), 0);  // pale blue
     lv_obj_set_style_border_color(s_btn_filter, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
     lv_obj_set_style_border_width(s_btn_filter, 2, 0);
@@ -1754,7 +1754,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
 
     s_btn_adif = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_adif, 140, 60);
-    lv_obj_set_pos(s_btn_adif, 148, 214);
+    lv_obj_set_pos(s_btn_adif, 148, 212);
     lv_obj_set_style_bg_color(s_btn_adif, lv_color_hex(0x163d5e), 0);  // darker blue
     lv_obj_set_style_border_color(s_btn_adif, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
     lv_obj_set_style_border_width(s_btn_adif, 2, 0);
@@ -1778,7 +1778,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // the two steps of the flow together visually.
     s_btn_cq = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_cq, 288, 60);
-    lv_obj_set_pos(s_btn_cq, 0, 278);
+    lv_obj_set_pos(s_btn_cq, 0, 280);
     lv_obj_set_style_bg_color(s_btn_cq, lv_color_hex(0x2e8b3a), 0);
     lv_obj_set_style_border_color(s_btn_cq, lv_color_hex(0x4caf50), 0);
     lv_obj_set_style_border_width(s_btn_cq, 2, 0);
