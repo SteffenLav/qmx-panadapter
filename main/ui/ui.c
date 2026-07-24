@@ -1973,6 +1973,18 @@ static void qmx_wait_poll_cb(lv_timer_t *t)
         lv_obj_clear_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
         qmx_wait_start_breathing(s_qmx_wait_lbl);
     }
+    // Mode-dependent horizontal placement: +150 px in FT8 mode so the text
+    // clears the 320 px left pane; plain screen-center in Panadapter mode
+    // (no pane to avoid). Re-checked every tick so a mode toggle while the
+    // overlay is visible re-aligns it. Only re-aligned on change.
+    {
+        static int s_cur_off = 0;
+        int want = (ui_mode_get() == UI_MODE_FT8) ? 150 : 0;
+        if (want != s_cur_off && s_qmx_wait_lbl) {
+            s_cur_off = want;
+            lv_obj_align(s_qmx_wait_lbl, LV_ALIGN_CENTER, want, 0);
+        }
+    }
     lv_obj_move_foreground(s_qmx_wait_overlay);  // keepalive against later modals
 }
 
@@ -3203,9 +3215,10 @@ void ui_init(lv_display_t *disp)
         lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
         lv_obj_set_style_text_color(lbl, lv_color_hex(0x909090), 0);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_48, 0);
-        // Centered +120 px right (box narrowed to stay on-screen): a plain
-        // screen-center put the text over the FT8 screen's 320 px left pane.
-        lv_obj_align(lbl, LV_ALIGN_CENTER, 120, 0);
+        // Horizontal offset is mode-dependent, applied by qmx_wait_poll_cb:
+        // +150 px in FT8 mode (clears the 320 px left pane), screen-centered
+        // in Panadapter mode. Box narrowed from 1200 so +150 stays on-screen.
+        lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
         s_qmx_wait_lbl = lbl;
     }
     qmx_wait_poll_cb(NULL);
