@@ -1625,6 +1625,12 @@ static void ft8_task(void *arg)
                              slot_idx, (long long)slot_sec,
                              sim_chk.ft8_early_decode ? "" : " (late, early-decode OFF)");
                     ft8_qso_advance(slot_sec);
+                    // Robot auto-answer must tick here too - it normally runs
+                    // from decode_slot() after a successful capture, which a
+                    // no-audio sim slot never reaches, so "Auto-answer CQ"
+                    // silently did nothing in QMX-less simulation. Same
+                    // ordering as decode_slot(): advance first, robot second.
+                    ft8_robot_tick(slot_sec);
                     ft8_screen_view_request_refresh();
                 } else {
                     ft8_status_set("RX: capture error");

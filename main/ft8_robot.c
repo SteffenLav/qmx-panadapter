@@ -3,6 +3,7 @@
 // the QSO itself runs on the existing ft8_qso state machine.
 
 #include "ft8_robot.h"
+#include "ft8_greylist.h"
 #include "ft8_qso.h"
 #include "ft8_tx.h"
 #include "ft8_status.h"
@@ -104,6 +105,10 @@ void ft8_robot_tick(int64_t slot_sec)
         if (strcmp(snap[i].call, qs.my_callsign) == 0) continue;  // our own echo
         if (f->excl_worked_before &&
             adif_log_contains_call_on_band(snap[i].call, cat_get_frequency())) continue;
+        // Grey-listed after repeated failed pounces - stop re-calling them
+        // every time their CQ reappears (gated by the same greylist_en the
+        // timeout tracker uses).
+        if (qs.greylist_en && ft8_greylist_contains(snap[i].call)) continue;
         if (!ft8_filter_match(snap[i].last_text, f)) continue;   // include/exclude terms
 
         double score = rank_score(&snap[i], (ft8_robot_priority_t)f->robot_priority, qs.my_grid);

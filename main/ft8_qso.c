@@ -27,6 +27,7 @@
 
 #include "ft8_qso.h"
 #include "ft8_pileup.h"
+#include "ft8_greylist.h"
 #include "ft8_tx.h"
 #include "ft8_test.h"   // ft8_op_mode_get() - FT8/FT4 sub-mode, for ADIF MODE
 #include "ft8_status.h"
@@ -807,6 +808,17 @@ static void register_miss(const char *waiting_for)
 
     clear_dt_follow();   // QSO over - back to the UTC/GPS beat
 
+    // Grey-listing (opt-in): a timed-out exchange counts as a failed attempt
+    // at this station; after GREY_FAIL_LIMIT of them the auto pickers (robot,
+    // auto-work pileup) stop re-calling it (Roy KI0ER: the robot re-tried the
+    // same deaf station all night). Manual pounces stay possible after an
+    // explicit "Clear from grey-list".
+    {
+        qmx_settings_t gq;
+        settings_load_all(&gq);
+        if (gq.greylist_en && tgt[0]) ft8_greylist_note_timeout(tgt);
+    }
+
     if (from_cq && s_have_cq_saved) {
         // Drop the half-finished QSO and go back to calling CQ on the frequency.
         lock();
@@ -1249,6 +1261,8 @@ static bool try_start_pileup_pounce(void)
         // rule the robot enforces, so auto-work never re-calls a logged station.
         if (qs.ft8_filters.excl_worked_before &&
             adif_log_contains_call_on_band(pile[i].call, cat_get_frequency())) continue;
+        // Grey-listed (repeated failed pounces) - don't auto-drain into them.
+        if (qs.greylist_en && ft8_greylist_contains(pile[i].call)) continue;
         if (best < 0 || pile[i].snr_db > pile[best].snr_db) best = i;
     }
     if (best < 0) return false;

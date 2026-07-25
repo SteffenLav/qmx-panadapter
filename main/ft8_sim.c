@@ -44,6 +44,8 @@ typedef struct {
     const char *fd_section;
     float       tone_hz;
     bool        engaged;   // true while "in" a simulated QSO with us
+    bool        deaf;      // never hears us: CQs but ignores every call - the
+                           // station grey-listing exists for (test fixture)
     bool        worked;    // completed a QSO with us this sim session - stops
                            // answering our CQ (still CQs itself, so pounce and
                            // the worked-before filter stay testable). Cleared
@@ -74,12 +76,14 @@ typedef struct {
 // phantoms don't sit on top of each other in the waterfall/decode list.
 #define N_PHANTOMS 6
 static ft8_sim_phantom_t s_phantoms[N_PHANTOMS] = {
-    { "W1AW",   "FN31", "3A", "EMA", 700.0f,  false },  // ARRL HQ, US
-    { "K9ZZ",   "EN52", "5B", "WCF", 2100.0f, false },  // US
-    { "N5XYZ",  "EM12", "2A", "STX", 1200.0f, false },  // US
-    { "VK3ABC", "QF22", "1D", "DX",  1550.0f, false },  // Australia (DX)
-    { "JA1XYZ", "PM95", "1D", "DX",  1850.0f, false },  // Japan (DX)
-    { "G0ABC",  "IO91", "1D", "DX",  2500.0f, false },  // England (DX)
+    { "W1AW",   "FN31", "3A", "EMA", 700.0f,  false },        // ARRL HQ, US
+    { "K9ZZ",   "EN52", "5B", "WCF", 2100.0f, false },        // US
+    { "N5XYZ",  "EM12", "2A", "STX", 1200.0f, false },        // US
+    { "VK3ABC", "QF22", "1D", "DX",  1550.0f, false },        // Australia (DX)
+    { "JA1XYZ", "PM95", "1D", "DX",  1850.0f, false },        // Japan (DX)
+    { "G0ABC",  "IO91", "1D", "DX",  2500.0f, .deaf = true }, // England (DX) - DEAF:
+                           // CQs but never hears you; pounces at it time out.
+                           // Practice target for the grey-list feature.
 };
 
 // How many phantoms pile onto our CQ in the same reply slot. >1 builds a real
@@ -236,6 +240,7 @@ static void schedule_cq_answer(const char *my_call, int64_t our_slot)
     int n = 0;
     for (int i = 0; i < N_PHANTOMS && n < SIM_PILEUP_CALLERS; i++) {
         if (s_phantoms[i].engaged || s_phantoms[i].worked) continue;
+        if (s_phantoms[i].deaf) continue;   // can't hear our CQ either
         // Pileup answers land EARLY in the slot (instant landing - text is
         // pre-synthesized) so all of them are inside the slot's scan.
         set_pending(&s_phantoms[i], my_call, s_phantoms[i].grid, false, true,
@@ -276,6 +281,11 @@ static void schedule_phantom_reply(ft8_sim_phantom_t *ph, const char *my_call,
 {
     char extra[20];
     bool use_fd = false;
+
+    if (ph->deaf) {
+        ESP_LOGI(TAG, "%s is deaf - ignoring our call (grey-list practice target)", ph->call);
+        return;
+    }
 
     // In-QSO phantoms must stop idle-CQing: the decode list keys one entry per
     // call, so a later 'CQ <ph>' overwrites the reply text/slot in that entry

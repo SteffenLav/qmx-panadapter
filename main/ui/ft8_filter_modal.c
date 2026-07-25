@@ -35,6 +35,7 @@ static lv_obj_t *s_cb_skip_tx1      = NULL;  // pounce: skip grid, send report f
 static lv_obj_t *s_cb_robot         = NULL;  // auto-answer enable
 static lv_obj_t *s_dd_robot_pri     = NULL;  // priority dropdown
 static lv_obj_t *s_cb_auto_pileup   = NULL;  // auto-work waiting pileup callers on QSO completion
+static lv_obj_t *s_cb_greylist      = NULL;  // grey-list stations after repeated failed pounces
 static lv_obj_t *s_robot_warn       = NULL;  // "unattended TX" warning - shown while robot OR auto-pileup is checked
 static lv_obj_t *s_cb_field_day     = NULL;  // ARRL Field Day exchange mode enable
 static lv_obj_t *s_ta_fd_class      = NULL;  // e.g. "16A"
@@ -114,6 +115,7 @@ static void save_btn_cb(lv_event_t *e)
     f.auto_pileup        = lv_obj_has_state(s_cb_auto_pileup, LV_STATE_CHECKED);
 
     settings_set_ft8_filters(&f);
+    settings_set_greylist_en(lv_obj_has_state(s_cb_greylist, LV_STATE_CHECKED));
 
     {
         char cls[8], sect[8];
@@ -391,6 +393,14 @@ static void modal_build(void)
     lv_obj_set_style_text_color(lbl_auto_pileup, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_add_event_cb(s_cb_auto_pileup, robot_checked_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
+    // Grey-listing: after repeated failed pounces at a station (they never
+    // respond - deaf to QRP, or ignoring us) the auto pickers stop re-calling
+    // it; its rows recolour and a tap offers "Clear from grey-list". The
+    // tracked list is RAM-only (reboot clears it). Roy KI0ER field request.
+    lv_obj_t *lbl_greylist;
+    s_cb_greylist = make_labeled_checkbox(panel, "Allow grey-listing", 540, 510, &lbl_greylist);
+    lv_obj_set_style_text_color(lbl_greylist, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+
     // --- ARRL Field Day exchange mode ---------------------------------
     // When on, FT8 QSOs (manual and auto) exchange class+section instead of
     // grid/signal report - see CLAUDE.md "FT8 robot" / ft8_qso.c. Class and
@@ -515,6 +525,7 @@ void ft8_filter_modal_show(void)
     lv_dropdown_set_selected(s_dd_robot_pri,
                              f->robot_priority <= FT8_ROBOT_PRI_DISTANT ? f->robot_priority : 0);
     apply_checkbox_state(s_cb_auto_pileup, f->auto_pileup);
+    apply_checkbox_state(s_cb_greylist, s.greylist_en);
     update_unattended_warn();   // shows the warning if robot OR auto-pileup is on
     apply_checkbox_state(s_cb_field_day, s.field_day_en);
     lv_textarea_set_text(s_ta_fd_class, s.fd_class);

@@ -30,6 +30,7 @@
 #include "ft8_pileup_modal.h"
 #include "ft8_status.h"
 #include "ft8_test.h"   // ft8_op_mode_set() - FT8/FT4 sub-mode flag
+#include "ft8_greylist.h"
 #include "ft8_tx_modal.h"
 #include "identity_config.h"
 #include "adif/adif_log.h"
@@ -185,6 +186,7 @@ static char         s_my_call[16] = {0};  /* operator callsign uppercased; refre
 // operator can tell, at a glance, who's actively being worked vs. who else
 // answered the CQ and is still waiting their turn in the list below.
 static char         s_qso_active_target[16] = {0};
+static bool         s_greylist_en = false;   // cached once per rebuild (drives row colour)
 static bool         s_distance_in_miles = false;  /* FT8 distance display unit; updated on settings change */
 static lv_obj_t    *s_lbl_hdr_km = NULL;  /* "KM"/"MI" column header, re-labelled when the unit setting changes */
 
@@ -422,6 +424,78 @@ static int screen_y_to_row(lv_coord_t abs_y)
 // to move relative to. -1 until the first activation.
 static int s_confirmed_row_idx = -1;
 
+// Grey-list clear dialog: tapping a grey-listed row offers to clear the
+// station instead of opening the TX modal (the auto pickers skip it anyway;
+// clearing it is the one action that makes sense on such a row).
+static lv_obj_t *s_grey_modal = NULL;
+static char      s_grey_call[12];
+
+static void grey_modal_close(void)
+{
+    if (s_grey_modal) { lv_obj_delete(s_grey_modal); s_grey_modal = NULL; }
+}
+
+static void grey_clear_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_grey_call[0]) ft8_greylist_clear(s_grey_call);
+    grey_modal_close();
+    s_refresh_pending = true;   // recolour the row on the next refresh
+}
+
+static void grey_cancel_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    grey_modal_close();
+}
+
+static void grey_modal_show(const char *call)
+{
+    grey_modal_close();
+    snprintf(s_grey_call, sizeof(s_grey_call), "%s", call);
+
+    s_grey_modal = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(s_grey_modal, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_style_bg_color(s_grey_modal, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_grey_modal, LV_OPA_60, 0);
+    lv_obj_set_style_border_width(s_grey_modal, 0, 0);
+    lv_obj_clear_flag(s_grey_modal, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *panel = lv_obj_create(s_grey_modal);
+    lv_obj_set_size(panel, 640, 240);
+    lv_obj_align(panel, LV_ALIGN_CENTER, 0, -60);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0x1c2128), 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_border_width(panel, 2, 0);
+    lv_obj_set_style_radius(panel, 10, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *lbl = lv_label_create(panel);
+    lv_label_set_text_fmt(lbl, "%s is grey-listed\n(no response to repeated calls)", call);
+    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
+    lv_obj_align(lbl, LV_ALIGN_TOP_MID, 0, 8);
+
+    struct { const char *t; uint32_t col; lv_event_cb_t cb; } btns[2] = {
+        { "Clear from grey-list", 0x2e8b3a, grey_clear_btn_cb  },
+        { "Cancel",               0x962020, grey_cancel_btn_cb },
+    };
+    for (int i = 0; i < 2; i++) {
+        lv_obj_t *b = lv_btn_create(panel);
+        lv_obj_set_size(b, 300, 64);
+        lv_obj_align(b, i == 0 ? LV_ALIGN_BOTTOM_LEFT : LV_ALIGN_BOTTOM_RIGHT, 0, -4);
+        lv_obj_set_style_bg_color(b, lv_color_hex(btns[i].col), 0);
+        lv_obj_set_style_radius(b, 8, 0);
+        lv_obj_add_event_cb(b, btns[i].cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *l = lv_label_create(b);
+        lv_label_set_text(l, btns[i].t);
+        lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_24, 0);
+        lv_obj_center(l);
+    }
+}
+
 static void row_activate(int idx)
 {
     if (idx < 0 || idx >= MAX_ROWS) return;
@@ -430,6 +504,18 @@ static void row_activate(int idx)
 
     const char *call = lv_label_get_text(r->l_call);
     if (!call || !call[0]) return;
+
+    // A grey-listed station's row offers "Clear from grey-list" instead of
+    // the TX modal (the auto pickers skip it; a manual pounce needs the
+    // clear first, which is one tap away here).
+    {
+        qmx_settings_t gq;
+        settings_load_all(&gq);
+        if (gq.greylist_en && ft8_greylist_contains(call)) {
+            grey_modal_show(call);
+            return;
+        }
+    }
 
     s_confirmed_row_idx = idx;
 
@@ -738,6 +824,8 @@ static void update_row(int i, const ft8_call_t *src)
             col = 4; /* the one station we're mid-exchange with -> amber (highest priority) */
         } else if (s_my_call[0] && strstr(src->last_text, s_my_call)) {
             col = 2; /* own call in message -> red */
+        } else if (s_greylist_en && ft8_greylist_contains(src->call)) {
+            col = 5; /* grey-listed (repeated failed pounces) -> violet */
         } else if (adif_log_contains_call_on_band(src->call, cat_get_frequency())) {
             col = 3; /* worked before on THIS band -> dim grey */
         } else if (strncmp(src->last_text, "CQ ", 3) == 0) {
@@ -756,6 +844,7 @@ static void update_row(int i, const ft8_call_t *src)
             lv_color_t c = (col == 4) ? lv_color_black()            /* amber fill needs dark text */
                          : (col == 2) ? lv_color_white()            /* red fill needs light text */
                          : (col == 3) ? lv_color_hex(0x808080)      /* worked: dim grey */
+                         : (col == 5) ? lv_color_hex(0x9070C8)      /* grey-listed: violet */
                          : (col == 1) ? lv_palette_main(LV_PALETTE_GREEN)
                          :              lv_color_white();
             lv_obj_set_style_text_color(r->l_call, c, 0);
@@ -847,6 +936,12 @@ static void rebuild_list(void)
     // Covers both a machine QSO's target and a manually-stepped partner
     // (ft8_qso_note_manual_target), so hand-run exchanges look the same.
     ft8_qso_get_working_target(s_qso_active_target, sizeof(s_qso_active_target));
+
+    {
+        qmx_settings_t gq;
+        settings_load_all(&gq);
+        s_greylist_en = gq.greylist_en;
+    }
 
     int row = 0;
     for (int i = 0; i < n && row < MAX_ROWS; i++) {

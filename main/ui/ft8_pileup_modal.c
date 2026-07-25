@@ -5,8 +5,10 @@
 #include "ft8_pileup.h"
 #include "ft8_tx.h"
 #include "ft8_tx_modal.h"
-#include "ft8_qso.h"            // ft8_qso_fmt_report()
+#include "ft8_qso.h"            // ft8_qso_fmt_report(), ft8_qso_build_manual_reply()
+#include "ft8_screen.h"         // decode-table snapshot for the intelligent reply
 #include "storage/settings.h"   // Field Day mode check
+#include "esp_heap_caps.h"
 #include "ui_theme.h"
 #include "ui.h"
 #include "util/dxcc.h"
@@ -66,6 +68,39 @@ static void row_work_cb(lv_event_t *e)
     // Reply on our own clear tone, same as a live decode-list row tap -
     // their stored frequency/last-seen-slot only feed the parity calc.
     int reply_freq_hz = ft8_find_clear_tone_hz();
+
+    // If the caller is still in the live decode table, build the correct
+    // NEXT message from their actual last transmission (the intelligent-
+    // Transmit ladder), exactly like a decode-row tap. This is what makes a
+    // hunting-mode comeback work from the pileup: a station we called
+    // earlier answers with a signal report minutes later - the right reply
+    // is "R"+our report, which the report-first fallback below can never
+    // produce (Roy KI0ER field report: only the grid could be sent, the
+    // exchange was lost). Fall back to report-first when they've aged out.
+    {
+        ft8_call_t *snap = heap_caps_malloc(
+            sizeof(ft8_call_t) * FT8_CALL_TABLE_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (snap) {   // PSRAM - LVGL task stack is far too small for this
+            int n = 0;
+            ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+            for (int i = 0; i < n; i++) {
+                if (strcmp(snap[i].call, match->call) != 0) continue;
+                ft8_tx_request_t ireq;
+                char ierr[64];
+                if (ft8_qso_build_manual_reply(&snap[i], reply_freq_hz,
+                                               &ireq, NULL, ierr, sizeof(ierr))) {
+                    ESP_LOGI(TAG, "pileup row work: %s via last message '%s'",
+                             match->call, snap[i].last_text);
+                    heap_caps_free(snap);
+                    modal_close();
+                    ft8_tx_modal_show(&ireq);
+                    return;
+                }
+                break;
+            }
+            heap_caps_free(snap);
+        }
+    }
 
     // A pileup entry called US, so reply the way cqrun_answer() does:
     // report-first, never grid TX1 (that's the answering station's message -
