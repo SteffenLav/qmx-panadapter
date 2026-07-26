@@ -158,6 +158,8 @@ static bool mirror_config(void)
     return ok;
 }
 
+static void sd_fail_diag(const char *where, int err);   // TEMP DIAGNOSTIC, see below
+
 // Append all newly-captured diag bytes to qmx-log.txt, rotating at 5 MB.
 // Returns false on a write error (possible card removal).
 static bool mirror_diag(void)
@@ -171,6 +173,7 @@ static bool mirror_diag(void)
         if (got == 0) break;
         if (fwrite(buf, 1, got, s_log_file) != got) {
             ESP_LOGW(TAG, "diag write failed: %s", strerror(errno));
+            sd_fail_diag("diagwrite", errno);
             return false;
         }
         s_diag_cursor = next;
@@ -212,12 +215,37 @@ static void unmount(void)
 }
 
 // Attempt to mount a card and set up the mirror. Returns true on success.
+// === TEMP DIAGNOSTIC (2026-07-26) - remove once the WiFi/SD question is closed.
+// Every observed SD failure reports 0x101 == ESP_ERR_NO_MEM, and the card dies
+// 226 ms after WiFi obtains an IP, so the working hypothesis is DMA-capable
+// internal-RAM exhaustion rather than a bus/pin conflict (pins are disjoint:
+// SD SPI 39/42/43/44 vs WiFi SDIO 8-13). This prints the numbers that confirm
+// or kill that hypothesis - "free" alone is not enough, a contiguous
+// DMA-capable block is what the SPI/FatFs layer actually needs.
+//
+// CAPPED at 3 calls on purpose: heap_caps_get_largest_free_block() walks the
+// heap with interrupts off, which is what caused the FT4 cyan flash, and
+// try_mount() retries every 10 s. Never let this run unbounded on that path.
+#define SD_FAIL_DIAG_MAX 3
+static void sd_fail_diag(const char *where, int err)
+{
+    static int n = 0;
+    if (n++ >= SD_FAIL_DIAG_MAX) return;
+    ESP_LOGW(TAG, "SDFAIL[%s] err=0x%x | INT free=%u lblk=%u | DMA free=%u lblk=%u",
+             where, err,
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+}
+
 static bool try_mount(void)
 {
     size_t pre_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     size_t pre_p = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
     esp_err_t err = bsp_sdcard_init((char *)SD_MOUNT_POINT, 2);
     if (err != ESP_OK) {
+        sd_fail_diag("mount", (int)err);
         // Leave the slot in a clean state so the next probe can retry (a failed
         // mount can leave the BSP's card handle dangling otherwise).
         bsp_sdcard_deinit(SD_MOUNT_POINT);

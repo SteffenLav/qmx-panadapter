@@ -88,8 +88,16 @@ static void heap_watchdog_task(void *arg)
                      (unsigned)(p_free / 1024), (void *)s_ring_storage,
                      (((uintptr_t)s_ring_storage >> 24) == 0x4F) ? "INTERNAL" : "PSRAM");
         } else {
-            ESP_LOGW(TAG, "HEAP: int free=%uKB (min=%uKB)  psram free=%uKB  ring@%p[%s]",
+            // TEMP DIAGNOSTIC (2026-07-26): dma= tracks the MALLOC_CAP_DMA pool.
+            // SD failures show it exhausted (704 B largest block) while general
+            // internal RAM is fine (31 KB largest) - this time series shows WHEN
+            // it drains. get_free_size is an O(1) counter query so it is safe
+            // here; largest_free_block walks the heap with interrupts off and
+            // must NEVER go on this periodic path (that caused the FT4 cyan
+            // flash), which is why only "free" is reported.
+            ESP_LOGW(TAG, "HEAP: int free=%uKB (min=%uKB)  dma free=%uB  psram free=%uKB  ring@%p[%s]",
                      (unsigned)(i_free / 1024), (unsigned)(i_min / 1024),
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
                      (unsigned)(p_free / 1024), (void *)s_ring_storage,
                      (((uintptr_t)s_ring_storage >> 24) == 0x4F) ? "INTERNAL" : "PSRAM");
         }
