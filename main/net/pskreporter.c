@@ -101,6 +101,27 @@ static const uint8_t DESC_TX[] = {
     0x00,0x96, 0x00,0x04,                        // flowStartSeconds u32
 };
 
+// Shortest data record each template can produce: every fixed field at its
+// stated width, every variable-length field at one length octet with an empty
+// value. RFC 5101/7011 s3.3.1 requires any trailing padding in a Data Set to be
+// SHORTER than this - otherwise the padding is byte-identical to a record of
+// empty values and a collector may ingest a phantom record or reject the
+// message. See the padding note in build_datagram().
+#define PSK_MIN_REC_RX  3    // 0x9992: 3 variable-length fields
+#define PSK_MIN_REC_TX  13   // 0x9993: 3 var (3) + frequency(4) + sNR(1)
+                             //         + informationSource(1) + flowStart(4)
+
+// Pad a just-written Data Set to a 4-byte boundary, but ONLY while the padding
+// stays shorter than min_rec (see above). Alignment is a SHOULD in IPFIX - the
+// set length field locates the next set either way - so when the two rules
+// collide we keep the MUST and drop the alignment.
+static int pad_data_set(uint8_t *buf, int off, int start, int min_rec)
+{
+    int pad = (4 - ((off - start) % 4)) % 4;
+    if (pad < min_rec) while (pad--) buf[off++] = 0;
+    return off;
+}
+
 // Build the full datagram into buf. Returns length, or 0 if nothing to send.
 static int build_datagram(uint8_t *buf, const spot_t *spots, int n,
                           bool with_desc, const char *my_call,
@@ -119,7 +140,12 @@ static int build_datagram(uint8_t *buf, const spot_t *spots, int n,
         off += put_str(buf + off, my_call);
         off += put_str(buf + off, my_grid);
         off += put_str(buf + off, sw);
-        while ((off - start) % 4) buf[off++] = 0;
+        // NOTE: this set is the one that can collide with the padding rule.
+        // Its shortest record is only 3 octets, and whether the natural pad
+        // reaches 3 depends purely on callsign + grid + version-string lengths
+        // - so an unguarded pad here corrupts the datagram for SOME stations
+        // and not others (measured: ~5 of 18 realistic call/grid combinations).
+        off = pad_data_set(buf, off, start, PSK_MIN_REC_RX);
         put_u16(buf + start, 0x9992);
         put_u16(buf + start + 2, (uint16_t)(off - start));
     }
@@ -137,7 +163,10 @@ static int build_datagram(uint8_t *buf, const spot_t *spots, int n,
             off += put_str(buf + off, spots[i].grid);   // "" -> length 0 (unknown)
             put_u32(buf + off, spots[i].utc_sec); off += 4;
         }
-        while ((off - start) % 4) buf[off++] = 0;
+        // A sender record is at least 13 octets, so the pad (<=3) is always
+        // legal here; routed through the same helper so the rule holds if the
+        // template ever changes.
+        off = pad_data_set(buf, off, start, PSK_MIN_REC_TX);
         put_u16(buf + start, 0x9993);
         put_u16(buf + start + 2, (uint16_t)(off - start));
     }
@@ -289,6 +318,53 @@ static void psk_task(void *arg)
     }
 }
 
+// === BENCH SELF-TEST - OFF in shipping builds ==========================
+// Flip to 1 to verify the datagram WITHOUT an antenna, a QMX or a live band:
+// it feeds synthetic spots through the real pskreporter_spot() entry point,
+// builds a real datagram, and hex-dumps it to the log. It deliberately does
+// NOT transmit - nothing may reach the public collector from a bench test.
+//
+//   1. set to 1, build + flash
+//   2. curl http://<ip>/api/log | grep SELFTEST
+//   3. strip the "NNNN " offsets, concatenate the hex, unhexlify to a .bin
+//   4. test/psk_harness.exe that.bin
+//
+// This is how the RFC 7011 s3.3.1 padding bug was found (2026-07-26): PSK
+// Reporter never acknowledges anything, so a malformed datagram is silently
+// discarded and the device log looks perfectly healthy. Keep this hook.
+#define PSK_BENCH_SELFTEST 0
+#if PSK_BENCH_SELFTEST
+static void psk_bench_selftest(void)
+{
+    // Feed through the real public entry point so the callsign guard is
+    // exercised too: two good calls, plus junk that must be dropped.
+    pskreporter_spot("K1ABC",     "FN42", 14075500u, -12, "FT8", 1770000000);
+    pskreporter_spot("PJ4/K9XYZ", "",     14074900u,  -3, "FT4", 1770000015);
+    pskreporter_spot("...",       "",     14074000u, -10, "FT8", 1770000030);  // must be dropped
+    pskreporter_spot("OZ",        "JO65", 14074000u, -10, "FT8", 1770000030);  // no digit -> dropped
+
+    qmx_settings_t s;
+    settings_load_all(&s);
+    char sw[48];
+    const esp_app_desc_t *app = esp_app_get_description();
+    snprintf(sw, sizeof(sw), "QMX Panadapter %s", app ? app->version : "?");
+
+    static uint8_t dg[DGRAM_MAX];
+    int len = build_datagram(dg, s_batch, s_batch_n, true,
+                             s.my_callsign, s.my_grid, sw);
+    ESP_LOGI(TAG, "SELFTEST spots_accepted=%d len=%d", s_batch_n, len);
+    // 32 bytes per line keeps each line well inside the log's line buffer.
+    for (int i = 0; i < len; i += 32) {
+        char hex[80]; int p = 0;
+        for (int j = i; j < i + 32 && j < len; j++)
+            p += snprintf(hex + p, sizeof(hex) - p, "%02X", dg[j]);
+        ESP_LOGI(TAG, "SELFTEST %04d %s", i, hex);
+    }
+    s_batch_n = 0;   // never let synthetic spots reach a real datagram
+}
+#endif
+// === END TEMPORARY =====================================================
+
 void pskreporter_init(void)
 {
     if (s_running) return;
@@ -305,5 +381,8 @@ void pskreporter_init(void)
         ESP_LOGI(TAG, "PSK Reporter sender ready (id=0x%08lx) - spotting %s, call='%s' grid='%s'",
                  (unsigned long)s_rand_id, s.pskreporter_en ? "ENABLED" : "disabled",
                  s.my_callsign, s.my_grid);
+#if PSK_BENCH_SELFTEST
+        psk_bench_selftest();
+#endif
     }
 }
