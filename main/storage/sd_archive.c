@@ -237,18 +237,30 @@ static bool s_parked = false;
 // + directory entry on f_sync/f_close).
 static void park_snapshot(void)
 {
+    // Close the diag log but deliberately KEEP THE CARD MOUNTED.
+    //
+    // Closing the file removes the corruption path (a teardown mid-write with the
+    // log held open is how FAT directory entries get damaged) and stops the
+    // continuous background writes that collide with WiFi.
+    //
+    // Do NOT bsp_sdcard_deinit() here. On-demand consumers all gate on
+    // sd_archive_is_mounted() - the Reader's "Save offline" (reader_net.c), the
+    // /files web browser and the SD log download (filebrowser.c) - and a remount
+    // is impossible once WiFi is up (the MALLOC_CAP_DMA pool is ~400 B, so every
+    // attempt fails 0x101). Unmounting would therefore make all three report
+    // "no SD card" with a card physically inserted, and nothing could ever bring
+    // it back. Keeping the boot mount alive is what preserves the POTA workflow:
+    // fetch the manual over WiFi at home and "Save offline" to the card.
     if (s_log_file) {
         fflush(s_log_file);
         fsync(fileno(s_log_file));
         fclose(s_log_file);
         s_log_file = NULL;
     }
-    bsp_sdcard_deinit(SD_MOUNT_POINT);
-    s_mounted = false;
-    s_parked  = true;
-    ui_set_sd_state(UI_SD_SNAPSHOT_ONLY);   // yellow: backup present, not mirroring
-    ESP_LOGW(TAG, "backup snapshot complete - live mirroring off while WiFi is on. "
-                  "Card is safe to remove; boot with WiFi off for continuous mirroring");
+    s_parked = true;                        // stop background mirroring only
+    ui_set_sd_state(UI_SD_SNAPSHOT_ONLY);   // yellow: card usable, not live-mirroring
+    ESP_LOGW(TAG, "backup snapshot complete - background mirroring off while WiFi is "
+                  "on; card stays mounted for Save-offline / web file browser");
 }
 
 static void unmount(void)
@@ -376,14 +388,17 @@ static void sd_archive_task(void *arg)
         const bool wifi_on = gs.wifi_enabled;
 
         if (s_parked) {
-            // Nothing more to do this session. Note once if WiFi was later turned
-            // off: we still cannot resume, because the DMA-capable pool was
-            // drained during bring-up and a remount needs a contiguous block.
+            // Background mirroring stays off for the rest of the session, but the
+            // card remains MOUNTED and fully usable on demand (Save offline, web
+            // file browser, log download). Resuming the background mirror after
+            // WiFi is switched off is deliberately not attempted here - it is an
+            // untested path, and a reboot with WiFi off gives the verified
+            // continuous-mirroring behaviour.
             static bool s_noted_wifi_off = false;
             if (!wifi_on && !s_noted_wifi_off) {
                 s_noted_wifi_off = true;
-                ESP_LOGW(TAG, "WiFi now off, but SD cannot be remounted this session "
-                              "(DMA pool already drained) - reboot to resume mirroring");
+                ESP_LOGW(TAG, "WiFi now off - card still mounted and usable, but "
+                              "background mirroring stays off until reboot");
             }
             vTaskDelay(pdMS_TO_TICKS(PROBE_MS));
             continue;
