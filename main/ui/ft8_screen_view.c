@@ -1706,6 +1706,21 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_clear_flag(s_container, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_container, LV_OBJ_FLAG_HIDDEN);
 
+    // Thin separator where the FT8 view meets the bottom bar - the same
+    // 1 px grey the panadapter draws between the frequency-axis band and the
+    // waterfall (RGB565 0x4208 there = 0x404040 here). Bottom edge of the
+    // container, so it spans both panes and stays put in FT4 too. Created
+    // here but FOREGROUNDED at the end of init: LVGL paints children in
+    // creation order and both panes are full-height, so they cover it.
+    lv_obj_t *sep = lv_obj_create(s_container);
+    lv_obj_remove_style_all(sep);
+    lv_obj_set_size(sep, MID_W, 1);
+    lv_obj_set_pos(sep, 0, MID_H - 1);
+    lv_obj_set_style_bg_color(sep, lv_color_hex(0x404040), 0);
+    lv_obj_set_style_bg_opa(sep, LV_OPA_COVER, 0);
+    lv_obj_clear_flag(sep, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(sep, LV_OBJ_FLAG_CLICKABLE);
+
     s_left_pane = lv_obj_create(s_container);
     lv_obj_set_size(s_left_pane, LEFT_W, MID_H);
     lv_obj_set_pos(s_left_pane, 0, 0);
@@ -2025,6 +2040,10 @@ void ft8_screen_view_init(lv_obj_t *parent)
     s_t_clock   = lv_timer_create(t_clock_cb,  1000, NULL);
     s_t_slotbar = lv_timer_create(t_slotbar_cb,  50, NULL);
 
+    // Both panes are full-height and were created after the bottom separator,
+    // so they painted over it - lift it above every sibling now that they all
+    // exist (LVGL z-order = child order within the parent).
+    lv_obj_move_foreground(sep);
 
     ESP_LOGI(TAG, "FT8 view built (container %dx%d at y=%d, hidden)",
              MID_W, MID_H, MID_Y);

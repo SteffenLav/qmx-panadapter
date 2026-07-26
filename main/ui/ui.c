@@ -36,6 +36,7 @@
 #include "time_sync.h"
 #include "ft8_screen.h"
 #include "ft8_screen_view.h"
+#include "net/reader_net.h"
 #include "../ft8_pileup.h"
 #include "reader_view.h"
 #include "ft8_test.h"
@@ -1718,7 +1719,29 @@ void ui_set_flat_mode(bool on);
 static void drawer_apply_preset(int db_min, int db_max, float alpha);
 static void drawer_build(void);
 void ui_open_user_manual(void);
-static void user_manual_cb(lv_event_t *e) { (void)e; ui_open_user_manual(); }
+// User Manual button: a short tap opens the Reader; holding >= 3 s instead
+// ERASES every stored copy of the manual (SPIFFS caches + microSD mirror,
+// reader_net_erase_all) - the recovery for a cache poisoned by a hotel
+// captive portal, which serves its login page instead of the real markdown
+// and gets cached as garbage. Duration is measured PRESSED->CLICKED; LVGL
+// still delivers CLICKED after a long hold, so one handler dispatches both.
+static uint32_t s_manual_press_tick = 0;
+static void user_manual_pressed_cb(lv_event_t *e)
+{
+    (void)e;
+    s_manual_press_tick = lv_tick_get();
+}
+static void user_manual_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_manual_press_tick && lv_tick_elaps(s_manual_press_tick) >= 3000) {
+        reader_net_erase_all();
+        ui_toast("User Manual erased (Tab5 + SD) - reopen to re-download");
+        ESP_LOGI(TAG, "User Manual long-hold: erasing all stored copies");
+        return;
+    }
+    ui_open_user_manual();
+}
 static void drawer_set_ft8_mode(bool ft8);
 static void drawer_open(void);
 static void drawer_close(void);
@@ -5250,6 +5273,14 @@ static void drawer_check_ft8_early_cb(lv_event_t *e)
     ESP_LOGI(TAG, "FT8 early-decode (fast pounce): %s", s_ft8_early_decode ? "on" : "off");
 }
 
+static void drawer_check_pskrep_cb(lv_event_t *e)
+{
+    lv_obj_t *cb = lv_event_get_target(e);
+    bool on = lv_obj_has_state(cb, LV_STATE_CHECKED);
+    settings_set_pskreporter_en(on);
+    ESP_LOGI(TAG, "PSK Reporter spotting: %s", on ? "on" : "off");
+}
+
 // (The manual "QMX has GPS" checkbox was removed 2026-07-19 - GPS is now
 // auto-detected in time_sync.c from whether the QMX tick agrees with SNTP.)
 
@@ -5475,6 +5506,7 @@ static void drawer_build(void)
         lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, y);
         lv_obj_set_style_bg_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
         lv_obj_set_style_radius(btn, 8, 0);
+        lv_obj_add_event_cb(btn, user_manual_pressed_cb, LV_EVENT_PRESSED, NULL);
         lv_obj_add_event_cb(btn, user_manual_cb, LV_EVENT_CLICKED, NULL);
         lv_obj_t *l = lv_label_create(btn);
         lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
@@ -6062,7 +6094,7 @@ static void drawer_build(void)
     // FT8 decode-list distance unit (km/miles). FT8-screen-only; kept visible
     // in FT8 mode via drawer_set_ft8_mode's keep[] list.
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_DISTANCE, y, 112);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_DISTANCE, y, 168);
         lv_obj_t *dist_lbl = lv_label_create(sec);
         lv_label_set_text(dist_lbl, "Distance in miles");
         lv_obj_set_style_text_color(dist_lbl, lv_color_hex(0xFFFFFF), 0);
@@ -6086,7 +6118,17 @@ static void drawer_build(void)
         s_ft8_early_decode = scfg_dist.ft8_early_decode;
         s_check_ft8_early = make_drawer_checkbox(sec, s_ft8_early_decode, drawer_check_ft8_early_cb, NULL);
         lv_obj_align(s_check_ft8_early, LV_ALIGN_TOP_RIGHT, 0, 62);
-        y += 112;
+
+        // Third row: PSK Reporter spotting. Real decodes only (never sim);
+        // batched UDP to pskreporter.info every ~5 min - see net/pskreporter.c.
+        lv_obj_t *psk_lbl = lv_label_create(sec);
+        lv_label_set_text(psk_lbl, "Report to PSK Reporter");
+        lv_obj_set_style_text_color(psk_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(psk_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(psk_lbl, LV_ALIGN_TOP_LEFT, 0, 122);
+        lv_obj_t *psk_cb = make_drawer_checkbox(sec, scfg_dist.pskreporter_en, drawer_check_pskrep_cb, NULL);
+        lv_obj_align(psk_cb, LV_ALIGN_TOP_RIGHT, 0, 118);
+        y += 168;
     }
     // FT8 simulation mode: phantom-station practice partner, real radio
     // never keyed (see ft8_sim.h). FT8-only - same exclusive-to-FT8-mode
@@ -6249,7 +6291,11 @@ static void drawer_set_ft8_mode(bool ft8)
     // height passed to that section's own drawer_section(ID, y, height) call.
     // (WiFi is 72, matching its drawer_section call - was mistakenly 128, which
     //  left a 56 px dead gap between WiFi setup and Callsign in FT8 mode.)
-    static const int keep_h[] = { 56, 124, 136, 130, 112, 56, 72, 72 };
+    // (BRIGHTNESS is 96 since its "Display" header was dropped - it was left
+    //  at 130, leaving a 34 px dead gap under the brightness slider. DISTANCE
+    //  is 168 since it gained the PSK Reporter row - it was left at 112, so
+    //  the Simulation-Mode section below it drew ON TOP of that row.)
+    static const int keep_h[] = { 56, 124, 136, 96, 168, 56, 72, 72 };
     const int n_keep = sizeof(keep) / sizeof(keep[0]);
 
     // Antenna Tune: shown only in Panadapter mode with confirmed 1_04+
