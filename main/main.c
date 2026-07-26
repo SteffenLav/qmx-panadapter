@@ -25,6 +25,7 @@
 #include "mem_channels.h"
 #include "wifi.h"
 #include "net/update_check.h"
+#include "net/reader_net.h"   // two-stage offline manual: stage 2 runs pre-WiFi
 #include "iq_balance.h"
 #include "ui_mode.h"
 #include "ft8_screen.h"
@@ -43,8 +44,21 @@
 #include "usb_hid_mouse.h"
 #include "time_sync.h"
 #include "adif/adif_log.h"
+#include "util/psram_task.h"
 
 static const char *TAG = "main";
+
+// Bench-only: see the READER_BENCH_SAVE hook below. Waits for WiFi, then fires
+// stage 1 of the offline manual save (normally a Reader button tap).
+__attribute__((unused))
+static void bench_save_task(void *arg)
+{
+    (void)arg;
+    for (int i = 0; i < 60 && !wifi_is_connected(); i++) vTaskDelay(pdMS_TO_TICKS(1000));
+    ESP_LOGW(TAG, "BENCH: triggering offline manual download (stage 1)");
+    reader_net_save_offline();
+    vTaskDelete(NULL);
+}
 
 void app_main(void)
 {
@@ -181,6 +195,52 @@ void app_main(void)
     // after ui_init so the SD mount never races display bring-up and the dot
     // exists when the first mount callback fires.
     sd_archive_init();
+
+    // STAGE 2 of the Reader's offline manual save, and it MUST happen here:
+    // after the SD boot mount, before panadapter_wifi_start(). SD writes are only
+    // reliable before esp_hosted brings up its SDIO link (hardware-verified
+    // 2026-07-26), which is exactly why the save is split in two - stage 1
+    // downloads over WiFi to SPIFFS, stage 2 writes it to the card on the next
+    // boot. Only wait for the mount when there is actually something staged, so a
+    // normal boot pays nothing.
+    // Wait for the SD boot-mount probe unconditionally. This is cheap: it blocks
+    // on the probe COMPLETING, not on a fixed delay - ~0.3 s with a card, ~1 s
+    // without (the retry burst ends and sets the flag), the 6 s being only a
+    // safety cap. It has to be unconditional, because
+    // reader_net_probe_sd_manual() below needs the card mounted to see a saved
+    // manual; gating the wait on "is something staged?" made every normal boot
+    // probe too early and report "no manual on card", which then put the wrong
+    // text on the Reader's button.
+    bool sd_up = sd_archive_wait_mounted(6000);
+
+    if (reader_net_has_staged_manual()) {
+        ESP_LOGW(TAG, "staged offline manual found - writing to SD before WiFi starts");
+        if (sd_up) reader_net_flush_staged_to_sd();
+        else ESP_LOGW(TAG, "no card mounted - manual stays staged for a later boot");
+    }
+    // Cache whether the card holds a manual while it is still reachable; the
+    // Reader's button text needs this later, when the card may be dead.
+    reader_net_probe_sd_manual();
+
+    // === BENCH HOOK - MUST be 0 in shipping builds =======================
+    // Fires stage 1 of the offline manual save (normally a Reader button tap)
+    // once WiFi is up, so the two-stage flow can be exercised without touching
+    // the screen. Boot with 1 to download+stage, then reboot with 0 to watch
+    // stage 2 write it to the card.
+    //   1 = stage 1 over the network (needs WiFi + the docs host reachable)
+    //   2 = fabricate staging locally, no network - isolates stage 2
+    //  -2 = cleanup: erase staging + the SD manual mirror (run pre-WiFi)
+    #define READER_BENCH_SAVE 0
+    #if READER_BENCH_SAVE == 1
+    psram_task_create(bench_save_task, "bench_save", 3072, NULL, 3, tskNO_AFFINITY);
+    #elif READER_BENCH_SAVE == 2
+    reader_net_bench_stage_fake();
+    #elif READER_BENCH_SAVE == -2
+    ESP_LOGW(TAG, "BENCH: erasing staged + SD manual");
+    reader_net_erase_all();
+    #endif
+    // === END BENCH HOOK ==================================================
+
     // Belt-and-suspenders: sync the dot in case a mount completed before this.
     ui_set_sd_active(sd_archive_is_mounted());
 

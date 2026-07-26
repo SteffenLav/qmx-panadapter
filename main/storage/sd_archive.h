@@ -72,6 +72,13 @@ void sd_archive_init(void);
 // bottom-bar "SD" indicator. Safe from any task.
 bool sd_archive_is_mounted(void);
 
+// Block until the boot-window mount has settled, up to timeout_ms. Returns true
+// if a card is mounted. Intended for one caller: app_main, so the Reader's staged
+// offline manual can be flushed to the card BEFORE panadapter_wifi_start() - the
+// only window in which SD writes are reliable on this board. Returns quickly on
+// a normal boot (the mount either succeeds within ~1 s or the retries are done).
+bool sd_archive_wait_mounted(uint32_t timeout_ms);
+
 // Mark a source file dirty so the background task re-mirrors it on its next
 // pass. Cheap and safe from any task, even before sd_archive_init().
 void sd_archive_mark_adif_dirty(void);

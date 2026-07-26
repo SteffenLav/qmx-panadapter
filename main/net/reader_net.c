@@ -259,6 +259,127 @@ static bool sd_write_page(const char *rel, const char *buf, size_t len)
     return ok;
 }
 
+// ---------------------------------------------------------------------------
+// Two-stage offline save: SPIFFS staging area (see reader_net.h for the why)
+// ---------------------------------------------------------------------------
+//
+// Content files are named by INDEX, not by relative path: SPIFFS enforces
+// CONFIG_SPIFFS_OBJ_NAME_LEN=32 over the whole name, and "reference/
+// troubleshooting.md" alone is 28 chars, so path-derived names would sit right on
+// the limit and break the moment a page is added or renamed. The manifest maps
+// index -> relative path instead.
+#define STAGE_MANIFEST   "/spiffs/mo.idx"
+#define STAGE_PARTIAL    "/spiffs/mo.tmp"
+#define STAGE_MAX_PAGES  64
+
+static void stage_content_path(int idx, char *out, size_t cap)
+{
+    snprintf(out, cap, "/spiffs/mo%02d", idx);
+}
+
+// Delete the manifest FIRST so a half-removed staging area can never be
+// mistaken for a complete one.
+static void stage_clear(void)
+{
+    remove(STAGE_MANIFEST);
+    remove(STAGE_PARTIAL);
+    for (int i = 0; i < STAGE_MAX_PAGES; i++) {
+        char p[32];
+        stage_content_path(i, p, sizeof(p));
+        if (remove(p) != 0 && i > 0) break;   // stop at the first gap past 0
+    }
+}
+
+bool reader_net_has_staged_manual(void)
+{
+    struct stat st;
+    return stat(STAGE_MANIFEST, &st) == 0 && st.st_size > 0;
+}
+
+static bool s_sd_manual_cached = false;
+
+void reader_net_probe_sd_manual(void)
+{
+    char p[256];
+    snprintf(p, sizeof(p), "%s/toc.json", SD_MANUAL_DIR);
+    struct stat st;
+    s_sd_manual_cached = (sd_archive_is_mounted() && stat(p, &st) == 0 && st.st_size > 0);
+    ESP_LOGI(TAG, "SD manual present: %s", s_sd_manual_cached ? "yes" : "no");
+}
+
+bool reader_net_manual_on_sd(void) { return s_sd_manual_cached; }
+
+// Bench/test only - see reader_net.h. Builds staging exactly the way save_task
+// does (content files by index, manifest renamed into place last) so stage 2 is
+// exercised on the real code path, minus the network.
+bool reader_net_bench_stage_fake(void)
+{
+    stage_clear();
+    static const char *rels[] = { "toc.json", "guide/bench.md" };
+    static const char *bodies[] = {
+        "{\"pages\":[{\"title\":\"Bench\",\"path\":\"guide/bench.md\",\"level\":0}]}",
+        "# Bench page\n\nStaged by reader_net_bench_stage_fake().\n"
+    };
+    FILE *m = fopen(STAGE_PARTIAL, "w");
+    if (!m) return false;
+    for (int i = 0; i < 2; i++) {
+        char sp[32];
+        stage_content_path(i, sp, sizeof(sp));
+        if (!write_file(sp, bodies[i], strlen(bodies[i]))) { fclose(m); stage_clear(); return false; }
+        fprintf(m, "%s\n", rels[i]);
+    }
+    fflush(m); fsync(fileno(m)); fclose(m);
+    if (rename(STAGE_PARTIAL, STAGE_MANIFEST) != 0) { stage_clear(); return false; }
+    ESP_LOGW(TAG, "BENCH: fabricated a staged manual (2 files)");
+    return true;
+}
+
+int reader_net_flush_staged_to_sd(void)
+{
+    if (!reader_net_has_staged_manual()) return 0;
+    if (!sd_archive_is_mounted()) {
+        ESP_LOGW(TAG, "staged manual ready but no card mounted - keeping it staged");
+        return 0;
+    }
+
+    FILE *m = fopen(STAGE_MANIFEST, "r");
+    if (!m) return 0;
+
+    char *buf = heap_caps_malloc(DOCS_MAX_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) { fclose(m); return 0; }
+
+    int idx = 0, written = 0, failed = 0;
+    char rel[160];
+    while (fgets(rel, sizeof(rel), m)) {
+        rel[strcspn(rel, "\r\n")] = '\0';
+        if (!rel[0]) continue;
+        char sp[32];
+        stage_content_path(idx, sp, sizeof(sp));
+        FILE *f = fopen(sp, "rb");
+        if (f) {
+            size_t len = fread(buf, 1, DOCS_MAX_BYTES, f);
+            fclose(f);
+            if (len > 0 && sd_write_page(rel, buf, len)) written++;
+            else failed++;
+        } else {
+            failed++;
+        }
+        idx++;
+    }
+    fclose(m);
+    heap_caps_free(buf);
+
+    if (failed == 0 && written > 0) {
+        stage_clear();   // only drop the staging copy once the card really has it
+        s_sd_manual_cached = true;
+        ESP_LOGW(TAG, "offline manual written to SD: %d file(s) - staging cleared", written);
+    } else {
+        ESP_LOGW(TAG, "offline manual flush incomplete (%d written, %d failed) - "
+                      "staging kept for the next boot", written, failed);
+    }
+    return written;
+}
+
 // Download the whole manual (toc + every page) to the SD card. Mirrors the
 // upload path's WiFi-coexistence safeguards (pause the WS stream + transfer
 // quiet) since SD writes during WiFi traffic are this board's most wedge-prone
@@ -268,9 +389,14 @@ static void save_task(void *arg)
 {
     (void)arg;
 
-    if (!wifi_is_connected())      { reader_view_notify_status("Connect WiFi to save offline"); s_busy = false; vTaskDelete(NULL); return; }
-    if (!sd_archive_is_mounted())  { reader_view_notify_status("No SD card");                    s_busy = false; vTaskDelete(NULL); return; }
+    // STAGE 1 needs WiFi but deliberately NOT a card: the download goes to SPIFFS
+    // staging and is written to the card on the next boot, before WiFi starts.
+    // See the two-stage rationale in reader_net.h.
+    if (!wifi_is_connected())      { reader_view_notify_status("Connect WiFi to download the manual"); s_busy = false; vTaskDelete(NULL); return; }
     if (in_cooldown())             { reader_view_notify_status("Server busy - wait a minute, then retry"); s_busy = false; vTaskDelete(NULL); return; }
+
+    // A fresh download supersedes anything already staged.
+    stage_clear();
 
     webserver_ws_set_paused(true);
     dsp_set_transfer_quiet(true);
@@ -282,15 +408,34 @@ static void save_task(void *arg)
     }
 
     int saved = 0, failed = 0;
+    int stage_idx = 0;                       // index of the next staged file
+    // The manifest is streamed to a PARTIAL file and renamed to its real name only
+    // once every page has arrived; that rename is the atomic completeness marker.
+    // Deliberately NOT an in-memory array: 64 x 160 chars is 10 KB, and this task
+    // has an 8 KB stack - the compiler reserves the frame at the prologue whether
+    // the path is taken or not, which is precisely how the v0.20.1 pounce crash
+    // happened.
+    FILE *man = fopen(STAGE_PARTIAL, "w");
+    if (!man) {
+        heap_caps_free(buf);
+        dsp_set_transfer_quiet(false); webserver_ws_set_paused(false);
+        reader_view_notify_status("No space to stage the manual");
+        s_busy = false; vTaskDelete(NULL); return;
+    }
 
     // TOC first (also gives us the page list).
-    reader_view_notify_status("Saving: contents...");
+    reader_view_notify_status("Downloading: contents...");
     char url[256];
     snprintf(url, sizeof(url), "%stoc.json", DOCS_BASE);
     size_t toclen = http_get_buf(url, buf, DOCS_MAX_BYTES);
     cJSON *root = NULL;
     if (toclen > 0) {
-        sd_write_page("toc.json", buf, toclen);
+        char sp[32];
+        stage_content_path(stage_idx, sp, sizeof(sp));
+        if (write_file(sp, buf, toclen)) {
+            fprintf(man, "toc.json\n");
+            stage_idx++;
+        }
         root = cJSON_Parse(buf);   // dups strings; buf reusable after this
     }
 
@@ -308,12 +453,21 @@ static void save_task(void *arg)
             cJSON *pa = cJSON_GetObjectItem(cJSON_GetArrayItem(pages, i), "path");
             if (!cJSON_IsString(pa) || !pa->valuestring || !pa->valuestring[0]) continue;
             idx++;
-            char st[48]; snprintf(st, sizeof(st), "Saving %d/%d to SD...", idx, total);
+            char st[48]; snprintf(st, sizeof(st), "Downloading %d/%d...", idx, total);
             reader_view_notify_status(st);
             snprintf(url, sizeof(url), "%s%s", DOCS_BASE, pa->valuestring);
             size_t len = http_get_buf(url, buf, DOCS_MAX_BYTES);
-            if (len > 0 && sd_write_page(pa->valuestring, buf, len)) saved++;
-            else failed++;
+            bool ok = false;
+            if (len > 0 && stage_idx < STAGE_MAX_PAGES) {
+                char sp[32];
+                stage_content_path(stage_idx, sp, sizeof(sp));
+                if (write_file(sp, buf, len)) {
+                    fprintf(man, "%s\n", pa->valuestring);
+                    stage_idx++;
+                    ok = true;
+                }
+            }
+            if (ok) saved++; else failed++;
             // Pace the bulk download: ~19 back-to-back requests look like a
             // bot burst to the host's rate limiter and get the IP temporarily
             // blocked mid-save. ~1 request/second passes as a human.
@@ -328,10 +482,23 @@ static void save_task(void *arg)
     dsp_set_transfer_quiet(false);
     webserver_ws_set_paused(false);
 
+    // Finalise the manifest. It is the completeness marker, so it only takes its
+    // real name once every page arrived - a partial download can never be flushed
+    // to the card.
+    bool complete = (saved > 0 && failed == 0 && stage_idx > 1);
+    fflush(man);
+    fsync(fileno(man));
+    fclose(man);
+    if (complete && rename(STAGE_PARTIAL, STAGE_MANIFEST) != 0) complete = false;
+    if (!complete) stage_clear();
+
     if (failed > 0) arm_cooldown();
-    ESP_LOGI(TAG, "offline save: %d saved, %d failed", saved, failed);
-    reader_view_notify_status("");                 // no "Saved N pages" line
-    reader_view_notify_saved(saved > 0 && failed == 0);
+    ESP_LOGI(TAG, "offline download: %d staged, %d failed, complete=%d",
+             saved, failed, (int)complete);
+    reader_view_notify_status(complete
+        ? "Downloaded. Restart with the SD card in to finish."
+        : "Download incomplete - try again");
+    reader_view_notify_saved(complete);
 
     s_busy = false;
     vTaskDelete(NULL);
@@ -379,10 +546,15 @@ static void erase_task(void *arg)
 
     unlink(PAGE_CACHE);
     unlink(TOC_CACHE);
+    // Also drop any staged (downloaded, not yet written) manual. Without this,
+    // "erase everything" would leave staging behind and the next boot would flush
+    // it straight back onto the card - resurrecting exactly what was just erased.
+    stage_clear();
 
     if (sd_archive_is_mounted()) {
         if (sd_archive_lock(5000)) {
             rm_tree(SD_MANUAL_DIR, 0);
+            s_sd_manual_cached = false;
             sd_archive_unlock();
         } else {
             ESP_LOGW(TAG, "erase: SD busy - manual mirror not deleted");

@@ -12,6 +12,7 @@
 #include "reader_net.h"
 #include "ui_theme.h"
 #include "storage/sd_archive.h"
+#include "wifi.h"          // wifi_is_connected(): offline-save button state
 
 #include "lvgl.h"
 #include "esp_log.h"
@@ -997,11 +998,30 @@ static void contents_btn_cb(lv_event_t *e)
     toc_panel_set_open(hidden);
 }
 
-// "Save offline" — download the whole manual to the SD card.
+// Offline manual: two-stage save (download over WiFi now, write to the card on
+// the next boot - see reader_net.h for why it cannot be done in one step).
+//
+// The button both TELLS the operator what the next step is and performs it, so a
+// POTA/SOTA user never has to know the mechanism. Tapping it in a state where
+// there is nothing to do explains what to do instead.
 static void save_btn_cb(lv_event_t *e)
 {
     (void)e;
-    s_save_state = 0;   // back to "Save offline" while the run is in progress
+
+    if (reader_net_has_staged_manual()) {
+        // Downloaded but not yet on the card - the write only works pre-WiFi.
+        reader_view_notify_status(sd_archive_is_mounted()
+            ? "Ready. Restart the Tab5 to finish writing it to the card."
+            : "Insert the SD card, then restart the Tab5 to finish.");
+        return;
+    }
+    if (!wifi_is_connected()) {
+        reader_view_notify_status(reader_net_manual_on_sd()
+            ? "Manual is already saved on the card - reading offline."
+            : "Connect WiFi (at home) and tap again to download the manual.");
+        return;
+    }
+    s_save_state = 0;   // clear any previous outcome while the run is in progress
     reader_net_save_offline();
 }
 
@@ -1047,15 +1067,27 @@ static void tick_cb(lv_timer_t *t)
     if (do_toc)    { parse_toc_file(); rebuild_toc_panel(); }
     if (do_reload) render_from_cache();
 
-    // "Save offline" is only meaningful with a card in the slot; its label
-    // reflects the last save's outcome.
+    // Offline-manual button. ALWAYS visible now (it was card-only): with the
+    // two-stage save, downloading is useful before a card is even inserted, and
+    // hiding the button is what left POTA users with no idea the feature exists.
+    // The label names the NEXT step for the current situation.
     if (s_save_btn) {
-        if (sd_archive_is_mounted()) lv_obj_clear_flag(s_save_btn, LV_OBJ_FLAG_HIDDEN);
-        else                         lv_obj_add_flag(s_save_btn, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_clear_flag(s_save_btn, LV_OBJ_FLAG_HIDDEN);
         if (s_save_lbl) {
-            const char *txt = (s_save_state == 1) ? LV_SYMBOL_SD_CARD "  Saved offline - update?"
-                            : (s_save_state == 2) ? LV_SYMBOL_SD_CARD "  Save failed"
-                                                  : LV_SYMBOL_SD_CARD "  Save offline";
+            const char *txt;
+            if (s_save_state == 2) {
+                txt = LV_SYMBOL_SD_CARD "  Download failed - retry";
+            } else if (reader_net_has_staged_manual()) {
+                // Stage 1 done, stage 2 pending: the restart is the whole point.
+                txt = sd_archive_is_mounted() ? LV_SYMBOL_SD_CARD "  Restart to finish saving"
+                                              : LV_SYMBOL_SD_CARD "  Insert card, then restart";
+            } else if (reader_net_manual_on_sd()) {
+                txt = wifi_is_connected() ? LV_SYMBOL_SD_CARD "  Saved offline - update?"
+                                          : LV_SYMBOL_SD_CARD "  Saved offline";
+            } else {
+                txt = wifi_is_connected() ? LV_SYMBOL_SD_CARD "  Save offline"
+                                          : LV_SYMBOL_SD_CARD "  Save offline (needs WiFi)";
+            }
             if (strcmp(lv_label_get_text(s_save_lbl), txt) != 0) lv_label_set_text(s_save_lbl, txt);
         }
     }

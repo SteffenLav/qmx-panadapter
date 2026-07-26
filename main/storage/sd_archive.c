@@ -47,6 +47,8 @@ static const char *TAG = "sd_arch";
 #define DIAG_CHUNK        4096                // diag flush copy buffer
 
 static volatile bool s_mounted      = false;
+// Set once the boot-window mount retries have finished, mounted or not.
+static volatile bool s_boot_probe_done = false;
 static volatile bool s_adif_dirty   = true;   // mirror once on first mount
 static volatile bool s_config_dirty = true;
 static volatile bool s_lotw_dirty   = true;   // LoTW cert+key: mount + on import
@@ -378,6 +380,9 @@ static void sd_archive_task(void *arg)
         }
         ESP_LOGW(TAG, "boot mount attempt %d/%d failed", i + 1, SD_BOOT_MOUNT_TRIES);
     }
+    // Release app_main, which flushes the Reader's staged offline manual to the
+    // card before it starts WiFi (see sd_archive_wait_mounted).
+    s_boot_probe_done = true;
 
     for (;;) {
         // WiFi-aware gating. Read the user's on/off INTENT live (not
@@ -545,6 +550,17 @@ void sd_archive_init(void)
 }
 
 bool sd_archive_is_mounted(void)        { return s_mounted; }
+
+bool sd_archive_wait_mounted(uint32_t timeout_ms)
+{
+    const uint32_t step = 25;
+    uint32_t waited = 0;
+    while (!s_boot_probe_done && waited < timeout_ms) {
+        vTaskDelay(pdMS_TO_TICKS(step));
+        waited += step;
+    }
+    return s_mounted;
+}
 void sd_archive_mark_adif_dirty(void)   { s_adif_dirty = true; }
 void sd_archive_mark_config_dirty(void) { s_config_dirty = true; }
 void sd_archive_mark_lotw_dirty(void)   { s_lotw_dirty = true; }
