@@ -160,6 +160,15 @@ static bool mirror_config(void)
 
 static void sd_fail_diag(const char *where, int err);   // TEMP DIAGNOSTIC, see below
 
+// Consecutive failed write bursts tolerated before concluding the card is gone.
+// 5 bursts x WORK_MS = ~15 s of retrying on the already-open handle.
+#define SD_WRITE_FAIL_UNMOUNT 5
+static int s_consec_write_fail = 0;
+
+// Quick mount retries inside the boot window, while DMA memory is still plentiful.
+#define SD_BOOT_MOUNT_TRIES   5
+#define SD_BOOT_MOUNT_GAP_MS  150
+
 // Append all newly-captured diag bytes to qmx-log.txt, rotating at 5 MB.
 // Returns false on a write error (possible card removal).
 static bool mirror_diag(void)
@@ -174,6 +183,12 @@ static bool mirror_diag(void)
         if (fwrite(buf, 1, got, s_log_file) != got) {
             ESP_LOGW(TAG, "diag write failed: %s", strerror(errno));
             sd_fail_diag("diagwrite", errno);
+            // MUST clear the stream error indicator, or every later fwrite on
+            // this FILE* returns short WITHOUT touching the card - the retry
+            // above would then be a no-op and a transient fault would look
+            // permanent. s_diag_cursor is deliberately not advanced, so the
+            // next burst re-writes exactly this chunk.
+            clearerr(s_log_file);
             return false;
         }
         s_diag_cursor = next;
@@ -226,7 +241,7 @@ static void unmount(void)
 // CAPPED at 3 calls on purpose: heap_caps_get_largest_free_block() walks the
 // heap with interrupts off, which is what caused the FT4 cyan flash, and
 // try_mount() retries every 10 s. Never let this run unbounded on that path.
-#define SD_FAIL_DIAG_MAX 3
+#define SD_FAIL_DIAG_MAX 8
 static void sd_fail_diag(const char *where, int err)
 {
     static int n = 0;
@@ -295,6 +310,32 @@ static void sd_archive_task(void *arg)
     int64_t s_hb_last_us   = esp_timer_get_time();
     int     s_burst_max_ms = 0;
     int     s_burst_cnt    = 0;
+
+    // The mount attempt at ~4.1 s is the ONLY one that ever runs while the
+    // MALLOC_CAP_DMA pool is still large (113 KB here; ~400 B from 14 s onward
+    // once WiFi has taken it). Every later attempt on the PROBE_MS cadence fails
+    // with 0x101 ESP_ERR_NO_MEM no matter how healthy the card is. Card init is
+    // also intermittently returning 0x108 ESP_ERR_INVALID_RESPONSE - observed on
+    // 2 of 5 boots, at both 20 MHz and 10 MHz - so a single attempt means one bad
+    // roll of the dice costs the card for the whole session.
+    //
+    // Retry a few times inside that window instead. This does not need to know
+    // WHY init is flaky; it only needs the good window to be used properly.
+    // ~0.6 s worst case, all before WiFi starts (sd_archive_init runs well ahead
+    // of panadapter_wifi_start in app_main).
+    for (int i = 0; i < SD_BOOT_MOUNT_TRIES && !s_mounted; i++) {
+        if (i) vTaskDelay(pdMS_TO_TICKS(SD_BOOT_MOUNT_GAP_MS));
+        xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
+        bool got = try_mount();
+        xSemaphoreGive(s_sd_mutex);
+        if (got) {
+            if (i) ESP_LOGW(TAG, "SD mounted on boot attempt %d/%d",
+                            i + 1, SD_BOOT_MOUNT_TRIES);
+            break;
+        }
+        ESP_LOGW(TAG, "boot mount attempt %d/%d failed", i + 1, SD_BOOT_MOUNT_TRIES);
+    }
+
     for (;;) {
         // Hold the SD mutex for the whole work burst so a concurrent web
         // download of the SD log can't interleave FatFs I/O with ours.
@@ -339,11 +380,42 @@ static void sd_archive_task(void *arg)
             }
         }
 
+        // A write error used to mean "card removed" immediately, because this
+        // board routes no card-detect line. But unmounting is a one-way door:
+        // re-mounting needs a contiguous DMA-capable allocation, and after WiFi
+        // is up the MALLOC_CAP_DMA pool is ~400 B, so the remount can NEVER
+        // succeed (measured 2026-07-26: 112 KB free at 4.2 s -> ~400 B from 44 s
+        // onward, while the general internal heap stays healthy at a 31 KB
+        // largest block). One transient glitch therefore killed the card for the
+        // whole session.
+        //
+        // So retry on the STILL-OPEN handle first: that needs no new allocation
+        // and sidesteps the DMA exhaustion entirely. Only conclude removal after
+        // several consecutive failed bursts. A genuinely removed card just fails
+        // SD_WRITE_FAIL_UNMOUNT times first, which costs nothing that matters.
         if (!ok) {
+            s_consec_write_fail++;
+            if (s_consec_write_fail < SD_WRITE_FAIL_UNMOUNT) {
+                ESP_LOGW(TAG, "SD write failed (%d/%d) - retrying on live handle",
+                         s_consec_write_fail, SD_WRITE_FAIL_UNMOUNT);
+                xSemaphoreGive(s_sd_mutex);
+                vTaskDelay(pdMS_TO_TICKS(WORK_MS));
+                continue;
+            }
+            ESP_LOGW(TAG, "SD write failed %d times consecutively - treating as removal",
+                     s_consec_write_fail);
+            s_consec_write_fail = 0;
             unmount();
             xSemaphoreGive(s_sd_mutex);
             vTaskDelay(pdMS_TO_TICKS(PROBE_MS));
             continue;
+        }
+        if (s_consec_write_fail) {
+            // The measured answer to "is the EIO transient?" - if this line ever
+            // appears, retrying on the live handle is the right fix.
+            ESP_LOGW(TAG, "SD write RECOVERED after %d consecutive failure(s)",
+                     s_consec_write_fail);
+            s_consec_write_fail = 0;
         }
 
         int burst_ms = (int)((esp_timer_get_time() - burst_t0) / 1000);

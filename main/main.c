@@ -231,7 +231,16 @@ void app_main(void)
 
     // WiFi+SNTP runs in a background task; doesn't block boot.
     // DISABLED pending C6 firmware investigation (see CLAUDE.md / git log).
+    // === BENCH EXPERIMENT - MUST be 1 in shipping builds =================
+    // Decisive test for "does WiFi kill the SD card?". Set to 0 to boot with
+    // WiFi never started; capture over SERIAL (no network needed) and see
+    // whether a mounted card still dies. Restore to 1 immediately after.
+    #define BENCH_WIFI_ENABLED 1
+    #if BENCH_WIFI_ENABLED
     panadapter_wifi_start();
+    #else
+    ESP_LOGW(TAG, "BENCH: WiFi deliberately NOT started (SD isolation test)");
+    #endif
     ESP_ERROR_CHECK(dsp_init());
     // ui_init() (above) applied the persisted zoom level via ui_set_zoom(),
     // but dsp_set_zoom() is a no-op before dsp_init() creates its config

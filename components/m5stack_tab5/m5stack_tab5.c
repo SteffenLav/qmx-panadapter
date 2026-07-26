@@ -558,6 +558,7 @@ void bsp_reset_tp()
 #define GPIO_SDMMC_D3  (GPIO_NUM_42)  // CS (was SDIO D3)
 
 #define BSP_SD_SPI_HOST SPI2_HOST  // dedicated SPI bus -- not shared with anything else on this board
+#define BSP_SD_SPI_FREQ_KHZ 10000  // 10 MHz (default is 20); see max_freq_khz note in bsp_sdcard_init
 
 static sdmmc_card_t* card;
 
@@ -604,6 +605,14 @@ esp_err_t bsp_sdcard_init(char* mount_point, size_t max_files)
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot         = BSP_SD_SPI_HOST;
+    // SDSPI_HOST_DEFAULT() leaves this at SDMMC_FREQ_DEFAULT (20 MHz). Card init
+    // was observed failing intermittently with ESP_ERR_INVALID_RESPONSE (0x108)
+    // while memory was abundant - the classic signature of marginal signal
+    // integrity (trace length, weak pull-ups, or a marginal card) rather than a
+    // software fault. The background mirror writes are small and infrequent, so
+    // clock rate is worth nothing here and reliability is worth everything.
+    // Drop to 4000 if 0x108 is still seen.
+    host.max_freq_khz = BSP_SD_SPI_FREQ_KHZ;
 
     sd_pwr_ctrl_ldo_config_t ldo_config = {
         .ldo_chan_id = BSP_LDO_PROBE_SD_CHAN,  // `LDO_VO4` is used as the SDMMC IO power
