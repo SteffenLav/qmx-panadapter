@@ -12,7 +12,6 @@
 #include "reader_net.h"
 #include "ui_theme.h"
 #include "storage/sd_archive.h"
-#include "wifi.h"          // wifi_is_connected(): offline-save button state
 
 #include "lvgl.h"
 #include "esp_log.h"
@@ -66,8 +65,6 @@ static lv_obj_t *s_banner       = NULL;   // update-available bar (hidden unless
 static lv_obj_t *s_banner_lbl   = NULL;
 static lv_obj_t *s_body         = NULL;   // scrollable flex column of content
 static lv_obj_t *s_toc_btn      = NULL;   // header "Contents" button
-static lv_obj_t *s_save_btn     = NULL;   // header "Save offline" button (SD only)
-static lv_obj_t *s_save_lbl     = NULL;   // its label (text toggles Save/Saved)
 static lv_obj_t *s_toc_panel    = NULL;   // scrollable contents overlay (hidden unless open)
 static lv_timer_t *s_timer      = NULL;
 
@@ -80,7 +77,6 @@ static volatile bool s_toc_reload_pending = false;
 static bool s_from_cache = false;
 static char s_status[64]  = {0};
 static char s_update_ver[24] = {0};
-static volatile int s_save_state = 0;   // 0 idle, 1 saved-ok, 2 saved-failed
 
 static void lock(void)   { if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY); }
 static void unlock(void) { if (s_lock) xSemaphoreGive(s_lock); }
@@ -998,33 +994,6 @@ static void contents_btn_cb(lv_event_t *e)
     toc_panel_set_open(hidden);
 }
 
-// Offline manual: two-stage save (download over WiFi now, write to the card on
-// the next boot - see reader_net.h for why it cannot be done in one step).
-//
-// The button both TELLS the operator what the next step is and performs it, so a
-// POTA/SOTA user never has to know the mechanism. Tapping it in a state where
-// there is nothing to do explains what to do instead.
-static void save_btn_cb(lv_event_t *e)
-{
-    (void)e;
-
-    if (reader_net_has_staged_manual()) {
-        // Downloaded but not yet on the card - the write only works pre-WiFi.
-        reader_view_notify_status(sd_archive_is_mounted()
-            ? "Ready. Restart the Tab5 to finish writing it to the card."
-            : "Insert the SD card, then restart the Tab5 to finish.");
-        return;
-    }
-    if (!wifi_is_connected()) {
-        reader_view_notify_status(reader_net_manual_on_sd()
-            ? "Manual is already saved on the card - reading offline."
-            : "Connect WiFi (at home) and tap again to download the manual.");
-        return;
-    }
-    s_save_state = 0;   // clear any previous outcome while the run is in progress
-    reader_net_save_offline();
-}
-
 // Back: close the contents panel if it's open; else go to the previous page in
 // history. (Leaving the manual is the separate Exit button.)
 static void back_btn_cb(lv_event_t *e)
@@ -1067,30 +1036,9 @@ static void tick_cb(lv_timer_t *t)
     if (do_toc)    { parse_toc_file(); rebuild_toc_panel(); }
     if (do_reload) render_from_cache();
 
-    // Offline-manual button. ALWAYS visible now (it was card-only): with the
-    // two-stage save, downloading is useful before a card is even inserted, and
-    // hiding the button is what left POTA users with no idea the feature exists.
-    // The label names the NEXT step for the current situation.
-    if (s_save_btn) {
-        lv_obj_clear_flag(s_save_btn, LV_OBJ_FLAG_HIDDEN);
-        if (s_save_lbl) {
-            const char *txt;
-            if (s_save_state == 2) {
-                txt = LV_SYMBOL_SD_CARD "  Download failed - retry";
-            } else if (reader_net_has_staged_manual()) {
-                // Stage 1 done, stage 2 pending: the restart is the whole point.
-                txt = sd_archive_is_mounted() ? LV_SYMBOL_SD_CARD "  Restart to finish saving"
-                                              : LV_SYMBOL_SD_CARD "  Insert card, then restart";
-            } else if (reader_net_manual_on_sd()) {
-                txt = wifi_is_connected() ? LV_SYMBOL_SD_CARD "  Saved offline - update?"
-                                          : LV_SYMBOL_SD_CARD "  Saved offline";
-            } else {
-                txt = wifi_is_connected() ? LV_SYMBOL_SD_CARD "  Save offline"
-                                          : LV_SYMBOL_SD_CARD "  Save offline (needs WiFi)";
-            }
-            if (strcmp(lv_label_get_text(s_save_lbl), txt) != 0) lv_label_set_text(s_save_lbl, txt);
-        }
-    }
+    // The "Save offline" button is gone: the manual is built into the firmware, so
+    // it is always available and there is nothing to save, download or restart
+    // for. See net/manual_embed.h.
 
     if (s_status_lbl) {
         if (do_reload && from_cache && !status[0]) strncpy(status, "Offline - showing cached copy", sizeof(status)-1);
@@ -1207,17 +1155,8 @@ void reader_view_init(lv_obj_t *parent)
     lv_label_set_text(toc_btn_lbl, "Contents");
 
     // Save offline (right end, SD only). Label flips to "Saved offline - update?"
-    s_save_btn = lv_button_create(s_overlay);
-    lv_obj_align(s_save_btn, LV_ALIGN_TOP_RIGHT, -16, BTN_Y);
-    lv_obj_set_style_bg_color(s_save_btn, lv_color_hex(UI_COLOR_SUCCESS), 0);
-    lv_obj_set_style_pad_hor(s_save_btn, 20, 0);
-    lv_obj_set_height(s_save_btn, BTN_H);
-    lv_obj_set_ext_click_area(s_save_btn, 44);
-    lv_obj_add_event_cb(s_save_btn, save_btn_cb, LV_EVENT_CLICKED, NULL);
-    s_save_lbl = lv_label_create(s_save_btn);
-    lv_obj_set_style_text_font(s_save_lbl, &lv_font_montserrat_24, 0);
-    lv_label_set_text(s_save_lbl, LV_SYMBOL_SD_CARD "  Save offline");
-    lv_obj_add_flag(s_save_btn, LV_OBJ_FLAG_HIDDEN);
+    // (The "Save offline" button used to live here, top-right. Removed: the manual
+    // is built into the firmware, so there is nothing to download or save.)
 
     // Update-available banner (hidden until update_check reports one)
     s_banner = lv_obj_create(s_overlay);
@@ -1282,7 +1221,6 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_move_foreground(back_btn);
     lv_obj_move_foreground(exit_btn);
     lv_obj_move_foreground(s_toc_btn);
-    lv_obj_move_foreground(s_save_btn);
     if (s_banner) lv_obj_move_foreground(s_banner);
 
     s_timer = lv_timer_create(tick_cb, 250, NULL);
@@ -1378,18 +1316,6 @@ void reader_view_notify_toc_loaded(void)
     lock();
     s_toc_reload_pending = true;
     unlock();
-}
-
-// Back to the plain "Save offline" state - used after the stored manual is
-// ERASED (nothing failed; there is simply no saved copy any more).
-void reader_view_notify_saved_reset(void)
-{
-    s_save_state = 0;
-}
-
-void reader_view_notify_saved(bool ok)
-{
-    s_save_state = ok ? 1 : 2;   // picked up by tick_cb -> button label
 }
 
 void reader_view_set_update_available(const char *latest_version)

@@ -22,6 +22,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 
 log = logging.getLogger("mkdocs.reader_export")
 
@@ -102,6 +103,28 @@ def on_post_build(config, **kwargs):
         log.info("reader_export: wrote toc.json (%d entries)", len(toc))
     except Exception as e:  # noqa: BLE001
         log.warning("reader_export: toc.json failed: %s", e)
+
+    # 2b) Repack main/manual.bin, the manual that gets built INTO the firmware
+    #     (see main/net/manual_embed.h). Done here because this is the one place
+    #     that knows the authoritative chapter order from mkdocs' own nav, so the
+    #     firmware build needs no mkdocs/PyYAML of its own - it just embeds the
+    #     committed blob. Commit main/manual.bin after a docs change, or the
+    #     on-device manual stays one edit behind.
+    try:
+        repo = os.path.dirname(os.path.abspath(__file__))
+        packer = os.path.join(repo, "tools", "pack_manual.py")
+        out = os.path.join(repo, "main", "manual.bin")
+        r = subprocess.run(
+            [sys.executable, packer, "--docs", docs_dir,
+             "--toc", os.path.join(md_out, "toc.json"), "--out", out],
+            capture_output=True, text=True)
+        if r.returncode == 0:
+            log.info("reader_export: %s", (r.stdout or "").strip())
+        else:
+            log.warning("reader_export: pack_manual.py failed: %s",
+                        (r.stderr or r.stdout or "").strip())
+    except Exception as e:  # noqa: BLE001
+        log.warning("reader_export: pack_manual.py could not run: %s", e)
 
     # 3) latest.json (update-check fallback) -> site/latest.json
     try:

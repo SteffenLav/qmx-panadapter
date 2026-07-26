@@ -1,106 +1,47 @@
-// See reader_net.h. Background HTTPS fetch of the docs markdown + TOC into
-// SPIFFS caches, mirroring the esp_http_client + esp_crt_bundle pattern used by
-// qrz_upload.c / lotw_upload.c. Also mirrors the whole manual to a microSD card
-// on demand ("Save offline") and reads from the card when offline.
+// See reader_net.h. Feeds the on-device docs Reader (ui/reader_view.c) from the
+// user manual built into the firmware binary (net/manual_embed.c).
+//
+// This module used to download each page over HTTPS on demand and optionally
+// mirror the whole manual to the SD card. All of that is gone: the manual now
+// ships inside the firmware, so there is nothing to download, nothing to cache
+// that can go stale, and no SD card involved. Deleted along with it - and worth
+// knowing WHY, so none of it gets reintroduced:
+//
+//   * the WiFi-up wait, because a page view no longer needs a link at all
+//   * the rate-limit cooldown for tab5.lav.dk, whose WAF temporarily blocks
+//     bursty clients (429/454/455) - a bulk download of 18 pages was exactly the
+//     pattern it blocks, and it hit us repeatedly during development
+//   * the SD manual mirror and its two-stage "download now, write on next boot"
+//     dance, which existed only because SD writes are unreliable once WiFi is up
+//     (see storage/sd_archive.c)
+//
+// What remains is a small shim: resolve a page from the embedded blob and write
+// it to the SPIFFS page cache, which is still the hand-off to the renderer. That
+// keeps reader_view.c unchanged, and the write happens on a background task
+// rather than on the LVGL thread.
 
 #include "reader_net.h"
+#include "net/manual_embed.h"
 #include "ui/reader_view.h"
-#include "wifi/wifi.h"
 #include "util/psram_task.h"
-#include "storage/sd_archive.h"
-#include "dsp/dsp.h"
-#include "net/webserver_ws.h"
 
-#include "esp_http_client.h"
-#include "esp_crt_bundle.h"
 #include "esp_log.h"
-#include "esp_heap_caps.h"
-#include "cJSON.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 #include <stdio.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <dirent.h>
 #include <unistd.h>
 
 static const char *TAG = "reader_net";
 
-// Public base for the raw source markdown, mirrored alongside the built site by
-// mkdocs_reader_export.py (see plan §1d).
-#define DOCS_BASE         "https://tab5.lav.dk/md/"
 #define PAGE_CACHE        "/spiffs/reader.md"
 #define TOC_CACHE         "/spiffs/reader_toc.json"
-#define SD_MANUAL_DIR     "/sdcard/qmx-panadapter/manual"
 
-// WAF-friendliness (the tab5.lav.dk host runs behavioural rate-limiting that
-// temporarily blocks bursty/retrying clients with 429/454/455 "security
-// incident" pages - observed live 2026-07-25; the block self-expires after
-// ~a minute of silence). Two accommodations keep the Reader under its radar:
-//  - a cooldown after any failed fetch, so tap-retries can't re-arm the block
-//  - pacing between the Save-offline bulk requests (see save_task)
-#define FETCH_COOLDOWN_MS   60000
-#define SAVE_PACING_MS      1200
-static int64_t s_cooldown_until_ms = 0;   // esp_timer epoch; 0 = no cooldown
-
-static bool in_cooldown(void)
-{
-    return s_cooldown_until_ms != 0 &&
-           (esp_timer_get_time() / 1000) < s_cooldown_until_ms;
-}
-
-static void arm_cooldown(void)
-{
-    s_cooldown_until_ms = esp_timer_get_time() / 1000 + FETCH_COOLDOWN_MS;
-}
-#define DOCS_MAX_BYTES    (96 * 1024)
-#define USER_AGENT        "qmx-panadapter-tab5"
-
-static volatile bool s_busy = false;   // one network op (fetch OR save) at a time
+static volatile bool s_busy = false;   // one page load at a time
 static char s_job_path[96];
 static bool s_job_toc;
-
-// Accumulate the response body into a caller-provided buffer.
-typedef struct { char *buf; size_t len; size_t cap; } resp_buf_t;
-
-static esp_err_t on_data(esp_http_client_event_t *evt)
-{
-    if (evt->event_id != HTTP_EVENT_ON_DATA) return ESP_OK;
-    resp_buf_t *r = (resp_buf_t *)evt->user_data;
-    if (!r || r->len + 1 >= r->cap) return ESP_OK;
-    size_t avail = r->cap - r->len - 1;
-    size_t n = (size_t)evt->data_len < avail ? (size_t)evt->data_len : avail;
-    memcpy(r->buf + r->len, evt->data, n);
-    r->len += n;
-    r->buf[r->len] = '\0';
-    return ESP_OK;
-}
-
-// GET url into buf. Returns body length on HTTP 200 (>0), else 0.
-static size_t http_get_buf(const char *url, char *buf, size_t cap)
-{
-    buf[0] = '\0';
-    resp_buf_t ctx = { buf, 0, cap };
-    esp_http_client_config_t cfg = {
-        .url               = url,
-        .method            = HTTP_METHOD_GET,
-        .timeout_ms        = 15000,
-        .event_handler     = on_data,
-        .user_data         = &ctx,
-        .crt_bundle_attach = esp_crt_bundle_attach,
-    };
-    esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (!client) return 0;
-    esp_http_client_set_header(client, "User-Agent", USER_AGENT);
-    esp_err_t err = esp_http_client_perform(client);
-    int status = (err == ESP_OK) ? esp_http_client_get_status_code(client) : -1;
-    esp_http_client_cleanup(client);
-    if (err == ESP_OK && status == 200 && ctx.len > 0) return ctx.len;
-    ESP_LOGW(TAG, "GET %s: err=%s status=%d len=%u", url, esp_err_to_name(err), status, (unsigned)ctx.len);
-    return 0;
-}
 
 static bool write_file(const char *path, const char *buf, size_t len)
 {
@@ -112,105 +53,29 @@ static bool write_file(const char *path, const char *buf, size_t len)
     return w == len;
 }
 
-// GET url -> cache_path (PSRAM scratch). Returns true only on 200 + written.
-static bool fetch_url_to_file(const char *url, const char *cache_path)
-{
-    char *body = heap_caps_malloc(DOCS_MAX_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!body) { ESP_LOGW(TAG, "OOM"); return false; }
-    size_t n = http_get_buf(url, body, DOCS_MAX_BYTES);
-    bool ok = (n > 0) && write_file(cache_path, body, n);
-    if (ok) ESP_LOGI(TAG, "fetched %u bytes -> %s", (unsigned)n, cache_path);
-    heap_caps_free(body);
-    return ok;
-}
-
-// Copy a page from the SD manual mirror into the page cache (offline read).
-static bool sd_page_to_cache(const char *rel)
-{
-    if (!sd_archive_is_mounted()) return false;
-    char sdpath[256];
-    snprintf(sdpath, sizeof(sdpath), "%s/%s", SD_MANUAL_DIR, rel);
-    if (!sd_archive_lock(3000)) return false;
-    bool ok = false;
-    char *body = heap_caps_malloc(DOCS_MAX_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    FILE *in = body ? fopen(sdpath, "rb") : NULL;
-    if (in) {
-        size_t n = fread(body, 1, DOCS_MAX_BYTES - 1, in);
-        fclose(in);
-        ok = write_file(PAGE_CACHE, body, n);
-        if (ok) ESP_LOGI(TAG, "offline: %s (SD) -> cache", rel);
-    }
-    if (body) heap_caps_free(body);
-    sd_archive_unlock();
-    return ok;
-}
-
 static void fetch_task(void *arg)
 {
     (void)arg;
 
-    if (!wifi_is_connected()) {
-        // WiFi may simply not be up YET: on the first manual-open right after
-        // boot the STA is often still associating / waiting on DHCP, so an
-        // instant bail showed "No documentation cached - connect to WiFi" even
-        // on a WiFi-configured unit, only curable by a reboot (Roy KI0ER field
-        // report). Wait briefly for the link to come up while the reader is
-        // still on screen, then fetch normally - no reboot or re-swipe needed.
-        const int MAX_WAIT_S = 30;
-        int waited = 0;
-        while (!wifi_is_connected() && waited < MAX_WAIT_S && reader_view_is_active()) {
-            if (waited == 0) reader_view_notify_status("Waiting for WiFi...");
-            vTaskDelay(pdMS_TO_TICKS(1000));
-            waited++;
-        }
-        if (!wifi_is_connected()) {
-            // Still offline (or the operator left the page): fall back to the SD
-            // manual mirror, else whatever's cached in SPIFFS.
-            if (sd_page_to_cache(s_job_path)) reader_view_notify_loaded(false);
-            else                              reader_view_notify_loaded(true);
-            s_busy = false;
-            vTaskDelete(NULL);
-            return;
-        }
-        // Link came up during the wait — fall through and download normally.
-    }
-
-    if (in_cooldown()) {
-        // A recent fetch failed; hammering the server again would extend the
-        // WAF's temporary block. Serve what we have and say why.
-        reader_view_notify_status("Server busy - wait a minute, then retry");
-        if (sd_page_to_cache(s_job_path)) reader_view_notify_loaded(false);
-        else                              reader_view_notify_loaded(true);
-        s_busy = false;
-        vTaskDelete(NULL);
-        return;
-    }
-
-    reader_view_notify_status("Downloading...");
-
     if (s_job_toc) {
-        char url[192];
-        snprintf(url, sizeof(url), "%stoc.json", DOCS_BASE);
-        if (fetch_url_to_file(url, TOC_CACHE)) reader_view_notify_toc_loaded();
+        const char *toc = NULL;
+        size_t toclen = 0;
+        if (manual_embed_get("toc.json", &toc, &toclen) &&
+            write_file(TOC_CACHE, toc, toclen)) {
+            reader_view_notify_toc_loaded();
+        } else {
+            ESP_LOGW(TAG, "contents list missing from the embedded manual");
+        }
     }
 
-    char url[256];
-    snprintf(url, sizeof(url), "%s%s", DOCS_BASE, s_job_path);
-    bool ok = fetch_url_to_file(url, PAGE_CACHE);
-
-    if (ok) {
-        s_cooldown_until_ms = 0;
+    const char *data = NULL;
+    size_t len = 0;
+    if (manual_embed_get(s_job_path, &data, &len) && write_file(PAGE_CACHE, data, len)) {
         reader_view_notify_status("");
         reader_view_notify_loaded(false);
-    } else if (sd_page_to_cache(s_job_path)) {   // online but fetch failed -> SD
-        arm_cooldown();
-        reader_view_notify_status("Offline copy (SD)");
-        reader_view_notify_loaded(false);
     } else {
-        // WiFi is up but the server refused/failed - NOT a WiFi problem
-        // (the old "check WiFi" wording sent operators down the wrong path).
-        arm_cooldown();
-        reader_view_notify_status("tab5.lav.dk not responding - retry in 1 min");
+        ESP_LOGW(TAG, "page '%s' not in the embedded manual", s_job_path);
+        reader_view_notify_status("Page not found in the built-in manual");
         reader_view_notify_loaded(true);
     }
 
@@ -225,7 +90,7 @@ void reader_net_fetch(const char *page_rel, bool with_toc)
     snprintf(s_job_path, sizeof(s_job_path), "%s",
              (page_rel && page_rel[0]) ? page_rel : "index.md");
     s_job_toc = with_toc;
-    if (!psram_task_create(fetch_task, "reader_net", 6144, NULL, 4, tskNO_AFFINITY)) {
+    if (!psram_task_create(fetch_task, "reader_net", 4096, NULL, 4, tskNO_AFFINITY)) {
         s_busy = false;
     }
 }
@@ -235,353 +100,14 @@ void reader_net_load_index(void)
     reader_net_fetch("index.md", true);
 }
 
-// ============================ SD offline save ============================
-
-// Create every parent directory of a full file path (mkdir each component).
-static void mkdirs_for_file(const char *filepath)
-{
-    char tmp[256];
-    snprintf(tmp, sizeof(tmp), "%s", filepath);
-    for (char *q = tmp + 1; *q; q++) {
-        if (*q == '/') { *q = '\0'; mkdir(tmp, 0777); *q = '/'; }
-    }
-}
-
-// Write one page buffer to the SD manual mirror at <rel> (under the SD lock).
-static bool sd_write_page(const char *rel, const char *buf, size_t len)
-{
-    char path[256];
-    snprintf(path, sizeof(path), "%s/%s", SD_MANUAL_DIR, rel);
-    if (!sd_archive_lock(5000)) return false;
-    mkdirs_for_file(path);
-    bool ok = write_file(path, buf, len);
-    sd_archive_unlock();
-    return ok;
-}
-
-// ---------------------------------------------------------------------------
-// Two-stage offline save: SPIFFS staging area (see reader_net.h for the why)
-// ---------------------------------------------------------------------------
-//
-// Content files are named by INDEX, not by relative path: SPIFFS enforces
-// CONFIG_SPIFFS_OBJ_NAME_LEN=32 over the whole name, and "reference/
-// troubleshooting.md" alone is 28 chars, so path-derived names would sit right on
-// the limit and break the moment a page is added or renamed. The manifest maps
-// index -> relative path instead.
-#define STAGE_MANIFEST   "/spiffs/mo.idx"
-#define STAGE_PARTIAL    "/spiffs/mo.tmp"
-#define STAGE_MAX_PAGES  64
-
-static void stage_content_path(int idx, char *out, size_t cap)
-{
-    snprintf(out, cap, "/spiffs/mo%02d", idx);
-}
-
-// Delete the manifest FIRST so a half-removed staging area can never be
-// mistaken for a complete one.
-static void stage_clear(void)
-{
-    remove(STAGE_MANIFEST);
-    remove(STAGE_PARTIAL);
-    for (int i = 0; i < STAGE_MAX_PAGES; i++) {
-        char p[32];
-        stage_content_path(i, p, sizeof(p));
-        if (remove(p) != 0 && i > 0) break;   // stop at the first gap past 0
-    }
-}
-
-bool reader_net_has_staged_manual(void)
-{
-    struct stat st;
-    return stat(STAGE_MANIFEST, &st) == 0 && st.st_size > 0;
-}
-
-static bool s_sd_manual_cached = false;
-
-void reader_net_probe_sd_manual(void)
-{
-    char p[256];
-    snprintf(p, sizeof(p), "%s/toc.json", SD_MANUAL_DIR);
-    struct stat st;
-    s_sd_manual_cached = (sd_archive_is_mounted() && stat(p, &st) == 0 && st.st_size > 0);
-    ESP_LOGI(TAG, "SD manual present: %s", s_sd_manual_cached ? "yes" : "no");
-}
-
-bool reader_net_manual_on_sd(void) { return s_sd_manual_cached; }
-
-// Bench/test only - see reader_net.h. Builds staging exactly the way save_task
-// does (content files by index, manifest renamed into place last) so stage 2 is
-// exercised on the real code path, minus the network.
-bool reader_net_bench_stage_fake(void)
-{
-    stage_clear();
-    static const char *rels[] = { "toc.json", "guide/bench.md" };
-    static const char *bodies[] = {
-        "{\"pages\":[{\"title\":\"Bench\",\"path\":\"guide/bench.md\",\"level\":0}]}",
-        "# Bench page\n\nStaged by reader_net_bench_stage_fake().\n"
-    };
-    FILE *m = fopen(STAGE_PARTIAL, "w");
-    if (!m) return false;
-    for (int i = 0; i < 2; i++) {
-        char sp[32];
-        stage_content_path(i, sp, sizeof(sp));
-        if (!write_file(sp, bodies[i], strlen(bodies[i]))) { fclose(m); stage_clear(); return false; }
-        fprintf(m, "%s\n", rels[i]);
-    }
-    fflush(m); fsync(fileno(m)); fclose(m);
-    if (rename(STAGE_PARTIAL, STAGE_MANIFEST) != 0) { stage_clear(); return false; }
-    ESP_LOGW(TAG, "BENCH: fabricated a staged manual (2 files)");
-    return true;
-}
-
-int reader_net_flush_staged_to_sd(void)
-{
-    if (!reader_net_has_staged_manual()) return 0;
-    if (!sd_archive_is_mounted()) {
-        ESP_LOGW(TAG, "staged manual ready but no card mounted - keeping it staged");
-        return 0;
-    }
-
-    FILE *m = fopen(STAGE_MANIFEST, "r");
-    if (!m) return 0;
-
-    char *buf = heap_caps_malloc(DOCS_MAX_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!buf) { fclose(m); return 0; }
-
-    int idx = 0, written = 0, failed = 0;
-    char rel[160];
-    while (fgets(rel, sizeof(rel), m)) {
-        rel[strcspn(rel, "\r\n")] = '\0';
-        if (!rel[0]) continue;
-        char sp[32];
-        stage_content_path(idx, sp, sizeof(sp));
-        FILE *f = fopen(sp, "rb");
-        if (f) {
-            size_t len = fread(buf, 1, DOCS_MAX_BYTES, f);
-            fclose(f);
-            if (len > 0 && sd_write_page(rel, buf, len)) written++;
-            else failed++;
-        } else {
-            failed++;
-        }
-        idx++;
-    }
-    fclose(m);
-    heap_caps_free(buf);
-
-    if (failed == 0 && written > 0) {
-        stage_clear();   // only drop the staging copy once the card really has it
-        s_sd_manual_cached = true;
-        ESP_LOGW(TAG, "offline manual written to SD: %d file(s) - staging cleared", written);
-    } else {
-        ESP_LOGW(TAG, "offline manual flush incomplete (%d written, %d failed) - "
-                      "staging kept for the next boot", written, failed);
-    }
-    return written;
-}
-
-// Download the whole manual (toc + every page) to the SD card. Mirrors the
-// upload path's WiFi-coexistence safeguards (pause the WS stream + transfer
-// quiet) since SD writes during WiFi traffic are this board's most wedge-prone
-// combination; SD writes are also serialised against the archive task via
-// sd_archive_lock (held only for the write, never across a WiFi fetch).
-static void save_task(void *arg)
-{
-    (void)arg;
-
-    // STAGE 1 needs WiFi but deliberately NOT a card: the download goes to SPIFFS
-    // staging and is written to the card on the next boot, before WiFi starts.
-    // See the two-stage rationale in reader_net.h.
-    if (!wifi_is_connected())      { reader_view_notify_status("Connect WiFi to download the manual"); s_busy = false; vTaskDelete(NULL); return; }
-    if (in_cooldown())             { reader_view_notify_status("Server busy - wait a minute, then retry"); s_busy = false; vTaskDelete(NULL); return; }
-
-    // A fresh download supersedes anything already staged.
-    stage_clear();
-
-    webserver_ws_set_paused(true);
-    dsp_set_transfer_quiet(true);
-
-    char *buf = heap_caps_malloc(DOCS_MAX_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!buf) {
-        dsp_set_transfer_quiet(false); webserver_ws_set_paused(false);
-        reader_view_notify_status("Out of memory"); s_busy = false; vTaskDelete(NULL); return;
-    }
-
-    int saved = 0, failed = 0;
-    int stage_idx = 0;                       // index of the next staged file
-    // The manifest is streamed to a PARTIAL file and renamed to its real name only
-    // once every page has arrived; that rename is the atomic completeness marker.
-    // Deliberately NOT an in-memory array: 64 x 160 chars is 10 KB, and this task
-    // has an 8 KB stack - the compiler reserves the frame at the prologue whether
-    // the path is taken or not, which is precisely how the v0.20.1 pounce crash
-    // happened.
-    FILE *man = fopen(STAGE_PARTIAL, "w");
-    if (!man) {
-        heap_caps_free(buf);
-        dsp_set_transfer_quiet(false); webserver_ws_set_paused(false);
-        reader_view_notify_status("No space to stage the manual");
-        s_busy = false; vTaskDelete(NULL); return;
-    }
-
-    // TOC first (also gives us the page list).
-    reader_view_notify_status("Downloading: contents...");
-    char url[256];
-    snprintf(url, sizeof(url), "%stoc.json", DOCS_BASE);
-    size_t toclen = http_get_buf(url, buf, DOCS_MAX_BYTES);
-    cJSON *root = NULL;
-    if (toclen > 0) {
-        char sp[32];
-        stage_content_path(stage_idx, sp, sizeof(sp));
-        if (write_file(sp, buf, toclen)) {
-            fprintf(man, "toc.json\n");
-            stage_idx++;
-        }
-        root = cJSON_Parse(buf);   // dups strings; buf reusable after this
-    }
-
-    if (root) {
-        cJSON *pages = cJSON_GetObjectItem(root, "pages");
-        int n = cJSON_IsArray(pages) ? cJSON_GetArraySize(pages) : 0;
-        // count real pages (entries with a path) for the progress denominator
-        int total = 0;
-        for (int i = 0; i < n; i++) {
-            cJSON *pa = cJSON_GetObjectItem(cJSON_GetArrayItem(pages, i), "path");
-            if (cJSON_IsString(pa) && pa->valuestring && pa->valuestring[0]) total++;
-        }
-        int idx = 0;
-        for (int i = 0; i < n; i++) {
-            cJSON *pa = cJSON_GetObjectItem(cJSON_GetArrayItem(pages, i), "path");
-            if (!cJSON_IsString(pa) || !pa->valuestring || !pa->valuestring[0]) continue;
-            idx++;
-            char st[48]; snprintf(st, sizeof(st), "Downloading %d/%d...", idx, total);
-            reader_view_notify_status(st);
-            snprintf(url, sizeof(url), "%s%s", DOCS_BASE, pa->valuestring);
-            size_t len = http_get_buf(url, buf, DOCS_MAX_BYTES);
-            bool ok = false;
-            if (len > 0 && stage_idx < STAGE_MAX_PAGES) {
-                char sp[32];
-                stage_content_path(stage_idx, sp, sizeof(sp));
-                if (write_file(sp, buf, len)) {
-                    fprintf(man, "%s\n", pa->valuestring);
-                    stage_idx++;
-                    ok = true;
-                }
-            }
-            if (ok) saved++; else failed++;
-            // Pace the bulk download: ~19 back-to-back requests look like a
-            // bot burst to the host's rate limiter and get the IP temporarily
-            // blocked mid-save. ~1 request/second passes as a human.
-            vTaskDelay(pdMS_TO_TICKS(SAVE_PACING_MS));
-        }
-        cJSON_Delete(root);
-    } else {
-        failed = 1;
-    }
-
-    heap_caps_free(buf);
-    dsp_set_transfer_quiet(false);
-    webserver_ws_set_paused(false);
-
-    // Finalise the manifest. It is the completeness marker, so it only takes its
-    // real name once every page arrived - a partial download can never be flushed
-    // to the card.
-    bool complete = (saved > 0 && failed == 0 && stage_idx > 1);
-    fflush(man);
-    fsync(fileno(man));
-    fclose(man);
-    if (complete && rename(STAGE_PARTIAL, STAGE_MANIFEST) != 0) complete = false;
-    if (!complete) stage_clear();
-
-    if (failed > 0) arm_cooldown();
-    ESP_LOGI(TAG, "offline download: %d staged, %d failed, complete=%d",
-             saved, failed, (int)complete);
-    reader_view_notify_status(complete
-        ? "Downloaded. Restart with the SD card in to finish."
-        : "Download incomplete - try again");
-    reader_view_notify_saved(complete);
-
-    s_busy = false;
-    vTaskDelete(NULL);
-}
-
-// Recursively delete a directory tree (bounded depth - the manual mirror is
-// at most base/guide|reference|build/page.md). Used only for SD_MANUAL_DIR.
-static void rm_tree(const char *path, int depth)
-{
-    if (depth > 4) return;
-    // Deleting entries while iterating with readdir() is undefined in FatFs
-    // (the DIR object caches directory sectors that unlink rewrites). Safe
-    // pattern instead: take the FIRST entry, close the iterator, delete it,
-    // reopen - bounded by the entry count, and the manual mirror holds ~20
-    // files, so the re-scans are cheap.
-    for (int guard = 0; guard < 256; guard++) {
-        DIR *d = opendir(path);
-        if (!d) return;
-        char name[64] = "";
-        struct dirent *e;
-        while ((e = readdir(d)) != NULL) {
-            if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
-            snprintf(name, sizeof(name), "%.63s", e->d_name);
-            break;
-        }
-        closedir(d);
-        if (!name[0]) break;   // directory is empty
-        char sub[192];
-        snprintf(sub, sizeof(sub), "%s/%s", path, name);
-        struct stat st;
-        if (stat(sub, &st) == 0 && S_ISDIR(st.st_mode)) rm_tree(sub, depth + 1);
-        else if (unlink(sub) != 0) break;   // can't delete: bail, don't spin
-    }
-    rmdir(path);
-}
-
-// Erase every stored copy of the manual: the SPIFFS page/TOC caches and the
-// microSD offline mirror. Recovery action for a cache poisoned by a captive
-// portal (hotel WiFi login pages served instead of the real markdown get
-// cached and then render as garbage until overwritten). Long-press the
-// drawer's User Manual button to trigger.
-static void erase_task(void *arg)
-{
-    (void)arg;
-
-    unlink(PAGE_CACHE);
-    unlink(TOC_CACHE);
-    // Also drop any staged (downloaded, not yet written) manual. Without this,
-    // "erase everything" would leave staging behind and the next boot would flush
-    // it straight back onto the card - resurrecting exactly what was just erased.
-    stage_clear();
-
-    if (sd_archive_is_mounted()) {
-        if (sd_archive_lock(5000)) {
-            rm_tree(SD_MANUAL_DIR, 0);
-            s_sd_manual_cached = false;
-            sd_archive_unlock();
-        } else {
-            ESP_LOGW(TAG, "erase: SD busy - manual mirror not deleted");
-        }
-    }
-
-    ESP_LOGI(TAG, "manual erased (SPIFFS caches + SD mirror)");
-    reader_view_notify_saved_reset();  // nothing failed - there's just no saved copy now
-    s_busy = false;
-    vTaskDelete(NULL);
-}
-
 void reader_net_erase_all(void)
 {
-    if (s_busy) return;
-    s_busy = true;
-    if (!psram_task_create(erase_task, "reader_erase", 6144, NULL, 4, tskNO_AFFINITY)) {
-        s_busy = false;
-    }
-}
-
-void reader_net_save_offline(void)
-{
-    if (s_busy) return;
-    s_busy = true;
-    // 8 KB stack: TLS + cJSON + FatFs. PSRAM stack (non-realtime).
-    if (!psram_task_create(save_task, "reader_save", 8192, NULL, 4, tskNO_AFFINITY)) {
-        s_busy = false;
-    }
+    // Only the two render caches are left to clear, and they are rebuilt from the
+    // embedded manual the next time a page is opened - so this is now a harmless
+    // "reset the reader" rather than the cache-poisoning recovery it once was
+    // (a captive portal can no longer substitute anything: nothing is fetched).
+    // Two small unlinks, so no task needed.
+    unlink(PAGE_CACHE);
+    unlink(TOC_CACHE);
+    ESP_LOGI(TAG, "reader caches cleared (manual itself is in the firmware)");
 }
