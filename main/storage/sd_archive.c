@@ -137,7 +137,19 @@ static void write_readme(void)
         "text, and lotw_key.b64 is your LoTW PRIVATE KEY. Keep this card as\r\n"
         "physically secure as you would a house key.\r\n"
         "\r\n"
-        "Written by QMX Panadapter %s. Mirror is continuous while inserted.\r\n",
+        "WHEN IS THIS WRITTEN?\r\n"
+        "  WiFi off  - continuously, the whole time the card is inserted.\r\n"
+        "  WiFi on   - once per start-up. Your log/config/certificate are all\r\n"
+        "              backed up within a few seconds of switching on, but QSOs\r\n"
+        "              made later in that session only reach the card at the next\r\n"
+        "              start-up. (WiFi and this card cannot both use the shared\r\n"
+        "              bus reliably, so the Tab5 takes the backup first, then\r\n"
+        "              leaves the card alone. The bottom-bar SD dot is GREEN while\r\n"
+        "              mirroring continuously, YELLOW once the backup is done.)\r\n"
+        "  Insert the card BEFORE switching on - a card pushed in later is not\r\n"
+        "  picked up until the next start-up.\r\n"
+        "\r\n"
+        "Written by QMX Panadapter %s.\r\n",
         fw);
     fclose(f);
     ESP_LOGI(TAG, "wrote %s", SD_README_PATH);
