@@ -71,6 +71,7 @@
 #include "ft8_tx.h"
 #include "ft8_qso.h"
 #include "ft8_robot.h"
+#include "net/pskreporter.h"
 #include "ft8_hash.h"
 #include "time_sync.h"
 #include "ft8_status.h"
@@ -910,6 +911,19 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
                      text, cands[i].score, freq_hz, snr_db, (int)lroundf(cand_dt_ms));
             ft8_screen_record_decode(text, cands[i].score, snr_db, freq_hz, slot_sec,
                                      (int)lroundf(cand_dt_ms));
+            // PSK Reporter spot (REAL decodes only - this path never runs on
+            // simulator injections, which bypass the audio pipeline entirely;
+            // pskreporter.c additionally refuses spots while sim mode is on).
+            {
+                char sp_call[16], sp_grid[8];
+                if (ft8_screen_extract_call(text, sp_call, sizeof(sp_call))) {
+                    ft8_screen_extract_grid(text, sp_grid, sizeof(sp_grid));
+                    pskreporter_spot(sp_call, sp_grid,
+                                     cat_get_frequency() + (uint32_t)freq_hz, snr_db,
+                                     s_pool_proto == (int)FTX_PROTOCOL_FT4 ? "FT4" : "FT8",
+                                     slot_sec);
+                }
+            }
         }
     }
 }

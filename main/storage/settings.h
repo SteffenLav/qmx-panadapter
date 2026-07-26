@@ -91,6 +91,8 @@ typedef struct {
     bool     ft8_sync_lines;  // Panadapter: FT8-sync-vs-SNTP waterfall slot-boundary lines + 2x waterfall speed (default false)
     bool     greylist_en;     // FT8: grey-list stations after repeated failed pounces - auto pickers skip
                               // them, rows recolour, tap offers clear (default false; RAM-only list)
+    bool     pskreporter_en;  // FT8/FT4: report real decodes to pskreporter.info (UDP, batched ~5 min;
+                              // needs callsign+grid; never in simulation mode; default false)
     ft8_filters_t ft8_filters;        // CQ-run reply include/exclude filters
     bool     field_day_en;    // ARRL Field Day exchange mode: TX/RX class+section instead of grid/report (default false)
     char     fd_class[4];     // Field Day class, e.g. "16A" (1-2 digit transmitter count + category letter)
@@ -187,6 +189,7 @@ void settings_set_distance_in_miles(bool v);
 // boundary and a hand-tapped reply can fire in its own slot at a decodable DT.
 void settings_set_ft8_early_decode(bool v);
 void settings_set_greylist_en(bool v);
+void settings_set_pskreporter_en(bool v);
 
 // Band-plan strip region (debounced flush): 0=auto (derive from grid), 1=R1,
 // 2=R2, 3=R3.

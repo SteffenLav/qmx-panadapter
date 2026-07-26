@@ -49,3 +49,12 @@ void ft8_screen_get_all(ft8_call_t *out, int max, int *count_out);
 // Clear the entire decode table (on mode/band switch).
 // Takes mutex internally.
 void ft8_screen_clear(void);
+
+// Extract the TRANSMITTING callsign from a decoded message (WSJT-X token
+// heuristic; strips <angle brackets> from hash-resolved calls). Public for
+// the PSK Reporter spot feeder.
+bool ft8_screen_extract_call(const char *msg, char *out_call, size_t cap);
+
+// Extract a Maidenhead grid from a decoded message's third field, if present
+// ("" otherwise). Public for the PSK Reporter spot feeder.
+void ft8_screen_extract_grid(const char *msg, char *out_grid, size_t cap);
