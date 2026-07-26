@@ -168,34 +168,44 @@ static void publish(const char *latest, bool newer)
     reader_view_set_update_available(newer ? latest : "");
 }
 
-static void do_check(void)
+static bool do_check(void)
 {
     const esp_app_desc_t *app = esp_app_get_description();
     const char *cur = app ? app->version : "";
 
     char *buf = heap_caps_malloc(RESP_MAX_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!buf) { ESP_LOGW(TAG, "OOM"); return; }
+    if (!buf) { ESP_LOGW(TAG, "OOM"); return false; }
 
     char tag[24] = {0};
     bool got = false;
 
+    // latest.json (tab5.lav.dk) is checked FIRST, GitHub second - the reverse
+    // of the original order. Both carry the same version string, so the result
+    // is unchanged; what this buys is a usage signal: the site's ordinary web
+    // logs now see one small request per device per check interval, which is
+    // the only count of ACTIVE installations available (GitHub reports
+    // downloads, not use). No identifying data is sent beyond what any HTTP
+    // request inherently carries, and nothing is stored on the device.
+    // DISCLOSED in the release notes + manual; see also the PSK Reporter
+    // "Software in use" table, which counts on-air users of this firmware.
     size_t len = 0;
-    int status = http_get(GITHUB_RELEASES_URL, buf, RESP_MAX_BYTES, &len);
-    if (status == 200 && parse_github(buf, tag, sizeof(tag))) {
+    int status = http_get(LATEST_JSON_URL, buf, RESP_MAX_BYTES, &len);
+    if (status == 200 && parse_latest_json(buf, tag, sizeof(tag))) {
         got = true;
     } else {
-        ESP_LOGW(TAG, "GitHub check failed (status=%d) — trying latest.json", status);
-        status = http_get(LATEST_JSON_URL, buf, RESP_MAX_BYTES, &len);
-        if (status == 200 && parse_latest_json(buf, tag, sizeof(tag))) got = true;
+        ESP_LOGW(TAG, "latest.json check failed (status=%d) - trying GitHub", status);
+        status = http_get(GITHUB_RELEASES_URL, buf, RESP_MAX_BYTES, &len);
+        if (status == 200 && parse_github(buf, tag, sizeof(tag))) got = true;
     }
     heap_caps_free(buf);
 
-    if (!got) { ESP_LOGW(TAG, "no version info available"); return; }
+    if (!got) { ESP_LOGW(TAG, "no version info available"); return false; }
 
     int cmp = ver_cmp(tag, cur);
     ESP_LOGI(TAG, "latest=%s running=%s -> %s", tag, cur,
              cmp > 0 ? "UPDATE AVAILABLE" : "up to date");
     publish(tag, cmp > 0);
+    return true;
 }
 
 static void check_task(void *arg)
@@ -203,12 +213,14 @@ static void check_task(void *arg)
     (void)arg;
     vTaskDelay(pdMS_TO_TICKS(FIRST_DELAY_MS));
     for (;;) {
-        if (wifi_is_connected()) {
-            do_check();
-            vTaskDelay(pdMS_TO_TICKS(CHECK_INTERVAL_MS));
-        } else {
-            vTaskDelay(pdMS_TO_TICKS(RETRY_WHEN_DOWN_MS));
-        }
+        // wifi_is_connected() goes true at association, but DNS/DHCP can still
+        // be unusable for a second or two - a check launched in that window
+        // fails on BOTH URLs. Retry on the short interval instead of sleeping
+        // the full 6 h, or one unlucky boot costs the whole day's check
+        // (hardware-observed: both URLs failed at 36.8 s uptime while WiFi
+        // came up at ~38.5 s; neighbouring boots succeeded at 37-38 s).
+        bool ok = wifi_is_connected() && do_check();
+        vTaskDelay(pdMS_TO_TICKS(ok ? CHECK_INTERVAL_MS : RETRY_WHEN_DOWN_MS));
     }
 }
 

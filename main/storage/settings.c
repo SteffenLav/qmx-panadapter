@@ -439,7 +439,11 @@ static void load_from_nvs(qmx_settings_t *out)
     out->snap_to_peak   = true;   // on by default (legacy behaviour)
     out->ft8_early_decode = true; // on by default (WSJT-X-style fast pounce timing)
     out->greylist_en = false;     // opt-in ("Allow grey-listing", Filter modal)
-    out->pskreporter_en = false;  // opt-in ("Report decodes to PSK Reporter", FT8 drawer)
+    // ON by default: contributing reception reports is the norm for FT8
+    // software (WSJT-X ships PSK Reporter spotting enabled) and the data is
+    // inherently public ham activity. Disclosed in the release notes + manual;
+    // the FT8 drawer checkbox turns it off. Inert until callsign+grid are set.
+    out->pskreporter_en = true;
     out->bandplan_region = 0;     // 0 = auto (derive from grid)
     memset(&out->ft8_filters, 0, sizeof(out->ft8_filters));
     out->field_day_en = false;

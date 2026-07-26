@@ -92,7 +92,8 @@ typedef struct {
     bool     greylist_en;     // FT8: grey-list stations after repeated failed pounces - auto pickers skip
                               // them, rows recolour, tap offers clear (default false; RAM-only list)
     bool     pskreporter_en;  // FT8/FT4: report real decodes to pskreporter.info (UDP, batched ~5 min;
-                              // needs callsign+grid; never in simulation mode; default false)
+                              // needs callsign+grid; never in simulation mode; default TRUE - same
+                              // as WSJT-X ships; drawer checkbox turns it off)
     ft8_filters_t ft8_filters;        // CQ-run reply include/exclude filters
     bool     field_day_en;    // ARRL Field Day exchange mode: TX/RX class+section instead of grid/report (default false)
     char     fd_class[4];     // Field Day class, e.g. "16A" (1-2 digit transmitter count + category letter)
