@@ -23,6 +23,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <dirent.h>
+#include <unistd.h>
 
 static const char *TAG = "reader_net";
 
@@ -32,6 +34,27 @@ static const char *TAG = "reader_net";
 #define PAGE_CACHE        "/spiffs/reader.md"
 #define TOC_CACHE         "/spiffs/reader_toc.json"
 #define SD_MANUAL_DIR     "/sdcard/qmx-panadapter/manual"
+
+// WAF-friendliness (the tab5.lav.dk host runs behavioural rate-limiting that
+// temporarily blocks bursty/retrying clients with 429/454/455 "security
+// incident" pages - observed live 2026-07-25; the block self-expires after
+// ~a minute of silence). Two accommodations keep the Reader under its radar:
+//  - a cooldown after any failed fetch, so tap-retries can't re-arm the block
+//  - pacing between the Save-offline bulk requests (see save_task)
+#define FETCH_COOLDOWN_MS   60000
+#define SAVE_PACING_MS      1200
+static int64_t s_cooldown_until_ms = 0;   // esp_timer epoch; 0 = no cooldown
+
+static bool in_cooldown(void)
+{
+    return s_cooldown_until_ms != 0 &&
+           (esp_timer_get_time() / 1000) < s_cooldown_until_ms;
+}
+
+static void arm_cooldown(void)
+{
+    s_cooldown_until_ms = esp_timer_get_time() / 1000 + FETCH_COOLDOWN_MS;
+}
 #define DOCS_MAX_BYTES    (96 * 1024)
 #define USER_AGENT        "qmx-panadapter-tab5"
 
@@ -152,6 +175,17 @@ static void fetch_task(void *arg)
         // Link came up during the wait — fall through and download normally.
     }
 
+    if (in_cooldown()) {
+        // A recent fetch failed; hammering the server again would extend the
+        // WAF's temporary block. Serve what we have and say why.
+        reader_view_notify_status("Server busy - wait a minute, then retry");
+        if (sd_page_to_cache(s_job_path)) reader_view_notify_loaded(false);
+        else                              reader_view_notify_loaded(true);
+        s_busy = false;
+        vTaskDelete(NULL);
+        return;
+    }
+
     reader_view_notify_status("Downloading...");
 
     if (s_job_toc) {
@@ -165,13 +199,18 @@ static void fetch_task(void *arg)
     bool ok = fetch_url_to_file(url, PAGE_CACHE);
 
     if (ok) {
+        s_cooldown_until_ms = 0;
         reader_view_notify_status("");
         reader_view_notify_loaded(false);
     } else if (sd_page_to_cache(s_job_path)) {   // online but fetch failed -> SD
+        arm_cooldown();
         reader_view_notify_status("Offline copy (SD)");
         reader_view_notify_loaded(false);
     } else {
-        reader_view_notify_status("Download failed - showing cached copy");
+        // WiFi is up but the server refused/failed - NOT a WiFi problem
+        // (the old "check WiFi" wording sent operators down the wrong path).
+        arm_cooldown();
+        reader_view_notify_status("tab5.lav.dk not responding - retry in 1 min");
         reader_view_notify_loaded(true);
     }
 
@@ -231,6 +270,7 @@ static void save_task(void *arg)
 
     if (!wifi_is_connected())      { reader_view_notify_status("Connect WiFi to save offline"); s_busy = false; vTaskDelete(NULL); return; }
     if (!sd_archive_is_mounted())  { reader_view_notify_status("No SD card");                    s_busy = false; vTaskDelete(NULL); return; }
+    if (in_cooldown())             { reader_view_notify_status("Server busy - wait a minute, then retry"); s_busy = false; vTaskDelete(NULL); return; }
 
     webserver_ws_set_paused(true);
     dsp_set_transfer_quiet(true);
@@ -274,6 +314,10 @@ static void save_task(void *arg)
             size_t len = http_get_buf(url, buf, DOCS_MAX_BYTES);
             if (len > 0 && sd_write_page(pa->valuestring, buf, len)) saved++;
             else failed++;
+            // Pace the bulk download: ~19 back-to-back requests look like a
+            // bot burst to the host's rate limiter and get the IP temporarily
+            // blocked mid-save. ~1 request/second passes as a human.
+            vTaskDelay(pdMS_TO_TICKS(SAVE_PACING_MS));
         }
         cJSON_Delete(root);
     } else {
@@ -284,12 +328,80 @@ static void save_task(void *arg)
     dsp_set_transfer_quiet(false);
     webserver_ws_set_paused(false);
 
+    if (failed > 0) arm_cooldown();
     ESP_LOGI(TAG, "offline save: %d saved, %d failed", saved, failed);
     reader_view_notify_status("");                 // no "Saved N pages" line
     reader_view_notify_saved(saved > 0 && failed == 0);
 
     s_busy = false;
     vTaskDelete(NULL);
+}
+
+// Recursively delete a directory tree (bounded depth - the manual mirror is
+// at most base/guide|reference|build/page.md). Used only for SD_MANUAL_DIR.
+static void rm_tree(const char *path, int depth)
+{
+    if (depth > 4) return;
+    // Deleting entries while iterating with readdir() is undefined in FatFs
+    // (the DIR object caches directory sectors that unlink rewrites). Safe
+    // pattern instead: take the FIRST entry, close the iterator, delete it,
+    // reopen - bounded by the entry count, and the manual mirror holds ~20
+    // files, so the re-scans are cheap.
+    for (int guard = 0; guard < 256; guard++) {
+        DIR *d = opendir(path);
+        if (!d) return;
+        char name[64] = "";
+        struct dirent *e;
+        while ((e = readdir(d)) != NULL) {
+            if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) continue;
+            snprintf(name, sizeof(name), "%.63s", e->d_name);
+            break;
+        }
+        closedir(d);
+        if (!name[0]) break;   // directory is empty
+        char sub[192];
+        snprintf(sub, sizeof(sub), "%s/%s", path, name);
+        struct stat st;
+        if (stat(sub, &st) == 0 && S_ISDIR(st.st_mode)) rm_tree(sub, depth + 1);
+        else if (unlink(sub) != 0) break;   // can't delete: bail, don't spin
+    }
+    rmdir(path);
+}
+
+// Erase every stored copy of the manual: the SPIFFS page/TOC caches and the
+// microSD offline mirror. Recovery action for a cache poisoned by a captive
+// portal (hotel WiFi login pages served instead of the real markdown get
+// cached and then render as garbage until overwritten). Long-press the
+// drawer's User Manual button to trigger.
+static void erase_task(void *arg)
+{
+    (void)arg;
+
+    unlink(PAGE_CACHE);
+    unlink(TOC_CACHE);
+
+    if (sd_archive_is_mounted()) {
+        if (sd_archive_lock(5000)) {
+            rm_tree(SD_MANUAL_DIR, 0);
+            sd_archive_unlock();
+        } else {
+            ESP_LOGW(TAG, "erase: SD busy - manual mirror not deleted");
+        }
+    }
+
+    ESP_LOGI(TAG, "manual erased (SPIFFS caches + SD mirror)");
+    reader_view_notify_saved_reset();  // nothing failed - there's just no saved copy now
+    s_busy = false;
+    vTaskDelete(NULL);
+}
+
+void reader_net_erase_all(void)
+{
+    if (s_busy) return;
+    s_busy = true;
+    if (!psram_task_create(erase_task, "reader_erase", 6144, NULL, 4, tskNO_AFFINITY)) {
+        s_busy = false;
+    }
 }
 
 void reader_net_save_offline(void)

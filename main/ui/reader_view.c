@@ -1114,10 +1114,19 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_align(s_title_lbl, LV_ALIGN_LEFT_MID, 520, 0);
     lv_label_set_text(s_title_lbl, "Documentation");
 
+    // Status: a FIXED two-line wrapping box in the gap between the gold title
+    // (starts x=520, can run to ~860 for long page titles) and the Save-offline
+    // button (left edge ~1044). The old single-line right-aligned label grew
+    // LEFTWARD from x=980 and ran under the title (operator report). Height
+    // stays within the 64 px bar (2 lines at font 18 ≈ 44 px); anything longer
+    // than two lines is dot-truncated rather than overflowing the bar.
     s_status_lbl = lv_label_create(hdr);
     lv_obj_set_style_text_font(s_status_lbl, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(s_status_lbl, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-    lv_obj_align(s_status_lbl, LV_ALIGN_RIGHT_MID, -300, 0);
+    lv_obj_set_size(s_status_lbl, 170, 46);
+    lv_label_set_long_mode(s_status_lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(s_status_lbl, LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(s_status_lbl, LV_ALIGN_RIGHT_MID, -240, 0);
     lv_label_set_text(s_status_lbl, "");
 
     // The three buttons are children of the full-screen OVERLAY, not the header
@@ -1337,6 +1346,13 @@ void reader_view_notify_toc_loaded(void)
     lock();
     s_toc_reload_pending = true;
     unlock();
+}
+
+// Back to the plain "Save offline" state - used after the stored manual is
+// ERASED (nothing failed; there is simply no saved copy any more).
+void reader_view_notify_saved_reset(void)
+{
+    s_save_state = 0;
 }
 
 void reader_view_notify_saved(bool ok)

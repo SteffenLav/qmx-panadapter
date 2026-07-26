@@ -24,3 +24,8 @@ void reader_net_fetch(const char *page_rel, bool with_toc);
 // use, on a background task. Progress is reported via reader_view's status line.
 // No-op if busy, WiFi is down, or no card is mounted. Safe from the LVGL thread.
 void reader_net_save_offline(void);
+
+// Erase every stored copy of the manual: SPIFFS page/TOC caches + the whole
+// microSD offline mirror. Recovery for a cache poisoned by a captive portal
+// (hotel WiFi). Triggered by a >=3 s hold on the drawer's User Manual button.
+void reader_net_erase_all(void);
