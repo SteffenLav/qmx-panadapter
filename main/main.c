@@ -232,11 +232,22 @@ void app_main(void)
     // WiFi+SNTP runs in a background task; doesn't block boot.
     // DISABLED pending C6 firmware investigation (see CLAUDE.md / git log).
     // === BENCH EXPERIMENT - MUST be 1 in shipping builds =================
-    // Decisive test for "does WiFi kill the SD card?". Set to 0 to boot with
-    // WiFi never started; capture over SERIAL (no network needed) and see
-    // whether a mounted card still dies. Restore to 1 immediately after.
+    // Simulates a genuinely WiFi-off (POTA/field) unit so the SD archive's
+    // WiFi-off branch can be exercised. Capture over SERIAL - there is no
+    // network in that mode.
+    //   1 = normal: start WiFi, touch no settings          <- shipping
+    //   0 = test:    force wifi_enabled=false, don't start WiFi
+    //  -1 = restore: force wifi_enabled=true, start WiFi   (run once, then set 1)
+    // 0 and -1 WRITE NVS, which is why the restore step is explicit rather than
+    // automatic - a normal boot must never override a user who turned WiFi off.
     #define BENCH_WIFI_ENABLED 1
-    #if BENCH_WIFI_ENABLED
+    #if BENCH_WIFI_ENABLED != 1
+    settings_set_wifi_enabled(BENCH_WIFI_ENABLED == -1);
+    settings_flush();
+    ESP_LOGW(TAG, "BENCH: forced wifi_enabled=%d (BENCH_WIFI_ENABLED=%d)",
+             (BENCH_WIFI_ENABLED == -1), BENCH_WIFI_ENABLED);
+    #endif
+    #if BENCH_WIFI_ENABLED != 0
     panadapter_wifi_start();
     #else
     ESP_LOGW(TAG, "BENCH: WiFi deliberately NOT started (SD isolation test)");

@@ -19,6 +19,7 @@
 #include "diag_log.h"
 #include "adif_log.h"
 #include "config_io.h"
+#include "settings.h"   // wifi_enabled: the WiFi-aware mirroring gate
 #include "ui.h"
 #include "psram_task.h"
 
@@ -220,6 +221,36 @@ static bool mirror_diag(void)
     return true;
 }
 
+// True once we have deliberately stopped touching the card for this session.
+static bool s_parked = false;
+
+// Cleanly stop mirroring and release the card, leaving the completed backup on
+// it. Used when WiFi is (or is becoming) active: live mirroring provably cannot
+// survive that (hardware-verified 2026-07-26 - with WiFi never started the same
+// card mirrored flawlessly for 230 s; with WiFi on it dies within 10-140 s and
+// can never be remounted, because the MALLOC_CAP_DMA pool is ~400 B by then).
+//
+// Parking deliberately is strictly better than being killed: a teardown mid-write
+// with the diag log still open is exactly how FAT directory entries get
+// corrupted, which is the most likely origin of the garbage entries seen on the
+// operator's card. fsync before fclose is mandatory (FatFs only commits the data
+// + directory entry on f_sync/f_close).
+static void park_snapshot(void)
+{
+    if (s_log_file) {
+        fflush(s_log_file);
+        fsync(fileno(s_log_file));
+        fclose(s_log_file);
+        s_log_file = NULL;
+    }
+    bsp_sdcard_deinit(SD_MOUNT_POINT);
+    s_mounted = false;
+    s_parked  = true;
+    ui_set_sd_state(UI_SD_SNAPSHOT_ONLY);   // yellow: backup present, not mirroring
+    ESP_LOGW(TAG, "backup snapshot complete - live mirroring off while WiFi is on. "
+                  "Card is safe to remove; boot with WiFi off for continuous mirroring");
+}
+
 static void unmount(void)
 {
     if (s_log_file) { fclose(s_log_file); s_log_file = NULL; }
@@ -337,6 +368,38 @@ static void sd_archive_task(void *arg)
     }
 
     for (;;) {
+        // WiFi-aware gating. Read the user's on/off INTENT live (not
+        // wifi_is_connected) - the interference comes from esp_hosted/SDIO being
+        // active at all, which includes scanning and reconnect attempts.
+        qmx_settings_t gs;
+        settings_load_all(&gs);
+        const bool wifi_on = gs.wifi_enabled;
+
+        if (s_parked) {
+            // Nothing more to do this session. Note once if WiFi was later turned
+            // off: we still cannot resume, because the DMA-capable pool was
+            // drained during bring-up and a remount needs a contiguous block.
+            static bool s_noted_wifi_off = false;
+            if (!wifi_on && !s_noted_wifi_off) {
+                s_noted_wifi_off = true;
+                ESP_LOGW(TAG, "WiFi now off, but SD cannot be remounted this session "
+                              "(DMA pool already drained) - reboot to resume mirroring");
+            }
+            vTaskDelay(pdMS_TO_TICKS(PROBE_MS));
+            continue;
+        }
+
+        // WiFi on and the boot window closed without a mount: further probes are
+        // futile (they fail 0x101 ESP_ERR_NO_MEM regardless of the card), and
+        // retrying every 10 s forever is pure log noise. Stop cleanly instead.
+        if (wifi_on && !s_mounted) {
+            s_parked = true;
+            ui_set_sd_state(UI_SD_NONE);
+            ESP_LOGW(TAG, "no card mounted in the boot window and WiFi is up - "
+                          "further mount attempts cannot succeed; stopping probes");
+            continue;
+        }
+
         // Hold the SD mutex for the whole work burst so a concurrent web
         // download of the SD log can't interleave FatFs I/O with ours.
         xSemaphoreTake(s_sd_mutex, portMAX_DELAY);
@@ -421,6 +484,20 @@ static void sd_archive_task(void *arg)
         int burst_ms = (int)((esp_timer_get_time() - burst_t0) / 1000);
         if (burst_ms > s_burst_max_ms) s_burst_max_ms = burst_ms;
         s_burst_cnt++;
+
+        // The burst that just succeeded wrote the complete backup (qso.adi,
+        // qmx-config.txt, lotw_cert/key and the README all start dirty). If WiFi
+        // is on, park now rather than keep mirroring until the card is killed
+        // mid-write. On a WiFi unit the SD diag log loses little - the full log is
+        // available over the network at /api/log - and the POTA/no-WiFi case,
+        // which is the one that actually needs an on-card log, keeps mirroring
+        // continuously below.
+        if (wifi_on) {
+            park_snapshot();
+            xSemaphoreGive(s_sd_mutex);
+            continue;
+        }
+
         xSemaphoreGive(s_sd_mutex);
 
         // 30 s heartbeat: proves SD is alive + shows how hard it's writing, so

@@ -68,10 +68,19 @@ void ui_set_resource_monitor_text(const char *text);
 // command (POST /api/cmd {"action":"resmon"}).
 void ui_resource_monitor_toggle(void);
 
-// Bottom-bar SD-backup indicator: a small red dot (+ "SD" label) between the
-// battery voltage and the firmware version that breathes while a microSD card
-// is mounted and being mirrored (active=true), hidden when false. Driven by
-// the sd_archive task on mount/unmount, and once at boot to sync initial state.
+// Bottom-bar SD-backup indicator: a small static dot (+ "SD" label) between the
+// battery voltage and the firmware version. Static, never breathing - a card in
+// the slot is ambient state, not something to draw the eye to.
+typedef enum {
+    UI_SD_NONE = 0,        // no card found            -> dot hidden
+    UI_SD_MIRRORING,       // mounted, mirroring live   -> GREEN
+    UI_SD_SNAPSHOT_ONLY,   // boot backup written, live mirroring unavailable
+                           // (WiFi is on - see sd_archive.c) -> YELLOW
+} ui_sd_state_t;
+
+void ui_set_sd_state(ui_sd_state_t st);
+
+// Back-compat shim: true -> UI_SD_MIRRORING, false -> UI_SD_NONE.
 void ui_set_sd_active(bool active);
 
 // Persistent top-of-screen red banner shown whenever the QMX never confirmed

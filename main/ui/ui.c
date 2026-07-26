@@ -1882,10 +1882,18 @@ static void sim_border_keepalive_cb(lv_timer_t *t)
     // Reconcile the microSD-mounted bottom-bar dot here (LVGL thread, no lock
     // needed) - ui_set_sd_active() only records the wanted state. See s_sd_want.
     if (s_sd_want >= 0 && s_bot_diag_dot) {
-        bool want_show = (s_sd_want == 1);
-        bool is_hidden = lv_obj_has_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);
-        if (want_show == is_hidden) {                 // mismatch -> fix
+        // Only touch LVGL when the state actually changed: a style set can force
+        // an invalidate/redraw even when the value is unchanged (the same reason
+        // ui_push_spectrum's unconditional set_style_opa was a measurable cost).
+        static int8_t s_sd_applied = -1;
+        if (s_sd_want != s_sd_applied) {
+            s_sd_applied = s_sd_want;
+            bool want_show = (s_sd_want != 0);
             if (want_show) {
+                // GREEN = mirroring live, YELLOW = boot backup written but live
+                // mirroring unavailable while WiFi is on.
+                lv_obj_set_style_bg_color(s_bot_diag_dot,
+                        lv_color_hex(s_sd_want == 1 ? 0x30D030 : 0xE0C020), 0);
                 lv_obj_clear_flag(s_bot_diag_dot, LV_OBJ_FLAG_HIDDEN);
                 if (s_bot_diag_label) lv_obj_clear_flag(s_bot_diag_label, LV_OBJ_FLAG_HIDDEN);
             } else {
@@ -2031,9 +2039,14 @@ void ui_notify_qmx_fw_known(void)
 // thread.
 // Called from the sd_archive task (NOT the LVGL thread). Just record intent;
 // the LVGL-thread timer reconciles the actual widget (see s_sd_want).
+void ui_set_sd_state(ui_sd_state_t st)
+{
+    s_sd_want = (int8_t)st;   // 0 hide, 1 green, 2 yellow; reconciled on the LVGL thread
+}
+
 void ui_set_sd_active(bool active)
 {
-    s_sd_want = active ? 1 : 0;
+    ui_set_sd_state(active ? UI_SD_MIRRORING : UI_SD_NONE);
 }
 
 // lv_anim_delete_all() (used by screenshot capture to freeze the UI for a
