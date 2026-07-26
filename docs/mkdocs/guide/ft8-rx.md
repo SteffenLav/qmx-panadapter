@@ -57,6 +57,7 @@ Tap the **Filter** button to open the filter modal:
 - **Exclude worked before** — skip calls you've already logged QSOs with
 - **Show only CQ callers** — hide replies, show only CQ messages
 - **Skip TX1** — when you pounce a station, open with your signal report straight away instead of the grid exchange, for a quicker QSO (falls back to the normal grid exchange if the station has dropped out of the decode list)
+- **Allow grey-listing** — off by default. A station that times out two of your pounces in a row is set aside: the robot and Auto-work-pileup skip it, its decode row turns **violet**, and tapping it offers to clear it from the grey-list instead of opening the TX dialog. Handy on a busy band where one station simply never comes back. The list is held in memory only and forgotten at power-off
 - **Auto-reply priority** — Strongest SNR, Weakest SNR, Most distant grid
 - **Robot mode** — auto-answer CQ (disabled by default; see [FT8 Transmit](ft8-tx.md))
 

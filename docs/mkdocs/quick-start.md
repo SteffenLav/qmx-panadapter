@@ -72,15 +72,20 @@ You can change these anytime by swiping right from the screen edge to open the s
 
 ## Step 5b: Optional — microSD Card (station backup)
 
-Insert a microSD card (a plain **FAT32 32 GB** card is ideal) into the Tab5's slot and it automatically mirrors your whole station to `/qmx-panadapter/` on the card — a **grab-and-go backup** you can pull into a PC or another Tab5, no computer needed in the field:
+Insert a microSD card (a plain **FAT32 32 GB** card is ideal) into the Tab5's slot **before switching it on**, and it automatically mirrors your whole station to `/qmx-panadapter/` on the card — a **grab-and-go backup** you can pull into a PC or another Tab5, no computer needed in the field:
 
 - **ADIF QSO log** — mirrored after each new QSO
 - **Config export** — all settings + memory channels (restore via the web **Config** upload)
 - **LoTW certificate + key** — so a restored device can sign QSOs for LoTW
-- **Diagnostic log** — continuous rolling copy
+- **Diagnostic log** — rolling copy
 - **README.txt** — describes every file on the card
 
-A green **SD** dot in the bottom status bar confirms a card is mounted and being mirrored (absent = no card, not an error).
+The **SD** dot in the bottom status bar shows what is happening (absent = no card, which is not an error):
+
+- **Green** — mirroring continuously. This is the case with **WiFi off**, i.e. normal POTA/SOTA operating.
+- **Yellow** — your start-up backup is written and mirroring has stopped. This is the case with **WiFi on**: the card and the WiFi co-processor share a bus and can't both use it reliably, so the Tab5 takes the full backup within a few seconds of switching on and then leaves the card alone. QSOs made later in that session are written at the next start-up.
+
+> **Insert the card before switching on.** A card pushed in later isn't picked up until you restart.
 
 > ⚠️ The backup contains credentials (WiFi password, QRZ/eQSL logins, LoTW private key) — keep the card physically secure. Skipping this step is fine; your logs and settings always live in the device's own storage too.
 

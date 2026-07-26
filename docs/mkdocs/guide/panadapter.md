@@ -29,7 +29,8 @@ The panadapter is your primary view — a real-time spectrum analyser and waterf
 |------|---------|
 | Battery % | Current battery charge level |
 | FPS | Render frame rate (target 30 fps) |
-| **SD** (green dot) | A microSD card is mounted and being mirrored to `/qmx-panadapter/` on the card — a full grab-and-go station backup (see [Settings](../guide/settings.md)) |
+| **SD** (green dot) | A microSD card is mounted and being mirrored **continuously** — the case with WiFi off (see [Settings](../guide/settings.md)) |
+| **SD** (yellow dot) | A card is present and your start-up backup is written, but continuous mirroring has stopped — the case with WiFi on. Your log, config and LoTW certificate are safe on the card; later QSOs are written at the next start-up |
 | `UTC(GPS)` / `UTC(NTP)` / `UTC(FT8)` / `UTC(FT4)` | The time source **currently** in charge — GPS-disciplined QMX, WiFi/SNTP, or FT8/FT4 offline sync (RTC / manual show as `UTC(RTC)` / `UTC(MAN)`) |
 | Firmware version | Currently flashed firmware version |
 | Waterfall label | Active colour map name |

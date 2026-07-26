@@ -4,15 +4,19 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.3.1** — 2026-07-24
+**v1.3.2** — 2026-07-26
 
-A small follow-up: two decode-list columns requested by Roy KI0ER, a diagnostics fix from Paul VE3PIK's report, and UI alignment polish.
+Your QSOs get their grid squares back, the Tab5 now contributes to PSK Reporter, and the user manual is built into the firmware.
 
-- **DT and HZ columns** in the decode list (after SNR): each station's slot-timing offset in seconds — an on-time station reads ~0.0, an off-time one shows its true offset — and its audio tone within the FT8 passband. The country column becomes a compact **3-letter code** to make room.
-- **Boot diagnostics fixed for ST7121 units**: the "TAB5 BSP INFO" block used to say "ST7123" on every unit (the two chips share an I2C address); it now reports the hardware the driver actually detected. *(Reported with the fix approach by Paul VE3PIK.)*
-- **UI polish**: the "turn on your QMX" prompt no longer overlaps the FT8 left pane; the FT8 left-pane buttons align to a uniform grid; settings-drawer dropdowns are content-sized with a light-grey background and the slider tracks are half as thick.
+- **Grid squares are logged again.** Almost every logged QSO was missing its `GRIDSQUARE` field — John W5JSS measured 5 of 60, unchanged since v1.0.1. Each station's grid was stored correctly from their CQ, then wiped by the *next* message from them (a report or `RR73` carries no grid, and the empty value overwrote the good one). Fixed. This affects your ADIF log and everything built from it — LoTW, QRZ and eQSL uploads, and the decode list's KM/MI and BRG columns. *Previously logged QSOs are not retro-fixed.*
+- **PSK Reporter spotting — on by default.** The stations you decode are reported to [PSK Reporter](https://pskreporter.info), as WSJT-X does, so you appear on the map as a monitoring station. It sends your callsign and grid, plus each decoded station's callsign, grid, frequency, signal report and mode — batched at most once every five minutes, **over the internet only, never on the air**. Turn it off in the FT8 settings drawer ("Report to PSK Reporter"). It stays inert until your callsign and grid are set, and is disabled entirely in simulation mode so practice contacts never reach the public map. ⚠️ *The first report is sent 5–5½ minutes after switching on, so a short trial shows nothing. Whether the collector accepts our reports is the one thing still unconfirmed in the field — if you run FT8 with this on, please check for "QMX Panadapter" under "Software in use" at pskreporter.info and report back.*
+- **The User Manual is built into the firmware.** Settings drawer → **User Manual** now works instantly and always: no WiFi, no SD card, no download, on the very first boot. The manual can also never describe a different version than the one you're running. The green **"Save offline"** button is **gone** — along with downloading the manual and copying it to a card, none of which is needed now. An old copy on your card is simply ignored; delete `/qmx-panadapter/manual/` if you want the space back.
+- **microSD backup: explicit about what happens when.** The SD card and the WiFi co-processor share a bus and can't both use it reliably, so instead of failing at an unpredictable moment the Tab5 now picks the behaviour that works: **WiFi off** → continuous mirroring (**green** SD dot); **WiFi on** → one complete backup within seconds of switching on, then mirroring stops (**yellow** dot). Your log, config, and LoTW certificate and key are safe either way; QSOs made later in a WiFi session reach the card at the next start-up. **Insert the card before switching on** — one pushed in later isn't picked up until you restart.
+- **Grey-listing for stations that never answer** (Roy KI0ER, opt-in). Enable **"Allow grey-listing"** in the FT8 Filter editor and a station that times out two of your pounces in a row is set aside: the robot and Auto-work-pileup skip it, its row turns violet, and tapping it offers to clear it instead of opening the TX dialog. Off by default; forgotten at power-off.
+- **Pileup replies use the intelligent-Transmit laddering** (Roy KI0ER). Working a caller from the pileup now builds the correct *next* message from what that station actually last sent, instead of always opening with a signal report — which could never produce the `R`+report a station needs when they come back minutes later with a report of their own.
+- **Smaller fixes:** the auto-answer robot now runs in simulation with no radio attached; the update check asks the project site before GitHub and retries once instead of reporting no version information; a ≥3 s hold on the User Manual button clears the reader's caches; settings-drawer section heights reflow correctly; the FT8 screen gained a bottom separator line.
 
-### Installing v1.3.1
+### Installing v1.3.2
 
 1. Use the one-click flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases)
 2. Or follow [Build from Source](build/build.md)
@@ -22,6 +26,8 @@ Your settings are preserved during a normal flash.
 ---
 
 ## Previous Releases
+
+**v1.3.1** — 2026-07-24 — Two decode-list columns requested by Roy KI0ER (**DT**, the station's slot-timing offset, and **HZ**, its audio tone, with the country column compacted to a 3-letter code), a boot-diagnostics fix so ST7121 units report the hardware actually detected (Paul VE3PIK), and UI alignment polish (QMX prompt placement, FT8 left-pane grid, settings-drawer dropdowns and sliders).
 
 **v1.3.0** — 2026-07-23
 
@@ -36,7 +42,7 @@ Smarter manual FT8 operation — built around field feedback from **Roy KI0ER** 
 - **microSD file browser.** **Files → SD Files** in the web page opens a browser for the card — download logs and backups, upload, delete — without pulling the card out.
 - **User Manual on a fresh boot** now waits for WiFi instead of asking for a reboot.
 
-**v1.2.0** — 2026-07-20 — A built-in **User Manual on the Tab5 itself** (Settings drawer → User Manual): native markdown reader with a drag-to-pick two-column Contents page, offline copies to microSD (**Save offline**), and a quiet GitHub firmware-update check. Plus the FT8 pileup fix: a worked (or late-answering) station no longer lingers in the pileup. *(Thanks to Dirk DK7CVD.)*
+**v1.2.0** — 2026-07-20 — A built-in **User Manual on the Tab5 itself** (Settings drawer → User Manual): native markdown reader with a drag-to-pick two-column Contents page, offline copies to microSD (**Save offline**), and a quiet GitHub firmware-update check. *(The Save-offline mechanism was superseded in v1.3.2 — the manual now ships inside the firmware.)* Plus the FT8 pileup fix: a worked (or late-answering) station no longer lingers in the pileup. *(Thanks to Dirk DK7CVD.)*
 
 **v1.1.0** — 2026-07-19 — A years-old FT8 decode mystery solved: the panadapter used to hear 60+ stations in its first slots then collapse to a fraction; the cause was ~200–350 ms of QMX audio lost at the USB wire every slot (invisible to every counter). Fixed — full decode rate every slot now. Plus the microSD card promoted to a full grab-and-go station backup (QSO log + settings + LoTW cert/key), automatic GPS time sync (~10 ms, no toggle), a band-plan drag from the bottom bar, and an ADIF-viewer crash fix.
 
@@ -185,7 +191,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 1. **Web-UI audio streaming** — listen to the receiver in any browser on your LAN, demodulated on the Tab5. Already working in development; held for quality tuning and an overnight streaming soak
 2. **CW page** — canned-message CW TX memories, then decoded-CW display
-3. **Re-enable SD auto-archive** — cut the mount's internal-memory cost (or gate it off during FT8) so it no longer starves the decoder
+3. **Live microSD mirroring while WiFi is up** — the card and the WiFi co-processor share a DMA controller, so continuous mirroring only works with WiFi off. v1.3.2 made the behaviour explicit and reliable (one complete backup per start-up with WiFi on); making it continuous in both cases needs the underlying bus contention solved
 
 ### Phase 6.3 (FPS Recovery)
 
@@ -203,7 +209,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.2.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.3.2.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

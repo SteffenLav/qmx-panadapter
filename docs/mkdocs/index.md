@@ -13,7 +13,9 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 - **FT8 & FT4 Decoding** — Onboard decode for both modes with configurable filtering, worked-before exclusion, and priority ranking
 - **FT8 & FT4 Transmit** — Reply to CQ, run CQ, auto-QSO (robot mode), full exchange, ARRL Field Day mode
 - **ADIF Logging** — Every QSO logged locally, with QRZ Logbook, eQSL, **and ARRL LoTW** upload (LoTW QSOs are signed on the device with your own callsign certificate)
-- **microSD Auto-Archive** — Insert a card and the diagnostic log, ADIF log, and config are mirrored automatically; a green SD dot in the bottom bar confirms it's active
+- **microSD Auto-Archive** — Insert a card *before switching on* and your ADIF log, config, LoTW certificate and diagnostic log are mirrored automatically. Continuous with WiFi off (green SD dot); one complete backup per start-up with WiFi on (dot turns yellow)
+- **PSK Reporter** — Reception reports uploaded automatically so you appear on the PSK Reporter map, as WSJT-X does. On by default; one checkbox to turn off
+- **Built-in User Manual** — This entire guide ships inside the firmware: Settings drawer → User Manual, working instantly with no WiFi and no SD card
 - **Web UI** — Remote spectrum, waterfall, and control from any browser on the LAN
 - **Offline Ready** — Tab5 RTC + SNTP sync; FT8 operates without WiFi (POTA/portable)
 - **Multi-frequency Memory** — 32 memory channels (4×8 grid), any frequency/mode, not tied to a band
@@ -21,11 +23,12 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 ## Status
 
-**v1.3.1 — a complete, self-contained FT8/FT4 station with no PC in the loop.**
+**v1.3.2 — a complete, self-contained FT8/FT4 station with no PC in the loop.**
 
+- **v1.3.2 — grid squares logged again** (a long-standing bug left `GRIDSQUARE` off almost every logged QSO — John W5JSS), **PSK Reporter spotting** (on by default; sends your call/grid and the stations you decode over the internet, never on the air), the **User Manual built into the firmware** (instant, no WiFi or SD card — the "Save offline" button is gone because it is no longer needed), **grey-listing** for stations that never answer and **pileup replies** using the intelligent-Transmit laddering (both Roy KI0ER), and an explicit **microSD backup contract** (continuous with WiFi off, one backup per start-up with WiFi on)
 - **v1.3.1 — DT + HZ decode-list columns** (each station's slot-timing offset and audio tone, Roy KI0ER's request), 3-letter country codes, an ST7121 boot-diagnostics fix (Paul VE3PIK), and UI alignment polish
 - **v1.3.0 — intelligent Transmit & faster replies** (from Roy KI0ER's field feedback): tapping a decoded station sends the correct *next* message WSJT-X-double-click style, hand-run QSOs log to ADIF, replies land on the beat, and a new **Fast pounce** toggle surfaces decodes before the slot boundary so a fresh CQ can be answered in the very next slot *(on by default; not yet verified on a live band — turn it off if your decode counts drop, and please report)*. Plus a rebuilt no-radio-needed **practice simulator**, **USB mouse** support (radio unplugged), and a **web file browser** for the microSD card
-- **v1.2.0 — on-device User Manual**: Settings drawer → **User Manual** reads this whole guide on the Tab5 (a native reader with a drag-to-pick Contents page); with a microSD card it can **Save offline**, and it flags a firmware update when one is available
+- **v1.2.0 — on-device User Manual**: Settings drawer → **User Manual** reads this whole guide on the Tab5 (a native reader with a drag-to-pick Contents page), and flags a firmware update when one is available. *(As of v1.3.2 the manual is built into the firmware and always available — the original download-and-save-to-SD mechanism is gone.)*
 - **v1.1.0 — FT8 decode collapse solved**: full decode rate every slot (was ~200–350 ms of QMX audio lost at the USB wire per slot); **microSD is a full station backup** and **GPS time sync is automatic**
 - **v1.0.0 foundation — LoTW upload**: QSOs are signed on the device with your own ARRL certificate, completing the logbook trio (QRZ, eQSL, LoTW); plus the FT8 double-send fix, `<...>` callsign resolution, broken-QSO resume, Today/POTA log view, and display sleep
 - All panadapter features (spectrum, waterfall, zoom, memory, web UI) are production-ready; FT8 **and FT4** receive/transmit, ADIF logging, and all three logbook uploads are stable
@@ -35,7 +38,7 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 **New user?** Start with the [Quick Start](quick-start.md) guide — 10 minutes to on-air.
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.3.1.pdf) — a printable 40-page reference.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.3.2.pdf) — a printable 40-page reference.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

@@ -83,7 +83,7 @@ When you call CQ (or work a busy run), more than one station may answer at once 
 - Whenever one or more stations are waiting, the **ADIF-log** button on the FT8 screen becomes a **Pileup** button in a distinct colour, and reverts once the list empties.
 - Tap **Pileup** to see everyone who has called you and isn't worked yet.
 - **Hold the button to open the ADIF log** — the log stays reachable even while the button reads "Pileup" (a one-time hint appears the first time it flips).
-- Tap a station in the list to work them (the same confirmation modal as a decode-list tap), or tap the small **✕** to dismiss them without working them. Replies from the pile-up list open with a **signal report** directly — the correct opening for a station that has already called you.
+- Tap a station in the list to work them (the same confirmation modal as a decode-list tap), or tap the small **✕** to dismiss them without working them. The reply is the correct **next** message for that station, built from whatever they actually last transmitted — usually a signal report for someone who has just called you, but an `R`+report if they came back later with a report of their own (v1.3.2; the same laddering as tapping a decode-list row).
 - A station is removed from the list automatically once you start a QSO with them, and a just-completed contact's trailing 73 can't put them back.
 - Stations you've worked before still appear in the pileup unless **Exclude worked-before** is checked — the pileup follows the same rule as the auto-answer.
 

@@ -123,12 +123,16 @@ All changes are saved automatically.
 
 ## User Manual (on-device docs)
 
-The **User Manual** button at the top of the settings drawer opens this whole guide right on the Tab5 — no phone or laptop needed. It downloads the documentation over WiFi and caches it, so it's there next time even offline.
+The **User Manual** button at the top of the settings drawer opens this whole guide right on the Tab5 — no phone or laptop needed.
+
+**It is built into the firmware** (since v1.3.2), so it works immediately and always: no WiFi, no microSD card, no download, no waiting, on the very first boot. It also can never describe a different version than the one you are running, because it ships inside it.
 
 - **Contents** — a two-column list of every page. Press and slide your finger down it: a highlight bar tracks your finger, and lifting opens the highlighted page.
 - **Back** — returns to the previous page you viewed. **Exit** — leaves the manual (back to the panadapter/FT8 screen).
-- **Save offline** (only shown with a microSD card inserted) — copies the entire manual to the card, so it reads with zero internet afterwards (POTA/SOTA). When it's done the button reads "Saved offline".
-- If a newer firmware version is available on GitHub, a banner appears at the top — informational only; flashing is always your choice.
+- **Hold the drawer's User Manual button for 3 s** to clear the reader's page caches — a reset if the display ever looks wrong. The manual itself is untouched; pages are rebuilt from the firmware copy the next time you open one.
+- If a newer firmware version is available, a banner appears at the top — informational only; flashing is always your choice.
+
+> Earlier firmware downloaded the manual over WiFi and could copy it to a microSD card with a green **"Save offline"** button. That button is gone in v1.3.2 and none of it is needed any more. An old copy left on a card is simply ignored — delete `/qmx-panadapter/manual/` if you want the space back.
 
 ## Modals (Pop-up Dialogs)
 

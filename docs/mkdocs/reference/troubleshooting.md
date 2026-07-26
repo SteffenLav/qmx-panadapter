@@ -199,7 +199,7 @@ The diagnostic log is **always on** — nothing to enable.
 
 1. Reproduce the issue (let it sit for 30 seconds)
 2. In the web UI bottom bar, open the **Files** menu and click **Diagnostic download ↓** — it downloads both the live session log and the copy persisted from before the last reboot (useful if the device crashed or was power-cycled)
-3. Alternatively, if a microSD card is inserted, pull `/qmx-panadapter/qmx-log.txt` from the card
+3. Alternatively, if a microSD card is inserted, pull `/qmx-panadapter/qmx-log.txt` from the card. Note that with WiFi on this copy stops at the start-up backup — the web download above is always the complete one
 4. Post the `.txt` file on [GitHub Issues](https://github.com/SteffenLav/qmx-panadapter/issues) or the [QRPLabs Groups.io thread](https://groups.io/g/QRPLabs/topic/119565643)
 
 ### From Serial Console (Offline)

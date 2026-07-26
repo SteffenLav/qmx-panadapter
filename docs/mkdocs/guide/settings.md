@@ -82,7 +82,15 @@ Once connected, the settings show your **IP address** — use this to access the
 
 **Distance in miles** — Show the decode list's distance column in miles instead of kilometres.
 
-**FT8 Filters** — Include/exclude stations, set auto-reply priority, enable robot mode (see [FT8 Receive](ft8-rx.md) for details).
+**Report to PSK Reporter** — **On by default.** Uploads the stations you decode to [PSK Reporter](https://pskreporter.info), the same as WSJT-X, so you appear on the map as a monitoring station and other operators can see where they were heard.
+
+What is sent, over the internet only and **never on the air**: your callsign and grid square, and for each station you decode their callsign, their grid (if their message contained one), the frequency, the signal report and the mode. Reports are batched and sent at most once every five minutes.
+
+It does nothing at all until both your **callsign and grid** are set, and it is disabled outright in **Simulation Mode**, so practice contacts can never reach the public map. Uncheck this box to switch it off entirely.
+
+> The first report goes out 5–5½ minutes after switching on, so nothing appears immediately. To check it is working, look for **QMX Panadapter** under "Software in use" at [pskreporter.info/cgi-bin/pskstats.pl](https://pskreporter.info/cgi-bin/pskstats.pl).
+
+**FT8 Filters** — Include/exclude stations, set auto-reply priority, enable robot mode, grey-listing (see [FT8 Receive](ft8-rx.md) for details).
 
 **Keyboard** — M5Stack Tab5 snap-on keyboard support (if connected).
 
@@ -92,7 +100,7 @@ Once connected, the settings show your **IP address** — use this to access the
 
 ## Diagnostic Logging
 
-The diagnostic log is **always on** — there is nothing to enable. All firmware log output is captured to a 5 MB memory ring, with a rolling copy persisted to internal flash (survives a reboot or power-off) and, if a microSD card is inserted, mirrored continuously to the card. Download via:
+The diagnostic log is **always on** — there is nothing to enable. All firmware log output is captured to a 5 MB memory ring, with a rolling copy persisted to internal flash (survives a reboot or power-off) and, if a microSD card is inserted, mirrored to the card as well (see [microSD Auto-Archive](#microsd-auto-archive-station-backup) for when the card copy is written — the flash copy is always complete). Download via:
 
 - Web UI: open the **Files** menu in the bottom bar and click **Diagnostic download ↓** (downloads both the live session log and the flash-persisted copy from before the last reboot)
 - microSD card: `/qmx-panadapter/qmx-log.txt`
@@ -102,19 +110,30 @@ Useful for troubleshooting rare issues.
 
 ## microSD Auto-Archive — Station Backup
 
-Insert a microSD card (FAT32 or exFAT, any size — a plain 32 GB FAT32 card is ideal) and the Tab5 automatically mirrors your whole station to `/qmx-panadapter/` on the card. It's a **grab-and-go backup**: pull the card into a PC (or another Tab5) to back up or move your setup — no computer needed in the field.
+Insert a microSD card (FAT32 or exFAT, any size — a plain 32 GB FAT32 card is ideal) **before switching the Tab5 on** and it automatically mirrors your whole station to `/qmx-panadapter/` on the card. It's a **grab-and-go backup**: pull the card into a PC (or another Tab5) to back up or move your setup — no computer needed in the field.
 
 | File | Contents |
 |------|----------|
-| `qso.adi` | ADIF QSO log, mirrored after each new entry |
+| `qso.adi` | ADIF QSO log — after each new entry with WiFi off, otherwise at the next start-up |
 | `qmx-config.txt` | All settings + memory channels, as INI text (restore via **Config** upload) |
 | `lotw_cert.b64`, `lotw_key.b64` | Your LoTW signing certificate + private key, so a restored device can sign for LoTW |
 | `qmx-log.txt` (+`.1`) | Diagnostic log, rolling (rotated at 5 MB) |
 | `README.txt` | A plain-text description of every file, written on each mount |
 
-**No setup needed** — the Tab5 probes for a card on startup and whenever it can't reach one it expected. Insertion and removal are detected automatically.
+**Insert the card before switching the Tab5 on.** A card pushed in later is not picked up until the next start-up — the Tab5 can only claim the card during a short window early in boot.
 
-A **green SD dot** in the bottom status bar confirms a card is mounted and being mirrored. If no card is inserted, the dot is absent (not an error).
+### When the mirror runs
+
+The microSD card and the WiFi co-processor share a bus on this hardware and cannot both use it reliably. Rather than fail at an unpredictable moment, the Tab5 picks the behaviour that works:
+
+| | What happens | SD dot |
+|---|---|---|
+| **WiFi off** (POTA/SOTA) | Continuous mirroring the whole time the card is in | **Green** |
+| **WiFi on** | One complete backup within a few seconds of switching on, then mirroring stops | **Yellow** |
+
+Either way your QSO log, config, and LoTW certificate and key are backed up. With WiFi on, QSOs made later in that session reach the card at the **next start-up** — so if you have been operating with WiFi up and want them on the card now, restart the Tab5.
+
+If no card is inserted the dot is absent, which is not an error.
 
 > **⚠️ The card holds credentials.** A full backup that can *restore* a station necessarily includes secrets: `qmx-config.txt` stores your WiFi password and QRZ/eQSL logins in clear text, and `lotw_key.b64` is your LoTW **private key**. Keep the card as physically secure as a house key. (The on-card `README.txt` repeats this warning.)
 

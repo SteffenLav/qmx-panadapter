@@ -959,6 +959,72 @@ The width comes from the country column: full entity names are replaced by **3-l
 
 - The v1.3.0 notes still apply: **Fast pounce (early decode)** remains on-air-unverified — ON/OFF decodes-per-slot comparisons are welcome — and the one-off boot-time reboot is still being watched for.
 
+## v1.3.2 — 2026-07-26 — PSK Reporter, grid-square fix, the manual built in
+
+Three things worth your attention in this one: your QSOs get their grid squares back, the Tab5 now contributes reception reports to PSK Reporter (**on by default** — see below), and the user manual is built into the firmware so it works with no WiFi and no SD card at all.
+
+### Grid squares are logged again (John W5JSS)
+
+**Almost every logged QSO was missing its `GRIDSQUARE` field.** John measured 5 of 60 on v1.0.1, and it was unchanged through v1.3.1. The decode table stored each station's grid correctly from their CQ, then wiped it again on the *next* message from that station — because a report, `R`-report, `RR73` or `73` carries no grid, and the code overwrote the stored grid with the empty one instead of keeping what it had. By the time a QSO completed and the log entry was built, the grid was gone.
+
+Confirmed on the operator's own log: 5 of 34 records had a grid before the fix, and both test QSOs after it logged theirs correctly. This affects the ADIF log and everything built from it — LoTW, QRZ and eQSL uploads, and the decode list's KM/MI and BRG columns. **Previously logged QSOs are not retro-fixed**; new ones are correct.
+
+### PSK Reporter spotting — ON by default
+
+The Tab5 now reports the stations it decodes to [PSK Reporter](https://pskreporter.info), the same as WSJT-X does, so you appear on the map as a monitoring station and other operators can see where they were heard.
+
+**What is sent:** your callsign and grid square, plus for each station you decode — their callsign, their grid (if it was in the message), the frequency, the signal report, and the mode. Batched and sent at most once every five minutes. **Nothing is transmitted on the air**; this is an internet report only.
+
+**To turn it off:** FT8 settings drawer → uncheck **"Report to PSK Reporter"**. It also does nothing at all unless your callsign *and* grid are set, and it is disabled outright in simulation mode so practice contacts never reach the public map.
+
+Two problems were found and fixed before release, both of which would have been invisible in normal use because PSK Reporter never acknowledges anything:
+
+- A callsign the decoder could not fully resolve (shown as `...` in the decode list) would have been published to the public database as a literal callsign. It is now rejected, as are over-long callsigns that would otherwise have been truncated into somebody else's call.
+- The report packet violated the IPFIX padding rule in a way that depended on the *lengths* of your callsign, grid and firmware version — so roughly a quarter of stations would have had their reports silently ignored or mis-parsed, and the rest would have worked fine. Found by decoding the bytes the hardware actually emits with an independent parser (`test/psk_harness.c`), not by reading the code.
+
+**Still unconfirmed:** that the collector accepts our reports in practice. The tests prove the packets are well-formed; only an entry appearing under "Software in use" at `pskreporter.info/cgi-bin/pskstats.pl` proves the rest. **The first report is sent 5–5½ minutes after switching on**, so a short trial shows nothing and looks like a failure. If you run FT8 with this enabled, please check that page and say whether "QMX Panadapter" shows up.
+
+### The user manual is now built into the firmware
+
+Settings drawer → **User Manual** works immediately, always: no WiFi, no SD card, no download, no waiting, on the very first boot. The whole manual ships inside the firmware image (~136 KB), so it also can never describe a different version than the one you are running.
+
+The green **"Save offline"** button is **gone**, along with downloading the manual and copying it to the SD card — none of which is needed any more, and all of which could fail. If you had previously saved the manual to a card, that copy is simply ignored; you can delete `/qmx-panadapter/manual/` from the card if you want the space back.
+
+### microSD backup: what gets written, and when
+
+Behaviour here is now explicit rather than best-effort, because on this hardware the SD card and WiFi cannot reliably share the bus:
+
+- **WiFi off** (the POTA/SOTA case) — continuous mirroring, exactly as before. Verified running clean for the full length of a soak with no errors.
+- **WiFi on** — one complete backup per start-up. Your QSO log, config, and LoTW certificate and key are all on the card within about five seconds of switching on; QSOs made later in that session reach the card at the next start-up.
+
+The bottom-bar **SD dot** now has two states: **green** while mirroring continuously, **yellow** once the start-up backup is done and mirroring has stopped. The card's own `README.txt` explains this too.
+
+**Insert the card before switching on.** A card pushed in later is not picked up until the next start-up.
+
+This also removed a real hazard: previously the card was torn down at an unpredictable moment mid-write, with the log file still open — which is exactly how FAT directory entries get corrupted. The Tab5 now closes its files and steps back deliberately instead.
+
+### FT8 operating
+
+**Grey-listing for stations that never answer (Roy KI0ER, opt-in).** Enable **"Allow grey-listing"** in the FT8 Filter modal and any station that times out two pounces in a row is set aside: the robot and Auto-work-pileup skip it, its row turns violet, and tapping it offers to clear it rather than opening the TX dialog. Off by default; the list is forgotten at power-off.
+
+**Pileup replies now use the same laddering as a manual Transmit.** Working a caller from the pileup builds the correct *next* message from what that station actually last sent, instead of always starting with a signal report. That fixes the lost comeback where a station answers minutes later with a report and needs `R`+report — which the old fixed path could never produce.
+
+**The auto-answer robot now works in simulation with no QMX attached.** It was only ever ticked after a successful audio capture, so with no radio present it silently did nothing.
+
+### Smaller fixes
+
+- **Update check** now asks `tab5.lav.dk` before GitHub and retries once on a transient failure, instead of giving up and reporting no version information. (The site request doubles as an anonymous count of active devices — it is a plain file fetch with no identifying data.)
+- **Reader:** a ≥3 s hold on the User Manual button clears the reader's caches; the header shows status inline rather than over the text.
+- **UI:** settings-drawer section heights reflow correctly; the FT8 screen gained a bottom separator line.
+- Boot log now reports the built-in manual's entry count and size, so a mis-packed manual is visible in a diagnostic log instead of silently showing "page not found".
+
+#### Notes for testers
+
+- **PSK Reporter is the one thing that genuinely needs a field check** — see above. Remember the 5½-minute delay before the first report.
+- **Fast pounce (early decode)** from v1.3.0 is *still* on-air-unverified. ON/OFF decodes-per-slot comparisons on the same band and time remain the most useful report anyone can send.
+- Live SD mirroring during a WiFi session is a known limitation, not a bug to report: the underlying cause is the SD and WiFi sharing a DMA controller, which is not fixed in this release. The start-up backup is unaffected.
+- The one-off `tlsf_free` boot-time reboot from v1.3.0 was not seen again this cycle and is still being watched.
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
