@@ -15,7 +15,8 @@
 // per-session random identifier.
 //
 // Gating: the "Report decodes to PSK Reporter" setting (pskreporter_en,
-// default off), callsign+grid configured, WiFi up - and NEVER in simulation
+// default ON - same as WSJT-X ships), callsign+grid configured, WiFi up -
+// and NEVER in simulation
 // mode (the spot hook lives in the real-decode path only, and the feeder
 // additionally refuses spots while sim_mode_en is set: phantoms must not
 // reach the real world).

@@ -174,11 +174,40 @@ static bool send_datagram(const uint8_t *buf, int len)
 // Public feeder + sender task
 // ---------------------------------------------------------------------------
 
+// Is this a callsign we may publish to a public database?
+//
+// The decode path hands us whatever ft8_screen_extract_call() found, and an
+// UNRESOLVED hashed callsign legitimately arrives as "..." (ft8_lib renders a
+// 12/22-bit hash it cannot resolve as "<...>", which the extractor strips to
+// "..."). That is harmless in the station table - it matches nothing - but it
+// must never be reported as a reception report: the spot would be a bogus
+// entry in a public database that other operators rely on. WSJT-X likewise
+// reports nothing for a call it could not resolve.
+//
+// A real callsign always has at least one letter AND one digit, and never a
+// '.'; '/' is allowed so compound calls ("PJ4/K1ABC") still spot.
+static bool call_is_publishable(const char *c)
+{
+    bool has_alpha = false, has_digit = false;
+    for (; *c; c++) {
+        if (*c >= 'A' && *c <= 'Z') { has_alpha = true; continue; }
+        if (*c >= 'a' && *c <= 'z') { has_alpha = true; continue; }
+        if (*c >= '0' && *c <= '9') { has_digit = true; continue; }
+        if (*c != '/') return false;   // '.', '<', '>' or any other junk
+    }
+    return has_alpha && has_digit;
+}
+
 void pskreporter_spot(const char *call, const char *grid,
                       uint32_t freq_hz, int snr_db,
                       const char *mode, int64_t utc_sec)
 {
     if (!s_running || !call || !call[0]) return;
+    if (!call_is_publishable(call)) return;
+    // Never publish a TRUNCATED call - that reports a different station, which
+    // is worse than reporting none. 11 chars is the FT8 maximum, so this only
+    // fires on something unexpected.
+    if (strlen(call) >= sizeof(s_batch[0].call)) return;
 
     qmx_settings_t s;
     settings_load_all(&s);
