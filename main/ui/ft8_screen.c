@@ -52,7 +52,7 @@ static bool token_has_digit(const char *t, size_t len)
     return false;
 }
 
-static bool extract_remote_call(const char *msg, char *out_call, size_t cap)
+bool ft8_screen_extract_call(const char *msg, char *out_call, size_t cap)
 {
     // Locate token starts/lengths for up to 3 tokens.
     const char *t[3] = {NULL, NULL, NULL};
@@ -155,7 +155,7 @@ static bool token_looks_like_grid(const char *t, size_t len)
     return true;
 }
 
-static void extract_grid_from_text(const char *msg, char *out_grid, size_t cap)
+void ft8_screen_extract_grid(const char *msg, char *out_grid, size_t cap)
 {
     out_grid[0] = '\0';
     // Scan to last token.
@@ -185,7 +185,7 @@ void ft8_screen_record_decode(const char *text,
                               int64_t utc_sec, int dt_ms)
 {
     char call[FT8_CALL_MAX_LEN];
-    if (!extract_remote_call(text, call, sizeof(call))) {
+    if (!ft8_screen_extract_call(text, call, sizeof(call))) {
         return;
     }
     if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
@@ -209,11 +209,15 @@ void ft8_screen_record_decode(const char *text,
     e->last_snr_db = (int16_t)snr_db;
     e->last_freq  = (int16_t)freq_off;
     e->last_dt_ms = (int16_t)dt_ms;
-    // Update grid if this message contains one (don't clobber prior grid
-    // with empty when later messages omit it).
+    // Update grid ONLY if this message contains one - never clobber a stored
+    // grid with empty when later messages omit it. A leftover unguarded
+    // extract straight into e->last_grid used to do exactly that: every
+    // post-answer message (report/RR73/73 carries no grid) erased the grid
+    // their initial CQ/answer had provided, so by QSO completion the ADIF
+    // lookup found it empty - GRIDSQUARE missing from ~90% of CQ-run logs
+    // (John W5JSS field report, v1.0.1 through v1.3.1).
     char new_grid[FT8_GRID_MAX_LEN];
-    extract_grid_from_text(text, e->last_grid, FT8_GRID_MAX_LEN);
-    extract_grid_from_text(text, new_grid, FT8_GRID_MAX_LEN);
+    ft8_screen_extract_grid(text, new_grid, FT8_GRID_MAX_LEN);
     if (new_grid[0]) {
         memcpy(e->last_grid, new_grid, FT8_GRID_MAX_LEN);
     }
