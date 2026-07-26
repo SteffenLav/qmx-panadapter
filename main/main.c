@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -78,6 +79,73 @@ void app_main(void)
     settings_init();
     mem_channels_init();
     adif_log_init();
+
+    // === BENCH HARNESS - MUST be 0 in shipping builds ==================
+    // Drives an unattended simulated QSO so FT8 exchange/logging changes can be
+    // verified with no antenna, no QMX and no touch input: sim mode supplies
+    // phantom stations, the robot answers their CQ from IDLE, and the completed
+    // QSO lands in the ADIF log (fetch /api/adif). Used 2026-07-26 to verify the
+    // GRIDSQUARE fix (93106be) end-to-end: 2/2 sim QSOs logged their grid,
+    // against a 5/34 baseline in the real log on the buggy firmware.
+    //   1  = force sim + robot + grey-list ON
+    //  -1  = force them OFF **and delete the FREQ==0 sim QSOs** the run logged
+    //        (they would otherwise be uploaded to QRZ/LoTW/eQSL as real
+    //        contacts). Run -1, confirm, then reflash with 0.
+    // The settings calls PERSIST to NVS, which is why -1 exists at all.
+    #define FT8_BENCH_SIM 0
+    #if FT8_BENCH_SIM != 0
+    {
+        bool on = (FT8_BENCH_SIM > 0);
+        qmx_settings_t bs;
+        settings_load_all(&bs);
+        ft8_filters_t bf = bs.ft8_filters;
+        bf.robot_en = on;
+        settings_set_ft8_filters(&bf);
+        settings_set_sim_mode_en(on);
+        // The sim's G0ABC phantom is deliberately DEAF and the robot's picker
+        // will keep choosing it - every pounce times out and no QSO ever
+        // completes. Grey-listing is what breaks that loop (two timeouts -> the
+        // auto pickers skip it), so the bench run needs it on.
+        settings_set_greylist_en(on);
+        settings_flush();
+        ESP_LOGW(TAG, "BENCH: sim=%d robot=%d greylist=%d (FT8_BENCH_SIM=%d)",
+                 on, on, on, FT8_BENCH_SIM);
+
+        if (!on) {
+            // Same scan as the ADIF viewer's "Del N test" button: a real
+            // contact always has a CAT frequency, so FREQ==0 marks a sim QSO.
+            // Delete HIGHEST-INDEX-FIRST - adif_log_delete_record() shifts
+            // every later record down one slot.
+            int cap = adif_log_count();
+            int *idxs = cap > 0 ? heap_caps_malloc((size_t)cap * sizeof(int),
+                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) : NULL;
+            int n_test = 0;
+            if (idxs) {
+                FILE *f = fopen(adif_log_file_path(), "r");
+                if (f) {
+                    char raw[1024], freq_s[16];
+                    bool hdr = false;
+                    int rec = 0;
+                    while (fgets(raw, sizeof(raw), f) && n_test < cap) {
+                        if (!hdr) { hdr = true; continue; }
+                        int this_rec = rec++;
+                        freq_s[0] = '\0';
+                        if (adif_log_extract_field(raw, "FREQ", freq_s, sizeof(freq_s)) &&
+                            atof(freq_s) < 0.001) idxs[n_test++] = this_rec;
+                    }
+                    fclose(f);
+                }
+            }
+            int deleted = 0;
+            for (int i = n_test - 1; i >= 0; i--)
+                if (adif_log_delete_record(idxs[i])) deleted++;
+            if (idxs) heap_caps_free(idxs);
+            ESP_LOGW(TAG, "BENCH: deleted %d sim (FREQ==0) QSO record(s)", deleted);
+        }
+    }
+    #endif
+    // === END BENCH HARNESS =============================================
+
     // adif_log_init() mounted SPIFFS; now the diag log can persist to flash so
     // it survives power-off with no SD card (POTA: log in the field, analyse
     // at home). Background task, 256 KB rolling file, downloadable at
