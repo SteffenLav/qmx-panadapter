@@ -268,6 +268,13 @@ void pskreporter_init(void)
     s_rand_id = esp_random();
     if (psram_task_create(psk_task, "pskrep", 6144, NULL, 2, tskNO_AFFINITY)) {
         s_running = true;
-        ESP_LOGI(TAG, "PSK Reporter sender ready (id=0x%08lx)", (unsigned long)s_rand_id);
+        // Report the effective state at boot: it is the quickest way to tell,
+        // from a user's diagnostic log, whether spotting is actually enabled
+        // and why nothing is being reported (setting off, or no callsign/grid).
+        qmx_settings_t s;
+        settings_load_all(&s);
+        ESP_LOGI(TAG, "PSK Reporter sender ready (id=0x%08lx) - spotting %s, call='%s' grid='%s'",
+                 (unsigned long)s_rand_id, s.pskreporter_en ? "ENABLED" : "disabled",
+                 s.my_callsign, s.my_grid);
     }
 }
