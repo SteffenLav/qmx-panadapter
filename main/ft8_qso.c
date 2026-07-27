@@ -1629,7 +1629,19 @@ void ft8_qso_advance(int64_t slot_sec)
 
     if (st == FT8_QSO_WAIT_RR73) {
         // POUNCE: we sent R<report>; expect RR73/73 (then we send 73).
-        if (!found || (!got_rr73 && !got_73)) {
+        //
+        // "RRR" is the older roger form and closes the exchange exactly like
+        // RR73 - we've sent our R<report>, they've acknowledged it, all that's
+        // left is our 73. Without this the exact-string RR73/73 test below
+        // dropped "RRR" into the "they repeated their report" branch, so we
+        // re-sent R<report> every slot forever while they re-sent RRR (Roy
+        // KI0ER, 2026-07-27, working NH6L - the QSO only completed once he
+        // took over by hand). Handled here rather than folded into
+        // scan_for_response()'s got_rr73 on purpose: WAIT_ROGER above already
+        // accepts "RRR" via is_roger_token() and must keep answering it with
+        // RR73, not the 73 that got_rr73 would produce there.
+        bool got_rrr = (strcmp(report, "RRR") == 0);
+        if (!found || (!got_rr73 && !got_73 && !got_rrr)) {
             // Re-heard them repeating their report (found, but no RR73 yet):
             // refresh our R<report> to this slot's fresh SNR before re-sending,
             // same WSJT-X behaviour as the CQ-run WAIT_ROGER path above.
@@ -1637,7 +1649,8 @@ void ft8_qso_advance(int64_t slot_sec)
             register_miss("waiting for RR73");
             return;
         }
-        ESP_LOGI(TAG, "WAIT_RR73: %s sent RR73/73 - arming TX3", target);
+        ESP_LOGI(TAG, "WAIT_RR73: %s sent %s - arming TX3", target,
+                 got_rrr ? "RRR" : "RR73/73");
         if (send_next(FT8_TX_KIND_73, target, freq, slot_sec, "73", FT8_QSO_WAIT_DONE))
             ft8_status_set("QSO %s: sending 73", target);
         else {
