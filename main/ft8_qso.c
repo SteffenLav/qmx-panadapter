@@ -560,12 +560,70 @@ static bool scan_for_reply_to_me(int64_t slot_sec,
 // Make req the current outgoing message and move to st. Resets the miss
 // counter (this is only ever called on progress / start). Arming itself is
 // deferred to on_tx_complete() / the idle fallback.
+// --- "they're working someone else" hold (Roy KI0ER, 2026-07-27) -----------
+// On a busy band several stations answer the same CQ and the caller picks one.
+// If that isn't us, we used to keep re-sending TX1 at them for QSO_TIMEOUT_SLOTS
+// slots while they were visibly mid-exchange with a third party - six ~12.6 s
+// full-power bursts nobody could answer - and then grey-list them, which is a
+// false positive: the grey-list is for stations that can't HEAR us, not ones
+// that are merely busy. So while their latest message is addressed to somebody
+// else we hold: no transmission, and no missed-slot count (so no timeout and no
+// grey-listing). When they sign off (73/RR73) or CQ again, we resume.
+//
+// Bounded on purpose. Holding forever would be its own bug - a station that
+// simply vanishes mid-sentence must still time out - and an unbounded hold that
+// kept re-transmitting would be WORSE for battery than timing out. 24 slots is
+// ~6 min, comfortably longer than a full exchange plus slack.
+#define QSO_BUSY_HOLD_MAX_SLOTS 24
+static int  s_busy_holds;              // consecutive slots held; 0 = not holding
+static char s_busy_with[FT8_CALL_MAX_LEN];  // who they're working, for the status line
+
+// True if `call`'s most recent decoded message is addressed to a THIRD party.
+// Conservative: anything we can't read as "busy with someone else" returns
+// false, so an unparseable or absent message never stalls a QSO.
+// PSRAM snapshot, never a stack local - this is reachable from the capture task
+// via on_tx_complete() and from the decode task via advance(); heaping it keeps
+// it safe if it ever gets called from a small stack too (the v0.20.1 crash).
+static bool partner_busy_with(const char *call, char *with, size_t with_sz)
+{
+    if (!call || !call[0]) return false;
+    ft8_call_t *snap = heap_caps_malloc(sizeof(ft8_call_t) * FT8_CALL_TABLE_SIZE,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!snap) return false;
+    int n = 0;
+    ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+
+    bool busy = false;
+    for (int i = 0; i < n; i++) {
+        if (strcmp(snap[i].call, call) != 0) continue;
+        const char *text = snap[i].last_text;
+        // A CQ means they're free and looking - engage, don't hold.
+        if (strncmp(text, "CQ ", 3) == 0 || strcmp(text, "CQ") == 0) break;
+
+        char tok1[16], tok2[16], rest[FT8_FD_EXCH_LEN];
+        if (!split_msg3(text, tok1, sizeof tok1, tok2, sizeof tok2, rest, sizeof rest))
+            break;
+        if (!tok1[0]) break;
+        if (strcmp(tok1, s_my_call) == 0) break;   // addressed to US - engage
+        // Signing off with a third party: the frequency is about to be free, so
+        // don't hold on this - the next slot will show a CQ or a reply to us.
+        if (strcmp(rest, "73") == 0 || strcmp(rest, "RR73") == 0) break;
+        busy = true;
+        if (with && with_sz) snprintf(with, with_sz, "%s", tok1);
+        break;
+    }
+    heap_caps_free(snap);
+    return busy;
+}
+
 static void set_current(const ft8_tx_request_t *req, ft8_qso_state_t st)
 {
     lock();
     if (req) { s_cur_req = *req; s_have_cur = true; }
     s_state        = st;
     s_missed_slots = 0;
+    s_busy_holds   = 0;    // progress - any hold is over
+    s_busy_with[0] = '\0';
     unlock();
 }
 
@@ -589,6 +647,33 @@ static void rearm_current(void)
     unlock();
 
     if (!have || (!one_shot && !repeating)) return;
+
+    // Don't key up at a partner who is visibly working somebody else - this is
+    // where the wasted transmissions actually get saved (see the hold comment
+    // above). Deliberately NOT applied to:
+    //   - WAIT_DONE, so our closing 73 always goes out and the QSO completes;
+    //   - CQ, where there's no specific station to be busy;
+    //   - CQ-run sessions (from_cq), where the partner answered US - if they
+    //     wander off to someone else that's a lost QSO which should time out
+    //     normally, not something to wait through.
+    {
+        lock();
+        bool pounce_wait = !s_from_cq && s_target[0] &&
+                           (st == FT8_QSO_WAIT_RPT || st == FT8_QSO_WAIT_ROGER ||
+                            st == FT8_QSO_WAIT_RR73);
+        char tgt[FT8_CALL_MAX_LEN];
+        snprintf(tgt, sizeof tgt, "%s", s_target);
+        int holds = s_busy_holds;
+        unlock();
+
+        if (pounce_wait && holds > 0 && holds <= QSO_BUSY_HOLD_MAX_SLOTS) {
+            ESP_LOGI(TAG, "holding TX: %s is working %s (%d/%d)",
+                     tgt, s_busy_with[0] ? s_busy_with : "someone else",
+                     holds, QSO_BUSY_HOLD_MAX_SLOTS);
+            return;
+        }
+    }
+
     char e[64];
     if (!ft8_tx_arm(&req, e, sizeof(e)))
         ESP_LOGW(TAG, "rearm_current failed: %s", e);
@@ -893,6 +978,8 @@ void ft8_qso_init(void)
     s_have_cq_saved = false;
     s_from_cq       = false;
     s_partner_freq_hz = 0;
+    s_busy_holds    = 0;
+    s_busy_with[0]  = '\0';
     s_rst_sent[0]   = '\0';
     s_rst_rcvd[0]   = '\0';
     s_fd_their_exch[0] = '\0';
@@ -1058,6 +1145,8 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     s_partner_freq_hz = partner_hz;
     s_min_scan_utc  = tx1_slot + 15;
     s_missed_slots  = 0;
+    s_busy_holds    = 0;    // a fresh pounce is never mid-hold
+    s_busy_with[0]  = '\0';
     s_from_cq       = false;
     s_cur_req       = req_to_arm;   // re-send each cycle until they reply
     s_have_cur      = true;
@@ -1582,6 +1671,51 @@ void ft8_qso_advance(int64_t slot_sec)
     // their current beat (engages only if they're >threshold off the band).
     if (found) update_dt_follow(target);
 
+    // They didn't answer US - but are they visibly mid-exchange with a third
+    // party? If so this is not a missed reply, it's a busy frequency: hold
+    // WITHOUT counting a miss, so we neither time out nor grey-list a station
+    // whose only fault is being popular (Roy KI0ER). rearm_current() reads
+    // s_busy_holds and skips the transmission itself. Pounce only - CQ-run's
+    // partner answered us, so one wandering off is a lost QSO that should time
+    // out normally. Bounded: past the cap we fall through to the usual
+    // miss/timeout path so a vanished station still gives up.
+    if (!found && !from_cq && target[0] &&
+        (st == FT8_QSO_WAIT_RPT || st == FT8_QSO_WAIT_ROGER || st == FT8_QSO_WAIT_RR73)) {
+        char with[FT8_CALL_MAX_LEN] = {0};
+        if (partner_busy_with(target, with, sizeof with) &&
+            s_busy_holds < QSO_BUSY_HOLD_MAX_SLOTS) {
+            lock();
+            s_busy_holds++;
+            snprintf(s_busy_with, sizeof s_busy_with, "%s", with);
+            int holds = s_busy_holds;
+            unlock();
+            // Also cancel the burst that on_tx_complete() already armed before
+            // we knew they were busy - otherwise the first held slot still
+            // transmits (hardware-observed), and saving transmissions is the
+            // entire point. No-op if it's already ACTIVE, so a burst on air is
+            // never cut mid-message; the hold then starts from the next cycle.
+            // Releasing the hold calls arm_current_if_idle() to put it back.
+            ft8_tx_disarm();
+            ft8_status_set("QSO %s: working %s - waiting (%d/%d)",
+                           target, with[0] ? with : "someone", holds,
+                           QSO_BUSY_HOLD_MAX_SLOTS);
+            ESP_LOGI(TAG, "%s is working %s - holding, not counting a miss (%d/%d)",
+                     target, with[0] ? with : "someone", holds, QSO_BUSY_HOLD_MAX_SLOTS);
+            return;
+        }
+        // Not busy any more (or held long enough): stop holding so the next
+        // rearm_current() transmits again and misses resume counting.
+        if (s_busy_holds) {
+            ESP_LOGI(TAG, "%s free again (or hold expired) after %d slots - resuming",
+                     target, s_busy_holds);
+            lock();
+            s_busy_holds   = 0;
+            s_busy_with[0] = '\0';
+            unlock();
+            arm_current_if_idle();   // we skipped re-arms while holding
+        }
+    }
+
     qmx_settings_t qs_exch;
     settings_load_all(&qs_exch);
     bool fd_mode = qs_exch.field_day_en && qs_exch.fd_class[0] && qs_exch.fd_section[0];
@@ -1913,6 +2047,8 @@ void ft8_qso_abort(void)
     s_have_cq_saved = false;
     s_from_cq       = false;
     s_partner_freq_hz = 0;
+    s_busy_holds    = 0;
+    s_busy_with[0]  = '\0';
     s_pileup_active = false;   // an abort ends any pileup drain
     clear_dt_follow();         // ...and returns TX to the UTC/GPS beat
     unlock();
