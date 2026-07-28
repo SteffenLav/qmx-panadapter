@@ -982,7 +982,9 @@ Two problems were found and fixed before release, both of which would have been 
 - A callsign the decoder could not fully resolve (shown as `...` in the decode list) would have been published to the public database as a literal callsign. It is now rejected, as are over-long callsigns that would otherwise have been truncated into somebody else's call.
 - The report packet violated the IPFIX padding rule in a way that depended on the *lengths* of your callsign, grid and firmware version — so roughly a quarter of stations would have had their reports silently ignored or mis-parsed, and the rest would have worked fine. Found by decoding the bytes the hardware actually emits with an independent parser (`test/psk_harness.c`), not by reading the code.
 
-**Still unconfirmed:** that the collector accepts our reports in practice. The tests prove the packets are well-formed; only an entry appearing under "Software in use" at `pskreporter.info/cgi-bin/pskstats.pl` proves the rest. **The first report is sent 5–5½ minutes after switching on**, so a short trial shows nothing and looks like a failure. If you run FT8 with this enabled, please check that page and say whether "QMX Panadapter" shows up.
+**Confirmed working in the field (2026-07-27):** "QMX Panadapter v1.3.2" now appears under "Software in use" at `pskreporter.info/cgi-bin/pskstats.pl`, with reports arriving from six stations — BD4AHS, KI0ER, VE3OFA, W5JSS, W5NR and W7STF. The collector accepts our reports; nothing further is outstanding here. FT4 spots are reported as well as FT8.
+
+Two things worth knowing if yours seems not to work. **The first report is sent 5–5½ minutes after switching on**, so a short trial shows nothing and looks like a failure. And PSK Reporter never acknowledges a report, so the "Software in use" page is the only place the truth shows — third-party dashboards built on top of PSK Reporter do not always display spots that the collector did in fact accept, which is what led one operator to think reporting was broken when his spots were arriving normally.
 
 ### The user manual is now built into the firmware
 
