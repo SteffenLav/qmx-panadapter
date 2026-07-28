@@ -219,6 +219,26 @@ static void set_pending(ft8_sim_phantom_t *ph, const char *my_call,
         ph->pend_active = false;
         return;
     }
+
+    // Re-scheduling the SAME message must NOT restart its timer. We detect our
+    // own burst every slot we re-send on, so without this the pending reply is
+    // pushed forward every 30 s and, with "Fast pounce" OFF, never fires at all:
+    // the reply is due at first_slot + 16 s = T+31 while our next re-send lands
+    // at T+30 and resets it to T+45. It loses by ~1 s, forever - the QSO times
+    // out and the reply finally appears ~12 slots late the instant we stop
+    // re-sending (hardware-observed twice, 2026-07-28). With Fast pounce ON the
+    // due time is T+28 and it happened to win, which is why this hid for so
+    // long. A real operator repeating themselves doesn't restart their
+    // partner's reply timer either, so keeping the original schedule (and the
+    // remaining patience) is also the more faithful behaviour.
+    // Compared with the stored field's own capacity so a truncated pend_text
+    // can't make every comparison a miss and silently restore the bug.
+    if (ph->pend_active &&
+        strncmp(ph->pend_text, text, sizeof(ph->pend_text) - 1) == 0) {
+        ph->engaged = true;
+        return;
+    }
+
     snprintf(ph->pend_text, sizeof(ph->pend_text), "%s", text);
     ph->pend_snr       = snr;
     ph->pend_score     = score;
