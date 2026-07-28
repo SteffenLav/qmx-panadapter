@@ -78,6 +78,17 @@ typedef struct {
 // user-adjustable later; a #define is plenty for the v0.12.0 MVP.
 #define FT8_TX_CQ_DEFAULT_FREQ_HZ   1500
 
+// Usable FT8 audio passband on the QMX (Hz), and the increment tones snap to.
+// These are the bounds the clear-slot scan searches (ft8_tx.c uses them for
+// FT8_AUDIO_SCAN_MIN/MAX_HZ) and therefore the bounds any MANUAL tone entry
+// must be clamped to, so a hand-typed tone can never land somewhere the
+// automatic picker would refuse to go. 200 Hz because the QMX audio path
+// attenuates below that; 2800 Hz because edge signals decode poorly on narrow
+// receivers. 50 Hz step: an FT8 signal is 7 x 6.25 = 43.75 Hz wide.
+#define FT8_TX_TONE_MIN_HZ           200
+#define FT8_TX_TONE_MAX_HZ          2800
+#define FT8_TX_TONE_STEP_HZ           50
+
 // One-time module init (mutex creation). Call once at boot, e.g. from
 // app_main alongside ft8_screen_init(). Idempotent.
 void ft8_tx_init(void);
@@ -171,6 +182,13 @@ ft8_tx_state_t ft8_tx_get_status(char *text, size_t text_len, int *secs_until);
 // instead of mass-expiring ~60 s into a run.
 bool ft8_tx_get_parity_lock(bool *want_even);
 
+// OUR outgoing audio tone (Hz) while ARMED or ACTIVE; 0 when IDLE. This is the
+// tone WE transmit on, which for a pounce is a clear slot chosen away from the
+// partner - NOT the partner's tone (that's ft8_qso_get_priority_freq()). Shown
+// on the TX status line so the operator can see where they're transmitting
+// (Roy KI0ER: it was previously picked silently and never displayed).
+int ft8_tx_get_tone_hz(void);
+
 // Seconds until the next slot boundary matching the given parity preference,
 // for an ARMED (or about-to-be-armed) request's countdown. If match_parity is
 // true, keeps searching forward until the parity equals want_even (REPLY or
@@ -194,6 +212,20 @@ float ft8_tx_get_last_power_swr(float *power_w, float *swr);
 // empty (nothing decoded yet) or when every bin is occupied (very busy band).
 // Heap-allocates a temporary snapshot buffer; returns the default on OOM.
 int ft8_find_clear_tone_hz(void);
+
+// The occupancy bitmask the clear-slot scan above works from, exposed so the UI
+// can SHOW the operator which slots are free instead of just handing them a
+// number to trust (Roy KI0ER / operator, 2026-07-28: "how can the user know
+// what is better without seeing the actual live signals?").
+//
+// Bit i set  => the 50 Hz slot starting at FT8_TX_TONE_MIN_HZ + i*FT8_TX_TONE_STEP_HZ
+//               is occupied by a decoded station or its +/-1-slot guard band.
+// *n_slots_out    receives the number of valid bits (52 for 200-2800 Hz).
+// *n_stations_out receives how many decoded stations fed the mask. ZERO means
+//                 nothing has been heard yet, so an all-clear mask means
+//                 "unknown", not "empty band" - say so in the UI.
+// Same snapshot cost as ft8_find_clear_tone_hz_near(); safe from any task.
+uint64_t ft8_tx_get_tone_occupancy(int *n_slots_out, int *n_stations_out);
 
 // Same scan as ft8_find_clear_tone_hz(), but centred on an arbitrary
 // audio frequency instead of the fixed 1500 Hz CQ default - used to hop a

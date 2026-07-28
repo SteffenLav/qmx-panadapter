@@ -86,9 +86,11 @@ static inline void encode_tones(const uint8_t *payload, uint8_t *tones, ftx_prot
 // QMX audio path attenuates below ~200 Hz).  Each FT8 signal occupies
 // 7 × 6.25 = 43.75 Hz; we snap to 50-Hz increments, giving 52 slots that
 // fit exactly in a uint64_t bitmask.
-#define FT8_AUDIO_SCAN_MIN_HZ    200
-#define FT8_AUDIO_SCAN_MAX_HZ   2800
-#define FT8_AUDIO_SLOT_HZ         50
+// Single source of truth lives in ft8_tx.h so the manual tone entry in
+// ft8_tone_modal.c clamps to exactly the range this scan searches.
+#define FT8_AUDIO_SCAN_MIN_HZ    FT8_TX_TONE_MIN_HZ
+#define FT8_AUDIO_SCAN_MAX_HZ    FT8_TX_TONE_MAX_HZ
+#define FT8_AUDIO_SLOT_HZ        FT8_TX_TONE_STEP_HZ
 // (2800 - 200) / 50 = 52 — must be ≤ 63 for the uint64_t bitmask.
 
 // ---------------------------------------------------------------------------
@@ -217,21 +219,29 @@ int ft8_tx_seconds_until_slot(bool match_parity, bool want_even, ftx_protocol_t 
 // transient ~11 KB internal-RAM bite that often was a real contributor to
 // the WiFi co-processor link dying under load (see CLAUDE.md "config import
 // /export buffers" fix - same bug class).
-int ft8_find_clear_tone_hz_near(int center_hz)
+// Shared by the clear-slot scan and by the UI's occupancy strip: one place
+// that decides what "occupied" means, so the picker can never show the
+// operator a slot the automatic scan would disagree about. *n_stations_out is
+// how many decoded stations went into the mask (0 = nothing heard yet, so
+// everything looks free - worth saying out loud in the UI rather than
+// implying the band is empty). Returns 0 on OOM, which reads as "all clear";
+// callers that care should treat n_stations 0 as "unknown", not "empty".
+static uint64_t build_tone_occupancy(int *n_slots_out, int *n_stations_out)
 {
+    const int n_slots = (FT8_AUDIO_SCAN_MAX_HZ - FT8_AUDIO_SCAN_MIN_HZ)
+                        / FT8_AUDIO_SLOT_HZ;
+    if (n_slots_out)    *n_slots_out    = n_slots;
+    if (n_stations_out) *n_stations_out = 0;
+
     ft8_call_t *calls = heap_caps_malloc(FT8_CALL_TABLE_SIZE * sizeof(ft8_call_t),
                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!calls) return center_hz;
+    if (!calls) return 0;
 
     int n = 0;
     ft8_screen_get_all(calls, FT8_CALL_TABLE_SIZE, &n);
 
-    // Number of 50-Hz slots across [SCAN_MIN, SCAN_MAX). = 52
-    const int n_slots = (FT8_AUDIO_SCAN_MAX_HZ - FT8_AUDIO_SCAN_MIN_HZ)
-                        / FT8_AUDIO_SLOT_HZ;
-
-    // Build occupancy bitmask.  Guard bands: mark the signal's own slot
-    // plus one slot on each side as occupied.
+    // Guard bands: mark the signal's own slot plus one slot on each side,
+    // giving 150 Hz of clearance around active signals.
     uint64_t occupied = 0;
     for (int i = 0; i < n; i++) {
         int bin = ((int)calls[i].last_freq - FT8_AUDIO_SCAN_MIN_HZ)
@@ -242,6 +252,19 @@ int ft8_find_clear_tone_hz_near(int center_hz)
         }
     }
     free(calls);
+    if (n_stations_out) *n_stations_out = n;
+    return occupied;
+}
+
+uint64_t ft8_tx_get_tone_occupancy(int *n_slots_out, int *n_stations_out)
+{
+    return build_tone_occupancy(n_slots_out, n_stations_out);
+}
+
+int ft8_find_clear_tone_hz_near(int center_hz)
+{
+    int n_slots = 0, n = 0;
+    uint64_t occupied = build_tone_occupancy(&n_slots, &n);
 
     // Walk outward from the centre bin for the nearest clear slot. Prefer the
     // lower bin when both equidistant (-r first).
@@ -628,6 +651,14 @@ ft8_tx_state_t ft8_tx_get_status(char *text, size_t text_len, int *secs_until)
 
     if (secs_until) *secs_until = secs;
     return st;
+}
+
+int ft8_tx_get_tone_hz(void)
+{
+    lock();
+    int hz = (s_state == FT8_TX_IDLE) ? 0 : s_armed.audio_freq_hz;
+    unlock();
+    return hz;
 }
 
 bool ft8_tx_get_parity_lock(bool *want_even)

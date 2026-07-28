@@ -3,6 +3,7 @@
 #include "ft8_screen.h"
 #include "ft8_cq_modal.h"
 #include "ft8_filter_modal.h"
+#include "ft8_tone_modal.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -159,6 +160,8 @@ static lv_obj_t *s_bar_slot     = NULL;  // tiny countdown bar beside s_lbl_coun
 static lv_obj_t *s_lbl_heard    = NULL;
 static lv_obj_t *s_btn_cq       = NULL;  // "Call CQ" - short tap TX, long-press edits presets
 static lv_obj_t *s_cq_lbl       = NULL;  // label inside s_btn_cq (shows the active CQ message)
+static lv_obj_t *s_btn_tx_tone  = NULL;  // "TX <n> Hz" chip on the Active: row, opens the tone picker
+static lv_obj_t *s_lbl_tx_tone  = NULL;
 static lv_obj_t *s_lbl_tx       = NULL;  // TX state indicator: armed/active, tap to cancel/abort
 static lv_obj_t *s_lbl_tx_pswr  = NULL;  // cyan live PWR/SWR line, shown only while ACTIVE (LVGL v9 has no in-label recolor)
 static lv_obj_t *s_btn_override_resend = NULL;  // manual QSO override: re-send current msg
@@ -1086,6 +1089,22 @@ static void t_clock_cb(lv_timer_t *t)
         s_was_pileup = has_pileup;
     }
 
+    // TX tone chip: show the session's tone (valid between bursts too, unlike
+    // ft8_tx_get_tone_hz) and hide it entirely when nothing is running, since
+    // ft8_qso_set_tx_tone_hz() has nothing to move then.
+    if (s_btn_tx_tone && s_lbl_tx_tone) {
+        int tone = ft8_qso_get_tx_tone_hz();
+        if (tone <= 0) tone = ft8_tx_get_tone_hz();
+        if (tone > 0) {
+            char tb[24];
+            snprintf(tb, sizeof(tb), "TX %d Hz", tone);
+            lv_label_set_text(s_lbl_tx_tone, tb);
+            lv_obj_clear_flag(s_btn_tx_tone, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(s_btn_tx_tone, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+
     // Status / TX / QSO indicator — always visible.
     // Priority: ACTIVE (red) > ARMED (amber) > QSO state (cyan) > ft8_status (dim white).
     if (s_lbl_tx) {
@@ -1109,10 +1128,18 @@ static void t_clock_cb(lv_timer_t *t)
             // itself is still free to wrap across multiple lines if it's too
             // long for the label width - only the boundary BETWEEN chunks is
             // fixed, not the wrapping within a chunk.
+            // Our own audio tone gets its own line. It used to be picked
+            // silently by ft8_find_clear_tone_hz() and never shown anywhere,
+            // so the operator had no idea where they were transmitting in the
+            // passband (Roy KI0ER) - and on a clash "⚠ FREQ BUSY" named no
+            // frequency to act on. Same one-chunk-per-line rule as below.
+            int tone_hz = ft8_tx_get_tone_hz();
             if (clash)
-                snprintf(b, sizeof(b), "Transmitting:\n%s\nTAP TO ABORT\n⚠ FREQ BUSY", tx_text);
+                snprintf(b, sizeof(b), "Transmitting:\n%s\n%d Hz\nTAP TO ABORT\n⚠ FREQ BUSY",
+                         tx_text, tone_hz);
             else
-                snprintf(b, sizeof(b), "Transmitting:\n%s\nTAP TO ABORT", tx_text);
+                snprintf(b, sizeof(b), "Transmitting:\n%s\n%d Hz\nTAP TO ABORT",
+                         tx_text, tone_hz);
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx, lv_palette_main(LV_PALETTE_RED), 0);
 
@@ -1147,12 +1174,16 @@ static void t_clock_cb(lv_timer_t *t)
             bool tx_even = ((fire_ms / ft8_op_mode_slot_ms()) % 2) == 0;
             // Same one-chunk-per-line rule as the ACTIVE branch above -
             // "TAP TO CANCEL" is always its own trailing line.
+            // Tone on its own line here too - this is the state where it's
+            // still changeable (ft8_tx_arm refuses while ACTIVE), so it's the
+            // most useful moment to be able to read it.
+            int armed_tone_hz = ft8_tx_get_tone_hz();
             if (clash)
-                snprintf(b, sizeof(b), "TX armed:\n%s\n-> %s slot, ~%ds\nTAP TO CANCEL\n⚠ FREQ BUSY",
-                         tx_text, tx_even ? "EVEN" : "ODD", secs_until);
+                snprintf(b, sizeof(b), "TX armed:\n%s\n%d Hz -> %s slot, ~%ds\nTAP TO CANCEL\n⚠ FREQ BUSY",
+                         tx_text, armed_tone_hz, tx_even ? "EVEN" : "ODD", secs_until);
             else
-                snprintf(b, sizeof(b), "TX armed:\n%s\n-> %s slot, ~%ds\nTAP TO CANCEL",
-                         tx_text, tx_even ? "EVEN" : "ODD", secs_until);
+                snprintf(b, sizeof(b), "TX armed:\n%s\n%d Hz -> %s slot, ~%ds\nTAP TO CANCEL",
+                         tx_text, armed_tone_hz, tx_even ? "EVEN" : "ODD", secs_until);
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx,
                 clash ? lv_color_hex(0xFF4010) : lv_color_hex(0xFFA040), 0);
@@ -1272,6 +1303,13 @@ static void filter_btn_cb(lv_event_t *e)
     (void)e;
     ESP_LOGI(TAG, "Filter button tapped");
     ft8_filter_modal_show();  // opens the exclude-prefix + future filters modal
+}
+
+static void tx_tone_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    ESP_LOGI(TAG, "TX tone chip tapped");
+    ft8_tone_modal_show();
 }
 
 static void override_resend_cb(lv_event_t *e)
@@ -1912,6 +1950,29 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_lbl_heard, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(s_lbl_heard, &lv_font_montserrat_24, 0);
     lv_obj_set_pos(s_lbl_heard, 0, 346);
+
+    // TX tone chip, sharing the "Active: N" row rather than taking a grid row
+    // of its own: that label only uses about half the 288 px content width, so
+    // this needs no reflow of Call CQ / the TX label below (deliberate choice -
+    // see the placement discussion, 2026-07-28). x=148 w=140 is the same
+    // right-column geometry as s_btn_tx_odd / s_btn_adif above. Hidden unless
+    // there's actually a tone to show (no CQ or QSO running -> nothing to
+    // move), which is also why it can't be confused with a settings control.
+    s_btn_tx_tone = lv_btn_create(s_left_pane);
+    lv_obj_set_size(s_btn_tx_tone, 140, 34);
+    lv_obj_set_pos(s_btn_tx_tone, 148, 342);
+    lv_obj_set_style_bg_color(s_btn_tx_tone, lv_color_hex(0x263040), 0);
+    lv_obj_set_style_border_color(s_btn_tx_tone, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_border_width(s_btn_tx_tone, 1, 0);
+    lv_obj_set_style_radius(s_btn_tx_tone, 8, 0);
+    lv_obj_set_style_pad_all(s_btn_tx_tone, 0, 0);
+    lv_obj_add_event_cb(s_btn_tx_tone, tx_tone_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(s_btn_tx_tone, LV_OBJ_FLAG_HIDDEN);
+    s_lbl_tx_tone = lv_label_create(s_btn_tx_tone);
+    lv_label_set_text(s_lbl_tx_tone, "TX -- Hz");
+    lv_obj_set_style_text_color(s_lbl_tx_tone, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(s_lbl_tx_tone, &lv_font_montserrat_20, 0);
+    lv_obj_center(s_lbl_tx_tone);
 
     // TX state indicator - hidden while idle; amber/armed or red/active,
     // tap to cancel/abort. See t_clock_cb (1 Hz refresh: state, colour,

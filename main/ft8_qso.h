@@ -107,6 +107,20 @@ bool ft8_qso_cq_filter_active(void);
 // slot window (FT8_REPLY_TX_WINDOW_MS).
 bool ft8_qso_get_priority_freq(int *freq_hz_out);
 
+// OUR outgoing audio tone (Hz) for the running CQ or exchange; 0 when IDLE.
+// Unlike ft8_tx_get_tone_hz() this is valid BETWEEN bursts too (the session's
+// tone, not just an armed request's), which is what the FT8 screen's tone chip
+// displays. Compare ft8_qso_get_priority_freq() for the partner's tone.
+int ft8_qso_get_tx_tone_hz(void);
+
+// Move our outgoing audio tone mid-session (Roy KI0ER: WSJT-X lets you retune
+// your own TX and the partner doesn't care, because they track our SLOT, not
+// our tone - only audio_freq_hz changes here, parity is preserved). Re-arms the
+// current message at the new tone. Clamped to FT8_TX_TONE_MIN/MAX_HZ.
+// Fails, with a reason in *err, when a burst is ACTIVE (never mid-burst - the
+// change would half-apply) or when nothing is running to move.
+bool ft8_qso_set_tx_tone_hz(int hz, char *err, size_t err_len);
+
 // Format a coarse SNR (dB) into an FT8 report token ("-07", "+02"), clamped
 // to the standard -24..+15 range. Same convention the QSO machine itself
 // uses for cqrun_answer()/skip-TX1 reports.

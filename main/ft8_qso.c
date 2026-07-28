@@ -1936,6 +1936,60 @@ void ft8_qso_get_target(char *buf, size_t len)
     unlock();
 }
 
+int ft8_qso_get_tx_tone_hz(void)
+{
+    lock();
+    int hz = (s_state == FT8_QSO_IDLE) ? 0 : s_freq_hz;
+    unlock();
+    return hz;
+}
+
+bool ft8_qso_set_tx_tone_hz(int hz, char *err, size_t err_len)
+{
+    if (err && err_len) err[0] = '\0';
+
+    if (hz < FT8_TX_TONE_MIN_HZ || hz > FT8_TX_TONE_MAX_HZ) {
+        if (err) snprintf(err, err_len, "Tone must be %d-%d Hz",
+                          FT8_TX_TONE_MIN_HZ, FT8_TX_TONE_MAX_HZ);
+        return false;
+    }
+
+    // Never mid-burst. ft8_tx_disarm() is a no-op while ACTIVE and
+    // ft8_tx_arm() refuses outright, so attempting a move now would update our
+    // bookkeeping while the engine kept transmitting on the old tone - a
+    // half-applied change, which is worse than refusing. Roy KI0ER's request
+    // was explicitly "changeable mid-QSO but not mid-burst".
+    if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ACTIVE) {
+        if (err) snprintf(err, err_len, "Transmitting - try again after this burst");
+        return false;
+    }
+
+    lock();
+    ft8_qso_state_t st = s_state;
+    int old_hz = s_freq_hz;
+    if (st != FT8_QSO_IDLE) {
+        s_freq_hz = hz;
+        // Parity is deliberately untouched: only audio_freq_hz changes, so the
+        // request keeps its use_parity/want_even_slot and still fires in the
+        // same slot. That's what makes a mid-exchange move safe - the partner
+        // tracks our slot, not our tone (same reasoning WSJT-X relies on).
+        if (s_have_cur)      s_cur_req.audio_freq_hz  = hz;
+        if (s_have_cq_saved) s_cq_saved.audio_freq_hz = hz;  // survives a resume-CQ
+    }
+    unlock();
+
+    if (st == FT8_QSO_IDLE) {
+        if (err) snprintf(err, err_len, "No CQ or QSO running");
+        return false;
+    }
+
+    ft8_tx_disarm();          // drop the request still armed at the old tone
+    arm_current_if_idle();    // ...and re-arm the same message at the new one
+    ft8_status_set("TX tone -> %d Hz", hz);
+    ESP_LOGI(TAG, "TX tone moved %d Hz -> %d Hz (state=%d)", old_hz, hz, (int)st);
+    return true;
+}
+
 bool ft8_qso_is_busy(char *target_buf, size_t len)
 {
     lock();
