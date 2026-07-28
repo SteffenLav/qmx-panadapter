@@ -67,7 +67,17 @@ static SemaphoreHandle_t  s_lock;
 static ft8_qso_state_t    s_state          = FT8_QSO_IDLE;
 static char               s_target[FT8_CALL_MAX_LEN];   // their callsign
 static char               s_my_call[FT8_CALL_MAX_LEN];  // our callsign (uppercased)
-static int                s_freq_hz;                    // partner AF tone for our replies
+static int                s_freq_hz;                    // OUR AF tone for our own replies
+// The PARTNER's AF tone - where THEIR next message will arrive. Deliberately
+// NOT s_freq_hz: for a pounce we answer on a clear slot chosen by
+// ft8_find_clear_tone_hz() (see ft8_screen_view.c "not the CQ station's own
+// tone"), so our TX tone and their TX tone are different frequencies and were
+// conflated until 2026-07-28 - ft8_qso_get_priority_freq() handed our own tone
+// to the decode-priority reorder, aiming it ~250 Hz off the partner every time.
+// 0 = unknown, in which case callers must fall back to no hint rather than a
+// wrong one. Seeded at QSO start from the decode table, refreshed every slot we
+// hear them in scan_for_response().
+static int                s_partner_freq_hz;
 static int64_t            s_min_scan_utc;               // pounce: don't scan before TX1 fires
 static int                s_missed_slots;
 static bool               s_from_cq;                    // session started as CQ-run
@@ -412,6 +422,12 @@ static bool scan_for_response(int64_t slot_sec,
         if (strcmp(tok2, s_target)  != 0) continue; // not from them
 
         if (snr_db_out) *snr_db_out = snap[i].last_snr_db;
+        // Refresh the partner's own tone while we can actually see it. Their AF
+        // normally holds for the whole exchange, but re-reading it each slot
+        // costs nothing here (we already have the row) and tracks a partner who
+        // does move. Plain int store - same unlocked-on-the-decode-task
+        // convention as s_rst_sent below.
+        if (snap[i].last_freq > 0) s_partner_freq_hz = (int)snap[i].last_freq;
         if (strcmp(rest, "RR73") == 0) { *got_rr73 = true; return true; }
         if (strcmp(rest, "73")   == 0) { *got_73   = true; return true; }
         if (rest[0] != '\0') {
@@ -420,6 +436,29 @@ static bool scan_for_response(int64_t slot_sec,
         }
     }
     return false;
+}
+
+// Look up a station's last-heard AF tone in the decode table. Returns 0 if the
+// call isn't there (caller must treat that as "no hint", never as a frequency).
+// The ~11 KB snapshot is heap-allocated in PSRAM, NOT a stack local: this is
+// reached from ft8_qso_start() on the LVGL event-callback's ~8 KB task stack,
+// where an 11 KB frame overflows at the prologue - the v0.20.1 pounce crash.
+static int partner_tone_hz(const char *call)
+{
+    if (!call || !call[0]) return 0;
+    ft8_call_t *snap = heap_caps_malloc(sizeof(ft8_call_t) * FT8_CALL_TABLE_SIZE,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!snap) return 0;
+    int n = 0, hz = 0;
+    ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+    for (int i = 0; i < n; i++) {
+        if (strcmp(snap[i].call, call) == 0) {
+            if (snap[i].last_freq > 0) hz = (int)snap[i].last_freq;
+            break;
+        }
+    }
+    heap_caps_free(snap);
+    return hz;
 }
 
 // Returns true if `text` (a decoded message, e.g. "CQ POTA OZ1LAV JO45" or
@@ -701,6 +740,7 @@ static char             s_resume_rst_sent[8], s_resume_rst_rcvd[8];
 static char             s_resume_fd_exch[FT8_FD_EXCH_LEN];
 static bool             s_resume_from_cq;
 static int              s_resume_freq_hz;
+static int              s_resume_partner_hz;
 static int64_t          s_resume_at;        // time(NULL) at abandonment
 
 // True while we're draining the pileup (auto-work-pileup): the current QSO was
@@ -726,6 +766,7 @@ static void resume_record_save_locked(void)
     memcpy(s_resume_fd_exch,  s_fd_their_exch, sizeof(s_resume_fd_exch));
     s_resume_from_cq  = s_from_cq;
     s_resume_freq_hz  = s_freq_hz;
+    s_resume_partner_hz = s_partner_freq_hz;
     s_resume_at       = (int64_t)time(NULL);
 }
 
@@ -753,6 +794,7 @@ static void resume_restore(void)
     memcpy(s_fd_their_exch, s_resume_fd_exch, sizeof(s_fd_their_exch));
     s_from_cq      = s_resume_from_cq;
     s_freq_hz      = s_resume_freq_hz;
+    s_partner_freq_hz = s_resume_partner_hz;
     s_missed_slots = 0;
     s_min_scan_utc = 0;             // partner is audible NOW - scan immediately
     s_resume_call[0]  = '\0';
@@ -850,6 +892,7 @@ void ft8_qso_init(void)
     s_have_cur      = false;
     s_have_cq_saved = false;
     s_from_cq       = false;
+    s_partner_freq_hz = 0;
     s_rst_sent[0]   = '\0';
     s_rst_rcvd[0]   = '\0';
     s_fd_their_exch[0] = '\0';
@@ -927,6 +970,7 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     // arm unchanged and start in WAIT_ROGER, exactly like cqrun_answer()'s
     // first reply. Every other builder passes extra=NULL for REPLY (grid),
     // so this can't misfire on a decode-list or robot pounce.
+    int partner_hz = 0;   // their AF tone, for the decode-priority hint
     size_t pre_rpt_len = strnlen(tx1_req->extra_field, sizeof(tx1_req->extra_field));
     if (tx1_req->kind == FT8_TX_KIND_REPLY &&
         (tx1_req->extra_field[0] == '+' || tx1_req->extra_field[0] == '-') &&
@@ -957,6 +1001,9 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
                 if (strcmp(snap[i].call, tx1_req->target_call) == 0) {
                     snr            = snap[i].last_snr_db;
                     their_last_utc = snap[i].last_utc;
+                    // Free while we're already holding the row - saves the
+                    // partner_tone_hz() fallback scan below.
+                    if (snap[i].last_freq > 0) partner_hz = (int)snap[i].last_freq;
                     found_target   = true;
                     break;
                 }
@@ -982,6 +1029,10 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
         }
     }
 
+    // Paths that took no snapshot above (plain grid TX1, or a pre-set report)
+    // still need the partner's tone for the decode-priority hint.
+    if (partner_hz <= 0) partner_hz = partner_tone_hz(tx1_req->target_call);
+
     char arm_err[64];
     if (!ft8_tx_arm(&req_to_arm, arm_err, sizeof(arm_err))) {
         if (err) snprintf(err, err_len, "%s", arm_err);
@@ -1004,6 +1055,7 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     strncpy(s_target, tx1_req->target_call, sizeof(s_target) - 1);
     s_target[sizeof(s_target) - 1] = '\0';
     s_freq_hz       = req_to_arm.audio_freq_hz;
+    s_partner_freq_hz = partner_hz;
     s_min_scan_utc  = tx1_slot + 15;
     s_missed_slots  = 0;
     s_from_cq       = false;
@@ -1033,15 +1085,24 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     // still-live decode row rather than the pileup list itself).
     ft8_pileup_remove(tx1_req->target_call);
 
+    // Both tones are logged deliberately: ours (where we transmit) and theirs
+    // (where we listen, and the decode-priority hint). They are DIFFERENT by
+    // design - conflating them was the 2026-07-28 priority-hint bug - so a log
+    // showing only one number cannot tell you whether the hint is sane.
     if (skip_applied) {
         ft8_status_set("QSO %s: sent report %s - waiting for roger", tx1_req->target_call, first_rpt);
-        ESP_LOGI(TAG, "started QSO (pounce, skip-TX1): %s @ %d Hz report=%s, min_scan=%lld",
-                 tx1_req->target_call, req_to_arm.audio_freq_hz, first_rpt, (long long)(tx1_slot + 15));
+        ESP_LOGI(TAG, "started QSO (pounce, skip-TX1): %s our_tone=%d Hz their_tone=%d Hz report=%s, min_scan=%lld",
+                 tx1_req->target_call, req_to_arm.audio_freq_hz, partner_hz, first_rpt,
+                 (long long)(tx1_slot + 15));
     } else {
         ft8_status_set("QSO %s: TX1 sent - waiting for report", tx1_req->target_call);
-        ESP_LOGI(TAG, "started QSO (pounce): %s @ %d Hz, min_scan=%lld",
-                 tx1_req->target_call, req_to_arm.audio_freq_hz, (long long)(tx1_slot + 15));
+        ESP_LOGI(TAG, "started QSO (pounce): %s our_tone=%d Hz their_tone=%d Hz, min_scan=%lld",
+                 tx1_req->target_call, req_to_arm.audio_freq_hz, partner_hz,
+                 (long long)(tx1_slot + 15));
     }
+    if (partner_hz <= 0)
+        ESP_LOGW(TAG, "%s has no tone in the decode table - decode-priority hint disabled for this QSO",
+                 tx1_req->target_call);
     return true;
 }
 
@@ -1073,6 +1134,7 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
     s_state         = FT8_QSO_CQ;
     s_target[0]     = '\0';
     s_freq_hz       = req_copy.audio_freq_hz;
+    s_partner_freq_hz = 0;     // no partner yet; don't leak a previous pounce's tone
     s_cur_req       = req_copy;
     s_have_cur      = true;
     s_cq_saved      = req_copy;
@@ -1850,6 +1912,7 @@ void ft8_qso_abort(void)
     s_have_cur      = false;
     s_have_cq_saved = false;
     s_from_cq       = false;
+    s_partner_freq_hz = 0;
     s_pileup_active = false;   // an abort ends any pileup drain
     clear_dt_follow();         // ...and returns TX to the UTC/GPS beat
     unlock();
@@ -1913,20 +1976,31 @@ bool ft8_qso_get_priority_freq(int *freq_hz_out)
     lock();
     ft8_qso_state_t st   = s_state;
     bool             from_cq = s_from_cq;
-    int              freq    = s_freq_hz;
+    int              freq    = s_partner_freq_hz;
     unlock();
 
     // Pounce only (WAIT_RPT / WAIT_ROGER / WAIT_RR73 — WAIT_ROGER normally
     // belongs to CQ-run, see the state table in ft8_qso.h, but a skip-TX1
     // pounce starts straight in WAIT_ROGER too; the `from_cq` check above
     // already excludes the real CQ-run case, so including it here only ever
-    // matches the skip-TX1 pounce). s_freq_hz is the partner's own tone there
-    // (we called THEM at it, and by FT8 convention they keep replying on it
-    // for the whole exchange). CQ-run's s_freq_hz is OUR tone, not theirs, so
-    // it's not a useful hint for who's replying to our report — skip it there.
+    // matches the skip-TX1 pounce).
+    //
+    // Returns the PARTNER's tone (s_partner_freq_hz), which is what the caller
+    // wants: the frequency their next message will arrive on. This used to
+    // return s_freq_hz — OUR TX tone — which for a pounce is a deliberately
+    // CLEAR slot away from theirs (ft8_find_clear_tone_hz), so the decode
+    // reorder in ft8_test.c was aimed ~250 Hz off the partner and the
+    // optimisation never fired. Measured 2026-07-28: partner at 1200 Hz, our
+    // burst at 1450 Hz, hint 1450, ±25 Hz window 1425–1475.
+    //
+    // CQ-run is still skipped: there the answering station's tone isn't
+    // tracked after the initial answer, so we'd have no reliable hint anyway.
     if (from_cq) return false;
     if (st != FT8_QSO_WAIT_RPT && st != FT8_QSO_WAIT_ROGER && st != FT8_QSO_WAIT_RR73)
         return false;
+    // Unknown tone must mean "no hint" — a wrong hint is worse than none,
+    // since it front-loads whatever happens to sit at that frequency.
+    if (freq <= 0) return false;
 
     if (freq_hz_out) *freq_hz_out = freq;
     return true;

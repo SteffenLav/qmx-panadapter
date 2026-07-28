@@ -96,9 +96,12 @@ bool ft8_qso_cq_filter_active(void);
 // True when we're mid pounce-exchange and know exactly which audio tone the
 // partner's next message will arrive on (their own tone — they reply on the
 // same AF the whole exchange, standard FT8 convention). *freq_hz_out is set
-// to that tone. False for CQ-run (the caller's tone differs from ours and
-// isn't tracked after the initial answer) and outside WAIT_RPT/WAIT_ROGER/
-// WAIT_RR73 — those callers should fall back to no frequency hint.
+// to that tone. This is THEIR tone, never ours: for a pounce we deliberately
+// transmit on a clear slot away from them, so the two are different numbers -
+// returning ours here was a real bug, see ft8_qso.c. False for CQ-run (the
+// caller's tone differs from ours and isn't tracked after the initial answer),
+// outside WAIT_RPT/WAIT_ROGER/WAIT_RR73, and when their tone isn't known —
+// those callers should fall back to no frequency hint.
 // Used by ft8_test.c to decode the message we're actually waiting for FIRST,
 // so a busy band can't push our own QSO's reply past the reply-on-immediate-
 // slot window (FT8_REPLY_TX_WINDOW_MS).
