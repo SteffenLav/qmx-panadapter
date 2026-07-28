@@ -114,6 +114,13 @@ typedef struct {
     char     lotw_dxcc[8];      // DXCC entity NUMBER as digits, e.g. "221" (required for upload)
     char     lotw_cqz[4];       // CQ zone, e.g. "14" (optional, part of the QSO signature when set)
     char     lotw_ituz[4];      // ITU zone, e.g. "18" (optional, ditto)
+    // US station subdivision. Without these a US operator's uploads carry no
+    // state/county, so their QSOs earn no WAS or county award credit - for them
+    // OR for the stations they work. Both are part of the QSO signature when
+    // set. lotw_county is the county NAME ALONE ("Arlington"), never the ADIF
+    // "ST,County" form, which LoTW rejects outright.
+    char     lotw_state[4];     // 2-letter US state, e.g. "VA"
+    char     lotw_county[40];   // county name only, e.g. "Arlington"
     uint32_t lotw_uploaded_n;   // count of ADIF records already uploaded to LoTW
 } qmx_settings_t;
 
@@ -264,6 +271,12 @@ void settings_set_eqsl_uploaded_n(uint32_t n);
 void settings_set_lotw_dxcc(const char *dxcc);
 void settings_set_lotw_cqz(const char *cqz);
 void settings_set_lotw_ituz(const char *ituz);
+// US subdivision. NOTE: these share DIRTY_LOTW_DXCC's dirty bit - the 64-bit
+// dirty bitmap in settings.c is FULL (bits 0-63 all allocated), and all three
+// LoTW location fields are only ever written together (the /api/lotw_cert
+// handler and config import), so one bit covers them coherently.
+void settings_set_lotw_state(const char *state);
+void settings_set_lotw_county(const char *county);
 
 // Count of ADIF records already uploaded to LoTW (offset into the log file
 // for the next upload batch). Debounced flush.

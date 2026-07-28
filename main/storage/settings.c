@@ -80,6 +80,8 @@ static const char *TAG = "settings";
 #define KEY_LOTW_DXCC      "lotw_dxcc"
 #define KEY_LOTW_CQZ       "lotw_cqz"
 #define KEY_LOTW_ITUZ      "lotw_ituz"
+#define KEY_LOTW_STATE     "lotw_state"
+#define KEY_LOTW_COUNTY    "lotw_cnty"
 #define KEY_LOTW_UPLOADED  "lotw_upl_n"
 
 // Defaults — must match the runtime defaults used elsewhere.
@@ -333,7 +335,14 @@ static void flush_task(void *arg)
             nvs_set_i16(s_nvs, KEY_RESMON_DY, snap.resmon_dy);
         }
         if (dirty_local & DIRTY_DISP_SLEEP)    nvs_set_u8(s_nvs, KEY_DISP_SLEEP, snap.display_sleep_min);
-        if (dirty_local & DIRTY_LOTW_DXCC)     nvs_set_str(s_nvs, KEY_LOTW_DXCC, snap.lotw_dxcc);
+        // State/county ride DIRTY_LOTW_DXCC: the dirty bitmap is full (bits
+        // 0-63 all allocated) and all three are only ever written together, so
+        // one bit covers them. Re-writing an unchanged dxcc costs nothing.
+        if (dirty_local & DIRTY_LOTW_DXCC) {
+            nvs_set_str(s_nvs, KEY_LOTW_DXCC,   snap.lotw_dxcc);
+            nvs_set_str(s_nvs, KEY_LOTW_STATE,  snap.lotw_state);
+            nvs_set_str(s_nvs, KEY_LOTW_COUNTY, snap.lotw_county);
+        }
         if (dirty_local & DIRTY_LOTW_CQZ)      nvs_set_str(s_nvs, KEY_LOTW_CQZ,  snap.lotw_cqz);
         if (dirty_local & DIRTY_LOTW_ITUZ)     nvs_set_str(s_nvs, KEY_LOTW_ITUZ, snap.lotw_ituz);
         if (dirty_local & DIRTY_LOTW_UPLOADED) nvs_set_u32(s_nvs, KEY_LOTW_UPLOADED, snap.lotw_uploaded_n);
@@ -460,6 +469,8 @@ static void load_from_nvs(qmx_settings_t *out)
     out->lotw_dxcc[0] = '\0';
     out->lotw_cqz[0] = '\0';
     out->lotw_ituz[0] = '\0';
+    out->lotw_state[0] = '\0';
+    out->lotw_county[0] = '\0';
     out->lotw_uploaded_n = 0;
 
     if (!s_ready) {
@@ -577,6 +588,10 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_str(s_nvs, KEY_LOTW_CQZ, out->lotw_cqz, &sz);
     sz = sizeof(out->lotw_ituz);
     nvs_get_str(s_nvs, KEY_LOTW_ITUZ, out->lotw_ituz, &sz);
+    sz = sizeof(out->lotw_state);
+    nvs_get_str(s_nvs, KEY_LOTW_STATE, out->lotw_state, &sz);
+    sz = sizeof(out->lotw_county);
+    nvs_get_str(s_nvs, KEY_LOTW_COUNTY, out->lotw_county, &sz);
     nvs_get_u32(s_nvs, KEY_LOTW_UPLOADED, &out->lotw_uploaded_n);
 
     ESP_LOGI(TAG, "loaded: db=[%.1f..%.1f] ema=%.2f iq=%d",
@@ -1270,6 +1285,17 @@ void settings_set_lotw_cqz(const char *cqz)
 void settings_set_lotw_ituz(const char *ituz)
 {
     set_lotw_str(s_pending.lotw_ituz, sizeof(s_pending.lotw_ituz), ituz, DIRTY_LOTW_ITUZ);
+}
+
+// Both share DIRTY_LOTW_DXCC - see the flush block and settings.h.
+void settings_set_lotw_state(const char *state)
+{
+    set_lotw_str(s_pending.lotw_state, sizeof(s_pending.lotw_state), state, DIRTY_LOTW_DXCC);
+}
+
+void settings_set_lotw_county(const char *county)
+{
+    set_lotw_str(s_pending.lotw_county, sizeof(s_pending.lotw_county), county, DIRTY_LOTW_DXCC);
 }
 
 void settings_set_lotw_uploaded_n(uint32_t n)

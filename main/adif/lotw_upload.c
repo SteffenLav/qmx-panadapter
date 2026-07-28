@@ -333,12 +333,24 @@ uint8_t *lotw_build_tq8_gz(int from, int max_qsos,
         char ident[64];
         snprintf(ident, sizeof ident, "QMX-Panadapter %s",
                  esp_app_get_description()->version);
+        // Tolerate a county entered in the ADIF "ST,County" style: LoTW wants
+        // the name alone and rejects the combined form outright, so strip
+        // anything up to and including a comma rather than fail the upload on
+        // a formatting choice the operator can't be expected to know about.
+        const char *county = cfg.lotw_county;
+        const char *comma  = strchr(county, ',');
+        if (comma) {
+            county = comma + 1;
+            while (*county == ' ') county++;
+        }
         lotw_station_t st = {
             .callsign   = cfg.my_callsign,
             .dxcc       = cfg.lotw_dxcc,
             .gridsquare = cfg.my_grid,
             .cqz        = cfg.lotw_cqz,
             .ituz       = cfg.lotw_ituz,
+            .us_state   = cfg.lotw_state,
+            .us_county  = county,
             .cert_pem   = cert_pem,
         };
         tq8 = lotw_tq8_build(&st, qsos, nq, ident, sign_cb, &sctx, err, errlen);
@@ -481,7 +493,14 @@ static bool lotw_post_tq8(const uint8_t *gz, size_t gz_len,
     extract_comment(resp, "<!-- .UPL.", result, sizeof result);
     extract_comment(resp, "<!-- .UPLMESSAGE.", msg, msg_sz);
     ESP_LOGI(TAG, "LoTW result='%s' message='%.100s'", result, msg);
-    if (strcmp(result, "accepted") == 0) {
+    // SUBSTRING, not equality: TQSL's own check is "does the captured status
+    // CONTAIN DEFAULT_UPL_STATUSOK", so a decorated status (e.g. an "accepted"
+    // with a qualifier) still counts as success there. An exact compare was
+    // stricter than the reference implementation and would have reported a
+    // failure - and declined to advance the upload cursor - on a successful
+    // upload. Still matched against the extracted <!-- .UPL. --> comment only,
+    // never the raw page, so a login/landing page can't false-positive.
+    if (strstr(result, "accepted") != NULL) {
         *accepted = true;
     } else if (!msg[0]) {
         snprintf(msg, msg_sz, result[0] ? "LoTW: %s" : "unexpected LoTW response",

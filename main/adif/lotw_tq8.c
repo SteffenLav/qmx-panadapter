@@ -138,14 +138,28 @@ static char *b64_wrap(const uint8_t *data, size_t n)
 // ------------------------------------------------------------- signdata --
 
 // Station part of the sign data: the SIGN_LOTW_V2.0 sigspec's tSTATION
-// fields we support, in sigspec order (CQZ < GRIDSQUARE < ITUZ), empty
-// fields skipped. CALL/DXCC are in the tSTATION *record* but are NOT part
-// of the sign data (they're absent from the sigspec field list).
+// fields we support, in sigspec order, empty fields skipped. CALL/DXCC are in
+// the tSTATION *record* but are NOT part of the sign data (they're absent from
+// the sigspec field list).
+//
+// The sigspec order is ALPHABETICAL over the full field set:
+//   AU_STATE, CA_PROVINCE, CA_US_PARK, CN_PROVINCE, CQZ, DX_US_PARK, FI_KUNTA,
+//   GRIDSQUARE, IOTA, ITUZ, JA_CITY_GUN_KU, JA_PREFECTURE, RU_OBLAST,
+//   US_COUNTY, US_PARK, US_STATE
+// so the ones we support fall out as CQZ, GRIDSQUARE, ITUZ, US_COUNTY,
+// US_STATE. US_COUNTY/US_STATE append AFTER ITUZ, which is why adding them
+// cannot change the signature of any existing non-US station.
+//
+// Order matters absolutely: LoTW re-derives this string and verifies against
+// it, and a mismatch is SILENT - the file is accepted and queued, then the QSO
+// is dropped during processing with no error reported.
 static void signdata_station(sb_t *sb, const lotw_station_t *st)
 {
     sb_append_trimmed(sb, st->cqz);
     sb_append_trimmed(sb, st->gridsquare);
     sb_append_trimmed(sb, st->ituz);
+    sb_append_trimmed(sb, st->us_county);
+    sb_append_trimmed(sb, st->us_state);
 }
 
 // QSO part, sigspec order: BAND [BAND_RX] CALL [FREQ] [FREQ_RX] MODE
@@ -274,6 +288,9 @@ char *lotw_tq8_build(const lotw_station_t *st,
     if (!is_empty(st->gridsquare)) sb_field_nl(&out, "GRIDSQUARE", st->gridsquare);
     if (!is_empty(st->cqz))        sb_field_nl(&out, "CQZ", st->cqz);
     if (!is_empty(st->ituz))       sb_field_nl(&out, "ITUZ", st->ituz);
+    // TrustedQSL internal field names, NOT the ADIF STATE/CNTY - see lotw_tq8.h.
+    if (!is_empty(st->us_state))   sb_field_nl(&out, "US_STATE", st->us_state);
+    if (!is_empty(st->us_county))  sb_field_nl(&out, "US_COUNTY", st->us_county);
     sb_append(&out, "<eor>\n");
 
     // --- tCONTACT per QSO ---

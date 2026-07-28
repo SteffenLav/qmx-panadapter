@@ -74,6 +74,8 @@ char *config_io_export(size_t *out_len)
     APP("lotw_dxcc          = %s\n", c.lotw_dxcc);
     APP("lotw_cqz           = %s\n", c.lotw_cqz);
     APP("lotw_ituz          = %s\n", c.lotw_ituz);
+    APP("lotw_state         = %s\n", c.lotw_state);
+    APP("lotw_county        = %s\n", c.lotw_county);
     // LoTW callsign cert + private key, single-line base64 DER (full-backup
     // decision: the config file already carries wifi/qrz/eqsl secrets in
     // clear, and this makes a restore complete). Omitted when not imported.
@@ -211,6 +213,8 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "lotw_dxcc"))         settings_set_lotw_dxcc(val);
             else if (!strcasecmp(key, "lotw_cqz"))          settings_set_lotw_cqz(val);
             else if (!strcasecmp(key, "lotw_ituz"))         settings_set_lotw_ituz(val);
+            else if (!strcasecmp(key, "lotw_state"))        settings_set_lotw_state(val);
+            else if (!strcasecmp(key, "lotw_county"))       settings_set_lotw_county(val);
             else if (!strcasecmp(key, "lotw_cert"))         lotw_store_cert_b64(val);
             else if (!strcasecmp(key, "lotw_key"))          lotw_store_key_b64(val);
             else break;   // unknown key: ignore, don't count

@@ -204,6 +204,47 @@ int main(void)
         const char *exp3 = "JO65HN20MW1AW14.074FT82026-07-1412:34:56Z";
         check(sd3 && strcmp(sd3, exp3) == 0, "SIGNDATA with zones omitted matches");
         free(sd3);
+
+        // US subdivision: US_COUNTY then US_STATE, both AFTER ITUZ (the sigspec
+        // field list is alphabetical). Adding them must not disturb the station
+        // part for anyone who leaves them empty - the three checks above are the
+        // regression guard for that.
+        lotw_station_t st4 = st;
+        st4.us_state  = "VA";
+        st4.us_county = "Arlington";
+        char *sd4 = lotw_tq8_signdata(&st4, &qsos[0]);
+        const char *exp4 = "14JO65HN18ARLINGTONVA20MW1AW14.074FT82026-07-1412:34:56Z";
+        check(sd4 && strcmp(sd4, exp4) == 0, "SIGNDATA with US_COUNTY/US_STATE matches");
+        if (sd4 && strcmp(sd4, exp4)) printf("  got: %s\n  exp: %s\n", sd4, exp4);
+        free(sd4);
+
+        // INDEPENDENT VECTOR. The station portion below is taken from CardSat's
+        // LOTW_TQ8_FORMAT.md worked example, whose full signed string came from
+        // a QSO that LoTW actually ACCEPTED AND POSTED - so this is external
+        // ground truth for our station-part field ORDER, not another
+        // hand-derivation by the same author who wrote the code.
+        // Their station: CQZ 5, GRID FM18LU, ITUZ 8, US_COUNTY Arlington,
+        // US_STATE VA -> "5FM18LU8ARLINGTONVA".
+        // (Their QSO part additionally exercises BAND_RX/FREQ_RX/PROP_MODE/
+        // SAT_NAME, which a QMX cannot produce, so only the station part is
+        // comparable - it is also the part this change touches.)
+        {
+            lotw_station_t n8hm = {
+                .callsign = "N8HM", .dxcc = "291", .gridsquare = "FM18LU",
+                .cqz = "5", .ituz = "8",
+                .us_state = "VA", .us_county = "Arlington",
+                .cert_pem = cert_pem,
+            };
+            lotw_qso_t q = { .call = "X", .band = "B", .mode = "M",
+                             .freq = "", .qso_date = "D", .qso_time = "T" };
+            char *sd5 = lotw_tq8_signdata(&n8hm, &q);
+            const char *pfx = "5FM18LU8ARLINGTONVA";
+            check(sd5 && strncmp(sd5, pfx, strlen(pfx)) == 0,
+                  "station part matches CardSat's LoTW-accepted vector");
+            if (sd5 && strncmp(sd5, pfx, strlen(pfx)))
+                printf("  got: %s\n  exp prefix: %s\n", sd5, pfx);
+            free(sd5);
+        }
     }
 
     // --- build the TQ8 ---

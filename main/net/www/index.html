@@ -465,6 +465,13 @@
         <label>CQ zone <input type="text" id="lotw-cqz" inputmode="numeric" size="3" style="margin-left:4px"></label>
         <label style="margin-left:16px">ITU zone <input type="text" id="lotw-ituz" inputmode="numeric" size="3" style="margin-left:4px"></label>
         <span style="color:#888"> (optional)</span>
+        <br><br>
+        <label>US state <input type="text" id="lotw-state" size="3" maxlength="2" style="margin-left:4px; text-transform:uppercase"></label>
+        <label style="margin-left:16px">County <input type="text" id="lotw-county" size="18" style="margin-left:4px"></label>
+        <br><span style="color:#888">US stations only, and only if your TQSL station location has them. Without
+        these your QSOs carry no state/county, so they earn no Worked&nbsp;All&nbsp;States or county
+        credit &mdash; for you or for the stations you work. County is the <b>name alone</b>
+        (e.g.&nbsp;Arlington), not &ldquo;VA,Arlington&rdquo;.</span>
         <div id="lotw-err" style="color:#ff6055; min-height:20px; margin-top:10px;"></div>
         <div style="text-align:right; margin-top:8px;">
           <button id="lotw-back" class="bot-btn" style="cursor:pointer; float:left" title="Back to the instructions">&larr; Back</button>
@@ -786,8 +793,17 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
   const dxcc = document.getElementById("lotw-dxcc").value.trim();
   const cqz  = document.getElementById("lotw-cqz").value.trim();
   const ituz = document.getElementById("lotw-ituz").value.trim();
+  const state = document.getElementById("lotw-state").value.trim().toUpperCase();
+  /* County name only: LoTW rejects the combined "VA,Arlington" form outright.
+     Strip a leading "ST," here as well as on the device, so a paste from an
+     ADIF MY_CNTY field just works. */
+  let county = document.getElementById("lotw-county").value.trim();
+  const cComma = county.indexOf(",");
+  if (cComma >= 0) county = county.slice(cComma + 1).trim();
   if (!file) { errEl.textContent = "Pick your .p12 file first."; return; }
   if (!/^[0-9]{1,3}$/.test(dxcc)) { errEl.textContent = "DXCC entity number is required (digits only)."; return; }
+  if (state && !/^[A-Z]{2}$/.test(state)) { errEl.textContent = "US state must be the 2-letter abbreviation (e.g. VA)."; return; }
+  if (county && !state) { errEl.textContent = "A county needs its state too - fill in US state."; return; }
   const btn = document.getElementById("lotw-import");
   btn.disabled = true;
   btn.textContent = "Working…";
@@ -795,7 +811,8 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
     const parsed = await lotwParseP12(file, pass);
     const r = await fetch("/api/lotw_cert", {
       method: "POST",
-      body: JSON.stringify({ cert: parsed.cert, key: parsed.key, dxcc: dxcc, cqz: cqz, ituz: ituz }),
+      body: JSON.stringify({ cert: parsed.cert, key: parsed.key, dxcc: dxcc, cqz: cqz,
+                             ituz: ituz, state: state, county: county }),
     });
     if (!r.ok) throw new Error("Tab5 rejected the import (HTTP " + r.status + ")");
     lotwReady = true;

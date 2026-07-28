@@ -605,6 +605,10 @@ static esp_err_t lotw_cert_handler(httpd_req_t *req)
     const char *dxcc = cJSON_GetStringValue(cJSON_GetObjectItem(root, "dxcc"));
     const char *cqz  = cJSON_GetStringValue(cJSON_GetObjectItem(root, "cqz"));
     const char *ituz = cJSON_GetStringValue(cJSON_GetObjectItem(root, "ituz"));
+    // US subdivision - only meaningful for US stations, omitted by everyone
+    // else. Without them a US operator's QSOs earn no WAS/county credit.
+    const char *state  = cJSON_GetStringValue(cJSON_GetObjectItem(root, "state"));
+    const char *county = cJSON_GetStringValue(cJSON_GetObjectItem(root, "county"));
     bool ok = true;
     if (cert && key && cert[0] && key[0]) {
         ok = lotw_store_cert_b64(cert) == ESP_OK &&
@@ -619,9 +623,17 @@ static esp_err_t lotw_cert_handler(httpd_req_t *req)
         // server-side duplicates.
         if (ok) settings_set_lotw_uploaded_n(0);
     }
-    if (dxcc) settings_set_lotw_dxcc(dxcc);
-    if (cqz)  settings_set_lotw_cqz(cqz);
-    if (ituz) settings_set_lotw_ituz(ituz);
+    if (dxcc)   settings_set_lotw_dxcc(dxcc);
+    if (cqz)    settings_set_lotw_cqz(cqz);
+    if (ituz)   settings_set_lotw_ituz(ituz);
+    // Only apply when NON-EMPTY. The form doesn't pre-fill (nor do dxcc/cqz/
+    // ituz), and Ctrl-click re-runs this whole flow for a cert renewal ~every
+    // 3 years - so an empty box here means "I didn't retype it", not "clear
+    // it". Wiping the state silently costs the operator WAS/county credit from
+    // then on, which is exactly the failure this feature exists to fix. Clear
+    // them deliberately via a config import (lotw_state = ) if ever needed.
+    if (state  && state[0])  settings_set_lotw_state(state);
+    if (county && county[0]) settings_set_lotw_county(county);
     cJSON_Delete(root);
 
     if (!ok) return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "store failed");

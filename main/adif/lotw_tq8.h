@@ -32,6 +32,14 @@ typedef struct {
     const char *gridsquare;  // e.g. "JO65HN" (NULL/"" = omit)
     const char *cqz;         // CQ zone, e.g. "14" (NULL/"" = omit)
     const char *ituz;        // ITU zone, e.g. "18" (NULL/"" = omit)
+    // US subdivision (NULL/"" = omit). Field names in the tSTATION record are
+    // TrustedQSL's INTERNAL names US_STATE / US_COUNTY, NOT the ADIF STATE /
+    // CNTY: emit ADIF names and LoTW reports "ADIF field data length overflow",
+    // rejects the whole tSTATION, and orphans every tCONTACT in the file.
+    const char *us_state;    // 2-letter, e.g. "VA"
+    const char *us_county;   // county NAME ALONE, e.g. "Arlington" - the combined
+                             // ADIF "VA,Arlington" form is rejected as
+                             // "US_COUNTY: Invalid value in field".
     const char *cert_pem;    // callsign certificate, full PEM incl. BEGIN/END lines (required)
 } lotw_station_t;
 
