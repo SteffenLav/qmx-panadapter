@@ -23,6 +23,7 @@
 #include "ft8_tx.h"
 #include "ft8_qso.h"
 #include "ui/ft8_screen.h"
+#include "ft8_pileup.h"
 #include "storage/settings.h"
 #include "ft8/message.h"
 
@@ -381,6 +382,15 @@ static void ft8_sim_task(void *arg)
                     s_phantoms[i].engaged     = false;
                     s_phantoms[i].pend_active = false;
                 }
+                // Wipe the phantoms out of the decode list and pileup too.
+                // Without this they lingered on screen after the toggle - up to
+                // FT8_ROW_STALE_SEC of fake stations sitting in a list the
+                // operator has just told us is supposed to be real, which is
+                // both confusing and tappable (a pounce at a station that no
+                // longer exists). Safe from this task: both take their own
+                // mutex, and the view rebuilds from the 1 Hz refresh.
+                ft8_screen_clear();
+                ft8_pileup_clear();
             }
             last_tx_slot = -1;
             continue;

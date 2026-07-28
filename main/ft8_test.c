@@ -67,6 +67,7 @@
 #include "storage/settings.h"
 #include "ui/ui_mode.h"
 #include "ui/ft8_screen.h"
+#include "ft8_pileup.h"
 #include "ui/ft8_screen_view.h"
 #include "ft8_tx.h"
 #include "ft8_qso.h"
@@ -105,10 +106,27 @@ void ft8_op_mode_set(ft8_op_mode_t m)
 #if FT4_MODE_DISABLED
     m = FT8_OP_MODE_FT8;   // see FT4_MODE_DISABLED's comment in ft8_test.h
 #endif
+    // Changing sub-mode invalidates everything already on screen: the two
+    // protocols have different slot lengths, so rows decoded under the old
+    // timing describe a band that no longer exists as far as the new engine is
+    // concerned - and a stale row is tappable, i.e. a pounce at a station we
+    // can no longer hear on this timing. The pileup goes with it for the same
+    // reason. Done HERE rather than at the call site so a future way of
+    // changing sub-mode can't forget it (apply_freq_preset() in
+    // ft8_screen_view.c also clears, which additionally covers a plain band
+    // change - the harmless overlap is deliberate).
+    // Guarded on an ACTUAL change so re-selecting the current mode, or a
+    // no-op coercion under FT4_MODE_DISABLED, doesn't wipe a live list.
+    bool changed = (s_op_mode_loaded && s_op_mode != m);
     s_op_mode = m;
     s_op_mode_loaded = true;   // a deliberate set always wins over the lazy load
     settings_set_ft8_op_mode((uint8_t)m);   // sticky across reboot (debounced flush)
     ESP_LOGI(TAG, "operating sub-mode -> %s", m == FT8_OP_MODE_FT4 ? "FT4" : "FT8");
+    if (changed) {
+        ft8_screen_clear();
+        ft8_pileup_clear();
+        ESP_LOGI(TAG, "sub-mode changed - decode list and pileup cleared");
+    }
 }
 
 ft8_op_mode_t ft8_op_mode_get(void)
