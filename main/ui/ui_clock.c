@@ -50,6 +50,10 @@ void ui_clock_set_time(ui_clock_t *clk, int h, int m, int s)
 #define BOW_R_INNER  11
 #define BOW_R_OUTER  16
 #define BOW_WIDTH     3
+// The outer bow is lifted clear of the inner one rather than sitting a bare
+// radius-step away: at this size the two arcs' ends nearly touched, which read
+// as one thick bow instead of two countable elements.
+#define BOW_OUTER_LIFT 2
 
 // LVGL angles: 0 deg = 3 o'clock, increasing clockwise. A fan pointing
 // straight up (12 o'clock = 270 deg) spanning 120 deg = 210..330.
@@ -88,7 +92,7 @@ void ui_wifi_fan_init(ui_wifi_fan_t *f, lv_obj_t *parent,
                       lv_coord_t cx, lv_coord_t cy_dot, lv_color_t color)
 {
     // Bows first, dot last, so the dot is drawn over the inner bow's ends.
-    f->bow[1] = make_bow(parent, cx, cy_dot, BOW_R_OUTER, color);
+    f->bow[1] = make_bow(parent, cx, cy_dot - BOW_OUTER_LIFT, BOW_R_OUTER, color);
     f->bow[0] = make_bow(parent, cx, cy_dot, BOW_R_INNER, color);
 
     f->dot = lv_obj_create(parent);
@@ -108,7 +112,7 @@ void ui_wifi_fan_init(ui_wifi_fan_t *f, lv_obj_t *parent,
 void ui_wifi_fan_set_x(ui_wifi_fan_t *f, lv_coord_t cx)
 {
     if (!f->dot) return;
-    lv_obj_set_pos(f->bow[1], cx - BOW_R_OUTER, f->cy - BOW_R_OUTER);
+    lv_obj_set_pos(f->bow[1], cx - BOW_R_OUTER, f->cy - BOW_R_OUTER - BOW_OUTER_LIFT);
     lv_obj_set_pos(f->bow[0], cx - BOW_R_INNER, f->cy - BOW_R_INNER);
     lv_obj_set_pos(f->dot,    cx - DOT_D / 2,   f->cy - DOT_D / 2);
 }

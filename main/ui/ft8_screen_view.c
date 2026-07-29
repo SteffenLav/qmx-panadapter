@@ -1919,7 +1919,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
 
         s_mini_strip = lv_obj_create(s_left_pane);
         lv_obj_set_size(s_mini_strip, MINI_STRIP_W, MINI_STRIP_H);
-        lv_obj_set_pos(s_mini_strip, 0, 144);
+        lv_obj_set_pos(s_mini_strip, 0, 149);   // 5 px clear of the countdown bar above
         lv_obj_set_style_bg_color(s_mini_strip, lv_color_hex(0x11141a), 0);
         lv_obj_set_style_bg_opa(s_mini_strip, LV_OPA_COVER, 0);
         lv_obj_set_style_border_color(s_mini_strip, lv_color_hex(0x555555), 0);
@@ -1957,7 +1957,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // out (operator, 2026-07-29).
     s_btn_parity = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_parity, 140, 52);
-    lv_obj_set_pos(s_btn_parity, 0, 178);
+    lv_obj_set_pos(s_btn_parity, 0, 183);
     lv_obj_set_style_bg_color(s_btn_parity, lv_color_hex(0x303044), 0);
     lv_obj_set_style_border_width(s_btn_parity, 0, 0);
     lv_obj_set_style_radius(s_btn_parity, 8, 0);
@@ -1975,7 +1975,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // the fill stays distinct from the parity button's three meaningful fills.
     s_btn_tx_tone = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_tx_tone, 140, 52);
-    lv_obj_set_pos(s_btn_tx_tone, 148, 178);
+    lv_obj_set_pos(s_btn_tx_tone, 148, 183);
     lv_obj_set_style_bg_color(s_btn_tx_tone, lv_color_hex(0x263040), 0);
     lv_obj_set_style_border_color(s_btn_tx_tone, lv_color_hex(UI_COLOR_PRIMARY), 0);
     lv_obj_set_style_border_width(s_btn_tx_tone, 2, 0);
@@ -1995,7 +1995,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // gets a darker blue fill to read as the secondary of the pair.
     s_btn_filter = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_filter, 140, 60);
-    lv_obj_set_pos(s_btn_filter, 0, 238);  // 8 px below the TX row (uniform grid gap)
+    lv_obj_set_pos(s_btn_filter, 0, 243);  // 8 px below the TX row (uniform grid gap)
     lv_obj_set_style_bg_color(s_btn_filter, lv_color_hex(UI_COLOR_PRIMARY), 0);  // pale blue
     lv_obj_set_style_border_color(s_btn_filter, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
     lv_obj_set_style_border_width(s_btn_filter, 2, 0);
@@ -2009,7 +2009,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
 
     s_btn_adif = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_adif, 140, 60);
-    lv_obj_set_pos(s_btn_adif, 148, 238);
+    lv_obj_set_pos(s_btn_adif, 148, 243);
     lv_obj_set_style_bg_color(s_btn_adif, lv_color_hex(0x163d5e), 0);  // darker blue
     lv_obj_set_style_border_color(s_btn_adif, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
     lv_obj_set_style_border_width(s_btn_adif, 2, 0);
@@ -2033,7 +2033,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // the two steps of the flow together visually.
     s_btn_cq = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_cq, 288, 60);
-    lv_obj_set_pos(s_btn_cq, 0, 306);
+    lv_obj_set_pos(s_btn_cq, 0, 311);
     lv_obj_set_style_bg_color(s_btn_cq, lv_color_hex(0x2e8b3a), 0);
     lv_obj_set_style_border_color(s_btn_cq, lv_color_hex(0x4caf50), 0);
     lv_obj_set_style_border_width(s_btn_cq, 2, 0);
@@ -2065,7 +2065,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_label_set_long_mode(s_lbl_tx, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_lbl_tx, 288);
-    lv_obj_set_pos(s_lbl_tx, 0, 374);   // the "Active: N" line paid for the mini strip above
+    lv_obj_set_pos(s_lbl_tx, 0, 379);   // the "Active: N" line paid for the mini strip above
 
     // Live TX PWR/SWR line. Separate label (cyan) aligned just under s_lbl_tx:
     // LVGL v9 dropped in-label recolor markup, so a distinct colour from the

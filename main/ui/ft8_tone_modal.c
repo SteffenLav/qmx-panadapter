@@ -32,11 +32,12 @@
 
 static const char *TAG = "ft8_tone_modal";
 
-// Strip geometry. 52 slots at 21 px = 1092, inside an 1180-wide panel (pad 24
-// -> 1132 usable) on a 1280 px screen. Cells are deliberately as wide as the
-// screen allows: this is a finger target in the field, and at the original
-// 16 px they were too fine to hit confidently. Rough taps are recoverable
-// anyway via -50/+50 once the marker shows where you landed.
+// Strip geometry. 52 slots at 21 px = 1092, and the panel is sized to exactly
+// that plus its 24 px padding (1140) so the strip - and everything else laid
+// out relative to it - is centred in the window with no per-element offsets.
+// Cells are deliberately as wide as that allows: this is a finger target in the
+// field, and at the original 16 px they were too fine to hit confidently. Rough
+// taps are recoverable anyway via -50/+50 once the marker shows where you landed.
 #define STRIP_SLOTS_MAX  64
 #define STRIP_CELL_W     21
 #define STRIP_CELL_GAP    0
@@ -53,7 +54,10 @@ static const char *TAG = "ft8_tone_modal";
 #define COL_PARTNER   FT8_TONE_COL_PARTNER
 // Light grey while a finger is down and dragging: "you are moving this, nothing
 // is committed yet". Deliberately far from COL_UNKNOWN's dark grey so a drag
-// can't be mistaken for an unknown slot.
+// can't be mistaken for an unknown slot. Kept light grey by the operator's
+// explicit decision (2026-07-29) after COL_PICK became white - do not "fix"
+// this to a contrasting hue; the marker also grows while dragging, so size
+// carries the state even where the two greys read as similar.
 #define COL_DRAG      0xD0D4DA
 
 static lv_obj_t *s_modal      = NULL;
@@ -213,14 +217,14 @@ static void refresh_view(void)
         if (s_sel_hold)
             snprintf(nb, sizeof(nb), "Every CQ and reply goes out on %d Hz", s_sel_hz);
         else
-            snprintf(nb, sizeof(nb), "TX moves to whichever slot is free (as now)");
+            snprintf(nb, sizeof(nb), "TX moves to whichever slot is free");
         lv_label_set_text(s_hold_note, nb);
     }
 
     if (s_partner) {
         if (partner_hz > 0) {
             char pb[48];
-            snprintf(pb, sizeof(pb), "Partner (cyan) is on %d Hz", partner_hz);
+            snprintf(pb, sizeof(pb), "Partner (purple) is on %d Hz", partner_hz);
             lv_label_set_text(s_partner, pb);
         } else {
             lv_label_set_text(s_partner, "");
@@ -390,7 +394,7 @@ static void modal_build(void)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 
     s_panel = lv_obj_create(s_modal);
-    lv_obj_set_size(s_panel, 1180, 660);
+    lv_obj_set_size(s_panel, 1140, 660);   // = strip_w + 2*pad; see the geometry note above
     lv_obj_align(s_panel, LV_ALIGN_CENTER, 0, 0);
     lv_obj_set_style_bg_color(s_panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(s_panel, LV_OPA_COVER, 0);
@@ -471,7 +475,7 @@ static void modal_build(void)
     // the operator immediately asked whether the cyan bar was their own tone -
     // it's the partner's. An unlabelled colour on a picker is a trap.
     lv_obj_t *legend = lv_label_create(s_panel);
-    lv_label_set_text(legend, "amber = YOUR tone      cyan = partner's tone      "
+    lv_label_set_text(legend, "white = YOUR tone      purple = partner's tone      "
                               "green = free      red = busy      "
                               "touch and drag to pick");
     lv_obj_set_style_text_color(legend, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
@@ -481,16 +485,21 @@ static void modal_build(void)
     // ---- nudge / readout row ----
     // Row geometry derives from the strip width so it stays centred if the slot
     // count or cell width ever changes.
-    const int row_y     = 196;
+    const int row_y     = 226;   // legend + 30: see the note on BELOW_LEGEND_DY
     const int nudge_w   = 140;
     const int readout_w = 400;
     const int readout_x = (strip_w - readout_w) / 2;
 
-    make_btn(s_panel, nudge_w, 80, LV_ALIGN_TOP_LEFT, 0, row_y, UI_COLOR_PRIMARY,
-             "-50", &lv_font_montserrat_28, step_cb,
+    // Nudges sit halfway between the readout and the ends of the strip rather
+    // than hard against those ends: they belong to the readout they modify, and
+    // at arm's length they read as unrelated controls.
+    const int nudge_lx = (readout_x - nudge_w) / 2;
+    const int nudge_rx = readout_x + readout_w + nudge_lx;
+    make_btn(s_panel, nudge_w, 80, LV_ALIGN_TOP_LEFT, nudge_lx, row_y, UI_COLOR_PRIMARY,
+             "-50", &lv_font_montserrat_32, step_cb,
              (void *)(intptr_t)(-FT8_TX_TONE_STEP_HZ));
-    make_btn(s_panel, nudge_w, 80, LV_ALIGN_TOP_LEFT, strip_w - nudge_w, row_y,
-             UI_COLOR_PRIMARY, "+50", &lv_font_montserrat_28, step_cb,
+    make_btn(s_panel, nudge_w, 80, LV_ALIGN_TOP_LEFT, nudge_rx, row_y,
+             UI_COLOR_PRIMARY, "+50", &lv_font_montserrat_32, step_cb,
              (void *)(intptr_t)FT8_TX_TONE_STEP_HZ);
 
     // Plain readout, NOT a button: there's nothing to type (see the file
@@ -512,7 +521,7 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_readout_lbl, &lv_font_montserrat_48, 0);
     lv_obj_center(s_readout_lbl);
 
-    make_btn(s_panel, readout_w, 64, LV_ALIGN_TOP_LEFT, readout_x, 292,
+    make_btn(s_panel, readout_w, 64, LV_ALIGN_TOP_LEFT, readout_x, 322,
              UI_COLOR_PRIMARY, "Find clear slot", &lv_font_montserrat_28,
              find_clear_cb, NULL);
 
@@ -533,15 +542,15 @@ static void modal_build(void)
             lv_style_set_border_width(&st_ind, 2);
             lv_style_set_pad_all(&st_ind, 8);
             lv_style_init(&st_ind_chk);
-            lv_style_set_bg_color(&st_ind_chk, lv_color_hex(COL_PICK));
-            lv_style_set_border_color(&st_ind_chk, lv_color_hex(COL_PICK));
+            lv_style_set_bg_color(&st_ind_chk, lv_color_hex(UI_COLOR_PRIMARY));
+            lv_style_set_border_color(&st_ind_chk, lv_color_hex(UI_COLOR_PRIMARY_BORDER));
             st_inited = true;
         }
         s_hold_cb = lv_checkbox_create(s_panel);
         lv_checkbox_set_text(s_hold_cb, "");
         lv_obj_add_style(s_hold_cb, &st_ind, LV_PART_INDICATOR);
         lv_obj_add_style(s_hold_cb, &st_ind_chk, LV_PART_INDICATOR | LV_STATE_CHECKED);
-        lv_obj_align(s_hold_cb, LV_ALIGN_TOP_LEFT, 0, 300);
+        lv_obj_align(s_hold_cb, LV_ALIGN_TOP_LEFT, 0, 330);
         lv_obj_add_event_cb(s_hold_cb, hold_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
         lv_obj_t *hl = lv_label_create(s_panel);
@@ -556,7 +565,7 @@ static void modal_build(void)
         lv_obj_set_width(s_hold_note, readout_x - 16);
         lv_obj_set_style_text_color(s_hold_note, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
         lv_obj_set_style_text_font(s_hold_note, &lv_font_montserrat_20, 0);
-        lv_obj_align(s_hold_note, LV_ALIGN_TOP_LEFT, 0, 344);
+        lv_obj_align(s_hold_note, LV_ALIGN_TOP_LEFT, 0, 374);
     }
 
     // ---- free slots, in words ----
@@ -566,15 +575,17 @@ static void modal_build(void)
     lv_obj_set_width(s_freelist, strip_w);
     lv_obj_set_style_text_color(s_freelist, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_text_font(s_freelist, &lv_font_montserrat_20, 0);
-    lv_obj_align(s_freelist, LV_ALIGN_TOP_LEFT, 0, 390);
+    lv_obj_set_style_text_align(s_freelist, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_freelist, LV_ALIGN_TOP_LEFT, 0, 430);
 
     s_hint = lv_label_create(s_panel);
     lv_label_set_text(s_hint, "");
     lv_label_set_long_mode(s_hint, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_hint, strip_w);
-    lv_obj_set_style_text_font(s_hint, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_font(s_hint, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(s_hint, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-    lv_obj_align(s_hint, LV_ALIGN_TOP_LEFT, 0, 452);
+    lv_obj_set_style_text_align(s_hint, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_align(s_hint, LV_ALIGN_TOP_LEFT, 0, 482);
 
     s_cancel_btn = lv_btn_create(s_panel);
     lv_obj_set_size(s_cancel_btn, 200, 72);
@@ -592,9 +603,13 @@ static void modal_build(void)
 
     // Wider than Cancel: it carries the frequency, so this is the "commit THIS
     // value" button rather than a bare Apply.
+    // Green, matching every other commit button in the app (identity/CQ Save,
+    // the TX modal's Transmit) - this is the primary action here too.
     s_apply_btn = make_btn(s_panel, 320, 72, LV_ALIGN_BOTTOM_RIGHT, 0, 0,
-                           UI_COLOR_PRIMARY, "Apply", &lv_font_montserrat_28,
+                           UI_COLOR_SUCCESS, "Apply", &lv_font_montserrat_28,
                            apply_cb, NULL);
+    lv_obj_set_style_border_color(s_apply_btn, lv_color_hex(UI_COLOR_SUCCESS_BORDER), 0);
+    lv_obj_set_style_border_width(s_apply_btn, 2, 0);
     s_apply_lbl = lv_obj_get_child(s_apply_btn, 0);
 
     // Snap-on keyboard Enter/Esc is claimed in _show(), not here. Every other
