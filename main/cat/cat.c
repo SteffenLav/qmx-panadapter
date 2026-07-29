@@ -99,6 +99,11 @@ static volatile uint32_t s_pending_ssb_bw = 0;
 // FW; poll is dropped from the rotation - reading the filter makes the QMX
 // re-assert a stale active width and our setting reverts.
 static volatile uint32_t s_ssb_bw_pinned = 0;
+// Pending AF gain (QMX volume) write, drained by the poll task. Same
+// poll-task-owns-the-pipe rule as the filter writes above. Stored +1 so that 0
+// can mean "nothing pending" while still allowing a genuine request of AG 0
+// (mute) to go through.
+static volatile uint32_t s_pending_af_gain_p1 = 0;
 // CW filter width pending write, drained by the poll task as "MMCW|CW passband=".
 // Same poll-task ownership as SSB: a direct cross-thread write (e.g. from the
 // web/httpd thread) would race the FA/MD/FW poll and garble into ?;. CW commits
@@ -114,6 +119,12 @@ void cat_request_cw_passband(uint32_t hz)
 {
     s_pending_cw_passband = hz;
     ui_update_passband_width(hz);  // optimistic; FW; poll confirms within ~150 ms
+}
+
+void cat_request_af_gain(uint16_t ag)
+{
+    if (ag > CAT_AF_GAIN_MAX) ag = CAT_AF_GAIN_MAX;
+    s_pending_af_gain_p1 = (uint32_t)ag + 1;
 }
 
 void cat_request_ssb_bandwidth(uint32_t hz)
@@ -543,6 +554,23 @@ static void poll_task(void *arg)
             cmd[0] = 'M'; cmd[1] = 'D'; cmd[2] = md; cmd[3] = ';'; cmd[4] = 0;
             esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd, 4, 200);
             ESP_LOGI(TAG, "mode -> MD%c; (%s)", md, err == ESP_OK ? "ok" : "fail");
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        uint32_t ag_p1 = s_pending_af_gain_p1;
+        if (ag_p1 != 0) {
+            s_pending_af_gain_p1 = 0;
+            unsigned ag = (unsigned)(ag_p1 - 1);
+            // "AG0" + 3 digits. The vendor manual's own example drops the
+            // leading zero ("AG091;" for 91) but its Get reply is "AG0091", so
+            // the 3-digit form is the one the radio demonstrably speaks. Value
+            // is in 0.25 dB steps, range 0-799 per the manual.
+            char cmd[16];
+            int n = snprintf(cmd, sizeof cmd, "AG0%03u;", ag);
+            esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd,
+                                                          (size_t)n, 200);
+            ESP_LOGI(TAG, "AF gain -> %s (%.2f dB) (%s)", cmd, ag * 0.25,
+                     err == ESP_OK ? "ok" : "fail");
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
         }

@@ -611,9 +611,19 @@ static esp_err_t lotw_cert_handler(httpd_req_t *req)
     const char *county = cJSON_GetStringValue(cJSON_GetObjectItem(root, "county"));
     bool ok = true;
     if (cert && key && cert[0] && key[0]) {
+        // Is this actually a DIFFERENT certificate? The setup page is the only
+        // place the station-location fields live, and re-running it needs the
+        // .p12 picked again - so adding a state/county to an existing setup
+        // re-submits the SAME cert. Rewinding on that would re-sign and re-send
+        // the entire log for a two-field edit, which is why the comparison
+        // exists rather than rewinding unconditionally.
+        char *prev = lotw_read_cert_b64();
+        bool cert_changed = (prev == NULL) || (strcmp(prev, cert) != 0);
+        free(prev);
+
         ok = lotw_store_cert_b64(cert) == ESP_OK &&
              lotw_store_key_b64(key) == ESP_OK;
-        // A new certificate means everything previously uploaded was signed
+        // A NEW certificate means everything previously uploaded was signed
         // with a different key - rewind the cursor so the whole log is
         // re-signed and re-sent. LoTW discards records whose cert it can't
         // validate (field-hit 2026-07-14: a leftover bench test cert
@@ -621,7 +631,12 @@ static esp_err_t lotw_cert_handler(httpd_req_t *req)
         // then the advanced cursor blocked re-upload with the real cert),
         // and genuine re-sends after a cert renewal are just harmless
         // server-side duplicates.
-        if (ok) settings_set_lotw_uploaded_n(0);
+        if (ok && cert_changed) {
+            settings_set_lotw_uploaded_n(0);
+            ESP_LOGI(TAG, "LoTW cert changed - upload cursor rewound to 0");
+        } else if (ok) {
+            ESP_LOGI(TAG, "LoTW cert unchanged - upload cursor left alone");
+        }
     }
     if (dxcc)   settings_set_lotw_dxcc(dxcc);
     if (cqz)    settings_set_lotw_cqz(cqz);

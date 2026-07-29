@@ -82,6 +82,11 @@ typedef struct {
     uint8_t  wf_floor_blend;  // waterfall per-bin floor blend 0..100% (0=global, default 100)
     uint8_t  wf_window;       // FFT window: 0=Blackman-Harris 1=Hann 2=Nuttall (default 0)
     bool     display_flip;    // landscape flipped 180 deg for upside-down mounting (default false)
+    // QMX AF gain as a 0-100 percentage of CAT_AF_GAIN_UI_MAX. Stored so the
+    // slider remembers where it was; deliberately NOT pushed to the radio at
+    // boot, so a saved value can never change the volume behind the operator's
+    // back on power-up. Only a slider move sends AG0nnn;.
+    uint8_t  qmx_vol_pct;
     bool     snap_to_peak;    // tap-to-tune snaps to the strongest nearby signal (default true)
     uint8_t  bandplan_region; // band-plan strip region: 0=auto(from grid) 1=R1 2=R2 3=R3
     bool     distance_in_miles; // FT8 decode list: show distance in miles instead of km (default false)
@@ -187,6 +192,7 @@ void settings_set_wf_window(uint8_t idx);
 
 // Display 180-degree flip for upside-down mounting (debounced flush).
 void settings_set_display_flip(bool v);
+void settings_set_qmx_vol_pct(uint8_t pct);
 
 // FT8 distance display unit (debounced flush). When false show distance in km,
 // when true show distance in miles.

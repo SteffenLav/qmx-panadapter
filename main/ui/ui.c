@@ -1623,10 +1623,15 @@ static int s_drawer_scrim_swipe_start_x = -1;
                                    // so the gap below the Antenna Tune button matches the
                                    // WiFi setup / Callsign sections (also 72), i.e. an equal
                                    // 16 px between Tune->WiFi and WiFi->Callsign buttons.
-#define N_DRAWER_SECTIONS     22
+#define DRAWER_SEC_QMXVOL     22  // QMX AF gain (volume), directly under Flip 180.
+                                   // Kept in both modes - the radio's audio is
+                                   // just as relevant on the FT8 screen.
+#define N_DRAWER_SECTIONS     23
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 // Phase 5.10D Stage 2b: drawer widgets we need to keep handles to
+static lv_obj_t *s_slider_qmx_vol = NULL;
+static lv_obj_t *s_lbl_qmx_vol    = NULL;
 static lv_obj_t *s_slider_db_min = NULL;
 static lv_obj_t *s_slider_db_max = NULL;
 static lv_obj_t *s_slider_alpha = NULL;
@@ -1703,6 +1708,7 @@ static void drawer_dropdown_cmap_open_cb(lv_event_t *e);
 static void drawer_dropdown_sleep_open_cb(lv_event_t *e);
 static void drawer_dropdown_bpregion_cb(lv_event_t *e);
 static void drawer_slider_brightness_cb(lv_event_t *e);
+static void drawer_slider_qmx_vol_cb(lv_event_t *e);
 static void drawer_check_flip_cb(lv_event_t *e);
 static void drawer_check_charge_limit_cb(lv_event_t *e);
 static void drawer_slider_charge_limit_pct_cb(lv_event_t *e);
@@ -5544,6 +5550,34 @@ static void drawer_build(void)
         y += 56;
     }
 
+    // QMX volume, directly under Flip 180 (operator placement, 2026-07-28).
+    // Sends the radio's AG0nnn; AF gain. Deliberately NOT applied at boot - only
+    // a slider move transmits - so a stored value can never change the volume
+    // behind the operator's back on power-up. Same geometry as the brightness
+    // slider below; the shared drawer_sliders[] loop applies the common
+    // thin-track/knob/hit-test tweaks.
+    {
+        qmx_settings_t vcfg;
+        settings_load_all(&vcfg);
+
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_QMXVOL, y, 96);
+        s_lbl_qmx_vol = lv_label_create(sec);
+        char vbuf[32];
+        snprintf(vbuf, sizeof(vbuf), "QMX volume: %u%%", (unsigned)vcfg.qmx_vol_pct);
+        lv_label_set_text(s_lbl_qmx_vol, vbuf);
+        lv_obj_set_style_text_color(s_lbl_qmx_vol, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_qmx_vol, &lv_font_montserrat_28, 0);
+        lv_obj_align(s_lbl_qmx_vol, LV_ALIGN_TOP_LEFT, 0, 10);
+
+        s_slider_qmx_vol = lv_slider_create(sec);
+        lv_obj_set_size(s_slider_qmx_vol, DRAWER_W - 32, 30);
+        lv_slider_set_range(s_slider_qmx_vol, 0, 100);
+        lv_slider_set_value(s_slider_qmx_vol, vcfg.qmx_vol_pct, LV_ANIM_OFF);
+        lv_obj_align(s_slider_qmx_vol, LV_ALIGN_TOP_LEFT, 0, 40);
+        lv_obj_add_event_cb(s_slider_qmx_vol, drawer_slider_qmx_vol_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        y += 96;
+    }
+
     // Display sleep (#34): idle minutes before the backlight turns off.
     // Touch wakes it; a two-finger double-tap blanks immediately. Kept in
     // both Panadapter and FT8 modes (it's a device-level setting).
@@ -6219,7 +6253,7 @@ static void drawer_build(void)
         s_slider_db_min, s_slider_db_max, s_slider_alpha, s_slider_cwpitch,
         s_slider_cwaudio_vol, s_slider_ifcal, s_slider_brightness,
         s_slider_wf_black, s_slider_wf_contrast, s_slider_wf_blend,
-        s_slider_charge_limit_pct,
+        s_slider_charge_limit_pct, s_slider_qmx_vol,
     };
     for (size_t i = 0; i < sizeof(drawer_sliders) / sizeof(drawer_sliders[0]); i++) {
         if (!drawer_sliders[i]) continue;
@@ -6299,7 +6333,7 @@ static void drawer_close(void)
 static void drawer_set_ft8_mode(bool ft8)
 {
     if (!s_drawer) return;
-    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_SLEEP, DRAWER_SEC_CHARGE, DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY };
+    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_QMXVOL, DRAWER_SEC_SLEEP, DRAWER_SEC_CHARGE, DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY };
     // Heights must line up 1:1 with keep[] above (same order) - each is the
     // height passed to that section's own drawer_section(ID, y, height) call.
     // (WiFi is 72, matching its drawer_section call - was mistakenly 128, which
@@ -6308,7 +6342,9 @@ static void drawer_set_ft8_mode(bool ft8)
     //  at 130, leaving a 34 px dead gap under the brightness slider. DISTANCE
     //  is 168 since it gained the PSK Reporter row - it was left at 112, so
     //  the Simulation-Mode section below it drew ON TOP of that row.)
-    static const int keep_h[] = { 56, 124, 136, 96, 168, 56, 72, 72 };
+    // (QMXVOL is 96, matching its drawer_section call - same geometry as the
+    //  brightness slider it was copied from.)
+    static const int keep_h[] = { 56, 96, 124, 136, 96, 168, 56, 72, 72 };
     const int n_keep = sizeof(keep) / sizeof(keep[0]);
 
     // Antenna Tune: shown only in Panadapter mode with confirmed 1_04+
@@ -6549,6 +6585,22 @@ static void drawer_slider_brightness_cb(lv_event_t *e)
         char b[32];
         snprintf(b, sizeof(b), "Display brightness: %d%%", v);
         lv_label_set_text(s_lbl_brightness, b);
+    }
+}
+
+// QMX volume: percentage of CAT_AF_GAIN_UI_MAX, sent as the radio's own
+// AG0nnn; through the CAT poll task (a direct write from this thread would race
+// the FA/MD/FW poll). Requested by Randy N4OPI, who runs a QMX+ with no control
+// panel and so has no other way to set the volume.
+static void drawer_slider_qmx_vol_cb(lv_event_t *e)
+{
+    int pct = (int)lv_slider_get_value(lv_event_get_target(e));
+    settings_set_qmx_vol_pct((uint8_t)pct);
+    cat_request_af_gain((uint16_t)((pct * CAT_AF_GAIN_UI_MAX) / 100));
+    if (s_lbl_qmx_vol) {
+        char b[32];
+        snprintf(b, sizeof(b), "QMX volume: %d%%", pct);
+        lv_label_set_text(s_lbl_qmx_vol, b);
     }
 }
 

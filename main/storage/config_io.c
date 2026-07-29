@@ -61,6 +61,7 @@ char *config_io_export(size_t *out_len)
     APP("wf_floor_blend     = %u\n", (unsigned)c.wf_floor_blend);
     APP("wf_window          = %u\n", (unsigned)c.wf_window);
     APP("display_flip       = %s\n", yn(c.display_flip));
+    APP("qmx_vol_pct        = %u\n", (unsigned)c.qmx_vol_pct);
     APP("cw_audio_vol       = %u\n", (unsigned)c.cw_audio_vol);
     APP("charge_limit       = %s\n", yn(c.charge_limit_en));
     APP("charge_limit_pct   = %u\n", (unsigned)c.charge_limit_pct);
@@ -200,6 +201,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "wf_floor_blend"))    settings_set_wf_floor_blend((uint8_t)atoi(val));
             else if (!strcasecmp(key, "wf_window"))         settings_set_wf_window((uint8_t)atoi(val));
             else if (!strcasecmp(key, "display_flip"))      settings_set_display_flip(to_bool(val));
+            else if (!strcasecmp(key, "qmx_vol_pct"))       settings_set_qmx_vol_pct((uint8_t)atoi(val));
             else if (!strcasecmp(key, "cw_audio_vol"))      settings_set_cw_audio_vol((uint8_t)atoi(val));
             else if (!strcasecmp(key, "charge_limit"))      settings_set_charge_limit_en(to_bool(val));
             else if (!strcasecmp(key, "charge_limit_pct"))  settings_set_charge_limit_pct((uint8_t)atoi(val));

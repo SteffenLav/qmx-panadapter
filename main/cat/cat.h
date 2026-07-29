@@ -187,6 +187,20 @@ void cat_request_mode(const char *mode);
  */
 void cat_request_ssb_bandwidth(uint32_t hz);
 
+/* QMX AF gain (volume), in the radio's own 0.25 dB steps. Kenwood "AG0nnn;".
+ * The manual's full range is 0-799 (= 0-199.75 dB) but it also says maximum
+ * gain "would make no sense, it would be far too high", so the UI spans
+ * CAT_AF_GAIN_UI_MAX and this call clamps to CAT_AF_GAIN_MAX.
+ * Deferred to the poll task like the filter writes - a direct cross-thread
+ * write races the FA/MD/FW poll and the QMX returns ?;.
+ * Requesting 0 is a valid mute, not a no-op. */
+#define CAT_AF_GAIN_MAX     799
+/* Top of the slider's range. 240 = 60 dB, chosen as a usable listening span
+ * rather than from measurement - if the slider turns out to be all-or-nothing
+ * at one end on real hardware, this is the single number to retune. */
+#define CAT_AF_GAIN_UI_MAX  240
+void cat_request_af_gain(uint16_t ag);
+
 /*
  * Request a CW filter width (Hz). Deferred to the poll task as
  * "MMCW|CW passband=<hz>;" - the QMX rejects a Kenwood FW<nnnn>; set with ?;,

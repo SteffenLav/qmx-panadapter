@@ -59,6 +59,7 @@ static const char *TAG = "settings";
 #define KEY_WF_BLEND     "wf_blend"
 #define KEY_WF_WINDOW    "wf_window"
 #define KEY_DISP_FLIP    "disp_flip"
+#define KEY_QMX_VOL      "qmx_vol"
 #define KEY_SNAP_PEAK    "snap_peak"
 #define KEY_BP_REGION    "bp_region"
 #define KEY_DISTANCE_MILES "dist_miles"
@@ -131,6 +132,13 @@ static const char *TAG = "settings";
 #define DIRTY_CQ_MSG1    (1u << 18)
 #define DIRTY_CQ_MSG2    (1u << 19)
 #define DIRTY_CQ_SEL     (1u << 20)
+// Bit 21 was the last free bit in the 64-bit dirty bitmap. With this the map is
+// genuinely full (0-63 all allocated) - the next setting that needs its own bit
+// must widen s_dirty beyond uint64_t. Note the LoTW state/county fields
+// deliberately share DIRTY_LOTW_DXCC instead of spending this bit, because they
+// are only ever written together with dxcc; a volume slider is moved on its own
+// and so does need one.
+#define DIRTY_QMX_VOL      (1u << 21)
 #define DIRTY_ONBOARDED    (1u << 22)
 #define DIRTY_FT8_FILT     (1u << 23)
 #define DIRTY_WIFI_ENABLED (1u << 24)
@@ -193,7 +201,7 @@ static const char *TAG = "settings";
     DIRTY_WIFI_ENABLED | DIRTY_QMX_GPS | DIRTY_FREQ_KP_CALC | \
     DIRTY_QRZ_KEY | DIRTY_EQSL_USER | DIRTY_EQSL_PSWD | \
     DIRTY_WF_BLACK | DIRTY_WF_CONTRAST | DIRTY_WF_BLEND | DIRTY_WF_WINDOW | \
-    DIRTY_DISP_FLIP | DIRTY_CW_AUD_VOL | DIRTY_CHARGE_LIM_EN | DIRTY_CHARGE_LIM_PCT | \
+    DIRTY_DISP_FLIP | DIRTY_QMX_VOL | DIRTY_CW_AUD_VOL | DIRTY_CHARGE_LIM_EN | DIRTY_CHARGE_LIM_PCT | \
     DIRTY_LOTW_DXCC | DIRTY_LOTW_CQZ | DIRTY_LOTW_ITUZ | DIRTY_DISP_SLEEP)
 
 // ---- Module state ------------------------------------------------------
@@ -315,6 +323,7 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_WF_BLEND)    nvs_set_u8(s_nvs, KEY_WF_BLEND,  snap.wf_floor_blend);
         if (dirty_local & DIRTY_WF_WINDOW)   nvs_set_u8(s_nvs, KEY_WF_WINDOW, snap.wf_window);
         if (dirty_local & DIRTY_DISP_FLIP)   nvs_set_u8(s_nvs, KEY_DISP_FLIP, snap.display_flip ? 1 : 0);
+        if (dirty_local & DIRTY_QMX_VOL)     nvs_set_u8(s_nvs, KEY_QMX_VOL,   snap.qmx_vol_pct);
         if (dirty_local & DIRTY_SNAP_PEAK)   nvs_set_u8(s_nvs, KEY_SNAP_PEAK, snap.snap_to_peak ? 1 : 0);
         if (dirty_local & DIRTY_BP_REGION)   nvs_set_u8(s_nvs, KEY_BP_REGION, snap.bandplan_region);
         if (dirty_local & DIRTY_DISTANCE_MILES) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap.distance_in_miles ? 1 : 0);
@@ -445,6 +454,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->wf_floor_blend = DEF_WF_BLEND;
     out->wf_window      = DEF_WF_WINDOW;
     out->display_flip   = false;
+    out->qmx_vol_pct    = 50;   // slider start position only - never sent at boot
     out->snap_to_peak   = true;   // on by default (legacy behaviour)
     out->ft8_early_decode = true; // on by default (WSJT-X-style fast pounce timing)
     out->greylist_en = false;     // opt-in ("Allow grey-listing", Filter modal)
@@ -554,6 +564,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (out->wf_floor_blend > 100) out->wf_floor_blend = 100;
     if (out->wf_window > 2)        out->wf_window = 0;
     if (nvs_get_u8(s_nvs, KEY_DISP_FLIP, &u8v) == ESP_OK) out->display_flip = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_QMX_VOL, &u8v) == ESP_OK) out->qmx_vol_pct = (u8v <= 100) ? u8v : 100;
     if (nvs_get_u8(s_nvs, KEY_SNAP_PEAK, &u8v) == ESP_OK) out->snap_to_peak = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_BP_REGION, &u8v) == ESP_OK) out->bandplan_region = (u8v <= 3) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_DISTANCE_MILES, &u8v) == ESP_OK) out->distance_in_miles = (u8v != 0);
@@ -1094,6 +1105,17 @@ void settings_set_display_flip(bool v)
     s_pending.display_flip = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_DISP_FLIP);
+}
+
+void settings_set_qmx_vol_pct(uint8_t pct)
+{
+    if (!s_ready) return;
+    if (pct > 100) pct = 100;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.qmx_vol_pct == pct) { xSemaphoreGive(s_mutex); return; }
+    s_pending.qmx_vol_pct = pct;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_QMX_VOL);
 }
 
 void settings_set_distance_in_miles(bool v)
