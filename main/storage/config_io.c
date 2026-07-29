@@ -205,6 +205,8 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "cw_audio_vol"))      settings_set_cw_audio_vol((uint8_t)atoi(val));
             else if (!strcasecmp(key, "charge_limit"))      settings_set_charge_limit_en(to_bool(val));
             else if (!strcasecmp(key, "charge_limit_pct"))  settings_set_charge_limit_pct((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "tx_tone_hz"))        settings_set_tx_tone_hz((uint16_t)atoi(val));
+            else if (!strcasecmp(key, "tx_tone_hold"))      settings_set_tx_tone_hold(to_bool(val));
             else if (!strcasecmp(key, "display_sleep_min")) settings_set_display_sleep_min((uint8_t)atoi(val));
             else if (!strcasecmp(key, "qmx_gps"))           settings_set_qmx_gps(to_bool(val));
             else if (!strcasecmp(key, "freq_keypad_10key")) settings_set_freq_kp_calc(to_bool(val));

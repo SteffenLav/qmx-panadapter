@@ -66,6 +66,8 @@ static const char *TAG = "settings";
 #define KEY_FT8_EARLY_DEC  "ft8_earlydec"
 #define KEY_GREYLIST_EN    "greylist_en"
 #define KEY_PSKREP_EN      "pskrep_en"
+#define KEY_TX_TONE_HZ     "tx_tone_hz"
+#define KEY_TX_TONE_HOLD   "tx_tone_hold"
 #define KEY_FT8_SYNC_LINES "ft8_sync_ln"
 #define KEY_FIELD_DAY_EN   "fd_en"
 #define KEY_FD_CLASS       "fd_class"
@@ -110,77 +112,136 @@ static const char *TAG = "settings";
 // Debounce: how long we wait after the last change before flushing.
 #define DEBOUNCE_MS     500
 
-// Dirty bits — which fields have been changed since last flush.
-#define DIRTY_DB_MIN     (1u << 0)
-#define DIRTY_DB_MAX     (1u << 1)
-#define DIRTY_EMA_ALPHA  (1u << 2)
-#define DIRTY_IQ_ENABLED (1u << 3)
-#define DIRTY_FLAT_MODE  (1u << 7)
-#define DIRTY_WIFI_SSID  (1u << 4)
-#define DIRTY_WIFI_PASS  (1u << 5)
-#define DIRTY_LAST_VFO  (1u << 6)
-#define DIRTY_CW_PITCH  (1u << 8)
-#define DIRTY_COLORMAP  (1u << 9)
-#define DIRTY_MY_CALL   (1u << 10)
-#define DIRTY_MY_GRID   (1u << 11)
-#define DIRTY_CW_CAL    (1u << 12)
-#define DIRTY_ZOOM      (1u << 13)
-#define DIRTY_BRIGHTNESS (1u << 14)
-#define DIRTY_LAST_MODE  (1u << 15)
-#define DIRTY_LAST_TIME  (1u << 16)
-#define DIRTY_CQ_MSG0    (1u << 17)
-#define DIRTY_CQ_MSG1    (1u << 18)
-#define DIRTY_CQ_MSG2    (1u << 19)
-#define DIRTY_CQ_SEL     (1u << 20)
-// Bit 21 was the last free bit in the 64-bit dirty bitmap. With this the map is
-// genuinely full (0-63 all allocated) - the next setting that needs its own bit
-// must widen s_dirty beyond uint64_t. Note the LoTW state/county fields
-// deliberately share DIRTY_LOTW_DXCC instead of spending this bit, because they
-// are only ever written together with dxcc; a volume slider is moved on its own
-// and so does need one.
-#define DIRTY_QMX_VOL      (1u << 21)
-#define DIRTY_ONBOARDED    (1u << 22)
-#define DIRTY_FT8_FILT     (1u << 23)
-#define DIRTY_WIFI_ENABLED (1u << 24)
-#define DIRTY_QMX_GPS      (1u << 25)
-#define DIRTY_FREQ_KP_CALC (1u << 26)
-#define DIRTY_QRZ_KEY      (1u << 27)
-#define DIRTY_QRZ_UPLOADED (1u << 28)
-#define DIRTY_EQSL_USER     (1u << 29)
-#define DIRTY_EQSL_PSWD     (1u << 30)
-#define DIRTY_EQSL_UPLOADED (1u << 31)
-#define DIRTY_CW_AUD_EN     (1ull << 32)
-#define DIRTY_CW_AUD_VOL    (1ull << 33)
-#define DIRTY_WF_BLACK      (1ull << 34)
-#define DIRTY_WF_CONTRAST   (1ull << 35)
-#define DIRTY_WF_BLEND      (1ull << 36)
-#define DIRTY_WF_WINDOW     (1ull << 37)
-#define DIRTY_DISP_FLIP     (1ull << 38)
-#define DIRTY_SNAP_PEAK     (1ull << 39)
-#define DIRTY_BP_REGION     (1ull << 40)
-#define DIRTY_DISTANCE_MILES (1ull << 41)
-#define DIRTY_FT8_SYNC_LINES (1ull << 42)
-#define DIRTY_FIELD_DAY_EN   (1ull << 43)
-#define DIRTY_FD_CLASS       (1ull << 44)
-#define DIRTY_FD_SECTION     (1ull << 45)
-#define DIRTY_SIM_MODE       (1ull << 46)
-#define DIRTY_FT8_OP_MODE    (1ull << 47)
-#define DIRTY_FREQ_KP_POS    (1ull << 48)
-#define DIRTY_FREQ_KP_SMALL  (1ull << 49)
-#define DIRTY_PASSBAND_HZ    (1ull << 50)
-#define DIRTY_FT8_FREQ       (1ull << 51)
-#define DIRTY_CHARGE_LIM_EN  (1ull << 52)
-#define DIRTY_CHARGE_LIM_PCT (1ull << 53)
-#define DIRTY_RESMON_EN      (1ull << 54)
-#define DIRTY_RESMON_POS     (1ull << 55)
-#define DIRTY_LOTW_DXCC      (1ull << 56)
-#define DIRTY_LOTW_CQZ       (1ull << 57)
-#define DIRTY_LOTW_ITUZ      (1ull << 58)
-#define DIRTY_LOTW_UPLOADED  (1ull << 59)
-#define DIRTY_DISP_SLEEP     (1ull << 60)
-#define DIRTY_FT8_EARLY_DEC  (1ull << 61)
-#define DIRTY_GREYLIST_EN    (1ull << 62)
-#define DIRTY_PSKREP_EN      (1ull << 63)
+// ---- Dirty set ---------------------------------------------------------------
+// Which fields have changed since the last flush.
+//
+// This was a uint64_t bitmask until v1.3.4, and by then every one of its 64 bits
+// was spoken for - so the next setting that wanted to persist simply could not,
+// and the workaround (sharing a bit with an unrelated field, as the LoTW
+// state/county fields do) only works for values that are always written
+// together. A wider integer wasn't an option either: riscv32 GCC has no
+// __int128. So the set is now a word array addressed by plain BIT INDEX, with
+// room to grow by changing one number.
+//
+// Consequence to remember: every DIRTY_* below is an INDEX, not a mask. Never
+// write `dirty & DIRTY_X` - use dirty_test(). The struct type makes the old
+// bitwise spelling a compile error rather than a silently-wrong test, which is
+// what makes this refactor safe to do to 65 call sites at once.
+//
+// Adding a setting: give it the next free index, bump DIRTY_WORDS if you cross a
+// 32-bit boundary past the end, and add the bit to s_config_export_bits[] if
+// config_io_export() actually writes the field.
+#define DIRTY_WORDS      4                        /* 128 bits; 62 spare today */
+#define DIRTY_BITS_MAX   (DIRTY_WORDS * 32)
+
+typedef struct { uint32_t w[DIRTY_WORDS]; } dirty_t;
+
+static inline void dirty_set(dirty_t *d, int bit)
+{
+    if (bit >= 0 && bit < DIRTY_BITS_MAX) d->w[bit >> 5] |= 1u << (bit & 31);
+}
+
+static inline bool dirty_test(const dirty_t *d, int bit)
+{
+    if (bit < 0 || bit >= DIRTY_BITS_MAX) return false;
+    return ((d->w[bit >> 5] >> (bit & 31)) & 1u) != 0;
+}
+
+static inline void dirty_clear_bit(dirty_t *d, int bit)
+{
+    if (bit >= 0 && bit < DIRTY_BITS_MAX) d->w[bit >> 5] &= ~(1u << (bit & 31));
+}
+
+static inline void dirty_clear_all(dirty_t *d)
+{
+    for (int i = 0; i < DIRTY_WORDS; i++) d->w[i] = 0;
+}
+
+static inline bool dirty_any(const dirty_t *d)
+{
+    for (int i = 0; i < DIRTY_WORDS; i++) if (d->w[i]) return true;
+    return false;
+}
+
+// True if any bit in `bits` (a list of indices) is set - the replacement for
+// the old `dirty & SOME_MASK` idiom.
+static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t n)
+{
+    for (size_t i = 0; i < n; i++) if (dirty_test(d, bits[i])) return true;
+    return false;
+}
+
+#define DIRTY_DB_MIN     0
+#define DIRTY_DB_MAX     1
+#define DIRTY_EMA_ALPHA  2
+#define DIRTY_IQ_ENABLED 3
+#define DIRTY_FLAT_MODE  7
+#define DIRTY_WIFI_SSID  4
+#define DIRTY_WIFI_PASS  5
+#define DIRTY_LAST_VFO  6
+#define DIRTY_CW_PITCH  8
+#define DIRTY_COLORMAP  9
+#define DIRTY_MY_CALL   10
+#define DIRTY_MY_GRID   11
+#define DIRTY_CW_CAL    12
+#define DIRTY_ZOOM      13
+#define DIRTY_BRIGHTNESS 14
+#define DIRTY_LAST_MODE  15
+#define DIRTY_LAST_TIME  16
+#define DIRTY_CQ_MSG0    17
+#define DIRTY_CQ_MSG1    18
+#define DIRTY_CQ_MSG2    19
+#define DIRTY_CQ_SEL     20
+// Bit 21 was the last free bit back when this was a 64-bit mask - spending it
+// (v1.3.3) is what finally forced the widening above. The LoTW state/county
+// fields still share DIRTY_LOTW_DXCC, not because bits are scarce now but
+// because those three are only ever written together.
+#define DIRTY_QMX_VOL      21
+#define DIRTY_ONBOARDED    22
+#define DIRTY_FT8_FILT     23
+#define DIRTY_WIFI_ENABLED 24
+#define DIRTY_QMX_GPS      25
+#define DIRTY_FREQ_KP_CALC 26
+#define DIRTY_QRZ_KEY      27
+#define DIRTY_QRZ_UPLOADED 28
+#define DIRTY_EQSL_USER     29
+#define DIRTY_EQSL_PSWD     30
+#define DIRTY_EQSL_UPLOADED 31
+#define DIRTY_CW_AUD_EN     32
+#define DIRTY_CW_AUD_VOL    33
+#define DIRTY_WF_BLACK      34
+#define DIRTY_WF_CONTRAST   35
+#define DIRTY_WF_BLEND      36
+#define DIRTY_WF_WINDOW     37
+#define DIRTY_DISP_FLIP     38
+#define DIRTY_SNAP_PEAK     39
+#define DIRTY_BP_REGION     40
+#define DIRTY_DISTANCE_MILES 41
+#define DIRTY_FT8_SYNC_LINES 42
+#define DIRTY_FIELD_DAY_EN   43
+#define DIRTY_FD_CLASS       44
+#define DIRTY_FD_SECTION     45
+#define DIRTY_SIM_MODE       46
+#define DIRTY_FT8_OP_MODE    47
+#define DIRTY_FREQ_KP_POS    48
+#define DIRTY_FREQ_KP_SMALL  49
+#define DIRTY_PASSBAND_HZ    50
+#define DIRTY_FT8_FREQ       51
+#define DIRTY_CHARGE_LIM_EN  52
+#define DIRTY_CHARGE_LIM_PCT 53
+#define DIRTY_RESMON_EN      54
+#define DIRTY_RESMON_POS     55
+#define DIRTY_LOTW_DXCC      56
+#define DIRTY_LOTW_CQZ       57
+#define DIRTY_LOTW_ITUZ      58
+#define DIRTY_LOTW_UPLOADED  59
+#define DIRTY_DISP_SLEEP     60
+#define DIRTY_FT8_EARLY_DEC  61
+#define DIRTY_GREYLIST_EN    62
+#define DIRTY_PSKREP_EN      63
+// --- past the old 64-bit ceiling (the whole point of DIRTY_WORDS) ---
+#define DIRTY_TX_TONE_HZ     64
+#define DIRTY_TX_TONE_HOLD   65
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -191,24 +252,27 @@ static const char *TAG = "settings";
 // WiFi co-processor's SDIO link for the same shared SDMMC host peripheral
 // (see CLAUDE.md "SD-card screenshot save REMOVED"), so an unnecessary
 // every-15-seconds SD write was a standing, unintentional trigger for that
-// same hazard. Keep this mask in sync with config_io_export()'s fields.
-#define DIRTY_CONFIG_EXPORT_MASK ( \
-    DIRTY_DB_MIN | DIRTY_DB_MAX | DIRTY_EMA_ALPHA | DIRTY_IQ_ENABLED | \
-    DIRTY_FLAT_MODE | DIRTY_WIFI_SSID | DIRTY_WIFI_PASS | DIRTY_CW_PITCH | \
-    DIRTY_COLORMAP | DIRTY_MY_CALL | DIRTY_MY_GRID | DIRTY_CW_CAL | \
-    DIRTY_ZOOM | DIRTY_BRIGHTNESS | DIRTY_CQ_MSG0 | DIRTY_CQ_MSG1 | \
-    DIRTY_CQ_MSG2 | DIRTY_CQ_SEL | DIRTY_ONBOARDED | DIRTY_FT8_FILT | \
-    DIRTY_WIFI_ENABLED | DIRTY_QMX_GPS | DIRTY_FREQ_KP_CALC | \
-    DIRTY_QRZ_KEY | DIRTY_EQSL_USER | DIRTY_EQSL_PSWD | \
-    DIRTY_WF_BLACK | DIRTY_WF_CONTRAST | DIRTY_WF_BLEND | DIRTY_WF_WINDOW | \
-    DIRTY_DISP_FLIP | DIRTY_QMX_VOL | DIRTY_CW_AUD_VOL | DIRTY_CHARGE_LIM_EN | DIRTY_CHARGE_LIM_PCT | \
-    DIRTY_LOTW_DXCC | DIRTY_LOTW_CQZ | DIRTY_LOTW_ITUZ | DIRTY_DISP_SLEEP)
+// same hazard. Keep this list in sync with config_io_export()'s fields.
+static const uint8_t s_config_export_bits[] = {
+    DIRTY_DB_MIN, DIRTY_DB_MAX, DIRTY_EMA_ALPHA, DIRTY_IQ_ENABLED,
+    DIRTY_FLAT_MODE, DIRTY_WIFI_SSID, DIRTY_WIFI_PASS, DIRTY_CW_PITCH,
+    DIRTY_COLORMAP, DIRTY_MY_CALL, DIRTY_MY_GRID, DIRTY_CW_CAL,
+    DIRTY_ZOOM, DIRTY_BRIGHTNESS, DIRTY_CQ_MSG0, DIRTY_CQ_MSG1,
+    DIRTY_CQ_MSG2, DIRTY_CQ_SEL, DIRTY_ONBOARDED, DIRTY_FT8_FILT,
+    DIRTY_WIFI_ENABLED, DIRTY_QMX_GPS, DIRTY_FREQ_KP_CALC,
+    DIRTY_QRZ_KEY, DIRTY_EQSL_USER, DIRTY_EQSL_PSWD,
+    DIRTY_WF_BLACK, DIRTY_WF_CONTRAST, DIRTY_WF_BLEND, DIRTY_WF_WINDOW,
+    DIRTY_DISP_FLIP, DIRTY_QMX_VOL, DIRTY_CW_AUD_VOL, DIRTY_CHARGE_LIM_EN,
+    DIRTY_CHARGE_LIM_PCT,
+    DIRTY_LOTW_DXCC, DIRTY_LOTW_CQZ, DIRTY_LOTW_ITUZ, DIRTY_DISP_SLEEP,
+    DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD,
+};
 
 // ---- Module state ------------------------------------------------------
 static bool             s_ready          = false;
 static nvs_handle_t     s_nvs            = 0;
 static SemaphoreHandle_t s_mutex         = NULL;
-static uint64_t         s_dirty          = 0;
+static dirty_t          s_dirty          = {0};
 static qmx_settings_t   s_pending;       // staged values awaiting flush
 static TickType_t       s_last_change_tick = 0;
 static TaskHandle_t     s_flush_task     = NULL;
@@ -255,17 +319,17 @@ static void flush_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(100));
         if (!s_ready) continue;
 
-        uint64_t dirty_local = 0;
+        dirty_t dirty_local = {0};
         qmx_settings_t snap;
         bool do_flush = false;
 
         if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE) {
-            if (s_dirty != 0) {
+            if (dirty_any(&s_dirty)) {
                 TickType_t age = xTaskGetTickCount() - s_last_change_tick;
                 if (age >= pdMS_TO_TICKS(DEBOUNCE_MS)) {
                     dirty_local = s_dirty;
                     snap = s_pending;
-                    s_dirty = 0;
+                    dirty_clear_all(&s_dirty);
                     do_flush = true;
                 }
             }
@@ -275,95 +339,100 @@ static void flush_task(void *arg)
         if (!do_flush) continue;
 
         // We hold no mutex now — NVS writes can be slow.
-        if (dirty_local & DIRTY_DB_MIN)     nvs_set_float(KEY_DB_MIN,    snap.db_min);
-        if (dirty_local & DIRTY_DB_MAX)     nvs_set_float(KEY_DB_MAX,    snap.db_max);
-        if (dirty_local & DIRTY_EMA_ALPHA)  nvs_set_float(KEY_EMA_ALPHA, snap.ema_alpha);
-        if (dirty_local & DIRTY_IQ_ENABLED) nvs_set_u8(s_nvs, KEY_IQ_ENABLED, snap.iq_enabled ? 1 : 0);
-        if (dirty_local & DIRTY_FLAT_MODE)  nvs_set_u8(s_nvs, KEY_FLAT_MODE,  snap.flat_mode    ? 1 : 0);
-        if (dirty_local & DIRTY_WIFI_SSID)  nvs_set_str(s_nvs, KEY_WIFI_SSID, snap.wifi_ssid);
-        if (dirty_local & DIRTY_MY_CALL)    nvs_set_str(s_nvs, KEY_MY_CALL,   snap.my_callsign);
-        if (dirty_local & DIRTY_MY_GRID)    nvs_set_str(s_nvs, KEY_MY_GRID,   snap.my_grid);
-        if (dirty_local & DIRTY_WIFI_PASS)  nvs_set_str(s_nvs, KEY_WIFI_PASS, snap.wifi_pass);
-        if (dirty_local & DIRTY_LAST_VFO)  nvs_set_u32(s_nvs, KEY_LAST_VFO, snap.last_vfo_hz);
-        if (dirty_local & DIRTY_FT8_FREQ)  nvs_set_u32(s_nvs, KEY_FT8_FREQ, snap.ft8_freq_hz);
-        if (dirty_local & DIRTY_CW_PITCH)  nvs_set_u16(s_nvs, KEY_CW_PITCH, snap.cw_pitch_hz);
-        if (dirty_local & DIRTY_CW_CAL)    nvs_set_i16(s_nvs, KEY_CW_CAL,   snap.cw_cal_hz);
-        if (dirty_local & DIRTY_ZOOM) {
+        if (dirty_test(&dirty_local, DIRTY_DB_MIN))     nvs_set_float(KEY_DB_MIN,    snap.db_min);
+        if (dirty_test(&dirty_local, DIRTY_DB_MAX))     nvs_set_float(KEY_DB_MAX,    snap.db_max);
+        if (dirty_test(&dirty_local, DIRTY_EMA_ALPHA))  nvs_set_float(KEY_EMA_ALPHA, snap.ema_alpha);
+        if (dirty_test(&dirty_local, DIRTY_IQ_ENABLED)) nvs_set_u8(s_nvs, KEY_IQ_ENABLED, snap.iq_enabled ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_FLAT_MODE))  nvs_set_u8(s_nvs, KEY_FLAT_MODE,  snap.flat_mode    ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_WIFI_SSID))  nvs_set_str(s_nvs, KEY_WIFI_SSID, snap.wifi_ssid);
+        if (dirty_test(&dirty_local, DIRTY_MY_CALL))    nvs_set_str(s_nvs, KEY_MY_CALL,   snap.my_callsign);
+        if (dirty_test(&dirty_local, DIRTY_MY_GRID))    nvs_set_str(s_nvs, KEY_MY_GRID,   snap.my_grid);
+        if (dirty_test(&dirty_local, DIRTY_WIFI_PASS))  nvs_set_str(s_nvs, KEY_WIFI_PASS, snap.wifi_pass);
+        if (dirty_test(&dirty_local, DIRTY_LAST_VFO))  nvs_set_u32(s_nvs, KEY_LAST_VFO, snap.last_vfo_hz);
+        if (dirty_test(&dirty_local, DIRTY_FT8_FREQ))  nvs_set_u32(s_nvs, KEY_FT8_FREQ, snap.ft8_freq_hz);
+        if (dirty_test(&dirty_local, DIRTY_CW_PITCH))  nvs_set_u16(s_nvs, KEY_CW_PITCH, snap.cw_pitch_hz);
+        if (dirty_test(&dirty_local, DIRTY_CW_CAL))    nvs_set_i16(s_nvs, KEY_CW_CAL,   snap.cw_cal_hz);
+        if (dirty_test(&dirty_local, DIRTY_ZOOM)) {
             uint32_t bits; memcpy(&bits, &snap.zoom_factor, 4);
             nvs_set_u32(s_nvs, KEY_ZOOM, bits);
         }
-        if (dirty_local & DIRTY_COLORMAP)  nvs_set_u8(s_nvs, KEY_COLORMAP, snap.colormap_idx);
-        if (dirty_local & DIRTY_BRIGHTNESS) nvs_set_u8(s_nvs, KEY_BRIGHTNESS, snap.brightness_pct);
-        if (dirty_local & DIRTY_LAST_MODE)  nvs_set_u8(s_nvs, KEY_LAST_MODE,  snap.last_ui_mode);
-        if (dirty_local & DIRTY_LAST_TIME)  nvs_set_u32(s_nvs, KEY_LAST_TIME, snap.last_unix_time);
-        if (dirty_local & DIRTY_CQ_MSG0)    nvs_set_str(s_nvs, KEY_CQ_MSG0, snap.cq_msg[0]);
-        if (dirty_local & DIRTY_CQ_MSG1)    nvs_set_str(s_nvs, KEY_CQ_MSG1, snap.cq_msg[1]);
-        if (dirty_local & DIRTY_CQ_MSG2)    nvs_set_str(s_nvs, KEY_CQ_MSG2, snap.cq_msg[2]);
-        if (dirty_local & DIRTY_CQ_SEL)     nvs_set_u8(s_nvs, KEY_CQ_SEL, snap.cq_sel);
-        if (dirty_local & DIRTY_ONBOARDED)  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap.onboarded ? 1 : 0);
-        if (dirty_local & DIRTY_FT8_FILT)     nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap.ft8_filters, sizeof(snap.ft8_filters));
-        if (dirty_local & DIRTY_WIFI_ENABLED) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap.wifi_enabled ? 1 : 0);
-        if (dirty_local & DIRTY_QMX_GPS)      nvs_set_u8(s_nvs, KEY_QMX_GPS,      snap.qmx_gps      ? 1 : 0);
-        if (dirty_local & DIRTY_FREQ_KP_CALC) nvs_set_u8(s_nvs, KEY_FREQ_KP_CALC, snap.freq_kp_calc ? 1 : 0);
-        if (dirty_local & DIRTY_FREQ_KP_POS) {
+        if (dirty_test(&dirty_local, DIRTY_COLORMAP))  nvs_set_u8(s_nvs, KEY_COLORMAP, snap.colormap_idx);
+        if (dirty_test(&dirty_local, DIRTY_BRIGHTNESS)) nvs_set_u8(s_nvs, KEY_BRIGHTNESS, snap.brightness_pct);
+        if (dirty_test(&dirty_local, DIRTY_LAST_MODE))  nvs_set_u8(s_nvs, KEY_LAST_MODE,  snap.last_ui_mode);
+        if (dirty_test(&dirty_local, DIRTY_LAST_TIME))  nvs_set_u32(s_nvs, KEY_LAST_TIME, snap.last_unix_time);
+        if (dirty_test(&dirty_local, DIRTY_CQ_MSG0))    nvs_set_str(s_nvs, KEY_CQ_MSG0, snap.cq_msg[0]);
+        if (dirty_test(&dirty_local, DIRTY_CQ_MSG1))    nvs_set_str(s_nvs, KEY_CQ_MSG1, snap.cq_msg[1]);
+        if (dirty_test(&dirty_local, DIRTY_CQ_MSG2))    nvs_set_str(s_nvs, KEY_CQ_MSG2, snap.cq_msg[2]);
+        if (dirty_test(&dirty_local, DIRTY_CQ_SEL))     nvs_set_u8(s_nvs, KEY_CQ_SEL, snap.cq_sel);
+        if (dirty_test(&dirty_local, DIRTY_ONBOARDED))  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap.onboarded ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_FT8_FILT))     nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap.ft8_filters, sizeof(snap.ft8_filters));
+        if (dirty_test(&dirty_local, DIRTY_WIFI_ENABLED)) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap.wifi_enabled ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_QMX_GPS))      nvs_set_u8(s_nvs, KEY_QMX_GPS,      snap.qmx_gps      ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_FREQ_KP_CALC)) nvs_set_u8(s_nvs, KEY_FREQ_KP_CALC, snap.freq_kp_calc ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_FREQ_KP_POS)) {
             nvs_set_i16(s_nvs, KEY_FREQ_KP_DX, snap.freq_kp_dx);
             nvs_set_i16(s_nvs, KEY_FREQ_KP_DY, snap.freq_kp_dy);
         }
-        if (dirty_local & DIRTY_FREQ_KP_SMALL) nvs_set_u8(s_nvs, KEY_FREQ_KP_SMALL, snap.freq_kp_small ? 1 : 0);
-        if (dirty_local & DIRTY_PASSBAND_HZ)   nvs_set_u32(s_nvs, KEY_PASSBAND_HZ, snap.passband_width_hz);
-        if (dirty_local & DIRTY_QRZ_KEY)      nvs_set_str(s_nvs, KEY_QRZ_KEY, snap.qrz_api_key);
-        if (dirty_local & DIRTY_QRZ_UPLOADED) nvs_set_u32(s_nvs, KEY_QRZ_UPLOADED, snap.qrz_uploaded_n);
-        if (dirty_local & DIRTY_EQSL_USER)     nvs_set_str(s_nvs, KEY_EQSL_USER, snap.eqsl_user);
-        if (dirty_local & DIRTY_EQSL_PSWD)     nvs_set_str(s_nvs, KEY_EQSL_PSWD, snap.eqsl_pswd);
-        if (dirty_local & DIRTY_EQSL_UPLOADED) nvs_set_u32(s_nvs, KEY_EQSL_UPLOADED, snap.eqsl_uploaded_n);
-        if (dirty_local & DIRTY_CW_AUD_EN)  nvs_set_u8(s_nvs, KEY_CW_AUD_EN,  snap.cw_audio_en ? 1 : 0);
-        if (dirty_local & DIRTY_CW_AUD_VOL) nvs_set_u8(s_nvs, KEY_CW_AUD_VOL, snap.cw_audio_vol);
-        if (dirty_local & DIRTY_WF_BLACK)    nvs_set_float(KEY_WF_BLACK,    snap.wf_black_db);
-        if (dirty_local & DIRTY_WF_CONTRAST) nvs_set_float(KEY_WF_CONTRAST, snap.wf_contrast_db);
-        if (dirty_local & DIRTY_WF_BLEND)    nvs_set_u8(s_nvs, KEY_WF_BLEND,  snap.wf_floor_blend);
-        if (dirty_local & DIRTY_WF_WINDOW)   nvs_set_u8(s_nvs, KEY_WF_WINDOW, snap.wf_window);
-        if (dirty_local & DIRTY_DISP_FLIP)   nvs_set_u8(s_nvs, KEY_DISP_FLIP, snap.display_flip ? 1 : 0);
-        if (dirty_local & DIRTY_QMX_VOL)     nvs_set_u8(s_nvs, KEY_QMX_VOL,   snap.qmx_vol_db);
-        if (dirty_local & DIRTY_SNAP_PEAK)   nvs_set_u8(s_nvs, KEY_SNAP_PEAK, snap.snap_to_peak ? 1 : 0);
-        if (dirty_local & DIRTY_BP_REGION)   nvs_set_u8(s_nvs, KEY_BP_REGION, snap.bandplan_region);
-        if (dirty_local & DIRTY_DISTANCE_MILES) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap.distance_in_miles ? 1 : 0);
-        if (dirty_local & DIRTY_FT8_EARLY_DEC) nvs_set_u8(s_nvs, KEY_FT8_EARLY_DEC, snap.ft8_early_decode ? 1 : 0);
-        if (dirty_local & DIRTY_GREYLIST_EN)   nvs_set_u8(s_nvs, KEY_GREYLIST_EN,   snap.greylist_en ? 1 : 0);
-        if (dirty_local & DIRTY_PSKREP_EN)     nvs_set_u8(s_nvs, KEY_PSKREP_EN,     snap.pskreporter_en ? 1 : 0);
-        if (dirty_local & DIRTY_FT8_SYNC_LINES) nvs_set_u8(s_nvs, KEY_FT8_SYNC_LINES, snap.ft8_sync_lines ? 1 : 0);
-        if (dirty_local & DIRTY_FIELD_DAY_EN) nvs_set_u8(s_nvs, KEY_FIELD_DAY_EN, snap.field_day_en ? 1 : 0);
-        if (dirty_local & DIRTY_FD_CLASS)     nvs_set_str(s_nvs, KEY_FD_CLASS, snap.fd_class);
-        if (dirty_local & DIRTY_FD_SECTION)   nvs_set_str(s_nvs, KEY_FD_SECTION, snap.fd_section);
-        if (dirty_local & DIRTY_SIM_MODE)     nvs_set_u8(s_nvs, KEY_SIM_MODE, snap.sim_mode_en ? 1 : 0);
-        if (dirty_local & DIRTY_FT8_OP_MODE)  nvs_set_u8(s_nvs, KEY_FT8_OP_MODE, snap.ft8_op_mode);
-        if (dirty_local & DIRTY_CHARGE_LIM_EN)  nvs_set_u8(s_nvs, KEY_CHARGE_LIM_EN,  snap.charge_limit_en ? 1 : 0);
-        if (dirty_local & DIRTY_CHARGE_LIM_PCT) nvs_set_u8(s_nvs, KEY_CHARGE_LIM_PCT, snap.charge_limit_pct);
-        if (dirty_local & DIRTY_RESMON_EN)  nvs_set_u8(s_nvs, KEY_RESMON_EN, snap.resmon_en ? 1 : 0);
-        if (dirty_local & DIRTY_RESMON_POS) {
+        if (dirty_test(&dirty_local, DIRTY_FREQ_KP_SMALL)) nvs_set_u8(s_nvs, KEY_FREQ_KP_SMALL, snap.freq_kp_small ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_PASSBAND_HZ))   nvs_set_u32(s_nvs, KEY_PASSBAND_HZ, snap.passband_width_hz);
+        if (dirty_test(&dirty_local, DIRTY_QRZ_KEY))      nvs_set_str(s_nvs, KEY_QRZ_KEY, snap.qrz_api_key);
+        if (dirty_test(&dirty_local, DIRTY_QRZ_UPLOADED)) nvs_set_u32(s_nvs, KEY_QRZ_UPLOADED, snap.qrz_uploaded_n);
+        if (dirty_test(&dirty_local, DIRTY_EQSL_USER))     nvs_set_str(s_nvs, KEY_EQSL_USER, snap.eqsl_user);
+        if (dirty_test(&dirty_local, DIRTY_EQSL_PSWD))     nvs_set_str(s_nvs, KEY_EQSL_PSWD, snap.eqsl_pswd);
+        if (dirty_test(&dirty_local, DIRTY_EQSL_UPLOADED)) nvs_set_u32(s_nvs, KEY_EQSL_UPLOADED, snap.eqsl_uploaded_n);
+        if (dirty_test(&dirty_local, DIRTY_CW_AUD_EN))  nvs_set_u8(s_nvs, KEY_CW_AUD_EN,  snap.cw_audio_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_CW_AUD_VOL)) nvs_set_u8(s_nvs, KEY_CW_AUD_VOL, snap.cw_audio_vol);
+        if (dirty_test(&dirty_local, DIRTY_WF_BLACK))    nvs_set_float(KEY_WF_BLACK,    snap.wf_black_db);
+        if (dirty_test(&dirty_local, DIRTY_WF_CONTRAST)) nvs_set_float(KEY_WF_CONTRAST, snap.wf_contrast_db);
+        if (dirty_test(&dirty_local, DIRTY_WF_BLEND))    nvs_set_u8(s_nvs, KEY_WF_BLEND,  snap.wf_floor_blend);
+        if (dirty_test(&dirty_local, DIRTY_WF_WINDOW))   nvs_set_u8(s_nvs, KEY_WF_WINDOW, snap.wf_window);
+        if (dirty_test(&dirty_local, DIRTY_DISP_FLIP))   nvs_set_u8(s_nvs, KEY_DISP_FLIP, snap.display_flip ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_QMX_VOL))     nvs_set_u8(s_nvs, KEY_QMX_VOL,   snap.qmx_vol_db);
+        if (dirty_test(&dirty_local, DIRTY_SNAP_PEAK))   nvs_set_u8(s_nvs, KEY_SNAP_PEAK, snap.snap_to_peak ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_BP_REGION))   nvs_set_u8(s_nvs, KEY_BP_REGION, snap.bandplan_region);
+        if (dirty_test(&dirty_local, DIRTY_DISTANCE_MILES)) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap.distance_in_miles ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_FT8_EARLY_DEC)) nvs_set_u8(s_nvs, KEY_FT8_EARLY_DEC, snap.ft8_early_decode ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_GREYLIST_EN))   nvs_set_u8(s_nvs, KEY_GREYLIST_EN,   snap.greylist_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_PSKREP_EN))     nvs_set_u8(s_nvs, KEY_PSKREP_EN,     snap.pskreporter_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_TX_TONE_HZ))    nvs_set_u16(s_nvs, KEY_TX_TONE_HZ,   snap.tx_tone_hz);
+        if (dirty_test(&dirty_local, DIRTY_TX_TONE_HOLD))  nvs_set_u8(s_nvs, KEY_TX_TONE_HOLD,  snap.tx_tone_hold ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_FT8_SYNC_LINES)) nvs_set_u8(s_nvs, KEY_FT8_SYNC_LINES, snap.ft8_sync_lines ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_FIELD_DAY_EN)) nvs_set_u8(s_nvs, KEY_FIELD_DAY_EN, snap.field_day_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_FD_CLASS))     nvs_set_str(s_nvs, KEY_FD_CLASS, snap.fd_class);
+        if (dirty_test(&dirty_local, DIRTY_FD_SECTION))   nvs_set_str(s_nvs, KEY_FD_SECTION, snap.fd_section);
+        if (dirty_test(&dirty_local, DIRTY_SIM_MODE))     nvs_set_u8(s_nvs, KEY_SIM_MODE, snap.sim_mode_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_FT8_OP_MODE))  nvs_set_u8(s_nvs, KEY_FT8_OP_MODE, snap.ft8_op_mode);
+        if (dirty_test(&dirty_local, DIRTY_CHARGE_LIM_EN))  nvs_set_u8(s_nvs, KEY_CHARGE_LIM_EN,  snap.charge_limit_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_CHARGE_LIM_PCT)) nvs_set_u8(s_nvs, KEY_CHARGE_LIM_PCT, snap.charge_limit_pct);
+        if (dirty_test(&dirty_local, DIRTY_RESMON_EN))  nvs_set_u8(s_nvs, KEY_RESMON_EN, snap.resmon_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_RESMON_POS)) {
             nvs_set_i16(s_nvs, KEY_RESMON_DX, snap.resmon_dx);
             nvs_set_i16(s_nvs, KEY_RESMON_DY, snap.resmon_dy);
         }
-        if (dirty_local & DIRTY_DISP_SLEEP)    nvs_set_u8(s_nvs, KEY_DISP_SLEEP, snap.display_sleep_min);
+        if (dirty_test(&dirty_local, DIRTY_DISP_SLEEP))    nvs_set_u8(s_nvs, KEY_DISP_SLEEP, snap.display_sleep_min);
         // State/county ride DIRTY_LOTW_DXCC: the dirty bitmap is full (bits
         // 0-63 all allocated) and all three are only ever written together, so
         // one bit covers them. Re-writing an unchanged dxcc costs nothing.
-        if (dirty_local & DIRTY_LOTW_DXCC) {
+        if (dirty_test(&dirty_local, DIRTY_LOTW_DXCC)) {
             nvs_set_str(s_nvs, KEY_LOTW_DXCC,   snap.lotw_dxcc);
             nvs_set_str(s_nvs, KEY_LOTW_STATE,  snap.lotw_state);
             nvs_set_str(s_nvs, KEY_LOTW_COUNTY, snap.lotw_county);
         }
-        if (dirty_local & DIRTY_LOTW_CQZ)      nvs_set_str(s_nvs, KEY_LOTW_CQZ,  snap.lotw_cqz);
-        if (dirty_local & DIRTY_LOTW_ITUZ)     nvs_set_str(s_nvs, KEY_LOTW_ITUZ, snap.lotw_ituz);
-        if (dirty_local & DIRTY_LOTW_UPLOADED) nvs_set_u32(s_nvs, KEY_LOTW_UPLOADED, snap.lotw_uploaded_n);
+        if (dirty_test(&dirty_local, DIRTY_LOTW_CQZ))      nvs_set_str(s_nvs, KEY_LOTW_CQZ,  snap.lotw_cqz);
+        if (dirty_test(&dirty_local, DIRTY_LOTW_ITUZ))     nvs_set_str(s_nvs, KEY_LOTW_ITUZ, snap.lotw_ituz);
+        if (dirty_test(&dirty_local, DIRTY_LOTW_UPLOADED)) nvs_set_u32(s_nvs, KEY_LOTW_UPLOADED, snap.lotw_uploaded_n);
 
         esp_err_t err = nvs_commit(s_nvs);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "nvs_commit failed: 0x%x", err);
         } else {
-            ESP_LOGI(TAG, "flushed dirty=0x%llx", (unsigned long long)dirty_local);
+            ESP_LOGI(TAG, "flushed dirty=%08lx%08lx%08lx%08lx",
+                     (unsigned long)dirty_local.w[3], (unsigned long)dirty_local.w[2],
+                     (unsigned long)dirty_local.w[1], (unsigned long)dirty_local.w[0]);
             // Only re-mirror to SD if something that's actually IN the
-            // exported file changed — see DIRTY_CONFIG_EXPORT_MASK above.
-            if (dirty_local & DIRTY_CONFIG_EXPORT_MASK) {
+            // exported file changed — see s_config_export_bits[] above.
+            if (dirty_test_any(&dirty_local, s_config_export_bits,
+                               sizeof(s_config_export_bits))) {
                 sd_archive_mark_config_dirty();
             }
         }
@@ -463,6 +532,8 @@ static void load_from_nvs(qmx_settings_t *out)
     // inherently public ham activity. Disclosed in the release notes + manual;
     // the FT8 drawer checkbox turns it off. Inert until callsign+grid are set.
     out->pskreporter_en = true;
+    out->tx_tone_hz   = 1500;     // conventional FT8 default; = FT8_TX_CQ_DEFAULT_FREQ_HZ
+    out->tx_tone_hold = false;    // auto-pick a clear slot, as it always did
     out->bandplan_region = 0;     // 0 = auto (derive from grid)
     memset(&out->ft8_filters, 0, sizeof(out->ft8_filters));
     out->field_day_en = false;
@@ -490,6 +561,7 @@ static void load_from_nvs(qmx_settings_t *out)
 
     float fv;
     uint8_t u8v;
+    uint16_t u16v;
     if (nvs_get_float(KEY_DB_MIN,    &fv)) out->db_min    = fv;
     if (nvs_get_float(KEY_DB_MAX,    &fv)) out->db_max    = fv;
     if (nvs_get_float(KEY_EMA_ALPHA, &fv)) out->ema_alpha = fv;
@@ -571,6 +643,8 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_FT8_EARLY_DEC, &u8v) == ESP_OK) out->ft8_early_decode = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_GREYLIST_EN, &u8v) == ESP_OK) out->greylist_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_PSKREP_EN, &u8v) == ESP_OK) out->pskreporter_en = (u8v != 0);
+    if (nvs_get_u16(s_nvs, KEY_TX_TONE_HZ, &u16v) == ESP_OK) out->tx_tone_hz = u16v;
+    if (nvs_get_u8(s_nvs, KEY_TX_TONE_HOLD, &u8v) == ESP_OK) out->tx_tone_hold = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_FT8_SYNC_LINES, &u8v) == ESP_OK) out->ft8_sync_lines = (u8v != 0);
 
     sz = sizeof(out->ft8_filters);
@@ -625,11 +699,11 @@ void settings_load_all(qmx_settings_t *out)
     load_from_nvs(out);  // not initialised yet: defaults + whatever NVS has
 }
 
-static void mark_dirty(uint64_t bit)
+static void mark_dirty(int bit)
 {
     if (!s_ready) return;
     if (xSemaphoreTake(s_mutex, portMAX_DELAY) == pdTRUE) {
-        s_dirty |= bit;
+        dirty_set(&s_dirty, bit);
         s_last_change_tick = xTaskGetTickCount();
         xSemaphoreGive(s_mutex);
     }
@@ -796,7 +870,7 @@ void settings_set_last_ui_mode(uint8_t mode)
     s_pending.last_ui_mode = mode;
     // 64-bit mask: ~(1u<<15) is a 32-bit value that would zero-extend and clear
     // the upper dirty bits (e.g. cw_audio, bits 32/33). Cast keeps them intact.
-    s_dirty &= ~((uint64_t)DIRTY_LAST_MODE);  // written synchronously below; nothing left for flush_task
+    dirty_clear_bit(&s_dirty, DIRTY_LAST_MODE);  // written synchronously below; nothing left for flush_task
     xSemaphoreGive(s_mutex);
 
     // Write immediately rather than via the debounced flush task: a mode
@@ -1156,6 +1230,26 @@ void settings_set_pskreporter_en(bool v)
     s_pending.pskreporter_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_PSKREP_EN);
+}
+
+void settings_set_tx_tone_hz(uint16_t v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.tx_tone_hz == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.tx_tone_hz = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_TX_TONE_HZ);
+}
+
+void settings_set_tx_tone_hold(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.tx_tone_hold == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.tx_tone_hold = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_TX_TONE_HOLD);
 }
 
 void settings_set_bandplan_region(uint8_t v)

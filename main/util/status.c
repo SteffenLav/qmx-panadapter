@@ -22,6 +22,11 @@
 
 static const char *TAG = "status";
 
+// Bench-only: drive the bottom bar's WiFi zone from canned values instead of
+// the real link, so the connected layout can be checked without an AP. MUST be
+// 0 in any build that leaves the bench - it reports a WiFi link that isn't there.
+#define BENCH_WIFI_BAR 0
+
 // SD free/max is only re-queried every SD_POLL_INTERVAL_S (not every 1Hz
 // tick) - it touches the physical SDMMC host that WiFi's SDIO link also
 // shares, and this project has been bitten three times before by exactly
@@ -53,14 +58,6 @@ static const char *battery_glyph(int level)
     if (level < 60) return LV_SYMBOL_BATTERY_2;
     if (level < 80) return LV_SYMBOL_BATTERY_3;
     return LV_SYMBOL_BATTERY_FULL;
-}
-
-// Dot prefix removed: U+25CF isn't in the Montserrat build (renders as tofu)
-// and LVGL 9 dropped inline recolor so it carried no signal value. WiFi symbol alone suffices.
-static const char *rssi_dot_prefix(int rssi, bool connected)
-{
-    (void)rssi; (void)connected;
-    return "";
 }
 
 // Pale green (full), pale yellow (~half), pale red (low, blinks off every
@@ -201,18 +198,31 @@ static void status_task(void *arg)
             default:                 clk_suffix = " UTC";      break;
         }
 
-        // --- RIGHT: WiFi symbol + SSID, then jitter-free RSSI, then "dBm  IP" ---
+        // --- RIGHT: strength fan (drawn by ui.c from rssi) + SSID, then the IP.
+        // No dBm number any more - the fan carries the strength, and the space
+        // it used to take goes to the SSID, which needs it far more.
         const char *ssid = wifi_get_ssid();
         int rssi = wifi_get_rssi_dbm();
         const char *ip = wifi_get_ip();
-        bool connected = wifi_is_connected();
-        const char *dot = rssi_dot_prefix(rssi, connected);
-        bool show_rssi = connected && ssid[0];
-        if (show_rssi) {
-            snprintf(ssid_buf, sizeof(ssid_buf), "%s%s %s ", dot, LV_SYMBOL_WIFI, ssid);
-            snprintf(suffix_buf, sizeof(suffix_buf), "dBm  %s", ip);
+        bool connected = wifi_is_connected() && ssid[0];
+
+#if BENCH_WIFI_BAR
+        // Bench hook (see BENCH_WIFI_BAR at the top of this file): fakes a
+        // connected link so the layout that only exists when associated - the
+        // four fan levels, a deliberately over-long SSID, the right-edge IP -
+        // can be eyeballed on a desk with no access point in range.
+        static int bench_tick = 0;
+        static const int bench_dbm[4] = { -95, -85, -70, -55 };  // 0, 1, 2, 3 lit
+        rssi      = bench_dbm[(bench_tick++ / 3) % 4];           // one level per 3 s
+        ssid      = "LongHouseholdSSID-5GHz";
+        ip        = "192.168.123.123";
+        connected = true;
+#endif
+        if (connected) {
+            snprintf(ssid_buf, sizeof(ssid_buf), "%s", ssid);
+            snprintf(suffix_buf, sizeof(suffix_buf), "%s", ip);
         } else {
-            snprintf(ssid_buf, sizeof(ssid_buf), "%s%s off", dot, LV_SYMBOL_WIFI);
+            snprintf(ssid_buf, sizeof(ssid_buf), "off");
             suffix_buf[0] = '\0';
         }
 
@@ -232,7 +242,7 @@ static void status_task(void *arg)
             }
         }
         ui_set_bottom_clock(tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec, time_valid, clk_suffix);
-        ui_set_bottom_wifi(ssid_buf, show_rssi, rssi, suffix_buf);
+        ui_set_bottom_wifi(ssid_buf, connected, rssi, suffix_buf);
     }
 }
 

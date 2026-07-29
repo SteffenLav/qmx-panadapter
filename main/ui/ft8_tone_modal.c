@@ -44,13 +44,13 @@ static const char *TAG = "ft8_tone_modal";
 #define MARKER_W          5
 #define MARKER_H         14
 
-// Colours: deliberately not the waterfall palette - this is a discrete
-// availability map, not signal strength, and shouldn't read as one.
-#define COL_FREE      0x1E6B34   // green: nothing decoded here
-#define COL_BUSY      0x7A2020   // red: station or its guard band
-#define COL_UNKNOWN   0x3A3F46   // grey: nothing heard at all yet
-#define COL_PICK      0xFFA040   // amber: where WE would transmit (matches TX label)
-#define COL_PARTNER   0x30C0D0   // cyan: the partner (matches the PWR/SWR line)
+// Palette lives in the header now - the FT8 pane's mini strip draws the same
+// data and must use the same colours (see ft8_tone_modal.h).
+#define COL_FREE      FT8_TONE_COL_FREE
+#define COL_BUSY      FT8_TONE_COL_BUSY
+#define COL_UNKNOWN   FT8_TONE_COL_UNKNOWN
+#define COL_PICK      FT8_TONE_COL_PICK
+#define COL_PARTNER   FT8_TONE_COL_PARTNER
 // Light grey while a finger is down and dragging: "you are moving this, nothing
 // is committed yet". Deliberately far from COL_UNKNOWN's dark grey so a drag
 // can't be mistaken for an unknown slot.
@@ -69,8 +69,11 @@ static lv_obj_t *s_apply_btn  = NULL;
 static lv_obj_t *s_apply_lbl  = NULL;   // carries the value: "Apply 1450 Hz"
 static lv_obj_t *s_cancel_btn = NULL;
 static lv_obj_t *s_marker     = NULL;   // amber pointer above the picked cell
+static lv_obj_t *s_hold_cb    = NULL;   // "TX Hold" - WSJT-X's Hold Tx Freq
+static lv_obj_t *s_hold_note  = NULL;   // spells out what the checkbox will do
 
 static int  s_sel_hz   = FT8_TX_CQ_DEFAULT_FREQ_HZ;  // the value being edited
+static bool s_sel_hold = false;   // hold state being edited (committed by Apply)
 static int  s_n_slots  = 0;
 static bool s_dragging = false;   // finger down on the strip right now
 
@@ -202,6 +205,18 @@ static void refresh_view(void)
         lv_label_set_text(s_apply_lbl, ab);
     }
 
+    // Say what the checkbox will actually DO, in words, and keep it in step with
+    // the tone being edited - "hold" is meaningless without naming the value
+    // being held.
+    if (s_hold_note) {
+        char nb[96];
+        if (s_sel_hold)
+            snprintf(nb, sizeof(nb), "Every CQ and reply goes out on %d Hz", s_sel_hz);
+        else
+            snprintf(nb, sizeof(nb), "TX moves to whichever slot is free (as now)");
+        lv_label_set_text(s_hold_note, nb);
+    }
+
     if (s_partner) {
         if (partner_hz > 0) {
             char pb[48];
@@ -288,20 +303,35 @@ static void find_clear_cb(lv_event_t *e)
     if (stuck) hint_set("Nothing clearer nearby - this is the best around here", 0xFFA040);
 }
 
+static void hold_cb(lv_event_t *e)
+{
+    s_sel_hold = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    refresh_view();   // restate the consequence in words
+}
+
 static void apply_cb(lv_event_t *e)
 {
     (void)e;
-    char err[64];
-    if (ft8_qso_set_tx_tone_hz(s_sel_hz, err, sizeof(err))) {
-        ESP_LOGI(TAG, "TX tone applied: %d Hz", s_sel_hz);
-        if (s_modal) lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
-        return;
+    // A running CQ/QSO is moved FIRST: it's the only step that can be refused
+    // (mid-burst), and refusing after having already stored the preference
+    // would leave the modal half-committed. Nothing running is not a failure
+    // any more - the chip is always on screen now, so setting the tone for the
+    // NEXT transmission is a perfectly ordinary thing to want.
+    if (ft8_qso_get_state() != FT8_QSO_IDLE) {
+        char err[64];
+        if (!ft8_qso_set_tx_tone_hz(s_sel_hz, err, sizeof(err))) {
+            // Stay open: "try again in a moment" is the whole failure mode, so
+            // closing would just force a re-open and re-pick.
+            ESP_LOGW(TAG, "TX tone %d Hz rejected: %s", s_sel_hz, err);
+            hint_set(err, 0xFF6020);
+            return;
+        }
     }
-    // Stay open on failure: both real failure modes (mid-burst, nothing
-    // running) are "try again in a moment", so closing would just force a
-    // re-open and re-pick.
-    ESP_LOGW(TAG, "TX tone %d Hz rejected: %s", s_sel_hz, err);
-    hint_set(err, 0xFF6020);
+
+    ft8_tx_set_tone_pref_hz(s_sel_hz);
+    ft8_tx_set_tone_hold(s_sel_hold);
+    ESP_LOGI(TAG, "TX tone applied: %d Hz (hold %s)", s_sel_hz, s_sel_hold ? "ON" : "off");
+    if (s_modal) lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void cancel_cb(lv_event_t *e)
@@ -486,6 +516,49 @@ static void modal_build(void)
              UI_COLOR_PRIMARY, "Find clear slot", &lv_font_montserrat_28,
              find_clear_cb, NULL);
 
+    // "TX Hold" (WSJT-X's Hold Tx Freq), deliberately placed level with "Find
+    // clear slot": they are the two halves of the same question - let the
+    // firmware chase a free slot, or stay exactly where I put it. Construction
+    // is the textless-checkbox-plus-separate-label pattern the filter modal
+    // documents (giving lv_checkbox_set_text() real text makes LVGL render a
+    // larger indicator), and the checkbox is positioned before the label is
+    // aligned to it.
+    {
+        static lv_style_t st_ind, st_ind_chk;
+        static bool st_inited = false;
+        if (!st_inited) {
+            lv_style_init(&st_ind);
+            lv_style_set_bg_color(&st_ind, lv_color_hex(UI_COLOR_SURFACE_RAISED));
+            lv_style_set_border_color(&st_ind, lv_color_hex(UI_COLOR_BORDER));
+            lv_style_set_border_width(&st_ind, 2);
+            lv_style_set_pad_all(&st_ind, 8);
+            lv_style_init(&st_ind_chk);
+            lv_style_set_bg_color(&st_ind_chk, lv_color_hex(COL_PICK));
+            lv_style_set_border_color(&st_ind_chk, lv_color_hex(COL_PICK));
+            st_inited = true;
+        }
+        s_hold_cb = lv_checkbox_create(s_panel);
+        lv_checkbox_set_text(s_hold_cb, "");
+        lv_obj_add_style(s_hold_cb, &st_ind, LV_PART_INDICATOR);
+        lv_obj_add_style(s_hold_cb, &st_ind_chk, LV_PART_INDICATOR | LV_STATE_CHECKED);
+        lv_obj_align(s_hold_cb, LV_ALIGN_TOP_LEFT, 0, 300);
+        lv_obj_add_event_cb(s_hold_cb, hold_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+        lv_obj_t *hl = lv_label_create(s_panel);
+        lv_label_set_text(hl, "TX Hold");
+        lv_obj_set_style_text_color(hl, lv_color_hex(0xffffff), 0);
+        lv_obj_set_style_text_font(hl, &lv_font_montserrat_28, 0);
+        lv_obj_align_to(hl, s_hold_cb, LV_ALIGN_OUT_RIGHT_MID, 10, 0);
+
+        s_hold_note = lv_label_create(s_panel);
+        lv_label_set_text(s_hold_note, "");
+        lv_label_set_long_mode(s_hold_note, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(s_hold_note, readout_x - 16);
+        lv_obj_set_style_text_color(s_hold_note, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+        lv_obj_set_style_text_font(s_hold_note, &lv_font_montserrat_20, 0);
+        lv_obj_align(s_hold_note, LV_ALIGN_TOP_LEFT, 0, 344);
+    }
+
     // ---- free slots, in words ----
     s_freelist = lv_label_create(s_panel);
     lv_label_set_text(s_freelist, "");
@@ -543,10 +616,19 @@ void ft8_tone_modal_show(void)
     modal_build();
     if (!s_modal) return;
 
+    // Open on the tone actually in use, falling back to the stored preference
+    // (which is what the chip shows while nothing is running) - never on a
+    // constant, or the picker would appear to forget the operator's last choice.
     int cur = ft8_qso_get_tx_tone_hz();
     if (cur <= 0) cur = ft8_tx_get_tone_hz();
+    if (cur <= 0) cur = ft8_tx_get_tone_pref_hz();
     if (cur <= 0) cur = FT8_TX_CQ_DEFAULT_FREQ_HZ;
-    s_sel_hz = cur;
+    s_sel_hz   = cur;
+    s_sel_hold = ft8_tx_get_tone_hold();
+    if (s_hold_cb) {
+        if (s_sel_hold) lv_obj_add_state(s_hold_cb, LV_STATE_CHECKED);
+        else            lv_obj_remove_state(s_hold_cb, LV_STATE_CHECKED);
+    }
 
     hint_set("", UI_COLOR_TEXT_MUTED);
     refresh_view();

@@ -1533,9 +1533,10 @@ static lv_obj_t *s_bot_center_suffix = NULL;
 static ui_clock_t s_bot_clock;
 static bool       s_bot_clock_valid = false;
 static lv_obj_t *s_bot_wifi_ssid = NULL;
-static ui_rssi_t s_bot_rssi;
-static bool       s_bot_rssi_valid = false;
-static lv_obj_t *s_bot_wifi_suffix = NULL;
+static ui_wifi_fan_t s_bot_wifi_fan;
+static bool          s_bot_wifi_fan_valid = false;
+static lv_obj_t *s_bot_wifi_ip = NULL;
+static lv_coord_t s_bot_wifi_min_x = 0;  /* leftmost x the WiFi zone may use (clock's right edge) */
 static lv_obj_t *s_bot_version = NULL; /* firmware version, between battery and clock */
 static lv_obj_t *s_bot_diag_dot = NULL; /* static green dot, shown while a microSD card is mounted */
 static lv_obj_t *s_bot_diag_label = NULL; /* "SD" text next to the dot, shown/hidden together with it */
@@ -2771,6 +2772,12 @@ static void build_bottom_bar(lv_obj_t *parent)
         ui_clock_init(&s_bot_clock, bar, x0, 0, font, lv_color_hex(UI_COLOR_TEXT_SECONDARY), cell_w);
         s_bot_clock_valid = true;
 
+        // The WiFi zone lays itself out from the right edge leftward and must
+        // stop here: the clock is CENTRED and stays centred, so it's the SSID
+        // that gives way (truncating with an ellipsis), never the clock that
+        // gets pushed off centre.
+        s_bot_wifi_min_x = x0 + clock_w + suffix_w + 24;
+
         s_bot_center_suffix = lv_label_create(bar);
         lv_label_set_text(s_bot_center_suffix, " UTC");  // updated each second by status_task
         lv_obj_set_style_text_color(s_bot_center_suffix, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
@@ -2816,40 +2823,41 @@ static void build_bottom_bar(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_bot_version, &lv_font_montserrat_24, 0);
     lv_obj_align(s_bot_version, LV_ALIGN_CENTER, -250, 0);
 
-    // WiFi status: icon+SSID, RSSI, and IP at fixed x positions so the
-    // per-second-changing RSSI digits (glyph-width jitter, same issue as
-    // the UTC clock) can't shift the icon/SSID to their left. The SSID
-    // label is right-aligned in a generous box ending exactly where the
-    // RSSI cells start, so a longer SSID pushes the icon further left
-    // (rather than being clipped) while the RSSI position stays fixed.
+    // WiFi status, left to right: strength fan, SSID, IP address.
+    //
+    // The numeric "-NN dBm" that used to sit in the middle is gone entirely -
+    // the fan's lit-element count carries the same information in a fraction of
+    // the width (see ui_wifi_fan_*), and that width goes to the SSID, which
+    // needs it far more. Nothing here jitters per-second any more either, so
+    // the fixed-width anti-jitter cells the RSSI digits needed are gone with it.
+    //
+    // Positions are computed per update in ui_set_bottom_wifi(), from the right
+    // edge leftward, because two of the three items are variable-width: the IP
+    // hugs the right edge, the SSID sits 20 px left of it, and the fan follows
+    // 10 px in front of the SSID TEXT (not its box). Only the objects are
+    // created here.
     {
         const lv_font_t *font = &lv_font_montserrat_24;
-        const lv_coord_t cell_w = 14;
-        const lv_coord_t rssi_w = 3 * cell_w;
-        const lv_coord_t suffix_w = 260;   // "dBm  192.168.123.123"
-        const lv_coord_t ssid_w = 220;     // icon + SSID, right-aligned
-        const lv_coord_t x_rssi = DISPLAY_H_RES - 8 - rssi_w - suffix_w;
-        const lv_coord_t x0 = x_rssi - ssid_w;
+
+        // Dot centre on the text's vertical centre; the bows extend upward from
+        // it, so this must leave UI_WIFI_FAN_W/2 of headroom above.
+        ui_wifi_fan_init(&s_bot_wifi_fan, bar, 0, 22,
+                         lv_color_hex(UI_COLOR_TEXT_SECONDARY));
+        s_bot_wifi_fan_valid = true;
 
         s_bot_wifi_ssid = lv_label_create(bar);
         lv_label_set_text(s_bot_wifi_ssid, "");
         lv_obj_set_style_text_color(s_bot_wifi_ssid, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
         lv_obj_set_style_text_font(s_bot_wifi_ssid, font, 0);
-        lv_obj_set_pos(s_bot_wifi_ssid, x0, 0);
-        lv_obj_set_width(s_bot_wifi_ssid, ssid_w);
+        lv_obj_set_pos(s_bot_wifi_ssid, s_bot_wifi_min_x, 0);
         lv_label_set_long_mode(s_bot_wifi_ssid, LV_LABEL_LONG_DOT);
-        lv_obj_set_style_text_align(s_bot_wifi_ssid, LV_TEXT_ALIGN_RIGHT, 0);
+        lv_obj_set_style_text_align(s_bot_wifi_ssid, LV_TEXT_ALIGN_LEFT, 0);
 
-        ui_rssi_init(&s_bot_rssi, bar, x_rssi, 0, font, lv_color_hex(UI_COLOR_TEXT_SECONDARY), cell_w);
-        s_bot_rssi_valid = true;
-
-        s_bot_wifi_suffix = lv_label_create(bar);
-        lv_label_set_text(s_bot_wifi_suffix, "");
-        lv_obj_set_style_text_color(s_bot_wifi_suffix, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-        lv_obj_set_style_text_font(s_bot_wifi_suffix, font, 0);
-        lv_obj_set_pos(s_bot_wifi_suffix, x0 + ssid_w + rssi_w, 0);
-        lv_obj_set_width(s_bot_wifi_suffix, suffix_w);
-        lv_label_set_long_mode(s_bot_wifi_suffix, LV_LABEL_LONG_DOT);
+        s_bot_wifi_ip = lv_label_create(bar);
+        lv_label_set_text(s_bot_wifi_ip, "");
+        lv_obj_set_style_text_color(s_bot_wifi_ip, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_set_style_text_font(s_bot_wifi_ip, font, 0);
+        lv_obj_set_style_text_align(s_bot_wifi_ip, LV_TEXT_ALIGN_RIGHT, 0);
     }
 }
 
@@ -4640,20 +4648,43 @@ void ui_set_bottom_clock(int h, int m, int s, bool valid, const char *suffix)
     }
 }
 
-void ui_set_bottom_wifi(const char *icon_ssid, bool show_rssi, int rssi_dbm, const char *suffix)
+void ui_set_bottom_wifi(const char *ssid, bool connected, int rssi_dbm, const char *ip)
 {
     if (!s_bot_wifi_ssid) return;
+    const char *s = ssid ? ssid : "";
+    const char *a = ip   ? ip   : "";
     if (display_lock(20)) {
-        lv_label_set_text(s_bot_wifi_ssid, icon_ssid ? icon_ssid : "");
-        if (s_bot_rssi_valid) {
-            if (show_rssi) {
-                ui_rssi_set(&s_bot_rssi, rssi_dbm);
-                for (int i = 0; i < 3; i++) lv_obj_clear_flag(s_bot_rssi.cells[i], LV_OBJ_FLAG_HIDDEN);
-            } else {
-                for (int i = 0; i < 3; i++) lv_obj_add_flag(s_bot_rssi.cells[i], LV_OBJ_FLAG_HIDDEN);
-            }
-        }
-        lv_label_set_text(s_bot_wifi_suffix, suffix ? suffix : "");
+        // Lay the zone out from the right edge leftward. Both texts are
+        // variable-width, so this is measured rather than assumed: an SSID box
+        // sized to its own text is what lets the fan sit a fixed 10 px in front
+        // of the first CHARACTER instead of in front of a mostly-empty box.
+        const lv_font_t *font  = &lv_font_montserrat_24;
+        const lv_coord_t bar_w = DISPLAY_H_RES - 8;    // bar has pad_all(4)
+        lv_coord_t ip_w = a[0] ? lv_txt_get_width(a, strlen(a), font, 0) : 0;
+        lv_coord_t ssid_right = bar_w - (a[0] ? ip_w + 20 : 0);
+
+        lv_coord_t avail = ssid_right - (s_bot_wifi_min_x + UI_WIFI_FAN_W + 10);
+        if (avail < 60) avail = 60;                    // never collapse to nothing
+        // +2 px: LONG_DOT ellipsises a box that fits its text exactly.
+        lv_coord_t txt_w = lv_txt_get_width(s, strlen(s), font, 0) + 2;
+        if (txt_w > avail) txt_w = avail;              // ...and truncate, never shove the clock
+
+        lv_obj_set_width(s_bot_wifi_ssid, txt_w);
+        lv_obj_set_pos(s_bot_wifi_ssid, ssid_right - txt_w, 0);
+        if (s_bot_wifi_fan_valid)
+            ui_wifi_fan_set_x(&s_bot_wifi_fan,
+                              ssid_right - txt_w - 10 - UI_WIFI_FAN_W / 2);
+        lv_obj_set_width(s_bot_wifi_ip, ip_w + 2);
+        lv_obj_set_pos(s_bot_wifi_ip, bar_w - ip_w - 2, 0);
+
+        lv_label_set_text(s_bot_wifi_ssid, s);
+        // Disconnected shows the fan fully dim rather than hidden: the shape
+        // stays as a landmark for where the WiFi state lives, and the SSID
+        // text ("off") is what distinguishes it from a connected-but-weak link.
+        if (s_bot_wifi_fan_valid)
+            ui_wifi_fan_set_level(&s_bot_wifi_fan,
+                                  connected ? ui_wifi_fan_level_for_dbm(rssi_dbm) : 0);
+        lv_label_set_text(s_bot_wifi_ip, a);
         display_unlock();
     }
 }

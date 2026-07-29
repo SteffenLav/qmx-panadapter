@@ -110,11 +110,10 @@ void ui_set_sim_mode_indicator(bool active);
 // ui_set_sim_mode_indicator() directly.
 void ui_refresh_sim_mode_indicator(void);
 
-// Bottom-bar right zone: WiFi icon+SSID (or "off" text), optional RSSI
-// (rendered in jitter-free fixed-width digit cells), and a trailing
-// suffix (e.g. " -67dBm  192.168.1.5" minus the rssi number -> "dBm  192.168.1.5").
-// Pass show_rssi=false to hide the RSSI cells (disconnected).
-void ui_set_bottom_wifi(const char *icon_ssid, bool show_rssi, int rssi_dbm, const char *suffix);
+// Bottom-bar right zone: strength fan, SSID (or "off"), then the IP pinned to
+// the right edge. rssi_dbm drives the fan's lit-element count and is ignored
+// when connected=false (fan shown fully dim). Pass ip="" when disconnected.
+void ui_set_bottom_wifi(const char *ssid, bool connected, int rssi_dbm, const char *ip);
 
 // Bottom-bar UTC clock (center). valid=false shows "--:--:--" with suffix.
 // suffix is the time-source indicator, e.g. " UTC(NTP)" or " UTC".

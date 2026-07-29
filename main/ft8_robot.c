@@ -123,7 +123,8 @@ void ft8_robot_tick(int64_t slot_sec)
 
     // Build TX1 exactly like the manual row_activate() path: our reply goes on a
     // clear tone (not the caller's own), parity derived from their last_utc.
-    int reply_freq_hz = ft8_find_clear_tone_hz();
+    // Honours TX hold, same as every other TX path.
+    int reply_freq_hz = ft8_tx_pick_tone_hz();
     ft8_tx_request_t req;
     char err[64];
     if (!ft8_tx_build_request(FT8_TX_KIND_REPLY, t->call, reply_freq_hz,

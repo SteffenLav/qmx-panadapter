@@ -32,7 +32,10 @@ main/
   ui/ft8_screen_view.c    FT8 RX decode list UI, touch-drag row selection, TX controls
   ui/ft8_tx_modal.c       TX confirmation modal (message preview, countdown, arm/cancel)
   ui/ft8_tone_modal.c     TX audio-tone picker: live occupancy strip over 200-2800 Hz
-                          (ft8_tx_get_tone_occupancy), drag-to-pick, +/-50, Find clear slot.
+                          (ft8_tx_get_tone_occupancy), drag-to-pick, +/-50, Find clear slot,
+                          "TX Hold" (WSJT-X's Hold Tx Freq). Apply commits tone+hold, and
+                          also moves a running CQ/QSO. Palette in ft8_tone_modal.h is SHARED
+                          with the FT8 pane's mini strip - keep it there, not duplicated.
                           NO numeric entry on purpose - the whole system is a 50 Hz grid
   cat/cat.c               USB CDC-ACM + Kenwood CAT (FA/MD/FW poll, tune write)
   audio/audio.c           USB UAC + ring buffer producer (core 0, polling)
@@ -312,8 +315,12 @@ When the QMX drops off USB, `link_task`'s cleanup (`EVT_DEV_GONE` handler in `ca
 
 The slider **reads the radio back on drawer open** (`drawer_refresh_qmx_vol`) rather than showing our last write — otherwise it disagrees with the LCD the moment the operator uses the physical knob. The NVS value is only a fallback position for before the radio has answered, and is **never pushed at boot**, so a stored value can't change the volume behind the operator's back. **UNVERIFIED against a radio as of v1.3.3** — no QMX was attached when it was written.
 
-### The settings dirty bitmap is FULL
-`s_dirty` in `storage/settings.c` is a `uint64_t` and **all 64 bits are now allocated** (bit 21, the last free one, went to `DIRTY_QMX_VOL` in v1.3.3). The next setting that needs its own bit must widen the bitmap. Note the LoTW `state`/`county` fields deliberately **share** `DIRTY_LOTW_DXCC` instead of spending a bit, because they're only ever written together with `dxcc` (the `/api/lotw_cert` handler and config import) — a slider, which moves on its own, genuinely needs one. Anything added to `config_io_export()` must also join `DIRTY_CONFIG_EXPORT_MASK` or the SD config mirror goes stale.
+### The settings dirty set is a bit-INDEX array now, not a mask (widened 2026-07-29)
+It was a `uint64_t` bitmask and it filled up completely — bit 21, the last free one, went to `DIRTY_QMX_VOL` in v1.3.3, so the next setting that wanted to persist simply couldn't. `s_dirty` in `storage/settings.c` is now `dirty_t`, a `DIRTY_WORDS`(4)×32 word array = **128 bits, 62 spare**; grow it by changing that one number. A wider integer was never an option: riscv32 GCC has no `__int128`.
+
+**Every `DIRTY_*` is now a plain bit INDEX, not a mask — never write `dirty & DIRTY_X`.** Use `dirty_test()` / `dirty_set()` / `dirty_clear_bit()` / `dirty_any()` / `dirty_test_any()`. Because the set is a struct, the old bitwise spelling is a *compile error* rather than a silently-always-false test — that property is what made converting 65 call sites in one pass safe, and it's why the type must stay a struct even if it ever holds exactly one word. All 64 original indices were preserved unchanged (the map is runtime-only, nothing in NVS depends on it, but keeping them made the diff reviewable). The old `DIRTY_CONFIG_EXPORT_MASK` is now the `s_config_export_bits[]` index list + `dirty_test_any()`.
+
+Unchanged rules: the LoTW `state`/`county` fields still **share** `DIRTY_LOTW_DXCC`, not because bits are scarce but because those three are only ever written together (the `/api/lotw_cert` handler and config import) — a slider, which moves on its own, needs its own bit. Anything added to `config_io_export()` must also join `s_config_export_bits[]` or the SD config mirror goes stale.
 
 ### Cross-thread CAT writes must go through the poll task, not the LVGL thread
 The poll task is the only thing that should write to the CDC pipe at runtime. Writing a CAT/MM command directly from the LVGL/UI thread (e.g. a touch handler) races the `FA;`/`MD;`/`FW;` poll on the same pipe; the two commands interleave and the QMX gets a garble and returns `?;`, so the write lands only intermittently. Pattern: stash the request in a `volatile` and let `poll_task` drain it on its next cycle (see `s_pending_ssb_bw` / `cat_request_ssb_bandwidth()` in `cat.c`). FT8 TX uses the other valid approach — `cat_poll_set_paused(true)` for the burst's whole duration.

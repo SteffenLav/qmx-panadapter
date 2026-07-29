@@ -157,10 +157,25 @@ static lv_obj_t *s_btn_freq     = NULL;  // "Preset: XX.XXX MHz" button (visual 
 static lv_obj_t *s_btn_freq_hit = NULL;  // screen-level click target, see ft8_screen_view_init
 static lv_obj_t *s_lbl_count    = NULL;
 static lv_obj_t *s_bar_slot     = NULL;  // tiny countdown bar beside s_lbl_count
-static lv_obj_t *s_lbl_heard    = NULL;
+
+// Mini live occupancy strip under the slot countdown: the same 50 Hz grid, the
+// same occupancy bitmask and the same colours as the TX tone picker's big strip
+// (palette in ft8_tone_modal.h), shrunk to the left pane's width. It answers
+// "where is the band busy, and where am I in it" at a glance, without opening
+// anything - which is what makes the tone picker's verdict predictable instead
+// of a surprise. Display only: not clickable (the TX tone button right below it
+// is the way in), so a stray finger near the countdown can't open a modal.
+#define MINI_SLOTS_MAX  64
+#define MINI_STRIP_W    288      // full left-pane content width
+#define MINI_STRIP_H     26
+static lv_obj_t *s_mini_strip   = NULL;
+static lv_obj_t *s_mini_cells[MINI_SLOTS_MAX];
+static uint8_t   s_mini_prev[MINI_SLOTS_MAX];  // last colour class per cell, see mini_paint()
+static int       s_mini_n_slots = 0;
+static void mini_paint(void);
 static lv_obj_t *s_btn_cq       = NULL;  // "Call CQ" - short tap TX, long-press edits presets
 static lv_obj_t *s_cq_lbl       = NULL;  // label inside s_btn_cq (shows the active CQ message)
-static lv_obj_t *s_btn_tx_tone  = NULL;  // "TX <n> Hz" chip on the Active: row, opens the tone picker
+static lv_obj_t *s_btn_tx_tone  = NULL;  // "TX <n> Hz" button, right of TXCQ; opens the tone picker
 static lv_obj_t *s_lbl_tx_tone  = NULL;
 static lv_obj_t *s_lbl_tx       = NULL;  // TX state indicator: armed/active, tap to cancel/abort
 static lv_obj_t *s_lbl_tx_pswr  = NULL;  // cyan live PWR/SWR line, shown only while ACTIVE (LVGL v9 has no in-label recolor)
@@ -169,10 +184,14 @@ static lv_obj_t *s_lbl_resend          = NULL;  // label inside s_btn_override_r
 static lv_obj_t *s_btn_override_rr73   = NULL;  // manual QSO override: force RR73
 static lv_obj_t *s_btn_override_73     = NULL;  // manual QSO override: force 73
 // CQ TX parity preference: -1=any slot, 0=EVEN only, 1=ODD only.
-// Shown as two small toggle buttons between the slot countdown and "Heard: N".
-// Tap once to lock; tap the active button again to revert to "any".
-static lv_obj_t *s_btn_tx_even  = NULL;
-static lv_obj_t *s_btn_tx_odd   = NULL;
+// ONE button cycling ANY -> EVEN -> ODD -> ANY, colour-coded to match the slot
+// countdown (grey = any, steel blue = EVEN, warm orange = ODD). It was two
+// buttons (EVEN and ODD, each toggling itself off again), which spent a whole
+// grid cell on a three-way choice and left "any" as an implied state you
+// reached by un-picking - the cycle states it outright and freed the cell for
+// the TX tone button.
+static lv_obj_t *s_btn_parity   = NULL;
+static lv_obj_t *s_lbl_parity   = NULL;
 static lv_obj_t *s_btn_filter   = NULL;  // "Filter" button — opens exclude-prefix modal
 static lv_obj_t *s_btn_adif     = NULL;  // "ADIF-log" button - swaps to "Pileup" when ft8_pileup_count() > 0
 static int        s_cq_parity   = -1;
@@ -533,10 +552,10 @@ static void row_activate(int idx)
         ESP_LOGW(TAG, "row activate: '%s' no longer in heard table - ignoring", call);
         return;
     }
-    // Pick a clear audio slot for our reply — not the CQ station's own tone
-    // (that's theirs). ft8_find_clear_tone_hz() scans the heard-station table
-    // and returns the nearest unoccupied 50 Hz slot to 1500 Hz.
-    int reply_freq_hz = ft8_find_clear_tone_hz();
+    // Pick our reply's audio slot — not the CQ station's own tone (that's
+    // theirs). ft8_tx_pick_tone_hz() honours TX hold: held tone, or the nearest
+    // unoccupied 50 Hz slot to the current preference when it's off.
+    int reply_freq_hz = ft8_tx_pick_tone_hz();
 
     ESP_LOGI(TAG, "row activate: reply to %s (their_freq=%d Hz -> our_freq=%d Hz, last_utc=%lld)",
              match->call, (int)match->last_freq, reply_freq_hz, (long long)match->last_utc);
@@ -961,12 +980,6 @@ static void rebuild_list(void)
     for (int i = row; i < MAX_ROWS; i++) {
         hide_row(i);
     }
-
-    if (s_lbl_heard) {
-        char b[32];
-        snprintf(b, sizeof(b), "Active: %d", n);
-        lv_label_set_text(s_lbl_heard, b);
-    }
 }
 
 static void t_refresh_cb(lv_timer_t *t)
@@ -1089,21 +1102,31 @@ static void t_clock_cb(lv_timer_t *t)
         s_was_pileup = has_pileup;
     }
 
-    // TX tone chip: show the session's tone (valid between bursts too, unlike
-    // ft8_tx_get_tone_hz) and hide it entirely when nothing is running, since
-    // ft8_qso_set_tx_tone_hz() has nothing to move then.
+    // TX tone button. Always shows a number: the session's live tone while a CQ
+    // or QSO is running (valid between bursts too, unlike ft8_tx_get_tone_hz),
+    // otherwise the stored preference - which is what the next CQ will use, or
+    // scan outward from when hold is off. A permanently-populated control, so
+    // "where am I transmitting" is answerable before pressing anything.
+    //
+    // Hold shows as an amber border (the picker's own "your tone" colour): with
+    // hold on the number is a promise, with it off it's a starting point, and
+    // that difference is worth seeing without opening the picker.
     if (s_btn_tx_tone && s_lbl_tx_tone) {
         int tone = ft8_qso_get_tx_tone_hz();
         if (tone <= 0) tone = ft8_tx_get_tone_hz();
-        if (tone > 0) {
-            char tb[24];
-            snprintf(tb, sizeof(tb), "TX %d Hz", tone);
-            lv_label_set_text(s_lbl_tx_tone, tb);
-            lv_obj_clear_flag(s_btn_tx_tone, LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_add_flag(s_btn_tx_tone, LV_OBJ_FLAG_HIDDEN);
-        }
+        if (tone <= 0) tone = ft8_tx_get_tone_pref_hz();
+        char tb[24];
+        snprintf(tb, sizeof(tb), "TX %d Hz", tone);
+        lv_label_set_text(s_lbl_tx_tone, tb);
+        lv_obj_set_style_border_color(s_btn_tx_tone,
+            lv_color_hex(ft8_tx_get_tone_hold() ? FT8_TONE_COL_PICK : UI_COLOR_PRIMARY), 0);
     }
+
+    // Same cadence and the same underlying occupancy the button's number came
+    // from, so the strip and the button can never show different pictures.
+    // Reached only when the FT8 view is visible (guard at the top of this
+    // callback), so the panadapter never pays for the occupancy snapshot.
+    mini_paint();
 
     // Status / TX / QSO indicator — always visible.
     // Priority: ACTIVE (red) > ARMED (amber) > QSO state (cyan) > ft8_status (dim white).
@@ -1128,18 +1151,15 @@ static void t_clock_cb(lv_timer_t *t)
             // itself is still free to wrap across multiple lines if it's too
             // long for the label width - only the boundary BETWEEN chunks is
             // fixed, not the wrapping within a chunk.
-            // Our own audio tone gets its own line. It used to be picked
-            // silently by ft8_find_clear_tone_hz() and never shown anywhere,
-            // so the operator had no idea where they were transmitting in the
-            // passband (Roy KI0ER) - and on a clash "⚠ FREQ BUSY" named no
-            // frequency to act on. Same one-chunk-per-line rule as below.
-            int tone_hz = ft8_tx_get_tone_hz();
+            // The audio tone is deliberately NOT repeated here: the "TX <n> Hz"
+            // chip on the "Active: N" row above shows it at all times and is
+            // also the control that moves it, so a copy on this line was pure
+            // duplication - and it cost a whole line on a label that already
+            // changes several times per slot, making the wrap harder to read.
             if (clash)
-                snprintf(b, sizeof(b), "Transmitting:\n%s\n%d Hz\nTAP TO ABORT\n⚠ FREQ BUSY",
-                         tx_text, tone_hz);
+                snprintf(b, sizeof(b), "Transmitting:\n%s\nTAP TO ABORT\n⚠ FREQ BUSY", tx_text);
             else
-                snprintf(b, sizeof(b), "Transmitting:\n%s\n%d Hz\nTAP TO ABORT",
-                         tx_text, tone_hz);
+                snprintf(b, sizeof(b), "Transmitting:\n%s\nTAP TO ABORT", tx_text);
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx, lv_palette_main(LV_PALETTE_RED), 0);
 
@@ -1173,17 +1193,16 @@ static void t_clock_cb(lv_timer_t *t)
                              + (int64_t)secs_until * 1000;
             bool tx_even = ((fire_ms / ft8_op_mode_slot_ms()) % 2) == 0;
             // Same one-chunk-per-line rule as the ACTIVE branch above -
-            // "TAP TO CANCEL" is always its own trailing line.
-            // Tone on its own line here too - this is the state where it's
-            // still changeable (ft8_tx_arm refuses while ACTIVE), so it's the
-            // most useful moment to be able to read it.
-            int armed_tone_hz = ft8_tx_get_tone_hz();
+            // "TAP TO CANCEL" is always its own trailing line. The tone is not
+            // repeated here either (the "TX <n> Hz" chip owns it) - and this is
+            // the state where it's still changeable, so the chip is where the
+            // operator should be looking anyway.
             if (clash)
-                snprintf(b, sizeof(b), "TX armed:\n%s\n%d Hz -> %s slot, ~%ds\nTAP TO CANCEL\n⚠ FREQ BUSY",
-                         tx_text, armed_tone_hz, tx_even ? "EVEN" : "ODD", secs_until);
+                snprintf(b, sizeof(b), "TX armed:\n%s\n%s slot, ~%ds\nTAP TO CANCEL\n⚠ FREQ BUSY",
+                         tx_text, tx_even ? "EVEN" : "ODD", secs_until);
             else
-                snprintf(b, sizeof(b), "TX armed:\n%s\n%d Hz -> %s slot, ~%ds\nTAP TO CANCEL",
-                         tx_text, armed_tone_hz, tx_even ? "EVEN" : "ODD", secs_until);
+                snprintf(b, sizeof(b), "TX armed:\n%s\n%s slot, ~%ds\nTAP TO CANCEL",
+                         tx_text, tx_even ? "EVEN" : "ODD", secs_until);
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx,
                 clash ? lv_color_hex(0xFF4010) : lv_color_hex(0xFFA040), 0);
@@ -1261,32 +1280,72 @@ static void t_clock_cb(lv_timer_t *t)
     s_refresh_pending = true;
 }
 
-// Sync button appearance to s_cq_parity: the active choice glows in the
-// slot colour; the inactive choice stays dim grey.
+// Repaint the mini occupancy strip. Called once a second from t_clock_cb.
+//
+// Only cells whose colour CLASS changed are touched: an lv_obj_set_style call
+// invalidates the object, and 52 unconditional invalidations per second in the
+// pane that shares core 0 with the decode pipeline is a cost worth not paying
+// for a picture that changes at most once per slot.
+enum { MINI_C_NONE = 0, MINI_C_UNKNOWN, MINI_C_FREE, MINI_C_BUSY, MINI_C_MINE, MINI_C_PARTNER };
+
+static void mini_paint(void)
+{
+    if (!s_mini_strip || s_mini_n_slots <= 0) return;
+
+    int n_slots = 0, n_stations = 0;
+    uint64_t occ = ft8_tx_get_tone_occupancy(&n_slots, &n_stations);
+    if (n_slots > s_mini_n_slots) n_slots = s_mini_n_slots;
+
+    // Our own tone: live value while running, otherwise the preference - the
+    // same expression the TX tone button shows, so button and strip agree.
+    int mine = ft8_qso_get_tx_tone_hz();
+    if (mine <= 0) mine = ft8_tx_get_tone_hz();
+    if (mine <= 0) mine = ft8_tx_get_tone_pref_hz();
+    int mine_slot = (mine > 0)
+        ? (mine - FT8_TX_TONE_MIN_HZ) / FT8_TX_TONE_STEP_HZ : -1;
+
+    int partner_hz = 0, partner_slot = -1;
+    if (ft8_qso_get_priority_freq(&partner_hz) && partner_hz > 0)
+        partner_slot = (partner_hz - FT8_TX_TONE_MIN_HZ) / FT8_TX_TONE_STEP_HZ;
+
+    for (int i = 0; i < n_slots; i++) {
+        if (!s_mini_cells[i]) continue;
+        uint8_t cls;
+        uint32_t col;
+        if (i == mine_slot)             { cls = MINI_C_MINE;    col = FT8_TONE_COL_PICK; }
+        else if (i == partner_slot)     { cls = MINI_C_PARTNER; col = FT8_TONE_COL_PARTNER; }
+        else if (n_stations == 0)       { cls = MINI_C_UNKNOWN; col = FT8_TONE_COL_UNKNOWN; }
+        else if ((occ >> i) & 1ULL)     { cls = MINI_C_BUSY;    col = FT8_TONE_COL_BUSY; }
+        else                            { cls = MINI_C_FREE;    col = FT8_TONE_COL_FREE; }
+        if (cls == s_mini_prev[i]) continue;
+        s_mini_prev[i] = cls;
+        lv_obj_set_style_bg_color(s_mini_cells[i], lv_color_hex(col), 0);
+    }
+}
+
+// Sync the parity button's label and fill to s_cq_parity. The two locked
+// choices keep the colours they had as separate buttons (steel blue EVEN, warm
+// orange ODD - the same pair the slot countdown and the per-row E/O indicator
+// use), and "any" is the neutral dim grey, so the fill alone says which of the
+// three is in force.
 static void update_parity_btns(void)
 {
-    if (!s_btn_tx_even || !s_btn_tx_odd) return;
-    lv_obj_set_style_bg_color(s_btn_tx_even,
+    if (!s_btn_parity || !s_lbl_parity) return;
+    lv_label_set_text(s_lbl_parity,
+        s_cq_parity == 0 ? "TXCQ EVEN" : s_cq_parity == 1 ? "TXCQ ODD" : "TXCQ ANY");
+    lv_obj_set_style_bg_color(s_btn_parity,
         s_cq_parity == 0 ? lv_color_hex(UI_COLOR_PRIMARY_BORDER)   // steel blue = EVEN
-                         : lv_color_hex(0x303044), 0);
-    lv_obj_set_style_bg_color(s_btn_tx_odd,
-        s_cq_parity == 1 ? lv_color_hex(0xE09040)   // warm orange = ODD
-                         : lv_color_hex(0x303044), 0);
+      : s_cq_parity == 1 ? lv_color_hex(0xE09040)                  // warm orange = ODD
+                         : lv_color_hex(0x303044), 0);             // dim grey = any
 }
 
-static void tx_even_btn_cb(lv_event_t *e)
+static void parity_btn_cb(lv_event_t *e)
 {
     (void)e;
-    s_cq_parity = (s_cq_parity == 0) ? -1 : 0;  // tap again to deselect
-    update_parity_btns();
-    ESP_LOGI(TAG, "CQ parity pref: %s",
-             s_cq_parity < 0 ? "any" : s_cq_parity == 0 ? "EVEN only" : "ODD only");
-}
-
-static void tx_odd_btn_cb(lv_event_t *e)
-{
-    (void)e;
-    s_cq_parity = (s_cq_parity == 1) ? -1 : 1;  // tap again to deselect
+    // ANY -> EVEN -> ODD -> ANY. Deliberately in that order so the neutral
+    // state is one tap away from either lock, and three taps always return
+    // to where you started.
+    s_cq_parity = (s_cq_parity < 0) ? 0 : (s_cq_parity == 0) ? 1 : -1;
     update_parity_btns();
     ESP_LOGI(TAG, "CQ parity pref: %s",
              s_cq_parity < 0 ? "any" : s_cq_parity == 0 ? "EVEN only" : "ODD only");
@@ -1343,9 +1402,10 @@ static void cq_btn_cb(lv_event_t *e)
 
     ft8_tx_request_t req;
     char err[64];
-    // Auto-select the nearest clear 50-Hz slot to 1500 Hz; if the table is
-    // empty (nothing decoded yet) ft8_find_clear_tone_hz() returns 1500 Hz.
-    int cq_freq_hz = ft8_find_clear_tone_hz();
+    // TX hold on -> exactly the tone the chip is showing. Off -> the nearest
+    // clear 50 Hz slot to it, which with the default preference is the nearest
+    // clear slot to 1500 Hz, i.e. unchanged behaviour.
+    int cq_freq_hz = ft8_tx_pick_tone_hz();
 
     // Transmit the user's selected CQ preset (defaults to "CQ <call> <grid>").
     char cq_text[28];
@@ -1847,39 +1907,86 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_bar_set_range(s_bar_slot, 0, 15000);
     lv_bar_set_value(s_bar_slot, 15000, LV_ANIM_OFF);
 
-    // CQ TX parity preference: [TX: EVEN] [TX: ODD] toggle row.
-    // Double-height buttons below the slot countdown.  Dim grey when
-    // inactive; lights up in the same slot colours as s_lbl_count
-    // (steel blue / warm orange) when active.
-    s_btn_tx_even = lv_btn_create(s_left_pane);
-    lv_obj_set_size(s_btn_tx_even, 140, 52);
-    lv_obj_set_pos(s_btn_tx_even, 0, 152);
-    lv_obj_set_style_bg_color(s_btn_tx_even, lv_color_hex(0x303044), 0);
-    lv_obj_set_style_border_width(s_btn_tx_even, 0, 0);
-    lv_obj_set_style_radius(s_btn_tx_even, 8, 0);
-    lv_obj_set_style_pad_all(s_btn_tx_even, 0, 0);
-    lv_obj_add_event_cb(s_btn_tx_even, tx_even_btn_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *even_lbl = lv_label_create(s_btn_tx_even);
-    lv_label_set_text(even_lbl, "TX: EVEN");
-    lv_obj_set_style_text_color(even_lbl, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(even_lbl, &lv_font_montserrat_20, 0);
-    lv_obj_center(even_lbl);
+    // Mini occupancy strip, directly under the slot countdown (see the
+    // s_mini_strip declaration for why it's here). 52 cells across the full
+    // 288 px pane width works out at 5-6 px each: too fine to touch, which is
+    // fine - it's a picture, and the tone picker below is where you act on it.
+    // Cell edges are computed by proportion (i*W/N) rather than a fixed width,
+    // so the row fills the pane exactly with no ragged right end.
+    {
+        const int n_max = (FT8_TX_TONE_MAX_HZ - FT8_TX_TONE_MIN_HZ) / FT8_TX_TONE_STEP_HZ;
+        s_mini_n_slots = (n_max > MINI_SLOTS_MAX) ? MINI_SLOTS_MAX : n_max;
 
-    s_btn_tx_odd = lv_btn_create(s_left_pane);
-    lv_obj_set_size(s_btn_tx_odd, 140, 52);
-    lv_obj_set_pos(s_btn_tx_odd, 148, 152);
-    lv_obj_set_style_bg_color(s_btn_tx_odd, lv_color_hex(0x303044), 0);
-    lv_obj_set_style_border_width(s_btn_tx_odd, 0, 0);
-    lv_obj_set_style_radius(s_btn_tx_odd, 8, 0);
-    lv_obj_set_style_pad_all(s_btn_tx_odd, 0, 0);
-    lv_obj_add_event_cb(s_btn_tx_odd, tx_odd_btn_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *odd_lbl = lv_label_create(s_btn_tx_odd);
-    lv_label_set_text(odd_lbl, "TX: ODD");
-    lv_obj_set_style_text_color(odd_lbl, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(odd_lbl, &lv_font_montserrat_20, 0);
-    lv_obj_center(odd_lbl);
+        s_mini_strip = lv_obj_create(s_left_pane);
+        lv_obj_set_size(s_mini_strip, MINI_STRIP_W, MINI_STRIP_H);
+        lv_obj_set_pos(s_mini_strip, 0, 144);
+        lv_obj_set_style_bg_color(s_mini_strip, lv_color_hex(0x11141a), 0);
+        lv_obj_set_style_bg_opa(s_mini_strip, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(s_mini_strip, lv_color_hex(0x555555), 0);
+        lv_obj_set_style_border_width(s_mini_strip, 1, 0);
+        lv_obj_set_style_radius(s_mini_strip, 2, 0);
+        lv_obj_set_style_pad_all(s_mini_strip, 0, 0);
+        lv_obj_clear_flag(s_mini_strip, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_clear_flag(s_mini_strip, LV_OBJ_FLAG_CLICKABLE);
 
-    update_parity_btns();  // sync colours to s_cq_parity (persists on FT8 re-entry)
+        for (int i = 0; i < s_mini_n_slots; i++) {
+            int x0 = (i * MINI_STRIP_W) / s_mini_n_slots;
+            int x1 = ((i + 1) * MINI_STRIP_W) / s_mini_n_slots;
+            lv_obj_t *c = lv_obj_create(s_mini_strip);
+            lv_obj_set_size(c, (x1 - x0) - 1, MINI_STRIP_H - 6);
+            lv_obj_set_pos(c, x0, 2);
+            lv_obj_set_style_bg_color(c, lv_color_hex(FT8_TONE_COL_UNKNOWN), 0);
+            lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
+            lv_obj_set_style_border_width(c, 0, 0);
+            lv_obj_set_style_radius(c, 1, 0);
+            lv_obj_set_style_pad_all(c, 0, 0);
+            lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+            s_mini_cells[i] = c;
+            s_mini_prev[i]  = MINI_C_UNKNOWN;
+        }
+    }
+
+    // TX row below the mini strip: [TXCQ <parity>] [TX <n> Hz].
+    // Left cell cycles the CQ slot-parity preference (see update_parity_btns);
+    // right cell shows the TX tone and opens the picker. The tone used to be a
+    // half-height chip sharing the "Active: N" line further down, and was hidden
+    // whenever nothing was running - which made the number you transmit on
+    // invisible exactly when you were choosing it. Up here it is a permanent
+    // control in the grid, next to the other thing that decides how a CQ goes
+    // out (operator, 2026-07-29).
+    s_btn_parity = lv_btn_create(s_left_pane);
+    lv_obj_set_size(s_btn_parity, 140, 52);
+    lv_obj_set_pos(s_btn_parity, 0, 178);
+    lv_obj_set_style_bg_color(s_btn_parity, lv_color_hex(0x303044), 0);
+    lv_obj_set_style_border_width(s_btn_parity, 0, 0);
+    lv_obj_set_style_radius(s_btn_parity, 8, 0);
+    lv_obj_set_style_pad_all(s_btn_parity, 0, 0);
+    lv_obj_add_event_cb(s_btn_parity, parity_btn_cb, LV_EVENT_CLICKED, NULL);
+    s_lbl_parity = lv_label_create(s_btn_parity);
+    lv_label_set_text(s_lbl_parity, "TXCQ ANY");
+    lv_obj_set_style_text_color(s_lbl_parity, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(s_lbl_parity, &lv_font_montserrat_20, 0);
+    lv_obj_center(s_lbl_parity);
+
+    update_parity_btns();  // sync label+colour to s_cq_parity (persists on FT8 re-entry)
+
+    // TX tone. Border (not fill) carries the hold state - see t_clock_cb - so
+    // the fill stays distinct from the parity button's three meaningful fills.
+    s_btn_tx_tone = lv_btn_create(s_left_pane);
+    lv_obj_set_size(s_btn_tx_tone, 140, 52);
+    lv_obj_set_pos(s_btn_tx_tone, 148, 178);
+    lv_obj_set_style_bg_color(s_btn_tx_tone, lv_color_hex(0x263040), 0);
+    lv_obj_set_style_border_color(s_btn_tx_tone, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_border_width(s_btn_tx_tone, 2, 0);
+    lv_obj_set_style_radius(s_btn_tx_tone, 8, 0);
+    lv_obj_set_style_pad_all(s_btn_tx_tone, 0, 0);
+    lv_obj_add_event_cb(s_btn_tx_tone, tx_tone_btn_cb, LV_EVENT_CLICKED, NULL);
+    s_lbl_tx_tone = lv_label_create(s_btn_tx_tone);
+    lv_label_set_text(s_lbl_tx_tone, "TX -- Hz");
+    lv_obj_set_style_text_color(s_lbl_tx_tone, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(s_lbl_tx_tone, &lv_font_montserrat_20, 0);
+    lv_obj_center(s_lbl_tx_tone);
 
     // Filter / ADIF-log — side by side, each half the old full-width Filter
     // button (140 px, 8 px gap). ADIF-log was a long-press on "Active: N"
@@ -1888,7 +1995,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // gets a darker blue fill to read as the secondary of the pair.
     s_btn_filter = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_filter, 140, 60);
-    lv_obj_set_pos(s_btn_filter, 0, 212);  // 8 px below the TX row (uniform grid gap)
+    lv_obj_set_pos(s_btn_filter, 0, 238);  // 8 px below the TX row (uniform grid gap)
     lv_obj_set_style_bg_color(s_btn_filter, lv_color_hex(UI_COLOR_PRIMARY), 0);  // pale blue
     lv_obj_set_style_border_color(s_btn_filter, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
     lv_obj_set_style_border_width(s_btn_filter, 2, 0);
@@ -1902,7 +2009,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
 
     s_btn_adif = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_adif, 140, 60);
-    lv_obj_set_pos(s_btn_adif, 148, 212);
+    lv_obj_set_pos(s_btn_adif, 148, 238);
     lv_obj_set_style_bg_color(s_btn_adif, lv_color_hex(0x163d5e), 0);  // darker blue
     lv_obj_set_style_border_color(s_btn_adif, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
     lv_obj_set_style_border_width(s_btn_adif, 2, 0);
@@ -1926,7 +2033,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // the two steps of the flow together visually.
     s_btn_cq = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_cq, 288, 60);
-    lv_obj_set_pos(s_btn_cq, 0, 280);
+    lv_obj_set_pos(s_btn_cq, 0, 306);
     lv_obj_set_style_bg_color(s_btn_cq, lv_color_hex(0x2e8b3a), 0);
     lv_obj_set_style_border_color(s_btn_cq, lv_color_hex(0x4caf50), 0);
     lv_obj_set_style_border_width(s_btn_cq, 2, 0);
@@ -1944,35 +2051,10 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_center(s_cq_lbl);
     ft8_screen_view_refresh_cq_label();  // show the active CQ message
 
-    // "Active: N" - own line directly below the Call CQ button.
-    s_lbl_heard = lv_label_create(s_left_pane);
-    lv_label_set_text(s_lbl_heard, "Active: 0");
-    lv_obj_set_style_text_color(s_lbl_heard, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-    lv_obj_set_style_text_font(s_lbl_heard, &lv_font_montserrat_24, 0);
-    lv_obj_set_pos(s_lbl_heard, 0, 346);
-
-    // TX tone chip, sharing the "Active: N" row rather than taking a grid row
-    // of its own: that label only uses about half the 288 px content width, so
-    // this needs no reflow of Call CQ / the TX label below (deliberate choice -
-    // see the placement discussion, 2026-07-28). x=148 w=140 is the same
-    // right-column geometry as s_btn_tx_odd / s_btn_adif above. Hidden unless
-    // there's actually a tone to show (no CQ or QSO running -> nothing to
-    // move), which is also why it can't be confused with a settings control.
-    s_btn_tx_tone = lv_btn_create(s_left_pane);
-    lv_obj_set_size(s_btn_tx_tone, 140, 34);
-    lv_obj_set_pos(s_btn_tx_tone, 148, 342);
-    lv_obj_set_style_bg_color(s_btn_tx_tone, lv_color_hex(0x263040), 0);
-    lv_obj_set_style_border_color(s_btn_tx_tone, lv_color_hex(UI_COLOR_PRIMARY), 0);
-    lv_obj_set_style_border_width(s_btn_tx_tone, 1, 0);
-    lv_obj_set_style_radius(s_btn_tx_tone, 8, 0);
-    lv_obj_set_style_pad_all(s_btn_tx_tone, 0, 0);
-    lv_obj_add_event_cb(s_btn_tx_tone, tx_tone_btn_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_add_flag(s_btn_tx_tone, LV_OBJ_FLAG_HIDDEN);
-    s_lbl_tx_tone = lv_label_create(s_btn_tx_tone);
-    lv_label_set_text(s_lbl_tx_tone, "TX -- Hz");
-    lv_obj_set_style_text_color(s_lbl_tx_tone, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(s_lbl_tx_tone, &lv_font_montserrat_20, 0);
-    lv_obj_center(s_lbl_tx_tone);
+    // "Active: N" removed (operator, 2026-07-29: not useful information) - the
+    // status text below moved up into the line it occupied, which is the label
+    // that actually needs the room, since it wraps and changes several times a
+    // slot.
 
     // TX state indicator - hidden while idle; amber/armed or red/active,
     // tap to cancel/abort. See t_clock_cb (1 Hz refresh: state, colour,
@@ -1983,7 +2065,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_label_set_long_mode(s_lbl_tx, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_lbl_tx, 288);
-    lv_obj_set_pos(s_lbl_tx, 0, 380);
+    lv_obj_set_pos(s_lbl_tx, 0, 374);   // the "Active: N" line paid for the mini strip above
 
     // Live TX PWR/SWR line. Separate label (cyan) aligned just under s_lbl_tx:
     // LVGL v9 dropped in-label recolor markup, so a distinct colour from the

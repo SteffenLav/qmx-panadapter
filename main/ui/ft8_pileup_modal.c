@@ -67,7 +67,7 @@ static void row_work_cb(lv_event_t *e)
 
     // Reply on our own clear tone, same as a live decode-list row tap -
     // their stored frequency/last-seen-slot only feed the parity calc.
-    int reply_freq_hz = ft8_find_clear_tone_hz();
+    int reply_freq_hz = ft8_tx_pick_tone_hz();
 
     // If the caller is still in the live decode table, build the correct
     // NEXT message from their actual last transmission (the intelligent-

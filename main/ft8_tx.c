@@ -132,6 +132,14 @@ void ft8_tx_set_follow_offset_ms(int ms)
 }
 int ft8_tx_get_follow_offset_ms(void) { return s_follow_offset_us / 1000; }
 
+// TX tone preference / hold (semantics in ft8_tx.h; accessors further down).
+// Plain aligned int/bool, no mutex: single-word reads and writes are atomic
+// here, the only writer is the LVGL thread (the tone picker), and readers only
+// ever need "the latest value, whatever it is". Loaded from NVS in
+// ft8_tx_init() and written back by the setters.
+static volatile int  s_tone_pref_hz = FT8_TX_CQ_DEFAULT_FREQ_HZ;
+static volatile bool s_tone_hold    = false;
+
 void ft8_tx_init(void)
 {
     if (!s_lock) {
@@ -139,7 +147,20 @@ void ft8_tx_init(void)
     }
     memset(&s_armed, 0, sizeof(s_armed));
     s_state = FT8_TX_IDLE;
-    ESP_LOGI(TAG, "FT8 TX core ready (mutex=%p, SEND_LIVE=%d)", s_lock, FT8_TX_SEND_LIVE);
+
+    // Restore the persisted TX tone preference / hold. Done here rather than
+    // lazily in the getters so there's exactly one load, on a known task, before
+    // anything can read them.
+    {
+        qmx_settings_t st;
+        settings_load_all(&st);
+        if (st.tx_tone_hz >= FT8_TX_TONE_MIN_HZ && st.tx_tone_hz <= FT8_TX_TONE_MAX_HZ)
+            s_tone_pref_hz = st.tx_tone_hz;
+        s_tone_hold = st.tx_tone_hold;
+    }
+
+    ESP_LOGI(TAG, "FT8 TX core ready (mutex=%p, SEND_LIVE=%d, tone %d Hz hold %s)",
+             s_lock, FT8_TX_SEND_LIVE, s_tone_pref_hz, s_tone_hold ? "ON" : "off");
 }
 
 static inline void lock(void)   { if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY); }
@@ -296,6 +317,35 @@ int ft8_find_clear_tone_hz_near(int center_hz)
 int ft8_find_clear_tone_hz(void)
 {
     return ft8_find_clear_tone_hz_near(FT8_TX_CQ_DEFAULT_FREQ_HZ);
+}
+
+// --- TX tone preference / hold (see ft8_tx.h for the semantics) --------------
+int ft8_tx_get_tone_pref_hz(void) { return s_tone_pref_hz; }
+bool ft8_tx_get_tone_hold(void)   { return s_tone_hold; }
+
+void ft8_tx_set_tone_pref_hz(int hz)
+{
+    if (hz < FT8_TX_TONE_MIN_HZ || hz > FT8_TX_TONE_MAX_HZ) return;
+    s_tone_pref_hz = hz;
+    settings_set_tx_tone_hz((uint16_t)hz);   // debounced NVS flush
+    ESP_LOGI(TAG, "TX tone preference -> %d Hz (hold %s)",
+             hz, s_tone_hold ? "ON" : "off");
+}
+
+void ft8_tx_set_tone_hold(bool on)
+{
+    s_tone_hold = on;
+    settings_set_tx_tone_hold(on);
+    ESP_LOGI(TAG, "TX tone hold %s (%d Hz)", on ? "ON" : "off", s_tone_pref_hz);
+}
+
+int ft8_tx_pick_tone_hz(void)
+{
+    if (s_tone_hold) {
+        ESP_LOGI(TAG, "TX tone held at %d Hz - no clear-slot scan", s_tone_pref_hz);
+        return s_tone_pref_hz;
+    }
+    return ft8_find_clear_tone_hz_near(s_tone_pref_hz);
 }
 
 bool ft8_tx_is_clashing(void)

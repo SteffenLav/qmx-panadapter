@@ -100,6 +100,10 @@ typedef struct {
     bool     pskreporter_en;  // FT8/FT4: report real decodes to pskreporter.info (UDP, batched ~5 min;
                               // needs callsign+grid; never in simulation mode; default TRUE - same
                               // as WSJT-X ships; drawer checkbox turns it off)
+    uint16_t tx_tone_hz;      // FT8/FT4 TX audio tone preference in Hz (default 1500). What the pane's
+                              // "TX <n> Hz" button shows while idle; with tx_tone_hold it IS the tone used
+    bool     tx_tone_hold;    // FT8/FT4: keep tx_tone_hz for every CQ/reply instead of auto-picking a
+                              // clear slot - WSJT-X's "Hold Tx Freq" (default false)
     ft8_filters_t ft8_filters;        // CQ-run reply include/exclude filters
     bool     field_day_en;    // ARRL Field Day exchange mode: TX/RX class+section instead of grid/report (default false)
     char     fd_class[4];     // Field Day class, e.g. "16A" (1-2 digit transmitter count + category letter)
@@ -205,6 +209,11 @@ void settings_set_distance_in_miles(bool v);
 void settings_set_ft8_early_decode(bool v);
 void settings_set_greylist_en(bool v);
 void settings_set_pskreporter_en(bool v);
+
+// FT8/FT4 TX tone preference and hold (debounced flush) - see ft8_tx.h for what
+// "hold" means to the TX paths. Both are written by the TX tone picker's Apply.
+void settings_set_tx_tone_hz(uint16_t v);
+void settings_set_tx_tone_hold(bool v);
 
 // Band-plan strip region (debounced flush): 0=auto (derive from grid), 1=R1,
 // 2=R2, 3=R3.

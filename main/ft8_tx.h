@@ -227,6 +227,37 @@ int ft8_find_clear_tone_hz(void);
 // Same snapshot cost as ft8_find_clear_tone_hz_near(); safe from any task.
 uint64_t ft8_tx_get_tone_occupancy(int *n_slots_out, int *n_stations_out);
 
+// --- TX tone preference and hold (WSJT-X's "Hold Tx Freq") -------------------
+//
+// The preference is the tone the picker last committed and what the FT8 pane's
+// "TX <n> Hz" chip shows while nothing is running. It starts at
+// FT8_TX_CQ_DEFAULT_FREQ_HZ (1500), the conventional default.
+//
+// Hold decides who owns the tone from then on:
+//   hold OFF (default) - every CQ/reply auto-picks the nearest CLEAR slot, and
+//                        a CQ that gets clashed relocates itself. The
+//                        preference is then only a starting point, so the tone
+//                        actually used can differ from the one displayed.
+//   hold ON            - the preference IS the tone, for CQ and replies alike,
+//                        and a clash is reported (the FREQ BUSY warning) but
+//                        never acted on. This is the "I chose this slot, stay
+//                        there" behaviour.
+//
+// Session-only, deliberately not persisted: the settings dirty bitmap is full
+// (see CLAUDE.md), and this sits next to the equally session-only CQ parity
+// preference. Both reset to their defaults on a reboot.
+int  ft8_tx_get_tone_pref_hz(void);
+void ft8_tx_set_tone_pref_hz(int hz);
+bool ft8_tx_get_tone_hold(void);
+void ft8_tx_set_tone_hold(bool on);
+
+// The tone a NEW CQ or reply should go out on: the held preference, or a fresh
+// clear-slot scan when hold is off. Every automatic tone choice goes through
+// here - do not call ft8_find_clear_tone_hz() directly from a TX path, or that
+// path will ignore hold. (The tone picker's own "Find clear slot" button is the
+// one legitimate direct caller: that is the operator asking to scan.)
+int  ft8_tx_pick_tone_hz(void);
+
 // Same scan as ft8_find_clear_tone_hz(), but centred on an arbitrary
 // audio frequency instead of the fixed 1500 Hz CQ default - used to hop a
 // CQ that's been clashed onto its original tone to the nearest still-clear

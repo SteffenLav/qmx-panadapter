@@ -788,6 +788,11 @@ static void relocate_cq_tone_if_clashing(void)
 {
     if (!ft8_tx_is_clashing()) return;
 
+    // TX hold means the operator picked this slot deliberately and wants to stay
+    // there (WSJT-X's "Hold Tx Freq"). The clash is still reported on the TX
+    // status line - it just isn't acted on behind their back.
+    if (ft8_tx_get_tone_hold()) return;
+
     lock();
     int old_freq = s_freq_hz;
     unlock();
@@ -1421,7 +1426,7 @@ static bool try_start_pileup_pounce(void)
     // Reply on a clear tone (not their own), parity derived from the slot we last
     // heard them call us in (parity is periodic, so a several-minute-old
     // last_seen still gives the correct TX parity).
-    int reply_freq_hz = ft8_find_clear_tone_hz();
+    int reply_freq_hz = ft8_tx_pick_tone_hz();
     ft8_tx_request_t req;
     char err[64];
     if (!ft8_tx_build_request(FT8_TX_KIND_REPLY, pile[best].call, reply_freq_hz,
