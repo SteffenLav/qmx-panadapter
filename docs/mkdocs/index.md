@@ -23,8 +23,9 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 ## Status
 
-**v1.3.2 — a complete, self-contained FT8/FT4 station with no PC in the loop.**
+**v1.3.3 — a complete, self-contained FT8/FT4 station with no PC in the loop.**
 
+- **v1.3.3 — your TX frequency, on screen and under your control** (almost all of it Roy KI0ER's field feedback): the transmit tone is shown on the TX status line, and a **TX nnnn Hz** button opens a picker with a **live occupancy strip** across the whole audio window — drag along it to choose a clear slot, changeable mid-QSO but never mid-burst. The Tab5 also **stops calling a station that is busy with someone else** until they sign off or call CQ again, which additionally stops a merely-popular station being grey-listed; an incoming **`RRR`** now closes a QSO like `RR73`; there is a **QMX volume** slider in dB matching the radio's own LCD (for QMX+ builds with no control panel — Randy N4OPI); and **LoTW uploads finally carry US state and county**, which were missing entirely and cost US operators their Worked All States and county credit
 - **v1.3.2 — grid squares logged again** (a long-standing bug left `GRIDSQUARE` off almost every logged QSO — John W5JSS), **PSK Reporter spotting** (on by default; sends your call/grid and the stations you decode over the internet, never on the air), the **User Manual built into the firmware** (instant, no WiFi or SD card — the "Save offline" button is gone because it is no longer needed), **grey-listing** for stations that never answer and **pileup replies** using the intelligent-Transmit laddering (both Roy KI0ER), and an explicit **microSD backup contract** (continuous with WiFi off, one backup per start-up with WiFi on)
 - **v1.3.1 — DT + HZ decode-list columns** (each station's slot-timing offset and audio tone, Roy KI0ER's request), 3-letter country codes, an ST7121 boot-diagnostics fix (Paul VE3PIK), and UI alignment polish
 - **v1.3.0 — intelligent Transmit & faster replies** (from Roy KI0ER's field feedback): tapping a decoded station sends the correct *next* message WSJT-X-double-click style, hand-run QSOs log to ADIF, replies land on the beat, and a new **Fast pounce** toggle surfaces decodes before the slot boundary so a fresh CQ can be answered in the very next slot *(on by default; not yet verified on a live band — turn it off if your decode counts drop, and please report)*. Plus a rebuilt no-radio-needed **practice simulator**, **USB mouse** support (radio unplugged), and a **web file browser** for the microSD card
@@ -38,7 +39,7 @@ Running on the [M5Stack Tab5](https://docs.m5stack.com/en/core/tab5) (ESP32-P4 w
 
 **New user?** Start with the [Quick Start](quick-start.md) guide — 10 minutes to on-air.
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.3.2.pdf) — a printable 40-page reference.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.3.3.pdf) — a printable 40-page reference.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

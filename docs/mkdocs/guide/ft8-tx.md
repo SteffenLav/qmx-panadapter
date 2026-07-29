@@ -40,7 +40,9 @@ FT4 has full feature parity with FT8, including time-sync from decoded signals (
 - Some bands have both FT8 and FT4 frequencies listed
 - Tap the FT4 variant to switch
 
-Your **settings and decode list are sticky** — when you switch back to FT8 or FT4, the panadapter remembers your last frequency, bandwidth, and filter settings for each mode.
+Your **settings are sticky** — when you switch back to FT8 or FT4, the panadapter remembers your last frequency, bandwidth, and filter settings for each mode.
+
+The **decode list and pileup are cleared** on the switch (v1.3.3). The two modes use different slot lengths, so stations decoded under the old timing describe a band the new mode cannot hear — and leaving them on screen meant you could tap one and try to work a station that was no longer there.
 
 ### 3. Modes of Transmission
 
@@ -149,7 +151,10 @@ Enable **FT8 Simulation Mode** in the settings drawer to practice everything: ma
 - Phantoms are **patient like real operators**: each repeats its message every cycle, up to four times, before giving up and going back to CQing; one you're working stops CQing; one you've worked stops answering your CQs (toggle sim off/on to reset)
 - Their replies match **what you actually transmitted** — grid gets a report, a report gets a roger, `RR73` gets a courtesy `73`
 - The **Fast pounce** toggle is honoured, so you can watch what it changes: decodes surface just before the slot boundary with it on, just after with it off
-- Swiping to the Panadapter and back clears the phantom rows and pileup for a fresh session
+- Swiping to the Panadapter and back clears the phantom rows and pileup for a fresh session, and **turning simulation mode off also clears them** (v1.3.3) — phantom stations no longer linger in a list that is supposed to be real, where they were still tappable
+
+!!! note "Fixed in v1.3.3"
+    With **Fast pounce** turned *off* — which is the default — the phantoms never answered at all, so every practice pounce simply timed out. If you tried the simulator before v1.3.3 and concluded the phantom stations were ignoring you, that was this, not you.
 
 **Visual indicator:** When simulation mode is active, a **10 px red border pulses around the entire screen** (breathing red frame). This is your visual reminder that you're in practice mode — if the red frame is gone, simulation is off and real stations are in play.
 
@@ -224,7 +229,32 @@ Presets persist across power cycles. Common modifiers:
 
 ### 9. Frequency & Tone Control
 
-When a CQ is active, the panadapter holds your **CQ tone** (6.25 Hz audio frequency) fixed across slots. If another station lands on your tone during an exchange, you'll see a warning **⚠ FREQ BUSY** on the status label — but the QSO continues on the same tone (doesn't auto-relocate mid-exchange).
+Your transmit tone is chosen for you — the nearest clear 50 Hz slot to 1500 Hz, scanned against the stations currently decoded. **From v1.3.3 you can both see it and change it.**
+
+The tone is shown on its own line in the TX status block whenever a burst is armed or on the air. If another station lands on it you get **⚠ FREQ BUSY**, and the warning now names the frequency so you can act on it. During a CQ run the tone relocates itself to the nearest clear slot on the next cycle; mid-exchange it stays put unless you move it.
+
+**To move it,** tap the **TX nnnn Hz** button on the FT8 screen, to the right of "Active: N" — it appears whenever a CQ or QSO is running:
+
+| Control | What it does |
+|---------|--------------|
+| **Occupancy strip** | The whole 200-2800 Hz window as 52 slots. **Green** free, **red** occupied, **amber** you, **cyan** your QSO partner |
+| **Touch and drag** | Drag along the strip to pick a slot. The bar turns grey and follows your finger, the readout tracks it live, and it commits when you lift off |
+| **-50 / +50** | Nudge one slot at a time |
+| **Find clear slot** | Jumps to the nearest free slot, scanning outward from where you are |
+| **Apply nnnn Hz** | Sends it to the radio |
+
+The readout also states in words whether your chosen slot is clear or occupied, and lists the nearest free slots as numbers.
+
+It applies **between** bursts. With a burst on the air, Apply refuses and says to try again after it. Slot parity is untouched, so moving your tone mid-QSO does not disturb the exchange — your partner tracks the slot, not the frequency. This is the same freedom WSJT-X gives you, and it is the way out from under a station that has landed on top of you.
+
+!!! note "The strip shows decoded stations, not raw spectrum"
+    A station too weak to decode will not appear as occupied, and an all-grey strip means nothing has been heard yet rather than "the band is clear".
+
+### Waiting for a busy station
+
+On a crowded band several stations answer the same CQ and the caller works one of them. If that is not you, the Tab5 no longer keeps calling: while their last decoded message is addressed to somebody else, **nothing is transmitted**, and the status line shows `working <call> - waiting`. As soon as they send `73` or `RR73`, or call CQ again, it picks up where it left off.
+
+This also protects the grey-list. Giving up on a station used to count against it, so a popular station could end up permanently skipped by the robot and Auto-work-pileup for no reason other than being busy. A wait is not a failed attempt. The wait is capped at about six minutes so a station that vanishes mid-exchange still times out normally.
 
 To tune to a different frequency while CQ is running:
 
@@ -267,9 +297,9 @@ Uploads work **while FT8 or FT4 is actively running** — the panadapter briefly
 
 **"⚠ FREQ BUSY warning, but no other station is there"**
 
-- The panadapter's tone-clash detector can be overly sensitive on a busy band
-- Tap the status label to clear the warning and continue
-- See [Settings → FT8 Filters](settings.md) for tone-clash sensitivity
+- The clash detector reserves a ±50 Hz guard band around each decoded station, so it flags a neighbour that is close rather than exactly on you
+- The warning names the frequency. Tap **TX nnnn Hz** and either **Find clear slot** or drag to a green slot on the occupancy strip
+- Remember the strip only knows about stations it has *decoded* — a very weak one will not show
 
 **"QSO timeout — no response"**
 

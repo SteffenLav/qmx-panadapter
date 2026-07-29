@@ -1,4 +1,4 @@
-﻿#include "config_io.h"
+#include "config_io.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,7 +26,7 @@ char *config_io_export(size_t *out_len)
 
     // Plain malloc() of 8 KB would be forced into internal RAM (below IDF's
     // CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL threshold), which is the one scarce
-    // resource on this device â€” this buffer is just text, no DMA needed.
+    // resource on this device — this buffer is just text, no DMA needed.
     char *buf = heap_caps_malloc(CFG_BUF_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf) return NULL;
     int n = 0;

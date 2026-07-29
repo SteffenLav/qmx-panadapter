@@ -1027,6 +1027,85 @@ This also removed a real hazard: previously the card was torn down at an unpredi
 - Live SD mirroring during a WiFi session is a known limitation, not a bug to report: the underlying cause is the SD and WiFi sharing a DMA controller, which is not fixed in this release. The start-up backup is unaffected.
 - The one-off `tlsf_free` boot-time reboot from v1.3.0 was not seen again this cycle and is still being watched.
 
+## v1.3.3 — 2026-07-29 — Your TX frequency, on screen and under your control
+
+This release is almost entirely Roy KI0ER's field feedback, plus a volume control for control-panel-less QMX+ builds and a LoTW gap that was quietly costing US operators award credit.
+
+### You can see and change your TX audio frequency (Roy KI0ER)
+
+Until now the Tab5 picked your transmit tone for you, silently, and never told you what it chose. There was no way to read it and no way to move it. Two things follow from that: you could not tell whether you were sitting on top of somebody, and when you were, you could not get out of the way.
+
+Both are fixed.
+
+**Reading it.** The tone now has its own line in the TX status block, in both the "TX armed" and "Transmitting" states. The `FREQ BUSY` warning names the frequency too, so it tells you something you can act on.
+
+**Changing it.** A new **TX nnnn Hz** button appears on the FT8 screen next to "Active: N" whenever a CQ or QSO is running. Tapping it opens a tone picker:
+
+- A **live occupancy strip** across the whole 200-2800 Hz audio window. Green is free, red is occupied, amber is you, cyan is your QSO partner.
+- **Touch and drag** along the strip to pick a slot. The bar you are holding turns grey and follows your finger, the big readout tracks it live, and it commits when you lift off.
+- **-50 / +50** buttons for a nudge, and a **Find clear slot** button that scans outward from wherever you are.
+- The free slots are also spelled out as numbers underneath, and the readout says in words whether the slot you have chosen is clear or occupied.
+- **Apply nnnn Hz** commits it to the radio.
+
+It applies **between** bursts and refuses while a burst is on the air, which is what Roy asked for. Slot parity is untouched, so your partner keeps tracking the exchange exactly as WSJT-X users expect when they retune mid-QSO.
+
+One honest limitation: the strip shows **decoded stations** and their guard bands, not raw spectrum. A station too weak to decode will not show up as occupied, and grey across the whole strip means nothing has been heard yet rather than "the band is empty".
+
+### It no longer calls a station that is busy with someone else (Roy KI0ER)
+
+On a crowded band several people answer the same CQ and the caller picks one of them. When that was not you, the Tab5 kept calling anyway — six full-power transmissions at a station whose own decode row plainly showed it mid-exchange with somebody else — and then gave up.
+
+Now it waits. While their last message is addressed to a third party, nothing is transmitted. When they sign off with `73` or `RR73`, or call CQ again, it picks straight back up.
+
+The part that matters most is not the wasted battery. Giving up on a station used to **grey-list** it after two attempts, so a perfectly good, perfectly audible station could end up permanently skipped by the robot and Auto-work-pileup for no reason other than being popular. A hold no longer counts as a failed attempt, so that cannot happen. The wait is capped at about six minutes, so a station that simply disappears mid-exchange still times out normally.
+
+### An incoming "RRR" now finishes the QSO (Roy KI0ER)
+
+`RRR` is the older form of `RR73` and means the same thing at that point in an exchange. The Tab5 did not recognise it, so when Roy worked NH6L the two of them deadlocked — NH6L sending `KI0ER NH6L RRR` every slot, the Tab5 answering with the same signal report every slot, and the QSO only completing when Roy stepped in by hand. An `RRR` now closes the exchange exactly like `RR73`, and the next thing sent is `73`.
+
+### QMX volume from the Tab5 (Randy N4OPI)
+
+Randy runs a QMX+ with no control panel, which means no volume knob at all. There is now a **QMX volume** slider in the settings drawer, directly under Flip 180, in both Panadapter and FT8 modes.
+
+The value is **in decibels — the same number the radio shows on its own LCD**, not an invented percentage. It also reads the radio back each time the drawer opens, so if you change the volume from the rig the slider follows rather than disagreeing with it.
+
+### LoTW: US state and county (found via Paul N8HM)
+
+Paul N8HM pointed out that ARRL's LoTW documentation is out of date and that TQSL's own source is the thing to work from — which is how this implementation was built — and offered his CardSat project as a cross-check. Comparing the two turned up a real gap on this side: **the Tab5 was not sending station state or county at all.**
+
+For a US operator that means uploaded QSOs earned **no Worked All States and no county credit**, for them or for the stations they worked. There are now two fields for it in the LoTW setup page. Fill them in if your TQSL station location has them; the county is the name on its own, not `ST,Name`.
+
+Two details worth knowing:
+
+- Adding them does **not** re-upload your log. The upload position now only resets when the certificate itself actually changes, so a two-field edit no longer re-sends everything.
+- Everyone outside the US is unaffected, and existing signatures are unchanged.
+
+Verified against the worked example in CardSat's own format notes, which came from a QSO LoTW accepted and posted — so the field ordering is checked against something external, not just against itself.
+
+### Fixes
+
+- **The "decode my partner's reply first" optimisation had been aimed at the wrong frequency since v0.18.4.** It was pointed at *our own* transmit tone instead of the partner's. Because a pounce deliberately transmits on a clear slot away from the station being called, those are two different frequencies — measured here as 250 Hz and 750 Hz apart on two test QSOs — so the optimisation never did anything. It exists to stop a busy band pushing a reply past the immediate-reply window, which was the original complaint behind it.
+- **The decode list is cleared when you leave simulation mode**, so phantom stations no longer linger in a list that is supposed to be real — and no longer sit there tappable.
+- **The decode list and pileup are cleared when you switch between FT8 and FT4.** The two modes use different slot lengths, so rows decoded under the other timing describe a band the new mode cannot hear.
+- **The practice simulator was silently broken with "Fast pounce" turned off** — which is the default. Phantom stations never replied at all, so every practice pounce timed out. A reply was scheduled one second later than the retry that reset it, and it lost that race every slot, forever. Nothing logged the miss; it simply looked as though the phantoms were ignoring you.
+- **LoTW upload success detection** now matches TQSL's own test exactly (a substring check rather than an exact one), so a decorated-but-successful status can no longer be read as a failure.
+
+### PSK Reporter is confirmed working
+
+The one item v1.3.2 flagged as needing a field check has been answered. `QMX Panadapter v1.3.2` is listed under "Software in use" at [pskreporter.info](https://pskreporter.info/cgi-bin/pskstats.pl), with reports arriving from six stations — BD4AHS, KI0ER, VE3OFA, W5JSS, W5NR and W7STF. FT4 is reported as well as FT8.
+
+Two things to know if yours looks dead: the first report goes out **five to five and a half minutes** after switching on, so a short test shows nothing; and PSK Reporter never acknowledges a report, so that page is the only place the truth shows. Third-party sites built on PSK Reporter data do not always display spots that were in fact accepted — which is exactly what led Samuel W7STF to think his reporting was broken while his spots were arriving normally.
+
+#### Notes for testers
+
+- **The QMX volume slider has not been tested against a radio.** No QMX was attached while it was written. The command format, the value read back from the radio, and whether the dB figure on the Tab5 matches the dB on the QMX LCD all want confirming. If the slider does nothing, or the useful range is squeezed into one end of its travel, that is the thing to report.
+- **The tone picker has not been used on a crowded band.** It was verified against the practice simulator, which puts six stations at fixed frequencies — nothing like a real evening on 20 m. Reports on whether the occupancy strip matches what you can actually hear are welcome.
+- **The busy-station hold has the same caveat**: the simulator cannot produce a real pileup.
+- **The LoTW state/county path needs a US callsign certificate to exercise.** It is written so the fields are optional and never required, precisely because that could not be checked here.
+- **Fast pounce (early decode)** from v1.3.0 remains on-air-unverified. ON/OFF decode counts on the same band and time are still the most useful report anyone can send.
+- Live SD mirroring during a WiFi session is still a known limitation rather than a bug: the SD card and WiFi share a DMA controller. The start-up backup is unaffected.
+- The one-off `tlsf_free` boot-time reboot first seen in v1.3.0 has still not recurred and is still being watched.
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*

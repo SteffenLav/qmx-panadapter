@@ -12,9 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi RSSI, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.3.2.** A complete, self-contained FT8/FT4 station — receive, transmit, auto-QSO, ADIF logging, and upload to **all three major logbooks: QRZ, eQSL, and ARRL LoTW** — with no PC in the loop. **New in v1.3.2:** your QSOs get their **grid squares** back (a long-standing bug left `GRIDSQUARE` off almost every logged contact — John W5JSS); **PSK Reporter spotting**, so the Tab5 appears on the map as a monitoring station (**on by default**, FT8 drawer → "Report to PSK Reporter" to turn it off — it sends your call/grid and the stations you decode over the internet, never on the air); the **User Manual is now built into the firmware**, so it opens instantly with no WiFi, no SD card and no download (the "Save offline" button is gone — it is not needed); **grey-listing** for stations that never answer (opt-in) and **pileup replies** that use the same message laddering as a manual Transmit (both Roy KI0ER); and the **microSD backup** is now explicit — continuous with WiFi off, one complete backup per start-up with WiFi on, with a green/yellow SD dot showing which. **From v1.3.1: DT and HZ columns in the decode list** (each station's slot-timing offset and audio tone — Roy KI0ER's request), country shown as a compact 3-letter code, a boot-diagnostics fix for ST7121 units (Paul VE3PIK), and a round of UI alignment polish (FT8 left pane grid, settings drawer, QMX prompt placement). **From v1.3.0 (built on Roy KI0ER's field feedback): intelligent Transmit** — tapping a decoded row now sends the correct *next* message for that station, WSJT-X double-click style, and a fully hand-stepped QSO logs to ADIF like any other; **faster replies** (wider mid-slot reply window, hand-armed exchanges land on the beat); a **"Fast pounce (early decode)" toggle** that surfaces decodes before the slot boundary so answering a fresh CQ can transmit in the very next slot (*on by default; not yet A/B-verified on a live band — turn it off if your decode counts drop, and please report*); the **pileup no longer locks you out of the ADIF log** (long-press always opens it); a rebuilt **FT8 practice simulator** that needs no radio at all — six patient phantom stations, real pileups, and a "Delete test QSOs" cleanup button; **USB mouse** support (with the QMX unplugged — a USB hub can't serve both on this hardware); and a **web file browser** for the microSD card (download logs/config, upload, delete — no card-pulling). Built on the v1.2.0 on-device User Manual, the v1.1.0 decode-collapse fix + microSD station backup + GPS time sync, and the 1.0 station core (auto-QSO, `<...>` callsign resolution, broken-QSO resume, Today/POTA log view, display sleep, LoTW upload).
+> **Release — v1.3.3.** A complete, self-contained FT8/FT4 station — receive, transmit, auto-QSO, ADIF logging, and upload to **all three major logbooks: QRZ, eQSL, and ARRL LoTW** — with no PC in the loop. **New in v1.3.3 (mostly Roy KI0ER's field feedback):** your **TX audio frequency is visible and adjustable** at last — the tone appears on the TX status line, and a **TX nnnn Hz** button opens a picker with a **live occupancy strip** across the whole 200-2800 Hz window (green free, red busy, amber you, cyan your partner), **drag along it to choose**, plus ±50 Hz, a **Find clear slot** button and the free slots listed as numbers; changeable **mid-QSO but never mid-burst**, exactly as WSJT-X allows. The Tab5 now **holds off calling a station that is plainly mid-QSO with somebody else** until they sign off or call CQ again — which also stops a merely-popular station being **grey-listed** for not answering. An incoming **`RRR`** now closes a QSO like `RR73` (it used to deadlock — Roy working NH6L). New **QMX volume** slider in the settings drawer under Flip 180, **in decibels, the same number the radio shows on its own LCD**, and it reads the rig back so the two never disagree (for QMX+ builds with no control panel — Randy N4OPI). **LoTW uploads now carry US state and county**, which were missing altogether and left US operators with no Worked All States or county credit (found by cross-checking against Paul N8HM's CardSat). Also: the decode list is **cleared when leaving simulation mode and when switching FT8↔FT4**, the **practice simulator is fixed** (phantom stations never replied with Fast pounce off — the default), and the reply-first decode optimisation is **aimed at the right frequency** for the first time since v0.18.4. **PSK Reporter from v1.3.2 is confirmed working in the field** — six stations reporting. **From v1.3.2:** your QSOs get their **grid squares** back (a long-standing bug left `GRIDSQUARE` off almost every logged contact — John W5JSS); **PSK Reporter spotting**, so the Tab5 appears on the map as a monitoring station (**on by default**, FT8 drawer → "Report to PSK Reporter" to turn it off — it sends your call/grid and the stations you decode over the internet, never on the air); the **User Manual is now built into the firmware**, so it opens instantly with no WiFi, no SD card and no download (the "Save offline" button is gone — it is not needed); **grey-listing** for stations that never answer (opt-in) and **pileup replies** that use the same message laddering as a manual Transmit (both Roy KI0ER); and the **microSD backup** is now explicit — continuous with WiFi off, one complete backup per start-up with WiFi on, with a green/yellow SD dot showing which. **From v1.3.1: DT and HZ columns in the decode list** (each station's slot-timing offset and audio tone — Roy KI0ER's request), country shown as a compact 3-letter code, a boot-diagnostics fix for ST7121 units (Paul VE3PIK), and a round of UI alignment polish (FT8 left pane grid, settings drawer, QMX prompt placement). **From v1.3.0 (built on Roy KI0ER's field feedback): intelligent Transmit** — tapping a decoded row now sends the correct *next* message for that station, WSJT-X double-click style, and a fully hand-stepped QSO logs to ADIF like any other; **faster replies** (wider mid-slot reply window, hand-armed exchanges land on the beat); a **"Fast pounce (early decode)" toggle** that surfaces decodes before the slot boundary so answering a fresh CQ can transmit in the very next slot (*on by default; not yet A/B-verified on a live band — turn it off if your decode counts drop, and please report*); the **pileup no longer locks you out of the ADIF log** (long-press always opens it); a rebuilt **FT8 practice simulator** that needs no radio at all — six patient phantom stations, real pileups, and a "Delete test QSOs" cleanup button; **USB mouse** support (with the QMX unplugged — a USB hub can't serve both on this hardware); and a **web file browser** for the microSD card (download logs/config, upload, delete — no card-pulling). Built on the v1.2.0 on-device User Manual, the v1.1.0 decode-collapse fix + microSD station backup + GPS time sync, and the 1.0 station core (auto-QSO, `<...>` callsign resolution, broken-QSO resume, Today/POTA log view, display sleep, LoTW upload).
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.3.2.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.3.3.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -286,6 +286,7 @@ Controls appear top to bottom in this order:
 | Control | What it does |
 |---------|--------------|
 | **Flip 180°** | Inverts the whole display and touch axes for upside-down mounting; centred checkbox so it isn't hit by accident, persisted |
+| **QMX volume** | The radio's own AF gain, **in decibels — the same number the QMX shows on its LCD**. Reads the rig back each time the drawer opens, so it stays in step if you use the radio's volume knob. Intended for QMX+ builds with no control panel, where there is no knob at all |
 | **IQ Balance** | Toggle adaptive I/Q image correction; re-enabling resets the estimator |
 | **Flat spectrum** | Toggle flat/absolute display mode, persisted |
 | **Presets** | HF Normal / HF DX / Strong Sig — sets dB range and smoothing in one tap |
@@ -303,7 +304,7 @@ Controls appear top to bottom in this order:
 
 The drawer was decluttered in v0.19.4: the **Snap to signal** and **FT8 sync lines** toggles were removed (taps now always tune where you touch), and **Band-plan region** moved up next to Identity.
 
-The drawer shows a different subset while on the FT8 screen (Flip 180°, WiFi, Identity, Display — plus three FT8-only controls not shown above: **Distance in miles** for the decode list's KM/MI column, **Fast pounce (early decode)** — see below — and **FT8 Simulation Mode**, see [FT8 Simulation mode](#ft8-simulation-mode)).
+The drawer shows a different subset while on the FT8 screen (Flip 180°, QMX volume, WiFi, Identity, Display — plus three FT8-only controls not shown above: **Distance in miles** for the decode list's KM/MI column, **Fast pounce (early decode)** — see below — and **FT8 Simulation Mode**, see [FT8 Simulation mode](#ft8-simulation-mode)).
 
 **Fast pounce (early decode)** — on by default. Decodes surface ~1.8 s *before* the slot boundary (the way WSJT-X decodes in the dead-air gap), so replying to a fresh CQ can transmit in the very next slot instead of waiting a full 30 s cycle, and mid-QSO replies land on the beat. The trade-off: the capture window closes ~1.8 s early, so a station transmitting *late* in the slot can occasionally be clipped and missed. ⚠️ This feature has not yet been A/B-verified on a live band — if your decodes-per-slot drop noticeably with it on, turn it off here and please report your before/after numbers on the groups.io thread.
 
@@ -565,12 +566,39 @@ The left pane shows a persistent status line below the slot countdown:
 
 | Colour | Meaning |
 |--------|---------|
-| **Red** | `TRANSMITTING: <message>` — burst in progress; tap to abort |
-| **Amber** | `TX armed: <message> → EVEN/ODD, ~Ns` — waiting for slot; tap to cancel |
-| **Red-orange ⚠ FREQ BUSY** | Armed tone is occupied (±50 Hz guard). During CQ-run this self-heals — the next cycle automatically hops to the nearest clear tone. Mid-exchange (replying to a specific station) the tone is locked to match them, so it just rides out until the exchange ends |
+| **Red** | `TRANSMITTING: <message>` — burst in progress, with your **audio tone on its own line**; tap to abort |
+| **Amber** | `TX armed: <message>` then `nnnn Hz → EVEN/ODD, ~Ns` — waiting for slot; tap to cancel |
+| **Red-orange ⚠ FREQ BUSY** | Your tone is occupied (±50 Hz guard), and the warning names the frequency so you can act on it. During CQ-run this self-heals — the next cycle hops to the nearest clear tone automatically. Mid-exchange you can now move it yourself: see **TX audio frequency** below |
+| **Grey, `working <call> - waiting`** | The station you are calling is mid-exchange with somebody else. Nothing is transmitted until they sign off or call CQ again — see **Waiting for a busy station** below |
 | **Green** | QSO complete |
 | **Orange** | QSO timed out — tap to clear |
 | **Dim white** | FT8 engine status passthrough (capturing / decoding / symbol count / …) |
+
+### TX audio frequency
+
+Your transmit tone is chosen automatically — the nearest clear 50 Hz slot to 1500 Hz, scanned against the stations currently decoded. From v1.3.3 you can both **see** it and **change** it.
+
+It is shown on the TX status line (above) whenever a burst is armed or on the air. To change it, tap the **TX nnnn Hz** button on the FT8 screen, to the right of "Active: N" — it appears whenever a CQ or QSO is running:
+
+| Control | What it does |
+|---------|--------------|
+| **Occupancy strip** | The whole 200-2800 Hz window as 52 slots. **Green** free, **red** occupied, **amber** you, **cyan** your QSO partner |
+| **Touch and drag** | Pick a slot by dragging along the strip. The bar goes grey and follows your finger, the readout tracks it live, and it commits when you lift off |
+| **-50 / +50** | Nudge one slot at a time |
+| **Find clear slot** | Scans outward from where you are and jumps to the nearest free slot |
+| **Apply nnnn Hz** | Sends it to the radio |
+
+The readout also says in words whether the slot you have picked is clear or occupied, and the free slots nearest you are listed as numbers underneath.
+
+It applies **between** bursts. If a burst is on the air, Apply refuses and tells you to try again after it — the same rule WSJT-X operators are used to. Slot parity is untouched, so moving your tone mid-QSO does not disturb the exchange; your partner tracks the slot, not the frequency.
+
+> **The strip shows decoded stations, not raw spectrum.** A station too weak to decode will not show as occupied, and an all-grey strip means nothing has been heard yet rather than "the band is clear".
+
+### Waiting for a busy station
+
+On a crowded band several stations answer the same CQ and the caller works one of them. If that is not you, the Tab5 no longer keeps calling: while their last decoded message is addressed to somebody else, **nothing is transmitted**. The status line shows `working <call> - waiting`. As soon as they send `73` or `RR73`, or call CQ again, it picks up where it left off.
+
+This also protects the grey-list. Giving up on a station used to count against it, so a popular station could end up permanently skipped by the robot and Auto-work-pileup for no reason other than being busy. A wait is not a failed attempt. The wait is capped at about six minutes so a station that vanishes mid-exchange still times out normally.
 
 ### QSO override buttons
 
@@ -596,11 +624,26 @@ Long-press the **Call CQ** button to open the preset editor. Three message slots
 
 Every completed FT8 QSO — pounce or CQ-run — is automatically written to an ADIF v3.1.4 file at `/spiffs/qso.adi` on the Tab5's internal flash. The log survives reboots and re-flashes.
 
-**Download.** The web UI bottom bar shows **"N QSOs ↓"** once the first QSO is logged. Clicking it downloads `qso.adi` for import into any logging software (WSJT-X, Log4OM, DXKeeper, …) or for LoTW/POTA.app, which the Tab5 can't upload to directly (see below).
+**Download.** The web UI bottom bar shows **"N QSOs ↓"** once the first QSO is logged. Clicking it downloads `qso.adi` for import into any logging software (WSJT-X, Log4OM, DXKeeper, …) or for POTA.app, which has no upload API (see below).
 
 **Upload to QRZ Logbook / eQSL — directly from the Tab5.** Two more buttons appear next to the ADIF download link once you've logged a QSO: **"QRZ ↑"** and **"eQSL ↑"**. Tap either the first time and it prompts for credentials (QRZ: API key from *Logbook Data → API Key* on qrz.com; eQSL: your username and password — eQSL has no API-key scheme) and saves them on the Tab5, not just in the browser. Every tap after that uploads everything logged since the last successful upload — no need to re-enter credentials, and no risk of duplicate uploads, since the Tab5 tracks how far it's gotten into the log. If a record is rejected (bad credentials, quota, etc.) the run stops and reports the reason rather than skipping past it; fix the cause and tap again to resume from where it left off. eQSL accepts a whole batch of QSOs per request; QRZ's API takes one at a time, so a big log takes one HTTP round trip per QSO.
 
-LoTW and POTA.app have no equivalent built-in path — LoTW requires a certificate-based TQSL signing step, and POTA.app has no upload API at all (browser login or email only). Use the ADIF download above for both.
+**Upload to ARRL LoTW — also directly from the Tab5.** The Tab5 signs your QSOs on-device with your own LoTW callsign certificate, so no TQSL and no PC are involved. The bottom bar shows **"LoTW setup"** until it is configured, then **"LoTW ↑"**.
+
+Setup is a two-page guided flow. Page one points you at ARRL's own "Save the Callsign Certificate" instructions — you export a `.p12` file from TQSL, which most people did once, years ago. Page two takes that file, its password, and your DXCC entity number:
+
+| Field | Notes |
+|-------|-------|
+| **.p12 file + password** | Parsed **in your browser**, not on the Tab5 — the password never reaches the device. Only the certificate and key are sent |
+| **DXCC entity number** | Required. The same one your TQSL station location uses (Denmark = 221, USA = 291) |
+| **CQ zone / ITU zone** | Optional |
+| **US state / county** | **US stations only** (v1.3.3). Without them your QSOs earn no Worked All States and no county credit — for you or for the stations you work. The county is the name on its own (`Arlington`), not `VA,Arlington` |
+
+Every tap of **LoTW ↑** afterwards signs and uploads everything logged since the last successful upload. Ctrl-click **LoTW ↑** to re-run setup — a certificate is typically valid three years. Re-importing the *same* certificate no longer re-uploads your whole log; only an actually-changed certificate resets the upload position, since a new key means everything has to be re-signed.
+
+> Uploads are queued at ARRL's end. If a QSO does not appear immediately, check [the LoTW queue status](https://www.arrl.org/logbook-queue-status) before assuming a problem — the queue has run hours behind at busy times. LoTW rejects a malformed file at upload time, so anything that reaches the queue was signed correctly.
+
+**POTA.app** has no upload API at all (browser login or email only), so use the ADIF download above for that.
 
 **Fields in each record:**
 
@@ -850,7 +893,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.3.2 is here** — **grid squares are logged again** (they were missing from almost every QSO), **PSK Reporter spotting** (on by default), the **User Manual built into the firmware** (no WiFi or SD card needed, ever), **grey-listing** for stations that never answer, **pileup replies** that use the intelligent-Transmit laddering, and an explicit **microSD backup** contract (continuous with WiFi off, one backup per start-up with WiFi on) — on top of v1.3.1's DT/HZ decode columns and UI polish, and v1.3.0's smarter manual FT8 operation from Roy KI0ER's field feedback (**intelligent Transmit**, faster reply timing, the **cold-pounce early-decode toggle**, the pileup/ADIF-log lockout fix, the no-radio **practice simulator**, **USB mouse** support, and the **web file browser** for the microSD card). Next on the bench:
+**v1.3.3 is here** — your **TX audio frequency is finally visible and adjustable** (a tone picker with a live occupancy strip across the band, drag to pick, changeable mid-QSO but never mid-burst), the Tab5 **stops calling a station that is busy with someone else** (and no longer grey-lists it for being popular), an incoming **`RRR` closes a QSO** like `RR73`, a **QMX volume** slider in dB matching the radio's own LCD (for control-panel-less QMX+ builds — Randy N4OPI), and **US state/county in LoTW uploads**, which were missing entirely and costing US operators their Worked All States and county credit. Most of this is Roy KI0ER's field feedback. **PSK Reporter from v1.3.2 is now confirmed working** — six stations reporting. On top of v1.3.2's grid-square fix and built-in User Manual, v1.3.1's DT/HZ decode columns, and v1.3.0's intelligent Transmit. Next on the bench:
 
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).

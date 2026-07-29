@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -29,13 +29,13 @@ typedef struct {
     bool excl_worked_before; // skip callers already in the ADIF log (enforced since the robot landed)
     bool excl_plain_cq;      // hide bare "CQ ..." rows, show only replies to us
     bool incl_cq_only;       // show ONLY "CQ ..." rows (display filter; does not affect auto-reply)
-    // --- Robot (auto-answer) â€” appended; old NVS blobs read back 0 (=off, STRONGEST) ---
+    // --- Robot (auto-answer) — appended; old NVS blobs read back 0 (=off, STRONGEST) ---
     bool    robot_en;        // auto-answer CQ callers with no tap (default off)
     uint8_t robot_priority;  // ft8_robot_priority_t: which caller to pick first
-    // --- Skip TX1 â€” appended; old NVS blobs read back 0 (=off) ---
+    // --- Skip TX1 — appended; old NVS blobs read back 0 (=off) ---
     bool    skip_tx1;        // pounce: first TX is a signal report (skip grid exchange),
                               // straight into the roger/RR73 wait - see ft8_qso_start()
-    // --- Auto-work pileup â€” appended; old NVS blobs read back 0 (=off) ---
+    // --- Auto-work pileup — appended; old NVS blobs read back 0 (=off) ---
     bool    auto_pileup;     // on QSO completion, auto-pounce the strongest waiting
                               // pileup caller instead of resuming CQ (unattended TX)
 } ft8_filters_t;
@@ -65,7 +65,7 @@ typedef struct {
     uint8_t  cq_sel;           // which CQ preset is active, 0..2 (default 0)
     bool     onboarded;        // first-boot WiFi/identity prompts shown (default false)
     bool     wifi_enabled;     // initiate WiFi at boot (default true)
-    bool     qmx_gps;         // QMX/QMX+ has GPS discipline â€” skip Tab5â†’QMX time push
+    bool     qmx_gps;         // QMX/QMX+ has GPS discipline — skip Tab5→QMX time push
     bool     freq_kp_calc;    // freq keypad digit layout: false=phone, true=10-key/calc
     int16_t  freq_kp_dx;      // freq keypad popup position: offset from screen center, px (default 0,0)
     int16_t  freq_kp_dy;
@@ -139,7 +139,7 @@ void settings_init(void);
 // written. Always succeeds (falls back to defaults silently).
 void settings_load_all(qmx_settings_t *out);
 
-// Per-field setters. Each schedules a debounced flush to NVS â€” fast
+// Per-field setters. Each schedules a debounced flush to NVS — fast
 // repeated calls (e.g. a slider drag) only result in one flash write
 // after the user pauses.
 void settings_set_db_min(float v);
@@ -244,7 +244,7 @@ void settings_set_freq_kp_calc(bool v);
 // Freq keypad popup position: offset (dx, dy) in pixels from screen center,
 // where it last sat after being dragged. Debounced flush (a drag-release
 // writes once, not per-pixel during the drag). Deliberately NOT part of
-// DIRTY_CONFIG_EXPORT_MASK â€” purely cosmetic placement, not worth a SD-card
+// DIRTY_CONFIG_EXPORT_MASK — purely cosmetic placement, not worth a SD-card
 // mirror write.
 void settings_set_freq_kp_pos(int16_t dx, int16_t dy);
 

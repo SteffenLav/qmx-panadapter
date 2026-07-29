@@ -34,6 +34,8 @@ Once connected, the settings show your **IP address** — use this to access the
 
 **Flip 180°** — Invert the display for upside-down mounting or cable routing.
 
+**QMX volume** — The radio's own AF gain, **in decibels: the same number the QMX shows on its own LCD**, not a percentage. Available in both Panadapter and FT8 modes. It reads the radio back each time you open the drawer, so if you turn the volume with the rig's own knob the slider follows instead of disagreeing with it. This exists mainly for QMX+ builds with no control panel, where there is no volume knob at all (Randy N4OPI's request). Nothing is sent to the radio until you move the slider, so switching on can never change your volume unexpectedly.
+
 **Display sleep** — Dropdown (Off / 1 / 2 / 5 / 10 / 30 min). After the chosen idle time the backlight turns off; FT8, the radio link, and the web UI keep running. Tap the screen to wake — the wake tap is swallowed, so it can't tune or press anything. A **two-finger double-tap** blanks the display immediately.
 
 **Brightness** — Screen brightness (0–100%).
