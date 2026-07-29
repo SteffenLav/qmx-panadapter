@@ -195,15 +195,25 @@ void cat_request_ssb_bandwidth(uint32_t hz);
  * the drawer slider is in dB so the number on the Tab5 is the same number the
  * radio shows. Do not reintroduce a percentage here.
  *
- * Range: 0-799 = 0-199.75 dB, matching the volume knob's own "0 to 200dB gain"
- * (operation manual, audio chain step 23). CAT_AF_GAIN_DB_MAX is the slider's
- * top in dB.
+ * Protocol range is 0-799 = 0-199.75 dB, matching the volume knob's own "0 to
+ * 200dB gain" (operation manual, audio chain step 23).
+ *
+ * CAT_AF_GAIN_DB_MAX is the SLIDER's top, and it is deliberately far below that
+ * protocol maximum. Field-verified 2026-07-29 (Randy N4OPI, first report from a
+ * real radio): the command format and the read-back both work, but "the usable
+ * portion of the slider is concentrated in the first 10% of the range - anything
+ * beyond that is way too loud". A 0-199 dB slider therefore put every setting an
+ * operator actually wants inside the leftmost ~2 cm of a 288 px control. Capped
+ * at 40 dB, which is double the reported usable top - so nothing reachable is
+ * lost - for 5x the resolution where it matters. Raise it if a unit is ever
+ * reported needing more; do NOT turn the scale back into a percentage (the whole
+ * point is that the number matches the radio's own LCD).
  *
  * Deferred to the poll task like the filter writes - a direct cross-thread
  * write races the FA/MD/FW poll and the QMX returns ?;.
  * Requesting 0 is a valid mute, not a no-op. */
 #define CAT_AF_GAIN_MAX     799
-#define CAT_AF_GAIN_DB_MAX  199   /* 199 dB -> AG 796, inside the 799 limit */
+#define CAT_AF_GAIN_DB_MAX  40    /* slider top in dB; 40 dB -> AG 160 */
 void cat_request_af_gain(uint16_t ag);
 
 /* Ask the radio for its current AF gain; the answer lands asynchronously and is

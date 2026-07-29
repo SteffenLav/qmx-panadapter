@@ -158,8 +158,17 @@ static void refresh_view(void)
         snprintf(freebuf, sizeof(freebuf),
                  "Nothing decoded yet - occupancy unknown, so every slot shows grey");
     } else {
-        fb = snprintf(freebuf, sizeof(freebuf), "%d of %d slots free near you: ",
-                      n_free, n_slots);
+        // Say WHICH window the picture is for. Occupancy is filtered to our own
+        // TX parity whenever that's known (see build_tone_occupancy), so a slot
+        // busy only in the other window shows free - true, but worth stating,
+        // since the same slot can look different a moment later when a reply
+        // fixes our parity (Roy KI0ER asked exactly this, 2026-07-29).
+        bool pe = false;
+        fb = ft8_tx_get_parity_lock(&pe)
+             ? snprintf(freebuf, sizeof(freebuf), "%d of %d free in your %s TX window: ",
+                        n_free, n_slots, pe ? "EVEN" : "ODD")
+             : snprintf(freebuf, sizeof(freebuf), "%d of %d slots free near you: ",
+                        n_free, n_slots);
         int listed = 0;
         for (int r = 0; r < n_slots && listed < 10; r++) {
             for (int sgn = (r == 0 ? 0 : -1); sgn <= 1 && listed < 10; sgn += 2) {

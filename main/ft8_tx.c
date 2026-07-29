@@ -261,10 +261,34 @@ static uint64_t build_tone_occupancy(int *n_slots_out, int *n_stations_out)
     int n = 0;
     ft8_screen_get_all(calls, FT8_CALL_TABLE_SIZE, &n);
 
+    // Slot-parity filter (Roy KI0ER, 2026-07-29: "a frequency offset could be
+    // entirely available to me, but only if I TX into the correct time window").
+    // Two stations only collide if they transmit in the SAME slot, so a station
+    // heard on the opposite parity to ours does not occupy our tone at all -
+    // counting it made the picker (and the automatic scan) reject slots that
+    // were in fact free for us, which on a busy band is most of them.
+    //
+    // Our parity is only knowable when something is armed or running
+    // (ft8_tx_get_parity_lock: a reply inherits the opposite of theirs, and a
+    // CQ carries the operator's TXCQ EVEN/ODD choice). With TXCQ ANY, or nothing
+    // armed at all, there is no answer - and then the honest view is the union of
+    // both windows, exactly as before.
+    bool our_even = false;
+    bool parity_known = ft8_tx_get_parity_lock(&our_even);
+    const int period_ms = ft8_op_mode_slot_ms();
+
     // Guard bands: mark the signal's own slot plus one slot on each side,
     // giving 150 Hz of clearance around active signals.
     uint64_t occupied = 0;
     for (int i = 0; i < n; i++) {
+        if (parity_known && calls[i].last_utc > 0) {
+            // Same nearest-slot rounding as the decode list's E/O column: the
+            // stored last_utc is a whole second, so a bare /period truncation
+            // would flip the parity of anything logged a hair before its slot.
+            int64_t sidx = ((int64_t)calls[i].last_utc * 1000 + period_ms / 2) / period_ms;
+            bool station_even = ((sidx % 2) == 0);
+            if (station_even != our_even) continue;   // opposite window - no clash
+        }
         int bin = ((int)calls[i].last_freq - FT8_AUDIO_SCAN_MIN_HZ)
                   / FT8_AUDIO_SLOT_HZ;
         for (int g = bin - 1; g <= bin + 1; g++) {

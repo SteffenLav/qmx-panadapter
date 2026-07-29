@@ -102,6 +102,39 @@ static int64_t            s_manual_target_ts;
 #define DONE_GRACE_TTL_S 180
 static char               s_last_done_call[FT8_CALL_MAX_LEN];
 static int64_t            s_last_done_ts;
+
+// --- A partner who never decoded our final ----------------------------------
+// Field report (Roy KI0ER, 2026-07-29, working VE3INB): the exchange completed
+// from our side - we sent R73, logged the QSO and moved on - but VE3INB never
+// decoded that final, so he kept sending "KI0ER VE3INB R-10" waiting for it.
+// Nothing in the machine could act on that: the comeback-resume record is
+// deliberately erased on completion (never auto-resume into a duplicate), and a
+// completed QSO is otherwise finished. So he stayed unfinished on his side while
+// we started working someone else, and every manual attempt to help him logged
+// ANOTHER copy of the same QSO.
+//
+// Both halves are fixed here. The tone is "keep answering while they're still
+// asking", which is what WSJT-X does and what actually gets us into their log:
+// if the just-worked station addresses us again with a report (not RR73/73/RRR,
+// which would mean they DID hear us) inside the window, re-send our final once
+// more - bounded, and without logging again.
+#define FINAL_RESEND_WINDOW_SEC 240
+#define FINAL_RESEND_MAX          3
+static char               s_final_call[FT8_CALL_MAX_LEN];  // who we owe a final to ('\0' = nobody)
+static int                s_final_freq_hz;                 // our tone for it
+static ft8_tx_kind_t      s_final_kind;                    // 73 (pounce) or RR73 (CQ-run)
+static char               s_final_extra[16];               // the final's third field (matches ft8_tx_request_t)
+static int                s_final_resends;
+
+// Duplicate-log guard. The log is written once at WAIT_DONE -> DONE, but that
+// state can legitimately be entered twice for one contact - most easily by
+// ft8_qso_notify_manual_final() when the operator takes over by hand, exactly as
+// Roy did above. Same call on the same band inside this window is the same
+// contact, not a second one.
+#define QSO_DUP_LOG_WINDOW_SEC 600
+static char               s_logged_call[FT8_CALL_MAX_LEN];
+static uint32_t           s_logged_freq_hz;
+static int64_t            s_logged_ts;
 // Signal reports captured during the exchange for ADIF logging.
 // Pounce: rst_rcvd = what they told us; rst_sent = our own locally-measured SNR
 //   of them (the protocol never has us transmit a numeric report of them - TX2
@@ -109,9 +142,11 @@ static int64_t            s_last_done_ts;
 // CQ-run: rst_sent = our report of their signal; rst_rcvd = the value in their
 //   numeric roger "R<rpt>" (or a direct report answer). The R-report is their
 //   own measurement of OUR signal, NOT an echo of the report we sent - proven
-//   on air 2026-07-15 (we sent -08, OS4K rogered R-06). "599" is only the
-//   fallback if the exchange completes without us ever hearing a numeric value
-//   (e.g. they jump straight to RR73 after a grid answer).
+//   on air 2026-07-15 (we sent -08, OS4K rogered R-06). Either field is left
+//   EMPTY if the exchange completes without us ever hearing a numeric value
+//   (e.g. they jump straight to RR73 after a grid answer); adif_log.c then
+//   omits it. Never substitute "599" - that would be a fabricated measurement
+//   uploaded to QRZ/eQSL/LoTW as if real (Roy KI0ER, 2026-07-29).
 static char               s_rst_sent[8];
 static char               s_rst_rcvd[8];
 // ARRL Field Day: their class+section, captured when their roger/exchange
@@ -1049,7 +1084,7 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
 
     ft8_tx_request_t req_to_arm  = *tx1_req;
     ft8_qso_state_t  start_state = FT8_QSO_WAIT_RPT;
-    char             first_rpt[8] = "599";
+    char             first_rpt[8] = "";   // filled from a real measurement below before any use
     bool             skip_applied = false;
 
     // A REPLY whose third field is already a signal report ("+NN"/"-NN" in
@@ -1157,18 +1192,18 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     s_have_cur      = true;
     s_have_cq_saved = false;
     if (skip_applied) {
-        // We sent them a numeric report directly. "599" is only the fallback:
-        // their roger "R<rpt>" carries their own measurement of us (not an
-        // echo of ours) and overwrites this in the WAIT_ROGER handler.
+        // We sent them a numeric report directly. RST_RCVD stays EMPTY until
+        // their roger "R<rpt>" arrives carrying their own measurement of us
+        // (not an echo of ours) - see the WAIT_ROGER handler. Empty means
+        // "never received", and adif_log.c omits the field rather than
+        // inventing a value.
         strncpy(s_rst_sent, first_rpt, sizeof(s_rst_sent) - 1);
         s_rst_sent[sizeof(s_rst_sent) - 1] = '\0';
-        strncpy(s_rst_rcvd, "599", sizeof(s_rst_rcvd) - 1);
-        s_rst_rcvd[sizeof(s_rst_rcvd) - 1] = '\0';
+        s_rst_rcvd[0] = '\0';
     } else {
         // Normal pounce: we receive their report (RST_RCVD); we never give our
-        // own numeric report in TX1/TX2 (RST_SENT = "599").
-        strncpy(s_rst_sent, "599", sizeof(s_rst_sent) - 1);
-        s_rst_sent[sizeof(s_rst_sent) - 1] = '\0';
+        // own numeric report in TX1/TX2, so RST_SENT stays empty and is omitted.
+        s_rst_sent[0] = '\0';
         s_rst_rcvd[0] = '\0';
     }
     s_fd_their_exch[0] = '\0';
@@ -1237,11 +1272,11 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
     s_missed_slots  = 0;
     s_pileup_active = false;   // starting CQ is not part of a pileup drain
     clear_dt_follow();         // no partner yet - transmit CQ on the UTC/GPS beat
-    // CQ-run: RST_SENT set in cqrun_answer. "599" is only the RST_RCVD
-    // fallback - their report answer (cqrun_answer) or numeric roger
-    // (WAIT_ROGER) overwrites it with their actual measurement of us.
+    // CQ-run: RST_SENT is set in cqrun_answer, RST_RCVD when their report
+    // answer (cqrun_answer) or numeric roger (WAIT_ROGER) arrives carrying
+    // their actual measurement of us. Both start empty = "not exchanged".
     s_rst_sent[0] = '\0';
-    strncpy(s_rst_rcvd, "599", sizeof(s_rst_rcvd));
+    s_rst_rcvd[0] = '\0';
     s_fd_their_exch[0] = '\0';
     unlock();
 
@@ -1445,9 +1480,89 @@ static bool try_start_pileup_pounce(void)
     return true;
 }
 
+// Is the station we just finished with STILL asking us for the final? True only
+// for a message addressed to us whose third field is a report or R-report -
+// RR73/73/RRR all mean they heard us and are done, and anything else (a grid, a
+// CQ) isn't them chasing this QSO.
+static bool partner_still_awaiting_final(int64_t slot_sec, const char *call)
+{
+    ft8_call_t *snap = heap_caps_malloc(sizeof(ft8_call_t) * FT8_CALL_TABLE_SIZE,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!snap) return false;   // PSRAM, not this task's stack (~11 KB)
+    int n = 0;
+    ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+
+    bool asking = false;
+    for (int i = 0; i < n && !asking; i++) {
+        if (strcmp(snap[i].call, call) != 0) continue;
+        if (snap[i].last_utc != slot_sec) continue;
+        char tok1[16], tok2[16], rest[FT8_FD_EXCH_LEN];
+        if (!split_msg3(snap[i].last_text, tok1, sizeof(tok1), tok2, sizeof(tok2),
+                        rest, sizeof(rest))) continue;
+        if (strcmp(tok1, s_my_call) != 0) continue;          // not addressed to us
+        if (!strcmp(rest, "RR73") || !strcmp(rest, "73") ||
+            !strcmp(rest, "RRR")) continue;                  // they DID hear us
+        // A report ("-10") or a roger'd report ("R-10") - they're still waiting.
+        const char *p = (rest[0] == 'R') ? rest + 1 : rest;
+        if (*p == '+' || *p == '-') asking = true;
+    }
+    free(snap);
+    return asking;
+}
+
+// Re-send the final to a just-worked partner who is still asking for it. Does
+// NOT touch s_state or s_cur_req: it builds and arms one message directly, so
+// whatever we were doing (idle, or an armed CQ) resumes by itself on the next
+// on_tx_complete() re-arm. Nothing is logged - the QSO already was.
+static bool final_resend_if_still_asked(int64_t slot_sec)
+{
+    if (!s_final_call[0]) return false;
+    int64_t now_s = (int64_t)time(NULL);
+    if ((now_s - s_last_done_ts) > FINAL_RESEND_WINDOW_SEC) {
+        s_final_call[0] = '\0';       // window closed - stop watching for them
+        return false;
+    }
+    if (s_final_resends >= FINAL_RESEND_MAX) return false;
+    // Mid-burst: leave it alone and catch them on their next repeat.
+    if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ACTIVE) return false;
+    if (!partner_still_awaiting_final(slot_sec, s_final_call)) return false;
+
+    ft8_tx_request_t req;
+    char err[64];
+    if (!ft8_tx_build_request(s_final_kind, s_final_call, s_final_freq_hz,
+                              slot_sec, s_final_extra, &req, err, sizeof(err))) {
+        ESP_LOGW(TAG, "final re-send build failed for %s: %s", s_final_call, err);
+        s_final_call[0] = '\0';
+        return false;
+    }
+    if (!ft8_tx_arm(&req, err, sizeof(err))) {
+        ESP_LOGW(TAG, "final re-send arm failed for %s: %s", s_final_call, err);
+        return false;
+    }
+    s_final_resends++;
+    ft8_status_set("QSO %s: never heard our %s - re-sending (%d/%d)",
+                   s_final_call, s_final_extra, s_final_resends, FINAL_RESEND_MAX);
+    ESP_LOGI(TAG, "%s still asking after completion - re-sending %s (%d/%d)",
+             s_final_call, s_final_extra, s_final_resends, FINAL_RESEND_MAX);
+    return true;
+}
+
 void ft8_qso_advance(int64_t slot_sec)
 {
     capture_pileup_callers(slot_sec);
+
+    // Before anything else can start a NEW contact this slot: finish the last
+    // one properly if the partner is still waiting on our final. Runs only when
+    // we aren't mid-exchange with someone else, and returns so this slot belongs
+    // to them rather than to the next CQ or pileup pounce.
+    {
+        lock();
+        ft8_qso_state_t stf = s_state;
+        unlock();
+        if ((stf == FT8_QSO_IDLE || stf == FT8_QSO_DONE || stf == FT8_QSO_CQ) &&
+            final_resend_if_still_asked(slot_sec))
+            return;
+    }
 
     // Comeback auto-resume: a partner we abandoned recently decoded THIS slot
     // with a message addressed to us, and we're not mid-exchange with anyone
@@ -1568,6 +1683,15 @@ void ft8_qso_advance(int64_t slot_sec)
             strncpy(s_last_done_call, target, sizeof(s_last_done_call) - 1);
             s_last_done_call[sizeof(s_last_done_call) - 1] = '\0';
             s_last_done_ts = time(NULL);
+            // Remember the final we just sent, so it can be re-sent if they turn
+            // out not to have decoded it (see final_resend_if_still_asked).
+            strncpy(s_final_call, target, sizeof(s_final_call) - 1);
+            s_final_call[sizeof(s_final_call) - 1] = '\0';
+            s_final_freq_hz = s_freq_hz;
+            s_final_kind    = s_have_cur ? s_cur_req.kind : FT8_TX_KIND_73;
+            snprintf(s_final_extra, sizeof(s_final_extra), "%s",
+                     s_have_cur && s_cur_req.extra_field[0] ? s_cur_req.extra_field : "73");
+            s_final_resends = 0;
             unlock();
 
             // A completed QSO with this call supersedes any older resumable
@@ -1626,7 +1750,25 @@ void ft8_qso_advance(int64_t slot_sec)
                 .their_arrl_class   = have_fd_exch ? their_fd_class   : NULL,
                 .their_arrl_section = have_fd_exch ? their_fd_section : NULL,
             };
-            adif_log_record(&qso);
+            // Duplicate guard (see QSO_DUP_LOG_WINDOW_SEC): the same call on the
+            // same band inside the window is this same contact reaching DONE a
+            // second time - most often because the operator finished it by hand
+            // after the machine already had - not a second QSO.
+            bool dup = (s_logged_call[0] &&
+                        strcmp(s_logged_call, target) == 0 &&
+                        strcmp(adif_log_band_for_freq(qso.freq_hz),
+                               adif_log_band_for_freq(s_logged_freq_hz)) == 0 &&
+                        ((int64_t)time(NULL) - s_logged_ts) < QSO_DUP_LOG_WINDOW_SEC);
+            if (dup) {
+                ESP_LOGW(TAG, "not logging %s again - same call/band logged %llds ago",
+                         target, (long long)((int64_t)time(NULL) - s_logged_ts));
+            } else {
+                adif_log_record(&qso);
+                strncpy(s_logged_call, target, sizeof(s_logged_call) - 1);
+                s_logged_call[sizeof(s_logged_call) - 1] = '\0';
+                s_logged_freq_hz = qso.freq_hz;
+                s_logged_ts      = (int64_t)time(NULL);
+            }
             s_fd_their_exch[0] = '\0';
         }
         return;
@@ -1991,10 +2133,11 @@ void ft8_qso_notify_manual_final(const char *target_call)
     // Reports for the ADIF record, best-effort from the decode table:
     // RST_SENT = our measured SNR of them (same value the manual builder puts
     // in a report message); RST_RCVD = their numeric report of us if their
-    // last message carried one ("R-09"/"-09"), else the "599" fallback. In a
-    // manual grid-flow their report arrived a step earlier and isn't stored,
-    // so RR73-as-last-message falls back - acceptable for a hand-run QSO.
-    char rst_sent[8] = "599", rst_rcvd[8] = "599";
+    // last message carried one ("R-09"/"-09"), else left EMPTY. In a manual
+    // grid-flow their report arrived a step earlier and isn't stored, so an
+    // RR73-as-last-message leaves RST_RCVD unset - the honest answer for a
+    // hand-run QSO, and adif_log.c omits the field rather than faking it.
+    char rst_sent[8] = "", rst_rcvd[8] = "";
     ft8_call_t *snap = heap_caps_malloc(
         sizeof(ft8_call_t) * FT8_CALL_TABLE_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (snap) {   // PSRAM, never the LVGL task's small stack (~11 KB snapshot)

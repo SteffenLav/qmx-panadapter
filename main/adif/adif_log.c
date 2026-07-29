@@ -47,6 +47,9 @@ static int            s_worked_count = 0;
 
 // ---------------------------------------------------------------------------
 
+// Exposed as adif_log_band_for_freq() below - callers that need to compare two
+// frequencies "by band" must use the same table this file logs BAND from, or the
+// comparison can disagree with the log it is reasoning about.
 static const char *freq_to_band(uint32_t hz)
 {
     if (hz >= 1800000  && hz < 2000000)  return "160M";
@@ -263,8 +266,14 @@ void adif_log_record(const adif_qso_t *qso)
     // ("Undefined message or mode"), most likely because its MODE/SUBMODE
     // validation table has no self-referential entry for either mode.
     write_field(f, "MODE",         qso->mode ? qso->mode : "FT8");
-    write_field(f, "RST_SENT",     (qso->rst_sent && qso->rst_sent[0]) ? qso->rst_sent : "599");
-    write_field(f, "RST_RCVD",     (qso->rst_rcvd && qso->rst_rcvd[0]) ? qso->rst_rcvd : "599");
+    // An unknown report is OMITTED, never filled in. These used to default to
+    // "599", which is a harmless convention in CW/SSB but in an FT8 log is a
+    // fabricated measurement - and one that gets uploaded to QRZ, eQSL and LoTW
+    // as if it were real. Roy KI0ER spotted it in his own log and reasonably
+    // asked whether stations really were sending him 599 (2026-07-29). ADIF
+    // requires neither field, and LoTW ignores both.
+    if (qso->rst_sent && qso->rst_sent[0]) write_field(f, "RST_SENT", qso->rst_sent);
+    if (qso->rst_rcvd && qso->rst_rcvd[0]) write_field(f, "RST_RCVD", qso->rst_rcvd);
     write_field(f, "QSO_DATE",     date_str);
     write_field(f, "TIME_ON",      time_str);
     write_field(f, "MY_CALL",      qso->my_call);
@@ -445,4 +454,9 @@ void adif_log_clear(void)
     FILE *f = fopen(FILE_PATH, "w");
     if (f) { write_header(f); fclose(f); }
     ESP_LOGI(TAG, "ADIF log cleared");
+}
+
+const char *adif_log_band_for_freq(uint32_t hz)
+{
+    return freq_to_band(hz);
 }

@@ -294,8 +294,12 @@ static void add_header_row(lv_obj_t *parent)
 static void build_qso_row(lv_obj_t *parent, const char *line, bool even_row,
                           int file_idx)
 {
+    // Reports show "-" when the record has no RST field: an FT8 exchange that
+    // never carried a numeric report writes none at all (see adif_log.c), and
+    // showing a number the log doesn't contain would just recreate the "am I
+    // really being sent 599?" confusion in the viewer instead of the file.
     char call[20] = "?", date[9] = "", time_on[7] = "", band[8] = "",
-         mode[8] = "FT8", rst_sent[8] = "599", rst_rcvd[8] = "599";
+         mode[8] = "FT8", rst_sent[8] = "-", rst_rcvd[8] = "-";
 
     adif_log_extract_field(line, "CALL",     call,     sizeof(call));
     adif_log_extract_field(line, "QSO_DATE", date,     sizeof(date));

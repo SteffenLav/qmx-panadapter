@@ -69,3 +69,10 @@ bool adif_log_get_record(int idx, char *out, size_t out_sz);
 // never matches inside "MY_CALL".
 bool adif_log_extract_field(const char *line, const char *field,
                             char *out, size_t out_sz);
+
+// The ADIF BAND string this module would log for a frequency ("20M", "40M"...),
+// or "" if it falls outside every known band. Exposed so callers comparing two
+// frequencies "same band?" use the same table the log itself is written from -
+// a private copy could disagree with the records it's reasoning about. Returns a
+// pointer to static storage; do not free.
+const char *adif_log_band_for_freq(uint32_t hz);

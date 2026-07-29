@@ -6654,9 +6654,14 @@ static void drawer_refresh_qmx_vol(void)
     int ag = cat_get_af_gain();
     if (ag >= 0) {
         int db = ag / 4;
-        if (db > CAT_AF_GAIN_DB_MAX) db = CAT_AF_GAIN_DB_MAX;
-        lv_slider_set_value(s_slider_qmx_vol, db, LV_ANIM_OFF);
-        settings_set_qmx_vol_db((uint8_t)db);   // keep the fallback in step
+        // The slider only spans the USABLE range (see CAT_AF_GAIN_DB_MAX), so a
+        // radio turned up past that with its own knob pins the knob at the end -
+        // but the LABEL still reports the radio's true dB. The label is what has
+        // to agree with the LCD; clamping it too would have made the Tab5 quietly
+        // disagree with the radio, which is the one thing this control must not do.
+        int knob = (db > CAT_AF_GAIN_DB_MAX) ? CAT_AF_GAIN_DB_MAX : db;
+        lv_slider_set_value(s_slider_qmx_vol, knob, LV_ANIM_OFF);
+        settings_set_qmx_vol_db((uint8_t)knob);   // keep the fallback in step
         if (s_lbl_qmx_vol) {
             char b[32];
             snprintf(b, sizeof(b), "QMX volume: %d dB", db);
