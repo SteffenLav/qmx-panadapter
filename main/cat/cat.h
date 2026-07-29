@@ -188,18 +188,33 @@ void cat_request_mode(const char *mode);
 void cat_request_ssb_bandwidth(uint32_t hz);
 
 /* QMX AF gain (volume), in the radio's own 0.25 dB steps. Kenwood "AG0nnn;".
- * The manual's full range is 0-799 (= 0-199.75 dB) but it also says maximum
- * gain "would make no sense, it would be far too high", so the UI spans
- * CAT_AF_GAIN_UI_MAX and this call clamps to CAT_AF_GAIN_MAX.
+ *
+ * The QMX shows this on its OWN LCD in decibels - operation manual, "Volume
+ * change" parameter: "the new volume is displayed momentarily on the bottom
+ * left of the LCD. The volume is shown in decibels." So dB = value / 4, and
+ * the drawer slider is in dB so the number on the Tab5 is the same number the
+ * radio shows. Do not reintroduce a percentage here.
+ *
+ * Range: 0-799 = 0-199.75 dB, matching the volume knob's own "0 to 200dB gain"
+ * (operation manual, audio chain step 23). CAT_AF_GAIN_DB_MAX is the slider's
+ * top in dB.
+ *
  * Deferred to the poll task like the filter writes - a direct cross-thread
  * write races the FA/MD/FW poll and the QMX returns ?;.
  * Requesting 0 is a valid mute, not a no-op. */
 #define CAT_AF_GAIN_MAX     799
-/* Top of the slider's range. 240 = 60 dB, chosen as a usable listening span
- * rather than from measurement - if the slider turns out to be all-or-nothing
- * at one end on real hardware, this is the single number to retune. */
-#define CAT_AF_GAIN_UI_MAX  240
+#define CAT_AF_GAIN_DB_MAX  199   /* 199 dB -> AG 796, inside the 799 limit */
 void cat_request_af_gain(uint16_t ag);
+
+/* Ask the radio for its current AF gain; the answer lands asynchronously and is
+ * readable via cat_get_af_gain(). Used when the settings drawer opens so the
+ * slider shows what the RADIO is actually set to (including changes made on its
+ * own volume knob) rather than the last value this UI sent. */
+void cat_query_af_gain(void);
+
+/* Last AF gain read back from the radio in 0.25 dB steps, or -1 if never read.
+ * Divide by 4 for the dB figure the QMX displays. */
+int cat_get_af_gain(void);
 
 /*
  * Request a CW filter width (Hz). Deferred to the poll task as

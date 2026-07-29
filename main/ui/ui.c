@@ -1709,6 +1709,7 @@ static void drawer_dropdown_sleep_open_cb(lv_event_t *e);
 static void drawer_dropdown_bpregion_cb(lv_event_t *e);
 static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_slider_qmx_vol_cb(lv_event_t *e);
+static void drawer_refresh_qmx_vol(void);
 static void drawer_check_flip_cb(lv_event_t *e);
 static void drawer_check_charge_limit_cb(lv_event_t *e);
 static void drawer_slider_charge_limit_pct_cb(lv_event_t *e);
@@ -5563,7 +5564,7 @@ static void drawer_build(void)
         lv_obj_t *sec = drawer_section(DRAWER_SEC_QMXVOL, y, 96);
         s_lbl_qmx_vol = lv_label_create(sec);
         char vbuf[32];
-        snprintf(vbuf, sizeof(vbuf), "QMX volume: %u%%", (unsigned)vcfg.qmx_vol_pct);
+        snprintf(vbuf, sizeof(vbuf), "QMX volume: %u dB", (unsigned)vcfg.qmx_vol_db);
         lv_label_set_text(s_lbl_qmx_vol, vbuf);
         lv_obj_set_style_text_color(s_lbl_qmx_vol, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(s_lbl_qmx_vol, &lv_font_montserrat_28, 0);
@@ -5571,8 +5572,11 @@ static void drawer_build(void)
 
         s_slider_qmx_vol = lv_slider_create(sec);
         lv_obj_set_size(s_slider_qmx_vol, DRAWER_W - 32, 30);
-        lv_slider_set_range(s_slider_qmx_vol, 0, 100);
-        lv_slider_set_value(s_slider_qmx_vol, vcfg.qmx_vol_pct, LV_ANIM_OFF);
+        // Full range the radio's own volume knob covers ("the 0 to 200dB gain
+        // selected by the volume control knob"), so the slider can reach every
+        // value the LCD can show - nothing more, nothing less.
+        lv_slider_set_range(s_slider_qmx_vol, 0, CAT_AF_GAIN_DB_MAX);
+        lv_slider_set_value(s_slider_qmx_vol, vcfg.qmx_vol_db, LV_ANIM_OFF);
         lv_obj_align(s_slider_qmx_vol, LV_ALIGN_TOP_LEFT, 0, 40);
         lv_obj_add_event_cb(s_slider_qmx_vol, drawer_slider_qmx_vol_cb, LV_EVENT_VALUE_CHANGED, NULL);
         y += 96;
@@ -6303,6 +6307,7 @@ static void drawer_open(void)
     lv_anim_set_time(&a, 250);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
     lv_anim_start(&a);
+    drawer_refresh_qmx_vol();   // show what the RADIO is set to, not our last write
     s_drawer_open = true;
     ESP_LOGI(TAG, "Settings drawer open");
 }
@@ -6588,20 +6593,46 @@ static void drawer_slider_brightness_cb(lv_event_t *e)
     }
 }
 
-// QMX volume: percentage of CAT_AF_GAIN_UI_MAX, sent as the radio's own
-// AG0nnn; through the CAT poll task (a direct write from this thread would race
-// the FA/MD/FW poll). Requested by Randy N4OPI, who runs a QMX+ with no control
-// panel and so has no other way to set the volume.
+// QMX volume, in DECIBELS - deliberately the same number the radio puts on its
+// own LCD (operation manual: "the new volume is displayed ... The volume is
+// shown in decibels"), so the Tab5 and the radio never disagree. The radio's
+// CAT unit is 0.25 dB steps, hence the x4. Sent through the CAT poll task
+// because a direct write from this thread races the FA/MD/FW poll.
+// Requested by Randy N4OPI, who runs a QMX+ with no control panel and so has no
+// other way to set the volume at all.
 static void drawer_slider_qmx_vol_cb(lv_event_t *e)
 {
-    int pct = (int)lv_slider_get_value(lv_event_get_target(e));
-    settings_set_qmx_vol_pct((uint8_t)pct);
-    cat_request_af_gain((uint16_t)((pct * CAT_AF_GAIN_UI_MAX) / 100));
+    int db = (int)lv_slider_get_value(lv_event_get_target(e));
+    settings_set_qmx_vol_db((uint8_t)db);
+    cat_request_af_gain((uint16_t)(db * 4));
     if (s_lbl_qmx_vol) {
         char b[32];
-        snprintf(b, sizeof(b), "QMX volume: %d%%", pct);
+        snprintf(b, sizeof(b), "QMX volume: %d dB", db);
         lv_label_set_text(s_lbl_qmx_vol, b);
     }
+}
+
+// Pull the radio's CURRENT volume into the slider. Without this the slider shows
+// the last value THIS UI sent, which disagrees with the radio the moment the
+// operator uses its own volume knob - and the whole point is that the number
+// matches the LCD. Called when the drawer opens: cat_query_af_gain() only asks,
+// so this also refreshes from the answer to the previous ask.
+static void drawer_refresh_qmx_vol(void)
+{
+    if (!s_slider_qmx_vol) return;
+    int ag = cat_get_af_gain();
+    if (ag >= 0) {
+        int db = ag / 4;
+        if (db > CAT_AF_GAIN_DB_MAX) db = CAT_AF_GAIN_DB_MAX;
+        lv_slider_set_value(s_slider_qmx_vol, db, LV_ANIM_OFF);
+        settings_set_qmx_vol_db((uint8_t)db);   // keep the fallback in step
+        if (s_lbl_qmx_vol) {
+            char b[32];
+            snprintf(b, sizeof(b), "QMX volume: %d dB", db);
+            lv_label_set_text(s_lbl_qmx_vol, b);
+        }
+    }
+    cat_query_af_gain();   // ask again for next time the drawer opens
 }
 
 static void drawer_check_flip_cb(lv_event_t *e)

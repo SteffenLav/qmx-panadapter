@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -29,13 +29,13 @@ typedef struct {
     bool excl_worked_before; // skip callers already in the ADIF log (enforced since the robot landed)
     bool excl_plain_cq;      // hide bare "CQ ..." rows, show only replies to us
     bool incl_cq_only;       // show ONLY "CQ ..." rows (display filter; does not affect auto-reply)
-    // --- Robot (auto-answer) — appended; old NVS blobs read back 0 (=off, STRONGEST) ---
+    // --- Robot (auto-answer) â€” appended; old NVS blobs read back 0 (=off, STRONGEST) ---
     bool    robot_en;        // auto-answer CQ callers with no tap (default off)
     uint8_t robot_priority;  // ft8_robot_priority_t: which caller to pick first
-    // --- Skip TX1 — appended; old NVS blobs read back 0 (=off) ---
+    // --- Skip TX1 â€” appended; old NVS blobs read back 0 (=off) ---
     bool    skip_tx1;        // pounce: first TX is a signal report (skip grid exchange),
                               // straight into the roger/RR73 wait - see ft8_qso_start()
-    // --- Auto-work pileup — appended; old NVS blobs read back 0 (=off) ---
+    // --- Auto-work pileup â€” appended; old NVS blobs read back 0 (=off) ---
     bool    auto_pileup;     // on QSO completion, auto-pounce the strongest waiting
                               // pileup caller instead of resuming CQ (unattended TX)
 } ft8_filters_t;
@@ -65,7 +65,7 @@ typedef struct {
     uint8_t  cq_sel;           // which CQ preset is active, 0..2 (default 0)
     bool     onboarded;        // first-boot WiFi/identity prompts shown (default false)
     bool     wifi_enabled;     // initiate WiFi at boot (default true)
-    bool     qmx_gps;         // QMX/QMX+ has GPS discipline — skip Tab5→QMX time push
+    bool     qmx_gps;         // QMX/QMX+ has GPS discipline â€” skip Tab5â†’QMX time push
     bool     freq_kp_calc;    // freq keypad digit layout: false=phone, true=10-key/calc
     int16_t  freq_kp_dx;      // freq keypad popup position: offset from screen center, px (default 0,0)
     int16_t  freq_kp_dy;
@@ -82,11 +82,12 @@ typedef struct {
     uint8_t  wf_floor_blend;  // waterfall per-bin floor blend 0..100% (0=global, default 100)
     uint8_t  wf_window;       // FFT window: 0=Blackman-Harris 1=Hann 2=Nuttall (default 0)
     bool     display_flip;    // landscape flipped 180 deg for upside-down mounting (default false)
-    // QMX AF gain as a 0-100 percentage of CAT_AF_GAIN_UI_MAX. Stored so the
-    // slider remembers where it was; deliberately NOT pushed to the radio at
-    // boot, so a saved value can never change the volume behind the operator's
-    // back on power-up. Only a slider move sends AG0nnn;.
-    uint8_t  qmx_vol_pct;
+    // QMX AF gain in DECIBELS - the same number the radio shows on its own LCD
+    // (see cat.h's CAT_AF_GAIN_MAX comment). Stored only as a fallback slider
+    // position for when the radio hasn't answered AG; yet; the live value comes
+    // from cat_get_af_gain(). Deliberately NOT pushed to the radio at boot, so a
+    // saved value can never change the volume behind the operator's back.
+    uint8_t  qmx_vol_db;
     bool     snap_to_peak;    // tap-to-tune snaps to the strongest nearby signal (default true)
     uint8_t  bandplan_region; // band-plan strip region: 0=auto(from grid) 1=R1 2=R2 3=R3
     bool     distance_in_miles; // FT8 decode list: show distance in miles instead of km (default false)
@@ -138,7 +139,7 @@ void settings_init(void);
 // written. Always succeeds (falls back to defaults silently).
 void settings_load_all(qmx_settings_t *out);
 
-// Per-field setters. Each schedules a debounced flush to NVS — fast
+// Per-field setters. Each schedules a debounced flush to NVS â€” fast
 // repeated calls (e.g. a slider drag) only result in one flash write
 // after the user pauses.
 void settings_set_db_min(float v);
@@ -192,7 +193,7 @@ void settings_set_wf_window(uint8_t idx);
 
 // Display 180-degree flip for upside-down mounting (debounced flush).
 void settings_set_display_flip(bool v);
-void settings_set_qmx_vol_pct(uint8_t pct);
+void settings_set_qmx_vol_db(uint8_t db);
 
 // FT8 distance display unit (debounced flush). When false show distance in km,
 // when true show distance in miles.
@@ -243,7 +244,7 @@ void settings_set_freq_kp_calc(bool v);
 // Freq keypad popup position: offset (dx, dy) in pixels from screen center,
 // where it last sat after being dragged. Debounced flush (a drag-release
 // writes once, not per-pixel during the drag). Deliberately NOT part of
-// DIRTY_CONFIG_EXPORT_MASK — purely cosmetic placement, not worth a SD-card
+// DIRTY_CONFIG_EXPORT_MASK â€” purely cosmetic placement, not worth a SD-card
 // mirror write.
 void settings_set_freq_kp_pos(int16_t dx, int16_t dy);
 

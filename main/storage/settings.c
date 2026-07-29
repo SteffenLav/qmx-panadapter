@@ -1,4 +1,4 @@
-#include "settings.h"
+﻿#include "settings.h"
 #include "sd_archive.h"
 
 #include <string.h>
@@ -59,7 +59,7 @@ static const char *TAG = "settings";
 #define KEY_WF_BLEND     "wf_blend"
 #define KEY_WF_WINDOW    "wf_window"
 #define KEY_DISP_FLIP    "disp_flip"
-#define KEY_QMX_VOL      "qmx_vol"
+#define KEY_QMX_VOL      "qmx_vol_db"
 #define KEY_SNAP_PEAK    "snap_peak"
 #define KEY_BP_REGION    "bp_region"
 #define KEY_DISTANCE_MILES "dist_miles"
@@ -85,7 +85,7 @@ static const char *TAG = "settings";
 #define KEY_LOTW_COUNTY    "lotw_cnty"
 #define KEY_LOTW_UPLOADED  "lotw_upl_n"
 
-// Defaults — must match the runtime defaults used elsewhere.
+// Defaults â€” must match the runtime defaults used elsewhere.
 #define DEF_DB_MIN      (-130.0f)
 #define DEF_DB_MAX      (-30.0f)
 #define DEF_EMA_ALPHA   (0.4f)
@@ -110,7 +110,7 @@ static const char *TAG = "settings";
 // Debounce: how long we wait after the last change before flushing.
 #define DEBOUNCE_MS     500
 
-// Dirty bits — which fields have been changed since last flush.
+// Dirty bits â€” which fields have been changed since last flush.
 #define DIRTY_DB_MIN     (1u << 0)
 #define DIRTY_DB_MAX     (1u << 1)
 #define DIRTY_EMA_ALPHA  (1u << 2)
@@ -187,7 +187,7 @@ static const char *TAG = "settings";
 // continuous time-sync correction, ~every 15s) and DIRTY_LAST_MODE are NOT in
 // here on purpose: re-mirroring qmx-config.txt to the SD card produces an
 // identical file (those fields aren't part of the export), so doing it on
-// their account is pure waste — and worse, SD card I/O competes with the
+// their account is pure waste â€” and worse, SD card I/O competes with the
 // WiFi co-processor's SDIO link for the same shared SDMMC host peripheral
 // (see CLAUDE.md "SD-card screenshot save REMOVED"), so an unnecessary
 // every-15-seconds SD write was a standing, unintentional trigger for that
@@ -274,7 +274,7 @@ static void flush_task(void *arg)
 
         if (!do_flush) continue;
 
-        // We hold no mutex now — NVS writes can be slow.
+        // We hold no mutex now â€” NVS writes can be slow.
         if (dirty_local & DIRTY_DB_MIN)     nvs_set_float(KEY_DB_MIN,    snap.db_min);
         if (dirty_local & DIRTY_DB_MAX)     nvs_set_float(KEY_DB_MAX,    snap.db_max);
         if (dirty_local & DIRTY_EMA_ALPHA)  nvs_set_float(KEY_EMA_ALPHA, snap.ema_alpha);
@@ -323,7 +323,7 @@ static void flush_task(void *arg)
         if (dirty_local & DIRTY_WF_BLEND)    nvs_set_u8(s_nvs, KEY_WF_BLEND,  snap.wf_floor_blend);
         if (dirty_local & DIRTY_WF_WINDOW)   nvs_set_u8(s_nvs, KEY_WF_WINDOW, snap.wf_window);
         if (dirty_local & DIRTY_DISP_FLIP)   nvs_set_u8(s_nvs, KEY_DISP_FLIP, snap.display_flip ? 1 : 0);
-        if (dirty_local & DIRTY_QMX_VOL)     nvs_set_u8(s_nvs, KEY_QMX_VOL,   snap.qmx_vol_pct);
+        if (dirty_local & DIRTY_QMX_VOL)     nvs_set_u8(s_nvs, KEY_QMX_VOL,   snap.qmx_vol_db);
         if (dirty_local & DIRTY_SNAP_PEAK)   nvs_set_u8(s_nvs, KEY_SNAP_PEAK, snap.snap_to_peak ? 1 : 0);
         if (dirty_local & DIRTY_BP_REGION)   nvs_set_u8(s_nvs, KEY_BP_REGION, snap.bandplan_region);
         if (dirty_local & DIRTY_DISTANCE_MILES) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap.distance_in_miles ? 1 : 0);
@@ -362,7 +362,7 @@ static void flush_task(void *arg)
         } else {
             ESP_LOGI(TAG, "flushed dirty=0x%llx", (unsigned long long)dirty_local);
             // Only re-mirror to SD if something that's actually IN the
-            // exported file changed — see DIRTY_CONFIG_EXPORT_MASK above.
+            // exported file changed â€” see DIRTY_CONFIG_EXPORT_MASK above.
             if (dirty_local & DIRTY_CONFIG_EXPORT_MASK) {
                 sd_archive_mark_config_dirty();
             }
@@ -390,7 +390,7 @@ void settings_init(void)
     }
     err = nvs_open_from_partition("user_nvs", NVS_NS, NVS_READWRITE, &s_nvs);
     if (err != ESP_OK) {
-        ESP_LOGW(TAG, "nvs_open failed: 0x%x — settings will not persist", err);
+        ESP_LOGW(TAG, "nvs_open failed: 0x%x â€” settings will not persist", err);
         return;
     }
 
@@ -403,7 +403,7 @@ void settings_init(void)
     // NVS already holds 1) is wrongly treated as a no-op and never written.
     load_from_nvs(&s_pending);
 
-    // Spawn the debounced flush task. Low priority — IO, not real-time.
+    // Spawn the debounced flush task. Low priority â€” IO, not real-time.
     s_flush_task = psram_task_create(flush_task, "settings_flush", 3072, NULL, 3, tskNO_AFFINITY);
     ESP_LOGI(TAG, "ready");
 }
@@ -422,7 +422,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->iq_enabled = DEF_IQ_ENABLED;
     out->flat_mode  = DEF_FLAT_MODE;
     out->last_vfo_hz = 0;
-    out->ft8_freq_hz = 14074000;   // 20m FT8 — sane default so FT8 never opens on an inherited odd VFO
+    out->ft8_freq_hz = 14074000;   // 20m FT8 â€” sane default so FT8 never opens on an inherited odd VFO
     out->cw_pitch_hz = DEF_CW_PITCH;
     out->cw_cal_hz   = DEF_CW_CAL;
     out->zoom_factor = DEF_ZOOM;
@@ -454,7 +454,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->wf_floor_blend = DEF_WF_BLEND;
     out->wf_window      = DEF_WF_WINDOW;
     out->display_flip   = false;
-    out->qmx_vol_pct    = 50;   // slider start position only - never sent at boot
+    out->qmx_vol_db     = 20;   // fallback slider position only - never sent at boot
     out->snap_to_peak   = true;   // on by default (legacy behaviour)
     out->ft8_early_decode = true; // on by default (WSJT-X-style fast pounce timing)
     out->greylist_en = false;     // opt-in ("Allow grey-listing", Filter modal)
@@ -564,7 +564,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (out->wf_floor_blend > 100) out->wf_floor_blend = 100;
     if (out->wf_window > 2)        out->wf_window = 0;
     if (nvs_get_u8(s_nvs, KEY_DISP_FLIP, &u8v) == ESP_OK) out->display_flip = (u8v != 0);
-    if (nvs_get_u8(s_nvs, KEY_QMX_VOL, &u8v) == ESP_OK) out->qmx_vol_pct = (u8v <= 100) ? u8v : 100;
+    if (nvs_get_u8(s_nvs, KEY_QMX_VOL, &u8v) == ESP_OK) out->qmx_vol_db = (u8v <= 199) ? u8v : 199;
     if (nvs_get_u8(s_nvs, KEY_SNAP_PEAK, &u8v) == ESP_OK) out->snap_to_peak = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_BP_REGION, &u8v) == ESP_OK) out->bandplan_region = (u8v <= 3) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_DISTANCE_MILES, &u8v) == ESP_OK) out->distance_in_miles = (u8v != 0);
@@ -1107,13 +1107,13 @@ void settings_set_display_flip(bool v)
     mark_dirty(DIRTY_DISP_FLIP);
 }
 
-void settings_set_qmx_vol_pct(uint8_t pct)
+void settings_set_qmx_vol_db(uint8_t db)
 {
     if (!s_ready) return;
-    if (pct > 100) pct = 100;
+    if (db > 199) db = 199;   // CAT_AF_GAIN_DB_MAX; not including cat.h here
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (s_pending.qmx_vol_pct == pct) { xSemaphoreGive(s_mutex); return; }
-    s_pending.qmx_vol_pct = pct;
+    if (s_pending.qmx_vol_db == db) { xSemaphoreGive(s_mutex); return; }
+    s_pending.qmx_vol_db = db;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_QMX_VOL);
 }

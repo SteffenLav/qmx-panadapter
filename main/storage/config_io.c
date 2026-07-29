@@ -1,4 +1,4 @@
-#include "config_io.h"
+﻿#include "config_io.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,7 +26,7 @@ char *config_io_export(size_t *out_len)
 
     // Plain malloc() of 8 KB would be forced into internal RAM (below IDF's
     // CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL threshold), which is the one scarce
-    // resource on this device — this buffer is just text, no DMA needed.
+    // resource on this device â€” this buffer is just text, no DMA needed.
     char *buf = heap_caps_malloc(CFG_BUF_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf) return NULL;
     int n = 0;
@@ -61,7 +61,7 @@ char *config_io_export(size_t *out_len)
     APP("wf_floor_blend     = %u\n", (unsigned)c.wf_floor_blend);
     APP("wf_window          = %u\n", (unsigned)c.wf_window);
     APP("display_flip       = %s\n", yn(c.display_flip));
-    APP("qmx_vol_pct        = %u\n", (unsigned)c.qmx_vol_pct);
+    APP("qmx_vol_db         = %u\n", (unsigned)c.qmx_vol_db);
     APP("cw_audio_vol       = %u\n", (unsigned)c.cw_audio_vol);
     APP("charge_limit       = %s\n", yn(c.charge_limit_en));
     APP("charge_limit_pct   = %u\n", (unsigned)c.charge_limit_pct);
@@ -201,7 +201,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "wf_floor_blend"))    settings_set_wf_floor_blend((uint8_t)atoi(val));
             else if (!strcasecmp(key, "wf_window"))         settings_set_wf_window((uint8_t)atoi(val));
             else if (!strcasecmp(key, "display_flip"))      settings_set_display_flip(to_bool(val));
-            else if (!strcasecmp(key, "qmx_vol_pct"))       settings_set_qmx_vol_pct((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "qmx_vol_db"))        settings_set_qmx_vol_db((uint8_t)atoi(val));
             else if (!strcasecmp(key, "cw_audio_vol"))      settings_set_cw_audio_vol((uint8_t)atoi(val));
             else if (!strcasecmp(key, "charge_limit"))      settings_set_charge_limit_en(to_bool(val));
             else if (!strcasecmp(key, "charge_limit_pct"))  settings_set_charge_limit_pct((uint8_t)atoi(val));

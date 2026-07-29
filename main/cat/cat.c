@@ -62,6 +62,12 @@ static size_t s_pc_resp_len = 0;
 static char   s_sw_resp[16] = {0};  // last SW (SWR) response
 static size_t s_sw_resp_len = 0;
 static char   s_qmx_fw[24] = {0};   // QMX firmware version from VN; (e.g. "1_03_002QMX")
+// Last AF gain read back from the radio via AG;, in the radio's own 0.25 dB
+// steps. -1 = never read. The QMX shows this value on its LCD IN DECIBELS
+// (operation manual: "the new volume is displayed ... The volume is shown in
+// decibels"), so dB = this / 4 and the drawer slider works in dB to match the
+// radio's display exactly.
+static volatile int s_af_gain = -1;
 static char   s_q9_resp[16] = {0};  // last Q9 (IQ mode) response, e.g. "Q91;"
 static size_t s_q9_resp_len = 0;
 static volatile bool s_iq_mode_confirmed = false;  // true once Q9; readback confirms IQ mode ON
@@ -104,6 +110,8 @@ static volatile uint32_t s_ssb_bw_pinned = 0;
 // can mean "nothing pending" while still allowing a genuine request of AG 0
 // (mute) to go through.
 static volatile uint32_t s_pending_af_gain_p1 = 0;
+// Set when someone wants the radio's current AF gain read back (drawer open).
+static volatile bool s_af_gain_query_pending = false;
 // CW filter width pending write, drained by the poll task as "MMCW|CW passband=".
 // Same poll-task ownership as SSB: a direct cross-thread write (e.g. from the
 // web/httpd thread) would race the FA/MD/FW poll and garble into ?;. CW commits
@@ -138,6 +146,16 @@ void cat_request_ssb_bandwidth(uint32_t hz)
     // web path did not, so a web BW change applied to the radio but never showed
     // on the Tab5. Doing it here covers every caller (touch, web, mode restore).
     ui_update_passband_width(hz);
+}
+
+int cat_get_af_gain(void) { return s_af_gain; }
+
+void cat_query_af_gain(void)
+{
+    // Just asks; process_cat_message() stores the answer in s_af_gain. Queued
+    // through the same pending mechanism as the write so the poll task owns the
+    // pipe (see cat_request_af_gain).
+    s_af_gain_query_pending = true;
 }
 
 int cat_get_cw_offset_hz(void) { return s_cw_offset_hz; }
@@ -445,6 +463,19 @@ static void process_cat_message(const char *msg, size_t len)
         }
         return;
     }
+    // AG response: "AG0nnn;" (Kenwood TS-480 form; the QMX also answers a bare
+    // "AG;" with the same). Value is in 0.25 dB steps, so the dB figure the
+    // radio puts on its own LCD is this / 4.
+    if (len >= 4 && msg[0] == 'A' && msg[1] == 'G') {
+        const char *p = msg + 2;
+        if (*p == '0') p++;          // skip the receiver digit when present
+        int v = atoi(p);
+        if (v >= 0 && v <= CAT_AF_GAIN_MAX) {
+            s_af_gain = v;
+            ESP_LOGI(TAG, "AF gain read back: %d (%.2f dB)", v, v * 0.25);
+        }
+        return;
+    }
     // VN response: "VN<version>;" — QMX/QDX firmware version string, e.g.
     // "VN1_03_002QMX;". Store the part between "VN" and the trailing ";".
     if (len >= 4 && msg[0] == 'V' && msg[1] == 'N') {
@@ -554,6 +585,14 @@ static void poll_task(void *arg)
             cmd[0] = 'M'; cmd[1] = 'D'; cmd[2] = md; cmd[3] = ';'; cmd[4] = 0;
             esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd, 4, 200);
             ESP_LOGI(TAG, "mode -> MD%c; (%s)", md, err == ESP_OK ? "ok" : "fail");
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        if (s_af_gain_query_pending) {
+            s_af_gain_query_pending = false;
+            static const char q[] = "AG;";
+            esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)q, 3, 200);
+            ESP_LOGI(TAG, "AF gain query AG; (%s)", err == ESP_OK ? "sent" : "fail");
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
         }
