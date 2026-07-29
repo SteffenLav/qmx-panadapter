@@ -33,6 +33,7 @@ The panadapter is your primary view — a real-time spectrum analyser and waterf
 | **SD** (yellow dot) | A card is present and your start-up backup is written, but continuous mirroring has stopped — the case with WiFi on. Your log, config and LoTW certificate are safe on the card; later QSOs are written at the next start-up |
 | `UTC(GPS)` / `UTC(NTP)` / `UTC(FT8)` / `UTC(FT4)` | The time source **currently** in charge — GPS-disciplined QMX, WiFi/SNTP, or FT8/FT4 offline sync (RTC / manual show as `UTC(RTC)` / `UTC(MAN)`) |
 | Firmware version | Currently flashed firmware version |
+| WiFi fan icon | Link strength, at the right-hand end with the network name and IP address. The dot alone means a weak link (above 25 %), plus the first bow above 50 %, plus the second above 80 %; all three faint means connected but very weak, or `off`. From v1.3.4 this replaces the old `-NN dBm` figure — the width went to the network name, which is far more often too long to fit |
 | Waterfall label | Active colour map name |
 
 ### 2. Touch Controls

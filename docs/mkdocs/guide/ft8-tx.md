@@ -195,6 +195,8 @@ Tap the status label to **abort** the current QSO (only works if ARMED or ACTIVE
 
 **Resume after timeout** — if a QSO times out because the partner faded, and they come back within ~5 minutes calling you, the exchange **resumes where it left off** automatically (or tap their row to resume manually) instead of restarting from scratch.
 
+**If they never heard your final** (v1.3.4) — a partner who does not decode your closing `73`/`RR73` keeps sending you their report, waiting for it. The Tab5 now notices: if the station just worked comes back with a report rather than `RR73`/`73`/`RRR`, the final is sent again, up to three times within four minutes, *before* anything else can start a new contact. The QSO is not logged a second time. Taking over by hand no longer produces a duplicate entry either — the same callsign on the same band inside ten minutes is recognised as the same contact.
+
 ### 7. Power & SWR Readout
 
 After each transmit burst, the status bar briefly shows:
@@ -229,26 +231,34 @@ Presets persist across power cycles. Common modifiers:
 
 ### 9. Frequency & Tone Control
 
-Your transmit tone is chosen for you — the nearest clear 50 Hz slot to 1500 Hz, scanned against the stations currently decoded. **From v1.3.3 you can both see it and change it.**
+Your transmit tone is chosen for you by default — the nearest clear 50 Hz slot, scanned against the stations currently decoded. You can see it, move it, and from v1.3.4 pin it.
 
-The tone is shown on its own line in the TX status block whenever a burst is armed or on the air. If another station lands on it you get **⚠ FREQ BUSY**, and the warning now names the frequency so you can act on it. During a CQ run the tone relocates itself to the nearest clear slot on the next cycle; mid-exchange it stays put unless you move it.
+**The TX tone button** is in the FT8 left pane, to the right of the `TXCQ` parity button, and always shows a number (1500 Hz until you change it). Tap it to open the picker.
 
-**To move it,** tap the **TX nnnn Hz** button on the FT8 screen, to the right of "Active: N" — it appears whenever a CQ or QSO is running:
+**The mini occupancy strip** sits directly under the slot countdown in the same pane: the same 50 Hz grid and the same colours as the picker's full-size strip, so where the band is busy — and where you are in it — is answerable at a glance without opening anything.
+
+In the picker:
 
 | Control | What it does |
 |---------|--------------|
-| **Occupancy strip** | The whole 200-2800 Hz window as 52 slots. **Green** free, **red** occupied, **amber** you, **cyan** your QSO partner |
+| **Occupancy strip** | The whole 200-2800 Hz window as 52 slots. **Green** free, **red** occupied, **white** you, **pink** your QSO partner |
 | **Touch and drag** | Drag along the strip to pick a slot. The bar turns grey and follows your finger, the readout tracks it live, and it commits when you lift off |
 | **-50 / +50** | Nudge one slot at a time |
 | **Find clear slot** | Jumps to the nearest free slot, scanning outward from where you are |
-| **Apply nnnn Hz** | Sends it to the radio |
+| **TX Hold** | Pins the tone: every CQ and every reply goes out on it. See below |
+| **Apply nnnn Hz** | Commits the tone and the hold setting |
 
-The readout also states in words whether your chosen slot is clear or occupied, and lists the nearest free slots as numbers.
+The readout states in words whether your chosen slot is clear or occupied, and lists the nearest free slots as numbers.
 
 It applies **between** bursts. With a burst on the air, Apply refuses and says to try again after it. Slot parity is untouched, so moving your tone mid-QSO does not disturb the exchange — your partner tracks the slot, not the frequency. This is the same freedom WSJT-X gives you, and it is the way out from under a station that has landed on top of you.
 
+**TX Hold** is WSJT-X's "Hold Tx Freq". With it **off** — the default — each transmission takes the nearest clear slot, and a CQ that gets clashed relocates itself on the next cycle. With it **on**, the tone you picked is the tone used for everything, a clash is reported but never acted on, and nothing moves you off the slot you chose. The line under the checkbox says which of the two you are getting. Both the tone and the hold setting survive a power cycle.
+
 !!! note "The strip shows decoded stations, not raw spectrum"
     A station too weak to decode will not appear as occupied, and an all-grey strip means nothing has been heard yet rather than "the band is clear".
+
+!!! note "Occupancy is per time window"
+    Two stations only collide if they transmit in the *same* slot, so a tone busy in the odd window may be completely free for you in the even one. The strip accounts for this whenever your own transmit window is known — that is, once a reply or a CQ is armed, since a reply inherits the opposite of your partner's slot and a CQ carries your `TXCQ EVEN`/`ODD` choice. With `TXCQ ANY` and nothing armed there is nothing to work from, so both windows are shown combined. When the window *is* known, the free-slot line names it.
 
 ### Waiting for a busy station
 

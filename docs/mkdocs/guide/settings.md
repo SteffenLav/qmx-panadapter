@@ -36,6 +36,8 @@ Once connected, the settings show your **IP address** — use this to access the
 
 **QMX volume** — The radio's own AF gain, **in decibels: the same number the QMX shows on its own LCD**, not a percentage. Available in both Panadapter and FT8 modes. It reads the radio back each time you open the drawer, so if you turn the volume with the rig's own knob the slider follows instead of disagreeing with it. This exists mainly for QMX+ builds with no control panel, where there is no volume knob at all (Randy N4OPI's request). Nothing is sent to the radio until you move the slider, so switching on can never change your volume unexpectedly.
 
+The slider runs 0–40 dB rather than the QMX's full 0–199 dB protocol range. Randy reported that everything usable sits inside the first tenth of that range and anything above it is far too loud, so covering it all crammed every useful setting into a couple of centimetres of travel. 40 dB is double the highest useful value reported. If you turn the radio past 40 dB with its own knob the slider knob sits at the end of its travel, but the number still shows the radio's true dB — it has to agree with the LCD.
+
 **Display sleep** — Dropdown (Off / 1 / 2 / 5 / 10 / 30 min). After the chosen idle time the backlight turns off; FT8, the radio link, and the web UI keep running. Tap the screen to wake — the wake tap is swallowed, so it can't tune or press anything. A **two-finger double-tap** blanks the display immediately.
 
 **Brightness** — Screen brightness (0–100%).

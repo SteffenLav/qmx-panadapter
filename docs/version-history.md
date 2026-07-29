@@ -1106,6 +1106,80 @@ Two things to know if yours looks dead: the first report goes out **five to five
 - Live SD mirroring during a WiFi session is still a known limitation rather than a bug: the SD card and WiFi share a DMA controller. The start-up backup is unaffected.
 - The one-off `tlsf_free` boot-time reboot first seen in v1.3.0 has still not recurred and is still being watched.
 
+## v1.3.4 — 2026-07-29 — Finishing the QSO, and a TX frequency you control from the main screen
+
+v1.3.3 went out in the morning and the reports came back the same day. This release is those reports: two real bugs in how QSOs finish, an invented signal report that should never have been in the log, a volume slider that worked but was unusable, and an occupancy map that was answering the wrong question. Plus the TX frequency control moved out of a corner and onto the main screen, with a live band picture beside it.
+
+### A QSO is not over just because we said 73 (Roy KI0ER)
+
+Roy worked VE3INB with auto-reply running. VE3INB sent his report, the Tab5 logged the QSO as complete and moved on to the next CQ — but VE3INB had never decoded the final `R73`, so he kept sending `KI0ER VE3INB R-10`, slot after slot, waiting for the one message that would let him close his own log. He never got it. Roy stepped in by hand and sent it himself, which produced a **second copy of the same QSO** in his ADIF log. He did it again. More copies. Meanwhile VE3INB gave up, and Roy is probably not in his log at all.
+
+Two separate faults, and the second explains the first.
+
+**The Tab5 now answers a partner who is still asking.** Nothing in the machine could act on VE3INB's repeated report. The record kept for resuming a broken QSO is deliberately erased on completion — that is what stops a fading partner being auto-resumed into a duplicate — and a completed QSO is otherwise finished, full stop. So the slot went to the next CQ while the previous contact was still unfinished on the other side.
+
+If the station just worked comes back addressing us with a report instead of `RR73`, `73` or `RRR` — meaning they did not hear our final — the final goes out again, up to three times within four minutes. That check runs *before* anything can start a new contact, so the slot is spent finishing the previous QSO rather than beginning the next one. Nothing is logged a second time, and an armed CQ resumes by itself afterwards. This is what WSJT-X does, and it is what actually gets you into the other operator's log.
+
+**And it will not log the same contact twice.** The log is written at exactly one moment, when the final leaves the air. Taking over by hand legitimately drives the machine through that moment again, which is where Roy's duplicates came from. The same callsign on the same band within ten minutes is now recognised as the same contact and logged once.
+
+### Your log no longer contains signal reports nobody sent (Roy KI0ER)
+
+Roy found `599` in the received-report column of his log and asked, reasonably, whether FT8 stations really were sending him 599.
+
+They were not. That was ours. When a QSO finished without a numeric report ever being exchanged — the partner answers your grid and jumps straight to `RR73`, for instance — the ADIF `RST_SENT`/`RST_RCVD` field was filled in with `599`. In a CW or SSB log that is a harmless convention. In an FT8 log it is a **fabricated measurement**, and it was being uploaded to QRZ, eQSL and LoTW as though it had been measured.
+
+Unknown reports are now left out of the record entirely. ADIF requires neither field and LoTW ignores both. The on-device log viewer shows a dash. Records already written keep their `599` — the log is not rewritten, since it may already have been uploaded.
+
+### The occupancy map now answers the right question (Roy KI0ER)
+
+Roy asked whether the new occupancy strip accounts for *which time window* you transmit in — because a slot occupied in the odd window may be completely free in the even one, and the answer decides whether it is a candidate for you.
+
+It did not. It counted every decoded station regardless of the slot it was heard in, so a tone busy only in the *opposite* window showed as busy for you. On a crowded band that is most of the strip, and the automatic clear-slot picker was making the same mistake — steering away from slots that were in fact free.
+
+Occupancy is now filtered by slot parity: two stations only collide if they transmit in the same window. One honest limit, because it is worth knowing rather than guessing: your own transmit window is only knowable once something is armed or running (a reply inherits the opposite of your partner's, and a CQ carries your `TXCQ EVEN`/`ODD` choice). With `TXCQ ANY` and nothing armed, there is no answer to give, so the map falls back to showing both windows combined — the same conservative view as before. When it does know, the free-slot line under the strip names the window it is showing.
+
+### The QMX volume slider is usable now — and it works (Randy N4OPI)
+
+Randy is the first person to have run the v1.3.3 volume slider against a real radio, and the news is good: the command format, the value read back from the rig, and the live dB on the LCD all work as intended. That was the release's largest untested claim.
+
+His complaint was the travel. The slider covered the QMX's full protocol range of 0 to 199 dB, but everything usable sits inside the first ten percent of it — "anything beyond that is way too loud" — so every setting an operator actually wants was crammed into the leftmost couple of centimetres.
+
+The slider now tops out at **40 dB**, double the highest useful value reported, so nothing reachable has been lost and there is five times the resolution where it matters. If you turn the radio past 40 dB with its own knob, the slider knob sits at the end of its travel but **the number still shows the radio's true dB** — the figure has to agree with the LCD, which is the whole point of the control.
+
+Randy also noticed the QMX remembers volume per band. That is the radio's own behaviour, not the Tab5's.
+
+### The TX frequency is a control on the main screen, with the band beside it
+
+In v1.3.3 the transmit tone was a small chip that appeared next to "Active: N" only while a CQ or QSO was running — which is to say it was hidden at exactly the moment you were deciding where to transmit. It is now a permanent, full-height button in the FT8 left pane, always showing a number, defaulting to the conventional 1500 Hz.
+
+- **A live occupancy strip sits under the slot countdown.** The same 50 Hz grid, the same occupancy data and the same colours as the picker's full-size strip, shrunk to the width of the left pane. Where the band is busy — and where you are in it — is now answerable at a glance without opening anything.
+- **`TX Hold`, WSJT-X's "Hold Tx Freq".** A checkbox in the tone picker. With it on, the tone you chose is the tone used for every CQ and every reply, and a clash is reported but never acted on. With it off, the behaviour is as before: each transmission takes the nearest clear slot. A line under the checkbox states which of the two you are getting, in words. Both the tone and the hold setting survive a power cycle.
+- **The parity preference is one button instead of two.** `TX: EVEN` and `TX: ODD` each toggled themselves off again, spending two cells of the pane on a three-way choice and leaving "any" as an implied state you reached by un-picking something. It is now a single button cycling `TXCQ ANY` → `TXCQ EVEN` → `TXCQ ODD`, keeping the colours the pair had.
+- **`Active: N` is gone.** It was not useful information, and the status text below it — which wraps, and changes several times a slot — took over the line.
+- **The tone is no longer repeated on the TX status line.** The button above shows it at all times and is also what moves it, so the copy was pure duplication, and it cost a line on the label that can least afford one.
+
+In the picker itself: your own tone is now **white** and your partner's **pink** (against green and red occupancy bars, the old amber read as a warning and cyan as a third state, when both are really just "mine" and "theirs"), `Apply` is the same green as every other commit button in the app, the ±50 nudges and the clear/busy verdict are larger, and the layout is centred and better spaced.
+
+### Bottom bar: WiFi signal strength as an icon
+
+The `-NN dBm` figure is gone from the bottom bar. WiFi strength is now shown the way every phone and laptop shows it — a **fan icon** whose lit elements track the link: the dot alone above 25 %, plus the first bow above 50 %, plus the second above 80 %. All three stay faintly visible so the icon never changes width and the count reads against a whole.
+
+That freed a useful amount of width, and it goes to the **SSID**, which is frequently long and was being truncated. The IP address is pinned to the right edge, the SSID sits beside it, and the icon follows the text. The centred UTC clock does not move: if an SSID is long enough to reach it, the SSID truncates rather than the clock shifting.
+
+### Under the hood
+
+**The settings dirty-bitmap was full, and is not any more.** Every one of its 64 bits had been allocated — the last went to the QMX volume slider in v1.3.3 — so the next setting that wanted to be remembered across a power cycle simply could not be. It is now a 128-bit set with 62 bits spare, and grows by changing one number. The `TX Hold` tone and flag are the first two settings to use the new room. There is no migration: nothing in flash depended on the old layout.
+
+#### Notes for testers
+
+- **The QSO-completion re-send is bench- and simulator-verified only.** Whether three re-sends inside four minutes is the right budget is a judgement about on-air conduct that only real contacts can settle. If a station needs more persistence than that, or if you see the Tab5 being *too* persistent, that is the report to send.
+- **The parity-aware occupancy map has not been checked against a real crowded band.** The logic is right — stations in the other window cannot collide with you — but whether the strip now matches what you can actually hear is worth a look.
+- **The QMX volume dB figure has still not been compared against a QMX LCD side by side.** Randy has confirmed the slider works and moves the volume; whether the two numbers read identically is the outstanding half.
+- **Fast pounce (early decode)** from v1.3.0 remains on-air-unverified. ON/OFF decode counts on the same band at the same time of day are still the most useful measurement anyone can send.
+- The **LoTW state/county** path still needs a US callsign certificate to exercise.
+- Live SD mirroring during a WiFi session remains a known limitation rather than a bug: the card and WiFi share a DMA controller. The start-up backup is unaffected.
+- The one-off `tlsf_free` boot-time reboot first seen in v1.3.0 has still not recurred and is still being watched.
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
