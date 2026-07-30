@@ -286,7 +286,7 @@ Controls appear top to bottom in this order:
 | Control | What it does |
 |---------|--------------|
 | **Flip 180°** | Inverts the whole display and touch axes for upside-down mounting; centred checkbox so it isn't hit by accident, persisted |
-| **QMX volume** | The radio's own AF gain, **in decibels — the same number the QMX shows on its LCD**. Reads the rig back each time the drawer opens, so it stays in step if you use the radio's volume knob. Intended for QMX+ builds with no control panel, where there is no knob at all. Spans 0–40 dB, not the QMX's full 0–199 dB: everything usable is in the bottom tenth of that range (Randy N4OPI), so the full span made the control unusably touchy |
+| **QMX volume** | The radio's own AF gain, **in decibels — the same number the QMX shows on its LCD**. Reads the rig back each time the drawer opens, so it stays in step if you use the radio's volume knob. Intended for QMX+ builds with no control panel, where there is no knob at all. Spans 0–70 dB, not the QMX's full 0–199 dB, so the useful travel isn't crammed into the first couple of centimetres. 70 dB is Randy N4OPI's measured figure — comfortable listening ends much lower, but weak-signal work and a noisy shack need the headroom |
 | **IQ Balance** | Toggle adaptive I/Q image correction; re-enabling resets the estimator |
 | **Flat spectrum** | Toggle flat/absolute display mode, persisted |
 | **Presets** | HF Normal / HF DX / Strong Sig — sets dB range and smoothing in one tap |

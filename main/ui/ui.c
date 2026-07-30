@@ -5407,6 +5407,12 @@ static lv_obj_t *make_drawer_checkbox(lv_obj_t *parent, bool checked,
     // is only ~30px, fiddly to hit on glass. ext_click_area grows the hittable
     // region on all sides without changing how it looks.
     lv_obj_set_ext_click_area(cbx, 28);
+    // The big target wins the press; this stops the drawer taking it away again.
+    // Same cause as the drawer sliders (see LV_OBJ_FLAG_SCROLL_CHAIN_VER there):
+    // a tap that wanders 10 px is reinterpreted as a drawer scroll and the
+    // checkbox never fires, which is why these felt intermittent despite the
+    // generous hit area (Don WB0LQW, 2026-07-29).
+    lv_obj_clear_flag(cbx, LV_OBJ_FLAG_SCROLL_CHAIN_VER);
     return cbx;
 }
 
@@ -6293,6 +6299,23 @@ static void drawer_build(void)
     for (size_t i = 0; i < sizeof(drawer_sliders) / sizeof(drawer_sliders[0]); i++) {
         if (!drawer_sliders[i]) continue;
         lv_obj_add_flag(drawer_sliders[i], LV_OBJ_FLAG_ADV_HITTEST);
+        // Don WB0LQW, 2026-07-29: "sometimes the sliders slide and sometimes
+        // they don't". Root cause is LVGL's scroll-vs-press arbitration, not the
+        // hit target. find_scroll_obj() (lv_indev_scroll.c) walks up from the
+        // pressed object looking for a scrollable ancestor and stops only if an
+        // object on the way lacks LV_OBJ_FLAG_SCROLL_CHAIN_VER; the drawer IS
+        // vertically scrollable, so once movement passes indev->scroll_limit
+        // (10 px, LVGL's default) the drawer takes the gesture and the slider
+        // gets PRESS_LOST. Ten px is nothing with a fingertip on this panel.
+        // Clearing the chain flag keeps a grabbed knob grabbed. Cost: a drag
+        // starting exactly on a knob no longer scrolls the drawer - everywhere
+        // else still does, which is the right trade for a 42 px target.
+        lv_obj_clear_flag(drawer_sliders[i], LV_OBJ_FLAG_SCROLL_CHAIN_VER);
+        // ADV_HITTEST means only the KNOB grabs (so a track press still scrolls
+        // the drawer - that is why the flag is there). lv_slider's HIT_TEST
+        // handler inflates right_knob_area by ext_click_pad, so this widens the
+        // catch radius from 42 to 66 px without re-arming the track.
+        lv_obj_set_ext_click_area(drawer_sliders[i], 12);
         lv_obj_set_style_pad_left(drawer_sliders[i], 0, LV_PART_MAIN);
         lv_obj_set_style_pad_right(drawer_sliders[i], 25, LV_PART_MAIN);
         // Half-thickness track, same-size knob (operator request 2026-07-24):
