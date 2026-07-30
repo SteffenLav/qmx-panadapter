@@ -6313,9 +6313,25 @@ static void drawer_build(void)
         lv_obj_clear_flag(drawer_sliders[i], LV_OBJ_FLAG_SCROLL_CHAIN_VER);
         // ADV_HITTEST means only the KNOB grabs (so a track press still scrolls
         // the drawer - that is why the flag is there). lv_slider's HIT_TEST
-        // handler inflates right_knob_area by ext_click_pad, so this widens the
-        // catch radius from 42 to 66 px without re-arming the track.
-        lv_obj_set_ext_click_area(drawer_sliders[i], 12);
+        // handler inflates right_knob_area by ext_click_pad, so this is the one
+        // knob that makes the knob easier to catch without re-arming the track.
+        //
+        // 28, not the 12 tried first: with the scroll-steal fixed the operator
+        // reported a grabbed knob now holds correctly, but still "you really
+        // need to increase the touch areas" - so hitting it, not keeping it, is
+        // what is left. 28 takes the catch area from 42 to 98 px. Sized against
+        // the closest slider spacing in the drawer, 72 px (wf_black 72 ->
+        // contrast 144 -> blend 216) minus the 14 px track = 29 px per side
+        // before two sliders would fight over the same touch. It matches the
+        // checkboxes, which use 28 for the same reason.
+        //
+        // What this does NOT fix: with ADV_HITTEST set you must still be near
+        // the knob HORIZONTALLY - a tap at the far end of the track does
+        // nothing. Clearing ADV_HITTEST would make the whole 488 px row grab
+        // and jump the knob to the tap, at the cost of a stray tap becoming a
+        // large value change (brightness to 5%, say) and of not being able to
+        // scroll the drawer from a slider row at all.
+        lv_obj_set_ext_click_area(drawer_sliders[i], 28);
         lv_obj_set_style_pad_left(drawer_sliders[i], 0, LV_PART_MAIN);
         lv_obj_set_style_pad_right(drawer_sliders[i], 25, LV_PART_MAIN);
         // Half-thickness track, same-size knob (operator request 2026-07-24):
