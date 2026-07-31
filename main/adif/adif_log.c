@@ -453,6 +453,13 @@ void adif_log_clear(void)
     remove(FILE_PATH);
     FILE *f = fopen(FILE_PATH, "w");
     if (f) { write_header(f); fclose(f); }
+
+    // The QRZ/eQSL/LoTW upload cursors are record counts into this log; with
+    // the log gone they must go back to 0 or every QSO logged after the clear
+    // sits below the stale cursor and silently never uploads.
+    settings_set_qrz_uploaded_n(0);
+    settings_set_eqsl_uploaded_n(0);
+    settings_set_lotw_uploaded_n(0);
     ESP_LOGI(TAG, "ADIF log cleared");
 }
 

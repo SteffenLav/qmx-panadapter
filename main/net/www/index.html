@@ -391,6 +391,7 @@
         <a href="#" id="qrz-link">QRZ upload &#8593;</a>
         <a href="#" id="eqsl-link">eQSL upload &#8593;</a>
         <a href="#" id="lotw-link" title="ARRL Logbook of the World. Once set up: signs pending QSOs on-device and uploads. Ctrl-click to re-run setup (e.g. after a certificate renewal).">LoTW setup</a>
+        <a href="#" id="adif-clear-link" class="danger" title="Delete ALL logged QSOs from the Tab5. Download the ADIF first if you want to keep them. Handy before a POTA activation: start with an empty log and the file at the end is exactly what you submit.">Clear log (delete all)</a>
       </div>
     </div>
     <div class="bot-menu-wrap">
@@ -504,6 +505,7 @@ let firstStatus    = true;
 let serverUtcAtTick = 0;   // server epoch (s) at last /api/status
 let localAtTick     = 0;   // Date.now()/1000 when that response arrived
 let qrzKeySet        = false;
+let lastQsoCount     = 0;      // qso_count from the last /api/status poll
 let eqslCredsSet     = false;
 let lotwReady        = false;
 let lastBandplan     = null;   // {lo, hi, segs:[{lo,hi,c,l}]} or null if off-band
@@ -897,6 +899,37 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
     "Use this if WiFi is stuck or FT8 misbehaves after a normal flash. The Tab5 reboots.");
 })();
 
+/* Clear the whole QSO log. Destroys data with no undo, so the gate is a typed
+   word rather than a plain confirm(). */
+(function () {
+  const link = document.getElementById("adif-clear-link");
+  if (!link) return;
+  link.addEventListener("click", async function (e) {
+    e.preventDefault();
+    const typed = prompt(
+      "Delete ALL " + lastQsoCount + " logged QSO" + (lastQsoCount === 1 ? "" : "s") +
+      " from the Tab5?\n\n" +
+      "There is NO undo. Download the ADIF first if you want a copy.\n\n" +
+      "Type DELETE to confirm:");
+    if (typed === null) return;
+    if (typed.trim().toUpperCase() !== "DELETE") {
+      alert("Not confirmed — the log was NOT cleared.");
+      return;
+    }
+    const prev = link.textContent;
+    link.textContent = "Clearing …";
+    try {
+      const r = await fetch("/api/adif/clear", { method: "POST" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      alert("QSO log cleared.");
+    } catch (err) {
+      alert("Clear failed: " + err.message);
+    } finally {
+      link.textContent = prev;
+    }
+  });
+})();
+
 function positionDropdown(pillId, ddId) {
   const pill = document.getElementById(pillId);
   const dd   = document.getElementById(ddId);
@@ -1150,6 +1183,7 @@ async function tick() {
     /* QSO count + ADIF/QRZ/eQSL buttons - all hidden until there's at least
        one QSO logged (nothing to download/upload otherwise). */
     const qsoCount = s.qso_count || 0;
+    lastQsoCount = qsoCount;
     const logGroupBtn = document.getElementById("log-group-btn");
     const adifLink = document.getElementById("adif-link");
     const lotwLink = document.getElementById("lotw-link");
