@@ -1180,6 +1180,63 @@ That freed a useful amount of width, and it goes to the **SSID**, which is frequ
 - Live SD mirroring during a WiFi session remains a known limitation rather than a bug: the card and WiFi share a DMA controller. The start-up backup is unaffected.
 - The one-off `tlsf_free` boot-time reboot first seen in v1.3.0 has still not recurred and is still being watched.
 
+## v1.3.5 — 2026-07-31 — Managing the log, pacing the CQ, and a way out of the wait
+
+Another same-week feedback release. Don WB0LQW asked for three things — a way to clear the log from the Tab5, a way to work with the log without downloading it, and a CQ that stops calling after a few tries. All three are here. Roy KI0ER found that the v1.3.4 busy-station hold had no exit. And the settings drawer's touch handling got the fix that was promised on groups.io.
+
+### Send CQ a few times, then pause (Don WB0LQW)
+
+Don: "I usually send CQ 2-4 times and then pause... it would be nice if there was a counter, or a limit I could set."
+
+Both now exist. Long-press **Call CQ** and the preset editor has a **CQ stop** button at the top right, cycling never / 1 / 2 / 3 / 4 / 5 / 10 calls — it applies the moment you tap it, no Save needed. While calling, the TX status shows the counter live: "call 2 of 4" (or just "call 2" with no limit set).
+
+The stop itself is polite about timing: after the last unanswered call, the Tab5 listens through one more receive slot — an answer to your final call still starts the QSO normally — and only then stops and goes idle. The limit applies to every CQ run, including the automatic resume after a completed or timed-out contact, and each fresh sequence starts the count over. The setting survives a power cycle and travels in the config backup.
+
+### The QSO log, in your browser (Dennis WN4FLA, Don WB0LQW)
+
+Both Dennis and Don went looking for log management in the web interface and found only the download link — and Don had been told, wrongly, that a whole-log clear was already there. The clear function existed inside the firmware; no button had ever been wired to it. That is owned up to and fixed properly.
+
+The QSO Logs menu now has **View / edit log**: the whole log as a table in the browser — call, mode, band, frequency, date, time, both reports, grid — newest first. **Click any column header to sort** by it, click again to reverse; sorting by date groups an activation's QSOs together, which was the practical need behind the "today-only download" request. Every row has a delete cross for removing that one record, and a **Delete all** button clears the whole log — that one asks you to type `DELETE`, because there is no undo.
+
+Single-record deletion from the browser is deliberately paranoid: the delete request carries both the record's position and its callsign, and the Tab5 refuses if they no longer match — so a log that changed since the page loaded (a new QSO mid-view) can never cause the wrong record to be deleted.
+
+### Delete all, on the Tab5 too (Don WB0LQW)
+
+The on-device ADIF log viewer gets its own **Delete all** button, next to Close. Same two-tap confirm as the test-record delete: the first tap arms it and the label changes to "ALL 34?" with the live count, a second tap within five seconds deletes, waiting disarms it.
+
+This is the POTA workflow Don described: clear the log at the start of the activation, and the ADIF file at the end is exactly what you submit — no editing, no filtering.
+
+### A bug the missing button was hiding
+
+Clearing the log never reset the QRZ, eQSL and LoTW upload positions. Since nothing could reach the clear function, nothing ever hit the bug — but the first operator to clear a 30-QSO log would have found their next 30 QSOs silently skipped by every upload, because the upload cursors still pointed past them. Fixed before it bit anyone: a cleared log now resets all three.
+
+### You can now escape the busy-station hold (Roy KI0ER)
+
+v1.3.3 taught the pounce to wait politely when its target is visibly working someone else, instead of keying up over their exchange. Roy found the flaw the same week it shipped: the wait had no exit. The hold deliberately disarms the transmitter, and the cancel action only existed while a transmission was armed or on the air — so the one state where you most want to opt out was the one state without a way to. You were committed to a station you were not actually working, locked out of pouncing on anyone else.
+
+The status line now shows **TAP TO CANCEL** during the hold, in the same amber as an armed transmission, and tapping it drops the pounce so you are free to work anyone else. The abandoned exchange stays resumable for a few minutes in case the station frees up and you want back in. The same escape covers the CQ auto-stop's final listening slot.
+
+### The settings drawer takes your finger seriously now (Don WB0LQW)
+
+Drawer sliders and checkboxes responded intermittently — whether a slider moved came down to how still your finger was. Not a hit-target problem: LVGL hands the gesture to the scrollable drawer the moment a touch travels ten pixels, and ten pixels is nothing for a fingertip on this panel. A grabbed control now stays grabbed (the drawer no longer steals the gesture mid-drag), and the slider knobs' catch area more than doubled to 98 px after a bench test showed the first attempt was still too tight. The stated cost: a drag starting exactly on a knob or checkbox no longer scrolls the drawer.
+
+One known leftover, deliberate: you still need to touch near the knob *horizontally* — a tap at the far end of the track does nothing. Making the whole track grab would let a stray tap jump the volume by 30 dB, so it stays knob-only.
+
+### QMX volume: 50 dB, and the number is verified (Randy N4OPI)
+
+Randy — still the only person who has measured this against a real radio — compared the Tab5's dB figure against the QMX's own LCD side by side: **they read identical**. Nothing in the volume path is unverified any more, closing v1.3.4's last outstanding claim about it.
+
+The cap moved once more, from 40 to **50 dB**, on his third and best-informed report: his earlier "40 is not quite loud enough" turned out to have been measured with the antenna switched off, so what was missing was band noise, not gain range. With the antenna on, "40 seems plenty loud now. Maybe 50?" — so 50, with about 10 px of slider travel per dB. As before, turning the radio's own knob past the cap pins the slider knob at the end while the number keeps showing the radio's true dB.
+
+#### Notes for testers
+
+- **The CQ auto-stop's on-air pacing is bench-verified only.** The counter, the setting and the stop logic all work on the bench; that it stops after exactly the Nth unanswered call on a real band, and resumes cleanly on the next Call CQ, is Don's to confirm.
+- **The busy-hold TAP TO CANCEL needs a live band to exercise** — the hold only engages when a pounce target is visibly working someone else.
+- The **QSO-completion re-send budget** (three re-sends inside four minutes, v1.3.4) is still bench-verified only.
+- **Fast pounce (early decode)** from v1.3.0 remains on-air-unverified.
+- The **LoTW state/county** path still needs a US callsign certificate to exercise.
+- Live SD mirroring during a WiFi session remains a known limitation rather than a bug: the card and WiFi share a DMA controller. The start-up backup is unaffected.
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
