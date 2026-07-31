@@ -78,6 +78,8 @@ The reply follows **correct FT8/FT4 parity** — if you're replying to an even s
 
 **Skip TX1 (faster pounce).** With **Skip TX1** enabled in the Filter modal, pouncing a station opens with your signal report straight away instead of the grid exchange — saving one round trip. If the station has already dropped out of the decode list, it falls back to the normal grid exchange automatically.
 
+**If your target is working someone else**, the panadapter holds instead of keying up over their exchange — the status shows "working *call* - waiting" with a **TAP TO CANCEL** line. Waiting costs nothing (a hold doesn't count toward the timeout), but if you'd rather move on, tap the status to cancel the pounce and pick a different station; the abandoned exchange stays resumable for a few minutes via the resume prompt.
+
 #### Working a pile-up
 
 When you call CQ (or work a busy run), more than one station may answer at once — and a caller who replies while you're mid-QSO with someone else used to vanish from the live decode list as soon as they stopped transmitting. They are now kept in a **Pileup** list so you don't lose them:
