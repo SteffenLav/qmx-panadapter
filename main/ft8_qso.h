@@ -77,6 +77,11 @@ bool ft8_qso_override_next(ft8_tx_kind_t kind, char *err, size_t err_len);
 ft8_qso_state_t ft8_qso_get_state(void);
 void            ft8_qso_get_target(char *buf, size_t len);
 
+// CQ auto-stop progress: CQ bursts already transmitted in the current CQ
+// sequence, or -1 when no CQ run is in progress. The armed/on-air call is
+// therefore number (sent+1). The limit itself is the cq_max_calls setting.
+int             ft8_qso_get_cq_calls_sent(void);
+
 // True while a QSO exchange (CQ loop or any WAIT_* state) is active - i.e.
 // ft8_qso_start()/ft8_tx_arm() of an unrelated message would clobber it.
 // *target_buf (if non-NULL) is filled with the call being worked, or empty

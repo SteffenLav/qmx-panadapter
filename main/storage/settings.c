@@ -38,6 +38,7 @@ static const char *TAG = "settings";
 #define KEY_CQ_MSG1    "cq_msg1"
 #define KEY_CQ_MSG2    "cq_msg2"
 #define KEY_CQ_SEL     "cq_sel"
+#define KEY_CQ_MAX     "cq_max"
 #define KEY_ONBOARDED  "onboarded"
 #define KEY_FT8_FILT   "ft8_filt"
 #define KEY_WIFI_ENABLED "wifi_en"
@@ -242,6 +243,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 // --- past the old 64-bit ceiling (the whole point of DIRTY_WORDS) ---
 #define DIRTY_TX_TONE_HZ     64
 #define DIRTY_TX_TONE_HOLD   65
+#define DIRTY_CQ_MAX_CALLS   66
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -265,7 +267,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_DISP_FLIP, DIRTY_QMX_VOL, DIRTY_CW_AUD_VOL, DIRTY_CHARGE_LIM_EN,
     DIRTY_CHARGE_LIM_PCT,
     DIRTY_LOTW_DXCC, DIRTY_LOTW_CQZ, DIRTY_LOTW_ITUZ, DIRTY_DISP_SLEEP,
-    DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD,
+    DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD, DIRTY_CQ_MAX_CALLS,
 };
 
 // ---- Module state ------------------------------------------------------
@@ -364,6 +366,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_CQ_MSG1))    nvs_set_str(s_nvs, KEY_CQ_MSG1, snap.cq_msg[1]);
         if (dirty_test(&dirty_local, DIRTY_CQ_MSG2))    nvs_set_str(s_nvs, KEY_CQ_MSG2, snap.cq_msg[2]);
         if (dirty_test(&dirty_local, DIRTY_CQ_SEL))     nvs_set_u8(s_nvs, KEY_CQ_SEL, snap.cq_sel);
+        if (dirty_test(&dirty_local, DIRTY_CQ_MAX_CALLS)) nvs_set_u8(s_nvs, KEY_CQ_MAX, snap.cq_max_calls);
         if (dirty_test(&dirty_local, DIRTY_ONBOARDED))  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap.onboarded ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FT8_FILT))     nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap.ft8_filters, sizeof(snap.ft8_filters));
         if (dirty_test(&dirty_local, DIRTY_WIFI_ENABLED)) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap.wifi_enabled ? 1 : 0);
@@ -503,6 +506,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->cq_msg[1][0] = '\0';
     out->cq_msg[2][0] = '\0';
     out->cq_sel = 0;
+    out->cq_max_calls = 0;
     out->onboarded = false;
     out->wifi_enabled = DEF_WIFI_ENABLED;
     out->qmx_gps = false;
@@ -599,6 +603,7 @@ static void load_from_nvs(qmx_settings_t *out)
     sz = sizeof(out->cq_msg[2]); nvs_get_str(s_nvs, KEY_CQ_MSG2, out->cq_msg[2], &sz);
     nvs_get_u8(s_nvs, KEY_CQ_SEL, &out->cq_sel);
     if (out->cq_sel > 2) out->cq_sel = 0;
+    nvs_get_u8(s_nvs, KEY_CQ_MAX, &out->cq_max_calls);
 
     if (nvs_get_u8(s_nvs, KEY_ONBOARDED,  &u8v) == ESP_OK) out->onboarded  = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_WIFI_ENABLED, &u8v) == ESP_OK) out->wifi_enabled = (u8v != 0);
@@ -947,6 +952,16 @@ void settings_set_cq_sel(uint8_t idx)
     s_pending.cq_sel = idx;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CQ_SEL);
+}
+
+void settings_set_cq_max_calls(uint8_t n)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.cq_max_calls == n) { xSemaphoreGive(s_mutex); return; }
+    s_pending.cq_max_calls = n;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CQ_MAX_CALLS);
 }
 
 void settings_set_onboarded(bool v)

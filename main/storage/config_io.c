@@ -94,6 +94,7 @@ char *config_io_export(size_t *out_len)
     APP("1 = %s\n", c.cq_msg[0]);
     APP("2 = %s\n", c.cq_msg[1]);
     APP("3 = %s\n", c.cq_msg[2]);
+    APP("stop_after = %u\n", (unsigned)c.cq_max_calls);   // 0 = keep calling
 
     APP("\n[ft8_filters]\n");
     APP("include1_on = %s\n", yn(c.ft8_filters.incl_en[0]));
@@ -229,6 +230,9 @@ int config_io_import(char *text)
             if (!strcasecmp(key, "active")) {
                 int s = atoi(val) - 1;          // file is 1-based
                 if (s >= 0 && s <= 2) { settings_set_cq_sel((uint8_t)s); applied++; }
+            } else if (!strcasecmp(key, "stop_after")) {
+                int n = atoi(val);
+                if (n >= 0 && n <= 255) { settings_set_cq_max_calls((uint8_t)n); applied++; }
             } else {
                 int idx = atoi(key) - 1;        // "1".."3"
                 if (idx >= 0 && idx <= 2) { settings_set_cq_msg((uint8_t)idx, val); applied++; }

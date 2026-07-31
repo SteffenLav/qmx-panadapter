@@ -63,6 +63,7 @@ typedef struct {
     uint32_t last_unix_time;   // last UTC unix time seen from SNTP (0 = never synced)
     char     cq_msg[3][28];    // 3 user-editable CQ message presets (FT8 TX)
     uint8_t  cq_sel;           // which CQ preset is active, 0..2 (default 0)
+    uint8_t  cq_max_calls;     // auto-stop CQ after N unanswered calls, 0=never (default 0)
     bool     onboarded;        // first-boot WiFi/identity prompts shown (default false)
     bool     wifi_enabled;     // initiate WiFi at boot (default true)
     bool     qmx_gps;         // QMX/QMX+ has GPS discipline — skip Tab5→QMX time push
@@ -173,6 +174,11 @@ void settings_set_my_grid(const char *grid);
 // settings_set_cq_sel selects the active preset (0..2). Debounced flush.
 void settings_set_cq_msg(uint8_t idx, const char *text);
 void settings_set_cq_sel(uint8_t idx);
+
+// Auto-stop a CQ run after this many unanswered calls (0 = keep calling).
+// Don WB0LQW: "I usually send CQ 2-4 times and then pause". Set from the CQ
+// preset modal's top-right cycle button; consumed by ft8_qso.c's CQ loop.
+void settings_set_cq_max_calls(uint8_t n);
 
 
 // First-boot onboarding done: once true, the WiFi/identity prompts are never

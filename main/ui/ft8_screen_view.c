@@ -1143,6 +1143,20 @@ static void t_clock_cb(lv_timer_t *t)
 
         bool clash = (tx_st != FT8_TX_IDLE) && ft8_tx_is_clashing();
 
+        // CQ auto-stop progress (Don WB0LQW): "call 2 of 4" while a limited
+        // CQ run is armed/on-air, "call 2" when unlimited. The engine counts
+        // COMPLETED bursts, so the one armed/on-air right now is (sent+1).
+        char cq_line[24] = "";
+        int  cq_sent = ft8_qso_get_cq_calls_sent();
+        if (cq_sent >= 0 && tx_st != FT8_TX_IDLE) {
+            qmx_settings_t cqs;
+            settings_load_all(&cqs);
+            if (cqs.cq_max_calls > 0)
+                snprintf(cq_line, sizeof(cq_line), "\ncall %d of %d", cq_sent + 1, cqs.cq_max_calls);
+            else
+                snprintf(cq_line, sizeof(cq_line), "\ncall %d", cq_sent + 1);
+        }
+
         if (tx_st == FT8_TX_ACTIVE) {
             // Red: transmitting right now (tap to abort). Each logical chunk
             // gets its own explicit line - "TAP TO ABORT" is always the last
@@ -1157,9 +1171,9 @@ static void t_clock_cb(lv_timer_t *t)
             // duplication - and it cost a whole line on a label that already
             // changes several times per slot, making the wrap harder to read.
             if (clash)
-                snprintf(b, sizeof(b), "Transmitting:\n%s\nTAP TO ABORT\n⚠ FREQ BUSY", tx_text);
+                snprintf(b, sizeof(b), "Transmitting:\n%s%s\nTAP TO ABORT\n⚠ FREQ BUSY", tx_text, cq_line);
             else
-                snprintf(b, sizeof(b), "Transmitting:\n%s\nTAP TO ABORT", tx_text);
+                snprintf(b, sizeof(b), "Transmitting:\n%s%s\nTAP TO ABORT", tx_text, cq_line);
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx, lv_palette_main(LV_PALETTE_RED), 0);
 
@@ -1198,11 +1212,11 @@ static void t_clock_cb(lv_timer_t *t)
             // the state where it's still changeable, so the chip is where the
             // operator should be looking anyway.
             if (clash)
-                snprintf(b, sizeof(b), "TX armed:\n%s\n%s slot, ~%ds\nTAP TO CANCEL\n⚠ FREQ BUSY",
-                         tx_text, tx_even ? "EVEN" : "ODD", secs_until);
+                snprintf(b, sizeof(b), "TX armed:\n%s%s\n%s slot, ~%ds\nTAP TO CANCEL\n⚠ FREQ BUSY",
+                         tx_text, cq_line, tx_even ? "EVEN" : "ODD", secs_until);
             else
-                snprintf(b, sizeof(b), "TX armed:\n%s\n%s slot, ~%ds\nTAP TO CANCEL",
-                         tx_text, tx_even ? "EVEN" : "ODD", secs_until);
+                snprintf(b, sizeof(b), "TX armed:\n%s%s\n%s slot, ~%ds\nTAP TO CANCEL",
+                         tx_text, cq_line, tx_even ? "EVEN" : "ODD", secs_until);
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx,
                 clash ? lv_color_hex(0xFF4010) : lv_color_hex(0xFFA040), 0);

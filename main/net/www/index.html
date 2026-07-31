@@ -944,9 +944,32 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
   if (!modal) return;
 
   const HDRS = ["Call", "Mode", "Band", "Freq", "Date", "Time", "Sent", "Rcvd", "Grid"];
-  head.innerHTML = HDRS.map(h => "<th>" + h + "</th>").join("") + "<th></th>";
+  const KEYS = ["CALL", "MODE", "BAND", "FREQ", "QSO_DATE", "TIME_ON", "RST_SENT", "RST_RCVD", "GRIDSQUARE"];
+  const NUMERIC = { FREQ: 1, RST_SENT: 1, RST_RCVD: 1 };
 
   let recs = [];
+  /* Click a column header to sort by it (click again to reverse); no sort =
+     newest first. Sorting by Date groups a POTA activation's QSOs together -
+     the answer to "give me just today" without a filtered download. */
+  let sortCol = null, sortAsc = true;
+
+  function headHtml() {
+    return HDRS.map((h, i) => {
+      const k = KEYS[i];
+      const arrow = (sortCol === k) ? (sortAsc ? " ▲" : " ▼") : "";
+      return "<th data-col='" + k + "' style='cursor:pointer' title='Sort by " + h + "'>" + h + arrow + "</th>";
+    }).join("") + "<th></th>";
+  }
+  head.innerHTML = headHtml();
+
+  head.addEventListener("click", (e) => {
+    const th = e.target.closest("th[data-col]");
+    if (!th) return;
+    const col = th.dataset.col;
+    if (sortCol === col) sortAsc = !sortAsc;
+    else { sortCol = col; sortAsc = true; }
+    render();
+  });
 
   function esc(s) {
     return (s || "").replace(/[&<>"]/g,
@@ -970,13 +993,25 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
 
   function render() {
     title.textContent = "QSO log — " + recs.length + " QSO" + (recs.length === 1 ? "" : "s");
+    head.innerHTML = headHtml();
     if (!recs.length) {
       body.innerHTML = "<tr><td colspan='10' style='color:#888'>No QSOs logged</td></tr>";
       return;
     }
+    let order = recs.map((r, k) => ({ r, k }));
+    if (sortCol) {
+      order.sort((a, b) => {
+        let c;
+        if (NUMERIC[sortCol]) c = (parseFloat(a.r[sortCol]) || 0) - (parseFloat(b.r[sortCol]) || 0);
+        else c = (a.r[sortCol] || "").localeCompare(b.r[sortCol] || "");
+        if (c === 0) c = a.k - b.k;   // stable: ties keep log order
+        return sortAsc ? c : -c;
+      });
+    } else {
+      order.reverse();   // default: newest first
+    }
     const rows = [];
-    for (let k = recs.length - 1; k >= 0; k--) {   // newest first
-      const r = recs[k];
+    for (const { r, k } of order) {
       const date = (r.QSO_DATE || "").length >= 8
                  ? r.QSO_DATE.slice(4, 6) + "-" + r.QSO_DATE.slice(6, 8) : "--";
       const time = (r.TIME_ON || "").length >= 4

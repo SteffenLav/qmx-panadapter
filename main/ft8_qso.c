@@ -85,6 +85,16 @@ static ft8_tx_request_t   s_cur_req;                    // message we're current
 static bool               s_have_cur;                   // s_cur_req valid
 static ft8_tx_request_t   s_cq_saved;                   // original CQ, to resume after a dropped QSO
 static bool               s_have_cq_saved;
+// --- CQ auto-stop (Don WB0LQW: "I usually send CQ 2-4 times and then pause") -
+// s_cq_calls_sent counts CQ bursts actually transmitted in the current CQ
+// sequence; when it reaches the cq_max_calls setting (0 = unlimited),
+// rearm_current() stops re-arming and sets s_cq_exhausted, the loop listens
+// through one more RX slot (an answer to the final call still starts a QSO
+// normally), and advance()'s no-answer path then ends the session to IDLE.
+// Every fresh CQ sequence - Call CQ, a timeout resume, a post-QSO resume -
+// starts the count over.
+static int                s_cq_calls_sent;
+static bool               s_cq_exhausted;
 // Station being worked MANUALLY (step-by-step Transmit taps, no machine QSO).
 // Noted on every manual arm so (a) the pileup capture doesn't list our own
 // partner as a waiting caller mid-exchange, and (b) the decode list can show
@@ -679,9 +689,26 @@ static void rearm_current(void)
     bool repeating = (st == FT8_QSO_CQ || st == FT8_QSO_WAIT_RPT ||
                       st == FT8_QSO_WAIT_ROGER || st == FT8_QSO_WAIT_RR73);
     if (have && one_shot) s_have_cur = false;   // final is sent once
+    int cq_sent = s_cq_calls_sent;
     unlock();
 
     if (!have || (!one_shot && !repeating)) return;
+
+    // CQ auto-stop: past the limit, stop re-arming but stay in CQ state so
+    // the RX slot after the final call is still scanned for an answer;
+    // advance()'s no-answer path sees s_cq_exhausted and ends the session.
+    // This is the single choke point for ALL CQ arming (on_tx_complete and
+    // the arm_current_if_idle safety nets both come through here).
+    if (st == FT8_QSO_CQ) {
+        qmx_settings_t qs;
+        settings_load_all(&qs);
+        if (qs.cq_max_calls > 0 && cq_sent >= qs.cq_max_calls) {
+            lock(); s_cq_exhausted = true; unlock();
+            ft8_status_set("CQ %d of %d sent - listening", cq_sent, qs.cq_max_calls);
+            ESP_LOGI(TAG, "CQ auto-stop: %d of %d sent - not re-arming", cq_sent, qs.cq_max_calls);
+            return;
+        }
+    }
 
     // Don't key up at a partner who is visibly working somebody else - this is
     // where the wasted transmissions actually get saved (see the hold comment
@@ -994,6 +1021,8 @@ static void register_miss(const char *waiting_for)
         s_state        = FT8_QSO_CQ;
         s_target[0]    = '\0';
         s_missed_slots = 0;
+        s_cq_calls_sent = 0;   // resumed CQ = fresh sequence for the auto-stop count
+        s_cq_exhausted  = false;
         unlock();
         ft8_tx_disarm();
         arm_current_if_idle();
@@ -1270,6 +1299,8 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
     s_have_cq_saved = true;
     s_from_cq       = true;
     s_missed_slots  = 0;
+    s_cq_calls_sent = 0;       // fresh CQ sequence - auto-stop count restarts
+    s_cq_exhausted  = false;
     s_pileup_active = false;   // starting CQ is not part of a pileup drain
     clear_dt_follow();         // no partner yet - transmit CQ on the UTC/GPS beat
     // CQ-run: RST_SENT is set in cqrun_answer, RST_RCVD when their report
@@ -1362,6 +1393,8 @@ static void cqrun_answer(const char *caller, int caller_freq, int caller_snr,
         s_state        = FT8_QSO_CQ;
         s_target[0]    = '\0';
         s_missed_slots = 0;
+        s_cq_calls_sent = 0;   // fresh sequence for the auto-stop count
+        s_cq_exhausted  = false;
         unlock();
     }
     arm_current_if_idle();
@@ -1644,6 +1677,8 @@ void ft8_qso_advance(int64_t slot_sec)
             s_state        = FT8_QSO_CQ;
             s_target[0]    = '\0';
             s_missed_slots = 0;
+            s_cq_calls_sent = 0;   // resumed CQ = fresh sequence for the auto-stop count
+            s_cq_exhausted  = false;
         } else {
             s_state    = FT8_QSO_IDLE;
             s_have_cur = false;
@@ -1789,6 +1824,27 @@ void ft8_qso_advance(int64_t slot_sec)
             ft8_tx_disarm();   // cancel the re-armed CQ (no-op if already ACTIVE)
             cqrun_answer(caller, caller_freq, caller_snr, report, slot_sec, got_rr73, got_73);
         } else {
+            // Auto-stop limit reached and the extra listening slot after the
+            // final call brought no answer - end the CQ session. Deliberately
+            // IDLE, not TIMEOUT: nothing went wrong, the operator asked for
+            // exactly this pause.
+            lock();
+            bool exhausted = s_cq_exhausted;
+            int  sent      = s_cq_calls_sent;
+            unlock();
+            if (exhausted) {
+                lock();
+                s_state         = FT8_QSO_IDLE;
+                s_have_cur      = false;
+                s_have_cq_saved = false;
+                s_cq_exhausted  = false;
+                s_cq_calls_sent = 0;
+                unlock();
+                ft8_tx_disarm();
+                ft8_status_set("CQ stopped after %d calls - no answer", sent);
+                ESP_LOGI(TAG, "CQ auto-stop: %d calls unanswered - session ended", sent);
+                return;
+            }
             // No answer - check whether someone has drifted onto our tone
             // since we started calling, and move off it if so. Otherwise
             // on_tx_complete keeps the CQ armed at the same tone; idle
@@ -2018,6 +2074,10 @@ void ft8_qso_on_tx_complete(void)
     // burst, still inside its slot, so "now's slot + 1" is the true earliest
     // slot a reply can arrive in. Only ever lowers the gate, never raises it.
     lock();
+    // Count the CQ burst that just finished for the auto-stop limit. State is
+    // still CQ only while nobody has answered (an answer moves the state
+    // machine on mid-burst, at which point the count no longer matters).
+    if (s_state == FT8_QSO_CQ) s_cq_calls_sent++;
     if (s_state != FT8_QSO_IDLE && s_min_scan_utc > 0) {
         int period_ms = (s_have_cur && s_cur_req.protocol == FTX_PROTOCOL_FT4) ? 7500 : 15000;
         struct timeval tv;
@@ -2209,6 +2269,14 @@ ft8_qso_state_t ft8_qso_get_state(void)
 {
     lock(); ft8_qso_state_t st = s_state; unlock();
     return st;
+}
+
+int ft8_qso_get_cq_calls_sent(void)
+{
+    lock();
+    int n = (s_state == FT8_QSO_CQ) ? s_cq_calls_sent : -1;
+    unlock();
+    return n;
 }
 
 void ft8_qso_get_target(char *buf, size_t len)

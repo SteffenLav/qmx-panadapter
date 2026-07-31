@@ -29,6 +29,15 @@ static lv_obj_t *s_save_btn  = NULL;
 static lv_obj_t *s_fd_hint   = NULL;  // Field Day status note - set in show()
 static int       s_sel       = 0;
 static bool      s_open      = false;
+// CQ auto-stop limit (Don WB0LQW: "I usually send CQ 2-4 times and then
+// pause"). Top-right cycle button; 0 = never stop. Commits IMMEDIATELY on
+// tap (not via Save) - same instant-cycle semantics as the pane's TXCQ
+// parity button - which also keeps it usable while Field Day mode locks the
+// preset editor (the limit is orthogonal to what the CQ text says).
+static lv_obj_t *s_stop_btn  = NULL;
+static lv_obj_t *s_stop_lbl  = NULL;
+static uint8_t   s_stop_val  = 0;
+static const uint8_t s_stop_vals[] = { 0, 1, 2, 3, 4, 5, 10 };
 // While true (Field Day mode on), the whole editor is locked - everything
 // except Cancel is both visually dimmed/disabled AND ignored by its handler,
 // so there's no path to edit/save/select a preset while it's in effect,
@@ -197,6 +206,27 @@ static void apply_fd_dim(bool field_day_en)
     }
 }
 
+static void stop_btn_update_label(void)
+{
+    if (!s_stop_lbl) return;
+    if (s_stop_val == 0) lv_label_set_text(s_stop_lbl, "CQ stop: never");
+    else                 lv_label_set_text_fmt(s_stop_lbl, "CQ stop after %u", (unsigned)s_stop_val);
+}
+
+// Advance to the next listed value above the current one (a custom value from
+// a config import lands on the next larger step), wrapping to 0 = never.
+static void stop_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    uint8_t next = 0;
+    for (size_t i = 0; i < sizeof(s_stop_vals); i++) {
+        if (s_stop_vals[i] > s_stop_val) { next = s_stop_vals[i]; break; }
+    }
+    s_stop_val = next;
+    settings_set_cq_max_calls(s_stop_val);
+    stop_btn_update_label();
+}
+
 static void radio_clicked_cb(lv_event_t *e)
 {
     if (s_fd_locked) return;
@@ -327,10 +357,26 @@ static void modal_build(void)
     lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
 
+    // CQ auto-stop cycle button, top-right. Applies on tap - no Save needed
+    // (and deliberately NOT part of the Field Day lock, see the statics).
+    s_stop_btn = lv_btn_create(panel);
+    lv_obj_set_size(s_stop_btn, 290, 56);
+    lv_obj_align(s_stop_btn, LV_ALIGN_TOP_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(s_stop_btn, lv_color_hex(0x2a2f37), 0);
+    lv_obj_set_style_border_color(s_stop_btn, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_border_width(s_stop_btn, 2, 0);
+    lv_obj_set_style_radius(s_stop_btn, 8, 0);
+    lv_obj_add_event_cb(s_stop_btn, stop_btn_cb, LV_EVENT_CLICKED, NULL);
+    s_stop_lbl = lv_label_create(s_stop_btn);
+    lv_label_set_text(s_stop_lbl, "CQ stop: never");
+    lv_obj_set_style_text_color(s_stop_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(s_stop_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(s_stop_lbl);
+
     // Field Day status note - text/visibility set in show() from live
     // settings, since this modal can be reopened without rebuilding it.
     s_fd_hint = lv_label_create(panel);
-    lv_obj_set_width(s_fd_hint, 1000);
+    lv_obj_set_width(s_fd_hint, 700);   // clear of the top-right CQ-stop button
     lv_label_set_long_mode(s_fd_hint, LV_LABEL_LONG_WRAP);
     lv_obj_set_style_text_font(s_fd_hint, &lv_font_montserrat_22, 0);
     lv_obj_set_style_text_color(s_fd_hint, lv_color_hex(0xFF8800), 0);
@@ -460,6 +506,8 @@ void ft8_cq_modal_show(void)
     qmx_settings_t s;
     settings_load_all(&s);
     s_sel = (s.cq_sel <= 2) ? s.cq_sel : 0;
+    s_stop_val = s.cq_max_calls;
+    stop_btn_update_label();
 
     // Quick-insert button shows the actual call+grid (or a hint if unset).
     if (s_add_lbl) {
