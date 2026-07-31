@@ -2257,6 +2257,8 @@ void ft8_qso_abort(void)
     s_partner_freq_hz = 0;
     s_busy_holds    = 0;
     s_busy_with[0]  = '\0';
+    s_cq_calls_sent = 0;
+    s_cq_exhausted  = false;
     s_pileup_active = false;   // an abort ends any pileup drain
     clear_dt_follow();         // ...and returns TX to the UTC/GPS beat
     unlock();

@@ -1237,6 +1237,22 @@ static void t_clock_cb(lv_timer_t *t)
             lv_label_set_text(s_lbl_tx, b);
             lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0xFF6020), 0);
 
+        } else if (qso_st == FT8_QSO_CQ || qso_st == FT8_QSO_WAIT_RPT ||
+                   qso_st == FT8_QSO_WAIT_ROGER || qso_st == FT8_QSO_WAIT_RR73) {
+            // A QSO/CQ session is alive but nothing is armed. Transient
+            // between re-arms, but PERSISTENT in two cases: the busy-station
+            // hold (partner working someone else - TX deliberately disarmed)
+            // and the CQ auto-stop's final listening slot. Roy KI0ER (v1.3.4):
+            // the hold used to render as plain dim status with no tap action,
+            // locking the operator into the wait with no way to opt out and
+            // pounce elsewhere. Same amber as ARMED: a committed session you
+            // can still back out of.
+            char status[96];
+            ft8_status_get(status, sizeof(status));
+            snprintf(b, sizeof(b), "%s\nTAP TO CANCEL", status[0] ? status : "QSO waiting");
+            lv_label_set_text(s_lbl_tx, b);
+            lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(0xFFA040), 0);
+
         } else {
             // Not transmitting and no QSO state to show: plain ft8_status
             // passthrough (RX state, decode count, etc.). The TX power/SWR is
@@ -1511,6 +1527,17 @@ static void tx_indicator_tap_cb(lv_event_t *e)
     } else if (qso_st == FT8_QSO_TIMEOUT) {
         ESP_LOGI(TAG, "QSO timeout indicator tapped — clearing");
         ft8_qso_abort();          // resets to IDLE
+    } else if (qso_st == FT8_QSO_CQ || qso_st == FT8_QSO_WAIT_RPT ||
+               qso_st == FT8_QSO_WAIT_ROGER || qso_st == FT8_QSO_WAIT_RR73) {
+        // TX idle but a session is alive - the busy-station hold (Roy KI0ER:
+        // this used to be an inescapable wait) or the CQ auto-stop's final
+        // listening slot. Abort frees the operator to pounce elsewhere; a
+        // mid-exchange abort is resumable (resume_record_save in abort).
+        // WAIT_DONE is deliberately NOT here: the final has already fired and
+        // the machine is about to log the completed QSO - an abort in that
+        // window would throw the log entry away.
+        ESP_LOGI(TAG, "QSO indicator tapped while TX idle — aborting session");
+        ft8_qso_abort();
     }
 }
 
