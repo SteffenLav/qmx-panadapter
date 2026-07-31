@@ -30,6 +30,7 @@
 #include "freertos/task.h"
 #include "freertos/idf_additions.h"  // xTaskCreateWithCaps / vTaskDeleteWithCaps
 #include "freertos/queue.h"
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -441,11 +442,56 @@ static esp_err_t adif_clear_handler(httpd_req_t *req)
     return httpd_resp_sendstr(req, "{\"ok\":true}");
 }
 
+// POST /api/adif/delete?idx=<n>&call=<CALL> — delete ONE record (web ADIF
+// viewer). The call must match the record currently at idx: the browser's
+// copy of the log can be stale (a QSO may have logged since it fetched, and
+// indices shift on every delete), and a bare index would then silently
+// delete the wrong QSO. Mismatch = 409, viewer reloads and retries.
+static esp_err_t adif_delete_handler(httpd_req_t *req)
+{
+    char query[96] = "", idx_s[12] = "", call_raw[24] = "", call[24] = "";
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+        httpd_query_key_value(query, "idx", idx_s, sizeof(idx_s)) != ESP_OK ||
+        httpd_query_key_value(query, "call", call_raw, sizeof(call_raw)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "idx and call required");
+        return ESP_FAIL;
+    }
+    // %-decode the call (portable calls carry '/', sent as %2F).
+    size_t o = 0;
+    for (size_t i = 0; call_raw[i] && o + 1 < sizeof(call); i++) {
+        if (call_raw[i] == '%' && call_raw[i + 1] && call_raw[i + 2]) {
+            char h[3] = { call_raw[i + 1], call_raw[i + 2], 0 };
+            call[o++] = (char)strtol(h, NULL, 16);
+            i += 2;
+        } else {
+            call[o++] = call_raw[i];
+        }
+    }
+    call[o] = '\0';
+
+    int idx = atoi(idx_s);
+    char line[512], rec_call[24] = "";
+    if (idx < 0 || !adif_log_get_record(idx, line, sizeof(line)) ||
+        !adif_log_extract_field(line, "CALL", rec_call, sizeof(rec_call)) ||
+        strcmp(rec_call, call) != 0) {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"log changed - reload\"}");
+    }
+    bool ok = adif_log_delete_record(idx);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, ok ? "{\"ok\":true}"
+                                      : "{\"ok\":false,\"error\":\"delete failed\"}");
+}
+
 static const httpd_uri_t uri_adif_get = {
     .uri = "/api/adif", .method = HTTP_GET, .handler = adif_get_handler,
 };
 static const httpd_uri_t uri_adif_clear = {
     .uri = "/api/adif/clear", .method = HTTP_POST, .handler = adif_clear_handler,
+};
+static const httpd_uri_t uri_adif_delete = {
+    .uri = "/api/adif/delete", .method = HTTP_POST, .handler = adif_delete_handler,
 };
 
 // POST /api/qrz_key — body is the raw API key text (no JSON wrapper, the web
@@ -984,7 +1030,7 @@ esp_err_t webserver_start(void)
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.server_port     = 80;
     config.stack_size      = 12288;
-    config.max_uri_handlers = 28;   // 21 API + WS + 5 file-browser + headroom
+    config.max_uri_handlers = 30;   // 22 API + WS + 5 file-browser + headroom
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -1007,6 +1053,7 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_log_saved);
     httpd_register_uri_handler(s_server, &uri_adif_get);
     httpd_register_uri_handler(s_server, &uri_adif_clear);
+    httpd_register_uri_handler(s_server, &uri_adif_delete);
     httpd_register_uri_handler(s_server, &uri_qrz_key);
     httpd_register_uri_handler(s_server, &uri_qrz_upload);
     httpd_register_uri_handler(s_server, &uri_upload_status);

@@ -96,6 +96,7 @@ Enter frequency as `MHz.kHz.Hz` (e.g., `14.074` for 14.074 MHz).
 | **Long-press row** | Highlight the QSO red and lock list scrolling |
 | **Drag up/down** (while highlighted) | Move the highlight to another row |
 | **Release** | A Delete/Cancel bar appears — **Delete** removes that one record |
+| **Delete all** (tap twice) | First tap arms it ("ALL *N*?"), second tap within 5 s erases the whole log — no undo |
 
 ## Filter Modal
 

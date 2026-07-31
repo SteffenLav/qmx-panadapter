@@ -224,6 +224,17 @@
   .bot-menu a:hover { border-color: var(--accent); }
   .bot-menu a.danger:hover { border-color: #ff6055; }
 
+  /* ---- Web ADIF log viewer ---- */
+  #adifv-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  #adifv-table th, #adifv-table td {
+    padding: 4px 10px; text-align: left; white-space: nowrap;
+    border-bottom: 1px solid #2a2a2a;
+  }
+  #adifv-table th { position: sticky; top: 0; background: #1f2937; color: #bbb; }
+  #adifv-table tbody tr:hover td { background: #20242c; }
+  #adifv-table td.del { color: #ff6055; cursor: pointer; text-align: center; }
+  #adifv-table td.del:hover { color: #ff9090; }
+
   /* ---- Frequency keypad (tap the VFO to open) ---- */
   #vfo.clickable-freq { cursor: pointer; border-radius: 4px;
                         border: 1px solid transparent; padding: 0 0.3rem;
@@ -391,7 +402,7 @@
         <a href="#" id="qrz-link">QRZ upload &#8593;</a>
         <a href="#" id="eqsl-link">eQSL upload &#8593;</a>
         <a href="#" id="lotw-link" title="ARRL Logbook of the World. Once set up: signs pending QSOs on-device and uploads. Ctrl-click to re-run setup (e.g. after a certificate renewal).">LoTW setup</a>
-        <a href="#" id="adif-clear-link" class="danger" title="Delete ALL logged QSOs from the Tab5. Download the ADIF first if you want to keep them. Handy before a POTA activation: start with an empty log and the file at the end is exactly what you submit.">Clear log (delete all)</a>
+        <a href="#" id="adif-view-link" title="View the QSO log in the browser - delete single records or clear the whole log. Handy before a POTA activation: start with an empty log and the ADIF at the end is exactly what you submit.">View / edit log</a>
       </div>
     </div>
     <div class="bot-menu-wrap">
@@ -419,6 +430,26 @@
        own step-by-step page; (2) the import form. The .p12 is parsed in the
        BROWSER (forge.js, lazy-loaded); only the extracted cert+key DER are
        POSTed to the Tab5 - the passphrase never leaves this page. -->
+  <!-- Web ADIF log viewer (Dennis WN4FLA + Don WB0LQW, 2026-07-30): the
+       browser-side twin of the Tab5's ADIF viewer. The ADIF is fetched from
+       /api/adif (which already pauses the spectrum WS server-side) and parsed
+       here in the browser - no listing endpoint on the device. -->
+  <div id="adifv-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1000;">
+    <div style="max-width:860px; margin:5vh auto; background:#161616; border:1px solid #494949; border-radius:10px; padding:18px 22px; color:#ddd; font-size:14px;">
+      <h3 id="adifv-title" style="margin:0 0 10px; color:#ffa040;">QSO log</h3>
+      <div style="max-height:62vh; overflow:auto; border:1px solid #333; border-radius:6px;">
+        <table id="adifv-table">
+          <thead><tr id="adifv-head"></tr></thead>
+          <tbody id="adifv-body"></tbody>
+        </table>
+      </div>
+      <div style="margin-top:14px; overflow:auto;">
+        <button id="adifv-delall" class="bot-btn" style="cursor:pointer; float:left; border-color:#7a2020; color:#ff8080" title="Delete ALL logged QSOs from the Tab5 - no undo">Delete all</button>
+        <button id="adifv-close" class="bot-btn" style="cursor:pointer; float:right">Close</button>
+      </div>
+    </div>
+  </div>
+
   <div id="lotw-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1000;">
     <div style="max-width:520px; margin:6vh auto; background:#161616; border:1px solid #494949; border-radius:10px; padding:18px 22px; color:#ddd; font-size:14px; line-height:1.5;">
 
@@ -505,7 +536,6 @@ let firstStatus    = true;
 let serverUtcAtTick = 0;   // server epoch (s) at last /api/status
 let localAtTick     = 0;   // Date.now()/1000 when that response arrived
 let qrzKeySet        = false;
-let lastQsoCount     = 0;      // qso_count from the last /api/status poll
 let eqslCredsSet     = false;
 let lotwReady        = false;
 let lastBandplan     = null;   // {lo, hi, segs:[{lo,hi,c,l}]} or null if off-band
@@ -899,15 +929,105 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
     "Use this if WiFi is stuck or FT8 misbehaves after a normal flash. The Tab5 reboots.");
 })();
 
-/* Clear the whole QSO log. Destroys data with no undo, so the gate is a typed
-   word rather than a plain confirm(). */
+/* Web ADIF log viewer - browser-side twin of the Tab5's viewer. Fetches the
+   whole ADIF and parses it client-side (each record is one <EOR>-terminated
+   line; the part index below IS the device's 0-based record index). Per-row
+   ✕ deletes one record - idx AND call are sent so a stale view can't delete
+   the wrong QSO (the device answers 409 on mismatch and we just reload).
+   Delete-all destroys data with no undo, so its gate is a typed word rather
+   than a plain confirm(). */
 (function () {
-  const link = document.getElementById("adif-clear-link");
-  if (!link) return;
-  link.addEventListener("click", async function (e) {
-    e.preventDefault();
+  const modal = document.getElementById("adifv-modal");
+  const head  = document.getElementById("adifv-head");
+  const body  = document.getElementById("adifv-body");
+  const title = document.getElementById("adifv-title");
+  if (!modal) return;
+
+  const HDRS = ["Call", "Mode", "Band", "Freq", "Date", "Time", "Sent", "Rcvd", "Grid"];
+  head.innerHTML = HDRS.map(h => "<th>" + h + "</th>").join("") + "<th></th>";
+
+  let recs = [];
+
+  function esc(s) {
+    return (s || "").replace(/[&<>"]/g,
+      c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  }
+
+  function parseAdif(text) {
+    const eoh = text.search(/<EOH>/i);
+    const parts = (eoh >= 0 ? text.slice(eoh + 5) : text).split(/<EOR>/i);
+    const out = [];
+    for (let i = 0; i < parts.length; i++) {
+      const p = parts[i], rec = { _idx: i };
+      const re = /<([A-Za-z_]+):(\d+)(?::[^>]*)?>/g;
+      let m;
+      while ((m = re.exec(p)) !== null)
+        rec[m[1].toUpperCase()] = p.substr(re.lastIndex, parseInt(m[2], 10));
+      if (rec.CALL) out.push(rec);
+    }
+    return out;
+  }
+
+  function render() {
+    title.textContent = "QSO log — " + recs.length + " QSO" + (recs.length === 1 ? "" : "s");
+    if (!recs.length) {
+      body.innerHTML = "<tr><td colspan='10' style='color:#888'>No QSOs logged</td></tr>";
+      return;
+    }
+    const rows = [];
+    for (let k = recs.length - 1; k >= 0; k--) {   // newest first
+      const r = recs[k];
+      const date = (r.QSO_DATE || "").length >= 8
+                 ? r.QSO_DATE.slice(4, 6) + "-" + r.QSO_DATE.slice(6, 8) : "--";
+      const time = (r.TIME_ON || "").length >= 4
+                 ? r.TIME_ON.slice(0, 2) + ":" + r.TIME_ON.slice(2, 4) : "--";
+      const freq = r.FREQ ? (+r.FREQ).toFixed(3) : "--";
+      rows.push("<tr><td>" + esc(r.CALL) + "</td><td>" + esc(r.MODE || "FT8") +
+        "</td><td>" + esc(r.BAND || "--") + "</td><td>" + freq +
+        "</td><td>" + date + "</td><td>" + time +
+        "</td><td>" + esc(r.RST_SENT || "-") + "</td><td>" + esc(r.RST_RCVD || "-") +
+        "</td><td>" + esc(r.GRIDSQUARE || "-") + "</td>" +
+        "<td class='del' data-k='" + k + "' title='Delete this QSO'>&#10005;</td></tr>");
+    }
+    body.innerHTML = rows.join("");
+  }
+
+  async function load() {
+    body.innerHTML = "<tr><td colspan='10' style='color:#888'>Loading …</td></tr>";
+    try {
+      const r = await fetch("/api/adif");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      recs = parseAdif(await r.text());
+    } catch (err) {
+      body.innerHTML = "<tr><td colspan='10' style='color:#ff6055'>Load failed: " +
+                       esc(err.message) + "</td></tr>";
+      return;
+    }
+    render();
+  }
+
+  body.addEventListener("click", async (e) => {
+    const td = e.target.closest("td.del");
+    if (!td) return;
+    const r = recs[+td.dataset.k];
+    if (!r) return;
+    if (!confirm("Delete " + r.CALL + "  " + (r.QSO_DATE || "") + " " +
+                 (r.TIME_ON || "") + " ?")) return;
+    try {
+      const resp = await fetch("/api/adif/delete?idx=" + r._idx +
+                               "&call=" + encodeURIComponent(r.CALL), { method: "POST" });
+      if (resp.status === 409)
+        alert("The log changed since this page loaded — reloading the list, try again.");
+      else if (!resp.ok) throw new Error("HTTP " + resp.status);
+    } catch (err) {
+      alert("Delete failed: " + err.message);
+    }
+    load();   // always re-sync with the device
+  });
+
+  document.getElementById("adifv-delall").addEventListener("click", async () => {
     const typed = prompt(
-      "Delete ALL " + lastQsoCount + " logged QSO" + (lastQsoCount === 1 ? "" : "s") +
+      "Delete ALL " + recs.length + " logged QSO" + (recs.length === 1 ? "" : "s") +
       " from the Tab5?\n\n" +
       "There is NO undo. Download the ADIF first if you want a copy.\n\n" +
       "Type DELETE to confirm:");
@@ -916,17 +1036,24 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
       alert("Not confirmed — the log was NOT cleared.");
       return;
     }
-    const prev = link.textContent;
-    link.textContent = "Clearing …";
     try {
       const r = await fetch("/api/adif/clear", { method: "POST" });
       if (!r.ok) throw new Error("HTTP " + r.status);
-      alert("QSO log cleared.");
     } catch (err) {
       alert("Clear failed: " + err.message);
-    } finally {
-      link.textContent = prev;
     }
+    load();
+  });
+
+  document.getElementById("adifv-close").addEventListener("click",
+    () => { modal.style.display = "none"; });
+  modal.addEventListener("click",
+    (e) => { if (e.target === modal) modal.style.display = "none"; });
+
+  document.getElementById("adif-view-link").addEventListener("click", (e) => {
+    e.preventDefault();
+    modal.style.display = "";
+    load();
   });
 })();
 
@@ -1183,7 +1310,6 @@ async function tick() {
     /* QSO count + ADIF/QRZ/eQSL buttons - all hidden until there's at least
        one QSO logged (nothing to download/upload otherwise). */
     const qsoCount = s.qso_count || 0;
-    lastQsoCount = qsoCount;
     const logGroupBtn = document.getElementById("log-group-btn");
     const adifLink = document.getElementById("adif-link");
     const lotwLink = document.getElementById("lotw-link");

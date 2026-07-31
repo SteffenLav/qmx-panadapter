@@ -210,19 +210,23 @@ void cat_request_ssb_bandwidth(uint32_t hz);
  *      literally that is ~20 dB, so the cap went to 40.
  *   2. Same day, after using it: 40 dB "is not quite loud enough for weak
  *      signals down at the noise floor or in a noisy environment" on headphones
- *      or an added speaker. He suggested 70. So 70 it is.
- * The lesson: "too loud beyond X" described where the COMFORTABLE listening
- * range ended, not where the useful range did - weak-signal work and a noisy
- * shack both need headroom above comfortable. 70 dB still leaves ~7 px/dB on
- * the drawer's 488 px slider, so the resolution that made this worth capping
- * at all is intact. Do NOT turn the scale back into a percentage (the whole
- * point is that the number matches the radio's own LCD).
+ *      or an added speaker. He suggested 70. So 70 it was, briefly.
+ *   3. 2026-07-30: Randy retracted round 2 - he had been listening with the
+ *      antenna switched OFF, so the "not loud enough" was the missing band
+ *      noise, not a missing gain range. With the antenna on, "40 seems plenty
+ *      loud now. Maybe 50?" - so 50, splitting his two with-antenna reports.
+ * The lesson from round 1 stands: "too loud beyond X" described where the
+ * COMFORTABLE listening range ended, not where the useful range did. Round 3
+ * adds its own: ask what the antenna was doing before acting on a loudness
+ * report. 50 dB gives ~10 px/dB on the drawer's 488 px slider. Do NOT turn
+ * the scale back into a percentage (the whole point is that the number
+ * matches the radio's own LCD).
  *
  * Deferred to the poll task like the filter writes - a direct cross-thread
  * write races the FA/MD/FW poll and the QMX returns ?;.
  * Requesting 0 is a valid mute, not a no-op. */
 #define CAT_AF_GAIN_MAX     799
-#define CAT_AF_GAIN_DB_MAX  70    /* slider top in dB; 70 dB -> AG 280 */
+#define CAT_AF_GAIN_DB_MAX  50    /* slider top in dB; 50 dB -> AG 200 */
 void cat_request_af_gain(uint16_t ag);
 
 /* Ask the radio for its current AF gain; the answer lands asynchronously and is

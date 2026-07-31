@@ -168,7 +168,9 @@ A sticky header row stays pinned while you scroll. Even-numbered rows are lightl
 
 **Delete a single record** — **long-press** a QSO row: the row highlights red and list scrolling locks. Drag up/down to move the highlight, then release — a Delete/Cancel bar appears at the bottom. **Delete** removes just that one record (useful for duplicates).
 
-Tap **Clear** to erase the log (irreversible). Use the web UI to download the full ADIF file for import into WSJT-X, EQSL, or any other logging software.
+**Delete all** — the red-bordered button at the bottom-left erases the **whole** log. Two-tap confirm: the first tap arms it (the label changes to "ALL *N*?"), a second tap within 5 seconds deletes; wait and it disarms itself. There is no undo — download the ADIF from the web UI first if you want a copy. Handy before a POTA activation: start with an empty log and the ADIF at the end is exactly the file you submit.
+
+Use the web UI to download the full ADIF file for import into WSJT-X, EQSL, or any other logging software — or view and edit it in the browser (**QSO Logs → View / edit log**).
 
 **Exclude Worked Before** — When FT8 filtering, skip stations you've already logged QSOs with (requires you to import your own prior ADIF log first).
 

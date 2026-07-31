@@ -77,6 +77,15 @@ static lv_obj_t *s_lbl_del_test  = NULL;
 static int       s_test_count    = 0;      // FREQ==0 records at last render
 static int64_t   s_del_test_arm_us = 0;    // 0 = not armed
 
+// "Delete all" (Don WB0LQW, 2026-07-30): clear the whole log from the Tab5 -
+// the POTA case, where the operator starts an activation with an empty log so
+// the ADIF at the end is exactly the submission, with no PC or WiFi around.
+// Same two-tap confirm as the test-delete, but the armed label spells out the
+// stakes and the count, since this destroys the entire log with no undo.
+static lv_obj_t *s_btn_del_all  = NULL;
+static lv_obj_t *s_lbl_del_all  = NULL;
+static int64_t   s_del_all_arm_us = 0;     // 0 = not armed
+
 // Show only today's (UTC) QSOs - the POTA-activation view. Defaults to Today
 // on open; show() falls back to All when nothing was logged today (reviewing
 // an old log at home shouldn't open onto an empty list).
@@ -368,6 +377,8 @@ static void list_render(void)
         s_last_today = 0;
         s_test_count = 0;
         if (s_btn_del_test) lv_obj_add_flag(s_btn_del_test, LV_OBJ_FLAG_HIDDEN);
+        s_del_all_arm_us = 0;
+        if (s_btn_del_all) lv_obj_add_flag(s_btn_del_all, LV_OBJ_FLAG_HIDDEN);
         if (s_title) {
             lv_label_set_text(s_title, "ADIF Log - 0 QSOs");
             lv_obj_set_style_text_color(s_title, lv_color_hex(UI_COLOR_TEXT), 0);
@@ -440,6 +451,14 @@ static void list_render(void)
         // Park is open: 10+ QSOs today = a valid POTA activation.
         lv_obj_set_style_text_color(s_title,
             lv_color_hex(today_count >= POTA_ACTIVATION_QSOS ? COLOR_ACTIVATION_OK : UI_COLOR_TEXT), 0);
+    }
+
+    // "Delete all" exists whenever the log has records; disarm on re-render
+    // so a stale "Sure?" never survives a filter toggle or a single delete.
+    if (s_btn_del_all) {
+        s_del_all_arm_us = 0;
+        if (s_lbl_del_all) lv_label_set_text(s_lbl_del_all, "Delete all");
+        lv_obj_clear_flag(s_btn_del_all, LV_OBJ_FLAG_HIDDEN);
     }
 
     // "Delete test QSOs" only exists while sim-mode records are in the log -
@@ -562,6 +581,31 @@ static void del_test_btn_cb(lv_event_t *e)
     sel_reset(true);   // clears any row selection + re-renders (button hides itself)
 }
 
+// Delete EVERY record. Two-tap confirm like the test-delete, but the armed
+// label carries the count and the word "ALL" - this one has no undo and no
+// scope limit. adif_log_clear() also resets the QRZ/eQSL/LoTW upload cursors
+// (see adif_log.c), so QSOs logged after the clear upload normally.
+static void del_all_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    int64_t now = esp_timer_get_time();
+    if (s_del_all_arm_us == 0 || (now - s_del_all_arm_us) > 5000000) {
+        s_del_all_arm_us = now;
+        if (s_lbl_del_all)
+            lv_label_set_text_fmt(s_lbl_del_all, "ALL %d?", adif_log_count());
+        return;
+    }
+    s_del_all_arm_us = 0;
+
+    int n = adif_log_count();
+    adif_log_clear();
+    ESP_LOGI(TAG, "deleted ALL %d QSO record(s) (operator, ADIF viewer)", n);
+    char msg[48];
+    snprintf(msg, sizeof(msg), "Deleted all %d QSO%s", n, n == 1 ? "" : "s");
+    ui_toast(msg);
+    sel_reset(true);   // clears any row selection + re-renders (button hides itself)
+}
+
 static void filter_btn_cb(lv_event_t *e)
 {
     (void)e;
@@ -677,7 +721,36 @@ static void modal_build(void)
     lv_obj_set_style_pad_row(s_list, 8, 0);
     lv_obj_set_scroll_dir(s_list, LV_DIR_VER);
 
-    lv_obj_t *close_btn = lv_btn_create(s_panel);
+    // Bottom strip: "Delete all" (left) + Close (right). Deliberately NOT in
+    // the top header - the header is where the harmless Today/All toggle
+    // lives, and the panel's width can't fit a fourth button beside a long
+    // title anyway. Being across the panel from everything tapped routinely
+    // is part of the confirm gesture.
+    lv_obj_t *bot = lv_obj_create(s_panel);
+    lv_obj_set_width(bot, LV_PCT(100));
+    lv_obj_set_height(bot, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(bot, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(bot, 0, 0);
+    lv_obj_set_style_pad_all(bot, 0, 0);
+    lv_obj_set_flex_flow(bot, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(bot, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(bot, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_btn_del_all = lv_btn_create(bot);
+    lv_obj_set_size(s_btn_del_all, 240, 72);
+    lv_obj_set_style_bg_color(s_btn_del_all, lv_color_hex(0x5a1f1f), 0);   // dark red: danger
+    lv_obj_set_style_border_color(s_btn_del_all, lv_color_hex(0xff5050), 0);
+    lv_obj_set_style_border_width(s_btn_del_all, 2, 0);
+    lv_obj_set_style_radius(s_btn_del_all, 8, 0);
+    lv_obj_add_flag(s_btn_del_all, LV_OBJ_FLAG_HIDDEN);   // list_render() shows it with records
+    lv_obj_add_event_cb(s_btn_del_all, del_all_btn_cb, LV_EVENT_CLICKED, NULL);
+    s_lbl_del_all = lv_label_create(s_btn_del_all);
+    lv_label_set_text(s_lbl_del_all, "Delete all");
+    lv_obj_set_style_text_color(s_lbl_del_all, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(s_lbl_del_all, &lv_font_montserrat_24, 0);
+    lv_obj_center(s_lbl_del_all);
+
+    lv_obj_t *close_btn = lv_btn_create(bot);
     lv_obj_set_size(close_btn, 240, 72);
     lv_obj_set_style_bg_color(close_btn, lv_color_hex(0x962020), 0);
     lv_obj_set_style_radius(close_btn, 8, 0);
