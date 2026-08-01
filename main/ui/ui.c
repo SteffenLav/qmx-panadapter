@@ -2014,13 +2014,13 @@ static void qmx_wait_poll_cb(lv_timer_t *t)
         lv_obj_clear_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
         qmx_wait_start_breathing(s_qmx_wait_lbl);
     }
-    // Mode-dependent horizontal placement: +150 px in FT8 mode so the text
-    // clears the 320 px left pane; plain screen-center in Panadapter mode
-    // (no pane to avoid). Re-checked every tick so a mode toggle while the
-    // overlay is visible re-aligns it. Only re-aligned on change.
+    // Mode-dependent horizontal placement: +150 px in FT8 AND CW mode so the
+    // text clears their (equally wide, 320 px) left panes; plain screen-center
+    // in Panadapter mode (no pane to avoid). Re-checked every tick so a mode
+    // toggle while the overlay is visible re-aligns it. Only re-aligned on change.
     {
         static int s_cur_off = 0;
-        int want = (ui_mode_get() == UI_MODE_FT8) ? 150 : 0;
+        int want = (ui_mode_get() != UI_MODE_PANADAPTER) ? 150 : 0;
         if (want != s_cur_off && s_qmx_wait_lbl) {
             s_cur_off = want;
             lv_obj_align(s_qmx_wait_lbl, LV_ALIGN_CENTER, want, 0);
