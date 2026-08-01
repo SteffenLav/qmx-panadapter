@@ -2430,6 +2430,22 @@ static void update_bandplan_strip(uint32_t freq_hz)
         return;
     }
 
+    // CW page: the strip shows ONLY the band's CW segment, stretched across
+    // the full width. Roaming there is clamped to the segment, so rendering
+    // the digi/phone remainder is dead space - and at whole-band scale the
+    // strip read as a copy of the panadapter page (operator, 2026-08-01).
+    bp_seg_t cw_only;
+    if (ui_mode_get() == UI_MODE_CW) {
+        for (int i = 0; i < n; i++) {
+            if (segs[i].type == BP_CW) {
+                cw_only = segs[i];
+                segs = &cw_only;
+                n = 1;
+                break;
+            }
+        }
+    }
+
     uint32_t band_lo = segs[0].lo_hz;
     uint32_t band_hi = segs[n - 1].hi_hz;
     double   span    = (double)(band_hi - band_lo);
@@ -6953,6 +6969,8 @@ void ui_apply_saved_mode(void)
         drawer_set_ft8_mode(false);
         top_bar_set_hit_depth(false);   // bar-height zones; pane buttons live under y=200
         cat_request_mode("CW");
+        ui_update_mode("CW");           // optimistic - no MD; poll without a QMX
+        if (s_last_qmx_freq_hz) update_bandplan_strip(s_last_qmx_freq_hz);
         cw_screen_view_show();
         ESP_LOGI(TAG, "UI mode restored from NVS: CW");
         return;
@@ -7062,6 +7080,9 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
                 cat_set_frequency_forced(f);
                 ui_update_frequency(f);
             }
+            // Re-render the strip in its CW-only view (a freq that didn't
+            // change wouldn't trigger a refresh on its own).
+            update_bandplan_strip(s_cw_snapshot.freq_hz);
         }
         cw_screen_view_show();
         return;
@@ -7141,9 +7162,11 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
             s_ft8_snapshot.mode[sizeof(s_ft8_snapshot.mode) - 1] = '\0';
         }
         ui_restore_snapshot(&s_pan_snapshot);
-        // Optimistic mode label for the no-QMX case (see the FT8/CW branches).
+        // Optimistic mode label for the no-QMX case (see the FT8/CW branches),
+        // and re-render the band-plan strip back to its whole-band view.
         if (s_pan_snapshot.valid && s_pan_snapshot.mode[0])
             ui_update_mode(s_pan_snapshot.mode);
+        if (s_last_qmx_freq_hz) update_bandplan_strip(s_last_qmx_freq_hz);
         int start_x = animate ? -DISPLAY_H_RES : 0;
         if (s_spectrum_obj)  { lv_obj_set_x(s_spectrum_obj,  start_x); lv_obj_clear_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN); }
         if (s_label_bar)     { lv_obj_set_x(s_label_bar,     start_x); lv_obj_clear_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN); }
