@@ -54,16 +54,75 @@ yes, people do, and that person is our first-class user.
 ## Layout concept
 
 Third carousel stop (Panadapter ↔ FT8 ↔ CW), same left-pane + main-area
-skeleton as the FT8 page so the gesture language transfers. Two densities:
+skeleton as the FT8 page so the gesture language transfers. Unlike FT8, the
+spectrum AND waterfall stay live — CW is a tuning mode. Two densities
+(mockups reviewed + approved by the operator 2026-08-01):
 
-**Shack layout** — decode stream dominant: a scrolling ticker of TB text under
-the spectrum, tagged with time; left pane = memory buttons + WPM + status.
+**Shack layout** — decode stream dominant:
 
-**POTA layout** — buttons dominant: the decode ticker shrinks to 2 lines, and
-the pane becomes 4–6 huge glove-sized buttons (the FT8 page's 28 px catch-area
-lesson, applied from day one). Toggle between densities = one button, or
-follow the existing Tab5-vs-web placement rule: "would you need it mid-
-activation?"
+```
++--------------------------------------------------------------+
+| top bar (unchanged): freq | band | CW | 300 Hz | S-meter     |
++--------+-----------------------------------------------------+
+| NEXT   | spectrum (live) -- amber VFO line + ZERO-BEAT       |
+| sends: |   needle at the CW pitch (tier 2)                   |
+| <msg>  +-----------------------------------------------------+
+| [green]| waterfall (live) -- callsign+wpm skimmer tags       |
+|--------|   (tier 3 research spike; untagged at first)        |
+| M1  M2 +-------------------------------+---------------------+
+| M3  M4 | decode ticker (TB;), rolling, | station card:       |
+|--------| timestamped; our TX inter-    | W1AW - USA          |
+| -18wpm+| leaved dimmer; recognized     | 6213 km - 292 deg   |
+| match  | callsign highlighted amber    | worked 20m / new 40m|
+| TX sts |                               | their speed: 22 wpm |
++--------+-------------------------------+---------------------+
+| bottom bar (unchanged)                                       |
++--------------------------------------------------------------+
+```
+
+- Left pane top: the ESM **NEXT** button (green, always states what it sends).
+- Under it: M1-M6 memory grid, WPM stepper with a "match their N" chip
+  (tier 2), TX/decode status at the bottom.
+- Station card pops when a callsign is captured from the ticker (tier 2).
+
+**POTA layout** — buttons dominant, one-thumb glove operation:
+
+```
++--------------------------------------------------------------+
+| top bar (unchanged)                                          |
++--------------------------------------------------------------+
+| thin spectrum strip (tuning only), no waterfall              |
++--------------------------------------+-----------------------+
+|  NEXT sends                          | Park: US-1211 (tap    |
+|  CQ POTA DE OZ1LAV K                 |   to edit)            |
+|  [giant green, ~1/3 of screen]       | QSOs: 7 - 3 to go     |
++------------+------------+------------+------------+----------+
+| CQ POTA    | {CALL} 599 | TU 73 +LOG | -  16  +  WPM        |
++------------+------------+------------+------------+----------+
+| decode ticker, 1-2 lines: OZ1LAV DE K4XYZ 599 TN BK          |
++--------------------------------------------------------------+
+| bottom bar                                                   |
++--------------------------------------------------------------+
+```
+
+- Park number edit is one tap (the documented #1 POTA keyer failure is
+  sending yesterday's park); activation counter reuses the green-at-10 rule.
+- Density toggle = one button on the page.
+
+**ESM ladder (the one NEXT button through a whole QSO):**
+`CQ POTA DE OZ1LAV K` → (K4XYZ calls in, captured) → `K4XYZ 599 599 GA BK`
+→ (their `599 TN BK` decoded) → `TU 73 DE OZ1LAV EE` → one tap = logged
+(K4XYZ, 40m, 599/599) → back to CQ. Every state is the same physical button,
+relabeled from QSO state; the operator only ever decides "yes, send that".
+
+**RBN self-view card** (tier 3): after a CQ — "14 skimmers - 4 continents /
+EU best 32 dB (SM7IUN) / NA best 18 dB / your keying reads 17.8 WPM / POTA
+auto-spot: confirmed". Batched WiFi fetch, WS paused (the LoTW lesson).
+
+**Copy trainer overlay** (tier 3): the newest ticker line hidden behind a
+redaction bar with an adjustable delay — copy the live band by ear, tap
+reveal, self-score; per-character weak-spot stats over time ("82% on
+letters - Q, Y, 5 need work").
 
 ## Feature tiers
 
