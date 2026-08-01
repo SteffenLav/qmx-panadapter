@@ -2450,7 +2450,14 @@ static void update_bandplan_strip(uint32_t freq_hz)
     uint32_t band_hi = segs[n - 1].hi_hz;
     double   span    = (double)(band_hi - band_lo);
     if (span < 1.0) span = 1.0;
-    const int W = DISPLAY_H_RES;
+    // CW page: the strip spans only the spectrum width, to the right of the
+    // 320 px left pane - full-width ran under the panel and covered its
+    // status text (operator, 2026-08-01). Everywhere else: full width.
+    // (LVGL no-ops unchanged coords, so re-asserting per tick is cheap.)
+    const int strip_x = (ui_mode_get() == UI_MODE_CW) ? 320 : 0;
+    const int W = DISPLAY_H_RES - strip_x;
+    lv_obj_set_pos(s_bandplan_obj, strip_x, 720 - BOTTOM_BAR_H - BANDPLAN_H);
+    lv_obj_set_width(s_bandplan_obj, W);
 
     for (int i = 0; i < BANDPLAN_MAX_SEG; i++) {
         if (i >= n) {
@@ -4883,7 +4890,8 @@ static void touch_event_cb(lv_event_t *e)
                     if (s_bp_seg_lbl[i]) lv_obj_add_flag(s_bp_seg_lbl[i], LV_OBJ_FLAG_HIDDEN);
                 }
             }
-            double hz_per_px = (double)(s_bp_drag_band_hi - s_bp_drag_band_lo) / (double)DISPLAY_H_RES;
+            double hz_per_px = (double)(s_bp_drag_band_hi - s_bp_drag_band_lo) /
+                               (double)(DISPLAY_H_RES - (ui_mode_get() == UI_MODE_CW ? 320 : 0));
             int64_t target = s_bp_drag_start_freq + (int64_t)lround((double)dx * hz_per_px);
             target = ((target + 500) / 1000) * 1000;   // snap centre to whole kHz (xx.xxx.000 Hz)
             if (target < (int64_t)s_bp_drag_band_lo) target = (int64_t)s_bp_drag_band_lo;
@@ -4921,7 +4929,8 @@ static void touch_event_cb(lv_event_t *e)
                 // frequency right as the finger left the glass (same fix as the
                 // spectrum tune — the drag path already uses the last stable
                 // PRESSING value via s_bp_drag_target_hz).
-                double hz_per_px = (double)(s_bp_drag_band_hi - s_bp_drag_band_lo) / (double)DISPLAY_H_RES;
+                double hz_per_px = (double)(s_bp_drag_band_hi - s_bp_drag_band_lo) /
+                               (double)(DISPLAY_H_RES - (ui_mode_get() == UI_MODE_CW ? 320 : 0));
                 int64_t tap_hz = (int64_t)s_bp_drag_band_lo + (int64_t)lround((double)s_bp_drag_start_pt.x * hz_per_px);
                 tap_hz = ((tap_hz + 500) / 1000) * 1000;   // snap centre to whole kHz (xx.xxx.000 Hz)
                 if (tap_hz < (int64_t)s_bp_drag_band_lo) tap_hz = (int64_t)s_bp_drag_band_lo;
@@ -5184,7 +5193,8 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
             }
         }
         if (be_decided == 2 && be_bp_ok) {
-            double hz_per_px = (double)(s_bp_drag_band_hi - s_bp_drag_band_lo) / (double)DISPLAY_H_RES;
+            double hz_per_px = (double)(s_bp_drag_band_hi - s_bp_drag_band_lo) /
+                               (double)(DISPLAY_H_RES - (ui_mode_get() == UI_MODE_CW ? 320 : 0));
             int64_t target = s_bp_drag_start_freq + (int64_t)lround((double)dx * hz_per_px);
             target = ((target + 500) / 1000) * 1000;              // snap centre to whole kHz
             if (target < (int64_t)s_bp_drag_band_lo) target = (int64_t)s_bp_drag_band_lo;

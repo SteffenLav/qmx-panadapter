@@ -432,9 +432,10 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_clear_flag(s_container, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_container, LV_OBJ_FLAG_HIDDEN);
 
-    // Left pane (stops above the band-plan strip).
+    // Left pane, full middle-band height - the band-plan strip starts at the
+    // pane's right edge on this page (ui.c narrows it), so nothing hides.
     s_pane = lv_obj_create(s_container);
-    lv_obj_set_size(s_pane, PANE_W, MID_H - BANDPLAN_H);
+    lv_obj_set_size(s_pane, PANE_W, MID_H);
     lv_obj_set_pos(s_pane, 0, 0);
     lv_obj_set_style_bg_color(s_pane, lv_color_hex(0x14181e), 0);
     lv_obj_set_style_bg_opa(s_pane, LV_OPA_COVER, 0);
