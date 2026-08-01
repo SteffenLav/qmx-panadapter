@@ -1149,13 +1149,9 @@ static void mode_popup_open(void)
     // docs/qmx-1_04-cat-comparison.md.
     static const char *modes_std[] = {"USB", "LSB", "CW", "DiGi"};
     static const char *modes_am[]  = {"USB", "LSB", "CW", "DiGi", "AM"};
-    static const char *modes_cw[]  = {"CW"};
     bool show_am = cat_qmx_fw_at_least(1, 4, 0);
     const char **modes = show_am ? modes_am : modes_std;
     int n_modes = show_am ? 5 : 4;
-    // The CW page pins the radio to CW (re-forced on every entry) - offering
-    // the other modes here would just be undone, so the popup shows only CW.
-    if (ui_mode_get() == UI_MODE_CW) { modes = modes_cw; n_modes = 1; }
 
     lv_obj_t *ov = lv_obj_create(lv_layer_top());
     lv_obj_set_size(ov, LV_HOR_RES, LV_VER_RES);
@@ -1211,7 +1207,9 @@ static void mode_popup_open(void)
 static void mode_label_clicked_cb(lv_event_t *e)
 {
     (void)e;
-    if (ui_mode_get() == UI_MODE_FT8) return;
+    // FT8 dims the whole top bar; the CW page keeps it live but the mode is
+    // pinned to CW - a one-entry dropdown is noise, so no popup at all there.
+    if (ui_mode_get() != UI_MODE_PANADAPTER) return;
     mode_popup_open();
 }
 
@@ -7049,8 +7047,10 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
             ui_restore_snapshot(&s_cw_snapshot);   // apply the seeded zoom
         }
         // The CW page IS a CW-mode page - force it on every entry via the
-        // poll task, same as FT8 forces DiGi.
+        // poll task, same as FT8 forces DiGi. Optimistic label for the
+        // no-QMX case, same as the FT8 branch.
         cat_request_mode("CW");
+        ui_update_mode("CW");
         // ...and honour the band plan: an entry frequency outside the band's
         // CW segment (inherited from a phone/digi tune) moves into it.
         {
@@ -7110,6 +7110,10 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
         // (reliable, retried) — the snapshot restore's mode step can lose the
         // race, which left FT8 stuck in the panadapter's mode (e.g. CW).
         cat_request_mode("DIGI");
+        // Optimistic label: with no QMX connected there is no MD; poll to
+        // correct it, so the top bar would keep showing the previous page's
+        // mode (hardware-observed: "CW" while on the FT8 page).
+        ui_update_mode("DiGi");
         ft8_screen_view_show();
         // Respawn the FT8 task; it self-deleted on previous exit.
         ft8_self_test();
@@ -7137,6 +7141,9 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
             s_ft8_snapshot.mode[sizeof(s_ft8_snapshot.mode) - 1] = '\0';
         }
         ui_restore_snapshot(&s_pan_snapshot);
+        // Optimistic mode label for the no-QMX case (see the FT8/CW branches).
+        if (s_pan_snapshot.valid && s_pan_snapshot.mode[0])
+            ui_update_mode(s_pan_snapshot.mode);
         int start_x = animate ? -DISPLAY_H_RES : 0;
         if (s_spectrum_obj)  { lv_obj_set_x(s_spectrum_obj,  start_x); lv_obj_clear_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN); }
         if (s_label_bar)     { lv_obj_set_x(s_label_bar,     start_x); lv_obj_clear_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN); }

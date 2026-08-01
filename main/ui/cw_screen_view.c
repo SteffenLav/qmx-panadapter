@@ -47,6 +47,12 @@ static const char *TAG = "cw_screen";
 // composition, not just the code ("I already know this page").
 #define PANE_W        320
 #define TICKER_H      100
+// The band-plan strip (BANDPLAN_H in ui.c) sits directly above the bottom
+// bar and MUST stay visible and touchable on the CW page - it is how the
+// operator sees they are inside the CW segment and drags along it. The pane
+// and ticker therefore stop above it (hardware-observed 2026-08-01: the
+// first cut covered it completely).
+#define BANDPLAN_H    22
 
 #define N_CW_MEM      6
 #define CW_WPM_MIN    5
@@ -426,9 +432,9 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_clear_flag(s_container, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_container, LV_OBJ_FLAG_HIDDEN);
 
-    // Left pane.
+    // Left pane (stops above the band-plan strip).
     s_pane = lv_obj_create(s_container);
-    lv_obj_set_size(s_pane, PANE_W, MID_H);
+    lv_obj_set_size(s_pane, PANE_W, MID_H - BANDPLAN_H);
     lv_obj_set_pos(s_pane, 0, 0);
     lv_obj_set_style_bg_color(s_pane, lv_color_hex(0x14181e), 0);
     lv_obj_set_style_bg_opa(s_pane, LV_OPA_COVER, 0);
@@ -459,7 +465,7 @@ void cw_screen_view_init(lv_obj_t *parent)
         lv_obj_set_style_text_color(s_lbl_mem[i], lv_color_hex(0xffffff), 0);
         lv_obj_set_style_text_font(s_lbl_mem[i], &lv_font_montserrat_20, 0);
         lv_obj_center(s_lbl_mem[i]);
-        y += 64;
+        y += 62;
     }
 
     // WPM stepper row.
@@ -506,10 +512,11 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_lbl_status, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_obj_set_style_text_font(s_lbl_status, &lv_font_montserrat_20, 0);
 
-    // Decode ticker across the bottom, to the right of the pane.
+    // Decode ticker across the bottom, to the right of the pane, ending
+    // above the band-plan strip so the strip stays visible and draggable.
     s_ticker = lv_obj_create(s_container);
     lv_obj_set_size(s_ticker, MID_W - PANE_W, TICKER_H);
-    lv_obj_set_pos(s_ticker, PANE_W, MID_H - TICKER_H);
+    lv_obj_set_pos(s_ticker, PANE_W, MID_H - TICKER_H - BANDPLAN_H);
     lv_obj_set_style_bg_color(s_ticker, lv_color_hex(0x101418), 0);
     lv_obj_set_style_bg_opa(s_ticker, LV_OPA_90, 0);
     lv_obj_set_style_border_color(s_ticker, lv_color_hex(0x2a323c), 0);
