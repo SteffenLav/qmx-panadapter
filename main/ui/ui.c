@@ -3907,6 +3907,34 @@ static void top_bar_set_ft8_dim(bool dim)
     }
 }
 
+// CW page: keep the VFO inside the band's CW segment (operator, 2026-08-01:
+// "the spectrum should honour the band-plan CW only"). If the frequency the
+// page is entered/restored with sits outside every CW segment of its band,
+// retune into the band's first CW segment (CW lives at the bottom of every
+// HF band) - a little way in, so the 48 kHz window isn't half out-of-band.
+// Inside a CW segment already: leave the operator's frequency alone.
+static uint32_t cw_bandplan_clamp_hz(uint32_t hz)
+{
+    qmx_settings_t s;
+    settings_load_all(&s);
+    const bp_seg_t *segs = NULL;
+    int n = bandplan_get_segments(hz,
+                bandplan_effective_region((bandplan_region_t)s.bandplan_region,
+                                          s.my_grid), &segs);
+    if (n <= 0 || !segs) return hz;   // not in a known band: leave alone
+    for (int i = 0; i < n; i++)
+        if (segs[i].type == BP_CW && hz >= segs[i].lo_hz && hz <= segs[i].hi_hz)
+            return hz;
+    for (int i = 0; i < n; i++) {
+        if (segs[i].type == BP_CW) {
+            uint32_t span = segs[i].hi_hz - segs[i].lo_hz;
+            uint32_t f = segs[i].lo_hz + (span < 48000 ? span / 2 : 24000);
+            return (f / 1000) * 1000;   // snap to a whole kHz
+        }
+    }
+    return hz;
+}
+
 // CW page: the top bar stays fully ACTIVE (unlike FT8), but the deep 200 px
 // dropdown hit-zones - foregrounded above every sibling - would swallow taps
 // and long-presses on the CW pane's top memory buttons, which sit under
@@ -6959,6 +6987,18 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
         // The CW page IS a CW-mode page - force it on every entry via the
         // poll task, same as FT8 forces DiGi.
         cat_request_mode("CW");
+        // ...and honour the band plan: an entry frequency outside the band's
+        // CW segment (inherited from a phone/digi tune) moves into it.
+        {
+            uint32_t f = cw_bandplan_clamp_hz(s_cw_snapshot.freq_hz);
+            if (f != s_cw_snapshot.freq_hz) {
+                ESP_LOGI(TAG, "CW entry: %lu Hz outside the CW segment -> %lu Hz",
+                         (unsigned long)s_cw_snapshot.freq_hz, (unsigned long)f);
+                s_cw_snapshot.freq_hz = f;
+                cat_set_frequency_forced(f);
+                ui_update_frequency(f);
+            }
+        }
         cw_screen_view_show();
         return;
     }
