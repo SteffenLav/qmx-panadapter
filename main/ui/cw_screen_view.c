@@ -436,10 +436,19 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_pad_all(s_pane, 0, 0);
     lv_obj_clear_flag(s_pane, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Six memory buttons, full pane width.
-    int y = 10;
+    // Page header - the FT8 pane's "MODE: FT8" gold title, same font and
+    // colour, so the two pages read as siblings (operator request 2026-08-01).
+    lv_obj_t *hdr = lv_label_create(s_pane);
+    lv_label_set_text(hdr, "MODE: CW");
+    lv_obj_set_style_text_color(hdr, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+    lv_obj_set_style_text_font(hdr, &lv_font_montserrat_48, 0);
+    lv_obj_set_pos(hdr, 14, 6);
+
+    // Six memory buttons, full pane width (pitch tightened vs the first cut
+    // so the header fits without sacrificing a memory slot).
+    int y = 64;
     for (int i = 0; i < N_CW_MEM; i++) {
-        s_btn_mem[i] = make_pane_btn(s_pane, 10, y, PANE_W - 20, 62, 0x2a2f37, 0x555555);
+        s_btn_mem[i] = make_pane_btn(s_pane, 10, y, PANE_W - 20, 56, 0x2a2f37, 0x555555);
         lv_obj_add_event_cb(s_btn_mem[i], mem_pressed_cb, LV_EVENT_PRESSED, NULL);
         lv_obj_add_event_cb(s_btn_mem[i], mem_clicked_cb, LV_EVENT_CLICKED,
                             (void *)(intptr_t)i);
@@ -450,12 +459,12 @@ void cw_screen_view_init(lv_obj_t *parent)
         lv_obj_set_style_text_color(s_lbl_mem[i], lv_color_hex(0xffffff), 0);
         lv_obj_set_style_text_font(s_lbl_mem[i], &lv_font_montserrat_20, 0);
         lv_obj_center(s_lbl_mem[i]);
-        y += 70;
+        y += 64;
     }
 
     // WPM stepper row.
-    y += 6;
-    lv_obj_t *bm = make_pane_btn(s_pane, 10, y, 70, 58, 0x2a2f37, 0x555555);
+    y += 4;
+    lv_obj_t *bm = make_pane_btn(s_pane, 10, y, 70, 54, 0x2a2f37, 0x555555);
     lv_obj_add_event_cb(bm, wpm_minus_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lm = lv_label_create(bm);
     lv_label_set_text(lm, "-");
@@ -467,26 +476,26 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_label_set_text(s_lbl_wpm, "-- WPM");
     lv_obj_set_style_text_color(s_lbl_wpm, lv_color_hex(0xFFA040), 0);
     lv_obj_set_style_text_font(s_lbl_wpm, &lv_font_montserrat_24, 0);
-    lv_obj_set_pos(s_lbl_wpm, 96, y + 16);
+    lv_obj_set_pos(s_lbl_wpm, 96, y + 14);
 
-    lv_obj_t *bp = make_pane_btn(s_pane, PANE_W - 80, y, 70, 58, 0x2a2f37, 0x555555);
+    lv_obj_t *bp = make_pane_btn(s_pane, PANE_W - 80, y, 70, 54, 0x2a2f37, 0x555555);
     lv_obj_add_event_cb(bp, wpm_plus_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lp = lv_label_create(bp);
     lv_label_set_text(lp, "+");
     lv_obj_set_style_text_color(lp, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(lp, &lv_font_montserrat_28, 0);
     lv_obj_center(lp);
-    y += 66;
+    y += 60;
 
     // Park button.
-    lv_obj_t *bpark = make_pane_btn(s_pane, 10, y, PANE_W - 20, 54, 0x1c2128, 0x7a4a10);
+    lv_obj_t *bpark = make_pane_btn(s_pane, 10, y, PANE_W - 20, 50, 0x1c2128, 0x7a4a10);
     lv_obj_add_event_cb(bpark, park_clicked_cb, LV_EVENT_CLICKED, NULL);
     s_lbl_park = lv_label_create(bpark);
     lv_label_set_text(s_lbl_park, "Park: --");
     lv_obj_set_style_text_color(s_lbl_park, lv_color_hex(0xFFA040), 0);
     lv_obj_set_style_text_font(s_lbl_park, &lv_font_montserrat_22, 0);
     lv_obj_center(s_lbl_park);
-    y += 62;
+    y += 56;
 
     // Status line.
     s_lbl_status = lv_label_create(s_pane);
