@@ -3907,6 +3907,21 @@ static void top_bar_set_ft8_dim(bool dim)
     }
 }
 
+// CW page: the top bar stays fully ACTIVE (unlike FT8), but the deep 200 px
+// dropdown hit-zones - foregrounded above every sibling - would swallow taps
+// and long-presses on the CW pane's top memory buttons, which sit under
+// y=200 (hardware-observed 2026-08-01: M1-M3 opened the Band/Mode dropdowns
+// instead of sending/editing). In CW mode the zones shrink to the 60 px bar
+// itself; the panadapter keeps the deep zones, where nothing tappable lives
+// under them except tap-to-tune, which the top strip deliberately forgoes.
+static void top_bar_set_hit_depth(bool deep)
+{
+    for (int i = 0; i < N_TOPBAR_HIT_ZONES; i++) {
+        lv_obj_t *hit = s_topbar_hit_zones[i];
+        if (hit) lv_obj_set_height(hit, deep ? 200 : 60);
+    }
+}
+
 // Phase 5.10G: receive passband width from CAT (FW response) or
 // fallback to 0 = use per-mode defaults. Called by cat.c.
 void ui_update_passband_width(uint32_t hz)
@@ -6853,6 +6868,7 @@ void ui_apply_saved_mode(void)
         // pin the radio to CW mode.
         ui_mode_set(UI_MODE_CW);
         drawer_set_ft8_mode(false);
+        top_bar_set_hit_depth(false);   // bar-height zones; pane buttons live under y=200
         cat_request_mode("CW");
         cw_screen_view_show();
         ESP_LOGI(TAG, "UI mode restored from NVS: CW");
@@ -6898,6 +6914,7 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
     ui_mode_set(next);
     settings_set_last_ui_mode((uint8_t)next);
     top_bar_set_ft8_dim(next == UI_MODE_FT8);
+    top_bar_set_hit_depth(next == UI_MODE_PANADAPTER);
     drawer_set_ft8_mode(next == UI_MODE_FT8);
 
     lv_obj_t *ft8 = ft8_screen_view_get_container();
