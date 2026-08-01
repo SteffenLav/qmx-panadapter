@@ -182,6 +182,31 @@ bool ui_validate_band_freq_hz(uint32_t hz, uint32_t *lo_out, uint32_t *hi_out)
     return legal_band_edges(hz, lo_out, hi_out);
 }
 
+// Roaming edges for the drag/stroll gestures. On the CW page the roamable
+// window is the band's CW SEGMENT, not the whole band - the drag-clamp half
+// of the "honour the band plan" rule (operator, 2026-08-01); everywhere else
+// it's the plain band edges. Falls back to band edges when the band has no
+// known CW segment.
+static bool effective_drag_edges(uint32_t center_hz, uint32_t *lo, uint32_t *hi)
+{
+    if (!legal_band_edges(center_hz, lo, hi)) return false;
+    if (ui_mode_get() != UI_MODE_CW) return true;
+    qmx_settings_t s;
+    settings_load_all(&s);
+    const bp_seg_t *segs = NULL;
+    int n = bandplan_get_segments(center_hz,
+                bandplan_effective_region((bandplan_region_t)s.bandplan_region,
+                                          s.my_grid), &segs);
+    for (int i = 0; i < n; i++) {
+        if (segs[i].type == BP_CW) {
+            *lo = segs[i].lo_hz;
+            *hi = segs[i].hi_hz;
+            return true;
+        }
+    }
+    return true;
+}
+
 static void band_preset_cb(lv_event_t *e)
 {
     uint32_t center_hz = (uint32_t)(uintptr_t)lv_event_get_user_data(e);
@@ -801,14 +826,31 @@ static void freq_popup_build(void)
     // Mode row: DiGi / USB / LSB / CW. Only for the Memory channel editor;
     // the top-bar keypad omits it (mode lives in the top bar there).
     if (show_mode) {
+        // Mode-pinned pages restrict the choice: a memory coded from the
+        // FT8/FT4 page can only be DiGi, from the CW page only CW (operator,
+        // 2026-08-01 — the FT8 half was a standing gap: recall was gated but
+        // this editor still offered all four modes). The others are shown
+        // greyed and inert; the selection is forced to the pinned mode.
+        const char *req = (ui_mode_get() == UI_MODE_FT8) ? "DiGi"
+                        : (ui_mode_get() == UI_MODE_CW)  ? "CW" : NULL;
+        if (req) {
+            strncpy(s_freq_mode_sel, req, sizeof(s_freq_mode_sel) - 1);
+            s_freq_mode_sel[sizeof(s_freq_mode_sel) - 1] = '\0';
+        }
         int mode_w = (content_w - 3 * gap) / 4;
         for (int i = 0; i < 4; i++) {
+            bool allowed = (!req || strcmp(s_freq_modes[i], req) == 0);
             lv_obj_t *btn = lv_btn_create(panel);
             lv_obj_set_size(btn, mode_w, btn_h);
             lv_obj_set_pos(btn, i * (mode_w + gap), mode_y);
             lv_obj_set_style_bg_opa(btn, kp_opa, 0);
             lv_obj_set_style_radius(btn, 6, 0);
-            lv_obj_add_event_cb(btn, freq_mode_cb, LV_EVENT_CLICKED, (void *)s_freq_modes[i]);
+            if (allowed) {
+                lv_obj_add_event_cb(btn, freq_mode_cb, LV_EVENT_CLICKED, (void *)s_freq_modes[i]);
+            } else {
+                lv_obj_set_style_opa(btn, LV_OPA_30, 0);
+                lv_obj_clear_flag(btn, LV_OBJ_FLAG_CLICKABLE);
+            }
             lv_obj_t *lbl = lv_label_create(btn);
             lv_label_set_text(lbl, s_freq_modes[i]);
             lv_obj_set_style_text_font(lbl, font_key, 0);
@@ -1107,9 +1149,13 @@ static void mode_popup_open(void)
     // docs/qmx-1_04-cat-comparison.md.
     static const char *modes_std[] = {"USB", "LSB", "CW", "DiGi"};
     static const char *modes_am[]  = {"USB", "LSB", "CW", "DiGi", "AM"};
+    static const char *modes_cw[]  = {"CW"};
     bool show_am = cat_qmx_fw_at_least(1, 4, 0);
     const char **modes = show_am ? modes_am : modes_std;
     int n_modes = show_am ? 5 : 4;
+    // The CW page pins the radio to CW (re-forced on every entry) - offering
+    // the other modes here would just be undone, so the popup shows only CW.
+    if (ui_mode_get() == UI_MODE_CW) { modes = modes_cw; n_modes = 1; }
 
     lv_obj_t *ov = lv_obj_create(lv_layer_top());
     lv_obj_set_size(ov, LV_HOR_RES, LV_VER_RES);
@@ -3557,7 +3603,7 @@ static void pinch_poll_cb(lv_timer_t *t)
 
             uint32_t tgt = (uint32_t)s_stroll_target_hz;
             uint32_t lo, hi;
-            if (!legal_band_edges(tgt, &lo, &hi) || tgt < lo || tgt > hi) {
+            if (!effective_drag_edges((uint32_t)s_stroll_start_hz, &lo, &hi) || tgt < lo || tgt > hi) {
                 ESP_LOGI("pinch", "stroll settle: out of bounds %lu, rejecting", (unsigned long)tgt);
                 stroll_apply_offset(0);
                 if (s_tune_tooltip) lv_obj_add_flag(s_tune_tooltip, LV_OBJ_FLAG_HIDDEN);
@@ -3647,7 +3693,7 @@ static void pinch_poll_cb(lv_timer_t *t)
         const float hz_per_px = (float)DSP_SAMPLE_RATE_HZ / (float)DISPLAY_H_RES;
         int64_t tgt = s_stroll_start_hz - (int64_t)lroundf((float)off * hz_per_px);
         uint32_t lo, hi;
-        if (legal_band_edges(s_stroll_start_hz, &lo, &hi)) {
+        if (effective_drag_edges((uint32_t)s_stroll_start_hz, &lo, &hi)) {
             if (tgt < (int64_t)lo) tgt = lo;
             if (tgt > (int64_t)hi) tgt = hi;
         }
@@ -4784,6 +4830,17 @@ static void touch_event_cb(lv_event_t *e)
         if (n > 0) {
             s_bp_drag_band_lo = segs[0].lo_hz;
             s_bp_drag_band_hi = segs[n - 1].hi_hz;
+            // CW page: roaming is clamped to the band's CW segment, same rule
+            // as the stroll gesture (effective_drag_edges).
+            if (ui_mode_get() == UI_MODE_CW) {
+                for (int i = 0; i < n; i++) {
+                    if (segs[i].type == BP_CW) {
+                        s_bp_drag_band_lo = segs[i].lo_hz;
+                        s_bp_drag_band_hi = segs[i].hi_hz;
+                        break;
+                    }
+                }
+            }
         } else {
             // Outside a known band (shouldn't normally happen - the strip
             // is hidden then - but guard anyway): disable drag this press.
@@ -6978,11 +7035,18 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
             ui_restore_snapshot(&s_cw_snapshot);
         } else {
             // First CW entry this boot: inherit the current frequency (you
-            // tune to a CW signal, then swipe here) - just seed the snapshot
-            // so later toggles are sticky, with the mode pinned to CW.
+            // tune to a CW signal, then swipe here) - seed the snapshot so
+            // later toggles are sticky, with the mode pinned to CW and a
+            // deep default zoom: CW signals are ~200 Hz wide, so x8 (6 kHz
+            // visible) is a useful opening view where the panadapter's x1
+            // 48 kHz would render them as hairlines. Sticky from then on -
+            // whatever zoom the operator settles at becomes the CW zoom.
             ui_save_snapshot(&s_cw_snapshot);
             strncpy(s_cw_snapshot.mode, "CW", sizeof(s_cw_snapshot.mode) - 1);
             s_cw_snapshot.mode[sizeof(s_cw_snapshot.mode) - 1] = '\0';
+            s_cw_snapshot.zoom_factor     = 8.0f;
+            s_cw_snapshot.pan_offset_bins = 0;
+            ui_restore_snapshot(&s_cw_snapshot);   // apply the seeded zoom
         }
         // The CW page IS a CW-mode page - force it on every entry via the
         // poll task, same as FT8 forces DiGi.

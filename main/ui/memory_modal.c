@@ -323,13 +323,22 @@ static void format_freq_hz(uint32_t hz, char *out, size_t out_sz)
 // In FT8/FT4 mode the QMX must stay in its DiGi data mode, so recalling a
 // non-DiGi memory (CW, USB, ...) makes no sense — it would knock the radio out
 // of data mode mid-session. Such slots are greyed out in the grid and their
-// recall (tap) is blocked. Both FT8 and FT4 run under UI_MODE_FT8. Editing,
-// deleting and drag-moving those slots is still allowed.
+// recall (tap) is blocked. Both FT8 and FT4 run under UI_MODE_FT8. The CW
+// page gets the same rule with "CW" (v1.4). Editing, deleting and
+// drag-moving those slots is still allowed.
+static const char *mem_required_mode(void)
+{
+    switch (ui_mode_get()) {
+        case UI_MODE_FT8: return "DiGi";
+        case UI_MODE_CW:  return "CW";
+        default:          return NULL;   // panadapter: any mode recalls
+    }
+}
+
 static bool mem_recall_blocked(const mem_slot_t *slot)
 {
-    return slot->occupied &&
-           ui_mode_get() == UI_MODE_FT8 &&
-           strcmp(slot->mode, "DiGi") != 0;
+    const char *req = mem_required_mode();
+    return slot->occupied && req && strcmp(slot->mode, req) != 0;
 }
 
 static void memory_modal_refresh(void)
@@ -496,10 +505,15 @@ static void cell_tap_cb(lv_event_t *e)
     }
 
     if (mem_recall_blocked(&slot)) {
-        // Non-DiGi memory tapped while the FT8/FT4 screen is up — recalling it
-        // would drop the radio out of data mode. Refuse (the cell is greyed).
-        ESP_LOGI(TAG, "recall slot %d blocked in FT8/FT4 (mode '%s' != DiGi)", idx, slot.mode);
-        ui_toast("FT8/FT4: only DiGi memories can be recalled");
+        // Wrong-mode memory tapped while a mode-pinned page (FT8/FT4 or CW)
+        // is up — recalling it would knock the radio out of that mode.
+        // Refuse (the cell is greyed).
+        const char *req = mem_required_mode();
+        ESP_LOGI(TAG, "recall slot %d blocked (mode '%s' != %s)", idx, slot.mode, req);
+        char msg[64];
+        snprintf(msg, sizeof(msg), "%s: only %s memories can be recalled",
+                 ui_mode_get() == UI_MODE_CW ? "CW page" : "FT8/FT4", req);
+        ui_toast(msg);
         return;
     }
 
