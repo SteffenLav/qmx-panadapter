@@ -1,0 +1,20 @@
+#pragma once
+
+// CW page (Tier 1, v1.4 — docs/cw-page-design.md). Third carousel stop:
+// unlike the FT8 page this one KEEPS the panadapter spectrum/waterfall live
+// underneath (CW is a tuning mode) and overlays a left keyer pane + a decode
+// ticker strip. TX goes through the QMX's own keyer (CAT KY), decode is the
+// QMX's own CW decoder (CAT TB), speed is CAT KS — all plumbed in cat.c.
+
+#include "lvgl.h"
+
+void       cw_screen_view_init(lv_obj_t *parent);
+void       cw_screen_view_show(void);
+void       cw_screen_view_hide(void);
+lv_obj_t  *cw_screen_view_get_container(void);
+
+// Called by cat.c's TB; response parser with freshly decoded characters.
+// Runs on the CDC-ACM RX callback context — must never touch LVGL, so it
+// only appends to a spinlock-guarded ring; the page's own LVGL timer
+// renders it. Safe to call while the page is hidden (chars still collect).
+void cw_screen_feed_decoded(const char *s, int n);

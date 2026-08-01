@@ -39,6 +39,8 @@ static const char *TAG = "settings";
 #define KEY_CQ_MSG2    "cq_msg2"
 #define KEY_CQ_SEL     "cq_sel"
 #define KEY_CQ_MAX     "cq_max"
+#define KEY_CW_MSG     "cw_msg"    // + digit 0..5 appended at use sites
+#define KEY_CW_PARK    "cw_park"
 #define KEY_ONBOARDED  "onboarded"
 #define KEY_FT8_FILT   "ft8_filt"
 #define KEY_WIFI_ENABLED "wifi_en"
@@ -244,6 +246,9 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_TX_TONE_HZ     64
 #define DIRTY_TX_TONE_HOLD   65
 #define DIRTY_CQ_MAX_CALLS   66
+#define DIRTY_CW_MSG0        67   // ..72 = slots 0..5 (contiguous, indexed math below)
+#define DIRTY_CW_MSG5        72
+#define DIRTY_CW_PARK        73
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -268,6 +273,8 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_CHARGE_LIM_PCT,
     DIRTY_LOTW_DXCC, DIRTY_LOTW_CQZ, DIRTY_LOTW_ITUZ, DIRTY_DISP_SLEEP,
     DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD, DIRTY_CQ_MAX_CALLS,
+    DIRTY_CW_MSG0, DIRTY_CW_MSG0 + 1, DIRTY_CW_MSG0 + 2, DIRTY_CW_MSG0 + 3,
+    DIRTY_CW_MSG0 + 4, DIRTY_CW_MSG5, DIRTY_CW_PARK,
 };
 
 // ---- Module state ------------------------------------------------------
@@ -367,6 +374,14 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_CQ_MSG2))    nvs_set_str(s_nvs, KEY_CQ_MSG2, snap.cq_msg[2]);
         if (dirty_test(&dirty_local, DIRTY_CQ_SEL))     nvs_set_u8(s_nvs, KEY_CQ_SEL, snap.cq_sel);
         if (dirty_test(&dirty_local, DIRTY_CQ_MAX_CALLS)) nvs_set_u8(s_nvs, KEY_CQ_MAX, snap.cq_max_calls);
+        for (int i = 0; i < 6; i++) {
+            if (dirty_test(&dirty_local, DIRTY_CW_MSG0 + i)) {
+                char k[12];
+                snprintf(k, sizeof(k), KEY_CW_MSG "%d", i);
+                nvs_set_str(s_nvs, k, snap.cw_msg[i]);
+            }
+        }
+        if (dirty_test(&dirty_local, DIRTY_CW_PARK)) nvs_set_str(s_nvs, KEY_CW_PARK, snap.cw_park);
         if (dirty_test(&dirty_local, DIRTY_ONBOARDED))  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap.onboarded ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FT8_FILT))     nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap.ft8_filters, sizeof(snap.ft8_filters));
         if (dirty_test(&dirty_local, DIRTY_WIFI_ENABLED)) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap.wifi_enabled ? 1 : 0);
@@ -507,6 +522,16 @@ static void load_from_nvs(qmx_settings_t *out)
     out->cq_msg[2][0] = '\0';
     out->cq_sel = 0;
     out->cq_max_calls = 0;
+    // CW keyer memory defaults: usable out of the box, editable in place.
+    // {MYCALL}/{PARK} expand at send time (cw_screen_view.c) so the defaults
+    // work for every operator without baking a callsign in.
+    strcpy(out->cw_msg[0], "CQ CQ DE {MYCALL} {MYCALL} K");
+    strcpy(out->cw_msg[1], "CQ POTA DE {MYCALL} {MYCALL} K");
+    strcpy(out->cw_msg[2], "UR 599 599 BK");
+    strcpy(out->cw_msg[3], "TU 73 EE");
+    strcpy(out->cw_msg[4], "AGN AGN BK");
+    strcpy(out->cw_msg[5], "QRZ? DE {MYCALL} K");
+    out->cw_park[0] = '\0';
     out->onboarded = false;
     out->wifi_enabled = DEF_WIFI_ENABLED;
     out->qmx_gps = false;
@@ -604,6 +629,13 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_u8(s_nvs, KEY_CQ_SEL, &out->cq_sel);
     if (out->cq_sel > 2) out->cq_sel = 0;
     nvs_get_u8(s_nvs, KEY_CQ_MAX, &out->cq_max_calls);
+    for (int i = 0; i < 6; i++) {
+        char k[12];
+        snprintf(k, sizeof(k), KEY_CW_MSG "%d", i);
+        sz = sizeof(out->cw_msg[i]);
+        nvs_get_str(s_nvs, k, out->cw_msg[i], &sz);   // absent key keeps the default
+    }
+    sz = sizeof(out->cw_park); nvs_get_str(s_nvs, KEY_CW_PARK, out->cw_park, &sz);
 
     if (nvs_get_u8(s_nvs, KEY_ONBOARDED,  &u8v) == ESP_OK) out->onboarded  = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_WIFI_ENABLED, &u8v) == ESP_OK) out->wifi_enabled = (u8v != 0);
@@ -962,6 +994,30 @@ void settings_set_cq_max_calls(uint8_t n)
     s_pending.cq_max_calls = n;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CQ_MAX_CALLS);
+}
+
+void settings_set_cw_msg(uint8_t idx, const char *text)
+{
+    if (!s_ready || idx > 5) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    char buf[sizeof(s_pending.cw_msg[0])] = {0};
+    if (text) { strncpy(buf, text, sizeof(buf) - 1); }
+    if (strcmp(s_pending.cw_msg[idx], buf) == 0) { xSemaphoreGive(s_mutex); return; }
+    strcpy(s_pending.cw_msg[idx], buf);
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CW_MSG0 + idx);
+}
+
+void settings_set_cw_park(const char *park)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    char buf[sizeof(s_pending.cw_park)] = {0};
+    if (park) { strncpy(buf, park, sizeof(buf) - 1); }
+    if (strcmp(s_pending.cw_park, buf) == 0) { xSemaphoreGive(s_mutex); return; }
+    strcpy(s_pending.cw_park, buf);
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CW_PARK);
 }
 
 void settings_set_onboarded(bool v)

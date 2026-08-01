@@ -64,6 +64,8 @@ typedef struct {
     char     cq_msg[3][28];    // 3 user-editable CQ message presets (FT8 TX)
     uint8_t  cq_sel;           // which CQ preset is active, 0..2 (default 0)
     uint8_t  cq_max_calls;     // auto-stop CQ after N unanswered calls, 0=never (default 0)
+    char     cw_msg[6][44];    // 6 CW keyer memories ({MYCALL}/{PARK} macros; see cw_screen_view.c)
+    char     cw_park[16];      // POTA park reference for the {PARK} macro (e.g. "US-1211")
     bool     onboarded;        // first-boot WiFi/identity prompts shown (default false)
     bool     wifi_enabled;     // initiate WiFi at boot (default true)
     bool     qmx_gps;         // QMX/QMX+ has GPS discipline — skip Tab5→QMX time push
@@ -179,6 +181,12 @@ void settings_set_cq_sel(uint8_t idx);
 // Don WB0LQW: "I usually send CQ 2-4 times and then pause". Set from the CQ
 // preset modal's top-right cycle button; consumed by ft8_qso.c's CQ loop.
 void settings_set_cq_max_calls(uint8_t n);
+
+// CW keyer memories (idx 0..5) and the POTA park reference for the {PARK}
+// macro. Defaults are pre-filled (CQ / CQ POTA / exchange / TU 73 / AGN / QRZ)
+// so the CW page is usable before anything is edited. Debounced flush.
+void settings_set_cw_msg(uint8_t idx, const char *text);
+void settings_set_cw_park(const char *park);
 
 
 // First-boot onboarding done: once true, the WiFi/identity prompts are never

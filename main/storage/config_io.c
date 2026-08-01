@@ -96,6 +96,11 @@ char *config_io_export(size_t *out_len)
     APP("3 = %s\n", c.cq_msg[2]);
     APP("stop_after = %u\n", (unsigned)c.cq_max_calls);   // 0 = keep calling
 
+    APP("\n[cw]\n");
+    APP("# keyer memories 1-6; {MYCALL} and {PARK} expand at send time\n");
+    for (int i = 0; i < 6; i++) APP("%d = %s\n", i + 1, c.cw_msg[i]);
+    APP("park = %s\n", c.cw_park);
+
     APP("\n[ft8_filters]\n");
     APP("include1_on = %s\n", yn(c.ft8_filters.incl_en[0]));
     APP("include1    = %s\n", c.ft8_filters.incl_text[0]);
@@ -142,7 +147,7 @@ static bool to_bool(const char *v)
            strcasecmp(v, "yes") == 0  || strcasecmp(v, "on") == 0;
 }
 
-typedef enum { SEC_NONE, SEC_SETTINGS, SEC_CQ, SEC_FILTERS, SEC_MEM } section_t;
+typedef enum { SEC_NONE, SEC_SETTINGS, SEC_CQ, SEC_CW, SEC_FILTERS, SEC_MEM } section_t;
 
 int config_io_import(char *text)
 {
@@ -168,6 +173,7 @@ int config_io_import(char *text)
             char *name = trim(p + 1);
             if      (strcasecmp(name, "settings") == 0)    sec = SEC_SETTINGS;
             else if (strcasecmp(name, "cq") == 0)          sec = SEC_CQ;
+            else if (strcasecmp(name, "cw") == 0)          sec = SEC_CW;
             else if (strcasecmp(name, "ft8_filters") == 0) sec = SEC_FILTERS;
             else if (strcasecmp(name, "memories") == 0)    sec = SEC_MEM;
             else sec = SEC_NONE;
@@ -224,6 +230,15 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "lotw_key"))          lotw_store_key_b64(val);
             else break;   // unknown key: ignore, don't count
             applied++;
+            break;
+
+        case SEC_CW:
+            if (!strcasecmp(key, "park")) {
+                settings_set_cw_park(val); applied++;
+            } else {
+                int idx = atoi(key) - 1;        // "1".."6"
+                if (idx >= 0 && idx <= 5) { settings_set_cw_msg((uint8_t)idx, val); applied++; }
+            }
             break;
 
         case SEC_CQ:

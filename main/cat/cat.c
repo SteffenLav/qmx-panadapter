@@ -16,6 +16,7 @@
 #include "bsp/m5stack_tab5.h"
 
 #include "ui.h"
+#include "cw_screen_view.h"   // cw_screen_feed_decoded() (TB; RX path)
 #include "diag_log.h"
 
 static const char *TAG = "cat";
@@ -177,6 +178,45 @@ bool cat_qmx_fw_at_least(int major, int minor, int patch)
 // 1_04+) is transmitting. See cat_tune_poll_set_active() in cat.h.
 static volatile bool s_tune_poll_active = false;
 void cat_tune_poll_set_active(bool active) { s_tune_poll_active = active; }
+
+// ---- CW keyer / decoder surface (CW page, v1.4) ----------------------------
+// KY send text is staged here by the LVGL thread and drained by the poll task
+// (same pattern as s_pending_ssb_bw). The buffer holds ONE pending message:
+// the QMX's own 80-char circular KY buffer does the real queuing, so a second
+// tap before the first drained just replaces an un-sent staging copy.
+static char             s_pending_cw_send[96];
+static portMUX_TYPE     s_cw_send_mux = portMUX_INITIALIZER_UNLOCKED;
+static volatile uint8_t s_pending_keyer_wpm = 0;      // 0 = none pending
+static volatile bool    s_keyer_wpm_query_pending = false;
+static volatile int     s_keyer_wpm = -1;             // last KS readback
+static volatile int     s_cw_tx_remaining = -1;       // TB t-field, -1 unknown
+static volatile bool    s_cw_poll_active = false;     // TB; poll while CW page shown
+static int64_t          s_cw_tb_last_us = 0;          // rate-limits TB; to ~1 Hz
+
+void cat_request_cw_send(const char *text)
+{
+    if (!text || !text[0]) return;
+    portENTER_CRITICAL(&s_cw_send_mux);
+    strncpy(s_pending_cw_send, text, sizeof(s_pending_cw_send) - 1);
+    s_pending_cw_send[sizeof(s_pending_cw_send) - 1] = '\0';
+    portEXIT_CRITICAL(&s_cw_send_mux);
+}
+
+void cat_request_keyer_wpm(uint8_t wpm)
+{
+    if (wpm == 0) return;
+    s_pending_keyer_wpm = wpm;
+}
+
+void cat_query_keyer_wpm(void)   { s_keyer_wpm_query_pending = true; }
+int  cat_get_keyer_wpm(void)     { return s_keyer_wpm; }
+int  cat_get_cw_tx_remaining(void) { return s_cw_tx_remaining; }
+
+void cat_cw_poll_set_active(bool active)
+{
+    s_cw_poll_active = active;
+    if (!active) s_cw_tx_remaining = -1;   // stale TX-progress must not linger
+}
 esp_err_t cat_send_raw_cmd(const char *fmt, ...)
 {
     if (!s_cdc_dev) return ESP_ERR_INVALID_STATE;
@@ -338,12 +378,16 @@ static void diag_log_rx(const char *msg, size_t len)
     // Dedup routine poll responses (fixed short strings: FA…=14, MD…=4, FW…=7).
     // A response longer than its cache slot is treated as non-routine (e.g. a
     // garble) and always logged.
-    static char last_fa[16], last_md[8], last_fw[12];
+    static char last_fa[16], last_md[8], last_fw[12], last_tb[52];
     char  *slot    = NULL;
     size_t slot_sz = 0;
     if      (len >= 2 && msg[0] == 'F' && msg[1] == 'A') { slot = last_fa; slot_sz = sizeof(last_fa); }
     else if (len >= 2 && msg[0] == 'M' && msg[1] == 'D') { slot = last_md; slot_sz = sizeof(last_md); }
     else if (len >= 2 && msg[0] == 'F' && msg[1] == 'W') { slot = last_fw; slot_sz = sizeof(last_fw); }
+    // TB polls at 1 Hz while the CW page is up; the empty "TB000;" response is
+    // the steady state and would swamp the ring. Responses WITH decoded text
+    // differ each time and are high-value, so the dedup passes them through.
+    else if (len >= 2 && msg[0] == 'T' && msg[1] == 'B') { slot = last_tb; slot_sz = sizeof(last_tb); }
     if (slot && len < slot_sz) {
         if (strcmp(msg, slot) == 0) return;   // unchanged poll response — skip
         memcpy(slot, msg, len + 1);           // cache new value (len+1 <= slot_sz)
@@ -422,6 +466,40 @@ static void process_cat_message(const char *msg, size_t len)
         s_cat_ready = true;
         return;
     }
+    // TB response: "TBtnns...;" - t = KY chars remaining (0-9, 0 = receive
+    // mode), nn = decoded-char count, s = that many decoded characters from
+    // the QMX's own CW decoder (buffer is emptied by the read). A decoded ';'
+    // would split the tokenizer early and land here with a short len - warn
+    // and drop rather than feed a truncated fragment (no ';' in the standard
+    // CW charset, so this is theoretical).
+    if (len >= 6 && msg[0] == 'T' && msg[1] == 'B' &&
+        msg[2] >= '0' && msg[2] <= '9' &&
+        msg[3] >= '0' && msg[3] <= '9' && msg[4] >= '0' && msg[4] <= '9') {
+        int nn = (msg[3] - '0') * 10 + (msg[4] - '0');
+        if ((int)len == 6 + nn) {
+            s_cw_tx_remaining = msg[2] - '0';
+            if (nn > 0) cw_screen_feed_decoded(msg + 5, nn);
+        } else {
+            ESP_LOGW(TAG, "Bad TB response: nn=%d len=%u", nn, (unsigned)len);
+        }
+        return;
+    }
+
+    // KS response: "KSnnn;" (also accept 1-2 digits) - keyer speed in WPM.
+    if (len >= 4 && len <= 6 && msg[0] == 'K' && msg[1] == 'S') {
+        int wpm = 0;
+        bool ok = true;
+        for (size_t i = 2; i < len - 1; i++) {
+            if (msg[i] < '0' || msg[i] > '9') { ok = false; break; }
+            wpm = wpm * 10 + (msg[i] - '0');
+        }
+        if (ok && wpm > 0 && wpm <= 99) {
+            s_keyer_wpm = wpm;
+            ESP_LOGI(TAG, "Keyer speed = %d WPM", wpm);
+        }
+        return;
+    }
+
     // TM response: "TMhhmmss;" - 9 chars, real-time-clock time-of-day.
     if (len == 9 && msg[0] == 'T' && msg[1] == 'M') {
         s_tm_resp_us  = esp_timer_get_time();   // stamp arrival for GPS-tick phase lock
@@ -644,6 +722,55 @@ static void poll_task(void *arg)
                      e == ESP_OK ? "ok" : "fail");
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
+        }
+        // CW page: drain a staged KY message ("KY <text>;" - the radio does the
+        // keying), a keyer-speed set/query, and, while the page is visible,
+        // poll TB; at ~1 Hz for the QMX's decoded-CW buffer + KY TX progress.
+        {
+            char ky[112];
+            ky[0] = '\0';
+            portENTER_CRITICAL(&s_cw_send_mux);
+            if (s_pending_cw_send[0]) {
+                snprintf(ky, sizeof(ky), "KY %s;", s_pending_cw_send);
+                s_pending_cw_send[0] = '\0';
+            }
+            portEXIT_CRITICAL(&s_cw_send_mux);
+            if (ky[0]) {
+                esp_err_t e = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)ky,
+                                                            strlen(ky), 200);
+                ESP_LOGI(TAG, "CW send -> %s (%s)", ky, e == ESP_OK ? "ok" : "fail");
+                vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+                continue;
+            }
+        }
+        uint8_t wpm = s_pending_keyer_wpm;
+        if (wpm != 0) {
+            s_pending_keyer_wpm = 0;
+            char ks[8];
+            int n = snprintf(ks, sizeof(ks), "KS%03u;", (unsigned)wpm);
+            esp_err_t e = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)ks, n, 200);
+            ESP_LOGI(TAG, "keyer speed -> %s (%s)", ks, e == ESP_OK ? "ok" : "fail");
+            s_keyer_wpm = wpm;   // optimistic; a later KS; readback corrects it
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        if (s_keyer_wpm_query_pending) {
+            s_keyer_wpm_query_pending = false;
+            static const char q[] = "KS;";
+            esp_err_t e = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)q, 3, 200);
+            ESP_LOGI(TAG, "keyer speed query KS; (%s)", e == ESP_OK ? "sent" : "fail");
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        if (s_cw_poll_active) {
+            int64_t now = esp_timer_get_time();
+            if (now - s_cw_tb_last_us > 1000000) {
+                s_cw_tb_last_us = now;
+                static const char q[] = "TB;";
+                (void)cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)q, 3, 200);
+                vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+                continue;
+            }
         }
         // Phase 5.10G: 3-way rotation FA / MD / FW (passband width). A 4th
         // phase (PC;SW;) is added while cat_tune_poll_set_active(true) - live

@@ -36,6 +36,7 @@
 #include "time_sync.h"
 #include "ft8_screen.h"
 #include "ft8_screen_view.h"
+#include "cw_screen_view.h"
 #include "net/reader_net.h"
 #include "../ft8_pileup.h"
 #include "reader_view.h"
@@ -1340,6 +1341,7 @@ typedef struct {
 
 static ui_mode_snapshot_t s_pan_snapshot = {0};
 static ui_mode_snapshot_t s_ft8_snapshot = {0};
+static ui_mode_snapshot_t s_cw_snapshot  = {0};   // CW page (v1.4): sticky freq, mode always "CW"
 
 // CAT writes share a 200 ms TX rate-limiter; restoring freq+mode+bw
 // back-to-back would drop all but the first. Stagger them on a 250 ms
@@ -3120,6 +3122,7 @@ void ui_init(lv_display_t *disp)
     drawer_build();
 
     ft8_screen_view_init(scr);
+    cw_screen_view_init(scr);   // CW page overlays (hidden until UI_MODE_CW)
 
     // Docs Reader page (third page of the left-swipe cycle). Built here, BEFORE
     // the edge-swipe strips are re-foregrounded (below), so its full-screen
@@ -6844,6 +6847,17 @@ uint32_t ui_get_passband_width_hz(void) { return s_passband_width_hz; }
 void ui_apply_saved_mode(void)
 {
     ESP_LOGI(TAG, "ui_apply_saved_mode: last_ui_mode from NVS = %u", (unsigned)s_saved_ui_mode);
+    if (s_saved_ui_mode == UI_MODE_CW) {
+        // CW page restore: the panadapter widgets are already visible (boot
+        // default) and stay as the backdrop; just overlay the CW page and
+        // pin the radio to CW mode.
+        ui_mode_set(UI_MODE_CW);
+        drawer_set_ft8_mode(false);
+        cat_request_mode("CW");
+        cw_screen_view_show();
+        ESP_LOGI(TAG, "UI mode restored from NVS: CW");
+        return;
+    }
     if (s_saved_ui_mode != UI_MODE_FT8) {
         ui_mode_set(UI_MODE_PANADAPTER);
         drawer_set_ft8_mode(false);
@@ -6874,16 +6888,63 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
 {
     ui_mode_t cur = ui_mode_get();
     if (next == cur) return;
+    static const char *mode_names[] = { "Panadapter", "FT8", "CW" };
+    // CW transitions are instant: the CW page shares the panadapter's live
+    // widgets as its backdrop, so there is nothing meaningful to slide. The
+    // animated path below stays exactly as it was for the P<->FT8 pair.
+    if (cur == UI_MODE_CW || next == UI_MODE_CW) animate = false;
     ESP_LOGI(TAG, "Base mode: %s -> %s%s",
-             cur  == UI_MODE_FT8 ? "FT8" : "Panadapter",
-             next == UI_MODE_FT8 ? "FT8" : "Panadapter",
-             animate ? "" : " (instant)");
+             mode_names[cur], mode_names[next], animate ? "" : " (instant)");
     ui_mode_set(next);
     settings_set_last_ui_mode((uint8_t)next);
     top_bar_set_ft8_dim(next == UI_MODE_FT8);
     drawer_set_ft8_mode(next == UI_MODE_FT8);
 
     lv_obj_t *ft8 = ft8_screen_view_get_container();
+
+    // ---- leave CW (to either neighbour): remember its state, drop overlays.
+    if (cur == UI_MODE_CW) {
+        ui_save_snapshot(&s_cw_snapshot);
+        // The CW page is always mode CW - never let a drifted radio mode be
+        // carried back on the next entry (the FT8/DiGi rule, applied here).
+        strncpy(s_cw_snapshot.mode, "CW", sizeof(s_cw_snapshot.mode) - 1);
+        s_cw_snapshot.mode[sizeof(s_cw_snapshot.mode) - 1] = '\0';
+        cw_screen_view_hide();
+    }
+
+    if (next == UI_MODE_CW) {
+        // From Panadapter: widgets already live. From FT8: bring them back
+        // (instant - see above) and put the FT8 page away exactly as the
+        // leave-FT8 branch below does.
+        if (cur == UI_MODE_PANADAPTER) {
+            ui_save_snapshot(&s_pan_snapshot);
+        } else {   // cur == UI_MODE_FT8
+            ui_save_snapshot(&s_ft8_snapshot);
+            strncpy(s_ft8_snapshot.mode, "DiGi", sizeof(s_ft8_snapshot.mode) - 1);
+            s_ft8_snapshot.mode[sizeof(s_ft8_snapshot.mode) - 1] = '\0';
+            ft8_screen_view_hide();
+            if (ft8) lv_obj_set_x(ft8, 0);
+            if (s_spectrum_obj)  { lv_obj_set_x(s_spectrum_obj,  0); lv_obj_clear_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN); }
+            if (s_label_bar)     { lv_obj_set_x(s_label_bar,     0); lv_obj_clear_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN); }
+            if (s_bandplan_obj)  { lv_obj_set_x(s_bandplan_obj,  0); lv_obj_clear_flag(s_bandplan_obj,  LV_OBJ_FLAG_HIDDEN); }
+            if (s_waterfall_obj) { lv_obj_set_x(s_waterfall_obj, 0); lv_obj_clear_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN); }
+        }
+        if (s_cw_snapshot.valid) {
+            ui_restore_snapshot(&s_cw_snapshot);
+        } else {
+            // First CW entry this boot: inherit the current frequency (you
+            // tune to a CW signal, then swipe here) - just seed the snapshot
+            // so later toggles are sticky, with the mode pinned to CW.
+            ui_save_snapshot(&s_cw_snapshot);
+            strncpy(s_cw_snapshot.mode, "CW", sizeof(s_cw_snapshot.mode) - 1);
+            s_cw_snapshot.mode[sizeof(s_cw_snapshot.mode) - 1] = '\0';
+        }
+        // The CW page IS a CW-mode page - force it on every entry via the
+        // poll task, same as FT8 forces DiGi.
+        cat_request_mode("CW");
+        cw_screen_view_show();
+        return;
+    }
 
     if (next == UI_MODE_FT8) {
         if (ft8) {
@@ -6901,7 +6962,9 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
         }
         // Sticky settings: remember where Panadapter was left, restore
         // where FT8 was left (or just force DiGi on the very first entry).
-        ui_save_snapshot(&s_pan_snapshot);
+        // (Coming from CW, the CW snapshot was already saved above and the
+        // panadapter snapshot must NOT be clobbered with CW-page state.)
+        if (cur == UI_MODE_PANADAPTER) ui_save_snapshot(&s_pan_snapshot);
         if (s_ft8_snapshot.valid) {
             ui_restore_snapshot(&s_ft8_snapshot);   // restores FT8's freq/zoom
         } else {
@@ -6942,13 +7005,16 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
             if (s_waterfall_obj) { lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN); lv_obj_set_x(s_waterfall_obj, 0); }
         }
     } else {
-        // Sticky settings: remember where FT8 was left, restore where
-        // Panadapter was left (band/mode/bw/freq/zoom).
-        ui_save_snapshot(&s_ft8_snapshot);
-        // FT8 is always DiGi — never let the panadapter's mode (CW/SSB/...) be
-        // captured into the FT8 snapshot and carried back on the next FT8 entry.
-        strncpy(s_ft8_snapshot.mode, "DiGi", sizeof(s_ft8_snapshot.mode) - 1);
-        s_ft8_snapshot.mode[sizeof(s_ft8_snapshot.mode) - 1] = '\0';
+        // Sticky settings: remember where FT8 was left (only when actually
+        // leaving FT8 - a CW exit was snapshotted in the leave-CW step),
+        // restore where Panadapter was left (band/mode/bw/freq/zoom).
+        if (cur == UI_MODE_FT8) {
+            ui_save_snapshot(&s_ft8_snapshot);
+            // FT8 is always DiGi — never let the panadapter's mode (CW/SSB/...) be
+            // captured into the FT8 snapshot and carried back on the next FT8 entry.
+            strncpy(s_ft8_snapshot.mode, "DiGi", sizeof(s_ft8_snapshot.mode) - 1);
+            s_ft8_snapshot.mode[sizeof(s_ft8_snapshot.mode) - 1] = '\0';
+        }
         ui_restore_snapshot(&s_pan_snapshot);
         int start_x = animate ? -DISPLAY_H_RES : 0;
         if (s_spectrum_obj)  { lv_obj_set_x(s_spectrum_obj,  start_x); lv_obj_clear_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN); }
@@ -6977,8 +7043,12 @@ static void ui_advance_page(void)
     if (reader_view_is_active()) {
         reader_view_hide();
     } else {
-        ui_set_base_mode(ui_mode_get() == UI_MODE_PANADAPTER ? UI_MODE_FT8
-                                                             : UI_MODE_PANADAPTER, true);
+        // 3-stop carousel (v1.4): Panadapter -> FT8 -> CW -> Panadapter.
+        ui_mode_t cur = ui_mode_get();
+        ui_mode_t next = (cur == UI_MODE_PANADAPTER) ? UI_MODE_FT8
+                       : (cur == UI_MODE_FT8)        ? UI_MODE_CW
+                                                     : UI_MODE_PANADAPTER;
+        ui_set_base_mode(next, true);
     }
     // Close the drawer (if open) after switching. UX nicety, and (4c.1 finding)
     // an open drawer keeps LVGL busy enough to starve audio/fft tasks.

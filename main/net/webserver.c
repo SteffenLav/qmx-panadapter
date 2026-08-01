@@ -11,6 +11,7 @@
 #include "cat.h"              // cat_get_frequency, cat_get_band_list, cat_set_*
 #include "ui.h"               // ui_get_*, ui_set_zoom
 #include "ft8_screen_view.h"  // ft8_screen_view_is_active
+#include "ui_mode.h"          // ui_mode_get (CW page reports screen:"cw")
 #include "dsp.h"              // dsp_get_peak_dbm_around_vfo
 #include "display/display.h"  // display_lock / display_unlock
 #include "screenshot/screenshot.h"  // screenshot_capture_rgb565
@@ -102,7 +103,10 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "qmx_fw",       cat_get_qmx_fw());
     cJSON_AddStringToObject(root, "mode",         ui_get_mode_str());
     cJSON_AddStringToObject(root, "band",         ui_get_band_str());
-    cJSON_AddStringToObject(root, "screen",       ft8_screen_view_is_active() ? "ft8" : "panadapter");
+    cJSON_AddStringToObject(root, "screen",
+        ft8_screen_view_is_active()      ? "ft8"
+        : ui_mode_get() == UI_MODE_CW    ? "cw"
+                                         : "panadapter");
     // Apply mode defaults if CAT has not yet reported BW (matches Tab5 compute_passband_edges_hz)
     {
         uint32_t bw = ui_get_passband_width_hz();

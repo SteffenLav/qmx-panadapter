@@ -246,6 +246,28 @@ int cat_get_af_gain(void);
  */
 void cat_request_cw_passband(uint32_t hz);
 
+/* ---- CW keyer / decoder surface (CW page, v1.4) ---------------------------
+ * Three commands, all present in QMX 1_03_002 AND 1_04 (verified against both
+ * cached CAT manuals, docs/qmx-reference/):
+ *   KY <text>;  radio keys the CW itself (timing, envelope, keyer settings);
+ *               80-char circular TX buffer, append-while-sending OK, ?; on
+ *               overflow. NOTE the "Kenwood TS480 compatibility" System-Config
+ *               setting changes the wire format (fixed 24-char padded) - this
+ *               implementation speaks the compat-OFF form and is
+ *               HARDWARE-UNVERIFIED until the first bench session with a QMX.
+ *   KS / KSnnn; keyer speed get/set in WPM.
+ *   TB;         returns + empties the QMX's own CW-decode buffer ("TBtnns;",
+ *               t = KY chars remaining 0-9, 0 = receiving); polled ~1 Hz while
+ *               the CW page is visible (cat_cw_poll_set_active). Decoded text
+ *               is pushed to cw_screen_feed_decoded() (ui/cw_screen_view.h).
+ * All writes deferred to the poll task per the cross-thread CAT rule. */
+void cat_request_cw_send(const char *text);   /* expanded text, <= ~90 chars */
+void cat_request_keyer_wpm(uint8_t wpm);      /* KSnnn; set */
+void cat_query_keyer_wpm(void);               /* KS; -> cat_get_keyer_wpm() */
+int  cat_get_keyer_wpm(void);                 /* last readback, -1 = never */
+int  cat_get_cw_tx_remaining(void);           /* TB t-field: 0 = receiving, -1 = unknown */
+void cat_cw_poll_set_active(bool active);     /* TB; poll while CW page visible */
+
 /**
  * @brief Cooperatively pause/resume the background FA;/MD;/FW; poll loop.
  *
