@@ -139,9 +139,11 @@ static void refresh_mem_labels(void)
             txt = exp;
         lv_label_set_text(s_lbl_mem[i], txt);
     }
+    // ASCII fallback only - an em-dash is outside the compiled montserrat
+    // glyph range and renders as a tofu box (hardware-observed 2026-08-01).
     if (s_lbl_park)
         lv_label_set_text_fmt(s_lbl_park, "Park: %s",
-                              s.cw_park[0] ? s.cw_park : "\xE2\x80\x94");
+                              s.cw_park[0] ? s.cw_park : "--");
 }
 
 // ---- single-field editor modal ---------------------------------------------
@@ -480,7 +482,7 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_t *bpark = make_pane_btn(s_pane, 10, y, PANE_W - 20, 54, 0x1c2128, 0x7a4a10);
     lv_obj_add_event_cb(bpark, park_clicked_cb, LV_EVENT_CLICKED, NULL);
     s_lbl_park = lv_label_create(bpark);
-    lv_label_set_text(s_lbl_park, "Park: \xE2\x80\x94");
+    lv_label_set_text(s_lbl_park, "Park: --");
     lv_obj_set_style_text_color(s_lbl_park, lv_color_hex(0xFFA040), 0);
     lv_obj_set_style_text_font(s_lbl_park, &lv_font_montserrat_22, 0);
     lv_obj_center(s_lbl_park);
