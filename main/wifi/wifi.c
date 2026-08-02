@@ -24,6 +24,7 @@
 #include "webserver.h"
 #include "rigctld_server.h"
 #include "time_sync.h"
+#include "esp_timer.h"   // scan-hold timeout
 
 static const char *TAG = "wifi";
 
@@ -44,6 +45,19 @@ static bool s_wifi_started = false;
 // handler must NOT auto-reconnect — otherwise a user-requested stop would be
 // fought by the retry loop and the radio would come straight back up.
 static volatile bool s_wifi_user_disabled = false;
+
+// A user SSID scan competes with the reconnect loop for the C6's radio: with
+// an unreachable stored network the connect retries run back-to-back (the
+// backoff even sleeps ON the event-loop task), and every scan returns 0 APs
+// (hardware-captured 2026-08-02: stored hotel SSID gone, "scan done: 0 AP(s)"
+// ten seconds after the request, plenty of networks around). While a scan is
+// in flight AND we are not connected, the retry chain is held off and
+// re-kicked when the scan completes; time-bounded so a lost SCAN_DONE can't
+// kill WiFi. Scans while CONNECTED are untouched - they have always worked,
+// and dropping a live link to scan would be worse than the disease.
+static volatile bool    s_scan_hold = false;
+static volatile int64_t s_scan_hold_us = 0;
+#define SCAN_HOLD_TIMEOUT_US (15LL * 1000000)
 
 // True when WE created the STA netif (without IDF's default, un-guarded event
 // handlers) and therefore drive its start/connect/disconnect lifecycle from
@@ -158,6 +172,13 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
             esp_netif_action_connected(s_sta_netif, base, id, data);
         }
     } else if (id == WIFI_EVENT_SCAN_DONE) {
+        // Scan finished: if the retry chain was held for it, resume connecting
+        // (the chain is event-driven, so skipping a retry ends it - it must be
+        // re-kicked here or WiFi stays down until reboot).
+        if (s_scan_hold) {
+            s_scan_hold = false;
+            if (!s_wifi_user_disabled) esp_wifi_connect();
+        }
         static wifi_ap_record_t recs[WIFI_SCAN_MAX];
         uint16_t num = WIFI_SCAN_MAX;
         if (esp_wifi_scan_get_ap_records(&num, recs) != ESP_OK) {
@@ -188,6 +209,14 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
         webserver_stop();
         if (s_wifi_user_disabled) {
             ESP_LOGI(TAG, "Disconnected (WiFi turned off by user); not reconnecting");
+            return;
+        }
+        if (s_scan_hold &&
+            (esp_timer_get_time() - s_scan_hold_us) < SCAN_HOLD_TIMEOUT_US) {
+            // A user SSID scan is in flight: don't immediately re-grab the
+            // radio (and don't sleep the event loop in the backoff, which
+            // would also delay SCAN_DONE). The scan-done path resumes us.
+            ESP_LOGI(TAG, "Disconnected during SSID scan - retry held until scan completes");
             return;
         }
         s_retry_count++;
@@ -531,9 +560,23 @@ static void wifi_scan_task(void *arg)
         s_wifi_started = true;
     }
     s_scan_n = 0;
+    // Not connected -> the reconnect chain owns the radio (an unreachable
+    // stored SSID retries forever) and starves the scan to 0 APs. Hold the
+    // chain and abort any in-flight connect attempt so the scan gets real
+    // airtime; the SCAN_DONE handler resumes connecting.
+    if (!(xEventGroupGetBits(s_events) & BIT_CONNECTED)) {
+        s_scan_hold_us = esp_timer_get_time();
+        s_scan_hold = true;
+        esp_wifi_disconnect();               // no-op error if idle - fine
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
     wifi_scan_config_t scan_cfg = { 0 };  // active scan, all channels
     if (esp_wifi_scan_start(&scan_cfg, false) != ESP_OK) {
         s_scan_state = WIFI_SCAN_FAILED;
+        if (s_scan_hold) {                   // resume the chain we held
+            s_scan_hold = false;
+            if (!s_wifi_user_disabled) esp_wifi_connect();
+        }
     }
     vTaskDelete(NULL);
 }
