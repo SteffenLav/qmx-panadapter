@@ -235,6 +235,17 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
             // Back off — try again every 10 s.
             ESP_LOGW(TAG, "Disconnected (reason=%d) backing off", e->reason);
             vTaskDelay(pdMS_TO_TICKS(10000));
+            // Re-check the scan hold AFTER the sleep: a scan started during
+            // the backoff would otherwise be flushed by this wake-up connect
+            // (hardware-caught 2026-08-02: the first Scan press after a
+            // backoff always read 0 APs; a press during a connect attempt
+            // worked - the entry check above only covers that case). The
+            // SCAN_DONE handler re-kicks the chain, so returning here is safe.
+            if (s_scan_hold &&
+                (esp_timer_get_time() - s_scan_hold_us) < SCAN_HOLD_TIMEOUT_US) {
+                ESP_LOGI(TAG, "backoff wake during SSID scan - retry held");
+                return;
+            }
             esp_wifi_connect();
         }
     }
