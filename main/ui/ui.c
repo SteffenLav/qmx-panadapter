@@ -1939,11 +1939,13 @@ void ui_set_sim_mode_indicator(bool active)
 void ui_refresh_sim_mode_indicator(void)
 {
     bool ft4 = (ft8_op_mode_get() == FT8_OP_MODE_FT4);
-    // The breathing red bezel warns "nothing transmitted is real" - it shows
-    // for FT8 sim wherever you are (its phantoms persist in the decode list),
-    // and for CW practice only while the CW page is up (its own flag).
-    ui_set_sim_mode_indicator(s_sim_mode_en ||
-                              (s_cw_sim_en && ui_mode_get() == UI_MODE_CW));
+    // The breathing red bezel warns "nothing transmitted is real". Both sim
+    // flags are PAGE-scoped (operator, 2026-08-02): FT8 sim shows it only on
+    // the FT8/FT4 page, CW practice only on the CW page, the panadapter
+    // never - each page's own phantoms are the only thing the flags drive.
+    ui_mode_t m = ui_mode_get();
+    ui_set_sim_mode_indicator((s_sim_mode_en && m == UI_MODE_FT8) ||
+                              (s_cw_sim_en   && m == UI_MODE_CW));
     apply_sim_mode_lock(ft4);
 }
 
@@ -2751,9 +2753,6 @@ static void update_freq_axis_labels(uint32_t center_hz)
     for (int i = 0; i < 5; i++) {
         if (!s_tick_labels[i]) continue;
         int x = lx0 + (lw * i) / 4;
-        if (i == 0)      lv_obj_align(s_tick_labels[i], LV_ALIGN_BOTTOM_LEFT, lx0 + 2, -3);
-        else if (i == 4) lv_obj_align(s_tick_labels[i], LV_ALIGN_BOTTOM_RIGHT, -2, -3);
-        else             lv_obj_align(s_tick_labels[i], LV_ALIGN_BOTTOM_LEFT, x - 28, -3);
         int32_t offset = pan_hz +
             (int32_t)(((int64_t)span_hz * (x - DISPLAY_H_RES / 2)) / DISPLAY_H_RES);
         int32_t hz = (int32_t)center_hz + offset;
@@ -2772,6 +2771,19 @@ static void update_freq_axis_labels(uint32_t center_hz)
                      (unsigned long)((hz / 1000) % 1000));
         }
         lv_label_set_text(s_tick_labels[i], buf);
+        // Position AFTER the text is set: the middle three labels are
+        // centered dead on their tick mark (operator, 2026-08-02 - the old
+        // fixed -28 nudge left them offset right), which needs the rendered
+        // width; the two edge labels stay edge-aligned so they never clip.
+        if (i == 0) {
+            lv_obj_align(s_tick_labels[i], LV_ALIGN_BOTTOM_LEFT, lx0 + 2, -3);
+        } else if (i == 4) {
+            lv_obj_align(s_tick_labels[i], LV_ALIGN_BOTTOM_RIGHT, -2, -3);
+        } else {
+            lv_obj_update_layout(s_tick_labels[i]);
+            int lw_px = (int)lv_obj_get_width(s_tick_labels[i]);
+            lv_obj_align(s_tick_labels[i], LV_ALIGN_BOTTOM_LEFT, x - lw_px / 2, -3);
+        }
     }
 }
 
