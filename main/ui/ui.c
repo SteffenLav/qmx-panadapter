@@ -1307,6 +1307,19 @@ static void zoom_popup_open(void)
 // Re-center the passband-centered pan offset (zoom > x1) and push it to the
 // DSP zoom-FFT. No LVGL calls - safe to call from non-LVGL tasks (e.g. the
 // CAT task, when mode/passband width changes).
+// CW page: the 320 px left pane hides the leftmost quarter of the spectrum,
+// so the center of what the operator actually SEES is x=800, not x=640.
+// Shifting the displayed window down by span/8 puts the passband center at
+// the visible center, and because it's a plain pan offset, the freq axis,
+// waterfall, VFO cursor and tap-to-tune all follow the same mapping for
+// free (operator, 2026-08-02: "center freq needs to be in the center of the
+// scale"). In bins of the un-zoomed FFT: (160/1280) * FFT/zoom.
+static int cw_visible_center_shift_bins(float zoom)
+{
+    if (ui_mode_get() != UI_MODE_CW) return 0;
+    return -(int)lroundf((float)DSP_FFT_SIZE / (8.0f * zoom));
+}
+
 static void recompute_zoom_pan(void)
 {
     if (s_zoom_factor <= 1.0f) return;
@@ -1314,7 +1327,8 @@ static void recompute_zoom_pan(void)
     compute_passband_edges_hz(&pb_low_hz, &pb_high_hz);
     int32_t pb_center_hz = (pb_low_hz + pb_high_hz) / 2;
     float bin_width_hz = (float)DSP_SAMPLE_RATE_HZ / (float)DSP_FFT_SIZE;
-    s_pan_offset_bins = (int)lroundf((float)pb_center_hz / bin_width_hz);
+    s_pan_offset_bins = (int)lroundf((float)pb_center_hz / bin_width_hz)
+                        + cw_visible_center_shift_bins(s_zoom_factor);
     dsp_set_zoom(s_zoom_factor, s_pan_offset_bins, ui_get_if_bin_shift(DSP_FFT_SIZE));
 }
 
@@ -1329,7 +1343,8 @@ void ui_set_zoom(float zoom, int pan_bins)
         compute_passband_edges_hz(&pb_low_hz, &pb_high_hz);
         int32_t pb_center_hz = (pb_low_hz + pb_high_hz) / 2;
         float bin_width_hz = (float)DSP_SAMPLE_RATE_HZ / (float)DSP_FFT_SIZE;
-        pan_bins = (int)lroundf((float)pb_center_hz / bin_width_hz);
+        pan_bins = (int)lroundf((float)pb_center_hz / bin_width_hz)
+                   + cw_visible_center_shift_bins(zoom);
     }
     s_zoom_factor     = zoom;
     s_pan_offset_bins = pan_bins;
@@ -6565,19 +6580,30 @@ static void drawer_set_ft8_mode(bool ft8)
         for (int k = 0; k < n_keep; k++) {
             if (keep[k] == i) { kept = true; break; }
         }
-        // DRAWER_SEC_DISTANCE and DRAWER_SEC_SIMMODE are FT8-only (meaningless
-        // in Panadapter mode), unlike the rest of keep[] which is shared
-        // between both modes - so they're hidden, not kept, when !ft8.
+        // DRAWER_SEC_DISTANCE is FT8-only (meaningless elsewhere) and
+        // DRAWER_SEC_SIMMODE shows on the FT8 AND CW pages (both have phantom
+        // practice stations riding the one global sim_mode_en switch), never
+        // in plain Panadapter mode.
         // DRAWER_SEC_CWAUDIO is shelved (cw_audio.c) and hidden in BOTH modes.
         // DRAWER_SEC_TUNE2 is hidden whenever the Tune button is (FT8 mode or
         // <1_04 firmware).
-        if ((ft8 && !kept) || (!ft8 && (i == DRAWER_SEC_DISTANCE || i == DRAWER_SEC_SIMMODE)) ||
+        bool cw_page = (ui_mode_get() == UI_MODE_CW);
+        if ((ft8 && !kept) ||
+            (!ft8 && (i == DRAWER_SEC_DISTANCE ||
+                      (i == DRAWER_SEC_SIMMODE && !cw_page))) ||
             i == DRAWER_SEC_CWAUDIO || (i == DRAWER_SEC_TUNE2 && !tune_ok)) {
             lv_obj_add_flag(s_drawer_sections[i], LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_clear_flag(s_drawer_sections[i], LV_OBJ_FLAG_HIDDEN);
         }
     }
+
+    // The one checkbox drives phantom practice on whichever page is up -
+    // name it for the page so its effect is obvious.
+    if (s_lbl_sim_mode)
+        lv_label_set_text(s_lbl_sim_mode,
+            ui_mode_get() == UI_MODE_CW ? "CW Simulation Mode"
+                                        : "FT8 Simulation Mode");
 
     if (ft8) {
         // Start below the always-present "User Manual" button (built at y=96,
@@ -7094,6 +7120,10 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
             // change wouldn't trigger a refresh on its own).
             update_bandplan_strip(s_cw_snapshot.freq_hz);
         }
+        // Re-anchor the zoom window on the VISIBLE center (the pane hides
+        // the left quarter) and refresh the axis labels to match.
+        recompute_zoom_pan();
+        update_freq_axis_labels(s_cw_snapshot.freq_hz);
         cw_screen_view_show();
         return;
     }
@@ -7177,6 +7207,9 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
         if (s_pan_snapshot.valid && s_pan_snapshot.mode[0])
             ui_update_mode(s_pan_snapshot.mode);
         if (s_last_qmx_freq_hz) update_bandplan_strip(s_last_qmx_freq_hz);
+        // Undo the CW page's visible-center shift (screen-center anchoring).
+        recompute_zoom_pan();
+        if (s_last_qmx_freq_hz) update_freq_axis_labels(s_last_qmx_freq_hz);
         int start_x = animate ? -DISPLAY_H_RES : 0;
         if (s_spectrum_obj)  { lv_obj_set_x(s_spectrum_obj,  start_x); lv_obj_clear_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN); }
         if (s_label_bar)     { lv_obj_set_x(s_label_bar,     start_x); lv_obj_clear_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN); }

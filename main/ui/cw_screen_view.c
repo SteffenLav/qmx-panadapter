@@ -175,15 +175,20 @@ static void refresh_mem_labels(void)
                               s.cw_park[0] ? s.cw_park : "--");
 }
 
-// ---- single-field editor modal ---------------------------------------------
-// Edits one memory slot or the park reference at a time — one big textarea
-// plus the on-screen keyboard, so it stays finger-friendly (six stacked
-// fields plus a keyboard do not fit 720 px).
+// ---- editor modal ------------------------------------------------------------
+// ALL SIX memories in one window (operator request 2026-08-02) - long-press
+// any memory button opens it with that field focused; Save writes all six.
+// Park mode (edit_open(-1)) reuses the same modal with only the first field
+// shown. Buttons live in the title row (the P4-style top-right placement
+// from v1.3.0) so six fields + the on-screen keyboard fit 720 px.
 static lv_obj_t *s_edit_modal = NULL;
-static lv_obj_t *s_edit_ta    = NULL;
+static lv_obj_t *s_edit_ta6[N_CW_MEM] = {0};
+static lv_obj_t *s_edit_num[N_CW_MEM] = {0};
 static lv_obj_t *s_edit_title = NULL;
 static lv_obj_t *s_edit_kb    = NULL;
-static int       s_edit_slot  = -1;    // 0..5 = memory, -1 = park
+static bool      s_edit_park  = false;
+
+static void refresh_next_label(void);   // fwd (ESM section below)
 
 static void edit_close(void)
 {
@@ -193,16 +198,26 @@ static void edit_close(void)
 static void edit_save_cb(lv_event_t *e)
 {
     (void)e;
-    const char *raw = s_edit_ta ? lv_textarea_get_text(s_edit_ta) : NULL;
-    char buf[44] = {0};
-    if (raw) strncpy(buf, raw, sizeof(buf) - 1);
-    for (char *p = buf; *p; p++) *p = (char)toupper((unsigned char)*p);
-    if (s_edit_slot >= 0) settings_set_cw_msg((uint8_t)s_edit_slot, buf);
-    else                  settings_set_cw_park(buf);
-    ESP_LOGI(TAG, "saved %s: '%s'",
-             s_edit_slot >= 0 ? "memory" : "park", buf);
+    if (s_edit_park) {
+        char buf[16] = {0};
+        const char *raw = lv_textarea_get_text(s_edit_ta6[0]);
+        if (raw) snprintf(buf, sizeof(buf), "%s", raw);
+        for (char *p = buf; *p; p++) *p = (char)toupper((unsigned char)*p);
+        settings_set_cw_park(buf);
+        ESP_LOGI(TAG, "saved park: '%s'", buf);
+    } else {
+        for (int i = 0; i < N_CW_MEM; i++) {
+            char buf[44] = {0};
+            const char *raw = lv_textarea_get_text(s_edit_ta6[i]);
+            if (raw) snprintf(buf, sizeof(buf), "%s", raw);
+            for (char *p = buf; *p; p++) *p = (char)toupper((unsigned char)*p);
+            settings_set_cw_msg((uint8_t)i, buf);
+        }
+        ESP_LOGI(TAG, "saved all 6 CW memories");
+    }
     edit_close();
     refresh_mem_labels();
+    refresh_next_label();
 }
 
 static void edit_cancel_cb(lv_event_t *e) { (void)e; edit_close(); }
@@ -216,9 +231,13 @@ static void edit_kb_event_cb(lv_event_t *e)
 
 static void edit_ta_focused_cb(lv_event_t *e)
 {
-    (void)e;
+    lv_obj_t *ta = lv_event_get_target(e);
+    // One blinking cursor at a time, keyboard follows the focused field.
+    for (int i = 0; i < N_CW_MEM; i++)
+        if (s_edit_ta6[i] && s_edit_ta6[i] != ta)
+            lv_obj_remove_state(s_edit_ta6[i], LV_STATE_FOCUSED);
     if (!s_edit_kb) return;
-    lv_keyboard_set_textarea(s_edit_kb, s_edit_ta);
+    lv_keyboard_set_textarea(s_edit_kb, ta);
     lv_obj_clear_flag(s_edit_kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_edit_kb);
 }
@@ -239,39 +258,30 @@ static void edit_build(void)
     lv_obj_add_flag(s_edit_modal, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *panel = lv_obj_create(s_edit_modal);
-    lv_obj_set_size(panel, 1040, 240);
-    lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 18);
+    lv_obj_set_size(panel, 1080, 420);
+    lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 8);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_border_color(panel, lv_color_hex(0x555555), 0);
     lv_obj_set_style_border_width(panel, 2, 0);
     lv_obj_set_style_radius(panel, 10, 0);
-    lv_obj_set_style_pad_all(panel, 20, 0);
+    lv_obj_set_style_pad_all(panel, 16, 0);
     lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
 
     s_edit_title = lv_label_create(panel);
-    lv_label_set_text(s_edit_title, "CW memory");
+    lv_label_set_text(s_edit_title, "CW memories");
     lv_obj_set_style_text_color(s_edit_title, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(s_edit_title, &lv_font_montserrat_28, 0);
-    lv_obj_align(s_edit_title, LV_ALIGN_TOP_LEFT, 0, 0);
+    lv_obj_align(s_edit_title, LV_ALIGN_TOP_LEFT, 0, 4);
 
     lv_obj_t *hint = lv_label_create(panel);
-    lv_label_set_text(hint, "{MYCALL} and {PARK} are filled in when sent");
+    lv_label_set_text(hint, "{MYCALL} {PARK} {CALL} fill in when sent");
     lv_obj_set_style_text_color(hint, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_20, 0);
-    lv_obj_align(hint, LV_ALIGN_TOP_RIGHT, 0, 8);
-
-    s_edit_ta = lv_textarea_create(panel);
-    lv_obj_set_size(s_edit_ta, 660, 60);
-    lv_obj_align(s_edit_ta, LV_ALIGN_TOP_LEFT, 0, 54);
-    lv_textarea_set_one_line(s_edit_ta, true);
-    lv_textarea_set_max_length(s_edit_ta, 43);
-    lv_obj_set_style_text_font(s_edit_ta, &lv_font_montserrat_24, 0);
-    ui_theme_style_textarea(s_edit_ta);
-    lv_obj_add_event_cb(s_edit_ta, edit_ta_focused_cb, LV_EVENT_FOCUSED, NULL);
+    lv_obj_set_style_text_font(hint, &lv_font_montserrat_18, 0);
+    lv_obj_align(hint, LV_ALIGN_TOP_LEFT, 320, 12);
 
     lv_obj_t *btn_cancel = lv_btn_create(panel);
-    lv_obj_set_size(btn_cancel, 150, 60);
-    lv_obj_align(btn_cancel, LV_ALIGN_TOP_RIGHT, -170, 54);
+    lv_obj_set_size(btn_cancel, 150, 48);
+    lv_obj_align(btn_cancel, LV_ALIGN_TOP_RIGHT, -166, 0);
     lv_obj_set_style_bg_color(btn_cancel, lv_color_hex(0x962020), 0);
     lv_obj_set_style_radius(btn_cancel, 8, 0);
     lv_obj_add_event_cb(btn_cancel, edit_cancel_cb, LV_EVENT_CLICKED, NULL);
@@ -282,8 +292,8 @@ static void edit_build(void)
     lv_obj_center(lc);
 
     lv_obj_t *btn_save = lv_btn_create(panel);
-    lv_obj_set_size(btn_save, 150, 60);
-    lv_obj_align(btn_save, LV_ALIGN_TOP_RIGHT, 0, 54);
+    lv_obj_set_size(btn_save, 150, 48);
+    lv_obj_align(btn_save, LV_ALIGN_TOP_RIGHT, 0, 0);
     lv_obj_set_style_bg_color(btn_save, lv_color_hex(0x2e8b3a), 0);
     lv_obj_set_style_radius(btn_save, 8, 0);
     lv_obj_add_event_cb(btn_save, edit_save_cb, LV_EVENT_CLICKED, NULL);
@@ -293,6 +303,24 @@ static void edit_build(void)
     lv_obj_set_style_text_font(ls, &lv_font_montserrat_24, 0);
     lv_obj_center(ls);
     ui_kbd_set_buttons(btn_save, btn_cancel);
+
+    for (int i = 0; i < N_CW_MEM; i++) {
+        int fy = 60 + i * 54;
+        s_edit_num[i] = lv_label_create(panel);
+        lv_label_set_text_fmt(s_edit_num[i], "%d", i + 1);
+        lv_obj_set_style_text_color(s_edit_num[i], lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+        lv_obj_set_style_text_font(s_edit_num[i], &lv_font_montserrat_24, 0);
+        lv_obj_set_pos(s_edit_num[i], 4, fy + 12);
+
+        s_edit_ta6[i] = lv_textarea_create(panel);
+        lv_obj_set_size(s_edit_ta6[i], 1010, 48);
+        lv_obj_set_pos(s_edit_ta6[i], 34, fy);
+        lv_textarea_set_one_line(s_edit_ta6[i], true);
+        lv_textarea_set_max_length(s_edit_ta6[i], 43);
+        lv_obj_set_style_text_font(s_edit_ta6[i], &lv_font_montserrat_22, 0);
+        ui_theme_style_textarea(s_edit_ta6[i]);
+        lv_obj_add_event_cb(s_edit_ta6[i], edit_ta_focused_cb, LV_EVENT_FOCUSED, NULL);
+    }
 
     s_edit_kb = lv_keyboard_create(s_edit_modal);
     ui_theme_style_keyboard(s_edit_kb);
@@ -305,23 +333,36 @@ static void edit_build(void)
     lv_obj_add_event_cb(s_edit_kb, edit_kb_event_cb, LV_EVENT_CANCEL, NULL);
 }
 
+// slot 0..5 = memories editor focused on that slot; -1 = park (single field).
 static void edit_open(int slot)
 {
     edit_build();
-    s_edit_slot = slot;
+    s_edit_park = (slot < 0);
     qmx_settings_t s;
     settings_load_all(&s);
-    if (slot >= 0) {
-        lv_label_set_text_fmt(s_edit_title, "CW memory %d", slot + 1);
-        lv_textarea_set_text(s_edit_ta, s.cw_msg[slot]);
-    } else {
+    if (s_edit_park) {
         lv_label_set_text(s_edit_title, "POTA park reference");
-        lv_textarea_set_text(s_edit_ta, s.cw_park);
+        lv_textarea_set_text(s_edit_ta6[0], s.cw_park);
+        lv_textarea_set_max_length(s_edit_ta6[0], 15);
+        for (int i = 1; i < N_CW_MEM; i++) {
+            lv_obj_add_flag(s_edit_ta6[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_edit_num[i], LV_OBJ_FLAG_HIDDEN);
+        }
+        lv_obj_add_flag(s_edit_num[0], LV_OBJ_FLAG_HIDDEN);
+        slot = 0;
+    } else {
+        lv_label_set_text(s_edit_title, "CW memories");
+        for (int i = 0; i < N_CW_MEM; i++) {
+            lv_textarea_set_max_length(s_edit_ta6[i], 43);
+            lv_textarea_set_text(s_edit_ta6[i], s.cw_msg[i]);
+            lv_obj_clear_flag(s_edit_ta6[i], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(s_edit_num[i], LV_OBJ_FLAG_HIDDEN);
+        }
     }
     lv_obj_add_flag(s_edit_kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_edit_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_edit_modal);
-    ui_theme_focus_textarea(s_edit_ta);
+    ui_theme_focus_textarea(s_edit_ta6[slot]);
 }
 
 // ---- sending ----------------------------------------------------------------
@@ -617,9 +658,44 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_font(hdr, &lv_font_montserrat_48, 0);
     lv_obj_set_pos(hdr, 14, 6);
 
-    // ESM NEXT button (Tier 2): prime position under the header. Green like
-    // every commit button; the body label always states what a tap will key.
-    s_btn_next = make_pane_btn(s_pane, 10, 58, PANE_W - 20, 68, 0x2e8b3a, 0x2e8b3a);
+    // Pane order (operator, 2026-08-02): header, then the SETTINGS (WPM,
+    // park), then the ACTIONS (NEXT, memories), status at the bottom.
+
+    // WPM stepper row.
+    lv_obj_t *bm = make_pane_btn(s_pane, 10, 58, 70, 48, 0x2a2f37, 0x555555);
+    lv_obj_add_event_cb(bm, wpm_minus_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *lm = lv_label_create(bm);
+    lv_label_set_text(lm, "-");
+    lv_obj_set_style_text_color(lm, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(lm, &lv_font_montserrat_28, 0);
+    lv_obj_center(lm);
+
+    s_lbl_wpm = lv_label_create(s_pane);
+    lv_label_set_text(s_lbl_wpm, "-- WPM");
+    lv_obj_set_style_text_color(s_lbl_wpm, lv_color_hex(0xFFA040), 0);
+    lv_obj_set_style_text_font(s_lbl_wpm, &lv_font_montserrat_24, 0);
+    lv_obj_set_pos(s_lbl_wpm, 96, 69);
+
+    lv_obj_t *bp = make_pane_btn(s_pane, PANE_W - 80, 58, 70, 48, 0x2a2f37, 0x555555);
+    lv_obj_add_event_cb(bp, wpm_plus_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *lp = lv_label_create(bp);
+    lv_label_set_text(lp, "+");
+    lv_obj_set_style_text_color(lp, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(lp, &lv_font_montserrat_28, 0);
+    lv_obj_center(lp);
+
+    // Park button.
+    lv_obj_t *bpark = make_pane_btn(s_pane, 10, 110, PANE_W - 20, 44, 0x1c2128, 0x7a4a10);
+    lv_obj_add_event_cb(bpark, park_clicked_cb, LV_EVENT_CLICKED, NULL);
+    s_lbl_park = lv_label_create(bpark);
+    lv_label_set_text(s_lbl_park, "Park: --");
+    lv_obj_set_style_text_color(s_lbl_park, lv_color_hex(0xFFA040), 0);
+    lv_obj_set_style_text_font(s_lbl_park, &lv_font_montserrat_22, 0);
+    lv_obj_center(s_lbl_park);
+
+    // ESM NEXT button (Tier 2): green like every commit button; the body
+    // label always states what a tap will key.
+    s_btn_next = make_pane_btn(s_pane, 10, 158, PANE_W - 20, 68, 0x2e8b3a, 0x2e8b3a);
     lv_obj_add_event_cb(s_btn_next, next_pressed_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_btn_next, next_clicked_cb, LV_EVENT_CLICKED, NULL);
     s_lbl_next_hdr = lv_label_create(s_btn_next);
@@ -637,7 +713,7 @@ void cw_screen_view_init(lv_obj_t *parent)
 
     // Six memory buttons, single-line previews (long-press shows the full
     // text in the editor; the NEXT button carries the full ladder text).
-    int y = 132;
+    int y = 232;
     for (int i = 0; i < N_CW_MEM; i++) {
         s_btn_mem[i] = make_pane_btn(s_pane, 10, y, PANE_W - 20, 44, 0x2a2f37, 0x555555);
         lv_obj_add_event_cb(s_btn_mem[i], mem_pressed_cb, LV_EVENT_PRESSED, NULL);
@@ -652,41 +728,7 @@ void cw_screen_view_init(lv_obj_t *parent)
         lv_obj_center(s_lbl_mem[i]);
         y += 50;
     }
-
-    // WPM stepper row.
-    y += 4;
-    lv_obj_t *bm = make_pane_btn(s_pane, 10, y, 70, 48, 0x2a2f37, 0x555555);
-    lv_obj_add_event_cb(bm, wpm_minus_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *lm = lv_label_create(bm);
-    lv_label_set_text(lm, "-");
-    lv_obj_set_style_text_color(lm, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(lm, &lv_font_montserrat_28, 0);
-    lv_obj_center(lm);
-
-    s_lbl_wpm = lv_label_create(s_pane);
-    lv_label_set_text(s_lbl_wpm, "-- WPM");
-    lv_obj_set_style_text_color(s_lbl_wpm, lv_color_hex(0xFFA040), 0);
-    lv_obj_set_style_text_font(s_lbl_wpm, &lv_font_montserrat_24, 0);
-    lv_obj_set_pos(s_lbl_wpm, 96, y + 11);
-
-    lv_obj_t *bp = make_pane_btn(s_pane, PANE_W - 80, y, 70, 48, 0x2a2f37, 0x555555);
-    lv_obj_add_event_cb(bp, wpm_plus_cb, LV_EVENT_CLICKED, NULL);
-    lv_obj_t *lp = lv_label_create(bp);
-    lv_label_set_text(lp, "+");
-    lv_obj_set_style_text_color(lp, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(lp, &lv_font_montserrat_28, 0);
-    lv_obj_center(lp);
-    y += 54;
-
-    // Park button.
-    lv_obj_t *bpark = make_pane_btn(s_pane, 10, y, PANE_W - 20, 44, 0x1c2128, 0x7a4a10);
-    lv_obj_add_event_cb(bpark, park_clicked_cb, LV_EVENT_CLICKED, NULL);
-    s_lbl_park = lv_label_create(bpark);
-    lv_label_set_text(s_lbl_park, "Park: --");
-    lv_obj_set_style_text_color(s_lbl_park, lv_color_hex(0xFFA040), 0);
-    lv_obj_set_style_text_font(s_lbl_park, &lv_font_montserrat_22, 0);
-    lv_obj_center(s_lbl_park);
-    y += 50;
+    y += 6;
 
     // Status line.
     s_lbl_status = lv_label_create(s_pane);
