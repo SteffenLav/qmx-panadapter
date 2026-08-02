@@ -652,14 +652,16 @@ static void refresh_card(void)
         snprintf(worked, sizeof(worked), "new station");
     char rst[4];
     cw_qso_get_rst_rcvd(rst, sizeof(rst));
+    // ASCII separators only - a middle dot is outside the compiled montserrat
+    // glyph range and renders as a tofu box (hardware-observed 2026-08-02).
     if (tgt[0] && rst[0])
-        lv_label_set_text_fmt(s_card_info, "%s\n%s · rcvd %s",
+        lv_label_set_text_fmt(s_card_info, "%s\n%s - rcvd %s",
                               country ? country : "?", worked, rst);
     else
         lv_label_set_text_fmt(s_card_info, "%s\n%s",
                               country ? country : "?", worked);
     lv_label_set_text(s_card_hint,
-                      tgt[0] ? "working - NEXT advances · tap to drop"
+                      tgt[0] ? "working - NEXT advances, tap to drop"
                              : "tap to work this station");
     lv_obj_set_style_border_color(s_card,
         lv_color_hex(tgt[0] ? 0xFFA040 : 0x555555), 0);
@@ -907,7 +909,9 @@ void cw_screen_view_init(lv_obj_t *parent)
 
     s_card_info = lv_label_create(s_card);
     lv_label_set_text(s_card_info, "");
-    lv_label_set_long_mode(s_card_info, LV_LABEL_LONG_DOT);
+    // WRAP, not DOT: the info is two lines (country + worked-status) and DOT
+    // truncated it to "USA..." (hardware-observed 2026-08-02).
+    lv_label_set_long_mode(s_card_info, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_card_info, 310);
     lv_obj_set_style_text_color(s_card_info, lv_color_hex(0xdddddd), 0);
     lv_obj_set_style_text_font(s_card_info, &lv_font_montserrat_18, 0);

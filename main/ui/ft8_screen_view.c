@@ -1171,7 +1171,7 @@ static void t_clock_cb(lv_timer_t *t)
             // duplication - and it cost a whole line on a label that already
             // changes several times per slot, making the wrap harder to read.
             if (clash)
-                snprintf(b, sizeof(b), "Transmitting:\n%s%s\nTAP TO ABORT\n⚠ FREQ BUSY", tx_text, cq_line);
+                snprintf(b, sizeof(b), "Transmitting:\n%s%s\nTAP TO ABORT\n" LV_SYMBOL_WARNING " FREQ BUSY", tx_text, cq_line);
             else
                 snprintf(b, sizeof(b), "Transmitting:\n%s%s\nTAP TO ABORT", tx_text, cq_line);
             lv_label_set_text(s_lbl_tx, b);
@@ -1212,7 +1212,7 @@ static void t_clock_cb(lv_timer_t *t)
             // the state where it's still changeable, so the chip is where the
             // operator should be looking anyway.
             if (clash)
-                snprintf(b, sizeof(b), "TX armed:\n%s%s\n%s slot, ~%ds\nTAP TO CANCEL\n⚠ FREQ BUSY",
+                snprintf(b, sizeof(b), "TX armed:\n%s%s\n%s slot, ~%ds\nTAP TO CANCEL\n" LV_SYMBOL_WARNING " FREQ BUSY",
                          tx_text, cq_line, tx_even ? "EVEN" : "ODD", secs_until);
             else
                 snprintf(b, sizeof(b), "TX armed:\n%s%s\n%s slot, ~%ds\nTAP TO CANCEL",

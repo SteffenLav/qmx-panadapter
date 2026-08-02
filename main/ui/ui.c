@@ -6679,10 +6679,20 @@ static void drawer_set_ft8_mode(bool ft8)
         // height so the drawer stays gap-free on 1_03 firmware.
         int tune_y = s_drawer_section_y[DRAWER_SEC_TUNE2];
         int shift  = tune_ok ? 0 : DRAWER_TUNE2_H;
+        // CW page: the sim checkbox slots in directly ABOVE WiFi setup - the
+        // FT8 drawer's arrangement (operator, 2026-08-02) - so everything
+        // from WiFi down makes room for its 56 px.
+        bool cw_page = (ui_mode_get() == UI_MODE_CW);
+        int wifi_y   = s_drawer_section_y[DRAWER_SEC_WIFI];
+        int wifi_yy  = (wifi_y > tune_y) ? wifi_y - shift : wifi_y;
         for (int i = 0; i < N_DRAWER_SECTIONS; i++) {
             if (!s_drawer_sections[i]) continue;
             int yy = s_drawer_section_y[i];
             if (yy > tune_y) yy -= shift;
+            if (cw_page) {
+                if (i == DRAWER_SEC_CWSIM) yy = wifi_yy;
+                else if (yy >= wifi_yy)    yy += 56;
+            }
             lv_obj_set_pos(s_drawer_sections[i], 0, yy);
         }
     }
