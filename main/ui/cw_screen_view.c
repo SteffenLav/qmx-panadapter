@@ -25,6 +25,9 @@
 #include "ui.h"
 #include "settings.h"
 #include "cat.h"
+#include "cw_qso.h"
+#include "util/dxcc.h"
+#include "adif/adif_log.h"
 
 #include <string.h>
 #include <strings.h>   // strncasecmp
@@ -74,6 +77,20 @@ static lv_obj_t *s_lbl_status = NULL;
 static lv_timer_t *s_timer   = NULL;
 static bool      s_shown     = false;
 
+// ESM NEXT button (Tier 2): the one-tap QSO ladder. Header line names the
+// state, body shows exactly what a tap will key. Long-press resets to CQ.
+static lv_obj_t *s_btn_next     = NULL;
+static lv_obj_t *s_lbl_next_hdr = NULL;
+static lv_obj_t *s_lbl_next     = NULL;
+
+// Station card: the captured/adopted callsign, enriched (country from the
+// dxcc tables, worked-before from the ADIF cache). Tap = adopt (pounce);
+// tap again while adopted = drop.
+static lv_obj_t *s_card       = NULL;
+static lv_obj_t *s_card_call  = NULL;
+static lv_obj_t *s_card_info  = NULL;
+static lv_obj_t *s_card_hint  = NULL;
+
 // ---- decode ring (written from the CDC RX context, read by the timer) ------
 #define DEC_RING_CAP 512
 static char           s_dec_ring[DEC_RING_CAP];
@@ -84,6 +101,7 @@ static portMUX_TYPE   s_dec_mux = portMUX_INITIALIZER_UNLOCKED;
 void cw_screen_feed_decoded(const char *s, int n)
 {
     if (!s || n <= 0) return;
+    cw_qso_feed(s, n);   // callsign capture / ESM (spinlock-only, any context)
     portENTER_CRITICAL(&s_dec_mux);
     for (int i = 0; i < n; i++) {
         char c = s[i];
@@ -111,6 +129,8 @@ static bool expand_macros(const char *in, char *out, size_t out_sz,
     settings_load_all(&s);
     size_t o = 0;
     *missing = NULL;
+    char tgt[16];
+    cw_qso_get_target(tgt, sizeof(tgt));
     for (const char *p = in; *p && o + 1 < out_sz; ) {
         const char *val = NULL;
         if (strncasecmp(p, "{MYCALL}", 8) == 0) {
@@ -119,6 +139,9 @@ static bool expand_macros(const char *in, char *out, size_t out_sz,
         } else if (strncasecmp(p, "{PARK}", 6) == 0) {
             if (!s.cw_park[0]) { *missing = "park (tap Park)"; return false; }
             val = s.cw_park; p += 6;
+        } else if (strncasecmp(p, "{CALL}", 6) == 0) {
+            if (!tgt[0]) { *missing = "station (tap the card)"; return false; }
+            val = tgt; p += 6;
         }
         if (val) {
             while (*val && o + 1 < out_sz) out[o++] = (char)toupper((unsigned char)*val++);
@@ -301,6 +324,41 @@ static void edit_open(int slot)
     ui_theme_focus_textarea(s_edit_ta);
 }
 
+// ---- sending ----------------------------------------------------------------
+// The ONE path every CW transmission takes (memory buttons and the ESM NEXT
+// button): macro expansion, the simulation-mode interlock (sim never reaches
+// the radio - the ft8_tx rule applied here at the single choke point), the
+// CAT hand-off, and the capture notification. Returns true if "sent" (real
+// or sim), false with a toast when something needed is missing.
+static bool send_cw_text(const char *raw)
+{
+    char exp[CW_SEND_MAX + 1];
+    const char *missing = NULL;
+    if (!expand_macros(raw, exp, sizeof(exp), &missing)) {
+        char msg[64];
+        snprintf(msg, sizeof(msg), "Set your %s first", missing ? missing : "identity");
+        ui_toast(msg);
+        return false;
+    }
+    qmx_settings_t s;
+    settings_load_all(&s);
+    if (s.sim_mode_en) {
+        ESP_LOGI(TAG, "[SIM] CW send suppressed: '%s'", exp);
+        cw_qso_sim_arm();            // phantom answers by pre-advance state
+        cw_screen_feed_decoded(" ", 1);   // keep the stream's token boundary honest
+    } else {
+        if (!cat_is_ready()) { ui_toast("No QMX connected"); return false; }
+        cat_request_cw_send(exp);
+    }
+    cw_qso_note_sent(exp);
+    ESP_LOGI(TAG, "CW send: '%s'%s", exp, s.sim_mode_en ? " [SIM]" : "");
+    if (s_lbl_status) {
+        lv_label_set_text_fmt(s_lbl_status, "Keying:\n%s", exp);
+        lv_obj_set_style_text_color(s_lbl_status, lv_palette_main(LV_PALETTE_RED), 0);
+    }
+    return true;
+}
+
 // ---- memory buttons ---------------------------------------------------------
 // Tap = expand + send; long-press = edit. LVGL delivers CLICKED after a long
 // press too, so the press duration decides which action the CLICKED handler
@@ -324,25 +382,124 @@ static void mem_clicked_cb(lv_event_t *e)
     qmx_settings_t s;
     settings_load_all(&s);
     if (!s.cw_msg[idx][0]) { edit_open(idx); return; }   // empty slot: edit it
-
-    char exp[CW_SEND_MAX + 1];
-    const char *missing = NULL;
-    if (!expand_macros(s.cw_msg[idx], exp, sizeof(exp), &missing)) {
-        char msg[64];
-        snprintf(msg, sizeof(msg), "Set your %s first", missing ? missing : "identity");
-        ui_toast(msg);
-        return;
-    }
-    if (!cat_is_ready()) { ui_toast("No QMX connected"); return; }
-    cat_request_cw_send(exp);
-    ESP_LOGI(TAG, "M%d send: '%s'", idx + 1, exp);
-    if (s_lbl_status) {
-        lv_label_set_text_fmt(s_lbl_status, "Keying:\n%s", exp);
-        lv_obj_set_style_text_color(s_lbl_status, lv_palette_main(LV_PALETTE_RED), 0);
-    }
+    send_cw_text(s.cw_msg[idx]);
 }
 
 static void park_clicked_cb(lv_event_t *e) { (void)e; edit_open(-1); }
+
+// ---- ESM NEXT ---------------------------------------------------------------
+static void refresh_next_label(void)
+{
+    if (!s_lbl_next || !s_lbl_next_hdr) return;
+    char txt[CW_SEND_MAX + 1];
+    const char *state_lbl = "CQ";
+    if (cw_qso_next_text(txt, sizeof(txt), &state_lbl)) {
+        char exp[CW_SEND_MAX + 1];
+        const char *missing = NULL;
+        lv_label_set_text_fmt(s_lbl_next_hdr, "NEXT sends (%s):", state_lbl);
+        lv_label_set_text(s_lbl_next,
+            expand_macros(txt, exp, sizeof(exp), &missing) ? exp : txt);
+    } else {
+        lv_label_set_text_fmt(s_lbl_next_hdr, "NEXT (%s):", state_lbl);
+        lv_label_set_text(s_lbl_next, "(memory empty)");
+    }
+}
+
+static uint32_t s_next_press_tick = 0;
+
+static void next_pressed_cb(lv_event_t *e)
+{
+    (void)e;
+    s_next_press_tick = lv_tick_get();
+}
+
+static void next_clicked_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_next_press_tick && lv_tick_elaps(s_next_press_tick) >= 600) {
+        cw_qso_reset();
+        ui_toast("Ladder reset - back to CQ");
+        refresh_next_label();
+        return;
+    }
+    char txt[CW_SEND_MAX + 1];
+    const char *state_lbl = NULL;
+    if (!cw_qso_next_text(txt, sizeof(txt), &state_lbl)) {
+        ui_toast("Nothing to send - memory empty?");
+        return;
+    }
+    // Grab the target BEFORE advancing: the TU step logs and resets it.
+    char tgt[16];
+    cw_qso_get_target(tgt, sizeof(tgt));
+    if (!send_cw_text(txt)) return;    // (sim_arm happens inside, pre-advance)
+    if (cw_qso_on_next_sent()) {
+        char msg[48];
+        snprintf(msg, sizeof(msg), "Logged %s - back to CQ", tgt);
+        ui_toast(msg);
+    }
+    refresh_next_label();
+}
+
+// ---- station card -----------------------------------------------------------
+static void card_clicked_cb(lv_event_t *e)
+{
+    (void)e;
+    char tgt[16], heard[16];
+    int age = 0;
+    cw_qso_get_target(tgt, sizeof(tgt));
+    if (tgt[0]) {
+        cw_qso_reset();
+        char msg[40];
+        snprintf(msg, sizeof(msg), "Dropped %s", tgt);
+        ui_toast(msg);
+    } else if (cw_qso_get_heard(heard, sizeof(heard), &age) && heard[0]) {
+        cw_qso_adopt(heard);
+    }
+    refresh_next_label();
+}
+
+// Card refresh, from the 500 ms tick. Shows the adopted target (amber
+// border) or the latest heard call (grey border, fades after 2 min).
+static void refresh_card(void)
+{
+    if (!s_card) return;
+    char tgt[16], heard[16];
+    int age = 0;
+    cw_qso_get_target(tgt, sizeof(tgt));
+    bool have_heard = cw_qso_get_heard(heard, sizeof(heard), &age);
+    // (cw_qso_get_heard may have just applied an auto-adopt - re-read.)
+    if (!tgt[0]) cw_qso_get_target(tgt, sizeof(tgt));
+
+    const char *call = tgt[0] ? tgt : (have_heard && age < 120) ? heard : NULL;
+    if (!call) {
+        lv_obj_add_flag(s_card, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_label_set_text(s_card_call, call);
+    const char *country = dxcc_lookup(call);
+    char worked[48];
+    uint32_t f = cat_get_frequency();
+    if (adif_log_contains_call_on_band(call, f))
+        snprintf(worked, sizeof(worked), "worked before on this band");
+    else if (adif_log_contains_call(call))
+        snprintf(worked, sizeof(worked), "worked before - new band");
+    else
+        snprintf(worked, sizeof(worked), "new station");
+    char rst[4];
+    cw_qso_get_rst_rcvd(rst, sizeof(rst));
+    if (tgt[0] && rst[0])
+        lv_label_set_text_fmt(s_card_info, "%s\n%s · rcvd %s",
+                              country ? country : "?", worked, rst);
+    else
+        lv_label_set_text_fmt(s_card_info, "%s\n%s",
+                              country ? country : "?", worked);
+    lv_label_set_text(s_card_hint,
+                      tgt[0] ? "working - NEXT advances · tap to drop"
+                             : "tap to work this station");
+    lv_obj_set_style_border_color(s_card,
+        lv_color_hex(tgt[0] ? 0xFFA040 : 0x555555), 0);
+    lv_obj_clear_flag(s_card, LV_OBJ_FLAG_HIDDEN);
+}
 
 // ---- WPM stepper -------------------------------------------------------------
 static void wpm_step(int delta)
@@ -383,6 +540,15 @@ static void tick_cb(lv_timer_t *t)
 
     int wpm = cat_get_keyer_wpm();
     if (wpm > 0 && s_lbl_wpm) lv_label_set_text_fmt(s_lbl_wpm, "%d WPM", wpm);
+
+    // ESM/card refresh + the phantom practice pump (sim mode only).
+    {
+        qmx_settings_t qs;
+        settings_load_all(&qs);
+        if (qs.sim_mode_en) cw_qso_sim_tick();
+    }
+    refresh_card();
+    refresh_next_label();
 
     int rem = cat_get_cw_tx_remaining();
     if (s_lbl_status) {
@@ -451,27 +617,45 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_font(hdr, &lv_font_montserrat_48, 0);
     lv_obj_set_pos(hdr, 14, 6);
 
-    // Six memory buttons, full pane width (pitch tightened vs the first cut
-    // so the header fits without sacrificing a memory slot).
-    int y = 64;
+    // ESM NEXT button (Tier 2): prime position under the header. Green like
+    // every commit button; the body label always states what a tap will key.
+    s_btn_next = make_pane_btn(s_pane, 10, 58, PANE_W - 20, 68, 0x2e8b3a, 0x2e8b3a);
+    lv_obj_add_event_cb(s_btn_next, next_pressed_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(s_btn_next, next_clicked_cb, LV_EVENT_CLICKED, NULL);
+    s_lbl_next_hdr = lv_label_create(s_btn_next);
+    lv_label_set_text(s_lbl_next_hdr, "NEXT sends (CQ):");
+    lv_obj_set_style_text_color(s_lbl_next_hdr, lv_color_hex(0xd8ffd8), 0);
+    lv_obj_set_style_text_font(s_lbl_next_hdr, &lv_font_montserrat_18, 0);
+    lv_obj_align(s_lbl_next_hdr, LV_ALIGN_TOP_LEFT, 4, 0);
+    s_lbl_next = lv_label_create(s_btn_next);
+    lv_label_set_text(s_lbl_next, "");
+    lv_label_set_long_mode(s_lbl_next, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(s_lbl_next, PANE_W - 44);
+    lv_obj_set_style_text_color(s_lbl_next, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(s_lbl_next, &lv_font_montserrat_20, 0);
+    lv_obj_align(s_lbl_next, LV_ALIGN_BOTTOM_LEFT, 4, -2);
+
+    // Six memory buttons, single-line previews (long-press shows the full
+    // text in the editor; the NEXT button carries the full ladder text).
+    int y = 132;
     for (int i = 0; i < N_CW_MEM; i++) {
-        s_btn_mem[i] = make_pane_btn(s_pane, 10, y, PANE_W - 20, 56, 0x2a2f37, 0x555555);
+        s_btn_mem[i] = make_pane_btn(s_pane, 10, y, PANE_W - 20, 44, 0x2a2f37, 0x555555);
         lv_obj_add_event_cb(s_btn_mem[i], mem_pressed_cb, LV_EVENT_PRESSED, NULL);
         lv_obj_add_event_cb(s_btn_mem[i], mem_clicked_cb, LV_EVENT_CLICKED,
                             (void *)(intptr_t)i);
         s_lbl_mem[i] = lv_label_create(s_btn_mem[i]);
         lv_label_set_text(s_lbl_mem[i], "");
-        lv_label_set_long_mode(s_lbl_mem[i], LV_LABEL_LONG_WRAP);
+        lv_label_set_long_mode(s_lbl_mem[i], LV_LABEL_LONG_DOT);
         lv_obj_set_width(s_lbl_mem[i], PANE_W - 44);
         lv_obj_set_style_text_color(s_lbl_mem[i], lv_color_hex(0xffffff), 0);
         lv_obj_set_style_text_font(s_lbl_mem[i], &lv_font_montserrat_20, 0);
         lv_obj_center(s_lbl_mem[i]);
-        y += 62;
+        y += 50;
     }
 
     // WPM stepper row.
     y += 4;
-    lv_obj_t *bm = make_pane_btn(s_pane, 10, y, 70, 54, 0x2a2f37, 0x555555);
+    lv_obj_t *bm = make_pane_btn(s_pane, 10, y, 70, 48, 0x2a2f37, 0x555555);
     lv_obj_add_event_cb(bm, wpm_minus_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lm = lv_label_create(bm);
     lv_label_set_text(lm, "-");
@@ -483,26 +667,26 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_label_set_text(s_lbl_wpm, "-- WPM");
     lv_obj_set_style_text_color(s_lbl_wpm, lv_color_hex(0xFFA040), 0);
     lv_obj_set_style_text_font(s_lbl_wpm, &lv_font_montserrat_24, 0);
-    lv_obj_set_pos(s_lbl_wpm, 96, y + 14);
+    lv_obj_set_pos(s_lbl_wpm, 96, y + 11);
 
-    lv_obj_t *bp = make_pane_btn(s_pane, PANE_W - 80, y, 70, 54, 0x2a2f37, 0x555555);
+    lv_obj_t *bp = make_pane_btn(s_pane, PANE_W - 80, y, 70, 48, 0x2a2f37, 0x555555);
     lv_obj_add_event_cb(bp, wpm_plus_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *lp = lv_label_create(bp);
     lv_label_set_text(lp, "+");
     lv_obj_set_style_text_color(lp, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(lp, &lv_font_montserrat_28, 0);
     lv_obj_center(lp);
-    y += 60;
+    y += 54;
 
     // Park button.
-    lv_obj_t *bpark = make_pane_btn(s_pane, 10, y, PANE_W - 20, 50, 0x1c2128, 0x7a4a10);
+    lv_obj_t *bpark = make_pane_btn(s_pane, 10, y, PANE_W - 20, 44, 0x1c2128, 0x7a4a10);
     lv_obj_add_event_cb(bpark, park_clicked_cb, LV_EVENT_CLICKED, NULL);
     s_lbl_park = lv_label_create(bpark);
     lv_label_set_text(s_lbl_park, "Park: --");
     lv_obj_set_style_text_color(s_lbl_park, lv_color_hex(0xFFA040), 0);
     lv_obj_set_style_text_font(s_lbl_park, &lv_font_montserrat_22, 0);
     lv_obj_center(s_lbl_park);
-    y += 56;
+    y += 50;
 
     // Status line.
     s_lbl_status = lv_label_create(s_pane);
@@ -534,6 +718,41 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_ticker_lbl, &lv_font_montserrat_22, 0);
     lv_obj_set_pos(s_ticker_lbl, 0, 0);
 
+    // Station card, floating above the ticker's right end.
+    s_card = lv_obj_create(s_container);
+    lv_obj_set_size(s_card, 330, 122);
+    lv_obj_set_pos(s_card, MID_W - 340, MID_H - TICKER_H - BANDPLAN_H - 132);
+    lv_obj_set_style_bg_color(s_card, lv_color_hex(0x1c2128), 0);
+    lv_obj_set_style_bg_opa(s_card, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_color(s_card, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_border_width(s_card, 2, 0);
+    lv_obj_set_style_radius(s_card, 8, 0);
+    lv_obj_set_style_pad_all(s_card, 8, 0);
+    lv_obj_clear_flag(s_card, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_card, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_card, card_clicked_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(s_card, LV_OBJ_FLAG_HIDDEN);
+
+    s_card_call = lv_label_create(s_card);
+    lv_label_set_text(s_card_call, "");
+    lv_obj_set_style_text_color(s_card_call, lv_color_hex(0xFFA040), 0);
+    lv_obj_set_style_text_font(s_card_call, &lv_font_montserrat_28, 0);
+    lv_obj_set_pos(s_card_call, 0, 0);
+
+    s_card_info = lv_label_create(s_card);
+    lv_label_set_text(s_card_info, "");
+    lv_label_set_long_mode(s_card_info, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(s_card_info, 310);
+    lv_obj_set_style_text_color(s_card_info, lv_color_hex(0xdddddd), 0);
+    lv_obj_set_style_text_font(s_card_info, &lv_font_montserrat_18, 0);
+    lv_obj_set_pos(s_card_info, 0, 36);
+
+    s_card_hint = lv_label_create(s_card);
+    lv_label_set_text(s_card_hint, "");
+    lv_obj_set_style_text_color(s_card_hint, lv_color_hex(0x8a9199), 0);
+    lv_obj_set_style_text_font(s_card_hint, &lv_font_montserrat_18, 0);
+    lv_obj_align(s_card_hint, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+
     ESP_LOGI(TAG, "CW screen built");
 }
 
@@ -542,7 +761,13 @@ lv_obj_t *cw_screen_view_get_container(void) { return s_container; }
 void cw_screen_view_show(void)
 {
     if (!s_container) return;
+    {
+        qmx_settings_t s;
+        settings_load_all(&s);
+        cw_qso_set_my_call(s.my_callsign);   // capture heuristics need it
+    }
     refresh_mem_labels();
+    refresh_next_label();
     cat_query_keyer_wpm();
     cat_cw_poll_set_active(true);
     if (!s_timer) s_timer = lv_timer_create(tick_cb, 500, NULL);
