@@ -1384,6 +1384,7 @@ static bool s_distance_in_miles = false;  // FT8 distance unit toggle (NVS-backe
 static bool s_ft8_early_decode = true;    // FT8 fast-pounce early-decode toggle (NVS-backed)
 static const bool s_ft8_sync_lines = false;  // FT8 sync-line diagnostic removed (drawer toggle gone); overlay/3x-WF never engage
 static bool s_sim_mode_en = false;     // FT8 simulation mode toggle (NVS-backed)
+static bool s_cw_sim_en   = false;     // CW phantom practice - separate flag (NVS-backed)
 
 // ---- Sticky per-mode settings (v0.16.0) --------------------------------
 // Snapshot of freq/mode/passband/zoom taken on leaving a mode, restored
@@ -1676,6 +1677,7 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_FT8SYNC    18  // panadapter-only: FT8 sync lines + 3x waterfall (diagnostic)
 #define DRAWER_SEC_SIMMODE    19  // FT8-only: phantom-station simulation mode (practice/testing, never keys the radio)
 #define DRAWER_SEC_SLEEP      20  // display sleep: idle-timeout backlight-off (#34)
+#define DRAWER_SEC_CWSIM      22  // CW-page-only: CW phantom practice (own flag, NOT sim_mode_en)
 #define DRAWER_SEC_TUNE2      21  // Antenna Tune (1_04+ only) - own section right above
                                    // WiFi setup; the panadapter layout closes its slot
                                    // when hidden on <1_04 firmware and reopens it in
@@ -1937,7 +1939,11 @@ void ui_set_sim_mode_indicator(bool active)
 void ui_refresh_sim_mode_indicator(void)
 {
     bool ft4 = (ft8_op_mode_get() == FT8_OP_MODE_FT4);
-    ui_set_sim_mode_indicator(s_sim_mode_en);
+    // The breathing red bezel warns "nothing transmitted is real" - it shows
+    // for FT8 sim wherever you are (its phantoms persist in the decode list),
+    // and for CW practice only while the CW page is up (its own flag).
+    ui_set_sim_mode_indicator(s_sim_mode_en ||
+                              (s_cw_sim_en && ui_mode_get() == UI_MODE_CW));
     apply_sim_mode_lock(ft4);
 }
 
@@ -2354,6 +2360,35 @@ static uint8_t *s_label_canvas_buf = NULL;
 // can update them with actual MHz when the VFO changes.
 static lv_obj_t *s_tick_labels[5] = { NULL, NULL, NULL, NULL, NULL };
 
+// Draw the freq-axis tick marks. On the CW page the whole grid spans only
+// the VISIBLE window (x 320..1280 - the pane hides the rest) with the same
+// arrangement as the panadapter's full-width grid: a major tick under each
+// of the five labels (quarters), three minors between (operator,
+// 2026-08-02: "a center tick mark and whatever makes sense left and right").
+static void draw_label_ticks(void)
+{
+    if (!s_label_canvas_buf) return;
+    uint16_t *px = (uint16_t *)s_label_canvas_buf;
+    memset(px, 0, (size_t)DISPLAY_H_RES * LABEL_BAR_H * 2);
+    const uint16_t major_color = 0xC618;  // light grey
+    const uint16_t minor_color = 0x8410;  // medium grey
+    const int x0 = (ui_mode_get() == UI_MODE_CW) ? 320 : 0;
+    const int w  = DISPLAY_H_RES - x0;
+    for (int i = 0; i <= 16; i++) {       // 16 steps = 4 minors per quarter
+        int x = x0 + (w * i) / 16;
+        if (x >= DISPLAY_H_RES) x = DISPLAY_H_RES - 1;
+        int is_major = (i % 4 == 0);
+        int h = is_major ? 10 : 5;
+        uint16_t color = is_major ? major_color : minor_color;
+        for (int y = 0; y < h; y++) px[y * DISPLAY_H_RES + x] = color;
+    }
+    // Thin separator line where the freq-axis band meets the waterfall,
+    // matching the dB scale grid-line colour in the spectrum above.
+    for (int x = 0; x < DISPLAY_H_RES; x++)
+        px[(LABEL_BAR_H - 1) * DISPLAY_H_RES + x] = 0x4208;
+    if (s_label_canvas) lv_obj_invalidate(s_label_canvas);
+}
+
 static void build_label_bar(lv_obj_t *parent)
 {
     lv_obj_t *bar = lv_obj_create(parent);
@@ -2366,33 +2401,13 @@ static void build_label_bar(lv_obj_t *parent)
     lv_obj_set_style_pad_all(bar, 0, 0);
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Tick canvas: DISPLAY_H_RES x LABEL_BAR_H, drawn once
+    // Tick canvas: DISPLAY_H_RES x LABEL_BAR_H. Redrawn on page change (the
+    // CW page's tick grid spans only the visible window - see
+    // draw_label_ticks below), so the drawing lives in its own function.
     size_t buf_size = LV_CANVAS_BUF_SIZE(DISPLAY_H_RES, LABEL_BAR_H, 16, LV_DRAW_BUF_STRIDE_ALIGN);
     s_label_canvas_buf = heap_caps_malloc(buf_size, MALLOC_CAP_SPIRAM);
     if (s_label_canvas_buf) {
-        memset(s_label_canvas_buf, 0, buf_size);
-        // Draw ticks: major at multiples of 12 kHz (top-aligned, taller),
-        // minor at multiples of 3 kHz (top-aligned, shorter)
-        uint16_t *px = (uint16_t *)s_label_canvas_buf;
-        const uint16_t major_color = 0xC618;  // light grey
-        const uint16_t minor_color = 0x8410;  // medium grey
-        const int center_x = DISPLAY_H_RES / 2;
-        const float px_per_khz = (float)DISPLAY_H_RES / 48.0f;  // 26.67 at 1280 / 15 at 720
-        for (int khz = -24; khz <= 24; khz += 3) {
-            int x = center_x + (int)(khz * px_per_khz);
-            if (x < 0 || x >= DISPLAY_H_RES) continue;
-            int is_major = (khz % 12 == 0);
-            int h = is_major ? 10 : 5;
-            uint16_t color = is_major ? major_color : minor_color;
-            for (int y = 0; y < h; y++) {
-                px[y * DISPLAY_H_RES + x] = color;
-            }
-        }
-        // Thin separator line where the freq-axis band meets the waterfall,
-        // matching the dB scale grid-line colour in the spectrum above.
-        for (int x = 0; x < DISPLAY_H_RES; x++) {
-            px[(LABEL_BAR_H - 1) * DISPLAY_H_RES + x] = 0x4208;
-        }
+        draw_label_ticks();
         s_label_canvas = lv_canvas_create(bar);
         lv_canvas_set_buffer(s_label_canvas, s_label_canvas_buf,
                              DISPLAY_H_RES, LABEL_BAR_H, LV_COLOR_FORMAT_RGB565);
@@ -2726,10 +2741,21 @@ static void update_freq_axis_labels(uint32_t center_hz)
     // Pan shifts the center by pan_bins * (sample_rate / N) Hz.
     int32_t span_hz = (int32_t)(48000.0f / s_zoom_factor);
     int32_t pan_hz  = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
-    // Tick positions: -span/2, -span/4, 0, +span/4, +span/2 relative to panned center.
+    // CW page: the labels span only the VISIBLE window (the pane hides
+    // x<320) and each label's value is computed for the pixel it sits at, so
+    // the middle label reads the visible-center frequency. Positions are
+    // re-asserted every call - cheap, and it snaps back on page change.
+    const int lx0 = (ui_mode_get() == UI_MODE_CW) ? 320 : 0;
+    const int lw  = DISPLAY_H_RES - lx0;
+    // Tick positions: quarters of the (visible) width, values per pixel.
     for (int i = 0; i < 5; i++) {
         if (!s_tick_labels[i]) continue;
-        int32_t offset = pan_hz + (span_hz * (i - 2)) / 4;
+        int x = lx0 + (lw * i) / 4;
+        if (i == 0)      lv_obj_align(s_tick_labels[i], LV_ALIGN_BOTTOM_LEFT, lx0 + 2, -3);
+        else if (i == 4) lv_obj_align(s_tick_labels[i], LV_ALIGN_BOTTOM_RIGHT, -2, -3);
+        else             lv_obj_align(s_tick_labels[i], LV_ALIGN_BOTTOM_LEFT, x - 28, -3);
+        int32_t offset = pan_hz +
+            (int32_t)(((int64_t)span_hz * (x - DISPLAY_H_RES / 2)) / DISPLAY_H_RES);
         int32_t hz = (int32_t)center_hz + offset;
         if (hz < 0) hz = 0;
         char buf[20];
@@ -5514,6 +5540,18 @@ static void drawer_check_sim_mode_cb(lv_event_t *e)
     ESP_LOGI(TAG, "FT8 simulation mode: %s", s_sim_mode_en ? "ON (radio not keyed)" : "off");
 }
 
+// CW phantom practice - its OWN flag, deliberately not sim_mode_en: turning
+// on CW practice must not arm the FT8 phantoms when swiping to that page,
+// and vice versa (operator, 2026-08-02).
+static void drawer_check_cw_sim_cb(lv_event_t *e)
+{
+    lv_obj_t *cb = lv_event_get_target(e);
+    s_cw_sim_en = lv_obj_has_state(cb, LV_STATE_CHECKED);
+    settings_set_cw_sim_en(s_cw_sim_en);
+    ui_refresh_sim_mode_indicator();
+    ESP_LOGI(TAG, "CW simulation mode: %s", s_cw_sim_en ? "ON (radio not keyed)" : "off");
+}
+
 // Create a transparent, full-width, non-scrollable container for one
 // drawer section. Children are positioned relative to its (0,0) top-left,
 // same as they used to be positioned relative to s_drawer's top-left.
@@ -6378,6 +6416,23 @@ static void drawer_build(void)
         ui_refresh_sim_mode_indicator();   // also applies the FT4 lock (apply_sim_mode_lock)
         y += 56;
     }
+    // CW simulation mode: the CW page's phantom practice partner. Its own
+    // flag (cw_sim_en) so FT8 practice and CW practice arm independently;
+    // shown only while the CW page is up (drawer_set_ft8_mode).
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_CWSIM, y, 56);
+        lv_obj_t *lbl = lv_label_create(sec);
+        lv_label_set_text(lbl, "CW Simulation Mode");
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 0, 10);
+        qmx_settings_t scfg_cwsim;
+        settings_load_all(&scfg_cwsim);
+        s_cw_sim_en = scfg_cwsim.cw_sim_en;
+        lv_obj_t *cb = make_drawer_checkbox(sec, s_cw_sim_en, drawer_check_cw_sim_cb, NULL);
+        lv_obj_align(cb, LV_ALIGN_TOP_RIGHT, 0, 6);
+        y += 56;
+    }
 
     // Common tweaks for every drawer slider (all horizontal, 30 px tall), ported
     // from the Waveshare P4 build's slider fix:
@@ -6580,30 +6635,21 @@ static void drawer_set_ft8_mode(bool ft8)
         for (int k = 0; k < n_keep; k++) {
             if (keep[k] == i) { kept = true; break; }
         }
-        // DRAWER_SEC_DISTANCE is FT8-only (meaningless elsewhere) and
-        // DRAWER_SEC_SIMMODE shows on the FT8 AND CW pages (both have phantom
-        // practice stations riding the one global sim_mode_en switch), never
-        // in plain Panadapter mode.
+        // DRAWER_SEC_DISTANCE and DRAWER_SEC_SIMMODE are FT8-only;
+        // DRAWER_SEC_CWSIM is CW-page-only (its own cw_sim_en flag).
         // DRAWER_SEC_CWAUDIO is shelved (cw_audio.c) and hidden in BOTH modes.
         // DRAWER_SEC_TUNE2 is hidden whenever the Tune button is (FT8 mode or
         // <1_04 firmware).
         bool cw_page = (ui_mode_get() == UI_MODE_CW);
         if ((ft8 && !kept) ||
-            (!ft8 && (i == DRAWER_SEC_DISTANCE ||
-                      (i == DRAWER_SEC_SIMMODE && !cw_page))) ||
+            (!ft8 && (i == DRAWER_SEC_DISTANCE || i == DRAWER_SEC_SIMMODE)) ||
+            (i == DRAWER_SEC_CWSIM && !cw_page) ||
             i == DRAWER_SEC_CWAUDIO || (i == DRAWER_SEC_TUNE2 && !tune_ok)) {
             lv_obj_add_flag(s_drawer_sections[i], LV_OBJ_FLAG_HIDDEN);
         } else {
             lv_obj_clear_flag(s_drawer_sections[i], LV_OBJ_FLAG_HIDDEN);
         }
     }
-
-    // The one checkbox drives phantom practice on whichever page is up -
-    // name it for the page so its effect is obvious.
-    if (s_lbl_sim_mode)
-        lv_label_set_text(s_lbl_sim_mode,
-            ui_mode_get() == UI_MODE_CW ? "CW Simulation Mode"
-                                        : "FT8 Simulation Mode");
 
     if (ft8) {
         // Start below the always-present "User Manual" button (built at y=96,
@@ -7007,6 +7053,9 @@ void ui_apply_saved_mode(void)
         cat_request_mode("CW");
         ui_update_mode("CW");           // optimistic - no MD; poll without a QMX
         if (s_last_qmx_freq_hz) update_bandplan_strip(s_last_qmx_freq_hz);
+        recompute_zoom_pan();
+        draw_label_ticks();
+        if (s_last_qmx_freq_hz) update_freq_axis_labels(s_last_qmx_freq_hz);
         cw_screen_view_show();
         ESP_LOGI(TAG, "UI mode restored from NVS: CW");
         return;
@@ -7053,6 +7102,7 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
     top_bar_set_ft8_dim(next == UI_MODE_FT8);
     top_bar_set_hit_depth(next == UI_MODE_PANADAPTER);
     drawer_set_ft8_mode(next == UI_MODE_FT8);
+    ui_refresh_sim_mode_indicator();   // the CW-practice bezel is page-scoped
 
     lv_obj_t *ft8 = ft8_screen_view_get_container();
 
@@ -7121,8 +7171,9 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
             update_bandplan_strip(s_cw_snapshot.freq_hz);
         }
         // Re-anchor the zoom window on the VISIBLE center (the pane hides
-        // the left quarter) and refresh the axis labels to match.
+        // the left quarter) and redraw the axis grid + labels to match.
         recompute_zoom_pan();
+        draw_label_ticks();
         update_freq_axis_labels(s_cw_snapshot.freq_hz);
         cw_screen_view_show();
         return;
@@ -7207,8 +7258,10 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
         if (s_pan_snapshot.valid && s_pan_snapshot.mode[0])
             ui_update_mode(s_pan_snapshot.mode);
         if (s_last_qmx_freq_hz) update_bandplan_strip(s_last_qmx_freq_hz);
-        // Undo the CW page's visible-center shift (screen-center anchoring).
+        // Undo the CW page's visible-center shift (screen-center anchoring)
+        // and put the axis grid + labels back to full width.
         recompute_zoom_pan();
+        draw_label_ticks();
         if (s_last_qmx_freq_hz) update_freq_axis_labels(s_last_qmx_freq_hz);
         int start_x = animate ? -DISPLAY_H_RES : 0;
         if (s_spectrum_obj)  { lv_obj_set_x(s_spectrum_obj,  start_x); lv_obj_clear_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN); }

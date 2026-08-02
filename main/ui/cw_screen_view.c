@@ -186,9 +186,32 @@ static lv_obj_t *s_edit_ta6[N_CW_MEM] = {0};
 static lv_obj_t *s_edit_num[N_CW_MEM] = {0};
 static lv_obj_t *s_edit_title = NULL;
 static lv_obj_t *s_edit_kb    = NULL;
-static bool      s_edit_park  = false;
 
 static void refresh_next_label(void);   // fwd (ESM section below)
+
+// Same key styling as the WiFi/Callsign/CQ modals (ui_theme_style_keyboard
+// alone leaves the per-key look at LVGL defaults - operator noticed).
+static void style_edit_keyboard(lv_obj_t *kb)
+{
+    static lv_style_t style_kb_btn;
+    static bool inited = false;
+    if (!inited) {
+        lv_style_init(&style_kb_btn);
+        lv_style_set_bg_color(&style_kb_btn, lv_color_hex(UI_COLOR_KEY_BG));
+        lv_style_set_bg_opa(&style_kb_btn, LV_OPA_COVER);
+        lv_style_set_text_color(&style_kb_btn, lv_color_white());
+        lv_style_set_border_width(&style_kb_btn, 1);
+        lv_style_set_border_color(&style_kb_btn, lv_color_hex(0x505050));
+        inited = true;
+    }
+    lv_obj_add_style(kb, &style_kb_btn, LV_PART_ITEMS);
+    ui_theme_style_keyboard(kb);
+    lv_obj_set_size(kb, LV_PCT(100), 280);
+    lv_obj_align(kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    ui_theme_keyboard_attach_caps_cycle_upper(kb);
+    lv_obj_set_style_text_font(kb, &lv_font_montserrat_28, 0);
+    lv_obj_add_flag(kb, LV_OBJ_FLAG_HIDDEN);
+}
 
 static void edit_close(void)
 {
@@ -198,23 +221,14 @@ static void edit_close(void)
 static void edit_save_cb(lv_event_t *e)
 {
     (void)e;
-    if (s_edit_park) {
-        char buf[16] = {0};
-        const char *raw = lv_textarea_get_text(s_edit_ta6[0]);
+    for (int i = 0; i < N_CW_MEM; i++) {
+        char buf[44] = {0};
+        const char *raw = lv_textarea_get_text(s_edit_ta6[i]);
         if (raw) snprintf(buf, sizeof(buf), "%s", raw);
         for (char *p = buf; *p; p++) *p = (char)toupper((unsigned char)*p);
-        settings_set_cw_park(buf);
-        ESP_LOGI(TAG, "saved park: '%s'", buf);
-    } else {
-        for (int i = 0; i < N_CW_MEM; i++) {
-            char buf[44] = {0};
-            const char *raw = lv_textarea_get_text(s_edit_ta6[i]);
-            if (raw) snprintf(buf, sizeof(buf), "%s", raw);
-            for (char *p = buf; *p; p++) *p = (char)toupper((unsigned char)*p);
-            settings_set_cw_msg((uint8_t)i, buf);
-        }
-        ESP_LOGI(TAG, "saved all 6 CW memories");
+        settings_set_cw_msg((uint8_t)i, buf);
     }
+    ESP_LOGI(TAG, "saved all 6 CW memories");
     edit_close();
     refresh_mem_labels();
     refresh_next_label();
@@ -323,46 +337,155 @@ static void edit_build(void)
     }
 
     s_edit_kb = lv_keyboard_create(s_edit_modal);
-    ui_theme_style_keyboard(s_edit_kb);
-    lv_obj_set_size(s_edit_kb, LV_PCT(100), 280);
-    lv_obj_align(s_edit_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
-    ui_theme_keyboard_attach_caps_cycle_upper(s_edit_kb);
-    lv_obj_set_style_text_font(s_edit_kb, &lv_font_montserrat_28, 0);
-    lv_obj_add_flag(s_edit_kb, LV_OBJ_FLAG_HIDDEN);
+    style_edit_keyboard(s_edit_kb);
     lv_obj_add_event_cb(s_edit_kb, edit_kb_event_cb, LV_EVENT_READY, NULL);
     lv_obj_add_event_cb(s_edit_kb, edit_kb_event_cb, LV_EVENT_CANCEL, NULL);
 }
 
-// slot 0..5 = memories editor focused on that slot; -1 = park (single field).
+// Open the six-memory editor. NO field is focused on open (six blinking
+// cursors read as noise - operator): the first tap on a line focuses it and
+// raises the keyboard.
 static void edit_open(int slot)
 {
+    (void)slot;
     edit_build();
-    s_edit_park = (slot < 0);
     qmx_settings_t s;
     settings_load_all(&s);
-    if (s_edit_park) {
-        lv_label_set_text(s_edit_title, "POTA park reference");
-        lv_textarea_set_text(s_edit_ta6[0], s.cw_park);
-        lv_textarea_set_max_length(s_edit_ta6[0], 15);
-        for (int i = 1; i < N_CW_MEM; i++) {
-            lv_obj_add_flag(s_edit_ta6[i], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(s_edit_num[i], LV_OBJ_FLAG_HIDDEN);
-        }
-        lv_obj_add_flag(s_edit_num[0], LV_OBJ_FLAG_HIDDEN);
-        slot = 0;
-    } else {
-        lv_label_set_text(s_edit_title, "CW memories");
-        for (int i = 0; i < N_CW_MEM; i++) {
-            lv_textarea_set_max_length(s_edit_ta6[i], 43);
-            lv_textarea_set_text(s_edit_ta6[i], s.cw_msg[i]);
-            lv_obj_clear_flag(s_edit_ta6[i], LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(s_edit_num[i], LV_OBJ_FLAG_HIDDEN);
-        }
+    for (int i = 0; i < N_CW_MEM; i++) {
+        lv_textarea_set_text(s_edit_ta6[i], s.cw_msg[i]);
+        lv_obj_remove_state(s_edit_ta6[i], LV_STATE_FOCUSED);
     }
     lv_obj_add_flag(s_edit_kb, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(s_edit_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_edit_modal);
-    ui_theme_focus_textarea(s_edit_ta6[slot]);
+}
+
+// ---- park editor -------------------------------------------------------------
+// The park is one short field - it gets its own compact window instead of
+// the six-line editor with five dead rows (operator, 2026-08-02).
+static lv_obj_t *s_park_modal = NULL;
+static lv_obj_t *s_park_ta    = NULL;
+static lv_obj_t *s_park_kb    = NULL;
+
+static void park_close(void)
+{
+    if (s_park_modal) lv_obj_add_flag(s_park_modal, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void park_save_cb(lv_event_t *e)
+{
+    (void)e;
+    char buf[16] = {0};
+    const char *raw = s_park_ta ? lv_textarea_get_text(s_park_ta) : NULL;
+    if (raw) snprintf(buf, sizeof(buf), "%s", raw);
+    for (char *p = buf; *p; p++) *p = (char)toupper((unsigned char)*p);
+    settings_set_cw_park(buf);
+    ESP_LOGI(TAG, "saved park: '%s'", buf);
+    park_close();
+    refresh_mem_labels();
+    refresh_next_label();
+}
+
+static void park_cancel_cb(lv_event_t *e) { (void)e; park_close(); }
+
+static void park_kb_event_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_READY || code == LV_EVENT_CANCEL)
+        lv_obj_add_flag(s_park_kb, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void park_ta_focused_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!s_park_kb) return;
+    lv_keyboard_set_textarea(s_park_kb, s_park_ta);
+    lv_obj_clear_flag(s_park_kb, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_park_kb);
+}
+
+static void park_build(void)
+{
+    if (s_park_modal) return;
+    lv_obj_t *scr = lv_screen_active();
+
+    s_park_modal = lv_obj_create(scr);
+    lv_obj_set_size(s_park_modal, LV_PCT(100), LV_PCT(100));
+    lv_obj_set_pos(s_park_modal, 0, 0);
+    lv_obj_set_style_bg_color(s_park_modal, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_park_modal, UI_OPA_MODAL_SCRIM, 0);
+    lv_obj_set_style_border_width(s_park_modal, 0, 0);
+    lv_obj_set_style_pad_all(s_park_modal, 0, 0);
+    lv_obj_clear_flag(s_park_modal, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_park_modal, LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *panel = lv_obj_create(s_park_modal);
+    lv_obj_set_size(panel, 700, 150);
+    lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 40);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0x1c2128), 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_border_width(panel, 2, 0);
+    lv_obj_set_style_radius(panel, 10, 0);
+    lv_obj_set_style_pad_all(panel, 16, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *title = lv_label_create(panel);
+    lv_label_set_text(title, "POTA park reference");
+    lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    s_park_ta = lv_textarea_create(panel);
+    lv_obj_set_size(s_park_ta, 320, 56);
+    lv_obj_align(s_park_ta, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_textarea_set_one_line(s_park_ta, true);
+    lv_textarea_set_max_length(s_park_ta, 15);
+    lv_textarea_set_placeholder_text(s_park_ta, "US-1211");
+    lv_obj_set_style_text_font(s_park_ta, &lv_font_montserrat_24, 0);
+    ui_theme_style_textarea(s_park_ta);
+    lv_obj_add_event_cb(s_park_ta, park_ta_focused_cb, LV_EVENT_FOCUSED, NULL);
+
+    lv_obj_t *btn_cancel = lv_btn_create(panel);
+    lv_obj_set_size(btn_cancel, 150, 56);
+    lv_obj_align(btn_cancel, LV_ALIGN_BOTTOM_RIGHT, -166, 0);
+    lv_obj_set_style_bg_color(btn_cancel, lv_color_hex(0x962020), 0);
+    lv_obj_set_style_radius(btn_cancel, 8, 0);
+    lv_obj_add_event_cb(btn_cancel, park_cancel_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *lc = lv_label_create(btn_cancel);
+    lv_label_set_text(lc, "Cancel");
+    lv_obj_set_style_text_color(lc, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(lc, &lv_font_montserrat_24, 0);
+    lv_obj_center(lc);
+
+    lv_obj_t *btn_save = lv_btn_create(panel);
+    lv_obj_set_size(btn_save, 150, 56);
+    lv_obj_align(btn_save, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_set_style_bg_color(btn_save, lv_color_hex(0x2e8b3a), 0);
+    lv_obj_set_style_radius(btn_save, 8, 0);
+    lv_obj_add_event_cb(btn_save, park_save_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *ls = lv_label_create(btn_save);
+    lv_label_set_text(ls, "Save");
+    lv_obj_set_style_text_color(ls, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(ls, &lv_font_montserrat_24, 0);
+    lv_obj_center(ls);
+    ui_kbd_set_buttons(btn_save, btn_cancel);
+
+    s_park_kb = lv_keyboard_create(s_park_modal);
+    style_edit_keyboard(s_park_kb);
+    lv_obj_add_event_cb(s_park_kb, park_kb_event_cb, LV_EVENT_READY, NULL);
+    lv_obj_add_event_cb(s_park_kb, park_kb_event_cb, LV_EVENT_CANCEL, NULL);
+}
+
+static void park_edit_open(void)
+{
+    park_build();
+    qmx_settings_t s;
+    settings_load_all(&s);
+    lv_textarea_set_text(s_park_ta, s.cw_park);
+    lv_obj_remove_state(s_park_ta, LV_STATE_FOCUSED);
+    lv_obj_add_flag(s_park_kb, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_park_modal, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_park_modal);
 }
 
 // ---- sending ----------------------------------------------------------------
@@ -383,7 +506,7 @@ static bool send_cw_text(const char *raw)
     }
     qmx_settings_t s;
     settings_load_all(&s);
-    if (s.sim_mode_en) {
+    if (s.cw_sim_en) {
         ESP_LOGI(TAG, "[SIM] CW send suppressed: '%s'", exp);
         cw_qso_sim_arm();            // phantom answers by pre-advance state
         cw_screen_feed_decoded(" ", 1);   // keep the stream's token boundary honest
@@ -392,7 +515,7 @@ static bool send_cw_text(const char *raw)
         cat_request_cw_send(exp);
     }
     cw_qso_note_sent(exp);
-    ESP_LOGI(TAG, "CW send: '%s'%s", exp, s.sim_mode_en ? " [SIM]" : "");
+    ESP_LOGI(TAG, "CW send: '%s'%s", exp, s.cw_sim_en ? " [SIM]" : "");
     if (s_lbl_status) {
         lv_label_set_text_fmt(s_lbl_status, "Keying:\n%s", exp);
         lv_obj_set_style_text_color(s_lbl_status, lv_palette_main(LV_PALETTE_RED), 0);
@@ -426,7 +549,8 @@ static void mem_clicked_cb(lv_event_t *e)
     send_cw_text(s.cw_msg[idx]);
 }
 
-static void park_clicked_cb(lv_event_t *e) { (void)e; edit_open(-1); }
+static void park_edit_open(void);   // fwd (park editor below)
+static void park_clicked_cb(lv_event_t *e) { (void)e; park_edit_open(); }
 
 // ---- ESM NEXT ---------------------------------------------------------------
 static void refresh_next_label(void)
@@ -582,11 +706,11 @@ static void tick_cb(lv_timer_t *t)
     int wpm = cat_get_keyer_wpm();
     if (wpm > 0 && s_lbl_wpm) lv_label_set_text_fmt(s_lbl_wpm, "%d WPM", wpm);
 
-    // ESM/card refresh + the phantom practice pump (sim mode only).
+    // ESM/card refresh + the phantom practice pump (CW sim only).
     {
         qmx_settings_t qs;
         settings_load_all(&qs);
-        if (qs.sim_mode_en) cw_qso_sim_tick();
+        if (qs.cw_sim_en) cw_qso_sim_tick();
     }
     refresh_card();
     refresh_next_label();
@@ -829,4 +953,5 @@ void cw_screen_view_hide(void)
     if (s_timer) { lv_timer_delete(s_timer); s_timer = NULL; }
     lv_obj_add_flag(s_container, LV_OBJ_FLAG_HIDDEN);
     edit_close();
+    park_close();
 }

@@ -41,6 +41,7 @@ static const char *TAG = "settings";
 #define KEY_CQ_MAX     "cq_max"
 #define KEY_CW_MSG     "cw_msg"    // + digit 0..5 appended at use sites
 #define KEY_CW_PARK    "cw_park"
+#define KEY_CW_SIM     "cw_sim"
 #define KEY_ONBOARDED  "onboarded"
 #define KEY_FT8_FILT   "ft8_filt"
 #define KEY_WIFI_ENABLED "wifi_en"
@@ -249,6 +250,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_CW_MSG0        67   // ..72 = slots 0..5 (contiguous, indexed math below)
 #define DIRTY_CW_MSG5        72
 #define DIRTY_CW_PARK        73
+#define DIRTY_CW_SIM         74   // not config-exported, same as sim_mode_en
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -382,6 +384,7 @@ static void flush_task(void *arg)
             }
         }
         if (dirty_test(&dirty_local, DIRTY_CW_PARK)) nvs_set_str(s_nvs, KEY_CW_PARK, snap.cw_park);
+        if (dirty_test(&dirty_local, DIRTY_CW_SIM))  nvs_set_u8(s_nvs, KEY_CW_SIM, snap.cw_sim_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_ONBOARDED))  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap.onboarded ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FT8_FILT))     nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap.ft8_filters, sizeof(snap.ft8_filters));
         if (dirty_test(&dirty_local, DIRTY_WIFI_ENABLED)) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap.wifi_enabled ? 1 : 0);
@@ -532,6 +535,7 @@ static void load_from_nvs(qmx_settings_t *out)
     strcpy(out->cw_msg[4], "AGN AGN BK");
     strcpy(out->cw_msg[5], "QRZ? DE {MYCALL} K");
     out->cw_park[0] = '\0';
+    out->cw_sim_en = false;
     out->onboarded = false;
     out->wifi_enabled = DEF_WIFI_ENABLED;
     out->qmx_gps = false;
@@ -636,6 +640,7 @@ static void load_from_nvs(qmx_settings_t *out)
         nvs_get_str(s_nvs, k, out->cw_msg[i], &sz);   // absent key keeps the default
     }
     sz = sizeof(out->cw_park); nvs_get_str(s_nvs, KEY_CW_PARK, out->cw_park, &sz);
+    { uint8_t v8 = 0; if (nvs_get_u8(s_nvs, KEY_CW_SIM, &v8) == ESP_OK) out->cw_sim_en = v8 != 0; }
 
     if (nvs_get_u8(s_nvs, KEY_ONBOARDED,  &u8v) == ESP_OK) out->onboarded  = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_WIFI_ENABLED, &u8v) == ESP_OK) out->wifi_enabled = (u8v != 0);
@@ -1018,6 +1023,16 @@ void settings_set_cw_park(const char *park)
     strcpy(s_pending.cw_park, buf);
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CW_PARK);
+}
+
+void settings_set_cw_sim_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.cw_sim_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.cw_sim_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CW_SIM);
 }
 
 void settings_set_onboarded(bool v)

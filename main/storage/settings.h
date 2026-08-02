@@ -66,6 +66,7 @@ typedef struct {
     uint8_t  cq_max_calls;     // auto-stop CQ after N unanswered calls, 0=never (default 0)
     char     cw_msg[6][44];    // 6 CW keyer memories ({MYCALL}/{PARK} macros; see cw_screen_view.c)
     char     cw_park[16];      // POTA park reference for the {PARK} macro (e.g. "US-1211")
+    bool     cw_sim_en;        // CW phantom practice - SEPARATE from sim_mode_en (default false)
     bool     onboarded;        // first-boot WiFi/identity prompts shown (default false)
     bool     wifi_enabled;     // initiate WiFi at boot (default true)
     bool     qmx_gps;         // QMX/QMX+ has GPS discipline — skip Tab5→QMX time push
@@ -187,6 +188,11 @@ void settings_set_cq_max_calls(uint8_t n);
 // so the CW page is usable before anything is edited. Debounced flush.
 void settings_set_cw_msg(uint8_t idx, const char *text);
 void settings_set_cw_park(const char *park);
+
+// CW phantom-practice toggle. Deliberately its OWN flag, not sim_mode_en:
+// enabling CW practice must not arm the FT8 phantoms when swiping to that
+// page, and vice versa (operator, 2026-08-02).
+void settings_set_cw_sim_en(bool v);
 
 
 // First-boot onboarding done: once true, the WiFi/identity prompts are never
