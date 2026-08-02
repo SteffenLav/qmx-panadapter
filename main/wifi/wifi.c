@@ -172,6 +172,15 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
             esp_netif_action_connected(s_sta_netif, base, id, data);
         }
     } else if (id == WIFI_EVENT_SCAN_DONE) {
+        // Harvest FIRST: esp_wifi_connect() flushes the scan results on the
+        // radio, so the retry-chain re-kick below must wait until the records
+        // are copied out. Hardware-caught 2026-08-02: the first version of
+        // the scan-hold fix re-kicked first and read back 0 APs every time -
+        // the hold had given the scan its airtime and the harvest then threw
+        // the results away.
+        static wifi_ap_record_t recs[WIFI_SCAN_MAX];
+        uint16_t num = WIFI_SCAN_MAX;
+        esp_err_t get_err = esp_wifi_scan_get_ap_records(&num, recs);
         // Scan finished: if the retry chain was held for it, resume connecting
         // (the chain is event-driven, so skipping a retry ends it - it must be
         // re-kicked here or WiFi stays down until reboot).
@@ -179,9 +188,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
             s_scan_hold = false;
             if (!s_wifi_user_disabled) esp_wifi_connect();
         }
-        static wifi_ap_record_t recs[WIFI_SCAN_MAX];
-        uint16_t num = WIFI_SCAN_MAX;
-        if (esp_wifi_scan_get_ap_records(&num, recs) != ESP_OK) {
+        if (get_err != ESP_OK) {
             s_scan_state = WIFI_SCAN_FAILED;
             return;
         }
