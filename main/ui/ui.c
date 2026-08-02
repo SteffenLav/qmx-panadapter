@@ -7052,9 +7052,22 @@ uint32_t ui_get_passband_width_hz(void) { return s_passband_width_hz; }
 // main.c after ft8_screen_init()/ft8_status_init()/ft8_tx_init()/ft8_qso_init()
 // (and audio/cat init) have run -- ft8_screen_view_show() and ft8_self_test()
 // touch state set up by those.
+static void apply_saved_mode_inner(void);
+
 void ui_apply_saved_mode(void)
 {
     ESP_LOGI(TAG, "ui_apply_saved_mode: last_ui_mode from NVS = %u", (unsigned)s_saved_ui_mode);
+    apply_saved_mode_inner();
+    // The sim bezel is page-scoped (2026-08-02), so it must be re-evaluated
+    // AFTER the restored page is known - the drawer-build refresh ran while
+    // the UI was still momentarily in Panadapter mode, which is why a reboot
+    // into the FT8 page with sim on came up without its bezel
+    // (operator-observed after a crash recovery).
+    ui_refresh_sim_mode_indicator();
+}
+
+static void apply_saved_mode_inner(void)
+{
     if (s_saved_ui_mode == UI_MODE_CW) {
         // CW page restore: the panadapter widgets are already visible (boot
         // default) and stay as the backdrop; just overlay the CW page and
