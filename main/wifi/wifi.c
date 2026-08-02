@@ -58,6 +58,11 @@ static volatile bool s_wifi_user_disabled = false;
 static volatile bool    s_scan_hold = false;
 static volatile int64_t s_scan_hold_us = 0;
 #define SCAN_HOLD_TIMEOUT_US (15LL * 1000000)
+// One free automatic retry per user scan: a 0-AP result while we were
+// holding the retry chain is almost always interference (some timing window
+// trampling the scan), not an actually-empty band - retry once before
+// reporting "no networks", which also covers windows not yet imagined.
+static volatile bool    s_scan_auto_retried = false;
 
 // True when WE created the STA netif (without IDF's default, un-guarded event
 // handlers) and therefore drive its start/connect/disconnect lifecycle from
@@ -181,6 +186,18 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
         static wifi_ap_record_t recs[WIFI_SCAN_MAX];
         uint16_t num = WIFI_SCAN_MAX;
         esp_err_t get_err = esp_wifi_scan_get_ap_records(&num, recs);
+        // Empty result while holding: take the one free retry BEFORE releasing
+        // the hold (releasing reconnects, which flushes scan state). Extend the
+        // hold clock so the second scan gets its full window.
+        if (get_err == ESP_OK && num == 0 && s_scan_hold && !s_scan_auto_retried) {
+            s_scan_auto_retried = true;
+            s_scan_hold_us = esp_timer_get_time();
+            wifi_scan_config_t retry_cfg = { 0 };
+            if (esp_wifi_scan_start(&retry_cfg, false) == ESP_OK) {
+                ESP_LOGW(TAG, "scan returned 0 APs while held - auto-retrying once");
+                return;   // stay RUNNING; the retry's own SCAN_DONE lands here
+            }
+        }
         // Scan finished: if the retry chain was held for it, resume connecting
         // (the chain is event-driven, so skipping a retry ends it - it must be
         // re-kicked here or WiFi stays down until reboot).
@@ -601,8 +618,17 @@ static void wifi_scan_task(void *arg)
 
 void panadapter_wifi_scan_start(void)
 {
-    if (s_scan_state == WIFI_SCAN_RUNNING) return;  // already scanning
+    // "Already scanning" only blocks a FRESH scan - a RUNNING state older
+    // than 20 s means the SCAN_DONE event was lost (esp_hosted RPC drop),
+    // and without this escape every later press would be refused until
+    // reboot (Scan permanently dead is worse than a doubled scan).
+    static int64_t s_scan_started_us = 0;
+    int64_t now = esp_timer_get_time();
+    if (s_scan_state == WIFI_SCAN_RUNNING &&
+        (now - s_scan_started_us) < 20LL * 1000000) return;
+    s_scan_started_us = now;
     s_scan_state = WIFI_SCAN_RUNNING;
+    s_scan_auto_retried = false;   // each user press gets one free retry
     psram_task_create(wifi_scan_task, "wifi_scan", 4096, NULL, 5, tskNO_AFFINITY);
 }
 

@@ -207,6 +207,13 @@ static void scan_list_render(const char *title)
     }
 }
 
+// 400 ms polls; 50 of them = 20 s. Covers a scan whose SCAN_DONE event is
+// lost (esp_hosted RPC drop) - without a cap the panel says "Scanning..."
+// forever. Generous on purpose: an all-channel scan plus the firmware's
+// one automatic retry legitimately takes up to ~14 s.
+#define SCAN_POLL_MAX 50
+static int s_scan_polls = 0;
+
 static void scan_poll_cb(lv_timer_t *t)
 {
     wifi_scan_state_t st = panadapter_wifi_scan_state();
@@ -215,9 +222,9 @@ static void scan_poll_cb(lv_timer_t *t)
         scan_list_render(s_aps_n ? "Select a network:" : "No networks found");
         lv_timer_del(t);
         s_scan_timer = NULL;
-    } else if (st == WIFI_SCAN_FAILED) {
+    } else if (st == WIFI_SCAN_FAILED || ++s_scan_polls > SCAN_POLL_MAX) {
         s_aps_n = 0;
-        scan_list_render("Scan failed - type SSID manually");
+        scan_list_render("Scan failed - tap Scan to try again");
         lv_timer_del(t);
         s_scan_timer = NULL;
     }
@@ -228,6 +235,7 @@ static void scan_btn_cb(lv_event_t *e)
     (void)e;
     if (s_keyboard) lv_obj_add_flag(s_keyboard, LV_OBJ_FLAG_HIDDEN);
     s_aps_n = 0;
+    s_scan_polls = 0;
     scan_list_render("Scanning for networks...");
     lv_obj_clear_flag(s_scan_panel, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_scan_panel);
