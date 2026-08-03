@@ -177,10 +177,13 @@ static void usb_stale_detect_task(void *arg)
                     continue;
                 }
                 if (now - last_toast_us > (int64_t)DET_RETOAST_MS * 1000) {
+                    // Hardware-observed: a QMX power cycle (physical detach)
+                    // clears even the stuck-port state - it is the first
+                    // thing to try, the Tab5 reboot only the fallback.
                     ESP_LOGW(TAG, "USB port stuck after %d replug attempts - "
-                                  "only a Tab5 reboot can recover this state",
+                                  "needs a QMX power cycle (or Tab5 reboot)",
                              replug_attempts);
-                    ui_toast("USB port stuck - reboot the Tab5 (power radio off first)");
+                    ui_toast("USB stuck - power-cycle the QMX (reboot Tab5 if that fails)");
                     last_toast_us = now;
                 }
             }
