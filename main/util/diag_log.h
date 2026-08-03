@@ -61,6 +61,11 @@ void diag_log_clear(void);
 // never wraps). The cursor space for diag_log_read_from(). Thread-safe.
 uint64_t diag_log_total(void);
 
+// Count of USB enumeration failures seen in the log stream since boot
+// (ENUM CHECK_SHORT/FULL_DEV_DESC FAILED lines - the stale-QMX wedge
+// signature, TODO #74). Read by usb_replug.c's stale-QMX detector.
+uint32_t diag_log_usb_enum_failures(void);
+
 // Incremental tail read for the SD mirror. Copies bytes in [from, total)
 // still retained in the ring into dst (up to cap), returns the count, and
 // sets *out_next to the new cursor. If `from` has fallen off the back of the

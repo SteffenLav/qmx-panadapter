@@ -142,6 +142,19 @@ static void ring_append(const char *buf, size_t len)
 // the original vprintf so serial-console output is unchanged. Never logs
 // itself (no recursion). Must not take a blocking lock — this can run before
 // the scheduler starts and from arbitrary task contexts.
+// USB enumeration-failure tally. The stale-QMX wedge (TODO #74) ends in the
+// driver's "ENUM: [0:0] CHECK_SHORT_DEV_DESC FAILED" with the device object
+// freed and no retry - leaving nothing distinguishable from an empty port in
+// usb_host_lib_info(), so the log line itself is the only reliable signal.
+// This hook already sees every log line; a cheap substring probe here is
+// what usb_replug.c's stale-QMX detector reads.
+static volatile uint32_t s_usb_enum_failures = 0;
+
+uint32_t diag_log_usb_enum_failures(void)
+{
+    return s_usb_enum_failures;
+}
+
 static int diag_vprintf(const char *fmt, va_list ap)
 {
     if (s_enabled && s_ring) {
@@ -152,6 +165,9 @@ static int diag_vprintf(const char *fmt, va_list ap)
         va_end(ap2);
         if (n > 0) {
             size_t ln = (n < (int)sizeof(line)) ? (size_t)n : sizeof(line) - 1;
+            if (strstr(line, "CHECK_SHORT_DEV_DESC") ||
+                strstr(line, "CHECK_FULL_DEV_DESC"))
+                s_usb_enum_failures++;
             ring_append(line, ln);
         }
     }
