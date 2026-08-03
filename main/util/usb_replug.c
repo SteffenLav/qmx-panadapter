@@ -79,6 +79,7 @@ esp_err_t usb_replug(uint32_t off_ms)
 #include "usb_hid_mouse.h"
 #include "ui.h"
 #include "diag_log.h"
+#include "esp_timer.h"
 
 #define DET_CHECK_MS   15000
 #define DET_RETOAST_MS 300000  // remind every 5 min while it persists
@@ -116,9 +117,16 @@ static void usb_stale_detect_task(void *arg)
     // enum failure ~15 s before CDC finishes opening (hardware-observed),
     // and a mid-enumeration moment can look like "device present, nothing
     // open" for a few seconds.
+    // Holdoffs are TIMESTAMPS, never sleeps: an early version slept this
+    // task ~5 min after a toast, and a zombie created during that nap
+    // (hardware-hit: operator power-cycled the QMX and ran the zombie test
+    // inside the window) went unrecovered for the whole sleep. The 15 s
+    // check cadence must never pause.
     uint32_t baseline = 0;
     int      wedge_checks = 0;   // enum-failure (QMX-side) branch
     int      zombie_checks = 0;  // device-present-nothing-open branch
+    int64_t  last_replug_us = 0;
+    int64_t  last_toast_us  = 0;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(DET_CHECK_MS));
 
@@ -129,20 +137,23 @@ static void usb_stale_detect_task(void *arg)
             zombie_checks = 0;
             continue;
         }
+        int64_t now = esp_timer_get_time();
 
         // Zombie branch: something is enumerated yet neither driver opened
         // it for 2 consecutive checks. Note an unsupported device (e.g. a
         // USB stick) also lands here - replugging it is harmless, and we
-        // support nothing else on this port anyway.
+        // support nothing else on this port anyway. 60 s holdoff between
+        // replugs gives enumeration time without ever pausing the checks.
         usb_host_lib_info_t info;
         if (usb_host_lib_info(&info) == ESP_OK && info.num_devices > 0) {
-            if (++zombie_checks >= 2) {
+            if (++zombie_checks >= 2 &&
+                now - last_replug_us > 60000000LL) {
                 ESP_LOGW(TAG, "USB device present but never opened for %d s - "
                               "zombie device state, replugging the port",
                          (DET_CHECK_MS * 2) / 1000);
                 usb_replug(2000);
                 zombie_checks = 0;
-                vTaskDelay(pdMS_TO_TICKS(60000));  // give enumeration time
+                last_replug_us = now;
                 continue;
             }
         } else {
@@ -153,13 +164,14 @@ static void usb_stale_detect_task(void *arg)
         // usable connected - only the QMX's own restart clears it.
         if (fails <= baseline) { wedge_checks = 0; continue; }
         if (++wedge_checks < 2) continue;
+        if (now - last_toast_us < (int64_t)DET_RETOAST_MS * 1000) continue;
 
         ESP_LOGW(TAG, "USB enumeration failed (%lu since boot) and QMX is not "
                       "connected - stale QMX USB state, needs a QMX power cycle",
                  (unsigned long)fails);
         ui_toast("QMX USB is stuck - power-cycle the QMX to reconnect");
         wedge_checks = 0;
-        vTaskDelay(pdMS_TO_TICKS(DET_RETOAST_MS - DET_CHECK_MS));
+        last_toast_us = now;
     }
 }
 
