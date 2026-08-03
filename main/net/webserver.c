@@ -27,6 +27,7 @@
 #include "factory_reset.h"     // factory_reset_request (web-triggered NVS reset)
 #include "bandplan.h"          // bandplan_get_segments / _effective_region / _seg_color
 #include "config_io.h"         // config_io_export / config_io_import
+#include "usb_replug.h"        // usb_replug (hidden /api/cmd recovery action)
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
 #include "freertos/FreeRTOS.h"
@@ -312,6 +313,12 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                 display_unlock();
             }
         }
+    } else if (action && strcmp(action, "usb_replug") == 0) {
+        // Hidden dev/recovery action: emulate a physical USB-A unplug/replug
+        // (root-port power cycle + VBUS cut). Optional "off_ms" (200..8000).
+        cJSON *item = cJSON_GetObjectItem(root, "off_ms");
+        uint32_t off_ms = cJSON_IsNumber(item) ? (uint32_t)item->valuedouble : 2000;
+        usb_replug(off_ms);
     } else if (action && strcmp(action, "resmon") == 0) {
         // Hidden developer-only toggle for the resource-monitor overlay. No web
         // UI element references this — it's meant to be fired from the browser

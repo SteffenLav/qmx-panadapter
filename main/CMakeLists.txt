@@ -31,6 +31,7 @@ idf_component_register(
         "util/diag_log.c"
         "util/psram_task.c"
         "util/factory_reset.c"
+"util/usb_replug.c"
         "util/cpu_stats.c"
         "cat/cat.c"
         "audio/audio.c"
