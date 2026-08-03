@@ -1112,7 +1112,15 @@ static esp_err_t uac_host_interface_release_and_free_transfer(uac_iface_t *iface
     UAC_RETURN_ON_INVALID_ARG(iface->parent);
 
     UAC_RETURN_ON_FALSE(is_interface_in_list(iface), ESP_ERR_NOT_FOUND, "Interface handle not found");
-    UAC_RETURN_ON_ERROR(usb_host_interface_release(s_uac_driver->client_handle, iface->parent->dev_hdl, iface->dev_info.iface_num), "Unable to release UAC Interface");
+    // QMX-panadapter fork patch #4 (2026-08-03): releasing the interface of
+    // a device that vanished mid-stream can fail - stock code returned here,
+    // leaving transfers unfreed and the interface claimed, which made the
+    // later usb_host_device_close() fail: the permanent "zombie" device.
+    // Log and continue - the transfers and state must be torn down locally
+    // no matter what the (dead) device thinks.
+    esp_err_t rel_err = usb_host_interface_release(s_uac_driver->client_handle, iface->parent->dev_hdl, iface->dev_info.iface_num);
+    if (rel_err != ESP_OK)
+        ESP_LOGW(TAG, "Interface release failed (%s) - continuing teardown", esp_err_to_name(rel_err));
 
     if (iface->free_xfer_list) {
         for (int i = 0; i < iface->xfer_num; i++) {
@@ -1409,8 +1417,20 @@ static esp_err_t uac_host_interface_suspend(uac_iface_t *iface)
     }
 
     uint8_t ep_addr = iface->iface_alt[iface->cur_alt].ep_addr;
-    UAC_RETURN_ON_ERROR(usb_host_endpoint_halt(iface->parent->dev_hdl, ep_addr), "Unable to HALT EP");
-    UAC_RETURN_ON_ERROR(usb_host_endpoint_flush(iface->parent->dev_hdl, ep_addr), "Unable to FLUSH EP");
+    // QMX-panadapter fork patch #4 (2026-08-03): on a device that vanished
+    // mid-stream (power cut) the EP halt/flush control ops fail - stock code
+    // returned here, leaving the interface stuck in SUSPENDING with its
+    // transfers unfreed and the interface still claimed, so the later
+    // uac_host_device_close() could never release the usb_host device: a
+    // permanent "zombie" occupying the single root port until reboot
+    // (serial-captured on the Tab5). The device is gone - there is nothing
+    // to halt - so log and push on with the local teardown regardless.
+    esp_err_t halt_err = usb_host_endpoint_halt(iface->parent->dev_hdl, ep_addr);
+    if (halt_err != ESP_OK)
+        ESP_LOGW(TAG, "EP halt failed (%s) - device gone? forcing teardown", esp_err_to_name(halt_err));
+    esp_err_t flush_err = usb_host_endpoint_flush(iface->parent->dev_hdl, ep_addr);
+    if (flush_err != ESP_OK)
+        ESP_LOGW(TAG, "EP flush failed (%s) - continuing teardown", esp_err_to_name(flush_err));
     usb_host_endpoint_clear(iface->parent->dev_hdl, ep_addr);
     _ring_buffer_flush(iface->ringbuf);
 
