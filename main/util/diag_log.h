@@ -61,6 +61,10 @@ void diag_log_clear(void);
 // never wraps). The cursor space for diag_log_read_from(). Thread-safe.
 uint64_t diag_log_total(void);
 
+// Path of the rotated (older) generation of the flash-persisted log,
+// /spiffs/diag.0.log - may not exist until the first rotation.
+const char *diag_log_persist_path_rotated(void);
+
 // Count of USB enumeration failures seen in the log stream since boot
 // (ENUM CHECK_SHORT/FULL_DEV_DESC FAILED lines - the stale-QMX wedge
 // signature, TODO #74). Read by usb_replug.c's stale-QMX detector.

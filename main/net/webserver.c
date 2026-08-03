@@ -452,22 +452,23 @@ static esp_err_t log_handler(httpd_req_t *req)
 
 // GET /api/log/saved — download the persisted diagnostic log. Unlike /api/log
 // (the live PSRAM ring, wiped on reboot), this survives power-off — the POTA
-// "log in the field, download at home" path. Prefers the SD card's full
-// qmx-log.txt when a card is mounted (read under the sd_archive lock so it
-// can't race the mirror task's writes); otherwise falls back to the smaller
-// flash-persisted copy (/spiffs/diag.log).
-static esp_err_t stream_file_chunks(httpd_req_t *req, const char *path, const char *empty_msg)
+// "log in the field, download at home" path and the post-crash lead-up.
+//
+// Stream one file's content as response chunks WITHOUT sending the
+// terminating chunk, so several files can be concatenated into one
+// download. Returns bytes streamed (0 if the file doesn't exist).
+static size_t stream_file_part(httpd_req_t *req, const char *path, esp_err_t *err)
 {
     FILE *f = fopen(path, "r");
-    if (!f) return httpd_resp_sendstr(req, empty_msg);
+    if (!f) return 0;
     char buf[1024];
-    size_t n;
-    esp_err_t err = ESP_OK;
-    while ((n = fread(buf, 1, sizeof(buf), f)) > 0 && err == ESP_OK)
-        err = httpd_resp_send_chunk(req, buf, (ssize_t)n);
+    size_t n, total = 0;
+    while (*err == ESP_OK && (n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        *err = httpd_resp_send_chunk(req, buf, (ssize_t)n);
+        total += n;
+    }
     fclose(f);
-    httpd_resp_send_chunk(req, NULL, 0);
-    return err;
+    return total;
 }
 
 static esp_err_t saved_log_handler(httpd_req_t *req)
@@ -476,26 +477,25 @@ static esp_err_t saved_log_handler(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=qmx-log-saved.txt");
 
-    // Prefer the card's full log - but only if it actually EXISTS with
-    // content. Since the WiFi-aware SD gate (v1.3.2), the diag log is never
-    // mirrored to the card while WiFi is on, so on a WiFi-connected unit
-    // with a card inserted the old unconditional preference streamed a
-    // nonexistent file's placeholder and the flash copy - which holds the
-    // crash lead-up this endpoint exists for - was never reached (field-hit:
-    // Dennis WN4FLA's post-crash download came back empty, 2026-08-03).
-    if (sd_archive_is_mounted() && sd_archive_lock(2000)) {
-        struct stat st;
-        bool have_card_log = (stat(sd_archive_log_path(), &st) == 0 && st.st_size > 0);
-        if (have_card_log) {
-            esp_err_t err = stream_file_chunks(req, sd_archive_log_path(),
-                                               "(no diagnostic log on card yet)\n");
-            sd_archive_unlock();
-            return err;
-        }
-        sd_archive_unlock();
-    }
-    // Fall back to the flash-persisted copy.
-    return stream_file_chunks(req, diag_log_persist_path(), "(no saved diagnostic log yet)\n");
+    // Always serve the FLASH-persisted copy (rotated older generation first,
+    // then the current file) - it is written every 30 s regardless of WiFi
+    // or SD state, so it is always the freshest survivor of a crash, which
+    // is what this endpoint exists for. The endpoint used to prefer the SD
+    // card's qmx-log.txt whenever a card was mounted, which was wrong twice
+    // over since the v1.3.2 WiFi-aware SD gate: with WiFi on the card file
+    // either doesn't exist (Dennis WN4FLA got the empty placeholder right
+    // after a crash, 2026-08-03) or is a STALE snapshot frozen at the last
+    // WiFi-off session (operator's own unit served a months-old 512 KB
+    // fragment) - both masking the fresh flash copy. The card's full deep
+    // history remains available via the /files browser.
+    esp_err_t err = ESP_OK;
+    size_t total = 0;
+    total += stream_file_part(req, diag_log_persist_path_rotated(), &err);
+    total += stream_file_part(req, diag_log_persist_path(), &err);
+    if (total == 0)
+        return httpd_resp_sendstr(req, "(no saved diagnostic log yet)\n");
+    httpd_resp_send_chunk(req, NULL, 0);
+    return err;
 }
 
 // GET /api/adif — download the ADIF QSO log from SPIFFS.

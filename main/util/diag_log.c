@@ -349,3 +349,8 @@ const char *diag_log_persist_path(void)
 {
     return DIAG_FLASH_PATH;
 }
+
+const char *diag_log_persist_path_rotated(void)
+{
+    return DIAG_FLASH_PATH_0;
+}
