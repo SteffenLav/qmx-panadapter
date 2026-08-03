@@ -94,20 +94,31 @@ static void usb_stale_detect_task(void *arg)
     // - so old failures never nag after a later successful connect or an
     // ordinary unplug; only failures with nothing usable connected do.
     uint32_t baseline = 0;
+    int      stale_checks = 0;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(DET_CHECK_MS));
 
         uint32_t fails = diag_log_usb_enum_failures();
         if (cat_is_ready() || usb_hid_mouse_present()) {
             baseline = fails;
+            stale_checks = 0;
             continue;
         }
-        if (fails <= baseline) continue;
+        if (fails <= baseline) { stale_checks = 0; continue; }
+
+        // Require the condition on TWO consecutive checks before warning: a
+        // healthy fresh connect can tick one benign enumeration failure a
+        // few seconds before CAT finishes opening (hardware-observed on a
+        // QMX power-up: fail at 4.5 s, CDC ready at ~19 s - the single-check
+        // version toasted right into that window). A real wedge lasts
+        // forever, so 15 s of patience costs nothing.
+        if (++stale_checks < 2) continue;
 
         ESP_LOGW(TAG, "USB enumeration failed (%lu since boot) and QMX is not "
                       "connected - stale QMX USB state, needs a QMX power cycle",
                  (unsigned long)fails);
         ui_toast("QMX USB is stuck - power-cycle the QMX to reconnect");
+        stale_checks = 0;
         vTaskDelay(pdMS_TO_TICKS(DET_RETOAST_MS - DET_CHECK_MS));
     }
 }
