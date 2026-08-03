@@ -171,10 +171,25 @@
      Tab5 is not in Panadapter mode - see #ft8-notice toggle in tick()) ---- */
   #ft8-notice {
     display: none; align-items: center; justify-content: center;
+    flex-direction: column; gap: 1.2rem;
     text-align: center; line-height: 1.7;
     background: var(--card); border: 1px solid var(--border); border-radius: 6px;
     color: var(--dim); font-size: 1.6rem; padding: 1rem;
   }
+  /* TX/QSO status banner inside the FT8 notice - mirrors the Tab5's own
+     left-pane label colors (Dennis WN4FLA: see at a glance, from another
+     room, whether the radio is still transmitting or needs attention). */
+  #ft8-tx {
+    font-size: 2.2rem; font-weight: 700; line-height: 1.4;
+    padding: 0.8rem 1.4rem; border-radius: 8px;
+    border: 2px solid transparent; max-width: 90%;
+  }
+  #ft8-tx.st-active  { color: #ff4040; border-color: #ff4040; background: rgba(255,64,64,.08); }
+  #ft8-tx.st-armed   { color: #ffa040; border-color: #ffa040; background: rgba(255,160,64,.08); }
+  #ft8-tx.st-wait    { color: #ffa040; border-color: #ffa04080; }
+  #ft8-tx.st-done    { color: #40c040; border-color: #40c040; background: rgba(64,192,64,.08); }
+  #ft8-tx.st-timeout { color: #ff6020; border-color: #ff6020; background: rgba(255,96,32,.08); }
+  #ft8-tx.st-idle    { color: var(--dim); font-weight: 400; font-size: 1.8rem; }
 
   /* ---- Bottom status row ---- */
   #bot {
@@ -372,7 +387,7 @@
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
-  <div id="ft8-notice">Tab5 is in FT8/FT4 mode — spectrum &amp; waterfall are shown only in Panadapter mode.<br>Use the buttons below to download logs/config or upload QSOs.</div>
+  <div id="ft8-notice"><div id="ft8-tx" class="st-idle">--</div><div>Tab5 is in FT8/FT4 mode — spectrum &amp; waterfall are shown only in Panadapter mode.<br>Use the buttons below to download logs/config or upload QSOs.</div></div>
 
   <div id="bot">
     <span id="batt">🔋 --</span>
@@ -1297,6 +1312,21 @@ async function tick() {
         fpsEl.textContent = "FT8 mode";
         fpsEl.classList.remove("bad");
       }
+    }
+
+    /* TX/QSO status banner - updated every poll while the FT8 screen is up.
+       s.ft8 = { st: active|armed|wait|done|timeout|idle, text: "..." }. */
+    if (screen === "ft8" && s.ft8) {
+      const el = document.getElementById("ft8-tx");
+      el.className   = "st-" + (s.ft8.st || "idle");
+      el.textContent = s.ft8.text || "--";
+      /* Tab title mirrors the state so an unfocused tab still signals it. */
+      document.title =
+        s.ft8.st === "active" ? "\u{1F534} TX - QMX+ Panadapter" :
+        s.ft8.st === "armed"  ? "\u{1F7E0} armed - QMX+ Panadapter" :
+                                "QMX+ Panadapter";
+    } else if (document.title !== "QMX+ Panadapter") {
+      document.title = "QMX+ Panadapter";
     }
 
     /* Sync flat mode from device on first connect - ONLY when this browser has

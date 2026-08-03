@@ -11,6 +11,9 @@
 #include "cat.h"              // cat_get_frequency, cat_get_band_list, cat_set_*
 #include "ui.h"               // ui_get_*, ui_set_zoom
 #include "ft8_screen_view.h"  // ft8_screen_view_is_active
+#include "ft8_tx.h"           // ft8_tx_get_status (web TX-status banner)
+#include "ft8_qso.h"          // ft8_qso_get_state / get_target / get_cq_calls_sent
+#include "ft8_status.h"       // ft8_status_get
 #include "dsp.h"              // dsp_get_peak_dbm_around_vfo
 #include "display/display.h"  // display_lock / display_unlock
 #include "screenshot/screenshot.h"  // screenshot_capture_rgb565
@@ -83,6 +86,73 @@ static esp_err_t root_handler(httpd_req_t *req)
     return httpd_resp_send(req, index_html_start, len);
 }
 
+// FT8/FT4 TX + QSO state for the web page's status banner (Dennis WN4FLA:
+// see from another room when the radio stopped calling CQ / timed out and
+// needs attention). Mirrors the priority ladder of the Tab5's own left-pane
+// label (t_clock_cb in ft8_screen_view.c): ACTIVE > ARMED > DONE > TIMEOUT >
+// session-alive > ft8_status passthrough. The clash check is deliberately
+// omitted - ft8_tx_is_clashing() walks a heap snapshot of the heard-station
+// table and this runs on every 1 Hz status poll.
+static void add_ft8_tx_status(cJSON *root)
+{
+    cJSON *f = cJSON_AddObjectToObject(root, "ft8");
+    if (!f) return;
+
+    char tx_text[32];
+    int  secs_until = 0;
+    ft8_tx_state_t  tx_st  = ft8_tx_get_status(tx_text, sizeof(tx_text), &secs_until);
+    ft8_qso_state_t qso_st = ft8_qso_get_state();
+
+    // CQ auto-stop progress, same wording as the Tab5 label.
+    char cq_line[32] = "";
+    int  cq_sent = ft8_qso_get_cq_calls_sent();
+    if (cq_sent >= 0 && tx_st != FT8_TX_IDLE) {
+        qmx_settings_t cfg;
+        settings_load_all(&cfg);
+        if (cfg.cq_max_calls > 0)
+            snprintf(cq_line, sizeof(cq_line), " - call %d of %d", cq_sent + 1, cfg.cq_max_calls);
+        else
+            snprintf(cq_line, sizeof(cq_line), " - call %d", cq_sent + 1);
+    }
+
+    const char *st;
+    char b[160];
+    if (tx_st == FT8_TX_ACTIVE) {
+        st = "active";
+        snprintf(b, sizeof(b), "Transmitting: %s%s", tx_text, cq_line);
+    } else if (tx_st == FT8_TX_ARMED) {
+        st = "armed";
+        snprintf(b, sizeof(b), "TX armed: %s%s (~%ds)", tx_text, cq_line, secs_until);
+    } else if (qso_st == FT8_QSO_DONE) {
+        st = "done";
+        char target[FT8_CALL_MAX_LEN];
+        ft8_qso_get_target(target, sizeof(target));
+        snprintf(b, sizeof(b), "QSO %s: complete!", target);
+    } else if (qso_st == FT8_QSO_TIMEOUT) {
+        st = "timeout";
+        char target[FT8_CALL_MAX_LEN];
+        ft8_qso_get_target(target, sizeof(target));
+        snprintf(b, sizeof(b), "QSO %s: timeout", target);
+    } else if (qso_st == FT8_QSO_CQ || qso_st == FT8_QSO_WAIT_RPT ||
+               qso_st == FT8_QSO_WAIT_ROGER || qso_st == FT8_QSO_WAIT_RR73) {
+        // Session alive, nothing armed (busy-station hold, CQ auto-stop's
+        // final listening slot, or a transient between re-arms).
+        st = "wait";
+        char status[96];
+        ft8_status_get(status, sizeof(status));
+        snprintf(b, sizeof(b), "%s", status[0] ? status : "QSO waiting");
+    } else {
+        // Idle passthrough - this is where "CQ stopped after N calls - no
+        // answer" (the auto-stop's persistent message) shows up.
+        st = "idle";
+        char status[96];
+        ft8_status_get(status, sizeof(status));
+        snprintf(b, sizeof(b), "%s", status[0] ? status : "Idle");
+    }
+    cJSON_AddStringToObject(f, "st",   st);
+    cJSON_AddStringToObject(f, "text", b);
+}
+
 static esp_err_t status_handler(httpd_req_t *req)
 {
     cJSON *root = cJSON_CreateObject();
@@ -103,6 +173,10 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "mode",         ui_get_mode_str());
     cJSON_AddStringToObject(root, "band",         ui_get_band_str());
     cJSON_AddStringToObject(root, "screen",       ft8_screen_view_is_active() ? "ft8" : "panadapter");
+    // TX/QSO banner data, only while the FT8/FT4 screen is live (the FT8
+    // engine doesn't run otherwise, so its status would be stale text).
+    if (ft8_screen_view_is_active())
+        add_ft8_tx_status(root);
     // Apply mode defaults if CAT has not yet reported BW (matches Tab5 compute_passband_edges_hz)
     {
         uint32_t bw = ui_get_passband_width_hz();
