@@ -21,6 +21,15 @@
 
 If still flat after 10 seconds, proceed to [Collecting Diagnostics](#collecting-diagnostics).
 
+### QMX won't reconnect after a restart (v1.3.6 changes)
+
+Before v1.3.6, a QMX that vanished mid-session — powered off and on, or present across a Tab5 restart — could stay invisible no matter how many times you restarted the radio, and only a Tab5 reboot recovered. That was two separate bugs, and v1.3.6 handles both:
+
+1. **Fixed on the Tab5:** powering the QMX off while it streamed could jam the Tab5's USB port with the dead connection. The Tab5 now cleans up properly and additionally "replugs" the port by itself if a device sits unrecognized — turning the QMX off and back on reconnects within a few seconds, hands off.
+2. **Lives in the QMX's own firmware** (reported to QRP Labs; present in v1.03.002 and v1.04.004 alike): after some Tab5 restarts, the QMX answers USB enumeration incorrectly until *it* is restarted. The Tab5 can't fix this one, but it now detects it and shows **"QMX USB is stuck - power-cycle the QMX to reconnect"** on screen. Do exactly that — radio off for a few seconds, back on — and it connects normally.
+
+If you ever see **"USB stuck - power-cycle the QMX (reboot Tab5 if that fails)"** instead, the port ended up in a rarer state: try the QMX power cycle first; a Tab5 reboot is the fallback.
+
 ### Spectrum signal is shifted/mirrored, or slides across the whole window as you tune
 
 **Symptoms:** The signal isn't where it should be — it appears shifted, and turning the QMX's own VFO knob slides it across the *entire* 48 kHz window instead of just nudging it. Audio is often silent until you tune the signal back into the visible range.

@@ -38,7 +38,9 @@ Click anywhere on the spectrum to tune to that frequency. The waterfall updates 
 
 ## FT8 Control
 
-When the Tab5 is in **FT8/FT4 mode**, the browser pauses the live spectrum stream (see [Spectrum Waterfall](#spectrum-waterfall) above) and instead shows a status notice plus the **log and upload controls** — download your ADIF, upload to QRZ/eQSL/LoTW, grab the diagnostic log. Operate FT8 (watch the decode list, tap to reply, call CQ) **on the Tab5 itself**.
+When the Tab5 is in **FT8/FT4 mode**, the browser pauses the live spectrum stream (see [Spectrum Waterfall](#spectrum-waterfall) above) and instead shows a **live TX status banner** plus the **log and upload controls** — download your ADIF, upload to QRZ/eQSL/LoTW, grab the diagnostic log. Operate FT8 (watch the decode list, tap to reply, call CQ) **on the Tab5 itself**.
+
+The status banner (new in v1.3.6) mirrors the Tab5's own TX label so you can watch the radio from another room: **red** while transmitting — including the "call 2 of 4" counter when a [CQ stop limit](ft8-tx.md) is set — **amber** when a transmission is armed or a QSO is waiting, **green** on QSO complete, **orange** on timeout, and the persistent **"CQ stopped after N calls - no answer"** once an auto-stopped CQ run ends. The browser tab's title also shows a red dot while transmitting, so even a background tab signals when the radio is on the air.
 
 FT8 transmit can only be initiated from the Tab5 — a safety feature, since only one interface should key the QMX at a time.
 

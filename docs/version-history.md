@@ -1239,5 +1239,28 @@ The cap moved once more, from 40 to **50 dB**, on his third and best-informed re
 
 ---
 
+## v1.3.6 (2026-08-03) — the USB reconnect saga solved, a field crash fixed, and WiFi scan that works away from home
+
+A pure fixes release — no new operating features, but two of the fixes close problems that have been part of living with the panadapter since the beginning. Everything below was found, reproduced and verified in a single marathon bench session with a serial monitor attached (Hoi An, with the QMX on firmware 1_04_004 by the end of the night).
+
+**The "restart the QMX so many times" mystery — resolved into two separate bugs, both now handled.**
+
+- **The Tab5-side wedge ("zombie device") — FIXED.** Powering the QMX off while it was streaming could fail the USB teardown inside the audio driver, leaving a dead device object permanently occupying the USB port: the QMX became invisible no matter how many times it was restarted, and only a Tab5 reboot recovered. Root-fixed in our USB-audio driver fork (the teardown now always completes), with a belt-and-suspenders automatic recovery on top: if a device sits unrecognized on the port, the Tab5 now electrically "replugs" the port by itself (verified live — twice — including once fired remotely through the wedged unit's own web server). Net effect: QMX off → on now reconnects in about a second, hands off.
+- **The QMX-side wedge — detected and explained on screen; the fix belongs to QRP Labs.** After some Tab5 restarts, the QMX answers USB enumeration with a truncated device descriptor (8 of 16 requested bytes), forever — through bus resets, port power cycles, VBUS cuts and even physical cable replugs. Only restarting the QMX clears it. Reproduced identically on QMX firmware 1_03_002 and 1_04_004 and reported to QRP Labs. The Tab5 now recognizes the state and shows **"QMX USB is stuck - power-cycle the QMX to reconnect"** instead of sitting on a dead-looking screen.
+
+**FT8 crash on radio power-on — FIXED (Dennis WN4FLA).** Turning the radio on while the Tab5 sat waiting in FT8 mode (or changing bands around that moment) could reboot the Tab5 — Dennis hit it three times in one morning. Reproduced on the bench with his exact steps on the first try, with the serial backtrace the field could never provide: the FT8 engine's periodic restart could overlap its own shutdown and tear shared queues out from under a live decoder task. The engine's internal communications are now owned per-instance, the shutdown waits are ordered correctly, and a new engine refuses to start until the old one is fully gone. Torture-tested with every radio-off/on and band-change combination we could invent: no crash.
+
+**WiFi scan now works where it matters (hotel/POTA).** The WiFi setup's Scan button always returned "No networks found" whenever the stored network was unreachable — precisely the situation Scan exists for. Root cause: the automatic reconnect loop both starved the scan of radio airtime and (the killer) `esp_wifi_connect()` flushes the scan results before they could be read. Fixed with a scan-hold on the reconnect chain, harvest-before-reconnect ordering, a fix for scans started during the reconnect backoff, plus an automatic retry and proper UI timeouts. Verified five-for-five on hotel WiFi.
+
+**Web UI: live TX status banner (Dennis WN4FLA).** In FT8/FT4 mode the web page now shows the same status as the Tab5's own TX label — red while transmitting (with the "call 2 of 4" CQ counter), amber armed/waiting, green QSO complete, orange timeout, and the persistent "CQ stopped after N calls - no answer" from the v1.3.5 auto-stop. The browser tab's title carries a red dot while transmitting, so even an unfocused tab signals from across the room.
+
+**"Diag(saved)" download fixed.** With an SD card inserted and WiFi on, the saved-diagnostics download served an empty placeholder or a stale months-old card snapshot instead of the fresh crash log — hiding exactly the data it exists to deliver (found via Dennis's empty post-crash download). It now always serves the flash-persisted copy, including the rotated older half so rotation can't hide a crash lead-up.
+
+**For builders:** two new standing patches this release — `tools/patches/apply_hub_recover_tolerant.ps1` (IDF patch #5: the hub driver's root-port recovery abort → tolerant, required for the USB auto-recovery to be crash-safe) joins the four existing apply-scripts, and the USB-audio fork (`components/espressif__usb_host_uac`, in-repo) carries its 4th patch (forced teardown on a dead device).
+
+**Still on-air-unverified (carried over):** the v1.3.5 CQ auto-stop pacing and busy-hold cancel, the v1.3.4 final re-send budget, and v1.3.0 Fast pounce.
+
+---
+
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
 
