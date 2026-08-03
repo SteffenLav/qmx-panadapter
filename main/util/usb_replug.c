@@ -86,39 +86,79 @@ esp_err_t usb_replug(uint32_t off_ms)
 static void usb_stale_detect_task(void *arg)
 {
     (void)arg;
-    // The wedge's only reliable signal is the driver's enumeration-failure
-    // log line (tallied by diag_log's vprintf hook): the failed device is
-    // freed with no retry, so usb_host_lib_info() afterwards shows the same
-    // empty bus as "nothing plugged in". Baseline bookkeeping: while
-    // anything usable is connected (QMX or mouse), adopt the current tally
-    // - so old failures never nag after a later successful connect or an
-    // ordinary unplug; only failures with nothing usable connected do.
+    // TWO distinct wedges, told apart by usb_host_lib_info().num_devices -
+    // both hardware-verified 2026-08-03 (TODO #74/#75):
+    //
+    // ZOMBIE (Tab5-side, CURABLE): the QMX powered off mid-stream, the UAC
+    // teardown failed ("Suspend Interface Failed" + EP command errors), the
+    // device object is never freed - it occupies the single root port, so a
+    // re-powered QMX is invisible and the CAT reopen spins on
+    // usbh_devs_open ESP_ERR_INVALID_STATE forever. Signature: num_devices
+    // > 0 with nothing opened. usb_replug() CURES this (proven live: freed
+    // the zombie, QMX enumerated within a second, no reboot).
+    //
+    // DESCRIPTOR WEDGE (QMX-side, NOT curable from here): after some Tab5
+    // warm reboots the QMX answers every enumeration with 8 of 16
+    // descriptor bytes; the failed device is FREED, so the bus looks empty
+    // - only the enum-failure tally from diag_log's vprintf hook sees it.
+    // Replug proven useless (the QMX answers the same through bus resets,
+    // port power cycles, VBUS cuts, even physical cable replugs); only a
+    // QMX power cycle helps, so TELL the operator.
+    //
+    // The two hand off cleanly: replugging a descriptor-wedged QMX ends in
+    // a failed enumeration -> device freed -> zombie branch goes quiet ->
+    // enum branch toasts the power-cycle instruction.
+    //
+    // Baseline bookkeeping: while anything usable is connected (QMX or
+    // mouse), adopt the current tally - so old failures never nag after a
+    // later successful connect or an ordinary unplug. Every branch requires
+    // TWO consecutive 15 s checks: a healthy connect can tick one benign
+    // enum failure ~15 s before CDC finishes opening (hardware-observed),
+    // and a mid-enumeration moment can look like "device present, nothing
+    // open" for a few seconds.
     uint32_t baseline = 0;
-    int      stale_checks = 0;
+    int      wedge_checks = 0;   // enum-failure (QMX-side) branch
+    int      zombie_checks = 0;  // device-present-nothing-open branch
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(DET_CHECK_MS));
 
         uint32_t fails = diag_log_usb_enum_failures();
         if (cat_is_ready() || usb_hid_mouse_present()) {
             baseline = fails;
-            stale_checks = 0;
+            wedge_checks = 0;
+            zombie_checks = 0;
             continue;
         }
-        if (fails <= baseline) { stale_checks = 0; continue; }
 
-        // Require the condition on TWO consecutive checks before warning: a
-        // healthy fresh connect can tick one benign enumeration failure a
-        // few seconds before CAT finishes opening (hardware-observed on a
-        // QMX power-up: fail at 4.5 s, CDC ready at ~19 s - the single-check
-        // version toasted right into that window). A real wedge lasts
-        // forever, so 15 s of patience costs nothing.
-        if (++stale_checks < 2) continue;
+        // Zombie branch: something is enumerated yet neither driver opened
+        // it for 2 consecutive checks. Note an unsupported device (e.g. a
+        // USB stick) also lands here - replugging it is harmless, and we
+        // support nothing else on this port anyway.
+        usb_host_lib_info_t info;
+        if (usb_host_lib_info(&info) == ESP_OK && info.num_devices > 0) {
+            if (++zombie_checks >= 2) {
+                ESP_LOGW(TAG, "USB device present but never opened for %d s - "
+                              "zombie device state, replugging the port",
+                         (DET_CHECK_MS * 2) / 1000);
+                usb_replug(2000);
+                zombie_checks = 0;
+                vTaskDelay(pdMS_TO_TICKS(60000));  // give enumeration time
+                continue;
+            }
+        } else {
+            zombie_checks = 0;
+        }
+
+        // QMX-side descriptor-wedge branch: enumeration failed and nothing
+        // usable connected - only the QMX's own restart clears it.
+        if (fails <= baseline) { wedge_checks = 0; continue; }
+        if (++wedge_checks < 2) continue;
 
         ESP_LOGW(TAG, "USB enumeration failed (%lu since boot) and QMX is not "
                       "connected - stale QMX USB state, needs a QMX power cycle",
                  (unsigned long)fails);
         ui_toast("QMX USB is stuck - power-cycle the QMX to reconnect");
-        stale_checks = 0;
+        wedge_checks = 0;
         vTaskDelay(pdMS_TO_TICKS(DET_RETOAST_MS - DET_CHECK_MS));
     }
 }
