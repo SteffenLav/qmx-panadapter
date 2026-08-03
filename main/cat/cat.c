@@ -739,6 +739,16 @@ static void poll_task(void *arg)
                 esp_err_t e = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)ky,
                                                             strlen(ky), 200);
                 ESP_LOGI(TAG, "CW send -> %s (%s)", ky, e == ESP_OK ? "ok" : "fail");
+                // Diagnostic readback (CW-page bring-up): KY; 300 ms after the
+                // send. The radio answers KY0/KY1 = message sending in
+                // progress, KY2 = buffer empty (= it silently discarded the
+                // send - hardware-observed 2026-08-03: well-formed KY, compat
+                // OFF, practice ON, no ?; error, yet TB t stayed 0). The
+                // response lands in the diag log as a normal non-poll RX line.
+                if (e == ESP_OK) {
+                    vTaskDelay(pdMS_TO_TICKS(300));
+                    cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"KY;", 3, 200);
+                }
                 vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
                 continue;
             }
