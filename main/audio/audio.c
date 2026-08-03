@@ -232,6 +232,11 @@ uint32_t audio_get_dropped_total(void)
     return s_dropped_total;
 }
 
+bool audio_uac_active(void)
+{
+    return s_uac_dev != NULL;
+}
+
 void audio_request_reset(void)
 {
     s_flat_reset_pending = true;
