@@ -25,6 +25,7 @@
 #include "freertos/task.h"
 #include "usb/usb_host.h"
 #include "m5stack_tab5.h"
+#include "psram_task.h"
 
 static const char *TAG = "usb_replug";
 
@@ -47,4 +48,47 @@ esp_err_t usb_replug(uint32_t off_ms)
     esp_err_t err_on = usb_host_lib_set_root_port_power(true);
     ESP_LOGW(TAG, "replug: root port power ON: %s", esp_err_to_name(err_on));
     return err_on;
+}
+
+// No-device watchdog: if NOTHING has enumerated on the USB-A port for two
+// consecutive 15 s checks, fire a replug, then hold off for 60 s. Covers a
+// QMX whose stale USB state survived a Tab5 warm reboot (or any other
+// silent-port situation) without the operator touching anything. The
+// "anything enumerated -> reset the counter" guard means a lone mouse (or a
+// healthy QMX) is never disturbed, and with no device attached at all the
+// replug is an electrical no-op on an empty port. Deliberately unbounded -
+// the QMX may be powered on hours after the Tab5, and the periodic no-op
+// costs nothing.
+#define WD_CHECK_MS    15000
+#define WD_EMPTY_TRIPS 2      // 2 x 15 s of empty bus before acting
+#define WD_HOLDOFF_MS  60000  // after a replug, give enumeration time
+
+static void usb_replug_watchdog_task(void *arg)
+{
+    (void)arg;
+    int empty_checks = 0;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(WD_CHECK_MS));
+
+        usb_host_lib_info_t info;
+        if (usb_host_lib_info(&info) != ESP_OK) continue;  // host not up (yet)
+
+        if (info.num_devices > 0) {
+            empty_checks = 0;
+            continue;
+        }
+        if (++empty_checks < WD_EMPTY_TRIPS) continue;
+
+        ESP_LOGW(TAG, "watchdog: no USB device enumerated for %d s - replugging port",
+                 (WD_CHECK_MS * WD_EMPTY_TRIPS) / 1000);
+        usb_replug(2000);
+        empty_checks = 0;
+        vTaskDelay(pdMS_TO_TICKS(WD_HOLDOFF_MS));
+    }
+}
+
+void usb_replug_watchdog_start(void)
+{
+    psram_task_create(usb_replug_watchdog_task, "usb_replug_wd", 4096, NULL,
+                      2, tskNO_AFFINITY);
 }

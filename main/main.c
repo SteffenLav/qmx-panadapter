@@ -236,6 +236,10 @@ void app_main(void)
     // Harmless on a cold boot: nothing is enumerated/open this early, and a
     // disconnect mid-enumeration is the ordinary unplug path.
     usb_replug(2000);
+    // ...and keep watching: if the bus stays empty (QMX powered on late, or
+    // a stale state the boot replug didn't clear), replug again every ~30 s
+    // until something enumerates. Never fires while any device is present.
+    usb_replug_watchdog_start();
 
     ESP_ERROR_CHECK(audio_init());
     iq_balance_set_enabled(cfg.iq_enabled);
