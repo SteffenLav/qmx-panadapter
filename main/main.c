@@ -46,6 +46,7 @@
 #include "time_sync.h"
 #include "adif/adif_log.h"
 #include "util/psram_task.h"
+#include "util/usb_replug.h"
 
 static const char *TAG = "main";
 
@@ -223,6 +224,18 @@ void app_main(void)
 
     ESP_ERROR_CHECK(bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true));
     ESP_LOGI(TAG, "USB host started");
+
+    // Emulated USB-A unplug/replug at every boot: a warm Tab5 reboot leaves
+    // an attached QMX invisible to the fresh USB host (its stale device
+    // state never re-attaches), so the QMX needed a power cycle after every
+    // Tab5 reboot. Cycling the DWC root-port power forces a real detach ->
+    // attach -> bus-reset sequence; the VBUS cut rides along inside
+    // usb_replug() for devices that watch it. (A pre-install VBUS-only
+    // pulse - 500 ms and 3 s - was hardware-tested and did NOT recover the
+    // QMX; the root-port cycle is the operative lever being tested here.)
+    // Harmless on a cold boot: nothing is enumerated/open this early, and a
+    // disconnect mid-enumeration is the ordinary unplug path.
+    usb_replug(2000);
 
     ESP_ERROR_CHECK(audio_init());
     iq_balance_set_enabled(cfg.iq_enabled);
