@@ -79,6 +79,7 @@ esp_err_t usb_replug(uint32_t off_ms)
 #include "usb_hid_mouse.h"
 #include "ui.h"
 #include "diag_log.h"
+#include "audio.h"
 #include "esp_timer.h"
 
 #define DET_CHECK_MS   15000
@@ -123,41 +124,70 @@ static void usb_stale_detect_task(void *arg)
     // inside the window) went unrecovered for the whole sleep. The 15 s
     // check cadence must never pause.
     uint32_t baseline = 0;
-    int      wedge_checks = 0;   // enum-failure (QMX-side) branch
-    int      zombie_checks = 0;  // device-present-nothing-open branch
+    int      wedge_checks = 0;    // enum-failure (QMX-side) branch
+    int      zombie_checks = 0;   // device-present-nothing-open branch
+    int      replug_attempts = 0; // per-episode cap - reset on any connect
+    int      prev_devices = 0;
     int64_t  last_replug_us = 0;
     int64_t  last_toast_us  = 0;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(DET_CHECK_MS));
 
         uint32_t fails = diag_log_usb_enum_failures();
-        if (cat_is_ready() || usb_hid_mouse_present()) {
+        // audio_uac_active() is load-bearing here, not belt-and-suspenders:
+        // during a fresh connect UAC opens SECONDS before cat marks itself
+        // ready (CDC open -> IQ handshake -> band scan), and a check landing
+        // in that window once counted a CONNECTING QMX as a zombie and
+        // replugged it mid-handshake (hardware-hit 2026-08-03) - killing a
+        // healthy connect and wedging the port.
+        if (cat_is_ready() || usb_hid_mouse_present() || audio_uac_active()) {
             baseline = fails;
             wedge_checks = 0;
             zombie_checks = 0;
+            replug_attempts = 0;
             continue;
         }
         int64_t now = esp_timer_get_time();
 
         // Zombie branch: something is enumerated yet neither driver opened
-        // it for 2 consecutive checks. Note an unsupported device (e.g. a
-        // USB stick) also lands here - replugging it is harmless, and we
-        // support nothing else on this port anyway. 60 s holdoff between
-        // replugs gives enumeration time without ever pausing the checks.
+        // it for 3 consecutive checks OF THE SAME DEVICE SET - a change in
+        // num_devices restarts the window, so strikes counted against a
+        // wedged device can never carry over to a freshly attached one
+        // (that carry-over is exactly what caused the mid-connect replug
+        // above). Unsupported devices (e.g. a USB stick) also land here -
+        // replugging them is harmless. Max 3 replugs per episode: if three
+        // didn't clear it, more won't either (hardware-observed: a port
+        // stuck answering power-on with INVALID_STATE forever) - fall
+        // through to the toast so the operator learns the state.
         usb_host_lib_info_t info;
         if (usb_host_lib_info(&info) == ESP_OK && info.num_devices > 0) {
-            if (++zombie_checks >= 2 &&
-                now - last_replug_us > 60000000LL) {
-                ESP_LOGW(TAG, "USB device present but never opened for %d s - "
-                              "zombie device state, replugging the port",
-                         (DET_CHECK_MS * 2) / 1000);
-                usb_replug(2000);
+            if (info.num_devices != prev_devices) {
+                zombie_checks = 0;   // device set changed - fresh window
+            } else if (++zombie_checks >= 3 &&
+                       now - last_replug_us > 60000000LL) {
                 zombie_checks = 0;
-                last_replug_us = now;
-                continue;
+                if (replug_attempts < 3) {
+                    replug_attempts++;
+                    ESP_LOGW(TAG, "USB device present but never opened for %d s - "
+                                  "zombie device state, replugging the port (%d/3)",
+                             (DET_CHECK_MS * 3) / 1000, replug_attempts);
+                    usb_replug(2000);
+                    last_replug_us = now;
+                    prev_devices = info.num_devices;
+                    continue;
+                }
+                if (now - last_toast_us > (int64_t)DET_RETOAST_MS * 1000) {
+                    ESP_LOGW(TAG, "USB port stuck after %d replug attempts - "
+                                  "only a Tab5 reboot can recover this state",
+                             replug_attempts);
+                    ui_toast("USB port stuck - reboot the Tab5 (power radio off first)");
+                    last_toast_us = now;
+                }
             }
+            prev_devices = info.num_devices;
         } else {
             zombie_checks = 0;
+            prev_devices = 0;
         }
 
         // QMX-side descriptor-wedge branch: enumeration failed and nothing

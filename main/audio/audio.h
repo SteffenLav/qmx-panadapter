@@ -1,5 +1,6 @@
 ﻿#pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include "esp_err.h"
@@ -30,6 +31,10 @@ size_t audio_ring_backlog_pairs(void);
 
 /** @brief Running total of stereo pairs dropped on ring-full since boot. */
 uint32_t audio_get_dropped_total(void);
+
+// True while a UAC device is open (streaming or mid-setup). Read by the
+// stale-QMX detector so it never replugs a connecting/connected device.
+bool audio_uac_active(void);
 
 /**
  * @brief Request a soft audio reset on the next live sample batch.
