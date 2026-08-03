@@ -589,14 +589,31 @@ typedef struct {
     decode_result_t        *result;
 } worker_job_t;
 
-static QueueHandle_t     s_worker_queue  = NULL;  // carries worker_job_t*
-static SemaphoreHandle_t s_worker_done   = NULL;
-static SemaphoreHandle_t s_worker_exited = NULL;  // worker gives this just before vTaskDelete(NULL);
-                                                  // the decode task JOINS on it before freeing the
-                                                  // queue/semaphore and returning (freeing its stack).
-                                                  // Without the join, a worker still holding a job
-                                                  // pointer into the decode task's stack faulted on
-                                                  // freed memory ("Load address misaligned").
+// Core-0 worker comms, ONE HEAP CONTEXT PER DECODE-TASK INSTANCE - deliberately
+// NOT statics. These were three shared static handles, and Dennis WN4FLA's
+// field crash (serial-captured 2026-08-03, "assert failed: xQueueGenericSend
+// queue.c:936 (pxQueue)" in ft8_decode_worker_task) was two instances crossing
+// them: ft8_task's teardown waits a bounded time for the decode task, whose own
+// worker join can outlast it - ft8_task then declared itself dead, a new FT8
+// session spawned, its decode task RECREATED the statics, and the OLD decode
+// task's teardown deleted/NULLed the NEW instance's handles out from under its
+// live worker. With the handles owned per-instance (worker gets its context as
+// its task arg; decode_slot gets it as a parameter), overlapping instances
+// cannot touch each other's comms. exited: worker gives it just before
+// vTaskDelete; the owning decode task JOINS on it before deleting the handles
+// (and, on join timeout, deliberately LEAKS the context - a zombie worker may
+// still hold it, and a small leak beats a crash).
+typedef struct {
+    QueueHandle_t     jobs;    // carries worker_job_t*
+    SemaphoreHandle_t done;
+    SemaphoreHandle_t exited;
+} worker_ctx_t;
+
+// True from ft8_decode_task entry until just before its vTaskDelete. The
+// ft8_task single-instance guard must cover the DECODE task too - ft8_task's
+// bounded teardown wait can expire with the decode task still finishing, and
+// spawning a new session in that window is what crossed the worker handles.
+static volatile bool s_decode_task_alive = false;
 
 // ---------------------------------------------------------------------------
 // Boot-time gating helpers
@@ -948,33 +965,35 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
 
 // Persistent core-0 decode helper: waits for one sub-range job, decodes it,
 // signals completion. Only one job is ever in flight (the decode task blocks on
-// s_worker_done before issuing the next).
+// ctx->done before issuing the next).
 static void ft8_decode_worker_task(void *arg)
 {
-    (void)arg;
+    // Comms context owned by OUR decode-task instance (task arg, never a
+    // static) - see worker_ctx_t for the cross-instance crash this prevents.
+    worker_ctx_t *ctx = (worker_ctx_t *)arg;
     ESP_LOGI(TAG, "decode worker ready (core %d)", xPortGetCoreID());
     while (true) {
         worker_job_t *job = NULL;
-        if (xQueueReceive(s_worker_queue, &job, portMAX_DELAY) != pdTRUE) continue;
+        if (xQueueReceive(ctx->jobs, &job, portMAX_DELAY) != pdTRUE) continue;
         if (!job) break;   // termination sentinel
         decode_candidate_range(job->mon, job->cands, job->n_cand, job->start, job->step,
                                job->noise_db, job->slot_sec, job->t_start_us,
                                job->start_off_ms, job->result);
-        xSemaphoreGive(s_worker_done);
+        xSemaphoreGive(ctx->done);
     }
     ESP_LOGI(TAG, "decode worker exiting");
     // Signal the join BEFORE self-deleting: after this the worker touches
-    // nothing shared (queue/semaphore/job), so the decode task can safely
-    // free them once it sees this.
-    if (s_worker_exited) xSemaphoreGive(s_worker_exited);
+    // nothing shared (context/job), so the decode task can safely free them
+    // once it sees this.
+    xSemaphoreGive(ctx->exited);
     vTaskDelete(NULL);
 }
 
 // Decode one slot's PRE-BUILT waterfall (the STFT was streamed in during
 // capture). Candidate search, then dual-core LDPC fan-out, merge, record,
 // advance the QSO state machine.
-static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
-                        int cap_ms, int stft_ms, int start_off_ms,
+static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
+                        int slot_idx, int cap_ms, int stft_ms, int start_off_ms,
                         int arm_backlog, int drop_delta)
 {
     int64_t t_start = esp_timer_get_time();
@@ -1054,7 +1073,7 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
     // Fan out across both cores: the helper (core 0) takes odd candidates, we
     // take even. Both share the same const waterfall (read-only) and the
     // mutex-protected decode list. r_worker is static (one helper, one slot at a
-    // time); r_main is a stack local. We block on s_worker_done before reading
+    // time); r_main is a stack local. We block on the done semaphore before reading
     // r_worker, so neither result struct is ever touched concurrently.
     static decode_result_t r_worker;
     decode_result_t r_main;
@@ -1065,9 +1084,9 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
         .start = 1, .step = 2, .result = &r_worker,
     };
     bool dispatched = false;
-    if (s_worker_queue && n_cand > 1) {
-        worker_job_t *jp = &job;   // job stays valid: we block on s_worker_done below
-        if (xQueueSend(s_worker_queue, &jp, 0) == pdTRUE) dispatched = true;
+    if (wctx && n_cand > 1) {
+        worker_job_t *jp = &job;   // job stays valid: we block on wctx->done below
+        if (xQueueSend(wctx->jobs, &jp, 0) == pdTRUE) dispatched = true;
     }
 
     // Our half (even indices).
@@ -1075,7 +1094,7 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
                            t_start, start_off_ms, &r_main);
 
     if (dispatched) {
-        xSemaphoreTake(s_worker_done, portMAX_DELAY);
+        xSemaphoreTake(wctx->done, portMAX_DELAY);
     } else {
         // No helper (or <=1 candidate): decode the odd half inline too.
         decode_candidate_range(mon, cands, n_cand, 1, 2, noise_db, slot_sec,
@@ -1218,6 +1237,7 @@ static void decode_slot(monitor_t *mon, int64_t slot_sec, int slot_idx,
 static void ft8_decode_task(void *arg)
 {
     TaskHandle_t notify_target = (TaskHandle_t)arg;
+    s_decode_task_alive = true;
 
     // Dual-core decode helper: a 1-deep job queue + completion semaphore + a
     // worker pinned to core 0. In FT8 mode core 0 runs only the (light) UAC
@@ -1225,23 +1245,28 @@ static void ft8_decode_task(void *arg)
     // worker uses its spare cycles without ever starving audio. If the spawn
     // fails we drop the queue and decode_slot falls back to single-core.
     TaskHandle_t worker = NULL;
-    s_worker_queue  = xQueueCreate(1, sizeof(worker_job_t *));
-    s_worker_done   = xSemaphoreCreateBinary();
-    s_worker_exited = xSemaphoreCreateBinary();
-    if (s_worker_queue && s_worker_done && s_worker_exited) {
-        BaseType_t wrc = xTaskCreatePinnedToCoreWithCaps(
-            ft8_decode_worker_task, "ft8_dec0", 32768, NULL,
-            tskIDLE_PRIORITY + 2, &worker, 0,
-            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (wrc != pdPASS) {
-            ESP_LOGW(TAG, "core-0 decode worker spawn failed (rc=%d); single-core decode", (int)wrc);
-            worker = NULL;
+    worker_ctx_t *wctx = calloc(1, sizeof(worker_ctx_t));
+    if (wctx) {
+        wctx->jobs   = xQueueCreate(1, sizeof(worker_job_t *));
+        wctx->done   = xSemaphoreCreateBinary();
+        wctx->exited = xSemaphoreCreateBinary();
+        if (wctx->jobs && wctx->done && wctx->exited) {
+            BaseType_t wrc = xTaskCreatePinnedToCoreWithCaps(
+                ft8_decode_worker_task, "ft8_dec0", 32768, wctx,
+                tskIDLE_PRIORITY + 2, &worker, 0,
+                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (wrc != pdPASS) {
+                ESP_LOGW(TAG, "core-0 decode worker spawn failed (rc=%d); single-core decode", (int)wrc);
+                worker = NULL;
+            }
         }
-    }
-    if (!worker) {
-        if (s_worker_queue)  { vQueueDelete(s_worker_queue); s_worker_queue = NULL; }
-        if (s_worker_done)   { vSemaphoreDelete(s_worker_done); s_worker_done = NULL; }
-        if (s_worker_exited) { vSemaphoreDelete(s_worker_exited); s_worker_exited = NULL; }
+        if (!worker) {
+            if (wctx->jobs)   vQueueDelete(wctx->jobs);
+            if (wctx->done)   vSemaphoreDelete(wctx->done);
+            if (wctx->exited) vSemaphoreDelete(wctx->exited);
+            free(wctx);
+            wctx = NULL;
+        }
     }
 
     ESP_LOGI(TAG, "decode task ready (core %d, dual-core=%s)",
@@ -1256,7 +1281,7 @@ static void ft8_decode_task(void *arg)
             continue;
         }
         if (job.mon_idx < 0) break;     // termination sentinel from capture task
-        decode_slot(s_mon_pool[job.mon_idx], job.slot_sec, job.slot_idx,
+        decode_slot(wctx, s_mon_pool[job.mon_idx], job.slot_sec, job.slot_idx,
                     job.cap_ms, job.stft_ms, job.start_off_ms,
                     job.arm_backlog, job.drop_delta);
         s_buf_busy[job.mon_idx] = false;   // hand the monitor back to the pool
@@ -1268,25 +1293,33 @@ static void ft8_decode_task(void *arg)
 
     // Stop the core-0 worker (blocked on its queue): send a NULL sentinel, then
     // JOIN — wait for the worker to actually reach vTaskDelete (it gives
-    // s_worker_exited first) before deleting the queue/semaphore and returning.
+    // ctx->exited first) before deleting the queue/semaphore and returning.
     // The old code waited a FIXED 50 ms, which was not enough if the worker was
     // still holding a job pointer into this task's stack: freeing the stack out
     // from under it caused a "Load address misaligned" panic on FT8 exit. The
-    // worker is idle here (decode_slot always joins on s_worker_done before
+    // worker is idle here (decode_slot always joins on the done semaphore before
     // returning), so this normally returns in well under a millisecond; the
     // generous bound only guards a pathological in-flight decode.
-    if (worker && s_worker_queue && s_worker_exited) {
+    if (wctx) {
         worker_job_t *sentinel = NULL;
-        xQueueSend(s_worker_queue, &sentinel, pdMS_TO_TICKS(1000));
-        if (xSemaphoreTake(s_worker_exited, pdMS_TO_TICKS(12000)) != pdTRUE) {
-            ESP_LOGW(TAG, "worker join timed out — deleting shared state anyway");
+        xQueueSend(wctx->jobs, &sentinel, pdMS_TO_TICKS(1000));
+        if (xSemaphoreTake(wctx->exited, pdMS_TO_TICKS(12000)) == pdTRUE) {
+            vQueueDelete(wctx->jobs);
+            vSemaphoreDelete(wctx->done);
+            vSemaphoreDelete(wctx->exited);
+            free(wctx);
+        } else {
+            // The worker may still be alive holding this context - deleting
+            // it now is the use-after-free/assert path (Dennis WN4FLA's
+            // crash class). Leak it deliberately: ~few hundred bytes, only
+            // on a pathological join timeout, and a leak beats a reboot.
+            ESP_LOGW(TAG, "worker join timed out - LEAKING worker ctx (crash-safe)");
         }
+        wctx = NULL;
     }
-    if (s_worker_queue)  { vQueueDelete(s_worker_queue); s_worker_queue = NULL; }
-    if (s_worker_done)   { vSemaphoreDelete(s_worker_done); s_worker_done = NULL; }
-    if (s_worker_exited) { vSemaphoreDelete(s_worker_exited); s_worker_exited = NULL; }
 
     ESP_LOGI(TAG, "decode task exiting");
+    s_decode_task_alive = false;
     if (notify_target) xTaskNotify(notify_target, 1, eSetBits);
     vTaskDelete(NULL);
 }
@@ -1680,9 +1713,13 @@ static void ft8_task(void *arg)
     s_ft8_running = false;
     decode_job_t sentinel = { .mon_idx = -1, .slot_sec = -1LL };
     xQueueSend(s_decode_queue, &sentinel, pdMS_TO_TICKS(1000));
-    // Clear any stale notification, then wait up to 10 s for decode task exit
-    // (which also tears down its core-0 worker before notifying us).
-    xTaskNotifyWait(0x01, 0x01, NULL, pdMS_TO_TICKS(10000));
+    // Clear any stale notification, then wait for decode task exit (which
+    // also tears down its core-0 worker before notifying us). 15 s: must
+    // OUTLAST the decode task's own 12 s worker join, or ft8_task declares
+    // itself dead while the decode task still runs - the overlap window
+    // behind Dennis WN4FLA's crash (the 10 s it used to be was shorter than
+    // the join bound it was waiting on).
+    xTaskNotifyWait(0x01, 0x01, NULL, pdMS_TO_TICKS(15000));
 
     vQueueDelete(s_decode_queue);
     s_decode_queue = NULL;
@@ -2046,6 +2083,16 @@ void ft8_self_test(void)
     // surviving task keeps serving FT8 (its loop re-checks ui_mode each slot).
     if (s_ft8_task_alive) {
         ESP_LOGW(TAG, "ft8_self_test: an FT8 task is still alive; not spawning a second");
+        return;
+    }
+    // The decode task can outlive ft8_task (ft8_task's teardown wait is
+    // bounded, and the decode task's own worker join can outlast it). A new
+    // session starting in that window is what crossed the old shared worker
+    // handles (Dennis WN4FLA's crash) - now the handles are per-instance,
+    // but still refuse the overlap: the old instance also still owns monitor
+    // pool buffers and the decode list mutex path.
+    if (s_decode_task_alive) {
+        ESP_LOGW(TAG, "ft8_self_test: previous decode task still exiting; not spawning yet");
         return;
     }
     BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
