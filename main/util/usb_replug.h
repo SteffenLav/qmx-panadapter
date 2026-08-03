@@ -8,7 +8,10 @@
 // see an ordinary disconnect. Returns the root-port power-on result.
 esp_err_t usb_replug(uint32_t off_ms);
 
-// Background watchdog: replug the port whenever NOTHING has enumerated for
-// ~30 s (never fires while any device - QMX or mouse - is enumerated).
+// Background stale-QMX detector: when a USB device is attached but has not
+// become an open QMX (CDC) or mouse (HID) for ~30 s - the signature of the
+// QMX's stale-USB-stack wedge, which no host-side action can clear - log +
+// toast a "power-cycle the QMX" instruction (repeated every 5 min while it
+// persists). Deliberately does NOT auto-replug (see usb_replug.c).
 // Call once after the USB host is installed.
 void usb_replug_watchdog_start(void);

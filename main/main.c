@@ -225,20 +225,15 @@ void app_main(void)
     ESP_ERROR_CHECK(bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true));
     ESP_LOGI(TAG, "USB host started");
 
-    // Emulated USB-A unplug/replug at every boot: a warm Tab5 reboot leaves
-    // an attached QMX invisible to the fresh USB host (its stale device
-    // state never re-attaches), so the QMX needed a power cycle after every
-    // Tab5 reboot. Cycling the DWC root-port power forces a real detach ->
-    // attach -> bus-reset sequence; the VBUS cut rides along inside
-    // usb_replug() for devices that watch it. (A pre-install VBUS-only
-    // pulse - 500 ms and 3 s - was hardware-tested and did NOT recover the
-    // QMX; the root-port cycle is the operative lever being tested here.)
-    // Harmless on a cold boot: nothing is enumerated/open this early, and a
-    // disconnect mid-enumeration is the ordinary unplug path.
-    usb_replug(2000);
-    // ...and keep watching: if the bus stays empty (QMX powered on late, or
-    // a stale state the boot replug didn't clear), replug again every ~30 s
-    // until something enumerates. Never fires while any device is present.
+    // NO automatic replug at boot - deliberately. Hardware-tested 2026-08-03
+    // (TODO #74): the stale-QMX wedge (QMX answers enumeration with 8 of 16
+    // descriptor bytes after some warm reboots) is QMX-firmware-side and
+    // survives every host-side cue - bus resets, root-port power cycles,
+    // USB5V_EN cuts up to 8 s. A boot replug can't cure it, and aborting a
+    // healthy first enumeration (which normally succeeds) risks INDUCING
+    // the wedge. usb_replug() remains available via the hidden /api/cmd
+    // action for experiments; the task below detects the wedge and tells
+    // the operator to power-cycle the QMX instead of leaving a dead screen.
     usb_replug_watchdog_start();
 
     ESP_ERROR_CHECK(audio_init());

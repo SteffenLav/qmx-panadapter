@@ -34,61 +34,86 @@ esp_err_t usb_replug(uint32_t off_ms)
     if (off_ms < 200)  off_ms = 200;
     if (off_ms > 8000) off_ms = 8000;
 
-    ESP_LOGW(TAG, "replug: root port power OFF + VBUS off (%lums)",
-             (unsigned long)off_ms);
-    esp_err_t err_off = usb_host_lib_set_root_port_power(false);
-    if (err_off != ESP_OK)
-        ESP_LOGW(TAG, "root port power off: %s", esp_err_to_name(err_off));
-
+    // ORDER MATTERS - VBUS cycle FIRST, root-port cycle LAST. The first
+    // version did port-off -> VBUS-off -> wait -> VBUS-on -> port-on, and
+    // was caught on hardware sabotaging a healthy reconnect: the host lib
+    // auto-repowers the root port right after our power-off (its own port
+    // recovery - which is also why our later power-on returns
+    // ESP_ERR_INVALID_STATE "already powered"), so enumeration raced ahead
+    // WHILE VBUS was still cut, and the QMX - answering a descriptor
+    // request as its VBUS died - returned 8 of 16 bytes -> ENUM
+    // CHECK_SHORT_DEV_DESC FAILED -> the host abandoned the device with no
+    // retry, permanently. With VBUS restored and stable BEFORE any port
+    // action, whatever enumeration follows sees a solid bus.
+    ESP_LOGW(TAG, "replug: VBUS off (%lums)", (unsigned long)off_ms);
     bsp_set_usb_5v_en(false);
     vTaskDelay(pdMS_TO_TICKS(off_ms));
     bsp_set_usb_5v_en(true);
-    vTaskDelay(pdMS_TO_TICKS(100));   // VBUS rise before the port looks again
+    vTaskDelay(pdMS_TO_TICKS(150));   // VBUS rise + device-side settle
 
+    esp_err_t err_off = usb_host_lib_set_root_port_power(false);
+    if (err_off != ESP_OK)
+        ESP_LOGW(TAG, "root port power off: %s", esp_err_to_name(err_off));
+    vTaskDelay(pdMS_TO_TICKS(50));
+    // The lib may have re-powered the port on its own during recovery -
+    // ESP_ERR_INVALID_STATE ("already powered") is success for our purpose.
     esp_err_t err_on = usb_host_lib_set_root_port_power(true);
-    ESP_LOGW(TAG, "replug: root port power ON: %s", esp_err_to_name(err_on));
-    return err_on;
+    ESP_LOGW(TAG, "replug: done (port on: %s)", esp_err_to_name(err_on));
+    return (err_on == ESP_ERR_INVALID_STATE) ? ESP_OK : err_on;
 }
 
-// No-device watchdog: if NOTHING has enumerated on the USB-A port for two
-// consecutive 15 s checks, fire a replug, then hold off for 60 s. Covers a
-// QMX whose stale USB state survived a Tab5 warm reboot (or any other
-// silent-port situation) without the operator touching anything. The
-// "anything enumerated -> reset the counter" guard means a lone mouse (or a
-// healthy QMX) is never disturbed, and with no device attached at all the
-// replug is an electrical no-op on an empty port. Deliberately unbounded -
-// the QMX may be powered on hours after the Tab5, and the periodic no-op
-// costs nothing.
-#define WD_CHECK_MS    15000
-#define WD_EMPTY_TRIPS 2      // 2 x 15 s of empty bus before acting
-#define WD_HOLDOFF_MS  60000  // after a replug, give enumeration time
+// Stale-QMX detector. Hardware findings 2026-08-03 (full story in memory
+// project_qmx_reenumerate_after_reboot + TODO #74): after SOME Tab5 warm
+// reboots the QMX's own USB stack answers every fresh enumeration with 8 of
+// the 16 requested device-descriptor bytes (ENUM: CHECK_SHORT_DEV_DESC
+// FAILED) - persistently, across host bus resets, root-port power cycles,
+// and USB5V_EN cuts up to 8 s. Nothing the Tab5 can do clears it; only a
+// QMX power cycle (or cable replug - untested) does. Automatic replugging
+// was therefore REMOVED: it cannot cure the wedge, and interrupting a
+// healthy first enumeration (which usually succeeds after a reboot) risks
+// INDUCING it. What the Tab5 can do is tell the operator plainly, instead
+// of sitting on a dead-looking screen: a device is attached that never
+// became a QMX (CDC) or a mouse (HID) -> that is exactly the wedge
+// signature -> toast a clear instruction.
+#include "cat.h"
+#include "usb_hid_mouse.h"
+#include "ui.h"
+#include "diag_log.h"
 
-static void usb_replug_watchdog_task(void *arg)
+#define DET_CHECK_MS   15000
+#define DET_RETOAST_MS 300000  // remind every 5 min while it persists
+
+static void usb_stale_detect_task(void *arg)
 {
     (void)arg;
-    int empty_checks = 0;
+    // The wedge's only reliable signal is the driver's enumeration-failure
+    // log line (tallied by diag_log's vprintf hook): the failed device is
+    // freed with no retry, so usb_host_lib_info() afterwards shows the same
+    // empty bus as "nothing plugged in". Baseline bookkeeping: while
+    // anything usable is connected (QMX or mouse), adopt the current tally
+    // - so old failures never nag after a later successful connect or an
+    // ordinary unplug; only failures with nothing usable connected do.
+    uint32_t baseline = 0;
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(WD_CHECK_MS));
+        vTaskDelay(pdMS_TO_TICKS(DET_CHECK_MS));
 
-        usb_host_lib_info_t info;
-        if (usb_host_lib_info(&info) != ESP_OK) continue;  // host not up (yet)
-
-        if (info.num_devices > 0) {
-            empty_checks = 0;
+        uint32_t fails = diag_log_usb_enum_failures();
+        if (cat_is_ready() || usb_hid_mouse_present()) {
+            baseline = fails;
             continue;
         }
-        if (++empty_checks < WD_EMPTY_TRIPS) continue;
+        if (fails <= baseline) continue;
 
-        ESP_LOGW(TAG, "watchdog: no USB device enumerated for %d s - replugging port",
-                 (WD_CHECK_MS * WD_EMPTY_TRIPS) / 1000);
-        usb_replug(2000);
-        empty_checks = 0;
-        vTaskDelay(pdMS_TO_TICKS(WD_HOLDOFF_MS));
+        ESP_LOGW(TAG, "USB enumeration failed (%lu since boot) and QMX is not "
+                      "connected - stale QMX USB state, needs a QMX power cycle",
+                 (unsigned long)fails);
+        ui_toast("QMX USB is stuck - power-cycle the QMX to reconnect");
+        vTaskDelay(pdMS_TO_TICKS(DET_RETOAST_MS - DET_CHECK_MS));
     }
 }
 
 void usb_replug_watchdog_start(void)
 {
-    psram_task_create(usb_replug_watchdog_task, "usb_replug_wd", 4096, NULL,
+    psram_task_create(usb_stale_detect_task, "usb_stale_det", 4096, NULL,
                       2, tskNO_AFFINITY);
 }
