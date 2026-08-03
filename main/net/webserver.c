@@ -37,6 +37,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/stat.h>
 
 static const char *TAG = "webserver";
 
@@ -475,12 +476,23 @@ static esp_err_t saved_log_handler(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=qmx-log-saved.txt");
 
-    // Prefer the card's full log when present.
+    // Prefer the card's full log - but only if it actually EXISTS with
+    // content. Since the WiFi-aware SD gate (v1.3.2), the diag log is never
+    // mirrored to the card while WiFi is on, so on a WiFi-connected unit
+    // with a card inserted the old unconditional preference streamed a
+    // nonexistent file's placeholder and the flash copy - which holds the
+    // crash lead-up this endpoint exists for - was never reached (field-hit:
+    // Dennis WN4FLA's post-crash download came back empty, 2026-08-03).
     if (sd_archive_is_mounted() && sd_archive_lock(2000)) {
-        esp_err_t err = stream_file_chunks(req, sd_archive_log_path(),
-                                           "(no diagnostic log on card yet)\n");
+        struct stat st;
+        bool have_card_log = (stat(sd_archive_log_path(), &st) == 0 && st.st_size > 0);
+        if (have_card_log) {
+            esp_err_t err = stream_file_chunks(req, sd_archive_log_path(),
+                                               "(no diagnostic log on card yet)\n");
+            sd_archive_unlock();
+            return err;
+        }
         sd_archive_unlock();
-        return err;
     }
     // Fall back to the flash-persisted copy.
     return stream_file_chunks(req, diag_log_persist_path(), "(no saved diagnostic log yet)\n");
