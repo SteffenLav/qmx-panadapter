@@ -61,6 +61,11 @@ void cw_qso_adopt(const char *call);
 // already-adopted station).
 void cw_qso_reset(void);
 
+// Forget everything learned from the decode stream: the heard call, the
+// copilot hint, and the timing windows that pair "our call" with "DE <them>".
+// Used when leaving simulation mode so a phantom QSO leaves no trace.
+void cw_qso_clear_capture(void);
+
 // What NEXT would send right now (macro-UNexpanded except <CALL>, which is
 // substituted here). Returns false when it cannot compose (e.g. no target
 // mid-ladder). label_out gets a short state word for the UI ("CQ",

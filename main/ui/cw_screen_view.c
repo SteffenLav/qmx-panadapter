@@ -99,6 +99,25 @@ static size_t         s_dec_len = 0;          // chars currently held (<= CAP)
 static bool           s_dec_dirty = false;
 static portMUX_TYPE   s_dec_mux = portMUX_INITIALIZER_UNLOCKED;
 
+// Wipe everything the decode stream produced: the ticker's ring, the copilot
+// hint, the captured/adopted station and the ESM ladder. Called when
+// simulation mode is switched off so the phantom's QSO does not linger on
+// screen looking like real copy (operator-reported 2026-08-04) - the same
+// contract FT8 has, where ft8_op_mode_set() clears the decode list on a sim
+// exit. Safe from the LVGL thread only (touches labels).
+void cw_screen_clear_decode(void)
+{
+    portENTER_CRITICAL(&s_dec_mux);
+    s_dec_len = 0;
+    s_dec_dirty = false;
+    portEXIT_CRITICAL(&s_dec_mux);
+    cw_qso_reset();          // drops target + ladder
+    cw_qso_clear_capture();  // drops the heard call and the hint
+    if (s_ticker_lbl) lv_label_set_text(s_ticker_lbl, "");
+    if (s_lbl_hint)   lv_obj_add_flag(s_lbl_hint, LV_OBJ_FLAG_HIDDEN);
+    if (s_card)       lv_obj_add_flag(s_card, LV_OBJ_FLAG_HIDDEN);
+}
+
 void cw_screen_feed_decoded(const char *s, int n)
 {
     if (!s || n <= 0) return;

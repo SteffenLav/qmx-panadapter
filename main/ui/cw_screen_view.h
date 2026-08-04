@@ -18,3 +18,8 @@ lv_obj_t  *cw_screen_view_get_container(void);
 // only appends to a spinlock-guarded ring; the page's own LVGL timer
 // renders it. Safe to call while the page is hidden (chars still collect).
 void cw_screen_feed_decoded(const char *s, int n);
+
+// Clear the decode ticker, the copilot hint, the station card and the ESM
+// ladder. Called on a simulation-mode toggle so a phantom QSO leaves nothing
+// on screen. LVGL thread only.
+void cw_screen_clear_decode(void);

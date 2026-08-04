@@ -2059,11 +2059,14 @@ static void qmx_wait_poll_cb(lv_timer_t *t)
     bool hidden = lv_obj_has_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
     // Never show the "turn on your QMX" breathing overlay over the docs Reader —
     // it's an operational cue irrelevant while reading, and its 1 Hz
-    // re-foreground would draw on top of the Reader page. Same in FT8
-    // Simulation Mode: the simulator runs entirely on phantom stations and
-    // ft8_tx.c's interlock never keys a radio, so a QMX is not required —
-    // prompting for one is misleading (and the prompt covers the sim bezel).
-    if (reader_view_is_active() || s_sim_mode_en) {
+    // re-foreground would draw on top of the Reader page. Same in EITHER
+    // simulation mode: both simulators run entirely on phantom stations and
+    // never key a radio, so a QMX is not required — prompting for one is
+    // misleading (and the prompt covers the sim bezel). Both flags must be
+    // checked, not just the FT8 one: CW practice has its own deliberately
+    // independent toggle, and gating on FT8's alone left the overlay pulsing
+    // through the whole CW simulation (operator-reported 2026-08-04).
+    if (reader_view_is_active() || s_sim_mode_en || s_cw_sim_en) {
         if (!hidden) {
             lv_anim_delete(s_qmx_wait_lbl, qmx_wait_breathe_anim_cb);
             lv_obj_add_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
@@ -5561,6 +5564,11 @@ static void drawer_check_cw_sim_cb(lv_event_t *e)
     s_cw_sim_en = lv_obj_has_state(cb, LV_STATE_CHECKED);
     settings_set_cw_sim_en(s_cw_sim_en);
     ui_refresh_sim_mode_indicator();
+    // Leaving practice: wipe the phantom's copy, hint, station card and
+    // ladder, so a simulated QSO never lingers looking like real decode
+    // (operator-reported 2026-08-04). Entering practice clears too - a
+    // session should start from a clean ticker either way.
+    cw_screen_clear_decode();
     ESP_LOGI(TAG, "CW simulation mode: %s", s_cw_sim_en ? "ON (radio not keyed)" : "off");
 }
 

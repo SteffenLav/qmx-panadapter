@@ -439,6 +439,23 @@ void cw_qso_reset(void)
     ESP_LOGI(TAG, "ladder reset to CQ");
 }
 
+void cw_qso_clear_capture(void)
+{
+    portENTER_CRITICAL(&s_mux);
+    s_heard[0]     = '\0';
+    s_heard_us     = 0;
+    s_hint_kind    = CW_HINT_NONE;
+    s_hint_subj[0] = '\0';
+    s_hint_us      = 0;
+    s_cq_heard_us  = 0;
+    s_addressed_us = 0;
+    s_cq_sent_us   = 0;
+    s_prev_was_de  = false;
+    s_tok_len      = 0;
+    s_pending_auto_adopt = false;
+    portEXIT_CRITICAL(&s_mux);
+}
+
 // Compose "<target> <memory text>" (memory raw, macros expanded later by the
 // view's shared expander, which also handles {MYCALL}/{PARK}).
 static bool compose(char *out, size_t out_sz, int mem_idx, bool prefix_target)

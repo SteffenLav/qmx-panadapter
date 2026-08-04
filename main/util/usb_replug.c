@@ -80,6 +80,7 @@ esp_err_t usb_replug(uint32_t off_ms)
 #include "ui.h"
 #include "diag_log.h"
 #include "audio.h"
+#include "settings.h"
 #include "esp_timer.h"
 
 #define DET_CHECK_MS   15000
@@ -132,6 +133,18 @@ static void usb_stale_detect_task(void *arg)
     int64_t  last_toast_us  = 0;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(DET_CHECK_MS));
+
+        // Either simulation mode means the operator has deliberately opted
+        // out of needing a radio (phantom stations, nothing ever keyed), so
+        // "power-cycle the QMX" is noise on top of a practice session - and
+        // it lands as a toast across the page (operator-reported 2026-08-04).
+        // Skipping the whole check also parks the auto-replug, which is the
+        // right call here: a practice session has no USB work to protect.
+        {
+            qmx_settings_t sc;
+            settings_load_all(&sc);
+            if (sc.sim_mode_en || sc.cw_sim_en) continue;
+        }
 
         uint32_t fails = diag_log_usb_enum_failures();
         // audio_uac_active() is load-bearing here, not belt-and-suspenders:
