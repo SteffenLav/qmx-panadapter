@@ -739,12 +739,16 @@ static void poll_task(void *arg)
                 esp_err_t e = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)ky,
                                                             strlen(ky), 200);
                 ESP_LOGI(TAG, "CW send -> %s (%s)", ky, e == ESP_OK ? "ok" : "fail");
-                // Diagnostic readback (CW-page bring-up): KY; 300 ms after the
-                // send. The radio answers KY0/KY1 = message sending in
-                // progress, KY2 = buffer empty (= it silently discarded the
-                // send - hardware-observed 2026-08-03: well-formed KY, compat
-                // OFF, practice ON, no ?; error, yet TB t stayed 0). The
-                // response lands in the diag log as a normal non-poll RX line.
+                // One KY; readback 300 ms after the send. Deliberately NOT a
+                // drain probe any more: the 2026-08-04 baseline experiment
+                // (poll KY; on an IDLE radio) showed an idle QMX answers
+                // KY0 - so KY0 is the IDLE state on this firmware, NOT
+                // "sending in progress" as the non-compat manual text
+                // implies. The only informative reading is the KY1 that the
+                // SET itself returns (the buffer accepted the characters).
+                // Keeping one cheap query documents that in the diag log;
+                // polling it repeatedly proved nothing and blocked the
+                // FA/MD/FW poll for its duration.
                 if (e == ESP_OK) {
                     vTaskDelay(pdMS_TO_TICKS(300));
                     cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"KY;", 3, 200);

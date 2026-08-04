@@ -221,3 +221,61 @@ letters - Q, Y, 5 need work").
    levels; does it decode only the CW-filter passband center; buffer pacing.
 5. `KS` set — does the QMX LCD reflect it; range limits.
 6. Interaction with the FA/MD/FW poll (new poll phases must not garble).
+
+### Session results — 2026-08-03/04, QMX+ on firmware 1_04_004
+
+- Items 4, 5, 6: **PASS.** `TB;` polls cleanly at 1 Hz and decodes (it happily
+  decodes band noise into stray characters — a "quiet ticker" was the wrong
+  expectation, harmless). `KS` get/set works and the radio honours it. The new
+  poll phases never garbled the FA/MD/FW rotation.
+- Items 1, 2, 3: **CAT `KY` does not key this radio, and the fault is NOT on
+  our side.** `KY <text>;` is accepted (no `?;`) and the SET itself answers
+  `KY1` — the buffer demonstrably took the characters — and then nothing is
+  ever sent.
+
+**Choose the right observable — two of the three are useless.** This cost two
+evenings and one wrong conclusion, so it is worth stating plainly:
+
+| Observable | After CAT `KY` | After the QMX's OWN front-panel send | Verdict |
+|---|---|---|---|
+| Sidetone in headphones | silent | **silent** | **useless** — practice mode suppresses it for *any* message send |
+| `M` indicator on the LCD | absent | **absent** | **useless** — same |
+| **`TB` t-field** (chars left) | **0, never moves** | **counts down (`TB100;`)** | **the only reliable one** |
+
+- The sidetone/`M` silence made both paths look identical and briefly produced
+  the wrong conclusion that CAT `KY` was fine. The `TB` t-field separates them
+  cleanly: the radio's own keyer reports itself running; the CAT-initiated
+  send never does. **`TB`'s t-field is the ground truth for "is it keying".**
+- **A second control worth keeping: an IDLE QMX answers `KY0;`.** So on this
+  firmware `KY0` is the *idle* state, not "sending in progress" as the
+  non-compat manual text implies — every reading that looked like "the radio
+  says it is sending" was the radio saying "ready, nothing happening" (polled
+  for 34 s after a send, it never changes). Take the idle baseline of any
+  status command before believing what it says under load.
+- Ruled out, so nobody re-tests them: TS480-compat setting (NO = the
+  non-compat form we send, the factory default), Practice mode genuinely on
+  (`P` shown), keyer mode Iambic A, `KS` 12, sidetone volume 50, paddle jack
+  empty, IQ mode on and off, Band Config TX enabled for the band in use.
+  Confound that cost one run: a factory reset empties all 12 stored messages,
+  and sending an empty one is indistinguishable from failure — put text in
+  message 1 before using the front-panel send as a control.
+
+**Open, in priority order:**
+
+1. **Try the TS480-compat path** — a genuinely different code path inside the
+   QMX. Set `KY TS480` = YES in the radio's System Config and send the compat
+   form: `KY ` + the message padded with spaces to exactly 24 characters +
+   `;`. If that keys, we support both forms (gate on the setting, or just
+   always send compat). This is the cheapest remaining shot and needs no RF.
+2. **Practice mode OFF + dummy load** — the only way to answer "does `KY` key
+   for real, and how do we abort it" (checklist items 1 and 3). Needs hardware
+   we do not have travelling; at home, ~mid-August.
+3. **groups.io question**, now precise and evidenced: *"On 1_04_004, CAT `KY`
+   is accepted and the SET returns `KY1`, but `TB`'s t-field never leaves 0
+   and nothing is keyed — while the radio's own front-panel stored-message
+   send does move the t-field. What does CAT `KY` need that the front panel
+   does not?"* Note the SideKar products key real TX through this exact
+   command daily, so a missing precondition is more likely than a plain bug.
+
+**Status for release notes: the CW page's TX path is UNVERIFIED on hardware.**
+Do not describe CW transmit as working until item 1 or 2 above passes.
