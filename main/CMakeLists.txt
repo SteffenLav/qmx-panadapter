@@ -4,6 +4,7 @@ idf_component_register(
         "display/display.c"
         "ui/ui.c"
         "ui/ui_clock.c"
+        "ui/spots_lane.c"
         "ui/wifi_config.c"
         "ui/tune_modal.c"
         "ui/identity_config.c"

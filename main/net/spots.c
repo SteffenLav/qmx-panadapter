@@ -90,15 +90,20 @@ static void dma_probe(const char *where)
 #define RETRY_PERIOD_S 20              // after a failure
 
 static spot_t           *s_store;              // PSRAM, SPOTS_MAX entries
+static spot_t           *s_scratch;            // PSRAM, parse target (see parse_pota)
 static int               s_count;
 static SemaphoreHandle_t s_lock;
 static int64_t           s_last_ok_us;
 static volatile bool     s_refresh_req;
+static volatile uint32_t s_version;
 
 // ---- store -----------------------------------------------------------------
 
-static bool lock(void)   { return s_lock && xSemaphoreTake(s_lock, pdMS_TO_TICKS(200)) == pdTRUE; }
+static bool lock_ms(int ms) { return s_lock && xSemaphoreTake(s_lock, pdMS_TO_TICKS(ms)) == pdTRUE; }
+static bool lock(void)   { return lock_ms(200); }
 static void unlock(void) { if (s_lock) xSemaphoreGive(s_lock); }
+
+uint32_t spots_version(void) { return s_version; }
 
 int spots_get(spot_t *out, int max)
 {
@@ -109,13 +114,28 @@ int spots_get(spot_t *out, int max)
     return n;
 }
 
-int spots_get_in_range(spot_t *out, int max, uint32_t lo_hz, uint32_t hi_hz)
+static int get_in_range_locked(spot_t *out, int max, uint32_t lo_hz, uint32_t hi_hz)
 {
-    if (!out || max <= 0 || !lock()) return 0;
     int n = 0;
     for (int i = 0; i < s_count && n < max; i++)
         if (s_store[i].freq_hz >= lo_hz && s_store[i].freq_hz <= hi_hz)
             out[n++] = s_store[i];
+    return n;
+}
+
+int spots_get_in_range(spot_t *out, int max, uint32_t lo_hz, uint32_t hi_hz)
+{
+    if (!out || max <= 0 || !lock()) return 0;
+    int n = get_in_range_locked(out, max, lo_hz, hi_hz);
+    unlock();
+    return n;
+}
+
+int spots_get_in_range_wait(spot_t *out, int max, uint32_t lo_hz, uint32_t hi_hz, int wait_ms)
+{
+    if (!out || max <= 0) return 0;
+    if (!lock_ms(wait_ms)) return -1;      // caller keeps whatever it already drew
+    int n = get_in_range_locked(out, max, lo_hz, hi_hz);
     unlock();
     return n;
 }
@@ -174,6 +194,14 @@ static int64_t parse_spot_time(const char *s)
 // Replace the store with what the payload holds. Spots without a usable
 // frequency are dropped rather than clamped - a spot you cannot tune to is
 // worse than no spot.
+//
+// Parses into s_scratch and swaps the finished table in under ONE lock. The
+// first version wrote each entry straight into s_store and only set s_count at
+// the end, so for the whole duration of a parse the live table held a mix of
+// new and old entries while readers still saw the previous count - the lane
+// could draw a call at another station's frequency. Fixed-size entries under a
+// mutex meant it could never crash, which is exactly why it would have been an
+// annoying one to find later.
 static int parse_pota(const char *json)
 {
     cJSON *root = cJSON_Parse(json);
@@ -203,10 +231,15 @@ static int parse_pota(const char *json)
         sp.heard_unix = cJSON_IsString(jt) ? parse_spot_time(jt->valuestring) : 0;
         if (!sp.call[0]) continue;
 
-        if (lock()) { s_store[n++] = sp; unlock(); }
+        s_scratch[n++] = sp;
     }
     cJSON_Delete(root);
-    if (lock()) { s_count = n; unlock(); }
+
+    if (!lock()) return -1;                 // keep the previous table intact
+    memcpy(s_store, s_scratch, (size_t)n * sizeof(spot_t));
+    s_count = n;
+    s_version++;
+    unlock();
     return n;
 }
 
@@ -273,9 +306,10 @@ static void spots_task(void *arg)
 void spots_init(void)
 {
     if (s_store) return;
-    s_store = heap_caps_calloc(SPOTS_MAX, sizeof(spot_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    s_lock  = xSemaphoreCreateMutex();
-    if (!s_store || !s_lock) { ESP_LOGE(TAG, "init failed"); return; }
+    s_store   = heap_caps_calloc(SPOTS_MAX, sizeof(spot_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_scratch = heap_caps_calloc(SPOTS_MAX, sizeof(spot_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_lock    = xSemaphoreCreateMutex();
+    if (!s_store || !s_scratch || !s_lock) { ESP_LOGE(TAG, "init failed"); return; }
     dma_probe("init");    // TEMP DIAGNOSTIC: baseline before the pool collapses
     psram_task_create(spots_task, "spots", 6144, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "spot fetcher started (POTA)");

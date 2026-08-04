@@ -37,7 +37,12 @@ typedef struct {
     int64_t       heard_unix; // when it was spotted (UTC seconds)
 } spot_t;
 
-#define SPOTS_MAX 96
+// Headroom, not a measurement: the live POTA feed returned 94 spots one day and
+// 96 the next, and the first cap here WAS 96 - i.e. it was already silently
+// truncating on day two. RBN is meant to feed the same store later, so this has
+// to hold both sources at once. At ~48 bytes per entry the whole table is under
+// 10 KB of PSRAM, so there is no reason to run it tight.
+#define SPOTS_MAX 200
 
 // Start the background fetcher. Safe to call once at boot; does nothing until
 // WiFi is up and the feature is enabled in settings.
@@ -51,6 +56,18 @@ int  spots_get(spot_t *out, int max);
 // spectrum lane needs. Newest first, so a caller that runs out of label room
 // keeps the freshest.
 int  spots_get_in_range(spot_t *out, int max, uint32_t lo_hz, uint32_t hi_hz);
+
+// As spots_get_in_range, but bounded by wait_ms on the store lock and returning
+// -1 (not 0) when the lock could not be taken. The LVGL thread uses this: a
+// missed refresh should leave the previous picture on screen, whereas a 0 would
+// blank the lane for a tick. Never wait long here - a stalled LVGL thread is a
+// dropped display frame.
+int  spots_get_in_range_wait(spot_t *out, int max, uint32_t lo_hz, uint32_t hi_hz,
+                             int wait_ms);
+
+// Bumped once per successful store replacement. Lets the UI decide whether
+// anything actually changed without copying the table first.
+uint32_t spots_version(void);
 
 // Seconds since the last successful fetch, or -1 if none yet. Drives the
 // "spots are stale" state in the UI.

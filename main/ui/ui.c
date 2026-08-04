@@ -23,6 +23,7 @@
 #include "cw_audio.h"
 #include "settings.h"
 #include "bandplan.h"
+#include "spots_lane.h"
 #include "wifi_config.h"
 #include "tune_modal.h"
 #include "memory_modal.h"
@@ -51,6 +52,14 @@ static const char *TAG = "ui";
 #define SPECTRUM_H      200
 #define LABEL_BAR_H     32  /* Phase 5.10C: room for Montserrat 18 labels under tick marks */
 #define BANDPLAN_H      22  /* coarse CW/Digi/Phone band-plan strip under the freq axis */
+/* SPOTS_LANE_H (spots_lane.h) is a third fixed lane: live POTA/RBN spots between
+ * the spectrum and the freq axis. Like BANDPLAN_H it is subtracted from
+ * WATERFALL_H below, so the 36 px come off the waterfall - a deliberate trade,
+ * and the reason the lane is a strip rather than an overlay (see spots_lane.h).
+ * It is a compile-time constant on purpose: WATERFALL_H sizes the double-height
+ * canvas buffer that the 30 Hz render task writes into, so making the lane
+ * height runtime-variable would mean reallocating that buffer under the
+ * renderer - far more risk than the pixels are worth. */
 // Phase 5.10E: QMX I/Q has a 12 kHz IF offset -- the signal at the QMX's
 // tuned frequency lands at +12 kHz in the baseband. We compensate by
 // shifting the displayed spectrum left by 12 kHz so the tuned signal
@@ -1304,7 +1313,7 @@ void ui_set_zoom(float zoom, int pan_bins)
     }
 }
 
-#define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - LABEL_BAR_H - BANDPLAN_H - BOTTOM_BAR_H)
+#define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - SPOTS_LANE_H - LABEL_BAR_H - BANDPLAN_H - BOTTOM_BAR_H)
 
 // Forward declarations (Phase 6.1 - touch-to-tune)
 static void touch_event_cb(lv_event_t *e);
@@ -2298,7 +2307,7 @@ static void build_label_bar(lv_obj_t *parent)
     lv_obj_t *bar = lv_obj_create(parent);
     s_label_bar = bar;
     lv_obj_set_size(bar, DISPLAY_H_RES, LABEL_BAR_H);
-    lv_obj_align(bar, LV_ALIGN_TOP_LEFT, 0, TOP_BAR_H + SPECTRUM_H);
+    lv_obj_align(bar, LV_ALIGN_TOP_LEFT, 0, TOP_BAR_H + SPECTRUM_H + SPOTS_LANE_H);
     lv_obj_set_style_bg_color(bar, lv_color_hex(0x000000), 0);
     lv_obj_set_style_border_width(bar, 0, 0);
     lv_obj_set_style_radius(bar, 0, 0);
@@ -2642,6 +2651,19 @@ static void update_freq_axis_labels(uint32_t center_hz)
     // Pan shifts the center by pan_bins * (sample_rate / N) Hz.
     int32_t span_hz = (int32_t)(48000.0f / s_zoom_factor);
     int32_t pan_hz  = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
+
+    // Hand the same window to the spots lane. Deliberately computed HERE, from
+    // the axis's own span/pan, rather than recomputed inside the lane: a spot
+    // drawn from a second, subtly different mapping would point at the wrong
+    // frequency under a correct axis, and that is the one bug that would make
+    // the feature actively harmful.
+    {
+        int64_t lo = (int64_t)center_hz + pan_hz - span_hz / 2;
+        int64_t hi = (int64_t)center_hz + pan_hz + span_hz / 2;
+        if (lo < 0) lo = 0;
+        if (hi > lo) spots_lane_set_view((uint32_t)lo, (uint32_t)hi);
+    }
+
     // Tick positions: -span/2, -span/4, 0, +span/4, +span/2 relative to panned center.
     for (int i = 0; i < 5; i++) {
         if (!s_tick_labels[i]) continue;
@@ -2671,7 +2693,8 @@ static void build_waterfall(lv_obj_t *parent)
     s_waterfall_obj = lv_obj_create(parent);
     lv_obj_set_size(s_waterfall_obj, DISPLAY_H_RES, WATERFALL_H);
     // Waterfall starts right after label bar (band-plan now floats at bottom, built later)
-    lv_obj_align(s_waterfall_obj, LV_ALIGN_TOP_LEFT, 0, TOP_BAR_H + SPECTRUM_H + LABEL_BAR_H);
+    lv_obj_align(s_waterfall_obj, LV_ALIGN_TOP_LEFT, 0,
+                 TOP_BAR_H + SPECTRUM_H + SPOTS_LANE_H + LABEL_BAR_H);
     lv_obj_set_style_bg_color(s_waterfall_obj, lv_color_hex(0x000010), 0);
     lv_obj_set_style_border_width(s_waterfall_obj, 0, 0);
     lv_obj_set_style_radius(s_waterfall_obj, 0, 0);
@@ -3100,6 +3123,7 @@ void ui_init(lv_display_t *disp)
 
     build_top_bar(scr);
     build_spectrum(scr);
+    spots_lane_build(scr, TOP_BAR_H + SPECTRUM_H);
     build_label_bar(scr);
     build_waterfall(scr);
     build_bottom_bar(scr);
@@ -6855,6 +6879,7 @@ void ui_apply_saved_mode(void)
     if (s_label_bar)     lv_obj_add_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN);
     if (s_bandplan_obj)  lv_obj_add_flag(s_bandplan_obj,  LV_OBJ_FLAG_HIDDEN);
     if (s_waterfall_obj) lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN);
+    spots_lane_set_visible(false);
     top_bar_set_ft8_dim(true);
     drawer_set_ft8_mode(true);
     // FT8 is a digital mode - force the radio into DiGi regardless of
@@ -6935,12 +6960,17 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
             if (s_label_bar)     slide_x_anim(s_label_bar,     0, DISPLAY_H_RES, mode_slide_out_ready_cb);
             if (s_bandplan_obj)  slide_x_anim(s_bandplan_obj,  0, DISPLAY_H_RES, mode_slide_out_ready_cb);
             if (s_waterfall_obj) slide_x_anim(s_waterfall_obj, 0, DISPLAY_H_RES, mode_slide_out_ready_cb);
+            if (spots_lane_obj()) slide_x_anim(spots_lane_obj(), 0, DISPLAY_H_RES, mode_slide_out_ready_cb);
         } else {
             if (s_spectrum_obj)  { lv_obj_add_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN); lv_obj_set_x(s_spectrum_obj,  0); }
             if (s_label_bar)     { lv_obj_add_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN); lv_obj_set_x(s_label_bar,     0); }
             if (s_bandplan_obj)  { lv_obj_add_flag(s_bandplan_obj,  LV_OBJ_FLAG_HIDDEN); lv_obj_set_x(s_bandplan_obj,  0); }
             if (s_waterfall_obj) { lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN); lv_obj_set_x(s_waterfall_obj, 0); }
+            if (spots_lane_obj()) lv_obj_set_x(spots_lane_obj(), 0);
         }
+        // Content stops updating as soon as the lane is off-page; the repaint
+        // guard is what keeps the 1 Hz tick from doing work in FT8 mode.
+        spots_lane_set_visible(false);
     } else {
         // Sticky settings: remember where FT8 was left, restore where
         // Panadapter was left (band/mode/bw/freq/zoom).
@@ -6955,11 +6985,13 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
         if (s_label_bar)     { lv_obj_set_x(s_label_bar,     start_x); lv_obj_clear_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN); }
         if (s_bandplan_obj)  { lv_obj_set_x(s_bandplan_obj,  start_x); lv_obj_clear_flag(s_bandplan_obj,  LV_OBJ_FLAG_HIDDEN); }
         if (s_waterfall_obj) { lv_obj_set_x(s_waterfall_obj, start_x); lv_obj_clear_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN); }
+        if (spots_lane_obj()) { lv_obj_set_x(spots_lane_obj(), start_x); spots_lane_set_visible(true); }
         if (animate) {
             slide_x_anim(s_spectrum_obj,  -DISPLAY_H_RES, 0, NULL);
             slide_x_anim(s_label_bar,     -DISPLAY_H_RES, 0, NULL);
             slide_x_anim(s_bandplan_obj,  -DISPLAY_H_RES, 0, NULL);
             slide_x_anim(s_waterfall_obj, -DISPLAY_H_RES, 0, NULL);
+            if (spots_lane_obj()) slide_x_anim(spots_lane_obj(), -DISPLAY_H_RES, 0, NULL);
             slide_x_anim(ft8, 0, DISPLAY_H_RES, ft8_slide_out_ready_cb);
         } else {
             ft8_screen_view_hide();
