@@ -1025,11 +1025,17 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_font(lm, &lv_font_montserrat_28, 0);
     lv_obj_center(lm);
 
+    // Spans the whole gap between the two buttons (they end at x=80 and start
+    // at PANE_W-80) with centred text, so the number sits mid-row and STAYS
+    // there as it changes width - at a fixed x it drifted between "8 WPM" and
+    // "18 WPM" (operator, 2026-08-04).
     s_lbl_wpm = lv_label_create(s_pane);
     lv_label_set_text(s_lbl_wpm, "-- WPM");
     lv_obj_set_style_text_color(s_lbl_wpm, lv_color_hex(0xFFA040), 0);
     lv_obj_set_style_text_font(s_lbl_wpm, &lv_font_montserrat_24, 0);
-    lv_obj_set_pos(s_lbl_wpm, 96, 69);
+    lv_obj_set_width(s_lbl_wpm, (PANE_W - 80) - 80);
+    lv_obj_set_style_text_align(s_lbl_wpm, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(s_lbl_wpm, 80, 67);   // 58 + (48 - ~29 line height) / 2
 
     lv_obj_t *bp = make_pane_btn(s_pane, PANE_W - 80, 58, 70, 48, 0x2a2f37, 0x555555);
     lv_obj_add_event_cb(bp, wpm_plus_cb, LV_EVENT_CLICKED, NULL);
