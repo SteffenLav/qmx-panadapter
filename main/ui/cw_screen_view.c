@@ -100,8 +100,10 @@ static bool           s_dec_dirty = false;
 // Ticker noise-squelch state (feed context; see cw_screen_feed_decoded).
 static char           s_tick_tok[24];
 static int            s_tick_len = 0;
-static char           s_tick_last_single = 0;
-static int            s_tick_single_run = 0;
+static char           s_tick_last_single = 0;   // the current "noise letter"
+static int            s_tick_single_run = 0;    // consecutive lone repeats of it
+static char           s_tick_held = 0;          // one-char lookahead, 0 = none
+static char           s_tick_last_emitted = 0;  // to collapse runs of spaces
 static portMUX_TYPE   s_dec_mux = portMUX_INITIALIZER_UNLOCKED;
 
 // Wipe everything the decode stream produced: the ticker's ring, the copilot
@@ -119,6 +121,8 @@ void cw_screen_clear_decode(void)
     s_tick_len = 0;              // drop a half-built token
     s_tick_last_single = 0;      // and the squelch's run state
     s_tick_single_run = 0;
+    s_tick_held = 0;
+    s_tick_last_emitted = 0;
     cw_qso_reset();          // drops target + ladder
     cw_qso_clear_capture();  // drops the heard call and the hint
     if (s_ticker_lbl) lv_label_set_text(s_ticker_lbl, "");
@@ -140,53 +144,78 @@ void cw_screen_clear_decode(void)
 // completely unaffected - the filter cannot cost a decode.
 #define NOISE_RUN_SHOW 2
 
-// Append one completed token (plus a separating space) unless it is part of a
-// repeated single-character run. Caller holds no lock; this takes its own.
-static void ticker_emit_token(const char *tok, int len)
+// Append one character. Short critical section - see the cyan-flash note.
+static void ticker_emit_char(char c)
 {
-    if (len == 1) {
-        if (tok[0] == s_tick_last_single) s_tick_single_run++;
-        else { s_tick_last_single = tok[0]; s_tick_single_run = 1; }
-        if (s_tick_single_run > NOISE_RUN_SHOW) return;   // squelched
-    } else {
-        s_tick_last_single = 0;
-        s_tick_single_run  = 0;
+    portENTER_CRITICAL(&s_dec_mux);
+    if (s_dec_len == DEC_RING_CAP) {
+        memmove(s_dec_ring, s_dec_ring + DEC_RING_CAP / 4,
+                DEC_RING_CAP - DEC_RING_CAP / 4);
+        s_dec_len = DEC_RING_CAP - DEC_RING_CAP / 4;
     }
-    for (int i = 0; i <= len; i++) {          // <= len: trailing space
-        char c = (i == len) ? ' ' : tok[i];
-        portENTER_CRITICAL(&s_dec_mux);
-        if (s_dec_len == DEC_RING_CAP) {
-            memmove(s_dec_ring, s_dec_ring + DEC_RING_CAP / 4,
-                    DEC_RING_CAP - DEC_RING_CAP / 4);
-            s_dec_len = DEC_RING_CAP - DEC_RING_CAP / 4;
-        }
-        s_dec_ring[s_dec_len++] = c;
-        s_dec_dirty = true;
-        portEXIT_CRITICAL(&s_dec_mux);
-    }
+    s_dec_ring[s_dec_len++] = c;
+    s_dec_dirty = true;
+    portEXIT_CRITICAL(&s_dec_mux);
+    s_tick_last_emitted = c;
 }
 
 void cw_screen_feed_decoded(const char *s, int n)
 {
     if (!s || n <= 0) return;
     cw_qso_feed(s, n);   // RAW stream: capture / ESM / hints are never filtered
-    // Tokenise for the squelch. Characters are held until a separator
-    // completes the token, which is what lets a repeated run be recognised
-    // before it reaches the display; a token longer than the buffer is
-    // flushed as-is (it cannot be noise). ticker_emit_token() keeps the
-    // per-character critical sections short - see the cyan-flash note above.
+    // Characters reach the ticker AS THEY DECODE - an operator following a
+    // QSO needs to watch it arrive letter by letter, so nothing may be held
+    // back waiting for a word to finish (operator, 2026-08-04).
+    //
+    // The squelch therefore works on what it has ALREADY established: once
+    // the same lone letter has ended two tokens in a row it becomes the
+    // "noise letter", and only THAT letter, only as the first character of a
+    // token, is held back for a single character - just long enough to see
+    // whether a separator follows (another noise blip -> dropped) or more
+    // text does (a real word -> the held letter is emitted immediately, in
+    // order, and the squelch releases). Everything else streams with zero
+    // delay, and the delay that does exist is one character of the one
+    // letter the band is currently spewing.
     for (int i = 0; i < n; i++) {
         char c = s[i];
         if (c == '\r' || c == '\n') c = ' ';
+
         if (c == ' ') {
-            if (s_tick_len) { ticker_emit_token(s_tick_tok, s_tick_len); s_tick_len = 0; }
+            if (s_tick_held) {
+                // A lone noise letter: drop it and its separator, and keep
+                // the run going so the squelch stays armed.
+                s_tick_held = 0;
+                s_tick_single_run++;
+                s_tick_len = 0;
+                continue;
+            }
+            if (s_tick_len == 1) {
+                if (s_tick_tok[0] == s_tick_last_single) s_tick_single_run++;
+                else { s_tick_last_single = s_tick_tok[0]; s_tick_single_run = 1; }
+            } else if (s_tick_len > 1) {
+                s_tick_last_single = 0;   // real text breaks the run
+                s_tick_single_run  = 0;
+            }
+            s_tick_len = 0;
+            if (s_tick_last_emitted != ' ') ticker_emit_char(' ');
             continue;
         }
+
+        bool first_of_token = (s_tick_len == 0);
         if (s_tick_len < (int)sizeof(s_tick_tok)) s_tick_tok[s_tick_len++] = c;
-        if (s_tick_len == (int)sizeof(s_tick_tok)) {
-            ticker_emit_token(s_tick_tok, s_tick_len);
-            s_tick_len = 0;
+
+        if (first_of_token && c == s_tick_last_single &&
+            s_tick_single_run >= NOISE_RUN_SHOW) {
+            s_tick_held = c;      // might be another blip - decide next char
+            continue;
         }
+        if (s_tick_held) {        // it was not a blip after all
+            ticker_emit_char(s_tick_held);
+            s_tick_held = 0;
+            s_tick_last_single = 0;
+            s_tick_single_run  = 0;
+        }
+        ticker_emit_char(c);
     }
 }
 
