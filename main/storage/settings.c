@@ -67,6 +67,7 @@ static const char *TAG = "settings";
 #define KEY_FT8_EARLY_DEC  "ft8_earlydec"
 #define KEY_GREYLIST_EN    "greylist_en"
 #define KEY_PSKREP_EN      "pskrep_en"
+#define KEY_SPOTS_EN       "spots_en"
 #define KEY_TX_TONE_HZ     "tx_tone_hz"
 #define KEY_TX_TONE_HOLD   "tx_tone_hold"
 #define KEY_FT8_SYNC_LINES "ft8_sync_ln"
@@ -243,6 +244,10 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 // --- past the old 64-bit ceiling (the whole point of DIRTY_WORDS) ---
 #define DIRTY_TX_TONE_HZ     64
 #define DIRTY_TX_TONE_HOLD   65
+// 67..74 are RESERVED for the CW page on branch feat/cw-page (CW_MSG0..5,
+// CW_PARK, CW_SIM). Do not reuse them here or the two branches collide on
+// merge and settings land in the wrong fields.
+#define DIRTY_SPOTS_EN       75
 #define DIRTY_CQ_MAX_CALLS   66
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
@@ -397,6 +402,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_FT8_EARLY_DEC)) nvs_set_u8(s_nvs, KEY_FT8_EARLY_DEC, snap.ft8_early_decode ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_GREYLIST_EN))   nvs_set_u8(s_nvs, KEY_GREYLIST_EN,   snap.greylist_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_PSKREP_EN))     nvs_set_u8(s_nvs, KEY_PSKREP_EN,     snap.pskreporter_en ? 1 : 0);
+    if (dirty_test(&dirty_local, DIRTY_SPOTS_EN))      nvs_set_u8(s_nvs, KEY_SPOTS_EN,      snap.spots_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_TX_TONE_HZ))    nvs_set_u16(s_nvs, KEY_TX_TONE_HZ,   snap.tx_tone_hz);
         if (dirty_test(&dirty_local, DIRTY_TX_TONE_HOLD))  nvs_set_u8(s_nvs, KEY_TX_TONE_HOLD,  snap.tx_tone_hold ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FT8_SYNC_LINES)) nvs_set_u8(s_nvs, KEY_FT8_SYNC_LINES, snap.ft8_sync_lines ? 1 : 0);
@@ -536,6 +542,10 @@ static void load_from_nvs(qmx_settings_t *out)
     // inherently public ham activity. Disclosed in the release notes + manual;
     // the FT8 drawer checkbox turns it off. Inert until callsign+grid are set.
     out->pskreporter_en = true;
+    // Spots on by default: it is read-only use of a public API, and a feature
+    // that draws on the spectrum has to be visible to be discovered. Costs
+    // nothing until WiFi is up.
+    out->spots_en = true;
     out->tx_tone_hz   = 1500;     // conventional FT8 default; = FT8_TX_CQ_DEFAULT_FREQ_HZ
     out->tx_tone_hold = false;    // auto-pick a clear slot, as it always did
     out->bandplan_region = 0;     // 0 = auto (derive from grid)
@@ -648,6 +658,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_FT8_EARLY_DEC, &u8v) == ESP_OK) out->ft8_early_decode = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_GREYLIST_EN, &u8v) == ESP_OK) out->greylist_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_PSKREP_EN, &u8v) == ESP_OK) out->pskreporter_en = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_SPOTS_EN, &u8v) == ESP_OK) out->spots_en = (u8v != 0);
     if (nvs_get_u16(s_nvs, KEY_TX_TONE_HZ, &u16v) == ESP_OK) out->tx_tone_hz = u16v;
     if (nvs_get_u8(s_nvs, KEY_TX_TONE_HOLD, &u8v) == ESP_OK) out->tx_tone_hold = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_FT8_SYNC_LINES, &u8v) == ESP_OK) out->ft8_sync_lines = (u8v != 0);
@@ -1245,6 +1256,16 @@ void settings_set_pskreporter_en(bool v)
     s_pending.pskreporter_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_PSKREP_EN);
+}
+
+void settings_set_spots_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.spots_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.spots_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_SPOTS_EN);
 }
 
 void settings_set_tx_tone_hz(uint16_t v)

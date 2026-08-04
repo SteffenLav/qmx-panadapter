@@ -36,6 +36,7 @@
 #include "ft8_pileup.h"
 #include "ft8_sim.h"
 #include "net/pskreporter.h"
+#include "net/spots.h"
 #include "ft8_hash.h"
 #include "diag_log.h"
 #include "factory_reset.h"
@@ -334,6 +335,7 @@ void app_main(void)
     ft8_pileup_init();
     ft8_sim_init();
     pskreporter_init();
+    spots_init();          // live POTA spots on the spectrum (WiFi, opt-out)
     ft8_arrl_fd_selftest();
     ft8_hash_selftest();
     ft8_sim_synth_selftest();

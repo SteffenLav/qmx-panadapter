@@ -98,6 +98,7 @@ typedef struct {
     bool     ft8_sync_lines;  // Panadapter: FT8-sync-vs-SNTP waterfall slot-boundary lines + 2x waterfall speed (default false)
     bool     greylist_en;     // FT8: grey-list stations after repeated failed pounces - auto pickers skip
                               // them, rows recolour, tap offers clear (default false; RAM-only list)
+    bool     spots_en;        // draw live POTA (later RBN) spots on the spectrum (default true)
     bool     pskreporter_en;  // FT8/FT4: report real decodes to pskreporter.info (UDP, batched ~5 min;
                               // needs callsign+grid; never in simulation mode; default TRUE - same
                               // as WSJT-X ships; drawer checkbox turns it off)
@@ -215,6 +216,7 @@ void settings_set_distance_in_miles(bool v);
 void settings_set_ft8_early_decode(bool v);
 void settings_set_greylist_en(bool v);
 void settings_set_pskreporter_en(bool v);
+void settings_set_spots_en(bool v);
 
 // FT8/FT4 TX tone preference and hold (debounced flush) - see ft8_tx.h for what
 // "hold" means to the TX paths. Both are written by the TX tone picker's Apply.
