@@ -14,7 +14,7 @@ Tap **WiFi setup** in the settings drawer to open the WiFi window.
 
 **WiFi On/Off** — the WiFi icon button in the WiFi window (shown with a diagonal red slash when off). Toggling it takes effect immediately — off disconnects and stays off; on reconnects right away. Turning WiFi off is useful for field operation (no WiFi overhead, extended battery life).
 
-**SSID** — Your WiFi network name. Tap **Scan** to list nearby networks and pick one.
+**SSID** — Your WiFi network name. Tap **Scan** to list nearby networks and pick one (as of v1.3.6 this also works when your stored network is out of range — hotels, POTA sites — where it previously always reported "No networks found").
 
 **Password** — Your WiFi password (pre-filled with your saved password; tap the eye icon to show/hide it). Tap **Save** to store it and connect.
 

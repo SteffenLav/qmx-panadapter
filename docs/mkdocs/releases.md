@@ -4,19 +4,19 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.3.5** — 2026-07-31
+**v1.3.6** — 2026-08-03
 
-Another same-week feedback release: Don WB0LQW's three requests, Roy KI0ER's bug report on a three-day-old feature, and the drawer touch fix promised on groups.io.
+A pure fixes release — no new operating features, but two of the fixes close problems as old as the project. Everything was found and verified in one long bench session with a serial monitor attached.
 
-- **CQ stops calling after a limit you set** (Don WB0LQW: "I usually send CQ 2-4 times and then pause"). Long-press **Call CQ** and the preset editor's new top-right **CQ stop** button cycles never / 1 / 2 / 3 / 4 / 5 / 10 calls — applied the moment you tap it, no Save needed. While calling, the TX status counts live: **"call 2 of 4"**. After the last unanswered call the Tab5 listens through one more receive slot — an answer to your final call still starts the QSO normally — and then stops. The limit covers every CQ run, including the automatic resume after a completed contact, with each fresh sequence starting the count over.
-- **The QSO log opens in your browser** (Dennis WN4FLA, Don WB0LQW — both went looking for log management the web page didn't have). **QSO Logs → View / edit log** shows the whole log as a table, newest first. **Click any column header to sort** (click again to reverse) — sorting by date groups an activation's QSOs together. Every row has a delete cross; **Delete all** clears the whole log after you type `DELETE`, since there is no undo.
-- **Delete all on the Tab5 too** (Don WB0LQW). The on-device ADIF viewer gets a **Delete all** button next to Close — the first tap arms it and shows the live count ("ALL 34?"), a second tap within five seconds deletes, waiting disarms. The POTA workflow this enables: clear the log at the start of the activation, and the ADIF at the end is exactly what you submit.
-- **A bug the missing button was hiding.** Clearing the log never reset the QRZ/eQSL/LoTW upload positions — the first operator to clear a 30-QSO log would have found their next 30 QSOs silently skipped by every upload. Fixed before it bit anyone.
-- **You can escape the busy-station hold now** (Roy KI0ER). v1.3.3 taught the pounce to wait politely while its target works someone else — but the wait had no exit, and you were locked out of pouncing on anyone else. The status line now shows **TAP TO CANCEL** during the hold; tapping drops the pounce, and the abandoned exchange stays resumable for a few minutes in case the station frees up.
-- **The settings drawer takes your finger seriously** (Don WB0LQW). Sliders and checkboxes responded intermittently because the scrollable drawer stole any touch that moved ten pixels. A grabbed control now stays grabbed, and the slider knobs' catch area more than doubled. The stated cost: a drag starting exactly on a knob no longer scrolls the drawer.
-- **QMX volume: 50 dB, verified** (Randy N4OPI). His side-by-side check confirms the Tab5's dB figure reads **identical to the QMX's own LCD**. The cap settled at 50 dB on his third report — the earlier "40 is not loud enough" turned out to have been measured with the antenna off, so what was missing was band noise, not gain.
+- **The "restart the QMX again and again" USB mystery — solved. It was two separate bugs.**
+    - **Fixed on the Tab5:** powering the QMX off while it streamed could jam the Tab5's USB port with the dead connection — the radio became invisible no matter how many times you restarted it, and only a Tab5 reboot recovered. The USB teardown is repaired, and the Tab5 additionally heals the port by itself if a device sits unrecognized. Net effect: QMX off → on reconnects in about a second, hands off.
+    - **Lives in the QMX's own firmware** (reported to QRP Labs; reproduced on QMX firmware 1_03_002 *and* 1_04_004): after some Tab5 restarts the QMX answers USB enumeration incorrectly until the radio itself is restarted. The Tab5 can't fix that one — but it now detects it and shows **"QMX USB is stuck - power-cycle the QMX to reconnect"** instead of playing dead.
+- **A crash on radio power-on is fixed** (Dennis WN4FLA — three crashes in one morning). Turning the radio on while the Tab5 waited in FT8 mode — or changing bands around that moment — could reboot the Tab5. Reproduced on the bench with Dennis's exact steps, root-caused from the serial backtrace (the FT8 engine's periodic restart could overlap its own shutdown), fixed, and torture-tested with every off/on and band-change combination we could invent.
+- **WiFi Scan works away from home now.** Scan always said "No networks found" whenever your stored network was out of range — precisely the situation Scan exists for (hotels, POTA sites). The automatic reconnect loop was wiping the scan results before they could be read. Verified five-for-five on hotel WiFi.
+- **The web page shows live TX status in FT8/FT4 mode** (Dennis WN4FLA). Red while transmitting — including the "call 2 of 4" counter from v1.3.5's CQ auto-stop — amber armed/waiting, green QSO complete, orange timeout, and the persistent "CQ stopped after N calls - no answer". The browser tab title carries a red dot while transmitting, visible from across the room even with the tab unfocused.
+- **"Diag(saved)" delivers the crash log now.** With an SD card inserted it used to serve an empty or stale file — hiding exactly the data it exists for (found via Dennis's empty post-crash download).
 
-### Installing v1.3.5
+### Installing v1.3.6
 
 1. Use the one-click flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases)
 2. Or follow [Build from Source](build/build.md)
@@ -24,6 +24,8 @@ Another same-week feedback release: Don WB0LQW's three requests, Roy KI0ER's bug
 Your settings are preserved during a normal flash.
 
 ## Previous Releases
+
+**v1.3.5** — 2026-07-31 — Don WB0LQW's three requests, Roy KI0ER's bug report and the drawer touch fix: **CQ stops calling after a limit you set** (long-press Call CQ → **CQ stop**, never/1-5/10, live "call 2 of 4" counter, one extra listening slot after the final call), the **QSO log opens in your browser** (QSO Logs → View / edit log — sortable columns, per-row delete, type-DELETE Delete-all) with **Delete all on the Tab5 too** (two-tap, "ALL 34?"), an escape for the **busy-station hold** (TAP TO CANCEL), the **settings drawer stops stealing your finger** mid-drag, **QMX volume verified identical to the radio's own LCD** and capped at 50 dB (Randy N4OPI), and a latent bug fixed before it bit anyone: clearing the log would have silently disabled all future QRZ/eQSL/LoTW uploads.
 
 **v1.3.4** — 2026-07-29 — The same-day field reports on v1.3.3, almost all from Roy KI0ER: a partner who never decoded your final now gets it **re-sent** (up to three times in four minutes) instead of the Tab5 moving on without ever making their log, finishing by hand no longer writes **duplicate log entries**, the fabricated `599` **signal reports nobody sent** are gone from the ADIF log, and the **occupancy map is filtered by time window** — a tone busy only in the opposite slot no longer reads as busy for you. The **TX frequency became a permanent button** on the FT8 screen with a **live mini occupancy strip** under the slot countdown, **TX Hold** (WSJT-X's "Hold Tx Freq") pins your tone, the parity choice is one cycling `TXCQ ANY / EVEN / ODD` button, and WiFi strength in the bottom bar is a **fan icon** with the freed width going to the network name.
 
