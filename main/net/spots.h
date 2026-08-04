@@ -69,6 +69,12 @@ int  spots_get_in_range_wait(spot_t *out, int max, uint32_t lo_hz, uint32_t hi_h
 // anything actually changed without copying the table first.
 uint32_t spots_version(void);
 
+// Replace every spot belonging to `src` with `list`, leaving the other sources'
+// entries alone. This is how a second producer joins the store: POTA and RBN
+// each own their slice and neither can wipe the other's. `list` must not point
+// into the store itself.
+void spots_publish(spot_source_t src, const spot_t *list, int n);
+
 // Seconds since the last successful fetch, or -1 if none yet. Drives the
 // "spots are stale" state in the UI.
 int  spots_age_s(void);

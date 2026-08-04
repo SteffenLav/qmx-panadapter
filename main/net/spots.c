@@ -105,6 +105,26 @@ static void unlock(void) { if (s_lock) xSemaphoreGive(s_lock); }
 
 uint32_t spots_version(void) { return s_version; }
 
+void spots_publish(spot_source_t src, const spot_t *list, int n)
+{
+    if (!s_store || !lock()) return;
+
+    // Compact this source out in place, then append the replacement. Done under
+    // one lock so a reader never sees a half-swapped table, and in place so a
+    // second producer costs no extra buffer.
+    int keep = 0;
+    for (int i = 0; i < s_count; i++)
+        if (s_store[i].source != src) s_store[keep++] = s_store[i];
+
+    int room = SPOTS_MAX - keep;
+    if (n > room) n = room;            // the incoming source yields, not the settled one
+    if (n > 0 && list) memcpy(&s_store[keep], list, (size_t)n * sizeof(spot_t));
+
+    s_count = keep + (n > 0 ? n : 0);
+    s_version++;
+    unlock();
+}
+
 int spots_get(spot_t *out, int max)
 {
     if (!out || max <= 0 || !lock()) return 0;
@@ -235,11 +255,7 @@ static int parse_pota(const char *json)
     }
     cJSON_Delete(root);
 
-    if (!lock()) return -1;                 // keep the previous table intact
-    memcpy(s_store, s_scratch, (size_t)n * sizeof(spot_t));
-    s_count = n;
-    s_version++;
-    unlock();
+    spots_publish(SPOT_SRC_POTA, s_scratch, n);   // replaces only the POTA slice
     return n;
 }
 

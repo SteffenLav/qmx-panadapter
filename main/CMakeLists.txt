@@ -64,6 +64,7 @@ idf_component_register(
         "ft8_greylist.c"
         "net/pskreporter.c"
         "net/spots.c"
+        "net/rbn.c"
         "ft8_robot.c"
         "ft8_sim.c"
         "adif/adif_log.c"

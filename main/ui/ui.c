@@ -24,6 +24,7 @@
 #include "settings.h"
 #include "bandplan.h"
 #include "spots_lane.h"
+#include "net/spots.h"
 #include "wifi_config.h"
 #include "tune_modal.h"
 #include "memory_modal.h"
@@ -1636,7 +1637,10 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_QMXVOL     22  // QMX AF gain (volume), directly under Flip 180.
                                    // Kept in both modes - the radio's audio is
                                    // just as relevant on the FT8 screen.
-#define N_DRAWER_SECTIONS     23
+#define DRAWER_SEC_SPOTS      23  // panadapter-only: the live-spots lane (POTA, and RBN
+                                   // as an opt-in second source). Panadapter-only because
+                                   // the lane itself only exists on that page.
+#define N_DRAWER_SECTIONS     24
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 // Phase 5.10D Stage 2b: drawer widgets we need to keep handles to
@@ -5404,6 +5408,28 @@ static void drawer_check_sim_mode_cb(lv_event_t *e)
 // Themed square checkbox for drawer toggle rows. Indicator styled to match
 // the ft8_filter_modal (square, dark bg, primary-blue when checked, fat
 // padding for touch). Caller positions with lv_obj_align after this returns.
+static lv_obj_t *s_check_spots = NULL;
+static lv_obj_t *s_check_rbn   = NULL;
+
+static void drawer_spots_cb(lv_event_t *e)
+{
+    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_set_spots_en(on);
+    // Repaint at once rather than waiting for the 1 Hz tick, so the checkbox
+    // feels like it did something.
+    spots_lane_set_visible(ui_mode_get() != UI_MODE_FT8);
+    if (on) spots_request_refresh();
+    ESP_LOGI(TAG, "live spots: %s", on ? "on" : "off");
+}
+
+static void drawer_rbn_cb(lv_event_t *e)
+{
+    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_set_rbn_en(on);
+    // The RBN task polls the setting, so there is nothing to start or stop here.
+    ESP_LOGI(TAG, "RBN spot source: %s", on ? "on" : "off");
+}
+
 static lv_obj_t *make_drawer_checkbox(lv_obj_t *parent, bool checked,
                                        lv_event_cb_t cb, void *user_data)
 {
@@ -5862,6 +5888,32 @@ static void drawer_build(void)
         s_switch_flat = make_drawer_checkbox(sec, ui_get_flat_mode(), drawer_switch_flat_cb, NULL);
         lv_obj_align(s_switch_flat, LV_ALIGN_TOP_RIGHT, 0, 6);
         y += 56;
+    }
+
+    // Live spots: the lane on/off, plus RBN as a second source. Two rows in one
+    // section so they hide and reflow together in FT8 mode - the lane only exists
+    // on the panadapter page. RBN is listed second and indented under the first
+    // because it is meaningless with the lane switched off.
+    {
+        qmx_settings_t scfg_spots;
+        settings_load_all(&scfg_spots);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SPOTS, y, 112);
+        lv_obj_t *hdr = lv_label_create(sec);
+        lv_label_set_text(hdr, "Live spots (POTA)");
+        lv_obj_set_style_text_color(hdr, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 10);
+        s_check_spots = make_drawer_checkbox(sec, scfg_spots.spots_en, drawer_spots_cb, NULL);
+        lv_obj_align(s_check_spots, LV_ALIGN_TOP_RIGHT, 0, 6);
+
+        lv_obj_t *rbn_lbl = lv_label_create(sec);
+        lv_label_set_text(rbn_lbl, "Add RBN (CW skimmers)");
+        lv_obj_set_style_text_color(rbn_lbl, lv_color_hex(0xB0B0B0), 0);
+        lv_obj_set_style_text_font(rbn_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_align(rbn_lbl, LV_ALIGN_TOP_LEFT, 24, 66);
+        s_check_rbn = make_drawer_checkbox(sec, scfg_spots.rbn_en, drawer_rbn_cb, NULL);
+        lv_obj_align(s_check_rbn, LV_ALIGN_TOP_RIGHT, 0, 62);
+        y += 112;
     }
 
     // Presets section: header + three buttons side-by-side

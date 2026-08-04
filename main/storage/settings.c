@@ -68,6 +68,7 @@ static const char *TAG = "settings";
 #define KEY_GREYLIST_EN    "greylist_en"
 #define KEY_PSKREP_EN      "pskrep_en"
 #define KEY_SPOTS_EN       "spots_en"
+#define KEY_RBN_EN         "rbn_en"
 #define KEY_TX_TONE_HZ     "tx_tone_hz"
 #define KEY_TX_TONE_HOLD   "tx_tone_hold"
 #define KEY_FT8_SYNC_LINES "ft8_sync_ln"
@@ -248,6 +249,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 // CW_PARK, CW_SIM). Do not reuse them here or the two branches collide on
 // merge and settings land in the wrong fields.
 #define DIRTY_SPOTS_EN       75
+#define DIRTY_RBN_EN         76
 #define DIRTY_CQ_MAX_CALLS   66
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
@@ -273,6 +275,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_CHARGE_LIM_PCT,
     DIRTY_LOTW_DXCC, DIRTY_LOTW_CQZ, DIRTY_LOTW_ITUZ, DIRTY_DISP_SLEEP,
     DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD, DIRTY_CQ_MAX_CALLS,
+    DIRTY_SPOTS_EN, DIRTY_RBN_EN,
 };
 
 // ---- Module state ------------------------------------------------------
@@ -403,6 +406,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_GREYLIST_EN))   nvs_set_u8(s_nvs, KEY_GREYLIST_EN,   snap.greylist_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_PSKREP_EN))     nvs_set_u8(s_nvs, KEY_PSKREP_EN,     snap.pskreporter_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_SPOTS_EN))      nvs_set_u8(s_nvs, KEY_SPOTS_EN,      snap.spots_en ? 1 : 0);
+    if (dirty_test(&dirty_local, DIRTY_RBN_EN))        nvs_set_u8(s_nvs, KEY_RBN_EN,        snap.rbn_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_TX_TONE_HZ))    nvs_set_u16(s_nvs, KEY_TX_TONE_HZ,   snap.tx_tone_hz);
         if (dirty_test(&dirty_local, DIRTY_TX_TONE_HOLD))  nvs_set_u8(s_nvs, KEY_TX_TONE_HOLD,  snap.tx_tone_hold ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FT8_SYNC_LINES)) nvs_set_u8(s_nvs, KEY_FT8_SYNC_LINES, snap.ft8_sync_lines ? 1 : 0);
@@ -546,6 +550,7 @@ static void load_from_nvs(qmx_settings_t *out)
     // that draws on the spectrum has to be visible to be discovered. Costs
     // nothing until WiFi is up.
     out->spots_en = true;
+    out->rbn_en   = false;   // opt-in: a continuous telnet firehose on a fragile link
     out->tx_tone_hz   = 1500;     // conventional FT8 default; = FT8_TX_CQ_DEFAULT_FREQ_HZ
     out->tx_tone_hold = false;    // auto-pick a clear slot, as it always did
     out->bandplan_region = 0;     // 0 = auto (derive from grid)
@@ -659,6 +664,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_GREYLIST_EN, &u8v) == ESP_OK) out->greylist_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_PSKREP_EN, &u8v) == ESP_OK) out->pskreporter_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_SPOTS_EN, &u8v) == ESP_OK) out->spots_en = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_RBN_EN,   &u8v) == ESP_OK) out->rbn_en   = (u8v != 0);
     if (nvs_get_u16(s_nvs, KEY_TX_TONE_HZ, &u16v) == ESP_OK) out->tx_tone_hz = u16v;
     if (nvs_get_u8(s_nvs, KEY_TX_TONE_HOLD, &u8v) == ESP_OK) out->tx_tone_hold = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_FT8_SYNC_LINES, &u8v) == ESP_OK) out->ft8_sync_lines = (u8v != 0);
@@ -1266,6 +1272,16 @@ void settings_set_spots_en(bool v)
     s_pending.spots_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_SPOTS_EN);
+}
+
+void settings_set_rbn_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.rbn_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.rbn_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_RBN_EN);
 }
 
 void settings_set_tx_tone_hz(uint16_t v)
