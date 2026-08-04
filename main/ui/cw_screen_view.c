@@ -69,6 +69,7 @@ static lv_obj_t *s_container = NULL;
 static lv_obj_t *s_pane      = NULL;
 static lv_obj_t *s_ticker    = NULL;
 static lv_obj_t *s_ticker_lbl = NULL;
+static lv_obj_t *s_lbl_hint  = NULL;   // copilot: plain-language read of the decode
 static lv_obj_t *s_btn_mem[N_CW_MEM] = {0};
 static lv_obj_t *s_lbl_mem[N_CW_MEM] = {0};
 static lv_obj_t *s_lbl_wpm   = NULL;
@@ -668,6 +669,32 @@ static void refresh_card(void)
     lv_obj_clear_flag(s_card, LV_OBJ_FLAG_HIDDEN);
 }
 
+// Copilot hint line above the ticker: the ticker shows WHAT was heard, this
+// says WHAT IT MEANT (docs/cw-page-design.md Tier 3). Hidden when there is
+// nothing recent to say - a stale interpretation is worse than none, so it
+// fades out after HINT_TTL_S rather than lingering next to newer decode text.
+#define HINT_TTL_S 25
+static void refresh_hint(void)
+{
+    if (!s_lbl_hint) return;
+    cw_hint_t kind; char subj[16]; int age = 0;
+    if (!cw_qso_get_hint(&kind, subj, sizeof(subj), &age) || age > HINT_TTL_S) {
+        lv_obj_add_flag(s_lbl_hint, LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    char line[96];
+    cw_qso_hint_text(kind, subj, line, sizeof(line));
+    if (!line[0]) { lv_obj_add_flag(s_lbl_hint, LV_OBJ_FLAG_HIDDEN); return; }
+    lv_label_set_text(s_lbl_hint, line);
+    // Green when it is something to act on, muted amber for the rest.
+    bool actionable = (kind == CW_HINT_ANSWERED_YOU || kind == CW_HINT_CALLING_CQ ||
+                       kind == CW_HINT_CQ_FROM ||
+                       kind == CW_HINT_REPEAT || kind == CW_HINT_QRZ);
+    lv_obj_set_style_text_color(s_lbl_hint,
+        lv_color_hex(actionable ? 0x66DD88 : 0xFFA040), 0);
+    lv_obj_clear_flag(s_lbl_hint, LV_OBJ_FLAG_HIDDEN);
+}
+
 // ---- WPM stepper -------------------------------------------------------------
 static void wpm_step(int delta)
 {
@@ -716,6 +743,7 @@ static void tick_cb(lv_timer_t *t)
     }
     refresh_card();
     refresh_next_label();
+    refresh_hint();
 
     int rem = cat_get_cw_tx_remaining();
     if (s_lbl_status) {
@@ -885,6 +913,19 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_ticker_lbl, lv_color_hex(0xc8d0c8), 0);
     lv_obj_set_style_text_font(s_ticker_lbl, &lv_font_montserrat_22, 0);
     lv_obj_set_pos(s_ticker_lbl, 0, 0);
+
+    // Copilot hint line, immediately above the ticker and left-aligned with
+    // it: the ticker is the raw copy, this is the interpretation. Kept OUT of
+    // the ticker box so it cannot be mistaken for decoded text, and short
+    // enough to never collide with the station card at the right end.
+    s_lbl_hint = lv_label_create(s_container);
+    lv_label_set_text(s_lbl_hint, "");
+    lv_label_set_long_mode(s_lbl_hint, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(s_lbl_hint, MID_W - PANE_W - 360);
+    lv_obj_set_pos(s_lbl_hint, PANE_W + 8, MID_H - TICKER_H - BANDPLAN_H - 30);
+    lv_obj_set_style_text_font(s_lbl_hint, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_lbl_hint, lv_color_hex(0xFFA040), 0);
+    lv_obj_add_flag(s_lbl_hint, LV_OBJ_FLAG_HIDDEN);
 
     // Station card, floating above the ticker's right end.
     s_card = lv_obj_create(s_container);

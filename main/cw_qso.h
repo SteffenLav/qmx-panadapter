@@ -83,3 +83,38 @@ void cw_qso_sim_tick(void);
 // Arm a phantom reply after a [SIM] send. Call BEFORE cw_qso_on_next_sent()
 // (the pre-advance ladder state picks the reply script).
 void cw_qso_sim_arm(void);
+
+// ---- Copilot hints -----------------------------------------------------------
+// Plain-language interpretation of the decode stream, for an operator who
+// cannot yet copy CW by ear (docs/cw-page-design.md Tier 3, "CW copilot").
+// The ticker shows WHAT was heard; the hint says WHAT IT MEANT. Classified in
+// feed context (spinlock, no allocation), rendered by the LVGL tick.
+typedef enum {
+    CW_HINT_NONE = 0,
+    CW_HINT_CALLING_CQ,   // a CQ went by, sender not yet identified
+    CW_HINT_CQ_FROM,      // "<subj> is calling CQ" - CQ then DE <call>
+    CW_HINT_ANSWERED_YOU, // your call + "DE <call>" - they are answering you
+    CW_HINT_YOUR_CALL,    // your call heard, but no DE <call> yet
+    CW_HINT_REPORT,       // an RST went by (subj carries it, e.g. "599")
+    CW_HINT_SIGNOFF,      // 73 / TU - they are finishing
+    CW_HINT_REPEAT,       // AGN / PSE - they want a repeat
+    CW_HINT_QRZ,          // QRZ - they are asking who called
+    CW_HINT_CALL_HEARD,   // a plausible callsign appeared
+} cw_hint_t;
+
+// Latest hint, its subject (a callsign, or the report for CW_HINT_REPORT;
+// "" when not applicable) and how long ago it landed. False when there has
+// been no hint yet. Hints do NOT expire here - the UI decides how long to
+// show one (age_s_out is what it uses).
+bool cw_qso_get_hint(cw_hint_t *kind_out, char *subj_out, size_t subj_sz,
+                     int *age_s_out);
+
+// One line of plain English for a hint. Never NULL; returns buf.
+const char *cw_qso_hint_text(cw_hint_t kind, const char *subj,
+                             char *buf, size_t buf_sz);
+
+// Boot self-test: drives the tokenizer with canned decode text and checks the
+// hint classifier, since the real path needs a radio and a finger on the
+// screen. Logs one PASS/FAIL line per case and restores all state. Safe to
+// call once at startup before the CW page is used.
+void cw_qso_hint_selftest(void);

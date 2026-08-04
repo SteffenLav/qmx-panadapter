@@ -54,6 +54,24 @@ static char   s_tok[TOK_MAX + 1];
 static int    s_tok_len;
 static bool   s_prev_was_de;
 
+// Copilot hint: the newest interpretation of the decode stream. Written in
+// feed context under the same spinlock, read by the LVGL tick.
+static cw_hint_t s_hint_kind = CW_HINT_NONE;
+static char      s_hint_subj[CALL_MAX];
+static int64_t   s_hint_us;
+static int64_t   s_cq_heard_us;   // a CQ token went by (pairs with "DE <call>")
+
+#define CQ_PAIR_WINDOW_US (10LL * 1000000)  // CQ -> DE <call> pairing window
+#define HINT_STICKY_US    (10LL * 1000000)  // a strong read holds for repeats
+
+static void set_hint_locked(cw_hint_t kind, const char *subj, int64_t now)
+{
+    s_hint_kind = kind;
+    s_hint_subj[0] = '\0';
+    if (subj) snprintf(s_hint_subj, sizeof(s_hint_subj), "%s", subj);
+    s_hint_us = now;
+}
+
 static bool is_stopword(const char *t)
 {
     static const char *stop[] = {
@@ -99,14 +117,36 @@ static void process_token_locked(const char *tok, int64_t now)
     bool was_de = s_prev_was_de;
     s_prev_was_de = false;
 
+    // Copilot hints for the non-callsign tokens. Ordered weakest-first so a
+    // stronger signal later in the same transmission overwrites: hearing
+    // "CQ ... DE W1AW" ends on the call, and "<us> DE W1AW" ends on
+    // ANSWERED_YOU, which is what the operator most needs to see.
+    if (strcmp(tok, "CQ") == 0)  {
+        s_cq_heard_us = now;
+        set_hint_locked(CW_HINT_CALLING_CQ, NULL, now);
+        return;
+    }
+    if (strcmp(tok, "QRZ") == 0) { set_hint_locked(CW_HINT_QRZ, NULL, now); return; }
+    if (strcmp(tok, "AGN") == 0 || strcmp(tok, "PSE") == 0) {
+        set_hint_locked(CW_HINT_REPEAT, NULL, now); return;
+    }
+    if (strcmp(tok, "73") == 0 || strcmp(tok, "88") == 0 || strcmp(tok, "TU") == 0) {
+        set_hint_locked(CW_HINT_SIGNOFF, NULL, now); return;
+    }
+
     if (s_my_call[0] && strcmp(tok, s_my_call) == 0) {
         s_addressed_us = now;
+        set_hint_locked(CW_HINT_YOUR_CALL, NULL, now);
         return;
     }
 
     char rst[4];
-    if (s_state != CW_ESM_CQ && s_target[0] && is_rst(tok, rst)) {
-        memcpy(s_rst_rcvd, rst, sizeof(rst));
+    if (is_rst(tok, rst)) {
+        // Report the RST to the operator whatever the ladder state - hearing
+        // one before adopting is exactly when a beginner needs telling what
+        // it was. Only STORE it for the log once a target is being worked.
+        set_hint_locked(CW_HINT_REPORT, rst, now);
+        if (s_state != CW_ESM_CQ && s_target[0]) memcpy(s_rst_rcvd, rst, sizeof(rst));
         return;
     }
 
@@ -116,6 +156,29 @@ static void process_token_locked(const char *tok, int64_t now)
     // call updates the card - the operator decides what to do with it.
     snprintf(s_heard, sizeof(s_heard), "%s", tok);
     s_heard_us = now;
+
+    // Classify this call. Strongest first:
+    //   answering us  - our call, then "DE <them>"        -> act now
+    //   calling CQ    - a CQ, then "DE <them>"            -> you may answer
+    //   heard         - anything else plausible
+    bool answering_us = was_de && s_addressed_us &&
+                        (now - s_addressed_us) < ADDR_WINDOW_US;
+    bool cq_sender    = was_de && s_cq_heard_us &&
+                        (now - s_cq_heard_us) < CQ_PAIR_WINDOW_US;
+    cw_hint_t k = answering_us ? CW_HINT_ANSWERED_YOU
+                : cq_sender    ? CW_HINT_CQ_FROM
+                               : CW_HINT_CALL_HEARD;
+    // A station repeating its own call ("DE W1AW W1AW", standard practice)
+    // must not downgrade the read: only the FIRST of the repeats follows the
+    // "DE", so the later ones would otherwise demote a strong classification
+    // to a bare "heard a callsign" (caught by the self-test).
+    bool same_subject_recent = (strcmp(s_hint_subj, tok) == 0) &&
+                               (now - s_hint_us) < HINT_STICKY_US;
+    bool would_downgrade = (k == CW_HINT_CALL_HEARD) &&
+                           (s_hint_kind == CW_HINT_ANSWERED_YOU ||
+                            s_hint_kind == CW_HINT_CQ_FROM);
+    if (same_subject_recent && would_downgrade) s_hint_us = now;  // keep, refresh age
+    else                                        set_hint_locked(k, tok, now);
 
     // Auto-adopt: they addressed US (our call heard moments ago), this is
     // the DE <call> that follows, and we are in a CQ run they could be
@@ -127,6 +190,136 @@ static void process_token_locked(const char *tok, int64_t now)
         snprintf(s_pending_adopt_call, sizeof(s_pending_adopt_call), "%s", tok);
         s_pending_auto_adopt = true;
     }
+}
+
+// ---- hint self-test ---------------------------------------------------------
+// The live path needs a radio keying real CW and a finger on the screen, so
+// the classifier is verified here instead: canned decode text in, expected
+// hint out. Runs once at boot and restores every static it touches.
+void cw_qso_hint_selftest(void)
+{
+    struct { const char *decoded; cw_hint_t want; const char *want_subj; } cases[] = {
+        // A CQ call resolves to WHO is calling it - that is what the
+        // operator acts on. Both cases repeat the callsign the way real CW
+        // does; the repeat must not demote the classification (this pair is
+        // the regression test for exactly that bug, found here 2026-08-04).
+        { "CQ CQ DE W1AW W1AW K",     CW_HINT_CQ_FROM,      "W1AW" },
+        { "OZ1LAV DE W1AW W1AW",      CW_HINT_ANSWERED_YOU, "W1AW" },
+        // A bare CQ with no sender yet still says something useful.
+        { "CQ CQ CQ",                 CW_HINT_CALLING_CQ,   ""     },
+        // A call with no DE and no context is just a sighting.
+        { "SM5ABC",                   CW_HINT_CALL_HEARD,   "SM5ABC" },
+        // Our call alone (someone working us mid-exchange, or a tail-end).
+        { "OZ1LAV K",                 CW_HINT_YOUR_CALL,    ""     },
+        // Reports, plain and cut-number.
+        { "UR 599 599 BK",            CW_HINT_REPORT,       "599"  },
+        { "UR 5NN 5NN",               CW_HINT_REPORT,       "599"  },
+        // Sign-off and service tokens.
+        { "TU 73 EE",                 CW_HINT_SIGNOFF,      ""     },
+        { "AGN AGN BK",               CW_HINT_REPEAT,       ""     },
+        { "QRZ DE",                   CW_HINT_QRZ,          ""     },
+    };
+
+    // Save everything the tokenizer/classifier touches.
+    portENTER_CRITICAL(&s_mux);
+    char saved_call[CALL_MAX]; memcpy(saved_call, s_my_call, sizeof(saved_call));
+    cw_esm_state_t saved_state = s_state;
+    char saved_target[CALL_MAX]; memcpy(saved_target, s_target, sizeof(saved_target));
+    char saved_heard[CALL_MAX];  memcpy(saved_heard, s_heard, sizeof(saved_heard));
+    char saved_rst[4];           memcpy(saved_rst, s_rst_rcvd, sizeof(saved_rst));
+    int64_t saved_cq = s_cq_sent_us, saved_addr = s_addressed_us;
+    bool saved_pending = s_pending_auto_adopt;
+    snprintf(s_my_call, sizeof(s_my_call), "OZ1LAV");
+    s_state = CW_ESM_CQ; s_target[0] = '\0';
+    portEXIT_CRITICAL(&s_mux);
+
+    int pass = 0, fail = 0;
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        portENTER_CRITICAL(&s_mux);
+        s_hint_kind = CW_HINT_NONE; s_hint_subj[0] = '\0'; s_hint_us = 0;
+        s_prev_was_de = false; s_tok_len = 0; s_addressed_us = 0;
+        s_cq_heard_us = 0;
+        portEXIT_CRITICAL(&s_mux);
+
+        cw_qso_feed(cases[i].decoded, (int)strlen(cases[i].decoded));
+        cw_qso_feed(" ", 1);            // flush the final token
+
+        cw_hint_t got; char subj[CALL_MAX]; char line[96];
+        cw_qso_get_hint(&got, subj, sizeof(subj), NULL);
+        bool ok = (got == cases[i].want) && (strcmp(subj, cases[i].want_subj) == 0);
+        cw_qso_hint_text(got, subj, line, sizeof(line));
+        if (ok) { pass++; ESP_LOGI(TAG, "hint selftest PASS '%s' -> \"%s\"", cases[i].decoded, line); }
+        else    { fail++; ESP_LOGE(TAG, "hint selftest FAIL '%s' -> kind=%d subj='%s' (want kind=%d subj='%s')",
+                                   cases[i].decoded, (int)got, subj,
+                                   (int)cases[i].want, cases[i].want_subj); }
+    }
+
+    portENTER_CRITICAL(&s_mux);
+    memcpy(s_my_call, saved_call, sizeof(s_my_call));
+    s_state = saved_state;
+    memcpy(s_target, saved_target, sizeof(s_target));
+    memcpy(s_heard, saved_heard, sizeof(s_heard));
+    memcpy(s_rst_rcvd, saved_rst, sizeof(s_rst_rcvd));
+    s_cq_sent_us = saved_cq; s_addressed_us = saved_addr;
+    s_pending_auto_adopt = saved_pending;
+    s_hint_kind = CW_HINT_NONE; s_hint_subj[0] = '\0'; s_hint_us = 0;
+    s_prev_was_de = false; s_tok_len = 0; s_cq_heard_us = 0;
+    portEXIT_CRITICAL(&s_mux);
+
+    ESP_LOGI(TAG, "hint selftest: %d passed, %d failed", pass, fail);
+}
+
+bool cw_qso_get_hint(cw_hint_t *kind_out, char *subj_out, size_t subj_sz,
+                     int *age_s_out)
+{
+    portENTER_CRITICAL(&s_mux);
+    cw_hint_t k = s_hint_kind;
+    int64_t   ts = s_hint_us;
+    if (subj_out && subj_sz) snprintf(subj_out, subj_sz, "%s", s_hint_subj);
+    portEXIT_CRITICAL(&s_mux);
+    if (kind_out) *kind_out = k;
+    if (age_s_out) *age_s_out = ts ? (int)((esp_timer_get_time() - ts) / 1000000) : 0;
+    return k != CW_HINT_NONE;
+}
+
+const char *cw_qso_hint_text(cw_hint_t kind, const char *subj,
+                             char *buf, size_t buf_sz)
+{
+    const char *s = (subj && subj[0]) ? subj : "";
+    switch (kind) {
+    case CW_HINT_CALLING_CQ:
+        snprintf(buf, buf_sz, "Someone is calling CQ - you may answer");
+        break;
+    case CW_HINT_CQ_FROM:
+        snprintf(buf, buf_sz, "%s is calling CQ - tap the card to answer", s);
+        break;
+    case CW_HINT_ANSWERED_YOU:
+        snprintf(buf, buf_sz, "%s is answering YOU - tap the card to work them", s);
+        break;
+    case CW_HINT_YOUR_CALL:
+        snprintf(buf, buf_sz, "That was YOUR callsign");
+        break;
+    case CW_HINT_REPORT:
+        snprintf(buf, buf_sz, "That was a signal report: %s", s);
+        break;
+    case CW_HINT_SIGNOFF:
+        snprintf(buf, buf_sz, "They are signing off (73 / TU)");
+        break;
+    case CW_HINT_REPEAT:
+        snprintf(buf, buf_sz, "They want a repeat - send it again");
+        break;
+    case CW_HINT_QRZ:
+        snprintf(buf, buf_sz, "QRZ - they are asking who called");
+        break;
+    case CW_HINT_CALL_HEARD:
+        snprintf(buf, buf_sz, "Heard a callsign: %s", s);
+        break;
+    case CW_HINT_NONE:
+    default:
+        if (buf_sz) buf[0] = '\0';
+        break;
+    }
+    return buf;
 }
 
 void cw_qso_feed(const char *s, int n)

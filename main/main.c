@@ -35,6 +35,7 @@
 #include "ft8_qso.h"
 #include "ft8_pileup.h"
 #include "ft8_sim.h"
+#include "cw_qso.h"
 #include "net/pskreporter.h"
 #include "ft8_hash.h"
 #include "diag_log.h"
@@ -338,6 +339,7 @@ void app_main(void)
     ft8_hash_selftest();
     ft8_sim_synth_selftest();
     ft8_arrl_fd_e2e_selftest();
+    cw_qso_hint_selftest();   // CW copilot classifier (no radio needed)
     // Restore last UI mode (Panadapter/FT8), persisted across reboots.
     ui_apply_saved_mode();
 
