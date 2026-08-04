@@ -182,6 +182,10 @@ bool ui_validate_band_freq_hz(uint32_t hz, uint32_t *lo_out, uint32_t *hi_out)
     return legal_band_edges(hz, lo_out, hi_out);
 }
 
+// CW band-plan discipline (defined further down, used from here on).
+static uint32_t  cw_segment_center_hz(uint32_t hz);
+static esp_err_t ui_tune_commit(uint32_t hz, bool forced);
+
 // Roaming edges for the drag/stroll gestures. On the CW page the roamable
 // window is the band's CW SEGMENT, not the whole band - the drag-clamp half
 // of the "honour the band plan" rule (operator, 2026-08-01); everywhere else
@@ -226,6 +230,15 @@ static void band_preset_cb(lv_event_t *e)
         } else {
             target = last;                                  // unknown band -> recall as before
         }
+    }
+    // On the CW page a band change goes to the MIDDLE of that band's CW
+    // segment, by request (operator, 2026-08-04) - not the per-band recall,
+    // which on this page would often be a spot the operator has no interest
+    // in returning to. The recall feature itself is untouched everywhere
+    // else; see [[feedback_per_band_freq_recall]].
+    if (ui_mode_get() == UI_MODE_CW) {
+        uint32_t c = cw_segment_center_hz(center_hz);
+        if (c) target = c;
     }
     cat_set_frequency_forced(target);
     // Optimistically move the display (don't rely solely on the FA poll, which
@@ -531,7 +544,9 @@ static void freq_apply_key(char key, lv_obj_t *target_btn)
             }
             if (s_freq_buf[0]) {
                 uint32_t target_hz = freq_buf_to_hz(s_freq_buf);
-                esp_err_t err = cat_set_frequency(target_hz);
+                // Clamped on the CW page - typing a phone-band frequency
+                // there should still land in the CW segment.
+                esp_err_t err = ui_tune_commit(target_hz, false);
                 ESP_LOGI("ui", "Freq keypad: '%s' -> %lu Hz (err=0x%x)",
                          s_freq_buf, (unsigned long)target_hz, err);
                 if (err == ESP_OK) {
@@ -4036,6 +4051,37 @@ static void top_bar_set_ft8_dim(bool dim)
 // retune into the band's first CW segment (CW lives at the bottom of every
 // HF band) - a little way in, so the 48 kHz window isn't half out-of-band.
 // Inside a CW segment already: leave the operator's frequency alone.
+// Centre of the CW segment of whatever band `hz` falls in, snapped to a whole
+// kHz. 0 when the band is unknown or has no CW segment. This is where a band
+// change lands in CW mode (operator, 2026-08-04: "when changing band I would
+// like the centre freq always to be the middle of the CW portion").
+// Opening CW filter width. The QMX's CW passband is a 54-entry menu list
+// (MMCW|CW passband=), and 300 Hz is the standard narrow CW setting.
+#define CW_DEFAULT_BW_HZ 300
+
+static uint32_t cw_segment_center_hz(uint32_t hz)
+{
+    qmx_settings_t s;
+    settings_load_all(&s);
+    const bp_seg_t *segs = NULL;
+    int n = bandplan_get_segments(hz,
+                bandplan_effective_region((bandplan_region_t)s.bandplan_region,
+                                          s.my_grid), &segs);
+    if (n <= 0 || !segs) return 0;
+    for (int i = 0; i < n; i++) {
+        if (segs[i].type == BP_CW) {
+            uint32_t f = segs[i].lo_hz + (segs[i].hi_hz - segs[i].lo_hz) / 2;
+            return (f / 1000) * 1000;
+        }
+    }
+    return 0;
+}
+
+// Keep a frequency inside the band's CW segment. In-segment frequencies pass
+// through untouched; anything else moves to the segment centre. Applied to
+// EVERY tuning path while the CW page is up (tap-to-tune, keypad, band
+// change, page entry) - the page only lets you operate the CW portion, so it
+// should not be possible to leave it (operator, 2026-08-04).
 static uint32_t cw_bandplan_clamp_hz(uint32_t hz)
 {
     qmx_settings_t s;
@@ -4048,14 +4094,26 @@ static uint32_t cw_bandplan_clamp_hz(uint32_t hz)
     for (int i = 0; i < n; i++)
         if (segs[i].type == BP_CW && hz >= segs[i].lo_hz && hz <= segs[i].hi_hz)
             return hz;
-    for (int i = 0; i < n; i++) {
-        if (segs[i].type == BP_CW) {
-            uint32_t span = segs[i].hi_hz - segs[i].lo_hz;
-            uint32_t f = segs[i].lo_hz + (span < 48000 ? span / 2 : 24000);
-            return (f / 1000) * 1000;   // snap to a whole kHz
+    uint32_t c = cw_segment_center_hz(hz);
+    return c ? c : hz;
+}
+
+// The one tuning entry point for UI paths that can run on the CW page: it
+// applies the CW-segment clamp and then commits. Every user-initiated tune
+// must go through this, or the page can be walked out of its own band
+// segment (which is exactly what tap-to-tune and the keypad used to do).
+static esp_err_t ui_tune_commit(uint32_t hz, bool forced)
+{
+    if (ui_mode_get() == UI_MODE_CW) {
+        uint32_t c = cw_bandplan_clamp_hz(hz);
+        if (c != hz) {
+            ESP_LOGI(TAG, "CW: %lu Hz is outside the CW segment -> %lu Hz",
+                     (unsigned long)hz, (unsigned long)c);
+            hz = c;
+            ui_update_frequency(hz);   // keep the label honest about the move
         }
     }
-    return hz;
+    return forced ? cat_set_frequency_forced(hz) : cat_set_frequency(hz);
 }
 
 // CW page: the top bar stays fully ACTIVE (unlike FT8), but the deep 200 px
@@ -5133,7 +5191,9 @@ static void touch_event_cb(lv_event_t *e)
         }
         uint32_t target_hz = (uint32_t)s_target_freq_hz;
 
-        esp_err_t err = cat_set_frequency(target_hz);
+        // Via ui_tune_commit so a tap-to-tune on the CW page cannot land
+        // outside the CW segment (it was the one gesture that still could).
+        esp_err_t err = ui_tune_commit(target_hz, false);
         ESP_LOGI("ui_touch", "RELEASED tune -> %lu Hz (cursor value; release x=%d ignored) err=0x%x",
                  (unsigned long)target_hz, (int)p.x, err);
         // Optimistically update the on-screen freq label immediately so the user
@@ -7198,6 +7258,13 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
         // no-QMX case, same as the FT8 branch.
         cat_request_mode("CW");
         ui_update_mode("CW");
+        // 300 Hz is the CW default on this page (operator, 2026-08-04): a
+        // page dedicated to CW should open ready to copy CW, not at whatever
+        // width a previous phone/digi session left behind. Deferred through
+        // the poll task like every other CAT write, and the label is set
+        // optimistically for the no-QMX case.
+        cat_request_cw_passband(CW_DEFAULT_BW_HZ);
+        ui_update_passband_width(CW_DEFAULT_BW_HZ);
         // ...and honour the band plan: an entry frequency outside the band's
         // CW segment (inherited from a phone/digi tune) moves into it.
         {

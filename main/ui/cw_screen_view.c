@@ -122,10 +122,15 @@ void cw_screen_feed_decoded(const char *s, int n)
 {
     if (!s || n <= 0) return;
     cw_qso_feed(s, n);   // callsign capture / ESM (spinlock-only, any context)
-    portENTER_CRITICAL(&s_dec_mux);
+    // One short critical section per character rather than one across the
+    // whole message - same reasoning as cw_qso_feed(): an interrupts-off
+    // window spanning a full transmission (and occasionally a 384-byte
+    // memmove) is the DSI cyan-flash hazard, and the practice simulator now
+    // feeds this path every few seconds.
     for (int i = 0; i < n; i++) {
         char c = s[i];
         if (c == '\r' || c == '\n') c = ' ';
+        portENTER_CRITICAL(&s_dec_mux);
         if (s_dec_len == DEC_RING_CAP) {
             // Drop the oldest quarter in one memmove so appends stay O(1)-ish.
             memmove(s_dec_ring, s_dec_ring + DEC_RING_CAP / 4,
@@ -133,9 +138,9 @@ void cw_screen_feed_decoded(const char *s, int n)
             s_dec_len = DEC_RING_CAP - DEC_RING_CAP / 4;
         }
         s_dec_ring[s_dec_len++] = c;
+        s_dec_dirty = true;
+        portEXIT_CRITICAL(&s_dec_mux);
     }
-    s_dec_dirty = true;
-    portEXIT_CRITICAL(&s_dec_mux);
 }
 
 // ---- macro expansion --------------------------------------------------------

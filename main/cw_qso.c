@@ -65,11 +65,25 @@ static int64_t   s_cq_heard_us;   // a CQ token went by (pairs with "DE <call>")
 #define CQ_PAIR_WINDOW_US (10LL * 1000000)  // CQ -> DE <call> pairing window
 #define HINT_STICKY_US    (10LL * 1000000)  // a strong read holds for repeats
 
+// Bounded copy for use INSIDE a spinlock. snprintf must never run with
+// interrupts off on a path that repeats: the MIPI-DSI frame-restart ISR runs
+// on core 0 and a multi-ms interrupts-off window makes the panel drop a frame
+// and blank cyan (CLAUDE.md "No long interrupts-off critical sections").
+// Hint classification put snprintf inside this lock and the simulator then
+// drove it every few seconds - the operator saw exactly that cyan flash,
+// 2026-08-04.
+static void copy_small(char *dst, size_t dst_sz, const char *src)
+{
+    size_t i = 0;
+    if (!dst || dst_sz == 0) return;
+    if (src) for (; src[i] && i + 1 < dst_sz; i++) dst[i] = src[i];
+    dst[i] = '\0';
+}
+
 static void set_hint_locked(cw_hint_t kind, const char *subj, int64_t now)
 {
     s_hint_kind = kind;
-    s_hint_subj[0] = '\0';
-    if (subj) snprintf(s_hint_subj, sizeof(s_hint_subj), "%s", subj);
+    copy_small(s_hint_subj, sizeof(s_hint_subj), subj);
     s_hint_us = now;
 }
 
@@ -155,7 +169,7 @@ static void process_token_locked(const char *tok, int64_t now)
 
     // A senders-position call (after DE) is trusted more, but any plausible
     // call updates the card - the operator decides what to do with it.
-    snprintf(s_heard, sizeof(s_heard), "%s", tok);
+    copy_small(s_heard, sizeof(s_heard), tok);
     s_heard_us = now;
 
     // Classify this call. Strongest first:
@@ -188,7 +202,7 @@ static void process_token_locked(const char *tok, int64_t now)
     if (s_state == CW_ESM_CQ && was_de &&
         s_cq_sent_us && (now - s_cq_sent_us) < ADOPT_WINDOW_US &&
         s_addressed_us && (now - s_addressed_us) < ADDR_WINDOW_US) {
-        snprintf(s_pending_adopt_call, sizeof(s_pending_adopt_call), "%s", tok);
+        copy_small(s_pending_adopt_call, sizeof(s_pending_adopt_call), tok);
         s_pending_auto_adopt = true;
     }
 }
@@ -276,7 +290,7 @@ bool cw_qso_get_hint(cw_hint_t *kind_out, char *subj_out, size_t subj_sz,
     portENTER_CRITICAL(&s_mux);
     cw_hint_t k = s_hint_kind;
     int64_t   ts = s_hint_us;
-    if (subj_out && subj_sz) snprintf(subj_out, subj_sz, "%s", s_hint_subj);
+    if (subj_out && subj_sz) copy_small(subj_out, subj_sz, s_hint_subj);
     portEXIT_CRITICAL(&s_mux);
     if (kind_out) *kind_out = k;
     if (age_s_out) *age_s_out = ts ? (int)((esp_timer_get_time() - ts) / 1000000) : 0;
@@ -326,10 +340,19 @@ const char *cw_qso_hint_text(cw_hint_t kind, const char *subj,
 void cw_qso_feed(const char *s, int n)
 {
     int64_t now = esp_timer_get_time();
-    portENTER_CRITICAL(&s_mux);
+    // ONE SHORT critical section per character, not one across the whole
+    // message. The old single-lock loop held interrupts off for an entire
+    // transmission (~40 characters plus a token classification per word),
+    // which is the multi-ms window that makes the DSI panel drop a frame and
+    // flash cyan - and the practice simulator now feeds text every few
+    // seconds, so it fired regularly (operator-observed 2026-08-04). The
+    // per-character split keeps every window to a few instructions except at
+    // a token boundary, and the classification inside it is now allocation-
+    // and format-free (see copy_small).
     for (int i = 0; i < n; i++) {
         char c = (char)toupper((unsigned char)s[i]);
         bool tok_char = (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '/';
+        portENTER_CRITICAL(&s_mux);
         if (tok_char && s_tok_len < TOK_MAX) {
             s_tok[s_tok_len++] = c;
         } else if (s_tok_len > 0) {
@@ -337,8 +360,8 @@ void cw_qso_feed(const char *s, int n)
             process_token_locked(s_tok, now);
             s_tok_len = 0;
         }
+        portEXIT_CRITICAL(&s_mux);
     }
-    portEXIT_CRITICAL(&s_mux);
 }
 
 void cw_qso_init(void) { /* statics zero-init; nothing else */ }
