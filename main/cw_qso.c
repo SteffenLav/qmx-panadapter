@@ -61,6 +61,9 @@ static cw_hint_t s_hint_kind = CW_HINT_NONE;
 static char      s_hint_subj[CALL_MAX];
 static int64_t   s_hint_us;
 static int64_t   s_cq_heard_us;   // a CQ token went by (pairs with "DE <call>")
+static int64_t   s_pota_heard_us; // "POTA"/"SOTA" went by (marks an activation)
+static char      s_heard_park[12];// their park reference, "" if none heard
+static int64_t   s_heard_park_us;
 
 #define CQ_PAIR_WINDOW_US (10LL * 1000000)  // CQ -> DE <call> pairing window
 #define HINT_STICKY_US    (10LL * 1000000)  // a strong read holds for repeats
@@ -112,6 +115,23 @@ static bool is_plausible_call(const char *t)
     return has_alpha && has_digit && !is_stopword(t);
 }
 
+// A POTA park reference: 1-2 letters, an optional hyphen, then 4-5 digits -
+// "US-1211", "K-1234", "DL-0123", and the hyphen-less forms some operators
+// send to save time. Deliberately requires the long digit run so it can never
+// swallow a callsign (W1AW, SM5ABC) or a report.
+static bool is_park_ref(const char *t)
+{
+    size_t i = 0, n = strlen(t);
+    if (n < 5 || n > 9) return false;
+    while (i < n && isalpha((unsigned char)t[i])) i++;
+    if (i < 1 || i > 2) return false;
+    if (t[i] == '-') i++;
+    size_t digits = 0;
+    for (; i < n; i++, digits++)
+        if (!isdigit((unsigned char)t[i])) return false;
+    return digits >= 4 && digits <= 5;
+}
+
 // "579" / "5NN" style report: 3 chars, RST ranges, N = cut 9.
 static bool is_rst(const char *t, char out[4])
 {
@@ -139,6 +159,19 @@ static void process_token_locked(const char *tok, int64_t now)
     if (strcmp(tok, "CQ") == 0)  {
         s_cq_heard_us = now;
         set_hint_locked(CW_HINT_CALLING_CQ, NULL, now);
+        return;
+    }
+    // "POTA" (or SOTA) next to a CQ marks a park activation - worth saying so,
+    // because it tells the operator this is a station worth working and that a
+    // park reference is coming.
+    if (strcmp(tok, "POTA") == 0 || strcmp(tok, "SOTA") == 0) {
+        s_pota_heard_us = now;
+        return;
+    }
+    if (is_park_ref(tok)) {
+        copy_small(s_heard_park, sizeof(s_heard_park), tok);
+        s_heard_park_us = now;
+        set_hint_locked(CW_HINT_PARK, tok, now);
         return;
     }
     if (strcmp(tok, "QRZ") == 0) { set_hint_locked(CW_HINT_QRZ, NULL, now); return; }
@@ -180,7 +213,10 @@ static void process_token_locked(const char *tok, int64_t now)
                         (now - s_addressed_us) < ADDR_WINDOW_US;
     bool cq_sender    = was_de && s_cq_heard_us &&
                         (now - s_cq_heard_us) < CQ_PAIR_WINDOW_US;
+    bool pota_sender  = cq_sender && s_pota_heard_us &&
+                        (now - s_pota_heard_us) < CQ_PAIR_WINDOW_US;
     cw_hint_t k = answering_us ? CW_HINT_ANSWERED_YOU
+                : pota_sender  ? CW_HINT_CQ_POTA
                 : cq_sender    ? CW_HINT_CQ_FROM
                                : CW_HINT_CALL_HEARD;
     // A station repeating its own call ("DE W1AW W1AW", standard practice)
@@ -189,9 +225,14 @@ static void process_token_locked(const char *tok, int64_t now)
     // to a bare "heard a callsign" (caught by the self-test).
     bool same_subject_recent = (strcmp(s_hint_subj, tok) == 0) &&
                                (now - s_hint_us) < HINT_STICKY_US;
+    // NOTE: every "strong" call hint must be listed here. Adding CW_HINT_CQ_POTA
+    // beside CQ_FROM without adding it to this guard let the repeated callsign
+    // demote it again - the exact bug the guard exists to prevent, caught by
+    // the self-test 2026-08-04.
     bool would_downgrade = (k == CW_HINT_CALL_HEARD) &&
                            (s_hint_kind == CW_HINT_ANSWERED_YOU ||
-                            s_hint_kind == CW_HINT_CQ_FROM);
+                            s_hint_kind == CW_HINT_CQ_FROM ||
+                            s_hint_kind == CW_HINT_CQ_POTA);
     if (same_subject_recent && would_downgrade) s_hint_us = now;  // keep, refresh age
     else                                        set_hint_locked(k, tok, now);
 
@@ -224,6 +265,16 @@ void cw_qso_hint_selftest(void)
         { "CQ CQ CQ",                 CW_HINT_CALLING_CQ,   ""     },
         // A call with no DE and no context is just a sighting.
         { "SM5ABC",                   CW_HINT_CALL_HEARD,   "SM5ABC" },
+        // POTA: a park activation resolves to who is activating, and a park
+        // reference is called out. Both hyphenated and bare forms, and the
+        // reference must survive the tokenizer in one piece.
+        { "CQ POTA DE W1AW W1AW K",   CW_HINT_CQ_POTA,      "W1AW" },
+        { "UR 599 599 US-1211 BK",    CW_HINT_PARK,         "US-1211" },
+        { "QTH K-4521 HR",            CW_HINT_PARK,         "K-4521" },
+        // Bare (hyphen-less) reference, and NOT ending on a token that would
+        // legitimately produce a different hint - "... TU" really does mean
+        // SIGNOFF, which is what the first version of this case got wrong.
+        { "MY PARK US1211",           CW_HINT_PARK,         "US1211" },
         // Our call alone (someone working us mid-exchange, or a tail-end).
         { "OZ1LAV K",                 CW_HINT_YOUR_CALL,    ""     },
         // Reports, plain and cut-number.
@@ -253,7 +304,7 @@ void cw_qso_hint_selftest(void)
         portENTER_CRITICAL(&s_mux);
         s_hint_kind = CW_HINT_NONE; s_hint_subj[0] = '\0'; s_hint_us = 0;
         s_prev_was_de = false; s_tok_len = 0; s_addressed_us = 0;
-        s_cq_heard_us = 0;
+        s_cq_heard_us = 0; s_pota_heard_us = 0; s_heard_park[0] = '\0';
         portEXIT_CRITICAL(&s_mux);
 
         cw_qso_feed(cases[i].decoded, (int)strlen(cases[i].decoded));
@@ -308,6 +359,12 @@ const char *cw_qso_hint_text(cw_hint_t kind, const char *subj,
     case CW_HINT_CQ_FROM:
         snprintf(buf, buf_sz, "%s is calling CQ - tap the card to answer", s);
         break;
+    case CW_HINT_CQ_POTA:
+        snprintf(buf, buf_sz, "%s is activating a park - tap the card to work them", s);
+        break;
+    case CW_HINT_PARK:
+        snprintf(buf, buf_sz, "That was their park reference: %s", s);
+        break;
     case CW_HINT_ANSWERED_YOU:
         snprintf(buf, buf_sz, "%s is answering YOU - tap the card to work them", s);
         break;
@@ -351,7 +408,11 @@ void cw_qso_feed(const char *s, int n)
     // and format-free (see copy_small).
     for (int i = 0; i < n; i++) {
         char c = (char)toupper((unsigned char)s[i]);
-        bool tok_char = (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '/';
+        // '-' is a token character so POTA references survive as one token
+        // ("US-1211", not "US" + "1211"). It can never be mistaken for a
+        // callsign: is_plausible_call() rejects anything outside [A-Z0-9/].
+        bool tok_char = (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                        c == '/' || c == '-';
         portENTER_CRITICAL(&s_mux);
         if (tok_char && s_tok_len < TOK_MAX) {
             s_tok[s_tok_len++] = c;
@@ -463,11 +524,23 @@ void cw_qso_reset(void)
     ESP_LOGI(TAG, "ladder reset to CQ");
 }
 
+bool cw_qso_get_heard_park(char *out, size_t out_sz)
+{
+    portENTER_CRITICAL(&s_mux);
+    bool have = s_heard_park[0] != '\0';
+    if (out && out_sz) copy_small(out, out_sz, s_heard_park);
+    portEXIT_CRITICAL(&s_mux);
+    return have;
+}
+
 void cw_qso_clear_capture(void)
 {
     portENTER_CRITICAL(&s_mux);
-    s_heard[0]     = '\0';
-    s_heard_us     = 0;
+    s_heard[0]      = '\0';
+    s_heard_us      = 0;
+    s_heard_park[0] = '\0';
+    s_heard_park_us = 0;
+    s_pota_heard_us = 0;
     s_hint_kind    = CW_HINT_NONE;
     s_hint_subj[0] = '\0';
     s_hint_us      = 0;
@@ -672,7 +745,12 @@ void cw_qso_sim_tick(void)
             s_sim_cq_due_us = now + 25000000 + (int64_t)(esp_random() % 20000000);
             const char *c = SIM_CALLS[esp_random() % (sizeof(SIM_CALLS) / sizeof(SIM_CALLS[0]))];
             char msg[96];
-            snprintf(msg, sizeof(msg), " CQ CQ DE %s %s K ", c, c);
+            // Every third CQ or so is a park activation, so the POTA hints
+            // and the card's park line get exercised too.
+            if ((esp_random() % 3) == 0)
+                snprintf(msg, sizeof(msg), " CQ POTA DE %s %s K ", c, c);
+            else
+                snprintf(msg, sizeof(msg), " CQ CQ DE %s %s K ", c, c);
             sim_feed("station calls CQ", msg);
         }
     } else {
@@ -695,7 +773,8 @@ void cw_qso_sim_tick(void)
             snprintf(msg, sizeof(msg), " %s %s DE %s %s K ", my, my, s_sim_peer, s_sim_peer);
             break;
         case 2:  // their report back (we just sent ours, state moved to TU)
-            snprintf(msg, sizeof(msg), " %s DE %s UR 579 579 BK ", my, s_sim_peer);
+            snprintf(msg, sizeof(msg), " %s DE %s UR 579 579 US-%04u BK ",
+                     my, s_sim_peer, (unsigned)(esp_random() % 10000));
             break;
         default: // courtesy final after our TU
             snprintf(msg, sizeof(msg), " TU 73 EE ");

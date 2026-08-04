@@ -26,6 +26,7 @@ nav:
     - Web UI: guide/web-ui.md
     - FT8 RX: guide/ft8-rx.md
     - FT8 TX: guide/ft8-tx.md
+    - CW: guide/cw.md
     - Time Sync: guide/time-sync.md
     - Settings: guide/settings.md
   - Reference:

@@ -841,11 +841,19 @@ static void refresh_card(void)
         snprintf(worked, sizeof(worked), "worked before - new band");
     else
         snprintf(worked, sizeof(worked), "new station");
-    char rst[4];
+    char rst[4], park[12];
     cw_qso_get_rst_rcvd(rst, sizeof(rst));
+    bool have_park = cw_qso_get_heard_park(park, sizeof(park));
     // ASCII separators only - a middle dot is outside the compiled montserrat
     // glyph range and renders as a tofu box (hardware-observed 2026-08-02).
-    if (tgt[0] && rst[0])
+    // The park reference earns its place on the second line when there is
+    // one: hunting is the case where you must write it down.
+    if (have_park)
+        lv_label_set_text_fmt(s_card_info, "%s\npark %s%s%s",
+                              country ? country : "?", park,
+                              (tgt[0] && rst[0]) ? " - rcvd " : "",
+                              (tgt[0] && rst[0]) ? rst : "");
+    else if (tgt[0] && rst[0])
         lv_label_set_text_fmt(s_card_info, "%s\n%s - rcvd %s",
                               country ? country : "?", worked, rst);
     else

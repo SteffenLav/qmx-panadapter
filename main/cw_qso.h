@@ -66,6 +66,10 @@ void cw_qso_reset(void);
 // Used when leaving simulation mode so a phantom QSO leaves no trace.
 void cw_qso_clear_capture(void);
 
+// The most recent POTA park reference heard ("US-1211"), for the station
+// card. False when none has been decoded this session.
+bool cw_qso_get_heard_park(char *out, size_t out_sz);
+
 // What NEXT would send right now (macro-UNexpanded except <CALL>, which is
 // substituted here). Returns false when it cannot compose (e.g. no target
 // mid-ladder). label_out gets a short state word for the UI ("CQ",
@@ -98,6 +102,8 @@ typedef enum {
     CW_HINT_NONE = 0,
     CW_HINT_CALLING_CQ,   // a CQ went by, sender not yet identified
     CW_HINT_CQ_FROM,      // "<subj> is calling CQ" - CQ then DE <call>
+    CW_HINT_CQ_POTA,      // as CQ_FROM, but "CQ POTA" - a park activation
+    CW_HINT_PARK,         // a park reference went by (subj = e.g. "US-1211")
     CW_HINT_ANSWERED_YOU, // your call + "DE <call>" - they are answering you
     CW_HINT_YOUR_CALL,    // your call heard, but no DE <call> yet
     CW_HINT_REPORT,       // an RST went by (subj carries it, e.g. "599")
