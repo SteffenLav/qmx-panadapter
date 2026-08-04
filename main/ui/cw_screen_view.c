@@ -680,8 +680,11 @@ static void refresh_card(void)
     else
         lv_label_set_text_fmt(s_card_info, "%s\n%s",
                               country ? country : "?", worked);
+    // Short enough to fit the card at montserrat_18 - what NEXT will send is
+    // already spelled out on the NEXT button itself, so saying it here too
+    // was both redundant and what pushed this line off the edge.
     lv_label_set_text(s_card_hint,
-                      tgt[0] ? "working - NEXT advances, tap to drop"
+                      tgt[0] ? "working - tap to drop"
                              : "tap to work this station");
     lv_obj_set_style_border_color(s_card,
         lv_color_hex(tgt[0] ? 0xFFA040 : 0x555555), 0);
@@ -940,7 +943,8 @@ void cw_screen_view_init(lv_obj_t *parent)
     s_lbl_hint = lv_label_create(s_container);
     lv_label_set_text(s_lbl_hint, "");
     lv_label_set_long_mode(s_lbl_hint, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(s_lbl_hint, MID_W - PANE_W - 360);
+    // Ends at x 898, just short of the station card's new left edge (910).
+    lv_obj_set_width(s_lbl_hint, MID_W - PANE_W - 390);
     lv_obj_set_pos(s_lbl_hint, PANE_W + 8, MID_H - TICKER_H - BANDPLAN_H - 30);
     lv_obj_set_style_text_font(s_lbl_hint, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(s_lbl_hint, lv_color_hex(0xFFA040), 0);
@@ -949,7 +953,12 @@ void cw_screen_view_init(lv_obj_t *parent)
     // Station card, floating above the ticker's right end.
     s_card = lv_obj_create(s_container);
     lv_obj_set_size(s_card, 330, 122);
-    lv_obj_set_pos(s_card, MID_W - 340, MID_H - TICKER_H - BANDPLAN_H - 132);
+    // x: clear of the operator watermark, which is a 25 px wide vertical
+    // image at DISPLAY_H_RES - 4 - 25 = x 1251..1276 (build_signature in
+    // ui.c). At the old MID_W - 340 the card ran to x 1270 and the
+    // signature showed through its right edge (operator, 2026-08-04);
+    // MID_W - 370 ends it at 1240, a 11 px gap.
+    lv_obj_set_pos(s_card, MID_W - 370, MID_H - TICKER_H - BANDPLAN_H - 132);
     lv_obj_set_style_bg_color(s_card, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(s_card, LV_OPA_COVER, 0);
     lv_obj_set_style_border_color(s_card, lv_color_hex(0x555555), 0);
@@ -965,6 +974,11 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_label_set_text(s_card_call, "");
     lv_obj_set_style_text_color(s_card_call, lv_color_hex(0xFFA040), 0);
     lv_obj_set_style_text_font(s_card_call, &lv_font_montserrat_28, 0);
+    // Bounded like the other two: a long portable call (VK9/SM5ABC) at 28 px
+    // is close to the card width, and an unbounded label runs off the edge
+    // rather than truncating visibly.
+    lv_obj_set_width(s_card_call, 310);
+    lv_label_set_long_mode(s_card_call, LV_LABEL_LONG_DOT);
     lv_obj_set_pos(s_card_call, 0, 0);
 
     s_card_info = lv_label_create(s_card);
@@ -981,6 +995,13 @@ void cw_screen_view_init(lv_obj_t *parent)
     lv_label_set_text(s_card_hint, "");
     lv_obj_set_style_text_color(s_card_hint, lv_color_hex(0x8a9199), 0);
     lv_obj_set_style_text_font(s_card_hint, &lv_font_montserrat_18, 0);
+    // Bound the label to the card's inner width (330 - 2x8 pad) with DOT
+    // truncation: without this it had no width at all and simply ran past
+    // the card edge, clipping mid-word ("...tap to dr", operator-reported
+    // 2026-08-04). DOT rather than WRAP because the card's height is fixed
+    // and a second line would push out the bottom instead.
+    lv_obj_set_width(s_card_hint, 310);
+    lv_label_set_long_mode(s_card_hint, LV_LABEL_LONG_DOT);
     lv_obj_align(s_card_hint, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 
     ESP_LOGI(TAG, "CW screen built");
