@@ -628,26 +628,95 @@ static bool send_cw_text(const char *raw)
 // Tap = expand + send; long-press = edit. LVGL delivers CLICKED after a long
 // press too, so the press duration decides which action the CLICKED handler
 // takes (the User-Manual button pattern in ui.c).
+// The six memory buttons are 44 px tall on a 50 px pitch - thin enough that a
+// fingertip covers more than one and you cannot tell which will fire. So the
+// press is a PREVIEW, not a commitment (operator, 2026-08-04):
+//   - the button that would fire lights light-grey while the finger is down;
+//   - dragging up/down moves that highlight, so a mis-hit is corrected
+//     without lifting;
+//   - lifting fires whatever is highlighted;
+//   - holding still on it for MEM_LONG_MS opens the editor instead.
+// The hold timer RESTARTS whenever the highlight moves, so time spent hunting
+// for the right button never counts toward the long-press - which is why the
+// threshold could go up to a comfortable 2 s (it was 600 ms, unusable once
+// dragging exists).
+#define MEM_LONG_MS   2000
+#define MEM_BG_IDLE   0x2a2f37
+#define MEM_BG_ARMED  0x5b636f   // light grey: "this one will fire"
+
 static uint32_t s_mem_press_tick = 0;
+static int      s_mem_sel        = -1;   // highlighted button, -1 = none
+
+static void mem_highlight(int idx)
+{
+    for (int i = 0; i < N_CW_MEM; i++) {
+        if (!s_btn_mem[i]) continue;
+        lv_obj_set_style_bg_color(s_btn_mem[i],
+            lv_color_hex(i == idx ? MEM_BG_ARMED : MEM_BG_IDLE), 0);
+    }
+}
+
+// Which memory button is under this screen point? Uses each button's absolute
+// area so it stays correct wherever the pane sits. Y only: the finger may
+// stray sideways off the narrow pane while dragging vertically, and that
+// should not cancel the pick.
+static int mem_hit_test(const lv_point_t *p)
+{
+    for (int i = 0; i < N_CW_MEM; i++) {
+        if (!s_btn_mem[i]) continue;
+        lv_area_t a;
+        lv_obj_get_coords(s_btn_mem[i], &a);
+        if (p->y >= a.y1 && p->y <= a.y2) return i;
+    }
+    return -1;
+}
 
 static void mem_pressed_cb(lv_event_t *e)
 {
-    (void)e;
-    s_mem_press_tick = lv_tick_get();
-}
-
-static void mem_clicked_cb(lv_event_t *e)
-{
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     if (idx < 0 || idx >= N_CW_MEM) return;
-    if (s_mem_press_tick && lv_tick_elaps(s_mem_press_tick) >= 600) {
-        edit_open(idx);
-        return;
-    }
+    s_mem_sel = idx;
+    s_mem_press_tick = lv_tick_get();
+    mem_highlight(idx);
+}
+
+static void mem_pressing_cb(lv_event_t *e)
+{
+    (void)e;
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) return;
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    int idx = mem_hit_test(&p);
+    if (idx < 0 || idx == s_mem_sel) return;
+    s_mem_sel = idx;
+    s_mem_press_tick = lv_tick_get();   // hold timer restarts on the new button
+    mem_highlight(idx);
+}
+
+static void mem_released_cb(lv_event_t *e)
+{
+    (void)e;
+    int idx = s_mem_sel;
+    uint32_t held = s_mem_press_tick ? lv_tick_elaps(s_mem_press_tick) : 0;
+    s_mem_sel = -1;
+    s_mem_press_tick = 0;
+    mem_highlight(-1);
+    if (idx < 0 || idx >= N_CW_MEM) return;
+
+    if (held >= MEM_LONG_MS) { edit_open(idx); return; }
     qmx_settings_t s;
     settings_load_all(&s);
     if (!s.cw_msg[idx][0]) { edit_open(idx); return; }   // empty slot: edit it
     send_cw_text(s.cw_msg[idx]);
+}
+
+static void mem_press_lost_cb(lv_event_t *e)
+{
+    (void)e;
+    s_mem_sel = -1;
+    s_mem_press_tick = 0;
+    mem_highlight(-1);
 }
 
 static void park_edit_open(void);   // fwd (park editor below)
@@ -972,10 +1041,15 @@ void cw_screen_view_init(lv_obj_t *parent)
     // text in the editor; the NEXT button carries the full ladder text).
     int y = 232;
     for (int i = 0; i < N_CW_MEM; i++) {
-        s_btn_mem[i] = make_pane_btn(s_pane, 10, y, PANE_W - 20, 44, 0x2a2f37, 0x555555);
-        lv_obj_add_event_cb(s_btn_mem[i], mem_pressed_cb, LV_EVENT_PRESSED, NULL);
-        lv_obj_add_event_cb(s_btn_mem[i], mem_clicked_cb, LV_EVENT_CLICKED,
+        s_btn_mem[i] = make_pane_btn(s_pane, 10, y, PANE_W - 20, 44, MEM_BG_IDLE, 0x555555);
+        // Press = preview, drag = re-pick, release = fire, hold = edit. Acting
+        // on RELEASED rather than CLICKED is what lets the finger travel to a
+        // different button before lifting.
+        lv_obj_add_event_cb(s_btn_mem[i], mem_pressed_cb, LV_EVENT_PRESSED,
                             (void *)(intptr_t)i);
+        lv_obj_add_event_cb(s_btn_mem[i], mem_pressing_cb, LV_EVENT_PRESSING, NULL);
+        lv_obj_add_event_cb(s_btn_mem[i], mem_released_cb, LV_EVENT_RELEASED, NULL);
+        lv_obj_add_event_cb(s_btn_mem[i], mem_press_lost_cb, LV_EVENT_PRESS_LOST, NULL);
         s_lbl_mem[i] = lv_label_create(s_btn_mem[i]);
         lv_label_set_text(s_lbl_mem[i], "");
         lv_label_set_long_mode(s_lbl_mem[i], LV_LABEL_LONG_DOT);
