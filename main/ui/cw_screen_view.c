@@ -97,6 +97,11 @@ static lv_obj_t *s_card_hint  = NULL;
 static char           s_dec_ring[DEC_RING_CAP];
 static size_t         s_dec_len = 0;          // chars currently held (<= CAP)
 static bool           s_dec_dirty = false;
+// Ticker noise-squelch state (feed context; see cw_screen_feed_decoded).
+static char           s_tick_tok[24];
+static int            s_tick_len = 0;
+static char           s_tick_last_single = 0;
+static int            s_tick_single_run = 0;
 static portMUX_TYPE   s_dec_mux = portMUX_INITIALIZER_UNLOCKED;
 
 // Wipe everything the decode stream produced: the ticker's ring, the copilot
@@ -111,6 +116,9 @@ void cw_screen_clear_decode(void)
     s_dec_len = 0;
     s_dec_dirty = false;
     portEXIT_CRITICAL(&s_dec_mux);
+    s_tick_len = 0;              // drop a half-built token
+    s_tick_last_single = 0;      // and the squelch's run state
+    s_tick_single_run = 0;
     cw_qso_reset();          // drops target + ladder
     cw_qso_clear_capture();  // drops the heard call and the hint
     if (s_ticker_lbl) lv_label_set_text(s_ticker_lbl, "");
@@ -118,21 +126,36 @@ void cw_screen_clear_decode(void)
     if (s_card)       lv_obj_add_flag(s_card, LV_OBJ_FLAG_HIDDEN);
 }
 
-void cw_screen_feed_decoded(const char *s, int n)
+// Noise squelch for the TICKER ONLY. With no signal the QMX's decoder emits a
+// steady dribble of single characters - "T T T T T T T" (hardware-observed all
+// session, and reproduced by the simulator) - which buries real copy.
+//
+// The filter keys on REPETITION, never on which character it is: a run of the
+// same single-letter token is never real CW, while a lone R / K / N, and "EE",
+// certainly are. The first two of a run still show (so the operator can see
+// the band is noisy), the rest are dropped.
+//
+// It is applied ONLY to the display string. cw_qso_feed() below gets the raw
+// stream, so callsign capture, the copilot hints and the ESM ladder are
+// completely unaffected - the filter cannot cost a decode.
+#define NOISE_RUN_SHOW 2
+
+// Append one completed token (plus a separating space) unless it is part of a
+// repeated single-character run. Caller holds no lock; this takes its own.
+static void ticker_emit_token(const char *tok, int len)
 {
-    if (!s || n <= 0) return;
-    cw_qso_feed(s, n);   // callsign capture / ESM (spinlock-only, any context)
-    // One short critical section per character rather than one across the
-    // whole message - same reasoning as cw_qso_feed(): an interrupts-off
-    // window spanning a full transmission (and occasionally a 384-byte
-    // memmove) is the DSI cyan-flash hazard, and the practice simulator now
-    // feeds this path every few seconds.
-    for (int i = 0; i < n; i++) {
-        char c = s[i];
-        if (c == '\r' || c == '\n') c = ' ';
+    if (len == 1) {
+        if (tok[0] == s_tick_last_single) s_tick_single_run++;
+        else { s_tick_last_single = tok[0]; s_tick_single_run = 1; }
+        if (s_tick_single_run > NOISE_RUN_SHOW) return;   // squelched
+    } else {
+        s_tick_last_single = 0;
+        s_tick_single_run  = 0;
+    }
+    for (int i = 0; i <= len; i++) {          // <= len: trailing space
+        char c = (i == len) ? ' ' : tok[i];
         portENTER_CRITICAL(&s_dec_mux);
         if (s_dec_len == DEC_RING_CAP) {
-            // Drop the oldest quarter in one memmove so appends stay O(1)-ish.
             memmove(s_dec_ring, s_dec_ring + DEC_RING_CAP / 4,
                     DEC_RING_CAP - DEC_RING_CAP / 4);
             s_dec_len = DEC_RING_CAP - DEC_RING_CAP / 4;
@@ -140,6 +163,30 @@ void cw_screen_feed_decoded(const char *s, int n)
         s_dec_ring[s_dec_len++] = c;
         s_dec_dirty = true;
         portEXIT_CRITICAL(&s_dec_mux);
+    }
+}
+
+void cw_screen_feed_decoded(const char *s, int n)
+{
+    if (!s || n <= 0) return;
+    cw_qso_feed(s, n);   // RAW stream: capture / ESM / hints are never filtered
+    // Tokenise for the squelch. Characters are held until a separator
+    // completes the token, which is what lets a repeated run be recognised
+    // before it reaches the display; a token longer than the buffer is
+    // flushed as-is (it cannot be noise). ticker_emit_token() keeps the
+    // per-character critical sections short - see the cyan-flash note above.
+    for (int i = 0; i < n; i++) {
+        char c = s[i];
+        if (c == '\r' || c == '\n') c = ' ';
+        if (c == ' ') {
+            if (s_tick_len) { ticker_emit_token(s_tick_tok, s_tick_len); s_tick_len = 0; }
+            continue;
+        }
+        if (s_tick_len < (int)sizeof(s_tick_tok)) s_tick_tok[s_tick_len++] = c;
+        if (s_tick_len == (int)sizeof(s_tick_tok)) {
+            ticker_emit_token(s_tick_tok, s_tick_len);
+            s_tick_len = 0;
+        }
     }
 }
 
