@@ -120,3 +120,37 @@ CONFIG_USB_HOST_DWC_DMA_CAP_MEMORY_IN_PSRAM=y
 # DMA in PSRAM since v0.19.2), ~165 KB total.
 CONFIG_UAC_NUM_ISOC_URBS=8
 CONFIG_UAC_NUM_PACKETS_PER_URB=40
+
+# TLS must not depend on the MALLOC_CAP_DMA pool (2026-08-04). ALL outbound
+# HTTPS failed on the bench with:
+#     esp-aes: Failed to allocate memory for the array of DMA descriptors
+#     esp-tls-mbedtls: mbedtls_ctr_drbg_seed returned -0x0001
+# Measured at the moment of failure: MALLOC_CAP_DMA free=167-263 B, largest
+# free block 52-116 B - the pool is EMPTY, not merely fragmented, and a plain
+# unaligned 48-byte DMA request fails too (so it is not an alignment issue).
+# Meanwhile MALLOC_CAP_INTERNAL had 26-30 KB free with a 16-20 KB largest
+# block: there is plenty of internal RAM, just none of it DMA-capable. This is
+# the documented TODO #65 collapse (WiFi bring-up takes the pool to ~400 B and
+# it never recovers) finally biting something user-visible.
+#
+# On ESP32-P4 SOC_AES_SUPPORT_DMA=1 and the IDF AES port has NO small-buffer
+# fallback, so EVERY hardware-AES operation - including ctr_drbg's 16-byte
+# ones - first allocates a descriptor array from MALLOC_CAP_DMA|INTERNAL
+# (esp_aes_dma_core.c:422). With ~200 B free that can never succeed, so TLS
+# could not even seed its RNG: spots, update_check and the QRZ/eQSL/LoTW
+# uploads were all dead. Hardware SHA has the same dependency on its
+# realloc/copy paths (sha/dma/sha.c:196,209,354), so it goes too or the
+# failure just moves.
+#
+# MPI and ECC are deliberately LEFT ON: they are register-based and allocate
+# no DMA memory, so RSA/ECDSA - the expensive part of a handshake - stays
+# hardware-accelerated. What we give up is software AES-GCM/SHA over the
+# payload, a few ms of CPU on a background task for a ~40 KB body.
+#
+# Do NOT turn these back on to "recover performance" without first fixing the
+# DMA-pool collapse; hardware crypto that requires a runtime DMA allocation is
+# fundamentally incompatible with a pool that sits near zero whenever WiFi is
+# up. See TODO #65.
+# CONFIG_MBEDTLS_HARDWARE_AES is not set
+# CONFIG_MBEDTLS_HARDWARE_GCM is not set
+# CONFIG_MBEDTLS_HARDWARE_SHA is not set
