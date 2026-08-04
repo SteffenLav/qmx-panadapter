@@ -184,6 +184,21 @@ void cat_tune_poll_set_active(bool active) { s_tune_poll_active = active; }
 // (same pattern as s_pending_ssb_bw). The buffer holds ONE pending message:
 // the QMX's own 80-char circular KY buffer does the real queuing, so a second
 // tap before the first drained just replaces an un-sent staging copy.
+// KY message format. The QMX has TWO separate KY implementations selected by
+// its own "KY TS480" System Config item: the default QRP Labs / Elecraft-like
+// free-length form ("KY <text>;") and the Kenwood TS480 form (a FIXED
+// 24-character space-padded message). On the bench QMX+ (fw 1_04_004) the
+// free-length form is accepted but never keys - TB's t-field, the only honest
+// "is it keying" observable, stays 0, while the radio's own front-panel
+// message send does move it (see docs/cw-page-design.md). The TS480 path is a
+// different code path inside the radio and is the cheapest remaining thing to
+// try. Set true ONLY together with "KY TS480 = YES" on the radio - the two
+// must agree.
+//
+// If TS480 turns out to be the working path, this is also where the ABORT
+// answer lives: in that mode a message of ALL SPACES stops sending.
+#define CAT_KY_TS480_LEN 24
+static volatile bool    s_ky_ts480_compat = false;  // EXPERIMENT 2026-08-04
 static char             s_pending_cw_send[96];
 static portMUX_TYPE     s_cw_send_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint8_t s_pending_keyer_wpm = 0;      // 0 = none pending
@@ -727,14 +742,61 @@ static void poll_task(void *arg)
         // keying), a keyer-speed set/query, and, while the page is visible,
         // poll TB; at ~1 Hz for the QMX's decoded-CW buffer + KY TX progress.
         {
-            char ky[112];
-            ky[0] = '\0';
+            char msg[96];
+            msg[0] = '\0';
             portENTER_CRITICAL(&s_cw_send_mux);
             if (s_pending_cw_send[0]) {
-                snprintf(ky, sizeof(ky), "KY %s;", s_pending_cw_send);
+                memcpy(msg, s_pending_cw_send, sizeof(msg));
+                msg[sizeof(msg) - 1] = '\0';
                 s_pending_cw_send[0] = '\0';
             }
             portEXIT_CRITICAL(&s_cw_send_mux);
+            char ky[112];
+            ky[0] = '\0';
+            if (msg[0]) {
+                if (s_ky_ts480_compat) {
+                    // TS480-compat FORMAT PROBE (2026-08-04). The manual says
+                    // "KY followed by a space, followed by the message" AND
+                    // "a fixed 24-character length" - ambiguous about whether
+                    // that space is part of the 24. Sending it as EXTRA (25
+                    // chars after KY) is rejected with ?; even on a
+                    // freshly-power-cycled radio with a guaranteed-empty
+                    // buffer, so try the two remaining readings back to back
+                    // and let the radio pick: whichever does NOT answer ?; is
+                    // the right frame. Safe to fire both - practice mode puts
+                    // nothing on air, and a rejected command is "canceled" by
+                    // the radio so it cannot pollute the buffer.
+                    //   V2: space IS the first of the 24  -> "KY" + " " + 23
+                    //   V3: no leading space at all       -> "KY" + 24
+                    // Only the first 23/24 chars are probed; chunking for
+                    // longer messages comes back once the frame is known.
+                    struct { const char *tag; bool lead_space; } variants[] = {
+                        { "V2 space-in-24", true },
+                        { "V3 no-space",    false },
+                    };
+                    for (int v = 0; v < 2; v++) {
+                        char field[CAT_KY_TS480_LEN + 1];
+                        memset(field, ' ', CAT_KY_TS480_LEN);
+                        field[CAT_KY_TS480_LEN] = '\0';
+                        size_t lead = variants[v].lead_space ? 1 : 0;
+                        size_t room = CAT_KY_TS480_LEN - lead;
+                        size_t n = strlen(msg);
+                        if (n > room) n = room;
+                        memcpy(field + lead, msg, n);
+                        snprintf(ky, sizeof(ky), "KY%s;", field);
+                        esp_err_t e = cdc_acm_host_data_tx_blocking(
+                            s_cdc_dev, (const uint8_t *)ky, strlen(ky), 200);
+                        ESP_LOGI(TAG, "CW send [TS480 %s len=%u] -> '%s' (%s)",
+                                 variants[v].tag, (unsigned)strlen(ky), ky,
+                                 e == ESP_OK ? "ok" : "fail");
+                        vTaskDelay(pdMS_TO_TICKS(800));
+                    }
+                    cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"KY;", 3, 200);
+                    vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+                    continue;
+                }
+                snprintf(ky, sizeof(ky), "KY %s;", msg);
+            }
             if (ky[0]) {
                 esp_err_t e = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)ky,
                                                             strlen(ky), 200);
