@@ -49,6 +49,17 @@ main/
   ft8_qso.c               Auto search-and-pounce QSO state machine (WAIT_RPT/RR73/DONE)
   ft8_sim.c               FT8 simulation mode: phantom-station practice QSOs, no radio keyed
   ft8_status.c            Mutex-protected status string written by ft8_task, read by LVGL timer
+  cw_qso.c                CW page brain (branch feat/cw-page): ESM ladder (CQ->EXCH->TU),
+                          callsign capture over the raw decode stream, RST capture, one-tap
+                          ADIF log, phantom practice station, and the COPILOT HINTS that
+                          translate the decode into plain language. cw_qso_hint_selftest()
+                          proves the classifier at boot with no radio - the live path needs
+                          real CW and a finger on the screen, so that self-test IS the test.
+  ui/cw_screen_view.c     CW page UI (3rd carousel stop): 6 keyer memories with
+                          {MYCALL}/{PARK}/{CALL} macros, WPM stepper (CAT KS), decode ticker
+                          (CAT TB), station card, NEXT ladder button, copilot hint line.
+                          send_cw_text() is the ONE TX choke point (macros, sim interlock,
+                          capture notify) - all CW TX must go through it.
   rtc/rtc.c               Thin driver for RX8130CE supercap RTC (I2C 0x32, 30-40 h backup)
   time_sync/time_sync.c   Global time-sync orchestrator: RTC → SNTP → QMX priority; periodic QMX poll task
   render/render.c         30 Hz render task, EMA smoothing, dB scaling
@@ -80,6 +91,30 @@ Data flow: **audio → ring buffer → dsp (FFT) → spectrum mutex → render �
 FT8 TX data flow: **ft8_screen_view (tap) → ft8_tx_modal (confirm) → ft8_tx_arm() → ft8_test slot loop → ft8_tx_run() → CAT TA; burst**
 
 ## Critical quirks
+
+### CW page lives on `feat/cw-page`, NOT on main (branch contract)
+The CW page is in-progress and deliberately held back from releases: `main` is
+kept release-clean (v1.3.6 was cut from it), and all CW work lives on the local
+branch **`feat/cw-page`**, which is **never pushed**. Keep the branch current by
+merging `main` into it; expect duplicate-content conflicts in `net/webserver.c`
+(the v1.3.6 fixes were cherry-picked to main from this branch, so both sides
+carry the same change) — resolve by keeping the CW-aware side. When the page
+ships, merge `feat/cw-page` -> `main`. Three things live only on the branch and
+must not be assumed present on main: `cw_qso.c`, `ui/cw_screen_view.c`, and the
+`s_ky_ts480_compat` KY experiment in `cat.c`.
+
+**CW TRANSMIT IS NOT HARDWARE-VERIFIED — do not describe it as working.** Two
+bench evenings (2026-08-03/04, QMX+ on 1_04_004) failed to get CAT `KY` to key
+the radio, and the reason it stayed unresolved is a lesson worth keeping:
+**practice mode suppresses both sidetone and the LCD `M` indicator for message
+sending, so the two obvious observables lie.** `TB`'s t-field (characters left
+to send) is the only honest one — it counts down for the radio's OWN
+front-panel message send and never moves for CAT `KY`. Also: `KY;` GET readings
+depend on buffer state, so take the baseline only after a QMX power cycle (an
+un-drained buffer makes the radio report itself permanently "sending"). Full
+findings, the retracted wrong conclusions, and the untested TS480-compat path
+are in `docs/cw-page-design.md`. **The next step is a dummy load, not more
+code.**
 
 ### PI4IO expander must be initialized before display bring-up
 `display_init` calls `bsp_i2c_init()` + `bsp_io_expander_pi4ioe_init()` first, then waits 120 ms. Skipping this causes a cold-boot hang in the DSI FIFO loop. Soft resets mask the bug because the expander retains state across ESP32 resets.
