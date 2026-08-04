@@ -646,6 +646,7 @@ static bool send_cw_text(const char *raw)
 
 static uint32_t s_mem_press_tick = 0;
 static int      s_mem_sel        = -1;   // highlighted button, -1 = none
+static bool     s_mem_fired      = false; // editor already opened by the hold
 
 static void mem_highlight(int idx)
 {
@@ -677,34 +678,53 @@ static void mem_pressed_cb(lv_event_t *e)
     if (idx < 0 || idx >= N_CW_MEM) return;
     s_mem_sel = idx;
     s_mem_press_tick = lv_tick_get();
+    s_mem_fired = false;
     mem_highlight(idx);
 }
 
 static void mem_pressing_cb(lv_event_t *e)
 {
     (void)e;
+    if (s_mem_fired) return;            // editor already up; ignore the rest
     lv_indev_t *indev = lv_indev_active();
     if (!indev) return;
     lv_point_t p;
     lv_indev_get_point(indev, &p);
     int idx = mem_hit_test(&p);
-    if (idx < 0 || idx == s_mem_sel) return;
-    s_mem_sel = idx;
-    s_mem_press_tick = lv_tick_get();   // hold timer restarts on the new button
-    mem_highlight(idx);
+    if (idx >= 0 && idx != s_mem_sel) {
+        s_mem_sel = idx;
+        s_mem_press_tick = lv_tick_get();  // hold timer restarts on the new button
+        mem_highlight(idx);
+        return;
+    }
+    // The editor opens the INSTANT the hold is earned, with the finger still
+    // down - a long-press that only acts on release feels broken, because
+    // nothing tells you it worked until you let go (operator, 2026-08-04).
+    // PRESSING is delivered on every input read (~30 ms), so this is precise
+    // enough without a dedicated timer.
+    if (s_mem_sel >= 0 && s_mem_press_tick &&
+        lv_tick_elaps(s_mem_press_tick) >= MEM_LONG_MS) {
+        int idx_open = s_mem_sel;
+        s_mem_fired = true;
+        s_mem_sel = -1;
+        s_mem_press_tick = 0;
+        mem_highlight(-1);
+        edit_open(idx_open);
+    }
 }
 
 static void mem_released_cb(lv_event_t *e)
 {
     (void)e;
     int idx = s_mem_sel;
-    uint32_t held = s_mem_press_tick ? lv_tick_elaps(s_mem_press_tick) : 0;
+    bool fired = s_mem_fired;
     s_mem_sel = -1;
     s_mem_press_tick = 0;
+    s_mem_fired = false;
     mem_highlight(-1);
+    if (fired) return;                  // the hold already opened the editor
     if (idx < 0 || idx >= N_CW_MEM) return;
 
-    if (held >= MEM_LONG_MS) { edit_open(idx); return; }
     qmx_settings_t s;
     settings_load_all(&s);
     if (!s.cw_msg[idx][0]) { edit_open(idx); return; }   // empty slot: edit it
@@ -716,6 +736,7 @@ static void mem_press_lost_cb(lv_event_t *e)
     (void)e;
     s_mem_sel = -1;
     s_mem_press_tick = 0;
+    s_mem_fired = false;
     mem_highlight(-1);
 }
 
