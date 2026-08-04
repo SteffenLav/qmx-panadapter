@@ -27,6 +27,7 @@
 
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_random.h"
 #include "freertos/FreeRTOS.h"
 
 static const char *TAG = "cw_qso";
@@ -526,12 +527,89 @@ bool cw_qso_on_next_sent(void)
 }
 
 // ---- phantom practice station (sim mode) ------------------------------------
-// Scripted W1AW answers whatever the ladder last sent, injected through the
-// SAME path a real decode takes (cw_screen_feed_decoded), so capture/ESM/log
-// are exercised end to end with no radio. Timing: replies land ~3 s after
-// our send, roughly a real operator's turnaround.
+// Phantoms answer whatever the ladder last sent, injected through the SAME
+// path a real decode takes (cw_screen_feed_decoded), so capture/ESM/log are
+// exercised end to end with no radio. Timing: replies land ~3 s after our
+// send, roughly a real operator's turnaround.
+//
+// The copy is deliberately IMPERFECT. A real QMX decoder drops characters,
+// mis-times elements into neighbouring letters, and turns band noise into a
+// steady dribble of E/T/I/M (hardware-observed: "TB002 T;" arriving all
+// session with no signal present). Feeding the capture and copilot layers
+// clean text flattered them - the heuristics have to survive what the radio
+// actually produces, and the operator has to learn to read through it.
 static int64_t s_sim_reply_due_us = 0;
 static int     s_sim_reply_kind   = 0;   // 1=answer CQ, 2=report, 3=final
+static int64_t s_sim_noise_due_us = 0;   // idle band noise
+static int64_t s_sim_cq_due_us    = 0;   // an unsolicited CQ to pounce on
+static char    s_sim_peer[CALL_MAX] = "W1AW";   // who is working us now
+
+// Calls the phantoms draw from. Mixed prefixes so the station card's DXCC
+// lookup and the worked-before check get exercised too.
+static const char *SIM_CALLS[] = { "W1AW", "SM5ABC", "G3XYZ", "JA1TST", "VE3ABC" };
+
+static uint32_t rnd_pct(void) { return esp_random() % 100; }
+
+// A mis-timed element yields a NEIGHBOURING character, not a random one -
+// that is what makes real decoder output readable-but-wrong.
+static char confuse(char c)
+{
+    switch (c) {
+    case 'E': return 'I';  case 'I': return 'E';
+    case 'T': return 'M';  case 'M': return 'T';
+    case 'A': return 'W';  case 'W': return 'A';
+    case 'N': return 'D';  case 'D': return 'N';
+    case 'S': return 'H';  case 'H': return 'S';
+    case 'U': return 'V';  case 'V': return 'U';
+    case 'K': return 'C';  case 'C': return 'K';
+    case 'R': return 'L';  case 'L': return 'R';
+    case 'O': return 'M';  case 'G': return 'Q';
+    case '5': return 'S';  case '0': return 'T';  case '9': return 'N';
+    default:  return c;
+    }
+}
+
+// Corrupt one transmission the way a marginal copy would arrive. Rates are
+// deliberately modest: a 4-character call survives intact ~75% of the time,
+// and real CW repeats the call twice, so capture usually still gets it -
+// while the operator sees enough damage to have to think.
+static void sim_corrupt(char *dst, size_t dst_sz, const char *src)
+{
+    size_t o = 0;
+    for (const char *p = src; *p && o + 2 < dst_sz; p++) {
+        if (*p == ' ') { dst[o++] = ' '; continue; }
+        uint32_t r = rnd_pct();
+        if (r < 6)  continue;                            // element missed entirely
+        if (r < 12) { dst[o++] = confuse(*p); continue; } // mis-timed
+        dst[o++] = *p;
+        if (r >= 98) dst[o++] = confuse(*p);              // element split in two
+    }
+    dst[o] = '\0';
+}
+
+static void sim_feed(const char *what, const char *clean)
+{
+    char dirty[128];
+    sim_corrupt(dirty, sizeof(dirty), clean);
+    ESP_LOGI(TAG, "[SIM] %s: '%s' -> copied as '%s'", what, clean, dirty);
+    cw_screen_feed_decoded(dirty, (int)strlen(dirty));
+}
+
+// Idle band noise: short dit/dah-ish fragments, exactly what the QMX decoder
+// emits with no signal. Never contains a digit, so is_plausible_call() must
+// reject all of it - if a noise burst ever shows up on the station card, the
+// capture heuristics have a bug.
+static void sim_feed_noise(void)
+{
+    static const char pool[] = "ETIMSANE";
+    char buf[10];
+    int n = 1 + (int)(esp_random() % 3), o = 0;
+    buf[o++] = ' ';
+    for (int i = 0; i < n; i++) buf[o++] = pool[esp_random() % (sizeof(pool) - 1)];
+    buf[o++] = ' ';
+    buf[o] = '\0';
+    cw_screen_feed_decoded(buf, o);
+}
 
 void cw_qso_sim_arm(void)
 {
@@ -545,27 +623,60 @@ void cw_qso_sim_arm(void)
 
 void cw_qso_sim_tick(void)
 {
-    if (!s_sim_reply_due_us || esp_timer_get_time() < s_sim_reply_due_us) return;
-    s_sim_reply_due_us = 0;
+    int64_t now = esp_timer_get_time();
 
-    char my[CALL_MAX];
+    char my[CALL_MAX], tgt[CALL_MAX];
     portENTER_CRITICAL(&s_mux);
     memcpy(my, s_my_call, sizeof(my));
+    memcpy(tgt, s_target, sizeof(tgt));
+    cw_esm_state_t st = s_state;
     portEXIT_CRITICAL(&s_mux);
     if (!my[0]) return;
+
+    // Band noise, always - a real session never has a silent decoder.
+    if (!s_sim_noise_due_us) s_sim_noise_due_us = now + 4000000;
+    if (now >= s_sim_noise_due_us) {
+        s_sim_noise_due_us = now + 3000000 + (int64_t)(esp_random() % 6000000);
+        sim_feed_noise();
+    }
+
+    // Someone else calling CQ, so the operator can practise ANSWERING rather
+    // than only being answered. Only while idle: a station calling CQ in the
+    // middle of our exchange would be noise in the worst sense.
+    if (st == CW_ESM_CQ && !tgt[0]) {
+        if (!s_sim_cq_due_us) s_sim_cq_due_us = now + 15000000;
+        if (now >= s_sim_cq_due_us) {
+            s_sim_cq_due_us = now + 25000000 + (int64_t)(esp_random() % 20000000);
+            const char *c = SIM_CALLS[esp_random() % (sizeof(SIM_CALLS) / sizeof(SIM_CALLS[0]))];
+            char msg[96];
+            snprintf(msg, sizeof(msg), " CQ CQ DE %s %s K ", c, c);
+            sim_feed("station calls CQ", msg);
+        }
+    } else {
+        s_sim_cq_due_us = 0;   // re-arm the delay once we are free again
+    }
+
+    if (!s_sim_reply_due_us || now < s_sim_reply_due_us) return;
+    s_sim_reply_due_us = 0;
+
+    // Whoever we are actually working answers - if the operator pounced on a
+    // CQ, the replies must come from THAT station, not a hardcoded W1AW.
+    if (tgt[0]) snprintf(s_sim_peer, sizeof(s_sim_peer), "%s", tgt);
+    else if (s_sim_reply_kind == 1)
+        snprintf(s_sim_peer, sizeof(s_sim_peer), "%s",
+                 SIM_CALLS[esp_random() % (sizeof(SIM_CALLS) / sizeof(SIM_CALLS[0]))]);
 
     char msg[96];
     switch (s_sim_reply_kind) {
         case 1:  // they answer our CQ
-            snprintf(msg, sizeof(msg), " %s %s DE W1AW W1AW K ", my, my);
+            snprintf(msg, sizeof(msg), " %s %s DE %s %s K ", my, my, s_sim_peer, s_sim_peer);
             break;
         case 2:  // their report back (we just sent ours, state moved to TU)
-            snprintf(msg, sizeof(msg), " %s DE W1AW UR 579 579 BK ", my);
+            snprintf(msg, sizeof(msg), " %s DE %s UR 579 579 BK ", my, s_sim_peer);
             break;
         default: // courtesy final after our TU
             snprintf(msg, sizeof(msg), " TU 73 EE ");
             break;
     }
-    ESP_LOGI(TAG, "[SIM] phantom sends: %s", msg);
-    cw_screen_feed_decoded(msg, (int)strlen(msg));
+    sim_feed("phantom replies", msg);
 }
