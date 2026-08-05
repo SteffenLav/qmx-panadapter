@@ -320,12 +320,19 @@ static inline int32_t s24_to_s32(const uint8_t *p)
     return (int32_t)u;
 }
 
-static void process_rx(void)
+// Returns true if this poll actually moved audio. The caller uses that to decide
+// whether to yield: see audio_task().
+static bool process_rx(void)
 {
     // Raw 24-bit packed bytes from the QMX
     static uint8_t raw[RX_BUF_BYTES];
     // Decoded int16 stereo pairs (max half the bytes from raw, since 6B->4B)
     static int16_t decoded[(RX_BUF_BYTES / 6) * 2 + 2];
+
+    // Whether this call moved any audio at all. NOT simply "the last read
+    // returned data": the drain loop always ends on an empty read, so a healthy
+    // stream would otherwise look idle every single poll.
+    bool got_data = false;
 
     // Phase 5.7: drain loop. First read waits up to 25 ms for data;
     // subsequent reads in the same call are non-blocking so we drain the
@@ -341,15 +348,16 @@ static void process_rx(void)
             // No data this poll: the QMX may be mid power-cycle. Mark the
             // flat-spectrum floor for re-seeding once real samples resume.
             s_flat_reset_pending = true;
-            return;
+            return got_data;
         }
 
         // Each stereo pair = 6 bytes (3B L + 3B R, little-endian signed 24-bit)
         size_t pairs = bytes_read / 6;
         if (pairs == 0) {
             s_flat_reset_pending = true;
-            return;
+            return got_data;
         }
+        got_data = true;
 
         if (s_flat_reset_pending) {
             s_flat_reset_pending = false;
@@ -490,8 +498,25 @@ static void audio_task(void *arg)
             }
         }
         if (s_uac_dev) {
-            process_rx();
-            // vTaskDelay(1) removed - 10ms at default tick rate, was starving the read
+            // No vTaskDelay when audio is flowing - 10 ms at the default tick
+            // rate starved the read (and #51 is a standing reminder of what
+            // starving this path costs).
+            //
+            // But a poll that moved NOTHING must yield, or a dead device pegs
+            // this core. Hardware-observed 2026-08-05: a QMX power-cycle did not
+            // deliver AE_DISCONNECTED (a documented quirk of this hardware - the
+            // UAC handle just goes quiet), so s_uac_dev still pointed at the dead
+            // device. On a merely SILENT device the read honours its 25 ms
+            // timeout, so this loop self-limits to ~40 Hz and all is well; on an
+            // INVALID-STATE device it fails INSTANTLY, and this loop span flat
+            // out at priority 6. Result: core 0 at 0% idle, LVGL starved, the UI
+            // frozen and no recovery possible - the USB host logged
+            // "usbh_devs_open error: ESP_ERR_INVALID_STATE" every 50 ms
+            // indefinitely while nothing could act on it.
+            //
+            // Costs nothing when streaming (got_data == true), and turns the
+            // dead-device case from a locked-up radio into an idle one.
+            if (!process_rx()) vTaskDelay(pdMS_TO_TICKS(5));
         } else {
             vTaskDelay(pdMS_TO_TICKS(100));
         }
