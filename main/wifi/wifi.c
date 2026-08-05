@@ -69,10 +69,20 @@ static volatile bool    s_scan_auto_retried = false;
 // come up, we scan once and, if a DIFFERENT remembered network is on the air,
 // switch to it. s_roam_scan marks a scan we started for that purpose - the user
 // Scan button uses the same machinery and must not trigger a credential change.
-// s_roam_tried stops us doing it over and over: one attempt per disconnect
-// episode, cleared on a successful IP.
-static volatile bool s_roam_scan  = false;
-static volatile bool s_roam_tried = false;
+// s_roam_last_us rate-limits the attempts instead of allowing only one per
+// episode: a one-shot would stop looking entirely if the first scan happened
+// before the other network was up, which is precisely the "arrived somewhere new"
+// case this feature is for. Cleared on a successful IP so the next episode can
+// roam immediately.
+static volatile bool    s_roam_scan    = false;
+static volatile int64_t s_roam_last_us = 0;
+#define ROAM_RESCAN_INTERVAL_US (30LL * 1000000)
+// How many failed connects before looking elsewhere. Deliberately small: waiting
+// for the fast-retry budget AND the 10 s backoff took the best part of a minute
+// to notice a hotspot had gone (operator, 2026-08-05). Two failures is already a
+// clear signal, and a scan cannot pick a different network unless the configured
+// one is genuinely absent from the air - so being eager here is safe.
+#define ROAM_AFTER_RETRIES 2
 
 // True when WE created the STA netif (without IDF's default, un-guarded event
 // handlers) and therefore drive its start/connect/disconnect lifecycle from
@@ -210,6 +220,32 @@ static void roam_to_known_if_present(const wifi_ap_record_t *recs, uint16_t num)
     s_retry_count = 0;                   // fresh fast-retry budget for the new one
 }
 
+// Start a roam scan if it is worth doing. Returns true when a scan was started,
+// in which case the caller must return: SCAN_DONE picks the network and re-kicks
+// the connect.
+static bool try_start_roam_scan(void)
+{
+    if (s_wifi_user_disabled) return false;
+    if (settings_wifi_known_count() <= 1) return false;   // nothing to roam between
+    int64_t now = esp_timer_get_time();
+    if (s_roam_last_us && (now - s_roam_last_us) < ROAM_RESCAN_INTERVAL_US) return false;
+    if (s_scan_hold) return false;                        // a scan is already in flight
+
+    wifi_scan_config_t cfg = { 0 };
+    s_roam_last_us      = now;
+    s_roam_scan         = true;
+    s_scan_hold         = true;
+    s_scan_hold_us      = now;
+    s_scan_auto_retried = false;
+    if (esp_wifi_scan_start(&cfg, false) != ESP_OK) {
+        s_roam_scan = false;
+        s_scan_hold = false;
+        return false;
+    }
+    ESP_LOGI(TAG, "'%s' not answering - scanning for a remembered network", s_ssid);
+    return true;
+}
+
 // Event handlers -------------------------------------------------------
 static void on_wifi_event(void *arg, esp_event_base_t base,
                           int32_t id, void *data)
@@ -323,6 +359,11 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
             return;
         }
         s_retry_count++;
+
+        // Look for a remembered network as soon as two connects have failed,
+        // rather than after the whole fast-retry budget plus a 10 s sleep.
+        if (s_retry_count >= ROAM_AFTER_RETRIES && try_start_roam_scan()) return;
+
         if (s_retry_count <= MAX_FAST_RETRIES) {
             ESP_LOGW(TAG, "Disconnected (reason=%d) retry %d/%d",
                      e->reason, s_retry_count, MAX_FAST_RETRIES);
@@ -343,31 +384,9 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
                 return;
             }
 
-            // The configured network is not coming up. If we remember others,
-            // look around ONCE per disconnect episode and switch if one of them
-            // is on the air. Reuses the existing scan-hold machinery rather than
-            // inventing a second scan path: the hold keeps the retry chain off
-            // the radio, and SCAN_DONE both picks the network and re-kicks the
-            // connect. s_roam_tried is cleared on a successful IP, so a genuine
-            // move to a new location can roam again.
-            if (!s_roam_tried) {
-                if (settings_wifi_known_count() > 1) {
-                    wifi_scan_config_t roam_cfg = { 0 };
-                    s_roam_tried   = true;
-                    s_roam_scan    = true;
-                    s_scan_hold    = true;
-                    s_scan_hold_us = esp_timer_get_time();
-                    s_scan_auto_retried = false;
-                    if (esp_wifi_scan_start(&roam_cfg, false) == ESP_OK) {
-                        ESP_LOGI(TAG, "'%s' unreachable - scanning for a remembered network",
-                                 s_ssid);
-                        return;   // SCAN_DONE picks one (if any) and reconnects
-                    }
-                    // Scan refused: fall through and just retry as before.
-                    s_roam_scan = false;
-                    s_scan_hold = false;
-                }
-            }
+            // Still nowhere? Keep looking for a remembered network on the way
+            // round the backoff loop too (rate-limited inside).
+            if (try_start_roam_scan()) return;
             esp_wifi_connect();
         }
     }
@@ -386,7 +405,7 @@ static void on_ip_event(void *arg, esp_event_base_t base,
         ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&e->ip_info.ip));
         s_retry_count = 0;
-        s_roam_tried  = false;      // this network works; allow roaming again later
+        s_roam_last_us = 0;         // this network works; allow an immediate roam next time
         xEventGroupSetBits(s_events, BIT_CONNECTED);
 
         // Remember the network that actually worked, most-recently-used first.
