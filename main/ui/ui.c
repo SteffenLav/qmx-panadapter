@@ -53,14 +53,11 @@ static const char *TAG = "ui";
 #define SPECTRUM_H      200
 #define LABEL_BAR_H     32  /* Phase 5.10C: room for Montserrat 18 labels under tick marks */
 #define BANDPLAN_H      22  /* coarse CW/Digi/Phone band-plan strip under the freq axis */
-/* SPOTS_LANE_H (spots_lane.h) is a third fixed lane: live POTA/RBN spots between
- * the spectrum and the freq axis. Like BANDPLAN_H it is subtracted from
- * WATERFALL_H below, so the 36 px come off the waterfall - a deliberate trade,
- * and the reason the lane is a strip rather than an overlay (see spots_lane.h).
- * It is a compile-time constant on purpose: WATERFALL_H sizes the double-height
- * canvas buffer that the 30 Hz render task writes into, so making the lane
- * height runtime-variable would mean reallocating that buffer under the
- * renderer - far more risk than the pixels are worth. */
+/* Live spots take NO layout height: they are a see-through overlay on the
+ * spectrum (FlexRadio-style), not a strip. An earlier version did steal 36 px
+ * here for a dedicated lane between the spectrum and the freq axis; the overlay
+ * both reads better and gives those pixels back to the waterfall. See
+ * ui/spots_lane.h. */
 // Phase 5.10E: QMX I/Q has a 12 kHz IF offset -- the signal at the QMX's
 // tuned frequency lands at +12 kHz in the baseband. We compensate by
 // shifting the displayed spectrum left by 12 kHz so the tuned signal
@@ -1314,7 +1311,7 @@ void ui_set_zoom(float zoom, int pan_bins)
     }
 }
 
-#define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - SPOTS_LANE_H - LABEL_BAR_H - BANDPLAN_H - BOTTOM_BAR_H)
+#define WATERFALL_H     (DISPLAY_V_RES - TOP_BAR_H - SPECTRUM_H - LABEL_BAR_H - BANDPLAN_H - BOTTOM_BAR_H)
 
 // Forward declarations (Phase 6.1 - touch-to-tune)
 static void touch_event_cb(lv_event_t *e);
@@ -2311,7 +2308,7 @@ static void build_label_bar(lv_obj_t *parent)
     lv_obj_t *bar = lv_obj_create(parent);
     s_label_bar = bar;
     lv_obj_set_size(bar, DISPLAY_H_RES, LABEL_BAR_H);
-    lv_obj_align(bar, LV_ALIGN_TOP_LEFT, 0, TOP_BAR_H + SPECTRUM_H + SPOTS_LANE_H);
+    lv_obj_align(bar, LV_ALIGN_TOP_LEFT, 0, TOP_BAR_H + SPECTRUM_H);
     lv_obj_set_style_bg_color(bar, lv_color_hex(0x000000), 0);
     lv_obj_set_style_border_width(bar, 0, 0);
     lv_obj_set_style_radius(bar, 0, 0);
@@ -2697,8 +2694,7 @@ static void build_waterfall(lv_obj_t *parent)
     s_waterfall_obj = lv_obj_create(parent);
     lv_obj_set_size(s_waterfall_obj, DISPLAY_H_RES, WATERFALL_H);
     // Waterfall starts right after label bar (band-plan now floats at bottom, built later)
-    lv_obj_align(s_waterfall_obj, LV_ALIGN_TOP_LEFT, 0,
-                 TOP_BAR_H + SPECTRUM_H + SPOTS_LANE_H + LABEL_BAR_H);
+    lv_obj_align(s_waterfall_obj, LV_ALIGN_TOP_LEFT, 0, TOP_BAR_H + SPECTRUM_H + LABEL_BAR_H);
     lv_obj_set_style_bg_color(s_waterfall_obj, lv_color_hex(0x000010), 0);
     lv_obj_set_style_border_width(s_waterfall_obj, 0, 0);
     lv_obj_set_style_radius(s_waterfall_obj, 0, 0);
@@ -3127,7 +3123,7 @@ void ui_init(lv_display_t *disp)
 
     build_top_bar(scr);
     build_spectrum(scr);
-    spots_lane_build(scr, TOP_BAR_H + SPECTRUM_H);
+    spots_lane_build(scr, TOP_BAR_H, SPECTRUM_H);   // overlays the spectrum
     build_label_bar(scr);
     build_waterfall(scr);
     build_bottom_bar(scr);

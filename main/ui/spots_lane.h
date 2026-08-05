@@ -3,27 +3,33 @@
 #include <stdint.h>
 #include "lvgl.h"
 
-// The spots lane: live POTA/RBN spots drawn at their frequency, in a dedicated
-// strip BETWEEN the spectrum and the frequency axis.
+// Live POTA/RBN spots drawn at their frequency as a SEE-THROUGH overlay on the
+// spectrum - the FlexRadio/SmartSDR convention: a translucent vertical line down
+// through the trace at the spot's frequency, with a bright callsign at the top.
 //
-// Why its own strip and not an overlay. Drawing spots on the trace ruins both -
-// the labels sit in the signals you are trying to read - and the waterfall is
-// out because it scrolls, so a label would either smear downwards with the
-// history or have to be redrawn every tick at 30 Hz. A dedicated lane costs
-// SPOTS_LANE_H pixels of waterfall once and is then free: the strip only
-// repaints when the view moves, the spot table changes, or a spot ages.
+// This replaced a dedicated 36 px strip between the spectrum and the frequency
+// axis (operator's call, 2026-08-05, after seeing both). The overlay is the
+// better trade: it reads the way every other panadapter does, and it gives those
+// 36 px back to the waterfall. The labels sit at the TOP of the spectrum, which
+// is the part of the trace that is empty sky most of the time, so in practice
+// they cover very little signal.
 //
-// The lane is fed the visible window by ui.c from update_freq_axis_labels(), so
-// the x mapping is the SAME one the axis labels use. That is deliberate - if the
-// two ever drift, a spot would point at the wrong frequency on a correct axis,
-// which is the one failure mode that would make the feature worse than useless.
+// Implementation note that matters: the spots are LVGL objects composited over
+// the spectrum canvas, NOT drawn into it. The render task rewrites that canvas
+// at 30 Hz, so anything drawn in would be erased on the next frame.
+//
+// The overlay container is deliberately NOT clickable, and only the callsign
+// labels are - otherwise a transparent object covering the whole spectrum would
+// swallow tap-to-tune and pinch-zoom. Tapping the callsign itself is also how
+// Flex does it.
+//
+// The visible window is fed in by ui.c from update_freq_axis_labels(), so the x
+// mapping is the SAME one the axis labels use. If the two ever drifted, a spot
+// would point at the wrong frequency under a correct axis - the one failure mode
+// that makes this feature worse than not having it.
 
-// Height of the strip. Two label rows (montserrat_14) under a tick row; see
-// place_labels() for why two and not three.
-#define SPOTS_LANE_H 36
-
-// Build the strip. `y` is its top edge in screen coordinates.
-void spots_lane_build(lv_obj_t *parent, int y);
+// Build the overlay. (x spans the display; `y`/`h` are the spectrum's own rect.)
+void spots_lane_build(lv_obj_t *parent, int y, int h);
 
 // Publish the currently visible frequency window. Call from wherever the
 // frequency axis is recomputed so the two can never disagree.

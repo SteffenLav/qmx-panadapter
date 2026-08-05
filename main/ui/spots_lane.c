@@ -25,9 +25,15 @@ static const char *TAG = "spots_ui";
 #define MAX_TICKS   40
 #define MAX_LABELS  16
 
-#define TICK_H       6
-#define ROW_H       15
+#define ROW_H       17
+#define ROW_TOP      2    // first label row, just inside the top of the spectrum
 #define LABEL_PAD    5    // horizontal clearance between two labels in a row
+
+// See-through: the vertical line is faint enough to read the trace through it,
+// and the label carries a dark backing so bright text stays legible where it
+// crosses a strong signal. Both are scaled by the spot's age opacity.
+#define LINE_OPA_MAX  90      // of 255
+#define LABEL_BG_OPA  120     // of 255, behind the text only
 
 // Age fades the spot out: a POTA spot is a claim about *now*, and an hour-old
 // one pointing at an empty frequency is worse than no spot at all.
@@ -38,15 +44,21 @@ static const char *TAG = "spots_ui";
 // Colours are semantic, not decorative:
 //   amber = POTA activation, green = RBN skimmer, grey = already worked on this
 //   band. Grey is the important one - it answers "do I need this station?"
-#define COL_POTA    0xFFA040
-#define COL_RBN     0x40E070
-#define COL_WORKED  0x808080
+//
+// Deliberately BRIGHT (operator's request): these sit over a live spectrum with
+// a vivid green trace, so a mid-tone would disappear into it. Worked-before is
+// the only muted one, and even that is light enough to read - it needs to be
+// legible but not to compete for attention.
+#define COL_POTA    0xFFC864
+#define COL_RBN     0x70FF90
+#define COL_WORKED  0xC0C0C0
 
 static lv_obj_t *s_lane;
 static lv_obj_t *s_ticks[MAX_TICKS];
 static lv_obj_t *s_labels[MAX_LABELS];
 static lv_obj_t *s_edge_l, *s_edge_r;
 
+static int       s_lane_h;         // = SPECTRUM_H; the overlay's own height
 static uint32_t  s_view_lo, s_view_hi;
 static uint32_t  s_drawn_lo, s_drawn_hi;
 static uint32_t  s_drawn_version = 0xFFFFFFFFu;
@@ -219,7 +231,8 @@ static void repaint(void)
         if (!t) break;
         lv_obj_set_pos(t, s_w->x[i], 0);
         lv_obj_set_style_bg_color(t, lv_color_hex(s_w->colour[si]), 0);
-        lv_obj_set_style_bg_opa(t, s_w->opa[si], 0);
+        // Scale the line's translucency by age so a fading spot fades as a whole.
+        lv_obj_set_style_bg_opa(t, (lv_opa_t)((int)LINE_OPA_MAX * s_w->opa[si] / 255), 0);
         lv_obj_clear_flag(t, LV_OBJ_FLAG_HIDDEN);
         s_hits[tick_n].x = s_w->x[i];
         s_hits[tick_n].freq_hz = s_w->buf[si].freq_hz;
@@ -262,11 +275,15 @@ static void repaint(void)
         if (x + w > DISPLAY_H_RES) x = DISPLAY_H_RES - w;
 
         int row = pick_row(x, w, row_end);
-        if (row < 0) continue;                          // no room: tick only
+        if (row < 0) continue;                          // no room: line only
 
-        lv_obj_set_pos(lb, x, TICK_H + row * ROW_H);
+        lv_obj_set_pos(lb, x, ROW_TOP + row * ROW_H);
         lv_obj_set_style_text_color(lb, lv_color_hex(s_w->colour[si]), 0);
         lv_obj_set_style_text_opa(lb, s_w->opa[si], 0);
+        lv_obj_set_style_bg_opa(lb, (lv_opa_t)((int)LABEL_BG_OPA * s_w->opa[si] / 255), 0);
+        // The label is the tap target (the container cannot be, or it would eat
+        // every spectrum gesture), so it carries its own frequency.
+        lv_obj_set_user_data(lb, (void *)(uintptr_t)sp->freq_hz);
         lv_obj_clear_flag(lb, LV_OBJ_FLAG_HIDDEN);
         used++;
     }
@@ -282,7 +299,7 @@ static void repaint(void)
     if (off_r > 0 && s_edge_r) {
         snprintf(b, sizeof(b), "%d>", off_r);
         lv_label_set_text(s_edge_r, b);
-        lv_obj_align(s_edge_r, LV_ALIGN_TOP_RIGHT, 0, TICK_H + ROW_H);
+        lv_obj_align(s_edge_r, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
         lv_obj_clear_flag(s_edge_r, LV_OBJ_FLAG_HIDDEN);
     }
 
@@ -316,27 +333,15 @@ static void tick_cb(lv_timer_t *t)
 
 // ---- tap to tune -----------------------------------------------------------
 
-static void lane_click_cb(lv_event_t *e)
+// Tapping a CALLSIGN tunes to it. The tap target is the label itself, never the
+// container: a transparent container over the whole spectrum would swallow
+// tap-to-tune, the one-finger pan and pinch-zoom, all of which live there. Tiny
+// targets are also why each label gets a generous ext_click_area.
+static void label_click_cb(lv_event_t *e)
 {
-    (void)e;
-    if (!s_hit_n) return;
-
-    lv_indev_t *indev = lv_indev_active();
-    if (!indev) return;
-    lv_point_t p;
-    lv_indev_get_point(indev, &p);
-
-    // Nearest tick within a fingertip's reach. Without the distance cap a tap
-    // on empty lane would yank the VFO to whatever spot happened to be closest.
-    const int MAX_DIST_PX = 26;
-    int best = -1, best_d = MAX_DIST_PX + 1;
-    for (int i = 0; i < s_hit_n; i++) {
-        int d = p.x > s_hits[i].x ? p.x - s_hits[i].x : s_hits[i].x - p.x;
-        if (d < best_d) { best_d = d; best = i; }
-    }
-    if (best < 0) return;
-
-    uint32_t hz = s_hits[best].freq_hz;
+    lv_obj_t *lb = lv_event_get_target(e);
+    uint32_t hz = (uint32_t)(uintptr_t)lv_obj_get_user_data(lb);
+    if (!hz) return;
     ESP_LOGI(TAG, "spot tap -> %lu Hz", (unsigned long)hz);
     cat_set_frequency_forced(hz);      // deliberate user action, bypass the rate limiter
     ui_update_frequency(hz);           // optimistic, same as tap-to-tune on the spectrum
@@ -344,7 +349,7 @@ static void lane_click_cb(lv_event_t *e)
 
 // ---- build -----------------------------------------------------------------
 
-void spots_lane_build(lv_obj_t *parent, int y)
+void spots_lane_build(lv_obj_t *parent, int y, int h)
 {
     s_w = heap_caps_calloc(1, sizeof(work_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s_w) {
@@ -354,27 +359,31 @@ void spots_lane_build(lv_obj_t *parent, int y)
                  (unsigned)sizeof(work_t));
     }
 
+    s_lane_h = h;
+
     lv_obj_t *lane = lv_obj_create(parent);
     s_lane = lane;
-    lv_obj_set_size(lane, DISPLAY_H_RES, SPOTS_LANE_H);
+    lv_obj_set_size(lane, DISPLAY_H_RES, h);
     lv_obj_align(lane, LV_ALIGN_TOP_LEFT, 0, y);
-    lv_obj_set_style_bg_color(lane, lv_color_hex(0x000000), 0);
-    lv_obj_set_style_bg_opa(lane, LV_OPA_COVER, 0);
+    // Fully transparent and NOT clickable: this sits on top of the whole
+    // spectrum, so any background or any hit-testing here would either hide the
+    // trace or eat tap-to-tune, the one-finger pan and pinch-zoom.
+    lv_obj_set_style_bg_opa(lane, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(lane, 0, 0);
     lv_obj_set_style_radius(lane, 0, 0);
     lv_obj_set_style_pad_all(lane, 0, 0);
     lv_obj_clear_flag(lane, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(lane, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(lane, lane_click_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_clear_flag(lane, LV_OBJ_FLAG_CLICKABLE);
 
     for (int i = 0; i < MAX_TICKS; i++) {
         lv_obj_t *t = lv_obj_create(lane);
-        lv_obj_set_size(t, 2, TICK_H);
+        // A full-height translucent line down the trace, Flex-style.
+        lv_obj_set_size(t, 2, h);
         lv_obj_set_style_border_width(t, 0, 0);
         lv_obj_set_style_radius(t, 0, 0);
         lv_obj_set_style_pad_all(t, 0, 0);
         lv_obj_clear_flag(t, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_clear_flag(t, LV_OBJ_FLAG_CLICKABLE);   // taps belong to the lane
+        lv_obj_clear_flag(t, LV_OBJ_FLAG_CLICKABLE);   // must not block the spectrum
         lv_obj_add_flag(t, LV_OBJ_FLAG_HIDDEN);
         s_ticks[i] = t;
     }
@@ -382,21 +391,37 @@ void spots_lane_build(lv_obj_t *parent, int y)
         lv_obj_t *lb = lv_label_create(lane);
         lv_obj_set_style_text_font(lb, &lv_font_montserrat_14, 0);
         lv_label_set_text(lb, "");
-        lv_obj_clear_flag(lb, LV_OBJ_FLAG_CLICKABLE);
+        // Dark backing so bright text stays readable where it crosses a strong
+        // signal, kept translucent so the trace still shows through.
+        lv_obj_set_style_bg_color(lb, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(lb, LABEL_BG_OPA, 0);
+        lv_obj_set_style_pad_hor(lb, 2, 0);
+        lv_obj_set_style_radius(lb, 2, 0);
+        // The label is the tap target. ext_click_area gives a fingertip
+        // something to hit without making the drawn box any bigger.
+        lv_obj_add_flag(lb, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_ext_click_area(lb, 10);
+        lv_obj_add_event_cb(lb, label_click_cb, LV_EVENT_CLICKED, NULL);
         lv_obj_add_flag(lb, LV_OBJ_FLAG_HIDDEN);
         s_labels[i] = lb;
     }
 
+    // Off-screen counts go in the BOTTOM corners: the top rows belong to the
+    // callsigns, and the spectrum's top-right is the burger deadzone.
     s_edge_l = lv_label_create(lane);
     lv_obj_set_style_text_font(s_edge_l, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_edge_l, lv_color_hex(0x909090), 0);
-    lv_obj_align(s_edge_l, LV_ALIGN_TOP_LEFT, 0, TICK_H + ROW_H);
+    lv_obj_set_style_text_color(s_edge_l, lv_color_hex(0xA0A0A0), 0);
+    lv_obj_set_style_bg_color(s_edge_l, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_edge_l, LABEL_BG_OPA, 0);
+    lv_obj_align(s_edge_l, LV_ALIGN_BOTTOM_LEFT, 0, -2);
     lv_obj_add_flag(s_edge_l, LV_OBJ_FLAG_HIDDEN);
 
     s_edge_r = lv_label_create(lane);
     lv_obj_set_style_text_font(s_edge_r, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(s_edge_r, lv_color_hex(0x909090), 0);
-    lv_obj_align(s_edge_r, LV_ALIGN_TOP_RIGHT, 0, TICK_H + ROW_H);
+    lv_obj_set_style_text_color(s_edge_r, lv_color_hex(0xA0A0A0), 0);
+    lv_obj_set_style_bg_color(s_edge_r, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_edge_r, LABEL_BG_OPA, 0);
+    lv_obj_align(s_edge_r, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
     lv_obj_add_flag(s_edge_r, LV_OBJ_FLAG_HIDDEN);
 
     // Panadapter is the page the UI is built in; ui_apply_saved_mode() turns the
@@ -406,7 +431,7 @@ void spots_lane_build(lv_obj_t *parent, int y)
     s_visible = true;
 
     lv_timer_create(tick_cb, 1000, NULL);
-    ESP_LOGI(TAG, "spots lane built at y=%d h=%d scratch=%uB", y, SPOTS_LANE_H,
+    ESP_LOGI(TAG, "spots overlay built over spectrum y=%d h=%d scratch=%uB", y, h,
              (unsigned)sizeof(work_t));
     spots_lane_selftest();
 }
