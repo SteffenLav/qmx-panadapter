@@ -167,7 +167,8 @@ static void refresh_view(void)
         fb = ft8_tx_get_parity_lock(&pe)
              ? snprintf(freebuf, sizeof(freebuf), "%d of %d free in your %s TX window: ",
                         n_free, n_slots, pe ? "EVEN" : "ODD")
-             : snprintf(freebuf, sizeof(freebuf), "%d of %d slots free near you: ",
+             : snprintf(freebuf, sizeof(freebuf),
+                        "%d of %d free in BOTH windows (your TX window is not fixed yet): ",
                         n_free, n_slots);
         int listed = 0;
         for (int r = 0; r < n_slots && listed < 10; r++) {

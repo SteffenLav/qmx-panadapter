@@ -171,6 +171,7 @@ static lv_obj_t *s_bar_slot     = NULL;  // tiny countdown bar beside s_lbl_coun
 static lv_obj_t *s_mini_strip   = NULL;
 static lv_obj_t *s_mini_cells[MINI_SLOTS_MAX];
 static uint8_t   s_mini_prev[MINI_SLOTS_MAX];  // last colour class per cell, see mini_paint()
+static lv_obj_t *s_mini_parity = NULL;   // EVEN/ODD/BOTH tag drawn ON the strip
 static int       s_mini_n_slots = 0;
 static void mini_paint(void);
 static lv_obj_t *s_btn_cq       = NULL;  // "Call CQ" - short tap TX, long-press edits presets
@@ -1385,6 +1386,24 @@ static void mini_paint(void)
         s_mini_prev[i] = cls;
         lv_obj_set_style_bg_color(s_mini_cells[i], lv_color_hex(col), 0);
     }
+
+    // EVEN / ODD while our TX parity is fixed, BOTH when it is not (nothing
+    // armed, or TXCQ ANY) - in which case the strip is the union of the two
+    // windows and a slot shown busy may be free in the one we end up using.
+    // Colours match the slot countdown and the per-row E/O indicator.
+    if (s_mini_parity) {
+        bool pe = false;
+        bool known = ft8_tx_get_parity_lock(&pe);
+        const char *txt = !known ? "BOTH" : (pe ? "EVEN" : "ODD");
+        uint32_t col = !known ? 0xB0B0B0 : (pe ? 0x8AB4F8 : 0xFFA040);
+        static const char *s_prev_txt = NULL;
+        if (txt != s_prev_txt) {          // literals: pointer compare is enough
+            s_prev_txt = txt;
+            lv_label_set_text(s_mini_parity, txt);
+            lv_obj_set_style_text_color(s_mini_parity, lv_color_hex(col), 0);
+            lv_obj_align(s_mini_parity, LV_ALIGN_RIGHT_MID, -2, 0);
+        }
+    }
 }
 
 // Sync the parity button's label and fill to s_cq_parity. The two locked
@@ -2020,6 +2039,23 @@ void ft8_screen_view_init(lv_obj_t *parent)
             s_mini_cells[i] = c;
             s_mini_prev[i]  = MINI_C_UNKNOWN;
         }
+
+        // Which slot window is this picture FOR? Occupancy is filtered to our own
+        // TX parity when that is known, and is the union of both windows when it
+        // is not - a real and useful distinction that the strip gave no hint of.
+        // Roy KI0ER asked twice what he was looking at (2026-07-29 and
+        // 2026-08-05); the picker modal got wording the first time, but the strip
+        // on this page is the one you actually watch. Created after the cells so
+        // it draws on top of them, with a dark backing to stay readable.
+        s_mini_parity = lv_label_create(s_mini_strip);
+        lv_obj_set_style_text_font(s_mini_parity, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_bg_color(s_mini_parity, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(s_mini_parity, LV_OPA_70, 0);
+        lv_obj_set_style_pad_hor(s_mini_parity, 3, 0);
+        lv_obj_set_style_radius(s_mini_parity, 2, 0);
+        lv_obj_clear_flag(s_mini_parity, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_align(s_mini_parity, LV_ALIGN_RIGHT_MID, -2, 0);
+        lv_label_set_text(s_mini_parity, "BOTH");
     }
 
     // TX row below the mini strip: [TXCQ <parity>] [TX <n> Hz].

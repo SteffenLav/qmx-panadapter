@@ -7,6 +7,7 @@
 #include "ft8_qso.h"
 #include "ft8_tx.h"
 #include "ft8_status.h"
+#include "ft8_test.h"   // ft8_op_mode_slot_ms() - FT8 vs FT4 slot grid
 #include "ui/ft8_screen.h"
 #include "storage/settings.h"
 #include "adif/adif_log.h"
@@ -37,6 +38,12 @@ static double grid_distance_km(const char *a, const char *b)
 // ---------------------------------------------------------------------------
 // Target selection
 // ---------------------------------------------------------------------------
+
+// Parity-alternation state for the run-limiter in ft8_robot_tick(). See the
+// comment there for why hunting drifts onto one slot window and stays.
+#define ROBOT_PARITY_RUN_MAX 3
+static int s_last_parity = -1;   // parity of our last pounce (-1 = none yet)
+static int s_parity_run  = 0;    // consecutive pounces on that same parity
 
 // Is `text` a general CQ (starts with the "CQ" token)? We only auto-answer
 // CQs, never tail-end someone else's exchange.
@@ -96,6 +103,29 @@ void ft8_robot_tick(int64_t slot_sec)
     int n = 0;
     ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
 
+    // Deliberately let the OTHER slot window have a turn now and then.
+    //
+    // Every candidate in a single tick necessarily shares one parity (the loop
+    // below only accepts stations heard in THIS slot), so the choice is never
+    // within a slot - it is across them. And it is biased: an exchange takes a
+    // fixed number of slots, so completing a QSO tends to drop us back to idle on
+    // the SAME parity every time, and we can sit on one window for a long stretch.
+    // Roy KI0ER (2026-08-05) saw exactly that, and pointed out the cost: the
+    // occupancy picture for the window we never transmit in is never refreshed,
+    // so the automatic tone picker is working from a stale half of the band.
+    //
+    // After ROBOT_PARITY_RUN_MAX consecutive pounces on one parity, give up ONE
+    // slot so the next tick lands on the other one. Bounded on purpose: the run
+    // counter resets on the skip, so we can never skip twice running and go deaf.
+    const int64_t period_ms = ft8_op_mode_slot_ms();
+    int this_parity = (int)((((int64_t)slot_sec * 1000 + period_ms / 2) / period_ms) % 2);
+    if (s_parity_run >= ROBOT_PARITY_RUN_MAX && this_parity == s_last_parity) {
+        ESP_LOGI(TAG, "yielding this %s slot after %d pounces on it - sampling the other window",
+                 this_parity ? "odd" : "even", s_parity_run);
+        s_parity_run = 0;
+        return;
+    }
+
     int    best_idx   = -1;
     double best_score = 0;
     for (int i = 0; i < n; i++) {
@@ -120,6 +150,10 @@ void ft8_robot_tick(int64_t slot_sec)
     if (best_idx < 0) return;   // nobody eligible this slot
 
     const ft8_call_t *t = &snap[best_idx];
+
+    // Remember which window this pounce used, for the run-limiter above.
+    if (this_parity == s_last_parity) s_parity_run++;
+    else { s_last_parity = this_parity; s_parity_run = 1; }
 
     // Build TX1 exactly like the manual row_activate() path: our reply goes on a
     // clear tone (not the caller's own), parity derived from their last_utc.
