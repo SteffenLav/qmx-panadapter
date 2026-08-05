@@ -43,6 +43,16 @@ static const char *TAG = "spots_ui";
 #define LABEL_PAD    5    // horizontal clearance between two labels in a row
 #define LABEL_EXT_CLICK 10  // fingertip margin around a label's hit area
 
+// Off-screen counters. Inset from the screen border because a target flush
+// against the edge is awkward to hit - your fingertip runs out of glass - and
+// backed by a dedicated hit rectangle roughly a fingertip and a half in size.
+// A big ext_click_area on the label could not work: LVGL clips it to the parent,
+// and the label already sits at the parent's bottom edge, so it could only grow
+// upwards. That is why the first attempt still felt unhittable.
+#define EDGE_INSET   6
+#define EDGE_HIT_W   140
+#define EDGE_HIT_H   80
+
 // The line is drawn at the SAME opacity as its callsign (operator's request), so
 // the two read as one object and a faint spot is faint in both. See-through comes
 // from the line being 2 px wide, not from dimming it. The label's dark backing is
@@ -73,6 +83,7 @@ static lv_obj_t *s_lane;
 static lv_obj_t *s_ticks[MAX_TICKS];
 static lv_obj_t *s_labels[MAX_LABELS];
 static lv_obj_t *s_edge_l, *s_edge_r;
+static lv_obj_t *s_edge_l_hit, *s_edge_r_hit;   // generous invisible tap targets
 
 static int       s_lane_h;         // = SPECTRUM_H; the overlay's own height
 static int       s_lane_y;         // the overlay's top edge in SCREEN coords
@@ -195,6 +206,10 @@ static void hide_all(void)
     for (int i = 0; i < MAX_LABELS; i++) if (s_labels[i]) lv_obj_add_flag(s_labels[i], LV_OBJ_FLAG_HIDDEN);
     if (s_edge_l) lv_obj_add_flag(s_edge_l, LV_OBJ_FLAG_HIDDEN);
     if (s_edge_r) lv_obj_add_flag(s_edge_r, LV_OBJ_FLAG_HIDDEN);
+    // The tap targets go with them - an invisible live target over empty
+    // spectrum would swallow tap-to-tune for nothing.
+    if (s_edge_l_hit) lv_obj_add_flag(s_edge_l_hit, LV_OBJ_FLAG_HIDDEN);
+    if (s_edge_r_hit) lv_obj_add_flag(s_edge_r_hit, LV_OBJ_FLAG_HIDDEN);
 }
 
 // ---- repaint ---------------------------------------------------------------
@@ -371,13 +386,15 @@ static void repaint(void)
         // same picture rather than as chrome (operator's request).
         lv_obj_set_style_text_color(s_edge_l, lv_color_hex(s_off_l.colour ? s_off_l.colour : COL_POTA), 0);
         lv_obj_clear_flag(s_edge_l, LV_OBJ_FLAG_HIDDEN);
+        if (s_edge_l_hit) lv_obj_clear_flag(s_edge_l_hit, LV_OBJ_FLAG_HIDDEN);
     }
     if (off_r > 0 && s_edge_r) {
         snprintf(b, sizeof(b), "%d>", off_r);
         lv_label_set_text(s_edge_r, b);
         lv_obj_set_style_text_color(s_edge_r, lv_color_hex(s_off_r.colour ? s_off_r.colour : COL_POTA), 0);
-        lv_obj_align(s_edge_r, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
+        lv_obj_align(s_edge_r, LV_ALIGN_BOTTOM_RIGHT, -EDGE_INSET, -EDGE_INSET);
         lv_obj_clear_flag(s_edge_r, LV_OBJ_FLAG_HIDDEN);
+        if (s_edge_r_hit) lv_obj_clear_flag(s_edge_r_hit, LV_OBJ_FLAG_HIDDEN);
     }
 
     s_drawn_lo = s_view_lo;
@@ -522,36 +539,60 @@ void spots_lane_build(lv_obj_t *parent, int y, int h)
         s_labels[i] = lb;
     }
 
-    // Off-screen counts go in the BOTTOM corners: the top rows belong to the
-    // callsigns, and the spectrum's top-right is the burger deadzone.
+    // Off-screen counts sit near the BOTTOM corners: the upper rows belong to the
+    // callsigns, and the spectrum's top-right is the burger deadzone. Inset from
+    // the very edge (EDGE_INSET) because a target flush against the screen border
+    // is awkward to hit - your fingertip runs out of glass.
+    //
+    // Each gets a DEDICATED invisible hit rectangle rather than a big
+    // ext_click_area on the label. ext_click_area is clipped to the parent, so on
+    // a label already sitting at the parent's bottom edge it could only grow
+    // upward - which is exactly why the first attempt still felt unhittable. The
+    // rects are EDGE_HIT_W x EDGE_HIT_H, roughly a fingertip and a half, and they
+    // are shown and hidden with their labels so an invisible live target never
+    // sits over empty spectrum stealing tap-to-tune.
+    s_edge_l_hit = lv_obj_create(lane);
+    lv_obj_set_size(s_edge_l_hit, EDGE_HIT_W, EDGE_HIT_H);
+    lv_obj_align(s_edge_l_hit, LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_style_bg_opa(s_edge_l_hit, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_edge_l_hit, 0, 0);
+    lv_obj_set_style_pad_all(s_edge_l_hit, 0, 0);
+    lv_obj_clear_flag(s_edge_l_hit, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_edge_l_hit, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_edge_l_hit, edge_l_click_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(s_edge_l_hit, LV_OBJ_FLAG_HIDDEN);
+
+    s_edge_r_hit = lv_obj_create(lane);
+    lv_obj_set_size(s_edge_r_hit, EDGE_HIT_W, EDGE_HIT_H);
+    lv_obj_align(s_edge_r_hit, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_set_style_bg_opa(s_edge_r_hit, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_edge_r_hit, 0, 0);
+    lv_obj_set_style_pad_all(s_edge_r_hit, 0, 0);
+    lv_obj_clear_flag(s_edge_r_hit, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_edge_r_hit, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_edge_r_hit, edge_r_click_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(s_edge_r_hit, LV_OBJ_FLAG_HIDDEN);
+
+    // Labels created AFTER the rects so they draw on top, and left NON-clickable
+    // so the whole rect behaves as one uniform target.
     s_edge_l = lv_label_create(lane);
     lv_obj_set_style_text_font(s_edge_l, SPOT_FONT, 0);
-    lv_obj_set_style_text_color(s_edge_l, lv_color_hex(0xA0A0A0), 0);
     lv_obj_set_style_bg_color(s_edge_l, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_edge_l, LABEL_BG_OPA, 0);
-    lv_obj_align(s_edge_l, LV_ALIGN_BOTTOM_LEFT, 0, -2);
-    // Tappable, with a deliberately large fingertip margin: the text is only a
-    // few characters in the corner of the spectrum, far too small to hit
-    // reliably otherwise. (ext_click_area is clipped to the parent, so this
-    // grows the target upward and sideways, not past the overlay's edge.)
-    lv_obj_add_flag(s_edge_l, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_ext_click_area(s_edge_l, 26);
-    lv_obj_add_event_cb(s_edge_l, edge_l_click_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_style_pad_hor(s_edge_l, 4, 0);
+    lv_obj_set_style_radius(s_edge_l, 3, 0);
+    lv_obj_clear_flag(s_edge_l, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(s_edge_l, LV_ALIGN_BOTTOM_LEFT, EDGE_INSET, -EDGE_INSET);
     lv_obj_add_flag(s_edge_l, LV_OBJ_FLAG_HIDDEN);
 
     s_edge_r = lv_label_create(lane);
     lv_obj_set_style_text_font(s_edge_r, SPOT_FONT, 0);
-    lv_obj_set_style_text_color(s_edge_r, lv_color_hex(0xA0A0A0), 0);
     lv_obj_set_style_bg_color(s_edge_r, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_edge_r, LABEL_BG_OPA, 0);
-    lv_obj_align(s_edge_r, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
-    // Tappable, with a deliberately large fingertip margin: the text is only a
-    // few characters in the corner of the spectrum, far too small to hit
-    // reliably otherwise. (ext_click_area is clipped to the parent, so this
-    // grows the target upward and sideways, not past the overlay's edge.)
-    lv_obj_add_flag(s_edge_r, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_set_ext_click_area(s_edge_r, 26);
-    lv_obj_add_event_cb(s_edge_r, edge_r_click_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_set_style_pad_hor(s_edge_r, 4, 0);
+    lv_obj_set_style_radius(s_edge_r, 3, 0);
+    lv_obj_clear_flag(s_edge_r, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_align(s_edge_r, LV_ALIGN_BOTTOM_RIGHT, -EDGE_INSET, -EDGE_INSET);
     lv_obj_add_flag(s_edge_r, LV_OBJ_FLAG_HIDDEN);
 
     // Panadapter is the page the UI is built in; ui_apply_saved_mode() turns the

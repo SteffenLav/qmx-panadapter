@@ -75,6 +75,21 @@ Two things worth knowing, both from Randy N4OPI's side-by-side check against a r
 
 **Band Presets** — Add or remove custom bands. Standard bands (160–10 m) are always available.
 
+## Live Spots
+
+Draws other stations on the spectrum at the frequency they are operating on. Full
+details, including what the colours mean, in [Live Spots](spots.md).
+
+**Live spots (POTA)** — On by default. Fetches Parks On The Air activations about
+once a minute and draws them over the spectrum. Needs WiFi. Switching it off
+leaves the spectrum completely clean.
+
+**Add RBN (CW skimmers)** — **Off** by default, and deliberately so: RBN is a
+continuous global feed over a persistent connection, unlike POTA's occasional
+fetch. Adds CW stations the skimmer network is hearing right now, filtered to the
+band you are on. **Requires your callsign** to be set (the feed asks for one on
+connect — it identifies you, it is not a password).
+
 ## FT8 Settings
 
 

@@ -32,6 +32,8 @@ Tap any item on the top bar to open its selector:
 | **Tap** | Tune to that frequency |
 | **Drag (1 finger)** | Pan left/right |
 | **Pinch (2 fingers)** | Zoom in/out |
+| **Tap a spot callsign** | Tune to that station **and** set the mode — see [Live Spots](../guide/spots.md) |
+| **Tap an off-screen count** (`<3` / `5>`) | Jump to the nearest spot outside the window, on this band |
 
 The frequency grid snaps based on zoom level (10 kHz at 1x, 1 kHz at 8x).
 

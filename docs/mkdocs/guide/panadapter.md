@@ -42,6 +42,10 @@ The panadapter is your primary view — a real-time spectrum analyser and waterf
 
 Tap anywhere on the spectrum or waterfall to jump to that frequency. The panadapter snaps to a frequency grid (resolution depends on zoom level) for easy tuning.
 
+> Callsigns from [Live Spots](spots.md) are drawn over the spectrum and are the
+> one exception: tapping a **callsign** tunes to that station and sets the mode,
+> rather than tuning to the point you touched.
+
 - **Zoom 1.0x** — 10 kHz snap
 - **Zoom 2.0x** — 5 kHz snap
 - **Zoom 4.0x** — 2.5 kHz snap
