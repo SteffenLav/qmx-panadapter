@@ -64,6 +64,16 @@ static volatile int64_t s_scan_hold_us = 0;
 // reporting "no networks", which also covers windows not yet imagined.
 static volatile bool    s_scan_auto_retried = false;
 
+// Roaming to a remembered network (Roy KI0ER: "remember a few SSID setups ...
+// auto connect if that SSID is present"). When the configured network will not
+// come up, we scan once and, if a DIFFERENT remembered network is on the air,
+// switch to it. s_roam_scan marks a scan we started for that purpose - the user
+// Scan button uses the same machinery and must not trigger a credential change.
+// s_roam_tried stops us doing it over and over: one attempt per disconnect
+// episode, cleared on a successful IP.
+static volatile bool s_roam_scan  = false;
+static volatile bool s_roam_tried = false;
+
 // True when WE created the STA netif (without IDF's default, un-guarded event
 // handlers) and therefore drive its start/connect/disconnect lifecycle from
 // on_wifi_event()/on_ip_event(). False when we reused an ESP-Hosted
@@ -142,6 +152,64 @@ static void manual_netif_start(esp_event_base_t base, int32_t id, void *data)
     esp_netif_action_start(s_sta_netif, base, id, data);
 }
 
+// Apply a remembered network's credentials directly to the driver.
+//
+// Deliberately NOT panadapter_wifi_update_credentials(): that persists the SSID
+// as the configured one. Roaming is a convenience, not a decision - the network
+// the operator typed in stays the configured one, so returning home behaves
+// exactly as before. A successful connect is what promotes a network in the
+// remembered list, via settings_wifi_known_remember() on GOT_IP.
+static void apply_creds_live(const char *ssid, const char *pass)
+{
+    snprintf(s_ssid, sizeof(s_ssid), "%s", ssid);
+    snprintf(s_pass, sizeof(s_pass), "%s", pass ? pass : "");
+
+    wifi_config_t sta_cfg = { 0 };
+    memcpy(sta_cfg.sta.ssid, s_ssid, sizeof(sta_cfg.sta.ssid));
+    memcpy(sta_cfg.sta.password, s_pass, sizeof(sta_cfg.sta.password));
+    sta_cfg.sta.threshold.authmode = WIFI_AUTH_OPEN;
+    esp_wifi_set_config(WIFI_IF_STA, &sta_cfg);
+}
+
+// Pick the strongest remembered network that is actually on the air and switch
+// to it. `recs`/`num` are the freshly harvested scan records - see the call site
+// for why this must run before any connect is issued.
+static void roam_to_known_if_present(const wifi_ap_record_t *recs, uint16_t num)
+{
+    // STATIC, not on the stack: every caller of this runs on the system event
+    // task, whose stack is under 3 KB, and this array is ~590 bytes. The scan
+    // records buffer in the SCAN_DONE handler is static for the same reason.
+    // Safe to share because that task is single-threaded.
+    static wifi_known_t known[WIFI_KNOWN_MAX];
+    int kn = settings_wifi_known_get(known, WIFI_KNOWN_MAX);
+    if (kn <= 1) return;                 // nothing to roam between
+
+    int best_k = -1, best_rssi = -127;
+    for (uint16_t i = 0; i < num; i++) {
+        if (recs[i].ssid[0] == '\0') continue;
+        for (int k = 0; k < kn; k++) {
+            if (strcmp((const char *)recs[i].ssid, known[k].ssid) != 0) continue;
+            if (recs[i].rssi > best_rssi) { best_rssi = recs[i].rssi; best_k = k; }
+            break;
+        }
+    }
+    if (best_k < 0) {
+        ESP_LOGI(TAG, "roam: none of the %d remembered network(s) are on the air", kn);
+        return;
+    }
+    if (strcmp(known[best_k].ssid, s_ssid) == 0) {
+        // The one we are already failing on is the best remembered one present -
+        // nothing to gain by "switching" to it.
+        ESP_LOGI(TAG, "roam: '%s' (%d dBm) is already the network we are trying",
+                 s_ssid, best_rssi);
+        return;
+    }
+    ESP_LOGW(TAG, "roam: '%s' not reachable - switching to remembered '%s' (%d dBm)",
+             s_ssid, known[best_k].ssid, best_rssi);
+    apply_creds_live(known[best_k].ssid, known[best_k].pass);
+    s_retry_count = 0;                   // fresh fast-retry budget for the new one
+}
+
 // Event handlers -------------------------------------------------------
 static void on_wifi_event(void *arg, esp_event_base_t base,
                           int32_t id, void *data)
@@ -198,6 +266,16 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
                 return;   // stay RUNNING; the retry's own SCAN_DONE lands here
             }
         }
+        // Roam BEFORE the re-kick below. This is the only safe window: the
+        // records are already out of the radio (so the connect's scan-flush
+        // cannot lose them), and no connect has been issued yet - so the new
+        // credentials are the ones the re-kick actually uses. Doing it after the
+        // re-kick would waste an attempt on the old network first.
+        if (s_roam_scan && get_err == ESP_OK) {
+            s_roam_scan = false;
+            roam_to_known_if_present(recs, num);
+        }
+
         // Scan finished: if the retry chain was held for it, resume connecting
         // (the chain is event-driven, so skipping a retry ends it - it must be
         // re-kicked here or WiFi stays down until reboot).
@@ -226,6 +304,7 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
         s_scan_n = n;
         s_scan_state = WIFI_SCAN_DONE;  // set last
         ESP_LOGI(TAG, "scan done: %d AP(s)", n);
+
     } else if (id == WIFI_EVENT_STA_DISCONNECTED) {
         if (s_manual_netif) esp_netif_action_disconnected(s_sta_netif, base, id, data);
         wifi_event_sta_disconnected_t *e = (wifi_event_sta_disconnected_t *)data;
@@ -263,6 +342,32 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
                 ESP_LOGI(TAG, "backoff wake during SSID scan - retry held");
                 return;
             }
+
+            // The configured network is not coming up. If we remember others,
+            // look around ONCE per disconnect episode and switch if one of them
+            // is on the air. Reuses the existing scan-hold machinery rather than
+            // inventing a second scan path: the hold keeps the retry chain off
+            // the radio, and SCAN_DONE both picks the network and re-kicks the
+            // connect. s_roam_tried is cleared on a successful IP, so a genuine
+            // move to a new location can roam again.
+            if (!s_roam_tried) {
+                if (settings_wifi_known_count() > 1) {
+                    wifi_scan_config_t roam_cfg = { 0 };
+                    s_roam_tried   = true;
+                    s_roam_scan    = true;
+                    s_scan_hold    = true;
+                    s_scan_hold_us = esp_timer_get_time();
+                    s_scan_auto_retried = false;
+                    if (esp_wifi_scan_start(&roam_cfg, false) == ESP_OK) {
+                        ESP_LOGI(TAG, "'%s' unreachable - scanning for a remembered network",
+                                 s_ssid);
+                        return;   // SCAN_DONE picks one (if any) and reconnects
+                    }
+                    // Scan refused: fall through and just retry as before.
+                    s_roam_scan = false;
+                    s_scan_hold = false;
+                }
+            }
             esp_wifi_connect();
         }
     }
@@ -281,7 +386,23 @@ static void on_ip_event(void *arg, esp_event_base_t base,
         ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
         ESP_LOGI(TAG, "Got IP: " IPSTR, IP2STR(&e->ip_info.ip));
         s_retry_count = 0;
+        s_roam_tried  = false;      // this network works; allow roaming again later
         xEventGroupSetBits(s_events, BIT_CONNECTED);
+
+        // Remember the network that actually worked, most-recently-used first.
+        // Building the list from successes rather than from a management screen
+        // means there is nothing for the operator to maintain - which is the
+        // whole point of the request.
+        settings_wifi_known_remember(s_ssid, s_pass);
+        {
+            // Count only - never a WIFI_KNOWN_MAX buffer here. This runs on the
+            // system event task, whose stack is under 3 KB; a 588-byte array on it
+            // is a stack-protection fault, which is exactly how this got flashed
+            // once and crash-looped (2026-08-05).
+            int kn_n = settings_wifi_known_count();
+            ESP_LOGI(TAG, "remembered '%s' (%d network%s known)",
+                     s_ssid, kn_n, kn_n == 1 ? "" : "s");
+        }
 
         // Kick off SNTP on first connect.
         static bool sntp_started = false;

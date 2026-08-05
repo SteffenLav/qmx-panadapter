@@ -144,7 +144,7 @@ static bool to_bool(const char *v)
            strcasecmp(v, "yes") == 0  || strcasecmp(v, "on") == 0;
 }
 
-typedef enum { SEC_NONE, SEC_SETTINGS, SEC_CQ, SEC_FILTERS, SEC_MEM } section_t;
+typedef enum { SEC_NONE, SEC_SETTINGS, SEC_CQ, SEC_FILTERS, SEC_MEM, SEC_WIFI_KNOWN } section_t;
 
 int config_io_import(char *text)
 {
@@ -155,6 +155,16 @@ int config_io_import(char *text)
     settings_load_all(&cur);
     ft8_filters_t filt = cur.ft8_filters;
     bool filt_touched = false;
+
+    // Remembered networks, collected across the [wifi_known] section and applied
+    // in one go at the end so the file's order is preserved.
+    // STATIC for the same reason as everywhere else this array appears: ~590
+    // bytes is too much to put on a task stack on this board. Import runs from a
+    // single web request at a time, so a file-local scratch is safe.
+    static wifi_known_t known[WIFI_KNOWN_MAX];
+    memset(known, 0, sizeof(known));
+    int  known_n = 0;
+    bool known_touched = false;
 
     section_t sec = SEC_NONE;
     int applied = 0;
@@ -172,6 +182,7 @@ int config_io_import(char *text)
             else if (strcasecmp(name, "cq") == 0)          sec = SEC_CQ;
             else if (strcasecmp(name, "ft8_filters") == 0) sec = SEC_FILTERS;
             else if (strcasecmp(name, "memories") == 0)    sec = SEC_MEM;
+            else if (strcasecmp(name, "wifi_known") == 0)  sec = SEC_WIFI_KNOWN;
             else sec = SEC_NONE;
             continue;
         }
@@ -286,11 +297,31 @@ int config_io_import(char *text)
             break;
         }
 
+        case SEC_WIFI_KNOWN: {
+            // ssidN / passN pairs, buffered so the list can be applied in FILE
+            // order at the end. Going straight through remember() would reverse
+            // it (remember() promotes to the front), and the file is written
+            // most-recent-first.
+            int idx = atoi(key + 4) - 1;                 // "ssid3"/"pass3" -> 2
+            if (idx < 0 || idx >= WIFI_KNOWN_MAX) break;
+            if (strncasecmp(key, "ssid", 4) == 0) {
+                snprintf(known[idx].ssid, sizeof(known[idx].ssid), "%s", val);
+            } else if (strncasecmp(key, "pass", 4) == 0) {
+                snprintf(known[idx].pass, sizeof(known[idx].pass), "%s", val);
+            } else break;
+            if (idx + 1 > known_n) known_n = idx + 1;
+            known_touched = true;
+            applied++;
+            break;
+        }
+
         default: break;
         }
     }
 
     if (filt_touched) settings_set_ft8_filters(&filt);
+    // Applied wholesale, in file order: see the buffer's declaration.
+    if (known_touched) settings_wifi_known_set_all(known, known_n);
     settings_flush();
     ESP_LOGI(TAG, "imported config: %d keys/slots applied", applied);
     return applied;

@@ -222,6 +222,46 @@ void settings_set_pskreporter_en(bool v);
 void settings_set_spots_en(bool v);
 void settings_set_rbn_en(bool v);
 
+// ---- Known WiFi networks --------------------------------------------------
+//
+// A small most-recently-used list of networks that have actually worked, so the
+// radio can find its way onto whichever one is present without being told again
+// (Roy KI0ER's request: "remember a few SSID setups ... auto connect if that
+// SSID is present"). The list is built implicitly - every successful connection
+// promotes its network to the front - so there is nothing to manage by hand.
+//
+// Deliberately NOT part of qmx_settings_t: settings_load_all() copies that whole
+// struct, and it is called from hot paths (the 1 Hz spots repaint, the RBN recv
+// loop). Adding ~600 bytes to every one of those copies to hold data only the
+// WiFi layer reads would be a poor trade, so these get their own accessors.
+#define WIFI_KNOWN_MAX 6
+
+typedef struct {
+    char ssid[33];
+    char pass[65];
+} wifi_known_t;
+
+// How many networks are remembered. Exists so callers that only need the count
+// do not have to provide a WIFI_KNOWN_MAX buffer - the WiFi event handlers run on
+// the system event task, whose stack is under 3 KB.
+int  settings_wifi_known_count(void);
+
+// Copy up to max entries, most-recently-used first. Returns the count written.
+int  settings_wifi_known_get(wifi_known_t *out, int max);
+
+// Record a network that just worked, moving it to the front. Updates the stored
+// password if it changed. Drops the least-recently-used entry when full.
+void settings_wifi_known_remember(const char *ssid, const char *pass);
+
+// Replace the whole list, in the given order (index 0 = most recent). This is
+// what a config restore wants: remember() promotes to the front, so replaying an
+// exported list through it would come back reversed.
+void settings_wifi_known_set_all(const wifi_known_t *list, int n);
+
+// Forget one network (config import uses this to honour a deleted line), or all.
+void settings_wifi_known_forget(const char *ssid);
+void settings_wifi_known_clear(void);
+
 // FT8/FT4 TX tone preference and hold (debounced flush) - see ft8_tx.h for what
 // "hold" means to the TX paths. Both are written by the TX tone picker's Apply.
 void settings_set_tx_tone_hz(uint16_t v);

@@ -69,6 +69,7 @@ static const char *TAG = "settings";
 #define KEY_PSKREP_EN      "pskrep_en"
 #define KEY_SPOTS_EN       "spots_en"
 #define KEY_RBN_EN         "rbn_en"
+#define KEY_WIFI_KNOWN     "wifi_known"
 #define KEY_TX_TONE_HZ     "tx_tone_hz"
 #define KEY_TX_TONE_HOLD   "tx_tone_hold"
 #define KEY_FT8_SYNC_LINES "ft8_sync_ln"
@@ -250,6 +251,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 // merge and settings land in the wrong fields.
 #define DIRTY_SPOTS_EN       75
 #define DIRTY_RBN_EN         76
+#define DIRTY_WIFI_KNOWN     77
 #define DIRTY_CQ_MAX_CALLS   66
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
@@ -275,10 +277,17 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_CHARGE_LIM_PCT,
     DIRTY_LOTW_DXCC, DIRTY_LOTW_CQZ, DIRTY_LOTW_ITUZ, DIRTY_DISP_SLEEP,
     DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD, DIRTY_CQ_MAX_CALLS,
-    DIRTY_SPOTS_EN, DIRTY_RBN_EN,
+    DIRTY_SPOTS_EN, DIRTY_RBN_EN, DIRTY_WIFI_KNOWN,
 };
 
 // ---- Module state ------------------------------------------------------
+
+// Known WiFi networks, most-recently-used first. Deliberately outside
+// qmx_settings_t / s_pending so the hot settings_load_all() copies do not carry
+// it; see settings.h. Loaded in settings_init(), written on DIRTY_WIFI_KNOWN.
+static wifi_known_t s_known[WIFI_KNOWN_MAX];
+static int          s_known_n = 0;
+
 static bool             s_ready          = false;
 static nvs_handle_t     s_nvs            = 0;
 static SemaphoreHandle_t s_mutex         = NULL;
@@ -407,6 +416,22 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_PSKREP_EN))     nvs_set_u8(s_nvs, KEY_PSKREP_EN,     snap.pskreporter_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_SPOTS_EN))      nvs_set_u8(s_nvs, KEY_SPOTS_EN,      snap.spots_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_RBN_EN))        nvs_set_u8(s_nvs, KEY_RBN_EN,        snap.rbn_en ? 1 : 0);
+    if (dirty_test(&dirty_local, DIRTY_WIFI_KNOWN)) {
+        // Known-network list: not part of s_pending (see settings.h), so take a
+        // consistent copy under the mutex before writing it out.
+        // STATIC: this runs on the settings_flush task, whose stack is 3 KB, and
+        // this array is ~590 bytes. Only that one task reaches this code, so a
+        // file-local scratch is safe. (Learned the hard way on 2026-08-05: the
+        // stack version crash-looped with a stack-protection fault here AND in
+        // the system event task.)
+        static wifi_known_t kn[WIFI_KNOWN_MAX];
+        uint8_t kn_n;
+        xSemaphoreTake(s_mutex, portMAX_DELAY);
+        memcpy(kn, s_known, sizeof(kn));
+        kn_n = (uint8_t)s_known_n;
+        xSemaphoreGive(s_mutex);
+        nvs_set_blob(s_nvs, KEY_WIFI_KNOWN, kn, (size_t)kn_n * sizeof(wifi_known_t));
+    }
         if (dirty_test(&dirty_local, DIRTY_TX_TONE_HZ))    nvs_set_u16(s_nvs, KEY_TX_TONE_HZ,   snap.tx_tone_hz);
         if (dirty_test(&dirty_local, DIRTY_TX_TONE_HOLD))  nvs_set_u8(s_nvs, KEY_TX_TONE_HOLD,  snap.tx_tone_hold ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FT8_SYNC_LINES)) nvs_set_u8(s_nvs, KEY_FT8_SYNC_LINES, snap.ft8_sync_lines ? 1 : 0);
@@ -671,6 +696,23 @@ static void load_from_nvs(qmx_settings_t *out)
 
     sz = sizeof(out->ft8_filters);
     nvs_get_blob(s_nvs, KEY_FT8_FILT, &out->ft8_filters, &sz);
+
+    // Known-network list. Stored as a blob of exactly the used entries, so the
+    // returned size gives the count back. A short/absent blob just means "none
+    // remembered yet" - never an error worth reporting.
+    {
+        size_t ksz = sizeof(s_known);
+        memset(s_known, 0, sizeof(s_known));
+        s_known_n = 0;
+        if (nvs_get_blob(s_nvs, KEY_WIFI_KNOWN, s_known, &ksz) == ESP_OK) {
+            int n = (int)(ksz / sizeof(wifi_known_t));
+            if (n > WIFI_KNOWN_MAX) n = WIFI_KNOWN_MAX;
+            // Drop anything with an empty SSID: a truncated or hand-edited blob
+            // must not leave a blank entry that the roam scan would try to match.
+            for (int i = 0; i < n; i++)
+                if (s_known[i].ssid[0]) s_known[s_known_n++] = s_known[i];
+        }
+    }
 
     if (nvs_get_u8(s_nvs, KEY_FIELD_DAY_EN, &u8v) == ESP_OK) out->field_day_en = (u8v != 0);
     out->fd_class[0] = '\0';
@@ -1282,6 +1324,104 @@ void settings_set_rbn_en(bool v)
     s_pending.rbn_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_RBN_EN);
+}
+
+// ---- Known WiFi networks ---------------------------------------------------
+//
+// Kept in its own small array rather than in qmx_settings_t, so the hot
+// settings_load_all() copies do not have to carry it (see settings.h). Loaded
+// once in settings_init(), persisted through the normal dirty/flush path.
+
+int settings_wifi_known_count(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    int n = s_known_n;
+    xSemaphoreGive(s_mutex);
+    return n;
+}
+
+int settings_wifi_known_get(wifi_known_t *out, int max)
+{
+    if (!out || max <= 0 || !s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    int n = s_known_n < max ? s_known_n : max;
+    memcpy(out, s_known, (size_t)n * sizeof(wifi_known_t));
+    xSemaphoreGive(s_mutex);
+    return n;
+}
+
+void settings_wifi_known_remember(const char *ssid, const char *pass)
+{
+    if (!s_ready || !ssid || !ssid[0]) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+
+    // Already known? Move it to the front, refreshing the password in case it
+    // changed. Otherwise insert at the front and push the rest down, dropping
+    // the least-recently-used entry when the list is full.
+    int at = -1;
+    for (int i = 0; i < s_known_n; i++)
+        if (strcmp(s_known[i].ssid, ssid) == 0) { at = i; break; }
+
+    bool changed = false;
+    if (at == 0) {
+        // Front already: only a password change is worth a write.
+        if (strcmp(s_known[0].pass, pass ? pass : "") != 0) {
+            snprintf(s_known[0].pass, sizeof(s_known[0].pass), "%s", pass ? pass : "");
+            changed = true;
+        }
+    } else {
+        int from = (at > 0) ? at : (s_known_n < WIFI_KNOWN_MAX ? s_known_n : WIFI_KNOWN_MAX - 1);
+        for (int i = from; i > 0; i--) s_known[i] = s_known[i - 1];
+        snprintf(s_known[0].ssid, sizeof(s_known[0].ssid), "%s", ssid);
+        snprintf(s_known[0].pass, sizeof(s_known[0].pass), "%s", pass ? pass : "");
+        if (at < 0 && s_known_n < WIFI_KNOWN_MAX) s_known_n++;
+        changed = true;
+    }
+    xSemaphoreGive(s_mutex);
+    if (changed) mark_dirty(DIRTY_WIFI_KNOWN);
+}
+
+void settings_wifi_known_set_all(const wifi_known_t *list, int n)
+{
+    if (!s_ready) return;
+    if (n < 0) n = 0;
+    if (n > WIFI_KNOWN_MAX) n = WIFI_KNOWN_MAX;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    memset(s_known, 0, sizeof(s_known));
+    s_known_n = 0;
+    for (int i = 0; i < n && list; i++) {
+        if (!list[i].ssid[0]) continue;      // skip blanks from a hand-edited file
+        s_known[s_known_n++] = list[i];
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WIFI_KNOWN);
+}
+
+void settings_wifi_known_forget(const char *ssid)
+{
+    if (!s_ready || !ssid || !ssid[0]) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool changed = false;
+    for (int i = 0; i < s_known_n; i++) {
+        if (strcmp(s_known[i].ssid, ssid) != 0) continue;
+        for (int j = i; j < s_known_n - 1; j++) s_known[j] = s_known[j + 1];
+        memset(&s_known[--s_known_n], 0, sizeof(s_known[0]));
+        changed = true;
+        break;
+    }
+    xSemaphoreGive(s_mutex);
+    if (changed) mark_dirty(DIRTY_WIFI_KNOWN);
+}
+
+void settings_wifi_known_clear(void)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    memset(s_known, 0, sizeof(s_known));
+    s_known_n = 0;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WIFI_KNOWN);
 }
 
 void settings_set_tx_tone_hz(uint16_t v)
