@@ -42,7 +42,16 @@ typedef struct {
     char call[ADIF_CALL_MAX];
     char band[ADIF_BAND_MAX];
 } worked_entry_t;
-static worked_entry_t s_worked[ADIF_WORKED_CACHE];
+// PSRAM, allocated in adif_log_init(). As a static array this was 22.5 KB of
+// internal .bss - the single largest consumer in the whole firmware - and every
+// byte of it was pointless: the cache is scanned linearly, on demand, from the
+// UI and the QSO machine. Nothing here is latency-critical or DMA-adjacent.
+// Indexing is unchanged (s_worked[i] reads the same on a pointer); only the
+// declaration, the allocation and the NULL guards differ. See the internal-RAM
+// audit note at the top of this file's history: internal free sat at 23 KB with
+// a 0 KB watermark, which is what turned esp_hosted allocation failures into
+// reboots.
+static worked_entry_t *s_worked;
 static int            s_worked_count = 0;
 
 // ---------------------------------------------------------------------------
@@ -77,6 +86,7 @@ static void write_field(FILE *f, const char *name, const char *value)
 // ignores overflow). band may be NULL/"" (e.g. an out-of-band log entry).
 static void cache_add(const char *call, const char *band)
 {
+    if (!s_worked) return;          // allocation failed at init; cache disabled
     if (!call || !call[0]) return;
     if (!band) band = "";
     for (int i = 0; i < s_worked_count; i++) {
@@ -200,6 +210,13 @@ static void repair_legacy_submode_field(void)
 void adif_log_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
+
+    s_worked = heap_caps_calloc(ADIF_WORKED_CACHE, sizeof(worked_entry_t),
+                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_worked) {
+        // Not fatal: worked-before lookups just answer "no". Logging still works.
+        ESP_LOGE(TAG, "no PSRAM for the worked-call cache - worked-before disabled");
+    }
 
     esp_vfs_spiffs_conf_t conf = {
         .base_path              = "/spiffs",

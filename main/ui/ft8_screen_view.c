@@ -197,7 +197,32 @@ static lv_obj_t *s_btn_adif     = NULL;  // "ADIF-log" button - swaps to "Pileup
 static int        s_cq_parity   = -1;
 
 static lv_obj_t *s_list         = NULL;
-static row_widgets_t s_rows[MAX_ROWS];
+// PSRAM (allocated in the init path below): 8 KB of internal .bss as an array,
+// and it holds nothing but LVGL widget pointers touched from the LVGL thread.
+static row_widgets_t *s_rows;
+
+// One shared snapshot of the whole heard-station table, in PSRAM.
+//
+// There used to be TWO `static ft8_call_t snap[FT8_CALL_TABLE_SIZE]` locals in
+// this file, 11.25 KB each, 22.5 KB of internal .bss between them. They are
+// static rather than automatic on purpose - an 11 KB frame on taskLVGL's ~8 KB
+// stack is exactly what crashed v0.20.0 - but internal RAM is the scarcest pool
+// on this board, so PSRAM is where they belong.
+//
+// Sharing one buffer is safe because every caller runs on the LVGL thread and
+// none of them reenters another: row_activate() is a touch callback and
+// rebuild_list() is called from the refresh timer and from touch callbacks, all
+// on the same task.
+static ft8_call_t *table_snapshot(void)
+{
+    static ft8_call_t *buf;
+    if (!buf) {
+        buf = heap_caps_malloc((size_t)FT8_CALL_TABLE_SIZE * sizeof(ft8_call_t),
+                               MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!buf) ESP_LOGE(TAG, "no PSRAM for the heard-table snapshot");
+    }
+    return buf;
+}
 
 static lv_timer_t *s_t_refresh  = NULL;
 static lv_timer_t *s_t_clock    = NULL;
@@ -380,6 +405,7 @@ static lv_obj_t *make_label_styled(lv_obj_t *row, const lv_style_t *style)
 // hold gate fires.  List is still scrollable while preview is active.
 static void row_clear_preview(void)
 {
+    if (!s_rows) return;
     if (s_row_preview >= 0 && s_row_preview < MAX_ROWS && s_rows[s_row_preview].row)
         lv_obj_set_style_bg_opa(s_rows[s_row_preview].row, LV_OPA_0, 0);
     s_row_preview = -1;
@@ -402,6 +428,7 @@ static void row_set_preview(int idx)
 // previous row and any preview highlight first.
 static void row_set_hover(int new_idx)
 {
+    if (!s_rows) return;
     if (new_idx == s_row_hover) return;
     row_clear_preview();
     // Clear previous highlight
@@ -520,6 +547,7 @@ static void grey_modal_show(const char *call)
 
 static void row_activate(int idx)
 {
+    if (!s_rows) return;
     if (idx < 0 || idx >= MAX_ROWS) return;
     row_widgets_t *r = &s_rows[idx];
     if (!r->row || !r->l_call || lv_obj_has_flag(r->row, LV_OBJ_FLAG_HIDDEN)) return;
@@ -541,7 +569,8 @@ static void row_activate(int idx)
 
     s_confirmed_row_idx = idx;
 
-    static ft8_call_t snap[FT8_CALL_TABLE_SIZE];
+    ft8_call_t *snap = table_snapshot();
+    if (!snap) return;
     int n = 0;
     ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
     const ft8_call_t *match = NULL;
@@ -577,6 +606,7 @@ static void row_activate(int idx)
 
 void ft8_screen_view_nudge_confirm(int delta)
 {
+    if (!s_rows) return;
     if (s_confirmed_row_idx < 0) return;
     int idx = s_confirmed_row_idx + delta;
     if (idx < 0 || idx >= MAX_ROWS || !s_rows[idx].row
@@ -709,6 +739,7 @@ static void row_touch_cb(lv_event_t *e)
 
 static void build_row(int i)
 {
+    if (!s_rows) return;
     row_widgets_t *r = &s_rows[i];
 
     r->row = lv_obj_create(s_list);
@@ -763,6 +794,7 @@ static void build_row(int i)
 
 static void update_row(int i, const ft8_call_t *src)
 {
+    if (!s_rows) return;
     row_widgets_t *r = &s_rows[i];
     if (!r->row) return;
 
@@ -889,6 +921,7 @@ static void update_row(int i, const ft8_call_t *src)
 
 static void hide_row(int i)
 {
+    if (!s_rows) return;
     row_widgets_t *r = &s_rows[i];
     if (!r->row) return;
     if (!lv_obj_has_flag(r->row, LV_OBJ_FLAG_HIDDEN)) {
@@ -905,7 +938,8 @@ static void hide_row(int i)
 
 static void rebuild_list(void)
 {
-    static ft8_call_t snap[FT8_CALL_TABLE_SIZE];
+    ft8_call_t *snap = table_snapshot();
+    if (!snap) return;              // retried on the next refresh tick
     int n = 0;
     ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
     qsort(snap, n, sizeof(ft8_call_t), cmp_cq_then_snr);
@@ -2211,7 +2245,12 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // Pre-allocate the row pool at boot, when ~199 KB internal heap is
     // free. See MAX_ROWS comment block for the beta3 rationale.
     size_t heap_before = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    memset(s_rows, 0, sizeof(s_rows));
+    if (!s_rows) {
+        s_rows = heap_caps_calloc(MAX_ROWS, sizeof(row_widgets_t),
+                                  MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_rows) { ESP_LOGE(TAG, "no PSRAM for the row pool"); return; }
+    }
+    memset(s_rows, 0, (size_t)MAX_ROWS * sizeof(row_widgets_t));
     for (int i = 0; i < MAX_ROWS; i++) {
         build_row(i);
     }
