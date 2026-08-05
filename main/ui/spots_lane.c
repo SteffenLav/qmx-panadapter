@@ -18,15 +18,21 @@
 
 static const char *TAG = "spots_ui";
 
-// Object pool sizes. Ticks are cheap (a 2 px rect), labels are not - each is an
-// LVGL label with its own text buffer - so there are deliberately more ticks
-// than labels: at high density the lane degrades to "ticks everywhere, names on
+// Object pool sizes. Lines are cheap (a 2 px rect), labels are not - each is an
+// LVGL label with its own text buffer - so there are deliberately more lines
+// than labels: at high density this degrades to "a line for every spot, names on
 // the ones worth naming" rather than dropping spots entirely.
 #define MAX_TICKS   40
 #define MAX_LABELS  16
 
-#define ROW_H       17
-#define ROW_TOP      2    // first label row, just inside the top of the spectrum
+// Labels sit at the VERTICAL MIDDLE of the spectrum and each line runs from the
+// top of the spectrum DOWN to its own label, so the line points into the name it
+// belongs to (operator's layout, 2026-08-05). A second-row label therefore gets a
+// slightly longer line - which is why the label pass has to run BEFORE the line
+// pass, since the line length depends on which row the name landed in.
+#define SPOT_FONT   (&lv_font_montserrat_22)
+#define ROW_H       25    // montserrat_22 plus a little breathing room
+#define LABEL_ROWS   3    // see pick_row()
 #define LABEL_PAD    5    // horizontal clearance between two labels in a row
 
 // See-through: the vertical line is faint enough to read the trace through it,
@@ -85,6 +91,7 @@ typedef struct {
     uint32_t colour[SPOTS_MAX];   // per-spot, parallel to buf
     uint8_t  worked[SPOTS_MAX];   // per-spot, parallel to buf
     lv_opa_t opa[SPOTS_MAX];      // per-spot, parallel to buf
+    int8_t   row[SPOTS_MAX];      // label row per VISIBLE index, -1 = unnamed
 } work_t;
 static work_t *s_w;
 
@@ -132,12 +139,18 @@ static int name_priority(int i, int64_t now)
 }
 
 // Greedy row assignment. Pure, so the self-test can drive it directly: returns
-// the row a label of width w starting at x can use, or -1 if both are taken.
+// the row a label of width w starting at x can use, or -1 if every row is taken.
 // row_end[] carries the right edge of the last label placed in each row and is
 // advanced on success.
-static int pick_row(int x, int w, int row_end[2])
+//
+// THREE rows, raised from two when the font went 14 -> 22: the wider labels
+// collided far more often, and a real 4-spot cluster on the 20 m CW POTA
+// frequencies was getting only 2 names. The old argument against a third row was
+// that it cost waterfall pixels - void now that this is an overlay, with free
+// vertical space between the middle of the spectrum and its bottom edge.
+static int pick_row(int x, int w, int row_end[LABEL_ROWS])
 {
-    for (int r = 0; r < 2; r++) {
+    for (int r = 0; r < LABEL_ROWS; r++) {
         if (x >= row_end[r] + LABEL_PAD) { row_end[r] = x + w; return r; }
     }
     return -1;
@@ -158,9 +171,8 @@ static void repaint(void)
 {
     if (!s_lane || !s_visible || !s_w) return;
 
-    // Opting out empties the strip rather than reclaiming its pixels: the lane
-    // height is compile-time (it sizes the waterfall buffer), so the honest
-    // behaviour is a blank strip, not a relaid-out screen. See spots_lane.h.
+    // Opting out simply draws nothing. Now that this is an overlay rather than a
+    // strip it costs no layout height either way, so there is nothing to reflow.
     qmx_settings_t st;
     settings_load_all(&st);
     if (!st.spots_en) { hide_all(); return; }
@@ -222,26 +234,9 @@ static void repaint(void)
         s_w->x[j+1] = xi; s_w->idx[j+1] = ii;
     }
 
-    // Ticks for everything visible (up to the pool), so density is always
-    // honestly represented even when names are dropped.
-    int tick_n = 0;
-    for (int i = 0; i < vis_n && tick_n < MAX_TICKS; i++) {
-        int si = s_w->idx[i];
-        lv_obj_t *t = s_ticks[tick_n];
-        if (!t) break;
-        lv_obj_set_pos(t, s_w->x[i], 0);
-        lv_obj_set_style_bg_color(t, lv_color_hex(s_w->colour[si]), 0);
-        // Scale the line's translucency by age so a fading spot fades as a whole.
-        lv_obj_set_style_bg_opa(t, (lv_opa_t)((int)LINE_OPA_MAX * s_w->opa[si] / 255), 0);
-        lv_obj_clear_flag(t, LV_OBJ_FLAG_HIDDEN);
-        s_hits[tick_n].x = s_w->x[i];
-        s_hits[tick_n].freq_hz = s_w->buf[si].freq_hz;
-        tick_n++;
-    }
-    s_hit_n = tick_n;
-
     // Which visible spots deserve a name: best-priority first, capped by the
     // label pool.
+    for (int i = 0; i < vis_n; i++) s_w->row[i] = -1;
     for (int i = 0; i < vis_n; i++) s_w->order[i] = (uint16_t)i;
     for (int i = 1; i < vis_n; i++) {
         uint16_t oi = s_w->order[i];
@@ -253,11 +248,12 @@ static void repaint(void)
         s_w->order[j+1] = oi;
     }
 
-    // Greedy two-row packing. Two rows, not three: a third row would cost
-    // another 15 px of waterfall for the rare case that two rows cannot hold
-    // the names, and at that density the lane is unreadable anyway - degrading
-    // to ticks-only is the more honest answer than stacking labels into a wall.
-    int row_end[2] = { -10000, -10000 };
+    // Greedy row packing, best-priority first. Past LABEL_ROWS the display would
+    // be an unreadable wall of text, so extra spots keep their line and lose only
+    // their name.
+    const int mid = s_lane_h / 2;
+    int row_end[LABEL_ROWS];
+    for (int r = 0; r < LABEL_ROWS; r++) row_end[r] = -10000;
     int used = 0;
     for (int k = 0; k < vis_n && used < MAX_LABELS; k++) {
         int i  = s_w->order[k];
@@ -277,7 +273,7 @@ static void repaint(void)
         int row = pick_row(x, w, row_end);
         if (row < 0) continue;                          // no room: line only
 
-        lv_obj_set_pos(lb, x, ROW_TOP + row * ROW_H);
+        lv_obj_set_pos(lb, x, mid + row * ROW_H);
         lv_obj_set_style_text_color(lb, lv_color_hex(s_w->colour[si]), 0);
         lv_obj_set_style_text_opa(lb, s_w->opa[si], 0);
         lv_obj_set_style_bg_opa(lb, (lv_opa_t)((int)LABEL_BG_OPA * s_w->opa[si] / 255), 0);
@@ -285,8 +281,31 @@ static void repaint(void)
         // every spectrum gesture), so it carries its own frequency.
         lv_obj_set_user_data(lb, (void *)(uintptr_t)sp->freq_hz);
         lv_obj_clear_flag(lb, LV_OBJ_FLAG_HIDDEN);
+        s_w->row[i] = (int8_t)row;          // the line pass needs this
         used++;
     }
+
+    // Lines: top of the spectrum down to this spot's own label, so each line
+    // points into the name it belongs to. Everything visible gets a line even
+    // when its name was dropped, so density stays honestly represented.
+    int tick_n = 0;
+    for (int i = 0; i < vis_n && tick_n < MAX_TICKS; i++) {
+        int si = s_w->idx[i];
+        lv_obj_t *t = s_ticks[tick_n];
+        if (!t) break;
+        int row = s_w->row[i];
+        int len = mid + (row > 0 ? row * ROW_H : 0);
+        lv_obj_set_pos(t, s_w->x[i], 0);
+        lv_obj_set_size(t, 2, len);
+        lv_obj_set_style_bg_color(t, lv_color_hex(s_w->colour[si]), 0);
+        // Scale the line's translucency by age so a fading spot fades as a whole.
+        lv_obj_set_style_bg_opa(t, (lv_opa_t)((int)LINE_OPA_MAX * s_w->opa[si] / 255), 0);
+        lv_obj_clear_flag(t, LV_OBJ_FLAG_HIDDEN);
+        s_hits[tick_n].x = s_w->x[i];
+        s_hits[tick_n].freq_hz = s_w->buf[si].freq_hz;
+        tick_n++;
+    }
+    s_hit_n = tick_n;
 
     // Off-screen counts, so the lane says "there is more, that way" instead of
     // silently implying the band is empty outside the window.
@@ -389,7 +408,7 @@ void spots_lane_build(lv_obj_t *parent, int y, int h)
     }
     for (int i = 0; i < MAX_LABELS; i++) {
         lv_obj_t *lb = lv_label_create(lane);
-        lv_obj_set_style_text_font(lb, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(lb, SPOT_FONT, 0);
         lv_label_set_text(lb, "");
         // Dark backing so bright text stays readable where it crosses a strong
         // signal, kept translucent so the trace still shows through.
@@ -409,7 +428,7 @@ void spots_lane_build(lv_obj_t *parent, int y, int h)
     // Off-screen counts go in the BOTTOM corners: the top rows belong to the
     // callsigns, and the spectrum's top-right is the burger deadzone.
     s_edge_l = lv_label_create(lane);
-    lv_obj_set_style_text_font(s_edge_l, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_edge_l, SPOT_FONT, 0);
     lv_obj_set_style_text_color(s_edge_l, lv_color_hex(0xA0A0A0), 0);
     lv_obj_set_style_bg_color(s_edge_l, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_edge_l, LABEL_BG_OPA, 0);
@@ -417,7 +436,7 @@ void spots_lane_build(lv_obj_t *parent, int y, int h)
     lv_obj_add_flag(s_edge_l, LV_OBJ_FLAG_HIDDEN);
 
     s_edge_r = lv_label_create(lane);
-    lv_obj_set_style_text_font(s_edge_r, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(s_edge_r, SPOT_FONT, 0);
     lv_obj_set_style_text_color(s_edge_r, lv_color_hex(0xA0A0A0), 0);
     lv_obj_set_style_bg_color(s_edge_r, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_edge_r, LABEL_BG_OPA, 0);
@@ -447,6 +466,10 @@ void spots_lane_build(lv_obj_t *parent, int y, int h)
 // instead of silently pointing callsigns at the wrong frequencies.
 
 #define T_CHECK(cond, ...) do { if (!(cond)) { ESP_LOGE(TAG, "SELFTEST FAIL: " __VA_ARGS__); fails++; } } while (0)
+
+// The overlay's height is passed in at build time, but the row geometry has to be
+// checkable without it, so the test pins the value ui.c actually uses.
+#define SPECTRUM_H_ASSUMED 200
 
 void spots_lane_selftest(void)
 {
@@ -493,19 +516,26 @@ void spots_lane_selftest(void)
     }
 
     // --- two-row packing
-    int re[2] = { -10000, -10000 };
+    int re[LABEL_ROWS];
+    for (int r = 0; r < LABEL_ROWS; r++) re[r] = -10000;
     T_CHECK(pick_row(100, 50, re) == 0, "first label should take row 0");
     T_CHECK(pick_row(100, 50, re) == 1, "overlapping label should fall to row 1");
-    T_CHECK(pick_row(100, 50, re) == -1, "third overlapping label should be tick-only");
-    // Clear of both: back to row 0.
+    T_CHECK(pick_row(100, 50, re) == 2, "third overlapping label should fall to row 2");
+    T_CHECK(pick_row(100, 50, re) == -1, "fourth overlapping label should be line-only");
+    // Clear of all rows: back to row 0.
     T_CHECK(pick_row(400, 50, re) == 0, "well-separated label should return to row 0");
     // Exactly LABEL_PAD clear is allowed; one pixel less is not.
-    int re2[2] = { -10000, -10000 };
+    int re2[LABEL_ROWS];
+    for (int r = 0; r < LABEL_ROWS; r++) re2[r] = -10000;
     pick_row(0, 50, re2);
     T_CHECK(pick_row(50 + LABEL_PAD, 50, re2) == 0, "exactly LABEL_PAD clear should fit row 0");
-    int re3[2] = { -10000, -10000 };
+    int re3[LABEL_ROWS];
+    for (int r = 0; r < LABEL_ROWS; r++) re3[r] = -10000;
     pick_row(0, 50, re3);
     T_CHECK(pick_row(50 + LABEL_PAD - 1, 50, re3) == 1, "one px short should go to row 1");
+    // The bottom row must still fit inside the spectrum, above the edge counters.
+    T_CHECK((SPECTRUM_H_ASSUMED / 2) + (LABEL_ROWS - 1) * ROW_H + 22 < SPECTRUM_H_ASSUMED,
+            "row %d would overflow the spectrum", LABEL_ROWS - 1);
 
     s_view_lo = save_lo; s_view_hi = save_hi;
 
