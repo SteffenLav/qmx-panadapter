@@ -101,6 +101,16 @@ typedef struct {
 } work_t;
 static work_t *s_w;
 
+// What each drawn callsign points at, so a tap can act on it. The label carries
+// its index here in user_data (stored +1, so 0 means "nothing").
+typedef struct { uint32_t freq_hz; uint8_t mode; uint32_t colour; } tap_target_t;
+static tap_target_t s_label_target[MAX_LABELS];
+
+// Nearest OFF-screen spot on each side, within the current band. Drives the
+// "<3" / "5>" counters, which are tappable: they are the only way to reach a
+// spot you cannot see. 0 = nothing that side.
+static tap_target_t s_off_l, s_off_r;
+
 // ---- helpers ---------------------------------------------------------------
 
 static int freq_to_x(uint32_t hz)
@@ -226,6 +236,9 @@ static void repaint(void)
     // operator to tune somewhere that has nothing to do with where they are.
     // "Just outside this window, on this band" is the only reading that earns a
     // direction arrow.
+    s_off_l.freq_hz = 0;
+    s_off_r.freq_hz = 0;
+
     uint32_t band_lo = 0, band_hi = 0xFFFFFFFFu;
     {
         uint32_t mid = s_view_lo + (s_view_hi - s_view_lo) / 2;
@@ -238,8 +251,22 @@ static void repaint(void)
     for (int i = 0; i < n; i++) {
         if (s_w->opa[i] == LV_OPA_TRANSP) continue;
         uint32_t f = s_w->buf[i].freq_hz;
-        if (f < s_view_lo) { if (f >= band_lo) off_l++; continue; }
-        if (f > s_view_hi) { if (f <= band_hi) off_r++; continue; }
+        // Off-screen: count it, and remember the NEAREST one so the counter can
+        // be tapped to jump there.
+        if (f < s_view_lo) {
+            if (f >= band_lo) {
+                off_l++;
+                if (f > s_off_l.freq_hz) { s_off_l.freq_hz = f; s_off_l.mode = (uint8_t)s_w->buf[i].mode; s_off_l.colour = s_w->colour[i]; }
+            }
+            continue;
+        }
+        if (f > s_view_hi) {
+            if (f <= band_hi) {
+                off_r++;
+                if (!s_off_r.freq_hz || f < s_off_r.freq_hz) { s_off_r.freq_hz = f; s_off_r.mode = (uint8_t)s_w->buf[i].mode; s_off_r.colour = s_w->colour[i]; }
+            }
+            continue;
+        }
         int x = freq_to_x(s_w->buf[i].freq_hz);
         if (x < 0 || x >= DISPLAY_H_RES) continue;
         s_w->idx[vis_n] = (uint16_t)i;
@@ -299,8 +326,11 @@ static void repaint(void)
         lv_obj_set_style_text_opa(lb, s_w->opa[si], 0);
         lv_obj_set_style_bg_opa(lb, (lv_opa_t)((int)LABEL_BG_OPA * s_w->opa[si] / 255), 0);
         // The label is the tap target (the container cannot be, or it would eat
-        // every spectrum gesture), so it carries its own frequency.
-        lv_obj_set_user_data(lb, (void *)(uintptr_t)sp->freq_hz);
+        // every spectrum gesture). It carries an index into s_label_target[]
+        // rather than a bare frequency, because a tap has to set the MODE too.
+        s_label_target[used].freq_hz = sp->freq_hz;
+        s_label_target[used].mode    = (uint8_t)sp->mode;
+        lv_obj_set_user_data(lb, (void *)(uintptr_t)(used + 1));
         lv_obj_clear_flag(lb, LV_OBJ_FLAG_HIDDEN);
         s_w->row[i] = (int8_t)row;          // the line pass needs this
         used++;
@@ -337,11 +367,15 @@ static void repaint(void)
     if (off_l > 0 && s_edge_l) {
         snprintf(b, sizeof(b), "<%d", off_l);
         lv_label_set_text(s_edge_l, b);
+        // Coloured like the spot it will take you to, so it reads as part of the
+        // same picture rather than as chrome (operator's request).
+        lv_obj_set_style_text_color(s_edge_l, lv_color_hex(s_off_l.colour ? s_off_l.colour : COL_POTA), 0);
         lv_obj_clear_flag(s_edge_l, LV_OBJ_FLAG_HIDDEN);
     }
     if (off_r > 0 && s_edge_r) {
         snprintf(b, sizeof(b), "%d>", off_r);
         lv_label_set_text(s_edge_r, b);
+        lv_obj_set_style_text_color(s_edge_r, lv_color_hex(s_off_r.colour ? s_off_r.colour : COL_POTA), 0);
         lv_obj_align(s_edge_r, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
         lv_obj_clear_flag(s_edge_r, LV_OBJ_FLAG_HIDDEN);
     }
@@ -380,15 +414,52 @@ static void tick_cb(lv_timer_t *t)
 // container: a transparent container over the whole spectrum would swallow
 // tap-to-tune, the one-finger pan and pinch-zoom, all of which live there. Tiny
 // targets are also why each label gets a generous ext_click_area.
+// The CAT mode a spot should be worked in. NULL means "leave the mode alone" -
+// an unknown mode is not a reason to change the radio out from under the
+// operator. SSB splits at 10 MHz by the usual convention (LSB below, USB above).
+static const char *cat_mode_for_spot(uint8_t mode, uint32_t hz)
+{
+    switch ((spot_mode_t)mode) {
+    case SPOT_MODE_CW:   return "CW";
+    case SPOT_MODE_DIGI: return "DIGI";
+    case SPOT_MODE_SSB:  return hz >= 10000000u ? "USB" : "LSB";
+    default:             return NULL;
+    }
+}
+
+// Tune to a spot: frequency AND mode. Frequency alone is not much use - landing
+// on a CW activation while the radio is in USB just gives you a whistle
+// (operator's point, 2026-08-05).
+//
+// Bandwidth is deliberately NOT set here. The QMX keeps a filter per mode and
+// reloads it on a mode CHANGE, so the right width follows from the mode by
+// itself - and forcing one would collide with the hard-won SSB filter dance
+// (MMSSB|Filter RX + MMSSB|Bandwidth + FW; suppression, see CLAUDE.md).
+static void tune_to_spot(const tap_target_t *t, const char *what)
+{
+    if (!t->freq_hz) return;
+    const char *mode = cat_mode_for_spot(t->mode, t->freq_hz);
+    ESP_LOGI(TAG, "%s -> %lu Hz mode=%s", what, (unsigned long)t->freq_hz,
+             mode ? mode : "(unchanged)");
+    cat_set_frequency_forced(t->freq_hz);   // deliberate user action, bypass the rate limiter
+    ui_update_frequency(t->freq_hz);        // optimistic, same as tap-to-tune on the spectrum
+    // Via the poll task: the LVGL thread must never write the CDC pipe directly
+    // (it races the FA/MD/FW poll and the QMX answers '?;').
+    if (mode) cat_request_mode(mode);
+}
+
 static void label_click_cb(lv_event_t *e)
 {
     lv_obj_t *lb = lv_event_get_target(e);
-    uint32_t hz = (uint32_t)(uintptr_t)lv_obj_get_user_data(lb);
-    if (!hz) return;
-    ESP_LOGI(TAG, "spot tap -> %lu Hz", (unsigned long)hz);
-    cat_set_frequency_forced(hz);      // deliberate user action, bypass the rate limiter
-    ui_update_frequency(hz);           // optimistic, same as tap-to-tune on the spectrum
+    int idx = (int)(uintptr_t)lv_obj_get_user_data(lb) - 1;
+    if (idx < 0 || idx >= MAX_LABELS) return;
+    tune_to_spot(&s_label_target[idx], "spot tap");
 }
+
+// The off-screen counters are tappable: they are the only route to a spot that
+// is not on screen, and tuning to it brings it into view.
+static void edge_l_click_cb(lv_event_t *e) { (void)e; tune_to_spot(&s_off_l, "spot tap (off-screen left)"); }
+static void edge_r_click_cb(lv_event_t *e) { (void)e; tune_to_spot(&s_off_r, "spot tap (off-screen right)"); }
 
 // ---- build -----------------------------------------------------------------
 
@@ -459,6 +530,13 @@ void spots_lane_build(lv_obj_t *parent, int y, int h)
     lv_obj_set_style_bg_color(s_edge_l, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_edge_l, LABEL_BG_OPA, 0);
     lv_obj_align(s_edge_l, LV_ALIGN_BOTTOM_LEFT, 0, -2);
+    // Tappable, with a deliberately large fingertip margin: the text is only a
+    // few characters in the corner of the spectrum, far too small to hit
+    // reliably otherwise. (ext_click_area is clipped to the parent, so this
+    // grows the target upward and sideways, not past the overlay's edge.)
+    lv_obj_add_flag(s_edge_l, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(s_edge_l, 26);
+    lv_obj_add_event_cb(s_edge_l, edge_l_click_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_flag(s_edge_l, LV_OBJ_FLAG_HIDDEN);
 
     s_edge_r = lv_label_create(lane);
@@ -467,6 +545,13 @@ void spots_lane_build(lv_obj_t *parent, int y, int h)
     lv_obj_set_style_bg_color(s_edge_r, lv_color_hex(0x000000), 0);
     lv_obj_set_style_bg_opa(s_edge_r, LABEL_BG_OPA, 0);
     lv_obj_align(s_edge_r, LV_ALIGN_BOTTOM_RIGHT, 0, -2);
+    // Tappable, with a deliberately large fingertip margin: the text is only a
+    // few characters in the corner of the spectrum, far too small to hit
+    // reliably otherwise. (ext_click_area is clipped to the parent, so this
+    // grows the target upward and sideways, not past the overlay's edge.)
+    lv_obj_add_flag(s_edge_r, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(s_edge_r, 26);
+    lv_obj_add_event_cb(s_edge_r, edge_r_click_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_flag(s_edge_r, LV_OBJ_FLAG_HIDDEN);
 
     // Panadapter is the page the UI is built in; ui_apply_saved_mode() turns the
