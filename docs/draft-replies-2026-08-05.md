@@ -132,9 +132,18 @@ occupancy strip is built from that same list, filtered to your parity, i.e.
 precisely the rows being kept. So it filled up and stayed full until you restarted.
 There is now a 10-minute ceiling on that pause.
 
-**WiFi.** Glad the scan is better. Remembering several networks and connecting to
-whichever is present is on the list - it is a change in the most delicate part of
-this firmware, so I would rather do it carefully than squeeze it in.
+**WiFi - your multi-network request is done.** It remembers up to 6 networks that
+have actually worked, most recent first. You never have to enter them anywhere:
+every successful connection is remembered automatically. If the network it is set
+to will not come up, it scans and switches to whichever remembered network is on
+the air, within a few seconds. And when you pick a known network by hand from the
+Scan list, its password is filled in for you.
+
+The list is in the config file you can download and re-upload, under
+`[wifi_known]`, so it is inspectable and restorable like everything else.
+
+Tested here by connecting to a phone hotspot and then switching the hotspot off -
+it moved itself back to the house network without being touched.
 
 Good to hear there were no crashes in those three days.
 
