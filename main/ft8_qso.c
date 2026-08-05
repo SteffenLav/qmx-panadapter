@@ -128,13 +128,25 @@ static int64_t            s_last_done_ts;
 // if the just-worked station addresses us again with a report (not RR73/73/RRR,
 // which would mean they DID hear us) inside the window, re-send our final once
 // more - bounded, and without logging again.
-#define FINAL_RESEND_WINDOW_SEC 240
-#define FINAL_RESEND_MAX          3
+// Raised from 240 s / 3 on a field report (Roy KI0ER, 2026-08-05): a partner who
+// never heard our final repeats every cycle for minutes, and 3 tries inside 4
+// minutes ran out while he was still asking - at which point we went back to
+// calling CQ over the top of him. A human would simply keep answering, so the
+// budget is now 6 inside 5 minutes.
+#define FINAL_RESEND_WINDOW_SEC 300
+#define FINAL_RESEND_MAX          6
 static char               s_final_call[FT8_CALL_MAX_LEN];  // who we owe a final to ('\0' = nobody)
 static int                s_final_freq_hz;                 // our tone for it
 static ft8_tx_kind_t      s_final_kind;                    // 73 (pounce) or RR73 (CQ-run)
 static char               s_final_extra[16];               // the final's third field (matches ft8_tx_request_t)
 static int                s_final_resends;
+
+// True while a just-worked partner is still asking for our final. Set once per
+// RX slot by advance(); read by rearm_current(), which is the single choke point
+// for CQ arming. This is what stops us calling CQ over somebody who is waiting
+// on us even after the re-send budget is spent - staying silent is the polite
+// answer, and it was Roy KI0ER's own suggestion.
+static bool s_final_hold = false;
 
 // Duplicate-log guard. The log is written once at WAIT_DONE -> DONE, but that
 // state can legitimately be entered twice for one contact - most easily by
@@ -699,6 +711,15 @@ static void rearm_current(void)
     // advance()'s no-answer path sees s_cq_exhausted and ends the session.
     // This is the single choke point for ALL CQ arming (on_tx_complete and
     // the arm_current_if_idle safety nets both come through here).
+    // Somebody we just worked is still asking for our final: do not start
+    // calling CQ over the top of him. advance() sets this once per RX slot and
+    // clears it as soon as he stops (or the window closes), at which point the
+    // CQ resumes through the normal arm_current_if_idle() safety net.
+    if (st == FT8_QSO_CQ && s_final_hold) {
+        ESP_LOGI(TAG, "holding CQ: %s is still asking for our final", s_final_call);
+        return;
+    }
+
     if (st == FT8_QSO_CQ) {
         qmx_settings_t qs;
         settings_load_all(&qs);
@@ -1592,9 +1613,32 @@ void ft8_qso_advance(int64_t slot_sec)
         lock();
         ft8_qso_state_t stf = s_state;
         unlock();
-        if ((stf == FT8_QSO_IDLE || stf == FT8_QSO_DONE || stf == FT8_QSO_CQ) &&
-            final_resend_if_still_asked(slot_sec))
-            return;
+        if (stf == FT8_QSO_IDLE || stf == FT8_QSO_DONE || stf == FT8_QSO_CQ) {
+            // Is a just-worked partner STILL asking for our final? Evaluated
+            // regardless of whether we have re-sends left, because the answer
+            // also decides whether we are allowed to start talking to anyone
+            // else this slot.
+            int64_t now_s = (int64_t)time(NULL);
+            bool asking = s_final_call[0] &&
+                          (now_s - s_last_done_ts) <= FINAL_RESEND_WINDOW_SEC &&
+                          partner_still_awaiting_final(slot_sec, s_final_call);
+            s_final_hold = asking;
+
+            if (asking) {
+                if (final_resend_if_still_asked(slot_sec)) return;
+
+                // Budget spent, but he is still calling. Say nothing rather than
+                // call CQ over him: disarm anything queued (an ARMED burst fires
+                // on its own otherwise - the lesson from the v1.3.3 busy-station
+                // hold) and give the slot up. rearm_current() will not arm a new
+                // CQ while s_final_hold is set.
+                if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ARMED) ft8_tx_disarm();
+                ft8_status_set("%s still asking - holding TX", s_final_call);
+                return;
+            }
+        } else {
+            s_final_hold = false;      // mid-exchange with someone else
+        }
     }
 
     // Comeback auto-resume: a partner we abandoned recently decoded THIS slot

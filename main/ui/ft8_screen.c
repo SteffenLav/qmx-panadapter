@@ -26,6 +26,25 @@ static const char *TAG = "ft8_screen";
 // genuinely here now. Tunable.
 #define FT8_ROW_STALE_SEC   90
 
+// Hard ceiling on the parity-aware aging PAUSE above. The pause itself is right
+// - while we transmit over a station's slot its silence tells us nothing - but it
+// had no upper bound, and during a CQ run we are parity-locked essentially all
+// the time. So every row on our TX parity was kept FOREVER: ten minutes, an
+// hour, whatever the session lasted.
+//
+// That is not cosmetic. build_tone_occupancy() (ft8_tx.c) reads this same table
+// and filters it to OUR parity - precisely the rows being retained - so the
+// occupancy strip filled up and stayed full, the automatic picker ran out of
+// "free" tones, and only a restart cleared it. Field-reported by Roy KI0ER
+// (2026-08-05): "the offset strip turns totally red ... all slots taken", cured
+// by restarting, which is exactly what an unbounded retain looks like.
+//
+// 10 minutes: long enough to ride out any realistic CQ run or exchange without
+// the list churning, short enough that a station who left is not still claiming
+// a frequency. A stale "occupied" is worse than a missing row - it steers us
+// away from a tone that is actually free.
+#define FT8_ROW_PAUSED_MAX_SEC 600
+
 static ft8_call_t s_table[FT8_CALL_TABLE_SIZE];
 static SemaphoreHandle_t s_mutex = NULL;
 
@@ -258,7 +277,7 @@ void ft8_screen_get_all(ft8_call_t *out, int max, int *count_out)
     for (int i = 0; i < FT8_CALL_TABLE_SIZE; i++) {
         if (!s_table[i].occupied) continue;
         if (now - s_table[i].last_utc > FT8_ROW_STALE_SEC) {
-            if (tx_lock) {
+            if (tx_lock && (now - s_table[i].last_utc) <= FT8_ROW_PAUSED_MAX_SEC) {
                 // Row parity on the active protocol's grid (same nearest-slot
                 // rounding as ft8_screen_view's E/O indicator).
                 int64_t sidx = ((int64_t)s_table[i].last_utc * 1000 + per_ms / 2) / per_ms;
