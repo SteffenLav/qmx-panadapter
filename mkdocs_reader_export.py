@@ -121,9 +121,20 @@ def on_post_build(config, **kwargs):
         if r.returncode == 0:
             log.info("reader_export: %s", (r.stdout or "").strip())
         else:
-            log.warning("reader_export: pack_manual.py failed: %s",
-                        (r.stderr or r.stdout or "").strip())
-    except Exception as e:  # noqa: BLE001
+            # HARD FAIL, not a warning. Two reasons this must stop the build:
+            #
+            # 1. main/manual.bin is a FIRMWARE INPUT. A failed pack leaves the
+            #    previous blob in place, so the next build silently ships the old
+            #    manual - invisible until an operator notices a stale chapter list.
+            # 2. The packer verifies the context-help deep links. Letting that
+            #    through as a warning defeats the point of checking them at all:
+            #    the whole reason the check lives at build time is that rotted
+            #    deep links are otherwise found by users, not by us.
+            msg = (r.stderr or r.stdout or "").strip()
+            log.error("reader_export: pack_manual.py FAILED: %s", msg)
+            raise RuntimeError("pack_manual.py failed - manual.bin not regenerated:\n" + msg)
+    except FileNotFoundError as e:
+        # Genuinely absent tooling: warn, do not break an unrelated docs build.
         log.warning("reader_export: pack_manual.py could not run: %s", e)
 
     # 3) latest.json (update-check fallback) -> site/latest.json

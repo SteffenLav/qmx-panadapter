@@ -126,6 +126,8 @@ def main():
         payload += data
         off += len(data)
 
+    verify_help_topics(entries)
+
     blob = MAGIC + struct.pack("<II", VERSION, len(entries)) + index + payload
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
     with open(a.out, "wb") as f:
@@ -133,6 +135,57 @@ def main():
 
     print("packed %d entries (%d pages + toc) -> %s (%d bytes, %.1f KB)"
           % (len(entries), len(entries) - 1, a.out, len(blob), len(blob) / 1024.0))
+
+
+def verify_help_topics(entries):
+    """Check every context-help deep link in main/ui/help_topics.c still resolves.
+
+    Deep links rot silently: a heading gets reworded, and three releases later half
+    the "help me with this" buttons quietly land on the top of a long page while
+    nobody notices. Since the manual is packed here from the same markdown the site
+    uses, this is the one place that can prove the links are still good - so a
+    renamed heading breaks the BUILD instead of the feature.
+
+    Deliberately lenient about finding the table: if help_topics.c is absent or
+    unparseable the check is skipped with a warning rather than failing a build for
+    an unrelated reason. It only fails on a link it has positively shown to be dead.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    src = os.path.join(here, "..", "main", "ui", "help_topics.c")
+    if not os.path.isfile(src):
+        print("pack_manual: no help_topics.c - skipping deep-link check")
+        return
+
+    with open(src, "r", encoding="utf-8") as f:
+        text = f.read()
+
+    # { HELP_X, "page.md", "anchor", "label" }  - anchor may be empty
+    rows = re.findall(
+        r'\{\s*(HELP_[A-Z0-9_]+)\s*,\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\}',
+        text)
+    if not rows:
+        print("pack_manual: no help topics parsed - skipping deep-link check")
+        return
+
+    pages = {rel: data.decode("utf-8", "replace") for rel, data in entries}
+    problems = []
+    for topic, page, anchor, label in rows:
+        if page not in pages:
+            problems.append("%s (%s): page '%s' is not in the manual" % (topic, label, page))
+            continue
+        if not anchor:
+            continue
+        # Same rule the firmware applies: case-insensitive substring of a heading.
+        headings = [ln.lstrip("#").strip()
+                    for ln in pages[page].splitlines() if ln.lstrip().startswith("#")]
+        if not any(anchor.lower() in h.lower() for h in headings):
+            problems.append("%s (%s): no heading in '%s' contains '%s'"
+                            % (topic, label, page, anchor))
+
+    if problems:
+        sys.exit("pack_manual: context-help deep links are broken:\n  - "
+                 + "\n  - ".join(problems))
+    print("pack_manual: %d context-help deep link(s) verified" % len(rows))
 
 
 if __name__ == "__main__":

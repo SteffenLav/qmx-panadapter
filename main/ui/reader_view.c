@@ -66,6 +66,28 @@ static lv_obj_t *s_banner_lbl   = NULL;
 static lv_obj_t *s_body         = NULL;   // scrollable flex column of content
 static lv_obj_t *s_toc_btn      = NULL;   // header "Contents" button
 static lv_obj_t *s_toc_panel    = NULL;   // scrollable contents overlay (hidden unless open)
+
+// Context help: the heading we were asked to land on, and the rendered label for
+// it once found. Set by reader_view_open_help() before the page loads; consumed
+// (and cleared) by render_markdown(). Empty = land at the top, as before.
+static char      s_want_anchor[80] = {0};
+static lv_obj_t *s_anchor_obj      = NULL;
+
+// Case-insensitive substring search. Deliberately not strcasestr(): that is a
+// GNU extension and not reliably available here. Substring rather than exact
+// match so an anchor survives small heading edits ("Tap to Tune" still finds
+// "### 2. Tap to Tune") - the anchors are checked at build time by
+// tools/pack_manual.py, so a genuinely broken one fails the build rather than
+// silently landing on the page top.
+static bool strcasestr_local(const char *hay, const char *needle)
+{
+    if (!hay || !needle || !needle[0]) return false;
+    size_t nl = strlen(needle);
+    for (const char *p = hay; *p; p++) {
+        if (strncasecmp(p, needle, nl) == 0) return true;
+    }
+    return false;
+}
 static lv_timer_t *s_timer      = NULL;
 
 static bool s_active = false;
@@ -614,8 +636,15 @@ static void render_markdown(char *buf)
                                      (level == 3) ? &lv_font_montserrat_24 :
                                                     &lv_font_montserrat_22;
                 uint32_t col = (level <= 3) ? UI_COLOR_ACCENT_GOLD : UI_COLOR_TEXT;
-                add_label(cleaned, f, col, block_count ? 22 : 4, 0);
+                lv_obj_t *hl = add_label(cleaned, f, col, block_count ? 22 : 4, 0);
                 block_count++;
+                // Context help: remember the first heading that matches the
+                // requested anchor, so the render can finish and THEN scroll to
+                // it (its y is only known once the flex column is laid out).
+                if (hl && !s_anchor_obj && s_want_anchor[0] &&
+                    strcasestr_local(cleaned, s_want_anchor)) {
+                    s_anchor_obj = hl;
+                }
                 if (!title[0] && level == 1) { snprintf(title, MD_TITLE_SZ, "%s", cleaned); }
                 continue;
             }
@@ -744,7 +773,21 @@ static void render_markdown(char *buf)
     #undef FLUSH_PARA
 
     set_page_title(title);
-    lv_obj_scroll_to_y(s_body, 0, LV_ANIM_OFF);
+    if (s_anchor_obj) {
+        // Lay the flex column out first - a child's y is meaningless until then.
+        lv_obj_update_layout(s_body);
+        lv_coord_t y = lv_obj_get_y(s_anchor_obj);
+        if (y < 0) y = 0;
+        lv_obj_scroll_to_y(s_body, y, LV_ANIM_OFF);
+        ESP_LOGI(TAG, "context help: landed on '%s' (y=%d)", s_want_anchor, (int)y);
+    } else {
+        if (s_want_anchor[0])
+            ESP_LOGW(TAG, "context help: heading '%s' not found on this page - showing the top",
+                     s_want_anchor);
+        lv_obj_scroll_to_y(s_body, 0, LV_ANIM_OFF);
+    }
+    s_want_anchor[0] = 0;   // one-shot: a later manual page starts at the top
+    s_anchor_obj = NULL;
     ESP_LOGI(TAG, "rendered %d blocks", block_count);
     heap_caps_free(S);   // title already copied into the label above
 }
@@ -1008,6 +1051,19 @@ static void back_btn_cb(lv_event_t *e)
         snprintf(prev, sizeof(prev), "%s", s_hist[--s_hist_n]);
         load_page(prev, NULL, false);   // don't re-push
     }
+}
+
+void reader_view_open_help(const char *page_rel, const char *anchor)
+{
+    if (!page_rel || !page_rel[0]) return;
+    snprintf(s_want_anchor, sizeof(s_want_anchor), "%s", anchor ? anchor : "");
+    s_anchor_obj = NULL;
+    ESP_LOGI(TAG, "context help: %s%s%s", page_rel,
+             anchor && anchor[0] ? " -> " : "", anchor ? anchor : "");
+    // Show first so the overlay is already sliding in while the page renders;
+    // the load is synchronous off the embedded blob, so this feels instant.
+    reader_view_show();
+    reader_net_fetch(page_rel, false);
 }
 
 // Exit: leave the Reader entirely (returns to whatever mode was underneath).

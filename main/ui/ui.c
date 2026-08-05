@@ -25,6 +25,7 @@
 #include "bandplan.h"
 #include "spots_lane.h"
 #include "net/spots.h"
+#include "help_topics.h"
 #include "wifi_config.h"
 #include "tune_modal.h"
 #include "memory_modal.h"
@@ -7094,7 +7095,12 @@ static void ui_advance_page(void)
 // back on top so a left->right swipe (or the Back button) exits.
 void ui_open_user_manual(void)
 {
-    reader_view_show();
+    // Land where the operator actually is rather than on the contents page. The
+    // device already knows the page, the mode and whether a burst is armed, which
+    // is a better question than anything anyone could type on glass - and Contents
+    // is still one tap away for browsing. Costs no new UI at all.
+    help_open(help_topic_for_current_context());
+
     lv_obj_t *rdr = reader_view_get_container();
     if (rdr) lv_obj_move_foreground(rdr);
     if (s_left_edge_strip) lv_obj_move_foreground(s_left_edge_strip);
