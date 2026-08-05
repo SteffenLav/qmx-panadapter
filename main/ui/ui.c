@@ -1943,6 +1943,12 @@ static void sim_border_keepalive_cb(lv_timer_t *t)
 static lv_obj_t *s_iq_warn_banner = NULL;
 static bool      s_iq_warn_active = false;
 
+// Layer 3 of the context help: a warning the operator cannot act on is only half
+// a message. These handlers take them straight to the section that explains the
+// fix, which is the moment a manual is actually worth having.
+static void iq_warn_help_cb(lv_event_t *e)   { (void)e; help_open(HELP_TROUBLE_IQ); }
+static void qmx_wait_help_cb(lv_event_t *e)  { (void)e; help_open(HELP_TROUBLE_USB); }
+
 void ui_set_iq_mode_warning(bool active)
 {
     s_iq_warn_active = active;
@@ -3265,12 +3271,15 @@ void ui_init(lv_display_t *disp)
     lv_obj_set_style_border_width(s_iq_warn_banner, 0, 0);
     lv_obj_set_style_radius(s_iq_warn_banner, 0, 0);
     lv_obj_clear_flag(s_iq_warn_banner, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(s_iq_warn_banner, LV_OBJ_FLAG_CLICKABLE);
+    // Tappable: it spans the top of the screen only while the warning is up, so
+    // it cannot steal touches the rest of the time.
+    lv_obj_add_flag(s_iq_warn_banner, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_iq_warn_banner, iq_warn_help_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_add_flag(s_iq_warn_banner, LV_OBJ_FLAG_HIDDEN);
     {
         lv_obj_t *lbl = lv_label_create(s_iq_warn_banner);
         lv_label_set_text(lbl, LV_SYMBOL_WARNING " QMX IQ mode not confirmed - spectrum may be "
-                           "mirrored/shifted. Power-cycle the QMX or check System Config > IQ Mode.");
+                           "mirrored/shifted. Power-cycle the QMX or check System Config > IQ Mode.  [tap for help]");
         lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_22, 0);
         lv_obj_center(lbl);
@@ -3305,6 +3314,10 @@ void ui_init(lv_display_t *disp)
         // labels for a poor-man's-bold effect; dropped as visually messy.
         const char *txt = "Now turn on or reboot your QMX/+";
         lv_obj_t *lbl = lv_label_create(s_qmx_wait_overlay);
+        // Only the LABEL is tappable - never the overlay, which is full-screen
+        // and would swallow every touch (including the drawer) while waiting.
+        lv_obj_add_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(lbl, qmx_wait_help_cb, LV_EVENT_CLICKED, NULL);
         lv_label_set_text(lbl, txt);
         lv_obj_set_width(lbl, 1040);
         lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);

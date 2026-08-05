@@ -31,10 +31,16 @@ static const help_entry_t s_topics[] = {
     { HELP_LOGGING,             "guide/ft8-tx.md",              "",                  "QSO logging"         },
     { HELP_UPLOADS,             "guide/web-ui.md",              "",                  "Log uploads"         },
 
-    { HELP_TROUBLE_USB,         "reference/troubleshooting.md", "",                  "Radio not connecting" },
-    { HELP_TROUBLE_WIFI,        "reference/troubleshooting.md", "",                  "WiFi problems"        },
-    { HELP_TROUBLE_NO_DECODES,  "reference/troubleshooting.md", "",                  "No FT8 decodes"       },
-    { HELP_TROUBLE_TIME,        "guide/time-sync.md",           "",                  "Clock is wrong"       },
+    // Troubleshooting anchors point at headings that ALREADY exist in
+    // troubleshooting.md - no new headings were invented for this. The build
+    // check keeps them honest if the wording ever changes.
+    { HELP_TROUBLE_USB,         "reference/troubleshooting.md", "won't reconnect",           "Radio not connecting" },
+    { HELP_TROUBLE_WIFI,        "reference/troubleshooting.md", "WiFi won't connect",        "WiFi problems"        },
+    { HELP_TROUBLE_NO_DECODES,  "reference/troubleshooting.md", "decoding is slow or stops", "No FT8 decodes"       },
+    { HELP_TROUBLE_TIME,        "reference/troubleshooting.md", "Time is wrong",             "Clock is wrong"       },
+    { HELP_TROUBLE_NO_TX,       "reference/troubleshooting.md", "doesn't key the QMX",       "TX not keying"        },
+    { HELP_TROUBLE_FLAT,        "reference/troubleshooting.md", "Spectrum is flat",          "No signal on screen"  },
+    { HELP_TROUBLE_IQ,          "reference/troubleshooting.md", "shifted/mirrored",          "Spectrum looks wrong" },
 };
 
 const help_entry_t *help_topic_get(help_topic_t t)
