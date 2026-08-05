@@ -4,19 +4,19 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.3.6** — 2026-08-03
+**v1.4.0** — 2026-08-05
 
-A pure fixes release — no new operating features, but two of the fixes close problems as old as the project. Everything was found and verified in one long bench session with a serial monitor attached.
+Live spots on the spectrum, and three long-standing causes of instability finally root-caused rather than patched around.
 
-- **The "restart the QMX again and again" USB mystery — solved. It was two separate bugs.**
-    - **Fixed on the Tab5:** powering the QMX off while it streamed could jam the Tab5's USB port with the dead connection — the radio became invisible no matter how many times you restarted it, and only a Tab5 reboot recovered. The USB teardown is repaired, and the Tab5 additionally heals the port by itself if a device sits unrecognized. Net effect: QMX off → on reconnects in about a second, hands off.
-    - **Lives in the QMX's own firmware** (reported to QRP Labs; reproduced on QMX firmware 1_03_002 *and* 1_04_004): after some Tab5 restarts the QMX answers USB enumeration incorrectly until the radio itself is restarted. The Tab5 can't fix that one — but it now detects it and shows **"QMX USB is stuck - power-cycle the QMX to reconnect"** instead of playing dead.
-- **A crash on radio power-on is fixed** (Dennis WN4FLA — three crashes in one morning). Turning the radio on while the Tab5 waited in FT8 mode — or changing bands around that moment — could reboot the Tab5. Reproduced on the bench with Dennis's exact steps, root-caused from the serial backtrace (the FT8 engine's periodic restart could overlap its own shutdown), fixed, and torture-tested with every off/on and band-change combination we could invent.
-- **WiFi Scan works away from home now.** Scan always said "No networks found" whenever your stored network was out of range — precisely the situation Scan exists for (hotels, POTA sites). The automatic reconnect loop was wiping the scan results before they could be read. Verified five-for-five on hotel WiFi.
-- **The web page shows live TX status in FT8/FT4 mode** (Dennis WN4FLA). Red while transmitting — including the "call 2 of 4" counter from v1.3.5's CQ auto-stop — amber armed/waiting, green QSO complete, orange timeout, and the persistent "CQ stopped after N calls - no answer". The browser tab title carries a red dot while transmitting, visible from across the room even with the tab unfocused.
-- **"Diag(saved)" delivers the crash log now.** With an SD card inserted it used to serve an empty or stale file — hiding exactly the data it exists for (found via Dennis's empty post-crash download).
+- **See who is on the air, on your own spectrum.** Park activations from **POTA** are drawn onto the trace at the frequency the station is actually using — bright callsign with a thin line down to the frequency scale, the way a FlexRadio shows them. **Grey means you have already worked that station on this band**, so you can see at a glance who you still need. **Press and drag** across the callsigns and lift your finger to pick one: the Tab5 tunes to it **and sets the mode**. Spots fade with age and disappear after 30 minutes, because a spot is a claim about *now*. Counts in the corners show how many more are just outside your window; tap one to go there. **RBN** (the CW skimmer network) can be added as a second source — off by default, since unlike POTA it is a continuous feed.
+- **All internet uploads were broken — fixed.** QRZ, eQSL, LoTW *and* the update check were failing together on affected units: the encryption layer could not even start, because a hardware crypto engine was being starved of one specific kind of memory. If your uploads have been erroring, this is very likely why.
+- **52 KB of memory recovered, and it explains a whole family of faults.** Found by measuring rather than guessing: the firmware's own tables were sitting in the one genuinely scarce pool. The free-memory low-water mark went from **0 KB to 32 KB**. That single cause covers the SD card refusing to remount, USB failing to re-open after a radio power-cycle, the upload failure above, and reboots after an hour of FT8 (Dennis WN4FLA).
+- **Power-cycling the QMX recovers immediately.** Switching the radio off could leave the Tab5 pinning a CPU core on the dead USB connection — frozen screen, no recovery, reboot the only way out. Radio off → on now reconnects in a couple of seconds.
+- **WiFi remembers your networks** (Roy KI0ER). Up to six, automatically, with nothing to fill in — every successful connection is remembered. If the network it is set to is not there, it finds a remembered one that is, within seconds. Picking a known network from **Scan** fills in its password.
+- **Roy KI0ER's FT8 findings — four of five were real.** A partner still asking for your final gets it re-sent up to six times, and once that is used up the Tab5 **stays silent instead of calling CQ over him**. The occupancy strip no longer **fills up permanently** during a long CQ run. It now says **EVEN / ODD / BOTH**, so you know which time window you are looking at. And when hunting it gives the other time window a turn, keeping both halves of the band current.
+- **The QRZ / eQSL / LoTW setup is no longer hidden** until you have logged a contact — backwards, since you want it set up *before* operating (Brian WA6JFK went through three browsers looking for it).
 
-### Installing v1.3.6
+### Installing v1.4.0
 
 1. Use the one-click flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases)
 2. Or follow [Build from Source](build/build.md)
@@ -24,6 +24,8 @@ A pure fixes release — no new operating features, but two of the fixes close p
 Your settings are preserved during a normal flash.
 
 ## Previous Releases
+
+**v1.3.6** — 2026-08-03 — A pure fixes release, two of them closing problems as old as the project: the **"restart the QMX again and again" USB mystery solved** as two separate bugs (the Tab5-side one fixed with self-healing; the QMX-side one detected and explained on screen, reported to QRP Labs), a **crash on radio power-on** fixed (Dennis WN4FLA), **WiFi Scan working away from home**, **live TX status on the web page**, and the **"Diag(saved)" download delivering the crash log** with an SD card inserted.
 
 **v1.3.5** — 2026-07-31 — Don WB0LQW's three requests, Roy KI0ER's bug report and the drawer touch fix: **CQ stops calling after a limit you set** (long-press Call CQ → **CQ stop**, never/1-5/10, live "call 2 of 4" counter, one extra listening slot after the final call), the **QSO log opens in your browser** (QSO Logs → View / edit log — sortable columns, per-row delete, type-DELETE Delete-all) with **Delete all on the Tab5 too** (two-tap, "ALL 34?"), an escape for the **busy-station hold** (TAP TO CANCEL), the **settings drawer stops stealing your finger** mid-drag, **QMX volume verified identical to the radio's own LCD** and capped at 50 dB (Randy N4OPI), and a latent bug fixed before it bit anyone: clearing the log would have silently disabled all future QRZ/eQSL/LoTW uploads.
 
@@ -197,7 +199,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 1. **Web-UI audio streaming** — listen to the receiver in any browser on your LAN, demodulated on the Tab5. Already working in development; held for quality tuning and an overnight streaming soak
 2. **CW page** — canned-message CW TX memories, then decoded-CW display
-3. **Live microSD mirroring while WiFi is up** — the card and the WiFi co-processor share a DMA controller, so continuous mirroring only works with WiFi off. v1.3.2 made the behaviour explicit and reliable (one complete backup per start-up with WiFi on); making it continuous in both cases needs the underlying bus contention solved
+3. **Live microSD mirroring while WiFi is up** — continuous mirroring currently only runs with WiFi off; v1.3.2 made that explicit and reliable (one complete backup per start-up with WiFi on). This was believed to be bus contention between the card and the WiFi co-processor. v1.4.0 found that a large part of it was actually a memory shortage — the pool the card needs to mount had been squeezed to almost nothing, and now has room again — so this may already behave better than documented. Needs a retest before the behaviour is changed
 
 ### Phase 6.3 (FPS Recovery)
 
@@ -215,7 +217,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.3.4.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.4.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 
