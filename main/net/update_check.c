@@ -5,6 +5,7 @@
 #include "update_check.h"
 #include "ui/reader_view.h"
 #include "wifi/wifi.h"
+#include "net/webserver_ws.h"     // webserver_ws_set_paused
 #include "util/psram_task.h"
 
 #include "esp_http_client.h"
@@ -188,6 +189,18 @@ static bool do_check(void)
     // request inherently carries, and nothing is stored on the device.
     // DISCLOSED in the release notes + manual; see also the PSK Reporter
     // "Software in use" table, which counts on-air users of this firmware.
+    // Keep the spectrum WebSocket off the link for the duration, the same
+    // courtesy every other network path here pays (spots.c, the QRZ/eQSL/LoTW
+    // uploads, the log and file-browser transfers). This board's esp_hosted link
+    // is low-throughput and the ~10 fps WS stream saturates the uplink; a fetch
+    // landing on top of it is the documented wedge-prone combination.
+    //
+    // This was MISSING until 2026-08-05 and had never mattered, because all
+    // outbound TLS failed at RNG seeding - so this function could never actually
+    // reach the network. Fixing TLS turned it into the one network consumer on
+    // the board not following the house rule.
+    webserver_ws_set_paused(true);
+
     size_t len = 0;
     int status = http_get(LATEST_JSON_URL, buf, RESP_MAX_BYTES, &len);
     if (status == 200 && parse_latest_json(buf, tag, sizeof(tag))) {
@@ -197,6 +210,8 @@ static bool do_check(void)
         status = http_get(GITHUB_RELEASES_URL, buf, RESP_MAX_BYTES, &len);
         if (status == 200 && parse_github(buf, tag, sizeof(tag))) got = true;
     }
+
+    webserver_ws_set_paused(false);
     heap_caps_free(buf);
 
     if (!got) { ESP_LOGW(TAG, "no version info available"); return false; }
