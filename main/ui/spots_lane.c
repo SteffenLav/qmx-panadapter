@@ -114,8 +114,21 @@ static work_t *s_w;
 
 // What each drawn callsign points at, so a tap can act on it. The label carries
 // its index here in user_data (stored +1, so 0 means "nothing").
-typedef struct { uint32_t freq_hz; uint8_t mode; uint32_t colour; } tap_target_t;
+typedef struct { uint32_t freq_hz; uint8_t mode; uint32_t colour; int16_t x; } tap_target_t;
 static tap_target_t s_label_target[MAX_LABELS];
+static int          s_label_n = 0;      // how many labels are currently drawn
+
+// Press-drag-release selection, the same gesture the FT8 decode list and the CW
+// memory buttons use: press lights one up, dragging re-snaps to whichever
+// callsign is nearest the finger, lifting acts on it (operator, 2026-08-05).
+//
+// The press must START on a label. That is what keeps the overlay click-through
+// for the spectrum's own tap-to-tune, pan and pinch - only the callsigns are hit
+// targets - and LVGL keeps delivering PRESSING and RELEASED to the object that
+// took the press even once the finger has moved off it, which is exactly the
+// behaviour this needs.
+static int  s_sel  = -1;        // index into s_label_target / s_labels, -1 = none
+static bool s_drag = false;     // a selection gesture is in progress
 
 // Nearest OFF-screen spot on each side, within the current band. Drives the
 // "<3" / "5>" counters, which are tappable: they are the only way to reach a
@@ -218,6 +231,12 @@ static void repaint(void)
 {
     if (!s_lane || !s_visible || !s_w) return;
 
+    // Never rebuild under a finger: a selection gesture is in progress, and
+    // re-laying the labels out would move the thing being pointed at (and leave
+    // s_sel indexing a different station). The picture is at most one second
+    // stale, which is nothing next to yanking the target away mid-drag.
+    if (s_drag) return;
+
     // Opting out simply draws nothing. Now that this is an overlay rather than a
     // strip it costs no layout height either way, so there is nothing to reflow.
     qmx_settings_t st;
@@ -230,6 +249,8 @@ static void repaint(void)
     if (n < 0) return;                 // lock busy: keep the current picture
 
     hide_all();
+    s_sel = -1;             // labels are about to be reassigned
+    s_label_n = 0;
 
     int64_t now = (int64_t)time(NULL);
 
@@ -345,10 +366,13 @@ static void repaint(void)
         // rather than a bare frequency, because a tap has to set the MODE too.
         s_label_target[used].freq_hz = sp->freq_hz;
         s_label_target[used].mode    = (uint8_t)sp->mode;
+        s_label_target[used].colour  = s_w->colour[si];
+        s_label_target[used].x       = (int16_t)s_w->x[i];   // the tick, for drag-snap
         lv_obj_set_user_data(lb, (void *)(uintptr_t)(used + 1));
         lv_obj_clear_flag(lb, LV_OBJ_FLAG_HIDDEN);
         s_w->row[i] = (int8_t)row;          // the line pass needs this
         used++;
+        s_label_n = used;
     }
 
     // Lines: from just under each spot's own label DOWN to the frequency axis, so
@@ -465,12 +489,79 @@ static void tune_to_spot(const tap_target_t *t, const char *what)
     if (mode) cat_request_mode(mode);
 }
 
-static void label_click_cb(lv_event_t *e)
+// Highlight: the callsign inverts - its own colour becomes the fill and the text
+// goes dark. Unmistakable at a glance, and the same "invert to emphasise" idiom
+// the FT8 decode list already uses for own-call rows.
+static void set_highlight(int idx, bool on)
 {
-    lv_obj_t *lb = lv_event_get_target(e);
-    int idx = (int)(uintptr_t)lv_obj_get_user_data(lb) - 1;
-    if (idx < 0 || idx >= MAX_LABELS) return;
-    tune_to_spot(&s_label_target[idx], "spot tap");
+    if (idx < 0 || idx >= MAX_LABELS || !s_labels[idx]) return;
+    lv_obj_t *lb = s_labels[idx];
+    if (on) {
+        lv_obj_set_style_bg_color(lb, lv_color_hex(s_label_target[idx].colour), 0);
+        lv_obj_set_style_bg_opa(lb, LV_OPA_COVER, 0);
+        lv_obj_set_style_text_color(lb, lv_color_hex(0x101010), 0);
+    } else {
+        lv_obj_set_style_bg_color(lb, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(lb, LABEL_BG_OPA, 0);
+        lv_obj_set_style_text_color(lb, lv_color_hex(s_label_target[idx].colour), 0);
+    }
+}
+
+// Nearest DRAWN callsign to a screen x. Unbounded on purpose: once the gesture
+// has started on a spot, the finger is committed to picking one of them, so
+// dragging past the last label should hold that label rather than select nothing.
+static int nearest_label(int px)
+{
+    int best = -1, best_d = 0;
+    for (int i = 0; i < s_label_n; i++) {
+        if (!s_labels[i] || lv_obj_has_flag(s_labels[i], LV_OBJ_FLAG_HIDDEN)) continue;
+        int d = px > s_label_target[i].x ? px - s_label_target[i].x
+                                        : s_label_target[i].x - px;
+        if (best < 0 || d < best_d) { best = i; best_d = d; }
+    }
+    return best;
+}
+
+static void select_at_point(void)
+{
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) return;
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    int idx = nearest_label(p.x);
+    if (idx < 0 || idx == s_sel) return;
+    if (s_sel >= 0) set_highlight(s_sel, false);
+    s_sel = idx;
+    set_highlight(s_sel, true);
+}
+
+static void label_gesture_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+
+    if (code == LV_EVENT_PRESSED) {
+        lv_obj_t *lb = lv_event_get_target(e);
+        int idx = (int)(uintptr_t)lv_obj_get_user_data(lb) - 1;
+        if (idx < 0 || idx >= MAX_LABELS) return;
+        s_drag = true;                 // freezes repaint - see repaint()
+        if (s_sel >= 0 && s_sel != idx) set_highlight(s_sel, false);
+        s_sel = idx;
+        set_highlight(s_sel, true);
+    } else if (code == LV_EVENT_PRESSING) {
+        if (s_drag) select_at_point();
+    } else if (code == LV_EVENT_RELEASED) {
+        int idx = s_sel;
+        if (s_sel >= 0) set_highlight(s_sel, false);
+        s_sel  = -1;
+        s_drag = false;
+        if (idx >= 0) tune_to_spot(&s_label_target[idx], "spot pick");
+    } else if (code == LV_EVENT_PRESS_LOST) {
+        // Finger left the screen area or LVGL took the press away: abandon the
+        // selection rather than tuning somewhere the operator did not confirm.
+        if (s_sel >= 0) set_highlight(s_sel, false);
+        s_sel  = -1;
+        s_drag = false;
+    }
 }
 
 // The off-screen counters are tappable: they are the only route to a spot that
@@ -530,11 +621,16 @@ void spots_lane_build(lv_obj_t *parent, int y, int h)
         lv_obj_set_style_bg_opa(lb, LABEL_BG_OPA, 0);
         lv_obj_set_style_pad_hor(lb, 2, 0);
         lv_obj_set_style_radius(lb, 2, 0);
-        // The label is the tap target. ext_click_area gives a fingertip
-        // something to hit without making the drawn box any bigger.
+        // The label is the gesture target. ext_click_area gives a fingertip
+        // something to hit without making the drawn box any bigger; the press
+        // only has to LAND on a callsign, after which dragging re-snaps to
+        // whichever one is nearest (see label_gesture_cb).
         lv_obj_add_flag(lb, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_ext_click_area(lb, 10);
-        lv_obj_add_event_cb(lb, label_click_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_set_ext_click_area(lb, LABEL_EXT_CLICK);
+        lv_obj_add_event_cb(lb, label_gesture_cb, LV_EVENT_PRESSED,    NULL);
+        lv_obj_add_event_cb(lb, label_gesture_cb, LV_EVENT_PRESSING,   NULL);
+        lv_obj_add_event_cb(lb, label_gesture_cb, LV_EVENT_RELEASED,   NULL);
+        lv_obj_add_event_cb(lb, label_gesture_cb, LV_EVENT_PRESS_LOST, NULL);
         lv_obj_add_flag(lb, LV_OBJ_FLAG_HIDDEN);
         s_labels[i] = lb;
     }
