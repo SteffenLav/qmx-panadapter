@@ -30,9 +30,10 @@ those on glass is painful.
    the device, so QRZ, eQSL, LoTW and the update check all fail together. It is
    root-caused and fixed for the next release.
 
-If you can send the log - web interface, "Diag(saved)" - I can tell you which one
-you hit. If it contains "ctr_drbg_seed" it was fault 2, and the fix is already in
-hand.
+If you can send the log, I can tell you which one you hit: in the web interface,
+the bottom bar has a **Files** menu with **"Diagnostic download"** - that saves two
+files, and the one ending `-saved.txt` is the one that survives a power-off. If it
+contains "ctr_drbg_seed" it was fault 2, and the fix is already in hand.
 
 Re-entering WiFi, callsign and location after a clean install is expected - a
 clean install wipes everything by design. The flasher warns about it, but the
