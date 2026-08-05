@@ -41,6 +41,7 @@ static const char *TAG = "spots_ui";
 #define ROW_H       25    // montserrat_22 plus a little breathing room
 #define LABEL_ROWS   3    // see pick_row()
 #define LABEL_PAD    5    // horizontal clearance between two labels in a row
+#define LABEL_EXT_CLICK 10  // fingertip margin around a label's hit area
 
 // The line is drawn at the SAME opacity as its callsign (operator's request), so
 // the two read as one object and a faint spot is faint in both. See-through comes
@@ -74,15 +75,11 @@ static lv_obj_t *s_labels[MAX_LABELS];
 static lv_obj_t *s_edge_l, *s_edge_r;
 
 static int       s_lane_h;         // = SPECTRUM_H; the overlay's own height
+static int       s_lane_y;         // the overlay's top edge in SCREEN coords
 static uint32_t  s_view_lo, s_view_hi;
 static uint32_t  s_drawn_lo, s_drawn_hi;
 static uint32_t  s_drawn_version = 0xFFFFFFFFu;
 static bool      s_visible;
-
-// Spots currently drawn, for hit-testing a tap. Parallel to what we painted.
-typedef struct { int x; uint32_t freq_hz; } hit_t;
-static hit_t s_hits[MAX_TICKS];
-static int   s_hit_n;
 
 // Repaint scratch, allocated ONCE in PSRAM at build time.
 //
@@ -176,10 +173,11 @@ static int label_block_top(int h)
 
 static int label_row_y(int h, int row) { return label_block_top(h) + row * ROW_H; }
 
-// Where a spot's line starts: just under its own label, running to the axis. A
-// spot that lost its name (row < 0) still gets a line, starting where row 0's
-// would, so it marks its frequency without pretending to belong to a label.
-static int line_top_y(int h, int row) { return label_row_y(h, row < 0 ? 0 : row) + ROW_H; }
+// Where a spot's line starts: just under its own label, running to the axis.
+// Only ever called for a NAMED spot - a line with no callsign above it says
+// "something is here" without saying what, which just clutters the trace
+// (operator's call, 2026-08-05). No label, no line.
+static int line_top_y(int h, int row) { return label_row_y(h, row) + ROW_H; }
 
 static void hide_all(void)
 {
@@ -187,7 +185,6 @@ static void hide_all(void)
     for (int i = 0; i < MAX_LABELS; i++) if (s_labels[i]) lv_obj_add_flag(s_labels[i], LV_OBJ_FLAG_HIDDEN);
     if (s_edge_l) lv_obj_add_flag(s_edge_l, LV_OBJ_FLAG_HIDDEN);
     if (s_edge_r) lv_obj_add_flag(s_edge_r, LV_OBJ_FLAG_HIDDEN);
-    s_hit_n = 0;
 }
 
 // ---- repaint ---------------------------------------------------------------
@@ -310,10 +307,15 @@ static void repaint(void)
     }
 
     // Lines: from just under each spot's own label DOWN to the frequency axis, so
-    // the line points at the frequency it marks. Everything visible gets one even
-    // when its name was dropped, so density stays honestly represented.
+    // the line points at the frequency it marks.
+    //
+    // ONLY for spots that got a name. A line with no callsign above it marks a
+    // frequency without saying whose it is, which is clutter rather than
+    // information - and on screen it read as a leftover from a label that had
+    // just aged out. So: no label, no line.
     int tick_n = 0;
     for (int i = 0; i < vis_n && tick_n < MAX_TICKS; i++) {
+        if (s_w->row[i] < 0) continue;          // unnamed: draw nothing at all
         int si = s_w->idx[i];
         lv_obj_t *t = s_ticks[tick_n];
         if (!t) break;
@@ -326,11 +328,8 @@ static void repaint(void)
         // Same opacity as the callsign, so line and name read as one object.
         lv_obj_set_style_bg_opa(t, s_w->opa[si], 0);
         lv_obj_clear_flag(t, LV_OBJ_FLAG_HIDDEN);
-        s_hits[tick_n].x = s_w->x[i];
-        s_hits[tick_n].freq_hz = s_w->buf[si].freq_hz;
         tick_n++;
     }
-    s_hit_n = tick_n;
 
     // Off-screen counts, so the lane says "there is more, that way" instead of
     // silently implying the band is empty outside the window.
@@ -359,8 +358,8 @@ static void repaint(void)
     static int l_vis = -1, l_named = -1, l_l = -1, l_r = -1;
     if (vis_n != l_vis || used != l_named || off_l != l_l || off_r != l_r) {
         l_vis = vis_n; l_named = used; l_l = off_l; l_r = off_r;
-        ESP_LOGI(TAG, "lane: %d visible (%d named, %d ticks) off L%d R%d | window %lu-%lu Hz",
-                 vis_n, used, tick_n, off_l, off_r,
+        ESP_LOGI(TAG, "lane: %d visible, %d drawn (name+line) off L%d R%d | window %lu-%lu Hz",
+                 vis_n, used, off_l, off_r,
                  (unsigned long)s_view_lo, (unsigned long)s_view_hi);
     }
 }
@@ -404,6 +403,7 @@ void spots_lane_build(lv_obj_t *parent, int y, int h)
     }
 
     s_lane_h = h;
+    s_lane_y = y;
 
     lv_obj_t *lane = lv_obj_create(parent);
     s_lane = lane;
@@ -575,8 +575,6 @@ void spots_lane_selftest(void)
         T_CHECK(top > ly, "row %d line starts at %d, ABOVE its own label at %d (must drop)", r, top, ly);
         T_CHECK(H - top >= 8, "row %d line is only %d px to the axis", r, H - top);
     }
-    // A spot with no name still gets a line, and it drops too.
-    T_CHECK(line_top_y(H, -1) == line_top_y(H, 0), "unnamed line should start where row 0's does");
     // Rows must be ordered top to bottom.
     for (int r = 1; r < LABEL_ROWS; r++)
         T_CHECK(label_row_y(H, r) > label_row_y(H, r - 1), "row %d is not below row %d", r, r - 1);
@@ -588,6 +586,12 @@ void spots_lane_selftest(void)
 }
 
 lv_obj_t *spots_lane_obj(void) { return s_lane; }
+
+int spots_lane_top_hit_y(void)
+{
+    if (!s_lane_h) return 0;        // not built yet
+    return s_lane_y + label_block_top(s_lane_h) - LABEL_EXT_CLICK;
+}
 
 void spots_lane_set_view(uint32_t lo_hz, uint32_t hi_hz)
 {

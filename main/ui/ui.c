@@ -111,9 +111,11 @@ static lv_obj_t *s_zoom_label  = NULL;  // top bar zoom indicator
 static lv_obj_t *s_zoom_popup  = NULL;  // zoom preset dropdown panel
 
 // Top-bar Band/Mode/BW/Freq/Zoom hit-zones (see hit_zones[] in ui_init): each
-// spans the full 200px screen top as a direct child of `scr`, foregrounded
-// above everything else built so far - including FT8's own decode-row list,
-// whose topmost rows sit under y=200 right beneath the top bar. Their click
+// spans the top of the screen as a direct child of `scr`, foregrounded above
+// everything else built so far - including FT8's own decode-row list, whose
+// topmost rows sit right beneath the top bar. The depth was a flat 200 px until
+// 2026-08-05; it is now cut off just above the live-spot callsigns (see
+// spots_lane_top_hit_y) because at 200 px it swallowed every tap on them. Their click
 // callbacks already bail out for FT8 mode, but bailing in the callback only
 // stops the popup from opening - the hit-zone object still WINS the touch at
 // the screen's z-order level (LVGL hit-tests a parent's direct children in
@@ -3166,10 +3168,28 @@ void ui_init(lv_display_t *disp)
     // Enlarged touch targets for every top-bar dropdown: each label's own
     // ext_click_area doesn't win hit-testing against the spectrum's
     // tap-to-tune handler (different parent/z-order), so add dedicated
-    // transparent overlay buttons on top of everything, each spanning the
-    // full 200px height from the top of the screen down into the spectrum.
-    // No tap-to-tune is needed in the top strip anyway.
+    // transparent overlay buttons on top of everything, reaching from the top of
+    // the screen down into the spectrum. No tap-to-tune is needed up there.
+    //
+    // The depth used to be a flat 200 px, which was simply "cover the whole
+    // spectrum" for convenience - and once live spots arrived it swallowed every
+    // callsign tap, because the labels sit around mid-spectrum and these zones
+    // are foregrounded above everything. Now the depth stops just ABOVE the
+    // topmost callsign's hit area, which still leaves a target far deeper than
+    // the 60 px bar itself.
+    //
+    // Derived from spots_lane's own geometry rather than hard-coded: a change to
+    // the spot font, row height or row count moves this cut-off with it, instead
+    // of quietly re-creating the conflict. (Raising the spots overlay above these
+    // zones instead would have been wrong - the drawer, the modals, the FT8 view
+    // and the reader are all built BEFORE this point, so spot labels would then
+    // draw on top of an open drawer.)
     {
+        int zone_h = spots_lane_top_hit_y() - 4;
+        if (zone_h < TOP_BAR_H + 20) zone_h = TOP_BAR_H + 20;   // never smaller than the bar
+        if (zone_h > 200)            zone_h = 200;              // never deeper than before
+        ESP_LOGI(TAG, "top-bar hit zones: %d px deep (spots labels start at y=%d)",
+                 zone_h, spots_lane_top_hit_y());
         static const struct {
             int x, w;
             lv_event_cb_t cb;
@@ -3182,7 +3202,7 @@ void ui_init(lv_display_t *disp)
         };
         for (size_t i = 0; i < sizeof(hit_zones) / sizeof(hit_zones[0]); i++) {
             lv_obj_t *hit = lv_obj_create(scr);
-            lv_obj_set_size(hit, hit_zones[i].w, 200);
+            lv_obj_set_size(hit, hit_zones[i].w, zone_h);
             lv_obj_set_pos(hit, hit_zones[i].x, 0);
             lv_obj_set_style_bg_opa(hit, LV_OPA_TRANSP, 0);
             lv_obj_set_style_border_width(hit, 0, 0);

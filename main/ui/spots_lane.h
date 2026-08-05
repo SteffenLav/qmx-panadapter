@@ -46,6 +46,13 @@ void spots_lane_set_visible(bool visible);
 // like the other panadapter panes. NULL before spots_lane_build().
 lv_obj_t *spots_lane_obj(void);
 
+// Screen y of the topmost callsign's hit area. The top-bar dropdown hit-zones
+// are cut off just above this so they cannot swallow taps meant for a spot -
+// derived rather than hard-coded so a change to the font, the row height or the
+// row count moves the cut-off with it instead of silently re-creating the
+// conflict. 0 before spots_lane_build().
+int spots_lane_top_hit_y(void);
+
 // Verify the frequency->x mapping, the age fade and the row packing against
 // known values, logging PASS or the individual failures. Runs at boot: the lane
 // is pure geometry, which is the part that cannot be checked by re-reading the
