@@ -1382,15 +1382,19 @@ async function tick() {
     eqslCredsSet = !!s.eqsl_creds_set;
     lotwReady    = !!s.lotw_ready;
     if (!lotwBusy) lotwLink.textContent = lotwReady ? "LoTW upload ↑" : "LoTW setup";
-    // The whole QSO Log menu (ADIF/QRZ/eQSL/LoTW) only makes sense with QSOs
-    // logged, so the group button appears only then and carries the count.
-    if (qsoCount > 0) {
-      adifLink.textContent = "ADIF download ↓ (" + qsoCount + ")";
-      logGroupBtn.textContent = "QSO Logs (" + qsoCount + ") ▲";
-      logGroupBtn.style.display = "";
-    } else {
-      logGroupBtn.style.display = "none";
-    }
+    // ALWAYS shown. It used to appear only once qsoCount > 0, on the reasoning
+    // that the menu "only makes sense with QSOs logged" - but that menu is also
+    // the ONLY route to the QRZ, eQSL and LoTW SETUP, which you want to do
+    // BEFORE you start operating, not after. Brian WA6JFK (2026-08-04) went
+    // looking for the QRZ setup on a freshly flashed unit, could not find it,
+    // and tried three different browsers before someone told him it appears
+    // after the first contact. Hiding setup behind having-already-done-the-thing
+    // is the wrong trade.
+    adifLink.textContent = qsoCount > 0 ? "ADIF download ↓ (" + qsoCount + ")"
+                                        : "ADIF download ↓";
+    logGroupBtn.textContent = qsoCount > 0 ? "QSO Logs (" + qsoCount + ") ▲"
+                                           : "QSO Logs ▲";
+    logGroupBtn.style.display = "";
 
     /* Bottom-center: UTC clock (tick immediately, interval keeps it running) */
     serverUtcAtTick = s.utc_epoch || 0;
