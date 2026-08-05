@@ -25,21 +25,30 @@ static const char *TAG = "spots_ui";
 #define MAX_TICKS   40
 #define MAX_LABELS  16
 
-// Labels sit at the VERTICAL MIDDLE of the spectrum and each line runs from the
-// top of the spectrum DOWN to its own label, so the line points into the name it
-// belongs to (operator's layout, 2026-08-05). A second-row label therefore gets a
-// slightly longer line - which is why the label pass has to run BEFORE the line
-// pass, since the line length depends on which row the name landed in.
+// Vertical layout (operator's, 2026-08-05): the block of callsigns is CENTRED on
+// the middle of the spectrum, and each line drops from its own label DOWNWARDS to
+// the frequency axis at the bottom - so the line points at the frequency it
+// marks. An earlier version ran the line upwards from the label to the top of the
+// spectrum, which pointed at nothing.
+//
+// The block is centred rather than started at the middle so the lowest row still
+// has room for a usable line: with three rows beginning at mid, row 2 had only
+// 25 px left to reach the axis.
+//
+// The label pass therefore has to run BEFORE the line pass, since where the line
+// starts depends on which row the name landed in.
 #define SPOT_FONT   (&lv_font_montserrat_22)
 #define ROW_H       25    // montserrat_22 plus a little breathing room
 #define LABEL_ROWS   3    // see pick_row()
 #define LABEL_PAD    5    // horizontal clearance between two labels in a row
 
-// See-through: the vertical line is faint enough to read the trace through it,
-// and the label carries a dark backing so bright text stays legible where it
-// crosses a strong signal. Both are scaled by the spot's age opacity.
-#define LINE_OPA_MAX  90      // of 255
+// The line is drawn at the SAME opacity as its callsign (operator's request), so
+// the two read as one object and a faint spot is faint in both. See-through comes
+// from the line being 2 px wide, not from dimming it. The label's dark backing is
+// what keeps bright text legible where it crosses a strong signal.
 #define LABEL_BG_OPA  120     // of 255, behind the text only
+
+#define FONT_H        22      // montserrat_22, for the geometry helpers below
 
 // Age fades the spot out: a POTA spot is a claim about *now*, and an hour-old
 // one pointing at an empty frequency is worse than no spot at all.
@@ -156,6 +165,22 @@ static int pick_row(int x, int w, int row_end[LABEL_ROWS])
     return -1;
 }
 
+// ---- vertical geometry (pure, so the self-test can check it) ---------------
+
+// Top of the label block, centred on the middle of the spectrum.
+static int label_block_top(int h)
+{
+    int t = h / 2 - (LABEL_ROWS * ROW_H) / 2;
+    return t < 2 ? 2 : t;
+}
+
+static int label_row_y(int h, int row) { return label_block_top(h) + row * ROW_H; }
+
+// Where a spot's line starts: just under its own label, running to the axis. A
+// spot that lost its name (row < 0) still gets a line, starting where row 0's
+// would, so it marks its frequency without pretending to belong to a label.
+static int line_top_y(int h, int row) { return label_row_y(h, row < 0 ? 0 : row) + ROW_H; }
+
 static void hide_all(void)
 {
     for (int i = 0; i < MAX_TICKS; i++)  if (s_ticks[i])  lv_obj_add_flag(s_ticks[i],  LV_OBJ_FLAG_HIDDEN);
@@ -251,7 +276,6 @@ static void repaint(void)
     // Greedy row packing, best-priority first. Past LABEL_ROWS the display would
     // be an unreadable wall of text, so extra spots keep their line and lose only
     // their name.
-    const int mid = s_lane_h / 2;
     int row_end[LABEL_ROWS];
     for (int r = 0; r < LABEL_ROWS; r++) row_end[r] = -10000;
     int used = 0;
@@ -273,7 +297,7 @@ static void repaint(void)
         int row = pick_row(x, w, row_end);
         if (row < 0) continue;                          // no room: line only
 
-        lv_obj_set_pos(lb, x, mid + row * ROW_H);
+        lv_obj_set_pos(lb, x, label_row_y(s_lane_h, row));
         lv_obj_set_style_text_color(lb, lv_color_hex(s_w->colour[si]), 0);
         lv_obj_set_style_text_opa(lb, s_w->opa[si], 0);
         lv_obj_set_style_bg_opa(lb, (lv_opa_t)((int)LABEL_BG_OPA * s_w->opa[si] / 255), 0);
@@ -285,21 +309,22 @@ static void repaint(void)
         used++;
     }
 
-    // Lines: top of the spectrum down to this spot's own label, so each line
-    // points into the name it belongs to. Everything visible gets a line even
+    // Lines: from just under each spot's own label DOWN to the frequency axis, so
+    // the line points at the frequency it marks. Everything visible gets one even
     // when its name was dropped, so density stays honestly represented.
     int tick_n = 0;
     for (int i = 0; i < vis_n && tick_n < MAX_TICKS; i++) {
         int si = s_w->idx[i];
         lv_obj_t *t = s_ticks[tick_n];
         if (!t) break;
-        int row = s_w->row[i];
-        int len = mid + (row > 0 ? row * ROW_H : 0);
-        lv_obj_set_pos(t, s_w->x[i], 0);
+        int top = line_top_y(s_lane_h, s_w->row[i]);
+        int len = s_lane_h - top;
+        if (len < 4) len = 4;
+        lv_obj_set_pos(t, s_w->x[i], top);
         lv_obj_set_size(t, 2, len);
         lv_obj_set_style_bg_color(t, lv_color_hex(s_w->colour[si]), 0);
-        // Scale the line's translucency by age so a fading spot fades as a whole.
-        lv_obj_set_style_bg_opa(t, (lv_opa_t)((int)LINE_OPA_MAX * s_w->opa[si] / 255), 0);
+        // Same opacity as the callsign, so line and name read as one object.
+        lv_obj_set_style_bg_opa(t, s_w->opa[si], 0);
         lv_obj_clear_flag(t, LV_OBJ_FLAG_HIDDEN);
         s_hits[tick_n].x = s_w->x[i];
         s_hits[tick_n].freq_hz = s_w->buf[si].freq_hz;
@@ -396,8 +421,9 @@ void spots_lane_build(lv_obj_t *parent, int y, int h)
 
     for (int i = 0; i < MAX_TICKS; i++) {
         lv_obj_t *t = lv_obj_create(lane);
-        // A full-height translucent line down the trace, Flex-style.
-        lv_obj_set_size(t, 2, h);
+        // Size and position are set per-repaint (they depend on the label row);
+        // this is just a starting shape.
+        lv_obj_set_size(t, 2, h / 2);
         lv_obj_set_style_border_width(t, 0, 0);
         lv_obj_set_style_radius(t, 0, 0);
         lv_obj_set_style_pad_all(t, 0, 0);
@@ -533,9 +559,27 @@ void spots_lane_selftest(void)
     for (int r = 0; r < LABEL_ROWS; r++) re3[r] = -10000;
     pick_row(0, 50, re3);
     T_CHECK(pick_row(50 + LABEL_PAD - 1, 50, re3) == 1, "one px short should go to row 1");
-    // The bottom row must still fit inside the spectrum, above the edge counters.
-    T_CHECK((SPECTRUM_H_ASSUMED / 2) + (LABEL_ROWS - 1) * ROW_H + 22 < SPECTRUM_H_ASSUMED,
-            "row %d would overflow the spectrum", LABEL_ROWS - 1);
+    // --- vertical geometry
+    const int H = SPECTRUM_H_ASSUMED;
+    // The label block is centred on the middle of the spectrum.
+    int blk_top = label_block_top(H), blk_bot = blk_top + LABEL_ROWS * ROW_H;
+    int blk_mid = (blk_top + blk_bot) / 2;
+    T_CHECK(blk_mid > H / 2 - ROW_H && blk_mid < H / 2 + ROW_H,
+            "label block centre %d is not near mid-spectrum %d", blk_mid, H / 2);
+    T_CHECK(blk_top >= 0, "label block starts above the spectrum (%d)", blk_top);
+    // Every row must fit, and its line must run DOWNWARDS with usable length.
+    for (int r = 0; r < LABEL_ROWS; r++) {
+        int ly = label_row_y(H, r);
+        T_CHECK(ly + FONT_H < H, "row %d text ends at %d, past the spectrum (%d)", r, ly + FONT_H, H);
+        int top = line_top_y(H, r);
+        T_CHECK(top > ly, "row %d line starts at %d, ABOVE its own label at %d (must drop)", r, top, ly);
+        T_CHECK(H - top >= 8, "row %d line is only %d px to the axis", r, H - top);
+    }
+    // A spot with no name still gets a line, and it drops too.
+    T_CHECK(line_top_y(H, -1) == line_top_y(H, 0), "unnamed line should start where row 0's does");
+    // Rows must be ordered top to bottom.
+    for (int r = 1; r < LABEL_ROWS; r++)
+        T_CHECK(label_row_y(H, r) > label_row_y(H, r - 1), "row %d is not below row %d", r, r - 1);
 
     s_view_lo = save_lo; s_view_hi = save_hi;
 

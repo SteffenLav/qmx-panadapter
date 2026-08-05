@@ -4,15 +4,19 @@
 #include "lvgl.h"
 
 // Live POTA/RBN spots drawn at their frequency as a SEE-THROUGH overlay on the
-// spectrum - the FlexRadio/SmartSDR convention: a translucent vertical line down
-// through the trace at the spot's frequency, with a bright callsign at the top.
+// spectrum - the FlexRadio/SmartSDR convention: a bright callsign with a thin
+// vertical line dropping from it to the frequency axis, so the line points at the
+// frequency the spot is on.
 //
 // This replaced a dedicated 36 px strip between the spectrum and the frequency
 // axis (operator's call, 2026-08-05, after seeing both). The overlay is the
 // better trade: it reads the way every other panadapter does, and it gives those
-// 36 px back to the waterfall. The labels sit at the TOP of the spectrum, which
-// is the part of the trace that is empty sky most of the time, so in practice
-// they cover very little signal.
+// 36 px back to the waterfall.
+//
+// The callsign block is centred on the middle of the spectrum and the lines run
+// from there DOWN to the axis. See-through comes from the line being 2 px wide
+// rather than from dimming it - line and callsign are drawn at the same opacity
+// so they read as one object.
 //
 // Implementation note that matters: the spots are LVGL objects composited over
 // the spectrum canvas, NOT drawn into it. The render task rewrites that canvas
