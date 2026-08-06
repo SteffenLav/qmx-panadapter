@@ -94,6 +94,13 @@ void ui_set_iq_mode_warning(bool active);
 // "the spectrum looks mirrored" is offered first when it is actually happening.
 bool ui_iq_mode_warning_active(void);
 
+// Call whenever a help overlay (the docs Reader, the "What's wrong?" panel) opens
+// or closes. While one owns the screen the top-bar hit zones and the drawer/memory
+// edge swipes are dropped out of hit-testing, and the QMX-wait prompt stands down -
+// otherwise Panadapter navigation steals touches meant for the overlay, which is
+// what made the Reader's own Back/Exit buttons untappable.
+void ui_help_overlay_changed(void);
+
 // Called from cat.c's VN; response handler once the QMX firmware version is
 // known, so the drawer can reveal 1_04+-gated sections (AM mode, Tune button)
 // even if it was already built (lazy, first-open) before VN; answered. No-op

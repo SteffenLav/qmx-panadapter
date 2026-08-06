@@ -30,9 +30,15 @@ static lv_obj_t *s_panel = NULL;
 static lv_obj_t *s_rows[HELP_TRIAGE_MAX] = {0};
 static help_topic_t s_row_topic[HELP_TRIAGE_MAX] = {0};
 
+bool help_triage_is_open(void)
+{
+    return s_modal && !lv_obj_has_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void close_modal(void)
 {
     if (s_modal) lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
+    ui_help_overlay_changed();
 }
 
 static void close_cb(lv_event_t *e) { (void)e; close_modal(); }
@@ -188,5 +194,6 @@ void help_triage_open(void)
 
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_modal);
+    ui_help_overlay_changed();   // stand the top-bar hit zones and edge strips down
     ESP_LOGI(TAG, "opened with %d row(s), %d flagged", n, n ? (rows[0].flagged ? 1 : 0) : 0);
 }

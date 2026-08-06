@@ -11,6 +11,7 @@
 #include "reader_view.h"
 #include "reader_net.h"
 #include "ui_theme.h"
+#include "ui.h"                 // ui_help_overlay_changed()
 #include "storage/sd_archive.h"
 
 #include "lvgl.h"
@@ -60,6 +61,8 @@ static char s_page_title[64]   = "Documentation"; // title shown when TOC is clo
 // ---- LVGL objects (LVGL thread only) ----
 static lv_obj_t *s_overlay      = NULL;   // full-screen opaque page
 static lv_obj_t *s_title_lbl    = NULL;   // header: page title
+static lv_obj_t *s_back_btn     = NULL;   // hidden when there is nothing to go back to
+static lv_obj_t *s_exit_btn     = NULL;   // slides left into Back's slot when it is hidden
 static lv_obj_t *s_status_lbl   = NULL;   // header: right-aligned status
 static lv_obj_t *s_banner       = NULL;   // update-available bar (hidden unless set)
 static lv_obj_t *s_banner_lbl   = NULL;
@@ -1022,6 +1025,23 @@ static void toc_panel_set_open(bool open)
 static char s_hist[16][96];
 static int  s_hist_n = 0;
 
+// Show "Back" only when it would actually do something. With no history and the
+// contents panel closed it is a dead button sitting next to a live "Exit", and the
+// operator is left working out which of the two leaves the manual - the exact
+// confusion reported on 2026-08-06. When hidden, Exit slides into its slot so there
+// is no gap where a button used to be.
+static void nav_buttons_sync(void)
+{
+    const int BTN_Y = (HEADER_H - 46) / 2;
+    bool toc_open  = s_toc_panel && !lv_obj_has_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN);
+    bool want_back = (s_hist_n > 0) || toc_open;   // Back also closes the contents panel
+    if (s_back_btn) {
+        if (want_back) lv_obj_clear_flag(s_back_btn, LV_OBJ_FLAG_HIDDEN);
+        else           lv_obj_add_flag(s_back_btn, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_exit_btn) lv_obj_align(s_exit_btn, LV_ALIGN_TOP_LEFT, want_back ? 190 : 40, BTN_Y);
+}
+
 // Load and display a page. `push` records the page we're leaving onto the
 // history stack (Back replays it with push=false). LVGL thread only.
 static void load_page(const char *rel, const char *title_hint, bool push)
@@ -1110,6 +1130,7 @@ static void tick_cb(lv_timer_t *t)
 
     if (do_toc)    { parse_toc_file(); rebuild_toc_panel(); }
     if (do_reload) { s_render_from_cache = from_cache; render_from_cache(); }
+    nav_buttons_sync();   // history/contents state changes on navigation
 
     // The "Save offline" button is gone: the manual is built into the firmware, so
     // it is always available and there is nothing to save, download or restart
@@ -1194,6 +1215,7 @@ void reader_view_init(lv_obj_t *parent)
     // Back (previous page in history). Kept clear of the ~30 px left-edge
     // exit-swipe strip.
     lv_obj_t *back_btn = lv_button_create(s_overlay);
+    s_back_btn = back_btn;
     lv_obj_align(back_btn, LV_ALIGN_TOP_LEFT, 40, BTN_Y);
     lv_obj_set_style_bg_color(back_btn, lv_color_hex(UI_COLOR_SURFACE), 0);
     lv_obj_set_style_pad_hor(back_btn, 20, 0);
@@ -1206,6 +1228,7 @@ void reader_view_init(lv_obj_t *parent)
 
     // Exit (leaves the Reader). Same style/padding as Back.
     lv_obj_t *exit_btn = lv_button_create(s_overlay);
+    s_exit_btn = exit_btn;
     lv_obj_align(exit_btn, LV_ALIGN_TOP_LEFT, 190, BTN_Y);
     lv_obj_set_style_bg_color(exit_btn, lv_color_hex(UI_COLOR_SURFACE), 0);
     lv_obj_set_style_pad_hor(exit_btn, 20, 0);
@@ -1342,6 +1365,12 @@ void reader_view_show(void)
     strncpy(s_status, s_want_anchor[0] ? "Opening..." : "Refreshing...", sizeof(s_status)-1);
     unlock();
     reader_net_fetch(s_current_path, true);
+    nav_buttons_sync();
+    // Stand the Panadapter's touch navigation down. Without this the top-bar
+    // Band/Mode/BW hit zones - direct children of the screen, foregrounded above
+    // this overlay - swallow taps aimed at our own Back/Exit/Contents buttons, so
+    // the manual could be opened but not left.
+    ui_help_overlay_changed();
     ESP_LOGI(TAG, "show (page=%s)", s_current_path);
 }
 
@@ -1355,6 +1384,7 @@ void reader_view_hide(void)
 {
     if (!s_overlay) return;
     s_active = false;
+    ui_help_overlay_changed();   // hand the top bar and edge swipes back
     lv_anim_t anim;
     lv_anim_init(&anim);
     lv_anim_set_var(&anim, s_overlay);

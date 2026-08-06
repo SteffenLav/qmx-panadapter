@@ -1594,6 +1594,10 @@ static lv_obj_t *s_tune_entry_btn  = NULL;  // "Antenna Tune" button in the WiFi
 // Phase 5.10D Stage 2: settings drawer state
 static lv_obj_t *s_drawer = NULL;
 static bool s_drawer_open = false;
+// Where the drawer's scrollable sections begin, i.e. just below the fixed header
+// buttons. Written once by the drawer build, read by the FT8 reflow so the two can
+// never disagree - see the note at that reflow.
+static int  s_drawer_sec_y0 = 176;
 // Scrim covers the screen area to the left of the open drawer: blocks touches
 // to underlying FT8/Panadapter content and supports a rightward swipe-to-close
 // gesture that works regardless of which content is hidden behind it.
@@ -2022,7 +2026,14 @@ static void qmx_wait_poll_cb(lv_timer_t *t)
     // Simulation Mode: the simulator runs entirely on phantom stations and
     // ft8_tx.c's interlock never keys a radio, so a QMX is not required —
     // prompting for one is misleading (and the prompt covers the sim bezel).
-    if (reader_view_is_active() || s_sim_mode_en) {
+    // ... and equally: not over the settings drawer or the "What's wrong?" panel.
+    // This overlay re-foregrounds itself every second (the keepalive at the end of
+    // this function), so without standing down it climbs on top of anything opened
+    // later - it was drawing its headline across the open drawer and its help
+    // button over the triage panel's own choices. Hiding it is right rather than
+    // just skipping the keepalive: the prompt is an operational cue, and the
+    // operator reading a panel is not looking at the radio.
+    if (reader_view_is_active() || s_sim_mode_en || s_drawer_open || help_triage_is_open()) {
         if (!hidden) {
             lv_anim_delete(s_qmx_wait_lbl, qmx_wait_breathe_anim_cb);
             lv_obj_add_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
@@ -3998,6 +4009,55 @@ static void top_bar_set_ft8_dim(bool dim)
     }
 }
 
+void ui_help_overlay_changed(void)
+{
+    const bool reader = reader_view_is_active();
+    const bool triage = help_triage_is_open();
+    const bool owned  = reader || triage;
+    const bool ft8    = (ui_mode_get() == UI_MODE_FT8);
+
+    // The top-bar Band/Mode/BW/Freq/Zoom zones are direct children of the screen,
+    // foregrounded above EVERYTHING built before them - which includes the Reader
+    // overlay. That is why the Reader's Back/Exit/Contents buttons could not be
+    // tapped at all: the BW zone sits directly on top of them. Same remedy as
+    // top_bar_set_ft8_dim - drop them out of hit-testing rather than bailing inside
+    // the callback, because the zone still WINS the touch at the z-order level and
+    // swallows it before anything underneath sees it.
+    for (int i = 0; i < N_TOPBAR_HIT_ZONES; i++) {
+        lv_obj_t *hit = s_topbar_hit_zones[i];
+        if (!hit) continue;
+        if (owned || ft8) lv_obj_clear_flag(hit, LV_OBJ_FLAG_CLICKABLE);
+        else              lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
+    }
+
+    // Edge swipes. Right (settings drawer) and bottom (memory recall) are plain
+    // Panadapter navigation with no business firing while a help overlay owns the
+    // screen. The LEFT edge is deliberately kept alive while the Reader is up:
+    // there it CLOSES the Reader (see ui_advance_page), which is a convenience
+    // rather than a conflict. Over the triage panel it would toggle the operating
+    // mode behind the panel, so there it stands down.
+    if (s_right_edge_strip) {
+        if (owned) lv_obj_clear_flag(s_right_edge_strip, LV_OBJ_FLAG_CLICKABLE);
+        else       lv_obj_add_flag(s_right_edge_strip, LV_OBJ_FLAG_CLICKABLE);
+    }
+    if (s_bottom_edge_strip) {
+        if (owned) lv_obj_clear_flag(s_bottom_edge_strip, LV_OBJ_FLAG_CLICKABLE);
+        else       lv_obj_add_flag(s_bottom_edge_strip, LV_OBJ_FLAG_CLICKABLE);
+    }
+    if (s_left_edge_strip) {
+        if (triage) lv_obj_clear_flag(s_left_edge_strip, LV_OBJ_FLAG_CLICKABLE);
+        else        lv_obj_add_flag(s_left_edge_strip, LV_OBJ_FLAG_CLICKABLE);
+    }
+
+    // Re-evaluate the QMX prompt now instead of waiting up to a second for its own
+    // timer tick - a prompt visibly sitting on top of the panel for that long is
+    // exactly the complaint this is fixing.
+    qmx_wait_poll_cb(NULL);
+
+    ESP_LOGI(TAG, "help overlay: reader=%d triage=%d -> topbar/edges %s",
+             (int)reader, (int)triage, owned ? "stood down" : "live");
+}
+
 // Phase 5.10G: receive passband width from CAT (FW response) or
 // fallback to 0 = use per-mode defaults. Called by cat.c.
 void ui_update_passband_width(uint32_t hz)
@@ -5707,6 +5767,10 @@ static void drawer_build(void)
         y += 60 + 20;
     }
 
+    // Everything above is fixed header; the sections start here. Recorded so the
+    // FT8 reflow cannot fall out of step with this layout again.
+    s_drawer_sec_y0 = y;
+
     // Flip 180 degrees (upside-down mounting) -- kept at the very top. The
     // checkbox sits mid-row (just after the label) rather than at the right
     // edge so it is not toggled by accident while reaching for the drawer edge.
@@ -6540,6 +6604,9 @@ static void drawer_open(void)
     lv_anim_start(&a);
     drawer_refresh_qmx_vol();   // show what the RADIO is set to, not our last write
     s_drawer_open = true;
+    // Pull the QMX-wait prompt down now rather than waiting up to a second for its
+    // own tick - it was drawing its headline straight across the open drawer.
+    qmx_wait_poll_cb(NULL);
     ESP_LOGI(TAG, "Settings drawer open");
 }
 
@@ -6556,6 +6623,7 @@ static void drawer_close(void)
     lv_anim_set_path_cb(&a, lv_anim_path_ease_in);
     lv_anim_start(&a);
     s_drawer_open = false;
+    qmx_wait_poll_cb(NULL);   // prompt may come back now the drawer is gone
     ESP_LOGI(TAG, "Settings drawer closed");
 }
 
@@ -6614,11 +6682,13 @@ static void drawer_set_ft8_mode(bool ft8)
     }
 
     if (ft8) {
-        // Start below the always-present "User Manual" button (built at y=96,
-        // 60 tall + 20 gap = 176) — the panadapter build-time layout already
-        // starts its first section there, so keep the FT8 restack consistent or
-        // the reflow draws Flip 180 on top of the manual button.
-        int y = 176;
+        // Start below the always-present header buttons (User Manual + What's
+        // wrong?). This USED to be a hardcoded 176 with a comment warning that it
+        // had to be kept in step with the build-time layout by hand - and the very
+        // next person to add a header button (2026-08-06) did not, so the FT8
+        // reflow stacked Flip 180 straight on top of it. The build now records
+        // where the sections actually begin; do not reintroduce a literal here.
+        int y = s_drawer_sec_y0;
         for (int k = 0; k < n_keep; k++) {
             lv_obj_set_pos(s_drawer_sections[keep[k]], 0, y);
             y += keep_h[k];
