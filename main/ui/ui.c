@@ -1324,6 +1324,7 @@ static void bottom_edge_swipe_cb(lv_event_t *e);
 static void right_edge_swipe_cb(lv_event_t *e);
 static void resmon_drag_cb(lv_event_t *e);
 static void pinch_poll_cb(lv_timer_t *t);
+static void sync_nav_affordances(void);   // defined below; called from the 1 Hz poll
 static void update_freq_axis_labels(uint32_t center_hz);
 static uint32_t s_last_qmx_freq_hz = 0;  // updated by ui_update_frequency
 static int      s_last_band_idx = -1;    // track band changes for decode list clearing
@@ -2018,6 +2019,10 @@ static void qmx_wait_start_breathing(lv_obj_t *lbl)
 static void qmx_wait_poll_cb(lv_timer_t *t)
 {
     (void)t;
+    // Re-assert the nav affordances every tick: if any path ever closes an
+    // overlay without notifying, the operator must not be left with the edge
+    // swipes permanently hidden and no way to navigate.
+    sync_nav_affordances();
     if (!s_qmx_wait_overlay) return;
     bool hidden = lv_obj_has_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
     // Never show the "turn on your QMX" breathing overlay over the docs Reader —
@@ -4009,53 +4014,52 @@ static void top_bar_set_ft8_dim(bool dim)
     }
 }
 
-void ui_help_overlay_changed(void)
+// Show or hide the Panadapter's navigation affordances. Split out of
+// ui_help_overlay_changed() so the 1 Hz QMX-wait poll can re-assert it as a
+// safety net without recursing back into that function.
+//
+// HIDING is the operation, not "clear CLICKABLE". Two things were missed the first
+// time round (operator-caught, 2026-08-06): the breathing grip handles are CHILDREN
+// of the strips, so clearing the parent's CLICKABLE left them visibly pulsing over
+// the manual as if live; and the right edge has a SEPARATE s_burger_btn that opens
+// the drawer, which was never disabled at all. A hidden object is not hit-tested
+// and not drawn, which settles both in one move.
+static void sync_nav_affordances(void)
 {
-    const bool reader = reader_view_is_active();
-    const bool triage = help_triage_is_open();
-    const bool owned  = reader || triage;
-    const bool ft8    = (ui_mode_get() == UI_MODE_FT8);
+    const bool owned = reader_view_is_active() || help_triage_is_open();
+    const bool ft8   = (ui_mode_get() == UI_MODE_FT8);
+
+    lv_obj_t *nav[] = { s_left_edge_strip, s_bottom_edge_strip, s_right_edge_strip, s_burger_btn };
+    for (size_t i = 0; i < sizeof(nav) / sizeof(nav[0]); i++) {
+        if (!nav[i]) continue;
+        if (owned) lv_obj_add_flag(nav[i], LV_OBJ_FLAG_HIDDEN);
+        else       lv_obj_clear_flag(nav[i], LV_OBJ_FLAG_HIDDEN);
+    }
 
     // The top-bar Band/Mode/BW/Freq/Zoom zones are direct children of the screen,
-    // foregrounded above EVERYTHING built before them - which includes the Reader
-    // overlay. That is why the Reader's Back/Exit/Contents buttons could not be
-    // tapped at all: the BW zone sits directly on top of them. Same remedy as
-    // top_bar_set_ft8_dim - drop them out of hit-testing rather than bailing inside
-    // the callback, because the zone still WINS the touch at the z-order level and
-    // swallows it before anything underneath sees it.
+    // foregrounded above EVERYTHING built before them - including the Reader
+    // overlay. That is why the Reader's own Back/Exit/Contents buttons could not be
+    // tapped: the BW zone sits directly on top of them. LVGL hit-tests a parent's
+    // children in reverse creation order and descends into the first match without
+    // considering siblings, so the zone WINS the touch and swallows it. Dropping
+    // them out of hit-testing is the same remedy top_bar_set_ft8_dim() already uses.
     for (int i = 0; i < N_TOPBAR_HIT_ZONES; i++) {
         lv_obj_t *hit = s_topbar_hit_zones[i];
         if (!hit) continue;
         if (owned || ft8) lv_obj_clear_flag(hit, LV_OBJ_FLAG_CLICKABLE);
         else              lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
     }
+}
 
-    // Edge swipes. Right (settings drawer) and bottom (memory recall) are plain
-    // Panadapter navigation with no business firing while a help overlay owns the
-    // screen. The LEFT edge is deliberately kept alive while the Reader is up:
-    // there it CLOSES the Reader (see ui_advance_page), which is a convenience
-    // rather than a conflict. Over the triage panel it would toggle the operating
-    // mode behind the panel, so there it stands down.
-    if (s_right_edge_strip) {
-        if (owned) lv_obj_clear_flag(s_right_edge_strip, LV_OBJ_FLAG_CLICKABLE);
-        else       lv_obj_add_flag(s_right_edge_strip, LV_OBJ_FLAG_CLICKABLE);
-    }
-    if (s_bottom_edge_strip) {
-        if (owned) lv_obj_clear_flag(s_bottom_edge_strip, LV_OBJ_FLAG_CLICKABLE);
-        else       lv_obj_add_flag(s_bottom_edge_strip, LV_OBJ_FLAG_CLICKABLE);
-    }
-    if (s_left_edge_strip) {
-        if (triage) lv_obj_clear_flag(s_left_edge_strip, LV_OBJ_FLAG_CLICKABLE);
-        else        lv_obj_add_flag(s_left_edge_strip, LV_OBJ_FLAG_CLICKABLE);
-    }
-
-    // Re-evaluate the QMX prompt now instead of waiting up to a second for its own
-    // timer tick - a prompt visibly sitting on top of the panel for that long is
-    // exactly the complaint this is fixing.
+void ui_help_overlay_changed(void)
+{
+    sync_nav_affordances();
+    // Re-evaluate the QMX prompt now rather than waiting up to a second for its own
+    // tick - a prompt sitting on top of the panel for that long is exactly the
+    // complaint this is fixing.
     qmx_wait_poll_cb(NULL);
-
-    ESP_LOGI(TAG, "help overlay: reader=%d triage=%d -> topbar/edges %s",
-             (int)reader, (int)triage, owned ? "stood down" : "live");
+    ESP_LOGI(TAG, "help overlay: reader=%d triage=%d",
+             (int)reader_view_is_active(), (int)help_triage_is_open());
 }
 
 // Phase 5.10G: receive passband width from CAT (FW response) or

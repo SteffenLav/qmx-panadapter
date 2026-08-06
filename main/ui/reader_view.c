@@ -38,7 +38,6 @@ static const char *TAG = "reader_view";
 #define BANNER_H       34
 #define BODY_PAD_X     60
 #define BODY_PAD_Y     22
-#define SLIDE_TIME_MS  220
 
 #define READER_CACHE_PATH  "/spiffs/reader.md"
 #define TOC_CACHE_PATH     "/spiffs/reader_toc.json"
@@ -1346,46 +1345,42 @@ void reader_view_init(lv_obj_t *parent)
     ESP_LOGI(TAG, "init");
 }
 
-// Simple x-position animator for the slide.
-static void anim_x_cb(void *var, int32_t v) { lv_obj_set_x((lv_obj_t *)var, v); }
-
-static void slide(int32_t from, int32_t to)
-{
-    lv_anim_t a;
-    lv_anim_init(&a);
-    lv_anim_set_var(&a, s_overlay);
-    lv_anim_set_exec_cb(&a, anim_x_cb);
-    lv_anim_set_values(&a, from, to);
-    lv_anim_set_time(&a, SLIDE_TIME_MS);
-    lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
-    lv_anim_start(&a);
-}
-
 void reader_view_show(void)
 {
     if (!s_overlay) return;
-    // Left-edge swipe drags RIGHT, so the page enters from the LEFT and follows
-    // the finger (matches the Panadapter<->FT8 slide direction).
-    lv_obj_set_x(s_overlay, -SCR_W);
-    lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
-    s_active = true;
-    slide(-SCR_W, 0);
 
     toc_panel_set_open(false);
     s_hist_n = 0;   // fresh navigation history each time the manual is opened
-    // Render whatever is cached immediately (page + TOC), then kick a refresh of
-    // the current page and the contents list.
-    lock();
-    // Render at once. This is safe again now that pages come straight from the
-    // embedded manual rather than from a SPIFFS copy that lagged a fetch behind -
-    // the first render is already the requested page, anchor and all.
-    s_reload_pending = true;
-    s_from_cache = true;
-    s_toc_reload_pending = true;
-    strncpy(s_status, "", sizeof(s_status)-1);   // nothing to fetch: it is in the firmware
-    unlock();
-    reader_net_fetch(s_current_path, true);
+
+    // RENDER BEFORE SHOWING. The overlay used to be made visible and slid in while
+    // s_body still held the PREVIOUS visit's widget tree, with the new page only
+    // arriving on a later timer tick - so opening a help link visibly rendered one
+    // or two wrong pages before settling on the right one. That was a leftover from
+    // when pages came over WiFi and there was genuinely nothing to draw yet; now the
+    // page is in the firmware, so it can be built synchronously here and the very
+    // first visible frame is the correct one.
+    parse_toc_file();
+    rebuild_toc_panel();
+    render_from_cache();
     nav_buttons_sync();
+    lock();
+    s_reload_pending = false;      // already rendered - do not repaint and lose the anchor
+    s_toc_reload_pending = false;
+    s_status[0] = 0;           // nothing to fetch: the manual is in the firmware
+    unlock();
+
+    // APPEAR IN ONE FRAME - no slide. Landscape runs at ~13 fps (every flush goes
+    // through the software 90-degree rotation), so the old 220 ms slide was about
+    // THREE frames: not motion, just two or three discrete snapshots of the page at
+    // intermediate offsets. That is what read as a "rendering flicker offset to the
+    // left", and why it varied - it depends where the frames fall in the animation.
+    // A cross-fade would be the same three frames at 33/66/100% opacity, i.e. a
+    // flash rather than a dissolve, so animating differently is not the answer on
+    // this display. One correct frame is.
+    lv_obj_set_x(s_overlay, 0);
+    lv_obj_clear_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
+    s_active = true;
+
     // Stand the Panadapter's touch navigation down. Without this the top-bar
     // Band/Mode/BW hit zones - direct children of the screen, foregrounded above
     // this overlay - swallow taps aimed at our own Back/Exit/Contents buttons, so
@@ -1394,28 +1389,18 @@ void reader_view_show(void)
     ESP_LOGI(TAG, "show (page=%s)", s_current_path);
 }
 
-static void hide_done_cb(lv_anim_t *a)
-{
-    (void)a;
-    if (s_overlay) lv_obj_add_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
-}
 
 void reader_view_hide(void)
 {
     if (!s_overlay) return;
     s_active = false;
     ui_help_overlay_changed();   // hand the top bar and edge swipes back
-    lv_anim_t anim;
-    lv_anim_init(&anim);
-    lv_anim_set_var(&anim, s_overlay);
-    lv_anim_set_exec_cb(&anim, anim_x_cb);
-    // Exit slides off to the RIGHT (revealing the Panadapter underneath),
-    // matching the FT8->Panadapter direction on the same rightward swipe.
-    lv_anim_set_values(&anim, lv_obj_get_x(s_overlay), SCR_W);
-    lv_anim_set_time(&anim, SLIDE_TIME_MS);
-    lv_anim_set_path_cb(&anim, lv_anim_path_ease_in);
-    lv_anim_set_ready_cb(&anim, hide_done_cb);
-    lv_anim_start(&anim);
+    // Disappear in one frame, for the same reason show() appears in one (see there).
+    // Sliding out was worse than sliding in: the page being dragged across the
+    // screen at ~13 fps looked like an unrelated page surfacing before the FT8
+    // screen came back.
+    lv_obj_add_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_x(s_overlay, 0);
     ESP_LOGI(TAG, "hide");
 }
 
