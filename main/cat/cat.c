@@ -250,6 +250,13 @@ esp_err_t cat_pwr_swr_async_read(float *power_w, float *swr)
     if (power_w) *power_w = (s_pc_resp_len >= 3) ? (float)atoi(s_pc_resp + 2) / 10.0f  : -1.0f;  // see cat_query_power_swr re: /10
     if (swr)     *swr     = (s_sw_resp_len >  3) ? (float)atoi(s_sw_resp + 2) / 100.0f : -1.0f;
     if (s_pc_resp_len == 0 || s_sw_resp_len == 0) return ESP_ERR_TIMEOUT;
+    // Log the RAW strings, not just the scaled result. The /10 divisor is the one
+    // thing about this path that has actually been wrong before (it was /5 in
+    // v0.16.0, changed to /10 on 2026-06-28 after an on-air measurement), and a
+    // field report of "the power reading is always X" cannot be settled without
+    // knowing what the radio actually sent. This is the blocking path only - the
+    // FT8 burst reads it once per transmission, so ~1 line per 15 s.
+    ESP_LOGI(TAG, "pwr/swr raw: pc='%s' sw='%s'", s_pc_resp, s_sw_resp);
     return ESP_OK;
 }
 
