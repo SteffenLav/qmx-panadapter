@@ -12,6 +12,7 @@
 #include "reader_net.h"
 #include "ui_theme.h"
 #include "ui.h"                 // ui_help_overlay_changed()
+#include "net/manual_embed.h"   // pages are read straight from the embedded manual
 #include "storage/sd_archive.h"
 
 #include "lvgl.h"
@@ -100,10 +101,10 @@ static SemaphoreHandle_t s_lock = NULL;
 static volatile bool s_reload_pending = false;
 static volatile bool s_toc_reload_pending = false;
 static bool s_from_cache = false;
-// True while render_markdown() is rendering the CACHED file rather than a page the
-// fetch just delivered. The anchor logic needs to tell the two apart (see the tail
-// of render_markdown), so it is set immediately before each render_from_cache().
-static bool s_render_from_cache = false;
+// Whether the "heading not found" warning has already been logged for the current
+// anchor request. One request can render the same page more than once; the operator
+// only needs telling once.
+static bool s_anchor_reported = false;
 static char s_status[64]  = {0};
 static char s_update_ver[24] = {0};
 
@@ -788,43 +789,54 @@ static void render_markdown(char *buf)
         lv_obj_scroll_to_y(s_body, y, LV_ANIM_OFF);
         ESP_LOGI(TAG, "context help: landed on '%s' (y=%d)", s_want_anchor, (int)y);
     } else {
-        if (s_want_anchor[0] && !s_render_from_cache)
+        if (s_want_anchor[0] && !s_anchor_reported) {
+            s_anchor_reported = true;   // once per request, not once per render
             ESP_LOGW(TAG, "context help: heading '%s' not found on this page - showing the top",
                      s_want_anchor);
+        }
         lv_obj_scroll_to_y(s_body, 0, LV_ANIM_OFF);
     }
-    // One-shot, but ONLY once the requested page has actually been rendered. A
-    // cache render happens BEFORE the fetch lands and still holds the PREVIOUS
-    // page, so consuming the anchor there made every first visit land at the top
-    // and only a second visit hit the heading - which defeats the whole feature.
-    // Keep it armed across a cache render; the fresh render is the one that counts.
-    if (s_anchor_obj || !s_render_from_cache) {
-        s_want_anchor[0] = 0;
-        s_anchor_obj = NULL;
-    } else {
-        s_anchor_obj = NULL;   // stale render only: drop the object, keep the wish
-    }
+    // The anchor stays armed until the PAGE changes (load_page/navigate_to clear
+    // it), rather than being consumed by the first render. A single help request
+    // can produce more than one render of the same page - the immediate one plus
+    // the one reader_net's completion notify triggers - and a one-shot anchor meant
+    // the second render found nothing to aim at and reset the scroll to the top,
+    // undoing the jump a fraction of a second after making it.
+    s_anchor_obj = NULL;
     ESP_LOGI(TAG, "rendered %d blocks", block_count);
     heap_caps_free(S);   // title already copied into the label above
 }
 
 // Read the cache file and render it. LVGL thread only.
+// Render the current page STRAIGHT FROM THE EMBEDDED MANUAL.
+//
+// This used to read /spiffs/reader.md, which reader_net.c had just written from the
+// very same blob - a pointless round-trip through flash that became a real bug on
+// 2026-08-06: /spiffs is 1 MB shared with qso.adi, the LoTW cert+key and the diag
+// log's 256 KB rolling file plus a rotation, so on a well-used device the write
+// returned 0 of 12031 bytes and the manual showed an error for a page that was
+// sitting in the firmware the whole time. Reading the blob cannot fail that way,
+// needs no free space, and is faster.
+//
+// render_markdown() mutates its buffer, so the blob (in flash, const) is copied
+// into PSRAM first rather than cast away.
 static void render_from_cache(void)
 {
-    FILE *f = fopen(READER_CACHE_PATH, "rb");
-    if (!f) {
+    const char *data = NULL;
+    size_t len = 0;
+    if (!manual_embed_get(s_current_path, &data, &len) || !data) {
         lv_obj_clean(s_body);
-        add_label("Downloading documentation from tab5.lav.dk...\n\nThis needs WiFi. "
-                  "If it doesn't appear shortly, check WiFi and swipe out and back in.",
+        add_label("That page is not in this firmware's built-in manual.",
                   &lv_font_montserrat_24, UI_COLOR_TEXT_MUTED, 0, 0);
-        set_page_title("Documentation");
+        set_page_title("Manual");
+        ESP_LOGW(TAG, "render: '%s' not in the embedded manual", s_current_path);
         return;
     }
+    if (len > MD_MAX_BYTES - 1) len = MD_MAX_BYTES - 1;
     char *buf = heap_caps_malloc(MD_MAX_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!buf) { fclose(f); ESP_LOGW(TAG, "OOM rendering cache"); return; }
-    size_t n = fread(buf, 1, MD_MAX_BYTES - 1, f);
-    fclose(f);
-    buf[n] = '\0';
+    if (!buf) { ESP_LOGW(TAG, "OOM rendering page"); return; }
+    memcpy(buf, data, len);
+    buf[len] = '\0';
     render_markdown(buf);
     heap_caps_free(buf);
 }
@@ -835,14 +847,17 @@ static void render_from_cache(void)
 // LVGL thread only.
 static void parse_toc_file(void)
 {
+    // Same reasoning as render_from_cache(): the contents list is "toc.json" inside
+    // the embedded manual, so read it there rather than via a SPIFFS copy that can
+    // fail to be written on a full partition.
     s_toc_n = 0;
-    FILE *f = fopen(TOC_CACHE_PATH, "rb");
-    if (!f) return;
+    const char *data = NULL;
+    size_t n = 0;
+    if (!manual_embed_get("toc.json", &data, &n) || !data) return;
+    if (n > 16 * 1024 - 1) n = 16 * 1024 - 1;
     char *buf = heap_caps_malloc(16 * 1024, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!buf) { fclose(f); return; }
-    size_t n = fread(buf, 1, 16 * 1024 - 1, f);
-    fclose(f);
-    buf[n] = '\0';
+    if (!buf) return;
+    memcpy(buf, data, n);
 
     cJSON *root = cJSON_Parse(buf);
     heap_caps_free(buf);
@@ -1050,6 +1065,11 @@ static void load_page(const char *rel, const char *title_hint, bool push)
     if (push && s_current_path[0] && strcmp(s_current_path, rel) != 0 && s_hist_n < 16)
         snprintf(s_hist[s_hist_n++], sizeof(s_hist[0]), "%s", s_current_path);
     snprintf(s_current_path, sizeof(s_current_path), "%s", rel);
+    // A deliberate navigation (contents pick, in-page link, Back) means "top of
+    // that page" - so retire any context-help anchor still armed from a help jump,
+    // or it would keep yanking the scroll down on an unrelated page.
+    s_want_anchor[0] = 0;
+    s_anchor_reported = false;
     toc_panel_set_open(false);
     lv_obj_clean(s_body);
     add_label("Loading...", &lv_font_montserrat_24, UI_COLOR_TEXT_MUTED, 0, 0);
@@ -1090,6 +1110,7 @@ void reader_view_open_help(const char *page_rel, const char *anchor)
 {
     if (!page_rel || !page_rel[0]) return;
     snprintf(s_want_anchor, sizeof(s_want_anchor), "%s", anchor ? anchor : "");
+    s_anchor_reported = false;
     s_anchor_obj = NULL;
     ESP_LOGI(TAG, "context help: %s%s%s", page_rel,
              anchor && anchor[0] ? " -> " : "", anchor ? anchor : "");
@@ -1129,7 +1150,7 @@ static void tick_cb(lv_timer_t *t)
     unlock();
 
     if (do_toc)    { parse_toc_file(); rebuild_toc_panel(); }
-    if (do_reload) { s_render_from_cache = from_cache; render_from_cache(); }
+    if (do_reload) render_from_cache();
     nav_buttons_sync();   // history/contents state changes on navigation
 
     // The "Save offline" button is gone: the manual is built into the firmware, so
@@ -1355,14 +1376,13 @@ void reader_view_show(void)
     // Render whatever is cached immediately (page + TOC), then kick a refresh of
     // the current page and the contents list.
     lock();
-    // Normally we render the cached file at once so the page appears instantly.
-    // With a context-help anchor armed we deliberately do NOT: the cache still
-    // holds the PREVIOUS page, so rendering it would flash the wrong chapter for
-    // a moment and then jump. Wait the ~300 ms for the real page instead.
-    s_reload_pending = (s_want_anchor[0] == 0);
+    // Render at once. This is safe again now that pages come straight from the
+    // embedded manual rather than from a SPIFFS copy that lagged a fetch behind -
+    // the first render is already the requested page, anchor and all.
+    s_reload_pending = true;
     s_from_cache = true;
     s_toc_reload_pending = true;
-    strncpy(s_status, s_want_anchor[0] ? "Opening..." : "Refreshing...", sizeof(s_status)-1);
+    strncpy(s_status, "", sizeof(s_status)-1);   // nothing to fetch: it is in the firmware
     unlock();
     reader_net_fetch(s_current_path, true);
     nav_buttons_sync();
