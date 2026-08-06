@@ -397,7 +397,7 @@
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
-  <div id="ft8-notice"><div id="ft8-tx" class="st-idle">--</div><div>Tab5 is in FT8/FT4 mode — spectrum &amp; waterfall are shown only in Panadapter mode.<br>Use the buttons below to download logs/config or upload QSOs.</div><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button></div></div>
+  <div id="ft8-notice"><div id="ft8-tx" class="st-idle">--</div><div>Tab5 is in FT8/FT4 mode — spectrum &amp; waterfall are shown only in Panadapter mode.<br>Use the buttons below to download logs/config or upload QSOs.</div><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="to-panadapter" title="Switch the Tab5 to the Panadapter view">Show Panadapter</button></div></div>
 
   <div id="bot">
     <span id="batt">🔋 --</span>
@@ -564,6 +564,13 @@ let qrzKeySet        = false;
 let eqslCredsSet     = false;
 let lotwReady        = false;
 let lastBandplan     = null;   // {lo, hi, segs:[{lo,hi,c,l}]} or null if off-band
+/* Live spots (POTA/RBN) for the band we are on, from /api/status - the SAME
+   store the Tab5 lane draws from, so the two can never disagree. Scoped to the
+   band by the device; the browser filters to its own visible window, which the
+   device has no way of knowing. */
+let lastSpots        = [];
+let spotBoxes        = [];     // hit-test rects in CANVAS px: {x,y,w,h,hz,mode}
+let spotOffBoxes     = [];     // the two off-screen counters, same shape
 let bpDragging       = false;  // true once a bandplan-strip drag has crossed the threshold
 
 const SPEC_W     = 1024;
@@ -1163,6 +1170,22 @@ async function sendCmd(payload) {
   });
 })();
 
+/* Switch the Tab5's own view from the browser. Unlike Call CQ this changes
+   nothing on the air, so it does not confirm - but the Tab5 takes about a second
+   to act (the switch is handed to its display task), so the button says so
+   rather than looking dead. */
+(function wireScreenSwitch() {
+  const btn = document.getElementById("to-panadapter");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    btn.disabled = true;
+    const was = btn.textContent;
+    btn.textContent = "Switching...";
+    await sendCmd({ action: "set_screen", screen: "panadapter" });
+    setTimeout(() => { btn.disabled = false; btn.textContent = was; }, 2500);
+  });
+})();
+
 function buildBandDropdown() {
   const dd = document.getElementById("dd-band");
   dd.innerHTML = "";
@@ -1321,6 +1344,7 @@ async function tick() {
     lastPanBins    = s.pan_bins    || 0;
     lastBands      = s.bands       || [];
     lastBandplan   = s.bandplan    || null;
+    lastSpots      = s.spots       || [];
     document.getElementById("bandplan-wrap").classList.toggle("show", !!lastBandplan);
 
     /* Spectrum/waterfall are Panadapter-only - the Tab5 pauses the WS stream
@@ -1542,6 +1566,151 @@ function fmtFreqLabel(hz) {
   return hz ? fmtHz(hz) : "";
 }
 
+/* =====================================================================
+   Live spots on the spectrum (POTA / RBN)
+
+   Deliberately the same picture as the Tab5's own lane (ui/spots_lane.c):
+   callsign over the trace with a thin line dropping to the frequency it is on,
+   amber = POTA, green = RBN, GREY = already worked on this band, everything
+   fading with age because a spot is a claim about NOW. Where the two differ it
+   is because a mouse is not a finger: no press-and-drag pick, just a click.
+   ===================================================================== */
+const SPOT_COL_POTA   = "#ffb43c";
+const SPOT_COL_RBN    = "#35d84a";
+const SPOT_COL_WORKED = "#8a8a8a";
+const SPOT_FULL_S     = 300;    // full brightness up to 5 minutes old
+const SPOT_GONE_S     = 1800;   // invisible at 30 minutes - same as the Tab5
+const SPOT_LABEL_Y    = 34;     // canvas px from the top: clear of the dB labels
+const SPOT_MIN_OPA    = 0.18;
+
+function spotOpacity(ageS) {
+  if (ageS <= SPOT_FULL_S) return 1.0;
+  if (ageS >= SPOT_GONE_S) return 0.0;
+  return 1.0 - (ageS - SPOT_FULL_S) / (SPOT_GONE_S - SPOT_FULL_S);
+}
+
+function spotColour(sp) {
+  if (sp.w) return SPOT_COL_WORKED;
+  return sp.s === "rbn" ? SPOT_COL_RBN : SPOT_COL_POTA;
+}
+
+/* The radio mode a spot implies. Mirrors the Tab5's table: SSB is USB above
+   10 MHz and LSB below; an unknown mode tunes the frequency and leaves the mode
+   alone rather than guessing. Bandwidth is deliberately NOT forced - the QMX
+   keeps a filter per mode and loads it on the mode change. */
+function spotRadioMode(sp) {
+  if (sp.m === "cw")   return "CW";
+  if (sp.m === "digi") return "DIGI";
+  if (sp.m === "ssb")  return sp.f >= 10000000 ? "USB" : "LSB";
+  return null;
+}
+
+/* Draw the spot lane onto the spectrum canvas. Called at the end of both
+   spectrum renderers, so it redraws with every frame and needs no state. */
+function drawSpots(ctx, W, H) {
+  spotBoxes = [];
+  spotOffBoxes = [];
+  if (!lastSpots.length || !lastFreqHz) return;
+
+  /* Label priority, same rule as the Tab5: stations you have NOT worked earn a
+     label before ones you have, and fresher before older. Only so many
+     callsigns fit side by side, and a spot whose label does not fit is dropped
+     entirely rather than left as a line pointing at nothing. */
+  const cand = [];
+  for (const sp of lastSpots) {
+    const opa = spotOpacity(sp.a || 0);
+    if (opa <= 0) continue;
+    cand.push({ sp, opa, x: freqToPixelX(sp.f, W) });
+  }
+  cand.sort((a, b) => (a.sp.w ? 1 : 0) - (b.sp.w ? 1 : 0) || (a.sp.a || 0) - (b.sp.a || 0));
+
+  let offLo = 0, offHi = 0, offLoHz = 0, offHiHz = 0;
+  const placed = [];
+
+  ctx.save();
+  ctx.font = "bold 11px ui-monospace, monospace";
+  ctx.textAlign = "left";
+
+  for (const c of cand) {
+    if (c.x < 0)  { offLo++; if (!offLoHz || c.sp.f > offLoHz) offLoHz = c.sp.f; continue; }
+    if (c.x > W)  { offHi++; if (!offHiHz || c.sp.f < offHiHz) offHiHz = c.sp.f; continue; }
+
+    const text = c.sp.c || "";
+    if (!text) continue;
+    const tw = ctx.measureText(text).width;
+    const bx = Math.max(0, Math.min(W - tw - 6, c.x - tw / 2 - 3));
+    const box = { x: bx, y: SPOT_LABEL_Y - 12, w: tw + 6, h: 16,
+                  hz: c.sp.f, mode: spotRadioMode(c.sp), call: text };
+
+    // Overlap test against everything already placed - first come (i.e. highest
+    // priority) keeps its label.
+    let clash = false;
+    for (const p of placed) {
+      if (box.x < p.x + p.w + 2 && box.x + box.w + 2 > p.x) { clash = true; break; }
+    }
+    if (clash) continue;
+    placed.push(box);
+    spotBoxes.push(box);
+
+    const col = spotColour(c.sp);
+    ctx.globalAlpha = Math.max(SPOT_MIN_OPA, c.opa);
+
+    // The line drops from under the label to the bottom of the spectrum, so it
+    // points at the frequency without covering the trace it crosses.
+    ctx.fillStyle = col;
+    ctx.fillRect(Math.round(c.x), SPOT_LABEL_Y + 4, 1, H - SPOT_LABEL_Y - 4);
+
+    ctx.fillStyle = "rgba(0,0,0,0.55)";
+    ctx.fillRect(box.x, box.y, box.w, box.h);
+    ctx.fillStyle = col;
+    ctx.fillText(text, box.x + 3, SPOT_LABEL_Y);
+  }
+
+  /* Off-screen counts, in words rather than a bare "<3": a lone number against
+     the edge says neither what it counts nor that it can be clicked. Scoped to
+     this band by the device, so the arrow never points at another band. */
+  ctx.globalAlpha = 1;
+  ctx.font = "11px system-ui,sans-serif";
+  if (offLo > 0) {
+    const t = "< spots (" + offLo + ")";
+    const tw = ctx.measureText(t).width;
+    ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(2, H - 18, tw + 6, 15);
+    ctx.fillStyle = "#ffb43c";         ctx.fillText(t, 5, H - 7);
+    spotOffBoxes.push({ x: 2, y: H - 18, w: tw + 6, h: 15, hz: offLoHz, mode: null });
+  }
+  if (offHi > 0) {
+    const t = "spots (" + offHi + ") >";
+    const tw = ctx.measureText(t).width;
+    ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(W - tw - 8, H - 18, tw + 6, 15);
+    ctx.fillStyle = "#ffb43c";         ctx.fillText(t, W - tw - 5, H - 7);
+    spotOffBoxes.push({ x: W - tw - 8, y: H - 18, w: tw + 6, h: 15, hz: offHiHz, mode: null });
+  }
+  ctx.restore();
+}
+
+/* Hit-test a click against the spot labels and the off-screen counters.
+   Returns the box hit, or null. Canvas coordinates. */
+function spotHitTest(clientX, clientY, rect) {
+  const cx = (clientX - rect.left) / rect.width  * specPxW;
+  const cy = (clientY - rect.top)  / rect.height * specPxH;
+  for (const b of spotBoxes.concat(spotOffBoxes)) {
+    // Vertical slack: the labels are small, and a mouse is not precise on a
+    // 16 px target.
+    if (cx >= b.x - 3 && cx <= b.x + b.w + 3 && cy >= b.y - 6 && cy <= b.y + b.h + 6) return b;
+  }
+  return null;
+}
+
+/* Tune to a spot: frequency AND mode, the way the Tab5 does it. */
+function tuneToSpot(box) {
+  if (!box || !box.hz) return;
+  sendCmd({ action: "set_freq", hz: box.hz });
+  if (box.mode) sendCmd({ action: "set_mode", mode: box.mode });
+  lastFreqHz = box.hz;
+  document.getElementById("vfo").textContent = fmtHz(box.hz);
+  updateFreqAxis();
+}
+
 /* Draw the cyan cursor line + freq label on a canvas context */
 function drawTuneCursor(ctx, x, pxW, pxH, freqHz) {
   if (x < 0 || x > pxW) return;
@@ -1607,7 +1776,10 @@ function handleTuneCommit(clientX, rect) {
   tuneActive  = false;
 }
 
-function addTuneListeners(overlayId, getRect) {
+/* onSpec: the spectrum overlay also carries the clickable spot labels. The
+   waterfall shares the frequency mapping but not the vertical layout, so a
+   hit test there would fire on empty space. */
+function addTuneListeners(overlayId, getRect, onSpec) {
   const el = document.getElementById(overlayId);
 
   // Mouse
@@ -1615,12 +1787,22 @@ function addTuneListeners(overlayId, getRect) {
     handleTuneMove(e.clientX, getRect());
   });
   el.addEventListener("mousemove", (e) => {
+    // A spot label under the pointer says so, and swallows the tune cursor: the
+    // two mean different things and showing both invites a mis-click.
+    const hit = onSpec ? spotHitTest(e.clientX, e.clientY, getRect()) : null;
+    el.style.cursor = hit ? "pointer" : "";
+    if (hit && !tuneActive) { tuneCursorX = -1; return; }
     handleTuneMove(e.clientX, getRect());
   });
   el.addEventListener("mouseleave", () => {
     if (!tuneActive) tuneCursorX = -1;
+    el.style.cursor = "";
   });
   el.addEventListener("mousedown", (e) => {
+    // Clicking a spot tunes to THAT station (frequency and mode) instead of to
+    // wherever the pixel happened to be - the whole point of drawing them.
+    const hit = onSpec ? spotHitTest(e.clientX, e.clientY, getRect()) : null;
+    if (hit) { tuneToSpot(hit); tuneCursorX = -1; e.preventDefault(); return; }
     tuneActive = true;
     handleTuneMove(e.clientX, getRect());
     e.preventDefault();
@@ -1631,8 +1813,11 @@ function addTuneListeners(overlayId, getRect) {
 
   // Touch
   el.addEventListener("touchstart", (e) => {
+    const t0 = e.touches[0];
+    const hit = onSpec ? spotHitTest(t0.clientX, t0.clientY, getRect()) : null;
+    if (hit) { tuneToSpot(hit); tuneCursorX = -1; e.preventDefault(); return; }
     tuneActive = true;
-    handleTuneMove(e.touches[0].clientX, getRect());
+    handleTuneMove(t0.clientX, getRect());
     e.preventDefault();
   }, { passive: false });
   el.addEventListener("touchmove", (e) => {
@@ -1644,8 +1829,8 @@ function addTuneListeners(overlayId, getRect) {
   });
 }
 
-addTuneListeners("spec-overlay", () => spec.getBoundingClientRect());
-addTuneListeners("wf-overlay",   () => spec.getBoundingClientRect()); // same freq mapping
+addTuneListeners("spec-overlay", () => spec.getBoundingClientRect(), true);
+addTuneListeners("wf-overlay",   () => spec.getBoundingClientRect(), false); // same freq mapping, no spot labels
 
 /* =====================================================================
    WebSocket / spectrum rendering
@@ -2136,6 +2321,8 @@ function drawSpectrumFlat(bytes) {
     if (y > 8 && y < H - 2) sctx.fillText("+" + dbAbove + " dB", W - 3, y - 2);
   }
   sctx.textAlign = "left";
+
+  drawSpots(sctx, W, H);
 }
 
 /* Spectrum — raw mode */
@@ -2195,6 +2382,8 @@ function drawSpectrumRaw(bytes) {
     if (y > 8 && y < H - 2) sctx.fillText(db + " dBm", W - 3, y - 2);
   }
   sctx.textAlign = "left";
+
+  drawSpots(sctx, W, H);
 }
 
 /* Waterfall */

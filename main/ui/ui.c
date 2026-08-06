@@ -2019,9 +2019,33 @@ static void qmx_wait_start_breathing(lv_obj_t *lbl)
     lv_anim_start(&a);
 }
 
+// Browser-requested view switch: written on the HTTP task by
+// ui_request_base_mode(), consumed by qmx_wait_poll_cb() on the LVGL thread.
+// -1 = nothing pending. See ui_request_base_mode() for why it is deferred.
+static volatile int s_web_base_mode_req = -1;
+static void ui_set_base_mode(ui_mode_t next, bool animate);
+
 static void qmx_wait_poll_cb(lv_timer_t *t)
 {
     (void)t;
+
+    // Drain a view switch asked for from the browser. Set on the HTTP task,
+    // acted on here because ui_set_base_mode() spawns/tears down ft8_task and
+    // moves LVGL widgets - both LVGL-thread work. Same deferral pattern as
+    // ft8_screen_view_request_cq(). -1 means nothing pending.
+    if (s_web_base_mode_req >= 0) {
+        ui_mode_t want = (ui_mode_t)s_web_base_mode_req;
+        s_web_base_mode_req = -1;
+        if (want != ui_mode_get()) {
+            ESP_LOGI(TAG, "web requested view: %s",
+                     want == UI_MODE_FT8 ? "FT8" : "Panadapter");
+            // No animation: nobody is looking at the Tab5 when the request came
+            // from a browser in another room, and the slide costs frames.
+            ui_set_base_mode(want, false);
+            drawer_close();
+        }
+    }
+
     // Re-assert the nav affordances every tick: if any path ever closes an
     // overlay without notifying, the operator must not be left with the edge
     // swipes permanently hidden and no way to navigate.
@@ -7220,6 +7244,20 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
             if (ft8) lv_obj_set_x(ft8, 0);
         }
     }
+}
+
+// Switch the Panadapter/FT8 view from the browser (Dennis-style remote use: an
+// operator in another room who left the Tab5 in FT8 cannot otherwise get the
+// spectrum back without walking to it).
+//
+// Only sets a flag - ui_set_base_mode() spawns and tears down ft8_task and
+// moves LVGL widgets, so it belongs on the LVGL thread. qmx_wait_poll_cb()
+// drains it within a second. Deliberately NOT rejected when already in the
+// requested view; the drain compares and does nothing, which keeps the endpoint
+// idempotent for a browser that has a stale idea of the current screen.
+void ui_request_base_mode(bool ft8)
+{
+    s_web_base_mode_req = ft8 ? (int)UI_MODE_FT8 : (int)UI_MODE_PANADAPTER;
 }
 
 // Left-edge swipe (drag right): the normal Panadapter <-> FT8 toggle. If the

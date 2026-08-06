@@ -108,6 +108,12 @@ void ui_help_overlay_changed(void);
 // firmware string directly.
 void ui_notify_qmx_fw_known(void);
 
+// Ask for the Panadapter/FT8 view to change, from any task. Thread-safe: sets a
+// flag that the LVGL thread drains within ~1 s (the switch spawns/stops ft8_task
+// and moves widgets, so it cannot run on the caller's task). Used by the web
+// UI's view buttons.
+void ui_request_base_mode(bool ft8);
+
 // Full-screen breathing red bezel shown while FT8 simulation mode is on
 // (see ft8_sim.h) - an unmissable reminder that nothing transmitted right
 // now is real. Called from the FT8-drawer-only sim mode toggle and once at

@@ -26,6 +26,7 @@
 #include "settings.h"          // settings_load_all / settings_set_qrz_api_key
 #include "factory_reset.h"     // factory_reset_request (web-triggered NVS reset)
 #include "bandplan.h"          // bandplan_get_segments / _effective_region / _seg_color
+#include "spots.h"             // spots_get_in_range - live spots for the web spectrum
 #include "config_io.h"         // config_io_export / config_io_import
 #include "usb_replug.h"        // usb_replug (hidden /api/cmd recovery action)
 #include "esp_heap_caps.h"
@@ -240,6 +241,52 @@ static esp_err_t status_handler(httpd_req_t *req)
         } else {
             cJSON_AddNullToObject(root, "bandplan");
         }
+
+        // Live spots for the browser's own spectrum, from the SAME store the
+        // Tab5 lane draws from (net/spots.c) - so the two can never disagree
+        // about who is on the air. Rides this status poll for the same reason
+        // the band-plan does: no new endpoint, no new poller.
+        //
+        // Scoped to the band, not to the browser's visible window: the window is
+        // the browser's own business (it zooms and pans without telling us), and
+        // the band scope is also what the off-screen counts need. Same reasoning
+        // as the Tab5 lane, which counts per band rather than across all of HF.
+        //
+        // Only while the panadapter is on screen. In FT8 the browser hides the
+        // spectrum anyway, so this would be payload nobody draws.
+        if (cfg.spots_en && nseg > 0 && segs && !ft8_screen_view_is_active()) {
+            // ~48 B per spot: too big for the httpd task's stack (CLAUDE.md -
+            // task stacks on this board are tiny), and under the 16 KB that
+            // plain malloc would force into internal RAM, so ask for PSRAM.
+            const int MAXSP = 64;
+            spot_t *sp = heap_caps_malloc(sizeof(spot_t) * MAXSP,
+                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            if (sp) {
+                int ns = spots_get_in_range(sp, MAXSP, segs[0].lo_hz, segs[nseg - 1].hi_hz);
+                cJSON *sarr = cJSON_AddArrayToObject(root, "spots");
+                int64_t now = (int64_t)time(NULL);
+                for (int i = 0; i < ns; i++) {
+                    cJSON *o = cJSON_CreateObject();
+                    cJSON_AddStringToObject(o, "c", sp[i].call);
+                    if (sp[i].ref[0]) cJSON_AddStringToObject(o, "r", sp[i].ref);
+                    cJSON_AddNumberToObject(o, "f", (double)sp[i].freq_hz);
+                    cJSON_AddStringToObject(o, "m",
+                        sp[i].mode == SPOT_MODE_CW   ? "cw"   :
+                        sp[i].mode == SPOT_MODE_SSB  ? "ssb"  :
+                        sp[i].mode == SPOT_MODE_DIGI ? "digi" : "");
+                    cJSON_AddStringToObject(o, "s", sp[i].source == SPOT_SRC_RBN ? "rbn" : "pota");
+                    // Age in seconds, so the browser can fade exactly as the Tab5
+                    // does without needing the clocks to agree.
+                    int age = (int)(now - sp[i].heard_unix);
+                    cJSON_AddNumberToObject(o, "a", age < 0 ? 0 : age);
+                    // Worked on THIS band - the whole point of the grey state.
+                    cJSON_AddBoolToObject(o, "w",
+                        sp[i].call[0] && adif_log_contains_call_on_band(sp[i].call, sp[i].freq_hz));
+                    cJSON_AddItemToArray(sarr, o);
+                }
+                heap_caps_free(sp);
+            }
+        }
     }
     const esp_app_desc_t *app = esp_app_get_description();
     cJSON_AddStringToObject(root, "tab5_fw",     app ? app->version : "");
@@ -320,6 +367,12 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // the LVGL task inside ft8_screen_view - do NOT call the QSO machine from
         // this HTTP task.
         ft8_screen_view_request_cq();
+    } else if (action && strcmp(action, "set_screen") == 0) {
+        // Switch the Tab5 between the panadapter and FT8/FT4 from the browser.
+        // Deferred to the LVGL task (see ui_request_base_mode) - the switch
+        // spawns/stops ft8_task and moves widgets.
+        const char *scr = cJSON_GetStringValue(cJSON_GetObjectItem(root, "screen"));
+        if (scr) ui_request_base_mode(strcmp(scr, "ft8") == 0);
     } else if (action && strcmp(action, "usb_replug") == 0) {
         // Hidden dev/recovery action: emulate a physical USB-A unplug/replug
         // (root-port power cycle + VBUS cut). Optional "off_ms" (200..8000).
