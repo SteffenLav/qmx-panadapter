@@ -1746,12 +1746,13 @@ void ui_set_flat_mode(bool on);
 static void drawer_apply_preset(int db_min, int db_max, float alpha);
 static void drawer_build(void);
 void ui_open_user_manual(void);
-// User Manual button: a short tap opens the Reader; holding >= 3 s instead
-// ERASES every stored copy of the manual (SPIFFS caches + microSD mirror,
-// reader_net_erase_all) - the recovery for a cache poisoned by a hotel
-// captive portal, which serves its login page instead of the real markdown
-// and gets cached as garbage. Duration is measured PRESSED->CLICKED; LVGL
-// still delivers CLICKED after a long hold, so one handler dispatches both.
+// User Manual button: a short tap opens the Reader; holding >= 3 s resets the
+// reader by clearing its two vestigial SPIFFS render caches
+// (reader_net_erase_all). The manual ITSELF cannot be erased - it is embedded in
+// the firmware - so this is now a harmless "start clean", not the recovery it
+// once was for a cache poisoned by a hotel captive portal (nothing is fetched any
+// more, so there is nothing to poison). Duration is measured PRESSED->CLICKED;
+// LVGL still delivers CLICKED after a long hold, so one handler dispatches both.
 static uint32_t s_manual_press_tick = 0;
 static void user_manual_pressed_cb(lv_event_t *e)
 {
@@ -1763,8 +1764,10 @@ static void user_manual_cb(lv_event_t *e)
     (void)e;
     if (s_manual_press_tick && lv_tick_elaps(s_manual_press_tick) >= 3000) {
         reader_net_erase_all();
-        ui_toast("User Manual erased (Tab5 + SD) - reopen to re-download");
-        ESP_LOGI(TAG, "User Manual long-hold: erasing all stored copies");
+        // Do NOT say "erased ... re-download": nothing was erased that matters and
+        // nothing is downloaded. The manual is in the firmware.
+        ui_toast("Manual reader reset - the manual is built in, nothing lost");
+        ESP_LOGI(TAG, "User Manual long-hold: cleared the reader's render caches");
         return;
     }
     ui_open_user_manual();
@@ -3370,8 +3373,8 @@ void ui_init(lv_display_t *disp)
         lv_obj_t *hb = lv_label_create(s_qmx_wait_overlay);
         // "Need help?", NOT "What's wrong?" - a QMX that is off may well be off on
         // purpose (reading the manual, setting up, POTA planning), and a button
-        // implying a fault is wrong in that case. The panel it opens still says
-        // "What's wrong?", where the operator has chosen to ask.
+        // implying a fault is wrong in that case. The panel it opens is headed
+        // "What do you need help with?", which carries questions as well as faults.
         lv_label_set_text(hb, "Need help?");
         lv_obj_set_style_text_font(hb, &lv_font_montserrat_22, 0);
         lv_obj_set_style_text_color(hb, lv_color_hex(0xC0C0C0), 0);

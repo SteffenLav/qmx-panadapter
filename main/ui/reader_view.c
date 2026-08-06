@@ -1168,7 +1168,11 @@ static void load_page(const char *rel, const char *title_hint, bool push)
     lv_obj_clean(s_body);
     add_label("Loading...", &lv_font_montserrat_24, UI_COLOR_TEXT_MUTED, 0, 0);
     if (title_hint) set_page_title(title_hint);
-    lock(); strncpy(s_status, "Downloading...", sizeof(s_status) - 1); unlock();
+    // NOT "Downloading..." - nothing is downloaded. The page comes out of the
+    // embedded manual (render_from_cache), and a status line claiming a network
+    // fetch is exactly the kind of leftover that makes an operator go looking for
+    // a WiFi problem they do not have.
+    lock(); s_status[0] = '\0'; unlock();
     reader_net_fetch(rel, false);
 }
 
@@ -1252,7 +1256,9 @@ static void tick_cb(lv_timer_t *t)
     // for. See net/manual_embed.h.
 
     if (s_status_lbl) {
-        if (do_reload && from_cache && !status[0]) strncpy(status, "Offline - showing cached copy", sizeof(status)-1);
+        // No "Offline - showing cached copy" fallback any more: there is no online
+        // case to be offline from, and no cached copy - every page is read out of
+        // the firmware. Whatever status a caller set (or nothing) is the truth.
         lv_label_set_text(s_status_lbl, status);
     }
 

@@ -85,16 +85,20 @@ static void fetch_task(void *arg)
         reader_view_notify_status("Page not found in the built-in manual");
         reader_view_notify_loaded(true);
     } else if (!write_file(PAGE_CACHE, data, len)) {
-        // Almost always the render cache partition, not the manual. Report the
-        // free space with it - a short write on a full SPIFFS is otherwise
-        // indistinguishable from a missing page.
+        // The write failing is no longer the operator's problem: reader_view renders
+        // straight from the embedded blob, so the page displays perfectly either way
+        // and this cache is vestigial. Log it (with the free space - a short write on
+        // a full SPIFFS is otherwise indistinguishable from a missing page) but say
+        // NOTHING on screen. The old "Could not cache the page (storage full?)"
+        // reported a failure the reader had already recovered from, on a device where
+        // /spiffs being full is the normal end state.
         size_t total = 0, used = 0;
         if (esp_spiffs_info(NULL, &total, &used) != ESP_OK) total = used = 0;
-        ESP_LOGW(TAG, "page '%s' found (%u B) but caching it to %s FAILED "
-                 "- spiffs total=%u used=%u free=%u",
+        ESP_LOGW(TAG, "page '%s' found (%u B); vestigial cache write to %s failed "
+                 "- spiffs total=%u used=%u free=%u (harmless, page renders from the blob)",
                  s_job_path, (unsigned)len, PAGE_CACHE,
                  (unsigned)total, (unsigned)used, (unsigned)(total - used));
-        reader_view_notify_status("Could not cache the page (storage full?)");
+        reader_view_notify_status("");
         reader_view_notify_loaded(true);
     } else {
         reader_view_notify_status("");
