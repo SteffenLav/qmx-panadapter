@@ -2,6 +2,7 @@
 
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>   // qsort - shared decode-list ordering
 #include <time.h>
 
 #include "esp_log.h"
@@ -338,4 +339,64 @@ void ft8_screen_clear(void)
     memset(s_table, 0, sizeof(s_table));
     ESP_LOGI(TAG, "decode list cleared");
     if (s_mutex) xSemaphoreGive(s_mutex);
+}
+
+// ---------------------------------------------------------------------------
+// Ordering: one implementation, callable from any task
+// ---------------------------------------------------------------------------
+//
+// The decode list's order is a POLICY - "what is the operator looking for" -
+// and it now has two consumers: the Tab5's own list (ft8_screen_view.c) and the
+// browser's (net/webserver.c /api/decodes). Two copies would drift, and the
+// first symptom would be the two screens disagreeing about which station is at
+// the top during a QSO, which is exactly what the pin was added to fix.
+//
+// The tiers, most wanted first:
+//   1. the station we are working  - their reply, their CQ, even a message they
+//      send to a third station, which is when you most want to see them
+//   2. anything addressed to us
+//   3. CQ calls
+//   4. everything else, strongest signal first
+//
+// qsort() takes no context pointer, so the two keys live in file statics - which
+// is why this function owns a mutex rather than exposing a bare comparator: the
+// LVGL thread and the HTTP task must not be mid-sort in each other's keys.
+static SemaphoreHandle_t s_sort_mutex = NULL;
+static char s_sort_pin[FT8_CALL_MAX_LEN];
+static char s_sort_me[FT8_CALL_MAX_LEN];
+
+static int cmp_ordered(const void *a, const void *b)
+{
+    const ft8_call_t *ca = (const ft8_call_t *)a;
+    const ft8_call_t *cb = (const ft8_call_t *)b;
+    bool a_pin = s_sort_pin[0] && strcmp(ca->call, s_sort_pin) == 0;
+    bool b_pin = s_sort_pin[0] && strcmp(cb->call, s_sort_pin) == 0;
+    if (a_pin != b_pin) return b_pin ? 1 : -1;
+    bool a_me = s_sort_me[0] && strstr(ca->last_text, s_sort_me);
+    bool b_me = s_sort_me[0] && strstr(cb->last_text, s_sort_me);
+    if (a_me != b_me) return b_me ? 1 : -1;
+    bool a_cq = (strncmp(ca->last_text, "CQ ", 3) == 0);
+    bool b_cq = (strncmp(cb->last_text, "CQ ", 3) == 0);
+    if (a_cq != b_cq) return b_cq ? 1 : -1;
+    if (cb->last_snr_db > ca->last_snr_db) return  1;
+    if (cb->last_snr_db < ca->last_snr_db) return -1;
+    return 0;
+}
+
+void ft8_screen_sort_rows(ft8_call_t *rows, int n,
+                          const char *my_call, const char *pin_call)
+{
+    if (!rows || n <= 1) return;
+    if (!s_sort_mutex) {
+        s_sort_mutex = xSemaphoreCreateMutex();
+        if (!s_sort_mutex) return;          // sort unsorted rather than race
+    }
+    if (xSemaphoreTake(s_sort_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+        ESP_LOGW(TAG, "sort_rows: mutex timeout - leaving order untouched");
+        return;
+    }
+    snprintf(s_sort_pin, sizeof(s_sort_pin), "%s", pin_call ? pin_call : "");
+    snprintf(s_sort_me,  sizeof(s_sort_me),  "%s", my_call  ? my_call  : "");
+    qsort(rows, n, sizeof(ft8_call_t), cmp_ordered);
+    xSemaphoreGive(s_sort_mutex);
 }

@@ -397,7 +397,19 @@
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
-  <div id="ft8-notice"><div id="ft8-tx" class="st-idle">--</div><div>Tab5 is in FT8/FT4 mode — spectrum &amp; waterfall are shown only in Panadapter mode.<br>Use the buttons below to download logs/config or upload QSOs.</div><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="to-panadapter" title="Switch the Tab5 to the Panadapter view">Show Panadapter</button></div></div>
+  <div id="ft8-notice"><div id="ft8-tx" class="st-idle">--</div><div>Tab5 is in FT8/FT4 mode — spectrum &amp; waterfall are shown only in Panadapter mode.<br>Use the buttons below to download logs/config or upload QSOs.</div><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="to-panadapter" title="Switch the Tab5 to the Panadapter view">Show Panadapter</button></div>
+    <div id="ft8-decodes" style="width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
+      <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
+        <strong id="dec-title" style="color:#ffa040">Decode list</strong>
+        <span id="dec-count" style="color:#7d8894; font-size:12px"></span>
+      </div>
+      <div style="max-height:46vh; overflow:auto; border:1px solid #333; border-radius:6px;">
+        <table id="dec-table" style="width:100%; border-collapse:collapse; font-size:13px;">
+          <thead><tr id="dec-head"></tr></thead>
+          <tbody id="dec-body"></tbody>
+        </table>
+      </div>
+    </div></div>
 
   <div id="bot">
     <span id="batt">🔋 --</span>
@@ -593,6 +605,7 @@ let lastBandplan     = null;   // {lo, hi, segs:[{lo,hi,c,l}]} or null if off-ba
    band by the device; the browser filters to its own visible window, which the
    device has no way of knowing. */
 let lastSpots        = [];
+let lastSpotsV       = -1;     // version we hold; sent back so the device can skip resending
 let spotBoxes        = [];     // hit-test rects in CANVAS px: {x,y,w,h,hz,mode}
 let spotOffBoxes     = [];     // the two off-screen counters, same shape
 let bpDragging       = false;  // true once a bandplan-strip drag has crossed the threshold
@@ -1195,6 +1208,68 @@ async function sendCmd(payload) {
 })();
 
 /* =====================================================================
+   FT8/FT4 decode list in the browser
+
+   Read-only, and deliberately so: replying needs the decode list in front of you
+   and keys the radio, which stays a Tab5 decision. What this answers is the
+   question the TX banner alone could not - "who is actually out there, and did
+   anyone come back to me?" - from another room.
+
+   Order and filtering both come from the device (ft8_screen_sort_rows and the
+   Tab5's own Filter settings, applied in /api/decodes), so this table is the
+   same list, not a second opinion.
+   ===================================================================== */
+const DEC_COLS = [
+  ["sl",   "SL"],   ["call", "CALL"], ["text", "MESSAGE"], ["grid", "GRID"],
+  ["snr",  "SNR"],  ["dt",   "DT"],   ["hz",   "HZ"],      ["age",  "AGE"],
+];
+let decPollInFlight = false;
+
+function decFmt(k, r) {
+  if (k === "snr") return (r.snr > 0 ? "+" : "") + r.snr;
+  if (k === "dt")  return (r.dt / 1000).toFixed(1);
+  if (k === "hz")  return r.hz;
+  if (k === "age") return r.age < 60 ? r.age + "s" : Math.floor(r.age / 60) + "m";
+  return r[k] === undefined ? "" : r[k];
+}
+
+async function pollDecodes() {
+  // Only while the Tab5 is in FT8/FT4 and the panel is visible, and never
+  // stacked: this shares the link with everything else and the web server is
+  // single-threaded.
+  if (lastScreen !== "ft8" || decPollInFlight) return;
+  if (document.getElementById("help-modal").style.display !== "none") return;
+  decPollInFlight = true;
+  try {
+    const r = await fetch("/api/decodes", { cache: "no-store" });
+    const d = await r.json();
+    const rows = d.rows || [];
+    const head = document.getElementById("dec-head");
+    if (!head.childElementCount) {
+      head.innerHTML = DEC_COLS.map(c =>
+        '<th style="position:sticky;top:0;background:#1a1a1a;border-bottom:1px solid #333;padding:4px 6px;text-align:left;color:#ffa040">'
+        + c[1] + "</th>").join("");
+    }
+    document.getElementById("dec-title").textContent = (d.mode || "FT8") + " decode list";
+    document.getElementById("dec-count").textContent =
+      rows.length ? rows.length + " station" + (rows.length === 1 ? "" : "s") + " heard"
+                  : "nothing heard yet";
+    document.getElementById("dec-body").innerHTML = rows.map(r => {
+      // Same emphasis the Tab5 uses: the station being worked held at the top,
+      // and anything carrying your own callsign in reverse video.
+      const bg = r.pin ? "background:#3a2a10;" : (r.me ? "background:#7a1414;" : "");
+      const fg = r.me && !r.pin ? "color:#fff;" : (r.pin ? "color:#ffc864;" : "");
+      return "<tr style='" + bg + fg + "'>" + DEC_COLS.map(c =>
+        '<td style="border-bottom:1px solid #222;padding:3px 6px;white-space:nowrap">'
+        + String(decFmt(c[0], r)).replace(/[&<>]/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[m]))
+        + "</td>").join("") + "</tr>";
+    }).join("");
+  } catch (e) { /* transient - the next tick retries */ }
+  decPollInFlight = false;
+}
+setInterval(pollDecodes, 2000);
+
+/* =====================================================================
    Help: guidance rows + the built-in manual, both served by the Tab5
 
    Nothing here decides WHICH chapter answers what - that lives in exactly one
@@ -1620,7 +1695,10 @@ async function tick() {
   if (statusInFlight) return;   // never let /api/status requests pile up on a slow link
   statusInFlight = true;
   try {
-    const r = await fetch("/api/status", { cache: "no-store" });
+    // Tell the device which spot-store version we already have: it then omits
+    // the (multi-KB) spots array unless it changed. The store refreshes every
+    // few minutes; this poll runs every second.
+    const r = await fetch("/api/status?sv=" + lastSpotsV, { cache: "no-store" });
     if (!r.ok) throw new Error("HTTP " + r.status);
     const s = await r.json();
 
@@ -1634,7 +1712,11 @@ async function tick() {
     lastPanBins    = s.pan_bins    || 0;
     lastBands      = s.bands       || [];
     lastBandplan   = s.bandplan    || null;
-    lastSpots      = s.spots       || [];
+    // "spots" absent means UNCHANGED (the device always sends spots_v), so keep
+    // what we have rather than blanking the lane every second.
+    if (s.spots !== undefined) lastSpots = s.spots || [];
+    else if (s.spots_v === undefined) lastSpots = [];   // feature off / not panadapter
+    if (s.spots_v !== undefined) lastSpotsV = s.spots_v;
     document.getElementById("bandplan-wrap").classList.toggle("show", !!lastBandplan);
 
     /* Spectrum/waterfall are Panadapter-only - the Tab5 pauses the WS stream

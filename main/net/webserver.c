@@ -28,6 +28,9 @@
 #include "bandplan.h"          // bandplan_get_segments / _effective_region / _seg_color
 #include "spots.h"             // spots_get_in_range - live spots for the web spectrum
 #include "ui/help_topics.h"    // help_triage_collect / help_topic_get - /api/help
+#include "ft8_screen.h"        // decode table + shared ordering - /api/decodes
+#include "ft8_test.h"          // ft8_op_mode_get / ft8_op_mode_slot_ms
+#include <ctype.h>
 #include "net/manual_embed.h"  // manual_embed_get - /api/manual serves the built-in manual
 #include "config_io.h"         // config_io_export / config_io_import
 #include "usb_replug.h"        // usb_replug (hidden /api/cmd recovery action)
@@ -268,10 +271,32 @@ static esp_err_t status_handler(httpd_req_t *req)
             if (dial) sp_nseg = bandplan_get_segments(dial, reg, &sp_segs);
         }
         if (cfg.spots_en && sp_nseg > 0 && sp_segs && !ft8_screen_view_is_active()) {
+            // The spot store changes only when a source refreshes (POTA every few
+            // minutes), but this poll runs every second. Sending ~6 KB of
+            // unchanged JSON 60 times a minute on a link this fragile is exactly
+            // the kind of load that has wedged the web server before, so the
+            // browser sends back the version it already has (?sv=N) and gets the
+            // array only when it is stale. spots_v is ALWAYS sent, so "no spots
+            // key" is never ambiguous: it means "you are up to date".
+            uint32_t sv = spots_version();
+            cJSON_AddNumberToObject(root, "spots_v", (double)sv);
+            char qbuf[64] = {0}, svbuf[16] = {0};
+            bool want = true;
+            if (httpd_req_get_url_query_str(req, qbuf, sizeof(qbuf)) == ESP_OK &&
+                httpd_query_key_value(qbuf, "sv", svbuf, sizeof(svbuf)) == ESP_OK &&
+                svbuf[0] && (uint32_t)strtoul(svbuf, NULL, 10) == sv) {
+                want = false;
+            }
+          if (want) {
             // ~48 B per spot: too big for the httpd task's stack (CLAUDE.md -
             // task stacks on this board are tiny), and under the 16 KB that
             // plain malloc would force into internal RAM, so ask for PSRAM.
-            const int MAXSP = 64;
+            //
+            // 96, not 64: a busy 20 m afternoon put 64 on ONE band, which is the
+            // cap - i.e. it was already truncating, the same way SPOTS_MAX's
+            // first cut did (see spots.h). The count that was found is sent as
+            // spots_total regardless, so a truncation can never be silent.
+            const int MAXSP = 96;
             spot_t *sp = heap_caps_malloc(sizeof(spot_t) * MAXSP,
                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
             if (sp) {
@@ -297,8 +322,10 @@ static esp_err_t status_handler(httpd_req_t *req)
                         sp[i].call[0] && adif_log_contains_call_on_band(sp[i].call, sp[i].freq_hz));
                     cJSON_AddItemToArray(sarr, o);
                 }
+                cJSON_AddNumberToObject(root, "spots_total", ns);
                 heap_caps_free(sp);
             }
+          }
         }
     }
     const esp_app_desc_t *app = esp_app_get_description();
@@ -1061,6 +1088,93 @@ static const httpd_uri_t uri_upload_status = {
 // GET /api/signal — just the S-meter peak dBm around the VFO, nothing else.
 // Deliberately tiny so the web UI can poll it several times a second to make
 // its S-meter track like the Tab5's (which samples at 5 Hz), instead of the
+// GET /api/decodes - the FT8/FT4 decode list, as the Tab5 shows it.
+//
+// The browser has shown nothing about who is on frequency since FT8 landed: in
+// FT8 mode it pauses the spectrum and offers only the TX banner. An operator in
+// another room could see that their radio was transmitting but not who was
+// answering.
+//
+// Ordering comes from ft8_screen_sort_rows() - the SAME function the Tab5's own
+// list calls - so the two cannot disagree about which station is on top. The
+// display filters below are the ones from the Tab5's Filter window, applied here
+// too, because a browser list that quietly ignored them would be a different
+// list wearing the same name.
+//
+// Read-only. Nothing here can key the radio.
+static esp_err_t decodes_handler(httpd_req_t *req)
+{
+    // ~11 KB of rows: PSRAM, never the httpd task's stack.
+    ft8_call_t *snap = heap_caps_malloc(sizeof(ft8_call_t) * FT8_CALL_TABLE_SIZE,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!snap) return httpd_resp_send_500(req);
+
+    int n = 0;
+    ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+
+    qmx_settings_t qs;
+    settings_load_all(&qs);
+
+    char pin[FT8_CALL_MAX_LEN] = {0};
+    ft8_qso_get_pinned_call(pin, sizeof(pin));
+    char me[FT8_CALL_MAX_LEN] = {0};
+    for (size_t i = 0; i < sizeof(me) - 1 && qs.my_callsign[i]; i++)
+        me[i] = (char)toupper((unsigned char)qs.my_callsign[i]);
+
+    ft8_screen_sort_rows(snap, n, me, pin);
+
+    // Same hides as the Tab5 list: other stations' CQs during our own CQ run (or
+    // whenever "exclude plain CQ" is set), and the include/exclude filter terms.
+    // The our-parity hide is deliberately NOT applied here - it exists because a
+    // row frozen on screen for minutes is confusing on the Tab5's fixed-height
+    // list; the browser shows an age column instead, which answers it honestly.
+    bool hide_cq = ft8_qso_cq_filter_active() || qs.ft8_filters.excl_plain_cq;
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) { heap_caps_free(snap); return httpd_resp_send_500(req); }
+    cJSON_AddStringToObject(root, "mode", ft8_op_mode_get() == FT8_OP_MODE_FT4 ? "FT4" : "FT8");
+    cJSON_AddStringToObject(root, "working", pin);
+    cJSON *arr = cJSON_AddArrayToObject(root, "rows");
+
+    int64_t now = (int64_t)time(NULL);
+    int slot_ms = ft8_op_mode_slot_ms();
+    for (int i = 0; i < n; i++) {
+        const ft8_call_t *r = &snap[i];
+        if (hide_cq && strncmp(r->last_text, "CQ ", 3) == 0) continue;
+        if (qs.ft8_filters.incl_cq_only && strncmp(r->last_text, "CQ ", 3) != 0) continue;
+        if (!ft8_filter_match(r->last_text, &qs.ft8_filters)) continue;
+
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "call", r->call);
+        cJSON_AddStringToObject(o, "text", r->last_text);
+        cJSON_AddStringToObject(o, "grid", r->last_grid);
+        cJSON_AddNumberToObject(o, "snr",  r->last_snr_db);
+        cJSON_AddNumberToObject(o, "hz",   r->last_freq);
+        cJSON_AddNumberToObject(o, "dt",   r->last_dt_ms);
+        cJSON_AddNumberToObject(o, "age",  (double)(now - r->last_utc));
+        cJSON_AddNumberToObject(o, "heard", r->heard_count);
+        // Which 15 s (or 7.5 s) window it was heard in - the E/O column.
+        if (slot_ms > 0) {
+            int64_t sidx = (r->last_utc * 1000 + slot_ms / 2) / slot_ms;
+            cJSON_AddStringToObject(o, "sl", (sidx % 2) == 0 ? "E" : "O");
+        }
+        cJSON_AddBoolToObject(o, "me",  me[0] && strstr(r->last_text, me) != NULL);
+        cJSON_AddBoolToObject(o, "cq",  strncmp(r->last_text, "CQ ", 3) == 0);
+        cJSON_AddBoolToObject(o, "pin", pin[0] && strcmp(r->call, pin) == 0);
+        cJSON_AddItemToArray(arr, o);
+    }
+    heap_caps_free(snap);
+
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) return httpd_resp_send_500(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t err = httpd_resp_send(req, out, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(out);
+    return err;
+}
+
 // GET /api/help - the guidance panel's rows, ranked by the device itself.
 //
 // Deliberately reuses help_triage_collect() and help_topic_get() rather than
@@ -1172,6 +1286,10 @@ static esp_err_t signal_handler(httpd_req_t *req)
 
 static const httpd_uri_t uri_signal = {
     .uri = "/api/signal", .method = HTTP_GET, .handler = signal_handler,
+};
+
+static const httpd_uri_t uri_decodes = {
+    .uri = "/api/decodes", .method = HTTP_GET, .handler = decodes_handler,
 };
 
 static const httpd_uri_t uri_help = {
@@ -1295,7 +1413,7 @@ esp_err_t webserver_start(void)
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.server_port     = 80;
     config.stack_size      = 12288;
-    config.max_uri_handlers = 32;   // 24 API + WS + 5 file-browser + headroom
+    config.max_uri_handlers = 32;   // 25 API + WS + 5 file-browser + headroom
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -1323,6 +1441,7 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_qrz_upload);
     httpd_register_uri_handler(s_server, &uri_upload_status);
     httpd_register_uri_handler(s_server, &uri_signal);
+    httpd_register_uri_handler(s_server, &uri_decodes);
     httpd_register_uri_handler(s_server, &uri_help);
     httpd_register_uri_handler(s_server, &uri_manual);
     httpd_register_uri_handler(s_server, &uri_eqsl_creds);

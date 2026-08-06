@@ -360,31 +360,9 @@ static void styles_init(void)
 
 // ---------------- helpers ----------------
 
-static int cmp_cq_then_snr(const void *a, const void *b)
-{
-    const ft8_call_t *ca = (const ft8_call_t *)a;
-    const ft8_call_t *cb = (const ft8_call_t *)b;
-    // Messages directed at us (red rows) always sort first, regardless of CQ.
-    // The station we are working outranks everything, including a message addressed
-    // to us: mid-exchange their reply IS the one addressed to us in almost every
-    // case, and where a THIRD station calls us at the same time, the contact in
-    // progress is still what the operator is looking at. Matched on the row's
-    // callsign, not its text, so a third station merely mentioning our partner does
-    // not get promoted.
-    bool a_pin = s_pin_call[0] && strcmp(ca->call, s_pin_call) == 0;
-    bool b_pin = s_pin_call[0] && strcmp(cb->call, s_pin_call) == 0;
-    if (a_pin != b_pin) return b_pin ? 1 : -1;
-    bool a_me = s_my_call[0] && strstr(ca->last_text, s_my_call);
-    bool b_me = s_my_call[0] && strstr(cb->last_text, s_my_call);
-    if (a_me != b_me) return b_me ? 1 : -1;
-    bool a_cq = (strncmp(ca->last_text, "CQ ", 3) == 0);
-    bool b_cq = (strncmp(cb->last_text, "CQ ", 3) == 0);
-    if (a_cq != b_cq) return b_cq ? 1 : -1;  // CQ rows first
-    // Within same category: strongest SNR first
-    if (cb->last_snr_db > ca->last_snr_db) return  1;
-    if (cb->last_snr_db < ca->last_snr_db) return -1;
-    return 0;
-}
+/* The decode-list ORDER now lives in ft8_screen.c (ft8_screen_sort_rows), so the
+   Tab5 and the browser cannot disagree about it. It was here; the tiers and the
+   reasoning moved with it. */
 
 // Set label text only if it differs from cache (avoid redundant invalidate).
 static void set_text_if_changed(lv_obj_t *lbl, char *cache, size_t cap, const char *txt)
@@ -969,7 +947,11 @@ static void rebuild_list(void)
         if (s_pin_call[0]) ESP_LOGI(TAG, "decode list: holding %s at the top", s_pin_call);
         else               ESP_LOGI(TAG, "decode list: released %s from the top", prev_pin);
     }
-    qsort(snap, n, sizeof(ft8_call_t), cmp_cq_then_snr);
+    /* Order via the shared implementation in the data layer, so the browser's
+       list (net/webserver.c /api/decodes) cannot drift from this one. The keys
+       are handed in rather than read from statics inside the comparator, which
+       is what makes it safe to call from the HTTP task too. */
+    ft8_screen_sort_rows(snap, n, s_my_call, s_pin_call);
 
     qmx_settings_t qs;
     settings_load_all(&qs);
