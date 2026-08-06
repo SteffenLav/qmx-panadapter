@@ -1982,6 +1982,7 @@ static void iq_warn_banner_keepalive_cb(lv_timer_t *t)
 // off cat.c.
 static lv_obj_t *s_qmx_wait_overlay = NULL;
 static lv_obj_t *s_qmx_wait_lbl     = NULL;
+static lv_obj_t *s_qmx_wait_help    = NULL;   // the small "What's wrong?" button
 
 static void qmx_wait_breathe_anim_cb(void *var, int32_t v)
 {
@@ -2041,6 +2042,9 @@ static void qmx_wait_poll_cb(lv_timer_t *t)
         if (want != s_cur_off && s_qmx_wait_lbl) {
             s_cur_off = want;
             lv_obj_align(s_qmx_wait_lbl, LV_ALIGN_CENTER, want, 0);
+            // The help button rides along, or it would drift out from under the
+            // headline the first time the mode changes.
+            if (s_qmx_wait_help) lv_obj_align(s_qmx_wait_help, LV_ALIGN_CENTER, want, 90);
         }
     }
     lv_obj_move_foreground(s_qmx_wait_overlay);  // keepalive against later modals
@@ -3314,10 +3318,15 @@ void ui_init(lv_display_t *disp)
         // labels for a poor-man's-bold effect; dropped as visually messy.
         const char *txt = "Now turn on or reboot your QMX/+";
         lv_obj_t *lbl = lv_label_create(s_qmx_wait_overlay);
-        // Only the LABEL is tappable - never the overlay, which is full-screen
-        // and would swallow every touch (including the drawer) while waiting.
-        lv_obj_add_flag(lbl, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(lbl, qmx_wait_help_cb, LV_EVENT_CLICKED, NULL);
+        // The HEADLINE IS NOT TAPPABLE. It was, briefly, and that was a bug worth
+        // recording: this label's box is 1040 px wide and gets shifted +150 px in
+        // FT8 mode, so its click area ran off the right edge and sat straight on
+        // top of the drawer's edge-swipe grip - opening the drawer landed in the
+        // troubleshooting chapter instead. A 1040x57 invisible tap target in the
+        // middle of the screen is wrong even where it does not overlap anything:
+        // nothing about it looks like a button, so every hit on it is a surprise.
+        // The help affordance is the small button below, which is sized to its own
+        // text and stays well clear of both edge grips.
         lv_label_set_text(lbl, txt);
         lv_obj_set_width(lbl, 1040);
         lv_label_set_long_mode(lbl, LV_LABEL_LONG_WRAP);
@@ -3329,6 +3338,25 @@ void ui_init(lv_display_t *disp)
         // in Panadapter mode. Box narrowed from 1200 so +150 stays on-screen.
         lv_obj_align(lbl, LV_ALIGN_CENTER, 0, 0);
         s_qmx_wait_lbl = lbl;
+
+        // The help affordance: content-sized, visibly a button, centred under the
+        // headline and moved with it (see the placement block in
+        // qmx_wait_poll_cb). Deliberately small - it must not become another
+        // wide invisible target.
+        lv_obj_t *hb = lv_label_create(s_qmx_wait_overlay);
+        lv_label_set_text(hb, "What's wrong?");
+        lv_obj_set_style_text_font(hb, &lv_font_montserrat_22, 0);
+        lv_obj_set_style_text_color(hb, lv_color_hex(0xC0C0C0), 0);
+        lv_obj_set_style_bg_color(hb, lv_color_hex(0x303030), 0);
+        lv_obj_set_style_bg_opa(hb, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(hb, lv_color_hex(0x707070), 0);
+        lv_obj_set_style_border_width(hb, 2, 0);
+        lv_obj_set_style_radius(hb, 8, 0);
+        lv_obj_set_style_pad_all(hb, 12, 0);
+        lv_obj_add_flag(hb, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(hb, qmx_wait_help_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_align(hb, LV_ALIGN_CENTER, 0, 90);
+        s_qmx_wait_help = hb;
     }
     qmx_wait_poll_cb(NULL);
     lv_timer_create(qmx_wait_poll_cb, 1000, NULL);
