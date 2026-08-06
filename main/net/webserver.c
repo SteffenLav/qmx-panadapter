@@ -27,6 +27,8 @@
 #include "factory_reset.h"     // factory_reset_request (web-triggered NVS reset)
 #include "bandplan.h"          // bandplan_get_segments / _effective_region / _seg_color
 #include "spots.h"             // spots_get_in_range - live spots for the web spectrum
+#include "ui/help_topics.h"    // help_triage_collect / help_topic_get - /api/help
+#include "net/manual_embed.h"  // manual_embed_get - /api/manual serves the built-in manual
 #include "config_io.h"         // config_io_export / config_io_import
 #include "usb_replug.h"        // usb_replug (hidden /api/cmd recovery action)
 #include "esp_heap_caps.h"
@@ -254,7 +256,18 @@ static esp_err_t status_handler(httpd_req_t *req)
         //
         // Only while the panadapter is on screen. In FT8 the browser hides the
         // spectrum anyway, so this would be payload nobody draws.
-        if (cfg.spots_en && nseg > 0 && segs && !ft8_screen_view_is_active()) {
+        // Band for the spots, from the DIAL rather than the CAT poll (see
+        // ui_get_dial_freq_hz): with the radio off, cat reads 0 while the Tab5
+        // is still showing 20 m with a full lane of spots on it. Keyed to cat,
+        // the browser would show an empty band under a Tab5 that is showing
+        // twenty stations - the disagreement this whole payload exists to avoid.
+        const bp_seg_t *sp_segs = segs;
+        int sp_nseg = nseg;
+        if (sp_nseg <= 0) {
+            uint32_t dial = ui_get_dial_freq_hz();
+            if (dial) sp_nseg = bandplan_get_segments(dial, reg, &sp_segs);
+        }
+        if (cfg.spots_en && sp_nseg > 0 && sp_segs && !ft8_screen_view_is_active()) {
             // ~48 B per spot: too big for the httpd task's stack (CLAUDE.md -
             // task stacks on this board are tiny), and under the 16 KB that
             // plain malloc would force into internal RAM, so ask for PSRAM.
@@ -262,7 +275,7 @@ static esp_err_t status_handler(httpd_req_t *req)
             spot_t *sp = heap_caps_malloc(sizeof(spot_t) * MAXSP,
                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
             if (sp) {
-                int ns = spots_get_in_range(sp, MAXSP, segs[0].lo_hz, segs[nseg - 1].hi_hz);
+                int ns = spots_get_in_range(sp, MAXSP, sp_segs[0].lo_hz, sp_segs[sp_nseg - 1].hi_hz);
                 cJSON *sarr = cJSON_AddArrayToObject(root, "spots");
                 int64_t now = (int64_t)time(NULL);
                 for (int i = 0; i < ns; i++) {
@@ -1048,6 +1061,98 @@ static const httpd_uri_t uri_upload_status = {
 // GET /api/signal — just the S-meter peak dBm around the VFO, nothing else.
 // Deliberately tiny so the web UI can poll it several times a second to make
 // its S-meter track like the Tab5's (which samples at 5 Hz), instead of the
+// GET /api/help - the guidance panel's rows, ranked by the device itself.
+//
+// Deliberately reuses help_triage_collect() and help_topic_get() rather than
+// restating any of it in JavaScript: ui/help_topics.c is the ONE place that
+// knows which chapter covers what, and the build fails if a page or heading it
+// points at has gone (tools/pack_manual.py). A second copy in the web page could
+// not be checked that way and would rot silently - which is the exact failure
+// the table exists to prevent.
+//
+// The ranking reflects the TAB5's live state and current screen, which is the
+// honest thing for a remote operator: the rows describe what their radio is
+// doing, not what their browser is doing.
+static esp_err_t help_handler(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return httpd_resp_send_500(req);
+
+    // What the Tab5 would open if its own User Manual button were tapped now.
+    const help_entry_t *ctx = help_topic_get(help_topic_for_current_context());
+    if (ctx) {
+        cJSON *c = cJSON_AddObjectToObject(root, "context");
+        cJSON_AddStringToObject(c, "page",   ctx->page);
+        cJSON_AddStringToObject(c, "anchor", ctx->anchor);
+        cJSON_AddStringToObject(c, "label",  ctx->label);
+    }
+
+    help_triage_row_t rows[HELP_TRIAGE_MAX];
+    int n = help_triage_collect(rows, HELP_TRIAGE_MAX);
+    cJSON *arr = cJSON_AddArrayToObject(root, "rows");
+    for (int i = 0; i < n; i++) {
+        const help_entry_t *e = help_topic_get(rows[i].topic);
+        if (!e) continue;
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "symptom", rows[i].symptom);
+        cJSON_AddBoolToObject  (o, "flagged", rows[i].flagged);
+        cJSON_AddStringToObject(o, "page",    e->page);
+        cJSON_AddStringToObject(o, "anchor",  e->anchor);
+        cJSON_AddStringToObject(o, "label",   e->label);
+        cJSON_AddItemToArray(arr, o);
+    }
+
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) return httpd_resp_send_500(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t err = httpd_resp_send(req, out, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(out);
+    return err;
+}
+
+// GET /api/manual?page=guide/ft8-tx.md - one page of the built-in manual, as the
+// raw markdown that built the site. "toc.json" is a valid page name, so the
+// contents list comes from the same endpoint.
+//
+// Served from the firmware blob (net/manual_embed.c), so the browser gets help
+// with NO internet: a POTA operator on a phone hotspot, or a LAN with no route
+// out, still gets the whole manual - and it always matches the running firmware,
+// which a link to tab5.lav.dk could not promise.
+//
+// The blob is memory-mapped rodata: no copy, no allocation, and the send is
+// bounded by the page size (the largest is ~30 KB).
+static esp_err_t manual_handler(httpd_req_t *req)
+{
+    char q[128] = {0};
+    char page[96] = {0};
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK)
+        httpd_query_key_value(q, "page", page, sizeof(page));
+    if (!page[0]) snprintf(page, sizeof(page), "index.md");
+
+    // The blob is a fixed table of known paths, so a lookup miss is the whole
+    // guard - there is no filesystem to escape into. Still refuse "..", so a
+    // crafted URL never even reaches the lookup looking like a traversal.
+    if (strstr(page, "..")) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad page");
+        return ESP_FAIL;
+    }
+
+    const char *data = NULL;
+    size_t len = 0;
+    if (!manual_embed_get(page, &data, &len) || !data) {
+        httpd_resp_send_err(req, HTTPD_404_NOT_FOUND, "no such page in the built-in manual");
+        return ESP_FAIL;
+    }
+
+    httpd_resp_set_type(req, strstr(page, ".json") ? "application/json"
+                                                   : "text/markdown; charset=utf-8");
+    // The manual only changes when the firmware does, so let the browser keep it.
+    httpd_resp_set_hdr(req, "Cache-Control", "max-age=3600");
+    return httpd_resp_send(req, data, len);
+}
+
 // once-per-second /api/status that undersamples dynamic signals and reads low.
 // Same dsp call + params as status_handler and render.c's Tab5 S-meter, so the
 // dBm value is identical — only the polling cadence differs.
@@ -1067,6 +1172,14 @@ static esp_err_t signal_handler(httpd_req_t *req)
 
 static const httpd_uri_t uri_signal = {
     .uri = "/api/signal", .method = HTTP_GET, .handler = signal_handler,
+};
+
+static const httpd_uri_t uri_help = {
+    .uri = "/api/help", .method = HTTP_GET, .handler = help_handler,
+};
+
+static const httpd_uri_t uri_manual = {
+    .uri = "/api/manual", .method = HTTP_GET, .handler = manual_handler,
 };
 
 // Background upload task — processes QRZ/eQSL uploads without blocking httpd.
@@ -1182,7 +1295,7 @@ esp_err_t webserver_start(void)
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.server_port     = 80;
     config.stack_size      = 12288;
-    config.max_uri_handlers = 30;   // 22 API + WS + 5 file-browser + headroom
+    config.max_uri_handlers = 32;   // 24 API + WS + 5 file-browser + headroom
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -1210,6 +1323,8 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_qrz_upload);
     httpd_register_uri_handler(s_server, &uri_upload_status);
     httpd_register_uri_handler(s_server, &uri_signal);
+    httpd_register_uri_handler(s_server, &uri_help);
+    httpd_register_uri_handler(s_server, &uri_manual);
     httpd_register_uri_handler(s_server, &uri_eqsl_creds);
     httpd_register_uri_handler(s_server, &uri_eqsl_upload);
     httpd_register_uri_handler(s_server, &uri_lotw_cert);

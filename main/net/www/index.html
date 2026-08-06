@@ -447,7 +447,31 @@
         <a href="#" id="reset-network-link" class="danger" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
       </div>
     </div>
+    <button type="button" class="bot-btn" id="help-btn" title="Guidance and the full user manual - served by the Tab5 itself, no internet needed">Help &#63;</button>
     <input type="file" id="cfg-up-file" accept=".txt,text/plain" style="display:none">
+  </div>
+
+  <!-- Help: the same two doors the Tab5 has. A ranked list of symptoms and
+       questions in plain words (ranked by the DEVICE, from its own live state -
+       see /api/help), and the whole manual, served out of the firmware so it
+       works with no internet and always matches the running version. -->
+  <div id="help-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1000;">
+    <div style="max-width:900px; margin:4vh auto; background:#161616; border:1px solid #494949; border-radius:10px; padding:16px 20px; color:#ddd; font-size:14px;">
+      <div style="display:flex; align-items:center; gap:8px; margin-bottom:10px;">
+        <button id="help-back" class="bot-btn" style="cursor:pointer; display:none">&#8592; Back</button>
+        <button id="help-contents" class="bot-btn" style="cursor:pointer; display:none">Contents</button>
+        <strong id="help-title" style="color:#ffa040; font-size:17px;">What do you need help with?</strong>
+        <div style="flex:1"></div>
+        <button id="help-close" class="bot-btn" style="cursor:pointer">Close</button>
+      </div>
+      <div id="help-hint" style="color:#9aa7b4; margin-bottom:10px;">Pick what fits. Highlighted rows are happening right now on the Tab5.</div>
+      <div id="help-rows" style="max-height:60vh; overflow:auto;"></div>
+      <div id="help-doc" style="display:none; max-height:66vh; overflow:auto; padding-right:6px; line-height:1.5;"></div>
+      <div style="margin-top:14px; display:flex; align-items:center; gap:12px;">
+        <button id="help-open-manual" class="bot-btn" style="cursor:pointer">Open the manual</button>
+        <span style="color:#7d8894; font-size:12px;">Served by the Tab5 itself &mdash; no internet needed, and it always matches the firmware you are running.</span>
+      </div>
+    </div>
   </div>
 
   <!-- LoTW one-time setup, two pages: (1) how to get the .p12 out of TQSL -
@@ -1169,6 +1193,272 @@ async function sendCmd(payload) {
     setTimeout(() => { btn.disabled = false; btn.textContent = was; }, 2500);
   });
 })();
+
+/* =====================================================================
+   Help: guidance rows + the built-in manual, both served by the Tab5
+
+   Nothing here decides WHICH chapter answers what - that lives in exactly one
+   place on the device (ui/help_topics.c), where the build verifies every page
+   and heading still exists. The browser just renders what /api/help ranks and
+   what /api/manual returns. A second copy of that mapping in JavaScript could
+   not be checked by the build and would rot silently.
+   ===================================================================== */
+let helpHist = [];       // page history, for Back
+let helpPage = null;     // current page path, null = the symptom list
+
+function mdEscape(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/* Inline: `code`, **bold**, *italic*, [text](url). Escaping happens FIRST, so a
+   page containing raw HTML is shown, never executed. */
+function mdInline(s) {
+  s = mdEscape(s);
+  s = s.replace(/`([^`]+)`/g, '<code style="background:#22282f;padding:1px 4px;border-radius:3px;color:#8fd98f">$1</code>');
+  s = s.replace(/\*\*([^*]+)\*\*/g, '<strong style="color:#cfe6ff">$1</strong>');
+  s = s.replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>');
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (m, txt, url) => {
+    // Links between manual pages stay INSIDE the reader; anything else opens a
+    // normal tab. A relative .md link on a device with no internet must not turn
+    // into a broken external navigation.
+    if (/^https?:/i.test(url)) return '<a href="' + url + '" target="_blank" rel="noopener">' + txt + '</a>';
+    return '<a href="#" data-mdlink="' + url + '">' + txt + '</a>';
+  });
+  return s;
+}
+
+/* A deliberately small markdown subset - the same one the Tab5's own reader
+   renders, because it is the same source text. */
+function mdToHtml(src) {
+  const lines = src.replace(/\r\n/g, "\n").split("\n");
+  let out = [], i = 0, inCode = false, code = [];
+  let list = null;   // "ul" | "ol" | null
+
+  const closeList = () => { if (list) { out.push("</" + list + ">"); list = null; } };
+
+  while (i < lines.length) {
+    const ln = lines[i];
+
+    if (/^```/.test(ln)) {
+      if (inCode) {
+        out.push('<pre style="background:#11161c;border:1px solid #2b333c;border-radius:6px;padding:10px;overflow:auto"><code>'
+                 + mdEscape(code.join("\n")) + "</code></pre>");
+        code = []; inCode = false;
+      } else { closeList(); inCode = true; }
+      i++; continue;
+    }
+    if (inCode) { code.push(ln); i++; continue; }
+
+    const h = ln.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      closeList();
+      const lvl = h[1].length;
+      const size = [0, 22, 19, 17, 15, 14, 13][lvl];
+      const col  = lvl <= 3 ? "#ffa040" : "#dcdcdc";
+      out.push('<h' + lvl + ' data-h="1" style="color:' + col + ';font-size:' + size +
+               'px;margin:16px 0 6px">' + mdInline(h[2]) + "</h" + lvl + ">");
+      i++; continue;
+    }
+
+    if (/^\s*(---+|\*\*\*+)\s*$/.test(ln)) {
+      closeList(); out.push('<hr style="border:0;border-top:1px solid #333;margin:14px 0">'); i++; continue;
+    }
+
+    if (/^>\s?/.test(ln)) {
+      closeList();
+      const q = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) { q.push(lines[i].replace(/^>\s?/, "")); i++; }
+      out.push('<blockquote style="border-left:3px solid #3b6ea5;margin:10px 0;padding:6px 12px;background:#12171d;color:#b9c6d2">'
+               + mdInline(q.join(" ")) + "</blockquote>");
+      continue;
+    }
+
+    // Tables: header row, separator, then body until a blank line.
+    if (/^\s*\|/.test(ln) && i + 1 < lines.length && /^\s*\|?[\s:-]*\|[\s:|-]*$/.test(lines[i + 1])) {
+      closeList();
+      const cells = (r) => r.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+      let html = '<table style="border-collapse:collapse;margin:10px 0;width:100%"><thead><tr>';
+      for (const c of cells(ln)) html += '<th style="border:1px solid #333;padding:5px 8px;text-align:left;color:#ffa040">' + mdInline(c) + "</th>";
+      html += "</tr></thead><tbody>";
+      i += 2;
+      while (i < lines.length && /^\s*\|/.test(lines[i])) {
+        html += "<tr>";
+        for (const c of cells(lines[i])) html += '<td style="border:1px solid #333;padding:5px 8px;vertical-align:top">' + mdInline(c) + "</td>";
+        html += "</tr>"; i++;
+      }
+      out.push(html + "</tbody></table>");
+      continue;
+    }
+
+    const ul = ln.match(/^\s*[-*]\s+(.*)$/);
+    const ol = ln.match(/^\s*\d+\.\s+(.*)$/);
+    if (ul || ol) {
+      const want = ul ? "ul" : "ol";
+      if (list !== want) { closeList(); out.push("<" + want + ' style="margin:8px 0 8px 20px">'); list = want; }
+      out.push("<li style='margin:3px 0'>" + mdInline((ul || ol)[1]) + "</li>");
+      i++; continue;
+    }
+
+    if (!ln.trim()) { closeList(); i++; continue; }
+
+    closeList();
+    const para = [ln];
+    i++;
+    while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|```|>|\s*[-*]\s|\s*\d+\.\s|\s*\|)/.test(lines[i])) {
+      para.push(lines[i]); i++;
+    }
+    out.push('<p style="margin:8px 0">' + mdInline(para.join(" ")) + "</p>");
+  }
+  closeList();
+  return out.join("\n");
+}
+
+function helpShowRowsView() {
+  helpPage = null;
+  document.getElementById("help-rows").style.display = "";
+  document.getElementById("help-hint").style.display = "";
+  document.getElementById("help-doc").style.display = "none";
+  document.getElementById("help-title").textContent = "What do you need help with?";
+  document.getElementById("help-back").style.display = "none";
+  document.getElementById("help-contents").style.display = "none";
+}
+
+/* Load a manual page and, if given, scroll to the heading whose text CONTAINS
+   `anchor` (case-insensitive) - the same substring rule the device uses, so the
+   same table drives both without a second set of anchors to maintain. */
+async function helpOpenPage(path, anchor, title, push) {
+  const doc = document.getElementById("help-doc");
+  if (push && helpPage) helpHist.push(helpPage);
+  helpPage = path;
+  document.getElementById("help-rows").style.display = "none";
+  document.getElementById("help-hint").style.display = "none";
+  doc.style.display = "";
+  doc.innerHTML = '<p style="color:#7d8894">Loading...</p>';
+  document.getElementById("help-title").textContent = title || "User manual";
+  document.getElementById("help-back").style.display = helpHist.length ? "" : "none";
+  document.getElementById("help-contents").style.display = "";
+
+  try {
+    const r = await fetch("/api/manual?page=" + encodeURIComponent(path), { cache: "default" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    doc.innerHTML = mdToHtml(await r.text());
+  } catch (e) {
+    doc.innerHTML = '<p style="color:#ff8080">Could not load that page from the Tab5 (' + e.message + ').</p>';
+    return;
+  }
+
+  // In-manual links keep you in the reader.
+  doc.querySelectorAll("a[data-mdlink]").forEach(a => {
+    a.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      let t = a.getAttribute("data-mdlink").split("#")[0];
+      if (!t) return;
+      // Resolve "../reference/x.md" and "guide/x.md" against the current page.
+      const base = helpPage.includes("/") ? helpPage.replace(/\/[^/]*$/, "/") : "";
+      let full = /^[a-z]+\//i.test(t) || !base ? t : base + t;
+      const parts = [];
+      for (const seg of full.split("/")) {
+        if (seg === "..") parts.pop(); else if (seg && seg !== ".") parts.push(seg);
+      }
+      helpOpenPage(parts.join("/"), "", a.textContent, true);
+    });
+  });
+
+  doc.scrollTop = 0;
+  if (anchor) {
+    const want = anchor.toLowerCase();
+    for (const h of doc.querySelectorAll("[data-h]")) {
+      if (h.textContent.toLowerCase().includes(want)) {
+        doc.scrollTop = h.offsetTop - doc.offsetTop - 8;
+        h.style.background = "#2a2113";   // brief marker: you were sent HERE
+        setTimeout(() => { h.style.background = ""; }, 2500);
+        break;
+      }
+    }
+  }
+}
+
+async function helpShowContents() {
+  const doc = document.getElementById("help-doc");
+  document.getElementById("help-rows").style.display = "none";
+  document.getElementById("help-hint").style.display = "none";
+  doc.style.display = "";
+  doc.innerHTML = '<p style="color:#7d8894">Loading...</p>';
+  document.getElementById("help-title").textContent = "Contents";
+  try {
+    const r = await fetch("/api/manual?page=toc.json", { cache: "default" });
+    const toc = await r.json();
+    const items = (toc.pages || []).filter(p => p.path);
+    doc.innerHTML = items.map((p, n) =>
+      '<div data-toc="' + n + '" style="padding:7px 6px;border-bottom:1px solid #242424;cursor:pointer;' +
+      (p.level === 0 ? "color:#ffa040;font-size:16px" : "color:#dcdcdc;padding-left:22px") + '">' +
+      mdEscape(p.title || p.path) + "</div>").join("");
+    doc.querySelectorAll("[data-toc]").forEach(el => {
+      el.addEventListener("click", () => {
+        const p = items[+el.getAttribute("data-toc")];
+        helpOpenPage(p.path, "", p.title, true);
+      });
+    });
+  } catch (e) {
+    doc.innerHTML = '<p style="color:#ff8080">Could not load the contents list (' + e.message + ').</p>';
+  }
+}
+
+async function helpOpen() {
+  document.getElementById("help-modal").style.display = "";
+  // Same discipline as the LoTW setup window: the spectrum stream saturates this
+  // link, and a page fetch landing on top of it is what wedged the web server
+  // once before. The spectrum is behind a modal here anyway.
+  pauseWs();
+  helpHist = [];
+  helpShowRowsView();
+
+  const box = document.getElementById("help-rows");
+  box.innerHTML = '<p style="color:#7d8894">Asking the Tab5...</p>';
+  try {
+    const r = await fetch("/api/help", { cache: "no-store" });
+    const h = await r.json();
+    const rows = h.rows || [];
+    box.innerHTML = rows.map((row, n) =>
+      '<div data-help="' + n + '" style="display:flex;align-items:center;gap:10px;margin:6px 0;padding:11px 14px;border-radius:8px;cursor:pointer;border:2px solid ' +
+      (row.flagged ? "#FFA040;background:#3a2a10;color:#FFC864" : "#555;background:#252b33;color:#e0e0e0") + '">' +
+      (row.flagged ? "<span>&#9888;</span>" : "") + "<span>" + mdEscape(row.symptom) + "</span></div>").join("");
+    box.querySelectorAll("[data-help]").forEach(el => {
+      el.addEventListener("click", () => {
+        const row = rows[+el.getAttribute("data-help")];
+        helpOpenPage(row.page, row.anchor, row.label, false);
+      });
+    });
+    // What the Tab5's own User Manual button would open right now.
+    if (h.context && h.context.page) {
+      const b = document.getElementById("help-open-manual");
+      b.textContent = "Open: " + h.context.label;
+      b.onclick = () => helpOpenPage(h.context.page, h.context.anchor, h.context.label, false);
+    }
+  } catch (e) {
+    box.innerHTML = '<p style="color:#ff8080">Could not reach the Tab5 (' + e.message + ').</p>';
+  }
+}
+
+function helpClose() {
+  document.getElementById("help-modal").style.display = "none";
+  resumeWs();
+}
+
+document.getElementById("help-btn").addEventListener("click", helpOpen);
+document.getElementById("help-close").addEventListener("click", helpClose);
+document.getElementById("help-modal").addEventListener("click", (e) => {
+  if (e.target.id === "help-modal") helpClose();
+});
+document.getElementById("help-contents").addEventListener("click", helpShowContents);
+document.getElementById("help-back").addEventListener("click", () => {
+  const prev = helpHist.pop();
+  if (prev) helpOpenPage(prev, "", null, false); else helpShowRowsView();
+});
+document.getElementById("help-open-manual").addEventListener("click", () => {
+  // Replaced with the context page once /api/help answers; until then, contents.
+  if (!document.getElementById("help-open-manual").onclick) helpShowContents();
+});
 
 /* Switch the Tab5's own view from the browser. Unlike Call CQ this changes
    nothing on the air, so it does not confirm - but the Tab5 takes about a second

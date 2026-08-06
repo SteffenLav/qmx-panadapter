@@ -153,6 +153,12 @@ const char *ui_get_mode_str(void);
 const char *ui_get_band_str(void);
 uint32_t ui_get_passband_width_hz(void);
 
+// The frequency the display is working from (freshest UI-commanded dial reading,
+// falling back to the last CAT poll). Use this rather than cat_get_frequency()
+// for anything display-shaped: cat reads 0 while the radio is off, but the Tab5
+// keeps showing - and drawing spots on - the band it was last tuned to.
+uint32_t ui_get_dial_freq_hz(void);
+
 // Open the frequency entry keypad pre-filled with initial_hz and
 // initial_mode (one of "DiGi"/"USB"/"LSB"/"CW"), in "picker" mode: Enter
 // calls cb(typed_hz, selected_mode, true) without touching the QMX; Cancel

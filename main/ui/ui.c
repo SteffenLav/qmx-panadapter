@@ -7093,6 +7093,21 @@ static void drawer_dropdown_wf_window_cb(lv_event_t *e)
 
 // ---- Phase 9 (v0.9.5): read-only getters for web JSON ------------------
 
+// The frequency the DISPLAY is working from: the freshest UI-commanded dial
+// reading, falling back to the last CAT poll. Same expression ui_save_snapshot()
+// uses, and the same value the freq axis and the spots lane are drawn from.
+//
+// Why this and not cat_get_frequency() for anything display-shaped: cat returns
+// 0 while the radio is off or silent, but the Tab5 keeps showing the band it was
+// last on - and keeps drawing spots there. A web payload keyed to cat would show
+// the browser nothing while the Tab5 showed a full lane, which is exactly the
+// disagreement between the two surfaces that the shared spot store exists to
+// prevent.
+uint32_t ui_get_dial_freq_hz(void)
+{
+    return s_last_qmx_freq_hz ? s_last_qmx_freq_hz : cat_get_frequency();
+}
+
 const char *ui_get_mode_str(void) { return s_current_mode; }
 const char *ui_get_band_str(void) { return s_current_band; }
 uint32_t ui_get_passband_width_hz(void) { return s_passband_width_hz; }
