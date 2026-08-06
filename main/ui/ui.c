@@ -5770,7 +5770,11 @@ static void drawer_build(void)
         lv_obj_add_event_cb(btn, whats_wrong_cb, LV_EVENT_CLICKED, NULL);
         lv_obj_t *l = lv_label_create(btn);
         lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
-        lv_label_set_text(l, LV_SYMBOL_WARNING "  What's wrong?");
+        // "Need guidance?", and NOT with a warning glyph: this button sits in the
+        // drawer as a permanent companion to User Manual, so most taps on it are
+        // curiosity rather than trouble. LV_SYMBOL_LIST matches what it opens - a
+        // list of topics - where LV_SYMBOL_WARNING implied something was broken.
+        lv_label_set_text(l, LV_SYMBOL_LIST "  Need guidance?");
         lv_obj_center(l);
         y += 60 + 20;
     }

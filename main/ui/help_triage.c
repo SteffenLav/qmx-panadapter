@@ -24,9 +24,14 @@ static const char *TAG = "help_triage";
 #define ROW_H     68
 #define ROW_GAP   8
 #define ROWS_TOP  104
+// Height of the scrolling list area: panel minus the header block above it and the
+// button row below. About five rows are visible; the rest scroll.
+#define LIST_H    (PANEL_H - 2 * PAD - ROWS_TOP - 72 - 16)
+#define SBAR_W    14      // leave the scrollbar its own lane, clear of the labels
 
 static lv_obj_t *s_modal = NULL;
 static lv_obj_t *s_panel = NULL;
+static lv_obj_t *s_list  = NULL;   // scrolling container for the rows
 static lv_obj_t *s_rows[HELP_TRIAGE_MAX] = {0};
 static help_topic_t s_row_topic[HELP_TRIAGE_MAX] = {0};
 
@@ -127,21 +132,36 @@ static void build(void)
     lv_obj_clear_flag(s_panel, LV_OBJ_FLAG_SCROLLABLE);
 
     lv_obj_t *title = lv_label_create(s_panel);
-    lv_label_set_text(title, "What's wrong?");
+    // Not "What's wrong?" any more: the list carries how-to rows as well as faults,
+    // and a heading that only admits to problems makes the questions look misplaced.
+    lv_label_set_text(title, "What do you need help with?");
     lv_obj_set_style_text_color(title, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_48, 0);
+    // 32, not 36: montserrat_36 is not enabled in this build's LVGL font set.
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
 
     lv_obj_t *hint = lv_label_create(s_panel);
-    lv_label_set_text(hint, "Pick what you see. Highlighted rows are happening right now.");
+    lv_label_set_text(hint, "Pick what fits. Highlighted rows are happening right now - scroll for more.");
     lv_obj_set_style_text_color(hint, lv_color_hex(0x909090), 0);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_22, 0);
     lv_obj_align(hint, LV_ALIGN_TOP_LEFT, 0, 64);
 
+    // Scrolling list. Rows are flex children, so hiding one closes the gap it left
+    // instead of leaving a hole - which matters because which rows apply depends on
+    // the screen the panel was opened from.
+    s_list = lv_obj_create(s_panel);
+    lv_obj_set_size(s_list, ROW_W, LIST_H);
+    lv_obj_align(s_list, LV_ALIGN_TOP_LEFT, 0, ROWS_TOP);
+    lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(s_list, 0, 0);
+    lv_obj_set_style_pad_all(s_list, 0, 0);
+    lv_obj_set_style_pad_row(s_list, ROW_GAP, 0);
+    lv_obj_set_flex_flow(s_list, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scroll_dir(s_list, LV_DIR_VER);
+
     for (int i = 0; i < HELP_TRIAGE_MAX; i++) {
-        lv_obj_t *btn = lv_btn_create(s_panel);
-        lv_obj_set_size(btn, ROW_W, ROW_H);
-        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, ROWS_TOP + i * (ROW_H + ROW_GAP));
+        lv_obj_t *btn = lv_btn_create(s_list);
+        lv_obj_set_size(btn, ROW_W - SBAR_W, ROW_H);
         lv_obj_set_style_border_width(btn, 2, 0);
         lv_obj_set_style_radius(btn, 8, 0);
         lv_obj_set_style_pad_left(btn, 18, 0);
@@ -192,6 +212,7 @@ void help_triage_open(void)
     int n = help_triage_collect(rows, HELP_TRIAGE_MAX);
     for (int i = 0; i < HELP_TRIAGE_MAX; i++) row_apply(i, i < n ? &rows[i] : NULL);
 
+    if (s_list) lv_obj_scroll_to_y(s_list, 0, LV_ANIM_OFF);   // always open at the top
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_modal);
     ui_help_overlay_changed();   // stand the top-bar hit zones and edge strips down

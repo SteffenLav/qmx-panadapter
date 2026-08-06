@@ -103,27 +103,48 @@ static bool cond_no_decodes(void)
 // all - the operator called it nonsense, and he was right: one irrelevant row is
 // enough to make someone stop reading the list. The panadapter/ft8 flags are the
 // mechanism, so use them rather than adding a row that has to be mentally skipped.
+// Within each pass the order below is what the operator sees, so it runs: things
+// that are broken first, then "how do I" questions. The list scrolls, so being
+// generous costs nothing - and a question answered here saves scrolling the manual,
+// which is the whole point.
 static const triage_cand_t s_cands[] = {
-    // Shared: a missing radio and an unreachable web page mean the same thing in
-    // either mode.
+    // --- Shared: these mean the same thing on either screen ---
     { HELP_TROUBLE_USB,        "My radio is not showing up",              cond_no_radio,   true,  true  },
 
-    // FT8/FT4. No spectrum is drawn here, so nothing about the spectrum belongs.
+    // --- FT8/FT4 problems. No spectrum is drawn here, so nothing about the
+    //     spectrum belongs, however tempting the shared wording is. ---
     { HELP_TROUBLE_NO_DECODES, "Nothing appears in the decode list",      cond_no_decodes, false, true  },
     { HELP_TROUBLE_NO_TX,      "It never transmits",                      NULL,            false, true  },
     { HELP_TROUBLE_TIME,       "Decodes look late, or the timer is off",  NULL,            false, true  },
     { HELP_FT8_TX,             "Nobody answers my CQ",                    NULL,            false, true  },
-    { HELP_FT8_RX,             "How do I answer a station I can see?",    NULL,            false, true  },
-    { HELP_TX_TONE,            "Which frequency am I transmitting on?",   NULL,            false, true  },
 
-    // Panadapter. The IQ warning is here and NOT in FT8: its symptom is something
-    // you can only see on a spectrum. In FT8 the same topic is still one tap away
-    // from the warning banner itself, which is tappable (Layer 3).
+    // --- Panadapter problems. The IQ and flat-spectrum symptoms are things you can
+    //     only SEE on a spectrum, so they are offered here and not in FT8 (where the
+    //     IQ topic is still one tap from the warning banner, which is tappable). ---
     { HELP_TROUBLE_IQ,         "The spectrum looks mirrored or shifted",  cond_iq_bad,     true,  false },
     { HELP_TROUBLE_FLAT,       "The spectrum is flat - no signals",       NULL,            true,  false },
     { HELP_TAP_TO_TUNE,        "Tapping the screen tunes the wrong way",  NULL,            true,  false },
 
     { HELP_TROUBLE_WIFI,       "I cannot reach the web page",             cond_no_wifi,    true,  true  },
+
+    // --- FT8/FT4 how-to ---
+    { HELP_FT8_RX,             "How do I answer a station I can see?",    NULL,            false, true  },
+    { HELP_TX_TONE,            "Which frequency am I transmitting on?",   NULL,            false, true  },
+    { HELP_CQ_PRESETS,         "How do I change what my CQ says?",        NULL,            false, true  },
+    { HELP_ROBOT,              "Can it work stations by itself?",         NULL,            false, true  },
+    { HELP_LOGGING,            "Where are my contacts logged?",           NULL,            false, true  },
+    { HELP_UPLOADS,            "How do I send my log to LoTW or QRZ?",    NULL,            false, true  },
+
+    // --- Panadapter how-to ---
+    { HELP_GESTURES,           "How do I zoom or pan the spectrum?",      NULL,            true,  false },
+    { HELP_SPOTS,              "What are the coloured call signs?",       NULL,            true,  false },
+    { HELP_SPOTS_TAP,          "How do I tune to a spotted station?",     NULL,            true,  false },
+    { HELP_PANADAPTER,         "How do I change band or filter width?",   NULL,            true,  false },
+
+    // --- Shared how-to ---
+    { HELP_TIME_SYNC,          "How does it know the time?",              NULL,            true,  true  },
+    { HELP_SETTINGS,           "Where do I find the settings?",           NULL,            true,  true  },
+    { HELP_WEB_UI,             "What can the web interface do?",          NULL,            true,  true  },
 };
 
 int help_triage_collect(help_triage_row_t *out, int max)

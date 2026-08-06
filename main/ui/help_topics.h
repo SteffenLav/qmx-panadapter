@@ -87,7 +87,10 @@ help_topic_t help_topic_for_current_context(void);
 // is fine; one that hijacks the screen is the exact bug that made opening the
 // drawer land in the troubleshooting chapter (see the QMX-wait label in ui.c).
 
-#define HELP_TRIAGE_MAX 5
+// The list scrolls, so this is the size of the CANDIDATE POOL rather than what fits
+// on screen (about five rows are visible at a time). Raise it freely when adding
+// rows - the cost is one hidden widget each.
+#define HELP_TRIAGE_MAX 16
 
 typedef struct {
     help_topic_t topic;
