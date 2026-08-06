@@ -314,6 +314,12 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                 display_unlock();
             }
         }
+    } else if (action && strcmp(action, "cq_start") == 0) {
+        // Restart a CQ run from the browser (Dennis WN4FLA): a CQ that has timed out
+        // or hit its call limit otherwise needs a walk back to the Tab5. Deferred to
+        // the LVGL task inside ft8_screen_view - do NOT call the QSO machine from
+        // this HTTP task.
+        ft8_screen_view_request_cq();
     } else if (action && strcmp(action, "usb_replug") == 0) {
         // Hidden dev/recovery action: emulate a physical USB-A unplug/replug
         // (root-port power cycle + VBUS cut). Optional "off_ms" (200..8000).

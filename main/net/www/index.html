@@ -184,6 +184,16 @@
     padding: 0.8rem 1.4rem; border-radius: 8px;
     border: 2px solid transparent; max-width: 90%;
   }
+  /* Restart a CQ run without walking back to the Tab5 (Dennis WN4FLA). Sized like
+     a deliberate action rather than a toolbar link: it keys the radio. */
+  #ft8-actions { display: flex; gap: 1rem; }
+  #ft8-actions button {
+    font: inherit; font-size: 1.5rem; padding: 0.7rem 1.8rem;
+    color: var(--fg); background: var(--card);
+    border: 2px solid var(--accent); border-radius: 8px; cursor: pointer;
+  }
+  #ft8-actions button:hover:not(:disabled) { background: var(--accent); color: #000; }
+  #ft8-actions button:disabled { opacity: 0.45; cursor: default; }
   #ft8-tx.st-active  { color: #ff4040; border-color: #ff4040; background: rgba(255,64,64,.08); }
   #ft8-tx.st-armed   { color: #ffa040; border-color: #ffa040; background: rgba(255,160,64,.08); }
   #ft8-tx.st-wait    { color: #ffa040; border-color: #ffa04080; }
@@ -387,7 +397,7 @@
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
-  <div id="ft8-notice"><div id="ft8-tx" class="st-idle">--</div><div>Tab5 is in FT8/FT4 mode — spectrum &amp; waterfall are shown only in Panadapter mode.<br>Use the buttons below to download logs/config or upload QSOs.</div></div>
+  <div id="ft8-notice"><div id="ft8-tx" class="st-idle">--</div><div>Tab5 is in FT8/FT4 mode — spectrum &amp; waterfall are shown only in Panadapter mode.<br>Use the buttons below to download logs/config or upload QSOs.</div><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button></div></div>
 
   <div id="bot">
     <span id="batt">🔋 --</span>
@@ -1134,6 +1144,24 @@ async function sendCmd(payload) {
     });
   } catch(e) { /* ignore */ }
 }
+
+/* Restart a CQ run on the Tab5. This KEYS THE RADIO, so it confirms first - a
+   mis-click from another room should not put a carrier on the air. The button is
+   then held disabled briefly: the device defers the request to its own 1 Hz timer,
+   so a second click inside that window would do nothing visible and invite
+   double-tapping. */
+(function wireCqRestart() {
+  const btn = document.getElementById("cq-restart");
+  if (!btn) return;
+  btn.addEventListener("click", async () => {
+    if (!confirm("Start calling CQ on the Tab5?")) return;
+    btn.disabled = true;
+    const was = btn.textContent;
+    btn.textContent = "Calling...";
+    await sendCmd({ action: "cq_start" });
+    setTimeout(() => { btn.disabled = false; btn.textContent = was; }, 2500);
+  });
+})();
 
 function buildBandDropdown() {
   const dd = document.getElementById("dd-band");

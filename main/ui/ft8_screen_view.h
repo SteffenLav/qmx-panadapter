@@ -33,6 +33,13 @@ lv_obj_t *ft8_screen_view_get_container(void);
 // Safe to call from any task. Just sets a volatile flag.
 void ft8_screen_view_request_refresh(void);
 
+// Ask for a fresh CQ run to start, exactly as the Call CQ button does (same preset,
+// same TX-hold tone choice, same EVEN/ODD parity). Safe to call from ANY task: it
+// only raises a flag that the FT8 view's 1 Hz timer drains on the LVGL thread, since
+// the QSO state machine belongs to that task. Ignored, with a log line, if FT8 mode
+// is not up - there would be nothing to transmit on.
+void ft8_screen_view_request_cq(void);
+
 // Refresh the "Call CQ" button label to the currently-selected CQ preset.
 // Called by the CQ preset modal after a save. LVGL-thread only.
 void ft8_screen_view_refresh_cq_label(void);

@@ -1065,9 +1065,28 @@ static void t_slotbar_cb(lv_timer_t *t)
     lv_obj_set_style_bg_color(s_bar_slot, col, LV_PART_INDICATOR);
 }
 
+static void start_cq_run(bool interactive);          // defined below
+static volatile bool s_web_cq_pending;               // set from the HTTP task
+
 static void t_clock_cb(lv_timer_t *t)
 {
     (void)t;
+
+    // Drain a web CQ request BEFORE the visibility gate below, so it is consumed
+    // either way. If the FT8 view is not up there is nothing to run a CQ on, and a
+    // request left pending would otherwise fire the moment the operator next
+    // switched to FT8 - possibly minutes later, unasked.
+    if (s_web_cq_pending) {
+        s_web_cq_pending = false;
+        bool ft8_up = s_container && !lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN);
+        if (ft8_up) {
+            ESP_LOGI(TAG, "web requested CQ start");
+            start_cq_run(false);
+        } else {
+            ESP_LOGW(TAG, "web CQ request ignored - not in FT8 mode");
+        }
+    }
+
     if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) return;
 
     // Respawn watchdog: the FT8 view is visible (we're past the guard above),
@@ -1478,11 +1497,14 @@ static void override_73_cb(lv_event_t *e)
         ESP_LOGW(TAG, "73 override failed: %s", err);
 }
 
-static void cq_btn_cb(lv_event_t *e)
+// Start a fresh CQ run. Shared by the Call CQ button and the web interface's
+// restart button, so the two can never drift apart - notably over the TX-hold tone
+// choice and the EVEN/ODD parity selection, which live in this file.
+//
+// `interactive` is false for the web path: it must not pop the identity modal on a
+// screen nobody is looking at. It reports through the log instead.
+static void start_cq_run(bool interactive)
 {
-    (void)e;
-    ESP_LOGI(TAG, "Call CQ tapped");
-
     ft8_tx_request_t req;
     char err[64];
     // TX hold on -> exactly the tone the chip is showing. Off -> the nearest
@@ -1501,14 +1523,36 @@ static void cq_btn_cb(lv_event_t *e)
         char qso_err[64];
         if (!ft8_qso_start_cq(&req, qso_err, sizeof(qso_err))) {
             ESP_LOGW(TAG, "CQ start failed: %s", qso_err);
-            if (strstr(qso_err, "callsign") || strstr(qso_err, "Set your")) {
+            if (interactive && (strstr(qso_err, "callsign") || strstr(qso_err, "Set your")))
                 identity_config_modal_show();
-            }
+            else if (!interactive)
+                ui_toast(qso_err);
         }
     } else {
         ESP_LOGW(TAG, "build_request(CQ '%s') failed: %s", cq_text, err);
-        identity_config_modal_show();
+        if (interactive) identity_config_modal_show();
+        else             ui_toast("Set your callsign and grid first");
     }
+}
+
+// Web-interface request to (re)start CQ - Dennis WN4FLA asked for it so a timed-out
+// CQ run can be restarted without walking back to the Tab5.
+//
+// Only sets a flag: this is called on the HTTP server task, while ft8_qso_start_cq()
+// belongs to the LVGL task (see CLAUDE.md's QSO state-machine call sites). The 1 Hz
+// clock timer drains it. Same deferral pattern as the CAT poll task's pending
+// writes, and a second of latency is nothing against a 15 s slot. The flag itself is
+// declared up beside t_clock_cb, which consumes it.
+void ft8_screen_view_request_cq(void)
+{
+    s_web_cq_pending = true;
+}
+
+static void cq_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    ESP_LOGI(TAG, "Call CQ tapped");
+    start_cq_run(true);
 }
 
 // Long-press "Call CQ" -> open the CQ preset editor.
