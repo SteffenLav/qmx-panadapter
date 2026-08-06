@@ -20,54 +20,72 @@ Returns the current state of the panadapter.
 
 ```json
 {
-  "frequency_hz": 14074000,
-  "mode": "USB",
-  "bandwidth_hz": 2500,
-  "band": "20m",
-  "s_meter": "S7",
-  "signal_dbm": -83.5,
-  "waterfall_enabled": true,
-  "wifi_connected": true,
-  "wifi_rssi": -65,
-  "ip_address": "192.168.1.50",
-  "battery_percent": 85,
-  "callsign": "OZ1LAV",
-  "grid": "JO45",
-  "qmx_connected": true,
+  "battery":  { "level": 85, "mv": 8000, "charging": false },
+  "wifi":     { "ssid": "MyNet", "rssi": -65, "ip": "192.168.1.50" },
+  "freq_hz": 14074000,
   "qmx_fw": "1_03_002",
-  "time_utc": "2026-06-27T14:07:30Z",
-  "uptime_seconds": 3661,
-  "ft8_enabled": true,
-  "ft8_decoding": false,
-  "ft8_decode_count": 42
+  "mode": "DIGI",
+  "band": "20m",
+  "screen": "ft8",
+  "ft8":      { "st": "armed", "text": "TX armed: CQ OZ1LAV JO65 - call 2 of 4 (~7s)" },
+  "passband_hz": 2700,
+  "signal_dbm": -83.5,
+  "zoom": 1.0,
+  "pan_bins": 0,
+  "cw_pitch_hz": 700,
+  "if_cal_hz": 0,
+  "flat_mode": false,
+  "utc_epoch": 1785340050,
+  "qso_count": 42,
+  "qrz_key_set": true,
+  "eqsl_creds_set": false,
+  "lotw_ready": true,
+  "bandplan": { "lo": 14000000, "hi": 14350000, "segs": [ { "lo": 14000000, "hi": 14070000, "c": "20B0FF", "l": "CW" } ] },
+  "tab5_fw": "v1.5.0",
+  "bands":    [ { "name": "20", "center_hz": 14100000 } ]
 }
 ```
+
+Notes:
+
+- `screen` is `"panadapter"` or `"ft8"`.
+- **`ft8` is present only while the FT8/FT4 screen is live** — the engine does not run otherwise, so its text would be stale. `st` is one of `active` / `armed` / `done` / `timeout` / `wait` / `idle`, and `text` is the same line the Tab5 shows on its own TX status label. This is what drives the browser's TX banner and the red dot in the tab title.
+- `signal_dbm` and `bandplan` are `null` when unavailable (no spectrum yet; VFO outside a known band).
+- `passband_hz` falls back to a per-mode default until CAT reports a real width.
 
 ## Control Endpoints
 
 ### POST /api/cmd
 
-Send a command to the panadapter.
+Send a command to the panadapter. The command name is the **`action`** key; each
+action names its own parameter key (there is no generic `value`).
 
 **Request** (JSON):
 
 ```json
 {
-  "cmd": "set_frequency",
-  "value": 14074000
+  "action": "set_freq",
+  "hz": 14074000
 }
 ```
 
-**Supported commands**:
+**Supported actions**:
 
-| Command | Parameter | Effect |
+| Action | Parameter | Effect |
 |---|---|---|
-| `set_frequency` | `value: Hz` | Set VFO frequency |
-| `set_mode` | `value: "USB"/"LSB"/"CW"/"DIGI"` | Change mode |
-| `set_bandwidth` | `value: Hz` | Set filter width (SSB) |
-| `set_band` | `value: "20m"` etc | Switch band |
-| `enable_wifi` | `value: true/false` | Enable/disable WiFi |
-| `set_zoom` | `value: 1.0/2.0/4.0/8.0` | Zoom level |
+| `set_freq` | `hz` | Set VFO frequency |
+| `set_band` | `hz` (band centre) | Switch band — recalls the frequency last used on it |
+| `set_mode` | `mode: "USB"/"LSB"/"CW"/"DIGI"/"AM"` | Change mode (AM needs QMX firmware 1.04+) |
+| `set_bw` | `hz` | Filter width — SSB at 1000 Hz and above, CW passband below |
+| `set_zoom` | `zoom: 1.0/2.0/4.0/8.0` | Zoom level |
+| `cq_start` | *(none)* | Start a CQ run, as the Tab5's own **Call CQ** button does. **Keys the radio.** Only acted on while the Tab5 is in FT8/FT4 mode; otherwise discarded, not queued |
+| `reset_settings` | *(none)* | Clear stored settings back to defaults |
+| `reset_network` | *(none)* | Clear the stored WiFi/network state |
+
+The response is `{"ok":true}`; an unrecognised action returns `400`. Effects are
+applied asynchronously (mode and filter writes are queued onto the CAT poll task,
+`cq_start` onto the display task), so read `/api/status` to see the result rather
+than assuming it from the response.
 
 ## CAT Endpoints
 

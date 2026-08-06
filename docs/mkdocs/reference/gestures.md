@@ -116,7 +116,8 @@ In FT8 view, tap **Filter** to open:
 
 Swipe ← from right edge. The drawer is a single scrolling list of sections (they don't collapse — just scroll). It contains:
 
-- **User Manual** (top button) — opens this documentation on the Tab5 itself (see below)
+- **User Manual** (top button) — opens this documentation on the Tab5 itself, at the chapter covering the screen you were on (see below)
+- **Need guidance?** (directly below it) — a list of symptoms and questions in plain words; picking one opens the manual at the answer. See [Getting Help](../getting-help.md)
 - **Text fields** — tap to edit (opens keyboard if needed)
 - **Toggles** — tap to on/off
 - **Buttons** — tap to open modals (Config, Time, etc.)
@@ -130,10 +131,14 @@ The **User Manual** button at the top of the settings drawer opens this whole gu
 
 **It is built into the firmware** (since v1.3.2), so it works immediately and always: no WiFi, no microSD card, no download, no waiting, on the very first boot. It also can never describe a different version than the one you are running, because it ships inside it.
 
+- **It opens in context** (new in v1.5.0) — the panadapter chapter, the FT8 *receive* chapter, or the FT8 *transmit* chapter when a transmission is armed or running. Not a contents page you have to search.
 - **Contents** — a two-column list of every page. Press and slide your finger down it: a highlight bar tracks your finger, and lifting opens the highlighted page.
-- **Back** — returns to the previous page you viewed. **Exit** — leaves the manual (back to the panadapter/FT8 screen).
-- **Hold the drawer's User Manual button for 3 s** to clear the reader's page caches — a reset if the display ever looks wrong. The manual itself is untouched; pages are rebuilt from the firmware copy the next time you open one.
+- **Back** — returns to the previous page you viewed (shown only when there is somewhere to go back to). **Exit** — leaves the manual (back to the panadapter/FT8 screen).
+- **Edge swipes and top-bar taps are stood down** while the manual is open, so a stray touch cannot retune or switch view behind it.
+- **Hold the drawer's User Manual button for 3 s** to reset the reader. The manual itself is untouched — it is part of the firmware and cannot be lost or go stale.
 - If a newer firmware version is available, a banner appears at the top — informational only; flashing is always your choice.
+
+The other two ways into the same manual — the **Need guidance?** panel and the tappable warning banners — are covered in [Getting Help](../getting-help.md).
 
 > Earlier firmware downloaded the manual over WiFi and could copy it to a microSD card with a green **"Save offline"** button. That button is gone in v1.3.2 and none of it is needed any more. An old copy left on a card is simply ignored — delete `/qmx-panadapter/manual/` if you want the space back.
 

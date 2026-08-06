@@ -12,39 +12,13 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.4.0.** A complete, self-contained FT8/FT4 station — receive, transmit, auto-QSO, ADIF logging, and upload to **all three major logbooks: QRZ, eQSL, and ARRL LoTW** — with no PC in the loop.
+> **Release — v1.5.0.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **all three major logbooks — QRZ, eQSL and ARRL LoTW** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
-> **New in v1.4.0** — live spots on the spectrum, and three long-standing instability causes finally root-caused:
+> **New in v1.5.0 — the manual answers questions now, instead of being a manual.** The drawer's **User Manual** button opens the chapter for the screen you are on; the red **IQ mode** banner and the **Need help?** button under "Waiting for QMX" are tappable; and a new **Need guidance?** panel lists symptoms and questions in plain words — "My radio is not showing up", "Nothing appears in the decode list" — with the ones the device can see are happening highlighted at the top. It ranks; **you** choose. The built-in manual also stopped failing on well-used devices (it was being copied out of the firmware into already-full storage just to be read back) and its missing characters are fixed. Plus **Call CQ from the browser** (Dennis WN4FLA) and **the station you are working held at the top of the decode list** (Don WB0LQW). See [Getting help](#getting-help).
 >
-> - **See who is on the air, on your own spectrum.** Park activations from **POTA** are drawn straight onto the trace at the frequency they are operating on — bright callsign, a thin line down to the frequency scale, the way a FlexRadio shows them. **Grey means you have already worked that station on this band**, so at a glance you know who you still need. **Press and drag** across the callsigns to pick one and lift your finger: the Tab5 tunes to it **and sets the mode**. Spots fade as they age and vanish after 30 minutes, because a spot is a claim about *now*. Counts in the corners say how many more are just outside your window, and tapping one takes you there. **RBN** (the CW skimmer network) can be switched on as a second source — off by default, since it is a continuous feed.
-> - **All internet uploads were broken, and now work.** QRZ, eQSL, LoTW *and* the update check were failing together on affected units: the encryption layer could not start at all because a hardware crypto engine was being starved of a specific kind of memory. Root-caused and fixed. If your uploads have been erroring, this is very likely why.
-> - **52 KB of memory recovered — the cause behind a family of long-standing faults.** Measured rather than guessed: the firmware's own tables were sitting in the one scarce pool. The free-memory low-water mark went from **0 KB to 32 KB**. This single root cause explains the SD card refusing to remount, USB failing to re-open after a radio power-cycle, the crypto failure above, and reboots after an hour of FT8 (Dennis WN4FLA's report).
-> - **Power-cycling the QMX recovers immediately.** Switching the radio off could leave the Tab5 pinning one CPU core on a dead USB connection — screen frozen, nothing able to recover, reboot the only way out. Radio off → on now reconnects in a couple of seconds.
-> - **WiFi remembers your networks.** Up to six, automatically — every successful connection is remembered, with nothing to fill in. If the one it is set to is not there, it finds a remembered one that is, within seconds; and picking a known network from **Scan** fills its password in for you (Roy KI0ER).
-> - **Roy KI0ER's FT8 findings, four of five real.** A partner still asking for your final now gets it re-sent up to six times, and once that is used up the Tab5 **stays silent instead of calling CQ over him**. The occupancy strip no longer **fills up permanently** during a long CQ run (rows on your own transmit window were being kept for the whole session). The strip now says **EVEN / ODD / BOTH** so you know which time window you are looking at. And when hunting, it deliberately gives the other time window a turn, so both halves of the band stay current.
-> - **The QRZ / eQSL / LoTW setup is no longer hidden** until you have logged a contact — which is exactly backwards, since you want to set it up before you operate (Brian WA6JFK went looking for it through three browsers).
->
-> **From v1.3.6** (a pure fixes release — two of these closed problems as old as the project):
->
-> - **The "restart the QMX again and again" USB mystery is solved — it was two separate bugs.** The Tab5-side one is **fixed**: powering the QMX off while it streamed could leave a dead USB device permanently blocking the port, making the radio invisible until a Tab5 reboot no matter how many times you restarted it. The USB teardown is repaired and the Tab5 additionally heals the port by itself — QMX off → on now reconnects in about a second, hands off. The second bug lives **inside the QMX's own firmware** (after some Tab5 restarts it answers USB enumeration with a truncated reply, forever — reproduced on QMX firmware 1_03_002 *and* 1_04_004, and reported to QRP Labs): the Tab5 can't fix that one, but it now **tells you on screen** — "QMX USB is stuck - power-cycle the QMX to reconnect" — instead of playing dead.
-> - **A crash on radio power-on is fixed** (Dennis WN4FLA — three crashes in one morning): turning the radio on while the Tab5 waited in FT8 mode, or changing bands around that moment, could reboot the Tab5. Reproduced on the bench with Dennis's exact steps, root-caused with a serial backtrace, fixed, and torture-tested.
-> - **WiFi Scan now works when your stored network is out of range** — the exact situation Scan exists for (hotels, POTA sites). It used to always say "No networks found" because the automatic reconnect loop was wiping the scan results before they could be read. Verified five-for-five on hotel WiFi.
-> - **The web page shows the live TX status in FT8/FT4 mode** (Dennis WN4FLA) — red while transmitting with the "call 2 of 4" counter, amber armed, green QSO complete, and the persistent "CQ stopped after N calls" from v1.3.5's auto-stop. The browser tab title carries a red dot while transmitting, visible from across the room even unfocused.
-> - **The "Diag(saved)" download actually delivers the crash log now** — with an SD card inserted it used to serve an empty or stale file, hiding exactly the data it exists for.
->
-> **From v1.3.5** (the week's field reports, from Don WB0LQW, Dennis WN4FLA, Roy KI0ER and Randy N4OPI): **CQ stops calling after a limit you set** (long-press Call CQ → **CQ stop** cycles never/1-5/10; the TX status counts "call 2 of 4" live, one extra listening slot after the last call — Don's operating habit made automatic). **The QSO log opens in your browser** (QSO Logs → View / edit log — sortable columns, per-row delete, type-DELETE Delete-all) and **Delete all exists on the Tab5 too**. **The busy-station hold gained its TAP TO CANCEL exit** (Roy). **The settings drawer stops stealing your finger** mid-drag. The **QMX volume slider tops out at 50 dB** and reads **identical to the QMX's own LCD** (Randy's side-by-side). And clearing the log **no longer silently disables all future QRZ/eQSL/LoTW uploads** (latent bug, fixed before it bit anyone).
->
-> **From v1.3.4:** a QSO is **no longer treated as finished** just because we sent `73` — a partner who never decoded your final keeps sending their report, and the Tab5 now **sends the final again** instead of moving on to the next CQ, so you actually end up in their log (Roy KI0ER, working VE3INB). Finishing a contact **by hand no longer writes a duplicate log entry**. Your log no longer contains **signal reports nobody sent**: when no numeric report was exchanged the ADIF field was filled in with `599`, a fabricated measurement that was being uploaded to QRZ, eQSL and LoTW as if real — it is now simply left out (Roy KI0ER spotted it). The **occupancy map is filtered by time window**, because two stations only collide if they transmit in the same slot — a tone busy only in the *other* window no longer reads as busy for you, and the automatic clear-slot picker no longer avoids it (Roy KI0ER asked exactly the right question). Your **TX frequency is now a permanent button on the main screen** — it used to be a chip that appeared only mid-QSO, hidden exactly when you were choosing where to transmit — with a **live mini occupancy strip** beside it and **TX Hold** (WSJT-X's "Hold Tx Freq") in the picker to pin your tone instead of taking the nearest clear slot; the two parity buttons became one cycling **TXCQ ANY / EVEN / ODD**, and `Active: N` is gone. WiFi strength in the bottom bar is a **fan icon** now rather than a dBm number, and the width goes to the network name.
->
-> **From v1.3.3:** your **TX audio frequency became visible and adjustable** at last — a **TX nnnn Hz** button opens a picker with a **live occupancy strip** across the whole 200-2800 Hz window (green free, red busy, white you, pink your partner), **drag along it to choose**, plus ±50 Hz, a **Find clear slot** button and the free slots listed as numbers; changeable **mid-QSO but never mid-burst**, exactly as WSJT-X allows. The Tab5 now **holds off calling a station that is plainly mid-QSO with somebody else** until they sign off or call CQ again — which also stops a merely-popular station being **grey-listed** for not answering. An incoming **`RRR`** now closes a QSO like `RR73` (it used to deadlock — Roy working NH6L). New **QMX volume** slider in the settings drawer under Flip 180, **in decibels, the same number the radio shows on its own LCD**, and it reads the rig back so the two never disagree (for QMX+ builds with no control panel — Randy N4OPI). **LoTW uploads now carry US state and county**, which were missing altogether and left US operators with no Worked All States or county credit (found by cross-checking against Paul N8HM's CardSat). Also: the decode list is **cleared when leaving simulation mode and when switching FT8↔FT4**, the **practice simulator is fixed** (phantom stations never replied with Fast pounce off — the default), and the reply-first decode optimisation is **aimed at the right frequency** for the first time since v0.18.4. **PSK Reporter from v1.3.2 is confirmed working in the field** — six stations reporting.
->
-> **From v1.3.2:** your QSOs get their **grid squares** back (a long-standing bug left `GRIDSQUARE` off almost every logged contact — John W5JSS); **PSK Reporter spotting**, so the Tab5 appears on the map as a monitoring station (**on by default**, FT8 drawer → "Report to PSK Reporter" to turn it off — it sends your call/grid and the stations you decode over the internet, never on the air); the **User Manual is now built into the firmware**, so it opens instantly with no WiFi, no SD card and no download (the "Save offline" button is gone — it is not needed); **grey-listing** for stations that never answer (opt-in) and **pileup replies** that use the same message laddering as a manual Transmit (both Roy KI0ER); and the **microSD backup** is now explicit — continuous with WiFi off, one complete backup per start-up with WiFi on, with a green/yellow SD dot showing which.
->
-> **From v1.3.1:** DT and HZ columns in the decode list (each station's slot-timing offset and audio tone — Roy KI0ER's request), country shown as a compact 3-letter code, a boot-diagnostics fix for ST7121 units (Paul VE3PIK), and a round of UI alignment polish (FT8 left pane grid, settings drawer, QMX prompt placement).
->
-> Built on v1.3.0's intelligent Transmit, Fast pounce, rebuilt practice simulator, USB mouse and web SD file browser; the v1.2.0 on-device User Manual; the v1.1.0 decode-collapse fix + microSD station backup + GPS time sync; and the 1.0 station core (auto-QSO, `<...>` callsign resolution, broken-QSO resume, Today/POTA log view, display sleep, LoTW upload).
+> **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.4.0.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.5.0.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -54,29 +28,110 @@ The full documentation also lives online at **[tab5.lav.dk](https://tab5.lav.dk)
 
 ## Features
 
-**FT8 digital mode** — Full-featured FT8 station (15-second slots, 79 symbols @ 160 ms cadence): continuous on-device RX decoding, TX to reply or call CQ, auto-QSO workflows, ADIF logging — all in the same panadapter view. **FT4** (7.5-second slots, 105 symbols @ 48 ms cadence) is fully supported too, re-enabled in v0.21.0 once the FT8/FT4 render gate freed the processor headroom its faster cadence needs.
+Everything below is in the firmware **today**. Nothing here needs a PC, and only the
+items marked *(needs WiFi)* need a network.
 
-**Real-time panadapter** — Spectrum and waterfall with tap-to-tune, pinch-zoom, and touch-drag one-finger navigation. 30 Hz refresh, 12 kHz IF offset compensation, flat-spectrum mode, adaptive waterfall floor, FFT window selection, and S-meter. Screenshot and spectrum export to web browser.
+**Real-time panadapter** — Spectrum and waterfall across a 48 kHz window centred on the
+QMX VFO, at 30 Hz, with 12 kHz IF-offset compensation. Tap or drag to tune (mode-aware
+snapping), pinch to zoom ×1–×8 with a true zoom-FFT, one-finger drag to pan and retune.
+Adaptive per-bin noise floor, flat-spectrum mode, adjustable waterfall black level and
+contrast, selectable FFT window, and a graphical S-meter calibrated in dBm. A colour
+band-plan strip tracks the VFO (IARU region 1/2/3, auto-selected from your grid) and can
+be dragged to scrub across the band.
 
-**QMX CAT control** — Live frequency readout, mode switching (USB/LSB/CW/DiGi), SSB filter bandwidth control, passband indicator, and TX power/SWR readout. Round-trip CAT latency <50 ms. Band presets and per-band frequency recall.
+**QMX CAT control** — Live frequency, mode (USB/LSB/CW/DiGi, plus AM on QMX firmware
+1.04+), SSB filter bandwidth, CW passband, passband overlay, TX power and SWR readout,
+QMX volume in decibels matching the radio's own display, and an Antenna Tune button on
+1.04+. Round-trip CAT latency under 50 ms. Band presets with per-band frequency recall,
+and 32 memory channels in a 4×8 grid holding any frequency and mode.
 
-**ADIF logging** — Every QSO logs to onboard storage with QSO timestamp, callsign, frequency, mode, signal report, grid, and distance. Export to web UI or QRZ Logbook / eQSL for cloud backup.
+**FT8 and FT4, receive** — Continuous on-device decoding in the same view as the
+panadapter: FT8 (15 s slots) and FT4 (7.5 s slots). The decode list shows callsign,
+country, signal report, slot-timing offset (DT), audio tone (HZ), distance and bearing,
+with the station you are working held at the top. Include/exclude filters match anything
+in the message text, worked-before stations can be excluded band-by-band, and a pileup
+tracker collects everyone calling you.
 
-**PSK Reporter spotting** — The Tab5 reports the stations it decodes to [PSK Reporter](https://pskreporter.info), the same way WSJT-X does, so you show up on the map as a monitoring station. **On by default.** It sends your callsign and grid plus each decoded station's callsign, grid, frequency, signal report and mode, batched at most once every five minutes — over the internet only, **never on the air**. Turn it off in the FT8 settings drawer ("Report to PSK Reporter"); it is also inert until your callsign and grid are set, and disabled entirely in simulation mode.
+**FT8 and FT4, transmit** — Tap a station and the correct *next* message is sent
+(WSJT-X double-click style); or call CQ from one of three editable presets, with an
+optional stop-after-N-calls limit. Full automatic exchange through to `73` and an ADIF
+entry, a resend if your partner never heard your final, a polite hold for a station
+already working someone else, grey-listing for stations that never answer, and an
+optional unattended auto-answer robot. Your TX tone is a permanent on-screen button with
+a live occupancy strip, drag-to-pick tone selection, **TX Hold**, and a cycling
+**TXCQ ANY / EVEN / ODD** time-window choice. ARRL Field Day exchange mode included.
 
-**microSD station backup** — Insert a microSD card (a plain FAT32 32 GB card is ideal) **before switching on** and the Tab5 automatically mirrors your whole station to `/qmx-panadapter/` on the card: the ADIF QSO log, a full config export (settings + memory channels), your LoTW signing certificate + key, the diagnostic log, and a self-describing `README.txt`. No setup required. With **WiFi off** the mirror runs continuously (the **SD** dot is green); with **WiFi on** you get one complete backup within seconds of switching on and then mirroring stops (dot turns **yellow**) — the SD card and the WiFi co-processor share a bus and cannot both use it reliably, so the Tab5 takes the backup first and then leaves the card alone. A genuine grab-and-go backup for PC-free POTA/SOTA. *(The card holds credentials — WiFi password, QRZ/eQSL logins, LoTW private key — so keep it physically secure.)*
+**QSO logging and upload** — Every contact is written to an ADIF log on the device, with
+timestamp, callsign, grid, frequency, band, mode, both signal reports and distance
+(never a report that was not actually exchanged). Read the log on the Tab5 or in the
+browser, delete single records or all of them, and upload *(needs WiFi)* to **QRZ
+Logbook**, **eQSL** and **ARRL LoTW** — LoTW QSOs are signed on the device itself with
+your own callsign certificate.
 
-**Web UI** — Browser panadapter, remote control (tune, mode, bandwidth), QSO log viewer, config export/import, microSD file browser, and diagnostic log download — all without leaving the radio room.
+**Live spots on the spectrum** *(needs WiFi)* — **POTA** park activations, and
+optionally **RBN** CW skimmer spots, drawn onto the trace at the frequency the station
+is actually using. Grey means you have already worked them on that band. Press and drag
+to pick one, lift to tune it *with the right mode*. Spots fade with age and are gone
+after 30 minutes; corner counts take you to the ones just off-screen.
 
-**USB mouse** — Plug a mouse into the USB-A port and a cursor appears; clicks drive every menu, button and drawer. *One hardware limitation: the mouse and the QMX can't share the single USB host port (a hub doesn't help — the ESP32-P4's USB stack lacks the Transaction Translator a high-speed hub needs for them), so the mouse is for setup, log review, and reading the manual with the radio unplugged.*
+**PSK Reporter spotting** *(needs WiFi)* — The stations you decode are reported to
+[PSK Reporter](https://pskreporter.info) the way WSJT-X does, so you appear on the map as
+a monitoring station. **On by default**; sends your call and grid plus each decoded
+station's call, grid, frequency, report and mode, batched at most once every five
+minutes — over the internet only, **never on the air**. One checkbox turns it off, and it
+is inert until your callsign and grid are set, and in simulation mode.
 
-**Offline capable** — WiFi optional. For POTA/SOTA use cases: Tab5 RTC keeps time across power-off, FT8/FT4 timing stays locked via internal oscillator + periodic QMX sync (no GPS required).
+**Web UI** *(needs WiFi)* — The whole panadapter in any browser on the LAN: live
+spectrum and waterfall at ~10 fps, click or drag to tune, mouse-wheel pan and tune,
+band/mode/bandwidth/zoom control, a graphical S-meter and the whole-band plan strip. In
+FT8/FT4 mode it shows a live TX status banner and a **Call CQ** button instead of the
+stream. Also: the QSO log as a sortable table, config download/upload as an editable text
+file, a microSD file browser, screenshots, and the diagnostic log.
+
+**Built-in user manual** — This entire guide is compiled into the firmware, so it opens
+instantly with no WiFi, no card and no download, and can never describe a different
+version than the one you are running. It opens at the chapter for the screen you are on,
+warning banners are tappable, and a **Need guidance?** panel lets you pick your symptom
+in plain words. See [Getting help](#getting-help).
+
+**Time, with or without a network** — SNTP when WiFi is up *(needs WiFi)*, the Tab5's own
+supercap-backed RTC across power-off, the QMX's clock as an offline fallback, GPS
+detected and phase-locked automatically if your QMX has one, and a manual set-and-sync
+panel. FT8/FT4 timing also self-corrects from the decoded band consensus when offline.
+
+**microSD station backup** — Insert a card (a plain FAT32 32 GB card is ideal) **before
+switching on** and your whole station is mirrored to `/qmx-panadapter/`: the ADIF log, a
+full config export, your LoTW certificate and key, the diagnostic log and a
+self-describing `README.txt`. Continuous with WiFi off (green **SD** dot); one complete
+backup per start-up with WiFi on (yellow dot), because the card and the WiFi
+co-processor share a bus. *(The card holds credentials — WiFi password, QRZ/eQSL logins,
+LoTW private key — so keep it physically secure.)*
+
+**Diagnostics** — An always-on diagnostic log, nothing to enable: 5 MB in RAM, a rolling
+copy in flash that survives a power cut, and a full mirror to microSD if a card is in.
+Downloadable from the browser or over USB serial. Bug reports become answerable.
+
+**Practice mode** — A simulator with phantom stations that call CQ and reply through the
+real encode/decode pipeline, so you can rehearse a full QSO with **no radio connected**
+— and with a hard interlock that never keys a QMX even if one is attached.
+
+**Touch, keyboard, mouse** — Edge-swipe navigation with breathing grip handles, an
+on-screen keyboard, optional support for the M5Stack Tab5 70-key snap-on keyboard, and
+USB mouse support. *(The mouse and the QMX cannot share the single USB host port — the
+ESP32-P4's USB stack lacks the Transaction Translator a hub would need — so the mouse is
+for setup, log review and reading the manual with the radio unplugged.)*
+
+**Built for the field** — WiFi is entirely optional; battery percentage and voltage with
+a charge limit for battery care; display sleep and a 180° flip for awkward mounting;
+config backup and restore as a text file; and a settings reset that does not need a
+reflash.
 
 ---
 
 ## Contents
 
 - [Quick Guide](#quick-guide) — get on air in 10 minutes
+- [Getting help](#getting-help) — the manual on the device, and the guidance panel
 - [Panadapter](#panadapter) — spectrum, waterfall, zoom, touch-to-tune, S-meter, memory channels
 - [Web UI](#web-ui) — browser panadapter and remote control
 - [FT8 Receive](#ft8-receive) — onboard decoder, decode list
@@ -232,6 +287,22 @@ Every completed QSO is written to an ADIF log downloadable from the web UI. See 
 
 ---
 
+## Getting help
+
+**This whole guide is inside the firmware.** No WiFi, no microSD card, no download: it works on the first boot, in a field with no signal, and it can never describe a different version than the one you are running. Swipe ← from the right edge to open the settings drawer; the top two buttons are the two ways in.
+
+**User Manual — opens where you are (new in v1.5.0).** Not a contents page to search: it opens the chapter covering the screen you were on — the panadapter chapter, the FT8 **receive** chapter, or the FT8 **transmit** chapter if a transmission is armed or running (someone mid-transmission is asking a different question). Inside: **Contents** is a two-column list — press and slide, and lifting your finger opens the highlighted chapter; **Back** returns to the previous page (shown only when there is one); **Exit** puts you back where you came from. Edge swipes and top-bar taps are stood down while the manual is open, so a stray touch cannot retune behind it. Holding the **User Manual** button for 3 s resets the reader; the manual itself is part of the firmware and cannot be lost.
+
+**Need guidance? — describe the symptom, not the cause (new in v1.5.0).** The second drawer button opens a short list headed *"What do you need help with?"*, written the way you would say it out loud — "My radio is not showing up", "Nothing appears in the decode list", "It never transmits", "How do I change what my CQ says?", "Where are my contacts logged?" Pick the one that fits and the manual opens at the section that answers it. The list holds questions as well as faults, and it scrolls — keep going past the first few rows.
+
+**Rows the Tab5 can see are happening now are highlighted and floated to the top**: no CAT link to the QMX, IQ mode never confirmed, an empty decode list while FT8 is running with the radio present, or WiFi switched on but not connected. WiFi switched **off** deliberately — POTA, battery — is not reported as a fault; that row stays as a normal question. **The device ranks, you choose:** a highlighted row is a suggestion, and it will never navigate for you on inference. The rows offered are scoped to the screen you opened the panel from, so FT8 never offers you spectrum symptoms.
+
+**Warnings you can tap (new in v1.5.0).** A warning you cannot act on is half a warning. The red **"QMX IQ mode not confirmed"** banner across the top of the screen is a button — tap it for the section on that exact fault. The **"Waiting for QMX"** message carries a small **Need help?** button; it says *help* rather than *what is wrong* on purpose, since a radio that is off is often off deliberately.
+
+If a chapter does not answer your question, that is a documentation bug worth reporting — the wording of these rows is written from what operators actually say.
+
+---
+
 ## Panadapter
 
 ### Spectrum and waterfall
@@ -362,6 +433,8 @@ The browser panadapter is a full-featured view in its own right — not just a w
 **Whole-band plan strip & adjustable split (new in v0.20.0).** Along the bottom of the browser view (above the status bar), a colour-coded CW/Digi/Phone strip spans the entire band with a draggable "visible window" (drag or tap to retune) and a VFO marker, mirroring the Tab5's own strip. Drag the divider between the spectrum and the waterfall to give either more room — the split is remembered in the browser. **Tab5Shot** now captures any open pop-up (band/mode dropdown) too, and the frequency keypad is draggable with a standard 10-key layout.
 
 **In FT8/FT4 mode the live stream pauses (new in v0.20.0).** The browser stops streaming the spectrum/waterfall and shows a notice plus the log and upload controls instead. While you're operating digital modes the stream would compete with the on-device decoder and the WiFi link, so pausing it keeps FT8 decoding and WiFi noticeably steadier. Switch the Tab5 back to Panadapter mode and the stream resumes automatically.
+
+**Live TX status, and Call CQ from the browser.** In FT8/FT4 mode that same panel carries a **TX status banner** (v1.3.6) mirroring the Tab5's own label — red while transmitting including the "call 2 of 4" counter, amber armed, green on QSO complete, orange on timeout, plus the persistent "CQ stopped after N calls - no answer"; the browser tab title shows a red dot while transmitting, visible even in a background tab. Under it is a **Call CQ** button (v1.5.0, Dennis WN4FLA), so a CQ run that timed out or reached its call limit can be restarted without walking back to the radio. It **confirms first** — it keys the radio, and a mis-click from another room should not put a carrier on the air — then uses exactly what the Tab5 would: the active CQ preset, the current TX tone (honouring TX Hold) and the TXCQ ANY/EVEN/ODD parity, sharing one code path with the Tab5's own button so the two cannot drift. The request is handed to the display task, so the button greys out for a moment; watch the banner rather than the button. A request arriving while the Tab5 is not in FT8 is discarded, never queued. Replies and pounces are still initiated on the Tab5, where the decode list is.
 
 **Click or drag to tune.** Click or drag on the spectrum or waterfall — a cyan cursor appears with a live frequency readout and commits on release.
 
@@ -930,8 +1003,9 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.4.0 is here** — **live spots on the spectrum** (POTA now, RBN opt-in): callsigns drawn on the trace where the station actually is, grey when you have already worked them on that band, press-and-drag to pick one and lift to tune it with the right mode. Alongside that, three long-standing instability causes were root-caused rather than patched around: **all outbound internet uploads were failing** (hardware crypto starved of DMA memory), **52 KB of internal memory was being held by our own tables** — which turns out to explain the SD remount failures, the USB-after-power-cycle failures and the after-an-hour reboots as ONE cause — and **power-cycling the QMX could freeze the Tab5** by pinning a CPU core on the dead connection. Plus **WiFi remembers up to six networks** and moves between them by itself, and four of Roy KI0ER's five FT8 findings are fixed. Next on the bench:
+**v1.5.0 is here** — **the manual answers questions now, instead of being a manual.** The **User Manual** button opens the chapter for the screen you are on, warnings are tappable, and a new **Need guidance?** panel lists symptoms in plain words with the ones the device can see highlighted at the top — it ranks, you choose. The built-in manual also stopped failing on well-used devices (it was being copied out of the firmware just to be read back, on storage that is already full) and its missing characters are fixed. Plus **Call CQ from the browser** (Dennis WN4FLA) and **the station you are working held at the top of the decode list** (Don WB0LQW). Next on the bench:
 
+- **An A–Z index in the manual.** The guidance panel's bottom button deliberately reads "Open the manual", not "Show all topics", because the index does not exist yet — a touch-first term index generated into the firmware's manual, no typing on glass.
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).
 - **User Manual polish.** Inline images (phase 2 — the manual is currently text-only). The manual itself now ships inside the firmware, so there is no longer any download or SD-copy path to soak.

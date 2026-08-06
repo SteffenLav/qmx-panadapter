@@ -38,11 +38,23 @@ Click anywhere on the spectrum to tune to that frequency. The waterfall updates 
 
 ## FT8 Control
 
-When the Tab5 is in **FT8/FT4 mode**, the browser pauses the live spectrum stream (see [Spectrum Waterfall](#spectrum-waterfall) above) and instead shows a **live TX status banner** plus the **log and upload controls** — download your ADIF, upload to QRZ/eQSL/LoTW, grab the diagnostic log. Operate FT8 (watch the decode list, tap to reply, call CQ) **on the Tab5 itself**.
+When the Tab5 is in **FT8/FT4 mode**, the browser pauses the live spectrum stream (see [Spectrum Waterfall](#spectrum-waterfall) above) and instead shows a **live TX status banner**, a **Call CQ** button, and the **log and upload controls** — download your ADIF, upload to QRZ/eQSL/LoTW, grab the diagnostic log. Everything else about operating FT8 (watching the decode list, tapping a station to reply) happens **on the Tab5 itself**.
 
 The status banner (new in v1.3.6) mirrors the Tab5's own TX label so you can watch the radio from another room: **red** while transmitting — including the "call 2 of 4" counter when a [CQ stop limit](ft8-tx.md) is set — **amber** when a transmission is armed or a QSO is waiting, **green** on QSO complete, **orange** on timeout, and the persistent **"CQ stopped after N calls - no answer"** once an auto-stopped CQ run ends. The browser tab's title also shows a red dot while transmitting, so even a background tab signals when the radio is on the air.
 
-FT8 transmit can only be initiated from the Tab5 — a safety feature, since only one interface should key the QMX at a time.
+### Call CQ from the browser
+
+New in v1.5.0 (asked for by Dennis WN4FLA). A CQ run that has timed out, or that has reached its [CQ stop limit](ft8-tx.md), otherwise needs a walk back to the Tab5 to start it again. The **Call CQ** button under the status banner does it from wherever you are.
+
+- **It asks first.** The button **keys the radio**, and a mis-click from another room should not put a carrier on the air, so it confirms ("Start calling CQ on the Tab5?") before anything is sent.
+- **It calls exactly what the Tab5 would.** The active CQ preset, the current TX tone (honouring **TX Hold**, or picking the nearest clear slot as usual) and the **TXCQ ANY / EVEN / ODD** parity are all the ones set on the device — the two buttons share one code path, so they cannot drift apart. To change any of those, long-press **Call CQ** on the Tab5.
+- **It takes about a second.** The request is handed to the Tab5's own display task rather than acted on inside the web request, so the button greys out and reads "Calling..." briefly. Watch the status banner, not the button, to see the CQ start.
+- **Only in FT8/FT4 mode.** The button is part of the FT8 panel, and a request that arrives when the Tab5 is not in FT8 is discarded rather than queued — so it can never fire minutes later, unasked, when you next switch modes.
+- If your callsign and grid are not set, the Tab5 shows the reason on its own screen and nothing is transmitted.
+
+> **Not yet confirmed on the air.** The endpoint, the hand-off, the preset/tone/parity reuse and the error path are all verified on hardware; the final key-down is inferred from sharing the Tab5 button's code. Please report how it behaves.
+
+Apart from Call CQ, transmit is still initiated on the Tab5 — replies and pounces need the decode list in front of you, and only one interface should be keying the QMX.
 
 ## CAT Control (Advanced)
 
@@ -73,7 +85,7 @@ The bottom bar groups its actions into three popup menus, plus a battery indicat
 
 - **Config download ↓** — all settings as a text file (backup or transfer to another Tab5)
 - **Config upload ↑** — restore settings from a backup file
-- **SD Files** — opens the **microSD file browser** (`http://<tab5-ip>/files`, new in v1.3.0): browse the card from your computer without pulling it — download logs, config backups and the offline manual; upload files; delete
+- **SD Files** — opens the **microSD file browser** (`http://<tab5-ip>/files`, new in v1.3.0): browse the card from your computer without pulling it — download logs and config backups, upload files, delete
 - **Diagnostic download ↓** — downloads **both** diagnostic logs: the live session log (always on, nothing to enable) and the flash-persisted copy from before the last reboot/power-off
 
 **Miscellaneous ▲**:
@@ -114,7 +126,7 @@ Each upload remembers where it left off — re-uploading skips QSOs that were al
 
 ## Limitations
 
-- **Transmit from web** — not supported (must use Tab5)
+- **Transmit from web** — **Call CQ** only (see [Call CQ from the browser](#call-cq-from-the-browser)); replying to a station, pouncing and the TX tone/preset/parity settings are all on the Tab5
 - **Real-time chat** — no operator messaging
 - **Export formats** — ADIF only (import to EQSL, WSJT-X, etc. yourself)
 - **Latency** — ~200 ms typical (WiFi dependent)

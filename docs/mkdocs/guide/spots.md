@@ -46,9 +46,11 @@ The callsign and its line always fade together.
 
 **Off-screen counts.** When there are spots on your band that fall outside the
 window you are looking at, a small count appears in the bottom corner of the
-spectrum — `<3` on the low side, `5>` on the high side. These are **scoped to the
-band you are on**, so the arrow never points at something on 40 m while you are
-on 20 m. Each is coloured like the spot it will take you to.
+spectrum — `< spots (3)` on the low side, `spots (5) >` on the high side. It says
+"spots" in words rather than a bare `<3`, because a lone number against the edge
+of the spectrum tells you neither what it counts nor that you can tap it. These
+are **scoped to the band you are on**, so the arrow never points at something on
+40 m while you are on 20 m. Each is coloured like the spot it will take you to.
 
 **Crowded bands.** Only so many callsigns fit legibly side by side, so on a busy
 segment the closest-spaced spots lose their name — and a spot with no name is not
@@ -72,7 +74,7 @@ preference to older ones.
 Bandwidth is deliberately **not** forced. The QMX keeps a filter per mode and
 loads it when the mode changes, so the right width follows by itself.
 
-**Tap an off-screen count** (`<3` / `5>`) and you jump to the nearest spot on
+**Tap an off-screen count** (`< spots (3)` / `spots (5) >`) and you jump to the nearest spot on
 that side, which brings it into view. Those counts have a deliberately large
 touch area — the visible text is small, but the target around it is not.
 

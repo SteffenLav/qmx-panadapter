@@ -1,5 +1,10 @@
 # Troubleshooting
 
+> **On the Tab5 itself:** swipe in from the right edge and tap **Need guidance?**.
+> It lists these symptoms in plain words, highlights the ones it can see are
+> happening right now, and opens this chapter at the matching section. See
+> [Getting Help](../getting-help.md).
+
 ## Common Issues
 
 ### Spectrum is flat, no signal

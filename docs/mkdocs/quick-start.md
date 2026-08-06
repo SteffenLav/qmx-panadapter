@@ -149,6 +149,7 @@ If you set up WiFi:
 - See [Troubleshooting](reference/troubleshooting.md) for more
 
 **Still stuck?**
+- **Ask the Tab5 first.** Open the settings drawer (swipe in from the right edge) and tap **Need guidance?** — pick the symptom in plain words and it opens the manual at the answer. Anything the device can see for itself is highlighted at the top of that list. See [Getting Help](getting-help.md)
 - The **diagnostic log is always on** — nothing to enable. Download it via the web UI: open the **Files** menu in the web page's bottom bar and click **Diagnostic download ↓** (downloads both the live log and the saved pre-reboot copy), or pull `qmx-log.txt` from an inserted microSD card
 - Report the issue on [GitHub Issues](https://github.com/SteffenLav/qmx-panadapter/issues) or the [QRPLabs Groups.io thread](https://groups.io/g/QRPLabs/topic/119565643) and attach the log
 

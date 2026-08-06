@@ -21,6 +21,7 @@ theme:
 nav:
   - Home: index.md
   - Quick Start: quick-start.md
+  - Getting Help: getting-help.md
   - User Guide:
     - Panadapter: guide/panadapter.md
     - Live Spots: guide/spots.md

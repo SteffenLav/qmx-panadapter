@@ -1,6 +1,10 @@
 # Settings & Configuration
 
-Swipe ← from the right edge to open the settings drawer. All settings are saved automatically.
+Swipe in from the right edge to open the settings drawer. All settings are saved automatically.
+
+The top two buttons are not settings but the two ways into help: **User Manual**, which
+opens this guide at the chapter for the screen you came from, and **Need guidance?**,
+which lists symptoms and questions in plain words. See [Getting Help](../getting-help.md).
 
 ## Operator Info
 

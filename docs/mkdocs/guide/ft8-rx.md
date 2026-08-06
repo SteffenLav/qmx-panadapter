@@ -16,7 +16,7 @@ Swipe → from the left edge to toggle to FT8/FT4 view. The same decode list and
 
 You'll see:
 
-- **Decode list** (left pane) — all heard stations, sortable by signal strength, distance, or newest
+- **Decode list** (left pane) — every station heard, ordered so the ones that matter to you are at the top (see [Decode List](#2-decode-list) below)
 - **Waterfall** (right pane) — same real-time spectrum as panadapter mode
 - **Call CQ button** — start a CQ (requires QMX on the air)
 - **Filter button** — include/exclude stations, prioritise by SNR/distance, show only CQ callers
@@ -39,6 +39,13 @@ The list shows every decoded FT8 message:
 | **HRD** | Times decoded since last appearance |
 
 **Own call highlight** — your callsign is shown in **inverted colours** (red fill, white text) so you spot replies to you instantly.
+
+**How the list is ordered.** Top to bottom:
+
+1. **The station you are working** (new in v1.5.0, asked for by Don WB0LQW) — during an exchange there are several transmissions each way, and the partner's messages used to sort down-screen where you had to hunt for them. Now *everything* from them stays at the top: their reply to you, their CQ while you are mid-exchange, and a message they send to a third station — which is exactly when you most want to see it. It covers a hand-typed reply as well as an automatic exchange, and matches on their **callsign**, so a third station merely mentioning them is not promoted. It releases the moment the QSO completes (their closing `73` contains your callsign, so rule 2 keeps it up there anyway).
+2. **Messages addressed to you** — anything containing your callsign.
+3. **CQ calls.**
+4. **Everything else, strongest signal first.**
 
 **Stale entries** — the list is a live picture of who's on frequency now; stations not heard again within **2 minutes** drop off automatically.
 
