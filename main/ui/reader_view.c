@@ -1060,10 +1060,16 @@ void reader_view_open_help(const char *page_rel, const char *anchor)
     s_anchor_obj = NULL;
     ESP_LOGI(TAG, "context help: %s%s%s", page_rel,
              anchor && anchor[0] ? " -> " : "", anchor ? anchor : "");
-    // Show first so the overlay is already sliding in while the page renders;
-    // the load is synchronous off the embedded blob, so this feels instant.
+
+    // Point s_current_path at the target BEFORE show(), and let show()'s own
+    // fetch load it. Do NOT show-then-fetch: reader_view_show() already issues
+    // reader_net_fetch(s_current_path, true) for whatever page was last open, and
+    // reader_net_fetch() is a NO-OP while a load is in flight - so a second call
+    // here was silently dropped and every context-help tap landed on the index
+    // page instead (operator-reported, 2026-08-06: "all I have tried send me to
+    // the homepage"). One fetch, of the right page, is the whole fix.
+    snprintf(s_current_path, sizeof(s_current_path), "%s", page_rel);
     reader_view_show();
-    reader_net_fetch(page_rel, false);
 }
 
 // Exit: leave the Reader entirely (returns to whatever mode was underneath).

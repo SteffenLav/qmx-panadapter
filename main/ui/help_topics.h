@@ -34,6 +34,8 @@ typedef enum {
     HELP_CQ_PRESETS,
     HELP_LOGGING,
     HELP_UPLOADS,
+    HELP_SPOTS_TAP,
+    HELP_ROBOT,
 
     // --- What just went wrong (Layer 3: tappable warnings) ---
     HELP_TROUBLE_USB,

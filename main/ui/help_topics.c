@@ -16,24 +16,29 @@ static const char *TAG = "help";
 // Anchors are heading SUBSTRINGS, matched case-insensitively. Prefer the shortest
 // distinctive fragment: it survives renumbering and small wording edits.
 static const help_entry_t s_topics[] = {
-    { HELP_PANADAPTER,          "guide/panadapter.md",          "",                  "Panadapter"          },
-    { HELP_FT8_RX,              "guide/ft8-rx.md",              "",                  "FT8 receive"         },
-    { HELP_FT8_TX,              "guide/ft8-tx.md",              "",                  "FT8 transmit"        },
-    { HELP_SETTINGS,            "guide/settings.md",            "",                  "Settings"            },
-    { HELP_SPOTS,               "guide/spots.md",               "",                  "Live spots"          },
-    { HELP_WEB_UI,              "guide/web-ui.md",              "",                  "Web interface"       },
-    { HELP_TIME_SYNC,           "guide/time-sync.md",           "",                  "Time sync"           },
+    // Where you are (Layer 1). Anchors chosen so the operator lands on the part
+    // that answers "what am I looking at", not on a chapter title they then have
+    // to scroll past.
+    { HELP_PANADAPTER,          "guide/panadapter.md",          "Layout",                    "Panadapter"           },
+    { HELP_FT8_RX,              "guide/ft8-rx.md",              "Decode List",               "FT8 receive"          },
+    { HELP_FT8_TX,              "guide/ft8-tx.md",              "Modes of Transmission",     "FT8 transmit"         },
+    { HELP_SETTINGS,            "guide/settings.md",            "",                          "Settings"             },
+    { HELP_SPOTS,               "guide/spots.md",               "What you see",              "Live spots"           },
+    { HELP_WEB_UI,              "guide/web-ui.md",              "Quick Start",               "Web interface"        },
+    { HELP_TIME_SYNC,           "guide/time-sync.md",           "Time Sources",              "Time sync"            },
 
-    { HELP_TAP_TO_TUNE,         "guide/panadapter.md",          "Tap to Tune",       "Tap to tune"         },
-    { HELP_GESTURES,            "reference/gestures.md",        "",                  "Gestures"            },
-    { HELP_TX_TONE,             "guide/ft8-tx.md",              "",                  "TX frequency"        },
-    { HELP_CQ_PRESETS,          "guide/ft8-tx.md",              "",                  "CQ messages"         },
-    { HELP_LOGGING,             "guide/ft8-tx.md",              "",                  "QSO logging"         },
-    { HELP_UPLOADS,             "guide/web-ui.md",              "",                  "Log uploads"         },
+    // Specific controls (Layer 2).
+    { HELP_TAP_TO_TUNE,         "guide/panadapter.md",          "Tap to Tune",               "Tap to tune"          },
+    { HELP_GESTURES,            "reference/gestures.md",        "Spectrum",                  "Gestures"             },
+    { HELP_TX_TONE,             "guide/ft8-tx.md",              "Call CQ",                   "TX frequency"         },
+    { HELP_CQ_PRESETS,          "guide/ft8-tx.md",              "Call CQ",                   "CQ messages"          },
+    { HELP_LOGGING,             "guide/web-ui.md",              "Bottom Bar Menus",          "QSO logging"          },
+    { HELP_UPLOADS,             "guide/web-ui.md",              "LoTW Upload",               "Log uploads"          },
+    { HELP_SPOTS_TAP,           "guide/spots.md",               "Tapping a spot",            "Tapping a spot"       },
+    { HELP_ROBOT,              "guide/ft8-tx.md",               "Auto-Reply",                "Auto-reply robot"     },
 
-    // Troubleshooting anchors point at headings that ALREADY exist in
-    // troubleshooting.md - no new headings were invented for this. The build
-    // check keeps them honest if the wording ever changes.
+    // What just went wrong (Layer 3). These point at headings that ALREADY exist
+    // in troubleshooting.md - none were invented for this.
     { HELP_TROUBLE_USB,         "reference/troubleshooting.md", "won't reconnect",           "Radio not connecting" },
     { HELP_TROUBLE_WIFI,        "reference/troubleshooting.md", "WiFi won't connect",        "WiFi problems"        },
     { HELP_TROUBLE_NO_DECODES,  "reference/troubleshooting.md", "decoding is slow or stops", "No FT8 decodes"       },
