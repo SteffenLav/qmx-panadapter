@@ -26,6 +26,7 @@
 #include "spots_lane.h"
 #include "net/spots.h"
 #include "help_topics.h"
+#include "help_triage.h"
 #include "wifi_config.h"
 #include "tune_modal.h"
 #include "memory_modal.h"
@@ -1947,7 +1948,14 @@ static bool      s_iq_warn_active = false;
 // a message. These handlers take them straight to the section that explains the
 // fix, which is the moment a manual is actually worth having.
 static void iq_warn_help_cb(lv_event_t *e)   { (void)e; help_open(HELP_TROUBLE_IQ); }
-static void qmx_wait_help_cb(lv_event_t *e)  { (void)e; help_open(HELP_TROUBLE_USB); }
+// The QMX-wait button says "What's wrong?", so it opens the triage rather than
+// jumping to one chapter. The radio being absent is exactly what the triage will
+// have flagged at the top - and if the operator's real problem is something else,
+// the other rows are right there instead of a dead end.
+static void qmx_wait_help_cb(lv_event_t *e)  { (void)e; help_triage_open(); }
+static void whats_wrong_cb(lv_event_t *e)    { (void)e; drawer_close(); help_triage_open(); }
+
+bool ui_iq_mode_warning_active(void) { return s_iq_warn_active; }
 
 void ui_set_iq_mode_warning(bool active)
 {
@@ -5676,6 +5684,25 @@ static void drawer_build(void)
         lv_obj_t *l = lv_label_create(btn);
         lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
         lv_label_set_text(l, LV_SYMBOL_FILE "  User Manual");
+        lv_obj_center(l);
+        y += 60 + 8;
+    }
+
+    // "What's wrong?" - the other way in, for someone who is stuck and does not
+    // know what the chapter is called. Directly under User Manual because they are
+    // the same door seen from two sides: one for browsing, one for a problem.
+    {
+        lv_obj_t *btn = lv_button_create(s_drawer);
+        lv_obj_set_size(btn, DRAWER_W - 32, 60);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, y);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a3138), 0);
+        lv_obj_set_style_border_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_set_style_border_width(btn, 2, 0);
+        lv_obj_set_style_radius(btn, 8, 0);
+        lv_obj_add_event_cb(btn, whats_wrong_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *l = lv_label_create(btn);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+        lv_label_set_text(l, LV_SYMBOL_WARNING "  What's wrong?");
         lv_obj_center(l);
         y += 60 + 20;
     }

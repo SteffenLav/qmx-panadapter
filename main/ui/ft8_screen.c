@@ -297,6 +297,38 @@ void ft8_screen_get_all(ft8_call_t *out, int max, int *count_out)
     if (count_out) *count_out = n;
 }
 
+int ft8_screen_active_count(void)
+{
+    // Count-only companion to ft8_screen_get_all(), for callers that want the
+    // number and nothing else - notably the context-help triage, which runs on
+    // taskLVGL where an ft8_call_t table (~11 KB) on the stack is a crash, not a
+    // slow path. Same "count-only accessor" pattern as settings_wifi_known_count().
+    //
+    // Deliberately READ-ONLY: it applies the same visibility rule as get_all() but
+    // never purges. Asking "how many stations are live" from a help panel must not
+    // mutate the decode list.
+    bool tx_even = false;
+    bool tx_lock = ft8_tx_get_parity_lock(&tx_even);
+    int  per_ms  = ft8_op_mode_slot_ms();
+    if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) {
+        ESP_LOGW(TAG, "active_count: mutex timeout");
+        return 0;
+    }
+    int64_t now = (int64_t)time(NULL);
+    int n = 0;
+    for (int i = 0; i < FT8_CALL_TABLE_SIZE; i++) {
+        if (!s_table[i].occupied) continue;
+        if (now - s_table[i].last_utc > FT8_ROW_STALE_SEC) {
+            if (!(tx_lock && (now - s_table[i].last_utc) <= FT8_ROW_PAUSED_MAX_SEC)) continue;
+            int64_t sidx = ((int64_t)s_table[i].last_utc * 1000 + per_ms / 2) / per_ms;
+            if (((sidx % 2) == 0) != tx_even) continue;   // not our parity: genuinely stale
+        }
+        n++;
+    }
+    if (s_mutex) xSemaphoreGive(s_mutex);
+    return n;
+}
+
 void ft8_screen_clear(void)
 {
     if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) {

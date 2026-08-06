@@ -8,6 +8,9 @@
 #include "ui.h"
 #include "ui_mode.h"
 #include "ft8_tx.h"
+#include "ft8_screen.h"
+#include "cat.h"
+#include "wifi/wifi.h"
 
 #include "esp_log.h"
 
@@ -61,6 +64,72 @@ void help_open(help_topic_t t)
     if (!e) return;                       // HELP_NONE, or an id with no entry yet
     ESP_LOGI(TAG, "opening help: %s", e->label);
     reader_view_open_help(e->page, e->anchor);
+}
+
+// --- triage ----------------------------------------------------------------
+
+// One candidate row: the symptom text, the topic it resolves to, and the live
+// condition that says it is happening NOW. A NULL condition means "offer this as
+// a normal question for this screen, but never claim it is the problem".
+typedef struct {
+    help_topic_t topic;
+    const char  *symptom;
+    bool       (*happening_now)(void);
+    bool         panadapter;   // offer on the panadapter screen
+    bool         ft8;          // offer in FT8/FT4
+} triage_cand_t;
+
+static bool cond_no_radio(void)   { return !cat_is_ready(); }
+static bool cond_iq_bad(void)     { return ui_iq_mode_warning_active(); }
+// Only a fault if WiFi is supposed to be up. Someone operating POTA with WiFi
+// deliberately off must not be told their network is broken - the row stays in the
+// list as a normal question, it just is not flagged as happening now.
+static bool cond_no_wifi(void)    { return panadapter_wifi_is_enabled() && !wifi_is_connected(); }
+static bool cond_no_decodes(void)
+{
+    // Only meaningful in FT8/FT4, and only once the radio is actually there -
+    // otherwise "nothing is decoding" is just a restatement of "no radio", and
+    // two rows would be competing to describe one fault.
+    if (ui_mode_get() != UI_MODE_FT8 || !cat_is_ready()) return false;
+    return ft8_screen_active_count() == 0;
+}
+
+// Order here is the tie-break among rows that are equally (un)flagged, so it runs
+// most-serious first: no radio at all, then a radio that is misbehaving, then the
+// things that are merely puzzling.
+static const triage_cand_t s_cands[] = {
+    { HELP_TROUBLE_USB,        "My radio is not showing up",             cond_no_radio,   true,  true  },
+    { HELP_TROUBLE_IQ,         "The spectrum looks mirrored or shifted", cond_iq_bad,     true,  true  },
+    { HELP_TROUBLE_NO_DECODES, "Nothing appears in the decode list",     cond_no_decodes, false, true  },
+    { HELP_TROUBLE_NO_TX,      "It never transmits",                     NULL,            false, true  },
+    { HELP_TROUBLE_TIME,       "The clock looks wrong",                  NULL,            false, true  },
+    { HELP_TROUBLE_FLAT,       "The spectrum is flat - no signals",      NULL,            true,  false },
+    { HELP_TAP_TO_TUNE,        "Tapping the screen tunes the wrong way", NULL,            true,  false },
+    { HELP_TROUBLE_WIFI,       "I cannot reach the web page",            cond_no_wifi,    true,  true  },
+};
+
+int help_triage_collect(help_triage_row_t *out, int max)
+{
+    if (!out || max <= 0) return 0;
+    const bool ft8 = (ui_mode_get() == UI_MODE_FT8);
+    int n = 0;
+
+    // Two passes rather than a sort: flagged rows first, each pass already in
+    // seriousness order. Keeps it allocation-free and obviously stable.
+    for (int pass = 0; pass < 2 && n < max; pass++) {
+        const bool want_flagged = (pass == 0);
+        for (size_t i = 0; i < sizeof(s_cands) / sizeof(s_cands[0]) && n < max; i++) {
+            const triage_cand_t *c = &s_cands[i];
+            if (!(ft8 ? c->ft8 : c->panadapter)) continue;
+            bool now = c->happening_now ? c->happening_now() : false;
+            if (now != want_flagged) continue;
+            out[n].topic   = c->topic;
+            out[n].symptom = c->symptom;
+            out[n].flagged = now;
+            n++;
+        }
+    }
+    return n;
 }
 
 help_topic_t help_topic_for_current_context(void)

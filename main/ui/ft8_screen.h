@@ -46,6 +46,12 @@ void ft8_screen_record_decode(const char *text,
 // caller may sort.
 void ft8_screen_get_all(ft8_call_t *out, int max, int *count_out);
 
+// How many stations are currently live, without needing a snapshot buffer. Use
+// this instead of ft8_screen_get_all() when only the number is wanted: the table
+// is ~11 KB and callers on taskLVGL cannot put that on the stack. Read-only -
+// unlike get_all() it never purges expired rows.
+int ft8_screen_active_count(void);
+
 // Clear the entire decode table (on mode/band switch).
 // Takes mutex internally.
 void ft8_screen_clear(void);

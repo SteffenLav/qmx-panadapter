@@ -6,6 +6,7 @@ idf_component_register(
         "ui/ui_clock.c"
         "ui/spots_lane.c"
         "ui/help_topics.c"
+        "ui/help_triage.c"
         "ui/wifi_config.c"
         "ui/tune_modal.c"
         "ui/identity_config.c"

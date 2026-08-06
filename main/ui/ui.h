@@ -90,6 +90,10 @@ void ui_set_sd_active(bool active);
 // confirms IQ mode (e.g. on reconnect/power-cycle).
 void ui_set_iq_mode_warning(bool active);
 
+// Is the IQ-mode warning currently up? Read by the context-help triage so
+// "the spectrum looks mirrored" is offered first when it is actually happening.
+bool ui_iq_mode_warning_active(void);
+
 // Called from cat.c's VN; response handler once the QMX firmware version is
 // known, so the drawer can reveal 1_04+-gated sections (AM mode, Tune button)
 // even if it was already built (lazy, first-open) before VN; answered. No-op

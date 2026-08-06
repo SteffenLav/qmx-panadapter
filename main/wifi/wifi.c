@@ -574,6 +574,11 @@ bool wifi_is_connected(void)
     return (xEventGroupGetBits(s_events) & BIT_CONNECTED) != 0;
 }
 
+bool panadapter_wifi_is_enabled(void)
+{
+    return !s_wifi_user_disabled;
+}
+
 const char *wifi_get_ssid(void)
 {
     static char ssid_buf[33];

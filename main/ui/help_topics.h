@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdbool.h>
+
 // Context help topics: the map from "what the operator is doing / what just went
 // wrong" to a place in the built-in user manual.
 //
@@ -67,3 +69,32 @@ void help_open(help_topic_t t);
 // What is the operator doing right now? Used by the drawer's User Manual button
 // so a short tap lands somewhere useful instead of always on the contents page.
 help_topic_t help_topic_for_current_context(void);
+
+// ---------------------------------------------------------------------------
+// Triage: "what's wrong?" as a short, ranked list of SYMPTOMS
+// ---------------------------------------------------------------------------
+//
+// A fixed problem menu fails the way FAQ pages fail - a novice cannot map what
+// they SEE onto our vocabulary. So the rows are phrased in the first person as
+// observable symptoms ("Nothing appears in the decode list"), never as system
+// concepts ("no CAT link"), and the list is RANKED from live device state:
+// cat_is_ready(), wifi_is_connected(), the decode count, the IQ-confirmed flag.
+// Rows the device can see are actually happening float to the top and are marked
+// `flagged`; the rest are the usual questions for whichever screen is open.
+//
+// THE RULE THIS MUST NOT BREAK: the device RANKS, the operator CHOOSES. Never
+// auto-navigate on inference, however confident. A wrong guess that costs one tap
+// is fine; one that hijacks the screen is the exact bug that made opening the
+// drawer land in the troubleshooting chapter (see the QMX-wait label in ui.c).
+
+#define HELP_TRIAGE_MAX 5
+
+typedef struct {
+    help_topic_t topic;
+    const char  *symptom;   // first person, what the operator can SEE
+    bool         flagged;   // device state says this is happening right now
+} help_triage_row_t;
+
+// Fill out[0..max) with the ranked list, flagged rows first. Returns how many
+// were written. Cheap and side-effect free: safe to call from an LVGL callback.
+int help_triage_collect(help_triage_row_t *out, int max);
