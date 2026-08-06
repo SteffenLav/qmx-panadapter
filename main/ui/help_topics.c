@@ -97,15 +97,33 @@ static bool cond_no_decodes(void)
 // Order here is the tie-break among rows that are equally (un)flagged, so it runs
 // most-serious first: no radio at all, then a radio that is misbehaving, then the
 // things that are merely puzzling.
+//
+// EVERY ROW MUST MAKE SENSE ON THE SCREEN THAT OFFERS IT. "The spectrum looks
+// mirrored" was originally offered in FT8, where there is no spectrum on screen at
+// all - the operator called it nonsense, and he was right: one irrelevant row is
+// enough to make someone stop reading the list. The panadapter/ft8 flags are the
+// mechanism, so use them rather than adding a row that has to be mentally skipped.
 static const triage_cand_t s_cands[] = {
-    { HELP_TROUBLE_USB,        "My radio is not showing up",             cond_no_radio,   true,  true  },
-    { HELP_TROUBLE_IQ,         "The spectrum looks mirrored or shifted", cond_iq_bad,     true,  true  },
-    { HELP_TROUBLE_NO_DECODES, "Nothing appears in the decode list",     cond_no_decodes, false, true  },
-    { HELP_TROUBLE_NO_TX,      "It never transmits",                     NULL,            false, true  },
-    { HELP_TROUBLE_TIME,       "The clock looks wrong",                  NULL,            false, true  },
-    { HELP_TROUBLE_FLAT,       "The spectrum is flat - no signals",      NULL,            true,  false },
-    { HELP_TAP_TO_TUNE,        "Tapping the screen tunes the wrong way", NULL,            true,  false },
-    { HELP_TROUBLE_WIFI,       "I cannot reach the web page",            cond_no_wifi,    true,  true  },
+    // Shared: a missing radio and an unreachable web page mean the same thing in
+    // either mode.
+    { HELP_TROUBLE_USB,        "My radio is not showing up",              cond_no_radio,   true,  true  },
+
+    // FT8/FT4. No spectrum is drawn here, so nothing about the spectrum belongs.
+    { HELP_TROUBLE_NO_DECODES, "Nothing appears in the decode list",      cond_no_decodes, false, true  },
+    { HELP_TROUBLE_NO_TX,      "It never transmits",                      NULL,            false, true  },
+    { HELP_TROUBLE_TIME,       "Decodes look late, or the timer is off",  NULL,            false, true  },
+    { HELP_FT8_TX,             "Nobody answers my CQ",                    NULL,            false, true  },
+    { HELP_FT8_RX,             "How do I answer a station I can see?",    NULL,            false, true  },
+    { HELP_TX_TONE,            "Which frequency am I transmitting on?",   NULL,            false, true  },
+
+    // Panadapter. The IQ warning is here and NOT in FT8: its symptom is something
+    // you can only see on a spectrum. In FT8 the same topic is still one tap away
+    // from the warning banner itself, which is tappable (Layer 3).
+    { HELP_TROUBLE_IQ,         "The spectrum looks mirrored or shifted",  cond_iq_bad,     true,  false },
+    { HELP_TROUBLE_FLAT,       "The spectrum is flat - no signals",       NULL,            true,  false },
+    { HELP_TAP_TO_TUNE,        "Tapping the screen tunes the wrong way",  NULL,            true,  false },
+
+    { HELP_TROUBLE_WIFI,       "I cannot reach the web page",             cond_no_wifi,    true,  true  },
 };
 
 int help_triage_collect(help_triage_row_t *out, int max)

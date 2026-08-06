@@ -3368,7 +3368,11 @@ void ui_init(lv_display_t *disp)
         // qmx_wait_poll_cb). Deliberately small - it must not become another
         // wide invisible target.
         lv_obj_t *hb = lv_label_create(s_qmx_wait_overlay);
-        lv_label_set_text(hb, "What's wrong?");
+        // "Need help?", NOT "What's wrong?" - a QMX that is off may well be off on
+        // purpose (reading the manual, setting up, POTA planning), and a button
+        // implying a fault is wrong in that case. The panel it opens still says
+        // "What's wrong?", where the operator has chosen to ask.
+        lv_label_set_text(hb, "Need help?");
         lv_obj_set_style_text_font(hb, &lv_font_montserrat_22, 0);
         lv_obj_set_style_text_color(hb, lv_color_hex(0xC0C0C0), 0);
         lv_obj_set_style_bg_color(hb, lv_color_hex(0x303030), 0);
