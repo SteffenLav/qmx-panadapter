@@ -402,9 +402,12 @@ static void repaint(void)
 
     // Off-screen counts, so the lane says "there is more, that way" instead of
     // silently implying the band is empty outside the window.
-    char b[16];
+    // Spelled out as "spots (N)" rather than a bare "<N": a lone number against the
+    // edge of the spectrum gives no clue what it counts or that it can be tapped
+    // (operator's request). The arrow still says which way they are.
+    char b[24];
     if (off_l > 0 && s_edge_l) {
-        snprintf(b, sizeof(b), "<%d", off_l);
+        snprintf(b, sizeof(b), "< spots (%d)", off_l);
         lv_label_set_text(s_edge_l, b);
         // Coloured like the spot it will take you to, so it reads as part of the
         // same picture rather than as chrome (operator's request).
@@ -413,7 +416,7 @@ static void repaint(void)
         if (s_edge_l_hit) lv_obj_clear_flag(s_edge_l_hit, LV_OBJ_FLAG_HIDDEN);
     }
     if (off_r > 0 && s_edge_r) {
-        snprintf(b, sizeof(b), "%d>", off_r);
+        snprintf(b, sizeof(b), "spots (%d) >", off_r);
         lv_label_set_text(s_edge_r, b);
         lv_obj_set_style_text_color(s_edge_r, lv_color_hex(s_off_r.colour ? s_off_r.colour : COL_POTA), 0);
         lv_obj_align(s_edge_r, LV_ALIGN_BOTTOM_RIGHT, -EDGE_INSET, -EDGE_INSET);

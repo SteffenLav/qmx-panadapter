@@ -112,8 +112,15 @@ static void unlock(void) { if (s_lock) xSemaphoreGive(s_lock); }
 
 // Set the current page's title. Reflected on the top bar only while the TOC
 // panel is closed (when it's open the bar shows "Contents").
+static void fold_copy(char *dst, size_t dstsz, const char *src);   // defined below
+
 static void set_page_title(const char *t)
 {
+    // Folded on the way in: the title comes from the page's own H1, which is as
+    // free to contain a dash or an arrow as any other line.
+    char clean[sizeof(s_page_title)];
+    fold_copy(clean, sizeof(clean), (t && t[0]) ? t : "Documentation");
+    t = clean;
     snprintf(s_page_title, sizeof(s_page_title), "%s", (t && t[0]) ? t : "Documentation");
     if (s_title_lbl && (!s_toc_panel || lv_obj_has_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN)))
         lv_label_set_text(s_title_lbl, s_page_title);
@@ -177,12 +184,52 @@ static int fold_seq(const char *s, const char **rep)
         case 0x26A0: case 0x2705: case 0x274C: case 0xFE0F: *rep = ""; return len;
         default: break;
     }
-    // Box Drawing U+2500-257F -> -|+
+    // Box Drawing U+2500-257F -> -|+ , with the two diagonals kept as slashes
+    // (they appear in the manual's antenna/signal sketches, where "+" loses the
+    // sense of the line).
     if (cp >= 0x2500 && cp <= 0x257F) {
-        if      (cp == 0x2500 || cp == 0x2501) *rep = "-";
+        if      (cp == 0x2571)                 *rep = "/";
+        else if (cp == 0x2572)                 *rep = "\\";
+        else if (cp == 0x2500 || cp == 0x2501) *rep = "-";
         else if (cp == 0x2502 || cp == 0x2503) *rep = "|";
         else                                   *rep = "+";
         return len;
+    }
+    // Block Elements U+2580-259F -> ASCII shading. These are the waterfall and
+    // occupancy-strip sketches in the manual (U+2591 alone appears 128 times), and
+    // they used to fall through to the drop-everything default - so the art did not
+    // render as tofu, it silently VANISHED, leaving captioned blank space.
+    if (cp >= 0x2580 && cp <= 0x259F) {
+        if      (cp == 0x2591) *rep = ".";    // light shade
+        else if (cp == 0x2592) *rep = ":";    // medium shade
+        else                   *rep = "#";    // dark shade / full blocks
+        return len;
+    }
+    // Geometric Shapes: the manual uses these as UI pointers and state dots, so a
+    // word or punctuation carries the meaning where dropping them loses it.
+    switch (cp) {
+        case 0x25B2: *rep = "^"; return len;   // up triangle
+        case 0x25BC: *rep = "v"; return len;   // down triangle
+        case 0x25B6: case 0x25BA: *rep = ">"; return len;
+        case 0x25C0: case 0x25C4: *rep = "<"; return len;
+        case 0x25CB: case 0x25E6: *rep = "o"; return len;   // hollow dot
+        case 0x25CF: case 0x25AA: *rep = "*"; return len;   // filled dot
+        case 0x2248: *rep = "~";     return len;   // almost equal
+        case 0x2264: *rep = "<=";    return len;
+        case 0x2265: *rep = ">=";    return len;
+        case 0x2260: *rep = "!=";    return len;
+        case 0x00BD: *rep = "1/2";   return len;
+        case 0x00BC: *rep = "1/4";   return len;
+        case 0x00BE: *rep = "3/4";   return len;
+        case 0x2715: case 0x2716: *rep = "x"; return len;   // multiplication X
+        // Greek used as units/symbols in the docs - spell them, since the font has
+        // no Greek and a dropped tau turns "tau = 1 s" into "= 1 s".
+        case 0x03C4: *rep = "tau";   return len;
+        case 0x03B1: *rep = "alpha"; return len;
+        case 0x03A9: case 0x2126: *rep = "ohm"; return len;
+        case 0x00B2: *rep = "^2";    return len;
+        case 0x00B3: *rep = "^3";    return len;
+        default: break;
     }
     // Latin-1 accented letters -> unaccented base (avoids mangling names into
     // tofu; a docs reader in a proportional font can't show the accents anyway)
@@ -308,7 +355,23 @@ static lv_obj_t *add_label(const char *text, const lv_font_t *font,
     lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
     lv_obj_set_style_pad_top(l, top_gap, 0);
     if (left_indent) lv_obj_set_style_pad_left(l, left_indent, 0);
-    lv_label_set_text(l, text && text[0] ? text : " ");
+
+    // FOLD HERE, not (only) in the callers. Most callers pass text that has already
+    // been through md_inline_clean(), but the heading and blockquote paths passed
+    // their raw slice straight in - so any character the font lacks reached LVGL and
+    // rendered as a tofu box. Folding at the single point where text becomes a label
+    // makes that impossible to get wrong again; re-folding already-folded text is a
+    // no-op, since fold_seq() returns 0 for ASCII.
+    const char *src = (text && text[0]) ? text : " ";
+    size_t need = strlen(src) * 5 + 16;          // folds can EXPAND ("(left/right)")
+    char *folded = heap_caps_malloc(need, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (folded) {
+        fold_copy(folded, need, src);
+        lv_label_set_text(l, folded[0] ? folded : " ");
+        heap_caps_free(folded);
+    } else {
+        lv_label_set_text(l, src);
+    }
     return l;
 }
 
