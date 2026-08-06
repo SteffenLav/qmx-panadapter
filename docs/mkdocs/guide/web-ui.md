@@ -42,6 +42,48 @@ When the Tab5 is in **FT8/FT4 mode**, the browser pauses the live spectrum strea
 
 The status banner (new in v1.3.6) mirrors the Tab5's own TX label so you can watch the radio from another room: **red** while transmitting — including the "call 2 of 4" counter when a [CQ stop limit](ft8-tx.md) is set — **amber** when a transmission is armed or a QSO is waiting, **green** on QSO complete, **orange** on timeout, and the persistent **"CQ stopped after N calls - no answer"** once an auto-stopped CQ run ends. The browser tab's title also shows a red dot while transmitting, so even a background tab signals when the radio is on the air.
 
+### Live spots on the browser spectrum
+
+New in the next release. The **POTA** and **RBN** spots the Tab5 draws on its own
+trace are now drawn on the browser's spectrum too, from the same store on the
+device - so the two screens can never disagree about who is on the air.
+
+- **Amber** is a POTA activation, **green** an RBN (CW skimmer) spot, and **grey**
+  a station you have already worked *on this band*.
+- Spots fade with age and are gone at 30 minutes, exactly as on the Tab5.
+- **Click a callsign to tune to it** - frequency *and* mode (CW, DiGi, or USB/LSB
+  by band). Bandwidth is deliberately left alone: the QMX keeps a filter per mode.
+- Counts at the bottom corners - `< spots (3)` - say how many more are on this
+  band just outside your window; click one to jump to the nearest.
+- On a crowded band only so many callsigns fit; unworked and fresher spots keep
+  their labels, and a spot that cannot fit one is not drawn at all rather than
+  left as a line pointing at nothing.
+
+Spots are sent only while the Tab5 is showing the panadapter, and only when they
+have actually changed, so they cost the WiFi link almost nothing between refreshes.
+
+### The decode list, from another room
+
+New in the next release. In FT8/FT4 the browser used to show a transmit banner and
+nothing else - you could see that your radio was transmitting, but not who was
+answering. The FT8 panel now carries the **decode list**: callsign, message, grid,
+SNR, DT, audio tone, slot (E/O) and age.
+
+It is the **same list the Tab5 shows**, not a second opinion: the ordering comes
+from the device (the station you are working first, then anything addressed to
+you, then CQ calls, then strongest signal) and your Filter-window settings are
+applied to it. The station being worked is highlighted, and anything carrying your
+own callsign stands out, as on the Tab5.
+
+**Read-only on purpose.** Replying to a station means choosing one from the list in
+front of you and keying the radio; that stays a decision you make at the Tab5. The
+one transmit action the browser has is Call CQ, below.
+
+### Switching the Tab5 back to the panadapter
+
+New in the next release. If you left the Tab5 in FT8/FT4 and want the spectrum
+back, **Show Panadapter** on the FT8 panel does it without walking to the radio.
+
 ### Call CQ from the browser
 
 New in v1.5.0 (asked for by Dennis WN4FLA). A CQ run that has timed out, or that has reached its [CQ stop limit](ft8-tx.md), otherwise needs a walk back to the Tab5 to start it again. The **Call CQ** button under the status banner does it from wherever you are.
@@ -55,6 +97,22 @@ New in v1.5.0 (asked for by Dennis WN4FLA). A CQ run that has timed out, or that
 > **Not yet confirmed on the air.** The endpoint, the hand-off, the preset/tone/parity reuse and the error path are all verified on hardware; the final key-down is inferred from sharing the Tab5 button's code. Please report how it behaves.
 
 Apart from Call CQ, transmit is still initiated on the Tab5 — replies and pounces need the decode list in front of you, and only one interface should be keying the QMX.
+
+## Help, in the browser
+
+New in the next release. The **Help ?** button in the bottom bar opens the same two
+doors the Tab5 has, served **by the Tab5 itself** - so it works with no internet at
+all, and the text always matches the firmware you are running.
+
+- **A list of symptoms and questions in plain words** - "My radio is not showing
+  up", "Nothing appears in the decode list", "How do I change what my CQ says?".
+  Pick the one that fits and the manual opens at the section that answers it.
+- **Rows the Tab5 can see are happening right now are highlighted** and moved to
+  the top, exactly as on the device. It ranks; you choose.
+- **The whole manual**, with a Contents list, Back, and links between chapters.
+
+See [Getting Help](../getting-help.md) for what the device can detect and why it
+never navigates for you.
 
 ## CAT Control (Advanced)
 

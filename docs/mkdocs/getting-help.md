@@ -14,6 +14,11 @@ There are three ways in, and they are all one tap from wherever you are.
 
 To reach the drawer, swipe in from the **right edge** of the screen.
 
+**And from a browser.** If the Tab5 is on WiFi, the web page's **Help ?** button
+opens the same symptom list and the same manual, served by the Tab5 itself - so it
+needs no internet either, and it cannot show you a different version than the one
+your radio is running. See [Web UI](guide/web-ui.md#help-in-the-browser).
+
 ---
 
 ## The manual opens where you are

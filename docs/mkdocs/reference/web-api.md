@@ -78,6 +78,7 @@ action names its own parameter key (there is no generic `value`).
 | `set_mode` | `mode: "USB"/"LSB"/"CW"/"DIGI"/"AM"` | Change mode (AM needs QMX firmware 1.04+) |
 | `set_bw` | `hz` | Filter width — SSB at 1000 Hz and above, CW passband below |
 | `set_zoom` | `zoom: 1.0/2.0/4.0/8.0` | Zoom level |
+| `set_screen` | `screen: "panadapter"/"ft8"` | Switch the Tab5's own view. Applied within about a second (handed to the display task) |
 | `cq_start` | *(none)* | Start a CQ run, as the Tab5's own **Call CQ** button does. **Keys the radio.** Only acted on while the Tab5 is in FT8/FT4 mode; otherwise discarded, not queued |
 | `reset_settings` | *(none)* | Clear stored settings back to defaults |
 | `reset_network` | *(none)* | Clear the stored WiFi/network state |
@@ -87,89 +88,67 @@ applied asynchronously (mode and filter writes are queued onto the CAT poll task
 `cq_start` onto the display task), so read `/api/status` to see the result rather
 than assuming it from the response.
 
+### GET /api/decodes
+
+The FT8/FT4 decode list as the Tab5 shows it - same ordering (the station being
+worked, then messages addressed to you, then CQ calls, then strongest signal) and
+the same Filter-window hides applied. Read-only.
+
+```json
+{
+  "mode": "FT8",
+  "working": "DK7CVD",
+  "rows": [
+    { "call": "DK7CVD", "text": "OZ1LAV DK7CVD -07", "grid": "JO31",
+      "snr": -7, "hz": 1503, "dt": 210, "age": 6, "heard": 3,
+      "sl": "E", "me": true, "cq": false, "pin": true }
+  ]
+}
+```
+
+`dt` is milliseconds, `hz` the station's audio tone, `age` seconds since it was
+last decoded, `sl` the transmit window it was heard in. `me` marks a message
+containing your callsign, `pin` the station you are working.
+
+### GET /api/help
+
+The guidance rows, ranked by the device from its own live state. `flagged` marks a
+row the firmware can see is happening right now.
+
+```json
+{
+  "context": { "page": "guide/panadapter.md", "anchor": "Layout", "label": "Panadapter" },
+  "rows": [
+    { "symptom": "My radio is not showing up", "flagged": true,
+      "page": "reference/troubleshooting.md", "anchor": "won't reconnect",
+      "label": "Radio not connecting" }
+  ]
+}
+```
+
+`context` is the chapter the Tab5's own **User Manual** button would open right
+now. `anchor` is a case-insensitive heading substring, not a URL fragment.
+
+### GET /api/manual?page=guide/ft8-tx.md
+
+One page of the built-in manual, as the raw markdown that built the documentation
+site. `page=toc.json` returns the contents list. Served from the firmware, so it
+needs no internet and always matches the running version. 404 if the page is not
+in this firmware's manual.
+
 ## CAT Endpoints
 
-### POST /api/cat
-
-Send a raw CAT command.
-
-**Request** (JSON):
-
-```json
-{
-  "cmd": "FA;"
-}
-```
-
-**Response** (JSON):
-
-```json
-{
-  "response": "FA14074000;",
-  "error": null
-}
-```
-
-### GET /api/cat/freq
-
-Query frequency.
-
-**Response**:
-
-```json
-{
-  "frequency_hz": 14074000
-}
-```
-
-### GET /api/cat/mode
-
-Query mode.
-
-**Response**:
-
-```json
-{
-  "mode": "USB",
-  "mode_code": 2
-}
-```
+There is no raw-CAT HTTP endpoint. Send CAT-level changes through
+`POST /api/cmd` (`set_freq`, `set_mode`, `set_bw`, `set_band`), which routes them
+through the CAT poll task - the only writer to the radio's serial port. The web
+UI's own **CAT** box uses those actions.
 
 ## FT8 Endpoints
 
-### GET /api/ft8/decodes
-
-List recent FT8 decodes.
-
-**Response**:
-
-```json
-{
-  "decodes": [
-    {
-      "callsign": "K9ZZ",
-      "grid": "EN52",
-      "report": "-07",
-      "time_slot": 14,
-      "signal_dbm": -88,
-      "frequency_hz": 14074093
-    }
-  ],
-  "timestamp": "2026-06-27T14:07:30Z"
-}
-```
-
-### POST /api/ft8/transmit
-
-Initiate FT8 transmission (requires Tab5 to be in FT8 mode).
-
-**Request**:
-
-```json
-{
-  "message": "K9ZZ OZ1LAV JO45"
-}
-```
+The decode list is `GET /api/decodes` (above). Transmit from the browser is
+limited to `POST /api/cmd {"action":"cq_start"}`; there is no endpoint that sends
+an arbitrary FT8 message, deliberately - replies are chosen from the decode list
+in front of you, at the Tab5.
 
 ## ADIF Endpoints
 
@@ -204,7 +183,7 @@ Download current configuration (all settings + memory channels).
 
 Upload a configuration file to restore settings.
 
-**Request**: multipart form-data with file upload
+**Request**: the config file as the raw request body (not multipart)
 
 **Response**:
 
@@ -223,17 +202,33 @@ Download diagnostic log.
 
 **Response**: Text file (qmx-log.txt)
 
-### POST /api/log/clear
+### GET /api/log/saved
 
-Clear diagnostic log buffer.
+The flash-persisted copy of the diagnostic log from before the last reboot or
+power-off - the one that survives a crash in the field.
 
-**Response**:
+**Response**: Text file
+
+### GET /api/signal
+
+The signal level alone, for a faster S-meter than the 1 Hz `/api/status` poll can
+give. Same DSP call and parameters as `/api/status` and the Tab5's own S-meter -
+only the cadence differs.
 
 ```json
-{
-  "status": "cleared"
-}
+{ "dbm": -83.5 }
 ```
+
+### POST /api/adif/delete?idx=<n>&call=<CALL>
+
+Delete one QSO. **Both** the index and the callsign must match the record, or the
+request is refused with `409` - so a stale browser view can never delete the wrong
+contact.
+
+### GET /api/upload_status
+
+Progress of a running QRZ/eQSL/LoTW upload (`busy`, `kind`, `uploaded`, `failed`,
+`error`).
 
 ## Upload Endpoints
 
