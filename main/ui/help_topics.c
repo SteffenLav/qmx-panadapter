@@ -36,7 +36,11 @@ static const help_entry_t s_topics[] = {
     { HELP_TX_TONE,             "guide/ft8-tx.md",              "Call CQ",                   "TX frequency"         },
     { HELP_CQ_PRESETS,          "guide/ft8-tx.md",              "Call CQ",                   "CQ messages"          },
     { HELP_LOGGING,             "guide/web-ui.md",              "Bottom Bar Menus",          "QSO logging"          },
-    { HELP_UPLOADS,             "guide/web-ui.md",              "LoTW Upload",               "Log uploads"          },
+    // Points at ft8-tx.md's "Upload to QRZ, eQSL & LoTW", not web-ui.md's
+    // "LoTW Upload": all THREE services are asked about together, and only that
+    // section walks through all three. Anchor omits the section number so it
+    // survives renumbering.
+    { HELP_UPLOADS,             "guide/ft8-tx.md",              "Upload to QRZ",             "Log uploads"          },
     { HELP_SPOTS_TAP,           "guide/spots.md",               "Tapping a spot",            "Tapping a spot"       },
     { HELP_ROBOT,              "guide/ft8-tx.md",               "Auto-Reply",                "Auto-reply robot"     },
 
@@ -133,7 +137,7 @@ static const triage_cand_t s_cands[] = {
     { HELP_CQ_PRESETS,         "How do I change what my CQ says?",        NULL,            false, true  },
     { HELP_ROBOT,              "Can it work stations by itself?",         NULL,            false, true  },
     { HELP_LOGGING,            "Where are my contacts logged?",           NULL,            false, true  },
-    { HELP_UPLOADS,            "How do I send my log to LoTW or QRZ?",    NULL,            false, true  },
+    { HELP_UPLOADS,            "How do I send my log to QRZ, eQSL or LoTW?", NULL,         false, true  },
 
     // --- Panadapter how-to ---
     { HELP_GESTURES,           "How do I zoom or pan the spectrum?",      NULL,            true,  false },
