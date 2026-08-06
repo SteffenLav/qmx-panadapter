@@ -229,6 +229,12 @@ static lv_timer_t *s_t_refresh  = NULL;
 static lv_timer_t *s_t_clock    = NULL;
 static lv_timer_t *s_t_slotbar  = NULL;  // fast tick for smooth countdown bar
 static char         s_my_call[16] = {0};  /* operator callsign uppercased; refreshed by 1 Hz clock timer */
+/* The station we are working, held at the top of the list while the exchange runs
+   (Don WB0LQW). Refreshed ONCE per rebuild_list(), immediately before the sort -
+   never from inside the comparator, which qsort calls O(n log n) times and which
+   must not take the QSO lock. Empty when no contact is in progress, and the
+   comparator then behaves exactly as it did before this existed. */
+static char         s_pin_call[16] = {0};
 // Station currently mid-exchange in a CQ-run session (empty when none) -
 // refreshed once per rebuild_list() and consumed by update_row() so the
 // operator can tell, at a glance, who's actively being worked vs. who else
@@ -359,6 +365,15 @@ static int cmp_cq_then_snr(const void *a, const void *b)
     const ft8_call_t *ca = (const ft8_call_t *)a;
     const ft8_call_t *cb = (const ft8_call_t *)b;
     // Messages directed at us (red rows) always sort first, regardless of CQ.
+    // The station we are working outranks everything, including a message addressed
+    // to us: mid-exchange their reply IS the one addressed to us in almost every
+    // case, and where a THIRD station calls us at the same time, the contact in
+    // progress is still what the operator is looking at. Matched on the row's
+    // callsign, not its text, so a third station merely mentioning our partner does
+    // not get promoted.
+    bool a_pin = s_pin_call[0] && strcmp(ca->call, s_pin_call) == 0;
+    bool b_pin = s_pin_call[0] && strcmp(cb->call, s_pin_call) == 0;
+    if (a_pin != b_pin) return b_pin ? 1 : -1;
     bool a_me = s_my_call[0] && strstr(ca->last_text, s_my_call);
     bool b_me = s_my_call[0] && strstr(cb->last_text, s_my_call);
     if (a_me != b_me) return b_me ? 1 : -1;
@@ -943,6 +958,17 @@ static void rebuild_list(void)
     if (!snap) return;              // retried on the next refresh tick
     int n = 0;
     ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+    /* Who to hold at the top - read once, here, for the reasons at s_pin_call. */
+    char prev_pin[sizeof(s_pin_call)];
+    snprintf(prev_pin, sizeof(prev_pin), "%s", s_pin_call);
+    ft8_qso_get_pinned_call(s_pin_call, sizeof(s_pin_call));
+    /* Log only the CHANGES - this runs about once a second. Nobody can watch the
+       screen on the night this shipped, so the log is the evidence that the pin
+       engaged and released at the right moments. */
+    if (strcmp(prev_pin, s_pin_call) != 0) {
+        if (s_pin_call[0]) ESP_LOGI(TAG, "decode list: holding %s at the top", s_pin_call);
+        else               ESP_LOGI(TAG, "decode list: released %s from the top", prev_pin);
+    }
     qsort(snap, n, sizeof(ft8_call_t), cmp_cq_then_snr);
 
     qmx_settings_t qs;

@@ -2334,6 +2334,25 @@ void ft8_qso_get_target(char *buf, size_t len)
     unlock();
 }
 
+void ft8_qso_get_pinned_call(char *buf, size_t len)
+{
+    if (!buf || !len) return;
+    buf[0] = '\0';
+    lock();
+    if (s_target[0]) {
+        // A live exchange, engine-driven (pounce or CQ-run answer).
+        strncpy(buf, s_target, len - 1);
+    } else if (s_manual_target[0] &&
+               ((int64_t)time(NULL) - s_manual_target_ts) < MANUAL_TARGET_TTL_S) {
+        // Tapped a row and replied by hand without the state machine taking over.
+        // Same TTL the pileup exemption uses, so the two agree on "still working
+        // this station".
+        strncpy(buf, s_manual_target, len - 1);
+    }
+    buf[len - 1] = '\0';
+    unlock();
+}
+
 int ft8_qso_get_tx_tone_hz(void)
 {
     lock();

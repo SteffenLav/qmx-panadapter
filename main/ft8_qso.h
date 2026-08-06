@@ -77,6 +77,20 @@ bool ft8_qso_override_next(ft8_tx_kind_t kind, char *err, size_t err_len);
 ft8_qso_state_t ft8_qso_get_state(void);
 void            ft8_qso_get_target(char *buf, size_t len);
 
+// Which station's rows should be held at the top of the decode list, or "" for
+// none. Don WB0LQW: while working someone, "there is no station that I am as
+// interested in", and their replies were sorting down-screen where he had to go
+// looking for them mid-exchange.
+//
+// Answers for both routes into a contact: a live engine-driven exchange
+// (pounce or an answer to our CQ), and a hand-typed reply where the state machine
+// never took over - the latter bounded by the same MANUAL_TARGET_TTL_S the pileup
+// exemption uses, so the two cannot disagree about who we are working.
+//
+// Deliberately empty once a QSO completes: their closing 73 is addressed to us, and
+// messages containing our own callsign are already sorted to the top.
+void            ft8_qso_get_pinned_call(char *buf, size_t len);
+
 // CQ auto-stop progress: CQ bursts already transmitted in the current CQ
 // sequence, or -1 when no CQ run is in progress. The armed/on-air call is
 // therefore number (sent+1). The limit itself is the cq_max_calls setting.
