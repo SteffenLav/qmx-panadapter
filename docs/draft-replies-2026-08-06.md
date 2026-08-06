@@ -29,8 +29,14 @@ Thanks also for confirming the transmit power reads correctly on 1.4.0.
 Hi Dennis,
 
 Good suggestion, and it fits what is already there. The web page knows the TX
-status, so a button to start a fresh CQ run belongs next to it. I will put it in the
-next release.
+status, so a button to start a fresh CQ run belongs next to it. It is in v1.5.0,
+released today — under the TX status banner. It asks for confirmation before it keys
+the radio, and it uses your active CQ preset, your current TX tone and your EVEN/ODD
+choice, so it does the same thing the Tab5's own button does.
+
+One caveat worth stating plainly: I have no antenna up at the moment, so I have
+confirmed everything up to the point of the radio actually keying. If you use it,
+I would like to know it transmits.
 
 Glad the TX status banner is useful. That was the intent: keep the operating on the
 Tab5 and let the browser handle watching.
