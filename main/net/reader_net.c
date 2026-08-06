@@ -26,6 +26,7 @@
 #include "util/psram_task.h"
 
 #include "esp_log.h"
+#include "esp_spiffs.h"     // esp_spiffs_info(), for the cache-write failure path
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -50,6 +51,11 @@ static bool write_file(const char *path, const char *buf, size_t len)
     size_t w = fwrite(buf, 1, len, f);
     fflush(f);
     fclose(f);
+    // A SHORT write is the failure mode of a full partition, and fwrite reports
+    // it only through the count - so say so here rather than leaving the caller
+    // to infer it.
+    if (w != len) ESP_LOGW(TAG, "short write to %s: %u of %u bytes",
+                           path, (unsigned)w, (unsigned)len);
     return w == len;
 }
 
@@ -70,13 +76,29 @@ static void fetch_task(void *arg)
 
     const char *data = NULL;
     size_t len = 0;
-    if (manual_embed_get(s_job_path, &data, &len) && write_file(PAGE_CACHE, data, len)) {
-        reader_view_notify_status("");
-        reader_view_notify_loaded(false);
-    } else {
-        ESP_LOGW(TAG, "page '%s' not in the embedded manual", s_job_path);
+    // Two DIFFERENT failures used to share one message that asserted the first
+    // one ("not in the embedded manual"), which sent a debugging session chasing
+    // the blob while the real fault was the write. Keep them apart: a lying
+    // diagnostic costs more than no diagnostic.
+    if (!manual_embed_get(s_job_path, &data, &len)) {
+        ESP_LOGW(TAG, "page '%s' is not in the embedded manual", s_job_path);
         reader_view_notify_status("Page not found in the built-in manual");
         reader_view_notify_loaded(true);
+    } else if (!write_file(PAGE_CACHE, data, len)) {
+        // Almost always the render cache partition, not the manual. Report the
+        // free space with it - a short write on a full SPIFFS is otherwise
+        // indistinguishable from a missing page.
+        size_t total = 0, used = 0;
+        if (esp_spiffs_info(NULL, &total, &used) != ESP_OK) total = used = 0;
+        ESP_LOGW(TAG, "page '%s' found (%u B) but caching it to %s FAILED "
+                 "- spiffs total=%u used=%u free=%u",
+                 s_job_path, (unsigned)len, PAGE_CACHE,
+                 (unsigned)total, (unsigned)used, (unsigned)(total - used));
+        reader_view_notify_status("Could not cache the page (storage full?)");
+        reader_view_notify_loaded(true);
+    } else {
+        reader_view_notify_status("");
+        reader_view_notify_loaded(false);
     }
 
     s_busy = false;
