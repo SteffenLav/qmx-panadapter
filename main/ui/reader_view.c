@@ -97,6 +97,10 @@ static SemaphoreHandle_t s_lock = NULL;
 static volatile bool s_reload_pending = false;
 static volatile bool s_toc_reload_pending = false;
 static bool s_from_cache = false;
+// True while render_markdown() is rendering the CACHED file rather than a page the
+// fetch just delivered. The anchor logic needs to tell the two apart (see the tail
+// of render_markdown), so it is set immediately before each render_from_cache().
+static bool s_render_from_cache = false;
 static char s_status[64]  = {0};
 static char s_update_ver[24] = {0};
 
@@ -781,13 +785,22 @@ static void render_markdown(char *buf)
         lv_obj_scroll_to_y(s_body, y, LV_ANIM_OFF);
         ESP_LOGI(TAG, "context help: landed on '%s' (y=%d)", s_want_anchor, (int)y);
     } else {
-        if (s_want_anchor[0])
+        if (s_want_anchor[0] && !s_render_from_cache)
             ESP_LOGW(TAG, "context help: heading '%s' not found on this page - showing the top",
                      s_want_anchor);
         lv_obj_scroll_to_y(s_body, 0, LV_ANIM_OFF);
     }
-    s_want_anchor[0] = 0;   // one-shot: a later manual page starts at the top
-    s_anchor_obj = NULL;
+    // One-shot, but ONLY once the requested page has actually been rendered. A
+    // cache render happens BEFORE the fetch lands and still holds the PREVIOUS
+    // page, so consuming the anchor there made every first visit land at the top
+    // and only a second visit hit the heading - which defeats the whole feature.
+    // Keep it armed across a cache render; the fresh render is the one that counts.
+    if (s_anchor_obj || !s_render_from_cache) {
+        s_want_anchor[0] = 0;
+        s_anchor_obj = NULL;
+    } else {
+        s_anchor_obj = NULL;   // stale render only: drop the object, keep the wish
+    }
     ESP_LOGI(TAG, "rendered %d blocks", block_count);
     heap_caps_free(S);   // title already copied into the label above
 }
@@ -1096,7 +1109,7 @@ static void tick_cb(lv_timer_t *t)
     unlock();
 
     if (do_toc)    { parse_toc_file(); rebuild_toc_panel(); }
-    if (do_reload) render_from_cache();
+    if (do_reload) { s_render_from_cache = from_cache; render_from_cache(); }
 
     // The "Save offline" button is gone: the manual is built into the firmware, so
     // it is always available and there is nothing to save, download or restart
@@ -1319,9 +1332,14 @@ void reader_view_show(void)
     // Render whatever is cached immediately (page + TOC), then kick a refresh of
     // the current page and the contents list.
     lock();
-    s_reload_pending = true; s_from_cache = true;
+    // Normally we render the cached file at once so the page appears instantly.
+    // With a context-help anchor armed we deliberately do NOT: the cache still
+    // holds the PREVIOUS page, so rendering it would flash the wrong chapter for
+    // a moment and then jump. Wait the ~300 ms for the real page instead.
+    s_reload_pending = (s_want_anchor[0] == 0);
+    s_from_cache = true;
     s_toc_reload_pending = true;
-    strncpy(s_status, "Refreshing...", sizeof(s_status)-1);
+    strncpy(s_status, s_want_anchor[0] ? "Opening..." : "Refreshing...", sizeof(s_status)-1);
     unlock();
     reader_net_fetch(s_current_path, true);
     ESP_LOGI(TAG, "show (page=%s)", s_current_path);
