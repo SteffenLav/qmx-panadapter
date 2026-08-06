@@ -260,6 +260,38 @@ static int fold_seq(const char *s, const char **rep)
     return len;
 }
 
+// Append the bytes in [from, end) to dst at offset o, FOLDING as it goes; returns
+// the new offset.
+//
+// This exists because both markdown walkers had the same hole: their link and image
+// branches copied the label text out of "[...]" byte-for-byte, bypassing the fold
+// they perform on every other character. So every arrow OUTSIDE a link rendered
+// correctly while "[Web UI -> LoTW Upload]" put a tofu box on screen - which is
+// exactly what the operator found after I had reported the glyphs all handled. The
+// lesson: auditing the fold TABLE's coverage says nothing about code paths that
+// never call it. Any new place that copies source text must come through here.
+// Fold a short string for immediate use. The buffer is a file-local STATIC, not a
+// local: this runs on taskLVGL, where a few hundred bytes of stack is a real hazard
+// on this board. Safe because every caller is on that one task and hands the result
+// straight to lv_label_set_text(), which copies.
+static const char *fold_static(const char *s)
+{
+    static char buf[192];
+    fold_copy(buf, sizeof(buf), s ? s : "");
+    return buf;
+}
+
+static size_t append_folded(char *dst, size_t dstsz, size_t o,
+                            const char *from, const char *end)
+{
+    for (const char *q = from; q < end; ) {
+        const char *r; int a = fold_seq(q, &r);
+        if (a) { while (*r && o + 1 < dstsz) dst[o++] = *r++; q += a; }
+        else   { if (o + 1 < dstsz) dst[o++] = *q; q++; }
+    }
+    return o;
+}
+
 // Fold UTF-8 punctuation/box-drawing to ASCII into a SEPARATE bounded buffer.
 // (Must NOT be done in place: some folds EXPAND — e.g. an arrow "→" (3 bytes)
 // -> "(right)" (7) — so an in-place write would overrun the source. That bug
@@ -311,7 +343,7 @@ static void md_inline_clean(const char *src, char *dst, size_t dstsz)
                 const char *paren = strchr(close, ')');
                 if (paren) {
                     o += (size_t)snprintf(dst + o, dstsz - o, "[image] ");
-                    for (const char *p = src + i + 2; p < close && o + 1 < dstsz; p++) dst[o++] = *p;
+                    o = append_folded(dst, dstsz, o, src + i + 2, close);
                     i = (size_t)(paren - src) + 1;
                     continue;
                 }
@@ -323,7 +355,7 @@ static void md_inline_clean(const char *src, char *dst, size_t dstsz)
             if (close && close[1] == '(') {
                 const char *paren = strchr(close, ')');
                 if (paren) {
-                    for (const char *p = src + i + 1; p < close && o + 1 < dstsz; p++) dst[o++] = *p;
+                    o = append_folded(dst, dstsz, o, src + i + 1, close);
                     i = (size_t)(paren - src) + 1;
                     continue;
                 }
@@ -416,7 +448,7 @@ static lv_obj_t *add_rich_span(lv_obj_t *parent, const char *src,
                 if (paren) {
                     const char *pfx = "[image] ";
                     while (*pfx && o + 1 < sizeof(seg)) seg[o++] = *pfx++;
-                    for (const char *q = src + i + 2; q < close && o + 1 < sizeof(seg); q++) seg[o++] = *q;
+                    o = append_folded(seg, sizeof(seg), o, src + i + 2, close);
                     i = (size_t)(paren - src) + 1; continue;
                 }
             }
@@ -426,7 +458,7 @@ static lv_obj_t *add_rich_span(lv_obj_t *parent, const char *src,
             if (close && close[1] == '(') {
                 const char *paren = strchr(close, ')');
                 if (paren) {
-                    for (const char *q = src + i + 1; q < close && o + 1 < sizeof(seg); q++) seg[o++] = *q;
+                    o = append_folded(seg, sizeof(seg), o, src + i + 1, close);
                     i = (size_t)(paren - src) + 1; continue;
                 }
             }
@@ -970,7 +1002,7 @@ static void make_toc_entry(lv_obj_t *col, int i)
         lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
         lv_obj_set_style_pad_top(l, 10, 0);
         lv_obj_set_style_pad_left(l, 10, 0);   // align with the page cells' text
-        lv_label_set_text(l, e->title);
+        lv_label_set_text(l, fold_static(e->title));
         return;
     }
     // Page cell. Inert (not individually clickable) — the panel drives a
@@ -992,7 +1024,7 @@ static void make_toc_entry(lv_obj_t *col, int i)
     lv_obj_set_width(l, LV_PCT(100));
     lv_obj_set_style_text_font(l, font, 0);
     lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
-    lv_label_set_text(l, e->title[0] ? e->title : e->path);
+    lv_label_set_text(l, fold_static(e->title[0] ? e->title : e->path));
 }
 
 static lv_obj_t *make_toc_column(int w)
