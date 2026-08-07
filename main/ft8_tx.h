@@ -227,6 +227,13 @@ int ft8_find_clear_tone_hz(void);
 // Same snapshot cost as ft8_find_clear_tone_hz_near(); safe from any task.
 uint64_t ft8_tx_get_tone_occupancy(int *n_slots_out, int *n_stations_out);
 
+// Both windows at once (Roy KI0ER): one mask per parity, so the operator can see
+// which offset to choose BEFORE arming - only they know which window they will
+// pounce into. A station whose slot is unknowable lands in BOTH masks. Same
+// snapshot cost as the single-mask call.
+void ft8_tx_get_tone_occupancy_split(uint64_t *even_out, uint64_t *odd_out,
+                                     int *n_slots_out, int *n_stations_out);
+
 // --- TX tone preference and hold (WSJT-X's "Hold Tx Freq") -------------------
 //
 // The preference is the tone the picker last committed and what the FT8 pane's

@@ -63,7 +63,13 @@ static const char *TAG = "ft8_tone_modal";
 static lv_obj_t *s_modal      = NULL;
 static lv_obj_t *s_panel      = NULL;
 static lv_obj_t *s_strip      = NULL;
-static lv_obj_t *s_cells[STRIP_SLOTS_MAX];
+// Two rows, EVEN above ODD, ALWAYS both (Roy KI0ER 2026-08-07): the picker used
+// to show one strip - our window when armed, the union before - which left the
+// operator choosing blind exactly when the choice is made (BEFORE arming). The
+// tone picked is still ONE value; the rows just tell the truth about both
+// windows it might land in.
+static lv_obj_t *s_cells_e[STRIP_SLOTS_MAX];
+static lv_obj_t *s_cells_o[STRIP_SLOTS_MAX];
 static lv_obj_t *s_readout    = NULL;   // button: shows the tone, opens the freq pad
 static lv_obj_t *s_readout_lbl = NULL;
 static lv_obj_t *s_partner    = NULL;
@@ -107,9 +113,15 @@ static void hint_set(const char *msg, uint32_t colour)
 static void refresh_view(void)
 {
     int n_slots = 0, n_stations = 0;
-    uint64_t occ = ft8_tx_get_tone_occupancy(&n_slots, &n_stations);
+    uint64_t occ_e = 0, occ_o = 0;
+    ft8_tx_get_tone_occupancy_split(&occ_e, &occ_o, &n_slots, &n_stations);
     if (n_slots > STRIP_SLOTS_MAX) n_slots = STRIP_SLOTS_MAX;
     s_n_slots = n_slots;
+    // The mask the automatic verdict/free-list still runs on: our window when
+    // knowable, the union when not - unchanged semantics.
+    bool our_even = false;
+    bool parity_known = ft8_tx_get_parity_lock(&our_even);
+    uint64_t occ = parity_known ? (our_even ? occ_e : occ_o) : (occ_e | occ_o);
 
     int sel_slot     = hz_to_slot(s_sel_hz);
     int partner_hz   = 0;
@@ -124,22 +136,28 @@ static void refresh_view(void)
     int  fb = 0, n_free = 0;
     freebuf[0] = '\0';
 
+    const int row_h = (STRIP_H - 8) / 2 - 1;
     for (int i = 0; i < n_slots; i++) {
-        if (!s_cells[i]) continue;
-        bool busy = (occ >> i) & 1ULL;
-        uint32_t col;
-        if (i == sel_slot)           col = s_dragging ? COL_DRAG : COL_PICK;
-        else if (i == partner_slot)  col = COL_PARTNER;
-        else if (n_stations == 0)    col = COL_UNKNOWN;
-        else                         col = busy ? COL_BUSY : COL_FREE;
-        lv_obj_set_style_bg_color(s_cells[i], lv_color_hex(col), 0);
-        // The picked cell is drawn FULL height while the rest are inset, so the
-        // selection reads as a selection rather than just another colour among
-        // 52 near-identical bars.
-        bool pick = (i == sel_slot);
-        lv_obj_set_size(s_cells[i], STRIP_CELL_W - 2, pick ? STRIP_H - 2 : STRIP_H - 8);
-        lv_obj_set_pos(s_cells[i], i * (STRIP_CELL_W + STRIP_CELL_GAP) + 1, pick ? 0 : 3);
-        if (!busy) n_free++;
+        bool busy_any = ((occ >> i) & 1ULL);
+        for (int row = 0; row < 2; row++) {
+            lv_obj_t *cell = row ? s_cells_o[i] : s_cells_e[i];
+            if (!cell) continue;
+            bool busy = ((row ? occ_o : occ_e) >> i) & 1ULL;
+            uint32_t col;
+            if (i == sel_slot)           col = s_dragging ? COL_DRAG : COL_PICK;
+            else if (i == partner_slot && parity_known && ((row == 0) != our_even))
+                                         col = COL_PARTNER;   // partner lives in the OTHER window
+            else if (n_stations == 0)    col = COL_UNKNOWN;
+            else                         col = busy ? COL_BUSY : COL_FREE;
+            lv_obj_set_style_bg_color(cell, lv_color_hex(col), 0);
+            // The picked column grows to full row height in BOTH rows - the
+            // selection is one tone, whichever window it ends up in.
+            bool pick = (i == sel_slot);
+            lv_obj_set_size(cell, STRIP_CELL_W - 2, pick ? row_h + 3 : row_h);
+            lv_obj_set_pos(cell, i * (STRIP_CELL_W + STRIP_CELL_GAP) + 1,
+                           (row ? 3 + row_h + 2 : 3) - (pick ? 1 : 0));
+        }
+        if (!busy_any) n_free++;
     }
 
     // Pointer above the strip, centred on the picked cell. Goes grey and grows
@@ -163,10 +181,9 @@ static void refresh_view(void)
         // busy only in the other window shows free - true, but worth stating,
         // since the same slot can look different a moment later when a reply
         // fixes our parity (Roy KI0ER asked exactly this, 2026-07-29).
-        bool pe = false;
-        fb = ft8_tx_get_parity_lock(&pe)
+        fb = parity_known
              ? snprintf(freebuf, sizeof(freebuf), "%d of %d free in your %s TX window: ",
-                        n_free, n_slots, pe ? "EVEN" : "ODD")
+                        n_free, n_slots, our_even ? "EVEN" : "ODD")
              : snprintf(freebuf, sizeof(freebuf),
                         "%d of %d free in BOTH windows (your TX window is not fixed yet): ",
                         n_free, n_slots);
@@ -190,7 +207,9 @@ static void refresh_view(void)
     }
     if (s_freelist) lv_label_set_text(s_freelist, freebuf);
 
-    bool sel_busy = (n_stations > 0) && ((occ >> sel_slot) & 1ULL);
+    bool sel_busy   = (n_stations > 0) && ((occ >> sel_slot) & 1ULL);
+    bool sel_busy_e = (n_stations > 0) && ((occ_e >> sel_slot) & 1ULL);
+    bool sel_busy_o = (n_stations > 0) && ((occ_o >> sel_slot) & 1ULL);
 
     if (s_readout_lbl) {
         char rb[24];
@@ -206,10 +225,18 @@ static void refresh_view(void)
     // the operator who most needs this - outdoors, in sunlight, or colour-blind.
     if (n_stations == 0)
         hint_set("Nothing heard yet - can't tell if this slot is clear", 0xFFA040);
-    else if (sel_busy)
-        hint_set(LV_SYMBOL_WARNING " Someone is on this slot - pick a green one", 0xFF6020);
-    else
-        hint_set(LV_SYMBOL_OK " This slot is clear", 0x40C060);
+    else if (parity_known) {
+        // Our window decides; the other window is stated, not judged.
+        if (sel_busy) hint_set(LV_SYMBOL_WARNING " Someone is on this slot in your TX window - pick a green one", 0xFF6020);
+        else          hint_set(LV_SYMBOL_OK " Clear in your TX window", 0x40C060);
+    } else {
+        // No window fixed yet - the whole point of the two rows (Roy KI0ER):
+        // say where it is clear, so the operator can choose window AND tone.
+        if      (!sel_busy_e && !sel_busy_o) hint_set(LV_SYMBOL_OK " Clear in both windows", 0x40C060);
+        else if (!sel_busy_e)                hint_set("Clear in EVEN - busy in ODD", 0x8AB4F8);
+        else if (!sel_busy_o)                hint_set("Clear in ODD - busy in EVEN", 0xFFA040);
+        else                                 hint_set(LV_SYMBOL_WARNING " Busy in both windows - pick a green slot", 0xFF6020);
+    }
 
     // Put the value ON the confirm button, so committing is an explicit
     // "apply THIS frequency" rather than a generic Apply you have to trust.
@@ -447,20 +474,42 @@ static void modal_build(void)
     lv_obj_add_event_cb(s_strip, strip_touch_cb, LV_EVENT_RELEASED,   NULL);
     lv_obj_add_event_cb(s_strip, strip_touch_cb, LV_EVENT_PRESS_LOST, NULL);
 
+    // Row geometry: two rows inside the same strip, 2 px seam. The x -> slot
+    // touch map is unchanged and row-agnostic: tapping EITHER row picks that
+    // tone, because the tone is one value - only its window differs.
+    const int row_h = (STRIP_H - 8) / 2 - 1;
     for (int i = 0; i < n_max && i < STRIP_SLOTS_MAX; i++) {
-        lv_obj_t *c = lv_obj_create(s_strip);
-        lv_obj_set_size(c, STRIP_CELL_W - 2, STRIP_H - 8);
-        lv_obj_set_pos(c, i * (STRIP_CELL_W + STRIP_CELL_GAP) + 1, 3);
-        lv_obj_set_style_bg_color(c, lv_color_hex(COL_UNKNOWN), 0);
-        lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
-        lv_obj_set_style_border_width(c, 0, 0);
-        lv_obj_set_style_radius(c, 2, 0);
-        lv_obj_set_style_pad_all(c, 0, 0);
-        // Cells are decoration: clicks belong to the strip so the x->slot map
-        // is the single source of truth for what got tapped.
-        lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
-        s_cells[i] = c;
+        for (int row = 0; row < 2; row++) {
+            lv_obj_t *c = lv_obj_create(s_strip);
+            lv_obj_set_size(c, STRIP_CELL_W - 2, row_h);
+            lv_obj_set_pos(c, i * (STRIP_CELL_W + STRIP_CELL_GAP) + 1,
+                           3 + row * (row_h + 2));
+            lv_obj_set_style_bg_color(c, lv_color_hex(COL_UNKNOWN), 0);
+            lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
+            lv_obj_set_style_border_width(c, 0, 0);
+            lv_obj_set_style_radius(c, 2, 0);
+            lv_obj_set_style_pad_all(c, 0, 0);
+            // Cells are decoration: clicks belong to the strip so the x->slot map
+            // is the single source of truth for what got tapped.
+            lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+            if (row == 0) s_cells_e[i] = c; else s_cells_o[i] = c;
+        }
+    }
+
+    // E / O letters on the strip's right edge, one per row, dark-backed so they
+    // stay readable over whatever colour the last cells take.
+    for (int row = 0; row < 2; row++) {
+        lv_obj_t *tag = lv_label_create(s_strip);
+        lv_obj_set_style_text_font(tag, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(tag, lv_color_hex(row ? 0xFFA040 : 0x8AB4F8), 0);
+        lv_obj_set_style_bg_color(tag, lv_color_hex(0x000000), 0);
+        lv_obj_set_style_bg_opa(tag, LV_OPA_70, 0);
+        lv_obj_set_style_pad_hor(tag, 3, 0);
+        lv_obj_set_style_radius(tag, 2, 0);
+        lv_obj_clear_flag(tag, LV_OBJ_FLAG_CLICKABLE);
+        lv_label_set_text(tag, row ? "ODD" : "EVEN");
+        lv_obj_align(tag, LV_ALIGN_RIGHT_MID, -3, row ? (STRIP_H / 4) - 1 : -(STRIP_H / 4) + 1);
     }
 
     // Selection pointer. Lives on the PANEL (not the strip) so it can sit just

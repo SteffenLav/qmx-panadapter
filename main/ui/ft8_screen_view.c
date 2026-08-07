@@ -168,10 +168,17 @@ static lv_obj_t *s_bar_slot     = NULL;  // tiny countdown bar beside s_lbl_coun
 #define MINI_SLOTS_MAX  64
 #define MINI_STRIP_W    288      // full left-pane content width
 #define MINI_STRIP_H     26
+// TWO rows - EVEN on top, ODD below - ALWAYS both (Roy KI0ER, 2026-08-07). The
+// single strip could only show the operator's own window once something was
+// armed; before that it showed the union ("BOTH"), which on a busy band is
+// nearly all red and useless for planning. Only the operator knows which window
+// they are about to pounce into, so both pictures must be on screen BEFORE the
+// choice. The old EVEN/ODD/BOTH tag is gone - the rows are the label.
 static lv_obj_t *s_mini_strip   = NULL;
-static lv_obj_t *s_mini_cells[MINI_SLOTS_MAX];
-static uint8_t   s_mini_prev[MINI_SLOTS_MAX];  // last colour class per cell, see mini_paint()
-static lv_obj_t *s_mini_parity = NULL;   // EVEN/ODD/BOTH tag drawn ON the strip
+static lv_obj_t *s_mini_cells_e[MINI_SLOTS_MAX];
+static lv_obj_t *s_mini_cells_o[MINI_SLOTS_MAX];
+static uint8_t   s_mini_prev_e[MINI_SLOTS_MAX];
+static uint8_t   s_mini_prev_o[MINI_SLOTS_MAX];
 static int       s_mini_n_slots = 0;
 static void mini_paint(void);
 static lv_obj_t *s_btn_cq       = NULL;  // "Call CQ" - short tap TX, long-press edits presets
@@ -1486,7 +1493,8 @@ static void mini_paint(void)
     if (!s_mini_strip || s_mini_n_slots <= 0) return;
 
     int n_slots = 0, n_stations = 0;
-    uint64_t occ = ft8_tx_get_tone_occupancy(&n_slots, &n_stations);
+    uint64_t occ_e = 0, occ_o = 0;
+    ft8_tx_get_tone_occupancy_split(&occ_e, &occ_o, &n_slots, &n_stations);
     if (n_slots > s_mini_n_slots) n_slots = s_mini_n_slots;
 
     // Our own tone: live value while running, otherwise the preference - the
@@ -1501,35 +1509,33 @@ static void mini_paint(void)
     if (ft8_qso_get_priority_freq(&partner_hz) && partner_hz > 0)
         partner_slot = (partner_hz - FT8_TX_TONE_MIN_HZ) / FT8_TX_TONE_STEP_HZ;
 
-    for (int i = 0; i < n_slots; i++) {
-        if (!s_mini_cells[i]) continue;
-        uint8_t cls;
-        uint32_t col;
-        if (i == mine_slot)             { cls = MINI_C_MINE;    col = FT8_TONE_COL_PICK; }
-        else if (i == partner_slot)     { cls = MINI_C_PARTNER; col = FT8_TONE_COL_PARTNER; }
-        else if (n_stations == 0)       { cls = MINI_C_UNKNOWN; col = FT8_TONE_COL_UNKNOWN; }
-        else if ((occ >> i) & 1ULL)     { cls = MINI_C_BUSY;    col = FT8_TONE_COL_BUSY; }
-        else                            { cls = MINI_C_FREE;    col = FT8_TONE_COL_FREE; }
-        if (cls == s_mini_prev[i]) continue;
-        s_mini_prev[i] = cls;
-        lv_obj_set_style_bg_color(s_mini_cells[i], lv_color_hex(col), 0);
-    }
+    // Which ROW carries our white marker: our TX window when it is knowable,
+    // both rows when it is not (nothing armed, TXCQ ANY) - the tone is the same
+    // either way, only the window is undecided. The partner, when there is one,
+    // transmits in the OPPOSITE window to ours by construction.
+    bool our_even = false;
+    bool parity_known = ft8_tx_get_parity_lock(&our_even);
 
-    // EVEN / ODD while our TX parity is fixed, BOTH when it is not (nothing
-    // armed, or TXCQ ANY) - in which case the strip is the union of the two
-    // windows and a slot shown busy may be free in the one we end up using.
-    // Colours match the slot countdown and the per-row E/O indicator.
-    if (s_mini_parity) {
-        bool pe = false;
-        bool known = ft8_tx_get_parity_lock(&pe);
-        const char *txt = !known ? "BOTH" : (pe ? "EVEN" : "ODD");
-        uint32_t col = !known ? 0xB0B0B0 : (pe ? 0x8AB4F8 : 0xFFA040);
-        static const char *s_prev_txt = NULL;
-        if (txt != s_prev_txt) {          // literals: pointer compare is enough
-            s_prev_txt = txt;
-            lv_label_set_text(s_mini_parity, txt);
-            lv_obj_set_style_text_color(s_mini_parity, lv_color_hex(col), 0);
-            lv_obj_align(s_mini_parity, LV_ALIGN_RIGHT_MID, -2, 0);
+    for (int row = 0; row < 2; row++) {
+        bool row_even        = (row == 0);
+        lv_obj_t **cells     = row_even ? s_mini_cells_e : s_mini_cells_o;
+        uint8_t   *prev      = row_even ? s_mini_prev_e  : s_mini_prev_o;
+        uint64_t   occ       = row_even ? occ_e : occ_o;
+        bool mine_here    = !parity_known || (row_even == our_even);
+        bool partner_here = parity_known && (row_even != our_even) && partner_slot >= 0;
+
+        for (int i = 0; i < n_slots; i++) {
+            if (!cells[i]) continue;
+            uint8_t cls;
+            uint32_t col;
+            if (mine_here && i == mine_slot)         { cls = MINI_C_MINE;    col = FT8_TONE_COL_PICK; }
+            else if (partner_here && i == partner_slot) { cls = MINI_C_PARTNER; col = FT8_TONE_COL_PARTNER; }
+            else if (n_stations == 0)                { cls = MINI_C_UNKNOWN; col = FT8_TONE_COL_UNKNOWN; }
+            else if ((occ >> i) & 1ULL)              { cls = MINI_C_BUSY;    col = FT8_TONE_COL_BUSY; }
+            else                                     { cls = MINI_C_FREE;    col = FT8_TONE_COL_FREE; }
+            if (cls == prev[i]) continue;
+            prev[i] = cls;
+            lv_obj_set_style_bg_color(cells[i], lv_color_hex(col), 0);
         }
     }
 }
@@ -2176,39 +2182,41 @@ void ft8_screen_view_init(lv_obj_t *parent)
         lv_obj_clear_flag(s_mini_strip, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_clear_flag(s_mini_strip, LV_OBJ_FLAG_CLICKABLE);
 
-        for (int i = 0; i < s_mini_n_slots; i++) {
-            int x0 = (i * MINI_STRIP_W) / s_mini_n_slots;
-            int x1 = ((i + 1) * MINI_STRIP_W) / s_mini_n_slots;
-            lv_obj_t *c = lv_obj_create(s_mini_strip);
-            lv_obj_set_size(c, (x1 - x0) - 1, MINI_STRIP_H - 6);
-            lv_obj_set_pos(c, x0, 2);
-            lv_obj_set_style_bg_color(c, lv_color_hex(FT8_TONE_COL_UNKNOWN), 0);
-            lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
-            lv_obj_set_style_border_width(c, 0, 0);
-            lv_obj_set_style_radius(c, 1, 0);
-            lv_obj_set_style_pad_all(c, 0, 0);
-            lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
-            s_mini_cells[i] = c;
-            s_mini_prev[i]  = MINI_C_UNKNOWN;
+        // Two rows in the same 26 px: EVEN on top, ODD below, a 2 px seam
+        // between. 16 px of the width goes to the E/O letters on the right so a
+        // glance says which row is which - the colours already match the slot
+        // countdown and the per-row E/O column (steel blue / warm orange).
+        const int lbl_w   = 16;
+        const int cells_w = MINI_STRIP_W - lbl_w;
+        const int row_h   = (MINI_STRIP_H - 2) / 2 - 2;   // 10 px each
+        for (int row = 0; row < 2; row++) {
+            int y = 2 + row * (row_h + 2);
+            lv_obj_t **cells = row ? s_mini_cells_o : s_mini_cells_e;
+            uint8_t   *prev  = row ? s_mini_prev_o  : s_mini_prev_e;
+            for (int i = 0; i < s_mini_n_slots; i++) {
+                int x0 = (i * cells_w) / s_mini_n_slots;
+                int x1 = ((i + 1) * cells_w) / s_mini_n_slots;
+                lv_obj_t *c = lv_obj_create(s_mini_strip);
+                lv_obj_set_size(c, (x1 - x0) - 1, row_h);
+                lv_obj_set_pos(c, x0, y);
+                lv_obj_set_style_bg_color(c, lv_color_hex(FT8_TONE_COL_UNKNOWN), 0);
+                lv_obj_set_style_bg_opa(c, LV_OPA_COVER, 0);
+                lv_obj_set_style_border_width(c, 0, 0);
+                lv_obj_set_style_radius(c, 1, 0);
+                lv_obj_set_style_pad_all(c, 0, 0);
+                lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICKABLE);
+                lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+                cells[i] = c;
+                prev[i]  = MINI_C_UNKNOWN;
+            }
+            lv_obj_t *tag = lv_label_create(s_mini_strip);
+            lv_obj_set_style_text_font(tag, &lv_font_montserrat_14, 0);
+            lv_obj_set_style_text_color(tag,
+                lv_color_hex(row ? 0xFFA040 : 0x8AB4F8), 0);   // ODD orange / EVEN blue
+            lv_obj_clear_flag(tag, LV_OBJ_FLAG_CLICKABLE);
+            lv_label_set_text(tag, row ? "O" : "E");
+            lv_obj_set_pos(tag, cells_w + 4, y - 2);
         }
-
-        // Which slot window is this picture FOR? Occupancy is filtered to our own
-        // TX parity when that is known, and is the union of both windows when it
-        // is not - a real and useful distinction that the strip gave no hint of.
-        // Roy KI0ER asked twice what he was looking at (2026-07-29 and
-        // 2026-08-05); the picker modal got wording the first time, but the strip
-        // on this page is the one you actually watch. Created after the cells so
-        // it draws on top of them, with a dark backing to stay readable.
-        s_mini_parity = lv_label_create(s_mini_strip);
-        lv_obj_set_style_text_font(s_mini_parity, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_bg_color(s_mini_parity, lv_color_hex(0x000000), 0);
-        lv_obj_set_style_bg_opa(s_mini_parity, LV_OPA_70, 0);
-        lv_obj_set_style_pad_hor(s_mini_parity, 3, 0);
-        lv_obj_set_style_radius(s_mini_parity, 2, 0);
-        lv_obj_clear_flag(s_mini_parity, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_align(s_mini_parity, LV_ALIGN_RIGHT_MID, -2, 0);
-        lv_label_set_text(s_mini_parity, "BOTH");
     }
 
     // TX row below the mini strip: [TXCQ <parity>] [TX <n> Hz].

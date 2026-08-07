@@ -43,6 +43,7 @@
 #include "util/usb_shutdown.h" // usb_shutdown_graceful - "prepare for flashing"
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
+#include "esp_timer.h"         // web tune 60 s safety timeout
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/idf_additions.h"  // xTaskCreateWithCaps / vTaskDeleteWithCaps
@@ -170,6 +171,61 @@ static void add_ft8_tx_status(cJSON *root)
     // "X is no longer in the decode list"). Sticky until the next request.
     const char *wr = ft8_screen_view_get_web_reply_result();
     if (wr && wr[0]) cJSON_AddStringToObject(f, "web_r", wr);
+}
+
+// --- Web Antenna Tune (QMX 1.04+) -------------------------------------------
+//
+// Tune KEYS THE RADIO CONTINUOUSLY, so this session carries the same safety
+// rails as the Tab5's tune_modal.c, independently:
+//   * hard 60 s timeout (esp_timer) that restores the prior mode - a dropped
+//     browser tab must never leave a carrier on the air
+//   * the prior mode is restored on stop, never a bare MD0; (the CAT manual's
+//     Set list has no 0 - see docs/qmx-1_04-cat-comparison.md)
+//   * the radio's own front-panel exit is honoured: the 1 Hz status read sees
+//     the mode is no longer TUNE and stands the session down
+// Gated on cat_qmx_fw_at_least(1,4,0) like the Tab5 button. If the Tab5's own
+// tune modal is in use at the same moment the two would fight over the mode -
+// single-operator device, judged acceptable, same as two fingers on one radio.
+static volatile bool s_web_tune_active = false;
+static char          s_web_tune_prior[8] = "USB";
+static esp_timer_handle_t s_web_tune_timer = NULL;
+
+static void web_tune_stop(bool restore)
+{
+    if (!s_web_tune_active) return;
+    s_web_tune_active = false;
+    if (s_web_tune_timer) esp_timer_stop(s_web_tune_timer);
+    cat_tune_poll_set_active(false);
+    if (restore) cat_request_mode(s_web_tune_prior);
+    ESP_LOGW(TAG, "web tune: stopped (%s)", restore ? "mode restored" : "radio already out");
+}
+
+static void web_tune_timeout_cb(void *arg)
+{
+    (void)arg;
+    ESP_LOGW(TAG, "web tune: 60 s safety timeout");
+    web_tune_stop(true);
+}
+
+static bool web_tune_start(void)
+{
+    if (!cat_qmx_fw_at_least(1, 4, 0)) return false;
+    if (s_web_tune_active) return true;               // idempotent
+    // Never over an FT8 burst - the poll pause and the mode write would fight.
+    if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ACTIVE) return false;
+    const char *cur = cat_get_mode_str();
+    snprintf(s_web_tune_prior, sizeof(s_web_tune_prior), "%s",
+             (cur && cur[0] && strcmp(cur, "TUNE") != 0) ? cur : "USB");
+    if (!s_web_tune_timer) {
+        const esp_timer_create_args_t a = { .callback = web_tune_timeout_cb, .name = "web_tune" };
+        if (esp_timer_create(&a, &s_web_tune_timer) != ESP_OK) return false;
+    }
+    s_web_tune_active = true;
+    cat_request_mode("TUNE");
+    cat_tune_poll_set_active(true);
+    esp_timer_start_once(s_web_tune_timer, 60 * 1000000LL);
+    ESP_LOGW(TAG, "web tune: STARTED (prior mode %s, 60 s limit)", s_web_tune_prior);
+    return true;
 }
 
 static esp_err_t status_handler(httpd_req_t *req)
@@ -350,6 +406,22 @@ static esp_err_t status_handler(httpd_req_t *req)
           }
         }
     }
+    // Web tune session: live power/SWR while active, and the stand-down check -
+    // if the radio left TUNE by its own front panel, the session is over.
+    if (s_web_tune_active) {
+        const char *m = ui_get_mode_str();
+        if (m && m[0] && strcmp(m, "TUNE") != 0 && strcmp(m, "?") != 0) {
+            web_tune_stop(false);      // radio already out; do not re-write its mode
+        } else {
+            cJSON *tn = cJSON_AddObjectToObject(root, "tune");
+            float pw = 0, swr = 0;
+            cat_pwr_swr_async_read(&pw, &swr);
+            cJSON_AddNumberToObject(tn, "watts", pw);
+            cJSON_AddNumberToObject(tn, "swr",   swr);
+        }
+    }
+    cJSON_AddBoolToObject(root, "tune_ok", cat_qmx_fw_at_least(1, 4, 0));
+
     const esp_app_desc_t *app = esp_app_get_description();
     cJSON_AddStringToObject(root, "tab5_fw",     app ? app->version : "");
 
@@ -442,6 +514,15 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // (web_r), because a Tab5 toast is invisible from another room.
         const char *call = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call"));
         if (call && call[0]) ft8_screen_view_request_reply(call);
+    } else if (action && strcmp(action, "tune_start") == 0) {
+        if (!web_tune_start()) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                "Tune needs QMX firmware 1.04+ and an idle transmitter");
+            return ESP_FAIL;
+        }
+    } else if (action && strcmp(action, "tune_stop") == 0) {
+        web_tune_stop(true);
     } else if (action && strcmp(action, "greylist_clear") == 0) {
         // Un-skip everyone - band conditions change, and a station that timed
         // out an hour ago may be perfectly workable now.
@@ -1141,7 +1222,13 @@ static const httpd_uri_t uri_upload_status = {
 static esp_err_t tone_get_handler(httpd_req_t *req)
 {
     int n_slots = 0, n_stations = 0;
-    uint64_t mask = ft8_tx_get_tone_occupancy(&n_slots, &n_stations);
+    uint64_t mask_e = 0, mask_o = 0;
+    ft8_tx_get_tone_occupancy_split(&mask_e, &mask_o, &n_slots, &n_stations);
+    // The single-window view the verdict runs on, same rule as the device:
+    // our window when knowable, the union otherwise.
+    bool we = false;
+    uint64_t mask = ft8_tx_get_parity_lock(&we) ? (we ? mask_e : mask_o)
+                                                : (mask_e | mask_o);
 
     cJSON *root = cJSON_CreateObject();
     if (!root) return httpd_resp_send_500(req);
@@ -1159,6 +1246,12 @@ static esp_err_t tone_get_handler(httpd_req_t *req)
     for (int i = 0; i < n; i++) bits[i] = (mask >> i) & 1ULL ? '1' : '0';
     bits[n] = '\0';
     cJSON_AddStringToObject(root, "busy", bits);
+    // Both windows separately (Roy KI0ER): the browser draws an EVEN and an ODD
+    // row, so the operator can choose window AND tone before arming anything.
+    for (int i = 0; i < n; i++) bits[i] = (mask_e >> i) & 1ULL ? '1' : '0';
+    cJSON_AddStringToObject(root, "busy_e", bits);
+    for (int i = 0; i < n; i++) bits[i] = (mask_o >> i) & 1ULL ? '1' : '0';
+    cJSON_AddStringToObject(root, "busy_o", bits);
 
     // The partner's tone, so the browser can mark it the way the Tab5 does -
     // you avoid it, but it is not "busy" in the same sense as a stranger.

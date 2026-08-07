@@ -463,6 +463,7 @@
         <a href="#" id="reset-network-link" class="danger" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
       </div>
     </div>
+    <button type="button" class="bot-btn" id="tune-ant-btn" style="display:none" title="Antenna Tune (QMX 1.04+): keys the radio with a steady carrier and shows live power and SWR. Auto-stops after 60 s.">Antenna Tune</button>
     <button type="button" class="bot-btn" id="memory-btn" title="Your 32 memory channels - click one to tune to it">Memory</button>
     <button type="button" class="bot-btn" id="settings-btn" title="Callsign, grid, CQ messages, FT8 filters and the everyday toggles - with a real keyboard">Settings</button>
     <button type="button" class="bot-btn" id="help-btn" title="Guidance and the full user manual - served by the Tab5 itself, no internet needed">Help &#63;</button>
@@ -484,7 +485,7 @@
       </div>
       <div id="tone-read" style="font-size:20px; color:#fff; margin-bottom:2px">-- Hz</div>
       <div id="tone-verdict" style="font-size:13px; margin-bottom:10px">&nbsp;</div>
-      <canvas id="tone-strip" width="1000" height="64" style="width:100%; height:64px; cursor:crosshair; border:1px solid #333; border-radius:4px;"></canvas>
+      <canvas id="tone-strip" width="1000" height="84" style="width:100%; height:84px; cursor:crosshair; border:1px solid #333; border-radius:4px;"></canvas>
       <div style="display:flex; align-items:center; gap:10px; margin-top:10px; flex-wrap:wrap">
         <button id="tone-down" class="bot-btn" style="cursor:pointer">&minus;50</button>
         <button id="tone-up" class="bot-btn" style="cursor:pointer">+50</button>
@@ -1321,31 +1322,42 @@ function toneIsBusy(slot) {
 }
 
 function toneDraw() {
+  /* Two rows - EVEN above ODD, always both (Roy KI0ER): the operator can choose
+     window AND tone BEFORE arming anything, which a single our-window/union
+     strip could never show. The pick is one tone, drawn on both rows. */
   const cv = document.getElementById("tone-strip");
   const ctx = cv.getContext("2d");
   const W = cv.width, H = cv.height;
   ctx.fillStyle = "#0d1116"; ctx.fillRect(0, 0, W, H);
   if (!toneState) return;
-  const n = toneState.busy.length || 1;
-  const bw = W / n;
+  const n = (toneState.busy_e || toneState.busy || "").length || 1;
+  const bw = (W - 34) / n;                       // 34 px for the E/O letters
   const known = toneState.stations > 0;
-  for (let i = 0; i < n; i++) {
-    // Nothing decoded yet means UNKNOWN, not free: a reassuring row of green
-    // when the device has heard nothing would be a lie.
-    ctx.fillStyle = !known ? TONE_COL_UNKNOWN : (toneIsBusy(i) ? TONE_COL_BUSY : TONE_COL_FREE);
-    ctx.fillRect(i * bw + 1, 18, bw - 2, H - 30);
+  const rowH = Math.floor((H - 22) / 2) - 2;
+  const rows = [
+    { mask: toneState.busy_e || "", y: 18,             label: "E", col: "#8AB4F8" },
+    { mask: toneState.busy_o || "", y: 18 + rowH + 4,  label: "O", col: "#FFA040" },
+  ];
+  const sel = toneSlotOf(toneSel);
+  for (const r of rows) {
+    for (let i = 0; i < n; i++) {
+      ctx.fillStyle = (i === sel) ? TONE_COL_PICK
+                    : !known      ? TONE_COL_UNKNOWN
+                    : (r.mask[i] === "1" ? TONE_COL_BUSY : TONE_COL_FREE);
+      ctx.fillRect(i * bw + 1, r.y, bw - 2, rowH);
+    }
+    ctx.fillStyle = r.col; ctx.font = "bold 14px system-ui,sans-serif";
+    ctx.fillText(r.label, W - 26, r.y + rowH - 3);
   }
   if (toneState.partner_hz) {
     const p = toneSlotOf(toneState.partner_hz);
-    if (p >= 0 && p < n) { ctx.fillStyle = TONE_COL_PARTNER; ctx.fillRect(p * bw + 1, 18, bw - 2, H - 30); }
+    if (p >= 0 && p < n && p !== sel) {
+      // The partner transmits in ONE window; without knowing which, mark both -
+      // pink means "leave this alone" either way.
+      ctx.fillStyle = TONE_COL_PARTNER;
+      for (const r of rows) ctx.fillRect(p * bw + 1, r.y, bw - 2, rowH);
+    }
   }
-  const sel = toneSlotOf(toneSel);
-  if (sel >= 0 && sel < n) {
-    ctx.fillStyle = TONE_COL_PICK;
-    ctx.fillRect(sel * bw + 1, 14, bw - 2, H - 26);
-  }
-  // Frequency ruler every 500 Hz, so the strip is readable as frequencies and
-  // not just as a row of blocks.
   ctx.fillStyle = "#9db0bd"; ctx.font = "12px system-ui,sans-serif"; ctx.textAlign = "center";
   for (let hz = 500; hz <= toneState.max; hz += 500) {
     const x = (toneSlotOf(hz) + 0.5) * bw;
@@ -1361,12 +1373,14 @@ function toneSync() {
   if (toneState.stations === 0) {
     v.style.color = "#9db0bd";
     v.textContent = "Nothing decoded yet - the band picture is unknown, not empty.";
-  } else if (toneIsBusy(toneSlotOf(toneSel))) {
-    v.style.color = "#ff8080";
-    v.textContent = "Busy - a station or its guard band is here. Pick a green slot.";
   } else {
-    v.style.color = "#6ed27a";
-    v.textContent = "Clear, from " + toneState.stations + " station" + (toneState.stations === 1 ? "" : "s") + " heard.";
+    const i = toneSlotOf(toneSel);
+    const be = (toneState.busy_e || "")[i] === "1";
+    const bo = (toneState.busy_o || "")[i] === "1";
+    if (!be && !bo)      { v.style.color = "#6ed27a"; v.textContent = "Clear in both windows."; }
+    else if (!be)        { v.style.color = "#8AB4F8"; v.textContent = "Clear in EVEN - busy in ODD."; }
+    else if (!bo)        { v.style.color = "#FFA040"; v.textContent = "Clear in ODD - busy in EVEN."; }
+    else                 { v.style.color = "#ff8080"; v.textContent = "Busy in both windows - pick a green slot."; }
   }
   toneDraw();
 }
@@ -2078,6 +2092,30 @@ document.getElementById("help-open-manual").addEventListener("click", () => {
   if (!document.getElementById("help-open-manual").onclick) helpShowContents();
 });
 
+/* Antenna Tune (QMX 1.04+). KEYS THE RADIO with a steady carrier, so it
+   confirms, shows a live power/SWR readout while running, and both ends have a
+   60 s safety stop - the device's own timer fires even if this tab dies. */
+let tuneAntRunning = false;
+function tuneAntSync(s) {
+  const btn = document.getElementById("tune-ant-btn");
+  btn.style.display = s.tune_ok ? "" : "none";
+  if (s.tune) {
+    tuneAntRunning = true;
+    btn.textContent = "STOP Tune  " + (s.tune.watts || 0).toFixed(1) + " W  SWR " +
+                      (s.tune.swr ? s.tune.swr.toFixed(2) : "-");
+    btn.style.color = "#ff4040"; btn.style.borderColor = "#ff4040";
+  } else if (tuneAntRunning) {
+    tuneAntRunning = false;
+    btn.textContent = "Antenna Tune";
+    btn.style.color = ""; btn.style.borderColor = "";
+  }
+}
+document.getElementById("tune-ant-btn").addEventListener("click", async () => {
+  if (tuneAntRunning) { await sendCmd({ action: "tune_stop" }); return; }
+  if (!confirm("Start Antenna Tune? This keys the radio with a steady carrier until you stop it (60 s safety limit). Have a load or antenna connected.")) return;
+  await sendCmd({ action: "tune_start" });
+});
+
 /* Switch the Tab5's own view from the browser. Unlike Call CQ this changes
    nothing on the air, so it does not confirm - but the Tab5 takes about a second
    to act (the switch is handed to its display task), so the button says so
@@ -2261,6 +2299,7 @@ async function tick() {
     else if (s.spots_v === undefined) lastSpots = [];   // feature off / not panadapter
     if (s.spots_v !== undefined) lastSpotsV = s.spots_v;
     lastTimeSrc = s.time_src && s.time_src !== "none" ? s.time_src : "";
+    tuneAntSync(s);
     document.getElementById("bandplan-wrap").classList.toggle("show", !!lastBandplan);
 
     /* Spectrum/waterfall are Panadapter-only - the Tab5 pauses the WS stream

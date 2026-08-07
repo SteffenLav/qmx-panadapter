@@ -247,58 +247,75 @@ int ft8_tx_seconds_until_slot(bool match_parity, bool want_even, ftx_protocol_t 
 // everything looks free - worth saying out loud in the UI rather than
 // implying the band is empty). Returns 0 on OOM, which reads as "all clear";
 // callers that care should treat n_stations 0 as "unknown", not "empty".
-static uint64_t build_tone_occupancy(int *n_slots_out, int *n_stations_out)
+// One snapshot pass, BOTH windows (Roy KI0ER, 2026-08-07: "the operator can now
+// see which offset to choose BEFORE arming, because only the operator knows
+// which time window they are going to pounce on"). Two stations only collide if
+// they transmit in the SAME slot, so the honest picture is one mask per parity -
+// the old single strip could only show our own window once something was armed,
+// which left the operator reactive with ~15 s to re-pick.
+//
+// A station whose slot cannot be determined (no last_utc) lands in BOTH masks:
+// claiming a window is free on missing evidence is how you transmit over someone.
+static void build_tone_occupancy_split(uint64_t *even_out, uint64_t *odd_out,
+                                       int *n_slots_out, int *n_stations_out)
 {
     const int n_slots = (FT8_AUDIO_SCAN_MAX_HZ - FT8_AUDIO_SCAN_MIN_HZ)
                         / FT8_AUDIO_SLOT_HZ;
     if (n_slots_out)    *n_slots_out    = n_slots;
     if (n_stations_out) *n_stations_out = 0;
+    if (even_out) *even_out = 0;
+    if (odd_out)  *odd_out  = 0;
 
     ft8_call_t *calls = heap_caps_malloc(FT8_CALL_TABLE_SIZE * sizeof(ft8_call_t),
                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!calls) return 0;
+    if (!calls) return;
 
     int n = 0;
     ft8_screen_get_all(calls, FT8_CALL_TABLE_SIZE, &n);
-
-    // Slot-parity filter (Roy KI0ER, 2026-07-29: "a frequency offset could be
-    // entirely available to me, but only if I TX into the correct time window").
-    // Two stations only collide if they transmit in the SAME slot, so a station
-    // heard on the opposite parity to ours does not occupy our tone at all -
-    // counting it made the picker (and the automatic scan) reject slots that
-    // were in fact free for us, which on a busy band is most of them.
-    //
-    // Our parity is only knowable when something is armed or running
-    // (ft8_tx_get_parity_lock: a reply inherits the opposite of theirs, and a
-    // CQ carries the operator's TXCQ EVEN/ODD choice). With TXCQ ANY, or nothing
-    // armed at all, there is no answer - and then the honest view is the union of
-    // both windows, exactly as before.
-    bool our_even = false;
-    bool parity_known = ft8_tx_get_parity_lock(&our_even);
     const int period_ms = ft8_op_mode_slot_ms();
 
-    // Guard bands: mark the signal's own slot plus one slot on each side,
-    // giving 150 Hz of clearance around active signals.
-    uint64_t occupied = 0;
+    uint64_t ev = 0, od = 0;
     for (int i = 0; i < n; i++) {
-        if (parity_known && calls[i].last_utc > 0) {
-            // Same nearest-slot rounding as the decode list's E/O column: the
-            // stored last_utc is a whole second, so a bare /period truncation
-            // would flip the parity of anything logged a hair before its slot.
-            int64_t sidx = ((int64_t)calls[i].last_utc * 1000 + period_ms / 2) / period_ms;
-            bool station_even = ((sidx % 2) == 0);
-            if (station_even != our_even) continue;   // opposite window - no clash
-        }
         int bin = ((int)calls[i].last_freq - FT8_AUDIO_SCAN_MIN_HZ)
                   / FT8_AUDIO_SLOT_HZ;
-        for (int g = bin - 1; g <= bin + 1; g++) {
-            if (g >= 0 && g < n_slots)
-                occupied |= (1ULL << g);
+        // Guard bands: the signal's own slot plus one each side - 150 Hz of
+        // clearance around active signals, same as always.
+        uint64_t bits = 0;
+        for (int g = bin - 1; g <= bin + 1; g++)
+            if (g >= 0 && g < n_slots) bits |= (1ULL << g);
+
+        if (calls[i].last_utc > 0) {
+            // Nearest-slot rounding, same as the decode list's E/O column: the
+            // stored last_utc is a whole second, and a bare /period truncation
+            // flips the parity of anything logged a hair before its slot.
+            int64_t sidx = ((int64_t)calls[i].last_utc * 1000 + period_ms / 2) / period_ms;
+            if ((sidx % 2) == 0) ev |= bits; else od |= bits;
+        } else {
+            ev |= bits; od |= bits;
         }
     }
     free(calls);
+    if (even_out) *even_out = ev;
+    if (odd_out)  *odd_out  = od;
     if (n_stations_out) *n_stations_out = n;
-    return occupied;
+}
+
+void ft8_tx_get_tone_occupancy_split(uint64_t *even_out, uint64_t *odd_out,
+                                     int *n_slots_out, int *n_stations_out)
+{
+    build_tone_occupancy_split(even_out, odd_out, n_slots_out, n_stations_out);
+}
+
+// The our-parity view the automatic pickers use: our window's mask when the
+// parity is knowable (something armed/running, or a TXCQ EVEN/ODD choice), the
+// union of both otherwise - unchanged semantics, now derived from the split.
+static uint64_t build_tone_occupancy(int *n_slots_out, int *n_stations_out)
+{
+    uint64_t ev = 0, od = 0;
+    build_tone_occupancy_split(&ev, &od, n_slots_out, n_stations_out);
+    bool our_even = false;
+    if (ft8_tx_get_parity_lock(&our_even)) return our_even ? ev : od;
+    return ev | od;
 }
 
 uint64_t ft8_tx_get_tone_occupancy(int *n_slots_out, int *n_stations_out)
@@ -396,6 +413,15 @@ bool ft8_tx_is_clashing(void)
     const int n_slots = (FT8_AUDIO_SCAN_MAX_HZ - FT8_AUDIO_SCAN_MIN_HZ) / FT8_AUDIO_SLOT_HZ;
     int our_bin = (our_hz - FT8_AUDIO_SCAN_MIN_HZ) / FT8_AUDIO_SLOT_HZ;
 
+    // Parity filter (Roy KI0ER field report, 2026-08-07: "FREQ BUSY appeared even
+    // though the ODD strip showed my offset in green"): this check predates the
+    // v1.3.4 occupancy parity fix and never received it, so a station heard only
+    // in the OPPOSITE window still raised the warning - which is exactly when it
+    // is wrong, because that station cannot collide with us.
+    bool our_even = false;
+    bool parity_known = ft8_tx_get_parity_lock(&our_even);
+    const int period_ms = ft8_op_mode_slot_ms();
+
     bool clash = false;
     if (our_bin >= 0 && our_bin < n_slots) {
         for (int i = 0; i < n; i++) {
@@ -404,6 +430,10 @@ bool ft8_tx_is_clashing(void)
             if (kind == FT8_TX_KIND_REPLY && target[0] &&
                 strncmp(calls[i].call, target, sizeof(calls[i].call)) == 0)
                 continue;
+            if (parity_known && calls[i].last_utc > 0) {
+                int64_t sidx = ((int64_t)calls[i].last_utc * 1000 + period_ms / 2) / period_ms;
+                if ((((sidx % 2) == 0)) != our_even) continue;   // opposite window
+            }
             int their_bin = ((int)calls[i].last_freq - FT8_AUDIO_SCAN_MIN_HZ) / FT8_AUDIO_SLOT_HZ;
             if (abs(their_bin - our_bin) <= 1) {
                 clash = true;
