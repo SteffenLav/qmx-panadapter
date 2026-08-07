@@ -1076,6 +1076,92 @@ static void t_slotbar_cb(lv_timer_t *t)
 static void start_cq_run(bool interactive);          // defined below
 static volatile bool s_web_cq_pending;               // set from the HTTP task
 
+// Web reply-to-station request (Phase 6 of web parity: the operator explicitly
+// wanted TX from the browser). Same deferral as the CQ flag: the HTTP task only
+// writes the request; the 1 Hz LVGL timer builds and arms it, because
+// ft8_qso_build_manual_reply() and everything downstream are LVGL-thread-only.
+// s_web_reply_result carries the outcome back to the browser via /api/status -
+// a toast on the Tab5 is invisible from another room.
+static char          s_web_reply_call[FT8_CALL_MAX_LEN];   // "" = nothing pending
+static volatile bool s_web_reply_pending;
+static char          s_web_reply_result[64];
+
+void ft8_screen_view_request_reply(const char *call)
+{
+    if (!call || !call[0]) return;
+    snprintf(s_web_reply_call, sizeof(s_web_reply_call), "%s", call);
+    s_web_reply_pending = true;
+}
+
+const char *ft8_screen_view_get_web_reply_result(void)
+{
+    return s_web_reply_result;
+}
+
+// Runs on the LVGL task from t_clock_cb. Mirrors row_activate() + the TX modal's
+// buttons, minus the modal: the browser already confirmed, so the built message
+// goes straight to the same arm/pounce calls the modal's buttons make.
+static void web_reply_drain(void)
+{
+    char call[FT8_CALL_MAX_LEN];
+    snprintf(call, sizeof(call), "%s", s_web_reply_call);
+    s_web_reply_pending = false;
+    s_web_reply_call[0] = '\0';
+
+    ft8_call_t *snap = table_snapshot();
+    if (!snap) { snprintf(s_web_reply_result, sizeof(s_web_reply_result), "Internal: no snapshot buffer"); return; }
+    int n = 0;
+    ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+    const ft8_call_t *match = NULL;
+    for (int i = 0; i < n; i++)
+        if (strcmp(snap[i].call, call) == 0) { match = &snap[i]; break; }
+    if (!match) {
+        // Decode rows age out after 60 s, and the browser's copy can be a poll
+        // older still - refusing is the right answer, not transmitting at a
+        // station that may have left.
+        snprintf(s_web_reply_result, sizeof(s_web_reply_result), "%s is no longer in the decode list", call);
+        return;
+    }
+
+    char busy_target[24];
+    if (ft8_qso_is_busy(busy_target, sizeof(busy_target))) {
+        if (busy_target[0]) snprintf(s_web_reply_result, sizeof(s_web_reply_result), "Busy: working %s", busy_target);
+        else                snprintf(s_web_reply_result, sizeof(s_web_reply_result), "Busy: calling CQ");
+        return;
+    }
+
+    ft8_tx_request_t req;
+    bool is_fresh_grid = false;
+    char err[64];
+    if (!ft8_qso_build_manual_reply(match, ft8_tx_pick_tone_hz(), &req, &is_fresh_grid, err, sizeof(err))) {
+        snprintf(s_web_reply_result, sizeof(s_web_reply_result), "%s", err[0] ? err : "Could not build the reply");
+        return;
+    }
+
+    // Their fresh CQ -> the full auto-sequencer, because the operator is NOT in
+    // front of the radio to click each exchange step. Anything mid-exchange ->
+    // arm the one correct next message, with the same manual-QSO bookkeeping the
+    // modal's Transmit does (working-highlight, and WAIT_DONE seeding so a
+    // closing 73 still logs to ADIF).
+    if (is_fresh_grid) {
+        if (ft8_qso_start(&req, err, sizeof(err))) {
+            snprintf(s_web_reply_result, sizeof(s_web_reply_result), "Working %s (auto QSO)", call);
+            ESP_LOGI(TAG, "web reply: auto pounce on %s", call);
+        } else {
+            snprintf(s_web_reply_result, sizeof(s_web_reply_result), "%s", err[0] ? err : "Pounce refused");
+        }
+        return;
+    }
+    if (ft8_tx_arm(&req, err, sizeof(err))) {
+        if (req.target_call[0]) ft8_qso_note_manual_target(req.target_call);
+        if (req.kind == FT8_TX_KIND_73) ft8_qso_notify_manual_final(req.target_call);
+        snprintf(s_web_reply_result, sizeof(s_web_reply_result), "Armed: %s", req.display_text);
+        ESP_LOGI(TAG, "web reply: armed '%s'", req.display_text);
+    } else {
+        snprintf(s_web_reply_result, sizeof(s_web_reply_result), "%s", err[0] ? err : "Could not arm");
+    }
+}
+
 static void t_clock_cb(lv_timer_t *t)
 {
     (void)t;
@@ -1092,6 +1178,21 @@ static void t_clock_cb(lv_timer_t *t)
             start_cq_run(false);
         } else {
             ESP_LOGW(TAG, "web CQ request ignored - not in FT8 mode");
+        }
+    }
+
+    // Web reply request: consumed even when FT8 is not up, same reasoning as the
+    // CQ flag - a stale TX request firing minutes later, unasked, is the one
+    // failure mode this deferral must never have.
+    if (s_web_reply_pending) {
+        bool ft8_up = s_container && !lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN);
+        if (ft8_up) {
+            web_reply_drain();
+        } else {
+            s_web_reply_pending = false;
+            s_web_reply_call[0] = '\0';
+            snprintf(s_web_reply_result, sizeof(s_web_reply_result), "Not in FT8 mode");
+            ESP_LOGW(TAG, "web reply request ignored - not in FT8 mode");
         }
     }
 

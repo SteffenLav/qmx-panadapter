@@ -162,6 +162,10 @@ static void add_ft8_tx_status(cJSON *root)
     }
     cJSON_AddStringToObject(f, "st",   st);
     cJSON_AddStringToObject(f, "text", b);
+    // Outcome of the last browser-initiated reply ("Armed: ...", "Busy: ...",
+    // "X is no longer in the decode list"). Sticky until the next request.
+    const char *wr = ft8_screen_view_get_web_reply_result();
+    if (wr && wr[0]) cJSON_AddStringToObject(f, "web_r", wr);
 }
 
 static esp_err_t status_handler(httpd_req_t *req)
@@ -416,6 +420,13 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // spawns/stops ft8_task and moves widgets.
         const char *scr = cJSON_GetStringValue(cJSON_GetObjectItem(root, "screen"));
         if (scr) ui_request_base_mode(strcmp(scr, "ft8") == 0);
+    } else if (action && strcmp(action, "reply") == 0) {
+        // Reply to a decoded station from the browser - Phase 6 of web parity,
+        // TX explicitly blessed by the operator. Deferred to the LVGL task like
+        // cq_start; the outcome comes back through /api/status's ft8 block
+        // (web_r), because a Tab5 toast is invisible from another room.
+        const char *call = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call"));
+        if (call && call[0]) ft8_screen_view_request_reply(call);
     } else if (action && strcmp(action, "usb_shutdown") == 0) {
         // Orderly USB teardown before the operator re-flashes (see
         // util/usb_shutdown.h). Blocking and bounded; the browser gets its

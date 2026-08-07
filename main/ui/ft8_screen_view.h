@@ -40,6 +40,14 @@ void ft8_screen_view_request_refresh(void);
 // is not up - there would be nothing to transmit on.
 void ft8_screen_view_request_cq(void);
 
+// Reply to a decoded station from the web UI. Thread-safe request; the LVGL
+// timer builds the correct next message (WSJT-X double-click semantics) and
+// either starts the full auto-QSO (their fresh CQ) or arms the one next message
+// (mid-exchange). The outcome lands in ft8_screen_view_get_web_reply_result(),
+// surfaced through /api/status - a Tab5 toast is invisible from another room.
+void ft8_screen_view_request_reply(const char *call);
+const char *ft8_screen_view_get_web_reply_result(void);
+
 // Refresh the "Call CQ" button label to the currently-selected CQ preset.
 // Called by the CQ preset modal after a save. LVGL-thread only.
 void ft8_screen_view_refresh_cq_label(void);
