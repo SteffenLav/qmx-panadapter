@@ -1,4 +1,6 @@
 #include "audio.h"
+#include "cat.h"          // cat_is_ready - the dead-stream watchdog's CAT-alive test
+#include "usb_replug.h"   // the dead-stream watchdog's escalation
 #include "dsp.h"
 
 #include <string.h>
@@ -300,6 +302,41 @@ static void log_stats(void)
     s_period_start_us = now;
 
     uint32_t pairs_per_sec = (uint32_t)((uint64_t)samples * 1000000ULL / (uint64_t)elapsed_us);
+
+    // Dead-stream watchdog (Roy KI0ER, two field reports 2026-08-07: decode
+    // list blank while TX still works; his reproducible trigger is exiting the
+    // QMX's own menu, which stops the IQ audio stream and it never resumes).
+    // The decode-side watchdog cannot catch this - it stands down during TX/QSO
+    // (Roy was auto-answering) - but the SIGNATURE here is unambiguous: the UAC
+    // device is open, CAT answers polls, and not one audio pair arrives. A
+    // working QMX in IQ mode streams ~48000 pairs/s without exception.
+    //
+    // Escalation, deliberately slow and capped: 60 s silent -> soft reset of
+    // the audio pipeline (free - this is the same reset the decode watchdog
+    // uses). 120 s -> ONE usb_replug() (VBUS cycle - the recovery Roy performs
+    // by hand as a QMX power-cycle, minus the walk). Cap of 2 replugs per
+    // connection so a genuinely dead radio cannot put the port in a cycle loop;
+    // any real audio resets everything.
+    {
+        static int s_silent_secs = 0;
+        static int s_replug_used = 0;
+        if (pairs_per_sec > 0 || !s_uac_dev || !cat_is_ready()) {
+            if (pairs_per_sec > 0) s_replug_used = 0;
+            s_silent_secs = 0;
+        } else {
+            s_silent_secs += STATS_PERIOD_MS / 1000;
+            if (s_silent_secs == 60) {
+                ESP_LOGW(TAG, "dead stream: 60 s of silence with CAT alive - soft audio reset");
+                audio_request_reset();
+            } else if (s_silent_secs >= 120 && s_replug_used < 2) {
+                s_replug_used++;
+                s_silent_secs = 0;   // give the replug its own 120 s to prove itself
+                ESP_LOGW(TAG, "dead stream: still silent - USB replug (attempt %d/2)", s_replug_used);
+                usb_replug(2000);
+            }
+        }
+    }
+
     if (dropped > 0) {
         ESP_LOGW(TAG, "RX %u pairs/s peak L=%d R=%d DROPPED=%u (ring full)",
                  (unsigned)pairs_per_sec, (int)pL, (int)pR, (unsigned)dropped);
