@@ -66,6 +66,13 @@ void ft8_qso_on_tx_complete(void);
 // Abort QSO and disarm any pending TX. No-op when IDLE.
 void ft8_qso_abort(void);
 
+// Mark the QSO just started as ROBOT-initiated (call right after a successful
+// ft8_qso_start from the auto-answer picker). Changes one behaviour: a robot
+// pick that turns out to be mid-QSO with somebody else is abandoned so the
+// robot can choose another CQ caller, where a human pounce holds and waits -
+// a deliberate pounce means the operator wants THAT station (Roy KI0ER).
+void ft8_qso_mark_robot_started(void);
+
 // Manually override the next outgoing message during an active exchange.
 //   FT8_TX_KIND_REPLY    → re-arm the current message unchanged (re-send)
 //   FT8_TX_KIND_ROGER_RPT → force-send RR73 and advance to WAIT_DONE

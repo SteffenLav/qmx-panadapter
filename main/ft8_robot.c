@@ -166,7 +166,11 @@ void ft8_robot_tick(int64_t slot_sec)
         ESP_LOGW(TAG, "robot build_request(%s) failed: %s", t->call, err);
         return;
     }
-    if (!ft8_qso_start(&req, err, sizeof(err))) {
+    if (ft8_qso_start(&req, err, sizeof(err))) {
+        // Robot-started QSOs abandon a busy target instead of holding for it -
+        // the robot picked from a list, so there is nothing to be loyal to.
+        ft8_qso_mark_robot_started();
+    } else {
         ESP_LOGW(TAG, "robot ft8_qso_start(%s) refused: %s", t->call, err);
         return;
     }

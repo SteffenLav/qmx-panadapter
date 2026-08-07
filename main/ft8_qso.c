@@ -1075,12 +1075,26 @@ void ft8_qso_init(void)
     s_fd_their_exch[0] = '\0';
 }
 
+// Whether the CURRENT QSO was started by the auto-answer robot rather than a
+// human tap. The busy-station hold treats the two differently (Roy KI0ER,
+// 2026-08-07): a deliberate pounce means the operator wants THAT station and
+// will happily wait out their other QSO - but the robot picked its target off a
+// list, so when that target turns out to be mid-QSO with someone else, waiting
+// is pure loss: move on and let the robot pick another CQ caller.
+static bool s_robot_started = false;
+
+void ft8_qso_mark_robot_started(void)
+{
+    s_robot_started = true;
+}
+
 bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
 {
     if (!tx1_req || !tx1_req->target_call[0]) {
         if (err) snprintf(err, err_len, "No target callsign");
         return false;
     }
+    s_robot_started = false;   // set again by the robot AFTER a successful start
     // Any explicitly-started QSO (manual tap, robot) ends pileup-drain tracking;
     // try_start_pileup_pounce() re-sets it right after this returns for the
     // pileup case. Scopes the timed-out-pileup auto-advance to pileup pounces
@@ -1929,6 +1943,29 @@ void ft8_qso_advance(int64_t slot_sec)
     if (!found && !from_cq && target[0] &&
         (st == FT8_QSO_WAIT_RPT || st == FT8_QSO_WAIT_ROGER || st == FT8_QSO_WAIT_RR73)) {
         char with[FT8_CALL_MAX_LEN] = {0};
+        if (s_robot_started && partner_busy_with(target, with, sizeof with)) {
+            // Robot pick turned out busy: abandon, do not wait (Roy KI0ER). The
+            // robot's next tick chooses another CQ caller - and it cannot
+            // re-pick this one immediately, because their last message is a
+            // reply, not a CQ, so the is_cq gate excludes them until they call
+            // again. Deliberately NOT a grey-list strike: busy is not
+            // unresponsive, and the hold never counted a miss either.
+            ESP_LOGI(TAG, "robot pick %s is working %s - moving on instead of waiting",
+                     target, with[0] ? with : "someone");
+            ft8_status_set("%s busy with %s - robot moving on",
+                           target, with[0] ? with : "someone");
+            lock();
+            s_state         = FT8_QSO_IDLE;
+            s_target[0]     = '\0';
+            s_have_cur      = false;
+            s_from_cq       = false;
+            s_partner_freq_hz = 0;
+            s_robot_started = false;
+            unlock();
+            ft8_tx_disarm();          // the re-armed burst must not fire either
+            clear_dt_follow();
+            return;
+        }
         if (partner_busy_with(target, with, sizeof with) &&
             s_busy_holds < QSO_BUSY_HOLD_MAX_SLOTS) {
             lock();
