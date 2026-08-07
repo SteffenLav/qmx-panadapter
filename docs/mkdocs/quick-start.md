@@ -128,7 +128,7 @@ Swipe → from the left edge to switch to **FT8 view**. You'll see:
 
 If you set up WiFi:
 
-1. Open your browser to `http://<ip-address>` (Tab5 displays its IP in the settings)
+1. Open your browser to **`http://qmx.local`** (or the IP shown in the Tab5's bottom bar, if your network blocks `.local` names)
 2. You'll see a remote spectrum, waterfall, and control panel — plus QSO log downloads and uploads to QRZ, eQSL, and LoTW
 3. No installation or configuration needed — just open and go
 

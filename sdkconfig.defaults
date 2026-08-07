@@ -154,3 +154,28 @@ CONFIG_UAC_NUM_PACKETS_PER_URB=40
 # CONFIG_MBEDTLS_HARDWARE_AES is not set
 # CONFIG_MBEDTLS_HARDWARE_GCM is not set
 # CONFIG_MBEDTLS_HARDWARE_SHA is not set
+
+#
+# mDNS (qmx.local) - keep it OUT of internal RAM.
+# The component defaults to creating its task and its allocations in internal
+# RAM. Kept because it matches this project's standing rule for background tasks
+# (util/psram_task.h) - but MEASURED, it made no difference to the internal
+# low-water mark. What actually recovered it was trimming the static tables
+# below; see CLAUDE.md's mDNS section for the three-build comparison.
+#
+# CONFIG_MDNS_TASK_CREATE_FROM_INTERNAL is not set
+CONFIG_MDNS_TASK_CREATE_FROM_SPIRAM=y
+# CONFIG_MDNS_MEMORY_ALLOC_INTERNAL is not set
+CONFIG_MDNS_MEMORY_ALLOC_SPIRAM=y
+
+#
+# mDNS sizing. We have exactly ONE interface (WiFi STA) and advertise exactly ONE
+# service (_http._tcp), so the component's defaults of 3 and 10 are static RAM
+# bought for nothing - its own help text says lowering these reduces static RAM.
+# Measured on this board, adding mDNS took the internal low-water mark from ~31 KB
+# to ~9 KB, and moving its task+allocations to PSRAM did NOT recover it, so the
+# cost is elsewhere: static tables like these, and the LWIP pbufs that every
+# multicast packet on the LAN now lands in.
+#
+CONFIG_MDNS_MAX_INTERFACES=1
+CONFIG_MDNS_MAX_SERVICES=2

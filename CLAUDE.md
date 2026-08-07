@@ -82,6 +82,8 @@ main/
                           No network/SD any more (see manual_embed.h)
   net/manual_embed.c      User manual built into the binary (main/manual.bin via EMBED_FILES,
                           packed by tools/pack_manual.py from the mkdocs hook)
+  net/mdns_svc.c          mDNS responder: qmx.local + _http._tcp advert. Started from wifi.c's
+                          got-IP path; idempotent, and soft-fails to "IP still works"
   net/pskreporter.c       PSK Reporter reception reports (IPFIX/UDP, batched ~5 min, default ON)
   ft8_greylist.c          Grey-list: stations that time out 2 pounces are skipped by the auto pickers
   net/update_check.c      Background GitHub /releases poll (+ latest.json fallback) → "update available" banner in the Reader
@@ -100,6 +102,26 @@ FT8 TX data flow: **ft8_screen_view (tap) → ft8_tx_modal (confirm) → ft8_tx_
 `components/espressif__usb_host_uac/` is a hand-patched fork with `create_background_task = true`. Required for UAC + CDC-ACM to coexist on the same USB host. Do not replace with the registry version without re-applying the patches (4 as of 2026-08-03: background task; ringbuf-overflow WARN+count; 1 Hz `RX xport` ISO stats; **forced teardown on a dead device** — EP-halt/interface-release failures during suspend/close are logged and ignored so `uac_host_device_close()` always frees the usb_host device; without it a QMX powered off mid-stream left a permanent "zombie" device occupying the root port until reboot, TODO #75).
 
 `components/espressif__esp_lcd_touch_st7123/` is a hand-patched fork fixing ST7121 compatibility (see **ST7121 has an incomplete register map** below). Do not replace with the registry version.
+
+### mDNS: the device answers to `qmx.local`
+`net/mdns_svc.c` starts an mDNS responder from wifi.c's got-IP path (idempotent — that path also runs on every reconnect and roam) and advertises `_http._tcp` on port 80. Hostname is a fixed `MDNS_SVC_HOSTNAME` ("qmx"), deliberately not a setting: it is the one thing an operator has to remember about the web UI, and something you must look up is barely better than an IP. Two units on one LAN would collide — make it a setting then, defaulting to this.
+
+**Why it earns its place on a device this memory-tight:** the WiFi layer picks its own network (up to six remembered, roams to whichever is on the air), so the IP changes without anyone deciding it should — and the only place it is shown is the Tab5's own bottom bar, which is useless when the Tab5 is in the shack and you are not. Failure is soft everywhere: `mdns_init()` or the service advert failing logs a warning and leaves the IP working.
+
+**It costs internal RAM, and the fix was NOT the obvious one.** Stock, mDNS took the internal low-water mark from **~31 KB to ~9 KB** — on this board that is the difference between "fine" and "the next runtime allocation is a coin toss" (see the `MALLOC_CAP_DMA` and `.bss` notes). Measured, three builds, same session and same network:
+
+| Build | internal low-water mark |
+|---|---|
+| before mDNS | 27–31 KB |
+| mDNS defaults (internal task, `MAX_INTERFACES=3`, `MAX_SERVICES=10`) | 8–12 KB |
+| + `MDNS_TASK_CREATE_FROM_SPIRAM` + `MDNS_MEMORY_ALLOC_SPIRAM` | 9–10 KB — **no measurable change** |
+| + `MDNS_MAX_INTERFACES=1`, `MDNS_MAX_SERVICES=2` | **22 KB** |
+
+So the cost was the **static tables**, not the task stack — the component sizes for 3 interfaces and 10 services by default, and we have exactly one of each (WiFi STA, `_http._tcp`). The PSRAM settings are kept because they match this project's standing rule for background tasks (`util/psram_task.h`), **not** because they were shown to help; do not cite them as the fix. All four settings live in `sdkconfig` AND `sdkconfig.defaults`, since a `fullclean` regenerates the former.
+
+**Generalise this:** a managed component's defaults are sized for a generic device with several interfaces. On this board, check its Kconfig for interface/service/buffer counts and cut them to what we actually have BEFORE assuming a memory cost is intrinsic — and measure, because the obvious culprit (a task stack) was not the one that mattered here.
+
+⚠ **Adding `espressif/mdns` to `main/idf_component.yml` re-resolves `managed_components/`** — which is where the two hand-applied `esp_hosted` patches live. They survived this particular refresh (verified: both scripts reported "already patched"), but *any* dependency change is a moment to re-run `apply_esp_hosted_psram.ps1` and `apply_esp_hosted_sdio_recovery.ps1` before building.
 
 ### esp_hosted transport buffers → PSRAM (managed-component patch — must be re-applied)
 `managed_components/espressif__esp_hosted/host/port/include/os_wrapper.h` has a one-line patch in its `MEM_ALLOC` macro: `extra_heap_caps = MALLOC_CAP_SPIRAM` (was `0`). This routes the esp_hosted WiFi transport DMA pool (the per-packet TX/RX buffers that grow under WiFi bursts) into PSRAM instead of the scarce internal DRAM. **Without it the device reboots** under QMX+FT8 load when WiFi TX bursts (web UI / QRZ upload) exhaust internal DMA RAM → `transport_drv_sta_tx` → `assert(copy_buff)`. Safe on ESP32-P4: `SOC_SDMMC_PSRAM_DMA_CAPABLE == 1`, and the 1536-byte block is 64-byte aligned. `managed_components/` is **git-ignored** and is wiped by `idf.py fullclean` / a dependency refresh / the release process's `rm -r managed_components/`, so after any of those re-run `tools/patches/apply_esp_hosted_psram.ps1` (idempotent) before building. This is half of the upload/web-stability fix; the rest is in-repo: audio ring → PSRAM, `dsp_set_transfer_quiet()` (CPU-yield during transfers), and the WS-stream pause.

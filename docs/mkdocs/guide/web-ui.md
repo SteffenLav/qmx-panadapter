@@ -5,11 +5,21 @@ Access the panadapter remotely from any browser on your WiFi network.
 ## Quick Start
 
 1. Enable **WiFi** in the settings drawer
-2. Note the **IP address** shown in the settings
-3. Open your browser to `http://<ip>` (e.g., `http://192.168.1.50`)
-4. You'll see the same spectrum and waterfall as the Tab5
+2. Open your browser to **`http://qmx.local`**
+3. You'll see the same spectrum and waterfall as the Tab5
 
-No installation, no configuration — just open and go.
+No installation, no configuration, and **no IP address to write down**.
+
+> **Why a name and not an address.** The Tab5 picks its own network - it remembers
+> up to six and moves to whichever is on the air - so its IP address changes
+> without anyone deciding it should, and the only place it is shown is the Tab5's
+> own bottom bar, which is no help when the Tab5 is in the shack and you are not.
+> `qmx.local` does not change.
+>
+> If `qmx.local` does not resolve, the IP still works exactly as before - read it
+> off the Tab5's bottom bar. Windows and macOS resolve `.local` names out of the
+> box; a few Linux setups need `avahi-daemon` installed, and some guest/hotel
+> networks block the multicast that makes it work.
 
 ## Remote Control
 
@@ -237,6 +247,7 @@ Each upload remembers where it left off — re-uploading skips QSOs that were al
 - **WiFi must be on** (settings drawer)
 - **IP address shown** in settings (or static IP if you prefer)
 - **Both Tab5 and browser on the same LAN** (no internet needed)
+- **`qmx.local`** resolves on most networks; guest/hotel WiFi often blocks the multicast it needs, in which case use the IP
 - **5 GHz WiFi works** but 2.4 GHz is recommended (longer range)
 
 ## Limitations

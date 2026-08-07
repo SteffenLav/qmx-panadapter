@@ -49,6 +49,7 @@ idf_component_register(
         "storage/mem_channels.c"
         "storage/sd_archive.c"
         "wifi/wifi.c"
+        "net/mdns_svc.c"
         "net/webserver.c"
         "net/webserver_ws.c"
         "net/filebrowser.c"
@@ -112,6 +113,7 @@ idf_component_register(
         lwip
         esp_http_server
         esp_http_client
+        espressif__mdns
         mbedtls
         json
         ft8_lib

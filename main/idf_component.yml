@@ -14,6 +14,11 @@ dependencies:
 
   espressif/esp-dsp: "^1.6.0"
 
+  # mDNS: reach the Tab5 as qmx.local instead of hunting an IP that changes with
+  # the network. Added after an evening lost to exactly that (roamed onto a hotel
+  # WiFi, new lease, no way to find it).
+  espressif/mdns: "^1.2.0"
+
   lvgl/lvgl: "~9.2.0"
   espressif/esp_wifi_remote:
     version: "0.8.5"

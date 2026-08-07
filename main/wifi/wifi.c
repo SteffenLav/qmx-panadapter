@@ -1,5 +1,6 @@
 #include "wifi.h"
 #include "settings.h"
+#include "net/mdns_svc.h"   // qmx.local, announced once we have an IP
 #include <stdbool.h>
 
 #include <string.h>
@@ -413,6 +414,12 @@ static void on_ip_event(void *arg, esp_event_base_t base,
         // means there is nothing for the operator to maintain - which is the
         // whole point of the request.
         settings_wifi_known_remember(s_ssid, s_pass);
+
+        // Announce qmx.local now that there is an interface to announce on.
+        // Idempotent, so the reconnects and roams that are routine here cost
+        // nothing - and the name survives the address change a roam causes,
+        // which is the whole reason it is here.
+        mdns_svc_start();
         {
             // Count only - never a WIFI_KNOWN_MAX buffer here. This runs on the
             // system event task, whose stack is under 3 KB; a 588-byte array on it
