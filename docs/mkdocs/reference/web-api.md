@@ -80,6 +80,10 @@ action names its own parameter key (there is no generic `value`).
 | `set_zoom` | `zoom: 1.0/2.0/4.0/8.0` | Zoom level |
 | `set_screen` | `screen: "panadapter"/"ft8"` | Switch the Tab5's own view. Applied within about a second (handed to the display task) |
 | `cq_start` | *(none)* | Start a CQ run, as the Tab5's own **Call CQ** button does. **Keys the radio.** Only acted on while the Tab5 is in FT8/FT4 mode; otherwise discarded, not queued |
+| `reply` | `call` | Work a decoded station — the same intelligent Transmit a Tab5 row-tap runs. **Keys the radio.** Outcome in `/api/status` `ft8.web_r` |
+| `tune_start` / `tune_stop` | *(none)* | Antenna Tune (QMX 1.04+ only). **Keys the radio continuously**; 60 s safety stop on the device; live power/SWR in `/api/status` `tune` while running |
+| `greylist_clear` | *(none)* | Un-skip every grey-listed station |
+| `usb_shutdown` | *(none)* | Orderly USB teardown before a reflash: radio to RX, CAT and audio closed, VBUS dropped |
 | `reset_settings` | *(none)* | Clear stored settings back to defaults |
 | `reset_network` | *(none)* | Clear the stored WiFi/network state |
 
@@ -99,6 +103,10 @@ The TX audio tone and the live occupancy of the 200-2800 Hz window.
 
 `busy` is one character per 50 Hz slot (`1` = a station or its guard band), sent
 as a **string** because 52 bits do not survive JavaScript's number type.
+`busy_e` and `busy_o` carry the **EVEN and ODD windows separately** — two
+stations only collide in the same window, and only the operator knows which one
+they are about to transmit into; `busy` remains the our-window/union view the
+automatic verdict uses.
 `stations` is how many decoded stations fed the mask - **zero means the band
 picture is unknown, not empty**, and a caller must say so rather than showing the
 all-clear.

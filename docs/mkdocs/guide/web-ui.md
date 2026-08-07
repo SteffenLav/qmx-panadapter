@@ -85,9 +85,20 @@ you, then CQ calls, then strongest signal) and your Filter-window settings are
 applied to it. The station being worked is highlighted, and anything carrying your
 own callsign stands out, as on the Tab5.
 
-**Read-only on purpose.** Replying to a station means choosing one from the list in
-front of you and keying the radio; that stays a decision you make at the Tab5. The
-one transmit action the browser has is Call CQ, below.
+**Click a station to work it** (new in the next release, at the operator's own
+request). The confirm dialog states what will happen, and then the browser runs
+the **same intelligent Transmit a Tab5 row-tap runs**: a fresh CQ starts the full
+automatic QSO (you are not in front of the radio to click each exchange step);
+anything mid-exchange sends the one correct next message. The outcome comes back
+in plain words under the TX banner - "Armed: ...", "Busy: working X", or a refusal
+if the station has aged out of the list, because transmitting at a station that
+may have left is worse than asking you to click again.
+
+**Who is calling you.** Below the table, the **pileup** - stations answering you
+while you are busy - each clickable with the same confirm. And the **grey-list**
+(stations the auto pickers skip after repeated no-answers) is shown with a
+one-click clear, so "why is it ignoring that station?" is answerable from
+another room.
 
 ### Switching the Tab5 back to the panadapter
 
@@ -130,6 +141,13 @@ Changing the tone mid-QSO is fine - your partner tracks your time slot, not your
 audio frequency - but it is refused **mid-burst**, and the reason is shown rather
 than the change silently half-applying.
 
+**Both time windows, always** (new in the next release, asked for by Roy KI0ER).
+The strip is two rows - **EVEN above, ODD below** - because two stations only
+collide if they transmit in the *same* window, and only you know which window you
+are about to pounce into. The verdict says where your pick stands: *"Clear in
+EVEN - busy in ODD"*, or judges just your own window once a transmission has
+fixed it. The Tab5's own mini strip and picker show the same two rows.
+
 ## Memory channels
 
 New in the next release. The **Memory** button opens your 32 channels as a grid.
@@ -139,6 +157,16 @@ current VFO is two clicks.
 
 A frequency outside an amateur band is **refused**, exactly as the Tab5 refuses
 it: a channel you cannot legally tune is worse than no channel.
+
+## Antenna Tune from the browser (QMX 1.04+)
+
+New in the next release. With a QMX on firmware 1.04+, an **Antenna Tune** button
+appears in the bottom bar. It **keys the radio with a steady carrier**, so it
+confirms first - and while running, the button itself becomes the readout:
+**live power and SWR**, click again to stop. Both ends carry a **60-second
+safety stop**: the device's own timer fires even if the browser tab dies, and
+the radio's prior mode is restored, never left keyed. Stopping Tune from the
+QMX's own front panel is honoured too.
 
 ## Settings, with a real keyboard
 
@@ -156,14 +184,19 @@ things you *type* - which is exactly what the Tab5's touchscreen is worst at:
 Saved straight to the Tab5 - its own settings drawer shows the same values next
 time you open it.
 
-Two deliberate omissions. **Your WiFi password is never sent to the browser**, so
-the field is always blank; leave it blank and the stored one is kept. And the
-**auto-answer robot is not offered here** - it transmits unattended under your
-callsign, and the Tab5 keeps a permanent warning beside that switch, which a
-checkbox two rooms away would not carry.
+Also here (new in the next release): the **Display & waterfall** group -
+brightness, waterfall black level, contrast, adaptive floor, FFT window, colour
+map, display sleep, the dB scale range and spectrum smoothing - the controls you
+want to tune from a laptop *while watching the Tab5's screen*. Every change
+applies live and is stored, exactly as the drawer's own sliders do. The
+**auto-answer robot** switch is here too, carrying the same permanent warning the
+Tab5 shows beside it: it transmits unattended - never leave it running
+unsupervised.
 
-Live view controls - zoom, flat mode, waterfall tuning - stay on the screen you
-are looking at rather than being duplicated here.
+One deliberate omission: **your WiFi password is never sent to the browser**, so
+the field is always blank; leave it blank and the stored one is kept. And
+Flip-180 stays on the Tab5 - you set that standing at the device, because it
+depends on how it is mounted.
 
 ## Help, in the browser
 

@@ -1,6 +1,6 @@
 # QMX Panadapter — Master Todo List + Status Assessment
 
-**Last updated:** 2026-08-06
+**Last updated:** 2026-08-08
 **Scope:** v1.0 release gates → open investigations → feature requests → roadmap → full shipped history
 **Source:** CLAUDE.md + README.md + groups.io feature requests + session work
 **Assessment:** Code grep + git log + memory system
@@ -24,6 +24,14 @@
 
 | # | Item | Status | Effort | Next Step / Notes |
 |----|------|--------|--------|-----------|
+| **🆕 2026-08-08 — Roy KI0ER's v1.5.0 evening batch + web parity night** | | | | |
+| 82 | **Dual EVEN/ODD occupancy strips everywhere** | ✅ Done (local) | — | Roy KI0ER, commissioned by the operator. `ft8_tx_get_tone_occupancy_split()`; mini strip, tone modal and web picker all two rows, never "BOTH". Verified vs sim phantoms + screenshot pixel check |
+| 83 | **FREQ BUSY counted the opposite window** | ✅ Fixed (local) | — | `ft8_tx_is_clashing()` never got the v1.3.4 parity filter - Roy's "warning contradicts the green strip" was this bug, verbatim |
+| 84 | **Robot abandons a busy pick instead of holding** | ✅ Done (local), NOT on-air verified | — | Roy's reasoning adopted: a pounce is loyalty, a robot pick is not. `ft8_qso_mark_robot_started()`; no grey-list strike; log line "robot moving on" is the field confirmation hook |
+| 85 | **Dead-audio watchdog: QMX stops streaming, decodes blank, TX still works** | ✅ Done (local), NOT field-verified | — | Roy x2 (menu-visit trigger + spontaneous). audio.c 1 Hz path: 60 s silent-with-CAT-alive -> soft reset; 120 s -> usb_replug, capped 2/connection. Ask Roy for his captured diag logs to confirm the signature |
+| 86 | **CQ run should occasionally skip a TX slot to refresh our-window occupancy** | 🟡 Open - conduct decision | Small | Roy: after a QSO completes or every N CQs, idle one TX slot so the operator's own window picture refreshes. Changes on-air behaviour - operator to choose the cadence before it ships |
+| 87 | **Web parity: full remote operation** | ✅ Done (local) | — | Reply-to-station (same intelligent-Transmit path, confirm + web_r outcome), pileup + grey-list views, display/waterfall settings group, robot toggle with its warning, Antenna Tune w/ 60 s safety (gated 1.04+), time-source clock label, memory channels, settings, help/manual, spots, decode list, qmx.local |
+| 88 | **BT mouse (Samuel W7STF)** | 🔵 Deferred - answered | — | BT = new subsystem on the fragile C6 link; deferred, not rejected. Draft reply in docs/draft-replies-2026-08-08.md |
 | **🆕 2026-08-06 — v1.5.0: making the manual answer questions** | | | | |
 | 76 | **Context-sensitive help (Layers 1-3)** | ✅ Shipped (v1.5.0) | — | `ui/help_topics.c` maps a topic to a page + heading; the drawer's User Manual button lands on the chapter for the current screen (panadapter / FT8-RX / FT8-TX when armed); the IQ banner and QMX-wait prompt are tappable. `tools/pack_manual.py` fails the build on a rotted deep link. See memory `project_context_help_layers` |
 | 77 | **"Need guidance?" triage panel (Layer 4a)** | ✅ Shipped (v1.5.0) | — | `ui/help_triage.c`: symptom rows in the first person, ranked from live state (`cat_is_ready`, IQ flag, `ft8_screen_active_count()`, `panadapter_wifi_is_enabled()`). The device RANKS, the operator CHOOSES — never auto-navigates. Row wording NOT yet validated against how operators actually describe faults |
