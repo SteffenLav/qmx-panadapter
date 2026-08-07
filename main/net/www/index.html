@@ -459,9 +459,28 @@
         <a href="#" id="reset-network-link" class="danger" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
       </div>
     </div>
+    <button type="button" class="bot-btn" id="memory-btn" title="Your 32 memory channels - click one to tune to it">Memory</button>
     <button type="button" class="bot-btn" id="settings-btn" title="Callsign, grid, CQ messages, FT8 filters and the everyday toggles - with a real keyboard">Settings</button>
     <button type="button" class="bot-btn" id="help-btn" title="Guidance and the full user manual - served by the Tab5 itself, no internet needed">Help &#63;</button>
     <input type="file" id="cfg-up-file" accept=".txt,text/plain" style="display:none">
+  </div>
+
+  <!-- Memory channels: the Tab5's 4x8 grid, as a grid. Clicking one RECALLS it -
+       which is just set_freq + set_mode, so the browser needs no recall endpoint
+       and there is no second copy of that decision on the device. -->
+  <div id="mem-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1000;">
+    <div style="max-width:880px; margin:6vh auto; background:#161616; border:1px solid #494949; border-radius:10px; padding:16px 20px; color:#ddd; font-size:14px;">
+      <div style="display:flex; align-items:center; margin-bottom:10px;">
+        <strong style="color:#ffa040; font-size:17px;">Memory channels</strong>
+        <div style="flex:1"></div>
+        <span id="mem-status" style="color:#7d8894; font-size:12px; margin-right:10px"></span>
+        <button id="mem-close" class="bot-btn" style="cursor:pointer">Close</button>
+      </div>
+      <div style="color:#7d8894; font-size:12px; margin-bottom:8px">
+        Click a channel to tune to it. Click <b>Edit</b> to change or clear one. Empty slots take the VFO you are on now.
+      </div>
+      <div id="mem-grid" style="display:grid; grid-template-columns:repeat(4,1fr); gap:8px;"></div>
+    </div>
   </div>
 
   <!-- Settings. Deliberately the text-heavy half of the Tab5's drawer: callsign,
@@ -1227,6 +1246,84 @@ async function sendCmd(payload) {
     setTimeout(() => { btn.disabled = false; btn.textContent = was; }, 2500);
   });
 })();
+
+/* =====================================================================
+   Memory channels
+
+   Recall is set_freq + set_mode, which the browser already has - so there is no
+   recall endpoint and no second copy of that decision on the device. Storing a
+   channel goes through /api/memory, which refuses an out-of-band frequency
+   exactly as the Tab5 does: the browser must not be a way round a rule the
+   device enforces.
+   ===================================================================== */
+async function memOpen() {
+  document.getElementById("mem-modal").style.display = "";
+  pauseWs();
+  const g = document.getElementById("mem-grid");
+  g.innerHTML = '<p style="color:#7d8894">Reading the Tab5...</p>';
+  try {
+    const d = await (await fetch("/api/memory", { cache: "no-store" })).json();
+    g.innerHTML = (d.slots || []).map(sl => {
+      const filled = sl.occupied;
+      const title = filled ? (sl.label || "(no name)") : "empty";
+      const sub = filled ? (sl.freq_hz / 1e6).toFixed(3) + " MHz &middot; " + (sl.mode || "") : "&mdash;";
+      return '<div data-mem="' + sl.idx + '" style="border:1px solid ' + (filled ? "#3a4149" : "#2a2a2a") +
+        ";background:" + (filled ? "#1e242b" : "#141414") + ';border-radius:6px;padding:8px;">' +
+        '<div style="color:' + (filled ? "#ffa040" : "#666") + ';font-weight:600">' + title + "</div>" +
+        '<div style="color:#c8d2dc;font-size:12px;margin:2px 0 6px">' + sub + "</div>" +
+        '<button data-recall="' + sl.idx + '" class="bot-btn" style="cursor:pointer;font-size:12px;padding:2px 8px"' +
+        (filled ? "" : " disabled") + ">Tune</button> " +
+        '<button data-edit="' + sl.idx + '" class="bot-btn" style="cursor:pointer;font-size:12px;padding:2px 8px">Edit</button>' +
+        "</div>";
+    }).join("");
+    g.querySelectorAll("[data-recall]").forEach(b => b.addEventListener("click", async () => {
+      const sl = (d.slots || []).find(x => x.idx === +b.getAttribute("data-recall"));
+      if (!sl || !sl.occupied) return;
+      await sendCmd({ action: "set_freq", hz: sl.freq_hz });
+      if (sl.mode) await sendCmd({ action: "set_mode", mode: sl.mode });
+      document.getElementById("mem-status").textContent = "Tuned to " + (sl.label || sl.freq_hz);
+      setTimeout(() => { document.getElementById("mem-status").textContent = ""; }, 2500);
+    }));
+    g.querySelectorAll("[data-edit]").forEach(b => b.addEventListener("click", () => memEdit(d, +b.getAttribute("data-edit"))));
+  } catch (e) {
+    g.innerHTML = '<p style="color:#ff8080">Could not read the channels (' + e.message + ").</p>";
+  }
+}
+
+async function memEdit(d, idx) {
+  const sl = (d.slots || []).find(x => x.idx === idx) || { idx };
+  // Prompts rather than a second form: editing a channel is rare, and the Tab5
+  // remains the place where this is a pleasant thing to do by hand.
+  const cur = sl.occupied ? (sl.freq_hz / 1e6).toFixed(3) : (lastFreqHz / 1e6).toFixed(3);
+  const mhz = prompt("Frequency in MHz (blank to CLEAR this channel):", cur);
+  if (mhz === null) return;
+  const st = document.getElementById("mem-status");
+  try {
+    if (!mhz.trim()) {
+      await fetch("/api/memory", { method: "POST", headers: { "Content-Type": "application/json" },
+                                   body: JSON.stringify({ idx, clear: true }) });
+      st.textContent = "Channel cleared";
+    } else {
+      const mode = prompt("Mode (USB, LSB, CW, DIGI):", sl.mode || lastMode || "USB");
+      if (mode === null) return;
+      const label = prompt("Name:", sl.label || "");
+      if (label === null) return;
+      const r = await fetch("/api/memory", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idx, freq_hz: Math.round(parseFloat(mhz) * 1e6), mode, label }) });
+      st.textContent = r.ok ? "Saved" : "Refused: that frequency is not inside an amateur band";
+    }
+  } catch (e) { st.textContent = "Failed (" + e.message + ")"; }
+  await memOpen();
+  setTimeout(() => { st.textContent = ""; }, 4000);
+}
+
+document.getElementById("memory-btn").addEventListener("click", memOpen);
+document.getElementById("mem-close").addEventListener("click", () => {
+  document.getElementById("mem-modal").style.display = "none"; resumeWs();
+});
+document.getElementById("mem-modal").addEventListener("click", (e) => {
+  if (e.target.id === "mem-modal") { document.getElementById("mem-modal").style.display = "none"; resumeWs(); }
+});
 
 /* =====================================================================
    Settings

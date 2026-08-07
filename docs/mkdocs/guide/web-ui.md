@@ -19,7 +19,7 @@ The web UI provides full remote control:
 - **Mode** — buttons for USB, LSB, CW, DiGi
 - **Bandwidth** — selectors for SSB filter width or CW passband
 - **Band** — jump between configured bands
-- **Memory** — recall saved channels
+- **Memory** — recall, edit and clear your 32 saved channels (see [Memory channels](#memory-channels) below)
 - **Zoom** — pinch or scroll to zoom the spectrum
 
 Everything mirrors the Tab5 display with sub-second latency.
@@ -97,6 +97,16 @@ New in v1.5.0 (asked for by Dennis WN4FLA). A CQ run that has timed out, or that
 > **Not yet confirmed on the air.** The endpoint, the hand-off, the preset/tone/parity reuse and the error path are all verified on hardware; the final key-down is inferred from sharing the Tab5 button's code. Please report how it behaves.
 
 Apart from Call CQ, transmit is still initiated on the Tab5 — replies and pounces need the decode list in front of you, and only one interface should be keying the QMX.
+
+## Memory channels
+
+New in the next release. The **Memory** button opens your 32 channels as a grid.
+**Tune** recalls one - frequency and mode together - and **Edit** changes or
+clears it. An empty slot offers the frequency you are on now, so storing the
+current VFO is two clicks.
+
+A frequency outside an amateur band is **refused**, exactly as the Tab5 refuses
+it: a channel you cannot legally tune is worse than no channel.
 
 ## Settings, with a real keyboard
 

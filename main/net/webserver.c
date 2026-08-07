@@ -28,6 +28,7 @@
 #include "bandplan.h"          // bandplan_get_segments / _effective_region / _seg_color
 #include "spots.h"             // spots_get_in_range - live spots for the web spectrum
 #include "iq_balance.h"        // iq_balance_set_enabled - /api/settings
+#include "mem_channels.h"      // memory channels - /api/memory
 #include "ui/help_topics.h"    // help_triage_collect / help_topic_get - /api/help
 #include "ft8_screen.h"        // decode table + shared ordering - /api/decodes
 #include "ft8_test.h"          // ft8_op_mode_get / ft8_op_mode_slot_ms
@@ -1089,6 +1090,92 @@ static const httpd_uri_t uri_upload_status = {
 // GET /api/signal — just the S-meter peak dBm around the VFO, nothing else.
 // Deliberately tiny so the web UI can poll it several times a second to make
 // its S-meter track like the Tab5's (which samples at 5 Hz), instead of the
+// GET /api/memory  - all 32 memory channels.
+// POST /api/memory - write one: {"idx":n,"freq_hz":..,"mode":"USB","label":".."}
+//                    or clear one: {"idx":n,"clear":true}
+//
+// Recalling a channel deliberately needs no endpoint: the browser already has
+// set_freq and set_mode, and recall IS those two things. Adding a "recall" action
+// would put a second copy of that decision on the device for no gain.
+static esp_err_t memory_get_handler(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return httpd_resp_send_500(req);
+    cJSON *arr = cJSON_AddArrayToObject(root, "slots");
+    for (int i = 0; i < MEM_SLOTS; i++) {
+        mem_slot_t s;
+        if (!mem_channels_get(i, &s)) continue;
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "idx", i);
+        cJSON_AddBoolToObject  (o, "occupied", s.occupied != 0);
+        if (s.occupied) {
+            cJSON_AddNumberToObject(o, "freq_hz", (double)s.freq_hz);
+            cJSON_AddStringToObject(o, "mode",  s.mode);
+            cJSON_AddStringToObject(o, "label", s.label);
+        }
+        cJSON_AddItemToArray(arr, o);
+    }
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) return httpd_resp_send_500(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t err = httpd_resp_send(req, out, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(out);
+    return err;
+}
+
+static esp_err_t memory_post_handler(httpd_req_t *req)
+{
+    char buf[256];
+    int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (len <= 0) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body"); return ESP_FAIL; }
+    buf[len] = '\0';
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad json"); return ESP_FAIL; }
+
+    cJSON *ji = cJSON_GetObjectItem(root, "idx");
+    if (!cJSON_IsNumber(ji) || ji->valuedouble < 0 || ji->valuedouble >= MEM_SLOTS) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "idx out of range");
+        return ESP_FAIL;
+    }
+    int idx = (int)ji->valuedouble;
+
+    if (cJSON_IsTrue(cJSON_GetObjectItem(root, "clear"))) {
+        mem_channels_clear(idx);
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
+    }
+
+    // Start from what is already stored, so a partial edit (renaming a channel)
+    // does not blank the fields it did not mention.
+    mem_slot_t s;
+    if (!mem_channels_get(idx, &s)) memset(&s, 0, sizeof(s));
+
+    cJSON *jf = cJSON_GetObjectItem(root, "freq_hz");
+    if (cJSON_IsNumber(jf)) s.freq_hz = (uint32_t)jf->valuedouble;
+    const char *m = cJSON_GetStringValue(cJSON_GetObjectItem(root, "mode"));
+    if (m) snprintf(s.mode, sizeof(s.mode), "%s", m);
+    const char *l = cJSON_GetStringValue(cJSON_GetObjectItem(root, "label"));
+    if (l) snprintf(s.label, sizeof(s.label), "%s", l);
+
+    // The Tab5 refuses to store an out-of-band memory (ui_validate_band_freq_hz);
+    // the browser must not be a way around that - a channel that cannot legally
+    // be tuned is worse than no channel.
+    if (!s.freq_hz || !ui_validate_band_freq_hz(s.freq_hz, NULL, NULL)) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "frequency is not inside an amateur band");
+        return ESP_FAIL;
+    }
+    s.occupied = 1;
+    mem_channels_set(idx, &s);
+    cJSON_Delete(root);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
+}
+
 // GET /api/settings - the settings a browser can usefully edit.
 // POST /api/settings - apply a PARTIAL update; only the keys present are touched.
 //
@@ -1478,6 +1565,14 @@ static const httpd_uri_t uri_signal = {
     .uri = "/api/signal", .method = HTTP_GET, .handler = signal_handler,
 };
 
+static const httpd_uri_t uri_memory_get = {
+    .uri = "/api/memory", .method = HTTP_GET, .handler = memory_get_handler,
+};
+
+static const httpd_uri_t uri_memory_post = {
+    .uri = "/api/memory", .method = HTTP_POST, .handler = memory_post_handler,
+};
+
 static const httpd_uri_t uri_settings_get = {
     .uri = "/api/settings", .method = HTTP_GET, .handler = settings_get_handler,
 };
@@ -1611,7 +1706,7 @@ esp_err_t webserver_start(void)
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.server_port     = 80;
     config.stack_size      = 12288;
-    config.max_uri_handlers = 34;   // 27 API + WS + 5 file-browser + headroom
+    config.max_uri_handlers = 36;   // 29 API + WS + 5 file-browser + headroom
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -1639,6 +1734,8 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_qrz_upload);
     httpd_register_uri_handler(s_server, &uri_upload_status);
     httpd_register_uri_handler(s_server, &uri_signal);
+    httpd_register_uri_handler(s_server, &uri_memory_get);
+    httpd_register_uri_handler(s_server, &uri_memory_post);
     httpd_register_uri_handler(s_server, &uri_settings_get);
     httpd_register_uri_handler(s_server, &uri_settings_post);
     httpd_register_uri_handler(s_server, &uri_decodes);

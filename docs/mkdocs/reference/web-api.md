@@ -88,6 +88,23 @@ applied asynchronously (mode and filter writes are queued onto the CAT poll task
 `cq_start` onto the display task), so read `/api/status` to see the result rather
 than assuming it from the response.
 
+### GET /api/memory
+
+All 32 memory channels: `{"slots":[{"idx":0,"occupied":true,"freq_hz":14074000,"mode":"DIGI","label":"FT8"}, ...]}`.
+Empty slots carry only `idx` and `occupied:false`.
+
+### POST /api/memory
+
+Write one channel - `{"idx":3,"freq_hz":14074000,"mode":"DIGI","label":"FT8"}` -
+or clear one with `{"idx":3,"clear":true}`. Fields you omit keep their stored
+value, so renaming a channel needs only `idx` and `label`.
+
+A frequency outside a recognised amateur band returns **400** - the same refusal
+the Tab5 makes, so the browser cannot be a way around it.
+
+There is no recall endpoint: recalling a channel is `set_freq` plus `set_mode`,
+which `/api/cmd` already does.
+
 ### GET /api/settings
 
 The settings a browser can usefully edit: callsign, grid, the CQ presets, the FT8
