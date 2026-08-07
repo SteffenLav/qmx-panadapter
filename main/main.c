@@ -24,6 +24,7 @@
 #include "dsp/iq_balance.h"
 #include "mem_channels.h"
 #include "wifi.h"
+#include "util/usb_shutdown.h"
 #include "net/update_check.h"
 #include "net/manual_embed.h"  // built-in user manual (boot integrity check)
 #include "ui/reader_view.h"
@@ -226,6 +227,9 @@ void app_main(void)
 
     ESP_ERROR_CHECK(bsp_usb_host_start(BSP_USB_HOST_POWER_MODE_USB_DEV, true));
     ESP_LOGI(TAG, "USB host started");
+    // Make every firmware-initiated reboot tear the USB link down properly, so
+    // the QMX is told we are going rather than finding out (see usb_shutdown.h).
+    usb_shutdown_install_handler();
 
     // NO automatic replug at boot - deliberately. Hardware-tested 2026-08-03
     // (TODO #74): the stale-QMX wedge (QMX answers enumeration with 8 of 16

@@ -1323,3 +1323,40 @@ esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *
         ESP_LOGW(TAG, "GPS tick: no second flip caught in 1.3 s (err=%d)", result);
     return result;
 }
+
+// Orderly CAT shutdown, for when the host is about to stop existing (a reflash)
+// rather than the radio going away. See util/usb_shutdown.h for why.
+//
+// Reuses the EXACT close discipline the EVT_DEV_GONE path uses, and for the same
+// reason: poll_task can be mid-retry on this handle, and two tasks touching one
+// cdc_acm_dev_hdl_t corrupted the host driver's state badly enough to abort the
+// device (Dirk DK7CVD, 2026-06-29). Clear the handle first so poll_task's own
+// `while (s_cdc_dev != NULL)` lets it exit, wait for it, and only then close.
+void cat_usb_shutdown(void)
+{
+    cdc_acm_dev_hdl_t dev = s_cdc_dev;
+    if (!dev) {
+        ESP_LOGI(TAG, "shutdown: no CAT device open");
+        return;
+    }
+
+    // Put the radio back in receive before dropping the link. If a TX burst is
+    // in flight the QMX is keyed, and a host that vanishes mid-burst leaves it
+    // that way - the one outcome worse than a wedged USB port.
+    ESP_LOGI(TAG, "shutdown: returning the radio to RX");
+    const char *rx = "TA0;RX;";
+    cdc_acm_host_data_tx_blocking(dev, (const uint8_t *)rx, strlen(rx), 200);
+
+    s_cdc_dev = NULL;
+    s_cat_ready = false;
+    int wait_ms = 0;
+    while (s_poll_task != NULL && wait_ms < 1500) {
+        vTaskDelay(pdMS_TO_TICKS(20));
+        wait_ms += 20;
+    }
+    if (s_poll_task != NULL)
+        ESP_LOGW(TAG, "shutdown: poll_task still running after %dms, closing anyway", wait_ms);
+
+    cdc_acm_host_close(dev);
+    ESP_LOGI(TAG, "shutdown: CAT closed cleanly");
+}

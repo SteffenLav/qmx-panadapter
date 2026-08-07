@@ -523,3 +523,31 @@ static void audio_task(void *arg)
         log_stats();
     }
 }
+// Orderly UAC shutdown - see util/usb_shutdown.h.
+//
+// This is the half that matters most for the QMX. uac_host_device_stop() sets
+// the streaming interface back to alternate setting 0, which is the device's
+// signal to stop producing isochronous audio; uac_host_device_close() then
+// releases it. A host that simply disappears does neither, leaving the radio's
+// USB stack mid-stream on an endpoint nobody is servicing any more - which is
+// the state the QMX appears not to recover from.
+//
+// Runs on the caller's task, not audio_task: by the time this is called the
+// system is going down, and waiting for a task that polls USB (which is exactly
+// what we are dismantling) would be circular. s_uac_dev is cleared FIRST so
+// process_rx() cannot touch the handle we are closing.
+void audio_usb_shutdown(void)
+{
+    uac_host_device_handle_t dev = s_uac_dev;
+    if (!dev) {
+        ESP_LOGI(TAG, "shutdown: no UAC device open");
+        return;
+    }
+    s_uac_dev = NULL;              // audio_task's next poll sees no device
+    vTaskDelay(pdMS_TO_TICKS(30)); // let an in-flight read return
+
+    esp_err_t e1 = uac_host_device_stop(dev);
+    esp_err_t e2 = uac_host_device_close(dev);
+    ESP_LOGI(TAG, "shutdown: UAC stream stopped (%s) and closed (%s)",
+             esp_err_to_name(e1), esp_err_to_name(e2));
+}

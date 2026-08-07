@@ -20,6 +20,7 @@
 #include "tab5_keyboard.h"
 #include "usb_hid_mouse.h"
 #include "cat.h"
+#include "util/usb_shutdown.h"
 #include "cw_audio.h"
 #include "settings.h"
 #include "bandplan.h"
@@ -1646,7 +1647,11 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_SPOTS      23  // panadapter-only: the live-spots lane (POTA, and RBN
                                    // as an opt-in second source). Panadapter-only because
                                    // the lane itself only exists on that page.
-#define N_DRAWER_SECTIONS     24
+#define DRAWER_SEC_USBSHUT    24  // "Prepare for flashing": orderly USB teardown before
+                                   // the operator re-flashes. Kept in BOTH modes - the
+                                   // moment you need it is whichever screen you happen
+                                   // to be on when you reach for the USB cable.
+#define N_DRAWER_SECTIONS     25
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 // Phase 5.10D Stage 2b: drawer widgets we need to keep handles to
@@ -1777,6 +1782,7 @@ static void drawer_open(void);
 static void drawer_close(void);
 static void drawer_anim_x_cb(void *obj, int32_t v);
 static void drawer_touch_cb(lv_event_t *e);
+static void drawer_usb_shutdown_cb(lv_event_t *e);
 static void drawer_scrim_cb(lv_event_t *e);
 static void iq_balance_toggle_cb(lv_event_t *e);
 
@@ -5981,6 +5987,26 @@ static void drawer_build(void)
         y += DRAWER_TUNE2_H;
     }
 
+    // "Prepare for flashing". Sits with the setup items because that is when it
+    // is used: cable in hand, about to re-flash. Deliberately NOT hidden in FT8
+    // mode - the reason to reach for it does not depend on which screen is up.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_USBSHUT, y, 72);
+        lv_obj_t *btn = lv_btn_create(sec);
+        lv_obj_set_size(btn, DRAWER_W - 32, 56);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a3138), 0);
+        lv_obj_set_style_border_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_set_style_border_width(btn, 2, 0);
+        lv_obj_add_event_cb(btn, drawer_usb_shutdown_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, LV_SYMBOL_USB "  Prepare for flashing");
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_center(lbl);
+        y += 72;
+    }
+
     // WiFi setup button. Moved up under Battery care together with Callsign
     // & Grid and Band-plan region (operator request 2026-07-16).
     {
@@ -6745,6 +6771,17 @@ static void drawer_set_ft8_mode(bool ft8)
             lv_obj_set_pos(s_drawer_sections[i], 0, yy);
         }
     }
+}
+
+// "Prepare for flashing" - tell the QMX we are going, instead of letting it find
+// out when the host vanishes mid-transfer (see util/usb_shutdown.h). Roger AD5DZ
+// and Stan asked why we did not simply do this; there was no good answer.
+static void drawer_usb_shutdown_cb(lv_event_t *e)
+{
+    (void)e;
+    bool had = usb_shutdown_graceful();
+    ui_toast(had ? "USB closed - safe to reflash now"
+                 : "No radio was connected - safe to reflash");
 }
 
 // === Phase 5.10D Stage 2b: drawer button + slider callbacks ===

@@ -261,6 +261,12 @@ void cat_request_cw_passband(uint32_t hz);
  */
 void cat_poll_set_paused(bool paused);
 
+// Close the CAT link deliberately, on our way out - see util/usb_shutdown.h.
+// Sends TA0;RX; first so the radio is never left keyed, then tears the CDC
+// handle down using the same poll-task-aware sequence the disconnect path uses.
+// Safe to call with nothing open.
+void cat_usb_shutdown(void);
+
 #define CAT_MAX_BANDS 16
 
 typedef struct {

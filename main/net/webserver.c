@@ -36,6 +36,7 @@
 #include "net/manual_embed.h"  // manual_embed_get - /api/manual serves the built-in manual
 #include "config_io.h"         // config_io_export / config_io_import
 #include "usb_replug.h"        // usb_replug (hidden /api/cmd recovery action)
+#include "util/usb_shutdown.h" // usb_shutdown_graceful - "prepare for flashing"
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
 #include "freertos/FreeRTOS.h"
@@ -415,6 +416,11 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // spawns/stops ft8_task and moves widgets.
         const char *scr = cJSON_GetStringValue(cJSON_GetObjectItem(root, "screen"));
         if (scr) ui_request_base_mode(strcmp(scr, "ft8") == 0);
+    } else if (action && strcmp(action, "usb_shutdown") == 0) {
+        // Orderly USB teardown before the operator re-flashes (see
+        // util/usb_shutdown.h). Blocking and bounded; the browser gets its
+        // {"ok":true} once the radio is safely off the bus.
+        usb_shutdown_graceful();
     } else if (action && strcmp(action, "usb_replug") == 0) {
         // Hidden dev/recovery action: emulate a physical USB-A unplug/replug
         // (root-port power cycle + VBUS cut). Optional "off_ms" (200..8000).

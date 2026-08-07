@@ -49,6 +49,7 @@ idf_component_register(
         "storage/mem_channels.c"
         "storage/sd_archive.c"
         "wifi/wifi.c"
+        "util/usb_shutdown.c"
         "net/mdns_svc.c"
         "net/webserver.c"
         "net/webserver_ws.c"

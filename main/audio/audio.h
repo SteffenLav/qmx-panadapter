@@ -44,3 +44,8 @@ bool audio_uac_active(void);
  * arrives.  Safe to call from any task.
  */
 void audio_request_reset(void);
+
+// Stop and close the USB audio stream deliberately, on our way out - see
+// util/usb_shutdown.h. Sets the streaming interface back to alt 0, which is how
+// the radio is told to stop producing isochronous audio. Safe with nothing open.
+void audio_usb_shutdown(void);
