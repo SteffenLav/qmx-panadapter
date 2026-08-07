@@ -29,6 +29,10 @@
 #include "spots.h"             // spots_get_in_range - live spots for the web spectrum
 #include "iq_balance.h"        // iq_balance_set_enabled - /api/settings
 #include "mem_channels.h"      // memory channels - /api/memory
+#include "render_waterfall.h"  // live waterfall tuning - /api/settings display group
+#include "ft8_pileup.h"        // pileup list - /api/decodes
+#include "ft8_greylist.h"      // grey-list viewer - /api/decodes + greylist_clear
+#include "time_sync.h"         // time_sync_get_effective_source - /api/status time_src
 #include "ui/help_topics.h"    // help_triage_collect / help_topic_get - /api/help
 #include "ft8_screen.h"        // decode table + shared ordering - /api/decodes
 #include "ft8_test.h"          // ft8_op_mode_get / ft8_op_mode_slot_ms
@@ -218,6 +222,17 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "if_cal_hz",   (double)ui_get_if_cal_hz());
     cJSON_AddBoolToObject  (root, "flat_mode",   ui_get_flat_mode());
     cJSON_AddNumberToObject(root, "utc_epoch",   (double)time(NULL));
+    // What is maintaining the clock - same authority the Tab5's bottom-bar
+    // "UTC(NTP)"/"UTC(QMX)" suffix shows, so the two labels can never disagree.
+    {
+        time_sync_source_t ts = time_sync_get_effective_source();
+        const char *tsn = ts == TIME_SOURCE_SNTP   ? (time_sync_qmx_gps_confirmed() ? "GPS" : "NTP")
+                        : ts == TIME_SOURCE_QMX    ? (time_sync_qmx_gps_confirmed() ? "GPS" : "QMX")
+                        : ts == TIME_SOURCE_RTC    ? "RTC"
+                        : ts == TIME_SOURCE_FT8    ? "FT8"
+                        : ts == TIME_SOURCE_MANUAL ? "manual" : "none";
+        cJSON_AddStringToObject(root, "time_src", tsn);
+    }
     cJSON_AddNumberToObject(root, "qso_count",   (double)adif_log_count());
     {
         qmx_settings_t cfg;
@@ -427,6 +442,10 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // (web_r), because a Tab5 toast is invisible from another room.
         const char *call = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call"));
         if (call && call[0]) ft8_screen_view_request_reply(call);
+    } else if (action && strcmp(action, "greylist_clear") == 0) {
+        // Un-skip everyone - band conditions change, and a station that timed
+        // out an hour ago may be perfectly workable now.
+        ft8_greylist_clear_all();
     } else if (action && strcmp(action, "usb_shutdown") == 0) {
         // Orderly USB teardown before the operator re-flashes (see
         // util/usb_shutdown.h). Blocking and bounded; the browser gets its
@@ -1350,6 +1369,21 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "qmx_vol_db",      c.qmx_vol_db);
     cJSON_AddNumberToObject(root, "bandplan_region", c.bandplan_region);
 
+    // Display & waterfall - the "tune it from the laptop while watching the
+    // Tab5" group. Flip-180 is deliberately absent: you set that standing at
+    // the device, because it depends on how it is physically mounted.
+    cJSON *d = cJSON_AddObjectToObject(root, "display");
+    cJSON_AddNumberToObject(d, "wf_black_db",    c.wf_black_db);
+    cJSON_AddNumberToObject(d, "wf_contrast_db", c.wf_contrast_db);
+    cJSON_AddNumberToObject(d, "wf_floor_blend", c.wf_floor_blend);
+    cJSON_AddNumberToObject(d, "wf_window",      c.wf_window);
+    cJSON_AddNumberToObject(d, "colormap",       c.colormap_idx);
+    cJSON_AddNumberToObject(d, "brightness",     c.brightness_pct);
+    cJSON_AddNumberToObject(d, "sleep_min",      c.display_sleep_min);
+    cJSON_AddNumberToObject(d, "db_min",         c.db_min);
+    cJSON_AddNumberToObject(d, "db_max",         c.db_max);
+    cJSON_AddNumberToObject(d, "ema_pct",        (int)(c.ema_alpha * 100.0f + 0.5f));
+
     // SSID yes, password never: it would put the operator's WiFi key in every
     // browser cache and proxy log that ever touched this page. The form sends a
     // password only when the operator types a new one.
@@ -1365,6 +1399,11 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_free(out);
     return err;
 }
+
+// Current stored dB range, for a partial db_min/db_max update: the half not
+// supplied keeps its stored value rather than an invented default.
+static float c_cur_db_min(void) { qmx_settings_t c; settings_load_all(&c); return c.db_min; }
+static float c_cur_db_max(void) { qmx_settings_t c; settings_load_all(&c); return c.db_max; }
 
 static esp_err_t settings_post_handler(httpd_req_t *req)
 {
@@ -1461,6 +1500,68 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "bandplan_region")))
         settings_set_bandplan_region((uint8_t)it->valuedouble);
 
+    // Display & waterfall: every write does what the drawer's own control does -
+    // the LIVE call and the NVS setter together, or the screen and the stored
+    // value disagree until the next boot.
+    cJSON *disp = cJSON_GetObjectItem(root, "display");
+    if (cJSON_IsObject(disp)) {
+        cJSON *v;
+        if (cJSON_IsNumber(v = cJSON_GetObjectItem(disp, "wf_black_db"))) {
+            render_waterfall_set_black_level((float)v->valuedouble);
+            settings_set_wf_black_db((float)v->valuedouble);
+        }
+        if (cJSON_IsNumber(v = cJSON_GetObjectItem(disp, "wf_contrast_db"))) {
+            render_waterfall_set_contrast_db((float)v->valuedouble);
+            settings_set_wf_contrast_db((float)v->valuedouble);
+        }
+        if (cJSON_IsNumber(v = cJSON_GetObjectItem(disp, "wf_floor_blend"))) {
+            int pct = (int)v->valuedouble;
+            if (pct < 0) pct = 0;
+            if (pct > 100) pct = 100;
+            render_waterfall_set_floor_blend((float)pct / 100.0f);
+            settings_set_wf_floor_blend((uint8_t)pct);
+        }
+        if (cJSON_IsNumber(v = cJSON_GetObjectItem(disp, "wf_window"))) {
+            uint8_t idx = (uint8_t)v->valuedouble; if (idx > 2) idx = 0;
+            dsp_set_window(idx);
+            settings_set_wf_window(idx);
+        }
+        if (cJSON_IsNumber(v = cJSON_GetObjectItem(disp, "colormap"))) {
+            uint8_t idx = (uint8_t)v->valuedouble; if (idx > 3) idx = 0;
+            render_waterfall_set_colormap(idx);
+            settings_set_colormap_idx(idx);
+        }
+        if (cJSON_IsNumber(v = cJSON_GetObjectItem(disp, "brightness"))) {
+            int pct = (int)v->valuedouble;
+            // Floor at 10: a remote hand setting 0 turns the screen off with the
+            // operator maybe not at the device - the drawer's slider has the
+            // same floor for the same reason.
+            if (pct < 10) pct = 10;
+            if (pct > 100) pct = 100;
+            display_set_brightness(pct);
+            settings_set_brightness_pct((uint8_t)pct);
+        }
+        if (cJSON_IsNumber(v = cJSON_GetObjectItem(disp, "sleep_min")))
+            settings_set_display_sleep_min((uint8_t)v->valuedouble);
+        cJSON *jmin = cJSON_GetObjectItem(disp, "db_min");
+        cJSON *jmax = cJSON_GetObjectItem(disp, "db_max");
+        if (cJSON_IsNumber(jmin) || cJSON_IsNumber(jmax)) {
+            float mn = cJSON_IsNumber(jmin) ? (float)jmin->valuedouble : c_cur_db_min();
+            float mx = cJSON_IsNumber(jmax) ? (float)jmax->valuedouble : c_cur_db_max();
+            if (mx > mn + 10.0f) {          // a 10 dB floor keeps the scale sane
+                ui_set_db_range(mn, mx);
+                settings_set_db_min(mn);
+                settings_set_db_max(mx);
+            }
+        }
+        if (cJSON_IsNumber(v = cJSON_GetObjectItem(disp, "ema_pct"))) {
+            float a = (float)v->valuedouble / 100.0f;
+            if (a < 0.0f) a = 0.0f;
+            if (a > 1.0f) a = 1.0f;
+            settings_set_ema_alpha(a);      // the render task reads it live
+        }
+    }
+
     // WiFi: SSID and password together, and only when a password is actually
     // supplied - the GET never returns one, so an empty field means "unchanged",
     // not "erase it". This is how a second network gets added from a laptop.
@@ -1551,6 +1652,33 @@ static esp_err_t decodes_handler(httpd_req_t *req)
         cJSON_AddItemToArray(arr, o);
     }
     heap_caps_free(snap);
+
+    // The pileup: stations calling US while we are busy. Small (12 max) and
+    // exactly what a remote operator wants to see between exchanges.
+    {
+        ft8_pileup_entry_t pe[FT8_PILEUP_MAX];
+        int np = ft8_pileup_get_all(pe, FT8_PILEUP_MAX);
+        cJSON *parr = cJSON_AddArrayToObject(root, "pileup");
+        for (int i = 0; i < np; i++) {
+            cJSON *o = cJSON_CreateObject();
+            cJSON_AddStringToObject(o, "call", pe[i].call);
+            cJSON_AddNumberToObject(o, "snr",  pe[i].snr_db);
+            cJSON_AddNumberToObject(o, "hz",   pe[i].freq_hz);
+            cJSON_AddNumberToObject(o, "age",  (double)(now - pe[i].last_seen_utc));
+            cJSON_AddItemToArray(parr, o);
+        }
+    }
+
+    // The grey-list: who the auto pickers are skipping. The toggle was already
+    // in the web settings with no way to see WHO - "why is it ignoring that
+    // station?" was undiagnosable from another room.
+    {
+        char gl[24][12];
+        int ng = ft8_greylist_get_all(gl, 24);
+        cJSON *garr = cJSON_AddArrayToObject(root, "greylist");
+        for (int i = 0; i < ng; i++)
+            cJSON_AddItemToArray(garr, cJSON_CreateString(gl[i]));
+    }
 
     char *out = cJSON_PrintUnformatted(root);
     cJSON_Delete(root);

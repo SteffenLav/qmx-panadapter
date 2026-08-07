@@ -92,3 +92,23 @@ void ft8_greylist_clear_all(void)
     xSemaphoreGive(s_lock);
     ESP_LOGI(TAG, "grey-list cleared");
 }
+
+// Snapshot the listed calls for the web UI's viewer - the toggle existed there
+// with no way to see WHO was being skipped, which made "why is it ignoring that
+// station?" undiagnosable from another room. Returns entries actually LISTED
+// (i.e. being skipped), not ones merely carrying a first strike.
+int ft8_greylist_get_all(char out[][12], int max)
+{
+    ensure_lock();
+    if (!out || max <= 0 || !s_lock) return 0;
+    if (xSemaphoreTake(s_lock, pdMS_TO_TICKS(50)) != pdTRUE) return 0;
+    int n = 0;
+    for (int i = 0; i < s_count && n < max; i++) {
+        if (s_tbl[i].fails >= GREY_FAIL_LIMIT) {
+            snprintf(out[n], 12, "%.11s", s_tbl[i].call);
+            n++;
+        }
+    }
+    xSemaphoreGive(s_lock);
+    return n;
+}

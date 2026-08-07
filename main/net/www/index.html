@@ -411,6 +411,8 @@
           <tbody id="dec-body"></tbody>
         </table>
       </div>
+      <div id="dec-pileup" style="margin-top:8px; font-size:13px;"></div>
+      <div id="dec-grey" style="margin-top:4px; font-size:13px; color:var(--dim);"></div>
     </div></div>
 
   <div id="bot">
@@ -682,6 +684,7 @@ let lastBandplan     = null;   // {lo, hi, segs:[{lo,hi,c,l}]} or null if off-ba
    device has no way of knowing. */
 let lastSpots        = [];
 let lastSpotsV       = -1;     // version we hold; sent back so the device can skip resending
+let lastTimeSrc      = "";     // what maintains the Tab5 clock: NTP/GPS/QMX/RTC/FT8
 let spotBoxes        = [];     // hit-test rects in CANVAS px: {x,y,w,h,hz,mode}
 let spotOffBoxes     = [];     // the two off-screen counters, same shape
 let bpDragging       = false;  // true once a bandplan-strip drag has crossed the threshold
@@ -721,7 +724,8 @@ function updateClock() {
   const hh = String(d.getUTCHours()).padStart(2, "0");
   const mm = String(d.getUTCMinutes()).padStart(2, "0");
   const ss = String(d.getUTCSeconds()).padStart(2, "0");
-  document.getElementById("clock").textContent = hh + ":" + mm + ":" + ss + " UTC";
+  document.getElementById("clock").textContent =
+      hh + ":" + mm + ":" + ss + " UTC" + (lastTimeSrc ? "(" + lastTimeSrc + ")" : "");
 }
 setInterval(updateClock, 1000);
 
@@ -1562,11 +1566,13 @@ const SET_FIELDS = [
   ["FT8 filters", "filters.incl_cq_only",       "bool", "Show only CQ calls", ""],
   ["FT8 filters", "filters.skip_tx1",           "bool", "Skip TX1 (answer with a report)", ""],
   ["FT8 filters", "filters.auto_pileup",        "bool", "Auto-work the pileup", "Unattended transmit"],
-  /* The auto-answer ROBOT is deliberately not here. It transmits unattended
-     under your callsign, and the Tab5 puts a permanent warning beside its switch
-     - a checkbox in a browser two rooms away carries none of that weight. The
-     API accepts it, so a deliberate script still can; the form will not offer it
-     casually. */
+  /* The robot toggle carries the SAME permanent warning the Tab5 shows beside
+     its switch - it transmits unattended under your callsign, and that text is
+     part of the control, not a one-time dialog. */
+  ["FT8 filters", "filters.robot_en", "bool", "Auto-answer CQ (robot)",
+     "⚠ Transmits unattended - never leave running unsupervised"],
+  ["FT8 filters", "filters.robot_priority", "sel", "Robot picks", "",
+     [["0","Strongest signal"],["1","Weakest signal"],["2","Most distant"]]],
 
   ["Spots & reporting", "spots_en",       "bool", "Live POTA spots", ""],
   ["Spots & reporting", "rbn_en",         "bool", "RBN (CW skimmer) spots", "A continuous feed - off by default"],
@@ -1578,6 +1584,20 @@ const SET_FIELDS = [
   ["Radio & display", "distance_in_miles", "bool", "Distances in miles", "Kilometres when off"],
   ["Radio & display", "bandplan_region",   "sel",  "Band-plan region", "",
      [["0","Auto (from your grid)"],["1","Region 1"],["2","Region 2"],["3","Region 3"]]],
+
+  ["Display & waterfall", "display.brightness",     "num", "Brightness (%)", "10-100"],
+  ["Display & waterfall", "display.wf_black_db",    "num", "Waterfall black level (dB)", "dB above the floor that turns black; default 9"],
+  ["Display & waterfall", "display.wf_contrast_db", "num", "Waterfall contrast (dB)", "dB span filling the colour ramp; default 45"],
+  ["Display & waterfall", "display.wf_floor_blend", "num", "Adaptive floor (%)", "0 = global floor, 100 = per-bin; default 100"],
+  ["Display & waterfall", "display.wf_window",      "sel", "FFT window", "",
+     [["0","Blackman-Harris"],["1","Hann"],["2","Nuttall"]]],
+  ["Display & waterfall", "display.colormap",       "sel", "Waterfall colours", "",
+     [["0","Thermal"],["1","Viridis"],["2","Turbo"],["3","Grayscale"]]],
+  ["Display & waterfall", "display.sleep_min",      "sel", "Display sleep", "Idle minutes before the backlight turns off",
+     [["0","Never"],["5","5 min"],["10","10 min"],["30","30 min"]]],
+  ["Display & waterfall", "display.db_min",         "num", "Scale floor (dBm)", "default -130"],
+  ["Display & waterfall", "display.db_max",         "num", "Scale ceiling (dBm)", "default -30"],
+  ["Display & waterfall", "display.ema_pct",        "num", "Spectrum smoothing (%)", "EMA alpha x 100; default 20"],
 
   ["WiFi", "wifi_ssid", "text", "Network name", "Add another network from here; the Tab5 remembers up to six"],
   ["WiFi", "wifi_pass", "pass", "Password", "Leave blank to keep the stored one - it is never sent back to the browser"],
@@ -1746,6 +1766,32 @@ async function pollDecodes() {
         + String(decFmt(c[0], r)).replace(/[&<>]/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[m]))
         + "</td>").join("") + "</tr>";
     }).join("");
+    /* The pileup: who is calling US. Click works exactly like a decode row. */
+    const pu = d.pileup || [];
+    document.getElementById("dec-pileup").innerHTML = !pu.length ? "" :
+      '<span style="color:#ffa040">Calling you:</span> ' + pu.map(p =>
+        '<a href="#" data-pcall="' + p.call.replace(/[^A-Za-z0-9/]/g, "") + '" style="color:#ffc864; margin-right:10px">'
+        + p.call + " (" + (p.snr > 0 ? "+" : "") + p.snr + ")</a>").join("");
+    document.querySelectorAll("#dec-pileup [data-pcall]").forEach(a =>
+      a.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        const call = a.getAttribute("data-pcall");
+        if (!confirm("Work " + call + " from the pileup? This transmits with your callsign.")) return;
+        document.getElementById("ft8-webr").textContent = "Asking the Tab5 to reply to " + call + "...";
+        sendCmd({ action: "reply", call: call });
+      }));
+
+    /* The grey-list: who the auto pickers are skipping, and the way out. */
+    const gl = d.greylist || [];
+    document.getElementById("dec-grey").innerHTML = !gl.length ? "" :
+      "Grey-listed (skipped by auto pickers): " + gl.join(", ") +
+      ' &mdash; <a href="#" id="grey-clear" style="color:var(--dim)">clear</a>';
+    const gc = document.getElementById("grey-clear");
+    if (gc) gc.addEventListener("click", (ev) => {
+      ev.preventDefault();
+      sendCmd({ action: "greylist_clear" });
+      document.getElementById("dec-grey").textContent = "";
+    });
   } catch (e) { /* transient - the next tick retries */ }
   decPollInFlight = false;
 }
@@ -2214,6 +2260,7 @@ async function tick() {
     if (s.spots !== undefined) lastSpots = s.spots || [];
     else if (s.spots_v === undefined) lastSpots = [];   // feature off / not panadapter
     if (s.spots_v !== undefined) lastSpotsV = s.spots_v;
+    lastTimeSrc = s.time_src && s.time_src !== "none" ? s.time_src : "";
     document.getElementById("bandplan-wrap").classList.toggle("show", !!lastBandplan);
 
     /* Spectrum/waterfall are Panadapter-only - the Tab5 pauses the WS stream
