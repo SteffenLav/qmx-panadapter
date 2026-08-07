@@ -98,6 +98,31 @@ New in v1.5.0 (asked for by Dennis WN4FLA). A CQ run that has timed out, or that
 
 Apart from Call CQ, transmit is still initiated on the Tab5 — replies and pounces need the decode list in front of you, and only one interface should be keying the QMX.
 
+## Settings, with a real keyboard
+
+New in the next release. The **Settings** button in the bottom bar edits the
+things you *type* - which is exactly what the Tab5's touchscreen is worst at:
+
+- **Your callsign and grid.** Previously reachable from a browser only by
+  downloading the config file, editing it and uploading it back.
+- **The three CQ messages**, which preset is active, and the CQ stop limit.
+- **The FT8 include/exclude filter terms** (both pairs) and the filter toggles.
+- **Everyday switches**: POTA and RBN spots, PSK Reporter, grey-listing, distance
+  units, I/Q balance, band-plan region, and the QMX volume in dB.
+- **WiFi**: add another network from a laptop. The Tab5 remembers up to six.
+
+Saved straight to the Tab5 - its own settings drawer shows the same values next
+time you open it.
+
+Two deliberate omissions. **Your WiFi password is never sent to the browser**, so
+the field is always blank; leave it blank and the stored one is kept. And the
+**auto-answer robot is not offered here** - it transmits unattended under your
+callsign, and the Tab5 keeps a permanent warning beside that switch, which a
+checkbox two rooms away would not carry.
+
+Live view controls - zoom, flat mode, waterfall tuning - stay on the screen you
+are looking at rather than being duplicated here.
+
 ## Help, in the browser
 
 New in the next release. The **Help ?** button in the bottom bar opens the same two

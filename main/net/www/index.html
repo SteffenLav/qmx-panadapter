@@ -459,8 +459,29 @@
         <a href="#" id="reset-network-link" class="danger" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
       </div>
     </div>
+    <button type="button" class="bot-btn" id="settings-btn" title="Callsign, grid, CQ messages, FT8 filters and the everyday toggles - with a real keyboard">Settings</button>
     <button type="button" class="bot-btn" id="help-btn" title="Guidance and the full user manual - served by the Tab5 itself, no internet needed">Help &#63;</button>
     <input type="file" id="cfg-up-file" accept=".txt,text/plain" style="display:none">
+  </div>
+
+  <!-- Settings. Deliberately the text-heavy half of the Tab5's drawer: callsign,
+       grid, the three CQ messages and the FT8 filter terms are all things you
+       type, and a keyboard beats a touchscreen at that. The live view controls
+       (zoom, flat mode) stay where you are looking. -->
+  <div id="set-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1000;">
+    <div style="max-width:820px; margin:4vh auto; background:#161616; border:1px solid #494949; border-radius:10px; padding:16px 20px; color:#ddd; font-size:14px; max-height:88vh; overflow:auto;">
+      <div style="display:flex; align-items:center; margin-bottom:12px;">
+        <strong style="color:#ffa040; font-size:17px;">Settings</strong>
+        <div style="flex:1"></div>
+        <span id="set-status" style="color:#7d8894; font-size:12px; margin-right:10px"></span>
+        <button id="set-save" class="bot-btn" style="cursor:pointer; margin-right:6px">Save</button>
+        <button id="set-close" class="bot-btn" style="cursor:pointer">Close</button>
+      </div>
+      <div id="set-body"></div>
+      <p style="color:#7d8894; font-size:12px; margin-top:14px">
+        Saved straight to the Tab5. Its own settings drawer shows the same values next time you open it.
+      </p>
+    </div>
   </div>
 
   <!-- Help: the same two doors the Tab5 has. A ranked list of symptoms and
@@ -1206,6 +1227,166 @@ async function sendCmd(payload) {
     setTimeout(() => { btn.disabled = false; btn.textContent = was; }, 2500);
   });
 })();
+
+/* =====================================================================
+   Settings
+
+   Built from a small declaration rather than hand-written markup, so adding a
+   field later is one line here and one key in /api/settings - the same reason
+   the device keeps its settings in one struct instead of scattered globals.
+
+   Only what the browser is genuinely better at: text you type, and the everyday
+   toggles. Live view controls stay on the screen you are looking at.
+   ===================================================================== */
+const SET_FIELDS = [
+  ["Station",  "my_callsign", "text", "Your callsign", "Used for FT8/FT4 and every log entry"],
+  ["Station",  "my_grid",     "text", "Your grid",     "Maidenhead, e.g. JO65 or JO65ab"],
+
+  ["CQ messages", "cq.msg.0", "text", "CQ preset 1", "e.g. CQ OZ1LAV JO65"],
+  ["CQ messages", "cq.msg.1", "text", "CQ preset 2", ""],
+  ["CQ messages", "cq.msg.2", "text", "CQ preset 3", ""],
+  ["CQ messages", "cq.sel",   "sel",  "Active preset", "", [["0","Preset 1"],["1","Preset 2"],["2","Preset 3"]]],
+  ["CQ messages", "cq.max_calls", "sel", "Stop after", "Unanswered calls before the run ends",
+     [["0","Never stop"],["1","1 call"],["2","2 calls"],["3","3 calls"],["4","4 calls"],["5","5 calls"],["10","10 calls"]]],
+
+  ["FT8 filters", "filters.incl.0.text", "text", "Include if it contains", "Space- or comma-separated; matches the whole message"],
+  ["FT8 filters", "filters.incl.0.en",   "bool", "  ...enabled", ""],
+  ["FT8 filters", "filters.incl.1.text", "text", "Include if it contains (2)", ""],
+  ["FT8 filters", "filters.incl.1.en",   "bool", "  ...enabled", ""],
+  ["FT8 filters", "filters.excl.0.text", "text", "Exclude if it contains", ""],
+  ["FT8 filters", "filters.excl.0.en",   "bool", "  ...enabled", ""],
+  ["FT8 filters", "filters.excl.1.text", "text", "Exclude if it contains (2)", ""],
+  ["FT8 filters", "filters.excl.1.en",   "bool", "  ...enabled", ""],
+  ["FT8 filters", "filters.excl_worked_before", "bool", "Exclude stations worked before", "Per band - the same call on another band is still new"],
+  ["FT8 filters", "filters.excl_plain_cq",      "bool", "Hide plain CQ calls", ""],
+  ["FT8 filters", "filters.incl_cq_only",       "bool", "Show only CQ calls", ""],
+  ["FT8 filters", "filters.skip_tx1",           "bool", "Skip TX1 (answer with a report)", ""],
+  ["FT8 filters", "filters.auto_pileup",        "bool", "Auto-work the pileup", "Unattended transmit"],
+  /* The auto-answer ROBOT is deliberately not here. It transmits unattended
+     under your callsign, and the Tab5 puts a permanent warning beside its switch
+     - a checkbox in a browser two rooms away carries none of that weight. The
+     API accepts it, so a deliberate script still can; the form will not offer it
+     casually. */
+
+  ["Spots & reporting", "spots_en",       "bool", "Live POTA spots", ""],
+  ["Spots & reporting", "rbn_en",         "bool", "RBN (CW skimmer) spots", "A continuous feed - off by default"],
+  ["Spots & reporting", "pskreporter_en", "bool", "Report decodes to PSK Reporter", "Over the internet, never on the air"],
+  ["Spots & reporting", "greylist_en",    "bool", "Grey-list stations that never answer", ""],
+
+  ["Radio & display", "qmx_vol_db",        "num",  "QMX volume (dB)", "0-50, the same number the radio shows on its own LCD"],
+  ["Radio & display", "iq_enabled",        "bool", "I/Q balance correction", ""],
+  ["Radio & display", "distance_in_miles", "bool", "Distances in miles", "Kilometres when off"],
+  ["Radio & display", "bandplan_region",   "sel",  "Band-plan region", "",
+     [["0","Auto (from your grid)"],["1","Region 1"],["2","Region 2"],["3","Region 3"]]],
+
+  ["WiFi", "wifi_ssid", "text", "Network name", "Add another network from here; the Tab5 remembers up to six"],
+  ["WiFi", "wifi_pass", "pass", "Password", "Leave blank to keep the stored one - it is never sent back to the browser"],
+];
+
+let setLoaded = null;
+
+function setGet(obj, path) {
+  return path.split(".").reduce((o, k) => (o == null ? o : o[k]), obj);
+}
+function setPut(obj, path, val) {
+  const ks = path.split(".");
+  let o = obj;
+  for (let i = 0; i < ks.length - 1; i++) {
+    const k = ks[i], nextIsIdx = /^\d+$/.test(ks[i + 1]);
+    if (o[k] === undefined) o[k] = nextIsIdx ? [] : {};
+    o = o[k];
+  }
+  o[ks[ks.length - 1]] = val;
+}
+
+function setBuildForm(cfg) {
+  const body = document.getElementById("set-body");
+  let html = "", group = null;
+  for (const [grp, path, type, label, hint, opts] of SET_FIELDS) {
+    if (grp !== group) {
+      if (group !== null) html += "</div>";
+      html += '<div style="margin:14px 0 6px"><strong style="color:#ffa040">' + grp + "</strong></div><div>";
+      group = grp;
+    }
+    const v = setGet(cfg, path);
+    const id = "set__" + path.replace(/\./g, "_");
+    html += '<div style="display:flex;align-items:center;gap:10px;margin:5px 0">';
+    if (type === "bool") {
+      html += '<input type="checkbox" id="' + id + '" data-path="' + path + '" data-type="bool"' + (v ? " checked" : "") + ">";
+      html += '<label for="' + id + '" style="flex:1">' + label + "</label>";
+    } else {
+      html += '<label for="' + id + '" style="width:250px;color:#c8d2dc">' + label + "</label>";
+      if (type === "sel") {
+        html += '<select id="' + id + '" data-path="' + path + '" data-type="num" style="flex:1;background:#1e242b;color:#ddd;border:1px solid #3a4149;border-radius:4px;padding:4px">';
+        for (const [ov, ol] of opts)
+          html += '<option value="' + ov + '"' + (String(v) === ov ? " selected" : "") + ">" + ol + "</option>";
+        html += "</select>";
+      } else {
+        const t = type === "pass" ? "password" : "text";
+        const val = type === "pass" ? "" : (v === undefined || v === null ? "" : String(v));
+        html += '<input type="' + t + '" id="' + id + '" data-path="' + path + '" data-type="' +
+                (type === "num" ? "num" : "str") + '" value="' + val.replace(/"/g, "&quot;") +
+                '" style="flex:1;background:#1e242b;color:#ddd;border:1px solid #3a4149;border-radius:4px;padding:4px">';
+      }
+    }
+    if (hint) html += '<span style="color:#7d8894;font-size:11px;flex:1">' + hint + "</span>";
+    html += "</div>";
+  }
+  body.innerHTML = html + "</div>";
+}
+
+async function setOpen() {
+  document.getElementById("set-modal").style.display = "";
+  pauseWs();                                  // same discipline as the other modals
+  const body = document.getElementById("set-body");
+  body.innerHTML = '<p style="color:#7d8894">Reading the Tab5...</p>';
+  try {
+    setLoaded = await (await fetch("/api/settings", { cache: "no-store" })).json();
+    setBuildForm(setLoaded);
+    document.getElementById("set-status").textContent =
+      setLoaded.wifi_pass_set ? "" : "no WiFi password stored";
+  } catch (e) {
+    body.innerHTML = '<p style="color:#ff8080">Could not read the settings (' + e.message + ").</p>";
+  }
+}
+
+async function setSave() {
+  const patch = {};
+  for (const el of document.querySelectorAll("#set-body [data-path]")) {
+    const path = el.getAttribute("data-path"), t = el.getAttribute("data-type");
+    let v;
+    if (t === "bool") v = el.checked;
+    else if (t === "num") v = Number(el.value);
+    else v = el.value;
+    // A blank password means "keep the stored one" - the GET never returns it,
+    // so sending "" would look like an instruction to erase it.
+    if (path === "wifi_pass" && !v) continue;
+    setPut(patch, path, v);
+  }
+  const st = document.getElementById("set-status");
+  st.textContent = "Saving...";
+  try {
+    const r = await fetch("/api/settings", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch)
+    });
+    st.textContent = r.ok ? "Saved" : "Save failed (HTTP " + r.status + ")";
+  } catch (e) { st.textContent = "Save failed (" + e.message + ")"; }
+  setTimeout(() => { st.textContent = ""; }, 3000);
+}
+
+document.getElementById("settings-btn").addEventListener("click", setOpen);
+document.getElementById("set-save").addEventListener("click", setSave);
+document.getElementById("set-close").addEventListener("click", () => {
+  document.getElementById("set-modal").style.display = "none";
+  resumeWs();
+});
+document.getElementById("set-modal").addEventListener("click", (e) => {
+  if (e.target.id === "set-modal") {
+    document.getElementById("set-modal").style.display = "none";
+    resumeWs();
+  }
+});
 
 /* =====================================================================
    FT8/FT4 decode list in the browser

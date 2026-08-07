@@ -27,6 +27,7 @@
 #include "factory_reset.h"     // factory_reset_request (web-triggered NVS reset)
 #include "bandplan.h"          // bandplan_get_segments / _effective_region / _seg_color
 #include "spots.h"             // spots_get_in_range - live spots for the web spectrum
+#include "iq_balance.h"        // iq_balance_set_enabled - /api/settings
 #include "ui/help_topics.h"    // help_triage_collect / help_topic_get - /api/help
 #include "ft8_screen.h"        // decode table + shared ordering - /api/decodes
 #include "ft8_test.h"          // ft8_op_mode_get / ft8_op_mode_slot_ms
@@ -1088,6 +1089,195 @@ static const httpd_uri_t uri_upload_status = {
 // GET /api/signal — just the S-meter peak dBm around the VFO, nothing else.
 // Deliberately tiny so the web UI can poll it several times a second to make
 // its S-meter track like the Tab5's (which samples at 5 Hz), instead of the
+// GET /api/settings - the settings a browser can usefully edit.
+// POST /api/settings - apply a PARTIAL update; only the keys present are touched.
+//
+// Why a settings pair and not more per-setting actions: this is the drawer's
+// content, and it grows. One endpoint that merges whatever it is given keeps the
+// browser free to send a single field (a toggle) or a whole form, and keeps the
+// device free of a dozen near-identical handlers.
+//
+// Deliberately NOT everything in the drawer. Callsign, grid, the CQ presets and
+// the FT8 filter terms are here because they are TEXT, and typing them on glass
+// is the worst part of setting the radio up. WiFi credentials are here too, so a
+// second network can be added from a laptop - but the password is never sent
+// BACK (see below). Left out on purpose: anything that is a live view control
+// (zoom, pan, flat mode), which belongs to whichever screen you are looking at.
+//
+// Every setter below is the same one the drawer calls, so a value changed here is
+// the value the Tab5 shows when its drawer is next opened.
+static esp_err_t settings_get_handler(httpd_req_t *req)
+{
+    qmx_settings_t c;
+    settings_load_all(&c);
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return httpd_resp_send_500(req);
+
+    cJSON_AddStringToObject(root, "my_callsign", c.my_callsign);
+    cJSON_AddStringToObject(root, "my_grid",     c.my_grid);
+
+    cJSON *cq = cJSON_AddObjectToObject(root, "cq");
+    cJSON *msgs = cJSON_AddArrayToObject(cq, "msg");
+    for (int i = 0; i < 3; i++) cJSON_AddItemToArray(msgs, cJSON_CreateString(c.cq_msg[i]));
+    cJSON_AddNumberToObject(cq, "sel",        c.cq_sel);
+    cJSON_AddNumberToObject(cq, "max_calls",  c.cq_max_calls);
+
+    cJSON *f = cJSON_AddObjectToObject(root, "filters");
+    cJSON *fi = cJSON_AddArrayToObject(f, "incl");
+    cJSON *fx = cJSON_AddArrayToObject(f, "excl");
+    for (int i = 0; i < 2; i++) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddBoolToObject(o, "en", c.ft8_filters.incl_en[i]);
+        cJSON_AddStringToObject(o, "text", c.ft8_filters.incl_text[i]);
+        cJSON_AddItemToArray(fi, o);
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddBoolToObject(e, "en", c.ft8_filters.excl_en[i]);
+        cJSON_AddStringToObject(e, "text", c.ft8_filters.excl_text[i]);
+        cJSON_AddItemToArray(fx, e);
+    }
+    cJSON_AddBoolToObject(f, "excl_worked_before", c.ft8_filters.excl_worked_before);
+    cJSON_AddBoolToObject(f, "excl_plain_cq",      c.ft8_filters.excl_plain_cq);
+    cJSON_AddBoolToObject(f, "incl_cq_only",       c.ft8_filters.incl_cq_only);
+    cJSON_AddBoolToObject(f, "skip_tx1",           c.ft8_filters.skip_tx1);
+    cJSON_AddBoolToObject(f, "auto_pileup",        c.ft8_filters.auto_pileup);
+    cJSON_AddBoolToObject(f, "robot_en",           c.ft8_filters.robot_en);
+    cJSON_AddNumberToObject(f, "robot_priority",   c.ft8_filters.robot_priority);
+
+    cJSON_AddBoolToObject(root, "spots_en",          c.spots_en);
+    cJSON_AddBoolToObject(root, "rbn_en",            c.rbn_en);
+    cJSON_AddBoolToObject(root, "pskreporter_en",    c.pskreporter_en);
+    cJSON_AddBoolToObject(root, "greylist_en",       c.greylist_en);
+    cJSON_AddBoolToObject(root, "distance_in_miles", c.distance_in_miles);
+    cJSON_AddBoolToObject(root, "iq_enabled",        c.iq_enabled);
+    cJSON_AddNumberToObject(root, "qmx_vol_db",      c.qmx_vol_db);
+    cJSON_AddNumberToObject(root, "bandplan_region", c.bandplan_region);
+
+    // SSID yes, password never: it would put the operator's WiFi key in every
+    // browser cache and proxy log that ever touched this page. The form sends a
+    // password only when the operator types a new one.
+    cJSON_AddStringToObject(root, "wifi_ssid", c.wifi_ssid);
+    cJSON_AddBoolToObject(root, "wifi_pass_set", c.wifi_pass[0] != '\0');
+
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) return httpd_resp_send_500(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t err = httpd_resp_send(req, out, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(out);
+    return err;
+}
+
+static esp_err_t settings_post_handler(httpd_req_t *req)
+{
+    char buf[1024];
+    int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (len <= 0) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body"); return ESP_FAIL; }
+    buf[len] = '\0';
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad json"); return ESP_FAIL; }
+
+    // MERGE, never replace: a browser sending one toggle must not reset the rest
+    // to whatever its (possibly stale) form last read. Same principle as the
+    // config-file import.
+    const char *s;
+    cJSON *it;
+
+    if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "my_callsign")))) settings_set_my_callsign(s);
+    if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "my_grid"))))     settings_set_my_grid(s);
+
+    cJSON *cq = cJSON_GetObjectItem(root, "cq");
+    if (cJSON_IsObject(cq)) {
+        cJSON *msgs = cJSON_GetObjectItem(cq, "msg");
+        if (cJSON_IsArray(msgs)) {
+            int n = cJSON_GetArraySize(msgs);
+            for (int i = 0; i < n && i < 3; i++) {
+                const char *m = cJSON_GetStringValue(cJSON_GetArrayItem(msgs, i));
+                if (m) settings_set_cq_msg((uint8_t)i, m);
+            }
+        }
+        if (cJSON_IsNumber(it = cJSON_GetObjectItem(cq, "sel")))
+            settings_set_cq_sel((uint8_t)it->valuedouble);
+        if (cJSON_IsNumber(it = cJSON_GetObjectItem(cq, "max_calls")))
+            settings_set_cq_max_calls((uint8_t)it->valuedouble);
+    }
+
+    // Filters are one NVS blob, so read-modify-write the whole struct.
+    cJSON *f = cJSON_GetObjectItem(root, "filters");
+    if (cJSON_IsObject(f)) {
+        qmx_settings_t cur;
+        settings_load_all(&cur);
+        ft8_filters_t nf = cur.ft8_filters;
+        const char *keys[2] = { "incl", "excl" };
+        for (int k = 0; k < 2; k++) {
+            cJSON *arr = cJSON_GetObjectItem(f, keys[k]);
+            if (!cJSON_IsArray(arr)) continue;
+            for (int i = 0; i < 2 && i < cJSON_GetArraySize(arr); i++) {
+                cJSON *o = cJSON_GetArrayItem(arr, i);
+                if (!cJSON_IsObject(o)) continue;
+                bool *en  = k ? &nf.excl_en[i]   : &nf.incl_en[i];
+                char *txt = k ? nf.excl_text[i]  : nf.incl_text[i];
+                cJSON *e = cJSON_GetObjectItem(o, "en");
+                if (cJSON_IsBool(e)) *en = cJSON_IsTrue(e);
+                const char *t = cJSON_GetStringValue(cJSON_GetObjectItem(o, "text"));
+                if (t) snprintf(txt, FT8_FILTER_TEXT_LEN, "%s", t);
+            }
+        }
+        #define BOOLF(name, field) do { cJSON *b = cJSON_GetObjectItem(f, name); \
+            if (cJSON_IsBool(b)) nf.field = cJSON_IsTrue(b); } while (0)
+        BOOLF("excl_worked_before", excl_worked_before);
+        BOOLF("excl_plain_cq",      excl_plain_cq);
+        BOOLF("incl_cq_only",       incl_cq_only);
+        BOOLF("skip_tx1",           skip_tx1);
+        BOOLF("auto_pileup",        auto_pileup);
+        BOOLF("robot_en",           robot_en);
+        #undef BOOLF
+        if (cJSON_IsNumber(it = cJSON_GetObjectItem(f, "robot_priority")))
+            nf.robot_priority = (uint8_t)it->valuedouble;
+        settings_set_ft8_filters(&nf);
+    }
+
+    #define BOOLTOP(name, setter) do { cJSON *b = cJSON_GetObjectItem(root, name); \
+        if (cJSON_IsBool(b)) setter(cJSON_IsTrue(b)); } while (0)
+    BOOLTOP("spots_en",          settings_set_spots_en);
+    BOOLTOP("rbn_en",            settings_set_rbn_en);
+    BOOLTOP("pskreporter_en",    settings_set_pskreporter_en);
+    BOOLTOP("greylist_en",       settings_set_greylist_en);
+    BOOLTOP("distance_in_miles", settings_set_distance_in_miles);
+    #undef BOOLTOP
+
+    // IQ balance is a live DSP path as well as a stored flag - set both, exactly
+    // as the drawer switch does, or the setting and the behaviour disagree until
+    // the next boot.
+    cJSON *iq = cJSON_GetObjectItem(root, "iq_enabled");
+    if (cJSON_IsBool(iq)) { iq_balance_set_enabled(cJSON_IsTrue(iq)); settings_set_iq_enabled(cJSON_IsTrue(iq)); }
+
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "qmx_vol_db"))) {
+        uint8_t db = (uint8_t)it->valuedouble;
+        if (db > CAT_AF_GAIN_DB_MAX) db = CAT_AF_GAIN_DB_MAX;
+        settings_set_qmx_vol_db(db);
+        // AG is in 0.25 dB steps - the slider's own conversion. Sending dB here
+        // would set the radio to a quarter of what the browser asked for.
+        cat_request_af_gain((uint16_t)(db * 4));
+    }
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "bandplan_region")))
+        settings_set_bandplan_region((uint8_t)it->valuedouble);
+
+    // WiFi: SSID and password together, and only when a password is actually
+    // supplied - the GET never returns one, so an empty field means "unchanged",
+    // not "erase it". This is how a second network gets added from a laptop.
+    const char *ssid = cJSON_GetStringValue(cJSON_GetObjectItem(root, "wifi_ssid"));
+    const char *pass = cJSON_GetStringValue(cJSON_GetObjectItem(root, "wifi_pass"));
+    if (ssid && ssid[0] && pass && pass[0]) panadapter_wifi_update_credentials(ssid, pass);
+
+    cJSON_Delete(root);
+    settings_flush();
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
+}
+
 // GET /api/decodes - the FT8/FT4 decode list, as the Tab5 shows it.
 //
 // The browser has shown nothing about who is on frequency since FT8 landed: in
@@ -1288,6 +1478,14 @@ static const httpd_uri_t uri_signal = {
     .uri = "/api/signal", .method = HTTP_GET, .handler = signal_handler,
 };
 
+static const httpd_uri_t uri_settings_get = {
+    .uri = "/api/settings", .method = HTTP_GET, .handler = settings_get_handler,
+};
+
+static const httpd_uri_t uri_settings_post = {
+    .uri = "/api/settings", .method = HTTP_POST, .handler = settings_post_handler,
+};
+
 static const httpd_uri_t uri_decodes = {
     .uri = "/api/decodes", .method = HTTP_GET, .handler = decodes_handler,
 };
@@ -1413,7 +1611,7 @@ esp_err_t webserver_start(void)
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.server_port     = 80;
     config.stack_size      = 12288;
-    config.max_uri_handlers = 32;   // 25 API + WS + 5 file-browser + headroom
+    config.max_uri_handlers = 34;   // 27 API + WS + 5 file-browser + headroom
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -1441,6 +1639,8 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_qrz_upload);
     httpd_register_uri_handler(s_server, &uri_upload_status);
     httpd_register_uri_handler(s_server, &uri_signal);
+    httpd_register_uri_handler(s_server, &uri_settings_get);
+    httpd_register_uri_handler(s_server, &uri_settings_post);
     httpd_register_uri_handler(s_server, &uri_decodes);
     httpd_register_uri_handler(s_server, &uri_help);
     httpd_register_uri_handler(s_server, &uri_manual);

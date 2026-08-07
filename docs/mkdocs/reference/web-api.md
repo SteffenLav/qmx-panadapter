@@ -88,6 +88,28 @@ applied asynchronously (mode and filter writes are queued onto the CAT poll task
 `cq_start` onto the display task), so read `/api/status` to see the result rather
 than assuming it from the response.
 
+### GET /api/settings
+
+The settings a browser can usefully edit: callsign, grid, the CQ presets, the FT8
+filters, the everyday toggles, QMX volume, band-plan region and the WiFi SSID.
+
+**The WiFi password is never returned** - only `wifi_pass_set` says whether one is
+stored.
+
+### POST /api/settings
+
+Applies a **partial** update: only the keys present are touched, everything else
+is left alone. So a single toggle is a one-key body, and a stale browser form can
+never reset fields it did not show.
+
+```json
+{ "my_grid": "JO65ab", "rbn_en": true, "cq": { "max_calls": 10 } }
+```
+
+`wifi_ssid` and `wifi_pass` take effect only when both are supplied - an empty
+password means "keep the stored one", never "erase it". `qmx_vol_db` is in dB
+(0-50) and is sent to the radio as well as stored.
+
 ### GET /api/decodes
 
 The FT8/FT4 decode list as the Tab5 shows it - same ordering (the station being
