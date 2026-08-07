@@ -1090,6 +1090,99 @@ static const httpd_uri_t uri_upload_status = {
 // GET /api/signal — just the S-meter peak dBm around the VFO, nothing else.
 // Deliberately tiny so the web UI can poll it several times a second to make
 // its S-meter track like the Tab5's (which samples at 5 Hz), instead of the
+// GET /api/tone  - the TX audio tone, and the live occupancy of the 200-2800 Hz
+//                  window that the Tab5's picker draws.
+// POST /api/tone - {"hz":1650} and/or {"hold":true}
+//
+// The occupancy mask is the SAME one the automatic clear-slot picker uses
+// (ft8_tx_get_tone_occupancy), not a second opinion assembled for display - so
+// what the browser shows as busy is exactly what the device will refuse to
+// transmit on.
+//
+// n_stations matters: a mask of all-clear with ZERO stations heard means
+// "nothing decoded yet", not "the band is empty". The browser says so rather
+// than painting a reassuring row of green.
+static esp_err_t tone_get_handler(httpd_req_t *req)
+{
+    int n_slots = 0, n_stations = 0;
+    uint64_t mask = ft8_tx_get_tone_occupancy(&n_slots, &n_stations);
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return httpd_resp_send_500(req);
+    cJSON_AddNumberToObject(root, "hz",        ft8_tx_get_tone_pref_hz());
+    cJSON_AddBoolToObject  (root, "hold",      ft8_tx_get_tone_hold());
+    cJSON_AddNumberToObject(root, "min",       FT8_TX_TONE_MIN_HZ);
+    cJSON_AddNumberToObject(root, "max",       FT8_TX_TONE_MAX_HZ);
+    cJSON_AddNumberToObject(root, "step",      FT8_TX_TONE_STEP_HZ);
+    cJSON_AddNumberToObject(root, "stations",  n_stations);
+    // One char per 50 Hz slot: '1' busy, '0' free. A string, not a 64-bit number,
+    // because JavaScript cannot hold 52 bits of integer without losing the low
+    // ones to the double it would become.
+    char bits[72];
+    int n = n_slots > 0 && n_slots < (int)sizeof(bits) ? n_slots : 0;
+    for (int i = 0; i < n; i++) bits[i] = (mask >> i) & 1ULL ? '1' : '0';
+    bits[n] = '\0';
+    cJSON_AddStringToObject(root, "busy", bits);
+
+    // The partner's tone, so the browser can mark it the way the Tab5 does -
+    // you avoid it, but it is not "busy" in the same sense as a stranger.
+    int partner = 0;
+    if (ft8_qso_get_priority_freq(&partner) && partner > 0)
+        cJSON_AddNumberToObject(root, "partner_hz", partner);
+
+    // Whether a change would be accepted right now. A burst mid-flight refuses,
+    // and saying so up front beats offering a control that will fail.
+    cJSON_AddBoolToObject(root, "busy_tx", ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ACTIVE);
+
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) return httpd_resp_send_500(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t err = httpd_resp_send(req, out, HTTPD_RESP_USE_STRLEN);
+    cJSON_free(out);
+    return err;
+}
+
+static esp_err_t tone_post_handler(httpd_req_t *req)
+{
+    char buf[128];
+    int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (len <= 0) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body"); return ESP_FAIL; }
+    buf[len] = '\0';
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad json"); return ESP_FAIL; }
+
+    cJSON *jhz = cJSON_GetObjectItem(root, "hz");
+    cJSON *jhold = cJSON_GetObjectItem(root, "hold");
+
+    // Same ORDER as the Tab5's Apply (ft8_tone_modal.c): move a running QSO
+    // FIRST, because that is the only step that can be refused, and storing the
+    // preference before a refusal would leave the two half-committed.
+    if (cJSON_IsNumber(jhz)) {
+        int hz = (int)jhz->valuedouble;
+        if (hz < FT8_TX_TONE_MIN_HZ) hz = FT8_TX_TONE_MIN_HZ;
+        if (hz > FT8_TX_TONE_MAX_HZ) hz = FT8_TX_TONE_MAX_HZ;
+        if (ft8_qso_get_state() != FT8_QSO_IDLE) {
+            char err[64] = {0};
+            if (!ft8_qso_set_tx_tone_hz(hz, err, sizeof(err))) {
+                cJSON_Delete(root);
+                httpd_resp_set_type(req, "application/json");
+                httpd_resp_set_status(req, "409 Conflict");
+                char body[128];
+                snprintf(body, sizeof(body), "{\"ok\":false,\"error\":\"%s\"}", err[0] ? err : "refused");
+                return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+            }
+        }
+        ft8_tx_set_tone_pref_hz(hz);
+    }
+    if (cJSON_IsBool(jhold)) ft8_tx_set_tone_hold(cJSON_IsTrue(jhold));
+
+    cJSON_Delete(root);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, "{\"ok\":true}", HTTPD_RESP_USE_STRLEN);
+}
+
 // GET /api/memory  - all 32 memory channels.
 // POST /api/memory - write one: {"idx":n,"freq_hz":..,"mode":"USB","label":".."}
 //                    or clear one: {"idx":n,"clear":true}
@@ -1565,6 +1658,14 @@ static const httpd_uri_t uri_signal = {
     .uri = "/api/signal", .method = HTTP_GET, .handler = signal_handler,
 };
 
+static const httpd_uri_t uri_tone_get = {
+    .uri = "/api/tone", .method = HTTP_GET, .handler = tone_get_handler,
+};
+
+static const httpd_uri_t uri_tone_post = {
+    .uri = "/api/tone", .method = HTTP_POST, .handler = tone_post_handler,
+};
+
 static const httpd_uri_t uri_memory_get = {
     .uri = "/api/memory", .method = HTTP_GET, .handler = memory_get_handler,
 };
@@ -1706,7 +1807,7 @@ esp_err_t webserver_start(void)
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.server_port     = 80;
     config.stack_size      = 12288;
-    config.max_uri_handlers = 36;   // 29 API + WS + 5 file-browser + headroom
+    config.max_uri_handlers = 38;   // 31 API + WS + 5 file-browser + headroom
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -1734,6 +1835,8 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_qrz_upload);
     httpd_register_uri_handler(s_server, &uri_upload_status);
     httpd_register_uri_handler(s_server, &uri_signal);
+    httpd_register_uri_handler(s_server, &uri_tone_get);
+    httpd_register_uri_handler(s_server, &uri_tone_post);
     httpd_register_uri_handler(s_server, &uri_memory_get);
     httpd_register_uri_handler(s_server, &uri_memory_post);
     httpd_register_uri_handler(s_server, &uri_settings_get);

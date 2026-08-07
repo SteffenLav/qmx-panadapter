@@ -98,6 +98,28 @@ New in v1.5.0 (asked for by Dennis WN4FLA). A CQ run that has timed out, or that
 
 Apart from Call CQ, transmit is still initiated on the Tab5 — replies and pounces need the decode list in front of you, and only one interface should be keying the QMX.
 
+## Choosing your TX tone
+
+New in the next release. **TX tone** on the FT8 panel opens the same picker the
+Tab5 has, against the same live occupancy of the 200-2800 Hz window - it is the
+device's own map, the one its automatic clear-slot picker uses, so a slot shown
+busy here is one the device would avoid anyway.
+
+- **Green** is free, **red** a station or its guard band, **pink** the station you
+  are working, **white** where you will transmit.
+- **Click a slot** to choose it - a mouse can go straight there, where the Tab5
+  needs a drag. **&minus;50 / +50** nudge, and **Find a clear slot** walks outward
+  to the nearest free one, exactly as the automatic picker does.
+- **TX Hold** keeps the exact tone you picked. With it off, each transmission
+  takes the nearest clear slot, and a CQ that gets clashed moves itself.
+- **Grey means unknown, not free.** If nothing has been decoded yet the device has
+  no picture of the band, and the strip says so rather than showing reassuring
+  green.
+
+Changing the tone mid-QSO is fine - your partner tracks your time slot, not your
+audio frequency - but it is refused **mid-burst**, and the reason is shown rather
+than the change silently half-applying.
+
 ## Memory channels
 
 New in the next release. The **Memory** button opens your 32 channels as a grid.

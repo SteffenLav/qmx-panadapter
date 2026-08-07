@@ -9,7 +9,9 @@
   :root {
     --bg: #0a0e14;
     --fg: #c5d4dd;
-    --dim: #6a7a85;
+    --dim: #9db0bd;        /* secondary text - readable on --card and on the
+                              modal backgrounds. Was #6a7a85, which sat too
+                              close to the background to read comfortably. */
     --accent: #ffb95a;
     --ok: #6ed27a;
     --bad: #d26e6e;
@@ -397,11 +399,11 @@
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
-  <div id="ft8-notice"><div id="ft8-tx" class="st-idle">--</div><div>Tab5 is in FT8/FT4 mode — spectrum &amp; waterfall are shown only in Panadapter mode.<br>Use the buttons below to download logs/config or upload QSOs.</div><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="to-panadapter" title="Switch the Tab5 to the Panadapter view">Show Panadapter</button></div>
+  <div id="ft8-notice"><div id="ft8-tx" class="st-idle">--</div><div>Tab5 is in FT8/FT4 mode — spectrum &amp; waterfall are shown only in Panadapter mode.<br>Use the buttons below to download logs/config or upload QSOs.</div><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="to-panadapter" title="Switch the Tab5 to the Panadapter view">Show Panadapter</button><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button></div>
     <div id="ft8-decodes" style="width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
         <strong id="dec-title" style="color:#ffa040">Decode list</strong>
-        <span id="dec-count" style="color:#7d8894; font-size:12px"></span>
+        <span id="dec-count" style="color:var(--dim); font-size:13px"></span>
       </div>
       <div style="max-height:46vh; overflow:auto; border:1px solid #333; border-radius:6px;">
         <table id="dec-table" style="width:100%; border-collapse:collapse; font-size:13px;">
@@ -465,6 +467,40 @@
     <input type="file" id="cfg-up-file" accept=".txt,text/plain" style="display:none">
   </div>
 
+  <!-- TX tone picker. The Tab5 drags a finger along the occupancy strip; a mouse
+       can simply click the slot it wants, so this is the one place the browser
+       gets to be BETTER rather than merely equal. Colours mirror
+       ui/ft8_tone_modal.h, which is the source of truth for them. -->
+  <div id="tone-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1000;">
+    <div style="max-width:900px; margin:8vh auto; background:#161616; border:1px solid #494949; border-radius:10px; padding:16px 20px; color:#ddd; font-size:14px;">
+      <div style="display:flex; align-items:center; margin-bottom:10px;">
+        <strong style="color:#ffa040; font-size:17px;">TX tone</strong>
+        <div style="flex:1"></div>
+        <span id="tone-status" style="color:var(--dim); font-size:13px; margin-right:10px"></span>
+        <button id="tone-apply" class="bot-btn" style="cursor:pointer; margin-right:6px">Apply</button>
+        <button id="tone-cancel" class="bot-btn" style="cursor:pointer">Cancel</button>
+      </div>
+      <div id="tone-read" style="font-size:20px; color:#fff; margin-bottom:2px">-- Hz</div>
+      <div id="tone-verdict" style="font-size:13px; margin-bottom:10px">&nbsp;</div>
+      <canvas id="tone-strip" width="1000" height="64" style="width:100%; height:64px; cursor:crosshair; border:1px solid #333; border-radius:4px;"></canvas>
+      <div style="display:flex; align-items:center; gap:10px; margin-top:10px; flex-wrap:wrap">
+        <button id="tone-down" class="bot-btn" style="cursor:pointer">&minus;50</button>
+        <button id="tone-up" class="bot-btn" style="cursor:pointer">+50</button>
+        <button id="tone-find" class="bot-btn" style="cursor:pointer">Find a clear slot</button>
+        <label style="display:flex; align-items:center; gap:6px; margin-left:8px">
+          <input type="checkbox" id="tone-hold"> TX Hold
+        </label>
+        <span style="color:var(--dim); font-size:13px">Hold keeps this exact tone; off, each transmission takes the nearest clear slot.</span>
+      </div>
+      <div style="margin-top:10px; font-size:13px; color:var(--dim)">
+        <span style="color:#1E6B34">&#9632;</span> free
+        <span style="color:#7A2020; margin-left:10px">&#9632;</span> a station or its guard band
+        <span style="color:#FF69B4; margin-left:10px">&#9632;</span> the station you are working
+        <span style="color:#fff; margin-left:10px">&#9632;</span> you
+      </div>
+    </div>
+  </div>
+
   <!-- Memory channels: the Tab5's 4x8 grid, as a grid. Clicking one RECALLS it -
        which is just set_freq + set_mode, so the browser needs no recall endpoint
        and there is no second copy of that decision on the device. -->
@@ -473,10 +509,10 @@
       <div style="display:flex; align-items:center; margin-bottom:10px;">
         <strong style="color:#ffa040; font-size:17px;">Memory channels</strong>
         <div style="flex:1"></div>
-        <span id="mem-status" style="color:#7d8894; font-size:12px; margin-right:10px"></span>
+        <span id="mem-status" style="color:var(--dim); font-size:13px; margin-right:10px"></span>
         <button id="mem-close" class="bot-btn" style="cursor:pointer">Close</button>
       </div>
-      <div style="color:#7d8894; font-size:12px; margin-bottom:8px">
+      <div style="color:var(--dim); font-size:13px; margin-bottom:8px">
         Click a channel to tune to it. Click <b>Edit</b> to change or clear one. Empty slots take the VFO you are on now.
       </div>
       <div id="mem-grid" style="display:grid; grid-template-columns:repeat(4,1fr); gap:8px;"></div>
@@ -492,12 +528,12 @@
       <div style="display:flex; align-items:center; margin-bottom:12px;">
         <strong style="color:#ffa040; font-size:17px;">Settings</strong>
         <div style="flex:1"></div>
-        <span id="set-status" style="color:#7d8894; font-size:12px; margin-right:10px"></span>
+        <span id="set-status" style="color:var(--dim); font-size:13px; margin-right:10px"></span>
         <button id="set-save" class="bot-btn" style="cursor:pointer; margin-right:6px">Save</button>
         <button id="set-close" class="bot-btn" style="cursor:pointer">Close</button>
       </div>
       <div id="set-body"></div>
-      <p style="color:#7d8894; font-size:12px; margin-top:14px">
+      <p style="color:var(--dim); font-size:13px; margin-top:14px">
         Saved straight to the Tab5. Its own settings drawer shows the same values next time you open it.
       </p>
     </div>
@@ -516,12 +552,12 @@
         <div style="flex:1"></div>
         <button id="help-close" class="bot-btn" style="cursor:pointer">Close</button>
       </div>
-      <div id="help-hint" style="color:#9aa7b4; margin-bottom:10px;">Pick what fits. Highlighted rows are happening right now on the Tab5.</div>
+      <div id="help-hint" style="color:var(--dim); margin-bottom:10px;">Pick what fits. Highlighted rows are happening right now on the Tab5.</div>
       <div id="help-rows" style="max-height:60vh; overflow:auto;"></div>
       <div id="help-doc" style="display:none; max-height:66vh; overflow:auto; padding-right:6px; line-height:1.5;"></div>
       <div style="margin-top:14px; display:flex; align-items:center; gap:12px;">
         <button id="help-open-manual" class="bot-btn" style="cursor:pointer">Open the manual</button>
-        <span style="color:#7d8894; font-size:12px;">Served by the Tab5 itself &mdash; no internet needed, and it always matches the firmware you are running.</span>
+        <span style="color:var(--dim); font-size:13px;">Served by the Tab5 itself &mdash; no internet needed, and it always matches the firmware you are running.</span>
       </div>
     </div>
   </div>
@@ -1248,6 +1284,173 @@ async function sendCmd(payload) {
 })();
 
 /* =====================================================================
+   TX tone picker
+
+   The Tab5 drags a finger along the occupancy strip; a mouse can click the slot
+   it wants outright, so this is the one place the browser gets to be better
+   rather than merely equal.
+
+   The occupancy comes from the device's own mask - the same one the automatic
+   clear-slot picker uses - so a slot shown busy here is one the device would
+   refuse anyway. Colours mirror ui/ft8_tone_modal.h, which is the source of
+   truth; the Tab5's own mini-strip reads them from there too.
+   ===================================================================== */
+const TONE_COL_FREE    = "#1E6B34";
+const TONE_COL_BUSY    = "#7A2020";
+const TONE_COL_UNKNOWN = "#3A3F46";
+const TONE_COL_PICK    = "#FFFFFF";
+const TONE_COL_PARTNER = "#FF69B4";
+
+let toneState = null;   // last /api/tone reply
+let toneSel   = 1500;   // the slot the operator is choosing
+let toneHold  = false;
+
+function toneSlotOf(hz) {
+  if (!toneState) return 0;
+  return Math.round((hz - toneState.min) / toneState.step);
+}
+function toneHzOf(slot) {
+  return toneState ? toneState.min + slot * toneState.step : 1500;
+}
+function toneIsBusy(slot) {
+  return !!(toneState && toneState.busy && toneState.busy[slot] === "1");
+}
+
+function toneDraw() {
+  const cv = document.getElementById("tone-strip");
+  const ctx = cv.getContext("2d");
+  const W = cv.width, H = cv.height;
+  ctx.fillStyle = "#0d1116"; ctx.fillRect(0, 0, W, H);
+  if (!toneState) return;
+  const n = toneState.busy.length || 1;
+  const bw = W / n;
+  const known = toneState.stations > 0;
+  for (let i = 0; i < n; i++) {
+    // Nothing decoded yet means UNKNOWN, not free: a reassuring row of green
+    // when the device has heard nothing would be a lie.
+    ctx.fillStyle = !known ? TONE_COL_UNKNOWN : (toneIsBusy(i) ? TONE_COL_BUSY : TONE_COL_FREE);
+    ctx.fillRect(i * bw + 1, 18, bw - 2, H - 30);
+  }
+  if (toneState.partner_hz) {
+    const p = toneSlotOf(toneState.partner_hz);
+    if (p >= 0 && p < n) { ctx.fillStyle = TONE_COL_PARTNER; ctx.fillRect(p * bw + 1, 18, bw - 2, H - 30); }
+  }
+  const sel = toneSlotOf(toneSel);
+  if (sel >= 0 && sel < n) {
+    ctx.fillStyle = TONE_COL_PICK;
+    ctx.fillRect(sel * bw + 1, 14, bw - 2, H - 26);
+  }
+  // Frequency ruler every 500 Hz, so the strip is readable as frequencies and
+  // not just as a row of blocks.
+  ctx.fillStyle = "#9db0bd"; ctx.font = "12px system-ui,sans-serif"; ctx.textAlign = "center";
+  for (let hz = 500; hz <= toneState.max; hz += 500) {
+    const x = (toneSlotOf(hz) + 0.5) * bw;
+    ctx.fillText(String(hz), x, 12);
+  }
+  ctx.textAlign = "left";
+}
+
+function toneSync() {
+  document.getElementById("tone-read").textContent = toneSel + " Hz";
+  const v = document.getElementById("tone-verdict");
+  if (!toneState) { v.textContent = " "; return; }
+  if (toneState.stations === 0) {
+    v.style.color = "#9db0bd";
+    v.textContent = "Nothing decoded yet - the band picture is unknown, not empty.";
+  } else if (toneIsBusy(toneSlotOf(toneSel))) {
+    v.style.color = "#ff8080";
+    v.textContent = "Busy - a station or its guard band is here. Pick a green slot.";
+  } else {
+    v.style.color = "#6ed27a";
+    v.textContent = "Clear, from " + toneState.stations + " station" + (toneState.stations === 1 ? "" : "s") + " heard.";
+  }
+  toneDraw();
+}
+
+async function toneOpen() {
+  document.getElementById("tone-modal").style.display = "";
+  pauseWs();
+  const st = document.getElementById("tone-status");
+  st.textContent = "Reading the Tab5...";
+  try {
+    toneState = await (await fetch("/api/tone", { cache: "no-store" })).json();
+    toneSel  = toneState.hz;
+    toneHold = !!toneState.hold;
+    document.getElementById("tone-hold").checked = toneHold;
+    st.textContent = toneState.busy_tx ? "Transmitting - a change will be refused until the burst ends" : "";
+    toneSync();
+  } catch (e) {
+    st.textContent = "Could not read the tone (" + e.message + ")";
+  }
+}
+
+function toneNudge(d) {
+  if (!toneState) return;
+  toneSel = Math.min(toneState.max, Math.max(toneState.min, toneSel + d));
+  toneSync();
+}
+
+function toneFindClear() {
+  if (!toneState || toneState.stations === 0) return;
+  const n = toneState.busy.length, from = toneSlotOf(toneSel);
+  // Walk outwards from where you are, which is what the device does too - the
+  // nearest clear slot, not a jump back to the middle of the band.
+  for (let d = 1; d < n; d++) {
+    for (const c of [from - d, from + d]) {
+      if (c >= 0 && c < n && !toneIsBusy(c)) { toneSel = toneHzOf(c); toneSync(); return; }
+    }
+  }
+}
+
+async function toneApply() {
+  const st = document.getElementById("tone-status");
+  st.textContent = "Applying...";
+  try {
+    const r = await fetch("/api/tone", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hz: toneSel, hold: document.getElementById("tone-hold").checked })
+    });
+    if (r.ok) {
+      st.textContent = "Applied";
+      setTimeout(() => { document.getElementById("tone-modal").style.display = "none"; resumeWs(); }, 600);
+    } else {
+      // 409 carries the device's own reason - "not mid-burst" is the whole
+      // failure mode, so show it and stay open rather than forcing a re-pick.
+      let msg = "Refused";
+      try { msg = (await r.json()).error || msg; } catch (e) {}
+      st.textContent = msg;
+    }
+  } catch (e) { st.textContent = "Failed (" + e.message + ")"; }
+}
+
+(function wireTone() {
+  const cv = document.getElementById("tone-strip");
+  const pick = (ev) => {
+    if (!toneState) return;
+    const r = cv.getBoundingClientRect();
+    const n = toneState.busy.length || 1;
+    const slot = Math.floor((ev.clientX - r.left) / r.width * n);
+    toneSel = toneHzOf(Math.max(0, Math.min(n - 1, slot)));
+    toneSync();
+  };
+  cv.addEventListener("click", pick);
+  cv.addEventListener("mousemove", (ev) => { if (ev.buttons & 1) pick(ev); });
+  document.getElementById("tone-btn").addEventListener("click", toneOpen);
+  document.getElementById("tone-up").addEventListener("click", () => toneNudge(50));
+  document.getElementById("tone-down").addEventListener("click", () => toneNudge(-50));
+  document.getElementById("tone-find").addEventListener("click", toneFindClear);
+  document.getElementById("tone-apply").addEventListener("click", toneApply);
+  document.getElementById("tone-cancel").addEventListener("click", () => {
+    document.getElementById("tone-modal").style.display = "none"; resumeWs();
+  });
+  document.getElementById("tone-modal").addEventListener("click", (e) => {
+    if (e.target.id === "tone-modal") {
+      document.getElementById("tone-modal").style.display = "none"; resumeWs();
+    }
+  });
+})();
+
+/* =====================================================================
    Memory channels
 
    Recall is set_freq + set_mode, which the browser already has - so there is no
@@ -1260,7 +1463,7 @@ async function memOpen() {
   document.getElementById("mem-modal").style.display = "";
   pauseWs();
   const g = document.getElementById("mem-grid");
-  g.innerHTML = '<p style="color:#7d8894">Reading the Tab5...</p>';
+  g.innerHTML = '<p style="color:var(--dim)">Reading the Tab5...</p>';
   try {
     const d = await (await fetch("/api/memory", { cache: "no-store" })).json();
     g.innerHTML = (d.slots || []).map(sl => {
@@ -1269,11 +1472,11 @@ async function memOpen() {
       const sub = filled ? (sl.freq_hz / 1e6).toFixed(3) + " MHz &middot; " + (sl.mode || "") : "&mdash;";
       return '<div data-mem="' + sl.idx + '" style="border:1px solid ' + (filled ? "#3a4149" : "#2a2a2a") +
         ";background:" + (filled ? "#1e242b" : "#141414") + ';border-radius:6px;padding:8px;">' +
-        '<div style="color:' + (filled ? "#ffa040" : "#666") + ';font-weight:600">' + title + "</div>" +
-        '<div style="color:#c8d2dc;font-size:12px;margin:2px 0 6px">' + sub + "</div>" +
-        '<button data-recall="' + sl.idx + '" class="bot-btn" style="cursor:pointer;font-size:12px;padding:2px 8px"' +
+        '<div style="color:' + (filled ? "#ffa040" : "var(--dim)") + ';font-weight:600">' + title + "</div>" +
+        '<div style="color:var(--fg);font-size:13px;margin:2px 0 6px">' + sub + "</div>" +
+        '<button data-recall="' + sl.idx + '" class="bot-btn" style="cursor:pointer;font-size:13px;padding:2px 8px"' +
         (filled ? "" : " disabled") + ">Tune</button> " +
-        '<button data-edit="' + sl.idx + '" class="bot-btn" style="cursor:pointer;font-size:12px;padding:2px 8px">Edit</button>' +
+        '<button data-edit="' + sl.idx + '" class="bot-btn" style="cursor:pointer;font-size:13px;padding:2px 8px">Edit</button>' +
         "</div>";
     }).join("");
     g.querySelectorAll("[data-recall]").forEach(b => b.addEventListener("click", async () => {
@@ -1412,7 +1615,7 @@ function setBuildForm(cfg) {
       html += '<input type="checkbox" id="' + id + '" data-path="' + path + '" data-type="bool"' + (v ? " checked" : "") + ">";
       html += '<label for="' + id + '" style="flex:1">' + label + "</label>";
     } else {
-      html += '<label for="' + id + '" style="width:250px;color:#c8d2dc">' + label + "</label>";
+      html += '<label for="' + id + '" style="width:250px;color:var(--fg)">' + label + "</label>";
       if (type === "sel") {
         html += '<select id="' + id + '" data-path="' + path + '" data-type="num" style="flex:1;background:#1e242b;color:#ddd;border:1px solid #3a4149;border-radius:4px;padding:4px">';
         for (const [ov, ol] of opts)
@@ -1426,7 +1629,7 @@ function setBuildForm(cfg) {
                 '" style="flex:1;background:#1e242b;color:#ddd;border:1px solid #3a4149;border-radius:4px;padding:4px">';
       }
     }
-    if (hint) html += '<span style="color:#7d8894;font-size:11px;flex:1">' + hint + "</span>";
+    if (hint) html += '<span style="color:var(--dim);font-size:13px;flex:1">' + hint + "</span>";
     html += "</div>";
   }
   body.innerHTML = html + "</div>";
@@ -1436,7 +1639,7 @@ async function setOpen() {
   document.getElementById("set-modal").style.display = "";
   pauseWs();                                  // same discipline as the other modals
   const body = document.getElementById("set-body");
-  body.innerHTML = '<p style="color:#7d8894">Reading the Tab5...</p>';
+  body.innerHTML = '<p style="color:var(--dim)">Reading the Tab5...</p>';
   try {
     setLoaded = await (await fetch("/api/settings", { cache: "no-store" })).json();
     setBuildForm(setLoaded);
@@ -1686,7 +1889,7 @@ async function helpOpenPage(path, anchor, title, push) {
   document.getElementById("help-rows").style.display = "none";
   document.getElementById("help-hint").style.display = "none";
   doc.style.display = "";
-  doc.innerHTML = '<p style="color:#7d8894">Loading...</p>';
+  doc.innerHTML = '<p style="color:var(--dim)">Loading...</p>';
   document.getElementById("help-title").textContent = title || "User manual";
   document.getElementById("help-back").style.display = helpHist.length ? "" : "none";
   document.getElementById("help-contents").style.display = "";
@@ -1736,7 +1939,7 @@ async function helpShowContents() {
   document.getElementById("help-rows").style.display = "none";
   document.getElementById("help-hint").style.display = "none";
   doc.style.display = "";
-  doc.innerHTML = '<p style="color:#7d8894">Loading...</p>';
+  doc.innerHTML = '<p style="color:var(--dim)">Loading...</p>';
   document.getElementById("help-title").textContent = "Contents";
   try {
     const r = await fetch("/api/manual?page=toc.json", { cache: "default" });
@@ -1767,7 +1970,7 @@ async function helpOpen() {
   helpShowRowsView();
 
   const box = document.getElementById("help-rows");
-  box.innerHTML = '<p style="color:#7d8894">Asking the Tab5...</p>';
+  box.innerHTML = '<p style="color:var(--dim)">Asking the Tab5...</p>';
   try {
     const r = await fetch("/api/help", { cache: "no-store" });
     const h = await r.json();
@@ -2230,7 +2433,7 @@ const SPOT_COL_RBN    = "#35d84a";
 const SPOT_COL_WORKED = "#8a8a8a";
 const SPOT_FULL_S     = 300;    // full brightness up to 5 minutes old
 const SPOT_GONE_S     = 1800;   // invisible at 30 minutes - same as the Tab5
-const SPOT_LABEL_Y    = 34;     // canvas px from the top: clear of the dB labels
+const SPOT_LABEL_Y    = 38;     // canvas px from the top: clear of the dB labels
 const SPOT_MIN_OPA    = 0.18;
 
 function spotOpacity(ageS) {
@@ -2278,7 +2481,7 @@ function drawSpots(ctx, W, H) {
   const placed = [];
 
   ctx.save();
-  ctx.font = "bold 11px ui-monospace, monospace";
+  ctx.font = "bold 14px ui-monospace, monospace";
   ctx.textAlign = "left";
 
   for (const c of cand) {
@@ -2289,7 +2492,7 @@ function drawSpots(ctx, W, H) {
     if (!text) continue;
     const tw = ctx.measureText(text).width;
     const bx = Math.max(0, Math.min(W - tw - 6, c.x - tw / 2 - 3));
-    const box = { x: bx, y: SPOT_LABEL_Y - 12, w: tw + 6, h: 16,
+    const box = { x: bx, y: SPOT_LABEL_Y - 15, w: tw + 8, h: 20,
                   hz: c.sp.f, mode: spotRadioMode(c.sp), call: text };
 
     // Overlap test against everything already placed - first come (i.e. highest
@@ -2308,32 +2511,32 @@ function drawSpots(ctx, W, H) {
     // The line drops from under the label to the bottom of the spectrum, so it
     // points at the frequency without covering the trace it crosses.
     ctx.fillStyle = col;
-    ctx.fillRect(Math.round(c.x), SPOT_LABEL_Y + 4, 1, H - SPOT_LABEL_Y - 4);
+    ctx.fillRect(Math.round(c.x), SPOT_LABEL_Y + 6, 1, H - SPOT_LABEL_Y - 6);
 
     ctx.fillStyle = "rgba(0,0,0,0.55)";
     ctx.fillRect(box.x, box.y, box.w, box.h);
     ctx.fillStyle = col;
-    ctx.fillText(text, box.x + 3, SPOT_LABEL_Y);
+    ctx.fillText(text, box.x + 4, SPOT_LABEL_Y);
   }
 
   /* Off-screen counts, in words rather than a bare "<3": a lone number against
      the edge says neither what it counts nor that it can be clicked. Scoped to
      this band by the device, so the arrow never points at another band. */
   ctx.globalAlpha = 1;
-  ctx.font = "11px system-ui,sans-serif";
+  ctx.font = "13px system-ui,sans-serif";
   if (offLo > 0) {
     const t = "< spots (" + offLo + ")";
     const tw = ctx.measureText(t).width;
-    ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(2, H - 18, tw + 6, 15);
-    ctx.fillStyle = "#ffb43c";         ctx.fillText(t, 5, H - 7);
-    spotOffBoxes.push({ x: 2, y: H - 18, w: tw + 6, h: 15, hz: offLoHz, mode: null });
+    ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(2, H - 21, tw + 8, 18);
+    ctx.fillStyle = "#ffb43c";         ctx.fillText(t, 6, H - 8);
+    spotOffBoxes.push({ x: 2, y: H - 21, w: tw + 8, h: 18, hz: offLoHz, mode: null });
   }
   if (offHi > 0) {
     const t = "spots (" + offHi + ") >";
     const tw = ctx.measureText(t).width;
-    ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(W - tw - 8, H - 18, tw + 6, 15);
-    ctx.fillStyle = "#ffb43c";         ctx.fillText(t, W - tw - 5, H - 7);
-    spotOffBoxes.push({ x: W - tw - 8, y: H - 18, w: tw + 6, h: 15, hz: offHiHz, mode: null });
+    ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(W - tw - 10, H - 21, tw + 8, 18);
+    ctx.fillStyle = "#ffb43c";         ctx.fillText(t, W - tw - 6, H - 8);
+    spotOffBoxes.push({ x: W - tw - 10, y: H - 21, w: tw + 8, h: 18, hz: offHiHz, mode: null });
   }
   ctx.restore();
 }
@@ -2964,7 +3167,7 @@ function drawSpectrumFlat(bytes) {
   sctx.fillStyle = "#ffb95a"; sctx.fillRect(vfoX-1, 0, 2, H);
 
   /* dB-above-floor scale labels at the gridlines (right edge) */
-  sctx.fillStyle = "#9aa7b4"; sctx.font = "11px system-ui,sans-serif"; sctx.textAlign = "right";
+  sctx.fillStyle = "#9aa7b4"; sctx.font = "13px system-ui,sans-serif"; sctx.textAlign = "right";
   for (const dbAbove of [10, 20, 30]) {
     const q = dbAbove * 2.55;
     const y = H - 1 - Math.round(q * (H-1) / SPEC_RANGE_Q);
@@ -3025,7 +3228,7 @@ function drawSpectrumRaw(bytes) {
   sctx.fillStyle = "#ffb95a"; sctx.fillRect(vfoX-1, 0, 2, H);
 
   /* dBm scale labels at the gridlines (right edge) */
-  sctx.fillStyle = "#9aa7b4"; sctx.font = "11px system-ui,sans-serif"; sctx.textAlign = "right";
+  sctx.fillStyle = "#9aa7b4"; sctx.font = "13px system-ui,sans-serif"; sctx.textAlign = "right";
   for (const db of [-40, -60, -80, -100, -120]) {
     const q = (db + 130) * 255 / 100;
     const y = H - 1 - Math.round(q * (H-1) / 255);

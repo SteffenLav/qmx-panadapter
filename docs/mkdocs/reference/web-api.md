@@ -88,6 +88,30 @@ applied asynchronously (mode and filter writes are queued onto the CAT poll task
 `cq_start` onto the display task), so read `/api/status` to see the result rather
 than assuming it from the response.
 
+### GET /api/tone
+
+The TX audio tone and the live occupancy of the 200-2800 Hz window.
+
+```json
+{ "hz": 1650, "hold": false, "min": 200, "max": 2800, "step": 50,
+  "stations": 14, "busy": "0000000000111110...", "partner_hz": 1750, "busy_tx": false }
+```
+
+`busy` is one character per 50 Hz slot (`1` = a station or its guard band), sent
+as a **string** because 52 bits do not survive JavaScript's number type.
+`stations` is how many decoded stations fed the mask - **zero means the band
+picture is unknown, not empty**, and a caller must say so rather than showing the
+all-clear.
+
+### POST /api/tone
+
+`{"hz":1650}` and/or `{"hold":true}`. Out-of-range frequencies are clamped.
+
+A tone change while a QSO is running is applied to the running exchange first
+(your partner tracks your slot, not your tone). Mid-burst it is **refused with
+409** and the body carries the device's own reason - the preference is not stored
+either, so the two can never end up half-committed.
+
 ### GET /api/memory
 
 All 32 memory channels: `{"slots":[{"idx":0,"occupied":true,"freq_hz":14074000,"mode":"DIGI","label":"FT8"}, ...]}`.
