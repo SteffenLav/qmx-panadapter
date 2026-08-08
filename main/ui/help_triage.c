@@ -63,7 +63,10 @@ static void manual_cb(lv_event_t *e)
 {
     (void)e;
     close_modal();
-    reader_view_show();   // plain manual; Contents is one tap away inside it
+    // Straight to the A-Z index, not the front page. Someone who reaches this
+    // button has a word in mind; the contents list is organised by chapter,
+    // which is the wrong shape for that question.
+    reader_view_open_index();
 }
 
 // Style one row for its current content, or hide it when unused. Rows are created
@@ -180,9 +183,10 @@ static void build(void)
     lv_obj_set_style_radius(man_btn, 8, 0);
     lv_obj_add_event_cb(man_btn, manual_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *man_lbl = lv_label_create(man_btn);
-    // Deliberately NOT "Show all topics": the A-Z index (Layer 4) does not exist
-    // yet, and a button must not promise one. Rename it when the index lands.
-    lv_label_set_text(man_lbl, "Open the manual");
+    // The A-Z index (Layer 4) exists now, so this button can finally promise
+    // what an operator with a word in mind actually wants. It used to read
+    // "Open the manual" precisely because the index did not exist yet.
+    lv_label_set_text(man_lbl, "Look it up (A-Z)");
     lv_obj_set_style_text_color(man_lbl, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(man_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(man_lbl);

@@ -34,6 +34,11 @@ void reader_view_init(lv_obj_t *parent);
 // headings in docs/mkdocs/**, so a renamed heading breaks the build instead of
 // quietly landing users on the top of a long page three releases later.
 void reader_view_open_help(const char *page_rel, const char *anchor);
+
+/* Open the Reader on the A-Z index of every heading in the manual (context
+ * help, Layer 4). Built into manual.bin by tools/pack_manual.py with every
+ * anchor verified at build time. Touch-first: letters, then terms, no typing. */
+void reader_view_open_index(void);
 void reader_view_show(void);   // slide overlay in; kick a (re)load if stale
 void reader_view_hide(void);   // slide overlay out
 bool reader_view_is_active(void);

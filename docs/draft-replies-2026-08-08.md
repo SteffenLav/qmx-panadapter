@@ -177,8 +177,11 @@ that apply to the mode entered over CAT, or only to the front-panel menu? If
 both, I am polling into the hazard and will change it. It would also account for
 a crash report I had months ago that followed use of the SWR Tune submenu.
 
-The quick-menu idea is written down: overlaying a button you do not use with your
-own choice of shortcuts.
+The quick-menu idea is written down. One thing I want to get right before
+building anything: your "overlay one of the current button actions" came just
+after Samuel's request for a quick menu on the QMX's own LCD, so I cannot tell
+whether you meant the radio or the Tab5. If you meant the Tab5, tell me which
+button you would give up and what you would want on it.
 
 ## To Samuel W7STF ALONE — post in the Tab5 panadapter topic
 

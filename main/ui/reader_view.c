@@ -981,6 +981,245 @@ static void parse_toc_file(void)
 }
 
 static void navigate_to(const char *rel, const char *title_hint);
+static void index_btn_cb(lv_event_t *e);
+
+// ---- A-Z index (context help, Layer 4) -------------------------------------
+//
+// Built into manual.bin as index.json by tools/pack_manual.py, one entry per
+// heading in the manual, with every anchor verified at build time.
+//
+// Deliberately NOT a generated markdown page of links: this reader renders
+// links as plain TEXT (only the Contents panel navigates), so an index written
+// that way would look correct and do nothing.
+//
+// Two stages, letters then terms, for a reason that is not cosmetic: 256 terms
+// means 256 LVGL objects, and at this display's ~13 fps building that many at
+// once is a visible stall. A letter holds a couple of dozen.
+#define IDX_MAX        320
+#define IDX_CELL_MAX   96
+typedef struct {
+    char term[72];
+    char path[56];
+    char anchor[72];
+} index_entry_t;
+
+static index_entry_t *s_idx = NULL;      // PSRAM; parsed once, kept
+static int   s_idx_n = 0;
+static lv_obj_t *s_idx_panel = NULL;
+static lv_obj_t *s_idx_btn   = NULL;   // header "A-Z" button
+static lv_obj_t *s_idx_cells[IDX_CELL_MAX];
+static int   s_idx_cell_term[IDX_CELL_MAX];  // -1 = a letter cell / the back cell
+static char  s_idx_cell_letter[IDX_CELL_MAX];
+static int   s_idx_cell_n = 0;
+static int   s_idx_hi = -1;
+static char  s_idx_letter = 0;           // 0 = showing the letter grid
+
+// Which bucket a term belongs to: its first letter, or '#' for anything else.
+static char index_bucket(const char *term)
+{
+    for (const char *p = term; *p; p++) {
+        if (*p >= 'A' && *p <= 'Z') return *p;
+        if (*p >= 'a' && *p <= 'z') return (char)(*p - 'a' + 'A');
+        if (*p > ' ' && (*p < '0' || *p > '9') && *p != '.') break;
+        if (*p >= '0' && *p <= '9') return '#';
+    }
+    return '#';
+}
+
+// Parse index.json out of the embedded manual into a PSRAM array. Once per
+// boot; ~60 KB, which has no business being on any task stack or in internal
+// RAM (CLAUDE.md, "Audit every malloc under ~16 KB").
+static void parse_index_file(void)
+{
+    if (s_idx || s_idx_n) return;
+    const char *data = NULL;
+    size_t n = 0;
+    if (!manual_embed_get("index.json", &data, &n) || !data) {
+        ESP_LOGW(TAG, "index: no index.json in the embedded manual");
+        return;
+    }
+    char *buf = heap_caps_malloc(n + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) return;
+    memcpy(buf, data, n);
+    buf[n] = '\0';
+
+    cJSON *root = cJSON_Parse(buf);
+    heap_caps_free(buf);
+    if (!root) { ESP_LOGW(TAG, "index: index.json did not parse"); return; }
+
+    cJSON *terms = cJSON_GetObjectItem(root, "terms");
+    if (cJSON_IsArray(terms)) {
+        int cnt = cJSON_GetArraySize(terms);
+        s_idx = heap_caps_malloc(sizeof(index_entry_t) * IDX_MAX,
+                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_idx) { cJSON_Delete(root); return; }
+        for (int i = 0; i < cnt && s_idx_n < IDX_MAX; i++) {
+            cJSON *e = cJSON_GetArrayItem(terms, i);
+            cJSON *t = cJSON_GetObjectItem(e, "t");
+            cJSON *p = cJSON_GetObjectItem(e, "p");
+            cJSON *a = cJSON_GetObjectItem(e, "a");
+            if (!cJSON_IsString(t) || !cJSON_IsString(p)) continue;
+            index_entry_t *d = &s_idx[s_idx_n++];
+            snprintf(d->term,   sizeof(d->term),   "%s", t->valuestring);
+            snprintf(d->path,   sizeof(d->path),   "%s", p->valuestring);
+            snprintf(d->anchor, sizeof(d->anchor), "%s",
+                     (cJSON_IsString(a) && a->valuestring) ? a->valuestring : "");
+        }
+    }
+    cJSON_Delete(root);
+    ESP_LOGI(TAG, "index: %d terms", s_idx_n);
+}
+
+static void index_cell_highlight(int k)
+{
+    if (k == s_idx_hi) return;
+    if (s_idx_hi >= 0 && s_idx_hi < s_idx_cell_n)
+        lv_obj_set_style_bg_opa(s_idx_cells[s_idx_hi], LV_OPA_TRANSP, 0);
+    s_idx_hi = k;
+    if (k >= 0 && k < s_idx_cell_n)
+        lv_obj_set_style_bg_opa(s_idx_cells[k], LV_OPA_COVER, 0);
+}
+
+static void index_build(char letter);   // forward: the cells rebuild each other
+
+static lv_obj_t *index_make_cell(lv_obj_t *parent, const char *text, int w, int h,
+                                 bool big, int term_idx, char letter)
+{
+    if (s_idx_cell_n >= IDX_CELL_MAX) return NULL;
+    lv_obj_t *cell = lv_obj_create(parent);
+    lv_obj_set_size(cell, w, h);
+    lv_obj_set_style_bg_color(cell, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_bg_opa(cell, LV_OPA_TRANSP, 0);     // highlight paints this
+    lv_obj_set_style_border_width(cell, 0, 0);
+    lv_obj_set_style_radius(cell, 6, 0);
+    lv_obj_set_style_pad_all(cell, 4, 0);
+    lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(cell, LV_OBJ_FLAG_CLICKABLE);      // the panel does the picking
+    lv_obj_t *lbl = lv_label_create(cell);
+    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(lbl, w - 16);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_font(lbl, big ? &lv_font_montserrat_32 : &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(lbl, lv_color_hex(big ? 0xE8C060 : 0xFFFFFF), 0);
+    lv_obj_center(lbl);
+    s_idx_cell_term[s_idx_cell_n]   = term_idx;
+    s_idx_cell_letter[s_idx_cell_n] = letter;
+    s_idx_cells[s_idx_cell_n++]     = cell;
+    return cell;
+}
+
+// letter == 0 -> the A-Z grid; otherwise that letter's terms.
+static void index_build(char letter)
+{
+    if (!s_idx_panel) return;
+    lv_obj_clean(s_idx_panel);
+    s_idx_cell_n = 0;
+    s_idx_hi = -1;
+    s_idx_letter = letter;
+    lv_obj_scroll_to_y(s_idx_panel, 0, LV_ANIM_OFF);
+
+    if (letter == 0) {
+        // Letter grid. Only buckets that actually hold something are offered -
+        // a dead letter is a promise the index cannot keep.
+        const int CW = 120, CH = 84, COLS = 8, GAP = 12;
+        const char *alphabet = "#ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        int shown = 0;
+        for (const char *L = alphabet; *L; L++) {
+            bool any = false;
+            for (int i = 0; i < s_idx_n; i++)
+                if (index_bucket(s_idx[i].term) == *L) { any = true; break; }
+            if (!any) continue;
+            char txt[2] = { *L, 0 };
+            lv_obj_t *c = index_make_cell(s_idx_panel, txt, CW, CH, true, -1, *L);
+            if (c) lv_obj_set_pos(c, (shown % COLS) * (CW + GAP) + 8,
+                                     (shown / COLS) * (CH + GAP) + 8);
+            shown++;
+        }
+        if (s_title_lbl) lv_label_set_text(s_title_lbl, "Index");
+        return;
+    }
+
+    // Terms for one letter. First cell goes back to the grid, so the way out is
+    // always the same gesture as the way in.
+    const int W = SCR_W - 96, H = 56;
+    int row = 0;
+    lv_obj_t *back = index_make_cell(s_idx_panel, LV_SYMBOL_LEFT "  All letters",
+                                     W, H, false, -1, 0);
+    if (back) lv_obj_set_pos(back, 8, 8);
+    row++;
+    for (int i = 0; i < s_idx_n && s_idx_cell_n < IDX_CELL_MAX; i++) {
+        if (index_bucket(s_idx[i].term) != letter) continue;
+        lv_obj_t *c = index_make_cell(s_idx_panel, s_idx[i].term, W, H, false, i, 0);
+        if (c) lv_obj_set_pos(c, 8, row * (H + 6) + 8);
+        row++;
+    }
+    if (s_title_lbl) {
+        char t[16];
+        snprintf(t, sizeof(t), "Index - %c", letter);
+        lv_label_set_text(s_title_lbl, t);
+    }
+}
+
+// Open (or close) the index. Closing the Contents panel first, since only one
+// of the two may be up.
+static void index_panel_set_open(bool open)
+{
+    if (!s_idx_panel) return;
+    if (open) {
+        parse_index_file();
+        if (s_toc_panel) lv_obj_add_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN);
+        index_build(0);
+        lv_obj_clear_flag(s_idx_panel, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_idx_panel);
+    } else {
+        lv_obj_add_flag(s_idx_panel, LV_OBJ_FLAG_HIDDEN);
+        if (s_title_lbl) lv_label_set_text(s_title_lbl, s_page_title);
+    }
+}
+
+static void index_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    bool up = s_idx_panel && !lv_obj_has_flag(s_idx_panel, LV_OBJ_FLAG_HIDDEN);
+    index_panel_set_open(!up);
+}
+
+// Same drag-to-pick as the Contents panel: highlight follows the finger, the
+// release commits. Attached to the panel because the cells are inert.
+static void index_drag_cb(lv_event_t *e)
+{
+    lv_event_code_t code = lv_event_get_code(e);
+    if (code == LV_EVENT_PRESSED || code == LV_EVENT_PRESSING) {
+        lv_indev_t *indev = lv_event_get_indev(e);
+        if (!indev) return;
+        lv_point_t p; lv_indev_get_point(indev, &p);
+        int hit = -1;
+        for (int k = 0; k < s_idx_cell_n; k++) {
+            lv_area_t a; lv_obj_get_coords(s_idx_cells[k], &a);
+            if (p.x >= a.x1 && p.x <= a.x2 && p.y >= a.y1 && p.y <= a.y2) { hit = k; break; }
+        }
+        index_cell_highlight(hit);
+    } else if (code == LV_EVENT_RELEASED) {
+        int k = s_idx_hi;
+        index_cell_highlight(-1);
+        if (k < 0 || k >= s_idx_cell_n) return;
+        int ti = s_idx_cell_term[k];
+        char lt = s_idx_cell_letter[k];
+        if (ti < 0) {                       // a letter cell, or "All letters"
+            index_build(lt);                // lt == 0 rebuilds the grid
+            return;
+        }
+        if (ti < s_idx_n) {
+            lv_obj_add_flag(s_idx_panel, LV_OBJ_FLAG_HIDDEN);
+            snprintf(s_want_anchor, sizeof(s_want_anchor), "%s", s_idx[ti].anchor);
+            s_anchor_reported = false;
+            s_anchor_obj = NULL;
+            navigate_to(s_idx[ti].path, NULL);
+        }
+    } else if (code == LV_EVENT_PRESS_LOST) {
+        index_cell_highlight(-1);
+    }
+}
 
 // One TOC entry into column `col`. Style driven purely by nav depth (level):
 //   level 0  -> gold 32 px  (section headers AND top pages read identically)
@@ -1224,6 +1463,16 @@ void reader_view_open_help(const char *page_rel, const char *anchor)
     reader_view_show();
 }
 
+// Open the Reader straight onto the A-Z index. This is what the "Need
+// guidance?" panel's bottom button does: the operator already knows the word
+// they are looking for, and the contents list is the wrong shape for that.
+void reader_view_open_index(void)
+{
+    s_want_anchor[0] = '\0';
+    reader_view_show();
+    index_panel_set_open(true);
+}
+
 // Exit: leave the Reader entirely (returns to whatever mode was underneath).
 static void exit_btn_cb(lv_event_t *e)
 {
@@ -1373,6 +1622,19 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_font(toc_btn_lbl, &lv_font_montserrat_24, 0);
     lv_label_set_text(toc_btn_lbl, "Contents");
 
+    // A-Z index, beside Contents. Contents answers "what is in here"; this one
+    // answers "where is the thing I already know the name of".
+    s_idx_btn = lv_button_create(s_overlay);
+    lv_obj_align(s_idx_btn, LV_ALIGN_TOP_LEFT, 500, BTN_Y);
+    lv_obj_set_style_bg_color(s_idx_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_pad_hor(s_idx_btn, 20, 0);
+    lv_obj_set_height(s_idx_btn, BTN_H);
+    lv_obj_set_ext_click_area(s_idx_btn, 44);
+    lv_obj_add_event_cb(s_idx_btn, index_btn_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *idx_btn_lbl = lv_label_create(s_idx_btn);
+    lv_obj_set_style_text_font(idx_btn_lbl, &lv_font_montserrat_24, 0);
+    lv_label_set_text(idx_btn_lbl, "A-Z");
+
     // Save offline (right end, SD only). Label flips to "Saved offline - update?"
     // (The "Save offline" button used to live here, top-right. Removed: the manual
     // is built into the firmware, so there is nothing to download or save.)
@@ -1432,6 +1694,25 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_add_event_cb(s_toc_panel, toc_drag_cb, LV_EVENT_PRESS_LOST, NULL);
     lv_obj_set_scrollbar_mode(s_toc_panel, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_add_flag(s_toc_panel, LV_OBJ_FLAG_HIDDEN);
+
+    // A-Z index panel (Layer 4). Same surface and same drag-to-pick as Contents,
+    // but absolutely positioned and SCROLLABLE - a busy letter runs past the
+    // bottom of the screen, which the two-column contents never does.
+    s_idx_panel = lv_obj_create(s_overlay);
+    lv_obj_remove_style_all(s_idx_panel);
+    lv_obj_set_size(s_idx_panel, SCR_W, SCR_H - HEADER_H);
+    lv_obj_set_pos(s_idx_panel, 0, HEADER_H);
+    lv_obj_set_style_bg_color(s_idx_panel, lv_color_hex(0x0a0d10), 0);
+    lv_obj_set_style_bg_opa(s_idx_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_pad_hor(s_idx_panel, 40, 0);
+    lv_obj_set_style_pad_ver(s_idx_panel, 20, 0);
+    lv_obj_add_flag(s_idx_panel, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_idx_panel, index_drag_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(s_idx_panel, index_drag_cb, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(s_idx_panel, index_drag_cb, LV_EVENT_RELEASED, NULL);
+    lv_obj_add_event_cb(s_idx_panel, index_drag_cb, LV_EVENT_PRESS_LOST, NULL);
+    lv_obj_set_scrollbar_mode(s_idx_panel, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_add_flag(s_idx_panel, LV_OBJ_FLAG_HIDDEN);
 
     // Keep the header bar and its buttons above the body so the buttons' large
     // ext_click_area — which reaches BELOW the bar — wins the touch there
