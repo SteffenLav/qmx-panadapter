@@ -1,6 +1,12 @@
 # Draft replies, groups.io, 2026-08-08
 
-Five replies. For the operator to review and post — nothing posts automatically.
+Four replies. For the operator to review and post — nothing posts automatically.
+(Samuel's Bluetooth-mouse answer is folded into the Stan/Band-config one, so he
+gets a single message rather than two.)
+
+There is a FIFTH, older and still unposted, in its own file:
+docs/draft-reply-orderly-shutdown-2026-08-07.md (Roger AD5DZ and Stan, the
+orderly-USB-shutdown experiment — a negative result).
 
 Nothing here was posted on 2026-08-07, so the Roy reply below folds together his
 FT8 evening batch AND his CW request from the following day.
