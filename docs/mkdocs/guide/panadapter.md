@@ -4,24 +4,18 @@ The panadapter is your primary view — a real-time spectrum analyser and waterf
 
 ### 1. Layout
 
+```qmxdiagram
+type: stack
+title: The panadapter screen, top to bottom
+row: 60 Top bar | frequency, mode, filter width, S-meter, zoom
+row: 200 Spectrum | green trace, amber VFO cursor, tinted passband
+row: 18 Frequency axis | absolute MHz labels
+row: 412 Waterfall | newest row at the top, SDR gradient
+row: 30 Status bar | battery, UTC clock, WiFi
+note: amber | the VFO cursor sits at the dial frequency; in USB the passband tint runs upward from it, in LSB downward
+note: dim | the top-right 200 x 120 of the spectrum is a deadzone, so a tap near the drawer grip cannot retune you
 ```
-┌─────────────────────────────────────────────────────────┐
-│ 14.074 | USB | 2.5 kHz | S7 | 1.0x        [⚙️ settings] │  Top bar (60px)
-├─────────────────────────────────────────────────────────┤
-│                    ╱╲                                    │  Spectrum (200px)
-│           ____╱╲_╱  ╲____                                │  Green trace,
-│        ╱╲╱                ╲                               │  amber VFO,
-│ ┼─────┼─────────────────────────────┼                     │  grey passband
-├─ 14.0  14.05  14.10  14.15  14.20 ─┤  Frequency axis    │
-│                                     │  (18px)            │
-│ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │  Waterfall        │
-│ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │  (412px)          │
-│ ░░░░░▓▓▓░░░░░░░░░░░░░░▓▓░░░░░░░░░░ │  Newest at top    │
-│ ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │  SDR gradient     │
-├─────────────────────────────────────────────────────────┤
-│ Battery 95%  FPS: 30   SD  v1.1.0   Waterfall         │  Status bar (30px)
-└─────────────────────────────────────────────────────────┘
-```
+
 
 **Status bar indicators:**
 

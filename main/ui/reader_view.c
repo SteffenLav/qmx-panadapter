@@ -11,6 +11,7 @@
 #include "reader_view.h"
 #include "reader_net.h"
 #include "ui_theme.h"
+#include "reader_diagram.h"
 #include "ui.h"                 // ui_help_overlay_changed()
 #include "net/manual_embed.h"   // pages are read straight from the embedded manual
 #include "storage/sd_archive.h"
@@ -680,6 +681,7 @@ static void render_markdown(char *buf)
     char *code    = S->code;    size_t code_len = 0;   // accumulated code-block text
     char *cleaned = S->cleaned;                        // reused per block (single-threaded)
     bool in_code = false;
+    bool in_diagram = false;   // the open fence is a ```qmxdiagram
     bool in_table = false;   // accumulating consecutive '|' rows into `code`
     bool in_frontmatter = false;
     int  block_count = 0;
@@ -720,8 +722,24 @@ static void render_markdown(char *buf)
 
         // fenced code block ``` or ~~~ (pymdownx superfences: language/opts follow)
         if (strncmp(t, "```", 3) == 0 || strncmp(t, "~~~", 3) == 0) {
-            if (in_code) { code[code_len] = '\0'; add_code_block(code); code_len = 0; block_count++; in_code = false; }
-            else         { FLUSH_PARA(); in_code = true; code_len = 0; }
+            if (in_code) {
+                code[code_len] = '\0';
+                // A ```qmxdiagram fence is a drawing, not code - see
+                // ui/reader_diagram.h for why the manual's pictures stopped
+                // being made of characters. If the spec is unusable the
+                // renderer returns NULL and we show the raw text, so a bad
+                // diagram degrades to something readable rather than to a gap.
+                lv_obj_t *drawn = NULL;
+                if (in_diagram) {
+                    drawn = reader_diagram_add(s_body, code, SCR_W - 2 * BODY_PAD_X);
+                }
+                if (!drawn) add_code_block(code);
+                code_len = 0; block_count++; in_code = false; in_diagram = false;
+            } else {
+                FLUSH_PARA();
+                in_code = true; code_len = 0;
+                in_diagram = (strncasecmp(t + 3, "qmxdiagram", 10) == 0);
+            }
             continue;
         }
         if (in_code) {
@@ -1637,7 +1655,11 @@ void reader_view_init(lv_obj_t *parent)
     // A-Z index, beside Contents. Contents answers "what is in here"; this one
     // answers "where is the thing I already know the name of".
     s_idx_btn = lv_button_create(s_overlay);
-    lv_obj_align(s_idx_btn, LV_ALIGN_TOP_LEFT, 500, BTN_Y);
+    // Right-hand end, not beside Contents: the gold page title is anchored at
+    // x=520 and a button at 500 lands underneath it. The old "Save offline"
+    // slot over here is free, and Back/Exit/Contents on the left with A-Z on
+    // the right splits "move around the book" from "look something up".
+    lv_obj_align(s_idx_btn, LV_ALIGN_TOP_RIGHT, -40, BTN_Y);
     lv_obj_set_style_bg_color(s_idx_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
     lv_obj_set_style_pad_hor(s_idx_btn, 20, 0);
     lv_obj_set_height(s_idx_btn, BTN_H);
@@ -1733,6 +1755,11 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_move_foreground(back_btn);
     lv_obj_move_foreground(exit_btn);
     lv_obj_move_foreground(s_toc_btn);
+    // A-Z too. hdr is raised above the whole overlay two lines up, so any
+    // header control missing from this list is painted over by the bar it
+    // sits in - which is precisely how this one went invisible while
+    // reporting a perfectly good x/y/w/h and hidden=0.
+    if (s_idx_btn) lv_obj_move_foreground(s_idx_btn);
     if (s_banner) lv_obj_move_foreground(s_banner);
 
     s_timer = lv_timer_create(tick_cb, 250, NULL);

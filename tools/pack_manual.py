@@ -176,6 +176,80 @@ def verify_index(docs_dir, terms):
     print("pack_manual: %d index anchor(s) verified" % sum(1 for e in terms if e["a"]))
 
 
+DIAGRAM_KEYS = {
+    "flow":     {"title", "node", "branch", "note"},
+    "stack":    {"title", "row", "note"},
+    "timeline": {"title", "span", "seg", "mark", "tick", "note"},
+}
+
+
+def verify_diagrams(docs_dir, pages):
+    """Check every ```qmxdiagram spec parses before it reaches the device.
+
+    The C renderer degrades to raw text on a bad spec rather than crashing, but
+    a diagram that silently renders as a wall of `key: value` lines is exactly
+    the sort of rot that went unnoticed in the character drawings for years.
+    Fail the build instead."""
+    bad, count = [], 0
+    for p in pages:
+        rel = p.get("path")
+        if not rel:
+            continue
+        src = os.path.join(docs_dir, rel)
+        if not os.path.isfile(src):
+            continue
+        with open(src, encoding="utf-8") as f:
+            body = f.read()
+        for m in re.finditer(r"```qmxdiagram\n(.*?)```", body, re.S):
+            count += 1
+            spec = m.group(1)
+            where = "%s (diagram %d)" % (rel, count)
+            fields = {}
+            for raw in spec.splitlines():
+                line = raw.strip()
+                if not line:
+                    continue
+                if ":" not in line:
+                    bad.append("%s: line is not 'key: value': %r" % (where, line[:50]))
+                    continue
+                k = line.split(":", 1)[0].strip().lower()
+                fields.setdefault(k, []).append(line.split(":", 1)[1].strip())
+            kind = (fields.get("type") or [""])[0].lower()
+            if kind not in DIAGRAM_KEYS:
+                bad.append("%s: unknown or missing type %r" % (where, kind))
+                continue
+            allowed = DIAGRAM_KEYS[kind] | {"type"}
+            for k in fields:
+                if k not in allowed:
+                    bad.append("%s: %r is not valid in a %s diagram" % (where, k, kind))
+            if kind == "timeline":
+                if "span" not in fields:
+                    bad.append("%s: timeline has no span" % where)
+                if "seg" not in fields:
+                    bad.append("%s: timeline has no segments" % where)
+                else:
+                    span = float(fields["span"][0]) if "span" in fields else 0
+                    for seg in fields["seg"] + fields.get("mark", []):
+                        rng = seg.split()[0]
+                        try:
+                            a, b = (float(x) for x in rng.split("-", 1))
+                        except ValueError:
+                            bad.append("%s: segment %r is not <a>-<b>" % (where, rng))
+                            continue
+                        if b <= a:
+                            bad.append("%s: segment %r ends before it starts" % (where, rng))
+                        if span and b > span + 1e-6:
+                            bad.append("%s: segment %r runs past the %g span" % (where, rng, span))
+            if kind == "flow" and "node" not in fields:
+                bad.append("%s: flow has no nodes" % where)
+            if kind == "stack" and "row" not in fields:
+                bad.append("%s: stack has no rows" % where)
+    if bad:
+        sys.exit("diagram specs did not check out:\n  " + "\n  ".join(bad))
+    if count:
+        print("pack_manual: %d diagram spec(s) verified" % count)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--docs", required=True, help="mkdocs docs_dir (markdown root)")
@@ -196,6 +270,7 @@ def main():
 
     # toc.json first so the reader can always find it, then the A-Z index, then
     # every real page.
+    verify_diagrams(a.docs, pages)
     index_terms = build_index(a.docs, pages)
     verify_index(a.docs, index_terms)
     index_bytes = json.dumps({"terms": index_terms}, indent=1).encode("utf-8")

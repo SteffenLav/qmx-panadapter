@@ -16,6 +16,7 @@
 #include "ft8_status.h"       // ft8_status_get
 #include "dsp.h"              // dsp_get_peak_dbm_around_vfo
 #include "display/display.h"  // display_lock / display_unlock
+#include "ui/reader_view.h"   // reader_view_open_help - the /api/cmd "help" action
 #include "screenshot/screenshot.h"  // screenshot_capture_rgb565
 #include "diag_log.h"         // diag_log_size / diag_log_snapshot
 #include "adif/adif_log.h"    // adif_log_count / adif_log_file_path / adif_log_clear
@@ -535,6 +536,25 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // Un-skip everyone - band conditions change, and a station that timed
         // out an hour ago may be perfectly workable now.
         ft8_greylist_clear_all();
+    } else if (action && strcmp(action, "help") == 0) {
+        // Open the Tab5's own manual at a page (and optionally a heading), the
+        // same call the context-help buttons make. Sending someone to the right
+        // page from the browser is squarely in the parity theme, and it is also
+        // the only way to see a Reader change without a finger on the glass.
+        //
+        // display_lock is recursive and safe cross-thread - the same reason
+        // ui_toast() takes it when the decode task calls it.
+        const char *page = cJSON_GetStringValue(cJSON_GetObjectItem(root, "page"));
+        const char *anch = cJSON_GetStringValue(cJSON_GetObjectItem(root, "anchor"));
+        if (!page || !page[0]) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "help needs a page");
+            return ESP_FAIL;
+        }
+        if (display_lock(500)) {
+            reader_view_open_help(page, anch);
+            display_unlock();
+        }
     } else if (action && strcmp(action, "pause") == 0) {
         // Release the radio to its own front panel (Stan's pause button, via
         // Samuel W7STF). Reachable from the browser as well as the drawer for
