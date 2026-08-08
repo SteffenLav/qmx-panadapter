@@ -64,6 +64,7 @@ char *config_io_export(size_t *out_len)
     APP("wf_window          = %u\n", (unsigned)c.wf_window);
     APP("display_flip       = %s\n", yn(c.display_flip));
     APP("qmx_vol_db         = %u\n", (unsigned)c.qmx_vol_db);
+    APP("cw_tx_offset_hz    = %d\n", (int)c.cw_tx_offset_hz);   // 0 = off (CW only)
     APP("cw_audio_vol       = %u\n", (unsigned)c.cw_audio_vol);
     APP("charge_limit       = %s\n", yn(c.charge_limit_en));
     APP("charge_limit_pct   = %u\n", (unsigned)c.charge_limit_pct);
@@ -97,6 +98,7 @@ char *config_io_export(size_t *out_len)
     APP("2 = %s\n", c.cq_msg[1]);
     APP("3 = %s\n", c.cq_msg[2]);
     APP("stop_after = %u\n", (unsigned)c.cq_max_calls);   // 0 = keep calling
+    APP("listen_every = %u\n", (unsigned)c.cq_listen_every);  // 0 = never pause to listen
 
     APP("\n[ft8_filters]\n");
     APP("include1_on = %s\n", yn(c.ft8_filters.incl_en[0]));
