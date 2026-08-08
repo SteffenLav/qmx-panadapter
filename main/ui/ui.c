@@ -6874,7 +6874,7 @@ static void drawer_close(void)
 static void drawer_set_ft8_mode(bool ft8)
 {
     if (!s_drawer) return;
-    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_QMXVOL, DRAWER_SEC_SLEEP, DRAWER_SEC_CHARGE, DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY };
+    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_QMXVOL, DRAWER_SEC_QMXRF, DRAWER_SEC_SLEEP, DRAWER_SEC_CHARGE, DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_PAUSE, DRAWER_SEC_USBSHUT };
     // Heights must line up 1:1 with keep[] above (same order) - each is the
     // height passed to that section's own drawer_section(ID, y, height) call.
     // (WiFi is 72, matching its drawer_section call - was mistakenly 128, which
@@ -6884,8 +6884,13 @@ static void drawer_set_ft8_mode(bool ft8)
     //  is 168 since it gained the PSK Reporter row - it was left at 112, so
     //  the Simulation-Mode section below it drew ON TOP of that row.)
     // (QMXVOL is 96, matching its drawer_section call - same geometry as the
-    //  brightness slider it was copied from.)
-    static const int keep_h[] = { 56, 96, 124, 136, 96, 168, 56, 72, 72 };
+    //  brightness slider it was copied from. QMXRF is 96 for the same reason.)
+    // (PAUSE and USBSHUT are 72 each. USBSHUT was NOT in this list before, which
+    //  contradicted its own comment at the #define - "kept in BOTH modes, the
+    //  moment you need it is whichever screen you happen to be on" - and it was
+    //  in fact invisible in FT8. Same argument applies to PAUSE: you reach for
+    //  it because the radio is in front of you, not because of the screen.)
+    static const int keep_h[] = { 56, 96, 96, 124, 136, 96, 168, 56, 72, 72, 72, 72 };
     const int n_keep = sizeof(keep) / sizeof(keep[0]);
 
     // Antenna Tune: shown only in Panadapter mode with confirmed 1_04+
