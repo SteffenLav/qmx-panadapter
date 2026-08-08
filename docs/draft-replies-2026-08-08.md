@@ -1,8 +1,14 @@
 # Draft replies, groups.io, 2026-08-08
 
-Four replies. For the operator to review and post — nothing posts automatically.
-(Samuel's Bluetooth-mouse answer is folded into the Stan/Band-config one, so he
-gets a single message rather than two.)
+Five replies, each headed with WHERE it goes — they span two different threads,
+so posting the right text in the right place matters. For the operator to review
+and post; nothing posts automatically.
+
+  1. Roy KI0ER            -> panadapter topic
+  2. Michael KZ4LY        -> panadapter topic
+  3. Samuel W7STF + Stan  -> Band config thread (#176111)
+  4. Samuel W7STF alone   -> panadapter topic (Bluetooth mouse)
+  5. BD4AHS               -> panadapter topic
 
 There is a FIFTH, older and still unposted, in its own file:
 docs/draft-reply-orderly-shutdown-2026-08-07.md (Roger AD5DZ and Stan, the
@@ -122,7 +128,11 @@ binaural comes with it, and doing it on the Tab5 has one advantage over doing it
 in the radio: the Tab5 knows where every signal sits in the passband, so the
 stereo image can follow the spectrum rather than being a fixed 45 degrees.
 
-## To Samuel W7STF and Stan KC7XE — the Band config thread
+## To Samuel W7STF AND Stan KC7XE — post in the Band config thread (#176111)
+
+Both of them are in that thread, and everything below is about what they raised
+there. The Bluetooth mouse is NOT here — it belongs to the panadapter topic and
+is a separate message to Samuel alone, further down.
 
 Samuel, Stan — both of Stan's suggestions are in the next build, and the Band
 config behaviour now makes sense.
@@ -192,17 +202,32 @@ Your quick-menu idea is a good one and I have written it down: overlaying a
 button you do not use (presets, in your case) with your own choice of shortcuts.
 That is the right shape for it — configurable, not another fixed row of buttons.
 
-On the Bluetooth mouse from your earlier note: a USB mouse already works today,
-but only with the radio unplugged — the Tab5 has one USB host port, and sharing
-it needs a hub, which needs a feature (a transaction translator) the ESP32-P4's
-USB stack does not implement. So the mouse is currently for setup and log
-reading, not operating. Bluetooth is the right long-term answer and the Tab5's
-radio chip supports it; the honest reason it is not done is that Bluetooth runs
-through the same co-processor link as WiFi, which has been the most fragile part
-of this system, and I am not ready to add a subsystem to that link while it is
-finally behaving. Deferred, not rejected. Meanwhile most of what a mouse would do
-from across the desk you can now do from any browser on your WiFi, including
-replying to stations and tuning.
+## To Samuel W7STF ALONE — post in the Tab5 panadapter topic
+
+This is the Bluetooth-mouse answer, which came from the panadapter topic rather
+than the Band config thread. It ends by pointing at the other message so he does
+not have to wonder where his relayed suggestions went.
+
+Samuel — on the Bluetooth mouse: a USB mouse already works today, but only with
+the radio unplugged. The Tab5 has one USB host port, and sharing it needs a hub,
+which needs a feature (a transaction translator) that the ESP32-P4's USB stack
+does not implement. So the mouse is currently for setup and log reading, not
+operating.
+
+Bluetooth is the right long-term answer for using one while operating, and the
+Tab5's radio chip does support it. The honest reason it is not done: Bluetooth
+runs through the same co-processor link as WiFi, which has been the most fragile
+part of this whole system, and I am not ready to add a new subsystem to that link
+while it is finally behaving. Deferred, not rejected.
+
+Meanwhile, most of what a mouse would do from across the desk you can now do from
+any browser on your WiFi — including replying to stations and tuning — which may
+scratch some of the same itch.
+
+And thank you for relaying Stan's two suggestions. Both are built: RF gain over
+CAT, and a "Release radio" pause for getting at the QMX's menus. I have answered
+those properly over in the Band config thread, along with what I think is going
+on with the QMX+ reboot you reproduced there.
 
 ## To BD4AHS — power reading rise time
 
