@@ -195,6 +195,17 @@ void cat_user_pause_set(bool paused)
     if (s_user_paused == paused) return;
     s_user_paused = paused;
     if (paused) {
+        // Drop anything queued but not yet sent. These would otherwise flush
+        // the moment we resume - minutes later, describing a radio state the
+        // operator has since changed by hand in the very menu they paused us
+        // to use.
+        s_pending_mode_digit    = 0;
+        s_pending_ssb_bw        = 0;
+        s_pending_cw_passband   = 0;
+        s_pending_af_gain_p1    = 0;
+        s_pending_rf_gain_p1    = 0;
+        s_af_gain_query_pending = false;
+        s_rf_gain_query_pending = false;
         ESP_LOGI(TAG, "CAT paused by operator - radio released (no polling)");
     } else {
         // Coming back: the radio may have been through its own menu, which can

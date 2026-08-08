@@ -658,6 +658,15 @@ bool ft8_tx_arm(const ft8_tx_request_t *req, char *out_err, size_t out_err_len)
         return false;
     }
 
+    // The operator has released the radio to its own front panel. Arming here
+    // would key it from under their hands mid-menu: the TX burst writes TX;/TA;
+    // straight to the CDC pipe and does NOT go through the paused poll task, so
+    // the pause has to be enforced at this end too.
+    if (cat_user_pause_active()) {
+        if (out_err) snprintf(out_err, out_err_len, "Radio released - take it back first");
+        return false;
+    }
+
     // ---- Digi-mode pre-flight (slow path - runs OUTSIDE the lock, so the
     // status getter / UI indicator stay responsive while this blocks the
     // calling task for up to ~1s). See ft8_tx.h doc comment + plan §5 for
@@ -781,6 +790,12 @@ bool ft8_tx_get_parity_lock(bool *want_even)
 bool ft8_tx_should_run_this_slot(int64_t slot_start_ms, ft8_tx_request_t *out)
 {
     if (!out) return false;
+
+    // Belt and braces against a pause that arrived AFTER something was armed:
+    // ft8_tx_arm() already refuses while the radio is released, but a request
+    // armed a slot earlier is still sitting there waiting for its boundary, and
+    // that boundary must not key a radio the operator is holding.
+    if (cat_user_pause_active()) return false;
 
     lock();
     bool fire = false;

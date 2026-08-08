@@ -92,6 +92,12 @@ static void action_btn_cb(lv_event_t *e)
         do_stop(NULL);  // status label + button already show the exit; no toast
         return;
     }
+    // Tune keys a steady carrier. Not while the operator has released the radio
+    // to its own menu - the mode write would land in whatever they are doing.
+    if (cat_user_pause_active()) {
+        ui_toast("Radio released - take it back before tuning");
+        return;
+    }
     const char *cur = cat_get_mode_str();
     strncpy(s_prior_mode, (cur && cur[0]) ? cur : "USB", sizeof(s_prior_mode) - 1);
     s_prior_mode[sizeof(s_prior_mode) - 1] = '\0';

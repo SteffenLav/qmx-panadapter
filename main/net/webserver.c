@@ -213,6 +213,9 @@ static bool web_tune_start(void)
     if (s_web_tune_active) return true;               // idempotent
     // Never over an FT8 burst - the poll pause and the mode write would fight.
     if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ACTIVE) return false;
+    // Never while the operator has released the radio: Tune keys a carrier, and
+    // the mode write it needs would go into a menu they are standing in front of.
+    if (cat_user_pause_active()) return false;
     const char *cur = cat_get_mode_str();
     snprintf(s_web_tune_prior, sizeof(s_web_tune_prior), "%s",
              (cur && cur[0] && strcmp(cur, "TUNE") != 0) ? cur : "USB");
