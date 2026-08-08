@@ -332,7 +332,7 @@ Three UI follow-ups shipped same day once the underlying math was confirmed fixe
 +----------------------------------------------------------+
 | Waterfall 412 px — newest row at top, SDR gradient       |
 +----------------------------------------------------------+
-| Bottom bar 30 px — status / span / fps                   |
+| Bottom bar 30 px — battery | UTC clock | WiFi (3 zones)  |
 +----------------------------------------------------------+
 ```
 
