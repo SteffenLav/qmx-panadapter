@@ -257,8 +257,8 @@ static void panel_buttons(lv_obj_t *root, char *csv, lv_coord_t inner_w)
         // the mock-up carries the same colour language as the real dialog.
         uint32_t bg = UI_COLOR_PRIMARY;
         size_t len = strlen(label);
-        if (len && label[len-1] == '!') { bg = 0x962020; label[len-1] = ' '; }
-        else if (len && label[len-1] == '+') { bg = 0x2A6B3C; label[len-1] = ' '; }
+        if (len && label[len-1] == '!') { bg = 0x962020; label[len-1] = '\0'; }
+        else if (len && label[len-1] == '+') { bg = 0x2A6B3C; label[len-1] = '\0'; }
         trim(label);
         lv_obj_t *b = lv_obj_create(row);
         lv_obj_set_height(b, LV_SIZE_CONTENT);
