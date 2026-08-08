@@ -177,11 +177,18 @@ that apply to the mode entered over CAT, or only to the front-panel menu? If
 both, I am polling into the hazard and will change it. It would also account for
 a crash report I had months ago that followed use of the SWR Tune submenu.
 
-The quick-menu idea is written down. One thing I want to get right before
-building anything: your "overlay one of the current button actions" came just
-after Samuel's request for a quick menu on the QMX's own LCD, so I cannot tell
-whether you meant the radio or the Tab5. If you meant the Tab5, tell me which
-button you would give up and what you would want on it.
+On the quick menu: Samuel has since confirmed he meant the QMX itself, so that
+one is Hans's to weigh, and I agree with the reasoning behind it — plenty of
+people run these radios without any second screen, and a limited LCD and two
+encoders is a much harder problem than a touchscreen.
+
+For the Tab5 the same idea is worth doing on its own merits, and the web page is
+probably where it earns most: the browser already reaches almost everything the
+Tab5 does, and the things you would want on a shortcut — RF gain, volume, the CW
+transmit offset, releasing the radio — are exactly the ones you want without
+hunting. I am not going to guess the contents. If either of you has a shortlist
+of what you would put on it, and whether you would rather it replaced something
+or sat beside it, that would shape it better than my guessing.
 
 ## To Samuel W7STF ALONE — post in the Tab5 panadapter topic
 
