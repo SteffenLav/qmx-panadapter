@@ -192,6 +192,89 @@ static void stack_row(lv_obj_t *root, int px, const char *name, const char *capt
     lv_obj_set_flex_grow(cl, 1);
 }
 
+// ---- panel -----------------------------------------------------------------
+// A mock-up of one of the app's own modals. Worth drawing rather than
+// describing: both of the manual's modal pictures had drifted out of date
+// (radio buttons where the real dialog has checkboxes, a title that no longer
+// exists, two cycle buttons it had never heard of), and a picture that looks
+// like the screen makes that kind of rot obvious.
+
+static void panel_row(lv_obj_t *root, const char *text, lv_coord_t inner_w)
+{
+    // "[x] label" / "[ ] label" render as a real checkbox, anything else as a
+    // plain row. The spec stays readable as text either way.
+    bool has_box = (text[0] == '[' && text[2] == ']');
+    bool checked = has_box && (text[1] == 'x' || text[1] == 'X');
+    const char *label = has_box ? skip_ws(text + 3) : text;
+
+    lv_obj_t *row = lv_obj_create(root);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, inner_w);
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(row, 10, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    if (has_box) {
+        lv_obj_t *box = lv_obj_create(row);
+        lv_obj_set_size(box, 22, 22);
+        lv_obj_set_style_radius(box, 4, 0);
+        lv_obj_set_style_bg_color(box, lv_color_hex(checked ? UI_COLOR_PRIMARY : DIAG_SURFACE), 0);
+        lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_color(box, lv_color_hex(checked ? UI_COLOR_PRIMARY : DIAG_LINE), 0);
+        lv_obj_set_style_border_width(box, 2, 0);
+        lv_obj_set_style_margin_top(box, 6, 0);
+        lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+        if (checked) {
+            lv_obj_t *tick = lv_label_create(box);
+            lv_label_set_text(tick, LV_SYMBOL_OK);
+            lv_obj_set_style_text_color(tick, lv_color_hex(0xFFFFFF), 0);
+            lv_obj_set_style_text_font(tick, &lv_font_montserrat_14, 0);
+            lv_obj_center(tick);
+        }
+    }
+    lv_obj_t *field_box = make_box(row, DIAG_SURFACE, DIAG_LINE);
+    lv_obj_set_height(field_box, LV_SIZE_CONTENT);
+    lv_obj_set_style_pad_all(field_box, 8, 0);
+    lv_obj_set_flex_grow(field_box, 1);
+    make_label(field_box, label, &lv_font_montserrat_18, DIAG_INK, inner_w - (has_box ? 80 : 46));
+}
+
+static void panel_buttons(lv_obj_t *root, char *csv, lv_coord_t inner_w)
+{
+    lv_obj_t *row = lv_obj_create(root);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_width(row, inner_w);
+    lv_obj_set_height(row, LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_style_pad_column(row, 10, 0);
+    lv_obj_clear_flag(row, LV_OBJ_FLAG_SCROLLABLE);
+
+    char *tok = strtok(csv, ",");
+    while (tok) {
+        char *label = trim(tok);
+        // A trailing "!" marks the destructive one, "+" the confirming one, so
+        // the mock-up carries the same colour language as the real dialog.
+        uint32_t bg = UI_COLOR_PRIMARY;
+        size_t len = strlen(label);
+        if (len && label[len-1] == '!') { bg = 0x962020; label[len-1] = ' '; }
+        else if (len && label[len-1] == '+') { bg = 0x2A6B3C; label[len-1] = ' '; }
+        trim(label);
+        lv_obj_t *b = lv_obj_create(row);
+        lv_obj_set_height(b, LV_SIZE_CONTENT);
+        lv_obj_set_style_bg_color(b, lv_color_hex(bg), 0);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+        lv_obj_set_style_border_width(b, 0, 0);
+        lv_obj_set_style_radius(b, 6, 0);
+        lv_obj_set_style_pad_all(b, 10, 0);
+        lv_obj_set_flex_grow(b, 1);
+        lv_obj_clear_flag(b, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_t *l = make_label(b, label, &lv_font_montserrat_18, 0xFFFFFF, 0);
+        lv_obj_center(l);
+        tok = strtok(NULL, ",");
+    }
+}
+
 // ---- timeline --------------------------------------------------------------
 // The one type with computed coordinates. Every x comes from (t / span), so the
 // only numbers a human writes are times.
@@ -287,6 +370,7 @@ lv_obj_t *reader_diagram_add(lv_obj_t *parent, const char *spec, lv_coord_t widt
     bool is_flow = (strcasecmp(type, "flow") == 0);
     bool is_stack = (strcasecmp(type, "stack") == 0);
     bool is_time = (strcasecmp(type, "timeline") == 0);
+    bool is_panel = (strcasecmp(type, "panel") == 0);
 
     // Stack needs the total height before it can place anything, so it is
     // measured first rather than guessed.
@@ -327,6 +411,10 @@ lv_obj_t *reader_diagram_add(lv_obj_t *parent, const char *spec, lv_coord_t widt
             first_node = false;
         } else if (is_flow && (v = field(line, "branch")) != NULL) {
             flow_branch(root, v, inner_w);
+        } else if (is_panel && (v = field(line, "row")) != NULL) {
+            panel_row(root, v, inner_w);
+        } else if (is_panel && (v = field(line, "buttons")) != NULL) {
+            panel_buttons(root, v, inner_w);
         } else if (is_stack && (v = field(line, "row")) != NULL) {
             // "row: <px> <name> | <caption>"
             char *cap = split_pipe(v);

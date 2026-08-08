@@ -50,19 +50,16 @@ The **decode list and pileup are cleared** on the switch (v1.3.3). The two modes
 
 In FT8 view, tap a CQ row in the decode list. A confirmation modal appears:
 
-```
-┌──────────────────────────────┐
-│ Confirm FT8 Transmission     │
-│ ▲  K9ZZ EN52  -07  2138 Hz  │ ← nudge up
-│ ►  W1AW FN31  -12  1406 Hz  │ ← selected row
-│ ▼  SV1ENG JN37 -09 1869 Hz  │ ← nudge down
-│                              │
-│  TX1: W1AW OZ1LAV JO45      │
-│                              │
-│  [▲ Nudge up]  [▼ Nudge down]│
-│  [Auto Pounce]    [Cancel]   │
-│  [Transmit ●]                │
-└──────────────────────────────┘
+```qmxdiagram
+type: panel
+title: Confirm FT8 Transmission
+row: K9ZZ EN52   -07   2138 Hz
+row: W1AW FN31   -12   1406 Hz   <- the row you picked
+row: SV1ENG JN37 -09   1869 Hz
+row: TX1: W1AW OZ1LAV JO45
+buttons: Cancel!, Auto Pounce, Transmit+
+note: dim | drag up or down the list to move the highlight before you lift your finger
+note: amber | Transmit sends this message once; Auto Pounce runs the whole exchange for you
 ```
 
 - **Transmit** (green) — send this one message on the next correct slot
@@ -97,15 +94,14 @@ The pile-up tracker never transmits on its own — it only remembers callers; yo
 
 Tap the **Call CQ** button. A modal opens:
 
-```
-┌──────────────────────────┐
-│ CQ Preset:               │
-│ [○] 1. CQ OZ1LAV JO45    │
-│ [○] 2. DX OZ1LAV JO45    │
-│ [○] 3. POTA OZ1LAV JO45  │
-│                          │
-│ [Save Preset] [Transmit] │
-└──────────────────────────┘
+```qmxdiagram
+type: panel
+title: CQ Messages (check the active)
+row: [x] CQ OZ1LAV JO65
+row: [ ] CQ DX OZ1LAV JO65
+row: [ ] CQ POTA OZ1LAV JO65
+buttons: Cancel!, + call grid, Save+
+note: dim | CQ stop and Listen sit top-right and apply on the tap - no Save needed
 ```
 
 Choose a preset (or edit/save a new one), then tap **Transmit**. The QMX starts calling CQ and listening for replies.

@@ -26,6 +26,28 @@ import sys
 
 log = logging.getLogger("mkdocs.reader_export")
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools"))
+try:
+    import diagram_svg
+except Exception as _e:            # pragma: no cover - the site still builds
+    diagram_svg = None
+    log.warning("reader_export: diagram_svg unavailable (%s); qmxdiagram fences "
+                "will render as raw spec text on the site", _e)
+
+
+def on_page_markdown(markdown, page=None, config=None, files=None, **kwargs):
+    """Turn ```qmxdiagram fences into inline SVG for the website.
+
+    Only the RENDERED site is affected. The .md mirrored to site/md/ and the
+    copy packed into manual.bin keep the spec, because that is what the Tab5's
+    own renderer reads - one source, two renderers.
+
+    Without this the site would show the spec as a code block, which is worse
+    than the character drawings it replaced."""
+    if diagram_svg is None or "```qmxdiagram" not in markdown:
+        return markdown
+    return diagram_svg.substitute(markdown)
+
 REPO = "SteffenLav/qmx-panadapter"
 
 

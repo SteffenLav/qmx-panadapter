@@ -180,6 +180,7 @@ DIAGRAM_KEYS = {
     "flow":     {"title", "node", "branch", "note"},
     "stack":    {"title", "row", "note"},
     "timeline": {"title", "span", "seg", "mark", "tick", "note"},
+    "panel":    {"title", "row", "buttons", "note"},
 }
 
 
@@ -242,6 +243,8 @@ def verify_diagrams(docs_dir, pages):
                             bad.append("%s: segment %r runs past the %g span" % (where, rng, span))
             if kind == "flow" and "node" not in fields:
                 bad.append("%s: flow has no nodes" % where)
+            if kind == "panel" and "row" not in fields:
+                bad.append("%s: panel has no rows" % where)
             if kind == "stack" and "row" not in fields:
                 bad.append("%s: stack has no rows" % where)
     if bad:
