@@ -507,13 +507,19 @@ static void add_code_block(const char *text)
     lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(l, LV_SIZE_CONTENT);
     lv_obj_set_style_max_width(l, SCR_W - 2 * BODY_PAD_X - 24, 0);
-    // MONOSPACE (operator, 2026-08-08: the manual's box drawings "often break
-    // due to char spacing"). They were not broken - they were being rendered in
-    // montserrat, which is proportional, so no column could ever line up. This
-    // is the whole fix for every ASCII diagram in the manual at once.
-    // unscii_16 is 8x16 and ASCII-only, which suits: the reader already folds
-    // UTF-8 to ASCII before it gets here.
-    lv_obj_set_style_text_font(l, &lv_font_unscii_16, 0);
+    // REVERTED to montserrat 2026-08-08, same day it was tried. unscii_16 is a
+    // bitmap pixel font and the operator's verdict was "super ugly and not
+    // readable" - and it did NOT fix the drawings anyway.
+    //
+    // Why monospace was never going to be enough: the drawings are built from
+    // UTF-8 box characters, arrows and an emoji, and this reader folds UTF-8 to
+    // ASCII before drawing. Some folds CHANGE THE LENGTH - an arrow becomes
+    // "(right)", one character turning into seven. A line whose character count
+    // grew after the author aligned it cannot line up in any font, monospace or
+    // not, and it overruns the box and wraps.
+    //
+    // The fix is to stop drawing pictures out of characters. See TODO #96.
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     // Fold UTF-8 -> ASCII into a PSRAM temp (fold can expand, so not in place);
     // code is verbatim otherwise (no markdown stripping). Label copies the text.
