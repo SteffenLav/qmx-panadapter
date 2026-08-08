@@ -1647,7 +1647,10 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_SPOTS      23  // panadapter-only: the live-spots lane (POTA, and RBN
                                    // as an opt-in second source). Panadapter-only because
                                    // the lane itself only exists on that page.
-#define DRAWER_SEC_USBSHUT    24  // "Prepare for flashing": orderly USB teardown before
+#define DRAWER_SEC_USBSHUT    24  // RETIRED 2026-08-08 - no section is built for this id
+                                   // any more (see the removal note in drawer_build).
+                                   // Kept so the ids below keep their numbers.
+                                   // Was: "Prepare for flashing": orderly USB teardown before
                                    // the operator re-flashes. Kept in BOTH modes - the
                                    // moment you need it is whichever screen you happen
                                    // to be on when you reach for the USB cable.
@@ -1797,7 +1800,6 @@ static void drawer_open(void);
 static void drawer_close(void);
 static void drawer_anim_x_cb(void *obj, int32_t v);
 static void drawer_touch_cb(lv_event_t *e);
-static void drawer_usb_shutdown_cb(lv_event_t *e);
 static void drawer_scrim_cb(lv_event_t *e);
 static void iq_balance_toggle_cb(lv_event_t *e);
 
@@ -6140,25 +6142,14 @@ static void drawer_build(void)
         y += DRAWER_TUNE2_H;
     }
 
-    // "Prepare for flashing". Sits with the setup items because that is when it
-    // is used: cable in hand, about to re-flash. Deliberately NOT hidden in FT8
-    // mode - the reason to reach for it does not depend on which screen is up.
-    {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_USBSHUT, y, 72);
-        lv_obj_t *btn = lv_btn_create(sec);
-        lv_obj_set_size(btn, DRAWER_W - 32, 56);
-        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
-        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a3138), 0);
-        lv_obj_set_style_border_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
-        lv_obj_set_style_border_width(btn, 2, 0);
-        lv_obj_add_event_cb(btn, drawer_usb_shutdown_cb, LV_EVENT_CLICKED, NULL);
-        lv_obj_t *lbl = lv_label_create(btn);
-        lv_label_set_text(lbl, LV_SYMBOL_USB "  Prepare for flashing");
-        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
-        lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
-        lv_obj_center(lbl);
-        y += 72;
-    }
+    // "Prepare for flashing" REMOVED 2026-08-08. The orderly-teardown
+    // experiment was a negative result on hardware, and the operator's verdict
+    // after using it was blunt: "It did not do the job". A button that performs
+    // a ceremony which does not change the outcome is worse than no button -
+    // it tells the operator the port is safe when nothing was actually fixed.
+    // The plumbing (util/usb_shutdown.c, cat_usb_shutdown, audio_usb_shutdown,
+    // the /api/cmd usb_shutdown action) is kept: it is also the app's exit path
+    // and costs nothing sitting there.
 
     // WiFi setup button. Moved up under Battery care together with Callsign
     // & Grid and Band-plan region (operator request 2026-07-16).
@@ -6755,7 +6746,8 @@ static void drawer_build(void)
         s_slider_db_min, s_slider_db_max, s_slider_alpha, s_slider_cwpitch,
         s_slider_cwaudio_vol, s_slider_ifcal, s_slider_brightness,
         s_slider_wf_black, s_slider_wf_contrast, s_slider_wf_blend,
-        s_slider_charge_limit_pct, s_slider_qmx_vol,
+        s_slider_charge_limit_pct, s_slider_qmx_vol, s_slider_qmx_rf,
+        s_slider_cwtxoff,
     };
     for (size_t i = 0; i < sizeof(drawer_sliders) / sizeof(drawer_sliders[0]); i++) {
         if (!drawer_sliders[i]) continue;
@@ -6874,7 +6866,7 @@ static void drawer_close(void)
 static void drawer_set_ft8_mode(bool ft8)
 {
     if (!s_drawer) return;
-    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_QMXVOL, DRAWER_SEC_QMXRF, DRAWER_SEC_SLEEP, DRAWER_SEC_CHARGE, DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_PAUSE, DRAWER_SEC_USBSHUT };
+    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_QMXVOL, DRAWER_SEC_QMXRF, DRAWER_SEC_SLEEP, DRAWER_SEC_CHARGE, DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_PAUSE };
     // Heights must line up 1:1 with keep[] above (same order) - each is the
     // height passed to that section's own drawer_section(ID, y, height) call.
     // (WiFi is 72, matching its drawer_section call - was mistakenly 128, which
@@ -6890,7 +6882,7 @@ static void drawer_set_ft8_mode(bool ft8)
     //  moment you need it is whichever screen you happen to be on" - and it was
     //  in fact invisible in FT8. Same argument applies to PAUSE: you reach for
     //  it because the radio is in front of you, not because of the screen.)
-    static const int keep_h[] = { 56, 96, 96, 124, 136, 96, 168, 56, 72, 72, 72, 72 };
+    static const int keep_h[] = { 56, 96, 96, 124, 136, 96, 168, 56, 72, 72, 72 };
     const int n_keep = sizeof(keep) / sizeof(keep[0]);
 
     // Antenna Tune: shown only in Panadapter mode with confirmed 1_04+
@@ -6953,14 +6945,6 @@ static void drawer_set_ft8_mode(bool ft8)
 // "Prepare for flashing" - tell the QMX we are going, instead of letting it find
 // out when the host vanishes mid-transfer (see util/usb_shutdown.h). Roger AD5DZ
 // and Stan asked why we did not simply do this; there was no good answer.
-static void drawer_usb_shutdown_cb(lv_event_t *e)
-{
-    (void)e;
-    bool had = usb_shutdown_graceful();
-    ui_toast(had ? "USB closed - safe to reflash now"
-                 : "No radio was connected - safe to reflash");
-}
-
 // === Phase 5.10D Stage 2b: drawer button + slider callbacks ===
 
 static void drawer_apply_preset(int db_min, int db_max, float alpha)

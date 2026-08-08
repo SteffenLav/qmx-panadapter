@@ -179,3 +179,7 @@ CONFIG_MDNS_MEMORY_ALLOC_SPIRAM=y
 #
 CONFIG_MDNS_MAX_INTERFACES=1
 CONFIG_MDNS_MAX_SERVICES=2
+
+# Monospace font for the on-device manual's code/diagram blocks. The montserrat
+# fonts are proportional, so every ASCII drawing in the manual came out ragged.
+CONFIG_LV_FONT_UNSCII_16=y

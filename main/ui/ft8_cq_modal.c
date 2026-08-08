@@ -368,7 +368,9 @@ static void modal_build(void)
     lv_obj_add_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
 
     lv_obj_t *panel = lv_obj_create(s_modal);
-    lv_obj_set_size(panel, 1040, 424);   // +44 vs pre-Field-Day-hint height
+    // +40 again for the Listen button, which sits under CQ stop: the message
+    // rows share the buttons' horizontal band, so they start BELOW both.
+    lv_obj_set_size(panel, 1040, 464);
     lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 18);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0x1c2128), 0);
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, 0);
@@ -442,7 +444,7 @@ static void modal_build(void)
     }
 
     for (int i = 0; i < N_CQ; i++) {
-        int y = 100 + i * 72;
+        int y = 136 + i * 72;   // clear of the two stacked cycle buttons above
 
         // Text area first, so the checkbox can be vertically centred against it.
         s_ta[i] = lv_textarea_create(panel);

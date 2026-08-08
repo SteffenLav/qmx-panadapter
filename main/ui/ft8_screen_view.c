@@ -167,7 +167,11 @@ static lv_obj_t *s_bar_slot     = NULL;  // tiny countdown bar beside s_lbl_coun
 // is the way in), so a stray finger near the countdown can't open a modal.
 #define MINI_SLOTS_MAX  64
 #define MINI_STRIP_W    288      // full left-pane content width
-#define MINI_STRIP_H     26
+// 40, was 26. Operator, 2026-08-08: the two rows "cannot be observed other than
+// with young eyes - the majority of my users are 60+". Rows go 10 -> 17 px and
+// the E/O letters follow (14 -> 20). Everything below in the left pane shifts
+// down by the same 14 px; that real estate is the price, and it was agreed.
+#define MINI_STRIP_H     40
 // TWO rows - EVEN on top, ODD below - ALWAYS both (Roy KI0ER, 2026-08-07). The
 // single strip could only show the operator's own window once something was
 // armed; before that it showed the union ("BOTH"), which on a busy band is
@@ -2186,7 +2190,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
         // between. 16 px of the width goes to the E/O letters on the right so a
         // glance says which row is which - the colours already match the slot
         // countdown and the per-row E/O column (steel blue / warm orange).
-        const int lbl_w   = 16;
+        const int lbl_w   = 24;
         const int cells_w = MINI_STRIP_W - lbl_w;
         const int row_h   = (MINI_STRIP_H - 2) / 2 - 2;   // 10 px each
         for (int row = 0; row < 2; row++) {
@@ -2209,13 +2213,26 @@ void ft8_screen_view_init(lv_obj_t *parent)
                 cells[i] = c;
                 prev[i]  = MINI_C_UNKNOWN;
             }
-            lv_obj_t *tag = lv_label_create(s_mini_strip);
-            lv_obj_set_style_text_font(tag, &lv_font_montserrat_14, 0);
+            // The letter lives in a row-sized box and is CENTRED in it, rather
+            // than positioned by hand: a 20 px font has a ~25 px line box, so a
+            // hand-placed label would hang into the row below (or off the
+            // bottom of the strip). Centring puts the cap height inside the row
+            // and the box clips the rest.
+            lv_obj_t *tagbox = lv_obj_create(s_mini_strip);
+            lv_obj_set_size(tagbox, lbl_w, row_h);
+            lv_obj_set_pos(tagbox, cells_w, y);
+            lv_obj_set_style_bg_opa(tagbox, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_border_width(tagbox, 0, 0);
+            lv_obj_set_style_pad_all(tagbox, 0, 0);
+            lv_obj_clear_flag(tagbox, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_clear_flag(tagbox, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_t *tag = lv_label_create(tagbox);
+            lv_obj_set_style_text_font(tag, &lv_font_montserrat_20, 0);
             lv_obj_set_style_text_color(tag,
                 lv_color_hex(row ? 0xFFA040 : 0x8AB4F8), 0);   // ODD orange / EVEN blue
             lv_obj_clear_flag(tag, LV_OBJ_FLAG_CLICKABLE);
             lv_label_set_text(tag, row ? "O" : "E");
-            lv_obj_set_pos(tag, cells_w + 4, y - 2);
+            lv_obj_center(tag);
         }
     }
 
@@ -2229,7 +2246,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // out (operator, 2026-07-29).
     s_btn_parity = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_parity, 140, 52);
-    lv_obj_set_pos(s_btn_parity, 0, 183);
+    lv_obj_set_pos(s_btn_parity, 0, 197);
     lv_obj_set_style_bg_color(s_btn_parity, lv_color_hex(0x303044), 0);
     lv_obj_set_style_border_width(s_btn_parity, 0, 0);
     lv_obj_set_style_radius(s_btn_parity, 8, 0);
@@ -2247,7 +2264,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // the fill stays distinct from the parity button's three meaningful fills.
     s_btn_tx_tone = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_tx_tone, 140, 52);
-    lv_obj_set_pos(s_btn_tx_tone, 148, 183);
+    lv_obj_set_pos(s_btn_tx_tone, 148, 197);
     lv_obj_set_style_bg_color(s_btn_tx_tone, lv_color_hex(0x263040), 0);
     lv_obj_set_style_border_color(s_btn_tx_tone, lv_color_hex(UI_COLOR_PRIMARY), 0);
     lv_obj_set_style_border_width(s_btn_tx_tone, 2, 0);
@@ -2267,7 +2284,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // gets a darker blue fill to read as the secondary of the pair.
     s_btn_filter = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_filter, 140, 60);
-    lv_obj_set_pos(s_btn_filter, 0, 243);  // 8 px below the TX row (uniform grid gap)
+    lv_obj_set_pos(s_btn_filter, 0, 257);  // 8 px below the TX row (uniform grid gap)
     lv_obj_set_style_bg_color(s_btn_filter, lv_color_hex(UI_COLOR_PRIMARY), 0);  // pale blue
     lv_obj_set_style_border_color(s_btn_filter, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
     lv_obj_set_style_border_width(s_btn_filter, 2, 0);
@@ -2281,7 +2298,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
 
     s_btn_adif = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_adif, 140, 60);
-    lv_obj_set_pos(s_btn_adif, 148, 243);
+    lv_obj_set_pos(s_btn_adif, 148, 257);
     lv_obj_set_style_bg_color(s_btn_adif, lv_color_hex(0x163d5e), 0);  // darker blue
     lv_obj_set_style_border_color(s_btn_adif, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
     lv_obj_set_style_border_width(s_btn_adif, 2, 0);
@@ -2305,7 +2322,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     // the two steps of the flow together visually.
     s_btn_cq = lv_btn_create(s_left_pane);
     lv_obj_set_size(s_btn_cq, 288, 60);
-    lv_obj_set_pos(s_btn_cq, 0, 311);
+    lv_obj_set_pos(s_btn_cq, 0, 325);
     lv_obj_set_style_bg_color(s_btn_cq, lv_color_hex(0x2e8b3a), 0);
     lv_obj_set_style_border_color(s_btn_cq, lv_color_hex(0x4caf50), 0);
     lv_obj_set_style_border_width(s_btn_cq, 2, 0);
@@ -2337,7 +2354,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_lbl_tx, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_label_set_long_mode(s_lbl_tx, LV_LABEL_LONG_WRAP);
     lv_obj_set_width(s_lbl_tx, 288);
-    lv_obj_set_pos(s_lbl_tx, 0, 379);   // the "Active: N" line paid for the mini strip above
+    lv_obj_set_pos(s_lbl_tx, 0, 393);   // the "Active: N" line paid for the mini strip above
 
     // Live TX PWR/SWR line. Separate label (cyan) aligned just under s_lbl_tx:
     // LVGL v9 dropped in-label recolor markup, so a distinct colour from the
