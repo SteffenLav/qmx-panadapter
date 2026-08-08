@@ -249,6 +249,9 @@ int config_io_import(char *text)
             } else if (!strcasecmp(key, "stop_after")) {
                 int n = atoi(val);
                 if (n >= 0 && n <= 255) { settings_set_cq_max_calls((uint8_t)n); applied++; }
+            } else if (!strcasecmp(key, "listen_every")) {
+                int n = atoi(val);
+                if (n >= 0 && n <= 255) { settings_set_cq_listen_every((uint8_t)n); applied++; }
             } else {
                 int idx = atoi(key) - 1;        // "1".."3"
                 if (idx >= 0 && idx <= 2) { settings_set_cq_msg((uint8_t)idx, val); applied++; }

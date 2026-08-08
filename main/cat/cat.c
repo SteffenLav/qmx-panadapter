@@ -73,6 +73,10 @@ static volatile int s_af_gain = -1;
 // there is no quarter-dB scaling). -1 = never read. This is the per-band "RF
 // gain (dB)" from the QMX's Band Configuration, 0-99, default 54.
 static volatile int s_rf_gain = -1;
+// Last SP; (split state) answer: -1 unknown, 0 off, 1 on. Declared up here with
+// the other response state because the RX parser runs long before the CW-split
+// maintainer that consumes it.
+static volatile int s_split_readback = -1;
 static char   s_q9_resp[16] = {0};  // last Q9 (IQ mode) response, e.g. "Q91;"
 static size_t s_q9_resp_len = 0;
 static volatile bool s_iq_mode_confirmed = false;  // true once Q9; readback confirms IQ mode ON
@@ -552,6 +556,15 @@ static void process_cat_message(const char *msg, size_t len)
         }
         return;
     }
+    // SP response: "SPn;" - split state, 0 = simplex, 1 = split. Read back after
+    // we engage split for the CW TX offset, because a successful CDC write only
+    // proves the bytes reached the radio (the lesson Q9/IQ mode taught us the
+    // hard way). Getting this wrong is silent and costly: we would believe we
+    // are transmitting 500 Hz up while actually sitting on top of the DX.
+    if (len >= 3 && msg[0] == 'S' && msg[1] == 'P') {
+        s_split_readback = (msg[2] == '1') ? 1 : 0;
+        return;
+    }
     // RG response: "RGnnn;" - RF gain in dB (manual's own example: "RG; returns
     // RG063 for 63dB"). Note this is a plain dB number, NOT the 0.25 dB steps AG
     // uses - the two commands look alike and are not.
@@ -674,10 +687,19 @@ static esp_err_t try_open_qmx(void)
 //   - Re-asserted whenever the base frequency moves, and every 30 s regardless,
 //     so a radio that dropped split on its own (band change, menu visit) is
 //     brought back into line rather than transmitting on top of the DX.
+//
+// ⚠ We read `SP;` back but deliberately NEVER send `FB;`. The vendor CAT manual
+// documents the FB *Get* as answering with an **FA**-prefixed string ("FB;"
+// returns "FA00007016000;"). Whether that is a manual typo or the radio's real
+// behaviour, querying it is a trap: our FA handler would take VFO B's value as
+// the dial frequency, and since VFO B is computed FROM the dial, the offset
+// would compound on every cycle and walk the radio up the band. One read-back
+// command is worth having; that one is not.
 #define CW_SPLIT_REFRESH_US  30000000LL
 static bool     s_split_engaged = false;   // true only while WE hold split on
 static uint32_t s_split_base_hz = 0;       // the RX frequency B was computed from
 static int64_t  s_split_last_us = 0;
+static bool     s_split_warned = false;    // one warning per failed engage, not per poll
 
 // Returns true if it used the pipe this cycle (caller should yield before the
 // next poll command, same as the other drained writes).
@@ -695,6 +717,8 @@ static bool cw_split_maintain(void)
         // Stand down: back to simplex, transmitting where we listen.
         esp_err_t e = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"SP0;", 4, 200);
         s_split_engaged = false;
+        s_split_readback = -1;
+        s_split_warned = false;
         ESP_LOGI(TAG, "CW TX offset off - split cleared (%s)", e == ESP_OK ? "ok" : "fail");
         return true;
     }
@@ -702,7 +726,18 @@ static bool cw_split_maintain(void)
 
     int64_t now = esp_timer_get_time();
     bool moved = (base != s_split_base_hz);
-    if (s_split_engaged && !moved && (now - s_split_last_us) < CW_SPLIT_REFRESH_US) return false;
+    if (s_split_engaged && !moved && (now - s_split_last_us) < CW_SPLIT_REFRESH_US) {
+        // Steady state: check the answer to the SP; we sent when we engaged. If
+        // the radio says it is NOT in split, the operator is about to transmit
+        // on top of the station they are calling - say so loudly, once.
+        if (s_split_readback == 0 && !s_split_warned) {
+            s_split_warned = true;
+            ESP_LOGE(TAG, "CW TX offset: radio reports split OFF after we set it - "
+                          "transmit is NOT offset");
+            ui_toast("CW TX offset not applied - radio refused split");
+        }
+        return false;
+    }
 
     int64_t tx = (int64_t)base + off;
     if (tx < 0) tx = 0;
@@ -715,6 +750,13 @@ static bool cw_split_maintain(void)
     // "we quietly transmitted on top of the station" if the radio dropped split
     // while we were not looking.
     esp_err_t e2 = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"SP1;", 4, 200);
+    // Ask what actually happened. The answer lands asynchronously in
+    // s_split_readback and is judged on a later cycle, so this costs one short
+    // write and no waiting.
+    vTaskDelay(pdMS_TO_TICKS(30));
+    s_split_readback = -1;
+    s_split_warned = false;
+    cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"SP;", 3, 200);
     s_split_engaged = true;
     s_split_base_hz = base;
     s_split_last_us = now;

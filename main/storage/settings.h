@@ -64,6 +64,11 @@ typedef struct {
     char     cq_msg[3][28];    // 3 user-editable CQ message presets (FT8 TX)
     uint8_t  cq_sel;           // which CQ preset is active, 0..2 (default 0)
     uint8_t  cq_max_calls;     // auto-stop CQ after N unanswered calls, 0=never (default 0)
+    // Roy KI0ER: while calling CQ you are deaf to your own time window, so the
+    // occupancy picture for the window you transmit in goes stale. After every
+    // N calls, spend one slot listening instead. 0 = never (default) - this
+    // changes on-air cadence, so it is opt-in.
+    uint8_t  cq_listen_every;
     bool     onboarded;        // first-boot WiFi/identity prompts shown (default false)
     bool     wifi_enabled;     // initiate WiFi at boot (default true)
     bool     qmx_gps;         // QMX/QMX+ has GPS discipline — skip Tab5→QMX time push
@@ -190,6 +195,8 @@ void settings_set_cq_sel(uint8_t idx);
 // Don WB0LQW: "I usually send CQ 2-4 times and then pause". Set from the CQ
 // preset modal's top-right cycle button; consumed by ft8_qso.c's CQ loop.
 void settings_set_cq_max_calls(uint8_t n);
+/* Spend one slot listening after every N CQ calls. 0 = never. */
+void settings_set_cq_listen_every(uint8_t n);
 
 
 // First-boot onboarding done: once true, the WiFi/identity prompts are never

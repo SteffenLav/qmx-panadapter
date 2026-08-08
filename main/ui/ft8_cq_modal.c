@@ -38,6 +38,13 @@ static lv_obj_t *s_stop_btn  = NULL;
 static lv_obj_t *s_stop_lbl  = NULL;
 static uint8_t   s_stop_val  = 0;
 static const uint8_t s_stop_vals[] = { 0, 1, 2, 3, 4, 5, 10 };
+// Listening slot (Roy KI0ER): spend one slot receiving after every N CQ calls,
+// so the occupancy picture for your OWN time window stays current. Same
+// commit-on-tap behaviour as the stop button beside it.
+static lv_obj_t *s_listen_btn = NULL;
+static lv_obj_t *s_listen_lbl = NULL;
+static uint8_t   s_listen_val = 0;
+static const uint8_t s_listen_vals[] = { 0, 3, 5, 10 };
 // While true (Field Day mode on), the whole editor is locked - everything
 // except Cancel is both visually dimmed/disabled AND ignored by its handler,
 // so there's no path to edit/save/select a preset while it's in effect,
@@ -227,6 +234,26 @@ static void stop_btn_cb(lv_event_t *e)
     stop_btn_update_label();
 }
 
+static void listen_btn_update_label(void)
+{
+    if (!s_listen_lbl) return;
+    if (s_listen_val == 0) lv_label_set_text(s_listen_lbl, "Listen: never");
+    else                   lv_label_set_text_fmt(s_listen_lbl, "Listen every %u",
+                                                 (unsigned)s_listen_val);
+}
+
+static void listen_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    uint8_t next = 0;
+    for (size_t i = 0; i < sizeof(s_listen_vals); i++) {
+        if (s_listen_vals[i] > s_listen_val) { next = s_listen_vals[i]; break; }
+    }
+    s_listen_val = next;
+    settings_set_cq_listen_every(s_listen_val);
+    listen_btn_update_label();
+}
+
 static void radio_clicked_cb(lv_event_t *e)
 {
     if (s_fd_locked) return;
@@ -373,6 +400,22 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_stop_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(s_stop_lbl);
 
+    // Listening-slot cycle button, directly under CQ stop. Same commit-on-tap,
+    // same exemption from the Field Day lock.
+    s_listen_btn = lv_btn_create(panel);
+    lv_obj_set_size(s_listen_btn, 290, 56);
+    lv_obj_align(s_listen_btn, LV_ALIGN_TOP_RIGHT, 0, 64);
+    lv_obj_set_style_bg_color(s_listen_btn, lv_color_hex(0x2a2f37), 0);
+    lv_obj_set_style_border_color(s_listen_btn, lv_color_hex(0x555555), 0);
+    lv_obj_set_style_border_width(s_listen_btn, 2, 0);
+    lv_obj_set_style_radius(s_listen_btn, 8, 0);
+    lv_obj_add_event_cb(s_listen_btn, listen_btn_cb, LV_EVENT_CLICKED, NULL);
+    s_listen_lbl = lv_label_create(s_listen_btn);
+    lv_label_set_text(s_listen_lbl, "Listen: never");
+    lv_obj_set_style_text_color(s_listen_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(s_listen_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(s_listen_lbl);
+
     // Field Day status note - text/visibility set in show() from live
     // settings, since this modal can be reopened without rebuilding it.
     s_fd_hint = lv_label_create(panel);
@@ -507,6 +550,8 @@ void ft8_cq_modal_show(void)
     settings_load_all(&s);
     s_sel = (s.cq_sel <= 2) ? s.cq_sel : 0;
     s_stop_val = s.cq_max_calls;
+    s_listen_val = s.cq_listen_every;
+    listen_btn_update_label();
     stop_btn_update_label();
 
     // Quick-insert button shows the actual call+grid (or a hint if unset).

@@ -94,6 +94,9 @@ static bool               s_have_cq_saved;
 // Every fresh CQ sequence - Call CQ, a timeout resume, a post-QSO resume -
 // starts the count over.
 static int                s_cq_calls_sent;
+// Which cq_calls_sent value we last spent a listening slot at, so the pause
+// fires once per multiple of cq_listen_every instead of latching there.
+static int                s_cq_listen_done_at = -1;
 static bool               s_cq_exhausted;
 // Station being worked MANUALLY (step-by-step Transmit taps, no machine QSO).
 // Noted on every manual arm so (a) the pileup capture doesn't list our own
@@ -729,6 +732,20 @@ static void rearm_current(void)
             ESP_LOGI(TAG, "CQ auto-stop: %d of %d sent - not re-arming", cq_sent, qs.cq_max_calls);
             return;
         }
+        // Listening slot (Roy KI0ER): while transmitting we are deaf to our own
+        // time window, so its occupancy picture goes stale exactly where we need
+        // it to be fresh. Every N calls, skip one transmission and listen.
+        //
+        // The guard matters: cq_calls_sent does NOT advance on a slot we skip,
+        // so without remembering which count we already paused at, the run would
+        // stop at N and never call again.
+        if (qs.cq_listen_every > 0 && cq_sent > 0 &&
+            (cq_sent % qs.cq_listen_every) == 0 && s_cq_listen_done_at != cq_sent) {
+            lock(); s_cq_listen_done_at = cq_sent; unlock();
+            ft8_status_set("listening (after %d CQ calls)", cq_sent);
+            ESP_LOGI(TAG, "CQ listening slot after %d calls - skipping one transmission", cq_sent);
+            return;
+        }
     }
 
     // Don't key up at a partner who is visibly working somebody else - this is
@@ -1042,7 +1059,7 @@ static void register_miss(const char *waiting_for)
         s_state        = FT8_QSO_CQ;
         s_target[0]    = '\0';
         s_missed_slots = 0;
-        s_cq_calls_sent = 0;   // resumed CQ = fresh sequence for the auto-stop count
+        s_cq_calls_sent = 0; s_cq_listen_done_at = -1;   // resumed CQ = fresh sequence for the auto-stop count
         s_cq_exhausted  = false;
         unlock();
         ft8_tx_disarm();
@@ -1334,7 +1351,7 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
     s_have_cq_saved = true;
     s_from_cq       = true;
     s_missed_slots  = 0;
-    s_cq_calls_sent = 0;       // fresh CQ sequence - auto-stop count restarts
+    s_cq_calls_sent = 0; s_cq_listen_done_at = -1;       // fresh CQ sequence - auto-stop count restarts
     s_cq_exhausted  = false;
     s_pileup_active = false;   // starting CQ is not part of a pileup drain
     clear_dt_follow();         // no partner yet - transmit CQ on the UTC/GPS beat
@@ -1428,7 +1445,7 @@ static void cqrun_answer(const char *caller, int caller_freq, int caller_snr,
         s_state        = FT8_QSO_CQ;
         s_target[0]    = '\0';
         s_missed_slots = 0;
-        s_cq_calls_sent = 0;   // fresh sequence for the auto-stop count
+        s_cq_calls_sent = 0; s_cq_listen_done_at = -1;   // fresh sequence for the auto-stop count
         s_cq_exhausted  = false;
         unlock();
     }
@@ -1735,7 +1752,7 @@ void ft8_qso_advance(int64_t slot_sec)
             s_state        = FT8_QSO_CQ;
             s_target[0]    = '\0';
             s_missed_slots = 0;
-            s_cq_calls_sent = 0;   // resumed CQ = fresh sequence for the auto-stop count
+            s_cq_calls_sent = 0; s_cq_listen_done_at = -1;   // resumed CQ = fresh sequence for the auto-stop count
             s_cq_exhausted  = false;
         } else {
             s_state    = FT8_QSO_IDLE;
@@ -1896,7 +1913,7 @@ void ft8_qso_advance(int64_t slot_sec)
                 s_have_cur      = false;
                 s_have_cq_saved = false;
                 s_cq_exhausted  = false;
-                s_cq_calls_sent = 0;
+                s_cq_calls_sent = 0; s_cq_listen_done_at = -1;
                 unlock();
                 ft8_tx_disarm();
                 ft8_status_set("CQ stopped after %d calls - no answer", sent);
@@ -2338,7 +2355,7 @@ void ft8_qso_abort(void)
     s_partner_freq_hz = 0;
     s_busy_holds    = 0;
     s_busy_with[0]  = '\0';
-    s_cq_calls_sent = 0;
+    s_cq_calls_sent = 0; s_cq_listen_done_at = -1;
     s_cq_exhausted  = false;
     s_pileup_active = false;   // an abort ends any pileup drain
     clear_dt_follow();         // ...and returns TX to the UTC/GPS beat
@@ -2448,10 +2465,9 @@ bool ft8_qso_is_busy(char *target_buf, size_t len)
 {
     lock();
     ft8_qso_state_t st = s_state;
-    if (target_buf && len) {
-        strncpy(target_buf, s_target, len - 1);
-        target_buf[len - 1] = '\0';
-    }
+    // snprintf, not strncpy: it always terminates, and the strncpy form made GCC
+    // warn about a truncated copy that the following assignment already handled.
+    if (target_buf && len) snprintf(target_buf, len, "%s", s_target);
     unlock();
     return st != FT8_QSO_IDLE && st != FT8_QSO_DONE && st != FT8_QSO_TIMEOUT;
 }

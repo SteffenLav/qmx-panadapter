@@ -1589,6 +1589,10 @@ const SET_FIELDS = [
   ["FT8 filters", "filters.robot_priority", "sel", "Robot picks", "",
      [["0","Strongest signal"],["1","Weakest signal"],["2","Most distant"]]],
 
+  ["FT8 filters", "cq.listen_every", "sel", "Listening slot during a CQ run",
+     "Spend one slot receiving after every N calls, so the occupancy picture for your own time window stays current",
+     [["0","Never"],["3","Every 3 calls"],["5","Every 5 calls"],["10","Every 10 calls"]]],
+
   ["Spots & reporting", "spots_en",       "bool", "Live POTA spots", ""],
   ["Spots & reporting", "rbn_en",         "bool", "RBN (CW skimmer) spots", "A continuous feed - off by default"],
   ["Spots & reporting", "pskreporter_en", "bool", "Report decodes to PSK Reporter", "Over the internet, never on the air"],

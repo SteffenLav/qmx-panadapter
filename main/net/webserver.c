@@ -1448,6 +1448,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     for (int i = 0; i < 3; i++) cJSON_AddItemToArray(msgs, cJSON_CreateString(c.cq_msg[i]));
     cJSON_AddNumberToObject(cq, "sel",        c.cq_sel);
     cJSON_AddNumberToObject(cq, "max_calls",  c.cq_max_calls);
+    cJSON_AddNumberToObject(cq, "listen_every", c.cq_listen_every);
 
     cJSON *f = cJSON_AddObjectToObject(root, "filters");
     cJSON *fi = cJSON_AddArrayToObject(f, "incl");
@@ -1552,6 +1553,8 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
             settings_set_cq_sel((uint8_t)it->valuedouble);
         if (cJSON_IsNumber(it = cJSON_GetObjectItem(cq, "max_calls")))
             settings_set_cq_max_calls((uint8_t)it->valuedouble);
+        if (cJSON_IsNumber(it = cJSON_GetObjectItem(cq, "listen_every")))
+            settings_set_cq_listen_every((uint8_t)it->valuedouble);
     }
 
     // Filters are one NVS blob, so read-modify-write the whole struct.
