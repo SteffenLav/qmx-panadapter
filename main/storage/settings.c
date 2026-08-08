@@ -61,6 +61,7 @@ static const char *TAG = "settings";
 #define KEY_WF_WINDOW    "wf_window"
 #define KEY_DISP_FLIP    "disp_flip"
 #define KEY_QMX_VOL      "qmx_vol_db"
+#define KEY_CW_TX_OFF    "cw_tx_off"
 #define KEY_SNAP_PEAK    "snap_peak"
 #define KEY_BP_REGION    "bp_region"
 #define KEY_DISTANCE_MILES "dist_miles"
@@ -253,6 +254,10 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_RBN_EN         76
 #define DIRTY_WIFI_KNOWN     77
 #define DIRTY_CQ_MAX_CALLS   66
+// 78 and up: after the CW-page reservation above. The CW TX offset lives on
+// main (it is a tuning behaviour, not part of the CW page), so it deliberately
+// does NOT take one of the reserved 67..74.
+#define DIRTY_CW_TX_OFFSET   78
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -277,7 +282,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_CHARGE_LIM_PCT,
     DIRTY_LOTW_DXCC, DIRTY_LOTW_CQZ, DIRTY_LOTW_ITUZ, DIRTY_DISP_SLEEP,
     DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD, DIRTY_CQ_MAX_CALLS,
-    DIRTY_SPOTS_EN, DIRTY_RBN_EN, DIRTY_WIFI_KNOWN,
+    DIRTY_SPOTS_EN, DIRTY_RBN_EN, DIRTY_WIFI_KNOWN, DIRTY_CW_TX_OFFSET,
 };
 
 // ---- Module state ------------------------------------------------------
@@ -408,6 +413,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_WF_WINDOW))   nvs_set_u8(s_nvs, KEY_WF_WINDOW, snap.wf_window);
         if (dirty_test(&dirty_local, DIRTY_DISP_FLIP))   nvs_set_u8(s_nvs, KEY_DISP_FLIP, snap.display_flip ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_VOL))     nvs_set_u8(s_nvs, KEY_QMX_VOL,   snap.qmx_vol_db);
+        if (dirty_test(&dirty_local, DIRTY_CW_TX_OFFSET)) nvs_set_i16(s_nvs, KEY_CW_TX_OFF, snap.cw_tx_offset_hz);
         if (dirty_test(&dirty_local, DIRTY_SNAP_PEAK))   nvs_set_u8(s_nvs, KEY_SNAP_PEAK, snap.snap_to_peak ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_BP_REGION))   nvs_set_u8(s_nvs, KEY_BP_REGION, snap.bandplan_region);
         if (dirty_test(&dirty_local, DIRTY_DISTANCE_MILES)) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap.distance_in_miles ? 1 : 0);
@@ -682,6 +688,14 @@ static void load_from_nvs(qmx_settings_t *out)
     if (out->wf_window > 2)        out->wf_window = 0;
     if (nvs_get_u8(s_nvs, KEY_DISP_FLIP, &u8v) == ESP_OK) out->display_flip = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_QMX_VOL, &u8v) == ESP_OK) out->qmx_vol_db = (u8v <= 199) ? u8v : 199;
+    {
+        int16_t i16v;
+        if (nvs_get_i16(s_nvs, KEY_CW_TX_OFF, &i16v) == ESP_OK) {
+            if (i16v >  1000) i16v =  1000;
+            if (i16v < -1000) i16v = -1000;
+            out->cw_tx_offset_hz = i16v;
+        }
+    }
     if (nvs_get_u8(s_nvs, KEY_SNAP_PEAK, &u8v) == ESP_OK) out->snap_to_peak = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_BP_REGION, &u8v) == ESP_OK) out->bandplan_region = (u8v <= 3) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_DISTANCE_MILES, &u8v) == ESP_OK) out->distance_in_miles = (u8v != 0);
@@ -1264,6 +1278,27 @@ void settings_set_qmx_vol_db(uint8_t db)
     s_pending.qmx_vol_db = db;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_QMX_VOL);
+}
+
+void settings_set_cw_tx_offset_hz(int16_t hz)
+{
+    if (!s_ready) return;
+    if (hz >  1000) hz =  1000;
+    if (hz < -1000) hz = -1000;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.cw_tx_offset_hz == hz) { xSemaphoreGive(s_mutex); return; }
+    s_pending.cw_tx_offset_hz = hz;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CW_TX_OFFSET);
+}
+
+int16_t settings_get_cw_tx_offset_hz(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    int16_t v = s_pending.cw_tx_offset_hz;
+    xSemaphoreGive(s_mutex);
+    return v;
 }
 
 void settings_set_distance_in_miles(bool v)

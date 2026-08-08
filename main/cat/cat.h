@@ -239,6 +239,59 @@ void cat_query_af_gain(void);
  * Divide by 4 for the dB figure the QMX displays. */
 int cat_get_af_gain(void);
 
+/* ---- RF gain (RG), Stan's suggestion via Samuel W7STF, 2026-08-07 ----------
+ *
+ * The QMX's per-band "RF gain (dB)" from its Band Configuration screen, exposed
+ * over CAT as RG in BOTH 1_03 and 1_04 - no firmware gate needed. Range 0-99,
+ * default 54 (operation manual: "RF gain (dB): 54 is the default. Valid values
+ * for the parameter are 0 to 99"). Get answers "RG063" for 63 dB.
+ *
+ * Two things this is NOT:
+ *  - not AF gain: AG is the volume in 0.25 dB steps, RG is plain dB. The
+ *    commands look alike and are scaled differently.
+ *  - not session-only: unlike Q9/Q3, the CAT manual does not mark RG as
+ *    "current operating session only", and the same value is editable in the
+ *    Band Configuration terminal app - so a write here changes the operator's
+ *    stored per-band configuration. That is why the drawer commits on slider
+ *    RELEASE rather than on every tick of a drag.
+ *
+ * It also moves the noise floor the panadapter is calibrated against, so a
+ * change re-seeds flat mode's floor (see the drawer callback). */
+#define CAT_RF_GAIN_DB_MAX  99
+void cat_request_rf_gain(uint8_t db);
+
+/* Ask the radio for the active band's RF gain; answer lands asynchronously in
+ * cat_get_rf_gain(). Same drawer-open read-back reasoning as AF gain, with an
+ * extra reason: RF gain is PER BAND, so the stored value goes stale the moment
+ * the operator changes band. */
+void cat_query_rf_gain(void);
+
+/* Last RF gain read back from the radio in dB, or -1 if never read. */
+int cat_get_rf_gain(void);
+
+/* ---- Operator pause: release the radio -------------------------------------
+ *
+ * Stops all CAT traffic to the QMX so the operator can use the radio's own menu
+ * or its Terminal Applications (Band Configuration), which speak over this same
+ * CDC pipe - our 50 ms FA/MD/FW poll otherwise lands in the middle of whatever
+ * they are doing. Also stands down the dead-stream and stuck-decode watchdogs,
+ * which would otherwise read a deliberate menu visit as a fault and eventually
+ * power-cycle the USB port under the operator's hands.
+ *
+ * Deliberately separate from cat_poll_set_paused(): that flag belongs to the
+ * FT8 TX burst and is cleared at the end of every burst, which would silently
+ * cancel the operator's pause.
+ *
+ * Resuming re-runs the IQ-mode handshake, because leaving the QMX's menu can
+ * drop IQ mode (Q9 is session state) and stop the audio stream. */
+void cat_user_pause_set(bool paused);
+bool cat_user_pause_active(void);
+
+/* Queue a re-run of the Q9 IQ-mode enable+confirm handshake on the live link.
+ * Cheap, invisible when IQ was already on, and the first thing worth trying
+ * when the radio has stopped streaming audio while still answering CAT. */
+void cat_request_iq_reassert(void);
+
 /*
  * Request a CW filter width (Hz). Deferred to the poll task as
  * "MMCW|CW passband=<hz>;" - the QMX rejects a Kenwood FW<nnnn>; set with ?;,

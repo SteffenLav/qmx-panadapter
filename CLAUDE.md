@@ -408,6 +408,48 @@ Roy KI0ER: "a frequency offset could be entirely available to me, but only if I 
 
 Stations whose parity differs from ours are now skipped, using the same nearest-slot rounding as the decode list's E/O column (a bare `/period` truncation flips the parity of anything logged a hair before its slot). Our parity is only knowable via `ft8_tx_get_parity_lock()` — something armed or running; a reply inherits the opposite of theirs, a CQ carries the `TXCQ EVEN/ODD` choice. With `TXCQ ANY` or nothing armed there is no answer, so the mask stays the **union** of both windows. `*n_stations_out` still counts ALL heard stations on purpose: it answers "is the picture known at all", which drives the UI's all-grey "nothing heard yet" state.
 
+### CW transmit offset is SPLIT, because the QMX has no XIT (v1.6.0, Roy KI0ER)
+Roy KI0ER (#176143) asked for a "not zero-beat CW reply" offset: everyone answering a CW CQ zero-beat arrives as one mud-pit, and a QRP station 400–600 Hz off stands out. His manual workaround was the full VFO A/B dance on the radio's own controls.
+
+**There is no XIT to use.** The QMX CAT manual is explicit — `IF;`'s XIT status field is *"always 0 because QMX has no XIT"*. So the offset is implemented as **split**: RX on VFO A, TX on VFO B, with `FB` held at `FA + offset` and `SP1;` on. **`FB`, `FR`, `FT` and `SP` all exist in 1_03_000 as well as 1_04** (checked command-by-command against both cached manuals), so this needs **no `cat_qmx_fw_at_least()` gate** — unlike AM/Tune. Only `RC`/`RR`/`IF` are 1_04-only.
+
+**It lives in `poll_task` (`cw_split_maintain()` in `cat.c`), not in `cat_set_frequency()`.** Two reasons, and the second is the feature: the poll task owns the CDC pipe and this needs two extra writes; and maintaining it there makes the offset follow **every** way the frequency can move — panadapter tap, spot click, memory recall, band change, web UI, *and the radio's own tuning knob* — which is precisely Roy's "change frequency to another station, don't touch anything else, and the offset follows". A hook on our own tune path would have missed the knob.
+
+Rules encoded in the maintainer, each one load-bearing:
+- **CW/CW-R only** (`s_last_mode_digit` `'3'`/`'7'`). Any other mode stands it down — an offset transmit in SSB or a digital mode is a mistake, not a courtesy. This is also what stops it leaking into an FT8 session.
+- **Only clears split if WE engaged it** (`s_split_engaged`). An operator running their own split has not asked us to interfere.
+- **Re-asserts `FB`+`SP1` every 30 s** (`CW_SPLIT_REFRESH_US`) as well as on every base-frequency change. A radio that dropped split on its own (band change, menu visit) would otherwise transmit on top of the DX — silently, which is the worst possible failure for this feature.
+- `FA;` reports **VFO A**, which stays the RX frequency in split, so `s_last_freq_hz` needs no special-casing.
+
+**Unverified, and it needs a human:** no CW contact has been made with it. The CAT round-trip is verifiable on the bench; "does the DX hear me 500 Hz up" is not. Also unknown: whether `SP` survives a QMX power cycle (the manual does not mark it session-only), so a Tab5 powered off mid-CW may leave the radio in split — the operator sees it on the radio's own display, but it is worth a line in the manual.
+
+### RF gain (`RG`) is per band and NOT session-only — commit on release, never store a copy
+Stan's suggestion via Samuel W7STF. `RG;` gets, `RG<nnn>;` sets, in **plain dB** — range 0–99, default 54 (operation manual: *"RF gain (dB): 54 is the default. Valid values for the parameter are 0 to 99"*). Present in 1_03 and 1_04.
+
+Three traps, all different from the `AG` volume slider it sits next to:
+- **`RG` is plain dB; `AG` is 0.25 dB steps.** The two commands look alike and are scaled differently. Sending dB to `AG` sets a quarter of what was asked.
+- **It is per BAND.** So the Tab5 stores **nothing** — no NVS key, no config-export field. It reads back on drawer open (and on every `/api/settings` GET) and shows "reading..." until the radio answers. A remembered value would belong to whichever band the operator was on last, and replaying it would silently reconfigure the current one.
+- **It is not marked session-only** in the CAT manual, and it edits the same figure as the Band Configuration terminal app — i.e. a write changes the operator's *stored* configuration. Hence the drawer slider commits on `LV_EVENT_RELEASED` and only moves its label on `VALUE_CHANGED`; a drag must not stream sixty writes into stored config.
+
+Changing it moves the noise floor the panadapter is calibrated against, so both the drawer and the web path call `ui_flat_mode_reset()`.
+
+### "Release radio" (operator pause) — and why the watchdogs had to learn about it
+Stan's second suggestion, and it is not merely a convenience. The QMX's own menu **and its Terminal Applications (Band Configuration)** speak over the *same* CDC pipe we poll `FA;`/`MD;`/`FW;` on every 50 ms, so anything the operator does on the radio is being interrupted continuously. This is also the leading hypothesis for Samuel W7STF's "odd behaviour changing Band config on the QMX+ while the panadapter runs" (#176112, thread not yet read — groups.io needs auth).
+
+`cat_user_pause_set()` / `cat_user_pause_active()`. **Deliberately a separate flag from `s_poll_paused`**: that one belongs to the FT8 TX burst and is cleared at the end of *every* burst, which would silently cancel the operator's pause.
+
+**Three things stand down together, and forgetting any one of them would have been worse than not having the button:**
+1. the CAT poll (the point of the exercise);
+2. the **dead-stream watchdog** (`audio.c`) — a deliberate menu visit produces its exact signature (UAC open, CAT alive, zero audio pairs), and at 120 s it would have cut VBUS under the operator's hands;
+3. the **stuck-decode watchdog** (`ft8_test.c`) — every slot decodes zero while paused, by design.
+
+Resume re-runs the IQ handshake and re-seeds the flat floor. UI: a calm blue banner (not warning-red — nothing is wrong, the operator asked for this), tappable to resume, plus the drawer button and `/api/cmd {"action":"pause"|"resume"}` with `paused` in `/api/status`. **The banner is not decoration**: while paused the spectrum freezes and the decode list empties, which is visually identical to the fault Roy KI0ER reported, so the screen has to say unprompted that this state was asked for and how to leave it.
+
+### IQ mode is SESSION state — re-assert it before resetting anything (v1.6.0)
+The QMX's `Q9` (IQ mode) is explicitly *"for the current operating session only and is not written to EEPROM"* — which is how a trip through the radio's own menu leaves the panadapter with a dead audio stream while CAT keeps answering perfectly. That is Roy KI0ER's blank-decode-list report, and the radio in that state is **not** broken: it simply is not being asked for IQ audio any more.
+
+So `iq_mode_handshake(int max_attempts)` was extracted from `link_task` (`cat.c`) and is now callable on a live link via `cat_request_iq_reassert()`, drained by `poll_task` (which owns the pipe). The dead-stream watchdog's escalation gained it as a **new first step at 30 s**, ahead of the 60 s soft audio reset and the 120 s `usb_replug()`. Cheapest-first: it is free, invisible when IQ was already on, and it fixes the menu-visit case outright without touching the USB port. Resume-from-pause queues the same handshake.
+
 ### Cross-thread CAT writes must go through the poll task, not the LVGL thread
 The poll task is the only thing that should write to the CDC pipe at runtime. Writing a CAT/MM command directly from the LVGL/UI thread (e.g. a touch handler) races the `FA;`/`MD;`/`FW;` poll on the same pipe; the two commands interleave and the QMX gets a garble and returns `?;`, so the write lands only intermittently. Pattern: stash the request in a `volatile` and let `poll_task` drain it on its next cycle (see `s_pending_ssb_bw` / `cat_request_ssb_bandwidth()` in `cat.c`). FT8 TX uses the other valid approach — `cat_poll_set_paused(true)` for the burst's whole duration.
 

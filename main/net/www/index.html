@@ -464,6 +464,7 @@
       </div>
     </div>
     <button type="button" class="bot-btn" id="tune-ant-btn" style="display:none" title="Antenna Tune (QMX 1.04+): keys the radio with a steady carrier and shows live power and SWR. Auto-stops after 60 s.">Antenna Tune</button>
+    <button type="button" class="bot-btn" id="pause-btn" title="Release the radio so you can use its own menu or the Band Configuration terminal app - the Tab5 stops sending CAT until you take it back">Release radio</button>
     <button type="button" class="bot-btn" id="memory-btn" title="Your 32 memory channels - click one to tune to it">Memory</button>
     <button type="button" class="bot-btn" id="settings-btn" title="Callsign, grid, CQ messages, FT8 filters and the everyday toggles - with a real keyboard">Settings</button>
     <button type="button" class="bot-btn" id="help-btn" title="Guidance and the full user manual - served by the Tab5 itself, no internet needed">Help &#63;</button>
@@ -1594,6 +1595,12 @@ const SET_FIELDS = [
   ["Spots & reporting", "greylist_en",    "bool", "Grey-list stations that never answer", ""],
 
   ["Radio & display", "qmx_vol_db",        "num",  "QMX volume (dB)", "0-50, the same number the radio shows on its own LCD"],
+  /* RF gain is read from the radio, not stored here - it is per band, so a
+     remembered number would belong to whichever band you were on last. -1 means
+     the radio has not answered yet. */
+  ["Radio & display", "qmx_rf_gain_db",    "num",  "QMX RF gain (dB)", "0-99, per band; the radio's default is 54"],
+  ["Radio & display", "cw_tx_offset_hz",   "num",  "CW transmit offset (Hz)",
+     "0 = off. In CW only, transmit this far from the station you are listening to (split), so a QRP call is not buried in the zero-beat pile. -1000 to +1000; 400-600 is typical"],
   ["Radio & display", "iq_enabled",        "bool", "I/Q balance correction", ""],
   ["Radio & display", "distance_in_miles", "bool", "Distances in miles", "Kilometres when off"],
   ["Radio & display", "bandplan_region",   "sel",  "Band-plan region", "",
@@ -2116,6 +2123,39 @@ document.getElementById("tune-ant-btn").addEventListener("click", async () => {
   await sendCmd({ action: "tune_start" });
 });
 
+/* Release the radio / take it back (Stan's pause button, via Samuel W7STF).
+   The button label always says what the NEXT click does, and paintPaused() is
+   driven from /api/status rather than from the click, so the drawer button and
+   this one can never disagree about which state the radio is in. */
+let pausedNow = false;
+function paintPaused(on) {
+  pausedNow = !!on;
+  const btn = document.getElementById("pause-btn");
+  if (btn) {
+    btn.textContent = pausedNow ? "Take radio back" : "Release radio";
+    btn.style.color = pausedNow ? "#ffb020" : "";
+    btn.style.borderColor = pausedNow ? "#ffb020" : "";
+  }
+  /* While paused nothing is polled, so every number on this page is frozen.
+     Say so once, at the top, instead of letting stale values read as live. */
+  let bar = document.getElementById("paused-bar");
+  if (pausedNow && !bar) {
+    bar = document.createElement("div");
+    bar.id = "paused-bar";
+    bar.style.cssText = "position:fixed;top:0;left:0;right:0;z-index:900;background:#1f4e79;" +
+                        "color:#fff;text-align:center;padding:6px;font-size:14px;cursor:pointer";
+    bar.textContent = "Radio released - the QMX menu is yours. Nothing is being polled or decoded. Click to take it back.";
+    bar.addEventListener("click", () => sendCmd({ action: "resume" }));
+    document.body.appendChild(bar);
+  } else if (!pausedNow && bar) {
+    bar.remove();
+  }
+}
+document.getElementById("pause-btn").addEventListener("click", async () => {
+  await sendCmd({ action: pausedNow ? "resume" : "pause" });
+  paintPaused(!pausedNow);   // optimistic; the next status poll is authoritative
+});
+
 /* Switch the Tab5's own view from the browser. Unlike Call CQ this changes
    nothing on the air, so it does not confirm - but the Tab5 takes about a second
    to act (the switch is handed to its display task), so the button says so
@@ -2299,6 +2339,7 @@ async function tick() {
     else if (s.spots_v === undefined) lastSpots = [];   // feature off / not panadapter
     if (s.spots_v !== undefined) lastSpotsV = s.spots_v;
     lastTimeSrc = s.time_src && s.time_src !== "none" ? s.time_src : "";
+    paintPaused(s.paused);
     tuneAntSync(s);
     document.getElementById("bandplan-wrap").classList.toggle("show", !!lastBandplan);
 

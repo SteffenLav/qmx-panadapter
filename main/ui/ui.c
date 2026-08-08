@@ -1651,12 +1651,20 @@ static int s_drawer_scrim_swipe_start_x = -1;
                                    // the operator re-flashes. Kept in BOTH modes - the
                                    // moment you need it is whichever screen you happen
                                    // to be on when you reach for the USB cable.
-#define N_DRAWER_SECTIONS     25
+#define DRAWER_SEC_QMXRF      25  // QMX RF gain (per band), directly under QMX volume -
+                                   // the radio's two gain controls belong together.
+#define DRAWER_SEC_PAUSE      26  // "Release radio (use QMX menu)": stops all CAT traffic
+                                   // so the radio's own menu and Terminal Applications
+                                   // have the pipe to themselves. Kept in BOTH modes.
+#define N_DRAWER_SECTIONS     27
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 // Phase 5.10D Stage 2b: drawer widgets we need to keep handles to
 static lv_obj_t *s_slider_qmx_vol = NULL;
 static lv_obj_t *s_lbl_qmx_vol    = NULL;
+static lv_obj_t *s_slider_qmx_rf  = NULL;
+static lv_obj_t *s_lbl_qmx_rf     = NULL;
+static lv_obj_t *s_lbl_pause_btn  = NULL;
 static lv_obj_t *s_slider_db_min = NULL;
 static lv_obj_t *s_slider_db_max = NULL;
 static lv_obj_t *s_slider_alpha = NULL;
@@ -1664,6 +1672,8 @@ static lv_obj_t *s_lbl_db_min = NULL;
 static lv_obj_t *s_lbl_db_max = NULL;
 static lv_obj_t *s_lbl_alpha = NULL;
 static lv_obj_t *s_slider_cwpitch = NULL;
+static lv_obj_t *s_slider_cwtxoff = NULL;
+static lv_obj_t *s_lbl_cwtxoff    = NULL;
 static lv_obj_t *s_lbl_ifcal    = NULL;
 static lv_obj_t *s_slider_ifcal = NULL;
 static lv_obj_t *s_lbl_cwpitch = NULL;
@@ -1735,6 +1745,11 @@ static void drawer_dropdown_bpregion_cb(lv_event_t *e);
 static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_slider_qmx_vol_cb(lv_event_t *e);
 static void drawer_refresh_qmx_vol(void);
+static void drawer_slider_qmx_rf_cb(lv_event_t *e);
+static void drawer_refresh_qmx_rf(void);
+static void drawer_pause_btn_cb(lv_event_t *e);
+static void drawer_slider_cwtxoff_cb(lv_event_t *e);
+static void ui_set_cw_tx_offset_label(int hz);
 static void drawer_check_flip_cb(lv_event_t *e);
 static void drawer_check_charge_limit_cb(lv_event_t *e);
 static void drawer_slider_charge_limit_pct_cb(lv_event_t *e);
@@ -1992,6 +2007,61 @@ static void iq_warn_banner_keepalive_cb(lv_timer_t *t)
     if (!s_iq_warn_active || !s_iq_warn_banner) return;
     if (reader_view_is_active()) return;   // don't draw over the docs Reader
     lv_obj_move_foreground(s_iq_warn_banner);
+}
+
+// ---- Operator pause: "release the radio" -----------------------------------
+// Stan's suggestion via Samuel W7STF: the QMX's own menu and its Terminal
+// Applications share this CDC pipe with our 50 ms poll. This is the one control
+// that hands the radio back.
+//
+// The banner is not decoration. While paused the spectrum freezes and the
+// decode list empties, which looks exactly like the fault Roy KI0ER reported -
+// so the screen has to say, unprompted, that this state was asked for and how
+// to leave it.
+static lv_obj_t *s_pause_banner = NULL;
+
+static void pause_banner_keepalive_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_pause_banner || !cat_user_pause_active()) return;
+    if (reader_view_is_active()) return;   // don't draw over the docs Reader
+    lv_obj_move_foreground(s_pause_banner);
+}
+
+static void pause_banner_tap_cb(lv_event_t *e)
+{
+    (void)e;
+    ui_set_cat_paused(false);
+    ui_toast("Radio back under Tab5 control");
+}
+
+void ui_set_cat_paused(bool paused)
+{
+    cat_user_pause_set(paused);
+    // Recursive lock: a no-op for the drawer/banner callers already on the LVGL
+    // thread, and what makes the web caller (httpd task) safe.
+    if (!display_lock(100)) return;
+    if (s_pause_banner) {
+        if (paused) {
+            lv_obj_clear_flag(s_pause_banner, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_move_foreground(s_pause_banner);
+        } else {
+            lv_obj_add_flag(s_pause_banner, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
+    if (s_lbl_pause_btn) {
+        lv_label_set_text(s_lbl_pause_btn,
+                          paused ? LV_SYMBOL_PLAY "  Take radio back"
+                                 : LV_SYMBOL_PAUSE "  Release radio (QMX menu)");
+    }
+    if (!paused) {
+        // The radio may have been retuned, had its band or filter changed, or
+        // come back from a factory-reset menu while we were not looking. The
+        // next FA/MD/FW rotation reports the truth within ~150 ms; re-seeding
+        // the flat floor covers an RF-gain or band change made in the menu.
+        ui_flat_mode_reset();
+    }
+    display_unlock();
 }
 
 // "Waiting for QMX" prompt: a breathing, screen-level message shown any time
@@ -3346,6 +3416,33 @@ void ui_init(lv_display_t *disp)
         lv_obj_center(lbl);
     }
     lv_timer_create(iq_warn_banner_keepalive_cb, 1000, NULL);
+
+    // "Radio released" banner (see ui_set_cat_paused). Same geometry and
+    // keepalive as the IQ banner, deliberately a calm blue rather than the
+    // warning red: nothing is wrong, the operator asked for this. Tapping it
+    // takes the radio back, so the way out is always on screen even if the
+    // drawer is not - which matters, because while paused the spectrum stops
+    // moving and that is otherwise indistinguishable from a fault.
+    s_pause_banner = lv_obj_create(scr);
+    lv_obj_set_size(s_pause_banner, LV_PCT(100), 40);
+    lv_obj_set_pos(s_pause_banner, 0, 0);
+    lv_obj_set_style_bg_color(s_pause_banner, lv_color_hex(0x1f4e79), 0);
+    lv_obj_set_style_bg_opa(s_pause_banner, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_pause_banner, 0, 0);
+    lv_obj_set_style_radius(s_pause_banner, 0, 0);
+    lv_obj_clear_flag(s_pause_banner, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_pause_banner, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_pause_banner, pause_banner_tap_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_flag(s_pause_banner, LV_OBJ_FLAG_HIDDEN);
+    {
+        lv_obj_t *lbl = lv_label_create(s_pause_banner);
+        lv_label_set_text(lbl, LV_SYMBOL_PAUSE " Radio released - the QMX menu is yours. "
+                               "Nothing is being decoded.  [tap to take it back]");
+        lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_22, 0);
+        lv_obj_center(lbl);
+    }
+    lv_timer_create(pause_banner_keepalive_cb, 1000, NULL);
 
     // "Waiting for QMX" prompt (see qmx_wait_poll_cb above). Full-screen,
     // transparent background so it reads over whatever's underneath on any
@@ -5863,6 +5960,62 @@ static void drawer_build(void)
         y += 96;
     }
 
+    // QMX RF gain (Stan's suggestion via Samuel W7STF, 2026-08-07), directly
+    // under the volume so the radio's two gain controls sit together.
+    //
+    // Unlike the volume this commits on RELEASED, not on every VALUE_CHANGED:
+    // RG is not marked session-only in the CAT manual and edits the same
+    // per-band figure as the Band Configuration screen, so a drag should write
+    // once, not sixty times. It also shows no stored fallback - the value is
+    // PER BAND, so anything remembered from another band would be a lie; until
+    // the radio answers RG; the label says so.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_QMXRF, y, 96);
+        s_lbl_qmx_rf = lv_label_create(sec);
+        int rf_now = cat_get_rf_gain();
+        char rbuf[40];
+        if (rf_now >= 0) snprintf(rbuf, sizeof(rbuf), "QMX RF gain: %d dB", rf_now);
+        else             snprintf(rbuf, sizeof(rbuf), "QMX RF gain: reading...");
+        lv_label_set_text(s_lbl_qmx_rf, rbuf);
+        lv_obj_set_style_text_color(s_lbl_qmx_rf, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_qmx_rf, &lv_font_montserrat_28, 0);
+        lv_obj_align(s_lbl_qmx_rf, LV_ALIGN_TOP_LEFT, 0, 10);
+
+        s_slider_qmx_rf = lv_slider_create(sec);
+        lv_obj_set_size(s_slider_qmx_rf, DRAWER_W - 32, 30);
+        lv_slider_set_range(s_slider_qmx_rf, 0, CAT_RF_GAIN_DB_MAX);
+        lv_slider_set_value(s_slider_qmx_rf, rf_now >= 0 ? rf_now : 54, LV_ANIM_OFF);
+        lv_obj_align(s_slider_qmx_rf, LV_ALIGN_TOP_LEFT, 0, 40);
+        // Two handlers on purpose: VALUE_CHANGED only moves the LABEL (free,
+        // immediate feedback under the finger), RELEASED is what reaches the
+        // radio.
+        lv_obj_add_event_cb(s_slider_qmx_rf, drawer_slider_qmx_rf_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(s_slider_qmx_rf, drawer_slider_qmx_rf_cb, LV_EVENT_RELEASED, NULL);
+        y += 96;
+    }
+
+    // "Release radio (use QMX menu)" - Stan's pause button, via Samuel W7STF.
+    // Kept in both modes: the reason to reach for it is the radio in front of
+    // you, not the screen you happen to be on.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_PAUSE, y, 72);
+        lv_obj_t *btn = lv_btn_create(sec);
+        lv_obj_set_size(btn, DRAWER_W - 32, 56);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a3138), 0);
+        lv_obj_set_style_border_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_set_style_border_width(btn, 2, 0);
+        lv_obj_add_event_cb(btn, drawer_pause_btn_cb, LV_EVENT_CLICKED, NULL);
+        s_lbl_pause_btn = lv_label_create(btn);
+        lv_label_set_text(s_lbl_pause_btn,
+                          cat_user_pause_active() ? LV_SYMBOL_PLAY "  Take radio back"
+                                                  : LV_SYMBOL_PAUSE "  Release radio (QMX menu)");
+        lv_obj_set_style_text_font(s_lbl_pause_btn, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(s_lbl_pause_btn, lv_color_hex(0xffffff), 0);
+        lv_obj_center(s_lbl_pause_btn);
+        y += 72;
+    }
+
     // Display sleep (#34): idle minutes before the backlight turns off.
     // Touch wakes it; a two-finger double-tap blanks immediately. Kept in
     // both Panadapter and FT8 modes (it's a device-level setting).
@@ -6255,7 +6408,7 @@ static void drawer_build(void)
 
     // CW section
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_CW, y, 130);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_CW, y, 230);
         lv_obj_t *cw_hdr = lv_label_create(sec);
         lv_label_set_text(cw_hdr, "CW");
         lv_obj_set_style_text_color(cw_hdr, lv_color_hex(0xA0E0A0), 0);
@@ -6277,7 +6430,25 @@ static void drawer_build(void)
         char cwbuf[24];
         snprintf(cwbuf, sizeof(cwbuf), "CW center: %u Hz", (unsigned)s_cw_pitch_hz);
         lv_label_set_text(s_lbl_cwpitch, cwbuf);
-        y += 130;
+
+        // CW transmit offset (Roy KI0ER): don't zero-beat the station you are
+        // calling. Centre of the slider is OFF, so "no offset" is one obvious
+        // place rather than a value you have to know. Steps of 10 Hz.
+        qmx_settings_t cwcfg;
+        settings_load_all(&cwcfg);
+        s_lbl_cwtxoff = lv_label_create(sec);
+        lv_obj_set_style_text_color(s_lbl_cwtxoff, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(s_lbl_cwtxoff, &lv_font_montserrat_28, 0);
+        lv_obj_align(s_lbl_cwtxoff, LV_ALIGN_TOP_LEFT, 0, 130);
+        ui_set_cw_tx_offset_label(cwcfg.cw_tx_offset_hz);
+
+        s_slider_cwtxoff = lv_slider_create(sec);
+        lv_obj_set_size(s_slider_cwtxoff, DRAWER_W - 32, 30);
+        lv_slider_set_range(s_slider_cwtxoff, -100, 100);   // x10 Hz
+        lv_slider_set_value(s_slider_cwtxoff, cwcfg.cw_tx_offset_hz / 10, LV_ANIM_OFF);
+        lv_obj_align(s_slider_cwtxoff, LV_ALIGN_TOP_LEFT, 0, 170);
+        lv_obj_add_event_cb(s_slider_cwtxoff, drawer_slider_cwtxoff_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        y += 230;
     }
 
     // CW Audio section: play demodulated CW on the Tab5 speaker/headphone
@@ -6668,6 +6839,7 @@ static void drawer_open(void)
     lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
     lv_anim_start(&a);
     drawer_refresh_qmx_vol();   // show what the RADIO is set to, not our last write
+    drawer_refresh_qmx_rf();    // and its per-band RF gain, which changes with the band
     s_drawer_open = true;
     // Pull the QMX-wait prompt down now rather than waiting up to a second for its
     // own tick - it was drawing its headline straight across the open drawer.
@@ -7015,6 +7187,76 @@ static void drawer_refresh_qmx_vol(void)
         }
     }
     cat_query_af_gain();   // ask again for next time the drawer opens
+}
+
+// RF gain. VALUE_CHANGED moves the label only; RELEASED is the one that writes
+// to the radio - see the section comment for why a drag must not stream sixty
+// writes into a stored per-band setting.
+static void drawer_slider_qmx_rf_cb(lv_event_t *e)
+{
+    int db = (int)lv_slider_get_value(lv_event_get_target(e));
+    if (s_lbl_qmx_rf) {
+        char b[40];
+        snprintf(b, sizeof(b), "QMX RF gain: %d dB", db);
+        lv_label_set_text(s_lbl_qmx_rf, b);
+    }
+    if (lv_event_get_code(e) != LV_EVENT_RELEASED) return;
+    cat_request_rf_gain((uint8_t)db);
+    // RF gain moves the noise floor this display is calibrated against, so the
+    // flat-mode floor has to be re-learned or the whole trace sits at the wrong
+    // height until it drifts back on its own.
+    ui_flat_mode_reset();
+    ESP_LOGI(TAG, "QMX RF gain -> %d dB (this band)", db);
+}
+
+// Same read-back-on-open reasoning as the volume, with one more: RF gain is per
+// band, so the previous band's value is not just stale, it is wrong.
+static void drawer_refresh_qmx_rf(void)
+{
+    if (!s_slider_qmx_rf) return;
+    int rf = cat_get_rf_gain();
+    if (rf >= 0) {
+        lv_slider_set_value(s_slider_qmx_rf, rf, LV_ANIM_OFF);
+        if (s_lbl_qmx_rf) {
+            char b[40];
+            snprintf(b, sizeof(b), "QMX RF gain: %d dB", rf);
+            lv_label_set_text(s_lbl_qmx_rf, b);
+        }
+    }
+    cat_query_rf_gain();   // ask again for next time the drawer opens
+}
+
+// The label carries the whole explanation, because the number alone does not
+// say which way it goes or that it only applies to CW.
+static void ui_set_cw_tx_offset_label(int hz)
+{
+    if (!s_lbl_cwtxoff) return;
+    char b[64];
+    if (hz == 0) snprintf(b, sizeof(b), "CW TX offset: off (zero-beat)");
+    else         snprintf(b, sizeof(b), "CW TX offset: %+d Hz (TX %s)",
+                          hz, hz > 0 ? "above" : "below");
+    lv_label_set_text(s_lbl_cwtxoff, b);
+}
+
+static void drawer_slider_cwtxoff_cb(lv_event_t *e)
+{
+    int hz = (int)lv_slider_get_value(lv_event_get_target(e)) * 10;
+    settings_set_cw_tx_offset_hz((int16_t)hz);
+    ui_set_cw_tx_offset_label(hz);
+    // Nothing is written to the radio here: cat.c's poll task notices the
+    // change on its next cycle and sets (or clears) split itself, which is also
+    // what keeps it correct when the frequency later moves.
+}
+
+// Release the radio / take it back. One button, two states - the label always
+// says what the NEXT tap will do.
+static void drawer_pause_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    bool now_paused = !cat_user_pause_active();
+    ui_set_cat_paused(now_paused);
+    ui_toast(now_paused ? "Radio released - the QMX menu is yours"
+                        : "Radio back under Tab5 control");
 }
 
 static void drawer_check_flip_cb(lv_event_t *e)

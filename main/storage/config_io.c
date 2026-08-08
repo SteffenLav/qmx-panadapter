@@ -218,6 +218,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "wf_window"))         settings_set_wf_window((uint8_t)atoi(val));
             else if (!strcasecmp(key, "display_flip"))      settings_set_display_flip(to_bool(val));
             else if (!strcasecmp(key, "qmx_vol_db"))        settings_set_qmx_vol_db((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "cw_tx_offset_hz"))   settings_set_cw_tx_offset_hz((int16_t)atoi(val));
             else if (!strcasecmp(key, "cw_audio_vol"))      settings_set_cw_audio_vol((uint8_t)atoi(val));
             else if (!strcasecmp(key, "charge_limit"))      settings_set_charge_limit_en(to_bool(val));
             else if (!strcasecmp(key, "charge_limit_pct"))  settings_set_charge_limit_pct((uint8_t)atoi(val));

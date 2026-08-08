@@ -1204,8 +1204,11 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
         int stuck_thresh = FT8_STUCK_RESET_MS / ft8_op_mode_slot_ms();  // 8 FT8 / 16 FT4
         bool tx_or_qso = (ft8_tx_get_status(NULL, 0, NULL) != FT8_TX_IDLE) ||
                          (ft8_qso_get_state() != FT8_QSO_IDLE);
-        if (tx_or_qso) {
-            s_stuck_slots = 0;   // sparse RX is expected here; never reset mid-exchange
+        if (tx_or_qso || cat_user_pause_active()) {
+            // Sparse RX is expected during an exchange, and GUARANTEED while
+            // the operator has paused CAT to use the radio's own menu - the
+            // radio stops streaming, so every slot decodes zero by design.
+            s_stuck_slots = 0;   // never reset mid-exchange or mid-pause
         } else if (n_cand > 20 && n_decoded == 0) {
             s_stuck_slots++;
             if (s_stuck_slots >= stuck_thresh) {

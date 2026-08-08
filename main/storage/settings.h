@@ -89,6 +89,13 @@ typedef struct {
     // from cat_get_af_gain(). Deliberately NOT pushed to the radio at boot, so a
     // saved value can never change the volume behind the operator's back.
     uint8_t  qmx_vol_db;
+    // CW transmit offset (Roy KI0ER, 2026-08-07): while in CW, transmit this
+    // many Hz away from the station you are listening to, so a QRP call does
+    // not land in the mud-pit of everyone else zero-beating the DX. 0 = off.
+    // The radio does this with split (RX on VFO A, TX on VFO B); we keep VFO B
+    // at A+offset for as long as the feature is on and the mode is CW.
+    // Yaesu calls the equivalent "CLAR TX"; the QMX has no XIT of its own.
+    int16_t  cw_tx_offset_hz;
     bool     snap_to_peak;    // tap-to-tune snaps to the strongest nearby signal (default true)
     uint8_t  bandplan_region; // band-plan strip region: 0=auto(from grid) 1=R1 2=R2 3=R3
     bool     distance_in_miles; // FT8 decode list: show distance in miles instead of km (default false)
@@ -208,6 +215,13 @@ void settings_set_wf_window(uint8_t idx);
 // Display 180-degree flip for upside-down mounting (debounced flush).
 void settings_set_display_flip(bool v);
 void settings_set_qmx_vol_db(uint8_t db);
+/* CW transmit offset in Hz, -1000..+1000, 0 = off. Applied only in CW mode. */
+void settings_set_cw_tx_offset_hz(int16_t hz);
+/* Scalar read of the same value. Exists so cat.c's poll task can check it every
+ * 50 ms WITHOUT putting a ~500-byte qmx_settings_t on its 4 KB stack - the same
+ * reason settings_wifi_known_count() exists (see CLAUDE.md, "Task stacks on
+ * this board are TINY"). */
+int16_t settings_get_cw_tx_offset_hz(void);
 
 // FT8 distance display unit (debounced flush). When false show distance in km,
 // when true show distance in miles.

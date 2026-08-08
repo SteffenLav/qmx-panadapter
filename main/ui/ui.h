@@ -94,6 +94,13 @@ void ui_set_iq_mode_warning(bool active);
 // "the spectrum looks mirrored" is offered first when it is actually happening.
 bool ui_iq_mode_warning_active(void);
 
+// Release the radio to its own front panel (Stan's pause button, via Samuel
+// W7STF), or take it back. Drives cat_user_pause_set() plus the on-screen
+// banner and the drawer button's label, so every entry point - drawer, banner
+// tap, web - leaves the same visible state. Safe from any task (the display
+// lock is recursive).
+void ui_set_cat_paused(bool paused);
+
 // Call whenever a help overlay (the docs Reader, the "What's wrong?" panel) opens
 // or closes. While one owns the screen the top-bar hit zones and the drawer/memory
 // edge swipes are dropped out of hit-testing, and the QMX-wait prompt stands down -

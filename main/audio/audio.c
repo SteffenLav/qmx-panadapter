@@ -311,21 +311,35 @@ static void log_stats(void)
     // device is open, CAT answers polls, and not one audio pair arrives. A
     // working QMX in IQ mode streams ~48000 pairs/s without exception.
     //
-    // Escalation, deliberately slow and capped: 60 s silent -> soft reset of
-    // the audio pipeline (free - this is the same reset the decode watchdog
-    // uses). 120 s -> ONE usb_replug() (VBUS cycle - the recovery Roy performs
-    // by hand as a QMX power-cycle, minus the walk). Cap of 2 replugs per
-    // connection so a genuinely dead radio cannot put the port in a cycle loop;
-    // any real audio resets everything.
+    // Escalation, deliberately slow and capped, cheapest step first:
+    //   30 s  -> re-assert IQ mode (Q9 1;). Free and invisible. Added after
+    //            the menu-visit trigger was understood: Q9 is SESSION state on
+    //            the QMX, and a trip through its menu can drop it - in which
+    //            case the radio is working perfectly and simply is not being
+    //            asked for IQ audio any more. Nothing to reset, nothing to
+    //            power-cycle; just ask again.
+    //   60 s  -> soft reset of the audio pipeline (the same reset the decode
+    //            watchdog uses).
+    //   120 s -> ONE usb_replug() (VBUS cycle - the recovery Roy performs by
+    //            hand as a QMX power-cycle, minus the walk). Cap of 2 replugs
+    //            per connection so a genuinely dead radio cannot put the port
+    //            in a cycle loop; any real audio resets everything.
+    //
+    // Stands down entirely while the operator has paused CAT: a deliberate trip
+    // into the QMX's own menu produces this exact signature, and yanking VBUS
+    // under the operator's hands would be the worst possible response to it.
     {
         static int s_silent_secs = 0;
         static int s_replug_used = 0;
-        if (pairs_per_sec > 0 || !s_uac_dev || !cat_is_ready()) {
+        if (pairs_per_sec > 0 || !s_uac_dev || !cat_is_ready() || cat_user_pause_active()) {
             if (pairs_per_sec > 0) s_replug_used = 0;
             s_silent_secs = 0;
         } else {
             s_silent_secs += STATS_PERIOD_MS / 1000;
-            if (s_silent_secs == 60) {
+            if (s_silent_secs == 30) {
+                ESP_LOGW(TAG, "dead stream: 30 s of silence with CAT alive - re-asserting IQ mode");
+                cat_request_iq_reassert();
+            } else if (s_silent_secs == 60) {
                 ESP_LOGW(TAG, "dead stream: 60 s of silence with CAT alive - soft audio reset");
                 audio_request_reset();
             } else if (s_silent_secs >= 120 && s_replug_used < 2) {

@@ -421,6 +421,11 @@ static esp_err_t status_handler(httpd_req_t *req)
         }
     }
     cJSON_AddBoolToObject(root, "tune_ok", cat_qmx_fw_at_least(1, 4, 0));
+    // Paused = the operator has released the radio to its own menu. Everything
+    // frequency-, mode- and decode-shaped in this payload is frozen while it is
+    // true, so the browser needs to say so rather than show stale numbers as if
+    // they were live.
+    cJSON_AddBoolToObject(root, "paused", cat_user_pause_active());
 
     const esp_app_desc_t *app = esp_app_get_description();
     cJSON_AddStringToObject(root, "tab5_fw",     app ? app->version : "");
@@ -527,6 +532,15 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // Un-skip everyone - band conditions change, and a station that timed
         // out an hour ago may be perfectly workable now.
         ft8_greylist_clear_all();
+    } else if (action && strcmp(action, "pause") == 0) {
+        // Release the radio to its own front panel (Stan's pause button, via
+        // Samuel W7STF). Reachable from the browser as well as the drawer for
+        // the same reason everything else is: the operator may be at the radio
+        // with the Tab5 across the room, which is precisely when they want the
+        // Tab5 to stop talking.
+        ui_set_cat_paused(true);
+    } else if (action && strcmp(action, "resume") == 0) {
+        ui_set_cat_paused(false);
     } else if (action && strcmp(action, "usb_shutdown") == 0) {
         // Orderly USB teardown before the operator re-flashes (see
         // util/usb_shutdown.h). Blocking and bounded; the browser gets its
@@ -1460,6 +1474,11 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "distance_in_miles", c.distance_in_miles);
     cJSON_AddBoolToObject(root, "iq_enabled",        c.iq_enabled);
     cJSON_AddNumberToObject(root, "qmx_vol_db",      c.qmx_vol_db);
+    // -1 until the radio has answered RG;. The browser must show that as
+    // "unknown" rather than as 0 dB, which is a real and very deaf setting.
+    cJSON_AddNumberToObject(root, "cw_tx_offset_hz", c.cw_tx_offset_hz);
+    cJSON_AddNumberToObject(root, "qmx_rf_gain_db",  cat_get_rf_gain());
+    cat_query_rf_gain();   // refresh for the next GET, as the drawer does on open
     cJSON_AddNumberToObject(root, "bandplan_region", c.bandplan_region);
 
     // Display & waterfall - the "tune it from the laptop while watching the
@@ -1589,6 +1608,18 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         // AG is in 0.25 dB steps - the slider's own conversion. Sending dB here
         // would set the radio to a quarter of what the browser asked for.
         cat_request_af_gain((uint16_t)(db * 4));
+    }
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "cw_tx_offset_hz")))
+        settings_set_cw_tx_offset_hz((int16_t)it->valuedouble);   // clamps internally
+    // RF gain is NOT stored on our side at all - it lives in the radio, per
+    // band, and we only ever relay it. Storing a copy would let the browser
+    // replay another band's value onto this one.
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "qmx_rf_gain_db"))) {
+        int db = (int)it->valuedouble;
+        if (db < 0) db = 0;
+        if (db > CAT_RF_GAIN_DB_MAX) db = CAT_RF_GAIN_DB_MAX;
+        cat_request_rf_gain((uint8_t)db);
+        ui_flat_mode_reset();   // the noise floor just moved
     }
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "bandplan_region")))
         settings_set_bandplan_region((uint8_t)it->valuedouble);
