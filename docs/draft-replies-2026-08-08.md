@@ -32,19 +32,27 @@ chooses another CQ caller. A deliberate pounce still holds and waits — a willi
 pounce means you want that station. No grey-list strike for the busy one; busy is
 not unresponsive.
 
-The blank message area: your two reports point at the same fault, and your QMX
-menu reproduction was the giveaway. The radio stops sending IQ audio while CAT
-keeps answering, so transmit still works, nothing decodes, and the rows age out
-after a minute — a blank list with signals audible. Chasing that down led
-somewhere useful: IQ mode on the QMX is *session* state, not a stored setting, so
-a trip through the radio's menu can simply switch it off. The radio is then
-working perfectly and just isn't being asked for IQ audio any more. So the first
-thing the next build does, after 30 seconds of silence with CAT still answering,
-is ask again — free, invisible, and it fixes that case outright. Only if silence
-continues does it escalate to an audio reset at 60 seconds and the USB
-power-cycle you perform by hand at 120, capped so a genuinely dead radio cannot
-loop it. Your diagnostic logs would still be very welcome to confirm the
-signature matches — please email them.
+The blank message area: your QMX menu reproduction was the giveaway, and between
+it and Samuel W7STF's Band config thread the mechanism is now clear. Stan KC7XE
+identified the blank LCD and "Starting processes" that Samuel saw as the QMX's
+own watchdog reset — so the radio is quietly restarting. Two consequences follow.
+IQ mode on the QMX is *session* state, not a stored setting, so a restart
+switches it off; and a QMX restart with the cable connected usually does not
+produce any disconnect the Tab5 can see. Which leaves exactly what you reported:
+a radio answering every CAT command perfectly, sending no audio. Transmit works,
+nothing decodes, the rows age out after a minute, and only restarting the radio
+by hand appears to fix it — because that finally forces a reconnection.
+
+So the next build just asks again. After 30 seconds of silence with CAT still
+answering, it re-sends the IQ-mode enable: free, invisible, and it should recover
+your case on its own. Only if silence continues does it escalate to an audio
+reset at 60 seconds and the USB power-cycle you perform by hand at 120, capped so
+a genuinely dead radio cannot loop it. There is also now a "Release radio" button
+that stops the Tab5 talking entirely while you use the QMX's menus — a gentler
+version of your own advice to unplug the USB cable first. Your diagnostic logs
+would still be very welcome to confirm the signature matches; if you see
+"re-asserting IQ mode" in the log followed by decodes coming back, that is this
+working.
 
 Now the CW offset. This one is in, and I think you are right that it changes what
 the device is for.
@@ -108,9 +116,10 @@ binaural comes with it, and doing it on the Tab5 has one advantage over doing it
 in the radio: the Tab5 knows where every signal sits in the passband, so the
 stereo image can follow the spectrum rather than being a fixed 45 degrees.
 
-## To Samuel W7STF — Stan's two suggestions
+## To Samuel W7STF and Stan KC7XE — the Band config thread
 
-Samuel — please pass both of these back to Stan, because both are in.
+Samuel, Stan — both of Stan's suggestions are in the next build, and the Band
+config behaviour now makes sense.
 
 RF gain over CAT: done. The QMX exposes it as RG, and it turns out to be
 available on 1.03 as well as 1.04, so nobody has to move firmware for it. It sits
@@ -132,13 +141,50 @@ down too. A blue bar across the top says the radio is yours and how to take it
 back, because with the spectrum frozen that state otherwise looks exactly like a
 failure. Taking it back re-checks IQ mode, which the menu can switch off.
 
-Which brings me to your other thread. I would like to see the Band config
-behaviour you described on the QMX+ with fresh eyes, because I suspect it is this
-same contention — the Band Configuration terminal app and our poll talking over
-each other on one port. Could you try it once more on the next build with
-"Release radio" engaged before you enter Band config, and send me a diagnostic
-log either way? If it still misbehaves with the Tab5 silent, then it is something
-else and I want to know that just as much.
+Which brings me to the Band config thread, where Stan had it worked out before I
+arrived.
+
+His reading matches everything I can see from this end. The front-panel menu
+drives the display from the MCU and is not isolated from the CAT channel the way
+the terminal menu is — which is exactly why PuTTY is fine, and why unplugging USB
+is fine. And the blank screen followed by "Starting processes" being the
+watchdog reset is the piece that makes the rest fall into place, because it means
+the radio genuinely restarts.
+
+That turns out to explain Roy's problem too, which I had been treating as
+separate. IQ mode on the QMX is *session* state — it is not saved — so when the
+watchdog restarts the firmware, IQ mode is switched off. Meanwhile the USB link
+usually survives a QMX restart without the Tab5 seeing any disconnect at all. So
+the Tab5 is left with a radio that answers every CAT command perfectly and sends
+no audio: transmit works, nothing decodes, and the decode list ages out to blank.
+That is precisely Roy's report, and it is why only restarting the radio appeared
+to fix it — the restart forced a reconnection and a fresh handshake.
+
+So the next build simply asks again. After 30 seconds of silence with CAT still
+answering, it re-sends the IQ-mode enable, which should recover both of your
+cases by itself without anyone touching anything. If it works you will see it in
+the log as "re-asserting IQ mode" followed by decodes resuming. I would very much
+like to know whether it does.
+
+Stan — your pause button and your "RG should ideally be accessible via Tab5" are
+both in the next build, which I had started before reading your message, so
+consider that agreement rather than obedience. Between them, Samuel's reason for
+being in that menu goes away: RF gain becomes a slider you can move mid-QSO
+without opening anything on the radio.
+
+One thing I would like your opinion on, because it worries me now that you have
+said it. You mentioned that in the Tune SWR menu, *any* character over CAT locks
+up the radio controls. The Tab5 has an Antenna Tune button for 1.04 firmware
+that enters SWR Tune with MD8 and then polls PC and SW continuously to show live
+power and SWR while it transmits. Does your warning apply to the mode when it is
+entered over CAT, or only to the front-panel menu? If it applies to both, I am
+polling straight into the hazard and I will change it — and it would also explain
+a crash report I had months ago that arrived right after someone used the SWR
+Tune submenu. I would rather ask than guess.
+
+Your quick-menu idea is a good one and I have written it down: overlaying a
+button you do not use (presets, in your case) with your own choice of shortcuts.
+That is the right shape for it — configurable, not another fixed row of buttons.
 
 On the Bluetooth mouse from your earlier note: a USB mouse already works today,
 but only with the radio unplugged — the Tab5 has one USB host port, and sharing
