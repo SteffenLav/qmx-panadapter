@@ -101,6 +101,11 @@ bool ui_iq_mode_warning_active(void);
 // lock is recursive).
 void ui_set_cat_paused(bool paused);
 
+/* Open/close the settings drawer from outside the UI. Used by the hidden
+ * /api/cmd {"action":"drawer"} dev action so a layout change can be checked on
+ * a screenshot. Call with the display lock held. */
+void ui_set_drawer_open(bool open);
+
 // Call whenever a help overlay (the docs Reader, the "What's wrong?" panel) opens
 // or closes. While one owns the screen the top-bar hit zones and the drawer/memory
 // edge swipes are dropped out of hit-testing, and the QMX-wait prompt stands down -

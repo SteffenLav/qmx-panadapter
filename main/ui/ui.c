@@ -1662,6 +1662,68 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define N_DRAWER_SECTIONS     27
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
+static int       s_drawer_section_h[N_DRAWER_SECTIONS];
+
+// ---- Drawer groups, then a Basic/Expert filter ------------------------------
+//
+// The drawer had grown to 25 sections in BUILD order - i.e. wherever each new
+// setting happened to fit - so the two QMX gain controls sat together but CW
+// pitch was nine sections away from the CW transmit offset. Operator's call,
+// 2026-08-08: group and reorder first, then add the filter on top.
+//
+// Sections are POSITIONED here, never rebuilt, so every construction block above
+// stays exactly where it is. Heights come from s_drawer_section_h[], recorded by
+// drawer_section() - there is no parallel table to keep in step by hand, which
+// is what went wrong twice before.
+typedef struct { const char *title; const int *ids; int n; bool expert; } drawer_group_t;
+
+static const int GRP_STATION[]  = { DRAWER_SEC_IDENTITY, DRAWER_SEC_BPREGION };
+static const int GRP_RADIO[]    = { DRAWER_SEC_QMXVOL, DRAWER_SEC_QMXRF, DRAWER_SEC_CW,
+                                    DRAWER_SEC_TUNE2, DRAWER_SEC_PAUSE };
+static const int GRP_NETWORK[]  = { DRAWER_SEC_WIFI, DRAWER_SEC_SPOTS };
+static const int GRP_DISPLAY[]  = { DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_SLEEP,
+                                    DRAWER_SEC_FLIP, DRAWER_SEC_CMAP };
+static const int GRP_FT8[]      = { DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_FT8SYNC };
+static const int GRP_SPECTRUM[] = { DRAWER_SEC_PRESETS, DRAWER_SEC_DBRANGE, DRAWER_SEC_SMOOTHING,
+                                    DRAWER_SEC_WATERFALL, DRAWER_SEC_FLAT, DRAWER_SEC_IQ,
+                                    DRAWER_SEC_IFCAL };
+static const int GRP_DEVICE[]   = { DRAWER_SEC_CHARGE };
+
+#define GRP_DEF(name, arr, exp) { name, arr, (int)(sizeof(arr)/sizeof((arr)[0])), exp }
+// A group marked `expert` is hidden in Basic. Everything reached in a normal
+// session is in a non-expert group; the tuning and calibration controls are not.
+static const drawer_group_t s_drawer_groups[] = {
+    GRP_DEF("Station",  GRP_STATION,  false),
+    GRP_DEF("Radio",    GRP_RADIO,    false),
+    GRP_DEF("Network",  GRP_NETWORK,  false),
+    GRP_DEF("Display",  GRP_DISPLAY,  false),
+    GRP_DEF("FT8",      GRP_FT8,      false),
+    GRP_DEF("Spectrum", GRP_SPECTRUM, true),
+    GRP_DEF("Device",   GRP_DEVICE,   true),
+};
+#define N_DRAWER_GROUPS ((int)(sizeof(s_drawer_groups)/sizeof(s_drawer_groups[0])))
+
+static lv_obj_t *s_grp_hdr[N_DRAWER_GROUPS];
+static lv_obj_t *s_basic_btn = NULL, *s_expert_btn = NULL;
+static bool      s_drawer_expert = false;
+
+// Is this section allowed on the screen we are on at all?
+static bool drawer_sec_visible(int id, bool ft8, bool tune_ok)
+{
+    if (id == DRAWER_SEC_CWAUDIO) return false;   // shelved - see cw_audio.c
+    if (id == DRAWER_SEC_RESMON)  return false;   // dev-only, driven by /api/cmd
+    if (id == DRAWER_SEC_TUNE2)   return tune_ok;
+    if (id == DRAWER_SEC_DISTANCE || id == DRAWER_SEC_SIMMODE ||
+        id == DRAWER_SEC_FT8SYNC) return ft8;
+    // The spectrum/waterfall controls describe a view FT8 mode does not show.
+    if (id == DRAWER_SEC_SPOTS   || id == DRAWER_SEC_PRESETS ||
+        id == DRAWER_SEC_DBRANGE || id == DRAWER_SEC_SMOOTHING ||
+        id == DRAWER_SEC_WATERFALL || id == DRAWER_SEC_FLAT ||
+        id == DRAWER_SEC_IQ      || id == DRAWER_SEC_IFCAL ||
+        id == DRAWER_SEC_CMAP) return !ft8;
+    return true;
+}
+
 // Phase 5.10D Stage 2b: drawer widgets we need to keep handles to
 static lv_obj_t *s_slider_qmx_vol = NULL;
 static lv_obj_t *s_lbl_qmx_vol    = NULL;
@@ -1753,6 +1815,7 @@ static void drawer_refresh_qmx_rf(void);
 static void drawer_pause_btn_cb(lv_event_t *e);
 static void drawer_slider_cwtxoff_cb(lv_event_t *e);
 static void ui_set_cw_tx_offset_label(int hz);
+static void drawer_expert_btn_cb(lv_event_t *e);
 static void drawer_check_flip_cb(lv_event_t *e);
 static void drawer_check_charge_limit_cb(lv_event_t *e);
 static void drawer_slider_charge_limit_pct_cb(lv_event_t *e);
@@ -5745,6 +5808,11 @@ static lv_obj_t *drawer_section(int sec_idx, int y, int h)
     lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
     s_drawer_sections[sec_idx]   = c;
     s_drawer_section_y[sec_idx]  = y;
+    // Record the height too. Every re-layout used to carry its own keep_h[]
+    // that had to line up 1:1 with its keep[] by hand - and twice it did not
+    // (a 34 px dead gap under the brightness slider, and a section drawn on top
+    // of the row above it). Ask the section, don't restate it.
+    s_drawer_section_h[sec_idx]  = h;
     return c;
 }
 
@@ -5909,6 +5977,61 @@ static void drawer_build(void)
         lv_label_set_text(l, LV_SYMBOL_LIST "  Need guidance?");
         lv_obj_center(l);
         y += 60 + 20;
+    }
+
+    // Basic / Expert. A two-position control rather than a hidden gesture: the
+    // drawer is long, but a setting you cannot find is worse than a long list,
+    // so the switch that shortens it is the first thing in the drawer and is
+    // always visible. Choice is not persisted on purpose - it is a way to look
+    // at the drawer, not a preference, and Basic is the right thing to land on
+    // when you open the box.
+    {
+        lv_obj_t *sw = lv_obj_create(s_drawer);
+        lv_obj_set_size(sw, DRAWER_W - 32, 56);
+        lv_obj_align(sw, LV_ALIGN_TOP_LEFT, 0, y);
+        lv_obj_set_style_bg_opa(sw, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(sw, 0, 0);
+        lv_obj_set_style_pad_all(sw, 0, 0);
+        lv_obj_clear_flag(sw, LV_OBJ_FLAG_SCROLLABLE);
+
+        s_basic_btn = lv_btn_create(sw);
+        lv_obj_set_size(s_basic_btn, (DRAWER_W - 32) / 2 - 4, 52);
+        lv_obj_align(s_basic_btn, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_set_style_radius(s_basic_btn, 8, 0);
+        lv_obj_add_event_cb(s_basic_btn, drawer_expert_btn_cb, LV_EVENT_CLICKED, (void *)0);
+        lv_obj_t *bl = lv_label_create(s_basic_btn);
+        lv_label_set_text(bl, "Basic");
+        lv_obj_set_style_text_font(bl, &lv_font_montserrat_24, 0);
+        lv_obj_center(bl);
+
+        s_expert_btn = lv_btn_create(sw);
+        lv_obj_set_size(s_expert_btn, (DRAWER_W - 32) / 2 - 4, 52);
+        lv_obj_align(s_expert_btn, LV_ALIGN_TOP_RIGHT, 0, 0);
+        lv_obj_set_style_radius(s_expert_btn, 8, 0);
+        lv_obj_add_event_cb(s_expert_btn, drawer_expert_btn_cb, LV_EVENT_CLICKED, (void *)1);
+        lv_obj_t *el = lv_label_create(s_expert_btn);
+        lv_label_set_text(el, "Expert");
+        lv_obj_set_style_text_font(el, &lv_font_montserrat_24, 0);
+        lv_obj_center(el);
+        // Paint the initial state here, or both buttons are the same blue until
+        // the first tap and the drawer never says which mode it is in.
+        lv_obj_set_style_bg_color(s_basic_btn,
+            lv_color_hex(s_drawer_expert ? 0x2a3138 : UI_COLOR_PRIMARY), 0);
+        lv_obj_set_style_bg_color(s_expert_btn,
+            lv_color_hex(s_drawer_expert ? UI_COLOR_PRIMARY : 0x2a3138), 0);
+        y += 68;
+    }
+
+    // Group headings. Created once here and POSITIONED by the layout pass, in
+    // the same walk that places the sections - so a heading can never end up
+    // over a group it does not belong to.
+    for (int g = 0; g < N_DRAWER_GROUPS; g++) {
+        lv_obj_t *h = lv_label_create(s_drawer);
+        lv_label_set_text(h, s_drawer_groups[g].title);
+        lv_obj_set_style_text_font(h, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(h, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+        lv_obj_add_flag(h, LV_OBJ_FLAG_HIDDEN);
+        s_grp_hdr[g] = h;
     }
 
     // Everything above is fixed header; the sections start here. Recorded so the
@@ -6839,6 +6962,15 @@ static void drawer_open(void)
     ESP_LOGI(TAG, "Settings drawer open");
 }
 
+// Open or close the drawer from outside the UI (the hidden /api/cmd "drawer"
+// dev action). Exists so a drawer layout change can be verified on a screenshot
+// rather than taken on trust.
+void ui_set_drawer_open(bool open)
+{
+    if (open) drawer_open();
+    else      drawer_close();
+}
+
 static void drawer_close(void)
 {
     if (!s_drawer || !s_drawer_open) return;
@@ -6895,50 +7027,53 @@ static void drawer_set_ft8_mode(bool ft8)
         else lv_obj_add_flag(s_tune_entry_btn, LV_OBJ_FLAG_HIDDEN);
     }
 
-    for (int i = 0; i < N_DRAWER_SECTIONS; i++) {
-        if (!s_drawer_sections[i]) continue;
-        bool kept = false;
-        for (int k = 0; k < n_keep; k++) {
-            if (keep[k] == i) { kept = true; break; }
-        }
-        // DRAWER_SEC_DISTANCE and DRAWER_SEC_SIMMODE are FT8-only (meaningless
-        // in Panadapter mode), unlike the rest of keep[] which is shared
-        // between both modes - so they're hidden, not kept, when !ft8.
-        // DRAWER_SEC_CWAUDIO is shelved (cw_audio.c) and hidden in BOTH modes.
-        // DRAWER_SEC_TUNE2 is hidden whenever the Tune button is (FT8 mode or
-        // <1_04 firmware).
-        if ((ft8 && !kept) || (!ft8 && (i == DRAWER_SEC_DISTANCE || i == DRAWER_SEC_SIMMODE)) ||
-            i == DRAWER_SEC_CWAUDIO || (i == DRAWER_SEC_TUNE2 && !tune_ok)) {
-            lv_obj_add_flag(s_drawer_sections[i], LV_OBJ_FLAG_HIDDEN);
-        } else {
-            lv_obj_clear_flag(s_drawer_sections[i], LV_OBJ_FLAG_HIDDEN);
-        }
-    }
+    (void)keep; (void)keep_h; (void)n_keep;   // superseded by the group table below
 
-    if (ft8) {
-        // Start below the always-present header buttons (User Manual + What's
-        // wrong?). This USED to be a hardcoded 176 with a comment warning that it
-        // had to be kept in step with the build-time layout by hand - and the very
-        // next person to add a header button (2026-08-06) did not, so the FT8
-        // reflow stacked Flip 180 straight on top of it. The build now records
-        // where the sections actually begin; do not reintroduce a literal here.
-        int y = s_drawer_sec_y0;
-        for (int k = 0; k < n_keep; k++) {
-            lv_obj_set_pos(s_drawer_sections[keep[k]], 0, y);
-            y += keep_h[k];
+    // Hide everything first: the walk below shows only what it places, so a
+    // section that falls out of every group cannot be left floating where the
+    // previous layout happened to leave it.
+    for (int i = 0; i < N_DRAWER_SECTIONS; i++)
+        if (s_drawer_sections[i]) lv_obj_add_flag(s_drawer_sections[i], LV_OBJ_FLAG_HIDDEN);
+
+    // Start below the always-present header buttons (User Manual + What's
+    // wrong?). This USED to be a hardcoded 176 with a comment warning that it
+    // had to be kept in step with the build-time layout by hand - and the very
+    // next person to add a header button (2026-08-06) did not, so the FT8
+    // reflow stacked Flip 180 straight on top of it. The build records where
+    // the sections actually begin; do not reintroduce a literal here.
+    int y = s_drawer_sec_y0;
+    for (int g = 0; g < N_DRAWER_GROUPS; g++) {
+        const drawer_group_t *grp = &s_drawer_groups[g];
+        bool show_group = (!grp->expert || s_drawer_expert);
+
+        // Count what would actually appear, so an empty group never leaves a
+        // heading with nothing under it (Spectrum in FT8 mode, for one).
+        int n_vis = 0;
+        if (show_group) {
+            for (int k = 0; k < grp->n; k++)
+                if (s_drawer_sections[grp->ids[k]] &&
+                    drawer_sec_visible(grp->ids[k], ft8, tune_ok)) n_vis++;
         }
-    } else {
-        // Panadapter layout = build-time positions, minus the Antenna Tune
-        // slot when it's hidden: every section below it shifts up by its
-        // height so the drawer stays gap-free on 1_03 firmware.
-        int tune_y = s_drawer_section_y[DRAWER_SEC_TUNE2];
-        int shift  = tune_ok ? 0 : DRAWER_TUNE2_H;
-        for (int i = 0; i < N_DRAWER_SECTIONS; i++) {
-            if (!s_drawer_sections[i]) continue;
-            int yy = s_drawer_section_y[i];
-            if (yy > tune_y) yy -= shift;
-            lv_obj_set_pos(s_drawer_sections[i], 0, yy);
+
+        if (s_grp_hdr[g]) {
+            if (n_vis > 0) {
+                lv_obj_clear_flag(s_grp_hdr[g], LV_OBJ_FLAG_HIDDEN);
+                lv_obj_set_pos(s_grp_hdr[g], 0, y + 4);
+                y += 46;
+            } else {
+                lv_obj_add_flag(s_grp_hdr[g], LV_OBJ_FLAG_HIDDEN);
+            }
         }
+        if (n_vis == 0) continue;
+
+        for (int k = 0; k < grp->n; k++) {
+            int id = grp->ids[k];
+            if (!s_drawer_sections[id] || !drawer_sec_visible(id, ft8, tune_ok)) continue;
+            lv_obj_clear_flag(s_drawer_sections[id], LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_pos(s_drawer_sections[id], 0, y);
+            y += s_drawer_section_h[id];
+        }
+        y += 12;   // air between groups
     }
 }
 
@@ -7235,6 +7370,21 @@ static void drawer_slider_cwtxoff_cb(lv_event_t *e)
     // Nothing is written to the radio here: cat.c's poll task notices the
     // change on its next cycle and sets (or clears) split itself, which is also
     // what keeps it correct when the frequency later moves.
+}
+
+// Basic / Expert. Re-lays the drawer out for the mode currently showing, and
+// paints the two buttons so it is obvious which one you are in.
+static void drawer_expert_btn_cb(lv_event_t *e)
+{
+    s_drawer_expert = (bool)(intptr_t)lv_event_get_user_data(e);
+    if (s_basic_btn)
+        lv_obj_set_style_bg_color(s_basic_btn,
+            lv_color_hex(s_drawer_expert ? 0x2a3138 : UI_COLOR_PRIMARY), 0);
+    if (s_expert_btn)
+        lv_obj_set_style_bg_color(s_expert_btn,
+            lv_color_hex(s_drawer_expert ? UI_COLOR_PRIMARY : 0x2a3138), 0);
+    drawer_set_ft8_mode(ui_mode_get() == UI_MODE_FT8);
+    if (s_drawer) lv_obj_scroll_to_y(s_drawer, 0, LV_ANIM_OFF);
 }
 
 // Release the radio / take it back. One button, two states - the label always

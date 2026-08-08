@@ -575,6 +575,14 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         cJSON *item = cJSON_GetObjectItem(root, "off_ms");
         uint32_t off_ms = cJSON_IsNumber(item) ? (uint32_t)item->valuedouble : 2000;
         usb_replug(off_ms);
+    } else if (action && strcmp(action, "drawer") == 0) {
+        // Hidden dev action, like resmon below: open or close the Tab5's own
+        // settings drawer. No web UI element references it - the browser has
+        // its own Settings. It exists so a drawer layout change can be checked
+        // on a screenshot instead of being taken on trust.
+        cJSON *o = cJSON_GetObjectItem(root, "open");
+        bool want = cJSON_IsBool(o) ? cJSON_IsTrue(o) : true;
+        if (display_lock(500)) { ui_set_drawer_open(want); display_unlock(); }
     } else if (action && strcmp(action, "resmon") == 0) {
         // Hidden developer-only toggle for the resource-monitor overlay. No web
         // UI element references this — it's meant to be fired from the browser
@@ -1905,10 +1913,35 @@ static esp_err_t help_handler(httpd_req_t *req)
 static esp_err_t manual_handler(httpd_req_t *req)
 {
     char q[128] = {0};
+    char raw[96] = {0};
     char page[96] = {0};
     if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK)
-        httpd_query_key_value(q, "page", page, sizeof(page));
-    if (!page[0]) snprintf(page, sizeof(page), "index.md");
+        httpd_query_key_value(q, "page", raw, sizeof(raw));
+    if (!raw[0]) snprintf(raw, sizeof(raw), "index.md");
+
+    // URL-DECODE, or every page in a subdirectory 404s. httpd_query_key_value
+    // hands back the value still percent-encoded, and the browser sends
+    // encodeURIComponent("guide/panadapter.md") = "guide%2Fpanadapter.md", which
+    // matches nothing in the blob's table of literal paths. That was 15 of the
+    // manual's 19 pages unreachable from the web UI - everything except the four
+    // at the top level. It read as "HTTP 404" in the reader and looked like a
+    // missing page rather than a missing decode.
+    {
+        size_t o = 0;
+        for (size_t i = 0; raw[i] && o + 1 < sizeof(page); i++) {
+            if (raw[i] == '%' && isxdigit((unsigned char)raw[i+1]) &&
+                                 isxdigit((unsigned char)raw[i+2])) {
+                char hex[3] = { raw[i+1], raw[i+2], 0 };
+                page[o++] = (char)strtol(hex, NULL, 16);
+                i += 2;
+            } else if (raw[i] == '+') {
+                page[o++] = ' ';
+            } else {
+                page[o++] = raw[i];
+            }
+        }
+        page[o] = '\0';
+    }
 
     // The blob is a fixed table of known paths, so a lookup miss is the whole
     // guard - there is no filesystem to escape into. Still refuse "..", so a
