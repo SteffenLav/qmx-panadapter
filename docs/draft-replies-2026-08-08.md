@@ -8,7 +8,13 @@ and post; nothing posts automatically.
   2. Michael KZ4LY        -> panadapter topic
   3. Samuel W7STF + Stan  -> Band config thread (#176111)
   4. Samuel W7STF alone   -> panadapter topic (Bluetooth mouse)
-  5. BD4AHS               -> panadapter topic
+  5. Roy KI0ER, 2nd       -> panadapter topic (he withdrew a post)
+  6. Michael KZ4LY, 2nd   -> panadapter topic (binaural, FT8-mode gating)
+  7. BD4AHS               -> panadapter topic
+
+1 and 2 were written before their follow-ups arrived. If 1 and 2 have already
+gone out, post 5 and 6 as they stand. If they have NOT, drop the RIT paragraph
+from 2 (Michael has since said he does not use RIT).
 
 There is a FIFTH, older and still unposted, in its own file:
 docs/draft-reply-orderly-shutdown-2026-08-07.md (Roger AD5DZ and Stan, the
@@ -200,6 +206,60 @@ And thank you for relaying Stan's two suggestions. Both are built: RF gain over
 CAT, and a "Release radio" pause for getting at the QMX's menus. I have answered
 those properly over in the Band config thread, along with what I think is going
 on with the QMX+ reboot you reproduced there.
+
+## To Roy KI0ER — second round (he withdrew a post and re-checked the split)
+
+Short on purpose. He corrected himself in public and deleted the wrong post; the
+useful thing is to confirm the direction and move on. Do NOT pick up his "TIT"
+joke.
+
+Roy — no apology needed, and thank you for checking it rather than assuming. The
+direction is as you describe: positive offset puts your transmit above the
+station you are listening to, negative below, and the receive frequency stays
+where you put it.
+
+Binaural is the part I would most like to get to as well. Michael has asked some
+sharp questions about how the sound stage should be built, which I have answered
+separately in this thread.
+
+## To Michael KZ4LY — second round (FT8-mode gating, and the binaural sound stage)
+
+He directly challenged a claim in my previous reply, and he is partly right.
+Answer the physics plainly and mark the unbuilt parts as unbuilt.
+
+Michael — RIT is dropped from the list, then. That is useful to know before I
+build it rather than after.
+
+On gating the audio path by mode: that is essentially the plan, with one detail
+that decides whether it works. The damage was not caused by audio being audible.
+The output task runs at a higher priority than the FFT consumer and on the same
+core, so merely existing, waking every 120 ms and going back to sleep, it
+interrupted the audio pipeline about 125 times per 15-second slot. Muting it
+would change nothing. It has to not run at all in FT8 and FT4 — which is exactly
+what you propose, and it is the cheap version of the rework.
+
+On binaural, you have caught a real error in what I wrote, and your first
+instinct is closer than mine on one point and further on another.
+
+Two stations on genuinely the same frequency cannot be separated by any stereo
+mapping. At that point they are one audio component, and no linear processing
+pulls them apart — position, phase or otherwise.
+
+What the classic I-and-Q-to-opposite-ears arrangement separates is sideband:
+signals above the dial land on one side of the stage, signals below it on the
+other. The other benefit, and I think the larger one, is that the noise reaching
+each ear is decorrelated. The brain gets several dB of usable improvement from
+that alone, with only one signal present.
+
+Your second reading describes what I was proposing: position set by where a
+signal sits, so two stations 30 Hz apart get distinct places while exactly
+co-channel ones stay merged. That leaves a design choice I would value your
+opinion on. Position can follow the audio pitch, in which case a station slides
+across the stage as you tune it; or it can follow the actual frequency within the
+displayed window, in which case a station holds its place while you tune and the
+stage stays still. I lean towards the second.
+
+All of that is design talk — none of it is built yet.
 
 ## To BD4AHS — power reading rise time
 
