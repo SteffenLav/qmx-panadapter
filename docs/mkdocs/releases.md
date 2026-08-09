@@ -4,24 +4,21 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.6.0** — 2026-08-09
+**v1.7.0** — 2026-08-09
 
-The browser became a second operating position, and the manual stopped being made of characters.
+A mouse, the phone spots that were missing, and knowing who hears you.
 
-- **Work the band from any browser.** The web page could show you the band; now it can work it. Tap a station to reply — the same decision the Tab5 makes about which message comes next, with a confirmation first because a mis-click from another room should not key your radio. Live spots on the spectrum, the TX tone picker, memory channels, settings you can type on a real keyboard, the pileup and grey-list views, Antenna Tune, and the whole manual — all served by the Tab5 itself with no internet needed. See [Web UI](guide/web-ui.md).
-- **`qmx.local`.** The Tab5 picks its own WiFi network from the ones it remembers, so its IP changes without you deciding it should — and the only place it was shown is the Tab5's own bottom bar, which is no use when the Tab5 is in the shack and you are not. Type `qmx.local` in a browser instead.
-- **Do not zero-beat the DX** (Roy KI0ER). Everyone answering a CW CQ zero-beat arrives as one mud-pit; a QRP station 400–600 Hz off stands out. Set a **CW transmit offset** once in Settings and it follows you everywhere — a tap on the panadapter, a spot, a memory recall, a band change, the web page, even the radio's own tuning knob. CW only, and it stands down the moment you leave CW.
-- **RF gain, and a Release radio button** (Stan KC7XE, via Samuel W7STF). RF gain is now a slider next to the QMX volume, read back from the radio because it is a per-band setting. **Release radio** stops the Tab5 talking to the QMX entirely so you can use the radio's own menus and its Band Configuration terminal without the two fighting over the same port.
-- **A radio that stops sending audio now recovers itself** (Roy KI0ER). A trip through the QMX's own menu can restart the radio, which switches its IQ mode off — leaving a radio that answers every command and sends no audio, so the decode list goes blank while transmit still works. The Tab5 now simply asks for IQ mode again after 30 seconds of silence, and only escalates if that does not help.
-- **FT8 transmit windows** (Roy KI0ER). Every occupancy strip shows **both** time windows, EVEN above ODD. The "FREQ BUSY" warning no longer counts stations in the window that cannot collide with you — which is why it used to contradict the green strip. The auto-answer robot moves on from a station that turns out to be working somebody else. And a CQ run can spend a **listening slot** every few calls so your view of your own window stays current.
-- **Look it up: an A–Z index.** The built-in manual now has an index of every heading, 256 terms, sorted by the word you would actually look for. Letters first, then terms — no typing on glass.
-- **The manual's diagrams are drawn now**, on the Tab5 and on this site. They used to be made of box characters, which the Tab5 could not render straight. Redrawing them turned up seven statements that were no longer true, including an FPS readout the Tab5 has never had.
-- **The settings drawer is grouped** — Station, Device, Radio, Network, Display, FT8, Spectrum — with a **Basic/Expert** toggle so everyday settings are not buried among the calibration ones.
-- **Fixes:** every manual page in a subdirectory returned a 404 in the browser (15 of 19 pages); spots that sat close together were being dropped rather than stacked; the memory page could not reach its own bottom rows and channels can now be dragged to move or clear them; spots settle instead of jumping to a new picture every minute.
+- **A Bluetooth mouse, with the radio still plugged in.** A USB mouse cannot do this: the QMX occupies the Tab5's only USB port, and sharing it through a hub does not work on this hardware. A Bluetooth mouse never touches that port. Pair it once — it reconnects by itself afterwards, across reboots and updates — and you get a pointer, a left click, and a wheel that scrolls whatever is under it. For anyone whose hands are cold or unsteady, every control becomes a click instead of a precise tap on glass. A symbol in the bottom bar shows off, scanning or connected. Off by default; see [Settings](guide/settings.md).
+- **DX cluster spots — the phone activity RBN cannot see.** RBN is automated skimmers, and no machine recognises a callsign spoken into a microphone, so every SSB station on the band was invisible to it. A cluster is people typing. Mode is worked out from the spotter's comment or your band plan, park and summit references are picked out of the text, and skimmer spots relayed onto the cluster are dropped so they cannot double what RBN already shows. See [Live Spots](guide/spots.md).
+- **Activation mode for POTA and SOTA.** Start an activation and every logged contact carries the reference automatically, with the count shown against the threshold — ten for POTA, four for SOTA — read from the log itself so it survives a reboot. Chases are tagged too, from spots already on screen. The ADIF download can be limited to one reference, so you upload that park's log rather than your whole file. Stopping is as prominent as starting, because the mistake that actually happens is driving home with it still on.
+- **SWR protection while transmitting.** The QMX reports SWR over the control link; above your limit — 3.0:1 by default — the transmission is cut short and the transmitter latched off until you clear it. An FT8 burst is nearly thirteen seconds of continuous key-down, so a disconnected or wrong-band antenna has real time to do damage.
+- **Who is hearing me.** Asks PSK Reporter which receivers have copied *your* callsign, listing distance, bearing and the report they gave you. The valuable case is the mismatch: stations you can hear that cannot hear you is a transmit-side fault, and from the receiving side alone that looks exactly like a dead band.
+- **Spots appear once.** An activator spotted on POTA *and* heard by RBN was drawn twice, in two colours, almost on top of each other; RBN also doubled itself where two skimmers rounded the same signal differently. One station is now one entry, and the RBN sighting is folded in as corroboration — meaning a receiver actually copied them just now, rather than a self-spot typed an hour ago.
+- **Fixes:** the clock claimed GPS time with no radio attached (Don N2VGU) — the Tab5 has no GPS of its own, and it was trusting a remembered verdict; each spot source checkbox is now genuinely its own source, where switching off POTA used to blank the whole lane and leave its spots behind; a tune started from the web UI now says so on the Tab5; and Antenna Tune no longer cancels itself after a second while leaving the radio keyed.
 
-**Not yet confirmed on the air:** the CW transmit offset (the radio does the right thing on the bench, but nobody has made a contact with it yet), the CQ listening slot's cadence, and the audio-recovery watchdog against a real occurrence in the field. Reports on all three are welcome.
+**Not yet confirmed on the air:** SWR protection has never seen a real mismatch, and the DX cluster lane has been verified as a feed but not watched drawing on a busy band. Reports welcome.
 
-### Installing v1.6.0
+### Installing v1.7.0
 
 1. Use the one-click flasher from the [Releases page](https://github.com/SteffenLav/qmx-panadapter/releases)
 2. Or follow [Build from Source](build/build.md)
@@ -29,6 +26,8 @@ The browser became a second operating position, and the manual stopped being mad
 Your settings are preserved during a normal flash.
 
 ## Previous Releases
+
+**v1.6.0** — 2026-08-09 — the browser became a second operating position: reply to a station, pick your TX tone, edit settings and memories and read the manual from any browser; `qmx.local`; CW transmit offset, RF gain and Release radio; self-recovering audio; the manual gained an A-Z index and drawn diagrams; the settings drawer was grouped with a Basic/Expert toggle.
 
 **v1.5.0** — 2026-08-06 — Context-sensitive help: the **User Manual** button opens the chapter for the screen you are on, warning banners are tappable, and a **Need guidance?** panel lists symptoms in plain words with the ones the device can see highlighted. Plus Call CQ from the browser (Dennis WN4FLA) and the station you are working held at the top of the decode list (Don WB0LQW).
 
@@ -227,7 +226,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.6.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.7.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

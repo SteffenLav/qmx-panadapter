@@ -69,18 +69,20 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.6.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, and now a
-second operating position in any browser.** The panadapter, FT8/FT4 receive and transmit,
-ADIF logging and all three logbook uploads are stable and in daily use.
+**v1.7.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+operating position in any browser, and now a mouse.** The panadapter, FT8/FT4 receive and
+transmit, ADIF logging and all three logbook uploads are stable and in daily use.
 
-**New in v1.6.0 — the browser can work the band, not just watch it.** Reply to a station,
-pick your transmit tone, edit settings and memories, read the whole manual — all from a
-phone or laptop, served by the Tab5 itself with no internet. The Tab5 now also answers to
-**`qmx.local`**, so its IP stops mattering. For CW there is a **transmit offset** so your
-QRP call is not buried in the zero-beat pile (Roy KI0ER), plus **RF gain** and a
-**Release radio** button for using the QMX's own menus (Stan KC7XE). A radio that stops
-sending audio now recovers by itself. And the manual's diagrams are properly drawn on
-both the Tab5 and this site.
+**New in v1.7.0 — a mouse, the phone spots that were missing, and knowing who hears you.**
+A **Bluetooth mouse** drives the Tab5 *while the QMX stays plugged in* — the case a USB
+mouse can never serve, because the radio owns the only USB port. Pair it once and it
+reconnects by itself; the wheel scrolls whatever is under the pointer. **DX cluster spots**
+add the SSB activity RBN structurally cannot see, because skimmers are machines and no
+machine recognises a callsign spoken into a microphone. **Activation mode** stamps every
+contact with your park or summit, counts them against the threshold, and can export that
+one reference on its own. **SWR protection** cuts a transmission short and latches off if
+the antenna is wrong. And **who is hearing me** asks PSK Reporter which receivers copied
+*your* call — the only way to tell a dead band from a transmit-side fault.
 
 Every release, newest first, is on the [Releases](releases.md) page.
 
@@ -90,7 +92,7 @@ Every release, newest first, is on the [Releases](releases.md) page.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.6.0.pdf) — a printable 40-page reference.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.7.0.pdf) — a printable 40-page reference.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

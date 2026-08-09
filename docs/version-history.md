@@ -1346,7 +1346,7 @@ Redrawing them was an audit, and **seven statements turned out to be untrue**. T
 
 ---
 
-### Shipped in v1.6.1 — 2026-08-09
+### Shipped in v1.7.0 — 2026-08-09
 
 **A Bluetooth mouse, phone spots, and knowing who can hear you.**
 
