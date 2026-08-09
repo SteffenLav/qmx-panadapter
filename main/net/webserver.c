@@ -309,8 +309,18 @@ static esp_err_t status_handler(httpd_req_t *req)
     // What is maintaining the clock - same authority the Tab5's bottom-bar
     // "UTC(NTP)"/"UTC(QMX)" suffix shows, so the two labels can never disagree.
     {
+        // SNTP is reported as NTP UNCONDITIONALLY, exactly as status.c does.
+        // This used to read "GPS" whenever the remembered GPS verdict was set -
+        // but the effective source is SNTP precisely when GPS is NOT live, so
+        // that printed GPS at the moment the radio carrying the GPS was absent.
+        // That is Don N2VGU's 2026-08-09 report, and it was fixed on the Tab5
+        // while this copy of the same decision was missed: the browser went on
+        // claiming GPS accuracy with the QMX unplugged. Found 2026-08-09 while
+        // verifying the Tab5 fix from a screenshot. The comment above once said
+        // these two labels "can never disagree" - they had already diverged,
+        // which is the argument for deriving the string in ONE place.
         time_sync_source_t ts = time_sync_get_effective_source();
-        const char *tsn = ts == TIME_SOURCE_SNTP   ? (time_sync_qmx_gps_confirmed() ? "GPS" : "NTP")
+        const char *tsn = ts == TIME_SOURCE_SNTP   ? "NTP"
                         : ts == TIME_SOURCE_QMX    ? (time_sync_qmx_gps_confirmed() ? "GPS" : "QMX")
                         : ts == TIME_SOURCE_RTC    ? "RTC"
                         : ts == TIME_SOURCE_FT8    ? "FT8"
