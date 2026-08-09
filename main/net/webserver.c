@@ -208,6 +208,11 @@ static void web_tune_stop(bool restore)
     if (s_web_tune_timer) esp_timer_stop(s_web_tune_timer);
     cat_tune_poll_set_active(false);
     if (restore) cat_request_mode(s_web_tune_prior);
+    // The label has to be put back explicitly: the MD; poll only calls
+    // ui_update_mode() when the DIGIT changes, and the digit never changed
+    // (it read the pre-Tune mode the whole time), so nothing else will ever
+    // clear the "TUNE" we set on start.
+    ui_update_mode(s_web_tune_prior);
     ESP_LOGW(TAG, "web tune: stopped (%s)", restore ? "mode restored" : "radio already out");
 }
 
@@ -238,6 +243,13 @@ static bool web_tune_start(void)
     cat_request_mode("TUNE");
     cat_tune_poll_set_active(true);
     esp_timer_start_once(s_web_tune_timer, 60 * 1000000LL);
+    // Say so on the Tab5 as well (TODO #95d). A tune started from a browser
+    // keys the radio for up to a minute while anyone standing at the Tab5 sees
+    // nothing at all - the top bar keeps showing the pre-Tune mode, because
+    // MD; reports that throughout (see CLAUDE.md). Someone in the room has to
+    // be able to tell the transmitter is on and that it was not them.
+    ui_update_mode("TUNE");
+    ui_toast(LV_SYMBOL_WARNING " Antenna Tune started from the web UI");
     ESP_LOGW(TAG, "web tune: STARTED (prior mode %s, 60 s limit)", s_web_tune_prior);
     return true;
 }
@@ -772,11 +784,35 @@ static esp_err_t saved_log_handler(httpd_req_t *req)
 }
 
 // GET /api/adif — download the ADIF QSO log from SPIFFS.
+//
+// ?activation=<REF> filters to the QSOs of ONE activation, which is what POTA
+// and SOTA actually want uploaded - a park's log, not your whole life's. The
+// filter is a line-wise MY_SIG_INFO match, which works because adif_log.c
+// writes exactly one record per line. Case-insensitive, since a reference can
+// reach the log from a config import or a hand edit in a different case.
 static esp_err_t adif_get_handler(httpd_req_t *req)
 {
+    char act[24] = "";
+    {
+        size_t qlen = httpd_req_get_url_query_len(req) + 1;
+        if (qlen > 1 && qlen < 256) {
+            char q[256];
+            if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK)
+                httpd_query_key_value(q, "activation", act, sizeof(act));
+        }
+    }
+
     httpd_resp_set_type(req, "text/plain; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=qso.adi");
+    if (act[0]) {
+        // Name the file after the reference - an activator ends up with one
+        // file per park and needs to tell them apart later.
+        char cd[80];
+        snprintf(cd, sizeof(cd), "attachment; filename=%s.adi", act);
+        httpd_resp_set_hdr(req, "Content-Disposition", cd);
+    } else {
+        httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=qso.adi");
+    }
 
     // Pause the spectrum stream so this download has the WiFi TX path to itself.
     webserver_ws_set_paused(true);
@@ -789,11 +825,31 @@ static esp_err_t adif_get_handler(httpd_req_t *req)
         return err;
     }
 
-    char buf[1024];
-    size_t n;
     esp_err_t err = ESP_OK;
-    while ((n = fread(buf, 1, sizeof(buf), f)) > 0 && err == ESP_OK)
-        err = httpd_resp_send_chunk(req, buf, (ssize_t)n);
+    if (!act[0]) {
+        char buf[1024];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof(buf), f)) > 0 && err == ESP_OK)
+            err = httpd_resp_send_chunk(req, buf, (ssize_t)n);
+    } else {
+        // Line-wise so each record can be tested. The header line is always
+        // emitted - an ADIF file without one is rejected by most loggers even
+        // when every record in it is valid.
+        char needle[40];
+        snprintf(needle, sizeof(needle), "<MY_SIG_INFO:%u>%s", (unsigned)strlen(act), act);
+        char line[1024];
+        bool header_done = false;
+        while (fgets(line, sizeof(line), f) && err == ESP_OK) {
+            bool keep;
+            if (!header_done) { header_done = true; keep = true; }
+            else {
+                keep = false;
+                for (const char *p = line; *p && !keep; p++)
+                    if (strncasecmp(p, needle, strlen(needle)) == 0) keep = true;
+            }
+            if (keep) err = httpd_resp_send_chunk(req, line, (ssize_t)strlen(line));
+        }
+    }
     fclose(f);
     httpd_resp_send_chunk(req, NULL, 0);
     webserver_ws_set_paused(false);
