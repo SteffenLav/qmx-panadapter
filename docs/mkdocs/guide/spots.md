@@ -124,12 +124,56 @@ If you do switch it on:
 
 ---
 
-### 5. Refresh and timing
+### 5. About the DX cluster — where phone spots come from
+
+RBN cannot show you an SSB station. It is a network of **automated skimmers**,
+and a skimmer decodes CW, RTTY, FT8 and FT4 — machine-readable modes. There is
+no such thing as an SSB skimmer, because no machine can recognise a callsign
+spoken into a microphone. So every phone station on the band is invisible to it.
+
+A **DX cluster** is people typing. That is the whole difference, and it is why
+this exists as a third source:
+
+- **Phone spots** — SSB activity you cannot see any other way.
+- **Park and summit references** — a human writes `POTA ES-2081` in the comment,
+  so a cluster spot can also tag your chase in the log.
+- **Everything else people bother to spot** — DX, contest activity, anything
+  worth telling other operators about.
+
+Switch it on with **DX cluster spots (phone)**, next to the other two sources in
+the settings drawer, or from the web UI. Like RBN it is **off by default**: it is
+a second continuous connection, and the same caution applies.
+
+Things worth knowing:
+
+- **Your callsign is required**, for the same reason as RBN — the node asks for
+  one to identify the connection.
+- **Only your current band is kept**, again like RBN.
+- **Mode is worked out for you.** Most cluster spots carry no mode field at all.
+  If the spotter typed one (`LSB`, `CW`, `FT8`) it is used; otherwise the
+  frequency is looked up in your band plan — 14.020 is CW, 14.285 is phone. The
+  same inference you would make reading the line yourself.
+- **Skimmer spots relayed onto the cluster are ignored.** Some nodes forward RBN
+  traffic; those entries would duplicate what RBN already gives you, so they are
+  dropped rather than drawn twice.
+- Spots are held for up to **15 minutes** — longer than RBN, because a human
+  spot describes something slower-moving than a skimmer's automatic report.
+
+!!! note "Not every node is equally busy"
+    Cluster nodes vary enormously. In testing, one node produced two spots in
+    four minutes while another produced seventy-five in fifteen. A quiet node
+    looks exactly like a broken connection, so give it a few minutes before
+    concluding anything.
+
+---
+
+### 6. Refresh and timing
 
 - POTA is fetched about **once a minute** — spot rates on that service change on
   that sort of timescale, and the fetch briefly pauses the web UI's spectrum
   stream so the two never compete for the link.
-- RBN arrives continuously and is merged into the display every **10 seconds**.
+- RBN and the DX cluster arrive continuously and are merged into the display
+  every **10 seconds**.
 - Ageing is re-evaluated every second, so spots dim and disappear on their own
   even when nothing new arrives.
 

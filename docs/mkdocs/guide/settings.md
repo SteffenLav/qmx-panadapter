@@ -126,6 +126,48 @@ Two things worth knowing, both from Randy N4OPI's side-by-side check against a r
 
 **Band Presets** — Add or remove custom bands. Standard bands (160–10 m) are always available.
 
+## Bluetooth mouse
+
+A Bluetooth mouse is the one pointer that works **while the QMX is plugged in**.
+A USB mouse cannot: the radio occupies the Tab5's only USB host, and sharing it
+through a hub does not work on this hardware — both devices end up disabled. A
+Bluetooth mouse never touches that port, so the radio keeps its connection.
+
+For anyone operating with cold or unsteady hands, that is the point: every menu,
+button and drawer control becomes a click instead of a precise tap on glass.
+
+**Setting it up**
+
+1. Tick **Bluetooth mouse → Enable** in the settings drawer.
+2. **Restart the Tab5.** Bluetooth can only start once the radio link to the
+   wireless co-processor is up, so the switch takes effect on the next boot —
+   the toast says so at the time.
+3. Put the mouse into pairing mode and wait a few seconds. It connects on its own.
+
+You only do this once. The pairing is stored, survives a reboot and a firmware
+update, and the mouse reconnects by itself from then on.
+
+**The Bluetooth symbol in the bottom bar** sits just left of the WiFi indicator
+and has three states:
+
+| Symbol | Meaning |
+|--------|---------|
+| Dim grey | Bluetooth is switched off |
+| Pale | On and looking for a mouse |
+| **Blue** | A mouse is connected |
+
+**What works:** moving the pointer, left click, and the scroll wheel — the wheel
+scrolls whatever is under the pointer, so the decode list, the settings drawer
+and the manual all scroll.
+
+!!! note "The pointer disappears when the mouse sleeps"
+    A Bluetooth mouse switches itself off after about half a minute of not being
+    moved, to save its battery. The pointer vanishes with it and comes back the
+    instant you touch the mouse — reconnecting takes under a third of a second.
+    This is the mouse looking after its own battery, not a fault.
+
+---
+
 ## Live Spots
 
 Draws other stations on the spectrum at the frequency they are operating on. Full
@@ -210,6 +252,88 @@ If no card is inserted the dot is absent, which is not an error.
 > **⚠️ The card holds credentials.** A full backup that can *restore* a station necessarily includes secrets: `qmx-config.txt` stores your WiFi password and QRZ/eQSL logins in clear text, and `lotw_key.b64` is your LoTW **private key**. Keep the card as physically secure as a house key. (The on-card `README.txt` repeats this warning.)
 
 > The diagnostic log is always-on regardless of whether an SD card is present. If no card is inserted, the log still persists to internal flash (see [Diagnostic Logging](#diagnostic-logging) above) and survives a power-off.
+
+## Activation (POTA / SOTA)
+
+When you are activating a park or a summit, every contact you make has to be
+logged as belonging to **that reference** — it is what POTA and SOTA read to
+credit the activation, for you and for the people who worked you.
+
+Open **Activation (POTA/SOTA)** in the settings drawer, pick the scheme, type the
+reference, and tap **Start activation**. From then on every logged QSO carries it
+automatically. There is nothing to remember per contact.
+
+The screen shows your **contact count against the threshold** — ten for POTA,
+four for SOTA — and turns green when you reach it. That number is read from the
+log itself, so it survives a reboot and can never disagree with what was actually
+written.
+
+**Stopping matters as much as starting.** While a session is running the main
+button is a red **Stop activation**, and the drawer button itself shows the live
+reference rather than a generic label. The failure that actually happens is
+driving home with it still switched on, quietly stamping every later contact with
+a park you have left.
+
+The session persists across a restart on purpose — a battery change in the field
+should not lose it — but it is deliberately **not** included in a config backup,
+so restoring an old backup can never re-activate a park you are nowhere near.
+
+**Chasing** works without any setup: if you work a station the panadapter has
+seen spotted at a park or summit, that reference is written into your log entry
+automatically.
+
+**Uploading just one activation:** the web UI's ADIF download can be limited to a
+single reference, so you get that park's log rather than your entire file.
+
+---
+
+## SWR protection
+
+While transmitting, the QMX reports its SWR back over the control link. If the
+reading reaches the limit you set here, the transmission is **cut short** and the
+transmitter is **latched off** — nothing will transmit again until you clear it
+by tapping the red warning on the FT8 screen.
+
+The default is **3.0:1**. That is high enough not to trip on a merely mediocre
+match, and low enough to stop a burst going into a disconnected antenna, a
+wrong-band antenna or a damaged feedline — which is how this usually goes wrong
+in the field. An FT8 transmission is nearly thirteen seconds of continuous
+key-down, so there is real time to save.
+
+The latch is deliberately sticky. A bad antenna does not repair itself, and
+resuming automatically would simply transmit into the same fault on the next
+slot.
+
+!!! note "Set it to Off if you use a tuner"
+    With a matched antenna the protection never fires, but if you are
+    deliberately loading something unusual you may prefer no interference at
+    all.
+
+---
+
+## Propagation feedback — who is hearing me
+
+This asks PSK Reporter which receivers have copied **your** callsign recently.
+It is the reverse of the reports the panadapter *sends*, and the two are
+separate settings — you can have either without the other.
+
+It answers a question no amount of local processing can: **am I actually getting
+out?** The valuable case is the mismatch. Stations you can hear that cannot hear
+you is a transmit-side problem — antenna, power, a bad connector — and from the
+receiving side alone it looks exactly like a dead band.
+
+Switch it on with **Propagation feedback**. Then open **Miscellaneous → Who is
+hearing me** in the web UI for the list: receiver, country, distance, bearing and
+the signal report they gave you, sorted by distance.
+
+It is read-only and asks at most once every five minutes, which is the rate PSK
+Reporter requests.
+
+!!! note "An empty list is the normal answer if you have not transmitted"
+    Nobody can report hearing you until you have been on the air. Give it a few
+    minutes after a CQ run.
+
+---
 
 ## ADIF & Logging
 

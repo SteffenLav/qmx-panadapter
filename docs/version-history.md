@@ -1346,5 +1346,56 @@ Redrawing them was an audit, and **seven statements turned out to be untrue**. T
 
 ---
 
+### Shipped in v1.6.1 — 2026-08-09
+
+**A Bluetooth mouse, phone spots, and knowing who can hear you.**
+
+- **Bluetooth mouse.** A pointer that works *while the QMX is connected* — the
+  case a USB mouse can never serve, because the radio owns the Tab5's only USB
+  host and sharing it through a hub does not work on this hardware. Pair once;
+  it reconnects by itself from then on, across reboots and firmware updates.
+  Move, left click, and a scroll wheel that scrolls whatever is under the
+  pointer. A Bluetooth symbol in the bottom bar shows off / scanning /
+  connected, mirrored in the web UI. Off by default; enabling it needs a
+  restart, because Bluetooth can only start once the link to the wireless
+  co-processor is up. Costs about 5 KB of memory — the pools live in external
+  RAM and the stack is sized for exactly one mouse, which is what keeps it
+  affordable on this board.
+- **DX cluster spots — the phone spots that were missing.** RBN is automated
+  skimmers, and no machine can recognise a callsign spoken into a microphone,
+  so every SSB station on the band was invisible. A cluster is people typing.
+  Third source into the same lane, with mode worked out from the spotter's
+  comment or your band plan, park/summit references picked out of the text, and
+  relayed skimmer spots dropped so they cannot double what RBN already shows.
+  Off by default.
+- **Activation logging (POTA / SOTA).** Start an activation and every logged
+  contact carries the reference automatically — with the contact count shown
+  against the threshold, read from the log itself. Chases are tagged too, from
+  spots the panadapter has already seen. The ADIF download can be limited to a
+  single reference, so you upload that park's log rather than your whole file.
+  Stopping is as prominent as starting, because the failure that actually
+  happens is driving home with it still on.
+- **SWR protection while transmitting.** The QMX reports SWR over the control
+  link; above your limit (3.0:1 by default) the transmission is cut short and
+  the transmitter latched off until you clear it. An FT8 burst is thirteen
+  seconds of key-down, so a disconnected or wrong-band antenna has real time to
+  do damage.
+- **Propagation feedback — "who is hearing me".** Asks PSK Reporter which
+  receivers have copied *your* call, listing distance, bearing and the report
+  they gave you. The valuable case is the mismatch: stations you can hear that
+  cannot hear you is a transmit-side fault, and from the receiving side alone it
+  looks exactly like a dead band.
+- **Spot lane de-duplication.** An activator spotted on POTA *and* heard by RBN
+  was drawn twice, in two colours, at almost the same place; RBN also doubled
+  itself where two skimmers rounded the same signal differently. One station is
+  now one entry, and the RBN sighting is folded in as corroboration — a
+  brighter marker meaning a receiver actually copied them just now, rather than
+  a self-spot typed an hour ago.
+- **Fixes.** A tune started from the web UI now says so on the Tab5 instead of
+  transmitting silently. Antenna Tune no longer cancels itself after a second
+  and leave the radio keyed — it was reading a mode value the QMX deliberately
+  does not report while tuning. Manual corrections: the panadapter page
+  documented an FPS readout and a colour-map label that have never existed.
+
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
 
