@@ -38,6 +38,7 @@
 #include "ft8_sim.h"
 #include "net/pskreporter.h"
 #include "net/spots.h"
+#include "net/psk_rx.h"
 #include "net/rbn.h"
 #include "ft8_hash.h"
 #include "diag_log.h"
@@ -341,6 +342,8 @@ void app_main(void)
     ft8_sim_init();
     pskreporter_init();
     spots_init();          // live POTA spots on the spectrum (WiFi, opt-out)
+    psk_rx_selftest();     // attribute names still match the collector's output
+    psk_rx_init();         // propagation feedback: who is hearing US (WiFi, opt-in)
     rbn_init();            // RBN as a second source into the same store (opt-IN)
     ft8_arrl_fd_selftest();
     ft8_hash_selftest();

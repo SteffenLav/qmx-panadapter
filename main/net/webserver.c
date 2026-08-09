@@ -28,6 +28,7 @@
 #include "factory_reset.h"     // factory_reset_request (web-triggered NVS reset)
 #include "bandplan.h"          // bandplan_get_segments / _effective_region / _seg_color
 #include "spots.h"             // spots_get_in_range - live spots for the web spectrum
+#include "psk_rx.h"            // propagation feedback - who is hearing US
 #include "iq_balance.h"        // iq_balance_set_enabled - /api/settings
 #include "mem_channels.h"      // memory channels - /api/memory
 #include "render_waterfall.h"  // live waterfall tuning - /api/settings display group
@@ -1757,6 +1758,56 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
 // list wearing the same name.
 //
 // Read-only. Nothing here can key the radio.
+// Propagation feedback: who has heard US lately. A GET here also nudges a
+// refresh, but psk_rx enforces the collector's own 5-minute floor, so a
+// browser polling this cannot turn into abuse of a free service.
+static esp_err_t psk_rx_handler(httpd_req_t *req)
+{
+    psk_rx_request_refresh();
+
+    psk_rx_report_t *rep = heap_caps_malloc(sizeof(psk_rx_report_t) * PSK_RX_MAX,
+                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!rep) return httpd_resp_send_500(req);
+    int n = psk_rx_get(rep, PSK_RX_MAX);
+
+    cJSON *root = cJSON_CreateObject();
+    if (!root) { heap_caps_free(rep); return httpd_resp_send_500(req); }
+    qmx_settings_t qs;
+    settings_load_all(&qs);
+    cJSON_AddBoolToObject(root,   "enabled",   qs.psk_rx_en);
+    cJSON_AddNumberToObject(root, "age_s",     psk_rx_age_s());
+    cJSON_AddNumberToObject(root, "receivers", psk_rx_unique_receivers());
+    cJSON_AddNumberToObject(root, "max_km",    psk_rx_max_distance_km());
+
+    cJSON *arr = cJSON_AddArrayToObject(root, "reports");
+    for (int i = 0; i < n && arr; i++) {
+        cJSON *o = cJSON_CreateObject();
+        if (!o) break;
+        cJSON_AddStringToObject(o, "call", rep[i].rx_call);
+        if (rep[i].rx_grid[0]) cJSON_AddStringToObject(o, "grid", rep[i].rx_grid);
+        if (rep[i].rx_dxcc[0]) cJSON_AddStringToObject(o, "dxcc", rep[i].rx_dxcc);
+        if (rep[i].mode[0])    cJSON_AddStringToObject(o, "mode", rep[i].mode);
+        cJSON_AddNumberToObject(o, "f", rep[i].freq_hz);
+        cJSON_AddNumberToObject(o, "t", (double)rep[i].heard_unix);
+        // Absent SNR is omitted rather than sent as 0 - 0 dB is a real report.
+        if (rep[i].snr_db != (int16_t)-32768) cJSON_AddNumberToObject(o, "snr", rep[i].snr_db);
+        if (rep[i].distance_km >= 0) {
+            cJSON_AddNumberToObject(o, "km",  rep[i].distance_km);
+            cJSON_AddNumberToObject(o, "brg", rep[i].bearing_deg);
+        }
+        cJSON_AddItemToArray(arr, o);
+    }
+    heap_caps_free(rep);
+
+    char *txt = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!txt) return httpd_resp_send_500(req);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t e = httpd_resp_sendstr(req, txt);
+    cJSON_free(txt);
+    return e;
+}
+
 static esp_err_t decodes_handler(httpd_req_t *req)
 {
     // ~11 KB of rows: PSRAM, never the httpd task's stack.
@@ -2023,6 +2074,10 @@ static const httpd_uri_t uri_decodes = {
     .uri = "/api/decodes", .method = HTTP_GET, .handler = decodes_handler,
 };
 
+static const httpd_uri_t uri_psk_rx = {
+    .uri = "/api/psk_rx", .method = HTTP_GET, .handler = psk_rx_handler,
+};
+
 static const httpd_uri_t uri_help = {
     .uri = "/api/help", .method = HTTP_GET, .handler = help_handler,
 };
@@ -2144,7 +2199,7 @@ esp_err_t webserver_start(void)
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.server_port     = 80;
     config.stack_size      = 12288;
-    config.max_uri_handlers = 38;   // 31 API + WS + 5 file-browser + headroom
+    config.max_uri_handlers = 39;   // 32 API + WS + 5 file-browser + headroom
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -2179,6 +2234,7 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_settings_get);
     httpd_register_uri_handler(s_server, &uri_settings_post);
     httpd_register_uri_handler(s_server, &uri_decodes);
+    httpd_register_uri_handler(s_server, &uri_psk_rx);
     httpd_register_uri_handler(s_server, &uri_help);
     httpd_register_uri_handler(s_server, &uri_manual);
     httpd_register_uri_handler(s_server, &uri_eqsl_creds);

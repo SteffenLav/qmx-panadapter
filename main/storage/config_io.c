@@ -66,6 +66,7 @@ char *config_io_export(size_t *out_len)
     APP("qmx_vol_db         = %u\n", (unsigned)c.qmx_vol_db);
     APP("cw_tx_offset_hz    = %d\n", (int)c.cw_tx_offset_hz);   // 0 = off (CW only)
     APP("swr_limit_x10      = %u\n", (unsigned)c.swr_limit_x10); // 0 = off, else x10 (30 = 3.0:1)
+    APP("psk_rx_en          = %d\n", c.psk_rx_en ? 1 : 0);       // propagation feedback (who hears me)
     APP("cw_audio_vol       = %u\n", (unsigned)c.cw_audio_vol);
     APP("charge_limit       = %s\n", yn(c.charge_limit_en));
     APP("charge_limit_pct   = %u\n", (unsigned)c.charge_limit_pct);
@@ -223,6 +224,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "qmx_vol_db"))        settings_set_qmx_vol_db((uint8_t)atoi(val));
             else if (!strcasecmp(key, "cw_tx_offset_hz"))   settings_set_cw_tx_offset_hz((int16_t)atoi(val));
             else if (!strcasecmp(key, "swr_limit_x10"))     settings_set_swr_limit_x10((uint8_t)atoi(val));
+            else if (!strcasecmp(key, "psk_rx_en"))         settings_set_psk_rx_en(atoi(val) != 0);
             else if (!strcasecmp(key, "cw_audio_vol"))      settings_set_cw_audio_vol((uint8_t)atoi(val));
             else if (!strcasecmp(key, "charge_limit"))      settings_set_charge_limit_en(to_bool(val));
             else if (!strcasecmp(key, "charge_limit_pct"))  settings_set_charge_limit_pct((uint8_t)atoi(val));

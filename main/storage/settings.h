@@ -107,6 +107,12 @@ typedef struct {
     // short and latched off rather than driving a mismatched load for the
     // whole 12.7 s. The QMX's finals are the thing being protected here.
     uint8_t  swr_limit_x10;
+    // Propagation feedback: query PSK Reporter for who has heard US. Separate
+    // from pskreporter_en (which is about SENDING reports) - they are opposite
+    // directions and an operator may reasonably want one without the other.
+    // Off by default: it is outbound traffic on a fragile link for a question
+    // not everyone is asking.
+    bool     psk_rx_en;
     bool     snap_to_peak;    // tap-to-tune snaps to the strongest nearby signal (default true)
     uint8_t  bandplan_region; // band-plan strip region: 0=auto(from grid) 1=R1 2=R2 3=R3
     bool     distance_in_miles; // FT8 decode list: show distance in miles instead of km (default false)
@@ -135,6 +141,12 @@ typedef struct {
     // activation outlives a battery change in the field, and re-typing the
     // reference after a reboot is exactly when it gets typed wrong.
     // 0 = none, 1 = POTA, 2 = SOTA. act_ref is the park/summit reference.
+    //
+    // Deliberately NOT in config_io_export() (and so not in s_config_export_bits):
+    // a config backup is restored weeks later on a different day, and restoring
+    // "activating DL-0123" would silently stamp every QSO with a park the
+    // operator is nowhere near. It persists in NVS so it survives a battery
+    // change DURING an activation, which is the case that matters.
     uint8_t  act_type;
     char     act_ref[16];     // "DL-0123" (POTA) or "OZ/SJ-001" (SOTA)
     char     fd_class[4];     // Field Day class, e.g. "16A" (1-2 digit transmitter count + category letter)
@@ -243,6 +255,7 @@ void settings_set_cw_tx_offset_hz(int16_t hz);
  * reason settings_wifi_known_count() exists (see CLAUDE.md, "Task stacks on
  * this board are TINY"). */
 int16_t settings_get_cw_tx_offset_hz(void);
+void    settings_set_psk_rx_en(bool v);          // propagation feedback (who is hearing me)
 void    settings_set_swr_limit_x10(uint8_t v);   // 0 = off, else limit x10 (25 = 2.5:1)
 uint8_t settings_get_swr_limit_x10(void);
 
