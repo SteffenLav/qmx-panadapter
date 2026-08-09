@@ -24,6 +24,7 @@
 
 | # | Item | Status | Effort | Next Step / Notes |
 |----|------|--------|--------|-----------|
+| **✅ RELEASED as v1.6.0 (2026-08-09)** — everything below shipped | | | | |
 | **🆕 2026-08-08 — the CW-hunting batch (Roy KI0ER, Michael KZ4LY, Stan via Samuel W7STF)** | | | | |
 | 89 | **CW transmit offset ("don't zero-beat the DX")** | ✅ Done + **hw-verified on the bench** (on-air still owed to Roy) | — | Roy KI0ER #176143: QRP callers all zero-beating a CW CQ arrive as one mud-pit. QMX has no XIT (its own CAT manual: "XIT status: always 0"), so this is SPLIT - VFO B held at A+offset, `cw_split_maintain()` in cat.c's poll task so the offset follows every tuning source incl. the radio's own knob. CW/CW-R only; only clears split if WE set it; re-asserts every 30 s. Drawer CW section + web + config export. **FB/FR/FT/SP all exist in 1_03 - no firmware gate needed.** Needs a real CW contact to verify |
 | 90 | **RF gain over CAT** | ✅ Done + **hw-verified** (wrote 60/54, radio read both back) | — | Stan via Samuel W7STF #176136. `RG;`/`RG<nnn>;`, 0-99 dB, default 54, **per band** and NOT session-only (it edits the same figure as the Band Configuration screen) - so the drawer commits on slider RELEASE, never stores a copy, and re-reads on open. Present in 1_03 as well as 1_04. Re-seeds the flat-mode floor, since the noise floor just moved |
