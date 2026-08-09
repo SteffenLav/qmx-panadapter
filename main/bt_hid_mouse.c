@@ -34,6 +34,8 @@
 #include "host/ble_hs.h"
 #include "host/ble_gap.h"
 #include "host/util/util.h"
+#include "host/ble_gatt.h"
+#include "store/config/ble_store_config.h"
 
 #include <string.h>
 
@@ -45,6 +47,24 @@ static const char *TAG = "btmouse";
 
 static bool s_started;
 static int  s_seen;          // devices reported this scan, for a one-line summary
+static bool s_connecting;
+static bool s_connected;
+static uint8_t s_own_addr_type;
+static uint16_t s_conn_handle;
+
+// HID input reports arrive on notifications from the Report characteristic
+// (0x2A4D). Discovering the full HID service, parsing its report map and
+// picking the right report ID is what esp_hid does - but its NimBLE host path
+// is a large dependency for one mouse, and the report we actually want is the
+// boot-protocol mouse report, whose layout is fixed. So we subscribe to every
+// notification and decode the ones that look like a mouse report.
+#define UUID_HID_REPORT 0x2A4D
+
+static void start_scan(void);
+static int  conn_event_cb(struct ble_gap_event *event, void *arg);
+static int  disc_dsc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                        uint16_t chr_val_handle, const struct ble_gatt_dsc *dsc, void *arg);
+static void handle_report(const uint8_t *d, int len);
 
 static void log_heap(const char *when)
 {
@@ -55,6 +75,20 @@ static void log_heap(const char *when)
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
              (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+}
+
+// Have we bonded with this address before? NimBLE keeps the bond list in NVS
+// (BT_NIMBLE_NVS_PERSIST), so this survives a reboot and a reflash - which is
+// the point: the operator should pair the mouse ONCE, ever.
+static bool addr_is_bonded(const ble_addr_t *addr)
+{
+    ble_addr_t peers[8];
+    int n = 0;
+    if (ble_store_util_bonded_peers(peers, &n, (int)(sizeof(peers) / sizeof(peers[0]))) != 0)
+        return false;
+    for (int i = 0; i < n; i++)
+        if (memcmp(peers[i].val, addr->val, 6) == 0) return true;
+    return false;
 }
 
 // Does this advertisement claim HID? Checked against the 16-bit service UUID
@@ -79,7 +113,14 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
         memcpy(name, f.name, n);
         name[n] = '\0';
     }
-    bool hid = adv_has_hid(&f);
+    // A device we have already bonded with is worth connecting to whatever its
+    // advert says - and this is not an optimisation, it is the difference
+    // between pairing once and pairing every time. A bonded peer reconnects
+    // with DIRECTED advertising, which carries NO service UUID list, so
+    // adv_has_hid() is false for the very mouse we just paired with. Matching
+    // on the bond is the only thing that catches it.
+    bool bonded = addr_is_bonded(&event->disc.addr);
+    bool hid = bonded || adv_has_hid(&f);
     s_seen++;
 
     // Log HID devices always; everything else only in the first few, so a busy
@@ -91,11 +132,71 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
                  a[5], a[4], a[3], a[2], a[1], a[0], event->disc.rssi,
                  name[0] ? name : "(no name)");
     }
-    if (hid) {
-        ESP_LOGW(TAG, "^ that is a HID device - Stage 2 will pair with it. "
-                      "Stage 1 only scans.");
+    if (hid && !s_connecting && !s_connected) {
+        ESP_LOGW(TAG, "HID device found - connecting");
+        s_connecting = true;
+        ble_gap_disc_cancel();              // cannot connect while scanning
+        int rc = ble_gap_connect(s_own_addr_type, &event->disc.addr, 10000,
+                                 NULL, conn_event_cb, NULL);
+        if (rc != 0) {
+            ESP_LOGE(TAG, "ble_gap_connect failed: %d - resuming scan", rc);
+            s_connecting = false;
+            start_scan();
+        }
     }
     return 0;
+}
+
+static int conn_event_cb(struct ble_gap_event *event, void *arg)
+{
+    (void)arg;
+    switch (event->type) {
+    case BLE_GAP_EVENT_CONNECT:
+        s_connecting = false;
+        if (event->connect.status != 0) {
+            ESP_LOGW(TAG, "connect failed: status=%d - resuming scan", event->connect.status);
+            start_scan();
+            return 0;
+        }
+        s_connected   = true;
+        s_conn_handle = event->connect.conn_handle;
+        ESP_LOGW(TAG, "CONNECTED to HID device (handle %u)", s_conn_handle);
+        hid_cursor_set_present(HID_CURSOR_SRC_BLE, true);
+        // Pair/encrypt first: a HID peripheral will not send reports over an
+        // unencrypted link, so skipping this gets a silent connection that
+        // never moves the cursor.
+        ble_gap_security_initiate(s_conn_handle);
+        return 0;
+
+    case BLE_GAP_EVENT_ENC_CHANGE:
+        ESP_LOGW(TAG, "encryption change: status=%d - discovering descriptors",
+                 event->enc_change.status);
+        // Subscribe to everything notifiable now that the link is encrypted.
+        ble_gattc_disc_all_dscs(s_conn_handle, 1, 0xffff, disc_dsc_cb, NULL);
+        return 0;
+
+    case BLE_GAP_EVENT_NOTIFY_RX: {
+        // om is a chained mbuf; flatten the leading fragment, which for a HID
+        // report is the whole thing.
+        uint8_t buf[16];
+        int len = OS_MBUF_PKTLEN(event->notify_rx.om);
+        if (len > (int)sizeof(buf)) len = sizeof(buf);
+        if (ble_hs_mbuf_to_flat(event->notify_rx.om, buf, len, NULL) == 0)
+            handle_report(buf, len);
+        return 0;
+    }
+
+    case BLE_GAP_EVENT_DISCONNECT:
+        ESP_LOGW(TAG, "HID device disconnected (reason %d) - scanning again",
+                 event->disconnect.reason);
+        s_connected = false;
+        hid_cursor_set_present(HID_CURSOR_SRC_BLE, false);
+        start_scan();
+        return 0;
+
+    default:
+        return 0;
+    }
 }
 
 static void start_scan(void)
@@ -105,6 +206,7 @@ static void start_scan(void)
         ESP_LOGE(TAG, "no usable BLE address");
         return;
     }
+    s_own_addr_type = own_addr_type;
     struct ble_gap_disc_params p = {0};
     p.itvl          = 0;      // stack defaults
     p.window        = 0;
@@ -116,6 +218,36 @@ static void start_scan(void)
     int rc = ble_gap_disc(own_addr_type, BLE_HS_FOREVER, &p, gap_event_cb, NULL);
     if (rc != 0) ESP_LOGE(TAG, "ble_gap_disc failed: %d", rc);
     else         ESP_LOGI(TAG, "scanning for BLE devices (turn the mouse on / put it in pairing mode)");
+}
+
+// Subscribe to every notifiable characteristic the peer has. A HID mouse's
+// input reports are notifications on 0x2A4D, but there is usually more than one
+// (boot report, report-protocol report, battery), and which one a given mouse
+// actually uses varies. Subscribing broadly and decoding what arrives is far
+// less code than a full report-map parse, and it cannot pick the wrong one -
+// a report that is not mouse-shaped is simply ignored.
+static int subscribe_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                        struct ble_gatt_attr *attr, void *arg)
+{
+    (void)conn_handle; (void)attr; (void)arg;
+    if (error && error->status != 0)
+        ESP_LOGW(TAG, "subscribe failed: status=%d", error->status);
+    return 0;
+}
+
+static int disc_dsc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                       uint16_t chr_val_handle, const struct ble_gatt_dsc *dsc, void *arg)
+{
+    (void)chr_val_handle; (void)arg;
+    if (!error || error->status != 0 || !dsc) return 0;
+    // 0x2902 = Client Characteristic Configuration. Writing 0x0001 turns
+    // notifications on, which is what makes a mouse actually send reports.
+    if (ble_uuid_u16(&dsc->uuid.u) != 0x2902) return 0;
+    uint8_t val[2] = { 0x01, 0x00 };
+    int rc = ble_gattc_write_flat(conn_handle, dsc->handle, val, sizeof(val),
+                                  subscribe_cb, NULL);
+    if (rc != 0) ESP_LOGW(TAG, "write CCCD failed: %d", rc);
+    return 0;
 }
 
 static void on_sync(void)
@@ -132,6 +264,46 @@ static void on_reset(int reason)
     // reset usually means the SDIO link to the C6 hiccuped, which is exactly
     // what this stage exists to find out about.
     ESP_LOGW(TAG, "BLE controller reset, reason=%d", reason);
+}
+
+// Decode one notification as a boot-protocol mouse report.
+//
+// Deliberately permissive about LENGTH and offset: BLE mice differ. Most send
+// [buttons, dx, dy] with 8-bit deltas; some prefix a report ID; some use 12- or
+// 16-bit deltas. Rather than guess, the RAW BYTES are logged at first sight so
+// the real layout can be read off the hardware and this narrowed if needed.
+static void handle_report(const uint8_t *d, int len)
+{
+    static int logged = 0;
+    if (logged < 12) {
+        logged++;
+        char hex[64] = "";
+        int n = 0;
+        for (int i = 0; i < len && n < (int)sizeof(hex) - 4; i++)
+            n += snprintf(hex + n, sizeof(hex) - n, "%02x ", d[i]);
+        ESP_LOGI(TAG, "report[%d]: %s", len, hex);
+    }
+    if (len < 3) return;
+
+    if (len >= 5) {
+        // 12-BIT PACKED report - what a Logitech M240 actually sends, captured
+        // on hardware 2026-08-09:
+        //     00 00 d9 0f fd 00 00   ->  X=-39  Y=-48
+        //     00 00 02 e0 ff 00 00   ->  X=+2   Y=-2
+        // Layout: [buttons][.][X lo 8][X hi 4 | Y lo 4][Y hi 8][wheel][pan]
+        // X and Y SHARE byte 3 - a nibble each - which is why reading this as
+        // a 3-byte boot report gave a permanently-zero dx and fed the X value
+        // into dy, so moving the mouse sideways moved the cursor vertically.
+        int x = d[2] | ((d[3] & 0x0F) << 8);
+        int y = ((d[3] >> 4) & 0x0F) | (d[4] << 4);
+        if (x & 0x800) x -= 0x1000;      // 12-bit two's complement
+        if (y & 0x800) y -= 0x1000;
+        hid_cursor_apply(x, y, d[0]);
+        return;
+    }
+
+    // Boot-protocol layout (3-4 bytes): [buttons][dx int8][dy int8][wheel].
+    hid_cursor_apply((int8_t)d[1], (int8_t)d[2], d[0]);
 }
 
 static void host_task(void *param)
@@ -198,7 +370,7 @@ static void bt_start_task(void *arg)
     nimble_port_freertos_init(host_task);
     s_started = true;
     log_heap("after NimBLE init");
-    ESP_LOGI(TAG, "BLE mouse Stage 1 up - scan only, no pairing yet");
+    ESP_LOGI(TAG, "BLE mouse up - scanning, will pair and connect automatically");
     vTaskDelete(NULL);
 }
 

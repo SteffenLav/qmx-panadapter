@@ -31,6 +31,7 @@
 #include "wifi_config.h"
 #include "tune_modal.h"
 #include "activation_modal.h"
+#include "hid_cursor.h"
 #include "memory_modal.h"
 #include "identity_config.h"
 #include "onboarding.h"
@@ -3287,7 +3288,10 @@ static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     (void)indev;
     int lx, ly;
     uint8_t b;
-    usb_hid_mouse_get(&lx, &ly, &b);
+    // Shared accumulator, not the USB module's own: a BLE mouse feeds exactly
+    // the same state, so this callback - and everything downstream of it -
+    // works identically whichever transport the mouse arrived on.
+    hid_cursor_get(&lx, &ly, &b);
 
     int32_t w = lv_display_get_horizontal_resolution(lv_display_get_default()); // 1280
     data->point.x = ly;
@@ -3295,7 +3299,7 @@ static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     data->state = (b & 0x01) ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
 
     if (s_mouse_cursor) {
-        if (usb_hid_mouse_present()) lv_obj_remove_flag(s_mouse_cursor, LV_OBJ_FLAG_HIDDEN);
+        if (hid_cursor_present()) lv_obj_remove_flag(s_mouse_cursor, LV_OBJ_FLAG_HIDDEN);
         else                         lv_obj_add_flag(s_mouse_cursor, LV_OBJ_FLAG_HIDDEN);
     }
 }
