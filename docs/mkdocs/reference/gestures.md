@@ -131,7 +131,7 @@ The **User Manual** button at the top of the settings drawer opens this whole gu
 
 **It is built into the firmware** (since v1.3.2), so it works immediately and always: no WiFi, no microSD card, no download, no waiting, on the very first boot. It also can never describe a different version than the one you are running, because it ships inside it.
 
-- **It opens in context** (new in v1.5.0) — the panadapter chapter, the FT8 *receive* chapter, or the FT8 *transmit* chapter when a transmission is armed or running. Not a contents page you have to search.
+- **It opens in context** — the panadapter chapter, the FT8 *receive* chapter, or the FT8 *transmit* chapter when a transmission is armed or running. Not a contents page you have to search.
 - **Contents** — a two-column list of every page. Press and slide your finger down it: a highlight bar tracks your finger, and lifting opens the highlighted page.
 - **Back** — returns to the previous page you viewed (shown only when there is somewhere to go back to). **Exit** — leaves the manual (back to the panadapter/FT8 screen).
 - **Edge swipes and top-bar taps are stood down** while the manual is open, so a stray touch cannot retune or switch view behind it.

@@ -12,7 +12,7 @@ Get your QMX Panadapter on air in 10 minutes.
 
 ## Step 1: Verify QMX Firmware
 
-Power the QMX on standalone and check the firmware version displayed on its screen. You need **v1.03.002 or newer**. If yours is older, update the QMX first — everything that follows depends on recent firmware. Both **v1.03.002** and the **v1.04.002 beta** work with the panadapter; on v1.04.002 you additionally get **AM mode** and an **Antenna Tune** button (SWR tune with a live power/SWR readout). Both stay hidden on v1.03.002, so either firmware is fine.
+Power the QMX on standalone and check the firmware version displayed on its screen. You need **v1.03.002 or newer**. If yours is older, update the QMX first — everything that follows depends on recent firmware. Both **v1.03.002** and the **v1.04 betas** work with the panadapter; on v1.04 you additionally get **AM mode** and an **Antenna Tune** button (SWR tune with a live power/SWR readout). Both stay hidden on v1.03.002, so either firmware is fine.
 
 ## Step 2: Flash the Tab5
 
@@ -41,7 +41,7 @@ Download the latest flasher from the [Releases page](https://github.com/SteffenL
     4. Press **Enter** for normal flash
     5. Wait for `SUCCESS`
 
-The flasher automatically downloads the latest firmware from GitHub. If you're offline, place a `qmx_panadapter_merged_*.bin` file next to the flasher and it will use that instead.
+The firmware is already inside the zip — the three `.bin` files next to the script are what get flashed. The only thing fetched from the internet is `esptool`, once, if your computer doesn't already have it, so after the first successful run the flasher works offline.
 
 ## Step 3: Connect the Cables
 
@@ -140,7 +140,7 @@ If you set up WiFi:
 - Restart both devices (Tab5 first, then QMX)
 
 **QMX doesn't appear?**
-- Check QMX firmware version (Step 1 above) — should be v1.03.002 or newer (the v1.04.002 beta also works)
+- Check QMX firmware version (Step 1 above) — should be v1.03.002 or newer (the v1.04 betas also work)
 - Try a different USB cable
 
 **WiFi won't connect?**

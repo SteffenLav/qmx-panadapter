@@ -1,6 +1,10 @@
-# Build output
-build/
-managed_components/
+# Build output. Anchored to the repo root on purpose: a bare `build/` matches a
+# directory of that name at ANY depth, which silently swallowed the three
+# documentation pages in docs/mkdocs/build/ - they were never committed, and a
+# fresh clone would have built a website and an on-device manual missing them.
+/build/
+/managed_components/
+/test/build/
 
 # mkdocs build output (root-level `mkdocs build` target — published to
 # tab5.lav.dk by manual FTP, never committed)
