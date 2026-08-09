@@ -403,9 +403,13 @@ Controls appear top to bottom in this order:
 | **Waterfall colour map** | Thermal / Viridis / Turbo / Grayscale, persisted |
 | **Waterfall** | Black level, Contrast, Adaptive floor blend, and FFT window — see [Waterfall colourisation](#waterfall-colourisation) below |
 
-The drawer was decluttered in v0.19.4: the **Snap to signal** and **FT8 sync lines** toggles were removed (taps now always tune where you touch), and **Band-plan region** moved up next to Identity.
+**Grouped, with a Basic/Expert toggle (v1.6.0).** The drawer had grown to twenty-five sections in the order they were built, so related controls were scattered — the two QMX gain controls sat together, but CW pitch was nine sections away from the CW transmit offset. It is now grouped under headings — **Station**, **Device**, **Radio**, **Network**, **Display**, **FT8**, **Spectrum** — and the toggle beside the **Settings** title chooses how much you see. It always says where you are and what a tap gives you: **BASIC (tap for Expert)** reveals the Spectrum and Device groups, which hold the calibration and tuning controls you set once and rarely revisit. Nothing is lost in Basic, only hidden, and the choice is not remembered between sessions — it is a way of looking at the drawer rather than a preference.
 
-The drawer shows a different subset while on the FT8 screen (Flip 180°, QMX volume, WiFi, Identity, Display — plus three FT8-only controls not shown above: **Distance in miles** for the decode list's KM/MI column, **Fast pounce (early decode)** — see below — and **FT8 Simulation Mode**, see [FT8 Simulation mode](#ft8-simulation-mode)).
+The **Radio** group is where the controls that reach the QMX live: **QMX volume**, **QMX RF gain** (per band, read back from the radio), the **CW transmit offset**, **Antenna Tune** on 1.04+ firmware, and **Release radio to QMX menu**.
+
+Earlier declutter, still true: the **Snap to signal** and **FT8 sync lines** toggles were removed in v0.19.4 (taps now always tune where you touch).
+
+On the FT8 screen the spectrum-related groups drop away and three FT8-only controls appear: **Distance in miles** for the decode list's KM/MI column, **Fast pounce (early decode)** — see below — and **FT8 Simulation Mode**, see [FT8 Simulation mode](#ft8-simulation-mode).
 
 **Fast pounce (early decode)** — on by default. Decodes surface ~1.8 s *before* the slot boundary (the way WSJT-X decodes in the dead-air gap), so replying to a fresh CQ can transmit in the very next slot instead of waiting a full 30 s cycle, and mid-QSO replies land on the beat. The trade-off: the capture window closes ~1.8 s early, so a station transmitting *late* in the slot can occasionally be clipped and missed. ⚠️ This feature has not yet been A/B-verified on a live band — if your decodes-per-slot drop noticeably with it on, turn it off here and please report your before/after numbers on the groups.io thread.
 
@@ -1003,12 +1007,12 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.5.0 is here** — **the manual answers questions now, instead of being a manual.** The **User Manual** button opens the chapter for the screen you are on, warnings are tappable, and a new **Need guidance?** panel lists symptoms in plain words with the ones the device can see highlighted at the top — it ranks, you choose. The built-in manual also stopped failing on well-used devices (it was being copied out of the firmware just to be read back, on storage that is already full) and its missing characters are fixed. Plus **Call CQ from the browser** (Dennis WN4FLA) and **the station you are working held at the top of the decode list** (Don WB0LQW). Next on the bench:
+**v1.6.0 is here** — **the browser became a second operating position, and the manual stopped being made of characters.** The web page can now work the band rather than watch it: reply to a station, pick your TX tone, edit settings and memory channels, read the whole manual — all served by the Tab5 itself. It answers to **`qmx.local`** so its IP stops mattering. For CW there is a **transmit offset** so a QRP call is not buried in the zero-beat pile (Roy KI0ER), plus **RF gain** and a **Release radio** button for using the QMX's own menus (Stan KC7XE). A radio that stops sending audio now recovers itself. The manual gained an **A–Z index** and properly drawn diagrams, and the settings drawer is grouped with a **Basic/Expert** toggle. Next on the bench:
 
-- **An A–Z index in the manual.** The guidance panel's bottom button deliberately reads "Open the manual", not "Show all topics", because the index does not exist yet — a touch-first term index generated into the firmware's manual, no typing on glass.
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).
-- **User Manual polish.** Inline images (phase 2 — the manual is currently text-only). The manual itself now ships inside the firmware, so there is no longer any download or SD-copy path to soak.
+- **Binaural CW audio.** Asked for by Roy KI0ER, and shaped by Don N2VGU and Michael KZ4LY: a stereo sound stage so two stations a few tens of hertz apart land in different places in your head, with the **stage width a setting** rather than a fixed angle. The DSP is small — the Tab5 already receives I and Q separately — but it needs the Tab5's own audio output path, which is the same rework the CW page waits on.
+- **Tab5 audio output rework.** The blocker under both of the above: the output task must not run at all in FT8/FT4 (Michael KZ4LY's suggestion), since merely existing at a higher priority than the FFT consumer cost decode yield.
 
 ### Longer term
 

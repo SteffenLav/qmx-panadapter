@@ -206,9 +206,9 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 ### Next up (post-v1.0.0)
 
-1. **An A–Z index in the built-in manual** — a touch-first term index, no typing on glass. v1.5.0's guidance panel deliberately says "Open the manual" rather than "Show all topics" because the index does not exist yet
-2. **Web-UI audio streaming** — listen to the receiver in any browser on your LAN, demodulated on the Tab5. Already working in development; held for quality tuning and an overnight streaming soak
-3. **CW page** — canned-message CW TX memories, then decoded-CW display
+1. **Web-UI audio streaming** — listen to the receiver in any browser on your LAN, demodulated on the Tab5. Already working in development; held for quality tuning and an overnight streaming soak
+2. **CW page** — canned-message CW TX memories, then decoded-CW display
+3. **Binaural CW audio** — a stereo sound stage so two stations a few tens of hertz apart land in different places in your head (asked for by Roy KI0ER; shaped by Don N2VGU and Michael KZ4LY, whose point that the stage **width** should be a setting rather than a fixed angle is now the plan). Waits on the same audio-output rework as the CW page
 4. **Live microSD mirroring while WiFi is up** — continuous mirroring currently only runs with WiFi off; v1.3.2 made that explicit and reliable (one complete backup per start-up with WiFi on). This was believed to be bus contention between the card and the WiFi co-processor. v1.4.0 found that a large part of it was actually a memory shortage — the pool the card needs to mount had been squeezed to almost nothing, and now has room again — so this may already behave better than documented. Needs a retest before the behaviour is changed
 
 ### Phase 6.3 (FPS Recovery)
