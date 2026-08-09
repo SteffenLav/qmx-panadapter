@@ -376,7 +376,7 @@ static esp_err_t status_handler(httpd_req_t *req)
             uint32_t dial = ui_get_dial_freq_hz();
             if (dial) sp_nseg = bandplan_get_segments(dial, reg, &sp_segs);
         }
-        if (cfg.spots_en && sp_nseg > 0 && sp_segs && !ft8_screen_view_is_active()) {
+        if (spots_any_source_enabled() && sp_nseg > 0 && sp_segs && !ft8_screen_view_is_active()) {
             // The spot store changes only when a source refreshes (POTA every few
             // minutes), but this poll runs every second. Sending ~6 KB of
             // unchanged JSON 60 times a minute on a link this fragile is exactly

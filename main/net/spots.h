@@ -102,6 +102,11 @@ bool spots_activation_for_call(const char *call, uint32_t freq_hz,
                                char *sig_out, size_t sig_sz,
                                char *ref_out, size_t ref_sz);
 
+// True when ANY source (POTA, RBN, DX cluster) is enabled. The display gates on
+// this rather than on spots_en, so no single source checkbox silently blanks
+// the lane for the others.
+bool spots_any_source_enabled(void);
+
 // Ask for a refresh now (e.g. the operator just enabled the feature or
 // changed band). Coalesced with the periodic cycle.
 void spots_request_refresh(void);

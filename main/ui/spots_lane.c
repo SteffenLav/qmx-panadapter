@@ -249,7 +249,7 @@ static void repaint(void)
     // strip it costs no layout height either way, so there is nothing to reflow.
     qmx_settings_t st;
     settings_load_all(&st);
-    if (!st.spots_en) { hide_all(); return; }
+    if (!spots_any_source_enabled()) { hide_all(); return; }
 
     // Scope to the band we are ON, the same range /api/status uses. Taking the
     // whole table meant the Tab5 and the browser were counting different pools -
