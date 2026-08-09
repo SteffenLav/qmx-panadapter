@@ -29,6 +29,7 @@
 
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
@@ -51,6 +52,9 @@ static bool s_connecting;
 static bool s_connected;
 static uint8_t s_own_addr_type;
 static uint16_t s_conn_handle;
+static int64_t  s_enc_us;      // esp_timer at encryption, for measuring the idle drop
+static int      s_cccd_writes; // CCCDs we asked to enable
+static int      s_cccd_done;   // CCCDs that answered
 
 // HID input reports arrive on notifications from the Report characteristic
 // (0x2A4D). Discovering the full HID service, parsing its report map and
@@ -65,8 +69,8 @@ static uint16_t s_conn_handle;
 
 static void start_scan(void);
 static int  conn_event_cb(struct ble_gap_event *event, void *arg);
-static int  disc_dsc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
-                        uint16_t chr_val_handle, const struct ble_gatt_dsc *dsc, void *arg);
+static int  hid_svc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                       const struct ble_gatt_svc *svc, void *arg);
 static void handle_report(const uint8_t *d, int len);
 
 static void log_heap(const char *when)
@@ -165,6 +169,27 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
         s_conn_handle = event->connect.conn_handle;
         ESP_LOGW(TAG, "CONNECTED to HID device (handle %u)", s_conn_handle);
         hid_cursor_set_present(HID_CURSOR_SRC_BLE, true);
+        // Ask for parameters a mouse can idle on. HYPOTHESIS for the ~30 s
+        // drop, and labelled as one: the peripheral terminates the link
+        // (reason 531 = HCI 0x13), so the lever is letting it SLEEP rather
+        // than making it talk. latency=30 lets it skip 30 connection events
+        // when it has nothing to send; the 6 s supervision timeout must stay
+        // comfortably above latency x interval or the link drops the moment it
+        // uses the latency we just granted.
+        //   interval 15-30 ms, latency 30  -> up to ~0.9 s of silence allowed
+        //   supervision 6 s                -> ~6x margin over that
+        {
+            struct ble_gap_upd_params p = {
+                .itvl_min            = 12,    // x1.25 ms = 15 ms
+                .itvl_max            = 24,    // x1.25 ms = 30 ms
+                .latency             = 30,
+                .supervision_timeout = 600,   // x10 ms = 6 s
+                .min_ce_len          = 0,
+                .max_ce_len          = 0,
+            };
+            int rc = ble_gap_update_params(s_conn_handle, &p);
+            ESP_LOGI(TAG, "connection params requested (latency 30, 6 s timeout), rc=%d", rc);
+        }
         // Pair/encrypt first: a HID peripheral will not send reports over an
         // unencrypted link, so skipping this gets a silent connection that
         // never moves the cursor.
@@ -172,10 +197,15 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
         return 0;
 
     case BLE_GAP_EVENT_ENC_CHANGE:
+        s_enc_us = esp_timer_get_time();
         ESP_LOGW(TAG, "encryption change: status=%d - completing HOGP setup",
                  event->enc_change.status);
         // Subscribe to everything notifiable now that the link is encrypted.
-        ble_gattc_disc_all_dscs(s_conn_handle, 1, 0xffff, disc_dsc_cb, NULL);
+        s_cccd_writes = 0;
+        s_cccd_done   = 0;
+        ble_gattc_disc_svc_by_uuid(s_conn_handle,
+                                   BLE_UUID16_DECLARE(BLE_SVC_HID_UUID16),
+                                   hid_svc_cb, NULL);
         // NO Protocol Mode write here. It was tried as a fix for the exactly-30 s
         // idle disconnect and FAILED on both counts, measured: the write itself
         // succeeded (handle 53, rc=0) yet the drop still came at 30335 ms and
@@ -201,9 +231,26 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
         return 0;
     }
 
+    case BLE_GAP_EVENT_CONN_UPDATE: {
+        // What the peripheral actually AGREED to - a request is not a result,
+        // and the whole 30 s question turns on whether it accepted latency.
+        struct ble_gap_conn_desc d;
+        if (ble_gap_conn_find(s_conn_handle, &d) == 0)
+            ESP_LOGW(TAG, "conn params now: itvl=%u (%u ms) latency=%u timeout=%u (%u ms) status=%d",
+                     d.conn_itvl, (unsigned)(d.conn_itvl * 125 / 100),
+                     d.conn_latency, d.supervision_timeout,
+                     (unsigned)(d.supervision_timeout * 10), event->conn_update.status);
+        return 0;
+    }
+
     case BLE_GAP_EVENT_DISCONNECT:
-        ESP_LOGW(TAG, "HID device disconnected (reason %d) - scanning again",
-                 event->disconnect.reason);
+        // Seconds since encryption, because that is what the 30 s drop is
+        // measured from - a bare "disconnected" line cost several rounds of
+        // eyeballing timestamps by hand.
+        ESP_LOGW(TAG, "HID device disconnected (reason %d) after %lld s connected - scanning again",
+                 event->disconnect.reason,
+                 s_enc_us ? (long long)((esp_timer_get_time() - s_enc_us) / 1000000) : -1);
+        s_enc_us = 0;
         s_connected = false;
         hid_cursor_set_present(HID_CURSOR_SRC_BLE, false);
         start_scan();
@@ -235,33 +282,73 @@ static void start_scan(void)
     else         ESP_LOGI(TAG, "scanning for BLE devices (turn the mouse on / put it in pairing mode)");
 }
 
-// Subscribe to every notifiable characteristic the peer has. A HID mouse's
-// input reports are notifications on 0x2A4D, but there is usually more than one
-// (boot report, report-protocol report, battery), and which one a given mouse
-// actually uses varies. Subscribing broadly and decoding what arrives is far
-// less code than a full report-map parse, and it cannot pick the wrong one -
-// a report that is not mouse-shaped is simply ignored.
-static int subscribe_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
-                        struct ble_gatt_attr *attr, void *arg)
+// Proper HOGP discovery: HID service -> its Report characteristics -> their
+// CCCDs. NOT a blanket walk of the whole attribute table.
+//
+// The blanket version is what caused the infamous 30 s disconnect. It wrote to
+// the first 0x2902 it found anywhere (handle 13, in a service that was not
+// HID), the mouse never answered that write, and the BLUETOOTH SPEC'S ATT
+// TRANSACTION TIMEOUT IS 30 SECONDS - on expiry the stack must tear the link
+// down. Hence a disconnect that was always exactly 30 s after GATT setup
+// began, on every connection, which looked for all the world like a
+// peripheral power-saving timer and was nothing of the sort.
+//   CCCD 1/1 answered at t+30133 ms, status=13   (13 = BLE_HS_ETIMEOUT)
+// Never issue an ATT request to a handle you have not established is the
+// right one.
+
+static int cccd_write_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                         struct ble_gatt_attr *attr, void *arg)
 {
     (void)conn_handle; (void)attr; (void)arg;
-    if (error && error->status != 0)
-        ESP_LOGW(TAG, "subscribe failed: status=%d", error->status);
+    s_cccd_done++;
+    ESP_LOGI(TAG, "CCCD %d/%d answered at t+%lld ms, status=%d",
+             s_cccd_done, s_cccd_writes,
+             s_enc_us ? (long long)((esp_timer_get_time() - s_enc_us) / 1000) : -1,
+             error ? error->status : 0);
     return 0;
 }
 
-static int disc_dsc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
-                       uint16_t chr_val_handle, const struct ble_gatt_dsc *dsc, void *arg)
+// A Report characteristic's CCCD is the descriptor immediately following it,
+// so search only the handle span belonging to THAT characteristic.
+static int report_dsc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                         uint16_t chr_val_handle, const struct ble_gatt_dsc *dsc, void *arg)
 {
-    (void)chr_val_handle; (void)arg;
+    (void)arg;
     if (!error || error->status != 0 || !dsc) return 0;
-    // 0x2902 = Client Characteristic Configuration. Writing 0x0001 turns
-    // notifications on, which is what makes a mouse actually send reports.
     if (ble_uuid_u16(&dsc->uuid.u) != 0x2902) return 0;
     uint8_t val[2] = { 0x01, 0x00 };
+    s_cccd_writes++;
+    ESP_LOGI(TAG, "CCCD #%d at handle %u for report chr %u",
+             s_cccd_writes, dsc->handle, chr_val_handle);
     int rc = ble_gattc_write_flat(conn_handle, dsc->handle, val, sizeof(val),
-                                  subscribe_cb, NULL);
-    if (rc != 0) ESP_LOGW(TAG, "write CCCD failed: %d", rc);
+                                  cccd_write_cb, NULL);
+    if (rc != 0) ESP_LOGW(TAG, "CCCD write failed to start: %d", rc);
+    return 0;
+}
+
+static int hid_chr_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                      const struct ble_gatt_chr *chr, void *arg)
+{
+    (void)arg;
+    if (!error || error->status != 0 || !chr) return 0;
+    if (!(chr->properties & BLE_GATT_CHR_PROP_NOTIFY)) return 0;
+    ESP_LOGI(TAG, "notifiable report chr at %u (props 0x%02x) - finding its CCCD",
+             chr->val_handle, chr->properties);
+    // Only this characteristic's own descriptor span.
+    ble_gattc_disc_all_dscs(conn_handle, chr->val_handle,
+                            chr->val_handle + 2, report_dsc_cb, NULL);
+    return 0;
+}
+
+static int hid_svc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                      const struct ble_gatt_svc *svc, void *arg)
+{
+    (void)arg;
+    if (!error || error->status != 0 || !svc) return 0;
+    ESP_LOGI(TAG, "HID service at handles %u-%u", svc->start_handle, svc->end_handle);
+    ble_gattc_disc_chrs_by_uuid(conn_handle, svc->start_handle, svc->end_handle,
+                                BLE_UUID16_DECLARE(UUID_HID_REPORT),
+                                hid_chr_cb, NULL);
     return 0;
 }
 
