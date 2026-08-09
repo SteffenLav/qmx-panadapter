@@ -979,7 +979,10 @@ static void poll_task(void *arg)
         // phase (PC;SW;) is added while cat_tune_poll_set_active(true) - live
         // power/SWR readout during QMX SWR Tune mode (1_04+, see
         // docs/qmx-1_04-cat-comparison.md). MD; stays in rotation during Tune
-        // so an exit via the radio's own front panel is still picked up.
+        // only to keep the mode label fresh - it does NOT detect an exit: the
+        // QMX answers MD; with the PRE-Tune digit for the whole time it is
+        // tuning (observed here 2026-07-03, confirmed by Stan KC7XE 2026-08-09),
+        // so digit 8 never comes back and tune_modal.c owns the session state.
         // While an SSB filter is pinned and we're in USB/LSB, skip FW; - the
         // QMX reverts the live filter whenever the filter is read back.
         bool in_ssb = (s_last_mode_digit == '1' || s_last_mode_digit == '2');

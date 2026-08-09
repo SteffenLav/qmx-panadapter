@@ -182,8 +182,17 @@ static void add_ft8_tx_status(cJSON *root)
 //     browser tab must never leave a carrier on the air
 //   * the prior mode is restored on stop, never a bare MD0; (the CAT manual's
 //     Set list has no 0 - see docs/qmx-1_04-cat-comparison.md)
-//   * the radio's own front-panel exit is honoured: the 1 Hz status read sees
-//     the mode is no longer TUNE and stands the session down
+//   * NO radio-side exit detection, because none is possible: after MD8; the
+//     QMX answers MD; with the PRE-Tune mode digit, not 8 (CLAUDE.md, "MD;
+//     reports the PRE-Tune mode while the radio is tuning"). This code used to
+//     read ui_get_mode_str() every status poll and stand the session down when
+//     it wasn't "TUNE" - which was true from the FIRST poll, so every web tune
+//     silently cancelled itself ~1 s in: it stopped the 60 s safety timer and
+//     the SWR poll WITHOUT restoring the mode, leaving the radio keyed with no
+//     automatic recovery, and made tune_stop a no-op (web_tune_stop returns
+//     early on !s_web_tune_active). Fixed 2026-08-09. tune_modal.c had already
+//     learned this on 2026-07-03; this file re-made the mistake independently.
+//     The 60 s timeout is the only automatic exit, exactly as on the Tab5.
 // Gated on cat_qmx_fw_at_least(1,4,0) like the Tab5 button. If the Tab5's own
 // tune modal is in use at the same moment the two would fight over the mode -
 // single-operator device, judged acceptable, same as two fingers on one radio.
@@ -410,19 +419,14 @@ static esp_err_t status_handler(httpd_req_t *req)
           }
         }
     }
-    // Web tune session: live power/SWR while active, and the stand-down check -
-    // if the radio left TUNE by its own front panel, the session is over.
+    // Web tune session: live power/SWR while active. There is deliberately NO
+    // stand-down-if-the-radio-left-TUNE check here - see below.
     if (s_web_tune_active) {
-        const char *m = ui_get_mode_str();
-        if (m && m[0] && strcmp(m, "TUNE") != 0 && strcmp(m, "?") != 0) {
-            web_tune_stop(false);      // radio already out; do not re-write its mode
-        } else {
-            cJSON *tn = cJSON_AddObjectToObject(root, "tune");
-            float pw = 0, swr = 0;
-            cat_pwr_swr_async_read(&pw, &swr);
-            cJSON_AddNumberToObject(tn, "watts", pw);
-            cJSON_AddNumberToObject(tn, "swr",   swr);
-        }
+        cJSON *tn = cJSON_AddObjectToObject(root, "tune");
+        float pw = 0, swr = 0;
+        cat_pwr_swr_async_read(&pw, &swr);
+        cJSON_AddNumberToObject(tn, "watts", pw);
+        cJSON_AddNumberToObject(tn, "swr",   swr);
     }
     cJSON_AddBoolToObject(root, "tune_ok", cat_qmx_fw_at_least(1, 4, 0));
     // Paused = the operator has released the radio to its own menu. Everything

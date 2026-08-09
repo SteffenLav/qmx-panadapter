@@ -42,7 +42,7 @@ until the items in §5 are verified on real 1_04 hardware.
 
 | Cmd | 1_03_000 manual | 1_04_001 manual | Impact on our code |
 |---|---|---|---|
-| **MD** | Set/Get: `3` (CW), `6` (FSK), `7` (CWR), `9` (FSR) *(manual predates SSB; real 1_03_002 also does 1/2 LSB/USB)* | Set/Get: `1` LSB, `2` USB, `3` CW, **`5` AM (new, 1_04_001)**, `6` FSK, `7` CWR, **`8` SWR Tune (new)**, `9` FSR. Note: **no `4` (FM)** — QMX has no FM | Our `kw_modes[]` table in `cat.c` already labels `5`→"AM" ✓. Digit `8` currently displays `"?"` — now shows `"TUNE"` (shipped). ⚠️ **How to *exit* Tune via CAT is NOT documented**: the manual's own Set list for `MD` is `1,2,3,5,6,7,8,9` — `0` never appears in it. The "`MD0;` exits" claim in earlier project notes traces to the original changelog summary, not the manual body — treat it as unverified until tested on hardware. The safe fallback is setting `MD` back to whatever digit was active before Tune was entered |
+| **MD** | Set/Get: `3` (CW), `6` (FSK), `7` (CWR), `9` (FSR) *(manual predates SSB; real 1_03_002 also does 1/2 LSB/USB)* | Set/Get: `1` LSB, `2` USB, `3` CW, **`5` AM (new, 1_04_001)**, `6` FSK, `7` CWR, **`8` SWR Tune (new)**, `9` FSR. Note: **no `4` (FM)** — QMX has no FM | Our `kw_modes[]` table in `cat.c` already labels `5`→"AM" ✓. Digit `8` currently displays `"?"` — now shows `"TUNE"` (shipped). ⚠️ **How to *exit* Tune via CAT is NOT documented**: the manual's own Set list for `MD` is `1,2,3,5,6,7,8,9` — `0` never appears in it. The "`MD0;` exits" claim in earlier project notes traces to the original changelog summary, not the manual body — treat it as unverified until tested on hardware. The safe fallback is setting `MD` back to whatever digit was active before Tune was entered. ⚠️ **`MD;` Get lies while tuning**: after `MD8;` a Get returns the **prior** mode, not `8` (found on hardware 2026-07-03, confirmed by Stan KC7XE 2026-08-09 — "either a feature or a bug", the radio remembering where to return to). Digit `8` is therefore unreachable via the poll, and there is **no CAT signal for "the radio left Tune"** — `tune_modal.c` owns the session state itself |
 | **PC** | "power output in tenths of a watt", e.g. `PC45;` = 4.5 W | Same manual text, but the changelog adds: **returns 3 digits when power ≥ 10 W** | Already handled — `cat_query_power_swr()`/`cat_pwr_swr_async_read()` were re-calibrated for the 3-digit case (see CLAUDE.md) ✓ |
 | **MM** (semantics) | MM Set stores to EEPROM; when the new value takes effect is undocumented | New **"MM Effect"** config parameter (System config → CAT config): **"Immediate"** = every MM Set auto-reloads config and takes effect at once; **"On demand"** = takes effect only on menu enter/exit or on `MU;` | Directly relevant to the hard-won SSB-filter recipe (§4.3). Also `1_04_001` changelog: "CAT MU command and MM loaded previously saved state" bug was fixed |
 
@@ -193,6 +193,11 @@ Run against a real `1_04_002` unit, in this order — each item independent:
    real hardware, this needs a different exit mechanism entirely). Also let the 60 s
    auto-timeout fire once on purpose to confirm it recovers cleanly. Separately confirm AM
    in the mode selector — Set works, and check what `FW;` reports once in AM.
+   **Do this on a dummy load**, and note two things already settled by Stan KC7XE
+   (2026-08-09) so they don't get re-tested here: CAT commands are safe while Tune is
+   entered via `MD8;` (the lock-up is front-panel-menu only), and `MD;` will report the
+   pre-Tune mode throughout — that is expected, not a failed entry. Judge "did it enter
+   Tune" from the radio transmitting and the SWR/power readout, never from `MD;`.
 6. **`AI` modes** — last, on an expendable session: `AI2;`, watch for unsolicited `IF;`
    frames, then `AI0;` and confirm normal polling still works. If anything corrupts,
    power-cycle and record it — that alone decides whether §4.2 is viable.
