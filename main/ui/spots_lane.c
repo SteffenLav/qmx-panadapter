@@ -7,6 +7,7 @@
 #include "adif/adif_log.h"
 #include "storage/settings.h"
 #include "cat.h"
+#include "util/bandplan.h"
 #include "display/display.h"
 
 #include "esp_heap_caps.h"
@@ -243,9 +244,21 @@ static void repaint(void)
     settings_load_all(&st);
     if (!st.spots_en) { hide_all(); return; }
 
-    // Take the whole table so the off-screen counts are meaningful, not just the
-    // visible slice.
-    int n = spots_get_in_range_wait(s_w->buf, SPOTS_MAX, 0, 0xFFFFFFFFu, 20);
+    // Scope to the band we are ON, the same range /api/status uses. Taking the
+    // whole table meant the Tab5 and the browser were counting different pools -
+    // the off-screen arrows disagreed, and the two never showed the same
+    // overview (operator, 2026-08-09). It is also what the arrows always claimed
+    // to mean: "more spots this way ON THIS BAND", never on another one.
+    uint32_t lo_hz = 0, hi_hz = 0xFFFFFFFFu;
+    {
+        const bp_seg_t *segs = NULL;
+        uint32_t dial = cat_get_frequency();
+        bandplan_region_t reg = bandplan_effective_region(
+            (bandplan_region_t)st.bandplan_region, st.my_grid);
+        int nseg = dial ? bandplan_get_segments(dial, reg, &segs) : 0;
+        if (nseg > 0 && segs) { lo_hz = segs[0].lo_hz; hi_hz = segs[nseg - 1].hi_hz; }
+    }
+    int n = spots_get_in_range_wait(s_w->buf, SPOTS_MAX, lo_hz, hi_hz, 20);
     if (n < 0) return;                 // lock busy: keep the current picture
 
     hide_all();

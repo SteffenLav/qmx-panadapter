@@ -1681,8 +1681,9 @@ static const int GRP_STATION[]  = { DRAWER_SEC_IDENTITY, DRAWER_SEC_BPREGION };
 static const int GRP_RADIO[]    = { DRAWER_SEC_QMXVOL, DRAWER_SEC_QMXRF, DRAWER_SEC_CW,
                                     DRAWER_SEC_TUNE2, DRAWER_SEC_PAUSE };
 static const int GRP_NETWORK[]  = { DRAWER_SEC_WIFI, DRAWER_SEC_SPOTS };
+// Flip 180 last: it is the least-touched control in the group (operator).
 static const int GRP_DISPLAY[]  = { DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_SLEEP,
-                                    DRAWER_SEC_FLIP, DRAWER_SEC_CMAP };
+                                    DRAWER_SEC_CMAP, DRAWER_SEC_FLIP };
 static const int GRP_FT8[]      = { DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_FT8SYNC };
 static const int GRP_SPECTRUM[] = { DRAWER_SEC_PRESETS, DRAWER_SEC_DBRANGE, DRAWER_SEC_SMOOTHING,
                                     DRAWER_SEC_WATERFALL, DRAWER_SEC_FLAT, DRAWER_SEC_IQ,
@@ -1694,17 +1695,17 @@ static const int GRP_DEVICE[]   = { DRAWER_SEC_CHARGE };
 // session is in a non-expert group; the tuning and calibration controls are not.
 static const drawer_group_t s_drawer_groups[] = {
     GRP_DEF("Station",  GRP_STATION,  false),
+    GRP_DEF("Device",   GRP_DEVICE,   true),
     GRP_DEF("Radio",    GRP_RADIO,    false),
     GRP_DEF("Network",  GRP_NETWORK,  false),
     GRP_DEF("Display",  GRP_DISPLAY,  false),
     GRP_DEF("FT8",      GRP_FT8,      false),
     GRP_DEF("Spectrum", GRP_SPECTRUM, true),
-    GRP_DEF("Device",   GRP_DEVICE,   true),
 };
 #define N_DRAWER_GROUPS ((int)(sizeof(s_drawer_groups)/sizeof(s_drawer_groups[0])))
 
 static lv_obj_t *s_grp_hdr[N_DRAWER_GROUPS];
-static lv_obj_t *s_basic_btn = NULL, *s_expert_btn = NULL;
+static lv_obj_t *s_expert_btn = NULL, *s_expert_lbl = NULL;
 static bool      s_drawer_expert = false;
 
 // Is this section allowed on the screen we are on at all?
@@ -1816,6 +1817,7 @@ static void drawer_pause_btn_cb(lv_event_t *e);
 static void drawer_slider_cwtxoff_cb(lv_event_t *e);
 static void ui_set_cw_tx_offset_label(int hz);
 static void drawer_expert_btn_cb(lv_event_t *e);
+static void drawer_expert_paint(void);
 static void drawer_check_flip_cb(lv_event_t *e);
 static void drawer_check_charge_limit_cb(lv_event_t *e);
 static void drawer_slider_charge_limit_pct_cb(lv_event_t *e);
@@ -2117,7 +2119,7 @@ void ui_set_cat_paused(bool paused)
     if (s_lbl_pause_btn) {
         lv_label_set_text(s_lbl_pause_btn,
                           paused ? LV_SYMBOL_PLAY "  Take radio back"
-                                 : LV_SYMBOL_PAUSE "  Release radio (QMX menu)");
+                                 : LV_SYMBOL_PAUSE "  Release radio to QMX menu");
     }
     if (!paused) {
         // The radio may have been retuned, had its band or filter changed, or
@@ -5931,6 +5933,20 @@ static void drawer_build(void)
     lv_obj_set_style_text_font(title, &lv_font_montserrat_48, 0);
     lv_obj_align(title, LV_ALIGN_LEFT_MID, 0, 0);
 
+    // One toggle beside the title, not two buttons in the list. It has to answer
+    // both questions at a glance, so it says both: the top line is where you are
+    // and the bottom is what a tap gives you.
+    s_expert_btn = lv_btn_create(hdr_bg);
+    lv_obj_set_size(s_expert_btn, 208, 62);
+    lv_obj_align(s_expert_btn, LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_style_radius(s_expert_btn, 8, 0);
+    lv_obj_add_event_cb(s_expert_btn, drawer_expert_btn_cb, LV_EVENT_CLICKED, NULL);
+    s_expert_lbl = lv_label_create(s_expert_btn);
+    lv_obj_set_style_text_align(s_expert_lbl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(s_expert_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_center(s_expert_lbl);
+    drawer_expert_paint();
+
     lv_obj_add_event_cb(s_drawer, drawer_touch_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_drawer, drawer_touch_cb, LV_EVENT_RELEASED, NULL);
 
@@ -5977,49 +5993,6 @@ static void drawer_build(void)
         lv_label_set_text(l, LV_SYMBOL_LIST "  Need guidance?");
         lv_obj_center(l);
         y += 60 + 20;
-    }
-
-    // Basic / Expert. A two-position control rather than a hidden gesture: the
-    // drawer is long, but a setting you cannot find is worse than a long list,
-    // so the switch that shortens it is the first thing in the drawer and is
-    // always visible. Choice is not persisted on purpose - it is a way to look
-    // at the drawer, not a preference, and Basic is the right thing to land on
-    // when you open the box.
-    {
-        lv_obj_t *sw = lv_obj_create(s_drawer);
-        lv_obj_set_size(sw, DRAWER_W - 32, 56);
-        lv_obj_align(sw, LV_ALIGN_TOP_LEFT, 0, y);
-        lv_obj_set_style_bg_opa(sw, LV_OPA_TRANSP, 0);
-        lv_obj_set_style_border_width(sw, 0, 0);
-        lv_obj_set_style_pad_all(sw, 0, 0);
-        lv_obj_clear_flag(sw, LV_OBJ_FLAG_SCROLLABLE);
-
-        s_basic_btn = lv_btn_create(sw);
-        lv_obj_set_size(s_basic_btn, (DRAWER_W - 32) / 2 - 4, 52);
-        lv_obj_align(s_basic_btn, LV_ALIGN_TOP_LEFT, 0, 0);
-        lv_obj_set_style_radius(s_basic_btn, 8, 0);
-        lv_obj_add_event_cb(s_basic_btn, drawer_expert_btn_cb, LV_EVENT_CLICKED, (void *)0);
-        lv_obj_t *bl = lv_label_create(s_basic_btn);
-        lv_label_set_text(bl, "Basic");
-        lv_obj_set_style_text_font(bl, &lv_font_montserrat_24, 0);
-        lv_obj_center(bl);
-
-        s_expert_btn = lv_btn_create(sw);
-        lv_obj_set_size(s_expert_btn, (DRAWER_W - 32) / 2 - 4, 52);
-        lv_obj_align(s_expert_btn, LV_ALIGN_TOP_RIGHT, 0, 0);
-        lv_obj_set_style_radius(s_expert_btn, 8, 0);
-        lv_obj_add_event_cb(s_expert_btn, drawer_expert_btn_cb, LV_EVENT_CLICKED, (void *)1);
-        lv_obj_t *el = lv_label_create(s_expert_btn);
-        lv_label_set_text(el, "Expert");
-        lv_obj_set_style_text_font(el, &lv_font_montserrat_24, 0);
-        lv_obj_center(el);
-        // Paint the initial state here, or both buttons are the same blue until
-        // the first tap and the drawer never says which mode it is in.
-        lv_obj_set_style_bg_color(s_basic_btn,
-            lv_color_hex(s_drawer_expert ? 0x2a3138 : UI_COLOR_PRIMARY), 0);
-        lv_obj_set_style_bg_color(s_expert_btn,
-            lv_color_hex(s_drawer_expert ? UI_COLOR_PRIMARY : 0x2a3138), 0);
-        y += 68;
     }
 
     // Group headings. Created once here and POSITIONED by the layout pass, in
@@ -6134,7 +6107,7 @@ static void drawer_build(void)
         s_lbl_pause_btn = lv_label_create(btn);
         lv_label_set_text(s_lbl_pause_btn,
                           cat_user_pause_active() ? LV_SYMBOL_PLAY "  Take radio back"
-                                                  : LV_SYMBOL_PAUSE "  Release radio (QMX menu)");
+                                                  : LV_SYMBOL_PAUSE "  Release radio to QMX menu");
         lv_obj_set_style_text_font(s_lbl_pause_btn, &lv_font_montserrat_28, 0);
         lv_obj_set_style_text_color(s_lbl_pause_btn, lv_color_hex(0xffffff), 0);
         lv_obj_center(s_lbl_pause_btn);
@@ -6388,10 +6361,12 @@ static void drawer_build(void)
         lv_obj_align(s_check_spots, LV_ALIGN_TOP_RIGHT, 0, 6);
 
         lv_obj_t *rbn_lbl = lv_label_create(sec);
-        lv_label_set_text(rbn_lbl, "Add RBN (CW skimmers)");
-        lv_obj_set_style_text_color(rbn_lbl, lv_color_hex(0xB0B0B0), 0);
-        lv_obj_set_style_text_font(rbn_lbl, &lv_font_montserrat_24, 0);
-        lv_obj_align(rbn_lbl, LV_ALIGN_TOP_LEFT, 24, 66);
+        // Same weight and indent as the POTA row: RBN is a second SOURCE, not a
+        // sub-option of the first (operator, 2026-08-09).
+        lv_label_set_text(rbn_lbl, "RBN spots (CW skimmers)");
+        lv_obj_set_style_text_color(rbn_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(rbn_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(rbn_lbl, LV_ALIGN_TOP_LEFT, 0, 62);
         s_check_rbn = make_drawer_checkbox(sec, scfg_spots.rbn_en, drawer_rbn_cb, NULL);
         lv_obj_align(s_check_rbn, LV_ALIGN_TOP_RIGHT, 0, 62);
         y += 112;
@@ -6522,24 +6497,20 @@ static void drawer_build(void)
 
     // CW section
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_CW, y, 230);
-        lv_obj_t *cw_hdr = lv_label_create(sec);
-        lv_label_set_text(cw_hdr, "CW");
-        lv_obj_set_style_text_color(cw_hdr, lv_color_hex(0xA0E0A0), 0);
-        lv_obj_set_style_text_font(cw_hdr, &lv_font_montserrat_28, 0);
-        lv_obj_align(cw_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
-
+        // The green "CW" heading that used to sit here is gone: the group
+        // heading above already says Radio, and "CW center" names itself.
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_CW, y, 194);
         s_lbl_cwpitch = lv_label_create(sec);
         lv_label_set_text(s_lbl_cwpitch, "CW center: 700 Hz");
         lv_obj_set_style_text_color(s_lbl_cwpitch, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(s_lbl_cwpitch, &lv_font_montserrat_28, 0);
-        lv_obj_align(s_lbl_cwpitch, LV_ALIGN_TOP_LEFT, 0, 40);
+        lv_obj_align(s_lbl_cwpitch, LV_ALIGN_TOP_LEFT, 0, 4);
 
         s_slider_cwpitch = lv_slider_create(sec);
         lv_obj_set_size(s_slider_cwpitch, DRAWER_W - 32, 30);
         lv_slider_set_range(s_slider_cwpitch, 600, 800);
         lv_slider_set_value(s_slider_cwpitch, (int)s_cw_pitch_hz, LV_ANIM_OFF);
-        lv_obj_align(s_slider_cwpitch, LV_ALIGN_TOP_LEFT, 0, 70);
+        lv_obj_align(s_slider_cwpitch, LV_ALIGN_TOP_LEFT, 0, 34);
         lv_obj_add_event_cb(s_slider_cwpitch, drawer_slider_cwpitch_cb, LV_EVENT_VALUE_CHANGED, NULL);
         char cwbuf[24];
         snprintf(cwbuf, sizeof(cwbuf), "CW center: %u Hz", (unsigned)s_cw_pitch_hz);
@@ -6553,16 +6524,16 @@ static void drawer_build(void)
         s_lbl_cwtxoff = lv_label_create(sec);
         lv_obj_set_style_text_color(s_lbl_cwtxoff, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(s_lbl_cwtxoff, &lv_font_montserrat_28, 0);
-        lv_obj_align(s_lbl_cwtxoff, LV_ALIGN_TOP_LEFT, 0, 130);
+        lv_obj_align(s_lbl_cwtxoff, LV_ALIGN_TOP_LEFT, 0, 94);
         ui_set_cw_tx_offset_label(cwcfg.cw_tx_offset_hz);
 
         s_slider_cwtxoff = lv_slider_create(sec);
         lv_obj_set_size(s_slider_cwtxoff, DRAWER_W - 32, 30);
         lv_slider_set_range(s_slider_cwtxoff, -100, 100);   // x10 Hz
         lv_slider_set_value(s_slider_cwtxoff, cwcfg.cw_tx_offset_hz / 10, LV_ANIM_OFF);
-        lv_obj_align(s_slider_cwtxoff, LV_ALIGN_TOP_LEFT, 0, 170);
+        lv_obj_align(s_slider_cwtxoff, LV_ALIGN_TOP_LEFT, 0, 134);
         lv_obj_add_event_cb(s_slider_cwtxoff, drawer_slider_cwtxoff_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        y += 230;
+        y += 194;
     }
 
     // CW Audio section: play demodulated CW on the Tab5 speaker/headphone
@@ -6971,6 +6942,18 @@ void ui_set_drawer_open(bool open)
     else      drawer_close();
 }
 
+// Force the Basic/Expert view from outside (the same dev action). Only exists so
+// the Expert layout can be checked on a screenshot; the operator's own route is
+// the toggle in the drawer header.
+void ui_set_drawer_expert(bool expert)
+{
+    if (s_drawer_expert == expert) return;
+    s_drawer_expert = expert;
+    drawer_expert_paint();
+    drawer_set_ft8_mode(ui_mode_get() == UI_MODE_FT8);
+    if (s_drawer) lv_obj_scroll_to_y(s_drawer, 0, LV_ANIM_OFF);
+}
+
 static void drawer_close(void)
 {
     if (!s_drawer || !s_drawer_open) return;
@@ -7372,17 +7355,22 @@ static void drawer_slider_cwtxoff_cb(lv_event_t *e)
     // what keeps it correct when the frequency later moves.
 }
 
-// Basic / Expert. Re-lays the drawer out for the mode currently showing, and
-// paints the two buttons so it is obvious which one you are in.
+// Paint the view toggle: current mode on top, what a tap does underneath.
+static void drawer_expert_paint(void)
+{
+    if (!s_expert_btn || !s_expert_lbl) return;
+    lv_label_set_text(s_expert_lbl, s_drawer_expert ? "EXPERT\ntap for Basic"
+                                                    : "BASIC\ntap for Expert");
+    lv_obj_set_style_bg_color(s_expert_btn,
+        lv_color_hex(s_drawer_expert ? 0x7a4a12 : UI_COLOR_PRIMARY), 0);
+}
+
+// Flip the view and re-lay the drawer out for whichever screen is showing.
 static void drawer_expert_btn_cb(lv_event_t *e)
 {
-    s_drawer_expert = (bool)(intptr_t)lv_event_get_user_data(e);
-    if (s_basic_btn)
-        lv_obj_set_style_bg_color(s_basic_btn,
-            lv_color_hex(s_drawer_expert ? 0x2a3138 : UI_COLOR_PRIMARY), 0);
-    if (s_expert_btn)
-        lv_obj_set_style_bg_color(s_expert_btn,
-            lv_color_hex(s_drawer_expert ? UI_COLOR_PRIMARY : 0x2a3138), 0);
+    (void)e;
+    s_drawer_expert = !s_drawer_expert;
+    drawer_expert_paint();
     drawer_set_ft8_mode(ui_mode_get() == UI_MODE_FT8);
     if (s_drawer) lv_obj_scroll_to_y(s_drawer, 0, LV_ANIM_OFF);
 }

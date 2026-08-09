@@ -105,22 +105,60 @@ static void unlock(void) { if (s_lock) xSemaphoreGive(s_lock); }
 
 uint32_t spots_version(void) { return s_version; }
 
+// How long a spot survives with no further mention. Matches the fade the UIs
+// already apply (invisible at 30 minutes), so nothing is dropped while still
+// being drawn.
+#define SPOT_STALE_S 1800
+
 void spots_publish(spot_source_t src, const spot_t *list, int n)
 {
     if (!s_store || !lock()) return;
 
-    // Compact this source out in place, then append the replacement. Done under
-    // one lock so a reader never sees a half-swapped table, and in place so a
-    // second producer costs no extra buffer.
+    // MERGE, not replace (operator, 2026-08-09: "sometimes all the spots
+    // delete/shift to a new picture - I would think they change at a much more
+    // steady and slow pace").
+    //
+    // This used to compact the whole source out and append whatever the fetch
+    // returned, so every 60 s the entire POTA set was swapped for the API's
+    // current view. A station the API happened to omit from one response
+    // vanished and came back a minute later, and the ORDER changed wholesale -
+    // which, since labels are placed first-come, re-shuffled which spots got a
+    // label at all. The display churned far more than the band did.
+    //
+    // Now a fetch REFRESHES what it mentions and leaves the rest to age out on
+    // their own. The spots carry heard_unix and both UIs already fade on it, so
+    // ageing is the honest expiry - absence from one response is not evidence a
+    // station has gone.
+    int64_t now = (int64_t)time(NULL);
+
+    // 1. Drop this source's genuinely stale entries (and keep every other source).
     int keep = 0;
-    for (int i = 0; i < s_count; i++)
-        if (s_store[i].source != src) s_store[keep++] = s_store[i];
+    for (int i = 0; i < s_count; i++) {
+        bool mine  = (s_store[i].source == src);
+        bool stale = mine && s_store[i].heard_unix > 0 &&
+                     (now - s_store[i].heard_unix) > SPOT_STALE_S;
+        if (!stale) s_store[keep++] = s_store[i];
+    }
+    s_count = keep;
 
-    int room = SPOTS_MAX - keep;
-    if (n > room) n = room;            // the incoming source yields, not the settled one
-    if (n > 0 && list) memcpy(&s_store[keep], list, (size_t)n * sizeof(spot_t));
+    // 2. Fold the fetch in: update a spot already known on the same frequency,
+    //    otherwise append. Matching on call AND frequency so the same operator
+    //    active on two bands stays two spots.
+    for (int i = 0; i < n && list; i++) {
+        int at = -1;
+        for (int j = 0; j < s_count; j++) {
+            if (s_store[j].source != src) continue;
+            if (s_store[j].freq_hz != list[i].freq_hz) continue;
+            if (strncmp(s_store[j].call, list[i].call, sizeof(s_store[j].call)) != 0) continue;
+            at = j; break;
+        }
+        if (at >= 0) {
+            s_store[at] = list[i];                 // same station, fresher details
+        } else if (s_count < SPOTS_MAX) {
+            s_store[s_count++] = list[i];
+        }
+    }
 
-    s_count = keep + (n > 0 ? n : 0);
     s_version++;
     unlock();
 }

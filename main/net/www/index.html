@@ -2781,10 +2781,11 @@ function drawSpots(ctx, W, H) {
     const col = spotColour(c.sp);
     ctx.globalAlpha = Math.max(SPOT_MIN_OPA, c.opa);
 
-    // Full-height line: with labels in the middle, a line that started under
-    // the label would leave the top half of the spectrum with no marker.
+    // The line runs DOWN from the label to the frequency axis, and no further
+    // up. A full-height line crossed its own callsign and pointed at nothing
+    // above it - the Tab5 has always drawn it this way (see spots_lane.c).
     ctx.fillStyle = col;
-    ctx.fillRect(Math.round(c.x), 0, 1, H);
+    ctx.fillRect(Math.round(c.x), by + 20, 1, Math.max(0, H - (by + 20)));
 
     ctx.fillStyle = "rgba(0,0,0,0.72)";
     ctx.fillRect(box.x, box.y, box.w, box.h);

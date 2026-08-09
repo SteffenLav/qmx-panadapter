@@ -582,7 +582,12 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // on a screenshot instead of being taken on trust.
         cJSON *o = cJSON_GetObjectItem(root, "open");
         bool want = cJSON_IsBool(o) ? cJSON_IsTrue(o) : true;
-        if (display_lock(500)) { ui_set_drawer_open(want); display_unlock(); }
+        cJSON *ex = cJSON_GetObjectItem(root, "expert");
+        if (display_lock(500)) {
+            if (cJSON_IsBool(ex)) ui_set_drawer_expert(cJSON_IsTrue(ex));
+            ui_set_drawer_open(want);
+            display_unlock();
+        }
     } else if (action && strcmp(action, "resmon") == 0) {
         // Hidden developer-only toggle for the resource-monitor overlay. No web
         // UI element references this — it's meant to be fired from the browser
