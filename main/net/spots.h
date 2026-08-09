@@ -35,6 +35,13 @@ typedef struct {
     spot_mode_t   mode;
     spot_source_t source;
     int64_t       heard_unix; // when it was spotted (UTC seconds)
+    // Set on an ACTIVATION spot (POTA/SOTA) when the RBN independently heard
+    // the same callsign on the same frequency. Two different things are true
+    // of such a spot: it is not a duplicate to be drawn twice, and it is
+    // corroborated - somebody's receiver actually copied it just now, rather
+    // than it being a self-spot typed in an hour ago. Set by the read path,
+    // never by a producer; see spots_get_in_range().
+    bool          rbn_confirmed;
 } spot_t;
 
 // Headroom, not a measurement: the live POTA feed returned 94 spots one day and

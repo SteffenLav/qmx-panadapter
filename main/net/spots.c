@@ -172,12 +172,66 @@ int spots_get(spot_t *out, int max)
     return n;
 }
 
+// How far apart two spots for the same callsign may sit and still be the same
+// station. The RBN reports the CW carrier a skimmer measured; a POTA/SOTA spot
+// carries whatever the activator (or a chaser) typed in. They routinely differ
+// by a few hundred Hz, and rounding to the nearest kHz is common by hand.
+#define SPOT_DUP_TOL_HZ 2000
+
+static inline bool spot_same_station(const spot_t *a, const spot_t *b)
+{
+    uint32_t d = (a->freq_hz > b->freq_hz) ? a->freq_hz - b->freq_hz
+                                           : b->freq_hz - a->freq_hz;
+    return d <= SPOT_DUP_TOL_HZ && strcasecmp(a->call, b->call) == 0;
+}
+
 static int get_in_range_locked(spot_t *out, int max, uint32_t lo_hz, uint32_t hi_hz)
 {
     int n = 0;
     for (int i = 0; i < s_count && n < max; i++)
         if (s_store[i].freq_hz >= lo_hz && s_store[i].freq_hz <= hi_hz)
             out[n++] = s_store[i];
+
+    // Collapse repeats of the same station into one entry. Two kinds occur, and
+    // both were measured on the live feed (20 m, 2026-08-09, 79 spots in
+    // window): an activator spotted on POTA AND heard by the RBN (2 of only 4
+    // activation spots were doubled - which is why it stood out so badly), and
+    // the RBN doubling ITSELF (5 pairs, every one exactly 100 Hz apart, i.e.
+    // two skimmers rounding the same signal differently). Both put two labels
+    // at almost the same x and make a busy band's lane unreadable.
+    //
+    // The earlier entry wins, because the store is newest-first - EXCEPT that
+    // an activation spot always beats an RBN one, since it carries the park or
+    // summit reference, which is the whole reason the operator is looking.
+    //
+    // Runs over the IN-RANGE subset (a band slice), not the whole 200-entry
+    // store. The frequency test is an integer compare and rejects almost every
+    // pair before the string compare, so the O(k^2) scan stays cheap enough for
+    // the LVGL thread holding the store lock.
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < i; j++) {
+            if (!spot_same_station(&out[i], &out[j])) continue;
+            // Keep the activation spot in the surviving slot, whichever way
+            // round the two happen to be.
+            if (out[i].source != SPOT_SRC_RBN && out[j].source == SPOT_SRC_RBN) {
+                spot_t tmp = out[j]; out[j] = out[i]; out[i] = tmp;
+            }
+            if (out[i].source == SPOT_SRC_RBN && out[j].source != SPOT_SRC_RBN)
+                out[j].rbn_confirmed = true;
+            if (out[i].rbn_confirmed) out[j].rbn_confirmed = true;
+            // Take the later timestamp. A skimmer copying the station five
+            // minutes ago is direct evidence it was on the air five minutes
+            // ago, which beats the hour-old self-spot the activation feed is
+            // still serving - and it makes the lane's age fade correct with no
+            // change needed there.
+            if (out[i].heard_unix > out[j].heard_unix)
+                out[j].heard_unix = out[i].heard_unix;
+            memmove(&out[i], &out[i + 1], (size_t)(n - i - 1) * sizeof(spot_t));
+            n--;
+            i--;                        // re-test the entry shifted into this slot
+            break;
+        }
+    }
     return n;
 }
 

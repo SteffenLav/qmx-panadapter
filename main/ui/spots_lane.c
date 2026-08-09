@@ -79,6 +79,13 @@ static const char *TAG = "spots_ui";
 #define COL_POTA    0xFFC864
 #define COL_RBN     0x70FF90
 #define COL_WORKED  0xC0C0C0
+// An activation spot the RBN independently heard on the same frequency. The
+// duplicate entry is gone (spots.c folds it in), so this colour is the only
+// remaining sign that two sources agree - and agreement is worth showing: it
+// separates "somebody says they are there" from "a receiver copied them just
+// now". Deliberately a brighter POTA amber rather than a new hue, because it
+// is the same KIND of spot, only better evidenced.
+#define COL_CONFIRMED 0xFFF0B0
 
 static lv_obj_t *s_lane;
 static lv_obj_t *s_ticks[MAX_TICKS];
@@ -275,7 +282,8 @@ static void repaint(void)
         s_w->worked[i] = (s_w->buf[i].call[0] &&
                           adif_log_contains_call_on_band(s_w->buf[i].call, s_w->buf[i].freq_hz)) ? 1 : 0;
         s_w->colour[i] = s_w->worked[i] ? COL_WORKED
-                       : (s_w->buf[i].source == SPOT_SRC_RBN ? COL_RBN : COL_POTA);
+                       : (s_w->buf[i].source == SPOT_SRC_RBN ? COL_RBN
+                       : (s_w->buf[i].rbn_confirmed ? COL_CONFIRMED : COL_POTA));
         s_w->opa[i]    = age_opa(s_w->buf[i].heard_unix, now);
     }
 
