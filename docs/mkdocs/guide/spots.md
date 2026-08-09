@@ -119,8 +119,12 @@ If you do switch it on:
   within a few seconds.
 - **Duplicates are merged.** The same CQ is typically reported by ten or more
   skimmers; you see one entry per station, at the best reported signal.
-- Spots are held for up to **10 minutes** after they were last heard.
-- It is the **CW** feed. FT8/FT4 activity comes from POTA, not RBN.
+- **RBN spots** are held for up to **10 minutes** after any skimmer last heard
+  them — shorter than the 30 minutes above, because an active caller is
+  re-spotted every couple of minutes and silence means they have stopped.
+- It is the **CW/RTTY** skimmer feed. RBN runs a separate FT8/FT4 feed that the
+  panadapter deliberately does not subscribe to — you are already decoding those
+  yourself, far better, from the antenna.
 
 ---
 

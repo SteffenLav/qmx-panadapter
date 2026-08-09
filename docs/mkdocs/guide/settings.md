@@ -177,11 +177,25 @@ details, including what the colours mean, in [Live Spots](spots.md).
 once a minute and draws them over the spectrum. Needs WiFi. Switching it off
 leaves the spectrum completely clean.
 
-**Add RBN (CW skimmers)** — **Off** by default, and deliberately so: RBN is a
+**RBN spots (CW skimmers)** — **Off** by default, and deliberately so: RBN is a
 continuous global feed over a persistent connection, unlike POTA's occasional
-fetch. Adds CW stations the skimmer network is hearing right now, filtered to the
+fetch. Adds stations the skimmer network is hearing right now, filtered to the
 band you are on. **Requires your callsign** to be set (the feed asks for one on
 connect — it identifies you, it is not a password).
+
+**DX cluster spots (phone)** — **Off** by default, same reasoning: a second
+persistent connection. This is the source that carries **SSB**. Skimmers are
+machines, and no machine recognises a callsign spoken into a microphone, so
+phone activity is structurally invisible to RBN however long you leave it on. A
+cluster is people typing, so it carries voice contacts, and park and summit
+references written into the comment. Mode is worked out from the spotter's
+comment, or from your band plan when the comment does not say. Relayed skimmer
+spots are dropped, so the cluster cannot double what RBN is already showing.
+
+Whatever you switch on, **one station is one entry**: the same callsign within
+2 kHz is merged, an activation spot outranks a plain sighting, and a dropped
+duplicate folds back in as corroboration — drawn brighter, meaning a receiver
+copied them just now rather than someone having typed it an hour ago.
 
 ## FT8 Settings
 
@@ -389,9 +403,24 @@ Use this to:
 
 ## Advanced / Expert
 
-**Reset to Defaults** — Wipe all user settings and return to factory defaults. ADIF log is preserved. Use only if something is stuck.
+**These two live in the browser, not in the drawer** — a reset you can trigger by
+mistake on a touchscreen in the field is a worse idea than one that needs a
+computer. Both are in the web UI's **Miscellaneous ▲** menu.
 
-**Factory Reset (Full)** — Erase everything including ADIF log. Use only as a last resort.
+**Reset settings** — Erases the stored settings and memory channels, returning
+everything to defaults, and reboots. Use if something is stuck in a state you
+cannot get out of. Take a **Config ↓** backup first and you can restore it in
+seconds.
+
+**Reset WiFi** — Erases the WiFi credentials and the stored radio/link state.
+This is the one for a WiFi setup that will not come up no matter what you enter.
+
+**Neither of them touches your QSO log.** The ADIF log lives in a separate area
+of flash that is deliberately left alone, so a reset cannot cost you contacts —
+and neither can a firmware update, which is why a normal flash keeps your log.
+The only things that erase the log are the **Delete all** button in the ADIF
+viewer, the same in the web log viewer, and a **clean/erase flash** from the
+flasher.
 
 ---
 
