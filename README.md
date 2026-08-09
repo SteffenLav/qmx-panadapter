@@ -33,7 +33,7 @@ items marked *(needs WiFi)* need a network.
 
 **Real-time panadapter** — Spectrum and waterfall across a 48 kHz window centred on the
 QMX VFO, at 30 Hz, with 12 kHz IF-offset compensation. Tap or drag to tune (mode-aware
-snapping), pinch to zoom ×1–×8 with a true zoom-FFT, one-finger drag to pan and retune.
+snapping), pinch to zoom ×1–×24 with a true zoom-FFT, one-finger drag to pan and retune.
 Adaptive per-bin noise floor, flat-spectrum mode, adjustable waterfall black level and
 contrast, selectable FFT window, and a graphical S-meter calibrated in dBm. A colour
 band-plan strip tracks the VFO (IARU region 1/2/3, auto-selected from your grid) and can
@@ -68,11 +68,27 @@ browser, delete single records or all of them, and upload *(needs WiFi)* to **QR
 Logbook**, **eQSL** and **ARRL LoTW** — LoTW QSOs are signed on the device itself with
 your own callsign certificate.
 
-**Live spots on the spectrum** *(needs WiFi)* — **POTA** park activations, and
-optionally **RBN** CW skimmer spots, drawn onto the trace at the frequency the station
-is actually using. Grey means you have already worked them on that band. Press and drag
-to pick one, lift to tune it *with the right mode*. Spots fade with age and are gone
-after 30 minutes; corner counts take you to the ones just off-screen.
+**Live spots on the spectrum** *(needs WiFi)* — **POTA** park activations, and optionally
+**RBN** CW skimmer spots and **DX cluster** spots, drawn onto the trace at the frequency
+the station is actually using. The cluster is where phone activity comes from — skimmers
+are machines, and no machine recognises a callsign spoken into a microphone. One station
+is one entry, however many sources report it. Grey means you have already worked them on
+that band. Press and drag to pick one, lift to tune it *with the right mode*. Spots fade
+with age and are gone after 30 minutes; corner counts take you to the ones just off-screen.
+
+**Knowing you are getting out** *(needs WiFi)* — **Who is hearing me** asks PSK Reporter
+which receivers have copied *your* call, with distance, bearing and the report they gave
+you. **SWR protection** cuts a transmission short and latches the transmitter off above
+your chosen limit, because an FT8 burst is thirteen seconds of key-down into whatever the
+antenna is doing.
+
+**Activation logging** — Start a **POTA** or **SOTA** activation and every contact is
+stamped with the reference as it is logged, counted against the threshold, with chases
+tagged from spots already seen and a single-reference ADIF export for uploading.
+
+**Bluetooth mouse** — A pointer that works *while the QMX stays plugged in*, which a USB
+mouse cannot do on this hardware. Pair once; it reconnects by itself. Move, click, and a
+wheel that scrolls whatever is under the pointer.
 
 **PSK Reporter spotting** *(needs WiFi)* — The stations you decode are reported to
 [PSK Reporter](https://pskreporter.info) the way WSJT-X does, so you appear on the map as
@@ -382,10 +398,32 @@ A new device ships with a few **example channels** already filled (rather than 3
 
 Open by swiping in from the right edge, or tapping the right grip handle. The drawer is scrollable.
 
-Controls appear top to bottom in this order:
+**It is grouped, with a Basic / Expert toggle at the top.** Basic shows what a normal session needs; Expert adds the tuning and calibration controls. The groups, in order:
+
+| Group | Controls | Basic? |
+|---|---|---|
+| **Station** | Identity (callsign + grid), Activation (POTA/SOTA), Band-plan region | yes |
+| **Device** | Battery charge limit | Expert |
+| **Radio** | QMX volume, QMX RF gain, CW transmit offset, SWR protection, Antenna Tune *(QMX 1.04+)*, Release radio | yes |
+| **Network** | WiFi, Live spots (POTA / RBN / DX cluster), Bluetooth mouse | yes |
+| **Display** | Brightness, Display sleep, Waterfall colour map, Flip 180° | yes |
+| **FT8** | Distance in miles, FT8 simulation mode | yes |
+| **Spectrum** | Presets, dB range, Smoothing, Waterfall controls, Flat spectrum, I/Q balance, IF calibration | Expert |
+
+The FT8 group only appears on the FT8 screen, and the spectrum-related groups drop away there.
+
+What each control does:
 
 | Control | What it does |
 |---------|--------------|
+| **Activation** | Start a POTA or SOTA activation; every logged contact then carries the reference, with the count shown against the threshold. See [Activation](#activation-pota--sota) |
+| **SWR protection** | Off / 2.0 / 2.5 / 3.0 / 4.0 : 1 — above the limit the transmitter latches off. See [SWR protection](#swr-protection) |
+| **Release radio** | Stops all CAT traffic so you can use the QMX's own menus without the Tab5 interrupting them |
+| **QMX RF gain** | The radio's RF gain in dB, **per band**, read back from the radio — nothing is stored on the Tab5, because a remembered value would belong to whichever band you were last on |
+| **CW transmit offset** | Transmit a few hundred hertz off the station you are answering, so you stand out of the zero-beat pile. Implemented as split, because the QMX has no XIT |
+| **Live spots** | The POTA, RBN and DX cluster sources for the [spot lane](#live-spots-on-the-spectrum) |
+| **Bluetooth mouse** | A pointer that works while the QMX is plugged in. See [Bluetooth mouse](#bluetooth-mouse) |
+| **Display sleep** | Backlight off after an idle timeout; a tap wakes it and is swallowed, so nothing is triggered by accident |
 | **Flip 180°** | Inverts the whole display and touch axes for upside-down mounting; centred checkbox so it isn't hit by accident, persisted |
 | **QMX volume** | The radio's own AF gain, **in decibels — the same number the QMX shows on its LCD** (verified side by side against a real QMX). Reads the rig back each time the drawer opens, so it stays in step if you use the radio's volume knob. Intended for QMX+ builds with no control panel, where there is no knob at all. Spans 0–50 dB, not the QMX's full 0–199 dB, so the useful travel isn't crammed into the first couple of centimetres — 50 dB is Randy N4OPI's with-antenna figure. Turn the rig's own knob past 50 and the slider knob pins at the end while the number keeps showing the true dB |
 | **IQ Balance** | Toggle adaptive I/Q image correction; re-enabling resets the estimator |
@@ -423,6 +461,24 @@ Four live, NVS-persisted sliders/dropdown at the bottom of the settings drawer f
 | **Contrast** | 10–80 dB | 45 dB | The dB span that fills the rest of the colour ramp above the black level |
 | **Adaptive floor** | 0–100% | 100% | Blend between a per-bin noise floor (100%) and one global mean floor across the band (0%) |
 | **FFT window** | Blackman-Harris / Hann (sharp) / Nuttall | Blackman-Harris | The FFT window function; Hann trades some sidelobe suppression for sharper peaks |
+
+### Live spots on the spectrum
+
+*(needs WiFi)* Callsigns drawn straight onto the trace, at the frequency the station is actually using. Three sources, each switched on separately in **Network → Live spots**:
+
+| Source | What it carries | Default |
+|---|---|---|
+| **POTA** | Park activations, self-spotted by the activator | on |
+| **RBN** | CW skimmer reports — machines listening for CW, RTTY, FT8 and FT4 | off |
+| **DX cluster** | People typing. This is where **SSB spots** come from: no machine recognises a callsign spoken into a microphone, so phone activity is structurally invisible to RBN | off |
+
+**Colours:** amber is a POTA activation, green an RBN spot, and **grey** a station you have already worked *on that band*.
+
+**Press and drag** to pick one, and lift to tune it — frequency *and* mode. Bandwidth is deliberately left alone, since the QMX keeps a filter per mode. Counts in the bottom corners (`< spots (3)`) say how many more are on this band just outside your window; tap one to jump to the nearest.
+
+Spots fade with age and are gone after 30 minutes. On a crowded band only so many labels fit — unworked and fresher spots keep theirs, and a spot that cannot fit a label is not drawn at all rather than left as a line pointing at nothing.
+
+**One station, one entry.** A station spotted on POTA *and* heard by RBN used to be drawn twice, in two colours, a few pixels apart — and RBN doubled itself where two skimmers rounded the same signal differently. The same callsign within 2 kHz is now a single entry: the activation spot wins, and the RBN sighting folds into it as corroboration, shown as a brighter marker. That distinction is worth having — it means *a receiver copied them just now*, rather than *somebody typed this an hour ago*.
 
 ---
 
@@ -534,6 +590,16 @@ Bins are pre-shifted server-side so byte 2 is the leftmost screen pixel. Push ra
 ```powershell
 Invoke-WebRequest -Uri "http://192.168.1.213/ss.bmp" -OutFile screenshot.bmp
 ```
+
+### Who is hearing me
+
+*(needs WiFi)* **Miscellaneous → Who is hearing me** asks PSK Reporter which receivers have copied **your** callsign recently, and lists them by distance with the country, bearing, and the signal report they gave you.
+
+This is the reverse of the reports the panadapter *sends*, and the two are separate settings — you can have either without the other. Switch it on in the browser under **Settings → Spots & reporting**; there is deliberately no Tab5 control, because the answer is a table of distances and bearings that wants a screen you are already sitting in front of.
+
+It answers the one question no amount of local processing can: **am I actually getting out?** The valuable case is the mismatch. Stations you can hear that cannot hear you is a transmit-side problem — antenna, power, a bad connector — and from the receiving side alone that looks exactly like a dead band.
+
+It is read-only, and asks at most once every five minutes because that is the rate PSK Reporter requests. An empty list is the normal answer until you have transmitted: nobody can report hearing a station that has not been on the air.
 
 ---
 
@@ -726,6 +792,30 @@ These are deliberate operator nudges for busy-band edge cases where the auto-eng
 
 After each burst the Tab5 queries `PC;`/`SW;` for instantaneous forward power and SWR and shows the result briefly in the status line: `Last TX: X.XW SWRx.xx [Ns]`. If SWR > 4.0 (indicating the QMX SWR-protection latch tripped), the firmware automatically cycles `TX;` / 150 ms / `RX;` to clear the latch so the radio is ready for the next TX slot without operator intervention.
 
+### SWR protection
+
+Reading the SWR is one thing; **acting** on it is another. Set a limit in **Radio → SWR protection** — **Off, 2.0, 2.5, 3.0** or **4.0 : 1**, defaulting to **3.0:1** — and a transmission that reaches it stops, with the transmitter **latched off** until you clear it by tapping the red warning on the FT8 screen.
+
+An FT8 burst is nearly **thirteen seconds of continuous key-down**, so a disconnected antenna, a wrong-band antenna or a damaged feedline has real time to do damage. 3.0:1 is high enough not to trip on a merely mediocre match and low enough to catch those.
+
+**FT8 and FT4 differ, on purpose.** In FT8 the SWR is sampled part-way through and the burst is **cut short**. In FT4 the check runs **after** the burst, so that one burst completes and every later one is blocked — FT4 symbols are 48 ms and a control-link query takes about 50 ms, so asking mid-burst would disturb the very transmission it is protecting. A reading only counts if there is real power behind it; the radio can report a meaningless ratio when the amplifier is not actually loaded.
+
+The latch is deliberately sticky. A bad antenna does not repair itself, and resuming automatically would just transmit into the same fault on the next slot.
+
+### Activation (POTA / SOTA)
+
+Start an activation in **Station → Activation**, pick **POTA** or **SOTA**, and enter the reference (`DL-0123`, `OZ/SJ-001`). From then on **every logged contact carries it automatically** — written as the ADIF `MY_SIG` / `MY_SIG_INFO` fields as the record is created, so no contact can be logged without it by forgetting a step.
+
+The panel shows your **contact count against the threshold** — 10 for POTA, 4 for SOTA — read from the log itself rather than from a counter that could drift.
+
+**Chases are tagged too.** If you work a station the panadapter has already seen spotted, their reference is recorded as `SIG` / `SIG_INFO`, so a chase is logged as a chase without you typing anything.
+
+**Stopping is as prominent as starting**, because the failure that actually happens is driving home with it still running and stamping the next evening's contacts with a park you left.
+
+The session survives a reboot, but is deliberately **not** part of the config backup — a backup restored weeks later would otherwise start stamping QSOs with an old activation.
+
+**Uploading just that park:** the ADIF download takes an optional reference, so you can export one activation's contacts rather than your whole log. In the web UI it is on the QSO Logs menu.
+
 ### CQ message presets
 
 Long-press the **Call CQ** button to open the preset editor. Three message slots with radio buttons — check the active one. A `+ <call> <grid>` quick-insert appends your identity. Standard CQ constructions (`CQ DX OZ1LAV JO65FR`, `CQ POTA …`) and ≤13-char free text both encode via the general ft8_lib encoder. Presets persist to NVS. The Call CQ button label shows the selected message; a short tap transmits it.
@@ -829,6 +919,28 @@ On the FT8 screen, tap **Filter** → **Sync Time** to open the time calibration
 | Tap or swipe ↓ | Top-bar item (Band/Mode/BW/Freq/Zoom) | Open that item's selector |
 | Touch and hold ~250 ms | FT8 decode list row | Dim preview at ~80 ms; full selection at 250 ms (scroll locks, drag moves highlight, lift to confirm) |
 | Quick swipe | FT8 decode list | Scroll the list normally |
+
+### Bluetooth mouse
+
+A Bluetooth mouse is the one pointer that works **while the QMX is plugged in**. A USB mouse cannot: the radio occupies the Tab5's only USB host, and sharing it through a hub does not work on this hardware — the ESP32-P4's USB host has no Transaction Translator, so every full- or low-speed device behind a hub is disabled. Bluetooth never touches that port, so the radio keeps its connection.
+
+For anyone operating with cold or unsteady hands, that is the whole point: every menu, button and drawer control becomes a click instead of a precise tap on glass.
+
+**Setting it up — once:**
+
+1. Tick **Network → Bluetooth mouse → Enable (then pair the mouse)**.
+2. **Restart the Tab5.** Bluetooth can only start after the link to the wireless co-processor is up, so the switch takes effect on the next boot. The confirmation toast says so.
+3. Put the mouse in pairing mode and wait a few seconds. It connects on its own.
+
+The pairing is stored and survives reboots *and* firmware updates — from then on the mouse reconnects by itself.
+
+**The Bluetooth symbol** sits in the bottom bar just left of the WiFi indicator: dim grey when switched off, pale when on and looking, **blue** when a mouse is connected. The web UI mirrors it.
+
+**What works:** moving the pointer, left click, and the scroll wheel — which scrolls whatever is under the pointer, so the decode list, the settings drawer and the manual all scroll.
+
+**The pointer disappears when the mouse sleeps.** A Bluetooth mouse switches itself off after about half a minute of stillness to save its battery, and the pointer goes with it. It comes back the instant you move the mouse — reconnecting takes under a third of a second. That is the mouse looking after its own battery, not a fault.
+
+It costs about 5 KB of memory: the Bluetooth pools live in external RAM and the stack is sized for exactly one mouse, which is what makes it affordable on a board this tight. Off by default.
 
 ### Per-unit IF calibration
 

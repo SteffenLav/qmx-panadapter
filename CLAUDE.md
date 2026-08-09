@@ -50,6 +50,15 @@ capture, not after a result looks strange.**
    "@flash_project_args"` (from `build/`), then start the capture with `-Reset`.
 8. **The monitor ALWAYS misses the boot after `idf.py flash`.** For boot lines
    use `/api/log` (live ring) or `/api/log/saved` (flash-persisted) instead.
+9. **A capture that has EXPIRED looks exactly like a quiet, healthy device.**
+   `cap_serial_reboot.ps1` runs for `-Seconds` (default 300) and then exits,
+   writing a tidy `=== [capture] done ===` at the end. Grep that file an hour
+   later and you get "0 reboots, 0 panics" — for a window that closed long ago.
+   Caught 2026-08-09 when the operator asked whether the monitor was still up
+   and it had been dead for 50 minutes. **Before reporting anything from a
+   capture, check the process is alive AND that the file's `LastWriteTime` is
+   within the last few seconds.** Note the parameter is `-Seconds`, not
+   `-Minutes`; pass something long for a standing monitor.
 
 **And the standing one: NEVER GUESS.** When a symptom appears, get the
 measurement first. Every "obvious cause" in this file has been wrong when
@@ -382,13 +391,21 @@ Three UI follow-ups shipped same day once the underlying math was confirmed fixe
 +----------------------------------------------------------+
 | Spectrum 200 px — green curve, amber VFO, grey passband  |
 +----------------------------------------------------------+
-| Freq axis 18 px — absolute MHz labels                    |
+| Freq axis 32 px — absolute MHz labels                    |
 +----------------------------------------------------------+
-| Waterfall 412 px — newest row at top, SDR gradient       |
+| Waterfall 370 px — newest row at top, SDR gradient       |
 +----------------------------------------------------------+
-| Bottom bar 30 px — battery | UTC clock | WiFi (3 zones)  |
+| Band-plan 22 px — CW/Digi/Phone + visible-span window    |
++----------------------------------------------------------+
+| Bottom bar 36 px — battery | UTC clock | WiFi (3 zones)  |
 +----------------------------------------------------------+
 ```
+
+Heights are `TOP_BAR_H` / `SPECTRUM_H` / `LABEL_BAR_H` / `BANDPLAN_H` / `BOTTOM_BAR_H`
+in `ui.c`; `WATERFALL_H` is whatever is left. **This block was wrong until
+2026-08-09** (18 / 412 / 30, and no band-plan row at all) and the same wrong
+numbers had been copied into the user manual's layout diagram — read the
+`#define`s, not this picture, if it matters.
 
 Top-right 200×120 of the spectrum is a deadzone (suppresses accidental tunes behind the burger button).
 
@@ -619,7 +636,7 @@ Do not call `AI1;` on the QMX CAT port — it partially executes (enables auto-i
 
 `FT8_TX_SEND_LIVE = 1` in `ft8_tx.c` — this is live TX; the radio keys up for real.
 
-- **CAT burst sequence**: `TX;` → 79× `TA<freq>;` at 160 ms cadence (absolute `esp_timer_get_time()` targets, no drift) → `TA0;` → 5 ms settle → `RX;`. Always runs the tail even on abort or error. **FT4 uses 105× `TA<freq>;` at 48 ms cadence** (6.25 Hz tone spacing × symbol period), burst ~5 s on-air vs ~12.7 s FT8. CAT cadence verified on real QMX hardware (v0.19.0): all commands sent cleanly with no timeouts or dropped tones.
+- **CAT burst sequence**: `TX;` → 79× `TA<freq>;` at 160 ms cadence (absolute `esp_timer_get_time()` targets, no drift) → `TA0;` → 5 ms settle → `RX;`. Always runs the tail even on abort or error. **FT4 uses 105× `TA<freq>;` at 48 ms cadence**, burst ~5 s on-air vs ~12.7 s FT8. **FT4's tone spacing is ~20.833 Hz, NOT 6.25 Hz** — it is `1 / FT4_SYMBOL_PERIOD` (`FT4_TONE_SPACING_HZ` in `ft8_tx.c`), and 4-FSK rather than FT8's 8. The code has always been right; this line claimed 6.25 Hz until 2026-08-09. CAT cadence verified on real QMX hardware (v0.19.0): all commands sent cleanly with no timeouts or dropped tones.
 - **Tone spacing**: 6.25 Hz per FT8 tone index (0–7). `freq = base_hz + tone * 6.25f`.
 - **Slot parity**: `((unix_sec / 15) % 2) == 0` → EVEN. Reply fires on the opposite parity from the heard slot. CQ fires on any slot unless `use_parity=true` + `want_even_slot` set.
 - **`cat_poll_set_paused(true/false)`** in `cat.c` — cooperative flag; TX burst holds this for its entire duration so the poll task doesn't interleave commands. Do **not** use `vTaskSuspend` — that can deadlock the CDC-ACM driver mutex.

@@ -129,7 +129,7 @@ When robot mode is on and you're idle, the panadapter scans every FT8 decode for
 5. **TX3** — send 73 or RR73 (exchange complete)
 6. **Log** — ADIF entry created, move to next CQ
 
-**A busy pick is abandoned, not waited for** (new in the next release, Roy KI0ER's reasoning adopted verbatim): when *you* pounce on a station that turns out to be mid-QSO with someone else, the Tab5 politely holds — a deliberate pounce means you want *that* station. But the robot picked its target off a list, so when its pick engages a third station the robot **moves on to a different CQ caller** instead of idling through someone else's QSO. No grey-list strike: busy is not unresponsive.
+**A busy pick is abandoned, not waited for** (Roy KI0ER's reasoning adopted verbatim): when *you* pounce on a station that turns out to be mid-QSO with someone else, the Tab5 politely holds — a deliberate pounce means you want *that* station. But the robot picked its target off a list, so when its pick engages a third station the robot **moves on to a different CQ caller** instead of idling through someone else's QSO. No grey-list strike: busy is not unresponsive.
 
 Each QSO takes **~90 seconds** (6 FT8 slots × 15 s/slot). If a station doesn't respond in 4 slots, the panadapter times out and resumes scanning CQ.
 
@@ -247,7 +247,7 @@ Your transmit tone is chosen for you by default — the nearest clear 50 Hz slot
 
 **The mini occupancy strip** sits directly under the slot countdown in the same pane: the same 50 Hz grid and the same colours as the picker's full-size strip, so where the band is busy — and where you are in it — is answerable at a glance without opening anything.
 
-**Both time windows, always** (new in the next release, asked for by Roy KI0ER). The strip is **two rows — EVEN above, ODD below**, marked `E` and `O` in the same blue/orange the slot countdown uses. Two stations only collide if they transmit in the *same* window, and only you know which window you are about to pounce into — so both pictures are on screen **before** you choose, not after a transmission has fixed your window. Your white marker sits on your own window's row once one is locked (both rows until then), and your partner's pink sits in *their* window. The picker's full-size strip is split the same way, and its verdict says where your pick stands: *"Clear in EVEN — busy in ODD"*.
+**Both time windows, always** (asked for by Roy KI0ER). The strip is **two rows — EVEN above, ODD below**, marked `E` and `O` in the same blue/orange the slot countdown uses. Two stations only collide if they transmit in the *same* window, and only you know which window you are about to pounce into — so both pictures are on screen **before** you choose, not after a transmission has fixed your window. Your white marker sits on your own window's row once one is locked (both rows until then), and your partner's pink sits in *their* window. The picker's full-size strip is split the same way, and its verdict says where your pick stands: *"Clear in EVEN — busy in ODD"*.
 
 In the picker:
 
@@ -320,7 +320,7 @@ Uploads work **while FT8 or FT4 is actively running** — the panadapter briefly
 **"⚠ FREQ BUSY warning, but no other station is there"**
 
 - The clash detector reserves a ±50 Hz guard band around each decoded station, so it flags a neighbour that is close rather than exactly on you
-- It counts only stations **in your own transmit window** (fixed in the next release — it used to count both windows, so it could warn about a station that could never collide with you; Roy KI0ER caught it)
+- It counts only stations **in your own transmit window** (it used to count both windows, so it could warn about a station that could never collide with you; Roy KI0ER caught it)
 - The warning names the frequency. Tap **TX nnnn Hz** and either **Find clear slot** or drag to a green slot on the occupancy strip
 - Remember the strip only knows about stations it has *decoded* — a very weak one will not show
 

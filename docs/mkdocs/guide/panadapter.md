@@ -9,9 +9,10 @@ type: stack
 title: The panadapter screen, top to bottom
 row: 60 Top bar | frequency, mode, filter width, S-meter, zoom
 row: 200 Spectrum | green trace, amber VFO cursor, tinted passband
-row: 18 Frequency axis | absolute MHz labels
-row: 412 Waterfall | newest row at the top, SDR gradient
-row: 30 Status bar | battery, UTC clock, WiFi
+row: 32 Frequency axis | absolute MHz labels
+row: 370 Waterfall | newest row at the top, SDR gradient
+row: 22 Band-plan strip | CW / Digi / Phone segments, with the visible span marked
+row: 36 Status bar | battery, UTC clock, WiFi
 note: amber | the VFO cursor sits at the dial frequency; in USB the passband tint runs upward from it, in LSB downward
 note: dim | the top-right 200 x 120 of the spectrum is a deadzone, so a tap near the drawer grip cannot retune you
 ```
@@ -35,16 +36,22 @@ WiFi indicator with the network name and IP address.
 
 #### Tap to Tune
 
-Tap anywhere on the spectrum or waterfall to jump to that frequency. The panadapter snaps to a frequency grid (resolution depends on zoom level) for easy tuning.
+Tap anywhere on the spectrum or waterfall to jump to that frequency. The tap snaps to a frequency grid so you land on a sensible frequency rather than wherever your fingertip happened to be.
 
 > Callsigns from [Live Spots](spots.md) are drawn over the spectrum and are the
 > one exception: tapping a **callsign** tunes to that station and sets the mode,
 > rather than tuning to the point you touched.
 
-- **Zoom 1.0x** — 10 kHz snap
-- **Zoom 2.0x** — 5 kHz snap
-- **Zoom 4.0x** — 2.5 kHz snap
-- **Zoom 8.0x** — 1 kHz snap
+The snap step follows the **mode**, not the zoom level — a CW signal needs to be found to the hertz, an FT8 dial frequency does not:
+
+| Mode | Snap step |
+|------|-----------|
+| CW / CW-R | 10 Hz |
+| USB / LSB | 250 Hz |
+| DiGi / FT8 / FT4 / RTTY | 500 Hz |
+| AM / FM | 1 kHz |
+
+The grid is anchored to absolute frequency, not to where your finger first touched, so the cursor always lands on the same set of points no matter where the drag began.
 
 #### Pinch to Zoom
 
@@ -98,10 +105,10 @@ Tap any item to open its selector:
 | Item | Purpose |
 |---|---|
 | **14.074** | Frequency. Tap to open the frequency keypad. |
-| **USB** | Mode. Tap to cycle USB, LSB, CW, DiGi. |
+| **USB** | Mode. Tap to open the picker: USB, LSB, CW, DiGi — plus **AM** once the connected QMX reports 1.04 or newer firmware. |
 | **2.5 kHz** | Bandwidth (SSB only). Tap to choose 2.5, 2.7, 2.9, or 3.2 kHz. |
-| **S7** | S-meter. Shows received signal strength. Tap to reset peak hold. |
-| **1.0x** | Zoom level. Tap to choose preset (1x, 2x, 4x, 8x) or custom. |
+| **S7** | S-meter. Shows received signal strength. Display only — there is nothing to tap. |
+| **1.0x** | Zoom level. Tap to choose x1, x2, x4, x8, x16 or x24. Pinching sets any value in between. |
 
 ### 4. Spectrum & Waterfall
 
@@ -142,9 +149,11 @@ Tap the **frequency** on the top bar to open the keypad. Enter frequency in MHz 
 
 - **14.074** for 14.074 MHz
 - **1.832** for 1.832 MHz
-- **.100** for relative tune (±100 Hz from current)
+- **14.074.250** for 14,074,250 Hz — a third group is hertz within the kilohertz
 
-Layout switches between **10-Key** (phone dial) and **Phone** (QWERTY) via a toggle. Choose whichever is faster for you — the preference persists.
+Each group after a `.` is padded to three digits, so `14.07` is 14.070 MHz, not 14.007. Type a number with **no `.` at all** and it is taken as plain hertz.
+
+The digit layout toggles between **10 Key** (calculator order, 7-8-9 on the top row) and **Phone** (1-2-3 on the top row). Pick whichever your fingers already know — the choice persists across reboots.
 
 **Resize the keypad:** Pinch it or swipe up/down on it to toggle between the normal and a compact layout. Your choice is remembered across reboots. The compact layout reveals more of the spectrum behind it.
 
@@ -195,15 +204,22 @@ Switching bands **remembers the last frequency you visited on each band**, so yo
 
 ### 9. Zoom & Pan
 
-The zoom level is displayed on the top bar (e.g., **2.0x**). Tap it to choose a preset:
+The QMX sends a 48 kHz-wide slice of I/Q, so **×1 shows 48 kHz** centred on the dial. Zooming narrows that window with a true zoom-FFT — you get finer resolution, not a stretched picture.
 
-- **1.0x** — full 4 MHz span (standard panadapter view)
-- **2.0x** — 2 MHz span (half-band view)
-- **4.0x** — 1 MHz span (detailed search)
-- **8.0x** — 500 kHz span (CW pile-up detail)
-- **Custom** — (coming in a future release)
+The zoom level is displayed on the top bar (e.g. **2.0x**). Tap it to choose a preset:
 
-At zoom levels above 1.0x, the display **pans to keep the passband centered** when you change mode or bandwidth, so the active receive area stays on screen.
+| Zoom | Visible span |
+|---|---|
+| ×1 | 48 kHz — the whole slice |
+| ×2 | 24 kHz |
+| ×4 | 12 kHz |
+| ×8 | 6 kHz — CW pile-up detail |
+| ×16 | 3 kHz |
+| ×24 | 2 kHz — individual CW signals well separated |
+
+Pinching sets any value in between; double-tap returns to ×1 and re-centres.
+
+At zoom levels above ×1 the display **pans to keep the passband centred** when you change mode or bandwidth, so the active receive area stays on screen.
 
 ### 10. S-Meter
 
@@ -212,19 +228,27 @@ The S-meter (top-right of the top bar) shows received signal strength on a 0–6
 - **S1 to S9** — standard S-units (-130 to -73 dBm)
 - **+10 to +20** — above S9 in 10 dB steps
 
-Tap the S-meter to toggle peak-hold mode (shows the strongest signal heard in the last ~5 seconds). Tap again to reset.
+It is a readout, not a control — there is nothing to tap, and there is no peak-hold mode. The reading is taken around the VFO's own bin (corrected for the QMX's 12 kHz IF offset), so it follows the signal you are actually listening to rather than the DC spike at the centre of the spectrum.
 
 ### 11. Settings Drawer
 
-Swipe ← from the right edge to open the settings drawer. Common panadapter controls:
+Swipe ← from the right edge to open the settings drawer. It is grouped, with a **Basic / Expert** toggle at the top — Basic shows the everyday items, Expert reveals the rest, so the list is short until you need it to be long.
 
-- **IQ Balance** — adaptive I/Q correction (usually on)
-- **Flat Spectrum** — normalise to per-bin noise floor
-- **Waterfall** — black level, contrast, adaptive floor, FFT window
-- **WiFi** — on/off, SSID, password
-- **Time Sync** — SNTP, manual time set, FT8-derived sync
-- **Display** — 180° flip, brightness
-- **About** — firmware version, reset to defaults
+The groups, in the order they appear:
+
+| Group | Holds | In Basic? |
+|---|---|---|
+| **Station** | Callsign and grid, activation, band-plan region | yes |
+| **Device** | Battery charge limit | Expert only |
+| **Radio** | QMX volume, RF gain, CW transmit offset, SWR limit, Antenna Tune, Release radio | yes |
+| **Network** | WiFi, spot sources (POTA / RBN / DX cluster), Bluetooth mouse | yes |
+| **Display** | Brightness, sleep, colour map, 180° flip | yes |
+| **FT8** | Distance units, simulation mode, FT8 sync lines | yes |
+| **Spectrum** | Presets, dB range, smoothing, waterfall colouring, flat mode, I/Q balance, IF calibration | Expert only |
+
+Everything reached in a normal session is in a Basic group; the tuning and calibration controls are the ones Expert reveals.
+
+The full list, group by group, is in [Settings](settings.md).
 
 ---
 

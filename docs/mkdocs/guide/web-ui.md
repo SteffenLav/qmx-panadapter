@@ -54,7 +54,7 @@ The status banner (new in v1.3.6) mirrors the Tab5's own TX label so you can wat
 
 ### Live spots on the browser spectrum
 
-New in the next release. The **POTA** and **RBN** spots the Tab5 draws on its own
+The **POTA** and **RBN** spots the Tab5 draws on its own
 trace are now drawn on the browser's spectrum too, from the same store on the
 device - so the two screens can never disagree about who is on the air.
 
@@ -74,7 +74,7 @@ have actually changed, so they cost the WiFi link almost nothing between refresh
 
 ### The decode list, from another room
 
-New in the next release. In FT8/FT4 the browser used to show a transmit banner and
+In FT8/FT4 the browser used to show a transmit banner and
 nothing else - you could see that your radio was transmitting, but not who was
 answering. The FT8 panel now carries the **decode list**: callsign, message, grid,
 SNR, DT, audio tone, slot (E/O) and age.
@@ -85,7 +85,7 @@ you, then CQ calls, then strongest signal) and your Filter-window settings are
 applied to it. The station being worked is highlighted, and anything carrying your
 own callsign stands out, as on the Tab5.
 
-**Click a station to work it** (new in the next release, at the operator's own
+**Click a station to work it** (at the operator's own
 request). The confirm dialog states what will happen, and then the browser runs
 the **same intelligent Transmit a Tab5 row-tap runs**: a fresh CQ starts the full
 automatic QSO (you are not in front of the radio to click each exchange step);
@@ -102,7 +102,7 @@ another room.
 
 ### Switching the Tab5 back to the panadapter
 
-New in the next release. If you left the Tab5 in FT8/FT4 and want the spectrum
+If you left the Tab5 in FT8/FT4 and want the spectrum
 back, **Show Panadapter** on the FT8 panel does it without walking to the radio.
 
 ### Call CQ from the browser
@@ -121,7 +121,7 @@ Apart from Call CQ, transmit is still initiated on the Tab5 — replies and poun
 
 ## Choosing your TX tone
 
-New in the next release. **TX tone** on the FT8 panel opens the same picker the
+**TX tone** on the FT8 panel opens the same picker the
 Tab5 has, against the same live occupancy of the 200-2800 Hz window - it is the
 device's own map, the one its automatic clear-slot picker uses, so a slot shown
 busy here is one the device would avoid anyway.
@@ -141,7 +141,7 @@ Changing the tone mid-QSO is fine - your partner tracks your time slot, not your
 audio frequency - but it is refused **mid-burst**, and the reason is shown rather
 than the change silently half-applying.
 
-**Both time windows, always** (new in the next release, asked for by Roy KI0ER).
+**Both time windows, always** (asked for by Roy KI0ER).
 The strip is two rows - **EVEN above, ODD below** - because two stations only
 collide if they transmit in the *same* window, and only you know which window you
 are about to pounce into. The verdict says where your pick stands: *"Clear in
@@ -150,7 +150,7 @@ fixed it. The Tab5's own mini strip and picker show the same two rows.
 
 ## Memory channels
 
-New in the next release. The **Memory** button opens your 32 channels as a grid.
+The **Memory** button opens your 32 channels as a grid.
 **Tune** recalls one - frequency and mode together - and **Edit** changes or
 clears it. An empty slot offers the frequency you are on now, so storing the
 current VFO is two clicks.
@@ -160,7 +160,7 @@ it: a channel you cannot legally tune is worse than no channel.
 
 ## Antenna Tune from the browser (QMX 1.04+)
 
-New in the next release. With a QMX on firmware 1.04+, an **Antenna Tune** button
+With a QMX on firmware 1.04+, an **Antenna Tune** button
 appears in the bottom bar. It **keys the radio with a steady carrier**, so it
 confirms first - and while running, the button itself becomes the readout:
 **live power and SWR**, click again to stop. Both ends carry a **60-second
@@ -170,7 +170,7 @@ QMX's own front panel is honoured too.
 
 ## Settings, with a real keyboard
 
-New in the next release. The **Settings** button in the bottom bar edits the
+The **Settings** button in the bottom bar edits the
 things you *type* - which is exactly what the Tab5's touchscreen is worst at:
 
 - **Your callsign and grid.** Previously reachable from a browser only by
@@ -184,7 +184,7 @@ things you *type* - which is exactly what the Tab5's touchscreen is worst at:
 Saved straight to the Tab5 - its own settings drawer shows the same values next
 time you open it.
 
-Also here (new in the next release): the **Display & waterfall** group -
+Also here: the **Display & waterfall** group -
 brightness, waterfall black level, contrast, adaptive floor, FFT window, colour
 map, display sleep, the dB scale range and spectrum smoothing - the controls you
 want to tune from a laptop *while watching the Tab5's screen*. Every change
@@ -200,7 +200,7 @@ depends on how it is mounted.
 
 ## Help, in the browser
 
-New in the next release. The **Help ?** button in the bottom bar opens the same two
+The **Help ?** button in the bottom bar opens the same two
 doors the Tab5 has, served **by the Tab5 itself** - so it works with no internet at
 all, and the text always matches the firmware you are running.
 

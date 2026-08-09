@@ -72,18 +72,22 @@ All filters persist across sessions. Toggle any filter on/off to enable or disab
 
 ### 4. Decoding Performance
 
-On-device decoding runs at:
+On a reasonably busy band, expect roughly **15–20 distinct messages per slot** in
+either mode. That is messages, not contacts — one QSO produces several.
 
-- **FT8:** ~15–20 QSOs per 15-second slot
-- **FT4:** ~15–20 QSOs per 7.5-second slot (faster decode cadence, same per-slot throughput)
+Decoding uses **both processor cores**: the decode task works one half of the
+candidate list on core 1 while a helper takes the other half on core 0, and both
+run against a waterfall that was built during the capture rather than after it.
+That is what makes the results appear a second or two into the following slot
+instead of most of the way through it.
 
-This is sufficient for casual operation but not a full WSJT-X-equivalent decoder.
+**What limits it:**
 
-**Why not faster?**
-
-- **Single CPU (core 0)** decodes ~1–2 QSOs/s (LDPC is computationally heavy)
-- **Real-time FFT** (waterfall) competes for CPU cycles
-- **USB audio streaming** needs constant servicing
+- **LDPC error correction is heavy**, and most candidates the search finds are
+  false alarms that use the full iteration budget before being discarded
+- **The spectrum and waterfall** are being drawn from the same audio at the same time
+- **USB audio must be serviced continuously** — a gap there costs decodes far more
+  than a slow decoder does
 
 **FT4 advantage:** because FT4 slots are half as long (7.5 s vs 15 s), you get refresh feedback roughly twice as fast, which feels snappier on a crowded band even though the per-slot decode count is the same.
 
@@ -121,7 +125,7 @@ When robot mode is on, the Tab5 **automatically replies to CQ** without waiting 
 
 ### 8. Search & Window
 
-The decoder uses an **FFT-based search window** to find candidate tone blocks. The search is tuned for standard FT8 tone spacing (6.25 Hz per tone).
+The decoder uses an **FFT-based search window** to find candidate tone blocks, at whichever tone spacing the active mode uses — **6.25 Hz** for FT8's 8 tones, **20.83 Hz** for FT4's 4.
 
 **Frequency stability:** The QMX's USB audio clock isn't bit-exact 48 kHz, so decodes slide slowly over time. The panadapter **re-locks to UTC boundaries every 15 seconds** (the slot boundary), preventing long-term drift.
 

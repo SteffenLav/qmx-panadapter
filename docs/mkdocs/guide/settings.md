@@ -290,11 +290,19 @@ single reference, so you get that park's log rather than your entire file.
 ## SWR protection
 
 While transmitting, the QMX reports its SWR back over the control link. If the
-reading reaches the limit you set here, the transmission is **cut short** and the
-transmitter is **latched off** — nothing will transmit again until you clear it
-by tapping the red warning on the FT8 screen.
+reading reaches the limit you set here the transmitter is **latched off** —
+nothing will transmit again until you clear it by tapping the red warning on the
+FT8 screen.
 
-The default is **3.0:1**. That is high enough not to trip on a merely mediocre
+Choose **Off, 2.0:1, 2.5:1, 3.0:1 or 4.0:1**. The default is **3.0:1**.
+
+**In FT8 the burst is cut short**; the SWR is sampled part-way through and the
+transmission stops there. **In FT4 the check happens after the burst**, so the
+one burst completes and every later one is blocked. That is not an oversight:
+FT4 symbols are 48 ms and a control-link query takes about 50 ms, so asking
+mid-burst would disturb the transmission it is trying to protect. A reading is
+only acted on if there is real power behind it — the radio can report a
+meaningless ratio when the amplifier is not actually loaded. That is high enough not to trip on a merely mediocre
 match, and low enough to stop a burst going into a disconnected antenna, a
 wrong-band antenna or a damaged feedline — which is how this usually goes wrong
 in the field. An FT8 transmission is nearly thirteen seconds of continuous
@@ -322,9 +330,13 @@ out?** The valuable case is the mismatch. Stations you can hear that cannot hear
 you is a transmit-side problem — antenna, power, a bad connector — and from the
 receiving side alone it looks exactly like a dead band.
 
-Switch it on with **Propagation feedback**. Then open **Miscellaneous → Who is
-hearing me** in the web UI for the list: receiver, country, distance, bearing and
-the signal report they gave you, sorted by distance.
+**This one lives in the browser, not on the Tab5.** There is no drawer control
+for it — the answer is a list of stations with distances and bearings, which
+wants a screen you are already sitting in front of. In the web UI open
+**Settings → Spots & reporting** and tick **Propagation feedback (who is hearing
+me)**, then **Miscellaneous → Who is hearing me** for the list: receiver,
+country, distance, bearing and the signal report they gave you, sorted by
+distance.
 
 It is read-only and asks at most once every five minutes, which is the rate PSK
 Reporter requests.
