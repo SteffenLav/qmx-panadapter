@@ -1547,6 +1547,7 @@ static lv_obj_t *s_bot_batt_slash = NULL; /* red diagonal stroke over the glyph 
 static lv_obj_t *s_bot_center_suffix = NULL;
 static ui_clock_t s_bot_clock;
 static bool       s_bot_clock_valid = false;
+static lv_obj_t *s_bot_bt = NULL;        // Bluetooth glyph, left of the WiFi fan
 static lv_obj_t *s_bot_wifi_ssid = NULL;
 static ui_wifi_fan_t s_bot_wifi_fan;
 static bool          s_bot_wifi_fan_valid = false;
@@ -1665,10 +1666,13 @@ static int s_drawer_scrim_swipe_start_x = -1;
                                    // have the pipe to themselves. Kept in BOTH modes.
 #define DRAWER_SEC_SWRLIM     27  // SWR protection limit for transmit. Sits with Antenna
                                    // Tune because both are about what the antenna is doing.
+#define DRAWER_SEC_BT         29  // Bluetooth mouse on/off. In the Network group beside
+                                   // WiFi - both are radios the operator switches on and
+                                   // off for the same reasons (power, and the C6 link).
 #define DRAWER_SEC_ACTIVATION 28  // POTA/SOTA activation session. In the Station group -
                                    // it is part of who you are on the air right now, and
                                    // it is what every logged QSO gets stamped with.
-#define N_DRAWER_SECTIONS     29
+#define N_DRAWER_SECTIONS     30
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
@@ -1690,7 +1694,7 @@ static const int GRP_STATION[]  = { DRAWER_SEC_IDENTITY, DRAWER_SEC_ACTIVATION,
                                     DRAWER_SEC_BPREGION };
 static const int GRP_RADIO[]    = { DRAWER_SEC_QMXVOL, DRAWER_SEC_QMXRF, DRAWER_SEC_CW,
                                     DRAWER_SEC_SWRLIM, DRAWER_SEC_TUNE2, DRAWER_SEC_PAUSE };
-static const int GRP_NETWORK[]  = { DRAWER_SEC_WIFI, DRAWER_SEC_SPOTS };
+static const int GRP_NETWORK[]  = { DRAWER_SEC_WIFI, DRAWER_SEC_SPOTS, DRAWER_SEC_BT };
 // Flip 180 last: it is the least-touched control in the group (operator).
 static const int GRP_DISPLAY[]  = { DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_SLEEP,
                                     DRAWER_SEC_CMAP, DRAWER_SEC_FLIP };
@@ -1756,6 +1760,7 @@ static lv_obj_t *s_lbl_cwpitch = NULL;
 static lv_obj_t *s_dropdown_cmap = NULL;
 static lv_obj_t *s_dropdown_bpregion = NULL;  // band-plan region picker
 static lv_obj_t *s_dropdown_swrlim   = NULL;  // SWR protection limit picker
+static lv_obj_t *s_cb_bt             = NULL;  // Bluetooth mouse enable
 static lv_obj_t *s_slider_brightness = NULL;
 static uint8_t s_saved_ui_mode = UI_MODE_PANADAPTER;
 static lv_obj_t *s_lbl_brightness = NULL;
@@ -1820,6 +1825,7 @@ static void drawer_dropdown_cmap_open_cb(lv_event_t *e);
 static void drawer_dropdown_sleep_open_cb(lv_event_t *e);
 static void drawer_dropdown_bpregion_cb(lv_event_t *e);
 static void drawer_dropdown_swrlim_cb(lv_event_t *e);
+static void drawer_bt_cb(lv_event_t *e);
 static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_slider_qmx_vol_cb(lv_event_t *e);
 static void drawer_refresh_qmx_vol(void);
@@ -3088,6 +3094,15 @@ static void build_bottom_bar(lv_obj_t *parent)
         ui_wifi_fan_init(&s_bot_wifi_fan, bar, 0, 22,
                          lv_color_hex(UI_COLOR_TEXT_SECONDARY));
         s_bot_wifi_fan_valid = true;
+
+        // Bluetooth, immediately left of the WiFi fan. Always PRESENT, never
+        // hidden - same reasoning as the fan itself: a glyph that disappears
+        // makes the operator wonder whether the feature exists at all, while a
+        // dim one says "here, and off". Colour carries the state.
+        s_bot_bt = lv_label_create(bar);
+        lv_label_set_text(s_bot_bt, LV_SYMBOL_BLUETOOTH);
+        lv_obj_set_style_text_font(s_bot_bt, font, 0);
+        lv_obj_set_style_text_color(s_bot_bt, lv_color_hex(UI_COLOR_BT_OFF), 0);
 
         s_bot_wifi_ssid = lv_label_create(bar);
         lv_label_set_text(s_bot_wifi_ssid, "");
@@ -5105,6 +5120,20 @@ void ui_set_bottom_clock(int h, int m, int s, bool valid, const char *suffix)
     }
 }
 
+// Bluetooth state in the bottom bar. Called from the 1 Hz status task, which
+// already owns every other bottom-bar field.
+void ui_set_bottom_bt(bool enabled, bool connected)
+{
+    if (!s_bot_bt) return;
+    if (display_lock(20)) {
+        lv_obj_set_style_text_color(s_bot_bt,
+            lv_color_hex(!enabled  ? UI_COLOR_BT_OFF
+                        : connected ? UI_COLOR_BT_ON
+                                    : UI_COLOR_BT_IDLE), 0);
+        display_unlock();
+    }
+}
+
 void ui_set_bottom_wifi(const char *ssid, bool connected, int rssi_dbm, const char *ip)
 {
     if (!s_bot_wifi_ssid) return;
@@ -5128,9 +5157,15 @@ void ui_set_bottom_wifi(const char *ssid, bool connected, int rssi_dbm, const ch
 
         lv_obj_set_width(s_bot_wifi_ssid, txt_w);
         lv_obj_set_pos(s_bot_wifi_ssid, ssid_right - txt_w, 0);
-        if (s_bot_wifi_fan_valid)
-            ui_wifi_fan_set_x(&s_bot_wifi_fan,
-                              ssid_right - txt_w - 10 - UI_WIFI_FAN_W / 2);
+        lv_coord_t fan_cx = ssid_right - txt_w - 10 - UI_WIFI_FAN_W / 2;
+        if (s_bot_wifi_fan_valid) ui_wifi_fan_set_x(&s_bot_wifi_fan, fan_cx);
+        // BT glyph sits left of the fan, in the same measured-from-the-right
+        // chain, so it never collides when a long SSID pushes everything left.
+        if (s_bot_bt) {
+            lv_obj_update_layout(s_bot_bt);
+            lv_coord_t bt_w = lv_obj_get_width(s_bot_bt);
+            lv_obj_set_pos(s_bot_bt, fan_cx - UI_WIFI_FAN_W / 2 - 10 - bt_w, 0);
+        }
         lv_obj_set_width(s_bot_wifi_ip, ip_w + 2);
         lv_obj_set_pos(s_bot_wifi_ip, bar_w - ip_w - 2, 0);
 
@@ -6427,6 +6462,32 @@ static void drawer_build(void)
         y += 72;
     }
 
+    // Bluetooth mouse. A plain on/off - scanning, pairing and reconnecting are
+    // all automatic, so there is nothing else to expose. Pair the mouse once
+    // (put it in pairing mode with this on) and it reconnects by itself from
+    // then on, including across a reboot: the bond lives in NVS.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_BT, y, 100);
+        lv_obj_t *hdr = lv_label_create(sec);
+        lv_label_set_text(hdr, "Bluetooth mouse");
+        lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        lv_obj_t *bt_lbl = lv_label_create(sec);
+        lv_label_set_text(bt_lbl, "Enable (then pair the mouse)");
+        lv_obj_set_style_text_color(bt_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(bt_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(bt_lbl, LV_ALIGN_TOP_LEFT, 0, 50);
+        {
+            qmx_settings_t bc;
+            settings_load_all(&bc);
+            s_cb_bt = make_drawer_checkbox(sec, bc.bt_mouse_en, drawer_bt_cb, NULL);
+        }
+        lv_obj_align(s_cb_bt, LV_ALIGN_TOP_RIGHT, -8, 46);
+        y += 100;
+    }
+
     // SWR protection: the limit at which a transmit burst is cut short and the
     // transmitter latched off. The QMX reports SWR over CAT while keyed, so
     // this costs nothing to watch. Default 3.0:1 - see settings.c for why it is
@@ -7624,6 +7685,19 @@ static void drawer_dropdown_sleep_open_cb(lv_event_t *e)
     lv_obj_set_style_text_font(list, &lv_font_montserrat_28, 0);
     lv_obj_set_style_max_height(list, LV_COORD_MAX, 0);  // no cap -> no scroll
     lv_obj_set_height(list, LV_SIZE_CONTENT);            // fit all options
+}
+
+// Applies immediately, but only takes effect on the NEXT boot: NimBLE must be
+// started after the C6 transport is up (see bt_hid_mouse.c), and there is no
+// safe way to bring it up mid-session. Say so rather than let the operator
+// wonder why the icon has not changed.
+static void drawer_bt_cb(lv_event_t *e)
+{
+    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_set_bt_mouse_en(on);
+    ui_toast(on ? "Bluetooth on after restart - then put the mouse in pairing mode"
+                : "Bluetooth off after restart");
+    ESP_LOGI(TAG, "BLE mouse %s (applies on restart)", on ? "enabled" : "disabled");
 }
 
 static void drawer_dropdown_swrlim_cb(lv_event_t *e)
