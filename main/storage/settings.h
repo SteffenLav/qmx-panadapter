@@ -117,6 +117,10 @@ typedef struct {
     // subsystem sharing the SDIO link with WiFi, which is this board's most
     // fragile component. Opt-in until a soak says otherwise.
     bool     bt_mouse_en;
+    // DX cluster spot feed. Opt-in: it is a SECOND long-lived TCP connection
+    // alongside RBN on this board's most fragile link. It is also the only
+    // source of PHONE spots - RBN is skimmers, and no SSB skimmer exists.
+    bool     cluster_en;
     bool     snap_to_peak;    // tap-to-tune snaps to the strongest nearby signal (default true)
     uint8_t  bandplan_region; // band-plan strip region: 0=auto(from grid) 1=R1 2=R2 3=R3
     bool     distance_in_miles; // FT8 decode list: show distance in miles instead of km (default false)
@@ -261,6 +265,7 @@ void settings_set_cw_tx_offset_hz(int16_t hz);
 int16_t settings_get_cw_tx_offset_hz(void);
 void    settings_set_psk_rx_en(bool v);          // propagation feedback (who is hearing me)
 void    settings_set_bt_mouse_en(bool v);        // BLE mouse (scan/pair)
+void    settings_set_cluster_en(bool v);         // DX cluster spot feed (phone spots)
 void    settings_set_swr_limit_x10(uint8_t v);   // 0 = off, else limit x10 (25 = 2.5:1)
 uint8_t settings_get_swr_limit_x10(void);
 

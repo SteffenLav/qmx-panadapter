@@ -74,6 +74,7 @@ idf_component_register(
         "hid_cursor.c"
         "bt_hid_mouse.c"
         "net/rbn.c"
+        "net/dxcluster.c"
         "ft8_robot.c"
         "ft8_sim.c"
         "adif/adif_log.c"

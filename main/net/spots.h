@@ -19,6 +19,7 @@
 typedef enum {
     SPOT_SRC_POTA = 0,
     SPOT_SRC_RBN,
+    SPOT_SRC_CLUSTER,   // human DX-cluster spots - the only source of PHONE
 } spot_source_t;
 
 typedef enum {

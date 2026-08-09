@@ -41,6 +41,7 @@
 #include "net/psk_rx.h"
 #include "bt_hid_mouse.h"
 #include "net/rbn.h"
+#include "net/dxcluster.h"
 #include "ft8_hash.h"
 #include "diag_log.h"
 #include "factory_reset.h"
@@ -347,6 +348,8 @@ void app_main(void)
     psk_rx_init();         // propagation feedback: who is hearing US (WiFi, opt-in)
     bt_hid_mouse_init();   // BLE mouse over the C6 (opt-in; Stage 1 = scan only)
     rbn_init();            // RBN as a second source into the same store (opt-IN)
+    dxcluster_selftest();  // parser vs lines captured from a real cluster node
+    dxcluster_init();      // human DX-cluster spots - the only PHONE source (opt-in)
     ft8_arrl_fd_selftest();
     ft8_hash_selftest();
     ft8_sim_synth_selftest();
