@@ -243,7 +243,7 @@ The groups, in the order they appear:
 | **Radio** | QMX volume, RF gain, CW transmit offset, SWR limit, Antenna Tune, Release radio | yes |
 | **Network** | WiFi, spot sources (POTA / RBN / DX cluster), Bluetooth mouse | yes |
 | **Display** | Brightness, sleep, colour map, 180° flip | yes |
-| **FT8** | Distance units, simulation mode, FT8 sync lines | yes |
+| **FT8** | Distance in miles, FT8 simulation mode | yes |
 | **Spectrum** | Presets, dB range, smoothing, waterfall colouring, flat mode, I/Q balance, IF calibration | Expert only |
 
 Everything reached in a normal session is in a Basic group; the tuning and calibration controls are the ones Expert reveals.
