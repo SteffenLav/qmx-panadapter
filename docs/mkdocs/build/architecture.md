@@ -53,12 +53,12 @@ note: dim | the audio task polls rather than waiting on events: event-driven rea
 type: flow
 title: From the slot boundary to a row on screen
 node: RX slot boundary - every 15 s, UTC-aligned
-node: ft8_task on core 0
-branch: dsp_ft8_capture() - 180000 samples at 12 kHz, cut at 13.2 s
+node: ft8_task on core 1
+branch: dsp_ft8_capture() - runs TO the next UTC boundary, ~180000 samples at 12 kHz
 branch: streaming STFT builds the waterfall DURING capture, into PSRAM
 branch: candidate search - up to FT8_MAX_CANDIDATES (140) sync hits
 branch: decode_candidate_range() - LDPC per candidate
-node: ft8_dec0 on core 1 takes the odd candidates in parallel
+node: ft8_dec0 on core 0 takes the other half of the candidates in parallel
 node: ft8_screen_record_decode() then ft8_qso_advance()
 node: ft8_screen_view - the live decode list
 note: dim | the candidate cap is 140, not ~10: on a busy band the search hits it every slot, and most are false syncs that burn a full LDPC budget before failing
@@ -101,7 +101,7 @@ Priority 1  — FT8 decode, CAT poll, render, LVGL, time sync
 ```qmxdiagram
 type: flow
 title: Ring buffer to canvas
-node: ring buffer - 4800 samples, 400 ms at 12 kHz effective
+node: ring buffer - 64 KB in PSRAM, 16384 I/Q pairs, about 1.4 s at 12 kHz
 node: FFT - 512-point, Blackman-Harris by default
 node: magnitude, then scaled
 branch: dBm = 20*log10(mag) - 148 dB calibration offset

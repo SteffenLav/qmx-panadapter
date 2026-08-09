@@ -35,7 +35,7 @@ Tap any item on the top bar to open its selector:
 | **Tap a spot callsign** | Tune to that station **and** set the mode — see [Live Spots](../guide/spots.md) |
 | **Tap an off-screen count** (`<3` / `5>`) | Jump to the nearest spot outside the window, on this band |
 
-The frequency grid snaps based on zoom level (10 kHz at 1x, 1 kHz at 8x).
+Taps snap to a grid set by the **mode**, not the zoom level: 10 Hz in CW, 250 Hz in USB/LSB, 500 Hz in the digital modes, 1 kHz in AM.
 
 ## Band-Plan Strip (Panadapter)
 

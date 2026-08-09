@@ -26,10 +26,10 @@ Send any of these to:
 ### What Makes a Good Bug Report
 
 1. Your hardware (Tab5 model, QMX/QMX+ firmware version)
-2. Your app version (Settings → About)
+2. Your app version — shown in the Tab5's bottom status bar, and in the diagnostic log's own header
 3. Steps to reproduce (exact sequence)
 4. What you expected vs. what happened
-5. **Diagnostic log** (Settings → Diagnostic log → on, reproduce, download) — this often reveals the root cause directly
+5. **The diagnostic log.** There is nothing to switch on — logging is always running. Reproduce the problem, then in the web UI take **Files → Diagnostic download ↓**. It gives you two files: the current session, and a copy that survives a reboot, which is the one that matters if the device restarted. The header identifies the firmware, the radio and the reset reason, so the log is self-describing.
 
 ## Building & Modifying for Yourself
 

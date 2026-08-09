@@ -175,3 +175,37 @@ def on_post_build(config, **kwargs):
             log.warning("reader_export: no git tag; left latest.json untouched")
     except Exception as e:  # noqa: BLE001
         log.warning("reader_export: latest.json failed: %s", e)
+
+    # 4) documentation consistency (tools/check_docs.py)
+    #
+    # Errors RAISE, for the same reason the packer's failure does: a docs build
+    # that only warns will be ignored, and the thing being checked here is text
+    # that shipped wrong to the website, the PDF and the on-device manual and
+    # stayed wrong for releases at a time. Warnings are printed, not fatal -
+    # they measure the README/mkdocs overlap, which is a known backlog rather
+    # than a regression.
+    try:
+        # Load by path rather than by name. mkdocs runs hooks with a sys.path
+        # that does not reliably keep the entry added at import time, and the
+        # broad except below would then turn "the check never ran" into a
+        # single warning line - which is exactly how a check quietly stops
+        # protecting anything. Verified failing that way before this change.
+        import importlib.util  # noqa: PLC0415
+        _cd_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "tools", "check_docs.py")
+        _spec = importlib.util.spec_from_file_location("check_docs", _cd_path)
+        check_docs = importlib.util.module_from_spec(_spec)
+        _spec.loader.exec_module(check_docs)
+        errors, warnings = check_docs.run(verbose=False)
+        for w in warnings:
+            log.warning("check_docs: %s", w)
+        if errors:
+            for e in errors:
+                log.error("check_docs: %s", e)
+            raise RuntimeError(
+                "check_docs found %d documentation error(s) - see above" % len(errors))
+        log.info("check_docs: no errors, %d warning(s)", len(warnings))
+    except RuntimeError:
+        raise
+    except Exception as e:  # noqa: BLE001
+        log.warning("reader_export: check_docs could not run: %s", e)

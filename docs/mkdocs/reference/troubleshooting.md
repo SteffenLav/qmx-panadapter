@@ -90,18 +90,37 @@ If you ever see **"USB stuck - power-cycle the QMX (reboot Tab5 if that fails)"*
 
 **Symptoms:** Decode list isn't updating, or only 1–2 decodes per slot.
 
-**Causes:**
+**First: check your firmware version.** The long-standing version of this — the
+first slots of a session decoding well, then collapsing to a fraction and never
+recovering — was **fixed in v1.1.0**. The cause was audio being lost at the USB
+wire itself: the transfer pipeline held only 9 ms of queued audio, so any pause
+longer than that (a decode burst, redrawing the list) let the stream run dry, and
+roughly 170–350 ms of every slot went missing with no error reported anywhere.
+The pipeline now holds 320 ms. If you are on an earlier version, update; nothing
+else on this page will help.
 
-1. WiFi interference (WiFi and USB host compete for DMA on the C6)
-2. CPU overload (rare; usually other tasks eating CPU)
-3. Audio USB disconnection (hidden; spectrum still updates, but FT8 decode silently stalls)
+**On v1.1.0 or later, the likely causes are:**
 
-**Fix:**
+1. **The QMX stopped sending audio without disconnecting** — a trip through the
+   radio's own menus can do this, because IQ mode is session state the QMX
+   forgets. CAT keeps answering normally, so everything looks connected while
+   the decode list sits empty. The Tab5 re-asserts IQ mode by itself after 30 s
+   of silence; if it does not recover, power-cycle the QMX.
+2. **A cable that is not carrying data properly** — intermittent is worse than
+   dead, because the spectrum can still look alive.
+3. **Your clock is wrong.** FT8 needs UTC within about a second; see *Time is
+   wrong* below. Candidates stay high while decodes go to zero — that pattern is
+   a timing problem, not a signal one.
 
-1. **Turn WiFi off** temporarily and see if decodes improve
-2. Restart the panadapter (go Panadapter → settings → About → Reset)
-3. Check USB cable is firmly connected
-4. Download the diagnostic log after a session (web UI **Files** menu → **Diagnostic download ↓**) and post it on GitHub
+**What to do:**
+
+1. Check the clock in the bottom bar, and what it says it is synced from
+2. Try the QMX on a different USB cable, connected directly — not through a hub
+3. Turn WiFi off for a few minutes and see whether decodes change
+4. Download the diagnostic log after a session (web UI **Files** menu →
+   **Diagnostic download ↓**) and post it on GitHub — it records the per-slot
+   decode counts and capture timing, which says immediately which of the above
+   it is
 
 ### FT8 transmit doesn't key the QMX
 

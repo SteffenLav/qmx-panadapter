@@ -52,6 +52,15 @@ PDF_SCRIPT = os.path.join(REPO, "tools", "build_userguide_pdf.ps1")
 # claim about the present.
 EXEMPT = {"version-history.md", "releases.md"}
 
+# Words that carry no subject: the two trees title the same thing differently
+# ("Quick Start" vs "Quick Guide", "Gestures & Controls" vs "Gestures"), and
+# matching on these would either match everything or nothing.
+GENERIC_WORDS = {
+    "reference", "overview", "guide", "controls", "configuration", "settings",
+    "start", "started", "getting", "introduction", "intro", "notes", "page",
+    "the", "and", "your",
+}
+
 # Phrases that are true only until the next release and never become false again.
 FORWARD_LOOKING = [
     r"new in the next release",
