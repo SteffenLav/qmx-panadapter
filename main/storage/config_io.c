@@ -225,6 +225,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "cw_tx_offset_hz"))   settings_set_cw_tx_offset_hz((int16_t)atoi(val));
             else if (!strcasecmp(key, "swr_limit_x10"))     settings_set_swr_limit_x10((uint8_t)atoi(val));
             else if (!strcasecmp(key, "psk_rx_en"))         settings_set_psk_rx_en(atoi(val) != 0);
+            else if (!strcasecmp(key, "bt_mouse_en"))       settings_set_bt_mouse_en(atoi(val) != 0);
             else if (!strcasecmp(key, "cw_audio_vol"))      settings_set_cw_audio_vol((uint8_t)atoi(val));
             else if (!strcasecmp(key, "charge_limit"))      settings_set_charge_limit_en(to_bool(val));
             else if (!strcasecmp(key, "charge_limit_pct"))  settings_set_charge_limit_pct((uint8_t)atoi(val));

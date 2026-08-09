@@ -113,6 +113,10 @@ typedef struct {
     // Off by default: it is outbound traffic on a fragile link for a question
     // not everyone is asking.
     bool     psk_rx_en;
+    // BLE mouse (bt_hid_mouse.c). Off by default - it starts a second radio
+    // subsystem sharing the SDIO link with WiFi, which is this board's most
+    // fragile component. Opt-in until a soak says otherwise.
+    bool     bt_mouse_en;
     bool     snap_to_peak;    // tap-to-tune snaps to the strongest nearby signal (default true)
     uint8_t  bandplan_region; // band-plan strip region: 0=auto(from grid) 1=R1 2=R2 3=R3
     bool     distance_in_miles; // FT8 decode list: show distance in miles instead of km (default false)
@@ -256,6 +260,7 @@ void settings_set_cw_tx_offset_hz(int16_t hz);
  * this board are TINY"). */
 int16_t settings_get_cw_tx_offset_hz(void);
 void    settings_set_psk_rx_en(bool v);          // propagation feedback (who is hearing me)
+void    settings_set_bt_mouse_en(bool v);        // BLE mouse (scan/pair)
 void    settings_set_swr_limit_x10(uint8_t v);   // 0 = off, else limit x10 (25 = 2.5:1)
 uint8_t settings_get_swr_limit_x10(void);
 

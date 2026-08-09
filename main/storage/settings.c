@@ -73,6 +73,7 @@ static const char *TAG = "settings";
 #define KEY_GREYLIST_EN    "greylist_en"
 #define KEY_PSKREP_EN      "pskrep_en"
 #define KEY_PSK_RX_EN      "pskrx_en"
+#define KEY_BT_MOUSE_EN    "btmouse_en"
 #define KEY_SPOTS_EN       "spots_en"
 #define KEY_RBN_EN         "rbn_en"
 #define KEY_WIFI_KNOWN     "wifi_known"
@@ -269,6 +270,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 // settings_set_activation(), so a second bit would buy nothing.
 #define DIRTY_ACTIVATION     81
 #define DIRTY_PSK_RX_EN      82
+#define DIRTY_BT_MOUSE_EN    83
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -294,7 +296,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_LOTW_DXCC, DIRTY_LOTW_CQZ, DIRTY_LOTW_ITUZ, DIRTY_DISP_SLEEP,
     DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD, DIRTY_CQ_MAX_CALLS,
     DIRTY_SPOTS_EN, DIRTY_RBN_EN, DIRTY_WIFI_KNOWN, DIRTY_CW_TX_OFFSET,
-    DIRTY_CQ_LISTEN, DIRTY_SWR_LIMIT, DIRTY_PSK_RX_EN,
+    DIRTY_CQ_LISTEN, DIRTY_SWR_LIMIT, DIRTY_PSK_RX_EN, DIRTY_BT_MOUSE_EN,
 };
 
 // ---- Module state ------------------------------------------------------
@@ -439,6 +441,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_GREYLIST_EN))   nvs_set_u8(s_nvs, KEY_GREYLIST_EN,   snap.greylist_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_PSKREP_EN))     nvs_set_u8(s_nvs, KEY_PSKREP_EN,     snap.pskreporter_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_PSK_RX_EN))     nvs_set_u8(s_nvs, KEY_PSK_RX_EN,     snap.psk_rx_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_BT_MOUSE_EN))   nvs_set_u8(s_nvs, KEY_BT_MOUSE_EN,   snap.bt_mouse_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_SPOTS_EN))      nvs_set_u8(s_nvs, KEY_SPOTS_EN,      snap.spots_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_RBN_EN))        nvs_set_u8(s_nvs, KEY_RBN_EN,        snap.rbn_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_WIFI_KNOWN)) {
@@ -598,6 +601,7 @@ static void load_from_nvs(qmx_settings_t *out)
     // the FT8 drawer checkbox turns it off. Inert until callsign+grid are set.
     out->pskreporter_en = true;
     out->psk_rx_en      = false;   // opt-in, see settings.h
+    out->bt_mouse_en    = false;   // opt-in, see settings.h
     // Spots on by default: it is read-only use of a public API, and a feature
     // that draws on the spectrum has to be visible to be discovered. Costs
     // nothing until WiFi is up.
@@ -739,6 +743,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_GREYLIST_EN, &u8v) == ESP_OK) out->greylist_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_PSKREP_EN, &u8v) == ESP_OK) out->pskreporter_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_PSK_RX_EN, &u8v) == ESP_OK) out->psk_rx_en = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_BT_MOUSE_EN, &u8v) == ESP_OK) out->bt_mouse_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_SPOTS_EN, &u8v) == ESP_OK) out->spots_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_RBN_EN,   &u8v) == ESP_OK) out->rbn_en   = (u8v != 0);
     if (nvs_get_u16(s_nvs, KEY_TX_TONE_HZ, &u16v) == ESP_OK) out->tx_tone_hz = u16v;
@@ -1337,6 +1342,16 @@ void settings_set_cq_listen_every(uint8_t n)
     s_pending.cq_listen_every = n;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CQ_LISTEN);
+}
+
+void settings_set_bt_mouse_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.bt_mouse_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.bt_mouse_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_BT_MOUSE_EN);
 }
 
 void settings_set_psk_rx_en(bool v)

@@ -71,6 +71,8 @@ idf_component_register(
         "net/pskreporter.c"
         "net/spots.c"
         "net/psk_rx.c"
+        "hid_cursor.c"
+        "bt_hid_mouse.c"
         "net/rbn.c"
         "ft8_robot.c"
         "ft8_sim.c"
@@ -122,6 +124,8 @@ idf_component_register(
         json
         ft8_lib
         spiffs
+        bt            # NimBLE host for the BLE mouse (controller is on the C6)
+        esp_hid
     PRIV_REQUIRES
         esp_app_format
         fatfs
