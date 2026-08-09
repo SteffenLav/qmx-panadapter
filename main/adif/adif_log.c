@@ -426,6 +426,38 @@ bool adif_log_get_record(int idx, char *out, size_t out_sz)
     return found;
 }
 
+int adif_log_count_activation(const char *sig_info)
+{
+    if (!s_mounted || !sig_info || !sig_info[0]) return 0;
+
+    // One pass over the file. Deliberately NOT a loop over
+    // adif_log_get_record(), which reopens and re-scans the file per record -
+    // that is O(n^2) file I/O on SPIFFS for a number shown on a modal.
+    FILE *f = fopen(FILE_PATH, "r");
+    if (!f) return 0;
+
+    char needle[32];
+    snprintf(needle, sizeof(needle), "<MY_SIG_INFO:%u>%s", (unsigned)strlen(sig_info), sig_info);
+
+    char line[1024];
+    int  n = 0;
+    bool header_done = false;
+    while (fgets(line, sizeof(line), f)) {
+        if (!header_done) { header_done = true; continue; }   // <EOH>
+        // Case-insensitive because a config import or a hand-edited log may
+        // carry a differently-cased reference than the one being counted.
+        const char *p = line;
+        size_t nl = strlen(needle);
+        bool hit = false;
+        for (; *p; p++) {
+            if (strncasecmp(p, needle, nl) == 0) { hit = true; break; }
+        }
+        if (hit) n++;
+    }
+    fclose(f);
+    return n;
+}
+
 bool adif_log_delete_record(int idx)
 {
     if (!s_mounted || idx < 0) return false;

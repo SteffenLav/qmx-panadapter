@@ -63,6 +63,12 @@ void adif_log_clear(void);
 // worked-call cache. Returns false if idx is out of range or I/O fails.
 bool adif_log_delete_record(int idx);
 
+// How many logged QSOs carry this MY_SIG_INFO - i.e. how many contacts the
+// current activation has. POTA wants 10 for a valid activation, so this is the
+// number an activator is actually counting in the field. One pass over the
+// file; case-insensitive on the reference.
+int adif_log_count_activation(const char *sig_info);
+
 // Read the idx-th completed QSO record (0-based, in log order) as a single
 // ADIF line with no trailing newline. Returns false if idx is out of range
 // or the file can't be read. out must be sized generously - a record line

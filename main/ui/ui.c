@@ -30,6 +30,7 @@
 #include "help_triage.h"
 #include "wifi_config.h"
 #include "tune_modal.h"
+#include "activation_modal.h"
 #include "memory_modal.h"
 #include "identity_config.h"
 #include "onboarding.h"
@@ -1590,6 +1591,8 @@ static int16_t   s_resmon_drag_start_dx, s_resmon_drag_start_dy;
 static lv_obj_t *s_switch_iq       = NULL;  // IQ balance checkbox in settings drawer
 static lv_obj_t *s_switch_flat     = NULL;  // flat-spectrum checkbox in settings drawer
 static lv_obj_t *s_tune_entry_btn  = NULL;  // "Antenna Tune" button in the WiFi drawer
+static lv_obj_t *s_activation_btn  = NULL;  // POTA/SOTA activation entry
+static lv_obj_t *s_activation_lbl  = NULL;  // shows the live reference, not a static label
                                             // section, opens tune_modal.c (replaces the
                                             // old "WiFi initiated" checkbox slot)
 
@@ -1661,7 +1664,10 @@ static int s_drawer_scrim_swipe_start_x = -1;
                                    // have the pipe to themselves. Kept in BOTH modes.
 #define DRAWER_SEC_SWRLIM     27  // SWR protection limit for transmit. Sits with Antenna
                                    // Tune because both are about what the antenna is doing.
-#define N_DRAWER_SECTIONS     28
+#define DRAWER_SEC_ACTIVATION 28  // POTA/SOTA activation session. In the Station group -
+                                   // it is part of who you are on the air right now, and
+                                   // it is what every logged QSO gets stamped with.
+#define N_DRAWER_SECTIONS     29
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
@@ -1679,7 +1685,8 @@ static int       s_drawer_section_h[N_DRAWER_SECTIONS];
 // is what went wrong twice before.
 typedef struct { const char *title; const int *ids; int n; bool expert; } drawer_group_t;
 
-static const int GRP_STATION[]  = { DRAWER_SEC_IDENTITY, DRAWER_SEC_BPREGION };
+static const int GRP_STATION[]  = { DRAWER_SEC_IDENTITY, DRAWER_SEC_ACTIVATION,
+                                    DRAWER_SEC_BPREGION };
 static const int GRP_RADIO[]    = { DRAWER_SEC_QMXVOL, DRAWER_SEC_QMXRF, DRAWER_SEC_CW,
                                     DRAWER_SEC_SWRLIM, DRAWER_SEC_TUNE2, DRAWER_SEC_PAUSE };
 static const int GRP_NETWORK[]  = { DRAWER_SEC_WIFI, DRAWER_SEC_SPOTS };
@@ -1827,6 +1834,8 @@ static void drawer_check_charge_limit_cb(lv_event_t *e);
 static void drawer_slider_charge_limit_pct_cb(lv_event_t *e);
 static void drawer_switch_flat_cb(lv_event_t *e);
 static void drawer_tune_entry_btn_cb(lv_event_t *e);
+static void drawer_activation_btn_cb(lv_event_t *e);
+static void drawer_refresh_activation(void);
 static void drawer_check_cwaudio_cb(lv_event_t *e);
 static void drawer_slider_cwaudio_vol_cb(lv_event_t *e);
 static void drawer_slider_wf_black_cb(lv_event_t *e);
@@ -6314,6 +6323,25 @@ static void drawer_build(void)
         y += 100;
     }
 
+    // Activation (POTA/SOTA). The label carries the LIVE reference rather than
+    // a static word, because "am I still activating?" is the question this
+    // feature gets wrong most expensively - a forgotten session stamps every
+    // QSO on the drive home with a park you already left.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_ACTIVATION, y, 72);
+        s_activation_btn = lv_btn_create(sec);
+        lv_obj_set_size(s_activation_btn, DRAWER_W - 32, 56);
+        lv_obj_align(s_activation_btn, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_set_style_bg_color(s_activation_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_add_event_cb(s_activation_btn, drawer_activation_btn_cb, LV_EVENT_CLICKED, NULL);
+        s_activation_lbl = lv_label_create(s_activation_btn);
+        lv_label_set_text(s_activation_lbl, "Activation (POTA/SOTA)");
+        lv_obj_set_style_text_font(s_activation_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(s_activation_lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_center(s_activation_lbl);
+        y += 72;
+    }
+
     // SWR protection: the limit at which a transmit burst is cut short and the
     // transmitter latched off. The QMX reports SWR over CAT while keyed, so
     // this costs nothing to watch. Default 3.0:1 - see settings.c for why it is
@@ -6969,6 +6997,7 @@ static void drawer_open(void)
     lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
     lv_anim_start(&a);
     drawer_refresh_qmx_vol();   // show what the RADIO is set to, not our last write
+    drawer_refresh_activation();
     drawer_refresh_qmx_rf();    // and its per-band RF gain, which changes with the band
     s_drawer_open = true;
     // Pull the QMX-wait prompt down now rather than waiting up to a second for its
@@ -7200,6 +7229,31 @@ static void drawer_tune_entry_btn_cb(lv_event_t *e)
     (void)e;
     drawer_close();
     tune_modal_show();
+}
+
+// Refreshes the drawer button to name the running activation. Called when the
+// drawer opens, so the operator sees the current state without having to open
+// the modal to find out.
+static void drawer_refresh_activation(void)
+{
+    if (!s_activation_lbl || !s_activation_btn) return;
+    char desc[32];
+    if (activation_describe(desc, sizeof(desc))) {
+        char b[48];
+        snprintf(b, sizeof(b), LV_SYMBOL_GPS " %s", desc);
+        lv_label_set_text(s_activation_lbl, b);
+        lv_obj_set_style_bg_color(s_activation_btn, lv_color_hex(0x2e8b3a), 0);
+    } else {
+        lv_label_set_text(s_activation_lbl, "Activation (POTA/SOTA)");
+        lv_obj_set_style_bg_color(s_activation_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    }
+}
+
+static void drawer_activation_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    drawer_close();
+    activation_modal_show();
 }
 
 // CW Audio is shelved (works but breaks up on the current USB-audio pipeline),
