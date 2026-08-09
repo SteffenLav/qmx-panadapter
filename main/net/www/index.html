@@ -441,6 +441,15 @@
     <div class="bot-fill"></div>
     <span id="clock">--:--:-- UTC</span>
     <div class="bot-fill"></div>
+    <!-- Bluetooth, left of WiFi, mirroring the Tab5's bottom bar. Always
+         present; colour carries the state (dim off / pale scanning / blue
+         connected) so the two screens read the same way. -->
+    <span id="bt-wrap" style="white-space:nowrap; margin-right:0.6rem;" title="Bluetooth">
+      <svg id="bt-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#555"
+           stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;">
+        <path d="M6.5 6.5l11 11L12 23V1l5.5 5.5-11 11"></path>
+      </svg>
+    </span>
     <span id="wifi-wrap" style="white-space:nowrap;">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2.5"
            stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px; margin-right:0.3rem;">
@@ -477,6 +486,7 @@
     <div class="bot-menu-wrap">
       <button type="button" class="bot-btn" id="reset-group-btn">Miscellaneous &#9650;</button>
       <div class="bot-menu" id="reset-menu">
+        <a href="#" id="prop-btn" title="Who has heard YOU lately, from PSK Reporter - receivers, distance, bearing and the signal report they gave you">Who is hearing me</a>
         <a href="/ss.bmp" target="_blank">Tab5 screenshot</a>
         <a href="#" id="reset-settings-link" class="danger" title="Reset all app settings + memory channels to defaults (keeps the QSO log and WiFi). Clears a stuck stored value without an esptool full-erase. Reboots.">Reset settings</a>
         <a href="#" id="reset-network-link" class="danger" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
@@ -533,6 +543,23 @@
   <!-- Memory channels: the Tab5's 4x8 grid, as a grid. Clicking one RECALLS it -
        which is just set_freq + set_mode, so the browser needs no recall endpoint
        and there is no second copy of that decision on the device. -->
+  <!-- Propagation feedback. The browser is the right home for this: it is a
+       table with distance and bearing, which needs width the Tab5 does not
+       have. The device only ever holds the parsed reports; everything below is
+       presentation. -->
+  <div id="prop-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1000;">
+    <div style="max-width:900px; margin:4vh auto; max-height:92vh; display:flex; flex-direction:column;
+                background:#161616; border:1px solid #494949; border-radius:10px; padding:16px 20px; color:#ddd; font-size:14px;">
+      <div style="display:flex; align-items:center; margin-bottom:10px;">
+        <strong style="color:#ffa040; font-size:17px;">Who is hearing me</strong>
+        <div style="flex:1"></div>
+        <button type="button" id="prop-close" class="bot-btn">Close</button>
+      </div>
+      <div id="prop-summary" style="color:var(--dim); margin-bottom:8px;"></div>
+      <div id="prop-body" style="overflow:auto;"></div>
+    </div>
+  </div>
+
   <div id="mem-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1000;">
     <!-- max-height + an inner scroll box: with 32 slots the card ran off the
          bottom of the window and the last rows could not be reached at all. -->
@@ -1627,6 +1654,62 @@ async function memEdit(d, idx) {
   setTimeout(() => { st.textContent = ""; }, 4000);
 }
 
+async function propOpen() {
+  document.getElementById("prop-modal").style.display = "";
+  pauseWs();                       // same courtesy every other fetch pays here
+  const body = document.getElementById("prop-body");
+  const sum  = document.getElementById("prop-summary");
+  body.innerHTML = '<p style="color:var(--dim)">Asking PSK Reporter...</p>';
+  sum.textContent = "";
+  try {
+    const d = await (await fetch("/api/psk_rx", { cache: "no-store" })).json();
+    if (!d.enabled) {
+      body.innerHTML = '<p style="color:var(--dim)">Propagation feedback is switched off. ' +
+                       'Turn on "Propagation feedback" in Settings.</p>';
+      return;
+    }
+    const reps = d.reports || [];
+    // The DISTINCT receiver count is the honest headline: ten reports from one
+    // receiver says far less about propagation than one each from ten.
+    sum.textContent = reps.length
+      ? (d.receivers + " receiver(s), furthest " + (d.max_km >= 0 ? d.max_km + " km" : "unknown") +
+         ", updated " + (d.age_s >= 0 ? d.age_s + " s ago" : "never"))
+      : "";
+    if (!reps.length) {
+      body.innerHTML = '<p style="color:var(--dim)">Nobody has reported hearing you in the last 24 hours. ' +
+                       'That is the normal answer if you have not transmitted - it is not an error.</p>';
+      return;
+    }
+    reps.sort((a, b) => (b.km || 0) - (a.km || 0));
+    body.innerHTML =
+      '<table style="width:100%; border-collapse:collapse;">' +
+      '<tr style="color:#ffa040; text-align:left;">' +
+      '<th>Receiver</th><th>Country</th><th>Distance</th><th>Bearing</th><th>SNR</th><th>Band</th><th>Mode</th><th>Age</th></tr>' +
+      reps.map(r => {
+        const age = r.t ? Math.max(0, Math.round(Date.now() / 1000 - r.t)) : null;
+        const ageS = age === null ? "&mdash;" : (age < 90 ? age + " s" : Math.round(age / 60) + " min");
+        return '<tr style="border-top:1px solid #2a2a2a">' +
+          '<td>' + (r.call || "") + '</td>' +
+          '<td style="color:var(--dim)">' + (r.dxcc || "") + '</td>' +
+          '<td>' + (r.km !== undefined ? r.km + " km" : "&mdash;") + '</td>' +
+          '<td style="color:var(--dim)">' + (r.brg !== undefined ? r.brg + "°" : "&mdash;") + '</td>' +
+          // SNR is OMITTED by the device when the reporter did not supply one -
+          // 0 dB is a real report, so absence must not render as zero.
+          '<td>' + (r.snr !== undefined ? (r.snr > 0 ? "+" : "") + r.snr + " dB" : "&mdash;") + '</td>' +
+          '<td style="color:var(--dim)">' + (r.f ? (r.f / 1e6).toFixed(3) + " MHz" : "") + '</td>' +
+          '<td style="color:var(--dim)">' + (r.mode || "") + '</td>' +
+          '<td style="color:var(--dim)">' + ageS + '</td></tr>';
+      }).join("") + '</table>';
+  } catch (e) {
+    body.innerHTML = '<p style="color:#ff6060">Could not read it: ' + e + '</p>';
+  } finally {
+    resumeWs();
+  }
+}
+document.getElementById("prop-btn").addEventListener("click", e => { e.preventDefault(); propOpen(); });
+document.getElementById("prop-close").addEventListener("click",
+  () => { document.getElementById("prop-modal").style.display = "none"; });
+
 document.getElementById("memory-btn").addEventListener("click", memOpen);
 document.getElementById("mem-close").addEventListener("click", () => {
   document.getElementById("mem-modal").style.display = "none"; resumeWs();
@@ -2531,6 +2614,17 @@ async function tick() {
     }
     document.getElementById("batt").textContent   = battStr;
     document.getElementById("tab5fw").textContent = s.tab5_fw || "";
+
+    /* Bluetooth glyph: same three states as the Tab5. */
+    {
+      const bt = s.bt || {};
+      const ic = document.getElementById("bt-icon");
+      if (ic) {
+        ic.setAttribute("stroke", !bt.en ? "#555" : (bt.conn ? "#3d8cff" : "#a0a0a0"));
+        document.getElementById("bt-wrap").title =
+          !bt.en ? "Bluetooth off" : (bt.conn ? "Bluetooth: device connected" : "Bluetooth: scanning");
+      }
+    }
 
     /* Bottom-right: WiFi + IP */
     const wifi = s.wifi;

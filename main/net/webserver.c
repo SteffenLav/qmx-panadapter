@@ -29,6 +29,8 @@
 #include "bandplan.h"          // bandplan_get_segments / _effective_region / _seg_color
 #include "spots.h"             // spots_get_in_range - live spots for the web spectrum
 #include "psk_rx.h"            // propagation feedback - who is hearing US
+#include "bt_hid_mouse.h"
+#include "hid_cursor.h"
 #include "iq_balance.h"        // iq_balance_set_enabled - /api/settings
 #include "mem_channels.h"      // memory channels - /api/memory
 #include "render_waterfall.h"  // live waterfall tuning - /api/settings display group
@@ -440,6 +442,15 @@ static esp_err_t status_handler(httpd_req_t *req)
         cat_pwr_swr_async_read(&pw, &swr);
         cJSON_AddNumberToObject(tn, "watts", pw);
         cJSON_AddNumberToObject(tn, "swr",   swr);
+    }
+    // Bluetooth, mirroring the Tab5's bottom-bar glyph: "enabled" and
+    // "something is actually connected" are separate facts.
+    {
+        qmx_settings_t bs;
+        settings_load_all(&bs);
+        cJSON *bt = cJSON_AddObjectToObject(root, "bt");
+        cJSON_AddBoolToObject(bt, "en",   bs.bt_mouse_en && bt_hid_mouse_started());
+        cJSON_AddBoolToObject(bt, "conn", hid_cursor_present());
     }
     cJSON_AddBoolToObject(root, "tune_ok", cat_qmx_fw_at_least(1, 4, 0));
     // Paused = the operator has released the radio to its own menu. Everything
