@@ -2681,9 +2681,15 @@ function fmtFreqLabel(hz) {
    fading with age because a spot is a claim about NOW. Where the two differ it
    is because a mouse is not a finger: no press-and-drag pick, just a click.
    ===================================================================== */
-const SPOT_COL_POTA   = "#ffb43c";
-const SPOT_COL_RBN    = "#35d84a";
-const SPOT_COL_WORKED = "#8a8a8a";
+/* The SAME three values the Tab5 uses (COL_POTA / COL_RBN / COL_WORKED in
+   ui/spots_lane.c). They were close but not equal, so a spot was one shade on
+   the device and another in the browser - and the off-screen counters, which
+   take the colour of the spot they point at, disagreed most visibly of all.
+   Deliberately bright: these sit over a live spectrum with a vivid green trace,
+   and a mid-tone disappears into it. Worked-before is the only muted one. */
+const SPOT_COL_POTA   = "#FFC864";
+const SPOT_COL_RBN    = "#70FF90";
+const SPOT_COL_WORKED = "#C0C0C0";
 const SPOT_FULL_S     = 300;    // full brightness up to 5 minutes old
 const SPOT_GONE_S     = 1800;   // invisible at 30 minutes - same as the Tab5
 /* Labels sit mid-height and STACK into rows. Both were operator calls: at the
@@ -2735,7 +2741,14 @@ function drawSpots(ctx, W, H) {
   }
   cand.sort((a, b) => (a.sp.w ? 1 : 0) - (b.sp.w ? 1 : 0) || (a.sp.a || 0) - (b.sp.a || 0));
 
+  // Track the colour of the NEAREST off-screen spot each side, not just its
+  // frequency: the counter is drawn in the colour of the spot it will take you
+  // to, so it reads as part of the same picture rather than as chrome. The Tab5
+  // has always done this (spots_lane.c); this page used to hardcode POTA amber,
+  // so the two disagreed whenever the nearest one was an RBN spot or already
+  // worked.
   let offLo = 0, offHi = 0, offLoHz = 0, offHiHz = 0;
+  let offLoCol = SPOT_COL_POTA, offHiCol = SPOT_COL_POTA;
   const placed = [];
 
   ctx.save();
@@ -2749,8 +2762,8 @@ function drawSpots(ctx, W, H) {
   for (let r = 0; r < SPOT_LABEL_ROWS; r++) rows.push([]);
 
   for (const c of cand) {
-    if (c.x < 0)  { offLo++; if (!offLoHz || c.sp.f > offLoHz) offLoHz = c.sp.f; continue; }
-    if (c.x > W)  { offHi++; if (!offHiHz || c.sp.f < offHiHz) offHiHz = c.sp.f; continue; }
+    if (c.x < 0)  { offLo++; if (!offLoHz || c.sp.f > offLoHz) { offLoHz = c.sp.f; offLoCol = spotColour(c.sp); } continue; }
+    if (c.x > W)  { offHi++; if (!offHiHz || c.sp.f < offHiHz) { offHiHz = c.sp.f; offHiCol = spotColour(c.sp); } continue; }
 
     const text = c.sp.c || "";
     if (!text) continue;
@@ -2802,14 +2815,14 @@ function drawSpots(ctx, W, H) {
     const t = "< spots (" + offLo + ")";
     const tw = ctx.measureText(t).width;
     ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(2, H - 21, tw + 8, 18);
-    ctx.fillStyle = "#ffb43c";         ctx.fillText(t, 6, H - 8);
+    ctx.fillStyle = offLoCol;          ctx.fillText(t, 6, H - 8);
     spotOffBoxes.push({ x: 2, y: H - 21, w: tw + 8, h: 18, hz: offLoHz, mode: null });
   }
   if (offHi > 0) {
     const t = "spots (" + offHi + ") >";
     const tw = ctx.measureText(t).width;
     ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(W - tw - 10, H - 21, tw + 8, 18);
-    ctx.fillStyle = "#ffb43c";         ctx.fillText(t, W - tw - 6, H - 8);
+    ctx.fillStyle = offHiCol;          ctx.fillText(t, W - tw - 6, H - 8);
     spotOffBoxes.push({ x: W - tw - 10, y: H - 21, w: tw + 8, h: 18, hz: offHiHz, mode: null });
   }
   ctx.restore();
