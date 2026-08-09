@@ -1761,6 +1761,7 @@ static lv_obj_t *s_dropdown_cmap = NULL;
 static lv_obj_t *s_dropdown_bpregion = NULL;  // band-plan region picker
 static lv_obj_t *s_dropdown_swrlim   = NULL;  // SWR protection limit picker
 static lv_obj_t *s_cb_bt             = NULL;  // Bluetooth mouse enable
+static lv_obj_t *s_check_cluster     = NULL;  // DX cluster spot source
 static lv_obj_t *s_slider_brightness = NULL;
 static uint8_t s_saved_ui_mode = UI_MODE_PANADAPTER;
 static lv_obj_t *s_lbl_brightness = NULL;
@@ -1826,6 +1827,7 @@ static void drawer_dropdown_sleep_open_cb(lv_event_t *e);
 static void drawer_dropdown_bpregion_cb(lv_event_t *e);
 static void drawer_dropdown_swrlim_cb(lv_event_t *e);
 static void drawer_bt_cb(lv_event_t *e);
+static void drawer_cluster_cb(lv_event_t *e);
 static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_slider_qmx_vol_cb(lv_event_t *e);
 static void drawer_refresh_qmx_vol(void);
@@ -6571,7 +6573,7 @@ static void drawer_build(void)
     {
         qmx_settings_t scfg_spots;
         settings_load_all(&scfg_spots);
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_SPOTS, y, 112);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SPOTS, y, 164);
         lv_obj_t *hdr = lv_label_create(sec);
         lv_label_set_text(hdr, "Live spots (POTA)");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xFFFFFF), 0);
@@ -6589,7 +6591,18 @@ static void drawer_build(void)
         lv_obj_align(rbn_lbl, LV_ALIGN_TOP_LEFT, 0, 62);
         s_check_rbn = make_drawer_checkbox(sec, scfg_spots.rbn_en, drawer_rbn_cb, NULL);
         lv_obj_align(s_check_rbn, LV_ALIGN_TOP_RIGHT, 0, 62);
-        y += 112;
+
+        // DX cluster: the third source, and the only one carrying PHONE spots -
+        // RBN is skimmers and no SSB skimmer exists. Same weight and indent as
+        // the other two: it is a SOURCE, not a sub-option of either.
+        lv_obj_t *dxc_lbl = lv_label_create(sec);
+        lv_label_set_text(dxc_lbl, "DX cluster spots (phone)");
+        lv_obj_set_style_text_color(dxc_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(dxc_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(dxc_lbl, LV_ALIGN_TOP_LEFT, 0, 114);
+        s_check_cluster = make_drawer_checkbox(sec, scfg_spots.cluster_en, drawer_cluster_cb, NULL);
+        lv_obj_align(s_check_cluster, LV_ALIGN_TOP_RIGHT, 0, 114);
+        y += 164;
     }
 
     // Presets section: header + three buttons side-by-side
@@ -7693,6 +7706,18 @@ static void drawer_dropdown_sleep_open_cb(lv_event_t *e)
 // started after the C6 transport is up (see bt_hid_mouse.c), and there is no
 // safe way to bring it up mid-session. Say so rather than let the operator
 // wonder why the icon has not changed.
+// Unlike the BT switch this applies LIVE - the cluster task polls the setting
+// each cycle and opens or closes the socket itself, so there is nothing to
+// restart.
+static void drawer_cluster_cb(lv_event_t *e)
+{
+    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_set_cluster_en(on);
+    ui_toast(on ? "DX cluster on - human spots, including phone"
+                : "DX cluster off");
+    ESP_LOGI(TAG, "DX cluster %s", on ? "enabled" : "disabled");
+}
+
 static void drawer_bt_cb(lv_event_t *e)
 {
     bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
