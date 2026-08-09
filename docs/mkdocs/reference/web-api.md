@@ -41,7 +41,8 @@ Returns the current state of the panadapter.
   "eqsl_creds_set": false,
   "lotw_ready": true,
   "bandplan": { "lo": 14000000, "hi": 14350000, "segs": [ { "lo": 14000000, "hi": 14070000, "c": "20B0FF", "l": "CW" } ] },
-  "tab5_fw": "v1.6.0",
+  "bt":       { "en": true, "conn": false },
+  "tab5_fw": "v1.7.0",
   "bands":    [ { "name": "20", "center_hz": 14100000 } ]
 }
 ```
@@ -50,6 +51,7 @@ Notes:
 
 - `screen` is `"panadapter"` or `"ft8"`.
 - **`ft8` is present only while the FT8/FT4 screen is live** — the engine does not run otherwise, so its text would be stale. `st` is one of `active` / `armed` / `done` / `timeout` / `wait` / `idle`, and `text` is the same line the Tab5 shows on its own TX status label. This is what drives the browser's TX banner and the red dot in the tab title.
+- `bt` is the Bluetooth mouse: `en` is whether it is switched on, `conn` whether a mouse is connected right now. `en: true, conn: false` means it is scanning or waiting for a paired mouse to come back.
 - `signal_dbm` and `bandplan` are `null` when unavailable (no spectrum yet; VFO outside a known band).
 - `passband_hz` falls back to a per-mode default until CAT reports a real width.
 
@@ -141,6 +143,11 @@ which `/api/cmd` already does.
 
 The settings a browser can usefully edit: callsign, grid, the CQ presets, the FT8
 filters, the everyday toggles, QMX volume, band-plan region and the WiFi SSID.
+The spot sources (`spots_en` overall, then `rbn_en` and `cluster_en`),
+propagation feedback (`psk_rx_en`) and the Bluetooth mouse (`bt_mouse_en`) are
+here too — `bt_mouse_en` is stored immediately but only takes effect after a
+restart. `swr_limit_x10` (the SWR limit × 10, so `30` is 3.0:1) is **reported
+but not writable** — a transmit safety limit is set at the device.
 
 **The WiFi password is never returned** - only `wifi_pass_set` says whether one is
 stored.
@@ -229,6 +236,11 @@ Download ADIF log.
 
 **Response**: ADIF file (text/plain)
 
+`?activation=<REF>` limits the download to contacts made during an activation of
+that reference (matched on `MY_SIG_INFO`), so a park's log can be uploaded on its
+own rather than the whole file. An unknown reference returns a valid ADIF file
+with no records, not an error.
+
 ### POST /api/adif/clear
 
 Clear all QSOs from ADIF log.
@@ -289,6 +301,33 @@ only the cadence differs.
 ```json
 { "dbm": -83.5 }
 ```
+
+### GET /api/psk_rx
+
+Propagation feedback — which receivers have copied **your** call, from PSK
+Reporter.
+
+```json
+{ "enabled": true, "age_s": 96, "receivers": 14, "max_km": 7412,
+  "reports": [
+    { "call": "W1ABC", "grid": "FN42", "dxcc": "United States", "mode": "FT8",
+      "f": 14074812, "t": 1785340050, "snr": -14, "km": 6031, "brg": 291 }
+  ] }
+```
+
+Requesting this asks for a refresh, but the collector's own **five-minute floor**
+is enforced on the device, so polling faster than that returns the same data with
+a larger `age_s` rather than fetching again. `age_s` is `-1` before the first
+successful query.
+
+`snr` is omitted when the receiver gave none — 0 dB is a real report, so it
+cannot double as "unknown". `km` and `brg` are omitted together when the
+receiver's grid is unknown.
+
+Off by default. The endpoint always answers: with the feature disabled nothing is
+fetched, so `enabled` is `false` and `reports` holds whatever the last query
+returned before it was switched off — read `age_s` rather than assuming the list
+is current. It is also empty while offline or before a callsign is set.
 
 ### POST /api/adif/delete?idx=<n>&call=<CALL>
 
