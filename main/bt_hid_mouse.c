@@ -18,6 +18,20 @@
 // by +96 bytes (156,780 -> 156,876), because the controller is not ours and
 // NimBLE takes its pools from the heap. The runtime heap cost is the real
 // number and is logged at init below.
+//
+// WITH bt_mouse_en OFF THE COST IS ZERO, and this was checked rather than
+// assumed. I spent an evening warning that CONFIG_BT_ENABLED changes the
+// host<->C6 handshake for every user, on the strength of a boot line reading
+// "vhci_drv: Host BT Support: Enabled". It does not:
+//   * hci_drv_init() for VHCI is literally an empty function;
+//   * hci_drv_show_configuration() is two ESP_LOGI calls;
+//   * hci_rx_handler() only runs when HCI data arrives, and none does unless
+//     NimBLE is started and sends a command first;
+//   * the "capabilities: 0xd / HCI over SDIO / BLE only" report appears in
+//     NON-BT builds too - verified against a v1.6.0-era boot log. That is the
+//     C6 announcing its own features, unprompted.
+// So the only difference for a user who never ticks the box is ~71 KB of
+// dormant flash. Read the function before inferring behaviour from its log.
 
 #include "bt_hid_mouse.h"
 #include "hid_cursor.h"
