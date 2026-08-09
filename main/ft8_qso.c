@@ -34,6 +34,7 @@
 #include "ui/ft8_screen.h"
 #include "storage/settings.h"
 #include "adif/adif_log.h"
+#include "net/spots.h"  // spots_activation_for_call() - tag a chase with SIG/SIG_INFO
 #include "cat/cat.h"
 
 #include <string.h>
@@ -1845,6 +1846,15 @@ void ft8_qso_advance(int64_t slot_sec)
                 }
             }
 
+            // Were they activating a park/summit? Resolved now, while the
+            // contact is fresh - the spot can age out of the store long before
+            // anyone exports the log, and a chase with no SIG_INFO earns no
+            // credit for either side. Empty for an ordinary QSO.
+            char their_sig[8] = "", their_ref[16] = "";
+            spots_activation_for_call(target, cat_get_frequency(),
+                                      their_sig, sizeof(their_sig),
+                                      their_ref, sizeof(their_ref));
+
             adif_qso_t qso = {
                 .their_call = target,
                 .my_call    = s_my_call,
@@ -1859,6 +1869,8 @@ void ft8_qso_advance(int64_t slot_sec)
                 .my_arrl_section    = have_fd_exch ? qs.fd_section : NULL,
                 .their_arrl_class   = have_fd_exch ? their_fd_class   : NULL,
                 .their_arrl_section = have_fd_exch ? their_fd_section : NULL,
+                .their_sig      = their_sig[0] ? their_sig : NULL,
+                .their_sig_info = their_ref[0] ? their_ref : NULL,
             };
             // Duplicate guard (see QSO_DUP_LOG_WINDOW_SEC): the same call on the
             // same band inside the window is this same contact reaching DONE a

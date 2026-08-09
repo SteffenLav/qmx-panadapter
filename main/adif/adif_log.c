@@ -313,6 +313,27 @@ void adif_log_record(const adif_qso_t *qso)
         if (qso->my_arrl_section && qso->my_arrl_section[0])
             write_field(f, "MY_ARRL_SECT", qso->my_arrl_section);
     }
+
+    // Activation fields. MY_SIG/MY_SIG_INFO say what WE were activating and are
+    // what POTA and SOTA read to credit the activation; SIG/SIG_INFO say what
+    // THEY were, i.e. our chase. Our own side is read from settings here rather
+    // than passed in, so every present and future caller of this function gets
+    // it automatically - a QSO silently logged without MY_SIG_INFO during an
+    // activation is an uncreditable contact the operator only finds out about
+    // after the fact, when the log is rejected.
+    {
+        const char *my_sig = settings_activation_sig_name();
+        char my_ref[16];
+        if (my_sig && settings_get_activation_ref(my_ref, sizeof(my_ref))) {
+            write_field(f, "MY_SIG",      my_sig);
+            write_field(f, "MY_SIG_INFO", my_ref);
+        }
+    }
+    if (qso->their_sig_info && qso->their_sig_info[0]) {
+        write_field(f, "SIG",      qso->their_sig ? qso->their_sig : "POTA");
+        write_field(f, "SIG_INFO", qso->their_sig_info);
+    }
+
     fprintf(f, "<EOR>\n");
 
     fclose(f);

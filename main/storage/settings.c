@@ -64,6 +64,8 @@ static const char *TAG = "settings";
 #define KEY_CW_TX_OFF    "cw_tx_off"
 #define KEY_CQ_LISTEN    "cq_listen"
 #define KEY_SWR_LIMIT    "swr_lim"
+#define KEY_ACT_TYPE     "act_type"
+#define KEY_ACT_REF      "act_ref"
 #define KEY_SNAP_PEAK    "snap_peak"
 #define KEY_BP_REGION    "bp_region"
 #define KEY_DISTANCE_MILES "dist_miles"
@@ -262,6 +264,9 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_CW_TX_OFFSET   78
 #define DIRTY_CQ_LISTEN      79
 #define DIRTY_SWR_LIMIT      80
+// One bit for both activation fields: they are only ever written together by
+// settings_set_activation(), so a second bit would buy nothing.
+#define DIRTY_ACTIVATION     81
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -421,6 +426,10 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_QMX_VOL))     nvs_set_u8(s_nvs, KEY_QMX_VOL,   snap.qmx_vol_db);
         if (dirty_test(&dirty_local, DIRTY_CW_TX_OFFSET)) nvs_set_i16(s_nvs, KEY_CW_TX_OFF, snap.cw_tx_offset_hz);
         if (dirty_test(&dirty_local, DIRTY_SWR_LIMIT))    nvs_set_u8(s_nvs, KEY_SWR_LIMIT, snap.swr_limit_x10);
+        if (dirty_test(&dirty_local, DIRTY_ACTIVATION)) {
+            nvs_set_u8(s_nvs, KEY_ACT_TYPE, snap.act_type);
+            nvs_set_str(s_nvs, KEY_ACT_REF, snap.act_ref);
+        }
         if (dirty_test(&dirty_local, DIRTY_SNAP_PEAK))   nvs_set_u8(s_nvs, KEY_SNAP_PEAK, snap.snap_to_peak ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_BP_REGION))   nvs_set_u8(s_nvs, KEY_BP_REGION, snap.bandplan_region);
         if (dirty_test(&dirty_local, DIRTY_DISTANCE_MILES)) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap.distance_in_miles ? 1 : 0);
@@ -599,6 +608,8 @@ static void load_from_nvs(qmx_settings_t *out)
     // normal way this goes wrong in the field. 3.0 is high enough not to trip
     // on a merely mediocre match; the drawer can raise it or turn it off.
     out->swr_limit_x10 = 30;
+    out->act_type   = 0;          // not activating anything
+    out->act_ref[0] = '\0';
     memset(&out->ft8_filters, 0, sizeof(out->ft8_filters));
     out->field_day_en = false;
     out->fd_class[0]  = '\0';
@@ -666,6 +677,11 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_u8(s_nvs, KEY_CQ_MAX, &out->cq_max_calls);
     nvs_get_u8(s_nvs, KEY_CQ_LISTEN, &out->cq_listen_every);
     nvs_get_u8(s_nvs, KEY_SWR_LIMIT, &out->swr_limit_x10);
+    nvs_get_u8(s_nvs, KEY_ACT_TYPE, &out->act_type);
+    out->act_ref[0] = '\0';
+    sz = sizeof(out->act_ref);
+    nvs_get_str(s_nvs, KEY_ACT_REF, out->act_ref, &sz);
+    if (!out->act_ref[0]) out->act_type = 0;   // a reference-less activation is none
 
     if (nvs_get_u8(s_nvs, KEY_ONBOARDED,  &u8v) == ESP_OK) out->onboarded  = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_WIFI_ENABLED, &u8v) == ESP_OK) out->wifi_enabled = (u8v != 0);
@@ -1316,6 +1332,67 @@ void settings_set_cq_listen_every(uint8_t n)
     s_pending.cq_listen_every = n;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CQ_LISTEN);
+}
+
+void settings_set_activation(uint8_t type, const char *ref)
+{
+    if (!s_ready) return;
+    char clean[16];
+    clean[0] = '\0';
+    if (ref) {
+        // Trim and upper-case: references are case-insensitive in both schemes
+        // but the log should carry the canonical form, and an operator typing
+        // on glass in a field leaves stray spaces.
+        while (*ref == ' ') ref++;
+        size_t n = 0;
+        while (*ref && n < sizeof(clean) - 1) {
+            char c = *ref++;
+            clean[n++] = (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+        }
+        while (n > 0 && clean[n - 1] == ' ') n--;
+        clean[n] = '\0';
+    }
+    if (type > 2 || !clean[0]) { type = 0; clean[0] = '\0'; }
+
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool same = (s_pending.act_type == type) && (strcmp(s_pending.act_ref, clean) == 0);
+    if (same) { xSemaphoreGive(s_mutex); return; }
+    s_pending.act_type = type;
+    strncpy(s_pending.act_ref, clean, sizeof(s_pending.act_ref) - 1);
+    s_pending.act_ref[sizeof(s_pending.act_ref) - 1] = '\0';
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_ACTIVATION);
+}
+
+uint8_t settings_get_activation_type(void)
+{
+    if (!s_ready) return 0;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t t = s_pending.act_type;
+    bool has_ref = s_pending.act_ref[0] != '\0';
+    xSemaphoreGive(s_mutex);
+    return has_ref ? t : 0;
+}
+
+bool settings_get_activation_ref(char *out, size_t out_sz)
+{
+    if (!out || out_sz == 0) return false;
+    out[0] = '\0';
+    if (!s_ready) return false;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    bool on = (s_pending.act_type != 0) && (s_pending.act_ref[0] != '\0');
+    if (on) snprintf(out, out_sz, "%s", s_pending.act_ref);
+    xSemaphoreGive(s_mutex);
+    return on;
+}
+
+const char *settings_activation_sig_name(void)
+{
+    switch (settings_get_activation_type()) {
+        case 1:  return "POTA";
+        case 2:  return "SOTA";
+        default: return NULL;
+    }
 }
 
 void settings_set_swr_limit_x10(uint8_t v)

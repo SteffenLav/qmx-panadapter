@@ -20,6 +20,12 @@ typedef struct {
     const char *my_arrl_section;  // our section, e.g. "EMA"
     const char *their_arrl_class; // their class, e.g. "3A"
     const char *their_arrl_section; // their section, e.g. "NNJ"
+    // THEIR activation, when we are the chaser: the park/summit the station we
+    // worked was activating. Written as SIG/SIG_INFO. NULL/empty for an
+    // ordinary QSO. OUR OWN activation is NOT here on purpose - it comes from
+    // settings inside adif_log_record(), so no caller can forget it.
+    const char *their_sig;        // "POTA" / "SOTA"
+    const char *their_sig_info;   // their reference, e.g. "DL-0123"
 } adif_qso_t;
 
 // Mount SPIFFS and prepare the ADIF log file. Loads the worked-call cache.

@@ -2,6 +2,7 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stddef.h>   // size_t (settings_get_activation_ref)
 
 #ifdef __cplusplus
 extern "C" {
@@ -128,6 +129,14 @@ typedef struct {
                               // clear slot - WSJT-X's "Hold Tx Freq" (default false)
     ft8_filters_t ft8_filters;        // CQ-run reply include/exclude filters
     bool     field_day_en;    // ARRL Field Day exchange mode: TX/RX class+section instead of grid/report (default false)
+    // Activation session: what WE are activating right now, if anything. Every
+    // QSO logged while this is set carries MY_SIG/MY_SIG_INFO, which is what
+    // POTA and SOTA read to credit an activation. Persisted deliberately - an
+    // activation outlives a battery change in the field, and re-typing the
+    // reference after a reboot is exactly when it gets typed wrong.
+    // 0 = none, 1 = POTA, 2 = SOTA. act_ref is the park/summit reference.
+    uint8_t  act_type;
+    char     act_ref[16];     // "DL-0123" (POTA) or "OZ/SJ-001" (SOTA)
     char     fd_class[4];     // Field Day class, e.g. "16A" (1-2 digit transmitter count + category letter)
     char     fd_section[4];   // Field Day ARRL/RAC section abbreviation, e.g. "EMA"
     bool     sim_mode_en;     // FT8 simulation mode: phantom stations, real radio never keyed (default false)
@@ -302,6 +311,17 @@ void settings_set_bandplan_region(uint8_t v);
 // ARRL Field Day exchange mode (debounced flush). When enabled, FT8 QSOs
 // exchange class+section (fd_class/fd_section) instead of grid/signal report.
 void settings_set_field_day_en(bool v);
+// Activation session (POTA/SOTA). type: 0 none, 1 POTA, 2 SOTA. Setting a type
+// with an empty reference is treated as "none" - an activation with no
+// reference credits nothing and would only put a meaningless MY_SIG in the log.
+void settings_set_activation(uint8_t type, const char *ref);
+uint8_t settings_get_activation_type(void);
+// Copies the reference into out (always NUL-terminated). Returns false when no
+// activation is running, in which case out is set empty.
+bool settings_get_activation_ref(char *out, size_t out_sz);
+// "POTA" / "SOTA" / NULL. The exact strings ADIF's MY_SIG expects.
+const char *settings_activation_sig_name(void);
+
 void settings_set_fd_class(const char *cls);
 void settings_set_fd_section(const char *section);
 

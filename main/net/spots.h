@@ -86,6 +86,21 @@ void spots_publish(spot_source_t src, const spot_t *list, int n);
 // "spots are stale" state in the UI.
 int  spots_age_s(void);
 
+// Look up the park/summit reference a station was spotted activating, so a
+// completed QSO can be logged as a chase (ADIF SIG/SIG_INFO). Matches on
+// callsign and, if freq_hz is non-zero, requires the spot to be within the
+// same duplicate tolerance used for collapsing the lane - a station spotted
+// on 40 m says nothing about a contact made on 20 m.
+//
+// Returns true and fills ref_out (+ sig_out with "POTA"/"SOTA") only for a
+// source that actually carries a reference; an RBN spot never does. Deliberately
+// a lookup at QSO time rather than something cached per decode: the reference
+// has to be right in the log, and the spot may have aged out by the time the
+// contact completes - so the caller resolves it while the contact is fresh.
+bool spots_activation_for_call(const char *call, uint32_t freq_hz,
+                               char *sig_out, size_t sig_sz,
+                               char *ref_out, size_t ref_sz);
+
 // Ask for a refresh now (e.g. the operator just enabled the feature or
 // changed band). Coalesced with the periodic cycle.
 void spots_request_refresh(void);

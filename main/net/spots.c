@@ -252,6 +252,41 @@ int spots_get_in_range_wait(spot_t *out, int max, uint32_t lo_hz, uint32_t hi_hz
     return n;
 }
 
+bool spots_activation_for_call(const char *call, uint32_t freq_hz,
+                               char *sig_out, size_t sig_sz,
+                               char *ref_out, size_t ref_sz)
+{
+    if (sig_out && sig_sz) sig_out[0] = '\0';
+    if (ref_out && ref_sz) ref_out[0] = '\0';
+    if (!call || !call[0] || !ref_out || ref_sz == 0) return false;
+    // Short, bounded wait: this runs on the QSO-completion path, which must not
+    // stall behind a fetch swapping the table in. Losing the reference on a
+    // contended moment is a missed chase credit; blocking the QSO machine is
+    // worse.
+    if (!lock_ms(50)) return false;
+
+    bool found = false;
+    for (int i = 0; i < s_count; i++) {
+        if (s_store[i].source == SPOT_SRC_RBN) continue;   // never carries a reference
+        if (!s_store[i].ref[0]) continue;
+        if (strcasecmp(s_store[i].call, call) != 0) continue;
+        if (freq_hz) {
+            uint32_t d = (s_store[i].freq_hz > freq_hz) ? s_store[i].freq_hz - freq_hz
+                                                        : freq_hz - s_store[i].freq_hz;
+            if (d > SPOT_DUP_TOL_HZ) continue;
+        }
+        snprintf(ref_out, ref_sz, "%s", s_store[i].ref);
+        // POTA is the only reference-carrying source today (RBN has none, and
+        // SOTA is not fetched - its API terms require prior approval, see
+        // TODO). When a second one is added, switch on source here.
+        if (sig_out && sig_sz) snprintf(sig_out, sig_sz, "POTA");
+        found = true;
+        break;
+    }
+    unlock();
+    return found;
+}
+
 int spots_age_s(void)
 {
     if (!s_last_ok_us) return -1;
