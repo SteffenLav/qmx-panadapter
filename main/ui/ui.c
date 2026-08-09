@@ -6484,7 +6484,9 @@ static void drawer_build(void)
             settings_load_all(&bc);
             s_cb_bt = make_drawer_checkbox(sec, bc.bt_mouse_en, drawer_bt_cb, NULL);
         }
-        lv_obj_align(s_cb_bt, LV_ALIGN_TOP_RIGHT, -8, 46);
+        // x offset 0, matching every other drawer checkbox (Live spots, RBN,
+        // Flip 180...). -8 put this one visibly out of the column.
+        lv_obj_align(s_cb_bt, LV_ALIGN_TOP_RIGHT, 0, 46);
         y += 100;
     }
 

@@ -1683,9 +1683,17 @@ const SET_FIELDS = [
 
   ["Spots & reporting", "spots_en",       "bool", "Live POTA spots", ""],
   ["Spots & reporting", "rbn_en",         "bool", "RBN (CW skimmer) spots", "A continuous feed - off by default"],
+  ["Spots & reporting", "cluster_en",      "bool", "DX cluster spots (phone)",
+     "Human-typed spots. The ONLY source of SSB spots - RBN is automated skimmers and no SSB skimmer exists. A second connection, so off by default"],
   ["Spots & reporting", "pskreporter_en", "bool", "Report decodes to PSK Reporter", "Over the internet, never on the air"],
+  ["Spots & reporting", "psk_rx_en",      "bool", "Propagation feedback (who is hearing me)",
+     "Asks PSK Reporter which receivers have copied YOUR callsign. Read-only, at most one query every 5 minutes"],
   ["Spots & reporting", "greylist_en",    "bool", "Grey-list stations that never answer", ""],
 
+  ["Radio & display", "swr_limit_x10",     "num",  "SWR protection (x10)",
+     "0 = off. Otherwise the SWR at which a transmit burst is cut short and the transmitter latched off until you clear it - 30 means 3.0:1"],
+  ["Radio & display", "bt_mouse_en",       "bool", "Bluetooth mouse",
+     "Takes effect after a restart. Then put the mouse in pairing mode; it reconnects by itself from then on"],
   ["Radio & display", "qmx_vol_db",        "num",  "QMX volume (dB)", "0-50, the same number the radio shows on its own LCD"],
   /* RF gain is read from the radio, not stored here - it is per band, so a
      remembered number would belong to whichever band you were on last. -1 means
