@@ -55,6 +55,7 @@ static uint16_t s_conn_handle;
 static int64_t  s_enc_us;      // esp_timer at encryption, for measuring the idle drop
 static int      s_cccd_writes; // CCCDs we asked to enable
 static int      s_cccd_done;   // CCCDs that answered
+static uint16_t s_hid_start, s_hid_end;  // HID service handle span
 
 // HID input reports arrive on notifications from the Report characteristic
 // (0x2A4D). Discovering the full HID service, parsing its report map and
@@ -63,6 +64,12 @@ static int      s_cccd_done;   // CCCDs that answered
 // boot-protocol mouse report, whose layout is fixed. So we subscribe to every
 // notification and decode the ones that look like a mouse report.
 #define UUID_HID_REPORT 0x2A4D
+// The two characteristics a HOGP host is expected to READ during setup. We
+// have never read either, and a peripheral that drops any host after exactly
+// 30 s regardless of traffic behaves like one that does not consider the host
+// set up. Untried candidate for that; see the header comment.
+#define UUID_HID_REPORT_MAP  0x2A4B
+#define UUID_HID_INFORMATION 0x2A4A
 // Protocol Mode: 0 = Boot, 1 = Report. A HOGP host is expected to set this.
 #define UUID_HID_PROTOCOL_MODE 0x2A4E
 #define HID_PROTOCOL_MODE_REPORT 0x01
@@ -340,15 +347,65 @@ static int hid_chr_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
     return 0;
 }
 
+// Read-and-log the descriptive characteristics. A HOGP host reads these during
+// setup; we never did. Purely a read - it changes nothing on the peripheral -
+// so it is safe to try even though it is a hypothesis for the 30 s drop.
+static int hid_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                       struct ble_gatt_attr *attr, void *arg)
+{
+    (void)conn_handle;
+    const char *what = (const char *)arg;
+    if (!error || error->status != 0 || !attr || !attr->om) {
+        ESP_LOGW(TAG, "%s read failed: status=%d", what, error ? error->status : -1);
+        return 0;
+    }
+    ESP_LOGI(TAG, "%s read OK (%u bytes)", what, OS_MBUF_PKTLEN(attr->om));
+    return 0;
+}
+
+static int hid_info_chr_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                           const struct ble_gatt_chr *chr, void *arg)
+{
+    const char *what = (const char *)arg;
+    // status BLE_HS_EDONE marks the END of a discovery procedure - that is the
+    // only safe moment to start the next one.
+    if (error && error->status == BLE_HS_EDONE) {
+        int rc;
+        if (what && strcmp(what, "HID Information") == 0) {
+            rc = ble_gattc_disc_chrs_by_uuid(conn_handle, s_hid_start, s_hid_end,
+                                             BLE_UUID16_DECLARE(UUID_HID_REPORT_MAP),
+                                             hid_info_chr_cb, (void *)"Report Map");
+            if (rc != 0) ESP_LOGW(TAG, "Report Map discovery failed to start: %d", rc);
+        } else {
+            rc = ble_gattc_disc_chrs_by_uuid(conn_handle, s_hid_start, s_hid_end,
+                                             BLE_UUID16_DECLARE(UUID_HID_REPORT),
+                                             hid_chr_cb, NULL);
+            if (rc != 0) ESP_LOGW(TAG, "Report discovery failed to start: %d", rc);
+        }
+        return 0;
+    }
+    if (!error || error->status != 0 || !chr) return 0;
+    ble_gattc_read(conn_handle, chr->val_handle, hid_read_cb, arg);
+    return 0;
+}
+
 static int hid_svc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
                       const struct ble_gatt_svc *svc, void *arg)
 {
     (void)arg;
     if (!error || error->status != 0 || !svc) return 0;
     ESP_LOGI(TAG, "HID service at handles %u-%u", svc->start_handle, svc->end_handle);
-    ble_gattc_disc_chrs_by_uuid(conn_handle, svc->start_handle, svc->end_handle,
-                                BLE_UUID16_DECLARE(UUID_HID_REPORT),
-                                hid_chr_cb, NULL);
+    s_hid_start = svc->start_handle;
+    s_hid_end   = svc->end_handle;
+    // ONE GATT PROCEDURE AT A TIME. NimBLE rejects a second concurrent
+    // procedure on the same connection with BLE_HS_EALREADY, and I stacked
+    // three of these back-to-back - so the 2nd and 3rd were silently dropped
+    // and that connection ended up with NO notifications enabled at all.
+    // Chain them through the callbacks instead, and CHECK the return code.
+    int rc = ble_gattc_disc_chrs_by_uuid(conn_handle, s_hid_start, s_hid_end,
+                                         BLE_UUID16_DECLARE(UUID_HID_INFORMATION),
+                                         hid_info_chr_cb, (void *)"HID Information");
+    if (rc != 0) ESP_LOGW(TAG, "HID Information discovery failed to start: %d", rc);
     return 0;
 }
 
