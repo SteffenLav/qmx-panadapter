@@ -1,4 +1,5 @@
 #include "usb_hid_mouse.h"
+#include "hid_cursor.h"
 
 #include "usb/hid_host.h"
 #include "usb/hid_usage_mouse.h"
@@ -12,18 +13,17 @@ static const char *TAG = "hidmouse";
 #define SCR_W 1280
 #define SCR_H 720
 
-static volatile int     s_x = SCR_W / 2;
-static volatile int     s_y = SCR_H / 2;
-static volatile uint8_t s_buttons = 0;
-static volatile bool    s_present = false;
+// Cursor state now lives in hid_cursor.c so the BLE mouse can feed the same
+// accumulator. These stay as thin wrappers rather than being deleted - they
+// are the USB module's own public API and reading "is a USB mouse present"
+// is a different question from "is any mouse present".
+static volatile bool s_present = false;
 
 bool usb_hid_mouse_present(void) { return s_present; }
 
 void usb_hid_mouse_get(int *x, int *y, uint8_t *buttons)
 {
-    if (x)       *x = s_x;
-    if (y)       *y = s_y;
-    if (buttons) *buttons = s_buttons;
+    hid_cursor_get(x, y, buttons);
 }
 
 // Runs on the HID host background task.
@@ -41,26 +41,21 @@ static void iface_cb(hid_host_device_handle_t hdl,
             return;
         if (p.proto == HID_PROTOCOL_MOUSE && len >= 3) {
             // Boot-protocol mouse: [0]=buttons, [1]=dx(int8), [2]=dy(int8), [3]=wheel.
-            int8_t dx = (int8_t)data[1];
-            int8_t dy = (int8_t)data[2];
-            int nx = s_x + dx, ny = s_y + dy;
-            if (nx < 0) nx = 0; else if (nx >= SCR_W) nx = SCR_W - 1;
-            if (ny < 0) ny = 0; else if (ny >= SCR_H) ny = SCR_H - 1;
-            s_x = nx; s_y = ny;
-
-            uint8_t b = data[0];
-            if (b != s_buttons) {
-                s_buttons = b;
-                ESP_LOGI(TAG, "buttons=0x%02x at (%d,%d)", b, nx, ny);
-            }
+            hid_cursor_apply((int8_t)data[1], (int8_t)data[2], data[0]);
             // Throttle movement logging so it doesn't flood the diag ring.
             static int cnt = 0;
-            if (++cnt >= 25) { cnt = 0; ESP_LOGI(TAG, "cursor (%d,%d)", nx, ny); }
+            if (++cnt >= 25) {
+                cnt = 0;
+                int nx, ny; uint8_t b;
+                hid_cursor_get(&nx, &ny, &b);
+                ESP_LOGI(TAG, "cursor (%d,%d) buttons=0x%02x", nx, ny, b);
+            }
         }
         break;
     case HID_HOST_INTERFACE_EVENT_DISCONNECTED:
         ESP_LOGI(TAG, "HID interface disconnected");
         s_present = false;
+        hid_cursor_set_present(HID_CURSOR_SRC_USB, false);
         hid_host_device_close(hdl);
         break;
     case HID_HOST_INTERFACE_EVENT_TRANSFER_ERROR:
@@ -94,6 +89,7 @@ static void dev_cb(hid_host_device_handle_t hdl,
 
     if (p.proto == HID_PROTOCOL_MOUSE) {
         s_present = true;
+        hid_cursor_set_present(HID_CURSOR_SRC_USB, true);
         ESP_LOGI(TAG, "mouse ready");
     }
 }

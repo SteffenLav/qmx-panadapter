@@ -17,6 +17,8 @@
 #include "psram_task.h"
 #include "lvgl.h"
 #include "ui.h"
+#include "bt_hid_mouse.h"
+#include "hid_cursor.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
 
@@ -243,6 +245,14 @@ static void status_task(void *arg)
         }
         ui_set_bottom_clock(tm_utc.tm_hour, tm_utc.tm_min, tm_utc.tm_sec, time_valid, clk_suffix);
         ui_set_bottom_wifi(ssid_buf, connected, rssi, suffix_buf);
+        // Bluetooth, next to it. "Started" and "a mouse is on the other end"
+        // are separate facts and the glyph shows both.
+        {
+            qmx_settings_t bs;
+            settings_load_all(&bs);
+            ui_set_bottom_bt(bs.bt_mouse_en && bt_hid_mouse_started(),
+                             hid_cursor_present());
+        }
     }
 }
 

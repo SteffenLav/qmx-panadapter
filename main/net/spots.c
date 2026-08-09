@@ -295,6 +295,21 @@ int spots_age_s(void)
 
 void spots_request_refresh(void) { s_refresh_req = true; }
 
+// Is ANY spot source switched on? The lane is drawn on this, not on spots_en.
+//
+// spots_en used to gate both the POTA fetch AND the whole display, which made
+// it a hidden master switch: the drawer shows three checkboxes that look like
+// three equal sources, so turning off "Live spots (POTA)" and leaving RBN or
+// the DX cluster on produced an empty lane with no explanation. Reported by
+// the operator, who had exactly that combination. Each checkbox is now purely
+// its own source.
+bool spots_any_source_enabled(void)
+{
+    qmx_settings_t s;
+    settings_load_all(&s);
+    return s.spots_en || s.rbn_en || s.cluster_en;
+}
+
 // ---- fetch -----------------------------------------------------------------
 
 typedef struct { char *buf; size_t len; size_t cap; } resp_buf_t;
@@ -439,7 +454,16 @@ static void spots_task(void *arg)
 
         qmx_settings_t s;
         settings_load_all(&s);
-        if (!s.spots_en || !wifi_is_connected()) { wait_s = 10; continue; }
+        if (!s.spots_en || !wifi_is_connected()) {
+            // Clear this source's slice when it is switched off. Merely
+            // stopping the fetch leaves its spots in the store to age out over
+            // SPOT_STALE_S (30 minutes), so unticking POTA kept showing POTA
+            // spots - which looks exactly like the checkbox not working. RBN
+            // and the DX cluster already do this on their own disable paths.
+            if (!s.spots_en) spots_publish(SPOT_SRC_POTA, NULL, 0);
+            wait_s = 10;
+            continue;
+        }
 
         fetch_once();
         wait_s = (spots_age_s() == 0) ? FETCH_PERIOD_S : RETRY_PERIOD_S;

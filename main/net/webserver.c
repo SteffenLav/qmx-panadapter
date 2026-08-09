@@ -29,6 +29,8 @@
 #include "bandplan.h"          // bandplan_get_segments / _effective_region / _seg_color
 #include "spots.h"             // spots_get_in_range - live spots for the web spectrum
 #include "psk_rx.h"            // propagation feedback - who is hearing US
+#include "bt_hid_mouse.h"
+#include "hid_cursor.h"
 #include "iq_balance.h"        // iq_balance_set_enabled - /api/settings
 #include "mem_channels.h"      // memory channels - /api/memory
 #include "render_waterfall.h"  // live waterfall tuning - /api/settings display group
@@ -374,7 +376,7 @@ static esp_err_t status_handler(httpd_req_t *req)
             uint32_t dial = ui_get_dial_freq_hz();
             if (dial) sp_nseg = bandplan_get_segments(dial, reg, &sp_segs);
         }
-        if (cfg.spots_en && sp_nseg > 0 && sp_segs && !ft8_screen_view_is_active()) {
+        if (spots_any_source_enabled() && sp_nseg > 0 && sp_segs && !ft8_screen_view_is_active()) {
             // The spot store changes only when a source refreshes (POTA every few
             // minutes), but this poll runs every second. Sending ~6 KB of
             // unchanged JSON 60 times a minute on a link this fragile is exactly
@@ -440,6 +442,15 @@ static esp_err_t status_handler(httpd_req_t *req)
         cat_pwr_swr_async_read(&pw, &swr);
         cJSON_AddNumberToObject(tn, "watts", pw);
         cJSON_AddNumberToObject(tn, "swr",   swr);
+    }
+    // Bluetooth, mirroring the Tab5's bottom-bar glyph: "enabled" and
+    // "something is actually connected" are separate facts.
+    {
+        qmx_settings_t bs;
+        settings_load_all(&bs);
+        cJSON *bt = cJSON_AddObjectToObject(root, "bt");
+        cJSON_AddBoolToObject(bt, "en",   bs.bt_mouse_en && bt_hid_mouse_started());
+        cJSON_AddBoolToObject(bt, "conn", hid_cursor_present());
     }
     cJSON_AddBoolToObject(root, "tune_ok", cat_qmx_fw_at_least(1, 4, 0));
     // Paused = the operator has released the radio to its own menu. Everything
@@ -1567,6 +1578,10 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
 
     cJSON_AddBoolToObject(root, "spots_en",          c.spots_en);
     cJSON_AddBoolToObject(root, "rbn_en",            c.rbn_en);
+    cJSON_AddBoolToObject(root, "cluster_en",        c.cluster_en);
+    cJSON_AddBoolToObject(root, "psk_rx_en",         c.psk_rx_en);
+    cJSON_AddBoolToObject(root, "bt_mouse_en",       c.bt_mouse_en);
+    cJSON_AddNumberToObject(root, "swr_limit_x10",   c.swr_limit_x10);
     cJSON_AddBoolToObject(root, "pskreporter_en",    c.pskreporter_en);
     cJSON_AddBoolToObject(root, "greylist_en",       c.greylist_en);
     cJSON_AddBoolToObject(root, "distance_in_miles", c.distance_in_miles);
@@ -1690,6 +1705,9 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         if (cJSON_IsBool(b)) setter(cJSON_IsTrue(b)); } while (0)
     BOOLTOP("spots_en",          settings_set_spots_en);
     BOOLTOP("rbn_en",            settings_set_rbn_en);
+    BOOLTOP("cluster_en",        settings_set_cluster_en);
+    BOOLTOP("psk_rx_en",         settings_set_psk_rx_en);
+    BOOLTOP("bt_mouse_en",       settings_set_bt_mouse_en);
     BOOLTOP("pskreporter_en",    settings_set_pskreporter_en);
     BOOLTOP("greylist_en",       settings_set_greylist_en);
     BOOLTOP("distance_in_miles", settings_set_distance_in_miles);

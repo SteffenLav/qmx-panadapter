@@ -31,6 +31,7 @@
 #include "wifi_config.h"
 #include "tune_modal.h"
 #include "activation_modal.h"
+#include "hid_cursor.h"
 #include "memory_modal.h"
 #include "identity_config.h"
 #include "onboarding.h"
@@ -1546,6 +1547,7 @@ static lv_obj_t *s_bot_batt_slash = NULL; /* red diagonal stroke over the glyph 
 static lv_obj_t *s_bot_center_suffix = NULL;
 static ui_clock_t s_bot_clock;
 static bool       s_bot_clock_valid = false;
+static lv_obj_t *s_bot_bt = NULL;        // Bluetooth glyph, left of the WiFi fan
 static lv_obj_t *s_bot_wifi_ssid = NULL;
 static ui_wifi_fan_t s_bot_wifi_fan;
 static bool          s_bot_wifi_fan_valid = false;
@@ -1664,10 +1666,13 @@ static int s_drawer_scrim_swipe_start_x = -1;
                                    // have the pipe to themselves. Kept in BOTH modes.
 #define DRAWER_SEC_SWRLIM     27  // SWR protection limit for transmit. Sits with Antenna
                                    // Tune because both are about what the antenna is doing.
+#define DRAWER_SEC_BT         29  // Bluetooth mouse on/off. In the Network group beside
+                                   // WiFi - both are radios the operator switches on and
+                                   // off for the same reasons (power, and the C6 link).
 #define DRAWER_SEC_ACTIVATION 28  // POTA/SOTA activation session. In the Station group -
                                    // it is part of who you are on the air right now, and
                                    // it is what every logged QSO gets stamped with.
-#define N_DRAWER_SECTIONS     29
+#define N_DRAWER_SECTIONS     30
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
@@ -1689,7 +1694,7 @@ static const int GRP_STATION[]  = { DRAWER_SEC_IDENTITY, DRAWER_SEC_ACTIVATION,
                                     DRAWER_SEC_BPREGION };
 static const int GRP_RADIO[]    = { DRAWER_SEC_QMXVOL, DRAWER_SEC_QMXRF, DRAWER_SEC_CW,
                                     DRAWER_SEC_SWRLIM, DRAWER_SEC_TUNE2, DRAWER_SEC_PAUSE };
-static const int GRP_NETWORK[]  = { DRAWER_SEC_WIFI, DRAWER_SEC_SPOTS };
+static const int GRP_NETWORK[]  = { DRAWER_SEC_WIFI, DRAWER_SEC_SPOTS, DRAWER_SEC_BT };
 // Flip 180 last: it is the least-touched control in the group (operator).
 static const int GRP_DISPLAY[]  = { DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_SLEEP,
                                     DRAWER_SEC_CMAP, DRAWER_SEC_FLIP };
@@ -1755,6 +1760,8 @@ static lv_obj_t *s_lbl_cwpitch = NULL;
 static lv_obj_t *s_dropdown_cmap = NULL;
 static lv_obj_t *s_dropdown_bpregion = NULL;  // band-plan region picker
 static lv_obj_t *s_dropdown_swrlim   = NULL;  // SWR protection limit picker
+static lv_obj_t *s_cb_bt             = NULL;  // Bluetooth mouse enable
+static lv_obj_t *s_check_cluster     = NULL;  // DX cluster spot source
 static lv_obj_t *s_slider_brightness = NULL;
 static uint8_t s_saved_ui_mode = UI_MODE_PANADAPTER;
 static lv_obj_t *s_lbl_brightness = NULL;
@@ -1819,6 +1826,8 @@ static void drawer_dropdown_cmap_open_cb(lv_event_t *e);
 static void drawer_dropdown_sleep_open_cb(lv_event_t *e);
 static void drawer_dropdown_bpregion_cb(lv_event_t *e);
 static void drawer_dropdown_swrlim_cb(lv_event_t *e);
+static void drawer_bt_cb(lv_event_t *e);
+static void drawer_cluster_cb(lv_event_t *e);
 static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_slider_qmx_vol_cb(lv_event_t *e);
 static void drawer_refresh_qmx_vol(void);
@@ -3088,6 +3097,15 @@ static void build_bottom_bar(lv_obj_t *parent)
                          lv_color_hex(UI_COLOR_TEXT_SECONDARY));
         s_bot_wifi_fan_valid = true;
 
+        // Bluetooth, immediately left of the WiFi fan. Always PRESENT, never
+        // hidden - same reasoning as the fan itself: a glyph that disappears
+        // makes the operator wonder whether the feature exists at all, while a
+        // dim one says "here, and off". Colour carries the state.
+        s_bot_bt = lv_label_create(bar);
+        lv_label_set_text(s_bot_bt, LV_SYMBOL_BLUETOOTH);
+        lv_obj_set_style_text_font(s_bot_bt, font, 0);
+        lv_obj_set_style_text_color(s_bot_bt, lv_color_hex(UI_COLOR_BT_OFF), 0);
+
         s_bot_wifi_ssid = lv_label_create(bar);
         lv_label_set_text(s_bot_wifi_ssid, "");
         lv_obj_set_style_text_color(s_bot_wifi_ssid, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
@@ -3282,20 +3300,94 @@ static void build_resource_monitor(lv_obj_t *scr)
 // actually enumerated.
 static lv_obj_t *s_mouse_cursor = NULL;
 
+// Find the deepest SCROLLABLE object under a screen point, so the wheel scrolls
+// whatever the cursor is actually over - the FT8 decode list, the settings
+// drawer, the manual - without this file needing to know which of them exist.
+//
+// LVGL has no public hit-test-for-scroll, and a pointer indev carries no wheel
+// field (enc_diff belongs to ENCODER indevs, which need a focus group). So the
+// wheel is applied here, outside the indev, against the object under the point.
+// Deepest-first because a scrollable list inside a scrollable panel should take
+// the scroll itself rather than moving its container.
+static lv_obj_t *scrollable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
+{
+    if (!parent || lv_obj_has_flag(parent, LV_OBJ_FLAG_HIDDEN)) return NULL;
+    lv_area_t a;
+    lv_obj_get_coords(parent, &a);
+    if (x < a.x1 || x > a.x2 || y < a.y1 || y > a.y2) return NULL;
+
+    uint32_t n = lv_obj_get_child_count(parent);
+    for (uint32_t i = n; i > 0; i--) {                 // topmost child first
+        lv_obj_t *hit = scrollable_at(lv_obj_get_child(parent, i - 1), x, y);
+        if (hit) return hit;
+    }
+    if (lv_obj_has_flag(parent, LV_OBJ_FLAG_SCROLLABLE) &&
+        lv_obj_get_scroll_bottom(parent) + lv_obj_get_scroll_top(parent) > 0)
+        return parent;
+    return NULL;
+}
+
+// One wheel click moves this many pixels. A touch UI has large rows, so a
+// timid step feels broken; this is roughly one FT8 decode row.
+#define MOUSE_WHEEL_STEP_PX 48
+
+// Last cursor position, published by the indev read callback for the wheel
+// timer below. Both run on the LVGL thread, so no locking is needed.
+static lv_point_t s_mouse_pt;
+
+static void mouse_wheel_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    int clicks = hid_cursor_take_wheel();
+    if (!clicks) return;
+
+    lv_obj_t *target = scrollable_at(lv_layer_top(), s_mouse_pt.x, s_mouse_pt.y);
+    if (!target) target = scrollable_at(lv_screen_active(), s_mouse_pt.x, s_mouse_pt.y);
+    if (!target) {
+        // Log it: a silent no-op here is exactly how the first version of this
+        // was undiagnosable - the wheel clicks were arriving and being thrown
+        // away with nothing to say so.
+        ESP_LOGI(TAG, "wheel %+d at (%d,%d): no scrollable under the cursor",
+                 clicks, (int)s_mouse_pt.x, (int)s_mouse_pt.y);
+        return;
+    }
+    lv_coord_t before = lv_obj_get_scroll_y(target);
+    lv_obj_scroll_by(target, 0, clicks * MOUSE_WHEEL_STEP_PX, LV_ANIM_OFF);
+    ESP_LOGI(TAG, "wheel %+d at (%d,%d): scroll_y %d -> %d",
+             clicks, (int)s_mouse_pt.x, (int)s_mouse_pt.y,
+             (int)before, (int)lv_obj_get_scroll_y(target));
+}
+
 static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
     (void)indev;
     int lx, ly;
     uint8_t b;
-    usb_hid_mouse_get(&lx, &ly, &b);
+    // Shared accumulator, not the USB module's own: a BLE mouse feeds exactly
+    // the same state, so this callback - and everything downstream of it -
+    // works identically whichever transport the mouse arrived on.
+    hid_cursor_get(&lx, &ly, &b);
 
+    // The INVERSE of LVGL's own ROTATION_90 pointer map, so LVGL's rotation and
+    // this cancel out and (lx,ly) reach the screen unchanged. It must use the
+    // HORIZONTAL resolution: swapping in the vertical one breaks the
+    // cancellation and walls the cursor off at x = 1280 - 720 = 560.
     int32_t w = lv_display_get_horizontal_resolution(lv_display_get_default()); // 1280
     data->point.x = ly;
     data->point.y = (w - 1) - lx;
     data->state = (b & 0x01) ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+    // The wheel is applied from its own timer, NOT here: this callback runs
+    // inside LVGL's input processing, and scrolling an object from within it
+    // fights the indev's own gesture handling.
+    // SCREEN coordinates for the wheel hit-test - (lx,ly), NOT data->point.
+    // data->point is the pre-rotation value LVGL is about to un-rotate; using
+    // it here searched for objects at coordinates like (429,749) that exist
+    // nowhere on a 1280x720 screen, so the wheel never found a scroll target.
+    s_mouse_pt.x = lx;
+    s_mouse_pt.y = ly;
 
     if (s_mouse_cursor) {
-        if (usb_hid_mouse_present()) lv_obj_remove_flag(s_mouse_cursor, LV_OBJ_FLAG_HIDDEN);
+        if (hid_cursor_present()) lv_obj_remove_flag(s_mouse_cursor, LV_OBJ_FLAG_HIDDEN);
         else                         lv_obj_add_flag(s_mouse_cursor, LV_OBJ_FLAG_HIDDEN);
     }
 }
@@ -3307,6 +3399,7 @@ void ui_mouse_init(void)
     lv_indev_t *mouse = lv_indev_create();
     lv_indev_set_type(mouse, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(mouse, mouse_read_cb);
+    lv_timer_create(mouse_wheel_timer_cb, 30, NULL);   // ~33 Hz, smooth enough for a wheel
 
     // A small high-contrast circle cursor (no image asset needed): white fill
     // with a dark ring, readable over both the green spectrum and the waterfall.
@@ -3321,6 +3414,15 @@ void ui_mouse_init(void)
     lv_obj_remove_flag(s_mouse_cursor, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(s_mouse_cursor, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_mouse_cursor, LV_OBJ_FLAG_HIDDEN);   // shown when a mouse appears
+    // Centre the dot on the actual pointer position. lv_indev_set_cursor()
+    // places the object's TOP-LEFT at the point, so without this the cursor
+    // sits down-and-right of where it actually clicks: fully visible against
+    // the left and top edges, and drawn off-screen entirely at the right and
+    // bottom ones, where the pointer appears to vanish while still working.
+    // translate_x/y is a plain offset - NOT transform_rotation/scale, which
+    // this file has a history of hanging taskLVGL with.
+    lv_obj_set_style_translate_x(s_mouse_cursor, -10, 0);   // half of the 20 px size
+    lv_obj_set_style_translate_y(s_mouse_cursor, -10, 0);
     lv_indev_set_cursor(mouse, s_mouse_cursor);
 
     display_unlock();
@@ -5020,6 +5122,20 @@ void ui_set_bottom_clock(int h, int m, int s, bool valid, const char *suffix)
     }
 }
 
+// Bluetooth state in the bottom bar. Called from the 1 Hz status task, which
+// already owns every other bottom-bar field.
+void ui_set_bottom_bt(bool enabled, bool connected)
+{
+    if (!s_bot_bt) return;
+    if (display_lock(20)) {
+        lv_obj_set_style_text_color(s_bot_bt,
+            lv_color_hex(!enabled  ? UI_COLOR_BT_OFF
+                        : connected ? UI_COLOR_BT_ON
+                                    : UI_COLOR_BT_IDLE), 0);
+        display_unlock();
+    }
+}
+
 void ui_set_bottom_wifi(const char *ssid, bool connected, int rssi_dbm, const char *ip)
 {
     if (!s_bot_wifi_ssid) return;
@@ -5043,9 +5159,15 @@ void ui_set_bottom_wifi(const char *ssid, bool connected, int rssi_dbm, const ch
 
         lv_obj_set_width(s_bot_wifi_ssid, txt_w);
         lv_obj_set_pos(s_bot_wifi_ssid, ssid_right - txt_w, 0);
-        if (s_bot_wifi_fan_valid)
-            ui_wifi_fan_set_x(&s_bot_wifi_fan,
-                              ssid_right - txt_w - 10 - UI_WIFI_FAN_W / 2);
+        lv_coord_t fan_cx = ssid_right - txt_w - 10 - UI_WIFI_FAN_W / 2;
+        if (s_bot_wifi_fan_valid) ui_wifi_fan_set_x(&s_bot_wifi_fan, fan_cx);
+        // BT glyph sits left of the fan, in the same measured-from-the-right
+        // chain, so it never collides when a long SSID pushes everything left.
+        if (s_bot_bt) {
+            lv_obj_update_layout(s_bot_bt);
+            lv_coord_t bt_w = lv_obj_get_width(s_bot_bt);
+            lv_obj_set_pos(s_bot_bt, fan_cx - UI_WIFI_FAN_W / 2 - 10 - bt_w, 0);
+        }
         lv_obj_set_width(s_bot_wifi_ip, ip_w + 2);
         lv_obj_set_pos(s_bot_wifi_ip, bar_w - ip_w - 2, 0);
 
@@ -6342,6 +6464,34 @@ static void drawer_build(void)
         y += 72;
     }
 
+    // Bluetooth mouse. A plain on/off - scanning, pairing and reconnecting are
+    // all automatic, so there is nothing else to expose. Pair the mouse once
+    // (put it in pairing mode with this on) and it reconnects by itself from
+    // then on, including across a reboot: the bond lives in NVS.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_BT, y, 100);
+        lv_obj_t *hdr = lv_label_create(sec);
+        lv_label_set_text(hdr, "Bluetooth mouse");
+        lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        lv_obj_t *bt_lbl = lv_label_create(sec);
+        lv_label_set_text(bt_lbl, "Enable (then pair the mouse)");
+        lv_obj_set_style_text_color(bt_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(bt_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(bt_lbl, LV_ALIGN_TOP_LEFT, 0, 50);
+        {
+            qmx_settings_t bc;
+            settings_load_all(&bc);
+            s_cb_bt = make_drawer_checkbox(sec, bc.bt_mouse_en, drawer_bt_cb, NULL);
+        }
+        // x offset 0, matching every other drawer checkbox (Live spots, RBN,
+        // Flip 180...). -8 put this one visibly out of the column.
+        lv_obj_align(s_cb_bt, LV_ALIGN_TOP_RIGHT, 0, 46);
+        y += 100;
+    }
+
     // SWR protection: the limit at which a transmit burst is cut short and the
     // transmitter latched off. The QMX reports SWR over CAT while keyed, so
     // this costs nothing to watch. Default 3.0:1 - see settings.c for why it is
@@ -6423,7 +6573,7 @@ static void drawer_build(void)
     {
         qmx_settings_t scfg_spots;
         settings_load_all(&scfg_spots);
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_SPOTS, y, 112);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SPOTS, y, 164);
         lv_obj_t *hdr = lv_label_create(sec);
         lv_label_set_text(hdr, "Live spots (POTA)");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xFFFFFF), 0);
@@ -6441,7 +6591,18 @@ static void drawer_build(void)
         lv_obj_align(rbn_lbl, LV_ALIGN_TOP_LEFT, 0, 62);
         s_check_rbn = make_drawer_checkbox(sec, scfg_spots.rbn_en, drawer_rbn_cb, NULL);
         lv_obj_align(s_check_rbn, LV_ALIGN_TOP_RIGHT, 0, 62);
-        y += 112;
+
+        // DX cluster: the third source, and the only one carrying PHONE spots -
+        // RBN is skimmers and no SSB skimmer exists. Same weight and indent as
+        // the other two: it is a SOURCE, not a sub-option of either.
+        lv_obj_t *dxc_lbl = lv_label_create(sec);
+        lv_label_set_text(dxc_lbl, "DX cluster spots (phone)");
+        lv_obj_set_style_text_color(dxc_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(dxc_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(dxc_lbl, LV_ALIGN_TOP_LEFT, 0, 114);
+        s_check_cluster = make_drawer_checkbox(sec, scfg_spots.cluster_en, drawer_cluster_cb, NULL);
+        lv_obj_align(s_check_cluster, LV_ALIGN_TOP_RIGHT, 0, 114);
+        y += 164;
     }
 
     // Presets section: header + three buttons side-by-side
@@ -7539,6 +7700,31 @@ static void drawer_dropdown_sleep_open_cb(lv_event_t *e)
     lv_obj_set_style_text_font(list, &lv_font_montserrat_28, 0);
     lv_obj_set_style_max_height(list, LV_COORD_MAX, 0);  // no cap -> no scroll
     lv_obj_set_height(list, LV_SIZE_CONTENT);            // fit all options
+}
+
+// Applies immediately, but only takes effect on the NEXT boot: NimBLE must be
+// started after the C6 transport is up (see bt_hid_mouse.c), and there is no
+// safe way to bring it up mid-session. Say so rather than let the operator
+// wonder why the icon has not changed.
+// Unlike the BT switch this applies LIVE - the cluster task polls the setting
+// each cycle and opens or closes the socket itself, so there is nothing to
+// restart.
+static void drawer_cluster_cb(lv_event_t *e)
+{
+    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_set_cluster_en(on);
+    ui_toast(on ? "DX cluster on - human spots, including phone"
+                : "DX cluster off");
+    ESP_LOGI(TAG, "DX cluster %s", on ? "enabled" : "disabled");
+}
+
+static void drawer_bt_cb(lv_event_t *e)
+{
+    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_set_bt_mouse_en(on);
+    ui_toast(on ? "Bluetooth on after restart - then put the mouse in pairing mode"
+                : "Bluetooth off after restart");
+    ESP_LOGI(TAG, "BLE mouse %s (applies on restart)", on ? "enabled" : "disabled");
 }
 
 static void drawer_dropdown_swrlim_cb(lv_event_t *e)

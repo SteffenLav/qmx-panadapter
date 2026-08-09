@@ -143,6 +143,10 @@ void ui_refresh_sim_mode_indicator(void);
 // Bottom-bar right zone: strength fan, SSID (or "off"), then the IP pinned to
 // the right edge. rssi_dbm drives the fan's lit-element count and is ignored
 // when connected=false (fan shown fully dim). Pass ip="" when disconnected.
+// Bottom-bar Bluetooth glyph: dim when disabled, pale when scanning, blue when
+// a device is connected.
+void ui_set_bottom_bt(bool enabled, bool connected);
+
 void ui_set_bottom_wifi(const char *ssid, bool connected, int rssi_dbm, const char *ip);
 
 // Bottom-bar UTC clock (center). valid=false shows "--:--:--" with suffix.

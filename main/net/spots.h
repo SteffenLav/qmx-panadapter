@@ -19,6 +19,7 @@
 typedef enum {
     SPOT_SRC_POTA = 0,
     SPOT_SRC_RBN,
+    SPOT_SRC_CLUSTER,   // human DX-cluster spots - the only source of PHONE
 } spot_source_t;
 
 typedef enum {
@@ -100,6 +101,11 @@ int  spots_age_s(void);
 bool spots_activation_for_call(const char *call, uint32_t freq_hz,
                                char *sig_out, size_t sig_sz,
                                char *ref_out, size_t ref_sz);
+
+// True when ANY source (POTA, RBN, DX cluster) is enabled. The display gates on
+// this rather than on spots_en, so no single source checkbox silently blanks
+// the lane for the others.
+bool spots_any_source_enabled(void);
 
 // Ask for a refresh now (e.g. the operator just enabled the feature or
 // changed band). Coalesced with the periodic cycle.

@@ -67,9 +67,23 @@ bool time_sync_qmx_gps_confirmed(void) { return s_qmx_gps_confirmed; }
 // The source actually MAINTAINING the clock right now, for the UI label - not
 // the last one-off writer. A manual/FT8 nudge stamps s_source, but if SNTP or a
 // confirmed GPS is up they are the ongoing authority, so report that instead.
+// GPS is only a live reference while the RADIO CARRYING IT IS ATTACHED.
+//
+// s_qmx_gps_confirmed is restored from NVS at boot so an offline POTA start
+// keeps GPS discipline without re-detecting - but on its own it says only
+// "this QMX had GPS the last time we looked", not "there is a GPS clock here
+// now". Reported by Don N2VGU (2026-08-09): his Tab5 showed UTC(GPS) with the
+// QMX+ unplugged and WiFi connected, so the label claimed GPS accuracy while
+// SNTP was actually keeping the clock. The Tab5 has no GPS chip of its own -
+// if the radio is not there, neither is the GPS.
+static bool gps_is_live(void)
+{
+    return s_qmx_gps_confirmed && cat_is_ready();
+}
+
 time_sync_source_t time_sync_get_effective_source(void)
 {
-    if (s_qmx_gps_confirmed)                              return TIME_SOURCE_QMX;   // GPS
+    if (gps_is_live())                                    return TIME_SOURCE_QMX;   // GPS
     if (wifi_is_connected() && wifi_time_is_valid())      return TIME_SOURCE_SNTP;
     return s_source;   // offline: FT8 / manual / RTC / naive-QMX
 }
@@ -252,7 +266,11 @@ static int apply_ft8_correction(int delta_ms, bool leash, time_t *out_utc)
     int applied = delta_ms;
 
     if (leash) {   // leash == the auto-sync path (manual Apply passes false)
-        bool ref_ok = (wifi_is_connected() && wifi_time_is_valid()) || s_qmx_gps_confirmed;
+        // Same correction: a remembered GPS verdict is not an absolute
+        // reference when the radio is unplugged, and suppressing the FT8
+        // nudge on the strength of it would leave such a unit with NO
+        // discipline at all.
+        bool ref_ok = (wifi_is_connected() && wifi_time_is_valid()) || gps_is_live();
         if (ref_ok) {
             // A real absolute reference (SNTP or GPS) exists -> do NOT let FT8
             // touch the clock. Root-caused 2026-07-18: the FT8 timing offset is

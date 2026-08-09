@@ -59,6 +59,16 @@ void ui_kbd_set_buttons(lv_obj_t *save_btn, lv_obj_t *cancel_btn);
 /* Text */
 #define UI_COLOR_TEXT           0xffffff
 #define UI_COLOR_TEXT_SECONDARY 0xc0c0c0
+
+// Bluetooth glyph in the bottom bar. Three states, because "enabled" and
+// "actually connected to something" are different facts and the operator needs
+// to tell them apart at a glance:
+//   OFF   - dim grey, feature disabled (still drawn, as a landmark)
+//   IDLE  - white-ish, stack up and scanning but nothing paired
+//   ON    - Bluetooth blue, a device is connected
+#define UI_COLOR_BT_OFF  0x505050
+#define UI_COLOR_BT_IDLE 0xa0a0a0
+#define UI_COLOR_BT_ON   0x3d8cff
 #define UI_COLOR_TEXT_MUTED     0x808890
 
 /* Neutral keyboard/keypad button background (was a mix of 0x2A2A2A

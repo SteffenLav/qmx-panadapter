@@ -183,3 +183,42 @@ CONFIG_MDNS_MAX_SERVICES=2
 # Monospace font for the on-device manual's code/diagram blocks. The montserrat
 # fonts are proportional, so every ASCII drawing in the manual came out ragged.
 CONFIG_LV_FONT_UNSCII_16=y
+
+# ---- Bluetooth: BLE HID host for a wireless mouse (feat/bt-mouse) -----------
+# The ESP32-P4 has NO radio of its own - the controller lives on the C6 and is
+# reached over the SAME SDIO link as WiFi (the boot log's "HCI over SDIO,
+# BLE only"), so the controller is DISABLED here and esp_hosted carries HCI.
+#
+# NimBLE, not Bluedroid: esp_hid ships a NimBLE HID host (nimble_hidh.c) and
+# NimBLE costs far less RAM - which on this board is the resource that decides
+# whether a feature is possible at all (see the .bss / MALLOC_CAP_DMA notes).
+#
+# Central + observer only. We scan for and connect to a mouse; we never
+# advertise, so the peripheral and broadcaster roles are dead weight.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_CONTROLLER_DISABLED=y
+# NimBLE defaults its transport to UART whenever the local controller is
+# disabled, and the hosted BT option is gated on !BT_NIMBLE_TRANSPORT_UART.
+# Turning it off is what makes the VHCI-over-SDIO path selectable at all.
+CONFIG_BT_NIMBLE_TRANSPORT_UART=n
+CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE=y
+CONFIG_ESP_HOSTED_NIMBLE_HCI_VHCI=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
+CONFIG_BT_NIMBLE_NVS_PERSIST=y
+
+# NimBLE sizing for ONE MOUSE, not a generic BLE device. Stock defaults took the
+# MALLOC_CAP_DMA pool from 32 KB to 851 BYTES at nimble_port_init() - the exact
+# #65 signature that breaks USB endpoint alloc on a QMX reconnect, TLS, and the
+# SD mount. Same lesson as the mdns component: a managed component's defaults
+# are sized for a busier device; cut them to what this board actually has.
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_TRANSPORT_ACL_FROM_LL_COUNT=6
+CONFIG_BT_NIMBLE_TRANSPORT_EVT_COUNT=10
+CONFIG_BT_NIMBLE_TRANSPORT_EVT_DISCARD_COUNT=4
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=6
+CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=6
