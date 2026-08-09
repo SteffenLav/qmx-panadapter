@@ -41,7 +41,7 @@ Returns the current state of the panadapter.
   "eqsl_creds_set": false,
   "lotw_ready": true,
   "bandplan": { "lo": 14000000, "hi": 14350000, "segs": [ { "lo": 14000000, "hi": 14070000, "c": "20B0FF", "l": "CW" } ] },
-  "tab5_fw": "v1.5.0",
+  "tab5_fw": "v1.6.0",
   "bands":    [ { "name": "20", "center_hz": 14100000 } ]
 }
 ```

@@ -110,6 +110,12 @@ Choose a preset (or edit/save a new one), then tap **Transmit**. The QMX starts 
 
 **CQ auto-stop** — by default the panadapter keeps calling until someone answers. If you'd rather call a few times and then pause (a common courtesy on a quiet band), long-press **Call CQ** and tap the **CQ stop** button at the top-right of the preset editor: it cycles through never / 1 / 2 / 3 / 4 / 5 / 10 calls and applies immediately, no Save needed. While calling, the TX status shows the progress ("call 2 of 4"); after the last unanswered call the panadapter listens through one more receive slot (an answer to your final call still starts the QSO normally), then stops and goes idle. Applies to every CQ run, including the automatic resume after a completed or timed-out QSO — each fresh CQ sequence starts the count over.
 
+**Listening slot** - while you are transmitting you are deaf to your own time window, so
+the occupancy picture for the window you transmit in is the one that goes stale. The
+**Listen** button in the preset editor (under **CQ stop**) can spend one slot receiving
+after every 3, 5 or 10 calls. Off by default, because it changes your on-air cadence, and
+like CQ stop it applies on the tap with no Save needed.
+
 ### 3. Auto-Reply (Robot Mode)
 
 ⚠️ **Requires explicit checkbox in the Filter modal** to enable.

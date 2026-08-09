@@ -229,7 +229,7 @@ This is for advanced troubleshooting — most users don't need it.
 
 ## Bottom Bar Menus
 
-The bottom bar groups its actions into three popup menus, plus a battery indicator (e.g. `🔋 87% (8.0V)`):
+The bottom bar groups its actions into four popup menus, plus a battery indicator (e.g. `🔋 87% (8.0V)`):
 
 **QSO Logs (n) ▲** — only visible when QSOs exist; *n* is the QSO count:
 
@@ -245,6 +245,13 @@ The bottom bar groups its actions into three popup menus, plus a battery indicat
 - **Config upload ↑** — restore settings from a backup file
 - **SD Files** — opens the **microSD file browser** (`http://<tab5-ip>/files`, new in v1.3.0): browse the card from your computer without pulling it — download logs and config backups, upload files, delete
 - **Diagnostic download ↓** — downloads **both** diagnostic logs: the live session log (always on, nothing to enable) and the flash-persisted copy from before the last reboot/power-off
+
+**Radio ▲** (new in v1.6.0) — the things that reach the radio itself:
+
+- **Switch to FT8/FT4** / **Switch to Panadapter** — changes the Tab5's own screen from the browser. The label always says where you are going, and it follows the Tab5 if you switch there instead
+- **Memory channels** — your 32 channels: click one to tune to it, drag one onto another slot to move it, or onto the bin to clear it
+- **Release radio** — stops the Tab5 talking to the QMX so you can use the radio's own menus or its Band Configuration terminal. A bar appears until you take the radio back. See [Settings](settings.md#radio)
+- **Antenna Tune** — QMX 1.04+ only; keys a steady carrier with live power and SWR, and stops itself after 60 seconds
 
 **Miscellaneous ▲**:
 

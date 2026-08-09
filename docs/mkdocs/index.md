@@ -69,16 +69,18 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.5.0 — a complete, self-contained FT8/FT4 station with no PC in the loop.** The
-panadapter, FT8/FT4 receive and transmit, ADIF logging and all three logbook uploads are
-stable and in daily use.
+**v1.6.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, and now a
+second operating position in any browser.** The panadapter, FT8/FT4 receive and transmit,
+ADIF logging and all three logbook uploads are stable and in daily use.
 
-**New in v1.5.0 — the manual answers questions now, instead of being a manual.** The
-**User Manual** button opens the chapter for the screen you are on, warning banners are
-tappable, and a new **Need guidance?** panel lists symptoms in plain words with the ones
-the device can see are happening highlighted at the top — it ranks, you choose. Plus
-**Call CQ from the browser** (Dennis WN4FLA) and **the station you are working held at
-the top of the decode list** (Don WB0LQW).
+**New in v1.6.0 — the browser can work the band, not just watch it.** Reply to a station,
+pick your transmit tone, edit settings and memories, read the whole manual — all from a
+phone or laptop, served by the Tab5 itself with no internet. The Tab5 now also answers to
+**`qmx.local`**, so its IP stops mattering. For CW there is a **transmit offset** so your
+QRP call is not buried in the zero-beat pile (Roy KI0ER), plus **RF gain** and a
+**Release radio** button for using the QMX's own menus (Stan KC7XE). A radio that stops
+sending audio now recovers by itself. And the manual's diagrams are properly drawn on
+both the Tab5 and this site.
 
 Every release, newest first, is on the [Releases](releases.md) page.
 
@@ -88,7 +90,7 @@ Every release, newest first, is on the [Releases](releases.md) page.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.5.0.pdf) — a printable 40-page reference.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.6.0.pdf) — a printable 40-page reference.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

@@ -6,6 +6,53 @@ The top two buttons are not settings but the two ways into help: **User Manual**
 opens this guide at the chapter for the screen you came from, and **Need guidance?**,
 which lists symptoms and questions in plain words. See [Getting Help](../getting-help.md).
 
+## Basic and Expert
+
+The drawer is grouped under headings — **Station**, **Device**, **Radio**, **Network**,
+**Display**, **FT8** and **Spectrum** — and the toggle beside the **Settings** title
+chooses how much of it you see. It always says where you are and what a tap gives you:
+tapping **BASIC (tap for Expert)** reveals the Spectrum and Device groups, which hold the
+calibration and tuning controls you set once and rarely touch again.
+
+Nothing is lost in Basic; it is only hidden. The choice is not remembered between
+sessions, because it is a way of looking at the drawer rather than a preference.
+
+## Radio
+
+These reach the QMX itself over the CAT link.
+
+**QMX volume** — the radio's own AF gain, in decibels, the same number the QMX shows on
+its LCD when you click its volume knob. Read back from the radio when you open the
+drawer, so it agrees with the rig even if you last changed it there.
+
+**QMX RF gain** — the per-band RF gain from the radio's Band Configuration, 0–99 dB
+(the QMX default is 54). Because it is **per band**, the Tab5 reads it from the radio
+rather than remembering a number that would belong to whichever band you were on last;
+it shows "reading…" until the radio answers. It writes when you let go of the slider, not
+while you drag, because this is stored configuration rather than a session setting.
+Changing it moves the noise floor, so the flat-spectrum reference is re-learned.
+
+**CW transmit offset** — transmit a few hundred hertz away from the station you are
+listening to, so a QRP call is not buried in the pile of everyone zero-beating the DX
+(suggested by Roy KI0ER). The centre of the slider is off; 400–600 Hz is the usual range,
+and the sign chooses whether you transmit above or below.
+
+The QMX has no XIT, so this is done with **split**: you receive on VFO A and transmit on
+VFO B, which the Tab5 holds at your receive frequency plus the offset. Set it once and it
+follows you — a tap on the panadapter, a spot, a memory recall, a band change, the web
+page, and the radio's own tuning knob. It applies in **CW and CW-R only**, and leaving CW
+clears it. If you are running your own split, the Tab5 leaves it alone.
+
+**Release radio to QMX menu** — hands the radio back. The QMX's own menu, and its Band
+Configuration terminal application, talk over the same USB serial port the Tab5 polls
+several times a second, so the two fight over it. Tap this before using the radio's own
+menus: the Tab5 stops sending anything, the spectrum freezes, and a blue bar across the
+top says so and takes the radio back when you tap it. Resuming re-checks IQ mode, which a
+trip through the radio's menu can switch off.
+
+While the radio is released the Tab5 will not transmit — an armed FT8 burst and Antenna
+Tune are both refused rather than keying a radio you are holding.
+
 ## Operator Info
 
 **Callsign** — Your amateur radio callsign (required for FT8/FT4 logging).

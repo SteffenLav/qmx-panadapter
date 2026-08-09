@@ -82,6 +82,16 @@ main/
                           No network/SD any more (see manual_embed.h)
   net/manual_embed.c      User manual built into the binary (main/manual.bin via EMBED_FILES,
                           packed by tools/pack_manual.py from the mkdocs hook)
+  ui/reader_diagram.c     Manual DIAGRAMS (v1.6.0). A ```qmxdiagram fence carries a SEMANTIC
+                          spec (what the parts are, never where they go); this draws it with
+                          LVGL, tools/diagram_svg.py renders the SAME spec to SVG for the
+                          website via mkdocs_reader_export.py's on_page_markdown. Four types:
+                          flow / stack / timeline / panel. THE RULE: the renderer does the
+                          arithmetic - flow+stack are flex (cannot overlap), the timeline
+                          derives x from time/span, and a band too narrow for its own label
+                          declines to draw it. pack_manual.py fails the build on a bad spec.
+                          Character drawings are gone: the Reader folds UTF-8 to ASCII and
+                          some folds CHANGE THE LINE LENGTH, so no font could ever align them
   net/mdns_svc.c          mDNS responder: qmx.local + _http._tcp advert. Started from wifi.c's
                           got-IP path; idempotent, and soft-fails to "IP still works"
   net/pskreporter.c       PSK Reporter reception reports (IPFIX/UDP, batched ~5 min, default ON)

@@ -12,13 +12,13 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.5.0.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **all three major logbooks — QRZ, eQSL and ARRL LoTW** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.6.0.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **all three major logbooks — QRZ, eQSL and ARRL LoTW** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
-> **New in v1.5.0 — the manual answers questions now, instead of being a manual.** The drawer's **User Manual** button opens the chapter for the screen you are on; the red **IQ mode** banner and the **Need help?** button under "Waiting for QMX" are tappable; and a new **Need guidance?** panel lists symptoms and questions in plain words — "My radio is not showing up", "Nothing appears in the decode list" — with the ones the device can see are happening highlighted at the top. It ranks; **you** choose. The built-in manual also stopped failing on well-used devices (it was being copied out of the firmware into already-full storage just to be read back) and its missing characters are fixed. Plus **Call CQ from the browser** (Dennis WN4FLA) and **the station you are working held at the top of the decode list** (Don WB0LQW). See [Getting help](#getting-help).
+> **New in v1.6.0 — the browser became a second operating position.** The web page could show you the band; now it can work it. Tap a station to **reply** (the same decision the Tab5 makes about which message comes next, with a confirmation first), pick your **TX tone** against a live occupancy strip, edit **settings** and **memory channels** on a real keyboard, and read the **whole manual** — all served by the Tab5 itself, no internet. It now answers to **`qmx.local`**, so its IP stops mattering. For CW there is a **transmit offset** so a QRP call is not buried in the zero-beat pile (Roy KI0ER), plus **RF gain** and a **Release radio** button for using the QMX's own menus without the two fighting over the port (Stan KC7XE). A radio that stops sending audio now **recovers itself**. The manual gained an **A–Z index** and proper **drawn diagrams** on both the Tab5 and the website, and the settings drawer is **grouped with a Basic/Expert toggle**. Full detail in [docs/version-history.md](docs/version-history.md).
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.5.0.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.6.0.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -187,7 +187,7 @@ You need **two** USB connections, and the cable to the QMX is the one people get
 
 **Power-on order matters.** Turn the **Tab5 on first** and let it finish loading, then turn the **QMX on**. Within a few seconds the top bar should populate Band / Mode / BW and the spectrum should come alive.
 
-Once flashed you can power the Tab5 from any 5 V/2 A USB-C source or the internal battery — the laptop is only needed for flashing. For diagnostics the Tab5 also outputs a serial log over the USB-C data connection (useful if WiFi is not available), but for most users the built-in **diagnostic log** — always on, nothing to enable — is the easier path — see [Step 7](#step-7----something-not-working).
+Once flashed you can power the Tab5 from any 5 V/2 A USB-C source or the internal battery — the laptop is only needed for flashing. For diagnostics the Tab5 also outputs a serial log over the USB-C data connection (useful if WiFi is not available), but for most users the built-in **diagnostic log** — always on, nothing to enable — is the easier path — see [Step 7](#step-7--something-not-working).
 
 ### Step 3 — Find your way around
 

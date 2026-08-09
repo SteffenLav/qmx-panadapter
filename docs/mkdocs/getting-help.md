@@ -104,6 +104,20 @@ you were.
 
 ---
 
+## Look it up: the A-Z index
+
+If you already know the word you want, the contents list is the wrong shape for the
+question. The button at the bottom of the **Need guidance?** panel reads **Look it up
+(A-Z)**, and the **A-Z** button in the manual's own header does the same thing.
+
+It opens a grid of letters; tap one and you get that letter's terms. Drag your finger
+down the list and lift on the one you want, the same gesture the contents list uses. Terms
+are filed under the word you would look for rather than any numbering in the chapter, so
+"6. Tap to Reply" is under **T**.
+
+Only letters that actually have entries are offered - a dead letter is a promise the
+index cannot keep.
+
 ## Warnings you can tap
 
 A warning you cannot act on is only half a warning, so the two that matter are
