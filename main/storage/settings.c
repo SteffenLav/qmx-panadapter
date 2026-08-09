@@ -63,6 +63,7 @@ static const char *TAG = "settings";
 #define KEY_QMX_VOL      "qmx_vol_db"
 #define KEY_CW_TX_OFF    "cw_tx_off"
 #define KEY_CQ_LISTEN    "cq_listen"
+#define KEY_SWR_LIMIT    "swr_lim"
 #define KEY_SNAP_PEAK    "snap_peak"
 #define KEY_BP_REGION    "bp_region"
 #define KEY_DISTANCE_MILES "dist_miles"
@@ -260,6 +261,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 // does NOT take one of the reserved 67..74.
 #define DIRTY_CW_TX_OFFSET   78
 #define DIRTY_CQ_LISTEN      79
+#define DIRTY_SWR_LIMIT      80
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -285,7 +287,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_LOTW_DXCC, DIRTY_LOTW_CQZ, DIRTY_LOTW_ITUZ, DIRTY_DISP_SLEEP,
     DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD, DIRTY_CQ_MAX_CALLS,
     DIRTY_SPOTS_EN, DIRTY_RBN_EN, DIRTY_WIFI_KNOWN, DIRTY_CW_TX_OFFSET,
-    DIRTY_CQ_LISTEN,
+    DIRTY_CQ_LISTEN, DIRTY_SWR_LIMIT,
 };
 
 // ---- Module state ------------------------------------------------------
@@ -418,6 +420,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_DISP_FLIP))   nvs_set_u8(s_nvs, KEY_DISP_FLIP, snap.display_flip ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_VOL))     nvs_set_u8(s_nvs, KEY_QMX_VOL,   snap.qmx_vol_db);
         if (dirty_test(&dirty_local, DIRTY_CW_TX_OFFSET)) nvs_set_i16(s_nvs, KEY_CW_TX_OFF, snap.cw_tx_offset_hz);
+        if (dirty_test(&dirty_local, DIRTY_SWR_LIMIT))    nvs_set_u8(s_nvs, KEY_SWR_LIMIT, snap.swr_limit_x10);
         if (dirty_test(&dirty_local, DIRTY_SNAP_PEAK))   nvs_set_u8(s_nvs, KEY_SNAP_PEAK, snap.snap_to_peak ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_BP_REGION))   nvs_set_u8(s_nvs, KEY_BP_REGION, snap.bandplan_region);
         if (dirty_test(&dirty_local, DIRTY_DISTANCE_MILES)) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap.distance_in_miles ? 1 : 0);
@@ -590,6 +593,12 @@ static void load_from_nvs(qmx_settings_t *out)
     out->tx_tone_hz   = 1500;     // conventional FT8 default; = FT8_TX_CQ_DEFAULT_FREQ_HZ
     out->tx_tone_hold = false;    // auto-pick a clear slot, as it always did
     out->bandplan_region = 0;     // 0 = auto (derive from grid)
+    // SWR protection ON by default at 3.0:1. The QMX has no SWR foldback of
+    // its own on a digital burst, and an FT8 transmission is 12.7 s of key-down
+    // into whatever is connected - a disconnected or wrong-band antenna is the
+    // normal way this goes wrong in the field. 3.0 is high enough not to trip
+    // on a merely mediocre match; the drawer can raise it or turn it off.
+    out->swr_limit_x10 = 30;
     memset(&out->ft8_filters, 0, sizeof(out->ft8_filters));
     out->field_day_en = false;
     out->fd_class[0]  = '\0';
@@ -656,6 +665,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (out->cq_sel > 2) out->cq_sel = 0;
     nvs_get_u8(s_nvs, KEY_CQ_MAX, &out->cq_max_calls);
     nvs_get_u8(s_nvs, KEY_CQ_LISTEN, &out->cq_listen_every);
+    nvs_get_u8(s_nvs, KEY_SWR_LIMIT, &out->swr_limit_x10);
 
     if (nvs_get_u8(s_nvs, KEY_ONBOARDED,  &u8v) == ESP_OK) out->onboarded  = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_WIFI_ENABLED, &u8v) == ESP_OK) out->wifi_enabled = (u8v != 0);
@@ -1306,6 +1316,27 @@ void settings_set_cq_listen_every(uint8_t n)
     s_pending.cq_listen_every = n;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CQ_LISTEN);
+}
+
+void settings_set_swr_limit_x10(uint8_t v)
+{
+    if (!s_ready) return;
+    if (v != 0 && v < 15) v = 15;    // below 1.5:1 nothing real would ever pass
+    if (v > 99) v = 99;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.swr_limit_x10 == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.swr_limit_x10 = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_SWR_LIMIT);
+}
+
+uint8_t settings_get_swr_limit_x10(void)
+{
+    if (!s_ready) return 30;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint8_t v = s_pending.swr_limit_x10;
+    xSemaphoreGive(s_mutex);
+    return v;
 }
 
 int16_t settings_get_cw_tx_offset_hz(void)

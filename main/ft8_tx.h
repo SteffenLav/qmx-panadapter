@@ -205,6 +205,16 @@ int ft8_tx_seconds_until_slot(bool match_parity, bool want_even, ftx_protocol_t 
 // taken, or if that particular value was unavailable.
 float ft8_tx_get_last_power_swr(float *power_w, float *swr);
 
+// SWR protection. When settings' swr_limit_x10 is non-zero, a burst whose
+// live SW; reading reaches the limit is cut short and the transmitter is
+// LATCHED OFF: ft8_tx_arm() then refuses everything, including the QSO
+// machine's automatic re-arms, until ft8_tx_clear_swr_trip() is called.
+// Sticky on purpose - a bad antenna does not fix itself, and auto-resuming
+// would key into the same mismatch every slot. Returns true while latched;
+// *swr_out (optional) gets the reading that tripped it.
+bool ft8_tx_swr_tripped(float *swr_out);
+void ft8_tx_clear_swr_trip(void);
+
 // Scan the current heard-station table and return the audio frequency (Hz) of
 // the nearest unoccupied 50-Hz bin to FT8_TX_CQ_DEFAULT_FREQ_HZ (1500 Hz).
 // Safe to call from any task; takes the ft8_screen mutex internally via

@@ -1659,7 +1659,9 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_PAUSE      26  // "Release radio (use QMX menu)": stops all CAT traffic
                                    // so the radio's own menu and Terminal Applications
                                    // have the pipe to themselves. Kept in BOTH modes.
-#define N_DRAWER_SECTIONS     27
+#define DRAWER_SEC_SWRLIM     27  // SWR protection limit for transmit. Sits with Antenna
+                                   // Tune because both are about what the antenna is doing.
+#define N_DRAWER_SECTIONS     28
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
@@ -1679,7 +1681,7 @@ typedef struct { const char *title; const int *ids; int n; bool expert; } drawer
 
 static const int GRP_STATION[]  = { DRAWER_SEC_IDENTITY, DRAWER_SEC_BPREGION };
 static const int GRP_RADIO[]    = { DRAWER_SEC_QMXVOL, DRAWER_SEC_QMXRF, DRAWER_SEC_CW,
-                                    DRAWER_SEC_TUNE2, DRAWER_SEC_PAUSE };
+                                    DRAWER_SEC_SWRLIM, DRAWER_SEC_TUNE2, DRAWER_SEC_PAUSE };
 static const int GRP_NETWORK[]  = { DRAWER_SEC_WIFI, DRAWER_SEC_SPOTS };
 // Flip 180 last: it is the least-touched control in the group (operator).
 static const int GRP_DISPLAY[]  = { DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_SLEEP,
@@ -1745,6 +1747,7 @@ static lv_obj_t *s_slider_ifcal = NULL;
 static lv_obj_t *s_lbl_cwpitch = NULL;
 static lv_obj_t *s_dropdown_cmap = NULL;
 static lv_obj_t *s_dropdown_bpregion = NULL;  // band-plan region picker
+static lv_obj_t *s_dropdown_swrlim   = NULL;  // SWR protection limit picker
 static lv_obj_t *s_slider_brightness = NULL;
 static uint8_t s_saved_ui_mode = UI_MODE_PANADAPTER;
 static lv_obj_t *s_lbl_brightness = NULL;
@@ -1808,6 +1811,7 @@ static void drawer_dropdown_cmap_cb(lv_event_t *e);
 static void drawer_dropdown_cmap_open_cb(lv_event_t *e);
 static void drawer_dropdown_sleep_open_cb(lv_event_t *e);
 static void drawer_dropdown_bpregion_cb(lv_event_t *e);
+static void drawer_dropdown_swrlim_cb(lv_event_t *e);
 static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_slider_qmx_vol_cb(lv_event_t *e);
 static void drawer_refresh_qmx_vol(void);
@@ -6310,6 +6314,44 @@ static void drawer_build(void)
         y += 100;
     }
 
+    // SWR protection: the limit at which a transmit burst is cut short and the
+    // transmitter latched off. The QMX reports SWR over CAT while keyed, so
+    // this costs nothing to watch. Default 3.0:1 - see settings.c for why it is
+    // on out of the box. "Off" is offered because an operator with a known-good
+    // matched antenna and a tuner may prefer no interference at all.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SWRLIM, y, 100);
+        lv_obj_t *hdr = lv_label_create(sec);
+        lv_label_set_text(hdr, "SWR protection (transmit)");
+        lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+
+        s_dropdown_swrlim = lv_dropdown_create(sec);
+        lv_dropdown_set_options(s_dropdown_swrlim,
+                                "Off\nStop above 2.0:1\nStop above 2.5:1\nStop above 3.0:1\nStop above 4.0:1");
+        lv_obj_set_size(s_dropdown_swrlim, DRAWER_W - 32, 50);
+        lv_obj_align(s_dropdown_swrlim, LV_ALIGN_TOP_LEFT, 0, 40);
+        lv_obj_set_style_text_font(s_dropdown_swrlim, &lv_font_montserrat_28, 0);
+        {
+            // Map the stored x10 value onto the nearest offered option rather
+            // than assuming it is one of them - a config import can carry any
+            // value in range, and silently showing "Off" for a live limit
+            // would be the worst possible lie for a safety control.
+            uint8_t v = settings_get_swr_limit_x10();
+            uint16_t idx = 3;                        // 3.0 default
+            if      (v == 0)  idx = 0;
+            else if (v <= 22) idx = 1;               // 2.0
+            else if (v <= 27) idx = 2;               // 2.5
+            else if (v <= 34) idx = 3;               // 3.0
+            else              idx = 4;               // 4.0
+            lv_dropdown_set_selected(s_dropdown_swrlim, idx);
+        }
+        lv_obj_add_event_cb(s_dropdown_swrlim, drawer_dropdown_swrlim_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(s_dropdown_swrlim, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
+        y += 100;
+    }
+
     // Resource monitor: developer-only diagnostic overlay — deliberately NOT a
     // drawer toggle (would invite user confusion/discussion for no user benefit).
     // The overlay is still built (build_resource_monitor) but stays hidden;
@@ -7443,6 +7485,24 @@ static void drawer_dropdown_sleep_open_cb(lv_event_t *e)
     lv_obj_set_style_text_font(list, &lv_font_montserrat_28, 0);
     lv_obj_set_style_max_height(list, LV_COORD_MAX, 0);  // no cap -> no scroll
     lv_obj_set_height(list, LV_SIZE_CONTENT);            // fit all options
+}
+
+static void drawer_dropdown_swrlim_cb(lv_event_t *e)
+{
+    static const uint8_t map[] = { 0, 20, 25, 30, 40 };   // x10; 0 = off
+    uint16_t idx = lv_dropdown_get_selected(lv_event_get_target(e));
+    if (idx >= (sizeof(map) / sizeof(map[0]))) return;
+    settings_set_swr_limit_x10(map[idx]);
+    if (map[idx] == 0) {
+        ui_toast("SWR protection off");
+    } else {
+        // Turning protection back on does NOT clear a latch that is already
+        // set - the antenna fault it caught is still there until looked at.
+        char t[48];
+        snprintf(t, sizeof(t), "SWR protection: stop above %.1f:1", (double)map[idx] / 10.0);
+        ui_toast(t);
+    }
+    ESP_LOGI(TAG, "SWR protection limit set: %u (x10)", (unsigned)map[idx]);
 }
 
 static void drawer_dropdown_bpregion_cb(lv_event_t *e)

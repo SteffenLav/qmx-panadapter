@@ -1331,7 +1331,17 @@ static void t_clock_cb(lv_timer_t *t)
                 snprintf(cq_line, sizeof(cq_line), "\ncall %d", cq_sent + 1);
         }
 
-        if (tx_st == FT8_TX_ACTIVE) {
+        // SWR protection latched - a fault line, above everything else. The
+        // transmitter is refusing to key until the operator clears this, so it
+        // has to say so plainly rather than looking like an idle status.
+        float trip_swr = 0.0f;
+        if (ft8_tx_swr_tripped(&trip_swr)) {
+            snprintf(b, sizeof(b),
+                     LV_SYMBOL_WARNING " SWR %.1f:1\nTX STOPPED\nCheck antenna\nTAP TO CLEAR",
+                     (double)trip_swr);
+            lv_label_set_text(s_lbl_tx, b);
+            lv_obj_set_style_text_color(s_lbl_tx, lv_palette_main(LV_PALETTE_RED), 0);
+        } else if (tx_st == FT8_TX_ACTIVE) {
             // Red: transmitting right now (tap to abort). Each logical chunk
             // gets its own explicit line - "TAP TO ABORT" is always the last
             // line on its own, never sharing a line (and so never an
@@ -1731,6 +1741,17 @@ static void tx_indicator_tap_cb(lv_event_t *e)
     char text[32];
     ft8_tx_state_t  tx_st  = ft8_tx_get_status(text, sizeof(text), NULL);
     ft8_qso_state_t qso_st = ft8_qso_get_state();
+
+    // SWR protection outranks everything: while latched no TX can be armed at
+    // all, so every other branch below is unreachable anyway. Clearing it also
+    // ends whatever session was interrupted - the QSO cannot be resumed into a
+    // known-bad antenna, and the operator has just been told to go check it.
+    if (ft8_tx_swr_tripped(NULL)) {
+        ESP_LOGI(TAG, "SWR trip indicator tapped - clearing latch");
+        ft8_tx_clear_swr_trip();
+        ft8_qso_abort();
+        return;
+    }
 
     if (tx_st == FT8_TX_ACTIVE) {
         ESP_LOGI(TAG, "TX indicator tapped ACTIVE — requesting abort");

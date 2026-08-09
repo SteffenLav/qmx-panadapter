@@ -55,8 +55,10 @@ static const char *TAG = "ft8_tx";
 #define FT8_TX_MODE_POLL_MS      100
 #define FT8_TX_MODE_POLL_TRIES   10         // ~1s worst case; MD; refreshes ~every 150ms
 
-// Placeholder PWR/SWR shown for any SIMULATED burst (general sim mode or
-// FT4's forced-sim) - there is no real transmitter output to query when sim
+// Placeholder PWR/SWR shown for any SIMULATED burst (i.e. settings' sim mode;
+// there is NO separate "FT4 forced sim" - an earlier version of this comment
+// claimed one and no such interlock exists in this file) - there is no real
+// transmitter output to query when sim
 // is on, but the UI's live PWR/SWR line should still appear (same code path,
 // same layout) rather than silently differ from a real FT8 burst. Fixed,
 // plausible QRP values; tagged in the log as a placeholder, never claimed to
@@ -110,12 +112,35 @@ static float    s_last_power_w = -1.0f;
 static float    s_last_swr     = -1.0f;
 static int64_t  s_last_pwr_swr_us = -1;  // esp_timer_get_time() at capture, -1 if never
 
+// SWR protection latch. Set when a burst is cut short for high SWR; blocks
+// every subsequent arm until the operator clears it. Deliberately STICKY: the
+// fault that trips this (disconnected antenna, wrong band, bad feedline) does
+// not heal on its own, and an automatic re-arm would just key into the same
+// mismatch every 15 s. The operator has to look at the radio and say so.
+static volatile bool  s_swr_tripped   = false;
+static volatile float s_swr_trip_value = 0.0f;
+
 float ft8_tx_get_last_power_swr(float *power_w, float *swr)
 {
     if (power_w) *power_w = s_last_power_w;
     if (swr) *swr = s_last_swr;
     if (s_last_pwr_swr_us < 0) return -1.0f;
     return (float)(esp_timer_get_time() - s_last_pwr_swr_us) / 1e6f;
+}
+
+bool ft8_tx_swr_tripped(float *swr_out)
+{
+    if (swr_out) *swr_out = s_swr_trip_value;
+    return s_swr_tripped;
+}
+
+void ft8_tx_clear_swr_trip(void)
+{
+    if (!s_swr_tripped) return;
+    ESP_LOGW(TAG, "SWR protection latch cleared by operator (was %.2f:1)",
+             (double)s_swr_trip_value);
+    s_swr_tripped    = false;
+    s_swr_trip_value = 0.0f;
 }
 
 // DT-follow-partner offset (see ft8_tx_run). ft8_qso sets this to the partner's
@@ -658,6 +683,15 @@ bool ft8_tx_arm(const ft8_tx_request_t *req, char *out_err, size_t out_err_len)
         return false;
     }
 
+    // SWR protection latched by an earlier burst. Refuse everything - including
+    // the QSO machine's automatic re-arms - until the operator clears it.
+    if (s_swr_tripped) {
+        if (out_err) snprintf(out_err, out_err_len,
+                              "SWR protection tripped at %.1f:1 - check the antenna",
+                              (double)s_swr_trip_value);
+        return false;
+    }
+
     // The operator has released the radio to its own front panel. Arming here
     // would key it from under their hands mid-menu: the TX burst writes TX;/TA;
     // straight to the CDC pipe and does NOT go through the paused poll task, so
@@ -976,6 +1010,14 @@ void ft8_tx_run(const ft8_tx_request_t *req)
         // Result populates s_last_* so the "TRANSMITTING:" line shows the CURRENT
         // burst's reading from ~2 s in. Skipped in sim mode (no real link).
         bool ps_sent = false, ps_have = false;
+        int  ps_read_at = 0;
+        // SWR protection limit, sampled once per burst so a settings change
+        // mid-transmission cannot alter the rules half way through.
+        float swr_limit = 0.0f;
+        {
+            uint8_t lim_x10 = settings_get_swr_limit_x10();
+            if (lim_x10 > 0) swr_limit = (float)lim_x10 / 10.0f;
+        }
 
         bool aborted = false;
         for (int i = 0; i < nn; i++) {
@@ -995,11 +1037,26 @@ void ft8_tx_run(const ft8_tx_request_t *req)
             // 160 ms symbol slack at symbols 6/14); skipped for FT4 (forced sim
             // anyway - !sim is always false here when is_ft4).
 #if FT8_TX_SEND_LIVE
-            if (!sim) {
-                if (!ps_sent && i == 6) {
+            // FT8 only. FT4's symbol period is 48 ms and a CDC write is bounded
+            // at 50 ms, so a mid-burst query does not fit in the slack and would
+            // shift symbol timing. FT4 relies on the post-burst check below,
+            // which still latches the transmitter off for every LATER burst -
+            // the fault is caught one burst later, not never.
+            // (Comments here and in ft8_test.c used to claim FT4 TX was
+            // force-routed through the simulation interlock. It is not - `sim`
+            // is settings' sim_mode_en and nothing else - so this branch really
+            // did run for live FT4 bursts. Corrected 2026-08-09.)
+            if (!sim && !is_ft4) {
+                // Sample repeatedly, not once: with SWR protection armed this
+                // reading is a safety input, and one sample 2 s into a 12.7 s
+                // burst would let a fault run for the other 10 s. The cycle is
+                // send at symbol N, read at N+8 (~1.3 s), repeat - each step
+                // still fits the 160 ms inter-symbol slack, same as before.
+                if (!ps_sent && i >= 6) {
                     cat_pwr_swr_async_send();
                     ps_sent = true;
-                } else if (ps_sent && !ps_have && i >= 14) {
+                    ps_read_at = i + 8;
+                } else if (ps_sent && i >= ps_read_at) {
                     float pw = -1.0f, sw = -1.0f;
                     if (cat_pwr_swr_async_read(&pw, &sw) == ESP_OK && pw >= 0.0f && sw >= 0.0f) {
                         s_last_power_w   = pw;
@@ -1007,11 +1064,24 @@ void ft8_tx_run(const ft8_tx_request_t *req)
                         s_last_pwr_swr_us = esp_timer_get_time();
                         ps_have = true;
                         ESP_LOGI(TAG, "live TX power=%.1fW SWR=%.2f", (double)pw, (double)sw);
+                        // Trip: cut the burst short and latch. Only a reading
+                        // with real power behind it counts - SW; can report a
+                        // meaningless ratio when the PA is not actually loaded.
+                        if (swr_limit > 0.0f && sw >= swr_limit && pw > 0.1f) {
+                            ESP_LOGE(TAG, "SWR PROTECTION: %.2f:1 >= %.1f:1 limit at symbol %d/%d "
+                                          "- aborting burst and latching TX off",
+                                     (double)sw, (double)swr_limit, i, nn);
+                            s_swr_trip_value = sw;
+                            s_swr_tripped    = true;
+                            aborted = true;
+                            break;
+                        }
                     }
+                    ps_sent = false;   // re-arm the next send/read cycle
                 }
             } else if (!ps_have && i == nn / 4) {
-                // Simulated burst (general sim mode, or FT4's always-forced
-                // sim): no real PA to query, so populate the same s_last_*
+                // Simulated burst (settings' sim mode): no real PA to query,
+                // so populate the same s_last_*
                 // fields with a fixed placeholder reading at roughly the same
                 // point in the burst a real reading would land, so the UI's
                 // live PWR/SWR line behaves identically either way.
@@ -1050,6 +1120,16 @@ void ft8_tx_run(const ft8_tx_request_t *req)
                 s_last_power_w = power_w;
                 s_last_swr = swr;
                 s_last_pwr_swr_us = esp_timer_get_time();
+                // Post-burst trip. Catches what the mid-burst sampler could not:
+                // an FT4 burst (no mid-burst query at all), a fault that only
+                // appeared near the end, or a burst too short to sample. The
+                // burst is already over, so this protects every LATER one.
+                if (swr_limit > 0.0f && swr >= swr_limit && power_w > 0.1f && !s_swr_tripped) {
+                    ESP_LOGE(TAG, "SWR PROTECTION: post-burst %.2f:1 >= %.1f:1 limit "
+                                  "- latching TX off", (double)swr, (double)swr_limit);
+                    s_swr_trip_value = swr;
+                    s_swr_tripped    = true;
+                }
             }
         }
 #endif

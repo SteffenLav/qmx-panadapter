@@ -1449,12 +1449,14 @@ static void ft8_task(void *arg)
         bool   is_ft4    = (s_pool_proto == (int)FTX_PROTOCOL_FT4);
         int    period_ms = is_ft4 ? FT4_SLOT_MS : FT8_SLOT_MS;
         int    slot_samples = period_ms * (SR_HZ / 1000);   // 90000 (FT4) / 180000 (FT8)
-        // FT4 TX is now implemented (ft8_tx.c) but force-routed through the
-        // simulation interlock for ANY FT4 request - the 48 ms CAT cadence is
-        // unverified on real hardware, so ft8_tx_run()/ft8_tx_arm() never let
-        // an FT4 burst reach a connected QMX regardless of this slot loop's
-        // own gating. So the slot loop itself can simply try TX in both
-        // protocols; the real safety boundary lives in ft8_tx.c, not here.
+        // FT4 TX is implemented in ft8_tx.c and DOES key a connected radio.
+        // ⚠ This comment used to say FT4 was "force-routed through the
+        // simulation interlock ... never let an FT4 burst reach a connected
+        // QMX". That interlock does not exist: ft8_tx_run()'s `sim` is
+        // settings' sim_mode_en and nothing else, and CLAUDE.md records real
+        // FT4 QSOs completed on air. The claim was left behind when FT4 TX was
+        // enabled. Corrected 2026-08-09 - do not rely on a protocol-based TX
+        // safety boundary here or in ft8_tx.c, because there isn't one.
 
         ESP_LOGI(TAG, "slot %d: waiting for next %s boundary...", slot_idx, is_ft4 ? "FT4" : "FT8");
         int64_t boundary_ms = wait_for_slot_boundary_ms(last_boundary_ms, period_ms);
