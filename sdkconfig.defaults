@@ -209,3 +209,16 @@ CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
 CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=n
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
 CONFIG_BT_NIMBLE_NVS_PERSIST=y
+
+# NimBLE sizing for ONE MOUSE, not a generic BLE device. Stock defaults took the
+# MALLOC_CAP_DMA pool from 32 KB to 851 BYTES at nimble_port_init() - the exact
+# #65 signature that breaks USB endpoint alloc on a QMX reconnect, TLS, and the
+# SD mount. Same lesson as the mdns component: a managed component's defaults
+# are sized for a busier device; cut them to what this board actually has.
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_TRANSPORT_ACL_FROM_LL_COUNT=6
+CONFIG_BT_NIMBLE_TRANSPORT_EVT_COUNT=10
+CONFIG_BT_NIMBLE_TRANSPORT_EVT_DISCARD_COUNT=4
+CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=6
+CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=6

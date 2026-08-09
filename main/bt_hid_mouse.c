@@ -22,6 +22,10 @@
 #include "bt_hid_mouse.h"
 #include "hid_cursor.h"
 #include "storage/settings.h"
+#include "wifi/wifi.h"          // wifi_is_connected() - the C6 link must be up first
+#include "util/psram_task.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 
 #include "esp_log.h"
 #include "esp_heap_caps.h"
@@ -136,15 +140,36 @@ static void host_task(void *param)
     nimble_port_freertos_deinit();
 }
 
-void bt_hid_mouse_init(void)
+// Bring NimBLE up only once the hosted transport to the C6 is actually alive.
+//
+// This is not belt-and-braces, it is the whole reason the first attempt failed.
+// HCI rides the esp_hosted SDIO transport, and that transport is not ready
+// until ~6 s into boot. Calling nimble_port_init() from app_main alongside the
+// other network inits started the BLE host at ~4.8 s, a second BEFORE
+// "transport: Base transport is set-up" - so the host began issuing HCI
+// commands into a VHCI with no transport under it, and the link died with
+// "Not able to connect with ESP-Hosted slave device" on a ~4 s timeout, taking
+// WiFi down with it. Memory was never involved: 99 KB internal was free at the
+// moment of the failed init.
+//
+// Waiting for an IP is a deliberately conservative proxy for "the C6 link is
+// healthy and settled" rather than the earliest possible moment.
+static void bt_start_task(void *arg)
 {
-    if (s_started) return;
+    (void)arg;
+    const int WAIT_S = 60;
+    for (int i = 0; i < WAIT_S * 2 && !wifi_is_connected(); i++)
+        vTaskDelay(pdMS_TO_TICKS(500));
 
-    qmx_settings_t s;
-    settings_load_all(&s);
-    if (!s.bt_mouse_en) {
-        ESP_LOGI(TAG, "BLE mouse disabled in settings - stack not started");
-        return;
+    if (!wifi_is_connected()) {
+        // No WiFi means either it is switched off or the link never came up.
+        // Starting BLE anyway would be the same race that broke it before, so
+        // wait a further settling period and try regardless - a WiFi-off
+        // operator still deserves a mouse.
+        ESP_LOGW(TAG, "no WiFi after %d s - starting BLE anyway after a settle", WAIT_S);
+        vTaskDelay(pdMS_TO_TICKS(5000));
+    } else {
+        vTaskDelay(pdMS_TO_TICKS(3000));   // let the link settle past DHCP/SNTP
     }
 
     log_heap("before NimBLE init");
@@ -152,6 +177,7 @@ void bt_hid_mouse_init(void)
     if (e != ESP_OK) {
         ESP_LOGE(TAG, "nimble_port_init failed: %s - BLE unavailable this boot",
                  esp_err_to_name(e));
+        vTaskDelete(NULL);
         return;
     }
 
@@ -173,6 +199,23 @@ void bt_hid_mouse_init(void)
     s_started = true;
     log_heap("after NimBLE init");
     ESP_LOGI(TAG, "BLE mouse Stage 1 up - scan only, no pairing yet");
+    vTaskDelete(NULL);
+}
+
+void bt_hid_mouse_init(void)
+{
+    if (s_started) return;
+
+    qmx_settings_t s;
+    settings_load_all(&s);
+    if (!s.bt_mouse_en) {
+        ESP_LOGI(TAG, "BLE mouse disabled in settings - stack not started");
+        return;
+    }
+    // PSRAM stack, low priority: this task spends its life sleeping and must
+    // not compete with the audio/FFT pipeline.
+    psram_task_create(bt_start_task, "bt_start", 6144, NULL, 2, tskNO_AFFINITY);
+    ESP_LOGI(TAG, "BLE mouse enabled - waiting for the C6 link before starting NimBLE");
 }
 
 bool bt_hid_mouse_started(void) { return s_started; }
