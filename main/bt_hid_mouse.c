@@ -59,12 +59,17 @@ static uint16_t s_conn_handle;
 // boot-protocol mouse report, whose layout is fixed. So we subscribe to every
 // notification and decode the ones that look like a mouse report.
 #define UUID_HID_REPORT 0x2A4D
+// Protocol Mode: 0 = Boot, 1 = Report. A HOGP host is expected to set this.
+#define UUID_HID_PROTOCOL_MODE 0x2A4E
+#define HID_PROTOCOL_MODE_REPORT 0x01
 
 static void start_scan(void);
 static int  conn_event_cb(struct ble_gap_event *event, void *arg);
 static int  disc_dsc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
                         uint16_t chr_val_handle, const struct ble_gatt_dsc *dsc, void *arg);
 static void handle_report(const uint8_t *d, int len);
+static int  proto_mode_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                          const struct ble_gatt_chr *chr, void *arg);
 
 static void log_heap(const char *when)
 {
@@ -169,10 +174,23 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
         return 0;
 
     case BLE_GAP_EVENT_ENC_CHANGE:
-        ESP_LOGW(TAG, "encryption change: status=%d - discovering descriptors",
+        ESP_LOGW(TAG, "encryption change: status=%d - completing HOGP setup",
                  event->enc_change.status);
         // Subscribe to everything notifiable now that the link is encrypted.
         ble_gattc_disc_all_dscs(s_conn_handle, 1, 0xffff, disc_dsc_cb, NULL);
+        // ...and set Protocol Mode. HYPOTHESIS, not established fact: the M240
+        // drops the link EXACTLY 30 s after this event (30041 ms and 30089 ms
+        // on two separate connections), which looks far more like a peripheral
+        // waiting on an unfinished HOGP handshake than like battery saving -
+        // power saving would be minutes, and jittery. Subscribing to reports is
+        // the only host duty we were performing; writing Protocol Mode is the
+        // cheapest of the ones we were not. If the 30 s drop survives this, the
+        // next candidates are reading the Report Map (0x2A4B) and HID
+        // Information (0x2A4A), and this comment should be corrected rather
+        // than left implying it was solved.
+        ble_gattc_disc_chrs_by_uuid(s_conn_handle, 1, 0xffff,
+                                    BLE_UUID16_DECLARE(UUID_HID_PROTOCOL_MODE),
+                                    proto_mode_cb, NULL);
         return 0;
 
     case BLE_GAP_EVENT_NOTIFY_RX: {
@@ -232,6 +250,20 @@ static int subscribe_cb(uint16_t conn_handle, const struct ble_gatt_error *error
     (void)conn_handle; (void)attr; (void)arg;
     if (error && error->status != 0)
         ESP_LOGW(TAG, "subscribe failed: status=%d", error->status);
+    return 0;
+}
+
+// Write Protocol Mode = Report once the characteristic is located. Write
+// WITHOUT response: the spec defines Protocol Mode as write-without-response,
+// and a peripheral may not answer a normal write at all.
+static int proto_mode_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                         const struct ble_gatt_chr *chr, void *arg)
+{
+    (void)arg;
+    if (!error || error->status != 0 || !chr) return 0;
+    uint8_t v = HID_PROTOCOL_MODE_REPORT;
+    int rc = ble_gattc_write_no_rsp_flat(conn_handle, chr->val_handle, &v, 1);
+    ESP_LOGI(TAG, "Protocol Mode = Report (handle %u, rc=%d)", chr->val_handle, rc);
     return 0;
 }
 
@@ -299,6 +331,10 @@ static void handle_report(const uint8_t *d, int len)
         if (x & 0x800) x -= 0x1000;      // 12-bit two's complement
         if (y & 0x800) y -= 0x1000;
         hid_cursor_apply(x, y, d[0]);
+        // Byte 5 is the wheel: 00 in every movement-only report captured, ff
+        // (= -1) in the one where the wheel was turned. Byte 6 is the
+        // horizontal/pan wheel, which nothing in this UI scrolls sideways.
+        if (len >= 6 && (int8_t)d[5]) hid_cursor_add_wheel((int8_t)d[5]);
         return;
     }
 

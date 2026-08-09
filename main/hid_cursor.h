@@ -26,6 +26,13 @@ void hid_cursor_apply(int dx, int dy, uint8_t buttons);
 // Latest position (0..1279 / 0..719) and button bitmask (bit0 = left).
 void hid_cursor_get(int *x, int *y, uint8_t *buttons);
 
+// Wheel. Accumulated by the transport and CONSUMED by the UI: a wheel is a
+// stream of discrete clicks, not a level, so the reader must take-and-clear or
+// one click would scroll forever. hid_cursor_take_wheel() returns the clicks
+// since the last call and resets to zero.
+void hid_cursor_add_wheel(int clicks);
+int  hid_cursor_take_wheel(void);
+
 // Whether ANY mouse is currently connected - what the UI uses to decide
 // whether to draw a cursor at all. Each transport reports its own state.
 typedef enum { HID_CURSOR_SRC_USB = 0, HID_CURSOR_SRC_BLE, HID_CURSOR_SRC_COUNT } hid_cursor_src_t;

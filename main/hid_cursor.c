@@ -11,6 +11,7 @@ static volatile int     s_x = SCR_W / 2;
 static volatile int     s_y = SCR_H / 2;
 static volatile uint8_t s_buttons = 0;
 static volatile bool    s_present[HID_CURSOR_SRC_COUNT];
+static volatile int     s_wheel;   // unconsumed wheel clicks
 
 void hid_cursor_apply(int dx, int dy, uint8_t buttons)
 {
@@ -19,6 +20,15 @@ void hid_cursor_apply(int dx, int dy, uint8_t buttons)
     if (ny < 0) ny = 0; else if (ny >= SCR_H) ny = SCR_H - 1;
     s_x = nx; s_y = ny;
     s_buttons = buttons;
+}
+
+void hid_cursor_add_wheel(int clicks) { s_wheel += clicks; }
+
+int hid_cursor_take_wheel(void)
+{
+    int v = s_wheel;
+    s_wheel = 0;      // consume: a click must scroll exactly once
+    return v;
 }
 
 void hid_cursor_get(int *x, int *y, uint8_t *buttons)

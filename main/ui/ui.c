@@ -3283,6 +3283,49 @@ static void build_resource_monitor(lv_obj_t *scr)
 // actually enumerated.
 static lv_obj_t *s_mouse_cursor = NULL;
 
+// Find the deepest SCROLLABLE object under a screen point, so the wheel scrolls
+// whatever the cursor is actually over - the FT8 decode list, the settings
+// drawer, the manual - without this file needing to know which of them exist.
+//
+// LVGL has no public hit-test-for-scroll, and a pointer indev carries no wheel
+// field (enc_diff belongs to ENCODER indevs, which need a focus group). So the
+// wheel is applied here, outside the indev, against the object under the point.
+// Deepest-first because a scrollable list inside a scrollable panel should take
+// the scroll itself rather than moving its container.
+static lv_obj_t *scrollable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
+{
+    if (!parent || lv_obj_has_flag(parent, LV_OBJ_FLAG_HIDDEN)) return NULL;
+    lv_area_t a;
+    lv_obj_get_coords(parent, &a);
+    if (x < a.x1 || x > a.x2 || y < a.y1 || y > a.y2) return NULL;
+
+    uint32_t n = lv_obj_get_child_count(parent);
+    for (uint32_t i = n; i > 0; i--) {                 // topmost child first
+        lv_obj_t *hit = scrollable_at(lv_obj_get_child(parent, i - 1), x, y);
+        if (hit) return hit;
+    }
+    if (lv_obj_has_flag(parent, LV_OBJ_FLAG_SCROLLABLE) &&
+        lv_obj_get_scroll_bottom(parent) + lv_obj_get_scroll_top(parent) > 0)
+        return parent;
+    return NULL;
+}
+
+// One wheel click moves this many pixels. A touch UI has large rows, so a
+// timid step feels broken; this is roughly one FT8 decode row.
+#define MOUSE_WHEEL_STEP_PX 48
+
+static void mouse_wheel_apply(lv_coord_t x, lv_coord_t y)
+{
+    int clicks = hid_cursor_take_wheel();
+    if (!clicks) return;
+    lv_obj_t *target = scrollable_at(lv_screen_active(), x, y);
+    if (!target) target = scrollable_at(lv_layer_top(), x, y);
+    if (!target) return;
+    // Wheel down (negative) should move content DOWN the list, i.e. scroll_by
+    // with a negative y - matching every other pointer UI.
+    lv_obj_scroll_by(target, 0, clicks * MOUSE_WHEEL_STEP_PX, LV_ANIM_OFF);
+}
+
 static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
 {
     (void)indev;
@@ -3297,6 +3340,8 @@ static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     data->point.x = ly;
     data->point.y = (w - 1) - lx;
     data->state = (b & 0x01) ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+
+    mouse_wheel_apply(data->point.x, data->point.y);
 
     if (s_mouse_cursor) {
         if (hid_cursor_present()) lv_obj_remove_flag(s_mouse_cursor, LV_OBJ_FLAG_HIDDEN);
