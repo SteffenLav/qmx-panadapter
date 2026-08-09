@@ -68,8 +68,6 @@ static int  conn_event_cb(struct ble_gap_event *event, void *arg);
 static int  disc_dsc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
                         uint16_t chr_val_handle, const struct ble_gatt_dsc *dsc, void *arg);
 static void handle_report(const uint8_t *d, int len);
-static int  proto_mode_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
-                          const struct ble_gatt_chr *chr, void *arg);
 
 static void log_heap(const char *when)
 {
@@ -178,19 +176,18 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
                  event->enc_change.status);
         // Subscribe to everything notifiable now that the link is encrypted.
         ble_gattc_disc_all_dscs(s_conn_handle, 1, 0xffff, disc_dsc_cb, NULL);
-        // ...and set Protocol Mode. HYPOTHESIS, not established fact: the M240
-        // drops the link EXACTLY 30 s after this event (30041 ms and 30089 ms
-        // on two separate connections), which looks far more like a peripheral
-        // waiting on an unfinished HOGP handshake than like battery saving -
-        // power saving would be minutes, and jittery. Subscribing to reports is
-        // the only host duty we were performing; writing Protocol Mode is the
-        // cheapest of the ones we were not. If the 30 s drop survives this, the
-        // next candidates are reading the Report Map (0x2A4B) and HID
-        // Information (0x2A4A), and this comment should be corrected rather
-        // than left implying it was solved.
-        ble_gattc_disc_chrs_by_uuid(s_conn_handle, 1, 0xffff,
-                                    BLE_UUID16_DECLARE(UUID_HID_PROTOCOL_MODE),
-                                    proto_mode_cb, NULL);
+        // NO Protocol Mode write here. It was tried as a fix for the exactly-30 s
+        // idle disconnect and FAILED on both counts, measured: the write itself
+        // succeeded (handle 53, rc=0) yet the drop still came at 30335 ms and
+        // 30386 ms after encryption, AND report notifications stopped arriving
+        // entirely while it was in place. Switching the peripheral out of Boot
+        // Protocol evidently moves reports somewhere our blanket CCCD
+        // subscription does not catch. Do not re-add it without also handling
+        // the Report Reference descriptors that Report mode implies.
+        //
+        // The 30 s disconnect therefore remains UNEXPLAINED. Evidence so far:
+        // it is measured from the encryption-change event, not from the last
+        // report, and it is far too repeatable to be a battery-saving timer.
         return 0;
 
     case BLE_GAP_EVENT_NOTIFY_RX: {
@@ -253,20 +250,6 @@ static int subscribe_cb(uint16_t conn_handle, const struct ble_gatt_error *error
     return 0;
 }
 
-// Write Protocol Mode = Report once the characteristic is located. Write
-// WITHOUT response: the spec defines Protocol Mode as write-without-response,
-// and a peripheral may not answer a normal write at all.
-static int proto_mode_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
-                         const struct ble_gatt_chr *chr, void *arg)
-{
-    (void)arg;
-    if (!error || error->status != 0 || !chr) return 0;
-    uint8_t v = HID_PROTOCOL_MODE_REPORT;
-    int rc = ble_gattc_write_no_rsp_flat(conn_handle, chr->val_handle, &v, 1);
-    ESP_LOGI(TAG, "Protocol Mode = Report (handle %u, rc=%d)", chr->val_handle, rc);
-    return 0;
-}
-
 static int disc_dsc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
                        uint16_t chr_val_handle, const struct ble_gatt_dsc *dsc, void *arg)
 {
@@ -306,8 +289,14 @@ static void on_reset(int reason)
 // the real layout can be read off the hardware and this narrowed if needed.
 static void handle_report(const uint8_t *d, int len)
 {
+    // Log the first few of ANY report, and ALWAYS log one whose wheel byte is
+    // non-zero. The wheel is the thing under investigation and it is rare
+    // compared to movement, so a plain first-N budget is spent on movement
+    // before a single scroll is ever seen - which is exactly how the wheel
+    // ended up undiagnosable on the previous build.
     static int logged = 0;
-    if (logged < 12) {
+    bool wheelish = (len >= 6 && d[5] != 0);
+    if (logged < 12 || wheelish) {
         logged++;
         char hex[64] = "";
         int n = 0;

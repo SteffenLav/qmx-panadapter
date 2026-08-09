@@ -3314,16 +3314,31 @@ static lv_obj_t *scrollable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
 // timid step feels broken; this is roughly one FT8 decode row.
 #define MOUSE_WHEEL_STEP_PX 48
 
-static void mouse_wheel_apply(lv_coord_t x, lv_coord_t y)
+// Last cursor position, published by the indev read callback for the wheel
+// timer below. Both run on the LVGL thread, so no locking is needed.
+static lv_point_t s_mouse_pt;
+
+static void mouse_wheel_timer_cb(lv_timer_t *t)
 {
+    (void)t;
     int clicks = hid_cursor_take_wheel();
     if (!clicks) return;
-    lv_obj_t *target = scrollable_at(lv_screen_active(), x, y);
-    if (!target) target = scrollable_at(lv_layer_top(), x, y);
-    if (!target) return;
-    // Wheel down (negative) should move content DOWN the list, i.e. scroll_by
-    // with a negative y - matching every other pointer UI.
+
+    lv_obj_t *target = scrollable_at(lv_layer_top(), s_mouse_pt.x, s_mouse_pt.y);
+    if (!target) target = scrollable_at(lv_screen_active(), s_mouse_pt.x, s_mouse_pt.y);
+    if (!target) {
+        // Log it: a silent no-op here is exactly how the first version of this
+        // was undiagnosable - the wheel clicks were arriving and being thrown
+        // away with nothing to say so.
+        ESP_LOGI(TAG, "wheel %+d at (%d,%d): no scrollable under the cursor",
+                 clicks, (int)s_mouse_pt.x, (int)s_mouse_pt.y);
+        return;
+    }
+    lv_coord_t before = lv_obj_get_scroll_y(target);
     lv_obj_scroll_by(target, 0, clicks * MOUSE_WHEEL_STEP_PX, LV_ANIM_OFF);
+    ESP_LOGI(TAG, "wheel %+d at (%d,%d): scroll_y %d -> %d",
+             clicks, (int)s_mouse_pt.x, (int)s_mouse_pt.y,
+             (int)before, (int)lv_obj_get_scroll_y(target));
 }
 
 static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
@@ -3336,12 +3351,19 @@ static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     // works identically whichever transport the mouse arrived on.
     hid_cursor_get(&lx, &ly, &b);
 
-    int32_t w = lv_display_get_horizontal_resolution(lv_display_get_default()); // 1280
+    // Rotate the panel-space cursor into landscape screen space. The second
+    // line needs the VERTICAL resolution (720): it is producing a screen Y, and
+    // using the horizontal one let the result run to 1279 on a 720-tall screen
+    // - the pointer sat off the bottom of the display and every hit-test
+    // against it failed.
+    int32_t h = lv_display_get_vertical_resolution(lv_display_get_default());  // 720
     data->point.x = ly;
-    data->point.y = (w - 1) - lx;
+    data->point.y = (h - 1) - lx;
     data->state = (b & 0x01) ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
-
-    mouse_wheel_apply(data->point.x, data->point.y);
+    // The wheel is applied from its own timer, NOT here: this callback runs
+    // inside LVGL's input processing, and scrolling an object from within it
+    // fights the indev's own gesture handling.
+    s_mouse_pt = data->point;
 
     if (s_mouse_cursor) {
         if (hid_cursor_present()) lv_obj_remove_flag(s_mouse_cursor, LV_OBJ_FLAG_HIDDEN);
@@ -3356,6 +3378,7 @@ void ui_mouse_init(void)
     lv_indev_t *mouse = lv_indev_create();
     lv_indev_set_type(mouse, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(mouse, mouse_read_cb);
+    lv_timer_create(mouse_wheel_timer_cb, 30, NULL);   // ~33 Hz, smooth enough for a wheel
 
     // A small high-contrast circle cursor (no image asset needed): white fill
     // with a dark ring, readable over both the green spectrum and the waterfall.
