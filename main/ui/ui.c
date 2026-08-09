@@ -3351,19 +3351,23 @@ static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
     // works identically whichever transport the mouse arrived on.
     hid_cursor_get(&lx, &ly, &b);
 
-    // Rotate the panel-space cursor into landscape screen space. The second
-    // line needs the VERTICAL resolution (720): it is producing a screen Y, and
-    // using the horizontal one let the result run to 1279 on a 720-tall screen
-    // - the pointer sat off the bottom of the display and every hit-test
-    // against it failed.
-    int32_t h = lv_display_get_vertical_resolution(lv_display_get_default());  // 720
+    // The INVERSE of LVGL's own ROTATION_90 pointer map, so LVGL's rotation and
+    // this cancel out and (lx,ly) reach the screen unchanged. It must use the
+    // HORIZONTAL resolution: swapping in the vertical one breaks the
+    // cancellation and walls the cursor off at x = 1280 - 720 = 560.
+    int32_t w = lv_display_get_horizontal_resolution(lv_display_get_default()); // 1280
     data->point.x = ly;
-    data->point.y = (h - 1) - lx;
+    data->point.y = (w - 1) - lx;
     data->state = (b & 0x01) ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
     // The wheel is applied from its own timer, NOT here: this callback runs
     // inside LVGL's input processing, and scrolling an object from within it
     // fights the indev's own gesture handling.
-    s_mouse_pt = data->point;
+    // SCREEN coordinates for the wheel hit-test - (lx,ly), NOT data->point.
+    // data->point is the pre-rotation value LVGL is about to un-rotate; using
+    // it here searched for objects at coordinates like (429,749) that exist
+    // nowhere on a 1280x720 screen, so the wheel never found a scroll target.
+    s_mouse_pt.x = lx;
+    s_mouse_pt.y = ly;
 
     if (s_mouse_cursor) {
         if (hid_cursor_present()) lv_obj_remove_flag(s_mouse_cursor, LV_OBJ_FLAG_HIDDEN);
@@ -3393,6 +3397,15 @@ void ui_mouse_init(void)
     lv_obj_remove_flag(s_mouse_cursor, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(s_mouse_cursor, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_mouse_cursor, LV_OBJ_FLAG_HIDDEN);   // shown when a mouse appears
+    // Centre the dot on the actual pointer position. lv_indev_set_cursor()
+    // places the object's TOP-LEFT at the point, so without this the cursor
+    // sits down-and-right of where it actually clicks: fully visible against
+    // the left and top edges, and drawn off-screen entirely at the right and
+    // bottom ones, where the pointer appears to vanish while still working.
+    // translate_x/y is a plain offset - NOT transform_rotation/scale, which
+    // this file has a history of hanging taskLVGL with.
+    lv_obj_set_style_translate_x(s_mouse_cursor, -10, 0);   // half of the 20 px size
+    lv_obj_set_style_translate_y(s_mouse_cursor, -10, 0);
     lv_indev_set_cursor(mouse, s_mouse_cursor);
 
     display_unlock();
