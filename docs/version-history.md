@@ -1391,6 +1391,12 @@ Redrawing them was an audit, and **seven statements turned out to be untrue**. T
   now one entry, and the RBN sighting is folded in as corroboration — a
   brighter marker meaning a receiver actually copied them just now, rather than
   a self-spot typed an hour ago.
+- **Clock said GPS with no radio attached** (Don N2VGU). Once a QMX+ has been
+  seen to be GPS-disciplined that is remembered, so an offline start keeps GPS
+  timing without re-detecting it — but the clock label trusted that memory
+  without checking the radio was still there, and kept claiming GPS while NTP
+  was actually keeping the time. The Tab5 has no GPS of its own. The time was
+  always correct; only the label was wrong.
 - **Fixes.** A tune started from the web UI now says so on the Tab5 instead of
   transmitting silently. Antenna Tune no longer cancels itself after a second
   and leave the radio keyed — it was reading a mode value the QMX deliberately
