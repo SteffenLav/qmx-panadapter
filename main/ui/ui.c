@@ -6001,7 +6001,9 @@ static void drawer_build(void)
     for (int g = 0; g < N_DRAWER_GROUPS; g++) {
         lv_obj_t *h = lv_label_create(s_drawer);
         lv_label_set_text(h, s_drawer_groups[g].title);
-        lv_obj_set_style_text_font(h, &lv_font_montserrat_24, 0);
+        // 32, above the 28 px body text: a heading smaller than what it heads
+        // reads as a caption. Gold + larger is what makes it scan as a section.
+        lv_obj_set_style_text_font(h, &lv_font_montserrat_32, 0);
         lv_obj_set_style_text_color(h, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
         lv_obj_add_flag(h, LV_OBJ_FLAG_HIDDEN);
         s_grp_hdr[g] = h;
@@ -7042,7 +7044,7 @@ static void drawer_set_ft8_mode(bool ft8)
             if (n_vis > 0) {
                 lv_obj_clear_flag(s_grp_hdr[g], LV_OBJ_FLAG_HIDDEN);
                 lv_obj_set_pos(s_grp_hdr[g], 0, y + 4);
-                y += 46;
+                y += 54;
             } else {
                 lv_obj_add_flag(s_grp_hdr[g], LV_OBJ_FLAG_HIDDEN);
             }
@@ -7359,8 +7361,8 @@ static void drawer_slider_cwtxoff_cb(lv_event_t *e)
 static void drawer_expert_paint(void)
 {
     if (!s_expert_btn || !s_expert_lbl) return;
-    lv_label_set_text(s_expert_lbl, s_drawer_expert ? "EXPERT\ntap for Basic"
-                                                    : "BASIC\ntap for Expert");
+    lv_label_set_text(s_expert_lbl, s_drawer_expert ? "EXPERT\n(tap for Basic)"
+                                                    : "BASIC\n(tap for Expert)");
     lv_obj_set_style_bg_color(s_expert_btn,
         lv_color_hex(s_drawer_expert ? 0x7a4a12 : UI_COLOR_PRIMARY), 0);
 }
