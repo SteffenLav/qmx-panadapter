@@ -13,6 +13,50 @@ qmx m                               # monitor only
 
 Exit monitor: `Ctrl+T` then `Ctrl+X`.
 
+### ⛔ Serial capture: the rules, because getting these wrong has cost DAYS
+
+Every one of these is a mistake I actually made, each of which produced a
+CONFIDENT WRONG CONCLUSION reported to the operator as fact. They are here, in
+the file that is read in full every session, because they were in memory
+instead and memory is only consulted when something feels relevant — which is
+exactly what a routine step never does. **Read this list before touching a
+capture, not after a result looks strange.**
+
+1. **A capture that reset the device is how the "mystery double boot" was
+   born.** `cap_serial_boot.ps1` and `-Reset` pulse RTS on open. Starting one
+   as a passive monitor REBOOTS THE TAB5. The operator spent an hour reporting
+   a boot→dark→boot cycle that was my monitor, on top of the flash's own reset.
+   Use `scratchpad/cap_serial_reboot.ps1` with NO `-Reset` for anything
+   standing. Only pass `-Reset` when the boot itself is the thing under study.
+2. **NEVER put `Stop-Process` in the same PowerShell call as the capture.** It
+   exits non-zero, PowerShell aborts the rest of the chain, the capture never
+   starts, and a zero-byte file gets read as "no crash in the log". This single
+   bug is the whole history of "the background shell didn't run". Kill in one
+   call, start in another.
+3. **Two captures cannot share COM3.** Kill the old one first or the new one
+   logs `PORT LOST` and records nothing.
+4. **VERIFY BYTES BEFORE INTERPRETING.** `stat -c%s` / `.Length` must be > 0.
+   An empty log is not evidence of a quiet device. This one rule would have
+   caught every failure above.
+5. **Count boots ONLY with `grep -c "Loaded app from partition"`.** A regex over
+   numbers in parentheses matches image-segment sizes like `( 22520)` and
+   invents reboots that never happened (done twice in one session).
+6. **A capture without reconnect CANNOT see a reboot.** The console is
+   USB-Serial/JTAG implemented BY the P4, so a reset drops the USB device and
+   the handle dies — the file just stops, looking healthy. Only
+   `cap_serial_reboot.ps1` reopens.
+7. **A post-flash first boot is a different event from an RTS reset.** To catch
+   it: `python -m esptool --port COM3 --after no_reset write_flash
+   "@flash_project_args"` (from `build/`), then start the capture with `-Reset`.
+8. **The monitor ALWAYS misses the boot after `idf.py flash`.** For boot lines
+   use `/api/log` (live ring) or `/api/log/saved` (flash-persisted) instead.
+
+**And the standing one: NEVER GUESS.** When a symptom appears, get the
+measurement first. Every "obvious cause" in this file has been wrong when
+measured — WiFi death was not memory (99 KB free), the BLE 30 s drop was not
+Protocol Mode (it made it worse), the cursor was not off-screen (I misread a
+pre-rotation coordinate). If a fix is a hypothesis, say so in those words.
+
 **Claude Code note**: each PowerShell tool call is a fresh non-interactive shell — the user's `$PROFILE` (which defines `qmx`/`idfenv`) is not loaded, and `idf.py` fails with "IDF_PATH environment variable needs to be set". Activate the IDF environment in the same command chain first:
 ```powershell
 & "C:\esp\v5.4.4\esp-idf\export.ps1" | Out-Null; idf.py build
