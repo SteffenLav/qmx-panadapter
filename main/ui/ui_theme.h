@@ -54,6 +54,10 @@ void ui_kbd_set_buttons(lv_obj_t *save_btn, lv_obj_t *cancel_btn);
 /* Accent - semantic split: gold for passive selection/VFO/highlight,
  * a distinct warm colour reserved for TX-on-air-only cues. */
 #define UI_COLOR_ACCENT_GOLD    0xffd700
+// The mouse pointer's "this is clickable" tint. Bright green DELIBERATELY, and
+// deliberately not UI_COLOR_PRIMARY: blue already means button, panel, header and
+// BT-connected in this UI, so one more blue would say nothing (operator, v1.8.0).
+#define UI_COLOR_POINTER_HOT    0x00ff66
 #define UI_COLOR_TX_ACTIVE      0xff6020
 
 /* Text */

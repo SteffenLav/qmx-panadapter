@@ -3498,9 +3498,13 @@ static bool grip_mouse_click(lv_event_t *e, lv_obj_t *grip)
 // timer below. Both run on the LVGL thread, so no locking is needed.
 static lv_point_t s_mouse_pt;
 
-// Highlight the pointer while it is over something a click would actually
-// activate. The grips breathe on an animation of their own, so tinting the
-// POINTER is the one way to say "this is live" without fighting that animation.
+// Turn the pointer bright green over anything a click would actually do
+// something to. This is a DISCOVERY aid, not decoration: a touch UI carries no
+// hover states, so which of these labels, bars, rows and readouts are live is
+// invisible to someone driving it with a mouse - and a great many of them are.
+//
+// Green, not UI_COLOR_PRIMARY: this UI already uses blue for buttons, panels,
+// headers and the BT indicator, so a blue pointer would say nothing.
 //
 // Change-detected: an unconditional style set every 30 ms is a continuous
 // invalidate on the LVGL thread, which this file has already paid for once (see
@@ -3510,21 +3514,70 @@ static void cursor_set_hot(bool hot)
     static int last = -1;
     if (!s_mouse_cursor || (int)hot == last) return;
     last = hot;
-    lv_obj_set_style_image_recolor(s_mouse_cursor, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_image_recolor(s_mouse_cursor, lv_color_hex(UI_COLOR_POINTER_HOT), 0);
     lv_obj_set_style_image_recolor_opa(s_mouse_cursor,
-                                       hot ? LV_OPA_80 : LV_OPA_TRANSP, 0);
+                                       hot ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+}
+
+// Deepest CLICKABLE object under a point, by the same rules LVGL's own input
+// handling uses - lv_obj_hit_test() honours ext_click_area, so an enlarged
+// target reports hot over exactly the area that will actually respond.
+//
+// Cheaper than it looks: a subtree whose bounds exclude the point is rejected in
+// one comparison, so this descends only through objects actually under the
+// pointer, not the whole widget tree.
+static bool clickable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
+{
+    if (!parent || lv_obj_has_flag(parent, LV_OBJ_FLAG_HIDDEN)) return false;
+    // The CLICK area, not the coords: it already includes ext_click_area, so an
+    // enlarged target is descended into over exactly the region that responds.
+    lv_area_t a;
+    lv_obj_get_click_area(parent, &a);
+    if (x < a.x1 || x > a.x2 || y < a.y1 || y > a.y2) return false;
+
+    uint32_t n = lv_obj_get_child_count(parent);
+    for (uint32_t i = n; i > 0; i--)
+        if (clickable_at(lv_obj_get_child(parent, i - 1), x, y)) return true;
+
+    // lv_obj_hit_test() checks LV_OBJ_FLAG_CLICKABLE itself, and honours
+    // ADV_HITTEST - which the drawer's sliders set so only their knob responds.
+    // So a slider reports hot on the knob and nowhere else, which is the truth.
+    lv_point_t p = { x, y };
+    return lv_obj_hit_test(parent, &p);
+}
+
+// The edge strips are the one place where "clickable" and "does something" part
+// company: each strip is a full-height clickable object, but only a click ON ITS
+// GRIP activates (see grip_mouse_click). Reporting the whole 30 px strip as hot
+// would promise something the strip does not deliver.
+static bool point_in_obj(lv_obj_t *o, lv_coord_t x, lv_coord_t y)
+{
+    if (!o || lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN)) return false;
+    lv_area_t a;
+    lv_obj_get_coords(o, &a);
+    return x >= a.x1 && x <= a.x2 && y >= a.y1 && y <= a.y2;
 }
 
 static void mouse_timer_cb(lv_timer_t *t)
 {
     (void)t;
 
-    // Is the pointer on a grip? Cheap - three rectangle tests.
-    cursor_set_hot(point_on_grip(s_left_edge_grip,   s_mouse_pt.x, s_mouse_pt.y) ||
-                   point_on_grip(s_bottom_edge_grip, s_mouse_pt.x, s_mouse_pt.y) ||
-                   point_on_grip(s_burger_btn,       s_mouse_pt.x, s_mouse_pt.y) ||
-                   (s_drawer_open &&
-                    point_on_grip(s_drawer_grip, s_mouse_pt.x, s_mouse_pt.y)));
+    // Only re-test when the pointer has actually moved. It is stationary most of
+    // the time, and this runs at 33 Hz.
+    static lv_point_t last_pt = { -1, -1 };
+    if (s_mouse_pt.x != last_pt.x || s_mouse_pt.y != last_pt.y) {
+        last_pt = s_mouse_pt;
+        bool on_grip = point_on_grip(s_left_edge_grip,   s_mouse_pt.x, s_mouse_pt.y) ||
+                       point_on_grip(s_bottom_edge_grip, s_mouse_pt.x, s_mouse_pt.y) ||
+                       point_on_grip(s_burger_btn,       s_mouse_pt.x, s_mouse_pt.y);
+        bool on_strip = point_in_obj(s_left_edge_strip,   s_mouse_pt.x, s_mouse_pt.y) ||
+                        point_in_obj(s_bottom_edge_strip, s_mouse_pt.x, s_mouse_pt.y) ||
+                        point_in_obj(s_right_edge_strip,  s_mouse_pt.x, s_mouse_pt.y);
+        cursor_set_hot(on_grip ||
+                       (!on_strip &&
+                        (clickable_at(lv_layer_top(),     s_mouse_pt.x, s_mouse_pt.y) ||
+                         clickable_at(lv_screen_active(), s_mouse_pt.x, s_mouse_pt.y))));
+    }
 
     int clicks = hid_cursor_take_wheel();
     if (!clicks) return;
@@ -6297,33 +6350,30 @@ static void drawer_build(void)
     // Drawer scrolls vertically — content overflows once CW section is added.
     lv_obj_set_scroll_dir(s_drawer, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_drawer, LV_SCROLLBAR_MODE_AUTO);
-    // Keep the scrollbar off the right edge, which now belongs to the handle
-    // below - otherwise the two share pixels every time the drawer is scrolled,
-    // and the handle looks broken rather than merely overlapped.
-    lv_obj_set_style_pad_right(s_drawer, 18, LV_PART_SCROLLBAR);
 
-    // The handle, on the drawer's RIGHT edge - exactly where s_burger_btn sits
-    // when the drawer is shut, so from the operator's side the same handle stayed
-    // put and came along for the ride. Tapping it closes, which is what the
-    // burger grip's own position was already promising.
+    // The handle, on the drawer's LEFT edge - the edge that actually TRAVELS.
     //
-    // Styled like the Memory Channels grip (120 long, 10 thick, same colour and
-    // radius) because they are the same idea, and it sits on the edge you drag
-    // TOWARD to dismiss - the drawer closes rightward, that modal closes
-    // downward and puts its grip on top. It does NOT breathe: that animation
-    // means "there is a hidden gesture here", and a visible handle on an open
-    // panel is not hidden.
+    // It was on the right first, reasoning that that is where s_burger_btn sits
+    // when the drawer is shut. Wrong, and the operator said so immediately: the
+    // right edge is pinned against the screen, so a handle there just sits still
+    // while the panel appears from under it. The left edge is the one that moves,
+    // so that is where a drawer's pull belongs - the handle comes out WITH the
+    // drawer, and you push it back the way it came.
+    //
+    // Same reading as Memory Channels, which slides UP and puts its grip on TOP:
+    // the grip goes on the leading edge, which is also the edge you drag toward
+    // to dismiss. It does NOT breathe: that animation means "there is a hidden
+    // gesture here", and a visible handle on an open panel is not hidden.
     //
     // FLOATING for the same reason the header below is: the drawer scrolls, and a
     // handle that scrolled away with the content would be gone exactly when it
-    // was wanted. It lives in the drawer's 16 px right pad, clear of the
-    // right-aligned checkboxes, with ext_click_area making it a comfortable
-    // target (clipped to the drawer by LVGL, so it cannot reach outside).
+    // was wanted. ext_click_area makes it a comfortable target (LVGL clips that
+    // to the parent, so it cannot reach out over the scrim).
     s_drawer_grip = lv_obj_create(s_drawer);
     lv_obj_set_size(s_drawer_grip, 10, 120);
-    // +16 cancels the drawer's own 16 px padding, putting the handle flush with
-    // the drawer's right edge - the same pixels s_burger_btn occupies when shut.
-    lv_obj_align(s_drawer_grip, LV_ALIGN_RIGHT_MID, 16, 0);
+    // -16 cancels the drawer's own 16 px padding, putting the handle flush with
+    // the drawer's left edge, just inside the border it draws there.
+    lv_obj_align(s_drawer_grip, LV_ALIGN_LEFT_MID, -16, 0);
     lv_obj_set_style_bg_color(s_drawer_grip, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_set_style_bg_opa(s_drawer_grip, LV_OPA_30, 0);
     lv_obj_set_style_border_width(s_drawer_grip, 0, 0);
