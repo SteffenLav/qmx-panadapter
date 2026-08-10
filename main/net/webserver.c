@@ -428,7 +428,13 @@ static esp_err_t status_handler(httpd_req_t *req)
                         sp[i].mode == SPOT_MODE_CW   ? "cw"   :
                         sp[i].mode == SPOT_MODE_SSB  ? "ssb"  :
                         sp[i].mode == SPOT_MODE_DIGI ? "digi" : "");
-                    cJSON_AddStringToObject(o, "s", sp[i].source == SPOT_SRC_RBN ? "rbn" : "pota");
+                    // The browser only asks "is this RBN?" (anything else gets the
+                    // activation colour), so naming SOTA here needs no browser
+                    // change - but calling a summit "pota" in the API would be a
+                    // plain untruth for anything else reading it.
+                    cJSON_AddStringToObject(o, "s",
+                        sp[i].source == SPOT_SRC_RBN  ? "rbn"  :
+                        sp[i].source == SPOT_SRC_SOTA ? "sota" : "pota");
                     // Age in seconds, so the browser can fade exactly as the Tab5
                     // does without needing the clocks to agree.
                     int age = (int)(now - sp[i].heard_unix);
