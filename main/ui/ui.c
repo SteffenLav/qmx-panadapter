@@ -3333,6 +3333,82 @@ static void build_resource_monitor(lv_obj_t *scr)
 // cursor where the user expects. The cursor object is hidden until a mouse is
 // actually enumerated.
 static lv_obj_t *s_mouse_cursor = NULL;
+// Which indev is the mouse. Kept so the edge grips can offer CLICK activation to
+// a pointer without changing what a finger does - see grip_mouse_click().
+static lv_indev_t *s_mouse_indev = NULL;
+
+// ---- the pointer ------------------------------------------------------------
+//
+// An arrow, not the 20 px dot this started as. The dot clicked accurately but
+// could not say WHICH of its pixels was the hotspot, and over the waterfall it
+// read as a signal artefact rather than a pointer.
+//
+// Drawn from ASCII art rather than a generated asset, so the shape is editable
+// in place and obviously correct: 'o' outline, 'w' fill, anything else
+// transparent. **The tip is pixel (0,0)**, which is what lets
+// lv_indev_set_cursor() place it with no offset - the dot needed translate
+// -10,-10 precisely because its hotspot was its centre.
+#define CURSOR_ART_W  12
+#define CURSOR_ART_H  18
+#define CURSOR_SCALE  2      // 12x18 art -> 24x36 on screen
+static const char *const s_cursor_art[CURSOR_ART_H] = {
+    "o",
+    "oo",
+    "owo",
+    "owwo",
+    "owwwo",
+    "owwwwo",
+    "owwwwwo",
+    "owwwwwwo",
+    "owwwwwwwo",
+    "owwwwwwwwo",
+    "owwwwwwwwwo",
+    "owwwwwoooooo",
+    "owwowwo",
+    "owoowwo",
+    "oo   owwo",
+    "o    owwo",
+    "      owwo",
+    "      oooo",
+};
+
+static lv_image_dsc_t s_cursor_dsc;
+
+// Rasterise the art above into an ARGB8888 image. Rows are read with a LENGTH
+// CHECK rather than assumed to be CURSOR_ART_W long: the art is hand-written and
+// the short rows above have no trailing padding, and this file's history
+// includes a heap corruption from walking off the end of exactly this kind of
+// hand-maintained table (the Reader's UTF-8 fold, v1.5.0).
+static bool build_cursor_image(void)
+{
+    const int w = CURSOR_ART_W * CURSOR_SCALE;
+    const int h = CURSOR_ART_H * CURSOR_SCALE;
+    uint8_t *buf = heap_caps_calloc(1, (size_t)w * h * 4, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) return false;
+
+    for (int y = 0; y < h; y++) {
+        const char *row = s_cursor_art[y / CURSOR_SCALE];
+        size_t rlen = strlen(row);
+        for (int x = 0; x < w; x++) {
+            size_t ax = (size_t)(x / CURSOR_SCALE);
+            char c = (ax < rlen) ? row[ax] : ' ';
+            if (c != 'o' && c != 'w') continue;             // leave transparent
+            uint8_t *px = buf + ((size_t)y * w + x) * 4;
+            uint8_t v = (c == 'w') ? 0xFF : 0x00;           // fill white, outline black
+            px[0] = v; px[1] = v; px[2] = v; px[3] = 0xFF;  // grey, so byte order is moot
+        }
+    }
+
+    s_cursor_dsc.header.magic  = LV_IMAGE_HEADER_MAGIC;
+    s_cursor_dsc.header.cf     = LV_COLOR_FORMAT_ARGB8888;
+    s_cursor_dsc.header.flags  = 0;
+    s_cursor_dsc.header.w      = w;
+    s_cursor_dsc.header.h      = h;
+    s_cursor_dsc.header.stride = w * 4;
+    s_cursor_dsc.data_size     = (uint32_t)((size_t)w * h * 4);
+    s_cursor_dsc.data          = buf;
+    return true;
+}
 
 // Find the deepest SCROLLABLE object under a screen point, so the wheel scrolls
 // whatever the cursor is actually over - the FT8 decode list, the settings
@@ -3355,10 +3431,61 @@ static lv_obj_t *scrollable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
         lv_obj_t *hit = scrollable_at(lv_obj_get_child(parent, i - 1), x, y);
         if (hit) return hit;
     }
+    // A CLOSED dropdown is not a wheel target, even though LVGL reports it as
+    // scrollable with a scroll range. This is the "drawer stops scrolling when a
+    // dropdown passes under the pointer" bug: the wheel found the dropdown
+    // BUTTON, scrolled its label a pixel or two inside itself, and the drawer
+    // never moved - so scrolling appeared to jam until the pointer was moved off
+    // the control. An OPEN dropdown still gets the wheel, and correctly so: its
+    // list lives on the top layer, which is searched first.
+    if (lv_obj_check_type(parent, &lv_dropdown_class) && !lv_dropdown_is_open(parent))
+        return NULL;
+
     if (lv_obj_has_flag(parent, LV_OBJ_FLAG_SCROLLABLE) &&
         lv_obj_get_scroll_bottom(parent) + lv_obj_get_scroll_top(parent) > 0)
         return parent;
     return NULL;
+}
+
+// ---- the edge grips, for a pointer ------------------------------------------
+//
+// The left/bottom/right edges are SWIPE gestures - designed for a thumb, and not
+// performable with a mouse in any obvious way. So a pointer may CLICK the
+// breathing grip instead, which is the affordance that was already on screen
+// pretending to be one.
+//
+// Deliberately tight, per the operator: the click only counts within a few
+// pixels OF THE EDGE and ON the grip, not anywhere in the 30 px gesture strip.
+// Those strips lie on top of real content (the spectrum's left edge, the bottom
+// bar), so a loose target would make ordinary clicks toggle pages.
+//
+// The slop is what makes a 4 px-thick grip hittable at all with a pointer.
+#define GRIP_CLICK_SLOP_PX 10
+
+static bool point_on_grip(lv_obj_t *grip, lv_coord_t x, lv_coord_t y)
+{
+    if (!grip || lv_obj_has_flag(grip, LV_OBJ_FLAG_HIDDEN)) return false;
+    lv_area_t a;
+    lv_obj_get_coords(grip, &a);
+    return x >= a.x1 - GRIP_CLICK_SLOP_PX && x <= a.x2 + GRIP_CLICK_SLOP_PX &&
+           y >= a.y1 - GRIP_CLICK_SLOP_PX && y <= a.y2 + GRIP_CLICK_SLOP_PX;
+}
+
+// True when THIS event is a mouse release on `grip`. Gated on the indev because
+// a finger must keep behaving exactly as before: the bottom strip's own comment
+// notes that a pure tap deliberately does nothing there, so that reaching for
+// the grip cannot retune the radio. A pointer has no such problem - it does not
+// rest on the glass - so it gets the click and touch does not.
+//
+// No movement test is needed: the release point has to land back on a grip only
+// a few pixels wide, which a 60 px swipe never does.
+static bool grip_mouse_click(lv_event_t *e, lv_obj_t *grip)
+{
+    lv_indev_t *indev = lv_event_get_indev(e);
+    if (!indev || indev != s_mouse_indev) return false;
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    return point_on_grip(grip, p.x, p.y);
 }
 
 // One wheel click moves this many pixels. A touch UI has large rows, so a
@@ -3369,9 +3496,32 @@ static lv_obj_t *scrollable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
 // timer below. Both run on the LVGL thread, so no locking is needed.
 static lv_point_t s_mouse_pt;
 
-static void mouse_wheel_timer_cb(lv_timer_t *t)
+// Highlight the pointer while it is over something a click would actually
+// activate. The grips breathe on an animation of their own, so tinting the
+// POINTER is the one way to say "this is live" without fighting that animation.
+//
+// Change-detected: an unconditional style set every 30 ms is a continuous
+// invalidate on the LVGL thread, which this file has already paid for once (see
+// ui_push_spectrum's passband-fade fix).
+static void cursor_set_hot(bool hot)
+{
+    static int last = -1;
+    if (!s_mouse_cursor || (int)hot == last) return;
+    last = hot;
+    lv_obj_set_style_image_recolor(s_mouse_cursor, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_image_recolor_opa(s_mouse_cursor,
+                                       hot ? LV_OPA_80 : LV_OPA_TRANSP, 0);
+}
+
+static void mouse_timer_cb(lv_timer_t *t)
 {
     (void)t;
+
+    // Is the pointer on a grip? Cheap - three rectangle tests.
+    cursor_set_hot(point_on_grip(s_left_edge_grip,   s_mouse_pt.x, s_mouse_pt.y) ||
+                   point_on_grip(s_bottom_edge_grip, s_mouse_pt.x, s_mouse_pt.y) ||
+                   point_on_grip(s_burger_btn,       s_mouse_pt.x, s_mouse_pt.y));
+
     int clicks = hid_cursor_take_wheel();
     if (!clicks) return;
 
@@ -3385,11 +3535,27 @@ static void mouse_wheel_timer_cb(lv_timer_t *t)
                  clicks, (int)s_mouse_pt.x, (int)s_mouse_pt.y);
         return;
     }
-    lv_coord_t before = lv_obj_get_scroll_y(target);
-    lv_obj_scroll_by(target, 0, clicks * MOUSE_WHEEL_STEP_PX, LV_ANIM_OFF);
-    ESP_LOGI(TAG, "wheel %+d at (%d,%d): scroll_y %d -> %d",
-             clicks, (int)s_mouse_pt.x, (int)s_mouse_pt.y,
-             (int)before, (int)lv_obj_get_scroll_y(target));
+
+    // Scroll the deepest target, and if it did not move, hand the click to its
+    // nearest scrollable ancestor - the same chaining a finger gets from LVGL
+    // itself. Without this, a target that is merely AT ITS LIMIT silently eats
+    // the wheel, which is the general form of the dropdown bug fixed in
+    // scrollable_at(): the pointer sits over some small inner control and the
+    // panel behind it refuses to move.
+    for (lv_obj_t *o = target; o; o = lv_obj_get_parent(o)) {
+        if (!lv_obj_has_flag(o, LV_OBJ_FLAG_SCROLLABLE)) continue;
+        lv_coord_t before = lv_obj_get_scroll_y(o);
+        lv_obj_scroll_by(o, 0, clicks * MOUSE_WHEEL_STEP_PX, LV_ANIM_OFF);
+        lv_coord_t after = lv_obj_get_scroll_y(o);
+        if (after != before) {
+            ESP_LOGI(TAG, "wheel %+d at (%d,%d): scroll_y %d -> %d%s",
+                     clicks, (int)s_mouse_pt.x, (int)s_mouse_pt.y,
+                     (int)before, (int)after, (o == target) ? "" : " (chained to parent)");
+            return;
+        }
+    }
+    ESP_LOGI(TAG, "wheel %+d at (%d,%d): nothing under the cursor could scroll further",
+             clicks, (int)s_mouse_pt.x, (int)s_mouse_pt.y);
 }
 
 static void mouse_read_cb(lv_indev_t *indev, lv_indev_data_t *data)
@@ -3433,30 +3599,35 @@ void ui_mouse_init(void)
     lv_indev_t *mouse = lv_indev_create();
     lv_indev_set_type(mouse, LV_INDEV_TYPE_POINTER);
     lv_indev_set_read_cb(mouse, mouse_read_cb);
-    lv_timer_create(mouse_wheel_timer_cb, 30, NULL);   // ~33 Hz, smooth enough for a wheel
+    s_mouse_indev = mouse;
+    lv_timer_create(mouse_timer_cb, 30, NULL);   // ~33 Hz: wheel + grip hover
 
-    // A small high-contrast circle cursor (no image asset needed): white fill
-    // with a dark ring, readable over both the green spectrum and the waterfall.
-    s_mouse_cursor = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(s_mouse_cursor, 20, 20);
-    lv_obj_set_style_radius(s_mouse_cursor, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(s_mouse_cursor, lv_color_white(), 0);
-    lv_obj_set_style_bg_opa(s_mouse_cursor, LV_OPA_70, 0);
-    lv_obj_set_style_border_color(s_mouse_cursor, lv_color_black(), 0);
-    lv_obj_set_style_border_width(s_mouse_cursor, 2, 0);
+    if (build_cursor_image()) {
+        // An arrow whose TIP is pixel (0,0), so lv_indev_set_cursor() - which
+        // places the object's top-left at the point - needs no offset at all.
+        s_mouse_cursor = lv_image_create(lv_layer_top());
+        lv_image_set_src(s_mouse_cursor, &s_cursor_dsc);
+    } else {
+        // Fall back to the original dot rather than run with no pointer: white
+        // fill, dark ring, readable over both the spectrum and the waterfall.
+        // Its hotspot is its CENTRE, hence the translate that the arrow does not
+        // need. translate_x/y is a plain offset - NOT transform_rotation/scale,
+        // which this file has a history of hanging taskLVGL with.
+        ESP_LOGW(TAG, "no PSRAM for the arrow pointer - falling back to the dot");
+        s_mouse_cursor = lv_obj_create(lv_layer_top());
+        lv_obj_set_size(s_mouse_cursor, 20, 20);
+        lv_obj_set_style_radius(s_mouse_cursor, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(s_mouse_cursor, lv_color_white(), 0);
+        lv_obj_set_style_bg_opa(s_mouse_cursor, LV_OPA_70, 0);
+        lv_obj_set_style_border_color(s_mouse_cursor, lv_color_black(), 0);
+        lv_obj_set_style_border_width(s_mouse_cursor, 2, 0);
+        lv_obj_set_style_translate_x(s_mouse_cursor, -10, 0);
+        lv_obj_set_style_translate_y(s_mouse_cursor, -10, 0);
+    }
     lv_obj_set_style_pad_all(s_mouse_cursor, 0, 0);
     lv_obj_remove_flag(s_mouse_cursor, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_remove_flag(s_mouse_cursor, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_mouse_cursor, LV_OBJ_FLAG_HIDDEN);   // shown when a mouse appears
-    // Centre the dot on the actual pointer position. lv_indev_set_cursor()
-    // places the object's TOP-LEFT at the point, so without this the cursor
-    // sits down-and-right of where it actually clicks: fully visible against
-    // the left and top edges, and drawn off-screen entirely at the right and
-    // bottom ones, where the pointer appears to vanish while still working.
-    // translate_x/y is a plain offset - NOT transform_rotation/scale, which
-    // this file has a history of hanging taskLVGL with.
-    lv_obj_set_style_translate_x(s_mouse_cursor, -10, 0);   // half of the 20 px size
-    lv_obj_set_style_translate_y(s_mouse_cursor, -10, 0);
     lv_indev_set_cursor(mouse, s_mouse_cursor);
 
     display_unlock();
@@ -5514,6 +5685,8 @@ static void left_edge_swipe_cb(lv_event_t *e)
         if (s_left_edge_swipe_start_x >= 0 &&
             (int)p.x - s_left_edge_swipe_start_x >= EDGE_SWIPE_MIN_DX) {
             ui_advance_page();
+        } else if (grip_mouse_click(e, s_left_edge_grip)) {
+            ui_advance_page();          // a pointer cannot swipe: see grip_mouse_click()
         }
         s_left_edge_swipe_start_x = -1;
     }
@@ -5621,9 +5794,11 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
         } else if (be_decided == 1 && s_bottom_edge_swipe_start_y >= 0 &&
                    s_bottom_edge_swipe_start_y - (int)p.y >= EDGE_SWIPE_MIN_DY) {
             ui_show_memories();
+        } else if (be_decided == 0 && grip_mouse_click(e, s_bottom_edge_grip)) {
+            ui_show_memories();         // a pointer cannot swipe: see grip_mouse_click()
         }
-        // A pure tap (be_decided==0) does nothing - so reaching for the swipe
-        // grip can't accidentally retune.
+        // A pure tap (be_decided==0) from a FINGER still does nothing - so
+        // reaching for the swipe grip can't accidentally retune.
         s_touch_on_bandplan = false;
         s_bottom_edge_swipe_start_y = -1;
         be_start_x = -1;
@@ -5652,6 +5827,11 @@ static void right_edge_swipe_cb(lv_event_t *e)
     if (code == LV_EVENT_RELEASED) {
         if (s_right_edge_swipe_start_x >= 0 &&
             s_right_edge_swipe_start_x - (int)p.x >= EDGE_SWIPE_MIN_DX) {
+            drawer_open();
+        } else if (grip_mouse_click(e, s_burger_btn)) {
+            // The right edge's visual grip is s_burger_btn - a screen child, not
+            // a child of this strip (see build_edge_swipe_strips). It is
+            // non-clickable, so the click lands here, on the strip beneath it.
             drawer_open();
         }
         s_right_edge_swipe_start_x = -1;
