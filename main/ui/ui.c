@@ -1481,8 +1481,27 @@ static int  s_screen_swipe_start_x  = -1;
 #define DRAWER_SWIPE_MIN_DX  60
 // CW transmit-offset limit, in Hz either side of zero-beat. The slider and the
 // nudge buttons must agree on this, so it lives here rather than as a literal
-// in both. See drawer_cwtxoff_nudge_cb for why it is 1000 and not smaller.
-#define CW_TX_OFFSET_MAX_HZ  1000
+// in both.
+//
+// 300, and it was 1000 until both the operators who asked for this feature said
+// that was far too wide. Roy KI0ER, who requested it, originally said 400-600 Hz
+// and then corrected himself: "I forgot to divide by 2" - his real answer is
+// "plus or minus around 250 Hz or even 200 Hz would be more than adequate", and
+// in practice he sets +60 Hz on his own rig. Michael KZ4LY, who complained the
+// slider was too coarse, is "almost always within +/-100Hz" and has "never
+// actually gone beyond +/-250Hz".
+//
+// So 300 clears the ceiling BOTH of them named, with a little room for a station
+// running a wider filter than the ~500 Hz Roy assumed. It is not a compromise
+// between two positions - they converged, and the wide range turned out to have
+// no advocate at all. Michael asked outright, "Does anyone here actually ever
+// use 1kHz XIT offset?", and nobody did.
+//
+// The point of narrowing it is PRECISION: the slider is ~488 px, so 2000 Hz in
+// 10 Hz steps was 2.4 px per step ("had to roll my finger on the display"),
+// where 600 Hz is about 8 px. The +/-10 and +/-50 buttons cover exact placement
+// - Roy's 60 Hz is +50 then +10.
+#define CW_TX_OFFSET_MAX_HZ  300
 
 // Left-edge swipe (drag right) toggles Panadapter <-> FT8 mode, and
 // bottom-edge swipe (drag up) opens the memory-channel modal. These use
@@ -6803,16 +6822,31 @@ static void drawer_build(void)
         lv_obj_set_style_text_color(s_lbl_cwtxoff, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(s_lbl_cwtxoff, &lv_font_montserrat_28, 0);
         lv_obj_align(s_lbl_cwtxoff, LV_ALIGN_TOP_LEFT, 0, 94);
-        ui_set_cw_tx_offset_label(cwcfg.cw_tx_offset_hz);
+        // Clamp what was STORED, not just what the slider can show. A value
+        // saved by v1.7.1 can be up to 1000, and simply pinning the knob at the
+        // end would leave the radio using an offset the UI cannot represent or
+        // undo. Writing it back makes the displayed value the true one.
+        int cwoff = cwcfg.cw_tx_offset_hz;
+        if (cwoff >  CW_TX_OFFSET_MAX_HZ) cwoff =  CW_TX_OFFSET_MAX_HZ;
+        if (cwoff < -CW_TX_OFFSET_MAX_HZ) cwoff = -CW_TX_OFFSET_MAX_HZ;
+        if (cwoff != cwcfg.cw_tx_offset_hz) {
+            ESP_LOGW(TAG, "CW TX offset %d Hz is outside the +/-%d range - clamped to %d",
+                     cwcfg.cw_tx_offset_hz, CW_TX_OFFSET_MAX_HZ, cwoff);
+            settings_set_cw_tx_offset_hz((int16_t)cwoff);
+        }
+        ui_set_cw_tx_offset_label(cwoff);
 
         s_slider_cwtxoff = lv_slider_create(sec);
         lv_obj_set_size(s_slider_cwtxoff, DRAWER_W - 32, 30);
-        lv_slider_set_range(s_slider_cwtxoff, -100, 100);   // x10 Hz
-        lv_slider_set_value(s_slider_cwtxoff, cwcfg.cw_tx_offset_hz / 10, LV_ANIM_OFF);
+        // Derived from the limit, never restated: the slider is in x10 Hz steps.
+        lv_slider_set_range(s_slider_cwtxoff,
+                            -(CW_TX_OFFSET_MAX_HZ / 10), CW_TX_OFFSET_MAX_HZ / 10);
+        lv_slider_set_value(s_slider_cwtxoff, cwoff / 10, LV_ANIM_OFF);
         lv_obj_align(s_slider_cwtxoff, LV_ALIGN_TOP_LEFT, 0, 134);
         lv_obj_add_event_cb(s_slider_cwtxoff, drawer_slider_cwtxoff_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
-        // Exact steps, because 10 Hz is 2.4 px of slider (Michael KZ4LY).
+        // Exact steps. Even at +/-300 a 10 Hz step is only ~8 px, and Roy's
+        // 60 Hz is +50 then +10 (Michael KZ4LY, Roy KI0ER).
         {
             static const struct { const char *txt; int delta; } nudge[] = {
                 { "-50", -50 }, { "-10", -10 }, { "+10", +10 }, { "+50", +50 },
@@ -7693,13 +7727,15 @@ static void drawer_slider_cwtxoff_cb(lv_event_t *e)
 // 2000 Hz in 10 Hz steps across ~488 px, which is 2.4 px per step, so setting
 // 60 Hz by finger is genuinely fiddly.
 //
-// The RANGE is deliberately left at +/-1 kHz rather than narrowed to suit him,
-// because Roy KI0ER asked for this feature wanting 400-600 Hz: Roy RUNS QRP and
-// wants to stand out of the mud-pit, Michael HUNTS and is breaking into
-// pileups. Both are right for what they are doing, and capping the range would
-// have quietly taken Roy's use case away to fix Michael's. Buttons give exact
-// steps without removing anything - the same answer the TX tone picker's +/-50
-// already uses.
+// The buttons are the same answer the TX tone picker's +/-50 already uses.
+//
+// ⚠ An earlier version of this comment justified keeping the range at +/-1 kHz
+// on the grounds that "Roy KI0ER RUNS QRP and wants to stand out of the
+// mud-pit, Michael HUNTS". BOTH HALVES WERE WRONG. Roy asked for a "not
+// zero-beat CW REPLY" offset - he hunts too - and he then corrected his own
+// figure: "I forgot to divide by 2", his real answer being 200-250 Hz. I had
+// taken his 400-600 second-hand and built an argument on it, and it went into a
+// public thread before he put it right. See CW_TX_OFFSET_MAX_HZ.
 static void drawer_cwtxoff_nudge_cb(lv_event_t *e)
 {
     int delta = (int)(intptr_t)lv_event_get_user_data(e);
