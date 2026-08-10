@@ -674,6 +674,10 @@ static void freq_popup_build(void)
     // gesture (pinch_poll_cb) - not a replacement for it.
     lv_obj_add_event_cb(ov, freq_kp_swipe_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(ov, freq_kp_swipe_cb, LV_EVENT_RELEASED, NULL);
+    // Clickable only because it carries the pad-resize swipe - deliberately NOT
+    // a dismiss target (see the comment above), and certainly not a control, so
+    // the pointer must stay white over it.
+    lv_obj_add_flag(ov, UI_FLAG_NOT_HOT);
     s_freq_popup = ov;
 
     // Two discrete sizes (pinch toggles between them, see pinch_poll_cb) -
@@ -2791,6 +2795,7 @@ static void build_bandplan_strip(lv_obj_t *parent)
     // a separate implementation. A plain tap (no drag) tunes there directly,
     // same as the spectrum.
     lv_obj_add_flag(s_bandplan_obj, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_bandplan_obj, UI_FLAG_NOT_HOT);   // a track you drag, not a button
     lv_obj_add_event_cb(s_bandplan_obj, touch_event_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_bandplan_obj, touch_event_cb, LV_EVENT_PRESSING, NULL);
     lv_obj_add_event_cb(s_bandplan_obj, touch_event_cb, LV_EVENT_RELEASED, NULL);
@@ -3543,7 +3548,29 @@ static bool clickable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
     // ADV_HITTEST - which the drawer's sliders set so only their knob responds.
     // So a slider reports hot on the knob and nowhere else, which is the truth.
     lv_point_t p = { x, y };
-    return lv_obj_hit_test(parent, &p);
+    if (!lv_obj_hit_test(parent, &p)) return false;
+
+    // Being clickable is not the same as being worth pointing out. Almost every
+    // container in this UI is clickable, because that is lv_obj's default, and
+    // once tap-outside-to-dismiss was added to the drawer and the memory window
+    // the pointer went green nearly everywhere - which tells the operator
+    // nothing at all. Two further tests, in the order they are cheap:
+    //
+    //  1. UI_FLAG_NOT_HOT - set by hand on surfaces you click to DISMISS or drag
+    //     rather than to press (see ui_theme.h). They have real handlers, so
+    //     nothing else here can distinguish them.
+    //
+    //  2. A PLAIN lv_obj with no event handlers of its own is a background. This
+    //     is what excludes the drawer's section panels, the FT8 panes and every
+    //     modal's overlay without naming any of them - present or future. A
+    //     plain lv_obj WITH a handler is a deliberate hit zone (the FT8 "Preset"
+    //     target, the top-bar Band/Mode/BW zones) and stays hot; anything of a
+    //     real widget class - button, checkbox, slider, dropdown, textarea - is a
+    //     control whatever its handler count, since its class does the work.
+    if (lv_obj_has_flag(parent, UI_FLAG_NOT_HOT)) return false;
+    if (lv_obj_check_type(parent, &lv_obj_class) && lv_obj_get_event_count(parent) == 0)
+        return false;
+    return true;
 }
 
 // The edge strips are the one place where "clickable" and "does something" part
@@ -6335,6 +6362,7 @@ static void drawer_build(void)
     lv_obj_add_flag(s_drawer_scrim, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_event_cb(s_drawer_scrim, drawer_scrim_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_drawer_scrim, drawer_scrim_cb, LV_EVENT_RELEASED, NULL);
+    lv_obj_add_flag(s_drawer_scrim, UI_FLAG_NOT_HOT);   // dismiss surface, not a control
 
     s_drawer = lv_obj_create(scr);
     lv_obj_set_size(s_drawer, DRAWER_W, DISPLAY_V_RES);
@@ -6350,6 +6378,9 @@ static void drawer_build(void)
     // Drawer scrolls vertically — content overflows once CW section is added.
     lv_obj_set_scroll_dir(s_drawer, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_drawer, LV_SCROLLBAR_MODE_AUTO);
+    // The body carries the close-swipe, so it is clickable - but it is the panel
+    // you are working IN, not a button. Its controls report for themselves.
+    lv_obj_add_flag(s_drawer, UI_FLAG_NOT_HOT);
 
     // The handle, on the drawer's LEFT edge - the edge that actually TRAVELS.
     //

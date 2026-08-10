@@ -58,6 +58,15 @@ void ui_kbd_set_buttons(lv_obj_t *save_btn, lv_obj_t *cancel_btn);
 // deliberately not UI_COLOR_PRIMARY: blue already means button, panel, header and
 // BT-connected in this UI, so one more blue would say nothing (operator, v1.8.0).
 #define UI_COLOR_POINTER_HOT    0x00ff66
+
+// "This surface is clickable, but do NOT tell the operator it is."
+//
+// For the things you click to DISMISS or to DRAG rather than to press: a modal
+// backdrop, the drawer's own body, a band-plan or slider track. They are all
+// genuinely clickable, and reporting them turned the green pointer into a
+// pointer that is green nearly everywhere, which says nothing (operator,
+// v1.8.0). Set it on the surface itself; children are judged on their own.
+#define UI_FLAG_NOT_HOT         LV_OBJ_FLAG_USER_1
 #define UI_COLOR_TX_ACTIVE      0xff6020
 
 /* Text */

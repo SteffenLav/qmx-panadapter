@@ -920,6 +920,12 @@ static void modal_build(void)
     // it safe to close on.
     lv_obj_add_event_cb(s_modal, backdrop_click_cb, LV_EVENT_CLICKED, NULL);
 
+    // Both of these are things you click to DISMISS, not controls, so the mouse
+    // pointer must not advertise them - otherwise it is green across the whole
+    // window and means nothing. The cells inside report for themselves.
+    lv_obj_add_flag(s_modal, UI_FLAG_NOT_HOT);
+    lv_obj_add_flag(s_panel, UI_FLAG_NOT_HOT);
+
     /* Action panel for long-press */
     s_action_panel = lv_obj_create(s_panel);
     lv_obj_set_size(s_action_panel, 600, 280);
