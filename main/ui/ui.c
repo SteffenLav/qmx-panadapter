@@ -3688,9 +3688,18 @@ static void mouse_timer_cb(lv_timer_t *t)
     static lv_point_t last_pt = { -1, -1 };
     if (s_mouse_pt.x != last_pt.x || s_mouse_pt.y != last_pt.y) {
         last_pt = s_mouse_pt;
+        // Handles that are NOT clickable objects themselves - the press falls
+        // through to the strip behind them, which is what actually acts - so they
+        // have to be reported by geometry. Same reason for all four: the visible
+        // affordance and the hit target are different objects on purpose.
+        //
+        // s_bp_knob is the band-plan's visible-window slider. Its TRACK is
+        // UI_FLAG_NOT_HOT, so without this the one part of the band-plan you are
+        // meant to grab was the one part that said nothing (operator, v1.8.0).
         bool on_grip = point_on_grip(s_left_edge_grip,   s_mouse_pt.x, s_mouse_pt.y) ||
                        point_on_grip(s_bottom_edge_grip, s_mouse_pt.x, s_mouse_pt.y) ||
-                       point_on_grip(s_burger_btn,       s_mouse_pt.x, s_mouse_pt.y);
+                       point_on_grip(s_burger_btn,       s_mouse_pt.x, s_mouse_pt.y) ||
+                       point_on_grip(s_bp_knob,          s_mouse_pt.x, s_mouse_pt.y);
         bool on_strip = point_in_obj(s_left_edge_strip,   s_mouse_pt.x, s_mouse_pt.y) ||
                         point_in_obj(s_bottom_edge_strip, s_mouse_pt.x, s_mouse_pt.y) ||
                         point_in_obj(s_right_edge_strip,  s_mouse_pt.x, s_mouse_pt.y);

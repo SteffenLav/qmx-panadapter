@@ -156,6 +156,13 @@ static void refresh_view(void)
             lv_obj_set_size(cell, STRIP_CELL_W - 2, pick ? row_h + 3 : row_h);
             lv_obj_set_pos(cell, i * (STRIP_CELL_W + STRIP_CELL_GAP) + 1,
                            (row ? 3 + row_h + 2 : 3) - (pick ? 1 : 0));
+            // The picked cells - the white block - are the grabbable handle, and
+            // the only part of the strip the pointer reports. Set only on a
+            // change: this runs over every cell on every repaint.
+            if (pick != lv_obj_has_flag(cell, LV_OBJ_FLAG_CLICKABLE)) {
+                if (pick) lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+                else      lv_obj_clear_flag(cell, LV_OBJ_FLAG_CLICKABLE);
+            }
         }
         if (!busy_any) n_free++;
     }
@@ -493,9 +500,23 @@ static void modal_build(void)
             lv_obj_set_style_radius(c, 2, 0);
             lv_obj_set_style_pad_all(c, 0, 0);
             // Cells are decoration: clicks belong to the strip so the x->slot map
-            // is the single source of truth for what got tapped.
+            // is the single source of truth for what got tapped. CLICKABLE is
+            // therefore off here and refresh_view() turns it on for the PICKED
+            // cells only - the white "your tone" block - so that block is what
+            // the mouse pointer reports and what you can grab (operator, v1.8.0:
+            // report the whole block, not just the mark above it).
+            //
+            // The drag callbacks are attached now, to every cell, because adding
+            // them from refresh_view() would stack a fresh copy on every repaint.
+            // They are harmless while CLICKABLE is off, and strip_touch_cb reads
+            // the indev point against the STRIP's coords, so a press landing on a
+            // cell behaves exactly as one landing on the strip.
             lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_add_event_cb(c, strip_touch_cb, LV_EVENT_PRESSED,    NULL);
+            lv_obj_add_event_cb(c, strip_touch_cb, LV_EVENT_PRESSING,   NULL);
+            lv_obj_add_event_cb(c, strip_touch_cb, LV_EVENT_RELEASED,   NULL);
+            lv_obj_add_event_cb(c, strip_touch_cb, LV_EVENT_PRESS_LOST, NULL);
             if (row == 0) s_cells_e[i] = c; else s_cells_o[i] = c;
         }
     }
