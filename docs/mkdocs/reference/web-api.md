@@ -42,7 +42,7 @@ Returns the current state of the panadapter.
   "lotw_ready": true,
   "bandplan": { "lo": 14000000, "hi": 14350000, "segs": [ { "lo": 14000000, "hi": 14070000, "c": "20B0FF", "l": "CW" } ] },
   "bt":       { "en": true, "conn": false },
-  "tab5_fw": "v1.7.0",
+  "tab5_fw": "v1.7.1",
   "bands":    [ { "name": "20", "center_hz": 14100000 } ]
 }
 ```

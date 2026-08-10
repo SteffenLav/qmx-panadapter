@@ -35,10 +35,11 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 - **Logging & upload** — every QSO written to an ADIF log on the device, readable and
   editable on the Tab5 or in the browser, and uploaded *(needs WiFi)* to **QRZ Logbook**,
   **eQSL** and **ARRL LoTW** — LoTW QSOs signed on the device with your own certificate.
-- **Live spots** *(needs WiFi)* — **POTA** activations, and optionally **RBN** CW spots,
-  drawn on the trace where the station actually is, grey once you have worked them on that
-  band. Press and drag to pick one and lift to tune it *with the right mode*. See
-  [Live Spots](guide/spots.md).
+- **Live spots** *(needs WiFi)* — **POTA** activations, and optionally **RBN** CW skimmer
+  spots and **DX cluster** spots, which are where phone activity comes from. Drawn on the
+  trace where the station actually is, grey once you have worked them on that band, and one
+  entry per station however many sources report it. Press and drag to pick one and lift to
+  tune it *with the right mode*. See [Live Spots](guide/spots.md).
 - **PSK Reporter** *(needs WiFi)* — the stations you decode are reported to the PSK
   Reporter map the way WSJT-X does. On by default, one checkbox to turn off, and never
   anything on the air.
@@ -69,11 +70,13 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.7.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.7.1 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, and now a mouse.** The panadapter, FT8/FT4 receive and
 transmit, ADIF logging and all three logbook uploads are stable and in daily use.
 
-**New in v1.7.0 — a mouse, the phone spots that were missing, and knowing who hears you.**
+**v1.7.1 is a bug-fix patch — tried a Bluetooth mouse on v1.7.0? Install this so your WiFi doesn't go flaky.** Switching the mouse on could leave WiFi dropping and recovering, with the web UI flapping between Connected and Disconnected. WiFi and Bluetooth share one link to the wireless co-processor, and the Tab5 was listening for every Bluetooth device in range, continuously; it now listens in short bursts and ignores everything that is not your mouse. Also: tap outside the settings drawer to close it, ±10/±50 buttons for the CW transmit offset, and DX cluster spots stop vanishing every minute. Nothing changes if you do not use a Bluetooth mouse.
+
+**In v1.7.0 — a mouse, the phone spots that were missing, and knowing who hears you.**
 A **Bluetooth mouse** drives the Tab5 *while the QMX stays plugged in* — the case a USB
 mouse can never serve, because the radio owns the only USB port. Pair it once and it
 reconnects by itself; the wheel scrolls whatever is under the pointer. **DX cluster spots**
@@ -92,7 +95,7 @@ Every release, newest first, is on the [Releases](releases.md) page.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.7.0.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.7.1.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 
