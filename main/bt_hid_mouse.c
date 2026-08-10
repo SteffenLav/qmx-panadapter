@@ -63,6 +63,8 @@ static const char *TAG = "btmouse";
 static bool s_started;
 static int  s_seen;          // devices reported this scan, for a one-line summary
 static bool s_connecting;
+static int64_t s_connect_us;      // when s_connecting was set; see the stuck guard
+#define CONNECT_STUCK_US (20LL * 1000000)
 static bool s_connected;
 static uint8_t s_own_addr_type;
 static uint16_t s_conn_handle;
@@ -176,9 +178,21 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
                  a[5], a[4], a[3], a[2], a[1], a[0], event->disc.rssi,
                  name[0] ? name : "(no name)");
     }
+    // A connect attempt that neither succeeds nor reports failure would strand
+    // s_connecting and make the mouse permanently undiscoverable. One such path
+    // is fixed above (DISCONNECT), but the guard is the class of bug, not that
+    // one instance: ble_gap_connect() is given a 10 s timeout, so anything
+    // still "in progress" well past that is not coming back.
+    if (s_connecting && s_connect_us &&
+        (esp_timer_get_time() - s_connect_us) > CONNECT_STUCK_US) {
+        ESP_LOGW(TAG, "connect attempt stuck for >%d s - clearing and retrying",
+                 (int)(CONNECT_STUCK_US / 1000000));
+        s_connecting = false;
+    }
     if (hid && !s_connecting && !s_connected) {
         ESP_LOGW(TAG, "HID device found - connecting");
         s_connecting = true;
+        s_connect_us = esp_timer_get_time();
         ble_gap_disc_cancel();              // cannot connect while scanning
         int rc = ble_gap_connect(s_own_addr_type, &event->disc.addr, 10000,
                                  NULL, conn_event_cb, NULL);
@@ -289,6 +303,19 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
                  s_enc_us ? (long long)((esp_timer_get_time() - s_enc_us) / 1000000) : -1);
         s_enc_us = 0;
         s_connected = false;
+        // Clear the IN-PROGRESS flag too. A connection attempt that fails to
+        // establish (HCI 0x3E, reason 574 here) arrives as DISCONNECT, NOT as
+        // CONNECT-with-error - so this path used to leave s_connecting set
+        // forever, and every later sighting of the mouse hit the
+        // "!s_connecting" guard in gap_event_cb and was silently ignored. The
+        // mouse then never reconnected until the Tab5 was rebooted.
+        //
+        // Caught 2026-08-10 from the operator losing the cursor: the log shows
+        // the scan finding it ("HID DEVICE: ... rssi=-62") with no "connecting"
+        // line after it, again and again. The "-1 s connected" above is the
+        // same event seen from the other side - s_enc_us was never set, so it
+        // was never really connected.
+        s_connecting = false;
         hid_cursor_set_present(HID_CURSOR_SRC_BLE, false);
         start_scan();
         return 0;
