@@ -27,6 +27,7 @@
 // info pane alongside "ME: <call> <grid>".
 #include "ft8_tx.h"
 #include "ft8_qso.h"
+#include "ft8_hound.h"   // Fox/Hound: a tap at a Fox calls from the hound region
 #include "ft8_pileup.h"
 #include "ft8_pileup_modal.h"
 #include "ft8_status.h"
@@ -590,6 +591,17 @@ static void row_activate(int idx)
     // theirs). ft8_tx_pick_tone_hz() honours TX hold: held tone, or the nearest
     // unoccupied 50 Hz slot to the current preference when it's off.
     int reply_freq_hz = ft8_tx_pick_tone_hz();
+
+    // Tapping a FOX while Fox/Hound is enabled: call from the hound region
+    // instead. The ordinary picker searches the whole 200-2800 Hz passband and
+    // could hand us a tone inside the Fox's own region, which is the one place a
+    // hound must never call from - the Fox is listening there for the hound it
+    // already answered, not for new callers. See ft8_hound.h.
+    if (ft8_hound_enabled(ft8_hound_mode()) && ft8_hound_looks_like_fox(match)) {
+        reply_freq_hz = ft8_hound_pick_tx_tone();
+        ESP_LOGI(TAG, "row activate: %s is a Fox - calling from the hound region (%d Hz)",
+                 match->call, reply_freq_hz);
+    }
 
     ESP_LOGI(TAG, "row activate: reply to %s (their_freq=%d Hz -> our_freq=%d Hz, last_utc=%lld)",
              match->call, (int)match->last_freq, reply_freq_hz, (long long)match->last_utc);

@@ -59,14 +59,23 @@ static inline bool ft8_hound_enabled(ft8_hound_mode_t m) { return m != FT8_HOUND
 // hound never lands on the Fox's own slice by rounding.
 #define FT8_HOUND_TX_MIN_HZ    1100
 
-// Does this decoded station look like a Fox? Deliberately conservative - the
-// answer only ever OFFERS Hound to the operator, and a false positive would
-// invite them into a mode that changes how they transmit.
+// Feed the tick's decode snapshot in so the queue history stays current. Must be
+// called before ft8_hound_looks_like_fox() can answer true for anybody - the
+// decode table keeps only each station's last message, so "has it worked several
+// different stations lately" has to be accumulated over time, and that lives in
+// ft8_hound.c.
+void ft8_hound_observe(const ft8_call_t *list, int n, int64_t now);
+
+// Does this decoded station look like a Fox? Conservative on purpose: a false
+// positive means transmitting at an ordinary station as though it were a
+// DXpedition, and QSY'ing onto its frequency to do it.
 //
-// The test is the F/H signature rather than any one message: the station sits in
-// the Fox region AND is working the band as a Fox does (calling CQ there, or
-// visibly working other stations from there). A rare DX station simply operating
-// low in the passband is not a Fox and must not read as one.
+// Three things together, and the third is the one that matters: it sits in the
+// Fox region, its message is Fox-shaped (a CQ from down there or a report to
+// somebody), and it has been seen WORKING A QUEUE - several different callsigns
+// inside a few minutes. Being low in the passband and calling CQ is NOT enough;
+// that rule identified an ordinary phantom at 700 Hz as a Fox on the bench and
+// called it.
 bool ft8_hound_looks_like_fox(const ft8_call_t *c);
 
 // Scan a decode snapshot for the most promising Fox, or NULL. `n` entries.
@@ -79,11 +88,17 @@ bool ft8_hound_looks_like_fox(const ft8_call_t *c);
 // which is both useless and rude, since it is deaf while it transmits.
 const ft8_call_t *ft8_hound_find_fox(const ft8_call_t *list, int n, int64_t slot_sec);
 
-// Automatic mode: once per RX slot, from the decode task (the same place and the
-// same thread ft8_robot_tick() starts contacts from). No-op unless the mode is
-// FT8_HOUND_AUTO and the QSO machine is idle. Never calls a Fox already worked on
-// this band - a DXpedition dupe is worth nothing to either station, and without
-// that check automatic mode would work the same Fox for ever.
+// Once per RX slot, from the decode task (the same place and thread
+// ft8_robot_tick() starts contacts from). No-op when the mode is off or a contact
+// is already running.
+//
+//   GUIDED    says a Fox is there and what tapping it will do, and stops. Every
+//             transmission stays the operator's decision.
+//   AUTOMATIC does the same and then calls it.
+//
+// Never calls a Fox already worked on this band - a DXpedition dupe is worth
+// nothing to either station, and without that check automatic mode would work the
+// same Fox for ever.
 void ft8_hound_tick(int64_t slot_sec);
 
 // Pick our calling tone: a free 50 Hz slot at or above FT8_HOUND_TX_MIN_HZ,
@@ -91,8 +106,3 @@ void ft8_hound_tick(int64_t slot_sec);
 // which beats WSJT-X's random pick, since random is how hounds end up stacked on
 // each other. Falls back to a spread-out default if nothing is known yet.
 int ft8_hound_pick_tx_tone(void);
-
-// Guidance for the status line, given the QSO state. Returns NULL when there is
-// nothing to say. Guided mode shows these; automatic mode shows them too, since
-// knowing what the machine is doing is the whole point of watching it.
-const char *ft8_hound_hint(int qso_state, const char *fox_call);

@@ -34,6 +34,7 @@ static lv_obj_t *s_cb_incl_cq_only  = NULL;
 static lv_obj_t *s_cb_skip_tx1      = NULL;  // pounce: skip grid, send report first
 static lv_obj_t *s_cb_robot         = NULL;  // auto-answer enable
 static lv_obj_t *s_dd_robot_pri     = NULL;  // priority dropdown
+static lv_obj_t *s_dd_hound         = NULL;  // Fox/Hound: off / guided / automatic
 static lv_obj_t *s_cb_auto_pileup   = NULL;  // auto-work waiting pileup callers on QSO completion
 static lv_obj_t *s_cb_greylist      = NULL;  // grey-list stations after repeated failed pounces
 static lv_obj_t *s_robot_warn       = NULL;  // "unattended TX" warning - shown while robot OR auto-pileup is checked
@@ -116,6 +117,7 @@ static void save_btn_cb(lv_event_t *e)
 
     settings_set_ft8_filters(&f);
     settings_set_greylist_en(lv_obj_has_state(s_cb_greylist, LV_STATE_CHECKED));
+    settings_set_hound_mode((uint8_t)lv_dropdown_get_selected(s_dd_hound));
 
     {
         char cls[8], sect[8];
@@ -401,6 +403,29 @@ static void modal_build(void)
     s_cb_greylist = make_labeled_checkbox(panel, "Allow grey-listing", 540, 510, &lbl_greylist);
     lv_obj_set_style_text_color(lbl_greylist, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
+    // --- Fox/Hound (DXpedition) ---------------------------------------
+    // A ladder, not a switch, so it is a dropdown: off / guided / automatic.
+    // See ft8_hound.h - it suspends three of our politeness rules (the
+    // busy-station hold, the final re-send, the grey-list), which is exactly why
+    // it is a mode the operator turns on deliberately rather than something
+    // inferred from a low-frequency CQ.
+    lv_obj_t *lbl_hound = lv_label_create(panel);
+    lv_label_set_text(lbl_hound, "Fox/Hound (DXpedition):");
+    lv_obj_set_style_text_font(lbl_hound, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(lbl_hound, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_align(lbl_hound, LV_ALIGN_TOP_LEFT, 540, 578);
+
+    // Order MUST match ft8_hound_mode_t (OFF=0, GUIDED=1, AUTO=2).
+    s_dd_hound = lv_dropdown_create(panel);
+    lv_dropdown_set_options(s_dd_hound, "Off\nGuided\nAutomatic");
+    lv_obj_set_width(s_dd_hound, 200);
+    lv_obj_align_to(s_dd_hound, lbl_hound, LV_ALIGN_OUT_RIGHT_MID, 12, 0);
+    lv_obj_set_style_text_font(s_dd_hound, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_bg_color(s_dd_hound, lv_color_hex(UI_COLOR_KEY_BG), 0);
+    lv_obj_set_style_border_color(s_dd_hound, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_text_color(s_dd_hound, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_add_event_cb(s_dd_hound, robot_pri_dropdown_open_cb, LV_EVENT_CLICKED, NULL);
+
     // --- ARRL Field Day exchange mode ---------------------------------
     // When on, FT8 QSOs (manual and auto) exchange class+section instead of
     // grid/signal report - see CLAUDE.md "FT8 robot" / ft8_qso.c. Class and
@@ -526,6 +551,7 @@ void ft8_filter_modal_show(void)
                              f->robot_priority <= FT8_ROBOT_PRI_DISTANT ? f->robot_priority : 0);
     apply_checkbox_state(s_cb_auto_pileup, f->auto_pileup);
     apply_checkbox_state(s_cb_greylist, s.greylist_en);
+    lv_dropdown_set_selected(s_dd_hound, s.hound_mode <= 2 ? s.hound_mode : 0);
     update_unattended_warn();   // shows the warning if robot OR auto-pileup is on
     apply_checkbox_state(s_cb_field_day, s.field_day_en);
     lv_textarea_set_text(s_ta_fd_class, s.fd_class);

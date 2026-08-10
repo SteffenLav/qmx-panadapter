@@ -1707,6 +1707,14 @@ static void ft8_task(void *arg)
                     // no-audio sim slot never reaches, so "Auto-answer CQ"
                     // silently did nothing in QMX-less simulation. Same
                     // ordering as decode_slot(): advance first, robot second.
+                    //
+                    // ⚠ ANY per-slot tick added to decode_slot() needs adding
+                    // HERE as well, or it does nothing in simulation - which is
+                    // the one place the feature can be tested with the radio off.
+                    // Fox/Hound learned this the hard way on 2026-08-10: the
+                    // phantom Fox was decoded perfectly and ft8_hound_tick() was
+                    // never called, so it looked like detection was broken.
+                    ft8_hound_tick(slot_sec);
                     ft8_robot_tick(slot_sec);
                     ft8_screen_view_request_refresh();
                 } else {

@@ -1602,6 +1602,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "pskreporter_en",    c.pskreporter_en);
     cJSON_AddBoolToObject(root, "greylist_en",       c.greylist_en);
     cJSON_AddNumberToObject(root, "hound_mode",      c.hound_mode);
+    cJSON_AddBoolToObject(root, "sim_mode_en",       c.sim_mode_en);
     cJSON_AddBoolToObject(root, "distance_in_miles", c.distance_in_miles);
     cJSON_AddBoolToObject(root, "iq_enabled",        c.iq_enabled);
     cJSON_AddNumberToObject(root, "qmx_vol_db",      c.qmx_vol_db);
@@ -1735,6 +1736,11 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         cJSON *hm = cJSON_GetObjectItem(root, "hound_mode");
         if (cJSON_IsNumber(hm)) settings_set_hound_mode((uint8_t)hm->valuedouble);
     }
+    // Simulation mode over the web. Added so the Fox/Hound work could be tested
+    // with the radio switched off and nobody at the Tab5, and it earns its keep
+    // generally: this is the one setting that makes TX SAFER (ft8_tx.c's interlock
+    // sends not one CAT byte while it is on), so remote practice needs no trust.
+    BOOLTOP("sim_mode_en",       settings_set_sim_mode_en);
     BOOLTOP("distance_in_miles", settings_set_distance_in_miles);
     #undef BOOLTOP
 

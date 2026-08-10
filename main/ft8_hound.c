@@ -7,12 +7,14 @@
 #include "storage/settings.h"
 #include "adif/adif_log.h"    // adif_log_contains_call_on_band() - dupe guard
 #include "cat/cat.h"          // cat_get_frequency() - which band we are on
+#include "ft8_status.h"       // ft8_status_set() - the FT8 status line
 
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 
 static const char *TAG = "ft8_hound";
 
@@ -55,6 +57,111 @@ static bool text_is_working_someone(const char *t)
     return false;
 }
 
+// ---- "is it working a QUEUE?" -----------------------------------------------
+//
+// Sitting below 1000 Hz and calling CQ is NOT enough, and assuming it was is the
+// first thing this code got wrong: on the bench it identified W1AW - an ordinary
+// phantom whose only distinguishing feature is a 700 Hz tone - as a Fox and
+// called it. Plenty of ordinary stations work down there.
+//
+// What actually distinguishes a Fox is that it works MANY stations in quick
+// succession. One at a time is an ordinary QSO; several different callsigns
+// inside a couple of minutes is a DXpedition running a queue, and nothing else
+// on the band looks like that.
+//
+// The decode table keeps only each station's LAST message, so the history has to
+// live here: a handful of candidates, each with the distinct callsigns we have
+// seen them address. Small and fixed - this is a hint, not a database.
+#define FOX_CAND_MAX        6
+#define FOX_ADDR_MAX        3    // distinct addressees remembered per candidate
+#define FOX_QUEUE_MIN_ADDR  2    // ...and how many make it a queue
+#define FOX_WINDOW_SEC      240  // forget everything older than this
+
+typedef struct {
+    char    call[FT8_CALL_MAX_LEN];
+    char    addr[FOX_ADDR_MAX][FT8_CALL_MAX_LEN];
+    int     n_addr;
+    int64_t last_ts;
+} fox_cand_t;
+
+static fox_cand_t s_cands[FOX_CAND_MAX];
+
+// Note that `de` was heard working `to`. Called for every low-frequency station
+// on every tick; cheap, and only ever grows a tiny table.
+static void fox_note_working(const char *de, const char *to, int64_t now)
+{
+    if (!de || !de[0] || !to || !to[0]) return;
+
+    int slot = -1, oldest = 0;
+    for (int i = 0; i < FOX_CAND_MAX; i++) {
+        if (strcmp(s_cands[i].call, de) == 0) { slot = i; break; }
+        if (s_cands[i].last_ts < s_cands[oldest].last_ts) oldest = i;
+    }
+    if (slot < 0) {                       // new candidate: take a free or stalest row
+        slot = oldest;
+        memset(&s_cands[slot], 0, sizeof(s_cands[slot]));
+        snprintf(s_cands[slot].call, sizeof(s_cands[slot].call), "%s", de);
+    }
+    fox_cand_t *k = &s_cands[slot];
+    // Expired since we last saw it? Start its history over, so a station that
+    // worked somebody an hour ago does not look like a queue now.
+    if (k->last_ts && (now - k->last_ts) > FOX_WINDOW_SEC) {
+        k->n_addr = 0;
+        memset(k->addr, 0, sizeof(k->addr));
+    }
+    k->last_ts = now;
+
+    for (int a = 0; a < k->n_addr; a++)
+        if (strcmp(k->addr[a], to) == 0) return;        // already counted
+    if (k->n_addr < FOX_ADDR_MAX) {
+        snprintf(k->addr[k->n_addr], sizeof(k->addr[0]), "%s", to);
+        k->n_addr++;
+        if (k->n_addr == FOX_QUEUE_MIN_ADDR)
+            ESP_LOGI(TAG, "%s is working a queue (%s, %s...) - looks like a Fox",
+                     de, k->addr[0], k->addr[1]);
+    }
+}
+
+static bool fox_has_queue(const char *call, int64_t now)
+{
+    for (int i = 0; i < FOX_CAND_MAX; i++) {
+        if (strcmp(s_cands[i].call, call) != 0) continue;
+        if ((now - s_cands[i].last_ts) > FOX_WINDOW_SEC) return false;
+        return s_cands[i].n_addr >= FOX_QUEUE_MIN_ADDR;
+    }
+    return false;
+}
+
+// Split "<to> <de> <rest>" far enough to read the first two tokens.
+static bool msg_to_de(const char *t, char *to, size_t to_sz, char *de, size_t de_sz)
+{
+    if (!t || !t[0]) return false;
+    const char *sp1 = strchr(t, ' ');
+    if (!sp1) return false;
+    const char *sp2 = strchr(sp1 + 1, ' ');
+    if (!sp2) return false;
+    size_t l1 = (size_t)(sp1 - t), l2 = (size_t)(sp2 - sp1 - 1);
+    if (l1 == 0 || l1 >= to_sz || l2 == 0 || l2 >= de_sz) return false;
+    memcpy(to, t, l1); to[l1] = '\0';
+    memcpy(de, sp1 + 1, l2); de[l2] = '\0';
+    return true;
+}
+
+void ft8_hound_observe(const ft8_call_t *list, int n, int64_t now)
+{
+    for (int i = 0; i < n; i++) {
+        const ft8_call_t *c = &list[i];
+        if (!c->occupied || !c->call[0]) continue;
+        if (c->last_freq <= 0 || c->last_freq >= FT8_HOUND_FOX_MAX_HZ) continue;
+        if (!text_is_working_someone(c->last_text)) continue;
+        char to[FT8_CALL_MAX_LEN], de[FT8_CALL_MAX_LEN];
+        if (!msg_to_de(c->last_text, to, sizeof(to), de, sizeof(de))) continue;
+        if (strcmp(de, c->call) != 0) continue;      // the sender must be this row
+        if (strncmp(to, "CQ", 2) == 0) continue;
+        fox_note_working(de, to, now);
+    }
+}
+
 bool ft8_hound_looks_like_fox(const ft8_call_t *c)
 {
     if (!c || !c->occupied || !c->call[0]) return false;
@@ -63,13 +170,16 @@ bool ft8_hound_looks_like_fox(const ft8_call_t *c)
     // below that is one we could hear but never answer on frequency).
     if (c->last_freq <= 0 || c->last_freq >= FT8_HOUND_FOX_MAX_HZ) return false;
     if (c->last_freq < FT8_TX_TONE_MIN_HZ) return false;
-    // Working the band from down there, or calling from down there.
+    // Its current message must be Fox-shaped: a CQ from down there, or a report
+    // to somebody. (A Fox alternates between the two.)
     if (!text_is_cq(c->last_text) && !text_is_working_someone(c->last_text))
         return false;
-    // Heard more than once. A single decode in the Fox region is far more likely
-    // to be an ordinary station (or a decode artefact) than a DXpedition, and the
-    // cost of waiting one more slot is nothing.
-    return c->heard_count >= 2;
+    // Heard more than once - one decode in the Fox region is far more likely to be
+    // an ordinary station, or an artefact, than a DXpedition.
+    if (c->heard_count < 2) return false;
+    // And the test that actually means something: is it working a QUEUE? See
+    // fox_note_working() for why nothing weaker will do.
+    return fox_has_queue(c->call, (int64_t)time(NULL));
 }
 
 const ft8_call_t *ft8_hound_find_fox(const ft8_call_t *list, int n, int64_t slot_sec)
@@ -85,7 +195,9 @@ const ft8_call_t *ft8_hound_find_fox(const ft8_call_t *list, int n, int64_t slot
 
 void ft8_hound_tick(int64_t slot_sec)
 {
-    if (ft8_hound_mode() != FT8_HOUND_AUTO) return;
+    const ft8_hound_mode_t mode = ft8_hound_mode();
+    if (!ft8_hound_enabled(mode)) return;
+    const bool automatic = (mode == FT8_HOUND_AUTO);
 
     ft8_qso_state_t st = ft8_qso_get_state();
     // A hound contact that timed out goes sticky TIMEOUT. Clear it so automatic
@@ -93,7 +205,7 @@ void ft8_hound_tick(int64_t slot_sec)
     // Fox, not a fault. A HUMAN's timeout is left alone for them to see, exactly
     // as ft8_robot_tick() does.
     if (st == FT8_QSO_TIMEOUT) {
-        if (s_auto_started) { ft8_qso_abort(); s_auto_started = false; }
+        if (automatic && s_auto_started) { ft8_qso_abort(); s_auto_started = false; }
         return;
     }
     if (st != FT8_QSO_IDLE) return;
@@ -112,7 +224,24 @@ void ft8_hound_tick(int64_t slot_sec)
     int n = 0;
     ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
 
-    const ft8_call_t *fox = ft8_hound_find_fox(snap, n, slot_sec);
+    // Update the queue history FIRST - looks_like_fox() answers from it.
+    ft8_hound_observe(snap, n, (int64_t)time(NULL));
+
+    // NOT restricted to this exact slot, unlike the robot's CQ scan. A Fox
+    // transmits in ONE window, so demanding last_utc == slot_sec means every look
+    // that lands on the other window misses it - at best half the chances, and on
+    // the bench (where the phantom Fox calls every ~30 s) almost all of them: the
+    // first version of this never once fired, with nothing in the log to say why.
+    //
+    // Parity stays correct because ft8_tx_build_request() derives it from the
+    // Fox's OWN last_utc, so a one-slot-stale sighting still places our call in
+    // the window opposite the Fox's. Bounded at two slots: older than that and we
+    // would be calling something that may have stopped transmitting.
+    const ft8_call_t *fox = ft8_hound_find_fox(snap, n, 0);
+    if (fox && slot_sec > 0) {
+        int64_t age = slot_sec - fox->last_utc;
+        if (age < 0 || age > 2 * 15) fox = NULL;
+    }
     if (fox) {
         // Already in the log on this band? Then leave it alone. A DXpedition
         // dupe earns neither station anything, and this is what stops automatic
@@ -123,7 +252,32 @@ void ft8_hound_tick(int64_t slot_sec)
         }
     }
 
+    // GUIDED: say it is there, and what a tap will do. This is the whole of
+    // guided mode - the operator keeps every transmission decision, and the
+    // device's job is to make sure they know the opportunity exists, since a Fox
+    // is easy to miss down at the bottom of the passband among the ordinary
+    // traffic. Posting through ft8_status keeps ONE writer for the status line
+    // (the QSO machine owns it once a contact starts).
+    if (fox && !automatic) {
+        ft8_status_set("Fox %s at %d Hz - tap it to call as Hound",
+                       fox->call, (int)fox->last_freq);
+    }
+
+    // One line per sighting, change-detected on the callsign. Kept permanently
+    // (not a debug aid): "why did Hound not call that Fox" is the first question
+    // any field report will ask, and the answer is almost always either that we
+    // never saw it as a Fox or that it was already in the log.
     if (fox) {
+        static char last_seen[FT8_CALL_MAX_LEN];
+        if (strcmp(last_seen, fox->call) != 0) {
+            snprintf(last_seen, sizeof(last_seen), "%s", fox->call);
+            ESP_LOGI(TAG, "Fox seen: %s at %d Hz, snr %d, heard %u - mode %s",
+                     fox->call, (int)fox->last_freq, (int)fox->last_snr_db,
+                     (unsigned)fox->heard_count, automatic ? "automatic" : "guided");
+        }
+    }
+
+    if (fox && automatic) {
         int tone = ft8_hound_pick_tx_tone();
         ft8_tx_request_t req;
         char err[64];
@@ -174,27 +328,3 @@ int ft8_hound_pick_tx_tone(void)
     return 1500;
 }
 
-const char *ft8_hound_hint(int qso_state, const char *fox_call)
-{
-    (void)fox_call;
-    // Takes an int in the header so ft8_hound.h needn't pull in ft8_qso.h, but
-    // switches on the REAL enum here - magic numbers in a state machine are how
-    // a renumbered enum silently starts telling the operator the wrong thing.
-    switch ((ft8_qso_state_t)qso_state) {
-        case FT8_QSO_WAIT_RPT:
-            return "Hound: calling the Fox - it works a queue, so keep waiting";
-        case FT8_QSO_WAIT_RR73:
-            return "Hound: QSY'd onto the Fox - sending R-report";
-        case FT8_QSO_WAIT_DONE:
-            return "Hound: Fox answered - finishing";
-        case FT8_QSO_DONE:
-            return "Hound: in the log. Back on the hound tone";
-        case FT8_QSO_TIMEOUT:
-            return "Hound: no answer yet - the Fox is working others";
-        case FT8_QSO_IDLE:
-        case FT8_QSO_CQ:            // not a hound flow
-        case FT8_QSO_WAIT_ROGER:    // CQ-run only
-        default:
-            return NULL;
-    }
-}

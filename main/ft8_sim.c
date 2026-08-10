@@ -575,11 +575,51 @@ static void ft8_sim_task(void *arg)
             }
         }
 
+        // FOX: work the queue continuously, whether or not anyone has called us.
+        //
+        // A real Fox transmits in every one of its slots, mostly reports and RR73s
+        // to the hounds it is working, with the occasional CQ. That pattern is not
+        // decoration here - it is the ONLY thing that distinguishes a Fox from an
+        // ordinary station low in the passband, and ft8_hound_looks_like_fox()
+        // requires it (several distinct addressees within a few minutes). The first
+        // version of this Fox only worked others while ignoring our calls, which
+        // left it indistinguishable from any other CQ caller until we had already
+        // called it - so detection could never fire first, and the one station that
+        // DID get identified as a Fox was a phantom at 700 Hz that simply calls CQ.
+        {
+            static int64_t last_fox_work = 0;
+            int64_t nowq = time(NULL);
+            for (int i = 0; i < N_PHANTOMS; i++) {
+                ft8_sim_phantom_t *fx = &s_phantoms[i];
+                if (!fx->is_fox || fx->engaged || fx->pend_active) continue;
+                // Every other slot (30 s), which is the Fox's own parity.
+                if (nowq - last_fox_work < 30) continue;
+                last_fox_work = nowq;
+                static int qn = 0;
+                const int nq = (int)(sizeof(s_fox_queue) / sizeof(s_fox_queue[0]));
+                const char *victim = s_fox_queue[qn++ % nq];
+                // Alternate report / RR73 so the queue looks like real traffic
+                // rather than one message repeated at different callsigns.
+                const char *extra = (qn % 2) ? "-11" : "RR73";
+                set_pending(fx, victim, extra, false, true,
+                            ((nowq / 15) * 15) + 15, 1);
+                fx->engaged = false;   // it owes US nothing; keep it CQ-able too
+                break;                 // one per iteration - synth is not free
+            }
+        }
+
         // Idle-CQ refresh: one phantom per loop iteration (see
         // inject_next_idle_cq), restarted every CQ_REINJECT_PERIOD_SEC.
         static int s_cq_idx = N_PHANTOMS;   // pool position; ==N when batch done
         int64_t now = time(NULL);
-        if (now - last_cq_inject_sec >= CQ_REINJECT_PERIOD_SEC) {
+        // Only start a new batch once the previous one FINISHED. Each phantom
+        // costs ~3.2 s of synth+decode, so a 7-strong pool needs ~22 s - and
+        // restarting the index on the timer alone silently starved whichever
+        // phantom was last in the pool: adding the Fox (7th) made it CQ never,
+        // which is exactly the symptom that showed up on the bench, since a Fox
+        // that never transmits cannot be detected as one. The pool can grow
+        // without anyone having to re-derive this arithmetic now.
+        if (now - last_cq_inject_sec >= CQ_REINJECT_PERIOD_SEC && s_cq_idx >= N_PHANTOMS) {
             last_cq_inject_sec = now;
             s_cq_idx = 0;
         }

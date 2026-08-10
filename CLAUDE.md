@@ -50,7 +50,19 @@ capture, not after a result looks strange.**
    "@flash_project_args"` (from `build/`), then start the capture with `-Reset`.
 8. **The monitor ALWAYS misses the boot after `idf.py flash`.** For boot lines
    use `/api/log` (live ring) or `/api/log/saved` (flash-persisted) instead.
-9. **A capture that has EXPIRED looks exactly like a quiet, healthy device.**
+9. **`GET /api/log` DELETES the ring it just served.** `log_handler` calls
+   `diag_log_clear()` after a successful send, so each download is "since the
+   last one". Polling it in a loop to watch for something therefore **erases the
+   evidence continuously** — every fetch returns a few seconds of delta, and a
+   feature that logged something 20 s ago looks like a feature that never ran.
+   Cost most of a Fox/Hound test cycle on 2026-08-10, and produced two confident
+   wrong conclusions ("the tick never fires", "the Fox is never injected") from a
+   log I had shredded myself. **To WATCH the device, use a serial capture**
+   (`cap_serial_reboot.ps1`, no `-Reset`) — non-destructive, survives reboots,
+   and it is what these rules already told me to do. `/api/log` is for taking ONE
+   snapshot to keep; `/api/log/saved` (flash) is read-only and safe but lags
+   ~30 s.
+10. **A capture that has EXPIRED looks exactly like a quiet, healthy device.**
    `cap_serial_reboot.ps1` runs for `-Seconds` (default 300) and then exits,
    writing a tidy `=== [capture] done ===` at the end. Grep that file an hour
    later and you get "0 reboots, 0 panics" — for a window that closed long ago.
