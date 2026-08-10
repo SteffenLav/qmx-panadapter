@@ -3557,10 +3557,26 @@ static lv_obj_t *clickable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
     lv_obj_get_click_area(parent, &a);
     if (x < a.x1 || x > a.x2 || y < a.y1 || y > a.y2) return NULL;
 
+    lv_point_t pt = { x, y };
     uint32_t n = lv_obj_get_child_count(parent);
     for (uint32_t i = n; i > 0; i--) {
-        lv_obj_t *hit = clickable_at(lv_obj_get_child(parent, i - 1), x, y);
+        lv_obj_t *child = lv_obj_get_child(parent, i - 1);
+        lv_obj_t *hit = clickable_at(child, x, y);
         if (hit) return hit;
+
+        // OCCLUSION. If LVGL would hand the press to this child, then nothing
+        // BEHIND it can receive one, so the search has to stop here even though
+        // the child itself is not worth reporting.
+        //
+        // Without this the pointer lied in two places at once (operator, both in
+        // one sweep): over the tone modal's backdrop it reported the FT8
+        // left-pane buttons sitting behind the modal - the "ghost area that
+        // reports but is not clickable" - and over the Memory window's own
+        // background it reported the top-bar hit zones underneath. Both
+        // backdrops absorb the click; only this walk was looking through them.
+        if (child && !lv_obj_has_flag(child, LV_OBJ_FLAG_HIDDEN) &&
+            lv_obj_hit_test(child, &pt))
+            return NULL;
     }
 
     // lv_obj_hit_test() checks LV_OBJ_FLAG_CLICKABLE itself, and honours
@@ -3587,8 +3603,20 @@ static lv_obj_t *clickable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
     //     real widget class - button, checkbox, slider, dropdown, textarea - is a
     //     control whatever its handler count, since its class does the work.
     if (lv_obj_has_flag(parent, UI_FLAG_NOT_HOT)) return NULL;
-    if (lv_obj_check_type(parent, &lv_obj_class) && lv_obj_get_event_count(parent) == 0)
-        return NULL;
+
+    // A widget whose CLASS does something when pressed is a control whatever its
+    // handler count - a checkbox toggles itself, a dropdown opens its list, and
+    // several here are read at Save time rather than through a callback. Anything
+    // else - a plain container, and every DISPLAY-ONLY widget - needs a handler of
+    // its own to count, which is what excludes the top bar's S-meter bar (an
+    // lv_bar with no handlers, reported hot until now) along with backgrounds.
+    const lv_obj_class_t *c = lv_obj_get_class(parent);
+    bool interactive_class = (c == &lv_button_class)   || (c == &lv_checkbox_class) ||
+                             (c == &lv_dropdown_class) || (c == &lv_dropdownlist_class) ||
+                             (c == &lv_slider_class)   || (c == &lv_switch_class) ||
+                             (c == &lv_textarea_class) || (c == &lv_keyboard_class) ||
+                             (c == &lv_roller_class)   || (c == &lv_buttonmatrix_class);
+    if (!interactive_class && lv_obj_get_event_count(parent) == 0) return NULL;
     return parent;
 }
 
@@ -4687,6 +4715,20 @@ static void top_bar_set_ft8_dim(bool dim)
         if (!hit) continue;
         if (dim) lv_obj_clear_flag(hit, LV_OBJ_FLAG_CLICKABLE);
         else     lv_obj_add_flag(hit, LV_OBJ_FLAG_CLICKABLE);
+    }
+
+    // The LABELS are clickable too, in their own right and with click halos of
+    // 90-110 px (ext_click_area, so they are hittable on glass) - which together
+    // blanket the whole top bar. Dropping only the zones left those live, so in
+    // FT8 mode the bar still swallowed presses whose handlers then bailed out,
+    // and with a mouse the pointer went green right across a bar where nothing
+    // was actually available (operator, v1.8.0).
+    lv_obj_t *labels[] = { s_band_label, s_mode_label, s_bw_label,
+                           s_freq_label, s_zoom_label };
+    for (size_t i = 0; i < sizeof(labels) / sizeof(labels[0]); i++) {
+        if (!labels[i]) continue;
+        if (dim) lv_obj_clear_flag(labels[i], LV_OBJ_FLAG_CLICKABLE);
+        else     lv_obj_add_flag(labels[i], LV_OBJ_FLAG_CLICKABLE);
     }
 }
 

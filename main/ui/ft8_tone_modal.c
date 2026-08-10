@@ -473,6 +473,9 @@ static void modal_build(void)
     lv_obj_add_event_cb(s_strip, strip_touch_cb, LV_EVENT_PRESSING,   NULL);
     lv_obj_add_event_cb(s_strip, strip_touch_cb, LV_EVENT_RELEASED,   NULL);
     lv_obj_add_event_cb(s_strip, strip_touch_cb, LV_EVENT_PRESS_LOST, NULL);
+    // A track you drag, not a button - same call as the band-plan strip. The
+    // marker below carries the report for this control.
+    lv_obj_add_flag(s_strip, UI_FLAG_NOT_HOT);
 
     // Row geometry: two rows inside the same strip, 2 px seam. The x -> slot
     // touch map is unchanged and row-agnostic: tapping EITHER row picks that
@@ -522,7 +525,21 @@ static void modal_build(void)
     lv_obj_set_style_radius(s_marker, 2, 0);
     lv_obj_set_style_pad_all(s_marker, 0, 0);
     lv_obj_clear_flag(s_marker, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(s_marker, LV_OBJ_FLAG_CLICKABLE);
+    // The marker is the HANDLE: it takes the same drag callbacks as the strip, so
+    // grabbing the thing that shows your tone works exactly like pressing the
+    // strip does (strip_touch_cb reads the indev point against s_strip's own
+    // coords, so it does not care which object received the press).
+    //
+    // This is also what makes the mouse pointer honest here: the strip itself is
+    // UI_FLAG_NOT_HOT, being a track you drag rather than a button, so without a
+    // grabbable marker nothing in the strip would report at all (operator asked
+    // for "only the YOUR tone slider" to report).
+    lv_obj_add_flag(s_marker, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(s_marker, 10);
+    lv_obj_add_event_cb(s_marker, strip_touch_cb, LV_EVENT_PRESSED,    NULL);
+    lv_obj_add_event_cb(s_marker, strip_touch_cb, LV_EVENT_PRESSING,   NULL);
+    lv_obj_add_event_cb(s_marker, strip_touch_cb, LV_EVENT_RELEASED,   NULL);
+    lv_obj_add_event_cb(s_marker, strip_touch_cb, LV_EVENT_PRESS_LOST, NULL);
 
     add_axis_label(s_panel, 200,  strip_w, 130);
     add_axis_label(s_panel, 1000, strip_w, 130);
