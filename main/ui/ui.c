@@ -2517,6 +2517,9 @@ static void build_spectrum(lv_obj_t *parent)
 
     s_spec_canvas = lv_canvas_create(s_spectrum_obj);
     lv_obj_add_flag(s_spectrum_obj, LV_OBJ_FLAG_CLICKABLE);
+    // Clickable because tapping and dragging TUNES - a surface you work on,
+    // not a button. The pointer stays white over it (operator, v1.8.0).
+    lv_obj_add_flag(s_spectrum_obj, UI_FLAG_NOT_HOT);
     lv_obj_add_event_cb(s_spectrum_obj, touch_event_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_spectrum_obj, touch_event_cb, LV_EVENT_PRESSING, NULL);
     lv_obj_add_event_cb(s_spectrum_obj, touch_event_cb, LV_EVENT_RELEASED, NULL);
@@ -2983,6 +2986,9 @@ static void build_waterfall(lv_obj_t *parent)
 
     s_wf_canvas = lv_canvas_create(s_waterfall_obj);
     lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_CLICKABLE);
+    // Clickable because tapping and dragging TUNES - a surface you work on,
+    // not a button. The pointer stays white over it (operator, v1.8.0).
+    lv_obj_add_flag(s_waterfall_obj, UI_FLAG_NOT_HOT);
     lv_obj_add_event_cb(s_waterfall_obj, touch_event_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_waterfall_obj, touch_event_cb, LV_EVENT_PRESSING, NULL);
     lv_obj_add_event_cb(s_waterfall_obj, touch_event_cb, LV_EVENT_RELEASED, NULL);
@@ -3379,19 +3385,31 @@ static const char *const s_cursor_art[CURSOR_ART_H] = {
     "      oooo",
 };
 
-static lv_image_dsc_t s_cursor_dsc;
+// TWO bitmaps, not one image with a recolour applied on hover. LVGL's recolour
+// tints the whole image, so it turned the black OUTLINE green too and the pointer
+// lost the dark edge that makes it readable over the waterfall (operator, v1.8.0).
+// Only the fill changes; the outline is black in both.
+static lv_image_dsc_t s_cursor_dsc;       // white fill - the resting pointer
+static lv_image_dsc_t s_cursor_dsc_hot;   // green fill - over something clickable
+static bool s_cursor_is_image;            // false = the fallback dot, nothing to swap
 
-// Rasterise the art above into an ARGB8888 image. Rows are read with a LENGTH
-// CHECK rather than assumed to be CURSOR_ART_W long: the art is hand-written and
-// the short rows above have no trailing padding, and this file's history
-// includes a heap corruption from walking off the end of exactly this kind of
-// hand-maintained table (the Reader's UTF-8 fold, v1.5.0).
-static bool build_cursor_image(void)
+// Rasterise the art above into an ARGB8888 image with the given fill colour.
+// Rows are read with a LENGTH CHECK rather than assumed to be CURSOR_ART_W long:
+// the art is hand-written and the short rows above have no trailing padding, and
+// this file's history includes a heap corruption from walking off the end of
+// exactly this kind of hand-maintained table (the Reader's UTF-8 fold, v1.5.0).
+static bool build_cursor_image(lv_image_dsc_t *dsc, uint32_t fill_rgb)
 {
     const int w = CURSOR_ART_W * CURSOR_SCALE;
     const int h = CURSOR_ART_H * CURSOR_SCALE;
     uint8_t *buf = heap_caps_calloc(1, (size_t)w * h * 4, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf) return false;
+
+    // LVGL's ARGB8888 is lv_color32_t, i.e. B,G,R,A in memory on this
+    // little-endian target. It did not matter while both colours were grey; it
+    // does now that one of them is green.
+    const uint8_t fr = (uint8_t)(fill_rgb >> 16), fg = (uint8_t)(fill_rgb >> 8),
+                  fb = (uint8_t)fill_rgb;
 
     for (int y = 0; y < h; y++) {
         const char *row = s_cursor_art[y / CURSOR_SCALE];
@@ -3401,19 +3419,20 @@ static bool build_cursor_image(void)
             char c = (ax < rlen) ? row[ax] : ' ';
             if (c != 'o' && c != 'w') continue;             // leave transparent
             uint8_t *px = buf + ((size_t)y * w + x) * 4;
-            uint8_t v = (c == 'w') ? 0xFF : 0x00;           // fill white, outline black
-            px[0] = v; px[1] = v; px[2] = v; px[3] = 0xFF;  // grey, so byte order is moot
+            if (c == 'w') { px[0] = fb;   px[1] = fg;   px[2] = fr;   }
+            else          { px[0] = 0x00; px[1] = 0x00; px[2] = 0x00; }  // outline
+            px[3] = 0xFF;
         }
     }
 
-    s_cursor_dsc.header.magic  = LV_IMAGE_HEADER_MAGIC;
-    s_cursor_dsc.header.cf     = LV_COLOR_FORMAT_ARGB8888;
-    s_cursor_dsc.header.flags  = 0;
-    s_cursor_dsc.header.w      = w;
-    s_cursor_dsc.header.h      = h;
-    s_cursor_dsc.header.stride = w * 4;
-    s_cursor_dsc.data_size     = (uint32_t)((size_t)w * h * 4);
-    s_cursor_dsc.data          = buf;
+    dsc->header.magic  = LV_IMAGE_HEADER_MAGIC;
+    dsc->header.cf     = LV_COLOR_FORMAT_ARGB8888;
+    dsc->header.flags  = 0;
+    dsc->header.w      = w;
+    dsc->header.h      = h;
+    dsc->header.stride = w * 4;
+    dsc->data_size     = (uint32_t)((size_t)w * h * 4);
+    dsc->data          = buf;
     return true;
 }
 
@@ -3517,11 +3536,9 @@ static lv_point_t s_mouse_pt;
 static void cursor_set_hot(bool hot)
 {
     static int last = -1;
-    if (!s_mouse_cursor || (int)hot == last) return;
+    if (!s_mouse_cursor || !s_cursor_is_image || (int)hot == last) return;
     last = hot;
-    lv_obj_set_style_image_recolor(s_mouse_cursor, lv_color_hex(UI_COLOR_POINTER_HOT), 0);
-    lv_obj_set_style_image_recolor_opa(s_mouse_cursor,
-                                       hot ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+    lv_image_set_src(s_mouse_cursor, hot ? &s_cursor_dsc_hot : &s_cursor_dsc);
 }
 
 // Deepest CLICKABLE object under a point, by the same rules LVGL's own input
@@ -3531,24 +3548,26 @@ static void cursor_set_hot(bool hot)
 // Cheaper than it looks: a subtree whose bounds exclude the point is rejected in
 // one comparison, so this descends only through objects actually under the
 // pointer, not the whole widget tree.
-static bool clickable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
+static lv_obj_t *clickable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
 {
-    if (!parent || lv_obj_has_flag(parent, LV_OBJ_FLAG_HIDDEN)) return false;
+    if (!parent || lv_obj_has_flag(parent, LV_OBJ_FLAG_HIDDEN)) return NULL;
     // The CLICK area, not the coords: it already includes ext_click_area, so an
     // enlarged target is descended into over exactly the region that responds.
     lv_area_t a;
     lv_obj_get_click_area(parent, &a);
-    if (x < a.x1 || x > a.x2 || y < a.y1 || y > a.y2) return false;
+    if (x < a.x1 || x > a.x2 || y < a.y1 || y > a.y2) return NULL;
 
     uint32_t n = lv_obj_get_child_count(parent);
-    for (uint32_t i = n; i > 0; i--)
-        if (clickable_at(lv_obj_get_child(parent, i - 1), x, y)) return true;
+    for (uint32_t i = n; i > 0; i--) {
+        lv_obj_t *hit = clickable_at(lv_obj_get_child(parent, i - 1), x, y);
+        if (hit) return hit;
+    }
 
     // lv_obj_hit_test() checks LV_OBJ_FLAG_CLICKABLE itself, and honours
     // ADV_HITTEST - which the drawer's sliders set so only their knob responds.
     // So a slider reports hot on the knob and nowhere else, which is the truth.
     lv_point_t p = { x, y };
-    if (!lv_obj_hit_test(parent, &p)) return false;
+    if (!lv_obj_hit_test(parent, &p)) return NULL;
 
     // Being clickable is not the same as being worth pointing out. Almost every
     // container in this UI is clickable, because that is lv_obj's default, and
@@ -3567,10 +3586,10 @@ static bool clickable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
     //     target, the top-bar Band/Mode/BW zones) and stays hot; anything of a
     //     real widget class - button, checkbox, slider, dropdown, textarea - is a
     //     control whatever its handler count, since its class does the work.
-    if (lv_obj_has_flag(parent, UI_FLAG_NOT_HOT)) return false;
+    if (lv_obj_has_flag(parent, UI_FLAG_NOT_HOT)) return NULL;
     if (lv_obj_check_type(parent, &lv_obj_class) && lv_obj_get_event_count(parent) == 0)
-        return false;
-    return true;
+        return NULL;
+    return parent;
 }
 
 // The edge strips are the one place where "clickable" and "does something" part
@@ -3584,6 +3603,53 @@ static bool point_in_obj(lv_obj_t *o, lv_coord_t x, lv_coord_t y)
     lv_obj_get_coords(o, &a);
     return x >= a.x1 && x <= a.x2 && y >= a.y1 && y <= a.y2;
 }
+
+// ---- TEMPORARY (v1.8.0): name whatever is reporting hot ---------------------
+//
+// "The whole top bar reports", "the whole memory window reports", "a ghost area
+// outside the TX Hold checkbox reports" - all three are questions about WHICH
+// object is being hit, and guessing at that from the source is how this file
+// gets three wrong fixes in a row. So it says which, out loud: class, screen
+// rect and handler count, for the object and its two ancestors, logged only when
+// the hot object CHANGES. Sweep the pointer over the offending area and read
+// /api/log. Delete once the four reports are settled.
+static const char *obj_class_name(lv_obj_t *o)
+{
+    if (!o) return "-";
+    const lv_obj_class_t *c = lv_obj_get_class(o);
+    if (c == &lv_obj_class)       return "obj";
+    if (c == &lv_button_class)    return "button";
+    if (c == &lv_label_class)     return "label";
+    if (c == &lv_image_class)     return "image";
+    if (c == &lv_slider_class)    return "slider";
+    if (c == &lv_bar_class)       return "bar";
+    if (c == &lv_checkbox_class)  return "checkbox";
+    if (c == &lv_dropdown_class)  return "dropdown";
+    if (c == &lv_dropdownlist_class) return "dropdownlist";
+    if (c == &lv_textarea_class)  return "textarea";
+    if (c == &lv_canvas_class)    return "canvas";
+    if (c == &lv_switch_class)    return "switch";
+    if (c == &lv_keyboard_class)  return "keyboard";
+    return "other";
+}
+
+static void hot_report(lv_obj_t *hit)
+{
+    static lv_obj_t *last = (lv_obj_t *)-1;
+    if (hit == last) return;
+    last = hit;
+    if (!hit) { ESP_LOGI(TAG, "HOT: none"); return; }
+
+    lv_area_t a;
+    lv_obj_get_click_area(hit, &a);
+    lv_obj_t *par = lv_obj_get_parent(hit);
+    lv_obj_t *gp  = par ? lv_obj_get_parent(par) : NULL;
+    ESP_LOGI(TAG, "HOT: %s (%d,%d)-(%d,%d) evts=%u | parent %s | gp %s",
+             obj_class_name(hit), (int)a.x1, (int)a.y1, (int)a.x2, (int)a.y2,
+             (unsigned)lv_obj_get_event_count(hit),
+             obj_class_name(par), obj_class_name(gp));
+}
+// ---- end TEMPORARY ---------------------------------------------------------
 
 static void mouse_timer_cb(lv_timer_t *t)
 {
@@ -3600,10 +3666,13 @@ static void mouse_timer_cb(lv_timer_t *t)
         bool on_strip = point_in_obj(s_left_edge_strip,   s_mouse_pt.x, s_mouse_pt.y) ||
                         point_in_obj(s_bottom_edge_strip, s_mouse_pt.x, s_mouse_pt.y) ||
                         point_in_obj(s_right_edge_strip,  s_mouse_pt.x, s_mouse_pt.y);
-        cursor_set_hot(on_grip ||
-                       (!on_strip &&
-                        (clickable_at(lv_layer_top(),     s_mouse_pt.x, s_mouse_pt.y) ||
-                         clickable_at(lv_screen_active(), s_mouse_pt.x, s_mouse_pt.y))));
+        lv_obj_t *hit = NULL;
+        if (!on_strip) {
+            hit = clickable_at(lv_layer_top(), s_mouse_pt.x, s_mouse_pt.y);
+            if (!hit) hit = clickable_at(lv_screen_active(), s_mouse_pt.x, s_mouse_pt.y);
+        }
+        cursor_set_hot(on_grip || hit != NULL);
+        hot_report(hit);
     }
 
     int clicks = hid_cursor_take_wheel();
@@ -3686,7 +3755,9 @@ void ui_mouse_init(void)
     s_mouse_indev = mouse;
     lv_timer_create(mouse_timer_cb, 30, NULL);   // ~33 Hz: wheel + grip hover
 
-    if (build_cursor_image()) {
+    s_cursor_is_image = build_cursor_image(&s_cursor_dsc, 0xFFFFFF) &&
+                        build_cursor_image(&s_cursor_dsc_hot, UI_COLOR_POINTER_HOT);
+    if (s_cursor_is_image) {
         // An arrow whose TIP is pixel (0,0), so lv_indev_set_cursor() - which
         // places the object's top-left at the point - needs no offset at all.
         s_mouse_cursor = lv_image_create(lv_layer_top());
