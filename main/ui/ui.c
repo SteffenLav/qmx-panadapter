@@ -1836,7 +1836,7 @@ static void drawer_spotmode_cb(lv_event_t *e)
     bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
     settings_set_spots_mode_filter(on);
     ui_toast(on ? "Spots: this mode only"
-                : "Spots: all modes - labels now show CW / SB / FT");
+                : "Spots: all modes - labels now tagged CW / SB / FT");
     ESP_LOGI(TAG, "spot mode filter %s", on ? "on" : "off");
 }
 
@@ -6640,7 +6640,7 @@ static void drawer_build(void)
         // frequency, so with this off a CW operator can land in FT8 without
         // meaning to (Michael KZ4LY).
         lv_obj_t *smf_lbl = lv_label_create(sec);
-        lv_label_set_text(smf_lbl, "Only this mode's spots");
+        lv_label_set_text(smf_lbl, "Mode filter the spots");
         lv_obj_set_style_text_color(smf_lbl, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(smf_lbl, &lv_font_montserrat_28, 0);
         lv_obj_align(smf_lbl, LV_ALIGN_TOP_LEFT, 0, 176);
