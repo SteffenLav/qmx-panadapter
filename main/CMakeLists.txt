@@ -71,6 +71,7 @@ idf_component_register(
         "net/pskreporter.c"
         "net/spots.c"
         "net/spot_sig.c"
+        "ft8_hound.c"
         "net/psk_rx.c"
         "hid_cursor.c"
         "bt_hid_mouse.c"

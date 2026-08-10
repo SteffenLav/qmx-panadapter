@@ -39,6 +39,7 @@ static const char *TAG = "settings";
 #define KEY_CQ_MSG2    "cq_msg2"
 #define KEY_CQ_SEL     "cq_sel"
 #define KEY_CQ_MAX     "cq_max"
+#define KEY_HOUND_MODE "hound_md"
 #define KEY_ONBOARDED  "onboarded"
 #define KEY_FT8_FILT   "ft8_filt"
 #define KEY_WIFI_ENABLED "wifi_en"
@@ -277,6 +278,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_CLUSTER_EN     84
 #define DIRTY_SPOTS_MODE_FLT 85
 #define DIRTY_SOTA_EN        86
+#define DIRTY_HOUND_MODE     87
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -303,7 +305,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_TX_TONE_HZ, DIRTY_TX_TONE_HOLD, DIRTY_CQ_MAX_CALLS,
     DIRTY_SPOTS_EN, DIRTY_RBN_EN, DIRTY_WIFI_KNOWN, DIRTY_CW_TX_OFFSET,
     DIRTY_CQ_LISTEN, DIRTY_SWR_LIMIT, DIRTY_PSK_RX_EN, DIRTY_BT_MOUSE_EN,
-    DIRTY_CLUSTER_EN, DIRTY_SOTA_EN,
+    DIRTY_CLUSTER_EN, DIRTY_SOTA_EN, DIRTY_HOUND_MODE,
 };
 
 // ---- Module state ------------------------------------------------------
@@ -410,6 +412,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_CQ_MSG2))    nvs_set_str(s_nvs, KEY_CQ_MSG2, snap.cq_msg[2]);
         if (dirty_test(&dirty_local, DIRTY_CQ_SEL))     nvs_set_u8(s_nvs, KEY_CQ_SEL, snap.cq_sel);
         if (dirty_test(&dirty_local, DIRTY_CQ_MAX_CALLS)) nvs_set_u8(s_nvs, KEY_CQ_MAX, snap.cq_max_calls);
+        if (dirty_test(&dirty_local, DIRTY_HOUND_MODE))   nvs_set_u8(s_nvs, KEY_HOUND_MODE, snap.hound_mode);
         if (dirty_test(&dirty_local, DIRTY_CQ_LISTEN))    nvs_set_u8(s_nvs, KEY_CQ_LISTEN, snap.cq_listen_every);
         if (dirty_test(&dirty_local, DIRTY_ONBOARDED))  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap.onboarded ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FT8_FILT))     nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap.ft8_filters, sizeof(snap.ft8_filters));
@@ -580,6 +583,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->cq_msg[2][0] = '\0';
     out->cq_sel = 0;
     out->cq_max_calls = 0;
+    out->hound_mode   = 0;   // off: Hound changes TX behaviour, so it is opt-in
     out->cq_listen_every = 0;
     out->onboarded = false;
     out->wifi_enabled = DEF_WIFI_ENABLED;
@@ -696,6 +700,7 @@ static void load_from_nvs(qmx_settings_t *out)
     nvs_get_u8(s_nvs, KEY_CQ_SEL, &out->cq_sel);
     if (out->cq_sel > 2) out->cq_sel = 0;
     nvs_get_u8(s_nvs, KEY_CQ_MAX, &out->cq_max_calls);
+    nvs_get_u8(s_nvs, KEY_HOUND_MODE, &out->hound_mode);
     nvs_get_u8(s_nvs, KEY_CQ_LISTEN, &out->cq_listen_every);
     nvs_get_u8(s_nvs, KEY_SWR_LIMIT, &out->swr_limit_x10);
     nvs_get_u8(s_nvs, KEY_ACT_TYPE, &out->act_type);
@@ -1093,6 +1098,17 @@ void settings_set_cq_max_calls(uint8_t n)
     s_pending.cq_max_calls = n;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CQ_MAX_CALLS);
+}
+
+void settings_set_hound_mode(uint8_t m)
+{
+    if (!s_ready) return;
+    if (m > 2) m = 2;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.hound_mode == m) { xSemaphoreGive(s_mutex); return; }
+    s_pending.hound_mode = m;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_HOUND_MODE);
 }
 
 void settings_set_onboarded(bool v)

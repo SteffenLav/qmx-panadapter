@@ -56,6 +56,18 @@ typedef struct {
     // our next step (a fresh detection replaces the pending) or its patience
     // runs out (SIM_PHANTOM_REPEATS sends) - then it gives up and goes back
     // to CQing. Injection happens from the main loop (never blocks detection).
+    // FOX (Fox/Hound DXpedition practice target). A Fox differs from every other
+    // phantom in three ways that all matter to the Hound code under test:
+    //   * it transmits BELOW 1000 Hz (its tone_hz), which is what marks it as a
+    //     Fox to ft8_hound_looks_like_fox() and what our R-report must QSY onto;
+    //   * it works a QUEUE, so it is visibly mid-exchange with third parties -
+    //     the condition that makes ft8_qso.c's busy-station hold fire, which
+    //     Hound mode has to suspend or we would never call at all;
+    //   * it IGNORES the first few calls, because that is what a pileup is.
+    // fox_ignore_left counts those down; while it is non-zero the Fox answers
+    // somebody else instead of us.
+    bool        is_fox;
+    int         fox_ignore_left;
     bool        pend_active;
     char        pend_text[40];   // PRE-SYNTHESIZED decoded text (see
                                  // build_message: synth once at scheduling,
@@ -75,7 +87,18 @@ typedef struct {
 // distance readout and worked-before/filter paths have something to chew on.
 // Distinct tones (well spread across the 200-2900 Hz FT8 audio window) so the
 // phantoms don't sit on top of each other in the waterfall/decode list.
-#define N_PHANTOMS 6
+// How many of our calls the Fox ignores (working others instead) before it comes
+// back to us. Two is enough to prove the point and short enough that a bench test
+// completes in a couple of minutes; a real pileup can be hundreds.
+#define SIM_FOX_IGNORE_SLOTS 2
+
+// The Fox's queue: calls it works while ignoring us. Deliberately not phantoms
+// from the pool - they have their own entries in the decode list, and a Fox
+// answering one of them would make that station look like it was transmitting
+// when it was not.
+static const char *const s_fox_queue[] = { "JA3ABC", "EA5XYZ", "VK2DEF", "PY2GHI" };
+
+#define N_PHANTOMS 7
 static ft8_sim_phantom_t s_phantoms[N_PHANTOMS] = {
     { "W1AW",   "FN31", "3A", "EMA", 700.0f,  false },        // ARRL HQ, US
     { "K9ZZ",   "EN52", "5B", "WCF", 2100.0f, false },        // US
@@ -85,6 +108,13 @@ static ft8_sim_phantom_t s_phantoms[N_PHANTOMS] = {
     { "G0ABC",  "IO91", "1D", "DX",  2500.0f, .deaf = true }, // England (DX) - DEAF:
                            // CQs but never hears you; pounces at it time out.
                            // Practice target for the grey-list feature.
+    // The FOX, at 500 Hz - inside the Fox region (below FT8_HOUND_FOX_MAX_HZ) and
+    // above FT8_TX_TONE_MIN_HZ, so we can both hear it and follow it down there.
+    // "K0FOX" is mnemonic on purpose: sim contacts land in the REAL ADIF log
+    // (deliberately - it exercises the logging path), so when this turns up in the
+    // log months later it should be obvious what it was.
+    { "K0FOX",  "EM28", "1D", "DX",  500.0f,
+      .is_fox = true, .fox_ignore_left = SIM_FOX_IGNORE_SLOTS },
 };
 
 // How many phantoms pile onto our CQ in the same reply slot. >1 builds a real
@@ -209,13 +239,16 @@ static int reply_visibility_delay_sec(void)
 // runs HERE, once; the main loop's pending pump then lands the stored text
 // instantly at each due moment (repeats reuse it for free). Blocking ~2-3 s
 // here is fine - TX detection is slot-keyed, so a burst can't be missed.
-static void set_pending(ft8_sim_phantom_t *ph, const char *my_call,
+// `to_call` is who the phantom is addressing - us for every ordinary reply, but a
+// Fox working its queue addresses somebody else entirely, which is the whole point
+// of the busy-frequency test (see s_fox_queue).
+static void set_pending(ft8_sim_phantom_t *ph, const char *to_call,
                         const char *extra, bool use_fd,
                         bool early, int64_t first_slot, int repeats)
 {
     char text[FTX_MAX_MESSAGE_LENGTH];
     int snr, score;
-    if (!build_message(my_call, ph->call, extra, use_fd, ph->tone_hz,
+    if (!build_message(to_call, ph->call, extra, use_fd, ph->tone_hz,
                        text, sizeof(text), &snr, &score)) {
         ph->pend_active = false;
         return;
@@ -262,6 +295,9 @@ static void schedule_cq_answer(const char *my_call, int64_t our_slot)
     for (int i = 0; i < N_PHANTOMS && n < SIM_PILEUP_CALLERS; i++) {
         if (s_phantoms[i].engaged || s_phantoms[i].worked) continue;
         if (s_phantoms[i].deaf) continue;   // can't hear our CQ either
+        // A Fox never answers anyone's CQ - it IS the pileup's centre, and a Fox
+        // in our pileup would be nonsense to anyone watching the decode list.
+        if (s_phantoms[i].is_fox) continue;
         // Pileup answers land EARLY in the slot (instant landing - text is
         // pre-synthesized) so all of them are inside the slot's scan.
         set_pending(&s_phantoms[i], my_call, s_phantoms[i].grid, false, true,
@@ -305,6 +341,33 @@ static void schedule_phantom_reply(ft8_sim_phantom_t *ph, const char *my_call,
 
     if (ph->deaf) {
         ESP_LOGI(TAG, "%s is deaf - ignoring our call (grey-list practice target)", ph->call);
+        return;
+    }
+
+    // FOX: ignore the first few calls and work somebody else instead - a pileup,
+    // in other words. This is the condition the Hound code has to survive: the
+    // Fox's message is addressed to a third party, so ft8_qso.c's
+    // partner_busy_with() sees a busy frequency and, WITHOUT the Hound
+    // suspension, would hold our TX until its budget ran out. Which would mean
+    // sitting silent through the pileup instead of calling into it.
+    //
+    // Only the opening call (our grid) gets ignored. Once the Fox has answered us
+    // it plays the exchange straight through - a real Fox that has committed to a
+    // hound finishes with it, and the interesting part after that is the QSY.
+    if (ph->is_fox && ph->fox_ignore_left > 0 &&
+        sent_extra[0] != 'R' && sent_extra[0] != '+' && sent_extra[0] != '-') {
+        static int qi = 0;
+        const char *victim = s_fox_queue[qi++ % (int)(sizeof(s_fox_queue) / sizeof(s_fox_queue[0]))];
+        ph->fox_ignore_left--;
+        ESP_LOGI(TAG, "FOX %s ignores our call (%d left) - working %s instead",
+                 ph->call, ph->fox_ignore_left, victim);
+        // Lands EARLY in the Fox's own slot so it is in the decode table before
+        // ft8_qso_advance() scans that slot - the same reason pileup answers use
+        // the early flag. One send: the Fox moves on to the next hound.
+        set_pending(ph, victim, "-13", false, true, our_slot + 15, 1);
+        // NOT engaged: it owes us nothing, and leaving it engaged would stop its
+        // idle CQs, which are what keep it looking like a Fox in the decode list.
+        ph->engaged = false;
         return;
     }
 
@@ -381,6 +444,11 @@ static void ft8_sim_task(void *arg)
                     s_phantoms[i].worked      = false;
                     s_phantoms[i].engaged     = false;
                     s_phantoms[i].pend_active = false;
+                    // The Fox's patience resets too, so each sim session starts
+                    // with a pileup to fight through rather than a Fox that
+                    // answers instantly because a previous session used it up.
+                    if (s_phantoms[i].is_fox)
+                        s_phantoms[i].fox_ignore_left = SIM_FOX_IGNORE_SLOTS;
                 }
                 // Wipe the phantoms out of the decode list and pileup too.
                 // Without this they lingered on screen after the toggle - up to

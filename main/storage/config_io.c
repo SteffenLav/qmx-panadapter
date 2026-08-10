@@ -103,6 +103,7 @@ char *config_io_export(size_t *out_len)
     APP("2 = %s\n", c.cq_msg[1]);
     APP("3 = %s\n", c.cq_msg[2]);
     APP("stop_after = %u\n", (unsigned)c.cq_max_calls);   // 0 = keep calling
+    APP("hound_mode = %u\n", (unsigned)c.hound_mode);     // 0 off, 1 guided, 2 auto
     APP("listen_every = %u\n", (unsigned)c.cq_listen_every);  // 0 = never pause to listen
 
     APP("\n[ft8_filters]\n");
@@ -261,6 +262,10 @@ int config_io_import(char *text)
             } else if (!strcasecmp(key, "stop_after")) {
                 int n = atoi(val);
                 if (n >= 0 && n <= 255) { settings_set_cq_max_calls((uint8_t)n); applied++; }
+            }
+            else if (!strcasecmp(key, "hound_mode")) {
+                int n = atoi(val);
+                if (n >= 0 && n <= 2) { settings_set_hound_mode((uint8_t)n); applied++; }
             } else if (!strcasecmp(key, "listen_every")) {
                 int n = atoi(val);
                 if (n >= 0 && n <= 255) { settings_set_cq_listen_every((uint8_t)n); applied++; }

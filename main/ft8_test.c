@@ -72,6 +72,7 @@
 #include "ft8_tx.h"
 #include "ft8_qso.h"
 #include "ft8_robot.h"
+#include "ft8_hound.h"
 #include "net/pskreporter.h"
 #include "ft8_hash.h"
 #include "time_sync.h"
@@ -1229,6 +1230,12 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
     // first); self-gates to IDLE, so it only acts when no QSO is in progress.
     // Its ft8_qso_start() arms a reply for the next slot, which reply-on-
     // immediate-slot then fires — same fast path as a human-started pounce.
+    // Fox/Hound automatic mode goes BEFORE the robot: both self-gate to IDLE, so
+    // whichever runs first wins the slot, and a Fox is the rarer opportunity as
+    // well as the one the operator opted into explicitly. The robot separately
+    // refuses to pounce a Fox while Hound is enabled - an ordinary pounce at one
+    // cannot complete, since it never QSYs.
+    ft8_hound_tick(slot_sec);
     ft8_robot_tick(slot_sec);
     ft8_screen_view_request_refresh();
 }

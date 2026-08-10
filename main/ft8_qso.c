@@ -28,6 +28,7 @@
 #include "ft8_qso.h"
 #include "ft8_pileup.h"
 #include "ft8_greylist.h"
+#include "ft8_hound.h"  // Fox/Hound (DXpedition) rules - see the s_hound_active notes
 #include "ft8_tx.h"
 #include "ft8_test.h"   // ft8_op_mode_get() - FT8/FT4 sub-mode, for ADIF MODE
 #include "ft8_status.h"
@@ -79,6 +80,26 @@ static int                s_freq_hz;                    // OUR AF tone for our o
 // wrong one. Seeded at QSO start from the decode table, refreshed every slot we
 // hear them in scan_for_response().
 static int                s_partner_freq_hz;
+
+// ---- Fox/Hound (DXpedition) session state ----------------------------------
+//
+// Set when a contact is started against something that looks like a Fox while
+// Hound mode is enabled (see ft8_hound.h for the protocol and for why the Fox
+// side cannot exist on this radio). It changes four things, all of them in
+// ft8_qso.c and each marked with a comment naming this flag:
+//
+//   1. our R-report is sent AFTER QSY'ing onto the Fox's own frequency;
+//   2. the Fox's RR73 ends the QSO - a hound never sends 73;
+//   3. the busy-station hold stands down (a Fox is always working somebody, so
+//      holding for a free frequency means never calling);
+//   4. the final re-send and the grey-list stand down (the Fox never asks
+//      again, and being ignored in a pileup is not a station that never
+//      answers).
+//
+// s_hound_tone_hz remembers the up-band tone we called from, so the QSY is
+// reversible: after the contact we go back there for the next Fox.
+static bool               s_hound_active;
+static int                s_hound_tone_hz;
 static int64_t            s_min_scan_utc;               // pounce: don't scan before TX1 fires
 static int                s_missed_slots;
 static bool               s_from_cq;                    // session started as CQ-run
@@ -1046,10 +1067,14 @@ static void register_miss(const char *waiting_for)
     // auto-work pileup) stop re-calling it (Roy KI0ER: the robot re-tried the
     // same deaf station all night). Manual pounces stay possible after an
     // explicit "Clear from grey-list".
+    // HOUND (rule 4): no strike against a Fox. Going unanswered for many slots is
+    // the ordinary experience of a pileup - hundreds of hounds, one Fox, five
+    // contacts a slot - and grey-listing the DXpedition you are trying to work
+    // would be the exact opposite of what the operator wants.
     {
         qmx_settings_t gq;
         settings_load_all(&gq);
-        if (gq.greylist_en && tgt[0]) ft8_greylist_note_timeout(tgt);
+        if (gq.greylist_en && tgt[0] && !s_hound_active) ft8_greylist_note_timeout(tgt);
     }
 
     if (from_cq && s_have_cq_saved) {
@@ -1259,12 +1284,24 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     int64_t tx1_slot = next_slot_sec(req_to_arm.use_parity, req_to_arm.want_even_slot,
                                      req_to_arm.protocol);
 
+    // Is this a Fox? Decided ONCE, here, from the partner's own tone: a station
+    // in the Fox region while Hound mode is on. Deciding it per-slot instead
+    // would let a QSO change protocol halfway through if a decode wobbled - and
+    // the QSY in step 3 is not something to be unsure about mid-exchange.
+    //
+    // Note this is the partner's tone, not ours: a hound calls from up-band, so
+    // the two numbers differ for the whole first half of the contact.
+    bool hound = ft8_hound_enabled(ft8_hound_mode()) &&
+                 partner_hz > 0 && partner_hz < FT8_HOUND_FOX_MAX_HZ;
+
     lock();
     s_state         = start_state;
     strncpy(s_target, tx1_req->target_call, sizeof(s_target) - 1);
     s_target[sizeof(s_target) - 1] = '\0';
     s_freq_hz       = req_to_arm.audio_freq_hz;
     s_partner_freq_hz = partner_hz;
+    s_hound_active  = hound;
+    s_hound_tone_hz = hound ? req_to_arm.audio_freq_hz : 0;
     s_min_scan_utc  = tx1_slot + 15;
     s_missed_slots  = 0;
     s_busy_holds    = 0;    // a fresh pounce is never mid-hold
@@ -1346,6 +1383,7 @@ bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
     s_target[0]     = '\0';
     s_freq_hz       = req_copy.audio_freq_hz;
     s_partner_freq_hz = 0;     // no partner yet; don't leak a previous pounce's tone
+    s_hound_active  = false;   // calling CQ is never a hound flow
     s_cur_req       = req_copy;
     s_have_cur      = true;
     s_cq_saved      = req_copy;
@@ -1796,13 +1834,25 @@ void ft8_qso_advance(int64_t slot_sec)
             s_last_done_ts = time(NULL);
             // Remember the final we just sent, so it can be re-sent if they turn
             // out not to have decoded it (see final_resend_if_still_asked).
-            strncpy(s_final_call, target, sizeof(s_final_call) - 1);
-            s_final_call[sizeof(s_final_call) - 1] = '\0';
-            s_final_freq_hz = s_freq_hz;
-            s_final_kind    = s_have_cur ? s_cur_req.kind : FT8_TX_KIND_73;
-            snprintf(s_final_extra, sizeof(s_final_extra), "%s",
-                     s_have_cur && s_cur_req.extra_field[0] ? s_cur_req.extra_field : "73");
-            s_final_resends = 0;
+            //
+            // HOUND (rule 4): except after a hound contact, where there is no
+            // final to re-send - the Fox's RR73 closed it and we deliberately
+            // stayed quiet. Leaving s_final_call set would have us transmitting
+            // "73" into a Fox's frequency for up to three slots simply because it
+            // is still calling other hounds, which it always is.
+            if (s_hound_active) {
+                s_final_call[0] = '\0';
+                s_final_resends = 0;
+                s_hound_active  = false;   // session over; the next start decides afresh
+            } else {
+                strncpy(s_final_call, target, sizeof(s_final_call) - 1);
+                s_final_call[sizeof(s_final_call) - 1] = '\0';
+                s_final_freq_hz = s_freq_hz;
+                s_final_kind    = s_have_cur ? s_cur_req.kind : FT8_TX_KIND_73;
+                snprintf(s_final_extra, sizeof(s_final_extra), "%s",
+                         s_have_cur && s_cur_req.extra_field[0] ? s_cur_req.extra_field : "73");
+                s_final_resends = 0;
+            }
             unlock();
 
             // A completed QSO with this call supersedes any older resumable
@@ -1969,7 +2019,12 @@ void ft8_qso_advance(int64_t slot_sec)
     // partner answered us, so one wandering off is a lost QSO that should time
     // out normally. Bounded: past the cap we fall through to the usual
     // miss/timeout path so a vanished station still gives up.
-    if (!found && !from_cq && target[0] &&
+    // HOUND (rule 3): never hold for a busy Fox. A Fox is working somebody in
+    // every single slot - that is what a Fox IS - so the hold below would engage
+    // immediately and keep us silent for its whole budget, i.e. we would join the
+    // pileup by not calling. Being ignored while it works its queue is the normal
+    // hound experience, and the ordinary miss/timeout path handles it.
+    if (!found && !from_cq && target[0] && !s_hound_active &&
         (st == FT8_QSO_WAIT_RPT || st == FT8_QSO_WAIT_ROGER || st == FT8_QSO_WAIT_RR73)) {
         char with[FT8_CALL_MAX_LEN] = {0};
         if (s_robot_started && partner_busy_with(target, with, sizeof with)) {
@@ -2076,6 +2131,28 @@ void ft8_qso_advance(int64_t slot_sec)
             // 8-byte bound (real content is tiny, e.g. "R-04").
             char roger[16];
             make_roger(our_rpt, roger, sizeof(roger));
+
+            // HOUND (rule 1): QSY DOWN onto the Fox before answering. This is the
+            // whole point of Fox/Hound - the Fox listens only to its own narrow
+            // slice, so an R-report sent from our up-band calling tone is never
+            // heard and the contact dies one message short.
+            //
+            // Applied to s_freq_hz as well as to this message, so every re-send
+            // (rearm_current) stays down there until the Fox rogers us. The
+            // partner's tone comes from their decodes and is real Hz, not a bin
+            // index - the v0.18.4 fix, without which this would QSY to nonsense.
+            if (s_hound_active && s_partner_freq_hz > 0) {
+                int fox_hz = s_partner_freq_hz;
+                if (fox_hz < FT8_TX_TONE_MIN_HZ) fox_hz = FT8_TX_TONE_MIN_HZ;
+                if (freq != fox_hz) {
+                    ESP_LOGI(TAG, "HOUND: QSY %d -> %d Hz (onto %s) for the R-report",
+                             freq, fox_hz, target);
+                    ft8_status_set("Hound: QSY to %d Hz - answering %s", fox_hz, target);
+                }
+                freq = fox_hz;
+                lock(); s_freq_hz = fox_hz; unlock();
+            }
+
             ESP_LOGI(TAG, "WAIT_RPT: %s reported us %s, we heard them %s -> TX2 %s",
                      target, report, our_rpt, roger);
             ok = send_next(FT8_TX_KIND_ROGER_RPT, target, freq, slot_sec, roger,
@@ -2158,6 +2235,29 @@ void ft8_qso_advance(int64_t slot_sec)
             register_miss("waiting for RR73");
             return;
         }
+        // HOUND (rule 2): the Fox's RR73 ENDS it. A hound does not send 73 - the
+        // Fox's frequency is the scarcest thing on the band and a courtesy 73
+        // there is pure clutter, on top of the pileup F/H exists to thin out.
+        //
+        // Completing without a final message: go to WAIT_DONE with nothing armed,
+        // and its handler (which waits for TX_IDLE) logs the QSO, clears the
+        // pileup and posts "complete" exactly as it does for any other contact -
+        // no second completion path to keep in step. Also hop back to the hound
+        // tone now, so the next Fox call goes out up-band where it belongs.
+        if (s_hound_active) {
+            ESP_LOGI(TAG, "HOUND: %s sent %s - complete, no 73 (Fox frequency stays clear)",
+                     target, got_rrr ? "RRR" : "RR73/73");
+            ft8_tx_disarm();          // the re-armed R-report must not fire again
+            lock();
+            s_state    = FT8_QSO_WAIT_DONE;
+            s_have_cur = false;
+            if (s_hound_tone_hz > 0) s_freq_hz = s_hound_tone_hz;
+            unlock();
+            ft8_status_set("Hound: %s worked - back on %d Hz", target,
+                           s_hound_tone_hz > 0 ? s_hound_tone_hz : freq);
+            return;
+        }
+
         ESP_LOGI(TAG, "WAIT_RR73: %s sent %s - arming TX3", target,
                  got_rrr ? "RRR" : "RR73/73");
         if (send_next(FT8_TX_KIND_73, target, freq, slot_sec, "73", FT8_QSO_WAIT_DONE))
@@ -2370,6 +2470,11 @@ void ft8_qso_abort(void)
     s_cq_calls_sent = 0; s_cq_listen_done_at = -1;
     s_cq_exhausted  = false;
     s_pileup_active = false;   // an abort ends any pileup drain
+    // An aborted hound contact must not leave us parked on the Fox's frequency
+    // (we may have QSY'd down for the R-report), and the next contact decides
+    // hound-ness afresh from its own partner.
+    if (s_hound_active && s_hound_tone_hz > 0) s_freq_hz = s_hound_tone_hz;
+    s_hound_active  = false;
     clear_dt_follow();         // ...and returns TX to the UTC/GPS beat
     unlock();
     ft8_tx_disarm();
@@ -2381,6 +2486,12 @@ ft8_qso_state_t ft8_qso_get_state(void)
 {
     lock(); ft8_qso_state_t st = s_state; unlock();
     return st;
+}
+
+bool ft8_qso_is_hound_active(void)
+{
+    lock(); bool h = s_hound_active; unlock();
+    return h;
 }
 
 int ft8_qso_get_cq_calls_sent(void)

@@ -1601,6 +1601,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "swr_limit_x10",   c.swr_limit_x10);
     cJSON_AddBoolToObject(root, "pskreporter_en",    c.pskreporter_en);
     cJSON_AddBoolToObject(root, "greylist_en",       c.greylist_en);
+    cJSON_AddNumberToObject(root, "hound_mode",      c.hound_mode);
     cJSON_AddBoolToObject(root, "distance_in_miles", c.distance_in_miles);
     cJSON_AddBoolToObject(root, "iq_enabled",        c.iq_enabled);
     cJSON_AddNumberToObject(root, "qmx_vol_db",      c.qmx_vol_db);
@@ -1728,6 +1729,12 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     BOOLTOP("bt_mouse_en",       settings_set_bt_mouse_en);
     BOOLTOP("pskreporter_en",    settings_set_pskreporter_en);
     BOOLTOP("greylist_en",       settings_set_greylist_en);
+    // Fox/Hound: 0 off, 1 guided, 2 automatic. A number rather than a bool
+    // because it is a ladder, not a switch - see ft8_hound.h.
+    {
+        cJSON *hm = cJSON_GetObjectItem(root, "hound_mode");
+        if (cJSON_IsNumber(hm)) settings_set_hound_mode((uint8_t)hm->valuedouble);
+    }
     BOOLTOP("distance_in_miles", settings_set_distance_in_miles);
     #undef BOOLTOP
 

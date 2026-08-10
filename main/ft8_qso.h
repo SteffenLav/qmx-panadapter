@@ -82,6 +82,13 @@ void ft8_qso_mark_robot_started(void);
 bool ft8_qso_override_next(ft8_tx_kind_t kind, char *err, size_t err_len);
 
 ft8_qso_state_t ft8_qso_get_state(void);
+
+// True while the running contact is being worked as a HOUND (Fox/Hound
+// DXpedition mode): we called from up-band, we QSY onto the Fox to answer, and
+// its RR73 ends the contact with no 73 from us. See ft8_hound.h for the protocol
+// and ft8_qso.c's s_hound_active for the four behaviours it changes. The UI uses
+// this to say so, since it changes where the operator's signal is going.
+bool ft8_qso_is_hound_active(void);
 void            ft8_qso_get_target(char *buf, size_t len);
 
 // Which station's rows should be held at the top of the decode list, or "" for

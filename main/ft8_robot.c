@@ -4,6 +4,7 @@
 
 #include "ft8_robot.h"
 #include "ft8_greylist.h"
+#include "ft8_hound.h"   // Fox/Hound: a Fox is never a robot target
 #include "ft8_qso.h"
 #include "ft8_tx.h"
 #include "ft8_status.h"
@@ -126,6 +127,8 @@ void ft8_robot_tick(int64_t slot_sec)
         return;
     }
 
+    const bool hound_on = ft8_hound_enabled(ft8_hound_mode());
+
     int    best_idx   = -1;
     double best_score = 0;
     for (int i = 0; i < n; i++) {
@@ -140,6 +143,13 @@ void ft8_robot_tick(int64_t slot_sec)
         // timeout tracker uses).
         if (qs.greylist_en && ft8_greylist_contains(snap[i].call)) continue;
         if (!ft8_filter_match(snap[i].last_text, f)) continue;   // include/exclude terms
+        // A Fox belongs to the Hound path, never to the robot. A Fox calls CQ, so
+        // it passes every test above - but an ordinary pounce at one cannot
+        // complete: it never QSYs onto the Fox's frequency, so our R-report is
+        // sent where the Fox is not listening and the contact dies one message
+        // short, having transmitted for nothing. ft8_hound_tick() runs first and
+        // takes it if automatic mode is on; in guided mode the operator taps it.
+        if (hound_on && ft8_hound_looks_like_fox(&snap[i])) continue;
 
         double score = rank_score(&snap[i], (ft8_robot_priority_t)f->robot_priority, qs.my_grid);
         if (best_idx < 0 || score > best_score) {

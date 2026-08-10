@@ -65,6 +65,10 @@ typedef struct {
     char     cq_msg[3][28];    // 3 user-editable CQ message presets (FT8 TX)
     uint8_t  cq_sel;           // which CQ preset is active, 0..2 (default 0)
     uint8_t  cq_max_calls;     // auto-stop CQ after N unanswered calls, 0=never (default 0)
+    // FT8 Fox/Hound (DXpedition) mode - the HOUND side only. Fox is impossible on
+    // this radio: it needs up to five simultaneous signals and we emit one CAT
+    // "TA" tone per symbol. 0 = off, 1 = guided, 2 = automatic. See ft8_hound.h.
+    uint8_t  hound_mode;
     // Roy KI0ER: while calling CQ you are deaf to your own time window, so the
     // occupancy picture for the window you transmit in goes stale. After every
     // N calls, spend one slot listening instead. 0 = never (default) - this
@@ -242,6 +246,7 @@ void settings_set_cq_sel(uint8_t idx);
 // Don WB0LQW: "I usually send CQ 2-4 times and then pause". Set from the CQ
 // preset modal's top-right cycle button; consumed by ft8_qso.c's CQ loop.
 void settings_set_cq_max_calls(uint8_t n);
+void settings_set_hound_mode(uint8_t m);    // 0 off, 1 guided, 2 automatic
 /* Spend one slot listening after every N CQ calls. 0 = never. */
 void settings_set_cq_listen_every(uint8_t n);
 
