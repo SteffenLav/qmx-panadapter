@@ -88,6 +88,11 @@ static uint16_t s_hid_start, s_hid_end;  // HID service handle span
 #define UUID_HID_PROTOCOL_MODE 0x2A4E
 #define HID_PROTOCOL_MODE_REPORT 0x01
 
+// Which half of the scan cycle we are in - filtered to the bonded mouse, or
+// open so a new one can be found. Declared here because gap_event_cb flips it
+// on DISC_COMPLETE, well before start_scan() is defined. See start_scan().
+static bool s_scan_wl_phase = true;
+
 static void start_scan(void);
 static int  conn_event_cb(struct ble_gap_event *event, void *arg);
 static int  hid_svc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
@@ -130,6 +135,17 @@ static bool adv_has_hid(const struct ble_hs_adv_fields *f)
 
 static int gap_event_cb(struct ble_gap_event *event, void *arg)
 {
+    // The scan now runs in timed stretches instead of BLE_HS_FOREVER, so this
+    // event is what keeps it alive - without it scanning simply stops after the
+    // first stretch and the mouse never reconnects. Flip between the filtered
+    // and open phases here.
+    if (event->type == BLE_GAP_EVENT_DISC_COMPLETE) {
+        if (!s_connecting && !s_connected) {
+            s_scan_wl_phase = !s_scan_wl_phase;
+            start_scan();
+        }
+        return 0;
+    }
     if (event->type != BLE_GAP_EVENT_DISC) return 0;
 
     struct ble_hs_adv_fields f;
@@ -282,6 +298,44 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
     }
 }
 
+// Scanning cost the WiFi link, and that is not a theory - it was measured.
+//
+// 2026-08-10, root cause of TODO #109 (web UI flapping Disconnected/Connected
+// for days): WiFi and Bluetooth are multiplexed over the SAME esp_hosted SDIO
+// transport, and this scan - FOREVER, ACTIVE, no whitelist, continuous - had the
+// C6 forwarding every advertiser in an office to the host. NimBLE dropped
+// ~3,000 ADV reports a MINUTE for OOM, and the pending-byte delta kept
+// overrunning the 1536-byte SDIO RX buffer. Measured, same firmware, same
+// network, everything else identical:
+//
+//     BT on : 5.0 SDIO recoveries/min, 4-8 rpc timeouts/min
+//     BT off: 0 and 0 over 6.9 minutes (~34 recoveries expected)
+//
+// Three cheaper suspects were tested and cleared first (the spot feeds, the
+// 10 fps spectrum WebSocket, and the hotel network it was originally blamed on).
+//
+// So: scan less, and let the CONTROLLER throw away what we do not want.
+#define SCAN_ITVL_UNITS   160     // x0.625 ms = 100 ms between scan windows
+#define SCAN_WIN_UNITS     32     // x0.625 ms =  20 ms of listening -> 20% duty
+#define SCAN_WL_MS      60000     // stretch spent filtered to the bonded mouse
+#define SCAN_OPEN_MS    15000     // stretch spent open, so a new mouse is findable
+
+// Put the bonded peers on the controller whitelist. Returns how many, so the
+// caller can fall back to an open scan when there is nothing to filter to.
+static int whitelist_bonded(void)
+{
+    ble_addr_t peers[8];
+    int n = 0;
+    if (ble_store_util_bonded_peers(peers, &n, (int)(sizeof(peers) / sizeof(peers[0]))) != 0)
+        return 0;
+    if (n <= 0) return 0;
+    if (ble_gap_wl_set(peers, (uint8_t)n) != 0) {
+        ESP_LOGW(TAG, "whitelist set failed - scanning open");
+        return 0;
+    }
+    return n;
+}
+
 static void start_scan(void)
 {
     uint8_t own_addr_type;
@@ -290,17 +344,38 @@ static void start_scan(void)
         return;
     }
     s_own_addr_type = own_addr_type;
-    struct ble_gap_disc_params p = {0};
-    p.itvl          = 0;      // stack defaults
-    p.window        = 0;
-    p.filter_policy = 0;
-    p.limited       = 0;
-    p.passive       = 0;      // active: ask for the scan response, which carries the name
-    p.filter_duplicates = 1;
 
-    int rc = ble_gap_disc(own_addr_type, BLE_HS_FOREVER, &p, gap_event_cb, NULL);
-    if (rc != 0) ESP_LOGE(TAG, "ble_gap_disc failed: %d", rc);
-    else         ESP_LOGI(TAG, "scanning for BLE devices (turn the mouse on / put it in pairing mode)");
+    // ALTERNATE rather than commit to the whitelist. A mouse that advertises
+    // with a resolvable private address the controller cannot match would be
+    // filtered out permanently, and "the mouse silently never reconnects again"
+    // is a far worse bug than the one being fixed. So we spend SCAN_WL_MS
+    // filtered and SCAN_OPEN_MS open, which keeps ~80% of the airtime quiet
+    // while guaranteeing the mouse is still discoverable either way.
+    int wl = s_scan_wl_phase ? whitelist_bonded() : 0;
+
+    struct ble_gap_disc_params p = {0};
+    p.itvl          = SCAN_ITVL_UNITS;
+    p.window        = SCAN_WIN_UNITS;
+    p.limited       = 0;
+    p.filter_duplicates = 1;
+    // Filtered stretch: the controller drops non-bonded adverts before they ever
+    // cross SDIO, and passive scanning skips the scan REQUEST/RESPONSE exchange
+    // entirely - we already know who this is, we do not need its name.
+    // Open stretch: active, because pairing needs the scan response to show the
+    // operator a name rather than a bare address.
+    p.filter_policy = wl ? BLE_HCI_SCAN_FILT_USE_WL : BLE_HCI_SCAN_FILT_NO_WL;
+    p.passive       = wl ? 1 : 0;
+
+    int32_t dur = wl ? SCAN_WL_MS : SCAN_OPEN_MS;
+    int rc = ble_gap_disc(own_addr_type, dur, &p, gap_event_cb, NULL);
+    if (rc != 0) {
+        ESP_LOGE(TAG, "ble_gap_disc failed: %d", rc);
+        return;
+    }
+    if (wl) ESP_LOGI(TAG, "scanning (filtered to %d bonded device(s), passive, %d%% duty)",
+                     wl, (SCAN_WIN_UNITS * 100) / SCAN_ITVL_UNITS);
+    else    ESP_LOGI(TAG, "scanning open for %d s - turn the mouse on / put it in pairing mode",
+                     (int)(SCAN_OPEN_MS / 1000));
 }
 
 // Proper HOGP discovery: HID service -> its Report characteristics -> their
