@@ -266,6 +266,20 @@ bool spots_activation_for_call(const char *call, uint32_t freq_hz,
     for (int i = 0; i < s_count; i++) {
         if (s_store[i].source == SPOT_SRC_RBN) continue;   // never carries a reference
         if (!s_store[i].ref[0]) continue;
+        // EXACT match, deliberately - do NOT add a base-callsign fallback.
+        //
+        // Every SOTA spot carries a portable suffix (16 of 16 in a live sample:
+        // EA2GM/P, G4IPB/P, LA/SP9WLG/P...), so if a station is spotted as
+        // EA2GM/P and worked as EA2GM, no reference is logged and the chase
+        // credit is lost. Matching on the base call would recover those - and
+        // was rejected on purpose (operator's call, 2026-08-10).
+        //
+        // The reason is which way the error falls. EA2GM at home and EA2GM/P on
+        // a summit are the same operator in different places, so a loose match
+        // can write a summit into a QSO that never was one: an unearned claim in
+        // both logs, uploaded to QRZ/eQSL/LoTW as fact. The strict version only
+        // ever omits something. Same principle as never inventing an RST (see
+        // CLAUDE.md) - a missing field is honest, a wrong one is not.
         if (strcasecmp(s_store[i].call, call) != 0) continue;
         if (freq_hz) {
             uint32_t d = (s_store[i].freq_hz > freq_hz) ? s_store[i].freq_hz - freq_hz
