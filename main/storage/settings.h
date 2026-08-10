@@ -121,6 +121,12 @@ typedef struct {
     // alongside RBN on this board's most fragile link. It is also the only
     // source of PHONE spots - RBN is skimmers, and no SSB skimmer exists.
     bool     cluster_en;
+    // Show only spots you can work in the mode you are currently in. ON by
+    // default: tapping a spot sets the MODE as well as the frequency, so an
+    // unfiltered lane will happily drop a CW operator into FT8 (Michael KZ4LY,
+    // 2026-08-10). Turn it off to see the whole band, and the labels then carry
+    // a two-letter mode tag so the lane is not ambiguous.
+    bool     spots_mode_filter;
     bool     snap_to_peak;    // tap-to-tune snaps to the strongest nearby signal (default true)
     uint8_t  bandplan_region; // band-plan strip region: 0=auto(from grid) 1=R1 2=R2 3=R3
     bool     distance_in_miles; // FT8 decode list: show distance in miles instead of km (default false)
@@ -266,6 +272,7 @@ int16_t settings_get_cw_tx_offset_hz(void);
 void    settings_set_psk_rx_en(bool v);          // propagation feedback (who is hearing me)
 void    settings_set_bt_mouse_en(bool v);        // BLE mouse (scan/pair)
 void    settings_set_cluster_en(bool v);         // DX cluster spot feed (phone spots)
+void    settings_set_spots_mode_filter(bool v);  // show only spots for the current mode
 void    settings_set_swr_limit_x10(uint8_t v);   // 0 = off, else limit x10 (25 = 2.5:1)
 uint8_t settings_get_swr_limit_x10(void);
 

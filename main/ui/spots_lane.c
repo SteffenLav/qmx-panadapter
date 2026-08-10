@@ -87,6 +87,33 @@ static const char *TAG = "spots_ui";
 // is the same KIND of spot, only better evidenced.
 #define COL_CONFIRMED 0xFFF0B0
 
+// The radio's mode string as the spot store classifies modes. Returns
+// SPOT_MODE_OTHER for anything unrecognised, which the filter reads as "do not
+// filter" - failing OPEN on purpose. A mode we do not know about should show
+// you every spot, not hide the band.
+static spot_mode_t spot_mode_from_cat(const char *m)
+{
+    if (!m || !m[0]) return SPOT_MODE_OTHER;
+    if (strstr(m, "CW"))  return SPOT_MODE_CW;
+    if (strstr(m, "USB") || strstr(m, "LSB")) return SPOT_MODE_SSB;
+    if (strstr(m, "DIG") || strstr(m, "DiGi") || strstr(m, "FT") ||
+        strstr(m, "RTTY")) return SPOT_MODE_DIGI;
+    return SPOT_MODE_OTHER;
+}
+
+// Two letters for the "showing everything" case: CW / SB / FT. Short on
+// purpose - the lane is horizontally tight and every character a label grows
+// is a character that pushes a neighbouring callsign off the row.
+static const char *spot_mode_tag(spot_mode_t m)
+{
+    switch (m) {
+    case SPOT_MODE_CW:   return "CW";
+    case SPOT_MODE_SSB:  return "SB";
+    case SPOT_MODE_DIGI: return "FT";
+    default:             return NULL;
+    }
+}
+
 static lv_obj_t *s_lane;
 static lv_obj_t *s_ticks[MAX_TICKS];
 static lv_obj_t *s_labels[MAX_LABELS];
@@ -268,6 +295,34 @@ static void repaint(void)
     int n = spots_get_in_range_wait(s_w->buf, SPOTS_MAX, lo_hz, hi_hz, 20);
     if (n < 0) return;                 // lock busy: keep the current picture
 
+    // Drop spots you cannot work in the mode you are actually in.
+    //
+    // Michael KZ4LY, 2026-08-10: "I was wandering through CW spots and
+    // accidentally clicked on a digi spot and was suddenly accidentally
+    // listening to the dulcet tones of FT8." Tapping a spot sets the MODE as
+    // well as the frequency - which is the right behaviour, and exactly what
+    // makes an unfiltered lane a trap rather than a convenience.
+    //
+    // Filtered here, at ingest, so everything downstream agrees: the labels,
+    // the tick lines, and the off-screen "< spots (3)" counts. Filtering only
+    // at draw time would leave those counts promising stations that are not
+    // there when you jump to them.
+    //
+    // The mode is already on the spot - it has to be, since the tap uses it -
+    // so this shows nothing new, it just stops offering what you did not ask
+    // for. With the filter OFF the label carries a mode suffix instead (see
+    // the label pass), because THEN the lane is genuinely ambiguous.
+    if (st.spots_mode_filter) {
+        spot_mode_t want = spot_mode_from_cat(cat_get_mode_str());
+        if (want != SPOT_MODE_OTHER) {
+            int keep = 0;
+            for (int i = 0; i < n; i++)
+                if (s_w->buf[i].mode == want || s_w->buf[i].mode == SPOT_MODE_OTHER)
+                    s_w->buf[keep++] = s_w->buf[i];
+            n = keep;
+        }
+    }
+
     hide_all();
     s_sel = -1;             // labels are about to be reassigned
     s_label_n = 0;
@@ -368,7 +423,17 @@ static void repaint(void)
 
         lv_obj_t *lb = s_labels[used];
         if (!lb) break;
-        lv_label_set_text(lb, sp->call);
+        // Only tag the mode when the lane is showing more than one. With the
+        // filter on, every label is your mode and a tag would be noise on every
+        // single one - the sleekest indicator is the one that is not drawn.
+        const char *tag = st.spots_mode_filter ? NULL : spot_mode_tag(sp->mode);
+        if (tag) {
+            char buf[20];
+            snprintf(buf, sizeof(buf), "%s %s", sp->call, tag);
+            lv_label_set_text(lb, buf);
+        } else {
+            lv_label_set_text(lb, sp->call);
+        }
         lv_obj_update_layout(lb);
         int w = lv_obj_get_width(lb);
         int x = s_w->x[i] - w / 2;                      // centre the name on its tick

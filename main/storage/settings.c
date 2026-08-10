@@ -75,6 +75,7 @@ static const char *TAG = "settings";
 #define KEY_PSK_RX_EN      "pskrx_en"
 #define KEY_BT_MOUSE_EN    "btmouse_en"
 #define KEY_CLUSTER_EN     "cluster_en"
+#define KEY_SPOTS_MODE_FLT "spot_modeflt"
 #define KEY_SPOTS_EN       "spots_en"
 #define KEY_RBN_EN         "rbn_en"
 #define KEY_WIFI_KNOWN     "wifi_known"
@@ -273,6 +274,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_PSK_RX_EN      82
 #define DIRTY_BT_MOUSE_EN    83
 #define DIRTY_CLUSTER_EN     84
+#define DIRTY_SPOTS_MODE_FLT 85
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -446,6 +448,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_PSK_RX_EN))     nvs_set_u8(s_nvs, KEY_PSK_RX_EN,     snap.psk_rx_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_BT_MOUSE_EN))   nvs_set_u8(s_nvs, KEY_BT_MOUSE_EN,   snap.bt_mouse_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_CLUSTER_EN))    nvs_set_u8(s_nvs, KEY_CLUSTER_EN,    snap.cluster_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_SPOTS_MODE_FLT)) nvs_set_u8(s_nvs, KEY_SPOTS_MODE_FLT, snap.spots_mode_filter ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_SPOTS_EN))      nvs_set_u8(s_nvs, KEY_SPOTS_EN,      snap.spots_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_RBN_EN))        nvs_set_u8(s_nvs, KEY_RBN_EN,        snap.rbn_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_WIFI_KNOWN)) {
@@ -607,6 +610,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->psk_rx_en      = false;   // opt-in, see settings.h
     out->bt_mouse_en    = false;   // opt-in, see settings.h
     out->cluster_en     = false;   // opt-in, see settings.h
+    out->spots_mode_filter = true;  // ON by default, see settings.h
     // Spots on by default: it is read-only use of a public API, and a feature
     // that draws on the spectrum has to be visible to be discovered. Costs
     // nothing until WiFi is up.
@@ -750,6 +754,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_PSK_RX_EN, &u8v) == ESP_OK) out->psk_rx_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_BT_MOUSE_EN, &u8v) == ESP_OK) out->bt_mouse_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_CLUSTER_EN, &u8v) == ESP_OK) out->cluster_en = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_SPOTS_MODE_FLT, &u8v) == ESP_OK) out->spots_mode_filter = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_SPOTS_EN, &u8v) == ESP_OK) out->spots_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_RBN_EN,   &u8v) == ESP_OK) out->rbn_en   = (u8v != 0);
     if (nvs_get_u16(s_nvs, KEY_TX_TONE_HZ, &u16v) == ESP_OK) out->tx_tone_hz = u16v;
@@ -1358,6 +1363,16 @@ void settings_set_cluster_en(bool v)
     s_pending.cluster_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_CLUSTER_EN);
+}
+
+void settings_set_spots_mode_filter(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.spots_mode_filter == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.spots_mode_filter = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_SPOTS_MODE_FLT);
 }
 
 void settings_set_bt_mouse_en(bool v)
