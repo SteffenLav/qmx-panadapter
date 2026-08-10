@@ -4,6 +4,19 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.7.1** — 2026-08-10 — bug-fix patch
+
+**Tried a Bluetooth mouse on v1.7.0? Install this so your WiFi doesn't go flaky.**
+
+- **The Bluetooth mouse was making WiFi unstable.** Switching the mouse on could leave the web UI flapping between Connected and Disconnected, with the link dropping and recovering for as long as it stayed on. The two look unrelated, which is why it took days to find: WiFi and Bluetooth share one link to the wireless co-processor, and the Tab5 was listening for *every* Bluetooth device in the building, continuously — thousands of advertisements a minute in a busy room, all of it crowding WiFi off the same pipe. It now listens in short bursts, and once your mouse is paired the co-processor ignores everything else, so that traffic never reaches the Tab5 at all. On the bench the underlying link errors went from about five a minute to none, with the mouse still connecting by itself. **If you have not used a Bluetooth mouse, nothing changes for you.**
+- **The settings drawer would not close.** The swipe only worked if your finger started on bare background, so it felt random. **Tap anywhere outside the drawer.** *(Michael KZ4LY)*
+- **CW transmit offset by the hertz** — **−50 / −10 / +10 / +50** buttons under the slider, which covers 2000 Hz in two-pixel steps. Range deliberately unchanged. *(Michael KZ4LY)*
+- **DX cluster spots stop vanishing.** A cluster with nobody typing was treated as a dead connection and dropped about every 70 seconds, losing its held spots. Quiet is normal on a cluster.
+- **The browser said GPS with no radio attached** — the clock fault Don N2VGU reported, fixed on the Tab5 in v1.7.0 but missed in the web page.
+- **A failed WiFi scan says why**, and one that never returns no longer sits on "Scanning..." forever.
+
+## Previous Releases
+
 **v1.7.0** — 2026-08-09
 
 A mouse, the phone spots that were missing, and knowing who hears you.
@@ -24,8 +37,6 @@ A mouse, the phone spots that were missing, and knowing who hears you.
 2. Or follow [Build from Source](build/build.md)
 
 Your settings are preserved during a normal flash.
-
-## Previous Releases
 
 **v1.6.0** — 2026-08-09 — the browser became a second operating position: reply to a station, pick your TX tone, edit settings and memories and read the manual from any browser; `qmx.local`; CW transmit offset, RF gain and Release radio; self-recovering audio; the manual gained an A-Z index and drawn diagrams; the settings drawer was grouped with a Basic/Expert toggle.
 

@@ -1403,5 +1403,43 @@ Redrawing them was an audit, and **seven statements turned out to be untrue**. T
   does not report while tuning. Manual corrections: the panadapter page
   documented an FPS readout and a colour-map label that have never existed.
 
+### Shipped in v1.7.1 — 2026-08-10
+
+**Tried a Bluetooth mouse on v1.7.0? Install this patch so your WiFi doesn't go flaky.**
+
+- **The Bluetooth mouse was making WiFi unstable, and nothing said so.** Turning
+  the mouse on could leave the web UI flapping between Connected and
+  Disconnected, with the connection dropping and recovering for as long as it
+  stayed on. The two look completely unrelated, which is why it took days to
+  find: WiFi and Bluetooth share one link to the wireless co-processor, and the
+  Tab5 was listening for *every* Bluetooth device in the building, continuously,
+  forever. In a busy room that is thousands of advertisements a minute, and WiFi
+  was left fighting for the same pipe. It now listens in short bursts, and once
+  your mouse is paired the co-processor is told to ignore everything else — so
+  the traffic never reaches the Tab5 at all. Measured on the bench: the
+  underlying link errors went from about five a minute to **none**, with the
+  mouse still connecting by itself and working normally. If you have not used a
+  Bluetooth mouse, nothing changes for you.
+- **The settings drawer would not close.** Swiping it away worked only if your
+  finger happened to start on bare background — anywhere on a slider, a checkbox
+  or a label and nothing happened, which felt random because it was. **Tap
+  anywhere outside the drawer to close it.** (Michael KZ4LY)
+- **CW transmit offset is settable by the hertz.** The slider covers 2000 Hz in
+  10 Hz steps, which is about two pixels a step — fine for a rough setting,
+  hopeless for an exact one. There are now **−50 / −10 / +10 / +50** buttons
+  under it. The range is unchanged, deliberately: it runs to ±1 kHz because a
+  station calling CQ wants to stand out, while someone breaking a pileup rarely
+  moves more than 100 Hz. (Michael KZ4LY)
+- **DX cluster spots stopped disappearing.** A cluster that simply had nobody
+  typing was treated as a dead connection and dropped, roughly every 70 seconds
+  — losing the spots it was holding each time. Quiet is normal on a cluster; it
+  now stays connected.
+- **The browser said GPS with no radio attached.** The same fault Don N2VGU
+  reported in the clock, fixed on the Tab5 in v1.7.0 but missed in the web page.
+- **A failed WiFi scan now says why.** "Scan failed — tap Scan to try again"
+  used to leave nothing in the diagnostic log to explain it, and a scan that
+  never came back would sit on "Scanning..." indefinitely.
+
+
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
 
