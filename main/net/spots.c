@@ -38,56 +38,6 @@
 
 static const char *TAG = "spots";
 
-// ---- TEMP DIAGNOSTIC (2026-08-04): why does ALL outbound HTTPS fail? --------
-//
-// Every TLS attempt on this bench dies as:
-//     esp-aes: Failed to allocate memory for the array of DMA descriptors
-//     esp-tls-mbedtls: mbedtls_ctr_drbg_seed returned -0x0001
-// update_check fails identically, so it is device-wide TLS, not spots.
-//
-// On ESP32-P4 SOC_AES_SUPPORT_DMA=1 and there is NO small-buffer fallback, so
-// EVERY hardware-AES operation - including ctr_drbg's 16-byte ones - allocates
-// a descriptor array first (esp_aes_dma_core.c:422):
-//     heap_caps_aligned_calloc(8, n, 16, MALLOC_CAP_DMA|MALLOC_CAP_INTERNAL|MALLOC_CAP_8BIT)
-// That is 16-48 bytes at 8-byte alignment. audio.c's periodic line reports
-// 335-1515 B free in MALLOC_CAP_DMA, which OUGHT to satisfy it - so the open
-// question is whether the pool is fragmented below that size, or whether the
-// caps COMBINATION the AES port asks for resolves to a different and emptier
-// region than the MALLOC_CAP_DMA-only figure we have been measuring.
-//
-// So: report free AND largest-free-block for each cap set, and directly attempt
-// the allocation itself. largest_free_block walks the heap with interrupts off,
-// which must never sit on a periodic path (the DSI cyan-flash rule), hence the
-// hard cap - baseline at init plus the first few failures, then silence.
-#define DMA_PROBE_MAX 4
-static int s_dma_probes;
-
-static void dma_probe(const char *where)
-{
-    if (s_dma_probes >= DMA_PROBE_MAX) return;
-    s_dma_probes++;
-
-    // Exactly what esp_aes_dma_core.c asks for on a small (ctr_drbg-sized) op.
-    void *p_aes = heap_caps_aligned_calloc(8, 3, 16,
-                      MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    // Same caps, no alignment demand - separates "cannot align" from "no room".
-    void *p_plain = heap_caps_malloc(48, MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-
-    ESP_LOGW(TAG, "DMAPROBE[%s]: dma free=%uB lblk=%uB | dma|int free=%uB lblk=%uB | int free=%uB lblk=%uB | aes48@8=%s plain48=%s",
-             where,
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL),
-             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
-             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
-             p_aes ? "OK" : "FAIL", p_plain ? "OK" : "FAIL");
-
-    free(p_aes);
-    free(p_plain);
-}
-// ---- end TEMP DIAGNOSTIC ---------------------------------------------------
-
 #define POTA_URL       "https://api.pota.app/spot/activator"
 // Sized for the LARGER of the two bodies. POTA measured ~40 KB; a SOTA response
 // runs ~1.25 KB per record (spothole records carry flags, lat/long, zones, DXCC
@@ -578,7 +528,7 @@ static void fetch_pota(void)
 {
     char *buf = NULL;
     int len = http_get_json(POTA_URL, &buf);
-    if (len < 0) { dma_probe("fetch-fail"); return; }   // dma_probe: TEMP DIAGNOSTIC, capped
+    if (len < 0) return;                               // logged by http_get_json()
 
     int n = parse_pota(buf);
     if (n >= 0) {
@@ -682,7 +632,6 @@ void spots_init(void)
     s_scratch = heap_caps_calloc(SPOTS_MAX, sizeof(spot_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     s_lock    = xSemaphoreCreateMutex();
     if (!s_store || !s_scratch || !s_lock) { ESP_LOGE(TAG, "init failed"); return; }
-    dma_probe("init");    // TEMP DIAGNOSTIC: baseline before the pool collapses
     psram_task_create(spots_task, "spots", 6144, NULL, 2, tskNO_AFFINITY);
     ESP_LOGI(TAG, "spot fetcher started (POTA, SOTA)");
 }
