@@ -1441,5 +1441,19 @@ Redrawing them was an audit, and **seven statements turned out to be untrue**. T
   never came back would sit on "Scanning..." indefinitely.
 
 
+### Shipped in v1.7.2 — 2026-08-10
+
+**A Bluetooth mouse could stop reconnecting until you restarted the Tab5.**
+
+- If a reconnection attempt failed part-way — which happens routinely, because
+  the mouse powers itself down after about half a minute to save its battery —
+  the Tab5 stopped trying. The pointer never came back, even with the mouse
+  awake and right beside it, and only a restart fixed it. Verified over 14
+  sleep/wake cycles: fourteen disconnects, fourteen reconnects, none missed.
+
+Nothing else changed. If you do not use a Bluetooth mouse there is no reason to
+install this.
+
+
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
 
