@@ -1479,6 +1479,10 @@ static int      s_last_tap_x        = -1;
 static int  s_drawer_swipe_start_x  = -1;
 static int  s_screen_swipe_start_x  = -1;
 #define DRAWER_SWIPE_MIN_DX  60
+// CW transmit-offset limit, in Hz either side of zero-beat. The slider and the
+// nudge buttons must agree on this, so it lives here rather than as a literal
+// in both. See drawer_cwtxoff_nudge_cb for why it is 1000 and not smaller.
+#define CW_TX_OFFSET_MAX_HZ  1000
 
 // Left-edge swipe (drag right) toggles Panadapter <-> FT8 mode, and
 // bottom-edge swipe (drag up) opens the memory-channel modal. These use
@@ -1888,6 +1892,7 @@ static void drawer_close(void);
 static void drawer_anim_x_cb(void *obj, int32_t v);
 static void drawer_touch_cb(lv_event_t *e);
 static void drawer_scrim_cb(lv_event_t *e);
+static void drawer_cwtxoff_nudge_cb(lv_event_t *e);
 static void iq_balance_toggle_cb(lv_event_t *e);
 
 // Phase 5.5: static defaults -- manual Ref/Range, user-controlled later
@@ -5785,11 +5790,28 @@ static void drawer_scrim_cb(lv_event_t *e)
         return;
     }
     if (code == LV_EVENT_RELEASED) {
-        if (s_drawer_scrim_swipe_start_x >= 0 &&
-            (int)p.x - s_drawer_scrim_swipe_start_x >= DRAWER_SWIPE_MIN_DX) {
-            drawer_close();
-        }
+        // ANY release out here closes the drawer - a tap, not just a swipe.
+        //
+        // Michael KZ4LY (2026-08-10): "Most side-swipes didn't dismiss it, and
+        // when I'd finally dismiss it, I couldn't tell what I did different."
+        // He was not missing anything. The close-swipe is attached to the
+        // drawer OBJECT, and LVGL does not bubble child events unless asked
+        // (LV_OBJ_FLAG_EVENT_BUBBLE appears nowhere in this file) - so a swipe
+        // starting on a slider, checkbox or label was eaten by that child, and
+        // only one starting on the drawer's own background (a ~32 px margin and
+        // the gaps between sections) ever worked. Which one you hit was luck.
+        //
+        // Tap-outside-to-dismiss is what every drawer does, needs no
+        // discovering, and cannot be confused with adjusting a control, since
+        // the scrim only covers the area OUTSIDE the drawer. It also cannot
+        // retune the radio behind it: the scrim absorbs the touch.
+        //
+        // His workflow is why this matters rather than being a nicety - hunting
+        // a pileup means opening this, changing the offset, closing, listening,
+        // and going round again, many times per QSO.
+        (void)s_drawer_scrim_swipe_start_x;
         s_drawer_scrim_swipe_start_x = -1;
+        drawer_close();
     }
 }
 
@@ -6732,7 +6754,7 @@ static void drawer_build(void)
     {
         // The green "CW" heading that used to sit here is gone: the group
         // heading above already says Radio, and "CW center" names itself.
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_CW, y, 194);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_CW, y, 244);   /* 194 + a nudge-button row */
         s_lbl_cwpitch = lv_label_create(sec);
         lv_label_set_text(s_lbl_cwpitch, "CW center: 700 Hz");
         lv_obj_set_style_text_color(s_lbl_cwpitch, lv_color_hex(0xFFFFFF), 0);
@@ -6766,7 +6788,33 @@ static void drawer_build(void)
         lv_slider_set_value(s_slider_cwtxoff, cwcfg.cw_tx_offset_hz / 10, LV_ANIM_OFF);
         lv_obj_align(s_slider_cwtxoff, LV_ALIGN_TOP_LEFT, 0, 134);
         lv_obj_add_event_cb(s_slider_cwtxoff, drawer_slider_cwtxoff_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        y += 194;
+
+        // Exact steps, because 10 Hz is 2.4 px of slider (Michael KZ4LY).
+        {
+            static const struct { const char *txt; int delta; } nudge[] = {
+                { "-50", -50 }, { "-10", -10 }, { "+10", +10 }, { "+50", +50 },
+            };
+            const int n_btn = (int)(sizeof(nudge) / sizeof(nudge[0]));
+            const int gap   = 8;
+            const int bw    = ((DRAWER_W - 32) - gap * (n_btn - 1)) / n_btn;
+            for (int i = 0; i < n_btn; i++) {
+                lv_obj_t *b = lv_btn_create(sec);
+                lv_obj_set_size(b, bw, 54);
+                lv_obj_align(b, LV_ALIGN_TOP_LEFT, i * (bw + gap), 174);
+                lv_obj_set_style_bg_color(b, lv_color_hex(UI_COLOR_SURFACE), 0);
+                lv_obj_set_style_border_color(b, lv_color_hex(UI_COLOR_BORDER), 0);
+                lv_obj_set_style_border_width(b, 1, 0);
+                lv_obj_set_style_radius(b, 8, 0);
+                lv_obj_add_event_cb(b, drawer_cwtxoff_nudge_cb, LV_EVENT_CLICKED,
+                                    (void *)(intptr_t)nudge[i].delta);
+                lv_obj_t *l = lv_label_create(b);
+                lv_label_set_text(l, nudge[i].txt);
+                lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+                lv_obj_set_style_text_color(l, lv_color_hex(0xFFFFFF), 0);
+                lv_obj_center(l);
+            }
+        }
+        y += 244;
     }
 
     // CW Audio section: play demodulated CW on the Tab5 speaker/headphone
@@ -7612,6 +7660,34 @@ static void drawer_slider_cwtxoff_cb(lv_event_t *e)
     // Nothing is written to the radio here: cat.c's poll task notices the
     // change on its next cycle and sets (or clears) split itself, which is also
     // what keeps it correct when the frequency later moves.
+}
+
+// +/-10 and +/-50 Hz nudges beside the offset slider.
+//
+// Michael KZ4LY (2026-08-10): "I found the +/-1kHz offset range large, and had
+// to roll my finger on the display to fine-tune... I'm almost always within
+// +/-100Hz in practice." He is right about the precision - the slider spans
+// 2000 Hz in 10 Hz steps across ~488 px, which is 2.4 px per step, so setting
+// 60 Hz by finger is genuinely fiddly.
+//
+// The RANGE is deliberately left at +/-1 kHz rather than narrowed to suit him,
+// because Roy KI0ER asked for this feature wanting 400-600 Hz: Roy RUNS QRP and
+// wants to stand out of the mud-pit, Michael HUNTS and is breaking into
+// pileups. Both are right for what they are doing, and capping the range would
+// have quietly taken Roy's use case away to fix Michael's. Buttons give exact
+// steps without removing anything - the same answer the TX tone picker's +/-50
+// already uses.
+static void drawer_cwtxoff_nudge_cb(lv_event_t *e)
+{
+    int delta = (int)(intptr_t)lv_event_get_user_data(e);
+    qmx_settings_t c;
+    settings_load_all(&c);
+    int hz = (int)c.cw_tx_offset_hz + delta;
+    if (hz >  CW_TX_OFFSET_MAX_HZ) hz =  CW_TX_OFFSET_MAX_HZ;
+    if (hz < -CW_TX_OFFSET_MAX_HZ) hz = -CW_TX_OFFSET_MAX_HZ;
+    settings_set_cw_tx_offset_hz((int16_t)hz);
+    ui_set_cw_tx_offset_label(hz);
+    if (s_slider_cwtxoff) lv_slider_set_value(s_slider_cwtxoff, hz / 10, LV_ANIM_OFF);
 }
 
 // Paint the view toggle: current mode on top, what a tap does underneath.
