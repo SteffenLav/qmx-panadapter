@@ -2230,6 +2230,43 @@ static void qmx_wait_start_breathing(lv_obj_t *lbl)
 static volatile int s_web_base_mode_req = -1;
 static void ui_set_base_mode(ui_mode_t next, bool animate);
 
+// Is any modal window on screen? Used to stand the QMX-wait prompt down: it
+// belongs on a CLEAN surface, and it re-foregrounds itself every second, so
+// anything opened afterwards gets its headline drawn across it. The drawer and
+// the triage panel were already handled one at a time; in FT8 mode, where the
+// filter, tone, CQ, time and TX windows all live, that left a mess.
+//
+// Detected STRUCTURALLY rather than by asking each modal, because they all share
+// one shape - a FULL-SCREEN overlay object holding a centred panel - and there
+// are seventeen of them across sixteen files, only three of which expose an
+// is-open accessor at all. This way a modal added later (the CW page's, say) is
+// covered without anyone remembering to come back here.
+//
+// Deliberately NOT fooled by the big things that are always present: the FT8
+// container is 1280x624 and the drawer scrim is narrower than the screen, so
+// neither is full-screen. The two full-screen objects that are not modals are
+// this prompt itself (skipped) and the simulation-mode bezel, which suppresses
+// the prompt anyway.
+static bool any_modal_open(void)
+{
+    lv_display_t *d = lv_display_get_default();
+    int32_t sw = lv_display_get_horizontal_resolution(d);
+    int32_t sh = lv_display_get_vertical_resolution(d);
+    lv_obj_t *roots[] = { lv_layer_top(), lv_screen_active() };
+
+    for (size_t r = 0; r < sizeof(roots) / sizeof(roots[0]); r++) {
+        if (!roots[r]) continue;
+        uint32_t n = lv_obj_get_child_count(roots[r]);
+        for (uint32_t i = 0; i < n; i++) {
+            lv_obj_t *c = lv_obj_get_child(roots[r], i);
+            if (!c || c == s_qmx_wait_overlay) continue;
+            if (lv_obj_has_flag(c, LV_OBJ_FLAG_HIDDEN)) continue;
+            if (lv_obj_get_width(c) >= sw && lv_obj_get_height(c) >= sh) return true;
+        }
+    }
+    return false;
+}
+
 static void qmx_wait_poll_cb(lv_timer_t *t)
 {
     (void)t;
@@ -2270,7 +2307,8 @@ static void qmx_wait_poll_cb(lv_timer_t *t)
     // button over the triage panel's own choices. Hiding it is right rather than
     // just skipping the keepalive: the prompt is an operational cue, and the
     // operator reading a panel is not looking at the radio.
-    if (reader_view_is_active() || s_sim_mode_en || s_drawer_open || help_triage_is_open()) {
+    if (reader_view_is_active() || s_sim_mode_en || s_drawer_open ||
+        help_triage_is_open() || any_modal_open()) {
         if (!hidden) {
             lv_anim_delete(s_qmx_wait_lbl, qmx_wait_breathe_anim_cb);
             lv_obj_add_flag(s_qmx_wait_overlay, LV_OBJ_FLAG_HIDDEN);
@@ -3632,52 +3670,6 @@ static bool point_in_obj(lv_obj_t *o, lv_coord_t x, lv_coord_t y)
     return x >= a.x1 && x <= a.x2 && y >= a.y1 && y <= a.y2;
 }
 
-// ---- TEMPORARY (v1.8.0): name whatever is reporting hot ---------------------
-//
-// "The whole top bar reports", "the whole memory window reports", "a ghost area
-// outside the TX Hold checkbox reports" - all three are questions about WHICH
-// object is being hit, and guessing at that from the source is how this file
-// gets three wrong fixes in a row. So it says which, out loud: class, screen
-// rect and handler count, for the object and its two ancestors, logged only when
-// the hot object CHANGES. Sweep the pointer over the offending area and read
-// /api/log. Delete once the four reports are settled.
-static const char *obj_class_name(lv_obj_t *o)
-{
-    if (!o) return "-";
-    const lv_obj_class_t *c = lv_obj_get_class(o);
-    if (c == &lv_obj_class)       return "obj";
-    if (c == &lv_button_class)    return "button";
-    if (c == &lv_label_class)     return "label";
-    if (c == &lv_image_class)     return "image";
-    if (c == &lv_slider_class)    return "slider";
-    if (c == &lv_bar_class)       return "bar";
-    if (c == &lv_checkbox_class)  return "checkbox";
-    if (c == &lv_dropdown_class)  return "dropdown";
-    if (c == &lv_dropdownlist_class) return "dropdownlist";
-    if (c == &lv_textarea_class)  return "textarea";
-    if (c == &lv_canvas_class)    return "canvas";
-    if (c == &lv_switch_class)    return "switch";
-    if (c == &lv_keyboard_class)  return "keyboard";
-    return "other";
-}
-
-static void hot_report(lv_obj_t *hit)
-{
-    static lv_obj_t *last = (lv_obj_t *)-1;
-    if (hit == last) return;
-    last = hit;
-    if (!hit) { ESP_LOGI(TAG, "HOT: none"); return; }
-
-    lv_area_t a;
-    lv_obj_get_click_area(hit, &a);
-    lv_obj_t *par = lv_obj_get_parent(hit);
-    lv_obj_t *gp  = par ? lv_obj_get_parent(par) : NULL;
-    ESP_LOGI(TAG, "HOT: %s (%d,%d)-(%d,%d) evts=%u | parent %s | gp %s",
-             obj_class_name(hit), (int)a.x1, (int)a.y1, (int)a.x2, (int)a.y2,
-             (unsigned)lv_obj_get_event_count(hit),
-             obj_class_name(par), obj_class_name(gp));
-}
-// ---- end TEMPORARY ---------------------------------------------------------
 
 static void mouse_timer_cb(lv_timer_t *t)
 {
@@ -3709,7 +3701,6 @@ static void mouse_timer_cb(lv_timer_t *t)
             if (!hit) hit = clickable_at(lv_screen_active(), s_mouse_pt.x, s_mouse_pt.y);
         }
         cursor_set_hot(on_grip || hit != NULL);
-        hot_report(hit);
     }
 
     int clicks = hid_cursor_take_wheel();

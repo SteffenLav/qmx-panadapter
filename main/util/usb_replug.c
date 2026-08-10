@@ -183,7 +183,13 @@ static void usb_stale_detect_task(void *arg)
                     ESP_LOGW(TAG, "USB port stuck after %d replug attempts - "
                                   "needs a QMX power cycle (or Tab5 reboot)",
                              replug_attempts);
-                    ui_toast("USB stuck - power-cycle the QMX (reboot Tab5 if that fails)");
+                    // NO on-screen toast (operator, v1.8.0: "irritating and for no
+                    // use"). It fired every few minutes at a QMX that was simply
+                    // switched off - an ordinary state, not a fault - and the
+                    // screen already says "Now turn on or reboot your QMX/+"
+                    // whenever CAT is down, which is the same instruction in the
+                    // right place. The log line above keeps this diagnosable, and
+                    // the recovery behaviour is unchanged.
                     last_toast_us = now;
                 }
             }
@@ -202,7 +208,7 @@ static void usb_stale_detect_task(void *arg)
         ESP_LOGW(TAG, "USB enumeration failed (%lu since boot) and QMX is not "
                       "connected - stale QMX USB state, needs a QMX power cycle",
                  (unsigned long)fails);
-        ui_toast("QMX USB is stuck - power-cycle the QMX to reconnect");
+        // Log only, for the reason given on the zombie branch above.
         wedge_checks = 0;
         last_toast_us = now;
     }
