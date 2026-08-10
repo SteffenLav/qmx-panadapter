@@ -95,11 +95,13 @@ $appendixPart  = & $fixLinks $appendixPart
 $chapters = @(
     @{ Id = "quick-guide";   Title = "Quick Guide";   Num = 1; GuideFile = $null;                                    Desc = "get on air in 10 minutes" },
     @{ Id = "panadapter";    Title = "Panadapter";     Num = 2; GuideFile = (Join-Path $guideDir "panadapter.md");    Desc = "spectrum, waterfall, zoom, touch-to-tune, S-meter, memory channels" },
-    @{ Id = "web-ui";        Title = "Web UI";         Num = 3; GuideFile = $null;                                    Desc = "browser panadapter and remote control" },
-    @{ Id = "ft8-receive";   Title = "FT8 Receive";    Num = 4; GuideFile = (Join-Path $guideDir "ft8-rx.md");       Desc = "onboard decoder, decode list" },
-    @{ Id = "ft8-transmit";  Title = "FT8 Transmit";   Num = 5; GuideFile = (Join-Path $guideDir "ft8-tx.md");       Desc = "reply, CQ-run, auto-QSO, ADIF logging" },
-    @{ Id = "time-sync";     Title = "Time sync";      Num = 6; GuideFile = (Join-Path $guideDir "time-sync.md");    Desc = "WiFi/SNTP, Tab5 RTC, POTA/offline use" },
-    @{ Id = "reference";     Title = "Reference";      Num = 7; GuideFile = $null;                                    Desc = "gestures, settings drawer, web API, hardware" }
+    @{ Id = "spots";         Title = "Live spots";     Num = 3; GuideFile = (Join-Path $guideDir "spots.md");        Desc = "POTA, RBN and DX cluster callsigns drawn on the spectrum" },
+    @{ Id = "web-ui";        Title = "Web UI";         Num = 4; GuideFile = $null;                                    Desc = "browser panadapter and remote control" },
+    @{ Id = "ft8-receive";   Title = "FT8 Receive";    Num = 5; GuideFile = (Join-Path $guideDir "ft8-rx.md");       Desc = "onboard decoder, decode list" },
+    @{ Id = "ft8-transmit";  Title = "FT8 Transmit";   Num = 6; GuideFile = (Join-Path $guideDir "ft8-tx.md");       Desc = "reply, CQ-run, auto-QSO, ADIF logging" },
+    @{ Id = "time-sync";     Title = "Time sync";      Num = 7; GuideFile = (Join-Path $guideDir "time-sync.md");    Desc = "WiFi/SNTP, Tab5 RTC, POTA/offline use" },
+    @{ Id = "settings";      Title = "Settings";       Num = 8; GuideFile = (Join-Path $guideDir "settings.md");     Desc = "every drawer control, group by group" },
+    @{ Id = "reference";     Title = "Reference";      Num = 9; GuideFile = $null;                                    Desc = "gestures, web API, hardware" }
 )
 
 $appendices = @(
@@ -127,6 +129,24 @@ foreach ($c in $chapters) {
 
         # Remove the top-level heading (# Title)
         $guideContent = $guideContent -replace '(?m)^# [^\n]+\n+', ''
+
+        # Some guide pages are written with plain "## Section" headings and no
+        # numbering (settings.md has 21 of them). Those would land at CHAPTER
+        # level in the PDF and break the hierarchy, which is why such pages used
+        # to be left out of the printable guide altogether - and why whole
+        # features were missing from it. Normalise them here instead of
+        # renumbering the source, because those headings are anchors: the
+        # context-help table and the A-Z index both point at them by text, and
+        # pack_manual.py fails the build if one moves.
+        if ($guideContent -notmatch '(?m)^###\s+\d+\.\s') {
+            $guideContent = [regex]::Replace($guideContent, '(?m)^###\s+', '#### ')
+            $n = 0
+            $guideContent = [regex]::Replace($guideContent, '(?m)^##\s+([^\n]+)$', {
+                param($m)
+                $script:n++
+                "### $($script:n). $($m.Groups[1].Value)"
+            })
+        }
 
         # Extract and number subsections (### and #### both)
         $subsections = @()
@@ -316,9 +336,28 @@ function Build-Pdf([string]$markdownText, [string]$outputPdfPath) {
     & $edgePath --headless --disable-gpu --no-sandbox --print-to-pdf="$outputPdfPath" --no-pdf-header-footer $htmlUri 2>$null
     $ErrorActionPreference = $prevEap
 
-    $deadline = (Get-Date).AddSeconds(15)
+    # Wait for the file to APPEAR and then to STOP GROWING.
+    #
+    # This was a flat 15 s, which quietly became too short as the guide grew:
+    # at 93 pages a cold headless render overran it, the script errored, and a
+    # second run "fixed" it only because the browser was warm. A build step that
+    # fails roughly every other time is one people learn to re-run instead of
+    # believe, so give it real headroom - it costs nothing when the render is
+    # quick. Waiting for a stable size also stops the page-number pass from
+    # reading a half-written PDF.
+    $deadline = (Get-Date).AddSeconds(120)
     while (-not (Test-Path $outputPdfPath) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
-    if (-not (Test-Path $outputPdfPath)) { Write-Error "PDF was not produced at $outputPdfPath" }
+    if (-not (Test-Path $outputPdfPath)) {
+        Write-Error "PDF was not produced at $outputPdfPath within 120 s (headless render timed out)"
+        return
+    }
+    $lastLen = -1
+    while ((Get-Date) -lt $deadline) {
+        $len = (Get-Item $outputPdfPath).Length
+        if ($len -gt 0 -and $len -eq $lastLen) { break }
+        $lastLen = $len
+        Start-Sleep -Milliseconds 400
+    }
 }
 
 function Get-HeadingPages([string]$pdfPath, $entries) {

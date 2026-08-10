@@ -166,6 +166,8 @@ Enable **FT8 Simulation Mode** in the settings drawer to practice everything: ma
 
 **Visual indicator:** When simulation mode is active, a **10 px red border pulses around the entire screen** (breathing red frame). This is your visual reminder that you're in practice mode — if the red frame is gone, simulation is off and real stations are in play.
 
+**The interlock is in the firmware, not just the UI.** While simulation is on, every CAT command that would key the radio is skipped and logged instead — so a QMX that happens to be connected is never keyed, regardless of what the screen is showing.
+
 **Important:**
 - The QMX is **never keyed** in simulation mode, no matter what
 - QSOs are logged as real ADIF entries — deliberately, so the logging/upload paths get exercised too. When you're done, the ADIF viewer shows a **"Del N test"** button (only while practice contacts exist — they're recognized by their missing frequency): two taps deletes them all
@@ -173,19 +175,16 @@ Enable **FT8 Simulation Mode** in the settings drawer to practice everything: ma
 
 ### 5. ARRL Field Day Mode
 
-During [ARRL Field Day](https://www.arrl.org/field-day), enable **Field Day mode** in the settings:
+During [ARRL Field Day](https://www.arrl.org/field-day), tick **Field Day mode** in the Filter modal and fill in the two fields beside it:
 
-- **Mode** — on/off
-- **Class** — your transmitter class (1–2 kW)
-- **Section** — your ARRL section
+- **Class** — your number of transmitters plus the category letter, written together: `16A`, `5B`, `1D`. It is not a power rating.
+- **Section** — your ARRL/RAC section, e.g. `EMA`, `WCF`, `NNJ`.
 
-When FD mode is active:
+This switches the FT8 exchange from grid-and-signal-report to Field Day's class+section format, using the standard FT8 message type WSJT-X uses for FD (`WA9XYZ KA1ABC R 16A EMA`). Both pounce and CQ-run follow the convention automatically: the opening message is unchanged — FT8's CQ format has no room for class and section — and the *report-equivalent* step carries them instead, with the receiving side echoing back `R`-prefixed.
 
-- **CQ message changes** to `CQ FD` (replaces any other modifier)
-- **Exchange message** includes your class and section (e.g., `5B WCF` = class 5, section WCF)
-- **ADIF record** logs `CONTEST_ID=ARRL-FD`, your section, and their section
+While the mode is on, **Call CQ** tags your CQ as `CQ FD <call> <grid>`, using the same modifier mechanism as `CQ POTA` or `CQ DX`, so other Field Day stations know to expect this exchange. It **replaces** any other modifier for as long as the mode is enabled — FT8 allows exactly one. The CQ preset editor reflects that: the three presets are dimmed and locked while FD mode is on, since their own modifier cannot apply, and a live preview line shows exactly what will go out.
 
-The full FD exchange is automatic — no manual mode switching needed.
+Completed Field Day contacts log the standard ADIF contest fields — `CONTEST_ID=ARRL-FD`, your section and theirs — alongside the usual call, frequency and time, so they import cleanly into contest-logging software.
 
 ### 6. Message Status
 
@@ -275,6 +274,8 @@ It applies **between** bursts. With a burst on the air, Apply refuses and says t
 ### Waiting for a busy station
 
 On a crowded band several stations answer the same CQ and the caller works one of them. If that is not you, the Tab5 no longer keeps calling: while their last decoded message is addressed to somebody else, **nothing is transmitted**, and the status line shows `working <call> - waiting`. As soon as they send `73` or `RR73`, or call CQ again, it picks up where it left off.
+
+**You are not committed to the wait** (Roy KI0ER's report). The status line carries a **TAP TO CANCEL** line while the hold is on; tapping it drops the pounce so you are free to work somebody else. The abandoned exchange stays resumable for a few minutes, in case the station frees up and you want back in.
 
 This also protects the grey-list. Giving up on a station used to count against it, so a popular station could end up permanently skipped by the robot and Auto-work-pileup for no reason other than being busy. A wait is not a failed attempt. The wait is capped at about six minutes so a station that vanishes mid-exchange still times out normally.
 

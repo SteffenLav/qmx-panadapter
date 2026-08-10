@@ -149,11 +149,13 @@ reflash.
 - [Quick Guide](#quick-guide) — get on air in 10 minutes
 - [Getting help](#getting-help) — the manual on the device, and the guidance panel
 - [Panadapter](#panadapter) — spectrum, waterfall, zoom, touch-to-tune, S-meter, memory channels
+- [Live spots](#live-spots) — POTA, RBN and DX cluster callsigns drawn on the spectrum
 - [Web UI](#web-ui) — browser panadapter and remote control
 - [FT8 Receive](#ft8-receive) — onboard decoder, decode list
 - [FT8 Transmit](#ft8-transmit) — reply, CQ-run, auto-QSO, ADIF logging
 - [Time sync](#time-sync) — WiFi/SNTP, Tab5 RTC, POTA/offline use
-- [Reference](#reference) — gestures, settings drawer, web API, hardware
+- [Settings](#settings) — every drawer control, group by group
+- [Reference](#reference) — gestures, web API, hardware
 - [Build from source](#build-from-source)
 - [Under the hood](#under-the-hood) — DSP, I/Q correction, quirks
 - [Roadmap](#roadmap)
@@ -321,27 +323,11 @@ If a chapter does not answer your question, that is a documentation bug worth re
 
 ## Panadapter
 
-### Spectrum and waterfall
-
-The display is divided into a **60 px top bar**, a **200 px spectrum** (green curve with dim fill), a **32 px frequency axis**, a **370 px waterfall**, a **22 px band-plan strip**, and a **36 px bottom bar**. The full visible span is 48 kHz centred on the QMX VFO.
-
-The **spectrum** shows signal power in dBm (default range −130 to −30 dBm). Each frame is smoothed per-bin with an exponential moving average (EMA α = 0.4 by default, adjustable in the drawer), balancing visual stability against snappy response to CW signals and SSB attack transients.
-
-The **frequency axis** shows absolute MHz labels centred on the QMX VFO, refreshed on every CAT frequency update. At high zoom levels the labels resolve to kHz or Hz precision.
-
-**Band-plan strip.** A thin coloured bar directly above the bottom status bar (below the waterfall) shows the coarse CW / Digi / Phone segments of the current band, with a marker for where the VFO sits within them. Pick which IARU region it reflects in the settings drawer → **Band-plan region** (Auto from your grid square, or a fixed Region 1 / 2 / 3).
-
-The **waterfall** runs newest row at the top in a thermal SDR palette (black → dark blue → teal → green → yellow → red). Four colour maps are available in the settings drawer: Thermal, Viridis, Turbo, and Grayscale.
-
-**Waterfall floor tracking.** The waterfall's black level tracks the band noise automatically — a running median sampled only from bins inside the passband, EMA-smoothed — so the background colour follows conditions rather than a fixed anchor. Bins outside the passband run darker and are excluded from the floor calculation so they don't wash out dim in-band signals.
-
-**Flat-spectrum mode** (toggle in the settings drawer, persisted to NVS) switches both spectrum and waterfall to a per-bin adaptive display: each bin renders as dB above its own running noise floor. Real signals — including weak CW tones — stand out sharply against a calm baseline. This is the recommended mode on noisy bands. The dB range sliders have no effect in flat mode; the axis shows relative dB above floor.
-
 ### Touch-to-tune
 
 Tap anywhere on the spectrum or waterfall to place the cyan tune cursor. Drag and the cursor snaps grid-point to grid-point — you can see exactly which frequency will be tuned before you lift. The snap grid is **mode-aware**:
 
-**Tune vs. pan — how your finger is read.** A quick horizontal swipe (more than ~70 px within 250 ms) pans the view instead of tuning — see [Zoom and pan](#zoom-and-pan). A slower touch-and-hold (250 ms without that much movement) locks into tune mode, after which dragging moves the snap cursor as described below. In short: swipe fast to pan, hold-then-drag to tune.
+**Tune vs. pan — how your finger is read.** A quick horizontal swipe (more than ~70 px within 250 ms) pans the view instead of tuning — see [Zoom & Pan](https://tab5.lav.dk/guide/panadapter/#9-zoom-pan). A slower touch-and-hold (250 ms without that much movement) locks into tune mode, after which dragging moves the snap cursor as described below. In short: swipe fast to pan, hold-then-drag to tune.
 
 | Mode | Snap step |
 |------|-----------|
@@ -358,127 +344,22 @@ Taps always tune to exactly where you touched (snapped to the mode-aware grid ab
 
 **Passband indicator.** Two grey vertical lines mark your current filter edges. A faint coloured tint fills the passband. The amber VFO marker shows where the QMX is tuned; in CW mode it sits at dial + CW pitch offset so it marks the actual received tone frequency, not the suppressed carrier.
 
-### Zoom and pan
 
-| Gesture | Effect |
-|---------|--------|
-| One-finger fast horizontal swipe | Pan/"stroll" the view — retunes to the new centre frequency on release |
-| Pinch (two fingers) | Zoom ×1.0 – ×24.0 |
-| Two-finger drag | Pan the zoomed window |
-| Double-tap | Reset zoom and pan to ×1.0 / centred |
-| Top-bar Zoom → tap | Zoom preset: ×1 / ×2 / ×4 / ×8 / ×16 / ×24 |
+---
 
-**One-finger pan (stroll).** A fast horizontal swipe — more than ~70 px of movement within the first 250 ms of touching down — slides the spectrum and waterfall under your finger in real time, with a live frequency tooltip, and retunes to wherever you release. This works at any zoom level alongside the two-finger pinch/pan above; it's the quickest way to slide along a band without lifting into a deliberate tune-drag.
+## Live spots
 
-At zoom > ×1 the view **centres on the passband** (not the VFO dial), which matters for USB/LSB where the passband sits offset from the carrier. The passband lines and frequency axis track correctly at all zoom levels. Zoom level is persisted to NVS and restores with full zoom-FFT resolution on the next boot.
+Other stations drawn straight onto your spectrum at the frequency they are
+actually using — **POTA** park activations, **RBN** skimmer reports, and **DX
+cluster** spots, which are where phone activity comes from (no machine
+recognises a callsign spoken into a microphone, so SSB is invisible to RBN).
 
-### S-meter
+Grey means you have already worked them on that band. Press and drag to pick
+one, and lift to tune it with the right mode. One station is one entry, however
+many sources report it. Each source switches on separately in **Network → Live
+spots**.
 
-The Signal field in the top bar is a visual tick-scale bar labelled S1, S3, S5, S7, S9, +10, +20 with a moving green bar beneath. It is driven by the peak dBm in a ±64-bin window centred on the IF-shifted VFO bin — the actual signal under your cursor, not the DC/LO artefact at bin 0.
-
-S-unit mapping: S9 = −73 dBm; 6 dB per S-unit below S9; 1 dB per unit above S9. The meter stays live during FT8 capture.
-
-### Memory channels
-
-Swipe up from the bottom edge (or tap the bottom grip handle) to open the 4×8 memory channel grid (32 slots, NVS-persisted).
-
-| Action | How |
-|--------|-----|
-| Recall | Tap a slot — QMX retunes to stored frequency and mode |
-| Create | Tap an empty slot — the frequency/mode picker opens directly |
-| Edit | Long-press an occupied slot |
-| Move | Long-press and drag a filled slot onto an empty one — the data follows your finger |
-| Delete | Drag a filled slot onto the **wastebin** (bottom-right cell, channel 32) — it fades out |
-
-Memory slots show the label in large text and mode + frequency (dimmed) below. The frequency/mode picker pre-fills the current VFO and lets you edit both before naming.
-
-A new device ships with a few **example channels** already filled (rather than 32 blank cells), seeded only into empty slots so they never overwrite anything you've saved. The **first time** you open the picker, a brief one-time (~10 s) tour demonstrates the drag-to-move and drag-to-wastebin gestures, then never plays again.
-
-### Settings drawer
-
-Open by swiping in from the right edge, or tapping the right grip handle. The drawer is scrollable.
-
-**It is grouped, with a Basic / Expert toggle at the top.** Basic shows what a normal session needs; Expert adds the tuning and calibration controls. The groups, in order:
-
-| Group | Controls | Basic? |
-|---|---|---|
-| **Station** | Identity (callsign + grid), Activation (POTA/SOTA), Band-plan region | yes |
-| **Device** | Battery charge limit | Expert |
-| **Radio** | QMX volume, QMX RF gain, CW transmit offset, SWR protection, Antenna Tune *(QMX 1.04+)*, Release radio | yes |
-| **Network** | WiFi, Live spots (POTA / RBN / DX cluster), Bluetooth mouse | yes |
-| **Display** | Brightness, Display sleep, Waterfall colour map, Flip 180° | yes |
-| **FT8** | Distance in miles, FT8 simulation mode | yes |
-| **Spectrum** | Presets, dB range, Smoothing, Waterfall controls, Flat spectrum, I/Q balance, IF calibration | Expert |
-
-The FT8 group only appears on the FT8 screen, and the spectrum-related groups drop away there.
-
-What each control does:
-
-| Control | What it does |
-|---------|--------------|
-| **Activation** | Start a POTA or SOTA activation; every logged contact then carries the reference, with the count shown against the threshold. See [Activation](#activation-pota--sota) |
-| **SWR protection** | Off / 2.0 / 2.5 / 3.0 / 4.0 : 1 — above the limit the transmitter latches off. See [SWR protection](#swr-protection) |
-| **Release radio** | Stops all CAT traffic so you can use the QMX's own menus without the Tab5 interrupting them |
-| **QMX RF gain** | The radio's RF gain in dB, **per band**, read back from the radio — nothing is stored on the Tab5, because a remembered value would belong to whichever band you were last on |
-| **CW transmit offset** | Transmit a few hundred hertz off the station you are answering, so you stand out of the zero-beat pile. Implemented as split, because the QMX has no XIT |
-| **Live spots** | The POTA, RBN and DX cluster sources for the [spot lane](#live-spots-on-the-spectrum) |
-| **Bluetooth mouse** | A pointer that works while the QMX is plugged in. See [Bluetooth mouse](#bluetooth-mouse) |
-| **Display sleep** | Backlight off after an idle timeout; a tap wakes it and is swallowed, so nothing is triggered by accident |
-| **Flip 180°** | Inverts the whole display and touch axes for upside-down mounting; centred checkbox so it isn't hit by accident, persisted |
-| **QMX volume** | The radio's own AF gain, **in decibels — the same number the QMX shows on its LCD** (verified side by side against a real QMX). Reads the rig back each time the drawer opens, so it stays in step if you use the radio's volume knob. Intended for QMX+ builds with no control panel, where there is no knob at all. Spans 0–50 dB, not the QMX's full 0–199 dB, so the useful travel isn't crammed into the first couple of centimetres — 50 dB is Randy N4OPI's with-antenna figure. Turn the rig's own knob past 50 and the slider knob pins at the end while the number keeps showing the true dB |
-| **IQ Balance** | Toggle adaptive I/Q image correction; re-enabling resets the estimator |
-| **Flat spectrum** | Toggle flat/absolute display mode, persisted |
-| **Presets** | HF Normal / HF DX / Strong Sig — sets dB range and smoothing in one tap |
-| **WiFi** | Opens credential modal; **WiFi initiated** checkbox enables/disables WiFi entirely |
-| **Identity** | Callsign + Maidenhead grid (required for FT8/FT4 TX; also drives KM/BRG columns) |
-| **Band-plan region** | Auto (from your grid square) / Region 1 (EU/AF) / Region 2 (Americas) / Region 3 (Asia/Pac) — drives the [band-plan strip](#spectrum-and-waterfall); sits right under Identity since Auto derives from your grid |
-| **dB Range** | Min and Max sliders (dBm) |
-| **Smoothing** | EMA alpha 0.05–1.00 |
-| **CW** | CW sidetone centre, 600–800 Hz; touch-to-tune in CW mode snaps to this offset, persisted |
-| **IF calibration** | ±100 Hz trim for per-unit LO variance (see [Per-unit IF calibration](#per-unit-if-calibration)) |
-| **Display** | Brightness, 10–100%, persisted |
-| **Battery charge limit** | Optionally stop charging at a set percentage (default 80%) to reduce long-term pack wear; charging resumes automatically if the level later drops well below it (5% hysteresis). The displayed charge % now also compensates for the voltage rise while charging, so it no longer jumps around when plugged in |
-| **Waterfall colour map** | Thermal / Viridis / Turbo / Grayscale, persisted |
-| **Waterfall** | Black level, Contrast, Adaptive floor blend, and FFT window — see [Waterfall colourisation](#waterfall-colourisation) below |
-
-**Grouped, with a Basic/Expert toggle (v1.6.0).** The drawer had grown to twenty-five sections in the order they were built, so related controls were scattered — the two QMX gain controls sat together, but CW pitch was nine sections away from the CW transmit offset. It is now grouped under headings — **Station**, **Device**, **Radio**, **Network**, **Display**, **FT8**, **Spectrum** — and the toggle beside the **Settings** title chooses how much you see. It always says where you are and what a tap gives you: **BASIC (tap for Expert)** reveals the Spectrum and Device groups, which hold the calibration and tuning controls you set once and rarely revisit. Nothing is lost in Basic, only hidden, and the choice is not remembered between sessions — it is a way of looking at the drawer rather than a preference.
-
-The **Radio** group is where the controls that reach the QMX live: **QMX volume**, **QMX RF gain** (per band, read back from the radio), the **CW transmit offset**, **Antenna Tune** on 1.04+ firmware, and **Release radio to QMX menu**.
-
-Earlier declutter, still true: the **Snap to signal** and **FT8 sync lines** toggles were removed in v0.19.4 (taps now always tune where you touch).
-
-On the FT8 screen the spectrum-related groups drop away and three FT8-only controls appear: **Distance in miles** for the decode list's KM/MI column, **Fast pounce (early decode)** — see below — and **FT8 Simulation Mode**, see [FT8 Simulation mode](#ft8-simulation-mode).
-
-**Fast pounce (early decode)** — on by default. Decodes surface ~1.8 s *before* the slot boundary (the way WSJT-X decodes in the dead-air gap), so replying to a fresh CQ can transmit in the very next slot instead of waiting a full 30 s cycle, and mid-QSO replies land on the beat. The trade-off: the capture window closes ~1.8 s early, so a station transmitting *late* in the slot can occasionally be clipped and missed. ⚠️ This feature has not yet been A/B-verified on a live band — if your decodes-per-slot drop noticeably with it on, turn it off here and please report your before/after numbers on the groups.io thread.
-
-### Waterfall colourisation
-
-Four live, NVS-persisted sliders/dropdown at the bottom of the settings drawer fine-tune how the waterfall maps signal to colour — changes scroll in from the top as you drag:
-
-| Control | Range | Default | Effect |
-|---------|-------|---------|--------|
-| **Black level** | 0–30 dB | 9 dB | How far above each bin's own noise floor a signal needs to be before it lifts off black |
-| **Contrast** | 10–80 dB | 45 dB | The dB span that fills the rest of the colour ramp above the black level |
-| **Adaptive floor** | 0–100% | 100% | Blend between a per-bin noise floor (100%) and one global mean floor across the band (0%) |
-| **FFT window** | Blackman-Harris / Hann (sharp) / Nuttall | Blackman-Harris | The FFT window function; Hann trades some sidelobe suppression for sharper peaks |
-
-### Live spots on the spectrum
-
-*(needs WiFi)* Callsigns drawn straight onto the trace, at the frequency the station is actually using. Three sources, each switched on separately in **Network → Live spots**:
-
-| Source | What it carries | Default |
-|---|---|---|
-| **POTA** | Park activations, self-spotted by the activator | on |
-| **RBN** | CW skimmer reports — machines listening for CW, RTTY, FT8 and FT4 | off |
-| **DX cluster** | People typing. This is where **SSB spots** come from: no machine recognises a callsign spoken into a microphone, so phone activity is structurally invisible to RBN | off |
-
-**Colours:** amber is a POTA activation, green an RBN spot, and **grey** a station you have already worked *on that band*.
-
-**Press and drag** to pick one, and lift to tune it — frequency *and* mode. Bandwidth is deliberately left alone, since the QMX keeps a filter per mode. Counts in the bottom corners (`< spots (3)`) say how many more are on this band just outside your window; tap one to jump to the nearest.
-
-Spots fade with age and are gone after 30 minutes. On a crowded band only so many labels fit — unworked and fresher spots keep theirs, and a spot that cannot fit a label is not drawn at all rather than left as a line pointing at nothing.
-
-**One station, one entry.** A station spotted on POTA *and* heard by RBN used to be drawn twice, in two colours, a few pixels apart — and RBN doubled itself where two skimmers rounded the same signal differently. The same callsign within 2 kHz is now a single entry: the activation spot wins, and the RBN sighting folds into it as corroboration, shown as a brighter marker. That distinction is worth having — it means *a receiver copied them just now*, rather than *somebody typed this an hour ago*.
+📖 Full chapter: [tab5.lav.dk/guide/spots](https://tab5.lav.dk/guide/spots/)
 
 ---
 
@@ -712,28 +593,6 @@ Tap **Save** to persist (NVS) and apply immediately.
 
 **⚠ Transmits unattended — never leave it running unsupervised.** When enabled, the robot picks a CQ caller every slot (filtered the same way as above, plus a worked-before skip) and runs the full exchange itself — no per-QSO confirmation, no tap required. Pick a **Priority**: Strongest signal, Weakest signal, or Most distant grid. Same TX1→report→RR73→73→ADIF-log flow as a manually-tapped reply; you just aren't the one tapping. You remain responsible for everything it transmits under your callsign, same as any other unattended digital-mode software.
 
-### ARRL Field Day mode
-
-A checkbox in the same Filter modal as above (with Class/Section text fields next to it) switches the FT8 exchange from grid/signal-report to ARRL Field Day's class+section format — e.g. `16A EMA` instead of a grid square, using the standard `WA9XYZ KA1ABC R 16A EMA`-style FT8 message type (the same one WSJT-X uses for FD). Pounce and CQ-run both follow the convention automatically: the initial grid-exchange message is unchanged, but the report-equivalent step carries class+section instead, with the receiving side echoing it back `R`-prefixed.
-
-While the mode is on, **Call CQ** automatically tags your CQ message `CQ FD <call> <grid>` (the same "CQ modifier" mechanism as `CQ POTA`/`CQ DX`) so other Field Day stations know to expect this exchange instead of a normal report — this overrides any other modifier on the active CQ preset for as long as the mode is enabled. The long-press CQ preset editor reflects this: while Field Day mode is on, the three presets are shown dimmed (their own modifier doesn't matter right now) and a live preview line shows exactly what will be transmitted.
-
-Completed Field Day QSOs log the standard ADIF contest fields (see the table below) alongside the usual call/freq/time fields, so they import cleanly into contest-logging software.
-
-### FT8 Simulation mode
-
-A **"FT8 Simulation Mode"** checkbox in the FT8 settings drawer (FT8 screen only) lets you practice everything — manual step-by-step Transmit, Auto Pounce, CQ-runs, pileups, and Field Day exchanges — with **no real station, no antenna, and no QMX connected at all** (v1.3.0; previously the radio had to be attached even though it was never keyed).
-
-**Six phantom stations** (three US, three DX) call CQ on their own tones. Each phantom message is a real FT8 message, synthesized to actual GFSK audio and decoded through the same on-device receive pipeline real RF goes through — what lands in the decode list genuinely round-tripped the receiver. The phantoms behave like real operators:
-
-- Tap a CQ to pounce (auto or fully manual — they answer either), or **Call CQ** yourself and **four of them answer at once**, building a genuine pileup to practice the pileup tools on.
-- They're **patient**: each message repeats every cycle, up to four times, until you respond — then they give up and go back to CQing. A phantom you're mid-QSO with stops CQing; one you've worked stops answering your CQs for the session (toggle sim off/on to reset).
-- Their replies match **what you actually transmitted** — grid gets a report back, a report gets a roger, `RR73` gets a courtesy `73`.
-- The **Fast pounce** toggle (below) is honoured: with it ON, phantom messages surface just before the slot boundary; with it OFF, just after — so you can see exactly what the toggle changes.
-- Swiping to the Panadapter and back clears the phantom rows and pileup for a fresh session.
-
-While simulation mode is on, a **breathing red border** frames the whole screen as an unmissable reminder that nothing transmitted right now is real — the hard interlock lives in firmware (every CAT command that would key the radio is skipped, logged instead), not just in the UI. Completed simulated QSOs log to the same ADIF file as real ones — deliberately, so the logging/upload paths get exercised too. When you're done practicing, the ADIF viewer shows a **"Del N test"** button (only while simulation records exist — they're recognizable by their missing frequency): two taps wipes every practice contact from the log.
-
 ### TX status indicator
 
 The left pane shows a persistent status line below the slot countdown:
@@ -768,14 +627,6 @@ It applies **between** bursts. If a burst is on the air, Apply refuses and tells
 
 > **The strip shows decoded stations, not raw spectrum.** A station too weak to decode will not show as occupied, and an all-grey strip means nothing has been heard yet rather than "the band is clear".
 
-### Waiting for a busy station
-
-On a crowded band several stations answer the same CQ and the caller works one of them. If that is not you, the Tab5 no longer keeps calling: while their last decoded message is addressed to somebody else, **nothing is transmitted**. The status line shows `working <call> - waiting`. As soon as they send `73` or `RR73`, or call CQ again, it picks up where it left off.
-
-**You are not committed to the wait** (v1.3.5, Roy KI0ER's report): the status line carries a **TAP TO CANCEL** line during the hold, and tapping it drops the pounce so you are free to work anyone else. The abandoned exchange stays resumable for a few minutes in case the station frees up and you want back in.
-
-This also protects the grey-list. Giving up on a station used to count against it, so a popular station could end up permanently skipped by the robot and Auto-work-pileup for no reason other than being busy. A wait is not a failed attempt. The wait is capped at about six minutes so a station that vanishes mid-exchange still times out normally.
-
 ### QSO override buttons
 
 During an active auto-QSO exchange (any state between first reply and final 73), three buttons appear in the left pane:
@@ -791,30 +642,6 @@ These are deliberate operator nudges for busy-band edge cases where the auto-eng
 ### TX power / SWR readout
 
 After each burst the Tab5 queries `PC;`/`SW;` for instantaneous forward power and SWR and shows the result briefly in the status line: `Last TX: X.XW SWRx.xx [Ns]`. If SWR > 4.0 (indicating the QMX SWR-protection latch tripped), the firmware automatically cycles `TX;` / 150 ms / `RX;` to clear the latch so the radio is ready for the next TX slot without operator intervention.
-
-### SWR protection
-
-Reading the SWR is one thing; **acting** on it is another. Set a limit in **Radio → SWR protection** — **Off, 2.0, 2.5, 3.0** or **4.0 : 1**, defaulting to **3.0:1** — and a transmission that reaches it stops, with the transmitter **latched off** until you clear it by tapping the red warning on the FT8 screen.
-
-An FT8 burst is nearly **thirteen seconds of continuous key-down**, so a disconnected antenna, a wrong-band antenna or a damaged feedline has real time to do damage. 3.0:1 is high enough not to trip on a merely mediocre match and low enough to catch those.
-
-**FT8 and FT4 differ, on purpose.** In FT8 the SWR is sampled part-way through and the burst is **cut short**. In FT4 the check runs **after** the burst, so that one burst completes and every later one is blocked — FT4 symbols are 48 ms and a control-link query takes about 50 ms, so asking mid-burst would disturb the very transmission it is protecting. A reading only counts if there is real power behind it; the radio can report a meaningless ratio when the amplifier is not actually loaded.
-
-The latch is deliberately sticky. A bad antenna does not repair itself, and resuming automatically would just transmit into the same fault on the next slot.
-
-### Activation (POTA / SOTA)
-
-Start an activation in **Station → Activation**, pick **POTA** or **SOTA**, and enter the reference (`DL-0123`, `OZ/SJ-001`). From then on **every logged contact carries it automatically** — written as the ADIF `MY_SIG` / `MY_SIG_INFO` fields as the record is created, so no contact can be logged without it by forgetting a step.
-
-The panel shows your **contact count against the threshold** — 10 for POTA, 4 for SOTA — read from the log itself rather than from a counter that could drift.
-
-**Chases are tagged too.** If you work a station the panadapter has already seen spotted, their reference is recorded as `SIG` / `SIG_INFO`, so a chase is logged as a chase without you typing anything.
-
-**Stopping is as prominent as starting**, because the failure that actually happens is driving home with it still running and stamping the next evening's contacts with a park you left.
-
-The session survives a reboot, but is deliberately **not** part of the config backup — a backup restored weeks later would otherwise start stamping QSOs with an old activation.
-
-**Uploading just that park:** the ADIF download takes an optional reference, so you can export one activation's contacts rather than your whole log. In the web UI it is on the QSO Logs menu.
 
 ### CQ message presets
 
@@ -899,6 +726,18 @@ On the FT8 screen, tap **Filter** → **Sync Time** to open the time calibration
 
 ---
 
+## Settings
+
+The settings drawer, opened by swiping in from the right edge. It is grouped —
+**Station, Device, Radio, Network, Display, FT8, Spectrum** — with a **Basic /
+Expert** toggle that keeps the list short until you need it to be long. Changes
+save themselves; there is no OK button to hunt for.
+
+📖 Every control, group by group:
+[tab5.lav.dk/guide/settings](https://tab5.lav.dk/guide/settings/)
+
+---
+
 ## Reference
 
 ### Gestures
@@ -919,28 +758,6 @@ On the FT8 screen, tap **Filter** → **Sync Time** to open the time calibration
 | Tap or swipe ↓ | Top-bar item (Band/Mode/BW/Freq/Zoom) | Open that item's selector |
 | Touch and hold ~250 ms | FT8 decode list row | Dim preview at ~80 ms; full selection at 250 ms (scroll locks, drag moves highlight, lift to confirm) |
 | Quick swipe | FT8 decode list | Scroll the list normally |
-
-### Bluetooth mouse
-
-A Bluetooth mouse is the one pointer that works **while the QMX is plugged in**. A USB mouse cannot: the radio occupies the Tab5's only USB host, and sharing it through a hub does not work on this hardware — the ESP32-P4's USB host has no Transaction Translator, so every full- or low-speed device behind a hub is disabled. Bluetooth never touches that port, so the radio keeps its connection.
-
-For anyone operating with cold or unsteady hands, that is the whole point: every menu, button and drawer control becomes a click instead of a precise tap on glass.
-
-**Setting it up — once:**
-
-1. Tick **Network → Bluetooth mouse → Enable (then pair the mouse)**.
-2. **Restart the Tab5.** Bluetooth can only start after the link to the wireless co-processor is up, so the switch takes effect on the next boot. The confirmation toast says so.
-3. Put the mouse in pairing mode and wait a few seconds. It connects on its own.
-
-The pairing is stored and survives reboots *and* firmware updates — from then on the mouse reconnects by itself.
-
-**The Bluetooth symbol** sits in the bottom bar just left of the WiFi indicator: dim grey when switched off, pale when on and looking, **blue** when a mouse is connected. The web UI mirrors it.
-
-**What works:** moving the pointer, left click, and the scroll wheel — which scrolls whatever is under the pointer, so the decode list, the settings drawer and the manual all scroll.
-
-**The pointer disappears when the mouse sleeps.** A Bluetooth mouse switches itself off after about half a minute of stillness to save its battery, and the pointer goes with it. It comes back the instant you move the mouse — reconnecting takes under a third of a second. That is the mouse looking after its own battery, not a fault.
-
-It costs about 5 KB of memory: the Bluetooth pools live in external RAM and the stack is sized for exactly one mouse, which is what makes it affordable on a board this tight. Off by default.
 
 ### Per-unit IF calibration
 
@@ -1051,16 +868,6 @@ q_out = (q − K_phi · i) × K_amp
 ```
 
 No calibration step needed; the estimator converges on ambient band noise within a few seconds of any signal. A two-speed startup runs all alphas at 8× for the first 2 s of real signal after each reset (effective convergence ~125 ms), then drops to steady-state. Toggle in the settings drawer; re-enabling resets the estimator so it reconverges from a clean state.
-
-### DSP pipeline
-
-- **FFT:** 1024-pt complex, Blackman-Harris window. esp-dsp ANSI fallback is used (the PIE/vector version crashes under sustained WebSocket load on this silicon).
-- **IF offset:** The QMX presents I/Q at +12 kHz; spectrum, waterfall, and S-meter all shift bin selection by `n_bins/4` so the VFO signal appears at the visual centre.
-- **DC blocker:** one-pole IIR on the I/Q stream before FFT.
-- **Spectrum smoothing:** per-bin EMA (α = 0.4 default, adjustable).
-- **dBm calibration:** `DSP_DB_CALIBRATION_OFFSET = −148.0 dB` measured on dummy load; noise floor reads −130 dBm; S9 = −73 dBm.
-- **Waterfall scroll:** 1280×824 double-height canvas (~130 µs/tick vs ~92 ms with memmove).
-- **Audio task:** polling on core 0 with a drain loop. Event-driven reads caused noise-floor pumping (~13 s cycle) from truncated UAC chunks; this architecture eliminates it.
 
 ### Quirks and trade-offs
 

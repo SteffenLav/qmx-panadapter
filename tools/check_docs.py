@@ -198,6 +198,34 @@ def check_pdf_coverage():
     return warnings
 
 
+# Headings that COLLIDE BY NAME while describing different things. These are
+# not drift and collapsing them would be wrong - the browser's waterfall is not
+# the Tab5's, and a gesture table is not prose about the same feature.
+#
+# Keep this list SHORT and justified. Every entry is a promise that a human
+# looked; an allowlist used to silence real duplicates would make the count
+# meaningless, which is the one thing this check has to avoid.
+ACCEPTED_OVERLAP = {
+    ("docs/mkdocs/guide/web-ui.md", "spectrum waterfall"):
+        "the BROWSER's spectrum/waterfall, not the Tab5's",
+    ("docs/mkdocs/guide/web-ui.md", "memory channels"):
+        "recalling memories from the browser, not the on-device picker",
+    ("docs/mkdocs/reference/gestures.md", "spectrum waterfall"):
+        "a gesture lookup table for that screen area, not prose about the feature",
+    ("docs/mkdocs/reference/gestures.md", "memory channels"):
+        "gesture lookup table",
+    ("docs/mkdocs/reference/gestures.md", "settings drawer"):
+        "gesture lookup table",
+    ("docs/mkdocs/build/build.md", "prerequisites"):
+        "what you need to BUILD from source; README's is what you need to OPERATE",
+    ("docs/mkdocs/quick-start.md", "prerequisites"):
+        "the HARDWARE you need to buy; README's is the FT8 setup you need in place",
+    ("docs/mkdocs/guide/panadapter.md", "settings drawer"):
+        "deliberately reduced to a 3-line POINTER at settings.md - names the "
+        "groups and links, describes no control",
+}
+
+
 def check_duplicate_coverage():
     """Topics described in both trees - where drift happens."""
     if not os.path.isfile(README):
@@ -210,6 +238,8 @@ def check_duplicate_coverage():
                 continue
             path = os.path.join(root, fn)
             for key, (n, raw) in _headings(_read(path), levels=(2, 3)).items():
+                if (_rel(path), key) in ACCEPTED_OVERLAP:
+                    continue
                 if key in readme_h:
                     dupes.append(
                         "%s:%d %r also exists in README (line %d, %r)"

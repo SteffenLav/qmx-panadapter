@@ -112,38 +112,26 @@ Tap any item to open its selector:
 
 ### 4. Spectrum & Waterfall
 
-The **spectrum** shows real-time signal strength (green curve) across the tuned band. The **waterfall** shows a rolling history of that spectrum, with colour indicating signal strength (SDR gradient: blue → green → yellow → red).
+The **spectrum** shows signal power in dBm (default range −130 to −30 dBm) as a green curve with a dim fill. Each frame is smoothed per-bin with an exponential moving average — α = 0.4 by default, adjustable in the drawer — which balances a stable picture against a snappy response to CW keying and SSB attack transients.
 
-**Flat Spectrum Mode** (in settings) shows the dB scale relative to a per-bin noise floor, so even weak signals pop above the baseline. Normal mode shows absolute dBm (referenced to a -73 dBm S9 mark).
+The **frequency axis** shows absolute MHz labels centred on the QMX VFO, refreshed on every CAT frequency update. At high zoom the labels resolve to kHz or Hz precision.
 
-**Waterfall Controls** (in settings):
+The **waterfall** runs newest row at the top, in a thermal SDR palette (black → dark blue → teal → green → yellow → red). Four colour maps are available in the drawer: **Thermal, Viridis, Turbo** and **Grayscale**.
+
+**The waterfall floor tracks the band automatically.** Its black level follows a running median sampled only from bins *inside the passband*, EMA-smoothed, so the background colour follows conditions instead of sitting at a fixed anchor. Bins outside the passband are drawn darker and excluded from that calculation, so they cannot wash out dim in-band signals.
+
+**Flat-spectrum mode** (drawer toggle, persisted) switches both spectrum and waterfall to a per-bin adaptive display: every bin renders as dB *above its own running noise floor*. Real signals — weak CW tones especially — stand out sharply against a calm baseline, which is why it is the mode to reach for on a noisy band. The dB-range sliders have no effect while it is on, and the axis shows relative dB above floor rather than absolute dBm.
+
+**The picture is cleared when it would otherwise mislead.** Switching between Panadapter, FT8 and FT4, or changing band, clears the waterfall and resets the spectrum baseline, so stale signals from the old band cannot linger in the new one. The noise floor recalibrates and a new baseline settles in about a second.
+
+**Waterfall controls** (in settings):
 
 - **Black level** — how far above noise-floor to go black (default 9 dB)
 - **Contrast** — dB span of the colour ramp (default 45 dB)
 - **Adaptive floor** — blend between per-bin and global noise floor (default 100%)
 - **FFT window** — Blackman-Harris, Hann, or Nuttall (default Blackman-Harris)
 
-### 5. Display & Buffer Features
-
-#### Spectrum Buffer Clear
-
-When you **switch modes** (Panadapter ↔ FT8 ↔ FT4) or **change bands**, the panadapter automatically **clears the waterfall and resets the spectrum baseline**. This prevents stale signals from interfering with your new band or mode view.
-
-
-- Waterfall clears completely (starts fresh)
-- Noise floor recalibrates
-- New baseline takes ~1 second to establish
-
-This happens transparently — you'll notice the waterfall momentarily clear and re-initialize, then populate with real-time data from the new band/mode.
-
-#### Flat Spectrum Mode
-
-Toggle in settings. Shows dB scale relative to a **per-bin noise floor** (not absolute dBm), so weak signals stand out above the baseline even on a noisy band.
-
-- **Normal mode**: absolute dBm referenced to S9 = -73 dBm
-- **Flat mode**: relative dB above each bin's noise floor
-
-### 6. Frequency Keypad
+### 5. Frequency Keypad
 
 Tap the **frequency** on the top bar to open the keypad. Enter frequency in MHz format:
 
@@ -163,15 +151,15 @@ The background behind the keypad is intentionally semi-transparent (40% dim) so 
 
 **Cancel and Enter are the only exits** — tapping outside the keypad does nothing, so an accidental background touch cannot silently discard what you were typing.
 
-### 7. Memory Channels
+### 6. Memory Channels
 
 32 memory channels (4×8 grid), free to hold any frequency/mode — not tied to a band. Each stores frequency, mode, and name. Swipe up from the bottom edge to open the memory picker.
 
-Mode is shown in colour on each button — CW (green), DiGi (teal), USB (brick red), LSB (purple) — so the grid is scannable at a glance without reading every label.
+Each slot shows its **label in large text**, with the mode and frequency dimmed beneath. Mode is also colour-coded — CW (green), DiGi (teal), USB (brick red), LSB (purple) — so the grid is scannable at a glance without reading every label.
 
 **To recall a channel:** Tap it. The QMX retunes immediately.
 
-**To create a new channel (empty slot):** Tap the empty slot — the frequency keypad opens directly. No long-press needed.
+**To create a new channel (empty slot):** Tap the empty slot — the frequency/mode picker opens directly, pre-filled with the current VFO so you can adjust both before naming it. No long-press needed.
 
 **To edit an existing channel:** Long-press it in place. Change the name, frequency, or mode, then tap **Save**.
 
@@ -190,7 +178,7 @@ Mode is shown in colour on each button — CW (green), DiGi (teal), USB (brick r
 
 **Out-of-band frequencies are rejected immediately** — if you enter a frequency outside a recognised amateur band, the keypad stays open so you can correct it rather than silently saving a wrong value.
 
-### 8. Band Presets
+### 7. Band Presets
 
 Tap the **band name** on the top bar to switch between configured bands. The band selector shows:
 
@@ -202,7 +190,7 @@ On radios with many configured bands (QMX+), the picker lays the bands out in **
 
 Switching bands **remembers the last frequency you visited on each band**, so you can flip between 20m and 40m without losing your place.
 
-### 9. Zoom & Pan
+### 8. Zoom & Pan
 
 The QMX sends a 48 kHz-wide slice of I/Q, so **×1 shows 48 kHz** centred on the dial. Zooming narrows that window with a true zoom-FFT — you get finer resolution, not a stretched picture.
 
@@ -219,36 +207,40 @@ The zoom level is displayed on the top bar (e.g. **2.0x**). Tap it to choose a p
 
 Pinching sets any value in between; double-tap returns to ×1 and re-centres.
 
-At zoom levels above ×1 the display **pans to keep the passband centred** when you change mode or bandwidth, so the active receive area stays on screen.
+| Gesture | Effect |
+|---------|--------|
+| One-finger fast horizontal swipe | Pan ("stroll") the view — retunes to the new centre on release |
+| Pinch (two fingers) | Zoom ×1.0 – ×24.0 |
+| Two-finger drag | Pan the zoomed window |
+| Double-tap | Reset zoom and pan to ×1.0, centred |
+| Top-bar **Zoom** → tap | Pick a preset |
 
-### 10. S-Meter
+**One-finger pan (stroll).** A fast horizontal swipe — more than about 70 px of movement within the first 250 ms of touching down — slides the spectrum and waterfall under your finger in real time, with a live frequency tooltip, and retunes to wherever you release. It works at any zoom level, alongside the two-finger pinch and pan, and it is the quickest way to move along a band without dropping into a deliberate tune-drag.
 
-The S-meter (top-right of the top bar) shows received signal strength on a 0–68 scale:
+At zoom levels above ×1 the display **centres on the passband**, not the VFO dial — which matters in USB and LSB, where the passband sits to one side of the carrier. It re-centres automatically when you change mode or filter width, so the active receive area stays on screen, and the passband lines and frequency axis track correctly at every zoom level.
 
-- **S1 to S9** — standard S-units (-130 to -73 dBm)
-- **+10 to +20** — above S9 in 10 dB steps
+The zoom level is **persisted**, and comes back at full zoom-FFT resolution on the next boot.
 
-It is a readout, not a control — there is nothing to tap, and there is no peak-hold mode. The reading is taken around the VFO's own bin (corrected for the QMX's 12 kHz IF offset), so it follows the signal you are actually listening to rather than the DC spike at the centre of the spectrum.
+### 9. S-Meter
 
-### 11. Settings Drawer
+The **Signal** field in the top bar is a tick-scale bar labelled S1, S3, S5, S7, S9, +10, +20, with a moving green bar beneath it.
 
-Swipe ← from the right edge to open the settings drawer. It is grouped, with a **Basic / Expert** toggle at the top — Basic shows the everyday items, Expert reveals the rest, so the list is short until you need it to be long.
+- **S1 to S9** — standard S-units, −130 to −73 dBm
+- **+10 / +20** — above S9, in 10 dB steps
 
-The groups, in the order they appear:
+The scale is **S9 = −73 dBm**, 6 dB per S-unit below S9 and 1 dB per unit above it.
 
-| Group | Holds | In Basic? |
-|---|---|---|
-| **Station** | Callsign and grid, activation, band-plan region | yes |
-| **Device** | Battery charge limit | Expert only |
-| **Radio** | QMX volume, RF gain, CW transmit offset, SWR limit, Antenna Tune, Release radio | yes |
-| **Network** | WiFi, spot sources (POTA / RBN / DX cluster), Bluetooth mouse | yes |
-| **Display** | Brightness, sleep, colour map, 180° flip | yes |
-| **FT8** | Distance in miles, FT8 simulation mode | yes |
-| **Spectrum** | Presets, dB range, smoothing, waterfall colouring, flat mode, I/Q balance, IF calibration | Expert only |
+The reading is the peak level in a ±64-bin window centred on the **IF-shifted VFO bin** — corrected for the QMX's +12 kHz IF offset, so it measures the signal actually under your cursor rather than the DC/local-oscillator spike sitting at the centre of the spectrum. It stays live during FT8 capture.
 
-Everything reached in a normal session is in a Basic group; the tuning and calibration controls are the ones Expert reveals.
+It is a readout, not a control: there is nothing to tap, and there is no peak-hold mode.
 
-The full list, group by group, is in [Settings](settings.md).
+### 10. Settings Drawer
+
+Swipe ← from the right edge to open the settings drawer, or tap the right grip handle.
+
+It is grouped — **Station, Device, Radio, Network, Display, FT8, Spectrum** — with a **Basic / Expert** toggle at the top. Basic shows what a normal session needs; Expert reveals the tuning and calibration controls, so the list stays short until you need it to be long.
+
+**Every control, group by group, is documented once in [Settings](settings.md)** — deliberately in one place rather than summarised here as well.
 
 ---
 

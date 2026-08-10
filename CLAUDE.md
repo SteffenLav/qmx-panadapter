@@ -324,6 +324,33 @@ The discriminating experiment CLAUDE.md had wanted since 2026-07-06, finally run
 
 **Also a firmware input in practice: heading text.** `help_topics.c` anchors are case-insensitive heading *substrings* chosen to survive renumbering and small rewordings, but they are still a coupling between prose and code. Grep `help_topics.c` before renaming any heading in the docs.
 
+### ⛔ The docs live in TWO trees. README is NOT the single source.
+
+The **PDF** is built from `README.md` (between the `USERGUIDE` markers) **plus four
+injected guide files** (`guide/panadapter.md`, `ft8-rx.md`, `ft8-tx.md`,
+`time-sync.md`). The **website** and the **on-device manual** are built from
+`docs/mkdocs/**` and **never touch README**. Fixing a fact in one tree does not
+fix it in the other.
+
+Reading the shipped v1.7.0 PDF (2026-08-09) turned up **~15 wrong statements, all
+of them in `docs/mkdocs/**`** and all shipped to the website, the PDF and the
+embedded manual: the tune-snap grid described as zoom-based (it is **mode**-based),
+the ×1 span called "4 MHz" (it is **48 kHz**), a tappable S-meter peak-hold that
+**has never existed**, `settings → About → Reset` and `Settings → Diagnostic log`
+(**neither control exists**), and "Factory Reset erases the ADIF log" — the exact
+**opposite** of what `factory_reset.c` does. Plus 14 × "new in the next release"
+left from the previous cycle. README was right in *every* conflict, because README
+is the file that actually gets read.
+
+**`tools/check_docs.py` runs from the mkdocs hook.** Forward-looking phrasing is an
+**error that fails the docs build**. Duplicate coverage and PDF-coverage gaps are
+warnings, and those counts are the backlog — **if the duplicate count goes UP, a
+new second copy was just created.** ⚠ It cannot tell whether two copies *agree*;
+that stays human, and is Phase 4.0 of the release process.
+
+**Verify every number and every menu path against the code, never from memory.**
+Plan for collapsing the duplicates: `docs/docs-single-source-plan.md`.
+
 ### LVGL hit-tests children in REVERSE CREATION ORDER and ignores siblings — a foregrounded screen child wins over a full-screen overlay (v1.5.0)
 The Reader's own **Back / Exit / Contents** buttons could not be tapped at all, and it looked like an overlay z-order bug. It is not: the top-bar Band/Mode/BW **hit zones are direct children of the screen** and are `lv_obj_move_foreground()`ed as a keepalive, so they sit above the Reader overlay in the screen's child list — and LVGL walks a parent's children in reverse creation order, taking the first hit, **without comparing siblings' areas or z-intent**. The BW zone therefore swallowed every touch aimed at the overlay's header. Same root cause produced three siblings of the same bug in one screenshot: panadapter edge-swipe strips staying live over the manual, the QMX-wait prompt's own keepalive re-foregrounding itself over the drawer, and the FT8 drawer reflow stacking on itself (that one from a hardcoded `y` under a comment warning it had to be kept in step by hand).
 

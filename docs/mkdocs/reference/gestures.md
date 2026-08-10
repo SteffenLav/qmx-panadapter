@@ -23,7 +23,7 @@ Tap any item on the top bar to open its selector:
 | **Bandwidth** | Filter width (SSB) or CW passband |
 | **Band** | Band list (160 m – 10 m + custom) |
 | **S-meter** | Peak-hold toggle |
-| **Zoom** | 1x / 2x / 4x / 8x presets |
+| **Zoom** | x1 / x2 / x4 / x8 / x16 / x24 presets; pinch for anything between |
 
 ## Spectrum / Waterfall
 

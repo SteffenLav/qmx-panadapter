@@ -102,7 +102,7 @@ Priority 1  — FT8 decode, CAT poll, render, LVGL, time sync
 type: flow
 title: Ring buffer to canvas
 node: ring buffer - 64 KB in PSRAM, 16384 I/Q pairs, about 1.4 s at 12 kHz
-node: FFT - 512-point, Blackman-Harris by default
+node: FFT - 1024-point complex, Blackman-Harris by default
 node: magnitude, then scaled
 branch: dBm = 20*log10(mag) - 148 dB calibration offset
 branch: flat = 20*log10(mag / per-bin floor)
@@ -111,6 +111,16 @@ node: render_task at 30 Hz - EMA smoothing
 node: LVGL canvas push
 note: dim | the FFT window is selectable in the drawer: Blackman-Harris, Hann or Nuttall
 ```
+
+Details worth knowing, each of them load-bearing:
+
+- **FFT** — 1024-point complex. The **esp-dsp ANSI fallback** is used deliberately: the PIE/vector build crashes under sustained WebSocket load on this silicon.
+- **IF offset** — the QMX presents I/Q at **+12 kHz**, so the spectrum, waterfall *and* S-meter all shift bin selection by `n_bins/4` to put the VFO signal at the visual centre. Miss that shift and the S-meter reads the DC/LO spike instead of the signal.
+- **DC blocker** — a one-pole IIR on the I/Q stream, ahead of the FFT.
+- **Spectrum smoothing** — per-bin EMA, α = 0.4 by default and adjustable in the drawer.
+- **dBm calibration** — `DSP_DB_CALIBRATION_OFFSET = −148.0 dB`, measured on a dummy load: the noise floor reads −130 dBm and S9 = −73 dBm.
+- **Waterfall scroll** — a 1280×824 double-height canvas, so a new row costs about **130 µs** instead of the ~92 ms a `memmove` would take.
+- **Audio task** — polling on core 0 with a drain loop, **not** event-driven. Event-driven reads returned truncated UAC chunks that saturated the FFT input and pumped the noise floor on a slow ~13 s cycle.
 
 ### I/Q Balance (Gram-Schmidt)
 
