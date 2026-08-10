@@ -70,6 +70,7 @@ idf_component_register(
         "ft8_greylist.c"
         "net/pskreporter.c"
         "net/spots.c"
+        "net/spot_sig.c"
         "net/psk_rx.c"
         "hid_cursor.c"
         "bt_hid_mouse.c"

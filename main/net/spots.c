@@ -14,6 +14,7 @@
 // lighter than those, but it follows the same rule for the same reason.
 
 #include "spots.h"
+#include "spot_sig.h"         // spot_sig_for() - the ADIF SIG for a reference
 #include "webserver_ws.h"     // webserver_ws_set_paused
 #include "wifi.h"             // wifi_is_connected
 #include "storage/settings.h"
@@ -298,33 +299,6 @@ int spots_get_in_range_wait(spot_t *out, int max, uint32_t lo_hz, uint32_t hi_hz
     return n;
 }
 
-// Which programme a reference belongs to, for the ADIF SIG field. This has to be
-// right, because it is what a chase is matched on at the other end: a summit
-// filed as SIG=POTA earns nobody anything, and a WWFF reference filed as POTA is
-// simply a false claim in someone's log.
-//
-// The SOURCE settles it for a spot that came from a programme's own feed. It
-// cannot settle a DX CLUSTER spot, which carries whatever reference the spotter
-// typed - dxcluster.c's find_reference() deliberately accepts POTA, SOTA and
-// WWFF alike - so those are read from the reference's SHAPE:
-//
-//   G/LD-049, OE/TI-123   a '/' before the dash: SOTA associations are the only
-//                         one of the three that is region-qualified
-//   DLFF-0123             "FF" before the dash: WWFF
-//   ES-2081, DL-0123      anything else: POTA
-static const char *sig_for_spot(const spot_t *sp)
-{
-    if (sp->source == SPOT_SRC_SOTA) return "SOTA";
-    if (sp->source == SPOT_SRC_POTA) return "POTA";
-
-    const char *dash = strchr(sp->ref, '-');
-    if (dash) {
-        if (memchr(sp->ref, '/', (size_t)(dash - sp->ref))) return "SOTA";
-        if (dash - sp->ref >= 2 && strncasecmp(dash - 2, "FF", 2) == 0) return "WWFF";
-    }
-    return "POTA";
-}
-
 bool spots_activation_for_call(const char *call, uint32_t freq_hz,
                                char *sig_out, size_t sig_sz,
                                char *ref_out, size_t ref_sz)
@@ -349,7 +323,13 @@ bool spots_activation_for_call(const char *call, uint32_t freq_hz,
             if (d > SPOT_DUP_TOL_HZ) continue;
         }
         snprintf(ref_out, ref_sz, "%s", s_store[i].ref);
-        if (sig_out && sig_sz) snprintf(sig_out, sig_sz, "%s", sig_for_spot(&s_store[i]));
+        // The SIG has to agree with the reference, because that is what a chase
+        // is matched on at the other end: a summit filed as SIG=POTA earns
+        // nobody anything. Decided in spot_sig.c, which is dependency-free so
+        // the rule is covered by test/spot_sig_harness.c.
+        if (sig_out && sig_sz)
+            snprintf(sig_out, sig_sz, "%s",
+                     spot_sig_for(s_store[i].source, s_store[i].ref));
         found = true;
         break;
     }
