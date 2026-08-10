@@ -1205,6 +1205,22 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     // first reply. Every other builder passes extra=NULL for REPLY (grid),
     // so this can't misfire on a decode-list or robot pounce.
     int partner_hz = 0;   // their AF tone, for the decode-priority hint
+
+    // Is the target a Fox? Decided here, before the Skip-TX1 branch below, because
+    // it has to VETO it. Fox/Hound's exchange is fixed - grid, their report, our
+    // R-report ON THEIR FREQUENCY, their RR73 - and Skip TX1 replaces the opening
+    // grid with a report, which puts the contact on the CQ-run ladder instead: no
+    // QSY step exists there, so our closing message goes out from the calling tone
+    // where the Fox is not listening.
+    //
+    // Not theoretical. On the bench (2026-08-10) a hound contact with the phantom
+    // Fox ran to completion and logged, entirely from 1350 Hz, having never
+    // QSY'd - a green result that was not F/H at all. Skip TX1 was on, which many
+    // operators will have.
+    int  fox_probe_hz = partner_tone_hz(tx1_req->target_call);
+    bool hound = ft8_hound_enabled(ft8_hound_mode()) &&
+                 fox_probe_hz > 0 && fox_probe_hz < FT8_HOUND_FOX_MAX_HZ;
+
     size_t pre_rpt_len = strnlen(tx1_req->extra_field, sizeof(tx1_req->extra_field));
     if (tx1_req->kind == FT8_TX_KIND_REPLY &&
         (tx1_req->extra_field[0] == '+' || tx1_req->extra_field[0] == '-') &&
@@ -1213,6 +1229,11 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
         first_rpt[pre_rpt_len] = '\0';
         start_state  = FT8_QSO_WAIT_ROGER;
         skip_applied = true;
+    } else if (qs.ft8_filters.skip_tx1 && hound) {
+        // Skip TX1 vetoed - see the note above. Say so, or this looks like the
+        // toggle being ignored at random.
+        ESP_LOGI(TAG, "Skip TX1 ignored for %s: a Fox needs the standard "
+                      "grid -> report -> R-report exchange", tx1_req->target_call);
     } else if (qs.ft8_filters.skip_tx1) {
         // The decode-table snapshot is ~11 KB (FT8_CALL_TABLE_SIZE * sizeof(
         // ft8_call_t)) and MUST NOT be a stack local here: ft8_qso_start() runs
@@ -1284,15 +1305,14 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     int64_t tx1_slot = next_slot_sec(req_to_arm.use_parity, req_to_arm.want_even_slot,
                                      req_to_arm.protocol);
 
-    // Is this a Fox? Decided ONCE, here, from the partner's own tone: a station
-    // in the Fox region while Hound mode is on. Deciding it per-slot instead
-    // would let a QSO change protocol halfway through if a decode wobbled - and
-    // the QSY in step 3 is not something to be unsure about mid-exchange.
-    //
-    // Note this is the partner's tone, not ours: a hound calls from up-band, so
-    // the two numbers differ for the whole first half of the contact.
-    bool hound = ft8_hound_enabled(ft8_hound_mode()) &&
-                 partner_hz > 0 && partner_hz < FT8_HOUND_FOX_MAX_HZ;
+    // `hound` was decided above (it had to veto Skip TX1). Re-check against the
+    // tone we finally settled on, in case partner_hz came from somewhere other
+    // than the probe - the flag must agree with the frequency we will QSY onto.
+    if (hound && !(partner_hz > 0 && partner_hz < FT8_HOUND_FOX_MAX_HZ)) {
+        ESP_LOGW(TAG, "hound: %s no longer looks like a Fox (tone %d Hz) - "
+                      "running an ordinary exchange", tx1_req->target_call, partner_hz);
+        hound = false;
+    }
 
     lock();
     s_state         = start_state;

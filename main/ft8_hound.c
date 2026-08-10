@@ -240,14 +240,35 @@ void ft8_hound_tick(int64_t slot_sec)
     const ft8_call_t *fox = ft8_hound_find_fox(snap, n, 0);
     if (fox && slot_sec > 0) {
         int64_t age = slot_sec - fox->last_utc;
-        if (age < 0 || age > 2 * 15) fox = NULL;
+        // The window is asymmetric, and the negative side is not a curiosity: a
+        // decode can legitimately be NEWER than the slot being scanned, because it
+        // belongs to the slot now in progress (we scan a slot after it ends, and a
+        // message landing early in the next one is already in the table). Rejecting
+        // that as "impossible" is what swallowed every sighting on the bench -
+        // detection fired correctly and then the Fox was silently discarded here.
+        //
+        // One slot ahead, two slots behind. Parity is safe either way: it comes
+        // from the Fox's OWN last_utc, so our call always lands in the window
+        // opposite the one it transmitted in.
+        if (age > 2 * 15 || age < -15) fox = NULL;
     }
     if (fox) {
         // Already in the log on this band? Then leave it alone. A DXpedition
         // dupe earns neither station anything, and this is what stops automatic
         // mode from calling the same Fox until the operator intervenes.
         if (adif_log_contains_call_on_band(fox->call, (uint32_t)cat_get_frequency())) {
-            ESP_LOGD(TAG, "fox %s already worked on this band - not calling", fox->call);
+            // INFO, change-detected - not debug. A silent suppression here cost a
+            // whole bench cycle on 2026-08-10: detection was working perfectly and
+            // the Fox was being dropped on this line, with nothing in the log to
+            // say so. Note that with no CAT frequency (radio off, e.g. simulation)
+            // adif_log_contains_call_on_band() falls back to a call-only match, so
+            // in sim ANY earlier contact with that call suppresses it.
+            static char last_dupe[FT8_CALL_MAX_LEN];
+            if (strcmp(last_dupe, fox->call) != 0) {
+                snprintf(last_dupe, sizeof(last_dupe), "%s", fox->call);
+                ESP_LOGI(TAG, "Fox %s is already in the log for this band - not calling",
+                         fox->call);
+            }
             fox = NULL;
         }
     }

@@ -186,7 +186,55 @@ While the mode is on, **Call CQ** tags your CQ as `CQ FD <call> <grid>`, using t
 
 Completed Field Day contacts log the standard ADIF contest fields — `CONTEST_ID=ARRL-FD`, your section and theirs — alongside the usual call, frequency and time, so they import cleanly into contest-logging software.
 
-### 6. Message Status
+### 6. Fox/Hound (DXpedition) Mode
+
+Big DXpeditions run FT8 in **Fox/Hound** mode, where one station (the *Fox*) works
+five callers at a time from below 1000 Hz while everybody chasing it (the *Hounds*)
+calls from above 1000 Hz. It is not the ordinary FT8 exchange: a hound that answers
+the Fox has to **move onto the Fox's frequency** to do it, because the Fox listens
+only to its own narrow slice.
+
+Set **Fox/Hound (DXpedition)** in the Filter window to one of three positions:
+
+- **Off** — normal FT8. Nothing changes.
+- **Guided** — the Tab5 tells you when it can see a Fox, and you tap it to call.
+  Every transmission stays your decision.
+- **Automatic** — the Tab5 calls a Fox it recognises and runs the whole exchange.
+
+Whichever you choose, the awkward part is handled for you: your first call goes out
+**above 1000 Hz** on a clear slot, and the moment the Fox answers you with a report,
+your reply is **moved down onto the Fox's own frequency** — which is the step that
+makes the contact possible at all. The Fox's `RR73` ends it, and the Tab5 then
+returns to its calling tone ready for the next one.
+
+**The Tab5 does not send `73` to a Fox.** The Fox's frequency is the scarcest thing
+on the band during a DXpedition and a courtesy `73` there is just clutter. The
+contact is complete, and logged, on the Fox's `RR73`.
+
+**How a Fox is recognised.** Not by frequency alone — plenty of ordinary stations
+work below 1000 Hz. The Tab5 looks for a station down there that is visibly working
+a *queue*: several different callsigns inside a few minutes, which is a pattern
+nothing else on the band produces. Until it has seen that, it will not call anything
+a Fox.
+
+Three of the Tab5's usual courtesies stand down while a Fox contact runs, and all
+three would otherwise work against you:
+
+- it **keeps calling** while the Fox is busy with other stations — a Fox is always
+  busy, and waiting for a free frequency means never calling at all;
+- it **does not re-send** a closing message, because the Fox never asks for one;
+- it **does not grey-list** the Fox for ignoring you, which in a pileup of hundreds
+  is entirely normal.
+
+Automatic mode will not call a Fox already in your log on that band, so it works one
+contact and then leaves the DXpedition alone.
+
+!!! note "Hound only — the Tab5 cannot be a Fox"
+    A Fox transmits up to five signals simultaneously. The Tab5 keys the QMX one
+    tone at a time over CAT, so a multi-signal transmission is not something this
+    radio can be asked for. This is a hardware limit, not a missing feature.
+
+### 7. Message Status
 
 The FT8 left pane shows a **status label** indicating what's happening:
 
@@ -204,7 +252,7 @@ Tap the status label to **abort** the current QSO (only works if ARMED or ACTIVE
 
 **If they never heard your final** (v1.3.4) — a partner who does not decode your closing `73`/`RR73` keeps sending you their report, waiting for it. The Tab5 now notices: if the station just worked comes back with a report rather than `RR73`/`73`/`RRR`, the final is sent again, up to three times within four minutes, *before* anything else can start a new contact. The QSO is not logged a second time. Taking over by hand no longer produces a duplicate entry either — the same callsign on the same band inside ten minutes is recognised as the same contact.
 
-### 7. Power & SWR Readout
+### 8. Power & SWR Readout
 
 After each transmit burst, the status bar briefly shows:
 
@@ -220,7 +268,7 @@ Last TX: 5.2W SWRx1.25 [N=79]
 
 These readings are **informational only** — the panadapter does not enforce limits. Monitor your antenna system independently.
 
-### 8. CQ Presets
+### 9. CQ Presets
 
 You can save up to 3 custom CQ messages:
 
@@ -238,7 +286,7 @@ Presets persist across power cycles. Common modifiers:
 
 The preset editor's top-right **CQ stop** button sets the CQ auto-stop limit (see [Call CQ](#2-call-cq) above) — it cycles never / 1–5 / 10 and applies on tap, independent of Save/Cancel.
 
-### 9. Frequency & Tone Control
+### 10. Frequency & Tone Control
 
 Your transmit tone is chosen for you by default — the nearest clear 50 Hz slot, scanned against the stations currently decoded. You can see it, move it, and from v1.3.4 pin it.
 
@@ -285,7 +333,7 @@ To tune to a different frequency while CQ is running:
 2. Enter a new frequency
 3. The CQ continues on the new frequency next slot
 
-### 10. ADIF Logging
+### 11. ADIF Logging
 
 Every completed QSO is **automatically logged to ADIF** on the Tab5's internal storage:
 
@@ -296,7 +344,7 @@ Every completed QSO is **automatically logged to ADIF** on the Tab5's internal s
 
 Download the log via the web UI (**QSO Logs** menu → **ADIF download ↓**) or Settings → ADIF Log.
 
-### 11. Upload to QRZ, eQSL & LoTW
+### 12. Upload to QRZ, eQSL & LoTW
 
 Via the web UI:
 
@@ -310,7 +358,7 @@ Logs are batched — each upload session records which QSOs have been sent, so r
 
 Uploads work **while FT8 or FT4 is actively running** — the panadapter briefly steps the FFT and SD-archive activity aside for the duration of the HTTPS transfer, then resumes automatically. You typically miss one FT8 slot and won't notice. A progress result is shown once the upload completes.
 
-### 12. Troubleshooting
+### 13. Troubleshooting
 
 **"QMX not responding to TX command"**
 
