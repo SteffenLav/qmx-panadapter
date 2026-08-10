@@ -6826,6 +6826,12 @@ static void drawer_build(void)
         // saved by v1.7.1 can be up to 1000, and simply pinning the knob at the
         // end would leave the radio using an offset the UI cannot represent or
         // undo. Writing it back makes the displayed value the true one.
+        //
+        // This runs when the drawer is BUILT, which is once during UI init - not
+        // when it is opened - so an updating user is corrected on the first boot
+        // whether or not they ever open settings. Verified on hardware by
+        // planting 800 Hz before flashing: "CW TX offset 800 Hz is outside the
+        // +/-300 range - clamped to 300" at t+3.0 s.
         int cwoff = cwcfg.cw_tx_offset_hz;
         if (cwoff >  CW_TX_OFFSET_MAX_HZ) cwoff =  CW_TX_OFFSET_MAX_HZ;
         if (cwoff < -CW_TX_OFFSET_MAX_HZ) cwoff = -CW_TX_OFFSET_MAX_HZ;
