@@ -58,6 +58,13 @@ static volatile bool s_wifi_user_disabled = false;
 // and dropping a live link to scan would be worse than the disease.
 static volatile bool    s_scan_hold = false;
 static volatile int64_t s_scan_hold_us = 0;
+// A scan is considered lost after this long with no SCAN_DONE. Shared by the
+// "already scanning" guard and the state accessor so one cannot outlive the
+// other: the guard must not refuse a fresh press for a scan the accessor has
+// already given up on.
+#define SCAN_STALE_US        (20LL * 1000000)
+static volatile int64_t s_scan_started_us   = 0;
+static volatile bool    s_scan_stale_logged = false;
 #define SCAN_HOLD_TIMEOUT_US (15LL * 1000000)
 // One free automatic retry per user scan: a 0-AP result while we were
 // holding the retry chain is almost always interference (some timing window
@@ -321,6 +328,15 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
             if (!s_wifi_user_disabled) esp_wifi_connect();
         }
         if (get_err != ESP_OK) {
+            // Say WHY. All three paths that set WIFI_SCAN_FAILED used to be
+            // silent, so "Scan failed - tap Scan to try again" appeared on the
+            // Tab5 with nothing whatsoever in the diagnostic log to explain it
+            // - which is exactly the situation on 2026-08-10, moving office,
+            // with the stored SSID out of range and an rpc_core timeout to the
+            // C6 in the same second. A user-visible failure that leaves no
+            // trace is not diagnosable after the fact.
+            ESP_LOGE(TAG, "scan FAILED: could not read AP records (%s)",
+                     esp_err_to_name(get_err));
             s_scan_state = WIFI_SCAN_FAILED;
             return;
         }
@@ -739,7 +755,9 @@ static void wifi_scan_task(void *arg)
     (void)arg;
     if (!s_wifi_started) {
         ensure_sta_netif();
-        if (esp_wifi_start() != ESP_OK) {
+        esp_err_t st = esp_wifi_start();
+        if (st != ESP_OK) {
+            ESP_LOGE(TAG, "scan FAILED: esp_wifi_start (%s)", esp_err_to_name(st));
             s_scan_state = WIFI_SCAN_FAILED;
             vTaskDelete(NULL);
             return;
@@ -758,7 +776,13 @@ static void wifi_scan_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(200));
     }
     wifi_scan_config_t scan_cfg = { 0 };  // active scan, all channels
-    if (esp_wifi_scan_start(&scan_cfg, false) != ESP_OK) {
+    esp_err_t sst = esp_wifi_scan_start(&scan_cfg, false);
+    if (sst != ESP_OK) {
+        // Most likely the co-processor did not answer: every one of these calls
+        // is an RPC over SDIO to the C6, and a timed-out RPC surfaces here as a
+        // plain error return. Naming it separates "the radio refused" from
+        // "the scan ran and found nothing", which look identical on screen.
+        ESP_LOGE(TAG, "scan FAILED: esp_wifi_scan_start (%s)", esp_err_to_name(sst));
         s_scan_state = WIFI_SCAN_FAILED;
         if (s_scan_hold) {                   // resume the chain we held
             s_scan_hold = false;
@@ -774,18 +798,34 @@ void panadapter_wifi_scan_start(void)
     // than 20 s means the SCAN_DONE event was lost (esp_hosted RPC drop),
     // and without this escape every later press would be refused until
     // reboot (Scan permanently dead is worse than a doubled scan).
-    static int64_t s_scan_started_us = 0;
     int64_t now = esp_timer_get_time();
     if (s_scan_state == WIFI_SCAN_RUNNING &&
-        (now - s_scan_started_us) < 20LL * 1000000) return;
+        (now - s_scan_started_us) < SCAN_STALE_US) return;
     s_scan_started_us = now;
     s_scan_state = WIFI_SCAN_RUNNING;
     s_scan_auto_retried = false;   // each user press gets one free retry
+    s_scan_stale_logged = false;   // and one stale-scan complaint if it hangs
     psram_task_create(wifi_scan_task, "wifi_scan", 4096, NULL, 5, tskNO_AFFINITY);
 }
 
 wifi_scan_state_t panadapter_wifi_scan_state(void)
 {
+    // A scan whose SCAN_DONE never arrives would otherwise sit at RUNNING
+    // forever and leave the modal saying "Scanning..." with nothing coming.
+    // That is not hypothetical: on 2026-08-10 the background roam scan stopped
+    // completing entirely (no SCAN_DONE, no roam verdict) after an rpc_core
+    // timeout to the C6, and the only reason a later press worked at all was
+    // the staleness escape above. Report the failure instead of spinning - the
+    // operator can then retry, or switch WiFi off to free the radio.
+    if (s_scan_state == WIFI_SCAN_RUNNING && s_scan_started_us &&
+        (esp_timer_get_time() - s_scan_started_us) >= SCAN_STALE_US) {
+        if (!s_scan_stale_logged) {
+            s_scan_stale_logged = true;
+            ESP_LOGE(TAG, "scan FAILED: no SCAN_DONE within %d s "
+                          "(co-processor did not answer)", (int)(SCAN_STALE_US / 1000000));
+        }
+        return WIFI_SCAN_FAILED;
+    }
     return s_scan_state;
 }
 

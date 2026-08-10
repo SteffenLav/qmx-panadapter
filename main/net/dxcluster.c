@@ -50,6 +50,10 @@ static const char *TAG = "dxc";
 #define DXC_MAX      96
 #define LINE_MAX     256
 #define RX_TIMEOUT_S 60           // humans are bursty; 30 s of quiet is normal here
+// ...and so is ten minutes, at 3 a.m. on a dead band. RX_TIMEOUT_S is only how
+// often we wake to send a keepalive; THIS is how long a silent-but-answering
+// node is tolerated before we assume the far end is gone.
+#define DXC_DEAD_S   900
 
 typedef struct {
     char     call[12];
@@ -369,12 +373,44 @@ static void session(int fd, const char *mycall)
     int64_t last_pub = 0;
     s->line_len = 0;
 
+    int64_t last_data_us = esp_timer_get_time();
+
     for (;;) {
         int r = recv(fd, s->rx, sizeof(s->rx) - 1, 0);
-        if (r <= 0) {
-            ESP_LOGW(TAG, "feed closed (r=%d errno=%d)", r, errno);
+        if (r == 0) {                       // orderly close by the node
+            ESP_LOGW(TAG, "feed closed by peer");
             return;
         }
+        if (r < 0) {
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                // The RX timeout fired, which on a CLUSTER means only that
+                // nobody typed anything. This used to `return`, tearing down a
+                // healthy connection every RX_TIMEOUT_S of quiet and
+                // reconnecting - observed 2026-08-10 reconnecting roughly every
+                // 70 s all evening, which loses spots, repeats the login, and
+                // puts pointless traffic on a WiFi link this board already
+                // struggles with. rbn.c does return here and is right to: a
+                // skimmer network silent for 30 s really is dead. Humans are
+                // not skimmers, which this file's own RX_TIMEOUT_S comment
+                // already said.
+                //
+                // Probe instead of assuming: a bare CRLF is ignored by cluster
+                // nodes, and if the socket is genuinely gone the SEND fails,
+                // which is a real liveness test rather than a guess.
+                if (send(fd, "\r\n", 2, 0) != 2) {
+                    ESP_LOGW(TAG, "keepalive failed (errno %d) - reconnecting", errno);
+                    return;
+                }
+                if ((esp_timer_get_time() - last_data_us) > (int64_t)DXC_DEAD_S * 1000000) {
+                    ESP_LOGW(TAG, "no data for %d s - reconnecting", DXC_DEAD_S);
+                    return;
+                }
+                continue;
+            }
+            ESP_LOGW(TAG, "recv errno %d - reconnecting", errno);
+            return;
+        }
+        last_data_us = esp_timer_get_time();
         s->rx[r] = '\0';
         if (!sent && (strstr(s->rx, "call") || strstr(s->rx, "login") ||
                       strstr(s->rx, "Please enter"))) {
