@@ -4,6 +4,16 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
+**v1.7.2** — 2026-08-10 — bug-fix patch
+
+**A Bluetooth mouse could stop reconnecting until you restarted the Tab5.**
+
+- If a reconnection attempt failed part-way, the Tab5 stopped trying — the pointer never came back, even with the mouse awake and right beside it, and only a restart brought it back. It happens routinely, because the mouse powers itself down after about half a minute to save its battery. Verified over 14 sleep/wake cycles: fourteen disconnects, fourteen reconnects, none missed.
+
+Nothing else changed. **If you do not use a Bluetooth mouse there is no reason to install this.**
+
+## Previous Releases
+
 **v1.7.1** — 2026-08-10 — bug-fix patch
 
 **Tried a Bluetooth mouse on v1.7.0? Install this so your WiFi doesn't go flaky.**
@@ -14,8 +24,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **DX cluster spots stop vanishing.** A cluster with nobody typing was treated as a dead connection and dropped about every 70 seconds, losing its held spots. Quiet is normal on a cluster.
 - **The browser said GPS with no radio attached** — the clock fault Don N2VGU reported, fixed on the Tab5 in v1.7.0 but missed in the web page.
 - **A failed WiFi scan says why**, and one that never returns no longer sits on "Scanning..." forever.
-
-## Previous Releases
 
 **v1.7.0** — 2026-08-09
 
@@ -237,7 +245,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.7.1.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.7.2.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

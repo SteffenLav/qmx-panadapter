@@ -70,11 +70,11 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.7.1 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.7.2 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, and now a mouse.** The panadapter, FT8/FT4 receive and
 transmit, ADIF logging and all three logbook uploads are stable and in daily use.
 
-**v1.7.1 is a bug-fix patch — tried a Bluetooth mouse on v1.7.0? Install this so your WiFi doesn't go flaky.** Switching the mouse on could leave WiFi dropping and recovering, with the web UI flapping between Connected and Disconnected. WiFi and Bluetooth share one link to the wireless co-processor, and the Tab5 was listening for every Bluetooth device in range, continuously; it now listens in short bursts and ignores everything that is not your mouse. Also: tap outside the settings drawer to close it, ±10/±50 buttons for the CW transmit offset, and DX cluster spots stop vanishing every minute. Nothing changes if you do not use a Bluetooth mouse.
+**v1.7.2 is a small bug-fix patch — a Bluetooth mouse could stop reconnecting until you restarted the Tab5.** If a reconnection attempt failed part-way the Tab5 stopped trying, so the pointer never came back even with the mouse awake beside it — and that happens routinely, because the mouse powers itself down after about half a minute to save battery. Nothing else changed. **v1.7.1** before it stopped the Bluetooth mouse destabilising WiFi. If you do not use a Bluetooth mouse, neither patch changes anything for you.
 
 **In v1.7.0 — a mouse, the phone spots that were missing, and knowing who hears you.**
 A **Bluetooth mouse** drives the Tab5 *while the QMX stays plugged in* — the case a USB
@@ -95,7 +95,7 @@ Every release, newest first, is on the [Releases](releases.md) page.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.7.1.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.7.2.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 
