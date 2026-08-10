@@ -10,7 +10,9 @@
 // Source-agnostic by design. POTA (api.pota.app, a plain JSON GET) is the
 // first source; RBN is intended as a second one feeding the SAME store, so
 // the display layer never has to know where a spot came from - and a
-// misbehaving source can be dropped without losing the feature.
+// misbehaving source can be dropped without losing the feature. SOTA arrives
+// the same way, from spothole.app (see spots.c), and DX cluster spots from
+// net/dxcluster.c.
 //
 // Threading: one background fetch task (PSRAM stack, low priority) owns the
 // network side and publishes into a mutex-protected store. The UI reads a
@@ -20,6 +22,7 @@ typedef enum {
     SPOT_SRC_POTA = 0,
     SPOT_SRC_RBN,
     SPOT_SRC_CLUSTER,   // human DX-cluster spots - the only source of PHONE
+    SPOT_SRC_SOTA,      // SOTA summit activations, via spothole.app
 } spot_source_t;
 
 typedef enum {
@@ -29,9 +32,23 @@ typedef enum {
     SPOT_MODE_DIGI,      // FT8/FT4/digital
 } spot_mode_t;
 
+// Both widths below were measured against live feeds, and both were too small
+// before 2026-08-10 - silently, since a truncated callsign still draws and a
+// truncated reference still logs.
+//
+//   call: HB0/HB9BXQ/P is 12 characters, so it needs 13 bytes. A SOTA activator
+//         working a summit in another DXCC routinely looks like this, and the
+//         DX cluster has been able to produce such calls all along - this was
+//         already truncating there, not just for SOTA.
+//   ref:  a SOTA summit is association/region-number, up to EA1/AT-125 = 10
+//         characters, needing 11. At ref[10] that logged EA1/AT-12, i.e. a
+//         DIFFERENT summit - the one failure mode worth widening for.
+//
+// Sized with a little headroom rather than exactly, since the cost is 8 bytes
+// per entry in a 200-entry PSRAM table.
 typedef struct {
-    char          call[12];   // the station on the air
-    char          ref[10];    // POTA park reference ("US-1211"), "" if none
+    char          call[16];   // the station on the air
+    char          ref[12];    // POTA park ("US-1211") or SOTA summit ("G/LD-049"), "" if none
     uint32_t      freq_hz;
     spot_mode_t   mode;
     spot_source_t source;

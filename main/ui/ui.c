@@ -5927,6 +5927,7 @@ static void drawer_check_sim_mode_cb(lv_event_t *e)
 // padding for touch). Caller positions with lv_obj_align after this returns.
 static lv_obj_t *s_check_spots = NULL;
 static lv_obj_t *s_check_rbn   = NULL;
+static lv_obj_t *s_check_sota  = NULL;
 
 static void drawer_spots_cb(lv_event_t *e)
 {
@@ -5945,6 +5946,18 @@ static void drawer_rbn_cb(lv_event_t *e)
     settings_set_rbn_en(on);
     // The RBN task polls the setting, so there is nothing to start or stop here.
     ESP_LOGI(TAG, "RBN spot source: %s", on ? "on" : "off");
+}
+
+static void drawer_sota_cb(lv_event_t *e)
+{
+    bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
+    settings_set_sota_en(on);
+    // Ask for a fetch straight away, so switching it on shows summits within a
+    // second or two rather than at the next two-minute tick. The spots task
+    // polls the setting, so switching it OFF needs nothing here - it clears its
+    // own slice on the next cycle.
+    if (on) spots_request_refresh();
+    ESP_LOGI(TAG, "SOTA spot source: %s", on ? "on" : "off");
 }
 
 static lv_obj_t *make_drawer_checkbox(lv_obj_t *parent, bool checked,
@@ -6617,14 +6630,13 @@ static void drawer_build(void)
         y += 56;
     }
 
-    // Live spots: the lane on/off, plus RBN as a second source. Two rows in one
-    // section so they hide and reflow together in FT8 mode - the lane only exists
-    // on the panadapter page. RBN is listed second and indented under the first
-    // because it is meaningless with the lane switched off.
+    // Live spots: four sources (POTA, RBN, DX cluster, SOTA) plus one filter over
+    // all of them, in ONE section so they hide and reflow together in FT8 mode -
+    // the lane only exists on the panadapter page.
     {
         qmx_settings_t scfg_spots;
         settings_load_all(&scfg_spots);
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_SPOTS, y, 226);   /* 164 + the mode-filter row */
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_SPOTS, y, 278);   /* four source rows + the mode-filter row */
         lv_obj_t *hdr = lv_label_create(sec);
         lv_label_set_text(hdr, "Live spots (POTA)");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xFFFFFF), 0);
@@ -6654,7 +6666,19 @@ static void drawer_build(void)
         s_check_cluster = make_drawer_checkbox(sec, scfg_spots.cluster_en, drawer_cluster_cb, NULL);
         lv_obj_align(s_check_cluster, LV_ALIGN_TOP_RIGHT, 0, 114);
 
-        // Not a source - a filter over all three, so it sits below them with a
+        // SOTA: the fourth source, summit activations by way of spothole.app.
+        // Same weight and indent as the other three - a SOURCE, not a
+        // sub-option. Off by default, and the only source whose default is about
+        // courtesy to the server rather than to this board (see settings.h).
+        lv_obj_t *sota_lbl = lv_label_create(sec);
+        lv_label_set_text(sota_lbl, "SOTA spots (summits)");
+        lv_obj_set_style_text_color(sota_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(sota_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(sota_lbl, LV_ALIGN_TOP_LEFT, 0, 166);
+        s_check_sota = make_drawer_checkbox(sec, scfg_spots.sota_en, drawer_sota_cb, NULL);
+        lv_obj_align(s_check_sota, LV_ALIGN_TOP_RIGHT, 0, 166);
+
+        // Not a source - a filter over all four, so it sits below them with a
         // blank line between. Tapping a spot sets the MODE as well as the
         // frequency, so with this off a CW operator can land in FT8 without
         // meaning to (Michael KZ4LY).
@@ -6662,11 +6686,11 @@ static void drawer_build(void)
         lv_label_set_text(smf_lbl, "Mode filter the spots");
         lv_obj_set_style_text_color(smf_lbl, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(smf_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(smf_lbl, LV_ALIGN_TOP_LEFT, 0, 176);
+        lv_obj_align(smf_lbl, LV_ALIGN_TOP_LEFT, 0, 228);
         s_check_spotmode = make_drawer_checkbox(sec, scfg_spots.spots_mode_filter,
                                                 drawer_spotmode_cb, NULL);
-        lv_obj_align(s_check_spotmode, LV_ALIGN_TOP_RIGHT, 0, 176);
-        y += 226;
+        lv_obj_align(s_check_spotmode, LV_ALIGN_TOP_RIGHT, 0, 228);
+        y += 278;
     }
 
     // Presets section: header + three buttons side-by-side

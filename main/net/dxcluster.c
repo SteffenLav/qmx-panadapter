@@ -55,9 +55,14 @@ static const char *TAG = "dxc";
 // node is tolerated before we assume the far end is gone.
 #define DXC_DEAD_S   900
 
+// call/ref widths track spot_t's (see spots.h - both were too small, measured
+// against live feeds 2026-08-10). It matters twice here: find_reference()
+// requires len < cap, so at ref[10] a full-length summit like EA1/AT-125 was not
+// truncated but DISCARDED, and a 12-character portable call lost its last
+// character on the way into the store.
 typedef struct {
-    char     call[12];
-    char     ref[10];
+    char     call[16];
+    char     ref[12];
     uint32_t freq_hz;
     int      mode;
     int64_t  last_unix;
@@ -350,7 +355,7 @@ static int connect_feed(void)
 
 static void handle_line(const char *line, int64_t now)
 {
-    char call[12], ref[10];
+    char call[16], ref[12];
     uint32_t hz = 0;
     int mode = 0;
     if (!dxcluster_parse_line(line, call, sizeof(call), &hz, ref, sizeof(ref), &mode))
@@ -482,7 +487,7 @@ void dxcluster_init(void)
 void dxcluster_selftest(void)
 {
     bool ok = true;
-    char call[12], ref[10];
+    char call[16], ref[12];
     uint32_t hz;
     int mode;
 

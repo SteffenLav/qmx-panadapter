@@ -47,7 +47,9 @@ static const char *TAG = "rbn";
 #define RBN_FORCE_ON  0
 
 typedef struct {
-    char     call[12];
+    // Tracks spot_t.call (see spots.h): a 12-character portable call needs 13
+    // bytes, and the _Static_assert in publish() requires these to stay equal.
+    char     call[16];
     uint32_t freq_hz;
     int      snr_db;
     int64_t  last_unix;
@@ -168,7 +170,7 @@ static void publish(int64_t now)
         memset(sp, 0, sizeof(*sp));
         // Sized copy, not snprintf: both fields live inside *s, so GCC cannot
         // prove they do not overlap and -Wrestrict (an error here) rejects it.
-        // Both are char[12], so this is exact.
+        // Both are char[16], so this is exact.
         _Static_assert(sizeof(sp->call) == sizeof(s->tab[i].call), "call field sizes must match");
         memcpy(sp->call, s->tab[i].call, sizeof(sp->call));
         sp->call[sizeof(sp->call) - 1] = '\0';
@@ -232,7 +234,7 @@ static void refresh_band(void)
 
 static void handle_line(const char *line, int64_t now)
 {
-    char call[12];
+    char call[16];
     uint32_t hz;
     int snr;
     if (!rbn_parse_line(line, call, sizeof(call), &hz, &snr)) return;
@@ -348,7 +350,7 @@ static void rbn_task(void *arg)
 void rbn_selftest(void)
 {
     int fails = 0;
-    char call[12];
+    char call[16];
     uint32_t hz;
     int snr;
 

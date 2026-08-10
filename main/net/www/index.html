@@ -1768,6 +1768,8 @@ const SET_FIELDS = [
   ["Spots & reporting", "rbn_en",         "bool", "RBN (CW skimmer) spots", "A continuous feed - off by default"],
   ["Spots & reporting", "cluster_en",      "bool", "DX cluster spots (phone)",
      "Human-typed spots. The ONLY source of SSB spots - RBN is automated skimmers and no SSB skimmer exists. A second connection, so off by default"],
+  ["Spots & reporting", "sota_en",        "bool", "SOTA spots (summits)",
+     "Summit activations, from spothole.app - a volunteer-run aggregator. Fetched once every two minutes, and off by default so nobody polls it who did not ask"],
   ["Spots & reporting", "pskreporter_en", "bool", "Report decodes to PSK Reporter", "Over the internet, never on the air"],
   ["Spots & reporting", "psk_rx_en",      "bool", "Propagation feedback (who is hearing me)",
      "Asks PSK Reporter which receivers have copied YOUR callsign. Read-only, at most one query every 5 minutes"],

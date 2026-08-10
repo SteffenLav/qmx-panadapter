@@ -52,6 +52,7 @@ char *config_io_export(size_t *out_len)
     APP("flat_spectrum      = %s\n", yn(c.flat_mode));
     APP("spots              = %s\n", yn(c.spots_en));
     APP("spots_rbn          = %s\n", yn(c.rbn_en));
+    APP("spots_sota         = %s\n", yn(c.sota_en));
     APP("zoom               = %.2f\n", (double)c.zoom_factor);
     APP("colormap           = %u\n", (unsigned)c.colormap_idx);
     APP("brightness         = %u\n", (unsigned)c.brightness_pct);
@@ -212,6 +213,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "flat_spectrum"))     settings_set_flat_mode(to_bool(val));
             else if (!strcasecmp(key, "spots"))             settings_set_spots_en(to_bool(val));
             else if (!strcasecmp(key, "spots_rbn"))         settings_set_rbn_en(to_bool(val));
+            else if (!strcasecmp(key, "spots_sota"))        settings_set_sota_en(to_bool(val));
             else if (!strcasecmp(key, "zoom"))              settings_set_zoom_factor((float)atof(val));
             else if (!strcasecmp(key, "colormap"))          settings_set_colormap_idx((uint8_t)atoi(val));
             else if (!strcasecmp(key, "brightness"))        settings_set_brightness_pct((uint8_t)atoi(val));

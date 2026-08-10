@@ -140,6 +140,13 @@ typedef struct {
     bool     rbn_en;          // add the RBN telnet feed as a second spot source (default FALSE:
                               // a continuous firehose on this board's most fragile subsystem,
                               // so it is opt-in - see net/rbn.h)
+    // SOTA summit activations, fetched from spothole.app. Opt-in (default
+    // FALSE) for a reason that is about somebody else's server rather than
+    // ours: spothole is Ian Renton M0TRT's hobby box, shared with his blog, and
+    // he granted use with an explicit reliability caveat. Defaulting this ON
+    // would put every unit in the field on it forever from the moment they
+    // update. Flip the default only once it has proven itself. See net/spots.c.
+    bool     sota_en;
     bool     pskreporter_en;  // FT8/FT4: report real decodes to pskreporter.info (UDP, batched ~5 min;
                               // needs callsign+grid; never in simulation mode; default TRUE - same
                               // as WSJT-X ships; drawer checkbox turns it off)
@@ -288,6 +295,7 @@ void settings_set_greylist_en(bool v);
 void settings_set_pskreporter_en(bool v);
 void settings_set_spots_en(bool v);
 void settings_set_rbn_en(bool v);
+void settings_set_sota_en(bool v);   // SOTA activations via spothole.app (opt-in)
 
 // ---- Known WiFi networks --------------------------------------------------
 //

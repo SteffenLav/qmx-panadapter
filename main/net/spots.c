@@ -1,4 +1,6 @@
-// Live spots store + POTA fetcher. See spots.h for the contract.
+// Live spots store + the two HTTP fetchers: POTA (api.pota.app) and SOTA
+// (spothole.app). See spots.h for the contract, and net/rbn.c + net/dxcluster.c
+// for the two socket-based sources that publish into the same store.
 //
 // Sizing, measured against the live API 2026-08-04: 94 spots in 39.6 KB, mixed
 // SSB/CW/FT8. So one fetch is a ~40 KB body - trivial to parse, but far too
@@ -19,6 +21,7 @@
 
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
+#include "esp_app_desc.h"     // esp_app_get_description() - for the User-Agent
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -85,9 +88,52 @@ static void dma_probe(const char *where)
 // ---- end TEMP DIAGNOSTIC ---------------------------------------------------
 
 #define POTA_URL       "https://api.pota.app/spot/activator"
-#define RESP_CAP       (96 * 1024)     // ~2.4x the measured body, room to grow
+// Sized for the LARGER of the two bodies. POTA measured ~40 KB; a SOTA response
+// runs ~1.25 KB per record (spothole records carry flags, lat/long, zones, DXCC
+// and a nested sig_refs array), so the 60-record cap below is ~75 KB. This has
+// to hold it WHOLE: on_data() truncates safely at the cap, but a truncated body
+// fails cJSON_Parse, which would cost every SOTA spot rather than the last few.
+// PSRAM, allocated per fetch and freed straight after.
+#define RESP_CAP       (160 * 1024)
 #define FETCH_PERIOD_S 60              // POTA spots carry an ~expire of minutes
 #define RETRY_PERIOD_S 20              // after a failure
+
+// spothole.app - Ian Renton M0TRT's aggregator, use granted 2026-08-10. ONE
+// constant on purpose: v2 endpoints exist and v1 keeps working, so moving is a
+// literal v1->v2 swap here and nowhere else.
+#define SPOTHOLE_BASE  "https://spothole.app/api/v1"
+
+// What we ask spothole for, and why each parameter is there. The unfiltered
+// /spots body is 862 KB (measured), so filtering server-side is not an
+// optimisation, it is the difference between usable and not.
+//
+//   sig=SOTA       the PROGRAMME, not the feed: this also catches a SOTA
+//                  activation posted to a DX cluster, which source=SOTA misses.
+//   band=...       HF plus 6 m only. SOTA is largely a VHF/UHF game (the first
+//                  probe came back full of 2 m FM), and the QMX cannot tune it.
+//   allow_qrt=false spothole DEFAULTS THIS TO TRUE. A station that has packed up
+//                  and gone down the hill is worse than no spot at all.
+//   dedupe=true    latest spot per callsign; the store's own merge then keeps
+//                  one entry per call+frequency.
+//   max_age=3600   a summit activation runs far longer than a park one, and the
+//                  lane fades on age anyway (invisible at 30 minutes).
+//   limit=60       the response-buffer budget above. Newest first, so a busy
+//                  weekend loses the oldest rather than the nearest.
+#define SOTA_QUERY \
+    "sig=SOTA" \
+    "&band=160m,80m,60m,40m,30m,20m,17m,15m,12m,11m,10m,6m" \
+    "&allow_qrt=false&dedupe=true&max_age=3600&limit=60"
+
+// SOTA moves slower than POTA (a summit activation is a walk up and an hour on
+// the air), so once every two minutes is plenty - and it halves what we cost a
+// server we were lent.
+#define SOTA_PERIOD_S     120
+// On failure this backs OFF, doubling to a quarter of an hour, where POTA
+// retries SOONER (20 s). That asymmetry is the whole point: spothole is a hobby
+// box its owner says he occasionally breaks, so its being down has to be an
+// ordinary state we ride out quietly - not something we hammer. Held spots stay
+// on screen and age out on their own; nothing is shown to the operator.
+#define SOTA_BACKOFF_MAX_S 900
 
 static spot_t           *s_store;              // PSRAM, SPOTS_MAX entries
 static spot_t           *s_scratch;            // PSRAM, parse target (see parse_pota)
@@ -252,6 +298,33 @@ int spots_get_in_range_wait(spot_t *out, int max, uint32_t lo_hz, uint32_t hi_hz
     return n;
 }
 
+// Which programme a reference belongs to, for the ADIF SIG field. This has to be
+// right, because it is what a chase is matched on at the other end: a summit
+// filed as SIG=POTA earns nobody anything, and a WWFF reference filed as POTA is
+// simply a false claim in someone's log.
+//
+// The SOURCE settles it for a spot that came from a programme's own feed. It
+// cannot settle a DX CLUSTER spot, which carries whatever reference the spotter
+// typed - dxcluster.c's find_reference() deliberately accepts POTA, SOTA and
+// WWFF alike - so those are read from the reference's SHAPE:
+//
+//   G/LD-049, OE/TI-123   a '/' before the dash: SOTA associations are the only
+//                         one of the three that is region-qualified
+//   DLFF-0123             "FF" before the dash: WWFF
+//   ES-2081, DL-0123      anything else: POTA
+static const char *sig_for_spot(const spot_t *sp)
+{
+    if (sp->source == SPOT_SRC_SOTA) return "SOTA";
+    if (sp->source == SPOT_SRC_POTA) return "POTA";
+
+    const char *dash = strchr(sp->ref, '-');
+    if (dash) {
+        if (memchr(sp->ref, '/', (size_t)(dash - sp->ref))) return "SOTA";
+        if (dash - sp->ref >= 2 && strncasecmp(dash - 2, "FF", 2) == 0) return "WWFF";
+    }
+    return "POTA";
+}
+
 bool spots_activation_for_call(const char *call, uint32_t freq_hz,
                                char *sig_out, size_t sig_sz,
                                char *ref_out, size_t ref_sz)
@@ -276,10 +349,7 @@ bool spots_activation_for_call(const char *call, uint32_t freq_hz,
             if (d > SPOT_DUP_TOL_HZ) continue;
         }
         snprintf(ref_out, ref_sz, "%s", s_store[i].ref);
-        // POTA is the only reference-carrying source today (RBN has none, and
-        // SOTA is not fetched - its API terms require prior approval, see
-        // TODO). When a second one is added, switch on source here.
-        if (sig_out && sig_sz) snprintf(sig_out, sig_sz, "POTA");
+        if (sig_out && sig_sz) snprintf(sig_out, sig_sz, "%s", sig_for_spot(&s_store[i]));
         found = true;
         break;
     }
@@ -307,7 +377,7 @@ bool spots_any_source_enabled(void)
 {
     qmx_settings_t s;
     settings_load_all(&s);
-    return s.spots_en || s.rbn_en || s.cluster_en;
+    return s.spots_en || s.rbn_en || s.cluster_en || s.sota_en;
 }
 
 // ---- fetch -----------------------------------------------------------------
@@ -401,15 +471,94 @@ static int parse_pota(const char *json)
     return n;
 }
 
-static void fetch_once(void)
+// spothole's record shape, from the live feed rather than from the docs. Only
+// the six fields below are read; the rest of a ~1.25 KB record is ignored.
+//
+//   dx_call    "HB0/HB9BXQ/P"       the activator
+//   freq       7031000.0            HERTZ, as a float. POTA sends kHz - getting
+//                                  this the POTA way put spots 1000x off band.
+//   mode       "CW"/"SSB"/"FM"      absent on some spots, hence mode_type
+//   mode_type  "CW"/"PHONE"/"DATA"  the coarse class, used as the fallback
+//   sig_refs[] [{"id":"G/LD-049"}]  an ARRAY: a spot can carry more than one
+//                                  reference (a summit inside a park). The
+//                                  first is the one the spot is about.
+//   time       1786362640.3         unix seconds, float. There is a time_iso
+//                                  too; the number needs no parsing.
+static int parse_sota(const char *json)
 {
+    cJSON *root = cJSON_Parse(json);
+    if (!root) { ESP_LOGW(TAG, "SOTA: unparseable JSON"); return -1; }
+    if (!cJSON_IsArray(root)) { cJSON_Delete(root); ESP_LOGW(TAG, "SOTA: not an array"); return -1; }
+
+    int n = 0;
+    cJSON *it = NULL;
+    cJSON_ArrayForEach(it, root) {
+        if (n >= SPOTS_MAX) break;
+
+        const cJSON *jf = cJSON_GetObjectItem(it, "freq");
+        double hz = 0;
+        if (cJSON_IsNumber(jf))      hz = jf->valuedouble;
+        else if (cJSON_IsString(jf)) hz = atof(jf->valuestring);
+        // HF and 6 m only. The query already asks for those bands, but a feed is
+        // not a contract - and a spot we cannot tune to is worse than no spot.
+        if (hz < 1000000.0 || hz > 60000000.0) continue;
+
+        spot_t sp = {0};
+        sp.freq_hz = (uint32_t)hz;
+        sp.source  = SPOT_SRC_SOTA;
+
+        const cJSON *jc = cJSON_GetObjectItem(it, "dx_call");
+        if (cJSON_IsString(jc)) snprintf(sp.call, sizeof(sp.call), "%s", jc->valuestring);
+        if (!sp.call[0]) continue;
+
+        // Skip a QRT spot even though allow_qrt=false already should have. Same
+        // reasoning as the frequency clamp: cheap, and it is the operator's time
+        // being wasted if the server's default ever changes back.
+        const cJSON *jq = cJSON_GetObjectItem(it, "qrt");
+        if (cJSON_IsBool(jq) && cJSON_IsTrue(jq)) continue;
+
+        const cJSON *jm  = cJSON_GetObjectItem(it, "mode");
+        const cJSON *jmt = cJSON_GetObjectItem(it, "mode_type");
+        sp.mode = mode_from_str(cJSON_IsString(jm) ? jm->valuestring : NULL);
+        if (sp.mode == SPOT_MODE_OTHER && cJSON_IsString(jmt))
+            sp.mode = mode_from_str(jmt->valuestring);
+
+        // A SOTA spot with NO reference at all is normal, not a broken record:
+        // 2 of 16 in a live sample (LX/ON4UP/P, ON/PA9HR/P) were sig=SOTA with
+        // an empty sig_refs. Keep them - the operator can still work the
+        // station, and it is only the chase credit that is unavailable. Leaving
+        // ref empty is what stops spots_activation_for_call() inventing one.
+        const cJSON *jrefs = cJSON_GetObjectItem(it, "sig_refs");
+        if (cJSON_IsArray(jrefs)) {
+            const cJSON *r0 = cJSON_GetArrayItem(jrefs, 0);
+            const cJSON *jid = r0 ? cJSON_GetObjectItem(r0, "id") : NULL;
+            if (cJSON_IsString(jid)) snprintf(sp.ref, sizeof(sp.ref), "%s", jid->valuestring);
+        }
+
+        const cJSON *jt = cJSON_GetObjectItem(it, "time");
+        if (cJSON_IsNumber(jt)) sp.heard_unix = (int64_t)jt->valuedouble;
+
+        s_scratch[n++] = sp;
+    }
+    cJSON_Delete(root);
+
+    spots_publish(SPOT_SRC_SOTA, s_scratch, n);   // replaces only the SOTA slice
+    return n;
+}
+
+// GET url into a PSRAM buffer. Returns the body length, or -1 on any failure
+// (the caller must not parse). Shared by both sources so the WebSocket courtesy
+// and the buffer discipline cannot drift apart between them.
+static int http_get_json(const char *url, char **buf_out)
+{
+    *buf_out = NULL;
     char *buf = heap_caps_malloc(RESP_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!buf) { ESP_LOGW(TAG, "no PSRAM for the response buffer"); return; }
+    if (!buf) { ESP_LOGW(TAG, "no PSRAM for the response buffer"); return -1; }
     buf[0] = '\0';
     resp_buf_t ctx = { buf, 0, RESP_CAP };
 
     esp_http_client_config_t cfg = {
-        .url               = POTA_URL,
+        .url               = url,
         .method            = HTTP_METHOD_GET,
         .timeout_ms        = 15000,
         .event_handler     = on_data,
@@ -417,8 +566,16 @@ static void fetch_once(void)
         .crt_bundle_attach = esp_crt_bundle_attach,
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
-    if (!client) { heap_caps_free(buf); return; }
+    if (!client) { heap_caps_free(buf); return -1; }
     esp_http_client_set_header(client, "Accept", "application/json");
+    // Identify ourselves. Ian asked for this specifically ("you're already doing
+    // better than some clients I see in the log"), and a server operator who can
+    // see who is calling can tell us apart from a runaway client.
+    const esp_app_desc_t *app = esp_app_get_description();
+    char ua[80];
+    snprintf(ua, sizeof(ua), "QMX-Panadapter/%s (+https://tab5.lav.dk)",
+             app ? app->version : "dev");
+    esp_http_client_set_header(client, "User-Agent", ua);
 
     // Same courtesy the uploads pay: keep the spectrum stream off the link
     // while the transfer runs (see the LoTW note in CLAUDE.md).
@@ -428,45 +585,113 @@ static void fetch_once(void)
     esp_http_client_cleanup(client);
     webserver_ws_set_paused(false);
 
-    if (status == 200 && ctx.len > 0) {
-        int n = parse_pota(buf);
-        if (n >= 0) {
-            s_last_ok_us = esp_timer_get_time();
-            ESP_LOGI(TAG, "POTA: %d spots (%u bytes)", n, (unsigned)ctx.len);
-        }
-    } else {
-        ESP_LOGW(TAG, "POTA fetch failed (status=%d err=0x%x)", status, err);
-        dma_probe("fetch-fail");    // TEMP DIAGNOSTIC, capped
+    if (status != 200 || ctx.len == 0) {
+        ESP_LOGW(TAG, "GET failed (status=%d err=0x%x) %s", status, err, url);
+        heap_caps_free(buf);
+        return -1;
+    }
+    *buf_out = buf;
+    return (int)ctx.len;
+}
+
+static void fetch_pota(void)
+{
+    char *buf = NULL;
+    int len = http_get_json(POTA_URL, &buf);
+    if (len < 0) { dma_probe("fetch-fail"); return; }   // dma_probe: TEMP DIAGNOSTIC, capped
+
+    int n = parse_pota(buf);
+    if (n >= 0) {
+        s_last_ok_us = esp_timer_get_time();
+        ESP_LOGI(TAG, "POTA: %d spots (%u bytes)", n, (unsigned)len);
     }
     heap_caps_free(buf);
 }
 
+// Returns true when the fetch succeeded, so the caller can reset its backoff.
+static bool fetch_sota(void)
+{
+    char *buf = NULL;
+    int len = http_get_json(SPOTHOLE_BASE "/spots?" SOTA_QUERY, &buf);
+    if (len < 0) return false;
+
+    int n = parse_sota(buf);
+    heap_caps_free(buf);
+    if (n < 0) return false;
+
+    s_last_ok_us = esp_timer_get_time();
+    ESP_LOGI(TAG, "SOTA: %d spots (%u bytes)", n, (unsigned)len);
+    return true;
+}
+
+// One task, two sources, each with its own cadence: POTA every minute, SOTA
+// every two with a quiet backoff. Both are due-time driven rather than "sleep
+// the shorter period and count", so adding a third source is a due time and not
+// a rewrite - and a slow SOTA backoff can never delay a POTA fetch.
 static void spots_task(void *arg)
 {
     (void)arg;
-    int wait_s = 5;
+    int64_t next_pota_us = 0;                        // 0 = due now
+    int64_t next_sota_us = 0;
+    int     sota_backoff_s = 0;                      // 0 = last attempt was fine
+    // Start as if both were on, so a boot with a source switched off clears its
+    // (empty) slice exactly once and then leaves the store alone.
+    bool    was_pota_en = true, was_sota_en = true;
+
     for (;;) {
-        for (int i = 0; i < wait_s * 2; i++) {       // 500 ms granularity so a
-            vTaskDelay(pdMS_TO_TICKS(500));          // refresh request is prompt
-            if (s_refresh_req) break;
+        // 500 ms granularity so a refresh request (band change, source just
+        // switched on) is acted on promptly.
+        vTaskDelay(pdMS_TO_TICKS(500));
+        bool forced = s_refresh_req;
+        if (forced) {
+            s_refresh_req = false;
+            next_pota_us = next_sota_us = 0;
+            sota_backoff_s = 0;                      // an explicit ask resets the backoff
         }
-        s_refresh_req = false;
 
         qmx_settings_t s;
         settings_load_all(&s);
-        if (!s.spots_en || !wifi_is_connected()) {
-            // Clear this source's slice when it is switched off. Merely
-            // stopping the fetch leaves its spots in the store to age out over
-            // SPOT_STALE_S (30 minutes), so unticking POTA kept showing POTA
-            // spots - which looks exactly like the checkbox not working. RBN
-            // and the DX cluster already do this on their own disable paths.
-            if (!s.spots_en) spots_publish(SPOT_SRC_POTA, NULL, 0);
-            wait_s = 10;
-            continue;
+        int64_t now = esp_timer_get_time();
+
+        // Clear a source's slice when it is switched off. Merely stopping the
+        // fetch leaves its spots in the store to age out over SPOT_STALE_S (30
+        // minutes), so unticking POTA kept showing POTA spots - which looks
+        // exactly like the checkbox not working. RBN and the DX cluster already
+        // do this on their own disable paths.
+        //
+        // ON THE EDGE ONLY. spots_publish() bumps the store version, which is
+        // what the lane repaints on, and this loop now ticks at 2 Hz - clearing
+        // unconditionally rebuilt every label twice a second for as long as a
+        // source was switched off.
+        if (was_pota_en && !s.spots_en) spots_publish(SPOT_SRC_POTA, NULL, 0);
+        if (was_sota_en && !s.sota_en)  spots_publish(SPOT_SRC_SOTA, NULL, 0);
+        was_pota_en = s.spots_en;
+        was_sota_en = s.sota_en;
+
+        if (!wifi_is_connected()) continue;
+
+        if (s.spots_en && now >= next_pota_us) {
+            fetch_pota();
+            bool ok = (spots_age_s() == 0);
+            next_pota_us = esp_timer_get_time() +
+                           (int64_t)(ok ? FETCH_PERIOD_S : RETRY_PERIOD_S) * 1000000;
         }
 
-        fetch_once();
-        wait_s = (spots_age_s() == 0) ? FETCH_PERIOD_S : RETRY_PERIOD_S;
+        if (s.sota_en && now >= next_sota_us) {
+            bool ok = fetch_sota();
+            if (ok) {
+                sota_backoff_s = 0;
+            } else {
+                // Double, from one period up to the cap. Quietly - a failed
+                // fetch is logged and nothing else: no banner, no toast, and the
+                // spots already held stay on screen until they age out.
+                sota_backoff_s = sota_backoff_s ? sota_backoff_s * 2 : SOTA_PERIOD_S;
+                if (sota_backoff_s > SOTA_BACKOFF_MAX_S) sota_backoff_s = SOTA_BACKOFF_MAX_S;
+                ESP_LOGW(TAG, "SOTA: spothole unreachable - next try in %d s", sota_backoff_s);
+            }
+            next_sota_us = esp_timer_get_time() +
+                           (int64_t)(ok ? SOTA_PERIOD_S : sota_backoff_s) * 1000000;
+        }
     }
 }
 
@@ -479,5 +704,5 @@ void spots_init(void)
     if (!s_store || !s_scratch || !s_lock) { ESP_LOGE(TAG, "init failed"); return; }
     dma_probe("init");    // TEMP DIAGNOSTIC: baseline before the pool collapses
     psram_task_create(spots_task, "spots", 6144, NULL, 2, tskNO_AFFINITY);
-    ESP_LOGI(TAG, "spot fetcher started (POTA)");
+    ESP_LOGI(TAG, "spot fetcher started (POTA, SOTA)");
 }
