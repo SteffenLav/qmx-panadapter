@@ -280,6 +280,21 @@ static void modal_close(void)
     lv_anim_start(&a);
 }
 
+// Tap the grip handle to close. modal_close() is idempotent (it returns unless
+// s_open), so a gesture that both swipes and clicks cannot close twice.
+static void grip_click_cb(lv_event_t *e)
+{
+    (void)e;
+    modal_close();
+}
+
+// Click on the backdrop - i.e. anywhere outside the window - closes it.
+static void backdrop_click_cb(lv_event_t *e)
+{
+    (void)e;
+    modal_close();
+}
+
 // Swipe down (drag down) anywhere on the modal background closes it,
 // replacing the Close button.
 static void modal_swipe_cb(lv_event_t *e)
@@ -873,7 +888,11 @@ static void modal_build(void)
         }
     }
 
-    // Slim grip handle at the top of the panel: swipe down to close.
+    // Slim grip handle at the top of the panel: swipe down to close - or just
+    // TAP it. The handle was already the thing an operator reaches for, and a
+    // swipe-only handle asks them to guess that a gesture is hidden in it; a
+    // pointer cannot perform that gesture at all. ext_click_area gives it a
+    // comfortable target without making it look heavier.
     lv_obj_t *grip = lv_obj_create(s_panel);
     lv_obj_set_size(grip, 120, 10);
     lv_obj_align(grip, LV_ALIGN_TOP_MID, 0, -PAD + 4);
@@ -881,13 +900,25 @@ static void modal_build(void)
     lv_obj_set_style_bg_opa(grip, LV_OPA_30, 0);
     lv_obj_set_style_border_width(grip, 0, 0);
     lv_obj_set_style_radius(grip, 5, 0);
+    lv_obj_set_style_pad_all(grip, 0, 0);
     lv_obj_clear_flag(grip, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(grip, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(grip, 14);
+    lv_obj_add_event_cb(grip, grip_click_cb, LV_EVENT_CLICKED, NULL);
 
     // Swipe down anywhere on the modal background (outside the grid) closes it.
     lv_obj_add_event_cb(s_modal, modal_swipe_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_modal, modal_swipe_cb, LV_EVENT_RELEASED, NULL);
     lv_obj_add_event_cb(s_panel, modal_swipe_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_panel, modal_swipe_cb, LV_EVENT_RELEASED, NULL);
+
+    // A click OUTSIDE the window closes it, the same way the settings drawer's
+    // scrim works. Attached to s_modal, the full-screen backdrop: LVGL does not
+    // bubble child events unless asked (LV_OBJ_FLAG_EVENT_BUBBLE is used nowhere
+    // in this project), so a click that lands on the panel or any cell inside it
+    // is consumed there and never reaches this - which is precisely what makes
+    // it safe to close on.
+    lv_obj_add_event_cb(s_modal, backdrop_click_cb, LV_EVENT_CLICKED, NULL);
 
     /* Action panel for long-press */
     s_action_panel = lv_obj_create(s_panel);

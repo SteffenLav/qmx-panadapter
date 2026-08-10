@@ -1632,6 +1632,7 @@ static int  s_drawer_sec_y0 = 176;
 // to underlying FT8/Panadapter content and supports a rightward swipe-to-close
 // gesture that works regardless of which content is hidden behind it.
 static lv_obj_t *s_drawer_scrim = NULL;
+static lv_obj_t *s_drawer_grip = NULL;   // visible handle while the drawer is open
 static int s_drawer_scrim_swipe_start_x = -1;
 // FT8 mode only needs WiFi/Callsign+Grid/Brightness; everything else is
 // hidden and those three are restacked near the top. Each drawer section
@@ -1921,6 +1922,7 @@ static void drawer_close(void);
 static void drawer_anim_x_cb(void *obj, int32_t v);
 static void drawer_touch_cb(lv_event_t *e);
 static void drawer_scrim_cb(lv_event_t *e);
+static void drawer_grip_cb(lv_event_t *e);
 static void drawer_cwtxoff_nudge_cb(lv_event_t *e);
 static void iq_balance_toggle_cb(lv_event_t *e);
 
@@ -3520,7 +3522,9 @@ static void mouse_timer_cb(lv_timer_t *t)
     // Is the pointer on a grip? Cheap - three rectangle tests.
     cursor_set_hot(point_on_grip(s_left_edge_grip,   s_mouse_pt.x, s_mouse_pt.y) ||
                    point_on_grip(s_bottom_edge_grip, s_mouse_pt.x, s_mouse_pt.y) ||
-                   point_on_grip(s_burger_btn,       s_mouse_pt.x, s_mouse_pt.y));
+                   point_on_grip(s_burger_btn,       s_mouse_pt.x, s_mouse_pt.y) ||
+                   (s_drawer_open &&
+                    point_on_grip(s_drawer_grip, s_mouse_pt.x, s_mouse_pt.y)));
 
     int clicks = hid_cursor_take_wheel();
     if (!clicks) return;
@@ -5981,6 +5985,16 @@ static void drawer_touch_cb(lv_event_t *e)
     }
 }
 
+// The drawer's own handle: a tap closes it. Works for finger and pointer alike -
+// unlike the edge grips on the closed screen, this one sits on an open panel
+// where nothing else is competing for the same pixels, so there is no reason to
+// restrict it to a mouse.
+static void drawer_grip_cb(lv_event_t *e)
+{
+    (void)e;
+    drawer_close();
+}
+
 // Counter-swipe (drag right) on the scrim closes the drawer. The scrim covers
 // the FT8/Panadapter area to the left of the drawer while it's open, so this
 // also restores the close-swipe in FT8 mode where s_spectrum_obj/s_waterfall_obj
@@ -6283,6 +6297,43 @@ static void drawer_build(void)
     // Drawer scrolls vertically — content overflows once CW section is added.
     lv_obj_set_scroll_dir(s_drawer, LV_DIR_VER);
     lv_obj_set_scrollbar_mode(s_drawer, LV_SCROLLBAR_MODE_AUTO);
+    // Keep the scrollbar off the right edge, which now belongs to the handle
+    // below - otherwise the two share pixels every time the drawer is scrolled,
+    // and the handle looks broken rather than merely overlapped.
+    lv_obj_set_style_pad_right(s_drawer, 18, LV_PART_SCROLLBAR);
+
+    // The handle, on the drawer's RIGHT edge - exactly where s_burger_btn sits
+    // when the drawer is shut, so from the operator's side the same handle stayed
+    // put and came along for the ride. Tapping it closes, which is what the
+    // burger grip's own position was already promising.
+    //
+    // Styled like the Memory Channels grip (120 long, 10 thick, same colour and
+    // radius) because they are the same idea, and it sits on the edge you drag
+    // TOWARD to dismiss - the drawer closes rightward, that modal closes
+    // downward and puts its grip on top. It does NOT breathe: that animation
+    // means "there is a hidden gesture here", and a visible handle on an open
+    // panel is not hidden.
+    //
+    // FLOATING for the same reason the header below is: the drawer scrolls, and a
+    // handle that scrolled away with the content would be gone exactly when it
+    // was wanted. It lives in the drawer's 16 px right pad, clear of the
+    // right-aligned checkboxes, with ext_click_area making it a comfortable
+    // target (clipped to the drawer by LVGL, so it cannot reach outside).
+    s_drawer_grip = lv_obj_create(s_drawer);
+    lv_obj_set_size(s_drawer_grip, 10, 120);
+    // +16 cancels the drawer's own 16 px padding, putting the handle flush with
+    // the drawer's right edge - the same pixels s_burger_btn occupies when shut.
+    lv_obj_align(s_drawer_grip, LV_ALIGN_RIGHT_MID, 16, 0);
+    lv_obj_set_style_bg_color(s_drawer_grip, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_set_style_bg_opa(s_drawer_grip, LV_OPA_30, 0);
+    lv_obj_set_style_border_width(s_drawer_grip, 0, 0);
+    lv_obj_set_style_radius(s_drawer_grip, 5, 0);
+    lv_obj_set_style_pad_all(s_drawer_grip, 0, 0);
+    lv_obj_add_flag(s_drawer_grip, LV_OBJ_FLAG_FLOATING);
+    lv_obj_clear_flag(s_drawer_grip, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_drawer_grip, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_ext_click_area(s_drawer_grip, 12);
+    lv_obj_add_event_cb(s_drawer_grip, drawer_grip_cb, LV_EVENT_CLICKED, NULL);
 
     // Frozen "Settings" header: a floating opaque band that stays pinned at the
     // top while the sections scroll underneath it. LV_OBJ_FLAG_FLOATING makes it
