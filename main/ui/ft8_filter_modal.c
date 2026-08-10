@@ -403,29 +403,6 @@ static void modal_build(void)
     s_cb_greylist = make_labeled_checkbox(panel, "Allow grey-listing", 540, 510, &lbl_greylist);
     lv_obj_set_style_text_color(lbl_greylist, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
-    // --- Fox/Hound (DXpedition) ---------------------------------------
-    // A ladder, not a switch, so it is a dropdown: off / guided / automatic.
-    // See ft8_hound.h - it suspends three of our politeness rules (the
-    // busy-station hold, the final re-send, the grey-list), which is exactly why
-    // it is a mode the operator turns on deliberately rather than something
-    // inferred from a low-frequency CQ.
-    lv_obj_t *lbl_hound = lv_label_create(panel);
-    lv_label_set_text(lbl_hound, "Fox/Hound (DXpedition):");
-    lv_obj_set_style_text_font(lbl_hound, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_text_color(lbl_hound, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-    lv_obj_align(lbl_hound, LV_ALIGN_TOP_LEFT, 540, 578);
-
-    // Order MUST match ft8_hound_mode_t (OFF=0, GUIDED=1, AUTO=2).
-    s_dd_hound = lv_dropdown_create(panel);
-    lv_dropdown_set_options(s_dd_hound, "Off\nGuided\nAutomatic");
-    lv_obj_set_width(s_dd_hound, 200);
-    lv_obj_align_to(s_dd_hound, lbl_hound, LV_ALIGN_OUT_RIGHT_MID, 12, 0);
-    lv_obj_set_style_text_font(s_dd_hound, &lv_font_montserrat_24, 0);
-    lv_obj_set_style_bg_color(s_dd_hound, lv_color_hex(UI_COLOR_KEY_BG), 0);
-    lv_obj_set_style_border_color(s_dd_hound, lv_color_hex(UI_COLOR_BORDER), 0);
-    lv_obj_set_style_text_color(s_dd_hound, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-    lv_obj_add_event_cb(s_dd_hound, robot_pri_dropdown_open_cb, LV_EVENT_CLICKED, NULL);
-
     // --- ARRL Field Day exchange mode ---------------------------------
     // When on, FT8 QSOs (manual and auto) exchange class+section instead of
     // grid/signal report - see CLAUDE.md "FT8 robot" / ft8_qso.c. Class and
@@ -456,6 +433,44 @@ static void modal_build(void)
     lv_obj_set_style_text_color(s_ta_fd_section, lv_color_hex(UI_COLOR_TEXT_MUTED), LV_PART_TEXTAREA_PLACEHOLDER);
     lv_obj_add_event_cb(s_ta_fd_section, ta_focused_top_cb, LV_EVENT_FOCUSED, NULL);
 
+    // --- Fox/Hound (DXpedition) ---------------------------------------
+    // A ladder, not a switch, so it is a dropdown: off / guided / automatic.
+    // See ft8_hound.h - it suspends three of our politeness rules (the
+    // busy-station hold, the final re-send, the grey-list), which is exactly why
+    // it is a mode the operator turns on deliberately rather than something
+    // inferred from a low-frequency CQ.
+    // Placed on the FIELD DAY row's right-hand side, not at (540,578) where it
+    // first went: the "Auto-answer CQ with priority:" label plus its 280 px
+    // dropdown reach to about x=712, so the two overlapped on screen (operator
+    // caught it immediately - the labels ran into each other). The usable gap
+    // here is x 545..840, because the right-edge buttons start at 840
+    // (1040 panel - 20 pad - 180 button), hence the short label and a 150 px
+    // dropdown with short options.
+    // Aligned to the Field Day row and anchored to the SECTION box rather than to
+    // absolute coordinates, so it stays level with that row and clear of the box
+    // even if either moves. Two absolute-position attempts got this wrong: (540,
+    // 578) landed on the priority dropdown, and (545, 648) ran into the "EMA" box.
+    //
+    // There is room to the right here because the Save/Cancel/Sync Time buttons
+    // only occupy y 38..324 - below that the panel's full width is free.
+    lv_obj_t *lbl_hound = lv_label_create(panel);
+    lv_label_set_text(lbl_hound, "Fox/Hound:");
+    lv_obj_set_style_text_font(lbl_hound, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(lbl_hound, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_align_to(lbl_hound, s_ta_fd_section, LV_ALIGN_OUT_RIGHT_MID, 28, 0);
+
+    // Order MUST match ft8_hound_mode_t (OFF=0, GUIDED=1, AUTO=2).
+    s_dd_hound = lv_dropdown_create(panel);
+    lv_dropdown_set_options(s_dd_hound, "Off\nGuided\nAutomatic");
+    lv_obj_set_width(s_dd_hound, 200);
+    lv_obj_align_to(s_dd_hound, lbl_hound, LV_ALIGN_OUT_RIGHT_MID, 12, 0);
+    lv_obj_set_style_text_font(s_dd_hound, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_bg_color(s_dd_hound, lv_color_hex(UI_COLOR_KEY_BG), 0);
+    lv_obj_set_style_border_color(s_dd_hound, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_text_color(s_dd_hound, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_add_event_cb(s_dd_hound, robot_pri_dropdown_open_cb, LV_EVENT_CLICKED, NULL);
+
+
     // --- Save / Cancel / Sync Time on the right edge, stacked at the top.
     // Same placement as the Waveshare P4 port: Save lines up with the first
     // include text field (y=38) and the three stack down 120 px apart - this
@@ -467,11 +482,19 @@ static void modal_build(void)
             { "Cancel",    0x962020, cancel_btn_cb     },
             { "Sync Time", UI_COLOR_PRIMARY, sync_time_btn_cb },
         };
+        // Tied to the FOUR text rows rather than evenly spaced (operator,
+        // v1.8.0 - the even 120 px spacing left them looking unrelated to
+        // anything). The rows are 56 px tall at y = 38, 100, 206, 268, so the
+        // block spans 38..324, and the buttons are 64 tall:
+        //   Save      38          top edge level with the first row
+        //   Cancel   149          centred on the block: (38 + 324)/2 - 64/2
+        //   Sync Time 260         bottom edge level with the last row: 324 - 64
+        static const int btn_y[3] = { 38, 149, 260 };
         lv_obj_t *save_b = NULL, *cancel_b = NULL;
         for (int i = 0; i < 3; i++) {
             lv_obj_t *b = lv_btn_create(panel);
             lv_obj_set_size(b, 180, 64);
-            lv_obj_align(b, LV_ALIGN_TOP_RIGHT, 0, 38 + i * 120);
+            lv_obj_align(b, LV_ALIGN_TOP_RIGHT, 0, btn_y[i]);
             lv_obj_set_style_bg_color(b, lv_color_hex(btns[i].col), 0);
             lv_obj_set_style_radius(b, 8, 0);
             lv_obj_set_style_border_width(b, 0, 0);

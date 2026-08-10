@@ -2059,6 +2059,29 @@ void ui_refresh_sim_mode_indicator(void)
 static void sim_border_keepalive_cb(lv_timer_t *t)
 {
     (void)t;
+
+    // Follow the SETTING, not just this file's cached copy. s_sim_mode_en is
+    // written by the drawer checkbox, so a change made anywhere else left the UI
+    // stale - and simulation mode now has a web control (/api/settings
+    // sim_mode_en, added so Fox/Hound could be tested with nobody at the Tab5),
+    // which is exactly that case: switching it off over the web left the red
+    // simulation bezel breathing away on a device that was no longer simulating
+    // anything (operator, 2026-08-11). Change-detected, so this costs a settings
+    // read per second and nothing else.
+    {
+        qmx_settings_t s;
+        settings_load_all(&s);
+        if (s.sim_mode_en != s_sim_mode_en) {
+            s_sim_mode_en = s.sim_mode_en;
+            ESP_LOGI(TAG, "FT8 simulation mode changed elsewhere: %s",
+                     s_sim_mode_en ? "ON (radio not keyed)" : "off");
+            if (s_check_sim_mode) {          // keep the drawer checkbox honest too
+                if (s_sim_mode_en) lv_obj_add_state(s_check_sim_mode, LV_STATE_CHECKED);
+                else               lv_obj_remove_state(s_check_sim_mode, LV_STATE_CHECKED);
+            }
+            ui_refresh_sim_mode_indicator();
+        }
+    }
     // Reconcile the microSD-mounted bottom-bar dot here (LVGL thread, no lock
     // needed) - ui_set_sd_active() only records the wanted state. See s_sd_want.
     if (s_sd_want >= 0 && s_bot_diag_dot) {
