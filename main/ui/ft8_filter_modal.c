@@ -467,7 +467,11 @@ static void modal_build(void)
     // dropdown on the LABEL'S text height instead of on the box, which is why it
     // still sat a few pixels low (operator, twice). Box and dropdown centres now
     // coincide by construction.
-    lv_obj_align_to(s_dd_hound, s_ta_fd_section, LV_ALIGN_OUT_RIGHT_MID, 190, 0);
+    // -5 on the vertical: OUT_RIGHT_MID centres the two objects' boxes, but the
+    // dropdown and the textarea have different borders and padding, so their
+    // visible middles are not their box middles. The operator's eye is the
+    // authority here, and it said five pixels.
+    lv_obj_align_to(s_dd_hound, s_ta_fd_section, LV_ALIGN_OUT_RIGHT_MID, 190, -5);
     lv_obj_align_to(lbl_hound, s_dd_hound, LV_ALIGN_OUT_LEFT_MID, -12, 0);
     lv_obj_set_style_text_font(s_dd_hound, &lv_font_montserrat_24, 0);
     lv_obj_set_style_bg_color(s_dd_hound, lv_color_hex(UI_COLOR_KEY_BG), 0);
