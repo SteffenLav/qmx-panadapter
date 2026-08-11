@@ -1910,7 +1910,8 @@ const SET_FIELDS = [
   ["Display & waterfall", "display.brightness",     "num", "Brightness (%)", "10-100"],
   ["Display & waterfall", "display.wf_black_db",    "num", "Waterfall black level (dB)", "dB above the floor that turns black; default 9"],
   ["Display & waterfall", "display.wf_contrast_db", "num", "Waterfall contrast (dB)", "dB span filling the colour ramp; default 45"],
-  ["Display & waterfall", "display.wf_floor_blend", "num", "Adaptive floor (%)", "0 = global floor, 100 = per-bin; default 100"],
+  ["Display & waterfall", "display.wf_floor_blend", "num", "Adaptive floor (%)",
+     "Currently has NO effect on either screen. It cross-fades between a global noise floor and a per-bin one, but the per-bin floor is re-seeded many times a second (audio.c re-seeds on every gap in the USB audio stream), so the two are always the same value. Stored, and will start working if that is fixed"],
   ["Display & waterfall", "display.wf_window",      "sel", "FFT window", "",
      [["0","Blackman-Harris"],["1","Hann"],["2","Nuttall"]]],
   ["Display & waterfall", "display.colormap",       "sel", "Waterfall colours", "",
@@ -3413,6 +3414,14 @@ const SPEC_FLOOR_DOWN_ALPHA = 0.08;
    These were five separate literals sprinkled through this file (2.55, 76.5, 15.3,
    and "(db + 130) * 255 / 100" twice) - which is precisely how a scale change goes
    half-applied and every dB figure in the UI quietly becomes wrong. */
+/* ⚠ ONE SWITCH FOR BOTH RENDERERS. false = mirror what the Tab5 actually does
+   (re-seed the noise floor every frame); true = the converging per-bin floor that
+   both were DESIGNED around. It is false because the Tab5 re-seeds 17 times a second
+   and so has never run the design - see the long note above drawSpectrumFlat(). Flip
+   this the day audio.c's reset is fixed, and the "Adaptive floor" setting starts
+   meaning something on both screens at the same time. */
+const FLOOR_TRACKING = false;
+
 const WS_DB_MIN = -150, WS_DB_MAX = -30;
 const WS_COUNTS_PER_DB = 255 / (WS_DB_MAX - WS_DB_MIN);
 const dbToByte = (db) => (db - WS_DB_MIN) * WS_COUNTS_PER_DB;
@@ -3819,22 +3828,55 @@ function drawRitMarker(ctx, W, H) {
   for (let y = 0; y < H; y += step) ctx.fillRect(x - 1, y, 2, Math.min(on, H - y));
 }
 
+/* ⚠ THE TAB5 RE-SEEDS ITS FLOORS 17 TIMES A SECOND, so its per-bin adaptive floor
+   has never actually run - measured on hardware 2026-08-11 ("FLATRESET: 90 resets in
+   5.1 s"). audio.c sets s_flat_reset_pending on ANY poll that returns zero pairs, and
+   a drain loop normally ENDS on an empty read, so ui_flat_mode_reset() - intended for
+   a QMX power-cycle - fires continuously. Every draw therefore starts from a fresh
+   seed, and what the Tab5 actually shows is:
+
+       height = smoothed_bin - MEAN(smoothed bins) - 6 dB,   clamped 0..30 dB
+
+   with no per-bin tracking and no second EMA accumulating at all.
+
+   The browser faithfully implemented the DESIGNED behaviour - a converging per-bin
+   floor - which is why it matched for the first second or two and then diverged: over
+   ~60 s its floor crept onto every steady carrier and the signals faded into grass,
+   exactly as the design says it should. The Tab5 never gets that far.
+
+   The operator chose to keep the Tab5's look, so this mirrors the real behaviour
+   rather than the intended one. The long-term tracker and SPEC_FLOOR_UP/DOWN_ALPHA
+   are deliberately unused now; they are kept so that IF audio.c's reset is ever fixed,
+   this file has the matching implementation to switch back to - and the same day, the
+   "Adaptive floor" setting will start meaning something on both screens. */
 function drawSpectrumFlat(bytes) {
-  if (!specSmoothReady) {
-    for (let i = 0; i < SPEC_W; i++) specSmooth[i] = bytes[i];
-    specSmoothReady = true;
+  if (FLOOR_TRACKING) {
+    /* The DESIGNED behaviour: a per-bin floor that converges. Unreachable while the
+       device re-seeds 17 times a second - flip FLOOR_TRACKING with audio.c's reset. */
+    if (!specSmoothReady) {
+      for (let i = 0; i < SPEC_W; i++) specSmooth[i] = bytes[i];
+      specSmoothReady = true;
+    } else {
+      const a = SPEC_SMOOTH_ALPHA;
+      for (let i = 0; i < SPEC_W; i++) specSmooth[i] += a * (bytes[i] - specSmooth[i]);
+    }
+    if (!specFloorReady) {
+      const m = median256(bytes);
+      for (let i = 0; i < SPEC_W; i++) specFloor[i] = m;
+      specFloorReady = true;
+    }
+    for (let i = 0; i < SPEC_W; i++) {
+      const d = specSmooth[i] - specFloor[i];
+      specFloor[i] += (d > 0 ? SPEC_FLOOR_UP_ALPHA : SPEC_FLOOR_DOWN_ALPHA) * d;
+    }
   } else {
-    const a = SPEC_SMOOTH_ALPHA;
-    for (let i = 0; i < SPEC_W; i++) specSmooth[i] += a * (bytes[i] - specSmooth[i]);
-  }
-  if (!specFloorReady) {
-    const m = median256(bytes);
-    for (let i = 0; i < SPEC_W; i++) specFloor[i] = m;
-    specFloorReady = true;
-  }
-  for (let i = 0; i < SPEC_W; i++) {
-    const d = specSmooth[i] - specFloor[i];
-    specFloor[i] += (d > 0 ? SPEC_FLOOR_UP_ALPHA : SPEC_FLOOR_DOWN_ALPHA) * d;
+    /* What the Tab5 actually shows: value as-is (its second EMA never accumulates),
+       floor = the mean across bins, re-seeded every frame. */
+    let sum = 0;
+    for (let i = 0; i < SPEC_W; i++) { specSmooth[i] = bytes[i]; sum += bytes[i]; }
+    const mean = sum / SPEC_W;
+    for (let i = 0; i < SPEC_W; i++) specFloor[i] = mean;
+    specSmoothReady = true; specFloorReady = true;
   }
 
   const W = specPxW, H = specPxH;
@@ -4089,19 +4131,33 @@ function drawWaterfall(bytes) {
   if (dt > 0.5)   dt = 0.5;
   const alphaFor = (tc) => 1 - Math.exp(-dt / tc);
 
-  if (!wfFloorReady) {
+  /* Re-seed to the frame's median unless the converging tracker is switched on -
+     render_waterfall_floor_reset() lands here 17 times a second on the device, so
+     floor_arr is always the median and the per-bin term (and the blend control with
+     it) never gets to differ from the global one. */
+  if (!wfFloorReady || !FLOOR_TRACKING) {
     const m = median256(bytes);
-    for (let i = 0; i < SPEC_W; i++) { wfFloorArr[i] = m; wfSmooth[i] = bytes[i]; }
+    for (let i = 0; i < SPEC_W; i++) {
+      wfFloorArr[i] = m;
+      if (!wfFloorReady) wfSmooth[i] = bytes[i];
+    }
     wfFloorReady = true;
-    wfWarmupLeft = WF_WARMUP_S;
+    wfWarmupLeft = WF_WARMUP_S;      // the device re-arms its warmup on every reseed too
     wfFloorGlobal = m;
   }
 
   /* Fast decay briefly after (re)init so a fresh connection settles in seconds
      instead of a minute, then slow - signals must not be absorbed into the floor. */
   const aSmooth  = WF_SMOOTH_ALPHA;          // per ROW, not per second - see above
-  const aAttack  = alphaFor(WF_FLOOR_ATTACK_TC_S);
-  const aDecay   = alphaFor(wfWarmupLeft > 0 ? WF_FLOOR_FAST_TC_S : WF_FLOOR_SLOW_TC_S);
+  /* With the floor re-seeded every frame there is nothing accumulating, so the single
+     update step that follows has to use the device's PER-TICK alpha (0.05), not an
+     alpha derived from elapsed time - at 10 fps that came out 0.14 and quietly cut
+     the effective contrast by about 9 %. The time constants are correct only when
+     FLOOR_TRACKING is on and the value really does build up over seconds. */
+  const aAttack  = FLOOR_TRACKING ? alphaFor(WF_FLOOR_ATTACK_TC_S) : 0.05;
+  const aDecay   = FLOOR_TRACKING
+      ? alphaFor(wfWarmupLeft > 0 ? WF_FLOOR_FAST_TC_S : WF_FLOOR_SLOW_TC_S)
+      : 0.05;
   if (wfWarmupLeft > 0) wfWarmupLeft -= dt;
 
   let sum = 0;
