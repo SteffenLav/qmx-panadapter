@@ -1,0 +1,251 @@
+// hid_map_harness.c - host-side verification of hid_report_map_parse() and
+// hid_field_signed() (main/hid_report_map.c), which decide how a BLE mouse's
+// movement reports are laid out.
+//
+// Build + run (from the repo root):
+//   gcc -O2 -Wall -Wextra -I main -o test/hid_map.exe test/hid_map_harness.c main/hid_report_map.c
+//   ./test/hid_map.exe
+//
+// WHY THIS EXISTS
+//   The thing being replaced was an assumption: bt_hid_mouse.c treated every report
+//   of five bytes or more as the 12-bit packed layout captured off one Logitech
+//   M240. A mouse using 16-bit movement decodes under that assumption into numbers
+//   in the thousands, and because the cursor is clamped to the screen the pointer
+//   races sideways and pins itself to the top edge - which is what Samuel W7STF
+//   reported and what case 3 below reproduces numerically.
+//
+//   It cannot be tested on the device without owning every mouse. The descriptors
+//   are public and fixed, so it is testable here, and case 3 in particular is the
+//   whole point: it fails loudly under the OLD assumption and passes under the
+//   parser.
+//
+// WHY IT COMPILES THE REAL FILE
+//   Mirroring the parser here would let the two drift, and a drifted copy of a
+//   parser is worse than no test: it would keep passing while the device got it
+//   wrong. Same reasoning as test/spot_sig_harness.c.
+
+#include <stdio.h>
+#include <string.h>
+#include "hid_report_map.h"
+
+static int g_fail = 0;
+
+static void check(const char *what, long got, long want)
+{
+    if (got != want) {
+        printf("  FAIL %-34s got %ld want %ld\n", what, got, want);
+        g_fail++;
+    }
+}
+
+// ---------------------------------------------------------------- descriptors
+
+// 1. The standard boot-protocol mouse: 3 buttons + 5 bits padding, then two
+//    8-bit relative axes. This is the shape in the USB HID spec's own appendix.
+static const uint8_t DESC_BOOT[] = {
+    0x05, 0x01,        // Usage Page (Generic Desktop)
+    0x09, 0x02,        // Usage (Mouse)
+    0xA1, 0x01,        // Collection (Application)
+    0x09, 0x01,        //   Usage (Pointer)
+    0xA1, 0x00,        //   Collection (Physical)
+    0x05, 0x09,        //     Usage Page (Button)
+    0x19, 0x01,        //     Usage Minimum (1)
+    0x29, 0x03,        //     Usage Maximum (3)
+    0x15, 0x00, 0x25, 0x01,
+    0x95, 0x03,        //     Report Count (3)
+    0x75, 0x01,        //     Report Size (1)
+    0x81, 0x02,        //     Input (Data,Var,Abs)      <- 3 bits of buttons
+    0x95, 0x01,        //     Report Count (1)
+    0x75, 0x05,        //     Report Size (5)
+    0x81, 0x01,        //     Input (Cnst,Ary,Abs)      <- 5 bits of padding
+    0x05, 0x01,        //     Usage Page (Generic Desktop)
+    0x09, 0x30,        //     Usage (X)
+    0x09, 0x31,        //     Usage (Y)
+    0x15, 0x81, 0x25, 0x7F,
+    0x75, 0x08,        //     Report Size (8)
+    0x95, 0x02,        //     Report Count (2)
+    0x81, 0x06,        //     Input (Data,Var,Rel)      <- X then Y, 8 bits each
+    0xC0, 0xC0
+};
+
+// 2. 16-bit movement with a wheel in a SEPARATE input item, and a Report ID -
+//    the layout the old code decoded into nonsense.
+static const uint8_t DESC_16BIT_ID[] = {
+    0x05, 0x01, 0x09, 0x02, 0xA1, 0x01,
+    0x85, 0x02,        // Report ID (2)
+    0x09, 0x01, 0xA1, 0x00,
+    0x05, 0x09, 0x19, 0x01, 0x29, 0x05,
+    0x15, 0x00, 0x25, 0x01,
+    0x95, 0x05, 0x75, 0x01, 0x81, 0x02,   // 5 button bits
+    0x95, 0x01, 0x75, 0x03, 0x81, 0x01,   // 3 bits padding  -> byte boundary
+    0x05, 0x01,
+    0x09, 0x30, 0x09, 0x31,               // X, Y
+    0x16, 0x00, 0x80, 0x26, 0xFF, 0x7F,   // 16-bit logical range
+    0x75, 0x10, 0x95, 0x02, 0x81, 0x06,   // Report Size 16, Count 2
+    0x09, 0x38,                           // Usage (Wheel)
+    0x15, 0x81, 0x25, 0x7F,
+    0x75, 0x08, 0x95, 0x01, 0x81, 0x06,   // wheel, 8 bits, separate item
+    0xC0, 0xC0
+};
+
+// 3. The 12-bit packed layout captured off a Logitech M240 on hardware
+//    (bt_hid_mouse.c records the bytes it saw). X and Y share a byte.
+static const uint8_t DESC_12BIT[] = {
+    0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x09, 0x01, 0xA1, 0x00,
+    0x05, 0x09, 0x19, 0x01, 0x29, 0x08,
+    0x15, 0x00, 0x25, 0x01, 0x95, 0x08, 0x75, 0x01, 0x81, 0x02,  // 8 button bits
+    0x95, 0x01, 0x75, 0x08, 0x81, 0x01,                          // 8 bits padding
+    0x05, 0x01, 0x09, 0x30, 0x09, 0x31,
+    0x16, 0x00, 0xF8, 0x26, 0xFF, 0x07,
+    0x75, 0x0C, 0x95, 0x02, 0x81, 0x06,                          // 12 bits x2
+    0x09, 0x38, 0x15, 0x81, 0x25, 0x7F,
+    0x75, 0x08, 0x95, 0x01, 0x81, 0x06,
+    0xC0, 0xC0
+};
+
+int main(void)
+{
+    hid_mouse_layout_t L;
+
+    printf("1. boot-protocol mouse\n");
+    if (!hid_report_map_parse(DESC_BOOT, sizeof DESC_BOOT, &L)) {
+        printf("  FAIL parse returned false\n"); g_fail++;
+    } else {
+        check("report_id", L.report_id, 0);
+        check("x_bit",     L.x_bit,     8);      // 3 button bits + 5 padding
+        check("y_bit",     L.y_bit,    16);
+        check("x_bits",    L.x_bits,    8);
+        check("have_wheel",L.have_wheel,0);
+        // 00 05 FB  ->  X=+5, Y=-5
+        const uint8_t r[] = { 0x00, 0x05, 0xFB };
+        check("decode X", hid_field_signed(r, sizeof r, L.x_bit, L.x_bits),  5);
+        check("decode Y", hid_field_signed(r, sizeof r, L.y_bit, L.y_bits), -5);
+    }
+
+    printf("2. 16-bit movement, report ID, wheel in its own item\n");
+    if (!hid_report_map_parse(DESC_16BIT_ID, sizeof DESC_16BIT_ID, &L)) {
+        printf("  FAIL parse returned false\n"); g_fail++;
+    } else {
+        check("report_id",  L.report_id,  2);
+        check("x_bit",      L.x_bit,      8);    // 5 buttons + 3 padding
+        check("y_bit",      L.y_bit,     24);
+        check("x_bits",     L.x_bits,    16);
+        check("have_wheel", L.have_wheel, 1);
+        check("wheel_bit",  L.wheel_bit, 40);
+        check("wheel_bits", L.wheel_bits, 8);
+        // payload after the ID byte: buttons, X=+300 (0x012C), Y=-2 (0xFFFE), wheel=-1
+        const uint8_t r[] = { 0x00, 0x2C, 0x01, 0xFE, 0xFF, 0xFF };
+        check("decode X", hid_field_signed(r, sizeof r, L.x_bit, L.x_bits), 300);
+        check("decode Y", hid_field_signed(r, sizeof r, L.y_bit, L.y_bits),  -2);
+        check("decode wheel",
+              hid_field_signed(r, sizeof r, L.wheel_bit, L.wheel_bits), -1);
+
+        // THE REGRESSION THAT MATTERS - and this harness corrected me on what it
+        // actually is, which is why it is asserted rather than described.
+        //
+        // Decoding a 16-bit mouse as 12-bit packed reads Y FOUR BITS EARLY: it takes
+        // Y's low byte shifted up by four and picks up X's high nibble in the bottom
+        // bits. So Y comes out about SIXTEEN TIMES too large, while X comes out
+        // CORRECT by coincidence - the low 12 bits of a small 16-bit two's-complement
+        // value are that same value in 12-bit two's complement.
+        //
+        // That is exactly the reported symptom, and more precisely than "wrong
+        // values": a 16x vertical gain drives the cursor into the top or bottom edge
+        // on any movement at all, and the clamp in hid_cursor.c holds it there - so
+        // the pointer appears to move only left and right, along the very top of the
+        // screen. My first version of this test asserted "runaway values in the
+        // thousands" and FAILED, because for small movements Y is merely 16x out.
+        static const int mv[][2] = { {2,-2}, {5,5}, {20,-10}, {100,40} };
+        for (size_t k = 0; k < sizeof mv / sizeof mv[0]; k++) {
+            int X = mv[k][0], Y = mv[k][1];
+            uint8_t q[6] = { 0, (uint8_t)(X & 0xFF), (uint8_t)((X >> 8) & 0xFF),
+                                (uint8_t)(Y & 0xFF), (uint8_t)((Y >> 8) & 0xFF), 0 };
+            // the parser must get both right...
+            check("parser X", hid_field_signed(q, sizeof q, L.x_bit, L.x_bits), X);
+            check("parser Y", hid_field_signed(q, sizeof q, L.y_bit, L.y_bits), Y);
+            // ...and the old assumption must be wrong on Y by roughly 16x, which is
+            // what made the pointer unusable rather than merely inaccurate.
+            int oy = ((q[2] >> 4) & 0x0F) | (q[3] << 4);
+            if (oy & 0x800) oy -= 0x1000;
+            double ratio = (double)oy / (double)Y;
+            if (ratio < 12.0 || ratio > 24.0) {
+                printf("  FAIL old-layout Y gain was %.1fx for Y=%d (expected ~16x)\n",
+                       ratio, Y);
+                g_fail++;
+            }
+        }
+        printf("     old assumption: X right by coincidence, Y ~16x too large\n");
+    }
+
+    printf("3. 12-bit packed (Logitech M240)\n");
+    if (!hid_report_map_parse(DESC_12BIT, sizeof DESC_12BIT, &L)) {
+        printf("  FAIL parse returned false\n"); g_fail++;
+    } else {
+        check("report_id", L.report_id, 0);
+        check("x_bit",     L.x_bit,    16);      // 8 button bits + 8 padding
+        check("y_bit",     L.y_bit,    28);      // 16 + 12
+        check("x_bits",    L.x_bits,   12);
+        check("have_wheel",L.have_wheel,1);
+        check("wheel_bit", L.wheel_bit,40);
+        // The capture from hardware: 00 00 d9 0f fd 00 00 -> X=-39 Y=-48
+        const uint8_t r[] = { 0x00, 0x00, 0xd9, 0x0f, 0xfd, 0x00, 0x00 };
+        check("decode X (hw capture)", hid_field_signed(r, sizeof r, L.x_bit, L.x_bits), -39);
+        check("decode Y (hw capture)", hid_field_signed(r, sizeof r, L.y_bit, L.y_bits), -48);
+        const uint8_t r2[] = { 0x00, 0x00, 0x02, 0xe0, 0xff, 0x00, 0x00 };
+        check("decode X (hw capture 2)", hid_field_signed(r2, sizeof r2, L.x_bit, L.x_bits), 2);
+        check("decode Y (hw capture 2)", hid_field_signed(r2, sizeof r2, L.y_bit, L.y_bits), -2);
+    }
+
+    // Mutation testing found this branch uncovered: none of the three descriptors
+    // above contains a FOUR-byte item, so "size code 3 means 4 bytes, not 3" - the
+    // classic HID item-parsing trap - was never exercised, and breaking it on
+    // purpose still passed. Real descriptors do use 4-byte items for 32-bit logical
+    // ranges, and getting the length wrong desynchronises the whole item stream, so
+    // this covers it: a 4-byte Logical Maximum (0x27) sits before X and Y, and a
+    // 3-byte read would put them in the wrong place.
+    printf("4. a 4-byte item must not desynchronise the stream\n");
+    {
+        static const uint8_t DESC_LONGDATA[] = {
+            0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x09, 0x01, 0xA1, 0x00,
+            0x05, 0x09, 0x19, 0x01, 0x29, 0x08,
+            0x15, 0x00, 0x25, 0x01, 0x95, 0x08, 0x75, 0x01, 0x81, 0x02,  // 8 button bits
+            0x05, 0x01, 0x09, 0x30, 0x09, 0x31,
+            0x17, 0x00, 0x00, 0x00, 0x80,        // Logical Minimum, 4 bytes
+            0x27, 0xFF, 0xFF, 0xFF, 0x7F,        // Logical Maximum, 4 bytes
+            0x75, 0x10, 0x95, 0x02, 0x81, 0x06,  // Report Size 16, Count 2
+            0xC0, 0xC0
+        };
+        hid_mouse_layout_t M;
+        if (!hid_report_map_parse(DESC_LONGDATA, sizeof DESC_LONGDATA, &M)) {
+            printf("  FAIL parse returned false\n"); g_fail++;
+        } else {
+            check("x_bit after 4-byte items",  M.x_bit,  8);
+            check("y_bit after 4-byte items",  M.y_bit, 24);
+            check("x_bits after 4-byte items", M.x_bits, 16);
+            const uint8_t r[] = { 0x00, 0x2C, 0x01, 0xFE, 0xFF };
+            check("decode X", hid_field_signed(r, sizeof r, M.x_bit, M.x_bits), 300);
+            check("decode Y", hid_field_signed(r, sizeof r, M.y_bit, M.y_bits),  -2);
+        }
+    }
+
+    printf("5. malformed input must be refused, not guessed\n");
+    {
+        hid_mouse_layout_t T;
+        if (hid_report_map_parse(NULL, 0, &T))                       { printf("  FAIL NULL\n"); g_fail++; }
+        if (hid_report_map_parse(DESC_BOOT, 4, &T))                  { printf("  FAIL truncated\n"); g_fail++; }
+        const uint8_t only_buttons[] = { 0x05, 0x09, 0x19, 0x01, 0x29, 0x03,
+                                         0x95, 0x03, 0x75, 0x01, 0x81, 0x02 };
+        if (hid_report_map_parse(only_buttons, sizeof only_buttons, &T)) {
+            printf("  FAIL a descriptor with no X/Y was accepted\n"); g_fail++;
+        }
+        const uint8_t long_item[] = { 0xFE, 0x02, 0x00, 0x00, 0x00 };
+        if (hid_report_map_parse(long_item, sizeof long_item, &T))    { printf("  FAIL long item\n"); g_fail++; }
+        // A field running past the end of the report reads 0 rather than off the end
+        const uint8_t tiny[] = { 0x00 };
+        check("out-of-range field", hid_field_signed(tiny, sizeof tiny, 8, 16), 0);
+    }
+
+    printf("\n%s (%d failure%s)\n", g_fail ? "FAILED" : "PASSED", g_fail,
+           g_fail == 1 ? "" : "s");
+    return g_fail ? 1 : 0;
+}

@@ -13,9 +13,15 @@ Notes for the operator before posting:
 - Reply 1 asks Samuel four questions rather than announcing a fix, because I have
   not reproduced what he reported. The CW spot offset I *did* find is a constant
   shift and his report is asymmetric, so they may well be different things.
-- Reply 2 asks for a diag log, and the **order of his actions matters** — only the
-  first twelve mouse reports are logged. If he drives the mouse around before
-  downloading, the log will hold the wrong twelve. That instruction is load-bearing.
+- Reply 2's mouse paragraph was **rewritten after the fix went in**. The first
+  version said the old code decoded movement into "numbers in the thousands"; the
+  host harness proved that wrong. What actually happens on a 16-bit mouse is that Y
+  comes out ~16x too large while X is very nearly right by coincidence, and the 16x
+  vertical gain is what pins the cursor to the top edge. The sharper version is both
+  truer and more convincing, so the reply now leads with the fix rather than asking
+  for a log.
+- **The 60m label still needs his log** — that one is not diagnosed, only narrowed
+  to "the radio reported the name as 0".
 
 ---
 
@@ -73,37 +79,51 @@ A diagnostic log covering a few of these clicks would help too. Files ->
 
 Samuel — taking these in turn.
 
-**The Bluetooth mouse.** I think I know what this is, and your description is what
-convinced me. BLE mice do not all send the same report format. The Tab5 currently
-assumes one layout for any report of five bytes or more — the one I captured off a
-Logitech M240 here, which packs X and Y into twelve bits each and shares a byte
-between them. If your mouse uses sixteen-bit movement values instead, which is the
-other common format, that layout decodes them into numbers in the thousands. The
-cursor position is clamped to the screen, so the result is exactly what you saw:
-uncontrollable sideways movement, and vertically pinned against the top edge. Your
-"it worked in X and Y for a short period" fits too — the mouse very likely started
-in the simple boot format and switched to its own once it was fully connected.
+**The Bluetooth mouse.** Found it, and it is fixed on my bench. Your description
+is what identified it, down to the detail about the cursor sitting at the top.
 
-The build you already have logs the raw bytes your mouse sends, so I can read the
-real format off your log rather than guessing. There is one catch: it only records
-the first twelve reports. So please do it in this order — connect the mouse, then
-move it slowly left, then right, then up, then down, and *then* download
-Files -> "Diagnostic download" and send me qmx-log.txt. If you drive it around
-first, the twelve reports in the log will be the wrong twelve.
+BLE mice do not agree on a byte layout for movement. The Tab5 was assuming one for
+any report of five bytes or more — the one I captured off a Logitech M240 here,
+which packs X and Y into twelve bits each and shares a byte between them. If your
+mouse sends sixteen-bit movement instead, which is the other common choice, that
+assumption reads Y four bits early: it picks up Y's low byte shifted up by four,
+with a nibble of X leaking into the bottom bits. The arithmetic works out to Y being
+about **sixteen times too large**, while X comes out very nearly correct by
+coincidence.
 
-On speed: there is currently no sensitivity adjustment at all — one unit of
-movement from the mouse is one pixel on the screen. I would rather fix the decoding
-first, because I suspect most of what you are calling "uncontrollably fast" is the
-misreading rather than genuine sensitivity. Once it is decoding properly, a
-sensitivity setting is easy and I will add one.
+Sixteen times gain on the vertical is exactly your symptom. Any movement at all
+drives the pointer into the top or bottom edge, where it is clamped and stays — so
+what is left is a cursor that only slides left and right along the very top of the
+screen. The "it worked in X and Y for a short period" fits too: the mouse most
+likely started in the simple boot format and switched to its own once it was fully
+connected.
+
+The fix is to stop assuming. Every HID mouse publishes a descriptor saying exactly
+where X, Y and the wheel sit and how wide they are; the Tab5 was already reading
+that descriptor and throwing it away, logging only how many bytes it was. It now
+parses it and decodes accordingly, so this should work on your mouse and on models
+neither of us has. I have tested the parser against three real descriptors,
+including the two byte-for-byte captures from the mouse here, but I cannot test it
+against *yours* — so if the pointer still misbehaves, one diagnostic log will now
+tell me everything: it prints the descriptor as hex and the layout it derived from
+it.
+
+On speed: there is no sensitivity adjustment at all today — one unit of movement
+from the mouse is one pixel on the screen. I suspect most of what you are calling
+"uncontrollably fast" was the misreading rather than real sensitivity, so I would
+like you to try it decoded properly first. If it is still too quick after that, say
+so and I will add the setting; it is easy, I just do not want to add a knob to
+compensate for a bug.
 
 **60m showing as "0m".** The browser prints whatever name the Tab5 gives it with an
 "m" after it, so the Tab5 is reporting that band's name as "0" rather than "60".
 Those names are not built into my firmware — they are read out of your radio's own
 band table over CAT, one slot at a time, and the length of each name is worked out
-from the reply. My bench radio reports "60" correctly, so I cannot reproduce it,
-but the same diag log will show me the exact line for every band slot your radio
-answered with. One log settles both this and the mouse.
+from the reply. My bench radio reports "60" correctly, so I cannot reproduce it —
+but the Tab5 logs the name it got for every band slot, so a diagnostic log will show
+me exactly what your radio answered. Files -> "Diagnostic download", and send me
+qmx-log.txt whenever it is convenient. This is the one item on your list I have not
+been able to get to the bottom of from here.
 
 **CW decode.** Working as built, I am afraid — it is not in any release. What you
 read is the roadmap. The QMX+ decodes internally and mirroring that over CAT is the

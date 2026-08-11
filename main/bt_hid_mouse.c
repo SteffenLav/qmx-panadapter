@@ -54,11 +54,19 @@
 
 #include <string.h>
 
+#include "hid_report_map.h"   // parse the mouse's own report descriptor
+
 static const char *TAG = "btmouse";
 
 // HID over GATT. A mouse advertises this in its service-UUID list; it is what
 // separates "a mouse" from every phone and earbud in a hotel in Taipei.
 #define BLE_SVC_HID_UUID16 0x1812
+
+// The layout of this mouse's movement reports, parsed from its own HID Report Map
+// rather than assumed. Cleared on every disconnect: the next mouse to connect may
+// be a different model, and a stale layout is worse than no layout because it looks
+// authoritative. See hid_report_map.h for the whole story.
+static hid_mouse_layout_t s_layout;
 
 static bool s_started;
 static int  s_seen;          // devices reported this scan, for a one-line summary
@@ -303,6 +311,10 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
                  s_enc_us ? (long long)((esp_timer_get_time() - s_enc_us) / 1000000) : -1);
         s_enc_us = 0;
         s_connected = false;
+        // Forget the report layout: the next mouse to connect may be a different
+        // model, and a stale layout is worse than none because it looks
+        // authoritative. It is re-read from the descriptor on every connection.
+        s_layout.valid = false;
         // Clear the IN-PROGRESS flag too. A connection attempt that fails to
         // establish (HCI 0x3E, reason 574 here) arrives as DISCONNECT, NOT as
         // CONNECT-with-error - so this path used to leave s_connecting set
@@ -476,6 +488,43 @@ static int hid_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
         return 0;
     }
     ESP_LOGI(TAG, "%s read OK (%u bytes)", what, OS_MBUF_PKTLEN(attr->om));
+
+    // THE REPORT MAP IS THE ANSWER, AND WE USED TO THROW IT AWAY.
+    //
+    // This handler logged the length and dropped the bytes, while handle_report()
+    // guessed the layout from one hardware capture. The descriptor states it: which
+    // report ID carries movement, and at what bit offset and width X, Y and the
+    // wheel sit. Parsing it is why a mouse that packs 16-bit movement now works
+    // instead of decoding to a Y sixteen times too large (Samuel W7STF).
+    if (what && strcmp(what, "Report Map") == 0) {
+        uint8_t desc[256];
+        uint16_t n = OS_MBUF_PKTLEN(attr->om);
+        if (n > sizeof desc) n = sizeof desc;
+        if (os_mbuf_copydata(attr->om, 0, n, desc) == 0) {
+            // Log it as hex regardless of whether the parse succeeds: on a mouse
+            // this does not handle, that dump in a field diag log is the only way
+            // to find out why - and it is read ONCE per connection, not per report.
+            char hex[3 * 64 + 8];
+            int  used = 0;
+            for (uint16_t i = 0; i < n && used < (int)sizeof hex - 4; i++)
+                used += snprintf(hex + used, sizeof hex - used, "%02x ", desc[i]);
+            ESP_LOGI(TAG, "report map [%u]: %s%s", n, hex, n > 64 ? "..." : "");
+
+            hid_mouse_layout_t L;
+            if (hid_report_map_parse(desc, n, &L)) {
+                s_layout = L;
+                ESP_LOGI(TAG, "report layout: id=%u  X @bit%u/%ub  Y @bit%u/%ub  "
+                              "wheel %s  payload %u bits",
+                         (unsigned)L.report_id, (unsigned)L.x_bit, (unsigned)L.x_bits,
+                         (unsigned)L.y_bit, (unsigned)L.y_bits,
+                         L.have_wheel ? "yes" : "no", (unsigned)L.total_bits);
+            } else {
+                ESP_LOGW(TAG, "report map not understood - falling back to the "
+                              "fixed layouts; send the hex above if the pointer "
+                              "misbehaves");
+            }
+        }
+    }
     return 0;
 }
 
@@ -565,6 +614,33 @@ static void handle_report(const uint8_t *d, int len)
         ESP_LOGI(TAG, "report[%d]: %s", len, hex);
     }
     if (len < 3) return;
+
+    // PREFERRED PATH: the layout this mouse declared in its own Report Map.
+    //
+    // Everything below is fallback for a descriptor we could not read or parse. It
+    // is kept because it is known to work on at least one real mouse, but it is a
+    // guess and this is not.
+    if (s_layout.valid) {
+        const uint8_t *p = (const uint8_t *)d;
+        int plen = len;
+        // A descriptor that declares a report ID means the byte is on the wire.
+        // Reports for OTHER IDs (a consumer-control page, a battery report) share
+        // this notification and must be ignored rather than decoded as movement.
+        if (s_layout.report_id != 0) {
+            if (plen < 1 || p[0] != s_layout.report_id) return;
+            p++; plen--;
+        }
+        int x = hid_field_signed(p, (size_t)plen, s_layout.x_bit, s_layout.x_bits);
+        int y = hid_field_signed(p, (size_t)plen, s_layout.y_bit, s_layout.y_bits);
+        // Buttons are the low bits of the first byte on every mouse I have seen,
+        // and the descriptor's button range is not parsed, so this stays as it was.
+        hid_cursor_apply(x, y, p[0]);
+        if (s_layout.have_wheel) {
+            int w = hid_field_signed(p, (size_t)plen, s_layout.wheel_bit, s_layout.wheel_bits);
+            if (w) hid_cursor_add_wheel(w);
+        }
+        return;
+    }
 
     if (len >= 5) {
         // 12-BIT PACKED report - what a Logitech M240 actually sends, captured
