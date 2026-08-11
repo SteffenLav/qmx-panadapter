@@ -144,6 +144,36 @@ static volatile bool s_user_paused = false;
 // poll task, which owns the pipe.
 static volatile bool s_pending_iq_reassert = false;
 
+// ---- RIT (receiver incremental tuning) -------------------------------------
+//
+// Unlike XIT - which the QMX simply does not have, hence the split dance for the
+// CW transmit offset - RIT is real and present in BOTH 1_03 and 1_04, so no
+// firmware gate is needed. RT sets the mode, RU/RD the offset, RC clears.
+//
+// ⚠ RU/RD ARE NOT RELIABLY ABSOLUTE. The CAT manual says they set the offset
+// absolutely OR move it relatively, depending on the QMX's own System Config
+// setting "CAT RU and RD" - which we cannot read and have no business changing.
+// So every write goes RC; FIRST (clear to zero, unambiguous in both firmwares)
+// and THEN a single RU/RD, which lands on exactly the value we asked for under
+// EITHER setting. Never send RU/RD without the RC in front of it.
+//
+// We own the value rather than polling IF; for it - same reasoning as the pinned
+// SSB filter width: the display has to know the offset every frame, and a poll
+// would be both slower and a fifth thing competing for this pipe.
+static volatile int  s_pending_rit_hz  = 0;
+static volatile bool s_rit_pending     = false;
+static int           s_rit_hz          = 0;   // what we last commanded
+
+void cat_request_rit_hz(int hz)
+{
+    if (hz >  CAT_RIT_MAX_HZ) hz =  CAT_RIT_MAX_HZ;
+    if (hz < -CAT_RIT_MAX_HZ) hz = -CAT_RIT_MAX_HZ;
+    s_pending_rit_hz = hz;
+    s_rit_pending    = true;
+}
+
+int cat_get_rit_hz(void) { return s_rit_hz; }
+
 void cat_request_mode(const char *mode)
 {
     s_pending_mode_digit = hamlib_mode_to_digit(mode);
@@ -928,6 +958,34 @@ static void poll_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
         }
+        if (s_rit_pending) {
+            s_rit_pending = false;
+            int hz = s_pending_rit_hz;
+            // RC; first, ALWAYS - see the note on s_pending_rit_hz. It also
+            // covers hz == 0 on its own, which is how RIT gets switched off.
+            char cmd[24];
+            int n = snprintf(cmd, sizeof cmd, "RC;");
+            esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd,
+                                                          (size_t)n, 200);
+            if (err == ESP_OK && hz != 0) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+                unsigned mag = (unsigned)(hz < 0 ? -hz : hz);
+                n = snprintf(cmd, sizeof cmd, "%s%03u;", hz > 0 ? "RU" : "RD", mag);
+                err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd,
+                                                    (size_t)n, 200);
+                vTaskDelay(pdMS_TO_TICKS(20));
+                n = snprintf(cmd, sizeof cmd, "RT1;");
+                cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd, (size_t)n, 200);
+            } else if (err == ESP_OK) {
+                vTaskDelay(pdMS_TO_TICKS(20));
+                n = snprintf(cmd, sizeof cmd, "RT0;");
+                cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd, (size_t)n, 200);
+            }
+            if (err == ESP_OK) s_rit_hz = hz;
+            ESP_LOGI(TAG, "RIT -> %+d Hz (%s)", hz, err == ESP_OK ? "ok" : "fail");
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
         uint32_t rg_p1 = s_pending_rf_gain_p1;
         if (rg_p1 != 0) {
             s_pending_rf_gain_p1 = 0;
@@ -1385,6 +1443,20 @@ esp_err_t cat_set_frequency(uint32_t freq_hz)
         return err;
     }
     ESP_LOGI(TAG, "Sent: %s (target %lu Hz)", cmd, (unsigned long)freq_hz);
+
+    // RETUNING CLEARS RIT. It is per-caller by nature (Roy KI0ER engages it for
+    // one station and drops it for the next), and RIT left set across a retune is
+    // a classic way to end up listening somewhere you did not intend - the
+    // display would be offset from the dial for a reason nobody remembers. Every
+    // way the frequency can move comes through here: a panadapter tap, a spot, a
+    // memory recall, a band change, the web UI.
+    //
+    // Queued rather than sent inline: this function is called from the LVGL and
+    // HTTP threads, and only the poll task may write to the pipe.
+    if (s_rit_hz != 0 || s_rit_pending) {
+        ESP_LOGI(TAG, "retune -> clearing RIT (was %+d Hz)", s_rit_hz);
+        cat_request_rit_hz(0);
+    }
     return ESP_OK;
 }
 

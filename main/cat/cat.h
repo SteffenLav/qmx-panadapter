@@ -260,6 +260,26 @@ int cat_get_af_gain(void);
 #define CAT_RF_GAIN_DB_MAX  99
 void cat_request_rf_gain(uint8_t db);
 
+// ---- RIT (receiver incremental tuning) -------------------------------------
+//
+// Move the RECEIVE frequency without moving transmit - the thing you want when a
+// caller is answering you slightly off your frequency (Roy KI0ER: "a Sasquatch
+// tone below my centre frequency or a mosquito above me"). Positive = receive
+// HIGHER. Real RIT, present in both 1_03 and 1_04, so unlike the CW transmit
+// offset this needs no split trickery and no firmware gate.
+//
+// Writes are deferred to the poll task like every other CAT write, and the
+// sequence is deliberately RC; then RU/RD - see cat.c, because RU/RD alone are
+// absolute or relative depending on a QMX menu setting we cannot read.
+//
+// cat_get_rit_hz() returns what we last commanded, not a reading from the radio:
+// the display needs it every frame (see ui_get_if_offset_hz), and it is our own
+// value, so polling for it would be slower and would add a fifth competitor for
+// this pipe.
+#define CAT_RIT_MAX_HZ  500   /* plenty for pulling in an off-frequency caller */
+void cat_request_rit_hz(int hz);
+int  cat_get_rit_hz(void);
+
 /* Ask the radio for the active band's RF gain; answer lands asynchronously in
  * cat_get_rf_gain(). Same drawer-open read-back reasoning as AF gain, with an
  * extra reason: RF gain is PER BAND, so the stored value goes stale the moment

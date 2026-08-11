@@ -84,6 +84,26 @@ int ui_get_if_offset_hz(void)
     const char *m = cat_get_mode_str();
     if (m && strcmp(m, "CW") == 0)
         total_hz += cat_get_cw_offset_hz() + (int)s_cw_cal_hz;
+
+    // RIT: keep the signals STILL (Bill Carver's requirement - with RIT engaged
+    // the display must not slide, it should mark where you are listening).
+    //
+    // Derivation, because a sign error here moves everything by TWICE the offset
+    // instead of holding it steady, and this file has a history of exactly that:
+    //   - RIT +R means the receiver tunes R Hz HIGHER, so its LO moves up by R.
+    //   - A signal at absolute frequency S therefore lands R Hz LOWER in the
+    //     baseband than it did before.
+    //   - This function answers "which baseband frequency does the DIAL reading
+    //     map to". The dial still reads F, and the signal at F is now at
+    //     baseband IF_OFFSET - R.
+    // Hence MINUS. The frequency actually being listened to is F + R, which is
+    // what the RIT marker shows.
+    //
+    // ⚠ NOT YET VERIFIED ON A SIGNAL - no antenna here. The falsifying test is
+    // one observation: engage RIT +200 on a steady carrier. Correct => the trace
+    // does not move and the marker appears 200 Hz up. Inverted => the trace jumps
+    // 400 Hz. If it jumps, flip this one operator to +.
+    total_hz -= cat_get_rit_hz();
     return total_hz;
 }
 
