@@ -3365,6 +3365,15 @@ addTuneListeners("wf-overlay",   () => spec.getBoundingClientRect(), false); // 
    WebSocket / spectrum rendering
    ===================================================================== */
 const FRAME_TYPE_SPECTRUM = 0x01;
+/* The device serves exactly ONE live spectrum client and the newest connection wins.
+   It now tells the loser so, instead of just closing the socket - see
+   WS_FRAME_TYPE_TAKEOVER in webserver_ws.c. Without that, a second browser (or a
+   second TAB, or a phone left open on the shack shelf) makes both ends reconnect
+   every couple of seconds forever, and all either one shows is "reconnecting", which
+   reads as a network fault. It cost an hour of chasing a waterfall bug that was
+   really two browsers fighting: 340 takeovers in one session. */
+const FRAME_TYPE_TAKEOVER = 0x02;
+let wsDisplaced = false;
 const HEADER_LEN = 2;
 
 let specPxW = SPEC_W, specPxH = 200;
@@ -4140,6 +4149,31 @@ function resumeWs() {
   if (!ws) connectWs();
 }
 
+/* Displaced by another browser. Stand down rather than fight for the slot, say so
+   where the operator is already looking for connection state, and make that text the
+   way back - one click, no menu. The spectrum and waterfall simply stop, which is
+   honest: this browser is no longer receiving anything. */
+function wsTakenOver() {
+  wsDisplaced = true;
+  fpsEl.textContent = "another browser took the live view - click to take it back";
+  fpsEl.classList.add("bad");
+  fpsEl.style.cursor = "pointer";
+  fpsEl.title = "The Tab5 streams the spectrum to one browser at a time. " +
+                "Another browser, tab or device connected and took over. " +
+                "Click here to bring it back to this one - the other will then " +
+                "show this same message.";
+}
+
+function wsReclaim() {
+  if (!wsDisplaced) return;
+  wsDisplaced = false;
+  fpsEl.style.cursor = "";
+  fpsEl.title = "";
+  fpsEl.textContent = "reconnecting";
+  connectWs();
+}
+fpsEl.addEventListener("click", wsReclaim);
+
 function connectWs() {
   const url=(location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws";
   ws=new WebSocket(url);
@@ -4147,6 +4181,7 @@ function connectWs() {
   ws.onopen=()=>{ fpsEl.textContent="connected"; fpsEl.classList.remove("bad"); };
   ws.onmessage=(ev)=>{
     const buf=new Uint8Array(ev.data);
+    if (buf.length && buf[0]===FRAME_TYPE_TAKEOVER) { wsTakenOver(); return; }
     if (buf.length<HEADER_LEN+SPEC_W) return;
     if (buf[0]!==FRAME_TYPE_SPECTRUM) return;
     // byte[1] = zoom-FFT decimation factor (1 = base spectrum, 2/4/8/16 = zoom-FFT active)
@@ -4163,7 +4198,13 @@ function connectWs() {
       frameCount=0; lastFpsAt=now;
     }
   };
-  ws.onclose=()=>{ fpsEl.textContent="reconnecting"; fpsEl.classList.add("bad"); if(!wsSuppressReconnect) setTimeout(connectWs,2000); };
+  ws.onclose=()=>{
+    /* A displaced client must NOT retry: retrying is what creates the ping-pong.
+       Leave the message from wsTakenOver() in place and wait for the operator. */
+    if (wsDisplaced) return;
+    fpsEl.textContent="reconnecting"; fpsEl.classList.add("bad");
+    if(!wsSuppressReconnect) setTimeout(connectWs,2000);
+  };
   ws.onerror=()=>{};
 }
 /* =====================================================================

@@ -11,6 +11,10 @@
 #include "dsp.h"
 
 #define WS_FRAME_TYPE_SPECTRUM  0x01
+// Sent to a client that is about to be displaced by a newer one, so it can stop
+// reconnecting and say what happened instead of flapping. There is only ever ONE
+// live spectrum client - see the takeover note in ws_uri_handler().
+#define WS_FRAME_TYPE_TAKEOVER  0x02
 // ~10 fps. NOTE (2026-07-14): halving this to 5 fps was tried as a fix for a
 // browser-stream stutter + a core-0-saturation reboot, on the theory that the
 // WS TX path (httpd_ws_send_frame_async → LWIP/esp_hosted, core 0) dominated
@@ -108,6 +112,30 @@ static esp_err_t ws_uri_handler(httpd_req_t *req)
     // (LWIP_MAX_SOCKETS exhausted) and the server stops accepting connections.
     if (s_session_active && s_ws_fd != fd && s_ws_fd >= 0) {
         ESP_LOGW(TAG, "New client fd=%d takes over stale fd=%d (closing stale)", fd, s_ws_fd);
+        // TELL THE DISPLACED CLIENT WHY, before closing it. Without this the old
+        // browser only sees its socket close, retries after 2 s, takes the slot
+        // back, and the two ping-pong forever - 340 takeovers in one session while
+        // both showed nothing but "reconnecting", which reads as a network fault and
+        // sent an hour of debugging in the wrong direction. A browser that knows it
+        // was displaced can stand down and say so.
+        //
+        // One byte, sent synchronously to the OTHER fd before the close is queued. A
+        // browser that predates this frame type ignores any frame whose first byte
+        // is not WS_FRAME_TYPE_SPECTRUM, so it is backward compatible; the failure
+        // mode if the stale socket is genuinely dead is that this send fails and the
+        // close proceeds exactly as before.
+        {
+            uint8_t bye = WS_FRAME_TYPE_TAKEOVER;
+            httpd_ws_frame_t f = {
+                .final = true, .type = HTTPD_WS_TYPE_BINARY,
+                .payload = &bye, .len = 1,
+            };
+            httpd_handle_t h = s_server ? s_server : req->handle;
+            esp_err_t terr = httpd_ws_send_frame_async(h, s_ws_fd, &f);
+            if (terr != ESP_OK)
+                ESP_LOGD(TAG, "takeover notice to fd=%d failed: %s (closing anyway)",
+                         s_ws_fd, esp_err_to_name(terr));
+        }
         httpd_sess_trigger_close(s_server ? s_server : req->handle, s_ws_fd);
     }
     s_ws_fd = fd;
