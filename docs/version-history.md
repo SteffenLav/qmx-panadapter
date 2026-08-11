@@ -1455,5 +1455,46 @@ Nothing else changed. If you do not use a Bluetooth mouse there is no reason to
 install this.
 
 
+### In progress — v1.8.0 (unreleased)
+
+**Not shipped yet. Written as work lands so the release notes are not reconstructed from memory at cut time.**
+
+- **SOTA spots.** Summit activations now appear on the spectrum alongside POTA, RBN
+  and the DX cluster, fetched from [spothole.app](https://spothole.app) — Ian Renton
+  M0TRT's aggregator, used with his permission. **Off by default**: it is a
+  volunteer-run server, so nobody polls it who has not asked. Fetched once every two
+  minutes, and when it is unreachable the spots already on screen simply stay until
+  they age out — no banner, no error, nothing to dismiss.
+  - Two silent bugs fell out of it, both older than this feature: a 12-character
+    portable callsign (`HB0/HB9BXQ/P`) lost its last character, and a 10-character
+    summit reference (`EA1/AT-125`) was logged as `EA1/AT-12` — a *different*
+    summit. DX-cluster spots were affected too.
+  - A chase is now logged with the right award programme: a summit worked via a
+    cluster spot no longer goes into the log as POTA.
+- **Fox/Hound (DXpedition) mode — hound side.** See the FT8 Transmit chapter. Off /
+  Guided / Automatic. The Tab5 calls from above 1000 Hz, moves onto the Fox's own
+  frequency when answered, and stops on its `RR73` without sending a `73`.
+  Recognises a Fox by watching it work a queue rather than by frequency alone, and
+  the transmit window says "as HOUND — will QSY onto NNN Hz" before you commit.
+  **Validated in simulation only — no real DXpedition has seen it yet.** The Tab5
+  cannot act as a Fox: that needs five simultaneous signals and the QMX is keyed one
+  tone at a time.
+- **Mouse and pointer.** A proper arrow instead of a dot, which turns **bright
+  green** over anything a click would act on — a touch UI has no hover states, so
+  what is live was previously invisible to a mouse user. The edge grips accept a
+  click (a pointer cannot swipe), and the settings drawer and Memory Channels grew
+  handles you can simply tap. The scroll wheel no longer jams when the pointer
+  passes over a dropdown.
+- **Spot mode filter.** "Mode filter the spots" hides spots you cannot work in the
+  mode you are in — tapping a spot sets the mode as well as the frequency, so an
+  unfiltered lane could drop a CW operator into FT8.
+- **CW transmit offset narrowed to ±300 Hz**, and a stored wider value from v1.7.1
+  is clamped on the next start.
+- **Fixes.** The flash-persisted diagnostic log could stop writing silently and stay
+  stopped (it now reports the failure and recovers by rotating); the "power-cycle the
+  QMX" pop-up is gone, since it fired at a radio that was merely switched off and the
+  screen already says so; the "Now turn on or reboot your QMX" prompt now stands down
+  whenever any window is open instead of drawing across it.
+
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
 
