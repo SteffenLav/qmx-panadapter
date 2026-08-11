@@ -121,6 +121,13 @@ void ui_help_overlay_changed(void);
 // firmware string directly.
 void ui_notify_qmx_fw_known(void);
 
+// Called from cat_set_frequency() when a retune clears RIT, so tap-to-RIT mode
+// stands down with the offset it was setting. Without it the operator's next tap
+// on the spectrum would silently set an offset instead of tuning — a mode they
+// did not ask to still be in. Flag write only, safe from any task; the pill's own
+// timer repaints. See the RIT block in ui.c.
+void ui_rit_notify_retune(void);
+
 // Ask for the Panadapter/FT8 view to change, from any task. Thread-safe: sets a
 // flag that the LVGL thread drains within ~1 s (the switch spawns/stops ft8_task
 // and moves widgets, so it cannot run on the caller's task). Used by the web

@@ -1456,6 +1456,7 @@ esp_err_t cat_set_frequency(uint32_t freq_hz)
     if (s_rit_hz != 0 || s_rit_pending) {
         ESP_LOGI(TAG, "retune -> clearing RIT (was %+d Hz)", s_rit_hz);
         cat_request_rit_hz(0);
+        ui_rit_notify_retune();   // and tap-to-RIT mode stands down with it
     }
     return ESP_OK;
 }

@@ -1962,6 +1962,35 @@ static uint8_t *s_wf_canvas_buf = NULL;
 static lv_obj_t *s_wf_cursor = NULL;  // cyan tune cursor OVERLAY over the waterfall (not drawn into the
                                       // bitmap — that trailed as rows scrolled); a single current-position line
 
+// ---- RIT (receiver incremental tuning), TODO #113 ---------------------------
+//
+// Tap-to-RIT, the shape three operators converged on in the groups.io thread:
+// the pill ARMS a mode, and while armed a tap on the spectrum or waterfall sets
+// RIT onto whatever was tapped INSTEAD of retuning. That is Roy KI0ER's actual
+// job — he is running a frequency, a caller answers slightly off it, and he
+// needs to pull them in and drop them again without transmit ever moving.
+//
+// Deliberately a MODE rather than a one-shot: while running, the next caller is
+// a different offset, so a second tap should move RIT onto THEM rather than
+// force a trip back to the pill. The pill is therefore the only way out, which
+// is why it always shows the live offset — a mode you cannot see is a trap.
+//
+// The offset itself is not stored here: cat_get_rit_hz() owns it (what we last
+// commanded), so the pill, the marker and ui_get_if_offset_hz() cannot drift
+// apart. Nothing about RIT is persisted to NVS on purpose — it is per-caller,
+// and restoring one at boot means listening off-frequency for a reason nobody
+// remembers setting.
+static bool      s_rit_armed     = false;
+static lv_obj_t *s_rit_pill      = NULL;
+static lv_obj_t *s_rit_pill_lbl  = NULL;
+static lv_obj_t *s_rit_wf_marker = NULL;  // RIT position over the waterfall, same overlay
+                                          // reasoning (and same colour) as the spectrum line
+// Magenta: distinct from every other line on this display — green trace, gold
+// VFO/transmit, lavender passband, cyan tune cursor, orange spot ticks. The pill
+// uses the same hex when engaged so the eye connects the two without a legend.
+#define UI_RIT_COLOR_HEX  0xFF44DD
+#define UI_RIT_COLOR_565  0xFA3B    /* UI_RIT_COLOR_HEX in RGB565 */
+
 // Spectrum dB labels (Phase 5.4)
 static lv_obj_t *s_db_max_label = NULL;
 static lv_obj_t *s_db_min_label = NULL;
@@ -2385,6 +2414,100 @@ static void qmx_wait_poll_cb(lv_timer_t *t)
         }
     }
     lv_obj_move_foreground(s_qmx_wait_overlay);  // keepalive against later modals
+}
+
+// Repaint the RIT pill from the live state, and decide whether it should be on
+// screen at all. Single painter on purpose: the pill has three appearances and
+// four things can change them (the pill itself, a spectrum tap, a retune from
+// anywhere, a view switch), so anything that changes state just changes state and
+// leaves the looks to here.
+//
+// Change-detected down to the label text: this runs on a timer, and an
+// unconditional lv_label_set_text() invalidates the object every tick for a
+// string that is usually identical.
+static void rit_pill_sync(void)
+{
+    if (!s_rit_pill) return;
+
+    // Stand down for anything that covers this corner. The settings drawer is
+    // 520 px of the right-hand side, so it lands squarely on top of the pill, and
+    // this pill is created LAST (it has to out-rank the top-bar zoom hit zone it
+    // sits inside) which puts it above every window built during ui_init. Same
+    // reasoning and the same test as the QMX-wait prompt above — see CLAUDE.md on
+    // LVGL hit-testing children in reverse creation order.
+    //
+    // Hidden in FT8 mode as well: RIT is a running-a-frequency control for CW and
+    // SSB, and the FT8 view owns the screen there.
+    bool want_hidden = (ui_mode_get() == UI_MODE_FT8) || s_drawer_open ||
+                       reader_view_is_active() || help_triage_is_open() ||
+                       any_modal_open();
+    bool hidden = lv_obj_has_flag(s_rit_pill, LV_OBJ_FLAG_HIDDEN);
+    if (want_hidden != hidden) {
+        if (want_hidden) lv_obj_add_flag(s_rit_pill, LV_OBJ_FLAG_HIDDEN);
+        else             lv_obj_clear_flag(s_rit_pill, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (want_hidden) return;
+
+    int  rit = cat_get_rit_hz();
+    char txt[16];
+    uint32_t col;
+    if (rit != 0) {
+        // Engaged: the offset in the pill's own colour, which is the marker's
+        // colour too. Signed always — "RIT 250" would not say which side.
+        snprintf(txt, sizeof txt, "RIT %+d", rit);
+        col = UI_RIT_COLOR_HEX;
+    } else if (s_rit_armed) {
+        // Armed but nothing set yet: say what it is waiting for, in the amber this
+        // UI already uses for "armed" on the FT8 transmit status.
+        snprintf(txt, sizeof txt, "RIT: tap");
+        col = 0xFFA040;
+    } else {
+        snprintf(txt, sizeof txt, "RIT");
+        col = UI_COLOR_TEXT_SECONDARY;
+    }
+
+    const char *cur = lv_label_get_text(s_rit_pill_lbl);
+    if (!cur || strcmp(cur, txt) != 0) lv_label_set_text(s_rit_pill_lbl, txt);
+
+    static uint32_t s_last_col = 0;
+    if (col != s_last_col) {
+        s_last_col = col;
+        lv_obj_set_style_text_color(s_rit_pill_lbl, lv_color_hex(col), 0);
+        lv_obj_set_style_border_color(s_rit_pill, lv_color_hex(col), 0);
+    }
+}
+
+static void rit_pill_tick_cb(lv_timer_t *t) { (void)t; rit_pill_sync(); }
+
+// The pill is the arm/clear control. Three-way, and the order of the tests is
+// the behaviour: if RIT is engaged, the operator wants OUT (back to the run
+// frequency) whether or not the mode stays armed — so clear and disarm together,
+// which is what the operator asked for. Otherwise it toggles the mode.
+static void rit_pill_cb(lv_event_t *e)
+{
+    (void)e;
+    if (cat_get_rit_hz() != 0) {
+        cat_request_rit_hz(0);
+        s_rit_armed = false;
+        ESP_LOGI(TAG, "RIT: cleared and disarmed from the pill");
+    } else {
+        s_rit_armed = !s_rit_armed;
+        ESP_LOGI(TAG, "RIT: %s", s_rit_armed ? "armed - a tap now sets RIT, not the dial"
+                                             : "disarmed");
+    }
+    rit_pill_sync();   // immediate, not on the next tick: this was a button press
+}
+
+void ui_rit_notify_retune(void)
+{
+    // cat_set_frequency() clears RIT on every retune, so the MODE has to stand
+    // down with it. Leaving it armed after a band change or a spot click would
+    // mean the operator's next tap on the spectrum silently sets an offset
+    // instead of tuning — a mode they did not ask to still be in.
+    //
+    // Flag write only. This is called from the CAT poll task and the HTTP task as
+    // well as the LVGL thread; the pill's own timer does the repainting.
+    s_rit_armed = false;
 }
 
 void ui_notify_qmx_fw_known(void)
@@ -3095,6 +3218,23 @@ static void build_waterfall(lv_obj_t *parent)
     lv_obj_clear_flag(s_wf_cursor, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(s_wf_cursor, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_wf_cursor, LV_OBJ_FLAG_HIDDEN);
+
+    // RIT marker over the waterfall — same overlay reasoning as the tune cursor
+    // above (a line drawn into the bitmap would trail as rows scroll), and the same
+    // magenta as the spectrum's dashed RIT line. Positioned by ui_push_spectrum in
+    // the same pass that draws that line. Semi-transparent because unlike the tune
+    // cursor this one STAYS up for as long as RIT is engaged, and it must not hide
+    // a caller sitting underneath it.
+    s_rit_wf_marker = lv_obj_create(s_waterfall_obj);
+    lv_obj_set_size(s_rit_wf_marker, 2, WATERFALL_H);
+    lv_obj_set_style_bg_color(s_rit_wf_marker, lv_color_hex(UI_RIT_COLOR_HEX), 0);
+    lv_obj_set_style_bg_opa(s_rit_wf_marker, LV_OPA_60, 0);
+    lv_obj_set_style_border_width(s_rit_wf_marker, 0, 0);
+    lv_obj_set_style_radius(s_rit_wf_marker, 0, 0);
+    lv_obj_set_style_pad_all(s_rit_wf_marker, 0, 0);
+    lv_obj_clear_flag(s_rit_wf_marker, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(s_rit_wf_marker, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_rit_wf_marker, LV_OBJ_FLAG_HIDDEN);
 }
 
 // ==== Bottom status bar ====
@@ -3963,6 +4103,47 @@ void ui_init(lv_display_t *disp)
             lv_obj_move_foreground(hit);
             if (i < N_TOPBAR_HIT_ZONES) s_topbar_hit_zones[i] = hit;
         }
+    }
+
+    // RIT pill (TODO #113). Built HERE, immediately after the top-bar hit zones,
+    // and that position is the whole trick: it sits inside the Zoom zone's
+    // footprint, and LVGL hit-tests a parent's children in reverse creation order
+    // without comparing areas, so being created later is what lets the pill take
+    // its own taps while the rest of that zone still opens the zoom dropdown.
+    //
+    // Placement, measured off a real screenshot rather than guessed: the top bar
+    // has no contiguous gap wider than ~45 px, so a new control has to take a
+    // corner of the spectrum. This corner is the cheapest one on the screen —
+    // already non-tunable (the Zoom hit zone covers x>=1090 down to y=200), above
+    // where spot labels start (spots_lane_top_hit_y), clear of the "+30" dB scale
+    // label at x>=1236, and in the strip of sky only a signal above about +25 dB
+    // ever reaches.
+    {
+        s_rit_pill = lv_obj_create(scr);
+        lv_obj_set_size(s_rit_pill, 140, 52);
+        lv_obj_set_pos(s_rit_pill, 1088, 66);
+        lv_obj_set_style_bg_color(s_rit_pill, lv_color_hex(0x101820), 0);
+        lv_obj_set_style_bg_opa(s_rit_pill, LV_OPA_80, 0);   // slightly see-through: it is over the trace
+        lv_obj_set_style_border_color(s_rit_pill, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_set_style_border_width(s_rit_pill, 2, 0);
+        lv_obj_set_style_radius(s_rit_pill, 8, 0);
+        lv_obj_set_style_pad_all(s_rit_pill, 0, 0);
+        lv_obj_clear_flag(s_rit_pill, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_add_flag(s_rit_pill, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(s_rit_pill, rit_pill_cb, LV_EVENT_CLICKED, NULL);
+
+        s_rit_pill_lbl = lv_label_create(s_rit_pill);
+        lv_label_set_text(s_rit_pill_lbl, "RIT");
+        lv_obj_set_style_text_font(s_rit_pill_lbl, &lv_font_montserrat_24, 0);
+        lv_obj_set_style_text_color(s_rit_pill_lbl, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+        lv_obj_center(s_rit_pill_lbl);
+
+        // 250 ms, not 1 Hz: the pill is the only readout of a mode that changes
+        // the meaning of a touch, so a stale second of it is a second in which the
+        // screen is lying about what a tap will do. Every tick is a string compare
+        // in the common case.
+        rit_pill_sync();
+        lv_timer_create(rit_pill_tick_cb, 250, NULL);
     }
 
     // Edge-swipe gesture strips are built first (see build_edge_swipe_strips,
@@ -5088,6 +5269,18 @@ void ui_push_spectrum(const float *bins, int n_bins)
     {
         int32_t pb_low_hz, pb_high_hz;
         compute_passband_edges_hz(&pb_low_hz, &pb_high_hz);
+        // The filter follows the RECEIVER, so with RIT engaged the window moves onto
+        // where you are listening. Applied here at the drawing, NOT inside
+        // compute_passband_edges_hz(): that function also feeds the zoom>x1
+        // passband-centring pan, and shifting it there would slide the whole display
+        // when RIT changed — exactly the thing Bill Carver said must not happen.
+        //
+        // It is also the confirmation the feature is for: Roy's caller is "just
+        // outside my passband", and seeing the window arrive on top of them is how
+        // you know the offset landed.
+        int32_t rit_pb_hz = cat_get_rit_hz();
+        pb_low_hz  += rit_pb_hz;
+        pb_high_hz += rit_pb_hz;
         int32_t pan_hz_pb = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
         int32_t span_hz_pb = (int32_t)(48000.0f / s_zoom_factor);
         int edge_x_lo = (int)((int64_t)(pb_low_hz  - pan_hz_pb) * DISPLAY_H_RES / span_hz_pb) + DISPLAY_H_RES / 2;
@@ -5252,9 +5445,12 @@ void ui_push_spectrum(const float *bins, int n_bins)
             faded_pb_color = (r << 11) | (g << 5) | b;
         }
 
-        // Draw passband edges with fade
+        // Draw passband edges with fade. Same RIT shift as the tint they bound —
+        // see the note there for why it is applied at the drawing and not in
+        // compute_passband_edges_hz().
+        int32_t rit_edge_hz = cat_get_rit_hz();
         for (int side = 0; side < 2; side++) {
-            int32_t edge_hz = (side == 0) ? pb_low_hz : pb_high_hz;
+            int32_t edge_hz = ((side == 0) ? pb_low_hz : pb_high_hz) + rit_edge_hz;
             /* Edge frequency in Hz -> screen x, accounting for zoom and pan. */
             int32_t pan_hz = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
             int32_t span_hz_pb = (int32_t)(48000.0f / s_zoom_factor);
@@ -5288,6 +5484,51 @@ void ui_push_spectrum(const float *bins, int n_bins)
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + cx] = center_color;
             }
+        }
+
+        // RIT marker: where the receiver is actually listening (TODO #113, Bill
+        // Carver's requirement). The amber line above keeps meaning the DIAL, which
+        // is where transmit goes — that separation is the whole point of RIT, and
+        // seeing both lines at once is how the operator knows transmit did not
+        // follow the receiver.
+        //
+        // At +R Hz relative to centre, and that sign is not arbitrary: the display
+        // is re-centred on the signal at the dial frequency (ui_get_if_offset_hz
+        // subtracts RIT, which is what holds the trace still), so a signal at
+        // dial+R lands R to the RIGHT of centre. Marker and compensation therefore
+        // share one derivation — if the operator reports the trace jumping instead
+        // of standing still, BOTH flip together, in ui_get_if_offset_hz().
+        //
+        // Dashed, 2 px wide: a solid line reads as another VFO cursor, and this one
+        // is a readout rather than something you tune to. It is deliberately NOT
+        // faded with the passband — while panning, where you are listening is
+        // exactly what you want to keep seeing.
+        int rit_hz_now = cat_get_rit_hz();
+        if (rit_hz_now != 0) {
+            int rx = (int)((int64_t)(rit_hz_now - pan_hz_vfo) * DISPLAY_H_RES / span_hz_vfo)
+                     + DISPLAY_H_RES / 2;
+            if (rx >= 0 && rx < DISPLAY_H_RES) {
+                for (int y = 0; y < SPECTRUM_H; y++) {
+                    if ((y / 6) & 1) continue;   // 6 on, 6 off
+                    px[y * DISPLAY_H_RES + rx] = UI_RIT_COLOR_565;
+                    if (rx + 1 < DISPLAY_H_RES) px[y * DISPLAY_H_RES + rx + 1] = UI_RIT_COLOR_565;
+                }
+            }
+            // Same marker over the waterfall, where the callers you are picking
+            // between actually show up (Michael KZ4LY's flow is a tap on a zoomed
+            // waterfall). An overlay object rather than pixels in the bitmap, for the
+            // reason s_wf_cursor is one: rows scroll, so a drawn line would trail.
+            // Positioned from this same pass so the two can never disagree.
+            if (s_rit_wf_marker) {
+                if (rx >= 0 && rx < DISPLAY_H_RES) {
+                    lv_obj_set_x(s_rit_wf_marker, rx);
+                    lv_obj_clear_flag(s_rit_wf_marker, LV_OBJ_FLAG_HIDDEN);
+                } else {
+                    lv_obj_add_flag(s_rit_wf_marker, LV_OBJ_FLAG_HIDDEN);
+                }
+            }
+        } else if (s_rit_wf_marker && !lv_obj_has_flag(s_rit_wf_marker, LV_OBJ_FLAG_HIDDEN)) {
+            lv_obj_add_flag(s_rit_wf_marker, LV_OBJ_FLAG_HIDDEN);
         }
     }
     // Target cursor: cyan 1-px vertical line at last touched x, ~600 ms
@@ -5811,6 +6052,17 @@ static void touch_event_cb(lv_event_t *e)
                      || strstr(s_current_mode, "DiGi")) snap = 500;
             else if (strstr(s_current_mode, "AM") || strstr(s_current_mode, "FM")) snap = 1000;
             else if (strstr(s_current_mode, "CW")) snap = 10;
+            // Tap-to-RIT overrides the grid, because the two are answering
+            // different questions. The mode grid exists to land the DIAL on a tidy
+            // frequency; RIT is a few-hundred-Hz offset onto one caller's tone,
+            // where tidiness is worth nothing and resolution is everything. Left
+            // alone it would have made the feature useless in the very modes
+            // that snap coarsest: SSB's 250 Hz gives five usable offsets inside
+            // ±500, and DiGi's 500 Hz gives three. CW already snaps to 10.
+            //
+            // The cursor is drawn from this same snap, so the marker still lands
+            // exactly where the line was when the finger lifted.
+            if (s_rit_armed) snap = 10;
             // Snap the absolute target frequency to the grid (e.g. ...200,
             // 300, 400 Hz), not the touch offset — otherwise the grid is
             // shifted by the VFO's own offset from a snap multiple.
@@ -5889,6 +6141,35 @@ static void touch_event_cb(lv_event_t *e)
             return;
         }
         uint32_t target_hz = (uint32_t)s_target_freq_hz;
+
+        // TAP-TO-RIT (TODO #113). While armed, a tap moves the RECEIVE offset onto
+        // what was tapped and leaves the dial — and therefore transmit — exactly
+        // where it is. This is the intercept: it must come before
+        // cat_set_frequency(), which would both move the radio and clear the RIT we
+        // are in the middle of setting.
+        //
+        // Still armed afterwards, deliberately: running a frequency means a new
+        // caller with a new offset every time, so the next tap should move RIT onto
+        // them too. The pill is the way out.
+        if (s_rit_armed) {
+            int32_t delta = (int32_t)((int64_t)target_hz - (int64_t)s_last_qmx_freq_hz);
+            int32_t want  = delta;
+            if (want >  CAT_RIT_MAX_HZ) want =  CAT_RIT_MAX_HZ;
+            if (want < -CAT_RIT_MAX_HZ) want = -CAT_RIT_MAX_HZ;
+            if (want != delta) {
+                // Say so rather than silently clamping: the marker would land
+                // somewhere the operator did not tap, and something that far off is
+                // a retune, not a RIT case. Disarm first if you meant to move.
+                char msg[48];
+                snprintf(msg, sizeof msg, "RIT limit is %+d Hz", (int)want);
+                ui_toast(msg);
+            }
+            cat_request_rit_hz((int)want);
+            ESP_LOGI("ui_touch", "RELEASED tap-to-RIT -> %+d Hz (tapped %lu, dial %lu) - dial NOT moved",
+                     (int)want, (unsigned long)target_hz, (unsigned long)s_last_qmx_freq_hz);
+            rit_pill_sync();
+            return;
+        }
 
         esp_err_t err = cat_set_frequency(target_hz);
         ESP_LOGI("ui_touch", "RELEASED tune -> %lu Hz (cursor value; release x=%d ignored) err=0x%x",
