@@ -27,7 +27,24 @@
 #define WS_FRAME_LEN            (WS_HEADER_LEN + WS_PAYLOAD_LEN)
 
 // Quantization range: -130 dBm (q=0) .. -30 dBm (q=255). ~0.39 dB/step.
-#define WS_DB_MIN   (-130.0f)
+// The quantisation window for the spectrum bytes. The FLOOR matters more than it
+// looks: everything below it arrives as byte 0, and the browser's waterfall tracks a
+// per-bin noise floor out of these bytes exactly as render_waterfall.c does out of
+// floats. At -130 a QUARTER of the band was pinned at 0 on a quiet 20 m (measured
+// 2026-08-11: 24.7 % of bins at exactly 0, 44.7 % below byte 10), because -130 dBm
+// is where this receiver's own noise floor sits - see DSP_DB_CALIBRATION_OFFSET. A
+// floor tracker cannot find a floor it cannot see, so the browser's black level had
+// nothing to gate against and the waterfall came out as blue speckle where the Tab5
+// showed black.
+//
+// -150 puts 20 dB of headroom under the noise. The cost is resolution, 0.39 -> 0.47
+// dB per count, which is invisible next to a 24 dB contrast span - and the EMA the
+// browser applies before colouring interpolates between counts anyway.
+//
+// ⚠ WIRE FORMAT. The browser derives its own counts-per-dB from these two numbers
+// (WS_DB_MIN/WS_DB_MAX in index.html) - change one side and you must change the
+// other, or every dB figure in the browser is silently wrong.
+#define WS_DB_MIN   (-150.0f)
 #define WS_DB_MAX   (-30.0f)
 
 // Must match IF_OFFSET_HZ inside main/ui/ui.c (QMX dial sits at +12 kHz baseband).

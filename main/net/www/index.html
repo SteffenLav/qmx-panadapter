@@ -3395,13 +3395,23 @@ let specFlatten     = (specFlattenSaved !== null) ? (specFlattenSaved === "1") :
 const SPEC_SMOOTH_ALPHA     = 0.25;
 const SPEC_FLOOR_UP_ALPHA   = 0.002;
 const SPEC_FLOOR_DOWN_ALPHA = 0.08;
-/* Flat-mode range/bias, expressed in WS quantized-byte units (2.55 units/dB,
-   from the WS_DB_MIN/WS_DB_MAX -130..-30 dBm quantization in webserver_ws.c).
-   Must match the Tab5's own FLAT_RANGE_DB (30) / FLAT_FLOOR_BIAS_DB (6) in
-   ui.c - these used to be arbitrary web-only values (150 / 12, i.e. a ~58.8dB
-   range) that didn't match the Tab5's real fixed 30dB flat-mode range at all. */
-const SPEC_RANGE_Q          = 76.5;   // 30 dB * 2.55
-const SPEC_FLOOR_BIAS       = 15.3;   // 6 dB * 2.55
+/* ===== THE WIRE SCALE - the one place it is written down =====================
+   Spectrum bytes are dBm quantised into 0..255 over this window. It MUST match
+   WS_DB_MIN/WS_DB_MAX in webserver_ws.c; everything below is derived, so a change
+   there needs a change here and nothing else.
+   These were five separate literals sprinkled through this file (2.55, 76.5, 15.3,
+   and "(db + 130) * 255 / 100" twice) - which is precisely how a scale change goes
+   half-applied and every dB figure in the UI quietly becomes wrong. */
+const WS_DB_MIN = -150, WS_DB_MAX = -30;
+const WS_COUNTS_PER_DB = 255 / (WS_DB_MAX - WS_DB_MIN);
+const dbToByte = (db) => (db - WS_DB_MIN) * WS_COUNTS_PER_DB;
+
+/* Flat-mode range/bias, in those same byte units. Must match the Tab5's own
+   FLAT_RANGE_DB (30) / FLAT_FLOOR_BIAS_DB (6) in ui.c - these used to be arbitrary
+   web-only values (150 / 12, i.e. a ~58.8 dB range) that didn't match the Tab5's
+   real fixed 30 dB flat-mode range at all. */
+const SPEC_RANGE_Q          = 30 * WS_COUNTS_PER_DB;
+const SPEC_FLOOR_BIAS       = 6  * WS_COUNTS_PER_DB;
 
 function updateFlatBtn() {
   document.getElementById("flatbtn").classList.toggle("on", specFlatten);
@@ -3821,7 +3831,7 @@ function drawSpectrumFlat(bytes) {
 
   sctx.fillStyle = "#1f2530";
   for (const dbAbove of [10, 20, 30]) {
-    const q = dbAbove * 2.55;
+    const q = dbAbove * WS_COUNTS_PER_DB;
     const y = H - 1 - Math.round(q * (H-1) / SPEC_RANGE_Q);
     if (y >= 0 && y < H) sctx.fillRect(0, y, W, 1);
   }
@@ -3872,7 +3882,7 @@ function drawSpectrumFlat(bytes) {
   /* dB-above-floor scale labels at the gridlines (right edge) */
   sctx.fillStyle = "#9aa7b4"; sctx.font = "13px system-ui,sans-serif"; sctx.textAlign = "right";
   for (const dbAbove of [10, 20, 30]) {
-    const q = dbAbove * 2.55;
+    const q = dbAbove * WS_COUNTS_PER_DB;
     const y = H - 1 - Math.round(q * (H-1) / SPEC_RANGE_Q);
     if (y > 8 && y < H - 2) sctx.fillText("+" + dbAbove + " dB", W - 3, y - 2);
   }
@@ -3888,7 +3898,7 @@ function drawSpectrumRaw(bytes) {
 
   sctx.fillStyle = "#1f2530";
   for (const db of [-120, -100, -80, -60, -40]) {
-    const q = (db + 130) * 255 / 100;
+    const q = dbToByte(db);
     const y = H - 1 - Math.round(q * (H-1) / 255);
     sctx.fillRect(0, y, W, 1);
   }
@@ -3933,7 +3943,7 @@ function drawSpectrumRaw(bytes) {
   /* dBm scale labels at the gridlines (right edge) */
   sctx.fillStyle = "#9aa7b4"; sctx.font = "13px system-ui,sans-serif"; sctx.textAlign = "right";
   for (const db of [-40, -60, -80, -100, -120]) {
-    const q = (db + 130) * 255 / 100;
+    const q = dbToByte(db);
     const y = H - 1 - Math.round(q * (H-1) / 255);
     if (y > 8 && y < H - 2) sctx.fillText(db + " dBm", W - 3, y - 2);
   }
@@ -3980,24 +3990,42 @@ function buildWfPalette(idx) {
 let wfPalette    = buildWfPalette(0);
 let wfPaletteIdx = 0;
 
-/* Per-bin noise floor for the waterfall, plus the single global floor the blend
-   control cross-fades towards - the same pair render_waterfall.c keeps, with its
-   attack/decay constants. Deliberately the waterfall's OWN floor and not the
-   spectrum's specFloor[]: that one is only updated on the flat-spectrum draw path,
-   and the waterfall is drawn in both modes.
-   ⚠ The constants are per FRAME, and this browser runs slower than the Tab5's ~30 Hz
-   waterfall tick, so the floor settles slower here in wall-clock terms. Left alone
-   on purpose: rate-compensating would make the floor jitter with the frame rate,
-   and what the picture actually looks like is set by black level and contrast. */
-const wfFloorArr = new Float32Array(SPEC_W);
-let wfFloorReady = false, wfFloorGlobal = 64, wfWarmup = 0;
-const WF_FLOOR_ATTACK = 0.05, WF_FLOOR_DECAY_FAST = 0.05,
-      WF_FLOOR_DECAY_SLOW = 0.0005, WF_FLOOR_WARMUP_FRAMES = 90;
+/* SMOOTH BEFORE COLOURING - this is not optional, and a first version that skipped
+   it produced a waterfall of bright blue noise where the Tab5 showed black.
+   render.c colours s_wf_smoothed, an EMA of the spectrum, NOT the raw frame. The
+   reason shows up in the numbers: one raw frame off this device spans 13.3 dB
+   between its 10th and 90th percentile, and the operator's black level is 6 dB - so
+   half of the raw noise clears the gate and lights up, at ~10 LUT steps per dB. The
+   EMA collapses that spread to about 5 dB, which fits under the gate and goes black.
+   The floor then tracks the SMOOTHED array, exactly as floor_arr does on the device.
 
-/* Bytes on the wire are (dBm + 130) * 2.55 - see WS_DB_MIN/WS_DB_MAX in
-   webserver_ws.c - so one dB is 2.55 counts. The settings are in dB; the samples
-   are in counts; this is the only place the two meet. */
-const WF_COUNTS_PER_DB = 2.55;
+   THE SMOOTHING MATCHES PER ROW, THE FLOOR MATCHES PER SECOND, and that split is
+   deliberate - I had both on the wall clock first, which was wrong for the
+   smoothing.
+   A waterfall is a picture measured in ROWS. The device draws 30 rows a second and
+   smooths with alpha 0.15, so a signal reaches full brightness over about seven of
+   its rows and each row carries the noise of ~7 averaged frames. Copying its TIME
+   CONSTANT into a 10 fps browser would average only ~2 frames per row: same response
+   in seconds, but visibly noisier rows, which is the opposite of the goal. Copying
+   the ALPHA gives seven browser frames per browser row - the same picture, scrolling
+   slower, which is exactly what a slower waterfall should be.
+   The FLOOR is different: it tracks how the band's noise moves, which is a physical
+   thing happening in seconds regardless of anyone's frame rate, so those stay as
+   time constants derived from the elapsed time. */
+const WF_SMOOTH_ALPHA     = 0.15;                // WF_EMA_ALPHA, render.c - per ROW
+const WF_FLOOR_ATTACK_TC_S= 1 / (0.05   * 30);   // WF_FLOOR_ATTACK              -> 0.67 s
+const WF_FLOOR_FAST_TC_S  = 1 / (0.05   * 30);   // WF_FLOOR_DECAY_FAST          -> 0.67 s
+const WF_FLOOR_SLOW_TC_S  = 1 / (0.0005 * 30);   // WF_FLOOR_DECAY_SLOW          -> 67 s
+const WF_WARMUP_S         = 90 / 30;             // WF_FLOOR_WARMUP_TICKS        -> 3 s
+
+const wfSmooth   = new Float32Array(SPEC_W);
+const wfFloorArr = new Float32Array(SPEC_W);
+let wfFloorReady = false, wfFloorGlobal = 64;
+let wfWarmupLeft = 0, wfLastFrameAt = 0;
+
+/* The settings are in dB and the samples are in counts; this is where they meet.
+   Derived from the wire scale at the top of the file, never restated. */
+const WF_COUNTS_PER_DB = WS_COUNTS_PER_DB;
 
 /* Live from /api/status, so a slider dragged on the Tab5 shows up here. Defaults
    match WF_*_DEFAULT in render_waterfall.c. */
@@ -4015,21 +4043,37 @@ wfctx.fillStyle="#000"; wfctx.fillRect(0,0,wfPxW,wfPxH);
    texture of the band is still visible, and it is why "black level" gates rather
    than clips. */
 function drawWaterfall(bytes) {
+  /* Elapsed time since the last row, so every tracker below runs on the wall clock
+     rather than on however many frames this link happened to deliver. Clamped: a
+     backgrounded tab can hand us a gap of minutes, and letting that through would
+     snap the floor onto whatever is on the air at the moment it comes back. */
+  const now = performance.now();
+  let dt = wfLastFrameAt ? (now - wfLastFrameAt) / 1000 : 0.1;
+  wfLastFrameAt = now;
+  if (dt < 0.005) dt = 0.005;
+  if (dt > 0.5)   dt = 0.5;
+  const alphaFor = (tc) => 1 - Math.exp(-dt / tc);
+
   if (!wfFloorReady) {
     const m = median256(bytes);
-    for (let i = 0; i < SPEC_W; i++) wfFloorArr[i] = m;
+    for (let i = 0; i < SPEC_W; i++) { wfFloorArr[i] = m; wfSmooth[i] = bytes[i]; }
     wfFloorReady = true;
-    wfWarmup = WF_FLOOR_WARMUP_FRAMES;
+    wfWarmupLeft = WF_WARMUP_S;
     wfFloorGlobal = m;
   }
+
   /* Fast decay briefly after (re)init so a fresh connection settles in seconds
      instead of a minute, then slow - signals must not be absorbed into the floor. */
-  const decay = wfWarmup > 0 ? WF_FLOOR_DECAY_FAST : WF_FLOOR_DECAY_SLOW;
-  if (wfWarmup > 0) wfWarmup--;
+  const aSmooth  = WF_SMOOTH_ALPHA;          // per ROW, not per second - see above
+  const aAttack  = alphaFor(WF_FLOOR_ATTACK_TC_S);
+  const aDecay   = alphaFor(wfWarmupLeft > 0 ? WF_FLOOR_FAST_TC_S : WF_FLOOR_SLOW_TC_S);
+  if (wfWarmupLeft > 0) wfWarmupLeft -= dt;
+
   let sum = 0;
   for (let i = 0; i < SPEC_W; i++) {
-    const d = bytes[i] - wfFloorArr[i];
-    wfFloorArr[i] += (d < 0 ? WF_FLOOR_ATTACK : decay) * d;
+    wfSmooth[i] += aSmooth * (bytes[i] - wfSmooth[i]);
+    const d = wfSmooth[i] - wfFloorArr[i];
+    wfFloorArr[i] += (d < 0 ? aAttack : aDecay) * d;
     sum += wfFloorArr[i];
   }
   wfFloorGlobal = sum / SPEC_W;
@@ -4044,7 +4088,7 @@ function drawWaterfall(bytes) {
   for (let x=0; x<SPEC_W; x++) {
     const b = ((binStartW + Math.round(x * windowBinsW / SPEC_W)) % SPEC_W + SPEC_W) % SPEC_W;
     const effFloor = wfFloorGlobal + (wfFloorArr[b] - wfFloorGlobal) * wfFloorBlend;
-    let idx = (bytes[b] - (effFloor + blackCounts)) * scale + 32;
+    let idx = (wfSmooth[b] - (effFloor + blackCounts)) * scale + 32;
     idx=Math.max(0,Math.min(255,idx))|0;
     const p=idx*4, o=x*4;
     data[o]=wfPalette[p]; data[o+1]=wfPalette[p+1];
