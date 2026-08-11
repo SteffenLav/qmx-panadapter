@@ -211,11 +211,23 @@ returns to its calling tone ready for the next one.
 on the band during a DXpedition and a courtesy `73` there is just clutter. The
 contact is complete, and logged, on the Fox's `RR73`.
 
-**How a Fox is recognised.** Not by frequency alone — plenty of ordinary stations
-work below 1000 Hz. The Tab5 looks for a station down there that is visibly working
-a *queue*: several different callsigns inside a few minutes, which is a pattern
-nothing else on the band produces. Until it has seen that, it will not call anything
-a Fox.
+**How a Fox is recognised — and where it trusts you instead.** For anything it does
+*by itself*, the Tab5 is strict: not frequency alone (plenty of ordinary stations
+work below 1000 Hz) but a station down there visibly working a **queue** — several
+different callsigns inside a few minutes, a pattern nothing else on the band
+produces. Until it has seen that, automatic mode will not call anything a Fox.
+
+**A tap from you needs no such evidence.** While Fox/Hound is enabled, tapping any
+station in the Fox region runs the Fox/Hound exchange, because enabling the mode is
+your declaration that you are chasing a DXpedition — the same way WSJT-X's Hound
+tick works. The machine is deliberately more cautious than you are.
+
+The catch is leaving the mode on after the DXpedition has finished: a tap at an
+ordinary station low in the passband would then QSY onto their frequency and skip
+your `73`. So the transmit-confirmation window **tells you before you commit** —
+it adds a line reading *"as HOUND — will QSY onto 500 Hz, no 73 sent"* whenever
+Fox/Hound rules are about to apply. If you see that on a station you did not think
+was a DXpedition, set Fox/Hound back to **Off**.
 
 Three of the Tab5's usual courtesies stand down while a Fox contact runs, and all
 three would otherwise work against you:

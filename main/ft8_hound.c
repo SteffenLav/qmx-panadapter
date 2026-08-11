@@ -317,6 +317,29 @@ void ft8_hound_tick(int64_t slot_sec)
     heap_caps_free(snap);
 }
 
+int ft8_hound_qsy_tone_for(const char *call)
+{
+    if (!call || !call[0]) return 0;
+    if (!ft8_hound_enabled(ft8_hound_mode())) return 0;
+
+    // Heap, not the stack: this is called from the LVGL thread when the transmit
+    // modal opens, and taskLVGL's stack is ~8 KB against an 11 KB table (the
+    // v0.20.1 crash).
+    ft8_call_t *snap = heap_caps_malloc(sizeof(ft8_call_t) * FT8_CALL_TABLE_SIZE,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!snap) return 0;
+    int n = 0, tone = 0;
+    ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
+    for (int i = 0; i < n; i++) {
+        if (strcasecmp(snap[i].call, call) != 0) continue;
+        int hz = (int)snap[i].last_freq;
+        if (hz > 0 && hz < FT8_HOUND_FOX_MAX_HZ) tone = hz;
+        break;
+    }
+    heap_caps_free(snap);
+    return tone;
+}
+
 int ft8_hound_pick_tx_tone(void)
 {
     // Same occupancy mask the ordinary picker uses, so we avoid the tones we can

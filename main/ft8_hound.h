@@ -101,6 +101,17 @@ const ft8_call_t *ft8_hound_find_fox(const ft8_call_t *list, int n, int64_t slot
 // same Fox for ever.
 void ft8_hound_tick(int64_t slot_sec);
 
+// If calling this station would run as a HOUND contact, its own tone in Hz;
+// otherwise 0. Answers the question the transmit-confirmation modal needs to ask
+// before the operator commits: "will this QSY onto their frequency?"
+//
+// Deliberately the same test ft8_qso_start() applies - Hound mode enabled and the
+// target in the Fox region - and NOT the stricter queue signature that automatic
+// mode uses. A manual tap trusts the operator, exactly as WSJT-X's Hound tick
+// does: enabling the mode IS the declaration that you are chasing a DXpedition.
+// The asymmetry is deliberate; the machine should be more cautious than you are.
+int ft8_hound_qsy_tone_for(const char *call);
+
 // Pick our calling tone: a free 50 Hz slot at or above FT8_HOUND_TX_MIN_HZ,
 // chosen from the same live occupancy mask the ordinary clear-slot picker uses -
 // which beats WSJT-X's random pick, since random is how hounds end up stacked on

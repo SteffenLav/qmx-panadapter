@@ -12,6 +12,7 @@
 #include "ui_theme.h"
 #include "ui.h"
 #include "ft8_tx.h"
+#include "ft8_hound.h"   // ft8_hound_qsy_tone_for() - warn before a hound call
 #include "ft8_qso.h"
 #include "ft8_screen_view.h"
 
@@ -376,7 +377,25 @@ void ft8_tx_modal_show(const ft8_tx_request_t *req)
         snprintf(detail, sizeof(detail), "Audio %d Hz  -  fires on the next slot boundary",
                  s_pending_req.audio_freq_hz);
     }
-    lv_label_set_text(s_lbl_detail, detail);
+    // Say so when this will be a HOUND call, BEFORE the operator commits: it
+    // changes where their signal ends up (we QSY onto the other station's own
+    // frequency) and it suppresses the closing 73. Hound mode is a mode you
+    // leave on for a DXpedition and can forget about afterwards, so a contact
+    // that is about to behave differently must announce itself rather than
+    // surprise anybody (operator's choice of the three options, 2026-08-11).
+    {
+        int fox_hz = ft8_hound_qsy_tone_for(s_pending_req.target_call);
+        if (fox_hz > 0 && s_pending_req.kind != FT8_TX_KIND_CQ) {
+            // Generously sized: detail[] is 80, so the suffix must fit alongside
+            // a full one (-Wformat-truncation is an error in this build).
+            char hd[160];
+            snprintf(hd, sizeof(hd), "%s\nas HOUND - will QSY onto %d Hz, no 73 sent",
+                     detail, fox_hz);
+            lv_label_set_text(s_lbl_detail, hd);
+        } else {
+            lv_label_set_text(s_lbl_detail, detail);
+        }
+    }
 
     lv_label_set_text(s_lbl_error, "");
     lv_obj_add_flag(s_lbl_error, LV_OBJ_FLAG_HIDDEN);
