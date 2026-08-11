@@ -3054,7 +3054,11 @@ function drawSpots(ctx, W, H) {
 
     const by = rowTop + row * SPOT_ROW_H;
     const box = { x: bx, y: by, w: tw + 8, h: 20,
-                  hz: c.sp.f, mode: spotRadioMode(c.sp), call: text };
+                  hz: c.sp.f, mode: spotRadioMode(c.sp), call: text,
+                  /* carried so the hover preview can be drawn in this spot's own
+                     colour - the same reasoning the off-screen counters already use:
+                     it reads as part of the picture rather than as chrome. */
+                  col: spotColour(c.sp) };
     rows[row].push(box);
     placed.push(box);
     spotBoxes.push(box);
@@ -3084,29 +3088,72 @@ function drawSpots(ctx, W, H) {
     const tw = ctx.measureText(t).width;
     ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(2, H - 21, tw + 8, 18);
     ctx.fillStyle = offLoCol;          ctx.fillText(t, 6, H - 8);
-    spotOffBoxes.push({ x: 2, y: H - 21, w: tw + 8, h: 18, hz: offLoHz, mode: null });
+    spotOffBoxes.push({ x: 2, y: H - 21, w: tw + 8, h: 18, hz: offLoHz, mode: null,
+                        call: "nearest below", col: offLoCol });
   }
   if (offHi > 0) {
     const t = "spots (" + offHi + ") >";
     const tw = ctx.measureText(t).width;
     ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(W - tw - 10, H - 21, tw + 8, 18);
     ctx.fillStyle = offHiCol;          ctx.fillText(t, W - tw - 6, H - 8);
-    spotOffBoxes.push({ x: W - tw - 10, y: H - 21, w: tw + 8, h: 18, hz: offHiHz, mode: null });
+    spotOffBoxes.push({ x: W - tw - 10, y: H - 21, w: tw + 8, h: 18, hz: offHiHz, mode: null,
+                        call: "nearest above", col: offHiCol });
   }
   ctx.restore();
 }
 
 /* Hit-test a click against the spot labels and the off-screen counters.
    Returns the box hit, or null. Canvas coordinates. */
+/* Which spot, if any, a click here would take you to.
+   ⚠ A LABEL OWNS A LOT OF BAND. Its box is as wide as the callsign and sits at
+   mid-height of the spectrum, where the trace is - so a click inside it goes to that
+   station's frequency and NOT to the frequency under the pointer. Measured:
+   "OK/DL4ROB/P" is 93 px, which at zoom x1 is 3.8 kHz of band, with the spot's own
+   frequency merely in the middle. Four rows of these cover about half the spectrum's
+   height on a busy band. Samuel W7STF spent a while chasing that as a tuning fault:
+   clicking a signal put the VFO on a plausible nearby frequency where nothing could be
+   heard, because it was a spotted station up to a couple of kHz away.
+   The Tab5 does the same hit-testing on purpose ("how Flex does it") but cannot be
+   confused, because THERE the two gestures differ - a 250 ms hold tunes a point, a
+   quick tap takes a callsign. A browser has one click for both.
+   Two things keep it honest now: the vertical slack is gone (below), and hovering a
+   label previews where the click will actually land - see drawSpotPreview(). */
 function spotHitTest(clientX, clientY, rect) {
   const cx = (clientX - rect.left) / rect.width  * specPxW;
   const cy = (clientY - rect.top)  / rect.height * specPxH;
   for (const b of spotBoxes.concat(spotOffBoxes)) {
-    // Vertical slack: the labels are small, and a mouse is not precise on a
-    // 16 px target.
-    if (cx >= b.x - 3 && cx <= b.x + b.w + 3 && cy >= b.y - 6 && cy <= b.y + b.h + 6) return b;
+    /* No vertical slack. It was +/-6 px for fingertip imprecision, which a mouse does
+       not need, and it stretched a 20 px label to 32 px of click-stealing height. With
+       it gone, a click anywhere in the column ABOVE or BELOW the label rows tunes to
+       the pointer - which is the escape hatch for a signal sitting behind a label. */
+    if (cx >= b.x - 3 && cx <= b.x + b.w + 3 && cy >= b.y && cy <= b.y + b.h) return b;
   }
   return null;
+}
+
+/* Hovering a label: show WHERE the click would go, in the spot's own colour - a marker
+   at its real frequency plus the callsign. The browser can do this and a touchscreen
+   cannot, so it is the natural place to fix the ambiguity rather than copying the
+   Tab5's hold gesture. Being silent was the actual harm here, not the redirection. */
+function drawSpotPreview(ctx, box, pxW, pxH, col) {
+  const x = freqToPixelX(box.hz, pxW);
+  ctx.save();
+  ctx.strokeStyle = col; ctx.fillStyle = col;
+  ctx.lineWidth = 1.5; ctx.setLineDash([3, 3]);
+  if (x >= 0 && x <= pxW) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, pxH); ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.font = "bold 13px ui-monospace, monospace";
+  const txt = "→ " + (box.call || "spot") + "  " + fmtHz(box.hz);
+  const tw = ctx.measureText(txt).width;
+  let tx = Math.max(4, Math.min(pxW - tw - 6, (x >= 0 ? x : 0) + 8));
+  const ty = Math.max(14, box.y - 6);
+  ctx.fillStyle = "rgba(0,0,0,0.72)";
+  ctx.fillRect(tx - 3, ty - 12, tw + 6, 16);
+  ctx.fillStyle = col;
+  ctx.fillText(txt, tx, ty);
+  ctx.restore();
 }
 
 /* Tune to a spot: frequency AND mode, the way the Tab5 does it. */
@@ -3145,9 +3192,19 @@ function drawTuneCursor(ctx, x, pxW, pxH, freqHz) {
 }
 
 /* Called each frame after spectrum/waterfall draw to overlay cursor */
+let spotHover = null;
+
 function overlayTuneCursor() {
   // Always clear the wf cursor canvas so old lines don't persist
   wfcurctx.clearRect(0, 0, wfPxW, wfPxH);
+  /* Over a label the click does NOT go to the pointer, so show where it does go
+     instead of a tune cursor that would be lying about it. */
+  if (spotHover) {
+    const hcol = spotHover.col || "#ffd24a";
+    drawSpotPreview(sctx,     spotHover, specPxW, specPxH, hcol);
+    drawSpotPreview(wfcurctx, spotHover, wfPxW,   wfPxH,   hcol);
+    return;
+  }
   if (tuneCursorX < 0) return;
   const spanHz   = 48000 / lastZoom;
   const panHz    = lastPanBins * HZ_PER_BIN;
@@ -3323,11 +3380,13 @@ function addTuneListeners(overlayId, getRect, onSpec) {
     // two mean different things and showing both invites a mis-click.
     const hit = onSpec ? spotHitTest(e.clientX, e.clientY, getRect()) : null;
     el.style.cursor = hit ? "pointer" : "";
+    spotHover = hit;                 // drives the preview in overlayTuneCursor()
     if (hit && !tuneActive) { tuneCursorX = -1; return; }
     handleTuneMove(e.clientX, getRect());
   });
   el.addEventListener("mouseleave", () => {
     if (!tuneActive) tuneCursorX = -1;
+    spotHover = null;
     el.style.cursor = "";
   });
   el.addEventListener("mousedown", (e) => {
