@@ -12,15 +12,17 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.7.2.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **all three major logbooks — QRZ, eQSL and ARRL LoTW** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.8.0.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **all three major logbooks — QRZ, eQSL and ARRL LoTW** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
 >
-> **v1.7.2 is a small bug-fix patch — a Bluetooth mouse could stop reconnecting until you restarted the Tab5.** If a reconnection attempt failed part-way, the Tab5 stopped trying, so the pointer never came back even with the mouse awake beside it. It happens routinely, because the mouse powers itself down after about half a minute to save battery. Nothing else changed; if you do not use a Bluetooth mouse there is no reason to install it. v1.7.1 fixed the mouse destabilising WiFi — full list in [docs/version-history.md](docs/version-history.md).
+> **New in v1.8.0 — RIT you set by tapping, summit spots, and a browser that finally matches the Tab5.** **RIT** pulls in a caller answering off your frequency without moving transmit: arm it, tap the caller, and a marker shows where you are listening while the gold line goes on meaning the dial. **SOTA spots** put summit activations on the spectrum beside POTA, RBN and the DX cluster. **Fox/Hound** works DXpeditions from the hound side — simulation-verified only so far. The **browser caught up control by control**: RIT, activation start/stop, the last of the Tab5-only settings, and a spectrum and waterfall that now look like the Tab5's instead of approximating them.
+>
+> ⚠ **Two things worth checking if you use the browser.** **SWR protection set from the browser was never saved** on any v1.7.x build — if you set it there, check it on the Tab5 (Settings → "SWR protection (transmit)"). And **spot labels were stealing clicks**: a callsign's clickable area was wide enough to swallow several kHz of spectrum, so clicking a signal near one tuned you to that station instead. Both fixed. Full list in [docs/version-history.md](docs/version-history.md).
 >
 > **New in v1.7.0 — a mouse, the phone spots that were missing, and knowing who hears you.** A **Bluetooth mouse** now drives the Tab5 *while the QMX stays plugged in* — the case a USB mouse can never serve, because the radio owns the only USB port. Pair it once; it reconnects by itself, and the wheel scrolls whatever is under the pointer. **DX cluster spots** add the SSB activity RBN structurally cannot see: skimmers are machines, and no machine recognises a callsign spoken into a microphone. **Activation mode** stamps every contact with your park or summit and counts them against the threshold, with a single-reference export for uploading. **SWR protection** cuts a transmission short and latches off if the antenna is wrong — thirteen seconds of key-down is a long time into a fault. **Who is hearing me** asks PSK Reporter which receivers copied *your* call, which is the only way to tell a dead band from a transmit-side problem. Spots that appeared twice now appear once. Full detail in [docs/version-history.md](docs/version-history.md).
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.7.2.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.8.0.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -928,7 +930,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.7.0 is here** — **a mouse, the phone spots that were missing, and knowing who hears you.** A Bluetooth mouse drives the Tab5 with the QMX still plugged in; DX cluster spots bring the SSB activity RBN cannot see; activation mode stamps and counts your POTA/SOTA contacts; SWR protection stops a transmission going into a bad antenna; and "who is hearing me" asks PSK Reporter which receivers copied your call. Next on the bench:
+**v1.8.0 is here** — **RIT you set by tapping, summit spots, and a browser that matches the Tab5.** Arm RIT and tap a caller to receive off your transmit frequency; SOTA summit activations join POTA, RBN and the DX cluster on the spectrum; Fox/Hound works DXpeditions from the hound side; and the browser gained RIT, activation start/stop, the last Tab5-only settings and a spectrum and waterfall drawn the way the Tab5 draws them. Next on the bench:
 
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).

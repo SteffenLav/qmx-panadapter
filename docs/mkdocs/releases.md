@@ -4,15 +4,26 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.7.2** — 2026-08-10 — bug-fix patch
+**v1.8.0** — 2026-08-11
 
-**A Bluetooth mouse could stop reconnecting until you restarted the Tab5.**
+**RIT you set by tapping, summit spots, and a browser that finally matches the Tab5.**
 
-- If a reconnection attempt failed part-way, the Tab5 stopped trying — the pointer never came back, even with the mouse awake and right beside it, and only a restart brought it back. It happens routinely, because the mouse powers itself down after about half a minute to save its battery. Verified over 14 sleep/wake cycles: fourteen disconnects, fourteen reconnects, none missed.
+- **RIT — receive off your transmit frequency.** A caller answering slightly off your frequency can be pulled in without moving transmit. Tap **RIT** at the top right of the spectrum to arm it, then tap the caller: a dashed magenta marker shows where you are listening, in the spectrum and down the waterfall, while the gold line goes on meaning the dial — and therefore transmit. The filter window moves onto the caller too. It stays armed, so the next caller is another tap, and retuning clears it. Works from the browser as well. *(Roy KI0ER, shaped with Michael KZ4LY and Bill Carver)*
+- **SOTA spots.** Summit activations join POTA, RBN and the DX cluster on the spectrum, from [spothole.app](https://spothole.app) with Ian Renton M0TRT's permission. Off by default — it is a volunteer-run server.
+- **Fox/Hound (DXpedition) mode, hound side.** Off / Guided / Automatic. Calls from above 1000 Hz, moves onto the Fox's frequency when answered, and stops on its `RR73`. **Simulation-verified only — no real DXpedition has seen it yet.**
+- **The browser caught up with the Tab5, control by control.** RIT; starting and stopping a POTA/SOTA activation, with a badge while one is running so it cannot be forgotten; CW pitch, IF calibration, the battery charge limit, the 180° screen flip, Fox/Hound, simulation mode and the spot mode filter; and a "Prepare for flashing" item. Only the clock-sync window is still Tab5-only.
+- **The browser's spectrum and waterfall now look like the Tab5's** rather than approximating them — same colour maps, same floor arithmetic, and the black level, contrast, colour scheme and smoothing settings finally reach it.
+- **Spot mode filter.** Hides spots you cannot work in the mode you are in, since tapping a spot sets the mode as well as the frequency. *(Michael KZ4LY)*
+- **Mouse and pointer.** A proper arrow that turns bright green over anything a click would act on, clickable edge grips, and tappable handles on the drawer and Memory Channels.
+- **CW transmit offset narrowed to ±300 Hz**, and the guidance corrected: earlier releases suggested 400–600 Hz, which is outside many operators' filters. Around 100 Hz or less is what works.
 
-Nothing else changed. **If you do not use a Bluetooth mouse there is no reason to install this.**
+⚠ **Two things to check if you use the browser.** **SWR protection set from the browser was never saved** on any v1.7.x build — check it on the Tab5 (Settings → "SWR protection (transmit)") if you set it there. And **spot labels were stealing clicks**: a callsign's clickable area was wide enough to swallow several kHz, so clicking a signal near one tuned you to that station instead. Both fixed, along with **Bluetooth mice that send a different byte layout** than the one on the bench, and **two browsers fighting over the live spectrum**.
 
 ## Previous Releases
+
+**v1.7.2** — 2026-08-10 — bug-fix patch
+
+- A Bluetooth mouse could stop reconnecting until you restarted the Tab5: a part-way failed attempt stopped it trying again, and the mouse sleeps after about half a minute, so it happened routinely.
 
 **v1.7.1** — 2026-08-10 — bug-fix patch
 
@@ -245,7 +256,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.7.2.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.8.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

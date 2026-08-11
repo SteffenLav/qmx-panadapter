@@ -70,11 +70,13 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.7.2 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.8.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, and now a mouse.** The panadapter, FT8/FT4 receive and
 transmit, ADIF logging and all three logbook uploads are stable and in daily use.
 
-**v1.7.2 is a small bug-fix patch — a Bluetooth mouse could stop reconnecting until you restarted the Tab5.** If a reconnection attempt failed part-way the Tab5 stopped trying, so the pointer never came back even with the mouse awake beside it — and that happens routinely, because the mouse powers itself down after about half a minute to save battery. Nothing else changed. **v1.7.1** before it stopped the Bluetooth mouse destabilising WiFi. If you do not use a Bluetooth mouse, neither patch changes anything for you.
+**New in v1.8.0 — RIT you set by tapping, summit spots, and a browser that finally matches the Tab5.** Arm **RIT** and tap a caller to receive off your transmit frequency, with a marker showing where you are listening. **SOTA spots** join POTA, RBN and the DX cluster. **Fox/Hound** works DXpeditions from the hound side, simulation-verified so far. And the browser gained RIT, activation start/stop, the last Tab5-only settings, and a spectrum and waterfall drawn the way the Tab5 draws them.
+
+⚠ **If you use the browser, two things are worth checking.** **SWR protection set from the browser was never saved** on any v1.7.x build — check it on the Tab5 under Settings. And **spot labels were stealing clicks** near their own callsign. Both fixed.
 
 **In v1.7.0 — a mouse, the phone spots that were missing, and knowing who hears you.**
 A **Bluetooth mouse** drives the Tab5 *while the QMX stays plugged in* — the case a USB
@@ -95,7 +97,7 @@ Every release, newest first, is on the [Releases](releases.md) page.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.7.2.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.8.0.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

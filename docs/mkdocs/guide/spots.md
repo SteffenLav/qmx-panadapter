@@ -82,6 +82,17 @@ Tapping the spectrum anywhere else still tunes normally, and pinch-zoom and the
 one-finger pan are unaffected. Only the callsigns themselves and the two counts
 are spot targets.
 
+**A callsign's target is the text, and nothing above or below it.** That matters
+because a long callsign is a wide label sitting over the trace, and a click inside
+it goes to *that station* rather than to the frequency under your pointer. If a
+signal you want is behind a label, aim at the same column higher or lower in the
+spectrum and it tunes there normally.
+
+In the browser, hovering a callsign shows you a marker at that station's real
+frequency with its name, so you can see where the click will take you before you
+commit. On the Tab5 the two gestures are already distinct: tuning to a point needs
+a brief hold, while a callsign is a quick tap.
+
 ---
 
 ### 3. Turning it on and off

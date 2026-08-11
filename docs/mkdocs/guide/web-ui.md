@@ -31,6 +31,9 @@ The web UI provides full remote control:
 - **Band** — jump between configured bands
 - **Memory** — recall, edit and clear your 32 saved channels (see [Memory channels](#memory-channels) below)
 - **Zoom** — pinch or scroll to zoom the spectrum
+- **RIT** — click the **RIT** pill to arm it, then click a caller to receive off your
+  transmit frequency without moving the dial. See
+  [RIT](panadapter.md#rit-receiving-off-your-transmit-frequency)
 
 Everything mirrors the Tab5 display with sub-second latency.
 
@@ -180,23 +183,28 @@ things you *type* - which is exactly what the Tab5's touchscreen is worst at:
 - **Everyday switches**: POTA and RBN spots, PSK Reporter, grey-listing, distance
   units, I/Q balance, band-plan region, and the QMX volume in dB.
 - **WiFi**: add another network from a laptop. The Tab5 remembers up to six.
+- **The rest of the radio and display settings**, which used to be Tab5-only: CW pitch,
+  IF calibration, SWR protection, the battery charge limit, the 180° screen flip,
+  Fox/Hound mode, simulation mode and the spot mode filter.
 
 Saved straight to the Tab5 - its own settings drawer shows the same values next
 time you open it.
 
 Also here: the **Display & waterfall** group -
-brightness, waterfall black level, contrast, adaptive floor, FFT window, colour
-map, display sleep, the dB scale range and spectrum smoothing - the controls you
+brightness, waterfall black level, contrast, FFT window, colour map, display
+sleep, the 180° flip, the dB scale range and spectrum smoothing - the controls you
 want to tune from a laptop *while watching the Tab5's screen*. Every change
-applies live and is stored, exactly as the drawer's own sliders do. The
+applies live and is stored, exactly as the drawer's own sliders do, and the
+browser's own spectrum and waterfall follow them as well. **Adaptive floor is
+deliberately absent**: it has no effect at present (see
+[Spectrum & Waterfall](panadapter.md#4-spectrum-waterfall)), and a control that
+cannot change anything is worse than a missing one. The
 **auto-answer robot** switch is here too, carrying the same permanent warning the
 Tab5 shows beside it: it transmits unattended - never leave it running
 unsupervised.
 
 One deliberate omission: **your WiFi password is never sent to the browser**, so
-the field is always blank; leave it blank and the stored one is kept. And
-Flip-180 stays on the Tab5 - you set that standing at the device, because it
-depends on how it is mounted.
+the field is always blank; leave it blank and the stored one is kept.
 
 ## Help, in the browser
 
@@ -246,12 +254,15 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 - **SD Files** — opens the **microSD file browser** (`http://<tab5-ip>/files`, new in v1.3.0): browse the card from your computer without pulling it — download logs and config backups, upload files, delete
 - **Diagnostic download ↓** — downloads **both** diagnostic logs: the live session log (always on, nothing to enable) and the flash-persisted copy from before the last reboot/power-off
 
+**Miscellaneous ▲** also carries **Prepare for flashing** — closes the USB host cleanly before you unplug the radio or reflash the Tab5, so the QMX is not left half-open.
+
 **Radio ▲** (new in v1.6.0) — the things that reach the radio itself:
 
 - **Switch to FT8/FT4** / **Switch to Panadapter** — changes the Tab5's own screen from the browser. The label always says where you are going, and it follows the Tab5 if you switch there instead
 - **Memory channels** — your 32 channels: click one to tune to it, drag one onto another slot to move it, or onto the bin to clear it
 - **Let me use the QMX menus** — stops the Tab5 talking to the QMX so you can use the radio's own menus or its Band Configuration terminal. A bar appears until you hand it back. See [Settings](settings.md#radio)
 - **Antenna Tune** — QMX 1.04+ only; keys a steady carrier with live power and SWR, and stops itself after 60 seconds
+- **Activation** — start or stop a POTA/SOTA session from the browser. While one is running a badge appears in the top bar with the reference and the contact count, so it cannot be forgotten on the drive home
 
 **Miscellaneous ▲**:
 
@@ -292,7 +303,11 @@ Each upload remembers where it left off — re-uploading skips QSOs that were al
 
 ## Limitations
 
-- **Transmit from web** — **Call CQ** only (see [Call CQ from the browser](#call-cq-from-the-browser)); replying to a station, pouncing and the TX tone/preset/parity settings are all on the Tab5
+- **One browser at a time** — the Tab5 streams the spectrum to a single browser. Open a
+  second one (or a phone, or another tab) and it takes over; the first says *"another
+  browser took the live view — click to take it back"* and stops, rather than the two
+  fighting over it. Click that message to reclaim it.
+- **Clock sync** — the time-sync window is still on the Tab5 only
 - **Real-time chat** — no operator messaging
 - **Export formats** — ADIF only (import to EQSL, WSJT-X, etc. yourself)
 - **Latency** — ~200 ms typical (WiFi dependent)

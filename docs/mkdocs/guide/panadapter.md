@@ -51,6 +51,34 @@ The snap step follows the **mode**, not the zoom level — a CW signal needs to 
 | DiGi / FT8 / FT4 / RTTY | 500 Hz |
 | AM / FM | 1 kHz |
 
+#### RIT — receiving off your transmit frequency
+
+Someone answering your call a couple of hundred hertz off your frequency is the ordinary
+case this is for: you want to hear them without moving your own transmit frequency, which
+everyone else is listening on.
+
+1. Tap **RIT** at the top right of the spectrum. It turns amber and reads *click a signal*
+   (in the browser) or waits for a tap.
+2. Tap the caller on the spectrum or waterfall. The dial does **not** move. A dashed
+   magenta line appears where you are now listening, in the spectrum and down the
+   waterfall, and the filter window moves onto them.
+3. It stays armed, so the next caller is another tap.
+4. Tap **RIT** again to clear the offset and switch it off.
+
+The gold line goes on marking the **dial** — which is where you transmit — so seeing both
+lines at once tells you transmit has not followed your receiver. Tuning anywhere by any
+means clears RIT, on the assumption that you have moved on.
+
+While RIT is armed, taps use a 10 Hz grid whatever the mode. The normal grid above exists
+to land the dial on a tidy frequency; RIT is a fine adjustment onto one caller's tone, and
+SSB's 250 Hz step would leave only a handful of usable offsets. The range is ±500 Hz —
+tapping further away clamps to the limit and says so.
+
+Available in the browser too, where a click does the same thing. The offset itself is
+shared, so setting it on either screen shows on both; the *armed* state is per-screen,
+because arming changes what a click does and a click in a browser is not a finger on the
+Tab5.
+
 The grid is anchored to absolute frequency, not to where your finger first touched, so the cursor always lands on the same set of points no matter where the drag began.
 
 #### Pinch to Zoom
@@ -128,7 +156,10 @@ The **waterfall** runs newest row at the top, in a thermal SDR palette (black �
 
 - **Black level** — how far above noise-floor to go black (default 9 dB)
 - **Contrast** — dB span of the colour ramp (default 45 dB)
-- **Adaptive floor** — blend between per-bin and global noise floor (default 100%)
+- **Adaptive floor** — blends between a per-bin and a global noise floor. **This has no
+  effect at present** and is not offered in the browser: the per-bin floor is re-seeded
+  many times a second, so the two values it blends are always the same. Left in place
+  because the stored value is still exported with your configuration.
 - **FFT window** — Blackman-Harris, Hann, or Nuttall (default Blackman-Harris)
 
 ### 5. Frequency Keypad

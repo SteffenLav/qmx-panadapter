@@ -1455,9 +1455,7 @@ Nothing else changed. If you do not use a Bluetooth mouse there is no reason to
 install this.
 
 
-### In progress — v1.8.0 (unreleased)
-
-**Not shipped yet. Written as work lands so the release notes are not reconstructed from memory at cut time.**
+### Shipped in v1.8.0 — 2026-08-11
 
 - **SOTA spots.** Summit activations now appear on the spectrum alongside POTA, RBN
   and the DX cluster, fetched from [spothole.app](https://spothole.app) — Ian Renton
@@ -1501,6 +1499,92 @@ install this.
   QMX" pop-up is gone, since it fired at a radio that was merely switched off and the
   screen already says so; the "Now turn on or reboot your QMX" prompt now stands down
   whenever any window is open instead of drawing across it.
+
+- **RIT — receive off your transmit frequency, by tapping.** Asked for by Roy KI0ER,
+  and shaped with Michael KZ4LY and Bill Carver: while you are running a frequency, a
+  caller answering slightly off it can be pulled in without moving transmit. A **RIT**
+  button at the top right of the spectrum arms it; a tap on the spectrum or waterfall
+  then sets the receive offset onto whatever you tapped instead of retuning, and it
+  stays armed so the next caller is another tap. A dashed magenta marker shows where
+  you are listening, in the spectrum and down the waterfall, while the gold line goes
+  on meaning the dial — and therefore transmit. The filter window moves onto the caller
+  too. Retuning clears it, from every path. Available from the browser as well.
+  - The QMX has real RIT in both 1_03 and 1_04, so unlike the CW transmit offset this
+    needs no split trickery. ⚠ `RU`/`RD` are absolute *or* relative depending on a QMX
+    menu setting the Tab5 cannot read, so every write clears to zero first and then
+    moves once — which lands correctly under either setting.
+  - Tap-to-RIT uses a 10 Hz grid whatever the mode. The normal tuning grid exists to
+    land the *dial* on a tidy frequency; SSB's 250 Hz would have left five usable
+    offsets inside the ±500 Hz limit.
+  - ⚠ **The display sign is derived, not verified on a signal** — there is no antenna
+    on the bench. If a steady carrier jumps when you engage RIT instead of standing
+    still, say so and it is a one-character fix.
+
+- **The browser caught up with the Tab5.** A control-by-control comparison, 87 commits
+  after the last one. RIT and its marker; starting and stopping a POTA/SOTA activation,
+  with a badge that appears while one is running so it cannot be forgotten; CW pitch,
+  IF calibration, the battery charge limit, the 180° screen flip, Fox/Hound, simulation
+  mode and the spot mode filter; and a "Prepare for flashing" item for an action that
+  had existed since v1.6.0 with nothing to call it. The only thing still Tab5-only is
+  the clock-sync window.
+
+- **SWR protection could not be saved from the browser — check yours.** The field was
+  shown, accepted your value, reported success, and the device discarded it. It has
+  been that way on every v1.7.x build, so anyone who set it there and did not check the
+  Tab5 has been transmitting without it. The browser now offers the same four
+  thresholds the Tab5 does rather than asking for a number.
+
+- **The browser's spectrum and waterfall now look like the Tab5's.** Samuel W7STF asked
+  whether the black-level and contrast settings reached the browser. They did not, and
+  chasing that found four separate faults:
+  - the spectrum was quantised for transmission with its floor at **−130 dBm**, which is
+    exactly where this receiver's own noise sits, so a quarter of the band arrived
+    flattened against the bottom of the scale and the browser had nothing to measure a
+    noise floor against. Widened to −150 dBm;
+  - the browser was not applying the smoothing stage the Tab5 applies before drawing, so
+    the **Spectrum smoothing** setting did nothing there;
+  - it used its own colour ramp and its own floor arithmetic instead of the Tab5's;
+  - and the Tab5 **re-seeds its noise floor about seventeen times a second**, so the
+    per-bin adaptive floor has never actually run on any version. What the Tab5 draws is
+    each bin measured against the average across the band, refreshed constantly — which
+    is why it settles instantly and never lets a signal fade. The browser now does the
+    same. **Consequence: the "Adaptive floor" setting does nothing and never has**, so it
+    has been removed from the browser's settings page. The behaviour is deliberately left
+    alone — the alternative is what it was designed for, where a steady carrier sinks out
+    of sight over about a minute.
+
+- **Spot labels stopped stealing clicks.** Samuel W7STF's "tuning oddity": clicking a
+  signal in the browser put the VFO on a plausible nearby frequency where nothing could
+  be heard. Clicking a callsign takes you to that station, which is intended — but the
+  label's clickable area was as wide as the callsign and sat at the same height as the
+  trace, so `OK/DL4ROB/P` owned **3.8 kHz** of band in which every click went to that
+  station. The label no longer claims space above and below its text, so a click
+  elsewhere in the same column tunes where you clicked, and hovering a label now shows a
+  marker at the station's real frequency with its callsign, so nothing happens silently.
+  Two more found in the same code: in CW every spot was drawn **700 Hz to the left** of
+  its own signal, and the browser rounded clicks to a different grid than the Tab5
+  (500 Hz in SSB where the Tab5 uses 250).
+
+- **Bluetooth mice that are not the one on the bench.** The Tab5 assumed a single byte
+  layout for movement — the 12-bit one a Logitech here sends. A mouse using 16-bit
+  movement decoded to a vertical value about **sixteen times too large**, which drove the
+  cursor into the top edge and held it there while horizontal still worked: exactly what
+  Samuel W7STF reported. It now reads the descriptor every HID mouse publishes and
+  decodes accordingly, with the old fixed layouts kept as a fallback. Tested against
+  three real descriptors on the host; **not yet confirmed against his mouse**, and the
+  log now records both the descriptor and what was made of it.
+
+- **Two browsers no longer fight over the live view.** The Tab5 streams the spectrum to
+  one browser at a time and the newest connection wins — but the displaced one used to
+  retry after two seconds and take it back, so a second tab, a phone or a laptop left
+  open made both flap between "reconnecting" forever. One session here logged **340**
+  handovers. The displaced browser is now told, stops retrying, and says "another browser
+  took the live view — click to take it back".
+
+- **"Release radio" reworded** (Samuel W7STF: "not too helpful, in fact confusing"). It
+  described what the software does to the radio; it now says what you are trying to do —
+  **"Let me use the QMX menus"**, and **"Done - Tab5 takes over again"** while it is
+  handed over. The pause and play icons are gone; a gear points at where you are headed.
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
 

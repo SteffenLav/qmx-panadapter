@@ -124,6 +124,10 @@ main/
                           strength FAN (dot + 2 lv_arc bows; LV_SYMBOL_WIFI can't do
                           partial). Replaced the numeric -NN dBm readout in v1.3.4
   util/diag_log.c         Opt-in ESP_LOG ring-buffer capture (web /api/log + serial)
+  hid_report_map.c        Parse a BLE mouse's HID Report Map for the bit offsets/widths of
+                          X, Y and the wheel. Portable, no ESP deps, host-tested by
+                          test/hid_map_harness.c - BLE mice do not agree on a layout and
+                          bt_hid_mouse.c used to assume one (see the RIT/mouse notes)
   keyboard/tab5_keyboard.c  Optional Tab5 snap-on keyboard (STM32 I2C slave 0x6D, String mode); UI bridge lives in ui.c
   storage/settings.c      NVS-backed settings (debounced flush task)
   storage/sd_archive.c    microSD auto-archive: mirrors diag log/ADIF/config to /sdcard (probe-mount, no CD line)
@@ -576,6 +580,19 @@ Rules encoded in the maintainer, each one load-bearing:
 - `FA;` reports **VFO A**, which stays the RX frequency in split, so `s_last_freq_hz` needs no special-casing.
 
 **Unverified, and it needs a human:** no CW contact has been made with it. The CAT round-trip is verifiable on the bench; "does the DX hear me 500 Hz up" is not. Also unknown: whether `SP` survives a QMX power cycle (the manual does not mark it session-only), so a Tab5 powered off mid-CW may leave the radio in split — the operator sees it on the radio's own display, but it is worth a line in the manual.
+
+### RIT is real on the QMX — but `RU`/`RD` are absolute OR relative depending on a menu setting
+Unlike XIT, which the QMX does not have at all (hence the CW transmit offset's split dance), RIT exists in **both 1_03 and 1_04** — `RT` mode, `RU`/`RD` offset, `RC` clear. No firmware gate needed.
+
+⚠ **The trap:** the CAT manual says `RU`/`RD` either set the offset absolutely or move it relatively, depending on the QMX System Config setting **"CAT RU and RD"** — which we cannot read and have no business changing. So every write in `cat.c` sends **`RC;` first** (clear to zero, unambiguous in both firmwares) and **then one `RU`/`RD`**, which lands on exactly the requested value under either setting. **Never send `RU`/`RD` without the `RC`.**
+
+We own the value (`cat_get_rit_hz()`) rather than polling `IF;` for it — the display needs it every frame, and a poll would be both slower and a fifth competitor for the pipe.
+
+**Display compensation lives in `ui_get_if_offset_hz()`** (`total_hz -= cat_get_rit_hz()`), the one documented place defining which baseband frequency the dial maps to, so signals stand still and the marker shows where you are listening. ⚠ **The sign is DERIVED, not verified on a signal** — there is no antenna on the bench. The falsifying test is one steady carrier: engage RIT +200 and the trace must NOT move (a jump of 400 Hz means the sign is inverted). The comment in that function carries the reasoning and the test.
+
+**Tap-to-RIT forces a 10 Hz snap regardless of mode** (`touch_event_cb`'s PRESSING branch). The mode grid exists to land the DIAL tidily; SSB's 250 Hz would leave five usable offsets inside ±500 and DiGi's 500 Hz would leave three. The cursor is drawn from the same snap, so the marker lands where the line was.
+
+**Retuning clears RIT**, inside `cat_set_frequency()` so every path is covered (tap, spot, memory recall, band change, web), and `ui_rit_notify_retune()` stands the armed mode down with it — otherwise the operator's next tap would silently set an offset instead of tuning.
 
 ### RF gain (`RG`) is per band and NOT session-only — commit on release, never store a copy
 Stan's suggestion via Samuel W7STF. `RG;` gets, `RG<nnn>;` sets, in **plain dB** — range 0–99, default 54 (operation manual: *"RF gain (dB): 54 is the default. Valid values for the parameter are 0 to 99"*). Present in 1_03 and 1_04.
