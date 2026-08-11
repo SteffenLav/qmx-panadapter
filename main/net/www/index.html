@@ -1910,8 +1910,14 @@ const SET_FIELDS = [
   ["Display & waterfall", "display.brightness",     "num", "Brightness (%)", "10-100"],
   ["Display & waterfall", "display.wf_black_db",    "num", "Waterfall black level (dB)", "dB above the floor that turns black; default 9"],
   ["Display & waterfall", "display.wf_contrast_db", "num", "Waterfall contrast (dB)", "dB span filling the colour ramp; default 45"],
-  ["Display & waterfall", "display.wf_floor_blend", "num", "Adaptive floor (%)",
-     "Currently has NO effect on either screen. It cross-fades between a global noise floor and a per-bin one, but the per-bin floor is re-seeded many times a second (audio.c re-seeds on every gap in the USB audio stream), so the two are always the same value. Stored, and will start working if that is fixed"],
+  /* NO "Adaptive floor (%)" ROW, DELIBERATELY. It cross-fades between a global noise
+     floor and a per-bin one, and the per-bin floor is re-seeded many times a second
+     (audio.c, on every gap in the USB audio stream), so the two are always the same
+     value and the control does nothing. A setting that cannot change anything is worse
+     than a missing one - it invites the operator to tune something that is not there.
+     The value is still stored, still exported, and /api/settings still accepts it, so
+     the day audio.c's reset is fixed this row comes back and works. See TODO #114 and
+     CLAUDE.md, "The per-bin adaptive noise floor HAS NEVER RUN". */
   ["Display & waterfall", "display.wf_window",      "sel", "FFT window", "",
      [["0","Blackman-Harris"],["1","Hann"],["2","Nuttall"]]],
   ["Display & waterfall", "display.colormap",       "sel", "Waterfall colours", "",

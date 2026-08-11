@@ -99,10 +99,10 @@ has never actually run on any version. What it draws is each bin measured agains
 average across the band, refreshed constantly, which is why it settles instantly and
 never lets a signal fade. The browser now does the same and the two look alike. One
 consequence worth knowing: the **"Adaptive floor" setting does nothing, and never has**.
-I have left it that way deliberately — the alternative is the behaviour it was designed
+I have left the behaviour alone deliberately — the alternative is what it was designed
 for, where a steady carrier sinks out of sight over about a minute, and I do not think
-anyone wants that on a panadapter. But it should not pretend to work, so it is now
-labelled as inert.
+anyone wants that on a panadapter. But a setting that cannot change anything is worse
+than a missing one, so I have taken it out of the browser's settings page.
 
 Thank you for pushing on the tuning one after Roy could not reproduce it. A second report
 that disagrees with the first is usually the most useful thing in a bug hunt, and this
