@@ -339,6 +339,23 @@ static esp_err_t status_handler(httpd_req_t *req)
         }
     }
     cJSON_AddBoolToObject  (root, "flat_mode",   ui_get_flat_mode());
+    // Waterfall colourisation, so the browser can paint the SAME picture instead of
+    // inventing its own. In the 1 Hz status poll rather than only in /api/settings
+    // because that is fetched when the settings form opens - these four need to
+    // follow a slider dragged on the Tab5 itself, within a second, which is the
+    // whole point of them being here. Four small numbers.
+    {
+        qmx_settings_t ws;
+        settings_load_all(&ws);
+        cJSON *w = cJSON_AddObjectToObject(root, "wf");
+        cJSON_AddNumberToObject(w, "black",    ws.wf_black_db);
+        cJSON_AddNumberToObject(w, "contrast", ws.wf_contrast_db);
+        // PERCENT, not a fraction - named so, because the stored setting is 0..100
+        // while render_waterfall_set_floor_blend() takes 0..1 and both of its
+        // callers divide by 100. I got this wrong once by sending it as "blend".
+        cJSON_AddNumberToObject(w, "blend_pct", ws.wf_floor_blend);
+        cJSON_AddNumberToObject(w, "cmap",     ws.colormap_idx);
+    }
     cJSON_AddNumberToObject(root, "utc_epoch",   (double)time(NULL));
     // What is maintaining the clock - same authority the Tab5's bottom-bar
     // "UTC(NTP)"/"UTC(QMX)" suffix shows, so the two labels can never disagree.

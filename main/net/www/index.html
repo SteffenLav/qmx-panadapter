@@ -2650,6 +2650,19 @@ async function tick() {
     updateRitPill();   // the offset is radio state - it can be set from the Tab5
     lastAct        = s.activation || {type:0, ref:'', qsos:0};
     updateActPill();
+    /* Waterfall colourisation, live from the Tab5 so a slider dragged there shows
+       up here. The palette is only rebuilt when the index actually changes - it is
+       a 1 KB loop and this runs every second. */
+    if (s.wf) {
+      if (typeof s.wf.black    === "number") wfBlackDb    = s.wf.black;
+      if (typeof s.wf.contrast === "number") wfContrastDb = s.wf.contrast;
+      /* blend_pct is 0..100; the renderer's blend is 0..1. */
+      if (typeof s.wf.blend_pct === "number") wfFloorBlend = s.wf.blend_pct / 100;
+      if (typeof s.wf.cmap     === "number" && s.wf.cmap !== wfPaletteIdx) {
+        wfPaletteIdx = s.wf.cmap;
+        wfPalette    = buildWfPalette(wfPaletteIdx);
+      }
+    }
     lastMode       = s.mode        || "USB";
     lastQmxFw      = s.qmx_fw      || "";
     lastCwPitchHz  = s.cw_pitch_hz || 700;
@@ -3935,45 +3948,103 @@ wfRow.width = SPEC_W; wfRow.height = 1;
 const wfRowCtx = wfRow.getContext("2d");
 const wfRowImg = wfRowCtx.createImageData(SPEC_W, 1);
 
-const wfPalette = (() => {
-  const stops = [
-    [0.00,[0,0,0]],[0.20,[0,0,128]],[0.40,[0,128,192]],
-    [0.60,[0,192,0]],[0.80,[255,224,0]],[1.00,[255,0,0]],
-  ];
-  const lut = new Uint8Array(256*4);
-  for (let i = 0; i < 256; i++) {
-    const t = i/255;
-    let s = 0;
-    while (s < stops.length-2 && stops[s+1][0] < t) s++;
-    const [t0,c0]=stops[s], [t1,c1]=stops[s+1];
-    const f=(t-t0)/(t1-t0);
-    lut[i*4+0]=c0[0]+(c1[0]-c0[0])*f;
-    lut[i*4+1]=c0[1]+(c1[1]-c0[1])*f;
-    lut[i*4+2]=c0[2]+(c1[2]-c0[2])*f;
-    lut[i*4+3]=255;
+/* Waterfall colour maps - the SAME anchor tables as render_waterfall.c, and the
+   same linear interpolation between them, so the browser's waterfall is the Tab5's
+   waterfall rather than a lookalike. Anchors are at explicit indices (not evenly
+   spaced) exactly as the C tables have them; build_lut() there does this loop. */
+const WF_CMAPS = [
+  /* Thermal   */ [[0,0,0,0],[51,0,0,128],[102,0,128,192],[153,0,192,0],[204,255,224,0],[255,255,0,0]],
+  /* Viridis   */ [[0,68,1,84],[64,59,82,139],[128,33,144,141],[192,93,201,99],[255,253,231,37]],
+  /* Turbo     */ [[0,48,18,59],[43,64,100,225],[85,46,197,233],[128,119,245,138],[170,251,197,53],[212,245,98,37],[255,122,4,2]],
+  /* Grayscale */ [[0,0,0,0],[255,255,255,255]],
+];
+
+function buildWfPalette(idx) {
+  const a = WF_CMAPS[(idx >= 0 && idx < WF_CMAPS.length) ? idx : 0];
+  const lut = new Uint8Array(256 * 4);
+  for (let seg = 0; seg < a.length - 1; seg++) {
+    const [i0, r0, g0, b0] = a[seg], [i1, r1, g1, b1] = a[seg + 1];
+    const span = i1 - i0;
+    if (span <= 0) continue;
+    for (let i = i0; i <= i1; i++) {
+      const f = (i - i0) / span, o = i * 4;
+      lut[o]     = Math.round(r0 + (r1 - r0) * f);
+      lut[o + 1] = Math.round(g0 + (g1 - g0) * f);
+      lut[o + 2] = Math.round(b0 + (b1 - b0) * f);
+      lut[o + 3] = 255;
+    }
   }
   return lut;
-})();
+}
 
-let wfFloor=64, wfFrameCount=0;
-const WF_FLOOR_ALPHA=0.3, WF_FLOOR_PERIOD=10, WF_DYN_RANGE_Q=80;
-const WF_SCALE=255/WF_DYN_RANGE_Q, WF_FLOOR_OFFSET=32;
+let wfPalette    = buildWfPalette(0);
+let wfPaletteIdx = 0;
+
+/* Per-bin noise floor for the waterfall, plus the single global floor the blend
+   control cross-fades towards - the same pair render_waterfall.c keeps, with its
+   attack/decay constants. Deliberately the waterfall's OWN floor and not the
+   spectrum's specFloor[]: that one is only updated on the flat-spectrum draw path,
+   and the waterfall is drawn in both modes.
+   ⚠ The constants are per FRAME, and this browser runs slower than the Tab5's ~30 Hz
+   waterfall tick, so the floor settles slower here in wall-clock terms. Left alone
+   on purpose: rate-compensating would make the floor jitter with the frame rate,
+   and what the picture actually looks like is set by black level and contrast. */
+const wfFloorArr = new Float32Array(SPEC_W);
+let wfFloorReady = false, wfFloorGlobal = 64, wfWarmup = 0;
+const WF_FLOOR_ATTACK = 0.05, WF_FLOOR_DECAY_FAST = 0.05,
+      WF_FLOOR_DECAY_SLOW = 0.0005, WF_FLOOR_WARMUP_FRAMES = 90;
+
+/* Bytes on the wire are (dBm + 130) * 2.55 - see WS_DB_MIN/WS_DB_MAX in
+   webserver_ws.c - so one dB is 2.55 counts. The settings are in dB; the samples
+   are in counts; this is the only place the two meet. */
+const WF_COUNTS_PER_DB = 2.55;
+
+/* Live from /api/status, so a slider dragged on the Tab5 shows up here. Defaults
+   match WF_*_DEFAULT in render_waterfall.c. */
+let wfBlackDb = 9, wfContrastDb = 45, wfFloorBlend = 1.0;
 
 wfctx.fillStyle="#000"; wfctx.fillRect(0,0,wfPxW,wfPxH);
 
+/* One row of waterfall, coloured the way the Tab5 colours it.
+   The mapping is render_waterfall.c's, line for line:
+       eff_floor = global + (per_bin - global) * blend
+       black     = eff_floor + black_db
+       idx       = (sample - black) * 255/contrast_db + 32
+   with the dB-to-counts conversion applied because the samples arrive quantised.
+   The 32 offset is not decoration: it lifts the noise floor off pure black so the
+   texture of the band is still visible, and it is why "black level" gates rather
+   than clips. */
 function drawWaterfall(bytes) {
-  if (++wfFrameCount >= WF_FLOOR_PERIOD) {
-    wfFrameCount=0;
-    const m=median256(bytes);
-    wfFloor=WF_FLOOR_ALPHA*(m+15)+(1-WF_FLOOR_ALPHA)*wfFloor;
+  if (!wfFloorReady) {
+    const m = median256(bytes);
+    for (let i = 0; i < SPEC_W; i++) wfFloorArr[i] = m;
+    wfFloorReady = true;
+    wfWarmup = WF_FLOOR_WARMUP_FRAMES;
+    wfFloorGlobal = m;
   }
+  /* Fast decay briefly after (re)init so a fresh connection settles in seconds
+     instead of a minute, then slow - signals must not be absorbed into the floor. */
+  const decay = wfWarmup > 0 ? WF_FLOOR_DECAY_FAST : WF_FLOOR_DECAY_SLOW;
+  if (wfWarmup > 0) wfWarmup--;
+  let sum = 0;
+  for (let i = 0; i < SPEC_W; i++) {
+    const d = bytes[i] - wfFloorArr[i];
+    wfFloorArr[i] += (d < 0 ? WF_FLOOR_ATTACK : decay) * d;
+    sum += wfFloorArr[i];
+  }
+  wfFloorGlobal = sum / SPEC_W;
+
+  const blackCounts = wfBlackDb * WF_COUNTS_PER_DB;
+  const scale = 255 / Math.max(1, wfContrastDb * WF_COUNTS_PER_DB);
+
   /* Apply same zoom window as spectrum */
   const { windowBins: windowBinsW, centerBin: centerBinW } = getZoomWindow();
   const binStartW = centerBinW - Math.floor(windowBinsW / 2);
   const data=wfRowImg.data;
   for (let x=0; x<SPEC_W; x++) {
     const b = ((binStartW + Math.round(x * windowBinsW / SPEC_W)) % SPEC_W + SPEC_W) % SPEC_W;
-    let idx=(bytes[b]-wfFloor)*WF_SCALE+WF_FLOOR_OFFSET;
+    const effFloor = wfFloorGlobal + (wfFloorArr[b] - wfFloorGlobal) * wfFloorBlend;
+    let idx = (bytes[b] - (effFloor + blackCounts)) * scale + 32;
     idx=Math.max(0,Math.min(255,idx))|0;
     const p=idx*4, o=x*4;
     data[o]=wfPalette[p]; data[o+1]=wfPalette[p+1];
