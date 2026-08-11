@@ -1785,7 +1785,7 @@ const SET_FIELDS = [
      the radio has not answered yet. */
   ["Radio & display", "qmx_rf_gain_db",    "num",  "QMX RF gain (dB)", "0-99, per band; the radio's default is 54"],
   ["Radio & display", "cw_tx_offset_hz",   "num",  "CW transmit offset (Hz)",
-     "0 = off. In CW only, transmit this far from the station you are listening to (split), so a QRP call is not buried in the zero-beat pile. -1000 to +1000; 400-600 is typical"],
+     "0 = off. In CW only, transmit this far from the station you are listening to (split), so a QRP call is not buried in the zero-beat pile. -300 to +300, and around 100 Hz or less is typical - most CW operators run a 500 Hz filter or narrower (200 Hz is not unusual), and a QRP signal loses energy towards the filter edges (Michael KZ4LY). Roy KI0ER uses +60"],
   ["Radio & display", "iq_enabled",        "bool", "I/Q balance correction", ""],
   ["Radio & display", "distance_in_miles", "bool", "Distances in miles", "Kilometres when off"],
   ["Radio & display", "bandplan_region",   "sel",  "Band-plan region", "",

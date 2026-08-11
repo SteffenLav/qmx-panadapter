@@ -32,10 +32,18 @@ it shows "reading…" until the radio answers. It writes when you let go of the 
 while you drag, because this is stored configuration rather than a session setting.
 Changing it moves the noise floor, so the flat-spectrum reference is re-learned.
 
-**CW transmit offset** — transmit a few hundred hertz away from the station you are
-listening to, so a QRP call is not buried in the pile of everyone zero-beating the DX
-(suggested by Roy KI0ER). The centre of the slider is off; 400–600 Hz is the usual range,
-and the sign chooses whether you transmit above or below.
+**CW transmit offset** — transmit a little away from the station you are listening to,
+so a QRP call is not buried in the pile of everyone zero-beating the DX (suggested by
+Roy KI0ER). The centre of the slider is off, and the sign chooses whether you transmit
+above or below.
+
+**Keep it small: around 100 Hz or less is typical, and the slider stops at ±300.** The
+point is to land inside the other station's filter, not outside it — most CW operators
+run a 500 Hz filter or narrower, 200 Hz is not unusual, and the passband is not equally
+usable right to its edge: the tone gets muddy and a QRP signal has least energy exactly
+where the filter is already attenuating (Michael KZ4LY). Roy KI0ER uses +60 Hz on his own
+rig. Earlier versions of this page suggested 400–600 Hz, which is outside many operators'
+filters altogether.
 
 The QMX has no XIT, so this is done with **split**: you receive on VFO A and transmit on
 VFO B, which the Tab5 holds at your receive frequency plus the offset. Set it once and it

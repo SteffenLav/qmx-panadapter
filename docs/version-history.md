@@ -1489,7 +1489,13 @@ install this.
   mode you are in — tapping a spot sets the mode as well as the frequency, so an
   unfiltered lane could drop a CW operator into FT8.
 - **CW transmit offset narrowed to ±300 Hz**, and a stored wider value from v1.7.1
-  is clamped on the next start.
+  is clamped on the next start. **The guidance was wrong too, and is corrected
+  everywhere**: v1.6.0 and v1.7.x suggested 400–600 Hz, which is outside many
+  operators' filters altogether. Around 100 Hz or less is what actually works — the
+  aim is to land *inside* the other station's passband, most CW operators run 500 Hz
+  or narrower (200 Hz is not unusual), and a QRP signal has least energy exactly
+  where the filter is already attenuating (Michael KZ4LY). Roy KI0ER, who asked for
+  the feature, uses +60 Hz.
 - **Fixes.** The flash-persisted diagnostic log could stop writing silently and stay
   stopped (it now reports the failure and recovers by rotating); the "power-cycle the
   QMX" pop-up is gone, since it fired at a radio that was merely switched off and the

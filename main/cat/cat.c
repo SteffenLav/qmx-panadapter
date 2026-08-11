@@ -664,7 +664,16 @@ static esp_err_t try_open_qmx(void)
 // ... such that whatever frequency I tune to via the Panadapter for RX, my
 // effective TX frequency will add that predefined offset." The point is QRP
 // courtesy and audibility: everyone answering a CW CQ zero-beat arrives as one
-// mud-pit, and a station 400-600 Hz off stands out.
+// mud-pit, and a station slightly off stands out.
+//
+// "SLIGHTLY" IS THE WHOLE POINT, and the figure in this comment used to be
+// 400-600 Hz, which was wrong twice over. Roy KI0ER retracted his own original
+// number ("I forgot to divide by 2") and Michael KZ4LY explained why it cannot be
+// right: you are trying to land INSIDE the other station's filter, and most CW
+// operators run 500 Hz or narrower - 200 Hz is not unusual - with the passband
+// least usable at its edges, exactly where a QRP signal has least energy to
+// spare. Around 100 Hz or less is what actually works; Roy uses +60 on his own
+// rig. The slider stops at CW_TX_OFFSET_MAX_HZ (300) for that reason.
 //
 // The QMX has no XIT (its own CAT manual: "XIT status: always 0 because QMX has
 // no XIT"), so this is done with SPLIT: receive on VFO A, transmit on VFO B,
