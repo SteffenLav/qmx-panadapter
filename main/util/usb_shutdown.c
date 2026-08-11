@@ -52,6 +52,23 @@ bool usb_shutdown_graceful(void)
     esp_err_t err = usb_host_lib_set_root_port_power(false);
     ESP_LOGI(TAG, "root port power off: %s", esp_err_to_name(err));
 
+    // NOT cutting the physical 5 V here, and that is a measured decision.
+    //
+    // usb_host_lib_set_root_port_power() above is the DWC root port - a LOGICAL
+    // disable. The real VBUS switch is the PI4IO expander's USB5V_EN (P3), which only
+    // util/usb_replug.c ever touches, so this function has never removed power from the
+    // connector. That looked like the missing piece for the #74 wedge and it was TRIED
+    // on hardware 2026-08-11: interfaces closed properly, then VBUS off, held down
+    // through the reflash AND the whole boot (the expander retains state; P3 goes high
+    // again in bsp_io_expander_pi4ioe_init), so the radio got a genuine multi-second
+    // VBUS session end followed by a fresh start - the closest thing to a physical
+    // unplug this board can produce without a hand on the cable.
+    //
+    // The QMX still answered the next enumeration with an empty data stage. So it buys
+    // nothing, and left in it would be a footgun: press "Prepare for flashing", change
+    // your mind, and USB stays dead until a reboot with nothing on screen saying why.
+    // Reverted. See TODO #74 for the six approaches falsified.
+
     // Let the device see the bus go idle before anything resets the SoC.
     vTaskDelay(pdMS_TO_TICKS(150));
 
