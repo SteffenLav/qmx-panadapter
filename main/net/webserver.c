@@ -307,6 +307,37 @@ static esp_err_t status_handler(httpd_req_t *req)
     // RIT offset in Hz, 0 = off. Radio state, so the browser and the Tab5 pill show
     // the same number and the browser can draw the marker in the same place.
     cJSON_AddNumberToObject(root, "rit_hz",      (double)cat_get_rit_hz());
+
+    // POTA/SOTA activation session. Sent on every poll because the hazard this
+    // feature has is FORGETTING one is running - every QSO logged meanwhile claims
+    // a reference - so the browser must be able to say so unprompted, exactly as
+    // the Tab5's bottom bar does.
+    //
+    // The contact count comes from adif_log_count_activation(), which walks the log
+    // file, so it is cached for ACT_COUNT_TTL_US rather than run at 1 Hz on the
+    // httpd task. Only computed while a session is actually running.
+    {
+        cJSON *act = cJSON_AddObjectToObject(root, "activation");
+        uint8_t at = settings_get_activation_type();
+        char aref[24] = "";
+        settings_get_activation_ref(aref, sizeof aref);
+        cJSON_AddNumberToObject(act, "type", (double)at);
+        cJSON_AddStringToObject(act, "ref", aref);
+        if (at != 0 && aref[0]) {
+            static const int64_t ACT_COUNT_TTL_US = 10 * 1000 * 1000;
+            static int64_t s_act_count_at = 0;
+            static int     s_act_count    = 0;
+            static char    s_act_count_ref[24] = "";
+            int64_t now = esp_timer_get_time();
+            if (s_act_count_at == 0 || now - s_act_count_at > ACT_COUNT_TTL_US ||
+                strcmp(s_act_count_ref, aref) != 0) {
+                s_act_count = adif_log_count_activation(aref);
+                s_act_count_at = now;
+                snprintf(s_act_count_ref, sizeof s_act_count_ref, "%s", aref);
+            }
+            cJSON_AddNumberToObject(act, "qsos", (double)s_act_count);
+        }
+    }
     cJSON_AddBoolToObject  (root, "flat_mode",   ui_get_flat_mode());
     cJSON_AddNumberToObject(root, "utc_epoch",   (double)time(NULL));
     // What is maintaining the clock - same authority the Tab5's bottom-bar
@@ -563,6 +594,39 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         if (cJSON_IsNumber(item)) {
             cat_request_rit_hz((int)item->valuedouble);
             ESP_LOGI(TAG, "web: RIT -> %+d Hz", (int)item->valuedouble);
+        }
+    } else if (action && strcmp(action, "set_activation") == 0) {
+        // Start or stop a POTA/SOTA activation. type 0 stops; 1 = POTA, 2 = SOTA
+        // with a reference. Mirrors activation_modal.c's go button, including its
+        // refusals: a reference is required to start, and settings_set_activation()
+        // is the thing that decides whether one is usable (it trims), so the answer
+        // is read back from it rather than guessed here.
+        cJSON *jt = cJSON_GetObjectItem(root, "type");
+        const char *ref = cJSON_GetStringValue(cJSON_GetObjectItem(root, "ref"));
+        int t = cJSON_IsNumber(jt) ? (int)jt->valuedouble : -1;
+        const char *err = NULL;
+        if (t == 0) {
+            settings_set_activation(0, NULL);
+            ESP_LOGI(TAG, "web: activation stopped");
+        } else if (t == 1 || t == 2) {
+            if (!ref || !ref[0]) {
+                err = "Enter the park or summit reference first";
+            } else {
+                settings_set_activation((uint8_t)t, ref);
+                if (settings_get_activation_type() == 0) err = "That reference is not usable";
+                else ESP_LOGI(TAG, "web: activation started: %s %s", t == 1 ? "POTA" : "SOTA", ref);
+            }
+        } else {
+            err = "Unknown activation type";
+        }
+        if (err) {
+            cJSON_Delete(root);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_set_status(req, "400 Bad Request");
+            char msg[96];
+            snprintf(msg, sizeof msg, "{\"ok\":false,\"error\":\"%s\"}", err);
+            httpd_resp_sendstr(req, msg);
+            return ESP_OK;
         }
     } else if (action && strcmp(action, "cq_start") == 0) {
         // Restart a CQ run from the browser (Dennis WN4FLA): a CQ that has timed out

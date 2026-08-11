@@ -391,6 +391,12 @@
            title="Receive off the dial without moving transmit. Click to arm, then click a signal on the spectrum to listen there. Click again to clear.">
         <span class="lab">RIT</span><span id="rit">off</span>
       </div>
+      <!-- Activation, shown ONLY while one is running. The hazard is forgetting, so
+           it says so without being asked - the same job the Tab5's bottom bar does. -->
+      <div class="pill clickable" id="pill-act" style="display:none" onclick="actOpen()"
+           title="An activation is running - every QSO logged claims this reference. Click to stop it or change it.">
+        <span class="lab" id="act-kind">POTA</span><span id="act-ref">--</span>
+      </div>
     </div>
     <!-- center: VFO frequency (tap to open the keypad) -->
     <div id="top-center">
@@ -506,11 +512,44 @@
         <a href="#" id="memory-btn" title="Your 32 memory channels - click one to tune to it">Memory channels</a>
         <a href="#" id="pause-btn" title="Release the radio so you can use its own menu or the Band Configuration terminal app - the Tab5 stops sending CAT until you take it back">Release radio</a>
         <a href="#" id="tune-ant-btn" style="display:none" title="Antenna Tune (QMX 1.04+): keys the radio with a steady carrier and shows live power and SWR. Auto-stops after 60 s.">Antenna Tune</a>
+        <a href="#" id="act-btn" title="POTA / SOTA activation: every QSO logged while one is running claims that reference, so start it when you arrive and stop it when you leave">Activation</a>
       </div>
     </div>
     <button type="button" class="bot-btn" id="settings-btn" title="Callsign, grid, CQ messages, FT8 filters and the everyday toggles - with a real keyboard">Settings</button>
     <button type="button" class="bot-btn" id="help-btn" title="Guidance and the full user manual - served by the Tab5 itself, no internet needed">Help &#63;</button>
     <input type="file" id="cfg-up-file" accept=".txt,text/plain" style="display:none">
+  </div>
+
+  <!-- POTA / SOTA activation. Mirrors ui/activation_modal.c: pick the programme,
+       type the reference, one button that starts or stops. The reference is what
+       POTA and SOTA read out of MY_SIG_INFO to credit the contacts, so the wording
+       leans on getting it right and on stopping when you leave. -->
+  <div id="act-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1000;">
+    <div style="max-width:520px; margin:12vh auto; background:#161616; border:1px solid #494949; border-radius:10px; padding:16px 20px; color:#ddd; font-size:14px;">
+      <div style="display:flex; align-items:center; margin-bottom:10px;">
+        <strong style="color:#ffa040; font-size:17px;">Activation</strong>
+        <div style="flex:1"></div>
+        <span id="act-state" style="color:var(--dim); font-size:13px"></span>
+      </div>
+      <div style="color:var(--dim); font-size:13px; margin-bottom:12px;">
+        While this is running, every QSO you log carries the reference, which is what
+        POTA and SOTA read to credit it. Stop it when you leave.
+      </div>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;">
+        <select id="act-type" style="font-size:15px; padding:6px 8px;">
+          <option value="1">POTA (park)</option>
+          <option value="2">SOTA (summit)</option>
+        </select>
+        <input id="act-ref-in" type="text" placeholder="DL-0123" maxlength="15"
+               style="flex:1; font-size:15px; padding:6px 8px; text-transform:uppercase;">
+      </div>
+      <div id="act-err" style="color:#ff6a6a; font-size:13px; min-height:18px;"></div>
+      <div style="display:flex; gap:8px; justify-content:flex-end; margin-top:10px;">
+        <button type="button" id="act-cancel">Close</button>
+        <button type="button" id="act-stop" style="display:none">Stop activating</button>
+        <button type="button" id="act-go">Start</button>
+      </div>
+    </div>
   </div>
 
   <!-- TX tone picker. The Tab5 drags a finger along the occupancy strip; a mouse
@@ -734,6 +773,7 @@ let lastPassbandHz = 0;
    click here is not a finger on the Tab5 - sharing the flag would silently
    change what the person standing at the radio does next. */
 let lastRitHz      = 0;
+let lastAct        = {type:0, ref:'', qsos:0};   // POTA/SOTA activation session
 let ritArmed       = false;
 let ritFlash       = 0;      // ms deadline for the 'limit' message in the pill
 let lastMode       = "USB";
@@ -2569,6 +2609,8 @@ async function tick() {
     lastPassbandHz = s.passband_hz || 0;
     lastRitHz      = s.rit_hz     || 0;
     updateRitPill();   // the offset is radio state - it can be set from the Tab5
+    lastAct        = s.activation || {type:0, ref:'', qsos:0};
+    updateActPill();
     lastMode       = s.mode        || "USB";
     lastQmxFw      = s.qmx_fw      || "";
     lastCwPitchHz  = s.cw_pitch_hz || 700;
@@ -3128,6 +3170,76 @@ function updateRitPill() {
     pill.style.color = "";
   }
 }
+
+/* =====================================================================
+   Activation (POTA / SOTA). The pill is only visible while one is RUNNING - the
+   failure mode this guards is forgetting, and a control that says "off" all day
+   trains you to stop reading it. Starting one lives in the Radio menu. */
+function updateActPill() {
+  const pill = document.getElementById('pill-act');
+  if (!pill) return;
+  const running = lastAct && lastAct.type && lastAct.ref;
+  pill.style.display = running ? "" : "none";
+  if (!running) return;
+  document.getElementById('act-kind').textContent = lastAct.type === 2 ? "SOTA" : "POTA";
+  document.getElementById('act-ref').textContent =
+      lastAct.ref + (lastAct.qsos != null ? "  " + lastAct.qsos + " Q" : "");
+}
+
+function actOpen() {
+  const running = lastAct && lastAct.type && lastAct.ref;
+  document.getElementById('act-type').value = String(running ? lastAct.type : 1);
+  document.getElementById('act-ref-in').value = running ? lastAct.ref : "";
+  document.getElementById('act-err').textContent = "";
+  document.getElementById('act-state').textContent = running
+      ? "running: " + (lastAct.type === 2 ? "SOTA " : "POTA ") + lastAct.ref +
+        (lastAct.qsos != null ? " - " + lastAct.qsos + " logged" : "")
+      : "not running";
+  document.getElementById('act-stop').style.display = running ? "" : "none";
+  document.getElementById('act-go').textContent = running ? "Change reference" : "Start";
+  document.getElementById('act-modal').style.display = "block";
+}
+
+async function actSend(type, ref) {
+  const r = await fetch("/api/cmd", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({action: "set_activation", type: type, ref: ref || ""})
+  });
+  let j = {};
+  try { j = await r.json(); } catch (e) {}
+  if (!r.ok || j.ok === false) {
+    /* The device decides what is usable (it trims the reference), so show ITS
+       reason rather than inventing a client-side rule that could disagree. */
+    document.getElementById('act-err').textContent = j.error || ("HTTP " + r.status);
+    return false;
+  }
+  document.getElementById('act-modal').style.display = "none";
+  tick();                        // reflect it now, do not wait for the next poll
+  return true;
+}
+
+(function wireActivation() {
+  const g = document.getElementById('act-go');
+  if (!g) return;
+  g.addEventListener('click', () => {
+    const t = parseInt(document.getElementById('act-type').value, 10);
+    const ref = document.getElementById('act-ref-in').value.trim().toUpperCase();
+    actSend(t, ref);
+  });
+  document.getElementById('act-stop').addEventListener('click', () => actSend(0, ""));
+  const close = () => document.getElementById('act-modal').style.display = "none";
+  document.getElementById('act-cancel').addEventListener('click', close);
+  document.getElementById('act-modal').addEventListener('click', (e) => {
+    if (e.target.id === 'act-modal') close();
+  });
+  document.getElementById('act-ref-in').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') g.click();
+  });
+  const menu = document.getElementById('act-btn');
+  /* No explicit menu close: a click bubbling to document already closes all the
+     bottom menus, which is how every other item in them behaves. */
+  if (menu) menu.addEventListener('click', (e) => { e.preventDefault(); actOpen(); });
+})();
 
 function ritPillClick() {
   if (lastRitHz) {
