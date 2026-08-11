@@ -1,20 +1,31 @@
 # Draft replies, groups.io, 2026-08-11
 
-**Two posts. Nothing posts automatically.**
+**Three posts, the third optional. Nothing posts automatically.**
 
 Post 2 first if you only post one — SWR protection set from the browser has never been
 saved on any v1.7.x build, so anyone who set it there is transmitting without it.
 
-Everything below is on the bench, not released. No dates promised.
+Everything below is fixed on the bench and named as **v1.8.0** — no date given.
 
 Still needs Samuel's diagnostic log: the **60m "0m"** label. That is the only item on
 his list I could not get to the bottom of from here.
+
+**Coverage of the whole thread since your last post.** Every technical item is answered:
+Samuel's big v1.7.2 list (#176440), his tuning oddity (#176446), Roy's non-repro
+(#176447) and Samuel's follow-up (#176451). Deliberately NOT answered, because there is
+nothing for you to add: the Tab5 pricing and tariff sub-thread (Samuel, John K7JFW, Don
+N2VGU, Randy N4OPI) — John K7JFW's "Stef's panadapter software has caused a run on the
+Tab5" is a compliment, not a question. Post 3 is OPTIONAL: John Dusek asked about running
+without a battery and Don and Randy both answered him correctly, so it is only worth
+posting because you are the authority and there is one firmware detail they could not
+give him.
 
 ---
 
 ## Post 1 — to Samuel W7STF (and Roy)
 
-Samuel — your second message solved it, and it was not the tuning maths.
+Samuel — your second message solved it, and it was not the tuning maths. Everything
+below is fixed and will be in **v1.8.0**.
 
 **The spot labels were stealing your clicks.** Clicking a callsign takes you to that
 station, which is deliberate — the Tab5 and Flex both work that way. But in the browser
@@ -100,8 +111,24 @@ Please check it on the Tab5 itself: Settings → "SWR protection (transmit)". If
 Off and you thought you had set it, that is this bug and not you.
 
 Setting it on the Tab5 has always worked. Only the browser path was affected, on every
-v1.7.x build. Fixed on my bench, and the browser will offer the same four thresholds the
-Tab5 does instead of asking you to type a number.
+v1.7.x build. Fixed in **v1.8.0**, where the browser will also offer the same four
+thresholds the Tab5 does instead of asking you to type a number.
 
 My apologies — a control whose whole job is to stop a transmission into a bad antenna is
 the last one that should fail quietly.
+
+---
+
+## Post 3 (OPTIONAL) — to John Dusek, on running without a battery
+
+John — Don and Randy have it right, and to confirm from the firmware side: nothing in the
+panadapter needs the battery. It runs perfectly on USB-C alone, and the Tab5 powers up as
+soon as you plug it in.
+
+The only thing you lose is the battery readout: with no pack detected the bottom bar
+shows a red battery symbol with a line through it and no percentage, which is telling you
+the truth rather than complaining. The battery-care setting under Settings also has
+nothing to do — it limits how full the pack is charged.
+
+If you do run it on the bench permanently, USB-C is the option I would pick — it is the
+one that manages charging properly if you ever add a pack later.
