@@ -28,7 +28,7 @@ Samuel — your second message solved it, and it was not the tuning maths. Every
 below is fixed and will be in **v1.8.0**.
 
 **The spot labels were stealing your clicks.** Clicking a callsign takes you to that
-station, which is deliberate — the Tab5 and Flex both work that way. But in the browser
+station — that part is deliberate, and the Tab5 does the same. But in the browser
 the label's clickable area is as wide as the callsign and sits at the same height as the
 trace. `OK/DL4ROB/P` is 93 pixels wide, which at the default zoom is 3.8 kHz of band
 where every click went to that station instead of the frequency you clicked. So the VFO
