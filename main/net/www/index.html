@@ -503,6 +503,7 @@
         <a href="/ss.bmp" target="_blank">Tab5 screenshot</a>
         <a href="#" id="reset-settings-link" class="danger" title="Reset all app settings + memory channels to defaults (keeps the QSO log and WiFi). Clears a stuck stored value without an esptool full-erase. Reboots.">Reset settings</a>
         <a href="#" id="reset-network-link" class="danger" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
+        <a href="#" id="usb-shut-link" title="Close the USB host cleanly before you unplug the radio or flash the Tab5, so the QMX is not left in a half-open state that needs a power cycle to clear">Prepare for flashing</a>
       </div>
     </div>
     <div class="bot-menu-wrap">
@@ -1187,6 +1188,32 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
       }
     });
   }
+  /* Deliberately not wireReset(): this does not reboot, so that helper's
+     "the Tab5 is rebooting" copy would be untrue, and here there is a real answer
+     to report rather than a guess. */
+  (function () {
+    const link = document.getElementById("usb-shut-link");
+    if (!link) return;
+    link.addEventListener("click", async function (e) {
+      e.preventDefault();
+      if (!confirm("Close the USB host now?\n\n" +
+                   "Do this before unplugging the radio or flashing the Tab5. " +
+                   "Audio and CAT stop until the QMX is re-plugged or the Tab5 restarts.")) return;
+      const prev = link.textContent;
+      link.textContent = "Closing …";
+      try {
+        const r = await fetch("/api/cmd", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "usb_shutdown" })
+        });
+        alert(r.ok ? "USB host closed. Safe to unplug or flash."
+                   : "The device refused: HTTP " + r.status);
+      } catch (err) {
+        alert("No answer from the Tab5 - it may already have closed the link.");
+      } finally { link.textContent = prev; }
+    });
+  })();
+
   wireReset("reset-settings-link", "reset_settings",
     "Reset ALL app settings and memory channels to defaults?\n\n" +
     "• KEEPS your QSO log (ADIF) and WiFi.\n" +
@@ -1869,6 +1896,16 @@ const SET_FIELDS = [
   ["Radio & display", "distance_in_miles", "bool", "Distances in miles", "Kilometres when off"],
   ["Radio & display", "bandplan_region",   "sel",  "Band-plan region", "",
      [["0","Auto (from your grid)"],["1","Region 1"],["2","Region 2"],["3","Region 3"]]],
+  /* Per-unit calibration - set once, then forgotten. Exactly the kind of thing you
+     should not have to walk to the Tab5 for. Both clamp on the device. */
+  ["Radio & display", "cw_pitch_hz",        "num",  "CW pitch (Hz)",
+     "300-1200. Also sets the radio's own CW centre, so its sidetone and offset follow"],
+  ["Radio & display", "if_cal_hz",          "num",  "IF calibration (Hz)",
+     "Per-unit trim, -200 to +200, so a CW signal sits exactly under the cursor. Default -60"],
+
+  ["Radio & display", "charge_limit_en",    "bool", "Battery care (stop charging early)",
+     "Stopping short of full is easier on a lithium pack left plugged in"],
+  ["Radio & display", "charge_limit_pct",   "num",  "Stop charging at (%)", "50-100; default 80"],
 
   ["Display & waterfall", "display.brightness",     "num", "Brightness (%)", "10-100"],
   ["Display & waterfall", "display.wf_black_db",    "num", "Waterfall black level (dB)", "dB above the floor that turns black; default 9"],
@@ -1880,6 +1917,8 @@ const SET_FIELDS = [
      [["0","Thermal"],["1","Viridis"],["2","Turbo"],["3","Grayscale"]]],
   ["Display & waterfall", "display.sleep_min",      "sel", "Display sleep", "Idle minutes before the backlight turns off",
      [["0","Never"],["5","5 min"],["10","10 min"],["30","30 min"]]],
+  ["Display & waterfall", "display.flip",           "bool", "Flip the screen 180°",
+     "For a Tab5 mounted upside down. Touch follows, and it is reversible from either screen"],
   ["Display & waterfall", "display.db_min",         "num", "Scale floor (dBm)", "default -130"],
   ["Display & waterfall", "display.db_max",         "num", "Scale ceiling (dBm)", "default -30"],
   ["Display & waterfall", "display.ema_pct",        "num", "Spectrum smoothing (%)", "EMA alpha x 100; default 20"],

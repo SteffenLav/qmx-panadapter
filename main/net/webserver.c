@@ -1677,6 +1677,14 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "cluster_en",        c.cluster_en);
     cJSON_AddBoolToObject(root, "sota_en",           c.sota_en);
     cJSON_AddBoolToObject(root, "spots_mode_filter", c.spots_mode_filter);
+    // The last of the drawer's controls that had no remote equivalent. CW pitch and
+    // the IF trim are per-unit calibration you set once and forget, which is
+    // exactly the kind of thing you do not want to need the glass for; the charge
+    // limit matters most when the Tab5 is somewhere you are not.
+    cJSON_AddNumberToObject(root, "cw_pitch_hz",     (double)ui_get_cw_pitch_hz());
+    cJSON_AddNumberToObject(root, "if_cal_hz",       (double)ui_get_if_cal_hz());
+    cJSON_AddBoolToObject  (root, "charge_limit_en",  c.charge_limit_en);
+    cJSON_AddNumberToObject(root, "charge_limit_pct", (double)c.charge_limit_pct);
     cJSON_AddBoolToObject(root, "psk_rx_en",         c.psk_rx_en);
     cJSON_AddBoolToObject(root, "bt_mouse_en",       c.bt_mouse_en);
     cJSON_AddNumberToObject(root, "swr_limit_x10",   c.swr_limit_x10);
@@ -1708,6 +1716,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(d, "db_min",         c.db_min);
     cJSON_AddNumberToObject(d, "db_max",         c.db_max);
     cJSON_AddNumberToObject(d, "ema_pct",        (int)(c.ema_alpha * 100.0f + 0.5f));
+    cJSON_AddBoolToObject  (d, "flip",           c.display_flip);
 
     // SSID yes, password never: it would put the operator's WiFi key in every
     // browser cache and proxy log that ever touched this page. The form sends a
@@ -1855,6 +1864,24 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "bandplan_region")))
         settings_set_bandplan_region((uint8_t)it->valuedouble);
 
+    // CW pitch and the IF trim: live setter AND NVS, same as the drawer's sliders -
+    // ui_set_* do both, and ui_set_cw_pitch_hz also pushes the QMX's own CW centre.
+    // Both clamp internally, so a hand-written value cannot put the display out of
+    // step with the radio.
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "cw_pitch_hz"))) {
+        ui_set_cw_pitch_hz((uint16_t)it->valuedouble);
+        ui_flat_mode_reset();          // the CW carrier just moved in the passband
+    }
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "if_cal_hz")))
+        ui_set_cw_cal_hz((int16_t)it->valuedouble);
+
+    // Battery care. status.c re-reads the config on every poll, so storing it is
+    // enough - there is nothing to apply live.
+    { cJSON *b = cJSON_GetObjectItem(root, "charge_limit_en");
+      if (cJSON_IsBool(b)) settings_set_charge_limit_en(cJSON_IsTrue(b)); }
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "charge_limit_pct")))
+        settings_set_charge_limit_pct((uint8_t)it->valuedouble);   // clamps 50..100
+
     // SWR protection limit. This was in the GET and in the browser's form but had
     // no case here, so the field looked editable, looked saved, and was dropped -
     // the worst possible failure for a control whose whole job is to stop a
@@ -1914,6 +1941,15 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         }
         if (cJSON_IsNumber(v = cJSON_GetObjectItem(disp, "sleep_min")))
             settings_set_display_sleep_min((uint8_t)v->valuedouble);
+        // 180-degree flip, for a Tab5 mounted upside down. Live + stored, like the
+        // drawer's own toggle: LVGL rotation and the touch map follow together, so
+        // it is reversible from either screen.
+        if (cJSON_IsBool(v = cJSON_GetObjectItem(disp, "flip"))) {
+            bool fl = cJSON_IsTrue(v);
+            display_set_flipped(fl);
+            settings_set_display_flip(fl);
+            ESP_LOGI(TAG, "web: display flip %s", fl ? "on" : "off");
+        }
         cJSON *jmin = cJSON_GetObjectItem(disp, "db_min");
         cJSON *jmax = cJSON_GetObjectItem(disp, "db_max");
         if (cJSON_IsNumber(jmin) || cJSON_IsNumber(jmax)) {
