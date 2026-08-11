@@ -99,14 +99,26 @@ a brief hold, while a callsign is a quick tap.
 
 **Settings drawer** (swipe in from the right edge) — **Live spots** section:
 
-| Control | What it does |
-|---------|--------------|
-| **Live spots (POTA)** | The whole feature. Off leaves the spectrum completely clean |
-| **Add RBN (CW skimmers)** | Adds RBN as a second source. Needs your callsign set |
+| Control | Default | What it does |
+|---------|---------|--------------|
+| **Live spots (POTA)** | On | The whole feature. Off leaves the spectrum completely clean |
+| **Add RBN (CW skimmers)** | Off | Adds RBN as a second source. Needs your callsign set |
+| **DX cluster spots** | Off | Human-typed spots — the only source of SSB activity. A second connection, so opt-in |
+| **SOTA spots (summits)** | Off | Summit activations from spothole.app, a volunteer-run server. Opt-in for that reason |
+| **Mode filter the spots** | **On** | Shows only spots you can work in the mode you are in |
 
-Both settings are saved, and both appear in the configuration file you can
-download and restore from the web UI (`spots` and `spots_rbn` under
-`[settings]`).
+Every one is saved and appears in the configuration file you can download and
+restore from the web UI, under `[settings]`.
+
+**About the mode filter**, since it is on by default and changes what you see: tapping
+a spot sets the **mode** as well as the frequency, so an unfiltered lane can drop a CW
+operator into FT8 without warning — which is exactly what happened to Michael KZ4LY,
+and why this exists. With it on, changing mode changes which spots are on screen, and
+the off-screen counts change with them. A spot whose mode is unknown is always shown,
+so nothing is hidden on a guess. Switch it **off** and every spot is shown, with a
+two-letter tag on the label (`CW`, `SB`, `FT`) telling you what tapping it will do —
+deliberately absent when the filter is on, because then every spot is already your
+mode.
 
 The spots overlay belongs to the **Panadapter** page. It is not drawn on the FT8
 screen.
@@ -182,7 +194,29 @@ Things worth knowing:
 
 ---
 
-### 6. Refresh and timing
+### 6. About SOTA — summit activations
+
+SOTA spots come from **[spothole.app](https://spothole.app)**, an aggregator run by
+Ian Renton M0TRT, used with his permission. That is worth knowing because it shapes
+how the Tab5 treats it:
+
+- **Off by default**, so nobody polls somebody else's hobby server without choosing to.
+- **Fetched once every two minutes**, which is plenty for activations that last an hour.
+- **When it is unreachable, nothing happens.** The spots already on screen stay until
+  they age out normally — no banner, no error, nothing to dismiss. A volunteer server
+  being down for an afternoon is an ordinary state, not a fault in your radio.
+
+Almost every SOTA spot carries a portable suffix — `EA2GM/P` rather than `EA2GM` —
+because the operator is on a summit rather than at home. That is why the callsign
+shown is the one that was spotted, exactly as spotted.
+
+> **SOTA is nearly all CW and SSB.** Of a typical sample, none are in a digital mode.
+> So a summit will rarely appear in your FT8 log; the value of the source is seeing
+> where the activity is on the spectrum, and being able to tap it.
+
+---
+
+### 7. Refresh and timing
 
 - POTA is fetched about **once a minute** — spot rates on that service change on
   that sort of timescale, and the fetch briefly pauses the web UI's spectrum
