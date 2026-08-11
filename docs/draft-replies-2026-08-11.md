@@ -145,15 +145,37 @@ while one is running so you cannot forget it; and the last of the Tab5-only
 settings — CW pitch, IF calibration, the battery charge limit, the 180-degree flip,
 Fox/Hound, simulation mode and the spot mode filter.
 
-One correction to your question, though, because it deserves an accurate answer
-rather than a flattered one: no, I have not changed how black level and contrast
-feed the browser's picture, and it is worth knowing that they do not. The browser
-draws its own waterfall — it works out its own noise floor and uses its own fixed
-colour ramp — so black level, contrast, adaptive floor and the colour scheme
-currently only change what the Tab5's own screen looks like. The FFT window does
-affect both, because that calculation happens on the Tab5 before anything is sent.
-That is an inconsistency I had not noticed until you asked, and I will make the
-browser follow those settings.
+Your question about black level and contrast turned out to be the most productive
+thing in your list, so it deserves a proper answer.
+
+When you asked, the honest answer was no: the browser drew its own waterfall with its
+own noise floor and its own fixed colour ramp, so black level, contrast, adaptive
+floor and the colour scheme only ever changed the Tab5's screen. Chasing that turned
+up four separate faults, and the last one was not in the browser at all.
+
+The browser now uses the Tab5's own colour maps and mapping, and follows black level,
+contrast, colour scheme and spectrum smoothing live — change a slider on the Tab5 and
+the browser follows within a second. Two of the four were real bugs in the shared
+path: the spectrum was being quantised for transmission with its floor at -130 dBm,
+which is exactly where this receiver's own noise sits, so a quarter of the band
+arrived flattened against the bottom of the scale and the browser had nothing to
+measure a noise floor against. And the browser was never applying the smoothing stage
+the Tab5 applies before it draws anything, which is why your smoothing setting did
+nothing there.
+
+The fourth is worth telling you because it is on the radio side and it is not what I
+expected: the Tab5 re-seeds its noise floor about seventeen times a second, so the
+per-bin adaptive floor has never actually run on any version. What the Tab5 draws is
+each bin measured against the average across the band, refreshed constantly - which is
+why it settles instantly and never lets a signal fade. The consequence is that the
+**"Adaptive floor" setting does nothing, and never has**, on either screen. I have
+left it that way deliberately: the alternative is the behaviour it was designed for,
+where a steady carrier sinks into the noise floor over about a minute, and I do not
+think anyone wants that on a panadapter. But the setting should not pretend to work,
+so it is now labelled as inert.
+
+The FFT window setting was always shared, because that calculation happens on the Tab5
+before anything is sent.
 
 Thank you for the detail in that list. Reports written like that are the reason
 several of these are getting fixed at all.

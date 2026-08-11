@@ -409,6 +409,25 @@ With the USB cable left connected, power-cycling the QMX often does not trigger 
 ### Waterfall double-height buffer
 `1280 × 824` RGB565 canvas (2× waterfall height). Each tick writes the new row at `s_wf_head` and `s_wf_head + WATERFALL_H`, then moves the view pointer. Avoids `memmove` (~130 µs vs ~92 ms per tick).
 
+### ⛔ The per-bin adaptive noise floor HAS NEVER RUN — the floors are re-seeded 17×/s
+Measured on hardware 2026-08-11 (`FLATRESET: 90 resets in 5.1 s`, temporary instrumentation in `ui_flat_mode_reset()`, since removed). `audio.c`'s `process_rx()` sets `s_flat_reset_pending` on **any** poll that returns zero pairs, and the drain loop normally **ends** on an empty read — so `ui_flat_mode_reset()`, written for the QMX-power-cycle case (v0.15.5), fires continuously. It re-seeds **both** the flat-spectrum floor (`s_flat_ready = false`) and the waterfall floor (`render_waterfall_floor_reset()`).
+
+So every draw starts from a fresh seed, and what the Tab5 actually shows is:
+
+```
+spectrum:  height = smoothed_bin - MEAN(bins) - FLAT_FLOOR_BIAS_DB   clamped 0..FLAT_RANGE_DB
+waterfall: idx    = (sample - MEDIAN(bins) - black_db) * 255/contrast_db + 32
+```
+
+**Consequences, all real:**
+- The per-bin tracker in `render_waterfall.c` (`floor_arr`, `WF_FLOOR_ATTACK`, `WF_FLOOR_DECAY_SLOW`) and in `ui.c` (`s_flat_floor`, `FLAT_FLOOR_UP_ALPHA`) is inert. It is seeded, updated **once**, and thrown away.
+- **The "Adaptive floor (%)" drawer setting does nothing**, because `floor_arr[bin]` and `floor_global` are always the same value, so the blend has nothing to blend. The web settings form says so explicitly; the drawer does not yet.
+- `s_flat_smooth`'s own EMA never accumulates either — it is re-seeded to the current value each time. Only `render.c`'s `s_ema_alpha` (the "Spectrum smoothing" setting) and `WF_EMA_ALPHA` actually smooth anything.
+
+**Do not "fix" this casually.** The behaviour above is what the operator knows and likes: responsive, signals always visible. Letting the designed tracker run makes steady carriers **fade into the floor over ~60 s** (a 50 s rise time constant) — verified, because the browser implemented the DESIGN faithfully and that is exactly what it did, which is how this was found. Fixing `audio.c` means re-tuning the floor constants at the same time and getting the operator to judge the result.
+
+The browser mirrors the real behaviour behind one `FLOOR_TRACKING` switch in `index.html`; flip it the same day `audio.c` is fixed so both screens change together.
+
 ### 12 kHz IF offset
 The QMX presents IQ with +12 kHz IF offset — the VFO signal lands at +12 kHz in baseband. Spectrum and waterfall shift bin selection by `n_bins/4` to center the VFO signal visually. Touch-to-tune math uses the raw CAT frequency, so no adjustment needed there.
 
