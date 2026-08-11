@@ -77,9 +77,18 @@ your list I have not solved.
 **CW decode.** Not in a release yet — what you read is the roadmap. The QMX+ decodes
 internally and mirroring that over CAT is the plan.
 
-**"Release radio".** You are right, and I will reword it. On placement: while it is
-released there is already a banner you can tap to take the radio back, so the way out is
-at your fingertips — it is the way in that is buried. I will look at that.
+**"Release radio".** You were right, and it is reworded. The old wording described what
+the software does to the radio; it now says what you are trying to do. The button reads
+**"Let me use the QMX menus"**, and while it is handed over, **"Done - Tab5 takes over
+again"**. The pause and play icons are gone too — a gear now, pointing at where you are
+headed, since a tape-deck symbol was never the right metaphor.
+
+On placement: while the radio is handed over there is already a bar across the top you
+can tap to take it back, so the way out is at your fingertips — it is the way in that is
+buried in Settings. I have not moved it yet, because the bottom bar is already carrying
+battery, SD, version, clock, Bluetooth, WiFi, network name and IP, and I would rather
+find it a proper home than wedge it in. Tell me if you would still prefer it there and I
+will make room.
 
 **The web interface.** Your question about black level and contrast turned out to be the
 most productive thing in your list. The answer when you asked was no, they did not affect

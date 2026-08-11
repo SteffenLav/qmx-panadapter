@@ -72,7 +72,7 @@ title: From a tap to a keyed radio
 node: operator taps Transmit, or the QSO machine decides
 node: ft8_tx_build_request() - build the message text
 node: ft8_tx_arm() - stage it for a slot
-branch: refuses while the radio is released (see Release radio)
+branch: refuses while the radio is released (see "Let me use the QMX menus")
 node: ft8_tx_run() at the slot boundary
 branch: cat_poll_set_paused(true) for the whole burst
 branch: TX; then 79 x TA<freq>; at 160 ms, then TA0; and RX;

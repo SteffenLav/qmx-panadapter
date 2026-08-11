@@ -511,7 +511,7 @@
       <div class="bot-menu" id="radio-menu">
         <a href="#" id="screen-toggle-link" title="Switch the Tab5 between the panadapter and the FT8/FT4 screen">Switch to FT8/FT4</a>
         <a href="#" id="memory-btn" title="Your 32 memory channels - click one to tune to it">Memory channels</a>
-        <a href="#" id="pause-btn" title="Release the radio so you can use its own menu or the Band Configuration terminal app - the Tab5 stops sending CAT until you take it back">Release radio</a>
+        <a href="#" id="pause-btn" title="Stops the Tab5 talking to the radio, so its own menus and the Band Configuration terminal app behave normally. Nothing is decoded until you hand it back">Let me use the QMX menus</a>
         <a href="#" id="tune-ant-btn" style="display:none" title="Antenna Tune (QMX 1.04+): keys the radio with a steady carrier and shows live power and SWR. Auto-stops after 60 s.">Antenna Tune</a>
         <a href="#" id="act-btn" title="POTA / SOTA activation: every QSO logged while one is running claims that reference, so start it when you arrive and stop it when you leave">Activation</a>
       </div>
@@ -2436,7 +2436,10 @@ function paintPaused(on) {
   pausedNow = !!on;
   const btn = document.getElementById("pause-btn");
   if (btn) {
-    btn.textContent = pausedNow ? "Take radio back" : "Release radio";
+    /* Same wording as the Tab5's own button (ui.c) - Samuel W7STF found the old
+       "Release radio to QMX menu" / "Take radio back" pair confusing, and two screens
+       disagreeing about what a control is called would be worse than either. */
+    btn.textContent = pausedNow ? "Done - Tab5 takes over again" : "Let me use the QMX menus";
     btn.style.color = pausedNow ? "#ffb020" : "";
     btn.style.borderColor = pausedNow ? "#ffb020" : "";
   }

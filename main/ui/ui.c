@@ -1709,7 +1709,7 @@ static int s_drawer_scrim_swipe_start_x = -1;
                                    // to be on when you reach for the USB cable.
 #define DRAWER_SEC_QMXRF      25  // QMX RF gain (per band), directly under QMX volume -
                                    // the radio's two gain controls belong together.
-#define DRAWER_SEC_PAUSE      26  // "Release radio (use QMX menu)": stops all CAT traffic
+#define DRAWER_SEC_PAUSE      26  // "Let me use the QMX menus": stops all CAT traffic
                                    // so the radio's own menu and Terminal Applications
                                    // have the pipe to themselves. Kept in BOTH modes.
 #define DRAWER_SEC_SWRLIM     27  // SWR protection limit for transmit. Sits with Antenna
@@ -2252,8 +2252,8 @@ void ui_set_cat_paused(bool paused)
     }
     if (s_lbl_pause_btn) {
         lv_label_set_text(s_lbl_pause_btn,
-                          paused ? LV_SYMBOL_PLAY "  Take radio back"
-                                 : LV_SYMBOL_PAUSE "  Release radio to QMX menu");
+                          paused ? LV_SYMBOL_OK "  Done - Tab5 takes over again"
+                                 : LV_SYMBOL_SETTINGS "  Let me use the QMX menus");
     }
     if (!paused) {
         // The radio may have been retuned, had its band or filter changed, or
@@ -4230,8 +4230,9 @@ void ui_init(lv_display_t *disp)
     lv_obj_add_flag(s_pause_banner, LV_OBJ_FLAG_HIDDEN);
     {
         lv_obj_t *lbl = lv_label_create(s_pause_banner);
-        lv_label_set_text(lbl, LV_SYMBOL_PAUSE " Radio released - the QMX menu is yours. "
-                               "Nothing is being decoded.  [tap to take it back]");
+        lv_label_set_text(lbl, LV_SYMBOL_SETTINGS " The QMX menus are yours - the Tab5 is "
+                               "not touching the radio. Nothing is being decoded.  "
+                               "[tap here when you are done]");
         lv_obj_set_style_text_color(lbl, lv_color_white(), 0);
         lv_obj_set_style_text_font(lbl, &lv_font_montserrat_22, 0);
         lv_obj_center(lbl);
@@ -7042,7 +7043,13 @@ static void drawer_build(void)
         y += 96;
     }
 
-    // "Release radio (use QMX menu)" - Stan's pause button, via Samuel W7STF.
+    // "Let me use the QMX menus" - Stan's pause button, via Samuel W7STF.
+    //
+    // WORDING, reworded 2026-08-11 after Samuel called the original "not too helpful,
+    // in fact confusing". It was "Release radio to QMX menu" / "Take radio back" with
+    // pause and play icons - written from the SOFTWARE's point of view (what it does to
+    // the radio) and iconed like a tape deck. It now says what the OPERATOR wants to do,
+    // and the gear icon points at where they are going: the radio's own menus.
     // Kept in both modes: the reason to reach for it is the radio in front of
     // you, not the screen you happen to be on.
     {
@@ -7056,8 +7063,8 @@ static void drawer_build(void)
         lv_obj_add_event_cb(btn, drawer_pause_btn_cb, LV_EVENT_CLICKED, NULL);
         s_lbl_pause_btn = lv_label_create(btn);
         lv_label_set_text(s_lbl_pause_btn,
-                          cat_user_pause_active() ? LV_SYMBOL_PLAY "  Take radio back"
-                                                  : LV_SYMBOL_PAUSE "  Release radio to QMX menu");
+                          cat_user_pause_active() ? LV_SYMBOL_OK "  Done - Tab5 takes over again"
+                                                  : LV_SYMBOL_SETTINGS "  Let me use the QMX menus");
         lv_obj_set_style_text_font(s_lbl_pause_btn, &lv_font_montserrat_28, 0);
         lv_obj_set_style_text_color(s_lbl_pause_btn, lv_color_hex(0xffffff), 0);
         lv_obj_center(s_lbl_pause_btn);

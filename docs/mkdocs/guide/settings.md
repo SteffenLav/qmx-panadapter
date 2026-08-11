@@ -51,11 +51,11 @@ follows you — a tap on the panadapter, a spot, a memory recall, a band change,
 page, and the radio's own tuning knob. It applies in **CW and CW-R only**, and leaving CW
 clears it. If you are running your own split, the Tab5 leaves it alone.
 
-**Release radio to QMX menu** — hands the radio back. The QMX's own menu, and its Band
+**Let me use the QMX menus** — hands the radio back. The QMX's own menu, and its Band
 Configuration terminal application, talk over the same USB serial port the Tab5 polls
 several times a second, so the two fight over it. Tap this before using the radio's own
 menus: the Tab5 stops sending anything, the spectrum freezes, and a blue bar across the
-top says so and takes the radio back when you tap it. Resuming re-checks IQ mode, which a
+top says so and gives the radio back when you tap it. Resuming re-checks IQ mode, which a
 trip through the radio's menu can switch off.
 
 While the radio is released the Tab5 will not transmit — an armed FT8 burst and Antenna
