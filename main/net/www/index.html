@@ -384,6 +384,13 @@
         <span class="lab">Zoom</span><span id="zoom">x1.0</span><span class="arr">▾</span>
         <div class="dropdown" id="dd-zoom"></div>
       </div>
+      <!-- RIT: arms click-to-RIT, and shows the live offset. Not a dropdown - it is
+           a mode toggle, and the mode has to be readable at a glance because it
+           changes what clicking the spectrum does. -->
+      <div class="pill clickable" id="pill-rit" onclick="ritPillClick()"
+           title="Receive off the dial without moving transmit. Click to arm, then click a signal on the spectrum to listen there. Click again to clear.">
+        <span class="lab">RIT</span><span id="rit">off</span>
+      </div>
     </div>
     <!-- center: VFO frequency (tap to open the keypad) -->
     <div id="top-center">
@@ -722,6 +729,13 @@
    ===================================================================== */
 let lastFreqHz     = 0;
 let lastPassbandHz = 0;
+/* RIT: the OFFSET is radio state and comes from the device; the ARMED flag is
+   local to this browser on purpose. Arming changes what a CLICK does, and a
+   click here is not a finger on the Tab5 - sharing the flag would silently
+   change what the person standing at the radio does next. */
+let lastRitHz      = 0;
+let ritArmed       = false;
+let ritFlash       = 0;      // ms deadline for the 'limit' message in the pill
 let lastMode       = "USB";
 let lastQmxFw      = "";
 let lastCwPitchHz  = 700;
@@ -766,13 +780,21 @@ function fmtHz(hz) {
    WS byte 512 = the display centre frequency (VFO + IF + pan + CW pitch in CW mode).
    Pan moves the window RIGHT toward higher frequencies, so the VFO moves LEFT.
    Formula: px = W/2 + (freqHz - (VFO + panHz + cwHz)) / spanHz * W */
+/* Absolute frequency -> canvas x. Screen centre is the DIAL frequency in every
+   mode: the IF and, in CW, the pitch offset are a bin-domain shift the device
+   applies before the spectrum bytes leave it, exactly as updateFreqAxis() below
+   explains for the axis labels.
+   ⚠ This used to subtract the CW pitch here, which double-counted that shift. The
+   two VFO-line callers hid it by pre-ADDING the pitch so the two cancelled - but
+   the spot markers passed a plain frequency, so in CW every spot was drawn one CW
+   pitch (700 Hz by default) to the LEFT of the signal it was labelling: 19 px at
+   zoom x1, 149 px at x8. pxToFreqHz(), the click path, never had the term, so
+   clicking and drawing disagreed in CW and only in CW. */
 function freqToPixelX(freqHz, W) {
     if (!lastFreqHz || !freqHz) return W * 0.5;
     const spanHz = 48000 / lastZoom;
     const panHz  = lastPanBins * HZ_PER_BIN;
-    const isCW   = (lastMode || "").toUpperCase().indexOf("CW") >= 0;
-    const cwHz   = isCW ? lastCwPitchHz : 0;
-    return W * 0.5 + (freqHz - lastFreqHz - panHz - cwHz) / spanHz * W;
+    return W * 0.5 + (freqHz - lastFreqHz - panHz) / spanHz * W;
 }
 
 let lastSignalDbm = null;
@@ -1760,6 +1782,16 @@ const SET_FIELDS = [
   ["FT8 filters", "filters.robot_priority", "sel", "Robot picks", "",
      [["0","Strongest signal"],["1","Weakest signal"],["2","Most distant"]]],
 
+  /* Fox/Hound and simulation mode were both already accepted by /api/settings -
+     they were reachable with curl and invisible in the browser, which is the worst
+     of both. Order of the Fox/Hound values MUST match ft8_hound_mode_t, same as
+     the Tab5's dropdown in ft8_filter_modal.c. */
+  ["FT8 filters", "hound_mode", "sel", "Fox/Hound (DXpedition)",
+     "Guided asks before each step; Automatic works the queue on its own. A DXpedition Fox transmits several signals at once, which this radio cannot do - so this is the HOUND side only",
+     [["0","Off"],["1","Guided"],["2","Automatic"]]],
+  ["FT8 filters", "sim_mode_en", "bool", "Simulation mode (practice)",
+     "Phantom stations call and answer through the real decoder so you can practise a full QSO. The transmit path is interlocked and never keys the radio - but the contacts DO land in your log"],
+
   ["FT8 filters", "cq.listen_every", "sel", "Listening slot during a CQ run",
      "Spend one slot receiving after every N calls, so the occupancy picture for your own time window stays current",
      [["0","Never"],["3","Every 3 calls"],["5","Every 5 calls"],["10","Every 10 calls"]]],
@@ -1773,10 +1805,17 @@ const SET_FIELDS = [
   ["Spots & reporting", "pskreporter_en", "bool", "Report decodes to PSK Reporter", "Over the internet, never on the air"],
   ["Spots & reporting", "psk_rx_en",      "bool", "Propagation feedback (who is hearing me)",
      "Asks PSK Reporter which receivers have copied YOUR callsign. Read-only, at most one query every 5 minutes"],
+  ["Spots & reporting", "spots_mode_filter", "bool", "Mode filter the spots",
+     "Show only spots for the mode you are in, so tapping one cannot land you in a different mode. A spot whose mode is unknown is always shown. With this off, labels carry a CW/SB/FT tag instead"],
   ["Spots & reporting", "greylist_en",    "bool", "Grey-list stations that never answer", ""],
 
-  ["Radio & display", "swr_limit_x10",     "num",  "SWR protection (x10)",
-     "0 = off. Otherwise the SWR at which a transmit burst is cut short and the transmitter latched off until you clear it - 30 means 3.0:1"],
+  /* The same five choices the Tab5's dropdown offers, in the same words. It was a
+     free "x10" number, which asked the operator to know the encoding and let them
+     type a value the Tab5 would only ever show as the nearest option anyway. */
+  ["Radio & display", "swr_limit_x10",     "sel",  "SWR protection (transmit)",
+     "The SWR at which a transmit burst is cut short and the transmitter latched off until you clear it",
+     [["0","Off"],["20","Stop above 2.0:1"],["25","Stop above 2.5:1"],
+      ["30","Stop above 3.0:1"],["40","Stop above 4.0:1"]]],
   ["Radio & display", "bt_mouse_en",       "bool", "Bluetooth mouse",
      "Takes effect after a restart. Then put the mouse in pairing mode; it reconnects by itself from then on"],
   ["Radio & display", "qmx_vol_db",        "num",  "QMX volume (dB)", "0-50, the same number the radio shows on its own LCD"],
@@ -2519,8 +2558,17 @@ async function tick() {
     if (!r.ok) throw new Error("HTTP " + r.status);
     const s = await r.json();
 
+    /* A retune clears RIT at the radio (cat_set_frequency does it on every path),
+       so click-to-RIT mode has to stand down with it - otherwise the next click
+       silently sets an offset instead of tuning. Keyed on the DIAL MOVING rather
+       than on our own commands, so a band change from the Tab5, a spot click, or
+       the radio's own knob all count. Armed clicks never move the dial, so this
+       cannot disarm itself mid-use. */
+    if (ritArmed && lastFreqHz && s.freq_hz && s.freq_hz !== lastFreqHz) ritArmed = false;
     lastFreqHz     = s.freq_hz     || 0;
     lastPassbandHz = s.passband_hz || 0;
+    lastRitHz      = s.rit_hz     || 0;
+    updateRitPill();   // the offset is radio state - it can be set from the Tab5
     lastMode       = s.mode        || "USB";
     lastQmxFw      = s.qmx_fw      || "";
     lastCwPitchHz  = s.cw_pitch_hz || 700;
@@ -2756,6 +2804,12 @@ let tuneOnSpec   = true; // which canvas is being dragged
    digi 100) long after the Tab5 moved to 250 and 500, so the same click landed on
    a different frequency depending on which screen you used. */
 function tuneSnapHz() {
+  /* Armed for RIT the grid is 10 Hz in every mode, exactly as ui.c's touch path
+     does it: the mode grid exists to land the DIAL tidily, and SSB's 250 Hz would
+     leave five usable offsets inside the +/-500 limit. Both the cursor preview and
+     the commit read this, so the preview cannot promise a frequency the click will
+     not use. */
+  if (ritArmed) return 10;
   const m = (lastMode || "").toUpperCase();
   if (m.indexOf("USB") >= 0 || m.indexOf("LSB") >= 0)  return 250;
   if (m.indexOf("DIGI") >= 0 || m.indexOf("FT") >= 0 ||
@@ -3019,6 +3073,26 @@ function handleTuneMove(clientX, rect) {
 
 function handleTuneCommit(clientX, rect) {
   const hz = pxToFreqHz(clientX, rect);
+  /* Click-to-RIT. While armed a click moves the RECEIVE offset onto what was
+     clicked and leaves the dial - and therefore transmit - alone. Stays armed, so
+     the next caller is just another click; the pill is the way out. Mirrors the
+     Tab5 tap in ui.c. */
+  if (ritArmed && hz > 0 && lastFreqHz) {
+    const RIT_MAX = 500;            // CAT_RIT_MAX_HZ in cat.h
+    let rit = hz - lastFreqHz;
+    if (rit >  RIT_MAX) rit =  RIT_MAX;
+    if (rit < -RIT_MAX) rit = -RIT_MAX;
+    /* Say so rather than clamping in silence - the marker would otherwise appear
+       somewhere the operator did not click. There is no toast in this UI, so the
+       pill carries it for a moment; the 1 Hz status poll restores it. */
+    if (Math.abs(hz - lastFreqHz) > RIT_MAX) ritFlash = Date.now() + 1800;
+    sendCmd({ action: "set_rit", hz: rit });
+    lastRitHz = rit;                // draw the marker now, do not wait for the poll
+    updateRitPill();
+    tuneCursorX = -1;
+    tuneActive  = false;
+    return;
+  }
   if (hz > 0) {
     sendCmd({ action: "set_freq", hz: hz });
     lastFreqHz = hz;
@@ -3027,6 +3101,44 @@ function handleTuneCommit(clientX, rect) {
   }
   tuneCursorX = -1;
   tuneActive  = false;
+}
+
+/* =====================================================================
+   The RIT pill. Three appearances, and the order of the tests in ritPillClick() is
+   the behaviour: if RIT is engaged the operator wants OUT, back to the run
+   frequency, so clear and disarm together. Otherwise it toggles the mode. Same
+   rules as the Tab5's pill (ui.c, rit_pill_cb). */
+function updateRitPill() {
+  const pill = document.getElementById("pill-rit");
+  const val  = document.getElementById("rit");
+  if (!pill || !val) return;
+  if (ritFlash && Date.now() < ritFlash) {
+    val.textContent = "limit ±500";
+    pill.style.color = "#ff44dd";
+    return;
+  }
+  if (lastRitHz) {
+    val.textContent = (lastRitHz > 0 ? "+" : "") + lastRitHz + " Hz";
+    pill.style.color = "#ff44dd";          // the marker's colour, so the two read as one thing
+  } else if (ritArmed) {
+    val.textContent = "click a signal";
+    pill.style.color = "#ffa040";          // the same amber this UI uses for "armed"
+  } else {
+    val.textContent = "off";
+    pill.style.color = "";
+  }
+}
+
+function ritPillClick() {
+  if (lastRitHz) {
+    sendCmd({ action: "set_rit", hz: 0 });
+    lastRitHz = 0;
+    ritArmed  = false;
+  } else {
+    ritArmed = !ritArmed;
+  }
+  ritFlash = 0;
+  updateRitPill();
 }
 
 /* onSpec: the spectrum overlay also carries the clickable spot labels. The
@@ -3307,12 +3419,18 @@ function passbandBins() {
   const edges = computePassbandEdgesHz();
   if (!edges) return null;
 
+  /* The filter follows the RECEIVER, so with RIT engaged the window sits on what
+     you are listening to. Applied here rather than in computePassbandEdgesHz(),
+     which also feeds the band-plan strip - the same split the Tab5 makes, and on a
+     whole-band strip a few hundred Hz is sub-pixel anyway. */
+  const loHz = edges.loHz + lastRitHz, hiHz = edges.hiHz + lastRitHz;
+
   /* Pan offset in Hz (positive pan_bins = spectrum shifts right = view shifts left) */
   const panHz  = lastPanBins * HZ_PER_BIN;
   const spanHz = 48000 / lastZoom;
   const W      = SPEC_W;
-  const loBin  = (edges.loHz - panHz) / spanHz * W + W / 2;
-  const hiBin  = (edges.hiHz - panHz) / spanHz * W + W / 2;
+  const loBin  = (loHz - panHz) / spanHz * W + W / 2;
+  const hiBin  = (hiHz - panHz) / spanHz * W + W / 2;
   return { loBin, hiBin };
 }
 
@@ -3496,6 +3614,26 @@ function getZoomWindow() {
 }
 
 /* Spectrum — flat mode */
+/* =====================================================================
+   RIT marker - where the receiver is listening, when it is not the dial.
+
+   Mirrors the Tab5's dashed magenta line (ui.c, ui_push_spectrum). The amber line
+   keeps meaning the DIAL, i.e. transmit, and seeing both at once is how you know
+   transmit did not follow the receiver. Drawn at dial+RIT through freqToPixelX,
+   so the sign is the device's - it re-centres the display on the signal at the
+   dial, which is what holds the trace still, and a signal at dial+R therefore
+   lands R to the right.
+   Deliberately not faded or hidden while panning: where you are listening is
+   exactly what you want to keep seeing. */
+function drawRitMarker(ctx, W, H) {
+  if (!lastRitHz) return;
+  const x = Math.round(freqToPixelX(lastFreqHz + lastRitHz, W));
+  if (x < 0 || x >= W) return;
+  ctx.fillStyle = "#ff44dd";
+  const on = Math.max(3, Math.round(H / 33)), step = on * 2;   // ~6-on/6-off at 200 px, like the Tab5
+  for (let y = 0; y < H; y += step) ctx.fillRect(x - 1, y, 2, Math.min(on, H - y));
+}
+
 function drawSpectrumFlat(bytes) {
   if (!specSmoothReady) {
     for (let i = 0; i < SPEC_W; i++) specSmooth[i] = bytes[i];
@@ -3563,9 +3701,9 @@ function drawSpectrumFlat(bytes) {
   for (let i = 1; i < W; i++) sctx.lineTo(i, yOf(i));
   sctx.strokeStyle = "#07e007"; sctx.lineWidth = 1.5; sctx.stroke();
 
-  const isCW_f = (lastMode || "").toUpperCase().indexOf("CW") >= 0;
-  const vfoX = Math.round(freqToPixelX(isCW_f ? lastFreqHz + lastCwPitchHz : lastFreqHz, W));
+  const vfoX = Math.round(freqToPixelX(lastFreqHz, W));
   sctx.fillStyle = "#ffb95a"; sctx.fillRect(vfoX-1, 0, 2, H);
+  drawRitMarker(sctx, W, H);
 
   /* dB-above-floor scale labels at the gridlines (right edge) */
   sctx.fillStyle = "#9aa7b4"; sctx.font = "13px system-ui,sans-serif"; sctx.textAlign = "right";
@@ -3624,9 +3762,9 @@ function drawSpectrumRaw(bytes) {
     sctx.lineTo(i, H - 1 - Math.round(bytes[getBinR(i)] * (H-1) / 255));
   sctx.strokeStyle = "#07e007"; sctx.lineWidth = 1.5; sctx.stroke();
 
-  const isCW_r = (lastMode || "").toUpperCase().indexOf("CW") >= 0;
-  const vfoX = Math.round(freqToPixelX(isCW_r ? lastFreqHz + lastCwPitchHz : lastFreqHz, W));
+  const vfoX = Math.round(freqToPixelX(lastFreqHz, W));
   sctx.fillStyle = "#ffb95a"; sctx.fillRect(vfoX-1, 0, 2, H);
+  drawRitMarker(sctx, W, H);
 
   /* dBm scale labels at the gridlines (right edge) */
   sctx.fillStyle = "#9aa7b4"; sctx.font = "13px system-ui,sans-serif"; sctx.textAlign = "right";

@@ -304,6 +304,9 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "pan_bins",    (double)ui_get_pan_offset_bins());
     cJSON_AddNumberToObject(root, "cw_pitch_hz", (double)ui_get_cw_pitch_hz());
     cJSON_AddNumberToObject(root, "if_cal_hz",   (double)ui_get_if_cal_hz());
+    // RIT offset in Hz, 0 = off. Radio state, so the browser and the Tab5 pill show
+    // the same number and the browser can draw the marker in the same place.
+    cJSON_AddNumberToObject(root, "rit_hz",      (double)cat_get_rit_hz());
     cJSON_AddBoolToObject  (root, "flat_mode",   ui_get_flat_mode());
     cJSON_AddNumberToObject(root, "utc_epoch",   (double)time(NULL));
     // What is maintaining the clock - same authority the Tab5's bottom-bar
@@ -547,6 +550,19 @@ static esp_err_t cmd_handler(httpd_req_t *req)
                 ui_set_zoom((float)item->valuedouble, 0);
                 display_unlock();
             }
+        }
+    } else if (action && strcmp(action, "set_rit") == 0) {
+        // RIT offset in Hz; 0 clears it and switches RIT off at the radio. Same
+        // entry point the Tab5's tap-to-RIT uses, so the write goes through the
+        // poll task with the mandatory RC; in front of it (see cat.c), and both
+        // screens then show the one offset that is actually set.
+        //
+        // No "arm" here on purpose: arming is a property of the input surface, and
+        // the browser owns its own. cat_request_rit_hz() clamps to CAT_RIT_MAX_HZ.
+        cJSON *item = cJSON_GetObjectItem(root, "hz");
+        if (cJSON_IsNumber(item)) {
+            cat_request_rit_hz((int)item->valuedouble);
+            ESP_LOGI(TAG, "web: RIT -> %+d Hz", (int)item->valuedouble);
         }
     } else if (action && strcmp(action, "cq_start") == 0) {
         // Restart a CQ run from the browser (Dennis WN4FLA): a CQ that has timed out
@@ -1596,6 +1612,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "rbn_en",            c.rbn_en);
     cJSON_AddBoolToObject(root, "cluster_en",        c.cluster_en);
     cJSON_AddBoolToObject(root, "sota_en",           c.sota_en);
+    cJSON_AddBoolToObject(root, "spots_mode_filter", c.spots_mode_filter);
     cJSON_AddBoolToObject(root, "psk_rx_en",         c.psk_rx_en);
     cJSON_AddBoolToObject(root, "bt_mouse_en",       c.bt_mouse_en);
     cJSON_AddNumberToObject(root, "swr_limit_x10",   c.swr_limit_x10);
@@ -1726,6 +1743,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     BOOLTOP("rbn_en",            settings_set_rbn_en);
     BOOLTOP("cluster_en",        settings_set_cluster_en);
     BOOLTOP("sota_en",           settings_set_sota_en);
+    BOOLTOP("spots_mode_filter", settings_set_spots_mode_filter);
     BOOLTOP("psk_rx_en",         settings_set_psk_rx_en);
     BOOLTOP("bt_mouse_en",       settings_set_bt_mouse_en);
     BOOLTOP("pskreporter_en",    settings_set_pskreporter_en);
@@ -1772,6 +1790,22 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     }
     if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "bandplan_region")))
         settings_set_bandplan_region((uint8_t)it->valuedouble);
+
+    // SWR protection limit. This was in the GET and in the browser's form but had
+    // no case here, so the field looked editable, looked saved, and was dropped -
+    // the worst possible failure for a control whose whole job is to stop a
+    // transmit into a bad antenna. Clamped rather than trusted: 0 is off, and
+    // anything else is held inside the range the Tab5's own dropdown offers, so a
+    // hand-written value cannot disable protection by being absurd.
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "swr_limit_x10"))) {
+        int v = (int)it->valuedouble;
+        if (v != 0) {
+            if (v < 20) v = 20;
+            if (v > 40) v = 40;
+        }
+        settings_set_swr_limit_x10((uint8_t)v);
+        ESP_LOGI(TAG, "web: SWR protection -> %d.%d:1", v / 10, v % 10);
+    }
 
     // Display & waterfall: every write does what the drawer's own control does -
     // the LIVE call and the NVS setter together, or the screen and the stored
