@@ -199,17 +199,57 @@ static void usb_stale_detect_task(void *arg)
             prev_devices = 0;
         }
 
-        // QMX-side descriptor-wedge branch: enumeration failed and nothing
-        // usable connected - only the QMX's own restart clears it.
+        // ENUMERATION-FAILURE BRANCH - a hole worth closing, but NOT a fix for #74.
+        //
+        // ⚠ READ THIS BEFORE BELIEVING THE PARAGRAPH BELOW. On 2026-08-11 I told the
+        // operator this branch's log-only behaviour was "the whole bug". It was not:
+        // measured on hardware the same evening, the ZOMBIE branch above fires on this
+        // wedge (num_devices is NON-zero after a failed enumeration - my reasoning that
+        // it could not fire was simply wrong) and it replugged twice, and the QMX
+        // answered both attempts with the same empty data stage. So the retry already
+        // existed and does not help.
+        //
+        // This branch is still worth having: it covers an episode where num_devices IS
+        // zero, which the zombie branch genuinely cannot see. It is a closed hole, not a
+        // cure - do not cite it as one.
+        //
+        // What IS true: ESP-IDF's enum.c has no retry of its own - any error jumps to
+        // ENUM_STAGE_CANCEL, frees the device and gives up. Linux retries up to three
+        // times with escalating resets, and Espressif issue #17918 (open, no fix)
+        // reports this failure class on other devices as timing-related. That is a real
+        // robustness gap and this replug is our stand-in for it.
+        //
+        // What is NOT true is that it rescues a wedged QMX. Falsified on hardware, five
+        // ways, against a really-wedged radio: reset hold 50 ms, reset hold 200 ms
+        // (Linux's long-reset value), requesting 64 descriptor bytes instead of 8 the
+        // way Windows and Linux do, VBUS off for 2 s plus a port power cycle, and
+        // repeated retries. Every one produced the same answer - an EMPTY data stage, no
+        // descriptor bytes at all, ~350 ms after port-on. The radio is not answering
+        // address 0 in that state and no host-side timing changes that.
+        //
+        // Capped and backed off regardless, because a QMX that is merely switched off is
+        // an ordinary state and must not cause endless port cycling.
         if (fails <= baseline) { wedge_checks = 0; continue; }
         if (++wedge_checks < 2) continue;
-        if (now - last_toast_us < (int64_t)DET_RETOAST_MS * 1000) continue;
-
-        ESP_LOGW(TAG, "USB enumeration failed (%lu since boot) and QMX is not "
-                      "connected - stale QMX USB state, needs a QMX power cycle",
-                 (unsigned long)fails);
-        // Log only, for the reason given on the zombie branch above.
         wedge_checks = 0;
+
+        if (replug_attempts < 3 && now - last_replug_us > 60000000LL) {
+            replug_attempts++;
+            ESP_LOGW(TAG, "USB enumeration failed (%lu since boot) and nothing is "
+                          "connected - retrying the port (%d/3). ESP-IDF does not retry "
+                          "enumeration itself; this stands in for that.",
+                     (unsigned long)fails, replug_attempts);
+            usb_replug(2000);
+            last_replug_us = now;
+            baseline = diag_log_usb_enum_failures();   // judge the NEXT attempt on its own
+            continue;
+        }
+
+        if (now - last_toast_us < (int64_t)DET_RETOAST_MS * 1000) continue;
+        ESP_LOGW(TAG, "USB enumeration still failing after %d port retries (%lu failures "
+                      "since boot) - needs a QMX power cycle",
+                 replug_attempts, (unsigned long)fails);
+        // Log only, no toast - see the reason on the zombie branch above.
         last_toast_us = now;
     }
 }

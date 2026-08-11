@@ -222,3 +222,10 @@ CONFIG_BT_NIMBLE_TRANSPORT_EVT_COUNT=10
 CONFIG_BT_NIMBLE_TRANSPORT_EVT_DISCARD_COUNT=4
 CONFIG_BT_NIMBLE_MSYS_1_BLOCK_COUNT=6
 CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=6
+
+# USB host enumeration timing: DELIBERATELY LEFT AT THE IDF DEFAULTS (30/30/10).
+# Tested 2026-08-11 against a really-wedged QMX and it changed NOTHING - see TODO #74.
+# 50 ms and 200 ms reset holds (the latter is Linux's HUB_LONG_RESET_TIME) both produced
+# the identical empty data stage, as did requesting 64 descriptor bytes instead of 8 the
+# way Windows and Linux do. Do not raise these hoping to fix that wedge; it has been
+# measured and it does not.
