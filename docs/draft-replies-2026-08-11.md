@@ -10,9 +10,15 @@ Notes for the operator before posting:
   own post rather than a line buried in a long reply.
 - Nothing in these replies is released yet. They say "on my bench" and "the next
   release" and give no dates.
-- Reply 1 asks Samuel four questions rather than announcing a fix, because I have
-  not reproduced what he reported. The CW spot offset I *did* find is a constant
-  shift and his report is asymmetric, so they may well be different things.
+- **Reply 1a SUPERSEDES Reply 1 — post 1a, not 1.** Samuel's follow-up ("I have to
+  click outside the passband, then onto the signal") identified the bug: spot LABELS
+  steal clicks over a ~3.8 kHz-wide box at trace height and retune to their own
+  station. Reproduced on the mock — a click aimed at 14.031.750 landed on
+  14.033.000. Reply 1's two fixes (the CW spot draw offset, the tuning grid) are real
+  and shipped, but they are NOT his bug, and claiming them as his fix would be wrong.
+- Reply 1a deliberately **asks him which fix he prefers** rather than announcing one.
+  He is the one who hit it, and the three options trade discoverability against
+  safety. TODO #115 has them.
 - Reply 2's mouse paragraph was **rewritten after the fix went in**. The first
   version said the old code decoded movement into "numbers in the thousands"; the
   host harness proved that wrong. What actually happens on a 16-bit mouse is that Y
