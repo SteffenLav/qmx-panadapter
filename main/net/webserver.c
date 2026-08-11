@@ -355,6 +355,11 @@ static esp_err_t status_handler(httpd_req_t *req)
         // callers divide by 100. I got this wrong once by sending it as "blend".
         cJSON_AddNumberToObject(w, "blend_pct", ws.wf_floor_blend);
         cJSON_AddNumberToObject(w, "cmap",     ws.colormap_idx);
+        // The spectrum EMA the operator controls. render.c applies this to the raw
+        // spectrum before the Tab5 renders anything, so the browser has to apply it
+        // too or it is drawing a noisier picture from the same data - and the
+        // smoothing slider does nothing there.
+        cJSON_AddNumberToObject(w, "ema_pct",  (int)(ws.ema_alpha * 100.0f + 0.5f));
     }
     cJSON_AddNumberToObject(root, "utc_epoch",   (double)time(NULL));
     // What is maintaining the clock - same authority the Tab5's bottom-bar

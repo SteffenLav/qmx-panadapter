@@ -2658,6 +2658,8 @@ async function tick() {
       if (typeof s.wf.contrast === "number") wfContrastDb = s.wf.contrast;
       /* blend_pct is 0..100; the renderer's blend is 0..1. */
       if (typeof s.wf.blend_pct === "number") wfFloorBlend = s.wf.blend_pct / 100;
+      if (typeof s.wf.ema_pct === "number" && s.wf.ema_pct > 0)
+        specEmaAlpha = s.wf.ema_pct / 100;    // the operator's smoothing slider
       if (typeof s.wf.cmap     === "number" && s.wf.cmap !== wfPaletteIdx) {
         wfPaletteIdx = s.wf.cmap;
         wfPalette    = buildWfPalette(wfPaletteIdx);
@@ -4040,6 +4042,30 @@ const WF_COUNTS_PER_DB = WS_COUNTS_PER_DB;
    match WF_*_DEFAULT in render_waterfall.c. */
 let wfBlackDb = 9, wfContrastDb = 45, wfFloorBlend = 1.0;
 
+/* render.c applies an EMA to the raw spectrum BEFORE anything renders it -
+   s_ema_alpha, which is the operator's own "Spectrum smoothing" setting - and the
+   Tab5's flat mode then adds its own 0.25 EMA on top. The browser had only the
+   second stage, so its spectrum was running on a visibly noisier input than the
+   Tab5's, and the smoothing slider did nothing here at all.
+   Same shape as the waterfall bug: the device smooths before it draws.
+   NOTE the waterfall does NOT chain off this - render.c builds s_wf_smoothed from
+   the RAW scratch with its own alpha, independently, which is what wfSmooth already
+   mirrors. Chaining the two would smooth twice and is why they are kept separate. */
+let specEmaAlpha = 0.4;                       // render.c's default
+const specStage1 = new Float32Array(SPEC_W);
+let specStage1Ready = false;
+
+function applyDeviceEma(bytes) {
+  if (!specStage1Ready) {
+    for (let i = 0; i < SPEC_W; i++) specStage1[i] = bytes[i];
+    specStage1Ready = true;
+  } else {
+    const a = specEmaAlpha;
+    for (let i = 0; i < SPEC_W; i++) specStage1[i] += a * (bytes[i] - specStage1[i]);
+  }
+  return specStage1;
+}
+
 wfctx.fillStyle="#000"; wfctx.fillRect(0,0,wfPxW,wfPxH);
 
 /* One row of waterfall, coloured the way the Tab5 colours it.
@@ -4187,7 +4213,9 @@ function connectWs() {
     // byte[1] = zoom-FFT decimation factor (1 = base spectrum, 2/4/8/16 = zoom-FFT active)
     const d = buf[1]; lastZoomDecim = (d >= 1 && d <= 16) ? d : 1;
     const payload=buf.subarray(HEADER_LEN,HEADER_LEN+SPEC_W);
-    (specFlatten?drawSpectrumFlat:drawSpectrumRaw)(payload);
+    /* Spectrum gets the device's first EMA stage; the waterfall keeps its own,
+       built from the RAW frame, exactly as render.c does it. */
+    (specFlatten?drawSpectrumFlat:drawSpectrumRaw)(applyDeviceEma(payload));
     drawWaterfall(payload);
     overlayTuneCursor();
     frameCount++;
