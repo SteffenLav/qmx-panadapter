@@ -2750,6 +2750,21 @@ let tuneActive   = false;
 let tuneCursorX  = -1;   // canvas pixel x, -1 = hidden
 let tuneOnSpec   = true; // which canvas is being dragged
 
+/* The tuning grid, mode by mode. ONE copy: the cursor preview and the commit both
+   call this, and when they were two copies they had already drifted from each
+   other's twin in ui.c - the browser still had the pre-v0.15.9 values (SSB 500,
+   digi 100) long after the Tab5 moved to 250 and 500, so the same click landed on
+   a different frequency depending on which screen you used. */
+function tuneSnapHz() {
+  const m = (lastMode || "").toUpperCase();
+  if (m.indexOf("USB") >= 0 || m.indexOf("LSB") >= 0)  return 250;
+  if (m.indexOf("DIGI") >= 0 || m.indexOf("FT") >= 0 ||
+      m.indexOf("RTTY") >= 0)                          return 500;
+  if (m.indexOf("AM") >= 0 || m.indexOf("FM") >= 0)    return 1000;
+  if (m.indexOf("CW") >= 0)                            return 10;
+  return 10;
+}
+
 function pxToFreqHz(clientX, rect) {
   /* Map a clientX inside the canvas rect to an absolute frequency in Hz.
      Mirrors the Tab5 touch-to-tune formula:
@@ -2759,17 +2774,15 @@ function pxToFreqHz(clientX, rect) {
   const panHz    = lastPanBins * HZ_PER_BIN;
   const offsetHz = (frac - 0.5) * spanHz + panHz;
 
-  // Mode-aware step rounding (no DSP snap-to-peak in browser)
-  const m = (lastMode || "").toUpperCase();
-  let snap = 10;
-  if      (m.indexOf("USB") >= 0 || m.indexOf("LSB") >= 0)  snap = 500;
-  else if (m.indexOf("DIGI") >= 0 || m.indexOf("FT") >= 0 ||
-           m.indexOf("RTTY") >= 0)                           snap = 100;
-  else if (m.indexOf("AM") >= 0 || m.indexOf("FM") >= 0)    snap = 1000;
-  else if (m.indexOf("CW") >= 0)                             snap = 10;
-
-  const rounded = Math.round(offsetHz / snap) * snap;
-  return lastFreqHz + rounded;
+  /* Snap the ABSOLUTE target frequency, not the offset - the same correction
+     ui.c's touch path carries a comment about. Rounding the offset puts the grid
+     wherever the VFO happens to sit, so with the dial on 14.031.120 an SSB click
+     could land up to a full 250 Hz from the signal you aimed at, and the grid
+     moved every time you tuned. Rounding the target instead means the grid is
+     always ...000, ...250, ...500 regardless of where you started. */
+  const target  = lastFreqHz + offsetHz;
+  const snap    = tuneSnapHz();
+  return Math.round(target / snap) * snap;
 }
 
 function fmtFreqLabel(hz) {
@@ -2989,15 +3002,11 @@ function overlayTuneCursor() {
   const panHz    = lastPanBins * HZ_PER_BIN;
   const fracX    = tuneCursorX / specPxW;
   const offsetHz = (fracX - 0.5) * spanHz + panHz;
-  const m = (lastMode || "").toUpperCase();
-  let snap = 10;
-  if      (m.indexOf("USB") >= 0 || m.indexOf("LSB") >= 0) snap = 500;
-  else if (m.indexOf("DIGI") >= 0 || m.indexOf("FT") >= 0 ||
-           m.indexOf("RTTY") >= 0)                          snap = 100;
-  else if (m.indexOf("AM") >= 0 || m.indexOf("FM") >= 0)   snap = 1000;
-  else if (m.indexOf("CW") >= 0)                            snap = 10;
-  const rounded = Math.round(offsetHz / snap) * snap;
-  const freqHz  = lastFreqHz + rounded;
+  /* Same grid and the same absolute rounding as the commit (pxToFreqHz) - this is
+     the number the operator reads off the cursor before clicking, so if the two
+     disagree the preview is a lie. */
+  const snap    = tuneSnapHz();
+  const freqHz  = Math.round((lastFreqHz + offsetHz) / snap) * snap;
 
   drawTuneCursor(sctx,    tuneCursorX,                   specPxW, specPxH, freqHz);
   drawTuneCursor(wfcurctx, tuneCursorX * wfPxW / specPxW, wfPxW,  wfPxH,  freqHz);
