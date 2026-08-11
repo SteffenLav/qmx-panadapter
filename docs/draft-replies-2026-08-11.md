@@ -25,7 +25,47 @@ Notes for the operator before posting:
 
 ---
 
+## Reply 1a — to Samuel W7STF: FOUND IT (supersedes Reply 1 below)
+
+Samuel — your second message found it. The detail that did it was "I have to click
+outside the passband, then onto the higher in frequency signal to be successful", which
+told me the problem was not the tuning arithmetic at all.
+
+**The spot labels are stealing your clicks.** In the browser, clicking a callsign label
+tunes to that station — deliberately, it is how the Tab5 and Flex both work. But the
+label's clickable area is as wide as the callsign text, and it sits at the same height
+as the trace. Measured: `OK/DL4ROB/P` is 93 pixels wide, and at the default zoom that
+is a **3.8 kHz** stretch of band in which every click goes to that station's frequency
+instead of the one you clicked. Its own frequency is only in the middle of that stretch.
+
+So when you clicked a signal and the VFO showed a plausible nearby frequency but you
+heard nothing, you had been sent to a spotted station up to a couple of kHz away. With
+a 300 Hz filter that is silence. I reproduced it: a click aimed at 14.031.750 landed on
+14.033.000, which was the spot's frequency, with no indication anything had been
+overridden.
+
+That is also why clicking outside the passband first works. It is not the passband -
+moving the dial re-flows the label layout, so your second click lands clear of a box.
+And it is why Roy could not reproduce it: it depends entirely on whether a spot label
+happens to sit over the signal you are aiming at.
+
+Why the Tab5 does not suffer from it: there, tuning to a point needs a deliberate
+quarter-second hold, while tapping a callsign is a quick tap - two different gestures.
+In a browser both are the same click, and the label wins silently.
+
+I have not decided the fix yet and would value your opinion, because you are the one
+who hit it. The options are to make the label say what it will do before you click it
+(the frequency and callsign shown as you hover), to shrink its clickable area, or to
+require something deliberate - a double-click - to jump to a spot. My instinct is the
+first plus a tighter area: the feature is genuinely useful, it was just doing it
+invisibly.
+
+Thank you for pushing on this after Roy could not reproduce it. A second report that
+disagrees is usually the most useful thing in a bug hunt, and this one was.
+
 ## Reply 1 — to Samuel W7STF and Roy KI0ER, on the tuning oddity
+### ⚠ SUPERSEDED by Reply 1a above - kept only for the two fixes it describes, which
+### are real but are NOT what he reported. Do not post both.
 
 Samuel, Roy — thank you both. A report and a failed attempt to reproduce it are
 more useful together than either alone, so Roy's "I could not make it happen" is
