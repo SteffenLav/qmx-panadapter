@@ -113,6 +113,14 @@ bool hid_report_map_parse(const uint8_t *desc, size_t len, hid_mouse_layout_t *o
                 }
             }
             bit_cursor = (uint16_t)(bit_cursor + width);
+            // total_bits is the payload size of the report that carries X and Y -
+            // NOT the cursor at the end of the descriptor, which is what it used to
+            // be and which made it useless as a length check. A mouse descriptor
+            // continues past the mouse collection (a vendor page, a consumer page),
+            // so on the bench mouse the old version reported 152 bits for a report
+            // that is genuinely 56, and a check against it rejected every report.
+            if (out->valid && cur_report_id == out->report_id)
+                out->total_bits = bit_cursor;
             n_local = 0;
             break;
         }
@@ -134,7 +142,6 @@ bool hid_report_map_parse(const uint8_t *desc, size_t len, hid_mouse_layout_t *o
     }
 
     if (!out->valid) return false;
-    out->total_bits = bit_cursor;
     // A field wider than 32 bits, or an offset beyond a plausible report, means the
     // parse went wrong somewhere. Refuse rather than hand back nonsense.
     if (out->x_bits == 0 || out->x_bits > 32 || out->y_bits == 0 || out->y_bits > 32 ||

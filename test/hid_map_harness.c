@@ -103,6 +103,31 @@ static const uint8_t DESC_12BIT[] = {
     0xC0, 0xC0
 };
 
+// The bench mouse (Logitech, de:32:38:0b:83:5a), taken from its own Report Map as
+// read off the hardware on 2026-08-12: 3 button bits, 13 padding bits, then two
+// 12-bit relative fields for X and Y, then wheel and pan. What makes it the case
+// worth having is the SECOND top-level collection: a real mouse descriptor does not
+// end with the mouse, and total_bits used to run to the end of the whole
+// descriptor - 152 bits for a report that is genuinely 56 - so a length check
+// against it discarded every report the mouse sent.
+static const uint8_t DESC_TWO_COLLECTIONS[] = {
+    0x05, 0x01, 0x09, 0x02, 0xA1, 0x01, 0x85, 0x02, 0x09, 0x01, 0xA1, 0x00,
+    0x95, 0x03, 0x75, 0x01, 0x15, 0x00, 0x25, 0x01,
+    0x05, 0x09, 0x19, 0x01, 0x29, 0x03, 0x81, 0x02,               // 3 button bits
+    0x95, 0x0D, 0x81, 0x03,                                       // 13 bits padding
+    0x05, 0x01, 0x16, 0x01, 0xF8, 0x26, 0xFF, 0x07,
+    0x75, 0x0C, 0x95, 0x02, 0x09, 0x30, 0x09, 0x31, 0x81, 0x06,   // 12 bits x2
+    0x15, 0x81, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x01,
+    0x09, 0x38, 0x81, 0x06,                                       // wheel, 8 bits
+    0x0A, 0x38, 0x02, 0x81, 0x06,                                 // pan, 8 bits
+    0xC0, 0xC0,
+    // A vendor collection on its own report ID - must not touch report 2's size.
+    0x06, 0x00, 0xFF, 0x09, 0x01, 0xA1, 0x01, 0x85, 0x11,
+    0x75, 0x08, 0x95, 0x13, 0x15, 0x00, 0x26, 0xFF, 0x00,
+    0x09, 0x01, 0x81, 0x00,                                       // 19 bytes vendor
+    0xC0
+};
+
 int main(void)
 {
     hid_mouse_layout_t L;
@@ -243,6 +268,30 @@ int main(void)
         // A field running past the end of the report reads 0 rather than off the end
         const uint8_t tiny[] = { 0x00 };
         check("out-of-range field", hid_field_signed(tiny, sizeof tiny, 8, 16), 0);
+    }
+
+    printf("5. bench mouse: 12-bit X/Y and a second collection after it\n");
+    if (!hid_report_map_parse(DESC_TWO_COLLECTIONS, sizeof DESC_TWO_COLLECTIONS, &L)) {
+        printf("  FAIL parse returned false\n"); g_fail++;
+    } else {
+        // These four are the values the device logged for this mouse, so this case
+        // ties the harness to real hardware rather than to my reading of the spec.
+        check("report_id",  L.report_id,  2);
+        check("x_bit",      L.x_bit,     16);
+        check("y_bit",      L.y_bit,     28);
+        check("x_bits",     L.x_bits,    12);
+        check("have_wheel", L.have_wheel, 1);
+        check("wheel_bit",  L.wheel_bit, 40);
+        // THE POINT OF THIS CASE: report 2 is 3+13+24+8+8 = 56 bits, and the vendor
+        // collection that follows must not be counted. 152 was the old answer.
+        check("total_bits", L.total_bits, 56);
+
+        // A real 7-byte report off the wire: 00 00 0b e0 fe 00 00, which the device
+        // rejected as "56 bits, map declares 152" before this was fixed.
+        const uint8_t r[] = { 0x00, 0x00, 0x0B, 0xE0, 0xFE, 0x00, 0x00 };
+        check("report fits", (int)(sizeof r * 8) >= (int)L.total_bits, 1);
+        check("decode X", hid_field_signed(r, sizeof r, L.x_bit, L.x_bits),   11);
+        check("decode Y", hid_field_signed(r, sizeof r, L.y_bit, L.y_bits),  -18);
     }
 
     printf("\n%s (%d failure%s)\n", g_fail ? "FAILED" : "PASSED", g_fail,

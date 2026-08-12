@@ -81,13 +81,28 @@ static int      s_cccd_writes; // CCCDs we asked to enable
 static int      s_cccd_done;   // CCCDs that answered
 static uint16_t s_hid_start, s_hid_end;  // HID service handle span
 
-// HID input reports arrive on notifications from the Report characteristic
-// (0x2A4D). Discovering the full HID service, parsing its report map and
-// picking the right report ID is what esp_hid does - but its NimBLE host path
-// is a large dependency for one mouse, and the report we actually want is the
-// boot-protocol mouse report, whose layout is fixed. So we subscribe to every
-// notification and decode the ones that look like a mouse report.
+// HID input reports arrive as notifications, and WHICH characteristic they came
+// from decides how to decode them. This used to be ignored: we subscribed to
+// everything notifiable and fed every arriving notification through one decoder.
+// Two different bugs live in that:
+//
+//   - In BOOT protocol a mouse notifies the Boot Mouse Input Report (0x2A33),
+//     whose layout is FIXED at [buttons][dx int8][dy int8] and which the Report
+//     Map does NOT describe. In REPORT protocol it notifies a Report
+//     characteristic (0x2A4D) whose layout the map does describe. Decoding one
+//     with the other's rules is garbage, and we had no idea which we were
+//     holding.
+//   - A mouse has SEVERAL notifiable reports (battery, consumer control, a
+//     vendor page). Their payloads were being decoded as movement, which is a
+//     direct route to a cursor that jumps to the screen edges.
+//
+// So each notifiable characteristic is recorded with its UUID, and for a Report
+// characteristic its Report Reference descriptor (0x2908) is read to learn the
+// {report ID, report type} pair it carries - which is how HOGP identifies a
+// report. Note the report ID is NOT on the wire in BLE (unlike USB HID, where it
+// prefixes the payload): it lives in that descriptor.
 #define UUID_HID_REPORT 0x2A4D
+#define UUID_HID_BOOT_MOUSE_IN 0x2A33
 // The two characteristics a HOGP host is expected to READ during setup. We
 // have never read either, and a peripheral that drops any host after exactly
 // 30 s regardless of traffic behaves like one that does not consider the host
@@ -97,6 +112,40 @@ static uint16_t s_hid_start, s_hid_end;  // HID service handle span
 // Protocol Mode: 0 = Boot, 1 = Report. A HOGP host is expected to set this.
 #define UUID_HID_PROTOCOL_MODE 0x2A4E
 #define HID_PROTOCOL_MODE_REPORT 0x01
+#define UUID_CCCD             0x2902
+#define UUID_REPORT_REFERENCE 0x2908
+#define HID_REPORT_TYPE_INPUT 0x01
+
+// ⚠ PROTOCOL MODE IS DELIBERATELY OFF. Writing Report protocol was tried before
+// and measured to BREAK reports entirely - the write succeeded and notifications
+// then stopped, because Report mode moves reports onto characteristics the old
+// blanket subscription did not resolve (see the long note in conn_event_cb).
+// Handling the Report Reference descriptors was named there as the prerequisite,
+// and that is what the code below now does - so this is finally attemptable. It
+// stays OFF until the descriptor handling above is confirmed on hardware,
+// because the one mouse known to work today (Roy KI0ER's MX Master) works in
+// boot mode and must not be regressed by an untested switch. Flip to 1 and watch
+// for "report chr" lines followed by movement.
+#define BT_HID_SET_REPORT_PROTOCOL 0
+
+// One entry per notifiable characteristic in the HID service. 6 covers every
+// mouse seen so far (a report, a boot report, battery, consumer, vendor) with
+// room spare; extras beyond this are logged and left unsubscribed rather than
+// silently dropped.
+#define MAX_REPORT_CHRS 6
+typedef struct {
+    uint16_t val_handle;
+    uint16_t cccd_handle;
+    uint16_t rr_handle;      // Report Reference descriptor, 0 if absent
+    uint16_t uuid16;
+    uint8_t  report_id;
+    uint8_t  report_type;    // 1 = Input; only Input reports carry movement
+    bool     rr_known;
+    bool     subscribed;
+} report_chr_t;
+static report_chr_t s_chrs[MAX_REPORT_CHRS];
+static int s_n_chrs;
+static int s_chr_cursor;     // which entry the sequential setup pass is on
 
 // Which half of the scan cycle we are in - filtered to the bonded mouse, or
 // open so a new one can be found. Declared here because gap_event_cb flips it
@@ -107,7 +156,7 @@ static void start_scan(void);
 static int  conn_event_cb(struct ble_gap_event *event, void *arg);
 static int  hid_svc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
                        const struct ble_gatt_svc *svc, void *arg);
-static void handle_report(const uint8_t *d, int len);
+static void handle_report(uint16_t attr_handle, const uint8_t *d, int len);
 
 static void log_heap(const char *when)
 {
@@ -259,7 +308,14 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
         s_enc_us = esp_timer_get_time();
         ESP_LOGW(TAG, "encryption change: status=%d - completing HOGP setup",
                  event->enc_change.status);
-        // Subscribe to everything notifiable now that the link is encrypted.
+        // Resolve and subscribe now that the link is encrypted.
+        //
+        // No ble_gattc_exchange_mtu() here on purpose. The default 23-byte MTU is
+        // what truncated the report map, but the fix for that is the LONG read in
+        // hid_read_cb, which is correct at any MTU. An MTU exchange is one more
+        // GATT procedure competing for the single-procedure slot right at the point
+        // this chain is most fragile, and it would buy only round trips on a value
+        // read once per connection. Don't add it as an "optimisation".
         s_cccd_writes = 0;
         s_cccd_done   = 0;
         ble_gattc_disc_svc_by_uuid(s_conn_handle,
@@ -286,7 +342,7 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
         int len = OS_MBUF_PKTLEN(event->notify_rx.om);
         if (len > (int)sizeof(buf)) len = sizeof(buf);
         if (ble_hs_mbuf_to_flat(event->notify_rx.om, buf, len, NULL) == 0)
-            handle_report(buf, len);
+            handle_report(event->notify_rx.attr_handle, buf, len);
         return 0;
     }
 
@@ -315,6 +371,15 @@ static int conn_event_cb(struct ble_gap_event *event, void *arg)
         // model, and a stale layout is worse than none because it looks
         // authoritative. It is re-read from the descriptor on every connection.
         s_layout.valid = false;
+        // Same reasoning for the resolved characteristic table: handles belong to
+        // one connection and a stale entry would let a foreign notification be
+        // decoded as movement on the next.
+        for (int i = 0; i < MAX_REPORT_CHRS; i++) {
+            report_chr_t z = {0};
+            s_chrs[i] = z;
+        }
+        s_n_chrs = 0;
+        s_chr_cursor = 0;
         // Clear the IN-PROGRESS flag too. A connection attempt that fails to
         // establish (HCI 0x3E, reason 574 here) arrives as DISCONNECT, NOT as
         // CONNECT-with-error - so this path used to leave s_connecting set
@@ -431,6 +496,49 @@ static void start_scan(void)
 // Never issue an ATT request to a handle you have not established is the
 // right one.
 
+// ---- Sequential per-characteristic setup ----------------------------------
+//
+// ONE GATT PROCEDURE AT A TIME, and the previous version broke that rule: it
+// started descriptor discovery from INSIDE the characteristic-discovery callback,
+// so on a mouse with several report characteristics the 2nd and 3rd discoveries
+// hit BLE_HS_EALREADY and were silently dropped - the same class of bug the note
+// in hid_svc_cb() already warns about. The characteristics are now collected
+// first, then walked one at a time: discover descriptors -> read the Report
+// Reference -> enable the CCCD -> next.
+
+static void setup_next_chr(void);
+// Defined below, but setup_next_chr() starts the descriptive reads once every
+// characteristic is subscribed - so it needs the name up here.
+static int hid_info_chr_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                           const struct ble_gatt_chr *chr, void *arg);
+
+#if BT_HID_SET_REPORT_PROTOCOL
+// Write Report protocol, AFTER every report characteristic has been resolved and
+// subscribed - the ordering is the whole point. The earlier attempt wrote it up
+// front, before anything knew which characteristic carried what, so when the
+// mouse duly moved its reports the host was not listening in the right place.
+static int protocol_mode_chr_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                                const struct ble_gatt_chr *chr, void *arg)
+{
+    (void)arg;
+    if (!error || error->status != 0 || !chr) return 0;
+    uint8_t v = HID_PROTOCOL_MODE_REPORT;
+    // Write Without Response, as the profile specifies for this characteristic -
+    // it also keeps us out of the one-procedure-at-a-time queue.
+    int rc = ble_gattc_write_no_rsp_flat(conn_handle, chr->val_handle, &v, 1);
+    ESP_LOGW(TAG, "protocol mode -> Report at handle %u (rc=%d)", chr->val_handle, rc);
+    return 0;
+}
+
+static void set_report_protocol(void)
+{
+    int rc = ble_gattc_disc_chrs_by_uuid(s_conn_handle, s_hid_start, s_hid_end,
+                                         BLE_UUID16_DECLARE(UUID_HID_PROTOCOL_MODE),
+                                         protocol_mode_chr_cb, NULL);
+    if (rc != 0) ESP_LOGW(TAG, "protocol mode discovery failed to start: %d", rc);
+}
+#endif
+
 static int cccd_write_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
                          struct ble_gatt_attr *attr, void *arg)
 {
@@ -440,90 +548,253 @@ static int cccd_write_cb(uint16_t conn_handle, const struct ble_gatt_error *erro
              s_cccd_done, s_cccd_writes,
              s_enc_us ? (long long)((esp_timer_get_time() - s_enc_us) / 1000) : -1,
              error ? error->status : 0);
+    s_chr_cursor++;
+    setup_next_chr();
     return 0;
 }
 
-// A Report characteristic's CCCD is the descriptor immediately following it,
-// so search only the handle span belonging to THAT characteristic.
-static int report_dsc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
-                         uint16_t chr_val_handle, const struct ble_gatt_dsc *dsc, void *arg)
+// Decide whether THIS characteristic is one we want notifications from, and
+// either enable it or move on. Subscribing to everything is what fed battery and
+// consumer-control payloads into the movement decoder.
+static void subscribe_cur(void)
 {
-    (void)arg;
-    if (!error || error->status != 0 || !dsc) return 0;
-    if (ble_uuid_u16(&dsc->uuid.u) != 0x2902) return 0;
+    if (s_chr_cursor >= s_n_chrs) { setup_next_chr(); return; }
+    report_chr_t *e = &s_chrs[s_chr_cursor];
+
+    bool want;
+    if (e->uuid16 == UUID_HID_BOOT_MOUSE_IN) {
+        want = true;                      // fixed layout, always a mouse
+    } else if (e->uuid16 == UUID_HID_REPORT) {
+        // Without a Report Reference we cannot tell what this report is, so take
+        // it (that is the old behaviour, and better than being deaf) - the length
+        // check in handle_report() is then the only guard. With one, Input is the
+        // only type that can carry movement.
+        want = (!e->rr_known) || (e->report_type == HID_REPORT_TYPE_INPUT);
+    } else {
+        want = false;
+    }
+
+    if (!want || e->cccd_handle == 0) {
+        ESP_LOGI(TAG, "chr %u (uuid %04x id=%u type=%u): %s",
+                 e->val_handle, e->uuid16, e->report_id, e->report_type,
+                 !want ? "not an input report - skipping"
+                       : "wanted but has no CCCD - cannot subscribe");
+        s_chr_cursor++;
+        setup_next_chr();
+        return;
+    }
+
     uint8_t val[2] = { 0x01, 0x00 };
     s_cccd_writes++;
-    ESP_LOGI(TAG, "CCCD #%d at handle %u for report chr %u",
-             s_cccd_writes, dsc->handle, chr_val_handle);
-    int rc = ble_gattc_write_flat(conn_handle, dsc->handle, val, sizeof(val),
+    e->subscribed = true;
+    ESP_LOGI(TAG, "CCCD #%d at handle %u for chr %u (uuid %04x id=%u type=%u)",
+             s_cccd_writes, e->cccd_handle, e->val_handle, e->uuid16,
+             e->report_id, e->report_type);
+    int rc = ble_gattc_write_flat(s_conn_handle, e->cccd_handle, val, sizeof(val),
                                   cccd_write_cb, NULL);
-    if (rc != 0) ESP_LOGW(TAG, "CCCD write failed to start: %d", rc);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "CCCD write failed to start: %d", rc);
+        e->subscribed = false;
+        s_chr_cursor++;
+        setup_next_chr();
+    }
+}
+
+// The Report Reference descriptor is two bytes: [report ID][report type]. This is
+// how HOGP names a report - the ID is NOT on the wire in BLE.
+static int rr_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                      struct ble_gatt_attr *attr, void *arg)
+{
+    (void)conn_handle; (void)arg;
+    if (s_chr_cursor < s_n_chrs && error && error->status == 0 && attr && attr->om &&
+        OS_MBUF_PKTLEN(attr->om) >= 2) {
+        uint8_t rr[2];
+        if (os_mbuf_copydata(attr->om, 0, 2, rr) == 0) {
+            report_chr_t *e = &s_chrs[s_chr_cursor];
+            e->report_id   = rr[0];
+            e->report_type = rr[1];
+            e->rr_known    = true;
+            ESP_LOGI(TAG, "chr %u report reference: id=%u type=%u",
+                     e->val_handle, rr[0], rr[1]);
+        }
+    } else {
+        ESP_LOGW(TAG, "report reference read failed: status=%d",
+                 error ? error->status : -1);
+    }
+    subscribe_cur();
     return 0;
 }
 
+static int chr_dsc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
+                      uint16_t chr_val_handle, const struct ble_gatt_dsc *dsc, void *arg)
+{
+    (void)conn_handle; (void)chr_val_handle; (void)arg;
+    if (s_chr_cursor >= s_n_chrs) return 0;
+    report_chr_t *e = &s_chrs[s_chr_cursor];
+
+    if (error && error->status == BLE_HS_EDONE) {
+        // End of this characteristic's descriptors: read the Report Reference if
+        // there is one, otherwise go straight to subscribing.
+        if (e->rr_handle != 0) {
+            int rc = ble_gattc_read(s_conn_handle, e->rr_handle, rr_read_cb, NULL);
+            if (rc == 0) return 0;
+            ESP_LOGW(TAG, "report reference read failed to start: %d", rc);
+        }
+        subscribe_cur();
+        return 0;
+    }
+    if (!error || error->status != 0 || !dsc) return 0;
+
+    uint16_t u = ble_uuid_u16(&dsc->uuid.u);
+    if (u == UUID_CCCD)             e->cccd_handle = dsc->handle;
+    else if (u == UUID_REPORT_REFERENCE) e->rr_handle = dsc->handle;
+    return 0;
+}
+
+static void setup_next_chr(void)
+{
+    if (s_chr_cursor >= s_n_chrs) {
+        int subs = 0;
+        for (int i = 0; i < s_n_chrs; i++) if (s_chrs[i].subscribed) subs++;
+        ESP_LOGI(TAG, "HID setup done: %d notifiable chr(s), %d subscribed", s_n_chrs, subs);
+        // NOW read the descriptive characteristics - AFTER subscribing, never before.
+        // They used to come first, and a single failed read (observed:
+        // "HID Information read failed: status=7") left the chain dead with the mouse
+        // connected and nothing subscribed, for the 30 s until it hung up. Ordered
+        // this way the reads are pure improvement: lose them and we fall back to a
+        // guessed layout, which is a worse pointer rather than no pointer.
+        int rc = ble_gattc_disc_chrs_by_uuid(s_conn_handle, s_hid_start, s_hid_end,
+                                             BLE_UUID16_DECLARE(UUID_HID_INFORMATION),
+                                             hid_info_chr_cb, (void *)"HID Information");
+        if (rc != 0) ESP_LOGW(TAG, "HID Information discovery failed to start: %d", rc);
+        return;
+    }
+    report_chr_t *e = &s_chrs[s_chr_cursor];
+    // Descriptors live between this characteristic's value handle and the next
+    // declaration. A generous +3 span may reach the next declaration, whose UUID
+    // simply does not match either of the two we look for.
+    int rc = ble_gattc_disc_all_dscs(s_conn_handle, e->val_handle,
+                                     e->val_handle + 3, chr_dsc_cb, NULL);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "descriptor discovery failed to start for chr %u: %d",
+                 e->val_handle, rc);
+        s_chr_cursor++;
+        setup_next_chr();
+    }
+}
+
+// Collect every notifiable characteristic in the HID service - NO nested GATT
+// call from in here, see the note above setup_next_chr(). Discovery is over ALL
+// characteristics rather than filtered to 0x2A4D, because the boot mouse report
+// (0x2A33) is a different UUID and is what a mouse in boot protocol - i.e. every
+// mouse we talk to today - actually notifies on.
 static int hid_chr_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
                       const struct ble_gatt_chr *chr, void *arg)
 {
-    (void)arg;
+    (void)conn_handle; (void)arg;
+
+    if (error && error->status == BLE_HS_EDONE) {
+        ESP_LOGI(TAG, "%d notifiable characteristic(s) in the HID service", s_n_chrs);
+        s_chr_cursor = 0;
+        setup_next_chr();
+        return 0;
+    }
     if (!error || error->status != 0 || !chr) return 0;
     if (!(chr->properties & BLE_GATT_CHR_PROP_NOTIFY)) return 0;
-    ESP_LOGI(TAG, "notifiable report chr at %u (props 0x%02x) - finding its CCCD",
-             chr->val_handle, chr->properties);
-    // Only this characteristic's own descriptor span.
-    ble_gattc_disc_all_dscs(conn_handle, chr->val_handle,
-                            chr->val_handle + 2, report_dsc_cb, NULL);
+
+    if (s_n_chrs >= MAX_REPORT_CHRS) {
+        ESP_LOGW(TAG, "more than %d notifiable chrs - ignoring the one at %u",
+                 MAX_REPORT_CHRS, chr->val_handle);
+        return 0;
+    }
+    report_chr_t *e = &s_chrs[s_n_chrs++];
+    e->val_handle = chr->val_handle;
+    e->uuid16     = ble_uuid_u16(&chr->uuid.u);
+    ESP_LOGI(TAG, "notifiable chr at %u, uuid %04x (props 0x%02x)",
+             e->val_handle, e->uuid16, chr->properties);
     return 0;
 }
 
 // Read-and-log the descriptive characteristics. A HOGP host reads these during
 // setup; we never did. Purely a read - it changes nothing on the peripheral -
 // so it is safe to try even though it is a hypothesis for the 30 s drop.
+// ⚠ A REPORT MAP DOES NOT FIT IN ONE READ, AND THE TRUNCATION IS SILENT.
+// This used to be a single ble_gattc_read(), which returns at most ATT_MTU-1
+// bytes. Measured on the bench mouse: the MTU stayed at the default 23, so we got
+// exactly 22 bytes - the descriptor cut off mid-item, before the X/Y declaration -
+// and the parse "failed" for a reason nothing could see. The parser had never once
+// been handed a complete descriptor, which is why every mouse silently fell back
+// to the guessed fixed layouts.
+//
+// ble_gattc_read_long() reassembles the value across ATT Read Blob requests. The
+// chunks arrive here with attr->offset set, then a final callback with
+// BLE_HS_EDONE and no attribute - which is the only point the map is complete.
+static uint8_t  s_rmap[512];
+static uint16_t s_rmap_len;
+
+static void report_map_complete(void)
+{
+    uint16_t n = s_rmap_len;
+    if (n == 0) {
+        ESP_LOGW(TAG, "report map read returned nothing");
+        return;
+    }
+    // Log it as hex regardless of whether the parse succeeds: on a mouse this does
+    // not handle, that dump in a field diag log is the only way to find out why -
+    // and it is read ONCE per connection, not per report. 96 bytes of hex keeps a
+    // full mouse descriptor readable in the log.
+    char hex[3 * 96 + 8];
+    int  used = 0;
+    for (uint16_t i = 0; i < n && used < (int)sizeof hex - 4; i++)
+        used += snprintf(hex + used, sizeof hex - used, "%02x ", s_rmap[i]);
+    ESP_LOGI(TAG, "report map [%u]: %s%s", n, hex, n > 96 ? "..." : "");
+
+    hid_mouse_layout_t L;
+    if (hid_report_map_parse(s_rmap, n, &L)) {
+        s_layout = L;
+        ESP_LOGI(TAG, "report layout: id=%u  X @bit%u/%ub  Y @bit%u/%ub  "
+                      "wheel %s  payload %u bits",
+                 (unsigned)L.report_id, (unsigned)L.x_bit, (unsigned)L.x_bits,
+                 (unsigned)L.y_bit, (unsigned)L.y_bits,
+                 L.have_wheel ? "yes" : "no", (unsigned)L.total_bits);
+    } else {
+        ESP_LOGW(TAG, "report map not understood - falling back to the fixed "
+                      "layouts; send the hex above if the pointer misbehaves");
+    }
+}
+
 static int hid_read_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
                        struct ble_gatt_attr *attr, void *arg)
 {
     (void)conn_handle;
     const char *what = (const char *)arg;
+    bool is_map = (what && strcmp(what, "Report Map") == 0);
+
+    // End of a long read - for the map, this is where it gets parsed.
+    if (error && error->status == BLE_HS_EDONE) {
+        if (is_map) report_map_complete();
+        return 0;
+    }
     if (!error || error->status != 0 || !attr || !attr->om) {
         ESP_LOGW(TAG, "%s read failed: status=%d", what, error ? error->status : -1);
         return 0;
     }
-    ESP_LOGI(TAG, "%s read OK (%u bytes)", what, OS_MBUF_PKTLEN(attr->om));
 
-    // THE REPORT MAP IS THE ANSWER, AND WE USED TO THROW IT AWAY.
-    //
-    // This handler logged the length and dropped the bytes, while handle_report()
-    // guessed the layout from one hardware capture. The descriptor states it: which
-    // report ID carries movement, and at what bit offset and width X, Y and the
-    // wheel sit. Parsing it is why a mouse that packs 16-bit movement now works
-    // instead of decoding to a Y sixteen times too large (Samuel W7STF).
-    if (what && strcmp(what, "Report Map") == 0) {
-        uint8_t desc[256];
-        uint16_t n = OS_MBUF_PKTLEN(attr->om);
-        if (n > sizeof desc) n = sizeof desc;
-        if (os_mbuf_copydata(attr->om, 0, n, desc) == 0) {
-            // Log it as hex regardless of whether the parse succeeds: on a mouse
-            // this does not handle, that dump in a field diag log is the only way
-            // to find out why - and it is read ONCE per connection, not per report.
-            char hex[3 * 64 + 8];
-            int  used = 0;
-            for (uint16_t i = 0; i < n && used < (int)sizeof hex - 4; i++)
-                used += snprintf(hex + used, sizeof hex - used, "%02x ", desc[i]);
-            ESP_LOGI(TAG, "report map [%u]: %s%s", n, hex, n > 64 ? "..." : "");
+    uint16_t chunk = OS_MBUF_PKTLEN(attr->om);
+    if (!is_map) {
+        ESP_LOGI(TAG, "%s read OK (%u bytes)", what, chunk);
+        return 0;
+    }
 
-            hid_mouse_layout_t L;
-            if (hid_report_map_parse(desc, n, &L)) {
-                s_layout = L;
-                ESP_LOGI(TAG, "report layout: id=%u  X @bit%u/%ub  Y @bit%u/%ub  "
-                              "wheel %s  payload %u bits",
-                         (unsigned)L.report_id, (unsigned)L.x_bit, (unsigned)L.x_bits,
-                         (unsigned)L.y_bit, (unsigned)L.y_bits,
-                         L.have_wheel ? "yes" : "no", (unsigned)L.total_bits);
-            } else {
-                ESP_LOGW(TAG, "report map not understood - falling back to the "
-                              "fixed layouts; send the hex above if the pointer "
-                              "misbehaves");
-            }
+    if (attr->offset == 0) s_rmap_len = 0;          // a fresh read of the map
+    if ((size_t)attr->offset + chunk <= sizeof s_rmap) {
+        if (os_mbuf_copydata(attr->om, 0, chunk, s_rmap + attr->offset) == 0) {
+            uint16_t end = (uint16_t)(attr->offset + chunk);
+            if (end > s_rmap_len) s_rmap_len = end;
         }
+    } else {
+        ESP_LOGW(TAG, "report map longer than %u bytes - truncating",
+                 (unsigned)sizeof s_rmap);
     }
     return 0;
 }
@@ -542,15 +813,26 @@ static int hid_info_chr_cb(uint16_t conn_handle, const struct ble_gatt_error *er
                                              hid_info_chr_cb, (void *)"Report Map");
             if (rc != 0) ESP_LOGW(TAG, "Report Map discovery failed to start: %d", rc);
         } else {
-            rc = ble_gattc_disc_chrs_by_uuid(conn_handle, s_hid_start, s_hid_end,
-                                             BLE_UUID16_DECLARE(UUID_HID_REPORT),
-                                             hid_chr_cb, NULL);
-            if (rc != 0) ESP_LOGW(TAG, "Report discovery failed to start: %d", rc);
+            // "Report Map" done - that is the end of the chain now. Subscription
+            // already happened, before these reads.
+            ESP_LOGI(TAG, "HOGP setup complete");
+#if BT_HID_SET_REPORT_PROTOCOL
+            set_report_protocol();
+#endif
+            (void)rc;
         }
         return 0;
     }
     if (!error || error->status != 0 || !chr) return 0;
-    ble_gattc_read(conn_handle, chr->val_handle, hid_read_cb, arg);
+    // The Report Map needs a LONG read (see report_map_complete); HID Information
+    // is 4 bytes and fits in any MTU.
+    if (arg && strcmp((const char *)arg, "Report Map") == 0) {
+        s_rmap_len = 0;
+        int rc = ble_gattc_read_long(conn_handle, chr->val_handle, 0, hid_read_cb, arg);
+        if (rc != 0) ESP_LOGW(TAG, "report map long read failed to start: %d", rc);
+    } else {
+        ble_gattc_read(conn_handle, chr->val_handle, hid_read_cb, arg);
+    }
     return 0;
 }
 
@@ -567,10 +849,16 @@ static int hid_svc_cb(uint16_t conn_handle, const struct ble_gatt_error *error,
     // three of these back-to-back - so the 2nd and 3rd were silently dropped
     // and that connection ended up with NO notifications enabled at all.
     // Chain them through the callbacks instead, and CHECK the return code.
-    int rc = ble_gattc_disc_chrs_by_uuid(conn_handle, s_hid_start, s_hid_end,
-                                         BLE_UUID16_DECLARE(UUID_HID_INFORMATION),
-                                         hid_info_chr_cb, (void *)"HID Information");
-    if (rc != 0) ESP_LOGW(TAG, "HID Information discovery failed to start: %d", rc);
+    //
+    // SUBSCRIPTION FIRST. Getting notifications flowing is the only step that decides
+    // whether the operator has a pointer at all; the Report Map only decides how well
+    // it moves. So that ordering is deliberate - see setup_next_chr()'s tail, which
+    // starts the descriptive reads once every characteristic is subscribed.
+    s_n_chrs = 0;
+    s_chr_cursor = 0;
+    int rc = ble_gattc_disc_all_chrs(conn_handle, s_hid_start, s_hid_end,
+                                     hid_chr_cb, NULL);
+    if (rc != 0) ESP_LOGW(TAG, "characteristic discovery failed to start: %d", rc);
     return 0;
 }
 
@@ -596,8 +884,41 @@ static void on_reset(int reason)
 // [buttons, dx, dy] with 8-bit deltas; some prefix a report ID; some use 12- or
 // 16-bit deltas. Rather than guess, the RAW BYTES are logged at first sight so
 // the real layout can be read off the hardware and this narrowed if needed.
-static void handle_report(const uint8_t *d, int len)
+static void handle_report(uint16_t attr_handle, const uint8_t *d, int len)
 {
+    // WHICH characteristic this came from decides everything - see the block
+    // comment by UUID_HID_REPORT. An unrecognised handle is not ours.
+    const report_chr_t *src = NULL;
+    for (int i = 0; i < s_n_chrs; i++)
+        if (s_chrs[i].val_handle == attr_handle) { src = &s_chrs[i]; break; }
+
+    // ⚠ ONLY FILTER ONCE WE ACTUALLY KNOW SOMETHING. If the table is populated, a
+    // handle missing from it is not ours (the battery notifies too - seen on the
+    // bench as a 1-byte "64") and dropping it is the point. But if the table is
+    // EMPTY, we know nothing, and dropping everything means a frozen cursor.
+    //
+    // That is a regression I shipped: the first version dropped on !src
+    // unconditionally, so any connection whose GATT setup had not finished - or had
+    // failed, which is observed and does happen - decoded nothing at all, and the
+    // operator had to power-cycle the mouse. Before the filtering existed, a failed
+    // setup still fell through to the guessed layouts and the pointer worked. Never
+    // let an improvement to the good path make the bad path worse.
+    if (s_n_chrs > 0 && !src) {
+        static uint16_t warned_handle;
+        if (attr_handle != warned_handle) {
+            warned_handle = attr_handle;
+            ESP_LOGI(TAG, "notification from unresolved handle %u - ignoring", attr_handle);
+        }
+        return;
+    }
+    if (!src) {
+        static bool warned_empty = false;
+        if (!warned_empty) {
+            warned_empty = true;
+            ESP_LOGW(TAG, "reports arriving before the HID service is resolved - "
+                          "decoding with the fallback layout");
+        }
+    }
     // Log the first few of ANY report, and ALWAYS log one whose wheel byte is
     // non-zero. The wheel is the thing under investigation and it is rare
     // compared to movement, so a plain first-N budget is spent on movement
@@ -611,9 +932,25 @@ static void handle_report(const uint8_t *d, int len)
         int n = 0;
         for (int i = 0; i < len && n < (int)sizeof(hex) - 4; i++)
             n += snprintf(hex + n, sizeof(hex) - n, "%02x ", d[i]);
-        ESP_LOGI(TAG, "report[%d]: %s", len, hex);
+        ESP_LOGI(TAG, "report[%d] from chr %u (uuid %04x): %s",
+                 len, attr_handle, src ? src->uuid16 : 0, hex);
     }
     if (len < 3) return;
+
+    // A notification from a characteristic we chose not to treat as a mouse -
+    // battery, consumer control, a vendor page. Decoding these as movement is how
+    // the cursor ended up slamming between the screen edges.
+    if (src && src->uuid16 != UUID_HID_REPORT && src->uuid16 != UUID_HID_BOOT_MOUSE_IN)
+        return;
+    if (src && src->rr_known && src->report_type != HID_REPORT_TYPE_INPUT) return;
+
+    // BOOT protocol: the layout is FIXED by the profile and the Report Map does
+    // not describe it, so the map must not be applied here however good it looks.
+    if (src && src->uuid16 == UUID_HID_BOOT_MOUSE_IN) {
+        hid_cursor_apply((int8_t)d[1], (int8_t)d[2], d[0]);
+        if (len >= 4 && (int8_t)d[3]) hid_cursor_add_wheel((int8_t)d[3]);
+        return;
+    }
 
     // PREFERRED PATH: the layout this mouse declared in its own Report Map.
     //
@@ -621,22 +958,51 @@ static void handle_report(const uint8_t *d, int len)
     // is kept because it is known to work on at least one real mouse, but it is a
     // guess and this is not.
     if (s_layout.valid) {
-        const uint8_t *p = (const uint8_t *)d;
-        int plen = len;
-        // A descriptor that declares a report ID means the byte is on the wire.
-        // Reports for OTHER IDs (a consumer-control page, a battery report) share
-        // this notification and must be ignored rather than decoded as movement.
-        if (s_layout.report_id != 0) {
-            if (plen < 1 || p[0] != s_layout.report_id) return;
-            p++; plen--;
+        // THE REPORT ID IS NOT ON THE WIRE. In BLE each report gets its own
+        // characteristic and the ID lives in that characteristic's Report
+        // Reference descriptor; only USB HID prefixes the payload with it. The
+        // previous code stripped a leading ID byte, which either dropped every
+        // report (payload byte 0 is buttons, not the ID) or ate a real data byte
+        // on the occasions the two happened to be equal. Match on the descriptor
+        // instead - and if this mouse never gave us one, take the report.
+        if (src && src->rr_known && s_layout.report_id != 0 &&
+            src->report_id != s_layout.report_id) return;
+
+        // Length sanity check, which hid_mouse_layout_t asked for from the start
+        // ("declared payload size, for a sanity check on arrival") and never got.
+        // A payload too short to CONTAIN the fields we are about to read is not the
+        // report the map describes, whatever its handle says.
+        //
+        // Deliberately a lower bound derived from the fields themselves rather than
+        // an equality test against total_bits: a mouse may legitimately send a
+        // shorter report than the descriptor's maximum, and the first version of
+        // this check compared against an end-of-descriptor figure (152 bits for a
+        // report that is really 56) and threw away every single report.
+        int need = (int)s_layout.x_bit + s_layout.x_bits;
+        int ybits = (int)s_layout.y_bit + s_layout.y_bits;
+        if (ybits > need) need = ybits;
+        if (s_layout.have_wheel) {
+            int wbits = (int)s_layout.wheel_bit + s_layout.wheel_bits;
+            if (wbits > need) need = wbits;
         }
-        int x = hid_field_signed(p, (size_t)plen, s_layout.x_bit, s_layout.x_bits);
-        int y = hid_field_signed(p, (size_t)plen, s_layout.y_bit, s_layout.y_bits);
+        if (len * 8 < need) {
+            static bool warned = false;
+            if (!warned) {
+                warned = true;
+                ESP_LOGW(TAG, "report is %d bits, the mapped fields need %d - not "
+                              "decoding as movement; send this diag log",
+                         len * 8, need);
+            }
+            return;
+        }
+
+        int x = hid_field_signed(d, (size_t)len, s_layout.x_bit, s_layout.x_bits);
+        int y = hid_field_signed(d, (size_t)len, s_layout.y_bit, s_layout.y_bits);
         // Buttons are the low bits of the first byte on every mouse I have seen,
         // and the descriptor's button range is not parsed, so this stays as it was.
-        hid_cursor_apply(x, y, p[0]);
+        hid_cursor_apply(x, y, d[0]);
         if (s_layout.have_wheel) {
-            int w = hid_field_signed(p, (size_t)plen, s_layout.wheel_bit, s_layout.wheel_bits);
+            int w = hid_field_signed(d, (size_t)len, s_layout.wheel_bit, s_layout.wheel_bits);
             if (w) hid_cursor_add_wheel(w);
         }
         return;
