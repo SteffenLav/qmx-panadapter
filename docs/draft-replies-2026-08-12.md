@@ -1,91 +1,85 @@
 # Draft replies — groups.io, 2026-08-12
 
-Not sent. Four posts. Everything below is what I can actually stand behind; where
-something is unverified or unfixed it says so.
+Not sent. One post per person. v1.8.1 is referred to as coming soon.
+
+Accuracy notes for me, not for posting:
+- Verified on hardware: RF gain tracking, CW centre range + seeding, split VFO B
+  restore, Tab5 click-to-tune, web spot hit-test, the >1 KB settings save.
+- Fixed in code but not separately tested: the QMX volume slider (same fault as RF
+  gain, same fix).
+- Built but never performed by a human: the seconds gesture.
+- NOT fixed: the BT mouse (reverted), the QMX dual-VFO display (radio side), the
+  USB wedge after long sessions.
 
 ---
 
-## 1 — Samuel W7STF (v1.8.0 feedback)
+## 1 — Samuel W7STF
 
-Samuel, thanks — most of this turned out to be real bugs rather than preferences.
+Samuel, thanks for the list. Most of it turned out to be real bugs. All the fixes
+below are in v1.8.1, which I will release shortly.
 
-**QMX RF gain not tracking between the Tab5 and the web UI.** Fixed. The value was
-read from a cache that only updated when the radio answered a query, so whichever
-screen you opened second showed the number from before your change. It now updates
-immediately and asks the radio to confirm. While fixing it I found the volume
-slider had the same fault, so that is fixed too.
+**QMX RF gain not matching between the Tab5 and the web page.** Fixed. The number was
+read from a cache that only updated when the radio answered a query. So whichever
+screen you opened second showed the old value. It now updates at once and asks the
+radio to confirm. The volume slider had the same fault and is fixed too.
 
-**CW centre, and why it stopped at 600 Hz.** Yes, it is effectively the sidetone:
-with the QMX's default Auto-offset/tone setting, changing the filter centre moves
-the CW offset and the sidetone with it. My slider was simply wrong. The radio's
-real centres are 500 to 950 Hz in **25 Hz** steps, and which ones are available
-depends on the CW passband you have selected — with a 150 Hz filter, for instance,
-the centres are 575, 625, 675 and so on. My slider ran 600 to 800 in 50 Hz steps,
-so it was short at both ends and on a grid the radio does not use. It now covers
-the whole range on the correct grid, so your 550 is reachable.
+**CW centre stopping at 600 Hz.** Fixed. It is the sidetone. With the QMX default the
+filter centre moves the CW offset and the sidetone with it. My slider was simply
+wrong. The radio uses 500 to 950 Hz in 25 Hz steps. Which of those you can pick
+depends on the CW filter width you have chosen. My slider ran 600 to 800 in 50 Hz
+steps. It now covers the full range in the right steps. Your 550 works.
 
-There was a second half to that: the Tab5 pushed its stored value to the radio
-about four seconds into boot, but the radio is not reachable over CAT until about
-seventeen seconds. So that write never arrived, on every single boot, and the two
-numbers were free to disagree all session. The Tab5 now takes the value **from the
-radio** when the link comes up.
+There was a second half to it. The Tab5 pushed its stored value to the radio about
+four seconds into boot. The radio is not reachable over CAT until about seventeen
+seconds. So that write never arrived. The Tab5 now reads the value from the radio
+instead.
 
-**The web UI tuning problem.** Found and fixed, and it was not your imagination
-being inconsistent. Each spot label was a click target across its whole width — a
-callsign like OK/DL4ROB/P is 93 pixels, which at ×1 is 3.8 kHz of band, with the
-spot's actual frequency merely somewhere in the middle. So clicking a signal a
-couple of kHz from a spotted station tuned you to the station instead. I reproduced
-it: aimed at 14.031.750, landed on 14.033.000. A label is now only a target within
-about 400 Hz of the frequency it marks, and everywhere else tunes to where you
-clicked. Tested here and behaving.
+**Tuning on the web page.** Fixed. Each spot label was a click target across its whole
+width. A callsign is often 3 to 4 kHz wide on screen at full zoom. The spot frequency
+sits somewhere in the middle. So clicking a signal a couple of kHz from a spotted
+station took you to the station. I reproduced it here. I aimed at 14.031.750 and
+landed on 14.033.000. A label is now only a target close to the frequency it marks.
+Everywhere else tunes to where you clicked.
 
-**And a second one you did not report, found while chasing yours.** On the Tab5,
-most of the spectrum had stopped responding to tap-to-tune: only a window in the
-middle worked, which is why it felt like it only tuned near the centre frequency.
-A change last week shortened the top-bar Band/Mode/BW/Zoom touch areas so they
-would stop swallowing taps on the spot callsigns, but the tune code still assumed
-the old, deeper areas — so a band of the spectrum belonged to nobody. No menu
-opened and no tune happened. It is fixed, and the rule is now simply that if the
-mouse pointer is white, clicking tunes. You may not have noticed it with a finger;
-with a mouse it is obvious, so it is probably worth a look next time you are on the
-panadapter screen.
+**Something you did not report.** On the Tab5 most of the spectrum had stopped
+responding to tap-to-tune. Only a window in the middle worked. A change last week
+made the top bar touch areas shallower so they would stop swallowing taps on the spot
+callsigns. The tune code still assumed the old deeper areas. So a band of the spectrum
+belonged to nobody. Nothing opened and nothing tuned. It is fixed. The rule now is
+simple. If the mouse pointer is white then clicking tunes.
 
-**The Bluetooth mouse.** I found the main fault: the Tab5 asks the mouse to describe
-its own button and movement layout, and was only reading the first 22 bytes of that
-description. The rest was silently discarded, so the description never made sense
-and the Tab5 fell back to guessing from a layout I captured off one particular mouse
-months ago. On mine the real description is 110 bytes, and with all of it the layout
-comes out exactly right.
+**The Bluetooth mouse.** I found the main fault. The Tab5 asks the mouse to describe
+its own layout and was only reading the first 22 bytes of the answer. The rest was
+thrown away. So the description never made sense and the Tab5 fell back to guessing.
+On my mouse the real description is 110 bytes and the layout then comes out right.
 
-I have to be straight with you: my rewrite also broke the mouse in a different way,
-so I have reverted it for now and will redo it properly. **So this is not yet fixed
-in anything you can install.** When it is, I would like a diagnostic log from your
-mouse before I claim it works — your symptom (hopping left and right, vertical
-roughly usable) does not match the arithmetic of the fault I found, so there may be
-a second one.
+I have to be straight with you. My rewrite broke the mouse in a different way so I
+took it out again. **The mouse is unchanged in v1.8.1.** I will redo it properly.
 
-**The disconnect after an hour.** That is a known one, and it is on the radio's side
-of the USB link, not the Tab5's. Once it happens the QMX stops answering the very
-first question a USB host asks, and only a power cycle to the radio clears it. I
-tried six different approaches from the Tab5 end, including holding the USB power
-off through a whole reboot, and every one failed the same way. I have written it up
-for Hans.
+When I do I would like a diagnostic log from your mouse before I claim anything. Your
+symptom does not match the fault I found. You describe the pointer hopping left and
+right with vertical roughly usable. The fault I fixed does the opposite. So there is
+probably a second one on your mouse.
 
-**The RIT button.** Fair point. There is now a **Show RIT button** checkbox in the
-drawer under Radio, on by default, so you can turn it off and get the corner back.
-One deliberate exception: if RIT is actually engaged, the button reappears whatever
-the setting says — I am not willing to have the radio listening off frequency with
-nothing on screen telling you.
+**The disconnect after an hour.** That is on the radio side of the USB link. Once it
+happens the QMX stops answering the first question a USB host asks. Only a power cycle
+of the radio clears it. I tried six different approaches from the Tab5 end. One of
+them held the USB power off through an entire reboot. None of them helped. I have
+written it up for the QRP Labs side.
 
-**The top bar labels and matching the web layout.** I am going to leave these. The
-same bar is used on the panadapter, in FT8 and on the CW page I am working on, and
-its positions are muscle memory for people who have been using it a while. The space
-saved would not buy back what changing it costs.
+**The RIT button.** Fair point. v1.8.1 has a **Show RIT button** checkbox in the
+drawer under Radio. It is on by default. Turn it off and the corner is yours. One
+exception. If RIT is actually engaged the button comes back whatever the setting says.
+I am not willing to have the radio listening off frequency with nothing on screen
+saying so.
 
-**Arrow buttons beside the frequency.** I like the idea. What step would you want per
-press — the current tuning step for the mode you are in (250 Hz on SSB, 500 Hz on
-digital), or a fixed one you set? And would a fast pair alongside them be useful, or
-just the two?
+**The top bar labels and matching the web layout.** I am leaving these alone. The same
+bar is used on the panadapter, in FT8 and on the CW page I am working on. Its
+positions are muscle memory for anyone who has used it a while. The space saved is not
+worth that.
+
+**Arrow buttons beside the frequency.** I like it. What step would you want per press?
+The current tuning step for the mode you are in, or a fixed one you choose?
 
 73 Steffen
 
@@ -93,112 +87,106 @@ just the two?
 
 ## 2 — Roy KI0ER
 
-Roy, all four of yours were worth chasing.
+Roy, all four of yours were worth chasing. The fixes are in v1.8.1, coming shortly.
 
 **The transmit offset leaving VFO B behind.** You were right that something was left
-over, and wrong about the consequence, which is the good news: the split *was* being
-switched off when you changed to FT8, so your FT8 transmissions were not going out
-60 Hz high. What was left behind was VFO B itself, still sitting at A+60 for the rest
-of the session, which is what your radio was showing you. The Tab5 now writes VFO B
-back to match VFO A before it drops the split, and then asks the radio to confirm it
-is back to simplex. It has to be done in that order — the QMX will not accept a new
-VFO B once the split is already off.
+over. You were wrong about the consequence and that is the good news. The split was
+switched off when you changed to FT8. Your FT8 was not going out 60 Hz high. What was
+left behind was VFO B. It stayed at A plus 60 for the rest of the session. That is
+what your radio was showing you.
 
-**One part I have not solved, and it is on the radio's side.** After all that, the
-QMX still shows both VFOs, even though it reports that it is in VFO A mode,
-transmitting on A, with split off — and I can now read its actual LCD contents over
-CAT to prove the two disagree. The only things that put the display back to a single
-VFO are a full configuration reload or a power cycle, and the reload also switches
-off the radio's IQ mode, which would cost you the spectrum. That is too high a price
-for a cosmetic display, so I have deliberately left it alone.
+The Tab5 now puts VFO B back to match VFO A before it drops the split. Then it asks
+the radio to confirm simplex. The order matters. The QMX will not accept a new VFO B
+once the split is already off.
 
-To be clear about what matters: the radio is **not** transmitting off frequency. VFO
-B is set equal to VFO A and split is off, and I verify both by reading them back from
-the radio. It is the display that is stale, not the state.
+**One part I could not solve.** The QMX still shows both VFOs afterwards. I can read
+the radio's own display over CAT now so I can prove it. The radio reports VFO A mode,
+transmit on A, split off. The display disagrees. Only a full configuration reload or a
+power cycle puts it back to one VFO. The reload also switches off the radio's IQ mode
+which would cost you the spectrum. That is too high a price for a display, so I left
+it alone.
 
-I am writing this up for Stan to check and pass to Hans, since it looks like the
-display simply is not being redrawn when the VFO mode returns to A over CAT. If you
-see the same on yours, that is useful confirmation.
+What matters is that the radio is not transmitting off frequency. VFO B equals VFO A
+and the split is off. I check both by reading them back.
 
-**VFO B not following the tuning knob.** That one is working as intended. The offset
-only applies in CW, so as soon as you are in another mode the Tab5 stops maintaining
-VFO B and it stays where it was.
+I am writing this up for Stan to verify and pass on. It looks like the display is not
+redrawn when the VFO mode returns to A over CAT.
 
-**CW centre 625, and resetting to 700.** Fixed, and your suggestion was the right
-one. Two faults: my slider only offered 50 Hz steps between 600 and 800, when the
-radio's real centres are 500 to 950 in 25 Hz steps; and the Tab5 pushed its stored
-value to the radio about thirteen seconds before the CAT link exists, so that write
-went nowhere every boot. The Tab5 now reads the centre **from the radio** at connect
-and uses that, so the two cannot disagree, and 625 is selectable.
+**VFO B not following the tuning knob.** That is intended. The offset only applies in
+CW. In any other mode the Tab5 stops maintaining VFO B and it stays put.
+
+**CW centre 625 and resetting to 700.** Fixed, and your suggestion was the right one.
+Two faults. My slider only offered 50 Hz steps from 600 to 800. The radio uses 25 Hz
+steps from 500 to 950. And the Tab5 pushed its stored value to the radio thirteen
+seconds before the CAT link exists, so that write went nowhere every boot. The Tab5
+now reads the centre from the radio at connect. The two cannot disagree any more and
+625 is selectable.
 
 **The mice.** Your MX Master works because it is Bluetooth Low Energy. Your two
-Microsoft mice are almost certainly Bluetooth Classic, which is the older kind — and
-the Tab5's Bluetooth comes from a co-processor that has no Classic radio in it at
-all. So you are right that there is nothing to be done: not a software limitation,
-just silicon. For anyone buying a mouse for this, the thing to look for is Bluetooth
-4.0 or later.
+Microsoft mice are almost certainly Bluetooth Classic. The Tab5 gets its Bluetooth
+from a co-processor with no Classic radio in it. So you are right that there is
+nothing to be done. It is not software. For anyone buying a mouse for this, look for
+Bluetooth 4.0 or later.
 
 73 Steffen
 
 ---
 
-## 3 — Don WB0LQW (and Roy) — setting the clock
+## 3 — Don WB0LQW
 
-Don, you found a real gap and it is fixed.
+Don, you found a real gap and it is fixed in v1.8.1, coming shortly.
 
 You are right that section 7.5 of the guide describes something that no longer
-existed. HH and MM were editable and the seconds were not, so with WiFi off and no
-GPS there was no way to get the clock inside the second that FT8 needs. That is
-exactly the situation you were in, and there was no way out of it.
+existed. HH and MM were editable and the seconds were not. So with WiFi off and no GPS
+there was no way to get the clock inside the second that FT8 needs. That is exactly
+where you were.
 
-Roy's suggestion is what I have built: **press and hold the SS box, then release
-exactly on the minute.** The clock is set the moment you release, not when you tap
-Save — the release is the measurement, and a Save a few seconds later would be a few
-seconds late. Use your watch, or listen for the FT8 gap. If you have typed HH and MM
-in first it uses those; otherwise it takes the nearest minute to the Tab5's own
-clock. While you are holding it, the box turns amber and says what releasing will do.
+Roy's suggestion is what I built. Press and hold the SS box then release exactly on
+the minute. The clock is set the moment you release. Not when you tap Save. The
+release is the measurement. A Save a few seconds later would be a few seconds late.
+Use your watch or listen for the FT8 gap. If you have typed HH and MM first it uses
+those. Otherwise it takes the nearest minute to the Tab5 clock. While you hold it the
+box turns amber and says what releasing will do.
 
-**Nobody has actually performed this yet** — it is a timing gesture and it needs a
-person with a watch, so I would rather you told me how it behaves than have me claim
-it is right.
+Nobody has actually done this yet. It is a timing gesture and it needs a person with a
+watch. So please tell me how it behaves rather than take my word for it.
 
-I will bring sections 7.5 and 7.6 of the guide up to date with this.
+I will bring sections 7.5 and 7.6 of the guide up to date.
 
-Separately, you mentioned the SS frame never going from blue to grey, and the seconds
-disagreeing with your atomic watch. I have not looked into that yet and I do not want
-to guess at it. When you next see it, could you tell me whether WiFi was connected at
-the time, what colour the SS frame was, and roughly how far out the seconds were?
+You also mentioned the SS frame never going from blue to grey and the seconds
+disagreeing with your watch. I have not looked at that yet and I do not want to guess.
+Next time you see it, could you tell me whether WiFi was connected, what colour the SS
+frame was, and roughly how far out the seconds were?
 
 73 Steffen
 
 ---
 
-## 4 — Brian WA6JFK — GPS time on the QMX+
+## 4 — Brian WA6JFK
 
-Brian, yes, the GPS antenna needs to be connected — the QMX+ cannot get a fix
-without it, and the Tab5 only ever reads the time the radio already has.
+Brian, yes the GPS antenna needs to be connected. The QMX+ cannot get a fix without
+it. The Tab5 only reads the time the radio already has.
 
 On the radio, in the QMX+ menus:
 
-- **GPS source** — set to *QMX+ Internal* if you have the internal QLG3 fitted
-  (the default is *Paddle port*, which is for an external GPS on a plain QMX)
-- **Clock** — set to *ON*, so the radio keeps and displays a real time clock
-- **Real time clock** — *QMX+ Internal* if you have fitted the CR2032 coin cell, in
-  which case the clock keeps running while the radio is off. Otherwise leave it on
-  *Software*, which works but does not survive a power cycle
+- **GPS source** set to *QMX+ Internal* if you have the internal QLG3 fitted. The
+  default is *Paddle port* which is for an external GPS on a plain QMX.
+- **Clock** set to *ON* so the radio keeps and shows a real time clock.
+- **Real time clock** set to *QMX+ Internal* if you have fitted the CR2032 cell. Then
+  the clock keeps running while the radio is off. Otherwise leave it on *Software*
+  which works but does not survive a power cycle.
 
-There is no calibration or beacon menu to enter: the QMX parses the GPS data
-automatically as soon as it arrives, and updates its clock. Give it a few minutes
-for a first fix from cold.
+There is no calibration or beacon menu to enter. The QMX reads the GPS data
+automatically as soon as it arrives and sets its clock. Give it a few minutes for a
+first fix from cold.
 
-Nothing needs configuring on the Tab5. It reads the radio's time over CAT and works
-out for itself whether that time is GPS-disciplined, by checking how closely the
-radio's seconds agree with internet time when both are available.
+Nothing to configure on the Tab5. It reads the radio's time over CAT and works out for
+itself whether that time comes from GPS.
 
-One thing worth knowing if you ever use a plain QMX rather than a QMX+: there the GPS
-goes on the paddle port, and because the GPS shares those pins with the key the radio
-puts itself into practice mode while it is connected — you will see a G on the
-display. That is deliberate, to protect the transmitter. You connect the GPS, wait
-for the clock to update, then disconnect it.
+One thing worth knowing if you ever use a plain QMX instead of a QMX+. There the GPS
+goes on the paddle port. The GPS shares those pins with the key so the radio puts
+itself in practice mode while it is connected. You will see a G on the display. That
+is deliberate and it protects the transmitter. Connect the GPS, wait for the clock,
+then disconnect it.
 
 73 Steffen
