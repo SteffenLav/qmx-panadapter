@@ -1715,6 +1715,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "hound_mode",      c.hound_mode);
     cJSON_AddBoolToObject(root, "sim_mode_en",       c.sim_mode_en);
     cJSON_AddBoolToObject(root, "distance_in_miles", c.distance_in_miles);
+    cJSON_AddBoolToObject(root, "rit_pill_show",     c.rit_pill_show);
     cJSON_AddBoolToObject(root, "iq_enabled",        c.iq_enabled);
     cJSON_AddNumberToObject(root, "qmx_vol_db",      c.qmx_vol_db);
     // -1 until the radio has answered RG;. The browser must show that as
@@ -1763,11 +1764,35 @@ static float c_cur_db_max(void) { qmx_settings_t c; settings_load_all(&c); retur
 
 static esp_err_t settings_post_handler(httpd_req_t *req)
 {
-    char buf[1024];
-    int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
-    if (len <= 0) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body"); return ESP_FAIL; }
-    buf[len] = '\0';
+    // ⚠ READ THE WHOLE BODY. This was a fixed char buf[1024] and a SINGLE
+    // httpd_req_recv() with no loop, so it worked only for as long as the settings
+    // form stayed under 1 KB and every byte happened to arrive in one read. Adding
+    // one checkbox took the form past 1024 bytes: the body arrived truncated, the
+    // JSON failed to parse, and the browser got "Save failed (HTTP 400)" with no clue
+    // why. The form only ever grows, so size it from content_len and loop - the same
+    // discipline /api/config already uses.
+    //
+    // Buffer comes from PSRAM: this is several KB on the httpd task's stack
+    // otherwise, and a >16 KB plain malloc would land in scarce internal RAM
+    // (CLAUDE.md, SPIRAM_MALLOC_ALWAYSINTERNAL).
+    int total = req->content_len;
+    if (total <= 0)      { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body"); return ESP_FAIL; }
+    if (total > 65536)   { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "body too large"); return ESP_FAIL; }
+
+    char *buf = heap_caps_malloc((size_t)total + 1, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!buf) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "oom"); return ESP_FAIL; }
+
+    int got = 0;
+    while (got < total) {
+        int r = httpd_req_recv(req, buf + got, (size_t)(total - got));
+        if (r == HTTPD_SOCK_ERR_TIMEOUT) continue;      // retry, do not give up
+        if (r <= 0) { free(buf); httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "short body"); return ESP_FAIL; }
+        got += r;
+    }
+    buf[got] = '\0';
+
     cJSON *root = cJSON_Parse(buf);
+    free(buf);            // cJSON_Parse copies what it keeps, so this is safe here
     if (!root) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad json"); return ESP_FAIL; }
 
     // MERGE, never replace: a browser sending one toggle must not reset the rest
@@ -1855,6 +1880,12 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     // sends not one CAT byte while it is on), so remote practice needs no trust.
     BOOLTOP("sim_mode_en",       settings_set_sim_mode_en);
     BOOLTOP("distance_in_miles", settings_set_distance_in_miles);
+    // Mirror it into the live UI too, or the pill only changes on the next boot.
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "rit_pill_show"))) {
+        bool v = cJSON_IsTrue(it);
+        settings_set_rit_pill_show(v);
+        ui_set_rit_pill_show(v);
+    }
     #undef BOOLTOP
 
     // IQ balance is a live DSP path as well as a stored flag - set both, exactly

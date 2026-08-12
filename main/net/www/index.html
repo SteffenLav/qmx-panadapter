@@ -1894,6 +1894,8 @@ const SET_FIELDS = [
      "0 = off. In CW only, transmit this far from the station you are listening to (split), so a QRP call is not buried in the zero-beat pile. -300 to +300, and around 100 Hz or less is typical - most CW operators run a 500 Hz filter or narrower (200 Hz is not unusual), and a QRP signal loses energy towards the filter edges (Michael KZ4LY). Roy KI0ER uses +60"],
   ["Radio & display", "iq_enabled",        "bool", "I/Q balance correction", ""],
   ["Radio & display", "distance_in_miles", "bool", "Distances in miles", "Kilometres when off"],
+  ["Radio & display", "rit_pill_show",     "bool", "Show the RIT button",
+     "The RIT button in the Tab5's top-right corner, on the panadapter screen. Turn it off if you never use RIT and would rather have the space. An RIT offset that is actually engaged still shows itself either way, so the radio can never be listening off frequency with nothing on screen saying so"],
   ["Radio & display", "bandplan_region",   "sel",  "Band-plan region", "",
      [["0","Auto (from your grid)"],["1","Region 1"],["2","Region 2"],["3","Region 3"]]],
   /* Per-unit calibration - set once, then forgotten. Exactly the kind of thing you
@@ -3127,14 +3129,34 @@ function drawSpots(ctx, W, H) {
    quick tap takes a callsign. A browser has one click for both.
    Two things keep it honest now: the vertical slack is gone (below), and hovering a
    label previews where the click will actually land - see drawSpotPreview(). */
+/* A label is now only a target NEAR THE FREQUENCY IT MARKS, not across its whole
+   width. That width was the bug: 93 px of callsign is 3.8 kHz at zoom x1, and the
+   spot's real frequency sits in the middle of it, so clicking a signal 2 kHz away
+   from a spotted station tuned you to the station instead - which is exactly what
+   Samuel W7STF reported as an intermittent tuning fault (aimed at 14.031.750, landed
+   on 14.033.000). Removing the vertical slack and adding the hover preview helped but
+   did not close it: horizontally the label still owned kilohertz it had no claim to.
+   Now the click has to land within SPOT_HIT_HALF_PX of the spot's own frequency line -
+   the thing the label is pointing at - and everywhere else in the label tunes to the
+   pointer like the rest of the spectrum. The callsign text stays readable and the
+   hover preview still explains the redirection, because both go through here. */
+const SPOT_HIT_HALF_PX = 10;   /* ~400 Hz at zoom x1 */
+
 function spotHitTest(clientX, clientY, rect) {
   const cx = (clientX - rect.left) / rect.width  * specPxW;
   const cy = (clientY - rect.top)  / rect.height * specPxH;
-  for (const b of spotBoxes.concat(spotOffBoxes)) {
+  for (const b of spotBoxes) {
     /* No vertical slack. It was +/-6 px for fingertip imprecision, which a mouse does
        not need, and it stretched a 20 px label to 32 px of click-stealing height. With
        it gone, a click anywhere in the column ABOVE or BELOW the label rows tunes to
        the pointer - which is the escape hatch for a signal sitting behind a label. */
+    if (cy < b.y || cy > b.y + b.h) continue;
+    const sx = freqToPixelX(b.hz, specPxW);
+    if (Math.abs(cx - sx) <= SPOT_HIT_HALF_PX) return b;
+  }
+  /* The off-screen counters are different: their spot is outside the window entirely,
+     so there is no frequency line on screen to aim at. Their own box IS the target. */
+  for (const b of spotOffBoxes) {
     if (cx >= b.x - 3 && cx <= b.x + b.w + 3 && cy >= b.y && cy <= b.y + b.h) return b;
   }
   return null;

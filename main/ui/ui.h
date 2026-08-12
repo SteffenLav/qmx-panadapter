@@ -50,6 +50,7 @@ void ui_seed_cw_pitch_hz(uint16_t hz);
 void ui_set_cw_cal_hz(int16_t hz);     // CW LO trim (Hz), +/-100, persisted to NVS
 float    ui_get_zoom_factor(void);      // current zoom (1.0=full, max 24.0)
 uint16_t ui_get_cw_pitch_hz(void);
+void ui_set_rit_pill_show(bool show);  // panadapter RIT pill visibility (NVS-backed)
 uint32_t ui_band_last_hz(uint32_t center_hz); // 0 if never visited      // CW sidetone offset in Hz
 // True if hz falls inside a recognized HF amateur band's edges (lo/hi
 // receive that band's edges if non-NULL). False for anything out of band

@@ -1380,6 +1380,7 @@ static uint16_t s_cw_pitch_hz = 700;  // CW sidetone offset (Hz); applied to tou
 // The three CW_CENTER_* bounds live in ui.h - cat.c needs them too, to range-check
 // what it reads back from the radio.
 static bool s_distance_in_miles = false;  // FT8 distance unit toggle (NVS-backed)
+static bool s_rit_pill_show = true;       // show the RIT pill in the panadapter top bar (NVS-backed)
 static bool s_ft8_early_decode = true;    // FT8 fast-pounce early-decode toggle (NVS-backed)
 static const bool s_ft8_sync_lines = false;  // FT8 sync-line diagnostic removed (drawer toggle gone); overlay/3x-WF never engage
 static bool s_sim_mode_en = false;     // FT8 simulation mode toggle (NVS-backed)
@@ -1473,6 +1474,11 @@ static void ui_save_snapshot(ui_mode_snapshot_t *snap)
 }
 
 uint16_t ui_get_cw_pitch_hz(void) { return s_cw_pitch_hz; }
+
+// Applied at boot from NVS so the pill respects the operator's choice before the
+// drawer has ever been built. No CAT, no widgets - rit_pill_sync() does the work on
+// its next tick.
+void ui_set_rit_pill_show(bool show) { s_rit_pill_show = show; }
 int16_t  ui_get_if_cal_hz(void)   { return s_cw_cal_hz; }
 
 // Touch-target cursor state (Phase 6.1)
@@ -1700,6 +1706,9 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_CHARGE     15  // battery care: stop-charging-at-% (was DRAWER_SEC_SNAP,
                                    // dead since v0.19.4; briefly DRAWER_SEC_TUNE until Antenna
                                    // Tune moved into its own tune_modal.c window, 2026-07-04)
+#define DRAWER_SEC_RITPILL    30  // panadapter-only: show/hide the RIT pill in the top bar.
+                                   // Only the pill's VISIBILITY - the control itself stays where
+                                   // it is; RIT is not operated from the drawer (operator).
 #define DRAWER_SEC_BPREGION   16
 #define DRAWER_SEC_DISTANCE   17  // FT8 distance unit (km/miles) - kept visible in FT8 mode
 #define DRAWER_SEC_FT8SYNC    18  // panadapter-only: FT8 sync lines + 3x waterfall (diagnostic)
@@ -1740,7 +1749,12 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_ACTIVATION 28  // POTA/SOTA activation session. In the Station group -
                                    // it is part of who you are on the air right now, and
                                    // it is what every logged QSO gets stamped with.
-#define N_DRAWER_SECTIONS     30
+// ⚠ THIS IS THE BOUND FOR THE DRAWER_SEC_* IDS, AND THEY ARE ARRAY INDICES.
+// Adding DRAWER_SEC_RITPILL as id 30 while this was 30 wrote one past the end of
+// s_drawer_sections[] into s_drawer_section_y[], and the garbage was then used as an
+// object pointer - a Load access fault at MTVAL 0x6c, in a boot loop, straight after
+// "Settings drawer built". Raise this when adding a section, and keep headroom.
+#define N_DRAWER_SECTIONS     34
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
@@ -1761,7 +1775,8 @@ typedef struct { const char *title; const int *ids; int n; bool expert; } drawer
 static const int GRP_STATION[]  = { DRAWER_SEC_IDENTITY, DRAWER_SEC_ACTIVATION,
                                     DRAWER_SEC_BPREGION };
 static const int GRP_RADIO[]    = { DRAWER_SEC_QMXVOL, DRAWER_SEC_QMXRF, DRAWER_SEC_CW,
-                                    DRAWER_SEC_SWRLIM, DRAWER_SEC_TUNE2, DRAWER_SEC_PAUSE };
+                                    DRAWER_SEC_RITPILL, DRAWER_SEC_SWRLIM, DRAWER_SEC_TUNE2,
+                                    DRAWER_SEC_PAUSE };
 static const int GRP_NETWORK[]  = { DRAWER_SEC_WIFI, DRAWER_SEC_SPOTS, DRAWER_SEC_BT };
 // Flip 180 last: it is the least-touched control in the group (operator).
 static const int GRP_DISPLAY[]  = { DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_SLEEP,
@@ -1799,7 +1814,7 @@ static bool drawer_sec_visible(int id, bool ft8, bool tune_ok)
     if (id == DRAWER_SEC_DISTANCE || id == DRAWER_SEC_SIMMODE ||
         id == DRAWER_SEC_FT8SYNC) return ft8;
     // The spectrum/waterfall controls describe a view FT8 mode does not show.
-    if (id == DRAWER_SEC_SPOTS   || id == DRAWER_SEC_PRESETS ||
+    if (id == DRAWER_SEC_RITPILL || id == DRAWER_SEC_SPOTS   || id == DRAWER_SEC_PRESETS ||
         id == DRAWER_SEC_DBRANGE || id == DRAWER_SEC_SMOOTHING ||
         id == DRAWER_SEC_WATERFALL || id == DRAWER_SEC_FLAT ||
         id == DRAWER_SEC_IQ      || id == DRAWER_SEC_IFCAL ||
@@ -1841,7 +1856,8 @@ static void sleep_poll_cb(lv_timer_t *t);  // defined with the sleep code above 
 static lv_obj_t *s_check_charge_limit = NULL;   // battery-care enable checkbox
 static lv_obj_t *s_lbl_charge_limit_pct = NULL; // "Stop charging at: NN%" label
 static lv_obj_t *s_slider_charge_limit_pct = NULL;
-static lv_obj_t *s_check_distance_miles = NULL;  // FT8 distance unit (km/miles) checkbox
+static lv_obj_t *s_check_distance_miles = NULL;
+static lv_obj_t *s_check_rit_pill = NULL;  // "Show RIT button" checkbox (panadapter only)
 static lv_obj_t *s_check_ft8_early = NULL;       // FT8 fast-pounce early-decode checkbox
 static lv_obj_t *s_check_sim_mode = NULL;        // FT8 simulation mode checkbox
 static lv_obj_t *s_lbl_sim_mode   = NULL;        // its label (dimmed alongside the checkbox)
@@ -2458,9 +2474,19 @@ static void rit_pill_sync(void)
     //
     // Hidden in FT8 mode as well: RIT is a running-a-frequency control for CW and
     // SSB, and the FT8 view owns the screen there.
+    int rit_now = cat_get_rit_hz();
+
     bool want_hidden = (ui_mode_get() == UI_MODE_FT8) || s_drawer_open ||
                        reader_view_is_active() || help_triage_is_open() ||
                        any_modal_open();
+
+    // Operator opted out of the pill (Samuel W7STF: he does not use RIT and would
+    // rather have the corner). Hidden ONLY while RIT is zero and unarmed, because
+    // this pill is the INDICATOR as well as the control - and RIT can be engaged
+    // from the web UI (/api/cmd set_rit) with the pill hidden. A radio listening
+    // 250 Hz off with nothing on screen saying so is a bug, not a tidy screen, so
+    // an engaged RIT always shows itself whatever this setting says.
+    if (!s_rit_pill_show && rit_now == 0 && !s_rit_armed) want_hidden = true;
     bool hidden = lv_obj_has_flag(s_rit_pill, LV_OBJ_FLAG_HIDDEN);
     if (want_hidden != hidden) {
         if (want_hidden) lv_obj_add_flag(s_rit_pill, LV_OBJ_FLAG_HIDDEN);
@@ -2468,7 +2494,7 @@ static void rit_pill_sync(void)
     }
     if (want_hidden) return;
 
-    int  rit = cat_get_rit_hz();
+    int  rit = rit_now;
     char txt[16];
     uint32_t col;
     if (rit != 0) {
@@ -6624,6 +6650,17 @@ static void drawer_check_distance_miles_cb(lv_event_t *e)
     ESP_LOGI(TAG, "FT8 distance unit: %s", s_distance_in_miles ? "miles" : "km");
 }
 
+// Only the pill's visibility. RIT itself is still operated from the pill and the
+// spectrum tap - it is deliberately NOT driven from the drawer (operator).
+static void drawer_check_rit_pill_cb(lv_event_t *e)
+{
+    lv_obj_t *cb = lv_event_get_target(e);
+    s_rit_pill_show = lv_obj_has_state(cb, LV_STATE_CHECKED);
+    settings_set_rit_pill_show(s_rit_pill_show);
+    ESP_LOGI(TAG, "RIT pill: %s", s_rit_pill_show ? "shown" : "hidden");
+    rit_pill_sync();     // apply now rather than at the next tick
+}
+
 static void drawer_check_ft8_early_cb(lv_event_t *e)
 {
     lv_obj_t *cb = lv_event_get_target(e);
@@ -7899,6 +7936,25 @@ static void drawer_build(void)
     // build-order y, so a hidden section mid-list would show as empty space.
     // At the end they sit below the last visible Panadapter section (off the
     // bottom), and drawer_set_ft8_mode() restacks them at the top in FT8 mode.
+
+    // RIT pill visibility (Samuel W7STF: he never uses RIT and would rather have
+    // the top-right corner). Panadapter-only, because the pill only exists there.
+    // An ENGAGED RIT still shows itself regardless - see rit_pill_sync().
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_RITPILL, y, 72);
+        lv_obj_t *rp_lbl = lv_label_create(sec);
+        lv_label_set_text(rp_lbl, "Show RIT button");
+        lv_obj_set_style_text_color(rp_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(rp_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(rp_lbl, LV_ALIGN_TOP_LEFT, 0, 10);
+        qmx_settings_t rpcfg;
+        settings_load_all(&rpcfg);
+        s_rit_pill_show = rpcfg.rit_pill_show;
+        s_check_rit_pill = make_drawer_checkbox(sec, s_rit_pill_show,
+                                                drawer_check_rit_pill_cb, NULL);
+        lv_obj_align(s_check_rit_pill, LV_ALIGN_TOP_RIGHT, 0, 6);
+        y += 72;
+    }
 
     // FT8 decode-list distance unit (km/miles). FT8-screen-only; kept visible
     // in FT8 mode via drawer_set_ft8_mode's keep[] list.
