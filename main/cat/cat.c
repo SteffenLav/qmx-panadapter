@@ -185,10 +185,18 @@ void cat_request_cw_passband(uint32_t hz)
     ui_update_passband_width(hz);  // optimistic; FW; poll confirms within ~150 ms
 }
 
+// Same one-read-behind bug as the RF gain below, found by grepping the class
+// rather than waiting for it to be reported: the volume slider and the web
+// settings form both read s_af_gain, which only moved when an AG; answer landed.
+// Nobody had reported it because the drawer is usually the only surface anyone
+// changes volume from.
 void cat_request_af_gain(uint16_t ag)
 {
     if (ag > CAT_AF_GAIN_MAX) ag = CAT_AF_GAIN_MAX;
     s_pending_af_gain_p1 = (uint32_t)ag + 1;
+    // Gated, and the read-back deliberately NOT queued here - see
+    // cat_request_rf_gain() for both reasons.
+    if (cat_is_ready()) s_af_gain = ag;
 }
 
 void cat_request_ssb_bandwidth(uint32_t hz)
@@ -204,10 +212,31 @@ void cat_request_ssb_bandwidth(uint32_t hz)
     ui_update_passband_width(hz);
 }
 
+// Optimistic cache update + a queued read-back, and BOTH are load-bearing
+// (Samuel W7STF, v1.8.0: "QMX RF gain doesn't appear to track between Tab5 and
+// Web-UI"). s_rf_gain used to change only when an RG; answer arrived, so every
+// reader of cat_get_rf_gain() - the drawer on open, and /api/settings on every
+// GET - served the value from BEFORE this write. Change it on one surface, open
+// the other, and you saw the old number; the second open was right. Setting the
+// cache here makes the two agree immediately, and the read-back still lets the
+// radio correct us if it clamped or ignored the write, so the radio remains the
+// source of truth.
 void cat_request_rf_gain(uint8_t db)
 {
     if (db > CAT_RF_GAIN_DB_MAX) db = CAT_RF_GAIN_DB_MAX;
     s_pending_rf_gain_p1 = (uint32_t)db + 1;
+    // Gated on the link being up, because -1 means "the radio has never told us"
+    // and both UIs render that as "reading..."/unknown rather than as a number.
+    // With no radio attached the write is never going to leave the poll task, so
+    // caching it would turn an honest unknown into a figure nothing ever applied
+    // - the same rule as never writing a signal report we did not exchange.
+    // ⚠ DO NOT queue the read-back here. The poll task services the query branch
+    // BEFORE the write branch, so asking from this side sent RG; first, the radio
+    // answered with its PRE-WRITE value, and that overwrote the optimistic figure -
+    // making a stale read guaranteed instead of merely likely. Measured on hardware
+    // 2026-08-12: wrote 55, read 54, and only the NEXT read said 55. The read-back is
+    // queued by the write branch itself, after the value has gone out.
+    if (cat_is_ready()) s_rf_gain = db;
 }
 
 void cat_query_rf_gain(void)
@@ -739,6 +768,7 @@ static bool     s_split_engaged = false;   // true only while WE hold split on
 static uint32_t s_split_base_hz = 0;       // the RX frequency B was computed from
 static int64_t  s_split_last_us = 0;
 static bool     s_split_warned = false;    // one warning per failed engage, not per poll
+static bool     s_split_verify_pending = false;  // awaiting the SP; answer after a clear
 
 // Returns true if it used the pipe this cycle (caller should yield before the
 // next poll command, same as the other drained writes).
@@ -752,13 +782,81 @@ static bool cw_split_maintain(void)
     uint32_t base = s_last_freq_hz;
 
     if (!want) {
-        if (!s_split_engaged) return false;
-        // Stand down: back to simplex, transmitting where we listen.
+        if (!s_split_engaged) {
+            // Did the SP0; below actually take? Judged here, on a later cycle, once
+            // the SP; answer has landed. THIS IS THE DANGEROUS DIRECTION and it was
+            // unchecked: engaging split verifies itself and warns loudly, but
+            // clearing did not, so a dropped SP0; would leave the radio in split
+            // with this maintainer stood down - transmitting off frequency in a mode
+            // where nothing is watching any more. Roy KI0ER suspected exactly this
+            // of the FT8 hand-over; measured 2026-08-12, the clear does happen, but
+            // "it worked on the bench" is not the same as verified in the field.
+            if (s_split_verify_pending && s_split_readback >= 0) {
+                s_split_verify_pending = false;
+                if (s_split_readback == 1) {
+                    ESP_LOGE(TAG, "split still ON after clearing it - transmit may be "
+                                  "off frequency");
+                    ui_toast("Radio still in split - check VFO B");
+                } else {
+                    ESP_LOGI(TAG, "split confirmed off");
+                }
+            }
+            return false;
+        }
+        // PUT VFO B BACK **FIRST**, WHILE SPLIT IS STILL ON. SP0; only turns split
+        // off; VFO B keeps whatever we last wrote to it, so the QMX goes on showing
+        // an offset B for the rest of the session - which is what Roy KI0ER saw
+        // after switching to FT8, and reasonably read as "the offset is still
+        // active".
+        //
+        // ⚠ ORDER IS LOAD-BEARING, measured on hardware 2026-08-12: the first
+        // version sent SP0; and then FB, and the radio kept B at A+60 - it will not
+        // take an FB write once split is off. And the log line said "VFO B restored"
+        // while reporting the SP0; return code, so it claimed success for a write
+        // whose result was never looked at. Both are why this now writes FB before
+        // SP0; and reports its OWN result.
+        esp_err_t efb = ESP_OK;
+        if (base != 0) {
+            char fb[20];
+            int n = snprintf(fb, sizeof fb, "FB%011lu;", (unsigned long)base);
+            efb = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)fb, (size_t)n, 200);
+            vTaskDelay(pdMS_TO_TICKS(30));
+        }
+        // Now stand down: back to simplex, transmitting where we listen.
         esp_err_t e = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"SP0;", 4, 200);
-        s_split_engaged = false;
+        // ⚠ AND PUT THE VFO MODE BACK, which SP0; does NOT do. The QMX has a single
+        // three-state VFO Mode - A / B / Split - and the CAT manual is explicit that
+        // it is FR/FT that select it: "0, 1, 2 correspond to VFO A, VFO B or Split
+        // respectively ... because in the QMX the VFO mode use does not correspond
+        // exactly to TS-480". SP0; clears split in the Kenwood sense but leaves the
+        // radio's own mode at Split, so the LCD goes on showing both VFOs for the
+        // rest of the session. That is what the operator saw after this had already
+        // been "fixed" twice: B matched A, split read off, and the display was still
+        // A/B. FR0; is what actually returns the radio to plain VFO A.
+        vTaskDelay(pdMS_TO_TICKS(30));
+        esp_err_t efr = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"FR0;", 4, 200);
+        // The manual says FR and FT both select the same three-state VFO Mode, so send
+        // BOTH - and then ASK, because FR0; alone demonstrably did not clear the A/B
+        // display and I am not going to guess a fourth time. The answers arrive as
+        // plain RX lines in the diag log (our FA parser cannot mistake them: it tests
+        // for "FA"), which is enough to tell whether the mode really is 0 and the
+        // display is driven by something else, or the write is simply not landing.
+        vTaskDelay(pdMS_TO_TICKS(30));
+        cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"FT0;", 4, 200);
+        vTaskDelay(pdMS_TO_TICKS(30));
+        cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"FR;", 3, 200);
+        vTaskDelay(pdMS_TO_TICKS(30));
+        cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"FT;", 3, 200);
+        // Ask the radio to confirm simplex, judged on a later cycle above.
+        vTaskDelay(pdMS_TO_TICKS(30));
         s_split_readback = -1;
+        s_split_verify_pending = true;
+        cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"SP;", 3, 200);
+        s_split_engaged = false;
         s_split_warned = false;
-        ESP_LOGI(TAG, "CW TX offset off - split cleared (%s)", e == ESP_OK ? "ok" : "fail");
+        ESP_LOGI(TAG, "CW TX offset off - VFO B -> %lu (%s), split off (%s), VFO mode A (%s)",
+                 (unsigned long)base, efb == ESP_OK ? "ok" : "fail",
+                 e == ESP_OK ? "ok" : "fail", efr == ESP_OK ? "ok" : "fail");
         return true;
     }
     if (base == 0) return false;   // no FA reading yet; nothing to offset from
@@ -947,6 +1045,7 @@ static void poll_task(void *arg)
                                                           (size_t)n, 200);
             ESP_LOGI(TAG, "AF gain -> %s (%.2f dB) (%s)", cmd, ag * 0.25,
                      err == ESP_OK ? "ok" : "fail");
+            if (err == ESP_OK) s_af_gain_query_pending = true;   // see the RF gain branch
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
         }
@@ -1000,6 +1099,10 @@ static void poll_task(void *arg)
             esp_err_t err = cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)cmd,
                                                           (size_t)n, 200);
             ESP_LOGI(TAG, "RF gain -> %s (%s)", cmd, err == ESP_OK ? "ok" : "fail");
+            // Confirm it from HERE, after the value has gone out. Queued from the
+            // requesting side it would be served first (this loop checks the query
+            // ahead of the write) and would read back the old value.
+            if (err == ESP_OK) s_rf_gain_query_pending = true;
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
         }
@@ -1257,9 +1360,20 @@ static void link_task(void *arg)
                     // Response is in s_mm_resp — parse MMnnn;
                     if (s_mm_resp_len >= 4 && strncmp(s_mm_resp, "MM", 2) == 0) {
                         int val = atoi(s_mm_resp + 2);
-                        if (val >= 600 && val <= 800) {
+                        // 500-950, the radio's real range - this used to be 600-800,
+                        // which would have thrown away a QMX genuinely set to 550 or
+                        // 900 and silently substituted 700.
+                        if (val >= CW_CENTER_MIN_HZ && val <= CW_CENTER_MAX_HZ) {
                             s_cw_offset_hz = val;
                             ESP_LOGI(TAG, "QMX CW offset: %d Hz", s_cw_offset_hz);
+                            // THE RADIO'S VALUE WINS. Our stored one was pushed at
+                            // ~4.5 s of boot, ~13 s before this link exists, so that
+                            // write never reached anything - the two numbers have
+                            // been free to disagree for the whole session, which is
+                            // what Roy KI0ER reported as the Tab5 "resetting to 700".
+                            // With the QMX's default Auto-offset/tone=YES, CW offset
+                            // and CW centre track each other, so this is the centre.
+                            ui_seed_cw_pitch_hz((uint16_t)val);
                         } else {
                             ESP_LOGW(TAG, "CW offset out of range (%d), using 700", val);
                         }

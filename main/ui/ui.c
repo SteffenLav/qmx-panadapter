@@ -1359,6 +1359,26 @@ static char s_current_mode[8] = "USB";  // Phase 5.10F: latest CAT mode for snap
 static char s_current_band[8] = "---";  // Phase 9 (v0.9.5): cached band string for web JSON
 static uint32_t s_passband_width_hz = 0;  // Phase 5.10G: 0 = use mode default; else from CAT FW
 static uint16_t s_cw_pitch_hz = 700;  // CW sidetone offset (Hz); applied to touch-tune in CW modes
+
+// CW centre grid, straight from the radio. The QMX operation manual's table of
+// all 54 filters (docs/qmx-reference/op_104.txt, "The complete list of 54
+// filters now available in QMX") lists centres at 500..950 in 25 Hz steps, so
+// this is the union of every achievable value across all passbands.
+//
+// Both numbers were wrong before v1.8.1 (Samuel W7STF asked why he could not
+// reach the 550 Hz he uses on his other radios): the slider spanned 600-800 and
+// snapped to 50 Hz under a comment claiming 50 was the valid spacing. It is 25 -
+// and with the 150 Hz passband selected (centres 575/625/675/...) not one value
+// a 50 Hz grid can produce is achievable, so the radio was quietly substituting
+// its nearest on every change.
+//
+// Which centres are offered depends on the CW passband in use, and we do not
+// track that, so the slider spans the whole union and leaves the final choice to
+// the radio, which picks the nearest achievable one anyway. A slider that
+// changed its own range as the filter changed would be harder to understand.
+//
+// The three CW_CENTER_* bounds live in ui.h - cat.c needs them too, to range-check
+// what it reads back from the radio.
 static bool s_distance_in_miles = false;  // FT8 distance unit toggle (NVS-backed)
 static bool s_ft8_early_decode = true;    // FT8 fast-pounce early-decode toggle (NVS-backed)
 static const bool s_ft8_sync_lines = false;  // FT8 sync-line diagnostic removed (drawer toggle gone); overlay/3x-WF never engage
@@ -6405,6 +6425,37 @@ static void resmon_drag_cb(lv_event_t *e)
     }
 }
 
+// Adopt the radio's own CW centre. Same persistence as a slider move, but NO CAT
+// write: this is called when the radio has just told us what it is set to, and
+// echoing it straight back would be pointless at best. Also refreshes the drawer
+// widgets if they already exist, so a drawer built before the radio answered does
+// not keep showing the stale figure.
+void ui_seed_cw_pitch_hz(uint16_t hz)
+{
+    if (hz < CW_CENTER_MIN_HZ || hz > CW_CENTER_MAX_HZ) return;
+    if (hz == s_cw_pitch_hz) return;
+    // Neutral wording on purpose: this is called both from the boot seed (NVS) and
+    // from CAT link-up (the radio), and an earlier version said "adopted from the
+    // radio" in both - which read as the radio having answered 13 s before it could.
+    // cat.c logs its own "QMX CW offset:" line just above when it is the source.
+    ESP_LOGI(TAG, "CW centre now %u Hz (was %u)", (unsigned)hz, (unsigned)s_cw_pitch_hz);
+    s_cw_pitch_hz = hz;
+    settings_set_cw_pitch_hz(hz);
+    // This runs on cat.c's link task, NOT the LVGL thread, so the widget touches
+    // need the display lock - same reasoning as ui_toast()'s watchdog caller. The
+    // lock is recursive, so it is also safe if a UI-thread caller ever appears, and
+    // failing to get it costs only a label refresh (the value is already stored).
+    if (display_lock(100)) {
+        if (s_slider_cwpitch) lv_slider_set_value(s_slider_cwpitch, (int)hz, LV_ANIM_OFF);
+        if (s_lbl_cwpitch) {
+            char b[24];
+            snprintf(b, sizeof b, "CW center: %u Hz", (unsigned)hz);
+            lv_label_set_text(s_lbl_cwpitch, b);
+        }
+        display_unlock();
+    }
+}
+
 void ui_set_cw_pitch_hz(uint16_t hz)
 {
     if (hz < 300 || hz > 1200) return;  // sanity clamp
@@ -7585,7 +7636,7 @@ static void drawer_build(void)
 
         s_slider_cwpitch = lv_slider_create(sec);
         lv_obj_set_size(s_slider_cwpitch, DRAWER_W - 32, 30);
-        lv_slider_set_range(s_slider_cwpitch, 600, 800);
+        lv_slider_set_range(s_slider_cwpitch, CW_CENTER_MIN_HZ, CW_CENTER_MAX_HZ);
         lv_slider_set_value(s_slider_cwpitch, (int)s_cw_pitch_hz, LV_ANIM_OFF);
         lv_obj_align(s_slider_cwpitch, LV_ALIGN_TOP_LEFT, 0, 34);
         lv_obj_add_event_cb(s_slider_cwpitch, drawer_slider_cwpitch_cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -8376,10 +8427,16 @@ static void drawer_slider_cwpitch_cb(lv_event_t *e)
 {
     lv_obj_t *sl = lv_event_get_target(e);
     int v = (int)lv_slider_get_value(sl);
-    // Snap to nearest 50 Hz (valid QMX CW center values are 50 Hz apart)
-    int snapped = ((v + 25) / 50) * 50;
-    if (snapped < 600) snapped = 600;
-    if (snapped > 800) snapped = 800;
+    int snapped = ((v + CW_CENTER_STEP_HZ / 2) / CW_CENTER_STEP_HZ) * CW_CENTER_STEP_HZ;
+    if (snapped < CW_CENTER_MIN_HZ) snapped = CW_CENTER_MIN_HZ;
+    if (snapped > CW_CENTER_MAX_HZ) snapped = CW_CENTER_MAX_HZ;
+
+    // Only act when the snapped value actually moved. This fires on every touch
+    // -move event, and ui_set_cw_pitch_hz() writes MMCW|CW center= to the radio's
+    // STORED configuration - the same "a drag must not stream sixty writes"
+    // reasoning the RF gain slider's two-handler split is built on.
+    if (snapped == (int)s_cw_pitch_hz) return;
+
     ui_set_cw_pitch_hz((uint16_t)snapped);
     char buf[24];
     snprintf(buf, sizeof(buf), "CW center: %d Hz", snapped);

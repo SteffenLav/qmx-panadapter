@@ -248,7 +248,11 @@ void app_main(void)
     ESP_ERROR_CHECK(audio_init());
     iq_balance_set_enabled(cfg.iq_enabled);
     ui_set_flat_mode(cfg.flat_mode);
-    ui_set_cw_pitch_hz(cfg.cw_pitch_hz);
+    // Seed only - do NOT push to the radio here. CAT does not exist yet (it opens
+    // ~13 s from now), so the MMCW write this used to make went nowhere on every
+    // single boot. The radio tells us its own centre at link-up instead, and that is
+    // the value that wins; this is just what to show until it does.
+    ui_seed_cw_pitch_hz(cfg.cw_pitch_hz);
     ui_set_cw_cal_hz(cfg.cw_cal_hz);
     render_waterfall_set_colormap(cfg.colormap_idx);
 

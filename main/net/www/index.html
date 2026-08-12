@@ -1899,7 +1899,7 @@ const SET_FIELDS = [
   /* Per-unit calibration - set once, then forgotten. Exactly the kind of thing you
      should not have to walk to the Tab5 for. Both clamp on the device. */
   ["Radio & display", "cw_pitch_hz",        "num",  "CW pitch (Hz)",
-     "300-1200. Also sets the radio's own CW centre, so its sidetone and offset follow"],
+     "The radio's achievable CW filter centres are 500-950 in 25 Hz steps, and which of them are offered depends on the CW passband in use - the QMX picks the nearest achievable one. Also sets the radio's own CW centre, so its sidetone and offset follow"],
   ["Radio & display", "if_cal_hz",          "num",  "IF calibration (Hz)",
      "Per-unit trim, -200 to +200, so a CW signal sits exactly under the cursor. Default -60"],
 

@@ -31,7 +31,22 @@ void ui_toast(const char *msg);
 
 // Phase 5.4: runtime-set spectrum display range (autoscale)
 void ui_set_db_range(float db_min, float db_max);
+// The QMX's achievable CW filter centres: 500-950 Hz in 25 Hz steps, the union of
+// every centre across all its passbands (operation manual, "The complete list of 54
+// filters now available in QMX"). Shared because cat.c range-checks the value it
+// reads back from the radio and used to reject anything outside 600-800 - the same
+// wrong assumption the slider had, which would have discarded a radio genuinely set
+// to 550.
+#define CW_CENTER_MIN_HZ  500
+#define CW_CENTER_MAX_HZ  950
+#define CW_CENTER_STEP_HZ 25
+
 void ui_set_cw_pitch_hz(uint16_t hz);  // CW sidetone offset, persisted to NVS
+// Adopt the radio's OWN CW centre without writing back to it. The boot-time push of
+// our stored value is dead on arrival - measured: sent at 4.5 s, the radio is not
+// reachable until ~17 s - so the radio's value is the one that must win, and this is
+// how it gets in. Roy KI0ER asked for exactly this.
+void ui_seed_cw_pitch_hz(uint16_t hz);
 void ui_set_cw_cal_hz(int16_t hz);     // CW LO trim (Hz), +/-100, persisted to NVS
 float    ui_get_zoom_factor(void);      // current zoom (1.0=full, max 24.0)
 uint16_t ui_get_cw_pitch_hz(void);

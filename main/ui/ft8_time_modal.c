@@ -13,6 +13,9 @@
 //    Blue frame = auto-syncing; grey frame = locked.
 //    Tap SS to toggle locked / auto. While locked, seconds still count
 //    at the captured offset — no drift after locking.
+//    HOLD SS and RELEASE on the minute to set the seconds to 00 — the only way
+//    to set the clock to the second with no WiFi and no GPS. Applies on
+//    RELEASE, not on Apply: the release is the measurement.
 //
 //  Apply: time_sync_apply_correction_ms (sub-second) when only SS
 //    correction is needed; time_sync_set_manual when HH or MM were edited.
@@ -90,6 +93,20 @@ static bool  s_qmx_valid = false;
 static char s_edit_buf[3];
 static bool s_hh_edited  = false;
 static bool s_mm_edited  = false;
+
+// HOLD-TO-ZERO on the SS box. Don WB0LQW hit the gap this fills on a real POTA
+// activation: with WiFi off and no GPS there was no way to set the clock to the
+// second, because HH and MM are editable and SS is not - so he could not get inside
+// the ~1 s FT8 needs. The user guide's section 7.5 described a manual time set that
+// no longer existed.
+//
+// The gesture is Roy KI0ER's proposal, and it is the right one because the operator
+// already has the reference in front of them: hold the SS box, watch a wristwatch or
+// listen for the FT8 gap, and RELEASE on the minute. Release is the instant that
+// carries the information, which is why the clock is set on release and not on Save
+// - a Save tap seconds later would be seconds late.
+static bool s_ss_zero_armed = false;    // holding, waiting for the release
+static bool s_ss_zero_done  = false;    // suppress the CLICKED that follows a release
 static bool s_open       = false;
 
 // ---------------------------------------------------------------------------
@@ -137,6 +154,9 @@ static void refresh_box_styles(void)
         case SS_SYNC_QMX: ss_border = BOX_BORDER_SS_QMX; ss_digit = 0xffffff; break;
         default:          ss_border = BOX_BORDER_DIM;    ss_digit = 0xffffff; break;
     }
+    // Armed for hold-to-zero: the same amber this UI uses for "armed" on the FT8
+    // transmit status, so the state is recognisable rather than novel.
+    if (s_ss_zero_armed) ss_border = 0xFFA040;
     lv_obj_set_style_border_color(s_box_ss, lv_color_hex(ss_border), 0);
     lv_obj_set_style_border_width(s_box_ss, 3, 0);
     lv_obj_set_style_text_color(s_lbl_ss, lv_color_hex(ss_digit), 0);
@@ -238,9 +258,59 @@ static void mm_tap_cb(lv_event_t *e)
     refresh_box_styles();
 }
 
+// Long press on SS: arm, and say what releasing will do. Deliberately no countdown
+// or animation - the operator's eyes belong on their watch, not on this box.
+static void ss_hold_cb(lv_event_t *e)
+{
+    (void)e;
+    s_ss_zero_armed = true;
+    if (s_hint_ss) lv_label_set_text(s_hint_ss, "release ON the minute");
+    refresh_box_styles();
+}
+
+// Release while armed: THIS is the moment being measured.
+static void ss_release_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!s_ss_zero_armed) return;
+    s_ss_zero_armed = false;
+    s_ss_zero_done  = true;      // the CLICKED that follows must not cycle the source
+
+    time_t now = time(NULL);
+    struct tm tm; gmtime_r(&now, &tm);
+
+    int hh, mm;
+    if (s_hh_edited || s_mm_edited) {
+        // Don's flow: the clock was badly wrong, so HH:MM were typed in. Rounding the
+        // system clock would be meaningless - take what the operator entered.
+        hh = s_hh_val;
+        mm = s_mm_val;
+    } else {
+        // Roy's flow: the clock is roughly right and only the seconds are adrift.
+        // Releasing on the minute means the intended time is the NEAREST minute
+        // boundary, so 12:34:47 rounds up to 12:35:00 rather than back to 12:34:00.
+        time_t target = now - tm.tm_sec + (tm.tm_sec >= 30 ? 60 : 0);
+        struct tm tt; gmtime_r(&target, &tt);
+        hh = tt.tm_hour;
+        mm = tt.tm_min;
+    }
+
+    time_sync_set_manual(tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, hh, mm, 0);
+    ESP_LOGI(TAG, "seconds zeroed by hold-and-release: %02d:%02d:00 (was %02d:%02d:%02d)",
+             hh, mm, tm.tm_hour, tm.tm_min, tm.tm_sec);
+
+    s_hh_edited = false;         // the clock now IS this; stop holding the typed values
+    s_mm_edited = false;
+    if (s_hint_ss) lv_label_set_text(s_hint_ss, "SS  set to 00");
+    refresh_box_styles();
+}
+
 static void ss_tap_cb(lv_event_t *e)
 {
     (void)e;
+    // A release that just set the clock also raises CLICKED; cycling the sync source
+    // on top of it would undo the thing the operator was aiming for.
+    if (s_ss_zero_done) { s_ss_zero_done = false; return; }
     // Discard any in-progress numpad edit before switching source
     if (s_edit_field) {
         s_edit_buf[0] = '\0';
@@ -436,16 +506,16 @@ static void timer_cb(lv_timer_t *t)
                 ft8_get_last_applied_ms(&applied);
                 char hb[32];
                 snprintf(hb, sizeof(hb), "%s nudge %+d ms", active_proto_label(), applied);
-                lv_label_set_text(s_hint_ss, hb);
+                if (!s_ss_zero_armed) lv_label_set_text(s_hint_ss, hb);
             } else {
                 // Online: the clock is on NTP/GPS and FT8 auto-sync is disabled
                 // (its offset is one-way RX-audio latency, not a clock error).
                 char hb[24];
                 snprintf(hb, sizeof(hb), "on %s (auto)", active_source_label());
-                lv_label_set_text(s_hint_ss, hb);
+                if (!s_ss_zero_armed) lv_label_set_text(s_hint_ss, hb);
             }
         } else {
-            lv_label_set_text(s_hint_ss, "SS  NTP sync");
+            if (!s_ss_zero_armed) lv_label_set_text(s_hint_ss, "SS  NTP sync");
         }
     }
 }
@@ -635,6 +705,8 @@ static void modal_build(void)
     // SS
     s_box_ss = make_box(s_panel, x_ss, BY, BW, BH);
     lv_obj_add_event_cb(s_box_ss, ss_tap_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_add_event_cb(s_box_ss, ss_hold_cb, LV_EVENT_LONG_PRESSED, NULL);
+    lv_obj_add_event_cb(s_box_ss, ss_release_cb, LV_EVENT_RELEASED, NULL);
     s_lbl_ss = lv_label_create(s_box_ss);
     lv_label_set_text(s_lbl_ss, "00");
     lv_obj_set_style_text_color(s_lbl_ss, lv_color_hex(0x80bbff), 0);
@@ -706,6 +778,8 @@ void ft8_time_modal_show(void)
     s_edit_buf[0] = '\0';
     s_hh_edited   = false;
     s_mm_edited   = false;
+    s_ss_zero_armed = false;   // a hold left over from a previous opening must not
+    s_ss_zero_done  = false;   // swallow the first tap of this one
     s_ss_mode     = SS_SYNC_FT8;
     s_qmx_valid   = false;
 
