@@ -47,7 +47,10 @@ stays on the display in every case:
 - Re-toggling `SP1;` then `SP0;`.
 - Changing operating mode (`MD`) — the exit happens on a CW-to-Digi change anyway.
 
-So the only thing that resyncs the display is `MU;`.
+So the only things that resync the display are `MU;` and a power cycle. The power
+cycle is worth noting for what it implies: the dual-VFO layout is not stored in
+EEPROM, it is runtime state that survives every CAT route back to VFO A and clears
+only on a configuration reload or a restart.
 
 **Which brings me to the second half, and this may be the more useful part for
 Hans.** `MU;` also silently drops IQ mode. `Q9` is session state, not written to

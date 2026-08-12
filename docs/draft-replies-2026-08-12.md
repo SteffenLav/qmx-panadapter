@@ -104,12 +104,21 @@ back to match VFO A before it drops the split, and then asks the radio to confir
 is back to simplex. It has to be done in that order — the QMX will not accept a new
 VFO B once the split is already off.
 
-**One part I have not solved.** After all that, my QMX still displays both VFOs, even
-though it reports that it is in VFO A mode, transmitting on A, with split off. I
-cannot find any command in the CAT manual that addresses the display, so this may
-simply not be reachable from outside. Does yours do the same? And if you press the
-radio's Exit button once, does it change what is shown? That would tell me whether
-the radio is really in the mode it claims.
+**One part I have not solved, and it is on the radio's side.** After all that, the
+QMX still shows both VFOs, even though it reports that it is in VFO A mode,
+transmitting on A, with split off — and I can now read its actual LCD contents over
+CAT to prove the two disagree. The only things that put the display back to a single
+VFO are a full configuration reload or a power cycle, and the reload also switches
+off the radio's IQ mode, which would cost you the spectrum. That is too high a price
+for a cosmetic display, so I have deliberately left it alone.
+
+To be clear about what matters: the radio is **not** transmitting off frequency. VFO
+B is set equal to VFO A and split is off, and I verify both by reading them back from
+the radio. It is the display that is stale, not the state.
+
+I am writing this up for Stan to check and pass to Hans, since it looks like the
+display simply is not being redrawn when the VFO mode returns to A over CAT. If you
+see the same on yours, that is useful confirmation.
 
 **VFO B not following the tuning knob.** That one is working as intended. The offset
 only applies in CW, so as soon as you are in another mode the Tab5 stops maintaining
