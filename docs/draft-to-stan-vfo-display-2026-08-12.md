@@ -86,5 +86,10 @@ to VFO A and split is off, and I verify both by read-back.
 what turned this from guesswork into something I could measure. I had been inferring
 the display state from `FR;`/`FT;` and getting it wrong.
 
+If it helps, I can run any sequence you want to see on my bench and send you back the
+`LC;` contents and the read-backs — I have a way to fire arbitrary CAT at the radio
+and log its replies, so you can direct the measurement rather than repeating it all on
+yours. Same for anything you want checked around `MU;` and session state.
+
 73
 Steffen OZ1LAV
