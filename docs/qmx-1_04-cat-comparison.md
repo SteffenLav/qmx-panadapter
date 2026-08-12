@@ -10,9 +10,24 @@ capabilities worth utilising. This is TODO item **#22** (and unblocks **#3**, on
 | QMX CAT programming manual, fw **1_03_000** | the 1_03 baseline | `docs/qmx-reference/QMX_CAT_programming_manual_1.03.000.pdf` (local cache, gitignored) |
 | QMX CAT programming manual, fw **1_04_001** | all 1_04 CAT changes (rev history: "Added new CAT commands and features for 1_04_001 (MD, MU, TR, RR, PS, AI commands)") | `docs/qmx-reference/QMX_CAT_manual_1.04.001.pdf` |
 | QMX operating manual, fw **1_04_001** | non-CAT features | `docs/qmx-reference/QMX_operation_manual_1.04.001.pdf` |
-| qrp-labs.com/qmx changelog | 1_04_000 (08-May-2026), 1_04_001 (12-Jun-2026), 1_04_002 (18-Jun-2026) | web |
+| qrp-labs.com/qmx changelog | 1_04_000 (08-May-2026), 1_04_001 (12-Jun-2026), 1_04_002 (18-Jun-2026), **1_04_004**, **1_04_005 (06-Aug-2026)**, **1_04_006 (12-Aug-2026)** | web |
 
-**Status of 1_04 (as of 2026-07-03):** still **BETA**, no GA. Three betas so far.
+**⚠ Betas kept coming — checked again 2026-08-12.** This document was written against
+`1_04_002`; the bench radio has been on **`1_04_004`** for a while and **`1_04_005`** and
+**`1_04_006`** have since appeared. I only noticed because the operator saw the release
+post, having assumed 004 was current — so check the changelog before concluding anything
+is unfixed. Entries since 1_04_002 that touch us:
+
+| Version | Entry | Why it matters here |
+|---|---|---|
+| **1_04_006** (12-Aug-2026) | "Bug fix: TX underlines the correct VFO indicator character now in B and Split mode" | Same area as the dual-VFO display that survives our split stand-down (see the report drafted for Stan KC7XE). **Our finding was measured on 1_04_004** — re-test on 006 before pursuing it. Not the same bug on its face: ours is the second frequency remaining on screen after split is cleared, not the underline |
+| **1_04_006** | "Show S-meter in Digi mode" | Radio-side display only. Nothing for us |
+| **1_04_006** | "Protection disabled when not in CW mode or when internal GPS (QLG3 in QMX+) selected" | The GPS/paddle-port protection that drops the radio into practice mode with a `G`. From 006 it applies only in CW **and** with the external GPS selected, so a QMX+ using its internal QLG3 is unaffected. Any user-facing note about practice mode while a GPS is connected is now version-dependent |
+| **1_04_005** (06-Aug-2026) | "Bug fix: CAT `GP` command had reversed longitude sign" | We do not use `GP`. Noted so nobody re-derives it |
+| **1_04_005** | first-dit spike, PA mod test, key-down current spike | Radio-side. Nothing for us |
+| **1_04_001** | "Bug fix: CAT MU command and MM (when auto update enabled) loaded previously saved state (VFO etc)" | Directly relevant, and found late. "MM when auto update enabled" is **MM Effect = Immediate**. So `MU;` and MM-with-auto-reload mishandling saved VFO state is a KNOWN, already-fixed bug class. It also fits what we measured on 1_04_004: `MU;` discards session state (IQ mode `Q9` — the spectrum goes flat while USB audio keeps flowing at full rate) while an `MM` Set with MM Effect = Immediate does **not**. The two reload paths behave differently on purpose |
+
+**Status of 1_04 (as of 2026-07-03, superseded above):** still **BETA**, no GA. Three betas so far.
 `1_04_000` was QMX+-only (hung on QMX — fixed in `1_04_001`). `1_04_002` is one unified
 image for QMX and QMX+, and **installing it executes a Factory Reset** (all radio settings
 wiped; the user must re-select their firmware variant at the post-reset prompt).
