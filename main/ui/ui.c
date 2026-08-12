@@ -6167,14 +6167,30 @@ static void touch_event_cb(lv_event_t *e)
         s_last_tap_us = now_us;
         s_last_tap_x  = (int)p.x;
         if (s_last_qmx_freq_hz == 0) return;  // no freq known yet, can't tune
-        // Top-bar dropdown deadzones: band/mode/BW/zoom/burger overlay
-        // buttons each span the full top 200px (see hit_zones in ui_init).
-        // Tap-to-tune isn't needed under those columns; the gap between BW
-        // and Zoom (x=510..1090) remains tunable.
-        if (p.y < 200 && (p.x < 510 || p.x >= 1090)) {
-            ESP_LOGI("ui_touch", "RELEASED in top-bar dropdown deadzone (x=%d y=%d) - ignored", (int)p.x, (int)p.y);
-            return;
-        }
+        // ⛔ NO TOP-BAR DEADZONE HERE. There used to be one - "if (p.y < 200 &&
+        // (p.x < 510 || p.x >= 1090)) return" - on the premise that the Band/Mode/
+        // BW/Zoom hit zones "each span the full top 200px". They no longer do: on
+        // 2026-08-05 their depth was cut to just above the live-spot callsigns
+        // (zone_h = spots_lane_top_hit_y() - 4) so they would stop swallowing taps
+        // on those. The check kept the old flat 200, so a band of the spectrum
+        // ended up owned by nobody - no dropdown opened AND no tune happened.
+        // Measured with the mouse: every click at y=123..152 outside x=510..1089
+        // was discarded, which is why tuning "only worked near the centre
+        // frequency" and worked fine in the waterfall.
+        //
+        // It is not needed at all, and that is the point. This handler is attached
+        // to s_spectrum_obj, so LVGL only calls it when the PRESS landed on the
+        // spectrum: if a hit zone, a spot callsign, the RIT pill or an edge strip
+        // were under the finger, that object would have taken the press and we
+        // would never be here. So reaching this line already proves nothing
+        // clickable owned the gesture.
+        //
+        // Which is exactly the promise the mouse pointer makes (operator, and it
+        // is the right invariant): the cursor turns GREEN over anything a click
+        // acts on and stays WHITE otherwise, so white over the spectrum has to
+        // mean click-to-tune. Both now answer the same question - LVGL's own
+        // hit-testing - instead of keeping a second, hand-maintained copy of the
+        // geometry that drifted out of step. Do not add another one.
 
         // Commit the frequency the live cyan cursor last settled on during the
         // press (s_target_freq_hz, already mode-snapped in the PRESSING branch),
