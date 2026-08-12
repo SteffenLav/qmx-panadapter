@@ -144,6 +144,20 @@ Bluetooth mouse never touches that port, so the radio keeps its connection.
 For anyone operating with cold or unsteady hands, that is the point: every menu,
 button and drawer control becomes a click instead of a precise tap on glass.
 
+!!! warning "The mouse must be Bluetooth 4.0 or later"
+    Only **Bluetooth Low Energy** mice work. The Tab5 gets its Bluetooth from a
+    co-processor that has no Bluetooth Classic radio in it at all, so an older
+    Classic mouse cannot be made to work by any firmware change.
+
+    Most mice sold since about 2014 are Low Energy. Look for **Bluetooth 4.0** or
+    later on the box. A dual-mode mouse works on its Low Energy channel.
+
+    **How to tell which problem you have.** A Classic mouse never appears to the
+    Tab5 at all — the Bluetooth symbol keeps looking and never turns blue, because
+    the Tab5 listens only for mice that announce themselves the Low Energy way. A
+    mouse that *does* connect but moves the pointer oddly is a different matter,
+    and that one is worth reporting.
+
 **Setting it up**
 
 1. Tick **Bluetooth mouse → Enable** in the settings drawer.

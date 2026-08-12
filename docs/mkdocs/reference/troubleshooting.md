@@ -211,6 +211,25 @@ For POTA/portable operation without WiFi:
 2. If they disappear again, download the diagnostic log (web UI **Files** menu → **Diagnostic download ↓**) and report on GitHub
 3. As a last resort: export your config via the web UI (**Files** menu → **Config download ↓**), then do a full factory reset, then re-import
 
+### A Bluetooth mouse never connects
+
+**Symptoms:** Bluetooth is enabled, you have restarted the Tab5 and put the mouse into
+pairing mode, and nothing happens. The Bluetooth symbol in the bottom bar keeps looking
+and never turns blue.
+
+**Most likely cause: the mouse is Bluetooth Classic, not Bluetooth Low Energy.** Only
+Low Energy mice work. The Tab5's Bluetooth comes from a co-processor with no Bluetooth
+Classic radio in it, so a Classic mouse cannot be made to work by any firmware change,
+and it never appears to the Tab5 at all — the Tab5 listens only for mice that announce
+themselves the Low Energy way.
+
+Check the box or the maker's specification for **Bluetooth 4.0 or later**. Most mice
+sold since about 2014 qualify. A dual-mode mouse works on its Low Energy channel.
+
+If the mouse *does* connect — the symbol turns blue — but the pointer moves oddly or
+jumps to the edges of the screen, that is a different problem and worth reporting with
+a diagnostic log, since the Tab5 records what the mouse tells it about its own layout.
+
 ### Clearing a stuck configuration (web-based reset, new in v0.21.0)
 
 **Symptoms:** the panadapter behaves as if a setting is wedged — e.g. WiFi won't come up no matter what, or a stored value seems stuck — and re-entering settings doesn't help.

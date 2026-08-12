@@ -92,7 +92,11 @@ tagged from spots already seen and a single-reference ADIF export for uploading.
 
 **Bluetooth mouse** — A pointer that works *while the QMX stays plugged in*, which a USB
 mouse cannot do on this hardware. Pair once; it reconnects by itself. Move, click, and a
-wheel that scrolls whatever is under the pointer.
+wheel that scrolls whatever is under the pointer. **The mouse must be Bluetooth 4.0 or
+later (Bluetooth Low Energy).** The Tab5's Bluetooth comes from a co-processor with no
+Bluetooth Classic radio, so an older Classic mouse cannot work and no firmware change can
+help — it never appears to the Tab5 at all. Most mice sold since about 2014 qualify; a
+dual-mode mouse works on its Low Energy channel.
 
 **PSK Reporter spotting** *(needs WiFi)* — The stations you decode are reported to
 [PSK Reporter](https://pskreporter.info) the way WSJT-X does, so you appear on the map as
