@@ -51,17 +51,36 @@ The verdict is remembered across reboots, so starting up away from home keeps GP
     `UTC(NTP)`. Reported by Don N2VGU, whose Tab5 read `UTC(GPS)` with the radio
     disconnected; the time was correct throughout, only the label was wrong.
 
-### 5. Manual Time Set
+### 5. Setting the time by hand
 
-To set time manually:
+**There is no "Set Manual Time" control in the settings drawer.** Earlier versions of this
+guide said there was, and there never has been on recent firmware — Don WB0LQW went looking
+for it during a POTA activation and could not find it. Apologies. The clock is set from the
+FT8 screen:
 
-1. Swipe ← to open the settings drawer
-2. Tap **Time Sync** section
-3. Tap **Set Manual Time**
-4. Enter hours, minutes, seconds (UTC)
-5. Tap **Apply**
+1. Switch to **FT8**
+2. Tap **Filter** (left pane)
+3. Tap **Sync Time** (bottom right of the modal)
+4. A panel appears with three boxes: **[HH] : [MM] : [SS]**
+5. Tap **HH** or **MM** to type them on the numpad (0–23, 0–59)
+6. **Hold the SS box and let go exactly on the minute** — the seconds are set to 00 the
+   instant you release
+7. Tap **Apply**
 
-The time is set immediately and written to the RTC.
+Step 6 is the one that matters off-grid. FT8 needs the clock right to about a second, and
+until v1.8.1 the seconds could not be set at all — hours and minutes were editable and the
+seconds were not, which left no way to get inside a second with no WiFi and no GPS.
+
+The clock is set **when you release**, not when you tap Apply. The release is the
+measurement, so an Apply a few seconds later would be a few seconds late. Use a watch with
+a second hand, or listen for the gap between FT8 transmissions. While you hold the box it
+turns amber and tells you what letting go will do.
+
+If you have typed hours and minutes first, those are used. If you have not, the Tab5 takes
+the nearest minute to its own clock — so this corrects the seconds without disturbing an
+hour and minute that are already right.
+
+The time is written to the RTC as well as the system clock, so it survives a power-off.
 
 ### 6. FT8-Derived Sync (Offline Fallback)
 
@@ -83,7 +102,9 @@ In **FT8 mode**, the Filter modal includes a **"Sync Time" button** that opens a
 2. Tap the **Sync Time** button (bottom right of the modal)
 3. A panel appears with three fields: **[HH] : [MM] : [SS]**
    - **HH** / **MM** (hours/minutes) — tap to edit via numpad (0–23, 0–59)
-   - **SS** (seconds) — auto-syncs from FT8 signals (blue frame = actively syncing, grey = locked)
+   - **SS** (seconds) — auto-syncs from FT8 signals (blue frame = actively syncing, grey =
+     locked). **Hold it and release on the minute** to set the seconds to 00 yourself, which
+     is what you want when there are no FT8 signals to sync from
 4. Tap **Apply** to write the time to the RTC and system clock
 
 The **SS field** updates automatically from decoded FT8 messages — each decode gives a sub-second correction estimate. Tap **SS** to toggle between auto-syncing (blue) and locked (grey). While locked, seconds still count at the captured offset, so you don't lose precision after locking.

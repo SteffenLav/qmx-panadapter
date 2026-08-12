@@ -83,7 +83,10 @@ Once connected, the settings show your **IP address** — use this to access the
 
 **SNTP Server** — NTP pool (usually `pool.ntp.org`). Change only if you have a local NTP server.
 
-**Set Manual Time** — Manually enter UTC time (hours, minutes, seconds).
+**Setting the time by hand** — there is no control for this in the drawer, despite what
+earlier versions of this guide said. The clock is set from the FT8 screen: **Filter →
+Sync Time**. See [Setting the time by hand](time-sync.md#5-setting-the-time-by-hand),
+which also covers setting the seconds — the part that matters with no WiFi and no GPS.
 
 **FT8-Derived Sync** — Estimates the UTC offset from decoded FT8 signal timing. **Offline fallback only**: it is automatically ignored while SNTP or GPS is available (those are authoritative), and only nudges the clock when you're off-grid with no better source. See [Time Sync](../guide/time-sync.md).
 

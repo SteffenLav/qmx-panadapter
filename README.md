@@ -12,7 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.8.0.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **all three major logbooks — QRZ, eQSL and ARRL LoTW** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.8.1.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **all three major logbooks — QRZ, eQSL and ARRL LoTW** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+>
+> **New in v1.8.1 — the fixes from the first day of v1.8.0 in the field.** Most of the spectrum had stopped responding to **tap-to-tune** — only a window in the middle worked, which felt like tuning near the centre frequency only. The rule now is that if the mouse pointer is white, clicking tunes, and a finger behaves the same. **CW centre** covers the radio's real 500-950 Hz in 25 Hz steps and is read *from* the radio at connect, so the two can no longer disagree. The **CW transmit offset** puts VFO B back where it found it. **RF gain and volume** agree between the Tab5 and the browser. **Spot labels** in the browser no longer swallow clicks meant for a signal kilohertz away. The **seconds are settable again** — hold the SS box and release on the minute, which is the only way to set the clock with no WiFi and no GPS. And the **RIT button can be hidden** if you never use it. Bluetooth mouse decoding is unchanged this release; the real fault was found but the fix needs redoing. Full detail in [docs/version-history.md](docs/version-history.md).
 >
 > **New in v1.8.0 — RIT you set by tapping, summit spots, and a browser that finally matches the Tab5.** **RIT** pulls in a caller answering off your frequency without moving transmit: arm it, tap the caller, and a marker shows where you are listening while the gold line goes on meaning the dial. **SOTA spots** put summit activations on the spectrum beside POTA, RBN and the DX cluster. **Fox/Hound** works DXpeditions from the hound side — simulation-verified only so far. The **browser caught up control by control**: RIT, activation start/stop, the last of the Tab5-only settings, and a spectrum and waterfall that now look like the Tab5's instead of approximating them.
 >
@@ -22,7 +24,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.8.0.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.8.1.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -934,7 +936,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.8.0 is here** — **RIT you set by tapping, summit spots, and a browser that matches the Tab5.** Arm RIT and tap a caller to receive off your transmit frequency; SOTA summit activations join POTA, RBN and the DX cluster on the spectrum; Fox/Hound works DXpeditions from the hound side; and the browser gained RIT, activation start/stop, the last Tab5-only settings and a spectrum and waterfall drawn the way the Tab5 draws them. Next on the bench:
+**v1.8.1 is here** — a fixes release on top of v1.8.0: tap-to-tune across the whole spectrum, CW centre matching the radio, the CW transmit offset tidying up VFO B, RF gain and volume agreeing across both screens, browser spot labels that no longer steal clicks, settable seconds for POTA use with no WiFi, and an option to hide the RIT button. Previously in **v1.8.0** — **RIT you set by tapping, summit spots, and a browser that matches the Tab5.** Arm RIT and tap a caller to receive off your transmit frequency; SOTA summit activations join POTA, RBN and the DX cluster on the spectrum; Fox/Hound works DXpeditions from the hound side; and the browser gained RIT, activation start/stop, the last Tab5-only settings and a spectrum and waterfall drawn the way the Tab5 draws them. Next on the bench:
 
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).

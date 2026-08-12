@@ -38,6 +38,17 @@ WiFi indicator with the network name and IP address.
 
 Tap anywhere on the spectrum or waterfall to jump to that frequency. The tap snaps to a frequency grid so you land on a sensible frequency rather than wherever your fingertip happened to be.
 
+With a mouse the rule is simply the colour of the pointer: **white means clicking tunes,
+green means you are over something that will act instead** — a callsign, a top-bar control,
+an edge handle. Press and hold, or click and hold, and drag if you want to place the cursor
+before committing; a finger and a pointer behave identically.
+
+!!! note "Fixed in v1.8.1"
+    Before v1.8.1 a band across the upper part of the spectrum quietly refused to tune —
+    the touch areas behind the top bar had been made shallower without the tune code being
+    told, so that strip belonged to nobody. It looked as though tuning only worked near the
+    centre frequency, while the waterfall was fine.
+
 > Callsigns from [Live Spots](spots.md) are drawn over the spectrum and are the
 > one exception: tapping a **callsign** tunes to that station and sets the mode,
 > rather than tuning to the point you touched.
@@ -64,6 +75,11 @@ everyone else is listening on.
    waterfall, and the filter window moves onto them.
 3. It stays armed, so the next caller is another tap.
 4. Tap **RIT** again to clear the offset and switch it off.
+
+If you never use RIT, the button can be hidden: **Settings → Radio → Show RIT button**
+(also in the web settings). It is shown by default. If an offset is actually engaged the
+button appears regardless of that setting — the radio listening away from your dial is not
+something to leave unsaid on screen.
 
 The gold line goes on marking the **dial** — which is where you transmit — so seeing both
 lines at once tells you transmit has not followed your receiver. Tuning anywhere by any

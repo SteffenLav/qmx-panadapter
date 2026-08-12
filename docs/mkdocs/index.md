@@ -70,9 +70,11 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.8.0 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.8.1 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, and now a mouse.** The panadapter, FT8/FT4 receive and
 transmit, ADIF logging and all three logbook uploads are stable and in daily use.
+
+**New in v1.8.1 — the fixes from the first day of v1.8.0 in the field.** Most of the spectrum had stopped responding to **tap-to-tune**; the rule now is that if the mouse pointer is white, clicking tunes, and a finger behaves the same. **CW centre** covers the radio's real 500–950 Hz in 25 Hz steps and is read from the radio at connect. The **CW transmit offset** puts VFO B back where it found it. **RF gain and volume** agree between the Tab5 and the browser. Browser **spot labels** no longer swallow clicks meant for a signal kilohertz away. The **seconds are settable again** — hold the SS box and release on the minute, the only way to set the clock with no WiFi and no GPS. And the **RIT button can be hidden**.
 
 **New in v1.8.0 — RIT you set by tapping, summit spots, and a browser that finally matches the Tab5.** Arm **RIT** and tap a caller to receive off your transmit frequency, with a marker showing where you are listening. **SOTA spots** join POTA, RBN and the DX cluster. **Fox/Hound** works DXpeditions from the hound side, simulation-verified so far. And the browser gained RIT, activation start/stop, the last Tab5-only settings, and a spectrum and waterfall drawn the way the Tab5 draws them.
 
@@ -97,7 +99,7 @@ Every release, newest first, is on the [Releases](releases.md) page.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.8.0.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.8.1.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

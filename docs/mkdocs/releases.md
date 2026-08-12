@@ -4,7 +4,24 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.8.0** — 2026-08-11
+**v1.8.1** — 2026-08-12
+
+**The fixes from the first day of v1.8.0 in the field.**
+
+- **The spectrum is tunable again wherever you can see it.** Most of the spectrum had stopped responding to tap-to-tune — only a window in the middle worked, so it felt as though tuning only worked near the centre frequency while the waterfall was fine. The touch areas behind the top bar had been made shallower without the tune code being told, leaving a strip that belonged to nobody. The rule now is simply that **if the mouse pointer is white, clicking tunes**, and a finger behaves the same.
+- **CW centre reaches the value your radio actually uses.** The radio offers 500–950 Hz in 25 Hz steps and the slider offered 600–800 in 50 Hz steps. It also could never agree with the radio, because the Tab5 pushed its stored value about thirteen seconds before the CAT link exists — so it now **reads the centre from the radio** at connect. *(Samuel W7STF, Roy KI0ER)*
+- **The CW transmit offset puts VFO B back.** Switching it off did return the radio to simplex — FT8 was never transmitting off frequency — but VFO B was left at your frequency plus the offset for the rest of the session. It is now restored and simplex is confirmed by reading it back. Your QMX may still *show* both VFOs; that is on the radio's side and is reported to QRP Labs. Switching band and back clears it. *(Roy KI0ER)*
+- **RF gain and volume agree between the Tab5 and the browser.** Whichever screen you opened second used to show the value from before your change. *(Samuel W7STF)*
+- **Browser spot labels no longer swallow clicks meant for a signal.** A callsign can be 3–4 kHz wide on screen, and clicking anywhere in it took you to that station. A label is now a target only close to the frequency it marks. *(Samuel W7STF)*
+- **The seconds can be set again.** Hours and minutes were editable and the seconds were not, so with no WiFi and no GPS there was no way to get the clock inside the second FT8 needs. **Hold the SS box and release on the minute.** *(Don WB0LQW, gesture by Roy KI0ER)*
+- **The RIT button can be hidden** — Settings → Radio → Show RIT button, on by default. An offset that is actually engaged still shows itself. *(Samuel W7STF)*
+- **Saving settings from the browser could fail with "HTTP 400"** once the form grew past 1 KB.
+- **The manual now says a Bluetooth mouse must be BLE 4.0 or later.** The Tab5's Bluetooth has no Classic radio, so an older Classic mouse never appears at all and no firmware change can help. *(Roy KI0ER)*
+- **Bluetooth mouse decoding is unchanged this release.** The real fault was found — only the first 22 bytes of the layout description every mouse publishes were being read — but the fix broke something else and was reverted. It will be redone.
+
+## Previous Releases
+
+### v1.8.0 — 2026-08-11
 
 **RIT you set by tapping, summit spots, and a browser that finally matches the Tab5.**
 
@@ -19,7 +36,7 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ⚠ **Two things to check if you use the browser.** **SWR protection set from the browser was never saved** on any v1.7.x build — check it on the Tab5 (Settings → "SWR protection (transmit)") if you set it there. And **spot labels were stealing clicks**: a callsign's clickable area was wide enough to swallow several kHz, so clicking a signal near one tuned you to that station instead. Both fixed, along with **Bluetooth mice that send a different byte layout** than the one on the bench, and **two browsers fighting over the live spectrum**.
 
-## Previous Releases
+
 
 **v1.7.2** — 2026-08-10 — bug-fix patch
 
@@ -256,7 +273,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.8.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.8.1.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

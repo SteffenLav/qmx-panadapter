@@ -1586,5 +1586,85 @@ install this.
   **"Let me use the QMX menus"**, and **"Done - Tab5 takes over again"** while it is
   handed over. The pause and play icons are gone; a gear points at where you are headed.
 
+### Shipped in v1.8.1 — 2026-08-12
+
+A fixes release, almost all of it from field reports the day v1.8.0 landed.
+
+- **The spectrum is tunable again wherever you can see it.** Most of the spectrum had
+  stopped responding to tap-to-tune: only a window in the middle worked, so it felt like
+  tuning only worked near the centre frequency, and the waterfall was fine. A change the
+  week before had made the top-bar Band/Mode/BW/Zoom touch areas shallower so they would
+  stop swallowing taps on the spot callsigns — but the tune code still assumed the old,
+  deeper areas, leaving a band of the spectrum that belonged to nobody. Nothing opened and
+  nothing tuned. The rule now is simply that **if the mouse pointer is white, clicking
+  tunes**, and a finger behaves identically. Found with a mouse; a fingertip lands lower
+  and rarely met it.
+
+- **CW centre could not reach the value your radio uses** (Samuel W7STF, Roy KI0ER). It is
+  the sidetone: with the QMX default, the filter centre moves the CW offset and sidetone
+  with it. The radio offers **500 to 950 Hz in 25 Hz steps** — which of them you can pick
+  depends on the CW filter width you have chosen — while the slider ran 600 to 800 in
+  50 Hz steps. Wrong at both ends and on the wrong grid.
+  - It also could not agree with the radio. The Tab5 pushed its stored value about four
+    seconds into boot, and CAT does not exist until about seventeen, so that write never
+    arrived on any boot. The Tab5 now **reads the centre from the radio** when the link
+    comes up, which is what Roy asked for.
+
+- **The CW transmit offset now clears up after itself** (Roy KI0ER). Switching it off did
+  return the radio to simplex, so FT8 was never transmitting off frequency — but VFO B was
+  abandoned at A plus the offset for the rest of the session, which is what the radio was
+  showing. VFO B is now written back to match VFO A *before* the split is dropped (the QMX
+  will not take it afterwards), and simplex is confirmed by reading it back.
+  - **Still outstanding, and it is on the radio's side:** the QMX goes on displaying both
+    VFOs even though it reports VFO A mode and simplex. Only a configuration reload or a
+    power cycle clears it, and the reload also switches off the radio's IQ mode, which
+    would cost you the spectrum — too high a price for a display. Reported to QRP Labs.
+    Roy's workaround: switch band and back.
+
+- **RF gain and volume disagreed between the Tab5 and the web page** (Samuel W7STF). Both
+  read a cached value that only updated when the radio answered a query, so whichever
+  screen you opened second showed the number from before your change.
+
+- **Spot labels no longer claim kilohertz they do not own** (Samuel W7STF). In the browser
+  each label was a click target across its whole width — a callsign can be 3 to 4 kHz wide
+  on screen — with the spot's real frequency somewhere in the middle, so clicking a signal
+  a couple of kHz from a spotted station took you to the station instead. A label is now a
+  target only close to the frequency it marks.
+
+- **The seconds can be set again** (Don WB0LQW, gesture by Roy KI0ER). Hours and minutes
+  were editable and the seconds were not, so with no WiFi and no GPS there was no way to
+  get the clock inside the second FT8 needs — which is exactly where Don was on a POTA
+  activation. **Hold the SS box and release on the minute.** The clock is set on release,
+  not when you tap Save, because the release is the measurement.
+
+- **A "Show RIT button" setting** (Samuel W7STF), in the drawer under Radio and in the web
+  settings, on by default. Turn it off if you never use RIT and would rather have the
+  corner. If RIT is actually engaged the button appears anyway — a radio listening off
+  frequency with nothing on screen saying so is not a tidy screen.
+
+- **Saving settings from the web page could fail with "HTTP 400"**. The handler read the
+  form into a fixed 1 KB buffer with a single read and no loop, so it worked only while the
+  form stayed under that size. One more checkbox took it over and the whole save failed
+  with nothing to say the body had been cut short.
+
+- **The manual now states that a Bluetooth mouse must be BLE 4.0 or later.** The Tab5's
+  Bluetooth comes from a co-processor with no Bluetooth Classic radio, so an older Classic
+  mouse can never work and no firmware change can help — it never appears at all. Roy
+  KI0ER's two Microsoft mice are that case; his MX Master is Low Energy and works.
+
+- **Bluetooth mouse decoding is unchanged in this release.** The real fault was found — the
+  Tab5 was reading only the first 22 bytes of the layout description every mouse publishes,
+  so the description never made sense and it fell back to guessing — but the rewrite broke
+  the mouse another way and was reverted. It will be redone properly. Samuel W7STF's
+  symptom does not match the fault that was found, so there is likely a second one.
+
+- **The QMX USB wedge (#74) was investigated properly and the diagnosis stands.** Six
+  approaches were tried against a genuinely wedged radio, covering both recovery and
+  prevention, including an orderly shutdown and holding USB power off through an entire
+  reboot. All produced the identical failure: the radio acknowledges the setup packet and
+  returns **zero** descriptor bytes. Nothing the Tab5 does changes it and only a QMX power
+  cycle clears it. The sdkconfig records the negative results so nobody raises those
+  timings again hoping.
+
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
 

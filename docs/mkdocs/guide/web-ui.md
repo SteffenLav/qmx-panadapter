@@ -183,6 +183,8 @@ things you *type* - which is exactly what the Tab5's touchscreen is worst at:
 - **Everyday switches**: POTA and RBN spots, PSK Reporter, grey-listing, distance
   units, I/Q balance, band-plan region, and the QMX volume in dB.
 - **WiFi**: add another network from a laptop. The Tab5 remembers up to six.
+- **Show RIT button**, matching the Tab5 setting — hide the RIT button on the panadapter
+  if you never use it.
 - **The rest of the radio and display settings**, which used to be Tab5-only: CW pitch,
   IF calibration, SWR protection, the battery charge limit, the 180° screen flip,
   Fox/Hound mode, simulation mode and the spot mode filter.
