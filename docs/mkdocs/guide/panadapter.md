@@ -76,6 +76,17 @@ everyone else is listening on.
 3. It stays armed, so the next caller is another tap.
 4. Tap **RIT** again to clear the offset and switch it off.
 
+The offset is also printed beside its own marker over the waterfall, as `+250 Hz`,
+so you can read how far off you are listening without looking at the corner.
+
+**Long-press RIT to park the offset instead of clearing it.** The offset is
+remembered and RIT switches off; long-press again and it comes back unchanged. The
+button reads `RIT (+250)` in brackets while an offset is parked. This is for a round
+robin or a net where one station is off frequency: you drop the offset when the turn
+passes back to the stations who are on frequency, and pick it up again without
+re-dialling anything (suggested by Roy KI0ER). A parked offset is discarded when you
+retune — it belonged to that one station.
+
 If you never use RIT, the button can be hidden: **Settings → Radio → Show RIT button**
 (also in the web settings). It is shown by default. If an offset is actually engaged the
 button appears regardless of that setting — the radio listening away from your dial is not
@@ -121,6 +132,12 @@ A **passband sub-block** inside the visible-span block mirrors the current filte
 **Drag from the bottom bar too.** The visible-span block acts as a slider handle that reaches *below* the thin strip: touch on or just under it — anywhere along the bottom status bar — and **drag sideways** to scrub the band, exactly like dragging the strip itself. This gives you a much taller grab target. It coexists with the memory-picker gesture on the same row: a **sideways** drag retunes the band-plan, while a **vertical up-swipe** still opens the memory picker.
 
 The strip updates live as you zoom, pan, or change bands.
+
+**Outside a band**, the strip reads **"Out of band"** in one flat colour instead of
+the CW/Digi/Phone zones, and returns to normal as soon as you are back inside a band.
+The marker and the visible-span block are hidden while you are out, because there is
+no band plan to position them against. The strip itself stays put so the drag gesture
+is still where you expect it (asked for by Samuel W7STF).
 
 #### Memory Channels
 

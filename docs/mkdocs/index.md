@@ -70,9 +70,11 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.8.1 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.8.2 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, and now a mouse.** The panadapter, FT8/FT4 receive and
 transmit, ADIF logging and all three logbook uploads are stable and in daily use.
+
+**New in v1.8.2 — your radio's own spurs can be removed from the display, and a POTA clock that stopped being stolen.** If you have ever seen evenly spaced signals that never move and are still there with the antenna unplugged, those come from the QMX's own synthesizer — **spur suppression** finds them by nudging the dial 25 Hz and can subtract or erase them, **off by default** under Settings → Waterfall. A **QMX without GPS no longer overwrites an accurate clock** when you switch it on at a POTA site; the Tab5's own RTC wins and sets the radio instead. **RIT can be parked** with a long press and restored unchanged, and its offset is now printed beside its marker on the waterfall. The **band strip stays visible out of band**. And the panadapter no longer **switches your radio off** trying to recover a fault it cannot fix.
 
 **New in v1.8.1 — the fixes from the first day of v1.8.0 in the field.** Most of the spectrum had stopped responding to **tap-to-tune**; the rule now is that if the mouse pointer is white, clicking tunes, and a finger behaves the same. **CW centre** covers the radio's real 500–950 Hz in 25 Hz steps and is read from the radio at connect. The **CW transmit offset** puts VFO B back where it found it. **RF gain and volume** agree between the Tab5 and the browser. Browser **spot labels** no longer swallow clicks meant for a signal kilohertz away. The **seconds are settable again** — hold the SS box and release on the minute, the only way to set the clock with no WiFi and no GPS. And the **RIT button can be hidden**.
 
@@ -99,7 +101,7 @@ Every release, newest first, is on the [Releases](releases.md) page.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.8.1.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.8.2.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

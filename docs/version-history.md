@@ -1666,5 +1666,118 @@ A fixes release, almost all of it from field reports the day v1.8.0 landed.
   cycle clears it. The sdkconfig records the negative results so nobody raises those
   timings again hoping.
 
+## v1.8.2 — 2026-08-13
+
+A field-report release. Everything here came from an operator's message this week.
+
+### The radio's own spurs can now be removed from the display (new, off by default)
+
+At some dial frequencies the QMX puts a comb of evenly spaced artifacts into the IQ
+stream. They hold their position whatever you do, they do not move when you tune, and
+they are still there with the antenna disconnected. Measured on the bench at 14.074 —
+the FT8 calling frequency — the strongest sat **38.6 dB above the noise floor**, with a
+second harmonic and a mirror image, and the noise floor itself was 5–6 dB worse there
+than 6 kHz away.
+
+A frequency sweep found the law behind them: a spur's baseband offset moves at
+**16–50× the dial** (16.0 and 23.0 measured over several intervals). That is what makes
+them findable without any calibration. Nudge the dial 25 Hz and a spur jumps 8–27 FFT
+bins while a real signal moves half of one — a physical discriminator with an order of
+magnitude of margin, not a statistical guess. Three measurements at *f*, *f*+25 and *f*
+again identify bins that are strong and steady at *f* but collapse when the local
+oscillator moves. Baseband DC is handled separately, because bin 0 cannot move when the
+oscillator does.
+
+**Settings → Waterfall → Spur suppression**, three positions:
+
+- **Off** (default) — nothing is touched, and the marker code does not draw a pixel.
+- **Subtract spur power** — removes the measured artifact in the power domain, so a real
+  signal sharing a bin keeps its own contribution. Limited to about 12–17 dB: the spur's
+  own level wobbles a few tenths of a dB, and a constant cannot cancel something that
+  moves.
+- **Erase spur bins** — interpolates the affected bins away. The comb disappears (+38.6
+  dB → about +10 dB, below the waterfall's black level). A real signal sitting exactly on
+  one is hidden while the dial sits still; nudging the dial slides the blind spot off it.
+
+Results are cached per frequency, so returning to a frequency already learned needs no
+nudge at all — which matters because FT8 sits on one frequency for hours. Detection takes
+about 1.9 s and only fires 600 ms after the dial stops, so it never runs while tuning.
+Suppressed bins are marked in teal on the line under the frequency labels, so what the
+firmware is touching is always visible.
+
+### A QMX without GPS no longer overwrites an accurate clock (Don WB0LQW)
+
+Set the Tab5's RTC accurately at home, arrive at a POTA site, switch the radio on — and
+the accurate UTC was replaced by the radio's power-on 00:00, after which FT8 stopped
+decoding.
+
+The clock was only ever protected from the radio while SNTP was fresh, and **offline SNTP
+is never fresh**, so the protection could not help the one case that needed it. A QMX
+without GPS is not a time reference: its RTC free-runs and restarts at 00:00 after any
+power-off, while the Tab5's supercap RTC holds seconds-accurate UTC for 30–40 hours. The
+radio is now refused whenever the Tab5 holds a clock it trusts, and the Tab5 sets the
+radio instead — only when the radio is more than 3 seconds out. If the Tab5 has no good
+time either, a QMX reading is still used, because something beats nothing.
+
+### RIT can be parked and restored (Roy KI0ER)
+
+**Long-press the RIT button** and the offset is remembered while RIT switches off;
+long-press again and it comes back unchanged. Short press still clears it outright. The
+button reads `RIT (+250)` in brackets while an offset is parked, so there is always
+something on screen saying an offset is waiting — including when the button itself has
+been switched off in settings. A parked offset is discarded when you retune, because it
+belonged to the station that was off frequency.
+
+This is for a round robin or a net where one station is off frequency: the offset comes
+and goes as the turn passes, without re-dialling it each time.
+
+### The RIT offset is shown on the waterfall (Samuel W7STF)
+
+The offset now prints beside its own marker, as `+250 Hz`, so it can be read off the
+spectrum rather than from the corner.
+
+### The band strip stays visible out of band (Samuel W7STF)
+
+It used to hide its contents entirely and leave an empty row, which reads as a fault. It
+now fills with one flat block reading **"Out of band"** and returns to the CW/Digi/Phone
+colours as soon as you are back inside a band. The marker and visible-span block stay
+hidden while out, because there is no band plan to position them against. The strip
+staying put also keeps the coarse-tune drag where the thumb expects it.
+
+### The Operator Identity window no longer appears for unrelated faults (Don WB0LQW)
+
+Calling CQ with a message that would not build popped the Operator Identity editor
+whatever the actual cause, so an operator whose callsign and grid were perfectly fine was
+sent to check them. The real error is now reported, and the identity editor is only
+offered when the error is genuinely about identity.
+
+Investigating that report also produced `test/ft8_cq_encode_harness.c`, which runs CQ
+presets through the real encoder on a PC. It cleared the encoder of the underlying
+report: `CQ POTA <call>` and `CQ QRP <call>` encode and round-trip correctly with and
+without a grid. That fault is still open and needs a diagnostic log from the field.
+
+### The panadapter no longer power-cycles a wedged radio for nothing
+
+After certain Tab5 restarts the QMX answers every USB enumeration with an empty data
+stage, and only a QMX power cycle clears it. The recovery that watches for a stuck USB
+port was firing at this, cutting the port's 5 V for two seconds — which switches the
+radio off in front of the operator and, as six falsified approaches on the bench already
+showed, achieves nothing against this particular fault. It now recognises the radio-side
+signature and leaves the radio alone, logging what is actually wrong. A genuinely stuck
+port still gets its recovery, which is the case where it works.
+
+### Documentation
+
+- The offline/POTA section now covers switching the radio on, which is where Don lost his
+  clock.
+- A second frequency left on the QMX's own LCD after the CW transmit offset stands down
+  is documented as a display artifact of the radio, confirmed by Stan KC7XE and known on
+  the QRP Labs list. VFO B equals VFO A and split is off, both verified by read-back.
+  `MU;` clears the display but silently drops I/Q mode, and the manual now says so.
+- **"Adaptive floor" is documented as having no effect.** The per-bin floor it blends
+  towards is re-seeded many times a second, so both ends of the slider produce the same
+  picture. It was already absent from the browser's settings form for that reason; now
+  the manual says it plainly rather than describing a control that does nothing.
+
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
 

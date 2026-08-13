@@ -4,7 +4,22 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.8.1** — 2026-08-12
+**v1.8.2** — 2026-08-13
+
+**Your radio's own spurs can be removed from the display, and a POTA clock that stopped being stolen.**
+
+- **The spurs your radio makes itself can now be taken off the display.** If you have ever seen evenly spaced signals that are always in the same place, do not move when you tune, and are still there with the antenna unplugged — those come from the QMX's own synthesizer. On the bench at 14.074 MHz, the FT8 calling frequency, the strongest sat nearly 40 dB above the noise floor. The panadapter finds them by nudging the dial 25 Hz for about two seconds: a real signal stays where it is, while these move sixteen to fifty times further. **Off by default** — Settings → Waterfall → Spur suppression, with **Subtract** (can never hide a real signal) or **Erase** (they disappear completely). Wherever something is being removed, the line under the frequency labels turns teal, so you can always see what is being touched.
+- **A QMX without GPS no longer overwrites an accurate clock.** Set the Tab5's RTC at home, arrive at a POTA site, switch the radio on — and your accurate UTC was replaced by the radio's power-on 00:00, after which FT8 stopped decoding. The clock was only protected while the network time was fresh, and offline it never is. The Tab5's own RTC now wins, and it sets the radio's clock instead. *(Don WB0LQW)*
+- **RIT can be parked instead of cleared.** **Long-press the RIT button** and the offset is remembered while RIT switches off; long-press again and it comes back unchanged. For a net or a round robin where one station is off frequency, the offset comes and goes as the turn passes, without re-dialling it. The button reads `RIT (+250)` while an offset is parked. *(Roy KI0ER)*
+- **The RIT offset is shown on the waterfall**, beside its own marker, so you can read how far off you are listening without looking at the corner. *(Samuel W7STF)*
+- **The band strip no longer vanishes when you are out of band.** It reads "Out of band" in one flat colour and comes back to normal as soon as you are inside a band, so the row is never just empty and the coarse-tune drag stays where your thumb expects it. *(Samuel W7STF)*
+- **The Operator Identity window no longer appears for unrelated faults.** Calling CQ with a message that would not build sent you to check a callsign that was perfectly fine. The real error is now shown. *(Don WB0LQW)*
+- **The panadapter no longer switches your radio off trying to fix something it cannot.** After certain restarts the QMX stops answering on USB until it is power-cycled. The recovery meant for a stuck USB port was firing at that and cutting the port's 5 V — switching the radio off in front of you, for nothing. It now recognises the difference and leaves the radio alone.
+- **"Adaptive floor" is documented as having no effect.** Both ends of the slider produce the same picture. It was already absent from the browser for that reason; now the manual says so rather than describing a control that does nothing.
+
+## Previous Releases
+
+### v1.8.1 — 2026-08-12
 
 **The fixes from the first day of v1.8.0 in the field.**
 
@@ -18,8 +33,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **Saving settings from the browser could fail with "HTTP 400"** once the form grew past 1 KB.
 - **The manual now says a Bluetooth mouse must be BLE 4.0 or later.** The Tab5's Bluetooth has no Classic radio, so an older Classic mouse never appears at all and no firmware change can help. *(Roy KI0ER)*
 - **Bluetooth mouse decoding is unchanged this release.** The real fault was found — only the first 22 bytes of the layout description every mouse publishes were being read — but the fix broke something else and was reverted. It will be redone.
-
-## Previous Releases
 
 ### v1.8.0 — 2026-08-11
 

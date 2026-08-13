@@ -140,10 +140,51 @@ Two things worth knowing, both from Randy N4OPI's side-by-side check against a r
 
 **Adaptive Floor (%)** — Blend between per-bin noise floor (100%) and global mean floor (0%; default 100%).
 
+!!! warning "Adaptive Floor currently does nothing"
+
+    The per-bin floor it blends towards is re-seeded many times a second, so both
+    ends of this slider produce the same picture. Moving it has no effect. It is
+    left on screen because the value is still stored and the control will start
+    working the day that is fixed; it is deliberately absent from the browser's
+    settings form for the same reason. Nothing is wrong with your unit.
+
 **FFT Window** — 
 - **Blackman-Harris** (default) — best frequency resolution
 - **Hann** — smoother peaks
 - **Nuttall** — sharpest edges
+
+**Spur suppression** — Removes the radio's own synthesizer spurs from the display.
+**Off** by default.
+
+At some dial frequencies the QMX puts a comb of evenly spaced artifacts into the
+spectrum. They sit in the same place whatever you do, they do not move when you
+tune, and they are still there with the antenna disconnected. On one unit at
+14.074 MHz the strongest measured nearly 40 dB above the noise floor.
+
+The panadapter finds them by nudging the dial 25 Hz for about two seconds. A real
+signal stays where it is; these artifacts move sixteen to fifty times further,
+because their offset tracks the radio's synthesizer rather than the band. What it
+learns is remembered per frequency, so returning to a frequency you have already
+used costs nothing.
+
+- **Off** — nothing is touched.
+- **Subtract spur power** — removes the measured artifact. This can never hide a
+  real signal, because only the artifact's own power is taken away. The artifact
+  stays faintly visible.
+- **Erase spur bins** — the artifact disappears completely. The cost is that a real
+  signal sitting exactly on one is hidden while the dial sits still. Nudging the
+  dial slides the blind spot off it, because these artifacts shift so much faster
+  than the dial does.
+
+Wherever something is being removed, the thin line under the frequency labels turns
+teal. You can always see what is being touched.
+
+!!! note "The 25 Hz nudge is real"
+
+    Learning a frequency briefly moves the radio 25 Hz and puts it back. You may
+    hear it on CW. It happens once per frequency, about two seconds after you stop
+    tuning, and not at all on a frequency already learned. This is why the feature
+    is off by default.
 
 ## Panadapter & Zoom
 

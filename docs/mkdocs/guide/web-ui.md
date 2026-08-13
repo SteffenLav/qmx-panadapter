@@ -194,7 +194,8 @@ time you open it.
 
 Also here: the **Display & waterfall** group -
 brightness, waterfall black level, contrast, FFT window, colour map, display
-sleep, the 180° flip, the dB scale range and spectrum smoothing - the controls you
+sleep, the 180° flip, the dB scale range, spectrum smoothing and **spur
+suppression** - the controls you
 want to tune from a laptop *while watching the Tab5's screen*. Every change
 applies live and is stored, exactly as the drawer's own sliders do, and the
 browser's own spectrum and waterfall follow them as well. **Adaptive floor is
