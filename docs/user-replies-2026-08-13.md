@@ -63,9 +63,12 @@ paste. Nothing has been pushed or posted.
 > Radio at its power-on 00:00, Tab5 clock good, 7.8 hours apart. Before the fix
 > that 00:00 was applied. Now it is refused and the radio gets set.
 >
-> The manual's offline section will get the missing step you pointed out: what
-> happens when you switch the radio on, and that you do not have to do anything
-> about its clock.
+> The manual's offline section now has the missing step you pointed out — step 4
+> says to turn the QMX on whenever you like and that you do not have to do
+> anything about its clock, with a note explaining what changed. It also says what
+> happens if you have no good time at all: then a QMX reading *is* used, because
+> something beats nothing, and failing that you can set the clock by hand under
+> FT8 → Filter → Sync Time, which takes seconds as well as hours and minutes.
 
 ### 2b. The CQ presets ❓ I need one diagnostic log
 
@@ -124,7 +127,7 @@ paste. Nothing has been pushed or posted.
 > yours as well as Don's tells me whether this is something about a particular
 > unit or something in the code, which is the first thing I need to know.
 
-### 3b. Roy on RIT — thank you, and one request taken 💭
+### 3b. Roy on RIT — thank you, and one request built 🔧
 
 > Roy, thank you for the RIT explanation — that is a better answer than the one I
 > was about to give. I had been about to tell Samuel that RIT is useful in FT8 as
@@ -135,9 +138,20 @@ paste. Nothing has been pushed or posted.
 > Your round-robin case is one I had not thought about at all, and the request that
 > comes with it is a good one: **turn RIT off and back on again at the same offset,
 > with a long press.** That is how RIT works on a rig with a dedicated button —
-> clearing the offset and switching it off are two different actions, and right now
-> the panadapter only really offers the first. I will take that. Long-press to
-> toggle off and back on keeping the offset, short press as today.
+> clearing the offset and switching it off are two different actions, and the
+> panadapter only really offered the first. That is now built.
+>
+> Long press parks the offset and stands RIT down; long press again puts it back
+> unchanged. Short press is as it was. While an offset is parked the button reads
+> `RIT (+200)` in brackets and in the dim colour — the radio really is back on
+> frequency so it must not look engaged, but a plain `RIT` would give you nothing
+> to say there was something to bring back.
+>
+> One decision I made that you may want to argue with: the parked offset is
+> discarded when you retune. It belongs to the station that was off frequency, and
+> restoring it after a band change or a spot click would put your receiver
+> somewhere you never asked for, from a number you could no longer see. If you
+> would rather it survived a retune, say so — it is a one-line change.
 >
 > On XIT: agreed, and that is why the panadapter's version of it is deliberately
 > CW-only. It does the same job by holding VFO B at an offset and running split,
@@ -246,14 +260,15 @@ paste. Nothing has been pushed or posted.
 - The mkdocs note for Stan's item is in `docs/mkdocs/guide/settings.md`. It reaches
   the website and the on-device manual on the next docs build; `manual.bin` is not
   regenerated until then.
-- Don's manual gap (offline section, step 4 "turn the radio on") is **not written
-  yet** — only the code is fixed.
+- Don's manual gap: **done**. `docs/mkdocs/guide/time-sync.md`, which the PDF
+  builder injects (line 102 of `build_userguide_pdf.ps1`) as well as the website
+  and the on-device manual — one edit, all three trees. `check_docs.py` clean.
 - Samuel's four feature requests are answered but not built.
-- Roy's RIT long-press (off/on keeping the offset) is **accepted, not built**. Small
-  and well defined: the pill's short press stays as it is, long press toggles RIT
-  off and back on without discarding the offset. Note `cat_set_frequency()` clears
-  RIT on every retune and `ui_rit_notify_retune()` stands the armed mode down, so
-  the remembered offset has to survive that or the feature will feel broken.
+- Roy's RIT long-press: **built, gesture UNVERIFIED.** I can engage RIT over the
+  API but cannot perform a touch hold, so the hold itself needs a finger. Test:
+  engage RIT, long-press the pill (offset clears, label reads `RIT (+200)`),
+  long-press again (offset returns), then retune (label back to plain `RIT`,
+  nothing parked). RIT is currently set to +200 on the bench unit ready for it.
 - I nearly told Samuel that RIT is useful in FT8. It is not, our own code says so
   in a comment, and Roy would have corrected me in public. Check the code before
   explaining behaviour to operators who use it daily.
