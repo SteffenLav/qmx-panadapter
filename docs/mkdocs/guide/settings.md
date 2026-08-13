@@ -45,6 +45,22 @@ where the filter is already attenuating (Michael KZ4LY). Roy KI0ER uses +60 Hz o
 rig. Earlier versions of this page suggested 400–600 Hz, which is outside many operators'
 filters altogether.
 
+!!! note "Your QMX may keep showing two frequencies afterwards"
+
+    The offset works by putting the radio in split — receive on VFO A, transmit on
+    VFO B. When you switch the offset off, the panadapter returns VFO B to VFO A and
+    drops split, and it confirms both by reading the radio back.
+
+    The QMX's own LCD may nevertheless keep showing a second frequency until you
+    change band or power-cycle it. That is a display artifact: nothing repaints the
+    second row of the LCD when the VFO mode returns to A over CAT (confirmed by
+    Stan KC7XE, and known on the QRP Labs list). **You are not transmitting off
+    frequency** — VFO B equals VFO A and split is off.
+
+    Do not use the `MU;` command to tidy it up. It does clear the display, but it
+    also silently drops the radio's I/Q mode, and the panadapter's spectrum goes
+    flat while the radio keeps streaming audio as though nothing had happened.
+
 The QMX has no XIT, so this is done with **split**: you receive on VFO A and transmit on
 VFO B, which the Tab5 holds at your receive frequency plus the offset. Set it once and it
 follows you — a tap on the panadapter, a spot, a memory recall, a band change, the web
