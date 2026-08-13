@@ -1671,8 +1671,17 @@ static void start_cq_run(bool interactive)
         }
     } else {
         ESP_LOGW(TAG, "build_request(CQ '%s') failed: %s", cq_text, err);
-        if (interactive) identity_config_modal_show();
-        else             ui_toast("Set your callsign and grid first");
+        // Show what actually went wrong. This branch used to pop the identity
+        // modal for ANY encode failure, which told Don WB0LQW to fix a callsign
+        // that was perfectly fine while the real fault was in the message - and
+        // sent him looking in the wrong place for a day. Only offer the identity
+        // editor when the error is genuinely about identity.
+        if (strstr(err, "callsign") || strstr(err, "Set your") || strstr(err, "grid")) {
+            if (interactive) identity_config_modal_show();
+            else             ui_toast("Set your callsign and grid first");
+        } else {
+            ui_toast(err);
+        }
     }
 }
 
