@@ -2027,6 +2027,7 @@ static lv_obj_t *s_rit_pill      = NULL;
 static lv_obj_t *s_rit_pill_lbl  = NULL;
 static lv_obj_t *s_rit_wf_marker = NULL;  // RIT position over the waterfall, same overlay
                                           // reasoning (and same colour) as the spectrum line
+static lv_obj_t *s_rit_wf_lbl    = NULL;  // the offset as a number, beside that marker
 // Magenta: distinct from every other line on this display — green trace, gold
 // VFO/transmit, lavender passband, cyan tune cursor, orange spot ticks. The pill
 // uses the same hex when engaged so the eye connects the two without a legend.
@@ -2941,9 +2942,14 @@ static void build_label_bar(lv_obj_t *parent)
 // Full-band proportional (NOT aligned to the zoomed spectrum's scale): it's a
 // "where am I in the band" reference that's always readable, with a marker line
 // at the VFO. Region comes from settings (auto = derived from the grid square).
+// Out-of-band fill: clearly inert next to the CW/Digi/Phone colours, but well
+// clear of the strip's own 0x101418 background so the row still reads as present.
+#define BANDPLAN_OOB_COLOR 0x353B42
+
 static void update_bandplan_strip(uint32_t freq_hz)
 {
     if (!s_bandplan_obj) return;
+    const int W_BP = DISPLAY_H_RES;
 
     qmx_settings_t s;
     settings_load_all(&s);
@@ -2953,15 +2959,38 @@ static void update_bandplan_strip(uint32_t freq_hz)
     const bp_seg_t *segs = NULL;
     int n = bandplan_get_segments(freq_hz, reg, &segs);
     if (n <= 0 || n > BANDPLAN_MAX_SEG) {
-        // Not inside a known amateur band — hide the whole strip's contents.
-        for (int i = 0; i < BANDPLAN_MAX_SEG; i++) {
+        // Not inside a known amateur band. The strip used to vanish entirely;
+        // Samuel W7STF asked for it to stay, and he is right - an empty row reads
+        // as something broken, and the strip's presence is also what makes the
+        // coarse-tune drag discoverable in the first place.
+        //
+        // Segment 0 becomes one flat full-width block that says so. Everything
+        // that asserts a POSITION inside a band stays hidden - marker, knob, span
+        // window, passband - because there is no band to be positioned in, and
+        // drawing a marker against no scale would be a lie.
+        for (int i = 1; i < BANDPLAN_MAX_SEG; i++) {
             lv_obj_add_flag(s_bp_seg[i],     LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_bp_seg_lbl[i], LV_OBJ_FLAG_HIDDEN);
         }
+        lv_obj_set_pos(s_bp_seg[0], 0, 0);
+        lv_obj_set_size(s_bp_seg[0], W_BP, BANDPLAN_H);
+        lv_obj_set_style_bg_color(s_bp_seg[0], lv_color_hex(BANDPLAN_OOB_COLOR), 0);
+        lv_obj_clear_flag(s_bp_seg[0], LV_OBJ_FLAG_HIDDEN);
+
+        lv_label_set_text(s_bp_seg_lbl[0], "Out of band");
+        lv_obj_set_pos(s_bp_seg_lbl[0], 0, 0);
+        lv_obj_set_size(s_bp_seg_lbl[0], W_BP, BANDPLAN_H);
+        // Same rule the in-band labels follow: never while the strip is being
+        // dragged, so this does not fight touch_event_cb's fade.
+        if (s_bp_dragging) lv_obj_add_flag(s_bp_seg_lbl[0], LV_OBJ_FLAG_HIDDEN);
+        else               lv_obj_clear_flag(s_bp_seg_lbl[0], LV_OBJ_FLAG_HIDDEN);
+
         if (s_bp_span)     lv_obj_add_flag(s_bp_span, LV_OBJ_FLAG_HIDDEN);
         if (s_bp_passband) lv_obj_add_flag(s_bp_passband, LV_OBJ_FLAG_HIDDEN);
         if (s_bp_marker) lv_obj_add_flag(s_bp_marker, LV_OBJ_FLAG_HIDDEN);
         if (s_bp_knob) lv_obj_add_flag(s_bp_knob, LV_OBJ_FLAG_HIDDEN);
+        // Nothing to reset when we come back in band: the in-band path below
+        // rewrites segment 0's position, size, colour and label every tick.
         return;
     }
 
@@ -3330,6 +3359,20 @@ static void build_waterfall(lv_obj_t *parent)
     lv_obj_clear_flag(s_rit_wf_marker, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_clear_flag(s_rit_wf_marker, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_rit_wf_marker, LV_OBJ_FLAG_HIDDEN);
+
+    // The offset as a number, beside its line. Not clickable: it sits over the
+    // waterfall, which is a drag surface, and swallowing touches there would
+    // break tap-to-tune wherever the label happened to be.
+    s_rit_wf_lbl = lv_label_create(s_waterfall_obj);
+    lv_label_set_text(s_rit_wf_lbl, "");
+    lv_obj_set_style_text_color(s_rit_wf_lbl, lv_color_hex(UI_RIT_COLOR_HEX), 0);
+    lv_obj_set_style_text_font(s_rit_wf_lbl, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_bg_color(s_rit_wf_lbl, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_rit_wf_lbl, LV_OPA_50, 0);   // readable over a busy waterfall
+    lv_obj_set_style_pad_hor(s_rit_wf_lbl, 3, 0);
+    lv_obj_clear_flag(s_rit_wf_lbl, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(s_rit_wf_lbl, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_rit_wf_lbl, LV_OBJ_FLAG_HIDDEN);
 }
 
 // ==== Bottom status bar ====
@@ -5698,8 +5741,31 @@ void ui_push_spectrum(const float *bins, int n_bins)
                     lv_obj_add_flag(s_rit_wf_marker, LV_OBJ_FLAG_HIDDEN);
                 }
             }
-        } else if (s_rit_wf_marker && !lv_obj_has_flag(s_rit_wf_marker, LV_OBJ_FLAG_HIDDEN)) {
-            lv_obj_add_flag(s_rit_wf_marker, LV_OBJ_FLAG_HIDDEN);
+            // The offset in words, next to its own line. Samuel W7STF asked to read
+            // it off the spectrum rather than from the corner pill - which is also
+            // the honest place for it, since this is where the marker already says
+            // WHERE you are listening and the number says how far.
+            if (s_rit_wf_lbl) {
+                if (rx >= 0 && rx < DISPLAY_H_RES) {
+                    char rb[16];
+                    snprintf(rb, sizeof rb, "%+d Hz", rit_hz_now);
+                    const char *cur = lv_label_get_text(s_rit_wf_lbl);
+                    if (!cur || strcmp(cur, rb) != 0) lv_label_set_text(s_rit_wf_lbl, rb);
+                    // Flip to the left of the line when it would run off the right
+                    // edge - about 80 px covers "+9999 Hz" at montserrat_18.
+                    int lx = (rx + 4 + 80 <= DISPLAY_H_RES) ? rx + 6 : rx - 84;
+                    if (lx < 0) lx = 0;
+                    lv_obj_set_pos(s_rit_wf_lbl, lx, 2);
+                    lv_obj_clear_flag(s_rit_wf_lbl, LV_OBJ_FLAG_HIDDEN);
+                } else {
+                    lv_obj_add_flag(s_rit_wf_lbl, LV_OBJ_FLAG_HIDDEN);
+                }
+            }
+        } else {
+            if (s_rit_wf_marker && !lv_obj_has_flag(s_rit_wf_marker, LV_OBJ_FLAG_HIDDEN))
+                lv_obj_add_flag(s_rit_wf_marker, LV_OBJ_FLAG_HIDDEN);
+            if (s_rit_wf_lbl && !lv_obj_has_flag(s_rit_wf_lbl, LV_OBJ_FLAG_HIDDEN))
+                lv_obj_add_flag(s_rit_wf_lbl, LV_OBJ_FLAG_HIDDEN);
         }
     }
     // Target cursor: cyan 1-px vertical line at last touched x, ~600 ms
