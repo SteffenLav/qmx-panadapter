@@ -145,89 +145,53 @@ Everything from this session's reports, ready to paste. Nothing pushed or posted
 
 ## 4. Samuel W7STF — two built 🔧, two need your view 💭
 
-> **How many users:** No real number. Downloads are not people, and anyone getting
-> on fine never writes. The list I actually hear from is fifteen or twenty, and that
-> is what shapes the releases.
+> **Offsets on the spectrum: done.** With RIT engaged the offset prints beside its
+> own marker over the waterfall, as `+250 Hz`.
 >
-> **The mouse:** Unchanged in v1.8.1. I found the main fault, which is the report
-> descriptor being read short so the layout parses wrongly. My fix broke the
-> connection sequence, so I took it out rather than ship it. When the rewrite is
-> ready I will ask you for a diagnostic log first. Your symptom does not match that
-> fault, so I think there is a second one on your mouse.
+> **Band strip out of band: done, and you were right.** It no longer vanishes. One
+> flat block reading "Out of band", back to normal colours as soon as you are in a
+> band. The coarse-tune drag stays where your thumb expects it.
 >
-> **The hour-long USB disconnect:** Please raise things like that sooner. I tried
-> six approaches from the Tab5 end. None helped. Once the radio stops answering,
-> only a QMX power cycle clears it. That one is with QRP Labs.
+> **RIT outside CW:** Roy answered it. The button is hidden in FT8 and FT4 because
+> there it has nothing to do.
 >
-> **RIT outside CW:** Roy answered this better than I would have. It is not a
-> CW-only control. The panadapter behaves as he described: the button is hidden in
-> FT8 and FT4, because there it has nothing to do. If you do not want it in CW and
-> SSB either, the drawer switch in v1.8.1 gives you the corner back. An engaged
-> offset still shows itself regardless.
+> **The mouse:** Unchanged in v1.8.1. I found the main fault but my fix broke the
+> connection sequence, so I pulled it. I will ask you for a diagnostic log when the
+> rewrite is ready. Your symptom does not match that fault, so I suspect a second
+> one on your mouse.
 >
-> **Offsets on the spectrum: done.** With RIT engaged the offset prints in magenta
-> beside its own marker over the waterfall, as `+250 Hz`. The marker says where you
-> are listening. The number says how far. They belong together.
+> **The hour-long USB disconnect:** Please raise things like that sooner. Six
+> approaches from the Tab5 end, none helped. Only a QMX power cycle clears it. It is
+> with QRP Labs.
 >
-> **Band strip out of band: done, and you were right.** It no longer vanishes. It
-> fills with one flat block reading "Out of band" and returns to the CW/Digi/Phone
-> colours as soon as you are back in a band. The marker and the window frame stay
-> hidden while you are out, because there is no band to position them against. The
-> strip staying put also keeps the coarse-tune drag where your thumb expects it.
+> **How many users:** No real number. Fifteen or twenty write to me, and that is
+> what shapes the releases.
 >
-> **Arrow buttons: I want to build these but I need to know where.** Your sizing is
-> right. A quarter of the visible span per press, half for a double arrow, makes the
-> step mean the same thing at every zoom. A fixed step in hertz never does.
+> **Arrow buttons: yes, and your sizing is right.** A quarter of the visible span,
+> half for a double arrow. I cannot put them beside the frequency though — the top
+> bar is full and that same bar serves three screens. Pick one and I will build it
+> there:
 >
-> The problem is space. The top bar holds Band, Mode, BW, the frequency, the
-> S-meter and Zoom, and the only gap left is about 70 pixels. I am also reluctant to
-> redesign that bar, because the same one serves the panadapter, FT8 and the CW
-> page.
+> **(a)** the frequency-axis row under the spectrum, or **(b)** the band-plan strip
+> at the bottom.
 >
-> Your actual complaint was having to click the far edges of the spectrum to step
-> the VFO. Buttons anywhere reachable fix that. Two places I can see: a small
-> cluster at one end of the frequency-axis row under the spectrum, or on the
-> band-plan strip where your thumb already goes. Which would you use?
->
-> **VFO A/B: I want to push back for now.** The panadapter already uses split for
-> the CW transmit offset. It holds VFO B at your offset and re-asserts it every 30
-> seconds. A VFO A/B control would be a second thing steering the same two VFOs. The
-> first symptom would be the two fighting mid-QSO.
->
-> It would also land on the QMX display bug from this same thread. The LCD does not
-> repaint the second row on a CAT-driven VFO change, so a correctly working button
-> would often look broken.
->
-> **What I can do safely:** An indicator showing which VFO is active. A control that
-> switches them needs the split interaction worked out first. What would you use it
-> for?
->
-> **Top-bar labels and matching the browser:** Agreed, and that is the direction. The
-> same bar serves three screens, so it changes slowly.
+> **VFO A/B: not yet.** The panadapter already drives both VFOs for the CW transmit
+> offset, so a second control would fight it mid-QSO. It would also inherit the LCD
+> repaint bug from Stan's thread and look broken when it was not. I can show which
+> VFO is active safely enough. Switching them needs more thought.
 
 ### 4b. Samuel on RIT in a net 🔧
 
-> **One correction, then you are right anyway.**
->
 > **RIT cannot put anyone else off frequency.** It shifts only what you hear. Your
-> transmit does not move. In a net the risk is the reverse: while you compensate for
-> the one station who is off, everybody else sounds off-pitch to you.
+> transmit does not move. The risk is the reverse: while you compensate for the one
+> station who is off, everybody else sounds off-pitch to you.
 >
-> **So your conclusion holds.** That is the argument for a quick off, and it is now
-> built from Roy's request. Long press parks the offset and switches RIT off. Long
-> press again restores it. You can drop the offset when the turn passes back to the
-> stations on frequency and pick it up again without re-dialling.
+> **Your conclusion still holds.** That is the argument for a quick off, and it is
+> built. Long press parks the offset, long press again restores it.
 >
-> **Nudging it by accident:** This is the one I care about most. An engaged RIT
-> always shows itself, even with the button switched off in settings. A radio
-> listening 250 Hz away with nothing on screen saying so is a bug, not a tidy
-> screen. Your message made me extend that to a parked offset, which now shows as
-> `RIT (+250)`.
->
-> **The transmit side is different**, and there you are right that it moves you
-> relative to everyone else. The QMX has no XIT, so the panadapter uses split, and
-> it stands down the moment you leave CW. It cannot leave you transmitting off
-> frequency in SSB or AM.
+> **Nudging it by accident:** An engaged RIT always shows itself, even with the
+> button switched off in settings. Your message made me extend that to a parked
+> offset, which now reads `RIT (+250)`.
 
 ---
 
