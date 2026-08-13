@@ -2020,6 +2020,9 @@ static lv_obj_t *s_wf_cursor = NULL;  // cyan tune cursor OVERLAY over the water
 // and restoring one at boot means listening off-frequency for a reason nobody
 // remembers setting.
 static bool      s_rit_armed     = false;
+// Offset parked by a long press so it can be switched off and back on unchanged.
+// Cleared on retune along with RIT itself - see ui_rit_notify_retune().
+static int       s_rit_stash_hz  = 0;
 static lv_obj_t *s_rit_pill      = NULL;
 static lv_obj_t *s_rit_pill_lbl  = NULL;
 static lv_obj_t *s_rit_wf_marker = NULL;  // RIT position over the waterfall, same overlay
@@ -2510,6 +2513,13 @@ static void rit_pill_sync(void)
         // UI already uses for "armed" on the FT8 transmit status.
         snprintf(txt, sizeof txt, "RIT: tap");
         col = 0xFFA040;
+    } else if (s_rit_stash_hz != 0) {
+        // Parked by a long press. The radio IS back on frequency, so this must not
+        // look engaged - but a plain "RIT" would be indistinguishable from having
+        // no offset at all, leaving the operator with nothing to tell them a long
+        // press would bring it back. Brackets say "held, not applied".
+        snprintf(txt, sizeof txt, "RIT (%+d)", s_rit_stash_hz);
+        col = UI_COLOR_TEXT_SECONDARY;
     } else {
         snprintf(txt, sizeof txt, "RIT");
         col = UI_COLOR_TEXT_SECONDARY;
@@ -2547,6 +2557,36 @@ static void rit_pill_cb(lv_event_t *e)
     rit_pill_sync();   // immediate, not on the next tick: this was a button press
 }
 
+// Long press: switch RIT off and back on WITHOUT losing the offset - which is
+// what a rig with a dedicated RIT button does, and what the short press cannot
+// express (it clears the offset, which is a different intention).
+//
+// Roy KI0ER's case is a round robin: one station in the group is off frequency,
+// so you run an offset for them and want it gone - and then back, unchanged -
+// as the turn passes round. Clearing and re-dialling it every time is the thing
+// he was asking to avoid.
+static void rit_pill_long_cb(lv_event_t *e)
+{
+    (void)e;
+    int rit_now = cat_get_rit_hz();
+
+    if (rit_now != 0) {
+        s_rit_stash_hz = rit_now;      // park it and stand down
+        cat_request_rit_hz(0);
+        ESP_LOGI(TAG, "RIT: parked %+d Hz (long press) - long press again to restore",
+                 s_rit_stash_hz);
+    } else if (s_rit_stash_hz != 0) {
+        cat_request_rit_hz(s_rit_stash_hz);
+        ESP_LOGI(TAG, "RIT: restored %+d Hz (long press)", s_rit_stash_hz);
+    } else {
+        // Nothing engaged and nothing parked: say so rather than doing nothing
+        // silently, since a long press that appears inert reads as a dead button.
+        ui_toast("No RIT offset to restore");
+        return;
+    }
+    rit_pill_sync();
+}
+
 void ui_rit_notify_retune(void)
 {
     // cat_set_frequency() clears RIT on every retune, so the MODE has to stand
@@ -2554,9 +2594,15 @@ void ui_rit_notify_retune(void)
     // mean the operator's next tap on the spectrum silently sets an offset
     // instead of tuning — a mode they did not ask to still be in.
     //
+    // The PARKED offset goes too. It belongs to the station that was off
+    // frequency, and restoring it after a band change or a spot click would put
+    // the receiver somewhere the operator never asked for, from a number they
+    // could no longer see. A fresh frequency is a fresh start.
+    //
     // Flag write only. This is called from the CAT poll task and the HTTP task as
     // well as the LVGL thread; the pill's own timer does the repainting.
-    s_rit_armed = false;
+    s_rit_armed    = false;
+    s_rit_stash_hz = 0;
 }
 
 void ui_notify_qmx_fw_known(void)
@@ -4179,7 +4225,12 @@ void ui_init(lv_display_t *disp)
         lv_obj_set_style_pad_all(s_rit_pill, 0, 0);
         lv_obj_clear_flag(s_rit_pill, LV_OBJ_FLAG_SCROLLABLE);
         lv_obj_add_flag(s_rit_pill, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(s_rit_pill, rit_pill_cb, LV_EVENT_CLICKED, NULL);
+        // SHORT_CLICKED, not CLICKED: LVGL delivers CLICKED on release even after
+        // a long press, so pairing CLICKED with LONG_PRESSED would run the short
+        // handler too and immediately undo the long one. Same pairing as the Call
+        // CQ and ADIF buttons in ft8_screen_view.c.
+        lv_obj_add_event_cb(s_rit_pill, rit_pill_cb, LV_EVENT_SHORT_CLICKED, NULL);
+        lv_obj_add_event_cb(s_rit_pill, rit_pill_long_cb, LV_EVENT_LONG_PRESSED, NULL);
 
         s_rit_pill_lbl = lv_label_create(s_rit_pill);
         lv_label_set_text(s_rit_pill_lbl, "RIT");

@@ -19,9 +19,27 @@ If you're operating **without WiFi** (POTA, portable, SOTA):
 1. **Set the Tab5 RTC before you leave home** (settings → Time)
 2. The RTC is powered by a **supercap battery** and holds time for **30–40 hours** without power
 3. When you turn the Tab5 on in the field, it reads the RTC immediately
-4. Optional: if your QMX has GPS, the panadapter syncs the RTC from QMX GPS every 5 minutes
+4. **Turn the QMX on whenever you like — you do not have to do anything about its
+   clock.** A QMX without GPS comes up at 00:00 and its clock free-runs, so the
+   panadapter does not take the time from it while the Tab5's own clock is good.
+   It sets the radio's clock instead, and only when the radio is more than a few
+   seconds out.
+5. Optional: if your QMX has GPS, the panadapter syncs the RTC from QMX GPS every 5 minutes
 
 No internet needed — FT8 timing works offline.
+
+!!! note "Why step 4 says that"
+
+    Earlier versions took the time from a GPS-less QMX when there was no WiFi,
+    which meant switching the radio on in the field replaced your accurate RTC
+    time with the radio's 00:00 — and FT8 stopped decoding. Reported by
+    Don WB0LQW. The Tab5's supercap RTC is the better clock of the two offline,
+    so it now wins, and the radio gets set from it.
+
+    If you have no accurate time at all — the RTC was never set, or it has been
+    unpowered for more than a day or two — then a QMX reading *is* used, because
+    something is better than nothing. Failing that, set the clock by hand
+    (**FT8 → Filter → Sync Time**), which also accepts seconds.
 
 ### 3. WiFi + SNTP
 
