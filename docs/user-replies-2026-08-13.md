@@ -161,7 +161,7 @@ paste. Nothing has been pushed or posted.
 
 ---
 
-## 4. Samuel W7STF 💭 (answers, no code yet)
+## 4. Samuel W7STF — two of four built 🔧, two need your view 💭
 
 > Samuel, taking your points in order.
 >
@@ -191,21 +191,50 @@ paste. Nothing has been pushed or posted.
 > and an engaged offset still shows itself regardless, so RIT can never be on
 > without something on screen saying so.
 >
-> **Showing the offsets on the spectrum or waterfall:** I like that better than a
-> pill in the corner. Noted.
+> **Showing the offsets on the spectrum or waterfall: done.** With RIT engaged the
+> offset now prints in magenta beside its own marker over the waterfall — `+250 Hz`
+> next to the line that shows where you are actually listening. That is a better
+> home for it than the corner, as you said: the marker already says *where*, so the
+> number saying *how far* belongs next to it.
 >
-> **A VFO A/B button with the active VFO shown:** noted. It needs some care — the
-> panadapter uses split itself for the CW transmit offset — but it is reasonable.
+> **The band strip when out of band: done, and you were right.** It no longer
+> vanishes. It fills with one flat block reading "Out of band", and goes back to
+> the CW/Digi/Phone colours the moment you are inside a band again. The marker and
+> the little window frame stay hidden while you are out — there is no band for them
+> to be positioned against, and drawing them anyway would be inventing a scale.
+> The strip staying put also keeps the coarse-tune drag where your thumb expects
+> it, which I think was half your point.
 >
-> **Arrow buttons scaled by zoom:** your suggestion of a quarter of the visible
-> span per press, and half for a double arrow, is the right shape. It makes the
-> step mean the same thing to the eye at every zoom level, which a fixed step in
-> hertz never does.
+> **Arrow buttons scaled by zoom: I want to build this but I do not know where to
+> put them.** Your sizing is right — a quarter of the visible span per press and a
+> half for a double arrow makes the step mean the same thing to the eye at every
+> zoom, which a fixed step in hertz never does. The problem is space. The top bar
+> is genuinely full: Band, Mode, BW, then the frequency, then the S-meter, then
+> Zoom, and the only gap is about 70 pixels. I am also reluctant to redesign that
+> bar because the same one serves the panadapter, FT8 and the CW page.
 >
-> **The band strip when out of band:** I think you are right that it should stay
-> visible rather than vanish. Showing it in one flat colour with something like
-> "out of band" reads better than an empty row, and it keeps the coarse-tuning
-> gesture available. I will take that.
+> So: would arrows somewhere other than beside the frequency still solve your
+> problem? Your actual complaint was having to click the far left and right of the
+> spectrum to step the VFO, and buttons anywhere reachable would fix that. Options
+> I can see are a small cluster at one end of the frequency-axis row under the
+> spectrum, or on the band-plan strip at the bottom next to where your thumb
+> already goes. Tell me which you would actually use and I will build it there.
+>
+> **A VFO A/B button: I need to push back on this one, at least for now.** The
+> panadapter already uses split for the CW transmit offset — it holds VFO B at your
+> offset and re-asserts it every 30 seconds, and stands it down when you leave CW.
+> A VFO A/B control would be a second thing steering the same two VFOs, and the
+> first symptom would be the two fighting each other mid-QSO.
+>
+> It would also land straight on top of the QMX display bug in this same thread:
+> the radio's LCD does not repaint the second row when the VFO mode changes over
+> CAT, so a working A/B button would frequently *look* broken through no fault of
+> its own.
+>
+> If what you want is mostly to *see* which VFO is active, that I can do safely as
+> an indicator. A control that switches them needs the split interaction thought
+> through first, and I would rather do that properly than ship something that
+> misbehaves while you are transmitting. What would you actually use it for?
 >
 > **Top-bar labels and matching the browser:** agreed, and that is the direction
 > I am going. The same bar has to serve the panadapter, FT8 and the CW page, so it
@@ -263,7 +292,12 @@ paste. Nothing has been pushed or posted.
 - Don's manual gap: **done**. `docs/mkdocs/guide/time-sync.md`, which the PDF
   builder injects (line 102 of `build_userguide_pdf.ps1`) as well as the website
   and the on-device manual — one edit, all three trees. `check_docs.py` clean.
-- Samuel's four feature requests are answered but not built.
+- Samuel: **RIT-offset readout and the out-of-band band strip are built and
+  screen-verified** (`/ss.bmp`: strip uniform 49,56,66 with "Out of band" centred;
+  label "+250 Hz" at x≈653 beside the marker at x≈647). **Arrow buttons and VFO
+  A/B are not built** — both need his answer first. Arrows have nowhere to live in
+  a full top bar the operator has said he is keeping; VFO A/B would fight
+  `cw_split_maintain()` and would inherit the QMX's own LCD repaint bug.
 - Roy's RIT long-press: **built, gesture UNVERIFIED.** I can engage RIT over the
   API but cannot perform a touch hold, so the hold itself needs a finger. Test:
   engage RIT, long-press the pill (offset clears, label reads `RIT (+200)`),
