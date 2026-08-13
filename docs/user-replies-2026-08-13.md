@@ -240,6 +240,37 @@ paste. Nothing has been pushed or posted.
 > I am going. The same bar has to serve the panadapter, FT8 and the CW page, so it
 > changes slowly.
 
+### 4b. Samuel's follow-up on RIT in a net 🔧
+
+> Samuel, one correction and then you are right anyway.
+>
+> RIT cannot put anyone else off frequency. It shifts only what *you* hear — your
+> transmit does not move at all. So in a three-way or a net, the risk is not that
+> you drift away from the group; it is that while you are compensating for the one
+> station who is off, everybody else in the net now sounds off-pitch to *you*.
+>
+> Which is exactly the argument for a quick off, so your conclusion is right even
+> though the mechanism is the other way round. And it is now built, from Roy's
+> request: **long-press the RIT button and the offset is parked and switched off;
+> long-press again and it comes back unchanged.** Short press still clears it
+> outright. So in your net you can drop the offset when the turn passes back to the
+> stations who are on frequency, and pick it up again when it is that one operator's
+> turn, without re-dialling anything.
+>
+> Your other worry — nudging it by accident and forgetting — is the one I care about
+> most, and the panadapter is built so it cannot happen quietly. **An engaged RIT
+> always shows itself**, even if you have switched the button off in the settings; a
+> radio listening 250 Hz away with nothing on screen saying so is a bug, not a tidy
+> screen. As of your message that now covers a *parked* offset too: it shows as
+> `RIT (+250)` in brackets, so "there is an offset waiting to come back" is never
+> invisible either. Thank you for that — you found it by thinking out loud.
+>
+> On the transmit side you are right that it is a different matter, because that one
+> genuinely does move you relative to everyone else. The QMX has no XIT, so the
+> panadapter's CW transmit offset does the job with split — and it stands itself
+> down the moment you leave CW, precisely so it cannot leave you transmitting off
+> frequency in SSB or AM.
+
 ---
 
 ## 5. For the beta testers generally 🔧 — new: spur suppression (off by default)
@@ -298,6 +329,11 @@ paste. Nothing has been pushed or posted.
   A/B are not built** — both need his answer first. Arrows have nowhere to live in
   a full top bar the operator has said he is keeping; VFO A/B would fight
   `cw_split_maintain()` and would inherit the QMX's own LCD repaint bug.
+- Samuel's follow-up exposed a gap in the long-press: with the pill hidden, an
+  offset engaged from the browser and then parked, `rit_now` returns to 0 and the
+  pill hid itself again - leaving the parked offset invisible AND unreachable,
+  since restoring it needs the pill to be there. A parked offset now keeps the
+  pill visible, same rule as an engaged one.
 - Roy's RIT long-press: **built, gesture UNVERIFIED.** I can engage RIT over the
   API but cannot perform a touch hold, so the hold itself needs a finger. Test:
   engage RIT, long-press the pill (offset clears, label reads `RIT (+200)`),

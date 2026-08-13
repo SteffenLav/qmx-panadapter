@@ -2493,7 +2493,13 @@ static void rit_pill_sync(void)
     // from the web UI (/api/cmd set_rit) with the pill hidden. A radio listening
     // 250 Hz off with nothing on screen saying so is a bug, not a tidy screen, so
     // an engaged RIT always shows itself whatever this setting says.
-    if (!s_rit_pill_show && rit_now == 0 && !s_rit_armed) want_hidden = true;
+    // A PARKED offset counts as something to show, for the same reason an engaged
+    // one does. Otherwise: operator hides the pill, engages RIT from the browser,
+    // long-presses to park it - rit_now goes to 0, the pill hides itself again, and
+    // the parked offset is left both invisible and unreachable, since the long
+    // press that would restore it needs the pill to be there.
+    if (!s_rit_pill_show && rit_now == 0 && !s_rit_armed && s_rit_stash_hz == 0)
+        want_hidden = true;
     bool hidden = lv_obj_has_flag(s_rit_pill, LV_OBJ_FLAG_HIDDEN);
     if (want_hidden != hidden) {
         if (want_hidden) lv_obj_add_flag(s_rit_pill, LV_OBJ_FLAG_HIDDEN);
