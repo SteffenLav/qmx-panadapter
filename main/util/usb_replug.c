@@ -29,6 +29,20 @@
 
 static const char *TAG = "usb_replug";
 
+// Root port only. Keeps VBUS up, so a self-powered radio never sees its supply
+// disappear. Same port sequence as usb_replug()'s tail.
+esp_err_t usb_replug_port_only(void)
+{
+    ESP_LOGW(TAG, "replug: root port only (VBUS left up)");
+    esp_err_t err_off = usb_host_lib_set_root_port_power(false);
+    if (err_off != ESP_OK)
+        ESP_LOGW(TAG, "root port power off: %s", esp_err_to_name(err_off));
+    vTaskDelay(pdMS_TO_TICKS(50));
+    esp_err_t err_on = usb_host_lib_set_root_port_power(true);
+    ESP_LOGW(TAG, "replug: done (port on: %s)", esp_err_to_name(err_on));
+    return (err_on == ESP_ERR_INVALID_STATE) ? ESP_OK : err_on;
+}
+
 esp_err_t usb_replug(uint32_t off_ms)
 {
     if (off_ms < 200)  off_ms = 200;
@@ -269,7 +283,13 @@ static void usb_stale_detect_task(void *arg)
                           "connected - retrying the port (%d/3). ESP-IDF does not retry "
                           "enumeration itself; this stands in for that.",
                      (unsigned long)fails, replug_attempts);
-            usb_replug(2000);
+            // PORT ONLY - no VBUS cut. Cutting VBUS here switched the operator's
+            // radio off during the v1.8.2 release verification, from THIS branch,
+            // after the zombie branch had already been gated for the same reason.
+            // The port cycle is the part that stands in for ESP-IDF's missing enum
+            // retry; the VBUS cut only ever added a power-cycled radio, and it is
+            // proven not to clear the QMX-side wedge.
+            usb_replug_port_only();
             last_replug_us = now;
             baseline = diag_log_usb_enum_failures();   // judge the NEXT attempt on its own
             continue;
