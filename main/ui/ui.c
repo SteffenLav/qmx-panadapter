@@ -5261,12 +5261,13 @@ static void update_db_scale(void)
 // Repainted only when the mapped set or the zoom/pan window actually changes -
 // a canvas invalidate every 10 Hz push would cost a full 1280x32 redraw on a
 // display that only manages ~13 fps.
-// 0x2E9C is a clear teal-cyan: the first attempt (0x336D) was so close to the
-// separator's own brightness that the operator could barely find it. 3 px tall
-// for the same reason - one row on a 720-line panel is nearly nothing.
+// 0x2E9C is a clear teal-cyan. The first attempt (0x336D) sat so close to the
+// separator's own brightness that it could barely be found. Brightness is the
+// whole fix: this stays ONE pixel tall on purpose - the operator asked for a
+// stronger line, not a thicker one, and the separator it colours is 1 px.
 #define SPUR_MARK_COLOR   0x2E9C   /* teal, against the 0x4208 grey separator */
 #define SPUR_SEP_COLOR    0x4208
-#define SPUR_MARK_ROWS    3
+#define SPUR_MARK_ROWS    1
 
 static void spur_marks_update(int N, int bin_start, int window_bins)
 {
