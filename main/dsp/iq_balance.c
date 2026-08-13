@@ -42,6 +42,25 @@ static float    s_xy            = 0.0f; // mean of i*q
 static float    s_K_phi         = 0.0f;
 static float    s_K_amp         = 1.0f;
 
+// Diagnostic counters only - see iq_balance_get_debug().
+static uint32_t s_dbg_upd    = 0;
+static uint32_t s_dbg_frozen = 0;
+
+void iq_balance_get_debug(float *k_phi, float *k_amp,
+                          float *p_i, float *p_q, float *xy,
+                          uint32_t *upd, uint32_t *frozen)
+{
+    if (k_phi)  *k_phi  = s_K_phi;
+    if (k_amp)  *k_amp  = s_K_amp;
+    if (p_i)    *p_i    = s_p_i;
+    if (p_q)    *p_q    = s_p_q;
+    if (xy)     *xy     = s_xy;
+    if (upd)    *upd    = s_dbg_upd;
+    if (frozen) *frozen = s_dbg_frozen;
+    s_dbg_upd = 0;
+    s_dbg_frozen = 0;
+}
+
 // ---- Public API --------------------------------------------------------
 void iq_balance_reset(void)
 {
@@ -89,6 +108,7 @@ void iq_balance_apply(int16_t *i_inout, int16_t *q_inout)
 
     // 3. Update running estimates (only when there is some signal energy).
     float total_p = i * i + q * q;
+    if (total_p > POWER_FREEZE_THRESHOLD) s_dbg_upd++; else s_dbg_frozen++;
     if (total_p > POWER_FREEZE_THRESHOLD) {
         // Two-speed: 8× faster alpha for first 2 s of real signal after reset.
         float fast = (s_startup_count < FAST_RAMP_SAMPLES) ? ALPHA_FAST_MULT : 1.0f;

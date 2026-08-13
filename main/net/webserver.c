@@ -32,6 +32,7 @@
 #include "bt_hid_mouse.h"
 #include "hid_cursor.h"
 #include "iq_balance.h"        // iq_balance_set_enabled - /api/settings
+#include "spur_map.h"          // spur_map_set_enabled - /api/settings
 #include "mem_channels.h"      // memory channels - /api/memory
 #include "render_waterfall.h"  // live waterfall tuning - /api/settings display group
 #include "ft8_pileup.h"        // pileup list - /api/decodes
@@ -1716,6 +1717,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "sim_mode_en",       c.sim_mode_en);
     cJSON_AddBoolToObject(root, "distance_in_miles", c.distance_in_miles);
     cJSON_AddBoolToObject(root, "rit_pill_show",     c.rit_pill_show);
+    cJSON_AddNumberToObject(root, "spur_mode",       c.spur_mode);
     cJSON_AddBoolToObject(root, "iq_enabled",        c.iq_enabled);
     cJSON_AddNumberToObject(root, "qmx_vol_db",      c.qmx_vol_db);
     // -1 until the radio has answered RG;. The browser must show that as
@@ -1885,6 +1887,15 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         bool v = cJSON_IsTrue(it);
         settings_set_rit_pill_show(v);
         ui_set_rit_pill_show(v);
+    }
+    // Spur suppression, like IQ balance below, is a live DSP path as well as a
+    // stored value - set both or the control does nothing until the next boot.
+    // 0=off 1=subtract 2=interpolate.
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "spur_mode"))) {
+        int v = it->valueint;
+        if (v < 0 || v > 2) v = 0;
+        settings_set_spur_mode((uint8_t)v);
+        spur_map_set_mode((spur_mode_t)v);
     }
     #undef BOOLTOP
 

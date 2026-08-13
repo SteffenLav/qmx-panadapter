@@ -9,6 +9,16 @@
 #define DSP_FFT_SIZE       1024
 #define DSP_SAMPLE_RATE_HZ 48000
 
+// Phase 5.8: dBm calibration offset. Added to every dB value before display so
+// readings match real-world signal strength. Procedure: with QMX on dummy load,
+// log the per-second MEDIAN dB across all bins (= noise floor in raw dB);
+// the offset is then -130 - median.
+// In the header because spur_map.c must UNDO it: the spectra it compares are
+// dBm, but the powers it subtracts go back into raw FFT magnitude-squared.
+#ifndef DSP_DB_CALIBRATION_OFFSET
+#define DSP_DB_CALIBRATION_OFFSET -148.0f  /* measured against QMX on dummy load (-130 dBm floor target) */
+#endif
+
 // Bin frequency width = sample_rate / FFT_SIZE = 46.875 Hz at 48000/1024
 // Total span = sample_rate (i.e., -24 kHz to +24 kHz around tuned center)
 
@@ -53,6 +63,17 @@ void dsp_set_transfer_quiet(bool quiet);
  *         spectrum has been computed yet.
  */
 esp_err_t dsp_get_spectrum(float *dst);
+
+// Average LINEAR power over the next `frames` FFT frames, then convert to dB.
+// A single frame is Rayleigh-noisy (+/-13 dB bin to bin), so anything that has
+// to compare two spectra - spur_map.c's dial-nudge detector - needs averaging
+// to tell a real difference from luck. Averaging in the linear domain matters:
+// averaging dB would bias every result low.
+void dsp_avg_start(uint32_t frames);
+
+// True once the run has completed; copies DSP_FFT_SIZE dB values into `dst` and
+// disarms. Poll it - the accumulation happens on the FFT task.
+bool dsp_avg_ready(float *dst);
 
 // Phase 5.10D: peak dBm in a window centered on the VFO bin.
 // center_bin: index of the VFO bin in the raw (non-fftshifted) FFT array

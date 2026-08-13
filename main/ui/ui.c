@@ -36,6 +36,7 @@
 #include "identity_config.h"
 #include "onboarding.h"
 #include "iq_balance.h"
+#include "spur_map.h"
 #include "diag_log.h"
 #include "sd_archive.h"
 #include "ui_mode.h"
@@ -1875,6 +1876,7 @@ static lv_obj_t *s_lbl_wf_contrast = NULL;
 static lv_obj_t *s_slider_wf_blend = NULL;
 static lv_obj_t *s_lbl_wf_blend = NULL;
 static lv_obj_t *s_dropdown_wf_window = NULL;
+static lv_obj_t *s_dropdown_spur      = NULL;
 static lv_obj_t *s_tune_tooltip  = NULL;  // freq label above finger during tap-to-tune
 static lv_obj_t *s_bw_label      = NULL;  // passband width in top bar
 static void apply_sim_mode_lock(bool ft4);   // defined below, used by ui_refresh_sim_mode_indicator() above it
@@ -1945,6 +1947,7 @@ static void drawer_slider_wf_black_cb(lv_event_t *e);
 static void drawer_slider_wf_contrast_cb(lv_event_t *e);
 static void drawer_slider_wf_blend_cb(lv_event_t *e);
 static void drawer_dropdown_wf_window_cb(lv_event_t *e);
+static void drawer_dropdown_spur_cb(lv_event_t *e);
 bool ui_get_flat_mode(void);
 void ui_set_flat_mode(bool on);
 static void drawer_apply_preset(int db_min, int db_max, float alpha);
@@ -5250,6 +5253,69 @@ static void update_db_scale(void)
     if (s_db_min_label) lv_obj_add_flag(s_db_min_label, LV_OBJ_FLAG_HIDDEN);
 }
 
+// Recolour the thin separator between the frequency-label band and the
+// waterfall wherever the spur suppressor is removing something. The operator's
+// choice of location and of a muted colour: this has to say "the firmware is
+// touching these bins" without competing with a signal for attention.
+//
+// Repainted only when the mapped set or the zoom/pan window actually changes -
+// a canvas invalidate every 10 Hz push would cost a full 1280x32 redraw on a
+// display that only manages ~13 fps.
+// 0x2E9C is a clear teal-cyan: the first attempt (0x336D) was so close to the
+// separator's own brightness that the operator could barely find it. 3 px tall
+// for the same reason - one row on a 720-line panel is nearly nothing.
+#define SPUR_MARK_COLOR   0x2E9C   /* teal, against the 0x4208 grey separator */
+#define SPUR_SEP_COLOR    0x4208
+#define SPUR_MARK_ROWS    3
+
+static void spur_marks_update(int N, int bin_start, int window_bins)
+{
+    if (!s_label_canvas_buf || !s_label_canvas || N <= 0 || window_bins <= 0) return;
+
+    // With the feature switched off and nothing ever drawn, do nothing at all -
+    // not even repaint the separator in its own colour. An operator who leaves
+    // this alone must get a display that is byte-identical to before it existed.
+    static uint32_t s_last_sig = 0xFFFFFFFFu;
+    if (!spur_map_is_enabled() && s_last_sig == 0xFFFFFFFFu) return;
+
+    uint16_t marks[SPUR_MAP_MAX_ENTRIES];
+    int n = spur_map_get_marks(marks, SPUR_MAP_MAX_ENTRIES);
+
+    uint32_t sig = (uint32_t)n * 2654435761u;
+    for (int i = 0; i < n; i++) sig = sig * 31u + marks[i];
+    sig = sig * 31u + (uint32_t)bin_start;
+    sig = sig * 31u + (uint32_t)window_bins;
+    if (sig == s_last_sig) return;
+    s_last_sig = sig;
+
+    // Bottom SPUR_MARK_ROWS rows of the label band. The lowest row is the
+    // separator itself and is restored to its own colour where nothing is
+    // suppressed; the rows above it are cleared to black, which is the label
+    // band's background.
+    uint16_t *px = (uint16_t *)s_label_canvas_buf;
+    for (int r = 0; r < SPUR_MARK_ROWS; r++) {
+        uint16_t *row = px + (LABEL_BAR_H - 1 - r) * DISPLAY_H_RES;
+        uint16_t bg = (r == 0) ? SPUR_SEP_COLOR : 0x0000;
+        for (int x = 0; x < DISPLAY_H_RES; x++) row[x] = bg;
+    }
+
+    for (int i = 0; i < n; i++) {
+        // Bring the bin into the displayed window, honouring the wrap: the
+        // spectrum is circular and the window can straddle bin 0.
+        int rel = ((((int)marks[i] - bin_start) % N) + N) % N;
+        if (rel >= window_bins) continue;
+        int x0 = (int)((float)rel * (float)DISPLAY_H_RES / (float)window_bins);
+        int x1 = (int)((float)(rel + 1) * (float)DISPLAY_H_RES / (float)window_bins);
+        if (x1 <= x0) x1 = x0 + 1;
+        for (int x = x0; x < x1; x++) {
+            if (x < 0 || x >= DISPLAY_H_RES) continue;
+            for (int r = 0; r < SPUR_MARK_ROWS; r++)
+                px[(LABEL_BAR_H - 1 - r) * DISPLAY_H_RES + x] = SPUR_MARK_COLOR;
+        }
+    }
+    lv_obj_invalidate(s_label_canvas);
+}
+
 void ui_push_spectrum(const float *bins, int n_bins)
 {
     if (!s_spec_canvas_buf || !bins || n_bins <= 0) return;
@@ -5426,6 +5492,12 @@ void ui_push_spectrum(const float *bins, int n_bins)
     if (window_bins < 4) window_bins = 4;
     if (window_bins > N) window_bins = N;
     int bin_start  = center_bin - window_bins / 2;
+
+    // Show which bins the spur suppressor is touching. Done from here because
+    // bin_start/window_bins are the authoritative bin->x mapping and live only
+    // in this scope - deriving them a second time elsewhere is how the top-bar
+    // hit zones and the tune check drifted apart in v1.8.1.
+    spur_marks_update(N, bin_start, window_bins);
 
     for (int x = 0; x < DISPLAY_H_RES; x++) {
         int b = bin_start + (int)((float)x * (float)window_bins / (float)DISPLAY_H_RES);
@@ -7879,7 +7951,10 @@ static void drawer_build(void)
         qmx_settings_t wcfg;
         settings_load_all(&wcfg);
 
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_WATERFALL, y, 384);
+        // 484, not 384: the spur-suppression control was added at the bottom.
+        // This height and the `y +=` at the end of the block must move together
+        // or every section below overlaps it.
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WATERFALL, y, 484);
         lv_obj_t *wf_hdr = lv_label_create(sec);
         lv_label_set_text(wf_hdr, "Waterfall");
         lv_obj_set_style_text_color(wf_hdr, lv_color_hex(0xA0E0A0), 0);
@@ -7944,7 +8019,44 @@ static void drawer_build(void)
         if (wcfg.wf_window <= 2) lv_dropdown_set_selected(s_dropdown_wf_window, wcfg.wf_window);
         lv_obj_add_event_cb(s_dropdown_wf_window, drawer_dropdown_wf_window_cb, LV_EVENT_VALUE_CHANGED, NULL);
         lv_obj_add_event_cb(s_dropdown_wf_window, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
-        y += 384;
+
+        // Spur suppression. Off by default and deliberately here rather than in
+        // its own section: it is a display-quality control like the three above.
+        // "Subtract" removes the measured power and can never hide a real
+        // signal; "Hide" interpolates the mapped bins away, which removes the
+        // spur completely but blanks anything sharing those bins while the dial
+        // sits still. See spur_map.h for why that trade is the operator's.
+        lv_obj_t *spur_lbl = lv_label_create(sec);
+        lv_label_set_text(spur_lbl, "Spur suppression");
+        lv_obj_set_style_text_color(spur_lbl, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(spur_lbl, &lv_font_montserrat_28, 0);
+        lv_obj_align(spur_lbl, LV_ALIGN_TOP_LEFT, 0, 364);
+        s_dropdown_spur = lv_dropdown_create(sec);
+        // Name what happens to the SPUR, not to the feature - "Hide" read as
+        // "hide the suppression". Both working options say what they do to the
+        // radio's artifact and what it costs.
+        lv_dropdown_set_options(s_dropdown_spur,
+                                "Off\nSubtract spur power\nErase spur bins");
+        lv_obj_set_size(s_dropdown_spur, DRAWER_W - 32, 50);
+        lv_obj_align(s_dropdown_spur, LV_ALIGN_TOP_LEFT, 0, 400);
+        lv_obj_set_style_text_font(s_dropdown_spur, &lv_font_montserrat_28, 0);
+        // Open UPWARDS and unconstrained: this control sits at the bottom of the
+        // section, so a downward list is clipped by the drawer edge and has to
+        // be scrolled. All three choices should be visible in one look.
+        lv_dropdown_set_dir(s_dropdown_spur, LV_DIR_TOP);
+        lv_dropdown_set_symbol(s_dropdown_spur, NULL);
+        {
+            lv_obj_t *list = lv_dropdown_get_list(s_dropdown_spur);
+            if (list) {
+                lv_obj_set_style_max_height(list, LV_COORD_MAX, 0);
+                lv_obj_set_style_text_font(list, &lv_font_montserrat_28, 0);
+            }
+        }
+        if (wcfg.spur_mode <= 2) lv_dropdown_set_selected(s_dropdown_spur, wcfg.spur_mode);
+        lv_obj_add_event_cb(s_dropdown_spur, drawer_dropdown_spur_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        lv_obj_add_event_cb(s_dropdown_spur, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
+
+        y += 484;
     }
 
     // FT8-only sections built LAST so they never leave a gap in Panadapter
@@ -8845,6 +8957,16 @@ static void drawer_dropdown_wf_window_cb(lv_event_t *e)
     uint8_t idx = (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e));
     dsp_set_window(idx);
     settings_set_wf_window(idx);
+}
+
+// Spur suppression. Live DSP path AND stored value, like the IQ balance switch -
+// setting only one leaves the control disagreeing with the display until reboot.
+static void drawer_dropdown_spur_cb(lv_event_t *e)
+{
+    uint8_t idx = (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e));
+    if (idx > 2) idx = 0;
+    spur_map_set_mode((spur_mode_t)idx);
+    settings_set_spur_mode(idx);
 }
 
 

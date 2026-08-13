@@ -1922,6 +1922,15 @@ const SET_FIELDS = [
      CLAUDE.md, "The per-bin adaptive noise floor HAS NEVER RUN". */
   ["Display & waterfall", "display.wf_window",      "sel", "FFT window", "",
      [["0","Blackman-Harris"],["1","Hann"],["2","Nuttall"]]],
+  /* The radio's own synthesizer puts a comb of spurs into the IQ stream at some
+     dial frequencies - measured up to 41 dB over the noise floor, with a 2nd
+     harmonic and a mirror image, and present with no antenna connected. The
+     firmware finds them by nudging the dial 25 Hz: a spur moves 16-50x that, a
+     real signal moves a fraction of one FFT bin. Off by default because the
+     nudge is a real (brief) side effect on the operator's radio. */
+  ["Display & waterfall", "spur_mode",              "sel", "Spur suppression",
+     "Removes the radio's own synthesizer spurs from the display. Subtract takes away the measured power and can never hide a real signal. Erase replaces those bins entirely, so the spur vanishes completely but anything sharing them is hidden while the dial sits still - tuning a little moves the blind spots off it, because the spurs shift far faster than the dial does. Suppressed bins are marked in teal on the line under the frequency labels",
+     [["0","Off"],["1","Subtract spur power"],["2","Erase spur bins"]]],
   ["Display & waterfall", "display.colormap",       "sel", "Waterfall colours", "",
      [["0","Thermal"],["1","Viridis"],["2","Turbo"],["3","Grayscale"]]],
   ["Display & waterfall", "display.sleep_min",      "sel", "Display sleep", "Idle minutes before the backlight turns off",

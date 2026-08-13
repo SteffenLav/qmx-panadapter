@@ -1,6 +1,7 @@
 ﻿#include "dsp.h"
 
 #include <string.h>
+#include <stdlib.h>
 #include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -14,13 +15,9 @@
 #define DSP_DC_BLOCKER 1
 #endif
 
-// Phase 5.8: dBm calibration offset. Added to every dB value before display so
-// readings match real-world signal strength. Procedure: with QMX on dummy load,
-// log the per-second MEDIAN dB across all bins (= noise floor in raw dB);
-// the offset is then -130 - median.
-#ifndef DSP_DB_CALIBRATION_OFFSET
-#define DSP_DB_CALIBRATION_OFFSET -148.0f  /* measured against QMX on dummy load (-130 dBm floor target) */
-#endif
+// DSP_DB_CALIBRATION_OFFSET moved to dsp.h - spur_map.c has to undo it to get
+// back to raw FFT power, and two copies of a calibration constant is exactly
+// the kind of thing that drifts apart.
 #include "esp_err.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -33,6 +30,23 @@
 
 #include "audio.h"
 #include "ui_mode.h"
+#include "iq_balance.h"
+#include "spur_map.h"
+
+// Linear-power averaging for spur_map.c's dial-nudge detector. Accumulated on
+// the FFT task; armed and collected from the detection task.
+static float   *s_avg_acc    = NULL;
+static uint32_t s_avg_want   = 0;
+static volatile uint32_t s_avg_have = 0;
+static volatile bool s_avg_active = false;
+static volatile bool s_avg_done   = false;
+
+// The 2026-08-13 spur investigation's DCPROBE instrumentation lived here: a 1 Hz
+// power-averaged spectrum with a top-N peak list, which is what identified the
+// comb and its 16x-per-Hz sweep law. Removed now that spur_map.c ships and logs
+// what it learns. If it is ever needed again, the shape that mattered was
+// accumulating LINEAR power per bin over ~1 s before ranking - a single FFT frame
+// is +/-13 dB Rayleigh-noisy and cannot tell a spur from luck.
 
 static const char *TAG = "dsp";
 
@@ -564,16 +578,31 @@ static void compute_and_publish_spectrum(int16_t *samples, float *tmp_spectrum,
     float sum_db = 0.0f;
     float min_db = +1e9f;
     float max_db = -1e9f;
+
+    // Linear power first, so the spur subtraction can work in the domain where
+    // powers add. Subtracting in dB would remove the wrong amount from any bin
+    // that also carries a real signal.
     for (int i = 0; i < DSP_FFT_SIZE; i++) {
         float re = s_workbuf[2*i];
         float im = s_workbuf[2*i + 1];
-        float mag2 = re*re + im*im;
+        float m = re*re + im*im;
+        tmp_spectrum[i] = (m < floor_mag2) ? floor_mag2 : m;
+    }
+    spur_map_apply(tmp_spectrum, DSP_FFT_SIZE);
+
+    for (int i = 0; i < DSP_FFT_SIZE; i++) {
+        float mag2 = tmp_spectrum[i];
         if (mag2 < floor_mag2) mag2 = floor_mag2;
+        if (s_avg_active) s_avg_acc[i] += mag2;
         float db = 10.0f * log10f(mag2) + DSP_DB_CALIBRATION_OFFSET;
         tmp_spectrum[i] = db;
         sum_db += db;
         if (db < min_db) min_db = db;
         if (db > max_db) max_db = db;
+    }
+    if (s_avg_active && ++s_avg_have >= s_avg_want) {
+        s_avg_active = false;
+        s_avg_done   = true;
     }
     *last_min = min_db;
     *last_max = max_db;
@@ -587,6 +616,31 @@ static void compute_and_publish_spectrum(int16_t *samples, float *tmp_spectrum,
 
     s_frames_this_period++;
     log_stats(*last_min, *last_max, *last_mean);
+}
+
+void dsp_avg_start(uint32_t frames)
+{
+    if (!s_avg_acc) {
+        s_avg_acc = heap_caps_malloc(DSP_FFT_SIZE * sizeof(float),
+                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_avg_acc) return;
+    }
+    if (frames == 0) frames = 1;
+    s_avg_done = false;
+    memset(s_avg_acc, 0, DSP_FFT_SIZE * sizeof(float));
+    s_avg_have = 0;
+    s_avg_want = frames;
+    s_avg_active = true;      // set last: the FFT task tests this to start
+}
+
+bool dsp_avg_ready(float *dst)
+{
+    if (!s_avg_done || !dst || !s_avg_acc) return false;
+    float inv = 1.0f / (float)((s_avg_have > 0) ? s_avg_have : 1);
+    for (int i = 0; i < DSP_FFT_SIZE; i++)
+        dst[i] = 10.0f * log10f(s_avg_acc[i] * inv) + DSP_DB_CALIBRATION_OFFSET;
+    s_avg_done = false;
+    return true;
 }
 
 static void zoom_run_fft(void)

@@ -43,6 +43,7 @@ idf_component_register(
         "audio/cw_audio.c"
         "dsp/dsp.c"
         "dsp/iq_balance.c"
+        "dsp/spur_map.c"
         "render/render.c"
         "render/render_waterfall.c"
         "screenshot/screenshot.c"

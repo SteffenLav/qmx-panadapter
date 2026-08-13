@@ -29,6 +29,7 @@
 #include "net/manual_embed.h"  // built-in user manual (boot integrity check)
 #include "ui/reader_view.h"
 #include "iq_balance.h"
+#include "spur_map.h"
 #include "ui_mode.h"
 #include "ft8_screen.h"
 #include "ft8_tx.h"
@@ -295,6 +296,8 @@ void app_main(void)
     ESP_LOGW(TAG, "BENCH: WiFi deliberately NOT started (SD isolation test)");
     #endif
     ESP_ERROR_CHECK(dsp_init());
+    // After dsp_init: the detector arms dsp_avg_*, which needs the FFT running.
+    spur_map_init();
     // ui_init() (above) applied the persisted zoom level via ui_set_zoom(),
     // but dsp_set_zoom() is a no-op before dsp_init() creates its config
     // mutex - re-apply now so a saved zoom > x1 engages the zoom-FFT
