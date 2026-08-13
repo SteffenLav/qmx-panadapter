@@ -1,83 +1,79 @@
 # Replies to send — 2026-08-13
 
-Everything from this session's reports, in one place. Each section is ready to
-paste. Nothing has been pushed or posted.
+Everything from this session's reports, ready to paste. Nothing pushed or posted.
 
 **Status key:** ✅ fixed and verified · 🔧 fixed, needs a field check ·
-❓ needs information from the user · 💭 no action yet
+❓ needs information · 💭 no action yet
 
 ---
 
-## 1. Stan KC7XE — dual-VFO display ✅ (documented, no code change)
+## 1. Stan KC7XE — dual-VFO display ✅
 
-> Stan, thank you — that settles it, and it matches what I was seeing from the
-> other side. My read-back said split was off and VFO B equalled VFO A, and the
-> LCD kept showing both anyway. Knowing nothing repaints the second row explains
-> exactly that, and the older thread you linked confirms it is not new.
+> Stan, thank you. That settles it.
 >
-> I have decided against a workaround in the panadapter, and I want to say why in
-> case you disagree. A brief CW-mode switch only clears the row if CW decode is
-> enabled, which I cannot know from my side. And I tried a mode bounce once before
-> for a different problem — forcing the SSB filter to reload — and it worked but
-> flickered the mode indicator on every change, so I took it out. Trading a
-> cosmetic radio artifact for a visible mode flicker on every stand-down does not
-> feel like a good deal.
+> **What I saw from my side:** Read-back said split off and VFO B equal to VFO A.
+> The LCD showed both anyway. A second row that never repaints explains that
+> exactly.
 >
-> Instead the manual now says plainly that a second frequency left on the LCD is a
-> display artifact, that VFO B equals VFO A and split is off, and that both are
-> confirmed by read-back. It also warns people off `MU;` — it clears the display
-> but silently drops I/Q mode, and the spectrum goes flat while the radio carries
-> on streaming audio as if nothing happened. That one cost me an evening.
+> **No workaround in the panadapter:** A brief CW-mode switch only clears the row
+> when CW decode is enabled. I cannot know that from my side. I also tried a mode
+> bounce once before to force the SSB filter to reload. It worked, but it flickered
+> the mode indicator on every change, so I removed it. A cosmetic radio artifact is
+> the better of the two.
 >
-> If Hans ever repaints that row on a CAT-driven VFO change, I will happily delete
-> the note.
+> **What I did instead:** The manual now states that a second frequency on the LCD
+> is a display artifact, that VFO B equals VFO A, and that split is off. Both are
+> confirmed by read-back.
+>
+> **A warning about `MU;`:** It clears the display and silently drops I/Q mode. The
+> spectrum goes flat while the radio keeps streaming audio. The manual says so now.
+>
+> If Hans ever repaints that row on a CAT-driven VFO change, I will delete the note.
 
 ---
 
-## 2. Don WB0LQW — two separate things
+## 2. Don WB0LQW — two items
 
-### 2a. The clock: GPS-less QMX overwriting good UTC ✅ FIXED and verified
+### 2a. Clock: GPS-less QMX overwriting good UTC ✅
 
-> Don, you were not missing anything — this was a real bug and you described the
-> mechanism correctly. Fixed.
+> Don, you were not missing anything. Real bug, and you described the mechanism
+> correctly. Fixed.
 >
-> What was happening: the panadapter only ever protected the clock from the radio
-> when SNTP was fresh. Offline SNTP is never fresh, so the protection could not
-> possibly help the one case it mattered for — yours. On the first poll after you
-> switched the radio on, the QMX's 00:00 replaced your accurate RTC time.
+> **What was wrong:** The panadapter only protected the clock while SNTP was fresh.
+> Offline SNTP is never fresh. So the protection could not help the one case that
+> needed it. On the first poll after you switched the radio on, its 00:00 replaced
+> your RTC time.
 >
-> A QMX without GPS is now treated as what it is: not a time reference. Its RTC
-> free-runs and restarts at 00:00 after any power-off, while the Tab5's supercap
-> RTC holds seconds-accurate UTC for 30–40 hours. So the radio is refused whenever
-> the Tab5 holds a clock it trusts, and the Tab5 pushes its time **to** the radio
-> instead — which is what you suggested. It only pushes when the radio is more than
-> 3 seconds out, so it is not chattering over CAT every five minutes.
+> **What it does now:** A QMX without GPS is not treated as a time reference. Its
+> RTC free-runs and restarts at 00:00 after a power-off. The Tab5's supercap RTC
+> holds seconds-accurate UTC for 30–40 hours. So the radio is refused while the
+> Tab5 holds a clock it trusts, and the Tab5 sets the radio instead. That is what
+> you suggested. It only writes when the radio is more than 3 seconds out.
 >
-> I reproduced your exact situation on the bench and this is the log from the fix:
+> **Bench proof:** I reproduced your situation exactly.
 >
 > ```
 > QMX TM; 00:00:08 ignored - radio has no GPS and our clock is trusted (SNTP, 27992 s apart)
 > Tab5->QMX time push: 07:46:40 UTC
 > ```
 >
-> Radio at its power-on 00:00, Tab5 clock good, 7.8 hours apart. Before the fix
-> that 00:00 was applied. Now it is refused and the radio gets set.
+> Radio at power-on 00:00. Tab5 clock good. 7.8 hours apart. Before the fix that
+> 00:00 was applied.
 >
-> The manual's offline section now has the missing step you pointed out — step 4
-> says to turn the QMX on whenever you like and that you do not have to do
-> anything about its clock, with a note explaining what changed. It also says what
-> happens if you have no good time at all: then a QMX reading *is* used, because
-> something beats nothing, and failing that you can set the clock by hand under
-> FT8 → Filter → Sync Time, which takes seconds as well as hours and minutes.
-
-### 2b. The CQ presets ❓ I need one diagnostic log
-
-> On the CQ messages — thank you for that test, the dummy load and the second
-> receiver is exactly the setup that makes this findable.
+> **Manual:** Step 4 of the offline section now says to turn the QMX on whenever you
+> like and that its clock needs nothing from you.
 >
-> I have run your three presets through the message encoder on the bench, and
-> **all of them encode correctly**, including `CQ POTA WB0LQW` with and without
-> your grid:
+> **If you have no good time at all:** A QMX reading is used, because something
+> beats nothing. Failing that, set it by hand under FT8 → Filter → Sync Time, which
+> takes seconds as well as hours and minutes.
+
+### 2b. CQ presets ❓
+
+> **Your test setup:** The dummy load and a second receiver is what makes this
+> findable. Thank you.
+>
+> **The encoder is not the problem.** I ran your three presets through it on the
+> bench. All five variants encode and round-trip byte-for-byte.
 >
 > ```
 > CQ WB0LQW DN70        -> 'CQ WB0LQW DN70'
@@ -87,261 +83,209 @@ paste. Nothing has been pushed or posted.
 > CQ QRP WB0LQW DN70    -> 'CQ QRP WB0LQW DN70'
 > ```
 >
-> Each one round-trips back byte-for-byte, so the message format is not the
-> problem and `CQ POTA` / `CQ QRP` are perfectly legal. The preset field is also
-> wide enough that none of them are being truncated.
+> `CQ POTA` and `CQ QRP` are legal. The preset field is wide enough that none of
+> them truncate.
 >
-> I did find and fix one real bug from your report: **the Operator Identity window
-> was appearing for any message that would not build**, whatever the reason. Your
-> callsign and grid were fine — the panadapter just pointed you at them because
-> its error handling was lazy. That is why you went looking in the wrong place. It
-> now tells you what actually went wrong.
+> **One real bug found and fixed:** The Operator Identity window appeared for any
+> message that would not build, whatever the reason. Your callsign and grid were
+> fine. The panadapter pointed you at them because its error handling was lazy. It
+> now reports the actual error.
 >
-> But I have not found the cause of your main symptom, and I would rather say so
-> than guess. After the message is built, every preset takes an identical path to
-> the air — same tones, same timing, same CAT commands — so there is nothing left
-> in my code that would modulate one correctly and another not at all.
+> **What I have not found:** The cause of your main symptom. After the message is
+> built, every preset takes the same path to the air. Same tones, same timing, same
+> CAT commands. Nothing in my code would modulate one correctly and another not at
+> all.
 >
-> Could you reproduce it once more and send me a diagnostic log? Set up as you did
-> before, select Msg 2, transmit, then on the Tab5: **Files → "Diagnostic
-> download ↓"** and send me the file. There is a line in it that reads
-> `built text CQ: '...'` which tells me immediately whether the fault is before or
-> after the message is built, and that decides where I look next.
+> **What I need:** One diagnostic log. Set up as before, select Msg 2, transmit,
+> then **Files → "Diagnostic download ↓"** and send me the file. It contains a line
+> reading `built text CQ: '...'`. That tells me whether the fault is before or
+> after the message is built, and decides where I look next.
 
 ---
 
-## 3. Roy KI0ER — same CQ question ❓
+## 3. Roy KI0ER — two items
 
-> Roy, thank you for confirming Don's symptom — two reports of the same thing is
-> much more useful than one.
->
-> Short version of what I have found so far: the message encoding is fine. I ran
-> `CQ POTA <call>` and `CQ QRP <call>` through the encoder with and without a grid
-> and all of them encode and decode correctly, so the preset format is not the
-> problem. I also fixed a bad error message that was blaming the operator's
-> callsign whenever a message would not build, which is what sent Don looking in
-> the wrong place.
->
-> I have not found the real cause yet. Could you send me a diagnostic log of it
-> happening — **Files → "Diagnostic download ↓"** after reproducing it? Having
-> yours as well as Don's tells me whether this is something about a particular
-> unit or something in the code, which is the first thing I need to know.
+### 3a. CQ presets ❓
 
-### 3b. Roy on RIT — thank you, and one request built ✅
+> **Two reports beat one.** Thank you for confirming Don's symptom.
+>
+> **Where it stands:** The encoding is fine. `CQ POTA <call>` and `CQ QRP <call>`
+> encode and decode correctly with and without a grid. I also fixed an error
+> message that blamed the operator's callsign whenever a message would not build,
+> which is what sent Don looking in the wrong place.
+>
+> **Not found yet.** Could you send a diagnostic log of it happening?
+> **Files → "Diagnostic download ↓"** after reproducing it. Yours alongside Don's
+> tells me whether this is one unit or the code. That is the first thing I need.
 
-> Roy, thank you for the RIT explanation — that is a better answer than the one I
-> was about to give. I had been about to tell Samuel that RIT is useful in FT8 as
-> well, and you are right that it is not; the reason it is not shown there is
-> precisely that there is nothing for it to do. Good to have that stated by someone
-> who has actually used it in anger, and in more modes than I have.
+### 3b. RIT ✅
+
+> **Your explanation is better than mine was.** I had been about to tell Samuel that
+> RIT is useful in FT8. It is not. The reason it is hidden there is that it has
+> nothing to do.
 >
-> Your round-robin case is one I had not thought about at all, and the request that
-> comes with it is a good one: **turn RIT off and back on again at the same offset,
-> with a long press.** That is how RIT works on a rig with a dedicated button —
-> clearing the offset and switching it off are two different actions, and the
-> panadapter only really offered the first. That is now built.
+> **Your request is built:** Long press parks the offset and switches RIT off. Long
+> press again restores it unchanged. Short press still clears it outright. Tested
+> here. Parks and restores cleanly.
 >
-> Long press parks the offset and stands RIT down; long press again puts it back
-> unchanged — tested on the radio here, parks and restores cleanly. Short press is
-> as it was. While an offset is parked the button reads
-> `RIT (+200)` in brackets and in the dim colour — the radio really is back on
-> frequency so it must not look engaged, but a plain `RIT` would give you nothing
-> to say there was something to bring back.
+> **While parked:** The button reads `RIT (+200)` in brackets and in the dim colour.
+> The radio is back on frequency so it must not look engaged. A plain `RIT` would
+> leave nothing to say there was an offset waiting.
 >
-> One decision I made that you may want to argue with: the parked offset is
-> discarded when you retune. It belongs to the station that was off frequency, and
-> restoring it after a band change or a spot click would put your receiver
-> somewhere you never asked for, from a number you could no longer see. If you
-> would rather it survived a retune, say so — it is a one-line change.
+> **One decision you may want to argue with:** The parked offset is discarded when
+> you retune. It belongs to the station that was off frequency. Restoring it after a
+> band change would move your receiver from a number you can no longer see. Say the
+> word and it survives retuning instead. One line.
 >
-> On XIT: agreed, and that is why the panadapter's version of it is deliberately
-> CW-only. It does the same job by holding VFO B at an offset and running split,
-> since the QMX has no XIT of its own, and it stands itself down the moment you
-> leave CW. An offset transmit in SSB or a digital mode is a mistake rather than a
-> courtesy.
+> **On XIT:** Agreed, and that is why the panadapter's version is CW-only. It holds
+> VFO B at an offset and runs split, since the QMX has no XIT. It stands down the
+> moment you leave CW.
 
 ---
 
-## 4. Samuel W7STF — two of four built 🔧, two need your view 💭
+## 4. Samuel W7STF — two built 🔧, two need your view 💭
 
-> Samuel, taking your points in order.
+> **How many users:** No real number. Downloads are not people, and anyone getting
+> on fine never writes. The list I actually hear from is fifteen or twenty, and that
+> is what shapes the releases.
 >
-> **How many users:** I do not have a real number. Downloads are not people, and
-> most people who are getting on fine never write. The list I actually hear from
-> is maybe fifteen or twenty, and honestly that is what shapes the releases — your
-> reports, Roy's, Don's, Michael's, Dirk's. So the thanks does go both ways.
+> **The mouse:** Unchanged in v1.8.1. I found the main fault, which is the report
+> descriptor being read short so the layout parses wrongly. My fix broke the
+> connection sequence, so I took it out rather than ship it. When the rewrite is
+> ready I will ask you for a diagnostic log first. Your symptom does not match that
+> fault, so I think there is a second one on your mouse.
 >
-> **The mouse:** unchanged in v1.8.1, and I will redo it properly. I found the
-> main fault — the mouse's report descriptor was being read short, so the layout
-> was parsed wrongly — but my fix broke the connection sequence and I took it out
-> rather than ship it. When I have the rewrite I will ask you for a diagnostic log
-> first, because your symptom does not match that fault and I think there is a
-> second one on your mouse specifically.
+> **The hour-long USB disconnect:** Please raise things like that sooner. I tried
+> six approaches from the Tab5 end. None helped. Once the radio stops answering,
+> only a QMX power cycle clears it. That one is with QRP Labs.
 >
-> **The hour-long USB disconnect:** please do bring things like that up sooner. I
-> chased it from the Tab5 end with six different approaches and none of them
-> helped — once the radio stops answering, only a power cycle of the QMX clears
-> it. That one is with QRP Labs now.
+> **RIT outside CW:** Roy answered this better than I would have. It is not a
+> CW-only control. The panadapter behaves as he described: the button is hidden in
+> FT8 and FT4, because there it has nothing to do. If you do not want it in CW and
+> SSB either, the drawer switch in v1.8.1 gives you the corner back. An engaged
+> offset still shows itself regardless.
 >
-> **RIT in modes other than CW:** Roy has answered this better than I could, and
-> I would go with his explanation over mine — it is not a CW-only control, it is
-> for compensating another station being off frequency, in whatever mode. I will
-> add only that the panadapter behaves the way he described: the RIT button is
-> hidden in FT8/FT4, because there it has nothing useful to do. If you do not want
-> it in CW and SSB either, the drawer switch in v1.8.1 gives you the corner back —
-> and an engaged offset still shows itself regardless, so RIT can never be on
-> without something on screen saying so.
+> **Offsets on the spectrum: done.** With RIT engaged the offset prints in magenta
+> beside its own marker over the waterfall, as `+250 Hz`. The marker says where you
+> are listening. The number says how far. They belong together.
 >
-> **Showing the offsets on the spectrum or waterfall: done.** With RIT engaged the
-> offset now prints in magenta beside its own marker over the waterfall — `+250 Hz`
-> next to the line that shows where you are actually listening. That is a better
-> home for it than the corner, as you said: the marker already says *where*, so the
-> number saying *how far* belongs next to it.
+> **Band strip out of band: done, and you were right.** It no longer vanishes. It
+> fills with one flat block reading "Out of band" and returns to the CW/Digi/Phone
+> colours as soon as you are back in a band. The marker and the window frame stay
+> hidden while you are out, because there is no band to position them against. The
+> strip staying put also keeps the coarse-tune drag where your thumb expects it.
 >
-> **The band strip when out of band: done, and you were right.** It no longer
-> vanishes. It fills with one flat block reading "Out of band", and goes back to
-> the CW/Digi/Phone colours the moment you are inside a band again. The marker and
-> the little window frame stay hidden while you are out — there is no band for them
-> to be positioned against, and drawing them anyway would be inventing a scale.
-> The strip staying put also keeps the coarse-tune drag where your thumb expects
-> it, which I think was half your point.
+> **Arrow buttons: I want to build these but I need to know where.** Your sizing is
+> right. A quarter of the visible span per press, half for a double arrow, makes the
+> step mean the same thing at every zoom. A fixed step in hertz never does.
 >
-> **Arrow buttons scaled by zoom: I want to build this but I do not know where to
-> put them.** Your sizing is right — a quarter of the visible span per press and a
-> half for a double arrow makes the step mean the same thing to the eye at every
-> zoom, which a fixed step in hertz never does. The problem is space. The top bar
-> is genuinely full: Band, Mode, BW, then the frequency, then the S-meter, then
-> Zoom, and the only gap is about 70 pixels. I am also reluctant to redesign that
-> bar because the same one serves the panadapter, FT8 and the CW page.
+> The problem is space. The top bar holds Band, Mode, BW, the frequency, the
+> S-meter and Zoom, and the only gap left is about 70 pixels. I am also reluctant to
+> redesign that bar, because the same one serves the panadapter, FT8 and the CW
+> page.
 >
-> So: would arrows somewhere other than beside the frequency still solve your
-> problem? Your actual complaint was having to click the far left and right of the
-> spectrum to step the VFO, and buttons anywhere reachable would fix that. Options
-> I can see are a small cluster at one end of the frequency-axis row under the
-> spectrum, or on the band-plan strip at the bottom next to where your thumb
-> already goes. Tell me which you would actually use and I will build it there.
+> Your actual complaint was having to click the far edges of the spectrum to step
+> the VFO. Buttons anywhere reachable fix that. Two places I can see: a small
+> cluster at one end of the frequency-axis row under the spectrum, or on the
+> band-plan strip where your thumb already goes. Which would you use?
 >
-> **A VFO A/B button: I need to push back on this one, at least for now.** The
-> panadapter already uses split for the CW transmit offset — it holds VFO B at your
-> offset and re-asserts it every 30 seconds, and stands it down when you leave CW.
-> A VFO A/B control would be a second thing steering the same two VFOs, and the
-> first symptom would be the two fighting each other mid-QSO.
+> **VFO A/B: I want to push back for now.** The panadapter already uses split for
+> the CW transmit offset. It holds VFO B at your offset and re-asserts it every 30
+> seconds. A VFO A/B control would be a second thing steering the same two VFOs. The
+> first symptom would be the two fighting mid-QSO.
 >
-> It would also land straight on top of the QMX display bug in this same thread:
-> the radio's LCD does not repaint the second row when the VFO mode changes over
-> CAT, so a working A/B button would frequently *look* broken through no fault of
-> its own.
+> It would also land on the QMX display bug from this same thread. The LCD does not
+> repaint the second row on a CAT-driven VFO change, so a correctly working button
+> would often look broken.
 >
-> If what you want is mostly to *see* which VFO is active, that I can do safely as
-> an indicator. A control that switches them needs the split interaction thought
-> through first, and I would rather do that properly than ship something that
-> misbehaves while you are transmitting. What would you actually use it for?
+> **What I can do safely:** An indicator showing which VFO is active. A control that
+> switches them needs the split interaction worked out first. What would you use it
+> for?
 >
-> **Top-bar labels and matching the browser:** agreed, and that is the direction
-> I am going. The same bar has to serve the panadapter, FT8 and the CW page, so it
-> changes slowly.
+> **Top-bar labels and matching the browser:** Agreed, and that is the direction. The
+> same bar serves three screens, so it changes slowly.
 
-### 4b. Samuel's follow-up on RIT in a net 🔧
+### 4b. Samuel on RIT in a net 🔧
 
-> Samuel, one correction and then you are right anyway.
+> **One correction, then you are right anyway.**
 >
-> RIT cannot put anyone else off frequency. It shifts only what *you* hear — your
-> transmit does not move at all. So in a three-way or a net, the risk is not that
-> you drift away from the group; it is that while you are compensating for the one
-> station who is off, everybody else in the net now sounds off-pitch to *you*.
+> **RIT cannot put anyone else off frequency.** It shifts only what you hear. Your
+> transmit does not move. In a net the risk is the reverse: while you compensate for
+> the one station who is off, everybody else sounds off-pitch to you.
 >
-> Which is exactly the argument for a quick off, so your conclusion is right even
-> though the mechanism is the other way round. And it is now built, from Roy's
-> request: **long-press the RIT button and the offset is parked and switched off;
-> long-press again and it comes back unchanged.** Short press still clears it
-> outright. So in your net you can drop the offset when the turn passes back to the
-> stations who are on frequency, and pick it up again when it is that one operator's
-> turn, without re-dialling anything.
+> **So your conclusion holds.** That is the argument for a quick off, and it is now
+> built from Roy's request. Long press parks the offset and switches RIT off. Long
+> press again restores it. You can drop the offset when the turn passes back to the
+> stations on frequency and pick it up again without re-dialling.
 >
-> Your other worry — nudging it by accident and forgetting — is the one I care about
-> most, and the panadapter is built so it cannot happen quietly. **An engaged RIT
-> always shows itself**, even if you have switched the button off in the settings; a
-> radio listening 250 Hz away with nothing on screen saying so is a bug, not a tidy
-> screen. As of your message that now covers a *parked* offset too: it shows as
-> `RIT (+250)` in brackets, so "there is an offset waiting to come back" is never
-> invisible either. Thank you for that — you found it by thinking out loud.
+> **Nudging it by accident:** This is the one I care about most. An engaged RIT
+> always shows itself, even with the button switched off in settings. A radio
+> listening 250 Hz away with nothing on screen saying so is a bug, not a tidy
+> screen. Your message made me extend that to a parked offset, which now shows as
+> `RIT (+250)`.
 >
-> On the transmit side you are right that it is a different matter, because that one
-> genuinely does move you relative to everyone else. The QMX has no XIT, so the
-> panadapter's CW transmit offset does the job with split — and it stands itself
-> down the moment you leave CW, precisely so it cannot leave you transmitting off
+> **The transmit side is different**, and there you are right that it moves you
+> relative to everyone else. The QMX has no XIT, so the panadapter uses split, and
+> it stands down the moment you leave CW. It cannot leave you transmitting off
 > frequency in SSB or AM.
 
 ---
 
-## 5. For the beta testers generally 🔧 — new: spur suppression (off by default)
+## 5. Beta testers — spur suppression, off by default 🔧
 
-> There is something new on the next build that some of you may find interesting,
-> and it needs testing by people other than me.
+> **Something new, and it needs testing by people other than me.**
 >
-> If you have ever seen evenly-spaced signals on the waterfall that are always
-> there, do not move when you tune, and are still there with the antenna
-> disconnected — those are not signals. They come from the radio's own frequency
-> synthesizer, and how strong they are depends on exactly where you are tuned. On
-> my unit at 14.074 — the FT8 calling frequency, of all places — the strongest one
-> sits nearly 40 dB above the noise floor, and the noise floor itself is a few dB
+> **The symptom:** Evenly-spaced signals on the waterfall that are always there, do
+> not move when you tune, and remain with the antenna disconnected. Those are not
+> signals. They come from the radio's own synthesizer, and their strength depends on
+> where you are tuned. On my unit at 14.074, which is the FT8 calling frequency, the
+> strongest sits nearly 40 dB above the noise floor. The floor itself is a few dB
 > worse there.
 >
-> The panadapter can now find and remove them. It works by nudging the dial 25 Hz
-> for about two seconds: a real signal stays where it is, while one of these
-> artifacts jumps a long way, because they move sixteen to fifty times faster than
-> the dial does. Whatever it finds is remembered per frequency, so coming back to
-> a frequency you have used costs nothing.
+> **How it finds them:** It nudges the dial 25 Hz for about two seconds. A real
+> signal stays put. These artifacts jump a long way, because they move sixteen to
+> fifty times faster than the dial. Results are remembered per frequency, so
+> returning to a frequency you have used costs nothing.
 >
-> It is **off by default** and I would like it to stay opt-in until a few of you
-> have lived with it. **Settings → Waterfall → Spur suppression:**
+> **It is off by default** and I want it opt-in until some of you have lived with it.
+> **Settings → Waterfall → Spur suppression:**
 >
-> - **Off** — exactly as before, nothing is touched.
-> - **Subtract spur power** — takes away the measured artifact. It cannot hide a
->   real signal, but the artifact stays faintly visible.
-> - **Erase spur bins** — the artifact disappears completely. The cost is that a
->   real signal sitting exactly on one is hidden while you sit still. Nudging the
->   dial moves the blind spot right off it, because these things shift so much
->   faster than the dial.
+> - **Off** — nothing is touched.
+> - **Subtract spur power** — removes the measured artifact. It cannot hide a real
+>   signal. The artifact stays faintly visible.
+> - **Erase spur bins** — the artifact disappears. A real signal sitting exactly on
+>   one is hidden while you sit still. Nudging the dial moves the blind spot off it.
 >
-> Whichever you choose, the line just under the frequency labels turns teal wherever
-> something is being removed, so you can always see what the firmware is touching
-> rather than having to trust it.
+> **What is being touched:** The line under the frequency labels turns teal wherever
+> something is removed. You can always see it rather than having to trust it.
 >
-> What I would like to know: does it find your spurs, does the two-second nudge
-> bother you in normal operating, and does Erase ever hide something you wanted?
+> **What I want to know:** Does it find your spurs? Does the two-second nudge bother
+> you in normal operating? Does Erase ever hide something you wanted?
 
 ---
 
 ## Notes for me (not for sending)
 
 - Commits: `992fd54` spur suppression · `c7fd65b` harness + marker ·
-  `72d58c0` CQ error reporting + encode harness · `8a4f3f4` QMX time priority.
-  **Nothing pushed.**
-- The mkdocs note for Stan's item is in `docs/mkdocs/guide/settings.md`. It reaches
-  the website and the on-device manual on the next docs build; `manual.bin` is not
-  regenerated until then.
-- Don's manual gap: **done**. `docs/mkdocs/guide/time-sync.md`, which the PDF
-  builder injects (line 102 of `build_userguide_pdf.ps1`) as well as the website
-  and the on-device manual — one edit, all three trees. `check_docs.py` clean.
-- Samuel: **RIT-offset readout and the out-of-band band strip are built and
-  screen-verified** (`/ss.bmp`: strip uniform 49,56,66 with "Out of band" centred;
-  label "+250 Hz" at x≈653 beside the marker at x≈647). **Arrow buttons and VFO
-  A/B are not built** — both need his answer first. Arrows have nowhere to live in
-  a full top bar the operator has said he is keeping; VFO A/B would fight
-  `cw_split_maintain()` and would inherit the QMX's own LCD repaint bug.
-- Samuel's follow-up exposed a gap in the long-press: with the pill hidden, an
-  offset engaged from the browser and then parked, `rit_now` returns to 0 and the
-  pill hid itself again - leaving the parked offset invisible AND unreachable,
-  since restoring it needs the pill to be there. A parked offset now keeps the
-  pill visible, same rule as an engaged one.
-- Roy's RIT long-press: **built and hardware-verified** by the operator 2026-08-13
-  ("parks and restores fine"). I could not test it myself - engaging RIT over the
-  API is possible, performing a touch hold is not. Still untested by anyone: the
-  parked-offset-keeps-the-pill-visible case added after Samuel's message, which
-  needs the pill switched OFF in settings first.
-- I nearly told Samuel that RIT is useful in FT8. It is not, our own code says so
-  in a comment, and Roy would have corrected me in public. Check the code before
+  `72d58c0` CQ error reporting + encode harness · `8a4f3f4` QMX time priority ·
+  `12be1a2` RIT long-press + offline manual · `0c8a36e` OOB strip + RIT readout ·
+  `ac18351` replug gate · `e23ac80` parked-RIT visibility. **Nothing pushed.**
+- Stan's note is in `docs/mkdocs/guide/settings.md`. It reaches the website and the
+  on-device manual on the next docs build. `manual.bin` is not regenerated until then.
+- Don's manual gap is in `docs/mkdocs/guide/time-sync.md`, which the PDF builder
+  injects (line 102 of `build_userguide_pdf.ps1`). One edit covers all three trees.
+  `check_docs.py` clean.
+- Samuel: RIT readout and OOB strip are screen-verified via `/ss.bmp` (strip uniform
+  49,56,66 with "Out of band" centred; label "+250 Hz" at x≈653 beside the marker at
+  x≈647). Arrow buttons and VFO A/B need his answer first.
+- RIT long-press: hardware-verified by the operator. Still untested by anyone: the
+  parked-offset-keeps-the-pill-visible case, which needs the pill switched OFF in
+  settings first.
+- I nearly told Samuel that RIT is useful in FT8. Our own code says otherwise in a
+  comment, and Roy would have corrected me in public. Check the code before
   explaining behaviour to operators who use it daily.
-- Still open from earlier: SDIO recoveries clustering (1–2/boot where they should
-  be 0) — needs a feed-by-feed A/B soak, not a guess.
+- The replug gate has NOT been exercised. It only fires when the radio wedges. The
+  tell will be `RADIO-side wedge, not a stuck port. Not replugging` with the radio
+  staying on.
+- Still open: SDIO recoveries clustering (1–2/boot where they should be 0). Needs a
+  feed-by-feed A/B soak, not a guess.
