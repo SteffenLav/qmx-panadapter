@@ -16,6 +16,15 @@
 static const char *TAG = "time_sync";
 
 // UTC epoch bounds for sanity checks
+// Bench switch for the OFFLINE (POTA) time path - see time_sync_notify_qmx().
+// Ships as 0. Set to 1 to exercise the no-WiFi branch on a bench that has WiFi;
+// actually disabling WiFi persists to NVS and strands the device offline with no
+// way back except the Tab5's own drawer. Used to verify the fix for Don WB0LQW's
+// lost-UTC report 2026-08-13.
+#ifndef TIMESYNC_FORCE_OFFLINE_TEST
+#define TIMESYNC_FORCE_OFFLINE_TEST 0
+#endif
+
 #define EPOCH_SANE_MIN  1700000000LL  // 2023-11-14
 #define EPOCH_SANE_MAX  2208988800LL  // 2040-01-01 — anything beyond is garbage
 
@@ -104,6 +113,41 @@ static bool epoch_is_sane(int64_t t)
 {
     return t > EPOCH_SANE_MIN && t < EPOCH_SANE_MAX;
 }
+
+// Do we already hold a clock worth defending against a GPS-less QMX? Anything
+// but "nothing" and "the QMX told us" counts: the Tab5 RTC, SNTP, an FT8-derived
+// correction and a manual set are all better references than a radio RTC that
+// restarts at 00:00. Deliberately requires the system clock to be sane too, so a
+// stale s_source cannot veto a genuinely useful QMX reading.
+static bool clock_is_trusted(void)
+{
+    if (!epoch_is_sane((int64_t)time(NULL))) return false;
+    switch (s_source) {
+    case TIME_SOURCE_RTC:
+    case TIME_SOURCE_SNTP:
+    case TIME_SOURCE_MANUAL:
+    case TIME_SOURCE_FT8:
+        return true;
+    default:
+        return false;   // NONE, or the QMX itself
+    }
+}
+
+static const char *trusted_source_name(void)
+{
+    switch (s_source) {
+    case TIME_SOURCE_RTC:    return "Tab5 RTC";
+    case TIME_SOURCE_SNTP:   return "SNTP";
+    case TIME_SOURCE_MANUAL: return "manual";
+    case TIME_SOURCE_FT8:    return "FT8";
+    case TIME_SOURCE_QMX:    return "QMX";
+    default:                 return "none";
+    }
+}
+
+// Only correct the radio when it is meaningfully wrong. Its RTC has 1 s
+// resolution over CAT, so a couple of seconds of disagreement is just rounding.
+#define QMX_PUSH_THRESHOLD_SEC 3
 
 // Push UTC time-of-day to the QMX's onboard RTC so it stays in sync for
 // no-WiFi (POTA) sessions. Skipped when the QMX has GPS discipline (it has
@@ -240,6 +284,13 @@ bool time_sync_notify_qmx(int h, int m, int s)
 
     int64_t now_ms    = esp_timer_get_time() / 1000;
     bool wifi_sntp_ok = wifi_is_connected() && wifi_time_is_valid();
+#if TIMESYNC_FORCE_OFFLINE_TEST
+    // TEMP: pretend we are offline so the POTA path can be exercised on a bench
+    // that has WiFi. Disabling WiFi for real would persist to NVS and strand the
+    // device offline with no way back except the Tab5's own drawer.
+    wifi_sntp_ok = false;
+    s_last_sntp_sync_ms = 0;
+#endif
     bool sntp_fresh   = wifi_sntp_ok ||
                         (s_last_sntp_sync_ms > 0 &&
                          (now_ms - s_last_sntp_sync_ms) < SNTP_FRESH_MS);
@@ -250,6 +301,38 @@ bool time_sync_notify_qmx(int h, int m, int s)
                  h, m, s, (int)wifi_sntp_ok);
         return false;
     }
+
+    // A QMX WITHOUT GPS is not a time reference. Its RTC free-runs and comes up
+    // at 00:00 after any power-off, so offline it must never overwrite a clock we
+    // already trust. The Tab5's supercap RTC, set from SNTP before leaving home,
+    // holds seconds-accurate UTC for 30-40 h - that is the entire basis of the
+    // offline POTA workflow in the manual.
+    //
+    // Don WB0LQW lost his accurate UTC to exactly this: RTC good, turn the radio
+    // on in the field, and the first poll pulled the clock back to the QMX's
+    // 00:00. Offline SNTP is NEVER fresh, so the guard above cannot help him -
+    // it only ever protected the WiFi case.
+    //
+    // The right direction is the opposite one, which is what he asked for: push
+    // OUR time to the radio. Only done when the radio is actually wrong, so a
+    // healthy pair does not trade CAT writes every five minutes.
+    if (!s_qmx_gps_confirmed && clock_is_trusted()) {
+        time_t  now_utc = time(NULL);
+        struct tm tm_now;
+        gmtime_r(&now_utc, &tm_now);
+        int ours   = tm_now.tm_hour * 3600 + tm_now.tm_min * 60 + tm_now.tm_sec;
+        int theirs = h * 3600 + m * 60 + s;
+        int off    = ours - theirs;
+        if (off < 0) off = -off;
+        if (off > 43200) off = 86400 - off;   // wrap at midnight
+
+        ESP_LOGI(TAG, "QMX TM; %02d:%02d:%02d ignored - radio has no GPS and our "
+                      "clock is trusted (%s, %d s apart)",
+                 h, m, s, trusted_source_name(), off);
+        if (off > QMX_PUSH_THRESHOLD_SEC) push_to_qmx(now_utc);
+        return false;
+    }
+
     apply_and_persist(utc, "QMX");
     s_source = TIME_SOURCE_QMX;
     return true;
