@@ -127,7 +127,7 @@ paste. Nothing has been pushed or posted.
 > yours as well as Don's tells me whether this is something about a particular
 > unit or something in the code, which is the first thing I need to know.
 
-### 3b. Roy on RIT — thank you, and one request built 🔧
+### 3b. Roy on RIT — thank you, and one request built ✅
 
 > Roy, thank you for the RIT explanation — that is a better answer than the one I
 > was about to give. I had been about to tell Samuel that RIT is useful in FT8 as
@@ -142,7 +142,8 @@ paste. Nothing has been pushed or posted.
 > panadapter only really offered the first. That is now built.
 >
 > Long press parks the offset and stands RIT down; long press again puts it back
-> unchanged. Short press is as it was. While an offset is parked the button reads
+> unchanged — tested on the radio here, parks and restores cleanly. Short press is
+> as it was. While an offset is parked the button reads
 > `RIT (+200)` in brackets and in the dim colour — the radio really is back on
 > frequency so it must not look engaged, but a plain `RIT` would give you nothing
 > to say there was something to bring back.
@@ -334,11 +335,11 @@ paste. Nothing has been pushed or posted.
   pill hid itself again - leaving the parked offset invisible AND unreachable,
   since restoring it needs the pill to be there. A parked offset now keeps the
   pill visible, same rule as an engaged one.
-- Roy's RIT long-press: **built, gesture UNVERIFIED.** I can engage RIT over the
-  API but cannot perform a touch hold, so the hold itself needs a finger. Test:
-  engage RIT, long-press the pill (offset clears, label reads `RIT (+200)`),
-  long-press again (offset returns), then retune (label back to plain `RIT`,
-  nothing parked). RIT is currently set to +200 on the bench unit ready for it.
+- Roy's RIT long-press: **built and hardware-verified** by the operator 2026-08-13
+  ("parks and restores fine"). I could not test it myself - engaging RIT over the
+  API is possible, performing a touch hold is not. Still untested by anyone: the
+  parked-offset-keeps-the-pill-visible case added after Samuel's message, which
+  needs the pill switched OFF in settings first.
 - I nearly told Samuel that RIT is useful in FT8. It is not, our own code says so
   in a comment, and Roy would have corrected me in public. Check the code before
   explaining behaviour to operators who use it daily.
