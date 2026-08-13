@@ -166,6 +166,36 @@ static void usb_stale_detect_task(void *arg)
             } else if (++zombie_checks >= 3 &&
                        now - last_replug_us > 60000000LL) {
                 zombie_checks = 0;
+
+                // Is this actually a stuck PORT, or is it the RADIO refusing to
+                // enumerate? Rising enum failures say the latter - #74, the
+                // QMX-side descriptor wedge - and a replug against that is proven
+                // useless: six approaches were falsified on hardware against a
+                // really-wedged radio, this exact VBUS cut among them, and every
+                // one got back the same empty data stage.
+                //
+                // Firing it anyway cuts VBUS for 2 s and visibly power-cycles the
+                // operator's radio for no benefit. That happened on 2026-08-13 -
+                // "it hooked the qmx off" - and it is the only thing this branch
+                // achieved. num_devices is NON-zero after a failed enumeration,
+                // which is why the wedge reaches a branch written for a zombie.
+                //
+                // So: leave the radio alone and say what is actually wrong. The
+                // operator has to power-cycle the QMX either way, and the screen
+                // already tells them so whenever CAT is down.
+                if (fails > baseline) {
+                    if (now - last_toast_us > (int64_t)DET_RETOAST_MS * 1000) {
+                        ESP_LOGW(TAG, "USB device present but enumeration keeps failing "
+                                      "(%lu since boot) - RADIO-side wedge, not a stuck "
+                                      "port. Not replugging: it does not help and it "
+                                      "power-cycles the radio. Power-cycle the QMX.",
+                                 (unsigned long)fails);
+                        last_toast_us = now;
+                    }
+                    prev_devices = info.num_devices;
+                    continue;
+                }
+
                 if (replug_attempts < 3) {
                     replug_attempts++;
                     ESP_LOGW(TAG, "USB device present but never opened for %d s - "
