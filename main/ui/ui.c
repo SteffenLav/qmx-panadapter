@@ -1615,6 +1615,30 @@ static uint32_t  s_bp_drag_band_lo     = 0;
 static uint32_t  s_bp_drag_band_hi     = 0;
 static int64_t   s_bp_drag_target_hz   = 0;
 #define BP_DRAG_THRESHOLD_PX 8
+
+// --- Out-of-band coarse tune (Samuel W7STF, 2026-08-14) --------------------
+// In band the strip is an ABSOLUTE map: x is a frequency inside the band. Out of
+// band there is no band to map onto, so the same strip becomes a RELATIVE,
+// centre-detented control - drag off centre to move the dial, release and the
+// handle springs back.
+//
+// Full deflection to either screen edge moves by half the VISIBLE SPAN, which is
+// exactly what Samuel asked for: consecutive drags then overlap by half a screen,
+// so nothing can be scrolled past unseen ("the display of frequencies is
+// contiguous as we scroll"). It scales with zoom for free - a zoomed-in view
+// steps finer, which is the behaviour you want when hunting.
+//
+// Without this the row genuinely earned nothing: v1.8.2 made it stay visible out
+// of band, and his fair objection was that `Band: ---` in the top-left already
+// says that much.
+static bool      s_bp_oob_drag         = false;   // this press started out of band
+static int64_t   s_bp_oob_offset_hz    = 0;
+#define BP_OOB_KNOB_W_PX   140
+// A sanity corral only - out of band there are no edges to clamp to, and the
+// radio is the real authority on what it can tune. This just stops a wild drag
+// asking for something absurd.
+#define BP_OOB_MIN_HZ       1000000LL
+#define BP_OOB_MAX_HZ      60000000LL
 static lv_obj_t *s_label_bar = NULL;
 static lv_obj_t *s_bot_left   = NULL;
 static lv_obj_t *s_bot_batt_icon = NULL;  /* battery glyph, colored by charge level */
@@ -2991,7 +3015,8 @@ static void update_bandplan_strip(uint32_t freq_hz)
         lv_obj_set_style_bg_color(s_bp_seg[0], lv_color_hex(BANDPLAN_OOB_COLOR), 0);
         lv_obj_clear_flag(s_bp_seg[0], LV_OBJ_FLAG_HIDDEN);
 
-        lv_label_set_text(s_bp_seg_lbl[0], "Out of band");
+        lv_label_set_text(s_bp_seg_lbl[0],
+                          s_bp_dragging ? "" : "Out of band  -  drag to tune");
         lv_obj_set_pos(s_bp_seg_lbl[0], 0, 0);
         lv_obj_set_size(s_bp_seg_lbl[0], W_BP, BANDPLAN_H);
         // Same rule the in-band labels follow: never while the strip is being
@@ -3001,8 +3026,17 @@ static void update_bandplan_strip(uint32_t freq_hz)
 
         if (s_bp_span)     lv_obj_add_flag(s_bp_span, LV_OBJ_FLAG_HIDDEN);
         if (s_bp_passband) lv_obj_add_flag(s_bp_passband, LV_OBJ_FLAG_HIDDEN);
-        if (s_bp_marker) lv_obj_add_flag(s_bp_marker, LV_OBJ_FLAG_HIDDEN);
-        if (s_bp_knob) lv_obj_add_flag(s_bp_knob, LV_OBJ_FLAG_HIDDEN);
+        if (s_bp_marker)   lv_obj_add_flag(s_bp_marker, LV_OBJ_FLAG_HIDDEN);
+        // The knob STAYS, as the coarse-tune handle: centre-detented, so it sits
+        // mid-screen whenever a drag is not in progress (the drag positions it
+        // itself - see the OOB branch of touch_event_cb). It is the one thing
+        // that makes this row worth its height out of band, and it is also what
+        // makes the gesture discoverable at all.
+        if (s_bp_knob && !s_bp_dragging) {
+            lv_obj_set_size(s_bp_knob, BP_OOB_KNOB_W_PX, BANDPLAN_H);
+            lv_obj_set_pos(s_bp_knob, W_BP / 2 - BP_OOB_KNOB_W_PX / 2, 0);
+            lv_obj_clear_flag(s_bp_knob, LV_OBJ_FLAG_HIDDEN);
+        }
         // Nothing to reset when we come back in band: the in-band path below
         // rewrites segment 0's position, size, colour and label every tick.
         return;
@@ -6216,17 +6250,70 @@ static void touch_event_cb(lv_event_t *e)
             bandplan_effective_region((bandplan_region_t)s.bandplan_region, s.my_grid);
         const bp_seg_t *segs = NULL;
         int n = bandplan_get_segments(s_last_qmx_freq_hz, reg, &segs);
+        s_bp_oob_drag      = false;
+        s_bp_oob_offset_hz = 0;
         if (n > 0) {
             s_bp_drag_band_lo = segs[0].lo_hz;
             s_bp_drag_band_hi = segs[n - 1].hi_hz;
         } else {
-            // Outside a known band (shouldn't normally happen - the strip
-            // is hidden then - but guard anyway): disable drag this press.
+            // Outside a known band: no absolute map exists, so this press drives
+            // the centre-detented coarse tune instead (see BP_OOB_KNOB_W_PX).
             s_bp_drag_band_lo = s_bp_drag_band_hi = 0;
+            s_bp_oob_drag = true;
         }
         return;
     }
     if (s_touch_on_bandplan) {
+        if (code == LV_EVENT_PRESSING && s_bp_oob_drag) {
+            int dx = (int)p.x - (int)s_bp_drag_start_pt.x;
+            if (!s_bp_dragging) {
+                if (dx > -BP_DRAG_THRESHOLD_PX && dx < BP_DRAG_THRESHOLD_PX) return;
+                s_bp_dragging = true;
+                s_stroll_active = true;
+                for (int i = 0; i < BANDPLAN_MAX_SEG; i++) {
+                    if (s_bp_seg_lbl[i]) lv_obj_add_flag(s_bp_seg_lbl[i], LV_OBJ_FLAG_HIDDEN);
+                }
+            }
+            // Deflection is measured from where the finger LANDED, not from the
+            // centre of the strip. Both readings agree when the handle itself is
+            // grabbed, but measuring from centre would mean a press anywhere else
+            // deflected the control the instant it was touched - the dial would
+            // jump before the finger had moved at all.
+            const int half = DISPLAY_H_RES / 2;
+            int off_px = dx;
+            if (off_px >  half) off_px =  half;
+            if (off_px < -half) off_px = -half;
+
+            int32_t span_hz = (int32_t)(48000.0f / s_zoom_factor);
+            // Edge of the screen == half a span, so two drags cover one span with
+            // an overlap rather than a gap.
+            s_bp_oob_offset_hz = (int64_t)llround((double)off_px / (double)half
+                                                  * ((double)span_hz / 2.0));
+            int64_t target = s_bp_drag_start_freq + s_bp_oob_offset_hz;
+            target = ((target + 500) / 1000) * 1000;   // whole kHz, as in band
+            if (target < BP_OOB_MIN_HZ) target = BP_OOB_MIN_HZ;
+            if (target > BP_OOB_MAX_HZ) target = BP_OOB_MAX_HZ;
+            s_bp_drag_target_hz = target;
+
+            // Handle follows the finger. Positioned directly rather than through
+            // update_bandplan_strip(), which knows nothing about a relative drag.
+            if (s_bp_knob) {
+                int kx = half + off_px - BP_OOB_KNOB_W_PX / 2;
+                if (kx < 0) kx = 0;
+                if (kx > DISPLAY_H_RES - BP_OOB_KNOB_W_PX) kx = DISPLAY_H_RES - BP_OOB_KNOB_W_PX;
+                lv_obj_set_pos(s_bp_knob, kx, 0);
+                lv_obj_clear_flag(s_bp_knob, LV_OBJ_FLAG_HIDDEN);
+            }
+            if (s_freq_label) {
+                char fb[32];
+                uint32_t t = (uint32_t)target;
+                snprintf(fb, sizeof(fb), "Freq: %lu.%03lu.%03lu Hz",
+                         (unsigned long)(t / 1000000), (unsigned long)((t / 1000) % 1000),
+                         (unsigned long)(t % 1000));
+                lv_label_set_text(s_freq_label, fb);
+            }
+            return;
+        }
         if (code == LV_EVENT_PRESSING) {
             if (s_bp_drag_band_hi <= s_bp_drag_band_lo) return;  // no valid band captured at press
             int dx = (int)p.x - (int)s_bp_drag_start_pt.x;
@@ -6266,6 +6353,41 @@ static void touch_event_cb(lv_event_t *e)
                          (unsigned long)(t / 1000000), (unsigned long)((t / 1000) % 1000),
                          (unsigned long)(t % 1000));
                 lv_label_set_text(s_freq_label, fb);
+            }
+            return;
+        }
+        if (code == LV_EVENT_RELEASED && s_bp_oob_drag) {
+            bool was_dragging = s_bp_dragging;
+            // Only a real drag tunes. A plain TAP out of band deliberately does
+            // nothing: with no band to map onto, a tapped x means nothing, and
+            // guessing would move the dial for a touch that asked for nothing.
+            if (was_dragging) {
+                uint32_t tgt = (uint32_t)s_bp_drag_target_hz;
+                cat_set_frequency_forced(tgt);
+                ui_update_frequency(tgt);
+            }
+            s_touch_on_bandplan = false;
+            s_bp_dragging       = false;
+            s_bp_oob_drag       = false;
+            s_bp_oob_offset_hz  = 0;
+            if (was_dragging) {
+                // Spring back to centre. update_bandplan_strip() re-centres the
+                // handle on its next tick, but doing it here means the snap is
+                // seen on the frame the finger lifts rather than up to 100 ms
+                // later, which at ~13 fps is the difference between a spring and
+                // a glitch.
+                if (s_bp_knob) {
+                    lv_obj_set_pos(s_bp_knob,
+                                   DISPLAY_H_RES / 2 - BP_OOB_KNOB_W_PX / 2, 0);
+                }
+                s_stroll_active = false;
+                s_hide_passband_now = true;
+                s_passband_fade_start_us = esp_timer_get_time();
+                for (int i = 0; i < BANDPLAN_MAX_SEG; i++) {
+                    if (s_bp_seg_lbl[i] && !lv_obj_has_flag(s_bp_seg[i], LV_OBJ_FLAG_HIDDEN)) {
+                        lv_obj_clear_flag(s_bp_seg_lbl[i], LV_OBJ_FLAG_HIDDEN);
+                    }
+                }
             }
             return;
         }
