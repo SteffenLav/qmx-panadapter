@@ -40,6 +40,7 @@
 #include "time_sync.h"         // time_sync_get_effective_source - /api/status time_src
 #include "ui/help_topics.h"    // help_triage_collect / help_topic_get - /api/help
 #include "ft8_screen.h"        // decode table + shared ordering - /api/decodes
+#include "maidenhead.h"        // km/bearing for /api/decodes, same math as the Tab5
 #include "ft8_test.h"          // ft8_op_mode_get / ft8_op_mode_slot_ms
 #include <ctype.h>
 #include "net/manual_embed.h"  // manual_embed_get - /api/manual serves the built-in manual
@@ -2143,9 +2144,19 @@ static esp_err_t decodes_handler(httpd_req_t *req)
     // list; the browser shows an age column instead, which answers it honestly.
     bool hide_cq = ft8_qso_cq_filter_active() || qs.ft8_filters.excl_plain_cq;
 
+    // Distance/bearing for the browser's own KM|BRG columns (Tony Abbey asked
+    // for the distance the Tab5 already shows). Computed HERE, from the same
+    // util/maidenhead.c the Tab5 list uses, rather than in JS from the grid: one
+    // implementation means the two screens cannot disagree, and it picks up the
+    // miles setting for free. Same shape as /api/psk_rx's km/brg fields.
+    double my_lat = 0.0, my_lon = 0.0;
+    bool have_me_loc = qs.my_grid[0] && maidenhead_to_latlon(qs.my_grid, &my_lat, &my_lon);
+
     cJSON *root = cJSON_CreateObject();
     if (!root) { heap_caps_free(snap); return httpd_resp_send_500(req); }
     cJSON_AddStringToObject(root, "mode", ft8_op_mode_get() == FT8_OP_MODE_FT4 ? "FT4" : "FT8");
+    // So the browser can label the column MI or KM exactly as the Tab5 does.
+    cJSON_AddBoolToObject(root, "miles", qs.distance_in_miles);
     cJSON_AddStringToObject(root, "working", pin);
     cJSON *arr = cJSON_AddArrayToObject(root, "rows");
 
@@ -2166,6 +2177,18 @@ static esp_err_t decodes_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(o, "dt",   r->last_dt_ms);
         cJSON_AddNumberToObject(o, "age",  (double)(now - r->last_utc));
         cJSON_AddNumberToObject(o, "heard", r->heard_count);
+        // km/brg omitted entirely when either grid is missing - the browser then
+        // shows "--", the same as the Tab5. Never send a distance we cannot
+        // stand behind (see the ADIF "never fabricate a value" rule).
+        double rlat = 0.0, rlon = 0.0;
+        if (have_me_loc && r->last_grid[0]
+            && maidenhead_to_latlon(r->last_grid, &rlat, &rlon)) {
+            double km = haversine_km(my_lat, my_lon, rlat, rlon);
+            cJSON_AddNumberToObject(o, "km",
+                (int)((qs.distance_in_miles ? km * 0.621371 : km) + 0.5));
+            cJSON_AddNumberToObject(o, "brg",
+                (int)(bearing_deg(my_lat, my_lon, rlat, rlon) + 0.5));
+        }
         // Which 15 s (or 7.5 s) window it was heard in - the E/O column.
         if (slot_ms > 0) {
             int64_t sidx = (r->last_utc * 1000 + slot_ms / 2) / slot_ms;

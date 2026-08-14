@@ -24,6 +24,7 @@
 #include "cw_audio.h"
 #include "settings.h"
 #include "bandplan.h"
+#include "db_gridlines.h"   // round dBm gridlines derived from the dB Range sliders
 #include "spots_lane.h"
 #include "net/spots.h"
 #include "help_topics.h"
@@ -2046,7 +2047,15 @@ static lv_obj_t *s_db_scale_lbl[DB_SCALE_MAX_LBLS] = {0};
 // Evenly-spaced dBm ticks, each label centered on its gridline. The old -30/-130
 // corner labels are hidden (see update_db_scale) so the scale reads as one clean
 // right-edge column rather than bunching the corners against -40/-120.
-static const float s_grid_dbm[5]  = { -40.0f, -60.0f, -80.0f, -100.0f, -120.0f };
+// dBm gridlines are DERIVED from the dB Range sliders, not fixed. They used to
+// be a hardcoded { -40, -60, -80, -100, -120 }, which silently assumed the
+// default -130..-30 range: set Min/Max to anything else and the labels no longer
+// sat where the scale actually was. Samuel W7STF ran -118/-13 and reasonably
+// asked why the Tab5 and the browser disagreed (2026-08-14). Rebuilt by
+// build_dbm_gridlines() on every range change; at the default range it still
+// produces exactly the old five values, so nothing moves unless you moved it.
+static float s_grid_dbm[DB_SCALE_MAX_LBLS];
+static int   s_grid_dbm_n = 0;
 static const int   s_grid_flat[3] = { 10, 20, 30 };  // dB above floor
 static void update_db_scale(void);   // positions/labels the gridline values
 
@@ -5332,6 +5341,23 @@ static float *s_flat_floor  = NULL;
 static bool   s_flat_ready  = false;
 static bool   s_flat_mode   = true;  /* TODO: drawer toggle + NVS */
 
+// Pick round gridline values inside the current dB range, highest first (index 0
+// is the topmost line, and it is the one that carries the " dBm" suffix).
+//
+// The step is the smallest of the candidates that still fits inside
+// DB_SCALE_MAX_LBLS lines, so a narrow range gets finer lines rather than fewer.
+// At the default -130..-30 this yields -40/-60/-80/-100/-120 - the exact set
+// that used to be hardcoded, which is deliberate: the fix must be invisible to
+// anyone who never touched the sliders.
+// The arithmetic lives in util/db_gridlines.c so test/db_gridlines_harness.c can
+// link the real function - the step choice and the strictly-inside edge rule
+// have off-by-one traps that are much cheaper to catch on a PC than on glass.
+static void build_dbm_gridlines(void)
+{
+    s_grid_dbm_n = db_gridlines_build(DB_MIN_DISPLAY, DB_MAX_DISPLAY,
+                                      DB_SCALE_MAX_LBLS, s_grid_dbm);
+}
+
 // Reposition + relabel the right-edge dBm scale for the current mode/range.
 // Cheap; called on init, dB-range change, and flat-mode toggle (NOT per frame).
 // Lock-free: every caller already holds the display lock (LVGL event ctx /
@@ -5359,7 +5385,8 @@ static void update_db_scale(void)
             n++;
         }
     } else {
-        int cnt = (int)(sizeof(s_grid_dbm) / sizeof(s_grid_dbm[0]));
+        build_dbm_gridlines();
+        int cnt = s_grid_dbm_n;
         for (int i = 0; i < cnt && i < DB_SCALE_MAX_LBLS; i++) {
             int y = db_to_y(s_grid_dbm[i]);
             snprintf(txt, sizeof(txt), (i == 0) ? "%d dBm" : "%d", (int)s_grid_dbm[i]);
@@ -5562,8 +5589,10 @@ void ui_push_spectrum(const float *bins, int n_bins)
                     (int)((float)s_grid_flat[g] * (float)(SPECTRUM_H - 1) / FLAT_RANGE_DB);
             }
         } else {
-            int cnt = (int)(sizeof(s_grid_dbm) / sizeof(s_grid_dbm[0]));
-            for (int g = 0; g < cnt; g++) gys[gn++] = db_to_y(s_grid_dbm[g]);
+            // Built by update_db_scale() whenever the range changes, so the lines
+            // and their labels can never describe different scales. Before the
+            // first build there is nothing to draw, which is right rather than wrong.
+            for (int g = 0; g < s_grid_dbm_n; g++) gys[gn++] = db_to_y(s_grid_dbm[g]);
         }
         for (int g = 0; g < gn; g++) {
             int gy = gys[g];

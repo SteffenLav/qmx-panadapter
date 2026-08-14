@@ -114,7 +114,23 @@ static int64_t  s_period_start_us = 0;
 #endif
 
 // ----- v0.16.0 Zoom-FFT --------------------------------------------------
-#define ZOOM_FIR_LEN 31
+// 63 taps, was 31. The decimation filter cuts at 0.45/D while the display draws
+// the whole decimated span out to 0.5/D, so the outer edge of every zoomed view
+// is drawn from inside the filter's transition band - which is why both ends go
+// dark when you zoom. Samuel W7STF measured it and read it correctly ("about
+// 1000 Hz" at x4); computed from the 31-tap design the edge sat -16.6/-10.3/-8.0
+// dB down at x2/x4/x8 over 1846/1237/928 Hz per side.
+//
+// Transition width goes as 1/N, so doubling the taps roughly halves it and pulls
+// the corner in close to the drawn edge. ⛔ Do NOT "fix" this by moving the
+// cutoff toward 0.5/D instead: that trades a dark edge for energy above Nyquist
+// aliasing back in as FALSE SIGNALS, which is far worse. A dark edge is honest.
+//
+// Cost is bounded and was measured rather than assumed - see the ZOOMFIR log
+// line below. dsps_fird_init_f32 needs exactly N delay floats (the +4 quirk is
+// the non-decimating dsps_fir_init_f32), and the multiple-of-4/alignment
+// constraints in that init are ESP32-S3-only, so an odd 63 is fine on the P4.
+#define ZOOM_FIR_LEN 63
 
 static SemaphoreHandle_t s_zoom_cfg_mtx  = NULL;
 
@@ -147,6 +163,9 @@ static float *s_zoom_workbuf  = NULL;  // interleaved I/Q, DSP_FFT_SIZE complex
 static float *s_zoom_spectrum[2] = { NULL, NULL };
 static volatile int s_zoom_ready_idx = -1;
 static int    s_zoom_acc_idx  = 0;
+// Zoom-FIR cost accounting (see the ZOOMFIR log line). fft_task-only.
+static uint32_t s_zoomfir_us = 0;
+static uint32_t s_zoomfir_n  = 0;
 
 // Windowed-sinc lowpass, Hamming window. fc_norm = cutoff / sample_rate.
 static void zoom_design_lpf(float *taps, int n_taps, float fc_norm)
@@ -735,8 +754,21 @@ static void zoom_process(const int16_t *samples)
     }
 
     int n_out_target = DSP_FFT_SIZE / D;
+    // Measured, not assumed: this runs on fft_task, the audio ring's SOLE
+    // consumer, and #51 is the standing reminder of what starving it costs. The
+    // window period is 1024/48000 = 21.3 ms, so what matters is this figure
+    // against that. Silent unless zoomed (D > 1), i.e. never in normal use.
+    int64_t t0 = esp_timer_get_time();
     int n_out_i = dsps_fird_f32(&s_zoom_fir_i, s_zoom_mix_i, s_zoom_dec_i, n_out_target);
     int n_out_q = dsps_fird_f32(&s_zoom_fir_q, s_zoom_mix_q, s_zoom_dec_q, n_out_target);
+    s_zoomfir_us += (uint32_t)(esp_timer_get_time() - t0);
+    if (++s_zoomfir_n >= 47) {   // ~1 s of windows at 46.9 Hz
+        ESP_LOGI(TAG, "ZOOMFIR: %u taps D=%d  %.3f ms/window avg (window period 21.3 ms)",
+                 (unsigned)ZOOM_FIR_LEN, D,
+                 (double)s_zoomfir_us / (double)s_zoomfir_n / 1000.0);
+        s_zoomfir_us = 0;
+        s_zoomfir_n  = 0;
+    }
     int n_out = (n_out_i < n_out_q) ? n_out_i : n_out_q;
 
     for (int i = 0; i < n_out; i++) {

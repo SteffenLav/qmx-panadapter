@@ -28,6 +28,7 @@ idf_component_register(
         "ui/watermark_img.c"
         "util/status.c"
         "util/maidenhead.c"
+    "util/db_gridlines.c"
         "util/bandplan.c"
         "util/dxcc.c"
         "util/battery.c"

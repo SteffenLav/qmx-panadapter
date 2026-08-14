@@ -2107,17 +2107,28 @@ document.getElementById("set-modal").addEventListener("click", (e) => {
    Tab5's own Filter settings, applied in /api/decodes), so this table is the
    same list, not a second opinion.
    ===================================================================== */
+/* KM/BRG sit after HZ, the same order the Tab5 list uses. Both are computed ON
+   THE DEVICE (/api/decodes) from the same util/maidenhead.c the Tab5 reads, not
+   from the grid in JS - one implementation means the two screens cannot
+   disagree, and the miles setting comes along for free. Tony Abbey asked for
+   the distance the Tab5 already shows (2026-08-14). */
 const DEC_COLS = [
   ["sl",   "SL"],   ["call", "CALL"], ["text", "MESSAGE"], ["grid", "GRID"],
-  ["snr",  "SNR"],  ["dt",   "DT"],   ["hz",   "HZ"],      ["age",  "AGE"],
+  ["snr",  "SNR"],  ["dt",   "DT"],   ["hz",   "HZ"],      ["km",   "KM"],
+  ["brg",  "BRG"],  ["age",  "AGE"],
 ];
 let decPollInFlight = false;
+let decHeadUnit = null;   // distance unit the current header row was built for
 
 function decFmt(k, r) {
   if (k === "snr") return (r.snr > 0 ? "+" : "") + r.snr;
   if (k === "dt")  return (r.dt / 1000).toFixed(1);
   if (k === "hz")  return r.hz;
   if (k === "age") return r.age < 60 ? r.age + "s" : Math.floor(r.age / 60) + "m";
+  // The device OMITS km/brg when either grid is missing rather than sending a
+  // number it cannot stand behind, so "--" here means unknown, not zero.
+  if (k === "km")  return r.km  === undefined ? "—" : r.km;
+  if (k === "brg") return r.brg === undefined ? "—" : r.brg + "°";
   return r[k] === undefined ? "" : r[k];
 }
 
@@ -2133,10 +2144,14 @@ async function pollDecodes() {
     const d = await r.json();
     const rows = d.rows || [];
     const head = document.getElementById("dec-head");
-    if (!head.childElementCount) {
+    // Rebuilt when the distance unit changes, not only when empty - the KM
+    // column has to become MI the moment the Tab5 setting is flipped.
+    const unit = d.miles ? "MI" : "KM";
+    if (!head.childElementCount || decHeadUnit !== unit) {
+      decHeadUnit = unit;
       head.innerHTML = DEC_COLS.map(c =>
         '<th style="position:sticky;top:0;background:#1a1a1a;border-bottom:1px solid #333;padding:4px 6px;text-align:left;color:#ffa040">'
-        + c[1] + "</th>").join("");
+        + (c[0] === "km" ? unit : c[1]) + "</th>").join("");
     }
     document.getElementById("dec-title").textContent = (d.mode || "FT8") + " decode list";
     document.getElementById("dec-count").textContent =
