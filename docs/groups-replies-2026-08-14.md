@@ -43,7 +43,12 @@ On having something to do: Message received.
 
 ## 4. Don WB0LQW
 
-On your CQ presets: Solved, and your log is what solved it. You were not wasting my time.
+This one answers his email as well, so no separate email reply is needed. It
+covers: the cause, his test procedure, the two log files, the 3.2 W against
+3.62 W reading, his QMX firmware question, and the fact that v1.8.2 will not
+fix it.
+
+On your CQ presets: Solved, and your log is what solved it. You were not wasting my time. Everything below answers your email too, so there is nothing further you need from me by mail.
 
 On the cause: Your message 2 is stored with two spaces between CQ and POTA. Message 1 has one space, which is why that one always worked. In FT8 the space is part of the message format, not just spacing. With the extra space the encoder stops reading it as a CQ and encodes a signal report to an abbreviated callsign instead. The radio then transmits a valid frame for the full 12.6 seconds, which is why you saw 3.2 W and a good SWR, and a receiver decodes it as CQ followed by three dots and a report. Nothing WSJT-X can use. With a grid added it will not encode at all, which is why those presets refused to key and sent you to the identity window.
 
@@ -51,7 +56,9 @@ On reproducing it: I recreated all three of your symptoms on the bench from that
 
 On your QMX firmware: Not involved. 1_03_002 is fine. Roy could not reproduce it because his preset does not have the extra space.
 
-On what you can do right now: Open the CQ editor and delete the extra space in messages 2 and 3. They will work immediately, no update needed.
+On installing v1.8.2: Please do, but it will not fix this one, so expect the same result. That release only changed the error message so it stops blaming your callsign. The actual fix is tonight.
+
+On what you can do right now: Open the CQ editor and delete the extra space in messages 2 and 3. They will work immediately, on whichever version you are running, with no update needed.
 
 On the fixes tonight: Extra spaces anywhere in a message are collapsed, so a preset repairs itself the next time you open the editor and you will see the corrected text. Separately, every message is now decoded back the way the receiving station will see it before the radio is keyed, and if it no longer says what you typed it is refused with the reason instead of transmitted. That second one covers causes I have not thought of yet.
 
