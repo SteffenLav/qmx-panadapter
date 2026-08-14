@@ -122,6 +122,8 @@ void ui_set_cat_paused(bool paused);
  * a screenshot. Call with the display lock held. */
 void ui_set_drawer_open(bool open);
 void ui_set_drawer_expert(bool expert);
+/* Scroll the open drawer so a section below the fold can be screenshotted. */
+void ui_set_drawer_scroll_y(int y);
 
 // Call whenever a help overlay (the docs Reader, the "What's wrong?" panel) opens
 // or closes. While one owns the screen the top-bar hit zones and the drawer/memory

@@ -1873,8 +1873,6 @@ static lv_obj_t *s_slider_wf_black = NULL;
 static lv_obj_t *s_lbl_wf_black = NULL;
 static lv_obj_t *s_slider_wf_contrast = NULL;
 static lv_obj_t *s_lbl_wf_contrast = NULL;
-static lv_obj_t *s_slider_wf_blend = NULL;
-static lv_obj_t *s_lbl_wf_blend = NULL;
 static lv_obj_t *s_dropdown_wf_window = NULL;
 static lv_obj_t *s_dropdown_spur      = NULL;
 static lv_obj_t *s_tune_tooltip  = NULL;  // freq label above finger during tap-to-tune
@@ -1929,6 +1927,8 @@ static void drawer_slider_qmx_vol_cb(lv_event_t *e);
 static void drawer_refresh_qmx_vol(void);
 static void drawer_slider_qmx_rf_cb(lv_event_t *e);
 static void drawer_refresh_qmx_rf(void);
+static void gain_resolve_start(void);   // repaint a read-back that answers late
+static void gain_resolve_stop(void);
 static void drawer_pause_btn_cb(lv_event_t *e);
 static void drawer_slider_cwtxoff_cb(lv_event_t *e);
 static void ui_set_cw_tx_offset_label(int hz);
@@ -1945,7 +1945,6 @@ static void drawer_check_cwaudio_cb(lv_event_t *e);
 static void drawer_slider_cwaudio_vol_cb(lv_event_t *e);
 static void drawer_slider_wf_black_cb(lv_event_t *e);
 static void drawer_slider_wf_contrast_cb(lv_event_t *e);
-static void drawer_slider_wf_blend_cb(lv_event_t *e);
 static void drawer_dropdown_wf_window_cb(lv_event_t *e);
 static void drawer_dropdown_spur_cb(lv_event_t *e);
 bool ui_get_flat_mode(void);
@@ -5186,6 +5185,23 @@ void ui_update_passband_width(uint32_t hz)
 // Helper: returns (low, high) passband edges in Hz, relative to VFO,
 // from current mode + (optional) CAT FW width. CW is symmetric around VFO,
 // USB is +200 to +(200+width), LSB is -(200+width) to -200, etc.
+// Where the receive passband starts above the carrier. These are the overlay's
+// own numbers - the radio does not report a low corner over CAT, only a width -
+// so they must be traceable to the QMX manuals rather than picked to look right.
+//
+// DIGITAL: the operation manual names one fixed filter, the "default 150-3200Hz
+// wide filter used for Digital modes". Documented, so used directly.
+//
+// SSB: the low corner is NOT stated anywhere I can find - the manual gives the
+// selectable filters by WIDTH only (2500/2700/2900/3200). 200 Hz is the value
+// this overlay has always assumed and it stays until something measures it;
+// it is deliberately NOT "made consistent" with the digital figure, because SSB
+// genuinely uses different filters and a tidier-looking constant would only be
+// a guess wearing evidence's clothes.
+#define PB_DIGI_LOW_HZ    150
+#define PB_DIGI_HIGH_HZ  3200
+#define PB_SSB_LOW_HZ     200   /* UNVERIFIED - see above */
+
 static void compute_passband_edges_hz(int32_t *out_low, int32_t *out_high)
 {
     // Mode defaults if CAT FW didn't report
@@ -5197,12 +5213,12 @@ static void compute_passband_edges_hz(int32_t *out_low, int32_t *out_high)
         high = (int32_t)w / 2;
     } else if (strstr(s_current_mode, "USB")) {
         if (w == 0) w = 2700;
-        low = 200;
-        high = 200 + (int32_t)w;
+        low = PB_SSB_LOW_HZ;
+        high = PB_SSB_LOW_HZ + (int32_t)w;
     } else if (strstr(s_current_mode, "LSB")) {
         if (w == 0) w = 2700;
-        low = -(200 + (int32_t)w);
-        high = -200;
+        low = -(PB_SSB_LOW_HZ + (int32_t)w);
+        high = -PB_SSB_LOW_HZ;
     } else if (strstr(s_current_mode, "AM")) {
         if (w == 0) w = 6000;
         low = -(int32_t)w / 2;
@@ -5213,9 +5229,22 @@ static void compute_passband_edges_hz(int32_t *out_low, int32_t *out_high)
         high = (int32_t)w / 2;
     } else if (strstr(s_current_mode, "DiGi") || strstr(s_current_mode, "RTTY")
                || strstr(s_current_mode, "FT") || strstr(s_current_mode, "DIG")) {
-        if (w == 0) w = 2700;
-        low = 200;
-        high = 200 + (int32_t)w;
+        // Digital modes do NOT use the selectable SSB filters. The QMX operation
+        // manual names one fixed filter for them: the "default 150-3200Hz wide
+        // filter used for Digital modes". We drew 200..2900, wrong at BOTH ends -
+        // the gap at the bottom is what Samuel W7STF measured as "about 250 Hz"
+        // (2026-08-14), and the top edge was 300 Hz short.
+        //
+        // ⚠ In DiGi the radio reports FW; as 3200 (measured on 1_04_004), which is
+        // the filter's TOP EDGE, not its width - 150 + 3200 would be 3350 and
+        // contradict the manual. So the CAT number is used as the high corner
+        // here. SSB below still treats it as a width, which is how that path has
+        // always behaved; whether the SSB filters are also named by top edge is
+        // NOT established, so it is left alone rather than "made consistent" on
+        // an inference.
+        low  = PB_DIGI_LOW_HZ;
+        high = (w != 0) ? (int32_t)w : PB_DIGI_HIGH_HZ;
+        if (high <= low) high = PB_DIGI_HIGH_HZ;   // nonsense width, use the documented filter
     } else {
         // Unknown mode: a small symmetric default
         if (w == 0) w = 2700;
@@ -7323,8 +7352,9 @@ static void drawer_build(void)
         s_lbl_qmx_rf = lv_label_create(sec);
         int rf_now = cat_get_rf_gain();
         char rbuf[40];
-        if (rf_now >= 0) snprintf(rbuf, sizeof(rbuf), "QMX RF gain: %d dB", rf_now);
-        else             snprintf(rbuf, sizeof(rbuf), "QMX RF gain: reading...");
+        if (rf_now >= 0)          snprintf(rbuf, sizeof(rbuf), "QMX RF gain: %d dB", rf_now);
+        else if (cat_is_ready())  snprintf(rbuf, sizeof(rbuf), "QMX RF gain: reading...");
+        else                      snprintf(rbuf, sizeof(rbuf), "QMX RF gain: radio not connected");
         lv_label_set_text(s_lbl_qmx_rf, rbuf);
         lv_obj_set_style_text_color(s_lbl_qmx_rf, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(s_lbl_qmx_rf, &lv_font_montserrat_28, 0);
@@ -8075,10 +8105,11 @@ static void drawer_build(void)
         qmx_settings_t wcfg;
         settings_load_all(&wcfg);
 
-        // 484, not 384: the spur-suppression control was added at the bottom.
-        // This height and the `y +=` at the end of the block must move together
-        // or every section below overlaps it.
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_WATERFALL, y, 484);
+        // 404 = 484 minus the 80 px the removed "Adaptive floor" row occupied
+        // (it was 384 before spur suppression was added at the bottom). This
+        // height and the `y +=` at the end of the block must move together or
+        // every section below overlaps it.
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WATERFALL, y, 404);
         lv_obj_t *wf_hdr = lv_label_create(sec);
         lv_label_set_text(wf_hdr, "Waterfall");
         lv_obj_set_style_text_color(wf_hdr, lv_color_hex(0xA0E0A0), 0);
@@ -8115,30 +8146,34 @@ static void drawer_build(void)
         lv_obj_align(s_slider_wf_contrast, LV_ALIGN_TOP_LEFT, 0, 144);
         lv_obj_add_event_cb(s_slider_wf_contrast, drawer_slider_wf_contrast_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
-        // Per-bin floor blend (0 = global floor, 100 = full per-bin)
-        s_lbl_wf_blend = lv_label_create(sec);
-        snprintf(wbuf, sizeof(wbuf), "Adaptive floor: %d%%", (int)wcfg.wf_floor_blend);
-        lv_label_set_text(s_lbl_wf_blend, wbuf);
-        lv_obj_set_style_text_color(s_lbl_wf_blend, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(s_lbl_wf_blend, &lv_font_montserrat_28, 0);
-        lv_obj_align(s_lbl_wf_blend, LV_ALIGN_TOP_LEFT, 0, 184);
-        s_slider_wf_blend = lv_slider_create(sec);
-        lv_obj_set_size(s_slider_wf_blend, DRAWER_W - 32, 30);
-        lv_slider_set_range(s_slider_wf_blend, 0, 100);
-        lv_slider_set_value(s_slider_wf_blend, (int)wcfg.wf_floor_blend, LV_ANIM_OFF);
-        lv_obj_align(s_slider_wf_blend, LV_ALIGN_TOP_LEFT, 0, 216);
-        lv_obj_add_event_cb(s_slider_wf_blend, drawer_slider_wf_blend_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        // The "Adaptive floor" slider USED TO BE HERE and was removed in v1.8.3.
+        // It could not change anything: audio.c re-seeds the per-bin floor ~17
+        // times a second, so floor_arr[bin] and floor_global are always equal and
+        // the blend has nothing to blend (TODO #114). It was already dropped from
+        // the web settings form for that reason; Samuel W7STF then asked why the
+        // waterfall has so many handles, which is the argument for taking it off
+        // the Tab5 too - a control that invites tuning something that is not
+        // running is worse than a missing one.
+        //
+        // The SETTING is deliberately still alive: stored in NVS, carried in the
+        // config export, and still accepted by /api/settings. So this block comes
+        // straight back the day the floor tracker does. Do not delete
+        // settings_set_wf_floor_blend() or render_waterfall_set_floor_blend() -
+        // main.c applies the stored value at boot and webserver.c still sets it.
+        //
+        // Everything below moved UP 80 px with it, and the section height and the
+        // `y +=` at the end of the block moved with them (they must always).
 
         // FFT window
         lv_obj_t *win_lbl = lv_label_create(sec);
         lv_label_set_text(win_lbl, "FFT window");
         lv_obj_set_style_text_color(win_lbl, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(win_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(win_lbl, LV_ALIGN_TOP_LEFT, 0, 264);
+        lv_obj_align(win_lbl, LV_ALIGN_TOP_LEFT, 0, 184);
         s_dropdown_wf_window = lv_dropdown_create(sec);
         lv_dropdown_set_options(s_dropdown_wf_window, "Blackman-Harris\nHann (sharp)\nNuttall");
         lv_obj_set_size(s_dropdown_wf_window, DRAWER_W - 32, 50);
-        lv_obj_align(s_dropdown_wf_window, LV_ALIGN_TOP_LEFT, 0, 300);
+        lv_obj_align(s_dropdown_wf_window, LV_ALIGN_TOP_LEFT, 0, 220);
         lv_obj_set_style_text_font(s_dropdown_wf_window, &lv_font_montserrat_28, 0);
         if (wcfg.wf_window <= 2) lv_dropdown_set_selected(s_dropdown_wf_window, wcfg.wf_window);
         lv_obj_add_event_cb(s_dropdown_wf_window, drawer_dropdown_wf_window_cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -8154,7 +8189,7 @@ static void drawer_build(void)
         lv_label_set_text(spur_lbl, "Spur suppression");
         lv_obj_set_style_text_color(spur_lbl, lv_color_hex(0xFFFFFF), 0);
         lv_obj_set_style_text_font(spur_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(spur_lbl, LV_ALIGN_TOP_LEFT, 0, 364);
+        lv_obj_align(spur_lbl, LV_ALIGN_TOP_LEFT, 0, 284);
         s_dropdown_spur = lv_dropdown_create(sec);
         // Name what happens to the SPUR, not to the feature - "Hide" read as
         // "hide the suppression". Both working options say what they do to the
@@ -8162,7 +8197,7 @@ static void drawer_build(void)
         lv_dropdown_set_options(s_dropdown_spur,
                                 "Off\nSubtract spur power\nErase spur bins");
         lv_obj_set_size(s_dropdown_spur, DRAWER_W - 32, 50);
-        lv_obj_align(s_dropdown_spur, LV_ALIGN_TOP_LEFT, 0, 400);
+        lv_obj_align(s_dropdown_spur, LV_ALIGN_TOP_LEFT, 0, 320);
         lv_obj_set_style_text_font(s_dropdown_spur, &lv_font_montserrat_28, 0);
         // Open UPWARDS and unconstrained: this control sits at the bottom of the
         // section, so a downward list is clipped by the drawer edge and has to
@@ -8180,7 +8215,7 @@ static void drawer_build(void)
         lv_obj_add_event_cb(s_dropdown_spur, drawer_dropdown_spur_cb, LV_EVENT_VALUE_CHANGED, NULL);
         lv_obj_add_event_cb(s_dropdown_spur, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
 
-        y += 484;
+        y += 404;
     }
 
     // FT8-only sections built LAST so they never leave a gap in Panadapter
@@ -8322,7 +8357,7 @@ static void drawer_build(void)
     lv_obj_t *drawer_sliders[] = {
         s_slider_db_min, s_slider_db_max, s_slider_alpha, s_slider_cwpitch,
         s_slider_cwaudio_vol, s_slider_ifcal, s_slider_brightness,
-        s_slider_wf_black, s_slider_wf_contrast, s_slider_wf_blend,
+        s_slider_wf_black, s_slider_wf_contrast,
         s_slider_charge_limit_pct, s_slider_qmx_vol, s_slider_qmx_rf,
         s_slider_cwtxoff,
     };
@@ -8410,6 +8445,7 @@ static void drawer_open(void)
     drawer_refresh_qmx_vol();   // show what the RADIO is set to, not our last write
     drawer_refresh_activation();
     drawer_refresh_qmx_rf();    // and its per-band RF gain, which changes with the band
+    gain_resolve_start();       // ...and repaint whichever of those answers late
     s_drawer_open = true;
     // Pull the QMX-wait prompt down now rather than waiting up to a second for its
     // own tick - it was drawing its headline straight across the open drawer.
@@ -8438,6 +8474,18 @@ void ui_set_drawer_expert(bool expert)
     if (s_drawer) lv_obj_scroll_to_y(s_drawer, 0, LV_ANIM_OFF);
 }
 
+// Scroll the open drawer, for the same reason ui_set_drawer_open() exists: a
+// section further down (the Waterfall controls, the QMX gain sliders) cannot be
+// screenshotted otherwise, so its layout could only ever be taken on trust -
+// and a section whose height and `y +=` disagree overlaps the one below it,
+// which is precisely the mistake this file warns about. Dev action only.
+void ui_set_drawer_scroll_y(int y)
+{
+    if (!s_drawer || !s_drawer_open) return;
+    if (y < 0) y = 0;
+    lv_obj_scroll_to_y(s_drawer, y, LV_ANIM_OFF);
+}
+
 static void drawer_close(void)
 {
     if (!s_drawer || !s_drawer_open) return;
@@ -8451,6 +8499,7 @@ static void drawer_close(void)
     lv_anim_set_path_cb(&a, lv_anim_path_ease_in);
     lv_anim_start(&a);
     s_drawer_open = false;
+    gain_resolve_stop();      // nothing to repaint into once it is shut
     qmx_wait_poll_cb(NULL);   // prompt may come back now the drawer is gone
     ESP_LOGI(TAG, "Settings drawer closed");
 }
@@ -8788,11 +8837,10 @@ static void drawer_slider_qmx_vol_cb(lv_event_t *e)
 // operator uses its own volume knob - and the whole point is that the number
 // matches the LCD. Called when the drawer opens: cat_query_af_gain() only asks,
 // so this also refreshes from the answer to the previous ask.
-static void drawer_refresh_qmx_vol(void)
+static void paint_qmx_vol(int ag)
 {
-    if (!s_slider_qmx_vol) return;
-    int ag = cat_get_af_gain();
-    if (ag >= 0) {
+    if (!s_slider_qmx_vol || ag < 0) return;
+    {
         int db = ag / 4;
         // The slider only spans the USABLE range (see CAT_AF_GAIN_DB_MAX), so a
         // radio turned up past that with its own knob pins the knob at the end -
@@ -8808,6 +8856,12 @@ static void drawer_refresh_qmx_vol(void)
             lv_label_set_text(s_lbl_qmx_vol, b);
         }
     }
+}
+
+static void drawer_refresh_qmx_vol(void)
+{
+    if (!s_slider_qmx_vol) return;
+    paint_qmx_vol(cat_get_af_gain());
     cat_query_af_gain();   // ask again for next time the drawer opens
 }
 
@@ -8833,19 +8887,117 @@ static void drawer_slider_qmx_rf_cb(lv_event_t *e)
 
 // Same read-back-on-open reasoning as the volume, with one more: RF gain is per
 // band, so the previous band's value is not just stale, it is wrong.
+static void paint_qmx_rf(int rf)
+{
+    if (!s_slider_qmx_rf || rf < 0) return;
+    lv_slider_set_value(s_slider_qmx_rf, rf, LV_ANIM_OFF);
+    if (s_lbl_qmx_rf) {
+        char b[40];
+        snprintf(b, sizeof(b), "QMX RF gain: %d dB", rf);
+        lv_label_set_text(s_lbl_qmx_rf, b);
+    }
+}
+
 static void drawer_refresh_qmx_rf(void)
 {
     if (!s_slider_qmx_rf) return;
-    int rf = cat_get_rf_gain();
-    if (rf >= 0) {
-        lv_slider_set_value(s_slider_qmx_rf, rf, LV_ANIM_OFF);
-        if (s_lbl_qmx_rf) {
-            char b[40];
-            snprintf(b, sizeof(b), "QMX RF gain: %d dB", rf);
-            lv_label_set_text(s_lbl_qmx_rf, b);
-        }
-    }
+    paint_qmx_rf(cat_get_rf_gain());
     cat_query_rf_gain();   // ask again for next time the drawer opens
+}
+
+// --- Resolving a gain read-back that has not answered YET -------------------
+// Both refresh functions above ask the radio and paint whatever answer arrived
+// BEFORE the ask. On the first drawer open after boot there is no previous
+// answer, so RF gain painted "QMX RF gain: reading..." and NOTHING ever
+// repainted it: it cleared only on the NEXT open, and stayed stuck for the
+// whole session if that one query went unanswered. RF gain is per band, so it
+// came back on every band change too. Reported by Samuel W7STF (2026-08-14),
+// who found the drawer "kept displaying QMX: RF gain: reading...".
+//
+// This resolves a value that is still UNKNOWN, then stops. It deliberately does
+// NOT re-read a value already known: the read-back is once-per-open on purpose
+// so it cannot fight the operator's finger mid-drag (see drawer_refresh_qmx_vol
+// and the AG notes in cat.h). Giving up after ~10 s is intentional - leaving it
+// reading "reading..." is honest when the radio genuinely is not answering.
+#define GAIN_RESOLVE_PERIOD_MS   500
+#define GAIN_RESOLVE_MAX_TICKS   20   // ~10 s
+#define GAIN_RESOLVE_REASK_EVERY 6    // one more ask every ~3 s while waiting
+
+static lv_timer_t *s_gain_resolve_timer = NULL;
+static int  s_gain_resolve_ticks = 0;
+static bool s_rf_unresolved = false;
+static bool s_af_unresolved = false;
+
+static void gain_resolve_stop(void)
+{
+    if (s_gain_resolve_timer) {
+        lv_timer_del(s_gain_resolve_timer);
+        s_gain_resolve_timer = NULL;
+    }
+}
+
+// RF gain is the only one of the two with no fallback to show, so it is the one
+// that needs words when there is no number. "reading..." was the only thing it
+// ever said, which is a lie when the radio is not connected at all - it reads as
+// a conversation in progress. Samuel W7STF saw exactly that.
+static void paint_qmx_rf_unknown(const char *why)
+{
+    if (!s_lbl_qmx_rf) return;
+    char b[48];
+    snprintf(b, sizeof(b), "QMX RF gain: %s", why);
+    lv_label_set_text(s_lbl_qmx_rf, b);
+}
+
+static void gain_resolve_cb(lv_timer_t *t)
+{
+    (void)t;
+    const bool cat_up = cat_is_ready();
+
+    if (s_rf_unresolved) {
+        int rf = cat_get_rf_gain();
+        if (rf >= 0) { paint_qmx_rf(rf); s_rf_unresolved = false; }
+        else         paint_qmx_rf_unknown(cat_up ? "reading..." : "radio not connected");
+    }
+    if (s_af_unresolved) {
+        int ag = cat_get_af_gain();
+        if (ag >= 0) { paint_qmx_vol(ag); s_af_unresolved = false; }
+    }
+    if (!s_rf_unresolved && !s_af_unresolved) {
+        gain_resolve_stop();
+        return;
+    }
+
+    // Spend the budget ONLY while the radio is actually there to answer. The
+    // first version counted from drawer open, and CAT link-up is ~17 s after
+    // boot - so opening settings early (the normal thing to do) expired the
+    // wait before the radio could possibly reply, which is the very bug this
+    // is meant to fix. With the radio absent there is nothing to wait for and
+    // nothing to time out; the label already says so.
+    if (!cat_up) return;
+
+    if (++s_gain_resolve_ticks >= GAIN_RESOLVE_MAX_TICKS) {
+        if (s_rf_unresolved) paint_qmx_rf_unknown("no answer from radio");
+        gain_resolve_stop();
+        return;
+    }
+    // The open-time query can be lost (CAT busy, radio mid-menu), and one lost
+    // query is what made this stick before. Ask again while we are still waiting.
+    if ((s_gain_resolve_ticks % GAIN_RESOLVE_REASK_EVERY) == 0) {
+        if (s_rf_unresolved) cat_query_rf_gain();
+        if (s_af_unresolved) cat_query_af_gain();
+    }
+}
+
+static void gain_resolve_start(void)
+{
+    s_rf_unresolved = (s_slider_qmx_rf  != NULL) && (cat_get_rf_gain() < 0);
+    s_af_unresolved = (s_slider_qmx_vol != NULL) && (cat_get_af_gain() < 0);
+    s_gain_resolve_ticks = 0;
+    if (!s_rf_unresolved && !s_af_unresolved) { gain_resolve_stop(); return; }
+    if (!s_gain_resolve_timer) {
+        s_gain_resolve_timer = lv_timer_create(gain_resolve_cb,
+                                               GAIN_RESOLVE_PERIOD_MS, NULL);
+    }
 }
 
 // The label carries the whole explanation, because the number alone does not
@@ -9064,17 +9216,8 @@ static void drawer_slider_wf_contrast_cb(lv_event_t *e)
     }
 }
 
-static void drawer_slider_wf_blend_cb(lv_event_t *e)
-{
-    int v = (int)lv_slider_get_value(lv_event_get_target(e));
-    render_waterfall_set_floor_blend((float)v / 100.0f);
-    settings_set_wf_floor_blend((uint8_t)v);
-    if (s_lbl_wf_blend) {
-        char b[28];
-        snprintf(b, sizeof(b), "Adaptive floor: %d%%", v);
-        lv_label_set_text(s_lbl_wf_blend, b);
-    }
-}
+/* drawer_slider_wf_blend_cb() was here - removed with its slider in v1.8.3.
+   See the note in the Waterfall section of drawer_build(). */
 
 static void drawer_dropdown_wf_window_cb(lv_event_t *e)
 {

@@ -730,9 +730,13 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         cJSON *o = cJSON_GetObjectItem(root, "open");
         bool want = cJSON_IsBool(o) ? cJSON_IsTrue(o) : true;
         cJSON *ex = cJSON_GetObjectItem(root, "expert");
+        cJSON *sy = cJSON_GetObjectItem(root, "scroll_y");
         if (display_lock(500)) {
             if (cJSON_IsBool(ex)) ui_set_drawer_expert(cJSON_IsTrue(ex));
             ui_set_drawer_open(want);
+            // After open (which always scrolls to the top), so a section below
+            // the fold can be brought into a screenshot.
+            if (want && cJSON_IsNumber(sy)) ui_set_drawer_scroll_y((int)sy->valuedouble);
             display_unlock();
         }
     } else if (action && strcmp(action, "resmon") == 0) {
