@@ -5,6 +5,7 @@
 
 #include "ft8_tx.h"
 #include "ft8_hash.h"
+#include "ft8_msg_guard.h"
 #include "ft8_status.h"
 #include "ft8_test.h"   // ft8_op_mode_get() - FT8/FT4 sub-mode
 
@@ -627,18 +628,18 @@ bool ft8_tx_build_request_text(const char *message_text,
         return false;
     }
 
-    // Defensive trim: a stray leading/trailing space makes ftx_message_encode
-    // fail (it breaks "CQ" detection), which silently aborts a TX. Trim into a
-    // local copy so every caller is protected regardless of where the text came
-    // from (field-hit: a CQ preset saved as " CQ JP ...", 2026-07-15).
+    // Defensive normalisation: whitespace is SYNTAX in a 77-bit message, not
+    // formatting. A stray leading space breaks "CQ" detection outright (field-hit:
+    // a preset saved as " CQ JP ...", 2026-07-15), and a doubled interior space
+    // is worse - it encodes cleanly as a DIFFERENT message and keys the radio
+    // (field-hit: Don WB0LQW's "CQ  POTA WB0LQW" went out as "CQ  <...> +00",
+    // 2026-08-14). Normalise into a local copy so every caller is covered
+    // regardless of where the text came from.
     char trimmed[32];   // matches out_req->display_text; FT8 messages are short
     {
-        const char *p = message_text;
-        while (*p == ' ' || *p == '\t') p++;
-        strncpy(trimmed, p, sizeof(trimmed) - 1);
+        strncpy(trimmed, message_text, sizeof(trimmed) - 1);
         trimmed[sizeof(trimmed) - 1] = '\0';
-        size_t n = strlen(trimmed);
-        while (n > 0 && (trimmed[n - 1] == ' ' || trimmed[n - 1] == '\t')) trimmed[--n] = '\0';
+        ft8_msg_normalize(trimmed);
         if (!trimmed[0]) {
             if (out_err) snprintf(out_err, out_err_len, "Empty message");
             return false;
@@ -652,6 +653,34 @@ bool ft8_tx_build_request_text(const char *message_text,
         if (out_err) snprintf(out_err, out_err_len,
                               "Can't encode '%s' (rc=%d)", message_text, (int)rc);
         return false;
+    }
+
+    // Decode the payload back the way the far end will, and refuse to key if it
+    // no longer means what the operator typed. ftx_message_encode() succeeding
+    // proves only that SOMETHING encoded - Don's message encoded perfectly and
+    // transmitted for 12.6 s as a signal report to a hashed callsign. The check
+    // is deliberately about meaning, not bytes: the protocol legitimately drops
+    // tokens it has no room for ("CQ POTA PJ4/K1ABC" goes out as "CQ PJ4/K1ABC"),
+    // and refusing those would be worse than the fault being guarded against.
+    {
+        char seen[64] = "";
+        ftx_message_offsets_t offs;
+        qmx_settings_t s;
+        settings_load_all(&s);
+        if (ftx_message_decode(&msg, ft8_hash_if(), seen, &offs) != FTX_MESSAGE_RC_OK) {
+            if (out_err) snprintf(out_err, out_err_len,
+                                  "'%s' would not survive transmission", message_text);
+            ESP_LOGW(TAG, "round-trip guard: '%s' encoded but will not decode", message_text);
+            return false;
+        }
+        if (!ft8_msg_roundtrip_ok(message_text, seen, s.my_callsign)) {
+            if (out_err) snprintf(out_err, out_err_len,
+                                  "'%s' would go out as '%s' - not transmitted",
+                                  message_text, seen);
+            ESP_LOGW(TAG, "round-trip guard REFUSED: '%s' -> receivers would see '%s'",
+                     message_text, seen);
+            return false;
+        }
     }
 
     out_req->kind          = FT8_TX_KIND_CQ;

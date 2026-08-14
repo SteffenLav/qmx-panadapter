@@ -27,6 +27,7 @@
 // several of these strings.
 
 #include "message.h"
+#include "../main/ft8_msg_guard.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -77,6 +78,66 @@ static int try_one(const char *text, int expect_ok)
     return (expect_ok && same) ? 0 : (expect_ok ? 1 : 0);
 }
 
+// ---------------------------------------------------------------------------
+// The two guards that now stand between a typed preset and a keyed radio.
+// These link main/ft8_msg_guard.c itself, so a change there is tested here.
+
+static int norm_case(const char *in, const char *want)
+{
+    char buf[64];
+    snprintf(buf, sizeof(buf), "%s", in);
+    ft8_msg_normalize(buf);
+    int bad = (strcmp(buf, want) != 0);
+    printf("  normalize('%s') -> '%s'%s\n", in, buf,
+           bad ? "   *** FAIL, wanted '" : "");
+    if (bad) printf("%s'\n", want);
+    return bad;
+}
+
+static int guard_case(const char *typed, const char *decoded, const char *call,
+                      bool want_ok)
+{
+    bool got = ft8_msg_roundtrip_ok(typed, decoded, call);
+    int bad = (got != want_ok);
+    printf("  %-22s as seen '%-18s' -> %-6s%s\n", typed, decoded,
+           got ? "KEY" : "REFUSE", bad ? "   *** FAIL" : "");
+    return bad;
+}
+
+static int guard_tests(void)
+{
+    int bad = 0;
+
+    printf("\nWhitespace normalisation (the fix for Don's presets):\n");
+    bad += norm_case("CQ  POTA WB0LQW", "CQ POTA WB0LQW");
+    bad += norm_case("  CQ   QRP    WB0LQW  ", "CQ QRP WB0LQW");
+    bad += norm_case("CQ\tPOTA\t\tWB0LQW", "CQ POTA WB0LQW");
+    bad += norm_case("CQ WB0LQW DN70", "CQ WB0LQW DN70");   // already clean
+    bad += norm_case("   ", "");
+    bad += norm_case("", "");
+
+    printf("\nRound-trip guard - must REFUSE the dangerous, KEY the merely lossy:\n");
+    // The exact failure: callsign gone, turned into a report to a hash.
+    bad += guard_case("CQ  POTA WB0LQW", "CQ  <...> +00", "WB0LQW", false);
+    // Protocol legitimately has no room for the modifier or grid - still a CQ,
+    // still our call, so it must key.
+    bad += guard_case("CQ POTA PJ4/K1ABC", "CQ PJ4/K1ABC", "PJ4/K1ABC", true);
+    bad += guard_case("CQ VK9/WB0LQW DN70", "CQ VK9/WB0LQW", "VK9/WB0LQW", true);
+    bad += guard_case("CQ POTA WB0LQW", "CQ POTA WB0LQW", "WB0LQW", true);
+    // A resolved hash comes back in angle brackets - those are delimiters, not
+    // part of the callsign, or every nonstandard operator would be refused.
+    bad += guard_case("WB0LQW K1ABC -07", "<WB0LQW> K1ABC -07", "WB0LQW", true);
+    // A CQ that stops being a CQ is always wrong.
+    bad += guard_case("CQ WB0LQW DN70", "WB0LQW K1ABC -07", "WB0LQW", false);
+    // No callsign in the typed text - not our business to enforce one.
+    bad += guard_case("CQ DX", "CQ DX", "WB0LQW", true);
+    // Empty decode means we have nothing to transmit.
+    bad += guard_case("CQ WB0LQW DN70", "", "WB0LQW", false);
+
+    printf("%s\n", bad ? "  GUARD TESTS FAILED" : "  guard tests pass");
+    return bad;
+}
+
 int main(void)
 {
     int fails = 0;
@@ -88,11 +149,33 @@ int main(void)
     fails += try_one("CQ POTA WB0LQW DN70", 1);   /* refused to key */
     fails += try_one("CQ QRP WB0LQW DN70", 1);    /* refused to key */
 
+    // What Don's DEVICE actually built, from his 2026-08-14 diagnostic log:
+    //   ft8_tx: built text CQ: 'CQ  POTA WB0LQW' @ 1500 Hz
+    // Two spaces after CQ (U+0020 U+0020, confirmed byte by byte). The message
+    // encoded, armed, and keyed the radio for 12678 ms at 3.2 W - and WSJT-X on
+    // a receiver two metres away decoded nothing. So the fault is not the
+    // encoder refusing; it is what an extra space does to the message it builds.
+    printf("\nWhat Don's device actually built (double space, from his log):\n");
+    fails += try_one("CQ  POTA WB0LQW", 1);
+    fails += try_one("CQ  QRP WB0LQW", 1);
+    fails += try_one("CQ  POTA WB0LQW DN70", 1);
+    fails += try_one("CQ  WB0LQW DN70", 1);
+
     printf("\nFor comparison - forms the 77-bit protocol is known to carry:\n");
     try_one("CQ DX WB0LQW DN70", 1);
     try_one("CQ TEST WB0LQW DN70", 1);
     try_one("CQ 123 WB0LQW DN70", 1);
     try_one("CQ WB0LQW", 1);
+
+    // A round-trip guard at the TX choke point would catch every message that
+    // encodes to something other than what it says. Before adding one, check it
+    // cannot falsely reject the operators it must not reject: a nonstandard call
+    // is transmitted as a HASH, and ft8_lib hands it back in <angle brackets>,
+    // so a naive strcmp would refuse to key their radio at all.
+    printf("\nRound-trip fidelity for nonstandard callsigns (guard must tolerate these):\n");
+    try_one("CQ PJ4/K1ABC", 1);
+    try_one("CQ POTA PJ4/K1ABC", 1);
+    try_one("CQ VK9/WB0LQW DN70", 1);
 
     printf("\nAnd the character budget, since free text is the last resort:\n");
     printf("  free text carries 13 characters. Lengths above:\n");
@@ -101,6 +184,8 @@ int main(void)
     for (int i = 0; i < 5; i++)
         printf("    %-24s %2d chars%s\n", l[i], (int)strlen(l[i]),
                strlen(l[i]) > 13 ? "   (too long for free text)" : "");
+
+    fails += guard_tests();
 
     printf("\n%d case(s) did not survive a round trip.\n", fails);
     return fails ? 1 : 0;

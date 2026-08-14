@@ -8,6 +8,7 @@
 #include "ft8_cq_modal.h"
 #include "ui_theme.h"
 #include "ft8_screen_view.h"
+#include "ft8_msg_guard.h"
 #include "settings.h"
 #include "lvgl.h"
 #include "esp_log.h"
@@ -60,13 +61,12 @@ static void to_upper_inplace(char *s)
 // ftx_message_encode's "CQ" detection, so a preset saved as " CQ JP ..."
 // silently failed to transmit and fell through to the identity modal
 // (field-hit on the 3rd preset, 2026-07-15).
+// Interior runs matter as much as the edges - see ft8_msg_guard.h. Don WB0LQW's
+// preset was stored as "CQ  POTA WB0LQW" (two spaces) and transmitted as a
+// signal report to a hashed callsign for as long as it was saved that way.
 static void trim_inplace(char *s)
 {
-    char *p = s;
-    while (*p == ' ' || *p == '\t') p++;
-    if (p != s) memmove(s, p, strlen(p) + 1);
-    size_t n = strlen(s);
-    while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t')) s[--n] = '\0';
+    ft8_msg_normalize(s);
 }
 
 // Build "CQ <call> <grid>" from stored identity (or "CQ" if unset).
@@ -573,7 +573,15 @@ void ft8_cq_modal_show(void)
             build_default_cq(def, sizeof(def));
             lv_textarea_set_text(s_ta[0], def);
         } else {
-            lv_textarea_set_text(s_ta[i], s.cq_msg[i]);
+            // Show the NORMALISED text, so a preset already stored with a
+            // doubled space repairs itself visibly the next time the editor is
+            // opened rather than being quietly corrected on the way to the
+            // radio. What is on screen is then what actually goes out.
+            char shown[28];
+            strncpy(shown, s.cq_msg[i], sizeof(shown) - 1);
+            shown[sizeof(shown) - 1] = '\0';
+            trim_inplace(shown);
+            lv_textarea_set_text(s_ta[i], shown);
         }
     }
     apply_radio_state();

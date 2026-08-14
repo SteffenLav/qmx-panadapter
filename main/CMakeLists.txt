@@ -65,6 +65,7 @@ idf_component_register(
         "ft8_test.c"
         "ft8_tx.c"
         "ft8_hash.c"
+        "ft8_msg_guard.c"
         "ft8_status.c"
         "ft8_qso.c"
         "ft8_pileup.c"
