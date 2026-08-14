@@ -14,6 +14,7 @@ row: 370 Waterfall | newest row at the top, SDR gradient
 row: 22 Band-plan strip | CW / Digi / Phone segments, with the visible span marked
 row: 36 Status bar | battery, UTC clock, WiFi
 note: amber | the VFO cursor sits at the dial frequency; in USB the passband tint runs upward from it, in LSB downward
+note: dim | in a digital mode the tint spans 150-3200 Hz, the QMX's one fixed digital filter (corrected in v1.8.3)
 note: dim | the top-right 200 x 120 of the spectrum is a deadzone, so a tap near the drawer grip cannot retune you
 ```
 
@@ -112,6 +113,19 @@ The grid is anchored to absolute frequency, not to where your finger first touch
 
 Use two fingers to pinch in (zoom out) or pinch out (zoom in). The display centers on the passband width — in USB/LSB modes, the passband center stays on screen even when the VFO is off to the side.
 
+!!! note "The darker band at each end of a zoomed view (improved in v1.8.3)"
+
+    Zooming filters the signal before it is re-analysed, and that filter starts
+    rolling off just inside the edge of what is drawn — so the outer part of a
+    zoomed view is slightly attenuated. It is a property of the filter, not a
+    fault, and it has behaved this way since zoom was added.
+
+    v1.8.3 doubles the length of that filter, which roughly **halves the width of
+    the darkened band** at each side. The alternative — widening the filter
+    instead — was rejected deliberately: it would trade the dark edge for false
+    signals appearing where nothing is transmitting. Measured and reported by
+    Samuel W7STF, whose own estimate of the affected width was accurate.
+
 #### Pan (One-Finger Drag)
 
 Drag horizontally with one finger to scroll the spectrum left/right. Release to tune to the new center frequency.
@@ -133,11 +147,26 @@ A **passband sub-block** inside the visible-span block mirrors the current filte
 
 The strip updates live as you zoom, pan, or change bands.
 
-**Outside a band**, the strip reads **"Out of band"** in one flat colour instead of
-the CW/Digi/Phone zones, and returns to normal as soon as you are back inside a band.
-The marker and the visible-span block are hidden while you are out, because there is
-no band plan to position them against. The strip itself stays put so the drag gesture
-is still where you expect it (asked for by Samuel W7STF).
+**Outside a band**, the strip reads **"Out of band — drag to tune"** in one flat
+colour instead of the CW/Digi/Phone zones, and returns to normal as soon as you are
+back inside a band. The frequency marker is hidden while you are out, because there is
+no band plan to position it against.
+
+**Out of band the strip becomes a coarse tuner** (v1.8.3). Inside a band the strip is
+a *map* — where you touch is the frequency you get. Outside one there is no map to
+touch, so it works the other way round: a handle sits in the middle of the strip,
+and you **drag it off centre to move the dial**. Let go and it springs back to the
+middle, ready for the next pull.
+
+- Dragging all the way to either edge moves by **half of what is currently on
+  screen**, so two drags in the same direction overlap rather than skipping a gap.
+  Nothing can scroll past unseen.
+- It follows the zoom: zoomed in, the same drag is a finer step.
+- A plain **tap** out of band does nothing on purpose — with no band plan behind it,
+  a tapped position has no frequency to mean.
+
+Suggested by Samuel W7STF, who pointed out that a row saying only "out of band"
+earns nothing when `Band: ---` in the top-left already tells you that.
 
 #### Memory Channels
 
@@ -175,6 +204,12 @@ Tap any item to open its selector:
 
 The **spectrum** shows signal power in dBm (default range −130 to −30 dBm) as a green curve with a dim fill. Each frame is smoothed per-bin with an exponential moving average — α = 0.4 by default, adjustable in the drawer — which balances a stable picture against a snappy response to CW keying and SSB attack transients.
 
+The scale labels down the right-hand edge are **worked out from the dB range you set**
+(v1.8.3): the firmware picks round values that fit inside your Min and Max, choosing a
+finer step for a narrow range. Before this they were fixed at −40 to −120 regardless,
+so any range other than the default was described by labels that did not belong to it
+(found by Samuel W7STF running −118/−13). At the default range the labels are unchanged.
+
 The **frequency axis** shows absolute MHz labels centred on the QMX VFO, refreshed on every CAT frequency update. At high zoom the labels resolve to kHz or Hz precision.
 
 The **waterfall** runs newest row at the top, in a thermal SDR palette (black → dark blue → teal → green → yellow → red). Four colour maps are available in the drawer: **Thermal, Viridis, Turbo** and **Grayscale**.
@@ -189,11 +224,16 @@ The **waterfall** runs newest row at the top, in a thermal SDR palette (black �
 
 - **Black level** — how far above noise-floor to go black (default 9 dB)
 - **Contrast** — dB span of the colour ramp (default 45 dB)
-- **Adaptive floor** — blends between a per-bin and a global noise floor. **This has no
-  effect at present** and is not offered in the browser: the per-bin floor is re-seeded
-  many times a second, so the two values it blends are always the same. Left in place
-  because the stored value is still exported with your configuration.
 - **FFT window** — Blackman-Harris, Hann, or Nuttall (default Blackman-Harris)
+
+!!! note "Adaptive floor was removed in v1.8.3"
+
+    That slider could not change anything: the per-bin noise floor it blended
+    towards is re-seeded many times a second, so both ends of it produced the
+    same picture. It has been taken out of the drawer, as it already had been
+    from the browser. The stored value is still kept and still exported with
+    your configuration, so the control can come back the day the underlying
+    floor tracking runs.
 
 ### 5. Frequency Keypad
 

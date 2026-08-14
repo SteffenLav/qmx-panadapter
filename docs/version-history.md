@@ -1779,5 +1779,147 @@ port still gets its recovery, which is the case where it works.
   picture. It was already absent from the browser's settings form for that reason; now
   the manual says it plainly rather than describing a control that does nothing.
 
+## v1.8.3 — 2026-08-14
+
+**A field-report release. Every fix in it was found by someone using the radio, and
+most of them by one person.**
+
+### QRZ and eQSL credentials can be re-entered (Brian WA6JFK)
+
+The prompt for an API key or login only ever appeared when **nothing** was stored, so
+a key typed wrongly — or one the service later reissued — could not be replaced from
+the web page at all. The remaining routes were editing the config file by hand or a
+full erase-and-reflash, which is what Brian asked whether he needed. He did not.
+
+There are now visible **Change QRZ API key** and **Change eQSL login** rows under the
+upload links, which appear once something is stored. LoTW already had Ctrl-click for
+this, but a hidden gesture was not the answer either — Brian is the same operator who
+could not find the QRZ setup at all in August, which is why that menu stopped hiding
+itself.
+
+**Works today on any build:** Files → Config download, edit the `qrz_key`, `eqsl_user`
+and `eqsl_pass` lines, Files → Config upload. The new details are used by the very next
+upload with no restart. That file holds your WiFi password in plain text too.
+
+### The dB scale labels follow the range you set (Samuel W7STF)
+
+They were hardcoded `-40 / -60 / -80 / -100 / -120`, which silently assumed the default
+−130..−30 range. Set Min/Max to anything else — Samuel ran −118/−13 — and the labels
+described a scale that was no longer there.
+
+Now derived: the firmware picks the smallest round step that still fits in five labels,
+so a **narrow range gets finer lines rather than fewer**. At the default range the
+result is byte-for-byte the old five values, so this is invisible to anyone who never
+touched the sliders.
+
+The arithmetic lives in `util/db_gridlines.c`, deliberately portable so
+`test/db_gridlines_harness.c` can link the real function rather than a copy. It earned
+that immediately: the harness caught a wrong expectation, and a mutation run found that
+no test reached the case where the `n > max_n` clamp is the only thing preventing a
+write past the caller's five-element array.
+
+### The Adaptive floor slider is gone (Samuel W7STF)
+
+He asked why the waterfall has so many handles. The answer was that one of them did
+nothing at all: the per-bin noise floor it blends towards is re-seeded many times a
+second, so both ends of the slider produce the same picture. It had already been
+removed from the browser for that reason. A control that cannot change anything is
+worse than a missing one.
+
+The stored value is kept, still exported with your configuration and still accepted by
+the API, so the row returns the day the underlying floor tracking runs.
+
+### The shaded passband is drawn where the radio actually filters (Samuel W7STF)
+
+He measured a gap of about 250 Hz between the dial frequency and the start of the
+shaded region. That edge was a fixed 200 Hz that never came from the radio.
+
+Two errors, and the second is the one worth remembering. Digital modes do **not** use
+the selectable SSB filters — the QMX operation manual names one fixed *"150-3200Hz wide
+filter used for Digital modes"*. And in DiGi the radio reports `FW;` as **3200**, which
+is the filter's **top edge, not a width**: 150 + 3200 would be 3350 and contradict the
+manual. So the shading was drawn at 200–2900 where the radio is 150–3200.
+
+Corrected and then measured on the screen: with a 37.5 Hz/px axis and the dial cursor
+at x=641, the tint runs x=645–727, i.e. +150 Hz to about +3225 Hz.
+
+The low corner for the **SSB** filters is not documented anywhere findable, so that one
+is deliberately left at 200 and marked unverified rather than made tidy on an inference.
+
+### RF gain no longer sticks on "reading…" (Samuel W7STF)
+
+It asked the radio for the value and then painted the answer to the **previous** ask, so
+on the first drawer open after boot there was nothing to paint — and nothing repainted
+it when the reply landed. It cleared only on the *next* open, and a single unanswered
+query left it stuck for the whole session. Since the gain is stored per band, it
+returned on every band change.
+
+It now fills itself in as soon as the radio replies, and says **"radio not connected"**
+when the radio is not there, instead of a "reading…" that implied a conversation was in
+progress.
+
+*(The first version of this fix was falsified on hardware and rewritten: it counted its
+10 s budget from drawer open, but CAT link-up is ~17 s after boot, so opening settings
+early — the normal thing to do — expired the wait before the radio could possibly
+answer. The budget now runs only while the CAT link is up.)*
+
+### The dark bands at the edges of a zoomed view are about half as wide (Samuel W7STF)
+
+Zooming filters the signal before re-analysing it, and that filter began rolling off
+just inside the edge of what is drawn, so the outer part of a zoomed view was
+attenuated — measured at −16.6 / −10.3 / −8.0 dB at ×2 / ×4 / ×8. Samuel's own estimate
+of the affected width was accurate. It has behaved this way since zoom was added.
+
+The filter is now twice as long (31 → 63 taps), which roughly halves the width of the
+darkened band. Widening it instead was rejected deliberately: that trades a dark edge
+for energy above Nyquist aliasing back in as **false signals**, which is worse. A dark
+edge is honest.
+
+Cost was measured rather than assumed, because this runs on the task that is the audio
+ring's sole consumer: 1.95–2.02 ms per window at ×2 against a 21.3 ms window period,
+1.10 ms at ×4, 0.64 ms at ×8. An A/B against zoom ×1 confirmed it lands on core 1
+(84–90% idle → 56–85%), not on core 0.
+
+### Out of band, the band strip is a coarse tuner (Samuel W7STF)
+
+v1.8.2 made the strip stay visible out of band instead of leaving an empty row, and his
+fair objection was that it then earned nothing — `Band: ---` in the top-left already
+says as much.
+
+Inside a band the strip is a **map**: where you touch is the frequency you get. Outside
+one there is nothing to map, so it works the other way round. A handle sits in the
+middle; drag it off centre and the dial moves, let go and it springs back. A full pull
+to either edge moves by **half of what is on screen**, so two drags overlap instead of
+skipping a gap, and it gets finer as you zoom in — his "contiguous as we scroll".
+
+A plain tap out of band deliberately does nothing: with no band plan behind it, a tapped
+position has no frequency to mean. In band, tap-to-position is unchanged.
+
+### The browser's decode list shows distance and bearing (Tony Abbey)
+
+**KM** and **BRG** columns after the audio tone, in the same order the Tab5 uses, with
+the header reading **MI** when *Distance in miles* is ticked. The Tab5 works the
+distance out and sends it, rather than the browser calculating its own, so the two
+screens cannot disagree. Both fields are **omitted entirely** when either grid is
+missing and the browser shows a dash — never a distance that cannot be stood behind.
+
+### Also in this release
+
+- New hidden dev action `{"action":"drawer","scroll_y":N}` so a drawer section below the
+  fold can be screenshotted instead of its layout being taken on trust.
+
+### Known and not explained
+
+- **Core 0 sits at 0–5% idle in panadapter mode**, where this project's notes record
+  ~14–35% historically. Not caused by the longer zoom filter — an A/B against zoom ×1,
+  with the filter entirely off, showed the same figure. Not investigated.
+- **The `FRAME-MISALIGN` counter added in v1.8.2 has still never fired**, across a full
+  session with the radio streaming. That is not a refutation of the phantom-CW
+  mirror-image hypothesis — the session ran with no antenna and with the Bluetooth mouse
+  off, i.e. none of the load suspected as the trigger — but the cause remains
+  **unconfirmed** and should not be described as found.
+
+---
+
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
 

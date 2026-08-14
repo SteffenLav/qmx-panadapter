@@ -28,7 +28,11 @@ drawer, so it agrees with the rig even if you last changed it there.
 **QMX RF gain** — the per-band RF gain from the radio's Band Configuration, 0–99 dB
 (the QMX default is 54). Because it is **per band**, the Tab5 reads it from the radio
 rather than remembering a number that would belong to whichever band you were on last;
-it shows "reading…" until the radio answers. It writes when you let go of the slider, not
+it shows "reading…" until the radio answers, and **"radio not connected"** if the radio
+is not there at all. Until v1.8.3 it could stick on "reading…" for a whole session:
+the value was only ever repainted when you *next* opened the drawer, so a single
+unanswered query left it stuck (reported by Samuel W7STF). It now fills itself in as
+soon as the radio replies. It writes when you let go of the slider, not
 while you drag, because this is stored configuration rather than a session setting.
 Changing it moves the noise floor, so the flat-spectrum reference is re-learned.
 
@@ -137,16 +141,6 @@ Two things worth knowing, both from Randy N4OPI's side-by-side check against a r
 **Black Level (dB)** — How far above noise floor to show as black (default 9 dB). Lower = more colour detail.
 
 **Contrast (dB)** — Span of the colour ramp (default 45 dB). Lower = more contrast, higher = more gradation.
-
-**Adaptive Floor (%)** — Blend between per-bin noise floor (100%) and global mean floor (0%; default 100%).
-
-!!! warning "Adaptive Floor currently does nothing"
-
-    The per-bin floor it blends towards is re-seeded many times a second, so both
-    ends of this slider produce the same picture. Moving it has no effect. It is
-    left on screen because the value is still stored and the control will start
-    working the day that is fixed; it is deliberately absent from the browser's
-    settings form for the same reason. Nothing is wrong with your unit.
 
 **FFT Window** — 
 - **Blackman-Harris** (default) — best frequency resolution

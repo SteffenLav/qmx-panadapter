@@ -175,10 +175,12 @@ the same Filter-window hides applied. Read-only.
 ```json
 {
   "mode": "FT8",
+  "miles": false,
   "working": "DK7CVD",
   "rows": [
     { "call": "DK7CVD", "text": "OZ1LAV DK7CVD -07", "grid": "JO31",
       "snr": -7, "hz": 1503, "dt": 210, "age": 6, "heard": 3,
+      "km": 612, "brg": 173,
       "sl": "E", "me": true, "cq": false, "pin": true }
   ]
 }
@@ -187,6 +189,13 @@ the same Filter-window hides applied. Read-only.
 `dt` is milliseconds, `hz` the station's audio tone, `age` seconds since it was
 last decoded, `sl` the transmit window it was heard in. `me` marks a message
 containing your callsign, `pin` the station you are working.
+
+`km` and `brg` (v1.8.3) are distance and bearing from your grid to theirs, worked
+out on the device with the same maths the Tab5's own list uses. **Both are omitted
+entirely when either grid is missing** — there is no null and no zero, so a client
+should render an absent field as "unknown" rather than as a distance. `km` is in
+miles when the top-level `miles` flag is true, which mirrors the *Distance in
+miles* setting.
 
 ### GET /api/help
 

@@ -4,7 +4,22 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.8.2** — 2026-08-13
+**v1.8.3** — 2026-08-14
+
+**A field-report release: every fix in it was found by someone using the radio.**
+
+- **Your QRZ and eQSL logins can be changed from the browser.** The prompt only ever appeared when nothing was stored, so a key typed wrongly — or one the service later reissued — could not be replaced from the page at all, and the only ways out were editing the config file by hand or a full erase-and-reflash. There is now a **Change QRZ API key** and a **Change eQSL login** row under the upload links, which appear once something is stored. *(Brian WA6JFK)*
+- **The dB scale labels follow the range you set.** They were fixed at −40 down to −120 and ignored your Min and Max completely, so any range other than the default was described by labels that did not belong to it. They are now worked out from whatever range you choose, with a finer step for a narrow range. At the default range they are unchanged. *(Samuel W7STF)*
+- **The "Adaptive floor" slider has been removed.** It could not change anything — the per-bin noise floor it blends towards is re-seeded many times a second, so both ends of the slider produced the same picture. It was already absent from the browser; a control that cannot do anything is worse than a missing one. The stored value is kept, so it can return if the underlying tracking is ever fixed. *(Samuel W7STF asked why there were so many handles — this was the answer.)*
+- **The filtered part of the spectrum is drawn where the radio actually filters.** There was a gap of about 250 Hz between the dial frequency and the start of the shaded passband, because that edge was a fixed number that never came from the radio. In the digital modes the QMX uses one fixed filter of **150 to 3200 Hz**, and it reports 3200 as the top edge rather than as a width — so the shading was drawn at 200 to 2900. Corrected, and measured on the screen afterwards. *(Samuel W7STF)*
+- **RF gain no longer sticks on "reading…".** It displayed the answer to the *previous* question, so the first time you opened the drawer there was nothing to show and nothing repainted it when the answer arrived — it cleared only when you next opened the drawer, and a single unanswered query left it stuck for the whole session. Since the gain is stored per band, it came back on every band change. It also now says **"radio not connected"** when the radio is not there, instead of implying it is being read. *(Samuel W7STF)*
+- **The dark bands at the edges of a zoomed view are about half as wide.** Zooming filters the signal before re-analysing it, and that filter began rolling off just inside the edge of what is drawn. The filter is now twice as long. Widening it instead was rejected deliberately: that would have traded the dark edge for false signals appearing where nothing is transmitting. *(Samuel W7STF, whose own estimate of the width was accurate.)*
+- **Out of band, the band strip is now a coarse tuner.** Inside a band the strip is a map — where you touch is where you go. Outside one there is nothing to map, so a handle sits in the middle and you **drag it off centre to move the dial**; let go and it springs back. A full pull moves by half of what is on screen, so two drags overlap instead of skipping a gap, and it gets finer as you zoom in. *(Samuel W7STF, who rightly pointed out that a row saying only "out of band" earns nothing.)*
+- **The browser's decode list shows distance and bearing.** KM and BRG columns after the audio tone, in the same order the Tab5 uses, switching to MI if you have *Distance in miles* ticked. The Tab5 works it out and sends it, so the two screens cannot disagree, and a station that has not sent a grid shows a dash rather than a made-up number. *(Tony Abbey)*
+
+## Previous Releases
+
+### v1.8.2 — 2026-08-13
 
 **Your radio's own spurs can be removed from the display, and a POTA clock that stopped being stolen.**
 
@@ -15,9 +30,7 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **The band strip no longer vanishes when you are out of band.** It reads "Out of band" in one flat colour and comes back to normal as soon as you are inside a band, so the row is never just empty and the coarse-tune drag stays where your thumb expects it. *(Samuel W7STF)*
 - **The Operator Identity window no longer appears for unrelated faults.** Calling CQ with a message that would not build sent you to check a callsign that was perfectly fine. The real error is now shown. *(Don WB0LQW)*
 - **The panadapter no longer switches your radio off trying to fix something it cannot.** After certain restarts the QMX stops answering on USB until it is power-cycled. The recovery meant for a stuck USB port was firing at that and cutting the port's 5 V — switching the radio off in front of you, for nothing. It now recognises the difference and leaves the radio alone.
-- **"Adaptive floor" is documented as having no effect.** Both ends of the slider produce the same picture. It was already absent from the browser for that reason; now the manual says so rather than describing a control that does nothing.
-
-## Previous Releases
+- **"Adaptive floor" is documented as having no effect.** Both ends of the slider produce the same picture. It was already absent from the browser for that reason; now the manual says so rather than describing a control that does nothing. *(Removed outright in v1.8.3.)*
 
 ### v1.8.1 — 2026-08-12
 

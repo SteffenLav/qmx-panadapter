@@ -80,7 +80,14 @@ have actually changed, so they cost the WiFi link almost nothing between refresh
 In FT8/FT4 the browser used to show a transmit banner and
 nothing else - you could see that your radio was transmitting, but not who was
 answering. The FT8 panel now carries the **decode list**: callsign, message, grid,
-SNR, DT, audio tone, slot (E/O) and age.
+SNR, DT, audio tone, **distance and bearing**, slot (E/O) and age.
+
+The **KM** and **BRG** columns arrived in v1.8.3 (asked for by Tony Abbey). They sit
+after the tone, in the same order the Tab5 uses, and the header reads **MI** instead
+of KM if you have *Distance in miles* ticked. The Tab5 works the distance out and
+sends it, rather than the browser calculating its own, so the two screens cannot
+disagree — and where a station has not sent a grid the column shows a dash rather
+than a made-up number.
 
 It is the **same list the Tab5 shows**, not a second opinion: the ordering comes
 from the device (the station you are working first, then anything addressed to
@@ -199,7 +206,8 @@ suppression** - the controls you
 want to tune from a laptop *while watching the Tab5's screen*. Every change
 applies live and is stored, exactly as the drawer's own sliders do, and the
 browser's own spectrum and waterfall follow them as well. **Adaptive floor is
-deliberately absent**: it has no effect at present (see
+gone from both the browser and the Tab5 drawer** as of v1.8.3 — it could not
+change anything (see
 [Spectrum & Waterfall](panadapter.md#4-spectrum-waterfall)), and a control that
 cannot change anything is worse than a missing one. The
 **auto-answer robot** switch is here too, carrying the same permanent warning the
@@ -246,13 +254,15 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 
 - **ADIF download ↓** — QSO log as an ADIF file (import into WSJT-X, EQSL, etc.)
 - **QRZ upload ↑** — upload ADIF to QRZ Logbook (requires API key on first use, saved for future sessions)
+- **↳ Change QRZ API key** — appears once a key is stored, and replaces it. New in v1.8.3: before that the prompt only ever appeared when *nothing* was stored, so a key typed wrongly or later reissued could not be changed from the page at all (reported by Brian WA6JFK)
 - **eQSL upload ↑** — upload ADIF to eQSL (requires username/password on first use, saved)
+- **↳ Change eQSL login** — same, for the eQSL username and password
 - **LoTW setup** / **LoTW ↑** — upload ADIF to ARRL's Logbook of The World (see [LoTW Upload](#lotw-upload) below)
 - **View / edit log** — opens the QSO log right in the browser (call, mode, band, frequency, date/time, reports, grid — newest first). **Click any column header to sort** by it (click again to reverse) — sorting by Date groups an activation's QSOs together. Each row has a ✕ to delete that one record, and a **Delete all** button clears the whole log (no undo, so it asks you to type `DELETE` to confirm — download the ADIF first if you want a copy). Handy before a POTA activation: start with an empty log and the ADIF at the end is exactly the file you submit
 
 **Files ▲**:
 
-- **Config download ↓** — all settings as a text file (backup or transfer to another Tab5)
+- **Config download ↓** — all settings as a text file (backup or transfer to another Tab5). It is also the way to change a stored credential by hand: the `qrz_key`, `eqsl_user` and `eqsl_pass` lines are in there in plain text, and an edited file uploaded back takes effect on the next upload with no restart. Note it holds your WiFi password in plain text too, so treat the file accordingly
 - **Config upload ↑** — restore settings from a backup file
 - **SD Files** — opens the **microSD file browser** (`http://<tab5-ip>/files`, new in v1.3.0): browse the card from your computer without pulling it — download logs and config backups, upload files, delete
 - **Diagnostic download ↓** — downloads **both** diagnostic logs: the live session log (always on, nothing to enable) and the flash-persisted copy from before the last reboot/power-off
