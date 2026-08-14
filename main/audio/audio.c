@@ -56,6 +56,19 @@ typedef struct {
 static TaskHandle_t s_audio_task = NULL;
 static QueueHandle_t s_evt_queue = NULL;
 static uac_host_device_handle_t s_uac_dev = NULL;
+
+// Partial-frame carry and its measurement. Declared here rather than beside
+// process_rx() because the 1 Hz stats logger below reports the counters.
+// Full reasoning lives at process_rx().
+static uint8_t  s_carry[6];
+static size_t   s_carry_len = 0;
+static uint32_t s_misalign_events = 0;
+static uint32_t s_misalign_bytes  = 0;
+
+void audio_reset_frame_alignment(void)
+{
+    s_carry_len = 0;
+}
 static RingbufHandle_t s_ring = NULL;
 static uint8_t *s_ring_storage = NULL;   // where the ring's 64 KB landed (PSRAM vs internal)
 
@@ -351,7 +364,14 @@ static void log_stats(void)
         }
     }
 
-    if (dropped > 0) {
+    // A partial 6-byte frame ever reaching us is the I/Q-interleave hazard, so
+    // it is reported the moment it is non-zero rather than only under DROPPED.
+    // Cumulative, not per-second: one event is the whole story.
+    if (s_misalign_events > 0) {
+        ESP_LOGW(TAG, "RX %u pairs/s peak L=%d R=%d  FRAME-MISALIGN=%u ev / %u B (carried, not dropped)",
+                 (unsigned)pairs_per_sec, (int)pL, (int)pR,
+                 (unsigned)s_misalign_events, (unsigned)s_misalign_bytes);
+    } else if (dropped > 0) {
         ESP_LOGW(TAG, "RX %u pairs/s peak L=%d R=%d DROPPED=%u (ring full)",
                  (unsigned)pairs_per_sec, (int)pL, (int)pR, (unsigned)dropped);
     } else {
@@ -373,6 +393,31 @@ static inline int32_t s24_to_s32(const uint8_t *p)
 
 // Returns true if this poll actually moved audio. The caller uses that to decide
 // whether to yield: see audio_task().
+// Bytes left over from the previous read when it did not end on a whole 6-byte
+// stereo frame, carried into the next one.
+//
+// WHY THIS EXISTS. The stream is 3 bytes I + 3 bytes Q, and NOTHING in the path
+// re-synchronises it. `pairs = bytes_read / 6` used to discard the remainder, so
+// a single read that ended mid-frame shifted every following sample by 1-5
+// bytes for the REST OF THE UAC SESSION: a 3-byte shift swaps I and Q outright,
+// the others build both channels from mismatched bytes. Either way the image
+// rejection collapses and mirror signals appear.
+//
+// That failure survives a QMX power cycle (the UAC device stays open - see the
+// v0.15.5 note) and is cleared only by a Tab5 reboot, which is exactly what
+// Roy KI0ER reported on 2026-08-14: restarting the radio changed nothing,
+// restarting the Tab5 fixed it.
+//
+// Two ways a partial frame can reach us, neither guarded: `_ring_buffer_pop()`
+// returns whatever it has when its timeout expires with no frame alignment, and
+// the driver pushes `actual_num_bytes` per ISO packet, which its own comment
+// says "may be less than requested" - this file's own header already records
+// truncated UAC chunks as real on this radio.
+//
+// s_misalign_events is the measurement. It is a modulo on a hot path and one
+// counter, nothing walked (cyan-flash rule), and it reports on the existing
+// 1 Hz line rather than adding one. If it stays 0 in the field then partial
+// frames are not happening and the mirror images have another cause.
 static bool process_rx(void)
 {
     // Raw 24-bit packed bytes from the QMX
@@ -393,7 +438,12 @@ static bool process_rx(void)
         uint32_t bytes_read = 0;
         uint32_t to = first_read ? pdMS_TO_TICKS(25) : 0;
         first_read = false;
-        esp_err_t err = uac_host_device_read(s_uac_dev, raw, sizeof(raw),
+        // Put any partial frame from last time back at the front, so the frame
+        // it belongs to is completed rather than lost.
+        if (s_carry_len) memcpy(raw, s_carry, s_carry_len);
+
+        esp_err_t err = uac_host_device_read(s_uac_dev, raw + s_carry_len,
+                                             sizeof(raw) - s_carry_len,
                                              &bytes_read, to);
         if (err != ESP_OK || bytes_read == 0) {
             // No data this poll: the QMX may be mid power-cycle. Mark the
@@ -403,7 +453,19 @@ static bool process_rx(void)
         }
 
         // Each stereo pair = 6 bytes (3B L + 3B R, little-endian signed 24-bit)
-        size_t pairs = bytes_read / 6;
+        size_t avail = s_carry_len + bytes_read;
+        size_t pairs = avail / 6;
+        size_t rem   = avail - pairs * 6;
+
+        // Keep the partial frame for the next read instead of dropping it.
+        // Dropping is what shifted the I/Q interleave permanently.
+        if (rem) {
+            s_misalign_events++;
+            s_misalign_bytes += (uint32_t)rem;
+            memcpy(s_carry, raw + pairs * 6, rem);
+        }
+        s_carry_len = rem;
+
         if (pairs == 0) {
             s_flat_reset_pending = true;
             return got_data;
@@ -531,6 +593,9 @@ static void audio_task(void *arg)
             switch (e.kind) {
             case AE_RX_CONNECTED:
                 if (s_uac_dev == NULL) {
+                    // A new UAC session starts on a frame boundary; anything
+                    // held from the old one belongs to a stream that is gone.
+                    audio_reset_frame_alignment();
                     open_and_start(e.addr, e.iface_num);
                 } else {
                     ESP_LOGW(TAG, "Already streaming; ignoring extra RX_CONNECTED");
@@ -538,6 +603,7 @@ static void audio_task(void *arg)
                 break;
             case AE_DISCONNECTED:
                 ESP_LOGW(TAG, "UAC disconnected, cleaning up");
+                audio_reset_frame_alignment();
                 if (s_uac_dev) {
                     uac_host_device_stop(s_uac_dev);
                     uac_host_device_close(s_uac_dev);

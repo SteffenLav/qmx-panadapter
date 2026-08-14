@@ -45,6 +45,12 @@ bool audio_uac_active(void);
  */
 void audio_request_reset(void);
 
+// Drop any partial 6-byte I/Q frame held from a previous UAC session. Called
+// when a session starts or ends - a new stream begins on a frame boundary, and
+// carrying a fragment across would misalign the interleave from the first
+// sample. See the s_carry notes in audio.c.
+void audio_reset_frame_alignment(void);
+
 // Stop and close the USB audio stream deliberately, on our way out - see
 // util/usb_shutdown.h. Sets the streaming interface back to alt 0, which is how
 // the radio is told to stop producing isochronous audio. Safe with nothing open.
