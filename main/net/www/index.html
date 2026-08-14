@@ -269,6 +269,13 @@
   }
   .bot-menu a:hover { border-color: var(--accent); }
   .bot-menu a.danger:hover { border-color: #ff6055; }
+  /* Secondary row hanging off the item above it (e.g. "change these
+     credentials" under an upload link). Quieter and indented so it reads as
+     belonging to its parent rather than as another action of equal weight. */
+  .bot-menu a.subrow {
+    background: #171c25; color: #9aa4b2;
+    font-size: 0.78rem; padding-left: 1.1rem;
+  }
 
   /* ---- Web ADIF log viewer ---- */
   #adifv-table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -482,7 +489,9 @@
       <div class="bot-menu" id="log-menu">
         <a href="/api/adif" download="qso.adi" id="adif-link">ADIF download &#8595;</a>
         <a href="#" id="qrz-link">QRZ upload &#8593;</a>
+        <a href="#" id="qrz-creds-link" class="subrow" style="display:none" title="Replace the stored QRZ Logbook API key - after a new key is issued, or if it was typed wrongly the first time.">&#8627; Change QRZ API key</a>
         <a href="#" id="eqsl-link">eQSL upload &#8593;</a>
+        <a href="#" id="eqsl-creds-link" class="subrow" style="display:none" title="Replace the stored eQSL.cc username and password.">&#8627; Change eQSL login</a>
         <a href="#" id="lotw-link" title="ARRL Logbook of the World. Once set up: signs pending QSOs on-device and uploads. Ctrl-click to re-run setup (e.g. after a certificate renewal).">LoTW setup</a>
         <a href="#" id="adif-view-link" title="View the QSO log in the browser - delete single records or clear the whole log. Handy before a POTA activation: start with an empty log and the ADIF at the end is exactly what you submit.">View / edit log</a>
       </div>
@@ -910,17 +919,63 @@ async function pollUploadStatus(label) {
   }
 }
 
+/* Credential entry is split out of the upload handlers so it has a second way
+   in: the "Change ..." rows below each upload link.
+
+   Until v1.8.3 the prompt fired ONLY when nothing was stored, so a key typed
+   wrongly - or one the service later reissued - could not be replaced from the
+   web UI at all. The only routes left were a config export/edit/import or a
+   clean flash, and Brian WA6JFK (2026-08-14) asked whether re-entering eQSL
+   details really needed an erase-everything reflash. It did not, but nothing
+   on the page said so. LoTW already had Ctrl-click for this; a hidden gesture
+   is not the answer either, so these are visible rows that appear only once
+   there is something to change. */
+function updateCredsRows() {
+  const q = document.getElementById("qrz-creds-link");
+  const e = document.getElementById("eqsl-creds-link");
+  if (q) q.style.display = qrzKeySet    ? "block" : "none";
+  if (e) e.style.display = eqslCredsSet ? "block" : "none";
+}
+
+async function promptQrzKey() {
+  const key = prompt("Enter your QRZ Logbook API key (Logbook Data -> API Key on qrz.com):");
+  if (!key) return false;
+  await fetch("/api/qrz_key", { method: "POST", body: key.trim() });
+  qrzKeySet = true;
+  updateCredsRows();
+  return true;
+}
+
+async function promptEqslCreds() {
+  const user = prompt("Enter your eQSL.cc username (callsign):");
+  if (!user) return false;
+  const pswd = prompt("Enter your eQSL.cc password:");
+  if (!pswd) return false;
+  await fetch("/api/eqsl_creds", {
+    method: "POST",
+    body: JSON.stringify({ user: user.trim(), pswd: pswd.trim() }),
+  });
+  eqslCredsSet = true;
+  updateCredsRows();
+  return true;
+}
+
+document.getElementById("qrz-creds-link").addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (await promptQrzKey()) alert("QRZ API key saved.");
+});
+
+document.getElementById("eqsl-creds-link").addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (await promptEqslCreds()) alert("eQSL username and password saved.");
+});
+
 /* QRZ Logbook upload — prompts for an API key the first time (saved on the
    Tab5, not just this browser), then uploads every QSO logged since the
    last successful upload. */
 document.getElementById("qrz-link").addEventListener("click", async (e) => {
   e.preventDefault();
-  if (!qrzKeySet) {
-    const key = prompt("Enter your QRZ Logbook API key (Logbook Data -> API Key on qrz.com):");
-    if (!key) return;
-    await fetch("/api/qrz_key", { method: "POST", body: key.trim() });
-    qrzKeySet = true;
-  }
+  if (!qrzKeySet && !(await promptQrzKey())) return;
   const link = document.getElementById("qrz-link");
   const prevText = link.textContent;
   link.textContent = "Uploading…";
@@ -939,17 +994,7 @@ document.getElementById("qrz-link").addEventListener("click", async (e) => {
    Unlike QRZ, eQSL has no API key - it's plain username/password. */
 document.getElementById("eqsl-link").addEventListener("click", async (e) => {
   e.preventDefault();
-  if (!eqslCredsSet) {
-    const user = prompt("Enter your eQSL.cc username (callsign):");
-    if (!user) return;
-    const pswd = prompt("Enter your eQSL.cc password:");
-    if (!pswd) return;
-    await fetch("/api/eqsl_creds", {
-      method: "POST",
-      body: JSON.stringify({ user: user.trim(), pswd: pswd.trim() }),
-    });
-    eqslCredsSet = true;
-  }
+  if (!eqslCredsSet && !(await promptEqslCreds())) return;
   const link = document.getElementById("eqsl-link");
   const prevText = link.textContent;
   link.textContent = "Uploading…";
@@ -2808,6 +2853,8 @@ async function tick() {
     qrzKeySet    = !!s.qrz_key_set;
     eqslCredsSet = !!s.eqsl_creds_set;
     lotwReady    = !!s.lotw_ready;
+    updateCredsRows();   // the "Change ..." rows exist only once there is
+                         // something stored to change
     if (!lotwBusy) lotwLink.textContent = lotwReady ? "LoTW upload ↑" : "LoTW setup";
     // ALWAYS shown. It used to appear only once qsoCount > 0, on the reasoning
     // that the menu "only makes sense with QSOs logged" - but that menu is also
