@@ -25,6 +25,8 @@
 #include "settings.h"
 #include "bandplan.h"
 #include "ft8_robot.h"   // ft8_robot_stand_down - a band change stops auto-answer
+#include "ft8_tx.h"      // ft8_tx_disarm / ft8_tx_request_abort - safe power off
+#include "bsp/m5stack_tab5.h"   // bsp_generate_poweroff_signal
 #include "db_gridlines.h"   // round dBm gridlines derived from the dB Range sliders
 #include "spots_lane.h"
 #include "net/spots.h"
@@ -2648,6 +2650,54 @@ static void rit_pill_long_cb(lv_event_t *e)
         return;
     }
     rit_pill_sync();
+}
+
+// Power the Tab5 down WITHOUT leaving the radio transmitting.
+//
+// Roy KI0ER: "if the Tab5 is shut down while it's transmitting, the QMX is stuck
+// transmitting until it is powered off." He is right, and it is the worst thing
+// on his list - a radio left keyed is not a cosmetic bug.
+//
+// ⚠ WHAT THIS CANNOT DO. The Tab5's power button cuts power in hardware; the
+// firmware gets no warning and no handler can run. Roy anticipated exactly that
+// ("if the Tab5 loses input power ... there's nothing you can do"). So this is
+// not an interception - it is a SAFE ROUTE that does exist, for the case where
+// the operator is choosing to shut down. bsp_generate_poweroff_signal() was
+// present in the BSP all along and nothing had ever called it.
+//
+// Order matters and is the same order usb_shutdown.h argues for: the radio stops
+// transmitting FIRST, and only then does anything else happen.
+//
+// NOT the full usb_shutdown_graceful() ceremony. That was removed in v1.8.x
+// because it did not fix the flashing wedge it was built for - but the part that
+// matters here is only the CAT write, which works and always did.
+void ui_power_off_safely(void)
+{
+    ESP_LOGW(TAG, "power off requested - stopping any transmission first");
+
+    // 1. Nothing may re-arm behind us on the way down.
+    ft8_robot_stand_down(NULL);
+    ft8_tx_disarm();
+    ft8_tx_request_abort();
+
+    // 2. Tell the radio to receive, whatever it thought it was doing. Sent
+    //    unconditionally: if no burst was running this is harmless, and if one
+    //    was, this is the message that un-keys it. TA0; drops the tone first so
+    //    the QMX is not asked to change state mid-tone.
+    if (cat_is_ready()) {
+        cat_send_raw_cmd("TA0;");
+        vTaskDelay(pdMS_TO_TICKS(30));
+        cat_send_raw_cmd("RX;");
+        vTaskDelay(pdMS_TO_TICKS(120));   // let it reach the radio before power goes
+    }
+
+    // 3. Settings are flushed on their own debounce; give a pending write a
+    //    moment rather than yanking power out from under it.
+    settings_flush();
+    vTaskDelay(pdMS_TO_TICKS(100));
+
+    ESP_LOGW(TAG, "powering off now");
+    bsp_generate_poweroff_signal();
 }
 
 void ui_rit_notify_retune(void)

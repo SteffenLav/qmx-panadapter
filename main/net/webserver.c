@@ -745,6 +745,30 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             if (want && cJSON_IsNumber(sy)) ui_set_drawer_scroll_y((int)sy->valuedouble);
             display_unlock();
         }
+    } else if (action && strcmp(action, "power_off") == 0) {
+        // Shut the Tab5 down after putting the radio back into receive. Needs
+        // {"confirm":"POWEROFF"} - this is not something to trigger by fat
+        // fingers or a stale browser tab, and it does not come back on its own.
+        //
+        // Deliberately reachable from the API: Randy N4OPI runs a HEADLESS
+        // QMX+, and a headless station is exactly where "shut down safely
+        // without walking over to it" earns its place.
+        const char *c = cJSON_GetStringValue(cJSON_GetObjectItem(root, "confirm"));
+        if (!c || strcmp(c, "POWEROFF") != 0) {
+            cJSON_Delete(root);
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_sendstr(req, "{\"error\":\"needs confirm=POWEROFF\"}");
+            return ESP_OK;
+        }
+        ESP_LOGW(TAG, "power off requested over HTTP");
+        // Answer BEFORE powering down, or the caller sees a dropped connection
+        // and cannot tell "it worked" from "it crashed".
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"powering_off\":true}");
+        cJSON_Delete(root);
+        vTaskDelay(pdMS_TO_TICKS(150));
+        ui_power_off_safely();
+        return ESP_OK;
     } else if (action && strcmp(action, "resmon") == 0) {
         // Hidden developer-only toggle for the resource-monitor overlay. No web
         // UI element references this — it's meant to be fired from the browser

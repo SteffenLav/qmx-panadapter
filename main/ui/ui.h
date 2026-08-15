@@ -125,6 +125,15 @@ void ui_set_drawer_expert(bool expert);
 /* Scroll the open drawer so a section below the fold can be screenshotted. */
 void ui_set_drawer_scroll_y(int y);
 
+/* Power the Tab5 off after putting the radio back into receive.
+ *
+ * The power BUTTON cuts power in hardware with no warning to firmware, so a
+ * shutdown mid-burst leaves the QMX keyed until it is power-cycled (Roy KI0ER).
+ * This is the route that can be made safe: stop transmitting, flush settings,
+ * then signal power off. Blocking, takes roughly a third of a second, and does
+ * not return. */
+void ui_power_off_safely(void);
+
 // Call whenever a help overlay (the docs Reader, the "What's wrong?" panel) opens
 // or closes. While one owns the screen the top-bar hit zones and the drawer/memory
 // edge swipes are dropped out of hit-testing, and the QMX-wait prompt stands down -
