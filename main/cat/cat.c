@@ -744,8 +744,88 @@ int cat_probe_extra_cdc_ports(void)
             ESP_LOGI(TAG, "port probe: interface %d not a CDC port (0x%x)", idx, e);
         }
     }
-    ESP_LOGW(TAG, "port probe: %d virtual COM port(s) usable on this QMX", found);
+    // NB `found` counts openable INTERFACES, not ports. A CDC-ACM function is two
+    // interfaces (control + data), so a two-port radio reports 5 and 6 here and
+    // the honest reading is "the second port's function starts at 5" - which is
+    // what Windows shows as MI_05. Do not quote this number as a port count.
+    ESP_LOGW(TAG, "port probe: %d openable CDC interface(s); second port function starts at 5",
+             found);
     return found;
+}
+
+// ---- Terminal probe (#147) -------------------------------------------------
+// Open the QMX's SECOND serial port, press Enter, and capture what it sends back.
+//
+// The whole point of using port 2 is that CAT on port 1 is never touched, so
+// this cannot take the panadapter down even if the session is left open. That is
+// also what makes the QMX manual's warning survivable: "do not simply close the
+// terminal emulator window ... it will not accept CAT commands" applies to the
+// port hosting the session, and CAT lives on the other one.
+//
+// What we are trying to learn: is the stream ANSI/VT100 escape sequences, or
+// plain re-sent lines? That decides whether the Tab5 needs a small VT100 parser
+// or can simply paint rows.
+#define TERMPROBE_CAP 1024
+static uint8_t  s_termprobe_buf[TERMPROBE_CAP];
+static volatile int s_termprobe_len;
+
+static bool termprobe_rx(const uint8_t *data, size_t len, void *arg)
+{
+    (void)arg;
+    for (size_t i = 0; i < len && s_termprobe_len < TERMPROBE_CAP; i++)
+        s_termprobe_buf[s_termprobe_len++] = data[i];
+    return true;   // buffer consumed
+}
+
+int cat_probe_terminal(void)
+{
+    const cdc_acm_host_device_config_t cfg = {
+        .connection_timeout_ms = 1000,
+        .out_buffer_size = 64,
+        .in_buffer_size  = 512,
+        .event_cb = NULL,
+        .data_cb  = termprobe_rx,
+        .user_arg = NULL,
+    };
+    cdc_acm_dev_hdl_t h = NULL;
+    esp_err_t e = cdc_acm_host_open(QMX_VID, QMX_PID, 5, &cfg, &h);
+    if (e != ESP_OK || !h) {
+        ESP_LOGE(TAG, "terminal probe: cannot open interface 5 (0x%x)", e);
+        return -1;
+    }
+    const cdc_acm_line_coding_t lc = {
+        .dwDTERate = CAT_BAUD_RATE, .bCharFormat = 0, .bParityType = 0, .bDataBits = 8,
+    };
+    cdc_acm_host_line_coding_set(h, &lc);
+    cdc_acm_host_set_control_line_state(h, true, true);
+
+    s_termprobe_len = 0;
+    ESP_LOGW(TAG, "terminal probe: sending CR to port 2");
+    const uint8_t cr = '\r';
+    cdc_acm_host_data_tx_blocking(h, &cr, 1, 200);
+    vTaskDelay(pdMS_TO_TICKS(1500));
+
+    int n = s_termprobe_len;
+    ESP_LOGW(TAG, "terminal probe: %d byte(s) received", n);
+    // Hex + printable, 32 per line. ESC (0x1b) is the byte that answers the
+    // question, so it must be visible as hex rather than swallowed by the log.
+    for (int off = 0; off < n; off += 32) {
+        char hex[32 * 3 + 1], txt[33];
+        int m = (n - off > 32) ? 32 : n - off;
+        for (int i = 0; i < m; i++) {
+            snprintf(&hex[i * 3], 4, "%02x ", s_termprobe_buf[off + i]);
+            uint8_t c = s_termprobe_buf[off + i];
+            txt[i] = (c >= 32 && c < 127) ? (char)c : '.';
+        }
+        txt[m] = '\0';
+        ESP_LOGW(TAG, "  %04d  %s |%s|", off, hex, txt);
+    }
+    // Leave the session as we found it: Ctrl-Q backs out of any nested app.
+    const uint8_t ctrl_q = 0x11;
+    cdc_acm_host_data_tx_blocking(h, &ctrl_q, 1, 200);
+    vTaskDelay(pdMS_TO_TICKS(200));
+    cdc_acm_host_close(h);
+    return n;
 }
 
 static esp_err_t try_open_qmx(void)

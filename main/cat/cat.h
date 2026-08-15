@@ -109,6 +109,14 @@ bool cat_cw_tx_offset_engaged(void);
 // session can run alongside CAT. If there is a second interface, a Tab5 terminal
 // can own it and never disturb the CAT poll.
 int cat_probe_extra_cdc_ports(void);
+
+// Open the QMX's SECOND serial port (interface 5), send Enter, and hex-dump what
+// comes back to the log. Returns the byte count, or -1 if the port would not
+// open. CAT on port 1 is untouched throughout.
+//
+// Answers the one question left before a Tab5 terminal can be designed: is the
+// stream ANSI/VT100 escape sequences or plain re-sent lines?
+int cat_probe_terminal(void);
 /**
  * @brief QMX firmware version string from the VN; query (e.g. "1_03_002QMX").
  * Returns an empty string until the radio has answered VN; after link-up.

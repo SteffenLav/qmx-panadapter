@@ -768,6 +768,16 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, out);
         return ESP_OK;
+    } else if (action && strcmp(action, "qmx_term_probe") == 0) {
+        // Open port 2, press Enter, hex-dump the reply to the log. CAT on port 1
+        // is not involved, so this cannot take the panadapter down.
+        int n = cat_probe_terminal();
+        cJSON_Delete(root);
+        char out[64];
+        snprintf(out, sizeof(out), "{\"ok\":%s,\"bytes\":%d}", n >= 0 ? "true" : "false", n);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, out);
+        return ESP_OK;
     } else if (action && strcmp(action, "qmx_ports") == 0) {
         // Read-only: how many virtual COM ports does this radio expose? Decides
         // whether a Tab5 terminal can have its own port or would have to borrow
