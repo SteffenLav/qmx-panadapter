@@ -1542,6 +1542,27 @@ static void mini_paint(void)
     bool our_even = false;
     bool parity_known = ft8_tx_get_parity_lock(&our_even);
 
+    // A window we did not LISTEN to has no picture, and must not be painted as
+    // though every tone in it were free - which is what happened while
+    // transmitting, since our own window decodes nothing and every cell fell
+    // through to FREE. Roy KI0ER: "it turns the strip all green", and green is
+    // the one reading that will send you onto an occupied frequency.
+    //
+    // Stale = we have not received that window for STALE_WINDOWS of its own
+    // occurrences. A given parity comes round every SECOND slot, hence the x2:
+    // with FT8's 15 s slots this is 2 x 30 s = 60 s. One missed or aborted
+    // capture therefore does not flicker the strip, while a run of transmit
+    // cycles greys it within about four slots - close to the "about 3 cycles"
+    // Roy KI0ER described it going stale after.
+    //
+    // Grey is his own preferred option, and it matches the not-heard-yet state
+    // at FT8 start rather than inventing a third colour for "probably still
+    // true".
+    const int STALE_WINDOWS = 2;
+    int64_t now_utc = (int64_t)time(NULL);
+    int slot_s = ft8_op_mode_slot_ms() / 1000;
+    if (slot_s <= 0) slot_s = 15;
+
     for (int row = 0; row < 2; row++) {
         bool row_even        = (row == 0);
         lv_obj_t **cells     = row_even ? s_mini_cells_e : s_mini_cells_o;
@@ -1550,13 +1571,17 @@ static void mini_paint(void)
         bool mine_here    = !parity_known || (row_even == our_even);
         bool partner_here = parity_known && (row_even != our_even) && partner_slot >= 0;
 
+        int64_t last_rx = ft8_last_rx_utc_for_parity(row_even);
+        bool row_stale  = (last_rx <= 0) ||
+                          ((now_utc - last_rx) > (int64_t)STALE_WINDOWS * slot_s * 2);
+
         for (int i = 0; i < n_slots; i++) {
             if (!cells[i]) continue;
             uint8_t cls;
             uint32_t col;
             if (mine_here && i == mine_slot)         { cls = MINI_C_MINE;    col = FT8_TONE_COL_PICK; }
             else if (partner_here && i == partner_slot) { cls = MINI_C_PARTNER; col = FT8_TONE_COL_PARTNER; }
-            else if (n_stations == 0)                { cls = MINI_C_UNKNOWN; col = FT8_TONE_COL_UNKNOWN; }
+            else if (n_stations == 0 || row_stale)   { cls = MINI_C_UNKNOWN; col = FT8_TONE_COL_UNKNOWN; }
             else if ((occ >> i) & 1ULL)              { cls = MINI_C_BUSY;    col = FT8_TONE_COL_BUSY; }
             else                                     { cls = MINI_C_FREE;    col = FT8_TONE_COL_FREE; }
             if (cls == prev[i]) continue;

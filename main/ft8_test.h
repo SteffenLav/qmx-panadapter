@@ -62,6 +62,18 @@ void ft8_sim_synth_selftest(void);
 // clock is fast. Returns false if no valid measurement is available yet.
 bool ft8_get_last_timing_ms(int *out_ms);
 
+// Slot-start UTC (seconds) of the last slot we actually RECEIVED in the given
+// transmit window, or 0 if we have never received one. 0 while nothing has been
+// captured yet.
+//
+// Exists because "no stations decoded in this window" is ambiguous: it means the
+// window is empty OR that we were transmitting into it and heard nothing at all.
+// Those must not look the same, and before this they both rendered as FREE -
+// i.e. the window we were keying read as "entirely available" (Roy KI0ER, #135).
+// Compare the age against a couple of slot periods to decide whether the picture
+// for that window is current or merely the last thing we knew.
+int64_t ft8_last_rx_utc_for_parity(bool even);
+
 // The REAL per-slot correction actually applied to the UTC clock (ms; 0 = none
 // applied this slot). This is the damped+clamped value, NOT the raw measurement
 // above - the time modal shows this so a noisy single-station measurement never

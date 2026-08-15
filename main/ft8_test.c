@@ -377,6 +377,17 @@ static volatile bool s_buf_busy[FT8_NUM_BUFFERS];
 // are protocol-specific (FT8: 1920-sample blocks, 93/slot; FT4: 576, 156/slot),
 // so switching FT8<->FT4 rebuilds the pool. -1 = not yet built.
 static int           s_pool_proto = -1;   // ftx_protocol_t, or -1
+
+// Slot-start UTC of the last slot we actually RECEIVED, per transmit window.
+// Written only where a capture completed, read by the UI to tell "this window is
+// free" from "we were transmitting into this window and have no idea".
+static volatile int64_t s_last_rx_utc_even = 0;
+static volatile int64_t s_last_rx_utc_odd  = 0;
+
+int64_t ft8_last_rx_utc_for_parity(bool even)
+{
+    return even ? s_last_rx_utc_even : s_last_rx_utc_odd;
+}
 // Single reusable capture scratch buffer (decimated 12 kHz audio). Consumed by
 // the streaming STFT during capture; not needed once the waterfall is built, so
 // one buffer serves every slot (capture is strictly sequential).
@@ -1686,6 +1697,16 @@ static void ft8_task(void *arg)
                 ft8_status_set("TX done - waiting for next slot");
                 ft8_screen_view_request_refresh();
             } else if (e == ESP_OK) {
+                // We genuinely LISTENED to this slot, so the occupancy picture
+                // for its parity is current as of now. This is the only honest
+                // source for "do we know what is in that window": a station
+                // count cannot tell an EMPTY window from one we transmitted
+                // into, and both otherwise render as "free" (#135).
+                {
+                    int64_t sidx = boundary_ms / period_ms;
+                    if ((sidx % 2) == 0) s_last_rx_utc_even = slot_sec;
+                    else                 s_last_rx_utc_odd  = slot_sec;
+                }
                 // FFT any remaining whole blocks (late in-flight samples or the
                 // zero-padded dead-air tail -> noise), then queue the decode.
                 while ((processed + 1) * blk <= slot_samples) {
