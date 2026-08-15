@@ -64,6 +64,7 @@ idf_component_register(
         "net/reader_net.c"
         "net/manual_embed.c"
         "net/update_check.c"
+        "qmx_term.c"
         "ft8_test.c"
         "ft8_tx.c"
         "ft8_hash.c"
