@@ -1627,11 +1627,37 @@ static bool try_start_pileup_pounce(void)
         ESP_LOGW(TAG, "auto-pileup build_request(%s) failed: %s", pile[best].call, err);
         return false;
     }
+    // Carry the CQ-run context ACROSS the start, the same way s_pileup_active is
+    // re-set below, because ft8_qso_start() clears all of it (it cannot know an
+    // automatic drain from a manual pounce).
+    //
+    // Without this, draining the pileup ENDED the CQ run: every drained contact
+    // was marked "not from CQ", so when the pileup finally emptied the machine
+    // fell to IDLE and stopped calling. During an activation that is the wrong
+    // default - the operator decides when to stop calling, or the "CQ stop
+    // after N calls" setting does. Nothing should silently stop the run just
+    // because the queue drained. (Operator's call, 2026-08-15.)
+    //
+    // Only restored when we WERE in a CQ run: a pileup drained from IDLE must
+    // not invent a CQ to resume into.
+    lock();
+    bool             was_from_cq   = s_from_cq;
+    bool             had_cq_saved  = s_have_cq_saved;
+    ft8_tx_request_t cq_ctx        = s_cq_saved;
+    unlock();
+
     if (!ft8_qso_start(&req, err, sizeof(err))) {   // clears s_pileup_active
         ESP_LOGW(TAG, "auto-pileup ft8_qso_start(%s) refused: %s", pile[best].call, err);
         return false;
     }
+    lock();
     s_pileup_active = true;   // set AFTER ft8_qso_start (which clears it)
+    if (was_from_cq && had_cq_saved) {
+        s_from_cq       = true;
+        s_cq_saved      = cq_ctx;
+        s_have_cq_saved = true;
+    }
+    unlock();
     ESP_LOGI(TAG, "auto-pileup: working %s (snr=%d, %d waiting)",
              pile[best].call, pile[best].snr_db, n);
     ft8_status_set("Pileup: working %s", pile[best].call);
@@ -1785,8 +1811,44 @@ void ft8_qso_advance(int64_t slot_sec)
         // doesn't stall the whole drain. A human/robot pounce timeout is left
         // sticky (s_pileup_active is false for those).
         if (s_pileup_active) {
+            // ft8_qso_abort() also clears the CQ-run context, so without this a
+            // single caller who wandered off would quietly end the whole CQ run
+            // once the rest of the queue drained. Same rule as the completion
+            // path: nothing automatic stops the operator calling CQ.
+            lock();
+            bool             was_from_cq  = s_from_cq;
+            bool             had_cq_saved = s_have_cq_saved;
+            ft8_tx_request_t cq_ctx       = s_cq_saved;
+            unlock();
+
             ft8_qso_abort();                       // TIMEOUT -> IDLE, clears s_pileup_active
+
+            if (was_from_cq && had_cq_saved) {
+                lock();
+                s_from_cq       = true;
+                s_cq_saved      = cq_ctx;
+                s_have_cq_saved = true;
+                unlock();
+            }
             if (try_start_pileup_pounce()) return; // next waiting station
+
+            // Queue empty after a dead caller: fall back to the CQ we were
+            // running rather than going idle.
+            if (was_from_cq && had_cq_saved) {
+                lock();
+                s_cur_req       = cq_ctx;
+                s_have_cur      = true;
+                s_state         = FT8_QSO_CQ;
+                s_target[0]     = '\0';
+                s_missed_slots  = 0;
+                s_cq_calls_sent = 0; s_cq_listen_done_at = -1;
+                s_cq_exhausted  = false;
+                unlock();
+                arm_current_if_idle();
+                ft8_status_set("CQ: calling - listening for answers");
+                ESP_LOGI(TAG, "pileup drained (last caller timed out) - resuming CQ @ %d Hz",
+                         cq_ctx.audio_freq_hz);
+            }
         }
         return;
     }
