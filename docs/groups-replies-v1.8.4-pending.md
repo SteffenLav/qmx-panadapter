@@ -32,6 +32,8 @@ On clearing the Pile Up list: added. There is a "Clear all" button beside Close,
 
 On seeing your QSO count without fighting the Pile Up screen: the QSO log page already shows the count, and the Pile Up screen no longer traps you. If that still feels awkward in use, tell me - the underlying want was "how many have I got", and there may be a better place to put that than either screen.
 
+On the learning curve, and knowing when to bail out on a contact: that is worth saying out loud, because the panadapter already bails out for you and it does not tell you that it does. If a station stops answering, the exchange is abandoned after four slots with no progress and the radio goes back to what it was doing. There is also a grey-list, off by default, which skips a station that has timed out on you twice, so a silent station does not keep eating your cycles. What is missing is any of that being visible while it happens - you were tracking it in your head because the screen was not tracking it for you. I have not got a good answer yet, but it is the right complaint and I would rather say so than dress it up.
+
 Two of the above - the Pile Up changes - I have not been able to test, because the screen needs a finger and a real pileup. If you get a chance on your next activation, they are the two to watch.
 
 ---
@@ -70,6 +72,8 @@ On flashing failing while the COM port was still listed: your suggestion is now 
 On why it happens: the Tab5 has no separate USB-to-serial chip. The port you flash over is produced by the ESP32-P4 itself, so it only exists while the firmware is running - a busy firmware can leave the port listed in Device Manager while it no longer answers the flasher. Restarting it restarts the port. I have not endorsed the memory-depletion idea, because nothing has measured it, and I would rather leave the cause open than write a guess into the manual.
 
 On the arrow buttons: understood, and thank you for closing that off. The proportional slider stays as it is.
+
+On leaving it running seven hours and coming back to it still going: that is worth more to me than it probably felt like to report. Long unattended runs are the thing I cannot test properly here, so an "it was still motoring along" from a real station is real evidence.
 
 ---
 
