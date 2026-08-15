@@ -25,6 +25,7 @@ static lv_obj_t *s_modal = NULL;
 static lv_obj_t *s_panel = NULL;
 static lv_obj_t *s_title = NULL;
 static lv_obj_t *s_list  = NULL;
+static lv_obj_t *s_clear_lbl = NULL;   // "Clear all" / "Clear N?" - two-tap arm
 static bool      s_open  = false;
 
 static void list_render(void);
@@ -138,6 +139,37 @@ static void row_work_cb(lv_event_t *e)
     }
 }
 
+// Two-tap arm for Clear all. Disarms on any re-render (a new caller arriving, a
+// dismiss, or reopening the screen), so an armed button can never sit waiting to
+// wipe a list the operator has since started caring about.
+static bool s_clear_armed = false;
+
+static void clear_disarm(void)
+{
+    s_clear_armed = false;
+    if (s_clear_lbl) lv_label_set_text(s_clear_lbl, "Clear all");
+}
+
+static void clear_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    int n = ft8_pileup_count();
+    if (n <= 0) { clear_disarm(); return; }
+    if (!s_clear_armed) {
+        s_clear_armed = true;
+        if (s_clear_lbl) {
+            char b[24];
+            snprintf(b, sizeof(b), "Clear %d?", n);
+            lv_label_set_text(s_clear_lbl, b);
+        }
+        return;
+    }
+    ft8_pileup_clear();
+    clear_disarm();
+    list_render();
+    ESP_LOGI(TAG, "pileup: cleared %d waiting station(s) by operator", n);
+}
+
 static void row_dismiss_cb(lv_event_t *e)
 {
     lv_obj_t *l_call = (lv_obj_t *)lv_event_get_user_data(e);
@@ -197,8 +229,19 @@ static void add_pileup_row(lv_obj_t *parent, const ft8_pileup_entry_t *entry, bo
 
     // Dismiss - own click zone (a child button, no LV_OBJ_FLAG_EVENT_BUBBLE),
     // so tapping it does not also fire the row's own "work" handler below.
+    // ⚠ THE TWO TARGETS ON THIS ROW HAVE VERY DIFFERENT CONSEQUENCES, so a
+    // near-miss must not be a surprise. Dismiss just drops a name; the rest of
+    // the row WORKS the station - it opens the transmit ladder and closes this
+    // screen. Don WB0LQW (2026-08-15) reported difficulty hitting the small
+    // buttons and "sometimes I managed to exit the Pile Up screen" while trying:
+    // that was not a stray gesture, it was missing a 48 px button and landing on
+    // the row underneath.
+    //
+    // Fixed three ways: a bigger dismiss button, a GUARD STRIP beside it that
+    // absorbs near-misses and does nothing at all, and no reliance on
+    // ext_click_area (which LVGL clips to the parent row anyway).
     lv_obj_t *dismiss = lv_btn_create(row);
-    lv_obj_set_size(dismiss, 48, 48);
+    lv_obj_set_size(dismiss, 72, 56);
     lv_obj_align(dismiss, LV_ALIGN_RIGHT_MID, -10, 0);
     lv_obj_set_style_bg_color(dismiss, lv_color_hex(0x962020), 0);
     lv_obj_set_style_radius(dismiss, 6, 0);
@@ -209,12 +252,30 @@ static void add_pileup_row(lv_obj_t *parent, const ft8_pileup_entry_t *entry, bo
     lv_obj_center(dismiss_lbl);
     lv_obj_add_event_cb(dismiss, row_dismiss_cb, LV_EVENT_CLICKED, l_call);
 
+    // The guard: invisible, clickable, NO handler. A finger that slips off the
+    // dismiss button lands here and nothing happens - which is the right outcome
+    // when the alternative is transmitting to someone you did not choose.
+    // Marked NOT_HOT so the mouse pointer does not advertise it as a control.
+    lv_obj_t *guard = lv_obj_create(row);
+    lv_obj_set_size(guard, 34, 56);
+    lv_obj_align(guard, LV_ALIGN_RIGHT_MID, -(10 + 72), 0);
+    lv_obj_set_style_bg_opa(guard, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(guard, 0, 0);
+    lv_obj_set_style_pad_all(guard, 0, 0);
+    lv_obj_clear_flag(guard, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(guard, LV_OBJ_FLAG_CLICKABLE);   // swallows the press
+    lv_obj_add_flag(guard, UI_FLAG_NOT_HOT);
+
     // Work: tap anywhere else on the row.
     lv_obj_add_event_cb(row, row_work_cb, LV_EVENT_CLICKED, l_call);
 }
 
 static void list_render(void)
 {
+    // Any re-render means the list changed or the screen was reopened, so a
+    // half-pressed "Clear all" must stand down rather than wait here armed.
+    clear_disarm();
+
     ft8_pileup_entry_t entries[FT8_PILEUP_MAX];
     int n = ft8_pileup_get_all(entries, FT8_PILEUP_MAX);
 
@@ -293,7 +354,45 @@ static void modal_build(void)
     lv_obj_set_style_pad_row(s_list, 8, 0);
     lv_obj_set_scroll_dir(s_list, LV_DIR_VER);
 
-    lv_obj_t *close_btn = lv_btn_create(s_panel);
+    // Clear all. Don WB0LQW, after his first activation: a long pileup goes
+    // stale faster than it can be worked - by the time you pick someone they are
+    // often already in another QSO - and he wanted to wipe it and start fresh.
+    //
+    // Two-tap arm rather than a confirm dialog, the same pattern the ADIF
+    // viewer's Delete-all uses: one tap turns it into "Clear N?", a second
+    // clears. Anything destructive on a touch screen needs a second tap; a modal
+    // on top of a modal does not.
+    // Both buttons share ONE row. The panel is a flex COLUMN with
+    // max_height 640, and its existing content (title + hint + the 440 px list +
+    // one 72 px button row + padding) already came to ~638 - so stacking a
+    // second button underneath would have pushed past the limit and clipped it.
+    // Side by side costs zero extra height, and 240 + 240 + a gap fits the
+    // 788 px of content width easily.
+    lv_obj_t *btnrow = lv_obj_create(s_panel);
+    lv_obj_set_width(btnrow, LV_PCT(100));
+    lv_obj_set_height(btnrow, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(btnrow, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(btnrow, 0, 0);
+    lv_obj_set_style_pad_all(btnrow, 0, 0);
+    lv_obj_clear_flag(btnrow, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_flex_flow(btnrow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(btnrow, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER,
+                          LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_column(btnrow, 16, 0);
+
+    lv_obj_t *clear_btn = lv_btn_create(btnrow);
+    lv_obj_set_size(clear_btn, 240, 72);
+    lv_obj_set_style_bg_color(clear_btn, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
+    lv_obj_set_style_radius(clear_btn, 8, 0);
+    lv_obj_set_style_border_width(clear_btn, 0, 0);
+    lv_obj_add_event_cb(clear_btn, clear_btn_cb, LV_EVENT_CLICKED, NULL);
+    s_clear_lbl = lv_label_create(clear_btn);
+    lv_label_set_text(s_clear_lbl, "Clear all");
+    lv_obj_set_style_text_color(s_clear_lbl, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_font(s_clear_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(s_clear_lbl);
+
+    lv_obj_t *close_btn = lv_btn_create(btnrow);
     lv_obj_set_size(close_btn, 240, 72);
     lv_obj_set_style_bg_color(close_btn, lv_color_hex(0x962020), 0);
     lv_obj_set_style_radius(close_btn, 8, 0);
