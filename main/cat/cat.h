@@ -94,6 +94,12 @@ bool cat_is_ready(void);
  * Returns 700 (QMX default) if not yet read or CAT not connected.
  */
 int cat_get_cw_offset_hz(void);
+
+// True while WE are holding the radio in split for the CW transmit offset.
+// RIT is refused while this is true - the two are mutually exclusive, since the
+// offset is implemented as split (the QMX has no XIT) and RIT would move the
+// receiver as well. Clearing RIT to zero is always allowed.
+bool cat_cw_tx_offset_engaged(void);
 /**
  * @brief QMX firmware version string from the VN; query (e.g. "1_03_002QMX").
  * Returns an empty string until the radio has answered VN; after link-up.

@@ -97,6 +97,11 @@ const cat_band_entry_t *cat_get_band_list(int *out_count)
     return s_band_list;
 }
 static uint64_t s_last_tx_us = 0;   // for rate-limiting cat_set_frequency
+// True only while WE hold the radio in split for the CW transmit offset. Lives
+// here rather than beside cw_split_maintain() because cat_request_rit_hz(),
+// further up this file, refuses a RIT offset while it is set - the two controls
+// are mutually exclusive (see that function).
+static bool     s_split_engaged = false;
 static volatile bool s_poll_paused = false;  // v0.12.0: cooperative pause for FT8 TX bursts
 
 // Pending mode digit (Kenwood MD digit '1'-'9') requested from the LVGL thread.
@@ -164,8 +169,25 @@ static volatile int  s_pending_rit_hz  = 0;
 static volatile bool s_rit_pending     = false;
 static int           s_rit_hz          = 0;   // what we last commanded
 
+bool cat_cw_tx_offset_engaged(void) { return s_split_engaged; }
+
 void cat_request_rit_hz(int hz)
 {
+    // RIT and the CW transmit offset are mutually exclusive (Roy KI0ER). The CW
+    // offset is implemented as SPLIT - RX on VFO A, TX on VFO B at A+offset -
+    // because the QMX has no XIT. Adding RIT on top moves the receiver as well,
+    // so the operator is then listening on one frequency, transmitting on a
+    // second, and reading a dial that shows a third. Refusing is the honest
+    // answer; silently accepting it is how someone ends up calling into empty
+    // space and never knowing why.
+    //
+    // Enforced HERE rather than in the UI so the web API is covered by the same
+    // rule. Clearing to zero is always allowed - standing RIT down must never be
+    // the thing that gets refused.
+    if (hz != 0 && s_split_engaged) {
+        ESP_LOGW(TAG, "RIT %+d Hz refused: the CW transmit offset (split) is engaged", hz);
+        return;
+    }
     if (hz >  CAT_RIT_MAX_HZ) hz =  CAT_RIT_MAX_HZ;
     if (hz < -CAT_RIT_MAX_HZ) hz = -CAT_RIT_MAX_HZ;
     s_pending_rit_hz = hz;
@@ -764,7 +786,8 @@ static esp_err_t try_open_qmx(void)
 // would compound on every cycle and walk the radio up the band. One read-back
 // command is worth having; that one is not.
 #define CW_SPLIT_REFRESH_US  30000000LL
-static bool     s_split_engaged = false;   // true only while WE hold split on
+// s_split_engaged is declared up with the other CAT state, because
+// cat_request_rit_hz() needs it and sits earlier in this file.
 static uint32_t s_split_base_hz = 0;       // the RX frequency B was computed from
 static int64_t  s_split_last_us = 0;
 static bool     s_split_warned = false;    // one warning per failed engage, not per poll
@@ -1569,9 +1592,18 @@ esp_err_t cat_set_frequency(uint32_t freq_hz)
     // HTTP threads, and only the poll task may write to the pipe.
     if (s_rit_hz != 0 || s_rit_pending) {
         ESP_LOGI(TAG, "retune -> clearing RIT (was %+d Hz)", s_rit_hz);
-        cat_request_rit_hz(0);
-        ui_rit_notify_retune();   // and tap-to-RIT mode stands down with it
+        cat_request_rit_hz(0);   // only worth a CAT write if it is actually set
     }
+    // ⚠ UNCONDITIONAL, and it used to be inside the branch above. A PARKED
+    // offset (long-press: remembered while RIT is switched off) has s_rit_hz == 0,
+    // so the whole block was skipped and the park SURVIVED the retune - then a
+    // long press on the next band restored an offset belonging to the previous
+    // one, from a number the operator could no longer see. Roy KI0ER reported it
+    // as "a band change does not clear it out either, but should", and he is
+    // right: a fresh frequency is a fresh start. The armed tap-to-RIT mode
+    // stands down here too, or the next tap on the spectrum would silently set
+    // an offset instead of tuning.
+    ui_rit_notify_retune();
     return ESP_OK;
 }
 

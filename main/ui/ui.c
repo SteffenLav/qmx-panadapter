@@ -2588,6 +2588,22 @@ static void rit_pill_cb(lv_event_t *e)
         cat_request_rit_hz(0);
         s_rit_armed = false;
         ESP_LOGI(TAG, "RIT: cleared and disarmed from the pill");
+    } else if (s_rit_stash_hz != 0) {
+        // A PARKED offset had no way out: a short press armed tap-to-RIT and a
+        // long press brought the old offset back, so the only escape was to
+        // retune. Roy KI0ER: "I don't see a way to just reset it to off and
+        // zero offset." Short press is already the "off, and forget it" gesture
+        // when RIT is engaged, so it means the same thing for a parked one.
+        ESP_LOGI(TAG, "RIT: discarded the parked %+d Hz from the pill", s_rit_stash_hz);
+        s_rit_stash_hz = 0;
+        s_rit_armed    = false;
+        ui_toast("RIT offset discarded");
+    } else if (cat_cw_tx_offset_engaged()) {
+        // cat_request_rit_hz() would refuse the offset anyway; say so at the
+        // moment of the press rather than letting the pill arm and the tap that
+        // follows do nothing.
+        ui_toast("RIT unavailable: CW transmit offset is on");
+        s_rit_armed = false;
     } else {
         s_rit_armed = !s_rit_armed;
         ESP_LOGI(TAG, "RIT: %s", s_rit_armed ? "armed - a tap now sets RIT, not the dial"
