@@ -720,20 +720,31 @@ int cat_probe_extra_cdc_ports(void)
         .data_cb  = NULL,
         .user_arg = NULL,
     };
+    // ⚠ SCAN THE WHOLE RANGE, and do NOT stop at the first gap. The QMX's CDC
+    // functions are NOT contiguous: measured on Windows against a QMX with
+    // "USB serial ports" set to 2 (VID_0483 PID_A34C), the interfaces are
+    //
+    //     MI_00  CDC #1  (COM10)      <- interfaces 0-1
+    //     MI_02  QMX Transceiver      <- the audio function, 2-4
+    //     MI_05  CDC #2  (COM4)       <- the second serial port starts at 5
+    //
+    // An earlier version of this probe tried 1 and 2 and broke out on the first
+    // failure, so it never reached 5 and reported "1 port" for a radio that was
+    // presenting two the whole time. The audio function sits between them; that
+    // is the gap.
     int found = 1;   // interface 0 is the one we are already using
-    for (int idx = 1; idx <= 2; idx++) {
+    for (int idx = 1; idx <= 7; idx++) {
         cdc_acm_dev_hdl_t h = NULL;
         esp_err_t e = cdc_acm_host_open(QMX_VID, QMX_PID, idx, &cfg, &h);
         if (e == ESP_OK && h) {
-            found = idx + 1;
+            found++;
             ESP_LOGW(TAG, "port probe: CDC interface %d EXISTS - a terminal could own it", idx);
             cdc_acm_host_close(h);
         } else {
-            ESP_LOGW(TAG, "port probe: CDC interface %d not present (0x%x)", idx, e);
-            break;   // interfaces are contiguous; no point probing past a gap
+            ESP_LOGI(TAG, "port probe: interface %d not a CDC port (0x%x)", idx, e);
         }
     }
-    ESP_LOGW(TAG, "port probe: %d virtual COM port(s) on this QMX", found);
+    ESP_LOGW(TAG, "port probe: %d virtual COM port(s) usable on this QMX", found);
     return found;
 }
 
