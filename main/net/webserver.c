@@ -745,6 +745,40 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             if (want && cJSON_IsNumber(sy)) ui_set_drawer_scroll_y((int)sy->valuedouble);
             display_unlock();
         }
+    } else if (action && strcmp(action, "cat_raw") == 0) {
+        // Developer escape hatch: send one raw CAT string to the radio. The
+        // reply arrives on the normal RX path and is logged in full (non-poll
+        // traffic is never de-duplicated), so read it from the diagnostic log.
+        //
+        // Exists for menu DISCOVERY: the QMX's MM command can Get, Set or Query
+        // any configuration item by path, which means the exact menu tokens can
+        // be ASKED FOR rather than guessed - and CLAUDE.md records that guessing
+        // MM tokens has burned real time before.
+        const char *c = cJSON_GetStringValue(cJSON_GetObjectItem(root, "cmd"));
+        if (!c || !c[0]) {
+            cJSON_Delete(root);
+            httpd_resp_set_status(req, "400 Bad Request");
+            httpd_resp_sendstr(req, "{\"error\":\"needs cmd\"}");
+            return ESP_OK;
+        }
+        esp_err_t e = cat_send_raw_cmd("%s", c);
+        cJSON_Delete(root);
+        char out[64];
+        snprintf(out, sizeof(out), "{\"ok\":%s}", e == ESP_OK ? "true" : "false");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, out);
+        return ESP_OK;
+    } else if (action && strcmp(action, "qmx_ports") == 0) {
+        // Read-only: how many virtual COM ports does this radio expose? Decides
+        // whether a Tab5 terminal can have its own port or would have to borrow
+        // the CAT pipe. Writes nothing to the radio.
+        int n = cat_probe_extra_cdc_ports();
+        cJSON_Delete(root);
+        char out[64];
+        snprintf(out, sizeof(out), "{\"ok\":true,\"cdc_ports\":%d}", n);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, out);
+        return ESP_OK;
     } else if (action && strcmp(action, "power_off") == 0) {
         // Shut the Tab5 down after putting the radio back into receive. Needs
         // {"confirm":"POWEROFF"} - this is not something to trigger by fat

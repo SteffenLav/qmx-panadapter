@@ -100,6 +100,15 @@ int cat_get_cw_offset_hz(void);
 // offset is implemented as split (the QMX has no XIT) and RIT would move the
 // receiver as well. Clearing RIT to zero is always allowed.
 bool cat_cw_tx_offset_engaged(void);
+
+// How many CDC (virtual COM) interfaces this QMX exposes: 1, 2 or 3, or -1 if no
+// radio is open. Read-only - it opens and immediately closes the extra ones and
+// writes nothing to the radio.
+//
+// Matters because the QMX can be configured for three ports so a terminal
+// session can run alongside CAT. If there is a second interface, a Tab5 terminal
+// can own it and never disturb the CAT poll.
+int cat_probe_extra_cdc_ports(void);
 /**
  * @brief QMX firmware version string from the VN; query (e.g. "1_03_002QMX").
  * Returns an empty string until the radio has answered VN; after link-up.

@@ -695,6 +695,48 @@ static void process_cat_message(const char *msg, size_t len)
     }
 }
 
+// Does this radio expose more than one CDC interface?
+//
+// The QMX can be configured for THREE virtual COM ports (firmware 1_02_000+, a
+// System config parameter), expressly so a terminal session can run at the same
+// time as CAT. If a second interface is there, the Tab5's terminal can own it
+// outright and never touch the CAT pipe - which removes the entire risk of
+// leaving the radio in terminal mode with CAT dead.
+//
+// Read-only and safe: it opens an interface, says whether that worked, and
+// closes it again. Nothing is written to the radio, so a device with only one
+// interface simply reports a failure and is otherwise untouched.
+int cat_probe_extra_cdc_ports(void)
+{
+    if (!s_cdc_dev) {
+        ESP_LOGW(TAG, "port probe: no QMX open, nothing to probe");
+        return -1;
+    }
+    const cdc_acm_host_device_config_t cfg = {
+        .connection_timeout_ms = 1000,
+        .out_buffer_size = 64,
+        .in_buffer_size  = 64,
+        .event_cb = NULL,
+        .data_cb  = NULL,
+        .user_arg = NULL,
+    };
+    int found = 1;   // interface 0 is the one we are already using
+    for (int idx = 1; idx <= 2; idx++) {
+        cdc_acm_dev_hdl_t h = NULL;
+        esp_err_t e = cdc_acm_host_open(QMX_VID, QMX_PID, idx, &cfg, &h);
+        if (e == ESP_OK && h) {
+            found = idx + 1;
+            ESP_LOGW(TAG, "port probe: CDC interface %d EXISTS - a terminal could own it", idx);
+            cdc_acm_host_close(h);
+        } else {
+            ESP_LOGW(TAG, "port probe: CDC interface %d not present (0x%x)", idx, e);
+            break;   // interfaces are contiguous; no point probing past a gap
+        }
+    }
+    ESP_LOGW(TAG, "port probe: %d virtual COM port(s) on this QMX", found);
+    return found;
+}
+
 static esp_err_t try_open_qmx(void)
 {
     const cdc_acm_host_device_config_t cfg = {
