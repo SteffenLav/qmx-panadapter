@@ -1196,7 +1196,21 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
       const text = await f.text();
       const r = await fetch("/api/config", { method: "POST", headers: { "Content-Type": "text/plain" }, body: text });
       const j = await r.json();
-      alert("Config applied: " + j.applied + " item(s).\nRestart the Tab5 for all settings to take effect (memory channels are live now).");
+      /* Zero applied is a FAILURE, and saying "applied: 0" in the same words as
+         success is how Brian WA6JFK ended up erasing his unit to fix what was
+         only a bad file. Unknown keys are skipped silently by design (the import
+         merges), so a typo, the wrong file, or one an editor has mangled all
+         come back as 0 - which has to be said plainly, with the likely causes. */
+      if (!j.applied) {
+        alert("Nothing in that file was recognised, so no settings were changed.\n\n"
+            + "Check that it is a qmx-config.txt saved with \"Config download\", "
+            + "that it was saved as plain text, and that the setting names on the "
+            + "left of each \"=\" have not been altered.\n\n"
+            + "Nothing on the Tab5 has been touched - it is safe to edit the file "
+            + "and try again.");
+      } else {
+        alert("Config applied: " + j.applied + " item(s).\nRestart the Tab5 for all settings to take effect (memory channels are live now).");
+      }
     } catch (err) {
       alert("Config upload failed: " + err);
     } finally {
