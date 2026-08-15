@@ -286,6 +286,12 @@ static volatile bool s_active = false;  // true while the FT8 screen is showing 
 #define ROW_HOLD_SELECT_MS   250   // hold this long to enter selection mode
 #define ROW_PREVIEW_MS        80   // show dim highlight this many ms into the hold
 #define ROW_SCROLL_CANCEL_PX  20   // finger movement beyond this cancels selection
+// Hold this long, then release on a CQ row, to pounce WITHOUT the confirmation
+// modal (Roy KI0ER, #137). Comfortably clear of ROW_HOLD_SELECT_MS so the
+// ordinary hold-and-drag selection is unaffected: that gate is 250 ms and this
+// one is nearly three times it, so a touch that is merely being dragged across
+// rows does not reach it by accident.
+#define ROW_POUNCE_HOLD_MS   700
 
 static int      s_row_hover         = -1;
 static int      s_row_preview       = -1;  // dim pre-activation highlight
@@ -551,7 +557,28 @@ static void grey_modal_show(const char *call)
     }
 }
 
-static void row_activate(int idx)
+// Is this row a plain CQ? The long-press-to-pounce shortcut is limited to those:
+// answering a CQ is the case where the next message is never in doubt, and it is
+// the case where the next 15 s cycle is worth catching.
+static bool row_is_cq(int idx)
+{
+    if (!s_rows || idx < 0 || idx >= MAX_ROWS) return false;
+    row_widgets_t *r = &s_rows[idx];
+    if (!r->row || !r->l_msg || lv_obj_has_flag(r->row, LV_OBJ_FLAG_HIDDEN)) return false;
+    const char *msg = lv_label_get_text(r->l_msg);
+    return msg && strncmp(msg, "CQ ", 3) == 0;
+}
+
+static void row_activate_ex(int idx, bool direct);
+
+static void row_activate(int idx) { row_activate_ex(idx, false); }
+
+// Long-press release: same target resolution and same message construction as a
+// normal activation, but hands the request straight to the QSO machine instead
+// of the confirmation modal.
+static void row_pounce_direct(int idx) { row_activate_ex(idx, true); }
+
+static void row_activate_ex(int idx, bool direct)
 {
     if (!s_rows) return;
     if (idx < 0 || idx >= MAX_ROWS) return;
@@ -614,7 +641,24 @@ static void row_activate(int idx)
     ft8_tx_request_t req;
     char err[64];
     if (ft8_qso_build_manual_reply(match, reply_freq_hz, &req, NULL, err, sizeof(err))) {
-        ft8_tx_modal_show(&req);
+        if (direct) {
+            // Straight into the auto-sequencer, exactly what the modal's own
+            // "Auto Pounce" button does - so the shortcut and the button cannot
+            // drift apart.
+            char serr[64];
+            if (ft8_qso_start(&req, serr, sizeof(serr))) {
+                ft8_qso_note_manual_target(req.target_call);
+                char tb[48];
+                snprintf(tb, sizeof(tb), "Pouncing %s", match->call);
+                ui_toast(tb);
+                ESP_LOGI(TAG, "long-press pounce: %s (no modal)", match->call);
+            } else {
+                ui_toast(serr);
+                ESP_LOGW(TAG, "long-press pounce refused for %s: %s", match->call, serr);
+            }
+        } else {
+            ft8_tx_modal_show(&req);
+        }
     } else {
         ESP_LOGW(TAG, "build manual reply to %s failed: %s", match->call, err);
         identity_config_modal_show();
@@ -727,7 +771,23 @@ static void row_touch_cb(lv_event_t *e)
         } else if (was_selection_mode) {
             // Held long enough to lock scroll, optionally dragged across
             // rows - whatever's currently highlighted fires.
-            if (confirm >= 0) row_activate(confirm);
+            //
+            // Held a good deal LONGER than that, and released on a plain CQ?
+            // Skip the confirmation modal and pounce immediately. Roy KI0ER:
+            // "by the time I click the station, then respond to the modal
+            // window in order to click the Pounce button, too much time has
+            // passed so I cannot respond into the very next 15 second cycle" -
+            // and that next cycle is the whole point of answering a CQ.
+            //
+            // It fires on RELEASE, not when the threshold is reached, so the
+            // existing drag-to-reselect still cancels it: slide onto another
+            // row, or off the list, and nothing is sent. And it is gated to
+            // rows that are CQs, because skipping a confirmation mid-exchange
+            // would be skipping it on a message whose content matters more.
+            uint32_t held = lv_tick_elaps(s_press_start_ms);
+            if (confirm >= 0 && held >= ROW_POUNCE_HOLD_MS && row_is_cq(confirm))
+                row_pounce_direct(confirm);
+            else if (confirm >= 0) row_activate(confirm);
         } else {
             // A tap that never crossed the hold-to-drag gate, but also
             // never moved far enough to be a scroll - fire immediately on
