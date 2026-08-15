@@ -33,6 +33,7 @@
 #include "ft8_status.h"
 #include "ft8_test.h"   // ft8_op_mode_set() - FT8/FT4 sub-mode flag
 #include "ft8_greylist.h"
+#include "ft8_robot.h"   // ft8_robot_stand_down - cancelling a TX stops the automatics
 #include "ft8_tx_modal.h"
 #include "identity_config.h"
 #include "adif/adif_log.h"
@@ -1859,12 +1860,23 @@ static void tx_indicator_tap_cb(lv_event_t *e)
         return;
     }
 
+    // Cancelling a transmission STOPS THE AUTOMATICS TOO. The operator is
+    // cancelling in order to do something else - check an antenna, change a
+    // tuner, close the station down - and auto-answer re-arming a cycle later is
+    // exactly the thing they were preventing. Roy KI0ER is caught by this
+    // repeatedly: "It would be bad if I halted a TX to check my antenna, and
+    // detached it, and the QMX started transmitting."
+    //
+    // Being surprised by the radio NOT transmitting is recoverable in one tap.
+    // Being surprised by it transmitting is not.
     if (tx_st == FT8_TX_ACTIVE) {
         ESP_LOGI(TAG, "TX indicator tapped ACTIVE — requesting abort");
+        ft8_robot_stand_down("you cancelled a transmission");
         ft8_qso_abort();          // also aborts the auto-pounce QSO if one is running
         ft8_tx_request_abort();
     } else if (tx_st == FT8_TX_ARMED) {
         ESP_LOGI(TAG, "TX indicator tapped ARMED — disarming");
+        ft8_robot_stand_down("you cancelled a transmission");
         ft8_qso_abort();
         ft8_tx_disarm();
     } else if (qso_st == FT8_QSO_TIMEOUT) {

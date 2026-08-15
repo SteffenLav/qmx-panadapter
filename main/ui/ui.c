@@ -24,6 +24,7 @@
 #include "cw_audio.h"
 #include "settings.h"
 #include "bandplan.h"
+#include "ft8_robot.h"   // ft8_robot_stand_down - a band change stops auto-answer
 #include "db_gridlines.h"   // round dBm gridlines derived from the dB Range sliders
 #include "spots_lane.h"
 #include "net/spots.h"
@@ -237,6 +238,13 @@ static void band_preset_cb(lv_event_t *e)
             target = last;                                  // unknown band -> recall as before
         }
     }
+    // Changing band with auto-answer running would transmit into an antenna
+    // that is almost certainly not tuned for the new band - few operators have
+    // an auto-ATU, and the robot arms within a cycle or two. Roy KI0ER: "that's
+    // quite a lot of responsibility to entrust to the operator". Stand it down
+    // and say so; turning it back on is one tap and is the operator's decision.
+    ft8_robot_stand_down("band changed");
+
     cat_set_frequency_forced(target);
     // Optimistically move the display (don't rely solely on the FA poll, which
     // can lag or be briefly garbled after a CDC write) so the band button always

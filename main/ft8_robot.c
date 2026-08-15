@@ -14,6 +14,9 @@
 #include "adif/adif_log.h"
 #include "util/maidenhead.h"
 #include "cat/cat.h"
+#include "ui/ui.h"       // ui_toast - standing auto-answer down must be VISIBLE
+#include <stdio.h>
+#include <time.h>
 
 #include <string.h>
 
@@ -72,6 +75,40 @@ static double rank_score(const ft8_call_t *c, ft8_robot_priority_t pri,
     }
 }
 
+bool ft8_robot_occupancy_ready(void)
+{
+    int slot_s = ft8_op_mode_slot_ms() / 1000;
+    if (slot_s <= 0) slot_s = 15;
+    int64_t e = ft8_last_rx_utc_for_parity(true);
+    int64_t o = ft8_last_rx_utc_for_parity(false);
+    if (e <= 0 || o <= 0) return false;          // never heard one of them at all
+    // Each window comes round every SECOND slot, so hearing both inside four
+    // slot periods is Roy's "wait two full cycles" expressed as a condition
+    // rather than a timer - which also covers startup, a decoder backlog, or
+    // any other gap, not just a band change.
+    int64_t now = (int64_t)time(NULL);
+    int64_t max_age = (int64_t)slot_s * 4;
+    return (now - e) <= max_age && (now - o) <= max_age;
+}
+
+void ft8_robot_stand_down(const char *reason)
+{
+    qmx_settings_t qs;
+    settings_load_all(&qs);
+    if (!qs.ft8_filters.robot_en) return;        // already off - say nothing
+
+    ft8_filters_t f = qs.ft8_filters;
+    f.robot_en = false;
+    settings_set_ft8_filters(&f);
+    s_robot_qso = false;
+    ESP_LOGW(TAG, "auto-answer switched OFF: %s", reason ? reason : "startup");
+    if (reason) {
+        char b[64];
+        snprintf(b, sizeof(b), "Auto-answer off: %s", reason);
+        ui_toast(b);
+    }
+}
+
 void ft8_robot_tick(int64_t slot_sec)
 {
     qmx_settings_t qs;
@@ -79,6 +116,22 @@ void ft8_robot_tick(int64_t slot_sec)
     const ft8_filters_t *f = &qs.ft8_filters;
 
     if (!f->robot_en) { s_robot_qso = false; return; }
+
+    // Never transmit into a band we have not listened to yet. Straight after a
+    // band change or a startup the occupancy map is empty, so the tone would be
+    // chosen from no information at all - and the strip the operator is looking
+    // at is blank for the same reason (Roy KI0ER). Throttled log, because this
+    // is normal for the first couple of cycles and should not fill the ring.
+    if (!ft8_robot_occupancy_ready()) {
+        static int64_t last_log;
+        int64_t now = (int64_t)time(NULL);
+        if (now - last_log >= 15) {
+            last_log = now;
+            ESP_LOGI(TAG, "auto-answer holding: both transmit windows not mapped yet");
+        }
+        ft8_status_set("Auto-answer: listening before first call");
+        return;
+    }
 
     ft8_qso_state_t st = ft8_qso_get_state();
 

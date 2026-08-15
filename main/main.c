@@ -21,6 +21,7 @@
 #include "render.h"
 #include "render_waterfall.h"
 #include "settings.h"
+#include "ft8_robot.h"   // ft8_robot_stand_down - auto-answer must not survive a boot
 #include "dsp/iq_balance.h"
 #include "mem_channels.h"
 #include "wifi.h"
@@ -88,6 +89,14 @@ void app_main(void)
     }
 
     settings_init();
+    // Unattended transmission must never be the state the device powers up in.
+    // If auto-answer was left on at shutdown it used to be on at boot and would
+    // start answering CQs within a cycle or two - before the operator had
+    // checked the antenna, the band, or that they meant to be transmitting at
+    // all (Roy KI0ER). Turning it on is a deliberate act, once per session.
+    // NULL: no toast at boot, the UI does not exist yet and the checkbox will
+    // simply read unchecked, which is the truth.
+    ft8_robot_stand_down(NULL);
     mem_channels_init();
     adif_log_init();
 

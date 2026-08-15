@@ -40,6 +40,7 @@
 #include "time_sync.h"         // time_sync_get_effective_source - /api/status time_src
 #include "ui/help_topics.h"    // help_triage_collect / help_topic_get - /api/help
 #include "ft8_screen.h"        // decode table + shared ordering - /api/decodes
+#include "ft8_robot.h"         // ft8_robot_stand_down - band change stops auto-answer
 #include "maidenhead.h"        // km/bearing for /api/decodes, same math as the Tab5
 #include "ft8_test.h"          // ft8_op_mode_get / ft8_op_mode_slot_ms
 #include <ctype.h>
@@ -583,6 +584,10 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         if (cJSON_IsNumber(item)) {
             uint32_t center_hz = (uint32_t)item->valuedouble;
             uint32_t target    = ui_band_last_hz(center_hz);
+            // Same rule as the Tab5's own band buttons: a band change stands
+            // auto-answer down, because the antenna is probably not tuned for
+            // the new band. Doing it from the browser must not be the loophole.
+            ft8_robot_stand_down("band changed");
             cat_set_frequency(target ? target : center_hz);
         }
     } else if (action && strcmp(action, "set_mode") == 0) {

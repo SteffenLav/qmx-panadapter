@@ -27,3 +27,25 @@
 // UTC second. No-op unless robot is enabled AND the QSO machine is IDLE. When
 // it picks a target it calls ft8_qso_start() internally.
 void ft8_robot_tick(int64_t slot_sec);
+
+// Switch auto-answer OFF and say why. Clears the stored setting, so the Filter
+// modal's checkbox agrees with reality rather than claiming a mode that is no
+// longer running.
+//
+// Called wherever continuing to transmit unattended would be a surprise:
+//   - a band change, because the antenna is usually not tuned for the new band
+//     and few operators have an auto-ATU (Roy KI0ER);
+//   - the operator cancelling a transmission, because they are cancelling in
+//     order to do something else - check an antenna, close the station - and a
+//     re-arm a cycle later is exactly what they were preventing;
+//   - startup, so unattended transmission is never the state the device powers
+//     up in.
+//
+// `reason` is logged and shown to the operator; pass NULL for no toast (boot).
+void ft8_robot_stand_down(const char *reason);
+
+// True once BOTH transmit windows have been listened to recently enough for the
+// tone-occupancy map to mean anything. The robot refuses to transmit until then:
+// straight after a band change or a startup the map is empty, so a tone picked
+// from it is picked from nothing at all (Roy KI0ER).
+bool ft8_robot_occupancy_ready(void);
