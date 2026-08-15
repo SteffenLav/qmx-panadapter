@@ -107,6 +107,10 @@ static SemaphoreHandle_t s_lock = NULL;
 static ft8_tx_state_t    s_state = FT8_TX_IDLE;
 static ft8_tx_request_t  s_armed;                 // valid when s_state != IDLE
 static volatile bool     s_abort_requested = false;
+// Milliseconds into the burst at which the last run was aborted, or -1 if that
+// run was not aborted. Reset at the top of every ft8_tx_run(), so it always
+// describes the MOST RECENT burst and nothing older.
+static volatile int      s_last_abort_ms   = -1;
 
 // Last PC;/SW; reading taken at the tail of a TX burst (see ft8_tx_run).
 static float    s_last_power_w = -1.0f;
@@ -957,10 +961,13 @@ static void sleep_until(int64_t t0, int64_t offset_us)
     }
 }
 
+int ft8_tx_last_abort_ms(void) { return s_last_abort_ms; }
+
 void ft8_tx_run(const ft8_tx_request_t *req)
 {
     if (!req) return;
     s_abort_requested = false;
+    s_last_abort_ms   = -1;   // describes THIS run from here on
 
     // FT8 simulation-mode hard interlock (see ft8_sim.h): when on, this
     // function still runs its full real-time-accurate sequence (so
@@ -1053,6 +1060,10 @@ void ft8_tx_run(const ft8_tx_request_t *req)
             if (s_abort_requested) {
                 ESP_LOGW(TAG, "TX abort requested at symbol %d/%d - keying up now", i, nn);
                 aborted = true;
+                // How far into the burst we got, so the slot loop can decide
+                // whether enough of the slot is left to be worth listening to
+                // (see ft8_tx_last_abort_ms and #136).
+                s_last_abort_ms = (int)((esp_timer_get_time() - t0) / 1000);
                 break;
             }
             // Update status every ~10 symbols so the UI shows TX progress.

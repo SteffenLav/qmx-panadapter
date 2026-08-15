@@ -166,6 +166,16 @@ void ft8_tx_disarm(void);
 // if nothing is currently transmitting.
 void ft8_tx_request_abort(void);
 
+// How far into the MOST RECENT burst it was aborted, in milliseconds, or -1 if
+// that burst ran to completion. Reset at the start of every ft8_tx_run(), so it
+// never describes an older burst.
+//
+// Exists so the slot loop can tell an abort from a normal burst and decide
+// whether enough of the slot is left to be worth listening to: an aborted TX
+// hands the rest of its slot back, and what is heard in it is perfectly good
+// data for the occupancy map (Roy KI0ER, #136).
+int ft8_tx_last_abort_ms(void);
+
 // Snapshot current state for the UI. Mutex-guarded; safe to call from any
 // task/core at any rate (e.g. a 1 Hz refresh timer).
 //   text        if non-NULL, receives the display text of the armed/active

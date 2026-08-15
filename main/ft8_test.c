@@ -1489,13 +1489,46 @@ static void ft8_task(void *arg)
         // Pass boundary_ms (exact, undistorted) not slot_sec - see the
         // ft8_tx_should_run_this_slot doc comment for why the whole-second
         // truncation breaks FT4 parity.
+        // Set when this slot was spent transmitting. An ABORTED burst hands the
+        // rest of its slot back, and we fall through to the normal RX capture
+        // below rather than sitting idle until the next boundary (#136).
+        bool slot_used_by_tx = false;
         if (!hold_for_fresh && ft8_tx_should_run_this_slot(boundary_ms, &txreq)) {
             ft8_status_set("TX: %s", txreq.display_text);
             ft8_tx_run(&txreq);   // blocks ~12.7 s; always restores RX before returning
             ft8_qso_on_tx_complete();  // re-arm the current outgoing message
-            ft8_status_set("TX done - waiting for next slot");
             ft8_screen_view_request_refresh();
-        } else {
+            slot_used_by_tx = true;
+
+            // Cancelled early? Listen to what is left. Roy KI0ER's point: what
+            // we hear in the remainder is perfectly valid data for the tone
+            // occupancy map, even though it is only part of a slot - and the
+            // alternative is a window we transmitted into for half a second and
+            // then learned nothing from.
+            //
+            // No second capture path is needed: the FT8 pre-ring runs
+            // CONTINUOUSLY in FT8 mode (dsp.c fills it every window regardless
+            // of what this task is doing), so the ordinary RX branch below,
+            // which already backfills from the boundary, reconstructs the slot -
+            // including the fraction we were keyed for. That is the same
+            // machinery the late-arm case uses; it is not a new one.
+            //
+            // Only worth it if enough of the slot remains for a signal to still
+            // decode: FT8's payload is ~12.6 s of a 15 s slot, so a late abort
+            // leaves nothing but the tail. The threshold is deliberately
+            // generous rather than clever - a wasted capture costs one monitor
+            // from the pool and nothing else.
+            int ab_ms = ft8_tx_last_abort_ms();
+            if (ab_ms >= 0 && ab_ms <= (period_ms / 3)) {
+                slot_used_by_tx = false;
+                ESP_LOGI(TAG, "slot %d: TX aborted %d ms in - listening to the rest of the slot",
+                         slot_idx, ab_ms);
+                ft8_status_set("TX cancelled - listening");
+            } else {
+                ft8_status_set("TX done - waiting for next slot");
+            }
+        }
+        if (!slot_used_by_tx) {
             // RX this slot. We capture every non-TX slot, including the
             // parity opposite an armed TX: with ping-pong decode a capture is
             // exactly one slot long (15 s) and ends right on the next
