@@ -1608,8 +1608,22 @@ static bool try_start_pileup_pounce(void)
     int reply_freq_hz = ft8_tx_pick_tone_hz();
     ft8_tx_request_t req;
     char err[64];
+    // REPORT-FIRST, not grid. Everyone in the pileup CALLED US - they already
+    // have our grid from the CQ that put them there - so they are waiting for a
+    // signal report, and sending "<them> <me> <grid>" makes their software give
+    // up on the contact. Roy KI0ER lost QSOs to exactly this: the first caller
+    // worked fine, the second (picked up from the pileup after that QSO logged)
+    // was answered with a grid.
+    //
+    // Passing the report as `extra` is the whole fix: ft8_qso_start() already
+    // detects a REPLY whose third field is a "+NN"/"-NN" token, arms it
+    // unchanged and starts in WAIT_ROGER - the same shape and state
+    // cqrun_answer() uses. That path was added for the pileup MODAL (Ken
+    // KF0AYY, 2026-07-15) and this automatic drain was never moved onto it.
+    char pile_rpt[8];
+    fmt_report(pile[best].snr_db, pile_rpt, sizeof(pile_rpt));
     if (!ft8_tx_build_request(FT8_TX_KIND_REPLY, pile[best].call, reply_freq_hz,
-                              pile[best].last_seen_utc, NULL, &req, err, sizeof(err))) {
+                              pile[best].last_seen_utc, pile_rpt, &req, err, sizeof(err))) {
         ESP_LOGW(TAG, "auto-pileup build_request(%s) failed: %s", pile[best].call, err);
         return false;
     }
