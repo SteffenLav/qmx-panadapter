@@ -204,6 +204,8 @@ Use the one-click flasher in [`tools/QMX-Panadapter flasher/`](tools/QMX-Panadap
 - **Normal (press Enter)** — updates the firmware and **keeps** all your saved settings (WiFi, callsign, grid, memory channels, ADIF log). This is what you want almost every time.
 - **Clean (type E)** — wipes the whole chip first, so **every saved setting is permanently erased**: WiFi name *and* password, callsign/grid, all memory channels, and the logged QSOs. Use it only if something is stuck or corrupted (e.g. WiFi refuses to turn on no matter what). Back up first with **Config ↓** (below) so you can restore in seconds afterwards.
 
+**If the flash keeps failing, reboot the Tab5 and try again — before anything else.** The Tab5's USB serial connection is produced by the ESP32-P4 itself rather than by a separate USB chip, so a busy running firmware can leave the COM port listed in Windows Device Manager while it no longer answers the flasher. A reboot clears it. After that, the usual causes are a charge-only cable or a serial monitor still holding the port. *(Samuel W7STF, after a 7-hour session.)*
+
 Building from source? See [Build from source](#build-from-source).
 
 ### Step 2 — Connect the cables

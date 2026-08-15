@@ -230,6 +230,26 @@ If the mouse *does* connect — the symbol turns blue — but the pointer moves 
 jumps to the edges of the screen, that is a different problem and worth reporting with
 a diagnostic log, since the Tab5 records what the mouse tells it about its own layout.
 
+### Flashing keeps failing, but the COM port is still listed
+
+**Symptoms:** the flasher runs, the Tab5's COM port is visible in Windows Device
+Manager, and yet esptool fails again and again — often after the Tab5 has been
+running for a long time.
+
+**Fix: reboot the Tab5 and flash again.** Do this before changing cables or
+reinstalling anything.
+
+**Why it happens:** unlike most dev boards, the Tab5 has no separate USB-to-serial
+chip. The serial port you flash over is produced by the **ESP32-P4 itself**, so it
+only exists while the firmware is running. A busy or unhappy firmware can leave the
+port enumerated — Windows still lists it — while it no longer responds to the
+flasher's request to enter download mode. Restarting the Tab5 restarts that serial
+endpoint with it.
+
+Reported by Samuel W7STF after a seven-hour session; a reboot fixed it immediately.
+If a reboot does *not* fix it, the usual causes are a charge-only USB-C cable or a
+serial monitor still holding the port.
+
 ### Clearing a stuck configuration (web-based reset, new in v0.21.0)
 
 **Symptoms:** the panadapter behaves as if a setting is wedged — e.g. WiFi won't come up no matter what, or a stored value seems stuck — and re-entering settings doesn't help.

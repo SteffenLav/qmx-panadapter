@@ -143,6 +143,10 @@ If you set up WiFi:
 - Check QMX firmware version (Step 1 above) — should be v1.03.002 or newer (the v1.04 betas also work)
 - Try a different USB cable
 
+**Flashing keeps failing, but the COM port is there?**
+- **Reboot the Tab5 and try again — do this first.** The Tab5's USB serial connection is produced by the ESP32-P4 itself rather than by a separate chip, so a busy running firmware can leave the port listed in Windows Device Manager while it no longer answers the flasher. A reboot clears it.
+- Then the usual suspects: a charge-only USB-C cable, or a serial monitor still holding the port.
+
 **WiFi won't connect?**
 - Check your SSID and password spelling
 - Restart the Tab5 and try again
