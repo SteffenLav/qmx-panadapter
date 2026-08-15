@@ -10,9 +10,18 @@
 //
 //  SS  — live FT8/FT4-corrected seconds (syncs at each slot decode: ~15 s
 //    FT8, ~7.5 s FT4; whichever sub-mode is currently active).
-//    Blue frame = auto-syncing; grey frame = locked.
-//    Tap SS to toggle locked / auto. While locked, seconds still count
-//    at the captured offset — no drift after locking.
+//    ⚠ TAPPING SS CHANGES THE CLOCK SOURCE. It does NOT "lock" anything —
+//    it cycles FT8 -> NTP -> QMX -> FT8, and the frame colour names the
+//    source: blue = FT8/FT4 slot timing, green = NTP, white-grey = the
+//    radio's own clock.
+//
+//    This comment used to describe a lock ("blue = auto, grey = locked, tap
+//    to toggle"), which the design left behind and the comment did not.
+//    Don WB0LQW read the same thing into the UI: he tapped twice "to lock it
+//    in", landing on QMX — i.e. he adopted the RADIO's clock as his
+//    reference, which on a GPS-less QMX at a POTA site is the one source
+//    v1.8.2 stopped trusting. So the hint under the box now says
+//    "NTP source (tap)" / "QMX source (tap)" rather than "SS NTP sync".
 //    HOLD SS and RELEASE on the minute to set the seconds to 00 — the only way
 //    to set the clock to the second with no WiFi and no GPS. Applies on
 //    RELEASE, not on Apply: the release is the measurement.
@@ -459,7 +468,7 @@ static void timer_cb(lv_timer_t *t)
         s_ss_display = qs;
         char b[4]; snprintf(b, sizeof(b), "%02d", qs);
         lv_label_set_text(s_lbl_ss, b);
-        lv_label_set_text(s_hint_ss, "SS  QMX sync");
+        lv_label_set_text(s_hint_ss, "QMX source (tap)");
     } else {
         // FT8 or NTP mode — HH/MM from system clock
         // NTP forces live tracking even if user previously tapped HH/MM
@@ -504,8 +513,15 @@ static void timer_cb(lv_timer_t *t)
                 // - damped, leashed), not the RX-latency-biased raw offset.
                 int applied = 0;
                 ft8_get_last_applied_ms(&applied);
-                char hb[32];
-                snprintf(hb, sizeof(hb), "%s nudge %+d ms", active_proto_label(), applied);
+                // Show the RUNNING TOTAL as well as the latest nudge. Don WB0LQW
+                // could not tell how long to let it run or what it had actually
+                // done to his clock: the per-slot figure alone answers neither.
+                // time_sync_get_ft8_offset_ms() is the sum since the last hard
+                // sync, which is exactly "how far has this moved my clock".
+                int total = (int)time_sync_get_ft8_offset_ms();
+                char hb[40];
+                snprintf(hb, sizeof(hb), "%s %+d ms  tot %+d",
+                         active_proto_label(), applied, total);
                 if (!s_ss_zero_armed) lv_label_set_text(s_hint_ss, hb);
             } else {
                 // Online: the clock is on NTP/GPS and FT8 auto-sync is disabled
@@ -515,7 +531,7 @@ static void timer_cb(lv_timer_t *t)
                 if (!s_ss_zero_armed) lv_label_set_text(s_hint_ss, hb);
             }
         } else {
-            if (!s_ss_zero_armed) lv_label_set_text(s_hint_ss, "SS  NTP sync");
+            if (!s_ss_zero_armed) lv_label_set_text(s_hint_ss, "NTP source (tap)");
         }
     }
 }
