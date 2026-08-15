@@ -29,6 +29,7 @@ idf_component_register(
         "util/status.c"
         "util/maidenhead.c"
     "util/db_gridlines.c"
+    "util/ansi_term.c"
         "util/bandplan.c"
         "util/dxcc.c"
         "util/battery.c"
