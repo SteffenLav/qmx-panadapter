@@ -195,6 +195,17 @@ static void wait_for_quiet(void)
     ESP_LOGW(TAG, "port still busy after 2 s - closing anyway");
 }
 
+/* The port IS closed when a session ends, and that matters: holding a second
+ * CDC interface claimed across a QMX power cycle abort()s in IDF's hub layer
+ * ("dev_tree_node_dev_gone(NULL, 0)", hub.c:435). Keeping it open was tried and
+ * traded one crash for a worse one, since power-cycling the radio is routine.
+ *
+ * The close itself is only safe because of the standing patch
+ * tools/patches/apply_cdc_acm_close_tolerant.ps1 - stock cdc_acm_host_close()
+ * feeds usb_host_interface_release() into ESP_ERROR_CHECK, and that returns
+ * ESP_ERR_INVALID_STATE whenever an endpoint still has a URB in flight. If this
+ * ever starts abort()ing again at cdc_acm_host.c:717, that patch is missing:
+ * managed_components/ is git-ignored and wiped by fullclean. */
 static void close_locked(void)
 {
     if (!s_open) return;
@@ -209,6 +220,18 @@ static void close_locked(void)
     }
     if (s_dev) { cdc_acm_host_close(s_dev); s_dev = NULL; }
     ESP_LOGI(TAG, "terminal session closed");
+}
+
+/* The QMX going away mid-session. Without this the handle is stale and the next
+ * open() thinks a session is still up. cdc_acm_host requires the user to close
+ * the device from here - it will not do it for us. */
+static void on_cdc_event(const cdc_acm_host_dev_event_data_t *ev, void *arg)
+{
+    (void)arg;
+    if (!ev || ev->type != CDC_ACM_HOST_DEVICE_DISCONNECTED) return;
+    ESP_LOGW(TAG, "the radio disconnected with a terminal session open");
+    s_open = false;
+    if (s_dev) { cdc_acm_host_close(s_dev); s_dev = NULL; }
 }
 
 static void idle_task(void *arg)
@@ -254,7 +277,7 @@ bool qmx_term_open(void)
         .connection_timeout_ms = 1000,
         .out_buffer_size = 64,
         .in_buffer_size  = 512,
-        .event_cb = NULL,
+        .event_cb = on_cdc_event,
         .data_cb  = on_rx,
         .user_arg = NULL,
     };
