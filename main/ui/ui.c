@@ -1370,6 +1370,10 @@ static uint32_t s_last_qmx_freq_hz = 0;  // updated by ui_update_frequency
 static int      s_last_band_idx = -1;    // track band changes for decode list clearing
 static char s_current_mode[8] = "USB";  // Phase 5.10F: latest CAT mode for snap-aware tuning
 static char s_current_band[8] = "---";  // Phase 9 (v0.9.5): cached band string for web JSON
+// Set when a top-bar label write had to be abandoned because the display lock
+// timed out. topbar_reconcile_cb() picks it up; without it the label stays wrong
+// until the value changes again, which on a settled radio can be never.
+static volatile bool s_topbar_stale = false;
 static uint32_t s_passband_width_hz = 0;  // Phase 5.10G: 0 = use mode default; else from CAT FW
 static uint16_t s_cw_pitch_hz = 700;  // CW sidetone offset (Hz); applied to touch-tune in CW modes
 
@@ -1972,6 +1976,7 @@ static void gain_resolve_start(void);   // repaint a read-back that answers late
 static void gain_resolve_stop(void);
 static void drawer_pause_btn_cb(lv_event_t *e);
 static void drawer_term_btn_cb(lv_event_t *e);
+static void topbar_reconcile_cb(lv_timer_t *t);
 static void drawer_slider_cwtxoff_cb(lv_event_t *e);
 static void ui_set_cw_tx_offset_label(int hz);
 static void drawer_expert_btn_cb(lv_event_t *e);
@@ -4585,6 +4590,10 @@ void ui_init(lv_display_t *disp)
     }
     qmx_wait_poll_cb(NULL);
     lv_timer_create(qmx_wait_poll_cb, 1000, NULL);
+    // Re-assert a top-bar label whose write lost the display lock (see
+    // topbar_reconcile_cb). 500 ms so a stale label is corrected before the
+    // operator can read it and act on it.
+    lv_timer_create(topbar_reconcile_cb, 500, NULL);
 
     ESP_LOGI(TAG, "UI built: top=%dpx spectrum=%dpx labels=%dpx waterfall=%dpx bottom=%dpx",
              TOP_BAR_H, SPECTRUM_H, LABEL_BAR_H, WATERFALL_H, BOTTOM_BAR_H);
@@ -5139,7 +5148,8 @@ void ui_update_mode(const char *mode)
         lv_obj_invalidate(s_mode_label);
         display_unlock();
     } else {
-        ESP_LOGW("ui", "ui_update_mode: display_lock timeout for '%s'", mode);
+        // Do NOT give up - see topbar_reconcile_cb().
+        s_topbar_stale = true;
     }
 }
 
@@ -5185,7 +5195,44 @@ void ui_update_band(const char *band)
         lv_obj_invalidate(s_band_label);
         display_unlock();
     } else {
-        ESP_LOGW("ui", "ui_update_band: display_lock timeout for '%s'", band);
+        // Do NOT give up - see topbar_reconcile_cb().
+        s_topbar_stale = true;
+    }
+}
+
+// The top bar's Band and Mode labels are written from cat.c's poll task, which
+// has to take the display lock - and a 100 ms timeout DOES fire on this board
+// (the "display_lock timeout" warnings are routinely present in field logs).
+//
+// ⛔ THE BUG THAT MADE THIS NECESSARY: cat.c calls ui_update_mode()/ui_update_band()
+// ONLY when the value CHANGES. So a single missed lock did not merely delay the
+// label - it lost that update forever, and the top bar then disagreed with the
+// radio until the next change. Caught on the bench 2026-08-16: the radio was in
+// CW (MD3;), /api/status said CW because it reads the internal cache, and the
+// screen still said "DiGi". The operator saw it before I did.
+//
+// The caches are updated unconditionally above, so this only re-asserts what the
+// labels should already have said. Runs on the LVGL task, which owns the lock, so
+// it cannot fail the way the writer did.
+static void topbar_reconcile_cb(lv_timer_t *t)
+{
+    (void)t;
+    if (!s_topbar_stale) return;
+    s_topbar_stale = false;
+    char buf[32];
+    if (s_band_label && s_current_band[0]) {
+        snprintf(buf, sizeof(buf), "Band: %s", s_current_band);
+        if (strcmp(lv_label_get_text(s_band_label), buf) != 0) {
+            lv_label_set_text(s_band_label, buf);
+            lv_obj_invalidate(s_band_label);
+        }
+    }
+    if (s_mode_label && s_current_mode[0]) {
+        snprintf(buf, sizeof(buf), "Mode: %s", s_current_mode);
+        if (strcmp(lv_label_get_text(s_mode_label), buf) != 0) {
+            lv_label_set_text(s_mode_label, buf);
+            lv_obj_invalidate(s_mode_label);
+        }
     }
 }
 
