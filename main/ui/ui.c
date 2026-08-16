@@ -1374,6 +1374,10 @@ static char s_current_band[8] = "---";  // Phase 9 (v0.9.5): cached band string 
 // timed out. topbar_reconcile_cb() picks it up; without it the label stays wrong
 // until the value changes again, which on a settled radio can be never.
 static volatile bool s_topbar_stale = false;
+// Set by ui_update_band() when the band really changed, from ANY source.
+// Drained by topbar_reconcile_cb() on the LVGL task, which stands auto-answer
+// down - see the note in ui_update_band().
+static volatile bool s_band_changed_pending = false;
 static uint32_t s_passband_width_hz = 0;  // Phase 5.10G: 0 = use mode default; else from CAT FW
 static uint16_t s_cw_pitch_hz = 700;  // CW sidetone offset (Hz); applied to touch-tune in CW modes
 
@@ -5188,6 +5192,25 @@ void ui_refresh_bandplan_strip(uint32_t freq_hz)
 void ui_update_band(const char *band)
 {
     if (!s_band_label || !band) return;
+
+    // ⭐ THE central band-change detector. cat.c calls this whenever the band
+    // actually changes, whoever caused it - the band picker, the web UI, a spot
+    // click, a memory recall, a drag of the band strip, or the operator turning
+    // the radio's own knob. The band-preset button stands auto-answer down
+    // itself, but that covers ONE of those routes; measured 2026-08-16, tuning
+    // 30m -> 20m with set_freq left auto-answer ON.
+    //
+    // Same reasoning as cw_split_maintain() living in the CAT poll: put it where
+    // the change is observed, not on one of the paths that can cause it.
+    //
+    // Only a FLAG here - this runs on the CAT poll task, and
+    // ft8_robot_stand_down() puts a whole qmx_settings_t on the caller's stack
+    // and raises a toast. topbar_reconcile_cb() does the work on the LVGL task.
+    if (s_current_band[0] && strcmp(s_current_band, "---") != 0 &&
+        strcmp(s_current_band, band) != 0) {
+        s_band_changed_pending = true;
+    }
+
     strncpy(s_current_band, band, sizeof(s_current_band) - 1);
     s_current_band[sizeof(s_current_band) - 1] = '\0';
     if (display_lock(100)) {
@@ -5217,6 +5240,17 @@ void ui_update_band(const char *band)
 static void topbar_reconcile_cb(lv_timer_t *t)
 {
     (void)t;
+
+    // A band change from any source stands auto-answer down (#144, Roy KI0ER):
+    // the antenna is almost certainly not tuned for the new band and the robot
+    // arms within a cycle or two. Idempotent - the band-preset button already
+    // does this on its own path, and a second call to an already-off robot says
+    // nothing.
+    if (s_band_changed_pending) {
+        s_band_changed_pending = false;
+        ft8_robot_stand_down("band changed");
+    }
+
     if (!s_topbar_stale) return;
     s_topbar_stale = false;
     char buf[32];
