@@ -24,6 +24,8 @@ idf_component_register(
         "ui/adif_view_modal.c"
         "ui/ft8_pileup_modal.c"
         "ui/reader_view.c"
+        "ui/qmx_term_view.c"
+        "ui/font_qmx_mono_25.c"
         "ui/reader_diagram.c"
         "ui/watermark_img.c"
         "util/status.c"

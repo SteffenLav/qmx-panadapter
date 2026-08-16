@@ -51,6 +51,7 @@
 #include "net/reader_net.h"
 #include "../ft8_pileup.h"
 #include "reader_view.h"
+#include "qmx_term_view.h"     // "Radio menus" - the QMX's own menu system (#147)
 #include "ft8_test.h"
 #include "esp_lcd_touch.h"
 
@@ -1785,12 +1786,17 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_ACTIVATION 28  // POTA/SOTA activation session. In the Station group -
                                    // it is part of who you are on the air right now, and
                                    // it is what every logged QSO gets stamped with.
+#define DRAWER_SEC_TERM       34  // "Radio menus": the QMX's own menu system on its second
+                                   // serial port. Directly under the pause button, because
+                                   // both are ways of getting at the radio itself, and an
+                                   // operator who reached for one often wanted the other.
+                                   // Kept in BOTH modes for the same reason as PAUSE.
 // ⚠ THIS IS THE BOUND FOR THE DRAWER_SEC_* IDS, AND THEY ARE ARRAY INDICES.
 // Adding DRAWER_SEC_RITPILL as id 30 while this was 30 wrote one past the end of
 // s_drawer_sections[] into s_drawer_section_y[], and the garbage was then used as an
 // object pointer - a Load access fault at MTVAL 0x6c, in a boot loop, straight after
 // "Settings drawer built". Raise this when adding a section, and keep headroom.
-#define N_DRAWER_SECTIONS     34
+#define N_DRAWER_SECTIONS     40
 static lv_obj_t *s_drawer_sections[N_DRAWER_SECTIONS];
 static int       s_drawer_section_y[N_DRAWER_SECTIONS];
 static int       s_drawer_section_h[N_DRAWER_SECTIONS];
@@ -1812,7 +1818,7 @@ static const int GRP_STATION[]  = { DRAWER_SEC_IDENTITY, DRAWER_SEC_ACTIVATION,
                                     DRAWER_SEC_BPREGION };
 static const int GRP_RADIO[]    = { DRAWER_SEC_QMXVOL, DRAWER_SEC_QMXRF, DRAWER_SEC_CW,
                                     DRAWER_SEC_RITPILL, DRAWER_SEC_SWRLIM, DRAWER_SEC_TUNE2,
-                                    DRAWER_SEC_PAUSE };
+                                    DRAWER_SEC_PAUSE, DRAWER_SEC_TERM };
 static const int GRP_NETWORK[]  = { DRAWER_SEC_WIFI, DRAWER_SEC_SPOTS, DRAWER_SEC_BT };
 // Flip 180 last: it is the least-touched control in the group (operator).
 static const int GRP_DISPLAY[]  = { DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_SLEEP,
@@ -1965,6 +1971,7 @@ static void drawer_refresh_qmx_rf(void);
 static void gain_resolve_start(void);   // repaint a read-back that answers late
 static void gain_resolve_stop(void);
 static void drawer_pause_btn_cb(lv_event_t *e);
+static void drawer_term_btn_cb(lv_event_t *e);
 static void drawer_slider_cwtxoff_cb(lv_event_t *e);
 static void ui_set_cw_tx_offset_label(int hz);
 static void drawer_expert_btn_cb(lv_event_t *e);
@@ -5234,7 +5241,8 @@ static void top_bar_set_ft8_dim(bool dim)
 // and not drawn, which settles both in one move.
 static void sync_nav_affordances(void)
 {
-    const bool owned = reader_view_is_active() || help_triage_is_open();
+    const bool owned = reader_view_is_active() || help_triage_is_open()
+                       || qmx_term_view_is_open();
     const bool ft8   = (ui_mode_get() == UI_MODE_FT8);
 
     lv_obj_t *nav[] = { s_left_edge_strip, s_bottom_edge_strip, s_right_edge_strip, s_burger_btn };
@@ -7626,6 +7634,29 @@ static void drawer_build(void)
         y += 72;
     }
 
+    // "Radio menus" (#147) - the QMX's own menu system, on its SECOND serial
+    // port. Randy N4OPI and Michael KZ4LY both run headless QMX+ units, where
+    // this is the only way into the radio's menus at all.
+    //
+    // Directly under the pause button on purpose: an operator reaching for
+    // "let me use the QMX menus" on a radio with no front panel wanted this.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_TERM, y, 72);
+        lv_obj_t *btn = lv_btn_create(sec);
+        lv_obj_set_size(btn, DRAWER_W - 32, 56);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_set_style_bg_color(btn, lv_color_hex(0x2a3138), 0);
+        lv_obj_set_style_border_color(btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_set_style_border_width(btn, 2, 0);
+        lv_obj_add_event_cb(btn, drawer_term_btn_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_label_set_text(lbl, LV_SYMBOL_LIST "  Radio menus");
+        lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(0xffffff), 0);
+        lv_obj_center(lbl);
+        y += 72;
+    }
+
     // Display sleep (#34): idle minutes before the backlight turns off.
     // Touch wakes it; a two-finger double-tap blanks immediately. Kept in
     // both Panadapter and FT8 modes (it's a device-level setting).
@@ -8739,7 +8770,7 @@ static void drawer_close(void)
 static void drawer_set_ft8_mode(bool ft8)
 {
     if (!s_drawer) return;
-    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_QMXVOL, DRAWER_SEC_QMXRF, DRAWER_SEC_SLEEP, DRAWER_SEC_CHARGE, DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_PAUSE };
+    static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_QMXVOL, DRAWER_SEC_QMXRF, DRAWER_SEC_SLEEP, DRAWER_SEC_CHARGE, DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_PAUSE, DRAWER_SEC_TERM };
     // Heights must line up 1:1 with keep[] above (same order) - each is the
     // height passed to that section's own drawer_section(ID, y, height) call.
     // (WiFi is 72, matching its drawer_section call - was mistakenly 128, which
@@ -9306,6 +9337,17 @@ static void drawer_pause_btn_cb(lv_event_t *e)
     ui_set_cat_paused(now_paused);
     ui_toast(now_paused ? "Radio released - the QMX menu is yours"
                         : "Radio back under Tab5 control");
+}
+
+// "Radio menus" - open the QMX's own menu system full-screen (#147).
+// The drawer is closed first: the terminal takes the whole screen, and leaving
+// the drawer open behind it means the first tap after Close lands on whatever
+// drawer row happened to be under the finger.
+static void drawer_term_btn_cb(lv_event_t *e)
+{
+    (void)e;
+    ui_set_drawer_open(false);
+    qmx_term_view_open();
 }
 
 static void drawer_check_flip_cb(lv_event_t *e)
