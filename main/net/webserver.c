@@ -11,6 +11,7 @@
 #include "cat.h"              // cat_get_frequency, cat_get_band_list, cat_set_*
 #include "ui.h"               // ui_get_*, ui_set_zoom
 #include "qmx_term.h"         // /api/term
+#include "ui/qmx_term_view.h" // the dev "term_view" action
 #include "ft8_screen_view.h"  // ft8_screen_view_is_active
 #include "ft8_tx.h"           // ft8_tx_get_status (web TX-status banner)
 #include "ft8_qso.h"          // ft8_qso_get_state / get_target / get_cq_calls_sent
@@ -744,6 +745,18 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             // After open (which always scrolls to the top), so a section below
             // the fold can be brought into a screenshot.
             if (want && cJSON_IsNumber(sy)) ui_set_drawer_scroll_y((int)sy->valuedouble);
+            display_unlock();
+        }
+    } else if (action && strcmp(action, "term_view") == 0) {
+        // Hidden dev action, same reason as "drawer" above: open or close the
+        // Tab5's own Radio-menus screen so its layout can be checked on a
+        // screenshot rather than by asking the operator to tap it. No web UI
+        // element references it - the browser has its own terminal page.
+        cJSON *o = cJSON_GetObjectItem(root, "open");
+        bool want = cJSON_IsBool(o) ? cJSON_IsTrue(o) : true;
+        if (display_lock(500)) {
+            if (want) qmx_term_view_open();
+            else      qmx_term_view_close();
             display_unlock();
         }
     } else if (action && strcmp(action, "cat_raw") == 0) {

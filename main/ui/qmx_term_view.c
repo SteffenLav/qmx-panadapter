@@ -299,13 +299,18 @@ static void build(void)
     lv_obj_set_style_text_font(s_state, &lv_font_montserrat_20, 0);
     lv_obj_align(s_state, LV_ALIGN_LEFT_MID, 236, 0);   // clear of the title at _28
 
-    /* Keys along the header, so the 1200 px grid keeps the whole width below. */
-    make_key(hdr, LV_SYMBOL_UP,    "up",     440,  70);
-    make_key(hdr, LV_SYMBOL_DOWN,  "down",   516,  70);
-    make_key(hdr, LV_SYMBOL_LEFT,  "left",   592,  70);
-    make_key(hdr, LV_SYMBOL_RIGHT, "right",  668,  70);
-    make_key(hdr, "Enter",         "enter",  750, 120);
-    make_key(hdr, "Back",          "ctrl-q", 876, 110);
+    /* Keys along the header, so the 1200 px grid keeps the whole width below.
+     *
+     * The arrows are the keys actually used to drive a menu, and they were the
+     * narrowest things on the bar - 70 px, with 148 px sitting idle between Back
+     * and Close. They now take that space at 104 px each. Laid out left to right
+     * with 6 px gaps, ending clear of Close, which is right-aligned at -16. */
+    make_key(hdr, LV_SYMBOL_UP,    "up",     440, 104);
+    make_key(hdr, LV_SYMBOL_DOWN,  "down",   550, 104);
+    make_key(hdr, LV_SYMBOL_LEFT,  "left",   660, 104);
+    make_key(hdr, LV_SYMBOL_RIGHT, "right",  770, 104);
+    make_key(hdr, "Enter",         "enter",  880, 120);
+    make_key(hdr, "Back",          "ctrl-q", 1006, 110);
 
     lv_obj_t *cb = lv_btn_create(hdr);
     lv_obj_set_size(cb, 130, 48);
