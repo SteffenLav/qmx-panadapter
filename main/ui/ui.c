@@ -1998,6 +1998,7 @@ static void drawer_slider_wf_black_cb(lv_event_t *e);
 static void drawer_slider_wf_contrast_cb(lv_event_t *e);
 static void drawer_dropdown_wf_window_cb(lv_event_t *e);
 static void drawer_dropdown_spur_cb(lv_event_t *e);
+static int  spur_mode_to_menu_idx(uint8_t mode);
 bool ui_get_flat_mode(void);
 void ui_set_flat_mode(bool on);
 static void drawer_apply_preset(int db_min, int db_max, float alpha);
@@ -8531,8 +8532,9 @@ static void drawer_build(void)
         // Name what happens to the SPUR, not to the feature - "Hide" read as
         // "hide the suppression". Both working options say what they do to the
         // radio's artifact and what it costs.
+        // Order matches s_spur_menu[], NOT the enum - see the note there.
         lv_dropdown_set_options(s_dropdown_spur,
-                                "Off\nSubtract spur power\nErase spur bins");
+                                "Off\nErase spur bins\nSubtract spur power");
         lv_obj_set_size(s_dropdown_spur, DRAWER_W - 32, 50);
         lv_obj_align(s_dropdown_spur, LV_ALIGN_TOP_LEFT, 0, 320);
         lv_obj_set_style_text_font(s_dropdown_spur, &lv_font_montserrat_28, 0);
@@ -8548,7 +8550,7 @@ static void drawer_build(void)
                 lv_obj_set_style_text_font(list, &lv_font_montserrat_28, 0);
             }
         }
-        if (wcfg.spur_mode <= 2) lv_dropdown_set_selected(s_dropdown_spur, wcfg.spur_mode);
+        lv_dropdown_set_selected(s_dropdown_spur, spur_mode_to_menu_idx(wcfg.spur_mode));
         lv_obj_add_event_cb(s_dropdown_spur, drawer_dropdown_spur_cb, LV_EVENT_VALUE_CHANGED, NULL);
         lv_obj_add_event_cb(s_dropdown_spur, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
 
@@ -9576,12 +9578,36 @@ static void drawer_dropdown_wf_window_cb(lv_event_t *e)
 
 // Spur suppression. Live DSP path AND stored value, like the IQ balance switch -
 // setting only one leaves the control disagreeing with the display until reboot.
+/* ⛔ THE MENU ORDER IS NOT THE ENUM ORDER, and this table is what keeps the two
+ * apart. The dropdown index used to BE the mode, so reordering the list would
+ * silently change the meaning of every stored setting.
+ *
+ * "Erase spur bins" comes first because it is the one that works. Measured on
+ * hardware 2026-08-16 at 14.074, where the comb is 38.5 dB over the floor across
+ * 87 bins: on the waterfall, subtract takes the spur columns down 28% and erase
+ * takes them down 78%, and both remove the saturated red cores. Samuel W7STF
+ * reported the feature as "not all that effective" - a fair description of
+ * SUBTRACT, which was what the list offered first. Erase also turned out not to
+ * punch the dark holes we expected: it ramps between neighbouring bins rather
+ * than zeroing, so there are no notches to see. */
+static const spur_mode_t s_spur_menu[] = {
+    SPUR_MODE_OFF, SPUR_MODE_INTERPOLATE, SPUR_MODE_SUBTRACT,
+};
+#define SPUR_MENU_N ((int)(sizeof(s_spur_menu) / sizeof(s_spur_menu[0])))
+
+static int spur_mode_to_menu_idx(uint8_t mode)
+{
+    for (int i = 0; i < SPUR_MENU_N; i++) if ((uint8_t)s_spur_menu[i] == mode) return i;
+    return 0;
+}
+
 static void drawer_dropdown_spur_cb(lv_event_t *e)
 {
-    uint8_t idx = (uint8_t)lv_dropdown_get_selected(lv_event_get_target(e));
-    if (idx > 2) idx = 0;
-    spur_map_set_mode((spur_mode_t)idx);
-    settings_set_spur_mode(idx);
+    int idx = (int)lv_dropdown_get_selected(lv_event_get_target(e));
+    if (idx < 0 || idx >= SPUR_MENU_N) idx = 0;
+    spur_mode_t m = s_spur_menu[idx];
+    spur_map_set_mode(m);
+    settings_set_spur_mode((uint8_t)m);
 }
 
 
