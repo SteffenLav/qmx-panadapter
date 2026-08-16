@@ -100,6 +100,9 @@ static int                s_partner_freq_hz;
 // reversible: after the contact we go back there for the next Fox.
 static bool               s_hound_active;
 static int                s_hound_tone_hz;
+// A tone the operator chose while a burst was on the air. Applied by
+// on_tx_complete() the moment the burst ends - see ft8_qso_set_tx_tone_hz().
+static int                s_pending_tone_hz;
 static int64_t            s_min_scan_utc;               // pounce: don't scan before TX1 fires
 static int                s_missed_slots;
 static bool               s_from_cq;                    // session started as CQ-run
@@ -2398,6 +2401,26 @@ void ft8_qso_on_tx_complete(void)
     }
     unlock();
 
+    // The operator picked a new TX offset while this burst was on the air.
+    // Apply it now, BEFORE the re-arm below, so the very next transmission uses
+    // it - that is the whole point of queueing it rather than refusing.
+    lock();
+    int pending = s_pending_tone_hz;
+    if (pending > 0) s_pending_tone_hz = 0;
+    bool running = (s_state != FT8_QSO_IDLE);
+    if (pending > 0 && running) {
+        s_freq_hz = pending;
+        // Parity untouched, exactly as in the immediate path: the partner
+        // tracks our slot, not our tone.
+        if (s_have_cur)      s_cur_req.audio_freq_hz  = pending;
+        if (s_have_cq_saved) s_cq_saved.audio_freq_hz = pending;
+    }
+    unlock();
+    if (pending > 0 && running) {
+        ft8_status_set("TX tone -> %d Hz", pending);
+        ESP_LOGI(TAG, "TX tone applied after the burst: %d Hz", pending);
+    }
+
     // Re-arm whatever we're currently sending for its next matching slot. This
     // gives the CQ loop its 30 s cadence and keeps exchange messages repeating
     // until answered; the final 73/RR73 is armed once (see rearm_current).
@@ -2563,6 +2586,7 @@ void ft8_qso_abort(void)
     s_partner_freq_hz = 0;
     s_busy_holds    = 0;
     s_busy_with[0]  = '\0';
+    s_pending_tone_hz = 0;   // never carry a queued tone into the next contact
     s_cq_calls_sent = 0; s_cq_listen_done_at = -1;
     s_cq_exhausted  = false;
     s_pileup_active = false;   // an abort ends any pileup drain
@@ -2644,14 +2668,34 @@ bool ft8_qso_set_tx_tone_hz(int hz, char *err, size_t err_len)
         return false;
     }
 
-    // Never mid-burst. ft8_tx_disarm() is a no-op while ACTIVE and
-    // ft8_tx_arm() refuses outright, so attempting a move now would update our
-    // bookkeeping while the engine kept transmitting on the old tone - a
-    // half-applied change, which is worse than refusing. Roy KI0ER's request
-    // was explicitly "changeable mid-QSO but not mid-burst".
+    // Never mid-burst: ft8_tx_disarm() is a no-op while ACTIVE and ft8_tx_arm()
+    // refuses outright, so moving now would update our bookkeeping while the
+    // engine kept transmitting on the old tone - half-applied, which is worse
+    // than not applying.
+    //
+    // ⭐ BUT DO NOT REFUSE - REMEMBER IT. An FT8 burst is ~12.6 s of a 15 s slot
+    // and a QSO transmits every other slot, so roughly 40% of attempts landed
+    // mid-burst and were rejected. The exchange then carried on at the tone it
+    // started on, which is exactly what Roy KI0ER reported: "it does not honor
+    // my new choice, but instead remembers the offset my station transmitted on
+    // at the start of the qso". Measured on the bench: the FIRST attempt at a
+    // mid-QSO move came back "Transmitting - try again after this burst".
+    //
+    // Making the operator's choice depend on their timing is the bug. The burst
+    // still finishes on the old tone (it must), and on_tx_complete() applies
+    // this at the first legal moment.
     if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ACTIVE) {
-        if (err) snprintf(err, err_len, "Transmitting - try again after this burst");
-        return false;
+        lock();
+        bool running = (s_state != FT8_QSO_IDLE);
+        if (running) s_pending_tone_hz = hz;
+        unlock();
+        if (!running) {
+            if (err) snprintf(err, err_len, "No CQ or QSO running");
+            return false;
+        }
+        ft8_status_set("TX tone -> %d Hz after this burst", hz);
+        ESP_LOGI(TAG, "TX tone %d Hz queued - applying when the burst ends", hz);
+        return true;
     }
 
     lock();

@@ -360,16 +360,19 @@ static void hold_cb(lv_event_t *e)
 static void apply_cb(lv_event_t *e)
 {
     (void)e;
-    // A running CQ/QSO is moved FIRST: it's the only step that can be refused
-    // (mid-burst), and refusing after having already stored the preference
-    // would leave the modal half-committed. Nothing running is not a failure
-    // any more - the chip is always on screen now, so setting the tone for the
-    // NEXT transmission is a perfectly ordinary thing to want.
+    // A running CQ/QSO is moved FIRST, because storing the preference after a
+    // refusal would leave the modal half-committed. Nothing running is not a
+    // failure - the chip is always on screen, so setting the tone for the NEXT
+    // transmission is a perfectly ordinary thing to want.
+    //
+    // A move landing mid-burst is no longer a refusal either: the engine queues
+    // it and applies it the instant the burst ends (Roy KI0ER - a burst covers
+    // ~12.6 s of a 15 s slot, so refusing made the operator's choice depend on
+    // their timing). Anything still returning false here is a real error.
     if (ft8_qso_get_state() != FT8_QSO_IDLE) {
         char err[64];
         if (!ft8_qso_set_tx_tone_hz(s_sel_hz, err, sizeof(err))) {
-            // Stay open: "try again in a moment" is the whole failure mode, so
-            // closing would just force a re-open and re-pick.
+            // Stay open - re-opening and re-picking would be worse.
             ESP_LOGW(TAG, "TX tone %d Hz rejected: %s", s_sel_hz, err);
             hint_set(err, 0xFF6020);
             return;
