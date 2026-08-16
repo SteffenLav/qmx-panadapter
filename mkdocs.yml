@@ -29,6 +29,7 @@ nav:
     - FT8 RX: guide/ft8-rx.md
     - FT8 TX: guide/ft8-tx.md
     - Time Sync: guide/time-sync.md
+    - Radio Menus: guide/radio-menus.md
     - Settings: guide/settings.md
   - Reference:
     - Gestures & Controls: reference/gestures.md

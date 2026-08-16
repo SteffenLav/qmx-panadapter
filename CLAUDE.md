@@ -181,6 +181,18 @@ main/
   net/pskreporter.c       PSK Reporter reception reports (IPFIX/UDP, batched ~5 min, default ON)
   ft8_greylist.c          Grey-list: stations that time out 2 pounces are skipped by the auto pickers
   net/update_check.c      Background GitHub /releases poll (+ latest.json fallback) → "update available" banner in the Reader
+  util/ansi_term.c        80x24 ANSI/VT100 screen model for the QMX terminal (#147). Portable,
+                          no ESP deps, host-tested by test/ansi_term_harness.c against the REAL
+                          bytes the radio sent, re-fed at every byte-split point. Reverse video
+                          is load-bearing: it is the ONLY thing marking the selected menu item
+  qmx_term.c              Terminal SESSION on the QMX's SECOND serial port (INTERFACE 5 - the
+                          audio function occupies 2-4, so it is NOT contiguous with CAT's 0).
+                          CAT keeps polling interface 0 throughout, measured. Closing walks the
+                          radio's own "Exit terminal" by READING THE SCREEN, never a fixed key
+                          count; a 2-minute idle watchdog is the backstop if the browser vanishes
+  ui/qmx_term_view.c      The Tab5's "Radio menus" screen: 80x24 grid in JetBrains Mono at
+                          size 25 (font_qmx_mono_25.c). ⛔ The UI posts to a worker queue and
+                          NEVER touches the port itself - open blocks ~2.4 s and froze taskLVGL
 ```
 
 Data flow: **audio → ring buffer → dsp (FFT) → spectrum mutex → render → LVGL canvases**
@@ -264,6 +276,11 @@ ESP-IDF v5.4.4's `hcd_dwc.c` `_buffer_parse_bulk()` `assert()`s if a bulk transf
 
 ### USB hub root-port recover abort → tolerant (IDF-tree patch #5 — must be re-applied)
 ESP-IDF v5.4.4's `hub.c` `root_port_req()` feeds `hcd_port_recover()` into `ESP_ERROR_CHECK` — serial-captured 2026-08-03: `usb_replug()`'s root-port power cycle (the TODO #75 zombie-device recovery) raced the hub FSM's queued `PORT_REQ_RECOVER`, the port had already left the RECOVERY state, recover returned `ESP_ERR_INVALID_STATE` → abort() → reboot ("hub.c line 462"). `tools/patches/apply_hub_recover_tolerant.ps1` (idempotent, version-guarded, **5th standing patch script**) downgrades the recover and the follow-on POWER_ON to log-and-continue, mirroring the driver's own "We allow this to fail" precedent on PORT_REQ_DISABLE. Same maintenance model as patch #4: edits the pinned IDF tree, wiped on IDF reinstall, re-apply per build machine. Hardware-verified: replugs against wedged/zombie devices no longer abort. Full two-wedge story in TODO #74/#75 and memory `project_qmx_reenumerate_after_reboot`.
+
+### `cdc_acm_host_close()` abort → retry then tolerate (managed-component patch #6 — must be re-applied)
+Stock `cdc_acm_host.c` ends `cdc_acm_host_close()` with `usb_host_interface_release()` inside `ESP_ERROR_CHECK`. That call returns `ESP_ERR_INVALID_STATE` while **any** endpoint of the interface still has a URB in flight, and it allows the client task exactly `vTaskDelay(10)` to reap them — which at this project's `CONFIG_FREERTOS_HZ=1000` is **10 MILLISECONDS**, not the 100 ms the vendor comment reads like. So a busy port turns a transient into `abort()`, i.e. a reboot. Serial-captured 2026-08-16 while building the QMX terminal (#147): closing a session on the radio's second CDC interface aborted at `cdc_acm_host.c:717` with `0x103`. **`tools/patches/apply_cdc_acm_close_tolerant.ps1`** (idempotent, marker-guarded, **6th standing patch script**) retries the release 16 × 20 ms — that addresses the actual cause, the window simply being too short — and only then logs and continues, leaking the claim rather than killing the firmware. Same precedent as the UAC fork's forced teardown above. ⚠ Edits `managed_components/`, which is **git-ignored and wiped by `fullclean`**, a dependency refresh, and the release process's `rm -r managed_components/` — re-run it after any of those, alongside `apply_esp_hosted_psram.ps1` and `apply_esp_hosted_sdio_recovery.ps1`. If a close ever starts abort()ing at that line again, this patch is missing.
+
+**Two wrong turns on the way, both falsified on hardware — do not re-take them.** (1) *"Fixed by timing"*: a non-blocking RX callback plus a wait-for-quiet made the abort rarer, and it was called fixed off a **single** successful close; a repeat-cycle test then aborted on the fourth. Timing changes the odds of a race, not the race. (2) *"Then never close at all"*: keeping the interface claimed removes that abort by construction and trades it for a worse one — holding a second CDC interface across a QMX power cycle abort()s in IDF's hub layer (`dev_tree_node_dev_gone(NULL, 0)`, `hub.c:435`), and power-cycling the radio is routine. Every abort in this family is also a Tab5 warm reset with the radio attached, i.e. the documented #74 trigger, so each one wedged the QMX until a power cycle — which is why they cost so much bench time.
 
 ⚠ **#74 INVESTIGATED PROPERLY 2026-08-11 — SIX approaches FALSIFIED on hardware, recovery AND prevention. The original "needs a QMX power cycle" diagnosis STANDS, and this is now well evidenced rather than assumed.**
 
