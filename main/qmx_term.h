@@ -26,7 +26,12 @@ bool qmx_term_open(void);
  * This drives the radio's own "Exit terminal" menu item rather than just
  * dropping the connection, because dropping it is precisely what the manual
  * warns against. It reads the screen to find the item instead of sending a
- * fixed number of cursor keys, so it still works if the menu changes. */
+ * fixed number of cursor keys, so it still works if the menu changes.
+ *
+ * A session also closes ITSELF after two minutes with no activity. That is not
+ * housekeeping: a browser tab can close, WiFi can drop, a laptop can go flat,
+ * and the watchdog is then the only thing left that can walk the radio out of
+ * terminal mode. Every screen read and keystroke counts as activity. */
 void qmx_term_close(void);
 
 bool qmx_term_is_open(void);
@@ -35,7 +40,13 @@ bool qmx_term_is_open(void);
  * "ctrl-q", or a single printable character. */
 bool qmx_term_key(const char *name);
 
-/* The current screen. Returns NULL when no session is open. The pointer stays
- * valid until qmx_term_close(); `seq` (ansi_term_t.dirty_seq) lets a caller skip
- * a redraw when nothing changed. */
-const ansi_term_t *qmx_term_screen(void);
+/* Borrow the screen for reading. Returns NULL when no session is open (or the
+ * lock could not be had), otherwise a pointer that stays valid until the
+ * matching unlock - which the caller MUST make, promptly, because the USB RX
+ * callback blocks on the same lock while it is held.
+ *
+ * Read it in place rather than copying: ansi_term_t is ~4 KB, and a local that
+ * size is a stack-protection fault on most tasks on this board. `dirty_seq`
+ * lets a UI skip a redraw when nothing has changed. */
+const ansi_term_t *qmx_term_lock_screen(void);
+void qmx_term_unlock_screen(void);

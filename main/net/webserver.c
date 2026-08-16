@@ -10,6 +10,7 @@
 #include "wifi.h"             // wifi_get_ssid, wifi_get_rssi_dbm, wifi_get_ip
 #include "cat.h"              // cat_get_frequency, cat_get_band_list, cat_set_*
 #include "ui.h"               // ui_get_*, ui_set_zoom
+#include "qmx_term.h"         // /api/term
 #include "ft8_screen_view.h"  // ft8_screen_view_is_active
 #include "ft8_tx.h"           // ft8_tx_get_status (web TX-status banner)
 #include "ft8_qso.h"          // ft8_qso_get_state / get_target / get_cq_calls_sent
@@ -2489,6 +2490,146 @@ static const httpd_uri_t uri_manual = {
     .uri = "/api/manual", .method = HTTP_GET, .handler = manual_handler,
 };
 
+// ---- QMX terminal (#147) -------------------------------------------------
+//
+// GET /api/term  -> {"open":bool,"seq":n,"rows":[24 strings],
+//                    "rev":[[row,col,len],..],"col":[[row,col,len,fg],..]}
+//
+// The reverse-video runs are NOT decoration: reverse video is the only thing
+// marking the SELECTED menu item, so a client that drops it leaves the operator
+// unable to see where they are in the radio's menu. They are sent as runs
+// because there are normally one or two per screen - a full 80x24 attribute
+// grid would triple the payload for the same information.
+static void term_json_row(cJSON *arr, const ansi_term_t *t, int r)
+{
+    char line[ANSI_COLS + 1];
+    ansi_term_row_text(t, r, line);
+    int e = ANSI_COLS;
+    while (e > 0 && line[e - 1] == ' ') e--;   // trailing blanks carry nothing
+    line[e] = '\0';
+    cJSON_AddItemToArray(arr, cJSON_CreateString(line));
+}
+
+static esp_err_t term_get_handler(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (!root) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "oom"); return ESP_FAIL; }
+
+    const ansi_term_t *t = qmx_term_lock_screen();
+    if (!t) {
+        cJSON_AddBoolToObject(root, "open", false);
+    } else {
+        cJSON_AddBoolToObject(root, "open", true);
+        cJSON_AddNumberToObject(root, "seq", (double)t->dirty_seq);
+        cJSON_AddNumberToObject(root, "cursor", t->cursor_visible ? 1 : 0);
+
+        cJSON *rows = cJSON_AddArrayToObject(root, "rows");
+        cJSON *rev  = cJSON_AddArrayToObject(root, "rev");
+        cJSON *col  = cJSON_AddArrayToObject(root, "col");
+        for (int r = 0; r < ANSI_ROWS; r++) {
+            if (rows) term_json_row(rows, t, r);
+            // Collapse each attribute into runs as we walk the row.
+            for (int c = 0; c < ANSI_COLS; ) {
+                if (t->cell[r][c].reverse) {
+                    int s = c;
+                    while (c < ANSI_COLS && t->cell[r][c].reverse) c++;
+                    if (rev) {
+                        cJSON *run = cJSON_CreateArray();
+                        cJSON_AddItemToArray(run, cJSON_CreateNumber(r));
+                        cJSON_AddItemToArray(run, cJSON_CreateNumber(s));
+                        cJSON_AddItemToArray(run, cJSON_CreateNumber(c - s));
+                        cJSON_AddItemToArray(rev, run);
+                    }
+                } else c++;
+            }
+            for (int c = 0; c < ANSI_COLS; ) {
+                uint8_t fg = t->cell[r][c].fg;
+                if (fg) {
+                    int s = c;
+                    while (c < ANSI_COLS && t->cell[r][c].fg == fg) c++;
+                    if (col) {
+                        cJSON *run = cJSON_CreateArray();
+                        cJSON_AddItemToArray(run, cJSON_CreateNumber(r));
+                        cJSON_AddItemToArray(run, cJSON_CreateNumber(s));
+                        cJSON_AddItemToArray(run, cJSON_CreateNumber(c - s));
+                        cJSON_AddItemToArray(run, cJSON_CreateNumber(fg));
+                        cJSON_AddItemToArray(col, run);
+                    }
+                } else c++;
+            }
+        }
+        qmx_term_unlock_screen();
+    }
+
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!out) { httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "oom"); return ESP_FAIL; }
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    esp_err_t e = httpd_resp_send(req, out, HTTPD_RESP_USE_STRLEN);
+    free(out);
+    return e;
+}
+
+// POST /api/term  {"action":"open"|"close"|"key"|"text", "key":"down", "text":"12"}
+static esp_err_t term_post_handler(httpd_req_t *req)
+{
+    char buf[256];
+    int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (len <= 0) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body"); return ESP_FAIL; }
+    buf[len] = '\0';
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) { httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad json"); return ESP_FAIL; }
+
+    const cJSON *ja = cJSON_GetObjectItem(root, "action");
+    const char *action = cJSON_IsString(ja) ? ja->valuestring : "";
+    bool ok = false;
+    const char *err = NULL;
+
+    if (!strcmp(action, "open")) {
+        ok = qmx_term_open();
+        if (!ok) err = "The radio did not offer a second serial port. Set "
+                       "System config > GPS & Ser. ports > USB serial ports to 2, "
+                       "then power-cycle the QMX.";
+    } else if (!strcmp(action, "close")) {
+        qmx_term_close();
+        ok = true;
+    } else if (!strcmp(action, "key")) {
+        const cJSON *jk = cJSON_GetObjectItem(root, "key");
+        ok = cJSON_IsString(jk) && qmx_term_key(jk->valuestring);
+        if (!ok) err = "no session";
+    } else if (!strcmp(action, "text")) {
+        // Typing a value into a menu field. One character at a time through the
+        // same path as a key, so there is a single place that writes to the port.
+        const cJSON *jt = cJSON_GetObjectItem(root, "text");
+        if (cJSON_IsString(jt)) {
+            ok = true;
+            for (const char *p = jt->valuestring; *p && ok; p++) {
+                char one[2] = { *p, 0 };
+                ok = qmx_term_key(one);
+            }
+        }
+        if (!ok) err = "no session";
+    } else {
+        err = "unknown action";
+    }
+    cJSON_Delete(root);
+
+    char body[256];
+    if (ok) snprintf(body, sizeof(body), "{\"ok\":true}");
+    else    snprintf(body, sizeof(body), "{\"ok\":false,\"error\":\"%s\"}", err ? err : "failed");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_send(req, body, HTTPD_RESP_USE_STRLEN);
+}
+
+static const httpd_uri_t uri_term_get = {
+    .uri = "/api/term", .method = HTTP_GET, .handler = term_get_handler,
+};
+
+static const httpd_uri_t uri_term_post = {
+    .uri = "/api/term", .method = HTTP_POST, .handler = term_post_handler,
+};
+
 // Background upload task — processes QRZ/eQSL uploads without blocking httpd.
 // Results stored in s_last_upload for polling via /api/upload_status.
 static void upload_task(void *arg)
@@ -2602,7 +2743,7 @@ esp_err_t webserver_start(void)
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.server_port     = 80;
     config.stack_size      = 12288;
-    config.max_uri_handlers = 39;   // 32 API + WS + 5 file-browser + headroom
+    config.max_uri_handlers = 41;   // 34 API + WS + 5 file-browser + headroom
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -2648,6 +2789,8 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_forge_js);
     httpd_register_uri_handler(s_server, &uri_config_get);
     httpd_register_uri_handler(s_server, &uri_config_post);
+    httpd_register_uri_handler(s_server, &uri_term_get);
+    httpd_register_uri_handler(s_server, &uri_term_post);
     filebrowser_register(s_server);   // /files + /api/files + /api/file
     webserver_ws_start(s_server);
 

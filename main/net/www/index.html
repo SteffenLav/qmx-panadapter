@@ -523,6 +523,7 @@
         <a href="#" id="pause-btn" title="Stops the Tab5 talking to the radio, so its own menus and the Band Configuration terminal app behave normally. Nothing is decoded until you hand it back">Let me use the QMX menus</a>
         <a href="#" id="tune-ant-btn" style="display:none" title="Antenna Tune (QMX 1.04+): keys the radio with a steady carrier and shows live power and SWR. Auto-stops after 60 s.">Antenna Tune</a>
         <a href="#" id="act-btn" title="POTA / SOTA activation: every QSO logged while one is running claims that reference, so start it when you arrive and stop it when you leave">Activation</a>
+        <a href="#" id="term-btn" title="The QMX's own menu system, on its second USB serial port - the whole radio, including everything the front panel can reach. Needed if your QMX has no control panel.">Radio menus</a>
       </div>
     </div>
     <button type="button" class="bot-btn" id="settings-btn" title="Callsign, grid, CQ messages, FT8 filters and the everyday toggles - with a real keyboard">Settings</button>
@@ -701,6 +702,32 @@
       <div style="margin-top:14px; overflow:auto;">
         <button id="adifv-delall" class="bot-btn" style="cursor:pointer; float:left; border-color:#7a2020; color:#ff8080" title="Delete ALL logged QSOs from the Tab5 - no undo">Delete all</button>
         <button id="adifv-close" class="btn-neutral" style="float:right">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- The QMX's own menu system, rendered from its second USB serial port.
+       This is the whole radio - everything the front panel can reach - and for a
+       QMX+ with no control panel it is the ONLY way in. The 80x24 grid below is
+       the radio's, character for character; reverse video is how it marks the
+       selected item, so it is drawn rather than dropped. -->
+  <div id="term-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:1000;">
+    <div style="max-width:960px; margin:4vh auto; background:#161616; border:1px solid #494949; border-radius:10px; padding:16px 20px; color:#ddd; font-size:14px;">
+      <div style="display:flex; align-items:center; margin-bottom:10px;">
+        <h3 style="margin:0; color:#ffa040; flex:1;">Radio menus</h3>
+        <span id="term-state" style="color:#888; font-size:12px; margin-right:12px;"></span>
+        <button id="term-close" class="btn-neutral">Close</button>
+      </div>
+      <div id="term-err" style="display:none; background:#2a1a1a; border:1px solid #7a2020; border-radius:6px; padding:10px 12px; margin-bottom:10px; color:#ffb0b0; line-height:1.5;"></div>
+      <pre id="term-screen" style="background:#000; border:1px solid #333; border-radius:6px; padding:10px 12px; margin:0; overflow-x:auto; color:#d8d8d8; font-family:'Consolas','DejaVu Sans Mono',monospace; font-size:15px; line-height:1.15; white-space:pre;"></pre>
+      <div style="margin-top:12px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+        <button class="bot-btn term-key" data-key="up">&#9650;</button>
+        <button class="bot-btn term-key" data-key="down">&#9660;</button>
+        <button class="bot-btn term-key" data-key="left">&#9664;</button>
+        <button class="bot-btn term-key" data-key="right">&#9654;</button>
+        <button class="bot-btn term-key" data-key="enter">Enter</button>
+        <button class="bot-btn term-key" data-key="ctrl-q" title="Back out of a menu (the radio's own Ctrl-Q)">Back</button>
+        <span style="color:#888; font-size:12px; margin-left:8px;">Your keyboard works too &mdash; arrows, Enter, Esc, and typing.</span>
       </div>
     </div>
   </div>
@@ -4405,6 +4432,150 @@ function resumeWs() {
   wsSuppressReconnect = false;
   if (!ws) connectWs();
 }
+
+/* ---- QMX terminal (#147) ------------------------------------------------
+   The radio's own menu system. For a QMX+ with no control panel this is the
+   only way into it at all, which is why it is worth a page of its own.
+
+   Two rules this code exists to keep:
+   - The spectrum WebSocket is PAUSED for the whole session. Same reason as LoTW
+     setup: this link cannot carry the ~10 fps stream and anything else at once,
+     and here "anything else" is a poll every 400 ms.
+   - The session is CLOSED on every way out, including the tab being shut. The
+     device has its own two-minute idle watchdog as the backstop, but leaving the
+     radio in terminal mode for two minutes when the operator simply closed the
+     window would be sloppy. */
+let termTimer = null, termSeq = -1, termOpen = false;
+
+function termEsc(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/* Paint one row, splicing in the reverse-video runs for that row.
+   Reverse video is not decoration - it is the ONLY thing marking the selected
+   menu item, so an operator who cannot see it cannot tell where they are. */
+function termRowHtml(text, runs) {
+  const padded = (text + " ".repeat(80)).slice(0, 80);
+  if (!runs.length) return termEsc(padded.replace(/\s+$/, ""));
+  runs.sort((a, b) => a[0] - b[0]);
+  let out = "", at = 0;
+  for (const [c, len] of runs) {
+    if (c > at) out += termEsc(padded.slice(at, c));
+    out += '<span style="background:#d8d8d8; color:#000;">' +
+           termEsc(padded.slice(c, c + len)) + "</span>";
+    at = c + len;
+  }
+  return out + termEsc(padded.slice(at).replace(/\s+$/, ""));
+}
+
+function termRender(j) {
+  const byRow = {};
+  for (const [r, c, len] of (j.rev || [])) (byRow[r] = byRow[r] || []).push([c, len]);
+  const rows = j.rows || [];
+  let html = "";
+  for (let r = 0; r < rows.length; r++)
+    html += termRowHtml(rows[r], byRow[r] || []) + (r < rows.length - 1 ? "\n" : "");
+  document.getElementById("term-screen").innerHTML = html;
+}
+
+async function termPoll() {
+  try {
+    const j = await (await fetch("/api/term", { cache: "no-store" })).json();
+    if (!j.open) {
+      // The device closed it - almost always the idle watchdog. Say which,
+      // because "the screen stopped updating" is otherwise a mystery.
+      if (termOpen) {
+        termOpen = false;
+        document.getElementById("term-state").textContent = "session closed by the radio";
+        termShowErr("The session timed out after two minutes with nothing happening, "
+                  + "so the Tab5 handed the radio back. Close and reopen to carry on.");
+      }
+      return;
+    }
+    document.getElementById("term-state").textContent = "connected";
+    if (j.seq !== termSeq) { termSeq = j.seq; termRender(j); }
+  } catch (e) { /* a dropped poll is not worth a message; the next one retries */ }
+}
+
+function termShowErr(msg) {
+  const el = document.getElementById("term-err");
+  el.textContent = msg;
+  el.style.display = msg ? "" : "none";
+}
+
+async function termSend(action, extra) {
+  const body = Object.assign({ action: action }, extra || {});
+  try {
+    return await (await fetch("/api/term", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    })).json();
+  } catch (e) { return { ok: false, error: "the Tab5 did not answer" }; }
+}
+
+async function termOpenModal() {
+  document.getElementById("term-modal").style.display = "";
+  document.getElementById("term-screen").innerHTML = "";
+  document.getElementById("term-state").textContent = "connecting...";
+  termShowErr("");
+  termSeq = -1;
+  pauseWs();
+  const r = await termSend("open");
+  if (!r.ok) {
+    document.getElementById("term-state").textContent = "not available";
+    termShowErr(r.error || "Could not open the radio's second serial port.");
+    return;
+  }
+  termOpen = true;
+  await termPoll();
+  termTimer = setInterval(termPoll, 400);
+}
+
+async function termCloseModal() {
+  if (termTimer) { clearInterval(termTimer); termTimer = null; }
+  document.getElementById("term-modal").style.display = "none";
+  if (termOpen) { termOpen = false; await termSend("close"); }
+  resumeWs();
+}
+
+document.getElementById("term-btn").addEventListener("click", (e) => {
+  e.preventDefault();
+  const m = document.getElementById("radio-menu");
+  if (m) m.classList.remove("open");
+  termOpenModal();
+});
+document.getElementById("term-close").addEventListener("click", termCloseModal);
+document.querySelectorAll(".term-key").forEach((b) => {
+  b.addEventListener("click", async () => {
+    await termSend("key", { key: b.dataset.key });
+    setTimeout(termPoll, 120);   // the radio repaints, then we look
+  });
+});
+
+/* Physical keyboard, only while the modal is up. Menus are much faster to drive
+   from the keys than from the on-screen buttons, and typing is the only way to
+   enter a value in some of the radio's fields. */
+document.addEventListener("keydown", async (e) => {
+  if (!termOpen || document.getElementById("term-modal").style.display === "none") return;
+  const map = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right",
+                Enter: "enter", Escape: "esc", Backspace: "bksp" };
+  let key = map[e.key];
+  if (!key && e.key.length === 1) key = e.key;
+  if (!key) return;
+  e.preventDefault();
+  await termSend("key", { key: key });
+  setTimeout(termPoll, 120);
+});
+
+/* Closing the tab must still hand the radio back. sendBeacon survives teardown
+   where fetch does not. */
+window.addEventListener("beforeunload", () => {
+  if (!termOpen) return;
+  try {
+    navigator.sendBeacon("/api/term",
+      new Blob([JSON.stringify({ action: "close" })], { type: "application/json" }));
+  } catch (e) {}
+});
 
 /* Displaced by another browser. Stand down rather than fight for the slot, say so
    where the operator is already looking for connection state, and make that text the
