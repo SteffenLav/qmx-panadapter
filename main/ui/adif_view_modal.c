@@ -750,11 +750,24 @@ static void modal_build(void)
     lv_obj_set_style_text_font(s_lbl_del_all, &lv_font_montserrat_24, 0);
     lv_obj_center(s_lbl_del_all);
 
+    // ⭐ Close is NEUTRAL here, deliberately breaking the house Cancel colour.
+    //
+    // 0x962020 is what Cancel uses in every other modal, and that is fine where
+    // the worst outcome is "nothing happened". This is the ONE window with a
+    // destructive button in it, and there the convention actively misleads:
+    // Gyula HA3HZ opened the log, found Close "bright red as well as the Delete
+    // all button", and hesitated. He was being more careful than the UI
+    // deserved - Close was 0x962020 and Delete all 0x5a1f1f, so the SAFE button
+    // was the brighter red of the two.
+    //
+    // In this panel red means exactly one thing: it deletes your log. Anything
+    // else added here must stay off red.
     lv_obj_t *close_btn = lv_btn_create(bot);
     lv_obj_set_size(close_btn, 240, 72);
-    lv_obj_set_style_bg_color(close_btn, lv_color_hex(0x962020), 0);
+    lv_obj_set_style_bg_color(close_btn, lv_color_hex(0x2a3138), 0);
+    lv_obj_set_style_border_color(close_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_border_width(close_btn, 2, 0);
     lv_obj_set_style_radius(close_btn, 8, 0);
-    lv_obj_set_style_border_width(close_btn, 0, 0);
     lv_obj_add_event_cb(close_btn, close_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *close_lbl = lv_label_create(close_btn);
     lv_label_set_text(close_lbl, "Close");

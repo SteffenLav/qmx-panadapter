@@ -16,6 +16,7 @@
 #include "esp_heap_caps.h"
 #include "sd_archive.h"
 #include "settings.h"   // upload-cursor adjustment in adif_log_delete_record()
+#include "ui.h"         // ui_toast - a failed log write must reach the operator
 #include <unistd.h>     // fsync
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -336,7 +337,37 @@ void adif_log_record(const adif_qso_t *qso)
 
     fprintf(f, "<EOR>\n");
 
-    fclose(f);
+    // ⛔ A LOGGER MUST NOT CLAIM A CONTACT IT DID NOT WRITE.
+    //
+    // None of the fprintf()s above were checked and neither was fclose(), so a
+    // full or failing filesystem lost the QSO in silence while the code went on
+    // to increment the count and log "Logged QSO #N" - the operator is told it
+    // is safe, and finds out when they come to upload. The `storage` partition
+    // is 1 MB shared between this log, the 256 KB rolling diagnostic log and its
+    // rotation, and the LoTW certificate and key, so filling it is a real
+    // prospect on a long trip rather than a theoretical one (Gyula HA3HZ asked
+    // how much the log holds, which is what turned this up).
+    //
+    // fsync before fclose for the reason CLAUDE.md already gives about the SD
+    // log: fclose flushes to the filesystem, but a power cut immediately after
+    // can still lose it, and a QSO is not something to lose cheaply.
+    bool write_ok = (ferror(f) == 0);
+    if (write_ok) {
+        fflush(f);
+        fsync(fileno(f));
+    }
+    if (fclose(f) != 0) write_ok = false;
+
+    if (!write_ok) {
+        ESP_LOGE(TAG, "FAILED to log QSO with %s - the log file could not be "
+                      "written (filesystem full?). The contact is NOT saved.",
+                 qso->their_call);
+        char msg[96];
+        snprintf(msg, sizeof(msg), "QSO with %s NOT logged - storage full?",
+                 qso->their_call);
+        ui_toast(msg);
+        return;                      // do NOT count it, do NOT mirror it
+    }
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_count++;
