@@ -276,9 +276,59 @@ bool qmx_term_open(void)
     s_last_activity_us = esp_timer_get_time();
 
     /* A bare CR is what switches the radio out of CAT-command mode into the
-     * terminal application (manual 8.2). It answers with a full repaint. */
-    tx("\r", 1);
-    vTaskDelay(pdMS_TO_TICKS(400));
+     * terminal application (manual 8.2). It answers with a full repaint.
+     *
+     * ⚠ AND IT IS SOMETIMES LOST, so it is RETRIED. Measured: 2 of 6 opens came
+     * up with a completely blank screen, and the operator found the same thing
+     * by hand - "sometimes there is a blank screen and only if I press enter
+     * then it populates". Pressing Enter sends exactly this byte, which is the
+     * tell. The radio's CDC port is evidently not ready the instant after we
+     * assert DTR, so the first CR goes nowhere.
+     *
+     * A single lost CR was unrecoverable rather than merely slow: nothing else
+     * ever writes to the port unprompted, so the screen model stayed empty, and
+     * the UI's own poll skips a repaint while dirty_seq is unchanged. Blank
+     * forever, until a keystroke happened to supply the missing CR.
+     *
+     * So: give the port a moment, then send a CR and wait for ANY byte back,
+     * up to three times. s_last_rx_us is written by the RX callback, so this
+     * tests what the radio actually did rather than what we sent. */
+    vTaskDelay(pdMS_TO_TICKS(150));
+    bool answered = false;
+    for (int attempt = 1; attempt <= 3 && !answered; attempt++) {
+        int64_t sent_at = esp_timer_get_time();
+        tx("\r", 1);
+        for (int waited = 0; waited < 600; waited += 50) {
+            vTaskDelay(pdMS_TO_TICKS(50));
+            if (s_last_rx_us > sent_at) { answered = true; break; }
+        }
+        if (!answered) ESP_LOGW(TAG, "no reply to the opening CR (attempt %d/3)", attempt);
+    }
+    if (answered) {
+        /* The repaint is several packets; let it finish before anyone draws. */
+        vTaskDelay(pdMS_TO_TICKS(250));
+
+        /* ⭐ STEP OFF "Exit terminal" - a trap of our OWN making.
+         *
+         * The radio remembers the selected item between sessions, and the last
+         * thing our close does is select "Exit terminal" and press Enter. So
+         * every session after the first opens with that item highlighted, and
+         * the operator's first Enter - the most natural key on a menu - drops
+         * them straight back out. Measured: after open, the only selection was
+         * row 7, ' Exit terminal  '.
+         *
+         * One Down wraps to the first item (measured: row 7 -> row 3), so the
+         * operator arrives somewhere useful instead of one keypress from the
+         * door. */
+        int exit_row = find_row("Exit terminal");
+        if (exit_row >= 0 && find_selected_row() == exit_row) {
+            tx("\x1b[B", 3);
+            vTaskDelay(pdMS_TO_TICKS(200));
+        }
+    } else {
+        ESP_LOGW(TAG, "the radio never answered - the port is open but the screen "
+                      "will be blank until a key is pressed");
+    }
 
     /* Background housekeeping, and the strings it writes are literals rather
      * than stack buffers, so a PSRAM stack is safe here. */

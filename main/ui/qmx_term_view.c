@@ -5,6 +5,10 @@
 
 #include "lvgl.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+#include "util/psram_task.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -30,6 +34,68 @@ static lv_obj_t  *s_state;
 static lv_timer_t *s_timer;
 static bool       s_open;
 static uint32_t   s_seen_seq;
+static int        s_blank_ticks;
+static bool       s_nudged;
+
+/* ⛔ THE UI THREAD MUST NEVER TOUCH THE PORT.
+ *
+ * qmx_term_open() blocks for up to ~2.4 s (it retries the opening CR three
+ * times, waiting for the radio each time) and every keystroke is a blocking USB
+ * write. Calling those from a button callback runs them on taskLVGL, which at
+ * this display's ~13 fps is a freeze - serial-captured as
+ * "ui_update_band: display_lock timeout", and the operator reported it as a
+ * crash. The original code got away with a single 400 ms delay; the CR retry
+ * made a latent mistake fatal, which is the honest history of this queue.
+ *
+ * So: the UI posts a command and returns immediately. This worker owns all
+ * port I/O, and the poll timer picks the result up from the screen model. */
+typedef enum { CMD_OPEN, CMD_CLOSE, CMD_KEY } term_cmd_kind_t;
+typedef struct { term_cmd_kind_t kind; char key[12]; } term_cmd_t;
+
+static QueueHandle_t s_cmdq;
+static TaskHandle_t  s_worker;
+
+/* Written by the worker, read by the LVGL poll. A plain enum is enough - it is
+ * a single aligned word and the poll only ever displays it. */
+typedef enum { ST_IDLE, ST_CONNECTING, ST_CONNECTED, ST_NO_PORT, ST_CLOSED } term_status_t;
+static volatile term_status_t s_status = ST_IDLE;
+
+static void worker_task(void *arg)
+{
+    (void)arg;
+    term_cmd_t c;
+    for (;;) {
+        if (xQueueReceive(s_cmdq, &c, portMAX_DELAY) != pdTRUE) continue;
+        switch (c.kind) {
+        case CMD_OPEN:
+            s_status = ST_CONNECTING;
+            s_status = qmx_term_open() ? ST_CONNECTED : ST_NO_PORT;
+            break;
+        case CMD_CLOSE:
+            qmx_term_close();
+            s_status = ST_CLOSED;
+            break;
+        case CMD_KEY:
+            qmx_term_key(c.key);
+            break;
+        }
+    }
+}
+
+static void post(term_cmd_kind_t kind, const char *key)
+{
+    if (!s_cmdq) {
+        s_cmdq = xQueueCreate(8, sizeof(term_cmd_t));
+        if (!s_cmdq) return;
+    }
+    if (!s_worker) {
+        s_worker = psram_task_create(worker_task, "qmx_term_ui", 4096, NULL, 3,
+                                     tskNO_AFFINITY);
+    }
+    term_cmd_t c = { .kind = kind };
+    if (key) { strncpy(c.key, key, sizeof(c.key) - 1); c.key[sizeof(c.key) - 1] = '\0'; }
+    xQueueSend(s_cmdq, &c, 0);      /* never block the UI, even for a tick */
+}
 
 /* Reverse-video blocks, rebuilt on every change. There are one or two on a
  * normal menu, so a small fixed pool is plenty and avoids churning LVGL's
@@ -117,24 +183,69 @@ static void repaint(void)
     s_rev_used = rev_n;
 }
 
+/* Is there anything at all on the screen? */
+static bool grid_is_blank(void)
+{
+    const ansi_term_t *t = qmx_term_lock_screen();
+    if (!t) return false;
+    bool blank = true;
+    for (int r = 0; r < ANSI_ROWS && blank; r++)
+        for (int c = 0; c < ANSI_COLS; c++)
+            if (t->cell[r][c].ch != ' ') { blank = false; break; }
+    qmx_term_unlock_screen();
+    return blank;
+}
+
 static void poll_cb(lv_timer_t *t)
 {
     (void)t;
     if (!s_open) return;
+
+    /* Reflect whatever the worker has got to. This is the only place the state
+     * label is driven while a session is up, so it cannot disagree with what
+     * the port is actually doing. */
+    switch (s_status) {
+    case ST_CONNECTING:
+        set_state("connecting...", 0x888888);
+        return;                          /* nothing to draw yet */
+    case ST_NO_PORT:
+        set_state("no second serial port on the radio", 0xFF6050);
+        return;
+    default:
+        break;
+    }
+
     if (!qmx_term_is_open()) {
         /* The device's own idle watchdog closed it. Say which, or the screen
          * simply freezing looks like a fault. */
         set_state("session timed out - closed", 0xFFA040);
         return;
     }
+    set_state("connected", 0x60C060);
     repaint();
+
+    /* Last-ditch recovery for a blank screen. qmx_term_open() already retries
+     * the opening CR three times, so reaching here means all three went
+     * unanswered - but a blank page is what the OPERATOR sees, and they should
+     * not have to know that pressing Enter is the cure. Once per session, and
+     * only while genuinely empty, so it can never fight a real screen. */
+    if (!s_nudged && grid_is_blank()) {
+        if (++s_blank_ticks >= 4) {          /* ~1.4 s of nothing */
+            s_nudged = true;
+            ESP_LOGW(TAG, "screen still blank - sending one CR to wake it");
+            post(CMD_KEY, "enter");
+            s_seen_seq = 0;
+        }
+    } else {
+        s_blank_ticks = 0;
+    }
 }
 
 static void key_cb(lv_event_t *e)
 {
     const char *k = (const char *)lv_event_get_user_data(e);
     if (!k) return;
-    qmx_term_key(k);
+    post(CMD_KEY, k);               /* never blocking USB from taskLVGL */
     s_seen_seq = 0;                 /* force a repaint on the next tick */
 }
 
@@ -186,7 +297,7 @@ static void build(void)
     s_state = lv_label_create(hdr);
     lv_label_set_text(s_state, "");
     lv_obj_set_style_text_font(s_state, &lv_font_montserrat_20, 0);
-    lv_obj_align(s_state, LV_ALIGN_LEFT_MID, 200, 0);
+    lv_obj_align(s_state, LV_ALIGN_LEFT_MID, 236, 0);   // clear of the title at _28
 
     /* Keys along the header, so the 1200 px grid keeps the whole width below. */
     make_key(hdr, LV_SYMBOL_UP,    "up",     440,  70);
@@ -233,6 +344,8 @@ void qmx_term_view_open(void)
     lv_obj_move_foreground(s_overlay);
     s_open = true;
     s_seen_seq = 0;
+    s_blank_ticks = 0;
+    s_nudged = false;
     for (int r = 0; r < ANSI_ROWS; r++) if (s_rows[r]) lv_label_set_text(s_rows[r], "");
     for (int i = 0; i < s_rev_used; i++) if (s_rev[i]) lv_obj_add_flag(s_rev[i], LV_OBJ_FLAG_HIDDEN);
     s_rev_used = 0;
@@ -243,15 +356,10 @@ void qmx_term_view_open(void)
      * the Reader's Back/Exit buttons in v1.5.0. */
     ui_help_overlay_changed();
 
+    s_status = ST_CONNECTING;
     set_state("connecting...", 0x888888);
-    if (!qmx_term_open()) {
-        set_state("no second serial port on the radio", 0xFF6050);
-        ui_toast("Set the QMX's System config > GPS & Ser. ports > USB serial ports "
-                 "to 2, then power-cycle it.");
-    } else {
-        set_state("connected", 0x60C060);
-        repaint();
-    }
+    post(CMD_OPEN, NULL);           /* the worker does the waiting, not us */
+
     if (!s_timer) s_timer = lv_timer_create(poll_cb, POLL_MS, NULL);
     lv_timer_resume(s_timer);
     ESP_LOGI(TAG, "open");
@@ -264,6 +372,9 @@ void qmx_term_view_close(void)
     if (s_timer) lv_timer_pause(s_timer);
     if (s_overlay) lv_obj_add_flag(s_overlay, LV_OBJ_FLAG_HIDDEN);
     ui_help_overlay_changed();     // hand the top bar and edge swipes back
-    qmx_term_close();              // walks the radio's own "Exit terminal"
+    /* The exit walk is several seconds of USB round-trips - the screen is
+     * already gone, so the operator sees an instant close while the worker
+     * hands the radio back properly in the background. */
+    post(CMD_CLOSE, NULL);
     ESP_LOGI(TAG, "close");
 }
