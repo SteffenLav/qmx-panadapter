@@ -81,6 +81,13 @@ trip through the radio's menu can switch off.
 While the radio is released the Tab5 will not transmit — an armed FT8 burst and Antenna
 Tune are both refused rather than keying a radio you are holding.
 
+**Radio menus** — the QMX's own menu system on the Tab5's screen, so you do not have to
+reach the radio at all. Unlike the button above it, this does **not** stop the panadapter:
+it uses the radio's *second* USB serial port, so CAT keeps running while you are in the
+menus. You have to switch that port on once, on the radio — System config → GPS & Ser.
+ports → USB serial ports → 2. For a QMX+ with no control panel this is the only way into
+its menus. See [Radio Menus](radio-menus.md).
+
 ## Operator Info
 
 **Callsign** — Your amateur radio callsign (required for FT8/FT4 logging).
@@ -162,13 +169,17 @@ learns is remembered per frequency, so returning to a frequency you have already
 used costs nothing.
 
 - **Off** — nothing is touched.
-- **Subtract spur power** — removes the measured artifact. This can never hide a
-  real signal, because only the artifact's own power is taken away. The artifact
-  stays faintly visible.
-- **Erase spur bins** — the artifact disappears completely. The cost is that a real
-  signal sitting exactly on one is hidden while the dial sits still. Nudging the
-  dial slides the blind spot off it, because these artifacts shift so much faster
-  than the dial does.
+- **Erase spur bins** — the one to use. The artifact disappears. Measured on 20 m,
+  where the comb ran 38 dB over the noise floor: this takes the spur columns down
+  about 78% on the waterfall, against about 28% for Subtract. It does **not** leave
+  dark notches — it ramps between the neighbouring bins rather than blanking them.
+  Its one cost is that a real signal sitting exactly on a spur is hidden while the
+  dial sits still, and nudging the dial slides the blind spot off it, because these
+  artifacts shift so much faster than the dial does.
+- **Subtract spur power** — the conservative choice. Only the artifact's own
+  measured power is taken away, so it can never hide anything at all, but the
+  artifact stays clearly visible. Pick this if you would rather see a spur than
+  risk losing a weak signal underneath one.
 
 Wherever something is being removed, the thin line under the frequency labels turns
 teal. You can always see what is being touched.

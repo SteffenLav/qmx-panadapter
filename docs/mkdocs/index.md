@@ -70,11 +70,12 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.8.3 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
-operating position in any browser, and now a mouse.** The panadapter, FT8/FT4 receive and
-transmit, ADIF logging and all three logbook uploads are stable and in daily use.
+**v1.8.4 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+operating position in any browser, and the radio's own menus on the screen.** The
+panadapter, FT8/FT4 receive and transmit, ADIF logging and all three logbook uploads are
+stable and in daily use.
 
-**New in v1.8.3 — a field-report release: five reported faults, all found by users.** You can now **change your QRZ or eQSL login** from the browser — before this the prompt only ever appeared when nothing was stored, so a mistyped key could not be replaced at all (Brian WA6JFK). The **dB scale labels follow the range you set** instead of being fixed at −40 to −120, and the **Adaptive floor slider is gone** because it could never change anything. The **filtered part of the spectrum is drawn where the radio actually filters** — 150 to 3200 Hz in the digital modes, not 200 to 2900. **RF gain no longer sticks on "reading…"**. The **dark bands at the edges of a zoomed view are about half as wide**. Out of band the **band strip becomes a coarse tuner** you drag off centre to move the dial. And the browser's decode list gained **distance and bearing** columns (Tony Abbey). Most of this came from Samuel W7STF.
+**New in v1.8.4 — the QMX's own menus on the Tab5, and a batch of fixes that stop it doing things you did not ask for.** **Radio menus** puts the radio's own 80×24 menu system on the Tab5 and in the browser, running on its *second* USB serial port so the panadapter keeps decoding while you are in there — for a **QMX+ with no control panel it is the only way in** (Randy N4OPI, Michael KZ4LY). **Auto-answer now switches itself off** when you cancel a transmission, when you change band by any route, and at every startup, and it waits until it has heard both transmit windows before its first call (Roy KI0ER). A **transmit offset chosen during a QSO is used** instead of being refused whenever a burst happened to be on the air (Roy KI0ER). **Spur suppression offers the setting that works first** — measured, Erase takes the comb down about 78% against Subtract's 28% (Samuel W7STF). A **USB mouse is read from its own description**, fixing a pointer that flew sideways and barely moved vertically (Kevin KW6E). And a **WiFi hiccup can no longer restart the Tab5**.
 
 **New in v1.8.2 — your radio's own spurs can be removed from the display, and a POTA clock that stopped being stolen.** If you have ever seen evenly spaced signals that never move and are still there with the antenna unplugged, those come from the QMX's own synthesizer — **spur suppression** finds them by nudging the dial 25 Hz and can subtract or erase them, **off by default** under Settings → Waterfall. A **QMX without GPS no longer overwrites an accurate clock** when you switch it on at a POTA site; the Tab5's own RTC wins and sets the radio instead. **RIT can be parked** with a long press and restored unchanged, and its offset is now printed beside its marker on the waterfall. The **band strip stays visible out of band**. And the panadapter no longer **switches your radio off** trying to recover a fault it cannot fix.
 
@@ -103,7 +104,7 @@ Every release, newest first, is on the [Releases](releases.md) page.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.8.3.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.8.4.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

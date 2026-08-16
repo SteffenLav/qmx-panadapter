@@ -276,6 +276,7 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 - **Let me use the QMX menus** — stops the Tab5 talking to the QMX so you can use the radio's own menus or its Band Configuration terminal. A bar appears until you hand it back. See [Settings](settings.md#radio)
 - **Antenna Tune** — QMX 1.04+ only; keys a steady carrier with live power and SWR, and stops itself after 60 seconds
 - **Activation** — start or stop a POTA/SOTA session from the browser. While one is running a badge appears in the top bar with the reference and the contact count, so it cannot be forgotten on the drive home
+- **Radio menus** — the QMX's own 80×24 menu system, in the browser. Arrow keys, Enter and Back on screen, and your real keyboard works too. Needs the radio's second USB serial port switched on first. See [Radio Menus](radio-menus.md)
 
 **Miscellaneous ▲**:
 

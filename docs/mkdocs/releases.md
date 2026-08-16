@@ -4,7 +4,21 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.8.3** — 2026-08-14
+**v1.8.4** — 2026-08-16
+
+**Your radio's own menus on the Tab5, and a batch of fixes that stop it doing things you did not ask for.**
+
+- **The QMX's own menu system, on the Tab5 and in the browser.** Settings → Radio → **Radio menus** shows the radio's 80×24 menu screen with arrow keys, Enter and Back. For a **QMX+ with no control panel this is the only way in** — everything the front panel would reach, including Band config and System config. It runs on the radio's **second** USB serial port, so the panadapter keeps decoding while you are in the menus; enable that once on the radio under System config → GPS & Ser. ports → USB serial ports → 2. Closing walks the radio back out through its own *Exit terminal* item, and if you close the browser tab or leave it two minutes it hands the radio back by itself. *(Randy N4OPI, seconded by Michael KZ4LY)*
+- **Auto-answer now stands down when you would not expect it to be running.** It waits until it has heard **both** transmit windows before its first call, instead of picking a frequency from nothing after a band change. **Cancelling a transmission switches it off** — so halting a transmission to go and check your antenna does what you expect, rather than the radio starting again a cycle later. **A band change switches it off**, whichever way you changed band, because the antenna is usually not tuned for the new one yet. And **it is off at every startup**. *(Roy KI0ER)*
+- **A transmit offset you choose during a QSO is used.** It was refused whenever a burst happened to be on the air — which, since a transmission fills most of every other slot, was about four attempts in ten. The exchange then carried on at the offset it started with, exactly when you were trying to move out from under someone. It is now accepted immediately and applied the moment the burst ends. *(Roy KI0ER)*
+- **Spur suppression offers the setting that works first.** Both were there, but the weaker one was offered first: measured on 20 m, **Erase spur bins** takes the spur columns down about 78% against **Subtract**'s 28%. Erase now comes first. It does not leave dark holes — it ramps between the neighbouring bins — and what it learns is remembered per frequency, so the two-second measurement happens once. *(Samuel W7STF, who reported it as not seeming effective, and was right.)*
+- **A USB mouse is read from its own description instead of an assumption.** A mouse reporting 16-bit movement had it read as 8-bit, so the pointer flew sideways, jumped between points, and barely moved vertically. *(Kevin KW6E)*
+- **A WiFi hiccup can no longer restart the Tab5.** The WiFi transport used to restart the whole device rather than drop a single frame — and because it was a clean restart there was no crash report, so it looked like a mystery. It now drops the frame and keeps going.
+- **Smaller, all reported by users:** the **Close button in the QSO log is no longer red** — it was a brighter red than *Delete all*, which is exactly backwards *(Gyula HA3HZ)*; a **QSO that could not be saved is no longer reported as logged** *(found while answering Gyula's question about how much the log holds — about two thousand contacts)*; and the **top bar no longer gets stuck showing the wrong mode or band**.
+
+## Previous Releases
+
+### v1.8.3 — 2026-08-14
 
 **A field-report release: every fix in it was found by someone using the radio.**
 
@@ -16,8 +30,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **The dark bands at the edges of a zoomed view are about half as wide.** Zooming filters the signal before re-analysing it, and that filter began rolling off just inside the edge of what is drawn. The filter is now twice as long. Widening it instead was rejected deliberately: that would have traded the dark edge for false signals appearing where nothing is transmitting. *(Samuel W7STF, whose own estimate of the width was accurate.)*
 - **Out of band, the band strip is now a coarse tuner.** Inside a band the strip is a map — where you touch is where you go. Outside one there is nothing to map, so a handle sits in the middle and you **drag it off centre to move the dial**; let go and it springs back. A full pull moves by half of what is on screen, so two drags overlap instead of skipping a gap, and it gets finer as you zoom in. *(Samuel W7STF, who rightly pointed out that a row saying only "out of band" earns nothing.)*
 - **The browser's decode list shows distance and bearing.** KM and BRG columns after the audio tone, in the same order the Tab5 uses, switching to MI if you have *Distance in miles* ticked. The Tab5 works it out and sends it, so the two screens cannot disagree, and a station that has not sent a grid shows a dash rather than a made-up number. *(Tony Abbey)*
-
-## Previous Releases
 
 ### v1.8.2 — 2026-08-13
 
@@ -299,7 +311,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.8.3.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.8.4.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

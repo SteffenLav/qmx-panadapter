@@ -1921,5 +1921,60 @@ missing and the browser shows a dash — never a distance that cannot be stood b
 
 ---
 
+### Shipped in v1.8.2 — 2026-08-13
+
+*(Backfilled 2026-08-16 — this entry and v1.8.3's were missed at the time.)*
+
+- **Spur suppression** (`dsp/spur_map.c`, opt-in, default OFF). The QMX makes its own comb: +38.6 dB at 14.074 with the BNC open. A spur's baseband offset moves at **16–50× the dial**, so a 25 Hz nudge is a physical discriminator rather than a statistical guess. Two modes — subtract the measured power (~12–17 dB, can never hide a real signal) or interpolate the bins away. Cached per frequency, so a revisit needs no nudge. Teal marks under the frequency labels show what is being touched.
+- **A GPS-less QMX no longer overwrites a trusted clock.** The old guard was "SNTP is fresh", and offline SNTP is never fresh — so it could not help the one case that needed it. Don WB0LQW arrived at a POTA site, switched the radio on, and its power-on 00:00 replaced his RTC.
+- **RIT long-press parks and restores the offset** (Roy KI0ER); the offset is printed on the waterfall; the band strip reads "Out of band" instead of vanishing (Samuel W7STF).
+- **The CQ failure path no longer blames the callsign** for an unbuildable message (Don WB0LQW) — and its new log line is what solved the underlying fault the next day.
+- **`usb_replug` no longer power-cycles a wedged radio**, which the operator saw as his QMX being switched off.
+
+### Shipped in v1.8.3 — 2026-08-14
+
+*(Backfilled 2026-08-16.)*
+
+A field-report release — every fix in it was reported by a user.
+
+- **QRZ/eQSL credentials can be re-entered** (Brian WA6JFK): the prompt only fired when nothing was stored, so a mistyped key was unreachable.
+- **dBm gridlines derived from the dB range** (`util/db_gridlines.c` + host harness). The mutation run found a real `max_n` overrun no test reached.
+- **Adaptive-floor slider removed from the drawer** — it could not change anything, because the tracker it fed is re-seeded 17×/s.
+- **Passband overlay corrected to the radio's real digital filter, 150–3200 Hz** — and `FW;` reports a *top edge*, not a width, in DiGi. Pixel-measured on `/ss.bmp`.
+- **RF gain read-back repaints when the answer lands.** My first version counted its timeout from drawer open and was falsified on hardware, since CAT link-up is ~17 s after boot.
+- **Zoom FIR 31 → 63 taps** for the dark zoomed edges; **out-of-band band strip became a centre-detented coarse tuner**; **browser decode list gained KM/BRG** (Tony Abbey), computed on the device so the two screens cannot disagree.
+
+### Shipped in v1.8.4 — 2026-08-16
+
+**The radio's own menus on the Tab5, and a batch of fixes that stop it doing things you did not ask for.**
+
+**Radio menus (#147 — Randy N4OPI, seconded by Michael KZ4LY).** The QMX's own 80×24 terminal, on the Tab5 (Settings → Radio → Radio menus) and in the browser. For a QMX+ with no control panel this is the only way into the menu system at all.
+- It runs on the radio's **second** USB serial port — interface 5, which is *not* contiguous with CAT's interface 0 because the audio function occupies 2–4. Measured: CAT frequency, mode and the S-meter keep running for the whole session. Enable it once on the radio: System config → GPS & Ser. ports → USB serial ports → 2.
+- Closing walks the radio out through its own *Exit terminal* item, found by **reading the screen** rather than counting keypresses, so it works however deep you are. A two-minute idle watchdog and a browser-close handler are the backstops.
+- The screen model (`util/ansi_term.c`) is host-tested against the **real bytes the radio sent**, re-fed at every one of 287 byte-split points. Reverse video is load-bearing: it is the only thing marking the selected item.
+- Font is JetBrains Mono (OFL) at size 25 — a correctness constraint, not taste: the highlight is drawn at `col*CELL_W`, so only a size giving a whole-pixel advance works.
+
+**Auto-answer safety (#142–#145 — Roy KI0ER), all four hardware-verified.** It waits until both transmit windows are mapped before its first call; cancelling a transmission also switches it off; a band change switches it off **by any route**; and it is off at every startup. The band case was genuinely broken — the stand-down existed only on the band-button path, so the web page, a spot, a memory recall and the radio's own knob all left it running into an untuned antenna.
+
+**A TX offset chosen mid-QSO is honoured (#151 — Roy KI0ER).** The plumbing was always right; the *refusal* was the bug. A burst covers ~12.6 s of a 15 s slot and a QSO transmits every other slot, so roughly 40% of attempts were rejected outright, leaving the exchange on its starting offset. Now queued and applied the instant the burst ends.
+
+**Spur suppression offers the mode that works first (#157 — Samuel W7STF).** Measured before changing anything: the detector finds 87 bins, strongest 38.5 dB over the floor, exactly as designed. But the menu offered the weaker treatment first — on the waterfall, Subtract is −28% and Erase −78%. Erase now comes first, leaves no dark notches, and its ~3 s learn is cached per frequency.
+
+**USB mouse decoded from its report descriptor (#152 — Kevin KW6E).** A 16-bit X read as 8-bit made the horizontal axis wrap every 256 counts and the vertical axis nearly dead. Deliberately **no** speed setting was added: a scale factor cannot make one axis wrap while the other stands still, so it would have hidden the fault.
+
+**A WiFi hiccup can no longer reboot the device (#131).** esp_hosted's transmit path gave up after two CMD53 timeouts 11 ms apart and restarted the whole P4 rather than drop one frame — a clean `esp_restart()`, so no panic dump and `reset_reason` reads `SW_CPU_RESET`. Now 8 attempts with a pause, then the frame is dropped and the link stays up; the restart survives only behind 32 *consecutive* failures.
+
+**Smaller, all field-reported:**
+- **ADIF viewer Close was red** — brighter red than "Delete all" (Gyula HA3HZ). Now neutral; in that panel red means only "this deletes your log".
+- **A QSO that could not be written was reported as logged** — found while answering Gyula's question about log capacity. The write path checked neither `fprintf` nor `fclose`. It now refuses to count a contact it could not save and names the station on screen.
+- **A top-bar label that lost the display lock stayed wrong forever** — the caller only fired on change, so one missed lock left the screen disagreeing with the radio indefinitely.
+- **`ft8_status_set()` aborted the device if called before init** — `xSemaphoreTake(NULL)` is an immediate abort, and the FT8 screen could reach it while the QMX-wait prompt was up.
+
+**Standing patch #6** — `tools/patches/apply_cdc_acm_close_tolerant.ps1`. `cdc_acm_host_close()` fed `usb_host_interface_release()` into `ESP_ERROR_CHECK` while allowing the client task only 10 ms to reap URBs, so a busy port turned a transient into a reboot. Retries the release, then logs and continues.
+
+⚠ **Not verified in this release:** Kevin's mouse (no Surface Arc here — the new report-map log line will settle it), the ADIF Close colour on screen, the failed-write path (needs a full filesystem), and the SDIO drop path (needs a soak). **#118, the phantom CW mirror, remains open** — the IQ-mode explanation was falsified on hardware in Roy's exact configuration.
+
+---
+
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
 

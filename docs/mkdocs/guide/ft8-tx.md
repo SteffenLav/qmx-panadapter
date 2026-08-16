@@ -142,6 +142,27 @@ Each QSO takes **~90 seconds** (6 FT8 slots × 15 s/slot). If a station doesn't 
 
 A permanent on-screen warning appears whenever robot mode is available.
 
+**Four things now switch it off for you**, all of them because the alternative is
+transmitting when you did not expect it (Roy KI0ER):
+
+- **It waits before its first call.** Straight after a band change or a restart
+  nothing has been heard yet, so both transmit windows are unmapped and a tone
+  would be chosen from no information at all. It holds, showing *"Auto-answer:
+  listening before first call"*, until it has heard both windows.
+- **Cancelling a transmission switches it off.** Tapping the TX indicator to stop a
+  transmission disarms it, abandons the QSO **and** turns auto-answer off — so
+  halting a transmission to go and check your antenna does what you expect, rather
+  than the radio starting again a cycle later.
+- **A band change switches it off**, whichever way you changed band — the band
+  buttons, the web page, a spot, a memory recall, or the radio's own knob. Few
+  stations have an automatic ATU, so the antenna is usually not tuned for the new
+  band yet.
+- **It is off at every startup**, however the last session ended. Unattended
+  transmission is never the state the panadapter powers up in; switching it on is
+  a deliberate act, once per session.
+
+Each of these says on screen why it stood down.
+
 ### 4. FT8 Simulation Mode (Practice QSOs)
 
 ⚠️ **For practice only** — no real stations involved, radio never keys up. Since v1.3.0 the simulator needs **no QMX connected at all** — no radio, no antenna, zero RF.
@@ -321,7 +342,11 @@ In the picker:
 
 The readout states in words whether your chosen slot is clear or occupied, and lists the nearest free slots as numbers.
 
-It applies **between** bursts. With a burst on the air, Apply refuses and says to try again after it. Slot parity is untouched, so moving your tone mid-QSO does not disturb the exchange — your partner tracks the slot, not the frequency. This is the same freedom WSJT-X gives you, and it is the way out from under a station that has landed on top of you.
+**Apply whenever you like, including in the middle of a transmission.** If a burst is on the air the change is accepted and applied the moment that burst ends — the transmission in progress finishes on the old tone, because stopping it half way would send a corrupted frame, and the very next message carries your new one.
+
+That used to be a refusal, and it mattered more than it sounds (Roy KI0ER). A burst covers about 12.6 s of a 15 s slot and you transmit every other slot, so roughly four attempts in ten landed mid-burst and were rejected — leaving the QSO running on the offset it started with. Your choice depended on your timing, which is not a choice.
+
+Slot parity is untouched, so moving your tone mid-QSO does not disturb the exchange — your partner tracks the slot, not the frequency. Nothing in FT8 requires either station to stay on the offset it began on, only to stay in its time window. This is the same freedom WSJT-X gives you, and it is the way out from under a station that has landed on top of you.
 
 **TX Hold** is WSJT-X's "Hold Tx Freq". With it **off** — the default — each transmission takes the nearest clear slot, and a CQ that gets clashed relocates itself on the next cycle. With it **on**, the tone you picked is the tone used for everything, a clash is reported but never acted on, and nothing moves you off the slot you chose. The line under the checkbox says which of the two you are getting. Both the tone and the hold setting survive a power cycle.
 
