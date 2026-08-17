@@ -37,19 +37,21 @@ void qmx_term_close(void);
 bool qmx_term_is_open(void);
 
 /* Send a keystroke. Names: "up", "down", "left", "right", "enter", "esc",
- * "ctrl-q", "bksp" (0x08 BS), or a single printable character.
+ * "ctrl-q", "bksp" (sends 0x7F - see below), or a single printable character.
  *
- * BS is the delete key, and this is now ANSWERED rather than assumed. v1.8.4
- * offered BS and DEL side by side because the QMX manual does not say which byte
- * the radio acts on and guessing one would have been a coin toss; Randy N4OPI
- * settled it from PuTTY against the real radio (#177068): in a numeric field the
- * cursor lands on the rightmost digit, BS deletes leftward and you retype, and
- * Del does nothing. DEL and the other candidates are removed.
+ * The delete key sends 0x7F, MEASURED on the radio - not 0x08.
  *
- * ⚠ The missing piece was never an increment key - it was the editing MODEL.
- * These fields are backspace-and-retype, not arrow-adjust. And per Randy the
- * arrows moving between columns in a table is CORRECT behaviour, so do not
- * "fix" that. */
+ * Randy N4OPI answered the open question from PuTTY ("Backspace deletes leftward,
+ * Del does nothing"), and I read "Backspace" as 0x08. PuTTY's Backspace sends
+ * 0x7F by default, so his Backspace WAS 0x7F. Measured on 1_04_004 in
+ * Protection -> Max. PA voltage, with up/down as the control: 0x08, left, right
+ * and Enter do NOTHING; 0x7F deletes leftward and typing then appends.
+ *
+ * The key is still NAMED "bksp" and labelled BS, because backspace is what it does
+ * to the operator - only the byte changed.
+ *
+ * ⚠ The model is backspace-and-retype, not arrow-adjust, and the arrows moving
+ * between columns in a TABLE is correct behaviour - do not "fix" that. */
 bool qmx_term_key(const char *name);
 
 /* Borrow the screen for reading. Returns NULL when no session is open (or the

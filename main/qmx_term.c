@@ -445,28 +445,41 @@ bool qmx_term_key(const char *name)
         else if (!strcmp(name, "enter"))  ok = tx("\r", 1);
         else if (!strcmp(name, "esc"))    ok = tx("\x1b", 1);
         else if (!strcmp(name, "ctrl-q")) ok = tx("\x11", 1);
-        /* ⭐ BS (0x08) is THE delete key, and the question is settled - by Randy
-         * N4OPI (#177068), who answered it from PuTTY against the real radio:
+        /* ⭐ THE DELETE BYTE IS 0x7F, MEASURED ON THE RADIO - not 0x08.
          *
-         *   "In PuTTY landing in a numerical field puts the cursor at the right
-         *    most digit. Backspace deletes leftward and then you can type in the
-         *    desired values. Del does nothing."
+         * This was got wrong twice, so the evidence is written down rather than
+         * the conclusion. Randy N4OPI answered the open question from PuTTY:
+         * "landing in a numerical field puts the cursor at the right most digit,
+         * Backspace deletes leftward and then you can type in the desired values,
+         * Del does nothing." I read "Backspace" as 0x08, shipped 0x08 as the only
+         * key and deleted 0x7F.
          *
-         * v1.8.4 shipped BS and DEL as two separate keys deliberately, rather
-         * than guessing one - and the answer is BS, so DEL is gone along with the
-         * three other candidates that were exposed only to be tried (ESC[3~,
-         * Ctrl-U, Ctrl-W, Ctrl-H). Keeping them would leave four keys that do
-         * nothing next to the one that works.
+         * PuTTY's Backspace sends 0x7F by default (its "Backspace key" option
+         * defaults to Control-?), so his Backspace WAS 0x7F all along, and his
+         * "Del does nothing" refers to PuTTY's Delete, which sends ESC[3~.
          *
-         * ⚠ It was never an INCREMENT key that was missing - the editing MODEL
-         * was what I had wrong. These fields are backspace-and-retype, not
-         * arrow-adjust, so nothing here needs a new key for them.
+         * Measured on 1_04_004, in Configuration -> Protection -> Max. PA
+         * voltage, with up/down as the control to prove the key path works:
          *
-         * ⚠ And my own probe had looked like it contradicted Randy: BS moved the
-         * cursor but changed no text. That was in MESSAGES, a TEXT field, not a
-         * numeric one. Do not re-derive a conclusion about numeric editing from a
-         * text field again. */
-        else if (!strcmp(name, "bksp"))   ok = tx("\b", 1);      /* 0x08 BS */
+         *   up / down        selection moves, screen updates      (transport OK)
+         *   left / right     NOTHING - the radio does not answer
+         *   Enter            NOTHING
+         *   0x08 (BS)        NOTHING
+         *   0x7F (DEL)       "11.5" -> "11." -> "11"   deletes leftward ✓
+         *   then '9'         "11" -> "119"              typing appends ✓
+         *
+         * So the key stays NAMED "bksp" and LABELLED BS - backspace is what it
+         * does to the operator - and sends 0x7F, which is what the radio acts on.
+         *
+         * ⚠ The editing model is backspace-and-retype, NOT arrow-adjust: L/R do
+         * nothing on a field like this, and per Randy the arrows moving between
+         * columns in a TABLE is correct behaviour. Do not "fix" that.
+         *
+         * ⚠ And do not conclude anything about numeric fields from the Messages
+         * field: my earlier probe there found 0x08 moving the cursor without
+         * deleting, which is a text field behaving differently and proved nothing.
+         */
+        else if (!strcmp(name, "bksp"))   ok = tx("\x7f", 1);   /* 0x7F - see above */
         else if (name[1] == '\0')         ok = tx(name, 1);   /* a literal character */
         else ESP_LOGW(TAG, "unknown key '%s'", name);
     }
