@@ -2467,6 +2467,38 @@ void ft8_qso_on_tx_complete(void)
     }
     unlock();
 
+    // ⭐ RST_SENT is what we actually TRANSMITTED, not what we last armed.
+    //
+    // Gyula HA3HZ reported logged report values being wrong. s_rst_sent was
+    // written at ARM time in three places, and an armed request can be replaced
+    // before it ever reaches the air - refresh_our_report() does exactly that,
+    // deliberately, whenever we re-hear the partner with a fresher SNR. So the
+    // log could carry a report that was never sent, which is the same class of
+    // dishonesty as the fabricated "599" removed in v1.3.4: a value in the log
+    // that nothing on the air supports.
+    //
+    // We are called immediately after the burst and ft8_tx_arm() refuses while a
+    // burst is ACTIVE, so s_cur_req here IS the message that just went out.
+    // Latching from its extra_field makes RST_SENT track reality; if a fresher
+    // report is armed afterwards it will overwrite this on ITS own completion.
+    //
+    // Guarded to reports only: a Field Day exchange carries class+section in the
+    // same field and a TX1 carries a grid, and neither is a signal report.
+    lock();
+    if (s_have_cur && (s_cur_req.kind == FT8_TX_KIND_REPLY ||
+                       s_cur_req.kind == FT8_TX_KIND_ROGER_RPT)) {
+        const char *e = s_cur_req.extra_field;
+        if (e[0] == 'R' && (e[1] == '+' || e[1] == '-')) e++;   /* "R-10" -> "-10" */
+        if ((e[0] == '+' || e[0] == '-') && e[1] >= '0' && e[1] <= '9') {
+            if (strcmp(e, s_rst_sent) != 0) {
+                ESP_LOGI(TAG, "RST_SENT <- %s (as transmitted; was '%s')", e, s_rst_sent);
+            }
+            strncpy(s_rst_sent, e, sizeof(s_rst_sent) - 1);
+            s_rst_sent[sizeof(s_rst_sent) - 1] = '\0';
+        }
+    }
+    unlock();
+
     // The operator picked a new TX offset while this burst was on the air.
     // Apply it now, BEFORE the re-arm below, so the very next transmission uses
     // it - that is the whole point of queueing it rather than refusing.

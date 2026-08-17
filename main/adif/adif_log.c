@@ -489,6 +489,115 @@ int adif_log_count_activation(const char *sig_info)
     return n;
 }
 
+/* Case-insensitive strstr - ADIF tags are conventionally upper case but the
+ * spec does not require it, and a record we wrote is not the only record this
+ * could ever be asked to edit. */
+static char *strcasestr_local(char *hay, const char *needle)
+{
+    size_t n = strlen(needle);
+    for (char *p = hay; *p; p++) {
+        if (strncasecmp(p, needle, n) == 0) return p;
+    }
+    return NULL;
+}
+
+/* Replace, add or remove ONE field in ONE logged record.
+ *
+ * Gyula HA3HZ: the web log viewer is called "View / edit log" and the report
+ * column looked editable, but nothing could be changed - only whole-record
+ * delete existed. If a field looks editable it must edit, and correcting a value
+ * by hand is a fair thing to want in a log.
+ *
+ * value == NULL or "" REMOVES the field. That matters here rather than being a
+ * convenience: an absent RST is the honest representation of "never exchanged"
+ * (v1.3.4 deliberately stopped writing a fabricated "599"), so the operator must
+ * be able to get back to absent, not just to some other number.
+ *
+ * Same temp-file-and-rename walk as adif_log_delete_record(), including the
+ * fsync before rename that CLAUDE.md requires. Deliberately does NOT touch the
+ * QRZ/eQSL/LoTW upload cursors: an edit does not change how many records have
+ * been uploaded, and rewinding a cursor to "correct" a remote copy would
+ * re-upload the entire log. The remote copy of an already-uploaded QSO stays as
+ * it was - the caller is responsible for saying so.
+ */
+bool adif_log_set_field(int idx, const char *field, const char *value)
+{
+    if (!s_mounted || idx < 0 || !field || !field[0]) return false;
+    size_t flen = strlen(field);
+    if (flen > 24) return false;
+
+    const char *TMP_PATH = "/spiffs/qso.tmp";
+    FILE *in = fopen(FILE_PATH, "r");
+    if (!in) return false;
+    FILE *out = fopen(TMP_PATH, "w");
+    if (!out) { fclose(in); return false; }
+
+    char open_tag[32];
+    snprintf(open_tag, sizeof(open_tag), "<%s:", field);
+
+    char line[1024];
+    int  rec = -1;
+    bool edited = false;
+    while (fgets(line, sizeof(line), in)) {
+        if (rec < 0) { fputs(line, out); rec = 0; continue; }   /* header */
+        if (rec != idx) { fputs(line, out); rec++; continue; }
+
+        /* Rebuild this one record: copy it, dropping any existing instance of
+         * the field, then append the new one before <EOR>. Working on a copy
+         * keeps the parse simple and the original intact if anything fails. */
+        char rebuilt[1024];
+        size_t o = 0;
+        const char *p = line;
+        while (*p) {
+            if (*p == '<' && strncasecmp(p, open_tag, flen + 2) == 0) {
+                /* <FIELD:len>value - skip the tag AND its len bytes of value. */
+                const char *colon = p + flen + 2;
+                int vlen = atoi(colon);
+                const char *gt = strchr(colon, '>');
+                if (!gt || vlen < 0) break;            /* malformed - bail out */
+                p = gt + 1 + vlen;
+                while (*p == ' ') p++;                 /* and its separator */
+                continue;
+            }
+            if (o + 1 >= sizeof(rebuilt)) break;
+            rebuilt[o++] = *p++;
+        }
+        rebuilt[o] = '\0';
+
+        /* Strip the trailing <EOR> (and any whitespace) so the new field goes
+         * before it, which is what makes the record still parse. */
+        char *eor = strcasestr_local(rebuilt, "<EOR>");
+        if (!eor) { fputs(line, out); rec++; continue; }   /* not a record */
+        *eor = '\0';
+
+        char newrec[1200];
+        if (value && value[0]) {
+            snprintf(newrec, sizeof(newrec), "%s<%s:%u>%s <EOR>\n",
+                     rebuilt, field, (unsigned)strlen(value), value);
+        } else {
+            snprintf(newrec, sizeof(newrec), "%s<EOR>\n", rebuilt);
+        }
+        fputs(newrec, out);
+        edited = true;
+        rec++;
+    }
+    fclose(in);
+    fflush(out);
+    fsync(fileno(out));
+    fclose(out);
+
+    if (!edited) { remove(TMP_PATH); return false; }
+    remove(FILE_PATH);
+    if (rename(TMP_PATH, FILE_PATH) != 0) {
+        ESP_LOGE(TAG, "set_field: rename %s -> %s failed", TMP_PATH, FILE_PATH);
+        return false;
+    }
+
+    ESP_LOGI(TAG, "QSO #%d: %s = '%s'", idx, field, value ? value : "(removed)");
+    sd_archive_mark_adif_dirty();
+    return true;
+}
+
 bool adif_log_delete_record(int idx)
 {
     if (!s_mounted || idx < 0) return false;

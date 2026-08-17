@@ -1171,6 +1171,89 @@ static esp_err_t adif_delete_handler(httpd_req_t *req)
                                       : "{\"ok\":false,\"error\":\"delete failed\"}");
 }
 
+// POST /api/adif/edit?idx=<n>&call=<CALL>&field=<F>&value=<V> - correct ONE
+// field of ONE record. Same idx+call double-check as delete, for the same
+// reason: a stale browser view must not be able to edit the wrong QSO.
+//
+// Gyula HA3HZ found the viewer called "View / edit log" could not edit anything -
+// only delete. An empty value REMOVES the field, which is the honest state for a
+// report that was never exchanged.
+//
+// ⚠ ONLY the report fields are editable, and that boundary is the point: you may
+// correct WHAT WAS EXCHANGED, never who/when/where. CALL, BAND, MODE, QSO_DATE
+// and QSO_TIME are what QRZ, eQSL and LoTW match a contact on, and a LoTW record
+// is signed over exactly those - letting them be retyped by hand would invite
+// uploads that can never be matched, or a local log that silently disagrees with
+// three remote ones. Delete and re-log is the correct route for those.
+static esp_err_t adif_edit_handler(httpd_req_t *req)
+{
+    char query[192] = "", idx_s[12] = "", call_raw[24] = "", call[24] = "";
+    char field[24] = "", value_raw[32] = "", value[32] = "";
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK ||
+        httpd_query_key_value(query, "idx", idx_s, sizeof(idx_s)) != ESP_OK ||
+        httpd_query_key_value(query, "call", call_raw, sizeof(call_raw)) != ESP_OK ||
+        httpd_query_key_value(query, "field", field, sizeof(field)) != ESP_OK) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "idx, call and field required");
+        return ESP_FAIL;
+    }
+    // value is optional - absent or empty means "remove this field".
+    if (httpd_query_key_value(query, "value", value_raw, sizeof(value_raw)) != ESP_OK) {
+        value_raw[0] = '\0';
+    }
+    if (strcmp(field, "RST_SENT") != 0 && strcmp(field, "RST_RCVD") != 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                            "only RST_SENT and RST_RCVD are editable");
+        return ESP_FAIL;
+    }
+    // %-decode both (a call can carry '/', a report a leading '+' sent as %2B).
+    for (int pass = 0; pass < 2; pass++) {
+        const char *src = pass ? value_raw : call_raw;
+        char       *dst = pass ? value     : call;
+        size_t      cap = pass ? sizeof(value) : sizeof(call);
+        size_t o = 0;
+        for (size_t i = 0; src[i] && o + 1 < cap; i++) {
+            if (src[i] == '%' && src[i + 1] && src[i + 2]) {
+                char h[3] = { src[i + 1], src[i + 2], 0 };
+                dst[o++] = (char)strtol(h, NULL, 16);
+                i += 2;
+            } else {
+                dst[o++] = src[i];
+            }
+        }
+        dst[o] = '\0';
+    }
+    // A report is a signed 2-digit dB figure. Validate rather than trust: this
+    // string ends up in a file uploaded to three logbooks, and the whole reason
+    // the RST fields are honest now is that nothing invents their contents.
+    if (value[0]) {
+        const char *v = value;
+        bool okfmt = (v[0] == '+' || v[0] == '-') && isdigit((unsigned char)v[1]) &&
+                     isdigit((unsigned char)v[2]) && v[3] == '\0';
+        if (!okfmt) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                "report must be like -07 or +03, or empty to clear");
+            return ESP_FAIL;
+        }
+    }
+    int idx = atoi(idx_s);
+    char line[512], rec_call[24] = "";
+    if (idx < 0 || !adif_log_get_record(idx, line, sizeof(line)) ||
+        !adif_log_extract_field(line, "CALL", rec_call, sizeof(rec_call)) ||
+        strcmp(rec_call, call) != 0) {
+        httpd_resp_set_status(req, "409 Conflict");
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"log changed - reload\"}");
+    }
+    bool ok = adif_log_set_field(idx, field, value);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, ok ? "{\"ok\":true}"
+                                      : "{\"ok\":false,\"error\":\"edit failed\"}");
+}
+
+static const httpd_uri_t uri_adif_edit = {
+    .uri = "/api/adif/edit", .method = HTTP_POST, .handler = adif_edit_handler,
+};
+
 static const httpd_uri_t uri_adif_get = {
     .uri = "/api/adif", .method = HTTP_GET, .handler = adif_get_handler,
 };
@@ -2814,7 +2897,7 @@ esp_err_t webserver_start(void)
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.server_port     = 80;
     config.stack_size      = 12288;
-    config.max_uri_handlers = 41;   // 34 API + WS + 5 file-browser + headroom
+    config.max_uri_handlers = 42;   // 35 API + WS + 5 file-browser + headroom
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -2838,6 +2921,7 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_adif_get);
     httpd_register_uri_handler(s_server, &uri_adif_clear);
     httpd_register_uri_handler(s_server, &uri_adif_delete);
+    httpd_register_uri_handler(s_server, &uri_adif_edit);
     httpd_register_uri_handler(s_server, &uri_qrz_key);
     httpd_register_uri_handler(s_server, &uri_qrz_upload);
     httpd_register_uri_handler(s_server, &uri_upload_status);

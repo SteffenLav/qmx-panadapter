@@ -63,6 +63,13 @@ void adif_log_clear(void);
 // worked-call cache. Returns false if idx is out of range or I/O fails.
 bool adif_log_delete_record(int idx);
 
+// Replace, add or remove one field in one record. value NULL/"" removes the
+// field, which is the honest representation of "never exchanged" - so an
+// operator can get a report back to absent, not only to a different number.
+// Does NOT touch upload cursors: the remote copy of an already-uploaded QSO is
+// unchanged, and rewinding a cursor would re-upload the whole log.
+bool adif_log_set_field(int idx, const char *field, const char *value);
+
 // How many logged QSOs carry this MY_SIG_INFO - i.e. how many contacts the
 // current activation has. POTA wants 10 for a valid activation, so this is the
 // number an activator is actually counting in the field. One pass over the
