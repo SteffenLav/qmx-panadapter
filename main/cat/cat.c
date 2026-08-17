@@ -88,6 +88,10 @@ static uint64_t s_diag_poll_hb_us = 0;  // last diag poll-heartbeat timestamp
 static uint32_t s_last_freq_hz = 0;
 static char s_last_mode_digit = 0;  // Phase 5.10: cached Kenwood mode digit
 static int  s_cw_offset_hz = 700;   // CW LO offset read from QMX at connect, default 700
+// Does the radio report a permanently fitted GPS (QMX+ Internal)? Read once at
+// link-up from its GPS & Ser. Ports menu. False until asked, and false on any
+// firmware that does not report the item - the safe direction (#174).
+static bool s_qmx_gps_source_internal = false;
 static cat_band_entry_t s_band_list[CAT_MAX_BANDS];
 static int              s_band_count = 0;
 
@@ -313,6 +317,7 @@ void cat_query_af_gain(void)
 }
 
 int cat_get_cw_offset_hz(void) { return s_cw_offset_hz; }
+bool cat_qmx_gps_source_internal(void) { return s_qmx_gps_source_internal; }
 const char *cat_get_qmx_fw(void) { return s_qmx_fw; }
 bool cat_get_iq_mode_confirmed(void) { return s_iq_mode_confirmed; }
 bool cat_get_vox_disabled(void) { return s_vox_disabled; }
@@ -1599,6 +1604,55 @@ static void link_task(void *arg)
                     s_rx_len = 0;
                 } else {
                     ESP_LOGW(TAG, "Failed to query CW offset: 0x%x", cerr);
+                }
+            }
+
+            /* ⭐ ASK THE RADIO whether it has a permanently fitted GPS, instead of
+             * inferring it from whether its clock agrees with ours (#174).
+             *
+             * The inference was wrong in a way that mattered: the Tab5 also SETS
+             * that clock on a radio without GPS, so a close agreement could be our
+             * own doing - see the false-UTC(GPS) quirk in CLAUDE.md. #173 stopped
+             * that being believed, at the cost of a real QMX+ not re-confirming
+             * until its clock is next seen unset. This closes that hole.
+             *
+             * "GPS source" is Paddle port (default; the only value that works on a
+             * plain QMX, which must NOT have a GPS left connected - it forces
+             * practice mode) or QMX+ Internal (a QLG3 fitted inside a QMX+, i.e. a
+             * GPS that is always there). Verified on hardware that MM Get answers
+             * bare values: MMSystem config|Real time clock; -> MMSoftware;.
+             *
+             * ⚠ Do NOT use "Real time clock" for this. It selects software vs
+             * CR2032-backed hardware RTC, NOT GPS - checked against the 1_04_001
+             * operation manual, because it looks like the obvious answer. */
+            {
+                const char *gq = "MMGPS & Ser. Ports|GPS source;";
+                s_mm_resp_len = 0;
+                esp_err_t gerr = cdc_acm_host_data_tx_blocking(
+                    s_cdc_dev, (const uint8_t *)gq, strlen(gq), 200);
+                if (gerr == ESP_OK) {
+                    for (int wi = 0; wi < 15 && s_mm_resp_len == 0; wi++) {
+                        vTaskDelay(pdMS_TO_TICKS(20));
+                    }
+                    if (s_mm_resp_len >= 3 && strncmp(s_mm_resp, "MM", 2) == 0 &&
+                        strncmp(s_mm_resp, "MM?", 3) != 0) {
+                        /* Match on "Internal" rather than the whole string: the
+                         * exact wording is the radio's, and a menu label is a
+                         * weaker thing to depend on than the word that carries the
+                         * meaning. Anything else (Paddle port) means no permanent
+                         * GPS, which is the safe default. */
+                        s_qmx_gps_source_internal = (strstr(s_mm_resp, "Internal") != NULL);
+                        ESP_LOGI(TAG, "QMX GPS source: %s%s", s_mm_resp + 2,
+                                 s_qmx_gps_source_internal ? "  (permanent GPS)" : "");
+                    } else {
+                        /* Older firmware may not have the item at all. Not an
+                         * error, and not a reason to claim anything either way. */
+                        ESP_LOGI(TAG, "GPS source not reported by this firmware - "
+                                      "falling back to clock-agreement detection");
+                    }
+                    s_rx_len = 0;
+                } else {
+                    ESP_LOGW(TAG, "Failed to query GPS source: 0x%x", gerr);
                 }
             }
             // Query band list from QMX band config (up to 16 slots).

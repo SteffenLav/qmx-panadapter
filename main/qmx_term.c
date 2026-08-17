@@ -8,6 +8,8 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "util/psram_task.h"
+#include "cat.h"          /* cat_request_iq_reassert - see close_locked */
+#include "ui.h"           /* ui_flat_mode_reset                        */
 #include <string.h>
 #include <stdio.h>
 
@@ -244,7 +246,35 @@ static void close_locked(void)
         s_open = false;
     }
     if (s_dev) { cdc_acm_host_close(s_dev); s_dev = NULL; }
-    ESP_LOGI(TAG, "terminal session closed");
+
+    /* ⭐ Hand the radio back the way the operator-pause resume does, because a
+     * terminal session IS a trip through the radio's own menus and has the same
+     * two after-effects (#175, Roy KI0ER):
+     *
+     *   "when I exit the QMX menu on the Tab5 after changing my sidetone volume,
+     *    I still need to select 'Let me use the QMX menus' followed immediately by
+     *    'Done - Tab5 takes over' in order to clear the waterfall back to its
+     *    normal state because the waterfall starts doing the phantom thing."
+     *
+     * His workaround is literally this code path, which is what identified the
+     * cause: resume re-runs the IQ handshake and re-seeds the flat floor, and a
+     * terminal close did neither.
+     *
+     *   - Q9 (IQ mode) is SESSION state on the QMX and a menu visit can drop it.
+     *     The radio then keeps streaming audio at full rate while it is no longer
+     *     I/Q, so CAT answers normally and the spectrum is wrong - exactly the
+     *     shape of the symptom. Queued for the poll task, which owns the pipe.
+     *   - Anything changed in there (sidetone, RF gain, a band setting) moves the
+     *     noise floor the panadapter is calibrated against.
+     *
+     * Both are free when nothing changed: the handshake is a no-op if IQ was
+     * already on, and a floor re-seed costs one frame. ui_flat_mode_reset() only
+     * touches two statics plus the waterfall floor - no LVGL objects - so it is
+     * safe from this task without the display lock. */
+    cat_request_iq_reassert();
+    ui_flat_mode_reset();
+
+    ESP_LOGI(TAG, "terminal session closed - IQ re-assert queued, flat floor re-seeded");
 }
 
 /* The QMX going away mid-session. Without this the handle is stale and the next
@@ -415,27 +445,28 @@ bool qmx_term_key(const char *name)
         else if (!strcmp(name, "enter"))  ok = tx("\r", 1);
         else if (!strcmp(name, "esc"))    ok = tx("\x1b", 1);
         else if (!strcmp(name, "ctrl-q")) ok = tx("\x11", 1);
-        /* Randy N4OPI on 1.8.4: "Backspace and Delete keys do not work" when
-         * editing a value, so a wrong digit could not be taken back - typing 1
-         * into 8000 gave 80001. We only ever sent BS (0x08). A terminal app can
-         * want either that or DEL (0x7F), and which one is not documented
-         * anywhere I can find, so both names are offered and each sends its own
-         * byte rather than us guessing one for both. */
-        else if (!strcmp(name, "bksp"))   ok = tx("\b", 1);      /* 0x08 BS  */
-        else if (!strcmp(name, "del"))    ok = tx("\x7f", 1);    /* 0x7F DEL */
-        /* ⭐ What a REAL terminal sends for the Delete key is not 0x7F but the
-         * VT220 escape sequence ESC[3~ - and this menu system was written to be
-         * driven from PuTTY, so that is the likelier thing it listens for.
-         * Measured on 1_04_004: 0x08 and 0x7F are both ignored outright in the
-         * Messages field while printable characters append, so the delete the
-         * radio does implement is something other than those two. These are the
-         * remaining candidates, exposed so they can be tried rather than guessed:
-         * the VT sequence, and the two line-editing controls a terminal app
-         * commonly accepts. */
-        else if (!strcmp(name, "del-vt")) ok = tx("\x1b[3~", 4); /* VT220 Delete */
-        else if (!strcmp(name, "ctrl-u"))  ok = tx("\x15", 1);   /* kill line    */
-        else if (!strcmp(name, "ctrl-w"))  ok = tx("\x17", 1);   /* kill word    */
-        else if (!strcmp(name, "ctrl-h"))  ok = tx("\x08", 1);   /* == BS, named */
+        /* ⭐ BS (0x08) is THE delete key, and the question is settled - by Randy
+         * N4OPI (#177068), who answered it from PuTTY against the real radio:
+         *
+         *   "In PuTTY landing in a numerical field puts the cursor at the right
+         *    most digit. Backspace deletes leftward and then you can type in the
+         *    desired values. Del does nothing."
+         *
+         * v1.8.4 shipped BS and DEL as two separate keys deliberately, rather
+         * than guessing one - and the answer is BS, so DEL is gone along with the
+         * three other candidates that were exposed only to be tried (ESC[3~,
+         * Ctrl-U, Ctrl-W, Ctrl-H). Keeping them would leave four keys that do
+         * nothing next to the one that works.
+         *
+         * ⚠ It was never an INCREMENT key that was missing - the editing MODEL
+         * was what I had wrong. These fields are backspace-and-retype, not
+         * arrow-adjust, so nothing here needs a new key for them.
+         *
+         * ⚠ And my own probe had looked like it contradicted Randy: BS moved the
+         * cursor but changed no text. That was in MESSAGES, a TEXT field, not a
+         * numeric one. Do not re-derive a conclusion about numeric editing from a
+         * text field again. */
+        else if (!strcmp(name, "bksp"))   ok = tx("\b", 1);      /* 0x08 BS */
         else if (name[1] == '\0')         ok = tx(name, 1);   /* a literal character */
         else ESP_LOGW(TAG, "unknown key '%s'", name);
     }

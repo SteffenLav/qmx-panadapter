@@ -363,10 +363,12 @@ static void build(void)
     make_key(hdr, LV_SYMBOL_RIGHT, "right",  698, 100);
     make_key(hdr, "Enter",         "enter",  804,  96);
     make_key(hdr, "Back",          "ctrl-q", 906,  88);
-    /* Two delete keys, on purpose - see qmx_term.h. Neither worked when only BS
-     * was sent, and which byte the radio acts on is not documented. */
-    make_key(hdr, "BS",            "bksp",   1000, 54);
-    make_key(hdr, "DEL",           "del",    1060, 54);
+    /* ONE delete key now. v1.8.4 shipped BS and DEL side by side rather than
+     * guessing which byte the radio acts on; Randy N4OPI answered it from PuTTY
+     * (BS deletes leftward in a numeric field, Del does nothing), so DEL is gone
+     * and BS takes the whole 114 px both used to share - same row geometry, still
+     * ending at 1114 clear of Close, and a bigger target for a gloved finger. */
+    make_key(hdr, "BS",            "bksp",   1000, 114);
 
     lv_obj_t *cb = lv_btn_create(hdr);
     lv_obj_set_size(cb, 130, 48);

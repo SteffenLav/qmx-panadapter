@@ -2292,11 +2292,19 @@ static esp_err_t decodes_handler(httpd_req_t *req)
 
     int64_t now = (int64_t)time(NULL);
     int slot_ms = ft8_op_mode_slot_ms();
+    // The station we are working is never hidden by a display filter (#176, Roy
+    // KI0ER) - same rule and same accessor as the Tab5's rebuild_list(), so the
+    // two screens cannot disagree about who is worth showing.
+    char working[16] = {0};
+    ft8_qso_get_working_target(working, sizeof(working));
     for (int i = 0; i < n; i++) {
         const ft8_call_t *r = &snap[i];
-        if (hide_cq && strncmp(r->last_text, "CQ ", 3) == 0) continue;
-        if (qs.ft8_filters.incl_cq_only && strncmp(r->last_text, "CQ ", 3) != 0) continue;
-        if (!ft8_filter_match(r->last_text, &qs.ft8_filters)) continue;
+        bool is_partner = working[0] && strcasecmp(r->call, working) == 0;
+        if (!is_partner) {
+            if (hide_cq && strncmp(r->last_text, "CQ ", 3) == 0) continue;
+            if (qs.ft8_filters.incl_cq_only && strncmp(r->last_text, "CQ ", 3) != 0) continue;
+            if (!ft8_filter_match(r->last_text, &qs.ft8_filters)) continue;
+        }
 
         cJSON *o = cJSON_CreateObject();
         cJSON_AddStringToObject(o, "call", r->call);

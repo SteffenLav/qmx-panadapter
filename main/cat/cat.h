@@ -138,6 +138,13 @@ bool cat_qmx_fw_at_least(int major, int minor, int patch);
  * in that state the spectrum will appear mirrored/shifted.
  */
 bool cat_get_iq_mode_confirmed(void);
+
+// True when the radio reports a permanently fitted GPS ("GPS source = QMX+
+// Internal"), read once from its own menu at link-up. This is the radio's own
+// answer, which is why it exists: the alternative - inferring GPS from the
+// clock agreeing with ours - can be satisfied by a clock WE set. False on
+// firmware that does not report the item, so it only ever ADDS certainty.
+bool cat_qmx_gps_source_internal(void);
 /**
  * @brief True once VOX has been confirmed OFF (Q3; readback == 0) for the
  * current connection. The panadapter keys the QMX via CAT (TX;/TA;/RX;), never

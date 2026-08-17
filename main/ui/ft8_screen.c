@@ -1,6 +1,7 @@
 #include "ft8_screen.h"
 
 #include <string.h>
+#include <strings.h>  // strcasecmp - ft8_screen_find_call
 #include <stdio.h>
 #include <stdlib.h>   // qsort - shared decode-list ordering
 #include <time.h>
@@ -247,6 +248,35 @@ void ft8_screen_record_decode(const char *text,
              e->call, e->heard_count, e->last_score, e->last_freq,
              e->last_text);
     if (s_mutex) xSemaphoreGive(s_mutex);
+}
+
+/* Look ONE station up by callsign. Exists so a caller that needs what a station
+ * last SENT does not have to snapshot the whole table to find out: that snapshot
+ * is ~11 KB of ft8_call_t, which CLAUDE.md is emphatic must never sit on a stack
+ * on this board, and a 64-entry scan under the same mutex is cheaper anyway.
+ *
+ * Deliberately does NOT expire stale rows the way get_all() does. This answers
+ * "what did they last send", and a caller drained from the pileup queue may
+ * legitimately have been heard several minutes ago - which is exactly the case
+ * that needs it (#172). Freshness is the caller's business; the pileup queue has
+ * its own ageing. */
+bool ft8_screen_find_call(const char *call, ft8_call_t *out)
+{
+    if (!call || !call[0] || !out) return false;
+    bool found = false;
+    if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) {
+        ESP_LOGW(TAG, "find_call: mutex timeout");
+        return false;
+    }
+    for (int i = 0; i < FT8_CALL_TABLE_SIZE; i++) {
+        if (!s_table[i].occupied) continue;
+        if (strcasecmp(s_table[i].call, call) != 0) continue;
+        *out = s_table[i];
+        found = true;
+        break;
+    }
+    if (s_mutex) xSemaphoreGive(s_mutex);
+    return found;
 }
 
 void ft8_screen_get_all(ft8_call_t *out, int max, int *count_out)

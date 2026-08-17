@@ -1651,12 +1651,50 @@ static bool try_start_pileup_pounce(void)
     // unchanged and starts in WAIT_ROGER - the same shape and state
     // cqrun_answer() uses. That path was added for the pileup MODAL (Ken
     // KF0AYY, 2026-07-15) and this automatic drain was never moved onto it.
-    char pile_rpt[8];
-    fmt_report(pile[best].snr_db, pile_rpt, sizeof(pile_rpt));
-    if (!ft8_tx_build_request(FT8_TX_KIND_REPLY, pile[best].call, reply_freq_hz,
-                              pile[best].last_seen_utc, pile_rpt, &req, err, sizeof(err))) {
-        ESP_LOGW(TAG, "auto-pileup build_request(%s) failed: %s", pile[best].call, err);
-        return false;
+    // ⭐ BUILD THE REPLY FROM WHAT THEY ACTUALLY SENT, through the one builder
+    // that has been right every time (#172).
+    //
+    // This used to always send a BARE report and start in WAIT_ROGER. That is
+    // correct for a caller who sent a grid, and wrong for the experienced
+    // operator who reported US instead - he needs R<report> and WAIT_RR73. It
+    // could not be a one-line branch either, because ft8_pileup_entry_t records
+    // call/snr/freq/last_seen and NOT what they sent, so the drain had no way to
+    // tell the two apart.
+    //
+    // So look them up in the heard table and hand it to
+    // ft8_qso_build_manual_reply(), which derives the whole ladder from
+    // last_text. This removes the SECOND message-building path rather than
+    // patching it a third time - the same shape had already been fixed in the
+    // pileup modal (#134, sent a grid) and in cqrun_answer() (#167, sent a bare
+    // report), and each fix left the others standing. One path cannot disagree
+    // with itself.
+    //
+    // Safe from the decode task: that function touches no LVGL objects (its
+    // header note describes its original caller, not a hard constraint) and its
+    // one qmx_settings_t is the same load this function already does.
+    ft8_call_t heard;
+    if (ft8_screen_find_call(pile[best].call, &heard)) {
+        if (!ft8_qso_build_manual_reply(&heard, reply_freq_hz, &req, NULL, err, sizeof(err))) {
+            ESP_LOGW(TAG, "auto-pileup build_manual_reply(%s) failed: %s",
+                     pile[best].call, err);
+            return false;
+        }
+        ESP_LOGI(TAG, "auto-pileup %s: replying to '%s'", pile[best].call, heard.last_text);
+    } else {
+        // Aged out of the heard table (60 s) while still queued in the pileup,
+        // which is normal for a station waiting several minutes. Fall back to
+        // report-first: everyone in the pileup CALLED US, so they already have
+        // our grid and are waiting on a report. Roy KI0ER lost QSOs to a grid
+        // being sent here.
+        char pile_rpt[8];
+        fmt_report(pile[best].snr_db, pile_rpt, sizeof(pile_rpt));
+        if (!ft8_tx_build_request(FT8_TX_KIND_REPLY, pile[best].call, reply_freq_hz,
+                                  pile[best].last_seen_utc, pile_rpt, &req, err, sizeof(err))) {
+            ESP_LOGW(TAG, "auto-pileup build_request(%s) failed: %s", pile[best].call, err);
+            return false;
+        }
+        ESP_LOGI(TAG, "auto-pileup %s: not in heard table, report-first fallback",
+                 pile[best].call);
     }
     // Carry the CQ-run context ACROSS the start, the same way s_pileup_active is
     // re-set below, because ft8_qso_start() clears all of it (it cannot know an

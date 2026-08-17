@@ -46,6 +46,11 @@ void ft8_screen_record_decode(const char *text,
 // caller may sort.
 void ft8_screen_get_all(ft8_call_t *out, int max, int *count_out);
 
+// Look one station up by callsign (case-insensitive), so a caller needing what
+// that station last SENT does not have to snapshot the whole ~11 KB table.
+// Does NOT expire stale rows - see the note on the implementation.
+bool ft8_screen_find_call(const char *call, ft8_call_t *out);
+
 // How many stations are currently live, without needing a snapshot buffer. Use
 // this instead of ft8_screen_get_all() when only the number is wanted: the table
 // is ~11 KB and callers on taskLVGL cannot put that on the stack. Read-only -

@@ -1094,14 +1094,33 @@ static void rebuild_list(void)
 
     int row = 0;
     for (int i = 0; i < n && row < MAX_ROWS; i++) {
-        if (hide_cq && strncmp(snap[i].last_text, "CQ ", 3) == 0) continue;
-        if (cq_hide_our_parity) {
-            // Same nearest-slot parity rounding as the per-row E/O indicator.
-            int64_t sidx = ((int64_t)snap[i].last_utc * 1000 + cq_per_ms / 2) / cq_per_ms;
-            if (((sidx % 2) == 0) == cq_tx_even) continue;
+        // THE STATION WE ARE WORKING IS NEVER HIDDEN BY A DISPLAY FILTER (#176).
+        // Roy KI0ER, on "Show only CQ callers": "if there is an active QSO
+        // occurring with my callsign, the message display should also show all
+        // relevant messages associated with that exchange ... even though they
+        // are not CQ messages". He is right, and it generalises: every filter
+        // here answers "who is worth looking at", and the answer can never
+        // exclude the contact in progress. Applying the exemption to ALL of them
+        // rather than only to the filter he happened to be using is what stops
+        // this arriving again as a report about the include/exclude terms.
+        //
+        // s_qso_active_target covers a machine QSO's partner AND a manually
+        // stepped one (ft8_qso_note_manual_target), so a hand-run exchange
+        // behaves the same - it is the same string the "currently working" row
+        // highlight uses, so the row that is highlighted can no longer be the row
+        // that is hidden.
+        bool is_partner = s_qso_active_target[0] &&
+                          strcasecmp(snap[i].call, s_qso_active_target) == 0;
+        if (!is_partner) {
+            if (hide_cq && strncmp(snap[i].last_text, "CQ ", 3) == 0) continue;
+            if (cq_hide_our_parity) {
+                // Same nearest-slot parity rounding as the per-row E/O indicator.
+                int64_t sidx = ((int64_t)snap[i].last_utc * 1000 + cq_per_ms / 2) / cq_per_ms;
+                if (((sidx % 2) == 0) == cq_tx_even) continue;
+            }
+            if (qs.ft8_filters.incl_cq_only && strncmp(snap[i].last_text, "CQ ", 3) != 0) continue;
+            if (!ft8_filter_match(snap[i].last_text, &qs.ft8_filters)) continue;
         }
-        if (qs.ft8_filters.incl_cq_only && strncmp(snap[i].last_text, "CQ ", 3) != 0) continue;
-        if (!ft8_filter_match(snap[i].last_text, &qs.ft8_filters)) continue;
         update_row(row++, &snap[i]);
     }
     for (int i = row; i < MAX_ROWS; i++) {

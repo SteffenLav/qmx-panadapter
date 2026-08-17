@@ -517,7 +517,11 @@ static bool apply_gps_tick(int h, int m, int s, int64_t flip_us)
             return false;
         }
         // Tight agreement - but if we are the reason for it, it proves nothing.
-        if (s_qmx_time_pushed) {
+        // UNLESS the radio itself says it has a GPS permanently fitted, which is
+        // its own answer rather than our inference and so settles it outright
+        // (#174). This is what stops a genuine QMX+ we have pushed to from being
+        // stuck as "not GPS" until its clock is next seen unset.
+        if (s_qmx_time_pushed && !cat_qmx_gps_source_internal()) {
             ESP_LOGW(TAG, "QMX tick %02d:%02d:%02d agrees to %lldms, but WE set this "
                           "radio's clock - not treating that as GPS",
                      h, m, s, (long long)d_ms);

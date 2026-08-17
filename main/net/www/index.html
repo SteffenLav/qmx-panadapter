@@ -743,8 +743,7 @@
         <button class="bot-btn term-key" data-key="right">&#9654;</button>
         <button class="bot-btn term-key" data-key="enter">Enter</button>
         <button class="bot-btn term-key" data-key="ctrl-q" title="Back out of a menu (the radio's own Ctrl-Q)">Back</button>
-        <button class="bot-btn term-key" data-key="bksp" title="Backspace (0x08). If this does nothing when editing a value, try DEL - which byte the radio acts on is not documented">BS</button>
-        <button class="bot-btn term-key" data-key="del" title="Delete (0x7F). The other of the two - try this if BS does nothing">DEL</button>
+        <button class="bot-btn term-key" data-key="bksp" title="Backspace (0x08). In a numeric field the cursor sits on the rightmost digit - backspace leftward, then type the value you want">BS</button>
         <span style="color:#888; font-size:12px; margin-left:8px;">Your keyboard works too &mdash; arrows, Enter, Esc, and typing.</span>
       </div>
     </div>
@@ -4589,11 +4588,13 @@ document.querySelectorAll(".term-key").forEach((b) => {
    enter a value in some of the radio's fields. */
 document.addEventListener("keydown", async (e) => {
   if (!termOpen || document.getElementById("term-modal").style.display === "none") return;
-  /* Backspace and Delete are mapped to DIFFERENT bytes (0x08 and 0x7F). Randy
-     N4OPI found neither working when only 0x08 was sent, and which one the radio
-     acts on is not documented - so your real Delete key now sends the other. */
+  /* Backspace sends 0x08, and that is the one the radio acts on - Randy N4OPI
+     established it from PuTTY (#177068): in a numeric field the cursor lands on
+     the rightmost digit, BS deletes leftward and you retype; Del does nothing.
+     So Delete is mapped to BS as well rather than to a byte known to be ignored -
+     pressing either key does the thing the user meant. */
   const map = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right",
-                Enter: "enter", Escape: "esc", Backspace: "bksp", Delete: "del" };
+                Enter: "enter", Escape: "esc", Backspace: "bksp", Delete: "bksp" };
   let key = map[e.key];
   if (!key && e.key.length === 1) key = e.key;
   if (!key) return;
