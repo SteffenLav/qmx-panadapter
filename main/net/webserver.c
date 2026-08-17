@@ -1015,22 +1015,53 @@ static esp_err_t saved_log_handler(httpd_req_t *req)
 static esp_err_t adif_get_handler(httpd_req_t *req)
 {
     char act[24] = "";
+    char date[16] = "";
     {
         size_t qlen = httpd_req_get_url_query_len(req) + 1;
         if (qlen > 1 && qlen < 256) {
             char q[256];
-            if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK)
+            if (httpd_req_get_url_query_str(req, q, qlen) == ESP_OK) {
                 httpd_query_key_value(q, "activation", act, sizeof(act));
+                httpd_query_key_value(q, "date", date, sizeof(date));
+            }
         }
+    }
+
+    // ?date=today (or YYYYMMDD) filters to one day's QSOs, and the file is named
+    // for that day. Gyula HA3HZ files each day's contacts into cqrlog and needs
+    // to tell the downloads apart: "Downloading the ADIF log daily and marking
+    // the date in the downloaded file would be good."
+    //
+    // Resolved from the system clock, which is UTC on this device - the same
+    // basis as the QSO_DATE field being matched, so "today" means the same thing
+    // to both. A malformed value is treated as no filter rather than silently
+    // matching nothing, since an empty ADIF looks like a lost log.
+    char day[9] = "";
+    if (date[0]) {
+        if (strcasecmp(date, "today") == 0) {
+            time_t now = time(NULL);
+            struct tm tm;
+            gmtime_r(&now, &tm);
+            strftime(day, sizeof(day), "%Y%m%d", &tm);
+        } else if (strlen(date) == 8) {
+            bool digits = true;
+            for (int i = 0; i < 8; i++) if (!isdigit((unsigned char)date[i])) digits = false;
+            if (digits) snprintf(day, sizeof(day), "%s", date);
+        }
+        if (!day[0]) ESP_LOGW(TAG, "/api/adif: ignoring unusable date '%s'", date);
     }
 
     httpd_resp_set_type(req, "text/plain; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    char cd[80];
     if (act[0]) {
         // Name the file after the reference - an activator ends up with one
         // file per park and needs to tell them apart later.
-        char cd[80];
         snprintf(cd, sizeof(cd), "attachment; filename=%s.adi", act);
+        httpd_resp_set_hdr(req, "Content-Disposition", cd);
+    } else if (day[0]) {
+        snprintf(cd, sizeof(cd), "attachment; filename=qso-%.4s-%.2s-%.2s.adi",
+                 day, day + 4, day + 6);
         httpd_resp_set_hdr(req, "Content-Disposition", cd);
     } else {
         httpd_resp_set_hdr(req, "Content-Disposition", "attachment; filename=qso.adi");
@@ -1048,7 +1079,7 @@ static esp_err_t adif_get_handler(httpd_req_t *req)
     }
 
     esp_err_t err = ESP_OK;
-    if (!act[0]) {
+    if (!act[0] && !day[0]) {
         char buf[1024];
         size_t n;
         while ((n = fread(buf, 1, sizeof(buf), f)) > 0 && err == ESP_OK)
@@ -1058,7 +1089,10 @@ static esp_err_t adif_get_handler(httpd_req_t *req)
         // emitted - an ADIF file without one is rejected by most loggers even
         // when every record in it is valid.
         char needle[40];
-        snprintf(needle, sizeof(needle), "<MY_SIG_INFO:%u>%s", (unsigned)strlen(act), act);
+        if (act[0])
+            snprintf(needle, sizeof(needle), "<MY_SIG_INFO:%u>%s", (unsigned)strlen(act), act);
+        else
+            snprintf(needle, sizeof(needle), "<QSO_DATE:8>%s", day);
         char line[1024];
         bool header_done = false;
         while (fgets(line, sizeof(line), f) && err == ESP_OK) {
