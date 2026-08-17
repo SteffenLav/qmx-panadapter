@@ -542,6 +542,12 @@ static bool apply_gps_tick(int h, int m, int s, int64_t flip_us)
 // a hot-swap keeps the prior verdict until reboot (acceptable - swaps are rare).
 static bool s_qmx_detect_done = false;
 
+void time_sync_force_redetect(void)
+{
+    s_qmx_detect_done = false;
+    ESP_LOGW(TAG, "GPS auto-detect re-armed - will run on the next periodic pass");
+}
+
 // One QMX time sync + one-time GPS auto-detection (replaces the manual flag).
 // Detection runs on the QMX's OWN clock and requires SNTP as ground truth. A GPS
 // QMX's tick agrees tightly -> confirmed; a small/unset QMX is far off ->

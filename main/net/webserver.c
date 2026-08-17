@@ -759,6 +759,15 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             else      qmx_term_view_close();
             display_unlock();
         }
+    } else if (action && strcmp(action, "time_redetect") == 0) {
+        // Developer escape hatch: re-arm the once-per-boot QMX GPS auto-detection.
+        // See time_sync_force_redetect() for why a reboot is not a usable way to
+        // re-trigger it on a bench with the radio attached.
+        time_sync_force_redetect();
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true}");
+        return ESP_OK;
     } else if (action && strcmp(action, "cat_raw") == 0) {
         // Developer escape hatch: send one raw CAT string to the radio. The
         // reply arrives on the normal RX path and is logged in full (non-poll
