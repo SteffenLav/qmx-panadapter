@@ -162,3 +162,23 @@ idf_component_get_property(lvgl_lib lvgl__lvgl COMPONENT_LIB)
 target_compile_options(${lvgl_lib} PRIVATE
     "-include${CMAKE_CURRENT_SOURCE_DIR}/util/lv_pool_shim.h"
 )
+# ---------------------------------------------------------------------------
+# Refuse to build with a standing patch missing (TODO #181).
+#
+# Six patches live OUTSIDE version control - three in git-ignored
+# managed_components/, three in the pinned ESP-IDF install tree - so a clean
+# fetch, an `idf.py fullclean`, a dependency refresh or an IDF reinstall removes
+# them silently. The binary then builds perfectly and fails on hardware in a way
+# that reads as a hardware fault: on 2026-08-17 three of them were missing and
+# WiFi died within ~4 minutes of every boot, which cost an evening and two wrong
+# hypotheses before anyone checked. See TODO #180.
+#
+# PRE_BUILD on the component lib, not configure-time: a patch can vanish after
+# CMake has run, and this must catch that too. The check is a few file reads.
+add_custom_command(
+    TARGET ${COMPONENT_LIB} PRE_BUILD
+    COMMAND ${CMAKE_COMMAND} -E env "IDF_PATH=$ENV{IDF_PATH}"
+            ${PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_patches.py"
+    COMMENT "Checking standing patches (managed_components + IDF tree)"
+    VERBATIM
+)
