@@ -926,6 +926,60 @@ static int64_t  s_split_last_us = 0;
 static bool     s_split_warned = false;    // one warning per failed engage, not per poll
 static bool     s_split_verify_pending = false;  // awaiting the SP; answer after a clear
 
+// How often to re-read the radio's CW offset while we are in CW. A human turning
+// a menu knob is slow, so this is deliberately lazy - it costs one MM query and a
+// short bounded wait, and only in CW.
+#define CW_OFFSET_REFRESH_US  (5LL * 1000 * 1000)
+static int64_t s_cw_off_last_us = 0;
+
+// Re-read the QMX's CW offset so the display stops trusting a value that may be
+// hours stale.
+//
+// It used to be read in exactly ONE place - the one-time link-up sequence in
+// link_task - and never again. So the moment the operator changed CW offset or
+// CW centre on the radio (front panel or terminal), our compensation froze at
+// whatever it happened to be when the link came up, for the rest of the session.
+// Reported by Roy KI0ER (#165): the dial agreed with the radio but the waterfall
+// did not, and tapping a CW signal tuned him ~30 Hz off, so he transmitted off
+// frequency as if XIT were on. His errors were non-linear in the value he had
+// asked for, which is what a stale CONSTANT looks like - not a scale error.
+//
+// Measured on the bench before writing this (QMX 1_04_004, Auto-offset/tone=YES,
+// passband 300): setting CW centre to 650 dragged BOTH CW offset and Sidetone
+// freq. to 650, and restoring 700 took all three back - so `CW offset` is the
+// right item to read and it tracks the centre. Four consecutive reads returned
+// the same value with the passband untouched, i.e. reading is stable and has no
+// FW;-style re-assert side effect, which is what makes polling it safe at all.
+//
+// Returns true if it used the pipe this cycle.
+static bool cw_offset_refresh(void)
+{
+    if (s_last_mode_digit != '3' && s_last_mode_digit != '7') return false;
+    int64_t now = esp_timer_get_time();
+    if (s_cw_off_last_us != 0 && (now - s_cw_off_last_us) < CW_OFFSET_REFRESH_US) return false;
+    s_cw_off_last_us = now;
+
+    const char *q = "MMCW|CW offset;";
+    s_mm_resp_len = 0;
+    if (cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)q, strlen(q), 200) != ESP_OK) {
+        return true;   // transient; the poll's own error handling owns the link
+    }
+    for (int wi = 0; wi < 10 && s_mm_resp_len == 0; wi++) vTaskDelay(pdMS_TO_TICKS(10));
+    if (s_mm_resp_len < 4 || strncmp(s_mm_resp, "MM", 2) != 0) return true;
+
+    int val = atoi(s_mm_resp + 2);
+    if (val < CW_CENTER_MIN_HZ || val > CW_CENTER_MAX_HZ) return true;
+    if (val != s_cw_offset_hz) {
+        // Change-detected: a per-poll log line here would be 12 lines a minute of
+        // nothing happening, and the diag ring is the budget (CLAUDE.md).
+        ESP_LOGI(TAG, "QMX CW offset changed on the radio: %d -> %d Hz",
+                 s_cw_offset_hz, val);
+        s_cw_offset_hz = val;
+        ui_seed_cw_pitch_hz((uint16_t)val);
+    }
+    return true;
+}
+
 // Returns true if it used the pipe this cycle (caller should yield before the
 // next poll command, same as the other drained writes).
 static bool cw_split_maintain(void)
@@ -1298,6 +1352,12 @@ static void poll_task(void *arg)
         // Cheap when there is nothing to do: it only writes when the frequency
         // moved, the mode changed, or the 30 s re-assert is due.
         if (cw_split_maintain()) {
+            vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
+            continue;
+        }
+        // Keep the CW offset we compensate the display by in step with the radio.
+        // Lazy (5 s) and CW-only, so it costs nothing in any other mode. #165.
+        if (cw_offset_refresh()) {
             vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
             continue;
         }
