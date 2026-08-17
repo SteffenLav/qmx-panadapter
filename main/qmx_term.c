@@ -126,15 +126,40 @@ static int find_row(const char *needle)
     return found;
 }
 
-/* The row currently drawn in reverse video, i.e. the selected menu item, or -1.
- * Rows 0-1 are skipped because the menu TITLE is also reverse video and is drawn
- * INTO the top border ("+---Main menu------+") - measured, not reasoned. Without
- * the skip this finds the title every time and the exit walk never converges. */
+/* The row currently drawn in reverse video that is the SELECTED MENU ITEM, or -1.
+ *
+ * Reverse video marks more than the selection: every open box's TITLE is reverse
+ * too, drawn into its top border. The discriminator is the border itself - a
+ * title's row contains the box's "+-" corner/edge characters, an item's row does
+ * not. Measured in a nested menu, which is the case that matters:
+ *
+ *   row 1  '+---Main menu------+'      reverse "Main menu"      <- title
+ *   row 2  '|+---Configuration--+'     reverse "Configuration"  <- title
+ *   row 5  '|  CW              |'      reverse " CW "           <- THE SELECTION
+ *
+ * ⛔ The first version skipped rows 0-1 instead, on the strength of the MAIN
+ * menu, where the only title is on row 1. That is wrong the moment a submenu
+ * opens, because the nested box puts its title on row 2 - so this returned the
+ * submenu's title and the exit walk would have chased it. It never bit only
+ * because exit_terminal_mode() sends Ctrl-Q three times first and so is usually
+ * back on the main menu by the time it looks. Do not reintroduce a row-number
+ * rule; the border test holds at any depth. */
+static bool row_is_box_border(int r)
+{
+    for (int c = 0; c + 1 < ANSI_COLS; c++) {
+        if (s_scr->cell[r][c].ch == '+' &&
+            (s_scr->cell[r][c + 1].ch == '-' || (c > 0 && s_scr->cell[r][c - 1].ch == '-')))
+            return true;
+    }
+    return false;
+}
+
 static int find_selected_row(void)
 {
     int found = -1;
     if (!s_scr || xSemaphoreTake(s_scr_lock, pdMS_TO_TICKS(300)) != pdTRUE) return -1;
-    for (int r = 2; r < ANSI_ROWS && found < 0; r++) {
+    for (int r = 0; r < ANSI_ROWS && found < 0; r++) {
+        if (row_is_box_border(r)) continue;          /* a title, not the selection */
         for (int c = 0; c < ANSI_COLS; c++) {
             if (s_scr->cell[r][c].reverse && s_scr->cell[r][c].ch != ' ') { found = r; break; }
         }
@@ -398,6 +423,19 @@ bool qmx_term_key(const char *name)
          * byte rather than us guessing one for both. */
         else if (!strcmp(name, "bksp"))   ok = tx("\b", 1);      /* 0x08 BS  */
         else if (!strcmp(name, "del"))    ok = tx("\x7f", 1);    /* 0x7F DEL */
+        /* ⭐ What a REAL terminal sends for the Delete key is not 0x7F but the
+         * VT220 escape sequence ESC[3~ - and this menu system was written to be
+         * driven from PuTTY, so that is the likelier thing it listens for.
+         * Measured on 1_04_004: 0x08 and 0x7F are both ignored outright in the
+         * Messages field while printable characters append, so the delete the
+         * radio does implement is something other than those two. These are the
+         * remaining candidates, exposed so they can be tried rather than guessed:
+         * the VT sequence, and the two line-editing controls a terminal app
+         * commonly accepts. */
+        else if (!strcmp(name, "del-vt")) ok = tx("\x1b[3~", 4); /* VT220 Delete */
+        else if (!strcmp(name, "ctrl-u"))  ok = tx("\x15", 1);   /* kill line    */
+        else if (!strcmp(name, "ctrl-w"))  ok = tx("\x17", 1);   /* kill word    */
+        else if (!strcmp(name, "ctrl-h"))  ok = tx("\x08", 1);   /* == BS, named */
         else if (name[1] == '\0')         ok = tx(name, 1);   /* a literal character */
         else ESP_LOGW(TAG, "unknown key '%s'", name);
     }

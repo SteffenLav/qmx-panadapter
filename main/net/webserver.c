@@ -2569,6 +2569,13 @@ static esp_err_t term_get_handler(httpd_req_t *req)
         cJSON_AddBoolToObject(root, "open", true);
         cJSON_AddNumberToObject(root, "seq", (double)t->dirty_seq);
         cJSON_AddNumberToObject(root, "cursor", t->cursor_visible ? 1 : 0);
+        /* Cursor POSITION, not just visibility. Added 2026-08-17 after I claimed
+         * "the left arrow does nothing" in a text field having only checked the
+         * visibility flag - which cannot show movement. Whether a key moves the
+         * cursor is exactly the question when working out how the radio expects a
+         * field to be edited, so the position has to be observable. */
+        cJSON_AddNumberToObject(root, "cur_row", t->cur_r);
+        cJSON_AddNumberToObject(root, "cur_col", t->cur_c);
 
         cJSON *rows = cJSON_AddArrayToObject(root, "rows");
         cJSON *rev  = cJSON_AddArrayToObject(root, "rev");
