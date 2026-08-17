@@ -1626,7 +1626,17 @@ static void link_task(void *arg)
              * CR2032-backed hardware RTC, NOT GPS - checked against the 1_04_001
              * operation manual, because it looks like the obvious answer. */
             {
-                const char *gq = "MMGPS & Ser. Ports|GPS source;";
+                /* ⚠ The FULL nested path is required, and both halves of that
+                 * matter - measured, not guessed. "MMGPS & Ser. ports|GPS source;"
+                 * answers "?;" because MM wants the path from the TOP-LEVEL menu,
+                 * and the manual spells the submenu "Ser. Ports" while the radio
+                 * itself spells it "Ser. ports". Verified on 1_04_004:
+                 *   MMSystem config|GPS & Ser. ports|GPS source;  -> MMPaddle port;
+                 * A useful discovery aid: appending "?" to a name resolves it, and
+                 * a submenu answers with a 0|0 address (MMSystem config|GPS & Ser.
+                 * ports?; -> MM0|0|...), which is how a container is told from a
+                 * value. */
+                const char *gq = "MMSystem config|GPS & Ser. ports|GPS source;";
                 s_mm_resp_len = 0;
                 esp_err_t gerr = cdc_acm_host_data_tx_blocking(
                     s_cdc_dev, (const uint8_t *)gq, strlen(gq), 200);
