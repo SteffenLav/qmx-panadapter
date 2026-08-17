@@ -390,7 +390,14 @@ bool qmx_term_key(const char *name)
         else if (!strcmp(name, "enter"))  ok = tx("\r", 1);
         else if (!strcmp(name, "esc"))    ok = tx("\x1b", 1);
         else if (!strcmp(name, "ctrl-q")) ok = tx("\x11", 1);
-        else if (!strcmp(name, "bksp"))   ok = tx("\b", 1);
+        /* Randy N4OPI on 1.8.4: "Backspace and Delete keys do not work" when
+         * editing a value, so a wrong digit could not be taken back - typing 1
+         * into 8000 gave 80001. We only ever sent BS (0x08). A terminal app can
+         * want either that or DEL (0x7F), and which one is not documented
+         * anywhere I can find, so both names are offered and each sends its own
+         * byte rather than us guessing one for both. */
+        else if (!strcmp(name, "bksp"))   ok = tx("\b", 1);      /* 0x08 BS  */
+        else if (!strcmp(name, "del"))    ok = tx("\x7f", 1);    /* 0x7F DEL */
         else if (name[1] == '\0')         ok = tx(name, 1);   /* a literal character */
         else ESP_LOGW(TAG, "unknown key '%s'", name);
     }

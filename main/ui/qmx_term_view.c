@@ -31,11 +31,18 @@ static lv_obj_t  *s_overlay;
 static lv_obj_t  *s_grid;
 static lv_obj_t  *s_rows[ANSI_ROWS];
 static lv_obj_t  *s_state;
+static lv_obj_t  *s_help;           // shown when the radio offers no second port
+static lv_obj_t  *s_cursor;         // the radio's cursor - see repaint()
 static lv_timer_t *s_timer;
 static bool       s_open;
 static uint32_t   s_seen_seq;
 static int        s_blank_ticks;
 static bool       s_nudged;
+static uint32_t   s_open_tick;      // when this session opened, for the nudge window
+
+/* How long after opening a blank screen may still be a lost opening CR. Past
+ * this, a blank screen is the radio doing as it was told - see poll_cb(). */
+#define NUDGE_WINDOW_MS 8000
 
 /* ⛔ THE UI THREAD MUST NEVER TOUCH THE PORT.
  *
@@ -144,7 +151,33 @@ static void repaint(void)
             } else c++;
         }
     }
+    /* Where the radio's cursor is, and whether it wants it shown. Read under the
+     * same lock as the cells so it cannot disagree with what we just drew. */
+    int cur_r = t->cur_r, cur_c = t->cur_c;
+    bool cur_vis = t->cursor_visible;
     qmx_term_unlock_screen();
+
+    /* ⭐ DRAW THE CURSOR. The model has tracked cur_r/cur_c/cursor_visible since
+     * the first version and the renderer ignored all three, so in any field you
+     * type into - Messages especially - there was no way to see where you were.
+     * Randy N4OPI: "Cursor location is not displayed." Exact placement, because
+     * the font is fixed-pitch and CELL_W is integral. */
+    if (cur_vis && cur_r >= 0 && cur_r < ANSI_ROWS && cur_c >= 0 && cur_c < ANSI_COLS) {
+        if (!s_cursor) {
+            s_cursor = lv_obj_create(s_grid);
+            lv_obj_remove_style_all(s_cursor);
+            lv_obj_set_style_bg_opa(s_cursor, LV_OPA_60, 0);
+            lv_obj_set_style_bg_color(s_cursor, lv_color_hex(UI_COLOR_PRIMARY), 0);
+            lv_obj_set_size(s_cursor, CELL_W, ROW_H);
+            lv_obj_clear_flag(s_cursor, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_clear_flag(s_cursor, LV_OBJ_FLAG_SCROLLABLE);
+        }
+        lv_obj_set_pos(s_cursor, cur_c * CELL_W, cur_r * ROW_H);
+        lv_obj_clear_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_cursor);   // above the reverse-video blocks
+    } else if (s_cursor) {
+        lv_obj_add_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
+    }
 
     /* Highlights are drawn as filled blocks BEHIND the text, with the text
      * recoloured to dark for those rows... which cannot be done per-run on a
@@ -209,7 +242,9 @@ static void poll_cb(lv_timer_t *t)
         set_state("connecting...", 0x888888);
         return;                          /* nothing to draw yet */
     case ST_NO_PORT:
-        set_state("no second serial port on the radio", 0xFF6050);
+        // Short: the buttons start at x=380 and the panel below carries the detail.
+        set_state("no second port", 0xFF6050);
+        if (s_help) lv_obj_clear_flag(s_help, LV_OBJ_FLAG_HIDDEN);
         return;
     default:
         break;
@@ -224,15 +259,28 @@ static void poll_cb(lv_timer_t *t)
     set_state("connected", 0x60C060);
     repaint();
 
-    /* Last-ditch recovery for a blank screen. qmx_term_open() already retries
-     * the opening CR three times, so reaching here means all three went
-     * unanswered - but a blank page is what the OPERATOR sees, and they should
-     * not have to know that pressing Enter is the cure. Once per session, and
-     * only while genuinely empty, so it can never fight a real screen. */
-    if (!s_nudged && grid_is_blank()) {
-        if (++s_blank_ticks >= 4) {          /* ~1.4 s of nothing */
+    /* Last-ditch recovery for a blank screen at OPEN time. qmx_term_open()
+     * already retries the opening CR three times, so reaching here means all
+     * three went unanswered - but a blank page is what the OPERATOR sees, and
+     * they should not have to know that pressing Enter is the cure.
+     *
+     * ⛔ IT IS BOUNDED TO THE OPENING WINDOW, and that bound is the whole fix
+     * for a bug I shipped. The first version fired whenever the screen was
+     * blank, at any point in the session. Michael KZ4LY then chose "Exit
+     * terminal" from inside the radio's own menu - which clears the screen - and
+     * the nudge helpfully sent a CR a second and a half later and put him
+     * straight back into terminal mode: "I guessed that explicitly selecting
+     * 'Exit terminal' would do this, but it fired back up."
+     *
+     * A lost opening CR can only be lost at open. Anything blank later is the
+     * radio doing what the operator asked, so leave it alone. */
+    if (!s_nudged && s_open_tick && grid_is_blank()) {
+        if (lv_tick_elaps(s_open_tick) > NUDGE_WINDOW_MS) {
+            s_nudged = true;                 /* window closed - never nudge again */
+        } else if (++s_blank_ticks >= 4) {    /* ~1.4 s of nothing */
             s_nudged = true;
-            ESP_LOGW(TAG, "screen still blank - sending one CR to wake it");
+            ESP_LOGW(TAG, "screen still blank %lu ms after open - sending one CR",
+                     (unsigned long)lv_tick_elaps(s_open_tick));
             post(CMD_KEY, "enter");
             s_seen_seq = 0;
         }
@@ -305,12 +353,20 @@ static void build(void)
      * narrowest things on the bar - 70 px, with 148 px sitting idle between Back
      * and Close. They now take that space at 104 px each. Laid out left to right
      * with 6 px gaps, ending clear of Close, which is right-aligned at -16. */
-    make_key(hdr, LV_SYMBOL_UP,    "up",     440, 104);
-    make_key(hdr, LV_SYMBOL_DOWN,  "down",   550, 104);
-    make_key(hdr, LV_SYMBOL_LEFT,  "left",   660, 104);
-    make_key(hdr, LV_SYMBOL_RIGHT, "right",  770, 104);
-    make_key(hdr, "Enter",         "enter",  880, 120);
-    make_key(hdr, "Back",          "ctrl-q", 1006, 110);
+    /* Laid out left to right with 6 px gaps, ending clear of Close - which is
+     * right-aligned at -16 and therefore STARTS at 1134. Adding the two delete
+     * keys meant re-deriving the whole row rather than appending: the first
+     * attempt put DEL underneath Close. */
+    make_key(hdr, LV_SYMBOL_UP,    "up",     380, 100);
+    make_key(hdr, LV_SYMBOL_DOWN,  "down",   486, 100);
+    make_key(hdr, LV_SYMBOL_LEFT,  "left",   592, 100);
+    make_key(hdr, LV_SYMBOL_RIGHT, "right",  698, 100);
+    make_key(hdr, "Enter",         "enter",  804,  96);
+    make_key(hdr, "Back",          "ctrl-q", 906,  88);
+    /* Two delete keys, on purpose - see qmx_term.h. Neither worked when only BS
+     * was sent, and which byte the radio acts on is not documented. */
+    make_key(hdr, "BS",            "bksp",   1000, 54);
+    make_key(hdr, "DEL",           "del",    1060, 54);
 
     lv_obj_t *cb = lv_btn_create(hdr);
     lv_obj_set_size(cb, 130, 48);
@@ -340,6 +396,31 @@ static void build(void)
         lv_obj_set_pos(s_rows[r], 0, r * ROW_H);
         lv_label_set_text(s_rows[r], "");
     }
+
+    /* Shown INSTEAD of the grid when the radio has no second serial port, and it
+     * carries the menu path in full. Michael KZ4LY: "If it can't open the second
+     * serial port, could it display this literal menu path in text on screen? I
+     * knew I needed to do this but couldn't remember where in the menu structure
+     * to do it, so I had to come back here to read the announcement."
+     *
+     * A toast was wrong for this: it disappears, and the one person who needs the
+     * instruction is the one who never read the announcement. */
+    s_help = lv_label_create(s_overlay);
+    lv_label_set_text(s_help,
+        "This needs the radio's SECOND USB serial port, which is off by default.\n\n"
+        "On the QMX, set:\n\n"
+        "    System config\n"
+        "      -> GPS & Ser. ports\n"
+        "        -> USB serial ports\n"
+        "          -> 2\n\n"
+        "You only have to do this once - it survives a power cycle. Then reopen\n"
+        "this screen.\n\n"
+        "The panadapter keeps working while you are in the radio's menus, because\n"
+        "they run on different ports.");
+    lv_obj_set_style_text_font(s_help, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(s_help, lv_color_hex(0xFFC060), 0);
+    lv_obj_set_pos(s_help, (LV_HOR_RES - GRID_W) / 2, HEADER_H + 40);
+    lv_obj_add_flag(s_help, LV_OBJ_FLAG_HIDDEN);
 }
 
 void qmx_term_view_open(void)
@@ -351,6 +432,8 @@ void qmx_term_view_open(void)
     s_seen_seq = 0;
     s_blank_ticks = 0;
     s_nudged = false;
+    s_open_tick = lv_tick_get();
+    if (s_help) lv_obj_add_flag(s_help, LV_OBJ_FLAG_HIDDEN);
     for (int r = 0; r < ANSI_ROWS; r++) if (s_rows[r]) lv_label_set_text(s_rows[r], "");
     for (int i = 0; i < s_rev_used; i++) if (s_rev[i]) lv_obj_add_flag(s_rev[i], LV_OBJ_FLAG_HIDDEN);
     s_rev_used = 0;

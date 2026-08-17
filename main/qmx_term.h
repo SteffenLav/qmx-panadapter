@@ -37,7 +37,12 @@ void qmx_term_close(void);
 bool qmx_term_is_open(void);
 
 /* Send a keystroke. Names: "up", "down", "left", "right", "enter", "esc",
- * "ctrl-q", or a single printable character. */
+ * "ctrl-q", "bksp" (0x08 BS), "del" (0x7F DEL), or a single printable character.
+ *
+ * BS and DEL are deliberately separate: a terminal app can want either, the QMX
+ * manual does not say which, and Randy N4OPI found neither of them working when
+ * only BS was offered. Do not collapse them until it is known which one the
+ * radio actually acts on. */
 bool qmx_term_key(const char *name);
 
 /* Borrow the screen for reading. Returns NULL when no session is open (or the
