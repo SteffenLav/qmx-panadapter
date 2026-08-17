@@ -360,6 +360,11 @@ static void kb_event_cb(lv_event_t *e)
     else if (!strcmp(txt, LV_SYMBOL_LEFT))      name = "left";
     else if (!strcmp(txt, LV_SYMBOL_RIGHT))     name = "right";
 
+    /* One line per keypress, on a screen used rarely. It is here because its
+     * absence is why the phantom-backspace above had to be found by the operator
+     * on the radio instead of in a log. */
+    ESP_LOGI(TAG, "kb: id=%u label='%s' -> %s", (unsigned)id, txt,
+             name ? name : (txt[1] == '\0' ? "literal" : "ignored"));
     if (name) {
         post(CMD_KEY, name);
     } else if (txt[0] && txt[1] == '\0') {
@@ -564,18 +569,38 @@ static void build(void)
     lv_obj_align(s_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_text_font(s_kb, &lv_font_montserrat_28, 0);
 
+    /* ⭐ ORDER IS LOAD-BEARING: our handler is added BEFORE the caps cycle so it
+     * runs FIRST, while the keymap is still the one that was on screen when the
+     * key was pressed.
+     *
+     * Added second, it produced a phantom backspace, found by the operator: "if i
+     * use bs 4x to clear voltage then write 11 then abc to get the . then it also
+     * do one bs so it say 1." The caps-cycle handler calls
+     * lv_keyboard_def_event_cb(), which SWITCHES THE MAP - and the button INDEX
+     * stays the same while the map under it changes. LVGL's maps are not the same
+     * shape, so that index means a different key afterwards:
+     *
+     *     index 11:  symbol map = "abc"        lowercase map = BACKSPACE
+     *
+     * So pressing "abc" to leave the symbol layout resolved, one handler later, to
+     * BACKSPACE and we sent 0x7F to the radio. Reading the label before anything
+     * can change the map is the fix; a longer list of labels to ignore would NOT
+     * have been, because the label we read was not the label that was pressed.
+     *
+     * attach_caps_cycle() removes only lv_keyboard_def_event_cb, so ours survives
+     * being registered first. */
+    lv_obj_add_event_cb(s_kb, kb_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
     /* The shared iPad-style abc/Abc/ABC shift cycle, so shift behaves the way it
-     * does in every other field in this firmware. It REMOVES LVGL's built-in
-     * VALUE_CHANGED handler and becomes the primary one, invoking the built-in
-     * itself for non-shift keys - so our forwarding handler is added AFTER it and
-     * must not call lv_keyboard_def_event_cb() again. */
+     * does in every other field in this firmware. It removes LVGL's built-in
+     * VALUE_CHANGED handler and drives the mode changes itself, so our handler
+     * above must not call lv_keyboard_def_event_cb() as well. */
     ui_theme_keyboard_attach_caps_cycle(s_kb);
 
     /* NO textarea on purpose - see the comment on kb_event_cb. With none
      * attached, nothing can type into a local copy of the text; the radio's own
      * menu owns the field. */
-    lv_keyboard_set_textarea(s_kb, NULL);
-    lv_obj_add_event_cb(s_kb, kb_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_keyboard_set_textarea(s_kb, NULL);   /* see kb_event_cb - no local text */
     lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
     kb_set_shown(false);            /* also paints the toggle's idle colour */
 
