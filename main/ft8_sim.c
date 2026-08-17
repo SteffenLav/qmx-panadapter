@@ -38,6 +38,8 @@
 
 static const char *TAG = "ft8_sim";
 
+static void fmt_report(int snr_db, char *out, size_t len);   // defined below
+
 typedef struct {
     const char *call;
     const char *grid;
@@ -47,6 +49,12 @@ typedef struct {
     bool        engaged;   // true while "in" a simulated QSO with us
     bool        deaf;      // never hears us: CQs but ignores every call - the
                            // station grey-listing exists for (test fixture)
+    bool        terse;     // answers our CQ with a REPORT instead of a grid - the
+                           // experienced operator who already knows us. Gyula
+                           // HA3HZ hit this on the air and our CQ-run replied
+                           // with a bare report instead of R<report>, wasting a
+                           // cycle. A fixture so it stays reproducible on the
+                           // bench, where it can be checked without an antenna.
     bool        worked;    // completed a QSO with us this sim session - stops
                            // answering our CQ (still CQs itself, so pounce and
                            // the worked-before filter stay testable). Cleared
@@ -102,7 +110,8 @@ static const char *const s_fox_queue[] = { "JA3ABC", "EA5XYZ", "VK2DEF", "PY2GHI
 static ft8_sim_phantom_t s_phantoms[N_PHANTOMS] = {
     { "W1AW",   "FN31", "3A", "EMA", 700.0f,  false },        // ARRL HQ, US
     { "K9ZZ",   "EN52", "5B", "WCF", 2100.0f, false },        // US
-    { "N5XYZ",  "EM12", "2A", "STX", 1200.0f, false },        // US
+    { "N5XYZ",  "EM12", "2A", "STX", 1200.0f, .terse = true }, // US - TERSE: answers
+                           // our CQ with a report, not a grid (see `terse`).
     { "VK3ABC", "QF22", "1D", "DX",  1550.0f, false },        // Australia (DX)
     { "JA1XYZ", "PM95", "1D", "DX",  1850.0f, false },        // Japan (DX)
     { "G0ABC",  "IO91", "1D", "DX",  2500.0f, .deaf = true }, // England (DX) - DEAF:
@@ -300,7 +309,14 @@ static void schedule_cq_answer(const char *my_call, int64_t our_slot)
         if (s_phantoms[i].is_fox) continue;
         // Pileup answers land EARLY in the slot (instant landing - text is
         // pre-synthesized) so all of them are inside the slot's scan.
-        set_pending(&s_phantoms[i], my_call, s_phantoms[i].grid, false, true,
+        //
+        // A `terse` phantom answers with its report of us instead of its grid,
+        // which is what an operator who already knows us does. Our reply must
+        // then be R<report>, not another bare report (Gyula HA3HZ).
+        char third[16];
+        if (s_phantoms[i].terse) fmt_report(-9, third, sizeof(third));
+        else                     snprintf(third, sizeof(third), "%s", s_phantoms[i].grid);
+        set_pending(&s_phantoms[i], my_call, third, false, true,
                     reply_slot, SIM_PHANTOM_REPEATS);
         n++;
     }

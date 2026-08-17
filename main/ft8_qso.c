@@ -1487,6 +1487,34 @@ static void cqrun_answer(const char *caller, int caller_freq, int caller_snr,
         ok = send_next_fd(FT8_TX_KIND_REPLY, caller, our_freq, slot_sec, exch,
                           FT8_QSO_WAIT_ROGER);
         if (ok) ft8_status_set("QSO %s: answered - sending %s", caller, exch);
+    } else if (report && (report[0] == '+' || report[0] == '-') &&
+               report[1] >= '0' && report[1] <= '9') {
+        // ⭐ THEY SKIPPED THE GRID AND REPORTED US STRAIGHT AWAY, so the ladder
+        // is one rung further on than the plain case below: answer with
+        // R<our report>, which both acknowledges theirs and gives ours, and wait
+        // for RR73 rather than for a roger we have already been sent.
+        //
+        // Gyula HA3HZ: "When the partner replies to a CQ, he does not send a
+        // Grid, but a report (because he is already familiar), then my reply is
+        // also a report and not an acknowledgement of the report. This happened
+        // twice." Sending a bare report back reads as ignoring what they said,
+        // and costs a whole cycle.
+        //
+        // Note the block above ALREADY recognised this case to capture RST_RCVD -
+        // the information was there and the reply simply did not use it. And
+        // ft8_qso_build_manual_reply() has always got this right, so the manual
+        // Transmit behaved correctly while the automatic CQ-run did not: the same
+        // manual-right/automatic-wrong split as the pileup grid bug (#134).
+        char roger[16];
+        make_roger(rpt, roger, sizeof(roger));
+        ok = send_next(FT8_TX_KIND_ROGER_RPT, caller, our_freq, slot_sec, roger,
+                       FT8_QSO_WAIT_RR73);
+        if (ok) {
+            strncpy(s_rst_sent, rpt, sizeof(s_rst_sent) - 1);
+            s_rst_sent[sizeof(s_rst_sent) - 1] = '\0';
+            ft8_status_set("QSO %s: they reported %s - sending %s", caller,
+                           report, roger);
+        }
     } else {
         ok = send_next(FT8_TX_KIND_REPLY, caller, our_freq, slot_sec, rpt,
                        FT8_QSO_WAIT_ROGER);
