@@ -57,13 +57,24 @@ SNTP sync is **automatic** — you don't need to do anything. The bottom bar sho
 If your QMX has **internal GPS** (QMX+ models often do), there is **nothing to enable** — the Tab5 detects it automatically:
 
 1. At connect, it catches the QMX's `TM;` seconds *flip* (the true GPS second boundary) and compares it against SNTP.
-2. If they agree tightly, the QMX is flagged GPS-disciplined and the clock is **phase-locked to that second edge** (~10 ms, drift-free), not just set to the whole second. Re-locks every 5 minutes.
+2. If they agree tightly — **and the Tab5 has not itself set that radio's clock** — the QMX is flagged GPS-disciplined and the clock is **phase-locked to that second edge** (~10 ms, drift-free), not just set to the whole second. Re-locks every 5 minutes.
 3. If they don't agree (a non-GPS QMX with a free-running RTC), it's used only as a low-priority offline fallback.
 
-The verdict is remembered across reboots, so starting up away from home keeps GPS timing without having to re-detect it. A GPS-disciplined QMX shows **UTC(GPS)** in the bottom bar and is a top-tier source (as good as SNTP); a non-GPS QMX shows **UTC(QMX)** and only helps when offline.
+A GPS-disciplined QMX shows **UTC(GPS)** in the bottom bar and is a top-tier source (as good as SNTP); a non-GPS QMX shows **UTC(QMX)** and only helps when offline.
+
+!!! note "Why step 2 asks who set the clock"
+    The Tab5 pushes its own time into a non-GPS QMX to set that radio's clock —
+    which leaves the radio agreeing with the Tab5 *because the Tab5 put it
+    there*. Until v1.8.5 a close-enough agreement was taken as proof of GPS, so a
+    radio with no GPS at all could be labelled `UTC(GPS)`, and worse, the Tab5
+    then stopped maintaining the clock of the one radio that had no other source.
+    A clock the Tab5 has set is no longer accepted as evidence about itself. The
+    flag clears when the radio's clock is plainly its own again — a QMX's clock is
+    not kept across a power cycle, so switching it off and on is what re-arms
+    detection.
 
 !!! note "The label needs the radio to still be there"
-    The remembered verdict says *this radio is GPS-disciplined*, not *GPS is
+    A remembered verdict says *this radio is GPS-disciplined*, not *GPS is
     keeping time right now*. With the QMX unplugged the Tab5 has no GPS of its
     own, so the label falls back to whatever is actually in charge — usually
     `UTC(NTP)`. Reported by Don N2VGU, whose Tab5 read `UTC(GPS)` with the radio

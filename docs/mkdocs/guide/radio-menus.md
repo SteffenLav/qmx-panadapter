@@ -30,7 +30,10 @@ On the radio: **System config → GPS & Ser. ports → USB serial ports → 2**
     keeps working while you are in the menus.
 
 If the port has not been enabled, the Tab5 tells you so rather than failing
-quietly: *"The radio did not offer a second serial port."*
+quietly — and it puts **the whole menu path on screen**, in both the Tab5 panel and
+the browser, laid out to be followed while you are looking at the radio. The person
+who needs that instruction is the one who never read this page, so it belongs where
+the failure happens rather than in a message that disappears. *(Michael KZ4LY)*
 
 ---
 
@@ -77,7 +80,29 @@ Two things happen automatically so you cannot get stuck:
 
 ---
 
-### 4. What it does not do
+### 4. Typing and editing a value
+
+A **block cursor** shows where you are typing — in a field like one of the Messages,
+that is the difference between editing and guessing. *(Randy N4OPI)*
+
+For deleting, there are **two separate keys, BS and DEL**. They send different bytes
+(0x08 and 0x7F), because a terminal application may want either and the QMX manual
+does not say which. In the browser your real Backspace and Delete keys are wired to
+one each. If you find which one your firmware actually deletes with, please say so —
+then it can become a single obvious key.
+
+!!! warning "Some fields will not change yet, and this is not fixed"
+    Values that are more than two digits, or that sit in a table, do not increment
+    with ◀ ▶ — in a table the arrows move between columns instead. Reported by
+    Randy N4OPI on **Max PA Voltage**, the **band config** table columns, **CAT
+    Config → Timeout**, **System config → TCXO frequency**, the double-click
+    timeout, and the same fields inside **Virtual U3S**.
+
+    These need some key other than left/right, and rather than ship a guess the
+    question has gone to QRP Labs. Everything else in the menus edits normally. Use
+    the radio's own controls, or a laptop terminal, for those fields for now.
+
+### 5. What it does not do
 
 - **It does not transmit.** Nothing here keys the radio.
 - **It does not know what you changed.** If you alter something the panadapter

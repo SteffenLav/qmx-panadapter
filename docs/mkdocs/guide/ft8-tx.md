@@ -129,6 +129,13 @@ When robot mode is on and you're idle, the panadapter scans every FT8 decode for
 5. **TX3** — send 73 or RR73 (exchange complete)
 6. **Log** — ADIF entry created, move to next CQ
 
+**An experienced caller who skips a step is followed** (v1.8.5): if someone answers
+your CQ with a **report** instead of a grid — common from operators who already know
+they have you — the reply acknowledges it with `R` plus your report and waits for
+`RR73`, rather than sending another bare report and losing a cycle. Reported by
+Gyula HA3HZ, who saw it twice. Tapping **Transmit** by hand always did the right
+thing here; it was only the automatic run that was a rung behind.
+
 **A busy pick is abandoned, not waited for** (Roy KI0ER's reasoning adopted verbatim): when *you* pounce on a station that turns out to be mid-QSO with someone else, the Tab5 politely holds — a deliberate pounce means you want *that* station. But the robot picked its target off a list, so when its pick engages a third station the robot **moves on to a different CQ caller** instead of idling through someone else's QSO. No grey-list strike: busy is not unresponsive.
 
 Each QSO takes **~90 seconds** (6 FT8 slots × 15 s/slot). If a station doesn't respond in 4 slots, the panadapter times out and resumes scanning CQ.

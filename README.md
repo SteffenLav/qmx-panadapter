@@ -12,7 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.8.4.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **all three major logbooks — QRZ, eQSL and ARRL LoTW** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.8.5.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **all three major logbooks — QRZ, eQSL and ARRL LoTW** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+>
+> **New in v1.8.5 — the fixes people were already told about, and two found with an antenna back up.** Six of these had been described as done in replies sent before v1.8.4 shipped, so anyone who believed those replies went looking for them in a build that did not have them. In **Radio menus** there is now a **cursor** so you can see what you are typing, **separate BS and DEL keys**, the **menu path on screen** when the radio has no second port, and **"Exit terminal" no longer re-opens the session** *(Randy N4OPI, Michael KZ4LY)*. The **clock no longer claims `UTC(GPS)` on a radio with no GPS** — it was reading back a clock the Tab5 had set itself, and worse, then stopped maintaining the one clock that had no other source. In CW the display **follows the offset you actually set**: it was read once at connect and never again, so changing it on the radio left tap-to-tune about 30 Hz off and you transmitting off frequency *(Roy KI0ER)*. A caller who **answers your CQ with a report instead of a grid** now gets `R` plus your report rather than another bare report *(Gyula HA3HZ)*, there is a **dated "Today only" ADIF export**, and the **red transmitting banner no longer covers the text under it** *(Gyula HA3HZ)*. Full detail in [docs/version-history.md](docs/version-history.md).
 >
 > **New in v1.8.4 — your radio's own menus on the Tab5, and a batch of fixes that stop it doing things you did not ask for.** **Radio menus** puts the QMX's own 80×24 menu system on the Tab5 and in the browser, on the radio's *second* USB serial port so the panadapter keeps decoding while you are in there — for a QMX+ with no control panel it is the only way in *(Randy N4OPI, Michael KZ4LY)*. **Auto-answer now stands down** when you cancel a transmission, when you change band by any route, and at every startup, and it waits until it has heard both transmit windows before its first call *(Roy KI0ER)*. A **TX offset chosen mid-QSO is honoured** instead of being refused whenever a burst happened to be on the air *(Roy KI0ER)*. **Spur suppression offers the mode that works first** — measured, Erase takes the comb down 78% against Subtract's 28% *(Samuel W7STF)*. A **USB mouse is decoded from its own report descriptor**, fixing pointers that flew sideways and crawled vertically *(Kevin KW6E)*. And a **WiFi hiccup can no longer reboot the device**: the transport used to restart the whole Tab5 rather than drop a single frame. Full detail in [docs/version-history.md](docs/version-history.md).
 >
@@ -26,7 +28,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.8.4.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.8.5.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -356,7 +358,7 @@ A floating frequency tooltip above the cursor shows the target frequency in real
 
 Taps always tune to exactly where you touched (snapped to the mode-aware grid above). The old **Snap to signal** option — which hunted for the strongest bin near your tap — was removed in v0.19.4; predictable tuning won.
 
-**Passband indicator.** Two grey vertical lines mark your current filter edges. A faint coloured tint fills the passband. The amber VFO marker shows where the QMX is tuned; in CW mode it sits at dial + CW pitch offset so it marks the actual received tone frequency, not the suppressed carrier.
+**Passband indicator.** Two grey vertical lines mark your current filter edges. A faint coloured tint fills the passband. The amber VFO marker shows where the QMX is tuned; in CW mode it sits at dial + CW pitch offset so it marks the actual received tone frequency, not the suppressed carrier. The offset comes from the radio and is re-read every few seconds while you are in CW, so changing it on the radio is followed rather than leaving the display compensating by a stale figure.
 
 
 ---
@@ -940,7 +942,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.8.4 is here** — the radio's own menus on the Tab5, and a batch of fixes that stop it doing things you did not ask for: auto-answer standing down on a cancel, a band change or a restart; a TX offset accepted mid-QSO instead of refused; spur suppression offering the mode that works first; a USB mouse decoded from its own descriptor; and a WiFi hiccup that can no longer reboot the device. Next on the bench:
+**v1.8.5 is here** — mostly the fixes people had already been told about, delivered: a cursor and working delete keys in Radio menus, the menu path on screen, and "Exit terminal" no longer re-opening the session; a dated Today-only ADIF export; and the red transmitting banner no longer covering the text under it. Plus two found on the bench: the clock claiming `UTC(GPS)` on a radio with no GPS, and the CW display compensating by a CW offset it had read once at connect and never again. Next on the bench:
 
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).

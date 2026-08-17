@@ -4,7 +4,24 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.8.4** — 2026-08-16
+**v1.8.5** — 2026-08-17
+
+**Mostly the things people had already been told were fixed, plus two found on the bench.**
+
+Six of these were described as done in replies sent before v1.8.4 shipped, so anyone who believed those replies went looking for them in a build that did not contain them. That is the main reason this release exists.
+
+- **Radio menus: you can see what you are typing.** A **cursor** is drawn — it was tracked internally all along and simply never shown, so editing one of the Messages fields meant guessing where you were. There are **separate BS and DEL keys** (they send different bytes, and the QMX manual does not say which one the radio wants — if you find out, please say). **"Exit terminal" no longer re-opens the session**: choosing Exit clears the screen, and a recovery meant for a lost opening character saw a blank screen and woke the radio straight back up. And when the radio has **no second serial port, the full menu path is now on screen** — `System config → GPS & Ser. ports → USB serial ports → 2` — instead of a message that disappears, because the person who needs that instruction is the one who never read the announcement. *(Randy N4OPI, Michael KZ4LY)*
+- **The clock no longer says `UTC(GPS)` on a radio with no GPS.** The Tab5 decided a radio was GPS-disciplined when its second-tick agreed closely with internet time — but the Tab5 also *sets* that clock on a radio without GPS, so it was reading back its own handiwork. Measured across four pushes, the agreement landed anywhere from 12 ms to 834 ms, so the same firmware would say GPS on one unit and not on another for no reason at all. It was not only a wrong label: once it believed there was GPS it **stopped keeping that radio's clock right**, and a QMX loses its clock every time it is switched off. A clock the Tab5 set is no longer treated as evidence about itself.
+- **In CW the display follows the offset you actually set.** The dial agreed with the radio but the waterfall did not, and tapping a signal tuned you about 30 Hz off — so you transmitted off frequency as though XIT were on. The radio's CW offset was read **once**, when the Tab5 connected, and never again, so changing it on the radio left the display correcting by the old figure for the rest of the session. It is now re-read every few seconds while you are in CW. *(Roy KI0ER)*
+- **A caller who answers your CQ with a report instead of a grid is followed properly.** Someone who already knows they have you often skips the grid and reports you straight away; the reply should acknowledge that with `R` plus your report, not send another bare report and lose a cycle. Tapping **Transmit** by hand always did this correctly — it was only the automatic run that was a step behind. *(Gyula HA3HZ)*
+- **A dated, day-at-a-time ADIF export.** A **Today only, dated file** link beside the ADIF download gives just that day's contacts, named `qso-YYYY-MM-DD.adi`, so a daily file already says which day it is. *(Gyula HA3HZ)*
+- **The red transmitting banner no longer covers the text under it.** The panel was 99 pixels tall and holding 406 pixels of content with nothing to contain it. It can now shrink and scroll, and the status line no longer wraps onto three lines. *(Gyula HA3HZ)*
+
+**Known limitation, unchanged:** in Radio menus, values longer than two digits and values inside a table still do not change with the ◀ ▶ keys — Max PA Voltage, the band-config columns, CAT timeout, TCXO and the Virtual U3S fields. They need some key other than left/right, and the question has gone to QRP Labs rather than a guess going into a release. Everything else in the menus edits normally.
+
+## Previous Releases
+
+### v1.8.4 — 2026-08-16
 
 **Your radio's own menus on the Tab5, and a batch of fixes that stop it doing things you did not ask for.**
 
@@ -15,8 +32,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **A USB mouse is read from its own description instead of an assumption.** A mouse reporting 16-bit movement had it read as 8-bit, so the pointer flew sideways, jumped between points, and barely moved vertically. *(Kevin KW6E)*
 - **A WiFi hiccup can no longer restart the Tab5.** The WiFi transport used to restart the whole device rather than drop a single frame — and because it was a clean restart there was no crash report, so it looked like a mystery. It now drops the frame and keeps going.
 - **Smaller, all reported by users:** the **Close button in the QSO log is no longer red** — it was a brighter red than *Delete all*, which is exactly backwards *(Gyula HA3HZ)*; a **QSO that could not be saved is no longer reported as logged** *(found while answering Gyula's question about how much the log holds — about two thousand contacts)*; and the **top bar no longer gets stuck showing the wrong mode or band**.
-
-## Previous Releases
 
 ### v1.8.3 — 2026-08-14
 

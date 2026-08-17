@@ -61,6 +61,18 @@ The snap step follows the **mode**, not the zoom level — a CW signal needs to 
 | CW / CW-R | 10 Hz |
 | USB / LSB | 250 Hz |
 | DiGi / FT8 / FT4 / RTTY | 500 Hz |
+
+!!! note "In CW the display allows for your CW offset — including when you change it"
+    A CW signal you can hear at 700 Hz is not on the dial frequency, so the
+    spectrum, the waterfall and tap-to-tune all allow for the radio's **CW
+    offset**. That figure is read from the radio, and since v1.8.5 it is
+    **re-read every few seconds while you are in CW**, so changing CW offset or
+    CW centre on the radio itself is followed within a few seconds.
+
+    Before that it was read only once when the Tab5 connected, so if you changed
+    it afterwards the display kept compensating by the old value and tapping a
+    signal tuned you slightly off frequency — you would then transmit off
+    frequency as though XIT were on. Reported by Roy KI0ER.
 | AM / FM | 1 kHz |
 
 #### RIT — receiving off your transmit frequency

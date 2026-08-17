@@ -117,7 +117,7 @@ which also covers setting the seconds — the part that matters with no WiFi and
 
 **FT8-Derived Sync** — Estimates the UTC offset from decoded FT8 signal timing. **Offline fallback only**: it is automatically ignored while SNTP or GPS is available (those are authoritative), and only nudges the clock when you're off-grid with no better source. See [Time Sync](../guide/time-sync.md).
 
-**QMX GPS** — Detected **automatically**, no setting to toggle. If your QMX (typically a QMX+) is GPS-disciplined, the Tab5 recognises it at connect by comparing the QMX's own second-tick against SNTP, and then phase-locks to the GPS second boundary (~10 ms) as an offline time source. On a non-GPS QMX nothing happens. The bottom-bar clock shows **UTC(GPS)** when a GPS-disciplined QMX is the active source.
+**QMX GPS** — Detected **automatically**, no setting to toggle. If your QMX (typically a QMX+) is GPS-disciplined, the Tab5 recognises it at connect by comparing the QMX's own second-tick against SNTP, and then phase-locks to the GPS second boundary (~10 ms) as an offline time source. On a non-GPS QMX nothing happens. The bottom-bar clock shows **UTC(GPS)** when a GPS-disciplined QMX is the active source. A clock the Tab5 has itself pushed into the radio is never accepted as evidence of GPS — see [Time Sync](../guide/time-sync.md#4-qmx-gps-time-sync-auto-detected).
 
 ## Display
 

@@ -70,10 +70,12 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.8.4 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.8.5 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, and the radio's own menus on the screen.** The
 panadapter, FT8/FT4 receive and transmit, ADIF logging and all three logbook uploads are
 stable and in daily use.
+
+**New in v1.8.5 — the fixes people were already told about, and two found on the bench.** In **Radio menus** there is now a **cursor** so you can see what you are typing, **separate BS and DEL keys**, the **menu path on screen** when the radio has no second port, and **"Exit terminal" no longer re-opens the session** (Randy N4OPI, Michael KZ4LY). The **clock no longer claims `UTC(GPS)` on a radio with no GPS** — it was reading back a clock the Tab5 had set itself, and once it believed in GPS it stopped keeping that radio's clock right. In CW the display **follows the offset you actually set**, instead of one read once at connect and never again, which left tap-to-tune about 30 Hz off (Roy KI0ER). A caller who **answers your CQ with a report instead of a grid** now gets `R` plus your report (Gyula HA3HZ). There is a **dated Today-only ADIF export**, and the **red transmitting banner no longer covers the text under it** (Gyula HA3HZ).
 
 **New in v1.8.4 — the QMX's own menus on the Tab5, and a batch of fixes that stop it doing things you did not ask for.** **Radio menus** puts the radio's own 80×24 menu system on the Tab5 and in the browser, running on its *second* USB serial port so the panadapter keeps decoding while you are in there — for a **QMX+ with no control panel it is the only way in** (Randy N4OPI, Michael KZ4LY). **Auto-answer now switches itself off** when you cancel a transmission, when you change band by any route, and at every startup, and it waits until it has heard both transmit windows before its first call (Roy KI0ER). A **transmit offset chosen during a QSO is used** instead of being refused whenever a burst happened to be on the air (Roy KI0ER). **Spur suppression offers the setting that works first** — measured, Erase takes the comb down about 78% against Subtract's 28% (Samuel W7STF). A **USB mouse is read from its own description**, fixing a pointer that flew sideways and barely moved vertically (Kevin KW6E). And a **WiFi hiccup can no longer restart the Tab5**.
 
@@ -104,7 +106,7 @@ Every release, newest first, is on the [Releases](releases.md) page.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.8.4.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.8.5.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

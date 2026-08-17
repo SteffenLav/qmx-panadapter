@@ -1974,6 +1974,37 @@ A field-report release — every fix in it was reported by a user.
 
 ⚠ **Not verified in this release:** Kevin's mouse (no Surface Arc here — the new report-map log line will settle it), the ADIF Close colour on screen, the failed-write path (needs a full filesystem), and the SDIO drop path (needs a soak). **#118, the phantom CW mirror, remains open** — the IQ-mode explanation was falsified on hardware in Roy's exact configuration.
 
+### Shipped in v1.8.5 — 2026-08-17
+
+**Mostly the things people were already told were fixed, plus two faults found on the bench with an antenna finally back up.**
+
+Six of these had been described as done in replies posted before v1.8.4 went out, which meant anyone who took those replies at face value went looking for them in a build that did not contain them. That is the main reason this release exists.
+
+**Radio menus: you can now see what you are typing (#161, #162, #163 — Randy N4OPI, Michael KZ4LY).**
+- **A block cursor is drawn.** It was tracked internally the whole time and simply never rendered, so editing a Messages field meant guessing where you were.
+- **BS and DEL are separate keys**, sending 0x08 and 0x7F. A terminal application may want either and the QMX manual does not say which, so both are offered rather than one guessed; in the browser the real Backspace and Delete keys are wired to one each.
+- **"Exit terminal" no longer re-opens the session.** This was mine: choosing Exit clears the screen, and a recovery meant for a lost opening character saw a blank screen and helpfully woke the radio back up. It is now bounded to the first 8 s after opening, where it belongs.
+- **The menu path is on screen** when the radio has no second port — `System config → GPS & Ser. ports → USB serial ports → 2`, in both the Tab5 panel and the browser, rather than a toast that disappears. Michael's point was that the person needing that instruction is the one who never read the announcement.
+- Also fixed while testing: the code that finds the highlighted row **skipped rows 0–1**, which is right for the main menu but wrong three boxes deep, where a submenu's own title sits on row 2 — so inside a submenu it returned the *title* instead of the selection. It now discriminates on the box border itself, which holds at any depth. It had never bitten because the exit walk sends Ctrl-Q three times before looking, i.e. it was correct by accident.
+
+⚠ **Still not fixed, deliberately:** values over two digits, and values in a table, do not increment with ◀ ▶ — Max PA Voltage, the band-config columns, CAT timeout, TCXO, the U3S fields. Randy's own pattern is the lead. These need some key other than left/right, and the question has gone to QRP Labs rather than a guess going into a release.
+
+**The clock no longer claims GPS it does not have (#173).** A QMX with no GPS at all was showing `UTC(GPS)`. The detector confirms GPS when the radio's second-tick agrees with SNTP inside 300 ms, and its reasoning said a clock the Tab5 had pushed could never pass, being "only whole-second accurate". It is not: the time is sent at whatever instant the call happens and the radio starts its second when it parses, so the phase we induce lands **anywhere in 0..1000 ms** — measured across successive pushes at **12 ms, 834 ms, 154 ms and 404 ms**. The same code confirmed GPS or not purely on the draw.
+
+It was not just a wrong label. Once confirmed, the Tab5 **stops maintaining that radio's clock** — and a QMX's clock is not kept across a power cycle, so the one radio that needed the correction stopped getting it. The verdict also persisted, so an offline POTA session inherited it and began trusting a free-running RTC as authoritative. A clock the Tab5 has set is now never accepted as evidence about itself; the flag clears when the radio's clock is plainly its own again. Both branches were verified on hardware, including the exact case that used to lie: `agrees to 154ms, but WE set this radio's clock - not treating that as GPS`.
+
+**The CW display follows the offset you actually set (#165 — Roy KI0ER).** The dial agreed with the radio but the waterfall did not, and tapping a CW signal tuned about 30 Hz off — so he transmitted off frequency as if XIT were on. The radio's CW offset was read in exactly **one** place, the one-time link-up sequence, and never again; the moment he changed it on the radio, the display's compensation froze at the link-up value for the rest of the session. A stale constant is what "not linear in the value I asked for" looks like, which is why his own formula had to be withdrawn. It is now re-read every 5 s while in CW, and nothing at all in any other mode. Verified by changing the radio under a running session and watching the value follow 700 → 650 → 800.
+
+Measured first rather than assumed, because the approach depended on both: setting CW centre to 650 drags **both** CW offset and sidetone to 650 (so that is the right item to read, and it does track the centre), and repeated reads are stable with no `FW;`-style re-assert side effect — which is what makes polling it safe at all.
+
+**A caller who answers your CQ with a report is followed (#167 — Gyula HA3HZ).** An operator who already knows they have you often skips the grid and reports you straight away. The correct answer is `R` plus your report, which acknowledges theirs and gives yours in one message; the automatic run sent another bare report instead and lost a cycle. The information was already there — the same function detected this case a few lines earlier to capture their report for the log, and the reply branch just did not use it. Tapping **Transmit** by hand always did the right thing, which makes this the second of three instances of the same manual-right/automatic-wrong split; the third was found by grepping for the class and is not bodged.
+
+**Daily ADIF export with the date in the filename (#170 — Gyula HA3HZ).** A **Today only, dated file** link under the ADIF download gives that day's contacts as `qso-YYYY-MM-DD.adi`, so a daily file is self-identifying once saved instead of something to rename by hand.
+
+**The red transmitting banner no longer covers the text under it (#166 — Gyula HA3HZ).** Measured in a browser rather than eyeballed, and worse than it looked: a 99-pixel panel holding 406 pixels of content with nothing to contain it. It can now shrink and scroll, and the status line no longer wraps to three lines.
+
+⚠ **Not verified in this release:** the menu path on screen has not been *seen* — it needs a radio with the second port disabled; and Gyula's banner fix is verified by measurement in a browser, not against his screenshot. Roy's CW residual is also unsettled: a single stale value predicts an error of *requested − stale*, and his 30/40/140 would need three different stale values, so either he rebooted between tests or a second component remains — his own IF-calibration trim is the obvious candidate. He has been asked to retest rather than have three hand-read points fitted to a curve.
+
 ---
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*

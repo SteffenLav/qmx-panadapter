@@ -250,6 +250,10 @@ that reference (matched on `MY_SIG_INFO`), so a park's log can be uploaded on it
 own rather than the whole file. An unknown reference returns a valid ADIF file
 with no records, not an error.
 
+`?date=today` or `?date=YYYYMMDD` limits it to one UTC day, and names the download
+`qso-YYYY-MM-DD.adi` so a daily file is self-identifying once it is saved. A day
+with no contacts returns a valid empty ADIF, not an error.
+
 ### POST /api/adif/clear
 
 Clear all QSOs from ADIF log.

@@ -253,6 +253,7 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 **QSO Logs (n) ▲** — only visible when QSOs exist; *n* is the QSO count:
 
 - **ADIF download ↓** — QSO log as an ADIF file (import into WSJT-X, EQSL, etc.)
+- **Today only, dated file ↓** — just today's contacts, named `qso-YYYY-MM-DD.adi`. For anyone who files each day's log separately, the date is already in the filename rather than something to add by hand afterwards *(Gyula HA3HZ)*
 - **QRZ upload ↑** — upload ADIF to QRZ Logbook (requires API key on first use, saved for future sessions)
 - **↳ Change QRZ API key** — appears once a key is stored, and replaces it. New in v1.8.3: before that the prompt only ever appeared when *nothing* was stored, so a key typed wrongly or later reissued could not be changed from the page at all (reported by Brian WA6JFK)
 - **eQSL upload ↑** — upload ADIF to eQSL (requires username/password on first use, saved)
