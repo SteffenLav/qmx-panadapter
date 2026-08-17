@@ -289,6 +289,87 @@ static void poll_cb(lv_timer_t *t)
     }
 }
 
+/* ---- On-screen QWERTY (#164, Randy N4OPI + Michael KZ4LY) -----------------
+ *
+ * The Tab5 has no keyboard unless the snap-on one is fitted, so a menu field that
+ * wants a value typed into it was unreachable from the device - the browser had a
+ * real keyboard and the Tab5 had arrows. Randy asked for this and it was
+ * deliberately held back: "it waits behind the cursor and delete work - a keyboard
+ * is not much use typing into a field you cannot see." Both of those now work, so
+ * this is unblocked rather than merely wanted.
+ *
+ * Note the deliberate difference from every other keyboard in this firmware: it is
+ * attached to NO textarea. Each press is forwarded straight to the radio as a
+ * keystroke, because the radio's own menu owns the field and its cursor - there is
+ * no local copy of the text to edit, and inventing one would immediately disagree
+ * with what the radio shows.
+ */
+static lv_obj_t *s_kb;          /* NULL until first shown */
+static lv_obj_t *s_kb_btn;      /* the header toggle, so its look can follow */
+
+static void kb_set_shown(bool shown);
+
+static void kb_event_cb(lv_event_t *e)
+{
+    lv_obj_t *kb = lv_event_get_target(e);
+    uint32_t id = lv_buttonmatrix_get_selected_button(kb);
+    if (id == LV_BUTTONMATRIX_BUTTON_NONE) return;
+    const char *txt = lv_buttonmatrix_get_button_text(kb, id);
+    if (!txt) return;
+
+    /* Layout switches belong to LVGL - hand them to the built-in handler so the
+     * map actually changes, and send nothing to the radio. */
+    if (!strcmp(txt, "1#") || !strcmp(txt, "ABC") || !strcmp(txt, "abc")) {
+        lv_keyboard_def_event_cb(e);
+        return;
+    }
+    /* The keyboard glyph is conventionally "put it away", and that is genuinely
+     * useful here because the keyboard covers the lower rows of the screen. */
+    if (!strcmp(txt, LV_SYMBOL_KEYBOARD)) { kb_set_shown(false); return; }
+
+    /* Control keys map onto the same names the header buttons use, so there is
+     * one definition of what each key sends (qmx_term.c) and no second table to
+     * drift. */
+    const char *name = NULL;
+    if      (!strcmp(txt, LV_SYMBOL_BACKSPACE)) name = "bksp";
+    else if (!strcmp(txt, LV_SYMBOL_NEW_LINE))  name = "enter";
+    else if (!strcmp(txt, LV_SYMBOL_OK))        name = "enter";
+    else if (!strcmp(txt, LV_SYMBOL_LEFT))      name = "left";
+    else if (!strcmp(txt, LV_SYMBOL_RIGHT))     name = "right";
+
+    if (name) {
+        post(CMD_KEY, name);
+    } else if (txt[0] && txt[1] == '\0') {
+        /* A single BYTE - covers the letters, digits, punctuation and space.
+         * Anything longer is a multi-byte glyph from a layout we do not enable;
+         * dropping it is right, since the radio's menu is ASCII. */
+        post(CMD_KEY, txt);
+    } else {
+        return;
+    }
+    s_seen_seq = 0;                 /* repaint on the next tick */
+}
+
+static void kb_set_shown(bool shown)
+{
+    if (!s_kb) return;
+    if (shown) lv_obj_clear_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
+    else       lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
+    if (s_kb_btn) {
+        /* Show the state on the button: this thing covers half the screen, so
+         * whether it is up must be readable at a glance. */
+        lv_obj_set_style_bg_color(s_kb_btn,
+            lv_color_hex(shown ? UI_COLOR_PRIMARY : 0x252525), 0);
+    }
+}
+
+static void kb_toggle_cb(lv_event_t *e)
+{
+    (void)e;
+    if (!s_kb) return;
+    kb_set_shown(lv_obj_has_flag(s_kb, LV_OBJ_FLAG_HIDDEN));
+}
+
 static void key_cb(lv_event_t *e)
 {
     const char *k = (const char *)lv_event_get_user_data(e);
@@ -365,10 +446,23 @@ static void build(void)
     make_key(hdr, "Back",          "ctrl-q", 906,  88);
     /* ONE delete key now. v1.8.4 shipped BS and DEL side by side rather than
      * guessing which byte the radio acts on; Randy N4OPI answered it from PuTTY
-     * (BS deletes leftward in a numeric field, Del does nothing), so DEL is gone
-     * and BS takes the whole 114 px both used to share - same row geometry, still
-     * ending at 1114 clear of Close, and a bigger target for a gloved finger. */
-    make_key(hdr, "BS",            "bksp",   1000, 114);
+     * (BS deletes leftward in a numeric field, Del does nothing), so DEL is gone.
+     * Its 60 px goes to the keyboard toggle rather than to a wider BS: BS was
+     * usable at 54, and a way to type is worth more than a bigger backspace.
+     * Row geometry is unchanged, still ending at 1114 clear of Close. */
+    make_key(hdr, "BS",            "bksp",   1000, 54);
+
+    s_kb_btn = lv_btn_create(hdr);
+    lv_obj_set_size(s_kb_btn, 54, 48);
+    lv_obj_set_pos(s_kb_btn, 1060, (HEADER_H - 48) / 2);
+    lv_obj_set_style_bg_color(s_kb_btn, lv_color_hex(0x252525), 0);
+    lv_obj_set_style_border_color(s_kb_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+    lv_obj_set_style_border_width(s_kb_btn, 2, 0);
+    lv_obj_add_event_cb(s_kb_btn, kb_toggle_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *kbl = lv_label_create(s_kb_btn);
+    lv_label_set_text(kbl, LV_SYMBOL_KEYBOARD);
+    lv_obj_set_style_text_font(kbl, &lv_font_montserrat_24, 0);
+    lv_obj_center(kbl);
 
     lv_obj_t *cb = lv_btn_create(hdr);
     lv_obj_set_size(cb, 130, 48);
@@ -407,6 +501,22 @@ static void build(void)
      *
      * A toast was wrong for this: it disappears, and the one person who needs the
      * instruction is the one who never read the announcement. */
+    /* The QWERTY itself, created LAST so it draws over the grid, and hidden until
+     * asked for. It covers the lower rows - unavoidable at 1280x720 with a 648 px
+     * grid already on screen - which is why it is a toggle and why its own
+     * keyboard glyph puts it away. */
+    s_kb = lv_keyboard_create(s_overlay);
+    lv_obj_set_size(s_kb, LV_HOR_RES, 300);
+    lv_obj_align(s_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_keyboard_set_mode(s_kb, LV_KEYBOARD_MODE_TEXT_LOWER);
+    /* NO textarea on purpose - see the comment on kb_event_cb. With none
+     * attached, LVGL's own handler cannot type anywhere, so our handler is the
+     * only thing that acts on a press. */
+    lv_keyboard_set_textarea(s_kb, NULL);
+    lv_obj_add_event_cb(s_kb, kb_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
+    kb_set_shown(false);            /* also paints the toggle's idle colour */
+
     s_help = lv_label_create(s_overlay);
     lv_label_set_text(s_help,
         "This needs the radio's SECOND USB serial port, which is off by default.\n\n"
@@ -436,6 +546,7 @@ void qmx_term_view_open(void)
     s_nudged = false;
     s_open_tick = lv_tick_get();
     if (s_help) lv_obj_add_flag(s_help, LV_OBJ_FLAG_HIDDEN);
+    kb_set_shown(false);            /* every session starts with it out of the way */
     for (int r = 0; r < ANSI_ROWS; r++) if (s_rows[r]) lv_label_set_text(s_rows[r], "");
     for (int i = 0; i < s_rev_used; i++) if (s_rev[i]) lv_obj_add_flag(s_rev[i], LV_OBJ_FLAG_HIDDEN);
     s_rev_used = 0;
