@@ -336,6 +336,12 @@ static void kb_event_cb(lv_event_t *e)
     const char *txt = lv_buttonmatrix_get_button_text(kb, id);
     if (!txt) return;
 
+    /* One line per keypress, on a screen used rarely. Deliberately BEFORE the
+     * skip below, so the mode/shift keys are logged too: when the phantom
+     * backspace was fixed, the log could show only the ABSENCE of a stray bksp
+     * and not the mode key itself, which is weaker evidence than it should be. */
+    ESP_LOGI(TAG, "kb: id=%u label='%s'", (unsigned)id, txt);
+
     /* Layout and shift keys belong to the shared caps-cycle handler, which runs
      * BEFORE this one and already invoked LVGL's built-in for them. Calling
      * lv_keyboard_def_event_cb() here as well would double-handle the press, so
@@ -360,11 +366,7 @@ static void kb_event_cb(lv_event_t *e)
     else if (!strcmp(txt, LV_SYMBOL_LEFT))      name = "left";
     else if (!strcmp(txt, LV_SYMBOL_RIGHT))     name = "right";
 
-    /* One line per keypress, on a screen used rarely. It is here because its
-     * absence is why the phantom-backspace above had to be found by the operator
-     * on the radio instead of in a log. */
-    ESP_LOGI(TAG, "kb: id=%u label='%s' -> %s", (unsigned)id, txt,
-             name ? name : (txt[1] == '\0' ? "literal" : "ignored"));
+    ESP_LOGI(TAG, "kb:   -> %s", name ? name : (txt[1] == '\0' ? "literal" : "ignored"));
     if (name) {
         post(CMD_KEY, name);
     } else if (txt[0] && txt[1] == '\0') {
