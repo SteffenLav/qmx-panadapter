@@ -1672,8 +1672,34 @@ static bool try_start_pileup_pounce(void)
     // Safe from the decode task: that function touches no LVGL objects (its
     // header note describes its original caller, not a hard constraint) and its
     // one qmx_settings_t is the same load this function already does.
+    // ⚠ ONLY build from the heard text if it is ADDRESSED TO US - found by testing
+    // this in sim, where it was masked by a setting.
+    //
+    // The pileup exists because these stations called US. But the heard table
+    // holds their LATEST message, and a caller who gave up has usually gone back
+    // to calling CQ - so building from last_text would answer a pileup caller
+    // with a grid TX1, which is exactly the #134 bug the report-first logic was
+    // written to prevent ("Roy KI0ER lost QSOs to exactly this"). The sim run
+    // showed 'auto-pileup N5XYZ: replying to CQ N5XYZ EM12' and still produced a
+    // report - but only because Skip-TX1 happened to be ON, which turns a CQ
+    // answer into a report anyway. With it off the grid would have gone out.
+    //
+    // So: their message to us decides the rung (grid -> report, report ->
+    // R-report, which is the whole point of #172); anything else falls through to
+    // report-first, which is the right default for someone who called us.
     ft8_call_t heard;
+    bool heard_to_us = false;
     if (ft8_screen_find_call(pile[best].call, &heard)) {
+        char h1[16], h2[16], hrest[FT8_FD_EXCH_LEN];
+        heard_to_us = split_msg3(heard.last_text, h1, sizeof(h1), h2, sizeof(h2),
+                                 hrest, sizeof(hrest)) &&
+                      s_my_call[0] && strcmp(h1, s_my_call) == 0;
+        if (!heard_to_us) {
+            ESP_LOGI(TAG, "auto-pileup %s: last heard '%s' is not to us - "
+                          "report-first", pile[best].call, heard.last_text);
+        }
+    }
+    if (heard_to_us) {
         if (!ft8_qso_build_manual_reply(&heard, reply_freq_hz, &req, NULL, err, sizeof(err))) {
             ESP_LOGW(TAG, "auto-pileup build_manual_reply(%s) failed: %s",
                      pile[best].call, err);
