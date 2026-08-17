@@ -11,3 +11,6 @@
 void qmx_term_view_open(void);
 void qmx_term_view_close(void);
 bool qmx_term_view_is_open(void);
+
+// DEV ONLY: show/hide the on-screen keyboard (see the .c for why).
+void qmx_term_view_set_keyboard(bool shown);

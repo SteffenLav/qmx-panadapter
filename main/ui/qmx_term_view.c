@@ -25,6 +25,25 @@ LV_FONT_DECLARE(qmx_mono_25);
 #define GRID_H      (ANSI_ROWS * ROW_H)    /* 648  */
 #define HEADER_H    62
 
+/* Header key row: NINE identical buttons (4 arrows, Enter, Back, BS, keyboard
+ * toggle, Close), because the operator could not reliably hit the small ones when
+ * they were five different widths. One size, derived positions.
+ *
+ * KEY_X0 clears the title ("Radio menus" at font 28) and the status label beside
+ * it. The static assert below is the point of expressing it this way: it fails the
+ * BUILD if a tenth key, a wider key or a bigger gap would push the row off the
+ * right-hand edge, instead of that being discovered on the screen - which is how
+ * DEL once ended up underneath Close. */
+#define KEY_COUNT   9
+#define KEY_W       92
+#define KEY_H       48
+#define KEY_GAP     6
+#define KEY_X0      380
+#define KEY_ROW_END (KEY_X0 + KEY_COUNT * KEY_W + (KEY_COUNT - 1) * KEY_GAP)
+_Static_assert(KEY_ROW_END <= 1280 - 8,
+               "qmx_term_view header key row would run off the right edge - "
+               "reduce KEY_W/KEY_GAP or drop a key");
+
 #define POLL_MS     350
 
 static lv_obj_t  *s_overlay;
@@ -317,10 +336,14 @@ static void kb_event_cb(lv_event_t *e)
     const char *txt = lv_buttonmatrix_get_button_text(kb, id);
     if (!txt) return;
 
-    /* Layout switches belong to LVGL - hand them to the built-in handler so the
-     * map actually changes, and send nothing to the radio. */
-    if (!strcmp(txt, "1#") || !strcmp(txt, "ABC") || !strcmp(txt, "abc")) {
-        lv_keyboard_def_event_cb(e);
+    /* Layout and shift keys belong to the shared caps-cycle handler, which runs
+     * BEFORE this one and already invoked LVGL's built-in for them. Calling
+     * lv_keyboard_def_event_cb() here as well would double-handle the press, so
+     * these are simply skipped. "Abc" is the cycle's pending-shift label - the
+     * v0.15.12 bug was LVGL typing that label as text, so it must be skipped by
+     * name here too. */
+    if (!strcmp(txt, "1#")  || !strcmp(txt, "ABC") ||
+        !strcmp(txt, "abc") || !strcmp(txt, "Abc")) {
         return;
     }
     /* The keyboard glyph is conventionally "put it away", and that is genuinely
@@ -369,6 +392,12 @@ static void kb_toggle_cb(lv_event_t *e)
     if (!s_kb) return;
     kb_set_shown(lv_obj_has_flag(s_kb, LV_OBJ_FLAG_HIDDEN));
 }
+/* DEV ONLY: show/hide the on-screen keyboard without a finger, so its appearance
+ * can be screenshotted and checked against the other keyboards in the app. The
+ * toggle itself is a touch target with no API, and "does it look like the
+ * others" is exactly the kind of claim that should be verified rather than
+ * asserted from having copied the style block. */
+void qmx_term_view_set_keyboard(bool shown) { kb_set_shown(shown); }
 
 static void key_cb(lv_event_t *e)
 {
@@ -384,7 +413,7 @@ static lv_obj_t *make_key(lv_obj_t *parent, const char *label, const char *key,
                           int x, int w)
 {
     lv_obj_t *b = lv_btn_create(parent);
-    lv_obj_set_size(b, w, 48);
+    lv_obj_set_size(b, w, KEY_H);
     lv_obj_align(b, LV_ALIGN_LEFT_MID, x, 0);
     lv_obj_set_style_bg_color(b, lv_color_hex(0x2a3138), 0);
     lv_obj_set_style_border_color(b, lv_color_hex(UI_COLOR_PRIMARY), 0);
@@ -428,45 +457,47 @@ static void build(void)
     lv_obj_set_style_text_font(s_state, &lv_font_montserrat_20, 0);
     lv_obj_align(s_state, LV_ALIGN_LEFT_MID, 236, 0);   // clear of the title at _28
 
-    /* Keys along the header, so the 1200 px grid keeps the whole width below.
+    /* ⭐ ONE SIZE FOR EVERY BUTTON ON THIS BAR, including Close.
      *
-     * The arrows are the keys actually used to drive a menu, and they were the
-     * narrowest things on the bar - 70 px, with 148 px sitting idle between Back
-     * and Close. They now take that space at 104 px each. Laid out left to right
-     * with 6 px gaps, ending clear of Close, which is right-aligned at -16. */
-    /* Laid out left to right with 6 px gaps, ending clear of Close - which is
-     * right-aligned at -16 and therefore STARTS at 1134. Adding the two delete
-     * keys meant re-deriving the whole row rather than appending: the first
-     * attempt put DEL underneath Close. */
-    make_key(hdr, LV_SYMBOL_UP,    "up",     380, 100);
-    make_key(hdr, LV_SYMBOL_DOWN,  "down",   486, 100);
-    make_key(hdr, LV_SYMBOL_LEFT,  "left",   592, 100);
-    make_key(hdr, LV_SYMBOL_RIGHT, "right",  698, 100);
-    make_key(hdr, "Enter",         "enter",  804,  96);
-    make_key(hdr, "Back",          "ctrl-q", 906,  88);
-    /* ONE delete key now. v1.8.4 shipped BS and DEL side by side rather than
-     * guessing which byte the radio acts on; Randy N4OPI answered it from PuTTY
-     * (BS deletes leftward in a numeric field, Del does nothing), so DEL is gone.
-     * Its 60 px goes to the keyboard toggle rather than to a wider BS: BS was
-     * usable at 54, and a way to type is worth more than a bigger backspace.
-     * Row geometry is unchanged, still ending at 1114 clear of Close. */
-    make_key(hdr, "BS",            "bksp",   1000, 54);
+     * Operator, after using it: "ALL buttons on the top needs to have same size
+     * so you can actually hit them." They had drifted to five different widths -
+     * arrows 100, Enter 96, Back 88, BS 54, the keyboard toggle 54, Close 130 -
+     * each one locally justified and the row collectively a lottery for a finger.
+     *
+     * So the geometry is now DERIVED, not hand-placed: nine slots of KEY_W with
+     * KEY_GAP between them, laid out from KEY_X0. Adding or removing a key means
+     * changing the count, not re-deriving every x - which is what produced the
+     * drift, and what put DEL underneath Close on the first attempt.
+     *
+     * Close keeps its red colour: same size to hit, still unmistakable. */
+    const int slot = KEY_W + KEY_GAP;
+    make_key(hdr, LV_SYMBOL_UP,    "up",     KEY_X0 + 0 * slot, KEY_W);
+    make_key(hdr, LV_SYMBOL_DOWN,  "down",   KEY_X0 + 1 * slot, KEY_W);
+    make_key(hdr, LV_SYMBOL_LEFT,  "left",   KEY_X0 + 2 * slot, KEY_W);
+    make_key(hdr, LV_SYMBOL_RIGHT, "right",  KEY_X0 + 3 * slot, KEY_W);
+    make_key(hdr, "Enter",         "enter",  KEY_X0 + 4 * slot, KEY_W);
+    make_key(hdr, "Back",          "ctrl-q", KEY_X0 + 5 * slot, KEY_W);
+    /* ONE delete key. v1.8.4 shipped BS and DEL side by side rather than guessing
+     * which byte the radio acts on; Randy N4OPI answered it from PuTTY (BS deletes
+     * leftward in a numeric field, Del does nothing), so DEL is gone. */
+    make_key(hdr, "BS",            "bksp",   KEY_X0 + 6 * slot, KEY_W);
 
     s_kb_btn = lv_btn_create(hdr);
-    lv_obj_set_size(s_kb_btn, 54, 48);
-    lv_obj_set_pos(s_kb_btn, 1060, (HEADER_H - 48) / 2);
-    lv_obj_set_style_bg_color(s_kb_btn, lv_color_hex(0x252525), 0);
+    lv_obj_set_size(s_kb_btn, KEY_W, KEY_H);
+    lv_obj_align(s_kb_btn, LV_ALIGN_LEFT_MID, KEY_X0 + 7 * slot, 0);
+    lv_obj_set_style_bg_color(s_kb_btn, lv_color_hex(0x2a3138), 0);
     lv_obj_set_style_border_color(s_kb_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
     lv_obj_set_style_border_width(s_kb_btn, 2, 0);
     lv_obj_add_event_cb(s_kb_btn, kb_toggle_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *kbl = lv_label_create(s_kb_btn);
     lv_label_set_text(kbl, LV_SYMBOL_KEYBOARD);
     lv_obj_set_style_text_font(kbl, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(kbl, lv_color_hex(0xFFFFFF), 0);
     lv_obj_center(kbl);
 
     lv_obj_t *cb = lv_btn_create(hdr);
-    lv_obj_set_size(cb, 130, 48);
-    lv_obj_align(cb, LV_ALIGN_RIGHT_MID, -16, 0);
+    lv_obj_set_size(cb, KEY_W, KEY_H);
+    lv_obj_align(cb, LV_ALIGN_LEFT_MID, KEY_X0 + 8 * slot, 0);
     lv_obj_set_style_bg_color(cb, lv_color_hex(0x3a2222), 0);
     lv_obj_set_style_border_color(cb, lv_color_hex(0xB05050), 0);
     lv_obj_set_style_border_width(cb, 2, 0);
@@ -505,13 +536,44 @@ static void build(void)
      * asked for. It covers the lower rows - unavoidable at 1280x720 with a 648 px
      * grid already on screen - which is why it is a toggle and why its own
      * keyboard glyph puts it away. */
+    /* Styled EXACTLY like every other keyboard in the app - operator: "Keyboard has
+     * a completely wrong style and colour - needs to be equal to all other
+     * keybords we use in this app." My first version took LVGL's default theme,
+     * which is a light keyboard in a dark application.
+     *
+     * This is the same block ft8_cq_modal/identity_config/wifi use: the shared
+     * per-key style on LV_PART_ITEMS, then ui_theme_style_keyboard() for the
+     * surface and the checked-state override, then montserrat_28. Copied
+     * deliberately rather than re-invented, since "equal to the others" is the
+     * requirement and the shared helper is what defines equal. */
     s_kb = lv_keyboard_create(s_overlay);
-    lv_obj_set_size(s_kb, LV_HOR_RES, 300);
+    static lv_style_t style_kb_btn;
+    static bool kb_btn_style_inited = false;
+    if (!kb_btn_style_inited) {
+        lv_style_init(&style_kb_btn);
+        lv_style_set_bg_color(&style_kb_btn, lv_color_hex(UI_COLOR_KEY_BG));
+        lv_style_set_bg_opa(&style_kb_btn, LV_OPA_COVER);
+        lv_style_set_text_color(&style_kb_btn, lv_color_white());
+        lv_style_set_border_width(&style_kb_btn, 1);
+        lv_style_set_border_color(&style_kb_btn, lv_color_hex(0x505050));
+        kb_btn_style_inited = true;
+    }
+    lv_obj_add_style(s_kb, &style_kb_btn, LV_PART_ITEMS);
+    ui_theme_style_keyboard(s_kb);
+    lv_obj_set_size(s_kb, LV_PCT(100), 280);
     lv_obj_align(s_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_keyboard_set_mode(s_kb, LV_KEYBOARD_MODE_TEXT_LOWER);
+    lv_obj_set_style_text_font(s_kb, &lv_font_montserrat_28, 0);
+
+    /* The shared iPad-style abc/Abc/ABC shift cycle, so shift behaves the way it
+     * does in every other field in this firmware. It REMOVES LVGL's built-in
+     * VALUE_CHANGED handler and becomes the primary one, invoking the built-in
+     * itself for non-shift keys - so our forwarding handler is added AFTER it and
+     * must not call lv_keyboard_def_event_cb() again. */
+    ui_theme_keyboard_attach_caps_cycle(s_kb);
+
     /* NO textarea on purpose - see the comment on kb_event_cb. With none
-     * attached, LVGL's own handler cannot type anywhere, so our handler is the
-     * only thing that acts on a press. */
+     * attached, nothing can type into a local copy of the text; the radio's own
+     * menu owns the field. */
     lv_keyboard_set_textarea(s_kb, NULL);
     lv_obj_add_event_cb(s_kb, kb_event_cb, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_add_flag(s_kb, LV_OBJ_FLAG_HIDDEN);

@@ -757,6 +757,10 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         if (display_lock(500)) {
             if (want) qmx_term_view_open();
             else      qmx_term_view_close();
+            /* Optional "keyboard":true/false - dev aid so the on-screen QWERTY can
+             * be screenshotted; its toggle is a touch target with no API. */
+            cJSON *kbj = cJSON_GetObjectItem(root, "keyboard");
+            if (cJSON_IsBool(kbj)) qmx_term_view_set_keyboard(cJSON_IsTrue(kbj));
             display_unlock();
         }
     } else if (action && strcmp(action, "time_redetect") == 0) {
