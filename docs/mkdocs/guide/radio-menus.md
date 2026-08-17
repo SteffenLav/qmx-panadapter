@@ -43,7 +43,8 @@ the failure happens rather than in a message that disappears. *(Michael KZ4LY)*
 
     **Settings drawer → Radio → Radio menus**
 
-    The keys are along the top: **▲ ▼ ◀ ▶**, **Enter**, **Back**, and **Close**.
+    The keys are along the top, all the same size: **▲ ▼ ◀ ▶**, **Enter**,
+    **Back**, **BS**, the **keyboard** toggle, and **Close**.
 
 === "In the browser"
 
@@ -85,22 +86,28 @@ Two things happen automatically so you cannot get stuck:
 A **block cursor** shows where you are typing — in a field like one of the Messages,
 that is the difference between editing and guessing. *(Randy N4OPI)*
 
-For deleting, there are **two separate keys, BS and DEL**. They send different bytes
-(0x08 and 0x7F), because a terminal application may want either and the QMX manual
-does not say which. In the browser your real Backspace and Delete keys are wired to
-one each. If you find which one your firmware actually deletes with, please say so —
-then it can become a single obvious key.
+**BS deletes leftward.** Land on a value, backspace away the digits you don't want,
+and type the new ones — the cursor sits on the rightmost digit to begin with. In the
+browser both your Backspace and Delete keys do this.
 
-!!! warning "Some fields will not change yet, and this is not fixed"
-    Values that are more than two digits, or that sit in a table, do not increment
-    with ◀ ▶ — in a table the arrows move between columns instead. Reported by
-    Randy N4OPI on **Max PA Voltage**, the **band config** table columns, **CAT
-    Config → Timeout**, **System config → TCXO frequency**, the double-click
-    timeout, and the same fields inside **Virtual U3S**.
+!!! note "There is an on-screen keyboard"
+    Tap the **keyboard button** in the top row and a full QWERTY appears along the
+    bottom. It types straight into whatever field the radio has open — there is no
+    separate text box to fill in first. Tap the keyboard button on the keyboard
+    itself (bottom left) to put it away again.
 
-    These need some key other than left/right, and rather than ship a guess the
-    question has gone to QRP Labs. Everything else in the menus edits normally. Use
-    the radio's own controls, or a laptop terminal, for those fields for now.
+    Useful on a Tab5 without the snap-on keyboard, which otherwise has no way to
+    type a value at all. *(Randy N4OPI, Michael KZ4LY)*
+
+!!! tip "Longer values are backspace-and-retype, not arrow-adjust"
+    Short values — one or two digits — change with **◀ ▶**. Anything longer, and
+    anything inside a table, does not: on those the arrows do nothing at all, and in
+    a table they move between columns, which is the radio's own intended behaviour.
+
+    For those, use **BS** and type the value instead. `Max. PA voltage`, the band
+    config columns, `CAT Config → Timeout`, `System config → TCXO frequency` and the
+    Virtual U3S values all edit this way. *(Randy N4OPI worked this out from PuTTY
+    and told us — it is how the radio has always behaved, not a Tab5 limitation.)*
 
 ### 5. What it does not do
 
