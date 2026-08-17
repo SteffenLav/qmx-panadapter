@@ -77,6 +77,8 @@ typedef struct {
     bool     onboarded;        // first-boot WiFi/identity prompts shown (default false)
     bool     wifi_enabled;     // initiate WiFi at boot (default true)
     bool     qmx_gps;         // QMX/QMX+ has GPS discipline — skip Tab5→QMX time push
+    bool     qmx_time_pushed; // we have set THIS radio's clock, so its agreement with
+                              // ours proves nothing about GPS (see time_sync.c)
     bool     freq_kp_calc;    // freq keypad digit layout: false=phone, true=10-key/calc
     int16_t  freq_kp_dx;      // freq keypad popup position: offset from screen center, px (default 0,0)
     int16_t  freq_kp_dy;
@@ -392,6 +394,13 @@ void settings_set_wifi_enabled(bool v);
 // NOT push its clock to the QMX after a sync, because the GPS is more
 // accurate than anything the Tab5 has (SNTP, FT8, manual).
 void settings_set_qmx_gps(bool v);
+
+// Sticky record that we have push-set the connected radio's real-time clock.
+// Persisted because the state it describes lives in the RADIO, which outlives a
+// Tab5 reboot: a clock we set agrees with ours, so it must never be accepted as
+// evidence of GPS discipline. Cleared when the radio's clock is plainly its own
+// again (a power cycle drops a QMX's software RTC back to 00:00).
+void settings_set_qmx_time_pushed(bool v);
 
 // Freq keypad digit layout: false=phone (1 2 3 top), true=10-key/calculator
 // (7 8 9 top). Persisted (debounced flush) so it survives a reboot.

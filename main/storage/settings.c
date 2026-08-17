@@ -44,6 +44,7 @@ static const char *TAG = "settings";
 #define KEY_FT8_FILT   "ft8_filt"
 #define KEY_WIFI_ENABLED "wifi_en"
 #define KEY_QMX_GPS      "qmx_gps"
+#define KEY_QMX_TPUSH    "qmx_tpush"
 #define KEY_FREQ_KP_CALC "freq_kp_calc"
 #define KEY_FREQ_KP_DX   "freq_kp_dx"
 #define KEY_FREQ_KP_DY   "freq_kp_dy"
@@ -236,6 +237,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_DISTANCE_MILES 41
 #define DIRTY_RIT_PILL_SHOW  88
 #define DIRTY_SPUR_SUP       89
+#define DIRTY_QMX_TPUSH      90
 #define DIRTY_FT8_SYNC_LINES 42
 #define DIRTY_FIELD_DAY_EN   43
 #define DIRTY_FD_CLASS       44
@@ -422,6 +424,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_FT8_FILT))     nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap.ft8_filters, sizeof(snap.ft8_filters));
         if (dirty_test(&dirty_local, DIRTY_WIFI_ENABLED)) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap.wifi_enabled ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_GPS))      nvs_set_u8(s_nvs, KEY_QMX_GPS,      snap.qmx_gps      ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_QMX_TPUSH))    nvs_set_u8(s_nvs, KEY_QMX_TPUSH,    snap.qmx_time_pushed ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FREQ_KP_CALC)) nvs_set_u8(s_nvs, KEY_FREQ_KP_CALC, snap.freq_kp_calc ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FREQ_KP_POS)) {
             nvs_set_i16(s_nvs, KEY_FREQ_KP_DX, snap.freq_kp_dx);
@@ -599,6 +602,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->onboarded = false;
     out->wifi_enabled = DEF_WIFI_ENABLED;
     out->qmx_gps = false;
+    out->qmx_time_pushed = false;
     out->freq_kp_calc = false;
     out->freq_kp_dx = 0;
     out->freq_kp_dy = 0;
@@ -723,6 +727,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_ONBOARDED,  &u8v) == ESP_OK) out->onboarded  = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_WIFI_ENABLED, &u8v) == ESP_OK) out->wifi_enabled = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_QMX_GPS,      &u8v) == ESP_OK) out->qmx_gps      = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_QMX_TPUSH,    &u8v) == ESP_OK) out->qmx_time_pushed = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_FREQ_KP_CALC, &u8v) == ESP_OK) out->freq_kp_calc = (u8v != 0);
     {
         int16_t i16v;
@@ -1180,6 +1185,15 @@ void settings_set_qmx_gps(bool v)
     s_pending.qmx_gps = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_QMX_GPS);
+}
+
+void settings_set_qmx_time_pushed(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_pending.qmx_time_pushed = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_QMX_TPUSH);
 }
 
 void settings_set_freq_kp_calc(bool v)
