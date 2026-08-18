@@ -1,6 +1,7 @@
 #include "audio.h"
 #include "cat.h"          // cat_is_ready - the dead-stream watchdog's CAT-alive test
 #include "usb_replug.h"   // the dead-stream watchdog's escalation
+#include "util/usb_patch_counters.h"  // #189: report the silent USB patches' counts
 #include "dsp.h"
 
 #include <string.h>
@@ -93,6 +94,13 @@ static void heap_watchdog_task(void *arg)
     (void)arg;
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(10000));
+
+        // Standing USB patches #7/#8 turn two aborts into survivable errors but
+        // may not log from the interrupt path, so they count instead and this is
+        // where the count is read (TODO #189). Prints only on change, so a
+        // healthy device stays quiet and the line appearing IS the evidence.
+        usb_patch_counters_report();
+
         size_t i_free = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
         size_t i_min  = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
         size_t p_free = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);

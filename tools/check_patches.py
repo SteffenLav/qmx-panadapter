@@ -23,6 +23,13 @@ TWO RULES FOR THIS FILE:
      worse than no check at all. When a patch script's marker changes, change it
      here in the same commit.
 
+     For the two USB patches that cannot log (#7 and #8) the marker is the
+     COUNTER SYMBOL, not a date comment. Those patches turn an abort() into a
+     survivable error silently, so a tolerant-but-silent version of them is
+     indistinguishable from no patch at all in a diag log - it must not pass this
+     check. Testing for the symbol makes "patched" mean "patched AND observable"
+     (TODO #189).
+
   2. Missing patches are an ERROR, never a warning. A warning scrolls past in a
      long IDF build, which is exactly how it would go unnoticed again.
 
@@ -62,6 +69,16 @@ PATCHES = [
      "PATCHED (qmx-panadapter, 2026-07-16)",
      "a transient USB bulk error abort()s the device instead of being retried"),
 
+    # NOTE hcd_dwc.c carries TWO of our patches, #4 above and #8 here, with
+    # separate markers. Applying one does not apply the other, so both need
+    # their own row - do not collapse them into one check on the filename.
+    ("apply_hcd_buffer_parse_error_tolerant.ps1", "idf",
+     "components/usb/hcd_dwc.c",
+     "g_qmx_usb_pipe_event_unexpected",
+     "a failed URB carrying a pipe event the error parser thinks impossible "
+     "abort()s the device - observed at 7h into a healthy session, and that warm "
+     "reset then left the QMX unable to re-enumerate for the rest of the night"),
+
     ("apply_hub_recover_tolerant.ps1", "idf",
      "components/usb/hub.c",
      "PATCHED (qmx-panadapter, 2026-08-03)",
@@ -69,7 +86,7 @@ PATCHES = [
 
     ("apply_usb_dwc_hal_chan_error_tolerant.ps1", "idf",
      "components/hal/usb_dwc_hal.c",
-     "PATCHED (qmx-panadapter, 2026-08-18)",
+     "g_qmx_usb_chan_err_no_halt",
      "a USB channel error arriving without the halt bit abort()s the device - and "
      "that warm reset then leaves the QMX unable to re-enumerate for hours"),
 

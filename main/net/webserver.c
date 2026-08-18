@@ -50,6 +50,7 @@
 #include "config_io.h"         // config_io_export / config_io_import
 #include "usb_replug.h"        // usb_replug (hidden /api/cmd recovery action)
 #include "util/usb_shutdown.h" // usb_shutdown_graceful - "prepare for flashing"
+#include "util/usb_patch_counters.h" // #189: the silent USB patches' fire counts
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
 #include "esp_timer.h"         // web tune 60 s safety timeout
@@ -535,6 +536,18 @@ static esp_err_t status_handler(httpd_req_t *req)
     // true, so the browser needs to say so rather than show stale numbers as if
     // they were live.
     cJSON_AddBoolToObject(root, "paused", cat_user_pause_active());
+
+    // Standing USB patches #7/#8 convert two IDF abort()s into survivable errors
+    // and cannot log from the interrupt path, so they count (TODO #189). Both
+    // stay 0 on a healthy device; a non-zero value means the device survived
+    // something that used to reboot it - and, via TODO #74, used to take the
+    // radio down with it. Here as well as in the diag log so it can be read
+    // without a serial capture.
+    cJSON *usbp = cJSON_AddObjectToObject(root, "usb_patch");
+    if (usbp) {
+        cJSON_AddNumberToObject(usbp, "chan_err_no_halt",  (double)g_qmx_usb_chan_err_no_halt);
+        cJSON_AddNumberToObject(usbp, "unexpected_pipe_event", (double)g_qmx_usb_pipe_event_unexpected);
+    }
 
     const esp_app_desc_t *app = esp_app_get_description();
     cJSON_AddStringToObject(root, "tab5_fw",     app ? app->version : "");

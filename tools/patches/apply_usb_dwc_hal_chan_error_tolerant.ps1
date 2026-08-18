@@ -66,9 +66,47 @@ if (-not (Test-Path $target)) {
 }
 
 $content = Get-Content -Raw -Path $target
+$contentLf = $content -replace "`r`n", "`n"
 
-if ($content -match "PATCHED \(qmx-panadapter, 2026-08-18\)") {
-    Write-Host "Already patched (chan_decode_intr error tolerance) - nothing to do." -ForegroundColor Green
+# The marker is the COUNTER SYMBOL, not the date comment (TODO #189). A v1 patch
+# - tolerant but silent - is indistinguishable from no patch at all in a log, so
+# it must not pass the check. Testing for the symbol makes "patched" mean
+# "patched AND observable".
+if ($contentLf.Contains("g_qmx_usb_chan_err_no_halt")) {
+    Write-Host "Already patched (chan_decode_intr error tolerance + counter) - nothing to do." -ForegroundColor Green
+    exit 0
+}
+
+# The counter increment. An extern declaration inside a function body is legal C,
+# which keeps this patch to one self-contained block with no include to add. The
+# symbol is DEFINED in firmware (main/util/usb_patch_counters.c), so if this
+# patch is missing the count stays 0 rather than the link failing.
+$counter = @'
+        // TODO #189: count it. This patch may not log - it runs in the USB
+        // interrupt path, where CLAUDE.md's cyan-flash rule forbids it - and
+        // that made the patch unverifiable: a clean log could not distinguish
+        // "the fault never happened" from "it happened and was handled". A
+        // uint32_t increment is safe exactly where a log call is not. Reported
+        // by usb_patch_counters_report() from the 10 s heap watchdog.
+        extern volatile uint32_t g_qmx_usb_chan_err_no_halt;
+        g_qmx_usb_chan_err_no_halt++;
+'@
+$counterLf = ($counter -replace "`r`n", "`n") + "`n"   # trailing NL: the next
+# statement must start on its own line
+
+# v1 -> v2: the tolerance is already in, only the counter is missing. Insert it
+# after the explanatory block rather than re-applying the whole patch, so an
+# already-working tree is not disturbed.
+if ($contentLf -match "PATCHED \(qmx-panadapter, 2026-08-18\)") {
+    $anchor = "        // #4). No logging here - this runs in the USB interrupt path.`n"
+    if (-not $contentLf.Contains($anchor)) {
+        Write-Host "Found the v1 patch but not its last comment line - upgrade by hand." -ForegroundColor Red
+        exit 1
+    }
+    $result = $contentLf.Replace($anchor, $anchor + $counterLf)
+    [System.IO.File]::WriteAllText($target, $result, (New-Object System.Text.UTF8Encoding $false))
+    Write-Host "Upgraded usb_dwc_hal.c patch: the channel-error path now increments a counter (#189)." -ForegroundColor Green
+    Write-Host "  $target"
     exit 0
 }
 
@@ -94,7 +132,7 @@ $patched = @'
 
 # Normalize line endings for the match (the IDF tree uses LF)
 $originalLf = $original -replace "`r`n", "`n"
-$contentLf  = $content  -replace "`r`n", "`n"
+$patched = $patched + $counter + "`n"
 
 if (-not $contentLf.Contains($originalLf)) {
     Write-Host "Could not find the stock chan_decode_intr error block - usb_dwc_hal.c may have changed." -ForegroundColor Red

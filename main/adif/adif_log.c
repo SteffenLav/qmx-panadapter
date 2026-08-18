@@ -18,6 +18,8 @@
 #include "settings.h"   // upload-cursor adjustment in adif_log_delete_record()
 #include "ui.h"         // ui_toast - a failed log write must reach the operator
 #include <unistd.h>     // fsync
+#include <dirent.h>     // the boot-time /spiffs listing
+#include <sys/stat.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
@@ -238,6 +240,37 @@ void adif_log_init(void)
         ESP_LOGI(TAG, "SPIFFS: %zu KB used / %zu KB total", used / 1024, total / 1024);
         if (total - used < 65536)
             ESP_LOGW(TAG, "SPIFFS nearly full - ADIF writes may fail");
+    }
+
+    // ...and say WHO is using it. The total alone is not actionable: on
+    // 2026-08-18 a device reported 536 KB used of 934 KB and then failed diag
+    // writes with ENOSPC, and answering "which file" needed a rebuilt firmware
+    // and a serial capture because the only way in was esp_spiffs_info(). This
+    // partition holds the QSO log, the LoTW certificate AND PRIVATE KEY, and the
+    // diag log, so a stale or runaway file here is a real fault and the operator
+    // can now read it straight off the boot log. One-shot at boot, a handful of
+    // entries, no periodic cost - and deliberately NOT a directory walk on a
+    // timer (see the "no long interrupts-off critical sections" rule).
+    DIR *d = opendir("/spiffs");
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d)) != NULL) {
+            char p[64];
+            struct stat st;
+            // %.31s, not %s: dirent declares d_name[256], so the compiler cannot
+            // see that a SPIFFS name is bounded by CONFIG_SPIFFS_OBJ_NAME_LEN
+            // (32, i.e. 31 chars + NUL) and rejects the build with
+            // -Werror=format-truncation. Stating the real bound keeps the buffer
+            // small - this runs on app_main's task, where CLAUDE.md's "a
+            // multi-hundred-byte local is a bug until proven otherwise" applies.
+            snprintf(p, sizeof(p), "/spiffs/%.31s", e->d_name);
+            if (stat(p, &st) == 0) {
+                ESP_LOGI(TAG, "SPIFFS:   %-20s %8ld B", e->d_name, (long)st.st_size);
+            } else {
+                ESP_LOGI(TAG, "SPIFFS:   %-20s (stat failed)", e->d_name);
+            }
+        }
+        closedir(d);
     }
 
     // Create file with header if it doesn't exist yet.

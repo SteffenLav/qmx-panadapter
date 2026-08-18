@@ -24,3 +24,8 @@ void reader_net_fetch(const char *page_rel, bool with_toc);
 // manual on the next page open, so this is just a "reset the reader" action
 // (wired to a >=3 s hold on the drawer's User Manual button).
 void reader_net_erase_all(void);
+
+// Delete the page/TOC caches an older firmware wrote to /spiffs for a renderer
+// that stopped reading them. Call once at boot, after the SPIFFS mount. Cheap
+// and idempotent (unlink of a missing file is a no-op).
+void reader_net_purge_legacy_caches(void);

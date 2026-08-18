@@ -28,6 +28,7 @@
 #include "util/usb_shutdown.h"
 #include "net/update_check.h"
 #include "net/manual_embed.h"  // built-in user manual (boot integrity check)
+#include "net/reader_net.h"    // reader_net_purge_legacy_caches() at boot
 #include "ui/reader_view.h"
 #include "iq_balance.h"
 #include "spur_map.h"
@@ -166,10 +167,14 @@ void app_main(void)
     #endif
     // === END BENCH HARNESS =============================================
 
-    // adif_log_init() mounted SPIFFS; now the diag log can persist to flash so
-    // it survives power-off with no SD card (POTA: log in the field, analyse
-    // at home). Background task, 256 KB rolling file, downloadable at
-    // /api/log/saved.
+    // adif_log_init() mounted SPIFFS. Reclaim the reader page/TOC caches an
+    // older firmware left there BEFORE the diag log starts filling the space -
+    // nothing has read those files since 2026-08-06 (see reader_net.c).
+    reader_net_purge_legacy_caches();
+
+    // Now the diag log can persist to flash so it survives power-off with no SD
+    // card (POTA: log in the field, analyse at home). Background task, 256 KB
+    // rolling file, downloadable at /api/log/saved.
     diag_log_persist_start();
     qmx_settings_t cfg;
     settings_load_all(&cfg);

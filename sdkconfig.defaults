@@ -229,3 +229,22 @@ CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=6
 # the identical empty data stage, as did requesting 64 descriptor bytes instead of 8 the
 # way Windows and Linux do. Do not raise these hoping to fix that wedge; it has been
 # measured and it does not.
+
+# SPIFFS garbage collection: 10 (the IDF default) is not enough for the diag
+# log's rotation pattern. Measured 2026-08-18 on the released v1.8.6: the log
+# grows ~47 KB/min in an FT8 session, so diag.log reaches its 256 KB cap and
+# rotates roughly every 11 minutes, deleting a 256 KB file each time. That
+# leaves a large number of blocks holding a mix of live and deleted pages, and
+# SPIFFS returns ENOSPC as soon as GC cannot free a whole block within
+# GC_MAX_RUNS attempts - which happened twice in one 48-minute window with
+# ~400 KB still free:
+#   W diag: flash-persist: write failed (No space left on device) - streak 1
+# It self-heals (diag_log.c rotates early on ENOSPC) but only by DISCARDING a
+# generation, so the flash log silently loses history - and that flash copy is
+# the only log that survives the reboot it is meant to explain.
+# Raising the budget is safe on this board specifically because long erases
+# yield: CONFIG_SPI_FLASH_ERASE_YIELD_DURATION_MS=20 plus
+# CONFIG_SPIRAM_XIP_FROM_PSRAM=y mean GC cannot hold cache down long enough to
+# stall the MIPI-DSI frame-restart ISR (the "cyan flash" rule in CLAUDE.md).
+# The writes themselves are on diag_persist, a priority-2 background task.
+CONFIG_SPIFFS_GC_MAX_RUNS=32

@@ -238,6 +238,12 @@ The always-on diag log lives in a 5 MB PSRAM ring (`util/diag_log.c`) — wiped 
 - **microSD (full 5 MB+, when a card is in)**: see below.
 Both the SD and flash mirrors read the ring incrementally via `diag_log_total()`/`diag_log_read_from()` (separate monotonic cursors in `s_total` space; the `head == total % cap` invariant lets a total-position map straight to a ring index). **`fsync` is mandatory after writing an open log file** — `fflush` alone leaves the bytes in FatFs/SPIFFS buffers, so the file reads empty if the card is pulled / power cut before an `f_sync`/`f_close` (this bit the SD `qmx-log.txt`, which is held open and only appended).
 
+⚠ **The flash copy is an ~11-MINUTE window, not a session record — and it ENOSPC'd with 400 KB free (2026-08-18, #191).** Measured on the operator's unit: the log grows **~47 KB/min** in an FT8 session (dominated by legitimate per-decode `ft8_test`/`ft8_screen` lines — CLAUDE.md's older "~0 lines/s at the deduplicated steady state" describes the CAT poll only, not FT8), so `diag.log` reaches its 256 KB cap and **rotates about every 11 minutes**. That is the real retention figure; for anything longer, the **serial capture** is the record, not `/api/log/saved`.
+
+The ENOSPC was **not** a capacity problem — SPIFFS reported 536 KB used of 934 KB and `qso.adi` was 6 KB (37 QSOs). Deleting a 256 KB file every 11 minutes leaves many blocks holding a mix of live and deleted pages, and SPIFFS returns `ENOSPC` the moment GC cannot free a whole block within `CONFIG_SPIFFS_GC_MAX_RUNS`. **So on this filesystem "free space" does not mean "writable".** It self-heals (`diag_log.c` rotates early on `ENOSPC`) but only by **discarding a generation**, so the flash log silently loses the history it exists to preserve. Fixes: **GC budget 10 → 32** (`sdkconfig` *and* `sdkconfig.defaults`; safe here specifically because `SPI_FLASH_ERASE_YIELD_DURATION_MS=20` + `SPIRAM_XIP_FROM_PSRAM` mean GC cannot hold cache down long enough to trip the cyan flash, and the writes are on a priority-2 task), and the **reader page/TOC cache writes are deleted** — dead since 2026-08-06, up to ~30 KB per page view that nothing read back, plus a one-time reclaim at boot (`reader_net_purge_legacy_caches()`).
+
+**The boot log now LISTS every `/spiffs` file with its size** (`adif_log.c`), because "536 KB used" was not actionable: answering *which file* previously needed a rebuilt firmware, and this partition holds the QSO log, the LoTW certificate **and private key**, and the diag log. The structural fix — the diag log deserves its own partition, ~6.5 MB of flash after `storage` is unused — is **#192, deliberately not done**: it changes the flash layout on shipped units.
+
 ### microSD auto-archive + exFAT (IDF-tree patch — must be re-applied)
 `storage/sd_archive.c` mirrors the always-on diag log (`qmx-log.txt`, rotated at 5 MB), the ADIF log (`qso.adi`), and the config export (`qmx-config.txt`) to `/sdcard/qmx-panadapter/` whenever a FAT/exFAT card is present (it probes for a mount on a background task — the Tab5 routes **no card-detect line** to the SoC, so presence is found by retrying `bsp_sdcard_init`, and removal by a write failure). The bottom-bar **"SD"** dot lights up green (static, not animated) while a card is mounted (`ui_set_sd_active()`) — deliberately not the breathing/pulsing style used for things needing attention elsewhere in the UI, since "a card is in the slot" is an ambient, usually-permanent state, not something to draw the eye to.
 
@@ -336,14 +342,61 @@ rule). Edits the **pinned IDF tree**, so an IDF reinstall wipes it;
 `tools/check_patches.py` now fails the build if it is missing (mutation-tested).
 
 ⚠ **This is the THIRD assert of the same family**, after #4 (`hcd_dwc.c` bulk error)
-and #5 (`hub.c` recover in `ESP_ERROR_CHECK`). Generalise it: **IDF's USB stack
-asserts on hardware states it treats as impossible, and on this board they happen.**
-When a new USB abort appears, look for a `HAL_ASSERT`/`ESP_ERROR_CHECK` guarding a
-"cannot happen" case with a working error path sitting right beside it.
+and #5 (`hub.c` recover in `ESP_ERROR_CHECK`) — and #8 below is the fourth.
+Generalise it: **IDF's USB stack asserts on hardware states it treats as impossible,
+and on this board they happen.** When a new USB abort appears, look for a
+`HAL_ASSERT`/`ESP_ERROR_CHECK`/bare `abort()` guarding a "cannot happen" case with a
+working error path sitting right beside it.
 
 ⚠ **v1.8.5 shipped WITHOUT this fix.** Rate is unknown beyond once in ~2 h on this
 bench under FT8 — earlier 10 h+ soaks never showed it, so do not assume a rate from
 one event.
+
+### An "impossible" pipe event abort()s the device (IDF-tree patch #8 — must be re-applied)
+`hcd_dwc.c`'s `_buffer_parse_error()` switches on `status_flags.pipe_event` and its
+`default:` is a bare `abort()` under *"HCD_PIPE_EVENT_URB_DONE and
+HCD_PIPE_EVENT_ERROR_URB_NOT_AVAIL should not occur here"*. Same assumption, same
+outcome: serial-captured **2026-08-18 in a soak of the RELEASED v1.8.6**, at **7 h
+06 m** of a completely healthy FT8 receive session (26 decodes/slot, 49,460 pairs/s,
+53 KB internal free, `idle0` 61 %). And again the reboot was the cheap part — the
+warm reset with the radio attached triggered **#74**, the QMX never re-enumerated,
+and the operator's report was *"the QMX was wedged"*. **That inversion has now
+happened twice in two nights: a QMX wedge after an unattended run means look for a
+Tab5 abort FIRST.**
+
+**How the PC was tied to the line, because it does not read as obvious.**
+`addr2line 0x480f3e31` says `_buffer_parse` **line 2578** — the `default:` of a
+*different* switch, on `pipe->ep_char.type`, which is declared `type : 2` with all
+four enum values cased and is therefore **unreachable by construction**.
+`_buffer_parse_error` is `static inline` into `_buffer_parse`, and the two identical
+bare `abort()`s **fold into one block**, so addr2line reports the surviving line.
+`pipe_event` is `: 8`, so *its* `default:` is reachable. Corroborating:
+`CONFIG_COMPILER_OPTIMIZATION_ASSERTION_LEVEL=2`, so a failing `assert()` prints
+`assert failed: … file:line` — **nothing printed**, which is what proves it was a
+plain `abort()` rather than either `assert()` at the top of `_buffer_parse`.
+**Generalise the method**: when a bare abort's line looks unreachable, check for
+identical folded `abort()` blocks and an inlined static function, and use the field
+widths to eliminate.
+
+Fix follows **patch #4's own precedent in the same file**: `actual_num_bytes` is
+already 0 before the switch, so the `default:` only sets
+`transfer->status = USB_TRANSFER_STATUS_ERROR` — exactly what every other branch
+does — and the class driver retries. `tools/patches/apply_hcd_buffer_parse_error_tolerant.ps1`.
+⚠ **`hcd_dwc.c` now carries TWO of our patches (#4 and #8) with separate markers**;
+applying one does not apply the other, and `check_patches.py` has a row for each.
+
+⚠ **Patches #7 and #8 COUNT rather than log (#189), and the count is the marker.**
+Neither may log (interrupt path, cyan-flash rule), which made both unverifiable: a
+clean log cannot distinguish "never happened" from "happened and was handled", so
+they could only ever be failed-to-be-contradicted. Both now increment a `uint32_t`
+(`main/util/usb_patch_counters.c` — defined in **firmware** and only `extern`-declared
+inside the patched IDF files, deliberately that way round so a missing patch leaves
+the count at 0 instead of failing the link). Reported by
+`usb_patch_counters_report()` from the 10 s heap watchdog **only when a count
+changes**, and in `/api/status` as `usb_patch`. Because a silent-but-tolerant patch
+is as good as no patch for diagnosis, **`check_patches.py`'s marker for both is the
+counter symbol**, not a date comment. ⚠ Neither counter has been observed firing
+yet — the patches are correct-by-construction, not hardware-confirmed.
 
 ### USB mouse — WORKS mouse-alone (hw-verified 2026-07-20); simultaneous-with-QMX blocked by the hub/TT wall
 Frank K4FMH asked for mouse support (USB or BT). **The full USB-mouse stack works and is hardware-verified**: a mouse plugged **directly** into USB-A (no hub, QMX not attached) enumerates, and `main/usb_hid_mouse.c` (HID host, boot-protocol report → cursor accumulation) + the LVGL pointer indev in `ui.c` (`ui_mouse_init()`, `mouse_read_cb`, white-circle cursor on `lv_layer_top()`) give a moving cursor that drives every menu/button/drawer via normal LVGL clicks. The 90° rotation transform (`point.x = ly; point.y = (W-1) - lx`, the inverse of LVGL's own `indev_pointer_proc` ROTATION_90 map) was correct first try — cursor tracks and clicks land accurately. Verified with the mouse as the SOLE USB device.

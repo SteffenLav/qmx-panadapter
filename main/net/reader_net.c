@@ -15,10 +15,22 @@
 //     dance, which existed only because SD writes are unreliable once WiFi is up
 //     (see storage/sd_archive.c)
 //
-// What remains is a small shim: resolve a page from the embedded blob and write
-// it to the SPIFFS page cache, which is still the hand-off to the renderer. That
-// keeps reader_view.c unchanged, and the write happens on a background task
-// rather than on the LVGL thread.
+// What remains is a small shim: resolve a page from the embedded blob and tell
+// the renderer it is available. The work happens on a background task rather
+// than on the LVGL thread.
+//
+// The SPIFFS page cache is GONE too (2026-08-18). This comment used to call it
+// "still the hand-off to the renderer", and that had been untrue since
+// 2026-08-06: reader_view.c calls manual_embed_get() itself (see the comment at
+// its load_page()) and never reads /spiffs/reader.md. So every page view wrote
+// up to ~30 KB into a 934 KB filesystem that NOTHING read back - on a partition
+// shared with the ADIF log, the LoTW certificate and private key, and the diag
+// log, where running out of space is a real failure (it is what produced the
+// "Could not cache the page" reports, and the write's own failure path had
+// grown an esp_spiffs_info() call to explain itself). Deleting the write is
+// what makes those bytes and that churn go away. Do not reintroduce it: if a
+// hand-off is ever needed again, pass the blob pointer, not a copy through
+// flash.
 
 #include "reader_net.h"
 #include "net/manual_embed.h"
@@ -26,7 +38,8 @@
 #include "util/psram_task.h"
 
 #include "esp_log.h"
-#include "esp_spiffs.h"     // esp_spiffs_info(), for the cache-write failure path
+// No esp_spiffs.h any more: nothing here touches the filesystem except the
+// one-time unlink of the caches an older firmware left behind.
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -34,6 +47,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/stat.h>
 
 static const char *TAG = "reader_net";
 
@@ -44,21 +58,6 @@ static volatile bool s_busy = false;   // one page load at a time
 static char s_job_path[96];
 static bool s_job_toc;
 
-static bool write_file(const char *path, const char *buf, size_t len)
-{
-    FILE *f = fopen(path, "wb");
-    if (!f) { ESP_LOGW(TAG, "cannot open %s for write", path); return false; }
-    size_t w = fwrite(buf, 1, len, f);
-    fflush(f);
-    fclose(f);
-    // A SHORT write is the failure mode of a full partition, and fwrite reports
-    // it only through the count - so say so here rather than leaving the caller
-    // to infer it.
-    if (w != len) ESP_LOGW(TAG, "short write to %s: %u of %u bytes",
-                           path, (unsigned)w, (unsigned)len);
-    return w == len;
-}
-
 static void fetch_task(void *arg)
 {
     (void)arg;
@@ -66,8 +65,7 @@ static void fetch_task(void *arg)
     if (s_job_toc) {
         const char *toc = NULL;
         size_t toclen = 0;
-        if (manual_embed_get("toc.json", &toc, &toclen) &&
-            write_file(TOC_CACHE, toc, toclen)) {
+        if (manual_embed_get("toc.json", &toc, &toclen)) {
             reader_view_notify_toc_loaded();
         } else {
             ESP_LOGW(TAG, "contents list missing from the embedded manual");
@@ -76,29 +74,14 @@ static void fetch_task(void *arg)
 
     const char *data = NULL;
     size_t len = 0;
-    // Two DIFFERENT failures used to share one message that asserted the first
-    // one ("not in the embedded manual"), which sent a debugging session chasing
-    // the blob while the real fault was the write. Keep them apart: a lying
-    // diagnostic costs more than no diagnostic.
+    // reader_view reads the blob itself, so resolving the page here is only a
+    // check that it EXISTS - hence the deliberately unused data/len. Keeping the
+    // lookup means a missing page is still reported as a missing page rather
+    // than as a blank screen.
     if (!manual_embed_get(s_job_path, &data, &len)) {
         ESP_LOGW(TAG, "page '%s' is not in the embedded manual", s_job_path);
         reader_view_notify_status("Page not found in the built-in manual");
-        reader_view_notify_loaded(true);
-    } else if (!write_file(PAGE_CACHE, data, len)) {
-        // The write failing is no longer the operator's problem: reader_view renders
-        // straight from the embedded blob, so the page displays perfectly either way
-        // and this cache is vestigial. Log it (with the free space - a short write on
-        // a full SPIFFS is otherwise indistinguishable from a missing page) but say
-        // NOTHING on screen. The old "Could not cache the page (storage full?)"
-        // reported a failure the reader had already recovered from, on a device where
-        // /spiffs being full is the normal end state.
-        size_t total = 0, used = 0;
-        if (esp_spiffs_info(NULL, &total, &used) != ESP_OK) total = used = 0;
-        ESP_LOGW(TAG, "page '%s' found (%u B); vestigial cache write to %s failed "
-                 "- spiffs total=%u used=%u free=%u (harmless, page renders from the blob)",
-                 s_job_path, (unsigned)len, PAGE_CACHE,
-                 (unsigned)total, (unsigned)used, (unsigned)(total - used));
-        reader_view_notify_status("");
+        // true keeps the status text above; notify_loaded(false) clears it.
         reader_view_notify_loaded(true);
     } else {
         reader_view_notify_status("");
@@ -124,6 +107,26 @@ void reader_net_fetch(const char *page_rel, bool with_toc)
 void reader_net_load_index(void)
 {
     reader_net_fetch("index.md", true);
+}
+
+void reader_net_purge_legacy_caches(void)
+{
+    // An upgrade from any build before 2026-08-18 arrives with reader.md (up to
+    // ~30 KB) and reader_toc.json still on /spiffs, written by a cache nothing
+    // read. Reclaim them ONCE at boot: on a partition this small, and shared
+    // with the QSO log and the LoTW private key, tens of KB is worth having
+    // back, and stale files also cost GC work forever. unlink() on a file that
+    // is not there is a no-op, so later boots pay nothing and this needs no
+    // "have I done it" flag in NVS.
+    struct stat st;
+    size_t freed = 0;
+    if (stat(PAGE_CACHE, &st) == 0) freed += (size_t)st.st_size;
+    if (stat(TOC_CACHE,  &st) == 0) freed += (size_t)st.st_size;
+    unlink(PAGE_CACHE);
+    unlink(TOC_CACHE);
+    if (freed) {
+        ESP_LOGI(TAG, "reclaimed %u B of legacy reader cache from /spiffs", (unsigned)freed);
+    }
 }
 
 void reader_net_erase_all(void)
