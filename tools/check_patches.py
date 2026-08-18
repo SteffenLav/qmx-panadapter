@@ -67,6 +67,12 @@ PATCHES = [
      "PATCHED (qmx-panadapter, 2026-08-03)",
      "a root-port recover that races the hub FSM abort()s the device"),
 
+    ("apply_usb_dwc_hal_chan_error_tolerant.ps1", "idf",
+     "components/hal/usb_dwc_hal.c",
+     "PATCHED (qmx-panadapter, 2026-08-18)",
+     "a USB channel error arriving without the halt bit abort()s the device - and "
+     "that warm reset then leaves the QMX unable to re-enumerate for hours"),
+
     ("apply_fatfs_exfat.ps1", "idf",
      "components/fatfs/src/ffconf.h",
      "#define FF_FS_EXFAT\t1",

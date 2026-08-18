@@ -310,6 +310,41 @@ The operator refused the QMX-side diagnosis, reasonably: *"Stan and others have 
 
 ⚠ **Both branches are now LOG-ONLY — the "power-cycle the QMX" toasts were removed in v1.8.0** at the operator's request ("irritating and for no use"). They fired every few minutes at a QMX that was merely switched off, which is an ordinary state rather than a fault, and the screen already says *"Now turn on or reboot your QMX/+"* whenever CAT is down — the same instruction, in the right place. The `ESP_LOGW` lines in `util/usb_replug.c` are unchanged, so both wedges stay diagnosable from a diag log; the detection and the recovery are untouched. Don't reinstate the toasts; if this ever needs to be visible again, put it in the wait prompt rather than adding a second thing that pops up.
 
+### A channel error without the halt bit abort()s the device (IDF-tree patch #7 — must be re-applied)
+ESP-IDF v5.4.4's `usb_dwc_hal.c` `usb_dwc_hal_chan_decode_intr()` guards its error
+branch with `HAL_ASSERT(chan_intrs & USB_DWC_LL_INTR_CHAN_CHHLTD)` under the comment
+*"An error should have halted the channel"*. That is an **assumption**, and ESP32-P4
+v1.3 violates it — serial-captured 2026-08-18 during an overnight soak of the
+released v1.8.5, at **1 h 57 m** of a completely healthy FT8 session (radio streaming
+46,806 pairs/s, FT8 mid-capture, 55 KB internal free, 0 SDIO timeouts): a channel
+error interrupt arrived with no CHHLTD and the assert aborted the device.
+
+⛔ **The reboot is not the expensive part.** An abort is a warm reset with the QMX
+attached, which is the documented **#74** trigger — so the radio then failed to
+re-enumerate and stayed dead for the remaining **5 h 26 m** of the night (4 ENUM
+failures, then `RX 0 pairs/s` until morning). One assert cost the whole session, and
+the operator's report was "the QMX wedged during the night" — the QMX was fine.
+**When a QMX wedge is reported after an unattended run, look for a Tab5 abort first.**
+
+**The recovery was already written**, immediately below the assert: the same block
+classifies the error (STALL/BBLEER/BNA/XCS_XACT), clears `flags.active` and returns
+`USB_DWC_HAL_CHAN_EVENT_ERROR`, which the HCD handles — and patch #4 already made
+that layer tolerant. So `tools/patches/apply_usb_dwc_hal_chan_error_tolerant.ps1`
+(idempotent, marker-guarded) just drops the assert and lets the existing path run.
+**No logging inside it** — that code executes in the USB interrupt path (cyan-flash
+rule). Edits the **pinned IDF tree**, so an IDF reinstall wipes it;
+`tools/check_patches.py` now fails the build if it is missing (mutation-tested).
+
+⚠ **This is the THIRD assert of the same family**, after #4 (`hcd_dwc.c` bulk error)
+and #5 (`hub.c` recover in `ESP_ERROR_CHECK`). Generalise it: **IDF's USB stack
+asserts on hardware states it treats as impossible, and on this board they happen.**
+When a new USB abort appears, look for a `HAL_ASSERT`/`ESP_ERROR_CHECK` guarding a
+"cannot happen" case with a working error path sitting right beside it.
+
+⚠ **v1.8.5 shipped WITHOUT this fix.** Rate is unknown beyond once in ~2 h on this
+bench under FT8 — earlier 10 h+ soaks never showed it, so do not assume a rate from
+one event.
+
 ### USB mouse — WORKS mouse-alone (hw-verified 2026-07-20); simultaneous-with-QMX blocked by the hub/TT wall
 Frank K4FMH asked for mouse support (USB or BT). **The full USB-mouse stack works and is hardware-verified**: a mouse plugged **directly** into USB-A (no hub, QMX not attached) enumerates, and `main/usb_hid_mouse.c` (HID host, boot-protocol report → cursor accumulation) + the LVGL pointer indev in `ui.c` (`ui_mouse_init()`, `mouse_read_cb`, white-circle cursor on `lv_layer_top()`) give a moving cursor that drives every menu/button/drawer via normal LVGL clicks. The 90° rotation transform (`point.x = ly; point.y = (W-1) - lx`, the inverse of LVGL's own `indev_pointer_proc` ROTATION_90 map) was correct first try — cursor tracks and clicks land accurately. Verified with the mouse as the SOLE USB device.
 
