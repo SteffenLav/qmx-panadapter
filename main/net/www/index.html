@@ -1462,9 +1462,7 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
      rather than let someone believe they have corrected QRZ or LoTW - a LoTW
      record is signed over the contact and cannot be amended by re-uploading. */
   function uploadedWarning(r) {
-    return "
-
-Note: if this QSO has already been uploaded, this corrects the " +
+    return "\n\nNote: if this QSO has already been uploaded, this corrects the " +
            "Tab5's log only — the copy QRZ/eQSL/LoTW hold is unchanged.";
   }
 
@@ -1477,9 +1475,7 @@ Note: if this QSO has already been uploaded, this corrects the " +
       const cur = (fld === "RST_SENT" ? r.RST_SENT : r.RST_RCVD) || "";
       const v = prompt(
         "Report " + (fld === "RST_SENT" ? "SENT to " : "RECEIVED from ") + r.CALL +
-        "
-
-Like -07 or +03. Leave EMPTY to record that no report was exchanged." +
+        "\n\nLike -07 or +03. Leave EMPTY to record that no report was exchanged." +
         (uploadedWarning(r) || ""), cur);
       if (v === null) return;
       const val = v.trim();

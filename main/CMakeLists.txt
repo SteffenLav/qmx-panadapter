@@ -182,3 +182,21 @@ add_custom_command(
     COMMENT "Checking standing patches (managed_components + IDF tree)"
     VERBATIM
 )
+
+# Refuse to build a web UI whose JavaScript does not parse (TODO #183).
+#
+# v1.8.5 shipped with one unterminated string literal, which stops the ENTIRE
+# inline script running: the page draws its controls and then does nothing - no
+# spectrum, no buttons, "disconnected" in red. Two users reported it within hours.
+# `node --check` finds that in ~50 ms. The C compiler catches this class of mistake
+# in firmware sources; nothing caught it in HTML, because this build has no other
+# reason to parse it.
+#
+# Skips (does not fail) when node is absent, so a machine without it can still
+# build; the release machine has it, which is where it matters.
+add_custom_command(
+    TARGET ${COMPONENT_LIB} PRE_BUILD
+    COMMAND ${PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_web.py"
+    COMMENT "Checking web UI JavaScript parses"
+    VERBATIM
+)
