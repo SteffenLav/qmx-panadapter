@@ -4756,13 +4756,34 @@ static bool multitouch_lockout_active(void)
 
 static uint64_t s_2f_last_tap_us    = 0;      // end time of the previous two-finger tap
 
+/* Enable/disable EVERY input device, not just the first.
+ *
+ * This used to be a bare lv_indev_get_next(NULL), which reads as "the indev" and
+ * is not: LVGL's lv_indev_create() inserts at the HEAD of the list
+ * (lv_ll_ins_head) and lv_indev_get_next(NULL) returns that head, so it hands
+ * back the MOST RECENTLY CREATED device. The touch indev is created early, in
+ * bsp_display_start(); the mouse pointer is created later still, in
+ * ui_mouse_init() from main.c. So the one call disabled the MOUSE and left
+ * TOUCH fully live, and the tap that woke the screen went straight through to
+ * whatever widget happened to be under it - tuning the radio to wherever the
+ * operator happened to touch a blank screen (Randy N4OPI, 2026-08-18). Adding
+ * the pointer indev in v1.3.0 silently broke the v1.0.0 wake-swallow.
+ *
+ * Walking the list is also the future-proof shape: while the screen is asleep
+ * NO input device should be able to act, whatever gets added later. */
+static void indev_enable_all(bool en)
+{
+    for (lv_indev_t *i = lv_indev_get_next(NULL); i; i = lv_indev_get_next(i)) {
+        lv_indev_enable(i, en);
+    }
+}
+
 static void display_sleep_enter(void)
 {
     if (s_disp_asleep) return;
     s_disp_asleep = true;
     s_wake_pending = false;
-    lv_indev_t *indev = lv_indev_get_next(NULL);
-    if (indev) lv_indev_enable(indev, false);
+    indev_enable_all(false);
     display_set_brightness(0);
     ESP_LOGI(TAG, "display sleep: backlight off (touch to wake)");
 }
@@ -4772,8 +4793,14 @@ static void display_sleep_wake(void)
     qmx_settings_t c;
     settings_load_all(&c);
     display_set_brightness(c.brightness_pct);
-    lv_indev_t *indev = lv_indev_get_next(NULL);
-    if (indev) lv_indev_enable(indev, true);
+    indev_enable_all(true);
+    // Reset each indev's state as well. Re-enabling mid-gesture can otherwise
+    // leave LVGL holding a press it never saw released, so the first real touch
+    // after waking reads as the CONTINUATION of the waking tap - the same class
+    // of fault as the bug above, one step later.
+    for (lv_indev_t *i = lv_indev_get_next(NULL); i; i = lv_indev_get_next(i)) {
+        lv_indev_reset(i, NULL);
+    }
     lv_display_trigger_activity(NULL);
     s_disp_asleep = false;
     s_wake_pending = false;

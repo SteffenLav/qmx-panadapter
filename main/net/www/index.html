@@ -3213,12 +3213,27 @@ function drawSpots(ctx, W, H) {
   const placed = [];
 
   ctx.save();
-  ctx.font = "bold 14px ui-monospace, monospace";
+  /* Canvas coordinates here are DEVICE pixels: every canvas is sized
+     clientWidth * dpr and the context is never ctx.scale()d. So a literal
+     "14px" font renders at 14/dpr CSS pixels - about 7 px on a 2x display,
+     which is what made these labels "nearly microscopic" (Randy N4OPI,
+     2026-08-18) while the Tab5's own were fine. Scale the label metrics with
+     dpr, exactly as the band-plan strip's label already does ("scales with
+     strip height/dpr, not a fixed px size").
+     Everything the box is built from has to scale together, or the text
+     outgrows its own background. */
+  const dpr    = Math.min(window.devicePixelRatio || 1, 2);
+  const fontPx = Math.round(14 * dpr);
+  const rowH   = Math.round(SPOT_ROW_H * dpr);
+  const boxH   = Math.round(20 * dpr);
+  const baseY  = Math.round(15 * dpr);
+  const padX   = Math.round(4 * dpr);
+  ctx.font = "bold " + fontPx + "px ui-monospace, monospace";
   ctx.textAlign = "left";
 
   // Rows to stack into, starting from mid-height so the labels sit in the
   // quiet part of the trace rather than over the dB scale.
-  const rowTop = Math.round(H / 2 - (SPOT_LABEL_ROWS * SPOT_ROW_H) / 2);
+  const rowTop = Math.round(H / 2 - (SPOT_LABEL_ROWS * rowH) / 2);
   const rows = [];
   for (let r = 0; r < SPOT_LABEL_ROWS; r++) rows.push([]);
 
@@ -3229,7 +3244,7 @@ function drawSpots(ctx, W, H) {
     const text = c.sp.c || "";
     if (!text) continue;
     const tw = ctx.measureText(text).width;
-    const bx = Math.max(0, Math.min(W - tw - 6, c.x - tw / 2 - 3));
+    const bx = Math.max(0, Math.min(W - tw - padX - 2, c.x - tw / 2 - padX));
 
     /* Try each row in turn and take the first with space. Only a spot that
        clashes on EVERY row is dropped - previously one clash on the single row
@@ -3239,14 +3254,14 @@ function drawSpots(ctx, W, H) {
     for (let r = 0; r < SPOT_LABEL_ROWS; r++) {
       let clash = false;
       for (const p of rows[r]) {
-        if (bx < p.x + p.w + 2 && bx + tw + 8 + 2 > p.x) { clash = true; break; }
+        if (bx < p.x + p.w + 2 && bx + tw + 2 * padX + 2 > p.x) { clash = true; break; }
       }
       if (!clash) { row = r; break; }
     }
     if (row < 0) continue;
 
-    const by = rowTop + row * SPOT_ROW_H;
-    const box = { x: bx, y: by, w: tw + 8, h: 20,
+    const by = rowTop + row * rowH;
+    const box = { x: bx, y: by, w: tw + 2 * padX, h: boxH,
                   hz: c.sp.f, mode: spotRadioMode(c.sp), call: text,
                   /* carried so the hover preview can be drawn in this spot's own
                      colour - the same reasoning the off-screen counters already use:
@@ -3263,12 +3278,12 @@ function drawSpots(ctx, W, H) {
     // up. A full-height line crossed its own callsign and pointed at nothing
     // above it - the Tab5 has always drawn it this way (see spots_lane.c).
     ctx.fillStyle = col;
-    ctx.fillRect(Math.round(c.x), by + 20, 1, Math.max(0, H - (by + 20)));
+    ctx.fillRect(Math.round(c.x), by + boxH, Math.max(1, Math.round(dpr)), Math.max(0, H - (by + boxH)));
 
     ctx.fillStyle = "rgba(0,0,0,0.72)";
     ctx.fillRect(box.x, box.y, box.w, box.h);
     ctx.fillStyle = col;
-    ctx.fillText(text, box.x + 4, by + 15);
+    ctx.fillText(text, box.x + padX, by + baseY);
   }
 
   /* Off-screen counts, in words rather than a bare "<3": a lone number against
@@ -3357,13 +3372,17 @@ function drawSpotPreview(ctx, box, pxW, pxH, col) {
     ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, pxH); ctx.stroke();
   }
   ctx.setLineDash([]);
-  ctx.font = "bold 13px ui-monospace, monospace";
+  /* Device pixels - see drawSpots(). */
+  const dprP   = Math.min(window.devicePixelRatio || 1, 2);
+  const fontPx = Math.round(13 * dprP);
+  const padP   = Math.round(3 * dprP);
+  ctx.font = "bold " + fontPx + "px ui-monospace, monospace";
   const txt = "→ " + (box.call || "spot") + "  " + fmtHz(box.hz);
   const tw = ctx.measureText(txt).width;
-  let tx = Math.max(4, Math.min(pxW - tw - 6, (x >= 0 ? x : 0) + 8));
-  const ty = Math.max(14, box.y - 6);
+  let tx = Math.max(2 * padP, Math.min(pxW - tw - 2 * padP, (x >= 0 ? x : 0) + Math.round(8 * dprP)));
+  const ty = Math.max(Math.round(14 * dprP), box.y - 2 * padP);
   ctx.fillStyle = "rgba(0,0,0,0.72)";
-  ctx.fillRect(tx - 3, ty - 12, tw + 6, 16);
+  ctx.fillRect(tx - padP, ty - Math.round(12 * dprP), tw + 2 * padP, Math.round(16 * dprP));
   ctx.fillStyle = col;
   ctx.fillText(txt, tx, ty);
   ctx.restore();
@@ -3393,14 +3412,21 @@ function drawTuneCursor(ctx, x, pxW, pxH, freqHz) {
   ctx.setLineDash([]);
 
   const label = fmtFreqLabel(freqHz);
-  ctx.font      = "bold 13px ui-monospace, monospace";
+  /* Device pixels, not CSS pixels - see the note in drawSpots(). A fixed 13px
+     here rendered at ~6.5 CSS px on a 2x display. */
+  const dpr    = Math.min(window.devicePixelRatio || 1, 2);
+  const fontPx = Math.round(13 * dpr);
+  const boxY   = Math.round(4 * dpr);
+  const boxH   = Math.round(18 * dpr);
+  const pad    = Math.round(2 * dpr);
+  ctx.font      = "bold " + fontPx + "px ui-monospace, monospace";
   ctx.fillStyle = "#00e8ff";
   const tw = ctx.measureText(label).width;
-  const lx = Math.min(x + 5, pxW - tw - 4);
+  const lx = Math.min(x + Math.round(5 * dpr), pxW - tw - 2 * pad);
   ctx.fillStyle = "rgba(0,0,0,0.6)";
-  ctx.fillRect(lx - 2, 4, tw + 4, 18);
+  ctx.fillRect(lx - pad, boxY, tw + 2 * pad, boxH);
   ctx.fillStyle = "#00e8ff";
-  ctx.fillText(label, lx, 18);
+  ctx.fillText(label, lx, boxY + boxH - Math.round(4 * dpr));
   ctx.restore();
 }
 

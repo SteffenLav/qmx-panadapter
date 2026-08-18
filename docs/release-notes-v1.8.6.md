@@ -14,7 +14,7 @@ It was not a typo. The literal was written by a script whose shell collapsed a `
 
 The trim now defaults to 0 (the slider stays, for real per-unit trimming) and the rounding remainder is compensated where it matters: a tap converts screen position to frequency correctly, and the dial marker is drawn on the signal rather than beside it. The arithmetic reproduces **both** of Roy's measurements — 650 Hz predicts +41, 700 Hz predicts +44, against his reported +40 — and both go to zero.
 
-⚠ **Not confirmed against a signal.** There is no absolute frequency reference on the bench, so this is verified by arithmetic that matches his numbers, not by measurement. Please re-measure and report.
+✅ **CONFIRMED ON A REAL SIGNAL** (Roy KI0ER, 2026-08-18, v1.8.6 + QMX 1.04.007): *"an incoming CW signal's peak on the waterfall aligns properly with the actual frequency now. If it is off a tad, it appears it's within 5 Hz."* Tested at his 650 Hz CW centre; other centre/offset/tone settings not re-tested. This shipped verified only by arithmetic matching his earlier numbers - the measurement has now caught up with it.
 
 **Radio menus, all from Michael KZ4LY using it:**
 
