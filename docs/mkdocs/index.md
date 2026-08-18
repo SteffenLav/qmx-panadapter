@@ -70,10 +70,12 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.8.5 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.8.6 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, and the radio's own menus on the screen.** The
 panadapter, FT8/FT4 receive and transmit, ADIF logging and all three logbook uploads are
 stable and in daily use.
+
+**New in v1.8.6 — a same-day fix release, and the headline is that v1.8.5's browser interface was completely dead.** One broken text string stopped the whole page working: it drew its controls and then did nothing — no spectrum, no waterfall, no buttons, "disconnected" in the corner *(Randy N4OPI, Michael KZ4LY)*. The build now refuses to compile a page that does not parse, so this cannot ship again. **A crash that looked like a radio fault** is fixed too: an overnight soak aborted inside the USB driver, and because that reboot happens with the radio attached it left the QMX unable to reconnect for the rest of the night — the morning's report was "the QMX wedged", and the QMX was fine. **In CW the displayed frequency and tap-to-tune are corrected** — a signal on 7.060.000 showed 40 Hz high, from a stale calibration default plus the display rounding to whole analysis bins *(Roy KI0ER)*. And in **Radio menus** you can now see what you are typing past message 9, the help says to power-cycle the radio, and the **two-finger screen blank actually works** instead of about one try in ten *(Michael KZ4LY)*.
 
 **New in v1.8.5 — the fixes people were already told about, and a batch more found the same evening.** **Radio menus** gained a **cursor**, a **BS key that deletes**, an **on-screen QWERTY** so a Tab5 without the snap-on keyboard can type a value at all, the **menu path on screen** when the radio has no second port, and **"Exit terminal" no longer re-opens the session** (Randy N4OPI, Michael KZ4LY). The **clock no longer claims `UTC(GPS)` on a radio with no GPS**, and in CW the display **follows the offset you actually set** instead of one read once at connect — which had left tap-to-tune about 30 Hz off (Roy KI0ER). The **web log viewer can correct a report**, and a report is **logged only if it was transmitted** (Gyula HA3HZ). A caller who **answers your CQ with a report instead of a grid** now gets `R` plus your report, the **station you are working is never hidden by a display filter**, **leaving Radio menus hands the radio back properly**, there is a **dated Today-only ADIF export**, and the **red transmitting banner no longer covers the text under it**.
 
@@ -106,7 +108,7 @@ Every release, newest first, is on the [Releases](releases.md) page.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.8.5.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.8.6.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

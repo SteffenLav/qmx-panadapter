@@ -4,7 +4,21 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.8.5** — 2026-08-17
+**v1.8.6** — 2026-08-18
+
+**A same-day fix release. v1.8.5 shipped with the browser interface completely dead.**
+
+- **The web UI works again.** One broken text string stopped the entire page script running, so the browser drew its controls and then did nothing at all — no spectrum, no waterfall, no working buttons, "disconnected" in the corner, in both Chrome and Firefox. If you use the browser at all, v1.8.5 gave you nothing. The build now refuses to compile a page whose script does not parse, so this particular mistake cannot ship again. *(Randy N4OPI, Michael KZ4LY)*
+- **A crash that looked like a radio fault.** An overnight test of v1.8.5 aborted inside the USB driver after about two hours of healthy operation. The reboot is not the expensive part: it happens with the radio still plugged in, which is the one situation that leaves the QMX unable to reconnect — so the radio then stayed dead until morning. The report was "the QMX wedged during the night"; the QMX was fine. Now the driver reports the error instead of restarting.
+- **CW: the displayed frequency and tap-to-tune are corrected.** A signal transmitted on 7.060.000 appeared at 7.060.040, and tapping it tuned you 40 Hz off, so the other station heard you shifted. Two things added up: a calibration figure that has defaulted to the wrong value since before the panadapter read your CW offset from the radio, and the display rounding to whole analysis bins (47 Hz each). ⚠ Corrected by calculation that matches the reported measurements exactly, but not yet confirmed on the air — please measure and report. *(Roy KI0ER)*
+- **Radio menus: you can see what you are typing.** Editing messages past number 9 meant typing blind behind the on-screen keyboard; the screen now scrolls so the radio's cursor stays visible. The help for a radio with no second serial port now tells you to power-cycle it. And the **two-finger tap to blank the screen** works properly instead of about one attempt in ten — two fingers never leave the glass at the same instant, and the one left behind was being treated as a deliberate touch. *(Michael KZ4LY)*
+- **Also documented:** in the band config table, Enable/Disable entries accept **E** and **D** typed directly, and the arrows change the value rather than moving between columns — step onto a numeric column first to move across. That is the radio's own behaviour. *(Stan Dye KC7XE)*
+
+**Not a bug:** auto-answer is off after every restart by design — a radio that started transmitting the moment the Tab5 powered on might be feeding an untuned antenna. WSJT-X arms transmit per startup for the same reason. *(asked by Brian WA6JFK, answered by Roy KI0ER)*
+
+## Previous Releases
+
+### v1.8.5 — 2026-08-17
 
 **Mostly the things people had already been told were fixed, plus two found on the bench.**
 
@@ -22,8 +36,6 @@ Six of these were described as done in replies sent before v1.8.4 shipped, so an
 - **The red transmitting banner no longer covers the text under it.** The panel was 99 pixels tall and holding 406 pixels of content with nothing to contain it. It can now shrink and scroll, and the status line no longer wraps onto three lines. *(Gyula HA3HZ)*
 
 **Known limitation, unchanged:** in Radio menus, values longer than two digits and values inside a table still do not change with the ◀ ▶ keys — Max PA Voltage, the band-config columns, CAT timeout, TCXO and the Virtual U3S fields. They need some key other than left/right, and the question has gone to QRP Labs rather than a guess going into a release. Everything else in the menus edits normally.
-
-## Previous Releases
 
 ### v1.8.4 — 2026-08-16
 
