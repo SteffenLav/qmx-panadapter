@@ -88,6 +88,11 @@ static uint64_t s_diag_poll_hb_us = 0;  // last diag poll-heartbeat timestamp
 static uint32_t s_last_freq_hz = 0;
 static char s_last_mode_digit = 0;  // Phase 5.10: cached Kenwood mode digit
 static int  s_cw_offset_hz = 700;   // CW LO offset read from QMX at connect, default 700
+// Which VFO the radio RECEIVES on, from "FR;": 0 = VFO A, 1 = VFO B, 2 = Split.
+// -1 = not asked yet / no answer. We poll and write FA, i.e. VFO A ONLY, so a radio
+// receiving on B makes every frequency the Tab5 sets invisible and inaudible while
+// band select still appears to work - see ensure_rx_vfo_a(). (Markus DL8MBY.)
+static int  s_rx_vfo_mode = -1;
 // Does the radio report a permanently fitted GPS (QMX+ Internal)? Read once at
 // link-up from its GPS & Ser. Ports menu. False until asked, and false on any
 // firmware that does not report the item - the safe direction (#174).
@@ -649,6 +654,15 @@ static void process_cat_message(const char *msg, size_t len)
     // are transmitting 500 Hz up while actually sitting on top of the DX.
     if (len >= 3 && msg[0] == 'S' && msg[1] == 'P') {
         s_split_readback = (msg[2] == '1') ? 1 : 0;
+        return;
+    }
+    // FR response: "FRn;" - which VFO the radio RECEIVES on. 0 = A, 1 = B,
+    // 2 = Split (the QMX's own three-state VFO Mode, per its CAT manual: "0, 1, 2
+    // correspond to VFO A, VFO B or Split respectively"). Parsed because we can
+    // only tell the operator their radio was on the wrong one if we know what it
+    // was. Deliberately NOT confused with FA: that test is msg[1] == 'A'.
+    if (len >= 3 && msg[0] == 'F' && msg[1] == 'R' && msg[2] >= '0' && msg[2] <= '2') {
+        s_rx_vfo_mode = msg[2] - '0';
         return;
     }
     // RG response: "RGnnn;" - RF gain in dB (manual's own example: "RG; returns
@@ -1604,6 +1618,65 @@ static void link_task(void *arg)
                     s_rx_len = 0;
                 } else {
                     ESP_LOGW(TAG, "Failed to query CW offset: 0x%x", cerr);
+                }
+            }
+
+            /* ⭐ MAKE SURE THE RADIO RECEIVES ON VFO A, because everything this
+             * firmware does assumes it. We poll "FA;" and write "FA<freq>;", both of
+             * which are VFO A only.
+             *
+             * Markus DL8MBY, first day with a Tab5 and a QMX+: his radio was on
+             * VFO B, and the failure is a nasty one because it is PARTIAL. Band
+             * select still worked and the Tab5's display looked right, so CAT was
+             * plainly connected - but the frequency never changed on the radio and
+             * the receive frequency did not move, because we were writing a VFO he
+             * was not listening to. He worked it out himself and then had to ask
+             * whether it was his own misconfiguration. It was not.
+             *
+             * "As the VFO indicator is very small in the QMX+ display this could be
+             * easy overseen especially with my old eyes." Quite - and nothing in the
+             * Tab5 said a word about it.
+             *
+             * FR selects the radio's three-state VFO Mode (its CAT manual: "0, 1, 2
+             * correspond to VFO A, VFO B or Split respectively"). We ASK first so we
+             * can tell the operator what it was, then set A only if it needs it.
+             *
+             * ⚠ FR only - deliberately NOT FT or SP. An operator running their own
+             * split receives on A and transmits on B, which works perfectly well
+             * with the panadapter; clearing FT/SP would break that for no reason.
+             * The same restraint the CW-offset maintainer already observes: do not
+             * undo a split we did not engage. */
+            {
+                s_rx_vfo_mode = -1;
+                cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"FR;", 3, 200);
+                for (int wi = 0; wi < 10 && s_rx_vfo_mode < 0; wi++) {
+                    vTaskDelay(pdMS_TO_TICKS(20));
+                }
+                if (s_rx_vfo_mode < 0) {
+                    ESP_LOGW(TAG, "VFO mode: no answer to FR; - leaving the radio alone");
+                } else if (s_rx_vfo_mode == 0) {
+                    ESP_LOGI(TAG, "VFO mode: receiving on VFO A, as this firmware assumes");
+                } else {
+                    const char *was = (s_rx_vfo_mode == 1) ? "VFO B" : "Split";
+                    ESP_LOGW(TAG, "VFO mode: radio was receiving on %s - the Tab5 only "
+                                  "reads and writes VFO A, so nothing it did would have "
+                                  "been audible. Switching to VFO A.", was);
+                    cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"FR0;", 4, 200);
+                    vTaskDelay(pdMS_TO_TICKS(60));
+                    s_rx_vfo_mode = -1;
+                    cdc_acm_host_data_tx_blocking(s_cdc_dev, (const uint8_t *)"FR;", 3, 200);
+                    for (int wi = 0; wi < 10 && s_rx_vfo_mode < 0; wi++) {
+                        vTaskDelay(pdMS_TO_TICKS(20));
+                    }
+                    /* Read back rather than trust the write - the Q9/IQ-mode lesson:
+                     * a successful CDC write only proves the bytes arrived. */
+                    if (s_rx_vfo_mode == 0) {
+                        ESP_LOGI(TAG, "VFO mode: confirmed on VFO A now");
+                    } else {
+                        ESP_LOGW(TAG, "VFO mode: still reads %d after FR0; - the radio "
+                                      "is not taking it", s_rx_vfo_mode);
+                    }
+                    ui_set_vfo_switched_notice(was);
                 }
             }
 

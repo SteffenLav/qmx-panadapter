@@ -7455,6 +7455,22 @@ static void toast_hide_cb(lv_timer_t *t)
     s_toast_timer = NULL;   // one-shot timer auto-deletes after firing
 }
 
+/* We changed a setting on the operator's radio, so we say so. Called from the CAT
+ * link task when the QMX was found receiving on VFO B or Split - see the FR block in
+ * cat.c. Silently moving someone's VFO would just produce a different confused
+ * report; this one names what it was and what it is now.
+ *
+ * ui_toast() takes the display lock itself (v0.19.4), so this is safe off the LVGL
+ * thread, which is where the CAT link task lives. */
+void ui_set_vfo_switched_notice(const char *was)
+{
+    char msg[96];
+    snprintf(msg, sizeof(msg),
+             "Radio was receiving on %s - switched to VFO A, which the panadapter uses",
+             was ? was : "another VFO");
+    ui_toast(msg);
+}
+
 void ui_toast(const char *msg)
 {
     // Unlike every other ui_toast() call site (touch/button handlers already

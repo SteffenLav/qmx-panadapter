@@ -29,6 +29,11 @@ void ui_push_waterfall_row(const uint8_t *rgb565_row);  // Phase 5
 // from the LVGL/UI thread. Used for "Work in progress…." on shelved controls.
 void ui_toast(const char *msg);
 
+// The QMX was found receiving on VFO B or Split and has been switched to VFO A
+// (the panadapter reads and writes VFO A only). Tells the operator, because we
+// changed their radio. Safe off the LVGL thread.
+void ui_set_vfo_switched_notice(const char *was);
+
 // Phase 5.4: runtime-set spectrum display range (autoscale)
 void ui_set_db_range(float db_min, float db_max);
 // The QMX's achievable CW filter centres: 500-950 Hz in 25 Hz steps, the union of
