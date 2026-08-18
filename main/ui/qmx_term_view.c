@@ -23,6 +23,24 @@ LV_FONT_DECLARE(qmx_mono_25);
 #define ROW_H       27
 #define GRID_W      (ANSI_COLS * CELL_W)   /* 1200 */
 #define GRID_H      (ANSI_ROWS * ROW_H)    /* 648  */
+
+/* The keyboard covers the bottom of the grid, so tall menus are typed BLIND
+ * without this. Michael KZ4LY, after using it to add a message: "when editing
+ * messages after message 9 you are typing blind, because it's behind the
+ * keyboard. I don't suppose the keyboard could be transparent?"
+ *
+ * Transparency was the obvious answer and is the worse one - two layers of text
+ * over each other is readable only if you already know what it says. Instead the
+ * grid SCROLLS so the row the radio's cursor is on stays above the keyboard. The
+ * grid clips, so rows that slide up vanish under the header rather than over it.
+ *
+ * KB_VIS_H is how much of the grid is left uncovered: the keyboard is 280 px at
+ * the bottom of a 720 px screen, so it starts at 440, and the grid starts at
+ * HEADER_H + 4. */
+#define KB_H        280
+#define KB_VIS_H    (LV_VER_RES - KB_H - (HEADER_H + 4))
+static int s_scroll_px;      /* >0 = grid scrolled up by this much */
+static lv_obj_t *s_kb;       /* the on-screen QWERTY; NULL until first built */
 #define HEADER_H    62
 
 /* Header key row: NINE identical buttons (4 arrows, Enter, Back, BS, keyboard
@@ -176,6 +194,27 @@ static void repaint(void)
     bool cur_vis = t->cursor_visible;
     qmx_term_unlock_screen();
 
+    /* Keep the cursor row clear of the keyboard (see KB_VIS_H). Only scrolls while
+     * the keyboard is actually up; with it away the grid sits at its natural
+     * position, so nothing moves for anyone who never opens it. */
+    {
+        int want = 0;
+        bool kb_up = s_kb && !lv_obj_has_flag(s_kb, LV_OBJ_FLAG_HIDDEN);
+        if (kb_up && cur_r >= 0) {
+            int bottom = (cur_r + 1) * ROW_H;          /* px of the cursor row's foot */
+            if (bottom > KB_VIS_H) want = bottom - KB_VIS_H;
+            int max_scroll = GRID_H - KB_VIS_H;
+            if (want > max_scroll) want = max_scroll;
+            if (want < 0) want = 0;
+        }
+        if (want != s_scroll_px) {
+            s_scroll_px = want;
+            for (int r = 0; r < ANSI_ROWS; r++) {
+                if (s_rows[r]) lv_obj_set_pos(s_rows[r], 0, r * ROW_H - s_scroll_px);
+            }
+        }
+    }
+
     /* ⭐ DRAW THE CURSOR. The model has tracked cur_r/cur_c/cursor_visible since
      * the first version and the renderer ignored all three, so in any field you
      * type into - Messages especially - there was no way to see where you were.
@@ -191,7 +230,7 @@ static void repaint(void)
             lv_obj_clear_flag(s_cursor, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_clear_flag(s_cursor, LV_OBJ_FLAG_SCROLLABLE);
         }
-        lv_obj_set_pos(s_cursor, cur_c * CELL_W, cur_r * ROW_H);
+        lv_obj_set_pos(s_cursor, cur_c * CELL_W, cur_r * ROW_H - s_scroll_px);
         lv_obj_clear_flag(s_cursor, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_cursor);   // above the reverse-video blocks
     } else if (s_cursor) {
@@ -216,7 +255,7 @@ static void repaint(void)
             lv_obj_set_style_text_color(lbl, lv_color_hex(0x000000), 0);
             lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 0, 0);
         }
-        lv_obj_set_pos(s_rev[i], runs[i].c * CELL_W, runs[i].r * ROW_H);
+        lv_obj_set_pos(s_rev[i], runs[i].c * CELL_W, runs[i].r * ROW_H - s_scroll_px);
         lv_obj_set_size(s_rev[i], runs[i].len * CELL_W, ROW_H);
         lv_obj_clear_flag(s_rev[i], LV_OBJ_FLAG_HIDDEN);
 
@@ -323,7 +362,8 @@ static void poll_cb(lv_timer_t *t)
  * no local copy of the text to edit, and inventing one would immediately disagree
  * with what the radio shows.
  */
-static lv_obj_t *s_kb;          /* NULL until first shown */
+/* s_kb is declared with the grid geometry above - the paint function needs it to
+ * know whether the keyboard is covering the lower rows. */
 static lv_obj_t *s_kb_btn;      /* the header toggle, so its look can follow */
 
 static void kb_set_shown(bool shown);
@@ -527,7 +567,7 @@ static void build(void)
         lv_obj_set_style_text_color(s_rows[r], lv_color_hex(0xD8D8D8), 0);
         lv_label_set_long_mode(s_rows[r], LV_LABEL_LONG_CLIP);
         lv_obj_set_width(s_rows[r], GRID_W);
-        lv_obj_set_pos(s_rows[r], 0, r * ROW_H);
+        lv_obj_set_pos(s_rows[r], 0, r * ROW_H - s_scroll_px);
         lv_label_set_text(s_rows[r], "");
     }
 
@@ -567,7 +607,7 @@ static void build(void)
     }
     lv_obj_add_style(s_kb, &style_kb_btn, LV_PART_ITEMS);
     ui_theme_style_keyboard(s_kb);
-    lv_obj_set_size(s_kb, LV_PCT(100), 280);
+    lv_obj_set_size(s_kb, LV_PCT(100), KB_H);   /* KB_VIS_H is derived from this */
     lv_obj_align(s_kb, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_text_font(s_kb, &lv_font_montserrat_28, 0);
 
@@ -614,8 +654,9 @@ static void build(void)
         "      -> GPS & Ser. ports\n"
         "        -> USB serial ports\n"
         "          -> 2\n\n"
-        "You only have to do this once - it survives a power cycle. Then reopen\n"
-        "this screen.\n\n"
+        "Then POWER-CYCLE the QMX - the radio only offers the new port after a\n"
+        "restart. Then reopen this screen.\n\n"
+        "You only have to do this once; the setting itself survives a power cycle.\n\n"
         "The panadapter keeps working while you are in the radio's menus, because\n"
         "they run on different ports.");
     lv_obj_set_style_text_font(s_help, &lv_font_montserrat_24, 0);

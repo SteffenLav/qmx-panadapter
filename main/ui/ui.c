@@ -124,6 +124,32 @@ int ui_get_if_bin_shift(int n_bins)
     return sign * shift;
 }
 
+/* Hz between the DRAWN centre of the spectrum and the true dial frequency.
+ *
+ * The spectrum and waterfall are rotated by a WHOLE number of FFT bins so the VFO
+ * lands mid-screen, but the true IF offset almost never falls on a bin boundary.
+ * At DSP_FFT_SIZE=1024 over 48 kHz a bin is 46.88 Hz, so that rounding alone can
+ * misplace everything by up to +/-23 Hz - and it varies with the CW offset, which
+ * is why Roy KI0ER's measurements looked non-linear in the value he had set.
+ *
+ * Worked example, his exact case (CW offset 650, trim 0):
+ *     total = 12000 + 650                        = 12650 Hz
+ *     shift = round(12650 * 1024 / 48000) = 270 bins = 12656 Hz
+ *     residual = 12650 - 12656                   = -6 Hz
+ * so a signal on the dial frequency is drawn 6 Hz left of the marker unless this
+ * is compensated. With the old -60 trim the same sum gave +40 Hz, which is exactly
+ * what he measured on the air.
+ *
+ * Sign convention: the drawn centre corresponds to absolute (dial - residual), so
+ * converting a drawn position to a frequency SUBTRACTS this, and drawing something
+ * that belongs at the dial ADDS it. */
+int ui_get_if_residual_hz(void)
+{
+    int total = ui_get_if_offset_hz();
+    int shift = ui_get_if_bin_shift(DSP_FFT_SIZE);
+    return total - (int)(((int64_t)shift * 48000) / DSP_FFT_SIZE);
+}
+
 void ui_set_cw_cal_hz(int16_t hz)
 {
     if (hz < -200) hz = -200;
@@ -4709,6 +4735,25 @@ static uint64_t s_2f_down_us        = 0;      // two-finger session start (0 = n
 static int      s_2f_dist0          = 0;      // finger spread at session start
 static int      s_2f_mid0           = 0;      // midpoint at session start
 static bool     s_2f_moved          = false;  // pinch/swipe, not a tap
+/* Set whenever two fingers are down, and for a short while after the LAST of them
+ * lifts. Michael KZ4LY: the two-finger blank worked "fewer than one try in ten.
+ * Mostly other things steal the tap; usually the teal frequency slider line."
+ *
+ * Two fingers essentially never leave the glass on the same poll, so a normal lift
+ * goes 2 -> 1 -> 0, and that intermediate single finger is indistinguishable from a
+ * deliberate one-finger touch: it reached the pan/hold-to-tune path here AND LVGL's
+ * own handler, which is what drew the tune cursor he was seeing. This suppresses
+ * both for MULTI_LOCKOUT_MS after the gesture. */
+#define MULTI_LOCKOUT_MS 400
+static uint64_t s_multi_lockout_us  = 0;
+
+/* True while a two-finger gesture is in progress or has just ended - see
+ * s_multi_lockout_us. Used to ignore the single finger that is left behind. */
+static bool multitouch_lockout_active(void)
+{
+    return s_multi_lockout_us != 0 && esp_timer_get_time() < (int64_t)s_multi_lockout_us;
+}
+
 static uint64_t s_2f_last_tap_us    = 0;      // end time of the previous two-finger tap
 
 static void display_sleep_enter(void)
@@ -4850,9 +4895,14 @@ static void pinch_poll_cb(lv_timer_t *t)
                 int dm = mid - s_2f_mid0;  if (dm < 0) dm = -dm;
                 if (dd > 30 || dm > 30) s_2f_moved = true;
             }
-        } else if (npts == 0 && s_2f_down_us != 0) {
+            s_multi_lockout_us = now_us + MULTI_LOCKOUT_MS * 1000;
+        } else if (npts < 2 && s_2f_down_us != 0) {
+            /* npts < 2, not == 0: the fingers lift one at a time, so waiting for
+             * zero measured the tap as lasting until the SECOND finger left and
+             * blew the 300 ms budget almost every time. */
             uint64_t dur_us = now_us - s_2f_down_us;
             s_2f_down_us = 0;
+            s_multi_lockout_us = now_us + MULTI_LOCKOUT_MS * 1000;
             if (dur_us < 300000 && !s_2f_moved) {
                 if (s_2f_last_tap_us != 0 && now_us - s_2f_last_tap_us < 600000) {
                     s_2f_last_tap_us = 0;
@@ -4915,6 +4965,10 @@ static void pinch_poll_cb(lv_timer_t *t)
     int lx0 = (int)s_tp->data.coords[0].y;
 
     // One finger: horizontal swipe = pan (stroll), but only if moved past threshold.
+    if (npts == 1 && multitouch_lockout_active()) {
+        /* The straggler from a two-finger gesture - not a new one-finger touch. */
+        return;
+    }
     if (npts == 1) {
         if (!s_stroll_active) {
             // Initialize pan start position on first call.
@@ -5955,7 +6009,11 @@ void ui_push_spectrum(const float *bins, int n_bins)
 
         int32_t pan_hz_vfo = (int32_t)((int64_t)s_pan_offset_bins * 48000 / DSP_FFT_SIZE);
         int32_t span_hz_vfo = (int32_t)(48000.0f / s_zoom_factor);
-        int cx = (int)((int64_t)(0 - pan_hz_vfo) * DISPLAY_H_RES / span_hz_vfo) + DISPLAY_H_RES / 2;
+        // The dial does not sit exactly at the drawn centre - the spectrum is
+        // rotated by a whole number of bins, so it sits at (dial - residual).
+        // Drawing the marker at +residual puts it on the signal rather than up to
+        // ~23 Hz beside it, and keeps it agreeing with where a tap now tunes.
+        int cx = (int)((int64_t)(ui_get_if_residual_hz() - pan_hz_vfo) * DISPLAY_H_RES / span_hz_vfo) + DISPLAY_H_RES / 2;
         if (cx >= 0 && cx < DISPLAY_H_RES) {
             for (int y = 0; y < SPECTRUM_H; y++) {
                 px[y * DISPLAY_H_RES + cx] = center_color;
@@ -6393,6 +6451,12 @@ static void touch_event_cb(lv_event_t *e)
     lv_indev_t *indev = lv_event_get_indev(e);
     if (!indev) return;
 
+    /* Ignore the finger left behind by a two-finger gesture. LVGL sees only one
+     * touch point, so without this the straggler from a two-finger blank draws the
+     * tune cursor and can retune - which is exactly what Michael KZ4LY reported
+     * stealing his taps ("usually the teal frequency slider line"). */
+    if (multitouch_lockout_active()) return;
+
     lv_point_t p;
     lv_indev_get_point(indev, &p);
 
@@ -6653,7 +6717,13 @@ static void touch_event_cb(lv_event_t *e)
             // Snap the absolute target frequency to the grid (e.g. ...200,
             // 300, 400 Hz), not the touch offset — otherwise the grid is
             // shifted by the VFO's own offset from a snap multiple.
-            int64_t target_hz = (int64_t)s_last_qmx_freq_hz + offset_hz;
+            // The drawn centre is NOT the dial frequency: the spectrum is rotated
+            // by a whole number of bins, so it sits at (dial - residual). Without
+            // this term a tap lands up to ~23 Hz off in CW - which is Roy KI0ER's
+            // report, where tuning by tapping put him off frequency and the far
+            // station heard him shifted. See ui_get_if_residual_hz().
+            int64_t target_hz = (int64_t)s_last_qmx_freq_hz + offset_hz
+                                - ui_get_if_residual_hz();
             int64_t rounded_target = ((target_hz + (target_hz >= 0 ? snap/2 : -snap/2)) / snap) * snap;
             int32_t rounded = (int32_t)(rounded_target - (int64_t)s_last_qmx_freq_hz);
             int32_t snapped_dx = (int32_t)((int64_t)(rounded - pan_hz) * (int)(DISPLAY_H_RES * s_zoom_factor) / UAC_SAMPLE_RATE);

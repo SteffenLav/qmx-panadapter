@@ -112,7 +112,13 @@ static const char *TAG = "settings";
 #define DEF_IQ_ENABLED  (true)
 #define DEF_FLAT_MODE   (true)
 #define DEF_CW_PITCH    (700)
-#define DEF_CW_CAL      (-60)
+/* Per-unit CW display trim. Was -60, which came in with the commit that first
+ * read the CW offset from the radio over CAT - i.e. it was calibrated BEFORE
+ * that reading existed, and then never revisited. It is now measurably wrong:
+ * with it, a signal on Roy KI0ER's 7.060.000 shows at 7.060.040 (see the CW
+ * display-offset quirk in CLAUDE.md, which does the arithmetic). Zero is the
+ * honest default - the slider stays, for genuine per-unit trimming. */
+#define DEF_CW_CAL      (0)
 #define DEF_ZOOM        (1.0f)
 #define DEF_COLORMAP    (0)  // Thermal
 #define DEF_BRIGHTNESS  (100)

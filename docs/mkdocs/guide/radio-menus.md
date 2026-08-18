@@ -99,6 +99,17 @@ browser both your Backspace and Delete keys do this.
     Useful on a Tab5 without the snap-on keyboard, which otherwise has no way to
     type a value at all. *(Randy N4OPI, Michael KZ4LY)*
 
+!!! tip "Band config tables: E and D change a setting, and the arrows do not move you"
+    In the **band config** table the Enable/Disable entries accept either **◀ ▶**
+    *or* the letters **E** and **D** — type them straight in from the on-screen
+    keyboard. Because those fields use the arrows to change the *value*, the arrows
+    will not move you to the next column while you are sitting on one: step onto a
+    numeric column first, then move across.
+
+    That is the radio's own behaviour, not a Tab5 limitation, and it explains
+    something that otherwise reads as the arrows being broken in tables.
+    *(Stan Dye KC7XE.)*
+
 !!! tip "Longer values are backspace-and-retype, not arrow-adjust"
     Short values — one or two digits — change with **◀ ▶**. Anything longer, and
     anything inside a table, does not: on those the arrows do nothing at all, and in

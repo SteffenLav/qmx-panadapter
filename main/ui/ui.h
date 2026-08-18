@@ -62,6 +62,12 @@ int   ui_get_pan_offset_bins(void);     // current pan offset in FFT bins
 void  ui_set_zoom(float zoom, int pan_bins); // set zoom+pan, persists zoom to NVS
 int  ui_get_if_bin_shift(int n_bins);  // Total bin shift = (IF_OFFSET_HZ + if_cal_hz) -> bins
 int  ui_get_if_offset_hz(void);        // Baseband Hz the dial maps to (12 kHz, +CW LO offset+trim in CW)
+int  ui_get_if_residual_hz(void);      // Hz between the DRAWN centre and the dial:
+                                       // the spectrum is rotated a WHOLE number of
+                                       // 46.88 Hz bins, so the true offset lands
+                                       // between them. Drawn->freq subtracts it;
+                                       // dial->pixel adds it. Was worth up to 23 Hz
+                                       // of CW tuning error (Roy KI0ER).
 
 // Passband edges in Hz, relative to VFO/dial (mode + CAT-width dependent).
 void ui_get_passband_edges_hz(int32_t *out_low, int32_t *out_high);
