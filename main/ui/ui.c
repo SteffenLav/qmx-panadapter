@@ -1956,6 +1956,7 @@ static void apply_sim_mode_lock(bool ft4);   // defined below, used by ui_refres
 static void drawer_preset_normal_cb(lv_event_t *e);
 static void drawer_preset_dx_cb(lv_event_t *e);
 static void drawer_preset_strong_cb(lv_event_t *e);
+static void drawer_preset_noise_cb(lv_event_t *e);
 static void drawer_wifi_btn_cb(lv_event_t *e);
 static void drawer_identity_btn_cb(lv_event_t *e);
 static void ui_show_memories(void);
@@ -8239,24 +8240,31 @@ static void drawer_build(void)
         lv_obj_set_style_text_font(presets_hdr, &lv_font_montserrat_28, 0);
         lv_obj_align(presets_hdr, LV_ALIGN_TOP_LEFT, 0, 0);
 
-        const char *preset_names[3] = { "HF Normal", "HF DX", "Strong Sig." };
-        lv_event_cb_t preset_cbs[3] = {
+        // FOUR now, not three - "Noise" was added for #149. The width divisor and
+        // the gap count must move together with the array, or the last button
+        // overhangs the drawer.
+        const char *preset_names[4] = { "HF Normal", "HF DX", "Strong", "Noise" };
+        lv_event_cb_t preset_cbs[4] = {
             drawer_preset_normal_cb,
             drawer_preset_dx_cb,
             drawer_preset_strong_cb,
+            drawer_preset_noise_cb,
         };
+        const int n_presets = 4;
         const int row_w   = DRAWER_W - 32;   // inner usable width
         const int gap     = 8;
-        const int btn_w   = (row_w - 2 * gap) / 3;
+        const int btn_w   = (row_w - (n_presets - 1) * gap) / n_presets;
         const int btn_h   = 56;
-        for (int i = 0; i < 3; i++) {
+        for (int i = 0; i < n_presets; i++) {
             lv_obj_t *btn = lv_btn_create(sec);
             lv_obj_set_size(btn, btn_w, btn_h);
             lv_obj_align(btn, LV_ALIGN_TOP_LEFT, i * (btn_w + gap), 36);
             lv_obj_add_event_cb(btn, preset_cbs[i], LV_EVENT_CLICKED, NULL);
             lv_obj_t *lbl = lv_label_create(btn);
             lv_label_set_text(lbl, preset_names[i]);
-            lv_obj_set_style_text_font(lbl, &lv_font_montserrat_28, 0);
+            // 4 across is tighter than 3 was, so the label steps down a size or
+            // "Strong Sig." no longer fits inside its button.
+            lv_obj_set_style_text_font(lbl, &lv_font_montserrat_22, 0);
             lv_obj_center(lbl);
         }
         y += 108;
@@ -9189,6 +9197,18 @@ static void drawer_slider_cwaudio_vol_cb(lv_event_t *e)
 static void drawer_preset_normal_cb(lv_event_t *e)  { (void)e; drawer_apply_preset(-130, -30, 0.40f); }
 static void drawer_preset_dx_cb(lv_event_t *e)      { (void)e; drawer_apply_preset(-130, -50, 0.60f); }
 static void drawer_preset_strong_cb(lv_event_t *e)  { (void)e; drawer_apply_preset(-110, -20, 0.20f); }
+// "Noise floor" (#149, Samuel W7STF: "HF Normal and HF DX barely differ; I want a
+// preset that shows the noise floor"). He was right on both counts. Normal and DX
+// share the SAME floor of -130 and differ only in ceiling and smoothing, so on a
+// quiet band they look almost identical. And -130 is roughly where this
+// receiver's own noise sits (see DSP_DB_CALIBRATION_OFFSET), so the noise is
+// clipped against the bottom of the scale instead of being drawn.
+//
+// -150 is not a guess: it is what the BROWSER already uses (WS_DB_MIN in
+// webserver_ws.c), chosen when measurement showed a quarter of the band pinned at
+// zero on a quiet 20 m with -130. So this preset gives the Tab5 the same look he
+// can already get in the browser, which is exactly what he asked for.
+static void drawer_preset_noise_cb(lv_event_t *e)   { (void)e; drawer_apply_preset(-150, -30, 0.40f); }
 static void drawer_wifi_btn_cb(lv_event_t *e)       { (void)e; drawer_close(); wifi_config_modal_show(); }
 static void drawer_identity_btn_cb(lv_event_t *e)   { (void)e; identity_config_modal_show(); }
 
