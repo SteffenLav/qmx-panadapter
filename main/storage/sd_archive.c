@@ -44,6 +44,12 @@ static const char *TAG = "sd_arch";
 #define SD_LOG_MAX_BYTES (5 * 1024 * 1024)   // rotate qmx-log.txt at 5 MB
 #define PROBE_MS          10000               // mount-probe cadence when no card
 #define WORK_MS           3000                // mirror cadence while mounted
+// Slow diag-only cadence used while WiFi is on (#153). 30 s rather than 3, and the
+// file is opened, appended, fsync'd and CLOSED each time instead of being held
+// open - so the exposure to the SD/WiFi contention this project has fought for
+// months is roughly a tenth of the old continuous mode, and there is no held-open
+// handle for a card pull or a crash to damage.
+#define SLOW_LOG_MS       30000
 #define DIAG_CHUNK        4096                // diag flush copy buffer
 
 static volatile bool s_mounted      = false;
@@ -237,6 +243,8 @@ static bool mirror_diag(void)
 
 // True once we have deliberately stopped touching the card for this session.
 static bool s_parked = false;
+static int64_t s_slow_last_us = 0;   // #153 slow diag mirror pacing
+static int     s_slow_fail    = 0;   // consecutive slow-mirror failures
 
 // Cleanly stop mirroring and release the card, leaving the completed backup on
 // it. Used when WiFi is (or is becoming) active: live mirroring provably cannot
@@ -249,6 +257,37 @@ static bool s_parked = false;
 // corrupted, which is the most likely origin of the garbage entries seen on the
 // operator's card. fsync before fclose is mandatory (FatFs only commits the data
 // + directory entry on f_sync/f_close).
+// Append whatever the diag ring has produced since the last call, opening and
+// closing the file around the write.
+//
+// ⛔ WHY THIS EXISTS (#153). Parking used to stop SD logging entirely once WiFi
+// was up, on the reasoning that "the full log is available over the network at
+// /api/log". That reasoning fails in exactly the case the log is for: after a
+// crash the RAM ring is GONE, and the flash copy is a rolling ~11-minute window.
+// Michael KZ4LY sent "the full log from the microSD" to explain a reboot and it
+// was 17 boot headers each ending at uptime ~4.8 s - a log that stops before the
+// crash every single time, and which LOOKS like evidence.
+//
+// So the card keeps getting the log, just slowly. Open/append/fsync/close per
+// burst is deliberately not the held-open handle the continuous path uses: it
+// costs a little more per write and removes the corruption window entirely.
+static bool mirror_diag_slow(void)
+{
+    static char buf[DIAG_CHUNK];
+    uint64_t next = s_diag_cursor;
+    size_t got = diag_log_read_from(s_diag_cursor, buf, sizeof(buf), &next);
+    if (got == 0) return true;              // nothing new; not a failure
+
+    FILE *f = fopen(SD_LOG_PATH, "ab");
+    if (!f) { sd_fail_diag("slowopen", errno); return false; }
+    bool ok = (fwrite(buf, 1, got, f) == got);
+    if (ok) { fflush(f); fsync(fileno(f)); }
+    else    { sd_fail_diag("slowwrite", errno); }
+    fclose(f);
+    if (ok) { s_diag_cursor = next; s_log_bytes += got; }
+    return ok;
+}
+
 static void park_snapshot(void)
 {
     // Close the diag log but deliberately KEEP THE CARD MOUNTED.
@@ -273,8 +312,9 @@ static void park_snapshot(void)
     }
     s_parked = true;                        // stop background mirroring only
     ui_set_sd_state(UI_SD_SNAPSHOT_ONLY);   // yellow: card usable, not live-mirroring
-    ESP_LOGW(TAG, "backup snapshot complete - background mirroring off while WiFi is "
-                  "on; card stays mounted for Save-offline / web file browser");
+    ESP_LOGW(TAG, "backup snapshot complete - file mirroring off while WiFi is on; "
+                  "diag log continues every %d s (#153) and the card stays mounted "
+                  "for Save-offline / web file browser", SLOW_LOG_MS / 1000);
 }
 
 static void unmount(void)
@@ -417,6 +457,35 @@ static void sd_archive_task(void *arg)
                 ESP_LOGW(TAG, "WiFi now off - card still mounted and usable, but "
                               "background mirroring stays off until reboot");
             }
+            // ⭐ #153: keep the DIAG LOG going, slowly, so the card can still
+            // contain a crash. Parking used to stop it dead, which made every SD
+            // log 17 boot headers ending at ~4.8 s - unable to hold the thing it
+            // was sent to explain. Only while a card is actually mounted; the
+            // no-card park below must stay silent.
+            if (s_mounted) {
+                int64_t now_us = esp_timer_get_time();
+                if (now_us - s_slow_last_us >= (int64_t)SLOW_LOG_MS * 1000) {
+                    s_slow_last_us = now_us;
+                    if (xSemaphoreTake(s_sd_mutex, pdMS_TO_TICKS(2000)) == pdTRUE) {
+                        // ONE call - an earlier version called it twice in the
+                        // recovery branch, which would have written the same
+                        // chunk to the card a second time.
+                        bool ok = mirror_diag_slow();
+                        if (!ok) {
+                            if (++s_slow_fail >= 3) {
+                                ESP_LOGW(TAG, "slow diag mirror failed %d times - card gone?",
+                                         s_slow_fail);
+                                unmount();
+                            }
+                        } else if (s_slow_fail) {
+                            ESP_LOGI(TAG, "slow diag mirror recovered after %d failure(s)",
+                                     s_slow_fail);
+                            s_slow_fail = 0;
+                        }
+                        xSemaphoreGive(s_sd_mutex);
+                    }
+                }
+            }
             vTaskDelay(pdMS_TO_TICKS(PROBE_MS));
             continue;
         }
@@ -529,6 +598,7 @@ static void sd_archive_task(void *arg)
             xSemaphoreGive(s_sd_mutex);
             continue;
         }
+
 
         xSemaphoreGive(s_sd_mutex);
 
