@@ -1415,6 +1415,9 @@ static void ft8_decode_task(void *arg)
 static void ft8_task(void *arg)
 {
     (void)arg;
+    // Already set by ft8_self_test() BEFORE xTaskCreate - see the comment there.
+    // Kept (idempotent) so the flag is still correct if this task is ever
+    // started by some other route.
     s_ft8_task_alive = true;
 
     ft8_status_set("Waiting for QMX...");
@@ -2234,11 +2237,40 @@ void ft8_self_test(void)
         ESP_LOGW(TAG, "ft8_self_test: previous decode task still exiting; not spawning yet");
         return;
     }
+    // ⛔ CLAIM THE SLOT BEFORE CREATING THE TASK, NOT INSIDE IT (#199).
+    //
+    // s_ft8_task_alive used to be set as ft8_task's first statement, so the
+    // flag meant "an ft8_task has begun RUNNING" - and the guard above, and the
+    // 1 Hz respawn watchdog in ft8_screen_view.c, both need it to mean "an
+    // ft8_task EXISTS". Between those two readings sits the whole scheduling
+    // delay, and ft8_task is created at tskIDLE_PRIORITY + 1: the LOWEST
+    // priority on the board. On a busy core - capture, fft_task (4), taskLVGL,
+    // the feeds (2) and httpd (5) all above it - taking more than a second to
+    // get its first slice is ordinary, not exceptional. The same starvation is
+    // measured directly in ft8_screen.c's record_decode comment.
+    //
+    // So the FT8-entry path spawned the task, the watchdog looked one second
+    // later, saw a flag still false, logged "no ft8_task alive - respawning"
+    // and spawned a SECOND one. Both then built the monitor pool - four
+    // "Block size" lines where one build emits two - and the second build
+    // double-freed the shared FFT scratch: `assert failed: tlsf_free ... block
+    // already marked as free`, ft8_task -> build_monitor_pool -> free(). That
+    // is almost certainly the unreproduced tlsf_free double-free reboot open
+    // since v1.3.0.
+    //
+    // Setting the flag here closes the window by construction rather than by
+    // timing: a grace period in the watchdog would only have made the race
+    // rarer, and this file's history is emphatic that timing changes the odds
+    // of a race, not the race.
+    s_ft8_task_alive = true;
     BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
         ft8_task, "ft8", 65536, NULL,
         tskIDLE_PRIORITY + 1, NULL, 1,
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (rc != pdPASS) {
+        // Nothing will ever clear it, so release the claim here or FT8 is dead
+        // for the rest of the session with the watchdog refusing to retry.
+        s_ft8_task_alive = false;
         ESP_LOGE(TAG, "failed to spawn ft8_task (rc=%d)", (int)rc);
     }
 }
