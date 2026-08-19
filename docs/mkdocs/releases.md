@@ -4,7 +4,25 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.8.6** — 2026-08-18
+**v1.8.7** — 2026-08-19
+
+**The browser panadapter stops freezing, and your logs can go to your own Cloudlog.**
+
+- **The web panadapter no longer hangs for seconds at a time.** Reported as getting worse with every release, and it was. Measured over 9.6 hours, the browser session was being torn down **545 times** — roughly every 14 seconds in bursts — each costing about **2.2 seconds** of frozen display while the browser reconnected. Between the drops the stream ran at full speed, which is why it looked like stalling rather than slowness. The cause is a partial WebSocket write being reported as a complete one: a half-sent frame corrupted the stream, and the browser hung up. The background feeds only made it more likely, which is exactly why it worsened as more feeds were added. *(Samuel W7STF)*
+- **Upload to your own Cloudlog or Wavelog.** The fourth logbook, and the only one you host yourself. Plain `http://` is allowed when the server is on the same network as the Tab5, so a home server needs no certificate — checked at every upload rather than once at setup, so it refuses from a field site instead of sending your API key across a network you do not control. Use `https://` for anything remote or for a hostname. Records go in batches and Cloudlog does its own duplicate checking. If your server is on your own network this is the only upload that needs no internet at all. *(Mark G4MEM)*
+- **Radio menus show the radio's colours.** Everything rendered white while PuTTY showed the same screens in red and green. The colour was being read from the radio all along and simply thrown away by both the Tab5 and the browser. *(Samuel W7STF)*
+- **The battery no longer reads 100% then 0% with no pack fitted.** Running from USB-C with no NP-F550, the display alternated between the two extremes. The detector for a missing battery was flapping in time with the supply rather than latching. *(Randy N4OPI)*
+- **Waking from the screensaver no longer acts on the tap that woke it.** Sleep switched off the mouse pointer and left the touchscreen live. *(Randy N4OPI)*
+- **A radio left receiving on VFO B is put back on A, and tells you.** Frequency changes only ever go to VFO A, so with the radio on B nothing you tuned had any effect — while band select still worked, which is what makes it look like your own mistake. *(Markus DL8MBY)*
+- **The browser's spot and frequency labels are readable again** on a high-resolution display, where they were being drawn at about half size. *(Randy N4OPI)*
+- **A warning that blamed the wrong thing.** After a cable swap you could be told to set the radio to two USB serial ports when it already was. The port is now retried, and the setting is only mentioned when the radio is definitely connected. *(Samuel W7STF)*
+- **Under the surface:** a crash after about seven hours of healthy operation is fixed, the flash-persisted diagnostic log no longer stops writing with space still free, and two silent USB workarounds now count what they catch so it is possible to tell "never happened" from "happened and was handled".
+
+**Investigated, no change:** the first entry into Radio menus after a flash drawing blank could not be reproduced — the first open after flashing plus six more were all clean, and the same thing is seen in PuTTY, which points at the radio's own redraw. *(Samuel W7STF, Randy N4OPI)*
+
+## Previous Releases
+
+### v1.8.6 — 2026-08-18
 
 **A same-day fix release. v1.8.5 shipped with the browser interface completely dead.**
 
@@ -15,8 +33,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **Also documented:** in the band config table, Enable/Disable entries accept **E** and **D** typed directly, and the arrows change the value rather than moving between columns — step onto a numeric column first to move across. That is the radio's own behaviour. *(Stan Dye KC7XE)*
 
 **Not a bug:** auto-answer is off after every restart by design — a radio that started transmitting the moment the Tab5 powered on might be feeding an untuned antenna. WSJT-X arms transmit per startup for the same reason. *(asked by Brian WA6JFK, answered by Roy KI0ER)*
-
-## Previous Releases
 
 ### v1.8.5 — 2026-08-17
 

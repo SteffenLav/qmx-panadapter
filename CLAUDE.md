@@ -179,6 +179,15 @@ main/
   net/mdns_svc.c          mDNS responder: qmx.local + _http._tcp advert. Started from wifi.c's
                           got-IP path; idempotent, and soft-fails to "IP still works"
   net/pskreporter.c       PSK Reporter reception reports (IPFIX/UDP, batched ~5 min, default ON)
+  adif/cloudlog_upload.c  Cloudlog/Wavelog QSO upload (#171). The ONLY self-hosted target, so
+                          the address is the operator's and is stored, not compiled in. Batches
+                          20 records; server-side dedupe makes the cursor an optimisation, not a
+                          correctness requirement. Response schema is UNDOCUMENTED - success is
+                          HTTP status only, and the body is quoted verbatim on failure
+  util/net_guard.c        Decides whether an upload may go out in the CLEAR. Portable, no ESP
+                          deps, host-tested + mutation-tested by test/net_guard_harness.c.
+                          Plain http only onto our own subnet, and the check is re-taken on
+                          EVERY upload - see the header for why caching it is the whole bug
   ft8_greylist.c          Grey-list: stations that time out 2 pounces are skipped by the auto pickers
   net/update_check.c      Background GitHub /releases poll (+ latest.json fallback) → "update available" banner in the Reader
   util/ansi_term.c        80x24 ANSI/VT100 screen model for the QMX terminal (#147). Portable,
@@ -541,6 +550,50 @@ for the selectable SSB filters (2500/2700/2900/3200) is not documented anywhere 
 find, so `PB_SSB_LOW_HZ` stays at 200 and is marked UNVERIFIED. Do not "make it
 consistent" with the digital figure — that would be a guess wearing evidence's
 clothes. Samuel has been asked for the real number.
+
+### ⛔ `httpd_ws_send_frame_async()` reports a PARTIAL WRITE as success — never use it for the stream
+Samuel W7STF's "the web panadapter hangs for seconds, and it is worse every
+release" (#193, v1.8.7). Root-caused by MEASURING a 9.6 h capture first, not by
+reading code: **545 session teardowns**, median 14.4 s apart, each costing the
+browser a **median 2.2 s (p90 4.5 s)** blackout while it reconnected — while the
+stream ran at a healthy 10.0 fps in between. Feed activity was enriched in the 2 s
+before a teardown (RBN 8.4x, DX cluster 8.6x, TLS 5.7x, SDIO recovery 4.6x) against
+an 8.1 % base rate. **Socket exhaustion was TESTED AND FALSIFIED** (0 accept/ENFILE
+errors) — do not go looking there again.
+
+**The fault is in IDF, verified by reading the pinned v5.4.4 source.**
+`httpd_ws_send_frame_async()` sends the header and the payload with two bare
+`sess->send_fn()` calls and checks only `< 0`. `httpd_default_send()` is a single
+`send()` returning a BYTE COUNT, so a short count is not negative and **a partial
+TCP write is reported as `ESP_OK`**. The ordinary HTTP path is fine — it uses
+`httpd_send_all()`, which loops. The WS path never got that loop.
+
+⚠ **The freeze fix and this bug are the same line.** `ws_uri_handler()` sets
+`SO_SNDTIMEO` to 400 ms so a stuck send cannot freeze the single httpd worker (the
+2026-07-14 fix), and a send timeout on a socket with bytes already queued is
+precisely how a short count arises. So on a congested link the partial write is the
+EXPECTED outcome, not an edge case.
+
+The result is not a dropped frame but a **corrupt stream**: the browser is told to
+expect `WS_FRAME_LEN` payload bytes, gets fewer, and consumes the next frame's
+header as this frame's tail — every later frame misparses until it sees a protocol
+violation and closes the socket. Hence "freezes for a few seconds and comes back"
+rather than one glitchy frame, and hence "worse every release": feeds have been
+ADDED over time, so there is more congestion to trigger it.
+
+Fixed entirely in our own code — **no 9th standing IDF patch**, since
+`httpd_socket_send()` is public and returns the byte count. `ws_send_all()` loops
+until every byte is out; the WS header is built in front of the payload so the two
+cannot be split; **a frame we are committed to mid-way must be finished or the
+session closed, because abandoning it IS the corruption**; EAGAIN with nothing sent
+is free to drop, since the stream is still in sync. `HTTPD_SOCK_ERR_INVALID` means
+httpd already removed the session, so it closes immediately instead of burning 15
+attempts (~800 ms) on a socket that no longer exists.
+
+**Counted, not silent:** `partial writes healed` on the fps line. Before the fix
+these were indistinguishable from healthy sends, the same unverifiability trap #189
+documents for the USB patches. Hardware-verified: 9.3 min under live feed load gave
+**0 teardowns, 0 ECONNRESET, 8 partial writes healed**.
 
 ### dBm gridlines are DERIVED from the dB range, and the arithmetic is host-tested
 `s_grid_dbm[]` was a hardcoded `{ -40, -60, -80, -100, -120 }`, which silently assumed

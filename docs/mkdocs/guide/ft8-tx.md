@@ -388,15 +388,43 @@ Every completed QSO is **automatically logged to ADIF** on the Tab5's internal s
 
 Download the log via the web UI (**QSO Logs** menu → **ADIF download ↓**) or Settings → ADIF Log.
 
-### 12. Upload to QRZ, eQSL & LoTW
+### 12. Upload to QRZ, eQSL, LoTW & Cloudlog
 
 Via the web UI:
 
-1. Open the **QSO Logs** menu in the bottom bar and click **QRZ upload ↑**, **eQSL upload ↑**, or **LoTW setup** (reads **LoTW ↑** once configured)
-2. Enter your API key (QRZ), username/password (eQSL), or run the guided certificate setup (LoTW) when first prompted — credentials are saved for future sessions
+1. Open the **QSO Logs** menu in the bottom bar and click **QRZ upload ↑**, **eQSL upload ↑**, **LoTW setup** (reads **LoTW ↑** once configured), or **Cloudlog upload ↑**
+2. Enter your API key (QRZ), username/password (eQSL), the guided certificate setup (LoTW), or your server address and API key (Cloudlog) when first prompted — credentials are saved for future sessions
 3. Click again to upload
 
 See [Web UI → LoTW Upload](web-ui.md#lotw-upload) for the LoTW certificate setup details.
+
+#### Cloudlog and Wavelog
+
+Cloudlog and Wavelog are the only logbooks here that you host yourself, so you supply
+the address as well as the API key. Both use the same interface, so either works.
+
+You are asked for three things: the server address, your API key, and the station
+profile ID (the number in the Cloudlog URL — leave it as `1` if you only have one).
+
+**Plain `http://` is allowed, but only to a server on the same network as the Tab5**,
+and only to a numeric address such as `http://192.168.1.20`. That covers the usual
+case of a Cloudlog running on a machine at home with no certificate. Anything else
+needs `https://`.
+
+Two things follow from that, both deliberate:
+
+- The check is made **every time you upload**, not once when you save the address. So
+  if you set it up at home and then operate from a park, the upload refuses rather
+  than sending your API key across a network you do not control. Upload when you get
+  home and it goes through.
+- For plain `http://` the address must be numeric, not a name. A name has to be looked
+  up, and what answers the lookup away from home need not be your server. Use `https://`
+  if you want to use a hostname.
+
+If your server is on your own network this is the only upload that needs no internet
+connection at all, which suits POTA and SOTA better than the other three. Contacts are
+sent in batches, and Cloudlog does its own duplicate checking, so uploading again after
+a failure is harmless.
 
 Logs are batched — each upload session records which QSOs have been sent, so re-running skips already-submitted entries.
 

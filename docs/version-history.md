@@ -2044,5 +2044,62 @@ The trim now defaults to 0 (the slider stays, for real per-unit trimming) and th
 
 ---
 
+## v1.8.7 — 2026-08-19
+
+**The browser panadapter stops freezing, your logs can go to your own Cloudlog, and the radio's menus show the radio's colours.**
+
+### The web panadapter freezing for seconds at a time (Samuel W7STF, #177196)
+
+His report was that it *"hangs from time to time, and then several seconds later it begins to animate again"*, and that it had been getting worse with every release.
+
+Measured before anything was changed, because every "obvious cause" in this project's history has been wrong when measured. Over 9.6 hours on the bench the browser session was torn down **545 times**, roughly every 14 seconds in bursts, each costing a **median 2.2 seconds** of frozen display while the browser reconnected, worst case 4.5 seconds. Between the drops the stream ran at its full 10 frames per second. Feed traffic was heavily implicated — RBN 8.4x and the DX cluster 8.6x more likely in the two seconds before a teardown than at a random moment. Socket exhaustion was tested and ruled out.
+
+But the feeds were the trigger, not the fault. **ESP-IDF's WebSocket send writes the frame with a single call and only treats a negative result as an error — and a partial write is not negative.** A frame that went out half finished was reported as sent. The browser then read the next frame's header as the tail of the previous one, saw a protocol violation, and closed the connection. That is why it froze for seconds rather than glitching one frame, and why it got worse as more background feeds were added: more congestion, more partial writes.
+
+The July fix that stopped a stuck send freezing the whole web server made it more likely. That fix put a 400 ms timeout on the socket, and a send timeout with bytes already queued is exactly how a short write happens. **The freeze fix and this bug were the same line of code.**
+
+Now the send loops until every byte is out, the frame header is built in front of the payload so the two cannot be split, and a frame that cannot be finished closes the session rather than leaving the browser reading rubbish. Congestion with nothing yet sent simply drops a frame, which costs nothing. The repairs are counted and reported, so the fix can be seen working rather than merely assumed.
+
+**Verified on hardware:** 9.3 minutes under live feed load gave **0 teardowns** where the old build predicted about 9, **0 connection resets** where the old build logged over a thousand, and **8 partial writes caught and completed** — each one a stream that would previously have been corrupted.
+
+### Upload to your own Cloudlog or Wavelog (Mark G4MEM)
+
+The fourth logbook, and the only self-hosted one. Because the address is yours rather than compiled in, this is the first time the firmware sends credentials somewhere it does not already know.
+
+Mark runs his on his home network with no certificate, and asked whether plain `http://` could be allowed when the server is on the same subnet the Tab5 is connected to. It can, and it is. That is not the same as an "ignore the certificate" switch, which was refused: the subnet test is a fact the firmware can check, and on your own network the packets never leave equipment you own.
+
+Two deliberate limits. The check runs **on every upload, never cached at setup**, because the whole point is that you configure at home and then operate from a field site where the same name could be answered by anything. And plain HTTP needs a numeric address, since a name has to be looked up and what answers the lookup can differ from what answers the connection. Use `https://` for a hostname.
+
+Records go in batches, Cloudlog does its own duplicate checking, and Wavelog works identically. If your server is on your own network this is the only upload that needs no internet at all, which suits POTA and SOTA better than the other three.
+
+### The radio's menus in the radio's colours (Samuel W7STF)
+
+Radio menus rendered everything white while PuTTY showed the same screens in red and green. The colour was being parsed and stored all along; both renderers simply discarded it. Fixed on the Tab5 and in the browser, from the same palette so the two cannot disagree. The selected-item highlight still wins wherever both apply, since losing it would cost you your place in the menus.
+
+### Battery showing 100% then 0% with no battery fitted (Randy N4OPI)
+
+On a Tab5 run from USB-C with no NP-F550, the readout alternated between 100% (8.4 V) and 0% (4.2 V). A no-battery detector already existed and was flapping in time with the rail rather than latching: it watched a five-sample window, so while the voltage sat at either value the window looked perfectly steady and the detector decided a pack was present again.
+
+It now also checks two things a real pack cannot do — moving several volts between one-second readings, and running the device at 4.2 V. The web page is told as well, so it shows "USB" instead of inventing a percentage.
+
+### A warning that blamed the wrong thing (Samuel W7STF)
+
+After swapping cables he once got "is the radio set to 2 USB serial ports?" on a radio that was already set to two. The second port was opened exactly once, and any failure produced that message — so a radio still re-enumerating after a cable swap was reported as a configuration mistake. It now retries, and only names the setting when the radio is demonstrably present.
+
+### Also in this release
+
+- **A radio receiving on VFO B is put back on A**, and told you about it (Markus DL8MBY). Frequency writes go to VFO A only, so with the radio on B every tune went to a VFO he was not listening to while band select still worked — which is exactly why it looks like your own mistake rather than a fault.
+- **Waking from the screensaver no longer acts on the tap that woke it** (Randy N4OPI). Sleep disabled the mouse pointer and left the touchscreen live.
+- **The browser's spot and frequency labels are readable on a high-resolution display** (Randy N4OPI). They were being drawn at roughly half size.
+- **A crash after about seven hours is fixed** — a bare `abort()` in ESP-IDF's USB driver on a state it treats as impossible. This is the fourth of that family. As with the last one the reboot was not the expensive part: it happens with the radio attached, so the QMX then could not reconnect for the rest of the night.
+- **The flash-persisted diagnostic log no longer stops writing.** It reported "no space left" with 400 KB free — not a capacity problem but a garbage-collection one, caused by deleting a 256 KB file every 11 minutes. The boot log now lists every file with its size.
+- **Two silent USB patches now count what they catch.** They cannot log, because they run in an interrupt, so a clean log could not distinguish "never happened" from "happened and was handled". Neither has fired yet, which is now a statement of fact rather than an inference from silence.
+
+### Investigated, no change
+
+**The first entry into Radio menus after a flash drawing blank** (Samuel W7STF) could not be reproduced: the first open after flashing plus six more were all clean. Randy N4OPI sees the same thing in PuTTY, which points at the radio's own redraw rather than at the Tab5.
+
+---
+
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
 
