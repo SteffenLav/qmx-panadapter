@@ -1,7 +1,28 @@
 # FT8 web access — the decision Randy N4OPI is waiting on (#195)
 
-**Status: needs the operator. Nothing here is a recommendation I can make for you —
-it is the material to make it with.**
+## ✅ DECIDED 2026-08-19 (operator): NO SPECTRUM/WATERFALL ON THE WEB IN FT8 MODE
+
+> "Randy cannot have the spec/WF on the web due to lack of resources in Tab5 —
+> that will be the answer to him — a decision taken long time ago."
+
+So the answer to Randy is **(c)/(a) — no mirror is coming, send the list.** This is
+a long-standing decision, not a new one, and it is a *hardware* limit rather than a
+missing feature: the FT8 decode pipeline saturates core 0, which is exactly why the
+Tier-1 render gate turns the spectrum stream off in FT8 mode. Mirroring the screen
+would cost decode yield, which is the thing the device exists to do well.
+
+**Consequences for the reply:** tell him plainly that the mirror is not planned and
+why, so he stops waiting — and ask him to send the list, because the four control
+gaps in §1 below are exactly the kind of thing that CAN be added. Do not leave the
+impression it is merely deferred.
+
+The rest of this file is the material the decision was made from; kept because the
+same question will be asked again.
+
+---
+
+**Original status: needs the operator. Nothing here is a recommendation I can make
+for you — it is the material to make it with.**
 
 Randy, 2026-08-19:
 
