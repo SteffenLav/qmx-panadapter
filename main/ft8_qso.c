@@ -1614,6 +1614,11 @@ static bool try_start_pileup_pounce(void)
     qmx_settings_t qs;
     settings_load_all(&qs);
     if (!qs.ft8_filters.auto_pileup)            return false;
+    // Manual pick wins over auto-work-pileup. Both decide WHO to work next, and
+    // an operator who asked to choose has not asked to have the strongest caller
+    // chosen for them a moment later - leaving both live would quietly defeat the
+    // setting they just turned on.
+    if (qs.ft8_filters.cq_manual_pick)          return false;
     if (!qs.my_callsign[0] || !qs.my_grid[0])   return false;
 
     ft8_pileup_entry_t pile[FT8_PILEUP_MAX];
@@ -2149,6 +2154,24 @@ void ft8_qso_advance(int64_t slot_sec)
                                  report, sizeof(report), &got_rr73, &got_73)) {
             ESP_LOGI(TAG, "CQ: %s answered @ %d Hz snr=%d (rr73=%d 73=%d)",
                      caller, caller_freq, caller_snr, got_rr73, got_73);
+
+            // MANUAL PICK (Eric K3FNB): the operator chooses who to work rather
+            // than the first answer winning. Only the CHOICE is manual - a tapped
+            // caller runs the normal automated exchange from there.
+            //
+            // Deliberately keeps calling CQ instead of standing down. An activator
+            // wants the pile-up to keep building while they pick, and going silent
+            // would look like the radio had stopped. capture_pileup_callers() has
+            // already recorded this caller at the top of advance(), so they are
+            // tappable in the pile-up list without anything extra here.
+            qmx_settings_t mp;
+            settings_load_all(&mp);
+            if (mp.ft8_filters.cq_manual_pick) {
+                ESP_LOGI(TAG, "CQ: manual pick is on - %s is waiting in the pile-up, "
+                              "not answering automatically", caller);
+                return;
+            }
+
             ft8_tx_disarm();   // cancel the re-armed CQ (no-op if already ACTIVE)
             cqrun_answer(caller, caller_freq, caller_snr, report, slot_sec, got_rr73, got_73);
         } else {

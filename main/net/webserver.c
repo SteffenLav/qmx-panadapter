@@ -2025,6 +2025,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(f, "incl_cq_only",       c.ft8_filters.incl_cq_only);
     cJSON_AddBoolToObject(f, "skip_tx1",           c.ft8_filters.skip_tx1);
     cJSON_AddBoolToObject(f, "auto_pileup",        c.ft8_filters.auto_pileup);
+    cJSON_AddBoolToObject(f, "cq_manual_pick",     c.ft8_filters.cq_manual_pick);
     cJSON_AddBoolToObject(f, "robot_en",           c.ft8_filters.robot_en);
     cJSON_AddNumberToObject(f, "robot_priority",   c.ft8_filters.robot_priority);
 
@@ -2185,6 +2186,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         BOOLF("incl_cq_only",       incl_cq_only);
         BOOLF("skip_tx1",           skip_tx1);
         BOOLF("auto_pileup",        auto_pileup);
+        BOOLF("cq_manual_pick",     cq_manual_pick);
         BOOLF("robot_en",           robot_en);
         #undef BOOLF
         if (cJSON_IsNumber(it = cJSON_GetObjectItem(f, "robot_priority")))

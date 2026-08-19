@@ -60,10 +60,17 @@ static void iface_cb(hid_host_device_handle_t hdl,
                 dy  = hid_field_signed(rep, rlen, s_layout.y_bit, s_layout.y_bits);
                 btn = rlen ? rep[0] : 0;           // buttons are bit 0.. of byte 0
             } else {
-                // Boot-protocol mouse: [0]=buttons, [1]=dx(int8), [2]=dy(int8), [3]=wheel.
-                dx  = (int8_t)data[1];
-                dy  = (int8_t)data[2];
-                btn = data[0];
+                // No usable descriptor. Shared with the BLE path so the same
+                // known-real layouts are recognised on both: this branch used to
+                // assume the 3-byte boot layout for a report of ANY length, which
+                // is the same shape of bug that made Kevin KW6E's 9-byte Bluetooth
+                // mouse erratic. A USB mouse whose descriptor we cannot parse can
+                // just as easily send 16-bit movement.
+                hid_mouse_move_t mv;
+                if (!hid_fallback_decode(data, (size_t)len, &mv)) break;
+                dx  = mv.dx;
+                dy  = mv.dy;
+                btn = mv.buttons;
             }
             hid_cursor_apply(dx, dy, btn);
             // Throttle movement logging so it doesn't flood the diag ring.

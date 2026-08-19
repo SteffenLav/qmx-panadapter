@@ -642,29 +642,20 @@ static void handle_report(const uint8_t *d, int len)
         return;
     }
 
-    if (len >= 5) {
-        // 12-BIT PACKED report - what a Logitech M240 actually sends, captured
-        // on hardware 2026-08-09:
-        //     00 00 d9 0f fd 00 00   ->  X=-39  Y=-48
-        //     00 00 02 e0 ff 00 00   ->  X=+2   Y=-2
-        // Layout: [buttons][.][X lo 8][X hi 4 | Y lo 4][Y hi 8][wheel][pan]
-        // X and Y SHARE byte 3 - a nibble each - which is why reading this as
-        // a 3-byte boot report gave a permanently-zero dx and fed the X value
-        // into dy, so moving the mouse sideways moved the cursor vertically.
-        int x = d[2] | ((d[3] & 0x0F) << 8);
-        int y = ((d[3] >> 4) & 0x0F) | (d[4] << 4);
-        if (x & 0x800) x -= 0x1000;      // 12-bit two's complement
-        if (y & 0x800) y -= 0x1000;
-        hid_cursor_apply(x, y, d[0]);
-        // Byte 5 is the wheel: 00 in every movement-only report captured, ff
-        // (= -1) in the one where the wheel was turned. Byte 6 is the
-        // horizontal/pan wheel, which nothing in this UI scrolls sideways.
-        if (len >= 6 && (int8_t)d[5]) hid_cursor_add_wheel((int8_t)d[5]);
-        return;
-    }
-
-    // Boot-protocol layout (3-4 bytes): [buttons][dx int8][dy int8][wheel].
-    hid_cursor_apply((int8_t)d[1], (int8_t)d[2], d[0]);
+    // No usable descriptor. hid_fallback_decode() picks between layouts that have
+    // each been CAPTURED off real hardware, using the report length.
+    //
+    // This used to inline the Logitech M240's 12-bit packed layout and apply it to
+    // ANY report of five bytes or more. Kevin KW6E's Microsoft Surface Arc sends
+    // nine bytes with 16-bit movement, and his own diagnostic log showed what that
+    // cost: his report 00 06 00 0b 00 ff ff 00 00 is X=+6 Y=+11, and the M240
+    // arithmetic turned it into X=-1280 Y=0 - a large jump the wrong way with no
+    // vertical movement, which is the "erratic pointer" he reported while
+    // scrolling worked perfectly.
+    hid_mouse_move_t mv;
+    if (!hid_fallback_decode(d, (size_t)len, &mv)) return;
+    hid_cursor_apply(mv.dx, mv.dy, mv.buttons);
+    if (mv.wheel) hid_cursor_add_wheel(mv.wheel);
 }
 
 static void host_task(void *param)

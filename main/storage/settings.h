@@ -39,6 +39,13 @@ typedef struct {
     // --- Auto-work pileup — appended; old NVS blobs read back 0 (=off) ---
     bool    auto_pileup;     // on QSO completion, auto-pounce the strongest waiting
                               // pileup caller instead of resuming CQ (unattended TX)
+    // --- Manual pick while running CQ — appended; old NVS blobs read back 0 (=off) ---
+    // Eric K3FNB: "When I am activating a park, I sometimes like to be a bit more
+    // engaged ... could you have an option where I have to tap on a caller/hunter
+    // in order to initiate the exchange? I don't mind the firmware automating the
+    // rest." So this gates ONLY the decision of WHO to work. Once a caller is
+    // tapped the exchange runs itself exactly as before.
+    bool    cq_manual_pick;  // running CQ: never auto-answer a caller, wait for a tap
 } ft8_filters_t;
 
 // All persisted settings. Floats are stored as raw 32-bit bit-patterns

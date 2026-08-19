@@ -2056,6 +2056,7 @@ const SET_FIELDS = [
   ["FT8 filters", "filters.incl_cq_only",       "bool", "Show only CQ calls", ""],
   ["FT8 filters", "filters.skip_tx1",           "bool", "Skip TX1 (answer with a report)", ""],
   ["FT8 filters", "filters.auto_pileup",        "bool", "Auto-work the pileup", "Unattended transmit"],
+  ["FT8 filters", "filters.cq_manual_pick",     "bool", "Pick callers myself", "Running CQ: a caller waits in the pile-up until you tap them. The exchange itself is still automatic. Overrides Auto-work the pileup"],
   /* The robot toggle carries the SAME permanent warning the Tab5 shows beside
      its switch - it transmits unattended under your callsign, and that text is
      part of the control, not a one-time dialog. */

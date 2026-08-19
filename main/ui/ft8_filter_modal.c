@@ -37,6 +37,7 @@ static lv_obj_t *s_dd_robot_pri     = NULL;  // priority dropdown
 static lv_obj_t *s_dd_hound         = NULL;  // Fox/Hound: off / guided / automatic
 static lv_obj_t *s_cb_auto_pileup   = NULL;  // auto-work waiting pileup callers on QSO completion
 static lv_obj_t *s_cb_greylist      = NULL;  // grey-list stations after repeated failed pounces
+static lv_obj_t *s_cb_manual_pick   = NULL;  // running CQ: never auto-answer, wait for a tap
 static lv_obj_t *s_robot_warn       = NULL;  // "unattended TX" warning - shown while robot OR auto-pileup is checked
 static lv_obj_t *s_cb_field_day     = NULL;  // ARRL Field Day exchange mode enable
 static lv_obj_t *s_ta_fd_class      = NULL;  // e.g. "16A"
@@ -114,6 +115,7 @@ static void save_btn_cb(lv_event_t *e)
     f.robot_en           = lv_obj_has_state(s_cb_robot, LV_STATE_CHECKED);
     f.robot_priority     = (uint8_t)lv_dropdown_get_selected(s_dd_robot_pri);
     f.auto_pileup        = lv_obj_has_state(s_cb_auto_pileup, LV_STATE_CHECKED);
+    f.cq_manual_pick     = lv_obj_has_state(s_cb_manual_pick, LV_STATE_CHECKED);
 
     settings_set_ft8_filters(&f);
     settings_set_greylist_en(lv_obj_has_state(s_cb_greylist, LV_STATE_CHECKED));
@@ -403,6 +405,21 @@ static void modal_build(void)
     s_cb_greylist = make_labeled_checkbox(panel, "Allow grey-listing", 540, 510, &lbl_greylist);
     lv_obj_set_style_text_color(lbl_greylist, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
+    // --- Pick callers myself (Eric K3FNB) -----------------------------
+    // Running CQ, a caller answering does NOT start the exchange - they wait in
+    // the pile-up until tapped. Only the CHOICE becomes manual; a tapped caller
+    // runs the normal automated exchange afterwards, which is exactly what he
+    // asked for: "I don't mind the firmware automating the rest of the exchange,
+    // I just would like to have the option to not auto-pounce on hunters."
+    //
+    // Deliberately NOT next to the two unattended-TX rows above it in meaning:
+    // this one REDUCES what happens without you, so it carries no warning. It
+    // also overrides Auto-work pileup, which would otherwise pick for you a
+    // moment later.
+    lv_obj_t *lbl_manual_pick;
+    s_cb_manual_pick = make_labeled_checkbox(panel, "Pick callers myself", 540, 570, &lbl_manual_pick);
+    lv_obj_set_style_text_color(lbl_manual_pick, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+
     // --- ARRL Field Day exchange mode ---------------------------------
     // When on, FT8 QSOs (manual and auto) exchange class+section instead of
     // grid/signal report - see CLAUDE.md "FT8 robot" / ft8_qso.c. Class and
@@ -596,6 +613,7 @@ void ft8_filter_modal_show(void)
                              f->robot_priority <= FT8_ROBOT_PRI_DISTANT ? f->robot_priority : 0);
     apply_checkbox_state(s_cb_auto_pileup, f->auto_pileup);
     apply_checkbox_state(s_cb_greylist, s.greylist_en);
+    apply_checkbox_state(s_cb_manual_pick, f->cq_manual_pick);
     lv_dropdown_set_selected(s_dd_hound, s.hound_mode <= 2 ? s.hound_mode : 0);
     update_unattended_warn();   // shows the warning if robot OR auto-pileup is on
     apply_checkbox_state(s_cb_field_day, s.field_day_en);

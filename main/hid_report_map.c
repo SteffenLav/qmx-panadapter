@@ -169,3 +169,44 @@ int hid_field_signed(const uint8_t *report, size_t len, uint16_t bit_off, uint8_
     }
     return (int)(int32_t)v;
 }
+
+bool hid_fallback_decode(const uint8_t *report, size_t len, hid_mouse_move_t *out)
+{
+    if (!report || !out || len < 3) return false;
+
+    out->dx = out->dy = out->wheel = 0;
+    out->buttons = report[0];
+
+    // 16-BIT layout - Microsoft Surface Arc, captured from Kevin KW6E's log:
+    //     00 f5 ff fe ff 01 00 00 00   ->  X=-11  Y=-2   wheel=+1
+    //     00 06 00 0b 00 ff ff 00 00   ->  X=+6   Y=+11  wheel=-1
+    // [buttons][X lo][X hi][Y lo][Y hi][wheel lo][wheel hi][pan][pan]
+    // Checked against every distinct report in his capture, both signs.
+    if (len >= 9) {
+        out->dx = (int)(int16_t)((uint16_t)report[1] | ((uint16_t)report[2] << 8));
+        out->dy = (int)(int16_t)((uint16_t)report[3] | ((uint16_t)report[4] << 8));
+        out->wheel = (int)(int16_t)((uint16_t)report[5] | ((uint16_t)report[6] << 8));
+        return true;
+    }
+
+    // 12-BIT PACKED - Logitech M240, captured on hardware 2026-08-09:
+    //     00 00 d9 0f fd 00 00   ->  X=-39  Y=-48
+    //     00 00 02 e0 ff 00 00   ->  X=+2   Y=-2
+    // X and Y SHARE byte 3, a nibble each.
+    if (len >= 5) {
+        int x = report[2] | ((report[3] & 0x0F) << 8);
+        int y = ((report[3] >> 4) & 0x0F) | (report[4] << 4);
+        if (x & 0x800) x -= 0x1000;          // 12-bit two's complement
+        if (y & 0x800) y -= 0x1000;
+        out->dx = x;
+        out->dy = y;
+        if (len >= 6) out->wheel = (int8_t)report[5];
+        return true;
+    }
+
+    // Boot protocol: [buttons][dx int8][dy int8][wheel int8].
+    out->dx = (int8_t)report[1];
+    out->dy = (int8_t)report[2];
+    if (len >= 4) out->wheel = (int8_t)report[3];
+    return true;
+}

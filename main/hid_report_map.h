@@ -46,3 +46,30 @@ bool hid_report_map_parse(const uint8_t *desc, size_t len, hid_mouse_layout_t *o
 // each byte, which is how HID packs them), sign-extended to int. Returns 0 if the
 // field would run past the end of the report.
 int hid_field_signed(const uint8_t *report, size_t len, uint16_t bit_off, uint8_t bits_wide);
+
+// ---------------------------------------------------------------------------
+// Fallback decode, for when the Report Map could not be read or parsed.
+//
+// This is still a guess and is still the WRONG answer in principle - the right
+// one is hid_report_map_parse() above. What it is not is a guess at ONE layout
+// applied to every mouse, which is what it replaced: bt_hid_mouse.c treated any
+// report of five bytes or more as the Logitech M240's 12-bit packed layout.
+//
+// Kevin KW6E's Microsoft Surface Arc sends NINE bytes with 16-bit movement, and
+// his own diagnostic log proved what that costs. Run his real report
+// `00 06 00 0b 00 ff ff 00 00` (X=+6, Y=+11) through the M240 arithmetic and it
+// decodes as X=-1280, Y=0 - a huge jump in the wrong direction and no vertical
+// movement at all. That is exactly what he described: "connects and scrolls
+// perfectly, but moving the mouse pointer is erratic".
+//
+// So the length picks between layouts that have each been CAPTURED off real
+// hardware. Nothing here is inferred from a datasheet.
+// ---------------------------------------------------------------------------
+typedef struct {
+    int     dx, dy;     // movement this report, in mouse units
+    int     wheel;      // 0 when the report carries none
+    uint8_t buttons;    // raw first byte; callers read the low bits
+} hid_mouse_move_t;
+
+// Returns false for a report too short to hold movement at all.
+bool hid_fallback_decode(const uint8_t *report, size_t len, hid_mouse_move_t *out);

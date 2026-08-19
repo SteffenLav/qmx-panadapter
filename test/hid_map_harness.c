@@ -128,9 +128,77 @@ static const uint8_t DESC_TWO_COLLECTIONS[] = {
     0xC0
 };
 
+static void test_fallback(void)
+{
+    printf("F. fallback decode (no usable Report Map)\n");
+    hid_mouse_move_t m;
+
+    /* Microsoft Surface Arc, 9 bytes with 16-bit movement. These are REAL
+       reports out of Kevin KW6E's diagnostic log, not constructed - which is the
+       point, because the layout they disprove was also "known" from real
+       hardware.
+
+       Run the first one through the 12-bit M240 arithmetic that used to handle
+       every report of five bytes or more and it gives X=-1280, Y=0: a big jump
+       the wrong way and no vertical movement at all. In his words, "connects and
+       scrolls perfectly, but moving the mouse pointer is erratic". */
+    const uint8_t arc_a[] = { 0x00, 0x06, 0x00, 0x0b, 0x00, 0xff, 0xff, 0x00, 0x00 };
+    if (!hid_fallback_decode(arc_a, sizeof arc_a, &m)) { printf("  FAIL returned false\n"); g_fail++; }
+    else { check("arc +X", m.dx, 6); check("arc +Y", m.dy, 11); check("arc wheel-", m.wheel, -1); }
+
+    const uint8_t arc_b[] = { 0x00, 0xf5, 0xff, 0xfe, 0xff, 0x01, 0x00, 0x00, 0x00 };
+    if (hid_fallback_decode(arc_b, sizeof arc_b, &m)) {
+        check("arc -X", m.dx, -11); check("arc -Y", m.dy, -2); check("arc wheel+", m.wheel, 1);
+    }
+
+    /* ⚠ CONSTRUCTED, not captured - and it earns its place. Every movement in
+       Kevin's log is small enough that the high byte is only sign extension, so
+       an 8-bit read of the low byte returns the identical answer and the capture
+       cannot tell 8-bit from 16-bit at all. A mutation run proved that: dropping
+       the high byte broke nothing. A fast flick genuinely exceeds 127, so this
+       pins the field WIDTH, which the real data cannot. */
+    const uint8_t arc_fast[] = { 0x00, 0x40, 0x01, 0x00, 0xff, 0x00, 0x00, 0x00, 0x00 };
+    if (hid_fallback_decode(arc_fast, sizeof arc_fast, &m)) {
+        check("arc wide X", m.dx,  320);    /* 0x0140 - low byte alone reads 64 */
+        check("arc wide Y", m.dy, -256);    /* 0xff00 - low byte alone reads 0  */
+    }
+
+    /* Idle report: no movement at all. A layout error shows up here first, as a
+       cursor that drifts on its own with the mouse untouched. */
+    const uint8_t arc_idle[] = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+    if (hid_fallback_decode(arc_idle, sizeof arc_idle, &m)) {
+        check("idle dx", m.dx, 0); check("idle dy", m.dy, 0); check("idle wheel", m.wheel, 0);
+    }
+
+    /* Logitech M240, 7 bytes, 12-bit packed with X and Y sharing a nibble.
+       Captured on hardware 2026-08-09. This must keep working: it is the mouse
+       the old code was written for, and breaking it to fix Kevin's would just
+       move the bug to someone else. */
+    const uint8_t m240_a[] = { 0x00, 0x00, 0xd9, 0x0f, 0xfd, 0x00, 0x00 };
+    if (hid_fallback_decode(m240_a, sizeof m240_a, &m)) {
+        check("m240 X", m.dx, -39); check("m240 Y", m.dy, -48);
+    }
+    const uint8_t m240_b[] = { 0x00, 0x00, 0x02, 0xe0, 0xff, 0x00, 0x00 };
+    if (hid_fallback_decode(m240_b, sizeof m240_b, &m)) {
+        check("m240 X2", m.dx, 2); check("m240 Y2", m.dy, -2);
+    }
+
+    /* Boot protocol, 3-4 bytes. */
+    const uint8_t boot[] = { 0x00, 0x05, 0xfb, 0x01 };
+    if (hid_fallback_decode(boot, sizeof boot, &m)) {
+        check("boot X", m.dx, 5); check("boot Y", m.dy, -5); check("boot wheel", m.wheel, 1);
+    }
+
+    /* Too short to carry movement: refused, not read past the end. */
+    const uint8_t stub[] = { 0x00, 0x01 };
+    if (hid_fallback_decode(stub, sizeof stub, &m)) { printf("  FAIL 2-byte report accepted\n"); g_fail++; }
+}
+
 int main(void)
 {
     hid_mouse_layout_t L;
+
+    test_fallback();
 
     printf("1. boot-protocol mouse\n");
     if (!hid_report_map_parse(DESC_BOOT, sizeof DESC_BOOT, &L)) {
