@@ -209,8 +209,31 @@ void ft8_screen_record_decode(const char *text,
     if (!ft8_screen_extract_call(text, call, sizeof(call))) {
         return;
     }
-    if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
-        ESP_LOGW(TAG, "record_decode: mutex timeout, dropping '%s'", text);
+    // ⛔ THE WRITER MUST WAIT. A reader that gives up simply redraws a tick
+    // later; a decode dropped here is gone for good - the station never enters
+    // the table, so it is missing from the list, from the occupancy map the
+    // auto-answer gate reads, and from scan_for_reply_to_me(). A dropped
+    // message addressed to US is a stalled QSO step, and nothing marks it as
+    // anything other than the partner having gone quiet.
+    //
+    // The old 50 ms was far too short for what is at stake. Measured over a
+    // 54,142-decode soak: 99 drops (0.18%), in runs of two or three, each
+    // exactly 56 ms apart - i.e. the timeout firing back to back rather than
+    // one long stall. Cause, from an out-of-order log timestamp in the same
+    // burst: the holder's own "UPD" line landed ~190 ms after it took the
+    // mutex. BOTH decode tasks run at priority 1, the lowest on the board, so
+    // the holder was simply not scheduled while the capture task, fft_task (4),
+    // the feeds (2) and httpd (5) all ran above it. Priority inheritance cannot
+    // help - there is no inversion to correct when holder and waiter share a
+    // priority; the holder needs CPU, not a boost.
+    //
+    // So this is CPU starvation, not lock contention, and the answer is to
+    // outwait it: every observed stall was ~190 ms, and 2 s leaves an order of
+    // magnitude of margin while still bounded, so a holder that genuinely died
+    // cannot wedge the decode task forever. Raising the decode priority instead
+    // is the #51 trap - it would starve fft_task, which is far worse.
+    if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(2000)) != pdTRUE) {
+        ESP_LOGW(TAG, "record_decode: mutex timeout after 2s, dropping '%s'", text);
         return;
     }
     ft8_call_t *e = find_or_evict(call);
