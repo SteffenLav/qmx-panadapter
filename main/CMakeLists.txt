@@ -39,6 +39,7 @@ idf_component_register(
         "util/ina226.c"
         "util/bsp_info.c"
         "util/diag_log.c"
+        "util/panic_hook.c"
         "util/psram_task.c"
         "util/usb_patch_counters.c"
         "util/factory_reset.c"
@@ -203,3 +204,15 @@ add_custom_command(
     COMMENT "Checking web UI JavaScript parses"
     VERBATIM
 )
+
+# #117: carry a crash across the reboot so the diag log can report it.
+#
+# Panics never reach diag_log's vprintf hook, so a field crash left NOTHING on
+# the device - verified across /api/log/saved, the SD log and a 5 MB SD archive,
+# all of which held zero asserts. Wrapping esp_panic_handler lets us stash a
+# small record in RTC no-init RAM before the real handler reboots; the next boot
+# logs it through the ordinary path. See main/util/panic_hook.c.
+#
+# ⚠ The wrap MUST be on the final link, not on this component alone - the linker
+# only rewrites calls it resolves at link time.
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_panic_handler")

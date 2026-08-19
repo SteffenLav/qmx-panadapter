@@ -830,6 +830,22 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, "{\"ok\":true}");
         return ESP_OK;
+    } else if (action && strcmp(action, "panic_test") == 0) {
+        // Developer escape hatch: deliberately crash, to prove the #117 panic
+        // hook actually records anything. A tolerant-but-silent mechanism is
+        // worth nothing - the whole point of #117 is that a crash left NOTHING
+        // on the device, and a hook that never fires would look identical to
+        // the bug it fixes. So this exists to make the fix falsifiable: trigger
+        // it, then read the crash record back from the NEXT boot's /api/log.
+        //
+        // ⚠ A panic reboot is a Tab5 warm reset, which with the radio attached
+        // is the documented #74 trigger - the QMX then needs a power cycle. Run
+        // this with the radio OFF. No web UI element references it.
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"crashing\":true}");
+        vTaskDelay(pdMS_TO_TICKS(150));   // let the reply reach the browser
+        abort();
     } else if (action && strcmp(action, "cat_raw") == 0) {
         // Developer escape hatch: send one raw CAT string to the radio. The
         // reply arrives on the normal RX path and is logged in full (non-poll

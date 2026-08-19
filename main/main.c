@@ -47,6 +47,7 @@
 #include "net/dxcluster.h"
 #include "ft8_hash.h"
 #include "diag_log.h"
+#include "panic_hook.h"
 #include "factory_reset.h"
 #include "cpu_stats.h"
 #include "sd_archive.h"
@@ -65,6 +66,14 @@ void app_main(void)
     // sequence is captured. Diagnostic logging is always-on (no opt-in) — the
     // session header is written once below, after settings come up.
     diag_log_init();
+
+    // #117: if the last boot crashed, report it NOW - immediately after the log
+    // hook is installed, so the record is captured, and before anything else can
+    // panic and cost us the report. Panics never reach diag_log's vprintf hook,
+    // so before this a field crash left nothing on the device at all: the
+    // operator sent a diagnostic download containing everything except the one
+    // thing needed. No-op on a clean boot.
+    panic_hook_report_previous();
 
     // Apply any pending selective NVS reset requested from the web UI before a
     // reboot. Must run before nvs_flash_init()/settings_init() open handles on
