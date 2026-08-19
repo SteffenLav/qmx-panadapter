@@ -96,3 +96,15 @@ bool net_url_parse(const char *url, net_scheme_t *scheme_out,
     if (scheme_out) *scheme_out = scheme;
     return true;
 }
+
+uint32_t net_ipv4_from_network_order(uint32_t net_order)
+{
+    // Read the four octets out in wire order, then rebuild them the way
+    // net_ipv4_parse() does. Deliberately byte-wise rather than a bit-shuffle or
+    // ntohl(): this is portable to the host harness, where ntohl() would depend
+    // on the test machine's own endianness and could hide the very bug it is
+    // here to prevent.
+    const uint8_t *b = (const uint8_t *)&net_order;
+    return ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16) |
+           ((uint32_t)b[2] << 8)  |  (uint32_t)b[3];
+}

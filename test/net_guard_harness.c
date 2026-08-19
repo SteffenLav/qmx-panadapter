@@ -100,6 +100,57 @@ static void test_plaintext_allowed(void)
     CHECK(!net_plaintext_allowed(ip(192,168,1,20), ip(192,168,1,213), m32), "/32 other must refuse\n");
 }
 
+/* ⛔ THE TEST THAT WAS MISSING, and it is why v1.8.7 shipped a broken Cloudlog
+   upload (Mark G4MEM). Everything else in this file builds BOTH sides of a
+   comparison with ip() below, which produces host byte order - the same
+   convention net_ipv4_parse() produces. So the suite compared a convention
+   against itself and every case passed while the device failed.
+
+   The defect lived at the BOUNDARY: esp_netif_get_ip_info() returns network byte
+   order, and cloudlog_upload.c passed it straight into net_plaintext_allowed().
+   Mutation testing could not find it either - net_guard.c was internally correct;
+   the caller's conversion was the bug.
+
+   These cases therefore start from the RAW BYTES esp_netif produces, laid out by
+   hand, rather than from any helper of mine. */
+static void test_network_byte_order(void)
+{
+    printf("N. network-order conversion (the v1.8.7 Cloudlog bug)\n");
+
+    /* How lwip/esp_netif stores 192.168.1.8: byte 0 is the FIRST octet.
+       Proven by esp_ip4_addr1(ipaddr) == esp_ip4_addr_get_byte(ipaddr, 0). */
+    uint8_t wire[4] = { 192, 168, 1, 8 };
+    uint32_t as_stored;
+    memcpy(&as_stored, wire, 4);          /* exactly what the struct holds */
+
+    CHECK(net_ipv4_from_network_order(as_stored) == ip(192,168,1,8),
+          "network-order 192.168.1.8 must convert to the parsed form\n");
+
+    uint8_t maskwire[4] = { 255, 255, 255, 0 };
+    uint32_t mask_stored;
+    memcpy(&mask_stored, maskwire, 4);
+    CHECK(net_ipv4_from_network_order(mask_stored) == ip(255,255,255,0),
+          "network-order netmask must convert to the parsed form\n");
+
+    /* ⭐ The regression itself: Mark's exact setup. Server 192.168.1.8 on a
+       device at 192.168.1.100/24. Converted, this must be allowed. */
+    uint8_t ourwire[4] = { 192, 168, 1, 100 };
+    uint32_t our_stored;
+    memcpy(&our_stored, ourwire, 4);
+    uint32_t target = 0;
+    CHECK(net_ipv4_parse("192.168.1.8", &target), "parse target\n");
+    CHECK(net_plaintext_allowed(target,
+                                net_ipv4_from_network_order(our_stored),
+                                net_ipv4_from_network_order(mask_stored)),
+          "Mark's LAN server must be allowed once byte order is handled\n");
+
+    /* And the failure as it actually shipped: feeding the raw stored values in
+       without converting must NOT quietly appear to work. If this ever passes,
+       the conversion has been dropped again. */
+    CHECK(!net_plaintext_allowed(target, our_stored, mask_stored),
+          "raw network-order values must NOT compare equal - that was the bug\n");
+}
+
 static void test_ipv4_parse(void)
 {
     printf("net_ipv4_parse:\n");
@@ -173,6 +224,7 @@ int main(void)
 {
     printf("net_guard harness\n\n");
     test_same_subnet();
+    test_network_byte_order();
     test_plaintext_allowed();
     test_ipv4_parse();
     test_url_parse();

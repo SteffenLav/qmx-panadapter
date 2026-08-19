@@ -83,15 +83,24 @@ static size_t json_escape(const char *src, char *dst, size_t dst_sz)
     return o;
 }
 
-// Our current IPv4 address and netmask, in the same byte order as each other.
+// Our current IPv4 address and netmask, converted to the SAME convention
+// net_ipv4_parse() produces.
+//
+// ⛔ esp_netif hands these back in NETWORK byte order, and this function used to
+// pass them straight through. On this little-endian CPU that made 192.168.1.8
+// read as 0x0801A8C0 against a parsed 0xC0A80108, and turned a 255.255.255.0
+// netmask into 0x00FFFFFF - so the masked equality compared the wrong end of the
+// address and every upload to a LAN server was refused with "is not on this
+// network". Reported by Mark G4MEM within hours of v1.8.7, with the cause
+// correctly identified. Do not remove the conversion.
 static bool own_ipv4(uint32_t *ip_out, uint32_t *mask_out)
 {
     esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
     if (!netif) return false;
     esp_netif_ip_info_t info;
     if (esp_netif_get_ip_info(netif, &info) != ESP_OK) return false;
-    *ip_out   = info.ip.addr;
-    *mask_out = info.netmask.addr;
+    *ip_out   = net_ipv4_from_network_order(info.ip.addr);
+    *mask_out = net_ipv4_from_network_order(info.netmask.addr);
     return true;
 }
 

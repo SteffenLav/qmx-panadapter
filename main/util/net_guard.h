@@ -57,6 +57,26 @@ bool net_ipv4_parse(const char *s, uint32_t *out);
 // does not matter, because the operation is a masked equality.
 bool net_same_subnet(uint32_t a, uint32_t b, uint32_t netmask);
 
+// Convert an address held in NETWORK byte order (the layout lwip and esp_netif
+// use: byte 0 of the uint32 is the FIRST octet) into the host-order convention
+// net_ipv4_parse() produces, where 192.168.1.8 is 0xC0A80108.
+//
+// ⛔ THIS EXISTS BECAUSE OMITTING IT SHIPPED A BUG (Mark G4MEM, v1.8.7, within
+// hours of release). cloudlog_upload.c took the device's own IP and netmask
+// straight from esp_netif_get_ip_info() and compared them against a parsed
+// literal. On this little-endian CPU 192.168.1.8 arrives from esp_netif as
+// 0x0801A8C0 while net_ipv4_parse() returns 0xC0A80108 - byte-reversed - and the
+// netmask is worse: 255.255.255.0 arrives as 0x00FFFFFF, so the masked equality
+// compared the WRONG END of the address. Every LAN upload was refused with
+// "is not on this network".
+//
+// ⚠ The unit tests did not catch it and could not have: the harness built both
+// sides with its own host-order helper, so it compared a convention against
+// itself. The defect was in the CALLER'S conversion, outside the function under
+// test. That is what this wrapper is for - it drags the boundary inside the
+// portable file where the harness can reach it.
+uint32_t net_ipv4_from_network_order(uint32_t net_order);
+
 // The decision. True only when sending in the clear is acceptable: we know our
 // own address and mask, we know the target's address, and the target is on our
 // own subnet.
