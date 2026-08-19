@@ -80,6 +80,9 @@ char *config_io_export(size_t *out_len)
     APP("qrz_key            = %s\n", c.qrz_api_key);
     APP("eqsl_user          = %s\n", c.eqsl_user);
     APP("eqsl_pass          = %s\n", c.eqsl_pswd);
+    APP("cloudlog_url       = %s\n", c.cloudlog_url);
+    APP("cloudlog_key       = %s\n", c.cloudlog_key);
+    APP("cloudlog_station   = %s\n", c.cloudlog_station);
     APP("lotw_dxcc          = %s\n", c.lotw_dxcc);
     APP("lotw_cqz           = %s\n", c.lotw_cqz);
     APP("lotw_ituz          = %s\n", c.lotw_ituz);
@@ -244,6 +247,9 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "qrz_key"))           settings_set_qrz_api_key(val);
             else if (!strcasecmp(key, "eqsl_user"))         settings_set_eqsl_user(val);
             else if (!strcasecmp(key, "eqsl_pass"))         settings_set_eqsl_pswd(val);
+            else if (!strcasecmp(key, "cloudlog_url"))      settings_set_cloudlog_url(val);
+            else if (!strcasecmp(key, "cloudlog_key"))      settings_set_cloudlog_key(val);
+            else if (!strcasecmp(key, "cloudlog_station"))  settings_set_cloudlog_station(val);
             else if (!strcasecmp(key, "lotw_dxcc"))         settings_set_lotw_dxcc(val);
             else if (!strcasecmp(key, "lotw_cqz"))          settings_set_lotw_cqz(val);
             else if (!strcasecmp(key, "lotw_ituz"))         settings_set_lotw_ituz(val);

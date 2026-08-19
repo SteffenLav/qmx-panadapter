@@ -25,6 +25,8 @@
 #include "storage/sd_archive.h"  // sd_archive_is_mounted / sd_archive_log_path / lock / unlock
 #include "adif/qrz_upload.h"  // qrz_upload_pending
 #include "adif/eqsl_upload.h" // eqsl_upload_pending
+#include "adif/cloudlog_upload.h" // cloudlog_upload_pending (#171)
+#include "util/net_guard.h"   // net_url_parse - save-time URL sanity only
 #include "adif/lotw_upload.h" // lotw_upload_pending / cert storage
 #include "settings.h"          // settings_load_all / settings_set_qrz_api_key
 #include "factory_reset.h"     // factory_reset_request (web-triggered NVS reset)
@@ -75,7 +77,7 @@ static httpd_handle_t s_server = NULL;
 // upload_status handler uses "kind != UPLOAD_NONE" to decide whether to emit
 // the result fields, and QRZ being 0 previously made a finished QRZ upload
 // look like "no result" (browser read uploaded=undefined -> "undefined QSOs").
-typedef enum { UPLOAD_NONE = 0, UPLOAD_QRZ, UPLOAD_EQSL, UPLOAD_LOTW } upload_kind_t;
+typedef enum { UPLOAD_NONE = 0, UPLOAD_QRZ, UPLOAD_EQSL, UPLOAD_LOTW, UPLOAD_CLOUDLOG } upload_kind_t;
 typedef struct {
     upload_kind_t kind;
 } upload_request_t;
@@ -400,6 +402,7 @@ static esp_err_t status_handler(httpd_req_t *req)
         settings_load_all(&cfg);
         cJSON_AddBoolToObject(root, "qrz_key_set", cfg.qrz_api_key[0] != '\0');
         cJSON_AddBoolToObject(root, "eqsl_creds_set", cfg.eqsl_user[0] != '\0' && cfg.eqsl_pswd[0] != '\0');
+        cJSON_AddBoolToObject(root, "cloudlog_set", cfg.cloudlog_url[0] != '\0' && cfg.cloudlog_key[0] != '\0');
         cJSON_AddBoolToObject(root, "lotw_ready", lotw_cert_present() && cfg.lotw_dxcc[0] != '\0');
 
         // Band-plan for the current band — whole-band strip on the web UI,
@@ -1411,6 +1414,95 @@ static const httpd_uri_t uri_eqsl_upload = {
     .uri = "/api/eqsl_upload", .method = HTTP_POST, .handler = eqsl_upload_handler,
 };
 
+// POST /api/cloudlog_creds - JSON {"url":"...","key":"...","station":"1"} (#171).
+// Cloudlog/Wavelog is SELF-HOSTED, so unlike every other target the address is
+// part of the credentials. Whether that address may be spoken to in plain HTTP
+// is decided PER UPLOAD in cloudlog_upload.c, deliberately not here: saving a
+// URL at home is not consent to send the key to it from wherever the radio
+// happens to be next week.
+static esp_err_t cloudlog_creds_handler(httpd_req_t *req)
+{
+    char buf[320];
+    int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (len < 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no body");
+        return ESP_FAIL;
+    }
+    buf[len] = '\0';
+
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad json");
+        return ESP_FAIL;
+    }
+    const char *url = cJSON_GetStringValue(cJSON_GetObjectItem(root, "url"));
+    const char *key = cJSON_GetStringValue(cJSON_GetObjectItem(root, "key"));
+    const char *stn = cJSON_GetStringValue(cJSON_GetObjectItem(root, "station"));
+
+    // Save-time sanity ONLY, so a typo is caught now rather than at the first
+    // upload. It deliberately does not decide the http/https question.
+    if (url && url[0]) {
+        net_scheme_t sc; char host[80]; uint16_t port;
+        if (!net_url_parse(url, &sc, host, sizeof(host), &port)) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                "URL must look like http://192.168.1.20 or https://log.example.com");
+            return ESP_FAIL;
+        }
+    }
+
+    settings_set_cloudlog_url(url);
+    settings_set_cloudlog_key(key);
+    settings_set_cloudlog_station(stn);
+    // A new server or key describes a DIFFERENT logbook, so the old cursor is
+    // meaningless - start again. Cloudlog dedupes server-side, so the re-send
+    // costs time and nothing else.
+    settings_set_cloudlog_uploaded_n(0);
+    cJSON_Delete(root);
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+// POST /api/cloudlog_upload - queues the upload, returns 202 immediately.
+static esp_err_t cloudlog_upload_handler(httpd_req_t *req)
+{
+    if (!s_upload_queue)
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "upload task not ready");
+
+    xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+    if (s_last_upload.busy) {
+        xSemaphoreGive(s_upload_mutex);
+        httpd_resp_set_status(req, "423 Locked");
+        return httpd_resp_sendstr(req, "upload in progress");
+    }
+    s_last_upload.busy = true;
+    s_last_upload.kind = UPLOAD_CLOUDLOG;
+    s_last_upload.uploaded = 0;
+    s_last_upload.failed = 0;
+    s_last_upload.error[0] = '\0';
+    xSemaphoreGive(s_upload_mutex);
+
+    upload_request_t up = { .kind = UPLOAD_CLOUDLOG };
+    if (!xQueueSend(s_upload_queue, &up, 0)) {
+        xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+        s_last_upload.busy = false;
+        xSemaphoreGive(s_upload_mutex);
+        return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "queue full");
+    }
+
+    httpd_resp_set_status(req, "202 Accepted");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"status\":\"uploading\"}");
+}
+
+static const httpd_uri_t uri_cloudlog_creds = {
+    .uri = "/api/cloudlog_creds", .method = HTTP_POST, .handler = cloudlog_creds_handler,
+};
+static const httpd_uri_t uri_cloudlog_upload = {
+    .uri = "/api/cloudlog_upload", .method = HTTP_POST, .handler = cloudlog_upload_handler,
+};
+
 // POST /api/lotw_cert — JSON {"cert":"<b64 DER>","key":"<b64 PKCS#8 DER>",
 // "dxcc":"221","cqz":"14","ituz":"18"}. The browser parsed the user's .p12
 // with forge.js and sends only the extracted DER - the p12 passphrase never
@@ -1664,7 +1756,8 @@ static esp_err_t upload_status_handler(httpd_req_t *req)
     if (!s_last_upload.busy && s_last_upload.kind != UPLOAD_NONE) {
         cJSON_AddStringToObject(root, "kind",
             s_last_upload.kind == UPLOAD_QRZ  ? "qrz" :
-            s_last_upload.kind == UPLOAD_LOTW ? "lotw" : "eqsl");
+            s_last_upload.kind == UPLOAD_LOTW ? "lotw" :
+            s_last_upload.kind == UPLOAD_CLOUDLOG ? "cloudlog" : "eqsl");
         cJSON_AddNumberToObject(root, "uploaded", s_last_upload.uploaded);
         cJSON_AddNumberToObject(root, "failed",   s_last_upload.failed);
         cJSON_AddStringToObject(root, "error",    s_last_upload.error);
@@ -2850,6 +2943,16 @@ static void upload_task(void *arg)
             s_last_upload.error[sizeof(s_last_upload.error) - 1] = '\0';
             s_last_upload.busy = false;
             xSemaphoreGive(s_upload_mutex);
+        } else if (up.kind == UPLOAD_CLOUDLOG) {
+            cloudlog_upload_result_t result;
+            cloudlog_upload_pending(&result);
+            xSemaphoreTake(s_upload_mutex, portMAX_DELAY);
+            s_last_upload.uploaded = result.uploaded;
+            s_last_upload.failed = result.failed;
+            strncpy(s_last_upload.error, result.error, sizeof(s_last_upload.error) - 1);
+            s_last_upload.error[sizeof(s_last_upload.error) - 1] = '\0';
+            s_last_upload.busy = false;
+            xSemaphoreGive(s_upload_mutex);
         } else if (up.kind == UPLOAD_LOTW) {
             lotw_upload_result_t result;
             lotw_upload_pending(&result);
@@ -2960,6 +3063,8 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_manual);
     httpd_register_uri_handler(s_server, &uri_eqsl_creds);
     httpd_register_uri_handler(s_server, &uri_eqsl_upload);
+    httpd_register_uri_handler(s_server, &uri_cloudlog_creds);
+    httpd_register_uri_handler(s_server, &uri_cloudlog_upload);
     httpd_register_uri_handler(s_server, &uri_lotw_cert);
     httpd_register_uri_handler(s_server, &uri_lotw_upload);
     httpd_register_uri_handler(s_server, &uri_lotw_tq8);

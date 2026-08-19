@@ -55,6 +55,10 @@ static const char *TAG = "settings";
 #define KEY_EQSL_USER    "eqsl_user"
 #define KEY_EQSL_PSWD    "eqsl_pswd"
 #define KEY_EQSL_UPLOADED "eqsl_upl_n"
+#define KEY_CL_URL       "cl_url"
+#define KEY_CL_KEY       "cl_key"
+#define KEY_CL_STATION   "cl_stn"
+#define KEY_CL_UPLOADED  "cl_upl_n"
 #define KEY_CW_AUD_EN    "cw_aud_en"
 #define KEY_CW_AUD_VOL   "cw_aud_vol"
 #define KEY_WF_BLACK     "wf_black"
@@ -231,6 +235,11 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_EQSL_USER     29
 #define DIRTY_EQSL_PSWD     30
 #define DIRTY_EQSL_UPLOADED 31
+/* Cloudlog / Wavelog (#171) - self-hosted upload target */
+#define DIRTY_CL_URL        91
+#define DIRTY_CL_KEY        92
+#define DIRTY_CL_STATION    93
+#define DIRTY_CL_UPLOADED   94
 #define DIRTY_CW_AUD_EN     32
 #define DIRTY_CW_AUD_VOL    33
 #define DIRTY_WF_BLACK      34
@@ -310,6 +319,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_CQ_MSG2, DIRTY_CQ_SEL, DIRTY_ONBOARDED, DIRTY_FT8_FILT,
     DIRTY_WIFI_ENABLED, DIRTY_QMX_GPS, DIRTY_FREQ_KP_CALC,
     DIRTY_QRZ_KEY, DIRTY_EQSL_USER, DIRTY_EQSL_PSWD,
+    DIRTY_CL_URL, DIRTY_CL_KEY, DIRTY_CL_STATION,
     DIRTY_WF_BLACK, DIRTY_WF_CONTRAST, DIRTY_WF_BLEND, DIRTY_WF_WINDOW,
     DIRTY_DISP_FLIP, DIRTY_QMX_VOL, DIRTY_CW_AUD_VOL, DIRTY_CHARGE_LIM_EN,
     DIRTY_CHARGE_LIM_PCT,
@@ -443,6 +453,10 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_EQSL_USER))     nvs_set_str(s_nvs, KEY_EQSL_USER, snap.eqsl_user);
         if (dirty_test(&dirty_local, DIRTY_EQSL_PSWD))     nvs_set_str(s_nvs, KEY_EQSL_PSWD, snap.eqsl_pswd);
         if (dirty_test(&dirty_local, DIRTY_EQSL_UPLOADED)) nvs_set_u32(s_nvs, KEY_EQSL_UPLOADED, snap.eqsl_uploaded_n);
+        if (dirty_test(&dirty_local, DIRTY_CL_URL))      nvs_set_str(s_nvs, KEY_CL_URL, snap.cloudlog_url);
+        if (dirty_test(&dirty_local, DIRTY_CL_KEY))      nvs_set_str(s_nvs, KEY_CL_KEY, snap.cloudlog_key);
+        if (dirty_test(&dirty_local, DIRTY_CL_STATION))  nvs_set_str(s_nvs, KEY_CL_STATION, snap.cloudlog_station);
+        if (dirty_test(&dirty_local, DIRTY_CL_UPLOADED)) nvs_set_u32(s_nvs, KEY_CL_UPLOADED, snap.cloudlog_uploaded_n);
         if (dirty_test(&dirty_local, DIRTY_CW_AUD_EN))  nvs_set_u8(s_nvs, KEY_CW_AUD_EN,  snap.cw_audio_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_CW_AUD_VOL)) nvs_set_u8(s_nvs, KEY_CW_AUD_VOL, snap.cw_audio_vol);
         if (dirty_test(&dirty_local, DIRTY_WF_BLACK))    nvs_set_float(KEY_WF_BLACK,    snap.wf_black_db);
@@ -619,6 +633,10 @@ static void load_from_nvs(qmx_settings_t *out)
     out->eqsl_user[0] = '\0';
     out->eqsl_pswd[0] = '\0';
     out->eqsl_uploaded_n = 0;
+    out->cloudlog_url[0] = '\0';
+    out->cloudlog_key[0] = '\0';
+    out->cloudlog_station[0] = '\0';
+    out->cloudlog_uploaded_n = 0;
     out->cw_audio_en  = DEF_CW_AUD_EN;
     out->cw_audio_vol = DEF_CW_AUD_VOL;
     out->wf_black_db    = DEF_WF_BLACK;
@@ -756,6 +774,16 @@ static void load_from_nvs(qmx_settings_t *out)
     sz = sizeof(out->eqsl_pswd);
     nvs_get_str(s_nvs, KEY_EQSL_PSWD, out->eqsl_pswd, &sz);
     nvs_get_u32(s_nvs, KEY_EQSL_UPLOADED, &out->eqsl_uploaded_n);
+    out->cloudlog_url[0] = '\0';
+    sz = sizeof(out->cloudlog_url);
+    nvs_get_str(s_nvs, KEY_CL_URL, out->cloudlog_url, &sz);
+    out->cloudlog_key[0] = '\0';
+    sz = sizeof(out->cloudlog_key);
+    nvs_get_str(s_nvs, KEY_CL_KEY, out->cloudlog_key, &sz);
+    out->cloudlog_station[0] = '\0';
+    sz = sizeof(out->cloudlog_station);
+    nvs_get_str(s_nvs, KEY_CL_STATION, out->cloudlog_station, &sz);
+    nvs_get_u32(s_nvs, KEY_CL_UPLOADED, &out->cloudlog_uploaded_n);
 
     if (nvs_get_u8(s_nvs, KEY_CW_AUD_EN, &u8v) == ESP_OK) out->cw_audio_en = (u8v != 0);
     nvs_get_u8(s_nvs, KEY_CW_AUD_VOL, &out->cw_audio_vol);
@@ -1324,6 +1352,62 @@ void settings_set_eqsl_uploaded_n(uint32_t n)
     s_pending.eqsl_uploaded_n = n;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_EQSL_UPLOADED);
+}
+
+/* ---- Cloudlog / Wavelog (#171) --------------------------------------------
+ * The URL is the operator's own server, so unlike every other upload target it
+ * is stored rather than compiled in. util/net_guard.c decides, per upload,
+ * whether that address may be spoken to in the clear. */
+void settings_set_cloudlog_url(const char *url)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (url) {
+        strncpy(s_pending.cloudlog_url, url, sizeof(s_pending.cloudlog_url) - 1);
+        s_pending.cloudlog_url[sizeof(s_pending.cloudlog_url) - 1] = '\0';
+    } else {
+        s_pending.cloudlog_url[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CL_URL);
+}
+
+void settings_set_cloudlog_key(const char *key)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (key) {
+        strncpy(s_pending.cloudlog_key, key, sizeof(s_pending.cloudlog_key) - 1);
+        s_pending.cloudlog_key[sizeof(s_pending.cloudlog_key) - 1] = '\0';
+    } else {
+        s_pending.cloudlog_key[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CL_KEY);
+}
+
+void settings_set_cloudlog_station(const char *station_id)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (station_id) {
+        strncpy(s_pending.cloudlog_station, station_id, sizeof(s_pending.cloudlog_station) - 1);
+        s_pending.cloudlog_station[sizeof(s_pending.cloudlog_station) - 1] = '\0';
+    } else {
+        s_pending.cloudlog_station[0] = '\0';
+    }
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CL_STATION);
+}
+
+void settings_set_cloudlog_uploaded_n(uint32_t n)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.cloudlog_uploaded_n == n) { xSemaphoreGive(s_mutex); return; }
+    s_pending.cloudlog_uploaded_n = n;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_CL_UPLOADED);
 }
 
 void settings_set_wf_black_db(float db)

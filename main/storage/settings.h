@@ -88,6 +88,13 @@ typedef struct {
     char     eqsl_user[16];   // eQSL.cc username (callsign), set via web UI
     char     eqsl_pswd[32];   // eQSL.cc password
     uint32_t eqsl_uploaded_n; // count of ADIF records already uploaded to eQSL
+    // Cloudlog / Wavelog (#171). Self-hosted, so the ADDRESS is the operator's -
+    // the only upload target here whose host is not hardcoded. May be plain http
+    // when it resolves onto our own subnet; see util/net_guard.h for the rule.
+    char     cloudlog_url[96];   // base URL, e.g. http://cloudlog.lan or https://log.example.com
+    char     cloudlog_key[64];   // Cloudlog API key
+    char     cloudlog_station[8];// station_profile_id, as text - it is an opaque id, not arithmetic
+    uint32_t cloudlog_uploaded_n;// count of ADIF records already uploaded to Cloudlog
     bool     cw_audio_en;     // CW sidetone audio on Tab5 speaker/headphone (default false)
     uint8_t  cw_audio_vol;    // CW audio output volume 0..100 (default 60)
     float    wf_black_db;     // waterfall black level: dB above floor -> black (default 9)
@@ -435,6 +442,12 @@ void settings_set_eqsl_pswd(const char *pswd);
 // Count of ADIF records already uploaded to eQSL (offset into the log file
 // for the next upload batch). Debounced flush.
 void settings_set_eqsl_uploaded_n(uint32_t n);
+
+// Cloudlog / Wavelog (#171). The URL is the operator's own server.
+void settings_set_cloudlog_url(const char *url);
+void settings_set_cloudlog_key(const char *key);
+void settings_set_cloudlog_station(const char *station_id);
+void settings_set_cloudlog_uploaded_n(uint32_t n);
 
 // LoTW station-location fields, set via the web UI's cert-import dialog
 // (debounced flush). DXCC is the entity number as a digit string; zones are

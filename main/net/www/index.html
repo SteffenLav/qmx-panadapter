@@ -513,6 +513,8 @@
         <a href="#" id="qrz-creds-link" class="subrow" style="display:none" title="Replace the stored QRZ Logbook API key - after a new key is issued, or if it was typed wrongly the first time.">&#8627; Change QRZ API key</a>
         <a href="#" id="eqsl-link">eQSL upload &#8593;</a>
         <a href="#" id="eqsl-creds-link" class="subrow" style="display:none" title="Replace the stored eQSL.cc username and password.">&#8627; Change eQSL login</a>
+        <a href="#" id="cloudlog-link" title="Upload to your own Cloudlog or Wavelog server. If it is on your home network this is the only upload that needs no internet at all.">Cloudlog upload &#8593;</a>
+        <a href="#" id="cloudlog-creds-link" class="subrow" style="display:none" title="Replace the stored Cloudlog server address and API key.">&#8627; Change Cloudlog server</a>
         <a href="#" id="lotw-link" title="ARRL Logbook of the World. Once set up: signs pending QSOs on-device and uploads. Ctrl-click to re-run setup (e.g. after a certificate renewal).">LoTW setup</a>
         <a href="#" id="adif-view-link" title="View the QSO log in the browser - delete single records or clear the whole log. Handy before a POTA activation: start with an empty log and the ADIF at the end is exactly what you submit.">View / edit log</a>
       </div>
@@ -849,6 +851,7 @@ let serverUtcAtTick = 0;   // server epoch (s) at last /api/status
 let localAtTick     = 0;   // Date.now()/1000 when that response arrived
 let qrzKeySet        = false;
 let eqslCredsSet     = false;
+let cloudlogSet      = false;
 let lotwReady        = false;
 let lastBandplan     = null;   // {lo, hi, segs:[{lo,hi,c,l}]} or null if off-band
 /* Live spots (POTA/RBN) for the band we are on, from /api/status - the SAME
@@ -984,6 +987,8 @@ function updateCredsRows() {
   const e = document.getElementById("eqsl-creds-link");
   if (q) q.style.display = qrzKeySet    ? "block" : "none";
   if (e) e.style.display = eqslCredsSet ? "block" : "none";
+  const c = document.getElementById("cloudlog-creds-link");
+  if (c) c.style.display = cloudlogSet ? "block" : "none";
 }
 
 async function promptQrzKey() {
@@ -1017,6 +1022,60 @@ document.getElementById("qrz-creds-link").addEventListener("click", async (e) =>
 document.getElementById("eqsl-creds-link").addEventListener("click", async (e) => {
   e.preventDefault();
   if (await promptEqslCreds()) alert("eQSL username and password saved.");
+});
+
+/* Cloudlog / Wavelog (#171, Mark G4MEM). The only upload target that is
+   SELF-HOSTED, so the address is part of the credentials.
+
+   The http/https wording here matters and is not boilerplate: Mark runs his on
+   his own LAN with no certificate, which is a perfectly reasonable thing to do,
+   and the firmware permits it — but only to a numeric address on the same
+   subnet the Tab5 is currently on, re-checked at every upload. So the prompt
+   says what will and will not work rather than letting him find out from a
+   refusal later. */
+async function promptCloudlogCreds() {
+  const url = prompt(
+    "Cloudlog / Wavelog server address.\n\n" +
+    "https://log.example.com  - works anywhere\n" +
+    "http://192.168.1.20      - your own network only, and must be the numeric address\n\n" +
+    "(plain http is allowed only while the Tab5 is on the same network as the server,\n" +
+    "so your API key never crosses the internet in the clear)");
+  if (!url) return false;
+  const key = prompt("Cloudlog API key:");
+  if (!key) return false;
+  const station = prompt("Station profile ID (from the Cloudlog URL). Leave blank for 1:", "1");
+  if (station === null) return false;
+
+  const r = await fetch("/api/cloudlog_creds", {
+    method: "POST",
+    body: JSON.stringify({ url: url.trim().replace(/\/+$/, ""), key: key.trim(),
+                           station: (station || "1").trim() }),
+  });
+  if (!r.ok) { alert("Could not save: " + (await r.text())); return false; }
+  cloudlogSet = true;
+  updateCredsRows();
+  return true;
+}
+
+document.getElementById("cloudlog-creds-link").addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (await promptCloudlogCreds()) alert("Cloudlog server and key saved.");
+});
+
+document.getElementById("cloudlog-link").addEventListener("click", async (e) => {
+  e.preventDefault();
+  if (!cloudlogSet && !(await promptCloudlogCreds())) return;
+  const link = document.getElementById("cloudlog-link");
+  const prevText = link.textContent;
+  link.textContent = "Uploading…";
+  try {
+    await fetch("/api/cloudlog_upload", { method: "POST" });
+    await pollUploadStatus("Cloudlog");
+  } catch (err) {
+    alert("Cloudlog upload failed: " + err);
+  } finally {
+    link.textContent = prevText;
+  }
 });
 
 /* QRZ Logbook upload — prompts for an API key the first time (saved on the
@@ -2984,6 +3043,7 @@ async function tick() {
     const lotwLink = document.getElementById("lotw-link");
     qrzKeySet    = !!s.qrz_key_set;
     eqslCredsSet = !!s.eqsl_creds_set;
+    cloudlogSet  = !!s.cloudlog_set;
     lotwReady    = !!s.lotw_ready;
     updateCredsRows();   // the "Change ..." rows exist only once there is
                          // something stored to change
