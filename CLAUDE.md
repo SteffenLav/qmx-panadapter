@@ -427,6 +427,55 @@ The Tab5's USB-A host is the P4's **UTMI PHY = High-Speed only** (`usb_phy.c`: *
 ### LVGL memory pool → PSRAM (`main/util/lv_pool_shim.h`)
 LVGL's builtin tlsf allocator normally reserves a static 256 KB array in internal BSS (`CONFIG_LV_MEM_SIZE_KILOBYTES=256`). `lv_pool_shim.h` is force-included into the `lvgl__lvgl` component build (via `main/CMakeLists.txt`) and defines `LV_MEM_POOL_ALLOC` to call `heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT)` instead, freeing that 256 KB of internal SRAM for FreeRTOS/SDMMC/USB host/LWIP/the web server. Explicit and harmless — LVGL doesn't care where its pool memory comes from.
 
+### A liveness flag must be claimed by the SPAWNER, never set inside the task (#199, 2026-08-20)
+`s_ft8_task_alive` and `s_decode_task_alive` were each set as their own task's
+**first statement**, so both meant *"this task has begun RUNNING"* — while every
+reader (the single-instance guard in `ft8_self_test()`, and the 1 Hz respawn
+watchdog in `ft8_screen_view.c`) needs *"this task EXISTS"*. Between the two
+sits the whole scheduling delay.
+
+**On this board that delay is long, not a hair's breadth.** Both tasks are
+created at `tskIDLE_PRIORITY + 1` — the **lowest priority in the system** — under
+the capture task, `fft_task` (4), taskLVGL, the feeds (2) and httpd (5). Taking
+over a second to get a first slice is ordinary; the same starvation was measured
+directly the same day in `ft8_screen.c`'s `record_decode`, where a **mutex holder
+went ~190 ms with no CPU** and its own log line surfaced out of order.
+
+So the FT8-entry path spawned the task, the watchdog looked a second later, saw
+a flag still false, logged `respawning` and spawned a **second** one. Both built
+the monitor pool and the second double-freed the shared FFT scratch — almost
+certainly the `tlsf_free` double-free reboot open and unreproduced since v1.3.0.
+
+**The rule:** set the flag *before* `xTaskCreate`, and clear it if creation
+fails — otherwise nothing ever clears it and the subsystem is dead for the
+session with its watchdog refusing to retry. **Do not "fix" this with a grace
+period in the watchdog**: that only makes the race rarer, and this file already
+records two attempts falsified on hardware for exactly that reason (the
+`cdc_acm_host_close()` abort). *Timing changes the odds of a race, not the race.*
+
+A sweep of every task entry point in `main/` found **three** flags of this shape
+and only these two were real. `wifi.c`'s `s_wifi_started` is a **false positive**
+and must stay as it is — it records that `esp_wifi_start()` succeeded and is set
+at each call site right after the call, which is the correct pattern.
+
+⚠ **Not hardware-verified, and it cannot be with the radio off** — see the
+radio-off constraint below.
+
+### FT8 entry cannot be exercised with the QMX powered OFF
+`ui_request_base_mode()` is consumed by `qmx_wait_poll_cb()`, so while the
+"Waiting for QMX..." prompt is up the base-mode change **never completes** —
+`/api/cmd {"action":"screen","screen":"ft8"}` returns fine and `/api/status`
+keeps reporting `panadapter`. `build_monitor_pool()` is likewise only reached
+after CAT comes up.
+
+**So anything gated on FT8 entry — #38's task-stack leak, #199's double build,
+the monitor pool, the decode tasks — cannot be tested with the radio off, and a
+clean-looking result means the test did not run.** Measured 2026-08-20: twelve
+web-driven toggles moved `psram free` by **0 KB** against a predicted ~2 MB, and
+the capture held zero `waiting for CAT`, zero `respawning` and zero guard
+refusals, i.e. no task was ever spawned. A zero-leak reading has exactly the
+shape of good news; check the task actually started before believing it.
+
 ### Task stacks on this board are TINY — a multi-hundred-byte local is a bug until proven otherwise
 Measured stack bounds from real crash dumps: **`sys_evt` 2808 B**, **`settings_flush` 3064 B**. `taskLVGL` is ~8 KB. So a "small" local array is not small here. Instances so far, all the same bug: the v0.20.1 pounce crash (11 KB `ft8_call_t snap[]` on taskLVGL — the compiler reserves the frame at the prologue **unconditionally**, so it fired on every pounce regardless of the code path taken), and three in one sitting on 2026-08-05 while adding the WiFi known-network list — a `wifi_known_t[6]` (~590 B) on `sys_evt` (twice: the GOT_IP log and the backoff probe) and on `settings_flush`, each producing `Guru Meditation: Stack protection fault` and a **crash loop**.
 
