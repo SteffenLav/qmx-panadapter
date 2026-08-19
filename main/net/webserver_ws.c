@@ -68,8 +68,21 @@ static int            volatile s_ws_fd    = -1;
 static volatile bool           s_session_active = false;
 
 static float          s_spec[DSP_FFT_SIZE];
-static uint8_t        s_payload[WS_FRAME_LEN];
-static httpd_ws_frame_t s_ws_frame;  // static, NOT stack-local
+
+// WS wire buffer: the RFC 6455 header is built directly IN FRONT of the payload
+// so header and body leave as ONE contiguous send. A split between them is one of
+// the two ways the stream can desynchronise (see ws_send_all below).
+// Layout: [0..3] = 4-byte header for a 126-length frame, [4..] = our payload.
+#define WS_WIRE_HDR_LEN 4
+static uint8_t        s_txbuf[WS_WIRE_HDR_LEN + WS_FRAME_LEN];
+static uint8_t *const s_payload = s_txbuf + WS_WIRE_HDR_LEN;
+
+// Frames that needed more than one send() to go out, i.e. instances of the
+// partial write that used to silently corrupt the stream. Reported on the fps
+// line. This is the ONLY evidence that the fix is doing something: before it,
+// these were indistinguishable from healthy sends (IDF returned ESP_OK), which
+// is the same trap #189 documents for the silent USB patches.
+static uint32_t       s_partial_writes = 0;
 
 static TaskHandle_t   s_push_task = NULL;
 
@@ -83,6 +96,106 @@ static volatile bool s_ws_paused = false;
 void webserver_ws_set_paused(bool paused)
 {
     s_ws_paused = paused;
+}
+
+// ---------------------------------------------------------------------------
+// Sending a WS frame WITHOUT the partial-write bug in IDF's own helper.
+//
+// ⛔ Do NOT go back to httpd_ws_send_frame_async() for the spectrum stream.
+// Verified by reading the PINNED IDF v5.4.4 source
+// (components/esp_http_server/src/httpd_ws.c), not inferred: it sends the header
+// and the payload with two BARE calls to sess->send_fn() and checks only "< 0".
+// httpd_default_send() is a single send() that RETURNS A BYTE COUNT, and a short
+// count is not negative - so a PARTIAL TCP WRITE IS REPORTED TO US AS ESP_OK.
+// The ordinary HTTP path does not have this bug: it uses httpd_send_all(), which
+// loops until the buffer is drained. The WS path simply never got that loop.
+//
+// This bites here harder than it would anywhere else, because ws_uri_handler()
+// deliberately sets SO_SNDTIMEO to 400 ms (so a stuck send cannot freeze the
+// single httpd worker - the 2026-07-14 fix). A send timeout on a socket that has
+// already queued some bytes is EXACTLY how a short count arises, so on a
+// congested link the partial write is not a rare edge case, it is the expected
+// outcome. The freeze fix and this bug are the same line of code.
+//
+// The consequence is not a dropped frame, it is a CORRUPT STREAM. The browser has
+// been told to expect WS_FRAME_LEN payload bytes; it gets fewer, so it consumes
+// the NEXT frame's header as the tail of this one and every frame afterwards is
+// misparsed. The browser then sees a protocol violation and closes the socket -
+// which is why the symptom is "the panadapter freezes for a few seconds and then
+// comes back", not "one glitchy frame".
+//
+// MEASURED on a 9.6 h capture of v1.8.6-7-g7f387ab, before this fix:
+//   * 545 session teardowns, median 14.4 s apart
+//   * each costing the browser a median 2.2 s (p90 4.5 s) blackout while it
+//     reconnected - matching Samuel W7STF's "several seconds later it begins to
+//     animate again" (#177196)
+//   * feed activity enriched in the 2 s before a teardown: RBN 8.4x, DX cluster
+//     8.6x, TLS handshake 5.7x, SDIO recovery 4.6x, against an 8.1 % base rate
+// Socket exhaustion was TESTED AND FALSIFIED as the cause (0 accept/ENFILE
+// errors), so do not go looking there again.
+// ---------------------------------------------------------------------------
+typedef enum {
+    WS_TX_OK = 0,    // the whole frame reached the socket
+    WS_TX_SKIPPED,   // nothing was sent; frame abandoned cleanly, stream still in sync
+    WS_TX_DEAD,      // session gone, or the frame could not be completed
+} ws_tx_result_t;
+
+// Send every byte or report why not. The invariant this exists to keep: once ANY
+// byte of a frame is on the wire we are committed - abandoning it mid-frame is
+// what desynchronises the stream, so the only honest outcomes from that point are
+// "finished it" or "closed the session".
+static ws_tx_result_t ws_send_all(httpd_handle_t hd, int fd,
+                                  const uint8_t *buf, size_t len,
+                                  uint32_t budget_ms)
+{
+    size_t     off   = 0;
+    int        sends = 0;
+    TickType_t start = xTaskGetTickCount();
+
+    while (off < len) {
+        int r = httpd_socket_send(hd, fd, (const char *)buf + off, len - off, 0);
+        if (r > 0) {
+            off += (size_t)r;
+            sends++;
+            continue;
+        }
+        // The session has already been removed from httpd's table. This is not a
+        // transient condition and never becomes one, so waiting on it is pure
+        // added blackout - close now. (Same reading as httpd_ws_send_frame_async
+        // returning ESP_ERR_INVALID_ARG, which is what we used to burn 15
+        // attempts on.)
+        if (r == HTTPD_SOCK_ERR_INVALID) return WS_TX_DEAD;
+        if (r == HTTPD_SOCK_ERR_FAIL)    return WS_TX_DEAD;
+
+        // HTTPD_SOCK_ERR_TIMEOUT (EAGAIN: the TCP send buffer is full).
+        // Nothing sent yet => the stream is still perfectly in sync, so dropping
+        // this frame is free and the session survives the congestion.
+        if (off == 0) return WS_TX_SKIPPED;
+
+        // Committed mid-frame. Keep trying inside a bounded budget rather than
+        // leaving the browser parsing garbage.
+        if ((uint32_t)((xTaskGetTickCount() - start) * portTICK_PERIOD_MS) >= budget_ms)
+            return WS_TX_DEAD;
+        vTaskDelay(pdMS_TO_TICKS(10));
+    }
+
+    if (sends > 1) s_partial_writes++;   // would have been silent corruption before
+    return WS_TX_OK;
+}
+
+// Build an unmasked binary frame header in front of `payload_len` bytes that are
+// already sitting at buf + WS_WIRE_HDR_LEN, then send the lot in one go.
+static ws_tx_result_t ws_send_binary(httpd_handle_t hd, int fd,
+                                     uint8_t *buf, size_t payload_len,
+                                     uint32_t budget_ms)
+{
+    // Only the 16-bit length form is needed: every frame we send is either 1 byte
+    // (takeover notice) or WS_FRAME_LEN, and 126 is valid for anything <= 65535.
+    buf[0] = 0x80 | HTTPD_WS_TYPE_BINARY;      // FIN + opcode 0x2
+    buf[1] = 126;
+    buf[2] = (uint8_t)((payload_len >> 8) & 0xFF);
+    buf[3] = (uint8_t)(payload_len & 0xFF);
+    return ws_send_all(hd, fd, buf, WS_WIRE_HDR_LEN + payload_len, budget_ms);
 }
 
 // httpd worker has 1 task, so this URI handler runs in the only worker.
@@ -125,16 +238,15 @@ static esp_err_t ws_uri_handler(httpd_req_t *req)
         // mode if the stale socket is genuinely dead is that this send fails and the
         // close proceeds exactly as before.
         {
-            uint8_t bye = WS_FRAME_TYPE_TAKEOVER;
-            httpd_ws_frame_t f = {
-                .final = true, .type = HTTPD_WS_TYPE_BINARY,
-                .payload = &bye, .len = 1,
-            };
+            uint8_t bye[WS_WIRE_HDR_LEN + 1];
+            bye[WS_WIRE_HDR_LEN] = WS_FRAME_TYPE_TAKEOVER;
             httpd_handle_t h = s_server ? s_server : req->handle;
-            esp_err_t terr = httpd_ws_send_frame_async(h, s_ws_fd, &f);
-            if (terr != ESP_OK)
-                ESP_LOGD(TAG, "takeover notice to fd=%d failed: %s (closing anyway)",
-                         s_ws_fd, esp_err_to_name(terr));
+            // Same all-or-nothing send as the stream: a half-written notice would
+            // desynchronise the very socket we are about to close, and the stale
+            // browser would report a protocol error instead of the reason.
+            if (ws_send_binary(h, s_ws_fd, bye, 1, 200) != WS_TX_OK)
+                ESP_LOGD(TAG, "takeover notice to fd=%d did not go out (closing anyway)",
+                         s_ws_fd);
         }
         httpd_sess_trigger_close(s_server ? s_server : req->handle, s_ws_fd);
     }
@@ -164,10 +276,6 @@ static esp_err_t ws_uri_handler(httpd_req_t *req)
 static void ws_push_task(void *arg)
 {
     (void)arg;
-    s_ws_frame.final   = true;
-    s_ws_frame.type    = HTTPD_WS_TYPE_BINARY;
-    s_ws_frame.payload = s_payload;
-    s_ws_frame.len     = WS_FRAME_LEN;
     s_payload[0] = WS_FRAME_TYPE_SPECTRUM;
 
     const int   N     = DSP_FFT_SIZE;
@@ -252,17 +360,27 @@ static void ws_push_task(void *arg)
             s_payload[WS_HEADER_LEN + i] = (uint8_t)q;
         }
 
-        esp_err_t err = httpd_ws_send_frame_async(s_server, s_ws_fd, &s_ws_frame);
-        if (err != ESP_OK) {
+        // Budget for finishing a frame we are already committed to. Deliberately
+        // longer than one push period: dropping the session costs the browser a
+        // ~2 s reconnect, so riding out a congestion burst is much cheaper than
+        // being strict here.
+        ws_tx_result_t tx = ws_send_binary(s_server, s_ws_fd, s_txbuf, WS_FRAME_LEN, 1500);
+
+        if (tx == WS_TX_SKIPPED) {
+            // Nothing went out and the stream is still in sync. Count it, so a
+            // link that is congested for a sustained period still ends the
+            // session rather than showing a frozen page forever.
             TickType_t now_fail = xTaskGetTickCount();
             if (++fail_streak == 1) fail_streak_at = now_fail;
             uint32_t streak_ms = (uint32_t)(now_fail - fail_streak_at) * portTICK_PERIOD_MS;
-            if (fail_streak < MAX_FAIL_STREAK && streak_ms < (uint32_t)MAX_FAIL_STREAK_MS) {
-                // Transient: skip this frame, keep the session, retry next tick.
+            if (fail_streak < MAX_FAIL_STREAK && streak_ms < (uint32_t)MAX_FAIL_STREAK_MS)
                 continue;
-            }
-            ESP_LOGW(TAG, "async send failed fd=%d: %s (%d in a row, %ums); closing session",
-                     s_ws_fd, esp_err_to_name(err), fail_streak, (unsigned)streak_ms);
+            ESP_LOGW(TAG, "send blocked fd=%d (%d in a row, %ums); closing session",
+                     s_ws_fd, fail_streak, (unsigned)streak_ms);
+            tx = WS_TX_DEAD;
+        }
+
+        if (tx == WS_TX_DEAD) {
             // Close the socket so its LWIP slot is freed (see takeover note above).
             int dead = s_ws_fd;
             s_session_active = false;
@@ -279,7 +397,12 @@ static void ws_push_task(void *arg)
         TickType_t now = xTaskGetTickCount();
         if ((now - fps_at) >= pdMS_TO_TICKS(5000)) {
             float fps = (float)sent * 1000.0f / (float)pdTICKS_TO_MS(now - fps_at);
-            ESP_LOGI(TAG, "tx %.1f fps", fps);
+            // `partial` counts frames that needed more than one send() to go out.
+            // Every one of those was, before this fix, a silently corrupted stream
+            // and therefore a browser-side disconnect a moment later. A non-zero
+            // count here is the fix working, NOT a fault.
+            ESP_LOGI(TAG, "tx %.1f fps (partial writes healed: %u)",
+                     fps, (unsigned)s_partial_writes);
             sent = 0;
             fps_at = now;
         }
