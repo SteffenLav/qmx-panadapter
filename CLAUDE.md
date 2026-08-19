@@ -551,6 +551,41 @@ find, so `PB_SSB_LOW_HZ` stays at 200 and is marked UNVERIFIED. Do not "make it
 consistent" with the digital figure — that would be a guess wearing evidence's
 clothes. Samuel has been asked for the real number.
 
+### ⛔ The FT8 monitor pool can be built TWICE, and the build path used to double-free the shared FFT scratch
+Serial-captured 2026-08-19 switching into FT8, and it is almost certainly the
+**"one unreproduced `tlsf_free` double-free reboot"** open since v1.3.0 — it now has
+a backtrace and a mechanism.
+
+```
+ft8_task -> build_monitor_pool (ft8_test.c:535) -> free()
+assert failed: tlsf_free ... block already marked as free
+```
+
+All `FT8_NUM_BUFFERS` (2) monitors share ONE FFT scratch buffer. The build loop
+freed `s_mon_pool[i]->fft_work` **unconditionally** before repointing it, so on a
+rebuild that skipped the teardown every monitor still pointed at the OLD shared
+buffer and the same block was freed twice. ⚠ **The two TEARDOWN paths already make
+exactly this check** (`if (fft_work == s_shared_fft_work) fft_work = NULL;` in
+`free_monitor_pool` and `reinit_pool_if_mode_changed`) — only the build path was
+missing it, which is the shape to look for when a shared buffer is introduced.
+
+**What made it build twice**, from the log one second earlier:
+`W ft8_view: t_clock_cb: FT8 view visible but no ft8_task alive - respawning` — the
+respawn watchdog (v0.20.0) raced the normal FT8-entry path. Four `Block size` lines
+where one build emits two confirms it.
+
+**Fixed: the REBOOT, not the double build.** The loop frees only a buffer the monitor
+owns, and an old shared buffer left unreferenced is **LEAKED once** rather than freed —
+a decode may still be reading it on the other core, and a use-after-free would be just
+as fatal and harder to find. ⚠ **It logs a LOUD warning** (`monitor pool rebuilt with
+no teardown`) precisely so the double build stays visible; a silent survival is how
+this stayed open for months. **TODO #199** is the real fix — making the respawn
+watchdog and the FT8-entry path agree on who starts `ft8_task`. That is task
+lifecycle, where the v0.18.1 double-spawn and v0.19.5 worker-join crashes both live,
+so it wants a soak rather than a quick edit. ⚠ **The defensive path has NOT been seen
+firing**: 6 FT8-entry cycles and an FT8→FT4 change were all clean, with 2 respawn
+events survived — which means the fault did not recur, NOT that the fix is proven.
+
 ### ⛔ `httpd_ws_send_frame_async()` reports a PARTIAL WRITE as success — never use it for the stream
 Samuel W7STF's "the web panadapter hangs for seconds, and it is worse every
 release" (#193, v1.8.7). Root-caused by MEASURING a 9.6 h capture first, not by

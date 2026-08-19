@@ -90,6 +90,19 @@ When you call CQ (or work a busy run), more than one station may answer at once 
 
 The pile-up tracker never transmits on its own — it only remembers callers; you choose who to work. If you'd rather it *did*, check **Auto-work pileup** in the Filter modal: the strongest waiting caller is pounced automatically when your current QSO completes — or immediately, if you enable it with callers already waiting and nothing else in progress. It carries the same unattended-TX warning as the robot.
 
+#### Pick callers myself
+
+Normally, while you are calling CQ, the first station to answer starts the exchange straight away. Check **Pick callers myself** in the Filter modal and that no longer happens: an answering station waits in the pile-up until *you* tap them, and from that point the exchange runs automatically as usual.
+
+Only the *choice* becomes manual. You are not signing up to type anything, or to send each message by hand.
+
+Two things it deliberately does:
+
+- **It keeps calling CQ while you decide.** The pile-up carries on building, which is usually what you want when activating — and a radio that fell silent while you thought about it would look like it had stopped working.
+- **It overrides Auto-work pileup.** Both settings decide who to work next, so if you have asked to choose, nothing else picks for you a moment later.
+
+Off unless you turn it on, so nothing changes for anyone who does not want it.
+
 ### 2. Call CQ
 
 Tap the **Call CQ** button. A modal opens:

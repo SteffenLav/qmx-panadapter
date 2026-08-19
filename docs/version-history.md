@@ -2082,6 +2082,24 @@ On a Tab5 run from USB-C with no NP-F550, the readout alternated between 100% (8
 
 It now also checks two things a real pack cannot do — moving several volts between one-second readings, and running the device at 4.2 V. The web page is told as well, so it shows "USB" instead of inventing a percentage.
 
+### Pick callers myself, while running CQ (Eric K3FNB)
+
+> "When I am activating a park, I sometimes like to be a bit more engaged. If it is possible, could you have an option where I have to tap on a caller/hunter in order to initiate the exchange? I don't mind the firmware automating the rest of the exchange, I just would like to have the option to not auto-pounce on hunters."
+
+New option in the FT8 Filter modal. With it on, a station answering your CQ does not start the exchange — they wait in the pile-up until you tap them, and the exchange then runs itself exactly as before. Only the *choice* becomes manual.
+
+It deliberately keeps calling CQ rather than standing down. An activator wants the pile-up building while they pick, and a radio that went quiet would look like it had stopped. It also overrides "Auto-work pileup", because both settings decide who to work next and someone who asked to choose has not asked to have the strongest caller chosen for them a moment later.
+
+Off unless you turn it on.
+
+### A Bluetooth mouse whose pointer moved erratically (Kevin KW6E)
+
+His Microsoft Surface Arc connected and scrolled perfectly but the pointer jumped about. Two things were wrong. The mouse fix that shipped in v1.8.4 went into the **USB** path, and his mouse is **Bluetooth** — so it never touched the code he was running.
+
+The rest came out of the diagnostic log he attached, without needing his hardware. His mouse sends nine-byte reports with 16-bit movement; the firmware treated any report of five bytes or more as the layout of a Logitech M240, where the two axes share a nibble. His own report `00 06 00 0b 00 ff ff 00 00` is X=+6, Y=+11, and that arithmetic turned it into X=−1280, Y=0 — a large jump the wrong way with no vertical movement. Scrolling survived because the wheel byte lands in the same place either way.
+
+The decode now picks between layouts that have each been captured off real hardware, and the same routine serves both the USB and Bluetooth paths — the USB one had the matching assumption waiting for the next mouse. The mouse's own report descriptor remains the preferred answer; this is only what happens when it cannot be read.
+
 ### A warning that blamed the wrong thing (Samuel W7STF)
 
 After swapping cables he once got "is the radio set to 2 USB serial ports?" on a radio that was already set to two. The second port was opened exactly once, and any failure produced that message — so a radio still re-enumerating after a cable swap was reported as a configuration mistake. It now retries, and only names the setting when the radio is demonstrably present.
@@ -2094,6 +2112,7 @@ After swapping cables he once got "is the radio set to 2 USB serial ports?" on a
 - **A crash after about seven hours is fixed** — a bare `abort()` in ESP-IDF's USB driver on a state it treats as impossible. This is the fourth of that family. As with the last one the reboot was not the expensive part: it happens with the radio attached, so the QMX then could not reconnect for the rest of the night.
 - **The flash-persisted diagnostic log no longer stops writing.** It reported "no space left" with 400 KB free — not a capacity problem but a garbage-collection one, caused by deleting a 256 KB file every 11 minutes. The boot log now lists every file with its size.
 - **Two silent USB patches now count what they catch.** They cannot log, because they run in an interrupt, so a clean log could not distinguish "never happened" from "happened and was handled". Neither has fired yet, which is now a statement of fact rather than an inference from silence.
+- **Entering FT8 could reboot the device.** All the decoder's monitors share one FFT scratch buffer, and the code that set that up freed each monitor's old buffer without checking whether it was already the shared one — so if the pool was ever built twice without being torn down in between, the same block was freed twice and the device rebooted. Caught on the bench while testing this release, and it is almost certainly the unexplained heap crash that had been on the list since v1.3.0. The reboot is fixed; the underlying double build is not, and now logs a loud warning instead of being survived in silence.
 
 ### Investigated, no change
 
