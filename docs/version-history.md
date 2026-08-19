@@ -2092,6 +2092,8 @@ It deliberately keeps calling CQ rather than standing down. An activator wants t
 
 Off unless you turn it on.
 
+⚠ Verified in simulation mode, both ways — with the option on, a caller waits in the pile-up and no exchange starts; with it off, the same caller is answered automatically. Not yet used on the air, so if it misbehaves during a real activation please say so.
+
 ### A Bluetooth mouse whose pointer moved erratically (Kevin KW6E)
 
 His Microsoft Surface Arc connected and scrolled perfectly but the pointer jumped about. Two things were wrong. The mouse fix that shipped in v1.8.4 went into the **USB** path, and his mouse is **Bluetooth** — so it never touched the code he was running.

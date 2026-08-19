@@ -38,6 +38,14 @@ static lv_obj_t *s_dd_hound         = NULL;  // Fox/Hound: off / guided / automa
 static lv_obj_t *s_cb_auto_pileup   = NULL;  // auto-work waiting pileup callers on QSO completion
 static lv_obj_t *s_cb_greylist      = NULL;  // grey-list stations after repeated failed pounces
 static lv_obj_t *s_cb_manual_pick   = NULL;  // running CQ: never auto-answer, wait for a tap
+
+// X of the right-hand checkbox column. It has to clear the "Auto-answer CQ with
+// priority:" dropdown on the left, which is anchored to the right of a long label
+// and so reaches further across than any other row. ONE constant because all three
+// checkboxes must move together - at 540 the last of them was drawn on top of the
+// dropdown. The panel is 1040 wide and the longest label here is "Pick callers
+// myself", so this is as far right as they can go.
+#define RIGHT_COL_X 700
 static lv_obj_t *s_robot_warn       = NULL;  // "unattended TX" warning - shown while robot OR auto-pileup is checked
 static lv_obj_t *s_cb_field_day     = NULL;  // ARRL Field Day exchange mode enable
 static lv_obj_t *s_ta_fd_class      = NULL;  // e.g. "16A"
@@ -366,7 +374,9 @@ static void modal_build(void)
     // Order MUST match ft8_robot_priority_t (STRONGEST=0, WEAKEST=1, DISTANT=2).
     s_dd_robot_pri = lv_dropdown_create(panel);
     lv_dropdown_set_options(s_dd_robot_pri, "Strongest\nWeakest\nMost distant");
-    lv_obj_set_width(s_dd_robot_pri, 280);
+    // Narrow: it only ever shows Strongest / Weakest / Most distant, and the
+    // right-hand checkbox column sits beside it - 280 ran underneath them.
+    lv_obj_set_width(s_dd_robot_pri, 200);
     lv_obj_align_to(s_dd_robot_pri, lbl_robot, LV_ALIGN_OUT_RIGHT_MID, 12, 0);
     lv_obj_set_style_text_font(s_dd_robot_pri, &lv_font_montserrat_24, 0);
     lv_obj_set_style_bg_color(s_dd_robot_pri, lv_color_hex(UI_COLOR_KEY_BG), 0);
@@ -393,7 +403,7 @@ static void modal_build(void)
     // unattended-TX warning below. Placed in the right column so the packed
     // left checkbox stack doesn't need a reflow.
     lv_obj_t *lbl_auto_pileup;
-    s_cb_auto_pileup = make_labeled_checkbox(panel, "Auto-work pileup", 540, 450, &lbl_auto_pileup);
+    s_cb_auto_pileup = make_labeled_checkbox(panel, "Auto-work pileup", RIGHT_COL_X, 450, &lbl_auto_pileup);
     lv_obj_set_style_text_color(lbl_auto_pileup, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
     lv_obj_add_event_cb(s_cb_auto_pileup, robot_checked_cb, LV_EVENT_VALUE_CHANGED, NULL);
 
@@ -402,7 +412,7 @@ static void modal_build(void)
     // it; its rows recolour and a tap offers "Clear from grey-list". The
     // tracked list is RAM-only (reboot clears it). Roy KI0ER field request.
     lv_obj_t *lbl_greylist;
-    s_cb_greylist = make_labeled_checkbox(panel, "Allow grey-listing", 540, 510, &lbl_greylist);
+    s_cb_greylist = make_labeled_checkbox(panel, "Allow grey-listing", RIGHT_COL_X, 510, &lbl_greylist);
     lv_obj_set_style_text_color(lbl_greylist, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
     // --- Pick callers myself (Eric K3FNB) -----------------------------
@@ -417,7 +427,7 @@ static void modal_build(void)
     // also overrides Auto-work pileup, which would otherwise pick for you a
     // moment later.
     lv_obj_t *lbl_manual_pick;
-    s_cb_manual_pick = make_labeled_checkbox(panel, "Pick callers myself", 540, 570, &lbl_manual_pick);
+    s_cb_manual_pick = make_labeled_checkbox(panel, "Pick callers myself", RIGHT_COL_X, 570, &lbl_manual_pick);
     lv_obj_set_style_text_color(lbl_manual_pick, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
 
     // --- ARRL Field Day exchange mode ---------------------------------
