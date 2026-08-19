@@ -74,6 +74,12 @@ bool ft8_get_last_timing_ms(int *out_ms);
 // for that window is current or merely the last thing we knew.
 int64_t ft8_last_rx_utc_for_parity(bool even);
 
+// Slot-start UTC of the last slot we TRANSMITTED in, per window. Lets a caller
+// tell "never heard this window" from "we were talking in it" - see
+// ft8_robot_occupancy_ready(), where conflating the two stalled auto-answer for a
+// cycle after every QSO.
+int64_t ft8_last_tx_utc_for_parity(bool even);
+
 // The REAL per-slot correction actually applied to the UTC clock (ms; 0 = none
 // applied this slot). This is the damped+clamped value, NOT the raw measurement
 // above - the time modal shows this so a noisy single-station measurement never

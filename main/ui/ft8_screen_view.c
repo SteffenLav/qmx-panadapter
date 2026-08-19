@@ -1409,6 +1409,28 @@ static void t_clock_cb(lv_timer_t *t)
 
         bool clash = (tx_st != FT8_TX_IDLE) && ft8_tx_is_clashing();
 
+        // ⛔ LOG THE CLASH. "⚠ FREQ BUSY" was a screen-only state: Roy KI0ER
+        // photographed it and sent 29 minutes of diagnostic log in which the
+        // string does not appear once, so the report could not be investigated
+        // from the log at all. A warning the operator can see and the log cannot
+        // is a warning nobody can diagnose remotely.
+        //
+        // Change-detected because this timer runs at 1 Hz and the state persists
+        // for a whole burst. Carries the occupancy picture with it, since the
+        // question is always "busy according to what?" - n_stations == 0 means
+        // the map is empty and the warning is about nothing.
+        {
+            static int s_clash_logged = -1;
+            if ((int)clash != s_clash_logged) {
+                s_clash_logged = (int)clash;
+                int n_slots = 0, n_stations = 0;
+                (void)ft8_tx_get_tone_occupancy(&n_slots, &n_stations);
+                ESP_LOGI(TAG, "TX clash %s: tone=%d Hz, occupancy %d/%d slots busy from %d station(s)",
+                         clash ? "DETECTED" : "cleared",
+                         ft8_qso_get_tx_tone_hz(), n_slots, 52, n_stations);
+            }
+        }
+
         // CQ auto-stop progress (Don WB0LQW): "call 2 of 4" while a limited
         // CQ run is armed/on-air, "call 2" when unlimited. The engine counts
         // COMPLETED bursts, so the one armed/on-air right now is (sent+1).

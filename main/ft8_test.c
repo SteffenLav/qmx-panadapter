@@ -384,9 +384,33 @@ static int           s_pool_proto = -1;   // ftx_protocol_t, or -1
 static volatile int64_t s_last_rx_utc_even = 0;
 static volatile int64_t s_last_rx_utc_odd  = 0;
 
+// Slot-start UTC of the last slot we TRANSMITTED in, per window. The counterpart
+// of the pair above, and it exists because their comment names a state nobody was
+// recording: "we were transmitting into this window and have no idea".
+//
+// ⛔ Without this the auto-answer readiness gate could not tell "I have not heard
+// this window" from "I was busy talking in it", and treated our own transmission
+// as a failure to map the band. Roy KI0ER, v1.8.7: after every QSO the robot sat
+// out a cycle or two before answering the next CQ, by which time a POTA activator
+// had moved on - his "waits 30 seconds". See ft8_robot_occupancy_ready().
+static volatile int64_t s_last_tx_utc_even = 0;
+static volatile int64_t s_last_tx_utc_odd  = 0;
+
 int64_t ft8_last_rx_utc_for_parity(bool even)
 {
     return even ? s_last_rx_utc_even : s_last_rx_utc_odd;
+}
+
+int64_t ft8_last_tx_utc_for_parity(bool even)
+{
+    return even ? s_last_tx_utc_even : s_last_tx_utc_odd;
+}
+
+// Called from both TX paths in the slot loop. `slot_sec` is the slot's start UTC.
+static void note_tx_slot(int64_t slot_sec, int slot_index)
+{
+    if ((slot_index % 2) == 0) s_last_tx_utc_even = slot_sec;
+    else                       s_last_tx_utc_odd  = slot_sec;
 }
 // Single reusable capture scratch buffer (decimated 12 kHz audio). Consumed by
 // the streaming STFT during capture; not needed once the waterfall is built, so
@@ -1545,6 +1569,7 @@ static void ft8_task(void *arg)
         bool slot_used_by_tx = false;
         if (!hold_for_fresh && ft8_tx_should_run_this_slot(boundary_ms, &txreq)) {
             ft8_status_set("TX: %s", txreq.display_text);
+            note_tx_slot(slot_sec, (int)(boundary_ms / period_ms));
             ft8_tx_run(&txreq);   // blocks ~12.7 s; always restores RX before returning
             ft8_qso_on_tx_complete();  // re-arm the current outgoing message
             ft8_screen_view_request_refresh();
@@ -1731,6 +1756,7 @@ static void ft8_task(void *arg)
                 ESP_LOGI(TAG, "slot %d: reply armed mid-slot (+%dms) - TX on immediate slot: %s",
                          slot_idx, (int)((esp_timer_get_time() - t0) / 1000), late_txreq.display_text);
                 ft8_status_set("TX: %s", late_txreq.display_text);
+                note_tx_slot(slot_sec, (int)(boundary_ms / period_ms));
                 ft8_tx_run(&late_txreq);          // blocks ~12.7 s; always restores RX
                 ft8_qso_on_tx_complete();
                 ft8_status_set("TX done - waiting for next slot");

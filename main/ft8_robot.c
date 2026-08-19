@@ -88,7 +88,31 @@ bool ft8_robot_occupancy_ready(void)
     // any other gap, not just a band change.
     int64_t now = (int64_t)time(NULL);
     int64_t max_age = (int64_t)slot_s * 4;
-    return (now - e) <= max_age && (now - o) <= max_age;
+
+    // ⛔ A window we were TRANSMITTING in is not a window we failed to map.
+    //
+    // Roy KI0ER, v1.8.7: after a QSO the robot sat out a cycle or two before
+    // answering the next CQ - "it waits 30 seconds, by then the POTA CQ station
+    // has likely moved on" - while both occupancy strips on his screen were
+    // freshly mapped with green slots. His log shows exactly that: every
+    // "auto-answer holding: both transmit windows not mapped yet" follows OUR OWN
+    // transmission, two of them 30 s apart right after a completed QSO.
+    //
+    // The cause is that we cannot receive in a window we are transmitting in, so
+    // our own TX made that parity look unheard and this gate read it as "the band
+    // is not mapped". It is the right test at STARTUP, which is what #142 added
+    // it for, and the wrong one after a QSO. The strips he was looking at are
+    // built from the same accumulated data and quite correctly still showed it.
+    //
+    // So a window counts as known if we heard it recently OR we were the one
+    // using it recently. Deliberately NOT a blanket relaxation of max_age: a
+    // window that is genuinely quiet still holds the robot off, which is the
+    // safety property #142 exists for.
+    int64_t tx_e = ft8_last_tx_utc_for_parity(true);
+    int64_t tx_o = ft8_last_tx_utc_for_parity(false);
+    bool e_known = (now - e) <= max_age || (tx_e > 0 && (now - tx_e) <= max_age);
+    bool o_known = (now - o) <= max_age || (tx_o > 0 && (now - tx_o) <= max_age);
+    return e_known && o_known;
 }
 
 void ft8_robot_stand_down(const char *reason)
