@@ -1,6 +1,6 @@
 # v1.8.7 announcement — draft
 
-Plain text for groups.io. NOT posted.
+Plain text for groups.io. **POSTED 2026-08-19.** Kept for the record.
 
 ---
 

@@ -1,4 +1,4 @@
-Reply to Markus DL8MBY - VFO B issue. Plain text, ready to paste.
+Reply to Markus DL8MBY - VFO B issue. POSTED 2026-08-19.
 
 ---
 

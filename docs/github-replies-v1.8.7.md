@@ -1,4 +1,4 @@
-# GitHub issue replies for v1.8.7 — NOT posted
+# GitHub issue replies for v1.8.7 — POSTED 2026-08-19
 
 Markdown is fine here (unlike the groups.io posts, which are plain text).
 

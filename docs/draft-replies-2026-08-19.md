@@ -1,6 +1,6 @@
 # Draft replies — 2026-08-19
 
-Not sent. One post per person. Plain text, ready to paste.
+POSTED 2026-08-19. One post per person. Plain text, ready to paste.
 
 Accuracy notes for me, not for posting:
 - Verified on hardware: the terminal colours (both screens, pixel-measured), the
