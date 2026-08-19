@@ -515,6 +515,25 @@ static bool build_monitor_pool(ftx_protocol_t proto)
     // fragmented internal heap can't hold it right now, fall back to PSRAM -
     // that's symmetric and no worse than the old spilled buffer, and it can
     // never fail the pool build.
+    // ⛔ The shared buffer from a PREVIOUS build, captured before it is
+    // overwritten below. On a rebuild that skipped the teardown, every monitor
+    // still points at it - and the loop further down used to free
+    // s_mon_pool[i]->fft_work unconditionally, so the SAME block was freed once
+    // per monitor. That is a tlsf double-free and it reboots the device.
+    //
+    // Serial-captured 2026-08-19 switching into FT8, and it explains the
+    // "one unreproduced tlsf_free double-free" that had been open since v1.3.0:
+    //     W ft8_view: FT8 view visible but no ft8_task alive - respawning
+    //     I ft8_test: monitor pool built for FT8
+    //     assert failed: tlsf_free - block already marked as free
+    // The respawn watchdog raced the normal FT8-entry path and the pool was
+    // built twice with no teardown between.
+    //
+    // The two TEARDOWN paths already make exactly this check before freeing the
+    // shared buffer once (see free_monitor_pool / reinit_pool_if_mode_changed);
+    // only the build path was missing it.
+    void *prev_shared = s_shared_fft_work;
+
     size_t fft_work_size = 0;
     kiss_fftr_alloc(s_mon_pool[0]->nfft, 0, NULL, &fft_work_size);
     s_shared_fft_work = heap_caps_malloc(fft_work_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
@@ -531,9 +550,29 @@ static bool build_monitor_pool(ftx_protocol_t proto)
     for (int i = 0; i < FT8_NUM_BUFFERS; i++) {
         // Drop the per-monitor FFT scratch monitor_init created (allocated with
         // plain malloc, so free() it) and point at the shared one.
-        free(s_mon_pool[i]->fft_work);
+        //
+        // Free ONLY a buffer this monitor owns. A pointer equal to a shared
+        // buffer belongs to the pool, and freeing it here frees it once per
+        // monitor - see the prev_shared note above.
+        void *w = s_mon_pool[i]->fft_work;
+        if (w && w != prev_shared && w != s_shared_fft_work) free(w);
         s_mon_pool[i]->fft_work = s_shared_fft_work;
         s_mon_pool[i]->fft_cfg  = s_shared_fft_cfg;
+    }
+
+    if (prev_shared) {
+        // The pool was rebuilt without a teardown, which should not happen. The
+        // old shared buffer is now unreferenced, but a decode may still be
+        // running against it on the other core - so it is deliberately LEAKED
+        // once rather than risk a use-after-free, which would be harder to
+        // diagnose than the leak and just as fatal.
+        //
+        // LOUD on purpose: this is the double-build itself, and #199 is about
+        // stopping it happening rather than surviving it. A silent survival
+        // would leave the root cause invisible, which is how it stayed open for
+        // months in the first place.
+        ESP_LOGW(TAG, "monitor pool rebuilt with no teardown - old shared FFT "
+                      "scratch leaked (see #199). Was the ft8_task respawned?");
     }
 
     s_pool_proto = (int)proto;
