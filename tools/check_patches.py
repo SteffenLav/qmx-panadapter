@@ -90,6 +90,13 @@ PATCHES = [
      "a USB channel error arriving without the halt bit abort()s the device - and "
      "that warm reset then leaves the QMX unable to re-enumerate for hours"),
 
+    ("apply_httpd_ws_dead_socket_close.ps1", "idf",
+     "components/esp_http_server/src/httpd_ws.c",
+     "QMX PATCH #9: dead WS socket must close, not spin",
+     "a websocket whose socket dies is marked closed but never closed, so httpd "
+     "spins on recv at ~158/s and starves fft_task - the audio ring overflows and "
+     "FT8 decodes nothing until something else frees the socket"),
+
     ("apply_fatfs_exfat.ps1", "idf",
      "components/fatfs/src/ffconf.h",
      "#define FF_FS_EXFAT\t1",
