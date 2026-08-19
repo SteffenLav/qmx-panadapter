@@ -355,6 +355,20 @@ esp_err_t dsp_ft8_capture(float *dst_180000, uint32_t timeout_ms)
 
 static void fft_task(void *arg);
 
+// ⛔ xSemaphoreTake(NULL, t) is not a failed take - it is an immediate abort(),
+// and a timeout argument does not save you (#154). dsp_init() runs at main.c:312
+// but ui_init() is at 202, so there is a window of well over a hundred lines in
+// which the UI and its LVGL timers are live and these mutexes do not exist yet.
+// That is precisely the shape that rebooted the device through ft8_status.c.
+//
+// Treating "not created yet" as "could not take" is always safe here: every
+// caller already has a failure path for a busy mutex, and pre-init there is by
+// definition no concurrency to protect against.
+static inline bool dsp_take(SemaphoreHandle_t m, TickType_t ticks)
+{
+    return m && xSemaphoreTake(m, ticks) == pdTRUE;
+}
+
 esp_err_t dsp_init(void)
 {
     ESP_LOGI(TAG, "DSP init (Phase 4.2 - real-time FFT on audio ring buffer)");
@@ -441,7 +455,7 @@ esp_err_t dsp_init(void)
 esp_err_t dsp_get_spectrum(float *dst)
 {
     if (!s_spectrum_mtx || !dst) return ESP_ERR_INVALID_ARG;
-    if (xSemaphoreTake(s_spectrum_mtx, pdMS_TO_TICKS(10)) != pdTRUE) {
+    if (!dsp_take(s_spectrum_mtx, pdMS_TO_TICKS(10))) {
         return ESP_ERR_TIMEOUT;
     }
     if (!s_have_spectrum) {
@@ -461,7 +475,7 @@ esp_err_t dsp_get_spectrum(float *dst)
 esp_err_t dsp_get_peak_dbm_around_vfo(int center_bin, int half_width_bins, float *peak_dbm)
 {
     if (!s_spectrum_mtx || !peak_dbm) return ESP_ERR_INVALID_ARG;
-    if (xSemaphoreTake(s_spectrum_mtx, pdMS_TO_TICKS(10)) != pdTRUE) {
+    if (!dsp_take(s_spectrum_mtx, pdMS_TO_TICKS(10))) {
         return ESP_ERR_TIMEOUT;
     }
     if (!s_have_spectrum) {
@@ -487,7 +501,7 @@ esp_err_t dsp_find_peak_hz_around(int32_t center_hz, int32_t radius_hz, int32_t 
     if (!s_spectrum_mtx || !out_hz) return ESP_ERR_INVALID_ARG;
     if (radius_hz <= 0) { *out_hz = center_hz; return ESP_OK; }
 
-    if (xSemaphoreTake(s_spectrum_mtx, pdMS_TO_TICKS(10)) != pdTRUE) {
+    if (!dsp_take(s_spectrum_mtx, pdMS_TO_TICKS(10))) {
         return ESP_ERR_TIMEOUT;
     }
     if (!s_have_spectrum) {
@@ -627,7 +641,7 @@ static void compute_and_publish_spectrum(int16_t *samples, float *tmp_spectrum,
     *last_max = max_db;
     *last_mean = sum_db / (float)DSP_FFT_SIZE;
 
-    if (xSemaphoreTake(s_spectrum_mtx, pdMS_TO_TICKS(10)) == pdTRUE) {
+    if (dsp_take(s_spectrum_mtx, pdMS_TO_TICKS(10))) {
         memcpy(s_spectrum, tmp_spectrum, DSP_FFT_SIZE * sizeof(float));
         s_have_spectrum = true;
         xSemaphoreGive(s_spectrum_mtx);
@@ -704,7 +718,7 @@ static void zoom_process(const int16_t *samples)
     int D;
     int gen;
     float fshift;
-    if (xSemaphoreTake(s_zoom_cfg_mtx, 0) != pdTRUE) return;
+    if (!dsp_take(s_zoom_cfg_mtx, 0)) return;
     D = s_zoom_decim;
     gen = s_zoom_gen;
     fshift = s_zoom_fshift_hz;
@@ -801,7 +815,7 @@ void dsp_set_zoom(float zoom_factor, int pan_offset_bins, int if_bin_shift)
     float fshift_hz = (float)signed_bin * (float)DSP_SAMPLE_RATE_HZ / (float)N;
 
     if (!s_zoom_cfg_mtx) return;
-    if (xSemaphoreTake(s_zoom_cfg_mtx, portMAX_DELAY) == pdTRUE) {
+    if (dsp_take(s_zoom_cfg_mtx, portMAX_DELAY)) {
         s_zoom_decim     = D;
         s_zoom_residual  = residual;
         s_zoom_fshift_hz = fshift_hz;

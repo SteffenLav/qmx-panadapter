@@ -24,9 +24,25 @@ static grey_entry_t      s_tbl[GREY_MAX];
 static int               s_count = 0;
 static SemaphoreHandle_t s_lock;
 
+// Created lazily because there is no greylist_init() to hang it off, which
+// leaves two hazards this guards against (#154):
+//
+//  - The create can FAIL under memory pressure, and xSemaphoreTake(NULL, t) is
+//    not a failed take, it is an immediate abort(). Every caller therefore
+//    re-checks s_lock after calling this, exactly as the pickers already did.
+//  - The pickers run on taskLVGL and the timeout notes come from the decode
+//    task, so an unprotected first call could have BOTH create a mutex, with
+//    the second overwriting the first: two tasks each holding a different
+//    mutex, i.e. no mutual exclusion at all, plus a leak. The spinlock makes
+//    the check-and-create atomic; it is taken once in the life of the table.
+static portMUX_TYPE s_lock_mux = portMUX_INITIALIZER_UNLOCKED;
+
 static void ensure_lock(void)
 {
+    if (s_lock) return;
+    portENTER_CRITICAL(&s_lock_mux);
     if (!s_lock) s_lock = xSemaphoreCreateMutex();
+    portEXIT_CRITICAL(&s_lock_mux);
 }
 
 static int find_locked(const char *call)
@@ -41,6 +57,7 @@ void ft8_greylist_note_timeout(const char *call)
 {
     if (!call || !call[0]) return;
     ensure_lock();
+    if (!s_lock) return;   // create failed - a missed grey-list note, not a reboot
     xSemaphoreTake(s_lock, portMAX_DELAY);
     int i = find_locked(call);
     if (i < 0) {
