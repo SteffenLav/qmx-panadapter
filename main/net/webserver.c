@@ -716,6 +716,26 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // (web_r), because a Tab5 toast is invisible from another room.
         const char *call = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call"));
         if (call && call[0]) ft8_screen_view_request_reply(call);
+    } else if (action && strcmp(action, "qso_override") == 0) {
+        // Mid-QSO override from the browser (#205, Randy N4OPI). Same deferral as
+        // "reply": the QSO machine belongs to the LVGL task, and the outcome comes
+        // back through /api/status's ft8 block because a Tab5 toast is invisible
+        // from another room.
+        const char *w = cJSON_GetStringValue(cJSON_GetObjectItem(root, "what"));
+        int what = 0;
+        if (w) {
+            if      (!strcmp(w, "resend")) what = 1;
+            else if (!strcmp(w, "rr73"))   what = 2;
+            else if (!strcmp(w, "73"))     what = 3;
+            else if (!strcmp(w, "cancel")) what = 4;
+        }
+        if (!what) {
+            cJSON_Delete(root);
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                "what must be resend, rr73, 73 or cancel");
+            return ESP_FAIL;
+        }
+        ft8_screen_view_request_override(what);
     } else if (action && strcmp(action, "tune_start") == 0) {
         if (!web_tune_start()) {
             cJSON_Delete(root);
@@ -2066,6 +2086,11 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "greylist_en",       c.greylist_en);
     cJSON_AddNumberToObject(root, "hound_mode",      c.hound_mode);
     cJSON_AddBoolToObject(root, "sim_mode_en",       c.sim_mode_en);
+    // ARRL Field Day (#210, Randy N4OPI wanted the Filter modal reachable from the
+    // browser). Everything else in that modal was already here; this was the gap.
+    cJSON_AddBoolToObject(root,   "field_day_en", c.field_day_en);
+    cJSON_AddStringToObject(root, "fd_class",     c.fd_class);
+    cJSON_AddStringToObject(root, "fd_section",   c.fd_section);
     cJSON_AddBoolToObject(root, "distance_in_miles", c.distance_in_miles);
     cJSON_AddBoolToObject(root, "rit_pill_show",     c.rit_pill_show);
     cJSON_AddNumberToObject(root, "spur_mode",       c.spur_mode);
@@ -2234,6 +2259,9 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     // sends not one CAT byte while it is on), so remote practice needs no trust.
     BOOLTOP("sim_mode_en",       settings_set_sim_mode_en);
     BOOLTOP("distance_in_miles", settings_set_distance_in_miles);
+    BOOLTOP("field_day_en",      settings_set_field_day_en);
+    if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "fd_class"))))   settings_set_fd_class(s);
+    if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "fd_section")))) settings_set_fd_section(s);
     // Mirror it into the live UI too, or the pill only changes on the next boot.
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "rit_pill_show"))) {
         bool v = cJSON_IsTrue(it);

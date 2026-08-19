@@ -1187,6 +1187,13 @@ static volatile bool s_web_cq_pending;               // set from the HTTP task
 // a toast on the Tab5 is invisible from another room.
 static char          s_web_reply_call[FT8_CALL_MAX_LEN];   // "" = nothing pending
 static volatile bool s_web_reply_pending;
+// Mid-QSO override requested from the browser (#205, Randy N4OPI: operating FT8
+// "from another room or location", where the Tab5's Re-send / RR73 / 73 buttons
+// and its tap-to-cancel are out of reach). Same deferral as the reply flag - the
+// QSO machine belongs to the LVGL task - and consumed even when FT8 is down, so
+// a stale request can never fire minutes later unasked.
+//   0 = none, 1 = resend, 2 = RR73, 3 = 73, 4 = abort
+static volatile int s_web_override_pending;
 static char          s_web_reply_result[64];
 
 void ft8_screen_view_request_reply(const char *call)
@@ -1194,6 +1201,12 @@ void ft8_screen_view_request_reply(const char *call)
     if (!call || !call[0]) return;
     snprintf(s_web_reply_call, sizeof(s_web_reply_call), "%s", call);
     s_web_reply_pending = true;
+}
+
+void ft8_screen_view_request_override(int what)
+{
+    if (what < 1 || what > 4) return;
+    s_web_override_pending = what;
 }
 
 const char *ft8_screen_view_get_web_reply_result(void)
@@ -1287,6 +1300,35 @@ static void t_clock_cb(lv_timer_t *t)
     // Web reply request: consumed even when FT8 is not up, same reasoning as the
     // CQ flag - a stale TX request firing minutes later, unasked, is the one
     // failure mode this deferral must never have.
+    if (s_web_override_pending) {
+        int what = s_web_override_pending;
+        s_web_override_pending = 0;
+        bool up = s_container && !lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN);
+        char err[64] = "";
+        if (!up) {
+            snprintf(s_web_reply_result, sizeof(s_web_reply_result), "Not in FT8 mode");
+        } else if (what == 4) {
+            // Cancel: disarm whatever is queued AND end the exchange, which is
+            // what the Tab5's tap-on-the-TX-indicator does. Randy's words were
+            // "mid-QSO over-ride/cancel button".
+            ft8_tx_disarm();
+            ft8_qso_abort();
+            snprintf(s_web_reply_result, sizeof(s_web_reply_result), "QSO cancelled");
+            ESP_LOGI(TAG, "web override: cancel - TX disarmed, QSO aborted");
+        } else {
+            ft8_tx_kind_t k = (what == 2) ? FT8_TX_KIND_ROGER_RPT
+                            : (what == 3) ? FT8_TX_KIND_73
+                                          : FT8_TX_KIND_REPLY;
+            if (ft8_qso_override_next(k, err, sizeof(err))) {
+                snprintf(s_web_reply_result, sizeof(s_web_reply_result), "Override armed");
+                ESP_LOGI(TAG, "web override: kind=%d armed", (int)k);
+            } else {
+                snprintf(s_web_reply_result, sizeof(s_web_reply_result), "%s", err[0] ? err : "Override refused");
+                ESP_LOGW(TAG, "web override refused: %s", err);
+            }
+        }
+    }
+
     if (s_web_reply_pending) {
         bool ft8_up = s_container && !lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN);
         if (ft8_up) {

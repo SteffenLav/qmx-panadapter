@@ -46,6 +46,11 @@ void ft8_screen_view_request_cq(void);
 // (mid-exchange). The outcome lands in ft8_screen_view_get_web_reply_result(),
 // surfaced through /api/status - a Tab5 toast is invisible from another room.
 void ft8_screen_view_request_reply(const char *call);
+
+// Mid-QSO override from the browser (#205): 1=resend 2=RR73 3=73 4=cancel.
+// Deferred to the LVGL task and consumed even when FT8 is not up, so a stale
+// request cannot key the radio minutes later.
+void ft8_screen_view_request_override(int what);
 const char *ft8_screen_view_get_web_reply_result(void);
 
 // Refresh the "Call CQ" button label to the currently-selected CQ preset.
