@@ -179,6 +179,23 @@ static void add_ft8_tx_status(cJSON *root)
     }
     cJSON_AddStringToObject(f, "st",   st);
     cJSON_AddStringToObject(f, "text", b);
+
+    // Power and SWR from the last burst (Randy N4OPI, top of his list for
+    // operating FT8 from another room: "Ability to see Power out and SWR. As it
+    // is I have no idea if I'm even transmitting."). The Tab5 already shows
+    // this; the browser had no way to tell a working transmitter from a silent
+    // one. age_s lets the page say "last TX 40 s ago" rather than implying the
+    // reading is live - the values come from the PC;/SW; query at the END of a
+    // burst, not continuously.
+    {
+        float pw = -1.0f, sw = -1.0f;
+        float age_s = ft8_tx_get_last_power_swr(&pw, &sw);
+        if (age_s >= 0.0f) {
+            cJSON_AddNumberToObject(f, "tx_age_s", (double)age_s);
+            if (pw >= 0.0f) cJSON_AddNumberToObject(f, "tx_w",   (double)pw);
+            if (sw >= 0.0f) cJSON_AddNumberToObject(f, "tx_swr", (double)sw);
+        }
+    }
     // Outcome of the last browser-initiated reply ("Armed: ...", "Busy: ...",
     // "X is no longer in the decode list"). Sticky until the next request.
     const char *wr = ft8_screen_view_get_web_reply_result();
@@ -2416,6 +2433,14 @@ static esp_err_t psk_rx_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "age_s",     psk_rx_age_s());
     cJSON_AddNumberToObject(root, "receivers", psk_rx_unique_receivers());
     cJSON_AddNumberToObject(root, "max_km",    psk_rx_max_distance_km());
+    // Randy N4OPI: "Who Is Hearing Me: Distance is shown in km when it is
+    // configured for miles. It does show up as miles in the Decode List."
+    // /api/decodes carries this flag and its comment even says "Same shape as
+    // /api/psk_rx's km/brg fields" - which is where the inconsistency crept in,
+    // because this endpoint never had it. Sent rather than converted here so the
+    // raw km stay authoritative and the browser does one conversion, exactly as
+    // the decode list already does.
+    cJSON_AddBoolToObject(root,   "miles",     qs.distance_in_miles);
 
     cJSON *arr = cJSON_AddArrayToObject(root, "reports");
     for (int i = 0; i < n && arr; i++) {
@@ -2497,6 +2522,9 @@ static esp_err_t decodes_handler(httpd_req_t *req)
     // two screens cannot disagree about who is worth showing.
     char working[16] = {0};
     ft8_qso_get_working_target(working, sizeof(working));
+    // Hoisted: the worked-before test is band-scoped, and the band comes from the
+    // dial - not from r->last_freq, which is the station's AUDIO tone.
+    const uint32_t dial_hz = cat_get_frequency();
     for (int i = 0; i < n; i++) {
         const ft8_call_t *r = &snap[i];
         bool is_partner = working[0] && strcasecmp(r->call, working) == 0;
@@ -2534,6 +2562,12 @@ static esp_err_t decodes_handler(httpd_req_t *req)
         }
         cJSON_AddBoolToObject(o, "me",  me[0] && strstr(r->last_text, me) != NULL);
         cJSON_AddBoolToObject(o, "cq",  strncmp(r->last_text, "CQ ", 3) == 0);
+        // Worked before ON THIS BAND (Randy N4OPI: "it would be nice if the FT8
+        // decode list had some colour coding, especially for worked stations").
+        // Band-scoped, not any-band, because the same station on a new band is a
+        // new band-slot and worth working - the same rule the auto-answer
+        // worked-before filter uses, so the browser cannot disagree with it.
+        cJSON_AddBoolToObject(o, "wk",  dial_hz ? adif_log_contains_call_on_band(r->call, dial_hz) : false);
         cJSON_AddBoolToObject(o, "pin", pin[0] && strcmp(r->call, pin) == 0);
         cJSON_AddItemToArray(arr, o);
     }

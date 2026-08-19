@@ -196,11 +196,32 @@
      ⚠ Deliberately NOT clamp() with a vw term: a vw unit resolves to 0 in some
      embedded viewports, which silently collapses the text to the minimum. A
      fixed rem is checkable by arithmetic and behaves the same everywhere. */
+  /* ⛔ STICKY, and that is the fix rather than a nicety. #ft8-notice is the
+     scrolling container (min-height:0 + overflow:auto above), and this box sat in
+     its normal flow ABOVE the decode list. So as soon as enough stations decoded
+     to make the list scroll, the one thing you need while transmitting scrolled
+     away - reported independently by two people on v1.8.7: Randy N4OPI ("the box
+     that shows your queued or transmitting message scrolls off the top of the
+     screen and the scroll bar will not recover that part") and Gyula HA3HZ ("the
+     transmission and reception waiting (red and orange) subtitles ... disappear
+     when there are many stations in the reception window").
+
+     Gyula suggested capping the number of stations shown. That treats the
+     symptom - the status would still be in the scroll flow and would still leave
+     on a busy band. Pinning it treats the cause and costs no decodes.
+
+     The background is opaque on purpose: sticky content with a transparent
+     background has the list scrolling visibly underneath it. */
   #ft8-tx {
     font-size: 1.5rem; font-weight: 700; line-height: 1.3;
     padding: 0.6rem 1.2rem; border-radius: 8px;
     border: 2px solid transparent; max-width: 96%;
+    position: sticky; top: 0; z-index: 5;
+    background-color: #12161a;   /* opaque base; state tints layer over it */
   }
+  /* Same treatment for the one-line "asking the Tab5 to reply..." feedback that
+     sits directly under it, or it would scroll out from beneath a pinned box. */
+  #ft8-webr { position: sticky; top: 3.4rem; z-index: 5; background: #12161a; }
   /* Restart a CQ run without walking back to the Tab5 (Dennis WN4FLA). Sized like
      a deliberate action rather than a toolbar link: it keys the radio. */
   #ft8-actions { display: flex; gap: 1rem; }
@@ -211,11 +232,11 @@
   }
   #ft8-actions button:hover:not(:disabled) { background: var(--accent); color: #000; }
   #ft8-actions button:disabled { opacity: 0.45; cursor: default; }
-  #ft8-tx.st-active  { color: #ff4040; border-color: #ff4040; background: rgba(255,64,64,.08); }
-  #ft8-tx.st-armed   { color: #ffa040; border-color: #ffa040; background: rgba(255,160,64,.08); }
+  #ft8-tx.st-active  { color: #ff4040; border-color: #ff4040; background-image: linear-gradient(rgba(255,64,64,.08), rgba(255,64,64,.08)); }
+  #ft8-tx.st-armed   { color: #ffa040; border-color: #ffa040; background-image: linear-gradient(rgba(255,160,64,.08), rgba(255,160,64,.08)); }
   #ft8-tx.st-wait    { color: #ffa040; border-color: #ffa04080; }
-  #ft8-tx.st-done    { color: #40c040; border-color: #40c040; background: rgba(64,192,64,.08); }
-  #ft8-tx.st-timeout { color: #ff6020; border-color: #ff6020; background: rgba(255,96,32,.08); }
+  #ft8-tx.st-done    { color: #40c040; border-color: #40c040; background-image: linear-gradient(rgba(64,192,64,.08), rgba(64,192,64,.08)); }
+  #ft8-tx.st-timeout { color: #ff6020; border-color: #ff6020; background-image: linear-gradient(rgba(255,96,32,.08), rgba(255,96,32,.08)); }
   #ft8-tx.st-idle    { color: var(--dim); font-weight: 400; font-size: 1.8rem; }
 
   /* ---- Bottom status row ---- */
@@ -458,14 +479,19 @@
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
-  <div id="ft8-notice"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-webr" style="color:var(--dim); font-size:13px; min-height:18px;"></div><div>Tab5 is in FT8/FT4 mode — spectrum &amp; waterfall are shown only in Panadapter mode.<br>Use the buttons below to download logs/config or upload QSOs.</div><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="to-panadapter" title="Switch the Tab5 to the Panadapter view">Show Panadapter</button><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button></div>
+  <div id="ft8-notice"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-webr" style="color:var(--dim); font-size:13px; min-height:18px;"></div><div id="ft8-pwr" style="color:#40c0d0; font-size:14px; min-height:18px;"></div><div>Tab5 is in FT8/FT4 mode — spectrum &amp; waterfall are shown only in Panadapter mode.<br>Use the buttons below to download logs/config or upload QSOs.</div><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="to-panadapter" title="Switch the Tab5 to the Panadapter view">Show Panadapter</button><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button></div>
     <div id="ft8-decodes" style="width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
         <strong id="dec-title" style="color:#ffa040">Decode list</strong>
         <span id="dec-count" style="color:var(--dim); font-size:13px"></span>
       </div>
       <div style="max-height:46vh; overflow:auto; border:1px solid #333; border-radius:6px;">
-        <table id="dec-table" style="width:100%; border-collapse:collapse; font-size:13px;">
+        <!-- Monospace, matching the Tab5 (Gyula HA3HZ: "the font of the reception
+             window on the website should be the same as the Tab5 font, then it
+             would be better to read"). It is not only familiarity: callsigns,
+             reports and tones are columns of short tokens, and a proportional
+             font makes them ragged where the Tab5 lines them up. -->
+        <table id="dec-table" style="width:100%; border-collapse:collapse; font-size:13px; font-family:ui-monospace,'DejaVu Sans Mono',Consolas,monospace;">
           <thead><tr id="dec-head"></tr></thead>
           <tbody id="dec-body"></tbody>
         </table>
@@ -1975,8 +2001,16 @@ async function propOpen() {
     const reps = d.reports || [];
     // The DISTINCT receiver count is the honest headline: ten reports from one
     // receiver says far less about propagation than one each from ten.
+    /* Honour the miles setting, like the decode list does (Randy N4OPI - this
+       panel showed km while the decode list showed miles on the same device).
+       One conversion, one place, so the two tables cannot disagree. */
+    const pskMi   = !!d.miles;
+    const pskUnit = pskMi ? " mi" : " km";
+    const pskDist = v => (v === undefined || v === null || v < 0)
+                          ? null : Math.round(pskMi ? v * 0.621371 : v);
     sum.textContent = reps.length
-      ? (d.receivers + " receiver(s), furthest " + (d.max_km >= 0 ? d.max_km + " km" : "unknown") +
+      ? (d.receivers + " receiver(s), furthest " +
+         (pskDist(d.max_km) !== null ? pskDist(d.max_km) + pskUnit : "unknown") +
          ", updated " + (d.age_s >= 0 ? d.age_s + " s ago" : "never"))
       : "";
     if (!reps.length) {
@@ -1995,7 +2029,7 @@ async function propOpen() {
         return '<tr style="border-top:1px solid #2a2a2a">' +
           '<td>' + (r.call || "") + '</td>' +
           '<td style="color:var(--dim)">' + (r.dxcc || "") + '</td>' +
-          '<td>' + (r.km !== undefined ? r.km + " km" : "&mdash;") + '</td>' +
+          '<td>' + (pskDist(r.km) !== null ? pskDist(r.km) + pskUnit : "&mdash;") + '</td>' +
           '<td style="color:var(--dim)">' + (r.brg !== undefined ? r.brg + "°" : "&mdash;") + '</td>' +
           // SNR is OMITTED by the device when the reporter did not supply one -
           // 0 dB is a real report, so absence must not render as zero.
@@ -2332,8 +2366,18 @@ async function pollDecodes() {
     decBody.innerHTML = rows.map(r => {
       // Same emphasis the Tab5 uses: the station being worked held at the top,
       // and anything carrying your own callsign in reverse video.
+      /* Emphasis, highest priority first. Worked-before is DIMMED rather than
+         tinted (Randy N4OPI asked for colour coding "especially for worked
+         stations"): on a busy band the useful signal is which stations are still
+         worth calling, so the ones that are not should recede instead of
+         competing. Matches the Tab5, which greys a worked spot on the trace.
+         `wk` is band-scoped on the device, so the same station on a new band
+         stays bright - that is a new band-slot and worth working. */
       const bg = r.pin ? "background:#3a2a10;" : (r.me ? "background:#7a1414;" : "");
-      const fg = r.me && !r.pin ? "color:#fff;" : (r.pin ? "color:#ffc864;" : "");
+      const fg = r.me && !r.pin ? "color:#fff;"
+               : (r.pin ? "color:#ffc864;"
+               : (r.wk  ? "color:#6a7580;"
+               : (r.cq  ? "color:#8fe0a0;" : "")));
       return "<tr data-call='" + r.call.replace(/[^A-Za-z0-9/]/g, "") + "' style='cursor:pointer;" + bg + fg + "'>" + DEC_COLS.map(c =>
         '<td style="border-bottom:1px solid #222;padding:3px 6px;white-space:nowrap">'
         + String(decFmt(c[0], r)).replace(/[&<>]/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[m]))
@@ -2967,6 +3011,28 @@ async function tick() {
       /* Outcome of the last browser-initiated reply, straight from the device -
          "Armed: ...", "Busy: working X", "no longer in the decode list". */
       document.getElementById("ft8-webr").textContent = s.ft8.web_r || "";
+      /* Power / SWR from the last burst (Randy N4OPI). The age matters as much as
+         the numbers: they are taken by a PC;/SW; query at the END of a burst, not
+         continuously, so presenting them bare would imply a live reading. "just
+         now" up to one slot, then the age, so a stale figure is obviously stale. */
+      {
+        const pw = document.getElementById("ft8-pwr");
+        if (pw) {
+          const f = s.ft8;
+          if (f.tx_age_s === undefined) {
+            pw.textContent = "";
+          } else {
+            const bits = [];
+            if (f.tx_w   !== undefined) bits.push(f.tx_w.toFixed(1) + " W");
+            if (f.tx_swr !== undefined) bits.push("SWR " + f.tx_swr.toFixed(2));
+            const age = f.tx_age_s < 15 ? "just now"
+                      : (f.tx_age_s < 90 ? Math.round(f.tx_age_s) + " s ago"
+                                         : Math.round(f.tx_age_s / 60) + " min ago");
+            pw.textContent = bits.length ? "Last TX: " + bits.join("  ") + " (" + age + ")"
+                                         : "";
+          }
+        }
+      }
       /* Tab title mirrors the state so an unfocused tab still signals it. */
       document.title =
         s.ft8.st === "active" ? "\u{1F534} TX - QMX+ Panadapter" :
@@ -3357,21 +3423,34 @@ function drawSpots(ctx, W, H) {
      the edge says neither what it counts nor that it can be clicked. Scoped to
      this band by the device, so the arrow never points at another band. */
   ctx.globalAlpha = 1;
-  ctx.font = "13px system-ui,sans-serif";
+  /* ⛔ dpr-SCALED, like the spot labels above. This block was left on a literal
+     13px when the labels were fixed for v1.8.7, so on a 2x display the edge
+     counters still rendered at about 6.5 CSS px - Randy N4OPI confirmed the
+     label fix and then corrected himself: "the spots(8)> on the left or right
+     side of the screen are still 1/2 size". Same bug, same function, missed.
+     The BOX geometry has to scale too or the tap target shrinks with it. */
+  const offFontPx = Math.round(13 * dpr);
+  const offPad    = Math.round(4 * dpr);
+  const offH      = Math.round(18 * dpr);
+  const offTop    = H - Math.round(21 * dpr);
+  const offBase   = H - Math.round(8 * dpr);
+  const offEdge   = Math.round(2 * dpr);
+  ctx.font = offFontPx + "px system-ui,sans-serif";
   if (offLo > 0) {
     const t = "< spots (" + offLo + ")";
     const tw = ctx.measureText(t).width;
-    ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(2, H - 21, tw + 8, 18);
-    ctx.fillStyle = offLoCol;          ctx.fillText(t, 6, H - 8);
-    spotOffBoxes.push({ x: 2, y: H - 21, w: tw + 8, h: 18, hz: offLoHz, mode: null,
+    ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(offEdge, offTop, tw + offPad * 2, offH);
+    ctx.fillStyle = offLoCol;          ctx.fillText(t, offEdge + offPad, offBase);
+    spotOffBoxes.push({ x: offEdge, y: offTop, w: tw + offPad * 2, h: offH, hz: offLoHz, mode: null,
                         call: "nearest below", col: offLoCol });
   }
   if (offHi > 0) {
     const t = "spots (" + offHi + ") >";
     const tw = ctx.measureText(t).width;
-    ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(W - tw - 10, H - 21, tw + 8, 18);
-    ctx.fillStyle = offHiCol;          ctx.fillText(t, W - tw - 6, H - 8);
-    spotOffBoxes.push({ x: W - tw - 10, y: H - 21, w: tw + 8, h: 18, hz: offHiHz, mode: null,
+    const bx = W - tw - offPad * 2 - offEdge;
+    ctx.fillStyle = "rgba(0,0,0,0.6)"; ctx.fillRect(bx, offTop, tw + offPad * 2, offH);
+    ctx.fillStyle = offHiCol;          ctx.fillText(t, bx + offPad, offBase);
+    spotOffBoxes.push({ x: bx, y: offTop, w: tw + offPad * 2, h: offH, hz: offHiHz, mode: null,
                         call: "nearest above", col: offHiCol });
   }
   ctx.restore();
