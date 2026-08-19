@@ -8,10 +8,10 @@ The panadapter reads and writes VFO A only (FA over CAT). With your QMX+ receivi
 VFO B, every frequency the Tab5 set went to a VFO you were not listening to - while
 band select still worked, which is exactly why it looks like a configuration mistake
 rather than a fault. Your point about the small VFO indicator is the reason it needs
-handling in software, and it will be: the next release checks the radio's VFO mode
-when it connects, switches it to A if needed, and tells you on screen that it did.
+handling in software. It now does. v1.8.7 checks the radio's VFO mode when it
+connects, switches it to A if needed, and tells you on screen that it did.
 
-Until then, on the radio:
+If you are not on v1.8.7 yet, on the radio:
 
 To get back to VFO A now - a single short press of the Exit button cycles the VFO mode
 (A, B, Split). Press it until the display shows A.
