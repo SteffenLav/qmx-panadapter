@@ -38,6 +38,13 @@ static const char *TAG = "qmx_term";
  * really has gone away. */
 #define QMX_TERM_IDLE_MS 120000
 
+/* Opening the second port is retried before the failure is blamed on the radio's
+ * serial-port setting (#198). Deliberately short: a radio that only has one port
+ * fails all of these in ~0.6 s, which is not a delay anyone notices, while a
+ * device still finishing an enumeration usually needs only one more try. */
+#define QMX_TERM_OPEN_ATTEMPTS  4
+#define QMX_TERM_OPEN_RETRY_MS  200
+
 static cdc_acm_dev_hdl_t s_dev;
 static ansi_term_t      *s_scr;          /* PSRAM: ~4 KB of cells */
 static bool              s_open;
@@ -336,10 +343,40 @@ bool qmx_term_open(void)
         .data_cb  = on_rx,
         .user_arg = NULL,
     };
-    esp_err_t e = cdc_acm_host_open(QMX_VID, QMX_PID, QMX_TERM_INTERFACE, &cfg, &s_dev);
+    // RETRY BEFORE BLAMING THE RADIO'S CONFIGURATION (#198, Samuel W7STF).
+    // He got "set the radio to two USB serial ports" once after swapping cables,
+    // on a radio that was already set correctly. This open used to be one shot, and
+    // ANY failure produced that wording - so a device still coming back up after a
+    // re-enumeration was reported as a settings mistake, sending the operator into
+    // the radio's menus to change something that was already right.
+    //
+    // The two cases genuinely differ in how they fail: a radio set to ONE serial
+    // port has no interface 5 and will never have one, so it fails identically
+    // every time; a device mid-enumeration fails now and succeeds a moment later.
+    // Retrying is what separates them. Same shape as the IQ-mode handshake in cat.c
+    // and the opening-CR retry below, both of which exist for the same reason.
+    esp_err_t e = ESP_FAIL;
+    for (int attempt = 0; attempt < QMX_TERM_OPEN_ATTEMPTS; attempt++) {
+        if (attempt) vTaskDelay(pdMS_TO_TICKS(QMX_TERM_OPEN_RETRY_MS));
+        e = cdc_acm_host_open(QMX_VID, QMX_PID, QMX_TERM_INTERFACE, &cfg, &s_dev);
+        if (e == ESP_OK && s_dev) break;
+        s_dev = NULL;
+    }
     if (e != ESP_OK || !s_dev) {
-        ESP_LOGW(TAG, "port 2 (interface %d) would not open (0x%x) - is the radio "
-                      "set to 2 USB serial ports?", QMX_TERM_INTERFACE, e);
+        // Only name the setting when the radio is demonstrably THERE. CAT lives on
+        // interface 0 of the same device, so a live CAT link proves it enumerated
+        // and the missing interface really is a configuration matter. Without it we
+        // cannot tell a one-port radio from an absent/rebooting one, and saying so
+        // is better than guessing wrong in the direction of "go change your menus".
+        if (cat_is_ready())
+            ESP_LOGW(TAG, "port 2 (interface %d) would not open (0x%x) after %d tries - "
+                          "is the radio set to 2 USB serial ports?",
+                     QMX_TERM_INTERFACE, e, QMX_TERM_OPEN_ATTEMPTS);
+        else
+            ESP_LOGW(TAG, "port 2 (interface %d) would not open (0x%x) after %d tries, "
+                          "and CAT is not up either - the radio is not connected or is "
+                          "still starting, so this is NOT a serial-port setting problem",
+                     QMX_TERM_INTERFACE, e, QMX_TERM_OPEN_ATTEMPTS);
         s_dev = NULL;
         xSemaphoreGive(s_lock);
         return false;

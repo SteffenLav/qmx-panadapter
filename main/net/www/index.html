@@ -4672,7 +4672,11 @@ async function termOpenModal() {
       "      &rarr; 2</pre>" +
       "You only have to do this once &mdash; it survives a power cycle. Then reopen this page.<br><br>" +
       "<span style='color:#c0c0c0;'>The panadapter keeps working while you are in the radio's menus, " +
-      "because they run on different ports.</span>";
+      "because they run on different ports.</span><br><br>" +
+      "<span style='color:#c0c0c0;'><b>Already set it to 2?</b> Then check the radio is switched on and " +
+      "connected. This message appears whenever the second port cannot be opened, and just after " +
+      "plugging a cable in the radio may not be ready yet &mdash; wait for the frequency to appear, " +
+      "then try again.</span>";
     document.getElementById("term-err").style.display = "";
     return;
   }

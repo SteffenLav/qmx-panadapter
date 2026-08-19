@@ -740,7 +740,11 @@ static void build(void)
         "restart. Then reopen this screen.\n\n"
         "You only have to do this once; the setting itself survives a power cycle.\n\n"
         "The panadapter keeps working while you are in the radio's menus, because\n"
-        "they run on different ports.");
+        "they run on different ports.\n\n"
+        "Already set it to 2? Then check the radio is switched on and connected -\n"
+        "this same screen appears whenever the second port cannot be opened, and\n"
+        "just after plugging a cable in the radio may not be ready yet. Wait for\n"
+        "the frequency to appear on the main screen, then try again.");
     lv_obj_set_style_text_font(s_help, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(s_help, lv_color_hex(0xFFC060), 0);
     lv_obj_set_pos(s_help, (LV_HOR_RES - GRID_W) / 2, HEADER_H + 40);
