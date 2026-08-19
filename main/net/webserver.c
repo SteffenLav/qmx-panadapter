@@ -271,6 +271,11 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(batt, "level",    battery_get_level());
     cJSON_AddNumberToObject(batt, "mv",       battery_get_mv());
     cJSON_AddBoolToObject  (batt, "charging", battery_is_charging());
+    // The Tab5's own bottom bar has honoured battery_present() since the
+    // no-battery detector was added, but this endpoint never sent it - so the
+    // browser had no way to tell a real reading from the erratic rail of a unit
+    // with no pack fitted, and showed a percentage either way (#194).
+    cJSON_AddBoolToObject  (batt, "present",  battery_present());
 
     cJSON *wifi_obj = cJSON_AddObjectToObject(root, "wifi");
     cJSON_AddStringToObject(wifi_obj, "ssid", wifi_get_ssid());
