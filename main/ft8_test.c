@@ -1321,6 +1321,8 @@ static void decode_slot(worker_ctx_t *wctx, monitor_t *mon, int64_t slot_sec,
 static void ft8_decode_task(void *arg)
 {
     TaskHandle_t notify_target = (TaskHandle_t)arg;
+    // Already claimed by the spawner before xTaskCreate - see there. Kept
+    // (idempotent) so the flag is right whatever route started this task.
     s_decode_task_alive = true;
 
     // Dual-core decode helper: a 1-deep job queue + completion semaphore + a
@@ -1484,6 +1486,18 @@ static void ft8_task(void *arg)
 
     // Spawn decode task, passing our handle so it can notify us on exit.
     s_ft8_running = true;
+    // Same defect as #199, second instance: this flag used to be set as
+    // ft8_decode_task's first statement, so it meant "the decode task has begun
+    // RUNNING" while ft8_self_test()'s guard needs "a decode task EXISTS". Both
+    // tasks are tskIDLE_PRIORITY + 1 - the lowest on the board - so the gap
+    // between creating one and its first slice is routinely long.
+    //
+    // The dangerous ordering is real: with the flag still false, ft8_task could
+    // exit and clear s_ft8_task_alive, the 1 Hz respawn watchdog would spawn a
+    // fresh ft8_task, BOTH guards would pass, and the new instance would run
+    // alongside an orphaned decode task - which is precisely the overlap the
+    // guard exists to refuse (Dennis WN4FLA's crash). Claim it before creating.
+    s_decode_task_alive = true;
     BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
         ft8_decode_task, "ft8_dec", 65536,
         xTaskGetCurrentTaskHandle(),
@@ -1491,6 +1505,7 @@ static void ft8_task(void *arg)
         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (rc != pdPASS) {
         ESP_LOGE(TAG, "failed to spawn ft8_decode_task (rc=%d)", (int)rc);
+        s_decode_task_alive = false;   // release, or FT8 never starts again
         s_ft8_running = false;
         vQueueDelete(s_decode_queue);
         s_decode_queue = NULL;
