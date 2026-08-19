@@ -4547,30 +4547,64 @@ function termEsc(s) {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-/* Paint one row, splicing in the reverse-video runs for that row.
+/* SGR 30-37 foreground. KEEP IN STEP WITH fg_colour() in ui/qmx_term_view.c -
+   the whole point of #196 is that the two screens show the radio the same way,
+   so a palette that drifts between them re-creates the bug in a subtler form.
+   37/0 fall through to the pre's own #d8d8d8. */
+const TERM_FG = {
+  30: "#707070",  /* black lifted to grey: invisible on black would be worse */
+  31: "#ff5555", 32: "#55e066", 33: "#f0d050",
+  34: "#6e90ff",  /* blue lifted off pure blue, unreadable on black */
+  35: "#e070e0", 36: "#55d8d8"
+};
+
+/* Paint one row from BOTH attribute sets.
    Reverse video is not decoration - it is the ONLY thing marking the selected
-   menu item, so an operator who cannot see it cannot tell where they are. */
-function termRowHtml(text, runs) {
+   menu item, so an operator who cannot see it cannot tell where they are. The
+   foreground colour (#196, Samuel W7STF) was parsed and sent all along and this
+   renderer simply dropped it, which is why the menus came out all white here
+   while PuTTY showed red and green.
+   Built as a per-column attribute array rather than by splicing runs, because
+   rev and col runs can overlap and reverse has to win where they do. */
+function termRowHtml(text, revRuns, colRuns) {
   const padded = (text + " ".repeat(80)).slice(0, 80);
-  if (!runs.length) return termEsc(padded.replace(/\s+$/, ""));
-  runs.sort((a, b) => a[0] - b[0]);
+  if (!revRuns.length && !colRuns.length) return termEsc(padded.replace(/\s+$/, ""));
+
+  const rev = new Array(80).fill(false);
+  const fg  = new Array(80).fill(0);
+  for (const [c, len, f] of colRuns)
+    for (let k = c; k < c + len && k < 80; k++) fg[k] = f;
+  for (const [c, len] of revRuns)
+    for (let k = c; k < c + len && k < 80; k++) { rev[k] = true; fg[k] = 0; }
+
+  /* Trim trailing blanks that carry no attribute, so the row does not become a
+     wall of empty spans. */
+  let end = 80;
+  while (end > 0 && padded[end - 1] === " " && !rev[end - 1] && !fg[end - 1]) end--;
+
   let out = "", at = 0;
-  for (const [c, len] of runs) {
-    if (c > at) out += termEsc(padded.slice(at, c));
-    out += '<span style="background:#d8d8d8; color:#000;">' +
-           termEsc(padded.slice(c, c + len)) + "</span>";
-    at = c + len;
+  while (at < end) {
+    const r0 = rev[at], f0 = fg[at];
+    let k = at + 1;
+    while (k < end && rev[k] === r0 && fg[k] === f0) k++;
+    const chunk = termEsc(padded.slice(at, k));
+    if (r0)                    out += '<span style="background:#d8d8d8; color:#000;">' + chunk + "</span>";
+    else if (f0 && TERM_FG[f0]) out += '<span style="color:' + TERM_FG[f0] + ';">' + chunk + "</span>";
+    else                        out += chunk;
+    at = k;
   }
-  return out + termEsc(padded.slice(at).replace(/\s+$/, ""));
+  return out;
 }
 
 function termRender(j) {
-  const byRow = {};
-  for (const [r, c, len] of (j.rev || [])) (byRow[r] = byRow[r] || []).push([c, len]);
+  const revByRow = {}, colByRow = {};
+  for (const [r, c, len] of (j.rev || [])) (revByRow[r] = revByRow[r] || []).push([c, len]);
+  for (const [r, c, len, f] of (j.col || [])) (colByRow[r] = colByRow[r] || []).push([c, len, f]);
   const rows = j.rows || [];
   let html = "";
   for (let r = 0; r < rows.length; r++)
-    html += termRowHtml(rows[r], byRow[r] || []) + (r < rows.length - 1 ? "\n" : "");
+    html += termRowHtml(rows[r], revByRow[r] || [], colByRow[r] || []) +
+            (r < rows.length - 1 ? "\n" : "");
   document.getElementById("term-screen").innerHTML = html;
 }
 

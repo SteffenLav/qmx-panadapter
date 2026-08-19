@@ -149,6 +149,44 @@ static void post(term_cmd_kind_t kind, const char *key)
 static lv_obj_t *s_rev[MAX_REV];
 static int       s_rev_used;
 
+/* Colour runs (#196, Samuel W7STF: "Radio Menus render all white; PuTTY shows
+ * red/green"). ansi_term.c has parsed and stored the SGR 30-37 foreground in
+ * cell.fg since the first version - BOTH renderers simply threw it away and read
+ * only `reverse`. So this is a renderer gap, not missing parsing.
+ *
+ * LVGL 9.2.2 has NO label recolor (it was removed in v9), so a row cannot carry
+ * per-character colour in one label. Coloured cells are therefore BLANKED out of
+ * the row label and redrawn as their own small labels, positioned exactly because
+ * the font is fixed-pitch and CELL_W is integral - the same trick the reverse
+ * blocks above already use, minus the filled background.
+ *
+ * Reverse wins over colour where both apply: the highlight is what tells the
+ * operator which menu item is selected, and it is drawn on an opaque block. */
+#define MAX_FG 48
+static lv_obj_t *s_fg[MAX_FG];
+static int       s_fg_used;
+
+/* SGR 30-37 on a black terminal. 37 (white) and 0 (default) are deliberately
+ * absent: they already match the row label's own 0xD8D8D8, so leaving them in the
+ * base label costs nothing and saves a run. 30 (black) would be invisible here,
+ * so it is lifted to a dim grey rather than dropped - an unreadable cell would be
+ * a worse bug than a slightly wrong shade. */
+static uint32_t fg_colour(uint8_t sgr)
+{
+    switch (sgr) {
+    case 30: return 0x707070;   /* black -> dim grey, see above */
+    case 31: return 0xFF5555;   /* red    */
+    case 32: return 0x55E066;   /* green  */
+    case 33: return 0xF0D050;   /* yellow */
+    case 34: return 0x6E90FF;   /* blue - lifted off pure 0000FF, unreadable on black */
+    case 35: return 0xE070E0;   /* magenta */
+    case 36: return 0x55D8D8;   /* cyan   */
+    default: return 0xD8D8D8;   /* white / unknown -> the row's own colour */
+    }
+}
+
+static inline bool fg_is_default(uint8_t sgr) { return sgr == 0 || sgr == 37; }
+
 bool qmx_term_view_is_open(void) { return s_open; }
 
 static void set_state(const char *txt, uint32_t colour)
@@ -169,11 +207,37 @@ static void repaint(void)
     s_seen_seq = t->dirty_seq;
 
     char line[ANSI_COLS + 1];
-    int rev_n = 0;
+    int rev_n = 0, fg_n = 0;
     struct { int r, c, len; } runs[MAX_REV];
+    struct { int r, c, len; uint8_t fg; } fgruns[MAX_FG];
+    char fgtext[MAX_FG][ANSI_COLS + 1];
 
     for (int r = 0; r < ANSI_ROWS; r++) {
         ansi_term_row_text(t, r, line);
+
+        /* Colour runs, collected BEFORE the row text is trimmed so the column
+         * indices still line up with the cell grid. A run is contiguous cells
+         * sharing one non-default colour and not reversed. */
+        for (int c = 0; c < ANSI_COLS; ) {
+            uint8_t f = t->cell[r][c].fg;
+            if (t->cell[r][c].reverse || fg_is_default(f)) { c++; continue; }
+            int s = c;
+            while (c < ANSI_COLS && !t->cell[r][c].reverse && t->cell[r][c].fg == f) c++;
+            if (fg_n < MAX_FG) {
+                int n = 0;
+                bool any = false;
+                for (int k = s; k < c; k++) {
+                    char ch = line[k];
+                    fgtext[fg_n][n++] = ch;
+                    if (ch != ' ') any = true;
+                    line[k] = ' ';        /* blanked so it is not ALSO drawn by the row */
+                }
+                fgtext[fg_n][n] = '\0';
+                if (any) { fgruns[fg_n].r = r; fgruns[fg_n].c = s;
+                           fgruns[fg_n].len = c - s; fgruns[fg_n].fg = f; fg_n++; }
+            }
+        }
+
         int e = ANSI_COLS;
         while (e > 0 && line[e - 1] == ' ') e--;
         line[e] = '\0';
@@ -272,6 +336,24 @@ static void repaint(void)
     for (int i = rev_n; i < s_rev_used; i++)
         if (s_rev[i]) lv_obj_add_flag(s_rev[i], LV_OBJ_FLAG_HIDDEN);
     s_rev_used = rev_n;
+
+    /* Colour runs. Plain labels, no backing block - the cells they cover were
+     * blanked out of the row label above, so nothing is drawn twice. */
+    for (int i = 0; i < fg_n; i++) {
+        if (!s_fg[i]) {
+            s_fg[i] = lv_label_create(s_grid);
+            lv_obj_set_style_text_font(s_fg[i], &qmx_mono_25, 0);
+            lv_obj_clear_flag(s_fg[i], LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_clear_flag(s_fg[i], LV_OBJ_FLAG_SCROLLABLE);
+        }
+        lv_obj_set_style_text_color(s_fg[i], lv_color_hex(fg_colour(fgruns[i].fg)), 0);
+        lv_label_set_text(s_fg[i], fgtext[i]);
+        lv_obj_set_pos(s_fg[i], fgruns[i].c * CELL_W, fgruns[i].r * ROW_H - s_scroll_px);
+        lv_obj_clear_flag(s_fg[i], LV_OBJ_FLAG_HIDDEN);
+    }
+    for (int i = fg_n; i < s_fg_used; i++)
+        if (s_fg[i]) lv_obj_add_flag(s_fg[i], LV_OBJ_FLAG_HIDDEN);
+    s_fg_used = fg_n;
 }
 
 /* Is there anything at all on the screen? */
