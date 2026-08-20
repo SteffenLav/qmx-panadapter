@@ -51,6 +51,11 @@ void ft8_screen_view_request_reply(const char *call);
 // Deferred to the LVGL task and consumed even when FT8 is not up, so a stale
 // request cannot key the radio minutes later.
 void ft8_screen_view_request_override(int what);
+
+// #221: switch FT8/FT4 (and optionally retune) from the API. Deferred to the
+// LVGL task, because the switch also retunes the radio, clears stale decodes
+// and repaints labels. freq_hz 0 keeps the current frequency.
+void ft8_screen_view_request_preset(uint32_t freq_hz, bool ft4);
 const char *ft8_screen_view_get_web_reply_result(void);
 
 // Refresh the "Call CQ" button label to the currently-selected CQ preset.

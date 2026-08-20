@@ -1194,6 +1194,15 @@ static volatile bool s_web_reply_pending;
 // a stale request can never fire minutes later unasked.
 //   0 = none, 1 = resend, 2 = RR73, 3 = 73, 4 = abort
 static volatile int s_web_override_pending;
+
+// #221: FT8/FT4 preset requested over the API. Switching sub-mode is not just a
+// setting - apply_freq_preset() also retunes the radio, clears stale decodes and
+// repaints two labels, and it must run on taskLVGL. Same deferral as the CQ and
+// override requests: the HTTP task leaves a request, the 1 Hz timer performs it.
+// Packed rather than two variables so a half-applied request cannot be drained.
+static void apply_freq_preset(uint32_t freq_hz, bool ft4);   // defined below
+static volatile uint32_t s_web_preset_hz  = 0;    // 0 = nothing pending
+static volatile bool     s_web_preset_ft4 = false;
 static char          s_web_reply_result[64];
 
 void ft8_screen_view_request_reply(const char *call)
@@ -1201,6 +1210,14 @@ void ft8_screen_view_request_reply(const char *call)
     if (!call || !call[0]) return;
     snprintf(s_web_reply_call, sizeof(s_web_reply_call), "%s", call);
     s_web_reply_pending = true;
+}
+
+// #221: ask for an FT8/FT4 preset from the API. freq_hz of 0 means "keep the
+// current frequency, only change sub-mode".
+void ft8_screen_view_request_preset(uint32_t freq_hz, bool ft4)
+{
+    s_web_preset_ft4 = ft4;
+    s_web_preset_hz  = freq_hz ? freq_hz : 1;   // 1 = sentinel for "current freq"
 }
 
 void ft8_screen_view_request_override(int what)
@@ -1300,6 +1317,18 @@ static void t_clock_cb(lv_timer_t *t)
     // Web reply request: consumed even when FT8 is not up, same reasoning as the
     // CQ flag - a stale TX request firing minutes later, unasked, is the one
     // failure mode this deferral must never have.
+    if (s_web_preset_hz) {
+        uint32_t hz  = s_web_preset_hz;
+        bool     ft4 = s_web_preset_ft4;
+        s_web_preset_hz = 0;                    // consume before acting
+        if (hz == 1) hz = cat_get_frequency();  // sentinel: keep the dial where it is
+        if (hz) {
+            ESP_LOGW(TAG, "API: switching to %s on %lu Hz",
+                     ft4 ? "FT4" : "FT8", (unsigned long)hz);
+            apply_freq_preset(hz, ft4);
+        }
+    }
+
     if (s_web_override_pending) {
         int what = s_web_override_pending;
         s_web_override_pending = 0;

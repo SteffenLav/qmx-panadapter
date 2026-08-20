@@ -737,6 +737,27 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             httpd_resp_sendstr(req, msg);
             return ESP_OK;
         }
+    } else if (action && strcmp(action, "set_ft8_mode") == 0) {
+        // #221: switch FT8/FT4 from the API. This is not merely a setting - the
+        // Tab5's own preset also retunes the radio, clears stale decodes and
+        // repaints labels - so it is deferred to the LVGL task exactly like
+        // cq_start. Until this existed the only way to reach FT4 was a finger on
+        // the Preset button, which made every FT4 test need the operator.
+        //   {"action":"set_ft8_mode","mode":"ft4"}                 keep frequency
+        //   {"action":"set_ft8_mode","mode":"ft8","freq_hz":14074000}
+        const char *m  = cJSON_GetStringValue(cJSON_GetObjectItem(root, "mode"));
+        cJSON      *fz = cJSON_GetObjectItem(root, "freq_hz");
+        bool ft4 = (m && (strcasecmp(m, "ft4") == 0));
+        bool ok  = (m && (ft4 || strcasecmp(m, "ft8") == 0));
+        if (ok) {
+            ft8_screen_view_request_preset(
+                cJSON_IsNumber(fz) ? (uint32_t)fz->valuedouble : 0, ft4);
+        }
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, ok ? "{\"ok\":true}"
+                                   : "{\"ok\":false,\"error\":\"mode must be ft8 or ft4\"}");
+        return ESP_OK;
     } else if (action && strcmp(action, "cq_start") == 0) {
         // Restart a CQ run from the browser (Dennis WN4FLA): a CQ that has timed out
         // or hit its call limit otherwise needs a walk back to the Tab5. Deferred to
@@ -2169,6 +2190,23 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "swr_limit_x10",   c.swr_limit_x10);
     cJSON_AddBoolToObject(root, "pskreporter_en",    c.pskreporter_en);
     cJSON_AddBoolToObject(root, "greylist_en",       c.greylist_en);
+    // #221 API AUDIT, read side: these were WRITE-ONLY - settable but not
+    // readable, so a script could change them and never confirm what it had
+    // done, and could not restore what it found. An API that only writes is
+    // half an API.
+    cJSON_AddBoolToObject(root,   "flat_mode",        c.flat_mode);
+    cJSON_AddBoolToObject(root,   "ft8_early_decode", c.ft8_early_decode);
+    cJSON_AddBoolToObject(root,   "resmon_en",        c.resmon_en);
+    cJSON_AddBoolToObject(root,   "tx_tone_hold",     c.tx_tone_hold);
+    cJSON_AddNumberToObject(root, "tx_tone_hz",       (double)c.tx_tone_hz);
+    cJSON_AddNumberToObject(root, "cw_cal_hz",        (double)c.cw_cal_hz);
+    // The FT8/FT4 sub-mode and its frequency are read-only here on purpose -
+    // they are CHANGED through the "set_ft8_mode" action, which also retunes the
+    // radio and clears the decode list. Reporting them lets a caller check the
+    // result of that action, which it previously could not do at all.
+    cJSON_AddStringToObject(root, "ft8_op_mode",
+                            c.ft8_op_mode == 1 ? "ft4" : "ft8");
+    cJSON_AddNumberToObject(root, "ft8_freq_hz",      (double)c.ft8_freq_hz);
     cJSON_AddNumberToObject(root, "hound_mode",      c.hound_mode);
     cJSON_AddBoolToObject(root, "sim_mode_en",       c.sim_mode_en);
     // ARRL Field Day (#210, Randy N4OPI wanted the Filter modal reachable from the
@@ -2266,6 +2304,51 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
 
     if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "my_callsign")))) settings_set_my_callsign(s);
     if ((s = cJSON_GetStringValue(cJSON_GetObjectItem(root, "my_grid"))))     settings_set_my_grid(s);
+
+    // #221 API AUDIT: the settings below had NO route at all - not here, not via
+    // a dedicated endpoint - so anything driving the device over HTTP (a script,
+    // a test, another program) could not reach them even though the drawer can.
+    // Same MERGE rule as everything else: only keys actually present are applied.
+    //
+    // Deliberately NOT added: ft8_op_mode and ft8_freq_hz. Switching sub-mode
+    // also retunes the radio and clears the decode list, so it has its own
+    // action ("set_ft8_mode") that defers to the LVGL task rather than writing
+    // a setting behind the UI's back.
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "flat_mode")))
+        settings_set_flat_mode(cJSON_IsTrue(it));
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "distance_in_miles")))
+        settings_set_distance_in_miles(cJSON_IsTrue(it));
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "greylist_en")))
+        settings_set_greylist_en(cJSON_IsTrue(it));
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "ft8_early_decode")))
+        settings_set_ft8_early_decode(cJSON_IsTrue(it));
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "field_day_en")))
+        settings_set_field_day_en(cJSON_IsTrue(it));
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "spots_en")))
+        settings_set_spots_en(cJSON_IsTrue(it));
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "sota_en")))
+        settings_set_sota_en(cJSON_IsTrue(it));
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "rbn_en")))
+        settings_set_rbn_en(cJSON_IsTrue(it));
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "pskreporter_en")))
+        settings_set_pskreporter_en(cJSON_IsTrue(it));
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "resmon_en")))
+        settings_set_resmon_en(cJSON_IsTrue(it));
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "tx_tone_hold")))
+        settings_set_tx_tone_hold(cJSON_IsTrue(it));
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "tx_tone_hz")))
+        settings_set_tx_tone_hz((uint16_t)it->valuedouble);
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "cw_pitch_hz")))
+        settings_set_cw_pitch_hz((uint16_t)it->valuedouble);
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "cw_cal_hz")))
+        settings_set_cw_cal_hz((int16_t)it->valuedouble);
+
+    // ⛔ sim_mode_en is exposed on purpose and is the one to be careful with: it
+    // is what lets a test drive full QSOs with NO radio attached, and ft8_tx.c
+    // hard-refuses to key the QMX while it is set. Turning it ON is safe;
+    // leaving it on is what produces phantom contacts in a real log.
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "sim_mode_en")))
+        settings_set_sim_mode_en(cJSON_IsTrue(it));
 
     cJSON *cq = cJSON_GetObjectItem(root, "cq");
     if (cJSON_IsObject(cq)) {
