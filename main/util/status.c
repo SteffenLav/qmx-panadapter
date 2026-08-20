@@ -99,41 +99,31 @@ static void short_ver(const char *in, char *out, size_t out_sz)
 
 
 // ---------------------------------------------------------------------------
-// #218: what a tap on the bottom-bar update line means.
+// #218: what a long press on the bottom-bar update line means.
 //
-// TWO-TAP ARM, and that is not decoration. The bottom edge already owns a
-// swipe gesture (it opens Memory Channels) and its own code deliberately makes
-// a pure tap inert "so reaching for the swipe grip can't accidentally retune".
-// Downloading uses the operator's data and restarting interrupts receiving -
-// and with the QMX attached a restart leaves the radio needing a power cycle
-// (#74). So the first tap only CHANGES THE TEXT to ask, and the second acts.
-// It disarms itself, so a forgotten first tap does nothing.
+// LONG PRESS, not a tap, and that is the operator's design. The band-plan strip
+// is 22 px and sits directly on top of this bar, and a tap on IT retunes - so a
+// finger reaching for the update line and landing slightly high moved the dial.
+// A hold cannot be triggered by brushing past, it announces itself with
+// "release to confirm" while the finger is still down, and lifting early
+// cancels it. It also composes with the swipe already on this strip, because
+// that one is a DRAG: hold still to update, drag up for Memory Channels.
 //
-// Nothing is ever downloaded without an explicit tap: the first state offered
-// is "download", not a download already in progress.
+// Nothing is ever downloaded without that deliberate act: the first state
+// OFFERS a download rather than being one already in progress.
 // ---------------------------------------------------------------------------
-#define UPDATE_ARM_US   (5 * 1000000LL)
-
-static int64_t s_update_arm_until = 0;
-
-static bool update_armed(void)
-{
-    return s_update_arm_until > 0 && esp_timer_get_time() < s_update_arm_until;
-}
-
 static void update_line_tap(void)
 {
+    // Called only after a completed LONG PRESS (ui.c), which is the
+    // confirmation: it cannot happen by brushing past, it showed "release to
+    // confirm" while the finger was down, and lifting early cancels. So there
+    // is no second gate here - a two-tap arm on top would just be a hidden
+    // state the operator has to remember.
     int  pct = 0;
-    char msg[128], latest[32];
+    static char msg[128], latest[32];
     ota_state_t st = ota_update_get_state(&pct, msg, sizeof(msg));
 
     if (st == OTA_RUNNING) return;          // nothing sensible to do mid-download
-
-    if (!update_armed()) {                  // first tap: only ask
-        s_update_arm_until = esp_timer_get_time() + UPDATE_ARM_US;
-        return;
-    }
-    s_update_arm_until = 0;                 // second tap: act, and disarm
 
     if (st == OTA_DONE) {
         ESP_LOGW("status", "operator confirmed restart into the new firmware");
@@ -143,11 +133,11 @@ static void update_line_tap(void)
     update_check_get_latest(latest, sizeof(latest));
     if (!latest[0]) return;
 
-    char url[192];
+    static char url[192];
     snprintf(url, sizeof(url),
              "https://github.com/SteffenLav/qmx-panadapter/releases/download/%s/qmx_panadapter.bin",
              latest);
-    char err[96];
+    static char err[96];
     if (!ota_update_start(url, err, sizeof(err))) {
         // The refusal reason matters more than the failure - "transmitting" is
         // something the operator can act on.
@@ -199,7 +189,6 @@ static void status_task(void *arg)
             short_ver(over,   over_s,   sizeof(over_s));
             short_ver(latest, latest_s, sizeof(latest_s));
 
-            bool armed = update_armed();
 
             // Wording and colours are the operator's, chosen to fit at the
             // ORIGINAL montserrat_24 - every state below is ~20 characters,
@@ -212,16 +201,14 @@ static void status_task(void *arg)
                     snprintf(vline, sizeof(vline), "updating  %d%%", opct);
                 vcol = 0xFFA040;                       // amber - working
             } else if (ost == OTA_DONE) {
-                if (armed)        snprintf(vline, sizeof(vline), "restart now?");
-                else if (over_s[0]) snprintf(vline, sizeof(vline), "%s - tap updates", over_s);
-                else              snprintf(vline, sizeof(vline), "tap updates");
+                if (over_s[0]) snprintf(vline, sizeof(vline), "%s - hold updates", over_s);
+                else              snprintf(vline, sizeof(vline), "hold updates");
                 vcol = 0x8FE0A0;                       // light green - ready
             } else if (ost == OTA_FAILED) {
-                snprintf(vline, sizeof(vline), armed ? "retry now?" : "Failed - tap retries");
+                snprintf(vline, sizeof(vline), "Failed - hold retries");
                 vcol = 0xFF6060;                       // red - went wrong
             } else if (update_check_available() && latest_s[0]) {
-                if (armed) snprintf(vline, sizeof(vline), "download %s?", latest_s);
-                else snprintf(vline, sizeof(vline), "%s " LV_SYMBOL_RIGHT " %s  tap?",
+                snprintf(vline, sizeof(vline), "%s " LV_SYMBOL_RIGHT " %s  hold?",
                               running, latest_s);
                 vcol = 0x40D8E0;                       // cyan - offered, nothing fetched
             } else {
@@ -408,5 +395,17 @@ void status_bar_start(void)
     ui_set_update_tap_cb(update_line_tap);   // #218
     // The bottom-bar SD-backup dot is synced once in app_main (after ui_init)
     // and driven live by the sd_archive task on mount/unmount.
-    psram_task_create(status_task, "status", 4096, NULL, 2, tskNO_AFFINITY);
+    // 4096 was the historic size, and #218 added real work to this task -
+    // composing the update line, two version shortenings, ota/update_check
+    // queries and a wider snprintf. It crashed TWICE within an hour on 4 KB:
+    // first "Stack protection fault" outright, then "spinlock_acquire
+    // (lock->count == 0)" on a log call, which is what earlier corruption tends
+    // to look like by the time it is noticed.
+    //
+    // The buffers are static now, so this is deliberate headroom rather than a
+    // fix for a known overflow - and it is nearly free, because the stack lives
+    // in PSRAM (28 MB spare) while the TCB stays internal. On a board whose task
+    // stacks are documented as "TINY", being generous with a background task is
+    // the cheap side of the trade.
+    psram_task_create(status_task, "status", 8192, NULL, 2, tskNO_AFFINITY);
 }

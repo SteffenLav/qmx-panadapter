@@ -6453,10 +6453,42 @@ static void (*s_update_tap_cb)(void) = NULL;
 //   - the whole bottom bar becomes the tap target, not just ~230 px of text
 //   - the band-plan strip stops accepting taps directly above that text
 static bool s_update_line_tappable = false;
+// #218 LONG-PRESS. A tap is the wrong gesture here: the band-plan strip is 22 px
+// and sits directly on top of this bar, a tap on IT retunes, and a brush while
+// reaching should never start a download or restart the radio. Holding is
+// deliberate, self-cancelling (lift early and nothing happens) and needs no
+// hidden armed state - and it composes with the swipe-up already on this strip,
+// which is a DRAG: hold still to update, drag up for Memory Channels.
+#define UPDATE_HOLD_MS     700
+#define UPDATE_HOLD_SLOP   20     // px of wander still counted as "holding"
+
+static uint32_t s_update_press_ms = 0;    // 0 = not pressing
+static int      s_update_press_x  = 0;
+static bool     s_update_hold_ok  = false; // held long enough: fires on release
+// While the hold feedback is on screen, status.c's 1 Hz refresh must not paint
+// over it - the feedback has to be immediate and stay put until the finger goes.
+static bool     s_update_hold_paint = false;
 
 bool ui_update_line_tappable(void) { return s_update_line_tappable; }
 
 void ui_set_update_line_tappable(bool on) { s_update_line_tappable = on; }
+
+// Immediate feedback that the hold has "taken" and will fire when the finger
+// lifts. Bypasses the paint lock deliberately - this IS the lock's owner.
+static void update_hold_paint(const char *text, uint32_t colour)
+{
+    if (!s_bot_version) return;
+    s_update_hold_paint = false;              // let the writer through
+    ui_set_update_line(text, colour);
+    s_update_hold_paint = true;
+}
+
+static void update_hold_clear(void)
+{
+    s_update_press_ms = 0;
+    s_update_hold_ok  = false;
+    s_update_hold_paint = false;              // next 1 Hz refresh restores the real text
+}
 
 void ui_set_update_tap_cb(void (*cb)(void)) { s_update_tap_cb = cb; }
 
@@ -6474,6 +6506,7 @@ static bool update_line_hit(int x)
 void ui_set_update_line(const char *text, uint32_t colour)
 {
     if (!s_bot_version) return;
+    if (s_update_hold_paint) return;   // a hold is being shown; leave it alone
     const char *t = text ? text : "";
 
     // Font stays at the ORIGINAL montserrat_24 - the operator's wording is
@@ -7096,6 +7129,13 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
         be_start_x = (int)p.x;
         be_decided = 0;
         be_bp_ok   = false;
+        // #218: begin a possible long-press on the update line. Recorded for
+        // every press and simply never matures unless the finger stays put.
+        update_hold_clear();
+        if (s_update_line_tappable && s_update_tap_cb) {
+            s_update_press_ms = lv_tick_get();
+            s_update_press_x  = (int)p.x;
+        }
         // Capture the band context (used only if this turns into a horizontal
         // drag), gated on Panadapter mode with a visible band-plan strip AND on
         // the finger landing on/near the slider HEAD (the visible-window knob) -
@@ -7133,6 +7173,21 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
         int dy = (int)p.y - s_bottom_edge_swipe_start_y;
         int adx = dx < 0 ? -dx : dx;
         int ady = dy < 0 ? -dy : dy;
+
+        // #218: has this press become a HOLD on the update line? Any real
+        // movement abandons it - the operator is swiping up for Memory Channels
+        // or dragging the band plan, not choosing to update - so the two
+        // gestures never compete: hold still to update, drag to do anything
+        // else. The white "release to confirm" is the promise that lifting now
+        // is what acts; lifting early does nothing at all.
+        if (s_update_press_ms && !s_update_hold_ok) {
+            if (adx > UPDATE_HOLD_SLOP || ady > UPDATE_HOLD_SLOP) {
+                s_update_press_ms = 0;
+            } else if (lv_tick_elaps(s_update_press_ms) >= UPDATE_HOLD_MS) {
+                s_update_hold_ok = true;
+                update_hold_paint("release to confirm", 0xFFFFFF);
+            }
+        }
         if (be_decided == 0) {
             if (dy <= -BP_DRAG_THRESHOLD_PX && ady >= adx) {
                 be_decided = 1;                 // mostly-up -> swipe
@@ -7168,21 +7223,21 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
         } else if (be_decided == 1 && s_bottom_edge_swipe_start_y >= 0 &&
                    s_bottom_edge_swipe_start_y - (int)p.y >= EDGE_SWIPE_MIN_DY) {
             ui_show_memories();
-        } else if (be_decided == 0 && s_update_tap_cb &&
-                   (s_update_line_tappable || update_line_hit((int)p.x))) {
-            // While an update is pending the WHOLE bar is the target, so no
-            // precision is needed and there is no reason to aim at the small
-            // text near the band-plan strip. Otherwise only the label itself
-            // responds, leaving the bar inert exactly as before.
-            // #218: a tap on the update line. Safe to act on a single tap
-            // because status.c arms first and only acts on a SECOND tap - so
-            // reaching for the swipe grip still cannot do anything.
+        } else if (be_decided == 0 && s_update_hold_ok && s_update_tap_cb) {
+            // #218: a completed LONG PRESS on the bottom bar. The hold is the
+            // confirmation - it cannot happen by brushing past, it announced
+            // itself with "release to confirm" while the finger was still down,
+            // and lifting early cancels it. While an update is pending the whole
+            // bar accepts it, so there is no need to aim at the small text next
+            // to the band-plan strip.
+            ESP_LOGW("ui", "update line long-press confirmed (x=%d)", (int)p.x);
             s_update_tap_cb();
         } else if (be_decided == 0 && grip_mouse_click(e, s_bottom_edge_grip)) {
             ui_show_memories();         // a pointer cannot swipe: see grip_mouse_click()
         }
         // A pure tap (be_decided==0) from a FINGER still does nothing - so
         // reaching for the swipe grip can't accidentally retune.
+        update_hold_clear();        // #218: drop any hold feedback, whatever happened
         s_touch_on_bandplan = false;
         s_bottom_edge_swipe_start_y = -1;
         be_start_x = -1;
