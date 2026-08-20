@@ -200,6 +200,56 @@ int main(void)
         check("dirty_seq still valid after attr-only", t.dirty_seq >= after);
     }
 
+    /* #215: unhandled SGR parameters must be RECORDED, not silently dropped.
+       Every byte captured from the QMX menus uses only 0/7/27/33/37, but the
+       Diagnostics screen sends something else and a discarded parameter left no
+       way to find out what. */
+    ansi_term_reset(&t);
+    {
+        /* 1 = bold, 91 = bright red, 42 = green background: none implemented. */
+        ansi_term_feed(&t, (const uint8_t *)"\x1b[1;91mRED\x1b[42mBG", 17);
+        check("unknown SGR recorded at all",      t.unk_n > 0);
+        check("records 3 distinct unknown codes", t.unk_n == 3);
+        int saw1 = 0, saw91 = 0, saw42 = 0, saw37 = 0;
+        for (int i = 0; i < t.unk_n; i++) {
+            if (t.unk[i] == 1)  saw1  = 1;
+            if (t.unk[i] == 91) saw91 = 1;
+            if (t.unk[i] == 42) saw42 = 1;
+        }
+        check("bold (1) recorded",              saw1);
+        check("bright red (91) recorded",       saw91);
+        check("green background (42) recorded", saw42);
+        check("total occurrences counted",      t.unk_count == 3);
+        /* The text itself must still be parsed - telemetry must not eat cells. */
+        check_row(&t, 0, "REDBG");
+
+        /* A code we DO implement must never be reported as unknown. */
+        ansi_term_feed(&t, (const uint8_t *)"\x1b[37m\x1b[7m\x1b[27m\x1b[0m\x1b[33m", 25);
+        for (int i = 0; i < t.unk_n; i++) if (t.unk[i] == 37) saw37 = 1;
+        check("handled codes are NOT recorded as unknown", !saw37);
+        check("handled codes do not bump the count",       t.unk_count == 3);
+
+        /* Repeats must not consume slots - the list is DISTINCT codes. */
+        ansi_term_feed(&t, (const uint8_t *)"\x1b[91m\x1b[91m\x1b[91m", 15);
+        check("repeat does not add a slot", t.unk_n == 3);
+        check("repeat does bump the count", t.unk_count == 6);
+
+        /* Overflow must be bounded, not overrun the array. */
+        ansi_term_reset(&t);
+        char nbuf[8];
+        for (int pp = 60; pp < 60 + ANSI_UNK_MAX + 5; pp++) {
+            int n = snprintf(nbuf, sizeof(nbuf), "\x1b[%dm", pp);
+            ansi_term_feed(&t, (const uint8_t *)nbuf, (size_t)n);
+        }
+        check("unknown list is capped at ANSI_UNK_MAX", t.unk_n == ANSI_UNK_MAX);
+        check("count still tallies past the cap",       t.unk_count == ANSI_UNK_MAX + 5);
+    }
+
+    /* reset() must clear the telemetry too, or a stale code outlives its screen. */
+    ansi_term_reset(&t);
+    check("reset clears unknown list",  t.unk_n == 0);
+    check("reset clears unknown count", t.unk_count == 0);
+
     printf("\n%s\n", g_fail ? "FAILURES ABOVE" : "all checks passed");
     return g_fail ? 1 : 0;
 }

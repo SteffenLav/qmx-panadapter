@@ -49,9 +49,27 @@ static void apply_sgr(ansi_term_t *t, int p)
     else if (p == 7)              { t->cur_reverse = true; }
     else if (p == 27)             { t->cur_reverse = false; }
     else if (p >= 30 && p <= 37)  { t->cur_fg = (uint8_t)p; }
-    /* Anything else (bold, background, 256-colour) is ignored on purpose: the
-       radio does not send it, and guessing at unmeasured behaviour is how a
-       parser grows bugs nobody can reproduce. */
+    else {
+        /* Anything else (bold, background, bright 90-97, 256-colour) is still
+           ignored on purpose - guessing at unmeasured behaviour is how a parser
+           grows bugs nobody can reproduce.
+
+           But it is no longer ignored SILENTLY. Samuel W7STF reported that the
+           QMX+ Diagnostics screen "uses red" and that the green Press / <<< >>>
+           button labels do not come through (#215), while every byte ever
+           captured from the MENU screens uses only 0/7/27/33/37 - all handled.
+           So the Diagnostics screen sends something else and we had no way to
+           learn what: a dropped parameter left no trace, which is the same
+           unfalsifiability trap as the silent USB patches (#189).
+
+           Record the distinct offenders so /api/term can report them and the
+           answer comes from the radio instead of from my imagination. */
+        for (int i = 0; i < t->unk_n; i++) {
+            if (t->unk[i] == p) { t->unk_count++; return; }   /* already known */
+        }
+        if (t->unk_n < ANSI_UNK_MAX) t->unk[t->unk_n++] = (int16_t)p;
+        t->unk_count++;
+    }
 }
 
 /* A complete CSI sequence: esc_buf holds the parameter text, `final` the letter. */

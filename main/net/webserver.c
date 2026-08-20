@@ -2907,6 +2907,20 @@ static esp_err_t term_get_handler(httpd_req_t *req)
                 } else c++;
             }
         }
+        // #215: SGR parameters the parser does not implement. Every byte ever
+        // captured from the MENU screens uses only 0/7/27/33/37, but the
+        // Diagnostics screen evidently sends more (Samuel W7STF: it "uses red",
+        // and the green Press / <<< >>> labels never appear). Reporting the
+        // offenders turns "the colour is wrong" into a list of numbers, so the
+        // fix can be measured rather than guessed - ask the operator to open
+        // Diagnostics and read this back.
+        if (t->unk_n > 0) {
+            cJSON *unk = cJSON_AddArrayToObject(root, "unk");
+            for (int i = 0; i < t->unk_n; i++) {
+                cJSON_AddItemToArray(unk, cJSON_CreateNumber(t->unk[i]));
+            }
+            cJSON_AddNumberToObject(root, "unk_n", t->unk_count);
+        }
         qmx_term_unlock_screen();
     }
 
