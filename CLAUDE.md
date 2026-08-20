@@ -458,23 +458,33 @@ and only these two were real. `wifi.c`'s `s_wifi_started` is a **false positive*
 and must stay as it is — it records that `esp_wifi_start()` succeeded and is set
 at each call site right after the call, which is the correct pattern.
 
-⚠ **Not hardware-verified, and it cannot be with the radio off** — see the
-radio-off constraint below.
+⭐ **Exercised on hardware 2026-08-20 with the radio on: 7 FT8 entries, 2 spawns,
+1 legitimate respawn, 5 correct guard refusals, and EXACTLY ONE pool build per
+spawn** — zero `rebuilt with no teardown`, zero crashes. Read as
+*not contradicted*, not as proven: reproducing the original race needs the
+watchdog to look inside the spawn-to-first-run window, which cannot be forced on
+demand. The guard is demonstrably live though — a respawn was immediately
+followed by refusals, i.e. the flag went true at once.
 
-### FT8 entry cannot be exercised with the QMX powered OFF
-`ui_request_base_mode()` is consumed by `qmx_wait_poll_cb()`, so while the
-"Waiting for QMX..." prompt is up the base-mode change **never completes** —
-`/api/cmd {"action":"screen","screen":"ft8"}` returns fine and `/api/status`
-keeps reporting `panadapter`. `build_monitor_pool()` is likewise only reached
-after CAT comes up.
+### ⛔ `/api/cmd` answers an unknown action with `unknown action` and HTTP 200
+So a mistyped action is a **silent no-op**, and if the response is piped to
+`/dev/null` the test looks like it ran and changed nothing.
 
-**So anything gated on FT8 entry — #38's task-stack leak, #199's double build,
-the monitor pool, the decode tasks — cannot be tested with the radio off, and a
-clean-looking result means the test did not run.** Measured 2026-08-20: twelve
-web-driven toggles moved `psram free` by **0 KB** against a predicted ~2 MB, and
-the capture held zero `waiting for CAT`, zero `respawning` and zero guard
-refusals, i.e. no task was ever spawned. A zero-leak reading has exactly the
-shape of good news; check the task actually started before believing it.
+This cost real time on 2026-08-20. The screen-switch action is **`set_screen`**,
+not `screen`. Twelve "panadapter↔FT8 toggles" sent `{"action":"screen",...}`,
+every one returned `unknown action`, and the resulting perfectly flat heap was
+briefly written up as "#38's leak is gone" — against a predicted ~2 MB. Worse, a
+**mechanism was invented to explain it**: that `ui_request_base_mode()` was
+gated behind `qmx_wait_poll_cb()`'s "Waiting for QMX..." prompt. That claim was
+never tested and is **false**; with the correct action the switch completes
+normally. It had already been committed to this file, TODO.md and memory before
+the typo was found.
+
+**Two rules from it.** Check the BODY of an `/api/cmd` response, never just the
+status. And when a result is surprising, confirm the action executed at all
+before reasoning about why it behaved that way — an invented mechanism for a
+result that never happened is worse than no explanation, because it reads as
+knowledge.
 
 ### Task stacks on this board are TINY — a multi-hundred-byte local is a bug until proven otherwise
 Measured stack bounds from real crash dumps: **`sys_evt` 2808 B**, **`settings_flush` 3064 B**. `taskLVGL` is ~8 KB. So a "small" local array is not small here. Instances so far, all the same bug: the v0.20.1 pounce crash (11 KB `ft8_call_t snap[]` on taskLVGL — the compiler reserves the frame at the prologue **unconditionally**, so it fired on every pounce regardless of the code path taken), and three in one sitting on 2026-08-05 while adding the WiFi known-network list — a `wifi_known_t[6]` (~590 B) on `sys_evt` (twice: the GOT_IP log and the backoff probe) and on `settings_flush`, each producing `Guru Meditation: Stack protection fault` and a **crash loop**.
