@@ -53,6 +53,10 @@ static const char *TAG = "ft8_tx";
 #define FT4_TONE_SPACING_HZ      (1.0f / FT4_SYMBOL_PERIOD)                // ~20.833 Hz
 #define FT8_TX_KEYUP_TONE_HZ     0.0f       // "any value < 10 Hz" keys up (CAT manual)
 #define FT8_TX_ENVELOPE_SETTLE_MS  5        // wait after TA0; before RX; (CAT manual sequence)
+// How many times to re-send the commands that STOP transmission before giving
+// up. 8 x 20 ms = ~160 ms, which is nothing against a 12.6 s burst and is far
+// more than a transient CDC hiccup needs. See tx_cmd_critical().
+#define FT8_TX_STOP_RETRIES        8
 #define FT8_TX_MODE_POLL_MS      100
 #define FT8_TX_MODE_POLL_TRIES   10         // ~1s worst case; MD; refreshes ~every 150ms
 
@@ -949,6 +953,47 @@ static void tx_cmd(int64_t t0, bool sim, const char *fmt, ...)
 #endif
 }
 
+// ⛔ THE ONE CAT WRITE WHOSE FAILURE HAS A PHYSICAL CONSEQUENCE.
+//
+// tx_cmd() logs a failed send and carries on, which is right for the 79 tone
+// updates - a dropped tone is one bad symbol. It is NOT right for the command
+// that STOPS TRANSMITTING. A single transient CDC failure there leaves the
+// radio KEYED, with nothing in the firmware ever trying again, and this project
+// already documents that transient CDC TX failures happen (cat.c's poll task
+// tolerates ~20 in a row before giving up).
+//
+// Roy KI0ER, 2026-08-19: "the QMX Panadapter told the QMX radio that it should
+// stop TX, but the QMX radio did not stop TX" - his radio stayed keyed until he
+// power-cycled it, with the Tab5 UI running normally throughout. That is
+// exactly the shape of one dropped RX; and no retry. Not confirmed from his log
+// (the ring had rotated past the event), so this is a real gap being closed on
+// its own merits rather than a proven diagnosis.
+//
+// Retries hard and says so loudly if it never gets through - a silent failure
+// here is the operator transmitting without knowing.
+static bool tx_cmd_critical(int64_t t0, bool sim, const char *cmd)
+{
+    if (sim) { ESP_LOGI(TAG, "[SIM t+%6lldus] %s", (long long)(esp_timer_get_time() - t0), cmd); return true; }
+#if FT8_TX_SEND_LIVE
+    for (int i = 0; i < FT8_TX_STOP_RETRIES; i++) {
+        esp_err_t err = cat_send_raw_cmd("%s", cmd);
+        if (err == ESP_OK) {
+            if (i) ESP_LOGW(TAG, "%s succeeded on attempt %d - radio is back in receive", cmd, i + 1);
+            return true;
+        }
+        ESP_LOGW(TAG, "%s FAILED (0x%x), attempt %d/%d - retrying",
+                 cmd, err, i + 1, FT8_TX_STOP_RETRIES);
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
+    ESP_LOGE(TAG, "⚠ %s NEVER GOT THROUGH - THE RADIO MAY STILL BE TRANSMITTING. "
+                  "Power-cycle the QMX if it is.", cmd);
+    return false;
+#else
+    ESP_LOGI(TAG, "[DRY RUN t+%6lldus] %s", (long long)(esp_timer_get_time() - t0), cmd);
+    return true;
+#endif
+}
+
 // Sleep until t0 + offset_us, if that's still in the future. Anchoring every
 // target to the fixed t0 (rather than chaining vTaskDelay calls) keeps 79
 // sends from drifting cumulatively over the ~12.6s burst.
@@ -1143,7 +1188,11 @@ void ft8_tx_run(const ft8_tx_request_t *req)
         // Either way - whether all symbols played or we broke out early
         // on an abort request - key up immediately now. This is the part
         // that must ALWAYS run: the radio must never be left transmitting.
-        tx_cmd(t0, sim, "TA%.0f;", (double)FT8_TX_KEYUP_TONE_HZ);
+        {
+            char keyup[24];
+            snprintf(keyup, sizeof(keyup), "TA%.0f;", (double)FT8_TX_KEYUP_TONE_HZ);
+            tx_cmd_critical(t0, sim, keyup);   // drops the envelope
+        }
         vTaskDelay(pdMS_TO_TICKS(FT8_TX_ENVELOPE_SETTLE_MS));
 
         // Query power/SWR while still keyed - SW; returns no reading once
@@ -1174,7 +1223,7 @@ void ft8_tx_run(const ft8_tx_request_t *req)
         }
 #endif
 
-        tx_cmd(t0, sim, "RX;");
+        tx_cmd_critical(t0, sim, "RX;");   // back to receive - must not be a single try
 
 #if FT8_TX_SEND_LIVE
         if (!sim && power_w >= 0.0f && swr > 4.0f) {
