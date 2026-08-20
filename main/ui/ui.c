@@ -6438,11 +6438,62 @@ void ui_set_bottom_version(const char *text)
 // Takes ready-made text and a colour rather than reading the update/OTA modules
 // itself: ui.c has no business depending on net/, and status.c already owns the
 // 1 Hz bottom-bar refresh where the wording is composed for BOTH screens.
+// #218: the update line is TAPPABLE, and the tap is reported to status.c which
+// owns what it means (download / restart). ui.c must not know about net/.
+//
+// ⚠ It cannot be a clickable label. The bottom-edge swipe strip is an
+// always-on-top overlay covering the WHOLE bottom bar, so a new clickable there
+// would simply never be hit - the reverse-creation-order trap this file
+// documents. The tap is therefore detected inside that existing overlay's own
+// callback, restricted to this label's x-range, so the rest of the bar stays
+// inert exactly as before.
+static void (*s_update_tap_cb)(void) = NULL;
+
+void ui_set_update_tap_cb(void (*cb)(void)) { s_update_tap_cb = cb; }
+
+// True when x falls inside the version label. Used by bottom_edge_swipe_cb to
+// tell "tapped the update line" from "reached for the swipe grip".
+static bool update_line_hit(int x)
+{
+    if (!s_bot_version) return false;
+    lv_area_t a;
+    lv_obj_get_coords(s_bot_version, &a);
+    const int margin = 20;                 // finger-sized, still well clear of SD/clock
+    return x >= (int)a.x1 - margin && x <= (int)a.x2 + margin;
+}
+
 void ui_set_update_line(const char *text, uint32_t colour)
 {
     if (!s_bot_version) return;
+    const char *t = text ? text : "";
+
+    // ⚠ FIT THE FONT TO THE TEXT, because this label is CENTRE-aligned at a
+    // fixed offset and grows BOTH ways into its neighbours. Measured on the
+    // real bar: the SD text ends at x=254 and the clock starts at x=534, so
+    // there are ~280 px and the label sits in the middle of them - about 270 px
+    // symmetric. At montserrat_24 that is ~20 characters.
+    //
+    // "v1.8.8 - touch to update" is 24, and it ran straight through the clock
+    // and pushed the SD dot off screen - seen on a device screenshot, not
+    // predicted from the code. Shrinking the font beats truncating the text,
+    // because the version IS the information. The update states are transient
+    // and coloured, so a slightly smaller line does not read as inconsistent.
+    static const lv_font_t *fonts[] = {
+        &lv_font_montserrat_24, &lv_font_montserrat_22,
+        &lv_font_montserrat_20, &lv_font_montserrat_18,
+    };
+    const int budget_px = 264;
+    const lv_font_t *use = fonts[0];
+    for (unsigned i = 0; i < sizeof(fonts) / sizeof(fonts[0]); i++) {
+        lv_point_t sz;
+        lv_text_get_size(&sz, t, fonts[i], 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+        use = fonts[i];
+        if (sz.x <= budget_px) break;     // smallest that still fits wins
+    }
+
     if (display_lock(20)) {
-        lv_label_set_text(s_bot_version, text ? text : "");
+        lv_obj_set_style_text_font(s_bot_version, use, 0);
+        lv_label_set_text(s_bot_version, t);
         lv_obj_set_style_text_color(s_bot_version, lv_color_hex(colour), 0);
         display_unlock();
     }
@@ -7091,6 +7142,11 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
         } else if (be_decided == 1 && s_bottom_edge_swipe_start_y >= 0 &&
                    s_bottom_edge_swipe_start_y - (int)p.y >= EDGE_SWIPE_MIN_DY) {
             ui_show_memories();
+        } else if (be_decided == 0 && update_line_hit((int)p.x) && s_update_tap_cb) {
+            // #218: a tap on the update line. Safe to act on a single tap
+            // because status.c arms first and only acts on a SECOND tap - so
+            // reaching for the swipe grip still cannot do anything.
+            s_update_tap_cb();
         } else if (be_decided == 0 && grip_mouse_click(e, s_bottom_edge_grip)) {
             ui_show_memories();         // a pointer cannot swipe: see grip_mouse_click()
         }

@@ -97,6 +97,65 @@ static void short_ver(const char *in, char *out, size_t out_sz)
     out[n] = 0;
 }
 
+
+// ---------------------------------------------------------------------------
+// #218: what a tap on the bottom-bar update line means.
+//
+// TWO-TAP ARM, and that is not decoration. The bottom edge already owns a
+// swipe gesture (it opens Memory Channels) and its own code deliberately makes
+// a pure tap inert "so reaching for the swipe grip can't accidentally retune".
+// Downloading uses the operator's data and restarting interrupts receiving -
+// and with the QMX attached a restart leaves the radio needing a power cycle
+// (#74). So the first tap only CHANGES THE TEXT to ask, and the second acts.
+// It disarms itself, so a forgotten first tap does nothing.
+//
+// Nothing is ever downloaded without an explicit tap: the first state offered
+// is "download", not a download already in progress.
+// ---------------------------------------------------------------------------
+#define UPDATE_ARM_US   (5 * 1000000LL)
+
+static int64_t s_update_arm_until = 0;
+
+static bool update_armed(void)
+{
+    return s_update_arm_until > 0 && esp_timer_get_time() < s_update_arm_until;
+}
+
+static void update_line_tap(void)
+{
+    int  pct = 0;
+    char msg[128], latest[32];
+    ota_state_t st = ota_update_get_state(&pct, msg, sizeof(msg));
+
+    if (st == OTA_RUNNING) return;          // nothing sensible to do mid-download
+
+    if (!update_armed()) {                  // first tap: only ask
+        s_update_arm_until = esp_timer_get_time() + UPDATE_ARM_US;
+        return;
+    }
+    s_update_arm_until = 0;                 // second tap: act, and disarm
+
+    if (st == OTA_DONE) {
+        ESP_LOGW("status", "operator confirmed restart into the new firmware");
+        esp_restart();
+    }
+
+    update_check_get_latest(latest, sizeof(latest));
+    if (!latest[0]) return;
+
+    char url[192];
+    snprintf(url, sizeof(url),
+             "https://github.com/SteffenLav/qmx-panadapter/releases/download/%s/qmx_panadapter.bin",
+             latest);
+    char err[96];
+    if (!ota_update_start(url, err, sizeof(err))) {
+        // The refusal reason matters more than the failure - "transmitting" is
+        // something the operator can act on.
+        ESP_LOGW("status", "update refused: %s", err);
+        ui_toast(err);
+    }
+}
+
 static void status_task(void *arg)
 {
     (void)arg;
@@ -132,22 +191,30 @@ static void status_task(void *arg)
             short_ver(over,   over_s,   sizeof(over_s));
             short_ver(latest, latest_s, sizeof(latest_s));
 
+            bool armed = update_armed();
+
             if (ost == OTA_RUNNING) {
-                // Name what is being installed - "updating" alone does not tell
-                // the operator what they are getting - but keep it short enough
-                // not to run into the clock.
-                if (over_s[0]) snprintf(vline, sizeof(vline), "%s  %d%%", over_s, opct);
-                else           snprintf(vline, sizeof(vline), "updating  %d%%", opct);
+                // Name BOTH versions - "45%" alone does not say what you are
+                // getting, which is the whole point of showing it here.
+                if (running[0] && over_s[0])
+                    snprintf(vline, sizeof(vline), "%s " LV_SYMBOL_RIGHT " %s %d%%",
+                             running, over_s, opct);
+                else
+                    snprintf(vline, sizeof(vline), "updating %d%%", opct);
                 vcol = 0xFFA040;
             } else if (ost == OTA_DONE) {
-                if (over_s[0]) snprintf(vline, sizeof(vline), "%s ready", over_s);
-                else           snprintf(vline, sizeof(vline), "update ready");
+                if (armed) snprintf(vline, sizeof(vline), "restart now?");
+                else if (over_s[0])
+                    snprintf(vline, sizeof(vline), "%s - touch to update", over_s);
+                else snprintf(vline, sizeof(vline), "touch to update");
                 vcol = 0x8FE0A0;
             } else if (ost == OTA_FAILED) {
-                snprintf(vline, sizeof(vline), "update failed");
+                snprintf(vline, sizeof(vline), armed ? "retry download?" : "update failed");
                 vcol = 0xFF6060;
             } else if (update_check_available() && latest_s[0]) {
-                snprintf(vline, sizeof(vline), "%s " LV_SYMBOL_RIGHT " %s", running, latest_s);
+                if (armed) snprintf(vline, sizeof(vline), "download %s?", latest_s);
+                else snprintf(vline, sizeof(vline), "%s " LV_SYMBOL_RIGHT " %s download",
+                              running, latest_s);
                 vcol = 0xFFA040;
             } else {
                 snprintf(vline, sizeof(vline), "%s", running);
@@ -323,6 +390,7 @@ static void status_task(void *arg)
 void status_bar_start(void)
 {
     ui_set_bottom_version(esp_app_get_description()->version);
+    ui_set_update_tap_cb(update_line_tap);   // #218
     // The bottom-bar SD-backup dot is synced once in app_main (after ui_init)
     // and driven live by the sd_archive task on mount/unmount.
     psram_task_create(status_task, "status", 4096, NULL, 2, tskNO_AFFINITY);

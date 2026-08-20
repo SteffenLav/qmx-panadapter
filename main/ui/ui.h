@@ -92,6 +92,12 @@ void ui_set_bottom_version(const char *text);
 // so the Tab5 and the browser say the same thing.
 void ui_set_update_line(const char *text, uint32_t colour);
 
+// #218: called on the LVGL thread when the operator taps the update line.
+// status.c registers this and decides what the tap means; it arms on the
+// first tap and acts on the second, so a stray touch cannot start a download
+// or restart the device.
+void ui_set_update_tap_cb(void (*cb)(void));
+
 // Resource-monitor floating overlay text (see build_resource_monitor in
 // ui.c). No-op if the panel object doesn't exist yet or was never toggled on.
 void ui_set_resource_monitor_text(const char *text);
