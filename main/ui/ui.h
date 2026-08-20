@@ -98,6 +98,14 @@ void ui_set_update_line(const char *text, uint32_t colour);
 // or restart the device.
 void ui_set_update_tap_cb(void (*cb)(void));
 
+// #218: tell the UI whether the update line currently offers something to tap.
+// While true the WHOLE bottom bar accepts the tap (no precision needed), and
+// the band-plan strip ignores presses in its lowest few pixels directly above
+// the label - the strip is 22 px tall, sits on the bar, and a tap on it retunes,
+// so reaching for the update line used to move the dial.
+void ui_set_update_line_tappable(bool on);
+bool ui_update_line_tappable(void);
+
 // Resource-monitor floating overlay text (see build_resource_monitor in
 // ui.c). No-op if the panel object doesn't exist yet or was never toggled on.
 void ui_set_resource_monitor_text(const char *text);

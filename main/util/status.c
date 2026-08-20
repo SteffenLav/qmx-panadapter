@@ -178,13 +178,21 @@ static void status_task(void *arg)
         // never show live download progress. The wording is deliberately the
         // same as the browser's, so the two screens read alike.
         {
-            char vline[96];
+            static char vline[96];   // two versions plus an arrow - 64 truncates
             uint32_t vcol = 0x808080;              // running version, nothing to say
-            char running[32], over_s[32], latest_s[32];
+            // ⛔ STATIC, NOT STACK. status_task's stack is 4096 bytes (crash
+            // dump gave bounds 0x481b97b4-0x481ba7b0 = 4092), and the ~384
+            // bytes of buffers here - added for #218 - overflowed it: "Stack
+            // protection fault ... task status", 20 minutes in. Exactly the
+            // class CLAUDE.md warns about ("a multi-hundred-byte local is a bug
+            // until proven otherwise"), and the remedy it prescribes: a
+            // file-local static is safe because status_task is the ONLY caller
+            // and there is exactly one of it.
+            static char running[32], over_s[32], latest_s[32];
             short_ver(esp_app_get_description()->version, running, sizeof(running));
 
             int  opct = 0;
-            char omsg[128], over[32], latest[32];
+            static char omsg[128], over[32], latest[32];
             ota_state_t ost = ota_update_get_state(&opct, omsg, sizeof(omsg));
             ota_update_get_target_version(over, sizeof(over));
             update_check_get_latest(latest, sizeof(latest));
@@ -193,32 +201,39 @@ static void status_task(void *arg)
 
             bool armed = update_armed();
 
+            // Wording and colours are the operator's, chosen to fit at the
+            // ORIGINAL montserrat_24 - every state below is ~20 characters,
+            // where "touch to update" was 24 and overlapped the clock.
             if (ost == OTA_RUNNING) {
-                // Name BOTH versions - "45%" alone does not say what you are
-                // getting, which is the whole point of showing it here.
                 if (running[0] && over_s[0])
-                    snprintf(vline, sizeof(vline), "%s " LV_SYMBOL_RIGHT " %s %d%%",
+                    snprintf(vline, sizeof(vline), "%s " LV_SYMBOL_RIGHT " %s  %d%%",
                              running, over_s, opct);
                 else
-                    snprintf(vline, sizeof(vline), "updating %d%%", opct);
-                vcol = 0xFFA040;
+                    snprintf(vline, sizeof(vline), "updating  %d%%", opct);
+                vcol = 0xFFA040;                       // amber - working
             } else if (ost == OTA_DONE) {
-                if (armed) snprintf(vline, sizeof(vline), "restart now?");
-                else if (over_s[0])
-                    snprintf(vline, sizeof(vline), "%s - touch to update", over_s);
-                else snprintf(vline, sizeof(vline), "touch to update");
-                vcol = 0x8FE0A0;
+                if (armed)        snprintf(vline, sizeof(vline), "restart now?");
+                else if (over_s[0]) snprintf(vline, sizeof(vline), "%s - tap updates", over_s);
+                else              snprintf(vline, sizeof(vline), "tap updates");
+                vcol = 0x8FE0A0;                       // light green - ready
             } else if (ost == OTA_FAILED) {
-                snprintf(vline, sizeof(vline), armed ? "retry download?" : "update failed");
-                vcol = 0xFF6060;
+                snprintf(vline, sizeof(vline), armed ? "retry now?" : "Failed - tap retries");
+                vcol = 0xFF6060;                       // red - went wrong
             } else if (update_check_available() && latest_s[0]) {
                 if (armed) snprintf(vline, sizeof(vline), "download %s?", latest_s);
-                else snprintf(vline, sizeof(vline), "%s " LV_SYMBOL_RIGHT " %s download",
+                else snprintf(vline, sizeof(vline), "%s " LV_SYMBOL_RIGHT " %s  tap?",
                               running, latest_s);
-                vcol = 0xFFA040;
+                vcol = 0x40D8E0;                       // cyan - offered, nothing fetched
             } else {
                 snprintf(vline, sizeof(vline), "%s", running);
             }
+            // Tell the UI whether there is anything to tap. While true the WHOLE
+            // bottom bar accepts the tap and the band-plan strip ignores presses
+            // in its lowest pixels above the label - so reaching for this cannot
+            // nudge the dial (the strip is 22 px, sits on the bar, and a tap on
+            // it retunes).
+            ui_set_update_line_tappable(ost == OTA_DONE || ost == OTA_FAILED ||
+                                        (ost == OTA_IDLE && update_check_available()));
             ui_set_update_line(vline, vcol);
         }
 

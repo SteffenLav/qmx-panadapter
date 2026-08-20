@@ -6448,6 +6448,15 @@ void ui_set_bottom_version(const char *text)
 // callback, restricted to this label's x-range, so the rest of the bar stays
 // inert exactly as before.
 static void (*s_update_tap_cb)(void) = NULL;
+// True while the update line offers something to tap. Two things depend on it,
+// both scoped so NOTHING changes in normal use (#218):
+//   - the whole bottom bar becomes the tap target, not just ~230 px of text
+//   - the band-plan strip stops accepting taps directly above that text
+static bool s_update_line_tappable = false;
+
+bool ui_update_line_tappable(void) { return s_update_line_tappable; }
+
+void ui_set_update_line_tappable(bool on) { s_update_line_tappable = on; }
 
 void ui_set_update_tap_cb(void (*cb)(void)) { s_update_tap_cb = cb; }
 
@@ -6467,17 +6476,15 @@ void ui_set_update_line(const char *text, uint32_t colour)
     if (!s_bot_version) return;
     const char *t = text ? text : "";
 
-    // ⚠ FIT THE FONT TO THE TEXT, because this label is CENTRE-aligned at a
-    // fixed offset and grows BOTH ways into its neighbours. Measured on the
-    // real bar: the SD text ends at x=254 and the clock starts at x=534, so
-    // there are ~280 px and the label sits in the middle of them - about 270 px
-    // symmetric. At montserrat_24 that is ~20 characters.
+    // Font stays at the ORIGINAL montserrat_24 - the operator's wording is
+    // ~20 characters in every state, which fits the ~270 px between the SD text
+    // (ends x=254) and the clock (starts x=534), measured on the real bar.
     //
-    // "v1.8.8 - touch to update" is 24, and it ran straight through the clock
-    // and pushed the SD dot off screen - seen on a device screenshot, not
-    // predicted from the code. Shrinking the font beats truncating the text,
-    // because the version IS the information. The update states are transient
-    // and coloured, so a slightly smaller line does not read as inconsistent.
+    // The smaller sizes below are a SAFETY NET, not the normal path: they only
+    // engage if a string genuinely will not fit, which today means an unusually
+    // long version pair. Shrinking beats overlapping - "v1.8.8 - touch to
+    // update" (24 chars) previously ran through the clock and pushed the SD dot
+    // off screen, seen on a device screenshot rather than predicted.
     static const lv_font_t *fonts[] = {
         &lv_font_montserrat_24, &lv_font_montserrat_22,
         &lv_font_montserrat_20, &lv_font_montserrat_18,
@@ -6488,7 +6495,7 @@ void ui_set_update_line(const char *text, uint32_t colour)
         lv_point_t sz;
         lv_text_get_size(&sz, t, fonts[i], 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
         use = fonts[i];
-        if (sz.x <= budget_px) break;     // smallest that still fits wins
+        if (sz.x <= budget_px) break;
     }
 
     if (display_lock(20)) {
@@ -6620,6 +6627,25 @@ static void touch_event_cb(lv_event_t *e)
     // Band-plan strip: self-contained drag-to-tune, fully separate from the
     // spectrum gesture code below - see s_touch_on_bandplan's comment.
     if (code == LV_EVENT_PRESSED && lv_event_get_target(e) == s_bandplan_obj) {
+        // ⚠ OVERSHOOT GUARD (#218). The band-plan strip is only BANDPLAN_H (22)
+        // px tall and sits DIRECTLY on top of the bottom bar, and a tap on it
+        // retunes the radio. Reaching for the update line and landing a few
+        // pixels high therefore moved the dial - reported by the operator the
+        // first time it was tappable.
+        //
+        // While the update line has something to tap, the LOWEST few pixels of
+        // the strip above it stop accepting a press. Deliberately narrow on
+        // every axis: only the bottom BP_OVERSHOOT_PX, only across that label's
+        // own x-range, and only while an update is actually pending - so
+        // tap-to-tune is untouched the rest of the time, which is nearly always.
+        if (s_update_line_tappable && s_bandplan_obj) {
+            lv_area_t ba;
+            lv_obj_get_coords(s_bandplan_obj, &ba);
+            const int BP_OVERSHOOT_PX = 8;
+            if ((int)p.y >= (int)ba.y2 - BP_OVERSHOOT_PX && update_line_hit((int)p.x)) {
+                return;                 // a miss aimed at the bar below, not a tune
+            }
+        }
         s_touch_on_bandplan = true;
         s_bp_dragging = false;
         s_bp_drag_start_pt = p;
@@ -7142,7 +7168,12 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
         } else if (be_decided == 1 && s_bottom_edge_swipe_start_y >= 0 &&
                    s_bottom_edge_swipe_start_y - (int)p.y >= EDGE_SWIPE_MIN_DY) {
             ui_show_memories();
-        } else if (be_decided == 0 && update_line_hit((int)p.x) && s_update_tap_cb) {
+        } else if (be_decided == 0 && s_update_tap_cb &&
+                   (s_update_line_tappable || update_line_hit((int)p.x))) {
+            // While an update is pending the WHOLE bar is the target, so no
+            // precision is needed and there is no reason to aim at the small
+            // text near the band-plan strip. Otherwise only the label itself
+            // responds, leaving the bar inert exactly as before.
             // #218: a tap on the update line. Safe to act on a single tap
             // because status.c arms first and only acts on a SECOND tap - so
             // reaching for the swipe grip still cannot do anything.
