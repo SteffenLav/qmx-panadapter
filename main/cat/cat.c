@@ -128,6 +128,11 @@ static volatile uint32_t s_pending_ssb_bw = 0;
 // FW; poll is dropped from the rotation - reading the filter makes the QMX
 // re-assert a stale active width and our setting reverts.
 static volatile uint32_t s_ssb_bw_pinned = 0;
+
+// ⛔ "THE RADIO MAY STILL BE TRANSMITTING." Set by ft8_tx when a stop command
+// (TA0; / RX;) could not be delivered, cleared only when RX; actually gets
+// through. See cat_request_force_rx().
+static volatile bool s_force_rx_pending = false;
 // Pending AF gain (QMX volume) write, drained by the poll task. Same
 // poll-task-owns-the-pipe rule as the filter writes above. Stored +1 so that 0
 // can mean "nothing pending" while still allowing a genuine request of AG 0
@@ -1476,6 +1481,31 @@ static void poll_task(void *arg)
                 ESP_LOGI(TAG, "CAT link recovered after %d consecutive failures", poll_fail);
                 poll_fail = 0;
             }
+
+            // ⛔ #146: THE RADIO MAY STILL BE KEYED. A stop command was lost
+            // during a burst, so re-assert RX; now - this send just succeeded,
+            // which is the proof the pipe works again.
+            //
+            // Roy KI0ER's log, 2026-08-19, is exactly this and shows why a
+            // retry inside the burst is not enough on its own:
+            //     2126834  send failed (0x10c): TA0;
+            //     2126866  send failed (0x10c): RX;
+            //     2126879  TX burst complete          <- radio still keyed
+            //     2128963  CAT link recovered after 22 consecutive failures
+            // The link came back about TWO SECONDS after the burst gave up, and
+            // nothing ever re-sent RX;. His QMX transmitted until he power-
+            // cycled it. The burst-local retry covers a brief hiccup; this
+            // covers the case where the pipe is dead for longer than the burst
+            // is willing to wait, which is the one that actually bit.
+            if (s_force_rx_pending) {
+                if (cat_send_raw_cmd("RX;") == ESP_OK) {
+                    s_force_rx_pending = false;
+                    ESP_LOGW(TAG, "RX; re-asserted after a lost stop command - "
+                                  "radio is back in receive");
+                } else {
+                    ESP_LOGW(TAG, "RX; re-assert still failing - radio may be transmitting");
+                }
+            }
         }
         phase = (phase + 1) % n_phases;
         vTaskDelay(pdMS_TO_TICKS(CAT_POLL_INTERVAL_MS));
@@ -2209,3 +2239,15 @@ void cat_usb_shutdown(void)
     cdc_acm_host_close(dev);
     ESP_LOGI(TAG, "shutdown: CAT closed cleanly");
 }
+
+// #146: called by ft8_tx when a burst could not deliver TA0; or RX;. The poll
+// task owns the pipe, so it - not the TX path - is what keeps trying, on every
+// cycle that succeeds, until the radio is demonstrably back in receive.
+void cat_request_force_rx(void)
+{
+    s_force_rx_pending = true;
+    ESP_LOGE(TAG, "⚠ a TX stop command was lost - the radio may still be "
+                  "transmitting; will re-assert RX; as soon as CAT recovers");
+}
+
+bool cat_force_rx_pending(void) { return s_force_rx_pending; }

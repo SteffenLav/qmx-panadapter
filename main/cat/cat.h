@@ -422,3 +422,11 @@ esp_err_t cat_query_qmx_time(int *out_hour, int *out_min, int *out_sec);
  *         CDC pipe is busy (e.g. FT8 TX); ESP_ERR_TIMEOUT if no flip in ~1.3 s.
  */
 esp_err_t cat_gps_tick_sync(int *out_hour, int *out_min, int *out_sec, int64_t *out_flip_us);
+
+// #146: tell CAT that a TX stop command (TA0; / RX;) was lost, so the radio may
+// still be keyed. The poll task re-asserts RX; on every cycle that succeeds
+// until it gets through - a burst-local retry cannot cover a link that stays
+// down longer than the burst is willing to wait, which is what left Roy KI0ER's
+// QMX transmitting until he power-cycled it.
+void cat_request_force_rx(void);
+bool cat_force_rx_pending(void);

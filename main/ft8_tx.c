@@ -985,8 +985,12 @@ static bool tx_cmd_critical(int64_t t0, bool sim, const char *cmd)
                  cmd, err, i + 1, FT8_TX_STOP_RETRIES);
         vTaskDelay(pdMS_TO_TICKS(20));
     }
-    ESP_LOGE(TAG, "⚠ %s NEVER GOT THROUGH - THE RADIO MAY STILL BE TRANSMITTING. "
-                  "Power-cycle the QMX if it is.", cmd);
+    // Hand it to the poll task, which owns the pipe and keeps trying on every
+    // cycle that succeeds. Roy KI0ER's log shows why this matters more than the
+    // retries above: his link came back ~2 s AFTER the burst had given up, and
+    // nothing re-sent RX;, so the radio transmitted until he power-cycled it.
+    ESP_LOGE(TAG, "⚠ %s NEVER GOT THROUGH - handing to CAT to re-assert", cmd);
+    cat_request_force_rx();
     return false;
 #else
     ESP_LOGI(TAG, "[DRY RUN t+%6lldus] %s", (long long)(esp_timer_get_time() - t0), cmd);
