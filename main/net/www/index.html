@@ -4166,44 +4166,53 @@ async function otaRestart() {
 function paintUpdateNotice(s) {
   const el = document.getElementById("tab5fw");
   if (!el) return;
-  const u = s.update || {};
+  const u   = s.update || {};
   const ota = u.ota || "idle";
+
+  // ⭐ SAME WORDS, SAME COLOURS AS THE TAB5 (status.c). The two screens describe
+  // one device, so they must not use different vocabulary for the same state -
+  // the operator should be able to read either and know exactly where the
+  // update has got to. Keep this table and status.c's in step.
+  //
+  // "tap" rather than "click" deliberately: the browser is used from a phone as
+  // often as a desktop, and it is the word the Tab5 already uses.
+  const CYAN = "#40d8e0", AMBER = "#ffa040", GREEN = "#8fe0a0", RED = "#ff6060";
+
+  // Match the Tab5's short_ver(): show vX.Y.Z only. A dev build is
+  // "v1.8.8-13-g545f4d9-dirty", which is noise here and would wrap the footer.
+  const shortVer = (v) => (v || "").split("-")[0];
+
+  const set = (text, colour, onclick, title) => {
+    el.textContent  = text;
+    el.style.color  = colour || "";
+    el.style.cursor = onclick ? "pointer" : "";
+    el.title        = title || "";
+    el.onclick      = onclick || null;
+  };
+
+  const running = shortVer(u.running || s.tab5_fw);
+  const target  = shortVer(u.ota_ver);
+  const latest  = shortVer(u.latest);
+
   if (ota === "running") {
-    el.textContent = (u.ota_ver ? "Installing " + u.ota_ver : "Installing...")
-                   + "  " + (u.ota_pct || 0) + "%";
-    el.style.color = "#ffa040"; el.style.cursor = ""; el.onclick = null;
-    el.title = "Downloading the new firmware. Do not power off.";
-    return;
-  }
-  if (ota === "done") {
-    el.textContent = (u.ota_ver ? u.ota_ver + " ready" : "Update ready")
-                   + " – click to restart";
-    el.style.color = "#8fe0a0"; el.style.cursor = "pointer";
-    el.title = "The new firmware is installed. Restarting will interrupt the radio.";
-    el.onclick = otaRestart;
-    return;
-  }
-  if (ota === "failed") {
-    el.textContent = "Update failed";
-    el.style.color = "#ff6060"; el.style.cursor = "pointer";
-    el.title = (u.ota_error || "Unknown error") + " - click to try again";
-    el.onclick = () => otaInstall(u.latest);
-    return;
-  }
-  if (u.available && u.latest) {
-    el.textContent = (u.running || s.tab5_fw || "") + " \u2192 " + u.latest + " available";
-    el.style.color = "#ffa040";
-    el.style.cursor = "pointer";
-    el.title = "Click to install " + u.latest + " on the Tab5.";
-    el.onclick = () => otaInstall(u.latest);
+    set((running && target ? running + " \u2192 " + target : "updating")
+        + "  " + (u.ota_pct || 0) + "%",
+        AMBER, null, "Downloading the new firmware. Do not power off the Tab5.");
+  } else if (ota === "done") {
+    set((target ? target + " - tap updates" : "tap updates"), GREEN, otaRestart,
+        "Installed. Tap to restart the Tab5 into it.");
+  } else if (ota === "failed") {
+    set("Failed - tap retries", RED, () => otaInstall(u.latest),
+        (u.ota_error || "Unknown error") + " - tap to try again");
+  } else if (u.available && latest) {
+    set(running + " \u2192 " + latest + "  tap?", CYAN,
+        () => otaInstall(u.latest),
+        "Tap to download and install " + latest + " on the Tab5.");
   } else {
-    el.textContent = s.tab5_fw || "";
-    el.style.color = "";
-    el.style.cursor = "";
-    el.title = "";
-    el.onclick = null;
+    set(s.tab5_fw || "", "", null, "");
   }
 }
+
 
 function drawBandplan(previewHz) {
   const canvas = document.getElementById("bandplan");
