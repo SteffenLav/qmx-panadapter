@@ -70,6 +70,11 @@ static ft8_qso_state_t    s_state          = FT8_QSO_IDLE;
 static char               s_target[FT8_CALL_MAX_LEN];   // their callsign
 static char               s_my_call[FT8_CALL_MAX_LEN];  // our callsign (uppercased)
 static int                s_freq_hz;                    // OUR AF tone for our own replies
+// #201: has THIS exchange put anything on the air yet? Until it has, our tone
+// is nobody's reference and may still be re-picked; from the first burst
+// onwards the partner is tracking it and it must not move. Set by
+// ft8_qso_on_tx_complete(), cleared wherever an exchange begins.
+static bool s_tx_sent = false;
 // The PARTNER's AF tone - where THEIR next message will arrive. Deliberately
 // NOT s_freq_hz: for a pounce we answer on a clear slot chosen by
 // ft8_find_clear_tone_hz() (see ft8_screen_view.c "not the CQ station's own
@@ -903,13 +908,27 @@ static void refresh_our_report(int fresh_snr, bool as_roger,
     arm_current_replacing_armed();
 }
 
-// Another station has drifted onto our locked CQ tone since we started
-// calling (ft8_tx_is_clashing() true). Re-scan for the nearest still-clear
-// 50 Hz slot and move there instead of just flagging "FREQ BUSY" and
-// continuing to transmit over whoever is legitimately there. Only called
-// from the CQ no-answer path - never mid-exchange, where the partner is
-// tracking our specific tone.
-static void relocate_cq_tone_if_clashing(void)
+// Another station has drifted onto our tone since we picked it
+// (ft8_tx_is_clashing() true). Re-scan for the nearest still-clear 50 Hz slot
+// and move there instead of just flagging "FREQ BUSY" and transmitting over
+// whoever is legitimately there.
+//
+// Called from TWO places, and the distinction is the whole point (#201):
+//
+//   is_cq=true  - the CQ no-answer path, as before.
+//   is_cq=false - a POUNCE that has not transmitted yet, i.e. TX1 only.
+//
+// ⛔ Never mid-exchange. Once the partner has heard us they are tracking our
+// specific tone, and moving would lose them. But that reasoning does NOT hold
+// before our first transmission: nobody is listening for us yet, so re-picking
+// is free. Roy KI0ER hit exactly that hole - answering a CQ, TX HOLD off, fresh
+// EVEN+ODD maps with green slots visible, and the reply still went out on an
+// occupied offset showing "FREQ BUSY", because the tone was chosen once when
+// the reply was armed and nothing could move it in the ~15 s before the burst.
+//
+// The caller owns the "have we transmitted yet" test (s_tx_sent), not this
+// function - it is also reached from the CQ path, where the rule is different.
+static void relocate_tone_if_clashing(bool is_cq)
 {
     if (!ft8_tx_is_clashing()) return;
 
@@ -918,6 +937,11 @@ static void relocate_cq_tone_if_clashing(void)
     // status line - it just isn't acted on behind their back.
     if (ft8_tx_get_tone_hold()) return;
 
+    // Never move a burst that is already on the air. disarm/re-arm cannot
+    // recall a keyed transmission, and half-moving one would put the tone and
+    // the armed request out of step.
+    if (ft8_tx_get_status(NULL, 0, NULL) == FT8_TX_ACTIVE) return;
+
     lock();
     int old_freq = s_freq_hz;
     unlock();
@@ -925,10 +949,16 @@ static void relocate_cq_tone_if_clashing(void)
     int new_freq = ft8_find_clear_tone_hz_near(old_freq);
     if (new_freq == old_freq) return;   // band fully packed - nowhere clearer to go
 
+    ESP_LOGI(TAG, "%s tone %d Hz is busy - moving to %d Hz",
+             is_cq ? "CQ" : "TX1", old_freq, new_freq);
+
     lock();
     s_freq_hz               = new_freq;
     s_cur_req.audio_freq_hz = new_freq;
-    s_cq_saved.audio_freq_hz = new_freq;   // so a later QSO-timeout resume-CQ keeps the new tone
+    // CQ only: s_cq_saved is the CQ to resume after a QSO times out. A pounce
+    // must not rewrite it, or a later resume-CQ would come back on a tone that
+    // was picked for somebody else's exchange.
+    if (is_cq) s_cq_saved.audio_freq_hz = new_freq;
     unlock();
 
     ft8_tx_disarm();   // cancel the stale-frequency ARMED request
@@ -1136,6 +1166,7 @@ void ft8_qso_mark_robot_started(void)
 
 bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
 {
+    s_tx_sent = false;   // #201: a fresh exchange has aired nothing yet
     if (!tx1_req || !tx1_req->target_call[0]) {
         if (err) snprintf(err, err_len, "No target callsign");
         return false;
@@ -1379,6 +1410,7 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
 
 bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
 {
+    s_tx_sent = false;   // #201: a fresh exchange has aired nothing yet
     if (!cq_req) {
         if (err) snprintf(err, err_len, "No CQ request");
         return false;
@@ -2200,7 +2232,7 @@ void ft8_qso_advance(int64_t slot_sec)
             // since we started calling, and move off it if so. Otherwise
             // on_tx_complete keeps the CQ armed at the same tone; idle
             // fallback only.
-            relocate_cq_tone_if_clashing();
+            relocate_tone_if_clashing(true);
             arm_current_if_idle();
         }
         return;
@@ -2306,7 +2338,19 @@ void ft8_qso_advance(int64_t slot_sec)
         // POUNCE: we sent our grid; expect their signal report (normal mode)
         // or their class+section (Field Day - sent without "R", since this is
         // their first FD-specific message to us).
-        if (!found) { register_miss("waiting for report"); return; }
+        if (!found) {
+            // #201 (Roy KI0ER): TX1 is armed but has not gone out yet, so our
+            // tone is still nobody's reference - if someone has landed on it in
+            // the meantime, move before we key rather than transmitting on top
+            // of them and merely showing "FREQ BUSY".
+            //
+            // Strictly gated on !s_tx_sent: from our first burst onwards the
+            // partner is tracking this exact tone and moving would lose them,
+            // which is why the CQ-only restriction existed in the first place.
+            if (!s_tx_sent) relocate_tone_if_clashing(false);
+            register_miss("waiting for report");
+            return;
+        }
 
         // Our own locally-measured SNR of their signal. This is what TX2's
         // "R<report>" must carry - our measurement of THEM, NOT an echo of the
@@ -2487,6 +2531,8 @@ void ft8_qso_advance(int64_t slot_sec)
 
 void ft8_qso_on_tx_complete(void)
 {
+    // #201: from here on the partner may be tracking our tone - stop moving it.
+    s_tx_sent = true;
     // Clamp the scan gate to when our message ACTUALLY fired. s_min_scan_utc
     // is predicted at start (next_slot_sec) assuming the burst waits for the
     // next matching boundary - but the reply-window path (FT8_REPLY_TX_WINDOW_MS)
