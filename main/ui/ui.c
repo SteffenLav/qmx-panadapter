@@ -8807,7 +8807,10 @@ static void drawer_build(void)
         // (it was 384 before spur suppression was added at the bottom). This
         // height and the `y +=` at the end of the block must move together or
         // every section below overlaps it.
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_WATERFALL, y, 404);
+        // 404 -> 300 with the spur row parked. The section HEIGHT and the
+        // "y +=" below must always move together, or the next section
+        // overlaps this one - the reflow trap this file records.
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WATERFALL, y, 300);
         lv_obj_t *wf_hdr = lv_label_create(sec);
         lv_label_set_text(wf_hdr, "Waterfall");
         lv_obj_set_style_text_color(wf_hdr, lv_color_hex(0xA0E0A0), 0);
@@ -8877,44 +8880,37 @@ static void drawer_build(void)
         lv_obj_add_event_cb(s_dropdown_wf_window, drawer_dropdown_wf_window_cb, LV_EVENT_VALUE_CHANGED, NULL);
         lv_obj_add_event_cb(s_dropdown_wf_window, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
 
-        // Spur suppression. Off by default and deliberately here rather than in
-        // its own section: it is a display-quality control like the three above.
-        // "Subtract" removes the measured power and can never hide a real
-        // signal; "Hide" interpolates the mapped bins away, which removes the
-        // spur completely but blanks anything sharing those bins while the dial
-        // sits still. See spur_map.h for why that trade is the operator's.
-        lv_obj_t *spur_lbl = lv_label_create(sec);
-        lv_label_set_text(spur_lbl, "Spur suppression");
-        lv_obj_set_style_text_color(spur_lbl, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(spur_lbl, &lv_font_montserrat_28, 0);
-        lv_obj_align(spur_lbl, LV_ALIGN_TOP_LEFT, 0, 284);
-        s_dropdown_spur = lv_dropdown_create(sec);
-        // Name what happens to the SPUR, not to the feature - "Hide" read as
-        // "hide the suppression". Both working options say what they do to the
-        // radio's artifact and what it costs.
-        // Order matches s_spur_menu[], NOT the enum - see the note there.
-        lv_dropdown_set_options(s_dropdown_spur,
-                                "Off\nErase spur bins\nSubtract spur power");
-        lv_obj_set_size(s_dropdown_spur, DRAWER_W - 32, 50);
-        lv_obj_align(s_dropdown_spur, LV_ALIGN_TOP_LEFT, 0, 320);
-        lv_obj_set_style_text_font(s_dropdown_spur, &lv_font_montserrat_28, 0);
-        // Open UPWARDS and unconstrained: this control sits at the bottom of the
-        // section, so a downward list is clipped by the drawer edge and has to
-        // be scrolled. All three choices should be visible in one look.
-        lv_dropdown_set_dir(s_dropdown_spur, LV_DIR_TOP);
-        lv_dropdown_set_symbol(s_dropdown_spur, NULL);
-        {
-            lv_obj_t *list = lv_dropdown_get_list(s_dropdown_spur);
-            if (list) {
-                lv_obj_set_style_max_height(list, LV_COORD_MAX, 0);
-                lv_obj_set_style_text_font(list, &lv_font_montserrat_28, 0);
-            }
-        }
-        lv_dropdown_set_selected(s_dropdown_spur, spur_mode_to_menu_idx(wcfg.spur_mode));
-        lv_obj_add_event_cb(s_dropdown_spur, drawer_dropdown_spur_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        lv_obj_add_event_cb(s_dropdown_spur, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
+        // ⛔ SPUR SUPPRESSION IS PARKED - the control is deliberately NOT built.
+        //
+        // It only ever reached the display at zoom x1. Above that both the
+        // spectrum (ui.c) and the waterfall (render_waterfall.c) read
+        // dsp_get_zoom_spectrum(), and the zoom FFT goes straight from magnitude
+        // to dB without calling spur_map_apply() - so at x2 and up, on and off
+        // are identical. Anyone inspecting spurs zooms in, which is exactly
+        // where it stopped working, and that is why almost nobody reported on
+        // it and the operator could see no difference at all.
+        //
+        // Everything else stays: the setting, the config export, /api/settings,
+        // spur_map.c and the teal marks. Only the drawer row is gone, because a
+        // control that cannot change what you are looking at is worse than a
+        // missing one - it invites tuning something that is not there. Same
+        // reasoning, and the same precedent, as the parked "Adaptive floor"
+        // slider.
+        //
+        // ⚠ The severity is also lower than the bench figures suggested. With a
+        // real antenna the strongest tooth measured 22.7 dB over the floor
+        // against 38.6 dB with the BNC open - the comb is unchanged, band noise
+        // simply came up ~16 dB and buried the weaker teeth.
+        //
+        // TO BRING IT BACK: apply the map to the zoom spectrum too. Note the
+        // entries are BASE-FFT bin indices and the zoom FFT is finer, so one
+        // base bin spans several zoom bins - a straight index translation would
+        // notch a sliver and leave the spur. Translate via each entry's Hz
+        // offset to a RANGE of zoom bins and re-derive the interpolation
+        // references there. Then measure it WITH AN ANTENNA, not on an open
+        // BNC. See TODO #222.
 
-        y += 404;
+        y += 300;
     }
 
     // FT8-only sections built LAST so they never leave a gap in Panadapter
