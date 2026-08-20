@@ -24,6 +24,11 @@ esp_err_t webserver_ws_start(httpd_handle_t server);
  */
 void webserver_ws_stop(void);
 
+// #217: WS health counters for /api/status - lets a reported stall be matched
+// against what the device actually did, instead of argued about.
+void webserver_ws_stats(uint32_t *sessions, uint32_t *takeovers,
+                        uint32_t *closes, uint32_t *partial);
+
 /**
  * @brief Suspend/resume the spectrum push stream.
  *

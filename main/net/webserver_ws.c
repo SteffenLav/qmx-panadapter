@@ -83,6 +83,16 @@ static uint8_t *const s_payload = s_txbuf + WS_WIRE_HDR_LEN;
 // these were indistinguishable from healthy sends (IDF returned ESP_OK), which
 // is the same trap #189 documents for the silent USB patches.
 static uint32_t       s_partial_writes = 0;
+// #217 (Samuel W7STF): he reports occasional 3-6 s PSD stalls after the #193
+// fix and is careful to say it may be his PC. It might well be - but nobody
+// could tell, because every number that would settle it lived in a periodic
+// LOG LINE the operator never sees. These are reported in /api/status so a
+// stall becomes attributable instead of arguable: if a stall lines up with a
+// teardown the device caused it, and if these do not move during one, it is
+// the network or the browser.
+static uint32_t       s_sessions   = 0;   // WS sessions accepted
+static uint32_t       s_takeovers  = 0;   // a new client displacing a stale one
+static uint32_t       s_closes     = 0;   // sessions ended device-side
 
 static TaskHandle_t   s_push_task = NULL;
 
@@ -189,13 +199,42 @@ static ws_tx_result_t ws_send_binary(httpd_handle_t hd, int fd,
                                      uint8_t *buf, size_t payload_len,
                                      uint32_t budget_ms)
 {
-    // Only the 16-bit length form is needed: every frame we send is either 1 byte
-    // (takeover notice) or WS_FRAME_LEN, and 126 is valid for anything <= 65535.
-    buf[0] = 0x80 | HTTPD_WS_TYPE_BINARY;      // FIN + opcode 0x2
-    buf[1] = 126;
-    buf[2] = (uint8_t)((payload_len >> 8) & 0xFF);
-    buf[3] = (uint8_t)(payload_len & 0xFF);
-    return ws_send_all(hd, fd, buf, WS_WIRE_HDR_LEN + payload_len, budget_ms);
+    // ⛔ RFC 6455 §5.2 requires the MINIMAL length encoding: the 7-bit field for
+    // 0..125, and the 126 + 16-bit form ONLY for 126..65535. The old code used
+    // the 16-bit form unconditionally under the comment "126 is valid for
+    // anything <= 65535" - which is wrong, and it mattered for exactly one
+    // frame: the 1-byte TAKEOVER notice.
+    //
+    // That notice exists so a displaced browser can stand down instead of
+    // retrying, and the ping-pong it prevents is documented right where it is
+    // sent (340 takeovers in one session). But the notice itself was malformed,
+    // so a strict client - i.e. every browser - failed the connection rather
+    // than reading it, reconnected, and took the slot straight back. The cure
+    // was re-creating the disease.
+    //
+    // Measured on the bench 2026-08-20 with two tabs open: 19 sessions and
+    // **16 takeovers** in about ten seconds, each costing the displaced tab a
+    // reconnect. That is very likely the residual "PSD stalls for 3-6 s" report
+    // (#217, Samuel W7STF) whenever a second browser or phone is left open.
+    //
+    // The header is still built IN FRONT of the payload so the two can never be
+    // split across sends (the #193 rule); a 2-byte header simply starts two
+    // bytes later in the same buffer.
+    uint8_t *frame;
+    size_t   hdr;
+    if (payload_len <= 125) {
+        hdr   = 2;
+        frame = buf + WS_WIRE_HDR_LEN - hdr;
+        frame[1] = (uint8_t)payload_len;
+    } else {
+        hdr   = 4;
+        frame = buf;
+        frame[1] = 126;
+        frame[2] = (uint8_t)((payload_len >> 8) & 0xFF);
+        frame[3] = (uint8_t)(payload_len & 0xFF);
+    }
+    frame[0] = 0x80 | HTTPD_WS_TYPE_BINARY;    // FIN + opcode 0x2
+    return ws_send_all(hd, fd, frame, hdr + payload_len, budget_ms);
 }
 
 // httpd worker has 1 task, so this URI handler runs in the only worker.
@@ -225,6 +264,7 @@ static esp_err_t ws_uri_handler(httpd_req_t *req)
     // (LWIP_MAX_SOCKETS exhausted) and the server stops accepting connections.
     if (s_session_active && s_ws_fd != fd && s_ws_fd >= 0) {
         ESP_LOGW(TAG, "New client fd=%d takes over stale fd=%d (closing stale)", fd, s_ws_fd);
+        s_takeovers++;
         // TELL THE DISPLACED CLIENT WHY, before closing it. Without this the old
         // browser only sees its socket close, retries after 2 s, takes the slot
         // back, and the two ping-pong forever - 340 takeovers in one session while
@@ -251,6 +291,7 @@ static esp_err_t ws_uri_handler(httpd_req_t *req)
         httpd_sess_trigger_close(s_server ? s_server : req->handle, s_ws_fd);
     }
     s_ws_fd = fd;
+    s_sessions++;
     s_session_active = true;
 
     // Bound how long a single WS send may block. On a weak/congested link
@@ -383,6 +424,7 @@ static void ws_push_task(void *arg)
         if (tx == WS_TX_DEAD) {
             // Close the socket so its LWIP slot is freed (see takeover note above).
             int dead = s_ws_fd;
+            s_closes++;
             s_session_active = false;
             s_ws_fd = -1;
             fail_streak = 0;
@@ -459,4 +501,16 @@ void webserver_ws_stop(void)
     s_server = NULL;
     // Leave the push task running idle -- it will pick up the next start cleanly.
     ESP_LOGI(TAG, "WS stopped");
+}
+
+// #217: the WS health counters, for /api/status. Read-only snapshot; a torn
+// read is harmless here because these only ever increase and are for eyeballing
+// against a reported stall, not for control flow.
+void webserver_ws_stats(uint32_t *sessions, uint32_t *takeovers,
+                        uint32_t *closes, uint32_t *partial)
+{
+    if (sessions)  *sessions  = s_sessions;
+    if (takeovers) *takeovers = s_takeovers;
+    if (closes)    *closes    = s_closes;
+    if (partial)   *partial   = s_partial_writes;
 }

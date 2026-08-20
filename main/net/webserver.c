@@ -306,6 +306,20 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "mode",         ui_get_mode_str());
     cJSON_AddStringToObject(root, "band",         ui_get_band_str());
     cJSON_AddStringToObject(root, "screen",       ft8_screen_view_is_active() ? "ft8" : "panadapter");
+    // #217: WS health, so a reported PSD stall can be matched against what the
+    // device actually did. Sam W7STF sees occasional 3-6 s stalls and says it
+    // may be his PC - these numbers are how anyone can tell. `partial` is the
+    // #193 corruption being healed rather than shipped; `closes`/`takeovers`
+    // moving during a stall means the device dropped the session.
+    {
+        uint32_t ws_sess = 0, ws_take = 0, ws_close = 0, ws_part = 0;
+        webserver_ws_stats(&ws_sess, &ws_take, &ws_close, &ws_part);
+        cJSON *ws = cJSON_AddObjectToObject(root, "ws");
+        cJSON_AddNumberToObject(ws, "sessions",  ws_sess);
+        cJSON_AddNumberToObject(ws, "takeovers", ws_take);
+        cJSON_AddNumberToObject(ws, "closes",    ws_close);
+        cJSON_AddNumberToObject(ws, "partial",   ws_part);
+    }
     // TX/QSO banner data, only while the FT8/FT4 screen is live (the FT8
     // engine doesn't run otherwise, so its status would be stale text).
     if (ft8_screen_view_is_active())
