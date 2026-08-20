@@ -4152,9 +4152,13 @@ async function otaInstall(latest) {
 }
 
 async function otaRestart() {
+  // Deliberately does NOT mention power-cycling the QMX. The Tab5 already says
+  // "Now turn on or reboot your QMX/+" across the middle of its own screen
+  // whenever CAT is down - the same instruction, in the right place - and this
+  // project already removed the #74 toasts for duplicating it. A second copy
+  // here would be noise, not help.
   const msg = "Restart the Tab5 into the new firmware?" + "\n" + "\n"
-            + "This interrupts receiving. If your QMX is connected it will most "
-            + "likely need to be switched off and on again afterwards.";
+            + "This interrupts receiving for about ten seconds.";
   if (!confirm(msg)) return;
   await sendCmd({ action: "ota_reboot" });
 }

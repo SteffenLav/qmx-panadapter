@@ -1,4 +1,5 @@
 #include "status.h"
+#include "display.h"
 #include "net/update_check.h"
 #include "net/ota_update.h"
 #include "battery.h"
@@ -127,6 +128,20 @@ static void update_line_tap(void)
 
     if (st == OTA_DONE) {
         ESP_LOGW("status", "operator confirmed restart into the new firmware");
+
+        // Say what is happening, then GO DARK BEFORE RESTARTING.
+        //
+        // The operator saw "a clear cyan screen for 2-3 seconds" and called it
+        // intrusive - rightly. display_init() sets the backlight to 0 precisely
+        // so the panel's uninitialised content is never shown, but that call is
+        // ~2-3 s into boot; across esp_restart() the backlight simply stays on
+        // from the previous run and lights up a panel with nothing in it.
+        // Nobody noticed before because a reboot was a rare event; #218 makes it
+        // a normal one, so it has to look deliberate.
+        ui_update_line_force("restarting...", 0x8FE0A0);
+        vTaskDelay(pdMS_TO_TICKS(500));      // long enough to read
+        display_set_brightness(0);
+        vTaskDelay(pdMS_TO_TICKS(80));       // let the panel actually go dark
         esp_restart();
     }
 
@@ -201,14 +216,14 @@ static void status_task(void *arg)
                     snprintf(vline, sizeof(vline), "updating  %d%%", opct);
                 vcol = 0xFFA040;                       // amber - working
             } else if (ost == OTA_DONE) {
-                if (over_s[0]) snprintf(vline, sizeof(vline), "%s - hold updates", over_s);
-                else              snprintf(vline, sizeof(vline), "hold updates");
+                if (over_s[0]) snprintf(vline, sizeof(vline), "%s - tap updates", over_s);
+                else              snprintf(vline, sizeof(vline), "tap updates");
                 vcol = 0x8FE0A0;                       // light green - ready
             } else if (ost == OTA_FAILED) {
-                snprintf(vline, sizeof(vline), "Failed - hold retries");
+                snprintf(vline, sizeof(vline), "Failed - tap retries");
                 vcol = 0xFF6060;                       // red - went wrong
             } else if (update_check_available() && latest_s[0]) {
-                snprintf(vline, sizeof(vline), "%s " LV_SYMBOL_RIGHT " %s  hold?",
+                snprintf(vline, sizeof(vline), "%s " LV_SYMBOL_RIGHT " %s  tap?",
                               running, latest_s);
                 vcol = 0x40D8E0;                       // cyan - offered, nothing fetched
             } else {

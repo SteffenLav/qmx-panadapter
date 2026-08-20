@@ -6483,6 +6483,15 @@ static void update_hold_paint(const char *text, uint32_t colour)
     s_update_hold_paint = true;
 }
 
+// Paint the update line even while a hold is being shown. Used on the way to a
+// deliberate restart, where the hold feedback must be replaced by what is
+// actually about to happen.
+void ui_update_line_force(const char *text, uint32_t colour)
+{
+    s_update_hold_paint = false;
+    ui_set_update_line(text, colour);
+}
+
 static void update_hold_clear(void)
 {
     s_update_press_ms = 0;
@@ -7223,6 +7232,19 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
         } else if (be_decided == 1 && s_bottom_edge_swipe_start_y >= 0 &&
                    s_bottom_edge_swipe_start_y - (int)p.y >= EDGE_SWIPE_MIN_DY) {
             ui_show_memories();
+        } else if (be_decided == 0 && s_update_press_ms && !s_update_hold_ok &&
+                   s_update_tap_cb) {
+            // A SHORT tap on the update line. The label says "tap", which is the
+            // operator's wording and the right invitation - but the gesture that
+            // acts is a hold, because the band-plan strip is 22 px directly
+            // above this bar and a stray touch must never start a download or
+            // restart the radio. So a short tap is not ignored: it TEACHES the
+            // gesture instead of silently doing nothing, which is what would
+            // make the label a lie.
+            //
+            // No paint lock - the 1 Hz refresh clears the hint by itself within
+            // a second, so there is nothing to time out or reset.
+            ui_set_update_line("hold to confirm", 0xFFFFFF);
         } else if (be_decided == 0 && s_update_hold_ok && s_update_tap_cb) {
             // #218: a completed LONG PRESS on the bottom bar. The hold is the
             // confirmation - it cannot happen by brushing past, it announced

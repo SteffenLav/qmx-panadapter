@@ -106,6 +106,10 @@ void ui_set_update_tap_cb(void (*cb)(void));
 void ui_set_update_line_tappable(bool on);
 bool ui_update_line_tappable(void);
 
+// #218: paint the update line even while the hold feedback is showing - used to
+// say "restarting" on the way down.
+void ui_update_line_force(const char *text, uint32_t colour);
+
 // Resource-monitor floating overlay text (see build_resource_monitor in
 // ui.c). No-op if the panel object doesn't exist yet or was never toggled on.
 void ui_set_resource_monitor_text(const char *text);
