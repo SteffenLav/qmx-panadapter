@@ -80,19 +80,50 @@ action names its own parameter key (there is no generic `value`).
 | `set_mode` | `mode: "USB"/"LSB"/"CW"/"DIGI"/"AM"` | Change mode (AM needs QMX firmware 1.04+) |
 | `set_bw` | `hz` | Filter width — SSB at 1000 Hz and above, CW passband below |
 | `set_zoom` | `zoom: 1.0/2.0/4.0/8.0` | Zoom level |
+| `set_rit` | `hz` | RIT offset. Retuning clears it |
 | `set_screen` | `screen: "panadapter"/"ft8"` | Switch the Tab5's own view. Applied within about a second (handed to the display task) |
+| `set_ft8_mode` | `mode: "ft8"/"ft4"`, optional `freq_hz` | **Switch between FT8 and FT4**, optionally retuning. Omit `freq_hz` to keep the current frequency. This is an action rather than a setting because it also retunes the radio and clears stale decodes — read `ft8_op_mode` back from `/api/settings` to confirm |
+| `set_activation` | `ref` | Set the POTA/SOTA activation reference |
 | `cq_start` | *(none)* | Start a CQ run, as the Tab5's own **Call CQ** button does. **Keys the radio.** Only acted on while the Tab5 is in FT8/FT4 mode; otherwise discarded, not queued |
 | `reply` | `call` | Work a decoded station — the same intelligent Transmit a Tab5 row-tap runs. **Keys the radio.** Outcome in `/api/status` `ft8.web_r` |
+| `qso_override` | `what: "resend"/"rr73"/"73"/"cancel"` | Mid-QSO override, as the Tab5's own three buttons do. **Keys the radio** except for `cancel` |
 | `tune_start` / `tune_stop` | *(none)* | Antenna Tune (QMX 1.04+ only). **Keys the radio continuously**; 60 s safety stop on the device; live power/SWR in `/api/status` `tune` while running |
+| `pause` / `resume` | *(none)* | Release the radio so its own menus can be used, and take it back. While paused the CAT poll, the dead-stream watchdog and the stuck-decode watchdog all stand down |
 | `greylist_clear` | *(none)* | Un-skip every grey-listed station |
+| `ota_install` | `url` | Download and install firmware. Refused while transmitting or mid-QSO, with the reason in the reply body. Does **not** restart on its own |
+| `ota_reboot` | *(none)* | Restart into firmware already installed |
 | `usb_shutdown` | *(none)* | Orderly USB teardown before a reflash: radio to RX, CAT and audio closed, VBUS dropped |
+| `usb_replug` | *(none)* | Power-cycle the USB port to recover a wedged device |
+| `power_off` | *(none)* | Power the Tab5 down |
 | `reset_settings` | *(none)* | Clear stored settings back to defaults |
 | `reset_network` | *(none)* | Clear the stored WiFi/network state |
 
-The response is `{"ok":true}`; an unrecognised action returns `400`. Effects are
-applied asynchronously (mode and filter writes are queued onto the CAT poll task,
-`cq_start` onto the display task), so read `/api/status` to see the result rather
-than assuming it from the response.
+**Radio menus** (the QMX's own terminal, on its second serial port):
+`open`, `close`, `key`, `text`, `term_view`, `qmx_ports`, `qmx_term_probe` —
+see [Radio menus](#) and `GET /api/term`.
+
+**Developer actions.** Not referenced by any web-UI element, and easy to regret:
+
+| Action | Effect |
+|---|---|
+| `cat_raw` | Send one raw CAT string to the radio |
+| `drawer` | Open the settings drawer, optionally at `scroll_y`, so a section below the fold can be screenshotted |
+| `resmon` | Toggle the resource-monitor overlay |
+| `time_redetect` | Re-arm the once-per-boot QMX GPS detection without rebooting |
+| `help` | Open the on-device manual at a topic |
+| `panic_test` | **Crash the device deliberately**, to prove the crash recorder works. ⚠ Radio **off** only — a panic reboot is a warm reset, which leaves the QMX needing a power cycle |
+
+**⚠ Check the response BODY, not the status code.** The reply is `{"ok":true}`
+on success — but an unrecognised action returns **HTTP 200** with the body
+`unknown action`, and a refused one (for example `ota_install` while
+transmitting) returns `{"ok":false,"error":"..."}`, also with HTTP 200. A caller
+that only tests the status code cannot tell success from a typo, and a mistyped
+action is then a silent no-op.
+
+Effects are applied asynchronously — mode and filter writes are queued onto the
+CAT poll task, and `cq_start`, `reply`, `qso_override` and `set_ft8_mode` onto
+the display task — so read `/api/status` or `/api/settings` to see the result
+rather than assuming it from the response.
 
 ### GET /api/tone
 
@@ -165,6 +196,24 @@ never reset fields it did not show.
 `wifi_ssid` and `wifi_pass` take effect only when both are supplied - an empty
 password means "keep the stored one", never "erase it". `qmx_vol_db` is in dB
 (0-50) and is sent to the radio as well as stored.
+
+**Everything the settings drawer can change is reachable here.** Besides the keys
+above that includes `flat_mode`, `distance_in_miles`, `greylist_en`,
+`ft8_early_decode`, `field_day_en` (with `fd_class` / `fd_section`), `spots_en`,
+`sota_en`, `rbn_en`, `pskreporter_en`, `resmon_en`, `tx_tone_hold`, `tx_tone_hz`,
+`cw_pitch_hz` and `cw_cal_hz` — all readable back from `GET`.
+
+**`sim_mode_en` is the one to know about if you are automating tests.** With it
+on, the firmware runs complete FT8 exchanges against phantom stations and
+`ft8_tx.c` hard-refuses to key the radio, so a QSO can be driven end to end with
+no antenna and no QMX attached. ⚠ Simulated contacts land in the **real** ADIF
+log, so turn it off afterwards and delete them — they have `FREQ=0`, and the
+ADIF viewer's "Del N test" button finds exactly those.
+
+**Read-only reporters.** `ft8_op_mode` (`"ft8"` / `"ft4"`) and `ft8_freq_hz` are
+returned but not writable here — change them with the `set_ft8_mode` action,
+which also retunes the radio and clears stale decodes, then read these back to
+confirm. `swr_limit_x10` is likewise reported only.
 
 ### GET /api/decodes
 
