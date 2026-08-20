@@ -4165,13 +4165,15 @@ function paintUpdateNotice(s) {
   const u = s.update || {};
   const ota = u.ota || "idle";
   if (ota === "running") {
-    el.textContent = "Updating... " + (u.ota_pct || 0) + "%";
+    el.textContent = (u.ota_ver ? "Installing " + u.ota_ver : "Installing...")
+                   + "  " + (u.ota_pct || 0) + "%";
     el.style.color = "#ffa040"; el.style.cursor = ""; el.onclick = null;
     el.title = "Downloading the new firmware. Do not power off.";
     return;
   }
   if (ota === "done") {
-    el.textContent = "Update ready – click to restart";
+    el.textContent = (u.ota_ver ? u.ota_ver + " ready" : "Update ready")
+                   + " – click to restart";
     el.style.color = "#8fe0a0"; el.style.cursor = "pointer";
     el.title = "The new firmware is installed. Restarting will interrupt the radio.";
     el.onclick = otaRestart;

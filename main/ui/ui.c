@@ -6426,35 +6426,24 @@ void ui_set_bottom_version(const char *text)
     }
 }
 
-// #218: say so, on a surface people actually look at, when a newer firmware
-// exists.
+// #218: the bottom-bar version label doubles as the update indicator.
 //
-// The update check has worked since v1.1 and was effectively invisible: its ONLY
-// output was a banner inside the Reader, so you learned about a new version only
-// if you opened the on-device manual. Nothing else called
-// update_check_available() at all - it had zero consumers. That is exactly the
-// operator's "slower users" problem: people who are several releases behind and
-// have never been told.
+// The update check had run since v1.1 and announced itself ONLY inside the
+// Reader, so nobody who did not open the manual ever heard about a new release.
+// This is the always-on surface: it already says which version is running, so
+// saying "v1.8.8 -> v1.8.9" there needs no new widget, no popup and nothing to
+// dismiss. Deliberately never a toast - an update is not urgent and must not
+// interrupt operating.
 //
-// The bottom-bar version label is the right place because it is always on
-// screen, it already says which version you are running, and turning that same
-// number amber with an arrow needs no new widget, no popup, and nothing to
-// dismiss. Deliberately NOT a toast or a modal - an update is not urgent and
-// must never interrupt operating.
-void ui_set_update_available(const char *latest)
+// Takes ready-made text and a colour rather than reading the update/OTA modules
+// itself: ui.c has no business depending on net/, and status.c already owns the
+// 1 Hz bottom-bar refresh where the wording is composed for BOTH screens.
+void ui_set_update_line(const char *text, uint32_t colour)
 {
     if (!s_bot_version) return;
-    char buf[48];
-    const esp_app_desc_t *d = esp_app_get_description();
-    if (latest && latest[0]) {
-        snprintf(buf, sizeof(buf), LV_SYMBOL_DOWNLOAD " %s -> %s", d->version, latest);
-    } else {
-        snprintf(buf, sizeof(buf), "%s", d->version);
-    }
     if (display_lock(20)) {
-        lv_label_set_text(s_bot_version, buf);
-        lv_obj_set_style_text_color(s_bot_version,
-            lv_color_hex((latest && latest[0]) ? 0xFFA040 : 0x808080), 0);
+        lv_label_set_text(s_bot_version, text ? text : "");
+        lv_obj_set_style_text_color(s_bot_version, lv_color_hex(colour), 0);
         display_unlock();
     }
 }

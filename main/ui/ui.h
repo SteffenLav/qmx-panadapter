@@ -87,11 +87,10 @@ void ui_set_bottom_battery_absent(void);
 // Bottom-bar firmware version, centered between the battery text and the UTC clock.
 void ui_set_bottom_version(const char *text);
 
-// #218: show "vRUNNING -> vLATEST" in amber on the bottom bar when the update
-// check finds a newer release. Pass "" to clear. The update check was
-// previously announced ONLY inside the Reader, so nobody who did not open the
-// manual ever heard about it.
-void ui_set_update_available(const char *latest);
+// #218: the bottom-bar version label doubles as the update indicator - it is
+// the one surface always on screen. Text and colour are composed by status.c
+// so the Tab5 and the browser say the same thing.
+void ui_set_update_line(const char *text, uint32_t colour);
 
 // Resource-monitor floating overlay text (see build_resource_monitor in
 // ui.c). No-op if the panel object doesn't exist yet or was never toggled on.

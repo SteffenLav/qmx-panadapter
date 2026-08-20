@@ -1,4 +1,6 @@
 #include "status.h"
+#include "net/update_check.h"
+#include "net/ota_update.h"
 #include "battery.h"
 #include "wifi.h"
 #include "time_sync.h"
@@ -76,6 +78,25 @@ static uint32_t battery_color(int level)
     return BATT_COLOR_FULL;
 }
 
+
+// #218: the bottom-bar version label is CENTRE-aligned at a fixed offset and
+// grows both ways, so it collides with the SD dot and the clock if the text
+// gets long. A release version ("v1.8.9") is short; a dev build
+// ("v1.8.8-9-g7f4451a-dirty") is not, and it was overlapping both neighbours.
+// Keep only "vX.Y.Z" for display - the full string is still in the boot log,
+// /api/status and the diagnostic download, where it matters.
+static void short_ver(const char *in, char *out, size_t out_sz)
+{
+    if (!in || !out || !out_sz) { if (out && out_sz) out[0] = 0; return; }
+    size_t n = 0, dashes = 0;
+    while (in[n] && n < out_sz - 1) {
+        if (in[n] == '-' && ++dashes >= 1) break;   // stop at the first -N-g...
+        out[n] = in[n];
+        n++;
+    }
+    out[n] = 0;
+}
+
 static void status_task(void *arg)
 {
     (void)arg;
@@ -90,6 +111,49 @@ static void status_task(void *arg)
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
+
+        // --- #218: the bottom-bar version label doubles as the update line ---
+        //
+        // One writer for one label, and it lives here because this is the only
+        // 1 Hz bottom-bar refresh - the update poller runs hours apart and could
+        // never show live download progress. The wording is deliberately the
+        // same as the browser's, so the two screens read alike.
+        {
+            char vline[96];
+            uint32_t vcol = 0x808080;              // running version, nothing to say
+            char running[32], over_s[32], latest_s[32];
+            short_ver(esp_app_get_description()->version, running, sizeof(running));
+
+            int  opct = 0;
+            char omsg[128], over[32], latest[32];
+            ota_state_t ost = ota_update_get_state(&opct, omsg, sizeof(omsg));
+            ota_update_get_target_version(over, sizeof(over));
+            update_check_get_latest(latest, sizeof(latest));
+            short_ver(over,   over_s,   sizeof(over_s));
+            short_ver(latest, latest_s, sizeof(latest_s));
+
+            if (ost == OTA_RUNNING) {
+                // Name what is being installed - "updating" alone does not tell
+                // the operator what they are getting - but keep it short enough
+                // not to run into the clock.
+                if (over_s[0]) snprintf(vline, sizeof(vline), "%s  %d%%", over_s, opct);
+                else           snprintf(vline, sizeof(vline), "updating  %d%%", opct);
+                vcol = 0xFFA040;
+            } else if (ost == OTA_DONE) {
+                if (over_s[0]) snprintf(vline, sizeof(vline), "%s ready", over_s);
+                else           snprintf(vline, sizeof(vline), "update ready");
+                vcol = 0x8FE0A0;
+            } else if (ost == OTA_FAILED) {
+                snprintf(vline, sizeof(vline), "update failed");
+                vcol = 0xFF6060;
+            } else if (update_check_available() && latest_s[0]) {
+                snprintf(vline, sizeof(vline), "%s " LV_SYMBOL_RIGHT " %s", running, latest_s);
+                vcol = 0xFFA040;
+            } else {
+                snprintf(vline, sizeof(vline), "%s", running);
+            }
+            ui_set_update_line(vline, vcol);
+        }
 
         // --- LEFT: battery icon (colored by level) + percentage text ---
         int  level    = battery_get_level();

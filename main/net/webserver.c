@@ -327,6 +327,9 @@ static esp_err_t status_handler(httpd_req_t *req)
                          : (ost == OTA_FAILED)  ? "failed" : "idle";
         cJSON_AddStringToObject(up, "ota",       ostr);
         cJSON_AddNumberToObject(up, "ota_pct",   opct);
+        char over[32];
+        ota_update_get_target_version(over, sizeof(over));
+        if (over[0]) cJSON_AddStringToObject(up, "ota_ver", over);
         if (omsg[0]) cJSON_AddStringToObject(up, "ota_error", omsg);
     }
     // #217: WS health, so a reported PSD stall can be matched against what the

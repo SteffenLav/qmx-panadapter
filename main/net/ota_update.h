@@ -25,6 +25,7 @@
 
 #pragma once
 #include <stdbool.h>
+#include <stddef.h>
 
 typedef enum {
     OTA_IDLE = 0,
@@ -47,6 +48,10 @@ bool ota_update_start(const char *url, char *err, size_t err_len);
 // Snapshot for /api/status. `pct` is 0-100 while RUNNING, `msg` carries the
 // failure reason when FAILED.
 ota_state_t ota_update_get_state(int *pct, char *msg, size_t msg_len);
+
+// The version being installed, from the incoming image's own descriptor, or ""
+// before the header has been read. Both screens name it while the download runs.
+void ota_update_get_target_version(char *out, size_t out_sz);
 
 // True once an update has been written and the device is only waiting to be
 // restarted into it.

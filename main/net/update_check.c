@@ -4,7 +4,6 @@
 
 #include "update_check.h"
 #include "ui/reader_view.h"
-#include "ui.h"          // #218: bottom-bar update marker
 #include "wifi/wifi.h"
 #include "net/webserver_ws.h"     // webserver_ws_set_paused
 #include "util/psram_task.h"
@@ -168,11 +167,8 @@ static void publish(const char *latest, bool newer)
     s_available = newer;
     if (s_lock) xSemaphoreGive(s_lock);
     reader_view_set_update_available(newer ? latest : "");
-    // #218: the Reader banner was the ONLY announcement, so it reached nobody
-    // who did not open the on-device manual - which is most people, and exactly
-    // the users who end up several releases behind. Also mark the bottom-bar
-    // version label, which is always on screen.
-    ui_set_update_available(newer ? latest : "");
+    // #218: the bottom bar is painted by status.c's 1 Hz refresh, which also
+    // has to show live OTA progress - one writer for one label.
 }
 
 static bool do_check(void)

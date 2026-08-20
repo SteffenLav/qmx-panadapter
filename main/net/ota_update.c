@@ -31,6 +31,10 @@ static volatile ota_state_t s_state = OTA_IDLE;
 static volatile int         s_pct   = 0;
 static char                 s_msg[128];
 static char                 s_url[256];
+// Version being installed, taken from the incoming image's own descriptor so
+// both screens can name it while the download runs (the operator asked: "1.8.8
+// -> 1.8.9", not a bare "updating").
+static char                 s_target_ver[32];
 
 static void set_failed(const char *fmt, ...)
 {
@@ -158,6 +162,8 @@ static void ota_task(void *arg)
             esp_https_ota_abort(h);
             goto out;
         }
+        strncpy(s_target_ver, incoming.version, sizeof(s_target_ver) - 1);
+        s_target_ver[sizeof(s_target_ver) - 1] = '\0';
         ESP_LOGW(TAG, "incoming: %s %s", incoming.project_name, incoming.version);
     }
 
@@ -269,3 +275,10 @@ ota_state_t ota_update_get_state(int *pct, char *msg, size_t msg_len)
 }
 
 bool ota_update_reboot_pending(void) { return s_state == OTA_DONE; }
+
+void ota_update_get_target_version(char *out, size_t out_sz)
+{
+    if (!out || !out_sz) return;
+    strncpy(out, s_target_ver, out_sz - 1);
+    out[out_sz - 1] = '\0';
+}
