@@ -918,10 +918,21 @@ static void refresh_our_report(int fresh_snr, bool as_roger,
 //   is_cq=true  - the CQ no-answer path, as before.
 //   is_cq=false - a POUNCE that has not transmitted yet, i.e. TX1 only.
 //
-// ⛔ Never mid-exchange. Once the partner has heard us they are tracking our
-// specific tone, and moving would lose them. But that reasoning does NOT hold
-// before our first transmission: nobody is listening for us yet, so re-picking
-// is free. Roy KI0ER hit exactly that hole - answering a CQ, TX HOLD off, fresh
+// ⚠ THE ORIGINAL REASON FOR "NEVER MID-EXCHANGE" IS FALSE, and it was mine to
+// repeat. Roy KI0ER (2026-08-20): "The other station's software is not and
+// should not be tracking my offset tone. It does not matter where in the
+// waterfall I show up; their software is decoding and matching the TEXT of my
+// message to their callsign." He is right - FT8 decoders work the whole
+// passband and match on callsign, so each message in a QSO may ride a different
+// tone. Operators move deliberately in WSJT-X to escape QRM or QSB mid-QSO.
+//
+// ⚠ But there IS a real constraint, from Gyula HA3HZ in the same thread: a
+// partner who has NARROWED their receive bandwidth (MSHV does this to keep
+// decode time inside the reply window) may simply not hear a station that
+// jumped far away. So "move freely" is wrong too - what is safe is moving as
+// LITTLE as possible, which is exactly what ft8_find_clear_tone_hz_near() does.
+//
+// The one hard rule both agree on: never change tone DURING a burst. Roy KI0ER hit exactly that hole - answering a CQ, TX HOLD off, fresh
 // EVEN+ODD maps with green slots visible, and the reply still went out on an
 // occupied offset showing "FREQ BUSY", because the tone was chosen once when
 // the reply was armed and nothing could move it in the ~15 s before the burst.
@@ -2344,9 +2355,12 @@ void ft8_qso_advance(int64_t slot_sec)
             // the meantime, move before we key rather than transmitting on top
             // of them and merely showing "FREQ BUSY".
             //
-            // Strictly gated on !s_tx_sent: from our first burst onwards the
-            // partner is tracking this exact tone and moving would lose them,
-            // which is why the CQ-only restriction existed in the first place.
+            // Gated on !s_tx_sent for now. ⚠ The stated reason for that gate was
+            // WRONG - the partner does not track our tone (Roy KI0ER); see the
+            // note on relocate_tone_if_clashing(). Mid-QSO relocation is a
+            // deliberate open question rather than a prohibition: it is
+            // legitimate, but must move as little as possible so a partner with
+            // a narrowed receive window still hears us (Gyula HA3HZ). TODO #219.
             if (!s_tx_sent) relocate_tone_if_clashing(false);
             register_miss("waiting for report");
             return;
