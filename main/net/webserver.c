@@ -1,5 +1,6 @@
 #include "webserver.h"
 #include "webserver_ws.h"
+#include "net/update_check.h"   // #218
 #include "filebrowser.h"      // filebrowser_register - microSD web file browser
 
 #include "esp_http_server.h"
@@ -306,6 +307,19 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "mode",         ui_get_mode_str());
     cJSON_AddStringToObject(root, "band",         ui_get_band_str());
     cJSON_AddStringToObject(root, "screen",       ft8_screen_view_is_active() ? "ft8" : "panadapter");
+    // #218: firmware version + whether a newer release exists. The update check
+    // has run since v1.1 but announced itself ONLY inside the on-device Reader,
+    // so anyone who never opened the manual was never told - which is how people
+    // end up several releases behind. The browser is where most users actually
+    // look, so it says so here too.
+    {
+        cJSON *up = cJSON_AddObjectToObject(root, "update");
+        cJSON_AddStringToObject(up, "running", esp_app_get_description()->version);
+        char latest[32] = "";
+        update_check_get_latest(latest, sizeof(latest));
+        cJSON_AddStringToObject(up, "latest",    latest);
+        cJSON_AddBoolToObject(up,   "available", update_check_available());
+    }
     // #217: WS health, so a reported PSD stall can be matched against what the
     // device actually did. Sam W7STF sees occasional 3-6 s stalls and says it
     // may be his PC - these numbers are how anyone can tell. `partial` is the

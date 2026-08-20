@@ -3118,7 +3118,7 @@ async function tick() {
       battStr += "--";
     }
     document.getElementById("batt").textContent   = battStr;
-    document.getElementById("tab5fw").textContent = s.tab5_fw || "";
+    paintUpdateNotice(s);
 
     /* Bluetooth glyph: same three states as the Tab5. */
     {
@@ -4114,6 +4114,35 @@ function passbandBins() {
    while a drag is in progress (same idea as ui.c passing `target` straight
    into update_bandplan_strip() during a live drag, without touching the
    committed VFO until release). */
+
+/* #218: "a newer firmware exists" on a surface people actually look at.
+   The update check has run since v1.1 but its ONLY output was a banner inside
+   the on-device manual, so anyone who never opened that was never told - which
+   is exactly how someone ends up several releases behind.
+
+   A named function rather than inline in the status handler so BOTH branches can
+   be exercised without waiting for a real release to appear. Deliberately just
+   the version text going amber and clickable, never a popup: an update is not
+   urgent and must not interrupt operating. */
+function paintUpdateNotice(s) {
+  const el = document.getElementById("tab5fw");
+  if (!el) return;
+  const u = s.update || {};
+  if (u.available && u.latest) {
+    el.textContent = (u.running || s.tab5_fw || "") + " → " + u.latest + " available";
+    el.style.color = "#ffa040";
+    el.style.cursor = "pointer";
+    el.title = "A newer firmware is on GitHub. Click for the release page.";
+    el.onclick = () => window.open("https://github.com/SteffenLav/qmx-panadapter/releases/latest", "_blank");
+  } else {
+    el.textContent = s.tab5_fw || "";
+    el.style.color = "";
+    el.style.cursor = "";
+    el.title = "";
+    el.onclick = null;
+  }
+}
+
 function drawBandplan(previewHz) {
   const canvas = document.getElementById("bandplan");
   if (!canvas) return;

@@ -1,3 +1,4 @@
+#include "esp_app_desc.h"   // #218: bottom-bar "update available"
 #include "ui.h"
 #include "ui_theme.h"
 #include "render.h"
@@ -6421,6 +6422,39 @@ void ui_set_bottom_version(const char *text)
     if (!s_bot_version) return;
     if (display_lock(20)) {
         lv_label_set_text(s_bot_version, text ? text : "");
+        display_unlock();
+    }
+}
+
+// #218: say so, on a surface people actually look at, when a newer firmware
+// exists.
+//
+// The update check has worked since v1.1 and was effectively invisible: its ONLY
+// output was a banner inside the Reader, so you learned about a new version only
+// if you opened the on-device manual. Nothing else called
+// update_check_available() at all - it had zero consumers. That is exactly the
+// operator's "slower users" problem: people who are several releases behind and
+// have never been told.
+//
+// The bottom-bar version label is the right place because it is always on
+// screen, it already says which version you are running, and turning that same
+// number amber with an arrow needs no new widget, no popup, and nothing to
+// dismiss. Deliberately NOT a toast or a modal - an update is not urgent and
+// must never interrupt operating.
+void ui_set_update_available(const char *latest)
+{
+    if (!s_bot_version) return;
+    char buf[48];
+    const esp_app_desc_t *d = esp_app_get_description();
+    if (latest && latest[0]) {
+        snprintf(buf, sizeof(buf), LV_SYMBOL_DOWNLOAD " %s -> %s", d->version, latest);
+    } else {
+        snprintf(buf, sizeof(buf), "%s", d->version);
+    }
+    if (display_lock(20)) {
+        lv_label_set_text(s_bot_version, buf);
+        lv_obj_set_style_text_color(s_bot_version,
+            lv_color_hex((latest && latest[0]) ? 0xFFA040 : 0x808080), 0);
         display_unlock();
     }
 }
