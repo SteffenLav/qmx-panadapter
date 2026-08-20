@@ -3000,7 +3000,14 @@ async function tick() {
       if (a) a.textContent = (s.screen === "ft8") ? "Switch to Panadapter" : "Switch to FT8/FT4";
     }
     tuneAntSync(s);
-    document.getElementById("bandplan-wrap").classList.toggle("show", !!lastBandplan);
+    // #216 (Samuel W7STF): out of band the Tab5 keeps the strip and turns it
+    // into a centre-detented coarse tuner, but the browser used to hide it
+    // outright - the one place you most want a way back was the one place with
+    // no control at all. `bandplan` is null exactly when the VFO is outside a
+    // band, so that is the OOB signal, not a reason to disappear. Still gated
+    // on having a frequency at all, and FT8 hides the whole row separately via
+    // style.display below.
+    document.getElementById("bandplan-wrap").classList.toggle("show", !!lastBandplan || lastFreqHz > 0);
 
     /* Spectrum/waterfall are Panadapter-only - the Tab5 pauses the WS stream
        server-side while in FT8/FT4 (ft8_screen_view.c), so mirror that here:
@@ -4109,7 +4116,7 @@ function passbandBins() {
    committed VFO until release). */
 function drawBandplan(previewHz) {
   const canvas = document.getElementById("bandplan");
-  if (!canvas || !lastBandplan) return;
+  if (!canvas) return;
 
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const rect = canvas.getBoundingClientRect();
@@ -4118,6 +4125,10 @@ function drawBandplan(previewHz) {
   if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, W, H);
+
+  // Out of band: no band to map x onto, so the strip becomes a relative
+  // control instead of an absolute one (#216, mirrors ui.c's OOB branch).
+  if (!lastBandplan) { drawBandplanOob(ctx, W, H, dpr); return; }
 
   const bp      = lastBandplan;
   const bandLo  = bp.lo, bandHi = bp.hi;
@@ -4185,6 +4196,55 @@ function drawBandplan(previewHz) {
   ctx.strokeRect(sx0 + lw / 2, lw / 2, Math.max(1, sw - lw), Math.max(1, H - lw));
 }
 
+/* Out-of-band band strip (#216, Samuel W7STF) - the browser had nothing here.
+   In band, x IS a frequency. Out of band there is no band to map onto, so the
+   same strip becomes a CENTRE-DETENTED coarse tuner, exactly as ui.c does it:
+   the knob sits mid-strip carrying < > arrows, you drag off centre to move the
+   dial, and it springs back on release.
+
+   Full deflection = HALF the visible span, so consecutive drags overlap rather
+   than skipping a gap, and it scales with zoom for free.
+
+   bpOobOffPx is the live deflection in DEVICE pixels; 0 when idle (detented). */
+let bpOobOffPx = 0;
+const BP_OOB_KNOB_FRAC = 140 / 1280;   // same proportion as ui.c's 140 px at 1280
+
+function drawBandplanOob(ctx, W, H, dpr) {
+  ctx.fillStyle = "#353b42";           // BANDPLAN_OOB_COLOR from ui.c
+  ctx.fillRect(0, 0, W, H);
+
+  const knobW = Math.max(40 * dpr, Math.round(W * BP_OOB_KNOB_FRAC));
+  const half  = W / 2;
+  let kx = half + bpOobOffPx - knobW / 2;
+  if (kx < 0) kx = 0;
+  if (kx > W - knobW) kx = W - knobW;
+
+  ctx.fillStyle = "#4a525b";
+  ctx.fillRect(kx, 0, knobW, H);
+  ctx.strokeStyle = "#7d8894";
+  ctx.lineWidth = Math.max(1, dpr);
+  ctx.strokeRect(kx + 0.5, 0.5, knobW - 1, H - 1);
+
+  const fontPx = Math.max(9, Math.round(H * 0.55));
+  ctx.font = fontPx + "px system-ui, sans-serif";
+  ctx.textBaseline = "middle";
+
+  // Arrows live ON the knob, so it reads as a thing you push sideways.
+  ctx.fillStyle = "#d7dde3";
+  ctx.textAlign = "left";
+  ctx.fillText("‹", kx + 4 * dpr, H / 2);
+  ctx.textAlign = "right";
+  ctx.fillText("›", kx + knobW - 4 * dpr, H / 2);
+
+  // The label is the only thing telling you why the segments vanished, so it
+  // stays put while idle and gets out of the way during a drag.
+  if (!bpDragging) {
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#95a0ab";
+    ctx.fillText("Out of band  -  drag to tune", half, H / 2);
+  }
+}
+
 /* Drag-to-tune on the band-plan strip - mirrors touch_event_cb's bandplan
    branch in ui.c: a short move (< BP_DRAG_THRESHOLD_PX) is a plain tap that
    jumps straight to that position; past the threshold it becomes a live
@@ -4205,7 +4265,7 @@ function drawBandplan(previewHz) {
   }
 
   canvas.addEventListener("pointerdown", (e) => {
-    if (!lastBandplan) return;
+    if (!lastBandplan && !(lastFreqHz > 0)) return;   // OOB still tunes (#216)
     active = true;
     bpDragging = false;
     startX = e.clientX;
@@ -4216,14 +4276,43 @@ function drawBandplan(previewHz) {
   });
 
   canvas.addEventListener("pointermove", (e) => {
-    if (!active || !lastBandplan) return;
+    if (!active) return;
     const dx = e.clientX - startX;
     if (!bpDragging) {
       if (dx > -BP_DRAG_THRESHOLD_PX && dx < BP_DRAG_THRESHOLD_PX) return;
       bpDragging = true;
       canvas.classList.add("dragging");
     }
-    const rectW  = canvas.getBoundingClientRect().width;
+    const rectW = canvas.getBoundingClientRect().width;
+
+    if (!lastBandplan) {
+      // Out of band: relative, centre-detented (#216).
+      //
+      // ⚠ Deflection is measured from where the pointer LANDED, not from the
+      // centre of the strip. The two agree when the knob itself is grabbed, but
+      // measuring from centre would deflect the control the instant the strip
+      // was pressed anywhere else - the dial would jump before the pointer had
+      // moved at all. Same reasoning as ui.c's OOB branch.
+      const halfCss = rectW / 2;
+      let offCss = dx;
+      if (offCss >  halfCss) offCss =  halfCss;
+      if (offCss < -halfCss) offCss = -halfCss;
+
+      const spanHz = 48000 / (lastZoom || 1);
+      // Edge of the strip == half a span, so two drags cover one span with an
+      // overlap rather than a gap.
+      let hz = startFreq + Math.round(offCss / halfCss * (spanHz / 2));
+      hz = Math.round(hz / 1000) * 1000;          // whole kHz, as in band
+      hz = Math.max(1000000, Math.min(60000000, hz));   // BP_OOB_MIN/MAX_HZ
+      targetHz = hz;
+
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      bpOobOffPx = offCss * dpr;
+      drawBandplan();
+      document.getElementById("vfo").textContent = fmtHz(targetHz);
+      return;
+    }
+
     const hzPerPx = (lastBandplan.hi - lastBandplan.lo) / rectW;
     targetHz = clamp(startFreq + dx * hzPerPx);
     drawBandplan(targetHz);
@@ -4242,7 +4331,16 @@ function drawBandplan(previewHz) {
     if (!active) return;
     active = false;
     canvas.classList.remove("dragging");
-    if (!lastBandplan) { bpDragging = false; return; }
+    if (!lastBandplan) {
+      // OOB: commit the drag, then spring the knob back to centre. A plain TAP
+      // deliberately does nothing - with no band plan behind it a tapped x has
+      // no frequency to mean (#216, same rule as the Tab5).
+      const dragged = bpDragging;
+      bpDragging = false;
+      bpOobOffPx = 0;
+      if (dragged) commit(targetHz); else drawBandplan();
+      return;
+    }
     if (bpDragging) {
       commit(targetHz);
     } else {
@@ -4256,6 +4354,7 @@ function drawBandplan(previewHz) {
   canvas.addEventListener("pointercancel", () => {
     active = false;
     bpDragging = false;
+    bpOobOffPx = 0;      // detent back to centre, same as a release (#216)
     canvas.classList.remove("dragging");
     drawBandplan();
   });
