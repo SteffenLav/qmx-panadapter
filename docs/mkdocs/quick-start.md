@@ -132,6 +132,45 @@ If you set up WiFi:
 2. You'll see a remote spectrum, waterfall, and control panel — plus QSO log downloads and uploads to QRZ, eQSL, and LoTW
 3. No installation or configuration needed — just open and go
 
+## Step 10: Keeping It Up To Date
+
+From v1.8.9 the Tab5 can update itself over WiFi. You do not need the cable
+again unless something goes badly wrong.
+
+When a newer release exists, the version at the bottom of the screen changes to
+show it, in cyan:
+
+```
+v1.8.9 > v1.9.0  tap?
+```
+
+Touch it and it tells you to hold. Hold it for about a second and it says
+**release to confirm**; let go and the download starts. Lift your finger early
+and nothing happens.
+
+While it downloads the line is amber and counts up. When it is ready it turns
+light green:
+
+```
+v1.9.0 - tap updates
+```
+
+Hold it again to restart into the new firmware. Nothing restarts on its own —
+you choose when, so it can never interrupt a contact.
+
+The same thing appears at the bottom of the web page, in the same words and
+colours, and works the same way.
+
+**Nothing is downloaded unless you ask for it.** The first thing you are ever
+offered is a download, not one already in progress.
+
+Your settings, QSO log, LoTW certificate and memories are untouched by an
+update. The previous firmware is also kept, so a failed update falls back to it
+by itself.
+
+⚠ Restarting the Tab5 with the QMX connected usually means switching the radio
+off and on again afterwards — the screen will tell you if so.
+
 ## Troubleshooting
 
 **Spectrum is flat?**

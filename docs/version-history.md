@@ -2171,3 +2171,51 @@ Diagnostics + field reports. Full notes: `docs/release-notes-v1.8.8.md`.
   main.c:202 and `dsp_init()` at 312; `ft8_greylist.c` had an unguarded site and
   a lazy-create race across two tasks. Three other files verified safe.
 - **WS health counters** in `/api/status`.
+
+## v1.8.9 — 2026-08-20
+
+Full notes: `docs/release-notes-v1.8.9.md`.
+
+- **#146 the radio could be left transmitting, and now cannot.** Roy KI0ER's log
+  is the whole mechanism: `cdc_acm: TX transfer timeout` mid-burst, then every
+  write returning `0x10c`, so **both** `TA0;` and `RX;` were lost; the burst
+  declared itself complete and the QMX transmitted until he power-cycled it,
+  with the Tab5 UI normal throughout. ⚠ **The link recovered ~2 s later and
+  nothing re-sent `RX;`** — which is why a burst-local retry (8 x 20 ms) is not
+  sufficient on its own. `tx_cmd_critical()` retries the stop commands, and on
+  failure `cat_request_force_rx()` hands it to the poll task, which re-sends
+  `RX;` on every cycle whose send SUCCEEDS (the proof the pipe is alive) until
+  it gets through. The poll task owns the pipe and is the first code to learn
+  the link is back; ft8_tx has no business blocking a slot boundary for seconds.
+- **#218 one-tap firmware update.** Three 4 MB app slots with `user_nvs` and
+  `storage` at unchanged offsets and `factory` kept as a permanent known-good
+  fallback; rollback enabled; refuses while transmitting or mid-QSO. Long-press
+  to confirm ("release to confirm"), never automatic — an OTA reboot is a warm
+  reset, i.e. the #74 trigger. Tab5 and browser share one vocabulary. Awareness
+  was the bigger half: the update check had run since v1.1 with **zero callers**
+  outside its own module, announcing itself only inside the Reader.
+- **#117 crash records survive the reboot** (RTC no-init RAM, `-Wl,--wrap`), so
+  a field crash is diagnosable from a diagnostic download for the first time.
+- **#153 the SD diagnostic log continues while WiFi is on.** Previously a boot
+  snapshot only — proven from Roy's own log, where `qmx-log.txt` never appears.
+- **#220 flasher 44 MB -> 2.9 MB** (Gyula HA3HZ). The zip was built with a
+  wildcard over a directory holding 27 historical flasher archives.
+  `tools/make_flasher_zip.ps1` now packs an explicit list.
+- **#219 mid-QSO tone relocation, nearest slot only.** Roy KI0ER established
+  that decoders match on callsign not tone, so the old "never mid-exchange"
+  justification was false; Gyula HA3HZ established the limit, that a narrowed
+  receive window may not hear a big jump. Capped at 250 Hz and 3 moves.
+- **#214 BW stuck on a CW filter after CW -> LSB** (Samuel W7STF): the SSB pin is
+  never cleared, so `FW;` stays suppressed on re-entry and nothing repainted.
+- **#216 out-of-band tuner in the browser**, mirroring ui.c exactly.
+- **#217 browser stalls**: the takeover notice used the 16-bit length form for a
+  1-byte payload, violating RFC 6455's minimal-encoding rule, so browsers failed
+  the connection instead of standing down. 16 takeovers/10 s -> 2/25 s.
+- **#222 spur suppression parked.** `dsp_get_zoom_spectrum()` bypasses
+  `spur_map_apply()`, so it only ever worked at zoom x1. Code kept, drawer row
+  removed. With an antenna the strongest tooth is 22.7 dB over the floor against
+  38.6 dB with the BNC open.
+- **#221 API audit**: 37 actions documented (14 were), and the error semantics
+  corrected — `/api/cmd` answers an unknown action with **HTTP 200**, not 400.
+- Frequency label re-asserted from the FA poll; `#154` mutex-init audit;
+  `#199` FT8 monitor-pool double-build root-caused.

@@ -4,8 +4,26 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.8.8** — 2026-08-20
+**v1.8.9** — 2026-08-20
 
+**The Tab5 updates itself now, and a transmitter that could be left keyed no longer can.**
+
+- **The radio can no longer be left transmitting.** *(Roy KI0ER)* His QMX transmitted continuously until he power-cycled it, with the Tab5 running normally throughout. A USB timeout mid-burst made every command fail — including the two that *stop* transmission — the burst finished, and although the link recovered two seconds later nothing ever re-sent them. The stop command is now retried immediately, and if it still cannot get through it is handed to the radio-control task, which keeps re-sending it on every cycle that works until the radio is demonstrably back in receive.
+- **Updating from the device.** The version at the bottom of the screen tells you when a newer release exists and installs it if you ask: touch it, hold for a second, let go. It downloads in the background and never restarts on its own — you choose when. The web page says the same in the same words. Nothing is downloaded unless you ask, your settings and logs are untouched, and the previous firmware is kept as a fallback. Install this release with the flasher as usual; after that the cable is only for emergencies.
+- **A crash now survives the reboot.** An unexpected restart can finally be diagnosed from a diagnostic download — the next boot records what happened, which part of the firmware, and how far into the session.
+- **The microSD card keeps the diagnostic log again while WiFi is on.** Previously it only received a backup at start-up, so the log was not there when it was needed.
+- **The flasher download is 2.9 MB instead of 44 MB.** *(Gyula HA3HZ)* It had been quietly carrying every previous version inside it.
+- **FT8 can move off an occupied frequency mid-QSO** — to the nearest clear slot only. *(Roy KI0ER, Gyula HA3HZ)* Far enough to escape whoever is on top of you, near enough that a station using a narrow receive filter still hears you.
+- **Bandwidth stayed on a CW filter after switching to LSB.** *(Samuel W7STF)*
+- **The out-of-band tuner now works in the browser too.** *(Samuel W7STF)*
+- **Browser display stalls.** *(Samuel W7STF)* The message telling a second browser it had lost the live view was malformed, so browsers hung up and grabbed it straight back.
+- **The frequency readout could stick** on an old value while the spectrum and the radio were both correct.
+- **Spur suppression has been withdrawn** from the settings drawer. It only ever worked at ×1 zoom, which is not where anyone looks at spurs, and with a real antenna the problem is far smaller than bench measurements suggested. The work is kept for a future release.
+- **Every web API command is documented**, and the error behaviour is now described correctly.
+
+## Previous Releases
+
+### v1.8.8 — 2026-08-20
 **If the Tab5 ever restarts on you, the diagnostic download now says why.**
 
 - **A crash now survives the reboot.** Until now a crash left nothing on the device — the details went straight out of the serial port and were gone, so if you sent a diagnostic download it contained everything except the one thing needed. The next boot now reports the previous crash: what happened, which part of the firmware, how far into the session, and where. **If your Tab5 restarts unexpectedly, just send the diagnostic download.** A restart with no crash record is also positive evidence it was *not* a crash — a power cut looks identical otherwise.
@@ -17,7 +35,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **The frequency readout could stick** on an old value while the spectrum, waterfall and radio were all correct.
 - **Radio Menus / Diagnostics colour is not fixed yet, deliberately.** The colours the menus use are all handled; the Diagnostics screen sends something else. Rather than guess, the firmware now reports exactly which codes it did not understand — if you can open Diagnostics and send that reading, it is the fix.
 
-## Previous Releases
 
 ### v1.8.7 — 2026-08-19
 **The browser panadapter stops freezing, and your logs can go to your own Cloudlog.**
@@ -374,7 +391,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.8.8.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.8.9.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

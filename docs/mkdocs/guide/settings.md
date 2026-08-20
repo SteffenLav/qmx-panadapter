@@ -154,32 +154,21 @@ Two things worth knowing, both from Randy N4OPI's side-by-side check against a r
 - **Hann** — smoother peaks
 - **Nuttall** — sharpest edges
 
-**Spur suppression** — Removes the radio's own synthesizer spurs from the display.
-**Off** by default.
+**Spur suppression — withdrawn in v1.8.9.** The control is no longer in the
+drawer.
 
 At some dial frequencies the QMX puts a comb of evenly spaced artifacts into the
-spectrum. They sit in the same place whatever you do, they do not move when you
-tune, and they are still there with the antenna disconnected. On one unit at
-14.074 MHz the strongest measured nearly 40 dB above the noise floor.
+spectrum, and this setting was meant to remove them. It only ever worked at zoom
+×1: above that the display is drawn from a second, finer analysis that the
+suppression never reached, so turning it on or off made no difference at all —
+and zooming in is exactly what you do when you are looking at a spur.
 
-The panadapter finds them by nudging the dial 25 Hz for about two seconds. A real
-signal stays where it is; these artifacts move sixteen to fifty times further,
-because their offset tracks the radio's synthesizer rather than the band. What it
-learns is remembered per frequency, so returning to a frequency you have already
-used costs nothing.
+It also matters less than the original measurements suggested. Those were taken
+with the antenna disconnected, where the strongest tooth stood nearly 40 dB above
+the noise. With a real antenna on the same radio it measures about 23 dB, because
+band noise rises and buries the weaker teeth.
 
-- **Off** — nothing is touched.
-- **Erase spur bins** — the one to use. The artifact disappears. Measured on 20 m,
-  where the comb ran 38 dB over the noise floor: this takes the spur columns down
-  about 78% on the waterfall, against about 28% for Subtract. It does **not** leave
-  dark notches — it ramps between the neighbouring bins rather than blanking them.
-  Its one cost is that a real signal sitting exactly on a spur is hidden while the
-  dial sits still, and nudging the dial slides the blind spot off it, because these
-  artifacts shift so much faster than the dial does.
-- **Subtract spur power** — the conservative choice. Only the artifact's own
-  measured power is taken away, so it can never hide anything at all, but the
-  artifact stays clearly visible. Pick this if you would rather see a spur than
-  risk losing a weak signal underneath one.
+Nothing is lost by its absence, and the work is kept for a future release.
 
 Wherever something is being removed, the thin line under the frequency labels turns
 teal. You can always see what is being touched.

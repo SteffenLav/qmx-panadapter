@@ -70,10 +70,12 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.8.8 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.8.9 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, and the radio's own menus on the screen.** The
 panadapter, FT8/FT4 receive and transmit, ADIF logging and all four logbook uploads —
 QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable and in daily use.
+
+**New in v1.8.9 — the Tab5 updates itself, and a transmitter that could be left keyed no longer can.** Roy KI0ER's QMX transmitted continuously until he power-cycled it: a USB timeout mid-burst made every command fail, including the two that **stop** transmission, and although the link recovered two seconds later nothing ever re-sent them. The stop command is now retried, and if it still cannot get through it is handed to the radio-control task which keeps trying until the radio is demonstrably back in receive. **The version at the bottom of the screen now offers you a newer release** — touch it, hold for a second, let go, and it downloads in the background. It never restarts on its own, and nothing is fetched unless you ask. The web page says the same in the same words. **A crash now survives the reboot**, so an unexpected restart can finally be diagnosed from a diagnostic download, and **the microSD card keeps the log again while WiFi is on**. **The flasher download is 2.9 MB instead of 44 MB** *(Gyula HA3HZ)*. **FT8 can move off an occupied frequency mid-QSO** — to the nearest clear slot only, so a station with a narrow filter still hears you *(Roy KI0ER, Gyula HA3HZ)*. **Bandwidth stuck on a CW filter after switching to LSB**, **the out-of-band tuner missing from the browser** and **browser display stalls** are all fixed *(Samuel W7STF)*, and **spur suppression has been withdrawn** — it only ever worked at ×1 zoom. Full detail in [docs/version-history.md](docs/version-history.md).
 
 **New in v1.8.8 — if the Tab5 ever restarts on you, the diagnostic download now says why.** Until now a crash left **nothing** on the device: the details went straight out of the serial port and were gone, so a diagnostic download contained everything except the one thing needed. The next boot now reports the previous crash — what happened, **which part of the firmware**, how far into the session, and where. If your Tab5 restarts unexpectedly, just send the diagnostic download; that is enough. **An FT8 reboot open since v1.3.0 is root-caused and fixed**: entering FT8 could start the decoder twice, and the second copy freed memory the first was still using. **FT8 was quietly discarding decodes** — 99 out of 54,142 measured — and a lost one looks exactly like the other station going quiet. **The bandwidth no longer stays on a CW filter after switching to LSB**, and **the out-of-band tuner now exists in the browser too** *(Samuel W7STF)*. **Browser stalls**: the message that tells a second browser "another browser took the live view" was malformed, so browsers hung up and grabbed the view straight back — a continuous tug-of-war whenever a phone or second tab was left open *(Samuel W7STF)*. And the **frequency readout can no longer stick** on an old value while the spectrum and radio are correct.
 
@@ -112,7 +114,7 @@ Every release, newest first, is on the [Releases](releases.md) page.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.8.8.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.8.9.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 
