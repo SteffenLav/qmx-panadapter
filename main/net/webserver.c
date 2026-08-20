@@ -1,6 +1,7 @@
 #include "webserver.h"
 #include "webserver_ws.h"
 #include "net/update_check.h"   // #218
+#include "net/ota_update.h"     // #218
 #include "filebrowser.h"      // filebrowser_register - microSD web file browser
 
 #include "esp_http_server.h"
@@ -319,6 +320,14 @@ static esp_err_t status_handler(httpd_req_t *req)
         update_check_get_latest(latest, sizeof(latest));
         cJSON_AddStringToObject(up, "latest",    latest);
         cJSON_AddBoolToObject(up,   "available", update_check_available());
+        int opct = 0; char omsg[128];
+        ota_state_t ost = ota_update_get_state(&opct, omsg, sizeof(omsg));
+        const char *ostr = (ost == OTA_RUNNING) ? "running"
+                         : (ost == OTA_DONE)    ? "done"
+                         : (ost == OTA_FAILED)  ? "failed" : "idle";
+        cJSON_AddStringToObject(up, "ota",       ostr);
+        cJSON_AddNumberToObject(up, "ota_pct",   opct);
+        if (omsg[0]) cJSON_AddStringToObject(up, "ota_error", omsg);
     }
     // #217: WS health, so a reported PSD stall can be matched against what the
     // device actually did. Sam W7STF sees occasional 3-6 s stalls and says it
@@ -858,6 +867,35 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, "{\"ok\":true}");
         return ESP_OK;
+    } else if (action && strcmp(action, "ota_install") == 0) {
+        // #218: install a firmware release from the device. OPERATOR-INITIATED
+        // ONLY - see ota_update.h for why this must never become automatic
+        // (applying it reboots the Tab5, which with the radio attached is the
+        // #74 trigger and leaves the QMX needing a power cycle).
+        //
+        // ota_update_start() refuses while transmitting or mid-QSO; the reason
+        // comes back as text so the browser can say WHY rather than just fail.
+        const char *url = cJSON_GetStringValue(cJSON_GetObjectItem(root, "url"));
+        char oerr[96];
+        bool ok = ota_update_start(url, oerr, sizeof(oerr));
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        if (ok) {
+            httpd_resp_sendstr(req, "{\"ok\":true}");
+        } else {
+            char body[160];
+            snprintf(body, sizeof(body), "{\"ok\":false,\"error\":\"%s\"}", oerr);
+            httpd_resp_sendstr(req, body);
+        }
+        return ESP_OK;
+    } else if (action && strcmp(action, "ota_reboot") == 0) {
+        // Separate from ota_install on purpose: the operator decides WHEN the
+        // radio gets interrupted, and the page warns about the QMX first.
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true}");
+        vTaskDelay(pdMS_TO_TICKS(250));
+        esp_restart();
     } else if (action && strcmp(action, "panic_test") == 0) {
         // Developer escape hatch: deliberately crash, to prove the #117 panic
         // hook actually records anything. A tolerant-but-silent mechanism is

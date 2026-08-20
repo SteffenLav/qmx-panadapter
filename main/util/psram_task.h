@@ -1,5 +1,12 @@
 #pragma once
 
+// ⛔ NEVER for a task that writes FLASH (OTA, SPIFFS, NVS commit).
+// Writing flash disables the cache, and a task whose stack is in PSRAM cannot
+// run with the cache off - IDF asserts in
+// spi_flash_disable_interrupts_caches_and_other_cpu (cache_utils.c:152).
+// Confirmed on hardware 2026-08-20: the #218 OTA task with a PSRAM stack
+// panicked at 96% of the download. Such tasks need an ordinary internal stack.
+
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 

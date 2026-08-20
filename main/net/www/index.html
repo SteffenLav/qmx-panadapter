@@ -1665,13 +1665,20 @@ function toggleDropdown(name) {
 }
 
 async function sendCmd(payload) {
+  // Returns the parsed reply, or null. It used to await the fetch and throw the
+  // body away, which made every refusal invisible: /api/cmd answers an unknown
+  // action - and a refused one - with HTTP 200 and the reason in the BODY, so a
+  // caller that ignores it cannot tell "done" from "declined, because you are
+  // transmitting". Existing callers ignore the return value, so this is
+  // backward compatible; #218's install flow depends on it.
   try {
-    await fetch("/api/cmd", {
+    const r = await fetch("/api/cmd", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
-  } catch(e) { /* ignore */ }
+    try { return await r.json(); } catch (e) { return null; }
+  } catch(e) { return null; }
 }
 
 /* Restart a CQ run on the Tab5. This KEYS THE RADIO, so it confirms first - a
@@ -4124,16 +4131,65 @@ function passbandBins() {
    be exercised without waiting for a real release to appear. Deliberately just
    the version text going amber and clickable, never a popup: an update is not
    urgent and must not interrupt operating. */
+
+/* #218: install a release from the browser. The device refuses while
+   transmitting or mid-QSO and says why, so the confirm text below covers the
+   thing the firmware CANNOT know - that restarting interrupts the radio, and
+   that on this hardware a Tab5 restart with the QMX attached leaves the radio
+   needing a power cycle (#74). That is why installing and restarting are two
+   separate steps: the operator picks the moment. */
+async function otaInstall(latest) {
+  const msg = "Download and install " + (latest || "the latest firmware") + "?" + "\n" + "\n"
+            + "It installs in the background and does NOT restart on its own - "
+            + "you choose when." + "\n" + "\n"
+            + "The Tab5 screen may flicker while it writes. That is normal." + "\n" + "\n"
+            + "Your settings, QSO log and LoTW certificate are not touched.";
+  if (!confirm(msg)) return;
+  const url = "https://github.com/SteffenLav/qmx-panadapter/releases/download/"
+            + latest + "/qmx_panadapter.bin";
+  const r = await sendCmd({ action: "ota_install", url: url });
+  if (r && r.ok === false) alert("Cannot update right now:" + "\n" + "\n" + (r.error || "unknown reason"));
+}
+
+async function otaRestart() {
+  const msg = "Restart the Tab5 into the new firmware?" + "\n" + "\n"
+            + "This interrupts receiving. If your QMX is connected it will most "
+            + "likely need to be switched off and on again afterwards.";
+  if (!confirm(msg)) return;
+  await sendCmd({ action: "ota_reboot" });
+}
+
 function paintUpdateNotice(s) {
   const el = document.getElementById("tab5fw");
   if (!el) return;
   const u = s.update || {};
+  const ota = u.ota || "idle";
+  if (ota === "running") {
+    el.textContent = "Updating... " + (u.ota_pct || 0) + "%";
+    el.style.color = "#ffa040"; el.style.cursor = ""; el.onclick = null;
+    el.title = "Downloading the new firmware. Do not power off.";
+    return;
+  }
+  if (ota === "done") {
+    el.textContent = "Update ready – click to restart";
+    el.style.color = "#8fe0a0"; el.style.cursor = "pointer";
+    el.title = "The new firmware is installed. Restarting will interrupt the radio.";
+    el.onclick = otaRestart;
+    return;
+  }
+  if (ota === "failed") {
+    el.textContent = "Update failed";
+    el.style.color = "#ff6060"; el.style.cursor = "pointer";
+    el.title = (u.ota_error || "Unknown error") + " - click to try again";
+    el.onclick = () => otaInstall(u.latest);
+    return;
+  }
   if (u.available && u.latest) {
-    el.textContent = (u.running || s.tab5_fw || "") + " → " + u.latest + " available";
+    el.textContent = (u.running || s.tab5_fw || "") + " \u2192 " + u.latest + " available";
     el.style.color = "#ffa040";
     el.style.cursor = "pointer";
-    el.title = "A newer firmware is on GitHub. Click for the release page.";
-    el.onclick = () => window.open("https://github.com/SteffenLav/qmx-panadapter/releases/latest", "_blank");
+    el.title = "Click to install " + u.latest + " on the Tab5.";
+    el.onclick = () => otaInstall(u.latest);
   } else {
     el.textContent = s.tab5_fw || "";
     el.style.color = "";

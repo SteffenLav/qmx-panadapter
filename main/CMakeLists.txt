@@ -69,6 +69,7 @@ idf_component_register(
         "net/reader_net.c"
         "net/manual_embed.c"
         "net/update_check.c"
+        "net/ota_update.c"
         "qmx_term.c"
         "ft8_test.c"
         "ft8_tx.c"
@@ -134,6 +135,8 @@ idf_component_register(
         lwip
         esp_http_server
         esp_http_client
+        esp_https_ota   # #218 one-tap update
+        app_update      # #218 esp_ota_ops / rollback
         espressif__mdns
         mbedtls
         json

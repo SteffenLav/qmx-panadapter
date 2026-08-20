@@ -248,3 +248,10 @@ CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=6
 # stall the MIPI-DSI frame-restart ISR (the "cyan flash" rule in CLAUDE.md).
 # The writes themselves are on diag_persist, a priority-2 background task.
 CONFIG_SPIFFS_GC_MAX_RUNS=32
+
+# #218 one-tap update: a freshly OTA'd image boots PENDING_VERIFY and must call
+# esp_ota_mark_app_valid_cancel_rollback() itself. If it crashes or hangs before
+# it gets there, the bootloader reverts to the previous image on the next reset.
+# That is the whole safety net - without it a bad update is a dead device with no
+# cable in the field. Marked valid from app_main once the UI and network are up.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

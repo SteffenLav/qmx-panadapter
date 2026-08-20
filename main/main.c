@@ -27,6 +27,7 @@
 #include "wifi.h"
 #include "util/usb_shutdown.h"
 #include "net/update_check.h"
+#include "net/ota_update.h"
 #include "net/manual_embed.h"  // built-in user manual (boot integrity check)
 #include "net/reader_net.h"    // reader_net_purge_legacy_caches() at boot
 #include "ui/reader_view.h"
@@ -392,5 +393,13 @@ void app_main(void)
     // (first check ~30 s after boot, then every 6 h) and no-ops while WiFi is
     // down, so it's harmless on offline/POTA units.
     update_check_start();
+
+    // #218: confirm this image so the bootloader stops treating it as on trial.
+    // With CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE a freshly OTA'd firmware boots
+    // PENDING_VERIFY and reverts on the next reset unless it says it is good.
+    // Reaching here means display, settings, USB, the UI and the network all
+    // came up, which is the only working definition of "this image is fine"
+    // available from inside it. No-op on a cable-flashed image.
+    ota_update_mark_valid();
 }
 

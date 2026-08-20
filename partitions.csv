@@ -1,6 +1,27 @@
 # Name,    Type, SubType, Offset,    Size,     Flags
+#
+# 16 MB flash. #218: three app slots so firmware can be updated from the device
+# itself, while the existing flasher keeps working exactly as before.
+#
+# ⛔ user_nvs (0x810000) and storage (0x820000) MUST NOT MOVE. They hold the
+# settings, the QSO log, and the LoTW certificate AND PRIVATE KEY. The flasher
+# deliberately writes only 0x2000/0x8000/0x10000 so a normal update never
+# touches them - moving either offset would destroy user data on every unit in
+# the field. Everything below is arranged around keeping those two fixed.
+#
+# factory stays the flasher's target at 0x10000, so flash.bat/.command are
+# unchanged, and it survives as a permanent known-good image: erasing otadata
+# returns the device to whatever was last flashed by cable, even if both OTA
+# images are bad. That escape hatch is why factory is kept rather than going
+# ota-only.
+#
+# App slots are 4 MB against a ~3.3 MB binary (~20% headroom). An overflow is a
+# BUILD failure, not a field failure.
 nvs,       data, nvs,     0x9000,    0x6000,
 phy_init,  data, phy,     0xf000,    0x1000,
-factory,   app,  factory, 0x10000,   0x800000,
+factory,   app,  factory, 0x10000,   0x400000,
+ota_0,     app,  ota_0,   0x410000,  0x400000,
 user_nvs,  data, nvs,     0x810000,  0x6000,
 storage,   data, spiffs,  0x820000,  0x100000,
+otadata,   data, ota,     0x920000,  0x2000,
+ota_1,     app,  ota_1,   0x930000,  0x400000,

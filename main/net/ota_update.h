@@ -1,0 +1,53 @@
+// ota_update — install a firmware release from the device itself (#218).
+//
+// This is the "one tap" half. update_check.c already finds that a newer release
+// exists; this downloads and applies it. It sits ALONGSIDE the USB flasher and
+// replaces nothing: the flasher stays the recovery path, the way to move
+// between arbitrary versions, and the only route on a unit with no WiFi.
+//
+// ⛔ IT IS NOT AUTOMATIC, AND MUST NOT BECOME AUTOMATIC.
+// Applying an update reboots the Tab5, and a Tab5 warm reset with the radio
+// attached is the documented #74 trigger - the QMX then fails to re-enumerate
+// and needs a power cycle. An unattended update would therefore kill the radio
+// of an operator who was not watching, and it would be reported as a QMX fault
+// (that inversion has already happened twice). This device also keys a
+// transmitter. So the operator asks for it, every time.
+//
+// Safety, in the order it matters:
+//   1. Refused outright while transmitting or mid-QSO - see ota_update_start().
+//   2. Written to the inactive OTA slot; the running image is never touched.
+//   3. esp_https_ota verifies the image header before the boot slot is switched.
+//   4. CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE: the new image boots PENDING_VERIFY
+//      and this firmware marks it valid only once it is properly up. A crash or
+//      hang before that reverts to the previous image by itself.
+//   5. `factory` still holds whatever was last flashed by cable, so erasing
+//      otadata is a final escape hatch even if both OTA slots are bad.
+
+#pragma once
+#include <stdbool.h>
+
+typedef enum {
+    OTA_IDLE = 0,
+    OTA_RUNNING,      // downloading / writing
+    OTA_DONE,         // written and verified; reboot pending
+    OTA_FAILED,
+} ota_state_t;
+
+// Confirm the running image so the bootloader stops treating it as on trial.
+// Call once from app_main after the UI and network are up. No-op unless this
+// boot is PENDING_VERIFY, so it is harmless on a cable-flashed image.
+void ota_update_mark_valid(void);
+
+// Begin an update to `url` (a raw .bin). Returns false and fills `err` if the
+// device is in no state to be interrupted - transmitting, mid-QSO, no WiFi, or
+// an update already running. Spawns one PSRAM-stack task; progress via
+// ota_update_get_state().
+bool ota_update_start(const char *url, char *err, size_t err_len);
+
+// Snapshot for /api/status. `pct` is 0-100 while RUNNING, `msg` carries the
+// failure reason when FAILED.
+ota_state_t ota_update_get_state(int *pct, char *msg, size_t msg_len);
+
+// True once an update has been written and the device is only waiting to be
+// restarted into it.
+bool ota_update_reboot_pending(void);
