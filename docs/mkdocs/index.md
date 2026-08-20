@@ -70,10 +70,12 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.8.7 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.8.8 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, and the radio's own menus on the screen.** The
 panadapter, FT8/FT4 receive and transmit, ADIF logging and all four logbook uploads —
 QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable and in daily use.
+
+**New in v1.8.8 — if the Tab5 ever restarts on you, the diagnostic download now says why.** Until now a crash left **nothing** on the device: the details went straight out of the serial port and were gone, so a diagnostic download contained everything except the one thing needed. The next boot now reports the previous crash — what happened, **which part of the firmware**, how far into the session, and where. If your Tab5 restarts unexpectedly, just send the diagnostic download; that is enough. **An FT8 reboot open since v1.3.0 is root-caused and fixed**: entering FT8 could start the decoder twice, and the second copy freed memory the first was still using. **FT8 was quietly discarding decodes** — 99 out of 54,142 measured — and a lost one looks exactly like the other station going quiet. **The bandwidth no longer stays on a CW filter after switching to LSB**, and **the out-of-band tuner now exists in the browser too** *(Samuel W7STF)*. **Browser stalls**: the message that tells a second browser "another browser took the live view" was malformed, so browsers hung up and grabbed the view straight back — a continuous tug-of-war whenever a phone or second tab was left open *(Samuel W7STF)*. And the **frequency readout can no longer stick** on an old value while the spectrum and radio are correct.
 
 **New in v1.8.7 — the browser panadapter stops freezing, and your logs can go to your own Cloudlog.** The web display **hanging for seconds at a time** is fixed, and the cause was not what it looked like *(Samuel W7STF)*: measured over 9.6 hours, the browser session was being torn down **545 times**, each costing about **2.2 seconds** of frozen display while it reconnected. A partial WebSocket write was being reported as a complete one, which corrupted the stream and made the browser hang up — and the background feeds only made it more likely, which is why it worsened with every release. **Upload to a self-hosted Cloudlog or Wavelog** is new *(Mark G4MEM)*: plain `http://` is allowed when the server is on the same network as the Tab5, re-checked at every upload so it refuses from a field site. **Radio menus show the radio's own colours** instead of all white *(Samuel W7STF)*. A new **"Pick callers myself"** option lets you tap the hunter you want instead of the firmware answering the first one *(Eric K3FNB)*, a **Bluetooth mouse whose pointer jumped about** is fixed *(Kevin KW6E)*, and **entering FT8 can no longer reboot the device**. The **battery no longer reads 100% then 0% with no pack fitted** *(Randy N4OPI)*, **waking from the screensaver no longer acts on the tap** that woke it *(Randy N4OPI)*, and a **radio left receiving on VFO B is put back on A** and says so *(Markus DL8MBY)*.
 
@@ -110,7 +112,7 @@ Every release, newest first, is on the [Releases](releases.md) page.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.8.7.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.8.8.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

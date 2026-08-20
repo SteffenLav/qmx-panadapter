@@ -4,8 +4,22 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.8.7** — 2026-08-19
+**v1.8.8** — 2026-08-20
 
+**If the Tab5 ever restarts on you, the diagnostic download now says why.**
+
+- **A crash now survives the reboot.** Until now a crash left nothing on the device — the details went straight out of the serial port and were gone, so if you sent a diagnostic download it contained everything except the one thing needed. The next boot now reports the previous crash: what happened, which part of the firmware, how far into the session, and where. **If your Tab5 restarts unexpectedly, just send the diagnostic download.** A restart with no crash record is also positive evidence it was *not* a crash — a power cut looks identical otherwise.
+- **An FT8 reboot open since v1.3.0, root-caused.** Entering FT8 could start the decoder twice, and the second copy freed memory the first was still using. The cause was an internal "is it running yet" flag that answered a moment too late.
+- **FT8 was quietly discarding decodes** — 99 out of 54,142 in a measured run. A dropped decode never reaches the list, the busy-frequency map, or the check for a reply addressed to you, and a lost reply looks exactly like the other station going quiet.
+- **Bandwidth stayed on a CW filter after switching CW → LSB.** *(Samuel W7STF)*
+- **The out-of-band tuner now exists in the browser too.** *(Samuel W7STF)* Out of band the Tab5 turns the band strip into a centre-detented coarse tuner; the browser simply hid it, so the one place you most want a way back to a band had no control at all.
+- **Browser stalls — a real cause, and it was not your PC.** *(Samuel W7STF)* The message that tells a displaced browser "another browser took the live view" was a malformed frame, so browsers hung up instead of reading it and took the view straight back. Measured: 16 tug-of-war takeovers in ten seconds, down to 2 in twenty-five.
+- **The frequency readout could stick** on an old value while the spectrum, waterfall and radio were all correct.
+- **Radio Menus / Diagnostics colour is not fixed yet, deliberately.** The colours the menus use are all handled; the Diagnostics screen sends something else. Rather than guess, the firmware now reports exactly which codes it did not understand — if you can open Diagnostics and send that reading, it is the fix.
+
+## Previous Releases
+
+### v1.8.7 — 2026-08-19
 **The browser panadapter stops freezing, and your logs can go to your own Cloudlog.**
 
 - **The web panadapter no longer hangs for seconds at a time.** Reported as getting worse with every release, and it was. Measured over 9.6 hours, the browser session was being torn down **545 times** — roughly every 14 seconds in bursts — each costing about **2.2 seconds** of frozen display while the browser reconnected. Between the drops the stream ran at full speed, which is why it looked like stalling rather than slowness. The cause is a partial WebSocket write being reported as a complete one: a half-sent frame corrupted the stream, and the browser hung up. The background feeds only made it more likely, which is exactly why it worsened as more feeds were added. *(Samuel W7STF)*
@@ -23,7 +37,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 **Investigated, no change:** the first entry into Radio menus after a flash drawing blank could not be reproduced — the first open after flashing plus six more were all clean, and the same thing is seen in PuTTY, which points at the radio's own redraw. *(Samuel W7STF, Randy N4OPI)*
 
-## Previous Releases
 
 ### v1.8.6 — 2026-08-18
 
@@ -361,7 +374,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.8.7.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.8.8.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 
