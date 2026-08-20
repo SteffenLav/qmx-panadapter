@@ -573,6 +573,26 @@ static void process_cat_message(const char *msg, size_t len)
             s_last_mode_digit = d;
             ESP_LOGI(TAG, "Mode = %s (raw %c)", mode_str, d);
             ui_update_mode(mode_str);
+
+            // #214 (Samuel W7STF): coming back INTO SSB with a filter pinned,
+            // repaint the width from the pin - nothing else ever will.
+            //
+            // The poll drops FW; whenever a width is pinned AND the mode is
+            // USB/LSB, because reading the filter back makes the QMX revert it.
+            // In CW that suppression is off, so the label happily tracks the CW
+            // passband. Switch CW -> LSB and the suppression turns straight back
+            // on, so the label is frozen at whatever it last showed: he watched
+            // a CW signal on 40 m, moved to LSB, and the bandwidth stayed at
+            // 50 Hz - a CW width, in an SSB mode.
+            //
+            // The pin is the right value to show: setting it wrote BOTH
+            // MMSSB|Filter RX (committed) and MMSSB|Bandwidth (live) to it, so
+            // it IS the radio's SSB filter. Repaint rather than clearing the pin
+            // and re-reading - a bare FW; here would make the radio revert the
+            // filter, which is the whole reason the pin exists.
+            if ((d == '1' || d == '2') && s_ssb_bw_pinned != 0) {
+                ui_update_passband_width(s_ssb_bw_pinned);
+            }
         }
         return;
     }
