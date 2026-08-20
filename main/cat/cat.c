@@ -551,6 +551,11 @@ static void process_cat_message(const char *msg, size_t len)
         // ui_refresh_band_label() is cheap (band_from_freq + label set,
         // no side effects) so call it unconditionally every poll.
         ui_refresh_band_label(freq_hz);
+        // Same reason, for the frequency readout itself: a dropped label write
+        // is permanent otherwise, because the gated branch above will not fire
+        // again for this frequency. Caught with the top bar reading 14.263.000
+        // while the radio and the spectrum were both on 14.074 (2026-08-20).
+        ui_refresh_freq_label(freq_hz);
         ui_refresh_bandplan_strip(freq_hz);
         return;
     }

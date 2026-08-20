@@ -1620,6 +1620,10 @@ static int  s_right_edge_swipe_start_x  = -1;
 
 // Widget handles
 static lv_obj_t *s_freq_label = NULL;
+// Last value actually PAINTED into s_freq_label. Lets ui_refresh_freq_label()
+// early-out on the normal path, and is what makes a dropped label write
+// recoverable rather than permanent (2026-08-20).
+static uint32_t s_freq_shown_hz = 0;
 static lv_obj_t *s_smeter_bar = NULL;
 static lv_obj_t *s_band_label = NULL;   // Phase 5.10D: dedicated band slot
 static lv_obj_t *s_mode_label = NULL;
@@ -5178,9 +5182,13 @@ void ui_update_frequency(uint32_t freq_hz)
     snprintf(buf, sizeof(buf), "Freq: %lu.%03lu.%03lu Hz", mhz, khz, hz);
     if (display_lock(100)) {
         lv_label_set_text(s_freq_label, buf);
+        s_freq_shown_hz = freq_hz;   // so ui_refresh_freq_label() can early-out
         display_unlock();
     } else {
-        ESP_LOGW("ui", "ui_update_frequency: freq label lock timeout");
+        // Not fatal any more: ui_refresh_freq_label() re-asserts this from the
+        // FA poll, because this gated path will not run again for the same
+        // frequency and the stale number would otherwise stick (2026-08-20).
+        ESP_LOGW("ui", "ui_update_frequency: freq label lock timeout (poll will re-assert)");
     }
     // Phase 5.10: derive band and push to UI
     const char *band = band_from_freq(freq_hz);
@@ -5248,6 +5256,50 @@ void ui_refresh_band_label(uint32_t freq_hz)
 {
     const char *band = band_from_freq(freq_hz);
     if (band) ui_update_band(band);
+}
+
+// Same rationale as ui_refresh_band_label, for the FREQUENCY readout itself -
+// and it is not hypothetical: caught on the bench 2026-08-20 with the operator
+// watching the top bar say 14.263.000 Hz while the spectrum, the waterfall and
+// the radio were all on 14.074.
+//
+//   I (379486) cat: Freq = 14074000 Hz (14.074 MHz)
+//   W (379586) ui: ui_update_frequency: freq label lock timeout
+//
+// Exactly 100 ms apart: ui_update_frequency() got the FA change, tried to write
+// the label, lost display_lock(100), logged and gave up. cat.c's FA handler is
+// gated on `freq_hz != s_last_freq_hz`, so with the cache already updated the
+// gated path NEVER FIRES AGAIN - the wrong number then sticks until the VFO
+// happens to move, which on a quiet band can be a very long time.
+//
+// Cheap and side-effect-free by construction: it formats the text, returns
+// immediately if that is already what is on screen, and only then takes the
+// lock briefly. It must NOT do what ui_update_frequency() does around the
+// label - the pan reset, the axis relabel, the band-plan strip and the NVS
+// write all have to stay gated on a real change.
+//
+// ⚠ Deliberately does not fight a drag: while the band strip or spectrum is
+// being dragged the label shows a PREVIEW, but s_freq_shown_hz still holds the
+// committed value and so does the FA poll, so the early-out matches and this
+// leaves the preview alone.
+void ui_refresh_freq_label(uint32_t freq_hz)
+{
+    if (!s_freq_label) return;
+    if (freq_hz == s_freq_shown_hz) return;   // already correct - the normal case
+
+    char buf[32];
+    snprintf(buf, sizeof(buf), "Freq: %lu.%03lu.%03lu Hz",
+             (unsigned long)(freq_hz / 1000000),
+             (unsigned long)((freq_hz / 1000) % 1000),
+             (unsigned long)(freq_hz % 1000));
+    // Short timeout: this runs on every FA poll, so a busy moment simply means
+    // the next poll ~150 ms later picks it up. No warning log for the same
+    // reason - it would be noise, and the retry IS the recovery.
+    if (display_lock(20)) {
+        lv_label_set_text(s_freq_label, buf);
+        s_freq_shown_hz = freq_hz;
+        display_unlock();
+    }
 }
 
 // Same rationale as ui_refresh_band_label above, for the band-plan strip:

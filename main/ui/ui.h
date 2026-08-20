@@ -21,6 +21,7 @@ void ui_update_smeter(int s_units);
 void ui_update_mode(const char *mode);   // Phase 5.10: e.g. "USB", "CW"
 void ui_update_band(const char *band);   // Phase 5.10: e.g. "20m", "40m"
 void ui_refresh_band_label(uint32_t freq_hz);  // cheap, call every FA poll
+void ui_refresh_freq_label(uint32_t freq_hz);  // cheap, call every FA poll - re-asserts a dropped label write
 void ui_refresh_bandplan_strip(uint32_t freq_hz);  // cheap, call every FA poll - same rationale
 void ui_push_spectrum(const float *bins, int n_bins);   // Phase 4
 void ui_push_waterfall_row(const uint8_t *rgb565_row);  // Phase 5
