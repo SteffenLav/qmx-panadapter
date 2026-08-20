@@ -2124,3 +2124,50 @@ After swapping cables he once got "is the radio set to 2 USB serial ports?" on a
 
 *This is the archived "Shipped in" history. The live roadmap (Next up / Longer term) is in [`README.md`](../README.md).*
 
+
+## v1.8.8 — 2026-08-20
+
+Diagnostics + field reports. Full notes: `docs/release-notes-v1.8.8.md`.
+
+- **#117 a crash now survives the reboot.** `util/panic_hook.c` wraps
+  `esp_panic_handler` (`-Wl,--wrap=`) and stashes a record in RTC no-init RAM;
+  the next boot logs it through the ordinary path, so it reaches `/api/log` AND
+  `/api/log/saved` with reason, assert text, task name, uptime, registers and an
+  `addr2line` line. Deliberately NOT a flash write from panic context — that can
+  hang instead of rebooting. A valid record is also positive proof the reset was
+  a real crash, which `reset_reason` never was here. Hardware-verified end to
+  end: the wrap confirmed in the disassembly, and a deliberate crash decoded to
+  the exact `abort()` line. Dev action `{"action":"panic_test"}` keeps it
+  falsifiable (radio-OFF only — a panic reboot is the #74 trigger).
+- **#199 the FT8 monitor pool could be built twice — root cause found.** The
+  liveness flag was set inside the task, so it meant "has begun running" while
+  both readers needed "exists"; these tasks are the lowest priority on the board,
+  so the watchdog could look during the gap and spawn a second. Almost certainly
+  the `tlsf_free` double-free open since v1.3.0. Fixed by claiming the slot
+  before `xTaskCreate`; a sweep found a second instance (the decode task) and one
+  false positive left alone.
+- **record_decode dropped 0.18 % of decodes** (99 of 54,142, measured). Cause was
+  CPU starvation, not lock contention — the holder went ~190 ms with no CPU,
+  visible as an out-of-order log timestamp. Writer timeout 50 ms → 2 s; readers
+  unchanged.
+- **#214 BW label stuck on a CW filter after CW → LSB** (Samuel W7STF). The SSB
+  pin is never cleared, so `FW;` stays suppressed on re-entry to SSB and nothing
+  repainted the label. Repaint from the pin. Hardware-verified.
+- **#216 out-of-band tuner on the web UI** (Samuel W7STF). Mirrors `ui.c`:
+  centre-detented, full deflection = half the visible span, deflection measured
+  from where the pointer landed, tap does nothing. Browser-verified.
+- **#217 the takeover notice was a MALFORMED websocket frame.** RFC 6455 §5.2
+  requires the minimal length encoding; the 1-byte notice used the 16-bit form,
+  so browsers failed the connection instead of standing down and took the view
+  straight back. Measured 16 takeovers/10 s → 2/25 s.
+- **#215 made measurable, not guessed.** Colour was never missing (per-cell `fg`
+  since day one, shipped on both screens in v1.8.7); the parser implements only
+  0/7/27/30-37 and the Diagnostics screen sends more. Unhandled SGR codes are now
+  reported via `/api/term` as `unk`. Harness mutation-tested. Needs one reading
+  from a radio with two serial ports enabled.
+- **Frequency label could stick.** A dropped `display_lock` write was permanent
+  because the FA path is change-gated; the poll now re-asserts it.
+- **#154 mutex-init audit** — `dsp.c` had six unguarded takes with `ui_init()` at
+  main.c:202 and `dsp_init()` at 312; `ft8_greylist.c` had an unguarded site and
+  a lazy-create race across two tasks. Three other files verified safe.
+- **WS health counters** in `/api/status`.
