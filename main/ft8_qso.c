@@ -75,6 +75,27 @@ static int                s_freq_hz;                    // OUR AF tone for our o
 // onwards the partner is tracking it and it must not move. Set by
 // ft8_qso_on_tx_complete(), cleared wherever an exchange begins.
 static bool s_tx_sent = false;
+
+// #219: relocations made AFTER our first transmission, i.e. mid-exchange.
+// Bounded so a busy band cannot make us wander up and down the waterfall while
+// the partner is trying to find us. Reset with every new exchange.
+static int s_midqso_moves = 0;
+
+// How far a MID-QSO move may go, and how many are allowed.
+//
+// Roy KI0ER established that moving mid-QSO is legitimate at all: decoders work
+// the whole passband and match on callsign, so the partner is not following our
+// tone. Gyula HA3HZ established the limit: a station who has NARROWED their
+// receive bandwidth (MSHV does this to keep decode inside the reply window) may
+// simply not hear someone who jumped far away, and his own conclusion was that
+// you therefore cannot say flatly that changing frequency mid-QSO is right.
+//
+// Both are satisfied by moving as LITTLE as possible: far enough to clear the
+// station on top of us, near enough to stay inside a narrowed window. 250 Hz is
+// five 50 Hz slots - comfortably clear of a neighbour, and well inside any
+// plausible narrowed passband.
+#define QSO_MIDQSO_MOVE_MAX_HZ  250
+#define QSO_MIDQSO_MOVE_LIMIT   3
 // The PARTNER's AF tone - where THEIR next message will arrive. Deliberately
 // NOT s_freq_hz: for a pounce we answer on a clear slot chosen by
 // ft8_find_clear_tone_hz() (see ft8_screen_view.c "not the CQ station's own
@@ -960,8 +981,30 @@ static void relocate_tone_if_clashing(bool is_cq)
     int new_freq = ft8_find_clear_tone_hz_near(old_freq);
     if (new_freq == old_freq) return;   // band fully packed - nowhere clearer to go
 
+    // #219: mid-exchange, the move must be SMALL and it must not repeat
+    // forever. Before our first burst neither limit applies - nobody is
+    // listening for us yet, so the best available slot is simply the best one.
+    const bool mid_qso = (!is_cq && s_tx_sent);
+    if (mid_qso) {
+        int delta = new_freq - old_freq;
+        if (delta < 0) delta = -delta;
+        if (delta > QSO_MIDQSO_MOVE_MAX_HZ) {
+            // Staying put and showing FREQ BUSY beats going somewhere the
+            // partner may not be listening (Gyula HA3HZ).
+            ESP_LOGI(TAG, "clash at %d Hz: nearest clear slot is %d Hz away - "
+                          "too far to move mid-QSO, staying put", old_freq, delta);
+            return;
+        }
+        if (s_midqso_moves >= QSO_MIDQSO_MOVE_LIMIT) {
+            ESP_LOGI(TAG, "clash at %d Hz: already moved %d times this QSO - staying put",
+                     old_freq, s_midqso_moves);
+            return;
+        }
+        s_midqso_moves++;
+    }
+
     ESP_LOGI(TAG, "%s tone %d Hz is busy - moving to %d Hz",
-             is_cq ? "CQ" : "TX1", old_freq, new_freq);
+             is_cq ? "CQ" : mid_qso ? "mid-QSO" : "TX1", old_freq, new_freq);
 
     lock();
     s_freq_hz               = new_freq;
@@ -974,8 +1017,9 @@ static void relocate_tone_if_clashing(bool is_cq)
 
     ft8_tx_disarm();   // cancel the stale-frequency ARMED request
     arm_current_if_idle();
-    ft8_status_set("CQ: moved off busy tone -> %d Hz", new_freq);
-    ESP_LOGI(TAG, "CQ tone clash at %d Hz - relocated to %d Hz", old_freq, new_freq);
+    ft8_status_set("%s: moved off busy tone -> %d Hz", is_cq ? "CQ" : "TX", new_freq);
+    ESP_LOGI(TAG, "%s tone clash at %d Hz - relocated to %d Hz",
+             is_cq ? "CQ" : "TX", old_freq, new_freq);
 }
 
 // --- Broken-QSO resume (operator request 2026-07-16) -----------------------
@@ -1178,6 +1222,7 @@ void ft8_qso_mark_robot_started(void)
 bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
 {
     s_tx_sent = false;   // #201: a fresh exchange has aired nothing yet
+    s_midqso_moves = 0;  // #219
     if (!tx1_req || !tx1_req->target_call[0]) {
         if (err) snprintf(err, err_len, "No target callsign");
         return false;
@@ -1422,6 +1467,7 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
 bool ft8_qso_start_cq(const ft8_tx_request_t *cq_req, char *err, size_t err_len)
 {
     s_tx_sent = false;   // #201: a fresh exchange has aired nothing yet
+    s_midqso_moves = 0;  // #219
     if (!cq_req) {
         if (err) snprintf(err, err_len, "No CQ request");
         return false;
@@ -2355,13 +2401,14 @@ void ft8_qso_advance(int64_t slot_sec)
             // the meantime, move before we key rather than transmitting on top
             // of them and merely showing "FREQ BUSY".
             //
-            // Gated on !s_tx_sent for now. ⚠ The stated reason for that gate was
-            // WRONG - the partner does not track our tone (Roy KI0ER); see the
-            // note on relocate_tone_if_clashing(). Mid-QSO relocation is a
-            // deliberate open question rather than a prohibition: it is
-            // legitimate, but must move as little as possible so a partner with
-            // a narrowed receive window still hears us (Gyula HA3HZ). TODO #219.
-            if (!s_tx_sent) relocate_tone_if_clashing(false);
+            // #219: no longer gated on !s_tx_sent. Moving mid-QSO is legitimate
+            // - the partner matches on callsign, not on tone (Roy KI0ER) - and
+            // this is the no-progress path, so it only fires when we are being
+            // stepped on and getting nowhere, which is exactly when a WSJT-X
+            // operator would move by hand. The bounds live in
+            // relocate_tone_if_clashing(): at most QSO_MIDQSO_MOVE_MAX_HZ, at
+            // most QSO_MIDQSO_MOVE_LIMIT times, never during a burst.
+            relocate_tone_if_clashing(false);
             register_miss("waiting for report");
             return;
         }
@@ -2446,7 +2493,13 @@ void ft8_qso_advance(int64_t slot_sec)
 
     if (st == FT8_QSO_WAIT_ROGER) {
         // CQ-RUN: we sent a report; expect their R<report> (then we send RR73).
-        if (!found) { register_miss("waiting for roger"); return; }
+        if (!found) {
+            // #219: same as WAIT_RPT - stepped on and getting nowhere is when a
+            // WSJT-X operator moves, so do it here too, under the same bounds.
+            relocate_tone_if_clashing(false);
+            register_miss("waiting for roger");
+            return;
+        }
 
         if (got_rr73 || got_73) {
             if (send_next(FT8_TX_KIND_73, target, freq, slot_sec, "73", FT8_QSO_WAIT_DONE))
@@ -2504,6 +2557,7 @@ void ft8_qso_advance(int64_t slot_sec)
             // refresh our R<report> to this slot's fresh SNR before re-sending,
             // same WSJT-X behaviour as the CQ-run WAIT_ROGER path above.
             if (found && !fd_mode) refresh_our_report(snr_db, true, target, freq, slot_sec);
+            relocate_tone_if_clashing(false);   // #219, same bounds
             register_miss("waiting for RR73");
             return;
         }
