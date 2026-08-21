@@ -46,6 +46,13 @@ the failure happens rather than in a message that disappears. *(Michael KZ4LY)*
     The keys are along the top, all the same size: **▲ ▼ ◀ ▶**, **Enter**,
     **Back**, **BS**, the **keyboard** toggle, and **Close**.
 
+    **With the snap-on keyboard attached you can skip all of that** and drive
+    the radio's menus directly: arrows to move, Enter to select, digits to type
+    into a numeric field, Backspace to delete, and **Esc to leave the screen**.
+    Typing a value is far quicker than the on-screen keys.
+
+    Or open it without touching the screen at all: **Ctrl+R**.
+
 === "In the browser"
 
     **Radio ▸ Radio menus**

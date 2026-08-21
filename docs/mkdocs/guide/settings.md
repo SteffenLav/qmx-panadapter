@@ -296,7 +296,50 @@ It does nothing at all until both your **callsign and grid** are set, and it is 
 
 **FT8 Filters** — Include/exclude stations, set auto-reply priority, enable robot mode, grey-listing (see [FT8 Receive](ft8-rx.md) for details).
 
-**Keyboard** — M5Stack Tab5 snap-on keyboard support (if connected).
+**Keyboard** — M5Stack Tab5 snap-on keyboard support (if connected). See
+[The snap-on keyboard](#the-snap-on-keyboard) below for everything it can do.
+
+## The snap-on keyboard
+
+If the M5Stack Tab5 70-key snap-on keyboard is attached it is detected at boot
+and needs no configuration. It does considerably more than fill in text fields.
+
+**Typing.** Any window with text fields takes the keyboard directly — WiFi
+setup, your callsign and grid, CQ messages, FT8 filters, memory channels.
+**Tab** moves between fields, **Enter** saves and **Escape** cancels.
+
+**Getting around.**
+
+| Key | Does |
+|---|---|
+| Arrows | Scroll the settings drawer and the manual. Press repeatedly and it scrolls further each time |
+| Page Up / Page Down | Move a whole screen |
+| Enter | The confirming button of whatever is open — Save, Transmit, Yes |
+| Escape | Closes whatever is in front of you, including the settings drawer and the memory page |
+
+**Shortcuts.** Hold **Ctrl** and press a letter:
+
+| | | | |
+|---|---|---|---|
+| **Ctrl+R** Radio menus | **Ctrl+M** User manual | **Ctrl+H** Need guidance? | **Ctrl+L** QSO log |
+| **Ctrl+K** Memory channels | **Ctrl+P** Panadapter | **Ctrl+F** FT8 | **Ctrl+S** Settings drawer |
+| **Ctrl+D** Display off | | | |
+
+Any key wakes the display again afterwards.
+
+**Changing them.** The web page has a shortcuts editor — **Miscellaneous ▸
+Keyboard shortcuts**. There are 25 actions to choose from, including zoom,
+brightness, releasing the radio to its own front panel, and every setup window.
+**Alt** is left completely unused so you can put your own bindings there without
+disturbing anything. See [The web interface](web-ui.md).
+
+!!! note "Nothing that transmits can be given a shortcut"
+    Deliberately. A button you deliberately press is one thing; a two-key
+    combination that a slipped finger can produce is another. Calling CQ,
+    transmitting and tuning stay where you can see them.
+
+This keyboard has no Shift and no Fn key — **Sym** and **Aa** are handled inside
+the keyboard itself, so **Ctrl** and **Alt** are what shortcuts can use.
 
 ## Audio & DSP
 

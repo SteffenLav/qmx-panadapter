@@ -2219,3 +2219,98 @@ Full notes: `docs/release-notes-v1.8.9.md`.
   corrected — `/api/cmd` answers an unknown action with **HTTP 200**, not 400.
 - Frequency label re-asserted from the FA poll; `#154` mutex-init audit;
   `#199` FT8 monitor-pool double-build root-caused.
+
+### Shipped in v1.9.0 — 2026-08-21
+
+**The web page is fast again, the snap-on keyboard drives the whole app, and
+updating from the device can finally be seen working.**
+
+**Web UI performance — three separate faults, all measured rather than guessed.**
+
+- **The page was served UNCOMPRESSED**: 263 KB with `Cache-Control: no-store`,
+  so every visit re-downloaded all of it, on a link the 10 fps spectrum stream
+  already shares. Now gzipped at build time to 83 KB (3.2x) with an **ETag =
+  the running firmware's ELF hash**, so a reload of unchanged firmware is a 304.
+  A cold load went **~95 s → 1.5 s**. The compression is a CMake step, not a
+  committed artifact — `main/manual.bin` is the cautionary tale of a derived
+  file shipping stale.
+- **`esp_wifi_set_ps()` was never called**, so WiFi ran at IDF's default
+  `WIFI_PS_MIN_MODEM`. Outbound traffic was unaffected (the spot feeds always
+  worked), while inbound depended on the AP buffering for a sleeping radio.
+  Measured over 494/252 samples: HTTP failures **14.4% → 0.4%**, TCP **15.2% →
+  0.8%**, p90 latency **1137 ms → 543 ms**, with the router as a 0%-failure
+  control throughout. Now `WIFI_PS_NONE`, set from the `STA_START` handler so
+  all four `esp_wifi_start()` call sites are covered by one line.
+- **⛔ The page was evicting the spectrum WebSocket.** `httpd` closes its
+  least-recently-used session when the socket table fills, and
+  `httpd_sess.c` refreshes `lru_counter` in exactly ONE place — when a request
+  is **received** on that socket. `httpd_sess_update_lru_counter()` is a public
+  helper the component never calls. Our WS only ever *sends* and deliberately
+  never receives, so its position froze at the handshake and it was permanently
+  bottom of the pile; the browser's own `/api/status` and `/api/decodes` polling
+  was enough to get it purged. Measured session lifetimes **~10 s → ~28 s** from
+  the one-line fix, plus the counter refreshed while paused and
+  `max_open_sockets` 10 → 13.
+
+⚠ **An adaptive WS frame rate was built and REMOVED the same day.** Its premise
+was a "~12.7 KB/s link" measured while the page was still uncompressed and power
+save still on; re-measured afterwards, six identical 86 KB fetches ran at min
+9.9 / median 32.5 / max 74.7 KB/s. A **7.5x spread on identical work** means the
+link is LOSSY, not narrow, and rate control cannot help that. Its own telemetry
+confirmed it never engaged. The reasoning is kept as a comment in
+`webserver_ws.c` — measure the spread before reaching for it again.
+
+**The Tab5 snap-on keyboard (#233).**
+
+- Enter/Esc wired into the five modals that had buttons and no keyboard: FT8 TX
+  confirm, Antenna Tune (Esc only — it keys a carrier), the Reader, the guidance
+  panel and onboarding. Esc also backs out of the memory page and the drawer,
+  neither of which has a Cancel button.
+- ⛔ **A latent bug found on the way**: `ui_kbd_set_buttons()` stored ONE pair,
+  but these modals are built at boot and shown/hidden rather than created and
+  destroyed — so the LAST MODAL BUILT owned Enter and Esc for the whole session,
+  including while hidden. It is a registry now, and dispatch picks the entry
+  whose button is actually visible.
+- Arrows and PgUp/PgDn scroll the drawer and the manual, accelerating on
+  repeated presses. **True long-press repeat is impossible**: String mode reports
+  characters, never press/release, and holding a key produced two events 765 ms
+  apart. Normal mode (reg 0x20, bit7) would give key-up at the cost of
+  reimplementing the whole keymap — deliberately not taken.
+- **Shortcuts, built on measured bytes.** The driver had been receiving a
+  modifier byte with every keystroke and discarding it. Measured: **Ctrl = 0x01,
+  Alt = 0x04**, key in the first byte, payload `[char, modifier]`; Sym and Aa are
+  applied inside the keyboard's MCU. 25 actions, 9 bound by default, all Ctrl,
+  with Alt left free. **Nothing that transmits can be bound** — a chord may open
+  something, never key the radio.
+- **User-defined shortcuts**: NVS-persisted, edited from the web page. A binding
+  stores an ACTION ID, never a table position — appending an action is safe,
+  renumbering one silently repoints somebody's saved shortcut.
+
+**Update checking (#218).** 6 h → **30 min**, plus `update_check_now()` reachable
+three ways: long-press the Tab5 version (which did nothing when up to date —
+i.e. nearly always), tap it in the web page, or `/api/cmd
+{"action":"update_check"}`. The check task sleeps in 500 ms slices so a forced
+check does not wait out the interval. The **GitHub fallback is rate-limited to
+hourly** and keeps its WS pause — measured at 48,764 B and 3.7 s against
+latest.json's **139 B and 0.09 s**, which is why the small check no longer
+pauses the stream at all.
+
+**Field reports.**
+
+- **Randy N4OPI ×5.** TX power/SWR hidden behind the exchange status — that
+  whole strip rebuilt to lay out ACROSS rather than down, with the figures shown
+  only while transmitting. TX tone picker off by 1–2 slots (the draw reserved
+  34 px for the E/O letters, the click handler did not; error 0 at the left edge
+  and 1.83 slots at the right). "Busy: working …" and "QSO cancelled" never
+  clearing (a command outcome rendered as current state; now expires in 20 s).
+  A worked station staying green (`get_pinned_call()` gated on `s_target[0]`,
+  which deliberately survives completion for the final re-send; both accessors
+  now share one predicate — verified through a real QSO, released 84 ms after
+  the ADIF write). And **"Who is hearing me" silently truncating** at a 16 KB
+  response buffer and a 64-report cap, neither logged — now 64 KB/128 with both
+  limits reported, and **reproduced on the bench** hours later at exactly 128.
+- **COUNTRY replaces GRID** in the web decode list, spelled out.
+- **Don N2VGU**: the keyboard in Radio Menus, above.
+- Confirmation dialogs removed from ordinary operating actions (Call CQ, mid-QSO
+  Cancel, working a station, Antenna Tune). Destructive actions still ask.
+- Mid-QSO buttons equalised; the bottom-bar version colour 0x808080 → 0xC0C0C0.

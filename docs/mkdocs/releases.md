@@ -4,8 +4,22 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.8.9** — 2026-08-20
+**v1.9.0** — 2026-08-21
 
+**The web page is fast again, the snap-on keyboard drives the whole app, and updating from the device can finally be seen working.**
+
+- **Try the update.** v1.8.9 added updating from the device, but the offer only appears when a *newer* release exists — and at the time there was none. Now there is. Hold the version at the bottom of the Tab5, or tap it in the web page. **Do not want to wait for the 30-minute check?** Hold the version even while it says you are up to date and it checks there and then, showing `checking...` while it does.
+- **The web page loads in under two seconds instead of about ninety.** It was being sent uncompressed — 263 KB, on a link shared with the live spectrum stream — and is now 83 KB with a tag so a reload costs almost nothing.
+- **WiFi power saving is off.** It is right for a battery sensor and wrong for something serving web pages: the radio slept between beacons and relied on the access point to hold anything arriving. Outbound traffic was never affected, which is why the spot feeds always worked while the web page did not. Measured over 500 samples, requests that failed outright went from **14.4% to 0.4%**.
+- **The web page was killing the very stream it displayed.** The web server evicts its least-recently-used connection when it runs short of slots, and a connection's place in that queue is only refreshed when it *receives* something — the spectrum stream only ever sends. The browser's own polling was enough to get it thrown out every few seconds. That is the "reconnecting" some of you have seen for a long time.
+- **The snap-on keyboard drives the app.** It works in the radio's own menus (arrows, Enter, digits, backspace, Esc to leave), Enter and Escape work in every window with buttons, arrows and Page Up/Down scroll the drawer and the manual, and **Ctrl+R / M / L / K / P / F / S / H / D** open the common screens. **You can reassign all of it** from the web page — 25 actions, with Alt left free for your own. *(Don N2VGU)*
+- **Five fixes from Randy N4OPI.** The **TX power and SWR** readout was hidden behind the exchange status, and that whole strip is rebuilt to sit across the panel instead of stacked down it. The **TX tone picker** picked a slot one or two to the left of the click. **"Busy: working …"** and **"QSO cancelled"** never cleared. A **worked station stayed green** in the decode list. And **"Who is hearing me" was quietly discarding reports** — it stopped after 64 and said nothing; it now handles 128 and says when there were more.
+- **The decode list shows the country, spelled out**, where it used to repeat the grid square already in the message. *(Randy N4OPI)*
+- **The web page no longer asks you to confirm ordinary operating actions** — calling CQ, cancelling mid-QSO, working a station, starting Antenna Tune. Deleting things and installing firmware still ask.
+
+## Previous Releases
+
+### v1.8.9 — 2026-08-20
 **The Tab5 updates itself now, and a transmitter that could be left keyed no longer can.**
 
 - **The radio can no longer be left transmitting.** *(Roy KI0ER)* His QMX transmitted continuously until he power-cycled it, with the Tab5 running normally throughout. A USB timeout mid-burst made every command fail — including the two that *stop* transmission — the burst finished, and although the link recovered two seconds later nothing ever re-sent them. The stop command is now retried immediately, and if it still cannot get through it is handed to the radio-control task, which keeps re-sending it on every cycle that works until the radio is demonstrably back in receive.
@@ -20,8 +34,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **The frequency readout could stick** on an old value while the spectrum and the radio were both correct.
 - **Spur suppression has been withdrawn** from the settings drawer. It only ever worked at ×1 zoom, which is not where anyone looks at spurs, and with a real antenna the problem is far smaller than bench measurements suggested. The work is kept for a future release.
 - **Every web API command is documented**, and the error behaviour is now described correctly.
-
-## Previous Releases
 
 ### v1.8.8 — 2026-08-20
 **If the Tab5 ever restarts on you, the diagnostic download now says why.**

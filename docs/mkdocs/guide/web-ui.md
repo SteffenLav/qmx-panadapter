@@ -79,8 +79,14 @@ have actually changed, so they cost the WiFi link almost nothing between refresh
 
 In FT8/FT4 the browser used to show a transmit banner and
 nothing else - you could see that your radio was transmitting, but not who was
-answering. The FT8 panel now carries the **decode list**: callsign, message, grid,
+answering. The FT8 panel now carries the **decode list**: callsign, message, **country**,
 SNR, DT, audio tone, **distance and bearing**, slot (E/O) and age.
+
+The country column replaced a GRID column, because the grid was already sitting
+in the message text next to it. The country is the one thing in that row you
+cannot read off the message, and unlike the Tab5 — where it has to squeeze into
+three letters — the browser has room to spell it out. Both screens work it out
+the same way from the callsign, so they cannot disagree. *(Randy N4OPI)*
 
 The **KM** and **BRG** columns arrived in v1.8.3 (asked for by Tony Abbey). They sit
 after the tone, in the same order the Tab5 uses, and the header reads **MI** instead
@@ -284,8 +290,29 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 **Miscellaneous ▲**:
 
 - **Tab5 screenshot** — current display as PNG, including any open pop-up (band/mode dropdown), not just the base screen
+- **Keyboard shortcuts** — assign what the Tab5's snap-on keyboard does (see below)
 - **Reset settings** — clear stored settings back to defaults (see [Troubleshooting](../reference/troubleshooting.md))
 - **Reset WiFi** — clear just the WiFi/network state
+
+### Keyboard shortcuts
+
+**Miscellaneous ▸ Keyboard shortcuts** assigns what the Tab5's snap-on keyboard
+does. Each row is a modifier, a key and an action; **Add shortcut** makes a new
+one, **Remove** deletes it, and **Restore defaults** puts back the nine the
+firmware ships with.
+
+There are **25 actions** — opening any of the setup windows, the manual, the log,
+the radio menus, plus zoom in and out, brighter and dimmer, flat spectrum, and
+releasing the radio to its own front panel. **Alt is left completely unused** by
+the defaults, so it is free for your own bindings.
+
+The editor is here rather than on the Tab5 for a simple reason: assigning
+shortcuts is a setup job done once, and doing it on the Tab5 would mean typing
+on the very keyboard you are configuring.
+
+!!! note "Nothing that transmits can be bound"
+    A button you deliberately press is one thing; a two-key combination that a
+    slipped finger can produce is another.
 
 ## LoTW Upload
 

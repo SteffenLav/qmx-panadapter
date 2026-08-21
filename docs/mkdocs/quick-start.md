@@ -164,6 +164,17 @@ colours, and works the same way.
 **Nothing is downloaded unless you ask for it.** The first thing you are ever
 offered is a download, not one already in progress.
 
+### Checking straight away
+
+The Tab5 looks for a new release **every 30 minutes**, so an announcement can
+take that long to show up. If you have just read that a release is out and want
+to see it now, **hold the version even while it says you are up to date**. It
+shows `checking...` and asks immediately. Tapping the version in the web page
+does the same.
+
+That is also the quickest way to satisfy yourself the whole mechanism works
+before you ever need it.
+
 Your settings, QSO log, LoTW certificate and memories are untouched by an
 update. The previous firmware is also kept, so a failed update falls back to it
 by itself.
