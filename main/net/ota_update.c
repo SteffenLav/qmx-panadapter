@@ -139,6 +139,31 @@ static void ota_task(void *arg)
         // download - measured as "could not reach the download (0xffffffff)" on
         // the first real attempt. The bundle covers both hosts.
         .max_redirection_count = 5,
+        // ⛔ THE ACTUAL ROOT CAUSE OF THAT SAME ERROR, FOUND 2026-08-21 - the
+        // redirect above only got half fixed. esp_http_client's response buffer
+        // defaults to 512 bytes (DEFAULT_HTTP_BUF_SIZE), and github.com's 302
+        // itself carries 5,159 bytes of headers - dominated by a large
+        // Content-Security-Policy header, MEASURED with a plain `curl -I` against
+        // the real release URL. The header cannot fit, esp_http_client logs
+        // "Out of buffer", and esp_https_ota_begin fails with the same generic
+        // ESP_FAIL this file already had a comment about - so the earlier fix
+        // addressed FOLLOWING the redirect, never RECEIVING its headers.
+        //
+        // This means OTA has likely never completed a real download from GitHub
+        // on ANY shipped version since it was introduced in v1.8.9: the redirect
+        // fix alone was never enough, and nothing exercised the real CDN response
+        // until this was tested end-to-end for the first time.
+        .buffer_size       = 8192,
+        // ⛔ buffer_size ALONE WAS NOT ENOUGH - measured on hardware, still failed
+        // identically after adding it. The real fault is on the SEND side:
+        // http_client_prepare_first_line() builds "GET <path>?<query> HTTP/1.1"
+        // into a buffer sized by buffer_size_TX, not buffer_size (that one only
+        // covers what is RECEIVED). After GitHub's redirect, the request's own
+        // path+query for the second hop IS the entire signed CDN URL - the same
+        // ~930-byte string measured in the Location header - so building the
+        // outgoing request line is what actually overflowed a 512-byte tx buffer,
+        // not receiving GitHub's response. Both directions need headroom.
+        .buffer_size_tx    = 8192,
     };
     esp_https_ota_config_t cfg = { .http_config = &http };
 
@@ -167,10 +192,32 @@ static void ota_task(void *arg)
         ESP_LOGW(TAG, "incoming: %s %s", incoming.project_name, incoming.version);
     }
 
+    // ⛔ HARDWARE WATCHDOG RESET, found on hardware 2026-08-21, right at the end
+    // of a real download - a cyan flash, then rst:0x7 (HP_SYS_HP_WDT_RESET), the
+    // system-level watchdog rather than a clean esp_restart(). Continuous audio
+    // ring overflows (tens of thousands of samples/s dropped) ran for the WHOLE
+    // download beforehand, not just at the crash - the same "interrupts/cache
+    // disabled too long" mechanism this board's cyan-flash bug already documents,
+    // but sustained for minutes instead of one frame.
+    //
+    // Traced to the buffer_size fix immediately above. esp_https_ota.c sizes its
+    // OWN per-call image chunk as MAX(http_config->buffer_size, DEFAULT_OTA_BUF_SIZE)
+    // - so raising buffer_size to 8192 to fit GitHub's redirect headers ALSO made
+    // every download chunk 8192 bytes instead of a few hundred: one continuous
+    // read+decrypt+flash-write burst per call, ~400 of them back to back over a
+    // 3.2 MB image, with NO yield point anywhere in this loop or inside IDF's own
+    // esp_https_ota_perform(). Each burst is exactly the class of stretch the
+    // cyan-flash rule warns about, just repeated instead of one-off.
+    //
+    // A single explicit yield per chunk is the fix, not a smaller buffer_size -
+    // shrinking it would only trade this bug for the "Out of buffer" one it was
+    // added to solve. 1 tick (1 ms @ CONFIG_FREERTOS_HZ=1000) is enough to hand
+    // the scheduler a real gap without measurably slowing a background download.
     int total = esp_https_ota_get_image_size(h);
     while ((err = esp_https_ota_perform(h)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
         int done = esp_https_ota_get_image_len_read(h);
         s_pct = (total > 0) ? (int)((int64_t)done * 100 / total) : 0;
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 
     if (err != ESP_OK) {
