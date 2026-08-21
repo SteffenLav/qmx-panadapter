@@ -2314,3 +2314,54 @@ pauses the stream at all.
 - Confirmation dialogs removed from ordinary operating actions (Call CQ, mid-QSO
   Cancel, working a station, Antenna Tune). Destructive actions still ask.
 - Mid-QSO buttons equalised; the bottom-bar version colour 0x808080 → 0xC0C0C0.
+
+### Shipped in v1.9.1 — 2026-08-21
+
+**A hotfix for the OTA download path announced in v1.9.0. It never worked
+against a real download, on any version, ever, until this fix.**
+
+Two bugs, both in the same `esp_http_client_config_t` block, both found on
+hardware in the FIRST real attempt to download an actual release over OTA
+since the feature shipped in v1.8.9.
+
+- **The connection could never open.** `esp_http_client`'s response buffer
+  defaults to 512 bytes; `github.com`'s own 302 redirect carries 5,159 bytes
+  of headers (measured with `curl -I` against the real release URL, dominated
+  by a large Content-Security-Policy header). Every download failed instantly
+  with "could not reach the download (0xffffffff)" — the offer in v1.9.0
+  worked correctly, the download it pointed at could not. Fixed with
+  `buffer_size = 8192`. That alone was not enough: `http_client_prepare_first_line()`
+  builds the outgoing request line into a SEPARATE buffer sized by
+  `buffer_size_tx`, and after the redirect the request's own path+query for
+  the second hop IS the entire signed CDN URL (~930 bytes, also measured) —
+  overflowing a 512-byte tx buffer on the send side. Fixed with
+  `buffer_size_tx = 8192`.
+- **Once that was fixed, a genuine hardware watchdog reset appeared right at
+  100%.** `esp_https_ota.c` sizes its own per-call image chunk as
+  `MAX(http_config->buffer_size, DEFAULT_OTA_BUF_SIZE)`, so the same fix also
+  made every download chunk 8192 bytes instead of a few hundred — ~400
+  continuous read+decrypt+flash-write bursts back to back over a 3.2 MB
+  image, with no yield point anywhere in the loop. Continuous, severe audio-ring
+  overflow (tens of thousands of samples/s dropped, every second) ran for the
+  entire download, escalating to `rst:0x7 (HP_SYS_HP_WDT_RESET)` — the same
+  "interrupts/cache disabled too long" mechanism this board's documented
+  cyan-flash bug already describes, sustained for minutes instead of one
+  frame. Fixed with one `vTaskDelay(1)` per chunk.
+
+**Verified on hardware, twice, against the real published release asset**: a
+full download completed 0 → 100% in ~4m18s with zero crashes and zero audio
+drops for the entire capture, printing the code's own success line. A second
+run confirmed the fix survives a fresh boot.
+
+⚠ **Consequence for already-deployed units**: this is client-side, so no
+future release can OTA-update a unit that does not already have this fix — its
+own currently-running code performs the (broken) download regardless of
+target version. Every v1.8.9/v1.9.0 unit needs one cable flash to reach code
+that can OTA at all; every update after that works normally.
+
+⚠ Also recorded for the release process: `esp_https_ota_finish()` calls
+`esp_ota_set_boot_partition()` unconditionally on success, so a bench OTA test
+against a partially-fixed build silently repoints the next boot at the
+just-downloaded (possibly older/unfixed) image via `otadata` — a plain reflash
+of `factory` does not undo this. Recovery: `esptool erase_region <otadata
+offset> <size>`, which returns it to blank and falls back to `factory`.

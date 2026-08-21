@@ -4,8 +4,20 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.9.0** — 2026-08-21
+**v1.9.1** — 2026-08-21
 
+**A hotfix: updating from the device did not work over a real download, on any version, ever, until this fix.**
+
+- v1.9.0 was meant to be the first release where the OTA offer could actually be used; testing it for real for the first time turned up two bugs.
+- **The device could not even open the connection.** GitHub's own redirect response carries more header data than the firmware's HTTP client was sized to receive - every download failed instantly. This is why v1.9.0's offer downloaded nothing for anyone who tried it.
+- **Once that was fixed, a second bug appeared: the device could crash and reboot right at the end of a successful download.** The same fix made each downloaded chunk larger, and the download loop never yielded control back to the rest of the firmware while processing it - audio and FFT were starved badly enough, for long enough, to eventually trip a hardware reset.
+- Both fixed and **verified on hardware**: a real download against the live release completed twice, with a full serial capture proving zero crashes and zero audio interruption throughout.
+- **If you are on v1.8.9 or v1.9.0, this needs one cable flash.** Your device's own broken download code cannot fetch any release, including this one - it fails the same way regardless of what is on the other end. After that one flash, OTA works normally from then on.
+- Everything else is unchanged from v1.9.0 - the faster web page, WiFi power saving, the WebSocket eviction fix, and the snap-on keyboard shortcuts. This release exists solely to fix the OTA download path.
+
+## Previous Releases
+
+### v1.9.0 — 2026-08-21
 **The web page is fast again, the snap-on keyboard drives the whole app, and updating from the device can finally be seen working.**
 
 - **Try the update.** v1.8.9 added updating from the device, but the offer only appears when a *newer* release exists — and at the time there was none. Now there is. Hold the version at the bottom of the Tab5, or tap it in the web page. **Do not want to wait for the 30-minute check?** Hold the version even while it says you are up to date and it checks there and then, showing `checking...` while it does.
@@ -17,7 +29,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **The decode list shows the country, spelled out**, where it used to repeat the grid square already in the message. *(Randy N4OPI)*
 - **The web page no longer asks you to confirm ordinary operating actions** — calling CQ, cancelling mid-QSO, working a station, starting Antenna Tune. Deleting things and installing firmware still ask.
 
-## Previous Releases
 
 ### v1.8.9 — 2026-08-20
 **The Tab5 updates itself now, and a transmitter that could be left keyed no longer can.**
@@ -403,7 +414,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.9.0.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.9.1.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 
