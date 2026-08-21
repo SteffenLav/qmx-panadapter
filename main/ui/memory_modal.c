@@ -1037,6 +1037,11 @@ void memory_modal_init(void)
     modal_build();
 }
 
+// Esc from the physical keyboard. There is no Close button to click - this
+// page dismisses by backdrop tap or swipe-down - so ui.c asks directly.
+void memory_modal_close_now(void) { modal_close(); }
+bool memory_modal_is_open(void)   { return s_open; }
+
 void memory_modal_show(void)
 {
     modal_build();

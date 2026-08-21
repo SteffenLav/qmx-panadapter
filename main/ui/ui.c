@@ -10454,7 +10454,32 @@ static void kbd_text_cb(const char *text, uint8_t mods, void *arg)
         }
     }
 
-    if (!display_lock(50)) return;
+    // ⛔ 50 ms WAS TOO SHORT, AND IT DROPPED KEYS IN SILENCE. taskLVGL holds
+    // this lock through every flush, and on this board a flush goes through the
+    // software 90-degree rotation at ~13 fps - so a keystroke that lands in the
+    // wrong 50 ms window was simply discarded. The operator's report was
+    // "several shortcuts needed to be pressed twice", and the log shows exactly
+    // that: the event arrives every time, the action only sometimes.
+    //
+    // A keypress is a human being asking for something; waiting a moment for
+    // the lock is always better than ignoring them. And if it ever does time
+    // out, SAY SO - a silently dropped key is indistinguishable from a bug in
+    // whatever the key was supposed to do.
+    if (!display_lock(500)) {
+        ESP_LOGW(TAG, "kbd: dropped \"%s\" (mod=0x%02X) - display lock busy 500 ms",
+                 text, mods);
+        return;
+    }
+
+    // Asleep: ANY key wakes the screen and is swallowed, exactly as the waking
+    // touch is (see pinch_poll_cb). Ctrl+D turns the display off, so the key
+    // that turns it back on must not also do whatever it normally does.
+    if (s_disp_asleep) {
+        display_sleep_wake();
+        ESP_LOGI(TAG, "kbd: \"%s\" woke the display (key swallowed)", text);
+        display_unlock();
+        return;
+    }
 
     // Shortcuts run BEFORE everything else, so they work from any screen - and
     // a modified key NEVER falls through to the typing path, whether or not it
@@ -10518,6 +10543,22 @@ static void kbd_text_cb(const char *text, uint8_t mods, void *arg)
             else if (!strcasecmp(text, "pgup")) dy = -page;
             else if (!strcasecmp(text, "pgdn")) dy =  page;
             if (dy) {
+                // Does HOLDING an arrow auto-repeat? We cannot tell from the
+                // protocol: String mode reports characters, never press and
+                // release, so there is no key-up to stop a repeat we invent
+                // ourselves. The only safe way to give the operator
+                // "long-press should repeat" is if the keyboard's own MCU
+                // already sends repeats - so measure the gap between
+                // consecutive arrows and say so. A burst of ~100 ms gaps while
+                // a key is held means the hardware repeats and there is nothing
+                // to build; single events mean it does not.
+                static int64_t last_arrow_us = 0;
+                int64_t now_us = esp_timer_get_time();
+                if (last_arrow_us)
+                    ESP_LOGI(TAG, "kbd arrow: %s (+%lld ms since the last one)",
+                             text, (long long)((now_us - last_arrow_us) / 1000));
+                last_arrow_us = now_us;
+
                 lv_obj_scroll_by_bounded(sc, 0, -dy, LV_ANIM_OFF);
                 display_unlock();
                 return;
@@ -10529,8 +10570,22 @@ static void kbd_text_cb(const char *text, uint8_t mods, void *arg)
         lv_obj_t *b = kbd_visible_btn(true);
         if (b) lv_obj_send_event(b, LV_EVENT_CLICKED, NULL);
     } else if (!c && !strcasecmp(text, "esc")) {
+        // Esc means "back out of whatever is in front of me", in that order of
+        // nesting. The registry covers every modal that HAS a Cancel/Close
+        // button; the two things that do not are handled after it, because both
+        // can be underneath one of those modals.
         lv_obj_t *b = kbd_visible_btn(false);
-        if (b) lv_obj_send_event(b, LV_EVENT_CLICKED, NULL);
+        if (b) {
+            lv_obj_send_event(b, LV_EVENT_CLICKED, NULL);
+        } else if (memory_modal_is_open()) {
+            // No Close button on that page - it dismisses by backdrop tap or
+            // swipe-down, neither of which a keyboard can produce.
+            memory_modal_close_now();
+        } else if (s_drawer_open) {
+            // The drawer is not a modal and has no Cancel either; it closes by
+            // swiping or tapping the scrim.
+            ui_set_drawer_open(false);
+        }
     } else if (ta) {
         // Everything else edits the focused textarea.
         if (c) {
