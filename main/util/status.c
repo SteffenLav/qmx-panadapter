@@ -220,8 +220,16 @@ static void status_task(void *arg)
             // until proven otherwise"), and the remedy it prescribes: a
             // file-local static is safe because status_task is the ONLY caller
             // and there is exactly one of it.
-            static char running[32], over_s[32], latest_s[32];
-            short_ver(esp_app_get_description()->version, running, sizeof(running));
+            // The RUNNING version is shown VERBATIM, not shortened - a dev
+            // build's "-N-gHASH[-dirty]" suffix is exactly the fact that was
+            // hidden here before, and hiding it is what let the dev Tab5 run
+            // a drifted build (git HEAD one commit past the v1.9.1 tag) while
+            // both screens still read a clean "v1.9.1", indistinguishable from
+            // the real release. over_s/latest_s stay shortened - those always
+            // come from a published release tag, never a local build, so
+            // there is nothing to hide there in the first place.
+            static char running[48], over_s[32], latest_s[32];
+            snprintf(running, sizeof(running), "%s", esp_app_get_description()->version);
 
             int  opct = 0;
             static char omsg[128], over[32], latest[32];

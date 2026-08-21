@@ -374,6 +374,18 @@
   button.bot-btn { font: inherit; }
   .dim { color: var(--dim); font-size: 0.75rem; white-space: nowrap; }
 
+  /* "Who is hearing me" time-window chips and sortable table headers. Same
+     on/off language as #flatbtn: filled+dark-text means selected. */
+  .psk-win-btn {
+    font: inherit; cursor: pointer; border-radius: 6px; padding: 4px 10px;
+    border: 1px solid #4a545e; background: #1f2937; color: var(--fg);
+  }
+  .psk-win-btn:hover { border-color: var(--accent); }
+  .psk-win-btn.on { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+  th.sortable:hover { color: var(--accent) !important; }
+  th.sortable .arrow { color: var(--accent); font-size: 0.8em; margin-left: 2px; }
+
   /* Bottom-bar grouped menus (Log / Files / Reset) - declutter the row of
      ~11 flat buttons into 3 that pop a small menu UPWARD (bar sits at the
      bottom). The underlying <a> items keep their IDs so their handlers are
@@ -596,6 +608,10 @@
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
         <strong id="dec-title" style="color:#ffa040">Decode list</strong>
         <span id="dec-count" style="color:var(--dim); font-size:13px"></span>
+        <!-- Only shown once a column click has replaced the device's own
+             ordering, so clicking any header does not leave the operator
+             wondering how to get the CQ-callers-on-top view back. -->
+        <a href="#" id="dec-order-reset" style="color:var(--dim); display:none">↺ CQ callers on top</a>
       </div>
       <div style="max-height:46vh; overflow:auto; border:1px solid #333; border-radius:6px;">
         <!-- Monospace, matching the Tab5 (Gyula HA3HZ: "the font of the reception
@@ -800,6 +816,12 @@
         <strong style="color:#ffa040; font-size:17px;">Who is hearing me</strong>
         <div style="flex:1"></div>
         <button type="button" id="prop-close" class="bot-btn">Close</button>
+      </div>
+      <div id="psk-win-row" style="display:flex; gap:6px; margin-bottom:8px;">
+        <button type="button" class="psk-win-btn" data-min="15">15 min</button>
+        <button type="button" class="psk-win-btn" data-min="30">30 min</button>
+        <button type="button" class="psk-win-btn" data-min="360">6 h</button>
+        <button type="button" class="psk-win-btn on" data-min="1440">24 h</button>
       </div>
       <div id="prop-summary" style="color:var(--dim); margin-bottom:8px;"></div>
       <div id="prop-body" style="overflow:auto;"></div>
@@ -2295,6 +2317,124 @@ async function scSave(payload, note) {
     scSave({ reset: true }, "Defaults restored."));
 })();
 
+/* All state for the "Who is hearing me" modal. The device always answers
+   with its fixed PSK_RX_WINDOW_S (24 h) worth of reports and each one
+   carries its own heard-at timestamp, so the shorter windows (15 min / 30
+   min / 6 h) and the sort are both pure client-side re-slices of that one
+   fetch - no extra round trip per window or per column click. */
+const pskState = {
+  d: null, mi: false, unit: " km",
+  windowMin: 1440,             // 24h default - matches the one query the device makes
+  sortKey: "km", sortDir: "desc",
+};
+/* Column definitions: how to pull a comparable value out of a report, and
+   which direction is the useful default the FIRST time that column is
+   clicked (distance/SNR: biggest first: bearing/band/mode/call/country: A-Z
+   or low-to-high; age: smallest-first, i.e. most recent report on top). */
+const PSK_COLS = {
+  call: { label: "Receiver", get: r => r.call || null,  type: "str", def: "asc"  },
+  dxcc: { label: "Country",  get: r => r.dxcc || null,  type: "str", def: "asc"  },
+  km:   { label: "Distance", get: r => (r.km === undefined || r.km === null || r.km < 0) ? null : r.km, type: "num", def: "desc" },
+  brg:  { label: "Bearing",  get: r => r.brg === undefined ? null : r.brg, type: "num", def: "asc" },
+  snr:  { label: "SNR",      get: r => r.snr === undefined ? null : r.snr, type: "num", def: "desc" },
+  f:    { label: "Band",     get: r => r.f || null,      type: "num", def: "asc"  },
+  mode: { label: "Mode",     get: r => r.mode || null,   type: "str", def: "asc"  },
+  age:  { label: "Age",      get: r => r.t ? (Date.now() / 1000 - r.t) : null, type: "num", def: "asc" },
+};
+function pskSetWindow(min) {
+  pskState.windowMin = min;
+  document.querySelectorAll(".psk-win-btn").forEach(b =>
+    b.classList.toggle("on", Number(b.dataset.min) === min));
+  pskRenderTable();
+}
+function pskSetSort(key) {
+  if (pskState.sortKey === key) {
+    pskState.sortDir = pskState.sortDir === "asc" ? "desc" : "asc";
+  } else {
+    pskState.sortKey = key;
+    pskState.sortDir = PSK_COLS[key].def;
+  }
+  pskRenderTable();
+}
+function pskRenderTable() {
+  const d = pskState.d;
+  const body = document.getElementById("prop-body");
+  const sum  = document.getElementById("prop-summary");
+  if (!d) return;
+  const winSec = pskState.windowMin * 60;
+  const nowS = Date.now() / 1000;
+  const all = d.reports || [];
+  // The device's own query is a fixed 24h, so every shorter window is just
+  // "keep the reports young enough" - a report missing t (should not
+  // happen) is treated as too old to include rather than shown with an
+  // unknown age.
+  const reps = all.filter(r => r.t && (nowS - r.t) <= winSec);
+  const pskDist = v => (v === null) ? null : Math.round(pskState.mi ? v * 0.621371 : v);
+  const winTxt = pskState.windowMin >= 60
+    ? (pskState.windowMin / 60) + (pskState.windowMin === 60 ? " hour" : " hours")
+    : pskState.windowMin + " min";
+  // Recomputed FOR THE SELECTED WINDOW, not the device's fixed-24h totals -
+  // otherwise picking "15 min" would still claim the 24h receiver count.
+  const uniqueRx = new Set(reps.map(r => r.call).filter(Boolean)).size;
+  const maxKm = reps.reduce((m, r) => (r.km !== undefined && r.km !== null && r.km >= 0 && r.km > m) ? r.km : m, -1);
+  sum.textContent = reps.length
+    ? (uniqueRx + " receiver(s), furthest " +
+       (pskDist(maxKm >= 0 ? maxKm : null) !== null ? pskDist(maxKm) + pskState.unit : "unknown") +
+       ", last " + winTxt +
+       ", updated " + (d.age_s >= 0 ? d.age_s + " s ago" : "never"))
+    : "";
+  if (!reps.length) {
+    body.innerHTML = '<p style="color:var(--dim)">Nobody has reported hearing you in the last ' + winTxt + '. ' +
+                     'That is the normal answer if you have not transmitted - it is not an error.</p>';
+    return;
+  }
+  let notice = "";
+  /* A cut-short answer must never be presented as the whole picture: the
+     reports that did not fit are missing, not absent from the collector.
+     Only relevant at the full 24h window - a shorter window that already
+     fits inside what WAS read cannot be missing anything of its own. */
+  if (d.truncated && pskState.windowMin >= 1440) {
+    notice = '<p style="color:#ffa040">Showing ' + reps.length +
+             ' reports - the collector had more for the last ' + winTxt +
+             ' than this device could read in one query, so older ones may be missing. ' +
+             'pskreporter.info has the complete list.</p>';
+  }
+  const col = PSK_COLS[pskState.sortKey];
+  const dir = pskState.sortDir === "asc" ? 1 : -1;
+  const sorted = reps.slice().sort((a, b) => {
+    const va = col.get(a), vb = col.get(b);
+    if (va === null && vb === null) return 0;
+    if (va === null) return 1;   // missing values always sink to the bottom
+    if (vb === null) return -1;
+    if (col.type === "str") return dir * String(va).localeCompare(String(vb));
+    return dir * (va - vb);
+  });
+  const arrow = key => pskState.sortKey === key
+    ? '<span class="arrow">' + (pskState.sortDir === "asc" ? "▲" : "▼") + '</span>' : "";
+  const th = key => '<th class="sortable" onclick="pskSetSort(\'' + key + '\')">' +
+                     PSK_COLS[key].label + arrow(key) + '</th>';
+  body.innerHTML = notice +
+    '<table style="width:100%; border-collapse:collapse;">' +
+    '<tr style="color:#ffa040; text-align:left;">' +
+    th("call") + th("dxcc") + th("km") + th("brg") + th("snr") + th("f") + th("mode") + th("age") +
+    '</tr>' +
+    sorted.map(r => {
+      const age = r.t ? Math.max(0, Math.round(Date.now() / 1000 - r.t)) : null;
+      const ageS = age === null ? "&mdash;" : (age < 90 ? age + " s" : Math.round(age / 60) + " min");
+      return '<tr style="border-top:1px solid #2a2a2a">' +
+        '<td>' + (r.call || "") + '</td>' +
+        '<td style="color:var(--dim)">' + (r.dxcc || "") + '</td>' +
+        '<td>' + ((r.km !== undefined && r.km !== null && r.km >= 0)
+                    ? pskDist(r.km) + pskState.unit : "&mdash;") + '</td>' +
+        '<td style="color:var(--dim)">' + (r.brg !== undefined ? r.brg + "°" : "&mdash;") + '</td>' +
+        // SNR is OMITTED by the device when the reporter did not supply one -
+        // 0 dB is a real report, so absence must not render as zero.
+        '<td>' + (r.snr !== undefined ? (r.snr > 0 ? "+" : "") + r.snr + " dB" : "&mdash;") + '</td>' +
+        '<td style="color:var(--dim)">' + (r.f ? (r.f / 1e6).toFixed(3) + " MHz" : "") + '</td>' +
+        '<td style="color:var(--dim)">' + (r.mode || "") + '</td>' +
+        '<td style="color:var(--dim)">' + ageS + '</td></tr>';
+    }).join("") + '</table>';
+}
 async function propOpen() {
   document.getElementById("prop-modal").style.display = "";
   pauseWs();                       // same courtesy every other fetch pays here
@@ -2309,67 +2449,21 @@ async function propOpen() {
                        'Turn on "Propagation feedback" in Settings.</p>';
       return;
     }
-    const reps = d.reports || [];
-    // The DISTINCT receiver count is the honest headline: ten reports from one
-    // receiver says far less about propagation than one each from ten.
     /* Honour the miles setting, like the decode list does (Randy N4OPI - this
        panel showed km while the decode list showed miles on the same device).
        One conversion, one place, so the two tables cannot disagree. */
-    const pskMi   = !!d.miles;
-    const pskUnit = pskMi ? " mi" : " km";
-    const pskDist = v => (v === undefined || v === null || v < 0)
-                          ? null : Math.round(pskMi ? v * 0.621371 : v);
-    /* State the window instead of hardcoding "24 hours" in the prose - the
-       firmware owns it, and Randy N4OPI was left asking "I'm not sure how long
-       the history window is". */
-    const winTxt = (d.window_h ? d.window_h : 24) + " hours";
-    sum.textContent = reps.length
-      ? (d.receivers + " receiver(s), furthest " +
-         (pskDist(d.max_km) !== null ? pskDist(d.max_km) + pskUnit : "unknown") +
-         ", last " + winTxt +
-         ", updated " + (d.age_s >= 0 ? d.age_s + " s ago" : "never"))
-      : "";
-    if (!reps.length) {
-      body.innerHTML = '<p style="color:var(--dim)">Nobody has reported hearing you in the last ' + winTxt + '. ' +
-                       'That is the normal answer if you have not transmitted - it is not an error.</p>';
-      return;
-    }
-    /* A cut-short answer must never be presented as the whole picture: the
-       reports that did not fit are missing, not absent from the collector. */
-    if (d.truncated) {
-      body.innerHTML = '<p style="color:#ffa040">Showing ' + reps.length +
-                       ' reports - the collector had more for the last ' + winTxt +
-                       ' than this device could read in one query, so older ones may be missing. ' +
-                       'pskreporter.info has the complete list.</p>';
-    } else {
-      body.innerHTML = '';
-    }
-    reps.sort((a, b) => (b.km || 0) - (a.km || 0));
-    body.innerHTML +=
-      '<table style="width:100%; border-collapse:collapse;">' +
-      '<tr style="color:#ffa040; text-align:left;">' +
-      '<th>Receiver</th><th>Country</th><th>Distance</th><th>Bearing</th><th>SNR</th><th>Band</th><th>Mode</th><th>Age</th></tr>' +
-      reps.map(r => {
-        const age = r.t ? Math.max(0, Math.round(Date.now() / 1000 - r.t)) : null;
-        const ageS = age === null ? "&mdash;" : (age < 90 ? age + " s" : Math.round(age / 60) + " min");
-        return '<tr style="border-top:1px solid #2a2a2a">' +
-          '<td>' + (r.call || "") + '</td>' +
-          '<td style="color:var(--dim)">' + (r.dxcc || "") + '</td>' +
-          '<td>' + (pskDist(r.km) !== null ? pskDist(r.km) + pskUnit : "&mdash;") + '</td>' +
-          '<td style="color:var(--dim)">' + (r.brg !== undefined ? r.brg + "°" : "&mdash;") + '</td>' +
-          // SNR is OMITTED by the device when the reporter did not supply one -
-          // 0 dB is a real report, so absence must not render as zero.
-          '<td>' + (r.snr !== undefined ? (r.snr > 0 ? "+" : "") + r.snr + " dB" : "&mdash;") + '</td>' +
-          '<td style="color:var(--dim)">' + (r.f ? (r.f / 1e6).toFixed(3) + " MHz" : "") + '</td>' +
-          '<td style="color:var(--dim)">' + (r.mode || "") + '</td>' +
-          '<td style="color:var(--dim)">' + ageS + '</td></tr>';
-      }).join("") + '</table>';
+    pskState.d    = d;
+    pskState.mi   = !!d.miles;
+    pskState.unit = pskState.mi ? " mi" : " km";
+    pskRenderTable();
   } catch (e) {
     body.innerHTML = '<p style="color:#ff6060">Could not read it: ' + e + '</p>';
   } finally {
     resumeWs();
   }
 }
+document.querySelectorAll(".psk-win-btn").forEach(b =>
+  b.addEventListener("click", () => pskSetWindow(Number(b.dataset.min))));
 document.getElementById("prop-btn").addEventListener("click", e => { e.preventDefault(); propOpen(); });
 document.getElementById("prop-close").addEventListener("click",
   () => { document.getElementById("prop-modal").style.display = "none"; });
@@ -2661,8 +2755,27 @@ const DEC_COLS = [
   ["snr",  "SNR"],  ["dt",   "DT"],   ["hz",   "HZ"],      ["km",   "KM"],
   ["brg",  "BRG"],  ["age",  "AGE"],
 ];
+/* Sort comparators: how to pull a comparable value out of a row, and which
+   direction is the useful default the first time that column is clicked
+   (SNR/KM: strongest/furthest first; everything else: low-to-high or A-Z).
+   sortKey === null means "leave the device's own order alone" - that order
+   IS ft8_screen_sort_rows' CQ-callers-on-top ranking, which nothing here
+   should silently discard; a column click chooses to replace it, and the
+   reset link (below) is the deliberate way back. */
+const DEC_SORT = {
+  sl:   { get: r => r.sl   || null, type: "str", def: "asc"  },
+  call: { get: r => r.call || null, type: "str", def: "asc"  },
+  text: { get: r => r.text || null, type: "str", def: "asc"  },
+  cty:  { get: r => r.cty === undefined ? null : r.cty, type: "str", def: "asc" },
+  snr:  { get: r => r.snr === undefined ? null : r.snr, type: "num", def: "desc" },
+  dt:   { get: r => r.dt  === undefined ? null : r.dt,  type: "num", def: "asc"  },
+  hz:   { get: r => r.hz  === undefined ? null : r.hz,  type: "num", def: "asc"  },
+  km:   { get: r => r.km  === undefined ? null : r.km,  type: "num", def: "desc" },
+  brg:  { get: r => r.brg === undefined ? null : r.brg, type: "num", def: "asc"  },
+  age:  { get: r => r.age === undefined ? null : r.age, type: "num", def: "asc"  },
+};
+const decState = { rows: [], unit: "KM", mode: "FT8", sortKey: null, sortDir: "asc" };
 let decPollInFlight = false;
-let decHeadUnit = null;   // distance unit the current header row was built for
 
 function decFmt(k, r) {
   if (k === "snr") return (r.snr > 0 ? "+" : "") + r.snr;
@@ -2678,6 +2791,68 @@ function decFmt(k, r) {
   if (k === "cty") return r.cty === undefined ? "—" : r.cty;
   return r[k] === undefined ? "" : r[k];
 }
+function decSetSort(key) {
+  if (decState.sortKey === key) {
+    decState.sortDir = decState.sortDir === "asc" ? "desc" : "asc";
+  } else {
+    decState.sortKey = key;
+    decState.sortDir = DEC_SORT[key].def;
+  }
+  decRenderTable();
+}
+function decResetOrder() {
+  decState.sortKey = null;
+  decRenderTable();
+}
+function decRenderTable() {
+  const head = document.getElementById("dec-head");
+  const arrow = key => decState.sortKey === key
+    ? '<span class="arrow">' + (decState.sortDir === "asc" ? "▲" : "▼") + '</span>' : "";
+  head.innerHTML = DEC_COLS.map(c =>
+    '<th class="sortable" onclick="decSetSort(\'' + c[0] + '\')" '
+    + 'style="position:sticky;top:0;background:#1a1a1a;border-bottom:1px solid #333;padding:4px 6px;text-align:left;color:#ffa040">'
+    + (c[0] === "km" ? decState.unit : c[1]) + arrow(c[0]) + "</th>").join("");
+  document.getElementById("dec-order-reset").style.display = decState.sortKey === null ? "none" : "";
+
+  let rows = decState.rows;
+  if (decState.sortKey !== null) {
+    const col = DEC_SORT[decState.sortKey];
+    const dir = decState.sortDir === "asc" ? 1 : -1;
+    rows = rows.slice().sort((a, b) => {
+      const va = col.get(a), vb = col.get(b);
+      if (va === null && vb === null) return 0;
+      if (va === null) return 1;   // missing values always sink to the bottom
+      if (vb === null) return -1;
+      if (col.type === "str") return dir * String(va).localeCompare(String(vb));
+      return dir * (va - vb);
+    });
+  }
+  const decBody = document.getElementById("dec-body");
+  decBody.innerHTML = rows.map(r => {
+    // Same emphasis the Tab5 uses: the station being worked held at the top,
+    // and anything carrying your own callsign in reverse video.
+    /* Emphasis, highest priority first. Worked-before is DIMMED rather than
+       tinted (Randy N4OPI asked for colour coding "especially for worked
+       stations"): on a busy band the useful signal is which stations are still
+       worth calling, so the ones that are not should recede instead of
+       competing. Matches the Tab5, which greys a worked spot on the trace.
+       `wk` is band-scoped on the device, so the same station on a new band
+       stays bright - that is a new band-slot and worth working. */
+    const bg = r.pin ? "background:#3a2a10;" : (r.me ? "background:#7a1414;" : "");
+    const fg = r.me && !r.pin ? "color:#fff;"
+             : (r.pin ? "color:#ffc864;"
+             : (r.wk  ? "color:#6a7580;"
+             : (r.cq  ? "color:#8fe0a0;" : "")));
+    return "<tr data-call='" + r.call.replace(/[^A-Za-z0-9/]/g, "") + "' style='cursor:pointer;" + bg + fg + "'>" + DEC_COLS.map(c =>
+      '<td style="border-bottom:1px solid #222;padding:3px 6px;white-space:nowrap">'
+      + String(decFmt(c[0], r)).replace(/[&<>]/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[m]))
+      + "</td>").join("") + "</tr>";
+  }).join("");
+}
+document.getElementById("dec-order-reset").addEventListener("click", (ev) => {
+  ev.preventDefault();
+  decResetOrder();
+});
 
 async function pollDecodes() {
   // Only while the Tab5 is in FT8/FT4 and the panel is visible, and never
@@ -2689,42 +2864,15 @@ async function pollDecodes() {
   try {
     const r = await fetch("/api/decodes", { cache: "no-store" });
     const d = await r.json();
-    const rows = d.rows || [];
-    const head = document.getElementById("dec-head");
-    // Rebuilt when the distance unit changes, not only when empty - the KM
-    // column has to become MI the moment the Tab5 setting is flipped.
-    const unit = d.miles ? "MI" : "KM";
-    if (!head.childElementCount || decHeadUnit !== unit) {
-      decHeadUnit = unit;
-      head.innerHTML = DEC_COLS.map(c =>
-        '<th style="position:sticky;top:0;background:#1a1a1a;border-bottom:1px solid #333;padding:4px 6px;text-align:left;color:#ffa040">'
-        + (c[0] === "km" ? unit : c[1]) + "</th>").join("");
-    }
-    document.getElementById("dec-title").textContent = (d.mode || "FT8") + " decode list";
+    decState.rows = d.rows || [];
+    // The KM column has to become MI the moment the Tab5 setting is flipped.
+    decState.unit = d.miles ? "MI" : "KM";
+    decState.mode = d.mode || "FT8";
+    document.getElementById("dec-title").textContent = decState.mode + " decode list";
     document.getElementById("dec-count").textContent =
-      rows.length ? rows.length + " station" + (rows.length === 1 ? "" : "s") + " heard"
+      decState.rows.length ? decState.rows.length + " station" + (decState.rows.length === 1 ? "" : "s") + " heard"
                   : "nothing heard yet";
-    const decBody = document.getElementById("dec-body");
-    decBody.innerHTML = rows.map(r => {
-      // Same emphasis the Tab5 uses: the station being worked held at the top,
-      // and anything carrying your own callsign in reverse video.
-      /* Emphasis, highest priority first. Worked-before is DIMMED rather than
-         tinted (Randy N4OPI asked for colour coding "especially for worked
-         stations"): on a busy band the useful signal is which stations are still
-         worth calling, so the ones that are not should recede instead of
-         competing. Matches the Tab5, which greys a worked spot on the trace.
-         `wk` is band-scoped on the device, so the same station on a new band
-         stays bright - that is a new band-slot and worth working. */
-      const bg = r.pin ? "background:#3a2a10;" : (r.me ? "background:#7a1414;" : "");
-      const fg = r.me && !r.pin ? "color:#fff;"
-               : (r.pin ? "color:#ffc864;"
-               : (r.wk  ? "color:#6a7580;"
-               : (r.cq  ? "color:#8fe0a0;" : "")));
-      return "<tr data-call='" + r.call.replace(/[^A-Za-z0-9/]/g, "") + "' style='cursor:pointer;" + bg + fg + "'>" + DEC_COLS.map(c =>
-        '<td style="border-bottom:1px solid #222;padding:3px 6px;white-space:nowrap">'
-        + String(decFmt(c[0], r)).replace(/[&<>]/g, m => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[m]))
-        + "</td>").join("") + "</tr>";
-    }).join("");
+    decRenderTable();
     /* The pileup: who is calling US. Click works exactly like a decode row. */
     const pu = d.pileup || [];
     document.getElementById("dec-pileup").innerHTML = !pu.length ? "" :
@@ -4523,7 +4671,7 @@ function paintUpdateNotice(s) {
     el.onclick      = onclick || null;
   };
 
-  const running = shortVer(u.running || s.tab5_fw);
+  const running = (u.running || s.tab5_fw || "");   // verbatim - see status.c
   const target  = shortVer(u.ota_ver);
   const latest  = shortVer(u.latest);
 
