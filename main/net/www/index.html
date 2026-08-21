@@ -4039,6 +4039,9 @@ const FRAME_TYPE_SPECTRUM = 0x01;
    really two browsers fighting: 340 takeovers in one session. */
 const FRAME_TYPE_TAKEOVER = 0x02;
 let wsDisplaced = false;
+/* When the current socket opened, and the last few close codes - see ws.onclose. */
+let wsOpenedAt = 0;
+const wsCloseLog = [];
 const HEADER_LEN = 2;
 
 let specPxW = SPEC_W, specPxH = 200;
@@ -5308,7 +5311,8 @@ function connectWs() {
   const url=(location.protocol==="https:"?"wss://":"ws://")+location.host+"/ws";
   ws=new WebSocket(url);
   ws.binaryType="arraybuffer";
-  ws.onopen=()=>{ fpsEl.textContent="connected"; fpsEl.classList.remove("bad"); };
+  ws.onopen=()=>{ wsOpenedAt = Date.now();
+                  fpsEl.textContent="connected"; fpsEl.classList.remove("bad"); };
   ws.onmessage=(ev)=>{
     const buf=new Uint8Array(ev.data);
     if (buf.length && buf[0]===FRAME_TYPE_TAKEOVER) { wsTakenOver(); return; }
@@ -5330,11 +5334,26 @@ function connectWs() {
       frameCount=0; lastFpsAt=now;
     }
   };
-  ws.onclose=()=>{
-    /* A displaced client must NOT retry: retrying is what creates the ping-pong.
-       Leave the message from wsTakenOver() in place and wait for the operator. */
+  ws.onclose=(ev)=>{
+    /* ⛔ SAY WHY IT CLOSED. The device logs nothing when a session ends from the
+       outside, so "reconnecting" was the only evidence either end produced, and
+       chasing it cost most of an afternoon across the network, the signal, mDNS,
+       the frame rate and two real socket bugs. The CLOSE CODE distinguishes the
+       remaining possibilities in one number:
+         1006  no close frame at all - the TCP connection died  -> network/link
+         1000/1001  a clean close                               -> device or page
+         1002/1003/1007  protocol or data error                 -> our framing
+       Kept in a short history so a PATTERN is visible rather than one instance,
+       and shown in the fps slot so it needs no console to read. */
     if (wsDisplaced) return;
-    fpsEl.textContent="reconnecting"; fpsEl.classList.add("bad");
+    const secs = wsOpenedAt ? Math.round((Date.now() - wsOpenedAt) / 1000) : 0;
+    wsCloseLog.push(ev.code + (ev.reason ? "/" + ev.reason : "") + " after " + secs + "s");
+    if (wsCloseLog.length > 6) wsCloseLog.shift();
+    console.warn("WS closed: code=" + ev.code + " reason='" + (ev.reason || "") +
+                 "' clean=" + ev.wasClean + " after " + secs + "s");
+    fpsEl.textContent = "reconnecting (" + ev.code + ", " + secs + "s)";
+    fpsEl.title = "Recent WebSocket closes:\n" + wsCloseLog.join("\n");
+    fpsEl.classList.add("bad");
     if(!wsSuppressReconnect) setTimeout(connectWs,2000);
   };
   ws.onerror=()=>{};
