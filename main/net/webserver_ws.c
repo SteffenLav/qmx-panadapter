@@ -373,6 +373,14 @@ static void ws_push_task(void *arg)
     for (;;) {
         vTaskDelayUntil(&last, pdMS_TO_TICKS(period_ms));
 
+        // Keep the socket fresh WHILE PAUSED too. The refresh below only runs
+        // after a successful send, so a stream paused for an upload stops being
+        // refreshed for the whole transfer and drifts back to the bottom of the
+        // LRU pile - which is exactly the eviction this is meant to prevent,
+        // reappearing during the one operation that already stresses the link.
+        if (s_session_active && s_server && s_ws_fd >= 0 && s_ws_paused)
+            httpd_sess_update_lru_counter(s_server, s_ws_fd);
+
         if (!s_session_active || s_server == NULL || s_ws_fd < 0 || s_ws_paused) {
             // Idle (or paused for a transfer): reset fps counter so we do not
             // log stale stats on reconnect, and yield the link to the transfer.

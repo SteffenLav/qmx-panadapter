@@ -3353,7 +3353,16 @@ esp_err_t webserver_start(void)
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
     // session can be LRU-purged instead of bouncing new connects off ENFILE.
-    config.max_open_sockets = 10;
+    //
+    // 10 -> 13, i.e. all of the safe budget (#232). Eviction is not theoretical
+    // here: the spectrum WebSocket was being purged repeatedly because its LRU
+    // position never refreshed, and every purge costs the browser a reconnect.
+    // That specific bug is fixed in webserver_ws.c, but the pressure that made
+    // it fire is real - the page polls /api/status and /api/decodes, the feeds
+    // open outbound connections, and each of ours competes for the same table.
+    // Three more slots is free headroom against a mechanism we have now watched
+    // misfire, so there is no reason to hold any of it back.
+    config.max_open_sockets = 13;
 
     ESP_LOGI(TAG, "Starting HTTP server on port %d", config.server_port);
     esp_err_t err = httpd_start(&s_server, &config);
