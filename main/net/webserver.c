@@ -97,9 +97,10 @@ static struct {
 } s_last_upload = {0};
 static SemaphoreHandle_t s_upload_mutex = NULL;
 
-// index.html is embedded as a null-terminated string via EMBED_TXTFILES.
-extern const char index_html_start[] asm("_binary_index_html_start");
-extern const char index_html_end[]   asm("_binary_index_html_end");
+// index.html is embedded PRE-GZIPPED, compressed by tools/gzip_asset.py during
+// the build - see the block in main/CMakeLists.txt for the measurements.
+extern const uint8_t index_html_gz_start[] asm("_binary_index_html_gz_start");
+extern const uint8_t index_html_gz_end[]   asm("_binary_index_html_gz_end");
 
 // node-forge (BSD-3-Clause), pre-gzipped, embedded via EMBED_FILES. Served
 // with Content-Encoding: gzip for the web UI's browser-side p12 parsing -
@@ -108,12 +109,62 @@ extern const char index_html_end[]   asm("_binary_index_html_end");
 extern const uint8_t forge_js_gz_start[] asm("_binary_forge_min_js_gz_start");
 extern const uint8_t forge_js_gz_end[]   asm("_binary_forge_min_js_gz_end");
 
+// The page's identity is the RUNNING FIRMWARE's ELF hash. The page ships inside
+// the binary, so it can only change when the firmware does - which makes a
+// conditional GET both safe and exact: a reload after a firmware update always
+// re-fetches, and a reload of unchanged firmware costs one 304 instead of the
+// whole page. Built once, lazily; the hash cannot change while we run.
+static const char *page_etag(void)
+{
+    static char etag[24];
+    if (!etag[0]) {
+        const esp_app_desc_t *d = esp_app_get_description();
+        // 8 bytes of the ELF SHA-256 is ample to tell two builds apart.
+        snprintf(etag, sizeof(etag), "\"%02x%02x%02x%02x%02x%02x%02x%02x\"",
+                 d->app_elf_sha256[0], d->app_elf_sha256[1],
+                 d->app_elf_sha256[2], d->app_elf_sha256[3],
+                 d->app_elf_sha256[4], d->app_elf_sha256[5],
+                 d->app_elf_sha256[6], d->app_elf_sha256[7]);
+    }
+    return etag;
+}
+
 static esp_err_t root_handler(httpd_req_t *req)
 {
-    const size_t len = index_html_end - index_html_start - 1;  // strip NUL
+    const char *etag = page_etag();
+
+    // Conditional GET first - a matching ETag is a few bytes instead of 83 KB,
+    // and on this link that is the difference between a reload being instant
+    // and being a six-second wait.
+    char inm[32] = {0};
+    if (httpd_req_get_hdr_value_str(req, "If-None-Match", inm, sizeof(inm)) == ESP_OK &&
+        strcmp(inm, etag) == 0) {
+        httpd_resp_set_status(req, "304 Not Modified");
+        httpd_resp_set_hdr(req, "ETag", etag);
+        return httpd_resp_send(req, NULL, 0);
+    }
+
+    const size_t len = (size_t)(index_html_gz_end - index_html_gz_start);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-    return httpd_resp_send(req, index_html_start, len);
+    httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
+    // Revalidate every time, but revalidation is now cheap (see the ETag above).
+    // must-revalidate rather than no-store: a stale page after an update would
+    // be far worse than a re-fetch, and the ETag makes that impossible.
+    httpd_resp_set_hdr(req, "Cache-Control", "no-cache, must-revalidate");
+    httpd_resp_set_hdr(req, "ETag", etag);
+
+    // Give the page the whole uplink while it is in flight. The live spectrum
+    // WebSocket holds 10.0 KB/s of a MEASURED ~12.7 KB/s link, so a page load
+    // competing with it got 2.7 KB/s - the single biggest reason the web UI
+    // read as unreachable. Same courtesy the QRZ/eQSL/LoTW uploads already pay,
+    // and it costs a viewer at most a moment of frozen spectrum. Nothing is
+    // lost by pausing during a page load in particular: the browser fetching
+    // the page has no WebSocket open yet, and a reloading one is about to have
+    // its old session taken over anyway.
+    webserver_ws_set_paused(true);
+    esp_err_t e = httpd_resp_send(req, (const char *)index_html_gz_start, len);
+    webserver_ws_set_paused(false);
+    return e;
 }
 
 // FT8/FT4 TX + QSO state for the web page's status banner (Dennis WN4FLA:

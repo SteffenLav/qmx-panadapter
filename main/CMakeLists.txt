@@ -147,8 +147,6 @@ idf_component_register(
     PRIV_REQUIRES
         esp_app_format
         fatfs
-    EMBED_TXTFILES
-        "net/www/index.html"
     EMBED_FILES
         "net/www/forge.min.js.gz"
         # User manual, built into the binary so it is available with no WiFi, no
@@ -159,6 +157,41 @@ idf_component_register(
         # partition, and zero SPIFFS. See net/manual_embed.h.
         "manual.bin"
 )
+
+# ---------------------------------------------------------------------------
+# The web page is COMPRESSED AT BUILD TIME (#229).
+#
+# It was embedded raw and served raw - 263 KB of HTML+JS with
+# `Cache-Control: no-store`, so every visit re-downloaded all of it. That is
+# fine over Ethernet and hopeless here: this board's WiFi is esp_hosted over
+# SDIO to a C6 co-processor, the live spectrum WebSocket holds 1026 B x 10 fps
+# = 10.0 KB/s of it continuously, and MEASURED total capacity was ~12.7 KB/s.
+# The page therefore got 2.7 KB/s and took ~95 SECONDS to load, which reads as
+# "the web UI is unreachable" - reported from two different PCs on 2026-08-21,
+# and it has been getting worse every release as the page grew.
+#
+# gzip -9 takes it 263 KB -> 83 KB (3.2x). Together with the WS pause and the
+# ETag in webserver.c's root_handler, a load goes ~95 s -> ~6 s, and a repeat
+# visit to unchanged firmware costs one 304.
+#
+# GENERATED, never committed. `main/manual.bin` is the cautionary tale: a
+# committed derived artifact that shipped stale in v1.8.8 because its
+# regeneration ran after the tag. This cannot go stale - CMake rebuilds it
+# whenever index.html is newer, and the build fails if it cannot.
+set(WWW_SRC "${CMAKE_CURRENT_SOURCE_DIR}/net/www/index.html")
+set(WWW_GZ  "${CMAKE_CURRENT_BINARY_DIR}/index.html.gz")
+add_custom_command(
+    OUTPUT  "${WWW_GZ}"
+    COMMAND ${CMAKE_COMMAND} -E echo "Compressing web UI..."
+    COMMAND "${python}" "${CMAKE_CURRENT_SOURCE_DIR}/../tools/gzip_asset.py"
+            "${WWW_SRC}" "${WWW_GZ}"
+    DEPENDS "${WWW_SRC}" "${CMAKE_CURRENT_SOURCE_DIR}/../tools/gzip_asset.py"
+    COMMENT "gzip index.html -> index.html.gz"
+    VERBATIM
+)
+add_custom_target(www_gz DEPENDS "${WWW_GZ}")
+add_dependencies(${COMPONENT_LIB} www_gz)
+target_add_binary_data(${COMPONENT_LIB} "${WWW_GZ}" BINARY)
 
 # Route LVGL's 256 KB builtin tlsf pool from internal SRAM BSS to PSRAM.
 # LV_MEM_POOL_ALLOC is defined in lv_pool_shim.h and force-included into
