@@ -48,6 +48,28 @@ typedef struct {
     bool    cq_manual_pick;  // running CQ: never auto-answer a caller, wait for a tap
 } ft8_filters_t;
 
+// User-defined physical-keyboard shortcuts (#233).
+//
+// A binding is a modifier plus a key plus an ACTION ID. The id is what is
+// stored, never a function pointer or a menu position - so reordering the
+// action list in a later firmware cannot silently repoint somebody's Ctrl+M at
+// something else. Adding new actions is safe; RENUMBERING existing ones is not.
+//
+// Ctrl (0x01) and Alt (0x04) are the only modifiers this keyboard exposes -
+// measured, see the shortcut block in ui.c. Sym and Aa are consumed by the
+// keyboard's own MCU.
+#define KBD_BINDINGS_MAX 24
+typedef struct {
+    uint8_t mods;      // 0x01 Ctrl, 0x04 Alt
+    char    key;       // lower-case ASCII
+    uint8_t action;    // ui_kbd_action_* id; 0 = unbound/empty slot
+} kbd_binding_t;
+
+typedef struct {
+    uint8_t       n;                        // how many slots are in use
+    kbd_binding_t b[KBD_BINDINGS_MAX];
+} kbd_bindings_t;
+
 // All persisted settings. Floats are stored as raw 32-bit bit-patterns
 // in NVS (NVS doesn't have a native float type).
 typedef struct {
@@ -177,6 +199,7 @@ typedef struct {
     bool     tx_tone_hold;    // FT8/FT4: keep tx_tone_hz for every CQ/reply instead of auto-picking a
                               // clear slot - WSJT-X's "Hold Tx Freq" (default false)
     ft8_filters_t ft8_filters;        // CQ-run reply include/exclude filters
+    kbd_bindings_t kbd_bindings;      // physical-keyboard shortcuts (#233)
     bool     field_day_en;    // ARRL Field Day exchange mode: TX/RX class+section instead of grid/report (default false)
     // Activation session: what WE are activating right now, if anything. Every
     // QSO logged while this is set carries MY_SIG/MY_SIG_INFO, which is what
@@ -275,6 +298,7 @@ void settings_set_onboarded(bool v);
 
 // FT8 CQ-run reply include/exclude filters (debounced flush).
 void settings_set_ft8_filters(const ft8_filters_t *f);
+void settings_set_kbd_bindings(const kbd_bindings_t *b);
 
 // CW audio output: enable the on-device CW sidetone (speaker/headphone), and
 // its volume 0..100 (debounced flush).

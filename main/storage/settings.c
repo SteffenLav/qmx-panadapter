@@ -42,6 +42,7 @@ static const char *TAG = "settings";
 #define KEY_HOUND_MODE "hound_md"
 #define KEY_ONBOARDED  "onboarded"
 #define KEY_FT8_FILT   "ft8_filt"
+#define KEY_KBD_BIND   "kbd_bind"
 #define KEY_WIFI_ENABLED "wifi_en"
 #define KEY_QMX_GPS      "qmx_gps"
 #define KEY_QMX_TPUSH    "qmx_tpush"
@@ -300,6 +301,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_SPOTS_MODE_FLT 85
 #define DIRTY_SOTA_EN        86
 #define DIRTY_HOUND_MODE     87
+#define DIRTY_KBD_BIND       95   /* #233 user-defined keyboard shortcuts */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -438,6 +440,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_CQ_LISTEN))    nvs_set_u8(s_nvs, KEY_CQ_LISTEN, snap.cq_listen_every);
         if (dirty_test(&dirty_local, DIRTY_ONBOARDED))  nvs_set_u8(s_nvs, KEY_ONBOARDED, snap.onboarded ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FT8_FILT))     nvs_set_blob(s_nvs, KEY_FT8_FILT, &snap.ft8_filters, sizeof(snap.ft8_filters));
+        if (dirty_test(&dirty_local, DIRTY_KBD_BIND))     nvs_set_blob(s_nvs, KEY_KBD_BIND, &snap.kbd_bindings, sizeof(snap.kbd_bindings));
         if (dirty_test(&dirty_local, DIRTY_WIFI_ENABLED)) nvs_set_u8(s_nvs, KEY_WIFI_ENABLED, snap.wifi_enabled ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_GPS))      nvs_set_u8(s_nvs, KEY_QMX_GPS,      snap.qmx_gps      ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_QMX_TPUSH))    nvs_set_u8(s_nvs, KEY_QMX_TPUSH,    snap.qmx_time_pushed ? 1 : 0);
@@ -675,6 +678,9 @@ static void load_from_nvs(qmx_settings_t *out)
     out->act_type   = 0;          // not activating anything
     out->act_ref[0] = '\0';
     memset(&out->ft8_filters, 0, sizeof(out->ft8_filters));
+    // n = 0 means "never configured", which ui.c takes as "use the built-in
+    // defaults" rather than "the operator deleted every shortcut".
+    memset(&out->kbd_bindings, 0, sizeof(out->kbd_bindings));
     out->field_day_en = false;
     out->fd_class[0]  = '\0';
     out->fd_section[0] = '\0';
@@ -825,6 +831,9 @@ static void load_from_nvs(qmx_settings_t *out)
 
     sz = sizeof(out->ft8_filters);
     nvs_get_blob(s_nvs, KEY_FT8_FILT, &out->ft8_filters, &sz);
+    sz = sizeof(out->kbd_bindings);
+    nvs_get_blob(s_nvs, KEY_KBD_BIND, &out->kbd_bindings, &sz);
+    if (out->kbd_bindings.n > KBD_BINDINGS_MAX) out->kbd_bindings.n = 0;  /* corrupt/older blob */
 
     // Known-network list. Stored as a blob of exactly the used entries, so the
     // returned size gives the count back. A short/absent blob just means "none
@@ -1201,6 +1210,15 @@ void settings_set_ft8_filters(const ft8_filters_t *f)
     s_pending.ft8_filters = *f;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_FT8_FILT);
+}
+
+void settings_set_kbd_bindings(const kbd_bindings_t *b)
+{
+    if (!s_ready || !b) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    s_pending.kbd_bindings = *b;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_KBD_BIND);
 }
 
 void settings_set_wifi_enabled(bool v)

@@ -674,6 +674,7 @@
         <a href="#" id="reset-settings-link" class="danger" title="Reset all app settings + memory channels to defaults (keeps the QSO log and WiFi). Clears a stuck stored value without an esptool full-erase. Reboots.">Reset settings</a>
         <a href="#" id="reset-network-link" class="danger" title="Clear stored WiFi/network state (keeps app settings). Clears a stuck WiFi/link state a normal reflash leaves in place. Reboots.">Reset WiFi</a>
         <a href="#" id="usb-shut-link" title="Close the USB host cleanly before you unplug the radio or flash the Tab5, so the QMX is not left in a half-open state that needs a power cycle to clear">Prepare for flashing</a>
+        <a href="#" id="sc-btn" title="Assign Ctrl and Alt shortcuts on the Tab5's snap-on keyboard - which key opens the radio menus, the manual, the log, and so on">Keyboard shortcuts</a>
       </div>
     </div>
     <div class="bot-menu-wrap">
@@ -765,6 +766,33 @@
        table with distance and bearing, which needs width the Tab5 does not
        have. The device only ever holds the parsed reports; everything below is
        presentation. -->
+  <!-- Keyboard shortcuts editor (#233). Lives in the WEB UI rather than on the
+       Tab5 on purpose: assigning shortcuts is a setup task done once, and doing
+       it on glass would mean typing on the very keyboard being configured. -->
+  <div id="sc-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1000;">
+    <div style="max-width:760px; margin:4vh auto; max-height:92vh; display:flex; flex-direction:column;
+                background:#161616; border:1px solid #494949; border-radius:10px; padding:16px 20px; color:#ddd; font-size:14px;">
+      <div style="display:flex; align-items:center; margin-bottom:10px;">
+        <strong style="color:#ffa040; font-size:17px;">Keyboard shortcuts</strong>
+        <div style="flex:1"></div>
+        <button type="button" id="sc-close" class="bot-btn">Close</button>
+      </div>
+      <div style="color:var(--dim); margin-bottom:10px; line-height:1.5;">
+        For the Tab5's snap-on keyboard. Hold <b>Ctrl</b> or <b>Alt</b> and press the key.
+        This keyboard has no Shift or Fn — <b>Sym</b> and <b>Aa</b> are handled inside the
+        keyboard itself and cannot be used here. Nothing that transmits can be bound.
+      </div>
+      <div id="sc-body" style="overflow:auto; flex:1;"></div>
+      <div style="display:flex; gap:10px; margin-top:12px; align-items:center;">
+        <button type="button" id="sc-add" class="bot-btn">Add shortcut</button>
+        <div style="flex:1"></div>
+        <span id="sc-status" style="color:var(--dim)"></span>
+        <button type="button" id="sc-reset" class="btn-neutral">Restore defaults</button>
+        <button type="button" id="sc-save" class="btn-ok">Save</button>
+      </div>
+    </div>
+  </div>
+
   <div id="prop-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1000;">
     <div style="max-width:900px; margin:4vh auto; max-height:92vh; display:flex; flex-direction:column;
                 background:#161616; border:1px solid #494949; border-radius:10px; padding:16px 20px; color:#ddd; font-size:14px;">
@@ -2140,6 +2168,132 @@ async function memEdit(d, idx) {
   await memOpen();
   setTimeout(() => { st.textContent = ""; }, 4000);
 }
+
+/* =====================================================================
+   Keyboard shortcuts editor (#233)
+   The device serves the ACTION LIST alongside the bindings, so this page can
+   never offer an action the firmware does not have, nor miss one it gained.
+   Names are shown; ids go on the wire.
+   ===================================================================== */
+let scState = null;   // {actions:[], bindings:[], max, mod_ctrl, mod_alt}
+
+function scRender() {
+  const body = document.getElementById("sc-body");
+  if (!scState) { body.innerHTML = "<p style='color:var(--dim)'>Loading…</p>"; return; }
+  const opts = (sel) => scState.actions.map((nm, i) =>
+      '<option value="' + i + '"' + (i === sel ? ' selected' : '') + '>' + nm + '</option>').join("");
+  const modOpt = (m) =>
+      '<option value="' + scState.mod_ctrl + '"' + (m === scState.mod_ctrl ? ' selected' : '') + '>Ctrl</option>' +
+      '<option value="' + scState.mod_alt  + '"' + (m === scState.mod_alt  ? ' selected' : '') + '>Alt</option>';
+  body.innerHTML =
+    '<table style="width:100%; border-collapse:collapse;">' +
+    '<tr style="color:var(--accent); text-align:left;">' +
+      '<th style="padding:6px 8px;">Modifier</th><th style="padding:6px 8px;">Key</th>' +
+      '<th style="padding:6px 8px;">Does</th><th></th></tr>' +
+    scState.bindings.map((b, i) =>
+      '<tr data-i="' + i + '">' +
+      '<td style="padding:4px 8px;"><select class="sc-mod">' + modOpt(b.mods) + '</select></td>' +
+      '<td style="padding:4px 8px;"><input class="sc-key" maxlength="1" value="' +
+          (b.key || "") + '" style="width:3em; text-align:center; text-transform:uppercase;"></td>' +
+      '<td style="padding:4px 8px;"><select class="sc-act">' + opts(b.action) + '</select></td>' +
+      '<td style="padding:4px 8px;"><button type="button" class="sc-del btn-danger">Remove</button></td>' +
+      '</tr>').join("") +
+    '</table>' +
+    (scState.bindings.length ? "" :
+      "<p style='color:var(--dim)'>No shortcuts. Add one, or restore the defaults.</p>");
+
+  body.querySelectorAll(".sc-del").forEach(btn => btn.addEventListener("click", (e) => {
+    const i = +e.target.closest("tr").dataset.i;
+    scHarvest(); scState.bindings.splice(i, 1); scRender();
+  }));
+}
+
+/* Read the table back into scState before any structural change, so edits are
+   not lost when a row is added or removed. */
+function scHarvest() {
+  if (!scState) return;
+  const rows = [...document.querySelectorAll("#sc-body tr[data-i]")];
+  scState.bindings = rows.map(r => ({
+    mods:   +r.querySelector(".sc-mod").value,
+    key:    (r.querySelector(".sc-key").value || "").trim().toLowerCase().slice(0, 1),
+    action: +r.querySelector(".sc-act").value,
+  }));
+}
+
+async function scOpen() {
+  document.getElementById("sc-modal").style.display = "";
+  document.getElementById("sc-status").textContent = "";
+  scState = null; scRender();
+  pauseWs();                      // same courtesy every other fetch here pays
+  try {
+    scState = await (await fetch("/api/shortcuts", { cache: "no-store" })).json();
+  } catch (e) {
+    document.getElementById("sc-body").innerHTML =
+      "<p style='color:#ff6060'>Could not read the shortcuts (" + e.message + ")</p>";
+    return;
+  } finally { resumeWs(); }
+  scRender();
+}
+
+async function scSave(payload, note) {
+  const st = document.getElementById("sc-status");
+  st.textContent = "Saving…";
+  pauseWs();
+  try {
+    const r = await fetch("/api/shortcuts", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload) });
+    const d = await r.json();
+    /* Check the BODY, not just the status - this device answers some refusals
+       with HTTP 200 and a message. */
+    st.textContent = d && d.ok ? (note || "Saved.") : ("Refused: " + JSON.stringify(d));
+    if (d && d.ok) { scState = await (await fetch("/api/shortcuts", { cache: "no-store" })).json(); scRender(); }
+  } catch (e) {
+    st.textContent = "Failed: " + e.message;
+  } finally { resumeWs(); }
+}
+
+(function wireShortcuts() {
+  document.getElementById("sc-btn").addEventListener("click", (e) => { e.preventDefault(); scOpen(); });
+  document.getElementById("sc-close").addEventListener("click", () => {
+    document.getElementById("sc-modal").style.display = "none"; });
+  document.getElementById("sc-modal").addEventListener("click", (e) => {
+    if (e.target.id === "sc-modal") document.getElementById("sc-modal").style.display = "none"; });
+  document.getElementById("sc-add").addEventListener("click", () => {
+    if (!scState) return;
+    scHarvest();
+    if (scState.bindings.length >= scState.max) {
+      document.getElementById("sc-status").textContent = "That is the maximum (" + scState.max + ").";
+      return;
+    }
+    scState.bindings.push({ mods: scState.mod_ctrl, key: "", action: 1 });
+    scRender();
+  });
+  document.getElementById("sc-save").addEventListener("click", () => {
+    scHarvest();
+    const bad = scState.bindings.filter(b => !b.key || !b.action);
+    if (bad.length) {
+      document.getElementById("sc-status").textContent =
+        "Every row needs a key and an action - " + bad.length + " incomplete.";
+      return;
+    }
+    /* Duplicates are worth catching HERE: the device would take the first match
+       and the second would look broken rather than refused. */
+    const seen = new Set(), dup = [];
+    for (const b of scState.bindings) {
+      const id = b.mods + ":" + b.key;
+      if (seen.has(id)) dup.push((b.mods === scState.mod_alt ? "Alt+" : "Ctrl+") + b.key.toUpperCase());
+      seen.add(id);
+    }
+    if (dup.length) {
+      document.getElementById("sc-status").textContent = "Assigned twice: " + dup.join(", ");
+      return;
+    }
+    scSave({ bindings: scState.bindings });
+  });
+  document.getElementById("sc-reset").addEventListener("click", () =>
+    scSave({ reset: true }, "Defaults restored."));
+})();
 
 async function propOpen() {
   document.getElementById("prop-modal").style.display = "";

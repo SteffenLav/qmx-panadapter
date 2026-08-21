@@ -3040,6 +3040,112 @@ static const httpd_uri_t uri_memory_post = {
     .uri = "/api/memory", .method = HTTP_POST, .handler = memory_post_handler,
 };
 
+// GET  /api/shortcuts -> { actions:[...], bindings:[{mods,key,action}], max }
+// POST /api/shortcuts <- { bindings:[...] }  or  { reset:true }
+//
+// The action LIST is served with the bindings rather than hardcoded in the
+// page, so the editor can never offer an action this firmware does not have or
+// miss one it gained. The page shows names; the wire carries ids.
+static esp_err_t shortcuts_get_handler(httpd_req_t *req)
+{
+    cJSON *root = cJSON_CreateObject();
+    if (!root) return httpd_resp_send_500(req);
+
+    cJSON *acts = cJSON_AddArrayToObject(root, "actions");
+    for (int i = 0; acts && i < ui_kbd_action_count(); i++)
+        cJSON_AddItemToArray(acts, cJSON_CreateString(ui_kbd_action_name(i)));
+
+    kbd_binding_t b[KBD_BINDINGS_MAX];
+    int n = ui_kbd_bindings_get(b, KBD_BINDINGS_MAX);
+    cJSON *arr = cJSON_AddArrayToObject(root, "bindings");
+    for (int i = 0; arr && i < n; i++) {
+        cJSON *o = cJSON_CreateObject();
+        if (!o) break;
+        char key[2] = { b[i].key, 0 };
+        cJSON_AddNumberToObject(o, "mods", b[i].mods);
+        cJSON_AddStringToObject(o, "key",  key);
+        cJSON_AddNumberToObject(o, "action", b[i].action);
+        cJSON_AddItemToArray(arr, o);
+    }
+    cJSON_AddNumberToObject(root, "max", KBD_BINDINGS_MAX);
+    // The two modifiers this keyboard can actually produce - measured, not
+    // assumed. Sent so the editor's dropdown cannot offer Shift or Fn, which
+    // do not exist on it.
+    cJSON_AddNumberToObject(root, "mod_ctrl", 0x01);
+    cJSON_AddNumberToObject(root, "mod_alt",  0x04);
+
+    char *txt = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if (!txt) return httpd_resp_send_500(req);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t e = httpd_resp_sendstr(req, txt);
+    free(txt);
+    return e;
+}
+
+static esp_err_t shortcuts_post_handler(httpd_req_t *req)
+{
+    // Sized from content_len with a loop - a fixed buffer and a single recv is
+    // the bug that made every settings save fail once the form grew past 1 KB.
+    int len = req->content_len;
+    if (len <= 0 || len > 8192) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad length");
+    char *body = malloc((size_t)len + 1);
+    if (!body) return httpd_resp_send_500(req);
+    int got = 0;
+    while (got < len) {
+        int r = httpd_req_recv(req, body + got, len - got);
+        if (r <= 0) { free(body); return httpd_resp_send_500(req); }
+        got += r;
+    }
+    body[got] = '\0';
+
+    cJSON *root = cJSON_Parse(body);
+    free(body);
+    if (!root) return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad json");
+
+    if (cJSON_IsTrue(cJSON_GetObjectItem(root, "reset"))) {
+        ui_kbd_bindings_reset_defaults();
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"ok\":true,\"reset\":true}");
+    }
+
+    cJSON *arr = cJSON_GetObjectItem(root, "bindings");
+    if (!cJSON_IsArray(arr)) {
+        cJSON_Delete(root);
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "no bindings array");
+    }
+    kbd_binding_t b[KBD_BINDINGS_MAX];
+    int n = 0;
+    cJSON *it = NULL;
+    cJSON_ArrayForEach(it, arr) {
+        if (n >= KBD_BINDINGS_MAX) break;
+        const char *k = cJSON_GetStringValue(cJSON_GetObjectItem(it, "key"));
+        cJSON *m = cJSON_GetObjectItem(it, "mods");
+        cJSON *a = cJSON_GetObjectItem(it, "action");
+        if (!k || !k[0] || !cJSON_IsNumber(m) || !cJSON_IsNumber(a)) continue;
+        b[n].mods   = (uint8_t)m->valueint;
+        b[n].key    = k[0];
+        b[n].action = (uint8_t)a->valueint;
+        n++;
+    }
+    cJSON_Delete(root);
+    // ui_kbd_bindings_set() does the real validation (known action, a modifier
+    // this keyboard has, a non-empty key) and persists - one place, so the API
+    // and any future on-device editor cannot disagree about what is legal.
+    ui_kbd_bindings_set(b, n);
+
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+static const httpd_uri_t uri_shortcuts_get = {
+    .uri = "/api/shortcuts", .method = HTTP_GET, .handler = shortcuts_get_handler,
+};
+static const httpd_uri_t uri_shortcuts_post = {
+    .uri = "/api/shortcuts", .method = HTTP_POST, .handler = shortcuts_post_handler,
+};
+
 static const httpd_uri_t uri_settings_get = {
     .uri = "/api/settings", .method = HTTP_GET, .handler = settings_get_handler,
 };
@@ -3348,7 +3454,12 @@ esp_err_t webserver_start(void)
     httpd_config_t config  = HTTPD_DEFAULT_CONFIG();
     config.server_port     = 80;
     config.stack_size      = 12288;
-    config.max_uri_handlers = 42;   // 35 API + WS + 5 file-browser + headroom
+    // 38 registered here + 5 in filebrowser.c = 43, so 42 was ALREADY ONE SHORT
+    // the moment /api/shortcuts was added - and httpd fails the registration
+    // silently from the endpoint's point of view, so the symptom would have been
+    // "the shortcuts page 404s" with nothing obviously wrong. Counted, not
+    // guessed: grep -c httpd_register_uri_handler in both files.
+    config.max_uri_handlers = 48;   // 38 API + WS + 5 file-browser + headroom
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -3392,6 +3503,8 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_memory_post);
     httpd_register_uri_handler(s_server, &uri_settings_get);
     httpd_register_uri_handler(s_server, &uri_settings_post);
+    httpd_register_uri_handler(s_server, &uri_shortcuts_get);
+    httpd_register_uri_handler(s_server, &uri_shortcuts_post);
     httpd_register_uri_handler(s_server, &uri_decodes);
     httpd_register_uri_handler(s_server, &uri_psk_rx);
     httpd_register_uri_handler(s_server, &uri_help);

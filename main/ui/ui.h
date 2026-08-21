@@ -280,6 +280,16 @@ void ui_kbd_set_buttons(lv_obj_t *save_btn, lv_obj_t *cancel_btn);
 // is the visible one. Register once at build time; deletion deregisters.
 void ui_kbd_add_scrollable(lv_obj_t *obj);
 
+// User-defined keyboard shortcuts (#233). Bindings store an ACTION ID, so the
+// numbering in ui.c's k_kbd_actions[] is a persisted contract: append freely,
+// never renumber. ui_kbd_bindings_set() validates and persists in one step.
+#include "storage/settings.h"        // kbd_binding_t
+int         ui_kbd_action_count(void);
+const char *ui_kbd_action_name(int id);
+int         ui_kbd_bindings_get(kbd_binding_t *out, int max);
+void        ui_kbd_bindings_set(const kbd_binding_t *in, int n);
+void        ui_kbd_bindings_reset_defaults(void);
+
 // Register the physical keyboard's text callback (installs an internal handler
 // that applies typed characters to the focused textarea on the LVGL thread).
 // Call once after the UI is built.

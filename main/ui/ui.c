@@ -10407,18 +10407,93 @@ static void kbd_sc_sleep(void)    { display_sleep_enter(); }
 // applies to a button they deliberately pressed, not to a two-key chord that a
 // slipped finger can produce. Tapping Call CQ is a decision; Ctrl+C would be an
 // accident waiting to happen.
-static const struct { uint8_t mods; char key; const char *what; void (*fn)(void); }
-k_kbd_shortcuts[] = {
-    { KBD_MOD_CTRL, 'r', "Radio menus",      kbd_sc_radio      },
-    { KBD_MOD_CTRL, 'm', "User manual",      kbd_sc_manual     },
-    { KBD_MOD_CTRL, 'h', "Need guidance?",   kbd_sc_guidance   },
-    { KBD_MOD_CTRL, 'l', "QSO log",          kbd_sc_log        },
-    { KBD_MOD_CTRL, 'k', "Memory channels",  kbd_sc_memory     },
-    { KBD_MOD_CTRL, 'p', "Panadapter",       kbd_sc_panadapter },
-    { KBD_MOD_CTRL, 'f', "FT8",              kbd_sc_ft8        },
-    { KBD_MOD_CTRL, 's', "Settings drawer",  kbd_sc_drawer     },
-    { KBD_MOD_CTRL, 'd', "Display off",      kbd_sc_sleep      },
+// ⛔ THE ID IS THE CONTRACT. A binding stores an action ID, never a table
+// position or a function pointer, because the ids are written into NVS and into
+// the config export. Appending a new action is safe; RENUMBERING an existing
+// one silently repoints somebody's saved shortcut at a different feature, which
+// is the kind of change that is invisible until a user reports that Ctrl+M now
+// keys their radio. Index 0 is reserved for "unbound" so a zeroed slot cannot
+// mean an action.
+static const struct { const char *name; void (*fn)(void); } k_kbd_actions[] = {
+    /*  0 */ { "(none)",           NULL              },
+    /*  1 */ { "Radio menus",      kbd_sc_radio      },
+    /*  2 */ { "User manual",      kbd_sc_manual     },
+    /*  3 */ { "Need guidance?",   kbd_sc_guidance   },
+    /*  4 */ { "QSO log",          kbd_sc_log        },
+    /*  5 */ { "Memory channels",  kbd_sc_memory     },
+    /*  6 */ { "Panadapter",       kbd_sc_panadapter },
+    /*  7 */ { "FT8",              kbd_sc_ft8        },
+    /*  8 */ { "Settings drawer",  kbd_sc_drawer     },
+    /*  9 */ { "Display off",      kbd_sc_sleep      },
 };
+#define KBD_ACTION_N ((int)(sizeof(k_kbd_actions)/sizeof(k_kbd_actions[0])))
+
+// What a device with no saved shortcuts uses. Also what "Reset to defaults"
+// restores. All Ctrl, leaving Alt entirely free as the operator's own space.
+static const kbd_binding_t k_kbd_defaults[] = {
+    { KBD_MOD_CTRL, 'r', 1 }, { KBD_MOD_CTRL, 'm', 2 }, { KBD_MOD_CTRL, 'h', 3 },
+    { KBD_MOD_CTRL, 'l', 4 }, { KBD_MOD_CTRL, 'k', 5 }, { KBD_MOD_CTRL, 'p', 6 },
+    { KBD_MOD_CTRL, 'f', 7 }, { KBD_MOD_CTRL, 's', 8 }, { KBD_MOD_CTRL, 'd', 9 },
+};
+#define KBD_DEFAULT_N ((int)(sizeof(k_kbd_defaults)/sizeof(k_kbd_defaults[0])))
+
+// The live set. Loaded at boot; replaced whole by ui_kbd_bindings_set().
+static kbd_bindings_t s_kbd_bind;
+
+static void kbd_bindings_load(void)
+{
+    qmx_settings_t c;
+    settings_load_all(&c);
+    s_kbd_bind = c.kbd_bindings;
+    if (s_kbd_bind.n == 0 || s_kbd_bind.n > KBD_BINDINGS_MAX) {
+        // Never configured (or a blob from a build with a different layout) -
+        // fall back to the built-ins rather than to NO shortcuts, so an upgrade
+        // does not quietly take the keyboard away.
+        s_kbd_bind.n = KBD_DEFAULT_N;
+        memcpy(s_kbd_bind.b, k_kbd_defaults, sizeof(k_kbd_defaults));
+    }
+}
+
+int ui_kbd_action_count(void) { return KBD_ACTION_N; }
+
+const char *ui_kbd_action_name(int id)
+{
+    if (id < 0 || id >= KBD_ACTION_N) return "";
+    return k_kbd_actions[id].name;
+}
+
+int ui_kbd_bindings_get(kbd_binding_t *out, int max)
+{
+    if (!out || max <= 0) return 0;
+    int n = s_kbd_bind.n < max ? s_kbd_bind.n : max;
+    memcpy(out, s_kbd_bind.b, (size_t)n * sizeof(kbd_binding_t));
+    return n;
+}
+
+void ui_kbd_bindings_set(const kbd_binding_t *in, int n)
+{
+    if (!in || n < 0) return;
+    if (n > KBD_BINDINGS_MAX) n = KBD_BINDINGS_MAX;
+    kbd_bindings_t nb = { 0 };
+    for (int i = 0; i < n; i++) {
+        // Refuse what cannot work rather than storing it: an unknown action id,
+        // a modifier this keyboard cannot produce, or an empty key.
+        if (in[i].action == 0 || in[i].action >= KBD_ACTION_N) continue;
+        if (in[i].mods != KBD_MOD_CTRL && in[i].mods != KBD_MOD_ALT)  continue;
+        if (!in[i].key) continue;
+        nb.b[nb.n] = in[i];
+        nb.b[nb.n].key = (char)tolower((unsigned char)in[i].key);
+        nb.n++;
+    }
+    s_kbd_bind = nb;
+    settings_set_kbd_bindings(&nb);
+    ESP_LOGI(TAG, "kbd: %u shortcut(s) saved", (unsigned)nb.n);
+}
+
+void ui_kbd_bindings_reset_defaults(void)
+{
+    ui_kbd_bindings_set(k_kbd_defaults, KBD_DEFAULT_N);
+}
 
 static void kbd_text_cb(const char *text, uint8_t mods, void *arg)
 {
@@ -10490,15 +10565,16 @@ static void kbd_text_cb(const char *text, uint8_t mods, void *arg)
     // matched. Ctrl+Z with no binding must do nothing, not type "z".
     if (mods & (KBD_MOD_CTRL | KBD_MOD_ALT)) {
         char k = (char)tolower((unsigned char)text[0]);
-        for (size_t i = 0; i < sizeof(k_kbd_shortcuts)/sizeof(k_kbd_shortcuts[0]); i++) {
-            if (k_kbd_shortcuts[i].mods == mods && k_kbd_shortcuts[i].key == k) {
-                ESP_LOGI(TAG, "kbd shortcut: %s%c -> %s",
-                         (mods & KBD_MOD_CTRL) ? "Ctrl+" : "Alt+", k,
-                         k_kbd_shortcuts[i].what);
-                k_kbd_shortcuts[i].fn();
-                display_unlock();
-                return;
-            }
+        for (int i = 0; i < s_kbd_bind.n; i++) {
+            if (s_kbd_bind.b[i].mods != mods || s_kbd_bind.b[i].key != k) continue;
+            int act = s_kbd_bind.b[i].action;
+            if (act <= 0 || act >= KBD_ACTION_N || !k_kbd_actions[act].fn) break;
+            ESP_LOGI(TAG, "kbd shortcut: %s%c -> %s",
+                     (mods & KBD_MOD_CTRL) ? "Ctrl+" : "Alt+", k,
+                     k_kbd_actions[act].name);
+            k_kbd_actions[act].fn();
+            display_unlock();
+            return;
         }
         ESP_LOGD(TAG, "kbd: no shortcut for mod=0x%02X '%c'", mods, k);
         display_unlock();
@@ -10645,5 +10721,6 @@ static void kbd_text_cb(const char *text, uint8_t mods, void *arg)
 
 void ui_kbd_bridge_init(void)
 {
+    kbd_bindings_load();     // before the first keystroke can arrive
     tab5_keyboard_set_text_cb(kbd_text_cb, NULL);
 }
