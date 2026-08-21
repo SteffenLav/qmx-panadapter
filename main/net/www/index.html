@@ -179,12 +179,15 @@
      neighbours. A flex item defaults to min-height:auto and refuses to shrink
      below its content, which is what defeated the grid row. */
   #ft8-notice {
-    display: none; align-items: center; justify-content: center;
-    flex-direction: column; gap: 1.2rem;
+    display: none; align-items: center; justify-content: flex-start;
+    flex-direction: column; gap: 0;
     text-align: center; line-height: 1.7;
     background: var(--card); border: 1px solid var(--border); border-radius: 6px;
-    color: var(--dim); font-size: 1.6rem; padding: 1rem;
-    min-height: 0; overflow: auto;
+    color: var(--dim); font-size: 1.6rem;
+    /* No padding and no scrolling HERE any more: the header is a flex child
+       that must reach the panel's edges, and #ft8-body owns the scrolling so
+       nothing can slide under the header. Padding moved inside both. */
+    padding: 0; min-height: 0; overflow: hidden;
   }
   /* TX/QSO status banner inside the FT8 notice - mirrors the Tab5's own
      left-pane label colors (Dennis WN4FLA: see at a glance, from another
@@ -227,15 +230,36 @@
      "the text box is sitting right in front of the page". align-self:stretch
      plus the panel's own background makes it a header bar instead, and content
      scrolls cleanly underneath it the way a header is supposed to work. */
+  /* ⛔ NOT STICKY ANY MORE - it does not overlap anything, BY CONSTRUCTION.
+     Sticky kept the status visible while the page scrolled, and paid for it by
+     floating over whatever was underneath: at 100% browser zoom the pinned box
+     covered the explanatory paragraph and most of the three buttons, while at
+     67% everything fitted and it looked fine. "The box covers a lot - and since
+     the box is without a frame line then it is black on black background and
+     looks even more messy."
+     An overlay that only overlaps at some zoom levels cannot be fixed by
+     nudging offsets - there is no offset that is right at every zoom, font size
+     and window height. So the panel is now a fixed header plus a scrolling
+     body: the header always owns its own space and content physically cannot
+     get behind it. Same principle as the manual diagrams - let the layout do
+     the arithmetic instead of hand-maintaining a number that has to agree. */
   #ft8-status {
-    position: sticky; top: 0; z-index: 5;
+    flex: 0 0 auto;
     align-self: stretch;
     display: flex; flex-direction: column; align-items: center; gap: 0.4rem;
-    background: var(--card);
-    padding: 0.5rem 0 0.7rem;
-    border-bottom: 1px solid var(--border);
-    /* Makes the boundary obvious while something is scrolling under it. */
-    box-shadow: 0 8px 14px -8px rgba(0, 0, 0, 0.85);
+    /* Lifted off the panel so it reads as a header rather than as text that
+       happens to be at the top - it was card-on-card, i.e. the "black on black"
+       above, with nothing to say where the box ended. */
+    background: #11171e;
+    padding: 0.6rem 0.5rem 0.8rem;
+    border-bottom: 2px solid var(--border);
+    border-radius: 6px 6px 0 0;
+  }
+  /* The part that scrolls. Keeps the centred column layout the notice had. */
+  #ft8-body {
+    flex: 1 1 auto; align-self: stretch; overflow: auto;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: flex-start; gap: 1.2rem; padding-top: 1.2rem;
   }
   /* Both status lines were 13/14 px inside a panel whose base size is 1.6rem,
      so they read as fine print next to everything around them - "just too small
@@ -507,7 +531,7 @@
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
-  <div id="ft8-notice"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-webr"></div><div id="ft8-pwr"></div></div><div>Tab5 is in FT8/FT4 mode — spectrum &amp; waterfall are shown only in Panadapter mode.<br>Use the buttons below to download logs/config or upload QSOs.</div><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="to-panadapter" title="Switch the Tab5 to the Panadapter view">Show Panadapter</button><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button></div><div id="ft8-override" style="display:none; margin-top:6px;"><span style="color:var(--dim); font-size:13px; margin-right:8px;">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div>
+  <div id="ft8-notice"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-webr"></div><div id="ft8-pwr"></div></div><div id="ft8-body"><div>Tab5 is in FT8/FT4 mode — spectrum &amp; waterfall are shown only in Panadapter mode.<br>Use the buttons below to download logs/config or upload QSOs.</div><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="to-panadapter" title="Switch the Tab5 to the Panadapter view">Show Panadapter</button><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button></div><div id="ft8-override" style="display:none; margin-top:6px;"><span style="color:var(--dim); font-size:13px; margin-right:8px;">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div>
     <div id="ft8-decodes" style="width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
         <strong id="dec-title" style="color:#ffa040">Decode list</strong>
