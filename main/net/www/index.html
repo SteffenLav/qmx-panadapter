@@ -184,10 +184,12 @@
     text-align: center; line-height: 1.7;
     background: var(--card); border: 1px solid var(--border); border-radius: 6px;
     color: var(--dim); font-size: 1.6rem;
-    /* No padding and no scrolling HERE any more: the header is a flex child
-       that must reach the panel's edges, and #ft8-body owns the scrolling so
-       nothing can slide under the header. Padding moved inside both. */
-    padding: 0; min-height: 0; overflow: hidden;
+    /* ONE scroll container for the whole panel. Splitting it into a fixed
+       header plus a scrolling body removed the overlap but spent the panel's
+       whole height on the header, leaving "a super slim scrollable view port of
+       like 15mm tall". The panel is short and its content is small - it does
+       not need two scroll regions, it needs everything in one flow that adapts. */
+    padding: 1rem; min-height: 0; overflow: auto;
   }
   /* TX/QSO status banner inside the FT8 notice - mirrors the Tab5's own
      left-pane label colors (Dennis WN4FLA: see at a glance, from another
@@ -215,21 +217,23 @@
 
      The background is opaque on purpose: sticky content with a transparent
      background has the list scrolling visibly underneath it. */
-  /* ONE sticky wrapper around all three status lines, not one sticky rule per
-     line. The exchange status, the reply outcome and the TX power/SWR readout
-     were each positioned by hand - #ft8-tx at top:0, #ft8-webr at top:3.4rem,
-     and #ft8-pwr left in the normal flow because nobody gave it an offset. So
-     the moment the page scrolled, the pinned #ft8-webr floated over #ft8-pwr
-     and hid it behind an opaque background (Randy N4OPI: "once an exchange is
-     initiated it is covered by the exchange status block"). Stacking them
-     inside one sticky block makes the browser do that arithmetic, and no
-     hand-maintained offset can fall out of step with a line's height again. */
-  /* FULL WIDTH, not content width. #ft8-notice is a centred flex column, so a
-     plain block child shrinks to its own text and the pinned status then reads
-     as a floating box sitting on top of the paragraph behind it - the operator's
-     "the text box is sitting right in front of the page". align-self:stretch
-     plus the panel's own background makes it a header bar instead, and content
-     scrolls cleanly underneath it the way a header is supposed to work. */
+  /* ⛔ HISTORY, so the pinning idea is not reinvented. The status lines were
+     each positioned BY HAND as sticky elements - #ft8-tx at top:0, #ft8-webr at
+     top:3.4rem, and the power/SWR readout left in the flow with no offset at
+     all, so it was simply covered (Randy N4OPI: "once an exchange is initiated
+     it is covered by the exchange status block").
+     Three attempts to keep the pinning failed in three different ways: one
+     sticky wrapper still shrank to content width and read as a box dumped on
+     the page; stretching it full width still floated over the paragraph at 100%
+     zoom while looking fine at 67%; and splitting the panel into a fixed header
+     plus a scrolling body removed the overlap by spending the entire panel
+     height on the header - "a super slim scrollable view port of like 15mm
+     tall". The lesson is that an overlay whose correctness depends on the
+     content fitting cannot be made correct by choosing better numbers, because
+     the numbers change with every window size, zoom level and font setting.
+     Nothing here is pinned any more. Everything is in one flow, laid out ACROSS
+     rather than down, and sized with clamp() so it adapts instead of being
+     tuned for one machine. */
   /* ⛔ NOT STICKY ANY MORE - it does not overlap anything, BY CONSTRUCTION.
      Sticky kept the status visible while the page scrolled, and paid for it by
      floating over whatever was underneath: at 100% browser zoom the pinned box
@@ -243,42 +247,76 @@
      body: the header always owns its own space and content physically cannot
      get behind it. Same principle as the manual diagrams - let the layout do
      the arithmetic instead of hand-maintaining a number that has to agree. */
+  /* ACROSS, not down. Every item here used to be its own full-width line -
+     state, then reply outcome, then power, then a two-line paragraph, then the
+     buttons - so the block was five stacked rows tall before the station list
+     even started, on a panel only a few centimetres high. Laid out as a wrapping
+     row of boxes it says the same things in roughly one row on a wide window and
+     folds gracefully to two or three on a narrow one, which is also the honest
+     answer to "every user have their own windows and zoom levels". */
   #ft8-status {
-    flex: 0 0 auto;
-    align-self: stretch;
-    display: flex; flex-direction: column; align-items: center; gap: 0.4rem;
-    /* Lifted off the panel so it reads as a header rather than as text that
-       happens to be at the top - it was card-on-card, i.e. the "black on black"
-       above, with nothing to say where the box ended. */
-    background: #11171e;
-    padding: 0.6rem 0.5rem 0.8rem;
-    border-bottom: 2px solid var(--border);
-    border-radius: 6px 6px 0 0;
+    flex: 0 0 auto; align-self: stretch;
+    display: flex; flex-flow: row wrap; align-items: center; justify-content: center;
+    gap: 0.5rem 0.9rem;
+    background: #11171e; border: 1px solid var(--border); border-radius: 8px;
+    padding: 0.55rem 0.8rem; margin-bottom: 0.8rem;
   }
-  /* The part that scrolls. Keeps the centred column layout the notice had. */
+  /* The measured figures, as labelled cells. A number with its unit above it
+     reads at a glance and packs far tighter than "Last TX: 5.0 W SWR 1.11
+     (just now)" spelled out as a sentence. */
+  #ft8-stats { display: flex; flex-flow: row wrap; gap: 0.45rem; justify-content: center; }
+  .ft8-stat {
+    display: flex; flex-direction: column; align-items: center; line-height: 1.15;
+    min-width: 4.2rem; padding: 0.2rem 0.55rem;
+    background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+  }
+  .ft8-stat .k { font-size: clamp(0.58rem, 0.75vw, 0.75rem); color: var(--dim);
+                 letter-spacing: 0.07em; text-transform: uppercase; }
+  .ft8-stat .v { font-size: clamp(0.9rem, 1.45vw, 1.2rem); color: #40c0d0; font-weight: 600; }
   #ft8-body {
-    flex: 1 1 auto; align-self: stretch; overflow: auto;
-    display: flex; flex-direction: column; align-items: center;
-    justify-content: flex-start; gap: 1.2rem; padding-top: 1.2rem;
+    flex: 0 0 auto; align-self: stretch;
+    display: flex; flex-direction: column; align-items: center; gap: 0.7rem;
   }
+  /* One row for everything you can press, rather than a row of buttons and then
+     a separate row for the mid-QSO controls. */
+  #ft8-controls {
+    display: flex; flex-flow: row wrap; align-items: center;
+    justify-content: center; gap: 0.6rem 1.4rem;
+  }
+  /* Collapse anything with nothing to say instead of holding a row open. */
+  #ft8-webr:empty, #ft8-stats:empty { display: none; }
   /* Both status lines were 13/14 px inside a panel whose base size is 1.6rem,
      so they read as fine print next to everything around them - "just too small
      fonts if you ask me". Sized in rem now, so they track the rest of the page.
      min-height holds the row open when empty so nothing jumps as they fill. */
-  #ft8-webr { color: var(--dim); font-size: 1.15rem; min-height: 1.4em; }
-  #ft8-pwr  { color: #40c0d0;   font-size: 1.3rem;  min-height: 1.4em;
-              font-weight: 600; }
+  /* The reply outcome takes the full width of the strip and sits under the
+     rest, because it is a sentence rather than a figure and would otherwise
+     stretch the row. No min-height - :empty above collapses it. */
+  #ft8-webr { flex: 1 1 100%; text-align: center; color: var(--dim);
+              font-size: clamp(0.9rem, 1.3vw, 1.15rem); }
+  /* SCALED, not fixed. Every user has a different window and browser zoom, and
+     a size picked at one of them is wrong at the others - which is how the same
+     panel fitted at 67% and covered its own buttons at 100%. clamp() ties these
+     to the viewport with a floor (still legible on a phone) and a ceiling (does
+     not become a billboard on a 4K screen), so the block adapts instead of
+     being tuned for one machine. */
   #ft8-tx {
-    font-size: 1.5rem; font-weight: 700; line-height: 1.3;
-    padding: 0.6rem 1.2rem; border-radius: 8px;
+    font-size: clamp(1.05rem, 1.9vw, 1.5rem); font-weight: 700; line-height: 1.3;
+    padding: clamp(0.3rem, 0.7vw, 0.6rem) clamp(0.6rem, 1.4vw, 1.2rem);
+    border-radius: 8px;
     border: 2px solid transparent; max-width: 96%;
     background-color: #12161a;   /* opaque base; state tints layer over it */
   }
   /* Restart a CQ run without walking back to the Tab5 (Dennis WN4FLA). Sized like
      a deliberate action rather than a toolbar link: it keys the radio. */
-  #ft8-actions { display: flex; gap: 1rem; }
+  /* Secondary by design: it explains the mode once and should not compete with
+     the status or the station list for space. Was two full lines at 1.6rem. */
+  #ft8-hint { font-size: clamp(0.8rem, 1.15vw, 1.05rem); color: var(--dim);
+              max-width: 46rem; line-height: 1.45; }
+  #ft8-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 0.6rem; }
   #ft8-actions button {
-    font: inherit; font-size: 1.5rem; padding: 0.7rem 1.8rem;
+    font: inherit; font-size: clamp(0.95rem, 1.5vw, 1.5rem);
+    padding: clamp(0.35rem, 0.7vw, 0.7rem) clamp(0.8rem, 1.8vw, 1.8rem);
     color: var(--fg); background: var(--card);
     border: 2px solid var(--accent); border-radius: 8px; cursor: pointer;
   }
@@ -531,7 +569,7 @@
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
-  <div id="ft8-notice"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-webr"></div><div id="ft8-pwr"></div></div><div id="ft8-body"><div>Tab5 is in FT8/FT4 mode — spectrum &amp; waterfall are shown only in Panadapter mode.<br>Use the buttons below to download logs/config or upload QSOs.</div><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="to-panadapter" title="Switch the Tab5 to the Panadapter view">Show Panadapter</button><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button></div><div id="ft8-override" style="display:none; margin-top:6px;"><span style="color:var(--dim); font-size:13px; margin-right:8px;">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div>
+  <div id="ft8-notice"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-stats"></div><div id="ft8-webr"></div></div><div id="ft8-body"><div id="ft8-hint">Spectrum &amp; waterfall are shown in Panadapter mode. Logs, config and QSO upload are in the bar below.</div><div id="ft8-controls"><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="to-panadapter" title="Switch the Tab5 to the Panadapter view">Show Panadapter</button><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button></div><div id="ft8-override" style="display:none; margin-top:6px;"><span style="color:var(--dim); font-size:13px; margin-right:8px;">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div></div>
     <div id="ft8-decodes" style="width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
         <strong id="dec-title" style="color:#ffa040">Decode list</strong>
@@ -3141,21 +3179,29 @@ async function tick() {
          continuously, so presenting them bare would imply a live reading. "just
          now" up to one slot, then the age, so a stale figure is obviously stale. */
       {
-        const pw = document.getElementById("ft8-pwr");
-        if (pw) {
+        const st = document.getElementById("ft8-stats");
+        if (st) {
           const f = s.ft8;
-          if (f.tx_age_s === undefined) {
-            pw.textContent = "";
-          } else {
-            const bits = [];
-            if (f.tx_w   !== undefined) bits.push(f.tx_w.toFixed(1) + " W");
-            if (f.tx_swr !== undefined) bits.push("SWR " + f.tx_swr.toFixed(2));
-            const age = f.tx_age_s < 15 ? "just now"
-                      : (f.tx_age_s < 90 ? Math.round(f.tx_age_s) + " s ago"
-                                         : Math.round(f.tx_age_s / 60) + " min ago");
-            pw.textContent = bits.length ? "Last TX: " + bits.join("  ") + " (" + age + ")"
-                                         : "";
+          /* Labelled cells, not a sentence: the label carries the meaning so
+             the value can be short, and three small boxes side by side cost a
+             fraction of the height "Last TX: 5.0 W SWR 1.11 (just now)" did.
+             Empty when nothing has been transmitted - :empty then collapses the
+             whole group rather than showing three dashes. */
+          const cells = [];
+          if (f.tx_age_s !== undefined) {
+            if (f.tx_w   !== undefined) cells.push(["pwr", f.tx_w.toFixed(1) + " W"]);
+            if (f.tx_swr !== undefined) cells.push(["swr", f.tx_swr.toFixed(2)]);
+            if (cells.length) {
+              const age = f.tx_age_s < 15 ? "just now"
+                        : (f.tx_age_s < 90 ? Math.round(f.tx_age_s) + " s"
+                                           : Math.round(f.tx_age_s / 60) + " min");
+              cells.push(["last tx", age]);
+            }
           }
+          const html = cells.map(c =>
+            '<div class="ft8-stat"><span class="k">' + c[0] +
+            '</span><span class="v">' + c[1] + '</span></div>').join("");
+          if (st.innerHTML !== html) st.innerHTML = html;   /* avoid needless reflow */
         }
       }
       /* Tab title mirrors the state so an unfocused tab still signals it. */
