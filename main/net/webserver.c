@@ -154,18 +154,25 @@ static esp_err_t root_handler(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Cache-Control", "no-cache, must-revalidate");
     httpd_resp_set_hdr(req, "ETag", etag);
 
-    // Give the page the whole uplink while it is in flight. The live spectrum
-    // WebSocket holds 10.0 KB/s of a MEASURED ~12.7 KB/s link, so a page load
-    // competing with it got 2.7 KB/s - the single biggest reason the web UI
-    // read as unreachable. Same courtesy the QRZ/eQSL/LoTW uploads already pay,
-    // and it costs a viewer at most a moment of frozen spectrum. Nothing is
-    // lost by pausing during a page load in particular: the browser fetching
-    // the page has no WebSocket open yet, and a reloading one is about to have
-    // its old session taken over anyway.
-    webserver_ws_set_paused(true);
-    esp_err_t e = httpd_resp_send(req, (const char *)index_html_gz_start, len);
-    webserver_ws_set_paused(false);
-    return e;
+    // ⛔ DO NOT PAUSE THE SPECTRUM STREAM HERE. It was added in #229 to give the
+    // page the whole uplink, with the reasoning that "the browser fetching the
+    // page has no WebSocket open yet". That is true of the browser doing the
+    // FETCHING and false of one ALREADY CONNECTED - which is the common case,
+    // because the operator has the UI open on another machine while someone
+    // else loads it.
+    //
+    // The cost was not a moment of frozen spectrum. A paused socket sends
+    // nothing, so it becomes the least-recently-used socket, and this server
+    // runs with lru_purge_enable and max_open_sockets=10 - so a couple of page
+    // loads PURGE THE WEBSOCKET. The connected browser gets onclose, shows
+    // "reconnecting", waits its 2 s retry and comes back. Reported as a
+    // ten-second reconnect within hours of shipping the pause.
+    //
+    // It is also much less necessary than it was: the page is gzipped now, 263
+    // KB -> 83 KB, and ws_push_task backs its own rate off when the link cannot
+    // take a frame (#232). Sharing is the right behaviour; starving the live
+    // client to serve a new one is not.
+    return httpd_resp_send(req, (const char *)index_html_gz_start, len);
 }
 
 // FT8/FT4 TX + QSO state for the web page's status banner (Dennis WN4FLA:
