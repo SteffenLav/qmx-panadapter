@@ -33,6 +33,7 @@
 #include "net/spots.h"
 #include "help_topics.h"
 #include "help_triage.h"
+#include "adif_view_modal.h"   // Ctrl+L shortcut
 #include "wifi_config.h"
 #include "tune_modal.h"
 #include "activation_modal.h"
@@ -10366,6 +10367,55 @@ static void kbd_focus_next_field(void)
 // multi-char NAME token. Casing is inconsistent from the firmware ("ENTER" but
 // "esc"/"backspace"), so all token matches are case-insensitive. Modifier keys
 // (Shift/Fn/Sym/Ctrl/Alt) emit no event — the keyboard MCU applies them.
+// ---- Physical-keyboard shortcuts (#233) -----------------------------------
+//
+// MEASURED on the hardware 2026-08-21, not assumed. Pressing each combination
+// and logging the raw bytes gave:
+//
+//   Ctrl+R  mod=0x01  bytes=[72 01]      Ctrl+M  mod=0x01  bytes=[6D 01]
+//   Alt+R   mod=0x04  bytes=[72 04]      Alt+A   mod=0x04  bytes=[61 04]
+//   Sym+key mod=0x00  bytes=[3F]         Aa then a  mod=0x00  bytes=[41]
+//   plain b mod=0x00  bytes=[62]
+//
+// So: Ctrl is bit 0, Alt is bit 2, and the KEY ITSELF is the first byte. Sym
+// and Aa are applied inside the keyboard's own MCU and never reach us - which
+// is correct, they are doing their job, but it means the shortcut space is
+// exactly Ctrl and Alt. There is no Shift and no Fn key on this keyboard.
+//
+// ⚠ The payload is [char, modifier] - the modifier byte is REPEATED as a
+// second character, which is why these arrive with strlen()==2. Match on
+// text[0] only, and never let a modified key fall through to the typing path.
+#define KBD_MOD_CTRL 0x01
+#define KBD_MOD_ALT  0x04
+
+static void kbd_sc_radio(void)    { qmx_term_view_open(); }
+static void kbd_sc_manual(void)   { reader_view_show(); }
+static void kbd_sc_guidance(void) { help_triage_open(); }
+static void kbd_sc_log(void)      { adif_view_modal_show(); }
+static void kbd_sc_memory(void)   { memory_modal_show(); }
+static void kbd_sc_panadapter(void) { ui_request_base_mode(false); }
+static void kbd_sc_ft8(void)      { ui_request_base_mode(true); }
+static void kbd_sc_drawer(void)   { ui_set_drawer_open(!s_drawer_open); }
+static void kbd_sc_sleep(void)    { display_sleep_enter(); }
+
+// ⛔ NOTHING HERE TRANSMITS, deliberately. Every other confirmation was removed
+// today on the principle that the operator knows what they are doing - but that
+// applies to a button they deliberately pressed, not to a two-key chord that a
+// slipped finger can produce. Tapping Call CQ is a decision; Ctrl+C would be an
+// accident waiting to happen.
+static const struct { uint8_t mods; char key; const char *what; void (*fn)(void); }
+k_kbd_shortcuts[] = {
+    { KBD_MOD_CTRL, 'r', "Radio menus",      kbd_sc_radio      },
+    { KBD_MOD_CTRL, 'm', "User manual",      kbd_sc_manual     },
+    { KBD_MOD_CTRL, 'h', "Need guidance?",   kbd_sc_guidance   },
+    { KBD_MOD_CTRL, 'l', "QSO log",          kbd_sc_log        },
+    { KBD_MOD_CTRL, 'k', "Memory channels",  kbd_sc_memory     },
+    { KBD_MOD_CTRL, 'p', "Panadapter",       kbd_sc_panadapter },
+    { KBD_MOD_CTRL, 'f', "FT8",              kbd_sc_ft8        },
+    { KBD_MOD_CTRL, 's', "Settings drawer",  kbd_sc_drawer     },
+    { KBD_MOD_CTRL, 'd', "Display off",      kbd_sc_sleep      },
+};
+
 static void kbd_text_cb(const char *text, uint8_t mods, void *arg)
 {
     (void)arg;
@@ -10379,24 +10429,52 @@ static void kbd_text_cb(const char *text, uint8_t mods, void *arg)
     // Sym, and this keyboard has already cost one confident-wrong assumption
     // about a byte value. One line per new value, then silence.
     {
-        static uint32_t seen_mask = 0;      // bit N set = value N already logged
-        static uint8_t  seen_big[8];        // values >= 32, first 8 distinct
-        static int      seen_big_n = 0;
-        bool fresh = false;
-        if (mods < 32) {
-            if (!(seen_mask & (1u << mods))) { seen_mask |= (1u << mods); fresh = true; }
-        } else {
-            fresh = true;
-            for (int i = 0; i < seen_big_n; i++) if (seen_big[i] == mods) { fresh = false; break; }
-            if (fresh && seen_big_n < (int)sizeof(seen_big)) seen_big[seen_big_n++] = mods;
+        // EVERY modified keystroke is logged; only unmodified ones are deduped.
+        // Deduping on the modifier alone was wrong for exactly the job this is
+        // here to do: after Ctrl-R had been seen once, Ctrl-M and Ctrl-D would
+        // both have been silently skipped, because they share mod=0x01. Nobody
+        // presses Ctrl combinations by accident, so there is no spam risk.
+        static uint32_t seen_plain = 0;     // bit N = plain key with first byte N%32
+        bool fresh = (mods != 0);
+        if (!fresh) {
+            uint32_t bit = 1u << ((unsigned char)text[0] & 31);
+            if (!(seen_plain & bit)) { seen_plain |= bit; fresh = true; }
         }
-        if (fresh)
-            ESP_LOGW("ui", "kbd: NEW modifier byte 0x%02X with key \"%s\" "
-                           "(len=%u first=0x%02X)", mods, text,
-                     (unsigned)strlen(text), (unsigned char)text[0]);
+        if (fresh) {
+            // HEX EVERY BYTE. The first pass printed the string with %s and a
+            // length, and Ctrl-R came back as mod=0x01 key="r" len=2 - so there
+            // was a SECOND byte that %s could not show, which is exactly the
+            // byte that decides whether a shortcut layer is possible. Print
+            // what arrived, not what happens to be printable.
+            char hex[48]; int o = 0;
+            for (size_t i = 0; text[i] && o < (int)sizeof(hex) - 4; i++)
+                o += snprintf(hex + o, sizeof(hex) - o, "%02X ", (unsigned char)text[i]);
+            ESP_LOGW("ui", "kbd: NEW mod=0x%02X len=%u bytes=[ %s] str=\"%s\"",
+                     mods, (unsigned)strlen(text), hex, text);
+        }
     }
 
     if (!display_lock(50)) return;
+
+    // Shortcuts run BEFORE everything else, so they work from any screen - and
+    // a modified key NEVER falls through to the typing path, whether or not it
+    // matched. Ctrl+Z with no binding must do nothing, not type "z".
+    if (mods & (KBD_MOD_CTRL | KBD_MOD_ALT)) {
+        char k = (char)tolower((unsigned char)text[0]);
+        for (size_t i = 0; i < sizeof(k_kbd_shortcuts)/sizeof(k_kbd_shortcuts[0]); i++) {
+            if (k_kbd_shortcuts[i].mods == mods && k_kbd_shortcuts[i].key == k) {
+                ESP_LOGI(TAG, "kbd shortcut: %s%c -> %s",
+                         (mods & KBD_MOD_CTRL) ? "Ctrl+" : "Alt+", k,
+                         k_kbd_shortcuts[i].what);
+                k_kbd_shortcuts[i].fn();
+                display_unlock();
+                return;
+            }
+        }
+        ESP_LOGD(TAG, "kbd: no shortcut for mod=0x%02X '%c'", mods, k);
+        display_unlock();
+        return;
+    }
 
     size_t n = strlen(text);
     char c = (n == 1) ? text[0] : 0;
