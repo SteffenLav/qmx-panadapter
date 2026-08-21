@@ -206,7 +206,19 @@ static void add_ft8_tx_status(cJSON *root)
 
     const char *st;
     char b[160];
-    if (tx_st == FT8_TX_ACTIVE) {
+    // SWR protection latched, above everything else - the transmitter is
+    // refusing to key until cleared, same rule and same wording as the
+    // Tab5's own left-pane label (t_clock_cb, ft8_screen_view.c). Before
+    // this the web UI had NO visibility at all: the abort behind a trip
+    // reads through ft8_status_get() as a bare "QSO Cancelled", with no way
+    // to tell a fault from an ordinary cancel, and no way to clear it short
+    // of walking over to the Tab5 (Randy N4OPI).
+    float trip_swr = 0.0f;
+    if (ft8_tx_swr_tripped(&trip_swr)) {
+        st = "swr_fault";
+        snprintf(b, sizeof(b), "SWR %.1f:1 - TX STOPPED - check antenna - tap to clear",
+                 (double)trip_swr);
+    } else if (tx_st == FT8_TX_ACTIVE) {
         st = "active";
         snprintf(b, sizeof(b), "Transmitting: %s%s", tx_text, cq_line);
     } else if (tx_st == FT8_TX_ARMED) {
@@ -856,6 +868,11 @@ static esp_err_t cmd_handler(httpd_req_t *req)
             return ESP_FAIL;
         }
         ft8_screen_view_request_override(what);
+    } else if (action && strcmp(action, "clear_swr") == 0) {
+        // The web equivalent of tapping the Tab5's own SWR-fault prompt
+        // (Randy N4OPI: the web UI had no way to see the fault OR clear it).
+        // ft8_tx_clear_swr_trip() is a plain flag clear, safe from any task.
+        ft8_tx_clear_swr_trip();
     } else if (action && strcmp(action, "tune_start") == 0) {
         if (!web_tune_start()) {
             cJSON_Delete(root);

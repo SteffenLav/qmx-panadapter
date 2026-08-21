@@ -350,6 +350,10 @@
   #ft8-tx.st-done    { color: #40c040; border-color: #40c040; background-image: linear-gradient(rgba(64,192,64,.08), rgba(64,192,64,.08)); }
   #ft8-tx.st-timeout { color: #ff6020; border-color: #ff6020; background-image: linear-gradient(rgba(255,96,32,.08), rgba(255,96,32,.08)); }
   #ft8-tx.st-idle    { color: var(--dim); font-weight: 400; font-size: 1.8rem; }
+  /* SWR-protection fault: the loudest state there is, and tappable to clear -
+     same "TAP TO CLEAR" the Tab5's own prompt uses (Randy N4OPI). */
+  #ft8-tx.st-swr_fault { color: #ff2020; border-color: #ff2020; cursor: pointer;
+                         background-image: linear-gradient(rgba(255,32,32,.14), rgba(255,32,32,.14)); }
 
   /* ---- Bottom status row ---- */
   #bot {
@@ -1265,6 +1269,14 @@ async function promptCloudlogCreds() {
       await sendCmd({ action: "qso_override", what: what });
     });
   });
+
+/* SWR-protection fault: tap the banner itself to clear it, same gesture as
+   the Tab5's own "TAP TO CLEAR" prompt (Randy N4OPI - the web UI previously
+   showed only a bare "QSO Cancelled" with no way to tell why, or to recover). */
+document.getElementById("ft8-tx").addEventListener("click", async (e) => {
+  if (!e.target.classList.contains("st-swr_fault")) return;
+  await sendCmd({ action: "clear_swr" });
+});
 
 document.getElementById("cloudlog-creds-link").addEventListener("click", async (e) => {
   e.preventDefault();

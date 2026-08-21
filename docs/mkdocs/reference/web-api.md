@@ -87,6 +87,7 @@ action names its own parameter key (there is no generic `value`).
 | `cq_start` | *(none)* | Start a CQ run, as the Tab5's own **Call CQ** button does. **Keys the radio.** Only acted on while the Tab5 is in FT8/FT4 mode; otherwise discarded, not queued |
 | `reply` | `call` | Work a decoded station — the same intelligent Transmit a Tab5 row-tap runs. **Keys the radio.** Outcome in `/api/status` `ft8.web_r` |
 | `qso_override` | `what: "resend"/"rr73"/"73"/"cancel"` | Mid-QSO override, as the Tab5's own three buttons do. **Keys the radio** except for `cancel` |
+| `clear_swr` | *(none)* | Clear a latched SWR-protection trip, same as tapping the Tab5's own fault prompt. TX stays refused until this is called |
 | `tune_start` / `tune_stop` | *(none)* | Antenna Tune (QMX 1.04+ only). **Keys the radio continuously**; 60 s safety stop on the device; live power/SWR in `/api/status` `tune` while running |
 | `pause` / `resume` | *(none)* | Release the radio so its own menus can be used, and take it back. While paused the CAT poll, the dead-stream watchdog and the stuck-decode watchdog all stand down |
 | `greylist_clear` | *(none)* | Un-skip every grey-listed station |
