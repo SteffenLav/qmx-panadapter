@@ -25,18 +25,24 @@
 // reverted to 10 fps so the browser view isn't needlessly choppy. The core-0
 // saturation (with core 1 ~94% idle) is the thing to fix — by rebalancing to
 // core 1 / cutting the rotation cost — not here.
-#define WS_PUSH_PERIOD_MS       100        // ~10 fps - the FLOOR, i.e. fastest
-// Adaptive rate (#232). The period is raised when the link repeatedly cannot
-// take a frame and walked back down when it can, between these bounds.
-// 250 ms = 4 fps is as slow as this is allowed to get. Lower was tried at 400
-// and is not worth it: the extra 1.5 fps of headroom buys little on a link this
-// size, and a panadapter at 2.5 fps stops reading as a live display.
-#define WS_PERIOD_MAX_MS        250
-// Additive both directions, deliberately asymmetric: concede 20 ms at a time,
-// take back 5 ms at a time. Full range is therefore ~1.5 s down and ~6 s back,
-// slow enough that neither transition is visible as a jump.
-#define WS_PERIOD_BACKOFF_MS    20
-#define WS_PERIOD_RECOVER_MS    5
+#define WS_PUSH_PERIOD_MS       100        // ~10 fps
+// ⛔ AN ADAPTIVE FRAME RATE WAS TRIED HERE AND REMOVED (#232, 2026-08-21). It
+// raised the period when a frame needed more than one socket write and lowered
+// it again when frames went cleanly. Recorded rather than forgotten, because it
+// is an obvious idea to have twice:
+//   * it NEVER ENGAGED - its own telemetry reported "target 10.0" throughout
+//     the period the operator described the display as "very erratic".
+//   * its premise was a WRONG NUMBER. It was built on a measured "~12.7 KB/s
+//     link", of which 1026 B x 10 fps looked like 79%. That figure was taken
+//     while the page was still uncompressed AND WiFi power save was still on.
+//     Re-measured after both were fixed: six identical 86 KB fetches ran at min
+//     9.9, median 32.5, max 74.7 KB/s. The stream is 13% of the good case, and
+//     the 7.5x spread on IDENTICAL work says the link is LOSSY, not narrow.
+//     Rate control cannot help a link that is dropping packets.
+//   * its first form made things visibly worse, backing off x1.5 on a single
+//     hard frame and swinging 10 fps -> 3 fps and back within seconds.
+// Before reaching for this again, measure the SPREAD: a bandwidth ceiling gives
+// consistent throughput, and this link does not.
 #define WS_HEADER_LEN           2
 #define WS_PAYLOAD_LEN          DSP_FFT_SIZE
 #define WS_FRAME_LEN            (WS_HEADER_LEN + WS_PAYLOAD_LEN)
@@ -165,15 +171,9 @@ typedef enum {
 // byte of a frame is on the wire we are committed - abandoning it mid-frame is
 // what desynchronises the stream, so the only honest outcomes from that point are
 // "finished it" or "closed the session".
-// out_sends / out_ms report HOW HARD the frame was to push, for the adaptive
-// rate in ws_push_task(). Both may be NULL. A frame that needed more than one
-// socket write means the TCP send buffer was full - i.e. the link could not
-// take it in one go - which is the most direct congestion signal available
-// here, and it was already being counted for the #193 healer.
 static ws_tx_result_t ws_send_all(httpd_handle_t hd, int fd,
                                   const uint8_t *buf, size_t len,
-                                  uint32_t budget_ms,
-                                  int *out_sends, uint32_t *out_ms)
+                                  uint32_t budget_ms)
 {
     size_t     off   = 0;
     int        sends = 0;
@@ -207,8 +207,6 @@ static ws_tx_result_t ws_send_all(httpd_handle_t hd, int fd,
     }
 
     if (sends > 1) s_partial_writes++;   // would have been silent corruption before
-    if (out_sends) *out_sends = sends;
-    if (out_ms)    *out_ms = (uint32_t)((xTaskGetTickCount() - start) * portTICK_PERIOD_MS);
     return WS_TX_OK;
 }
 
@@ -216,8 +214,7 @@ static ws_tx_result_t ws_send_all(httpd_handle_t hd, int fd,
 // already sitting at buf + WS_WIRE_HDR_LEN, then send the lot in one go.
 static ws_tx_result_t ws_send_binary(httpd_handle_t hd, int fd,
                                      uint8_t *buf, size_t payload_len,
-                                     uint32_t budget_ms,
-                                     int *out_sends, uint32_t *out_ms)
+                                     uint32_t budget_ms)
 {
     // ⛔ RFC 6455 §5.2 requires the MINIMAL length encoding: the 7-bit field for
     // 0..125, and the 126 + 16-bit form ONLY for 126..65535. The old code used
@@ -254,7 +251,7 @@ static ws_tx_result_t ws_send_binary(httpd_handle_t hd, int fd,
         frame[3] = (uint8_t)(payload_len & 0xFF);
     }
     frame[0] = 0x80 | HTTPD_WS_TYPE_BINARY;    // FIN + opcode 0x2
-    return ws_send_all(hd, fd, frame, hdr + payload_len, budget_ms, out_sends, out_ms);
+    return ws_send_all(hd, fd, frame, hdr + payload_len, budget_ms);
 }
 
 // httpd worker has 1 task, so this URI handler runs in the only worker.
@@ -304,7 +301,7 @@ static esp_err_t ws_uri_handler(httpd_req_t *req)
             // Same all-or-nothing send as the stream: a half-written notice would
             // desynchronise the very socket we are about to close, and the stale
             // browser would report a protocol error instead of the reason.
-            if (ws_send_binary(h, s_ws_fd, bye, 1, 200, NULL, NULL) != WS_TX_OK)
+            if (ws_send_binary(h, s_ws_fd, bye, 1, 200) != WS_TX_OK)
                 ESP_LOGD(TAG, "takeover notice to fd=%d did not go out (closing anyway)",
                          s_ws_fd);
         }
@@ -348,8 +345,6 @@ static void ws_push_task(void *arg)
     TickType_t fps_at = last;
     int        fail_streak    = 0;   // consecutive async-send failures
     TickType_t fail_streak_at = 0;   // tick of the first failure in the streak
-    int        period_ms      = WS_PUSH_PERIOD_MS;  // adaptive, see below
-    int        hard_streak    = 0;   // consecutive frames the link struggled with
 
     // Tolerate a short burst of transient send failures (EAGAIN: the TCP send
     // buffer is momentarily full, common when the C6 link is briefly congested)
@@ -371,7 +366,7 @@ static void ws_push_task(void *arg)
     const int  MAX_FAIL_STREAK_MS = 5000;   // hard ceiling regardless of attempt count
 
     for (;;) {
-        vTaskDelayUntil(&last, pdMS_TO_TICKS(period_ms));
+        vTaskDelayUntil(&last, pdMS_TO_TICKS(WS_PUSH_PERIOD_MS));
 
         // Keep the socket fresh WHILE PAUSED too. The refresh below only runs
         // after a successful send, so a stream paused for an upload stops being
@@ -435,40 +430,8 @@ static void ws_push_task(void *arg)
         // longer than one push period: dropping the session costs the browser a
         // ~2 s reconnect, so riding out a congestion burst is much cheaper than
         // being strict here.
-        int      frame_sends = 0;
-        uint32_t frame_ms    = 0;
-        ws_tx_result_t tx = ws_send_binary(s_server, s_ws_fd, s_txbuf, WS_FRAME_LEN,
-                                           1500, &frame_sends, &frame_ms);
+        ws_tx_result_t tx = ws_send_binary(s_server, s_ws_fd, s_txbuf, WS_FRAME_LEN, 1500);
 
-        // ---- adaptive rate ------------------------------------------------
-        // This stream is the single biggest consumer of a small link, and at a
-        // fixed 10 fps it WINS: measured on the bench, the spectrum kept its
-        // 9.7-10.2 fps while a page load beside it crawled at 2.7 KB/s and the
-        // browser's own polls timed out. 1026 bytes x 10 fps = 10.0 KB/s of a
-        // link measured at ~12.7 KB/s, so everything else divides what is left.
-        //
-        // A frame that needed more than one socket write, or that took longer
-        // than a push period to get out, means the send buffer was full - the
-        // link could not take it. That is the moment to yield, and it is a
-        // signal we already compute (see ws_send_all).
-        //
-        // Backing off is deliberately FAST and recovery deliberately SLOW: the
-        // cost of being too quick to speed up is starving the very transfer we
-        // just made room for, whereas the cost of recovering slowly is a few
-        // seconds of a slightly lower frame rate that nobody can see. A healthy
-        // link never leaves WS_PERIOD_MIN_MS, so this is invisible until it is
-        // needed.
-        // ⚠ GENTLY, and only on SUSTAINED difficulty. The first version backed
-        // off x1.5 on a single hard frame and crawled back 20 ms at a time,
-        // which swings 10 fps -> 3 fps and back within a couple of seconds. The
-        // operator saw exactly that: "spectrum is running - but very erratic".
-        // A panadapter is judged on looking smooth, so a controller that lurches
-        // is worse than one that is slightly too fast: an occasional hard frame
-        // is normal on this link and must not move the rate at all.
-        //
-        // Additive both ways, and two hard frames IN A ROW before conceding
-        // anything. That turns the response into a slow glide the eye does not
-        // catch, while still yielding within a second or two of real congestion.
         if (tx == WS_TX_OK) {
             // ⛔ KEEP THIS SOCKET OUT OF THE LRU BIN. Without it httpd closes the
             // spectrum stream every few seconds and the browser shows
@@ -493,21 +456,6 @@ static void ws_push_task(void *arg)
             // are enough to fill it, so the stream was being killed by the page
             // that was watching it.
             httpd_sess_update_lru_counter(s_server, s_ws_fd);
-
-            bool hard = (frame_sends > 1) || (frame_ms >= (uint32_t)period_ms);
-            if (hard) {
-                if (++hard_streak >= 2) {
-                    period_ms += WS_PERIOD_BACKOFF_MS;
-                    if (period_ms > WS_PERIOD_MAX_MS) period_ms = WS_PERIOD_MAX_MS;
-                    hard_streak = 0;
-                }
-            } else {
-                hard_streak = 0;
-                if (period_ms > WS_PUSH_PERIOD_MS) {
-                    period_ms -= WS_PERIOD_RECOVER_MS;
-                    if (period_ms < WS_PUSH_PERIOD_MS) period_ms = WS_PUSH_PERIOD_MS;
-                }
-            }
         }
 
         if (tx == WS_TX_SKIPPED) {
@@ -546,12 +494,8 @@ static void ws_push_task(void *arg)
             // Every one of those was, before this fix, a silently corrupted stream
             // and therefore a browser-side disconnect a moment later. A non-zero
             // count here is the fix working, NOT a fault.
-            // `target` is the adaptive rate the link is currently allowing. If
-            // it sits below 10 fps the stream is deliberately yielding, which
-            // is the fix working rather than a fault - and it makes "the web UI
-            // felt slow" attributable instead of arguable.
-            ESP_LOGI(TAG, "tx %.1f fps (target %.1f, partial writes healed: %u)",
-                     fps, 1000.0f / (float)period_ms, (unsigned)s_partial_writes);
+            ESP_LOGI(TAG, "tx %.1f fps (partial writes healed: %u)",
+                     fps, (unsigned)s_partial_writes);
             sent = 0;
             fps_at = now;
         }
