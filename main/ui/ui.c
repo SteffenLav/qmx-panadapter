@@ -36,6 +36,11 @@
 #include "adif_view_modal.h"   // Ctrl+L shortcut
 #include "wifi_config.h"
 #include "tune_modal.h"
+#include "ft8_cq_modal.h"       // Ctrl/Alt shortcut targets (#233)
+#include "ft8_filter_modal.h"
+#include "ft8_time_modal.h"
+#include "ft8_tone_modal.h"
+#include "ft8_pileup_modal.h"
 #include "activation_modal.h"
 #include "hid_cursor.h"
 #include "memory_modal.h"
@@ -10402,6 +10407,60 @@ static void kbd_sc_ft8(void)      { ui_request_base_mode(true); }
 static void kbd_sc_drawer(void)   { ui_set_drawer_open(!s_drawer_open); }
 static void kbd_sc_sleep(void)    { display_sleep_enter(); }
 
+// --- the second batch (#233), so "Add shortcut" has something to offer ------
+// Setup modals: all of these are things an operator opens, reads and closes.
+static void kbd_sc_wifi(void)     { wifi_config_modal_show(); }
+static void kbd_sc_identity(void) { identity_config_modal_show(); }
+static void kbd_sc_cq_edit(void)  { ft8_cq_modal_show(); }
+static void kbd_sc_filters(void)  { ft8_filter_modal_show(); }
+static void kbd_sc_timesync(void) { ft8_time_modal_show(); }
+static void kbd_sc_tone(void)     { ft8_tone_modal_show(); }
+static void kbd_sc_pileup(void)   { ft8_pileup_modal_show(); }
+static void kbd_sc_activation(void) { activation_modal_show(); }
+static void kbd_sc_contents(void) { reader_view_open_index(); }
+
+// ⚠ Opens the Antenna Tune WINDOW; it does not start tuning. Starting is still
+// a deliberate press inside that modal, which is the line this whole shortcut
+// set holds: a chord may open something, never key the radio.
+static void kbd_sc_tune(void)     { tune_modal_show(); }
+
+// Toggles and steps, each reading the CURRENT state rather than keeping a
+// shadow copy - a shortcut that disagrees with the drawer would be worse than
+// no shortcut.
+static void kbd_sc_flat(void)     { ui_set_flat_mode(!ui_get_flat_mode()); }
+static void kbd_sc_pause(void)    { ui_set_cat_paused(!cat_user_pause_active()); }
+
+static void kbd_zoom_step(bool in)
+{
+    // The same 1,2,4,8,16,24 ladder the Zoom dropdown offers, so the keyboard
+    // and the touch control cannot land on values the other cannot reach.
+    static const float steps[] = { 1.0f, 2.0f, 4.0f, 8.0f, 16.0f, 24.0f };
+    const int n = (int)(sizeof(steps)/sizeof(steps[0]));
+    float cur = ui_get_zoom_factor();
+    int i = 0;
+    for (int j = 0; j < n; j++) if (cur >= steps[j] - 0.01f) i = j;
+    i += in ? 1 : -1;
+    if (i < 0) i = 0;
+    if (i >= n) i = n - 1;
+    ui_set_zoom(steps[i], 0);
+}
+static void kbd_sc_zoom_in(void)  { kbd_zoom_step(true);  }
+static void kbd_sc_zoom_out(void) { kbd_zoom_step(false); }
+
+static void kbd_bright_step(int delta)
+{
+    qmx_settings_t c;
+    settings_load_all(&c);
+    int p = (int)c.brightness_pct + delta;
+    if (p < 10)  p = 10;      // never to zero: that is what Display off is for,
+    if (p > 100) p = 100;     // and a dark screen with no way back is a trap
+    display_set_brightness(p);
+    settings_set_brightness_pct((uint8_t)p);
+    ESP_LOGI(TAG, "kbd: brightness %d%%", p);
+}
+static void kbd_sc_brighter(void) { kbd_bright_step(+10); }
+static void kbd_sc_dimmer(void)   { kbd_bright_step(-10); }
+
 // ⛔ NOTHING HERE TRANSMITS, deliberately. Every other confirmation was removed
 // today on the principle that the operator knows what they are doing - but that
 // applies to a button they deliberately pressed, not to a two-key chord that a
@@ -10425,6 +10484,23 @@ static const struct { const char *name; void (*fn)(void); } k_kbd_actions[] = {
     /*  7 */ { "FT8",              kbd_sc_ft8        },
     /*  8 */ { "Settings drawer",  kbd_sc_drawer     },
     /*  9 */ { "Display off",      kbd_sc_sleep      },
+    /* --- appended 2026-08-21; APPEND ONLY, never renumber the above --- */
+    /* 10 */ { "Manual contents",  kbd_sc_contents   },
+    /* 11 */ { "WiFi setup",       kbd_sc_wifi       },
+    /* 12 */ { "Operator identity",kbd_sc_identity   },
+    /* 13 */ { "CQ messages",      kbd_sc_cq_edit    },
+    /* 14 */ { "FT8 filters",      kbd_sc_filters    },
+    /* 15 */ { "Set the clock",    kbd_sc_timesync   },
+    /* 16 */ { "TX tone picker",   kbd_sc_tone       },
+    /* 17 */ { "Pileup",           kbd_sc_pileup     },
+    /* 18 */ { "Activation",       kbd_sc_activation },
+    /* 19 */ { "Antenna Tune window", kbd_sc_tune    },
+    /* 20 */ { "Flat spectrum on/off", kbd_sc_flat   },
+    /* 21 */ { "Release/take radio",   kbd_sc_pause  },
+    /* 22 */ { "Zoom in",          kbd_sc_zoom_in    },
+    /* 23 */ { "Zoom out",         kbd_sc_zoom_out   },
+    /* 24 */ { "Brighter",         kbd_sc_brighter   },
+    /* 25 */ { "Dimmer",           kbd_sc_dimmer     },
 };
 #define KBD_ACTION_N ((int)(sizeof(k_kbd_actions)/sizeof(k_kbd_actions[0])))
 
