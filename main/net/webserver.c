@@ -55,6 +55,7 @@
 #include "usb_replug.h"        // usb_replug (hidden /api/cmd recovery action)
 #include "util/usb_shutdown.h" // usb_shutdown_graceful - "prepare for flashing"
 #include "util/usb_patch_counters.h" // #189: the silent USB patches' fire counts
+#include "util/dxcc.h"        // dxcc_lookup - the decode list's COUNTRY column
 #include "esp_heap_caps.h"
 #include "esp_app_desc.h"
 #include "esp_timer.h"         // web tune 60 s safety timeout
@@ -2793,6 +2794,19 @@ static esp_err_t decodes_handler(httpd_req_t *req)
         cJSON_AddStringToObject(o, "call", r->call);
         cJSON_AddStringToObject(o, "text", r->last_text);
         cJSON_AddStringToObject(o, "grid", r->last_grid);
+        // The country - the one thing in this row you cannot read off the
+        // message text, and it was missing from the browser list entirely
+        // (that column carried GRID, which the message already repeats).
+        //
+        // SPELLED OUT here, unlike the Tab5. Both screens ask the same
+        // dxcc_lookup* over the same callsign so they can never disagree about
+        // WHO a station is, but the Tab5 has a 52 px column and must abbreviate
+        // to three letters; a browser window has room for "Czech Republic", and
+        // a name you can read beats a code you have to decode.
+        {
+            const char *cty = dxcc_lookup(r->call);
+            if (cty && cty[0]) cJSON_AddStringToObject(o, "cty", cty);
+        }
         cJSON_AddNumberToObject(o, "snr",  r->last_snr_db);
         cJSON_AddNumberToObject(o, "hz",   r->last_freq);
         cJSON_AddNumberToObject(o, "dt",   r->last_dt_ms);

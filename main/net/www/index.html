@@ -283,6 +283,28 @@
     display: flex; flex-flow: row wrap; align-items: center;
     justify-content: center; gap: 0.6rem 1.4rem;
   }
+  /* All four mid-QSO buttons the same size. Only Cancel carried a class
+     (.btn-danger), so only Cancel got the shared button padding and colour -
+     the other three fell back to the browser's default control, which is why
+     Cancel towered over them. Sized here rather than by adding classes so the
+     row is defined in ONE place, and it wraps rather than overflowing when the
+     window is narrow. */
+  #ft8-override { display: flex; flex-flow: row wrap; align-items: center;
+                  justify-content: center; gap: 0.4rem; }
+  #ft8-override button {
+    font: inherit; font-size: clamp(0.8rem, 1.15vw, 1.05rem);
+    padding: clamp(0.28rem, 0.55vw, 0.5rem) clamp(0.6rem, 1.1vw, 1rem);
+    min-width: 6.5em;              /* equal footprint despite unequal labels */
+    border-radius: 6px; cursor: pointer; color: #fff;
+    background: #2a3138; border: 1px solid var(--border);
+  }
+  #ft8-override button:hover { background: #333c45; }
+  /* Cancel keeps its colour - it is the one that stops a transmission - but
+     not a different size. */
+  #ft8-override button.btn-danger { background: #962020; border-color: #b83030; }
+  #ft8-override button.btn-danger:hover { background: #ab2727; }
+  #ft8-override .ovr-label { color: var(--dim);
+                             font-size: clamp(0.75rem, 1.05vw, 0.95rem); }
   /* Collapse anything with nothing to say instead of holding a row open. */
   #ft8-webr:empty, #ft8-stats:empty { display: none; }
   /* Both status lines were 13/14 px inside a panel whose base size is 1.6rem,
@@ -569,7 +591,7 @@
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
-  <div id="ft8-notice"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-stats"></div><div id="ft8-webr"></div></div><div id="ft8-body"><div id="ft8-hint">Spectrum &amp; waterfall are shown in Panadapter mode. Logs, config and QSO upload are in the bar below.</div><div id="ft8-controls"><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="to-panadapter" title="Switch the Tab5 to the Panadapter view">Show Panadapter</button><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button></div><div id="ft8-override" style="display:none; margin-top:6px;"><span style="color:var(--dim); font-size:13px; margin-right:8px;">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div></div>
+  <div id="ft8-notice"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-stats"></div><div id="ft8-webr"></div></div><div id="ft8-body"><div id="ft8-hint">Spectrum &amp; waterfall are shown in Panadapter mode. Logs, config and QSO upload are in the bar below.</div><div id="ft8-controls"><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="to-panadapter" title="Switch the Tab5 to the Panadapter view">Show Panadapter</button><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button></div><div id="ft8-override" style="display:none;"><span class="ovr-label">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div></div>
     <div id="ft8-decodes" style="width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
         <strong id="dec-title" style="color:#ffa040">Decode list</strong>
@@ -2464,8 +2486,17 @@ document.getElementById("set-modal").addEventListener("click", (e) => {
    from the grid in JS - one implementation means the two screens cannot
    disagree, and the miles setting comes along for free. Tony Abbey asked for
    the distance the Tab5 already shows (2026-08-14). */
+/* COUNTRY sits where GRID used to, matching the Tab5's own column order (its
+   narrow CTY column is in exactly this slot). GRID is gone because the message
+   text beside it already carries the grid on every message that has one - it
+   was the same value printed twice.
+   ⚠ Not quite ALWAYS: on a row whose latest message is a report or RR73 there
+   is no grid in the text, and the column used to show the one remembered from
+   an earlier decode. That is the cost of the swap, and it is the right trade -
+   the grid is recoverable by watching the station's next CQ, whereas the
+   country was not shown anywhere in this list at all. */
 const DEC_COLS = [
-  ["sl",   "SL"],   ["call", "CALL"], ["text", "MESSAGE"], ["grid", "GRID"],
+  ["sl",   "SL"],   ["call", "CALL"], ["text", "MESSAGE"], ["cty", "COUNTRY"],
   ["snr",  "SNR"],  ["dt",   "DT"],   ["hz",   "HZ"],      ["km",   "KM"],
   ["brg",  "BRG"],  ["age",  "AGE"],
 ];
@@ -2481,6 +2512,9 @@ function decFmt(k, r) {
   // number it cannot stand behind, so "--" here means unknown, not zero.
   if (k === "km")  return r.km  === undefined ? "—" : r.km;
   if (k === "brg") return r.brg === undefined ? "—" : r.brg + "°";
+  // The device's DXCC table covers ~190 of ~340 entities, so a miss is normal
+  // and honest - an em dash, never a guess at the country.
+  if (k === "cty") return r.cty === undefined ? "—" : r.cty;
   return r[k] === undefined ? "" : r[k];
 }
 
@@ -3187,16 +3221,16 @@ async function tick() {
              fraction of the height "Last TX: 5.0 W SWR 1.11 (just now)" did.
              Empty when nothing has been transmitted - :empty then collapses the
              whole group rather than showing three dashes. */
+          /* ONLY WHILE TRANSMITTING. These are readings from a burst, and once
+             the burst is over they are history: sitting there saying "6 min"
+             they were three cells of clutter describing something that had
+             stopped happening. The age cell went with them - it existed only to
+             admit the figures were stale, which is not a problem worth solving
+             once they are not shown when stale. */
           const cells = [];
-          if (f.tx_age_s !== undefined) {
+          if (f.st === "active") {
             if (f.tx_w   !== undefined) cells.push(["pwr", f.tx_w.toFixed(1) + " W"]);
             if (f.tx_swr !== undefined) cells.push(["swr", f.tx_swr.toFixed(2)]);
-            if (cells.length) {
-              const age = f.tx_age_s < 15 ? "just now"
-                        : (f.tx_age_s < 90 ? Math.round(f.tx_age_s) + " s"
-                                           : Math.round(f.tx_age_s / 60) + " min");
-              cells.push(["last tx", age]);
-            }
           }
           const html = cells.map(c =>
             '<div class="ft8-stat"><span class="k">' + c[0] +

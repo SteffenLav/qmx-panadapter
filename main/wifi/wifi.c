@@ -259,6 +259,30 @@ static void on_wifi_event(void *arg, esp_event_base_t base,
                           int32_t id, void *data)
 {
     if (id == WIFI_EVENT_STA_START) {
+        // ⛔ POWER SAVE OFF. This device is a SERVER, and IDF's default
+        // (WIFI_PS_MIN_MODEM) assumes the opposite: the radio sleeps between
+        // DTIM beacons and relies on the AP to buffer anything arriving for it.
+        // Outbound traffic is unaffected - the device wakes whenever IT wants to
+        // transmit - so the spot feeds, PSK Reporter and SNTP all worked
+        // perfectly while the web UI was intermittently unreachable from a PC on
+        // the same LAN. Measured on the bench over 494 samples at 5 s: the Tab5
+        // failed to answer a ping in 93 of them (19%), and TCP/80 in 66, with
+        // the router answering every single time from the same PC and adapter -
+        // and, when it did answer, ~2.2 s for a 6.7 KB request.
+        //
+        // That asymmetry - outbound flawless, inbound absent - is what modem
+        // sleep looks like when the AP's buffering does not hold up. Nothing is
+        // saved by it here either: the panel, the USB host and the FFT are all
+        // running flat out, and a spectrum stream at 10 fps means the radio is
+        // never idle for long anyway.
+        //
+        // Set from the STA_START handler so all four esp_wifi_start() call
+        // sites are covered by one line that cannot be forgotten. It must run
+        // AFTER start, which is exactly what this event means.
+        esp_err_t ps = esp_wifi_set_ps(WIFI_PS_NONE);
+        if (ps != ESP_OK) ESP_LOGW(TAG, "could not disable WiFi power save: %s",
+                                   esp_err_to_name(ps));
+
         // Drive the netif start ourselves, exactly once. The s_netif_started
         // guard makes the duplicate STA_START that newer ESP-Hosted firmware
         // delivers harmless (see s_netif_started declaration).
