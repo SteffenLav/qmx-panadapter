@@ -12,6 +12,9 @@
 void ui_kbd_note_focus(lv_obj_t *ta);
 void ui_kbd_note_unfocus(lv_obj_t *ta);
 void ui_kbd_set_buttons(lv_obj_t *save_btn, lv_obj_t *cancel_btn);
+// Let the physical keyboard's arrows / PgUp / PgDn scroll this object while it
+// is the visible one. Register once at build time; deletion deregisters.
+void ui_kbd_add_scrollable(lv_obj_t *obj);
 
 /*
  * Shared colour tokens for the panadapter UI. Goal: collapse the many

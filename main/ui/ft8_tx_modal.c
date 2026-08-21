@@ -344,6 +344,11 @@ static void modal_build(void)
     lv_obj_set_style_text_font(tx_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(tx_lbl);
 
+    // Enter transmits, Esc cancels. Consistent with the operator's standing
+    // rule that routine operating actions do not ask twice - this modal IS
+    // the confirmation, so confirming it from the keyboard is the point.
+    ui_kbd_set_buttons(tx_btn, cancel_btn);
+
     s_timer = lv_timer_create(timer_cb, 1000, NULL);
 
     ESP_LOGI(TAG, "modal built");

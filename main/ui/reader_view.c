@@ -1635,6 +1635,11 @@ void reader_view_init(lv_obj_t *parent)
     lv_obj_set_height(exit_btn, BTN_H);
     lv_obj_set_ext_click_area(exit_btn, 44);
     lv_obj_add_event_cb(exit_btn, exit_btn_cb, LV_EVENT_CLICKED, NULL);
+    // Esc leaves the manual. No Enter: there is nothing here to confirm, and a
+    // reader is exactly where a keyboard user expects Esc to work. Scrolling
+    // with the arrows and PgUp/PgDn is handled in ui.c's kbd_text_cb, which can
+    // see whether this overlay is the thing on screen.
+    ui_kbd_set_buttons(NULL, exit_btn);
     lv_obj_t *exit_lbl = lv_label_create(exit_btn);
     lv_obj_set_style_text_font(exit_lbl, &lv_font_montserrat_24, 0);
     lv_label_set_text(exit_lbl, LV_SYMBOL_CLOSE "  Exit");
@@ -1690,6 +1695,8 @@ void reader_view_init(lv_obj_t *parent)
 
     // Scrollable body
     s_body = lv_obj_create(s_overlay);
+    // Reading a manual is the clearest case for arrow scrolling there is.
+    ui_kbd_add_scrollable(s_body);
     lv_obj_remove_style_all(s_body);
     lv_obj_set_size(s_body, SCR_W, SCR_H - HEADER_H);
     lv_obj_set_pos(s_body, 0, HEADER_H);

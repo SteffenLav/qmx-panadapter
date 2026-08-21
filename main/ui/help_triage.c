@@ -201,6 +201,7 @@ static void build(void)
     lv_obj_add_event_cb(cl_btn, close_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *cl_lbl = lv_label_create(cl_btn);
     lv_label_set_text(cl_lbl, "Close");
+    ui_kbd_set_buttons(NULL, cl_btn);   // Esc closes the guidance panel
     lv_obj_set_style_text_color(cl_lbl, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(cl_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(cl_lbl);

@@ -95,7 +95,7 @@ static void drain_string_events(void)
                     o += snprintf(hex + o, sizeof(hex) - o, "%02X ", buf[i]);
                 ESP_LOGI(TAG, "evt mod=0x%02X len=%u bytes=[ %s] str=\"%s\"", buf[0], len, hex, text);
 #endif
-                if (s_cb) s_cb(text, s_cb_arg);
+                if (s_cb) s_cb(text, buf[0], s_cb_arg);
             }
         }
         count--;

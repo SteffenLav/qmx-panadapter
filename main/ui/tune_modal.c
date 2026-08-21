@@ -198,6 +198,11 @@ static void modal_build(void)
     lv_obj_set_style_text_font(cancel_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(cancel_lbl);
 
+    // Esc only, deliberately no Enter: this modal keys a carrier, and the
+    // key worth having on a keyboard is the one that STOPS it. Nothing here
+    // should be startable by a stray keypress.
+    ui_kbd_set_buttons(NULL, cancel_btn);
+
     ESP_LOGI(TAG, "Tune modal built");
 }
 

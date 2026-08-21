@@ -129,6 +129,11 @@ static void prompt_build(void)
     lv_obj_set_style_text_font(yes_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(yes_lbl);
 
+    // Enter accepts, Esc declines. This is the first thing a new operator
+    // meets, so a keyboard that does nothing here reads as a keyboard that
+    // does not work.
+    ui_kbd_set_buttons(yes, skip);
+
     ESP_LOGI(TAG, "prompt built");
 }
 

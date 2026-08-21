@@ -7800,6 +7800,9 @@ static void drawer_build(void)
     lv_obj_add_flag(s_drawer_scrim, UI_FLAG_NOT_HOT);   // dismiss surface, not a control
 
     s_drawer = lv_obj_create(scr);
+    // Arrows / PgUp / PgDn scroll the drawer - the operator's own suggestion,
+    // and the drawer is the longest scroll in the app.
+    ui_kbd_add_scrollable(s_drawer);
     lv_obj_set_size(s_drawer, DRAWER_W, DISPLAY_V_RES);
     // Park off-screen to the right
     lv_obj_set_pos(s_drawer, DISPLAY_H_RES, 0);
@@ -10222,8 +10225,74 @@ static lv_obj_t *s_kbd_ta = NULL;
 // Save/Cancel buttons of the currently-open modal, registered via
 // ui_kbd_set_buttons() so Enter/Esc can trigger them. Auto-cleared when the
 // buttons are deleted (modal closed) by kbd_btn_deleted_cb.
-static lv_obj_t *s_kbd_save_btn   = NULL;
-static lv_obj_t *s_kbd_cancel_btn = NULL;
+// ⛔ A REGISTRY, not one pair. Every modal registers ONCE at build time, and
+// these modals are built at boot and then shown/hidden rather than created and
+// destroyed - so a single pair meant the LAST MODAL BUILT owned Enter and Esc
+// for the whole session, including while it was hidden. Esc has been clicking
+// the pileup list's Close button since boot; harmless only because closing an
+// already-closed modal does nothing.
+//
+// Dispatch instead picks the entry whose button is ACTUALLY ON SCREEN
+// (lv_obj_is_visible walks the hidden flags of the whole ancestor chain), most
+// recently registered first. That keeps registration a one-liner at build time
+// - no show/hide bookkeeping to forget in seven files - and makes the answer to
+// "what does Esc do" simply "whatever is in front of you".
+#define KBD_BTN_SLOTS 12
+typedef struct { lv_obj_t *save; lv_obj_t *cancel; } kbd_btn_pair_t;
+static kbd_btn_pair_t s_kbd_btns[KBD_BTN_SLOTS];
+static int            s_kbd_btns_n = 0;
+
+// One arrow press moves about a line and a half of the drawer's body text -
+// enough to feel responsive, small enough to land on something specific.
+#define KBD_SCROLL_STEP_PX 60
+
+// The scrollable surface the arrows should drive: the topmost thing on screen
+// that can actually scroll. Registered by the surfaces themselves rather than
+// discovered, because "find the scrollable under the cursor" has no cursor to
+// work from when the input is a keyboard.
+#define KBD_SCROLL_SLOTS 10
+static lv_obj_t *s_kbd_scrollers[KBD_SCROLL_SLOTS];
+static int       s_kbd_scrollers_n = 0;
+
+static void kbd_scroller_deleted_cb(lv_event_t *e)
+{
+    lv_obj_t *o = (lv_obj_t *)lv_event_get_target(e);
+    for (int i = 0; i < s_kbd_scrollers_n; i++)
+        if (s_kbd_scrollers[i] == o) s_kbd_scrollers[i] = NULL;
+}
+
+void ui_kbd_add_scrollable(lv_obj_t *obj)
+{
+    if (!obj) return;
+    for (int i = 0; i < s_kbd_scrollers_n; i++) if (s_kbd_scrollers[i] == obj) return;
+    if (s_kbd_scrollers_n >= KBD_SCROLL_SLOTS) {
+        ESP_LOGW("ui", "kbd: scrollable registry full (%d)", KBD_SCROLL_SLOTS);
+        return;
+    }
+    s_kbd_scrollers[s_kbd_scrollers_n++] = obj;
+    lv_obj_add_event_cb(obj, kbd_scroller_deleted_cb, LV_EVENT_DELETE, NULL);
+}
+
+// Most recently registered visible one, same rule as the buttons: the arrows
+// act on what is in front of you.
+static lv_obj_t *kbd_scroll_target(void)
+{
+    for (int i = s_kbd_scrollers_n - 1; i >= 0; i--) {
+        lv_obj_t *o = s_kbd_scrollers[i];
+        if (o && lv_obj_is_visible(o)) return o;
+    }
+    return NULL;
+}
+
+// Most-recent-first, and only what the operator can see.
+static lv_obj_t *kbd_visible_btn(bool want_save)
+{
+    for (int i = s_kbd_btns_n - 1; i >= 0; i--) {
+        lv_obj_t *b = want_save ? s_kbd_btns[i].save : s_kbd_btns[i].cancel;
+        if (b && lv_obj_is_visible(b)) return b;
+    }
+    return NULL;
+}
 
 void ui_kbd_note_focus(lv_obj_t *ta)
 {
@@ -10238,14 +10307,30 @@ void ui_kbd_note_unfocus(lv_obj_t *ta)
 static void kbd_btn_deleted_cb(lv_event_t *e)
 {
     lv_obj_t *b = (lv_obj_t *)lv_event_get_target(e);
-    if (s_kbd_save_btn   == b) s_kbd_save_btn   = NULL;
-    if (s_kbd_cancel_btn == b) s_kbd_cancel_btn = NULL;
+    for (int i = 0; i < s_kbd_btns_n; i++) {
+        if (s_kbd_btns[i].save   == b) s_kbd_btns[i].save   = NULL;
+        if (s_kbd_btns[i].cancel == b) s_kbd_btns[i].cancel = NULL;
+    }
 }
 
 void ui_kbd_set_buttons(lv_obj_t *save_btn, lv_obj_t *cancel_btn)
 {
-    s_kbd_save_btn   = save_btn;
-    s_kbd_cancel_btn = cancel_btn;
+    // Re-registering the same pair (a modal rebuilt) replaces its slot rather
+    // than consuming another.
+    for (int i = 0; i < s_kbd_btns_n; i++) {
+        if (s_kbd_btns[i].save == save_btn && s_kbd_btns[i].cancel == cancel_btn) return;
+    }
+    if (s_kbd_btns_n >= KBD_BTN_SLOTS) {
+        // Bounded on purpose - a fixed array indexed by a growing set is the
+        // overrun this project has already had three times. Say so rather than
+        // writing past the end or silently dropping the newest registration.
+        ESP_LOGW("ui", "kbd: button registry full (%d) - '%s' modal gets no Enter/Esc",
+                 KBD_BTN_SLOTS, "newest");
+        return;
+    }
+    s_kbd_btns[s_kbd_btns_n].save   = save_btn;
+    s_kbd_btns[s_kbd_btns_n].cancel = cancel_btn;
+    s_kbd_btns_n++;
     if (save_btn)   lv_obj_add_event_cb(save_btn,   kbd_btn_deleted_cb, LV_EVENT_DELETE, NULL);
     if (cancel_btn) lv_obj_add_event_cb(cancel_btn, kbd_btn_deleted_cb, LV_EVENT_DELETE, NULL);
 }
@@ -10281,10 +10366,36 @@ static void kbd_focus_next_field(void)
 // multi-char NAME token. Casing is inconsistent from the firmware ("ENTER" but
 // "esc"/"backspace"), so all token matches are case-insensitive. Modifier keys
 // (Shift/Fn/Sym/Ctrl/Alt) emit no event — the keyboard MCU applies them.
-static void kbd_text_cb(const char *text, void *arg)
+static void kbd_text_cb(const char *text, uint8_t mods, void *arg)
 {
     (void)arg;
     if (!text || !text[0]) return;
+
+    // Report each DISTINCT modifier byte once, so the layout can be read off
+    // the hardware instead of guessed. The operator asked for shortcuts
+    // (Ctrl-R for the radio menus, Ctrl-M for the manual, and so on) and the
+    // byte that makes them possible has been arriving all along, unread - but
+    // nothing anywhere documents which bit is Ctrl, which is Fn and which is
+    // Sym, and this keyboard has already cost one confident-wrong assumption
+    // about a byte value. One line per new value, then silence.
+    {
+        static uint32_t seen_mask = 0;      // bit N set = value N already logged
+        static uint8_t  seen_big[8];        // values >= 32, first 8 distinct
+        static int      seen_big_n = 0;
+        bool fresh = false;
+        if (mods < 32) {
+            if (!(seen_mask & (1u << mods))) { seen_mask |= (1u << mods); fresh = true; }
+        } else {
+            fresh = true;
+            for (int i = 0; i < seen_big_n; i++) if (seen_big[i] == mods) { fresh = false; break; }
+            if (fresh && seen_big_n < (int)sizeof(seen_big)) seen_big[seen_big_n++] = mods;
+        }
+        if (fresh)
+            ESP_LOGW("ui", "kbd: NEW modifier byte 0x%02X with key \"%s\" "
+                           "(len=%u first=0x%02X)", mods, text,
+                     (unsigned)strlen(text), (unsigned char)text[0]);
+    }
+
     if (!display_lock(50)) return;
 
     size_t n = strlen(text);
@@ -10313,10 +10424,35 @@ static void kbd_text_cb(const char *text, void *arg)
 
     // Enter/Esc act on the modal's Save/Cancel buttons and work even when no
     // textarea is focused (e.g. the time-set modal, which has no text field).
+    // Arrows scroll whatever is on screen, when they are not editing a field.
+    // The operator's own suggestion ("in several places like scrolling in the
+    // drawer the up/down key could be used"), and it costs nothing: every one
+    // of these surfaces is already an LVGL scrollable, so this is routing, not
+    // new machinery. A focused textarea keeps the arrows for cursor movement -
+    // that check is the `!ta` below.
+    if (!c && !s_kbd_ta) {
+        lv_obj_t *sc = kbd_scroll_target();
+        if (sc) {
+            int page = lv_obj_get_height(sc) * 3 / 4;   // overlap, don't skip
+            int dy = 0;
+            if      (!strcasecmp(text, "up"))   dy = -KBD_SCROLL_STEP_PX;
+            else if (!strcasecmp(text, "down")) dy =  KBD_SCROLL_STEP_PX;
+            else if (!strcasecmp(text, "pgup")) dy = -page;
+            else if (!strcasecmp(text, "pgdn")) dy =  page;
+            if (dy) {
+                lv_obj_scroll_by_bounded(sc, 0, -dy, LV_ANIM_OFF);
+                display_unlock();
+                return;
+            }
+        }
+    }
+
     if (!c && !strcasecmp(text, "enter")) {
-        if (s_kbd_save_btn) lv_obj_send_event(s_kbd_save_btn, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *b = kbd_visible_btn(true);
+        if (b) lv_obj_send_event(b, LV_EVENT_CLICKED, NULL);
     } else if (!c && !strcasecmp(text, "esc")) {
-        if (s_kbd_cancel_btn) lv_obj_send_event(s_kbd_cancel_btn, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *b = kbd_visible_btn(false);
+        if (b) lv_obj_send_event(b, LV_EVENT_CLICKED, NULL);
     } else if (ta) {
         // Everything else edits the focused textarea.
         if (c) {

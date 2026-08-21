@@ -276,6 +276,9 @@ void ui_kbd_note_unfocus(lv_obj_t *ta);
 // NULL. Auto-cleared when the buttons are deleted (modal closed). Call once
 // after the modal's buttons are created.
 void ui_kbd_set_buttons(lv_obj_t *save_btn, lv_obj_t *cancel_btn);
+// Let the physical keyboard's arrows / PgUp / PgDn scroll this object while it
+// is the visible one. Register once at build time; deletion deregisters.
+void ui_kbd_add_scrollable(lv_obj_t *obj);
 
 // Register the physical keyboard's text callback (installs an internal handler
 // that applies typed characters to the focused textarea on the LVGL thread).
