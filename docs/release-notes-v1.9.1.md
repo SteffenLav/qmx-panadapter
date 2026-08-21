@@ -1,47 +1,7 @@
-# v1.9.1 — 2026-08-21
+**A hotfix for the update-from-the-device feature announced in v1.9.0. It did not work over a real download, on any version, ever - here is why, and what it means for you.**
 
-**A hotfix for the update-from-the-device feature announced in v1.9.0. It
-did not work over a real download, on any version, ever - here is why, and
-what it means for you.**
+**The bug.** v1.8.9 introduced updating from the device. v1.9.0 was meant to be the first release where the offer could actually be seen and used. Testing it for real, for the first time, against the live GitHub release turned up two bugs in the firmware's download code — both invisible until a genuine download was attempted against the real infrastructure, which nobody had done until today. The device could not even open the connection: GitHub's own redirect response carries more header data than the firmware's HTTP client was sized to receive, so every download failed instantly with "could not reach the download". This is why the v1.9.0 offer showed up correctly, downloaded nothing, and failed at 0% for everyone who tried it. Once that was fixed, a second bug appeared: the device could crash and reboot right at the end of a successful download. The same fix that let the connection open also made each downloaded chunk larger, and the download loop never handed control back to the rest of the firmware while processing it — audio and FFT processing were starved for the whole download, badly enough to eventually trip a hardware reset. Both are fixed here, and a real download was run to completion, twice, with a full serial capture proving zero crashes and zero audio interruption throughout.
 
-## The bug
+**What this means for your Tab5.** Your v1.8.9 or v1.9.0 unit cannot update itself to this release, or to any future one, over WiFi. The download code that is broken is the one currently running on your device — it doesn't matter what is on the other end, its own attempt to reach it fails the same way. This needs one cable flash, the same as any earlier update. After that single flash, OTA updates work normally from then on — this was tested and confirmed on the bench. Please do not try the in-device update from v1.8.9 or v1.9.0. It will not work, and there is nothing wrong with your unit or your network.
 
-v1.8.9 introduced updating from the device. v1.9.0 was meant to be the first
-release where the offer could actually be seen and used. Testing it for real,
-for the first time, against the live GitHub release turned up two bugs in the
-firmware's download code — both invisible until a genuine download was
-attempted against the real infrastructure, which nobody had done until today.
-
-**The device could not even open the connection.** GitHub's own redirect
-response carries more header data than the firmware's HTTP client was sized
-to receive, so every download failed instantly with "could not reach the
-download". This is why the v1.9.0 offer showed up correctly, downloaded
-nothing, and failed at 0% for everyone who tried it.
-
-**Once that was fixed, a second bug appeared: the device could crash and
-reboot right at the end of a successful download.** The same fix that let the
-connection open also made each downloaded chunk larger, and the download
-loop never handed control back to the rest of the firmware while processing
-it — audio and FFT processing were starved for the whole download, badly
-enough to eventually trip a hardware reset. Both are fixed here, and a real
-download was run to completion, twice, with a full serial capture proving
-zero crashes and zero audio interruption throughout.
-
-## What this means for your Tab5
-
-**Your v1.8.9 or v1.9.0 unit cannot update itself to this release, or to any
-future one, over WiFi.** The download code that is broken is the one
-currently running on your device — it doesn't matter what is on the other
-end, its own attempt to reach it fails the same way. This needs **one cable
-flash**, the same as any earlier update. After that single flash, OTA updates
-work normally from then on — this was tested and confirmed on the bench.
-
-Please do not try the in-device update from v1.8.9 or v1.9.0. It will not
-work, and there is nothing wrong with your unit or your network.
-
-## Everything else
-
-Unchanged from v1.9.0 — the faster web page, WiFi power saving, the
-WebSocket eviction fix, and the snap-on keyboard shortcuts are all exactly as
-described in the [v1.9.0 release notes](release-notes-v1.9.0.md). This
-release exists solely to fix the OTA download path.
+**Everything else** is unchanged from v1.9.0 — the faster web page, WiFi power saving, the WebSocket eviction fix, and the snap-on keyboard shortcuts are all exactly as described in the [v1.9.0 release notes](release-notes-v1.9.0.md). This release exists solely to fix the OTA download path.

@@ -1,115 +1,13 @@
-# v1.9.0 — 2026-08-21
+> ⚠️ **v1.9.1 is out - cable-flash it.** The update-from-the-device feature described below ("Try the update, from this release onwards") does not actually work in this release: it fails instantly for everyone due to a bug in the HTTP client, and if that alone were patched a second bug would crash the device partway through the download. Both are fixed in [v1.9.1](https://github.com/SteffenLav/qmx-panadapter/releases/tag/v1.9.1), but this release cannot download that fix itself - it needs one ordinary cable flash. After that, OTA updating works normally.
 
-**The web page is fast again, the snap-on keyboard drives the whole app, and
-this is the release where the update-from-the-device feature can finally be
-seen working.**
+**The web page is fast again, the snap-on keyboard drives the whole app, and this is the release where the update-from-the-device feature can finally be seen working.**
 
-## Try the update, from this release onwards
+**Try the update, from this release onwards.** v1.8.9 added updating from the device, but nobody could see it happen: the offer only appears when a release *newer* than the running one exists, and at the time there was none. From v1.9.0 there is, so here is how to try it. On the Tab5, look at the version at the bottom of the screen. When a newer release exists it turns cyan and reads something like `v1.9.0 → v1.9.1 tap?`. Touch it, hold for about a second, and let go — holding is the confirmation, so brushing past it does nothing. It downloads in the background and does **not** restart on its own; the line then says `tap updates`, and the same long press restarts into the new firmware when you are ready. In the web page, the version in the bottom bar does exactly the same thing, with a single tap. Do not want to wait? The Tab5 checks every 30 minutes, but you can ask it straight away: long-press the version even when it says you are up to date, and it will check there and then, showing `checking...` while it does. The web page does the same if you tap the version. That is the quickest way to see the whole thing work after an announcement goes out. Nothing is ever downloaded without you asking. Your settings, QSO log and LoTW certificate are untouched, and the previous firmware is kept as a fallback.
 
-v1.8.9 added updating from the device, but nobody could see it happen: the
-offer only appears when a release *newer* than the running one exists, and at
-the time there was none. From v1.9.0 there is, so here is how to try it.
+**The web page got a lot faster.** Three separate faults, all found by measuring rather than guessing. The page was being sent uncompressed — 263 KB of it, on a link that shares its bandwidth with the live spectrum stream. It is now compressed to 83 KB and carries a tag so a reload of unchanged firmware costs almost nothing. A cold load went from about 95 seconds to under two. WiFi power saving was switched on, which is right for a battery sensor and wrong for something that serves web pages: the radio slept between beacons and depended on the access point to hold anything arriving for it. Outbound traffic was never affected, which is why the spot feeds always worked while the web page did not. Measured over 500 samples, requests that failed outright went from **14.4% to 0.4%**, and the slow ones got twice as fast. The page was killing the very stream it displayed. The web server evicts its least-recently-used connection when it runs out of slots, and a connection's place in that queue is only refreshed when it *receives* something. The spectrum stream only ever sends — so it was permanently bottom of the pile, and the browser's own polling was enough to get it thrown out every few seconds. That is the "reconnecting" some of you have seen for a long time. If the panadapter in your browser has ever felt slow, stuttery, or dropped out and came back, all three of those were contributing.
 
-**On the Tab5.** Look at the version at the bottom of the screen. When a newer
-release exists it turns cyan and reads something like `v1.9.0 → v1.9.1 tap?`.
-Touch it, hold for about a second, and let go — holding is the confirmation, so
-brushing past it does nothing. It downloads in the background and does **not**
-restart on its own; the line then says `tap updates`, and the same long press
-restarts into the new firmware when you are ready.
+**The snap-on keyboard now drives the app.** If you have the Tab5's snap-on keyboard, it does considerably more than type into text fields. The radio's own menus can be driven from it — arrows, Enter, digits and backspace — so the Radio Menus screen no longer needs the on-screen keys, and Esc leaves the screen. Enter and Escape work in every window that has buttons, including the FT8 transmit confirmation and Antenna Tune, and Escape also backs out of the memory page and the settings drawer. Arrows and Page Up/Down scroll the settings drawer and the manual — press an arrow repeatedly and it scrolls further each time. Shortcuts: hold Ctrl and press a key — **R** radio menus, **M** manual, **L** QSO log, **K** memory channels, **P** panadapter, **F** FT8, **S** settings, **H** guidance, **D** display off. And you can change them: the web page has a shortcuts editor under Miscellaneous, with 25 actions to choose from — zoom, brightness, release the radio, any of the setup windows. Alt is left entirely free for your own bindings. Nothing that transmits can be bound to a shortcut. A button you deliberately press is one thing; a two-key combination a slipped finger can produce is another.
 
-**In the web page.** The version in the bottom bar does exactly the same thing,
-with a single tap.
+**Fixes from your reports.** Randy N4OPI found five, all fixed: the **TX power and SWR** readout was hidden behind the exchange status, so that whole strip is rebuilt — status, figures and buttons now sit across the panel instead of stacked down it, taking about a third less height — and the power and SWR figures only appear while you are actually transmitting. The **TX tone picker** selected a slot one or two to the left of where you clicked, an arithmetic mistake that grew from nothing at the left edge to nearly two slots at the right. **"Busy: working …"** and **"QSO cancelled"** never went away — that line reports what happened when you last clicked something, so it now expires by itself. A **worked station stayed green** in the decode list until the next QSO started. **"Who is hearing me" was quietly discarding reports** — it stopped reading after 64 and said nothing about it, and now handles 128 and tells you when the collector had more than it could read. The decode list also shows the **country, spelled out**, where it used to repeat the grid square that is already in the message text. Don N2VGU asked for keyboard support in the radio menus — see above.
 
-**Do not want to wait?** The Tab5 checks every 30 minutes, but you can ask it
-straight away: **long-press the version even when it says you are up to date**,
-and it will check there and then, showing `checking...` while it does. The web
-page does the same if you tap the version. That is the quickest way to see the
-whole thing work after an announcement goes out.
-
-Nothing is ever downloaded without you asking. Your settings, QSO log and LoTW
-certificate are untouched, and the previous firmware is kept as a fallback.
-
-## The web page got a lot faster
-
-Three separate faults, all found by measuring rather than guessing.
-
-**The page was being sent uncompressed** — 263 KB of it, on a link that shares
-its bandwidth with the live spectrum stream. It is now compressed to 83 KB and
-carries a tag so a reload of unchanged firmware costs almost nothing. **A cold
-load went from about 95 seconds to under two.**
-
-**WiFi power saving was switched on**, which is right for a battery sensor and
-wrong for something that serves web pages: the radio slept between beacons and
-depended on the access point to hold anything arriving for it. Outbound traffic
-was never affected, which is why the spot feeds always worked while the web page
-did not. Measured over 500 samples, requests that failed outright went from
-**14.4% to 0.4%**, and the slow ones got twice as fast.
-
-**The page was killing the very stream it displayed.** The web server evicts its
-least-recently-used connection when it runs out of slots, and a connection's
-place in that queue is only refreshed when it *receives* something. The spectrum
-stream only ever sends — so it was permanently bottom of the pile, and the
-browser's own polling was enough to get it thrown out every few seconds. That is
-the "reconnecting" some of you have seen for a long time.
-
-If the panadapter in your browser has ever felt slow, stuttery, or dropped out
-and came back, all three of those were contributing.
-
-## The snap-on keyboard now drives the app
-
-If you have the Tab5's snap-on keyboard, it does considerably more than type
-into text fields.
-
-- **The radio's own menus** can be driven from it — arrows, Enter, digits and
-  backspace — so the Radio Menus screen no longer needs the on-screen keys.
-  Esc leaves the screen.
-- **Enter and Escape** work in every window that has buttons, including the FT8
-  transmit confirmation and Antenna Tune. Escape also backs out of the memory
-  page and the settings drawer.
-- **Arrows and Page Up/Down scroll** the settings drawer and the manual. Press
-  an arrow repeatedly and it scrolls further each time.
-- **Shortcuts.** Hold Ctrl and press a key: **R** radio menus, **M** manual,
-  **L** QSO log, **K** memory channels, **P** panadapter, **F** FT8, **S**
-  settings, **H** guidance, **D** display off.
-- **And you can change them.** The web page has a shortcuts editor under
-  Miscellaneous, with 25 actions to choose from — zoom, brightness, release the
-  radio, any of the setup windows. Alt is left entirely free for your own
-  bindings.
-
-Nothing that transmits can be bound to a shortcut. A button you deliberately
-press is one thing; a two-key combination a slipped finger can produce is
-another.
-
-## Fixes from your reports
-
-**Randy N4OPI** found five, all fixed:
-
-- The **TX power and SWR** readout was hidden behind the exchange status. That
-  whole strip is rebuilt — status, figures and buttons now sit across the panel
-  instead of stacked down it, taking about a third less height — and the power
-  and SWR figures only appear while you are actually transmitting.
-- The **TX tone picker** selected a slot one or two to the left of where you
-  clicked. It was an arithmetic mistake that grew from nothing at the left edge
-  to nearly two slots at the right.
-- **"Busy: working …"** and **"QSO cancelled"** never went away. That line
-  reports what happened when you last clicked something, so it now expires by
-  itself.
-- A **worked station stayed green** in the decode list until the next QSO
-  started.
-- **"Who is hearing me" was quietly discarding reports** — it stopped reading
-  after 64 and said nothing about it. It now handles 128 and tells you when the
-  collector had more than it could read.
-
-The decode list also shows the **country, spelled out**, where it used to repeat
-the grid square that is already in the message text.
-
-**Don N2VGU** asked for keyboard support in the radio menus — see above.
-
-## Also
-
-- The web page no longer asks you to confirm ordinary operating actions. Calling
-  CQ, cancelling mid-QSO, working a station from the list and starting Antenna
-  Tune all just happen. Deleting things and installing firmware still ask.
-- The mid-QSO Re-send / RR73 / 73 / Cancel buttons are all the same size.
-- The firmware version at the bottom of the Tab5 is no longer dimmer than
-  everything beside it.
+**Also:** the web page no longer asks you to confirm ordinary operating actions — calling CQ, cancelling mid-QSO, working a station from the list and starting Antenna Tune all just happen, though deleting things and installing firmware still ask. The mid-QSO Re-send / RR73 / 73 / Cancel buttons are all the same size. The firmware version at the bottom of the Tab5 is no longer dimmer than everything beside it.
