@@ -2750,14 +2750,28 @@ void ft8_qso_note_manual_target(const char *target_call)
     unlock();
 }
 
+// "An exchange is under way with s_target." The one predicate both accessors
+// below ask, because they used to ask different questions and disagreed:
+// get_working_target() tested the STATE (so it released at completion) while
+// get_pinned_call() tested s_target[0] - which is deliberately NOT cleared when
+// a QSO completes, because final_resend_if_still_asked() needs it afterwards.
+// So the browser's decode list kept the finished station highlighted as "being
+// worked" until the next QSO overwrote the name (Randy N4OPI: "that call also
+// does not change from green text to grey in the decode list until a new QSO
+// starts"). Route any future "are we working someone" test through here.
+static inline bool qso_state_is_live(ft8_qso_state_t st)
+{
+    return st == FT8_QSO_WAIT_RPT || st == FT8_QSO_WAIT_ROGER ||
+           st == FT8_QSO_WAIT_RR73 || st == FT8_QSO_WAIT_DONE;
+}
+
 bool ft8_qso_get_working_target(char *buf, size_t len)
 {
     if (!buf || !len) return false;
     buf[0] = '\0';
     lock();
     ft8_qso_state_t st = s_state;
-    if (st == FT8_QSO_WAIT_RPT || st == FT8_QSO_WAIT_ROGER ||
-        st == FT8_QSO_WAIT_RR73 || st == FT8_QSO_WAIT_DONE) {
+    if (qso_state_is_live(st)) {
         strncpy(buf, s_target, len - 1);
         buf[len - 1] = '\0';
     } else if (s_manual_target[0] &&
@@ -2897,8 +2911,11 @@ void ft8_qso_get_pinned_call(char *buf, size_t len)
     if (!buf || !len) return;
     buf[0] = '\0';
     lock();
-    if (s_target[0]) {
-        // A live exchange, engine-driven (pounce or CQ-run answer).
+    if (s_target[0] && qso_state_is_live(s_state)) {
+        // A live exchange, engine-driven (pounce or CQ-run answer). The state
+        // test is load-bearing: s_target survives completion on purpose (the
+        // final re-send reads it), so testing the name alone kept a logged
+        // station pinned and green - see qso_state_is_live().
         strncpy(buf, s_target, len - 1);
     } else if (s_manual_target[0] &&
                ((int64_t)time(NULL) - s_manual_target_ts) < MANUAL_TARGET_TTL_S) {

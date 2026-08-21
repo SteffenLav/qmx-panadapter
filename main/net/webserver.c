@@ -2637,6 +2637,14 @@ static esp_err_t psk_rx_handler(httpd_req_t *req)
     // raw km stay authoritative and the browser does one conversion, exactly as
     // the decode list already does.
     cJSON_AddBoolToObject(root,   "miles",     qs.distance_in_miles);
+    // The set may be the part that fit rather than the whole answer - see
+    // psk_rx_is_truncated(). The browser must be able to say so, because a
+    // partial list and a quiet band look identical on screen.
+    cJSON_AddBoolToObject(root,   "truncated", psk_rx_is_truncated());
+    // The window is fixed in firmware and the page had no way to state it, so
+    // "I'm not sure how long the history window is" was a fair question to be
+    // left with (Randy N4OPI).
+    cJSON_AddNumberToObject(root, "window_h",  PSK_RX_WINDOW_S / 3600);
 
     cJSON *arr = cJSON_AddArrayToObject(root, "reports");
     for (int i = 0; i < n && arr; i++) {

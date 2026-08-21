@@ -6,11 +6,13 @@
 #include "ft8_tone_modal.h"
 
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include <stdlib.h>
 #include <time.h>
 #include <sys/time.h>
 #include <stdbool.h>
+#include "esp_timer.h"
 
 #include "esp_log.h"
 #include "esp_heap_caps.h"
@@ -1203,7 +1205,34 @@ static volatile int s_web_override_pending;
 static void apply_freq_preset(uint32_t freq_hz, bool ft4);   // defined below
 static volatile uint32_t s_web_preset_hz  = 0;    // 0 = nothing pending
 static volatile bool     s_web_preset_ft4 = false;
+// The OUTCOME OF THE LAST BROWSER COMMAND - not a description of the current
+// state, which is what it looked like to Randy N4OPI: "'Busy: working KA3PMW'
+// never clears until a new QSO is initiated", and the same for "QSO cancelled"
+// after the picked-up QSO had completed and logged. It was only ever overwritten
+// by the NEXT command, so a refusal from ten minutes ago still sat on screen
+// describing a station already in the log - and, because the status lines are
+// pinned, sat on top of the TX power/SWR readout as well.
+//
+// Every string written here answers "what happened when I clicked that": it
+// belongs to the click, so it expires with it. A live condition has its own
+// field in /api/status (ft8.st, working, tx_w/tx_swr) and does not need to be
+// mirrored in a sentence.
+#define WEB_RESULT_TTL_MS 20000
 static char          s_web_reply_result[64];
+static int64_t       s_web_reply_result_us;      // 0 = nothing has been said yet
+
+// Every write goes through here so none can forget the timestamp. The printf
+// attribute keeps the compiler checking the format strings it used to check
+// when these were plain snprintf() calls.
+static void web_result_set(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+static void web_result_set(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(s_web_reply_result, sizeof(s_web_reply_result), fmt, ap);
+    va_end(ap);
+    s_web_reply_result_us = esp_timer_get_time();
+}
 
 void ft8_screen_view_request_reply(const char *call)
 {
@@ -1228,6 +1257,12 @@ void ft8_screen_view_request_override(int what)
 
 const char *ft8_screen_view_get_web_reply_result(void)
 {
+    // Reports expiry rather than clearing it: this runs on the HTTP task while
+    // the LVGL task owns the buffer, and a reader must not write into another
+    // task's string.
+    if (!s_web_reply_result[0] || !s_web_reply_result_us) return "";
+    if (esp_timer_get_time() - s_web_reply_result_us > (int64_t)WEB_RESULT_TTL_MS * 1000)
+        return "";
     return s_web_reply_result;
 }
 
@@ -1242,7 +1277,7 @@ static void web_reply_drain(void)
     s_web_reply_call[0] = '\0';
 
     ft8_call_t *snap = table_snapshot();
-    if (!snap) { snprintf(s_web_reply_result, sizeof(s_web_reply_result), "Internal: no snapshot buffer"); return; }
+    if (!snap) { web_result_set("Internal: no snapshot buffer"); return; }
     int n = 0;
     ft8_screen_get_all(snap, FT8_CALL_TABLE_SIZE, &n);
     const ft8_call_t *match = NULL;
@@ -1252,14 +1287,14 @@ static void web_reply_drain(void)
         // Decode rows age out after 60 s, and the browser's copy can be a poll
         // older still - refusing is the right answer, not transmitting at a
         // station that may have left.
-        snprintf(s_web_reply_result, sizeof(s_web_reply_result), "%s is no longer in the decode list", call);
+        web_result_set("%s is no longer in the decode list", call);
         return;
     }
 
     char busy_target[24];
     if (ft8_qso_is_busy(busy_target, sizeof(busy_target))) {
-        if (busy_target[0]) snprintf(s_web_reply_result, sizeof(s_web_reply_result), "Busy: working %s", busy_target);
-        else                snprintf(s_web_reply_result, sizeof(s_web_reply_result), "Busy: calling CQ");
+        if (busy_target[0]) web_result_set("Busy: working %s", busy_target);
+        else                web_result_set("Busy: calling CQ");
         return;
     }
 
@@ -1267,7 +1302,7 @@ static void web_reply_drain(void)
     bool is_fresh_grid = false;
     char err[64];
     if (!ft8_qso_build_manual_reply(match, ft8_tx_pick_tone_hz(), &req, &is_fresh_grid, err, sizeof(err))) {
-        snprintf(s_web_reply_result, sizeof(s_web_reply_result), "%s", err[0] ? err : "Could not build the reply");
+        web_result_set("%s", err[0] ? err : "Could not build the reply");
         return;
     }
 
@@ -1278,20 +1313,20 @@ static void web_reply_drain(void)
     // closing 73 still logs to ADIF).
     if (is_fresh_grid) {
         if (ft8_qso_start(&req, err, sizeof(err))) {
-            snprintf(s_web_reply_result, sizeof(s_web_reply_result), "Working %s (auto QSO)", call);
+            web_result_set("Working %s (auto QSO)", call);
             ESP_LOGI(TAG, "web reply: auto pounce on %s", call);
         } else {
-            snprintf(s_web_reply_result, sizeof(s_web_reply_result), "%s", err[0] ? err : "Pounce refused");
+            web_result_set("%s", err[0] ? err : "Pounce refused");
         }
         return;
     }
     if (ft8_tx_arm(&req, err, sizeof(err))) {
         if (req.target_call[0]) ft8_qso_note_manual_target(req.target_call);
         if (req.kind == FT8_TX_KIND_73) ft8_qso_notify_manual_final(req.target_call);
-        snprintf(s_web_reply_result, sizeof(s_web_reply_result), "Armed: %s", req.display_text);
+        web_result_set("Armed: %s", req.display_text);
         ESP_LOGI(TAG, "web reply: armed '%s'", req.display_text);
     } else {
-        snprintf(s_web_reply_result, sizeof(s_web_reply_result), "%s", err[0] ? err : "Could not arm");
+        web_result_set("%s", err[0] ? err : "Could not arm");
     }
 }
 
@@ -1335,24 +1370,24 @@ static void t_clock_cb(lv_timer_t *t)
         bool up = s_container && !lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN);
         char err[64] = "";
         if (!up) {
-            snprintf(s_web_reply_result, sizeof(s_web_reply_result), "Not in FT8 mode");
+            web_result_set("Not in FT8 mode");
         } else if (what == 4) {
             // Cancel: disarm whatever is queued AND end the exchange, which is
             // what the Tab5's tap-on-the-TX-indicator does. Randy's words were
             // "mid-QSO over-ride/cancel button".
             ft8_tx_disarm();
             ft8_qso_abort();
-            snprintf(s_web_reply_result, sizeof(s_web_reply_result), "QSO cancelled");
+            web_result_set("QSO cancelled");
             ESP_LOGI(TAG, "web override: cancel - TX disarmed, QSO aborted");
         } else {
             ft8_tx_kind_t k = (what == 2) ? FT8_TX_KIND_ROGER_RPT
                             : (what == 3) ? FT8_TX_KIND_73
                                           : FT8_TX_KIND_REPLY;
             if (ft8_qso_override_next(k, err, sizeof(err))) {
-                snprintf(s_web_reply_result, sizeof(s_web_reply_result), "Override armed");
+                web_result_set("Override armed");
                 ESP_LOGI(TAG, "web override: kind=%d armed", (int)k);
             } else {
-                snprintf(s_web_reply_result, sizeof(s_web_reply_result), "%s", err[0] ? err : "Override refused");
+                web_result_set("%s", err[0] ? err : "Override refused");
                 ESP_LOGW(TAG, "web override refused: %s", err);
             }
         }
@@ -1365,7 +1400,7 @@ static void t_clock_cb(lv_timer_t *t)
         } else {
             s_web_reply_pending = false;
             s_web_reply_call[0] = '\0';
-            snprintf(s_web_reply_result, sizeof(s_web_reply_result), "Not in FT8 mode");
+            web_result_set("Not in FT8 mode");
             ESP_LOGW(TAG, "web reply request ignored - not in FT8 mode");
         }
     }

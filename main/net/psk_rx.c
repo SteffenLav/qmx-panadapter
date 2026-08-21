@@ -41,11 +41,23 @@ static const char *TAG = "psk_rx";
 // and any refresh request, so an operator tapping a refresh button cannot get
 // us rate-limited.
 #define PSK_RX_MIN_INTERVAL_S 300
-#define PSK_RX_WINDOW_S       86400   // look back a day: a POTA op wants the morning, not the minute
-#define RESP_CAP              16384
+
+// The response buffer must hold a DAY of reports, not a handful. At 16 KB it
+// held roughly 40-55 <receptionReport> elements and on_data() dropped the rest
+// on the floor with a bare `return ESP_OK` - no warning, no counter, nothing in
+// a diag log. Randy N4OPI saw the result as "PSK Reporter direct via the web
+// reports dozens of spots in the last 12 hrs ... the Panadapter reports no one
+// has heard me", with recent contacts present and older ones gone.
+//
+// A silent cut is the real defect here, not the size: a truncated answer and a
+// quiet band look identical, which is the same unverifiability trap the USB
+// patch counters exist to close (#189). Both limits are now generous AND both
+// say so when they bite.
+#define RESP_CAP              65536
 
 static psk_rx_report_t  *s_store;         // PSRAM
 static int               s_count;
+static bool              s_truncated;     // the set on display is not the whole answer
 static SemaphoreHandle_t s_lock;
 static int64_t           s_last_ok_us;
 static int64_t           s_last_try_us;
@@ -149,6 +161,14 @@ int psk_rx_unique_receivers(void)
     return uniq;
 }
 
+bool psk_rx_is_truncated(void)
+{
+    if (!lock_ms(50)) return false;
+    bool t = s_truncated;
+    unlock();
+    return t;
+}
+
 int psk_rx_max_distance_km(void)
 {
     if (!lock_ms(50)) return -1;
@@ -169,18 +189,22 @@ void psk_rx_request_refresh(void) { s_refresh_req = true; }
 
 // ---- fetch -----------------------------------------------------------------
 
-typedef struct { char *buf; size_t len, cap; } resp_buf_t;
+typedef struct { char *buf; size_t len, cap; size_t dropped; } resp_buf_t;
 
 static esp_err_t on_data(esp_http_client_event_t *evt)
 {
     if (evt->event_id != HTTP_EVENT_ON_DATA) return ESP_OK;
     resp_buf_t *r = (resp_buf_t *)evt->user_data;
-    if (!r || r->len + 1 >= r->cap) return ESP_OK;
+    if (!r) return ESP_OK;
+    if (r->len + 1 >= r->cap) { r->dropped += (size_t)evt->data_len; return ESP_OK; }
     size_t avail = r->cap - r->len - 1;
     size_t n = (size_t)evt->data_len < avail ? (size_t)evt->data_len : avail;
     memcpy(r->buf + r->len, evt->data, n);
     r->len += n;
     r->buf[r->len] = '\0';
+    // Count what would not fit. Silently discarding the tail is how a partial
+    // answer came to look like an empty band - see RESP_CAP.
+    r->dropped += (size_t)evt->data_len - n;
     return ESP_OK;
 }
 
@@ -203,8 +227,10 @@ static int parse_body(const char *xml)
     static char elem[512];
 
     int n = 0;
+    bool hit_cap = false;
     const char *p = xml;
-    while (n < PSK_RX_MAX && (p = strstr(p, "<receptionReport")) != NULL) {
+    while ((p = strstr(p, "<receptionReport")) != NULL) {
+        if (n >= PSK_RX_MAX) { hit_cap = true; break; }
         const char *end = strchr(p, '>');
         if (!end) break;
         size_t len = (size_t)(end - p);
@@ -218,9 +244,14 @@ static int parse_body(const char *xml)
         p = end + 1;
     }
 
+    if (hit_cap)
+        ESP_LOGW(TAG, "hit the %d-report cap - the collector had more for this "
+                      "window and the rest were not read", PSK_RX_MAX);
+
     if (lock_ms(1000)) {
         memcpy(s_store, tmp, sizeof(psk_rx_report_t) * (size_t)n);
         s_count = n;
+        s_truncated = hit_cap;
         unlock();
     }
     heap_caps_free(tmp);
@@ -232,7 +263,7 @@ static void fetch_once(const char *mycall)
     char *buf = heap_caps_malloc(RESP_CAP, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!buf) { ESP_LOGW(TAG, "no PSRAM for the response buffer"); return; }
     buf[0] = '\0';
-    resp_buf_t ctx = { buf, 0, RESP_CAP };
+    resp_buf_t ctx = { buf, 0, RESP_CAP, 0 };
 
     char url[192];
     snprintf(url, sizeof(url),
@@ -265,8 +296,17 @@ static void fetch_once(const char *mycall)
         int n = parse_body(buf);
         if (n >= 0) {
             s_last_ok_us = esp_timer_get_time();
-            ESP_LOGI(TAG, "%d report(s) of %s from %d receiver(s), furthest %d km",
-                     n, mycall, psk_rx_unique_receivers(), psk_rx_max_distance_km());
+            if (ctx.dropped) {
+                // Say it out loud. This is the failure that used to be
+                // indistinguishable from "nobody heard you".
+                ESP_LOGW(TAG, "response did not fit: kept %u B, dropped %u B - "
+                              "reports beyond the cut were never parsed",
+                         (unsigned)ctx.len, (unsigned)ctx.dropped);
+                if (lock_ms(200)) { s_truncated = true; unlock(); }
+            }
+            ESP_LOGI(TAG, "%d report(s) of %s from %d receiver(s), furthest %d km%s",
+                     n, mycall, psk_rx_unique_receivers(), psk_rx_max_distance_km(),
+                     psk_rx_is_truncated() ? " [PARTIAL - see warning above]" : "");
         }
     } else {
         // A 4xx here usually means we queried too often. Backing off is the

@@ -10,6 +10,7 @@
 #include "freertos/queue.h"
 #include "util/psram_task.h"
 #include <string.h>
+#include <strings.h>   /* strcasecmp - the keyboard's key names vary in case */
 #include <stdio.h>
 
 static const char *TAG = "term_view";
@@ -534,6 +535,52 @@ static void key_cb(lv_event_t *e)
     if (!k) return;
     post(CMD_KEY, k);               /* never blocking USB from taskLVGL */
     s_seen_seq = 0;                 /* force a repaint on the next tick */
+}
+
+/* The Tab5's snap-on keyboard, driving the radio's menus (Don N2VGU: "would it
+ * be possible ... to further ease operation by enabling use of the Tab 5
+ * hardware keyboard while in this screen ... or at least the navigation keys").
+ *
+ * This screen is the natural home for a real keyboard: it is the one place in
+ * the app that IS a keyboard interface, and the radio's numeric fields are
+ * typed. It needs no new plumbing - the same post(CMD_KEY) the on-screen keys
+ * use, so the port is still touched only by the worker and never from taskLVGL.
+ *
+ * The keyboard firmware spells its special keys out as NAMES with inconsistent
+ * casing ("ENTER" upper, "esc"/"backspace" lower), hence strcasecmp - see the
+ * keyboard section in CLAUDE.md. Names that mean nothing to the radio are
+ * refused rather than typed, so a stray Tab cannot end up in a menu field. */
+bool qmx_term_view_key(const char *token)
+{
+    if (!token || !token[0] || !qmx_term_view_is_open()) return false;
+
+    const char *name = NULL;
+    if (token[1] == '\0') {
+        /* A single byte - letters, digits, punctuation, space. The radio's
+         * menus are ASCII, so this passes straight through. */
+        name = token;
+    }
+    else if (!strcasecmp(token, "up"))        name = "up";
+    else if (!strcasecmp(token, "down"))      name = "down";
+    else if (!strcasecmp(token, "left"))      name = "left";
+    else if (!strcasecmp(token, "right"))     name = "right";
+    else if (!strcasecmp(token, "enter"))     name = "enter";
+    else if (!strcasecmp(token, "esc"))       name = "esc";
+    /* Both of the keyboard's delete keys send the byte the radio actually acts
+     * on. Measured, not assumed: 0x7F deletes leftward in a numeric field and
+     * 0x08 does nothing - see the evidence block in qmx_term.c's qmx_term_key(),
+     * which is why there is one BS key on screen and not two. */
+    else if (!strcasecmp(token, "backspace")) name = "bksp";
+    else if (!strcasecmp(token, "del"))       name = "bksp";
+    else {
+        ESP_LOGD(TAG, "kbd: no radio key for \"%s\" - ignored", token);
+        return false;
+    }
+
+    ESP_LOGI(TAG, "kbd: \"%s\" -> %s", token, name);
+    post(CMD_KEY, name);
+    s_seen_seq = 0;                 /* repaint on the next tick */
+    return true;
 }
 
 static void close_cb(lv_event_t *e) { (void)e; qmx_term_view_close(); }

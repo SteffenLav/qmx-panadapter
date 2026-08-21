@@ -10290,6 +10290,15 @@ static void kbd_text_cb(const char *text, void *arg)
     size_t n = strlen(text);
     char c = (n == 1) ? text[0] : 0;
 
+    // The radio's own menus claim the keyboard while they are on screen (Don
+    // N2VGU). Same shape as the frequency keypad below: a full-screen view with
+    // no textarea, so it has to take the keys before the textarea logic runs.
+    // It refuses keys the radio has no use for, and we fall through for those.
+    if (qmx_term_view_is_open() && qmx_term_view_key(text)) {
+        display_unlock();
+        return;
+    }
+
     // The frequency keypad has no textarea — route keys straight into it.
     if (freq_keypad_is_open()) {
         if (c && ((c >= '0' && c <= '9') || c == '.')) freq_apply_key(c, NULL);

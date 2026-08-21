@@ -12,5 +12,12 @@ void qmx_term_view_open(void);
 void qmx_term_view_close(void);
 bool qmx_term_view_is_open(void);
 
+// Feed one key from the Tab5's snap-on keyboard into the radio's menus
+// (Don N2VGU). Takes the keyboard bridge's own tokens - a single character, or
+// a spelled-out name like "up"/"enter"/"backspace". Returns true if the key was
+// consumed, false if this screen is not up or the radio has no use for that key,
+// so the caller can fall through to its normal handling.
+bool qmx_term_view_key(const char *token);
+
 // DEV ONLY: show/hide the on-screen keyboard (see the .c for why).
 void qmx_term_view_set_keyboard(bool shown);

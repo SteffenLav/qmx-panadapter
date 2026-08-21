@@ -212,16 +212,22 @@
 
      The background is opaque on purpose: sticky content with a transparent
      background has the list scrolling visibly underneath it. */
+  /* ONE sticky wrapper around all three status lines, not one sticky rule per
+     line. The exchange status, the reply outcome and the TX power/SWR readout
+     were each positioned by hand - #ft8-tx at top:0, #ft8-webr at top:3.4rem,
+     and #ft8-pwr left in the normal flow because nobody gave it an offset. So
+     the moment the page scrolled, the pinned #ft8-webr floated over #ft8-pwr
+     and hid it behind an opaque background (Randy N4OPI: "once an exchange is
+     initiated it is covered by the exchange status block"). Stacking them
+     inside one sticky block makes the browser do that arithmetic, and no
+     hand-maintained offset can fall out of step with a line's height again. */
+  #ft8-status { position: sticky; top: 0; z-index: 5; background: #12161a; }
   #ft8-tx {
     font-size: 1.5rem; font-weight: 700; line-height: 1.3;
     padding: 0.6rem 1.2rem; border-radius: 8px;
     border: 2px solid transparent; max-width: 96%;
-    position: sticky; top: 0; z-index: 5;
     background-color: #12161a;   /* opaque base; state tints layer over it */
   }
-  /* Same treatment for the one-line "asking the Tab5 to reply..." feedback that
-     sits directly under it, or it would scroll out from beneath a pinned box. */
-  #ft8-webr { position: sticky; top: 3.4rem; z-index: 5; background: #12161a; }
   /* Restart a CQ run without walking back to the Tab5 (Dennis WN4FLA). Sized like
      a deliberate action rather than a toolbar link: it keys the radio. */
   #ft8-actions { display: flex; gap: 1rem; }
@@ -479,7 +485,7 @@
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
-  <div id="ft8-notice"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-webr" style="color:var(--dim); font-size:13px; min-height:18px;"></div><div id="ft8-pwr" style="color:#40c0d0; font-size:14px; min-height:18px;"></div><div>Tab5 is in FT8/FT4 mode — spectrum &amp; waterfall are shown only in Panadapter mode.<br>Use the buttons below to download logs/config or upload QSOs.</div><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="to-panadapter" title="Switch the Tab5 to the Panadapter view">Show Panadapter</button><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button></div><div id="ft8-override" style="display:none; margin-top:6px;"><span style="color:var(--dim); font-size:13px; margin-right:8px;">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div>
+  <div id="ft8-notice"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-webr" style="color:var(--dim); font-size:13px; min-height:18px;"></div><div id="ft8-pwr" style="color:#40c0d0; font-size:14px; min-height:18px;"></div></div><div>Tab5 is in FT8/FT4 mode — spectrum &amp; waterfall are shown only in Panadapter mode.<br>Use the buttons below to download logs/config or upload QSOs.</div><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="to-panadapter" title="Switch the Tab5 to the Panadapter view">Show Panadapter</button><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button></div><div id="ft8-override" style="display:none; margin-top:6px;"><span style="color:var(--dim); font-size:13px; margin-right:8px;">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div>
     <div id="ft8-decodes" style="width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
         <strong id="dec-title" style="color:#ffa040">Decode list</strong>
@@ -1732,6 +1738,18 @@ function toneIsBusy(slot) {
   return !!(toneState && toneState.busy && toneState.busy[slot] === "1");
 }
 
+/* Slot geometry - the ONE place that knows where a cell is. The draw reserved
+   34 px at the right for the E/O letters (bw = (W-34)/n) while the click
+   handler mapped the pointer across the FULL width, so the two disagreed by a
+   factor of W/(W-34): zero error at the left edge, growing to ~1.8 slots at the
+   right (Randy N4OPI, "the cursor is off between 1 and 2 slots ... it does not
+   pick the slot that I click on"). Keep both callers on this function. */
+function toneGeom() {
+  const cv = document.getElementById("tone-strip");
+  const n  = ((toneState && (toneState.busy_e || toneState.busy)) || "").length || 1;
+  return { cv: cv, W: cv.width, n: n, bw: (cv.width - 34) / n };
+}
+
 function toneDraw() {
   /* Two rows - EVEN above ODD, always both (Roy KI0ER): the operator can choose
      window AND tone BEFORE arming anything, which a single our-window/union
@@ -1741,8 +1759,8 @@ function toneDraw() {
   const W = cv.width, H = cv.height;
   ctx.fillStyle = "#0d1116"; ctx.fillRect(0, 0, W, H);
   if (!toneState) return;
-  const n = (toneState.busy_e || toneState.busy || "").length || 1;
-  const bw = (W - 34) / n;                       // 34 px for the E/O letters
+  const g = toneGeom();
+  const n = g.n, bw = g.bw;
   const known = toneState.stations > 0;
   const rowH = Math.floor((H - 22) / 2) - 2;
   const rows = [
@@ -1857,9 +1875,13 @@ async function toneApply() {
   const pick = (ev) => {
     if (!toneState) return;
     const r = cv.getBoundingClientRect();
-    const n = toneState.busy.length || 1;
-    const slot = Math.floor((ev.clientX - r.left) / r.width * n);
-    toneSel = toneHzOf(Math.max(0, Math.min(n - 1, slot)));
+    const g = toneGeom();
+    /* The canvas is 1000 px internally and CSS-stretched to the container, so
+       the pointer has to be converted to INTERNAL pixels before it is divided
+       by the cell width the draw actually used - see toneGeom(). */
+    const x = (ev.clientX - r.left) / r.width * g.W;
+    const slot = Math.floor(x / g.bw);
+    toneSel = toneHzOf(Math.max(0, Math.min(g.n - 1, slot)));
     toneSync();
   };
   cv.addEventListener("click", pick);
@@ -2030,18 +2052,33 @@ async function propOpen() {
     const pskUnit = pskMi ? " mi" : " km";
     const pskDist = v => (v === undefined || v === null || v < 0)
                           ? null : Math.round(pskMi ? v * 0.621371 : v);
+    /* State the window instead of hardcoding "24 hours" in the prose - the
+       firmware owns it, and Randy N4OPI was left asking "I'm not sure how long
+       the history window is". */
+    const winTxt = (d.window_h ? d.window_h : 24) + " hours";
     sum.textContent = reps.length
       ? (d.receivers + " receiver(s), furthest " +
          (pskDist(d.max_km) !== null ? pskDist(d.max_km) + pskUnit : "unknown") +
+         ", last " + winTxt +
          ", updated " + (d.age_s >= 0 ? d.age_s + " s ago" : "never"))
       : "";
     if (!reps.length) {
-      body.innerHTML = '<p style="color:var(--dim)">Nobody has reported hearing you in the last 24 hours. ' +
+      body.innerHTML = '<p style="color:var(--dim)">Nobody has reported hearing you in the last ' + winTxt + '. ' +
                        'That is the normal answer if you have not transmitted - it is not an error.</p>';
       return;
     }
+    /* A cut-short answer must never be presented as the whole picture: the
+       reports that did not fit are missing, not absent from the collector. */
+    if (d.truncated) {
+      body.innerHTML = '<p style="color:#ffa040">Showing ' + reps.length +
+                       ' reports - the collector had more for the last ' + winTxt +
+                       ' than this device could read in one query, so older ones may be missing. ' +
+                       'pskreporter.info has the complete list.</p>';
+    } else {
+      body.innerHTML = '';
+    }
     reps.sort((a, b) => (b.km || 0) - (a.km || 0));
-    body.innerHTML =
+    body.innerHTML +=
       '<table style="width:100%; border-collapse:collapse;">' +
       '<tr style="color:#ffa040; text-align:left;">' +
       '<th>Receiver</th><th>Country</th><th>Distance</th><th>Bearing</th><th>SNR</th><th>Band</th><th>Mode</th><th>Age</th></tr>' +

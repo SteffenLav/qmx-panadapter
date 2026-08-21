@@ -31,10 +31,18 @@ typedef struct {
     int16_t  bearing_deg;   // -1 when either grid is missing
 } psk_rx_report_t;
 
+// How far back each query looks: a day, because a POTA operator wants the
+// morning, not the minute. In the header rather than the .c so the web UI can
+// state the window instead of leaving the reader to guess it.
+#define PSK_RX_WINDOW_S 86400
+
 // A single query returns everything the collector has for the window, and a
-// busy station on a good band can be heard by a lot of receivers. 64 is enough
-// to answer "where am I getting out" without pretending to be a logbook.
-#define PSK_RX_MAX 64
+// busy station on a good band can be heard by a lot of receivers. 64 was chosen
+// to answer "where am I getting out" without pretending to be a logbook - but
+// over a 24 h window an active operator passes it easily, and the overflow was
+// discarded in silence. 128 costs ~10 KB of PSRAM and covers a real session;
+// psk_rx_is_truncated() reports the case where even that is not enough.
+#define PSK_RX_MAX 128
 
 void psk_rx_init(void);
 
@@ -52,6 +60,14 @@ int  psk_rx_age_s(void);
 
 // Furthest report in the current set, in km; -1 when no report carried a grid.
 int  psk_rx_max_distance_km(void);
+
+// True when the last answer was CUT SHORT - the collector had more for the
+// window than the response buffer or the report cap could hold. The set on
+// display is then the part that fit, not the whole picture, and the UI has to
+// say so: a partial answer and a quiet band are otherwise indistinguishable,
+// which is exactly how "no one has heard me in 24 hrs" was reported while
+// pskreporter.info's own page showed dozens (Randy N4OPI).
+bool psk_rx_is_truncated(void);
 
 // Ask for a query now (e.g. the operator just opened the view). Coalesced with
 // the periodic cycle and still rate-limited - see PSK_RX_MIN_INTERVAL_S.
