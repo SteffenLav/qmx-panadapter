@@ -1204,7 +1204,13 @@ async function promptCloudlogCreds() {
     if (!b) return;
     b.addEventListener("click", async (e) => {
       e.preventDefault();
-      if (what === "cancel" && !confirm("Stop transmitting and end this exchange?")) return;
+      /* No confirm on Cancel. ⛔ THE RULE FOR THIS PAGE: routine operating
+         actions do not ask. A licensed operator pressing Cancel mid-exchange
+         knows what Cancel does, and a dialog between the finger and the stop
+         button is worse than useless on the one control whose whole purpose is
+         to stop a transmission quickly. Confirms are kept only where something
+         is destroyed or the device reboots - deleting a QSO, clearing a memory,
+         importing a config, factory reset, OTA install. */
       document.getElementById("ft8-webr").textContent = "Asking the Tab5 to " + what + "...";
       await sendCmd({ action: "qso_override", what: what });
     });
@@ -1802,7 +1808,8 @@ async function sendCmd(payload) {
   const btn = document.getElementById("cq-restart");
   if (!btn) return;
   btn.addEventListener("click", async () => {
-    if (!confirm("Start calling CQ on the Tab5?")) return;
+    /* No confirm - see the note on the mid-QSO Cancel. Calling CQ is the
+       ordinary thing this page exists to do. */
     btn.disabled = true;
     const was = btn.textContent;
     btn.textContent = "Calling...";
@@ -2574,7 +2581,8 @@ async function pollDecodes() {
       a.addEventListener("click", (ev) => {
         ev.preventDefault();
         const call = a.getAttribute("data-pcall");
-        if (!confirm("Work " + call + " from the pileup? This transmits with your callsign.")) return;
+        /* No confirm - working a caller out of the pileup is the point of the
+           pileup list. See the note on the mid-QSO Cancel. */
         document.getElementById("ft8-webr").textContent = "Asking the Tab5 to reply to " + call + "...";
         sendCmd({ action: "reply", call: call });
       }));
@@ -2605,7 +2613,8 @@ document.getElementById("dec-body").addEventListener("click", async (e) => {
   if (!tr) return;
   const call = tr.getAttribute("data-call");
   if (!call) return;
-  if (!confirm("Work " + call + "? This transmits with your callsign. A CQ starts a full automatic QSO; anything else sends the correct next message.")) return;
+  /* No confirm - clicking a station in the decode list to work it is the
+     primary gesture of this page. See the note on the mid-QSO Cancel. */
   document.getElementById("ft8-webr").textContent = "Asking the Tab5 to reply to " + call + "...";
   await sendCmd({ action: "reply", call: call });
 })
