@@ -146,7 +146,25 @@ static void update_line_tap(void)
     }
 
     update_check_get_latest(latest, sizeof(latest));
-    if (!latest[0]) return;
+
+    // NOTHING TO INSTALL -> the long press means "check now" instead.
+    //
+    // Without this the gesture simply did nothing whenever the device was up to
+    // date, which is the state it is in almost all the time - so on the Tab5
+    // itself there was no way to act on an announcement at all. A tester who
+    // reads the release post and walks over to the radio should not need a
+    // browser to ask the question, on a device whose whole point is working
+    // without a laptop.
+    //
+    // The check runs on update_check's own task; this only asks. The 1 Hz
+    // refresh above repaints the line either way, so "checking..." is replaced
+    // by the version again, or by the cyan offer.
+    if (!latest[0] || !update_check_available()) {
+        ESP_LOGI("status", "operator asked for an update check");
+        ui_update_line_force("checking...", 0x40D8E0);
+        update_check_now();
+        return;
+    }
 
     static char url[192];
     snprintf(url, sizeof(url),
@@ -184,7 +202,16 @@ static void status_task(void *arg)
         // same as the browser's, so the two screens read alike.
         {
             static char vline[96];   // two versions plus an arrow - 64 truncates
-            uint32_t vcol = 0x808080;              // running version, nothing to say
+            // The running version, with nothing to report. Was 0x808080, a
+            // mid-grey noticeably dimmer than everything else on this bar -
+            // the operator's words were "grey (dim) and not white-ish". It is
+            // not a warning and not an afterthought, it is simply which
+            // firmware this is, so it reads like the rest of the bar. The
+            // colours below still carry the states that DO mean something.
+            // 0xC0C0C0 is UI_COLOR_TEXT_SECONDARY, spelled literally because
+            // this file deliberately does not depend on ui_theme.h - every
+            // other state below is a literal for the same reason.
+            uint32_t vcol = 0xC0C0C0;
             // ⛔ STATIC, NOT STACK. status_task's stack is 4096 bytes (crash
             // dump gave bounds 0x481b97b4-0x481ba7b0 = 4092), and the ~384
             // bytes of buffers here - added for #218 - overflowed it: "Stack
@@ -234,8 +261,22 @@ static void status_task(void *arg)
             // in its lowest pixels above the label - so reaching for this cannot
             // nudge the dial (the strip is 22 px, sits on the bar, and a tap on
             // it retunes).
-            ui_set_update_line_tappable(ost == OTA_DONE || ost == OTA_FAILED ||
-                                        (ost == OTA_IDLE && update_check_available()));
+            // Tappable in every state EXCEPT mid-download, because the long
+            // press now always means something: install, restart, retry - or,
+            // when there is nothing to install, CHECK NOW (see update_line_tap).
+            // Previously it was inert whenever the device was up to date, which
+            // is nearly all the time, so on the Tab5 itself there was no way to
+            // act on a release announcement without a browser.
+            //
+            // ⚠ THE COST, and it is why this was gated before: while tappable,
+            // the lowest 8 px of the band-plan strip across this label's own
+            // x-range stop accepting a press, so a miss aimed at the bar cannot
+            // nudge the dial. That exclusion is now permanent rather than only
+            // while an update is pending. It is 8 px of a 22 px strip over a
+            // couple of hundred pixels of width - small, but real, and this is
+            // the line to change back if tap-to-tune ever feels worse near the
+            // bottom bar.
+            ui_set_update_line_tappable(ost != OTA_RUNNING);
             ui_set_update_line(vline, vcol);
         }
 

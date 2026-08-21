@@ -32,12 +32,31 @@ static const char *TAG = "update_check";
 
 #define RESP_MAX_BYTES      (48 * 1024)
 #define FIRST_DELAY_MS      30000              // let WiFi/SNTP settle first
-#define CHECK_INTERVAL_MS   (6 * 60 * 60 * 1000)   // 6 h (pending operator confirm)
+// 30 MINUTES, down from 6 hours. Six hours meant a unit left switched on before
+// a release might not notice until the next day, which made the OTA offer close
+// to useless - and untestable.
+//
+// Cheap because of what is actually fetched. MEASURED: latest.json is 139 BYTES
+// and takes 0.09 s, so this is ~280 bytes an hour per device and 50 hits an hour
+// across 25 devices. Five minutes was tried first and is unnecessary now that
+// update_check_now() exists: anyone who has just read the announcement can force
+// a check from the version number in the footer, so the timer only has to catch
+// the people who have not.
+#define CHECK_INTERVAL_MS   (30 * 60 * 1000)       // 30 min
+// ⛔ THE GITHUB FALLBACK IS A DIFFERENT ANIMAL AND MUST NOT RUN AT THAT RATE.
+// MEASURED: /releases?per_page=5 is 48,764 BYTES and takes 3.7 s - 350x the
+// traffic, several seconds of a marginal WiFi link, and GitHub's unauthenticated
+// limit is 60 requests/hour per IP. If latest.json ever went down, every device
+// on a site would start pulling 48 KB every five minutes and would rate-limit
+// themselves out. So it is tried at most this often, and the cheap check keeps
+// running in between.
+#define GITHUB_MIN_GAP_MS   (60 * 60 * 1000)       // 1 h
 #define RETRY_WHEN_DOWN_MS  (10 * 60 * 1000)   // WiFi down: retry sooner
 
 static SemaphoreHandle_t s_lock = NULL;
 static char s_latest[24]  = {0};
 static bool s_available   = false;
+static volatile bool s_force = false;   // set by update_check_now()
 static bool s_started     = false;
 
 // ---- version compare -------------------------------------------------------
@@ -201,19 +220,32 @@ static bool do_check(void)
     // outbound TLS failed at RNG seeding - so this function could never actually
     // reach the network. Fixing TLS turned it into the one network consumer on
     // the board not following the house rule.
-    webserver_ws_set_paused(true);
-
+    // ⚠ The WS pause is NOT taken for latest.json. The house rule exists because
+    // a big fetch landing on the ~10 fps spectrum stream is the documented
+    // wedge-prone combination - but this fetch is 139 bytes and 0.09 s, and at
+    // one every five minutes a stutter that often would be a worse bug than the
+    // one the rule prevents. The GitHub fallback is 48 KB and DOES pause.
     size_t len = 0;
     int status = http_get(LATEST_JSON_URL, buf, RESP_MAX_BYTES, &len);
     if (status == 200 && parse_latest_json(buf, tag, sizeof(tag))) {
         got = true;
     } else {
-        ESP_LOGW(TAG, "latest.json check failed (status=%d) - trying GitHub", status);
-        status = http_get(GITHUB_RELEASES_URL, buf, RESP_MAX_BYTES, &len);
-        if (status == 200 && parse_github(buf, tag, sizeof(tag))) got = true;
+        static int64_t s_last_github_us = 0;
+        int64_t now = esp_timer_get_time();
+        if (s_last_github_us &&
+            (now - s_last_github_us) < (int64_t)GITHUB_MIN_GAP_MS * 1000) {
+            ESP_LOGW(TAG, "latest.json failed (status=%d); GitHub tried %lld min ago "
+                          "- waiting rather than hammering it", status,
+                     (long long)((now - s_last_github_us) / 60000000));
+        } else {
+            ESP_LOGW(TAG, "latest.json check failed (status=%d) - trying GitHub", status);
+            s_last_github_us = now;
+            webserver_ws_set_paused(true);        // 48 KB: this one yields
+            status = http_get(GITHUB_RELEASES_URL, buf, RESP_MAX_BYTES, &len);
+            webserver_ws_set_paused(false);
+            if (status == 200 && parse_github(buf, tag, sizeof(tag))) got = true;
+        }
     }
-
-    webserver_ws_set_paused(false);
     heap_caps_free(buf);
 
     if (!got) { ESP_LOGW(TAG, "no version info available"); return false; }
@@ -237,9 +269,16 @@ static void check_task(void *arg)
         // (hardware-observed: both URLs failed at 36.8 s uptime while WiFi
         // came up at ~38.5 s; neighbouring boots succeeded at 37-38 s).
         bool ok = wifi_is_connected() && do_check();
-        vTaskDelay(pdMS_TO_TICKS(ok ? CHECK_INTERVAL_MS : RETRY_WHEN_DOWN_MS));
+        // Sleep in slices so a forced check does not wait out the interval.
+        // Even at 5 minutes that is too long when the operator has just
+        // published a release and wants to SEE the offer appear.
+        int slept = 0, want = ok ? CHECK_INTERVAL_MS : RETRY_WHEN_DOWN_MS;
+        while (slept < want && !s_force) { vTaskDelay(pdMS_TO_TICKS(500)); slept += 500; }
+        if (s_force) { s_force = false; ESP_LOGI(TAG, "check forced"); }
     }
 }
+
+void update_check_now(void) { s_force = true; }
 
 void update_check_start(void)
 {

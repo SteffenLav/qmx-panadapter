@@ -22,3 +22,9 @@ void update_check_get_latest(char *out, int out_sz);
 
 // True if a newer-than-running version has been found.
 bool update_check_available(void);
+
+// Ask for a check RIGHT NOW instead of waiting for the next interval. Used by
+// /api/cmd {"action":"update_check"} so a release can be watched arriving
+// rather than waited for - and so "is the update system working?" is a question
+// with a five-second answer.
+void update_check_now(void);

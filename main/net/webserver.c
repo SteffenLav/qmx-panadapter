@@ -950,6 +950,15 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, "{\"ok\":true}");
         return ESP_OK;
+    } else if (action && strcmp(action, "update_check") == 0) {
+        // Force the periodic check to run now rather than waiting out the
+        // interval. Makes "did the release land?" answerable in seconds
+        // instead of minutes, and makes the whole update path testable.
+        update_check_now();
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"note\":\"checking now\"}");
+        return ESP_OK;
     } else if (action && strcmp(action, "ota_install") == 0) {
         // #218: install a firmware release from the device. OPERATOR-INITIATED
         // ONLY - see ota_update.h for why this must never become automatic

@@ -4542,7 +4542,38 @@ function paintUpdateNotice(s) {
         () => otaInstall(u.latest),
         "Tap to download and install " + latest + " on the Tab5.");
   } else {
-    set(s.tab5_fw || "", "", null, "");
+    /* UP TO DATE - and still tappable, to FORCE a check.
+       The device polls every 5 minutes, but a beta tester who has just read the
+       announcement on groups.io or GitHub wants to act on it now, not wait for
+       a timer they cannot see. The version number is where someone looks to ask
+       "what am I on?", so it is also where "is there anything newer?" belongs -
+       no new control, and the label is already tappable in every other state. */
+    set(s.tab5_fw || "", "", forceUpdateCheck,
+        "Up to date as of the last check. Tap to check again now.");
+  }
+}
+
+async function forceUpdateCheck() {
+  const el = document.getElementById("tab5fw");
+  const was = el ? el.textContent : "";
+  if (el) { el.textContent = "checking…"; el.style.color = "#40d8e0"; }
+  try {
+    /* Check the BODY, not just the status - this device answers an unknown
+       action with HTTP 200 and "unknown action", which would otherwise look
+       exactly like success. */
+    const r = await sendCmd({ action: "update_check" });
+    if (!r || r.ok !== true) {
+      if (el) { el.textContent = "check failed"; el.style.color = "#ff6060"; }
+      setTimeout(() => { if (el) el.textContent = was; }, 4000);
+      return;
+    }
+    /* The check runs on its own task; the result arrives through the ordinary
+       /api/status poll, which repaints this label. Restore the old text if
+       nothing has changed it by then, so it cannot sit on "checking..." */
+    setTimeout(() => { if (el && el.textContent === "checking…") el.textContent = was; }, 8000);
+  } catch (e) {
+    if (el) { el.textContent = "check failed"; el.style.color = "#ff6060"; }
+    setTimeout(() => { if (el) el.textContent = was; }, 4000);
   }
 }
 
