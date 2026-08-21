@@ -70,6 +70,9 @@ static hid_mouse_layout_t s_layout;
 
 static bool s_started;
 static int  s_seen;          // devices reported this scan, for a one-line summary
+// Per OPEN scan window, not per boot. High enough to see a whole room -
+// the point of the open window is to find a device you are holding.
+#define SCAN_LOG_MAX 40
 static bool s_connecting;
 static int64_t s_connect_us;      // when s_connecting was set; see the stuck guard
 #define CONNECT_STUCK_US (20LL * 1000000)
@@ -179,7 +182,7 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
 
     // Log HID devices always; everything else only in the first few, so a busy
     // hotel does not flood the diag ring with earbuds.
-    if (hid || s_seen <= 8) {
+    if (hid || s_seen <= SCAN_LOG_MAX) {
         const uint8_t *a = event->disc.addr.val;
         ESP_LOGI(TAG, "%s %02x:%02x:%02x:%02x:%02x:%02x rssi=%d %s",
                  hid ? "HID DEVICE:" : "  seen:",
@@ -413,8 +416,17 @@ static void start_scan(void)
     }
     if (wl) ESP_LOGI(TAG, "scanning (filtered to %d bonded device(s), passive, %d%% duty)",
                      wl, (SCAN_WIN_UNITS * 100) / SCAN_ITVL_UNITS);
-    else    ESP_LOGI(TAG, "scanning open for %d s - turn the mouse on / put it in pairing mode",
-                     (int)(SCAN_OPEN_MS / 1000));
+    else {
+        // Reset the per-scan log budget so EVERY open window reports what it
+        // found, not only the first one after boot. The old counter was
+        // cumulative, so from the ninth device onward the log showed HID
+        // devices and nothing else - which makes "my keyboard does not appear"
+        // indistinguishable from "my keyboard does not advertise HID", and
+        // those need completely different answers.
+        s_seen = 0;
+        ESP_LOGI(TAG, "scanning open for %d s - turn the mouse on / put it in pairing mode",
+                 (int)(SCAN_OPEN_MS / 1000));
+    }
 }
 
 // Proper HOGP discovery: HID service -> its Report characteristics -> their
