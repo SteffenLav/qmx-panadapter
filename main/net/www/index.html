@@ -2905,7 +2905,11 @@ function tuneAntSync(s) {
 }
 document.getElementById("tune-ant-btn").addEventListener("click", async () => {
   if (tuneAntRunning) { await sendCmd({ action: "tune_stop" }); return; }
-  if (!confirm("Start Antenna Tune? This keys the radio with a steady carrier until you stop it (60 s safety limit). Have a load or antenna connected.")) return;
+  /* No confirm here either, at the operator's instruction - see the note on the
+     mid-QSO Cancel. Tuning into a load is a normal part of operating, and the
+     person pressing the button is the one responsible for what is on the far
+     end of the coax. The 60 s limit in ft8_tx/tune_modal is the real safety
+     net, and unlike a dialog it still works when nobody is watching. */
   await sendCmd({ action: "tune_start" });
 });
 
