@@ -10246,6 +10246,10 @@ static int            s_kbd_btns_n = 0;
 // One arrow press moves about a line and a half of the drawer's body text -
 // enough to feel responsive, small enough to land on something specific.
 #define KBD_SCROLL_STEP_PX 60
+// Two arrow presses closer together than this count as "still going", and the
+// step grows. Comfortably longer than a deliberate second press and far shorter
+// than the ~765 ms measured between events while a key was held down.
+#define KBD_SCROLL_ACCEL_GAP_US 500000
 
 // The scrollable surface the arrows should drive: the topmost thing on screen
 // that can actually scroll. Registered by the surfaces themselves rather than
@@ -10533,6 +10537,20 @@ static void kbd_text_cb(const char *text, uint8_t mods, void *arg)
     // of these surfaces is already an LVGL scrollable, so this is routing, not
     // new machinery. A focused textarea keeps the arrows for cursor movement -
     // that check is the `!ta` below.
+    if (!c && (!strcasecmp(text, "up")   || !strcasecmp(text, "down") ||
+               !strcasecmp(text, "pgup") || !strcasecmp(text, "pgdn"))) {
+        // Say WHY an arrow did or did not scroll. The first version logged only
+        // from inside the success path, so when the operator held Down in the
+        // drawer and nothing was recorded, there was no way to tell whether the
+        // key never arrived, a stale focused textarea had claimed it, or no
+        // scrollable was considered visible. Log the inputs to the decision,
+        // not just the outcome.
+        lv_obj_t *dbg_sc = kbd_scroll_target();
+        ESP_LOGD(TAG, "kbd arrow \"%s\": focused_ta=%s scroll_target=%s",
+                 text, s_kbd_ta ? "YES (arrows move the cursor)" : "no",
+                 dbg_sc ? "found" : "NONE VISIBLE");
+    }
+
     if (!c && !s_kbd_ta) {
         lv_obj_t *sc = kbd_scroll_target();
         if (sc) {
@@ -10543,21 +10561,42 @@ static void kbd_text_cb(const char *text, uint8_t mods, void *arg)
             else if (!strcasecmp(text, "pgup")) dy = -page;
             else if (!strcasecmp(text, "pgdn")) dy =  page;
             if (dy) {
-                // Does HOLDING an arrow auto-repeat? We cannot tell from the
-                // protocol: String mode reports characters, never press and
-                // release, so there is no key-up to stop a repeat we invent
-                // ourselves. The only safe way to give the operator
-                // "long-press should repeat" is if the keyboard's own MCU
-                // already sends repeats - so measure the gap between
-                // consecutive arrows and say so. A burst of ~100 ms gaps while
-                // a key is held means the hardware repeats and there is nothing
-                // to build; single events mean it does not.
+                // ⛔ HOLDING A KEY CANNOT BE DETECTED, so repeated presses
+                // accelerate instead. MEASURED: holding Down produced two
+                // events 765 ms apart - the keyboard's MCU does not auto-repeat
+                // usefully - and String mode reports CHARACTERS, never press
+                // and release, so a repeat we invented would have no key-up to
+                // stop it and would run away.
+                //
+                // The keyboard does have a Normal mode (reg 0x20, bit7 =
+                // pressed/released) which would give real key-up. Taking it
+                // means reimplementing the whole keymap ourselves - the Sym
+                // layers, the Aa case toggle, every special character - which
+                // the reference notes explicitly advise against and which is a
+                // large regression to the entire keyboard for a scrolling
+                // nicety. Not worth it; if it is ever reconsidered, that is the
+                // trade being made.
+                //
+                // So: press it again quickly and it moves further each time,
+                // which is what "hold to scroll faster" actually feels like
+                // from the operator's side. PgUp/PgDn remain the one-press way
+                // to cover a whole screen.
                 static int64_t last_arrow_us = 0;
+                static int     last_dir      = 0;
+                static int     streak        = 0;
                 int64_t now_us = esp_timer_get_time();
-                if (last_arrow_us)
-                    ESP_LOGI(TAG, "kbd arrow: %s (+%lld ms since the last one)",
-                             text, (long long)((now_us - last_arrow_us) / 1000));
+                int     dir    = (dy > 0) ? 1 : -1;
+                if (last_arrow_us && dir == last_dir &&
+                    (now_us - last_arrow_us) < KBD_SCROLL_ACCEL_GAP_US)
+                    streak++;
+                else
+                    streak = 0;
                 last_arrow_us = now_us;
+                last_dir      = dir;
+                // 1x, 2x, 3x, 4x and no further - beyond that it overshoots
+                // whatever the operator was aiming at.
+                int mult = 1 + (streak < 3 ? streak : 3);
+                dy *= mult;
 
                 lv_obj_scroll_by_bounded(sc, 0, -dy, LV_ANIM_OFF);
                 display_unlock();
