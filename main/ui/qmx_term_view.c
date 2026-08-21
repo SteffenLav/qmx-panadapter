@@ -554,6 +554,30 @@ bool qmx_term_view_key(const char *token)
 {
     if (!token || !token[0] || !qmx_term_view_is_open()) return false;
 
+    /* Esc LEAVES THIS SCREEN, it does not go to the radio.
+     *
+     * It used to be forwarded as a real ESC (0x1B) and the QMX ignored it -
+     * confirmed on hardware 2026-08-21, where the capture shows `kbd: "esc" ->
+     * esc` firing four times with no effect on the radio, consistent with the
+     * measured record for the same numeric field in which left/right and Enter
+     * do nothing either. A key that transmits a byte nobody acts on is a dead
+     * key, and Esc already means "leave this" in every modal in the app.
+     *
+     * ⛔ It must go through qmx_term_view_close(), NOT a raw ctrl-q. Ctrl-Q is
+     * the radio's own "Exit terminal", but closing properly is a screen-READING
+     * walk that hands the port back and re-asserts IQ mode; sending the bare
+     * keystroke would take the radio out of terminal mode while this UI still
+     * believed the session was open. Same path as the Close button, therefore.
+     *
+     * Safe from the keyboard task: close() only touches LVGL and posts to the
+     * worker queue, and the caller already holds display_lock() - the same
+     * state taskLVGL is in when the Close button runs it. */
+    if (!strcasecmp(token, "esc")) {
+        ESP_LOGI(TAG, "kbd: \"esc\" -> closing the terminal view");
+        qmx_term_view_close();
+        return true;
+    }
+
     const char *name = NULL;
     if (token[1] == '\0') {
         /* A single byte - letters, digits, punctuation, space. The radio's
@@ -565,7 +589,6 @@ bool qmx_term_view_key(const char *token)
     else if (!strcasecmp(token, "left"))      name = "left";
     else if (!strcasecmp(token, "right"))     name = "right";
     else if (!strcasecmp(token, "enter"))     name = "enter";
-    else if (!strcasecmp(token, "esc"))       name = "esc";
     /* Both of the keyboard's delete keys send the byte the radio actually acts
      * on. Measured, not assumed: 0x7F deletes leftward in a numeric field and
      * 0x08 does nothing - see the evidence block in qmx_term.c's qmx_term_key(),
