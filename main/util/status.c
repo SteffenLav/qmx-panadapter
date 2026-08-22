@@ -45,7 +45,7 @@ static uint64_t s_sd_free_b = 0, s_sd_total_b = 0;
 // for a few seconds, short enough that an abandoned failure does not sit in
 // red forever. Tap-and-hold still retries after this - see the OTA_FAILED
 // branch in status_task().
-#define OTA_FAILED_SHOW_S 20
+#define OTA_FAILED_SHOW_S 3
 static bool     s_sd_ok = false;
 static int      s_sd_poll_countdown = 0;  // 0 = poll on the next tick
 
@@ -206,6 +206,7 @@ static void status_task(void *arg)
     // that reads ota_update_get_state() fresh and the backend's FAILED state
     // is untouched by this purely cosmetic timeout.
     uint32_t ota_failed_ticks = 0;
+    uint32_t last_fail_seq    = 0;   // last ota_update_get_fail_seq() we've seen
 
     // We use coloured-text formatting in the right label only; the static label
     // style needs recolor enabled, but the runtime API lv_label_set_recolor()
@@ -254,6 +255,19 @@ static void status_task(void *arg)
             int  opct = 0;
             static char omsg[128], over[32], latest[32];
             ota_state_t ost = ota_update_get_state(&opct, omsg, sizeof(omsg));
+            // A NEW failure resets the pulse counter regardless of what ost
+            // was doing in between - see ota_update_get_fail_seq()'s own
+            // comment: a fast failure (bad hostname, under 100ms measured)
+            // can complete entirely between two 1 Hz ticks with no
+            // observable OTA_RUNNING in the middle, so ost alone cannot
+            // tell "brand new failure" from "still the same one as before".
+            {
+                uint32_t seq = ota_update_get_fail_seq();
+                if (seq != last_fail_seq) {
+                    last_fail_seq    = seq;
+                    ota_failed_ticks = 0;
+                }
+            }
             ota_update_get_target_version(over, sizeof(over));
             update_check_get_latest(latest, sizeof(latest));
             short_ver(over,   over_s,   sizeof(over_s));
@@ -263,6 +277,11 @@ static void status_task(void *arg)
             // Wording and colours are the operator's, chosen to fit at the
             // ORIGINAL montserrat_24 - every state below is ~20 characters,
             // where "touch to update" was 24 and overlapped the clock.
+            // Set true only by the pulsing OTA_FAILED branch, which already
+            // called ui_set_update_line_failed() itself - the plain
+            // ui_set_update_line() call at the end of this block would
+            // otherwise immediately stop the pulse it just started.
+            bool skip_plain_update_line = false;
             if (ost == OTA_RUNNING) {
                 ota_failed_ticks = 0;
                 if (running[0] && over_s[0])
@@ -281,11 +300,20 @@ static void status_task(void *arg)
                 // failed download (v1.9.0/v1.9.1's own OTA bug) was
                 // indistinguishable from the press not registering at all -
                 // the diag log proved the press fired every time; a static
-                // red line was just easy to miss. Blink red/white so it
-                // cannot be, for OTA_FAILED_SHOW_S seconds.
+                // red line was just easy to miss. A 1 Hz red/white colour
+                // swap turned out to be far too subtle over a short window
+                // (changes at most 2-3 times - a glance mid-cycle just reads
+                // "red"), so this now PULSES (ui_set_update_line_failed(),
+                // a fast opacity animation, not tied to this 1 Hz tick) for
+                // OTA_FAILED_SHOW_S seconds, unmistakable even at a glance.
+                // "Server busy" rather than "Failed": the operator did
+                // nothing wrong, and this IS what happened (a connection
+                // that could not be reached), not a vague failure.
                 ota_failed_ticks++;
-                snprintf(vline, sizeof(vline), "Failed - tap retries");
-                vcol = blink_on ? 0xFF6060 : 0xFFFFFF;
+                snprintf(vline, sizeof(vline), "Server busy - tap retries");
+                ui_set_update_line_tappable(true);
+                ui_set_update_line_failed(vline);
+                skip_plain_update_line = true;
             } else if (ost == OTA_FAILED) {
                 // Given up being loud about it, but tap-and-hold still
                 // retries from here - update_line_tap() reads the backend
@@ -321,8 +349,10 @@ static void status_task(void *arg)
             // couple of hundred pixels of width - small, but real, and this is
             // the line to change back if tap-to-tune ever feels worse near the
             // bottom bar.
-            ui_set_update_line_tappable(ost != OTA_RUNNING);
-            ui_set_update_line(vline, vcol);
+            if (!skip_plain_update_line) {
+                ui_set_update_line_tappable(ost != OTA_RUNNING);
+                ui_set_update_line(vline, vcol);
+            }
         }
 
         // --- LEFT: battery icon (colored by level) + percentage text ---

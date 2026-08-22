@@ -26,6 +26,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 typedef enum {
     OTA_IDLE = 0,
@@ -52,6 +53,14 @@ ota_state_t ota_update_get_state(int *pct, char *msg, size_t msg_len);
 // The version being installed, from the incoming image's own descriptor, or ""
 // before the header has been read. Both screens name it while the download runs.
 void ota_update_get_target_version(char *out, size_t out_sz);
+
+// Bumped on every failure, never reset. A fast failure (bad hostname, DNS
+// fails in under 100ms - measured) can complete entirely between two 1 Hz
+// status polls with no observable OTA_RUNNING tick in between, so
+// ota_state_t alone cannot tell status.c's bottom-bar pulse "this is a NEW
+// failure, reset your 3-tick counter" from "still the same one as last
+// tick". Compare this against a remembered value instead.
+uint32_t ota_update_get_fail_seq(void);
 
 // True once an update has been written and the device is only waiting to be
 // restarted into it.

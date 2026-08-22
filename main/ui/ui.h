@@ -92,6 +92,15 @@ void ui_set_bottom_version(const char *text);
 // so the Tab5 and the browser say the same thing.
 void ui_set_update_line(const char *text, uint32_t colour);
 
+// Red, fixed-colour, PULSING variant for "a correctly-confirmed action just
+// failed" (currently: an OTA download that could not reach the server).
+// Fast opacity animation, not a colour swap - a 1 Hz colour alternation
+// proved too subtle to read as "blinking" over the few seconds it needs to
+// stay unmissable. status.c calls this once per second while the failure
+// is being shown; a plain ui_set_update_line() call (any other state)
+// stops the pulse.
+void ui_set_update_line_failed(const char *text);
+
 // #218: called on the LVGL thread when the operator taps the update line.
 // status.c registers this and decides what the tap means; it arms on the
 // first tap and acts on the second, so a stray touch cannot start a download

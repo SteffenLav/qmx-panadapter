@@ -35,6 +35,15 @@ static char                 s_url[256];
 // both screens can name it while the download runs (the operator asked: "1.8.8
 // -> 1.8.9", not a bare "updating").
 static char                 s_target_ver[32];
+// Bumped on every failure, never reset. status.c's bottom-bar pulse needs to
+// know "is THIS a new failure" to reset its own 3-tick counter, and cannot
+// tell from ota_state_t alone: a fast failure (a bad hostname fails DNS in
+// under 100ms - measured) never spends a whole second in OTA_RUNNING, so
+// the 1 Hz status poll can go straight from one OTA_FAILED tick to the next
+// FAILED tick of a brand new attempt with no observable state change in
+// between. A plain counter status.c can compare against is unambiguous
+// regardless of how fast the failure was.
+static volatile uint32_t    s_fail_seq = 0;
 
 static void set_failed(const char *fmt, ...)
 {
@@ -43,6 +52,7 @@ static void set_failed(const char *fmt, ...)
     vsnprintf(s_msg, sizeof(s_msg), fmt, ap);
     va_end(ap);
     s_state = OTA_FAILED;
+    s_fail_seq++;
     ESP_LOGE(TAG, "update failed: %s", s_msg);
 }
 
@@ -322,6 +332,8 @@ ota_state_t ota_update_get_state(int *pct, char *msg, size_t msg_len)
 }
 
 bool ota_update_reboot_pending(void) { return s_state == OTA_DONE; }
+
+uint32_t ota_update_get_fail_seq(void) { return s_fail_seq; }
 
 void ota_update_get_target_version(char *out, size_t out_sz)
 {

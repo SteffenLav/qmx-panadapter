@@ -6475,6 +6475,61 @@ static bool     s_update_hold_ok  = false; // held long enough: fires on release
 // over it - the feedback has to be immediate and stay put until the finger goes.
 static bool     s_update_hold_paint = false;
 
+// Breathing-opacity pulse for "Failed - tap retries" - same technique as the
+// sim-mode border and the edge grips (lv_anim on style opacity), reused here
+// because a plain 1 Hz red/white colour swap turned out to be far too
+// subtle to read as "blinking" over a short 3 s window: it changes color at
+// most 2-3 times total, and a human glancing at it mid-cycle just sees
+// "red" and moves on. A fast opacity pulse (350 ms each way, ~4 full cycles
+// in 3 s) is unmistakable even at a glance.
+static bool s_update_blink_active = false;
+
+static void update_line_blink_anim_cb(void *var, int32_t v)
+{
+    lv_obj_set_style_text_opa((lv_obj_t *)var, (lv_opa_t)v, 0);
+}
+
+// ⛔ lv_anim_start()/lv_anim_del() touch LVGL's own global animation list,
+// exactly like lv_label_set_text()/lv_obj_set_style_*() touch an object's
+// style - callable ONLY under display_lock(), same as everything else in
+// this file. The first version of this called them straight from
+// status_task with no lock at all: the device itself stayed completely
+// healthy (no assert, FT8/CAT/WiFi all fine), but the bottom-bar version
+// label got permanently stuck after the first blink cycle - every later
+// write to it, from any source, silently stopped taking effect. Consistent
+// with LVGL's own redraw loop (which DOES run under this lock) hanging
+// while traversing an anim list corrupted by a concurrent unlocked touch:
+// display_lock() would then time out forever afterward, and every call in
+// this file already treats a failed lock as "silently do nothing" - which
+// reads as exactly the frozen label reported.
+static void update_line_blink_start(void)
+{
+    if (s_update_blink_active || !s_bot_version) return;
+    if (!display_lock(20)) return;
+    s_update_blink_active = true;
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, s_bot_version);
+    lv_anim_set_exec_cb(&a, update_line_blink_anim_cb);
+    lv_anim_set_values(&a, LV_OPA_30, LV_OPA_COVER);
+    lv_anim_set_time(&a, 350);
+    lv_anim_set_playback_time(&a, 350);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_start(&a);
+    display_unlock();
+}
+
+static void update_line_blink_stop(void)
+{
+    if (!s_update_blink_active || !s_bot_version) return;
+    if (!display_lock(20)) return;
+    s_update_blink_active = false;
+    lv_anim_del(s_bot_version, update_line_blink_anim_cb);
+    lv_obj_set_style_text_opa(s_bot_version, LV_OPA_COVER, 0);
+    display_unlock();
+}
+
 bool ui_update_line_tappable(void) { return s_update_line_tappable; }
 
 void ui_set_update_line_tappable(bool on) { s_update_line_tappable = on; }
@@ -6522,6 +6577,7 @@ void ui_set_update_line(const char *text, uint32_t colour)
 {
     if (!s_bot_version) return;
     if (s_update_hold_paint) return;   // a hold is being shown; leave it alone
+    update_line_blink_stop();          // any normal text-set ends a pulse in progress
     const char *t = text ? text : "";
 
     // Font stays at the ORIGINAL montserrat_24 - the operator's wording is
@@ -6552,6 +6608,26 @@ void ui_set_update_line(const char *text, uint32_t colour)
         lv_obj_set_style_text_color(s_bot_version, lv_color_hex(colour), 0);
         display_unlock();
     }
+}
+
+void ui_set_update_line_failed(const char *text)
+{
+    if (!s_bot_version) return;
+    if (s_update_hold_paint) return;   // a hold is being shown; leave it alone
+    // Called once per second for as long as the failure is shown. Only the
+    // FIRST call needs to touch text/font/colour or start the animation -
+    // repainting identical text every tick would just reset the pulse's
+    // phase each time (a visible judder, not a smooth breathe). Once
+    // s_update_blink_active is true, later calls this second are no-ops.
+    if (s_update_blink_active) return;
+    const char *t = text ? text : "";
+    if (display_lock(20)) {
+        lv_obj_set_style_text_font(s_bot_version, &lv_font_montserrat_24, 0);
+        lv_label_set_text(s_bot_version, t);
+        lv_obj_set_style_text_color(s_bot_version, lv_color_hex(0xFF6060), 0);
+        display_unlock();
+    }
+    update_line_blink_start();
 }
 
 void ui_set_bottom_clock(int h, int m, int s, bool valid, const char *suffix)
