@@ -300,18 +300,58 @@ came out worse than the reference implementation, by a plausible margin,
 for a well-understood reason, is a healthier result than one that looked
 suspiciously perfect - which the first (wrong) unit did.
 
+## Update — soft-decision metric attempted, NEGATIVE result, not shipped
+
+Followed up on "real soft-decision metrics" (previously flagged as having
+a measured ~3-5 dB cost vs. published wsprd numbers) with a from-scratch
+Monte Carlo simulation: `test/wspr_metric_sim.c` simulates this decoder's
+own channel statistic (the coherent-DFT tone-power difference D each
+symbol reduces to) under AWGN at a chosen amplitude, and builds an
+empirical log-likelihood-ratio metric table from the resulting
+histograms - fully original, not derived from anyone's published table
+(this was in fact what prompted checking K9AN's `metric_tables.c`'s
+license in the first place, which is what surfaced the licensing problem
+recorded near the top of this document).
+
+**Result: negative, table not shipped.** A single fixed-scale table,
+calibrated at one amplitude, decodes correctly only in a narrow band
+around that calibration point and fails outside it - including at
+STRONG signal (+6.8 dB SNR, where the existing crude hard-decision table
+works trivially). Confirmed with two different scales and up to 250,000
+trials each; not a statistics problem, a structural one. D scales
+roughly with amplitude² (it's a power difference), so a signal several
+times stronger than the calibration point saturates nearly every symbol
+to byte 0 or 255, and the noisy low-sample-count table entries at those
+extreme bins (visibly single-digit counts in the printed tables) get
+trusted as if reliable. This is exactly why wsprd itself doesn't use one
+fixed table - K9AN's `metric_tables.c` ships FOUR tables for different
+Es/No points and selects between them.
+
+The existing 2-level hard-decision table stays the shipped default: no
+calibration fragility, and already measured at -22.7 dB sensitivity,
+which this attempt did not beat. Real follow-up work, not done here:
+either multiple tables selected by an estimated operating SNR (matching
+wsprd's own approach, but built fresh rather than copied), or per-capture
+normalization - deriving the quantization scale from the ACTUAL candidate
+signal's own measured |D| distribution rather than a pre-baked constant.
+`test/wspr_metric_sim.c` is kept as the tool to pick this up with, not
+deleted, since the simulation methodology itself worked fine - only the
+fixed-scale design choice didn't.
+
 ### What's still open
 
 - **Why the strongest real-signal candidate fails** — open question, not
   confirmed to be frequency drift (see above). Worth revisiting with a
   proper wsprd-style 2D (frequency × drift) joint search rather than a 1D
   drift search bolted onto an already-fixed frequency, if picked up again.
-- **Real soft-decision metrics** — still hard-decision only. Now has an
-  actual measured cost (roughly 3-5 dB of sensitivity vs. published
-  wsprd numbers, see above) rather than being an unquantified gap - closing
-  it would directly buy back that margin. `ast/wsprd`'s `metric_tables.c`
-  (K9AN's real soft-decision table) is a concrete starting point if this
-  is picked up.
+- **Real soft-decision metrics** — still hard-decision only; a from-scratch
+  attempt (see the update above) failed for a well-understood, fixable
+  reason (single fixed calibration scale, no per-SNR adaptation). Next
+  attempt should build multiple tables at different calibration amplitudes
+  and select between them (or estimate scale per-capture) - do NOT reach
+  for `ast/wsprd`'s `metric_tables.c` even for "inspiration on the
+  numbers", it's GPL v3, same problem this document's licensing section
+  is about.
 - **A second real WAV** — not found through the official channel; the
   synthetic multi-signal test above is the practical substitute for now.
 - **Device integration (Phase 2)** — deliberately not started. Per the
