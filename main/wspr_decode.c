@@ -159,6 +159,186 @@ static int is_legal_power(int dbm)
  * count. */
 #define WSPR_CYCLES_SUSPECT 2000
 
+/* Runs the three shared plausibility checks (message shape, legal power
+ * quantization, Fano convergence speed - see wspr_decode.h) and fills
+ * *result if a decoded message passes all three. Shared by both decode
+ * attempts below so the two can't silently apply different standards. */
+static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
+                                wspr_decode_result_t *result)
+{
+    result->cycles = cycles;
+    char call[7], grid[5];
+    int dbm;
+    if (!wspr_unpack_message(msg, call, grid, &dbm)) return 0;
+    if (strlen(call) < 3) return 0;
+    if (!is_legal_power(dbm)) return 0;
+    if (cycles > WSPR_CYCLES_SUSPECT) return 0;
+    wspr_msg_bytes_t repack;
+    if (!wspr_pack_message(call, grid, dbm, &repack)) return 0;
+
+    strcpy(result->callsign, call);
+    strcpy(result->grid, grid);
+    result->power_dbm = dbm;
+    result->ok = 1;
+    return 1;
+}
+
+/* Hard-decision per symbol, conditioned on the known sync bit. Simple and
+ * robust - no calibration dependency at all - and what decodes 5 of the
+ * reference WAV's 8 candidates.
+ *
+ * A per-capture-normalized SOFT metric (wspr_build_soft_metric_table())
+ * was tried in place of this and reverted - worth recording why, since
+ * it's a real trap. In a synthetic single/multi-tone AWGN sweep
+ * (test/wspr_metric_sim.c, test/wspr_synth_harness.c) it measured ~2-3 dB
+ * more sensitive than this hard-decision table. Wired in here, it
+ * REGRESSED real-world performance badly: 1/8 plausible decodes from the
+ * reference WAV instead of 5/8. Lesson worth keeping: a synthetic
+ * sensitivity sweep passing is evidence, not proof - the real WAV test is
+ * what actually decides whether a decoder change is a genuine
+ * improvement. Full account in docs/wspr-phase1-status.md. */
+static int try_hard_decision(double tp[WSPR_NSYM][4], wspr_decode_result_t *result)
+{
+    uint8_t channel_bits[WSPR_NSYM];
+    for (int i = 0; i < WSPR_NSYM; i++) {
+        int sync = wspr_sync_vector[i];
+        double p_data1 = sync ? tp[i][3] : tp[i][2];
+        double p_data0 = sync ? tp[i][1] : tp[i][0];
+        channel_bits[i] = (p_data1 > p_data0) ? 1 : 0;
+    }
+    uint8_t raw[WSPR_NSYM];
+    wspr_deinterleave(channel_bits, raw);
+    uint8_t soft[WSPR_NSYM];
+    for (int i = 0; i < WSPR_NSYM; i++) soft[i] = raw[i] ? 255 : 0;
+
+    int mettab[2][256];
+    wspr_build_hard_metric_table(mettab);
+    wspr_msg_bytes_t msg;
+    unsigned int metric = 0, cycles = 0;
+    if (!wspr_fano_decode(soft, mettab, 2, 20000, &msg, &metric, &cycles)) {
+        result->cycles = cycles;
+        return 0;
+    }
+    return accept_if_plausible(&msg, cycles, result);
+}
+
+/* PER-SYMBOL reliability-weighted decision - targets a specific failure
+ * mode the hard-decision path can't handle at all: real HF fading (QSB)
+ * WITHIN a single 110 s transmission (test/wspr_diag_candidate0.c,
+ * docs/wspr-phase1-status.md). A signal can be strong for half the
+ * transmission and near-noise for the other half; hard-decision (and the
+ * reverted per-CAPTURE soft table) both give every symbol the same
+ * weight regardless of which half it came from, so ~40+ genuinely
+ * unreliable symbols from the weak half poison the decode even though
+ * the strong half alone would likely be enough.
+ *
+ * The fix: weight each symbol's contribution to the Fano metric by that
+ * symbol's own LOCAL signal strength (smoothed over nearby symbols, since
+ * fading is a slow, continuous envelope, not an independent per-symbol
+ * event) relative to the capture's overall level. A symbol from a deep
+ * fade contributes almost nothing either way; a symbol from a strong
+ * stretch contributes with full confidence. This is a per-symbol analytic
+ * formula, not a trained table (deliberately - the per-capture SOFT TABLE
+ * attempt above regressed real data despite a careful synthetic
+ * validation, and a formula that doesn't depend on matching a pre-trained
+ * distribution shape is less exposed to that same synthetic/real
+ * mismatch). Called as a FALLBACK, only when hard-decision doesn't
+ * already produce a plausible result - see wspr_decode_candidate() -  so
+ * candidates hard-decision already handles correctly can't regress. */
+static int try_weighted_decision(double tp[WSPR_NSYM][4], wspr_decode_result_t *result)
+{
+    double d_channel[WSPR_NSYM], power_channel[WSPR_NSYM];
+    for (int i = 0; i < WSPR_NSYM; i++) {
+        int sync = wspr_sync_vector[i];
+        double p_data1 = sync ? tp[i][3] : tp[i][2];
+        double p_data0 = sync ? tp[i][1] : tp[i][0];
+        d_channel[i] = p_data1 - p_data0;
+        power_channel[i] = tp[i][0] + tp[i][1] + tp[i][2] + tp[i][3];
+    }
+
+    /* Smooth the power envelope over a window of neighboring symbols, IN
+     * TRANSMISSION-TIME (channel) ORDER - fading is a slow envelope over
+     * real time, and only channel order reflects real time; raw/encode
+     * order is scrambled by the interleaver. Window ~15 symbols (~10.2 s)
+     * - short enough to track fading on the timescale
+     * test/wspr_diag_candidate0.c actually observed (structure visible at
+     * ~18 s granularity), long enough to average out symbol-to-symbol
+     * jitter rather than chasing it. */
+    const int half_window = 7;
+    double smoothed[WSPR_NSYM];
+    for (int i = 0; i < WSPR_NSYM; i++) {
+        int lo = i - half_window, hi = i + half_window;
+        if (lo < 0) lo = 0;
+        if (hi > WSPR_NSYM - 1) hi = WSPR_NSYM - 1;
+        double sum = 0;
+        for (int j = lo; j <= hi; j++) sum += power_channel[j];
+        smoothed[i] = sum / (hi - lo + 1);
+    }
+
+    /* Reliability weight relative to the capture's own median smoothed
+     * power - median rather than mean so a handful of very strong or very
+     * weak symbols can't drag the reference point around. Clamped to keep
+     * the search numerically well-behaved (an unclamped near-zero weight
+     * would make a symbol contribute nothing at all rather than "very
+     * little", which loses information a genuinely marginal symbol might
+     * still carry). */
+    double sorted[WSPR_NSYM];
+    memcpy(sorted, smoothed, sizeof(sorted));
+    for (int i = 1; i < WSPR_NSYM; i++) { /* insertion sort - 162 elements, not worth qsort overhead */
+        double key = sorted[i];
+        int j = i - 1;
+        while (j >= 0 && sorted[j] > key) { sorted[j + 1] = sorted[j]; j--; }
+        sorted[j + 1] = key;
+    }
+    double median = sorted[WSPR_NSYM / 2];
+    if (median < 1e-9) median = 1e-9;
+
+    double weight_channel[WSPR_NSYM];
+    for (int i = 0; i < WSPR_NSYM; i++) {
+        double w = smoothed[i] / median;
+        if (w < 0.2) w = 0.2;
+        if (w > 3.0) w = 3.0;
+        weight_channel[i] = w;
+    }
+
+    double d_raw[WSPR_NSYM], weight_raw[WSPR_NSYM];
+    wspr_deinterleave_scores(d_channel, d_raw);
+    wspr_deinterleave_scores(weight_channel, weight_raw);
+
+    double abs_sum = 0;
+    for (int i = 0; i < WSPR_NSYM; i++) abs_sum += fabs(d_raw[i]);
+    double scale = abs_sum / WSPR_NSYM;
+    if (scale < 1e-9) scale = 1e-9;
+
+    /* ALPHA/BETA/CAP shape the metric the same way the hard-decision
+     * table's match=+1/mismatch=-3 does: BETA is a fixed per-symbol
+     * penalty ensuring an uninformative (near-zero D) symbol still nets
+     * negative for BOTH candidate bits (the Fano algorithm's structural
+     * requirement - see wspr_build_hard_metric_table()'s comment), and
+     * ALPHA sets how strongly a confident D actually moves the metric.
+     * weight[] then scales the WHOLE contribution - informative part and
+     * fixed penalty alike - so a low-reliability symbol's vote barely
+     * counts either way instead of confidently voting the wrong way. */
+    const double ALPHA = 6.0, BETA = 3.0, CAP = 4.0;
+    int branch_metric[WSPR_NSYM][2];
+    for (int i = 0; i < WSPR_NSYM; i++) {
+        double dn = d_raw[i] / scale;
+        if (dn > CAP) dn = CAP;
+        if (dn < -CAP) dn = -CAP;
+        double base = ALPHA * dn;
+        branch_metric[i][1] = (int)lround(weight_raw[i] * (base - BETA));
+        branch_metric[i][0] = (int)lround(weight_raw[i] * (-base - BETA));
+    }
+
+    wspr_msg_bytes_t msg;
+    unsigned int metric = 0, cycles = 0;
+    if (!wspr_fano_decode_weighted(branch_metric, 2, 20000, &msg, &metric, &cycles)) {
+        result->cycles = cycles;
+        return 0;
+    }
+    return accept_if_plausible(&msg, cycles, result);
+}
+
 void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
                             wspr_decode_result_t *result)
 {
@@ -203,61 +383,8 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
     result->best_dt_samples = best_dt;
     result->sync_score = best_score;
 
-    /* Hard-decision per symbol, conditioned on the known sync bit.
-     *
-     * A per-capture-normalized SOFT metric (wspr_build_soft_metric_table())
-     * was tried here and reverted - worth recording why, since it's a real
-     * trap. In a synthetic single/multi-tone AWGN sweep
-     * (test/wspr_metric_sim.c, test/wspr_synth_harness.c) it measured
-     * ~2-3 dB more sensitive than this hard-decision table. Wired into
-     * this function, it REGRESSED real-world performance badly: 1/8
-     * plausible decodes from the reference WAV instead of 5/8, with most
-     * candidates timing out or converging on garbage. The synthetic
-     * channel model (one or a few clean tones plus i.i.d. Gaussian noise)
-     * apparently isn't representative enough of what a real captured
-     * signal actually looks like (other in-band activity, non-ideal
-     * noise, whatever else a real recording has that a clean 2-tone
-     * simulation doesn't) - and the soft table, calibrated tightly to the
-     * synthetic statistic, wasn't robust to that mismatch the way this
-     * simpler hard decision is. Lesson worth keeping: a synthetic
-     * sensitivity sweep passing is evidence, not proof - the real WAV
-     * test is what actually decides whether a decoder change is a
-     * genuine improvement. Full account in docs/wspr-phase1-status.md. */
-    uint8_t channel_bits[WSPR_NSYM];
-    for (int i = 0; i < WSPR_NSYM; i++) {
-        int sync = wspr_sync_vector[i];
-        double p_data1 = sync ? tp[i][3] : tp[i][2];
-        double p_data0 = sync ? tp[i][1] : tp[i][0];
-        channel_bits[i] = (p_data1 > p_data0) ? 1 : 0;
-    }
-    uint8_t raw[WSPR_NSYM];
-    wspr_deinterleave(channel_bits, raw);
-    uint8_t soft[WSPR_NSYM];
-    for (int i = 0; i < WSPR_NSYM; i++) soft[i] = raw[i] ? 255 : 0;
-
-    int mettab[2][256];
-    wspr_build_hard_metric_table(mettab);
-    wspr_msg_bytes_t msg;
-    unsigned int metric = 0, cycles = 0;
-    int fano_ok = wspr_fano_decode(soft, mettab, 2, 20000, &msg, &metric, &cycles);
-    result->cycles = cycles;
-    if (!fano_ok) return;
-
-    char call[7], grid[5];
-    int dbm;
-    if (!wspr_unpack_message(&msg, call, grid, &dbm)) return;
-
-    /* Three independent checks, all sourced/justified in wspr_decode.h and
-     * this file's comments - message shape, legal power quantization, and
-     * decoder convergence speed. All three must agree. */
-    if (strlen(call) < 3) return;
-    if (!is_legal_power(dbm)) return;
-    if (cycles > WSPR_CYCLES_SUSPECT) return;
-    wspr_msg_bytes_t repack;
-    if (!wspr_pack_message(call, grid, dbm, &repack)) return;
-
-    strcpy(result->callsign, call);
-    strcpy(result->grid, grid);
-    result->power_dbm = dbm;
-    result->ok = 1;
+    if (try_hard_decision(tp, result)) return;
+    /* Hard decision failed or was implausible - give the per-symbol
+     * weighted attempt a shot before giving up on this candidate. */
+    try_weighted_decision(tp, result);
 }

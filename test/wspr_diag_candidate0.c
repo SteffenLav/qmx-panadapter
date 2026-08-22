@@ -129,6 +129,85 @@ static void extract_tone_powers(const twiddles_t *tw, long start_sample,
     }
 }
 
+/* Self-contained replica of wspr_decode.c's try_weighted_decision(), but
+ * with tunable parameters and UNCONDITIONAL diagnostic output (prints the
+ * raw decode result regardless of whether it passes the plausibility
+ * gate) - for iterating on ALPHA/BETA/CAP/window/clamp quickly against a
+ * known-hard real candidate instead of guessing blind. */
+static void try_weighted_diag(double tp[WSPR_NSYM][4], int half_window,
+                               double alpha, double beta, double cap,
+                               double wmin, double wmax, const char *label)
+{
+    double d_channel[WSPR_NSYM], power_channel[WSPR_NSYM];
+    for (int i = 0; i < WSPR_NSYM; i++) {
+        int sync = wspr_sync_vector[i];
+        double p_data1 = sync ? tp[i][3] : tp[i][2];
+        double p_data0 = sync ? tp[i][1] : tp[i][0];
+        d_channel[i] = p_data1 - p_data0;
+        power_channel[i] = tp[i][0] + tp[i][1] + tp[i][2] + tp[i][3];
+    }
+
+    double smoothed[WSPR_NSYM];
+    for (int i = 0; i < WSPR_NSYM; i++) {
+        int lo = i - half_window, hi = i + half_window;
+        if (lo < 0) lo = 0;
+        if (hi > WSPR_NSYM - 1) hi = WSPR_NSYM - 1;
+        double sum = 0;
+        for (int j = lo; j <= hi; j++) sum += power_channel[j];
+        smoothed[i] = sum / (hi - lo + 1);
+    }
+
+    double sorted[WSPR_NSYM];
+    memcpy(sorted, smoothed, sizeof(sorted));
+    for (int i = 1; i < WSPR_NSYM; i++) {
+        double key = sorted[i]; int j = i - 1;
+        while (j >= 0 && sorted[j] > key) { sorted[j + 1] = sorted[j]; j--; }
+        sorted[j + 1] = key;
+    }
+    double median = sorted[WSPR_NSYM / 2];
+    if (median < 1e-9) median = 1e-9;
+
+    double weight_channel[WSPR_NSYM];
+    for (int i = 0; i < WSPR_NSYM; i++) {
+        double w = smoothed[i] / median;
+        if (w < wmin) w = wmin;
+        if (w > wmax) w = wmax;
+        weight_channel[i] = w;
+    }
+
+    double d_raw[WSPR_NSYM], weight_raw[WSPR_NSYM];
+    wspr_deinterleave_scores(d_channel, d_raw);
+    wspr_deinterleave_scores(weight_channel, weight_raw);
+
+    double abs_sum = 0;
+    for (int i = 0; i < WSPR_NSYM; i++) abs_sum += fabs(d_raw[i]);
+    double scale = abs_sum / WSPR_NSYM;
+    if (scale < 1e-9) scale = 1e-9;
+
+    int branch_metric[WSPR_NSYM][2];
+    for (int i = 0; i < WSPR_NSYM; i++) {
+        double dn = d_raw[i] / scale;
+        if (dn > cap) dn = cap;
+        if (dn < -cap) dn = -cap;
+        double base = alpha * dn;
+        branch_metric[i][1] = (int)lround(weight_raw[i] * (base - beta));
+        branch_metric[i][0] = (int)lround(weight_raw[i] * (-base - beta));
+    }
+
+    wspr_msg_bytes_t msg;
+    unsigned int metric = 0, cycles = 0;
+    int ok = wspr_fano_decode_weighted(branch_metric, 2, 20000, &msg, &metric, &cycles);
+    if (!ok) {
+        fprintf(stderr, "  [%s] TIMEOUT (cycles=%u)\n", label, cycles);
+        return;
+    }
+    char call[7], grid[5]; int dbm;
+    int unpacked = wspr_unpack_message(&msg, call, grid, &dbm);
+    fprintf(stderr, "  [%s] converged cycles=%u  unpacked=%d call='%s' grid='%s' dbm=%d\n",
+            label, cycles, unpacked, unpacked ? call : "?", unpacked ? grid : "?",
+            unpacked ? dbm : -1);
+}
+
 int main(int argc, char **argv)
 {
     const char *path = argc > 1 ? argv[1] : "test/wav_reference/wspr/150426_0918.wav";
@@ -196,6 +275,19 @@ int main(int argc, char **argv)
         for (int i = 0; i < WSPR_NSYM; i++) for (int k = 0; k < 4; k++) tot += tp2[i][k];
         fprintf(stderr, "  df=%+5.2f Hz  total_power=%10.1f\n", df, tot);
     }
+
+    fprintf(stderr, "\nper-symbol weighted decode - parameter sweep:\n");
+    try_weighted_diag(tp, 7,  6.0, 3.0, 4.0, 0.2, 3.0, "default (win=7,a=6,b=3,cap=4)");
+    try_weighted_diag(tp, 3,  6.0, 3.0, 4.0, 0.2, 3.0, "narrower window (win=3)");
+    try_weighted_diag(tp, 15, 6.0, 3.0, 4.0, 0.2, 3.0, "wider window (win=15)");
+    try_weighted_diag(tp, 25, 6.0, 3.0, 4.0, 0.2, 3.0, "very wide window (win=25)");
+    try_weighted_diag(tp, 7,  10.0, 3.0, 4.0, 0.2, 3.0, "stronger alpha (a=10)");
+    try_weighted_diag(tp, 7,  6.0, 1.0, 4.0, 0.2, 3.0, "weaker beta (b=1)");
+    try_weighted_diag(tp, 7,  6.0, 6.0, 4.0, 0.2, 3.0, "stronger beta (b=6)");
+    try_weighted_diag(tp, 7,  6.0, 3.0, 4.0, 0.05, 5.0, "wider weight clamp (0.05-5)");
+    try_weighted_diag(tp, 7,  6.0, 3.0, 4.0, 0.02, 8.0, "very wide weight clamp (0.02-8)");
+    try_weighted_diag(tp, 7,  6.0, 3.0, 8.0, 0.2, 3.0, "wider D cap (cap=8)");
+    try_weighted_diag(tp, 11, 8.0, 2.0, 6.0, 0.05, 6.0, "combined tweak");
 
     return 0;
 }

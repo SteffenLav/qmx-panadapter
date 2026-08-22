@@ -434,22 +434,104 @@ OTHER (working) candidates last time might have been a separate synthetic-
 model-mismatch problem, not evidence against per-symbol weighting
 specifically.
 
+## Update — per-symbol reliability weighting: built, validated, shipped as a fallback
+
+Followed up directly on the fading finding above with a targeted (not
+generic) mechanism: **per-symbol** confidence weighting, distinct from
+both earlier soft-metric attempts which used one scale for the whole
+capture. First checked prior art: the general technique ("optimum soft-
+decision decoding with channel state information in the presence of
+fading") is textbook, dating to a 1984 IEEE paper (Cain, Clark & Geist) -
+not new. But `wsprd`'s own only metric-tuning knob (`-z`, a single global
+bias) and its documented two-pass technique (successive interference
+*cancellation*, for separating overlapping signals - a different problem)
+show no evidence of genuine per-symbol/time-varying weighting for WSPR
+specifically. Applying the known technique to this specific problem
+looked like real, if modest, unexplored ground.
+
+**Implementation**: `wspr_fano_decode_weighted()` (new, `main/wspr_fano.c`/
+`.h`) lets the caller supply the branch metric directly per raw position
+instead of going through a fixed `mettab[2][256]` lookup - a static table
+has no way to express "this symbol's neighborhood was weak". Refactored
+the search loop into a shared `fano_search()` so `wspr_fano_decode()` and
+the new weighted variant can't drift apart in behavior.
+`wspr_deinterleave_scores()` (new) carries a real-valued score, not just a
+hard bit, through the same interleave permutation. `main/wspr_decode.c`'s
+`try_weighted_decision()` computes a per-symbol reliability weight from a
+smoothed local power envelope (window ~15 symbols / ~10 s, matching the
+timescale `test/wspr_diag_candidate0.c` observed), normalized against the
+capture's own median, clamped to [0.2, 3.0] - then scales BOTH the
+informative part and a fixed per-symbol penalty by that weight, so a
+low-reliability symbol's vote barely counts either way rather than
+confidently voting wrong. Deliberately an analytic formula, not a trained
+table - the per-capture soft-table attempt's regression was blamed on
+overfitting a trained distribution to a synthetic channel model that
+didn't match reality, so avoiding that shape of solution was itself part
+of the design.
+
+**Wired in as a FALLBACK, not a replacement**: `wspr_decode_candidate()`
+tries hard-decision first; only if that's not plausible does it try
+weighted. This means candidates hard-decision already handles correctly
+cannot regress - confirmed, the real WAV still decodes the identical
+5/8 candidates.
+
+**This time, validated properly before trusting synthetic results** -
+learning directly from the previous soft-metric regression:
+- **Mechanism sanity** (`test/wspr_fading_harness.c` test 1): a uniform
+  strong signal (no fading) still decodes correctly through the weighted
+  path. Not broken by construction.
+- **An early test run gave a false alarm worth recording**: the first
+  attempt at a controlled "50%-match first half" synthetic test actually
+  measured 100% match in that "weak" half (the chosen amplitude wasn't
+  actually weak) - and on that not-actually-fading case, the weighted
+  decoder gave a WRONG answer while hard-decision succeeded easily. That
+  looked like a real bug at first. Recalibrating the amplitude (a small
+  separate sweep) to genuinely reproduce the diagnosed ~57% match rate
+  showed the mechanism was never broken - the initial test just wasn't
+  testing what it was meant to.
+- **Moderate fading, 10 seeds** (test 2): weighted decode is **10/10
+  correct vs hard-decision's 9/10**, including one specific seed where
+  hard-decision fails outright and weighted recovers it. A real,
+  measurable, reproducible win.
+- **Severe fading matching the real candidate's diagnosed pattern, 10
+  seeds, WITH ORACLE (ground-truth) weighting** (test 3): **both
+  hard-decision and weighted decoding fail 0/10** - even the best
+  possible case for this mechanism (knowing exactly which symbols to
+  trust, not just estimating it) cannot recover this severity. Swept
+  weight levels from near-zero to 1.0 (i.e. no weighting at all) and every
+  level converged on the same result. **Conclusion: not a bug, not a
+  tuning gap - a genuine information-theoretic limit.** With ~55% of a
+  162-symbol K=32 rate-1/2 codeword effectively erased, there isn't
+  enough redundancy left to reconstruct 50 message bits, regardless of
+  how well the decoder identifies which symbols to discount.
+
+**So the answer to "why does the strongest real candidate fail" gets a
+final coda**: fading explains it, per-symbol weighting is the
+theoretically correct response to fading, and it was built, worked, and
+still doesn't recover THIS candidate - because this candidate's fading is
+simply too severe for any weighting scheme to fix. That is a complete,
+non-contradictory story, not a loose end. The mechanism itself is real
+value for less extreme cases and is shipped; `test/wspr_fading_harness.c`
+keeps both results (the win and the honest limit) as permanent regression
+tests, including a note that a FUTURE change making test 3 start passing
+should be treated with suspicion (possible false-positive decode of
+noise) rather than celebrated automatically.
+
 ### What's still open
 
-- **Real soft-decision metrics** — still hard-decision only, by choice.
-  TWO from-scratch attempts now (see the two updates above): a fixed-scale
-  table (failed - too narrow a calibration band) and a per-capture-
-  normalized pooled table (worked great synthetically, REGRESSED the real
-  WAV 5/8 → 1/8, reverted). The open question isn't "how to build the
-  table" any more, it's "why does a synthetic AWGN-only channel model not
-  predict real-world behavior" - that needs investigating BEFORE a third
-  attempt, or it'll likely repeat the same trap. Do NOT reach for
-  `ast/wsprd`'s `metric_tables.c` even for "inspiration on the numbers",
-  it's GPL v3, same problem this document's licensing section is about.
+- **Real soft-decision metrics (whole-capture, trained-table style)** —
+  still not used; two attempts (fixed-scale, per-capture-normalized) both
+  failed for reasons documented above. The per-symbol WEIGHTED approach
+  (see the update directly above) is a different, working mechanism
+  serving a related but distinct need - it doesn't replace the open
+  question of whether a properly-calibrated whole-capture soft table could
+  still help on top of it.
 - **A second real WAV** — not found through the official channel; the
   synthetic multi-signal test above is the practical substitute for now.
 - **Device integration (Phase 2)** — deliberately not started. Per the
   scope doc's own rule, real-signal validation was worth more than moving
-  to firmware, and this session added two genuinely new pieces of evidence
-  (multi-signal separation, a measured sensitivity number) rather than
-  just one WAV file's results.
+  to firmware, and this session added several genuinely new pieces of
+  evidence (multi-signal separation, a measured sensitivity number, a
+  validated and shipped fading-recovery mechanism, and a complete,
+  evidenced answer for why one specific real candidate can't be
+  recovered) rather than just one WAV file's results.

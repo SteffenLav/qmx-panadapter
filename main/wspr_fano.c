@@ -260,28 +260,45 @@ static int has_untried_branch(fano_stage_t stage, int allow_bit1)
     return 0;
 }
 
+/* A metric SOURCE abstracts "how do we score extending the path at depth
+ * d with bit 0 or bit 1" - either a fixed byte-quantized lookup table
+ * (the original design) or arbitrary precomputed per-position values (for
+ * per-symbol reliability weighting, which a fixed table can't express at
+ * all - see wspr_fano_decode_weighted() and docs/wspr-phase1-status.md).
+ * Both public entry points share the one search loop below through this
+ * abstraction, so the two can't drift apart in behavior. */
+typedef struct {
+    const uint8_t *soft;      /* mettab path: deinterleaved soft bytes, or NULL */
+    int (*mettab)[256];
+    const int (*precomputed)[2]; /* weighted path: per-raw-position [bit0,bit1] metrics, or NULL */
+} metric_source_t;
+
 /* Fills branch_metric[0], branch_metric[1] with the Fano metric of
  * extending the path at depth d (whose encoder state is `enc_state`) with
- * input bit 0 or bit 1 respectively, against the two soft-decision symbol
- * values at deinterleaved-order positions 2d and 2d+1. */
-static void branch_metrics(uint32_t enc_state, const uint8_t soft[WSPR_NSYM],
-                            unsigned int d, int mettab[2][256],
-                            int branch_metric[2])
+ * input bit 0 or bit 1 respectively, using whichever metric source is
+ * active. Encode step d covers raw/deinterleaved-order positions 2d and
+ * 2d+1 (POLY1's and POLY2's output bits respectively). */
+static void branch_metrics(uint32_t enc_state, const metric_source_t *src,
+                            unsigned int d, int branch_metric[2])
 {
-    const uint8_t *sym = &soft[2 * d];
     for (int bit = 0; bit < 2; bit++) {
         uint32_t next_state = (enc_state << 1) | (uint32_t)bit;
         int code = fano_encode_step(next_state); /* 2 bits: (POLY1<<1)|POLY2 */
         int bit_hi = (code >> 1) & 1, bit_lo = code & 1;
-        branch_metric[bit] = mettab[bit_hi][sym[0]] + mettab[bit_lo][sym[1]];
+        if (src->precomputed) {
+            branch_metric[bit] = src->precomputed[2 * d][bit_hi]
+                                + src->precomputed[2 * d + 1][bit_lo];
+        } else {
+            const uint8_t *sym = &src->soft[2 * d];
+            branch_metric[bit] = src->mettab[bit_hi][sym[0]] + src->mettab[bit_lo][sym[1]];
+        }
     }
 }
 
-int wspr_fano_decode(const uint8_t deinterleaved_soft[WSPR_NSYM],
-                      int mettab[2][256], int delta,
-                      unsigned int maxcycles_per_bit,
-                      wspr_msg_bytes_t *msg_out,
-                      unsigned int *metric_out, unsigned int *cycles_out)
+static int fano_search(const metric_source_t *src, int delta,
+                        unsigned int maxcycles_per_bit,
+                        wspr_msg_bytes_t *msg_out,
+                        unsigned int *metric_out, unsigned int *cycles_out)
 {
     const unsigned int N = WSPR_ENC_BITS;
     const unsigned int WSPR_FLUSH_START = N - 31; /* depths >= this: bit must be 0 */
@@ -309,7 +326,7 @@ int wspr_fano_decode(const uint8_t deinterleaved_soft[WSPR_NSYM],
 
         if (has_untried_branch(stage[d], allow_bit1)) {
             int bm[2];
-            branch_metrics(enc_state[d], deinterleaved_soft, d, mettab, bm);
+            branch_metrics(enc_state[d], src, d, bm);
             /* In the flush region bit 1 can never be correct, so it isn't
              * a real candidate at all - forcing better_bit=0 there (rather
              * than letting a noisy bm[1]>bm[0] pick it) keeps the search
@@ -380,4 +397,23 @@ int wspr_fano_decode(const uint8_t deinterleaved_soft[WSPR_NSYM],
     free(enc_state);
     free(stage);
     return success ? 1 : 0;
+}
+
+int wspr_fano_decode(const uint8_t deinterleaved_soft[WSPR_NSYM],
+                      int mettab[2][256], int delta,
+                      unsigned int maxcycles_per_bit,
+                      wspr_msg_bytes_t *msg_out,
+                      unsigned int *metric_out, unsigned int *cycles_out)
+{
+    metric_source_t src = { deinterleaved_soft, mettab, NULL };
+    return fano_search(&src, delta, maxcycles_per_bit, msg_out, metric_out, cycles_out);
+}
+
+int wspr_fano_decode_weighted(const int branch_metric[WSPR_NSYM][2],
+                               int delta, unsigned int maxcycles_per_bit,
+                               wspr_msg_bytes_t *msg_out,
+                               unsigned int *metric_out, unsigned int *cycles_out)
+{
+    metric_source_t src = { NULL, NULL, branch_metric };
+    return fano_search(&src, delta, maxcycles_per_bit, msg_out, metric_out, cycles_out);
 }

@@ -115,6 +115,28 @@ int wspr_fano_decode(const uint8_t deinterleaved_soft[WSPR_NSYM],
                       wspr_msg_bytes_t *msg_out,
                       unsigned int *metric_out, unsigned int *cycles_out);
 
+/* Same search as wspr_fano_decode(), but the caller supplies the branch
+ * metric DIRECTLY per raw/deinterleaved-order position instead of going
+ * through a fixed byte-quantized mettab[2][256] lookup -
+ * branch_metric[k][0]/[1] is the contribution if raw bit k is 0/1.
+ *
+ * This exists because a per-symbol RELIABILITY-WEIGHTED metric (down-
+ * weighting symbols from a faded/weak part of the transmission, trusting
+ * ones from a strong part) can't be expressed as a static table at all -
+ * mettab has no notion of "this symbol's neighborhood was weak". The
+ * caller (main/wspr_decode.c) derives branch_metric from each position's
+ * measured local signal strength; see its own comment for the exact
+ * formula and the reasoning (test/wspr_diag_candidate0.c and
+ * docs/wspr-phase1-status.md's fading investigation is what motivated
+ * this - a real signal whose confidence should vary symbol-to-symbol,
+ * which no per-capture-global approach, soft or hard, can express).
+ *
+ * Same success/timeout/output contract as wspr_fano_decode(). */
+int wspr_fano_decode_weighted(const int branch_metric[WSPR_NSYM][2],
+                               int delta, unsigned int maxcycles_per_bit,
+                               wspr_msg_bytes_t *msg_out,
+                               unsigned int *metric_out, unsigned int *cycles_out);
+
 #ifdef __cplusplus
 }
 #endif
