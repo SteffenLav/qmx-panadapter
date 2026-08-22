@@ -46,20 +46,22 @@ firmware touched yet.
    single- and two-symbol errors (exhaustive, 162/162 and 162/162) and
    degrades gracefully beyond the code's real correction radius (3+
    simultaneous errors: not 100%, which is expected, not a bug).
-4. **A web-fetched "cross-check" constant was wrong.** I pulled a
-   closed-form bit-reversal formula from wsprcan's source via a web fetch to
-   cross-verify the interleave permutation, and it doesn't reverse an 8-bit
-   value correctly (hand-verified: `reverse8(1)` should be 128, the fetched
-   formula gave a nonsense multi-billion-value result for the same input) —
-   almost certainly a transcription error from the fetch/summarization step,
-   not a real algorithmic disagreement. Removed from the harness rather than
-   assert something false; replaced with a bijection check (every one of the
-   162 interleave positions is hit exactly once), which is a real property
-   test even without a second independent source. **The interleave
-   permutation is therefore internally self-consistent and uses the
-   documented textbook construction, but has not yet been cross-checked
-   against a second independently-sourced implementation** — flagged here
-   rather than glossed over.
+4. **CORRECTED (initially misdiagnosed, see the follow-up session below).**
+   I pulled a closed-form bit-reversal formula from wsprcan's source to
+   cross-verify the interleave permutation, compared it against `reverse8()`
+   as a 64-bit value, saw total disagreement, and wrote it up as "the
+   fetched constant is wrong, almost certainly a transcription error" — an
+   accusation against the source I never actually verified by hand. The
+   real bug was in my own comparison: wsprcan's code declares the result as
+   `unsigned char j = (...) >> 32;`, an 8-bit truncation that matters - the
+   untruncated 64-bit intermediate is garbage BY DESIGN, only the low byte
+   is the answer. Truncated correctly, it matches `reverse8()` exactly for
+   all 256 inputs. **The interleave permutation now has a genuine
+   second-source cross-check** (`test_interleave_self_consistency()` in
+   `wspr_codec_harness.c`), and it passes. Kept here instead of quietly
+   fixed, because "the web source was wrong" was itself an unverified claim
+   presented as fact - the lesson is to re-check a "this looks wrong"
+   conclusion by hand before writing it down, not just to fix the bug.
 
 ## What's proven vs. what's still open
 
@@ -74,11 +76,8 @@ firmware touched yet.
   10000 cycles/bit budget) — though see the caveat below.
 
 **Explicitly NOT proven yet** (next steps, in rough order):
-- **Sync-vector interleave against a second independent source.** The one
-  cross-check attempted this session used a bad transcription; a real
-  second source (ideally by reading actual code rather than a web-fetched
-  summary of it) is still worth doing before trusting this against a real
-  captured signal.
+- ~~Sync-vector interleave against a second independent source~~ — **done**,
+  see the correction above and the follow-up session below.
 - **False-decode rejection.** Fed pure random noise, the Fano decoder
   "succeeds" nearly every time (a WSPR type-1 message carries no CRC) — a
   real receiver needs a separate quality gate (sync-correlation score
@@ -139,18 +138,51 @@ candidate frequency (indexed by absolute sample position) so the search
 itself is pure array-lookup multiply-adds — full 8-candidate run now takes
 ~15 s on a laptop.
 
+## Update — interleave cross-check corrected (same session, continued)
+
+Fixed the item flagged throughout this doc as "still open": the interleave
+permutation now has a real second-source cross-check against wsprcan's
+independent implementation, and it passes. The earlier write-up blamed a
+web-fetch transcription error for a mismatch that was actually my own
+comparison bug (missing an 8-bit truncation the source code does
+explicitly) — corrected in place above rather than silently rewritten, see
+item 4 under "Bugs the harness caught".
+
+## Update — frequency drift tested as a hypothesis, NOT confirmed (same session)
+
+Tried a linear drift search (±8 Hz total across the transmission, 0.5 Hz
+steps, plus a small start-time nudge) around the rejected strong-signal
+candidate (`f0=1500.933 Hz`, `dt=2048`), throwaway tool, not promoted into
+`main/`. Result: the best-scoring drift (-1.0 Hz) raised the raw
+sync-correlation score by ~21% (199846 → 241820), but the resulting decode
+was a **different** implausible callsign (`NE7CCO`), an illegal power value
+(54 dBm - not on the legal WSPR set either), and a **worse** cycle count
+(256154, vs 49400 at zero drift) - the opposite of what a real fix should
+do. A better sync score without a better decode, on a search that also
+picked a different message than the baseline, is the signature of chasing
+noise, not of correcting a real impairment.
+
+**Conclusion: frequency drift is not confirmed as the explanation** for
+this candidate. Could still be drift with a wrong model (linear-centered
+may not match a real oscillator's warm-up curve) or too coarse a search,
+but could equally be something this simple pipeline was never going to
+decode - two overlapping signals near the same frequency, a birdie/local
+carrier, or genuinely not a standard WSPR transmission. Not chasing this
+further blindly; the honest state is "rejected, cause unconfirmed," and
+the existing three-check gate is doing its job either way - it caught a
+decode that shouldn't be trusted regardless of why.
+
 ### What's still open
 
-- **Frequency drift compensation** — the most likely fix for the one
-  strong-signal false-reject, and the natural next piece of DSP work.
+- **Why the strongest candidate fails** — open question, not confirmed to
+  be frequency drift (see above). Worth revisiting with a proper wsprd-style
+  2D (frequency × drift) joint search rather than a 1D drift search bolted
+  onto an already-fixed frequency, if this is picked up again.
 - **Real soft-decision metrics** — still hard-decision only; unclear yet
   whether this matters for weak (not just strong-but-drifting) real
   signals, since nothing genuinely weak has been tested against.
 - **A second real WAV** (different date/conditions) to confirm this isn't
   overfit to one recording's particular signal mix.
-- **Sync-vector interleave cross-check against a second independent
-  source** — still just internally self-consistent, per the original
-  Phase 1 note above.
 - **Device integration (Phase 2)** — deliberately not started. The decoder
   has now seen one real signal set successfully; per the scope doc's own
   rule, more real-signal validation (the items above) is worth more than

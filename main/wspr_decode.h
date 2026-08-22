@@ -12,15 +12,18 @@
  * WSPR power values and fast Fano convergence (82-102 cycles); the other 3
  * are correctly rejected as implausible (see wspr_decode.c for the three
  * checks and why each exists - one caught the file's own STRONGEST signal,
- * almost certainly a frequency-drift case this module doesn't compensate
- * for yet, see the "known limitations" note below).
+ * cause not yet confirmed, see docs/wspr-phase1-status.md).
  *
  * KNOWN LIMITATIONS (next work, not silently glossed over):
  *  - No frequency-drift compensation. A real WSPR transmitter's oscillator
  *    can drift a fraction of a Hz over the 110.6 s transmission; this
  *    module assumes a single fixed center frequency for the whole message.
- *    This is the most likely explanation for the one strong-signal
- *    candidate in the reference file that fails to decode plausibly.
+ *    A linear-drift search WAS tried against the one strong-signal
+ *    candidate that fails to decode plausibly, and it did NOT confirm
+ *    drift as the cause - a better-scoring drift produced a DIFFERENT,
+ *    still-implausible decode with a worse (not better) Fano cycle count.
+ *    See docs/wspr-phase1-status.md for the negative result. Don't assume
+ *    drift compensation fixes that candidate without re-testing.
  *  - Hard-decision only. Tone power is compared pairwise (which of two
  *    candidate tones is stronger) rather than feeding a graded soft metric
  *    to the Fano decoder - correctness-proven (see wspr_codec_harness.c)

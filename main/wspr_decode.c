@@ -152,10 +152,11 @@ static int is_legal_power(int dbm)
 
 /* A clean decode converges fast — every genuine signal found in the
  * reference WAV (see wspr_decode.h) took 82-102 Fano cycles; the file's
- * own strongest candidate, which fails to decode plausibly (almost
- * certainly frequency drift this module doesn't compensate for), took
- * 49400. Picked with real margin: ~20x the clean cluster's ceiling, far
- * below any observed false-decode cycle count. */
+ * own strongest candidate, which fails to decode plausibly (cause not
+ * confirmed - frequency drift was tried and did NOT explain it, see
+ * docs/wspr-phase1-status.md), took 49400. Picked with real margin: ~20x
+ * the clean cluster's ceiling, far below any observed false-decode cycle
+ * count. */
 #define WSPR_CYCLES_SUSPECT 2000
 
 void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,

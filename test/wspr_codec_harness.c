@@ -109,20 +109,25 @@ static void test_pack_unpack_roundtrip(void)
     }
 }
 
-/* NOTE: an earlier version of this test also cross-checked
- * wspr_deinterleave() against wsprcan's "magic number" closed-form
- * deinterleave formula, pulled via a web fetch. That magic constant does
- * NOT reverse an 8-bit value correctly (hand-verified: reverse8(1)=128 but
- * the fetched formula gave a nonsense multi-billion result for the same
- * input) - almost certainly a transcription error introduced by the
- * fetch/summarization step, not a real algorithmic disagreement. Removed
- * rather than ship a check against a constant nobody re-verified by hand.
- * wspr_interleave()/wspr_deinterleave() use the textbook bit-reversal
- * permutation WSPR's own interleaver is documented to use (see
- * docs/wspr-phase0-research.md); what's proven here is that our own
- * construction is self-consistent (round-trips), not that it's been
- * cross-checked against a second independent source. That cross-check is
- * still open - flagged in docs/wspr-phase0-research.md. */
+/* Independent (magic-number) closed-form bit-reversal, from wsprcan's
+ * wspr.c deinterleave() - a second, independently-maintained source for
+ * the same permutation wspr_interleave()/wspr_deinterleave() use.
+ *
+ * CORRECTION: an earlier version of this test compared this formula's
+ * result as a 64-bit value and got total disagreement, and the comment
+ * here wrongly blamed a web-fetch transcription error. The actual bug was
+ * in the comparison, not the source: wsprcan's own code declares the
+ * result as `unsigned char j = (...) >> 32;`, an 8-bit truncation that
+ * matters - the untruncated 64-bit intermediate is garbage by design, only
+ * the low 8 bits are the answer. Truncated correctly (as below), this
+ * matches reverse8() exactly for all 256 inputs. Lesson: re-verify a
+ * "this looks wrong" conclusion by hand before writing it down as fact -
+ * see feedback memory on this exact failure mode. */
+static uint8_t magic_reverse8(uint8_t i)
+{
+    return (uint8_t)(((i * 0x80200802ULL) & 0x0884422110ULL) * 0x0101010101ULL >> 32);
+}
+
 static void test_interleave_self_consistency(void)
 {
     printf("-- 2. interleave self-consistency --\n");
@@ -152,6 +157,24 @@ static void test_interleave_self_consistency(void)
     printf("  %s  interleave() is a bijection over 0..161\n",
            bijective ? "PASS" : "FAIL");
     if (!bijective) g_fail++;
+
+    /* The actual cross-check: build the same "scan k=0..255, keep reversed
+     * values <162 in the order they appear" construction wspr_fano.c uses,
+     * but with wsprcan's independently-sourced magic_reverse8() standing in
+     * for the internal reverse8() - if the two sources agree on every
+     * bit-reversal, they'll produce the identical map. */
+    uint8_t alt_map[WSPR_NSYM];
+    int idx = 0;
+    for (int k = 0; k < 256 && idx < WSPR_NSYM; k++) {
+        uint8_t j = magic_reverse8((uint8_t)k);
+        if (j < WSPR_NSYM) alt_map[idx++] = j;
+    }
+    uint8_t alt_channel[WSPR_NSYM];
+    for (int i = 0; i < WSPR_NSYM; i++) alt_channel[alt_map[i]] = idmap_raw[i];
+    int cross_ok = (idx == WSPR_NSYM) && (memcmp(idmap_channel, alt_channel, WSPR_NSYM) == 0);
+    printf("  %s  matches wsprcan's independent magic-number formula (second source)\n",
+           cross_ok ? "PASS" : "FAIL");
+    if (!cross_ok) g_fail++;
 }
 
 /* ---------- 3. full noiseless FEC round-trip ---------- */

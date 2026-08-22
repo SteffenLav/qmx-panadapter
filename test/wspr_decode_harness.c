@@ -29,12 +29,13 @@
  * this comment and tighten the assertions.
  *
  * The file's own STRONGEST signal (by a 3x margin) does NOT decode
- * plausibly - see main/wspr_decode.h's "known limitations": most likely
- * frequency drift, which this decoder doesn't compensate for. Documented,
- * not hidden - the regression test below asserts the 5 that DO work, and
- * separately checks that exactly 3 are rejected, so a future fix for drift
- * compensation shows up as an easy "6th decode appeared" rather than a
- * silent behavior change nobody notices.
+ * plausibly - cause not confirmed (a linear frequency-drift search was
+ * tried against it and did NOT explain it - see
+ * docs/wspr-phase1-status.md). Documented, not hidden - the regression
+ * test below asserts the 5 that DO work, and separately checks that
+ * exactly 3 are rejected, so any future fix for this candidate shows up as
+ * an easy "6th decode appeared" rather than a silent behavior change
+ * nobody notices.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -165,11 +166,11 @@ int main(void)
     }
 
     printf("\n-- checking the reject count --\n");
-    /* Documents the known-drift-limitation candidate (this file's own
-     * strongest signal) plus 2 noise candidates as an explicit, visible
-     * assertion - see the file header. If drift compensation is ever
-     * added, this count should drop and this assertion should be updated
-     * deliberately, not silently pass either way. */
+    /* Documents the file's own strongest (cause-unconfirmed) candidate
+     * plus 2 noise candidates as an explicit, visible assertion - see the
+     * file header. If that candidate is ever explained/fixed, this count
+     * should drop and this assertion should be updated deliberately, not
+     * silently pass either way. */
     int reject_ok = (n_rejected == 3);
     printf("  %s  %d rejected (expected 3)\n", reject_ok ? "PASS" : "FAIL", n_rejected);
     if (!reject_ok) g_fail++;
