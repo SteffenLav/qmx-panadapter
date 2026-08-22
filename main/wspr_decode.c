@@ -203,9 +203,26 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
     result->best_dt_samples = best_dt;
     result->sync_score = best_score;
 
-    /* Hard-decision per symbol, conditioned on the known sync bit (see
-     * wspr_decode.h's "known limitations" - a real soft metric is future
-     * work; this is proven-correct, not maximally sensitive). */
+    /* Hard-decision per symbol, conditioned on the known sync bit.
+     *
+     * A per-capture-normalized SOFT metric (wspr_build_soft_metric_table())
+     * was tried here and reverted - worth recording why, since it's a real
+     * trap. In a synthetic single/multi-tone AWGN sweep
+     * (test/wspr_metric_sim.c, test/wspr_synth_harness.c) it measured
+     * ~2-3 dB more sensitive than this hard-decision table. Wired into
+     * this function, it REGRESSED real-world performance badly: 1/8
+     * plausible decodes from the reference WAV instead of 5/8, with most
+     * candidates timing out or converging on garbage. The synthetic
+     * channel model (one or a few clean tones plus i.i.d. Gaussian noise)
+     * apparently isn't representative enough of what a real captured
+     * signal actually looks like (other in-band activity, non-ideal
+     * noise, whatever else a real recording has that a clean 2-tone
+     * simulation doesn't) - and the soft table, calibrated tightly to the
+     * synthetic statistic, wasn't robust to that mismatch the way this
+     * simpler hard decision is. Lesson worth keeping: a synthetic
+     * sensitivity sweep passing is evidence, not proof - the real WAV
+     * test is what actually decides whether a decoder change is a
+     * genuine improvement. Full account in docs/wspr-phase1-status.md. */
     uint8_t channel_bits[WSPR_NSYM];
     for (int i = 0; i < WSPR_NSYM; i++) {
         int sync = wspr_sync_vector[i];

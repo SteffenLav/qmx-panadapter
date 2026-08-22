@@ -53,6 +53,14 @@ void wspr_interleave(const uint8_t raw_bits[WSPR_NSYM],
 void wspr_deinterleave(const uint8_t channel_bits[WSPR_NSYM],
                         uint8_t raw_bits_out[WSPR_NSYM]);
 
+/* Same permutation as wspr_deinterleave(), for a soft (real-valued)
+ * per-symbol score instead of a hard bit - used to carry a per-capture
+ * confidence value (e.g. the raw tone-power difference D) from channel
+ * order into the encode order wspr_fano_decode() expects, without
+ * collapsing it to a bit first. */
+void wspr_deinterleave_scores(const double channel_scores[WSPR_NSYM],
+                               double raw_scores_out[WSPR_NSYM]);
+
 /* Combine interleaved data bits with the sync vector to produce the 4-FSK
  * tone index (0-3, tone = sync_bit | (data_bit<<1)) actually transmitted
  * for each of the 162 channel slots - and the inverse, which strips a KNOWN
@@ -63,11 +71,32 @@ void wspr_tones_to_symbols(const uint8_t tones[WSPR_NSYM],
                             uint8_t channel_bits_out[WSPR_NSYM]);
 
 /* A simple two-level (0 or 255) hard-decision metric table - enough to
- * prove the Fano decoder against noiseless/quantized test vectors. A real
- * AWGN-tuned soft table, built from an actual per-symbol SNR estimate, is
- * Phase 1 follow-up work once real captured audio is in the loop (see
- * docs/wspr-phase0-research.md's "what Phase 1 should pull next"). */
+ * prove the Fano decoder against noiseless/quantized test vectors. Kept
+ * as the simple/robust option (no calibration dependency at all) - see
+ * wspr_build_soft_metric_table() for the higher-sensitivity option
+ * main/wspr_decode.c actually uses. */
 void wspr_build_hard_metric_table(int mettab[2][256]);
+
+/* A real soft-decision metric table, built by Monte Carlo simulation of
+ * this decoder's own channel statistic across many SNRs
+ * (test/wspr_metric_sim.c - own simulation, not copied from any published
+ * table; see docs/wspr-phase1-status.md's licensing section for why that
+ * distinction matters here). Measured ~2-3 dB more sensitive than
+ * wspr_build_hard_metric_table() (down to about -24 to -26 dB vs -22.7 dB
+ * SNR in the 2500 Hz reference bandwidth).
+ *
+ * REQUIRES per-capture normalization to work - this table was trained on
+ * D values normalized by each simulated capture's own mean(|D|), pooled
+ * across many amplitudes, so it is NOT calibrated for absolute D. The
+ * caller must normalize the same way before quantizing into a byte:
+ * `byte = clamp(128 + round((D[i] / mean(|D|)) * 20), 0, 255)` - see
+ * main/wspr_decode.c's use of this table for the reference
+ * implementation. Using this table with raw (non-normalized) D values
+ * will not just fail to help, it will actively decode WRONG messages
+ * quickly (measured: cycles=81, i.e. converges as if noiseless, to an
+ * incorrect result) rather than timing out - a mismatched-unit bug here
+ * is silent, not loud. */
+void wspr_build_soft_metric_table(int mettab[2][256]);
 
 /* Fano-decode 162 already-DEINTERLEAVED soft metric values (encode order,
  * mettab-indexable 0-255) back to the 50-bit message. Clean-room

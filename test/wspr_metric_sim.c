@@ -1,34 +1,24 @@
-/* Attempt to build a real soft-decision metric table via Monte Carlo
- * simulation of THIS decoder's own channel statistic - not copied from
- * anyone's published table (K9AN's metric_tables.c is GPL v3, see
- * docs/wspr-phase1-status.md's licensing section; this was meant to be
- * independent original work instead).
+/* Build a real soft-decision metric table via Monte Carlo simulation of
+ * THIS decoder's own channel statistic - not copied from anyone's
+ * published table (K9AN's metric_tables.c is GPL v3, see
+ * docs/wspr-phase1-status.md's licensing section; this is independent
+ * original work instead).
  *
- * RESULT: NEGATIVE, NOT SHIPPED. A single fixed-scale table, calibrated
- * at one amplitude (amp=0.06 here), decodes correctly only in a narrow
- * band around that calibration point and FAILS outside it - including at
- * STRONG signal (tested to +6.8 dB SNR, where even the crude hard-decision
- * table in wspr_fano.c works trivially). Confirmed with two different
- * scale choices and up to 250,000 trials each - not a statistics problem,
- * a structural one: D scales roughly with amplitude^2 (it's a power
- * difference), so a signal several times stronger than the calibration
- * point saturates nearly every symbol to byte 0 or 255, and the noisy,
- * low-sample-count entries the calibration run happened to produce at
- * those extreme bins get used as if they were reliable - each printed
- * table run of 100k trials showed long runs of near-empty (single-digit
- * count) tail bins.
- *
- * This is exactly why real decoders like wsprd don't use one fixed table:
- * K9AN's metric_tables.c ships FOUR tables for different Es/No operating
- * points and selects/blends between them. The real fix here would be
- * either the same (multiple tables, chosen by an estimated SNR) or
- * per-capture normalization (derive the quantization scale from the
- * ACTUAL candidate signal's own measured |D| distribution, not a
- * pre-baked constant) - genuine follow-up work, not done here. The
- * existing 2-level hard-decision table in wspr_fano.c stays the shipped
- * default: it has no calibration-fragility at all and is already measured
- * at -22.7 dB SNR sensitivity (test/wspr_synth_harness.c), which this
- * attempt did not beat.
+ * SECOND ATTEMPT - PER-CAPTURE NORMALIZATION. The first attempt (see git
+ * history / docs/wspr-phase1-status.md) built one table at one fixed
+ * calibration amplitude and found it only worked in a narrow band around
+ * that amplitude - D scales roughly with amplitude^2, so any candidate
+ * signal noticeably stronger or weaker than the calibration point
+ * saturated into unreliable table entries. The fix: normalize each
+ * symbol's D by an estimate of the SIGNAL'S OWN typical magnitude before
+ * quantizing - both here (during training, pooled across many amplitudes)
+ * and in main/wspr_decode.c (during real decoding, from the actual
+ * candidate's own 162 symbols) - so the table is calibrated in
+ * SCALE-INVARIANT units instead of absolute ones. This is the same idea
+ * real receivers implement as AGC; it isn't a perfect equalizer (a
+ * genuinely low-SNR signal's normalized statistics are still noisier than
+ * a high-SNR one's, even after removing the raw amplitude), but it should
+ * remove the GROSS mismatch that broke the first attempt.
  *
  * The statistic being calibrated is what main/wspr_decode.c computes per
  * symbol: given the known sync bit, the difference in coherent-DFT power
@@ -39,10 +29,9 @@
  *   gcc -O2 -Wall -I main -o wspr_metric_sim test/wspr_metric_sim.c \
  *       main/wspr_proto.c main/wspr_fano.c -lm
  *
- * Prints a C array literal (the built table) to stdout, and reports its
- * measured effect on the sensitivity sweep to stderr - kept as a tool for
- * revisiting this with per-capture normalization, not as something to
- * link into main/.
+ * Prints a C array literal (the built table) to stdout; reports the
+ * self-check (does this table + per-capture normalization actually beat
+ * the -22.7 dB hard-decision baseline across a wide SNR sweep?) to stderr.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -55,6 +44,7 @@
 #define SYM_LEN 8192
 #define FS 12000.0
 #define TONE_SPACING (FS / SYM_LEN)
+#define NBYTE 256
 
 static uint32_t g_rng = 0xA5A5A5A5u;
 static double rng_uniform(void)
@@ -68,15 +58,10 @@ static double rng_gaussian(void)
     return sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2);
 }
 
-/* Precomputed twiddle tables for both correlator frequencies, built once
- * at startup - simulate_D() is called hundreds of thousands of times and
- * an earlier version of this function called cos()/sin() inside the
- * per-sample loop, which made even a 100k-trial run impractically slow
- * (same mistake, same fix, as main/wspr_decode.c's start-time search -
- * see docs/wspr-phase1-status.md). Reusing sin(a+b) = sin(a)cos(b) +
- * cos(a)sin(b) means the per-trial random phase only needs ONE sin/cos
- * call total, with the rest of the 8192-sample loop being pure
- * table-lookup multiply-adds. */
+/* Precomputed twiddle tables - see docs/wspr-phase1-status.md, this exact
+ * optimization was needed twice already (main/wspr_decode.c's start-time
+ * search, and this file's first version) before a per-sample cos()/sin()
+ * call was recognized as the thing making runs impractically slow. */
 static float g_cos0[SYM_LEN], g_sin0[SYM_LEN], g_cos1[SYM_LEN], g_sin1[SYM_LEN];
 
 static void init_twiddles(void)
@@ -92,23 +77,16 @@ static void init_twiddles(void)
 }
 
 /* Simulate one symbol's coherent DFT power difference D = P(tone1) -
- * P(tone0), where tone1 is one tone-spacing above tone0 - matching what
- * the real decoder compares - `sent_bit` selects which tone actually
- * carries the signal. `amp` is the tone's peak amplitude, `sigma` the
- * AWGN per-sample stddev, both in the same normalized units
- * main/wspr_decode.c's int16 samples/32768.0 use. */
+ * P(tone0) - `sent_bit` selects which tone carries the signal. `amp` is
+ * the tone's peak amplitude, `sigma` the AWGN per-sample stddev. */
 static double simulate_D(int sent_bit, double amp, double sigma)
 {
     double re0 = 0, im0 = 0, re1 = 0, im1 = 0;
-    double phase0 = rng_uniform() * 2.0 * M_PI; /* random start phase - a
-        real capture's symbol boundary doesn't line up with a cosine's
-        zero-crossing, and averaging over phase is exactly what a
-        realistic simulation must do rather than assuming phase=0. */
+    double phase0 = rng_uniform() * 2.0 * M_PI;
     double cp = cos(phase0), sp = sin(phase0);
     const float *sig_cos = (sent_bit == 0) ? g_cos0 : g_cos1;
     const float *sig_sin = (sent_bit == 0) ? g_sin0 : g_sin1;
     for (int n = 0; n < SYM_LEN; n++) {
-        /* sin(phase0 + w*n) = sin(phase0)cos(w*n) + cos(phase0)sin(w*n) */
         double sig = amp * (sp * sig_cos[n] + cp * sig_sin[n]);
         double x = sig + sigma * rng_gaussian();
         re0 += x * g_cos0[n]; im0 -= x * g_sin0[n];
@@ -119,71 +97,76 @@ static double simulate_D(int sent_bit, double amp, double sigma)
     return p1 - p0;
 }
 
-#define NBYTE 256
+/* Estimate the normalization scale for a batch of D values the same way a
+ * real decode would: from the batch's OWN mean absolute value. Shared by
+ * training (pooling across amplitudes) and the self-check (per-capture),
+ * so the two can't quietly use different conventions. */
+static double batch_scale(const double *d, int n)
+{
+    double sum = 0;
+    for (int i = 0; i < n; i++) sum += fabs(d[i]);
+    double s = sum / n;
+    return (s > 1e-9) ? s : 1e-9;
+}
+
+static long g_hist0[NBYTE], g_hist1[NBYTE];
+
+static void train_at_amplitude(double amp, double sigma, long trials)
+{
+    /* Pilot batch to estimate this amplitude's own typical |D| - trained
+     * the same way decode-time per-capture normalization will estimate
+     * it from a real candidate's 162 symbols, just with a bigger sample
+     * for a cleaner training signal. */
+    enum { PILOT = 4000 };
+    double pilot_d[PILOT];
+    for (int t = 0; t < PILOT; t++) pilot_d[t] = simulate_D(t & 1, amp, sigma);
+    double scale = batch_scale(pilot_d, PILOT);
+
+    for (long t = 0; t < trials; t++) {
+        int bit = (int)(t & 1);
+        double D = simulate_D(bit, amp, sigma) / scale;
+        int byte = (int)lround(128.0 + D * 20.0); /* fixed post-normalization
+            spread - D/scale is O(1) by construction, so a single spread
+            constant (unlike the first attempt's per-amplitude scale) is
+            appropriate here: normalization already removed the amplitude
+            dependence, this just maps the normalized unit onto the byte
+            range. */
+        if (byte < 0) byte = 0;
+        if (byte > 255) byte = 255;
+        if (bit == 0) g_hist0[byte]++; else g_hist1[byte]++;
+    }
+}
 
 int main(int argc, char **argv)
 {
     init_twiddles();
-
-    /* Reference operating point: chosen near this decoder's own
-     * hard-decision sensitivity limit (~-22.7 dB SNR in the 2500 Hz
-     * reference bandwidth, measured in test/wspr_synth_harness.c) - the
-     * regime a soft metric actually needs to help in, not an arbitrary
-     * "strong signal" point where hard-decision already works fine. */
-    double amp = 0.06;
     double sigma = 0.10;
-    long trials = (argc > 1) ? atol(argv[1]) : 200000;
+    long trials_per_amp = (argc > 1) ? atol(argv[1]) : 30000;
 
-    fprintf(stderr, "simulating %ld trials at amp=%.3f sigma=%.3f...\n", trials, amp, sigma);
-
-    /* Empirical D-scale: run a small pilot batch first to see the typical
-     * magnitude of D, so the byte quantization actually spans the
-     * meaningful range instead of guessing a scale constant. */
-    double abs_sum = 0;
-    int pilot = 2000;
-    for (int t = 0; t < pilot; t++) {
-        abs_sum += fabs(simulate_D(t & 1, amp, sigma));
-    }
-    double mean_abs_D = abs_sum / pilot;
-    double scale = mean_abs_D / 12.0; /* wider dynamic range than the first
-        attempt's /40 - that left most of the byte range as near-empty,
-        unreliable-count bins (confirmed by inspecting the printed table:
-        long runs of 0s and single-digit counts at the tails), which
-        starved the Fano decoder of real information outside a narrow band
-        around the calibration amplitude. */
-    fprintf(stderr, "pilot mean|D|=%.4f, quantization scale=%.6f\n", mean_abs_D, scale);
-
-    long hist0[NBYTE] = { 0 }, hist1[NBYTE] = { 0 };
-    for (long t = 0; t < trials; t++) {
-        int bit = (int)(t & 1);
-        double D = simulate_D(bit, amp, sigma);
-        int byte = (int)lround(128.0 + D / scale);
-        if (byte < 0) byte = 0;
-        if (byte > 255) byte = 255;
-        if (bit == 0) hist0[byte]++; else hist1[byte]++;
+    /* Train across a wide span of amplitudes - roughly -25 to +10 dB in
+     * the 2500 Hz reference sense - so the pooled table reflects
+     * "typical normalized statistics" rather than one operating point. */
+    double amps[] = { 0.015, 0.025, 0.04, 0.06, 0.09, 0.13, 0.19, 0.28 };
+    int n_amps = (int)(sizeof(amps) / sizeof(amps[0]));
+    memset(g_hist0, 0, sizeof(g_hist0));
+    memset(g_hist1, 0, sizeof(g_hist1));
+    for (int a = 0; a < n_amps; a++) {
+        fprintf(stderr, "training at amp=%.3f (%ld trials)...\n", amps[a], trials_per_amp);
+        train_at_amplitude(amps[a], sigma, trials_per_amp);
     }
 
-    /* Empirical log-likelihood-ratio metric, scaled to fit a reasonable
-     * integer range (matching the magnitude the hard-decision table used,
-     * roughly +-10, so the Fano threshold/delta tuning already validated
-     * doesn't need re-deriving from scratch). Laplace-smoothed (+1) so an
-     * unseen byte doesn't produce a -inf/log(0). */
     int mettab[2][NBYTE];
     double METRIC_SCALE = 4.0;
     for (int b = 0; b < NBYTE; b++) {
-        double tot0 = hist0[b] + 1.0, tot1 = hist1[b] + 1.0;
+        double tot0 = g_hist0[b] + 1.0, tot1 = g_hist1[b] + 1.0;
         double avg = (tot0 + tot1) / 2.0;
-        double m0 = METRIC_SCALE * log(tot0 / avg);
-        double m1 = METRIC_SCALE * log(tot1 / avg);
-        mettab[0][b] = (int)lround(m0);
-        mettab[1][b] = (int)lround(m1);
+        mettab[0][b] = (int)lround(METRIC_SCALE * log(tot0 / avg));
+        mettab[1][b] = (int)lround(METRIC_SCALE * log(tot1 / avg));
     }
 
-    printf("/* Generated by test/wspr_metric_sim.c - empirical log-likelihood\n");
-    printf(" * metric from %ld Monte Carlo trials at amp=%.3f sigma=%.3f\n", trials, amp, sigma);
-    printf(" * (own simulation of this decoder's own channel statistic - not\n");
-    printf(" * copied from any published table). Quantization scale=%.6f */\n", scale);
-    printf("static const int kSoftMetricScale_x1000 = %d;\n", (int)lround(scale * 1000));
+    printf("/* Generated by test/wspr_metric_sim.c (per-capture-normalized,\n");
+    printf(" * pooled across %d amplitudes x %ld trials each) - own\n", n_amps, trials_per_amp);
+    printf(" * simulation, not copied from any published table. */\n");
     printf("static const int kSoftMetric[2][256] = {\n");
     for (int bit = 0; bit < 2; bit++) {
         printf("  {");
@@ -195,32 +178,26 @@ int main(int argc, char **argv)
     }
     printf("};\n");
 
-    /* Quick self-check: does this table actually decode correctly at the
-     * reference point and beyond? (uses the real wspr_fano_decode, real
-     * encode/interleave - this IS the correctness check, the printed
-     * table is only useful if this passes.) */
-    fprintf(stderr, "\nself-check: encode/decode round trip using the new table:\n");
+    /* Self-check: for each of a WIDE range of test amplitudes, simulate
+     * all 162 symbols, estimate the normalization scale from THAT
+     * CAPTURE'S OWN 162 values (not a separate pilot - this is exactly
+     * what main/wspr_decode.c would have to do on a real candidate), then
+     * decode. */
+    fprintf(stderr, "\nself-check across a wide SNR sweep (per-capture normalization):\n");
     wspr_msg_bytes_t msg;
     wspr_pack_message("W5BIT", "EL09", 17, &msg);
-    /* wspr_fano_decode() consumes ENCODE-ORDER (pre-interleave) soft
-     * values - the real receiver deinterleaves before decoding, but since
-     * this simulation treats every symbol as an i.i.d. trial (no
-     * position-dependent effects modeled), simulating directly against
-     * wspr_convolve_encode()'s raw output and skipping interleave/
-     * deinterleave entirely gives the identical result while testing
-     * exactly what this tool cares about: the metric table's quality, not
-     * the (already separately proven) interleave logic. */
     uint8_t raw[WSPR_NSYM];
     wspr_convolve_encode(&msg, raw);
 
-    for (double test_amp = 0.20; test_amp >= 0.01; test_amp *= 0.8) {
+    int n_ok = 0, n_tested = 0;
+    for (double test_amp = 0.30; test_amp >= 0.0004; test_amp *= 0.78) {
+        double d[WSPR_NSYM];
+        for (int i = 0; i < WSPR_NSYM; i++) d[i] = simulate_D(raw[i], test_amp, sigma);
+        double scale = batch_scale(d, WSPR_NSYM);
+
         uint8_t soft[WSPR_NSYM];
         for (int i = 0; i < WSPR_NSYM; i++) {
-            int data = raw[i];
-            /* Simulate this symbol's D exactly as the real receiver would
-             * see it, using the just-built table's own quantization. */
-            double D = simulate_D(data, test_amp, sigma);
-            int byte = (int)lround(128.0 + D / scale);
+            int byte = (int)lround(128.0 + (d[i] / scale) * 20.0);
             if (byte < 0) byte = 0;
             if (byte > 255) byte = 255;
             soft[i] = (uint8_t)byte;
@@ -231,8 +208,11 @@ int main(int argc, char **argv)
         int correct = ok && memcmp(msg.dat, decoded.dat, 7) == 0;
         double snr_db = 10.0 * log10((test_amp * test_amp / 2.0)
                                        / ((sigma * sigma / (FS / 2.0)) * 2500.0));
-        fprintf(stderr, "  amp=%.4f SNR(2500Hzref)=%6.1fdB ok=%d correct=%d cycles=%u\n",
-                test_amp, snr_db, ok, correct, cycles);
+        fprintf(stderr, "  amp=%.4f SNR(2500Hzref)=%6.1fdB correct=%d cycles=%u\n",
+                test_amp, snr_db, correct, cycles);
+        n_tested++;
+        if (correct) n_ok++;
     }
+    fprintf(stderr, "\n%d/%d correct across the sweep\n", n_ok, n_tested);
     return 0;
 }

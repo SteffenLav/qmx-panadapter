@@ -338,20 +338,70 @@ signal's own measured |D| distribution rather than a pre-baked constant.
 deleted, since the simulation methodology itself worked fine - only the
 fixed-scale design choice didn't.
 
+## Update — per-capture normalization: works great synthetically, REGRESSES real WAV, reverted
+
+Picked up the "per-capture normalization" follow-up from above:
+`test/wspr_metric_sim.c` rewritten to train a pooled table across 8
+amplitudes (200,000 total trials), each batch normalized by its own
+mean(|D|) before quantizing - and the self-check applies the identical
+per-capture normalization at decode time (estimating scale from the
+candidate's own 162 symbols, exactly as a real decode would).
+
+**Synthetic result: dramatic.** Single-message sweep decoded correctly
+from +10.3 dB down to -24.2 dB, first failure at -26.4 dB - about 2-3 dB
+better than the -22.7 dB hard-decision baseline. Wired into
+`main/wspr_decode.c` (`wspr_build_soft_metric_table()` +
+`wspr_deinterleave_scores()`, new function, added to `wspr_fano.c`/`.h`
+for carrying a soft score instead of a hard bit through the interleave
+permutation).
+
+**Real-world result: regression, reverted the same session.** Run against
+the actual reference WAV, plausible decodes dropped from 5/8 to 1/8 - most
+candidates that used to decode cleanly now either time out or converge on
+garbage. Reverted `wspr_decode_candidate()` back to the hard-decision
+table immediately; verified all three test suites (codec, real-WAV,
+synthetic) pass again at the known-good baseline before moving on.
+
+**Why this matters more than the numbers:** this is the textbook
+"validated in simulation, fails in reality" trap, and it happened despite
+a careful, methodical simulation approach. The likely cause: the
+synthetic channel model is one or a few clean tones plus i.i.d. Gaussian
+noise, and real captured audio apparently has enough else going on (other
+in-band signals, non-ideal noise characteristics, whatever a 120-second
+real HF recording actually contains) that a table tightly calibrated to
+the clean synthetic statistic isn't robust to the mismatch - while the
+simple hard-decision table, needing no calibration at all, doesn't have
+that fragility.
+
+**The standing rule this reinforces**: a synthetic sensitivity sweep
+passing is evidence, not proof. The real WAV test is what actually
+decides whether a decoder change is a genuine improvement, and it must be
+run - and trusted over synthetic results when they disagree - before
+anything is called a win. `wspr_build_soft_metric_table()` and
+`test/wspr_metric_sim.c` are kept (real, working infrastructure, and the
+synthetic-only validation gap is now a known, documented risk rather than
+an invisible one) but NOT used by default. If picked up again: test
+against the real WAV at every iteration, not just at the end, and
+consider whether the synthetic channel model needs to include something
+closer to real band conditions (multiple signals, real noise) rather than
+assuming AWGN-only is representative.
+
 ### What's still open
 
 - **Why the strongest real-signal candidate fails** — open question, not
   confirmed to be frequency drift (see above). Worth revisiting with a
   proper wsprd-style 2D (frequency × drift) joint search rather than a 1D
   drift search bolted onto an already-fixed frequency, if picked up again.
-- **Real soft-decision metrics** — still hard-decision only; a from-scratch
-  attempt (see the update above) failed for a well-understood, fixable
-  reason (single fixed calibration scale, no per-SNR adaptation). Next
-  attempt should build multiple tables at different calibration amplitudes
-  and select between them (or estimate scale per-capture) - do NOT reach
-  for `ast/wsprd`'s `metric_tables.c` even for "inspiration on the
-  numbers", it's GPL v3, same problem this document's licensing section
-  is about.
+- **Real soft-decision metrics** — still hard-decision only, by choice.
+  TWO from-scratch attempts now (see the two updates above): a fixed-scale
+  table (failed - too narrow a calibration band) and a per-capture-
+  normalized pooled table (worked great synthetically, REGRESSED the real
+  WAV 5/8 → 1/8, reverted). The open question isn't "how to build the
+  table" any more, it's "why does a synthetic AWGN-only channel model not
+  predict real-world behavior" - that needs investigating BEFORE a third
+  attempt, or it'll likely repeat the same trap. Do NOT reach for
+  `ast/wsprd`'s `metric_tables.c` even for "inspiration on the numbers",
+  it's GPL v3, same problem this document's licensing section is about.
 - **A second real WAV** — not found through the official channel; the
   synthetic multi-signal test above is the practical substitute for now.
 - **Device integration (Phase 2)** — deliberately not started. Per the
