@@ -97,9 +97,61 @@ firmware touched yet.
   still, per the scope doc, "probably the majority of the total effort" —
   today's work is the layer underneath it, not a shortcut past it.
 
-## Recommended next session
+## Update — audio-domain decode against a real WAV (same session, continued)
 
-Pick up with real captured WSPR audio: get a public WSPR WAV archive
-sample + its known-correct decoded message, and start on the sync/frequency
-search needed to turn raw IQ into the 162 soft symbol values this session's
-decoder already knows how to consume.
+The "next steps" above are now partly done. Added:
+
+- [main/wspr_decode.h](../main/wspr_decode.h) / `.c` — coarse frequency
+  candidate detection (one FFT over the whole capture, scored by 4-tone
+  comb energy) + per-candidate start-time search + hard-decision tone
+  extraction + the three-check plausibility gate (message shape, legal
+  power quantization, Fano cycle count).
+- [test/wspr_decode_harness.c](../test/wspr_decode_harness.c) — downloads
+  are not automated (see below), but the harness runs against
+  `test/wav_reference/wspr/150426_0918.wav`, **WSJT's own official WSPR
+  sample recording** (sourceforge.net/projects/wsjt/files/samples/WSPR/,
+  120 s / 12000 Hz / 16-bit mono), tracked in git alongside the existing
+  FT8 reference WAVs.
+
+**Result: 5 of 8 detected candidates decode cleanly** to standard-format US
+amateur callsigns (W3HH, WD4LHT, ND6P, W5BIT, KI7CI), each with a legal
+WSPR power value and fast Fano convergence (82-102 cycles). The other 3 are
+correctly rejected — including, notably, **the file's own strongest signal
+by a 3x margin**, which is the interesting result: its huge cycle count
+(49400, vs 82-102 for the clean ones) says the decoder had to fight for a
+result it shouldn't trust, and the most likely explanation is the one
+documented limitation this module doesn't yet handle — frequency drift
+over the 110.6 s transmission. Not silently worked around; flagged in
+`wspr_decode.h` and asserted in the harness (`3 rejected` is a checked
+regression, not just a log line) so a future drift-compensation fix shows
+up as "the reject count changed" rather than an unnoticed behavior shift.
+
+There is no independently-published "ground truth" for what this specific
+file decodes to — the corroboration is three independent signals agreeing
+(real callsign shape, legal power, fast convergence) across 5 different
+candidates, not a match against an authoritative answer key. That's real
+evidence, not proof; documented as such in the harness's own header.
+
+**Runtime note**: the initial version of the start-time search called
+`cos()`/`sin()` inside the innermost sample loop and didn't finish a single
+candidate in 2 minutes. Fixed by precomputing twiddle tables once per
+candidate frequency (indexed by absolute sample position) so the search
+itself is pure array-lookup multiply-adds — full 8-candidate run now takes
+~15 s on a laptop.
+
+### What's still open
+
+- **Frequency drift compensation** — the most likely fix for the one
+  strong-signal false-reject, and the natural next piece of DSP work.
+- **Real soft-decision metrics** — still hard-decision only; unclear yet
+  whether this matters for weak (not just strong-but-drifting) real
+  signals, since nothing genuinely weak has been tested against.
+- **A second real WAV** (different date/conditions) to confirm this isn't
+  overfit to one recording's particular signal mix.
+- **Sync-vector interleave cross-check against a second independent
+  source** — still just internally self-consistent, per the original
+  Phase 1 note above.
+- **Device integration (Phase 2)** — deliberately not started. The decoder
+  has now seen one real signal set successfully; per the scope doc's own
+  rule, more real-signal validation (the items above) is worth more than
+  moving to firmware at this point.
