@@ -29,12 +29,20 @@
  * this comment and tighten the assertions.
  *
  * The file's own STRONGEST signal (by a 3x margin) does NOT decode
- * plausibly - cause not confirmed (a linear frequency-drift search was
- * tried against it and did NOT explain it - see
- * docs/wspr-phase1-status.md). Documented, not hidden - the regression
- * test below asserts the 5 that DO work, and separately checks that
- * exactly 3 are rejected, so any future fix for this candidate shows up as
- * an easy "6th decode appeared" rather than a silent behavior change
+ * plausibly - RESOLVED (test/wspr_diag_candidate0.c, docs/wspr-phase1-
+ * status.md): real ionospheric fading (QSB) within the transmission, not
+ * a bug - confirmed frequency drift was NOT the cause, then found the
+ * signal's sync-bit match rate climbs from ~52-63% to 81-89% and its
+ * total power rises ~20x over the 110s transmission, both textbook QSB,
+ * with no second overlapping signal (a +/-3Hz scan shows one clean peak).
+ * A uniform-confidence metric can't recover ~46/162 symbol errors
+ * concentrated in the noisy first half even though the signal is real -
+ * fixing this needs PER-SYMBOL (not per-capture) confidence weighting, a
+ * genuinely different idea from the soft-metric attempts tried so far.
+ * The regression test below asserts the 5 that DO work, and separately
+ * checks that exactly 3 are rejected, so a future fix for this candidate
+ * shows up as an easy "6th decode appeared" rather than a silent behavior
+ * change
  * nobody notices.
  */
 #include <stdio.h>

@@ -386,12 +386,56 @@ consider whether the synthetic channel model needs to include something
 closer to real band conditions (multiple signals, real noise) rather than
 assuming AWGN-only is representative.
 
+## Update — RESOLVED: why the strongest real-signal candidate fails
+
+Answered with a purpose-built diagnostic, `test/wspr_diag_candidate0.c`
+(kept, not deleted - reusable for any future "why doesn't this candidate
+decode" question). **Real ionospheric fading (QSB) within the 110 s
+transmission - not a bug, not frequency drift (already tested and ruled
+out), not a second overlapping signal.**
+
+Three pieces of evidence, all from the diagnostic tool:
+
+1. **Sync-bit match rate climbs from ~52-63% (near coin-flip) in the
+   first ~55 s to 81-89% in the last ~55 s.** Uniform noise would sit flat
+   near 50% throughout; a steady signal would sit flat near its own real
+   confidence. A clear monotonic climb is fading, not noise or a decode
+   artifact.
+2. **Total 4-tone power rises ~20x from the first time-window to the
+   last**, tracking the same shape - the signal was physically weak for
+   roughly the first half of the transmission and strong for the second
+   half. Textbook HF QSB.
+3. **Scanning ±3 Hz around the candidate frequency shows ONE clean,
+   single-humped power curve** - no second bump, definitively ruling out
+   an overlapping second station sharing this frequency.
+
+**Why the decoder can't recover it despite the real signal being
+present:** roughly 46 of 162 symbols are wrong, mostly clustered in the
+noisy first half - far beyond the code's measured ~2-symbol correction
+capacity (`wspr_codec_harness.c`). The reason a real signal with real
+information in it still can't be decoded is that BOTH metric tables tried
+so far (hard, and the reverted per-capture soft table) give every symbol
+the SAME confidence regardless of whether it came from the coin-flip-weak
+first half or the crystal-clear second half. A per-capture-normalized
+soft metric can't fix this - it corrects for the CAPTURE's overall
+strength, not for strength varying WITHIN the capture.
+
+**This reframes the next soft-metric attempt, if there is one.** The two
+tried so far both used one global scale per capture. What this candidate
+actually needs is PER-SYMBOL (or short-window) local confidence
+weighting - e.g. scale each symbol's metric contribution by that symbol's
+own measured power relative to a local neighborhood, so the decoder
+naturally down-weights the noisy early symbols and trusts the strong late
+ones, the way a real receiver's AGC-plus-soft-decision pipeline would.
+That's a genuinely different mechanism from either previous attempt, not
+just a retry with different numbers - worth trying before concluding soft
+metrics don't help on real signals, since the real regression on the
+OTHER (working) candidates last time might have been a separate synthetic-
+model-mismatch problem, not evidence against per-symbol weighting
+specifically.
+
 ### What's still open
 
-- **Why the strongest real-signal candidate fails** — open question, not
-  confirmed to be frequency drift (see above). Worth revisiting with a
-  proper wsprd-style 2D (frequency × drift) joint search rather than a 1D
-  drift search bolted onto an already-fixed frequency, if picked up again.
 - **Real soft-decision metrics** — still hard-decision only, by choice.
   TWO from-scratch attempts now (see the two updates above): a fixed-scale
   table (failed - too narrow a calibration band) and a per-capture-
