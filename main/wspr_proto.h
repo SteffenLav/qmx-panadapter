@@ -6,16 +6,22 @@
  * REAL functions rather than a copy of them — same convention as
  * main/util/db_gridlines.c and main/ft8_msg_guard.c.
  *
- * wspr_unpack_message() is ported BYTE-IDENTICAL (not re-derived) from
- * WSJT-X's own lib/wsprd/wsprd_utils.c (unpack50/unpackcall/unpackgrid) —
- * that is the authoritative decoder, so it is the ground truth this module
- * is tested against. wspr_pack_message() is built from two independently-
- * maintained encoder sources (WsprryPi's wspr.cpp for the callsign mixed-
- * radix packing + power correction table, robertostling/wspr-tools'
- * encode.py for the grid-locator formula) — see docs/wspr-phase0-research.md
- * for the full source list and cross-check. The harness proves the two
- * halves agree by round-tripping pack -> unpack for many messages; that is
- * the real test, not this comment.
+ * CLEAN-ROOM implementation. An earlier version of this file ported
+ * wspr_unpack_message()'s internals "byte-identical" from WSJT-X's own
+ * lib/wsprd/wsprd_utils.c, and sourced the pack-side grid/power formulas
+ * from two other GitHub projects that turned out to also be GPL-3.0 or
+ * unclear-license - none of that was safe in this MIT-licensed project.
+ * Rewritten from the WSPR message SPECIFICATION (the 6-character standard-
+ * callsign template, the Maidenhead grid system, the field bit widths -
+ * protocol/geographic facts, not anyone's copyrightable code), with pack
+ * and unpack sharing one symmetric bit-packing design instead of being two
+ * separately-authored halves. See docs/wspr-phase1-status.md for the full
+ * account, and wspr_proto.c's own header comment for the implementation
+ * details. The harness proves pack and unpack agree by round-tripping many
+ * messages, AND (more importantly) that this rewrite decodes WSJT's own
+ * real captured WSPR recording to the same real, standard-format callsigns
+ * and legitimate grid squares as before the rewrite - genuine over-the-air
+ * interoperability, not just internal self-consistency.
  *
  * Only the plain 6-character "standard callsign" type-1 message is
  * implemented (matches the scope doc: compound/hashed calls are a type-3
@@ -27,8 +33,8 @@
 extern "C" {
 #endif
 
-/* The 50-bit WSPR message, byte-packed exactly the way WSJT-X's own
- * unpack50()/encode() expect: dat[0..3] hold the 28-bit callsign field
+/* The 50-bit WSPR message, byte-packed the way the protocol's own bit
+ * layout requires: dat[0..3] hold the 28-bit callsign field
  * (dat[3] split across bit 4), dat[3..6] hold the 22-bit grid+power field,
  * and the low 6 bits of dat[6] are zero padding (NOT part of the 31-bit
  * convolutional-encoder flush — that's separate, see wspr_fano.h). */
@@ -51,8 +57,7 @@ typedef struct {
 int wspr_pack_message(const char *callsign, const char *grid, int power_dbm,
                        wspr_msg_bytes_t *out);
 
-/* Inverse of wspr_pack_message() — ported from WSJT-X's own unpack50() /
- * unpackcall() / unpackgrid(). `callsign_out` and `grid_out` must each be at
+/* Inverse of wspr_pack_message(). `callsign_out` and `grid_out` must each be at
  * least 7 and 5 bytes respectively. Returns 1 on success, 0 if the packed
  * value is out of range (which should never happen for a value this module
  * itself packed, but can for arbitrary/corrupt decoder output). */

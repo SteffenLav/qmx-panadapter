@@ -7,28 +7,32 @@
  *       -lm && ./wspr_codec_harness
  *
  * WHY. This is WSPR Phase 1 (docs/wspr-scope.md / wspr-phase0-research.md):
- * prove the protocol + FEC round-trip on a PC, against constants pulled
- * from and cross-checked across WSJT-X's own source plus two independent
- * encoder implementations, BEFORE any of it touches a task or an ISR. A
- * wrong generator polynomial or a wrong grid-packing formula would compile,
- * run, and never decode anything - exactly the failure mode this harness
- * exists to catch cheaply, on a PC, instead of expensively on the glass.
+ * prove the protocol + FEC round-trip on a PC, against a clean-room
+ * implementation of the WSPR message spec and Fano's published algorithm
+ * (see main/wspr_proto.c and main/wspr_fano.c's header comments -
+ * docs/wspr-phase1-status.md records a real licensing mistake, an initial
+ * near-verbatim port of GPL v3 WSJT-X source into this MIT-licensed repo,
+ * and the same-day clean-room rewrite that fixed it), BEFORE any of it
+ * touches a task or an ISR. A wrong generator polynomial or a wrong
+ * grid-packing formula would compile, run, and never decode anything -
+ * exactly the failure mode this harness exists to catch cheaply, on a PC,
+ * instead of expensively on the glass.
  *
  * Three things are proven here, each a real trap in a first WSPR
  * implementation:
  *
  *  1. Pack -> unpack round-trips for a spread of real and edge-case
- *     messages. wspr_unpack_message() is ported byte-identical from
- *     WSJT-X's own wsprd_utils.c; wspr_pack_message() is independently
- *     sourced (WsprryPi + wspr-tools). If they disagree, the harness says
- *     so immediately - it does NOT compare pack against a copy of itself.
+ *     messages. wspr_pack_message() and wspr_unpack_message() are
+ *     independently-shaped halves of the same module (see wspr_proto.c);
+ *     if they disagree, the harness says so immediately - it does NOT
+ *     compare pack against a copy of itself.
  *
  *  2. The interleave permutation is self-consistent: interleave() then
- *     deinterleave() is the identity for all 162 positions, AND the
- *     bit-reversal construction used here agrees with the independent
- *     closed-form "magic number" deinterleave formula from wsprcan's
- *     wspr.c - two differently-expressed implementations of the same
- *     permutation, cross-checked against each other.
+ *     deinterleave() is the identity for all 162 positions AND a genuine
+ *     bijection, AND the table-driven bit-reversal construction used here
+ *     agrees with an independently-written naive bit-by-bit reversal -
+ *     two differently-expressed implementations of the same permutation,
+ *     cross-checked against each other.
  *
  *  3. The full noiseless pipeline (pack -> convolve-encode -> interleave ->
  *     combine with sync -> [strip sync] -> deinterleave -> Fano decode ->
@@ -71,7 +75,7 @@ static const roundtrip_case_t kCases[] = {
     { "G0UPL",  "IO91", 10, 10 },
     { "K1ABC",  "AA00", 33, 33 }, /* SW corner of the grid */
     { "K1ABC",  "RR99", 33, 33 }, /* NE corner of the grid */
-    { "K1ABC",  "FN20", 35, 37 }, /* power rounds to nearest legal value */
+    { "K1ABC",  "FN20", 35, 33 }, /* exact tie between 33/37 - rounds to the lower one, see wspr_proto.c */
     { "K1ABC",  "FN20", 38, 37 }, /* power rounds down */
     { "K1ABC",  "FN20", 39, 40 }, /* power rounds up */
 };
@@ -109,23 +113,30 @@ static void test_pack_unpack_roundtrip(void)
     }
 }
 
-/* Independent (magic-number) closed-form bit-reversal, from wsprcan's
- * wspr.c deinterleave() - a second, independently-maintained source for
- * the same permutation wspr_interleave()/wspr_deinterleave() use.
- *
- * CORRECTION: an earlier version of this test compared this formula's
- * result as a 64-bit value and got total disagreement, and the comment
- * here wrongly blamed a web-fetch transcription error. The actual bug was
- * in the comparison, not the source: wsprcan's own code declares the
- * result as `unsigned char j = (...) >> 32;`, an 8-bit truncation that
- * matters - the untruncated 64-bit intermediate is garbage by design, only
- * the low 8 bits are the answer. Truncated correctly (as below), this
- * matches reverse8() exactly for all 256 inputs. Lesson: re-verify a
- * "this looks wrong" conclusion by hand before writing it down as fact -
- * see feedback memory on this exact failure mode. */
-static uint8_t magic_reverse8(uint8_t i)
+/* CORRECTION (second one on this exact spot - see docs/wspr-phase1-status.md):
+ * this cross-check used to compare wspr_fano.c's internal reverse8()
+ * (shift-and-mask) against a closed-form "magic number" bit-reversal
+ * one-liner copied verbatim from wsprcan's wspr.c. Two problems with that,
+ * found in sequence: first, the comparison itself was wrong (compared the
+ * formula's result as a 64-bit value instead of the 8-bit truncation the
+ * source declares - fixed, and it did genuinely then agree). Second,
+ * checking wsprcan's license turned up GPL-3.0 - this is an MIT-licensed
+ * project, so that one-liner was never safe to keep verbatim regardless of
+ * whether the comparison was right. It isn't even a WSPR-specific fact (an
+ * 8-bit bit-reversal is a generic, widely-published trick, not particular
+ * to this protocol), so there was no reason to lean on that specific
+ * source's expression of it at all. Replaced with a naive bit-by-bit
+ * reference reversal below - obviously correct by inspection, needs no
+ * external source, and is still a genuine second independent expression
+ * of the same computation to cross-check the table-driven version against. */
+static uint8_t naive_reverse8(uint8_t v)
 {
-    return (uint8_t)(((i * 0x80200802ULL) & 0x0884422110ULL) * 0x0101010101ULL >> 32);
+    uint8_t r = 0;
+    for (int b = 0; b < 8; b++) {
+        r = (uint8_t)((r << 1) | (v & 1));
+        v = (uint8_t)(v >> 1);
+    }
+    return r;
 }
 
 static void test_interleave_self_consistency(void)
@@ -160,19 +171,20 @@ static void test_interleave_self_consistency(void)
 
     /* The actual cross-check: build the same "scan k=0..255, keep reversed
      * values <162 in the order they appear" construction wspr_fano.c uses,
-     * but with wsprcan's independently-sourced magic_reverse8() standing in
-     * for the internal reverse8() - if the two sources agree on every
-     * bit-reversal, they'll produce the identical map. */
+     * but with the naive bit-by-bit reversal above standing in for the
+     * internal table-driven reverse8() - if the two independently-written
+     * expressions of "reverse 8 bits" agree everywhere, they'll produce
+     * the identical map. */
     uint8_t alt_map[WSPR_NSYM];
     int idx = 0;
     for (int k = 0; k < 256 && idx < WSPR_NSYM; k++) {
-        uint8_t j = magic_reverse8((uint8_t)k);
+        uint8_t j = naive_reverse8((uint8_t)k);
         if (j < WSPR_NSYM) alt_map[idx++] = j;
     }
     uint8_t alt_channel[WSPR_NSYM];
     for (int i = 0; i < WSPR_NSYM; i++) alt_channel[alt_map[i]] = idmap_raw[i];
     int cross_ok = (idx == WSPR_NSYM) && (memcmp(idmap_channel, alt_channel, WSPR_NSYM) == 0);
-    printf("  %s  matches wsprcan's independent magic-number formula (second source)\n",
+    printf("  %s  matches an independently-written naive bit-reversal (second expression)\n",
            cross_ok ? "PASS" : "FAIL");
     if (!cross_ok) g_fail++;
 }

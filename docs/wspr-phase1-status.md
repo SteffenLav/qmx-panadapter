@@ -5,18 +5,107 @@ the protocol-layer slice of Phase 1: message packing, the K=32 convolutional
 code, interleaving, and the Fano decoder — proven on the PC, no ESP deps, no
 firmware touched yet.
 
+## ⚠ Licensing incident and fix (2026-08-22) — read this first
+
+Everything below this section describes work that happened in TWO passes:
+an initial implementation that turned out to have a real licensing problem,
+and a same-day clean-room rewrite that fixed it. Recording both, not just
+the fixed end state, because the mistake and how it was caught are worth
+keeping.
+
+**What happened.** This repo is MIT-licensed. The initial WSPR protocol/FEC
+implementation was built by reading (and in places directly porting)
+several WSJT-X-family GitHub projects: WSJT-X's own `lib/wsprd/fano.c` and
+`wsprd_utils.c`, plus `robertostling/wspr-tools` and `mike-hb/wsprcan` for
+cross-checks and pack-side formulas. All four of those are **GPL v3**
+(confirmed via each repo's GitHub license API, not assumed). A fifth
+source, `JamesP6000/WsprryPi`, shows as **"Other/NOASSERTION"** - GitHub
+hosting a repo does not itself grant a license, so an unclear license
+grants no rights either. None of that was safe to fold into an MIT
+project: `main/wspr_fano.c`'s Fano decoder was described in its own commit
+message as "ported near-verbatim" from `fano.c`, and `main/wspr_proto.c`'s
+unpack functions were "ported byte-identical" from `wsprd_utils.c` - both
+literal admissions of copying GPL source structure, not just facts about
+the protocol.
+
+**How it was caught.** Continuing Phase 1 work (better soft-decision
+metrics, understanding a real-signal decode failure), the natural next
+step was K9AN's `metric_tables.c` - and before using it, checking where it
+actually lived turned up the `wsprd.c` file right next to it carrying an
+explicit `License: GNU GPL v3` header. That prompted checking this repo's
+own `LICENSE` (MIT) and then, once the mismatch was obvious, going back
+and checking every WSPR source used so far - which is how the already-
+committed `fano.c` port and the pack-side sources turned out to be the
+same problem, not just the one file about to be added.
+
+**The fix — clean-room rewrite of everything sourced from those repos.**
+- `main/wspr_fano.c`'s Fano decoder: rewritten from the algorithm's
+  published 1963 rules (Fano's original paper predates WSJT-X by decades;
+  independent descriptions exist in the Wikipedia "Sequential decoding"
+  article and standard coding-theory course notes) using this module's own
+  data layout (parallel `gamma[]`/`enc_state[]`/`stage[]` arrays with an
+  explicit backtrack cascade) instead of Karn's `struct node` array-of-
+  precomputed-branch-metrics design.
+- `main/wspr_proto.c`'s callsign/grid/power packing: rewritten from the
+  WSPR message SPECIFICATION (the standard-callsign template, the
+  Maidenhead grid system - protocol/geographic facts, not copyrightable
+  code) with pack and unpack sharing ONE symmetric bit-packing design
+  instead of being two separately-authored halves the way the ported
+  version was.
+- `test/wspr_codec_harness.c`'s interleave cross-check: the "magic number"
+  one-liner copied from `wsprcan` (itself GPL) was replaced with an
+  independent, obviously-correct-by-inspection naive bit-reversal - it
+  didn't even need to be sourced from anywhere, since 8-bit bit-reversal is
+  a generic, widely-published technique, not a WSPR-specific fact.
+- **What was kept, deliberately:** the 162-bit sync vector, the generator
+  polynomials (`0xF2D05351`/`0xE4613C47`), and the general bit-width
+  layout (28-bit call / 15-bit grid / 7-bit power / 31-bit flush). These
+  are DATA - facts about how the WSPR protocol is defined, not anyone's
+  creative expression - and copyright doesn't protect facts. Reading them
+  from a GPL source to confirm they're correct is fine; copying that
+  source's CODE is what wasn't.
+
+**The rewrite caught two genuine bugs of its own**, both fixed and now
+covered by the test suite:
+1. The Fano decoder's threshold-loosening logic initially jumped back to
+   the root on every loosening event instead of resuming at whatever depth
+   got stuck - this passed single-symbol-error correction (162/162) but
+   silently broke two-symbol-error correction (94/162, should be 162/162).
+   Fixed by loosening in place, matching the algorithm's actual
+   requirement (not just Karn's specific implementation of it).
+2. The callsign unpacker's range-check used the wrong radix for the
+   leading (most-significant) character - 36 instead of the correct 37
+   (alnum values 0-35 plus 36 for "absent") - which rejected every
+   valid callsign whose digit sits at position 1 (K1ABC, W1AW, G0UPL) while
+   accepting ones at position 2 (OZ1LAV, VE3XYZ, 4X1XX) by coincidence.
+   Caught immediately by the round-trip test.
+
+**Verification that the rewrite is behaviorally correct, not just
+differently-licensed:** all three existing test harnesses
+(`wspr_codec_harness`, `wspr_decode_harness`, `wspr_synth_harness`) were
+rerun after the rewrite and produce **identical results** to before -
+same 11/11 codec round-trip cases, same 162/162 single- and two-symbol
+error correction, and critically, **the same 5 real callsigns and
+legitimate grid squares decoded from WSJT's real reference WAV** (W3HH/
+EL89/30, WD4LHT/EL89/30, ND6P/DM04/30, W5BIT/EL09/17, KI7CI/DM09/37) and
+the same 3 candidates correctly rejected. That real-world decode match is
+the strongest evidence the rewrite's independently-derived bit-layout
+formulas are actually correct, not just internally self-consistent - a
+formula that only agreed with itself could still be wrong in a way that
+happened to cancel out; one that keeps decoding real over-the-air signals
+correctly has been checked against reality.
+
 ## What exists
 
 - [main/wspr_proto.h](../main/wspr_proto.h) / `.c` — WSPR type-1 message
   pack/unpack (callsign + 4-char grid + power dBm <-> the 50-bit message).
-  `wspr_unpack_message()` is ported byte-identical from WSJT-X's own
-  `wsprd_utils.c`; `wspr_pack_message()` is independently sourced (WsprryPi +
-  wspr-tools) and proven to agree with the ported unpack via round-trip
-  testing, not by construction.
+  Clean-room implementation (see the licensing section above): pack and
+  unpack share one symmetric bit-packing design, derived from the protocol
+  specification rather than ported from any single source.
 - [main/wspr_fano.h](../main/wspr_fano.h) / `.c` — the convolutional
-  encoder, the interleave/deinterleave permutation, sync-vector combine, and
-  the Fano sequential decoder (ported near-verbatim from WSJT-X's
-  `fano.c`, Phil Karn KA9Q / Joe Taylor K1JT).
+  encoder, the interleave/deinterleave permutation, sync-vector combine,
+  and the Fano sequential decoder. Clean-room implementation of Fano's
+  published algorithm (see the licensing section above).
 - [test/wspr_codec_harness.c](../test/wspr_codec_harness.c) — the proof.
   Build/run:
   ```

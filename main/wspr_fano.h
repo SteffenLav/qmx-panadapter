@@ -5,16 +5,21 @@
  * Portable on purpose (no ESP deps) so test/wspr_codec_harness.c can link
  * the REAL functions - same convention as wspr_proto.h/db_gridlines.c.
  *
- * The Fano decoder (wspr_fano_decode) is ported near-verbatim from WSJT-X's
- * own lib/wsprd/fano.c, originally written by Phil Karn KA9Q (1994) with
- * modifications by Joe Taylor K1JT - the "Layland-Lushbaugh" K=32 code is
- * WSPR's actual FEC, not something re-derived here. Plain Viterbi is
- * infeasible at K=32 (2^31 states); the Fano sequential-decode algorithm is
- * what makes this tractable, per docs/wspr-phase0-research.md.
+ * The Fano decoder (wspr_fano_decode) is a CLEAN-ROOM implementation of
+ * Fano's 1963 sequential decoding algorithm - public academic material,
+ * independent of any particular codebase. An earlier version of this file
+ * ported WSJT-X's own lib/wsprd/fano.c (GPL v3) "near-verbatim", which was
+ * a licensing mistake in this MIT-licensed project - caught and corrected;
+ * see docs/wspr-phase1-status.md for the full account. The "Layland-
+ * Lushbaugh" K=32 generator polynomials are WSPR's actual FEC (a protocol
+ * fact, not anyone's expression) - Plain Viterbi is infeasible at K=32
+ * (2^31 states); the Fano sequential-decode algorithm is what makes this
+ * tractable, per docs/wspr-phase0-research.md.
  *
  * The sync vector and generator polynomials are cross-checked against three
  * independent source trees (WSJT-X, WsprryPi, wsprcan) - see
- * docs/wspr-phase0-research.md for the corroboration.
+ * docs/wspr-phase0-research.md for the corroboration. (Those are protocol
+ * constants - facts about what WSPR transmits, not copyrightable code.)
  */
 #include <stdint.h>
 #include "wspr_proto.h"
@@ -65,11 +70,10 @@ void wspr_tones_to_symbols(const uint8_t tones[WSPR_NSYM],
 void wspr_build_hard_metric_table(int mettab[2][256]);
 
 /* Fano-decode 162 already-DEINTERLEAVED soft metric values (encode order,
- * mettab-indexable 0-255) back to the 50-bit message. Ported from WSJT-X's
- * own fano() (Phil Karn KA9Q / Joe Taylor K1JT).
+ * mettab-indexable 0-255) back to the 50-bit message. Clean-room
+ * implementation of the Fano algorithm - see wspr_fano.c's header comment.
  *
- * `delta` is the threshold-adjust step (WSJT-X uses 1-2 typically for this
- * code); `maxcycles_per_bit` bounds the search (WSJT-X uses ~10000) so a
+ * `delta` is the threshold-adjust step; `maxcycles_per_bit` bounds the search so a
  * bad candidate returns failure instead of hanging - same concern as FT8's
  * FT8_DECODE_BUDGET_MS.
  *

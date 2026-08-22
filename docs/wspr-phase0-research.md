@@ -5,6 +5,17 @@ touched. Each of the three Phase 0 items from the scope doc is answered below
 with sources, so Phase 1 (the host decoder harness) can start from verified
 constants instead of guessing them.
 
+⚠ **Licensing note added after the fact:** several sources cited below
+(WSJT-X's `wsprd.c`/`fano.c`/`wsprd_utils.c`, wsprcan, robertostling/
+wspr-tools) are GPL v3-licensed; WsprryPi's license is unclear
+("NOASSERTION"). This project is MIT-licensed. Quoting/reading these
+sources for the PROTOCOL FACTS they confirm (the sync vector, generator
+polynomials, bit widths — data, not copyrightable expression) is fine and
+is what this doc does. What's NOT fine, and what an early version of the
+Phase 1 code did before being corrected, is porting their CODE. See "What
+Phase 1 should pull next" below and `docs/wspr-phase1-status.md` for the
+full account.
+
 ## 1. CAT tone resolution — RESOLVED, sufficient
 
 QMX CAT manual (`docs/qmx-reference/cat_104.txt`, `TA` command):
@@ -156,17 +167,39 @@ int fano(unsigned int *metric, unsigned int *cycles, unsigned int *maxnp,
 
 ## What Phase 1 should pull next (not done here — this is research, not code)
 
-- `wsprd_utils.c`'s `unpackgrid()`/`unpackcall()`/`unpack50()` for the exact
-  inverse-packing formulas (this doc confirms bit widths and the general
-  packing shape, not yet byte-verified formulas — do that verification
-  *in* the host harness, the same way `test/ft8_cq_encode_harness.c` checks
-  itself against known-good vectors, not by trusting this summary).
-- `fano.c`'s full body and `fano.h`'s `ENCODE` macro, to port both the
-  metric-table generator and the search loop.
+⚠ **CORRECTION, added after Phase 1 was underway:** the two bullets below,
+as originally written, said to "port" the linked GPL v3 source files
+directly — that's exactly what happened, and it was a licensing mistake in
+this MIT-licensed project (this repo's WSPR code initially DID a
+near-verbatim port of `fano.c` and a byte-identical port of
+`wsprd_utils.c`, caught and rewritten clean-room afterward — see
+`docs/wspr-phase1-status.md`). Left here, struck through in spirit rather
+than deleted, as a record of the mistake and its fix. The corrected
+guidance: use these files to understand the ALGORITHM and the PROTOCOL'S
+bit layout (facts, not copyrightable), then write fresh code from that
+understanding — verified against the host harness's own tests AND against
+real captured signals, not against how closely it resembles the source.
+
+- ~~`wsprd_utils.c`'s `unpackgrid()`/`unpackcall()`/`unpack50()` for the exact
+  inverse-packing formulas~~ — do learn the bit layout and mixed-radix
+  scheme from reading it, but write the implementation fresh, and verify it
+  *in* the host harness (round-trip tests, AND real-WAV decode giving
+  real-world-valid callsigns/grids) rather than by comparing code shape to
+  the source.
+- ~~`fano.c`'s full body and `fano.h`'s `ENCODE` macro, to port both the
+  metric-table generator and the search loop~~ — Fano's algorithm is
+  1963 public academic material; implement it from its published RULES
+  (many independent descriptions exist, e.g. the Wikipedia "Sequential
+  decoding" article) with your own data layout and control flow. If
+  building a soft-decision metric table, derive it from your own Monte
+  Carlo simulation of the actual channel statistic your code computes, not
+  by copying anyone's published table (K9AN's `metric_tables.c` is ALSO
+  GPL v3 - checked and confirmed 2026-08-22, not just assumed).
 - A small set of known-good WSPR WAV captures + their expected decoded
   messages, to use as the harness's ground truth (per the scope doc's
   Phase 1 plan) — public WSPR WAV archives exist for this purpose; picking
-  specific ones is a Phase 1 task.
+  specific ones is a Phase 1 task. (In practice only WSJT's own official
+  sample turned up findable; see `docs/wspr-phase1-status.md`.)
 
 ## Conclusion / recommended next step
 

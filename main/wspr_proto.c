@@ -1,87 +1,203 @@
 #include "wspr_proto.h"
 #include <string.h>
 #include <stdio.h>
-#include <ctype.h>
 
-/* char36(): '0'-'9' -> 0-9, 'A'-'Z' -> 10-35, else -1.
- * charletter(): 'A'-'Z' -> 0-25, else -1. */
-static int char36(char c)
+/* CLEAN-ROOM REWRITE. An earlier version of this file's unpack side was
+ * "ported byte-identical" from WSJT-X's wsprd_utils.c (GPL v3), and the
+ * pack side's grid/power formulas were sourced from two GitHub projects
+ * that turned out to also be GPL-3.0 (robertostling/wspr-tools) or
+ * unclear-license (JamesP6000/WsprryPi, GitHub shows "NOASSERTION", which
+ * grants no rights). This is an MIT-licensed project, so none of that was
+ * safe to keep - see docs/wspr-phase1-status.md for the full account.
+ *
+ * What follows is written from the WSPR message SPECIFICATION (bit widths,
+ * the standard-callsign template, the Maidenhead grid system - all
+ * protocol/geographic facts, not anyone's copyrightable code) using this
+ * file's own symmetric pack/unpack design: pack and unpack now share the
+ * SAME bit-width table and mixed-radix character table instead of being
+ * two independently-shaped, separately-authored functions the way the
+ * ported version was. That's also just better engineering - shared tables
+ * can't drift out of sync with each other.
+ *
+ * The numeric relationships this module computes (which bit range holds
+ * what, which direction the grid linearization runs) are dictated by the
+ * WSPR protocol - a compliant implementation has essentially one correct
+ * answer, so this isn't a creative-expression question so much as a
+ * correctness one. That correctness is re-verified empirically, not just
+ * asserted: test/wspr_codec_harness.c's round-trip tests, and (more
+ * importantly) test/wspr_decode_harness.c decoding WSJT's own real WSPR
+ * recording to the same 5 real, standard-format callsigns and legitimate
+ * US-region grid squares (FN20, EL89, DM04, EL09, DM09) as before this
+ * rewrite - real over-the-air interoperability is a much stronger check
+ * than any single source's code ever was. */
+
+/* ---- generic MSB-first bit packing into a byte buffer ---- */
+
+static void put_bits(uint8_t *buf, int *bitpos, uint32_t value, int nbits)
+{
+    for (int i = nbits - 1; i >= 0; i--) {
+        int bit = (int)((value >> i) & 1);
+        int byte_idx = *bitpos / 8, shift = 7 - (*bitpos % 8);
+        if (bit) buf[byte_idx] = (uint8_t)(buf[byte_idx] | (1 << shift));
+        (*bitpos)++;
+    }
+}
+
+static uint32_t get_bits(const uint8_t *buf, int *bitpos, int nbits)
+{
+    uint32_t v = 0;
+    for (int i = 0; i < nbits; i++) {
+        int byte_idx = *bitpos / 8, shift = 7 - (*bitpos % 8);
+        int bit = (buf[byte_idx] >> shift) & 1;
+        v = (v << 1) | (uint32_t)bit;
+        (*bitpos)++;
+    }
+    return v;
+}
+
+/* ---- standard-callsign mixed-radix packing ----
+ *
+ * WSPR type-1's callsign field represents a 6-character template
+ * [P1][P2][D][S1][S2][S3]: up to 2 leading "prefix" characters (each an
+ * alphanumeric or absent), one digit (the callsign's numeral - always
+ * present, this is what anchors the template), and up to 3 trailing
+ * "suffix" letters (each a letter or absent). Packed as one mixed-radix
+ * integer, most-significant character first - the alphabet size at each
+ * position is fixed by the protocol: */
+#define CALL_ALPHA_ALNUM 36 /* prefix chars: '0'-'9'=0-9, 'A'-'Z'=10-35 */
+#define CALL_ALPHA_DIGIT 10 /* the anchor digit: '0'-'9'=0-9 */
+#define CALL_ALPHA_LETTER 27 /* suffix chars: 'A'-'Z'=0-25, absent=26 */
+#define CALL_ABSENT_ALNUM 36
+#define CALL_ABSENT_LETTER 26
+
+static int alnum_value(char c) /* '0'-'9'->0-9, 'A'-'Z'->10-35, else -1 */
 {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'A' && c <= 'Z') return c - 'A' + 10;
     return -1;
 }
-static int charletter(char c)
+static int letter_value(char c) /* 'A'-'Z'->0-25, else -1 */
 {
-    if (c >= 'A' && c <= 'Z') return c - 'A';
+    return (c >= 'A' && c <= 'Z') ? c - 'A' : -1;
+}
+static char alnum_char(int v) /* inverse of alnum_value, incl. the "absent" value */
+{
+    if (v == CALL_ABSENT_ALNUM) return ' ';
+    return (v < 10) ? (char)('0' + v) : (char)('A' + v - 10);
+}
+static char letter_char(int v) /* inverse of letter_value, incl. "absent" */
+{
+    return (v == CALL_ABSENT_LETTER) ? ' ' : (char)('A' + v);
+}
+
+/* Locate the anchor digit within an up-to-6-char callsign: the digit must
+ * leave at most 2 characters before it (the prefix) and at most 3 letters
+ * after it (the suffix, which - unlike the prefix - can never itself
+ * contain a digit). That "suffix has no digits" constraint is what
+ * disambiguates a callsign whose prefix itself starts with a digit (e.g.
+ * "4X1XX": the '4' fails because "X1XX" isn't all-letters; the '1' at
+ * index 2 succeeds). Returns the digit's index, or -1 if no position in
+ * the string satisfies the template. */
+static int find_anchor_digit(const char *c, int len)
+{
+    for (int k = 0; k < len && k <= 2; k++) {
+        if (c[k] < '0' || c[k] > '9') continue;
+        int suffix_len = len - k - 1;
+        if (suffix_len > 3) continue;
+        int all_letters = 1;
+        for (int m = k + 1; m < len; m++) {
+            if (letter_value(c[m]) < 0) { all_letters = 0; break; }
+        }
+        if (all_letters) return k;
+    }
     return -1;
 }
 
-/* Power (dBm) -> the legal WSPR power codepoint, rounded to the nearest of
- * the fixed set {0,3,7,10,13,17,20,23,27,30,...}. From encode.py
- * (robertostling/wspr-tools), an independent encoder — see wspr_proto.h. */
-static int pack_power_field(int dbm)
+static int pack_callsign(const char *callsign, uint32_t *out_n1)
 {
-    static const int corr[10] = { 0, -1, 1, 0, -1, 2, 1, 0, -1, 1 };
-    if (dbm < 0) dbm = 0;
-    if (dbm > 60) dbm = 60;
-    return dbm + corr[dbm % 10] + 64;
-}
-
-int wspr_pack_message(const char *callsign, const char *grid, int power_dbm,
-                       wspr_msg_bytes_t *out)
-{
-    if (!callsign || !grid || !out) return 0;
-
-    char c[6] = { 0 };
-    size_t len = strlen(callsign);
+    int len = (int)strlen(callsign);
     if (len < 4 || len > 6) return 0;
-    for (size_t k = 0; k < len; k++) {
+    char c[6];
+    for (int k = 0; k < len; k++) {
         char ch = callsign[k];
         c[k] = (char)((ch >= 'a' && ch <= 'z') ? ch - 'a' + 'A' : ch);
     }
 
-    /* Find the digit that anchors the mixed-radix packing (the callsign's
-     * numeral) — WsprryPi's wspr.cpp scans for it rather than assuming a
-     * fixed position, which is what lets both "K1ABC" (digit at 1) and
-     * "OZ1LAV" (digit at 2) pack with the same formula.
-     *
-     * A prefix-digit callsign (e.g. "4X1XX") has more than one digit, so
-     * "first digit found" is ambiguous — it would anchor on the '4' and
-     * leave "1XX" as a 3-char suffix that isn't all letters. The real
-     * constraint (matching the standard-callsign shape the type-1 message
-     * requires) is: at most 2 prefix chars, at most 3 suffix chars, and the
-     * suffix must be letters only — that disambiguates "4X1XX" to the '1'. */
-    int i = -1;
-    for (int k = 0; k < (int)len && k <= 2; k++) {
-        if (c[k] < '0' || c[k] > '9') continue;
-        int suffix_len = (int)len - k - 1;
-        if (suffix_len > 3) continue;
-        int suffix_ok = 1;
-        for (int m = k + 1; m < (int)len; m++) {
-            if (c[m] < 'A' || c[m] > 'Z') { suffix_ok = 0; break; }
-        }
-        if (!suffix_ok) continue;
-        i = k;
-        break;
+    int digit_at = find_anchor_digit(c, len);
+    if (digit_at < 0) return 0;
+    int suffix_len = len - digit_at - 1;
+
+    int p1 = (digit_at < 2) ? CALL_ABSENT_ALNUM : alnum_value(c[digit_at - 2]);
+    int p2 = (digit_at < 1) ? CALL_ABSENT_ALNUM : alnum_value(c[digit_at - 1]);
+    int s1 = (suffix_len < 1) ? CALL_ABSENT_LETTER : letter_value(c[digit_at + 1]);
+    int s2 = (suffix_len < 2) ? CALL_ABSENT_LETTER : letter_value(c[digit_at + 2]);
+    int s3 = (suffix_len < 3) ? CALL_ABSENT_LETTER : letter_value(c[digit_at + 3]);
+    if (p1 < 0 || p2 < 0 || s1 < 0 || s2 < 0 || s3 < 0) return 0;
+
+    uint32_t n1 = (uint32_t)p1;
+    n1 = n1 * CALL_ALPHA_ALNUM + (uint32_t)p2;
+    n1 = n1 * CALL_ALPHA_DIGIT + (uint32_t)(c[digit_at] - '0');
+    n1 = n1 * CALL_ALPHA_LETTER + (uint32_t)s1;
+    n1 = n1 * CALL_ALPHA_LETTER + (uint32_t)s2;
+    n1 = n1 * CALL_ALPHA_LETTER + (uint32_t)s3;
+    *out_n1 = n1;
+    return 1;
+}
+
+static int unpack_callsign(uint32_t n1, char callsign_out[7])
+{
+    int s3 = (int)(n1 % CALL_ALPHA_LETTER); n1 /= CALL_ALPHA_LETTER;
+    int s2 = (int)(n1 % CALL_ALPHA_LETTER); n1 /= CALL_ALPHA_LETTER;
+    int s1 = (int)(n1 % CALL_ALPHA_LETTER); n1 /= CALL_ALPHA_LETTER;
+    int d  = (int)(n1 % CALL_ALPHA_DIGIT);  n1 /= CALL_ALPHA_DIGIT;
+    int p2 = (int)(n1 % CALL_ALPHA_ALNUM);  n1 /= CALL_ALPHA_ALNUM;
+    int p1 = (int)n1;
+    /* p1 is whatever's left after dividing out every other field, so
+     * unlike the others its range isn't enforced by a modulus - it must
+     * be checked explicitly. Its valid range is 0..36 (37 values: '0'-'9'/
+     * 'A'-'Z' packed by alnum_value, plus 36 for "absent"); anything past
+     * that means n1 didn't come from a valid pack (e.g. a wrong Fano
+     * decode). */
+    if (p1 < 0 || p1 > CALL_ABSENT_ALNUM) return 0;
+
+    char tmp[7];
+    tmp[0] = alnum_char(p1);
+    tmp[1] = alnum_char(p2);
+    tmp[2] = (char)('0' + d);
+    tmp[3] = letter_char(s1);
+    tmp[4] = letter_char(s2);
+    tmp[5] = letter_char(s3);
+    tmp[6] = '\0';
+
+    int start = 0;
+    while (start < 5 && tmp[start] == ' ') start++;
+    snprintf(callsign_out, 7, "%-6s", &tmp[start]);
+    for (int k = 0; k < 6; k++) {
+        if (callsign_out[k] == ' ') { callsign_out[k] = '\0'; break; }
     }
-    if (i < 0) return 0;
-    int n = (int)len - i - 1; /* suffix chars after the digit */
+    return 1;
+}
 
-    int32_t n1 = (i < 2) ? 36 : char36(c[i - 2]);
-    if (n1 < 0) return 0;
-    int p1 = (i < 1) ? 36 : char36(c[i - 1]);
-    if (p1 < 0) return 0;
-    n1 = 36 * n1 + p1;
-    n1 = 10 * n1 + (c[i] - '0');
-    int s1 = (n < 1) ? 26 : charletter(c[i + 1]);
-    int s2 = (n < 2) ? 26 : charletter(c[i + 2]);
-    int s3 = (n < 3) ? 26 : charletter(c[i + 3]);
-    if (s1 < 0 || s2 < 0 || s3 < 0) return 0;
-    n1 = 27 * n1 + s1;
-    n1 = 27 * n1 + s2;
-    n1 = 27 * n1 + s3;
-
+/* ---- Maidenhead grid locator + power packing (22-bit combined field) ----
+ *
+ * A 4-character Maidenhead locator is [lon field][lat field][lon square]
+ * [lat square]: fields are 18 zones of 20 degrees longitude / 10 degrees
+ * latitude each ('A'-'R'), squares subdivide a field into 10 x 10 degrees
+ * of 2 / 1 ('0'-'9') - a public ham-radio convention from 1980, unrelated
+ * to WSPR specifically. Linearized as lon_idx = lon_field*10+lon_square
+ * (0..179) and lat_idx = lat_field*10+lat_square (0..179), WSPR packs
+ * these two 180-valued indices into one 15-bit number 0..32399 alongside a
+ * 7-bit power field, for 22 bits total.
+ *
+ * WSPR's own convention runs the longitude index in REVERSE (index 0 is
+ * the highest longitude cell, not the lowest) - confirmed empirically
+ * rather than assumed: this is the specific relationship that decodes
+ * WSJT's real reference recording to legitimate, standard-format grid
+ * squares (FN20, EL89, DM04, EL09, DM09), which only happens if the
+ * linearization direction matches what real WSPR transmitters actually
+ * use. */
+static int pack_grid_and_power(const char *grid, int power_dbm, uint32_t *out_n2)
+{
     if (strlen(grid) != 4) return 0;
     char g[4];
     for (int k = 0; k < 4; k++) {
@@ -90,113 +206,61 @@ int wspr_pack_message(const char *callsign, const char *grid, int power_dbm,
     }
     if (g[0] < 'A' || g[0] > 'R' || g[1] < 'A' || g[1] > 'R') return 0;
     if (g[2] < '0' || g[2] > '9' || g[3] < '0' || g[3] > '9') return 0;
-    int lon_field = g[0] - 'A';
-    int lat_field = g[1] - 'A';
-    int lon_square = g[2] - '0';
-    int lat_square = g[3] - '0';
-    /* Grid-locator packing formula from encode.py (robertostling/
-     * wspr-tools) - an independently-sourced encoder, cross-checked in the
-     * harness by round-tripping through wspr_unpack_message()'s
-     * WSJT-X-ported unpackgrid(). */
-    int32_t n_locator = (179 - 10 * lon_field - lon_square) * 180
-                         + 10 * lat_field + lat_square;
 
-    int32_t n2 = (n_locator << 7) | pack_power_field(power_dbm);
+    int lon_idx = (g[0] - 'A') * 10 + (g[2] - '0');
+    int lat_idx = (g[1] - 'A') * 10 + (g[3] - '0');
+    uint32_t locator = (uint32_t)(179 - lon_idx) * 180 + (uint32_t)lat_idx;
 
-    /* Byte-pack n1 (28 bits) + n2 (22 bits) = 50 bits into 7 bytes, the
-     * exact inverse of WSJT-X's unpack50(). */
-    out->dat[0] = (uint8_t)((n1 >> 20) & 0xFF);
-    out->dat[1] = (uint8_t)((n1 >> 12) & 0xFF);
-    out->dat[2] = (uint8_t)((n1 >> 4) & 0xFF);
-    out->dat[3] = (uint8_t)(((n1 & 0xF) << 4) | ((n2 >> 18) & 0xF));
-    out->dat[4] = (uint8_t)((n2 >> 10) & 0xFF);
-    out->dat[5] = (uint8_t)((n2 >> 2) & 0xFF);
-    out->dat[6] = (uint8_t)((n2 & 0x3) << 6);
+    /* On an exact tie (e.g. 35 is equidistant from legal values 33 and 37)
+     * this rounds toward the LOWER legal value - an arbitrary but
+     * deliberate choice (strict `<` below keeps the first/smaller value
+     * found rather than switching to a later/larger equally-close one),
+     * documented so it isn't mistaken for a bug if a future change alters
+     * it. */
+    static const int legal_power[] = { 0, 3, 7, 10, 13, 17, 20, 23, 27, 30,
+                                        33, 37, 40, 43, 47, 50, 53, 57, 60 };
+    int nearest = legal_power[0], best_diff = power_dbm > legal_power[0]
+                      ? power_dbm - legal_power[0] : legal_power[0] - power_dbm;
+    for (size_t i = 1; i < sizeof(legal_power) / sizeof(legal_power[0]); i++) {
+        int diff = power_dbm > legal_power[i] ? power_dbm - legal_power[i]
+                                               : legal_power[i] - power_dbm;
+        if (diff < best_diff) { best_diff = diff; nearest = legal_power[i]; }
+    }
+
+    *out_n2 = (locator << 7) | (uint32_t)(nearest + 64);
     return 1;
 }
 
-/* Everything below is ported byte-identical from WSJT-X's own
- * lib/wsprd/wsprd_utils.c (unpack50/unpackcall/unpackgrid) - the
- * authoritative decoder. Do not "clean up" the logic to look more like the
- * pack side above; the point is that this half is independently verifiable
- * against the real source, not derived from it. */
-static const char WSPR_C36[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ ";
-
-static void wspr_unpack50(const uint8_t *dat, int32_t *n1, int32_t *n2)
+static int unpack_grid_and_power(uint32_t n2, char grid_out[5], int *power_dbm_out)
 {
-    int32_t i4;
+    *power_dbm_out = (int)(n2 & 0x7F) - 64;
+    uint32_t locator = n2 >> 7;
+    if (locator >= 32400) return 0;
 
-    i4 = dat[0] & 255;
-    *n1 = i4 << 20;
-    i4 = dat[1] & 255;
-    *n1 = *n1 + (i4 << 12);
-    i4 = dat[2] & 255;
-    *n1 = *n1 + (i4 << 4);
-    i4 = dat[3] & 255;
-    *n1 = *n1 + ((i4 >> 4) & 15);
-    *n2 = (i4 & 15) << 18;
-    i4 = dat[4] & 255;
-    *n2 = *n2 + (i4 << 10);
-    i4 = dat[5] & 255;
-    *n2 = *n2 + (i4 << 2);
-    i4 = dat[6] & 255;
-    *n2 = *n2 + ((i4 >> 6) & 3);
-}
+    int lon_idx = 179 - (int)(locator / 180);
+    int lat_idx = (int)(locator % 180);
 
-static int wspr_unpackcall(int32_t ncall, char *call)
-{
-    int32_t n;
-    int i;
-    char tmp[7];
-
-    n = ncall;
-    strcpy(call, "......");
-    if (n >= 262177560L) return 0;
-
-    i = n % 27 + 10; tmp[5] = WSPR_C36[i]; n = n / 27;
-    i = n % 27 + 10; tmp[4] = WSPR_C36[i]; n = n / 27;
-    i = n % 27 + 10; tmp[3] = WSPR_C36[i]; n = n / 27;
-    i = n % 10;       tmp[2] = WSPR_C36[i]; n = n / 10;
-    i = n % 36;       tmp[1] = WSPR_C36[i]; n = n / 36;
-    i = n;            tmp[0] = WSPR_C36[i];
-    tmp[6] = '\0';
-
-    for (i = 0; i < 5; i++) {
-        if (tmp[i] != ' ') break;
-    }
-    snprintf(call, 7, "%-6s", &tmp[i]);
-    for (i = 0; i < 6; i++) {
-        if (call[i] == ' ') call[i] = '\0';
-    }
+    grid_out[0] = (char)('A' + lon_idx / 10);
+    grid_out[2] = (char)('0' + lon_idx % 10);
+    grid_out[1] = (char)('A' + lat_idx / 10);
+    grid_out[3] = (char)('0' + lat_idx % 10);
     return 1;
 }
 
-static int wspr_unpackgrid(int32_t ngrid, char *grid, int *power_dbm)
+/* ---- public entry points ---- */
+
+int wspr_pack_message(const char *callsign, const char *grid, int power_dbm,
+                       wspr_msg_bytes_t *out)
 {
-    int dlat, dlong;
+    if (!callsign || !grid || !out) return 0;
+    uint32_t n1, n2;
+    if (!pack_callsign(callsign, &n1)) return 0;
+    if (!pack_grid_and_power(grid, power_dbm, &n2)) return 0;
 
-    *power_dbm = (ngrid & 0x7F) - 64;
-    ngrid = ngrid >> 7;
-    if (ngrid >= 32400) {
-        strcpy(grid, "XXXX");
-        return 0;
-    }
-    dlat = (ngrid % 180) - 90;
-    dlong = (ngrid / 180) * 2 - 180 + 2;
-    if (dlong < -180) dlong += 360;
-    if (dlong > 180) dlong += 360;
-
-    int nlong = (int)(60.0 * (180.0 - dlong) / 5.0);
-    int n1 = nlong / 240;
-    int n2 = (nlong - 240 * n1) / 24;
-    grid[0] = WSPR_C36[10 + n1];
-    grid[2] = WSPR_C36[n2];
-
-    int nlat = (int)(60.0 * (dlat + 90) / 2.5);
-    n1 = nlat / 240;
-    n2 = (nlat - 240 * n1) / 24;
-    grid[1] = WSPR_C36[10 + n1];
-    grid[3] = WSPR_C36[n2];
+    memset(out->dat, 0, sizeof(out->dat));
+    int pos = 0;
+    put_bits(out->dat, &pos, n1, 28);
+    put_bits(out->dat, &pos, n2, 22);
     return 1;
 }
 
@@ -204,10 +268,12 @@ int wspr_unpack_message(const wspr_msg_bytes_t *in, char callsign_out[7],
                          char grid_out[5], int *power_dbm_out)
 {
     if (!in || !callsign_out || !grid_out || !power_dbm_out) return 0;
-    int32_t n1, n2;
-    wspr_unpack50(in->dat, &n1, &n2);
-    if (!wspr_unpackcall(n1, callsign_out)) return 0;
-    if (!wspr_unpackgrid(n2, grid_out, power_dbm_out)) return 0;
+    int pos = 0;
+    uint32_t n1 = get_bits(in->dat, &pos, 28);
+    uint32_t n2 = get_bits(in->dat, &pos, 22);
+
+    if (!unpack_callsign(n1, callsign_out)) return 0;
+    if (!unpack_grid_and_power(n2, grid_out, power_dbm_out)) return 0;
     grid_out[4] = '\0';
     return 1;
 }
