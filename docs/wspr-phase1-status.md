@@ -172,18 +172,61 @@ further blindly; the honest state is "rejected, cause unconfirmed," and
 the existing three-check gate is doing its job either way - it caught a
 decode that shouldn't be trusted regardless of why.
 
+## Update — synthetic multi-signal + sensitivity testing (same session, continued)
+
+A second *real* WAV proved to be a dead end: WSJT's own official sample
+archive genuinely only has one WSPR file (checked its manifest directly,
+`contents_2.5.json` through `contents_3.1.json` - all identical, one
+entry). Rather than keep searching indefinitely, pivoted to something
+fully controllable: synthesize known-ground-truth WSPR signals (same
+precedent as this project's FT8 self-test, which synthesizes real GFSK
+audio and decodes it through the real pipeline) and run them through the
+real `main/wspr_decode.c` - not a replacement for real-signal testing
+(`test/wspr_decode_harness.c` still does that), a complementary check with
+exact ground truth. New: `test/wspr_synth_harness.c`.
+
+**Multi-signal separation: PASS.** Three simultaneous synthetic
+signals (different callsigns, grids, powers, frequencies within the same
+200 Hz sub-band, light AWGN) - all three correctly detected as separate
+candidates and decoded correctly. This is real evidence the coarse
+frequency-candidate detection genuinely separates overlapping signals,
+not just an artifact of the one real file having well-separated ones.
+
+**Sensitivity sweep: informative, and a real methodology bug caught along
+the way.** First attempt reported a "dB SNR" figure using a naive wideband
+amplitude/noise ratio, and found NO breaking point at all down to -20 dB in
+that unit - every test point decoded identically. That result should have
+been a red flag on its own (a decoder that never fails as signal shrinks
+isn't real), and the actual cause was a miscalibrated unit: each symbol's
+soft decision comes from an 8192-sample coherent DFT, which has real
+processing gain (~39 dB) a wideband ratio doesn't account for. Fixed by
+computing SNR properly in WSJT-X's own standard 2500 Hz reference
+bandwidth (the unit published WSPR sensitivity figures use) and widening
+the sweep range. Corrected result: **this hard-decision decoder works down
+to about -22.7 dB SNR (2500 Hz ref) and fails by -25.2 dB** - roughly 3-5 dB
+worse than real wsprd's published ~-28 to -31 dB, which is the right shape
+of result: hard-decision decoding is expected to lose a few dB of coding
+gain versus soft-decision, not perform identically to it. A number that
+came out worse than the reference implementation, by a plausible margin,
+for a well-understood reason, is a healthier result than one that looked
+suspiciously perfect - which the first (wrong) unit did.
+
 ### What's still open
 
-- **Why the strongest candidate fails** — open question, not confirmed to
-  be frequency drift (see above). Worth revisiting with a proper wsprd-style
-  2D (frequency × drift) joint search rather than a 1D drift search bolted
-  onto an already-fixed frequency, if this is picked up again.
-- **Real soft-decision metrics** — still hard-decision only; unclear yet
-  whether this matters for weak (not just strong-but-drifting) real
-  signals, since nothing genuinely weak has been tested against.
-- **A second real WAV** (different date/conditions) to confirm this isn't
-  overfit to one recording's particular signal mix.
-- **Device integration (Phase 2)** — deliberately not started. The decoder
-  has now seen one real signal set successfully; per the scope doc's own
-  rule, more real-signal validation (the items above) is worth more than
-  moving to firmware at this point.
+- **Why the strongest real-signal candidate fails** — open question, not
+  confirmed to be frequency drift (see above). Worth revisiting with a
+  proper wsprd-style 2D (frequency × drift) joint search rather than a 1D
+  drift search bolted onto an already-fixed frequency, if picked up again.
+- **Real soft-decision metrics** — still hard-decision only. Now has an
+  actual measured cost (roughly 3-5 dB of sensitivity vs. published
+  wsprd numbers, see above) rather than being an unquantified gap - closing
+  it would directly buy back that margin. `ast/wsprd`'s `metric_tables.c`
+  (K9AN's real soft-decision table) is a concrete starting point if this
+  is picked up.
+- **A second real WAV** — not found through the official channel; the
+  synthetic multi-signal test above is the practical substitute for now.
+- **Device integration (Phase 2)** — deliberately not started. Per the
+  scope doc's own rule, real-signal validation was worth more than moving
+  to firmware, and this session added two genuinely new pieces of evidence
+  (multi-signal separation, a measured sensitivity number) rather than
+  just one WAV file's results.
