@@ -2888,9 +2888,17 @@ async function pollDecodes() {
     /* The pileup: who is calling US. Click works exactly like a decode row. */
     const pu = d.pileup || [];
     document.getElementById("dec-pileup").innerHTML = !pu.length ? "" :
-      '<span style="color:#ffa040">Calling you:</span> ' + pu.map(p =>
-        '<a href="#" data-pcall="' + p.call.replace(/[^A-Za-z0-9/]/g, "") + '" style="color:#ffc864; margin-right:10px">'
-        + p.call + " (" + (p.snr > 0 ? "+" : "") + p.snr + ")</a>").join("");
+      '<span style="color:#ffa040">Calling you:</span> ' + pu.map(p => {
+        // Same "Xs ago"/"Xm ago" shape as the Tab5's own pileup screen - a
+        // caller sitting here can be much older than a live decode row
+        // (the pileup has no expiry of its own), so the age is the thing
+        // that tells you whether a reply is likely to still land.
+        const a = p.age;
+        const ageTxt = (a === undefined || a === null) ? ""
+                     : (a < 60 ? Math.round(a) + "s ago" : Math.round(a / 60) + "m ago");
+        return '<a href="#" data-pcall="' + p.call.replace(/[^A-Za-z0-9/]/g, "") + '" style="color:#ffc864; margin-right:10px">'
+          + p.call + " (" + (p.snr > 0 ? "+" : "") + p.snr + (ageTxt ? ", " + ageTxt : "") + ")</a>";
+      }).join("");
     document.querySelectorAll("#dec-pileup [data-pcall]").forEach(a =>
       a.addEventListener("click", (ev) => {
         ev.preventDefault();

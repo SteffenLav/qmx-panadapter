@@ -12,6 +12,7 @@
 
 #include "ft8_tx.h"    // ft8_tx_get_parity_lock() - pause aging on our TX parity
 #include "ft8_test.h"  // ft8_op_mode_slot_ms() - protocol slot grid for row parity
+#include "storage/settings.h"  // ft8_filters_t.max_age_sec - operator-tunable row aging
 
 static const char *TAG = "ft8_screen";
 
@@ -25,8 +26,24 @@ static const char *TAG = "ft8_screen";
 // real fix (parity-aware aging pause, #46). 120 -> 90 (2026-07-19) once the
 // #51 ISO-pipeline fix restored ~16 unique decodes/slot: 120 s now keeps far
 // too large a crowd on screen, so 90 s tightens "Active" back to who is
-// genuinely here now. Tunable.
+// genuinely here now. Tunable - and now literally tunable, by the operator,
+// from the Filter modal's "Max age in list" dropdown (30/45/60/75/90 s);
+// this is the fallback used when that setting has never been written (a
+// pre-existing NVS blob reads back 0, which must NOT be read as "expire
+// instantly" - see row_stale_sec() below).
 #define FT8_ROW_STALE_SEC   90
+
+// Reads the operator's chosen max-age, or FT8_ROW_STALE_SEC if it has never
+// been set (0 = an NVS blob from before this setting existed). Computed once
+// per caller, before the mutex, same discipline as tx_even/tx_lock/per_ms
+// just above each call site - settings_load_all() is a cheap RAM-cached
+// read (no flash I/O), so this is safe to call every tick.
+static int row_stale_sec(void)
+{
+    qmx_settings_t qs;
+    settings_load_all(&qs);
+    return qs.ft8_filters.max_age_sec ? (int)qs.ft8_filters.max_age_sec : FT8_ROW_STALE_SEC;
+}
 
 // Hard ceiling on the parity-aware aging PAUSE above. The pause itself is right
 // - while we transmit over a station's slot its silence tells us nothing - but it
@@ -317,12 +334,13 @@ void ft8_screen_get_all(ft8_call_t *out, int max, int *count_out)
     bool tx_even  = false;
     bool tx_lock  = ft8_tx_get_parity_lock(&tx_even);
     int  per_ms   = ft8_op_mode_slot_ms();
+    int  stale_sec = row_stale_sec();
     if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) {
         ESP_LOGW(TAG, "get_all: mutex timeout");
         return;
     }
     // Expire stale stations as we snapshot: anything not re-decoded within
-    // FT8_ROW_STALE_SEC is freed here, so it vanishes from the view, the active
+    // stale_sec is freed here, so it vanishes from the view, the active
     // count, and the CQ clear-frequency scan in one place. last_utc and now are
     // both UTC seconds (slot start vs wall clock); valid because FT8 mode gates
     // on SNTP sync. Scan the whole table (not limited by max) so purging is
@@ -330,7 +348,7 @@ void ft8_screen_get_all(ft8_call_t *out, int max, int *count_out)
     int64_t now = (int64_t)time(NULL);
     for (int i = 0; i < FT8_CALL_TABLE_SIZE; i++) {
         if (!s_table[i].occupied) continue;
-        if (now - s_table[i].last_utc > FT8_ROW_STALE_SEC) {
+        if (now - s_table[i].last_utc > stale_sec) {
             if (tx_lock && (now - s_table[i].last_utc) <= FT8_ROW_PAUSED_MAX_SEC) {
                 // Row parity on the active protocol's grid (same nearest-slot
                 // rounding as ft8_screen_view's E/O indicator).
@@ -364,6 +382,7 @@ int ft8_screen_active_count(void)
     bool tx_even = false;
     bool tx_lock = ft8_tx_get_parity_lock(&tx_even);
     int  per_ms  = ft8_op_mode_slot_ms();
+    int  stale_sec = row_stale_sec();
     if (s_mutex && xSemaphoreTake(s_mutex, pdMS_TO_TICKS(20)) != pdTRUE) {
         ESP_LOGW(TAG, "active_count: mutex timeout");
         return 0;
@@ -372,7 +391,7 @@ int ft8_screen_active_count(void)
     int n = 0;
     for (int i = 0; i < FT8_CALL_TABLE_SIZE; i++) {
         if (!s_table[i].occupied) continue;
-        if (now - s_table[i].last_utc > FT8_ROW_STALE_SEC) {
+        if (now - s_table[i].last_utc > stale_sec) {
             if (!(tx_lock && (now - s_table[i].last_utc) <= FT8_ROW_PAUSED_MAX_SEC)) continue;
             int64_t sidx = ((int64_t)s_table[i].last_utc * 1000 + per_ms / 2) / per_ms;
             if (((sidx % 2) == 0) != tx_even) continue;   // not our parity: genuinely stale

@@ -46,6 +46,16 @@ typedef struct {
     // rest." So this gates ONLY the decision of WHO to work. Once a caller is
     // tapped the exchange runs itself exactly as before.
     bool    cq_manual_pick;  // running CQ: never auto-answer a caller, wait for a tap
+    // --- Max age in the decode list — appended; old NVS blobs read back 0 ---
+    // How long a station stays in the LIVE decode list with no fresh decode,
+    // in seconds - was the fixed FT8_ROW_STALE_SEC (90) in ft8_screen.c, now
+    // operator-tunable (30/45/60/75/90) from the Filter modal. Deliberately
+    // NOT applied to the pileup list, which has no expiry of its own by
+    // design (ft8_pileup.h) - this only ever shortens/lengthens how long a
+    // row survives in the live table. 0 means "never written" (an NVS blob
+    // from before this field existed), read as "use the 90 s default", NOT
+    // as "expire instantly" - see ft8_screen.c's row_stale_sec().
+    uint8_t max_age_sec;
 } ft8_filters_t;
 
 // User-defined physical-keyboard shortcuts (#233).
