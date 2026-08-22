@@ -39,6 +39,13 @@ static const char *TAG = "status";
 // doesn't change fast enough to need second-by-second polling anyway.
 #define SD_POLL_INTERVAL_S 20
 static uint64_t s_sd_free_b = 0, s_sd_total_b = 0;
+
+// How long "Failed - tap retries" blinks red/white before quietly reverting
+// to the plain version line. Long enough to be seen even away from the bar
+// for a few seconds, short enough that an abandoned failure does not sit in
+// red forever. Tap-and-hold still retries after this - see the OTA_FAILED
+// branch in status_task().
+#define OTA_FAILED_SHOW_S 20
 static bool     s_sd_ok = false;
 static int      s_sd_poll_countdown = 0;  // 0 = poll on the next tick
 
@@ -186,6 +193,19 @@ static void status_task(void *arg)
     char ssid_buf[64];
     char suffix_buf[80];
     bool blink_on = true;
+    // #<pending>: how long "Failed - tap retries" has been showing. A
+    // correctly-registered long-press followed by an instantly-failed
+    // download (the exact v1.9.0/v1.9.1 OTA bug) LOOKED identical to the
+    // press not registering at all - the diag log proved the press fired
+    // every time, but a static red line at the far end of the bottom bar,
+    // outside where the operator was watching (their own thumb, mid-press),
+    // was easy to miss entirely. Blinking makes it impossible to miss even
+    // glancing back a few seconds later; the auto-revert after
+    // OTA_FAILED_SHOW_S keeps a genuinely abandoned failure from sitting in
+    // red forever - tap-and-hold still retries afterward regardless, since
+    // that reads ota_update_get_state() fresh and the backend's FAILED state
+    // is untouched by this purely cosmetic timeout.
+    uint32_t ota_failed_ticks = 0;
 
     // We use coloured-text formatting in the right label only; the static label
     // style needs recolor enabled, but the runtime API lv_label_set_recolor()
@@ -244,6 +264,7 @@ static void status_task(void *arg)
             // ORIGINAL montserrat_24 - every state below is ~20 characters,
             // where "touch to update" was 24 and overlapped the clock.
             if (ost == OTA_RUNNING) {
+                ota_failed_ticks = 0;
                 if (running[0] && over_s[0])
                     snprintf(vline, sizeof(vline), "%s " LV_SYMBOL_RIGHT " %s  %d%%",
                              running, over_s, opct);
@@ -251,17 +272,33 @@ static void status_task(void *arg)
                     snprintf(vline, sizeof(vline), "updating  %d%%", opct);
                 vcol = 0xFFA040;                       // amber - working
             } else if (ost == OTA_DONE) {
+                ota_failed_ticks = 0;
                 if (over_s[0]) snprintf(vline, sizeof(vline), "%s - tap updates", over_s);
                 else              snprintf(vline, sizeof(vline), "tap updates");
                 vcol = 0x8FE0A0;                       // light green - ready
-            } else if (ost == OTA_FAILED) {
+            } else if (ost == OTA_FAILED && ota_failed_ticks < OTA_FAILED_SHOW_S) {
+                // A correctly-registered long-press followed by an instantly
+                // failed download (v1.9.0/v1.9.1's own OTA bug) was
+                // indistinguishable from the press not registering at all -
+                // the diag log proved the press fired every time; a static
+                // red line was just easy to miss. Blink red/white so it
+                // cannot be, for OTA_FAILED_SHOW_S seconds.
+                ota_failed_ticks++;
                 snprintf(vline, sizeof(vline), "Failed - tap retries");
-                vcol = 0xFF6060;                       // red - went wrong
+                vcol = blink_on ? 0xFF6060 : 0xFFFFFF;
+            } else if (ost == OTA_FAILED) {
+                // Given up being loud about it, but tap-and-hold still
+                // retries from here - update_line_tap() reads the backend
+                // state fresh and it is untouched by this display-only
+                // timeout, it just no longer LOOKS different from normal.
+                snprintf(vline, sizeof(vline), "%s", running);
             } else if (update_check_available() && latest_s[0]) {
+                ota_failed_ticks = 0;
                 snprintf(vline, sizeof(vline), "%s " LV_SYMBOL_RIGHT " %s  tap?",
                               running, latest_s);
                 vcol = 0x40D8E0;                       // cyan - offered, nothing fetched
             } else {
+                ota_failed_ticks = 0;
                 snprintf(vline, sizeof(vline), "%s", running);
             }
             // Tell the UI whether there is anything to tap. While true the WHOLE
