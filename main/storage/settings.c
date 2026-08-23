@@ -670,7 +670,13 @@ static void load_from_nvs(qmx_settings_t *out)
     out->spots_en = true;
     out->rbn_en   = false;   // opt-in: a continuous telnet firehose on a fragile link
     out->sota_en  = false;   // opt-in: somebody else's hobby server, see settings.h
-    out->ota_autodl = true;  // #239: on by default - it only downloads, never applies
+    // #239: OFF until the background download is PROVEN on a long, slow link
+    // with the radio streaming. The verify at the end took the hardware
+    // watchdog 4 times out of 4 under exactly those conditions before 14 KB of
+    // cold buffers were moved out of internal RAM; the fix passed a controlled
+    // A/B once, and once is not enough for a feature that runs unattended while
+    // nobody is watching. Flip this when the repeat runs are in.
+    out->ota_autodl = false;
     out->tx_tone_hz   = 1500;     // conventional FT8 default; = FT8_TX_CQ_DEFAULT_FREQ_HZ
     out->tx_tone_hold = false;    // auto-pick a clear slot, as it always did
     out->bandplan_region = 0;     // 0 = auto (derive from grid)

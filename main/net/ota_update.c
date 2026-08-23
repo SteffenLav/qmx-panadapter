@@ -42,10 +42,22 @@
 // and no yield avoids it: expect brief stutter, not a freeze.
 #define OTA_CHUNK_YIELD_MS 15
 
-// Internal, never PSRAM - see the comment at the task creation. Logged as a
-// high-water mark at the end of every run so the number is measured, not
-// assumed.
-#define OTA_TASK_STACK_BYTES 8192
+// Internal, never PSRAM - see the comment at the task creation - and now
+// STATIC, so starting an update cannot fail for want of memory.
+//
+// It was 8192 bytes allocated dynamically, and both halves of that were wrong:
+//   - MEASURED on hardware, the task uses 3,216 bytes. 8192 was a round number,
+//     not a measurement.
+//   - Asking the heap for 8 KB of CONTIGUOUS INTERNAL RAM at the moment an
+//     operator presses "update" is asking at the worst possible time. In FT8
+//     mode with the radio streaming the largest internal block was 6,912 bytes,
+//     and ota_update_start() returned "Could not start the update task" -
+//     intermittently, which is worse than never.
+// 6144 keeps ~2.9 KB over the measured high-water mark for TLS-path variation,
+// still hands 2 KB back, and as .bss it is simply always there.
+#define OTA_TASK_STACK_BYTES 6144
+static StaticTask_t s_ota_tcb;
+static StackType_t  s_ota_stack[OTA_TASK_STACK_BYTES / sizeof(StackType_t)];
 
 // Runtime overrides, for testing only (see ota_update_set_test_params). The
 // failure being chased only appears on a SLOW link, and the bench link is not
@@ -430,9 +442,12 @@ bool ota_update_start(const char *url, char *err, size_t err_len)
     // is a PSRAM stack for background work (util/psram_task.h), which is right
     // for every other background task and WRONG for any task that touches
     // flash. 8 KB internal, held only for the duration of the update.
-    BaseType_t rc = xTaskCreatePinnedToCore(
-        ota_task, "ota", OTA_TASK_STACK_BYTES, NULL, tskIDLE_PRIORITY + 2, NULL, 1);
-    if (rc != pdPASS) {
+    TaskHandle_t h = xTaskCreateStaticPinnedToCore(
+        ota_task, "ota", OTA_TASK_STACK_BYTES / sizeof(StackType_t), NULL,
+        tskIDLE_PRIORITY + 2, s_ota_stack, &s_ota_tcb, 1);
+    if (!h) {
+        // Cannot happen with a static stack - kept so a future change back to a
+        // dynamic one does not silently lose the error path.
         s_state = OTA_IDLE;
         if (err) snprintf(err, err_len, "Could not start the update task");
         return false;
