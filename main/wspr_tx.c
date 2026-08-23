@@ -243,6 +243,20 @@ static void wspr_tx_worker_task(void *arg)
                                                                      : (uint32_t)secs * 1000));
     }
 
+    // A WSPR transmission does not begin AT the even minute - it begins one
+    // second into it. 110.6 s of signal sits inside a 120 s window and the
+    // convention puts the slack mostly at the end.
+    //
+    // MEASURED rather than recalled, because getting it wrong is invisible from
+    // this side - we would transmit perfectly and simply be early. The five real
+    // stations in WSJT's own reference capture
+    // (test/wav_reference/wspr/150426_0918.wav, recorded from the even minute)
+    // start at 1.109, 1.515, 1.621, 1.813 and 2.133 s: a clear floor at ~1.1 s
+    // with each station's own clock error above it. Firing at :00 would put us
+    // ~1.6 s ahead of the population every receiver is searching around, which
+    // spends decode margin for nothing.
+    vTaskDelay(pdMS_TO_TICKS(WSPR_TX_START_OFFSET_MS));
+
     lock();
     s_state = WSPR_TX_ACTIVE;
     unlock();
@@ -273,24 +287,47 @@ bool wspr_tx_arm(const wspr_tx_request_t *req, char *out_err, size_t out_err_len
         return false;
     }
 
+    // In a DRY-RUN build, a missing radio is not a reason to refuse. tx_cmd()
+    // sends zero bytes when WSPR_TX_SEND_LIVE is 0, so the burst cannot key
+    // anything, cannot mis-set a mode, and cannot reach the radio at all - the
+    // Digi pre-flight below is guarding an action that will not happen. Left
+    // strict, it made the engine untestable in exactly the situation where
+    // bench time is cheapest: this Tab5 wedges its QMX on every reflash (#74),
+    // so after any firmware change there is no radio until someone power-cycles
+    // it by hand, and the timing work that needs neither radio nor antenna was
+    // blocked behind that.
+    //
+    // A LIVE build keeps the check unconditionally. There the pre-flight is the
+    // real thing - it is what stops a burst going out in the wrong mode.
+    bool preflight_required = true;
+#if !WSPR_TX_SEND_LIVE
+    if (!cat_is_ready()) {
+        ESP_LOGW(TAG, "arm: no CAT link - allowing anyway, this is a DRY RUN "
+                      "(nothing is sent to the radio; a live build would refuse)");
+        preflight_required = false;
+    }
+#endif
+
     // Digi-mode pre-flight - see ft8_tx_arm()'s identical reasoning: check/
     // switch happens here, with up to ~110 s of lead time, never at burst
     // time where any delay would shift the start off the slot boundary.
-    const char *mode = cat_get_mode_str();
-    if (strcmp(mode, "DiGi") != 0) {
-        ESP_LOGI(TAG, "arm: QMX mode is '%s' - switching to Digi...", mode);
-        cat_set_mode("FT8"); // hamlib_mode_to_digit() maps this to digit '6' = DiGi
-        bool confirmed = false;
-        for (int i = 0; i < WSPR_TX_MODE_POLL_TRIES; i++) {
-            vTaskDelay(pdMS_TO_TICKS(WSPR_TX_MODE_POLL_MS));
-            if (strcmp(cat_get_mode_str(), "DiGi") == 0) { confirmed = true; break; }
+    if (preflight_required) {
+        const char *mode = cat_get_mode_str();
+        if (strcmp(mode, "DiGi") != 0) {
+            ESP_LOGI(TAG, "arm: QMX mode is '%s' - switching to Digi...", mode);
+            cat_set_mode("FT8"); // hamlib_mode_to_digit() maps this to digit '6' = DiGi
+            bool confirmed = false;
+            for (int i = 0; i < WSPR_TX_MODE_POLL_TRIES; i++) {
+                vTaskDelay(pdMS_TO_TICKS(WSPR_TX_MODE_POLL_MS));
+                if (strcmp(cat_get_mode_str(), "DiGi") == 0) { confirmed = true; break; }
+            }
+            if (!confirmed) {
+                ESP_LOGW(TAG, "arm: QMX would not confirm Digi mode (still '%s')", cat_get_mode_str());
+                if (out_err) snprintf(out_err, out_err_len, "QMX won't switch to Digi mode - check the radio");
+                return false;
+            }
+            ESP_LOGI(TAG, "arm: QMX confirmed Digi mode");
         }
-        if (!confirmed) {
-            ESP_LOGW(TAG, "arm: QMX would not confirm Digi mode (still '%s')", cat_get_mode_str());
-            if (out_err) snprintf(out_err, out_err_len, "QMX won't switch to Digi mode - check the radio");
-            return false;
-        }
-        ESP_LOGI(TAG, "arm: QMX confirmed Digi mode");
     }
 
     lock();

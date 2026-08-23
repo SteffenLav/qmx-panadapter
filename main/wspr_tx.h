@@ -59,6 +59,13 @@ typedef struct {
 #define WSPR_TX_TONE_MIN_HZ        200
 #define WSPR_TX_TONE_MAX_HZ       2800
 
+// A WSPR transmission starts ONE SECOND into the even UTC minute, not at it.
+// Measured, not recalled: the five real stations in WSJT's own reference
+// capture (test/wav_reference/wspr/150426_0918.wav, recorded from the even
+// minute) begin at 1.109 / 1.515 / 1.621 / 1.813 / 2.133 s - a floor at ~1.1 s
+// with each station's own clock error stacked on top. See wspr_tx_worker_task().
+#define WSPR_TX_START_OFFSET_MS   1000
+
 // One-time module init (mutex creation). Call once at boot. Idempotent.
 void wspr_tx_init(void);
 

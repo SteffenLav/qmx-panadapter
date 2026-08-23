@@ -4,10 +4,15 @@ Companion to `wspr-phase1-status.md` (RX codec + decoder). This file covers
 `main/wspr_tx.c` / `.h`: building a WSPR transmission and driving it out as a
 timed CAT tone sequence.
 
-**Nothing in this file has been on the air.** `WSPR_TX_SEND_LIVE` defaults to
-0 and every result below is from a dry run, where `tx_cmd()` logs the command
-it would have sent and sends nothing. That distinction is load-bearing when
-reading the timing numbers: see "what the dry run does and does not prove".
+**This engine has now transmitted on the air and been decoded worldwide** — see
+"ON THE AIR" below, the last section. Everything before that section was written
+from **dry runs**, where `tx_cmd()` logs the command it would have sent and sends
+nothing, and it is kept in that voice deliberately: the dry-run sections record
+what could and could not be concluded *before* there was external evidence, which
+is the more useful thing to be able to re-read.
+
+`WSPR_TX_SEND_LIVE` still defaults to 0 in git and always has. Going on air is a
+deliberate, supervised act, not a build-time default.
 
 ## First hardware run — 2026-08-23
 
@@ -100,3 +105,100 @@ real silicon and real scheduling.
 
 Because the burst sends nothing, the **only** part of a dry run that needs a
 radio at all is the arm-time Digi-mode confirmation.
+
+## ON THE AIR — 2026-08-23, 21:28 UTC
+
+First WSPR transmission from this firmware, supervised, one burst, operator
+awake and watching the radio. `OZ1LAV JO65 37` on 14.09710 MHz (dial 14.0956 +
+1500 Hz audio), 5 W.
+
+**Decoded by 50 receiving stations**, from 913 km to 15,663 km:
+
+| reporter | grid | SNR | km |
+|---|---|---|---|
+| VK5WA/2 | QG50nf | −19 | 15,663 |
+| VK5ARG | PF95ht | −6 | 15,280 |
+| WA2TP | FN30lu | −7 | 6,152 |
+| EB5TC | IM99tk | −12 | 2,038 |
+| F1ZNO | JN14sc | −8 | 1,431 |
+| GW2HFR | IO83ib | −4 | 1,086 |
+| G4HZX | IO91xk | −6 | 969 |
+| HB9VQQ | JN47kh | −9 | 951 |
+| G3VGZ | IO94im | −6 | 913 |
+| …40 more | | | |
+
+What each column independently confirms:
+
+- **Grid `JO65` and power `+37 dBm`, identical on all 50 rows.** The message
+  survived packing, convolutional encoding, interleaving, sync merge, tone
+  mapping, 110.6 s of CAT stepping and the ionosphere, and came back bit-exact
+  from 50 decoders that have never seen our code.
+- **Frequency 14.097108–14.097111 MHz** against a predicted 14.09710 — within
+  about 10 Hz, which is the QMX's own calibration, not ours.
+- **Drift 0 on every single spot, no exceptions.** This is the result worth
+  keeping. Drift is what a receiver measures when a transmitter wanders during
+  the transmission, so 50 independent stations all reporting zero is external
+  confirmation of the tone stepping AND the symbol timing under real RF - the
+  thing a dry run structurally cannot prove.
+
+Also cleared, since these were the open questions from the dry-run section
+above: **zero `send failed`** across all 162 real CAT writes, the QMX accepted a
+`TA<freq>;` every 682 ms for 110 s without complaint, the 110 s continuous
+key-down completed with no thermal or SWR event, and the CAT poll heartbeat
+resumed 2 ms after the burst. The `[n/162]` markers landed at 13,651–13,656 ms
+per 20 symbols against an ideal 13,653.3, so the timing held with real blocking
+CDC writes and not merely when logging.
+
+⚠ **A live build loses the per-symbol telemetry.** `tx_cmd()` only logs its
+`[DRY RUN t+…us]` line when `WSPR_TX_SEND_LIVE` is 0, so a live burst gives only
+the every-20-symbols progress markers. Fine here - the external drift figure is
+better evidence than our own timestamps could ever be - but if per-symbol timing
+ever needs measuring *on air*, that logging has to be made unconditional first.
+
+⚠ The build that transmitted was a **temporary local edit** of
+`WSPR_TX_SEND_LIVE` to 1, reverted in the source immediately after flashing.
+Nothing in git has ever had it set to 1, and going on air stays a deliberate,
+supervised act rather than a build-time default.
+
+## Start offset: WSPR begins one second INTO the even minute
+
+Caught while preparing the on-air test, and it would have been invisible from
+our side - we would have transmitted perfectly and simply been early.
+
+`wspr_tx_seconds_until_next_slot()` targeted `sec_in_minute == 0`. The
+convention is +1 s: 110.6 s of signal inside a 120 s window with the slack
+mostly at the end.
+
+Rather than take that from recollection, it was **measured against real
+traffic**. The five stations in the reference WAV (recorded from the even
+minute) start at:
+
+| W5BIT | KI7CI | WD4LHT | W3HH | ND6P |
+|---|---|---|---|---|
+| 1.109 s | 1.515 s | 1.621 s | 1.813 s | 2.133 s |
+
+A clear floor at ~1.1 s with each station's own clock error stacked above it -
+so the convention is real, and firing at `:00` would have put us ~1.6 s ahead of
+the population every receiver searches around. `WSPR_TX_START_OFFSET_MS` (1000)
+was added before the on-air test, and the 50 spots say the resulting alignment
+is right.
+
+The same reference WAV also independently confirmed that **37 dBm is a legal
+WSPR power quantization** - KI7CI transmits at exactly that - so the power we
+encoded was checked against real traffic rather than a remembered table.
+
+## A dry run no longer needs a radio
+
+`wspr_tx_arm()` refused to arm unless the QMX confirmed Digi mode. In a dry-run
+build that check guards an action that cannot happen: `tx_cmd()` sends zero
+bytes, so the burst cannot key anything or reach the radio at all.
+
+Left strict it made the engine untestable exactly when bench time is cheapest.
+This Tab5 wedges its QMX on **every** reflash (#74 - confirmed deterministic by
+the operator: "it will never survive on its own"), so after any firmware change
+there is no radio until someone power-cycles it by hand, and all the timing work
+that needs neither radio nor antenna sat blocked behind that.
+
+Now a dry-run build logs a warning and arms anyway when `cat_is_ready()` is
+false. **A live build keeps the check unconditionally** - there it is the real
+thing, the one that stops a burst going out in the wrong mode.
