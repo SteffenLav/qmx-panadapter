@@ -16,30 +16,65 @@ int wspr_find_candidates(const int16_t *samples, long n, double f_lo_hz,
                           int max_out)
 {
     if (n <= 0 || max_out <= 0) return 0;
-    int nfft = (int)n;
+
+    /* AVERAGED PERIODOGRAM, not one FFT over the whole capture.
+     *
+     * This used to set nfft = n. For a 120 s capture that is a 1,440,000-point
+     * real FFT, and between kiss_fftr's own twiddles, its inner complex config,
+     * `in` and `spec` it asks for roughly 23 MB - so on the device
+     * kiss_fftr_alloc() simply returned NULL and this function reported "0
+     * candidates" in 0 ms. That is what the first on-device self-test hit.
+     *
+     * Averaging |X|^2 over overlapping windows is the standard answer and is
+     * better here on three counts, not merely cheaper: bounded memory (~2 MB),
+     * a smoother noise estimate, and cache locality.
+     *
+     * WINDOW LENGTH IS CHOSEN, NOT ARBITRARY. A power-of-two MULTIPLE of the
+     * symbol length makes WSPR's 1.4648 Hz tone spacing land on an exact whole
+     * number of bins: tone_step_bins = nfft / WSPR_SYM_LEN_SAMPLES, with no
+     * rounding error in the comb at all. 16 x 8192 = 131072 gives 0.0916 Hz
+     * bins and a tone step of exactly 16.
+     *
+     * Frequency precision: the reported peak is quantised to 0.0916 Hz instead
+     * of the old 0.0083 Hz. Worst-case error is then 0.046 Hz, which over one
+     * 0.6827 s symbol is 0.03 of a cycle - far inside the ~1.46 Hz sinc null,
+     * i.e. well under 0.1 dB of correlation loss.
+     */
+    int nfft = 16 * WSPR_SYM_LEN_SAMPLES;      /* 131072 */
+    while ((long)nfft > n && nfft > WSPR_SYM_LEN_SAMPLES) nfft /= 2;
+    if ((long)nfft > n) return 0;              /* capture shorter than one symbol */
+
     kiss_fftr_cfg cfg = kiss_fftr_alloc(nfft, 0, NULL, NULL);
     if (!cfg) return 0;
     kiss_fft_scalar *in = (kiss_fft_scalar *)malloc((size_t)nfft * sizeof(kiss_fft_scalar));
     kiss_fft_cpx *spec = (kiss_fft_cpx *)malloc((size_t)(nfft / 2 + 1) * sizeof(kiss_fft_cpx));
-    if (!in || !spec) {
-        free(in); free(spec); free(cfg);
+    int nbins = nfft / 2 + 1;
+    float *mag = (float *)calloc((size_t)nbins, sizeof(float));
+    if (!in || !spec || !mag) {
+        free(in); free(spec); free(mag); free(cfg);
         return 0;
     }
-    for (int i = 0; i < nfft; i++) in[i] = (kiss_fft_scalar)(samples[i] / 32768.0);
-    kiss_fftr(cfg, in, spec);
+
+    /* 50 % overlap: every sample outside the first and last half-window is
+     * covered twice, so a transmission straddling a window boundary is not
+     * penalised. */
+    const long step = nfft / 2;
+    int nwin = 0;
+    for (long off = 0; off + nfft <= n; off += step) {
+        for (int i = 0; i < nfft; i++)
+            in[i] = (kiss_fft_scalar)(samples[off + i] / 32768.0);
+        kiss_fftr(cfg, in, spec);
+        for (int b = 0; b < nbins; b++)
+            mag[b] += spec[b].r * spec[b].r + spec[b].i * spec[b].i;
+        nwin++;
+    }
+    if (nwin == 0) { free(in); free(spec); free(mag); free(cfg); return 0; }
 
     double bin_hz = WSPR_SAMPLE_RATE_HZ / nfft;
     int lo_bin = (int)(f_lo_hz / bin_hz), hi_bin = (int)(f_hi_hz / bin_hz);
-    int nbins = nfft / 2 + 1;
     if (hi_bin > nbins) hi_bin = nbins;
     if (lo_bin < 0) lo_bin = 0;
-    int tone_step_bins = (int)(TONE_SPACING / bin_hz + 0.5);
-
-    float *mag = (float *)malloc((size_t)nbins * sizeof(float));
-    for (int b = 0; b < nbins; b++) {
-        float re = spec[b].r, im = spec[b].i;
-        mag[b] = re * re + im * im;
-    }
+    int tone_step_bins = nfft / WSPR_SYM_LEN_SAMPLES;   /* exact, by construction */
 
     int nscore = hi_bin - lo_bin;
     int count = 0;
@@ -78,19 +113,52 @@ int wspr_find_candidates(const int16_t *samples, long n, double f_lo_hz,
     return count;
 }
 
-/* Twiddle tables for the 4 tone frequencies at a given f0, indexed by
- * ABSOLUTE sample position - precomputed once so the start-time search
+/* Twiddle tables for the 4 tone frequencies at a given f0, indexed by the
+ * sample's offset WITHIN ITS SYMBOL - precomputed once so the start-time search
  * never calls cos()/sin() in its inner loop, only array lookups +
  * multiply-add. Without this an exhaustive search over the ~9 s of start
  * slack doesn't finish in reasonable time (verified: minutes, not the
- * ~2 s/candidate this version takes). */
+ * ~2 s/candidate this version takes).
+ *
+ * These were indexed by ABSOLUTE sample position until the tables turned out
+ * to need 46 MB for a 120 s capture; build_twiddles() explains why one symbol
+ * period is exactly equivalent. */
 typedef struct {
     float *cos_tab[4];
     float *sin_tab[4];
 } twiddles_t;
 
-static int build_twiddles(double f0, long n, twiddles_t *tw)
+/* ONE SYMBOL PERIOD, not one capture.
+ *
+ * This used to allocate tables as long as the whole capture and index them by
+ * absolute sample position. On a host that is merely wasteful; on the device it
+ * is fatal - a 120 s capture is 1,440,000 samples, so 4 tones x {cos,sin} x 4 B
+ * is **46 MB**, against 14.7 MB of free PSRAM. It is why the first on-device
+ * self-test returned "0 candidates in 0 ms": the allocations simply failed.
+ *
+ * The shortening is EXACT, not an approximation. extract_tone_powers()
+ * correlates one symbol at a time and keeps only the MAGNITUDE:
+ *
+ *     sum_over_symbol x[idx] * e^(-j*w*idx)
+ *   = e^(-j*w*base) * sum_over_symbol x[base+j] * e^(-j*w*j)
+ *
+ * The leading factor is the per-symbol phase, it has unit magnitude, and it
+ * therefore cancels identically in |.|^2. So indexing by the LOCAL offset j
+ * gives bit-for-bit the same tone powers as indexing by idx did.
+ *
+ * It is also slightly MORE accurate: cos(w*i) for i up to 1.44 million loses
+ * precision in argument reduction before the (float) cast, while j never
+ * exceeds 8192.
+ */
+static int build_twiddles(double f0, twiddles_t *tw)
 {
+    const long n = WSPR_SYM_LEN_SAMPLES;
+    // Zero FIRST: the caller declares `twiddles_t tw;` uninitialised and calls
+    // free_twiddles() on the failure path, so a partial build would otherwise
+    // hand free() whatever was on the stack. Never fired while the tables were
+    // allocated on a host with gigabytes; on the device, failing here is the
+    // EXPECTED path when memory is short, which is exactly when it would bite.
+    memset(tw, 0, sizeof(*tw));
     for (int k = 0; k < 4; k++) {
         tw->cos_tab[k] = (float *)malloc((size_t)n * sizeof(float));
         tw->sin_tab[k] = (float *)malloc((size_t)n * sizeof(float));
@@ -120,10 +188,14 @@ static void extract_tone_powers(const int16_t *samples, long n,
         for (int k = 0; k < 4; k++) {
             const float *ct = tw->cos_tab[k], *st = tw->sin_tab[k];
             float re = 0, im = 0;
+            // Local offset into the symbol, so the tables are one symbol long
+            // instead of one capture long - see build_twiddles(). The dropped
+            // per-symbol phase has unit magnitude and cancels in the power below.
             for (long idx = n0; idx < n1; idx++) {
+                long j = idx - base;          // 0 <= j < WSPR_SYM_LEN_SAMPLES
                 float x = samples[idx] / 32768.0f;
-                re += x * ct[idx];
-                im -= x * st[idx];
+                re += x * ct[j];
+                im -= x * st[j];
             }
             tone_power[sym][k] = (double)re * re + (double)im * im;
         }
@@ -354,17 +426,26 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
     if (slack < 0) slack = 0;
 
     twiddles_t tw;
-    if (!build_twiddles(f0_hz, n, &tw)) { free_twiddles(&tw); return; }
+    if (!build_twiddles(f0_hz, &tw)) { free_twiddles(&tw); return; }
 
     /* Coarse start-time search, then refine around the best coarse hit -
      * exhaustive at symbol-period-fine resolution would be needlessly
      * slow; this two-pass search finds the same optimum in testing. */
+    /* ONE tone-power array, reused. There used to be three - two loop-scoped
+     * and one at function scope - at 162*4*8 = 5184 bytes each. They are never
+     * live at the same time, so the compiler was free to overlap them and did
+     * not: on the device this function overflowed a 16 KB task stack by 1268
+     * bytes. That matters here far more than it would on a host, because
+     * xTaskCreate() takes its stack from INTERNAL RAM and this board runs with
+     * roughly 40 KB of it free (see CLAUDE.md's task-stack and .bss notes).
+     * Hoisting takes the decode path from ~18 KB of stack to ~8 KB. */
+    double tp[WSPR_NSYM][4];
+
     long best_dt = 0;
     double best_score = -1e300;
     long coarse_step = WSPR_SYM_LEN_SAMPLES / 8;
     if (coarse_step < 1) coarse_step = 1;
     for (long dt = 0; dt <= slack; dt += coarse_step) {
-        double tp[WSPR_NSYM][4];
         extract_tone_powers(samples, n, &tw, dt, tp);
         double s = sync_score(tp);
         if (s > best_score) { best_score = s; best_dt = dt; }
@@ -375,13 +456,11 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
     long fine_step = WSPR_SYM_LEN_SAMPLES / 32;
     if (fine_step < 1) fine_step = 1;
     for (long dt = fine_lo; dt <= fine_hi; dt += fine_step) {
-        double tp[WSPR_NSYM][4];
         extract_tone_powers(samples, n, &tw, dt, tp);
         double s = sync_score(tp);
         if (s > best_score) { best_score = s; best_dt = dt; }
     }
 
-    double tp[WSPR_NSYM][4];
     extract_tone_powers(samples, n, &tw, best_dt, tp);
     free_twiddles(&tw);
 

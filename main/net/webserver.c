@@ -17,6 +17,7 @@
 #include "ft8_screen_view.h"  // ft8_screen_view_is_active
 #include "ft8_tx.h"           // ft8_tx_get_status (web TX-status banner)
 #include "wspr_tx.h"          // the dev "wspr_tx_test" action
+#include "wspr_selftest.h"    // the dev "wspr_selftest" action
 #include "ft8_qso.h"          // ft8_qso_get_state / get_target / get_cq_calls_sent
 #include "ft8_status.h"       // ft8_status_get
 #include "dsp.h"              // dsp_get_peak_dbm_around_vfo
@@ -1130,6 +1131,20 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // UI element references this — it's meant to be fired from the browser
         // console/bookmarklet on the dev's PC.
         ui_resource_monitor_toggle();
+    } else if (action && strcmp(action, "wspr_selftest") == 0) {
+        // Developer probe: synthesize a known WSPR transmission, decode it with
+        // the real decoder, and report per-stage milliseconds. Needs no radio,
+        // no antenna and no CAT link. This is the feasibility gate in front of
+        // the Phase 3 RX slot loop - see wspr_selftest.h. Results are logged,
+        // not returned, because the run takes far longer than an HTTP response
+        // should wait for.
+        bool already = wspr_selftest_running();
+        if (!already) wspr_selftest_start();
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, already ? "{\"ok\":false,\"error\":\"already running\"}"
+                                        : "{\"ok\":true,\"note\":\"running - see the log, tag wspr_st\"}");
+        cJSON_Delete(root);
+        return ESP_OK;
     } else if (action && strcmp(action, "wspr_tx_test") == 0) {
         // Developer escape hatch, mirroring panic_test's "prove the mechanism
         // actually runs" reasoning: WSPR TX (main/wspr_tx.c) has no UI trigger

@@ -97,6 +97,7 @@ idf_component_register(
         "wspr_fano.c"
         "wspr_decode.c"
         "wspr_tx.c"
+        "wspr_selftest.c"
         "adif/adif_log.c"
         "adif/qrz_upload.c"
         "adif/eqsl_upload.c"

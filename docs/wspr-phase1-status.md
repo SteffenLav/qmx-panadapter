@@ -535,3 +535,119 @@ noise) rather than celebrated automatically.
   validated and shipped fading-recovery mechanism, and a complete,
   evidenced answer for why one specific real candidate can't be
   recovered) rather than just one WAV file's results.
+
+## ⚠ Update 2026-08-24 — Phase 1 was proven as an ALGORITHM, never sized for the DEVICE
+
+Everything above is still true and still passes. But every measurement in it was
+taken on a laptop, and the first attempt to run this decoder on the ESP32-P4
+failed instantly and completely. The feasibility probe that found it is
+`main/wspr_selftest.c` (dev action `{"action":"wspr_selftest"}`), which
+synthesizes a known transmission and pushes it through the real decoder on real
+silicon - the WSPR analogue of `ft8_synth_and_decode()`.
+
+First on-device run:
+
+```
+STAGE 1  find_candidates: 0 candidate(s) in 0 ms
+RESULT: FAIL - 'W5BIT' 'EL09' 17 dBm was NOT recovered
+```
+
+Zero milliseconds for an FFT over 1.44 million samples is impossible, and the
+only fast exit is a failed allocation. Three host-shaped assumptions, none of
+which a PC would ever notice:
+
+| | what it asked for | against |
+|---|---|---|
+| `build_twiddles()` - tables as long as the capture | **46.1 MB** | 14.7 MB free PSRAM |
+| `wspr_find_candidates()` - one FFT over the whole capture | ~23 MB | 14.7 MB free PSRAM |
+| three live `double tp[162][4]` arrays | ~18 KB of **stack** | 16 KB task stack |
+
+All three are now fixed, and **every fix was verified behaviour-preserving
+against the real reference WAV before it went anywhere near the device.**
+
+**1. Twiddle tables: 46.1 MB → 262 KB, exactly.** The correlation keeps only the
+magnitude of `sum x[idx]*e^(-j*w*idx)` over one symbol. Split the index into
+`base + j` and the sum becomes `e^(-j*w*base) * sum x*e^(-j*w*j)`; the leading
+factor has unit magnitude and cancels identically in `|.|^2`. So the tables only
+ever need one symbol period, indexed by the local offset. Not an approximation -
+the real-WAV regression came back with the **same five callsigns and the same
+Fano cycle counts** (81/94/81/114/119), which is what proves the tone powers are
+numerically identical rather than merely close enough to decode. It is also ~2x
+faster (7.0 s vs ~15 s for the 8-candidate run) because an 8192-float table
+stays in cache and a 1.44M one cannot, and marginally more accurate, since
+`cos(w*i)` for i up to 1.44 million loses precision in argument reduction.
+
+**2. Candidate search: one giant FFT → averaged periodogram, ~2 MB.** 50 %
+overlapped windows of `16 * WSPR_SYM_LEN_SAMPLES = 131072`. The window length is
+chosen, not arbitrary: a power-of-two multiple of the symbol length makes the
+1.4648 Hz tone spacing land on **exactly 16 bins** with no rounding in the comb
+at all. Frequency precision drops from 0.0083 Hz to 0.0916 Hz bins, i.e. 0.046 Hz
+worst-case error, which is 0.03 of a cycle across a symbol - far inside the
+~1.46 Hz sinc null. Real WAV: same five stations, same grids, same powers, still
+exactly 3 rejects. Sensitivity sweep: **identical**, same -22.7 dB floor, same 81
+cycles at every level.
+
+**3. Stack: ~18 KB → ~8 KB.** Three `double tp[WSPR_NSYM][4]` arrays at 5184
+bytes each, never live simultaneously, which the compiler was free to overlap and
+did not - the device overflowed a 16 KB task stack by 1268 bytes. Hoisted to one.
+This matters far more here than on a host: `xTaskCreate()` takes its stack from
+**internal** RAM, and this board runs with roughly 40 KB of that free.
+
+**A separate note on floats.** The self-test's own signal synthesis took **80
+seconds** in double precision and **2.8 s** in float - 29x - because the P4's FPU
+is single-precision only and every double `sin`/`log`/`cos` is software-emulated.
+That was never inside the decode budget, but it is worth knowing before writing
+any new DSP for this target: on this chip, `double` is not "float but safer", it
+is a software library.
+
+**Standing lesson, and the reason the gate existed:** a host harness proves the
+ALGORITHM. It cannot prove the implementation fits the target, and on this board
+memory - not CPU - was the wall. Measure on the device before building anything
+on top.
+
+### The timing answer: it decodes CORRECTLY on the P4, and it is 4.5x too slow
+
+With the three memory fixes in, the self-test runs to completion on hardware:
+
+```
+synthesized 1440000 samples (120 s) in 2804 ms
+STAGE 1  find_candidates: 8 candidate(s) in 9229 ms
+  #0 f=1492.03  DECODED 'W5BIT' 'EL09' 17 dBm  dt=1.600s cycles=81  [67166 ms]
+```
+
+**Correctness is not in doubt.** The decoder recovered the exact message, the
+`dt=1.600s` matches the 1.6 s start offset that was synthesized, and
+`cycles=81` is **identical to the host's 81** - bit-level agreement between a
+laptop and the P4, not merely "it decoded here too".
+
+**Speed is the problem, and it is not marginal:**
+
+| candidates | total | of a 120 s cycle |
+|---|---|---|
+| 8 | 546.6 s | **456 %** |
+| 4 | 277.9 s | 232 % |
+| 2 | 143.6 s | 120 % |
+
+The device is **~78x slower than the laptop** on this path. Note that even
+**two** candidates does not fit - so trimming the candidate list cannot rescue
+it, and neither can narrowing the start-time search (worth ~4.7x on its own).
+
+**Why, and therefore what the fix is.** Per candidate the start-time search runs
+~119 `extract_tone_powers()` calls, each reading 162 symbols x 4 tones x 8192
+samples ~ 5.3 M values - about 630 M reads per candidate, from a 2.88 MB buffer
+that only fits in PSRAM. The inner loop is **memory-bound on PSRAM**, not
+compute-bound, which is why a 360 MHz core lands 78x off a laptop rather than
+the ~5-10x raw clock ratio would suggest.
+
+So the fix is the one every real WSPR decoder already uses, `wsprd` included:
+**mix each candidate down to complex baseband and decimate before correlating.**
+WSPR occupies about 6 Hz; at a decimated 375 Hz a symbol is 256 samples instead
+of 8192, so `extract_tone_powers()` drops from 5.3 M reads to ~166 K - a 32x cut
+that should put eight candidates near 20 s, comfortably inside the cycle. The
+mixing pass itself is one sweep of 1.44 M samples per candidate, negligible
+against the 630 M it removes.
+
+**Status: RX-on-device is BLOCKED on that front end.** Not on correctness, not on
+memory any more, and not on anything the UI can work around - Phase 3 can be
+built and looked at, but it will show an empty list until the decimating mixer
+exists. That is now the top item for this branch.
