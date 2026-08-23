@@ -8,6 +8,7 @@
 #include "net/webserver_ws.h"     // webserver_ws_set_paused
 #include "util/psram_task.h"
 #include "net/ota_update.h"
+#include "net/net_quiet.h"
 #include "storage/settings.h"
 
 #include "esp_http_client.h"
@@ -270,7 +271,10 @@ static void check_task(void *arg)
         // the full 6 h, or one unlucky boot costs the whole day's check
         // (hardware-observed: both URLs failed at 36.8 s uptime while WiFi
         // came up at ~38.5 s; neighbouring boots succeeded at 37-38 s).
-        bool ok = wifi_is_connected() && do_check();
+        // Not while an update is downloading: do_check()'s GitHub fallback
+        // pulls 48 KB over TLS, and the thing it would be checking for is
+        // already in flight. See net_quiet.h.
+        bool ok = wifi_is_connected() && !net_quiet_active() && do_check();
 
         // #239: fetch it quietly, so the operator is only ever asked the one
         // question that matters - "restart into it?" - instead of starting a

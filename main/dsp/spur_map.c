@@ -1,4 +1,5 @@
 #include "spur_map.h"
+#include "esp_attr.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -88,7 +89,9 @@ typedef struct {
 // Published map, double-buffered: the FFT task reads whichever index
 // s_live points at, the detection task fills the other and then swaps. No lock
 // on the hot path, and the worst possible race is one frame of stale data.
-static spur_ent_t s_pub[2][SPUR_MAP_MAX_ENTRIES];
+// 4,608 bytes of internal .bss for a feature that DEFAULTS OFF. Same reasoning
+// as reader_view.c's s_toc - see the #239 memory investigation.
+EXT_RAM_BSS_ATTR static spur_ent_t s_pub[2][SPUR_MAP_MAX_ENTRIES];
 static uint8_t    s_pub_n[2] = {0, 0};
 static volatile int s_live = 0;
 

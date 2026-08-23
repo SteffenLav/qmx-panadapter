@@ -625,7 +625,12 @@ static void spots_task(void *arg)
                            (int64_t)(ok ? FETCH_PERIOD_S : RETRY_PERIOD_S) * 1000000;
         }
 
-        if (s.sota_en && now >= next_sota_us) {
+        // ⚠ MISSED ON THE FIRST PASS. Only the POTA fetch was gated, so a
+        // 23 KB SOTA response was still being pulled over TLS in the middle of
+        // an update - measured mid-download as "spots: SOTA: 18 spots (23600
+        // bytes)" while internal free was 5 KB. Closing three of four doors is
+        // not closing the door.
+        if (s.sota_en && now >= next_sota_us && !net_quiet_active()) {
             bool ok = fetch_sota();
             if (ok) {
                 sota_backoff_s = 0;

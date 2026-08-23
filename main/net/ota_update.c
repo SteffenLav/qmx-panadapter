@@ -42,6 +42,11 @@
 // and no yield avoids it: expect brief stutter, not a freeze.
 #define OTA_CHUNK_YIELD_MS 15
 
+// Internal, never PSRAM - see the comment at the task creation. Logged as a
+// high-water mark at the end of every run so the number is measured, not
+// assumed.
+#define OTA_TASK_STACK_BYTES 8192
+
 // Runtime overrides, for testing only (see ota_update_set_test_params). The
 // failure being chased only appears on a SLOW link, and the bench link is not
 // reliably slow - so the yield doubles as a way to manufacture a long download
@@ -350,6 +355,16 @@ static void ota_task(void *arg)
     ESP_LOGW(TAG, "update written and verified - waiting for the operator to restart");
 
 out:
+    // How much of the 8 KB internal stack did this actually need? The task
+    // cannot use a PSRAM stack (flash writes run with the cache off), so every
+    // byte here is contiguous INTERNAL RAM - and in FT8 mode with the radio
+    // streaming the largest internal block measured 6.9 KB, i.e. the update now
+    // refuses to start at all. Sizing this from measurement rather than from
+    // the round number it was born with is the first move.
+    ESP_LOGW(TAG, "ota task stack: %u bytes still free of %d",
+             (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)),
+             OTA_TASK_STACK_BYTES);
+
     // Belt and braces: every path out of the verify above already clears it,
     // but a future early-return between the two must not leave the spectrum
     // dead for the rest of the session.
@@ -416,7 +431,7 @@ bool ota_update_start(const char *url, char *err, size_t err_len)
     // for every other background task and WRONG for any task that touches
     // flash. 8 KB internal, held only for the duration of the update.
     BaseType_t rc = xTaskCreatePinnedToCore(
-        ota_task, "ota", 8192, NULL, tskIDLE_PRIORITY + 2, NULL, 1);
+        ota_task, "ota", OTA_TASK_STACK_BYTES, NULL, tskIDLE_PRIORITY + 2, NULL, 1);
     if (rc != pdPASS) {
         s_state = OTA_IDLE;
         if (err) snprintf(err, err_len, "Could not start the update task");
