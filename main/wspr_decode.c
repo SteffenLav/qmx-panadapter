@@ -113,89 +113,131 @@ int wspr_find_candidates(const int16_t *samples, long n, double f_lo_hz,
     return count;
 }
 
-/* Twiddle tables for the 4 tone frequencies at a given f0, indexed by the
- * sample's offset WITHIN ITS SYMBOL - precomputed once so the start-time search
- * never calls cos()/sin() in its inner loop, only array lookups +
- * multiply-add. Without this an exhaustive search over the ~9 s of start
- * slack doesn't finish in reasonable time (verified: minutes, not the
- * ~2 s/candidate this version takes).
+/* ---------------------------------------------------------------------------
+ * DECIMATING FRONT END
  *
- * These were indexed by ABSOLUTE sample position until the tables turned out
- * to need 46 MB for a 120 s capture; build_twiddles() explains why one symbol
- * period is exactly equivalent. */
-typedef struct {
-    float *cos_tab[4];
-    float *sin_tab[4];
-} twiddles_t;
+ * The correlator used to run at the full 12 kHz sample rate, reading 162
+ * symbols x 4 tones x 8192 samples - about 5.3 M values - for EVERY start-time
+ * offset tried, ~119 of them per candidate. On a host that is merely
+ * inefficient. On the P4 the capture only fits in PSRAM, so the loop is
+ * memory-bound on ~630 M PSRAM reads per candidate and it MEASURED 67 SECONDS
+ * per candidate against a 120 s cycle budget - 456 % for eight candidates, and
+ * still 120 % for two, so trimming the candidate list could not have saved it.
+ *
+ * WSPR occupies about 6 Hz. Carrying 12 kHz of bandwidth through the inner loop
+ * to look at 6 Hz of signal is the whole waste, and every real WSPR decoder
+ * (wsprd included) does the same thing about it: mix the candidate down to
+ * complex baseband once, decimate hard, and correlate on the small array.
+ *
+ * At WSPR_DECIM = 32 the rate becomes 375 Hz and a symbol is 256 samples
+ * instead of 8192, so extract_tone_powers() reads ~166 K values instead of
+ * 5.3 M. The mixing pass itself is one sweep of the capture per candidate,
+ * negligible against the 630 M reads it removes.
+ * ------------------------------------------------------------------------- */
 
-/* ONE SYMBOL PERIOD, not one capture.
- *
- * This used to allocate tables as long as the whole capture and index them by
- * absolute sample position. On a host that is merely wasteful; on the device it
- * is fatal - a 120 s capture is 1,440,000 samples, so 4 tones x {cos,sin} x 4 B
- * is **46 MB**, against 14.7 MB of free PSRAM. It is why the first on-device
- * self-test returned "0 candidates in 0 ms": the allocations simply failed.
- *
- * The shortening is EXACT, not an approximation. extract_tone_powers()
- * correlates one symbol at a time and keeps only the MAGNITUDE:
- *
- *     sum_over_symbol x[idx] * e^(-j*w*idx)
- *   = e^(-j*w*base) * sum_over_symbol x[base+j] * e^(-j*w*j)
- *
- * The leading factor is the per-symbol phase, it has unit magnitude, and it
- * therefore cancels identically in |.|^2. So indexing by the LOCAL offset j
- * gives bit-for-bit the same tone powers as indexing by idx did.
- *
- * It is also slightly MORE accurate: cos(w*i) for i up to 1.44 million loses
- * precision in argument reduction before the (float) cast, while j never
- * exceeds 8192.
- */
-static int build_twiddles(double f0, twiddles_t *tw)
+#define WSPR_DECIM        32
+#define WSPR_DEC_RATE_HZ  (WSPR_SAMPLE_RATE_HZ / WSPR_DECIM)     /* 375 Hz */
+#define WSPR_DEC_SPS      (WSPR_SYM_LEN_SAMPLES / WSPR_DECIM)    /* 256    */
+
+typedef struct {
+    float *i;      /* complex baseband, decimated */
+    float *q;
+    long   n;      /* samples in i/q */
+} baseband_t;
+
+static void free_baseband(baseband_t *bb)
 {
-    const long n = WSPR_SYM_LEN_SAMPLES;
-    // Zero FIRST: the caller declares `twiddles_t tw;` uninitialised and calls
-    // free_twiddles() on the failure path, so a partial build would otherwise
-    // hand free() whatever was on the stack. Never fired while the tables were
-    // allocated on a host with gigabytes; on the device, failing here is the
-    // EXPECTED path when memory is short, which is exactly when it would bite.
-    memset(tw, 0, sizeof(*tw));
-    for (int k = 0; k < 4; k++) {
-        tw->cos_tab[k] = (float *)malloc((size_t)n * sizeof(float));
-        tw->sin_tab[k] = (float *)malloc((size_t)n * sizeof(float));
-        if (!tw->cos_tab[k] || !tw->sin_tab[k]) return 0;
-        double w = 2.0 * M_PI * (f0 + k * TONE_SPACING) / WSPR_SAMPLE_RATE_HZ;
-        for (long i = 0; i < n; i++) {
-            tw->cos_tab[k][i] = (float)cos(w * i);
-            tw->sin_tab[k][i] = (float)sin(w * i);
+    free(bb->i); free(bb->q);
+    bb->i = bb->q = NULL; bb->n = 0;
+}
+
+/* Mix `samples` down by f0 and decimate by WSPR_DECIM with a boxcar average.
+ *
+ * The local oscillator is an incremental complex rotation rather than a
+ * cos()/sin() per sample: 1.44 M libm calls would cost more than the work being
+ * saved. It is renormalised periodically because repeated complex multiplies
+ * drift in magnitude - without that, the tail of a 120 s capture would be
+ * scaled differently from its head, which is exactly the kind of slow error
+ * that looks like fading and would be blamed on the ionosphere.
+ */
+static int mix_decimate(const int16_t *samples, long n, double f0, baseband_t *bb)
+{
+    memset(bb, 0, sizeof(*bb));
+    long out_n = n / WSPR_DECIM;
+    if (out_n <= 0) return 0;
+    bb->i = (float *)malloc((size_t)out_n * sizeof(float));
+    bb->q = (float *)malloc((size_t)out_n * sizeof(float));
+    if (!bb->i || !bb->q) { free_baseband(bb); return 0; }
+    bb->n = out_n;
+
+    const double w = 2.0 * M_PI * f0 / WSPR_SAMPLE_RATE_HZ;
+    const double cs = cos(-w), sn = sin(-w);   /* step: e^(-j*w) */
+    double ore = 1.0, oim = 0.0;
+
+    long o = 0;
+    double ai = 0.0, aq = 0.0;
+    int cnt = 0;
+    for (long idx = 0; idx < out_n * WSPR_DECIM; idx++) {
+        double x = samples[idx] * (1.0 / 32768.0);
+        ai += x * ore;
+        aq += x * oim;
+        /* advance the oscillator */
+        double nre = ore * cs - oim * sn;
+        double nim = ore * sn + oim * cs;
+        ore = nre; oim = nim;
+        if ((idx & 1023) == 1023) {           /* renormalise: |osc| -> 1 */
+            double m = sqrt(ore * ore + oim * oim);
+            if (m > 0) { ore /= m; oim /= m; }
+        }
+        if (++cnt == WSPR_DECIM) {
+            bb->i[o] = (float)(ai / WSPR_DECIM);
+            bb->q[o] = (float)(aq / WSPR_DECIM);
+            o++; ai = aq = 0.0; cnt = 0;
         }
     }
     return 1;
 }
 
-static void free_twiddles(twiddles_t *tw)
+/* Tone twiddles at the DECIMATED rate: one symbol long (256), four tones.
+ * 8 KB in total, against the 46 MB the full-rate absolute-index tables wanted. */
+typedef struct {
+    float cos_tab[4][WSPR_DEC_SPS];
+    float sin_tab[4][WSPR_DEC_SPS];
+} tone_tw_t;
+
+static void build_tone_tw(tone_tw_t *tw)
 {
-    for (int k = 0; k < 4; k++) { free(tw->cos_tab[k]); free(tw->sin_tab[k]); }
+    for (int k = 0; k < 4; k++) {
+        double w = 2.0 * M_PI * (k * TONE_SPACING) / WSPR_DEC_RATE_HZ;
+        for (int j = 0; j < WSPR_DEC_SPS; j++) {
+            tw->cos_tab[k][j] = (float)cos(w * j);
+            tw->sin_tab[k][j] = (float)sin(w * j);
+        }
+    }
 }
 
-static void extract_tone_powers(const int16_t *samples, long n,
-                                 const twiddles_t *tw, long start_sample,
-                                 double tone_power[WSPR_NSYM][4])
+/* Correlate each symbol against each of the 4 tones, on the decimated complex
+ * baseband. start_dec is the transmission start in DECIMATED samples.
+ *
+ * As before only the magnitude is kept, so the per-symbol phase of the local
+ * oscillator cancels and the tables can be indexed by the offset within the
+ * symbol. */
+static void extract_tone_powers(const baseband_t *bb, const tone_tw_t *tw,
+                                 long start_dec, double tone_power[WSPR_NSYM][4])
 {
     for (int sym = 0; sym < WSPR_NSYM; sym++) {
-        long base = start_sample + (long)sym * WSPR_SYM_LEN_SAMPLES;
-        long n0 = base < 0 ? 0 : base;
-        long n1 = base + WSPR_SYM_LEN_SAMPLES > n ? n : base + WSPR_SYM_LEN_SAMPLES;
+        long base = start_dec + (long)sym * WSPR_DEC_SPS;
+        long j0 = 0, j1 = WSPR_DEC_SPS;
+        if (base < 0)               j0 = -base;
+        if (base + j1 > bb->n)      j1 = bb->n - base;
         for (int k = 0; k < 4; k++) {
             const float *ct = tw->cos_tab[k], *st = tw->sin_tab[k];
             float re = 0, im = 0;
-            // Local offset into the symbol, so the tables are one symbol long
-            // instead of one capture long - see build_twiddles(). The dropped
-            // per-symbol phase has unit magnitude and cancels in the power below.
-            for (long idx = n0; idx < n1; idx++) {
-                long j = idx - base;          // 0 <= j < WSPR_SYM_LEN_SAMPLES
-                float x = samples[idx] / 32768.0f;
-                re += x * ct[j];
-                im -= x * st[j];
+            for (long j = j0; j < j1; j++) {
+                float xi = bb->i[base + j], xq = bb->q[base + j];
+                /* (xi + j*xq) * e^(-j*w*j) */
+                re += xi * ct[j] + xq * st[j];
+                im += xq * ct[j] - xi * st[j];
             }
             tone_power[sym][k] = (double)re * re + (double)im * im;
         }
@@ -422,49 +464,59 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
     memset(result, 0, sizeof(*result));
     result->freq_hz = f0_hz;
 
-    long slack = n - (long)WSPR_NSYM * WSPR_SYM_LEN_SAMPLES;
-    if (slack < 0) slack = 0;
+    /* Everything below works in DECIMATED samples. The start-time search is
+     * where the cost lives - ~119 correlations per candidate - so it is the
+     * part that had to move off the 12 kHz stream. */
+    baseband_t bb;
+    if (!mix_decimate(samples, n, f0_hz, &bb)) { free_baseband(&bb); return; }
 
-    twiddles_t tw;
-    if (!build_twiddles(f0_hz, &tw)) { free_twiddles(&tw); return; }
+    tone_tw_t tw;
+    build_tone_tw(&tw);
 
-    /* Coarse start-time search, then refine around the best coarse hit -
-     * exhaustive at symbol-period-fine resolution would be needlessly
-     * slow; this two-pass search finds the same optimum in testing. */
+    long slack_dec = bb.n - (long)WSPR_NSYM * WSPR_DEC_SPS;
+    if (slack_dec < 0) slack_dec = 0;
+
     /* ONE tone-power array, reused. There used to be three - two loop-scoped
      * and one at function scope - at 162*4*8 = 5184 bytes each. They are never
      * live at the same time, so the compiler was free to overlap them and did
      * not: on the device this function overflowed a 16 KB task stack by 1268
      * bytes. That matters here far more than it would on a host, because
      * xTaskCreate() takes its stack from INTERNAL RAM and this board runs with
-     * roughly 40 KB of it free (see CLAUDE.md's task-stack and .bss notes).
-     * Hoisting takes the decode path from ~18 KB of stack to ~8 KB. */
+     * roughly 40 KB of it free (see CLAUDE.md's task-stack and .bss notes). */
     double tp[WSPR_NSYM][4];
 
+    /* Coarse start-time search, then refine around the best coarse hit -
+     * exhaustive at the fine step would be needlessly slow; this two-pass
+     * search finds the same optimum in testing.
+     *
+     * The steps are the SAME real-time intervals as before, expressed in
+     * decimated samples: 8192/8 original = 32 decimated, 8192/32 = 8. So the
+     * search grid did not get coarser when the rate dropped. */
     long best_dt = 0;
     double best_score = -1e300;
-    long coarse_step = WSPR_SYM_LEN_SAMPLES / 8;
+    long coarse_step = WSPR_DEC_SPS / 8;          /* 32 dec = 1024 orig */
     if (coarse_step < 1) coarse_step = 1;
-    for (long dt = 0; dt <= slack; dt += coarse_step) {
-        extract_tone_powers(samples, n, &tw, dt, tp);
+    for (long dt = 0; dt <= slack_dec; dt += coarse_step) {
+        extract_tone_powers(&bb, &tw, dt, tp);
         double s = sync_score(tp);
         if (s > best_score) { best_score = s; best_dt = dt; }
     }
     long fine_lo = best_dt - coarse_step, fine_hi = best_dt + coarse_step;
     if (fine_lo < 0) fine_lo = 0;
-    if (fine_hi > slack) fine_hi = slack;
-    long fine_step = WSPR_SYM_LEN_SAMPLES / 32;
+    if (fine_hi > slack_dec) fine_hi = slack_dec;
+    long fine_step = WSPR_DEC_SPS / 32;           /* 8 dec = 256 orig */
     if (fine_step < 1) fine_step = 1;
     for (long dt = fine_lo; dt <= fine_hi; dt += fine_step) {
-        extract_tone_powers(samples, n, &tw, dt, tp);
+        extract_tone_powers(&bb, &tw, dt, tp);
         double s = sync_score(tp);
         if (s > best_score) { best_score = s; best_dt = dt; }
     }
 
-    extract_tone_powers(samples, n, &tw, best_dt, tp);
-    free_twiddles(&tw);
+    extract_tone_powers(&bb, &tw, best_dt, tp);
+    free_baseband(&bb);
 
-    result->best_dt_samples = best_dt;
+    /* reported in ORIGINAL samples, so the API is unchanged for callers */
+    result->best_dt_samples = best_dt * WSPR_DECIM;
     result->sync_score = best_score;
 
     if (try_hard_decision(tp, result)) return;

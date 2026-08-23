@@ -651,3 +651,48 @@ against the 630 M it removes.
 memory any more, and not on anything the UI can work around - Phase 3 can be
 built and looked at, but it will show an empty list until the decimating mixer
 exists. That is now the top item for this branch.
+
+### RESOLVED — the decimating front end, and RX now fits the cycle
+
+Implemented the fix named above: mix each candidate to complex baseband and
+decimate by 32 (12 kHz → 375 Hz) before correlating, so a symbol is 256 samples
+instead of 8192 and `extract_tone_powers()` reads ~166 K values per call
+instead of 5.3 M.
+
+Measured on the device, same self-test, same synthesized signal:
+
+| | before | after |
+|---|---|---|
+| per candidate | 67,166 ms | **6,787 ms** |
+| 8 candidates + search | 546 s | **64.1 s** |
+| of a 120 s cycle | 456 % | **53.4 %** |
+| host, full 8-candidate run | 6.90 s | **0.58 s** |
+
+**And nothing was traded for it**, which is the part that needed checking rather
+than assuming:
+
+- Real reference WAV: the same five callsigns, grids and powers, still exactly
+  3 rejects, and the decode **cycle counts are identical** (90/81/81/118/117).
+- Sensitivity sweep: **identical** - same −22.7 dB floor, same 81 cycles at
+  every level. Decimation cost nothing.
+- On-device: `DECODED 'W5BIT' 'EL09' 17 dBm dt=1.600s cycles=81` - same message,
+  the same recovered 1.6 s start offset, and the same 81 cycles the host gets.
+
+Two implementation notes worth keeping:
+
+- **The local oscillator is an incremental complex rotation, renormalised every
+  1024 samples.** A `cosf`/`sinf` per sample would cost more than the work being
+  saved, but an un-renormalised rotation drifts in magnitude - and the tail of a
+  120 s capture being scaled differently from its head is exactly the kind of
+  slow error that looks like fading and gets blamed on the ionosphere.
+- **The search grid did not get coarser.** The coarse and fine steps are the
+  same real-time intervals as before, expressed in decimated samples
+  (8192/8 → 32, 8192/32 → 8).
+
+**Stack**: the self-test task finished with 5196 bytes free of 32768, i.e. ~27.5
+KB used - so the 32 KB PSRAM stack was not generous, it was necessary, and the
+original 16 KB could never have worked.
+
+**Remaining cost is now the candidate search**, 9.3 s of the 64 s, doing 21
+FFTs of 131072 over PSRAM. Comfortable inside the budget and not worth
+optimising until something else needs the room.
