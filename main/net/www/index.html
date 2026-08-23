@@ -3294,24 +3294,42 @@ const CQ_PARITY = [
   { v:  0, label: "TXCQ EVEN", bg: "#2b6ea8" },   /* steel blue, as on the Tab5 */
   { v:  1, label: "TXCQ ODD",  bg: "#E09040" },   /* warm orange, as on the Tab5 */
 ];
-function renderCqParity(v) {
+/* The device applies a parity change on its 1 Hz LVGL timer, so a status poll
+   landing in that gap still reports the OLD value - and rendering it made the
+   button visibly flip back and forth before settling (operator, on the first
+   try). While a change is in flight we therefore ignore the polled value.
+   cqParityUntil is a DEADLINE, not a lock: if the device never confirms, we
+   stop guessing and show whatever it actually says, so this can never leave the
+   button lying about the radio. */
+let cqParityWant = null, cqParityUntil = 0, cqParityCur = -1;
+
+function renderCqParity(v, fromDevice) {
   const btn = document.getElementById("cq-parity");
   if (!btn) return;
+  if (fromDevice && cqParityWant !== null) {
+    if (v === cqParityWant) { cqParityWant = null; }        /* confirmed - resume following */
+    else if (Date.now() < cqParityUntil) { return; }        /* still in flight - ignore the stale value */
+    else { cqParityWant = null; }                           /* gave up waiting - trust the device */
+  }
   const e = CQ_PARITY.find(x => x.v === v) || CQ_PARITY[0];
+  cqParityCur = e.v;
   btn.textContent = e.label;
   btn.style.background = e.bg;
 }
 (function wireCqParity() {
   const btn = document.getElementById("cq-parity");
   if (!btn) return;
-  btn.addEventListener("click", async () => {
-    /* Advance from what the DEVICE last told us, not from a local counter -
-       otherwise the Tab5's own button and this one drift apart the moment
-       either is used. */
-    const cur = CQ_PARITY.findIndex(x => x.label === btn.textContent);
-    const next = CQ_PARITY[(cur < 0 ? 0 : (cur + 1) % CQ_PARITY.length)];
-    renderCqParity(next.v);                       /* immediate feedback */
-    await sendCmd({ action: "cq_parity", value: next.v });
+  btn.addEventListener("click", () => {
+    /* Advance from the last value the DEVICE reported (cqParityCur), so the
+       Tab5's own button and this one cannot drift apart. Reading it back out of
+       btn.textContent worked but made the click depend on the rendered label -
+       one more thing between the tap and the paint. */
+    const cur  = CQ_PARITY.findIndex(x => x.v === cqParityCur);
+    const next = CQ_PARITY[(cur < 0 ? 1 : (cur + 1) % CQ_PARITY.length)];
+    renderCqParity(next.v);              /* paint FIRST - before any await */
+    cqParityWant  = next.v;
+    cqParityUntil = Date.now() + 4000;   /* 1 Hz apply + poll interval, with room to spare */
+    sendCmd({ action: "cq_parity", value: next.v });   /* deliberately not awaited */
   });
 })();
 
@@ -3551,7 +3569,7 @@ async function tick() {
       /* Outcome of the last browser-initiated reply, straight from the device -
          "Armed: ...", "Busy: working X", "no longer in the decode list". */
       document.getElementById("ft8-webr").textContent = s.ft8.web_r || "";
-      if (typeof s.ft8.cq_parity === "number") renderCqParity(s.ft8.cq_parity);
+      if (typeof s.ft8.cq_parity === "number") renderCqParity(s.ft8.cq_parity, true);
       /* Show the override row only while an exchange is live. st covers the
          armed/active/waiting states; idle and done get nothing to press. */
       {

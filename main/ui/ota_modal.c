@@ -54,22 +54,13 @@ static void close_modal(void)
 static void later_btn_cb(lv_event_t *e)
 {
     (void)e;
-    // Two things "Later" means, and one it does not.
-    //
-    // It GIVES THE BOTTOM BAR BACK. The full-width "ready - tap to restart"
-    // takeover exists to make the decision unmissable, and Later IS the
-    // decision - keeping the bar after it meant an operator who declined an
-    // update never saw their battery, clock or WiFi again until they gave in
-    // and restarted (found on hardware by the operator, 2026-08-23). The small
-    // "vX.Y.Z ready - tap" line stays in the version slot and tapping the bar
-    // reopens this window, so nothing is lost but the shouting.
-    //
-    // It does NOT cancel a download in flight. This is a window, not a switch;
-    // closing it would have to either abort the transfer (throwing away
+    // "Later" does NOT cancel a download in flight. This is a window, not a
+    // switch; closing it would have to either abort the transfer (throwing away
     // bandwidth the operator already spent) or silently keep going, and only
-    // one of those is honest. The bar keeps showing progress either way.
+    // one of those is honest. The bottom-bar line keeps saying where things
+    // stand either way, and tapping it reopens this window.
     ESP_LOGI(TAG, "closed by the operator");
-    status_ota_banner_dismiss();
+    status_ota_ready_ack();   // seen it - the bar can stop breathing
     close_modal();
 }
 

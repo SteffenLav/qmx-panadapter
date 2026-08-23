@@ -1714,15 +1714,6 @@ static bool          s_bot_wifi_fan_valid = false;
 static lv_obj_t *s_bot_wifi_ip = NULL;
 static lv_coord_t s_bot_wifi_min_x = 0;  /* leftmost x the WiFi zone may use (clock's right edge) */
 static lv_obj_t *s_bot_version = NULL; /* firmware version, between battery and clock */
-/* OTA takeover: covers the whole bottom bar while an update is in flight.
- * s_ota_banner_active also stands down every competing gesture near the bar -
- * see the band-plan overshoot guard and the bottom-edge strip's PRESSING
- * branch. Read before the object exists (boot), hence a separate bool rather
- * than testing the HIDDEN flag. */
-static lv_obj_t *s_ota_banner      = NULL;
-static lv_obj_t *s_ota_banner_lbl  = NULL;
-static lv_obj_t *s_ota_banner_fill = NULL;
-static bool      s_ota_banner_active = false;
 static lv_obj_t *s_bot_diag_dot = NULL; /* static green dot, shown while a microSD card is mounted */
 static lv_obj_t *s_bot_diag_label = NULL; /* "SD" text next to the dot, shown/hidden together with it */
 // Desired microSD-dot state, set by ui_set_sd_active() (called from the
@@ -3703,54 +3694,6 @@ static void build_bottom_bar(lv_obj_t *parent)
     lv_obj_set_style_text_font(s_bot_version, &lv_font_montserrat_24, 0);
     lv_obj_align(s_bot_version, LV_ALIGN_CENTER, -250, 0);
 
-    // ---- OTA banner: the WHOLE bottom bar, taken over by one sentence ----
-    // Don N2VGU's point, generalised: an update is the one moment the operator
-    // is waiting to be TOLD something, and we were saying it in the smallest
-    // text on the screen - a ~264 px slot between the SD text and the clock.
-    // That slot is also WHY the wording was wrong: every state had to squeeze
-    // into ~20 characters, which is how "tap updates" came to describe an
-    // action that is actually a HOLD, and a RESTART.
-    //
-    // Taking the bar gives the sentence the full 1280 px, so it can just say
-    // what to do. Three rules it has to keep:
-    //   - NOT clickable. The bottom-edge swipe strip is a SCREEN-level overlay
-    //     that owns every press on this bar, including the hold-to-restart
-    //     gesture. A clickable panel here would be hit-tested among the bar's
-    //     own children and could swallow it - the reverse-creation-order trap
-    //     documented throughout this file.
-    //   - lv_obj_move_foreground() only reorders within the PARENT, so this
-    //     covers the bar's own widgets and never competes with that strip.
-    //   - No animation. At ~13 fps a fade is three frames, which reads as a
-    //     glitch rather than a transition, so the bar swaps instantly.
-    //
-    // Dark background with bright state-coloured text rather than a solid
-    // colour wash: this is a dark-themed app used in a shack at night, and a
-    // full-width flare of amber is worse than useless at 2am.
-    s_ota_banner = lv_obj_create(bar);
-    lv_obj_remove_style_all(s_ota_banner);
-    lv_obj_set_size(s_ota_banner, DISPLAY_H_RES, BOTTOM_BAR_H);
-    lv_obj_set_pos(s_ota_banner, 0, 0);
-    lv_obj_set_style_bg_color(s_ota_banner, lv_color_hex(0x0C1016), 0);
-    lv_obj_set_style_bg_opa(s_ota_banner, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(s_ota_banner, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(s_ota_banner, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(s_ota_banner, LV_OBJ_FLAG_HIDDEN);
-
-    // Progress as a 3 px underline the full width of the screen. A download is
-    // the one thing here with a real percentage, and a bar reads at a glance
-    // from across the room where digits do not.
-    s_ota_banner_fill = lv_obj_create(s_ota_banner);
-    lv_obj_remove_style_all(s_ota_banner_fill);
-    lv_obj_set_size(s_ota_banner_fill, 0, 3);
-    lv_obj_set_pos(s_ota_banner_fill, 0, BOTTOM_BAR_H - 3);
-    lv_obj_set_style_bg_opa(s_ota_banner_fill, LV_OPA_COVER, 0);
-    lv_obj_clear_flag(s_ota_banner_fill, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_clear_flag(s_ota_banner_fill, LV_OBJ_FLAG_CLICKABLE);
-
-    s_ota_banner_lbl = lv_label_create(s_ota_banner);
-    lv_label_set_text(s_ota_banner_lbl, "");
-    lv_obj_set_style_text_font(s_ota_banner_lbl, &lv_font_montserrat_24, 0);
-    lv_obj_center(s_ota_banner_lbl);
 
     // WiFi status, left to right: strength fan, SSID, IP address.
     //
@@ -5565,12 +5508,14 @@ static void sync_nav_affordances(void)
     lv_obj_t *nav[] = { s_left_edge_strip, s_bottom_edge_strip, s_right_edge_strip, s_burger_btn };
     for (size_t i = 0; i < sizeof(nav) / sizeof(nav[0]); i++) {
         if (!nav[i]) continue;
-        // ⚠ An OTA stands the navigation down too, but it CANNOT reuse `owned`:
-        // hold-to-restart is detected inside s_bottom_edge_strip's own callback,
-        // so hiding that one would remove the only gesture the screen is asking
-        // for. Its competing branches are disabled in the handler instead.
-        const bool hide = owned ||
-                          (s_ota_banner_active && nav[i] != s_bottom_edge_strip);
+        // ⛔ The OTA banner must NEVER hide these. It used to, back when the
+        // banner covered the bar for the DURATION OF A DOWNLOAD - a few
+        // seconds, nothing competing. The banner now appears only in the READY
+        // state, which persists until the operator decides, so that same rule
+        // locked them out of the edge swipes and the drawer INDEFINITELY:
+        // reported from the bench as "no way to swipe away from FT8", with a
+        // staged update sitting on the bar. A message is not a modal.
+        const bool hide = owned;
         if (hide) lv_obj_add_flag(nav[i], LV_OBJ_FLAG_HIDDEN);
         else      lv_obj_clear_flag(nav[i], LV_OBJ_FLAG_HIDDEN);
     }
@@ -6629,45 +6574,6 @@ static void update_line_blink_stop(void)
     display_unlock();
 }
 
-// Show/refresh the bottom-bar OTA takeover. Idempotent - status.c calls it
-// every second with fresh text and percentage, and re-foregrounding an object
-// that is already foremost costs nothing.
-void ui_ota_banner(const char *text, uint32_t colour, int pct)
-{
-    if (!s_ota_banner || !s_ota_banner_lbl || !s_ota_banner_fill) return;
-    if (!display_lock(20)) return;                 // a failed lock means skip, as everywhere here
-    if (pct < 0)   pct = 0;
-    if (pct > 100) pct = 100;
-    lv_label_set_text(s_ota_banner_lbl, text ? text : "");
-    lv_obj_set_style_text_color(s_ota_banner_lbl, lv_color_hex(colour), 0);
-    lv_obj_set_style_bg_color(s_ota_banner_fill, lv_color_hex(colour), 0);
-    lv_obj_set_width(s_ota_banner_fill, (DISPLAY_H_RES * pct) / 100);
-    lv_obj_center(s_ota_banner_lbl);
-    lv_obj_clear_flag(s_ota_banner, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_ota_banner);          // within `bar` only - see the build comment
-    display_unlock();
-    if (!s_ota_banner_active) {
-        s_ota_banner_active = true;
-        sync_nav_affordances();     // stand the side strips and the burger down
-    }
-}
-
-void ui_ota_banner_hide(void)
-{
-    if (!s_ota_banner) return;
-    if (display_lock(20)) {
-        lv_obj_add_flag(s_ota_banner, LV_OBJ_FLAG_HIDDEN);
-        display_unlock();
-    }
-    // Clear the flag even if the lock timed out: leaving it set would strand
-    // every navigation gesture off for the rest of the session, which is far
-    // worse than a banner that stays drawn until the next 1 Hz repaint.
-    if (s_ota_banner_active) {
-        s_ota_banner_active = false;
-        sync_nav_affordances();
-    }
-}
-
 bool ui_update_line_tappable(void) { return s_update_line_tappable; }
 
 void ui_set_update_line_tappable(bool on) { s_update_line_tappable = on; }
@@ -6728,22 +6634,60 @@ void ui_set_update_line(const char *text, uint32_t colour)
 
 void ui_set_update_line_failed(const char *text)
 {
-    if (!s_bot_version) return;
-    // Called once per second for as long as the failure is shown. Only the
-    // FIRST call needs to touch text/font/colour or start the animation -
-    // repainting identical text every tick would just reset the pulse's
-    // phase each time (a visible judder, not a smooth breathe). Once
-    // s_update_blink_active is true, later calls this second are no-ops.
-    if (s_update_blink_active) return;
-    const char *t = text ? text : "";
-    if (display_lock(20)) {
-        lv_obj_set_style_text_font(s_bot_version, &lv_font_montserrat_24, 0);
-        lv_label_set_text(s_bot_version, t);
-        lv_obj_set_style_text_color(s_bot_version, lv_color_hex(0xFF6060), 0);
-        display_unlock();
-    }
-    update_line_blink_start();
+    ui_set_update_line_pulsing(text, 0xFF6060);
 }
+
+// Same breathe, any colour. Red for a failure; green for "downloaded, waiting
+// for you" - the operator's call, and the right one: that state persists until
+// someone acts on it, so it has to catch the eye without shouting, and the bar
+// is only ~264 px of dim text otherwise.
+void ui_set_update_line_pulsing(const char *text, uint32_t colour)
+{
+    if (!s_bot_version) return;
+    const char *t = text ? text : "";
+
+    // ⚠ ONE lock for the text AND the animation, and the pulse flag is set only
+    // if that lock was actually taken.
+    //
+    // This used to paint under one display_lock() and then call
+    // update_line_blink_start(), which took a SECOND one - so if the paint's
+    // lock timed out while the animation's succeeded, the OLD text was left
+    // breathing forever and every later tick early-returned on
+    // s_update_blink_active. Seen on the bench: the amber "v1.9.2 -> v1.9.2
+    // 100%" download line kept pulsing after the state had gone to DONE,
+    // because the first DONE tick landed while taskLVGL was still catching up
+    // from the flash verify - precisely when a 20 ms lock is least likely to be
+    // granted.
+    //
+    // The early-out is now on CONTENT, not on "is something already pulsing":
+    // a changed line must always repaint, and an unchanged one must not restart
+    // the animation (that resets its phase into a judder).
+    static char     last_txt[96] = {0};
+    static uint32_t last_col     = 0;
+    if (s_update_blink_active && last_col == colour && strcmp(last_txt, t) == 0) return;
+
+    if (!display_lock(20)) return;          // nothing done - retried next tick
+    lv_obj_set_style_text_font(s_bot_version, &lv_font_montserrat_24, 0);
+    lv_label_set_text(s_bot_version, t);
+    lv_obj_set_style_text_color(s_bot_version, lv_color_hex(colour), 0);
+    if (!s_update_blink_active) {
+        s_update_blink_active = true;
+        lv_anim_t a;
+        lv_anim_init(&a);
+        lv_anim_set_var(&a, s_bot_version);
+        lv_anim_set_exec_cb(&a, update_line_blink_anim_cb);
+        lv_anim_set_values(&a, LV_OPA_30, LV_OPA_COVER);
+        lv_anim_set_time(&a, 350);
+        lv_anim_set_playback_time(&a, 350);
+        lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+        lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+        lv_anim_start(&a);
+    }
+    display_unlock();
+    snprintf(last_txt, sizeof(last_txt), "%s", t);
+    last_col = colour;
+}
+
 
 void ui_set_bottom_clock(int h, int m, int s, bool valid, const char *suffix)
 {
@@ -6878,12 +6822,6 @@ static void touch_event_cb(lv_event_t *e)
         // every axis: only the bottom BP_OVERSHOOT_PX, only across that label's
         // own x-range, and only while an update is actually pending - so
         // tap-to-tune is untouched the rest of the time, which is nearly always.
-        // While the bar is TAKEN OVER by an update, the strip is inert across
-        // its whole width. Nothing above the bar should compete with a running
-        // download or with hold-to-restart, and unlike the narrow guard below
-        // this state is transient and deliberate, so the cost is momentary.
-        if (s_ota_banner_active) return;
-
         if (s_update_line_tappable && s_bandplan_obj) {
             lv_area_t ba;
             lv_obj_get_coords(s_bandplan_obj, &ba);
@@ -7408,12 +7346,7 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
         if (s_update_press_ms && (adx > UPDATE_HOLD_SLOP || ady > UPDATE_HOLD_SLOP)) {
             s_update_press_ms = 0;
         }
-        // While the bar is taken over by an update, this strip keeps working -
-        // it is where hold-to-restart is detected - but ONLY for that. Neither
-        // gesture it normally also carries (swipe up for Memory Channels,
-        // sideways drag to retune) may fire, so nothing can compete with the
-        // one action the screen is asking for.
-        if (be_decided == 0 && !s_ota_banner_active) {
+        if (be_decided == 0) {
             if (dy <= -BP_DRAG_THRESHOLD_PX && ady >= adx) {
                 be_decided = 1;                 // mostly-up -> swipe
             } else if (be_bp_ok && adx >= BP_DRAG_THRESHOLD_PX && adx > ady) {

@@ -48,11 +48,27 @@ static uint64_t s_sd_free_b = 0, s_sd_total_b = 0;
 // branch in status_task().
 #define OTA_FAILED_SHOW_S 3
 
-// Set by "Later" on the update window; cleared as soon as the OTA state is
-// anything but DONE, so a NEW download always gets the full-width treatment
-// again rather than inheriting an old dismissal.
-static volatile bool s_ota_banner_dismissed = false;
-void status_ota_banner_dismiss(void) { s_ota_banner_dismissed = true; }
+// The arrow between the two versions, and all three obvious choices are wrong:
+//   LV_SYMBOL_RIGHT  - a chevron in LVGL's symbol font. Screenshot-checked: it
+//                      reads as ">" and is visually heavy next to 24 px text.
+//                      Operator: "too bulky and makes it not readable".
+//   U+2192 "->"      - NOT in this font. Tried, and rendered as tofu boxes on
+//                      the bar (screenshot). montserrat here is ASCII plus
+//                      LVGL's symbol set, nothing else.
+//   a bitmap/second  - the line is ONE label; mixing a glyph in needs either a
+//   label             font rebuild or splitting the label, both of which cost
+//                      more than the arrow is worth right now.
+// So: plain ASCII. Small, light, unmistakable, and it cannot turn into a box on
+// someone else's build. A real U+2192 needs montserrat_24 regenerating with
+// lv_font_conv - worth doing, not worth blocking a release on.
+#define UI_ARROW "->"
+
+// Set when the operator presses "Later" on the update window: the ready line
+// keeps its words but stops breathing. Cleared whenever the OTA state is not
+// DONE, so a NEW update gets the eye again rather than inheriting the last
+// dismissal.
+static volatile bool s_ota_ready_ack = false;
+void status_ota_ready_ack(void) { s_ota_ready_ack = true; }
 
 static bool     s_sd_ok = false;
 static int      s_sd_poll_countdown = 0;  // 0 = poll on the next tick
@@ -219,6 +235,15 @@ static void status_task(void *arg)
             update_check_get_latest(latest, sizeof(latest));
             short_ver(over,   over_s,   sizeof(over_s));
             short_ver(latest, latest_s, sizeof(latest_s));
+            // ⚠ And the RUNNING version too. short_ver() exists precisely to
+            // keep this slot to "vX.Y.Z" (its own comment says so), but it was
+            // only ever applied to the target - so on a dev build the line read
+            // "v1.9.2-9-g7580eb4-dirty -> v1.9.2 42%", the auto-shrink dropped
+            // to a tiny font, and it still ran into the SD text and the clock.
+            // Operator, from the bench. The full string is still in the boot
+            // log, /api/status and the diagnostic download, where it matters.
+            static char running_s[24];
+            short_ver(running, running_s, sizeof(running_s));
 
 
             // Wording and colours are the operator's, chosen to fit at the
@@ -228,12 +253,20 @@ static void status_task(void *arg)
             // called ui_set_update_line_failed() itself - the plain
             // ui_set_update_line() call at the end of this block would
             // otherwise immediately stop the pulse it just started.
+            if (ost != OTA_DONE) s_ota_ready_ack = false;
             bool skip_plain_update_line = false;
             if (ost == OTA_RUNNING) {
                 ota_failed_ticks = 0;
-                if (running[0] && over_s[0])
-                    snprintf(vline, sizeof(vline), "%s " LV_SYMBOL_RIGHT " %s  %d%%",
-                             running, over_s, opct);
+                // over_s is empty until esp_https_ota has read the incoming
+                // image descriptor - about 2 s in on this link - and the line
+                // used to read a bare "updating 0%" until then, which the
+                // operator saw as the bar changing its mind. latest_s is the
+                // same version and update_check already has it, so fall back to
+                // that and the line reads the same from the first tick.
+                const char *tgt = over_s[0] ? over_s : latest_s;
+                if (running_s[0] && tgt[0])
+                    snprintf(vline, sizeof(vline), "%s " UI_ARROW " %s  %d%%",
+                             running_s, tgt, opct);
                 else
                     snprintf(vline, sizeof(vline), "updating  %d%%", opct);
                 vcol = 0xFFA040;                       // amber - working
@@ -244,9 +277,25 @@ static void status_task(void *arg)
                 // and what remains is a RESTART - he suggested exactly this
                 // ("tap to reboot" / "tap to finish"). #237: and it is a hold,
                 // not a tap. The banner below has the room to say both.
-                if (over_s[0]) snprintf(vline, sizeof(vline), "%s ready - tap", over_s);
-                else           snprintf(vline, sizeof(vline), "ready - tap");
-                vcol = 0x8FE0A0;                       // light green - ready
+                if (running_s[0] && over_s[0])
+                    snprintf(vline, sizeof(vline), "%s " UI_ARROW " %s ?", running_s, over_s);
+                else if (over_s[0])
+                    snprintf(vline, sizeof(vline), "%s ready ?", over_s);
+                else
+                    snprintf(vline, sizeof(vline), "ready ?");
+                // BREATHING, not static. This state waits for a person and
+                // will sit there for hours otherwise; a dim static line in a
+                // 264 px slot is exactly what nobody notices. Same animation as
+                // the failure pulse, in green.
+                // Breathing UNTIL ACKNOWLEDGED. "Later" means "I have seen it",
+                // so after that it says the same thing quietly - still there,
+                // still tappable, no longer asking for the eye. Operator's call
+                // and the right one: a pulse that never stops stops being a
+                // signal.
+                ui_set_update_line_tappable(true);
+                if (s_ota_ready_ack) ui_set_update_line(vline, 0x8FE0A0);
+                else                 ui_set_update_line_pulsing(vline, 0x8FE0A0);
+                skip_plain_update_line = true;
             } else if (ost == OTA_FAILED && ota_failed_ticks < OTA_FAILED_SHOW_S) {
                 // A correctly-registered long-press followed by an instantly
                 // failed download (v1.9.0/v1.9.1's own OTA bug) was
@@ -277,8 +326,8 @@ static void status_task(void *arg)
                 // #237 ended up fixed by construction rather than by wording:
                 // the press now only OPENS ota_modal, so it is safe as a plain
                 // tap and "tap?" is true again.
-                snprintf(vline, sizeof(vline), "%s " LV_SYMBOL_RIGHT " %s  tap?",
-                              running, latest_s);
+                snprintf(vline, sizeof(vline), "%s " UI_ARROW " %s  tap?",
+                              running_s, latest_s);
                 vcol = 0x40D8E0;                       // cyan - offered, nothing fetched
             } else {
                 ota_failed_ticks = 0;
@@ -309,25 +358,6 @@ static void status_task(void *arg)
                 ui_set_update_line(vline, vcol);
             }
 
-            // ---- the bar's ONE unmissable state ----
-            // #239. The download is now QUIET and unattended, so taking the
-            // whole bar over while it runs would contradict the point of it -
-            // nobody asked for a download, so nobody should be told about one
-            // at full width. It stays a small line in the version slot.
-            //
-            // The bar IS taken over for exactly one state: the bytes are down
-            // and the operator has to decide. That is the step Don N2VGU found
-            // confusing, it is the only step that needs a person, and it
-            // persists until they act on it.
-            if (ost != OTA_DONE) s_ota_banner_dismissed = false;
-            if (ost == OTA_DONE && !s_ota_banner_dismissed) {
-                char b[96];
-                if (over_s[0]) snprintf(b, sizeof(b), "%s is ready  -  tap to restart", over_s);
-                else           snprintf(b, sizeof(b), "Update ready  -  tap to restart");
-                ui_ota_banner(b, 0x8FE0A0, 100);
-            } else {
-                ui_ota_banner_hide();
-            }
         }
 
         // --- LEFT: battery icon (colored by level) + percentage text ---
