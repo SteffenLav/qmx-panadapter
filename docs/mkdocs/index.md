@@ -70,10 +70,12 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.8.9 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.9.3 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, and the radio's own menus on the screen.** The
 panadapter, FT8/FT4 receive and transmit, ADIF logging and all four logbook uploads —
 QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable and in daily use.
+
+**New in v1.9.3 — updating is one decision instead of a procedure, and the crash at 100% is fixed.** The Tab5 now **fetches a new release quietly in the background** and asks you once, at the end, in a **window in the middle of the screen** with **Restart now** / **Later** — no more long-press, no more twenty-character line trying to explain itself. The bottom bar breathes gently while an update waits and goes quiet once you have said "later". Switch the background download off under **Settings → Network** if you are on a metered connection. **The spectrum, waterfall and FT8 decoding now keep running while it downloads.** The **crash right at 100%** turned out to be memory, not timing: 14 KB that had no business being in the small fast memory the update needs — the manual's contents list and a spur map for a feature that defaults off — was moved out, and the exact failing case then completed cleanly twice where it had failed four times. An **audio bug found on the way affects every upload**, not just updates: during any transfer the audio buffer was drained at less than half the rate the radio fills it. The **band-plan strip is far easier to hit**, its touch area reaching 50 px up into the waterfall. Plus **TXCQ ANY/EVEN/ODD on the web FT8 page** *(Randy N4OPI)* and an **SSB tune snap of 500 Hz** *(Dave KX3DX)*. Full detail in [docs/version-history.md](docs/version-history.md).
 
 **New in v1.9.2 — a field-report release: five things fixed or added, three of them from Randy N4OPI.** A **stuck exchange that never logged** is fixed *(Roy KI0ER, working K7FD)*: when a caller's own first message to us was already a signal report, the QSO machine started itself in the wrong state and kept re-sending the same reply for over ten minutes while the far station sent RRR. **The SWR-protection fault is visible from the web page now** — before this, tripping it stopped transmission with no explanation on screen anywhere but the Tab5, and no way to clear it remotely *(Randy N4OPI)*. **"Who is hearing me" gets 15 min/30 min/6 h/24 h time windows and sortable columns**, and the FT8/FT4 decode list in the browser gets the same sortable columns with a "CQ callers on top" link back to the device's own ordering. **Working an older pileup caller from the web page now actually works** instead of refusing outright — it falls back to the same report-first reply the Tab5 has always used *(Randy N4OPI)*, and pileup entries now show their age on both screens. The Tab5's decode-list HRD column is now **AGE in seconds**, and how long a row survives before it drops off the list is **operator-tunable** (Filter modal, 30-90 s). **Simulation mode no longer leaves real stations flickering on screen** — entering it now clears the list immediately, and real decodes are suppressed for as long as it's on. Full detail in [docs/version-history.md](docs/version-history.md).
 
@@ -120,7 +122,7 @@ Every release, newest first, is on the [Releases](releases.md) page.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.9.2.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.9.3.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

@@ -135,42 +135,56 @@ If you set up WiFi:
 ## Step 10: Keeping It Up To Date
 
 From v1.8.9 the Tab5 can update itself over WiFi. You do not need the cable
-again unless something goes badly wrong.
+again unless something goes badly wrong. **From v1.9.3 it also fetches the
+update quietly in the background**, so by the time it says anything, the work
+is already done and only one decision is left.
 
-When a newer release exists, the version at the bottom of the screen changes to
-show it, in cyan:
-
-```
-v1.8.9 > v1.9.0  tap?
-```
-
-Touch it and it tells you to hold. Hold it for about a second and it says
-**release to confirm**; let go and the download starts. Lift your finger early
-and nothing happens.
-
-While it downloads the line is amber and counts up. When it is ready it turns
-light green:
+When a newer release has been downloaded and is waiting for you, the version at
+the bottom of the screen changes to show it, in light green, and breathes
+gently so you notice it:
 
 ```
-v1.9.0 - tap updates
+v1.9.2 -> v1.9.3 ?
 ```
 
-Hold it again to restart into the new firmware. Nothing restarts on its own —
-you choose when, so it can never interrupt a contact.
+Tap the bar — anywhere along it — and a window opens in the middle of the
+screen with the version, what will happen, and two buttons:
 
-The same thing appears at the bottom of the web page, in the same words and
-colours, and works the same way.
+- **Restart now** — the screen goes dark and the Tab5 comes back on the new
+  firmware, about 20 seconds.
+- **Later** — the window closes and the bar stops breathing. The line stays,
+  quietly, and tapping it opens the window again whenever you are ready.
 
-**Nothing is downloaded unless you ask for it.** The first thing you are ever
-offered is a download, not one already in progress.
+Nothing restarts on its own. You choose when, so it can never interrupt a
+contact.
+
+While a download is running the line is amber and counts up, and the spectrum,
+waterfall and FT8 decoding all keep working — expect a slight stutter and one
+brief pause right at the end while the new firmware is verified:
+
+```
+v1.9.2 -> v1.9.3  42%
+```
+
+The same window is available from the web page, in the same words.
+
+### If you would rather it did not download by itself
+
+The background download is **on by default** and can be switched off in
+**Settings → Network → Download updates automatically**. Turn it off if you
+are on a metered connection — a phone hotspot in a field, for instance — since
+each update is about 3.3 MB. With it off, the bar offers the update and the
+window's button reads **Download now** instead.
+
+Downloading never applies anything on its own. Only the restart does that, and
+only you can ask for it.
 
 ### Checking straight away
 
 The Tab5 looks for a new release **every 30 minutes**, so an announcement can
 take that long to show up. If you have just read that a release is out and want
-to see it now, **hold the version even while it says you are up to date**. It
-shows `checking...` and asks immediately. Tapping the version in the web page
-does the same.
+to see it now, **tap the version even while it says you are up to date**. The
+window offers **Check now**. Tapping the version in the web page does the same.
 
 That is also the quickest way to satisfy yourself the whole mechanism works
 before you ever need it.

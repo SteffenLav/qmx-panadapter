@@ -59,7 +59,7 @@ The snap step follows the **mode**, not the zoom level — a CW signal needs to 
 | Mode | Snap step |
 |------|-----------|
 | CW / CW-R | 10 Hz |
-| USB / LSB | 250 Hz |
+| USB / LSB | 500 Hz |
 | DiGi / FT8 / FT4 / RTTY | 500 Hz |
 
 !!! note "In CW the display allows for your CW offset — including when you change it"

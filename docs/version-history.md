@@ -2467,3 +2467,114 @@ candidate. Verified on hardware: with sim mode on and a real QMX attached and
 streaming, all 7 phantom stations reached the decode list over multiple
 cycles, each one paired with its own `ft8_sim: injected` log line, and zero
 unlabeled (real) decodes appeared.
+
+---
+
+### Shipped in v1.9.3 — 2026-08-23
+
+**The update flow stopped being a thing you had to learn, and the reason it
+kept failing turned out to be memory, not timing.**
+
+#### Updating, rewritten
+
+Don N2VGU pointed out that "tap to update" described the wrong action at the
+wrong moment: by the time it appeared the download was already on the device
+and what remained was a restart. He was right about the cause rather than the
+wording — the whole conversation lived in a ~264 px slot between the SD text
+and the clock, so every state had to fit about twenty characters, and there was
+no room to say what was actually happening.
+
+- **The update now downloads quietly in the background** when one is available,
+  so the only thing left for the operator is one decision. On by default, with
+  **Settings → Network → Download updates automatically** to switch it off —
+  each update is 3.3 MB, which is not free on the phone hotspot a POTA operator
+  is using in a field. Downloading never applies anything; only a restart does,
+  and only the operator can ask for that.
+- **A window in the middle of the screen** (`ui/ota_modal.c`) carries the
+  conversation in readable type with named buttons: *Restart now* / *Later*, or
+  *Download now* / *Try again* / *Check now* depending on the state. It re-reads
+  the live state every 500 ms, so a download that completes while it is open
+  turns "Downloading" into "Restart now" by itself.
+- **The bottom bar announces and no longer negotiates.** The line breathes
+  gently while an update waits for a decision, and goes quiet once *Later* has
+  been pressed — a pulse that never stops stops being a signal.
+- **The 700 ms long-press is gone.** It existed only so that a stray brush from
+  the 22 px band-plan strip directly above could not start a download or reboot
+  a radio. Now that a press only opens a *dismissible window*, a stray brush
+  costs nothing, so a plain tap is safe and the label saying "tap" is finally
+  true. #237 dissolved rather than being reworded.
+- **The band plan is much easier to hit.** It is 22 px with the bottom bar hard
+  against it below and the waterfall hard above, all three doing different
+  things with a tap. An invisible 50 px catcher above the strip gives it 72 px
+  of touch while it still draws as 22; tap-to-tune gives up the same 50 px,
+  which a 370 px waterfall can spare.
+
+#### Why the update kept crashing at 100%
+
+Four watchdog resets in a row, always at the very end of a long download with
+the radio streaming. It was **not** scheduling — the verify step measured
+894 ms with the FFT running and 890 ms with it stood down, four milliseconds
+apart — and the very first symptom said so plainly: *"Could not start the
+update task"* is `xTaskCreate` failing to find 8 KB of contiguous internal RAM.
+
+`size` → `size-components` → `nm --size-sort` named the culprits in four
+minutes and no hardware: **`s_toc`** (9,472 B, the manual's contents list,
+touched only while the Reader is open) and **`s_pub`** (4,608 B, a spur map for
+a feature that defaults off), both sitting in the scarcest memory on the board.
+Moved to PSRAM with `EXT_RAM_BSS_ATTR`, recovering **14,084 bytes**.
+
+Measured in FT8 with the radio streaming ~48,000 pairs/s:
+
+| | before | after |
+|---|---|---|
+| largest internal block | 6,912 | **19,456** |
+| DMA pool free | 4,683 | **20,231** |
+| minimum internal free | 2,519 | **10,067** |
+
+Confirmed by a controlled A/B under the exact failing recipe — same mode, same
+audio load, ~300 s download, one variable — where four runs below ~12 KB free
+took the watchdog and two runs above ~14 KB completed cleanly at 304 s and
+328 s.
+
+The **OTA task's stack is now static and right-sized**: it measures 3,216 bytes
+of use, so the 8,192 it asked the heap for was a round number rather than a
+figure, requested at the worst possible moment. A static 6,144-byte `.bss`
+stack is 2 KB smaller *and* cannot fail to allocate, so that failure mode is
+gone by construction.
+
+#### A real bug in every upload, not just updates
+
+`fft_task`'s transfer-quiet branch read **one window (1,024 pairs) then slept
+50 ms** — about 20,000 pairs/s against the ~48,000 the QMX produces. It fell
+behind more than 2:1 and overflowed the audio ring for the whole of *every*
+upload and every download, while its own comment claimed it prevented exactly
+that. Measured as `DROPPED=17904 (ring full)` then `DROPPED=28128` a second
+later. It now drains until the backlog is gone. This has been wrong since the
+flag was written and affects QRZ, eQSL and LoTW uploads too.
+
+Related: the download loop no longer stands the FFT down at all — the spectrum,
+waterfall and FT8 decoding keep running throughout, with the quiet period
+reduced to the ~1.9 s image verify at the end.
+
+#### Also in this release
+
+- **TXCQ ANY / EVEN / ODD on the web FT8 page** *(Randy N4OPI)* — the browser
+  could start a CQ but not choose which 15-second window it went out in. It
+  drives the same single piece of state as the Tab5's own button and re-renders
+  from the device, so the two surfaces cannot drift apart.
+- **SSB tune snap 250 → 500 Hz** *(Dave KX3DX)* — he asked for 1 kHz, noting
+  that stations which stray sit at 0.5 kHz; 500 Hz was chosen because a 1 kHz
+  grid cannot land on the very exception he named, and it halves the number of
+  stops across a drag.
+- The bottom-bar version line no longer collides with the SD text and the
+  clock: `short_ver()` existed for exactly that and had never been applied to
+  the *running* version, so a development build rendered its full
+  `-N-gHASH-dirty` string in a shrunken font. Shortened in the composite update
+  lines only — the idle bar still shows the full string, which is deliberate.
+
+#### Known limitation
+
+The arrow between the two versions is plain ASCII `->`. LVGL's symbol-font
+arrow is a chevron that reads as `>` and is too heavy at 24 px; U+2192 is not
+in this font and renders as a tofu box. A real arrow needs `montserrat_24`
+regenerated with `lv_font_conv` — logged as #244.
