@@ -10,6 +10,7 @@ idf_component_register(
         "ui/wifi_config.c"
         "ui/tune_modal.c"
         "ui/ota_modal.c"
+        "net/net_quiet.c"
         "ui/activation_modal.c"
         "ui/identity_config.c"
         "ui/onboarding.c"

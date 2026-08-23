@@ -48,6 +48,12 @@ static uint64_t s_sd_free_b = 0, s_sd_total_b = 0;
 // branch in status_task().
 #define OTA_FAILED_SHOW_S 3
 
+// Set by "Later" on the update window; cleared as soon as the OTA state is
+// anything but DONE, so a NEW download always gets the full-width treatment
+// again rather than inheriting an old dismissal.
+static volatile bool s_ota_banner_dismissed = false;
+void status_ota_banner_dismiss(void) { s_ota_banner_dismissed = true; }
+
 static bool     s_sd_ok = false;
 static int      s_sd_poll_countdown = 0;  // 0 = poll on the next tick
 
@@ -313,7 +319,8 @@ static void status_task(void *arg)
             // and the operator has to decide. That is the step Don N2VGU found
             // confusing, it is the only step that needs a person, and it
             // persists until they act on it.
-            if (ost == OTA_DONE) {
+            if (ost != OTA_DONE) s_ota_banner_dismissed = false;
+            if (ost == OTA_DONE && !s_ota_banner_dismissed) {
                 char b[96];
                 if (over_s[0]) snprintf(b, sizeof(b), "%s is ready  -  tap to restart", over_s);
                 else           snprintf(b, sizeof(b), "Update ready  -  tap to restart");

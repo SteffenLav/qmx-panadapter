@@ -6,6 +6,7 @@
 #include "display.h"
 #include "net/ota_update.h"
 #include "net/update_check.h"
+#include "util/status.h"
 #include "esp_app_desc.h"
 #include "esp_system.h"
 #include "esp_log.h"
@@ -53,12 +54,22 @@ static void close_modal(void)
 static void later_btn_cb(lv_event_t *e)
 {
     (void)e;
-    // "Later" never cancels a download in flight. It is a window, not a
-    // switch - closing it while the bytes are still coming would either have
-    // to abort the transfer (wasting the operator's bandwidth for nothing) or
-    // silently keep going, and of those two only one is honest. The bar keeps
-    // showing progress either way.
+    // Two things "Later" means, and one it does not.
+    //
+    // It GIVES THE BOTTOM BAR BACK. The full-width "ready - tap to restart"
+    // takeover exists to make the decision unmissable, and Later IS the
+    // decision - keeping the bar after it meant an operator who declined an
+    // update never saw their battery, clock or WiFi again until they gave in
+    // and restarted (found on hardware by the operator, 2026-08-23). The small
+    // "vX.Y.Z ready - tap" line stays in the version slot and tapping the bar
+    // reopens this window, so nothing is lost but the shouting.
+    //
+    // It does NOT cancel a download in flight. This is a window, not a switch;
+    // closing it would have to either abort the transfer (throwing away
+    // bandwidth the operator already spent) or silently keep going, and only
+    // one of those is honest. The bar keeps showing progress either way.
     ESP_LOGI(TAG, "closed by the operator");
+    status_ota_banner_dismiss();
     close_modal();
 }
 

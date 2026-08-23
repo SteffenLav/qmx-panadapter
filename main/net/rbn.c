@@ -1,6 +1,7 @@
 // Reverse Beacon Network telnet client. Contract and rationale in rbn.h.
 
 #include "rbn.h"
+#include "net/net_quiet.h"
 #include "spots.h"
 #include "wifi.h"
 #include "cat.h"
@@ -266,6 +267,11 @@ static void session(int fd, const char *mycall)
     for (;;) {
         qmx_settings_t st;
         settings_load_all(&st);
+        // net_quiet: hold off RECONNECTING during an OTA - a fresh session is
+        // exactly the internal-heap churn the verify cannot afford. A live
+        // connection is left running; this only gates starting a new one.
+        if (net_quiet_active()) { vTaskDelay(pdMS_TO_TICKS(5000)); continue; }
+
         if ((!st.rbn_en && !RBN_FORCE_ON) || !wifi_is_connected()) { ESP_LOGI(TAG, "session ending (disabled or offline)"); return; }
 
         int r = recv(fd, s->rx, sizeof(s->rx), 0);
@@ -317,6 +323,11 @@ static void rbn_task(void *arg)
     for (;;) {
         qmx_settings_t st;
         settings_load_all(&st);
+
+        // net_quiet: hold off RECONNECTING during an OTA - a fresh session is
+        // exactly the internal-heap churn the verify cannot afford. A live
+        // connection is left running; this only gates starting a new one.
+        if (net_quiet_active()) { vTaskDelay(pdMS_TO_TICKS(5000)); continue; }
 
         if ((!st.rbn_en && !RBN_FORCE_ON) || !wifi_is_connected()) {
             // Drop anything we were showing: stale RBN spots are worse than none.

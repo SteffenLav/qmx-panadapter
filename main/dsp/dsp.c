@@ -233,7 +233,22 @@ static volatile bool s_ft8_active = false;
 // set, fft_task drains the ring and idles, freeing the core for the transfer.
 // Stopping the FFT also stops FT8 capture/decode (they're fed from here).
 static volatile bool s_xfer_quiet = false;
-void dsp_set_transfer_quiet(bool quiet) { s_xfer_quiet = quiet; }
+// True once fft_task has ACTUALLY observed the quiet flag and drained the ring
+// down. Callers that follow a quiet request with something the system must be
+// idle for (esp_https_ota_finish()'s 1.4 MB verify) have to wait for this -
+// setting the flag and proceeding immediately does nothing, because the flag is
+// cooperative and fft_task may be mid-window when it is set. Learned the hard
+// way: a verify started microseconds after the flag went up took the hardware
+// watchdog twice.
+static volatile bool s_xfer_quiet_settled = false;
+
+void dsp_set_transfer_quiet(bool quiet)
+{
+    if (quiet && !s_xfer_quiet) s_xfer_quiet_settled = false;   // must be re-earned
+    s_xfer_quiet = quiet;
+}
+
+bool dsp_transfer_quiet_settled(void) { return s_xfer_quiet && s_xfer_quiet_settled; }
 
 static float s_ft8_mix_buf[DSP_FFT_SIZE];
 static float s_ft8_dec_buf[DSP_FFT_SIZE / 4];
@@ -899,13 +914,39 @@ static void fft_task(void *arg)
     float last_min = 0, last_max = 0, last_mean = 0;
 
     while (1) {
-        // While a network transfer is in flight, give up the CPU: drain a window
-        // from the ring (so it doesn't overflow) but skip all FFT/FT8 work, then
-        // sleep. This stops fft_task (pri 4) from preempting the upload (pri 3),
-        // and cascades to halt FT8 capture/decode. Resumes the instant the flag
-        // clears; the audio producer keeps the ring fresh meanwhile.
+        // While a network transfer is in flight, give up the CPU: drain the
+        // ring but skip all FFT/FT8 work. This stops fft_task (pri 4) from
+        // preempting the transfer, and cascades to halt FT8 capture/decode.
+        // Resumes the instant the flag clears.
+        //
+        // ⚠ THE OLD DRAIN COULD NOT KEEP UP, and its comment claimed it could.
+        // It read ONE window (1024 pairs) and then slept 50 ms - about 20,000
+        // pairs/s against the ~48,000 pairs/s the QMX actually produces. So it
+        // fell behind more than 2:1 and the ring overflowed continuously for
+        // the whole of every upload and every OTA download: measured on
+        // hardware 2026-08-23 as "DROPPED=17904 (ring full)" then "DROPPED=28128"
+        // one second apart. That in turn keeps audio_task (pri 6, core 0,
+        // polling with no delay) in a discard loop it was never meant to run.
+        //
+        // Drain until the backlog is actually gone, then sleep briefly. The
+        // guard bounds the loop in case production genuinely outruns us, so a
+        // fast producer can never turn this into a spin.
         if (s_xfer_quiet) {
-            audio_read_samples(samples, DSP_FFT_SIZE, 10);
+            uint32_t guard = 0;
+            while (audio_ring_backlog_pairs() >= DSP_FFT_SIZE && guard++ < 64) {
+                audio_read_samples(samples, DSP_FFT_SIZE, 0);
+            }
+            s_xfer_quiet_settled = true;   // observed the flag, ring is down
+            // ⚠ 50 ms, NOT 5. Draining properly is the fix; waking 200x/s to
+            // check is a regression - "quiet" has to mean IDLE, and fft_task
+            // shares core 1 with the OTA task. A first version of this fix used
+            // 5 ms and made the quiet state ten times busier than the one it
+            // replaced, while reporting itself settled because the ring was
+            // empty. Emptying the ring and being idle are not the same claim.
+            //
+            // 50 ms is safe with a real drain behind it: ~48,000 pairs/s makes
+            // ~2,400 pairs in that window, so the loop above does two reads and
+            // stops, where the old single-read version fell behind 2:1 forever.
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }

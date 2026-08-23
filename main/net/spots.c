@@ -14,6 +14,7 @@
 // lighter than those, but it follows the same rule for the same reason.
 
 #include "spots.h"
+#include "net/net_quiet.h"
 #include "spot_sig.h"         // spot_sig_for() - the ADIF SIG for a reference
 #include "webserver_ws.h"     // webserver_ws_set_paused
 #include "wifi.h"             // wifi_is_connected
@@ -614,7 +615,10 @@ static void spots_task(void *arg)
 
         if (!wifi_is_connected()) continue;
 
-        if (s.spots_en && now >= next_pota_us) {
+        // net_quiet: an OTA verify needs internal heap, and a POTA fetch is a
+        // whole TLS session built and torn down. Skipping it costs one polling
+        // interval; colliding with the verify has cost a watchdog reset.
+        if (s.spots_en && now >= next_pota_us && !net_quiet_active()) {
             fetch_pota();
             bool ok = (spots_age_s() == 0);
             next_pota_us = esp_timer_get_time() +

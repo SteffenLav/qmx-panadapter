@@ -985,6 +985,12 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // ota_update_start() refuses while transmitting or mid-QSO; the reason
         // comes back as text so the browser can say WHY rather than just fail.
         const char *url = cJSON_GetStringValue(cJSON_GetObjectItem(root, "url"));
+        {   // dev-only knobs; absent = shipping defaults
+            cJSON *y  = cJSON_GetObjectItem(root, "yield_ms");
+            cJSON *pf = cJSON_GetObjectItem(root, "pause_feeds");
+            ota_update_set_test_params(cJSON_IsNumber(y) ? y->valueint : 0,
+                                       cJSON_IsBool(pf) ? cJSON_IsTrue(pf) : true);
+        }
         char oerr[96];
         bool ok = ota_update_start(url, oerr, sizeof(oerr));
         cJSON_Delete(root);
@@ -1005,6 +1011,24 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, "{\"ok\":true}");
         vTaskDelay(pdMS_TO_TICKS(250));
         esp_restart();
+    } else if (action && strcmp(action, "ota_reset") == 0) {
+        // Dev only - clear a staged update in place so the next test run does
+        // not need a reflash (and therefore a radio-wedging warm reset).
+        ota_update_reset_state();
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"note\":\"ota state cleared\"}");
+        return ESP_OK;
+    } else if (action && strcmp(action, "verify_test") == 0) {
+        // Dev only - see ota_update_verify_test(). Isolates the OTA verify from
+        // the download in front of it so it can be tested in seconds.
+        cJSON *q = cJSON_GetObjectItem(root, "quiet");
+        bool quiet = cJSON_IsBool(q) ? cJSON_IsTrue(q) : false;
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"note\":\"see the serial log\"}");
+        ota_update_verify_test(quiet);
+        return ESP_OK;
     } else if (action && strcmp(action, "panic_test") == 0) {
         // Developer escape hatch: deliberately crash, to prove the #117 panic
         // hook actually records anything. A tolerant-but-silent mechanism is
