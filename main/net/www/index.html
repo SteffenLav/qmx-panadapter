@@ -607,7 +607,7 @@
 
   <div id="bandplan-wrap"><canvas id="bandplan" title="Whole-band plan - drag or tap to retune"></canvas></div>
 
-  <div id="ft8-notice"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-stats"></div><div id="ft8-webr"></div></div><div id="ft8-body"><div id="ft8-hint">Spectrum &amp; waterfall are shown in Panadapter mode. Logs, config and QSO upload are in the bar below.</div><div id="ft8-controls"><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="to-panadapter" title="Switch the Tab5 to the Panadapter view">Show Panadapter</button><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button></div><div id="ft8-override" style="display:none;"><span class="ovr-label">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div></div>
+  <div id="ft8-notice"><div id="ft8-status"><div id="ft8-tx" class="st-idle">--</div><div id="ft8-stats"></div><div id="ft8-webr"></div></div><div id="ft8-body"><div id="ft8-hint">Spectrum &amp; waterfall are shown in Panadapter mode. Logs, config and QSO upload are in the bar below.</div><div id="ft8-controls"><div id="ft8-actions"><button id="cq-restart" title="Start a fresh CQ run on the Tab5">Call CQ</button><button id="cq-parity" title="Which 15-second slot your CQ goes out in. ANY uses whichever comes first; EVEN and ODD lock it.">TXCQ ANY</button><button id="tone-btn" title="Choose the audio tone you transmit on, against the live occupancy of the band">TX tone</button></div><div id="ft8-override" style="display:none;"><span class="ovr-label">Mid-QSO:</span><button id="ovr-resend" title="Send the current message again">Re-send</button><button id="ovr-rr73" title="Jump straight to RR73">RR73</button><button id="ovr-73" title="Jump straight to 73">73</button><button id="ovr-cancel" class="btn-danger" title="Stop transmitting and end this exchange">Cancel</button></div></div></div>
     <div id="ft8-decodes" style="width:100%; max-width:1000px; margin:14px auto 0; text-align:left;">
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
         <strong id="dec-title" style="color:#ffa040">Decode list</strong>
@@ -3282,19 +3282,36 @@ document.getElementById("pause-btn").addEventListener("click", async () => {
   });
 })();
 
-/* Switch the Tab5's own view from the browser. Unlike Call CQ this changes
-   nothing on the air, so it does not confirm - but the Tab5 takes about a second
-   to act (the switch is handed to its display task), so the button says so
-   rather than looking dead. */
-(function wireScreenSwitch() {
-  const btn = document.getElementById("to-panadapter");
+/* TXCQ slot parity (Randy N4OPI). The Tab5 has had a cycling TXCQ button for
+   a while; the web FT8 page could start a CQ but not choose the window it went
+   out in. Cycles ANY -> EVEN -> ODD -> ANY, the same order and the same three
+   states as the Tab5 button, driving the SAME device-side value - the label is
+   re-rendered from /api/status every poll, so the two surfaces cannot drift.
+   (The Panadapter switch this button replaced still lives in the bottom bar's
+   Radio menu.) */
+const CQ_PARITY = [
+  { v: -1, label: "TXCQ ANY",  bg: "" },
+  { v:  0, label: "TXCQ EVEN", bg: "#2b6ea8" },   /* steel blue, as on the Tab5 */
+  { v:  1, label: "TXCQ ODD",  bg: "#E09040" },   /* warm orange, as on the Tab5 */
+];
+function renderCqParity(v) {
+  const btn = document.getElementById("cq-parity");
+  if (!btn) return;
+  const e = CQ_PARITY.find(x => x.v === v) || CQ_PARITY[0];
+  btn.textContent = e.label;
+  btn.style.background = e.bg;
+}
+(function wireCqParity() {
+  const btn = document.getElementById("cq-parity");
   if (!btn) return;
   btn.addEventListener("click", async () => {
-    btn.disabled = true;
-    const was = btn.textContent;
-    btn.textContent = "Switching...";
-    await sendCmd({ action: "set_screen", screen: "panadapter" });
-    setTimeout(() => { btn.disabled = false; btn.textContent = was; }, 2500);
+    /* Advance from what the DEVICE last told us, not from a local counter -
+       otherwise the Tab5's own button and this one drift apart the moment
+       either is used. */
+    const cur = CQ_PARITY.findIndex(x => x.label === btn.textContent);
+    const next = CQ_PARITY[(cur < 0 ? 0 : (cur + 1) % CQ_PARITY.length)];
+    renderCqParity(next.v);                       /* immediate feedback */
+    await sendCmd({ action: "cq_parity", value: next.v });
   });
 })();
 
@@ -3534,6 +3551,7 @@ async function tick() {
       /* Outcome of the last browser-initiated reply, straight from the device -
          "Armed: ...", "Busy: working X", "no longer in the decode list". */
       document.getElementById("ft8-webr").textContent = s.ft8.web_r || "";
+      if (typeof s.ft8.cq_parity === "number") renderCqParity(s.ft8.cq_parity);
       /* Show the override row only while an exchange is live. st covers the
          armed/active/waiting states; idle and done get nothing to press. */
       {

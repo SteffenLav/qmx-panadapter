@@ -1189,6 +1189,13 @@ static void t_slotbar_cb(lv_timer_t *t)
 
 static void start_cq_run(bool interactive);          // defined below
 static volatile bool s_web_cq_pending;               // set from the HTTP task
+// Randy N4OPI: the web FT8 page had no way to choose the CQ slot parity, so a
+// browser operator could start a CQ but not say which window it went out in.
+// -2 = nothing pending. Same deferral as s_web_cq_pending: s_cq_parity and the
+// button that displays it belong to taskLVGL, so the HTTP task only leaves a
+// value behind and the 1 Hz timer applies it.
+static volatile int  s_web_parity_pending = -2;
+static void update_parity_btns(void);   // defined with the button, used by the 1 Hz drain above it
 
 // Web reply-to-station request (Phase 6 of web parity: the operator explicitly
 // wanted TX from the browser). Same deferral as the CQ flag: the HTTP task only
@@ -1384,6 +1391,15 @@ static void t_clock_cb(lv_timer_t *t)
     // either way. If the FT8 view is not up there is nothing to run a CQ on, and a
     // request left pending would otherwise fire the moment the operator next
     // switched to FT8 - possibly minutes later, unasked.
+    if (s_web_parity_pending != -2) {
+        int p = s_web_parity_pending;
+        s_web_parity_pending = -2;
+        s_cq_parity = (p == 0 || p == 1) ? p : -1;
+        update_parity_btns();
+        ESP_LOGI(TAG, "web set CQ parity: %s",
+                 s_cq_parity < 0 ? "any" : s_cq_parity == 0 ? "EVEN only" : "ODD only");
+    }
+
     if (s_web_cq_pending) {
         s_web_cq_pending = false;
         bool ft8_up = s_container && !lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN);
@@ -1976,6 +1992,16 @@ void ft8_screen_view_request_cq(void)
 {
     s_web_cq_pending = true;
 }
+
+// -1 = any, 0 = EVEN only, 1 = ODD only. Applied by the 1 Hz timer so the Tab5
+// button and the browser can never disagree - there is one piece of state, not
+// a copy per surface.
+void ft8_screen_view_set_cq_parity(int parity)
+{
+    s_web_parity_pending = (parity == 0 || parity == 1) ? parity : -1;
+}
+
+int ft8_screen_view_get_cq_parity(void) { return s_cq_parity; }
 
 static void cq_btn_cb(lv_event_t *e)
 {

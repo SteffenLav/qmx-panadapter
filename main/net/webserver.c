@@ -187,6 +187,11 @@ static void add_ft8_tx_status(cJSON *root)
     cJSON *f = cJSON_AddObjectToObject(root, "ft8");
     if (!f) return;
 
+    // Randy N4OPI: the browser needs to SHOW which slot parity a CQ will use,
+    // not just set it - a toggle that cannot read the current value is a second
+    // source of truth waiting to drift from the Tab5's own button.
+    cJSON_AddNumberToObject(f, "cq_parity", ft8_screen_view_get_cq_parity());
+
     char tx_text[32];
     int  secs_until = 0;
     ft8_tx_state_t  tx_st  = ft8_tx_get_status(tx_text, sizeof(tx_text), &secs_until);
@@ -835,6 +840,12 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // the LVGL task inside ft8_screen_view - do NOT call the QSO machine from
         // this HTTP task.
         ft8_screen_view_request_cq();
+    } else if (action && strcmp(action, "cq_parity") == 0) {
+        // Randy N4OPI: choose the CQ slot window from the browser. -1 any,
+        // 0 EVEN, 1 ODD - the same three the Tab5's TXCQ button cycles, and
+        // the same single piece of state, so the two surfaces cannot drift.
+        cJSON *v = cJSON_GetObjectItem(root, "value");
+        ft8_screen_view_set_cq_parity(cJSON_IsNumber(v) ? v->valueint : -1);
     } else if (action && strcmp(action, "set_screen") == 0) {
         // Switch the Tab5 between the panadapter and FT8/FT4 from the browser.
         // Deferred to the LVGL task (see ui_request_base_mode) - the switch
