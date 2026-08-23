@@ -2261,6 +2261,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "rbn_en",            c.rbn_en);
     cJSON_AddBoolToObject(root, "cluster_en",        c.cluster_en);
     cJSON_AddBoolToObject(root, "sota_en",           c.sota_en);
+    cJSON_AddBoolToObject(root, "ota_autodl",        c.ota_autodl);
     cJSON_AddBoolToObject(root, "spots_mode_filter", c.spots_mode_filter);
     // The last of the drawer's controls that had no remote equivalent. CW pitch and
     // the IF trim are per-unit calibration you set once and forget, which is
@@ -2413,6 +2414,8 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         settings_set_spots_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "sota_en")))
         settings_set_sota_en(cJSON_IsTrue(it));
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "ota_autodl")))
+        settings_set_ota_autodl(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "rbn_en")))
         settings_set_rbn_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "pskreporter_en")))
@@ -2495,6 +2498,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     BOOLTOP("rbn_en",            settings_set_rbn_en);
     BOOLTOP("cluster_en",        settings_set_cluster_en);
     BOOLTOP("sota_en",           settings_set_sota_en);
+    BOOLTOP("ota_autodl",        settings_set_ota_autodl);
     BOOLTOP("spots_mode_filter", settings_set_spots_mode_filter);
     BOOLTOP("psk_rx_en",         settings_set_psk_rx_en);
     BOOLTOP("bt_mouse_en",       settings_set_bt_mouse_en);

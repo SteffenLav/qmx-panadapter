@@ -1,5 +1,6 @@
 #pragma once
 #include <stdbool.h>
+#include <stddef.h>   // size_t, for update_check_get_asset_url()
 
 // Automatic firmware-update check for the on-device Reader (v1.1+).
 //
@@ -22,6 +23,12 @@ void update_check_get_latest(char *out, int out_sz);
 
 // True if a newer-than-running version has been found.
 bool update_check_available(void);
+
+// The download URL for the latest release's firmware image, or "" when no
+// newer release is known. ONE place builds this: status.c's manual path and
+// the #239 auto-download must not each carry their own copy of the release
+// asset layout, or a rename breaks one of them silently.
+void update_check_get_asset_url(char *out, size_t out_sz);
 
 // Ask for a check RIGHT NOW instead of waiting for the next interval. Used by
 // /api/cmd {"action":"update_check"} so a release can be watched arriving

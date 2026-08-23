@@ -88,6 +88,7 @@ static const char *TAG = "settings";
 #define KEY_SPOTS_EN       "spots_en"
 #define KEY_RBN_EN         "rbn_en"
 #define KEY_SOTA_EN        "sota_en"
+#define KEY_OTA_AUTODL     "ota_autodl"
 #define KEY_WIFI_KNOWN     "wifi_known"
 #define KEY_TX_TONE_HZ     "tx_tone_hz"
 #define KEY_TX_TONE_HOLD   "tx_tone_hold"
@@ -302,6 +303,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_SOTA_EN        86
 #define DIRTY_HOUND_MODE     87
 #define DIRTY_KBD_BIND       95   /* #233 user-defined keyboard shortcuts */
+#define DIRTY_OTA_AUTODL     96   /* #239 quiet background download of a new release */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -314,6 +316,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 // every-15-seconds SD write was a standing, unintentional trigger for that
 // same hazard. Keep this list in sync with config_io_export()'s fields.
 static const uint8_t s_config_export_bits[] = {
+    DIRTY_OTA_AUTODL,
     DIRTY_DB_MIN, DIRTY_DB_MAX, DIRTY_EMA_ALPHA, DIRTY_IQ_ENABLED,
     DIRTY_FLAT_MODE, DIRTY_WIFI_SSID, DIRTY_WIFI_PASS, DIRTY_CW_PITCH,
     DIRTY_COLORMAP, DIRTY_MY_CALL, DIRTY_MY_GRID, DIRTY_CW_CAL,
@@ -489,6 +492,7 @@ static void flush_task(void *arg)
     if (dirty_test(&dirty_local, DIRTY_SPOTS_EN))      nvs_set_u8(s_nvs, KEY_SPOTS_EN,      snap.spots_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_RBN_EN))        nvs_set_u8(s_nvs, KEY_RBN_EN,        snap.rbn_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_SOTA_EN))       nvs_set_u8(s_nvs, KEY_SOTA_EN,       snap.sota_en ? 1 : 0);
+    if (dirty_test(&dirty_local, DIRTY_OTA_AUTODL))    nvs_set_u8(s_nvs, KEY_OTA_AUTODL,    snap.ota_autodl ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_WIFI_KNOWN)) {
         // Known-network list: not part of s_pending (see settings.h), so take a
         // consistent copy under the mutex before writing it out.
@@ -666,6 +670,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->spots_en = true;
     out->rbn_en   = false;   // opt-in: a continuous telnet firehose on a fragile link
     out->sota_en  = false;   // opt-in: somebody else's hobby server, see settings.h
+    out->ota_autodl = true;  // #239: on by default - it only downloads, never applies
     out->tx_tone_hz   = 1500;     // conventional FT8 default; = FT8_TX_CQ_DEFAULT_FREQ_HZ
     out->tx_tone_hold = false;    // auto-pick a clear slot, as it always did
     out->bandplan_region = 0;     // 0 = auto (derive from grid)
@@ -825,6 +830,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_SPOTS_EN, &u8v) == ESP_OK) out->spots_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_RBN_EN,   &u8v) == ESP_OK) out->rbn_en   = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_SOTA_EN,  &u8v) == ESP_OK) out->sota_en  = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_OTA_AUTODL, &u8v) == ESP_OK) out->ota_autodl = (u8v != 0);
     if (nvs_get_u16(s_nvs, KEY_TX_TONE_HZ, &u16v) == ESP_OK) out->tx_tone_hz = u16v;
     if (nvs_get_u8(s_nvs, KEY_TX_TONE_HOLD, &u8v) == ESP_OK) out->tx_tone_hold = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_FT8_SYNC_LINES, &u8v) == ESP_OK) out->ft8_sync_lines = (u8v != 0);
@@ -1739,6 +1745,16 @@ void settings_set_sota_en(bool v)
     s_pending.sota_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_SOTA_EN);
+}
+
+void settings_set_ota_autodl(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.ota_autodl == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.ota_autodl = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_OTA_AUTODL);
 }
 
 // ---- Known WiFi networks ---------------------------------------------------

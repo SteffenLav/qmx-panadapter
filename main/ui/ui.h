@@ -100,6 +100,12 @@ void ui_set_update_line(const char *text, uint32_t colour);
 // is being shown; a plain ui_set_update_line() call (any other state)
 // stops the pulse.
 void ui_set_update_line_failed(const char *text);
+// OTA takeover of the WHOLE bottom bar: one centred sentence plus a progress
+// underline, replacing the ~264 px version slot for the duration of an update.
+// `pct` < 0 is treated as 0; pass 100 for a state with no progress to show.
+// Safe from any task - takes display_lock() itself, like everything in ui.c.
+void ui_ota_banner(const char *text, uint32_t colour, int pct);
+void ui_ota_banner_hide(void);
 
 // #218: called on the LVGL thread when the operator taps the update line.
 // status.c registers this and decides what the tap means; it arms on the

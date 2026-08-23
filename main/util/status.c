@@ -2,6 +2,7 @@
 #include "display.h"
 #include "net/update_check.h"
 #include "net/ota_update.h"
+#include "ui/ota_modal.h"
 #include "battery.h"
 #include "wifi.h"
 #include "time_sync.h"
@@ -46,6 +47,7 @@ static uint64_t s_sd_free_b = 0, s_sd_total_b = 0;
 // red forever. Tap-and-hold still retries after this - see the OTA_FAILED
 // branch in status_task().
 #define OTA_FAILED_SHOW_S 3
+
 static bool     s_sd_ok = false;
 static int      s_sd_poll_countdown = 0;  // 0 = poll on the next tick
 
@@ -107,83 +109,22 @@ static void short_ver(const char *in, char *out, size_t out_sz)
 
 
 // ---------------------------------------------------------------------------
-// #218: what a long press on the bottom-bar update line means.
+// #239: what a TAP on the bottom-bar update line means - it opens the window,
+// and nothing else.
 //
-// LONG PRESS, not a tap, and that is the operator's design. The band-plan strip
-// is 22 px and sits directly on top of this bar, and a tap on IT retunes - so a
-// finger reaching for the update line and landing slightly high moved the dial.
-// A hold cannot be triggered by brushing past, it announces itself with
-// "release to confirm" while the finger is still down, and lifting early
-// cancels it. It also composes with the swipe already on this strip, because
-// that one is a DRAG: hold still to update, drag up for Memory Channels.
+// It used to do the work itself: start a download, or restart the radio, or
+// force a check, decided from a ~264 px label with no room to say which. That
+// is what made Don N2VGU's "tap to update" wrong, and it is why the gesture
+// had to be a 700 ms HOLD - a stray brush from the 22 px band-plan strip
+// directly above must never start a download or reboot a radio.
 //
-// Nothing is ever downloaded without that deliberate act: the first state
-// OFFERS a download rather than being one already in progress.
+// Opening a dismissible window is safe to do by accident, so the gesture is
+// free to be a plain tap again, and the label is free to say "tap" honestly.
+// Every action now lives in ota_modal.c behind a named button.
 // ---------------------------------------------------------------------------
 static void update_line_tap(void)
 {
-    // Called only after a completed LONG PRESS (ui.c), which is the
-    // confirmation: it cannot happen by brushing past, it showed "release to
-    // confirm" while the finger was down, and lifting early cancels. So there
-    // is no second gate here - a two-tap arm on top would just be a hidden
-    // state the operator has to remember.
-    int  pct = 0;
-    static char msg[128], latest[32];
-    ota_state_t st = ota_update_get_state(&pct, msg, sizeof(msg));
-
-    if (st == OTA_RUNNING) return;          // nothing sensible to do mid-download
-
-    if (st == OTA_DONE) {
-        ESP_LOGW("status", "operator confirmed restart into the new firmware");
-
-        // Say what is happening, then GO DARK BEFORE RESTARTING.
-        //
-        // The operator saw "a clear cyan screen for 2-3 seconds" and called it
-        // intrusive - rightly. display_init() sets the backlight to 0 precisely
-        // so the panel's uninitialised content is never shown, but that call is
-        // ~2-3 s into boot; across esp_restart() the backlight simply stays on
-        // from the previous run and lights up a panel with nothing in it.
-        // Nobody noticed before because a reboot was a rare event; #218 makes it
-        // a normal one, so it has to look deliberate.
-        ui_update_line_force("restarting...", 0x8FE0A0);
-        vTaskDelay(pdMS_TO_TICKS(500));      // long enough to read
-        display_set_brightness(0);
-        vTaskDelay(pdMS_TO_TICKS(80));       // let the panel actually go dark
-        esp_restart();
-    }
-
-    update_check_get_latest(latest, sizeof(latest));
-
-    // NOTHING TO INSTALL -> the long press means "check now" instead.
-    //
-    // Without this the gesture simply did nothing whenever the device was up to
-    // date, which is the state it is in almost all the time - so on the Tab5
-    // itself there was no way to act on an announcement at all. A tester who
-    // reads the release post and walks over to the radio should not need a
-    // browser to ask the question, on a device whose whole point is working
-    // without a laptop.
-    //
-    // The check runs on update_check's own task; this only asks. The 1 Hz
-    // refresh above repaints the line either way, so "checking..." is replaced
-    // by the version again, or by the cyan offer.
-    if (!latest[0] || !update_check_available()) {
-        ESP_LOGI("status", "operator asked for an update check");
-        ui_update_line_force("checking...", 0x40D8E0);
-        update_check_now();
-        return;
-    }
-
-    static char url[192];
-    snprintf(url, sizeof(url),
-             "https://github.com/SteffenLav/qmx-panadapter/releases/download/%s/qmx_panadapter.bin",
-             latest);
-    static char err[96];
-    if (!ota_update_start(url, err, sizeof(err))) {
-        // The refusal reason matters more than the failure - "transmitting" is
-        // something the operator can act on.
-        ESP_LOGW("status", "update refused: %s", err);
-        ui_toast(err);
-    }
+    ota_modal_show();
 }
 
 static void status_task(void *arg)
@@ -292,8 +233,13 @@ static void status_task(void *arg)
                 vcol = 0xFFA040;                       // amber - working
             } else if (ost == OTA_DONE) {
                 ota_failed_ticks = 0;
-                if (over_s[0]) snprintf(vline, sizeof(vline), "%s - tap updates", over_s);
-                else              snprintf(vline, sizeof(vline), "tap updates");
+                // #236, Don N2VGU: "tap updates" described the wrong action at
+                // the wrong moment. By here the bytes are already on the device
+                // and what remains is a RESTART - he suggested exactly this
+                // ("tap to reboot" / "tap to finish"). #237: and it is a hold,
+                // not a tap. The banner below has the room to say both.
+                if (over_s[0]) snprintf(vline, sizeof(vline), "%s ready - tap", over_s);
+                else           snprintf(vline, sizeof(vline), "ready - tap");
                 vcol = 0x8FE0A0;                       // light green - ready
             } else if (ost == OTA_FAILED && ota_failed_ticks < OTA_FAILED_SHOW_S) {
                 // A correctly-registered long-press followed by an instantly
@@ -322,6 +268,9 @@ static void status_task(void *arg)
                 snprintf(vline, sizeof(vline), "%s", running);
             } else if (update_check_available() && latest_s[0]) {
                 ota_failed_ticks = 0;
+                // #237 ended up fixed by construction rather than by wording:
+                // the press now only OPENS ota_modal, so it is safe as a plain
+                // tap and "tap?" is true again.
                 snprintf(vline, sizeof(vline), "%s " LV_SYMBOL_RIGHT " %s  tap?",
                               running, latest_s);
                 vcol = 0x40D8E0;                       // cyan - offered, nothing fetched
@@ -352,6 +301,25 @@ static void status_task(void *arg)
             if (!skip_plain_update_line) {
                 ui_set_update_line_tappable(ost != OTA_RUNNING);
                 ui_set_update_line(vline, vcol);
+            }
+
+            // ---- the bar's ONE unmissable state ----
+            // #239. The download is now QUIET and unattended, so taking the
+            // whole bar over while it runs would contradict the point of it -
+            // nobody asked for a download, so nobody should be told about one
+            // at full width. It stays a small line in the version slot.
+            //
+            // The bar IS taken over for exactly one state: the bytes are down
+            // and the operator has to decide. That is the step Don N2VGU found
+            // confusing, it is the only step that needs a person, and it
+            // persists until they act on it.
+            if (ost == OTA_DONE) {
+                char b[96];
+                if (over_s[0]) snprintf(b, sizeof(b), "%s is ready  -  tap to restart", over_s);
+                else           snprintf(b, sizeof(b), "Update ready  -  tap to restart");
+                ui_ota_banner(b, 0x8FE0A0, 100);
+            } else {
+                ui_ota_banner_hide();
             }
         }
 

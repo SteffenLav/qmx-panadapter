@@ -278,6 +278,8 @@ function Cmd-Flash {
 
     $took = Take-Lock $reg "flash" $b.name
     $hadCapture = ((Get-CaptureProcess $b.capture).Count -gt 0)
+    $preLen = 0
+    if (Test-Path $b.capture) { $preLen = (Get-Item $b.capture).Length }
     try {
         if ($hadCapture) { Cmd-StopCapture $reg $b; Start-Sleep -Seconds 1 }
         $rc = Invoke-Idf $reg $b.tree @("-p", $b.com, "flash")
@@ -290,20 +292,31 @@ function Cmd-Flash {
         }
         if ($took) { Release-Lock $reg }
     }
-    Start-Sleep -Seconds 8
-    Cmd-Verify $reg $b
+    # Reopening the port resets the Tab5 (documented), so a restarted capture
+    # WILL see a boot header within a few seconds - that is what makes the
+    # identity check possible at all after a flash, whose own reset happens
+    # while the port is closed.
+    Start-Sleep -Seconds 10
+    Cmd-Verify $reg $b $preLen
 }
 
 function Cmd-Verify {
-    param($reg, $b)
+    param($reg, $b, [long] $sinceBytes = 0)
     if (-not (Test-Path $b.capture)) { Write-Host "No capture file to verify against."; return }
-    $line = Select-String -Path $b.capture -Pattern 'serial\(MAC\)=([0-9A-Fa-f:]{17})' -AllMatches |
-            Select-Object -Last 1
+    # ⚠ Only trust a boot header written AFTER the flash. Searching the whole
+    # file matched a serial(MAC)= line from a PREVIOUS boot and cheerfully
+    # reported "Identity OK" when nothing had been captured at all - a check
+    # that cannot fail is not a check, and this one is the last line of defence
+    # against flashing the wrong board.
+    $text = Get-Content $b.capture -Raw -ErrorAction SilentlyContinue
+    if ($sinceBytes -gt 0 -and $text.Length -gt $sinceBytes) { $text = $text.Substring([int]$sinceBytes) }
+    elseif ($sinceBytes -gt 0) { $text = "" }
+    $line = [regex]::Matches($text, 'serial\(MAC\)=([0-9A-Fa-f:]{17})') | Select-Object -Last 1
     if (-not $line) {
-        Write-Host "No 'serial(MAC)=' boot header in the capture yet - cannot verify identity. It is printed at boot only." -ForegroundColor DarkYellow
+        Write-Host "NOT VERIFIED: no fresh 'serial(MAC)=' boot header since the flash. It is printed at boot only, and a stale one from an earlier boot proves nothing." -ForegroundColor DarkYellow
         return
     }
-    $mac = ($line.Matches | Select-Object -Last 1).Groups[1].Value.ToUpper()
+    $mac = $line.Groups[1].Value.ToUpper()
     if ($b.mac -like "UNKNOWN*") {
         Write-Host "Bench '$($b.name)' has no MAC recorded. The board that just booted is $mac - put that in tools/bench.json." -ForegroundColor Cyan
         return

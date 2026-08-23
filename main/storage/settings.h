@@ -201,6 +201,14 @@ typedef struct {
     // would put every unit in the field on it forever from the moment they
     // update. Flip the default only once it has proven itself. See net/spots.c.
     bool     sota_en;
+    // #239: fetch a newer release in the BACKGROUND, so the operator is only
+    // ever asked the one question that matters ("restart into it?") instead of
+    // starting a download and then waiting on it. Default ON, but it must stay
+    // switchable: a POTA operator on a phone hotspot did not ask us to pull
+    // 3.3 MB, and the download saturates this link (~12.7 KB/s) for over a
+    // minute. Downloading is safe to automate; APPLYING is not, and is not -
+    // see the standing rule at the top of net/ota_update.h.
+    bool     ota_autodl;
     bool     pskreporter_en;  // FT8/FT4: report real decodes to pskreporter.info (UDP, batched ~5 min;
                               // needs callsign+grid; never in simulation mode; default TRUE - same
                               // as WSJT-X ships; drawer checkbox turns it off)
@@ -355,6 +363,7 @@ void settings_set_pskreporter_en(bool v);
 void settings_set_spots_en(bool v);
 void settings_set_rbn_en(bool v);
 void settings_set_sota_en(bool v);   // SOTA activations via spothole.app (opt-in)
+void settings_set_ota_autodl(bool v); // #239: download a new release quietly (never applies it)
 
 // ---- Known WiFi networks --------------------------------------------------
 //
