@@ -1641,6 +1641,11 @@ static lv_obj_t *s_waterfall_obj = NULL;
 // segments per band (coarse plan); a small pool of reusable child rects+labels.
 #define BANDPLAN_MAX_SEG 6
 static lv_obj_t *s_bandplan_obj  = NULL;
+// Invisible touch extension ABOVE the band plan (operator, 2026-08-23: the
+// 22 px strip is "super difficult to land on"). Tap-to-tune gives up these
+// pixels; the waterfall is 370 px tall and can spare them.
+#define BP_CATCH_PX 50
+static lv_obj_t *s_bp_catch      = NULL;
 static lv_obj_t *s_bp_seg[BANDPLAN_MAX_SEG];
 static lv_obj_t *s_bp_seg_lbl[BANDPLAN_MAX_SEG];
 static lv_obj_t *s_bp_span       = NULL;  // translucent block: the slice of the band currently visible on the spectrum/waterfall
@@ -3506,6 +3511,37 @@ static void build_waterfall(lv_obj_t *parent)
     lv_obj_add_event_cb(s_waterfall_obj, touch_event_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_waterfall_obj, touch_event_cb, LV_EVENT_PRESSING, NULL);
     lv_obj_add_event_cb(s_waterfall_obj, touch_event_cb, LV_EVENT_RELEASED, NULL);
+
+    // ---- band-plan catcher: BP_CATCH_PX of invisible strip above the band plan ----
+    // The band plan is BANDPLAN_H (22) px with the bottom bar hard against it
+    // below and the waterfall hard against it above, and all three do something
+    // different with a tap. The operator's report: "it is super difficult to
+    // land on the band-plan slider first hit - you either land on the wf and get
+    // the cyan guide line if you hit just a bit too high, or you land on the
+    // bottom bar". 22 px is simply not a finger.
+    //
+    // So the strip's TOUCH area grows upward into the waterfall while its drawn
+    // height stays 22 px. Tap-to-tune gives up the same 50 px, which it can
+    // afford - the waterfall is 370 px tall and none of the interesting part of
+    // it is in the last centimetre.
+    //
+    // Deliberately a separate transparent object rather than a taller
+    // s_bandplan_obj: every segment, label, marker and knob inside that object
+    // is positioned relative to it, so growing it would silently move all of
+    // them. And it is created AFTER s_waterfall_obj because LVGL hit-tests a
+    // parent's children in REVERSE creation order - built any earlier, the
+    // waterfall would keep winning the overlap and this would do nothing at all.
+    s_bp_catch = lv_obj_create(parent);
+    lv_obj_remove_style_all(s_bp_catch);
+    lv_obj_set_size(s_bp_catch, DISPLAY_H_RES, BP_CATCH_PX);
+    lv_obj_set_pos(s_bp_catch, 0, DISPLAY_V_RES - BOTTOM_BAR_H - BANDPLAN_H - BP_CATCH_PX);
+    lv_obj_set_style_bg_opa(s_bp_catch, LV_OPA_TRANSP, 0);   // invisible, purely a target
+    lv_obj_clear_flag(s_bp_catch, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_bp_catch, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_bp_catch, UI_FLAG_NOT_HOT);            // a track you drag, like the strip itself
+    lv_obj_add_event_cb(s_bp_catch, touch_event_cb, LV_EVENT_PRESSED, NULL);
+    lv_obj_add_event_cb(s_bp_catch, touch_event_cb, LV_EVENT_PRESSING, NULL);
+    lv_obj_add_event_cb(s_bp_catch, touch_event_cb, LV_EVENT_RELEASED, NULL);
     lv_canvas_set_buffer(s_wf_canvas, s_wf_canvas_buf,
                          DISPLAY_H_RES, WATERFALL_H, LV_COLOR_FORMAT_RGB565);
     lv_obj_align(s_wf_canvas, LV_ALIGN_TOP_LEFT, 0, 0);
@@ -6523,21 +6559,20 @@ static void (*s_update_tap_cb)(void) = NULL;
 //   - the whole bottom bar becomes the tap target, not just ~230 px of text
 //   - the band-plan strip stops accepting taps directly above that text
 static bool s_update_line_tappable = false;
-// #218 LONG-PRESS. A tap is the wrong gesture here: the band-plan strip is 22 px
-// and sits directly on top of this bar, a tap on IT retunes, and a brush while
-// reaching should never start a download or restart the radio. Holding is
-// deliberate, self-cancelling (lift early and nothing happens) and needs no
-// hidden armed state - and it composes with the swipe-up already on this strip,
-// which is a DRAG: hold still to update, drag up for Memory Channels.
-#define UPDATE_HOLD_MS     700
-#define UPDATE_HOLD_SLOP   20     // px of wander still counted as "holding"
+// #218 shipped this as a 700 ms LONG-PRESS, because a tap that could start a
+// download or reboot the radio had to be impossible to trigger by brushing past
+// the 22 px band-plan strip directly above. #239 removed the reason: the press
+// now only opens a dismissible window, so a stray brush costs nothing and the
+// gesture is a plain TAP. The hold, its "release to confirm" feedback and the
+// paint-lock that protected that feedback from the 1 Hz refresh are all gone -
+// the operator kept hitting the leftover long-press and rightly asked for it
+// out. Only the press-started flag and the movement slop remain, so a DRAG
+// (swipe up for Memory Channels, sideways for the band plan) still cannot also
+// register as a tap.
+#define UPDATE_HOLD_SLOP   20     // px of wander before this stops being a tap
 
 static uint32_t s_update_press_ms = 0;    // 0 = not pressing
 static int      s_update_press_x  = 0;
-static bool     s_update_hold_ok  = false; // held long enough: fires on release
-// While the hold feedback is on screen, status.c's 1 Hz refresh must not paint
-// over it - the feedback has to be immediate and stay put until the finger goes.
-static bool     s_update_hold_paint = false;
 
 // Breathing-opacity pulse for "Failed - tap retries" - same technique as the
 // sim-mode border and the edge grips (lv_anim on style opacity), reused here
@@ -6637,30 +6672,9 @@ bool ui_update_line_tappable(void) { return s_update_line_tappable; }
 
 void ui_set_update_line_tappable(bool on) { s_update_line_tappable = on; }
 
-// Immediate feedback that the hold has "taken" and will fire when the finger
-// lifts. Bypasses the paint lock deliberately - this IS the lock's owner.
-static void update_hold_paint(const char *text, uint32_t colour)
-{
-    if (!s_bot_version) return;
-    s_update_hold_paint = false;              // let the writer through
-    ui_set_update_line(text, colour);
-    s_update_hold_paint = true;
-}
-
-// Paint the update line even while a hold is being shown. Used on the way to a
-// deliberate restart, where the hold feedback must be replaced by what is
-// actually about to happen.
-void ui_update_line_force(const char *text, uint32_t colour)
-{
-    s_update_hold_paint = false;
-    ui_set_update_line(text, colour);
-}
-
 static void update_hold_clear(void)
 {
     s_update_press_ms = 0;
-    s_update_hold_ok  = false;
-    s_update_hold_paint = false;              // next 1 Hz refresh restores the real text
 }
 
 void ui_set_update_tap_cb(void (*cb)(void)) { s_update_tap_cb = cb; }
@@ -6679,7 +6693,6 @@ static bool update_line_hit(int x)
 void ui_set_update_line(const char *text, uint32_t colour)
 {
     if (!s_bot_version) return;
-    if (s_update_hold_paint) return;   // a hold is being shown; leave it alone
     update_line_blink_stop();          // any normal text-set ends a pulse in progress
     const char *t = text ? text : "";
 
@@ -6716,7 +6729,6 @@ void ui_set_update_line(const char *text, uint32_t colour)
 void ui_set_update_line_failed(const char *text)
 {
     if (!s_bot_version) return;
-    if (s_update_hold_paint) return;   // a hold is being shown; leave it alone
     // Called once per second for as long as the failure is shown. Only the
     // FIRST call needs to touch text/font/colour or start the animation -
     // repainting identical text every tick would just reset the pulse's
@@ -6853,7 +6865,8 @@ static void touch_event_cb(lv_event_t *e)
 
     // Band-plan strip: self-contained drag-to-tune, fully separate from the
     // spectrum gesture code below - see s_touch_on_bandplan's comment.
-    if (code == LV_EVENT_PRESSED && lv_event_get_target(e) == s_bandplan_obj) {
+    if (code == LV_EVENT_PRESSED &&
+        (lv_event_get_target(e) == s_bandplan_obj || lv_event_get_target(e) == s_bp_catch)) {
         // ⚠ OVERSHOOT GUARD (#218). The band-plan strip is only BANDPLAN_H (22)
         // px tall and sits DIRECTLY on top of the bottom bar, and a tap on it
         // retunes the radio. Reaching for the update line and landing a few
@@ -7391,19 +7404,9 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
         int adx = dx < 0 ? -dx : dx;
         int ady = dy < 0 ? -dy : dy;
 
-        // #218: has this press become a HOLD on the update line? Any real
-        // movement abandons it - the operator is swiping up for Memory Channels
-        // or dragging the band plan, not choosing to update - so the two
-        // gestures never compete: hold still to update, drag to do anything
-        // else. The white "release to confirm" is the promise that lifting now
-        // is what acts; lifting early does nothing at all.
-        if (s_update_press_ms && !s_update_hold_ok) {
-            if (adx > UPDATE_HOLD_SLOP || ady > UPDATE_HOLD_SLOP) {
-                s_update_press_ms = 0;
-            } else if (lv_tick_elaps(s_update_press_ms) >= UPDATE_HOLD_MS) {
-                s_update_hold_ok = true;
-                update_hold_paint("release to confirm", 0xFFFFFF);
-            }
+        // Real movement means this was a drag, not a tap on the update line.
+        if (s_update_press_ms && (adx > UPDATE_HOLD_SLOP || ady > UPDATE_HOLD_SLOP)) {
+            s_update_press_ms = 0;
         }
         // While the bar is taken over by an update, this strip keeps working -
         // it is where hold-to-restart is detected - but ONLY for that. Neither
@@ -7445,8 +7448,7 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
         } else if (be_decided == 1 && s_bottom_edge_swipe_start_y >= 0 &&
                    s_bottom_edge_swipe_start_y - (int)p.y >= EDGE_SWIPE_MIN_DY) {
             ui_show_memories();
-        } else if (be_decided == 0 && s_update_press_ms && !s_update_hold_ok &&
-                   s_update_tap_cb) {
+        } else if (be_decided == 0 && s_update_press_ms && s_update_tap_cb) {
             // #239: a SHORT TAP now acts, and that is the whole point of the
             // rework. It opens ota_modal and does nothing else - no download,
             // no reboot - so the thing the 700 ms hold was protecting against
@@ -7454,18 +7456,7 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
             // a download or restarting a radio) costs a dismissible window
             // instead. The label can finally say "tap" and mean it.
             //
-            // This used to paint "hold to confirm" to teach the gesture, which
-            // is exactly the kind of instruction you no longer need once the
-            // invitation is true.
-            s_update_tap_cb();
-        } else if (be_decided == 0 && s_update_hold_ok && s_update_tap_cb) {
-            // #218: a completed LONG PRESS on the bottom bar. The hold is the
-            // confirmation - it cannot happen by brushing past, it announced
-            // itself with "release to confirm" while the finger was still down,
-            // and lifting early cancels it. While an update is pending the whole
-            // bar accepts it, so there is no need to aim at the small text next
-            // to the band-plan strip.
-            ESP_LOGW("ui", "update line long-press confirmed (x=%d)", (int)p.x);
+            ESP_LOGI("ui", "update line tapped (x=%d)", (int)p.x);
             s_update_tap_cb();
         } else if (be_decided == 0 && grip_mouse_click(e, s_bottom_edge_grip)) {
             ui_show_memories();         // a pointer cannot swipe: see grip_mouse_click()
@@ -10244,6 +10235,7 @@ void ui_apply_saved_mode(void)
     if (s_spectrum_obj)  lv_obj_add_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN);
     if (s_label_bar)     lv_obj_add_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN);
     if (s_bandplan_obj)  lv_obj_add_flag(s_bandplan_obj,  LV_OBJ_FLAG_HIDDEN);
+    if (s_bp_catch)      lv_obj_add_flag(s_bp_catch,      LV_OBJ_FLAG_HIDDEN);  // no strip, no catcher
     if (s_waterfall_obj) lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN);
     spots_lane_set_visible(false);
     top_bar_set_ft8_dim(true);
@@ -10331,6 +10323,7 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
             if (s_spectrum_obj)  { lv_obj_add_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN); lv_obj_set_x(s_spectrum_obj,  0); }
             if (s_label_bar)     { lv_obj_add_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN); lv_obj_set_x(s_label_bar,     0); }
             if (s_bandplan_obj)  { lv_obj_add_flag(s_bandplan_obj,  LV_OBJ_FLAG_HIDDEN); lv_obj_set_x(s_bandplan_obj,  0); }
+            if (s_bp_catch)      lv_obj_add_flag(s_bp_catch,      LV_OBJ_FLAG_HIDDEN);
             if (s_waterfall_obj) { lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN); lv_obj_set_x(s_waterfall_obj, 0); }
             if (spots_lane_obj()) lv_obj_set_x(spots_lane_obj(), 0);
         }
@@ -10350,6 +10343,7 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
         if (s_spectrum_obj)  { lv_obj_set_x(s_spectrum_obj,  start_x); lv_obj_clear_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN); }
         if (s_label_bar)     { lv_obj_set_x(s_label_bar,     start_x); lv_obj_clear_flag(s_label_bar,     LV_OBJ_FLAG_HIDDEN); }
         if (s_bandplan_obj)  { lv_obj_set_x(s_bandplan_obj,  start_x); lv_obj_clear_flag(s_bandplan_obj,  LV_OBJ_FLAG_HIDDEN); }
+        if (s_bp_catch)      lv_obj_clear_flag(s_bp_catch, LV_OBJ_FLAG_HIDDEN);
         if (s_waterfall_obj) { lv_obj_set_x(s_waterfall_obj, start_x); lv_obj_clear_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN); }
         if (spots_lane_obj()) { lv_obj_set_x(spots_lane_obj(), start_x); spots_lane_set_visible(true); }
         if (animate) {
