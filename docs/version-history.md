@@ -2472,8 +2472,7 @@ unlabeled (real) decodes appeared.
 
 ### Shipped in v1.9.3 — 2026-08-23
 
-**The update flow stopped being a thing you had to learn, and the reason it
-kept failing turned out to be memory, not timing.**
+**The update flow stopped being a thing you had to learn.**
 
 #### Updating, rewritten
 
@@ -2509,19 +2508,19 @@ no room to say what was actually happening.
   of touch while it still draws as 22; tap-to-tune gives up the same 50 px,
   which a 370 px waterfall can spare.
 
-#### Why the update kept crashing at 100%
+#### Internal memory headroom, which is what made background download possible
 
-Four watchdog resets in a row, always at the very end of a long download with
-the radio streaming. It was **not** scheduling — the verify step measured
-894 ms with the FFT running and 890 ms with it stood down, four milliseconds
-apart — and the very first symptom said so plainly: *"Could not start the
-update task"* is `xTaskCreate` failing to find 8 KB of contiguous internal RAM.
+Background download is only safe if the device has room to do it while
+everything else keeps running, and it did not. `ota_update_start()` needs 8 KB
+of *contiguous internal* RAM for its task stack — it cannot use PSRAM, because
+flash writes run with the cache off — and in FT8 with the radio streaming the
+largest internal block measured **6,912 bytes**.
 
-`size` → `size-components` → `nm --size-sort` named the culprits in four
-minutes and no hardware: **`s_toc`** (9,472 B, the manual's contents list,
-touched only while the Reader is open) and **`s_pub`** (4,608 B, a spur map for
-a feature that defaults off), both sitting in the scarcest memory on the board.
-Moved to PSRAM with `EXT_RAM_BSS_ATTR`, recovering **14,084 bytes**.
+`size` → `size-components` → `nm --size-sort` named the two worst offenders in
+four minutes: **`s_toc`** (9,472 B, the manual's contents list, touched only
+while the Reader is open) and **`s_pub`** (4,608 B, a spur map for a feature
+that defaults off), both sitting in internal `.bss` for no reason.
+`EXT_RAM_BSS_ATTR` moved them, recovering **14,084 bytes**.
 
 Measured in FT8 with the radio streaming ~48,000 pairs/s:
 
@@ -2531,16 +2530,14 @@ Measured in FT8 with the radio streaming ~48,000 pairs/s:
 | DMA pool free | 4,683 | **20,231** |
 | minimum internal free | 2,519 | **10,067** |
 
-Confirmed by a controlled A/B under the exact failing recipe — same mode, same
-audio load, ~300 s download, one variable — where four runs below ~12 KB free
-took the watchdog and two runs above ~14 KB completed cleanly at 304 s and
-328 s.
+The **OTA task's stack is now static and right-sized**: measured use is 3,216
+bytes, so the 8,192 it asked the heap for was a round number rather than a
+figure — and asking for it at the moment an operator presses "update" is asking
+at the worst possible time. A static 6,144-byte `.bss` stack is 2 KB smaller
+*and* cannot fail to allocate.
 
-The **OTA task's stack is now static and right-sized**: it measures 3,216 bytes
-of use, so the 8,192 it asked the heap for was a round number rather than a
-figure, requested at the worst possible moment. A static 6,144-byte `.bss`
-stack is 2 KB smaller *and* cannot fail to allocate, so that failure mode is
-gone by construction.
+⚠ Engineering detail, including the falsified theories and the controlled A/B
+that settled it, is in `CLAUDE.md` rather than here.
 
 #### A real bug in every upload, not just updates
 

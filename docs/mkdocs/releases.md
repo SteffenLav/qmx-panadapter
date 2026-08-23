@@ -6,15 +6,14 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 **v1.9.3** — 2026-08-23
 
-**Updating is now one decision instead of a procedure — and the reason it kept crashing at 100% turned out to be memory, not timing.**
+**Updating is now one decision instead of a procedure.**
 
 - **The update downloads quietly in the background** and only asks you once, at the end. On by default; switch it off under **Settings → Network → Download updates automatically** if you are on a metered connection, since each update is about 3.3 MB. Downloading never installs anything - only a restart does, and only you can ask for that.
 - **A proper window in the middle of the screen**, with the version, what will happen, and two buttons: **Restart now** or **Later**. The bottom bar breathes gently while an update waits for you and goes quiet once you have said "later" - a signal that never stops being a signal.
 - **The long-press is gone.** A plain tap opens the window. The hold only ever existed so a stray brush could not start a download; now that a press just opens something you can dismiss, it does not need to be defended against. *(Don N2VGU spotted that the old wording described the wrong action at the wrong moment - he was right about the cause, not just the words.)*
 - **The band-plan strip is far easier to hit.** It is only 22 px tall with the bottom bar hard against it below and the waterfall above; its touch area now reaches 50 px up into the waterfall while it still draws the same size.
 - **The spectrum, waterfall and FT8 decoding keep running while an update downloads.** Previously everything stopped for the whole download. Expect a slight stutter and one brief pause right at the end.
-- **The crash at 100% is fixed, and it was never about timing.** 14 KB of memory that had no business being where it was - the manual's contents list and a spur map for a feature that defaults off - was moved out of the small, fast memory the update needs. Confirmed by running the exact failing case repeatedly: four failures before, two clean completions after.
-- **An audio bug found on the way, affecting every upload.** While any transfer was running, the audio buffer was being drained at less than half the rate the radio fills it, so audio was quietly dropped throughout - QRZ, eQSL and LoTW uploads included, not just updates. Fixed.
+- **Audio is no longer dropped while a log upload is running.** Uploading to QRZ, eQSL or LoTW quietly interrupted the audio feed, which could cost you FT8 decodes at the time.
 - **TXCQ ANY / EVEN / ODD on the web FT8 page** *(Randy N4OPI)* - choose which 15-second slot your CQ goes out in, from the browser. Same setting as the Tab5's own button, so the two always agree.
 - **SSB tune snap is now 500 Hz** *(Dave KX3DX)* - stations that stray off an integer kHz sit at 0.5, and a 1 kHz grid cannot reach them. Also half as many stops across a drag.
 
