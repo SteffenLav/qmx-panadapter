@@ -13,6 +13,36 @@ qmx m                               # monitor only
 
 Exit monitor: `Ctrl+T` then `Ctrl+X`.
 
+### ⛔ FOUR boards share this machine — resolve every port by BENCH NAME
+
+`docs/bench-setup.md` is the standing reference and `tools/bench.json` is the
+registry the tooling reads. Read the doc before touching hardware; the short
+version:
+
+| Bench | Board | Radio | Console | Tree |
+|---|---|---|---|---|
+| **dev** | Tab5 #1 `30:ED:A0:EA:DD:57` | QMX | COM3 → COM20 | `qmx-panadapter` / `main` |
+| **lab** | Tab5 #3 | QMX+ | COM21 | `-wspr` / `-cw` |
+| **field** | Tab5 #2 `80:F1:B2:D1:45:92` | none | COM22 | last **release**, **OTA only — never USB-flash it** |
+| **port** | Waveshare P4 7B | none | COM12 → COM23 | `-p4` / `feat/board-hal-seam` |
+
+- **All four enumerate as `VID_303A&PID_1001` with no serial number**, so the COM
+  number follows the SOCKET, not the board. `idf.py flash` with no `-p` has
+  already partially flashed a Tab5 binary onto the Waveshare and boot-looped it.
+  Use `bench flash <name>`, which resolves the port from the registry and then
+  **verifies the `serial(MAC)=` line in the boot header afterwards**.
+- **ONE build at a time, all four trees.** Not an IDF limitation — the CPU is 2
+  cores, so a second build starves both. (The earlier "the pinned IDF Python
+  environment isn't concurrency-safe" explanation was wrong; nothing was
+  locking.) `bench build`/`bench flash` take `C:/dev/bench.lock`.
+- **ONE antenna, two radios, a switch.** Decode counts, SNR and noise floor from
+  the bench that does NOT hold the antenna are meaningless. `bench antenna
+  <name>` records the holder; ask before believing any receive measurement.
+- **Standing patches split two ways**: six edit the shared IDF tree
+  (`C:/esp/v5.4.4`, applied once per machine — one IDF reinstall breaks all four
+  benches), three edit `managed_components/` (per tree, wiped by `fullclean` — so
+  four applications, one per tree). Table in the doc.
+
 ### ⛔ Serial capture: the rules, because getting these wrong has cost DAYS
 
 Every one of these is a mistake I actually made, each of which produced a
