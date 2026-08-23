@@ -241,7 +241,13 @@ function Invoke-Idf {
     if (-not $env:IDF_PATH) { & $reg.idf_export | Out-Null }
     Push-Location $tree
     try {
-        & idf.py @idfArgs
+        # Out-Host, NOT a bare call. Anything idf.py writes to stdout otherwise
+        # joins this function's RETURN VALUE, so the caller's `$rc` becomes the
+        # whole output array and `$rc -ne 0` is true even on a clean build -
+        # which is exactly what happened the first time this ran: a successful
+        # build reported "Build FAILED". A tool that cries wolf on its first
+        # use is worse than no tool.
+        & idf.py @idfArgs | Out-Host
         return $LASTEXITCODE
     } finally { Pop-Location }
 }
