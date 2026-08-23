@@ -2,7 +2,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "kiss_fftr.h"
+#include "fft/kiss_fftr.h" /* ft8_lib's component INCLUDE_DIRS is its own root
+                             ("."), not fft/ specifically - matters once this
+                             file is built as part of the real firmware
+                             (main/CMakeLists.txt REQUIRES ft8_lib), not just
+                             host test builds that pass -I .../ft8_lib/fft
+                             directly. */
 
 #define TONE_SPACING (WSPR_SAMPLE_RATE_HZ / WSPR_SYM_LEN_SAMPLES) /* 1.46484375 Hz */
 

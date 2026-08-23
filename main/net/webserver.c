@@ -16,6 +16,7 @@
 #include "ui/qmx_term_view.h" // the dev "term_view" action
 #include "ft8_screen_view.h"  // ft8_screen_view_is_active
 #include "ft8_tx.h"           // ft8_tx_get_status (web TX-status banner)
+#include "wspr_tx.h"          // the dev "wspr_tx_test" action
 #include "ft8_qso.h"          // ft8_qso_get_state / get_target / get_cq_calls_sent
 #include "ft8_status.h"       // ft8_status_get
 #include "dsp.h"              // dsp_get_peak_dbm_around_vfo
@@ -1094,6 +1095,59 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // UI element references this — it's meant to be fired from the browser
         // console/bookmarklet on the dev's PC.
         ui_resource_monitor_toggle();
+    } else if (action && strcmp(action, "wspr_tx_test") == 0) {
+        // Developer escape hatch, mirroring panic_test's "prove the mechanism
+        // actually runs" reasoning: WSPR TX (main/wspr_tx.c) has no UI trigger
+        // yet (Phase 3 in docs/wspr-scope.md), and WSPR_TX_SEND_LIVE defaults
+        // to 0 (dry run - see wspr_tx.c's own header), so this is currently
+        // the ONLY way to exercise the ~110 s CAT-burst timing/sequencing
+        // against real hardware scheduling instead of just trusting the code
+        // reading correct. Even with this trigger reachable, nothing is
+        // actually transmitted unless WSPR_TX_SEND_LIVE is deliberately
+        // flipped to 1 in a rebuild - this endpoint cannot key the radio on
+        // its own. No web UI element references it.
+        //
+        // Optional JSON body fields override the defaults (from settings'
+        // my_callsign/my_grid, and a fixed placeholder power/freq): "call",
+        // "grid", "power_dbm", "freq_hz".
+        qmx_settings_t wt_s;
+        settings_load_all(&wt_s);
+        const char *call = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call"));
+        const char *grid = cJSON_GetStringValue(cJSON_GetObjectItem(root, "grid"));
+        cJSON *power_j = cJSON_GetObjectItem(root, "power_dbm");
+        cJSON *freq_j  = cJSON_GetObjectItem(root, "freq_hz");
+        if (!call || !call[0]) call = wt_s.my_callsign;
+        if (!grid || !grid[0]) grid = wt_s.my_grid;
+        int power_dbm  = cJSON_IsNumber(power_j) ? power_j->valueint : 23;
+        int freq_hz    = cJSON_IsNumber(freq_j) ? freq_j->valueint : WSPR_TX_DEFAULT_FREQ_HZ;
+
+        wspr_tx_request_t wt_req;
+        char wt_err[80] = "";
+        char out[192];
+        if (!wspr_tx_build_request(call, grid, power_dbm, freq_hz, &wt_req, wt_err, sizeof(wt_err))) {
+            cJSON_Delete(root);
+            httpd_resp_set_status(req, "400 Bad Request");
+            snprintf(out, sizeof(out), "{\"ok\":false,\"error\":\"%s\"}", wt_err);
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_sendstr(req, out);
+            return ESP_OK;
+        }
+        bool armed = wspr_tx_arm(&wt_req, wt_err, sizeof(wt_err));
+        cJSON_Delete(root);
+        if (!armed) {
+            httpd_resp_set_status(req, "409 Conflict");
+            snprintf(out, sizeof(out), "{\"ok\":false,\"error\":\"%s\"}", wt_err);
+        } else {
+            int secs = wspr_tx_seconds_until_next_slot();
+            snprintf(out, sizeof(out),
+                     "{\"ok\":true,\"call\":\"%s\",\"grid\":\"%s\",\"power_dbm\":%d,"
+                     "\"freq_hz\":%d,\"fires_in_s\":%d,\"live\":%s}",
+                     wt_req.callsign, wt_req.grid, wt_req.power_dbm, wt_req.audio_freq_hz, secs,
+                     wspr_tx_send_live_build() ? "true" : "false");
+        }
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, out);
+        return ESP_OK;
     } else if (action && strcmp(action, "reset_settings") == 0) {
         // Clear all app settings + memory channels (erases user_nvs on the next
         // boot), keeping the ADIF QSO log and WiFi. Replaces the esptool

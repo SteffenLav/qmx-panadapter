@@ -11,25 +11,35 @@
  * candidates decode cleanly to standard-format US callsigns with legal
  * WSPR power values and fast Fano convergence (82-102 cycles); the other 3
  * are correctly rejected as implausible (see wspr_decode.c for the three
- * checks and why each exists - one caught the file's own STRONGEST signal,
- * cause not yet confirmed, see docs/wspr-phase1-status.md).
+ * checks and why each exists).
+ *
+ * RESOLVED: why the file's own STRONGEST candidate still fails. Real
+ * ionospheric fading (QSB) within the 110 s transmission - not a bug, not
+ * frequency drift (tested and ruled out), not a second overlapping signal.
+ * See test/wspr_diag_candidate0.c and docs/wspr-phase1-status.md for the
+ * full diagnosis (sync-match rate climbing from ~55% to ~85% across the
+ * transmission, total power rising ~20x, a clean single frequency peak).
+ *
+ * Per-symbol reliability-weighted decoding (wspr_fano_decode_weighted(),
+ * main/wspr_fano.c/.h) was built and shipped as a FALLBACK specifically to
+ * target this: it measurably beats hard-decision at moderate fading (10/10
+ * vs 9/10 across seeds, test/wspr_fading_harness.c), but even oracle
+ * (ground-truth) weighting cannot recover THIS candidate's severity -
+ * confirmed a genuine information-theoretic limit, not a tuning gap. Hard-
+ * decision stays the primary path (no calibration fragility); weighted is
+ * tried only when hard-decision doesn't produce a plausible result.
  *
  * KNOWN LIMITATIONS (next work, not silently glossed over):
- *  - No frequency-drift compensation. A real WSPR transmitter's oscillator
- *    can drift a fraction of a Hz over the 110.6 s transmission; this
- *    module assumes a single fixed center frequency for the whole message.
- *    A linear-drift search WAS tried against the one strong-signal
- *    candidate that fails to decode plausibly, and it did NOT confirm
- *    drift as the cause - a better-scoring drift produced a DIFFERENT,
- *    still-implausible decode with a worse (not better) Fano cycle count.
- *    See docs/wspr-phase1-status.md for the negative result. Don't assume
- *    drift compensation fixes that candidate without re-testing.
- *  - Hard-decision only. Tone power is compared pairwise (which of two
- *    candidate tones is stronger) rather than feeding a graded soft metric
- *    to the Fano decoder - correctness-proven (see wspr_codec_harness.c)
- *    but not the maximum-sensitivity approach a real weak-signal receiver
- *    needs.
- *  - The three plausibility checks (message shape, legal power, Fano cycle
+ *  - No frequency-drift compensation - tested against the one candidate
+ *    that seemed like a plausible drift case and ruled out (see above);
+ *    may still matter for a different real signal never captured yet.
+ *  - Whole-capture soft-decision metrics (as opposed to the per-symbol
+ *    weighted fallback above) were tried twice and NOT shipped - see
+ *    docs/wspr-phase1-status.md's licensing section and the two "soft
+ *    metric" update entries for why (a fixed-scale table was too narrow;
+ *    a per-capture-normalized one worked synthetically but regressed the
+ *    real WAV 5/8 -> 1/8).
+ *  - The plausibility checks (message shape, legal power, Fano cycle
  *    count) are a proxy for signal quality, not a real quality metric
  *    (sync correlation vs. noise floor, the way wsprd itself gates
  *    candidates). Good enough to reject a wrong decode in testing so far,

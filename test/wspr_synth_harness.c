@@ -17,7 +17,7 @@
  * questions in docs/wspr-phase1-status.md.
  *
  * Build:
- *   gcc -O2 -Wall -I main -I components/ft8_lib/fft \
+ *   gcc -O2 -Wall -I main -I components/ft8_lib \
  *       -o wspr_synth_harness test/wspr_synth_harness.c \
  *       main/wspr_proto.c main/wspr_fano.c main/wspr_decode.c \
  *       components/ft8_lib/fft/kiss_fft.c components/ft8_lib/fft/kiss_fftr.c \

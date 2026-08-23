@@ -4,7 +4,7 @@
  * before it ever touches the device."
  *
  * Build (from the repo root):
- *   gcc -O2 -Wall -I main -I components/ft8_lib/fft \
+ *   gcc -O2 -Wall -I main -I components/ft8_lib \
  *       -o wspr_decode_harness test/wspr_decode_harness.c \
  *       main/wspr_proto.c main/wspr_fano.c main/wspr_decode.c \
  *       components/ft8_lib/fft/kiss_fft.c components/ft8_lib/fft/kiss_fftr.c \

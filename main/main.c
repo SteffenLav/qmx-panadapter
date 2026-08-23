@@ -36,6 +36,7 @@
 #include "ui_mode.h"
 #include "ft8_screen.h"
 #include "ft8_tx.h"
+#include "wspr_tx.h"
 #include "ft8_status.h"
 #include "ft8_qso.h"
 #include "ft8_pileup.h"
@@ -371,6 +372,7 @@ void app_main(void)
     ft8_screen_init();
     ft8_status_init();
     ft8_tx_init();
+    wspr_tx_init();
     ft8_qso_init();
     ft8_pileup_init();
     ft8_sim_init();
