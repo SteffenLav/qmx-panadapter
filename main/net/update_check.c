@@ -7,6 +7,9 @@
 #include "wifi/wifi.h"
 #include "net/webserver_ws.h"     // webserver_ws_set_paused
 #include "util/psram_task.h"
+#include "net/ota_update.h"
+#include "net/net_quiet.h"
+#include "storage/settings.h"
 
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
@@ -268,7 +271,41 @@ static void check_task(void *arg)
         // the full 6 h, or one unlucky boot costs the whole day's check
         // (hardware-observed: both URLs failed at 36.8 s uptime while WiFi
         // came up at ~38.5 s; neighbouring boots succeeded at 37-38 s).
-        bool ok = wifi_is_connected() && do_check();
+        // Not while an update is downloading: do_check()'s GitHub fallback
+        // pulls 48 KB over TLS, and the thing it would be checking for is
+        // already in flight. See net_quiet.h.
+        bool ok = wifi_is_connected() && !net_quiet_active() && do_check();
+
+        // #239: fetch it quietly, so the operator is only ever asked the one
+        // question that matters - "restart into it?" - instead of starting a
+        // download and then waiting on it. This DOWNLOADS ONLY. Applying still
+        // needs a deliberate press, which is the standing rule at the top of
+        // ota_update.h and the reason it exists: a warm reset with the radio
+        // attached is the #74 trigger, so an unattended RESTART would kill
+        // someone's QMX. An unattended download cannot.
+        //
+        // Opt-out, because it is not free: 3.3 MB saturates this link
+        // (~12.7 KB/s measured) for over a minute and costs real money on the
+        // phone hotspot a POTA operator is using. ota_update_start() refuses
+        // by itself while transmitting or mid-QSO, so those need no gate here.
+        //
+        // Retried on the next check rather than immediately: gating on "not
+        // RUNNING and not DONE" means a failure is re-attempted at the normal
+        // CHECK_INTERVAL_MS cadence (30 min), which is the right amount of
+        // persistence for something nobody asked for.
+        if (ok && s_available) {
+            qmx_settings_t cfg;
+            settings_load_all(&cfg);
+            ota_state_t st = ota_update_get_state(NULL, NULL, 0);
+            if (cfg.ota_autodl && st != OTA_RUNNING && st != OTA_DONE) {
+                char aurl[192], oerr[96];
+                update_check_get_asset_url(aurl, sizeof(aurl));
+                if (aurl[0] && ota_update_start(aurl, oerr, sizeof(oerr)))
+                    ESP_LOGW(TAG, "auto-download of %s started (quiet)", s_latest);
+                else
+                    ESP_LOGI(TAG, "auto-download held off: %s", oerr);
+            }
+        }
         // Sleep in slices so a forced check does not wait out the interval.
         // Even at 5 minutes that is too long when the operator has just
         // published a release and wants to SEE the offer appear.
@@ -298,3 +335,15 @@ void update_check_get_latest(char *out, int out_sz)
 }
 
 bool update_check_available(void) { return s_available; }
+
+#define RELEASE_ASSET_URL_FMT     "https://github.com/SteffenLav/qmx-panadapter/releases/download/%s/qmx_panadapter.bin"
+
+void update_check_get_asset_url(char *out, size_t out_sz)
+{
+    if (!out || out_sz == 0) return;
+    out[0] = ' ';
+    if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_available && s_latest[0])
+        snprintf(out, out_sz, RELEASE_ASSET_URL_FMT, s_latest);
+    if (s_lock) xSemaphoreGive(s_lock);
+}

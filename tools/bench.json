@@ -1,0 +1,86 @@
+{
+  "_README": [
+    "Canonical bench registry for this machine. ONE copy, at",
+    "C:/dev/qmx-panadapter/tools/bench.json - every worktree reads it by",
+    "absolute path. Never copy it into another tree; edit it here.",
+    "Paths use forward slashes deliberately: PowerShell accepts them and it",
+    "keeps this file free of backslash escaping.",
+    "Runtime state (who holds the build lock, who holds the antenna) lives in",
+    "the lock file, NOT here. This file is the plan; the lock is the moment."
+  ],
+
+  "lock_file": "C:/dev/bench.lock",
+  "idf_export": "C:/esp/v5.4.4/esp-idf/export.ps1",
+  "capture_script": "C:/dev/qmx-panadapter/tools/cap_serial_reboot.ps1",
+  "capture_seconds": 315360000,
+
+  "antenna": {
+    "count": 1,
+    "band": "20m",
+    "note": "One antenna, two radios, a 2-way switch. Only ONE bench is on air at a time. The spare switch position feeds a dummy load, so a TX on the off-antenna bench is safe. Record the holder with 'bench antenna <name>' - decode counts and noise floor from the antenna-less bench are meaningless."
+  },
+
+  "benches": [
+    {
+      "name": "dev",
+      "role": "Daily driver. Always the newest main commit.",
+      "board": "Tab5 #1",
+      "mac": "30:ED:A0:EA:DD:57",
+      "ip": "192.168.1.213",
+      "com": "COM3",
+      "com_planned": "COM20",
+      "radio": "QMX (small)",
+      "tree": "C:/dev/qmx-panadapter",
+      "branch": "main",
+      "capture": "C:/dev/qmx-panadapter/scratchpad/capture-dev.txt",
+      "usb_flash": "yes"
+    },
+    {
+      "name": "lab",
+      "role": "Feature branch of the day (wspr, cw). Flashed freely.",
+      "board": "Tab5 #3 (new)",
+      "mac": "UNKNOWN - fill in from the first boot line",
+      "ip": "UNKNOWN",
+      "com": "UNASSIGNED",
+      "com_planned": "COM21",
+      "radio": "QMX+",
+      "tree": "C:/dev/qmx-panadapter-wspr",
+      "branch": "feat/wspr-page",
+      "capture": "C:/dev/qmx-panadapter/scratchpad/capture-lab.txt",
+      "usb_flash": "yes"
+    },
+    {
+      "name": "field",
+      "role": "Release + OTA verification. User simulator.",
+      "board": "Tab5 #2",
+      "mac": "80:F1:B2:D1:45:92",
+      "ip": "192.168.1.178",
+      "com": "UNASSIGNED",
+      "com_planned": "COM22",
+      "radio": "none",
+      "radio_note": "Borrow the small QMX if a release touches radio behaviour.",
+      "tree": "n/a - runs the last RELEASE",
+      "branch": "n/a",
+      "capture": "C:/dev/qmx-panadapter/scratchpad/capture-field.txt",
+      "usb_flash": "NO",
+      "usb_flash_reason": "This unit has never been USB-flashed. That provenance is what makes an OTA result credible - it is the only board that proves an update path a real user would take. Update it over the air only. If it must ever be recovered by USB, say so explicitly and update this field, because the OTA evidence resets with it."
+    },
+    {
+      "name": "port",
+      "role": "Multi-board port to the Waveshare P4. Private remote.",
+      "board": "Waveshare P4 7B",
+      "board_note": "ESP32-P4-WIFI6-Touch-LCD-7B, 1024x600 native landscape, EK79007 + GT911.",
+      "mac": "UNKNOWN - fill in from the first boot line",
+      "ip": "UNKNOWN",
+      "com": "COM12",
+      "com_planned": "COM23",
+      "radio": "none",
+      "radio_note": "Borrow the small QMX for the USB-host and parity phases.",
+      "tree": "C:/dev/qmx-panadapter-p4",
+      "branch": "feat/board-hal-seam",
+      "capture": "C:/dev/qmx-panadapter/scratchpad/capture-port.txt",
+      "usb_flash": "yes",
+      "warning": "This board was once partially flashed with Tab5 firmware at 94% and boot-looped, because VID_303A was assumed to mean Tab5. It is NOT a Tab5 and must never receive a qmx-panadapter main-tree binary."
+    }
+  ]
+}

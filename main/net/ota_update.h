@@ -26,6 +26,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 typedef enum {
     OTA_IDLE = 0,
@@ -49,9 +50,34 @@ bool ota_update_start(const char *url, char *err, size_t err_len);
 // failure reason when FAILED.
 ota_state_t ota_update_get_state(int *pct, char *msg, size_t msg_len);
 
+// DEV ONLY (POST /api/cmd {"action":"verify_test","quiet":true|false}). Runs
+// only the image verify that esp_https_ota_finish() performs, on the partition
+// already written, so a 2-second operation can be tested without a 6-minute
+// download in front of it. Logs the duration and result.
+void ota_update_verify_test(bool quiet);
+
+// DEV ONLY. `yield_ms` stretches the download so a slow link can be simulated
+// on a fast one - the failure being chased only appears on long downloads.
+// `pause_feeds` A/Bs the net_quiet hold. Both default to the shipping values.
+void ota_update_set_test_params(int yield_ms, bool pause_feeds);
+
+// DEV ONLY (POST /api/cmd {"action":"ota_reset"}). Forget a staged update so
+// another download can be started, WITHOUT a reboot - a reflash to clear this
+// is a warm reset with the radio attached, which is the #74 trigger. Does not
+// touch the written image or the boot partition.
+void ota_update_reset_state(void);
+
 // The version being installed, from the incoming image's own descriptor, or ""
 // before the header has been read. Both screens name it while the download runs.
 void ota_update_get_target_version(char *out, size_t out_sz);
+
+// Bumped on every failure, never reset. A fast failure (bad hostname, DNS
+// fails in under 100ms - measured) can complete entirely between two 1 Hz
+// status polls with no observable OTA_RUNNING tick in between, so
+// ota_state_t alone cannot tell status.c's bottom-bar pulse "this is a NEW
+// failure, reset your 3-tick counter" from "still the same one as last
+// tick". Compare this against a remembered value instead.
+uint32_t ota_update_get_fail_seq(void);
 
 // True once an update has been written and the device is only waiting to be
 // restarted into it.

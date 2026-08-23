@@ -40,6 +40,12 @@ void ft8_screen_view_request_refresh(void);
 // is not up - there would be nothing to transmit on.
 void ft8_screen_view_request_cq(void);
 
+// CQ slot parity: -1 = any, 0 = EVEN only, 1 = ODD only. The Tab5's cycling
+// TXCQ button and the web page drive the SAME state - set is deferred to the
+// LVGL task, get is a plain read.
+void ft8_screen_view_set_cq_parity(int parity);
+int  ft8_screen_view_get_cq_parity(void);
+
 // Reply to a decoded station from the web UI. Thread-safe request; the LVGL
 // timer builds the correct next message (WSJT-X double-click semantics) and
 // either starts the full auto-QSO (their fresh CQ) or arms the one next message

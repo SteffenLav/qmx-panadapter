@@ -55,7 +55,7 @@ static const char *TAG = "ft8_view";
 #define RIGHT_W          (MID_W - LEFT_W)
 
 // Column x-offsets / widths within the row.
-// Layout: SL | CALL | MESSAGE | CTY | SNR | DT | HZ | KM | BRG | HRD
+// Layout: SL | CALL | MESSAGE | CTY | SNR | DT | HZ | KM | BRG | AGE
 // SL = slot parity (E blue / O amber). SL/CALL/MESSAGE are unchanged from
 // the pre-v1.3.1 layout; the country column shrank from full entity names
 // (157 px) to 3-letter codes (dxcc_lookup_alpha3), which - together with a
@@ -72,7 +72,7 @@ static const char *TAG = "ft8_view";
 #define COL_HZ_X        669
 #define COL_KM_X        739
 #define COL_BRG_X       817
-#define COL_HEARD_X     885
+#define COL_AGE_X       885
 #define COL_RIGHT_EDGE  960
 #define ROW_H           36
 
@@ -84,7 +84,7 @@ static const char *TAG = "ft8_view";
 #define COL_HZ_W        64
 #define COL_KM_W        72
 #define COL_BRG_W       62
-#define COL_HEARD_W     (COL_RIGHT_EDGE - COL_HEARD_X  - 16)
+#define COL_AGE_W       (COL_RIGHT_EDGE - COL_AGE_X  - 16)
 
 // Pool size: pre-allocated row container/label objects.
 // Combined with shared lv_style_t (below), per-row local styles drop
@@ -120,7 +120,7 @@ static lv_style_t s_style_col_dt;       // DT (dim, right)
 static lv_style_t s_style_col_hz;       // HZ (dim, right)
 static lv_style_t s_style_col_km;       // KM (dim, right)
 static lv_style_t s_style_col_brg;      // BRG (dim, right)
-static lv_style_t s_style_col_heard;    // HRD (dim, right)
+static lv_style_t s_style_col_age;      // AGE (dim, right)
 static lv_style_t s_style_header;       // column header row
 static lv_style_t s_style_header_label; // column header text
 static bool s_styles_inited = false;
@@ -136,7 +136,7 @@ typedef struct {
     lv_obj_t *l_hz;
     lv_obj_t *l_km;
     lv_obj_t *l_brg;
-    lv_obj_t *l_heard;
+    lv_obj_t *l_age;
     // Dirty-tracking cache: skip lv_label_set_text when unchanged.
     char prev_call[16];
     char prev_msg[40];
@@ -146,7 +146,7 @@ typedef struct {
     char prev_hz[12];
     char prev_km[12];
     char prev_brg[12];
-    char prev_heard[12];
+    char prev_age[12];
     int16_t prev_snr_db;
     int8_t  prev_color;          /* -1=unset 0=other 1=CQ/green 2=self/red */
     int8_t  prev_slot_parity;    /* -1=unset 0=odd 1=even */
@@ -361,7 +361,7 @@ static void styles_init(void)
     INIT_COL(s_style_col_hz,      COL_HZ_X  + 10, COL_HZ_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     INIT_COL(s_style_col_km,      COL_KM_X  + 10, COL_KM_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     INIT_COL(s_style_col_brg,     COL_BRG_X + 10, COL_BRG_W,    LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
-    INIT_COL(s_style_col_heard,   COL_HEARD_X,   COL_HEARD_W,   LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
+    INIT_COL(s_style_col_age,     COL_AGE_X,     COL_AGE_W,     LV_TEXT_ALIGN_RIGHT, &lv_font_montserrat_24, UI_COLOR_TEXT_SECONDARY);
     #undef INIT_COL
 
     // Column header bar.
@@ -853,7 +853,7 @@ static void build_row(int i)
     r->l_hz      = make_label_styled(r->row, &s_style_col_hz);
     r->l_km      = make_label_styled(r->row, &s_style_col_km);
     r->l_brg     = make_label_styled(r->row, &s_style_col_brg);
-    r->l_heard   = make_label_styled(r->row, &s_style_col_heard);
+    r->l_age     = make_label_styled(r->row, &s_style_col_age);
 
     // SNR colour starts white; per-row local override on update.
     if (r->l_snr) {
@@ -866,7 +866,7 @@ static void build_row(int i)
     r->prev_snr[0]     = '\0';
     r->prev_km[0]      = '\0';
     r->prev_brg[0]     = '\0';
-    r->prev_heard[0]   = '\0';
+    r->prev_age[0]     = '\0';
     r->prev_snr_db       = -127;
     r->prev_color        = -1;
     r->prev_slot_parity  = -1;
@@ -882,9 +882,18 @@ static void update_row(int i, const ft8_call_t *src)
     if (!country) country = "--";
 
     int snr = (int)src->last_snr_db;
-    char b_snr[12], b_dt[12], b_hz[12], b_km[12], b_brg[12], b_heard[12];
+    char b_snr[12], b_dt[12], b_hz[12], b_km[12], b_brg[12], b_age[12];
     snprintf(b_snr,   sizeof(b_snr),   "%+d", snr);
-    snprintf(b_heard, sizeof(b_heard), "%u",  (unsigned)src->heard_count);
+    // Seconds since last heard, not heard_count - the browser's decode list
+    // already shows this (Randy N4OPI asked for parity between the two, and
+    // it's the more useful number: how stale is this row, not how many times
+    // has it been seen). Rows age out of the table entirely at the max-age
+    // setting below, so this never needs more than 2-3 digits.
+    {
+        int64_t age = (int64_t)time(NULL) - src->last_utc;
+        if (age < 0) age = 0;
+        snprintf(b_age, sizeof(b_age), "%us", (unsigned)age);
+    }
 
     // DT: the station's slot-timing offset in seconds, relative to the band
     // consensus - the consensus carries our common RX audio latency, so
@@ -948,7 +957,7 @@ static void update_row(int i, const ft8_call_t *src)
     set_text_if_changed(r->l_hz,      r->prev_hz,      sizeof(r->prev_hz),      b_hz);
     set_text_if_changed(r->l_km,      r->prev_km,      sizeof(r->prev_km),      b_km);
     set_text_if_changed(r->l_brg,     r->prev_brg,     sizeof(r->prev_brg),     b_brg);
-    set_text_if_changed(r->l_heard,   r->prev_heard,   sizeof(r->prev_heard),   b_heard);
+    set_text_if_changed(r->l_age,     r->prev_age,     sizeof(r->prev_age),     b_age);
 
     /* Colour scheme: AMBER=actively working now, RED=own call heard,
        GREY=worked before, GREEN=CQ, WHITE=other */
@@ -1180,6 +1189,13 @@ static void t_slotbar_cb(lv_timer_t *t)
 
 static void start_cq_run(bool interactive);          // defined below
 static volatile bool s_web_cq_pending;               // set from the HTTP task
+// Randy N4OPI: the web FT8 page had no way to choose the CQ slot parity, so a
+// browser operator could start a CQ but not say which window it went out in.
+// -2 = nothing pending. Same deferral as s_web_cq_pending: s_cq_parity and the
+// button that displays it belong to taskLVGL, so the HTTP task only leaves a
+// value behind and the 1 Hz timer applies it.
+static volatile int  s_web_parity_pending = -2;
+static void update_parity_btns(void);   // defined with the button, used by the 1 Hz drain above it
 
 // Web reply-to-station request (Phase 6 of web parity: the operator explicitly
 // wanted TX from the browser). Same deferral as the CQ flag: the HTTP task only
@@ -1283,13 +1299,6 @@ static void web_reply_drain(void)
     const ft8_call_t *match = NULL;
     for (int i = 0; i < n; i++)
         if (strcmp(snap[i].call, call) == 0) { match = &snap[i]; break; }
-    if (!match) {
-        // Decode rows age out after 60 s, and the browser's copy can be a poll
-        // older still - refusing is the right answer, not transmitting at a
-        // station that may have left.
-        web_result_set("%s is no longer in the decode list", call);
-        return;
-    }
 
     char busy_target[24];
     if (ft8_qso_is_busy(busy_target, sizeof(busy_target))) {
@@ -1301,9 +1310,53 @@ static void web_reply_drain(void)
     ft8_tx_request_t req;
     bool is_fresh_grid = false;
     char err[64];
-    if (!ft8_qso_build_manual_reply(match, ft8_tx_pick_tone_hz(), &req, &is_fresh_grid, err, sizeof(err))) {
-        web_result_set("%s", err[0] ? err : "Could not build the reply");
-        return;
+    if (match) {
+        if (!ft8_qso_build_manual_reply(match, ft8_tx_pick_tone_hz(), &req, &is_fresh_grid, err, sizeof(err))) {
+            web_result_set("%s", err[0] ? err : "Could not build the reply");
+            return;
+        }
+    } else {
+        // Not in the live decode table - a row is gone after FT8_ROW_STALE_SEC
+        // (120 s) with no fresh decode, or the browser's own poll can be a
+        // cycle older still. But the pileup list has NO expiry of its own by
+        // design (ft8_pileup.h: "so the operator can go back and work someone
+        // ... even after they've aged out of the live decode list"), so a
+        // caller can sit there for minutes - and this endpoint used to refuse
+        // outright the moment the decode row was gone, even though the Tab5's
+        // own pileup screen has always had a working fallback for exactly this
+        // (Randy N4OPI: he could click a pileup entry on the web page and get
+        // "no longer in the decode list" for a caller he could work fine from
+        // the Tab5 sitting right next to it). Same fallback here now: reply
+        // report-first from the pileup entry's own cached SNR, same shape
+        // cqrun_answer() and ft8_pileup_modal.c's row_work_cb already use.
+        ft8_pileup_entry_t pile[FT8_PILEUP_MAX];
+        int pn = ft8_pileup_get_all(pile, FT8_PILEUP_MAX);
+        const ft8_pileup_entry_t *pmatch = NULL;
+        for (int i = 0; i < pn; i++)
+            if (strcmp(pile[i].call, call) == 0) { pmatch = &pile[i]; break; }
+        if (!pmatch) {
+            // Genuinely gone from both lists - refusing is still right here,
+            // not transmitting at a station with no trace of ever calling.
+            web_result_set("%s is no longer in the decode list", call);
+            return;
+        }
+        qmx_settings_t qs;
+        settings_load_all(&qs);
+        bool fd_mode = qs.field_day_en && qs.fd_class[0] && qs.fd_section[0];
+        char rpt[8];
+        const char *extra = NULL;
+        if (!fd_mode) {
+            ft8_qso_fmt_report(pmatch->snr_db, rpt, sizeof(rpt));
+            extra = rpt;
+        }
+        if (!ft8_tx_build_request(FT8_TX_KIND_REPLY, pmatch->call, ft8_tx_pick_tone_hz(),
+                                  pmatch->last_seen_utc, extra, &req, err, sizeof(err))) {
+            web_result_set("%s", err[0] ? err : "Could not build the reply");
+            return;
+        }
+        is_fresh_grid = false;   // report-first is never TX1
+        ESP_LOGI(TAG, "web reply: %s via pileup fallback, report=%s",
+                 call, extra ? extra : "(grid TX1, FD mode)");
     }
 
     // Their fresh CQ -> the full auto-sequencer, because the operator is NOT in
@@ -1338,6 +1391,15 @@ static void t_clock_cb(lv_timer_t *t)
     // either way. If the FT8 view is not up there is nothing to run a CQ on, and a
     // request left pending would otherwise fire the moment the operator next
     // switched to FT8 - possibly minutes later, unasked.
+    if (s_web_parity_pending != -2) {
+        int p = s_web_parity_pending;
+        s_web_parity_pending = -2;
+        s_cq_parity = (p == 0 || p == 1) ? p : -1;
+        update_parity_btns();
+        ESP_LOGI(TAG, "web set CQ parity: %s",
+                 s_cq_parity < 0 ? "any" : s_cq_parity == 0 ? "EVEN only" : "ODD only");
+    }
+
     if (s_web_cq_pending) {
         s_web_cq_pending = false;
         bool ft8_up = s_container && !lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN);
@@ -1930,6 +1992,16 @@ void ft8_screen_view_request_cq(void)
 {
     s_web_cq_pending = true;
 }
+
+// -1 = any, 0 = EVEN only, 1 = ODD only. Applied by the 1 Hz timer so the Tab5
+// button and the browser can never disagree - there is one piece of state, not
+// a copy per surface.
+void ft8_screen_view_set_cq_parity(int parity)
+{
+    s_web_parity_pending = (parity == 0 || parity == 1) ? parity : -1;
+}
+
+int ft8_screen_view_get_cq_parity(void) { return s_cq_parity; }
 
 static void cq_btn_cb(lv_event_t *e)
 {
@@ -2719,7 +2791,7 @@ void ft8_screen_view_init(lv_obj_t *parent)
         { "HZ",      COL_HZ_X,      COL_HZ_W,      LV_TEXT_ALIGN_RIGHT },
         { "KM",      COL_KM_X,      COL_KM_W,      LV_TEXT_ALIGN_RIGHT },
         { "BRG",     COL_BRG_X,     COL_BRG_W,     LV_TEXT_ALIGN_RIGHT },
-        { "HRD",     COL_HEARD_X,   COL_HEARD_W,   LV_TEXT_ALIGN_RIGHT },
+        { "AGE",     COL_AGE_X,     COL_AGE_W,     LV_TEXT_ALIGN_RIGHT },
     };
     for (int i = 0; i < 10; i++) {
         lv_obj_t *lbl = lv_label_create(hdr);

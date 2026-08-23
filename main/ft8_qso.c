@@ -1319,6 +1319,34 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
         first_rpt[pre_rpt_len] = '\0';
         start_state  = FT8_QSO_WAIT_ROGER;
         skip_applied = true;
+    } else if (tx1_req->kind == FT8_TX_KIND_ROGER_RPT &&
+               tx1_req->extra_field[0] == 'R' &&
+               (tx1_req->extra_field[1] == '+' || tx1_req->extra_field[1] == '-') &&
+               pre_rpt_len - 1 < sizeof(first_rpt)) {
+        // #234 (Roy KI0ER, working K7FD): a pre-built ROGER-REPORT request -
+        // ft8_qso_build_manual_reply()/the auto-pileup drain skip straight to
+        // TX2 because the partner's OWN last message already reported us, so
+        // there is nothing left to wait for at TX1 - fell all the way through
+        // to the unconditional default below, WAIT_RPT. WAIT_RPT is "waiting
+        // for THEIR FIRST report"; it has no branch for "they already
+        // rogered us", only an explicit got_rr73/got_73 skip-ahead. So the
+        // very next decode from K7FD - a bare "RRR", carrying no report at
+        // all - fell into WAIT_RPT's default case, which re-measures OUR
+        // current SNR of them and re-sends ANOTHER R-report, forever. WSJT-X
+        // sends 73 after an RRR; ours just kept saying R-<latest SNR> every
+        // slot for 10+ minutes, and the QSO never logged.
+        //
+        // The correct next state, same as the REPLY/WAIT_ROGER branch above,
+        // is the one that already expects RR73/RRR/73 and already replies
+        // with "73" - WAIT_RR73's handler has carried this exact fix for a
+        // BARE "RRR" since 2026-07-27 (Roy KI0ER, NH6L). Skip the leading
+        // 'R' so first_rpt matches the plain numeric form ("-20", not
+        // "R-20") that ADIF's RST_SENT and every other caller of first_rpt
+        // already expect.
+        memcpy(first_rpt, tx1_req->extra_field + 1, pre_rpt_len - 1);
+        first_rpt[pre_rpt_len - 1] = '\0';
+        start_state  = FT8_QSO_WAIT_RR73;
+        skip_applied = true;
     } else if (qs.ft8_filters.skip_tx1 && hound) {
         // Skip TX1 vetoed - see the note above. Say so, or this looks like the
         // toggle being ignored at random.
@@ -1447,7 +1475,17 @@ bool ft8_qso_start(const ft8_tx_request_t *tx1_req, char *err, size_t err_len)
     // (where we listen, and the decode-priority hint). They are DIFFERENT by
     // design - conflating them was the 2026-07-28 priority-hint bug - so a log
     // showing only one number cannot tell you whether the hint is sane.
-    if (skip_applied) {
+    if (skip_applied && start_state == FT8_QSO_WAIT_RR73) {
+        // #234: the ROGER_RPT-triggered start above - we've already been
+        // given their report, so what we sent is R<report>, and what we're
+        // waiting for is RR73/RRR/73, not "a roger". Distinct wording so a
+        // future log-reader isn't misled the same way this bug's own log
+        // line ("started QSO (pounce)") gave no hint anything was off.
+        ft8_status_set("QSO %s: sent R%s - waiting for RR73", tx1_req->target_call, first_rpt);
+        ESP_LOGI(TAG, "started QSO (pounce, R-report): %s our_tone=%d Hz their_tone=%d Hz report=R%s, min_scan=%lld",
+                 tx1_req->target_call, req_to_arm.audio_freq_hz, partner_hz, first_rpt,
+                 (long long)(tx1_slot + 15));
+    } else if (skip_applied) {
         ft8_status_set("QSO %s: sent report %s - waiting for roger", tx1_req->target_call, first_rpt);
         ESP_LOGI(TAG, "started QSO (pounce, skip-TX1): %s our_tone=%d Hz their_tone=%d Hz report=%s, min_scan=%lld",
                  tx1_req->target_call, req_to_arm.audio_freq_hz, partner_hz, first_rpt,

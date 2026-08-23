@@ -488,7 +488,18 @@ static void ft8_sim_task(void *arg)
             continue;
         }
         warned_no_call = false;
-        if (!was_active) { ESP_LOGI(TAG, "sim mode ON (my_call=%s)", s.my_callsign); was_active = true; }
+        if (!was_active) {
+            ESP_LOGI(TAG, "sim mode ON (my_call=%s)", s.my_callsign);
+            was_active = true;
+            // Mirror the OFF transition below: real decodes/pileup callers
+            // sitting on screen from before the toggle are exactly as
+            // confusing and tappable here as leftover phantoms are after
+            // leaving sim mode - a station you might pounce that the
+            // operator has just told us is not real. Clear on the way IN,
+            // not just on the way out.
+            ft8_screen_clear();
+            ft8_pileup_clear();
+        }
 
         char my_call[FT8_CALL_MAX_LEN];
         size_t n = 0;

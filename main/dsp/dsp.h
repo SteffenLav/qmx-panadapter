@@ -55,6 +55,12 @@ void dsp_set_window(uint8_t idx);
  */
 void dsp_set_transfer_quiet(bool quiet);
 
+// True once fft_task has actually observed a quiet request and drained the
+// audio ring. Setting the flag is not enough on its own - it is cooperative,
+// and anything that needs a genuinely idle system (a long flash verify) must
+// wait for this, bounded, before starting.
+bool dsp_transfer_quiet_settled(void);
+
 /**
  * @brief Get a snapshot of the latest spectrum.
  *

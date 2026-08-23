@@ -119,7 +119,13 @@ another room.
 ### Switching the Tab5 back to the panadapter
 
 If you left the Tab5 in FT8/FT4 and want the spectrum
-back, **Show Panadapter** on the FT8 panel does it without walking to the radio.
+back, use the **Radio** menu in the bottom bar — it carries the
+Panadapter ↔ FT8 switch.
+
+Next to **Call CQ** is **TXCQ ANY / EVEN / ODD**, which chooses the 15-second
+slot your CQ transmits in — the same three states as the button on the Tab5,
+and the same setting underneath, so changing it on either surface is reflected
+on the other. ANY takes whichever window comes first; EVEN and ODD lock it.
 
 ### Call CQ from the browser
 

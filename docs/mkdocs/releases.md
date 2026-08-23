@@ -4,7 +4,32 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.9.1** — 2026-08-21
+**v1.9.3** — 2026-08-23
+
+**Updating is now one decision instead of a procedure.**
+
+- **The update downloads quietly in the background** and only asks you once, at the end. On by default; switch it off under **Settings → Network → Download updates automatically** if you are on a metered connection, since each update is about 3.3 MB. Downloading never installs anything - only a restart does, and only you can ask for that.
+- **A proper window in the middle of the screen**, with the version, what will happen, and two buttons: **Restart now** or **Later**. The bottom bar breathes gently while an update waits for you and goes quiet once you have said "later" - a signal that never stops being a signal.
+- **The long-press is gone.** A plain tap opens the window. The hold only ever existed so a stray brush could not start a download; now that a press just opens something you can dismiss, it does not need to be defended against. *(Don N2VGU spotted that the old wording described the wrong action at the wrong moment - he was right about the cause, not just the words.)*
+- **The band-plan strip is far easier to hit.** It is only 22 px tall with the bottom bar hard against it below and the waterfall above; its touch area now reaches 50 px up into the waterfall while it still draws the same size.
+- **The spectrum, waterfall and FT8 decoding keep running while an update downloads.** Previously everything stopped for the whole download. Expect a slight stutter and one brief pause right at the end.
+- **Audio is no longer dropped while a log upload is running.** Uploading to QRZ, eQSL or LoTW quietly interrupted the audio feed, which could cost you FT8 decodes at the time.
+- **TXCQ ANY / EVEN / ODD on the web FT8 page** *(Randy N4OPI)* - choose which 15-second slot your CQ goes out in, from the browser. Same setting as the Tab5's own button, so the two always agree.
+- **SSB tune snap is now 500 Hz** *(Dave KX3DX)* - stations that stray off an integer kHz sit at 0.5, and a 1 kHz grid cannot reach them. Also half as many stops across a drag.
+
+## Previous Releases
+
+### v1.9.2 — 2026-08-22
+
+**A field-report release: five things fixed or added, three of them from Randy N4OPI.**
+
+- **A stuck exchange that never logged** is fixed *(Roy KI0ER, working K7FD)*. When a caller's own first message back to us was already a signal report (not a fresh CQ), the QSO machine correctly built the reply but started itself in the wrong state - "waiting for their first report" instead of "waiting for RR73" - so it had no idea what to do with a bare RRR and kept re-sending the same reply for over ten minutes. Fixed at the single choke point all three ways of starting this kind of exchange share.
+- **The SWR-protection fault is visible from the web page now** *(Randy N4OPI)*. Before this, tripping SWR protection stopped transmission with no explanation anywhere but the Tab5's own prompt, and no way to clear it remotely - the web page showed only a bare "QSO Cancelled". It now shows the same fault message and clears the same way a tap on the Tab5 does.
+- **"Who is hearing me" gets time windows and sortable columns.** 15 min / 30 min / 6 h / 24 h chips, and every column header sorts by clicking it - both pure re-slices of the one fetch the device already makes. The FT8/FT4 decode list in the browser gets the same sortable columns, with a "CQ callers on top" link back to the device's own priority ordering.
+- **Working an older pileup caller from the web page now actually works** *(Randy N4OPI)*. Clicking a "Calling you:" entry used to refuse outright the moment the caller's row aged out of the live decode table, even though the Tab5's own pileup screen could work the identical caller fine. It now falls back to the same report-first reply the Tab5 has always used. Pileup entries show their age on both screens now, and the Tab5's decode-list HRD column is now **AGE in seconds** - a more useful number for judging how much to trust a row. How long a row survives before it drops off the list is now operator-tunable too: a "Max age:" dropdown in the Filter modal, 30 to 90 seconds.
+- **Simulation mode no longer leaves real stations flickering on screen.** Turning it on now clears the decode list and pileup immediately, same as turning it off already did, and real decodes are suppressed from the shared list for as long as sim mode is on - a QMX still attached and receiving can no longer keep re-populating a practice session with genuine stations.
+
+### v1.9.1 — 2026-08-21
 
 **A hotfix: updating from the device did not work over a real download, on any version, ever, until this fix.**
 
@@ -14,8 +39,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - Both fixed and **verified on hardware**: a real download against the live release completed twice, with a full serial capture proving zero crashes and zero audio interruption throughout.
 - **If you are on v1.8.9 or v1.9.0, this needs one cable flash.** Your device's own broken download code cannot fetch any release, including this one - it fails the same way regardless of what is on the other end. After that one flash, OTA works normally from then on.
 - Everything else is unchanged from v1.9.0 - the faster web page, WiFi power saving, the WebSocket eviction fix, and the snap-on keyboard shortcuts. This release exists solely to fix the OTA download path.
-
-## Previous Releases
 
 ### v1.9.0 — 2026-08-21
 **The web page is fast again, the snap-on keyboard drives the whole app, and updating from the device can finally be seen working.**
@@ -414,7 +437,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.9.1.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.9.2.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

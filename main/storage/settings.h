@@ -46,6 +46,16 @@ typedef struct {
     // rest." So this gates ONLY the decision of WHO to work. Once a caller is
     // tapped the exchange runs itself exactly as before.
     bool    cq_manual_pick;  // running CQ: never auto-answer a caller, wait for a tap
+    // --- Max age in the decode list — appended; old NVS blobs read back 0 ---
+    // How long a station stays in the LIVE decode list with no fresh decode,
+    // in seconds - was the fixed FT8_ROW_STALE_SEC (90) in ft8_screen.c, now
+    // operator-tunable (30/45/60/75/90) from the Filter modal. Deliberately
+    // NOT applied to the pileup list, which has no expiry of its own by
+    // design (ft8_pileup.h) - this only ever shortens/lengthens how long a
+    // row survives in the live table. 0 means "never written" (an NVS blob
+    // from before this field existed), read as "use the 90 s default", NOT
+    // as "expire instantly" - see ft8_screen.c's row_stale_sec().
+    uint8_t max_age_sec;
 } ft8_filters_t;
 
 // User-defined physical-keyboard shortcuts (#233).
@@ -191,6 +201,14 @@ typedef struct {
     // would put every unit in the field on it forever from the moment they
     // update. Flip the default only once it has proven itself. See net/spots.c.
     bool     sota_en;
+    // #239: fetch a newer release in the BACKGROUND, so the operator is only
+    // ever asked the one question that matters ("restart into it?") instead of
+    // starting a download and then waiting on it. Default ON, but it must stay
+    // switchable: a POTA operator on a phone hotspot did not ask us to pull
+    // 3.3 MB, and the download saturates this link (~12.7 KB/s) for over a
+    // minute. Downloading is safe to automate; APPLYING is not, and is not -
+    // see the standing rule at the top of net/ota_update.h.
+    bool     ota_autodl;
     bool     pskreporter_en;  // FT8/FT4: report real decodes to pskreporter.info (UDP, batched ~5 min;
                               // needs callsign+grid; never in simulation mode; default TRUE - same
                               // as WSJT-X ships; drawer checkbox turns it off)
@@ -345,6 +363,7 @@ void settings_set_pskreporter_en(bool v);
 void settings_set_spots_en(bool v);
 void settings_set_rbn_en(bool v);
 void settings_set_sota_en(bool v);   // SOTA activations via spothole.app (opt-in)
+void settings_set_ota_autodl(bool v); // #239: download a new release quietly (never applies it)
 
 // ---- Known WiFi networks --------------------------------------------------
 //

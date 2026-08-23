@@ -963,6 +963,20 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
                           // buffer to the boundary); kept for the future robust
                           // incomplete-backfill fix. See the timing calc below.
     int max_iters = (s_pool_proto == (int)FTX_PROTOCOL_FT4) ? FT4_LDPC_MAX_ITERS : FT8_LDPC_MAX_ITERS;
+    // Real decodes are suppressed from the shared decode list while sim mode
+    // is on - otherwise a real QMX still attached and receiving keeps
+    // re-populating the list with genuine stations moments after ft8_sim.c
+    // clears it on entry, which read as "stations flickering back and forth
+    // before finally fading" (they were real, still being decoded, and only
+    // stopped once they aged out or the band moved on). Sim mode's whole
+    // point is a view isolated from whatever is actually on the air right
+    // now, same principle the TX interlock already applies and pskreporter.c
+    // already applies to spot reporting - this closes the matching gap on
+    // the RX/display side. Loaded once per call (both decode-task cores),
+    // not per candidate - settings_load_all() is a cheap RAM-cached read.
+    qmx_settings_t sim_qs;
+    settings_load_all(&sim_qs);
+    bool sim_suppresses_real = sim_qs.sim_mode_en;
     for (int i = start; i < n_cand; i += step) {
         if ((int)((esp_timer_get_time() - t_start_us) / 1000) >= FT8_DECODE_BUDGET_MS) {
             break;
@@ -1019,8 +1033,10 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
             int freq_hz = (int)lroundf((mon->min_bin + cands[i].freq_offset) / mon->symbol_period);
             ESP_LOGI(TAG, "decoded: '%s' (score=%d freq=%dHz snr=%d dt=%d)",
                      text, cands[i].score, freq_hz, snr_db, (int)lroundf(cand_dt_ms));
-            ft8_screen_record_decode(text, cands[i].score, snr_db, freq_hz, slot_sec,
-                                     (int)lroundf(cand_dt_ms));
+            if (!sim_suppresses_real) {
+                ft8_screen_record_decode(text, cands[i].score, snr_db, freq_hz, slot_sec,
+                                         (int)lroundf(cand_dt_ms));
+            }
             // PSK Reporter spot (REAL decodes only - this path never runs on
             // simulator injections, which bypass the audio pipeline entirely;
             // pskreporter.c additionally refuses spots while sim mode is on).

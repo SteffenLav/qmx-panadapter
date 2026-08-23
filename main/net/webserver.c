@@ -188,6 +188,11 @@ static void add_ft8_tx_status(cJSON *root)
     cJSON *f = cJSON_AddObjectToObject(root, "ft8");
     if (!f) return;
 
+    // Randy N4OPI: the browser needs to SHOW which slot parity a CQ will use,
+    // not just set it - a toggle that cannot read the current value is a second
+    // source of truth waiting to drift from the Tab5's own button.
+    cJSON_AddNumberToObject(f, "cq_parity", ft8_screen_view_get_cq_parity());
+
     char tx_text[32];
     int  secs_until = 0;
     ft8_tx_state_t  tx_st  = ft8_tx_get_status(tx_text, sizeof(tx_text), &secs_until);
@@ -836,6 +841,12 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // the LVGL task inside ft8_screen_view - do NOT call the QSO machine from
         // this HTTP task.
         ft8_screen_view_request_cq();
+    } else if (action && strcmp(action, "cq_parity") == 0) {
+        // Randy N4OPI: choose the CQ slot window from the browser. -1 any,
+        // 0 EVEN, 1 ODD - the same three the Tab5's TXCQ button cycles, and
+        // the same single piece of state, so the two surfaces cannot drift.
+        cJSON *v = cJSON_GetObjectItem(root, "value");
+        ft8_screen_view_set_cq_parity(cJSON_IsNumber(v) ? v->valueint : -1);
     } else if (action && strcmp(action, "set_screen") == 0) {
         // Switch the Tab5 between the panadapter and FT8/FT4 from the browser.
         // Deferred to the LVGL task (see ui_request_base_mode) - the switch
@@ -986,6 +997,12 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // ota_update_start() refuses while transmitting or mid-QSO; the reason
         // comes back as text so the browser can say WHY rather than just fail.
         const char *url = cJSON_GetStringValue(cJSON_GetObjectItem(root, "url"));
+        {   // dev-only knobs; absent = shipping defaults
+            cJSON *y  = cJSON_GetObjectItem(root, "yield_ms");
+            cJSON *pf = cJSON_GetObjectItem(root, "pause_feeds");
+            ota_update_set_test_params(cJSON_IsNumber(y) ? y->valueint : 0,
+                                       cJSON_IsBool(pf) ? cJSON_IsTrue(pf) : true);
+        }
         char oerr[96];
         bool ok = ota_update_start(url, oerr, sizeof(oerr));
         cJSON_Delete(root);
@@ -1006,6 +1023,24 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, "{\"ok\":true}");
         vTaskDelay(pdMS_TO_TICKS(250));
         esp_restart();
+    } else if (action && strcmp(action, "ota_reset") == 0) {
+        // Dev only - clear a staged update in place so the next test run does
+        // not need a reflash (and therefore a radio-wedging warm reset).
+        ota_update_reset_state();
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"note\":\"ota state cleared\"}");
+        return ESP_OK;
+    } else if (action && strcmp(action, "verify_test") == 0) {
+        // Dev only - see ota_update_verify_test(). Isolates the OTA verify from
+        // the download in front of it so it can be tested in seconds.
+        cJSON *q = cJSON_GetObjectItem(root, "quiet");
+        bool quiet = cJSON_IsBool(q) ? cJSON_IsTrue(q) : false;
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"note\":\"see the serial log\"}");
+        ota_update_verify_test(quiet);
+        return ESP_OK;
     } else if (action && strcmp(action, "panic_test") == 0) {
         // Developer escape hatch: deliberately crash, to prove the #117 panic
         // hook actually records anything. A tolerant-but-silent mechanism is
@@ -2315,6 +2350,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "rbn_en",            c.rbn_en);
     cJSON_AddBoolToObject(root, "cluster_en",        c.cluster_en);
     cJSON_AddBoolToObject(root, "sota_en",           c.sota_en);
+    cJSON_AddBoolToObject(root, "ota_autodl",        c.ota_autodl);
     cJSON_AddBoolToObject(root, "spots_mode_filter", c.spots_mode_filter);
     // The last of the drawer's controls that had no remote equivalent. CW pitch and
     // the IF trim are per-unit calibration you set once and forget, which is
@@ -2467,6 +2503,8 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
         settings_set_spots_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "sota_en")))
         settings_set_sota_en(cJSON_IsTrue(it));
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "ota_autodl")))
+        settings_set_ota_autodl(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "rbn_en")))
         settings_set_rbn_en(cJSON_IsTrue(it));
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "pskreporter_en")))
@@ -2549,6 +2587,7 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     BOOLTOP("rbn_en",            settings_set_rbn_en);
     BOOLTOP("cluster_en",        settings_set_cluster_en);
     BOOLTOP("sota_en",           settings_set_sota_en);
+    BOOLTOP("ota_autodl",        settings_set_ota_autodl);
     BOOLTOP("spots_mode_filter", settings_set_spots_mode_filter);
     BOOLTOP("psk_rx_en",         settings_set_psk_rx_en);
     BOOLTOP("bt_mouse_en",       settings_set_bt_mouse_en);

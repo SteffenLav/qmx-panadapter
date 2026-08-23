@@ -38,6 +38,13 @@ static lv_obj_t *s_dd_hound         = NULL;  // Fox/Hound: off / guided / automa
 static lv_obj_t *s_cb_auto_pileup   = NULL;  // auto-work waiting pileup callers on QSO completion
 static lv_obj_t *s_cb_greylist      = NULL;  // grey-list stations after repeated failed pounces
 static lv_obj_t *s_cb_manual_pick   = NULL;  // running CQ: never auto-answer, wait for a tap
+static lv_obj_t *s_dd_max_age       = NULL;  // "Max age in list" - how long a row survives with no fresh decode
+
+// Options for s_dd_max_age, index -> seconds. The pileup list is deliberately
+// NOT covered by this - see ft8_filters_t.max_age_sec's comment in settings.h.
+static const uint8_t MAX_AGE_OPTS[] = { 30, 45, 60, 75, 90 };
+#define MAX_AGE_OPTS_N (sizeof(MAX_AGE_OPTS) / sizeof(MAX_AGE_OPTS[0]))
+#define MAX_AGE_DEFAULT_IDX 4   // 90 s - today's fixed FT8_ROW_STALE_SEC
 
 // X of the right-hand checkbox column. It has to clear the "Auto-answer CQ with
 // priority:" dropdown on the left, which is anchored to the right of a long label
@@ -124,6 +131,10 @@ static void save_btn_cb(lv_event_t *e)
     f.robot_priority     = (uint8_t)lv_dropdown_get_selected(s_dd_robot_pri);
     f.auto_pileup        = lv_obj_has_state(s_cb_auto_pileup, LV_STATE_CHECKED);
     f.cq_manual_pick     = lv_obj_has_state(s_cb_manual_pick, LV_STATE_CHECKED);
+    {
+        uint32_t idx = lv_dropdown_get_selected(s_dd_max_age);
+        f.max_age_sec = MAX_AGE_OPTS[idx < MAX_AGE_OPTS_N ? idx : MAX_AGE_DEFAULT_IDX];
+    }
 
     settings_set_ft8_filters(&f);
     settings_set_greylist_en(lv_obj_has_state(s_cb_greylist, LV_STATE_CHECKED));
@@ -355,6 +366,28 @@ static void modal_build(void)
 
     s_cb_incl_cq_only = make_labeled_checkbox(panel, "Show only CQ callers", 4, 450, &lbl_incl_cq_only);
     lv_obj_set_style_text_color(lbl_incl_cq_only, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+
+    // --- Max age in list — same row, in the gap before the right column ---
+    // How long a station stays in the LIVE decode list with no fresh decode.
+    // Was a fixed 90 s (ft8_screen.c's FT8_ROW_STALE_SEC); the pileup list is
+    // deliberately NOT covered by this - it has no expiry of its own by
+    // design, so someone who called a while ago can still be worked from
+    // there after their row here has gone.
+    lv_obj_t *lbl_max_age = lv_label_create(panel);
+    lv_label_set_text(lbl_max_age, "Max age:");
+    lv_obj_set_style_text_font(lbl_max_age, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_text_color(lbl_max_age, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_align_to(lbl_max_age, lbl_incl_cq_only, LV_ALIGN_OUT_RIGHT_MID, 40, 0);
+
+    s_dd_max_age = lv_dropdown_create(panel);
+    lv_dropdown_set_options(s_dd_max_age, "30s\n45s\n60s\n75s\n90s");
+    lv_obj_set_width(s_dd_max_age, 110);
+    lv_obj_align_to(s_dd_max_age, lbl_max_age, LV_ALIGN_OUT_RIGHT_MID, 12, 0);
+    lv_obj_set_style_text_font(s_dd_max_age, &lv_font_montserrat_24, 0);
+    lv_obj_set_style_bg_color(s_dd_max_age, lv_color_hex(UI_COLOR_KEY_BG), 0);
+    lv_obj_set_style_border_color(s_dd_max_age, lv_color_hex(UI_COLOR_BORDER), 0);
+    lv_obj_set_style_text_color(s_dd_max_age, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_add_event_cb(s_dd_max_age, robot_pri_dropdown_open_cb, LV_EVENT_CLICKED, NULL);
 
     // Pounce shortcut: first TX is a signal report (skip the grid exchange),
     // going straight into the roger/RR73 wait - see ft8_qso_start(). Does not
@@ -624,6 +657,14 @@ void ft8_filter_modal_show(void)
     apply_checkbox_state(s_cb_auto_pileup, f->auto_pileup);
     apply_checkbox_state(s_cb_greylist, s.greylist_en);
     apply_checkbox_state(s_cb_manual_pick, f->cq_manual_pick);
+    {
+        // 0 = never written (pre-existing NVS blob) - show the same 90 s the
+        // firmware falls back to, not an arbitrary index.
+        uint32_t idx = MAX_AGE_DEFAULT_IDX;
+        for (uint32_t i = 0; i < MAX_AGE_OPTS_N; i++)
+            if (MAX_AGE_OPTS[i] == f->max_age_sec) { idx = i; break; }
+        lv_dropdown_set_selected(s_dd_max_age, idx);
+    }
     lv_dropdown_set_selected(s_dd_hound, s.hound_mode <= 2 ? s.hound_mode : 0);
     update_unattended_warn();   // shows the warning if robot OR auto-pileup is on
     apply_checkbox_state(s_cb_field_day, s.field_day_en);

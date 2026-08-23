@@ -92,23 +92,32 @@ void ui_set_bottom_version(const char *text);
 // so the Tab5 and the browser say the same thing.
 void ui_set_update_line(const char *text, uint32_t colour);
 
-// #218: called on the LVGL thread when the operator taps the update line.
-// status.c registers this and decides what the tap means; it arms on the
-// first tap and acts on the second, so a stray touch cannot start a download
-// or restart the device.
+// Red, fixed-colour, PULSING variant for "a correctly-confirmed action just
+// failed" (currently: an OTA download that could not reach the server).
+// Fast opacity animation, not a colour swap - a 1 Hz colour alternation
+// proved too subtle to read as "blinking" over the few seconds it needs to
+// stay unmissable. status.c calls this once per second while the failure
+// is being shown; a plain ui_set_update_line() call (any other state)
+// stops the pulse.
+void ui_set_update_line_failed(const char *text);
+
+// The same breathing line in any colour. Used green for "downloaded, waiting
+// for you", which persists until the operator acts and so has to be noticeable
+// without taking the whole bar over.
+void ui_set_update_line_pulsing(const char *text, uint32_t colour);
+// Called on the LVGL thread when the operator taps the update line. status.c
+// registers this and, since #239, it does exactly one thing: open ota_modal.
+// That is what makes a single plain tap safe - a stray touch costs a
+// dismissible window, never a download or a restart.
 void ui_set_update_tap_cb(void (*cb)(void));
 
-// #218: tell the UI whether the update line currently offers something to tap.
+// Tell the UI whether the update line currently offers something to tap.
 // While true the WHOLE bottom bar accepts the tap (no precision needed), and
-// the band-plan strip ignores presses in its lowest few pixels directly above
-// the label - the strip is 22 px tall, sits on the bar, and a tap on it retunes,
-// so reaching for the update line used to move the dial.
+// the band-plan strip refuses presses across the label's x-range - the strip is
+// only 22 px, sits directly on the bar, and a tap on it retunes, so reaching
+// for the update line used to move the dial.
 void ui_set_update_line_tappable(bool on);
 bool ui_update_line_tappable(void);
-
-// #218: paint the update line even while the hold feedback is showing - used to
-// say "restarting" on the way down.
-void ui_update_line_force(const char *text, uint32_t colour);
 
 // Resource-monitor floating overlay text (see build_resource_monitor in
 // ui.c). No-op if the panel object doesn't exist yet or was never toggled on.

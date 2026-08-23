@@ -2365,3 +2365,213 @@ against a partially-fixed build silently repoints the next boot at the
 just-downloaded (possibly older/unfixed) image via `otadata` — a plain reflash
 of `factory` does not undo this. Recovery: `esptool erase_region <otadata
 offset> <size>`, which returns it to blank and falls back to `factory`.
+
+### Shipped in v1.9.2 — 2026-08-22
+
+A field-report release: five things fixed or added, three of them from Randy
+N4OPI.
+
+**A stuck exchange that never logged (#234, Roy KI0ER, working K7FD).** His
+diagnostic log showed `K7FD KI0ER R-17` retransmitted every slot for over ten
+minutes while K7FD kept sending RRR, and the contact never logged. Root cause:
+`ft8_qso_start()`'s only special-case for "this request already skips past
+TX1" checked `kind == FT8_TX_KIND_REPLY` (a bare report reply). A
+`FT8_TX_KIND_ROGER_RPT` request — built whenever the partner's own last
+message to us was already a numeric report, so we reply with `R<report>`, not
+a fresh grid — fell through to the unconditional default, `FT8_QSO_WAIT_RPT`.
+That state expects THEIR FIRST report and has no "they already rogered us"
+branch, only an explicit `got_rr73`/`got_73` skip-ahead, so every later decode
+from that partner — including a bare RRR — was re-treated as a fresh report
+and answered with another R-report, forever. `WAIT_RR73`'s handler already had
+the correct bare-RRR handling (fixed for a different callsign, NH6L, back on
+2026-07-27) and would have closed the exchange normally had the start state
+been right. Fixed by adding a matching branch for `FT8_TX_KIND_ROGER_RPT` that
+starts in `FT8_QSO_WAIT_RR73` instead — the single choke point all three ways
+of starting this kind of exchange share (the auto-pileup drain, the pileup
+modal, and a decode-row Transmit/Auto Pounce), so one fix covers all three.
+Regression-tested in FT8 simulation mode: a full QSO through the exact
+`WAIT_RPT`/`WAIT_RR73` transition this touches completed and logged normally.
+Not yet reproduced against the specific 3-message sequence from Roy's report —
+that needs a partner whose first message to us is already a report, which
+sim's phantoms don't organically produce.
+
+**The SWR-protection fault is visible from the web page now (Randy N4OPI).**
+Before this the web UI had no visibility into a latched SWR trip at all — the
+abort behind it read through as a bare "QSO Cancelled", and clearing it
+required walking over to the Tab5 and tapping its prompt. `/api/status`'s
+`ft8` block now reports `"swr_fault"` above every other TX/QSO state, same
+wording as the Tab5's own left-pane label (`SWR X.X:1 - TX STOPPED - check
+antenna - tap to clear`), and the banner is tappable in the browser exactly
+like the Tab5 prompt — new `/api/cmd` action `clear_swr` calls the same
+`ft8_tx_clear_swr_trip()` the Tab5 button does.
+
+**"Who is hearing me" gets time windows and sortable columns.** The device
+always answers with its fixed 24 h query, and every report carries its own
+heard-at timestamp, so 15 min / 30 min / 6 h / 24 h chips and per-column
+sorting are both pure client-side re-slices of that one fetch — no extra
+device round trip per window or per column click. Summary figures (receiver
+count, furthest distance) are recomputed per window rather than always
+showing the full-24h totals. The FT8/FT4 decode list in the browser gets the
+same sortable, clickable column headers, with a "↺ CQ callers on top" link
+that appears once a column click has replaced the device's own
+`ft8_screen_sort_rows` ordering, so nothing is lost getting back to it.
+
+**Working an older pileup caller from the web page now actually works (Randy
+N4OPI).** Clicking a "Calling you:" entry used to refuse outright —
+`"%s is no longer in the decode list"` — the moment the caller's row had aged
+out of the live decode table (`FT8_ROW_STALE_SEC`), even though the Tab5's own
+pileup modal has always had a working fallback for exactly this case
+(`ft8_pileup_modal.c`'s `row_work_cb`, added earlier for Roy KI0ER and Ken
+KF0AYY field reports). `web_reply_drain()` (`ft8_screen_view.c`) now falls
+back the same way: when the caller isn't in the live decode snapshot, look
+them up in the pileup list instead and build a report-first reply from the
+pileup entry's own cached SNR — the same shape `cqrun_answer()` and the Tab5's
+pileup modal already use. Genuinely gone from both lists still refuses, which
+is still correct (nothing to reply to).
+
+Pileup entries now show their age too, on both screens: the web page's
+"Calling you:" line gets `"Xs ago"`/`"Xm ago"` next to each caller (the
+backend already sent `age` in `/api/decodes`' pileup array; only the frontend
+was missing it — the Tab5's own pileup modal has shown this since it was
+built). And the Tab5's main decode list's HRD (heard-count) column is now
+**AGE**, in seconds since last heard — a more useful number for judging how
+much to trust a row than how many times it's been seen, and matches what the
+browser's decode list already showed.
+
+Since that number now genuinely matters, **how long a row survives is
+operator-tunable**: a new "Max age:" dropdown in the Filter modal (same row as
+"Show only CQ callers"), 30/45/60/75/90 seconds, defaulting to 90 — the value
+`FT8_ROW_STALE_SEC` has held since 2026-07-19. Stored as `ft8_filters_t`'s
+appended `max_age_sec` byte; 0 (an NVS blob written before this field existed)
+reads as "use the 90 s default," never as "expire instantly." The pileup list
+is deliberately **not** covered by this setting — it has no expiry of its own
+by design, which is the entire reason the report-first fallback above exists.
+
+**Simulation mode no longer leaves real stations flickering on screen.**
+Turning sim mode ON now clears the decode list and pileup immediately,
+mirroring the existing clear on turning it OFF (previously only the OFF
+transition did this). That alone wasn't enough with a real QMX still attached
+and receiving: real decodes were never gated by `sim_mode_en` at all, so a
+genuine station decoded moments after the entry-clear would silently
+repopulate the list — reported as "some of the previous stations is
+reappearing on and off... then finally disappear" (they were real, still
+being decoded normally, and only stopped once they aged out or the band
+moved on). Root cause confirmed by reading `decode_candidate_range()`
+(`ft8_test.c`): its call to `ft8_screen_record_decode()` for a real decoded
+candidate was unconditional, with no sim-mode check anywhere in the path —
+unlike PSK Reporter spotting, which `net/pskreporter.c` already refuses while
+sim mode is on, and unlike TX, which `ft8_tx.c`'s hard interlock already
+blocks. Fixed by gating that one call on `sim_mode_en`, loaded once per
+decode-candidate-range call (both decode-task cores) rather than per
+candidate. Verified on hardware: with sim mode on and a real QMX attached and
+streaming, all 7 phantom stations reached the decode list over multiple
+cycles, each one paired with its own `ft8_sim: injected` log line, and zero
+unlabeled (real) decodes appeared.
+
+---
+
+### Shipped in v1.9.3 — 2026-08-23
+
+**The update flow stopped being a thing you had to learn.**
+
+#### Updating, rewritten
+
+Don N2VGU pointed out that "tap to update" described the wrong action at the
+wrong moment: by the time it appeared the download was already on the device
+and what remained was a restart. He was right about the cause rather than the
+wording — the whole conversation lived in a ~264 px slot between the SD text
+and the clock, so every state had to fit about twenty characters, and there was
+no room to say what was actually happening.
+
+- **The update now downloads quietly in the background** when one is available,
+  so the only thing left for the operator is one decision. On by default, with
+  **Settings → Network → Download updates automatically** to switch it off —
+  each update is 3.3 MB, which is not free on the phone hotspot a POTA operator
+  is using in a field. Downloading never applies anything; only a restart does,
+  and only the operator can ask for that.
+- **A window in the middle of the screen** (`ui/ota_modal.c`) carries the
+  conversation in readable type with named buttons: *Restart now* / *Later*, or
+  *Download now* / *Try again* / *Check now* depending on the state. It re-reads
+  the live state every 500 ms, so a download that completes while it is open
+  turns "Downloading" into "Restart now" by itself.
+- **The bottom bar announces and no longer negotiates.** The line breathes
+  gently while an update waits for a decision, and goes quiet once *Later* has
+  been pressed — a pulse that never stops stops being a signal.
+- **The 700 ms long-press is gone.** It existed only so that a stray brush from
+  the 22 px band-plan strip directly above could not start a download or reboot
+  a radio. Now that a press only opens a *dismissible window*, a stray brush
+  costs nothing, so a plain tap is safe and the label saying "tap" is finally
+  true. #237 dissolved rather than being reworded.
+- **The band plan is much easier to hit.** It is 22 px with the bottom bar hard
+  against it below and the waterfall hard above, all three doing different
+  things with a tap. An invisible 50 px catcher above the strip gives it 72 px
+  of touch while it still draws as 22; tap-to-tune gives up the same 50 px,
+  which a 370 px waterfall can spare.
+
+#### Internal memory headroom, which is what made background download possible
+
+Background download is only safe if the device has room to do it while
+everything else keeps running, and it did not. `ota_update_start()` needs 8 KB
+of *contiguous internal* RAM for its task stack — it cannot use PSRAM, because
+flash writes run with the cache off — and in FT8 with the radio streaming the
+largest internal block measured **6,912 bytes**.
+
+`size` → `size-components` → `nm --size-sort` named the two worst offenders in
+four minutes: **`s_toc`** (9,472 B, the manual's contents list, touched only
+while the Reader is open) and **`s_pub`** (4,608 B, a spur map for a feature
+that defaults off), both sitting in internal `.bss` for no reason.
+`EXT_RAM_BSS_ATTR` moved them, recovering **14,084 bytes**.
+
+Measured in FT8 with the radio streaming ~48,000 pairs/s:
+
+| | before | after |
+|---|---|---|
+| largest internal block | 6,912 | **19,456** |
+| DMA pool free | 4,683 | **20,231** |
+| minimum internal free | 2,519 | **10,067** |
+
+The **OTA task's stack is now static and right-sized**: measured use is 3,216
+bytes, so the 8,192 it asked the heap for was a round number rather than a
+figure — and asking for it at the moment an operator presses "update" is asking
+at the worst possible time. A static 6,144-byte `.bss` stack is 2 KB smaller
+*and* cannot fail to allocate.
+
+⚠ Engineering detail, including the falsified theories and the controlled A/B
+that settled it, is in `CLAUDE.md` rather than here.
+
+#### A real bug in every upload, not just updates
+
+`fft_task`'s transfer-quiet branch read **one window (1,024 pairs) then slept
+50 ms** — about 20,000 pairs/s against the ~48,000 the QMX produces. It fell
+behind more than 2:1 and overflowed the audio ring for the whole of *every*
+upload and every download, while its own comment claimed it prevented exactly
+that. Measured as `DROPPED=17904 (ring full)` then `DROPPED=28128` a second
+later. It now drains until the backlog is gone. This has been wrong since the
+flag was written and affects QRZ, eQSL and LoTW uploads too.
+
+Related: the download loop no longer stands the FFT down at all — the spectrum,
+waterfall and FT8 decoding keep running throughout, with the quiet period
+reduced to the ~1.9 s image verify at the end.
+
+#### Also in this release
+
+- **TXCQ ANY / EVEN / ODD on the web FT8 page** *(Randy N4OPI)* — the browser
+  could start a CQ but not choose which 15-second window it went out in. It
+  drives the same single piece of state as the Tab5's own button and re-renders
+  from the device, so the two surfaces cannot drift apart.
+- **SSB tune snap 250 → 500 Hz** *(Dave KX3DX)* — he asked for 1 kHz, noting
+  that stations which stray sit at 0.5 kHz; 500 Hz was chosen because a 1 kHz
+  grid cannot land on the very exception he named, and it halves the number of
+  stops across a drag.
+- The bottom-bar version line no longer collides with the SD text and the
+  clock: `short_ver()` existed for exactly that and had never been applied to
+  the *running* version, so a development build rendered its full
+  `-N-gHASH-dirty` string in a shrunken font. Shortened in the composite update
+  lines only — the idle bar still shows the full string, which is deliberate.
+
+#### Known limitation
+
+The arrow between the two versions is plain ASCII `->`. LVGL's symbol-font
+arrow is a chevron that reads as `>` and is too heavy at 24 px; U+2192 is not
+in this font and renders as a tofu box. A real arrow needs `montserrat_24`
+regenerated with `lv_font_conv` — logged as #244.

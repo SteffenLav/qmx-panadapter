@@ -37,7 +37,11 @@ $files = @(
     "README.txt",
     "flash.bat", "flash.command",
     "flash-recovery.bat", "flash-recovery.command",
-    "bootloader.bin", "partition-table.bin", "qmx_panadapter.bin"
+    "bootloader.bin", "partition-table.bin", "qmx_panadapter.bin",
+    # 0x920000 - resets the boot slot so a cable flash BOOTS what it just wrote.
+    # Without it a device with a staged OTA boots the staged image instead, and
+    # the operator concludes the flash failed. Caught on the bench at v1.9.3.
+    "ota_data_initial.bin"
 )
 
 Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue

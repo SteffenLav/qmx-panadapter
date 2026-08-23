@@ -9,6 +9,7 @@
 // source markdown, not a purpose-stripped feed.
 
 #include "reader_view.h"
+#include "esp_attr.h"
 #include "reader_net.h"
 #include "ui_theme.h"
 #include "reader_diagram.h"
@@ -47,7 +48,13 @@ static const char *TAG = "reader_view";
 // Table of contents (parsed from toc.json published by mkdocs_reader_export.py).
 #define TOC_MAX  64
 typedef struct { char title[48]; char path[96]; int level; } toc_entry_t;
-static toc_entry_t s_toc[TOC_MAX];
+// 9,472 bytes, and COLD - only touched while the Reader overlay is open.
+// It was sitting in internal .bss, which on this board is the scarcest
+// resource there is: measured during an OTA download in FT8 mode, internal
+// free fell to 5 KB and the update could not allocate its own 8 KB task
+// stack. Nothing here needs the speed or the DMA-reachability of internal
+// RAM. See the #239 investigation.
+EXT_RAM_BSS_ATTR static toc_entry_t s_toc[TOC_MAX];
 static int  s_toc_n = 0;
 
 // Drag-to-pick state for the Contents list: the finger drags a highlight bar

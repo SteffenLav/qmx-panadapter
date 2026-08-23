@@ -218,6 +218,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "spots"))             settings_set_spots_en(to_bool(val));
             else if (!strcasecmp(key, "spots_rbn"))         settings_set_rbn_en(to_bool(val));
             else if (!strcasecmp(key, "spots_sota"))        settings_set_sota_en(to_bool(val));
+            else if (!strcasecmp(key, "ota_autodownload")) settings_set_ota_autodl(to_bool(val));
             else if (!strcasecmp(key, "zoom"))              settings_set_zoom_factor((float)atof(val));
             else if (!strcasecmp(key, "colormap"))          settings_set_colormap_idx((uint8_t)atoi(val));
             else if (!strcasecmp(key, "brightness"))        settings_set_brightness_pct((uint8_t)atoi(val));

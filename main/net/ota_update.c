@@ -12,6 +12,8 @@
 #include "esp_app_desc.h"
 #include "esp_heap_caps.h"
 #include "esp_crt_bundle.h"
+#include "esp_timer.h"
+#include "esp_image_format.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -22,8 +24,53 @@
 #include "cat.h"
 #include "dsp.h"
 #include "webserver_ws.h"
+#include "net/net_quiet.h"
 #include "util/net_guard.h"
 #include "esp_netif.h"
+
+// Pause between image chunks. 1 ms was enough to stop the hardware watchdog
+// reset this loop used to cause (esp_https_ota sizes each chunk as
+// MAX(buffer_size, DEFAULT_OTA_BUF_SIZE) = 8192 here, so ~400 back-to-back
+// read+decrypt+flash-write bursts over a 3.2 MB image, with no yield point
+// anywhere inside IDF's own esp_https_ota_perform()). It was NOT enough to let
+// fft_task actually run, which is why the old code idled it outright instead.
+//
+// Raising it buys the spectrum, the waterfall and FT8 decode their time slices
+// back, at the cost of a longer download. Yielding MORE is strictly safer than
+// the 1 ms that already fixed the watchdog - the risk here is duration, not
+// stability. Note the cache-disabled stall inside each flash write is hardware
+// and no yield avoids it: expect brief stutter, not a freeze.
+#define OTA_CHUNK_YIELD_MS 15
+
+// Internal, never PSRAM - see the comment at the task creation - and now
+// STATIC, so starting an update cannot fail for want of memory.
+//
+// It was 8192 bytes allocated dynamically, and both halves of that were wrong:
+//   - MEASURED on hardware, the task uses 3,216 bytes. 8192 was a round number,
+//     not a measurement.
+//   - Asking the heap for 8 KB of CONTIGUOUS INTERNAL RAM at the moment an
+//     operator presses "update" is asking at the worst possible time. In FT8
+//     mode with the radio streaming the largest internal block was 6,912 bytes,
+//     and ota_update_start() returned "Could not start the update task" -
+//     intermittently, which is worse than never.
+// 6144 keeps ~2.9 KB over the measured high-water mark for TLS-path variation,
+// still hands 2 KB back, and as .bss it is simply always there.
+#define OTA_TASK_STACK_BYTES 6144
+static StaticTask_t s_ota_tcb;
+static StackType_t  s_ota_stack[OTA_TASK_STACK_BYTES / sizeof(StackType_t)];
+
+// Runtime overrides, for testing only (see ota_update_set_test_params). The
+// failure being chased only appears on a SLOW link, and the bench link is not
+// reliably slow - so the yield doubles as a way to manufacture a long download
+// on demand. Defaults are the shipping values.
+static int  s_yield_ms    = OTA_CHUNK_YIELD_MS;
+static bool s_pause_feeds = true;
+
+void ota_update_set_test_params(int yield_ms, bool pause_feeds)
+{
+    s_yield_ms    = (yield_ms > 0) ? yield_ms : OTA_CHUNK_YIELD_MS;
+    s_pause_feeds = pause_feeds;
+}
 
 static const char *TAG = "ota";
 
@@ -35,6 +82,15 @@ static char                 s_url[256];
 // both screens can name it while the download runs (the operator asked: "1.8.8
 // -> 1.8.9", not a bare "updating").
 static char                 s_target_ver[32];
+// Bumped on every failure, never reset. status.c's bottom-bar pulse needs to
+// know "is THIS a new failure" to reset its own 3-tick counter, and cannot
+// tell from ota_state_t alone: a fast failure (a bad hostname fails DNS in
+// under 100ms - measured) never spends a whole second in OTA_RUNNING, so
+// the 1 Hz status poll can go straight from one OTA_FAILED tick to the next
+// FAILED tick of a brand new attempt with no observable state change in
+// between. A plain counter status.c can compare against is unambiguous
+// regardless of how fast the failure was.
+static volatile uint32_t    s_fail_seq = 0;
 
 static void set_failed(const char *fmt, ...)
 {
@@ -43,6 +99,7 @@ static void set_failed(const char *fmt, ...)
     vsnprintf(s_msg, sizeof(s_msg), fmt, ap);
     va_end(ap);
     s_state = OTA_FAILED;
+    s_fail_seq++;
     ESP_LOGE(TAG, "update failed: %s", s_msg);
 }
 
@@ -127,7 +184,28 @@ static void ota_task(void *arg)
     // crypto (hardware AES cannot get DMA descriptors on this board), which
     // makes the transfer unusually expensive as well as large.
     webserver_ws_set_paused(true);
-    dsp_set_transfer_quiet(true);
+    // Hold off the spot feeds for the whole update. Not about CPU: the verify
+    // at the end needs internal heap, and a 6-minute download gives POTA five
+    // TLS sessions and RBN/DX several reconnects to churn it down to ~10 KB.
+    // See net_quiet.h for the measurements.
+    if (s_pause_feeds) net_quiet_set(true);
+    // ⚠ dsp_set_transfer_quiet(true) is NOT taken for the whole download any
+    // more - only around the verify at the end (see esp_https_ota_finish()).
+    // It idles fft_task, and fft_task feeds the spectrum, the waterfall AND
+    // FT8 capture/decode, so the panadapter went completely dead for the
+    // duration. Tolerable when the operator started the download and was
+    // watching it; not tolerable now it can be automatic, and not tolerable at
+    // all on a weak signal where it lasts minutes (operator, 2026-08-23: "it
+    // stops all spectrum/wf activity").
+    //
+    // MEASURED: with only OTA_CHUNK_YIELD_MS below and no quiet, the loop ran
+    // 3,302,576 bytes in 355,842 ms with audio at ~48,000 pairs/s throughout
+    // and the waterfall visibly smooth - "cant even see that it stutter".
+    // The 400 chunks x 15 ms add ~6 s of that 356 s; the rest is a 9.3 KB/s
+    // link, so the throttle is close to free.
+    //
+    // The WS pause stays - that is about the LINK, not the CPU, and the page
+    // has nothing to show while the bytes are in flight anyway.
 
     esp_http_client_config_t http = {
         .url               = s_url,
@@ -214,11 +292,14 @@ static void ota_task(void *arg)
     // added to solve. 1 tick (1 ms @ CONFIG_FREERTOS_HZ=1000) is enough to hand
     // the scheduler a real gap without measurably slowing a background download.
     int total = esp_https_ota_get_image_size(h);
+    int64_t t0 = esp_timer_get_time();
     while ((err = esp_https_ota_perform(h)) == ESP_ERR_HTTPS_OTA_IN_PROGRESS) {
         int done = esp_https_ota_get_image_len_read(h);
         s_pct = (total > 0) ? (int)((int64_t)done * 100 / total) : 0;
-        vTaskDelay(pdMS_TO_TICKS(1));
+        vTaskDelay(pdMS_TO_TICKS(s_yield_ms));
     }
+    ESP_LOGW(TAG, "download loop: %d bytes in %lld ms (yield %d ms/chunk)",
+             total, (long long)((esp_timer_get_time() - t0) / 1000), s_yield_ms);
 
     if (err != ESP_OK) {
         set_failed("download stopped early (0x%x)", err);
@@ -232,7 +313,50 @@ static void ota_task(void *arg)
         goto out;
     }
 
+    // ⛔ QUIET ONLY HERE, and this is measured, not reasoned.
+    //
+    // esp_https_ota_finish() verifies the written image - it maps and reads
+    // back the whole app segment (1.375 MB, logged as "esp_image: segment 0
+    // ... map") in one contiguous run with no yield point inside it. That is
+    // the stretch the cyan-flash rule warns about, and with fft_task running
+    // it took the HARDWARE watchdog: rst:0x7 HP_SYS_HP_WDT_RESET, ~2 s after a
+    // download loop that had itself run 356 s perfectly happily.
+    //
+    // So the two protections this path used to take together are NOT
+    // interchangeable, and an earlier version of this comment claiming
+    // "yielding more is strictly safer" was wrong. The loop needs the yield;
+    // the verify needs the FFT out of the way. Splitting them costs the
+    // operator ~2 s of frozen spectrum instead of the entire download.
+    dsp_set_transfer_quiet(true);
+    // WAIT for it to actually take effect. The flag is cooperative: fft_task
+    // notices it at the top of its loop, drains the ring, and only then is the
+    // system genuinely idle. Two hardware watchdog resets came from starting
+    // the verify microseconds after raising the flag, with fft_task still
+    // mid-window and a full second of audio backlog queued behind it.
+    // Bounded, because a quiesce that never arrives must not hang the update -
+    // the verify then runs anyway and is no worse off than before.
+    for (int i = 0; i < 200 && !dsp_transfer_quiet_settled(); i++)
+        vTaskDelay(pdMS_TO_TICKS(10));
+    // MEASUREMENT, not a fix. The identical verify runs in 890 ms and cannot
+    // be made to fail on its own (ota_update_verify_test(), with the FFT alive
+    // or quiesced - 894 vs 890 ms). During a real update it died inside
+    // SEGMENT 0 after >1.8 s, three times out of three. So the difference is
+    // the state the download leaves behind, and the only candidates the logs
+    // point at are memory-shaped: an internal heap seen at 10 KB free / 4 KB
+    // largest, and feeds opening fresh TLS sessions inside the verify window
+    // while the OTA's own connection is still open. Print the numbers so the
+    // next run answers it instead of producing another theory.
+    ESP_LOGW(TAG, "verify: dsp %s | int free=%u lblk=%u min=%u | dma free=%u lblk=%u",
+             dsp_transfer_quiet_settled() ? "idle" : "NOT idle",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+    int64_t tv = esp_timer_get_time();
     err = esp_https_ota_finish(h);
+    ESP_LOGW(TAG, "verify took %lld ms", (long long)((esp_timer_get_time() - tv) / 1000));
+    dsp_set_transfer_quiet(false);
     if (err != ESP_OK) {
         set_failed("the downloaded firmware was rejected (0x%x)", err);
         goto out;
@@ -243,7 +367,21 @@ static void ota_task(void *arg)
     ESP_LOGW(TAG, "update written and verified - waiting for the operator to restart");
 
 out:
+    // How much of the 8 KB internal stack did this actually need? The task
+    // cannot use a PSRAM stack (flash writes run with the cache off), so every
+    // byte here is contiguous INTERNAL RAM - and in FT8 mode with the radio
+    // streaming the largest internal block measured 6.9 KB, i.e. the update now
+    // refuses to start at all. Sizing this from measurement rather than from
+    // the round number it was born with is the first move.
+    ESP_LOGW(TAG, "ota task stack: %u bytes still free of %d",
+             (unsigned)(uxTaskGetStackHighWaterMark(NULL) * sizeof(StackType_t)),
+             OTA_TASK_STACK_BYTES);
+
+    // Belt and braces: every path out of the verify above already clears it,
+    // but a future early-return between the two must not leave the spectrum
+    // dead for the rest of the session.
     dsp_set_transfer_quiet(false);
+    net_quiet_set(false);
     webserver_ws_set_paused(false);
     vTaskDelete(NULL);
 }
@@ -304,14 +442,83 @@ bool ota_update_start(const char *url, char *err, size_t err_len)
     // is a PSRAM stack for background work (util/psram_task.h), which is right
     // for every other background task and WRONG for any task that touches
     // flash. 8 KB internal, held only for the duration of the update.
-    BaseType_t rc = xTaskCreatePinnedToCore(
-        ota_task, "ota", 8192, NULL, tskIDLE_PRIORITY + 2, NULL, 1);
-    if (rc != pdPASS) {
+    TaskHandle_t h = xTaskCreateStaticPinnedToCore(
+        ota_task, "ota", OTA_TASK_STACK_BYTES / sizeof(StackType_t), NULL,
+        tskIDLE_PRIORITY + 2, s_ota_stack, &s_ota_tcb, 1);
+    if (!h) {
+        // Cannot happen with a static stack - kept so a future change back to a
+        // dynamic one does not silently lose the error path.
         s_state = OTA_IDLE;
         if (err) snprintf(err, err_len, "Could not start the update task");
         return false;
     }
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// DEV ONLY: run just the image verify, on the partition already written.
+//
+// Exists because the thing that keeps failing is a ~2 SECOND operation that so
+// far could only be reached by a ~6 MINUTE download, so every hypothesis cost
+// six minutes to test and three of them were wrong. esp_image_verify() is the
+// same call esp_https_ota_finish() makes, on the same bytes, and it can be made
+// at any time. `quiet` selects whether fft_task is stood down for it, which is
+// the one variable that separates the runs that worked from the runs that did
+// not.
+//
+// ⚠ If this trips the watchdog the device warm-resets, which with the radio
+// attached is the documented #74 trigger. Radio off, or accept the replug.
+void ota_update_verify_test(bool quiet)
+{
+    const esp_partition_t *p = esp_ota_get_next_update_partition(NULL);
+    if (!p) { ESP_LOGE(TAG, "verify_test: no OTA partition"); return; }
+
+    if (quiet) {
+        dsp_set_transfer_quiet(true);
+        for (int i = 0; i < 200 && !dsp_transfer_quiet_settled(); i++)
+            vTaskDelay(pdMS_TO_TICKS(10));
+    }
+    ESP_LOGW(TAG, "verify_test: quiet=%d dsp_idle=%d | int free=%u lblk=%u | dma free=%u lblk=%u",
+             (int)quiet, (int)dsp_transfer_quiet_settled(),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_DMA),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+
+    esp_partition_pos_t pos = { .offset = p->address, .size = p->size };
+    esp_image_metadata_t meta = {0};
+    int64_t t0 = esp_timer_get_time();
+    esp_err_t e = esp_image_verify(ESP_IMAGE_VERIFY, &pos, &meta);
+    int64_t ms = (esp_timer_get_time() - t0) / 1000;
+
+    if (quiet) dsp_set_transfer_quiet(false);
+    ESP_LOGW(TAG, "verify_test: DONE rc=0x%x in %lld ms (image %lu bytes)",
+             e, (long long)ms, (unsigned long)meta.image_len);
+}
+
+// DEV ONLY: clear a staged update so another can be started, without a reboot.
+//
+// ota_update_start() rightly refuses while an update is READY - that refusal is
+// what stops a second download trampling a verified image. But it made every
+// test iteration cost a reflash purely to clear the state, and on this bench a
+// reflash is a warm reset with the radio attached, i.e. the #74 trigger. One
+// housekeeping reflash wedged the QMX during exactly that. Fixing the
+// experiment is cheaper than paying for it every time.
+//
+// Only touches OUR state machine. The written image and the boot partition are
+// left exactly as they are - this makes the device forget it offered to
+// restart, nothing more.
+void ota_update_reset_state(void)
+{
+    if (s_state == OTA_RUNNING) {
+        ESP_LOGW(TAG, "reset refused: a download is in flight");
+        return;
+    }
+    ESP_LOGW(TAG, "state reset (was %d) - a new update may be started", (int)s_state);
+    s_state = OTA_IDLE;
+    s_pct   = 0;
+    s_msg[0] = 0;
+    s_target_ver[0] = 0;
 }
 
 ota_state_t ota_update_get_state(int *pct, char *msg, size_t msg_len)
@@ -322,6 +529,8 @@ ota_state_t ota_update_get_state(int *pct, char *msg, size_t msg_len)
 }
 
 bool ota_update_reboot_pending(void) { return s_state == OTA_DONE; }
+
+uint32_t ota_update_get_fail_seq(void) { return s_fail_seq; }
 
 void ota_update_get_target_version(char *out, size_t out_sz)
 {

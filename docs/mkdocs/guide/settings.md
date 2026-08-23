@@ -244,6 +244,24 @@ and the manual all scroll.
 
 ---
 
+## Firmware updates
+
+**Download updates automatically** *(Network — on by default, v1.9.3)* — when a
+newer release appears, the Tab5 fetches it quietly in the background so that
+the only thing left for you is one decision: restart now, or later. The
+spectrum, waterfall and FT8 decoding keep running while it downloads.
+
+Switch it off if you are on a metered connection — a phone hotspot in a field,
+for example — as each update is about 3.3 MB. With it off nothing is fetched
+until you ask: the bottom bar still offers the update, and the window's button
+reads **Download now**.
+
+⚠ Turning this on never installs anything by itself. Applying an update
+restarts the Tab5, and only you can ask for that — see
+[Keeping It Up To Date](../quick-start.md#step-10-keeping-it-up-to-date).
+
+---
+
 ## Live Spots
 
 Draws other stations on the spectrum at the frequency they are operating on. Full
