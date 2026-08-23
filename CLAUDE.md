@@ -56,8 +56,12 @@ capture, not after a result looks strange.**
    born.** `cap_serial_boot.ps1` and `-Reset` pulse RTS on open. Starting one
    as a passive monitor REBOOTS THE TAB5. The operator spent an hour reporting
    a boot→dark→boot cycle that was my monitor, on top of the flash's own reset.
-   Use `scratchpad/cap_serial_reboot.ps1` with NO `-Reset` for anything
-   standing. Only pass `-Reset` when the boot itself is the thing under study.
+   Use `tools/cap_serial_reboot.ps1` with NO `-Reset` for anything
+   standing (or just `bench capture <name>`, which gets the flags right).
+   ⚠ **These three scripts moved from `scratchpad/` to `tools/` on 2026-08-23**
+   because `scratchpad/` is gitignored — the most load-bearing diagnostic tool
+   in the project was untracked, existed on exactly one disk, and would have
+   been lost by a clone onto a new machine. Only pass `-Reset` when the boot itself is the thing under study.
 2. **NEVER put `Stop-Process` in the same PowerShell call as the capture.** It
    exits non-zero, PowerShell aborts the rest of the chain, the capture never
    starts, and a zero-byte file gets read as "no crash in the log". This single

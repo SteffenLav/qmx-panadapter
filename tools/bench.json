@@ -11,7 +11,7 @@
 
   "lock_file": "C:/dev/bench.lock",
   "idf_export": "C:/esp/v5.4.4/esp-idf/export.ps1",
-  "capture_script": "C:/dev/qmx-panadapter/scratchpad/cap_serial_reboot.ps1",
+  "capture_script": "C:/dev/qmx-panadapter/tools/cap_serial_reboot.ps1",
   "capture_seconds": 315360000,
 
   "antenna": {
