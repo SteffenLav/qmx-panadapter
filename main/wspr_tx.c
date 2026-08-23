@@ -304,8 +304,26 @@ bool wspr_tx_arm(const wspr_tx_request_t *req, char *out_err, size_t out_err_len
     s_disarm_requested = false;
     unlock();
 
+    // Priority 5, NOT tskIDLE_PRIORITY + 1. This task is asleep 99.85% of the
+    // time - it wants ~1 ms of CPU once every 682 ms to send one TA; - but the
+    // instant it wants it, it must have it: a late wake is a tone transition
+    // landing inside the previous symbol, and nothing downstream can undo that.
+    //
+    // Measured, first hardware dry run (2026-08-23, 162 symbols, with FT8
+    // capturing and decoding concurrently, i.e. worst case): at
+    // tskIDLE_PRIORITY + 1 the worker sat below fft_task (4), cat_poll and
+    // cat_link (5) and audio_task (6), and 15 of 162 symbols went out late -
+    // 7 of them by more than 30 ms, worst 66 ms, each one coinciding with an
+    // ordinary FT8-capture or USB-transport slice. That is the same
+    // lowest-priority starvation CLAUDE.md's #199 note describes.
+    //
+    // 5 puts it with the CAT tasks, which is where it belongs - it IS a CAT
+    // burst, and cat_poll is paused for its whole duration anyway. It stays
+    // strictly BELOW audio_task (6) so the USB isochronous pump keeps its
+    // margin: see #51, where losing that margin cost 170-350 ms of audio a
+    // slot, silently, at the wire.
     TaskHandle_t h = psram_task_create(wspr_tx_worker_task, "wspr_tx", 4096, NULL,
-                                        tskIDLE_PRIORITY + 1, tskNO_AFFINITY);
+                                        5, tskNO_AFFINITY);
     if (!h) {
         lock();
         s_state = WSPR_TX_IDLE;
