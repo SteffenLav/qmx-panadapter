@@ -670,13 +670,17 @@ static void load_from_nvs(qmx_settings_t *out)
     out->spots_en = true;
     out->rbn_en   = false;   // opt-in: a continuous telnet firehose on a fragile link
     out->sota_en  = false;   // opt-in: somebody else's hobby server, see settings.h
-    // #239: OFF until the background download is PROVEN on a long, slow link
-    // with the radio streaming. The verify at the end took the hardware
-    // watchdog 4 times out of 4 under exactly those conditions before 14 KB of
-    // cold buffers were moved out of internal RAM; the fix passed a controlled
-    // A/B once, and once is not enough for a feature that runs unattended while
-    // nobody is watching. Flip this when the repeat runs are in.
-    out->ota_autodl = false;
+    // #239: ON, and the repeat runs are in. Under the exact failing recipe -
+    // FT8 with the radio streaming ~48,000 pairs/s and a ~5 minute download -
+    // the verify took the hardware watchdog 4 times out of 4 while internal
+    // free at verify sat between 8.5 and 11.7 KB. After 14 KB of cold buffers
+    // moved to PSRAM it passed twice at 304 s and 328 s with 14.8 and 14.5 KB
+    // free, and the MINIMUM free over the whole run went from 2.5 KB to over
+    // 10 KB. Same conditions, one variable, opposite result, repeated.
+    //
+    // Still a real setting, and it must stay one: this pulls 3.3 MB, which is
+    // not free on the phone hotspot a POTA operator is using.
+    out->ota_autodl = true;
     out->tx_tone_hz   = 1500;     // conventional FT8 default; = FT8_TX_CQ_DEFAULT_FREQ_HZ
     out->tx_tone_hold = false;    // auto-pick a clear slot, as it always did
     out->bandplan_region = 0;     // 0 = auto (derive from grid)
