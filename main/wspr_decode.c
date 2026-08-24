@@ -160,6 +160,52 @@ static void free_baseband(baseband_t *bb)
  * scaled differently from its head, which is exactly the kind of slow error
  * that looks like fading and would be blamed on the ionosphere.
  */
+/* ---- ANTI-ALIASING LOW-PASS TAPS -------------------------------------
+ *
+ * ⛔ THIS REPLACED A SINGLE 32-TAP BOXCAR AVERAGE, WHICH WAS THE ONLY
+ * ANTI-ALIASING THIS DECODER HAD.
+ *
+ * A boxcar is a dreadful low-pass: first sidelobe only -13 dB. At WSPR_DECIM 32
+ * the decimated band is +/-187.5 Hz, so every decode admitted everything within
+ * 187 Hz at nearly full strength and folded in whatever lay beyond. On a WSPR
+ * band carrying stations every 10-20 Hz across a 200 Hz window, that means
+ * every decode was contaminated by every other station present.
+ *
+ * Found from two anomalies that no narrowband effect could explain: subtracting
+ * G8MCD at 1407 Hz destroyed a decode of F6APU at 1441 Hz (34 Hz away, inside
+ * the band), and subtracting a fabricated signal at 1400.94 Hz was what made
+ * PA2PGU at 1589.72 Hz decodable at all (188.8 Hz away - just outside the band,
+ * so aliased straight back in).
+ *
+ * A WSPR transmission is ~6 Hz wide (4 tones x 1.4648 Hz) and f0 is known to
+ * ~0.1 Hz, so a cutoff of 50 Hz is enormously generous to the signal while
+ * rejecting the neighbours. Windowed sinc, built once. */
+#define LPF_TAPS   255
+#define LPF_CUT_HZ 50.0
+
+static float  s_lpf[LPF_TAPS];
+static int    s_lpf_ready;
+
+static void build_lpf(void)
+{
+    if (s_lpf_ready) return;
+    const double fc = LPF_CUT_HZ / WSPR_SAMPLE_RATE_HZ;   /* cycles/sample */
+    const int    M  = LPF_TAPS / 2;
+    double sum = 0.0;
+    for (int k = 0; k < LPF_TAPS; k++) {
+        const int    m = k - M;
+        const double sinc = (m == 0) ? 2.0 * fc
+                                     : sin(2.0 * M_PI * fc * m) / (M_PI * m);
+        /* Hamming: -43 dB sidelobes, which is what the boxcar's -13 dB was
+         * costing us. */
+        const double win = 0.54 - 0.46 * cos(2.0 * M_PI * k / (LPF_TAPS - 1));
+        s_lpf[k] = (float)(sinc * win);
+        sum += s_lpf[k];
+    }
+    if (sum != 0.0) for (int k = 0; k < LPF_TAPS; k++) s_lpf[k] /= (float)sum;
+    s_lpf_ready = 1;
+}
+
 static int mix_decimate(const int16_t *samples, long n, double f0, baseband_t *bb)
 {
     memset(bb, 0, sizeof(*bb));
@@ -170,18 +216,36 @@ static int mix_decimate(const int16_t *samples, long n, double f0, baseband_t *b
     if (!bb->i || !bb->q) { free_baseband(bb); return 0; }
     bb->n = out_n;
 
+    build_lpf();
+
     const double w = 2.0 * M_PI * f0 / WSPR_SAMPLE_RATE_HZ;
     const double cs = cos(-w), sn = sin(-w);   /* step: e^(-j*w) */
     double ore = 1.0, oim = 0.0;
 
+    /* Only the last LPF_TAPS mixed samples are ever needed, so this is a small
+     * ring rather than an 11 MB copy of the whole mixed capture. Outputs are
+     * computed 1-in-32, i.e. polyphase by hand: the filter cost falls on the
+     * 45000 outputs, not on the 1.44 M inputs. */
+    /* ⛔ FILE-SCOPE STATIC, SO wspr_decode_candidate() MUST NOT BE CALLED FROM
+     * TWO TASKS AT ONCE. It is not today - the ping-pong runs capture and
+     * decode concurrently but there is exactly one decode task - and that is
+     * precisely why this warning is here, because the architecture now LOOKS
+     * like it could. Kept static rather than local because 2 KB on a task that
+     * already reserves a 16 KB frame is not free, and kept internal rather than
+     * PSRAM because the inner loop reads it ~11.5 M times per candidate. */
+    static float hi[LPF_TAPS], hq[LPF_TAPS];
+    memset(hi, 0, sizeof(hi));
+    memset(hq, 0, sizeof(hq));
+    int hp = 0;
+
     long o = 0;
-    double ai = 0.0, aq = 0.0;
     int cnt = 0;
     for (long idx = 0; idx < out_n * WSPR_DECIM; idx++) {
-        double x = samples[idx] * (1.0 / 32768.0);
-        ai += x * ore;
-        aq += x * oim;
-        /* advance the oscillator */
+        const double x = samples[idx] * (1.0 / 32768.0);
+        hi[hp] = (float)(x * ore);
+        hq[hp] = (float)(x * oim);
+        hp = (hp + 1) % LPF_TAPS;
+
         double nre = ore * cs - oim * sn;
         double nim = ore * sn + oim * cs;
         ore = nre; oim = nim;
@@ -189,10 +253,17 @@ static int mix_decimate(const int16_t *samples, long n, double f0, baseband_t *b
             double m = sqrt(ore * ore + oim * oim);
             if (m > 0) { ore /= m; oim /= m; }
         }
+
         if (++cnt == WSPR_DECIM) {
-            bb->i[o] = (float)(ai / WSPR_DECIM);
-            bb->q[o] = (float)(aq / WSPR_DECIM);
-            o++; ai = aq = 0.0; cnt = 0;
+            double ai = 0.0, aq = 0.0;
+            int r = hp;                        /* oldest sample in the ring */
+            for (int k = 0; k < LPF_TAPS; k++) {
+                ai += (double)s_lpf[k] * hi[r];
+                aq += (double)s_lpf[k] * hq[r];
+                r = (r + 1) % LPF_TAPS;
+            }
+            if (o < out_n) { bb->i[o] = (float)ai; bb->q[o] = (float)aq; o++; }
+            cnt = 0;
         }
     }
     return 1;
