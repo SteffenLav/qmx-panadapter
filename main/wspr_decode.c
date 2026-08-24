@@ -180,7 +180,7 @@ static void free_baseband(baseband_t *bb)
  * A WSPR transmission is ~6 Hz wide (4 tones x 1.4648 Hz) and f0 is known to
  * ~0.1 Hz, so a cutoff of 50 Hz is enormously generous to the signal while
  * rejecting the neighbours. Windowed sinc, built once. */
-#define LPF_TAPS   255
+#define LPF_TAPS   256   /* POWER OF TWO on purpose - see the ring below */
 #define LPF_CUT_HZ 50.0
 
 static float  s_lpf[LPF_TAPS];
@@ -198,7 +198,7 @@ static void build_lpf(void)
                                      : sin(2.0 * M_PI * fc * m) / (M_PI * m);
         /* Hamming: -43 dB sidelobes, which is what the boxcar's -13 dB was
          * costing us. */
-        const double win = 0.54 - 0.46 * cos(2.0 * M_PI * k / (LPF_TAPS - 1));
+        const double win = 0.54 - 0.46 * cos(2.0 * M_PI * k / (double)(LPF_TAPS - 1));
         s_lpf[k] = (float)(sinc * win);
         sum += s_lpf[k];
     }
@@ -241,10 +241,10 @@ static int mix_decimate(const int16_t *samples, long n, double f0, baseband_t *b
     long o = 0;
     int cnt = 0;
     for (long idx = 0; idx < out_n * WSPR_DECIM; idx++) {
-        const double x = samples[idx] * (1.0 / 32768.0);
-        hi[hp] = (float)(x * ore);
-        hq[hp] = (float)(x * oim);
-        hp = (hp + 1) % LPF_TAPS;
+        const float x = samples[idx] * (1.0f / 32768.0f);
+        hi[hp] = x * (float)ore;
+        hq[hp] = x * (float)oim;
+        hp = (hp + 1) & (LPF_TAPS - 1);
 
         double nre = ore * cs - oim * sn;
         double nim = ore * sn + oim * cs;
@@ -255,14 +255,30 @@ static int mix_decimate(const int16_t *samples, long n, double f0, baseband_t *b
         }
 
         if (++cnt == WSPR_DECIM) {
-            double ai = 0.0, aq = 0.0;
-            int r = hp;                        /* oldest sample in the ring */
+            /* ⛔ FLOAT, NOT DOUBLE, AND A MASK, NOT A MODULO.
+             *
+             * This loop runs LPF_TAPS x 45000 = 11.5 M times per candidate, so
+             * both details are the difference between a working receiver and a
+             * broken one - measured on hardware, not guessed:
+             *
+             *   double accumulators + `% 255`  ->  ~40 s per candidate, 3 of 20
+             *                                      tried, decode yield destroyed
+             *   float accumulators + `& 255`   ->  see the commit message
+             *
+             * The ESP32-P4 has a SINGLE-PRECISION FPU, so `double` is a
+             * software library here (CLAUDE.md records 80 s vs 2.8 s for the
+             * same synthesis). And 255 is not a power of two, so the ring wrap
+             * was an integer division per tap. The host showed +5 % for the
+             * double version and told me nothing, because it has neither
+             * problem. */
+            float ai = 0.0f, aq = 0.0f;
+            int r = hp;
             for (int k = 0; k < LPF_TAPS; k++) {
-                ai += (double)s_lpf[k] * hi[r];
-                aq += (double)s_lpf[k] * hq[r];
-                r = (r + 1) % LPF_TAPS;
+                ai += s_lpf[k] * hi[r];
+                aq += s_lpf[k] * hq[r];
+                r = (r + 1) & (LPF_TAPS - 1);
             }
-            if (o < out_n) { bb->i[o] = (float)ai; bb->q[o] = (float)aq; o++; }
+            if (o < out_n) { bb->i[o] = ai; bb->q[o] = aq; o++; }
             cnt = 0;
         }
     }
