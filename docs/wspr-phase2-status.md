@@ -258,3 +258,87 @@ exactly this reason: candidate 0 scored 2.16e6 and decoded; candidates 1–6 sat
 in a tight cluster at 2.15–3.28e5, i.e. the noise floor. One real signal was on
 the air and the loop found it. A bare "0 decodes" line could never have
 distinguished that from a broken receiver.
+
+## Update — the decoder invented a station, and two guards now measure against it
+
+Simulation mode, first hardware run. The window is entirely synthetic (the
+radio was wedged, so there is no real audio at all) and holds six phantom
+stations whose callsigns all end in `SIM` by construction. It produced a
+seventh:
+
+    DECODED 'LG9TPW' 'FQ54' 17 dBm  f=1442.23 Hz dt=4.76s cycles=1534
+
+That is a **false decode**, and it passed every existing plausibility check:
+17 dBm is a legal WSPR power, the callsign and grid are well formed, the
+message repacks, and 1534 is inside `WSPR_CYCLES_SUSPECT` (2000). It sat
+6.6 Hz from a genuine decode at 1448.82 Hz — about one WSPR signal bandwidth,
+i.e. a candidate on a strong signal's skirt.
+
+⚠ **It falsifies the constant's own rationale.** `WSPR_CYCLES_SUSPECT`'s
+comment says 2000 sits *"far below any observed false-decode cycle count"*.
+Here is one at 1534. The other half of that rationale is *corroborated*
+though, from independent audio: all six genuine phantoms converged at **81**
+cycles, inside the reference WAV's own 82–102 band.
+
+This matters more than a display artefact. A WSPR spot is a **reception
+report**. Publishing a station that was never on the air is a fabricated
+measurement — the thing refused everywhere else in this project (the RST
+placeholder rule, the PSK Reporter callsign guard).
+
+### Two guards, and why both are kept
+
+- **NEAR** — reject a decode within 10 Hz of one already accepted this cycle.
+  Surgical; two WSPR signals closer than ~6 Hz overlap anyway.
+- **SLOW** — reject a decode needing more than 250 Fano cycles. Blunt, and it
+  could cost sensitivity.
+
+⭐ **Both are MEASURED on every decode, whichever is enforced**, and each
+decode logs `would[near=..,slow=..]`. A guard computed only when enabled can
+never be compared against the alternative on the SAME signals — that needs two
+flashes and two different band conditions. This way one ordinary receiving
+session accumulates the evidence to choose. Enforcement flips at runtime with
+`{"action":"wspr_guards","near":1,"slow":0}`, deliberately NOT an NVS setting:
+it is an experiment knob, not a user preference.
+
+Default: NEAR enforced, SLOW measured only. The risk is asymmetric — a missed
+spot is invisible, a false spot is published — so an untested sensitivity trade
+is not enforced by default.
+
+### Bench (host harness, the real WSJT reference WAV)
+
+All five known-good decodes still pass and **neither guard would reject any of
+them**. Genuine cycles run 81–118 against the 250 threshold (2.1x margin), and
+the closest genuine pair is **14.28 Hz** against the 10 Hz threshold.
+
+⚠ **That NEAR margin is only 1.43x**, thinner than the "6 Hz signals cannot
+overlap" reasoning assumed — real WSPR packs closer than that. If field data
+ever shows NEAR rejecting a genuine decode, **drop the threshold before
+dropping the guard.**
+
+Mutation-tested: widening NEAR to 100 Hz, tightening SLOW to 50, and removing
+the `d >= 0.0` sentinel are all caught. The last matters most — without it the
+guard rejects the FIRST decode of every cycle, because "nothing accepted yet"
+is a negative sentinel.
+
+### Hardware
+
+Four phantoms transmitted, four decoded, `0 guarded`, every `dnear` logged and
+the first decode of each cycle correctly showing `dnear=-1.00` and passing.
+
+⭐ **The rejection path was proven, not assumed.** A guard that never fires
+looks exactly like a guard that does not work (the #189 trap). Rather than wait
+for a stochastic false decode, the threshold was widened at runtime to force
+it:
+
+    guards now: near=ENFORCED (200.0 Hz)  slow=measured (250 cycles)
+    GUARDED 'W1SIM' 'FN42' f=1445.43 Hz cycles=81 dnear=30.12 Hz
+            - rejected by NEAR (near=1 slow=0)
+
+Measured distance, correct verdict, correct log, `would[]` still reporting both
+guards. Restored to 10 Hz afterwards; the experiment needed no reflash, which
+is what the dev action is for.
+
+⚠ **Demonstrated by construction, not observed:** that LG9TPW *specifically*
+would be caught. It sat 6.6 Hz from a genuine decode and the mechanism provably
+rejects anything inside `near_hz`, so it follows — but that exact false decode
+has not recurred to watch it happen.
