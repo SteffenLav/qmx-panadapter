@@ -1258,6 +1258,25 @@ static esp_err_t cmd_handler(httpd_req_t *req)
 // Minimal 16bpp BMP (BITMAPFILEHEADER + BITMAPINFOHEADER + BI_BITFIELDS masks)
 // wrapping the raw RGB565 framebuffer snapshot. Top-down (negative height) so
 // the LVGL row order can be sent as-is.
+/* GET /ss.bmp[?x=&y=&w=&h=]
+ *
+ * The optional crop is there because the full frame is 1280x720 RGB565 = 1.84
+ * MB, and on a weak link that does not arrive: measured at -83 dBm RSSI, every
+ * fetch truncated between 365 and 632 KB. Small JSON requests were fine
+ * throughout, so this is a payload-size problem, not a connectivity one.
+ *
+ * ⛔ The crop deliberately does NOT scale. Downscaling was the obvious way to
+ * shrink it, and it is the wrong tool HERE: the thing most often being checked
+ * in a screenshot is a one-pixel-wide WSPR trace or a hairline in the
+ * spectrum, and nearest-neighbour can drop such a feature entirely while box
+ * averaging dims it. Either would quietly misreport the very thing the
+ * screenshot was taken to judge. A crop returns real pixels or nothing.
+ *
+ * The body is also sent in bounded chunks rather than one 1.84 MB write. That
+ * does not make a stalled link succeed, but it stops a single timeout from
+ * discarding an entire transfer that was nearly complete. */
+#define SS_CHUNK_BYTES 32768
+
 static esp_err_t ss_bmp_handler(httpd_req_t *req)
 {
     uint8_t *buf;
@@ -1267,6 +1286,25 @@ static esp_err_t ss_bmp_handler(httpd_req_t *req)
         return httpd_resp_send_500(req);
     }
 
+    /* Crop window, defaulting to the whole frame. Clamped to the image rather
+     * than rejected: a caller asking for more than exists wants what exists. */
+    uint32_t cx = 0, cy = 0, cw = w, ch = h;
+    char q[128];
+    if (httpd_req_get_url_query_str(req, q, sizeof(q)) == ESP_OK) {
+        char v[16];
+        if (httpd_query_key_value(q, "x", v, sizeof(v)) == ESP_OK) cx = (uint32_t)strtoul(v, NULL, 10);
+        if (httpd_query_key_value(q, "y", v, sizeof(v)) == ESP_OK) cy = (uint32_t)strtoul(v, NULL, 10);
+        if (httpd_query_key_value(q, "w", v, sizeof(v)) == ESP_OK) cw = (uint32_t)strtoul(v, NULL, 10);
+        if (httpd_query_key_value(q, "h", v, sizeof(v)) == ESP_OK) ch = (uint32_t)strtoul(v, NULL, 10);
+    }
+    if (cx >= w) cx = w - 1;
+    if (cy >= h) cy = h - 1;
+    if (cw == 0 || cw > w - cx) cw = w - cx;
+    if (ch == 0 || ch > h - cy) ch = h - cy;
+
+    const bool cropped = (cx || cy || cw != w || ch != h);
+    size = (size_t)cw * ch * 2;
+
     uint8_t header[66] = {0};
     header[0] = 'B';
     header[1] = 'M';
@@ -1274,8 +1312,8 @@ static esp_err_t ss_bmp_handler(httpd_req_t *req)
     uint32_t file_size = (uint32_t)(sizeof(header) + size);
     uint32_t off_bits  = sizeof(header);
     uint32_t info_size = 40;
-    int32_t  width     = (int32_t)w;
-    int32_t  height    = -(int32_t)h;  // negative = top-down DIB
+    int32_t  width     = (int32_t)cw;
+    int32_t  height    = -(int32_t)ch;  // negative = top-down DIB
     uint16_t planes    = 1;
     uint16_t bpp       = 16;
     uint32_t comp      = 3;  // BI_BITFIELDS
@@ -1302,9 +1340,22 @@ static esp_err_t ss_bmp_handler(httpd_req_t *req)
     httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=ss.bmp");
 
     esp_err_t err = httpd_resp_send_chunk(req, (const char *)header, sizeof(header));
-    if (err == ESP_OK) {
-        err = httpd_resp_send_chunk(req, (const char *)buf, size);
+
+    if (cropped) {
+        /* Row by row: the crop is not contiguous in the source buffer. */
+        const uint32_t row_bytes = cw * 2;
+        for (uint32_t r = 0; r < ch && err == ESP_OK; r++) {
+            const uint8_t *src = buf + (size_t)(cy + r) * w * 2 + (size_t)cx * 2;
+            err = httpd_resp_send_chunk(req, (const char *)src, row_bytes);
+        }
+    } else {
+        for (size_t off = 0; off < size && err == ESP_OK; off += SS_CHUNK_BYTES) {
+            size_t n = size - off;
+            if (n > SS_CHUNK_BYTES) n = SS_CHUNK_BYTES;
+            err = httpd_resp_send_chunk(req, (const char *)(buf + off), n);
+        }
     }
+
     if (err == ESP_OK) {
         err = httpd_resp_send_chunk(req, NULL, 0);
     }
