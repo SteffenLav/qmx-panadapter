@@ -179,10 +179,36 @@ answer the only question it exists to answer.
 **Layout as built**: panel left (info, and buttons when there are any),
 waterfall top-right, decode log underneath.
 
-**Caught by screenshot, not by reading**: "MODE: WSPR" at montserrat_48 overran
-the 320 px panel into the decode list's CALL column. "MODE: FT8" fits at that
-size and one more character does not - the sort of thing no amount of staring at
-the source finds.
+### Four faults that only a photograph of the screen found
+
+Recorded together because the pattern is the lesson: every one of these was
+invisible in the source, in the logs, and in the rendered DOM. The operator
+photographed the Tab5 and all four fell out.
+
+1. **"MODE: WSPR" overran the 320 px panel** into the decode list's CALL column.
+   "MODE: FT8" fits at montserrat_48; one more character does not.
+2. **The waterfall was drowned in speckle.** Black was mapped to the median, so
+   half the noise showed - and a single FFT bin's noise power is exponentially
+   distributed, standard deviation equal to its mean, ~5.6 dB. Against that, a
+   weak WSPR signal is only ~7 dB above the floor in a 1.4648 Hz bin. Black is
+   now +5 dB and two FFTs are averaged per row.
+3. **The frequency scale was compressed**, ending at x~730 of a 944 px
+   waterfall, because it was a space-padded string and I had guessed the
+   proportional font's space width at roughly double its real value. Now one
+   absolutely-positioned label per tick, placed by the same arithmetic that maps
+   a frequency to a column.
+4. **The decode list header did not line up with its rows.** The header string
+   and the row printf format were maintained separately and had drifted - PWR's
+   data ended in the column its header started in. There is now ONE format
+   string for both, every field passed as a string so the header goes through
+   the same specifiers.
+
+A fifth, found by measurement rather than eye: the waterfall was filled with
+188,800 `lv_canvas_set_px()` calls, each going through LVGL's draw layer, which
+blocked taskLVGL long enough to starve the HTTP server - the browser
+disconnected every cycle and `/ss.bmp` truncated at 135 KB of 1.84 MB. Writing
+RGB565 straight into the canvas buffer plus one invalidate does the same work
+without holding the task.
 
 ## Build order
 
