@@ -78,19 +78,21 @@ static void render_task(void *arg)
         // the FT8 top bar — the v0.15.7 fix exists precisely to keep it
         // running there). The web UI is unaffected: ws_push_task reads
         // dsp_get_spectrum() itself, not this pipeline.
-        // WSPR is excluded for the same reason FT8 is, and it matters more
-        // there: a WSPR decode needs ~64 s of CPU inside a 120 s cycle, and the
-        // Tier 1 render gate is what freed core 0 for FT8 in the first place
-        // (~14-35 % idle -> ~70-80 %).
+        // WSPR is NOT excluded here, and that is a decision backed by numbers.
         //
-        // ⚠ Note what this does NOT mean. dsp.c skips the panadapter FFT while a
-        // CAPTURE IS ARMED, not for the whole mode - so the spectrum is still
-        // being computed in the gaps between WSPR windows, and the WEB UI still
-        // shows it moving, because ws_push_task reads dsp_get_spectrum() on its
-        // own path rather than through this one. Measured, after I assumed the
-        // opposite: signal_dbm changed -96.7 -> -94.7 over 6 s with the slot loop
-        // running. This gate is a Tab5-render CPU saving, nothing more.
-        bool pan_visible = !ui_mode_uses_iq_capture(ui_mode_get());
+        // It was excluded at first, on the theory that a 66 s decode inside a
+        // 120 s cycle needs core 0 the way FT8 does. Measured, it buys nothing:
+        // the decode takes 64.1-65.5 s with the panadapter rendering (the
+        // self-test, in panadapter mode) and 65.7-66.1 s with it gated off (the
+        // live loop, in WSPR mode). What it DID buy was a Tab5 frozen for as
+        // long as the loop ran - reported by the operator within minutes - while
+        // the web kept moving, because ws_push_task reads dsp_get_spectrum() on
+        // its own path.
+        //
+        // The panadapter still freezes for the 120 s of each CAPTURE, because
+        // dsp.c skips the FFT while one is armed. That is inherent to capturing
+        // and not this gate's business.
+        bool pan_visible = (ui_mode_get() != UI_MODE_FT8);
         bool have_spectrum = false;
 
         if (pan_visible) {
