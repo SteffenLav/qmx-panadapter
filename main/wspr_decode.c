@@ -278,6 +278,47 @@ static int is_legal_power(int dbm)
  * count. */
 #define WSPR_CYCLES_SUSPECT 2000
 
+/* ⛔ A CALLSIGN CAN SATISFY WSPR'S ENCODING AND STILL BE IMPOSSIBLE.
+ *
+ * The 28-bit field only demands a digit in the third character slot, so
+ * `0C0RCS` packs, unpacks and REPACKS perfectly - it passed every check here
+ * and was reported as a received station. wsprd, given the same audio, reports
+ * no such call. A WSPR spot is a reception report, so publishing that is a
+ * fabricated measurement, which is the one thing this project refuses
+ * everywhere else (see the deleted ADIF "599" and the PSK Reporter rules).
+ *
+ * The rule is ITU Article 19: a callsign's first character is a letter, or a
+ * digit 2-9. **`0` and `1` are never allocated.**
+ *
+ * ⚠ IT MUST BE EXACTLY THAT AND NO BROADER. Leading digits in general are
+ * perfectly legitimate - `2E0DLC` is in wsprd's own 19:06 list, and 3DA0, 4X,
+ * 5B, 8P and 9A are all real prefixes. Rejecting "starts with a digit" would
+ * throw away real stations to catch a fake one, which is a worse trade than
+ * the bug.
+ *
+ * Verified against all four reference windows: rejects 0C0RCS, keeps every
+ * wsprd-confirmed decode including 2E0DLC.
+ *
+ * ⚠ This does NOT catch every fabrication. `E48XFU` (also absent from wsprd)
+ * has a legal shape - E4 is Palestine, so prefix + area digit + 3-letter suffix
+ * is structurally fine - and no shape test can reject it without rejecting real
+ * calls. Its tell is elsewhere: it needed 1987 Fano cycles where every
+ * wsprd-confirmed decode across these files converged in <= 453. That is a
+ * threshold judgement on thin data, so it is deliberately left alone here. */
+static int callsign_shape_ok(const char *call)
+{
+    if (!call || !call[0]) return 0;
+    if (call[0] == '0' || call[0] == '1') return 0;
+    /* A real call has both: all-letters or all-digits is not a callsign. */
+    int letters = 0, digits = 0;
+    for (const char *c = call; *c; c++) {
+        if (*c >= 'A' && *c <= 'Z') letters++;
+        else if (*c >= '0' && *c <= '9') digits++;
+        else if (*c != '/') return 0;      /* nothing else belongs in one */
+    }
+    return letters > 0 && digits > 0;
+}
+
 /* Runs the three shared plausibility checks (message shape, legal power
  * quantization, Fano convergence speed - see wspr_decode.h) and fills
  * *result if a decoded message passes all three. Shared by both decode
@@ -290,6 +331,7 @@ static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
     int dbm;
     if (!wspr_unpack_message(msg, call, grid, &dbm)) return 0;
     if (strlen(call) < 3) return 0;
+    if (!callsign_shape_ok(call)) return 0;
     if (!is_legal_power(dbm)) return 0;
     if (cycles > WSPR_CYCLES_SUSPECT) return 0;
     wspr_msg_bytes_t repack;
