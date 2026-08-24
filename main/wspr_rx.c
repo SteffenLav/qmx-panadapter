@@ -158,7 +158,9 @@ static void build_waterfall(const int16_t *pcm, long n)
         }
     }
 
-    /* median of a subsample, as the floor; 99th-percentile-ish as the top */
+    /* median of a subsample as the floor. The 99.5th percentile no longer
+     * sets the scale (see below) but is still measured and logged, because it
+     * is the number that says how loud the interference was this cycle. */
     static float samp[2048];
     int ns = 0;
     for (int i = 0; i < WSPR_WF_ROWS * WSPR_WF_COLS && ns < 2048; i += 17)
@@ -173,21 +175,42 @@ static void build_waterfall(const int16_t *pcm, long n)
     if (med <= 0) med = 1e-12f;
     if (top <= med) top = med * 100.0f;
 
-    /* BLACK IS WELL ABOVE THE FLOOR, not at it.
+    /* BLACK IS WELL ABOVE THE FLOOR, not at it - and the TOP IS FIXED.
      *
      * Mapping the median to black showed half the noise, and with ~5.6 dB of
      * per-bin spread that reads as dense speckle with the signal lost in it -
      * which is what the first version looked like on the operator's screen.
+     * Hence a black point above the floor rather than at it.
      *
-     * 5 dB puts most noise at black; 20 dB is where real WSPR signals live in a
-     * 1.4648 Hz bin (weak ~7 dB above the floor, strong ~20). The capture's own
-     * 99.5th percentile widens the top if this particular window has something
-     * much stronger, so a loud local station does not clip everything flat. */
-    float lo_db = 5.0f;
-    float hi_db = 10.0f * log10f(top / med);
-    if (hi_db < 20.0f) hi_db = 20.0f;
-    if (hi_db > 40.0f) hi_db = 40.0f;
-    (void)0;
+     * The top used to be the capture's own 99.5th percentile, clamped to
+     * 20-40 dB, on the reasoning that a loud local station should not clip
+     * everything flat. That was exactly backwards, and a screenshot proved it:
+     * the scale ended up set by THE LOUDEST THING IN THE WINDOW, which on this
+     * band is broadband QRM, not a WSPR signal. With a burst present the
+     * percentile pinned hi_db at the 40 dB clamp, and the arithmetic then reads
+     *
+     *     weak signal  7 dB above floor -> (7-5)/(40-5)  =  6% brightness
+     *     solid signal 20 dB            -> (20-5)/(40-5) = 43%
+     *
+     * i.e. real traces sat near black while the interference took the whole top
+     * of the ramp. Observed directly: YU1DGH at 1456.97 Hz decoded fine and was
+     * a faint vertical streak, while horizontal QRM at 1573-1630 Hz was
+     * blinding.
+     *
+     * So the span is FIXED, relative to this capture's median: black at +4 dB,
+     * saturated at +16 dB. A WSPR signal in a 1.4648 Hz bin runs ~7 dB above
+     * the floor when weak and ~20 dB when strong, so that maps them to 25% and
+     * fully-on respectively. Interference still clips - but clipping the QRM is
+     * the correct trade, because the display exists to show WSPR traces. The
+     * floor stays adaptive (the median), so this still tracks band noise; only
+     * the SPAN is now independent of what happens to be loudest. */
+    float lo_db = 4.0f;
+    float hi_db = 16.0f;
+
+    /* What the old adaptive rule WOULD have chosen, so a screenshot that still
+     * looks wrong can be judged against a number instead of an impression. */
+    ESP_LOGI(TAG, "waterfall: span %.0f-%.0f dB over median; loudest bin +%.1f dB",
+             lo_db, hi_db, 10.0f * log10f(top / med));
 
     if (s_wf_mtx) xSemaphoreTake(s_wf_mtx, portMAX_DELAY);
     for (int i = 0; i < WSPR_WF_ROWS * WSPR_WF_COLS; i++) {
