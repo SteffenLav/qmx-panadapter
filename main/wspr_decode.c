@@ -524,3 +524,62 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
      * weighted attempt a shot before giving up on this candidate. */
     try_weighted_decision(tp, result);
 }
+
+/* ---- false-decode guards (see wspr_decode.h for the evidence) ---------- */
+
+void wspr_guards_defaults(wspr_guards_t *g)
+{
+    if (!g) return;
+    /* NEAR on: it is the surgical one and should cost no genuine decode.
+     * SLOW off: measured every cycle, but not acted on until real-world data
+     * says a genuine signal never needs that many cycles. Enforcing an
+     * untested sensitivity trade by default is exactly the wrong direction -
+     * a missed spot is invisible, where a false spot is published. */
+    g->enforce_near = 1;
+    g->near_hz      = WSPR_GUARD_NEAR_HZ;
+    g->enforce_slow = 0;
+    g->slow_cycles  = WSPR_GUARD_SLOW_CYCLES;
+}
+
+double wspr_nearest_accepted_hz(const wspr_accepted_t *acc, double freq_hz)
+{
+    if (!acc || acc->n <= 0) return -1.0;
+    double best = -1.0;
+    for (int i = 0; i < acc->n; i++) {
+        double d = freq_hz - acc->freq_hz[i];
+        if (d < 0) d = -d;
+        if (best < 0 || d < best) best = d;
+    }
+    return best;
+}
+
+wspr_guard_verdict_t wspr_guard_check(const wspr_guards_t *g,
+                                      const wspr_accepted_t *acc,
+                                      const wspr_decode_result_t *r,
+                                      double *nearest_hz_out,
+                                      int *would_near, int *would_slow)
+{
+    const double near_hz = g ? g->near_hz : WSPR_GUARD_NEAR_HZ;
+    const unsigned int slow = g ? g->slow_cycles : WSPR_GUARD_SLOW_CYCLES;
+
+    const double d = wspr_nearest_accepted_hz(acc, r->freq_hz);
+    /* d < 0 means nothing accepted yet, which is NOT "near". Writing this out
+     * because `d < near_hz` alone would silently reject the cycle's FIRST
+     * decode every time - the sentinel is negative. */
+    const int near_hit = (d >= 0.0 && d < near_hz);
+    const int slow_hit = (r->cycles > slow);
+
+    if (nearest_hz_out) *nearest_hz_out = d;
+    if (would_near)     *would_near     = near_hit;
+    if (would_slow)     *would_slow     = slow_hit;
+
+    if (g && g->enforce_near && near_hit) return WSPR_GUARD_REJECT_NEAR;
+    if (g && g->enforce_slow && slow_hit) return WSPR_GUARD_REJECT_SLOW;
+    return WSPR_GUARD_PASS;
+}
+
+void wspr_accepted_add(wspr_accepted_t *acc, double freq_hz)
+{
+    if (!acc || acc->n >= WSPR_ACCEPTED_MAX) return;
+    acc->freq_hz[acc->n++] = freq_hz;
+}

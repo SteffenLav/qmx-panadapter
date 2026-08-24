@@ -91,6 +91,87 @@ typedef struct {
 void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
                             wspr_decode_result_t *result);
 
+/* ---- FALSE-DECODE GUARDS -------------------------------------------------
+ *
+ * wspr_decode_candidate()'s own checks (message shape, legal power, repack
+ * round-trip, cycles <= WSPR_CYCLES_SUSPECT) are not sufficient. Simulation
+ * mode produced a counterexample on hardware: with a purely synthetic window
+ * containing six phantom stations and nothing else, the decoder emitted a
+ * SEVENTH station -
+ *
+ *     DECODED 'LG9TPW' 'FQ54' 17 dBm  f=1442.23 Hz dt=4.76s cycles=1534
+ *
+ * - which passed every check. 17 dBm is a legal power, the callsign and grid
+ * are well formed, and 1534 is inside the 2000 threshold. It sat 6.6 Hz from
+ * a genuine decode at 1448.82 Hz, i.e. about one WSPR signal bandwidth: a
+ * candidate on a strong signal's skirt.
+ *
+ * This matters more than a display artefact. A WSPR spot is a RECEPTION
+ * REPORT, and publishing a station that was never on the air is a fabricated
+ * measurement - the thing this project refuses to do anywhere else (see the
+ * RST placeholder and PSK Reporter callsign rules in CLAUDE.md).
+ *
+ * Two guards, deliberately INDEPENDENT, because they trade differently and
+ * which one is right cannot be settled on synthetic audio:
+ *
+ *   NEAR - reject a decode within near_hz of one already accepted this cycle.
+ *          Surgical. Two WSPR signals closer than ~6 Hz overlap anyway, so it
+ *          should cost no real decode.
+ *   SLOW - reject a decode needing more than slow_cycles Fano cycles. Blunt.
+ *          Every genuine decode observed so far converged in 81-102 cycles
+ *          (5 real signals in the reference WAV, 6 synthetic phantoms), but
+ *          synthetic phantoms are clean and say nothing about weak real
+ *          signals, so this could cost sensitivity.
+ *
+ * ⭐ BOTH ARE ALWAYS MEASURED, whether or not they are enforced. A guard that
+ * only acts when enabled can never be compared against the alternative on the
+ * SAME signals - it would need two flashes and two different band conditions.
+ * Measuring both on every decode means one ordinary receiving session
+ * accumulates the evidence to decide, which is the whole point. */
+
+#define WSPR_GUARD_NEAR_HZ      10.0   /* ~1.5x a WSPR signal's ~6 Hz width */
+#define WSPR_GUARD_SLOW_CYCLES  250u   /* ~2.5x the 82-102 genuine cluster */
+#define WSPR_ACCEPTED_MAX       16
+
+typedef struct {
+    int    enforce_near;
+    double near_hz;
+    int    enforce_slow;
+    unsigned int slow_cycles;
+} wspr_guards_t;
+
+/* Frequencies accepted so far IN THIS CYCLE. Reset per cycle by the caller. */
+typedef struct {
+    int    n;
+    double freq_hz[WSPR_ACCEPTED_MAX];
+} wspr_accepted_t;
+
+typedef enum {
+    WSPR_GUARD_PASS = 0,
+    WSPR_GUARD_REJECT_NEAR,
+    WSPR_GUARD_REJECT_SLOW,
+} wspr_guard_verdict_t;
+
+/* Sensible defaults: NEAR enforced (agreed low-risk), SLOW measured only. */
+void wspr_guards_defaults(wspr_guards_t *g);
+
+/* Distance in Hz to the nearest already-accepted decode, or -1.0 if none.
+ * Always meaningful, independent of whether any guard is enforced. */
+double wspr_nearest_accepted_hz(const wspr_accepted_t *acc, double freq_hz);
+
+/* The verdict for `r` given what has already been accepted this cycle.
+ * *nearest_hz_out (may be NULL) always receives the measured distance, and
+ * *would_near / *would_slow (may be NULL) always receive what EACH guard
+ * would have decided, regardless of which is enforced - that is the data the
+ * real-world comparison is made from. */
+wspr_guard_verdict_t wspr_guard_check(const wspr_guards_t *g,
+                                      const wspr_accepted_t *acc,
+                                      const wspr_decode_result_t *r,
+                                      double *nearest_hz_out,
+                                      int *would_near, int *would_slow);
+
+void wspr_accepted_add(wspr_accepted_t *acc, double freq_hz);
+
 #ifdef __cplusplus
 }
 #endif

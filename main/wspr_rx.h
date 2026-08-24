@@ -62,3 +62,10 @@ uint32_t wspr_rx_waterfall_seq(void);
 // What the loop is doing right now, for /api/wspr and any future UI:
 // "idle" / "waiting for the slot" / "capturing 62/120 s" / "decoding 3/8".
 const char *wspr_rx_status(void);
+/* Flip guard ENFORCEMENT at runtime (dev action "wspr_guards"). Both guards
+ * are measured either way; this only changes which one acts. Deliberately not
+ * an NVS setting: it is an experiment knob for choosing between the two on
+ * real signals, not a user preference, and it should not survive silently. */
+void wspr_rx_set_guards(int enforce_near, double near_hz,
+                        int enforce_slow, unsigned int slow_cycles);
+

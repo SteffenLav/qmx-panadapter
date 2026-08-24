@@ -1138,6 +1138,19 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         vTaskDelay(pdMS_TO_TICKS(150));
         ui_power_off_safely();
         return ESP_OK;
+    } else if (action && strcmp(action, "wspr_guards") == 0) {
+        /* Dev action: choose which false-decode guard ACTS. Both are measured
+         * regardless, so this exists to compare them on real signals without
+         * a reflash. {"action":"wspr_guards","near":1,"slow":0,
+         *             "near_hz":10,"slow_cycles":250} */
+        cJSON *jn = cJSON_GetObjectItem(root, "near");
+        cJSON *js = cJSON_GetObjectItem(root, "slow");
+        cJSON *jnh = cJSON_GetObjectItem(root, "near_hz");
+        cJSON *jsc = cJSON_GetObjectItem(root, "slow_cycles");
+        wspr_rx_set_guards(jn ? cJSON_IsTrue(jn) || jn->valueint : 1,
+                           jnh ? jnh->valuedouble : 0.0,
+                           js ? (cJSON_IsTrue(js) || js->valueint) : 0,
+                           jsc ? (unsigned)jsc->valueint : 0u);
     } else if (action && strcmp(action, "resmon") == 0) {
         // Hidden developer-only toggle for the resource-monitor overlay. No web
         // UI element references this — it's meant to be fired from the browser

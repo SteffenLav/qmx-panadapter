@@ -46,6 +46,8 @@ static const char *TAG = "wspr_rx";
  * possible on this page). Allocated on first use and reused: ~36 KB, and the
  * kiss_fftr config for 8192 points is a few hundred KB more, so neither wants
  * to be built 176 times a cycle - let alone once per row. */
+static wspr_guards_t s_guards;      /* see wspr_decode.h; set at slot-loop start */
+
 static uint8_t  *s_wf;                 /* WSPR_WF_ROWS * WSPR_WF_COLS */
 static uint32_t  s_wf_seq;
 static SemaphoreHandle_t s_wf_mtx;
@@ -261,6 +263,9 @@ static void wspr_rx_task(void *arg)
         vTaskDelete(NULL);
         return;
     }
+    ESP_LOGI(TAG, "guards: near=%s (%.1f Hz)  slow=%s (%u cycles) - both always measured",
+             s_guards.enforce_near ? "ENFORCED" : "measured", s_guards.near_hz,
+             s_guards.enforce_slow ? "ENFORCED" : "measured", s_guards.slow_cycles);
     ESP_LOGI(TAG, "slot loop up: %u KB capture + %u KB decode, searching %.0f-%.0f Hz",
              (unsigned)(CAP_SAMPLES * sizeof(float) / 1024),
              (unsigned)(CAP_SAMPLES * sizeof(int16_t) / 1024),
@@ -389,6 +394,8 @@ static void wspr_rx_task(void *arg)
         int ncand = wspr_find_candidates(pcm, CAP_SAMPLES, SEARCH_LO_HZ, SEARCH_HI_HZ,
                                           cands, WSPR_MAX_CANDS);
         int decoded = 0;
+        int guarded = 0;
+        wspr_accepted_t accepted = { 0 };
         for (int i = 0; i < ncand && s_run; i++) {
             set_status("decoding %d/%d", i + 1, ncand);
             wspr_decode_result_t r;
@@ -401,15 +408,36 @@ static void wspr_rx_task(void *arg)
                      i, cands[i].freq_hz, (double)cands[i].comb_score,
                      r.cycles, r.ok ? "DECODED" : "rejected");
             if (!r.ok) continue;
+
+            /* Both guards are MEASURED here whatever is enforced, so an
+             * ordinary session accumulates the evidence to choose between
+             * them on real signals. See wspr_decode.h. */
+            double dnear = -1.0;
+            int would_near = 0, would_slow = 0;
+            wspr_guard_verdict_t v = wspr_guard_check(&s_guards, &accepted, &r,
+                                                      &dnear, &would_near, &would_slow);
+            if (v != WSPR_GUARD_PASS) {
+                guarded++;
+                ESP_LOGW(TAG, "  GUARDED '%s' '%s' f=%.2f Hz cycles=%u dnear=%.2f Hz"
+                              " - rejected by %s (near=%d slow=%d)",
+                         r.callsign, r.grid, r.freq_hz, r.cycles, dnear,
+                         v == WSPR_GUARD_REJECT_NEAR ? "NEAR" : "SLOW",
+                         would_near, would_slow);
+                continue;
+            }
+
             decoded++;
-            ESP_LOGW(TAG, "  DECODED '%s' '%s' %d dBm  f=%.2f Hz dt=%.2fs cycles=%u",
+            wspr_accepted_add(&accepted, r.freq_hz);
+            ESP_LOGW(TAG, "  DECODED '%s' '%s' %d dBm  f=%.2f Hz dt=%.2fs cycles=%u"
+                          " dnear=%.2f Hz would[near=%d slow=%d]",
                      r.callsign, r.grid, r.power_dbm, r.freq_hz,
-                     r.best_dt_samples / WSPR_SAMPLE_RATE_HZ, r.cycles);
+                     r.best_dt_samples / WSPR_SAMPLE_RATE_HZ, r.cycles,
+                     dnear, would_near, would_slow);
             file_spot(&r, cycle_utc, WSPR_SNR_UNKNOWN);
         }
         int64_t dec_ms = (esp_timer_get_time() - t0) / 1000;
-        ESP_LOGW(TAG, "cycle %lld: %d candidate(s), %d decode(s), %lld ms",
-                 (long long)cycle_utc, ncand, decoded, (long long)dec_ms);
+        ESP_LOGW(TAG, "cycle %lld: %d candidate(s), %d decode(s), %d guarded, %lld ms",
+                 (long long)cycle_utc, ncand, decoded, guarded, (long long)dec_ms);
         set_status("%d decoded", decoded);
     }
 
@@ -430,6 +458,10 @@ bool wspr_rx_start(void)
      * every reader needs "exists", and on this board the gap between the two is
      * long enough to matter. */
     if (!s_wf_mtx) s_wf_mtx = xSemaphoreCreateMutex();
+    /* Only if untouched: a wspr_guards dev action set before the page is
+     * entered must survive starting the loop, or an experiment silently
+     * reverts to defaults the moment it is run. */
+    if (s_guards.near_hz <= 0.0) wspr_guards_defaults(&s_guards);
     s_run = true;
     ui_mode_set(UI_MODE_WSPR);
 
@@ -457,4 +489,17 @@ void wspr_rx_stop(void)
      * so the panadapter starts drawing again immediately rather than waiting for
      * a capture in flight to finish. */
     ui_mode_set(UI_MODE_PANADAPTER);
+}
+
+void wspr_rx_set_guards(int enforce_near, double near_hz,
+                        int enforce_slow, unsigned int slow_cycles)
+{
+    if (s_guards.near_hz <= 0.0) wspr_guards_defaults(&s_guards);
+    s_guards.enforce_near = enforce_near ? 1 : 0;
+    s_guards.enforce_slow = enforce_slow ? 1 : 0;
+    if (near_hz     > 0.0) s_guards.near_hz     = near_hz;
+    if (slow_cycles > 0u)  s_guards.slow_cycles = slow_cycles;
+    ESP_LOGW(TAG, "guards now: near=%s (%.1f Hz)  slow=%s (%u cycles)",
+             s_guards.enforce_near ? "ENFORCED" : "measured", s_guards.near_hz,
+             s_guards.enforce_slow ? "ENFORCED" : "measured", s_guards.slow_cycles);
 }

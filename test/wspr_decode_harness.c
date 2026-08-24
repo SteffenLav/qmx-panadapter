@@ -146,13 +146,44 @@ int main(void)
     int matched[N_EXPECTED] = { 0 };
     int n_ok = 0, n_rejected = 0;
 
+    /* What each false-decode guard WOULD do to this file's genuine decodes.
+     * The guards exist because simulation mode caught the decoder inventing a
+     * station (see wspr_decode.h). What synthetic audio cannot answer is
+     * whether they cost a REAL decode - so measure them against the five
+     * known-good ones, the only real ground truth available. */
+    wspr_guards_t guards;
+    wspr_guards_defaults(&guards);
+    wspr_accepted_t accepted = { 0 };
+    int would_near_total = 0, would_slow_total = 0;
+    int near_hit_on_known = 0, slow_hit_on_known = 0;
+
     for (int c = 0; c < ncand; c++) {
         wspr_decode_result_t r;
         wspr_decode_candidate(samples, n, cands[c].freq_hz, &r);
         if (r.ok) {
             n_ok++;
+
+            double dnear = -1.0;
+            int wn = 0, ws = 0;
+            wspr_guard_check(&guards, &accepted, &r, &dnear, &wn, &ws);
+            would_near_total += wn;
+            would_slow_total += ws;
+            {
+                int is_known = 0;
+                for (int e = 0; e < N_EXPECTED; e++) {
+                    if (strcmp(r.callsign, kExpected[e].call) == 0
+                        && strcmp(r.grid, kExpected[e].grid) == 0
+                        && r.power_dbm == kExpected[e].dbm) is_known = 1;
+                }
+                if (is_known && wn) near_hit_on_known++;
+                if (is_known && ws) slow_hit_on_known++;
+            }
+            /* Mirrors what the device keeps, so the NEAR distances measured
+             * here are the ones a real run would see. */
+            wspr_accepted_add(&accepted, r.freq_hz);
             printf("  #%d f0=%.3f Hz  DECODED call='%s' grid='%s' power=%d dBm  cycles=%u\n",
                    c, cands[c].freq_hz, r.callsign, r.grid, r.power_dbm, r.cycles);
+            printf("      dnear=%.2f Hz would[near=%d slow=%d]\n", dnear, wn, ws);
             for (int e = 0; e < N_EXPECTED; e++) {
                 if (strcmp(r.callsign, kExpected[e].call) == 0
                     && strcmp(r.grid, kExpected[e].grid) == 0
@@ -172,6 +203,19 @@ int main(void)
                kExpected[e].call, kExpected[e].grid, kExpected[e].dbm);
         if (!matched[e]) g_fail++;
     }
+
+    printf("\n-- what the false-decode guards would do to REAL signals --\n");
+    printf("  NEAR (%.1f Hz): would reject %d of %d plausible, %d known-good\n",
+           guards.near_hz, would_near_total, n_ok, near_hit_on_known);
+    printf("  SLOW (%u cycles): would reject %d of %d plausible, %d known-good\n",
+           guards.slow_cycles, would_slow_total, n_ok, slow_hit_on_known);
+    /* THE assertion that matters. A guard that discards a genuine decode is
+     * worse than the false decode it prevents: a missed spot is invisible,
+     * where a false one is merely wrong and can be seen and corrected. */
+    printf("  %s  NEAR costs no known-good decode\n", near_hit_on_known == 0 ? "PASS" : "FAIL");
+    if (near_hit_on_known) g_fail++;
+    printf("  %s  SLOW costs no known-good decode\n", slow_hit_on_known == 0 ? "PASS" : "FAIL");
+    if (slow_hit_on_known) g_fail++;
 
     printf("\n-- checking the reject count --\n");
     /* Documents the file's own strongest (cause-unconfirmed) candidate
