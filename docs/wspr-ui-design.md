@@ -149,6 +149,41 @@ reporting for exactly these reasons. Designed around, not designed in: the
 cycle header and the left pane both leave room for a "heard by N" line to
 appear later without moving anything.
 
+## Update — the page as built, and the one thing the design got wrong
+
+Built on 2026-08-24 and revised live against the operator's screenshots. The
+side-panel shape survived contact; one thing did not.
+
+**The design said nothing about a spectrum, and the operator wanted one.** Their
+reasoning was sound - WSPR is narrow, so the panel leaves room and the rest of
+the pane is spare. Two facts then shaped what could actually be built:
+
+- A **live** spectrum is impossible here. While a capture is armed the DSP
+  diverts the IQ into the capture pre-ring instead of the panadapter FFT, and a
+  capture fills 120 s of every 120 s cycle - so it would be frozen for exactly
+  the time it matters.
+- A **full-span** one would be nearly useless anyway: the panadapter shows
+  48 kHz and WSPR occupies 200 Hz, so the whole sub-band is about SIX PIXELS.
+
+So the page shows the **captured window as a waterfall**, built after each
+capture and before the decode - which is what WSJT-X shows for WSPR, and costs
+almost nothing because the data is already in hand. 176 rows (one per symbol
+period) x 205 columns at 1.4648 Hz per bin, which is exactly one bin per WSPR
+tone spacing. Updates once per cycle; for a mode where nothing happens faster
+than that, once per cycle is live.
+
+The frequency scale under it is the operator's requirement, verbatim: *"need
+numbers to judge the horizontal placement"*. A waterfall without them cannot
+answer the only question it exists to answer.
+
+**Layout as built**: panel left (info, and buttons when there are any),
+waterfall top-right, decode log underneath.
+
+**Caught by screenshot, not by reading**: "MODE: WSPR" at montserrat_48 overran
+the 320 px panel into the decode list's CALL column. "MODE: FT8" fits at that
+size and one more character does not - the sort of thing no amount of staring at
+the source finds.
+
 ## Build order
 
 1. `wspr_spots.c` - the spot store (mutex-protected, aged, sortable), modelled
