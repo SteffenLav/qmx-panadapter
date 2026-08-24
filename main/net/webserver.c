@@ -18,6 +18,7 @@
 #include "ft8_tx.h"           // ft8_tx_get_status (web TX-status banner)
 #include "wspr_tx.h"          // the dev "wspr_tx_test" action
 #include "wspr_selftest.h"    // the dev "wspr_selftest" action
+#include "wspr_spots.h"       // GET /api/wspr
 #include "ft8_qso.h"          // ft8_qso_get_state / get_target / get_cq_calls_sent
 #include "ft8_status.h"       // ft8_status_get
 #include "dsp.h"              // dsp_get_peak_dbm_around_vfo
@@ -2868,6 +2869,64 @@ static esp_err_t psk_rx_handler(httpd_req_t *req)
     return e;
 }
 
+
+/* GET /api/wspr - the spot list and the cycle state, mirroring /api/decodes'
+ * shape so the browser side needs no new idioms.
+ *
+ * Distance and bearing are computed HERE, from the same util/maidenhead.c the
+ * Tab5 list uses, for the reason /api/decodes already gives: one implementation
+ * means the two screens cannot disagree, and it picks up the miles setting for
+ * free. */
+static esp_err_t wspr_handler(httpd_req_t *req)
+{
+    int total = wspr_spots_count();
+    int want  = total < 128 ? total : 128;
+
+    wspr_spot_t *snap = NULL;
+    int n = 0;
+    if (want > 0) {
+        /* PSRAM, never the httpd task's stack - same rule as decodes_handler. */
+        snap = heap_caps_malloc(sizeof(wspr_spot_t) * want,
+                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!snap) return httpd_resp_send_500(req);
+        n = wspr_spots_get(snap, want);
+    }
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "spots_held",   total);
+    cJSON_AddNumberToObject(root, "unique_calls", wspr_spots_unique_calls());
+    cJSON_AddBoolToObject  (root, "rx_live",      false); /* until the slot loop exists */
+
+    cJSON *arr = cJSON_AddArrayToObject(root, "spots");
+    for (int i = 0; i < n; i++) {
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddStringToObject(o, "call", snap[i].call);
+        cJSON_AddStringToObject(o, "grid", snap[i].grid);
+        cJSON_AddStringToObject(o, "cty",  snap[i].cty);
+        cJSON_AddNumberToObject(o, "utc",   (double)snap[i].cycle_utc);
+        cJSON_AddNumberToObject(o, "hz",    snap[i].freq_hz);
+        /* null, not a number, when nothing measured it - the browser renders
+         * "--" rather than inventing a value. */
+        if (snap[i].snr_db == WSPR_SNR_UNKNOWN) cJSON_AddNullToObject(o, "snr");
+        else cJSON_AddNumberToObject(o, "snr", snap[i].snr_db);
+        if (snap[i].drift_hz == WSPR_DRIFT_UNKNOWN) cJSON_AddNullToObject(o, "drift");
+        else cJSON_AddNumberToObject(o, "drift", snap[i].drift_hz);
+        cJSON_AddNumberToObject(o, "pwr",   snap[i].power_dbm);
+        cJSON_AddNumberToObject(o, "km",    snap[i].km);
+        cJSON_AddNumberToObject(o, "brg",   snap[i].bearing_deg);
+        cJSON_AddItemToArray(arr, o);
+    }
+
+    char *out = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    free(snap);
+    if (!out) return httpd_resp_send_500(req);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, out);
+    free(out);
+    return ESP_OK;
+}
+
 static esp_err_t decodes_handler(httpd_req_t *req)
 {
     // ~11 KB of rows: PSRAM, never the httpd task's stack.
@@ -3288,6 +3347,10 @@ static const httpd_uri_t uri_settings_post = {
     .uri = "/api/settings", .method = HTTP_POST, .handler = settings_post_handler,
 };
 
+static const httpd_uri_t uri_wspr = {
+    .uri = "/api/wspr", .method = HTTP_GET, .handler = wspr_handler,
+};
+
 static const httpd_uri_t uri_decodes = {
     .uri = "/api/decodes", .method = HTTP_GET, .handler = decodes_handler,
 };
@@ -3593,7 +3656,7 @@ esp_err_t webserver_start(void)
     // silently from the endpoint's point of view, so the symptom would have been
     // "the shortcuts page 404s" with nothing obviously wrong. Counted, not
     // guessed: grep -c httpd_register_uri_handler in both files.
-    config.max_uri_handlers = 48;   // 38 API + WS + 5 file-browser + headroom
+    config.max_uri_handlers = 49;   // 39 API + WS + 5 file-browser + headroom
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -3639,6 +3702,7 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_settings_post);
     httpd_register_uri_handler(s_server, &uri_shortcuts_get);
     httpd_register_uri_handler(s_server, &uri_shortcuts_post);
+    httpd_register_uri_handler(s_server, &uri_wspr);
     httpd_register_uri_handler(s_server, &uri_decodes);
     httpd_register_uri_handler(s_server, &uri_psk_rx);
     httpd_register_uri_handler(s_server, &uri_help);

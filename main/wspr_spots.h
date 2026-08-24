@@ -27,6 +27,8 @@
 #define WSPR_SPOT_CALL_MAX  11   /* WSPR type-1 callsigns, plus room for NUL */
 #define WSPR_SPOT_GRID_MAX   5   /* 4-character Maidenhead field + NUL */
 #define WSPR_SPOT_CTY_MAX    4   /* DXCC alpha-3, as the FT8 list uses */
+#define WSPR_SNR_UNKNOWN     (-32768)  /* see snr_db below */
+#define WSPR_DRIFT_UNKNOWN   (-32768)  /* likewise - 0 Hz is a REAL reading */
 #define WSPR_SPOT_RING       256 /* ~8 cycles of a busy band, ~10 KB in PSRAM */
 
 typedef struct {
@@ -35,8 +37,16 @@ typedef struct {
     char     cty[WSPR_SPOT_CTY_MAX];
     int64_t  cycle_utc;     /* start of the even minute this was heard in */
     float    freq_hz;       /* audio offset inside the 200 Hz window */
+    /* WSPR_SNR_UNKNOWN until something actually measures it. NEVER a stand-in
+     * value: this project deleted the ADIF "599" placeholder for exactly this
+     * reason - an unmeasured number displayed as a measurement is a fabricated
+     * one, and a missing field is honest where a wrong one is not. */
     int16_t  snr_db;
-    int16_t  drift_hz;      /* Hz across the transmission, signed */
+    /* WSPR_DRIFT_UNKNOWN until measured. Note 0 is a genuine and common value -
+     * fifty stations reported drift 0 for our own transmission - so a default of
+     * 0 would be indistinguishable from a real clean reading. That is precisely
+     * why it needs a sentinel rather than a "harmless" zero. */
+    int16_t  drift_hz;
     int16_t  power_dbm;     /* as REPORTED by that station - never inferred */
     int32_t  km;            /* -1 when the grid gives no answer */
     int16_t  bearing_deg;   /* -1 when unknown */
