@@ -1,8 +1,11 @@
-# WSPR Phase 2 — TX engine status
+# WSPR Phase 2 — the radio side, TX and RX
 
-Companion to `wspr-phase1-status.md` (RX codec + decoder). This file covers
-`main/wspr_tx.c` / `.h`: building a WSPR transmission and driving it out as a
-timed CAT tone sequence.
+Companion to `wspr-phase1-status.md`, which covers the codec and decoder as
+algorithms. This file covers the parts that touch the radio: `main/wspr_tx.c`
+(building a transmission and driving it out as a timed CAT tone sequence) and
+`main/wspr_rx.c` (capturing the even-minute window from the live IQ stream and
+decoding it). Both have now worked on the air - see "ON THE AIR" for TX and
+"RX ON THE AIR" for receive.
 
 **This engine has now transmitted on the air and been decoded worldwide** — see
 "ON THE AIR" below, the last section. Everything before that section was written
