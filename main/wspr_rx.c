@@ -113,64 +113,143 @@ static int64_t now_ms(void)
  * WSPR's tone spacing, so a transmission occupies four adjacent columns and
  * reads as a clean vertical trace rather than a smear.
  *
- * Scaled per capture against its own median and peak. WSPR captures have no
- * absolute reference - the RF gain, the band and the time of day all move the
- * floor - so a fixed dB mapping would be black on one band and saturated on the
- * next. The median is the noise floor by construction here, since a WSPR window
- * is mostly noise. */
-static void build_waterfall(const int16_t *pcm, long n)
+ * ---- WHY THIS IS ROW-AT-A-TIME ----
+ *
+ * It used to build the whole image after the capture closed, which meant the
+ * pane showed nothing for two minutes and then everything at once, plus an
+ * ~8 s pause while 352 FFTs ran. Rows are independent, so they can instead be
+ * produced AS THE CAPTURE FILLS: row r needs samples [r*8192, r*8192+12288)
+ * and is finished the moment the capture passes that mark. One row every
+ * 0.68 s at ~45 ms of work, about 6.6% of a core - the same total work, spread
+ * out - and the picture scrolls while the band is being heard.
+ *
+ * Row r advances 8192 samples but CONSUMES 12288: two 8192-point FFTs
+ * overlapped by half. A single bin's noise power is exponentially distributed,
+ * so its standard deviation equals its mean - ~5.6 dB of speckle, which swamps
+ * a weak WSPR trace sitting only ~7 dB above the floor. Averaging two halves
+ * the variance, and at 1.4 s per row the lost time resolution is free against
+ * a 110 s transmission.
+ *
+ * ---- THE FLOOR, AND THE TRAP IT AVOIDS ----
+ *
+ * Scaling is relative to the capture's own median: WSPR windows have no
+ * absolute reference, since RF gain, band and time of day all move the floor.
+ * Live, that median does not exist yet - so a row is painted against the
+ * PREVIOUS cycle's floor, and the definitive median is computed once at
+ * finalise, which repaints every row from magnitudes already stored.
+ *
+ * The floor is therefore updated ONCE PER CYCLE and never per row. Deriving it
+ * per row is the documented trap that left the panadapter's per-bin adaptive
+ * floor never actually running: ui_flat_mode_reset() re-seeds it ~17 times a
+ * second, so the tracker is seeded, updated once and thrown away. A floor that
+ * re-derives itself faster than it converges is not adaptive, it is noise. */
+
+static float *s_wf_mag;          /* ROWS*COLS magnitudes, PSRAM, alive per cycle */
+static float  s_wf_floor;        /* median carried from the previous cycle */
+static int    s_wf_rows_done;
+static kiss_fftr_cfg     s_wf_cfg;
+static kiss_fft_scalar  *s_wf_in;
+static kiss_fft_cpx     *s_wf_sp;
+
+#define WF_NFFT   8192
+#define WF_STEP   (WF_NFFT)                 /* samples a row advances */
+#define WF_SPAN   (WF_NFFT + WF_NFFT / 2)   /* samples a row consumes: 12288 */
+#define WF_LO_DB  4.0f
+#define WF_HI_DB  16.0f
+
+/* Samples that must have landed before row r can be computed. */
+static long wf_samples_for_row(int r) { return (long)r * WF_STEP + WF_SPAN; }
+
+static uint8_t wf_byte(float magv, float floorv)
+{
+    float db = 10.0f * log10f((magv + 1e-20f) / floorv);
+    float t = (db - WF_LO_DB) / (WF_HI_DB - WF_LO_DB);
+    if (t < 0) t = 0;
+    if (t > 1) t = 1;
+    return (uint8_t)(t * 255.0f);
+}
+
+static bool wf_begin(void)
 {
     if (!s_wf) {
         s_wf = heap_caps_malloc(WSPR_WF_ROWS * WSPR_WF_COLS,
                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        if (!s_wf) { ESP_LOGW(TAG, "no PSRAM for the waterfall"); return; }
+        if (!s_wf) { ESP_LOGW(TAG, "no PSRAM for the waterfall"); return false; }
     }
-    const int NF = 8192;
-    kiss_fftr_cfg cfg = kiss_fftr_alloc(NF, 0, NULL, NULL);
-    kiss_fft_scalar *in = malloc((size_t)NF * sizeof(kiss_fft_scalar));
-    kiss_fft_cpx *sp = malloc((size_t)(NF / 2 + 1) * sizeof(kiss_fft_cpx));
-    float *mag = malloc((size_t)WSPR_WF_ROWS * WSPR_WF_COLS * sizeof(float));
-    if (!cfg || !in || !sp || !mag) {
+    if (!s_wf_mag) {
+        s_wf_mag = heap_caps_malloc((size_t)WSPR_WF_ROWS * WSPR_WF_COLS * sizeof(float),
+                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_wf_mag) { ESP_LOGW(TAG, "no PSRAM for waterfall magnitudes"); return false; }
+    }
+    if (!s_wf_cfg) s_wf_cfg = kiss_fftr_alloc(WF_NFFT, 0, NULL, NULL);
+    if (!s_wf_in)  s_wf_in  = malloc((size_t)WF_NFFT * sizeof(kiss_fft_scalar));
+    if (!s_wf_sp)  s_wf_sp  = malloc((size_t)(WF_NFFT / 2 + 1) * sizeof(kiss_fft_cpx));
+    if (!s_wf_cfg || !s_wf_in || !s_wf_sp) {
         ESP_LOGW(TAG, "waterfall: out of memory");
-        free(in); free(sp); free(mag); free(cfg);
-        return;
+        return false;
     }
+    s_wf_rows_done = 0;
+    /* Blank first, so a short cycle cannot leave last cycle's rows standing
+     * below this one's - that would read as signal that is no longer there. */
+    if (s_wf_mtx) xSemaphoreTake(s_wf_mtx, portMAX_DELAY);
+    memset(s_wf, 0, WSPR_WF_ROWS * WSPR_WF_COLS);
+    s_wf_seq++;
+    if (s_wf_mtx) xSemaphoreGive(s_wf_mtx);
+    return true;
+}
 
-    const double bin_hz = WSPR_SAMPLE_RATE_HZ / NF;      /* 1.46484375 */
+/* Compute one row. Exactly one of fsrc/isrc is non-NULL: the live capture
+ * hands back floats, the simulator synthesizes int16. Both are only ever read
+ * relative to this capture's own median, so their differing absolute scales
+ * cancel and no normalisation is needed here. */
+static void wf_row(const float *fsrc, const int16_t *isrc, long navail, int row)
+{
+    if (!s_wf_mag || row < 0 || row >= WSPR_WF_ROWS) return;
+    const double bin_hz = WSPR_SAMPLE_RATE_HZ / WF_NFFT;
     const int lo_bin = (int)(WSPR_WF_LO_HZ / bin_hz + 0.5);
+    float *magrow = &s_wf_mag[(size_t)row * WSPR_WF_COLS];
 
-    /* TWO FFTs averaged per displayed row.
-     *
-     * A single FFT bin's noise power is exponentially distributed - its standard
-     * deviation EQUALS its mean, about 5.6 dB once expressed in dB. That is the
-     * speckle, and it swamps the signal: a weak WSPR transmission is only ~7 dB
-     * above the noise in a 1.4648 Hz bin (-25 dB in the 2500 Hz reference plus
-     * 10*log10(2500/1.4648)). Averaging two halves the variance for the cost of
-     * halving the time resolution, which at 1.4 s per row is free - a WSPR trace
-     * lasts 110 s. */
-    for (int r = 0; r < WSPR_WF_ROWS; r++) {
-        for (int c = 0; c < WSPR_WF_COLS; c++) mag[r * WSPR_WF_COLS + c] = 0;
-        for (int k = 0; k < 2; k++) {
-            long off = ((long)r * 2 + k) * (NF / 2);
-            for (int i = 0; i < NF; i++)
-                in[i] = (off + i < n) ? (kiss_fft_scalar)(pcm[off + i] / 32768.0) : 0;
-            kiss_fftr(cfg, in, sp);
-            for (int c = 0; c < WSPR_WF_COLS; c++) {
-                int b = lo_bin + c;
-                float p = (b <= NF / 2) ? sp[b].r * sp[b].r + sp[b].i * sp[b].i : 0;
-                mag[r * WSPR_WF_COLS + c] += p * 0.5f;
-            }
+    for (int c = 0; c < WSPR_WF_COLS; c++) magrow[c] = 0;
+    for (int k = 0; k < 2; k++) {
+        long off = ((long)row * 2 + k) * (WF_NFFT / 2);
+        for (int i = 0; i < WF_NFFT; i++) {
+            long s = off + i;
+            if (s >= navail)  s_wf_in[i] = 0;
+            else if (fsrc)    s_wf_in[i] = (kiss_fft_scalar)fsrc[s];
+            else              s_wf_in[i] = (kiss_fft_scalar)(isrc[s] / 32768.0);
+        }
+        kiss_fftr(s_wf_cfg, s_wf_in, s_wf_sp);
+        for (int c = 0; c < WSPR_WF_COLS; c++) {
+            int b = lo_bin + c;
+            float p = (b <= WF_NFFT / 2)
+                    ? s_wf_sp[b].r * s_wf_sp[b].r + s_wf_sp[b].i * s_wf_sp[b].i : 0;
+            magrow[c] += p * 0.5f;
         }
     }
 
-    /* median of a subsample as the floor. The 99.5th percentile no longer
-     * sets the scale (see below) but is still measured and logged, because it
-     * is the number that says how loud the interference was this cycle. */
+    /* Paint now against the carried floor so the row is visible immediately;
+     * wf_finalise() repaints it against this cycle's own median. */
+    if (s_wf_floor > 0.0f) {
+        if (s_wf_mtx) xSemaphoreTake(s_wf_mtx, portMAX_DELAY);
+        for (int c = 0; c < WSPR_WF_COLS; c++)
+            s_wf[(size_t)row * WSPR_WF_COLS + c] = wf_byte(magrow[c], s_wf_floor);
+        s_wf_seq++;
+        if (s_wf_mtx) xSemaphoreGive(s_wf_mtx);
+    }
+    if (row >= s_wf_rows_done) s_wf_rows_done = row + 1;
+}
+
+/* Definitive pass: this cycle's own median, every row repainted from the
+ * magnitudes already computed. No FFTs here - they were done row by row. */
+static void wf_finalise(void)
+{
+    if (!s_wf || !s_wf_mag) return;
+
     static float samp[2048];
     int ns = 0;
     for (int i = 0; i < WSPR_WF_ROWS * WSPR_WF_COLS && ns < 2048; i += 17)
-        samp[ns++] = mag[i];
-    for (int a = 1; a < ns; a++) {          /* insertion sort, ns is small */
+        samp[ns++] = s_wf_mag[i];
+    for (int a = 1; a < ns; a++) {
         float v = samp[a]; int b = a - 1;
         while (b >= 0 && samp[b] > v) { samp[b + 1] = samp[b]; b--; }
         samp[b + 1] = v;
@@ -180,55 +259,39 @@ static void build_waterfall(const int16_t *pcm, long n)
     if (med <= 0) med = 1e-12f;
     if (top <= med) top = med * 100.0f;
 
-    /* BLACK IS WELL ABOVE THE FLOOR, not at it - and the TOP IS FIXED.
+    /* BLACK IS WELL ABOVE THE FLOOR, and the TOP IS FIXED.
      *
-     * Mapping the median to black showed half the noise, and with ~5.6 dB of
-     * per-bin spread that reads as dense speckle with the signal lost in it -
-     * which is what the first version looked like on the operator's screen.
-     * Hence a black point above the floor rather than at it.
+     * The top used to be this capture's 99.5th percentile clamped to 20-40 dB,
+     * so THE LOUDEST THING IN THE WINDOW set the scale - and on this band that
+     * is broadband QRM, not a WSPR signal. A screenshot proved it: with a burst
+     * present hi_db pinned at 40 and a weak 7 dB trace rendered at 6%
+     * brightness while the interference took the whole top of the ramp.
      *
-     * The top used to be the capture's own 99.5th percentile, clamped to
-     * 20-40 dB, on the reasoning that a loud local station should not clip
-     * everything flat. That was exactly backwards, and a screenshot proved it:
-     * the scale ended up set by THE LOUDEST THING IN THE WINDOW, which on this
-     * band is broadband QRM, not a WSPR signal. With a burst present the
-     * percentile pinned hi_db at the 40 dB clamp, and the arithmetic then reads
-     *
-     *     weak signal  7 dB above floor -> (7-5)/(40-5)  =  6% brightness
-     *     solid signal 20 dB            -> (20-5)/(40-5) = 43%
-     *
-     * i.e. real traces sat near black while the interference took the whole top
-     * of the ramp. Observed directly: YU1DGH at 1456.97 Hz decoded fine and was
-     * a faint vertical streak, while horizontal QRM at 1573-1630 Hz was
-     * blinding.
-     *
-     * So the span is FIXED, relative to this capture's median: black at +4 dB,
-     * saturated at +16 dB. A WSPR signal in a 1.4648 Hz bin runs ~7 dB above
-     * the floor when weak and ~20 dB when strong, so that maps them to 25% and
-     * fully-on respectively. Interference still clips - but clipping the QRM is
-     * the correct trade, because the display exists to show WSPR traces. The
-     * floor stays adaptive (the median), so this still tracks band noise; only
-     * the SPAN is now independent of what happens to be loudest. */
-    float lo_db = 4.0f;
-    float hi_db = 16.0f;
-
-    /* What the old adaptive rule WOULD have chosen, so a screenshot that still
-     * looks wrong can be judged against a number instead of an impression. */
+     * Fixed span instead: black at +4 dB, saturated at +16 dB over the median.
+     * A WSPR signal in a 1.4648 Hz bin is ~7 dB above the floor when weak and
+     * ~20 dB when strong, so those map to 25% and fully-on. Interference clips,
+     * which is the right trade for a display whose job is showing WSPR. The
+     * FLOOR stays adaptive; only the SPAN is fixed. */
     ESP_LOGI(TAG, "waterfall: span %.0f-%.0f dB over median; loudest bin +%.1f dB",
-             lo_db, hi_db, 10.0f * log10f(top / med));
+             WF_LO_DB, WF_HI_DB, 10.0f * log10f(top / med));
 
     if (s_wf_mtx) xSemaphoreTake(s_wf_mtx, portMAX_DELAY);
-    for (int i = 0; i < WSPR_WF_ROWS * WSPR_WF_COLS; i++) {
-        float db = 10.0f * log10f((mag[i] + 1e-20f) / med);
-        float t = (db - lo_db) / (hi_db - lo_db);
-        if (t < 0) t = 0;
-        if (t > 1) t = 1;
-        s_wf[i] = (uint8_t)(t * 255.0f);
-    }
+    for (int i = 0; i < WSPR_WF_ROWS * WSPR_WF_COLS; i++)
+        s_wf[i] = wf_byte(s_wf_mag[i], med);
     s_wf_seq++;
     if (s_wf_mtx) xSemaphoreGive(s_wf_mtx);
 
-    free(in); free(sp); free(mag); free(cfg);
+    s_wf_floor = med;   /* the next cycle paints its live rows against this */
+}
+
+/* Whole-window build, used by the simulator, which has the entire window at
+ * once. Identical output to the incremental path - same row function, same
+ * finalise - so the two cannot drift apart. */
+static void build_waterfall(const int16_t *pcm, long n)
+{
+    if (!wf_begin()) return;
+    for (int r = 0; r < WSPR_WF_ROWS; r++) wf_row(NULL, pcm, n, r);
+    wf_finalise();
 }
 
 bool wspr_rx_get_waterfall(uint8_t *out)
@@ -384,6 +447,15 @@ static void wspr_rx_task(void *arg)
          * mechanism, and same reason, as the FT8 boundary-discard fix. */
         uint32_t start_off_ms = (uint32_t)(now_ms() % WSPR_CYCLE_MS);
         uint32_t backfill     = start_off_ms * (uint32_t)(WSPR_SAMPLE_RATE_HZ / 1000);
+        /* Allocate and blank BEFORE the capture opens: the wait loop starts
+         * painting rows the moment samples land.
+         *
+         * ⛔ The return value is LOAD-BEARING. wf_row() advances s_wf_rows_done
+         * itself, and early-returns without advancing it when the magnitude
+         * store could not be allocated - so driving the row loop after a failed
+         * wf_begin() would spin forever and hang the capture, turning an
+         * out-of-memory condition into a dead receiver. */
+        const bool wf_live = wf_begin();
         esp_err_t err = dsp_ft8_capture_begin(cap, CAP_SAMPLES, backfill);
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "capture_begin failed (%s) - skipping this cycle",
@@ -397,6 +469,19 @@ static void wspr_rx_task(void *arg)
 
         while (s_run) {
             int got = dsp_ft8_capture_progress();
+
+            /* ---- LIVE WATERFALL ----
+             * Every row whose samples have landed is drawn now, so the pane
+             * scrolls while the band is being heard instead of showing nothing
+             * for two minutes and everything at once. Rows are painted against
+             * the PREVIOUS cycle's floor; wf_finalise() below repaints the lot
+             * against this cycle's own median once it exists. */
+            while (wf_live && s_wf_rows_done < WSPR_WF_ROWS &&
+                   (long)got >= wf_samples_for_row(s_wf_rows_done)) {
+                wf_row(cap, NULL, (long)got, s_wf_rows_done);
+                if (!s_run) break;
+            }
+
             if (got >= (int)CAP_SAMPLES) break;
             int64_t elapsed = now_ms() % WSPR_CYCLE_MS;
             if (elapsed > WSPR_CYCLE_MS - 500 && got > 0) break;  /* boundary */
@@ -452,10 +537,11 @@ static void wspr_rx_task(void *arg)
         ESP_LOGW(TAG, "capture level: peak=%.1f gain=%.0fx -> rms=%.0f of 32768",
                  peak, gain, sqrt(sumsq / CAP_SAMPLES));
 
-        /* Built BEFORE the decode, not after: the decode takes ~66 s and the
-         * operator should see the window they just captured while it runs, not
-         * a minute later. */
-        build_waterfall(pcm, CAP_SAMPLES);
+        /* The rows were drawn live as the capture filled; this only recomputes
+         * the floor from the finished window and repaints against it. No FFTs,
+         * so the ~8 s post-capture pause the old whole-window build cost is
+         * gone - the picture was already there. */
+        wf_finalise();
 
     decode_window:
         /* ---- decode ---- */
