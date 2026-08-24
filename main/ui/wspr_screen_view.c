@@ -17,6 +17,7 @@
 #include "util/dxcc.h"
 #include "wspr_tx.h"
 #include "storage/settings.h"
+#include "wspr_sim.h"
 
 /* JetBrains Mono, already compiled in for the QMX terminal page (#147). The
  * spot list is space-padded columns of short tokens, and in a PROPORTIONAL font
@@ -134,8 +135,45 @@ static uint8_t  *s_wf_buf;      /* RGB565 canvas pixels */
 static uint8_t  *s_wf_data;     /* WSPR_WF_HIST_ROWS x WSPR_WF_COLS, NEWEST ROW FIRST */
 static uint32_t  s_wf_seen;
 
+/* First logging in this file: the dial push is the one thing here that
+ * silently changes the radio, so it says what it did and why. */
+static const char *TAG = "wspr_view";
+
 static int   s_last_spot_count = -1;
 static char  s_last_status[48];
+
+/* ---- THE STORED DIAL HAS TO BE PUSHED TO THE RADIO -------------------
+ *
+ * ⛔ IT USED TO BE PUSHED ONLY BY A TAP ON THE PICKER. Nothing re-applied it on
+ * page entry, at boot, after a QMX power cycle, or on leaving simulation - so
+ * the device could sit on the WSPR page with 20 m stored while the radio was on
+ * 7.074 MHz, quietly decoding a 200 Hz slice of the FT8 calling frequency.
+ * Observed exactly that on 2026-08-24, and again when a QMX power cycle brought
+ * the radio back on 30 m mid-session.
+ *
+ * ⛔ AND IT CANNOT SIMPLY BE PUSHED AT PAGE-ENTRY TIME. CAT link-up is ~17 s
+ * after boot, so an immediate write often has nowhere to go - this project
+ * already shipped that bug once, where the CW-pitch value was written at ~4.5 s
+ * and went nowhere on EVERY boot. So the push stays PENDING until
+ * cat_is_ready() and then fires once.
+ *
+ * ⛔ AND IT MUST NOT FIGHT THE OPERATOR. Re-pushing continuously would drag the
+ * radio back every time someone deliberately tuned off the sub-band. So this is
+ * a BOUNDED ONE-SHOT armed by three discrete events - entering the page, CAT
+ * coming back (which is what a QMX power cycle looks like from here), and
+ * simulation being switched off - and it gives up rather than surprising
+ * anyone minutes later. */
+#define DIAL_PUSH_TRIES 60          /* ~60 s: comfortably past CAT link-up */
+
+static int  s_dial_push_left;
+static bool s_cat_was_ready;
+static bool s_sim_was_on;
+
+static void arm_dial_push(const char *why)
+{
+    s_dial_push_left = DIAL_PUSH_TRIES;
+    ESP_LOGI(TAG, "dial: will push the stored WSPR dial to the radio (%s)", why);
+}
 
 /* ONE format string for the header AND every row.
  *
@@ -461,6 +499,11 @@ void wspr_screen_view_show(void)
     lv_obj_move_foreground(s_container);
     s_last_spot_count = -1;      /* force a repaint on entry */
     s_last_status[0]  = '\0';
+    /* Entering the page is the operator saying "receive WSPR", and that is
+     * only true if the radio is actually on a WSPR dial. */
+    arm_dial_push("page entry");
+    s_cat_was_ready = cat_is_ready();
+    s_sim_was_on    = wspr_sim_enabled();
 }
 
 void wspr_screen_view_hide(void)
@@ -527,6 +570,47 @@ static void repaint_waterfall(void)
 void wspr_screen_view_tick(void)
 {
     if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) return;
+
+    /* ---- re-arm triggers, then the pending push ---------------------- */
+    {
+        const bool cat_now = cat_is_ready();
+        const bool sim_now = wspr_sim_enabled();
+        /* CAT coming back is what a QMX power cycle looks like from here, and a
+         * power cycle reloads the radio's own band config - measured, it came
+         * back on 30 m while 20 m was stored. */
+        if (cat_now && !s_cat_was_ready) arm_dial_push("CAT came back");
+        /* Simulation never touches the radio, so switching it OFF is the first
+         * moment the radio's actual frequency starts to matter again. */
+        if (!sim_now && s_sim_was_on)    arm_dial_push("simulation off");
+        s_cat_was_ready = cat_now;
+        s_sim_was_on    = sim_now;
+
+        if (s_dial_push_left > 0) {
+            if (!cat_now) {
+                s_dial_push_left--;      /* wait for the link, do not give up yet */
+                if (s_dial_push_left == 0)
+                    ESP_LOGW(TAG, "dial: CAT never became ready - the radio keeps "
+                                  "whatever frequency it is on");
+            } else {
+                qmx_settings_t ds;
+                settings_load_all(&ds);
+                const uint32_t want = ds.wspr_dial_hz;
+                const uint32_t have = cat_get_frequency();
+                if (want && have != want) {
+                    /* Forced: the ordinary setter shares a 200 ms rate limit
+                     * with the CAT poll, and the one write that decides whether
+                     * this page hears anything at all must not be the one that
+                     * gets dropped. */
+                    cat_set_frequency_forced(want);
+                    ESP_LOGW(TAG, "dial: pushed %lu Hz to the radio (was %lu)",
+                             (unsigned long)want, (unsigned long)have);
+                } else if (want) {
+                    ESP_LOGI(TAG, "dial: radio already on %lu Hz", (unsigned long)want);
+                }
+                s_dial_push_left = 0;    /* one shot - never fight manual tuning */
+            }
+        }
+    }
 
     /* Dial: select the standard entry matching the radio, so the picker shows
      * where we actually are rather than what was last tapped. A dial that is
