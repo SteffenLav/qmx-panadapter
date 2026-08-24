@@ -20,6 +20,7 @@
 #include "wspr_selftest.h"    // the dev "wspr_selftest" action
 #include "wspr_spots.h"       // GET /api/wspr
 #include "wspr_rx.h"         // the RX slot loop
+#include "ui_mode.h"
 #include "ft8_qso.h"          // ft8_qso_get_state / get_target / get_cq_calls_sent
 #include "ft8_status.h"       // ft8_status_get
 #include "dsp.h"              // dsp_get_peak_dbm_around_vfo
@@ -387,7 +388,11 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "qmx_fw",       cat_get_qmx_fw());
     cJSON_AddStringToObject(root, "mode",         ui_get_mode_str());
     cJSON_AddStringToObject(root, "band",         ui_get_band_str());
-    cJSON_AddStringToObject(root, "screen",       ft8_screen_view_is_active() ? "ft8" : "panadapter");
+    /* Three pages now. Asked of ui_mode rather than of the FT8 view, so a new
+     * page cannot be reported as "panadapter" just because FT8 is not up. */
+    cJSON_AddStringToObject(root, "screen",
+        ui_mode_get() == UI_MODE_FT8  ? "ft8"  :
+        ui_mode_get() == UI_MODE_WSPR ? "wspr" : "panadapter");
     // #218: firmware version + whether a newer release exists. The update check
     // has run since v1.1 but announced itself ONLY inside the on-device Reader,
     // so anyone who never opened the manual was never told - which is how people
@@ -855,7 +860,12 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // Deferred to the LVGL task (see ui_request_base_mode) - the switch
         // spawns/stops ft8_task and moves widgets.
         const char *scr = cJSON_GetStringValue(cJSON_GetObjectItem(root, "screen"));
-        if (scr) ui_request_base_mode(strcmp(scr, "ft8") == 0);
+        if (scr) {
+            /* Three pages now, so the bool form cannot express it. */
+            if      (!strcmp(scr, "ft8"))  ui_request_base_mode_m(UI_MODE_FT8);
+            else if (!strcmp(scr, "wspr")) ui_request_base_mode_m(UI_MODE_WSPR);
+            else                            ui_request_base_mode_m(UI_MODE_PANADAPTER);
+        }
     } else if (action && strcmp(action, "reply") == 0) {
         // Reply to a decoded station from the browser - Phase 6 of web parity,
         // TX explicitly blessed by the operator. Deferred to the LVGL task like
@@ -2920,6 +2930,14 @@ static esp_err_t wspr_handler(httpd_req_t *req)
         cJSON_AddStringToObject(o, "call", snap[i].call);
         cJSON_AddStringToObject(o, "grid", snap[i].grid);
         cJSON_AddStringToObject(o, "cty",  snap[i].cty);
+        /* Spelled out for the browser, which has the width. The Tab5's own pane
+         * keeps the 3-letter form because it genuinely does not - same split the
+         * FT8 list already makes. Looked up from the callsign here rather than
+         * stored, so the spot struct stays small. */
+        {
+            const char *full = dxcc_lookup(snap[i].call);
+            cJSON_AddStringToObject(o, "country", full ? full : "");
+        }
         cJSON_AddNumberToObject(o, "utc",   (double)snap[i].cycle_utc);
         cJSON_AddNumberToObject(o, "hz",    snap[i].freq_hz);
         /* null, not a number, when nothing measured it - the browser renders

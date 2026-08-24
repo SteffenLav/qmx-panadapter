@@ -2829,7 +2829,7 @@ const DEC_SORT = {
    measurement.
    --------------------------------------------------------------------------- */
 const WSPR_COLS = [
-  ["call", "CALL"], ["grid", "GRID"], ["cty", "COUNTRY"], ["snr", "SNR"],
+  ["call", "CALL"], ["grid", "GRID"], ["country", "COUNTRY"], ["snr", "SNR"],
   ["drift", "DRIFT"], ["hz", "HZ"], ["pwr", "PWR"], ["km", "KM"], ["brg", "BRG"],
 ];
 
@@ -2844,7 +2844,16 @@ function wsprFmt(k, r) {
   if (k === "snr")   return (v > 0 ? "+" : "") + v;
   if (k === "drift") return (v > 0 ? "+" : "") + v;
   if (k === "hz")    return Number(v).toFixed(1);
-  if (k === "pwr")   return v + " dBm";
+  if (k === "pwr") {
+    /* Both units. dBm is what the protocol carries and what other WSPR tools
+       show, but watts is what an operator actually pictures - "37 dBm" and
+       "5 W" are the same fact and only one of them is intuitive. */
+    const w = Math.pow(10, (v - 30) / 10);
+    const ws = w >= 1 ? (Math.round(w * 10) / 10) + " W"
+             : w >= 0.001 ? Math.round(w * 1000) + " mW"
+             : (w * 1e6).toFixed(0) + " µW";
+    return v + " dBm (" + ws + ")";
+  }
   if (k === "brg")   return v + "°";
   return v;
 }

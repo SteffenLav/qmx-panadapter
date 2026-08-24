@@ -18,6 +18,7 @@ idf_component_register(
         "ui/ui_mode.c"
         "ui/ft8_screen.c"
         "ui/ft8_screen_view.c"
+        "ui/wspr_screen_view.c"
         "ui/ft8_tx_modal.c"
         "ui/ft8_cq_modal.c"
         "ui/ft8_filter_modal.c"
