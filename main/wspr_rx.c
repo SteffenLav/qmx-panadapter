@@ -17,6 +17,7 @@
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "freertos/semphr.h"
 
 #include "dsp.h"
@@ -40,7 +41,40 @@ static const char *TAG = "wspr_rx";
 
 #define WSPR_CYCLE_MS     120000
 #define CAP_SAMPLES       ((uint32_t)(120 * (uint32_t)WSPR_SAMPLE_RATE_HZ))  /* 1,440,000 */
-#define WSPR_MAX_CANDS    8
+/* ⛔ THIS WAS 8, AND IT WAS THE REAL SENSITIVITY LIMIT.
+ *
+ * Every one of the first 127 cycles ever run reported exactly 8 candidates -
+ * the cap was saturated 100 % of the time, so real signals were discarded on
+ * every cycle and the log line "8 candidate(s)" read like a measurement while
+ * actually being a ceiling.
+ *
+ * Proved with the capture dump (test/wav_reference/wspr/README-260824.md):
+ * wsprd found 32 stations across three windows where we found 10, and at 19:10
+ * we decoded -11/-13/-13/-18 dB while MISSING -13 and -15 dB. A weak-signal
+ * floor cannot do that; it would take everything above it. The comb score that
+ * ranks candidates is correlation ENERGY, not SNR, so a strong station can sit
+ * below eight noisier peaks and never be tried at all.
+ *
+ * Raising it is only safe because the decode now runs on its own task while the
+ * next capture fills (the ping-pong below), which buys a whole cycle instead of
+ * the leftovers of one. WSPR_DECODE_BUDGET_MS is the real limiter; this number
+ * just has to be high enough not to be the limiter itself. */
+#define WSPR_MAX_CANDS    20
+
+/* Decode is ~7.9 s per candidate, and with the ping-pong it has a full 120 s
+ * cycle. Stop at 105 s so the buffer is handed back before the next capture
+ * needs it - the alternative is dropping a whole cycle, which costs far more
+ * than the last candidate or two would have found.
+ * ⭐ The count of candidates NOT tried is LOGGED, because a silent budget cut
+ * is exactly the kind of invisible ceiling this file just spent a day
+ * discovering. */
+#define WSPR_DECODE_BUDGET_MS  115000
+
+/* How late an arm may be and still be anchored by the pre-ring. The conversion
+ * is ~2 s and an armed SD dump adds ~4.2 s, so 10 s is generous cover while
+ * leaving a third of FT8_PRE_CAP's 15 s in reserve. Being late is free here;
+ * SLEEPING through a boundary is what costs a whole cycle. */
+#define WSPR_ARM_GRACE_MS      10000
 
 /* The audio window sits between 1400 and 1600 Hz for a standard WSPR dial, but
  * the search is widened a little either side: the operator's dial calibration,
@@ -64,17 +98,36 @@ static SemaphoreHandle_t s_wf_mtx;
 
 static volatile bool s_run;
 static TaskHandle_t  s_task;
-static char          s_status[48] = "idle";
+/* ONE BUFFER PER WRITER. Capture and decode are separate tasks now and both
+ * report progress; sharing a single static would tear the string. Composed on
+ * read instead, which also makes the parallelism visible - "cap 45/120 | dec
+ * 3/20" says at a glance that the receiver is no longer deaf while decoding. */
+static char          s_cap_status[40] = "idle";
+static char          s_dec_status[40] = "";
 
 static void set_status(const char *fmt, ...)
 {
     va_list ap;
     va_start(ap, fmt);
-    vsnprintf(s_status, sizeof(s_status), fmt, ap);
+    vsnprintf(s_cap_status, sizeof(s_cap_status), fmt, ap);
     va_end(ap);
 }
 
-const char *wspr_rx_status(void) { return s_status; }
+static void set_dec_status(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(s_dec_status, sizeof(s_dec_status), fmt, ap);
+    va_end(ap);
+}
+
+const char *wspr_rx_status(void)
+{
+    static char out[88];
+    if (s_dec_status[0]) snprintf(out, sizeof(out), "%s | %s", s_cap_status, s_dec_status);
+    else                 snprintf(out, sizeof(out), "%s", s_cap_status);
+    return out;
+}
 bool wspr_rx_running(void)       { return s_run; }
 
 /* Same conversion the spot store's other producer does. Distance, bearing and
@@ -404,6 +457,48 @@ bool wspr_rx_get_waterfall(uint8_t *out)
 
 uint32_t wspr_rx_waterfall_seq(void) { return s_wf_seq; }
 
+/* ---- PING-PONG: capture and decode at the same time --------------------
+ *
+ * The receiver used to be DEAF for a whole cycle out of every two: a capture
+ * fills 120 s, then the same task decoded for ~63 s, and by then the next
+ * boundary had passed. Measured directly - captures armed at 13:52:00 and
+ * 13:56:00 with 13:54:00 skipped, i.e. 121 + 68 = 189 s of a 120 s cycle.
+ *
+ * Two int16 windows, so one can be decoded while the other is being filled.
+ * Only the int16 side is doubled: the float capture buffer is fully consumed by
+ * the conversion before the next capture opens, so a second one would be 5.6 MB
+ * of PSRAM bought for nothing.
+ *
+ * ⛔ A BUSY BUFFER IS NEVER OVERWRITTEN. If the decoder still holds both, the
+ * cycle is DROPPED and said so out loud - the ft8_test.c precedent, and the
+ * only safe answer: blocking would push the next capture off its UTC boundary,
+ * which breaks WSPR timing outright, and overwriting corrupts a decode in
+ * flight. With a 105 s budget against a 120 s cycle this should never fire; it
+ * exists so that if it does, it is visible rather than silently wrong. */
+#define WSPR_PCM_SLOTS 2
+
+static int16_t      *s_pcm[WSPR_PCM_SLOTS];
+static volatile bool s_pcm_busy[WSPR_PCM_SLOTS];
+static QueueHandle_t s_dec_q;
+static TaskHandle_t  s_dec_task;
+static volatile bool s_dec_exited;
+
+typedef struct {
+    int     slot;
+    int64_t cycle_utc;
+} wspr_dec_job_t;
+
+/* Claimed by the CAPTURE task only, released by the DECODE task only - one
+ * writer each way, so a plain volatile flag is sufficient and no lock is
+ * needed. Returns -1 when the decoder holds everything. */
+static int claim_pcm_slot(void)
+{
+    for (int i = 0; i < WSPR_PCM_SLOTS; i++) {
+        if (!s_pcm_busy[i]) { s_pcm_busy[i] = true; return i; }
+    }
+    return -1;
+}
+
 /* ---- capture dump ------------------------------------------------------ */
 
 /* Armed count lives in NVS, not in a volatile, because the dump can only
@@ -493,6 +588,106 @@ static void dump_window(const int16_t *pcm, uint32_t nsamples, int64_t cycle_utc
     else    ESP_LOGE(TAG, "dump: FAILED writing %s after %d ms", name, ms);
 }
 
+/* Decode one finished window. Runs on the DECODE task; the capture task is
+ * filling the other buffer while this works. Reads `pcm` and nothing the
+ * capture task writes, which is what makes the concurrency safe - and the
+ * decoder itself is re-entrant, every FFT config and scratch buffer being
+ * malloc'd and freed per call rather than shared. (A shared FFT scratch is
+ * exactly what bit the FT8 monitor pool; see CLAUDE.md.) */
+static void decode_one_window(const int16_t *pcm, int64_t cycle_utc)
+{
+    /* ---- decode ---- */
+    int64_t t0 = esp_timer_get_time();
+    wspr_freq_candidate_t cands[WSPR_MAX_CANDS];
+    int ncand = wspr_find_candidates(pcm, CAP_SAMPLES, SEARCH_LO_HZ, SEARCH_HI_HZ,
+                                      cands, WSPR_MAX_CANDS);
+    int decoded = 0;
+    int guarded = 0;
+    wspr_accepted_t accepted = { 0 };
+    int skipped = 0;
+    for (int i = 0; i < ncand && s_run; i++) {
+        /* ⛔ The budget is checked BEFORE starting a candidate, never mid-way:
+         * wspr_decode_candidate() is not interruptible, so a check inside it
+         * would either do nothing or leave a half-decoded result. */
+        int64_t used_ms = (esp_timer_get_time() - t0) / 1000;
+        if (used_ms > WSPR_DECODE_BUDGET_MS) { skipped = ncand - i; break; }
+        set_dec_status("dec %d/%d", i + 1, ncand);
+        wspr_decode_result_t r;
+        wspr_decode_candidate(pcm, CAP_SAMPLES, cands[i].freq_hz, &r);
+        /* Log EVERY candidate, not just the ones that decode. A silent
+         * "0 decodes" cannot distinguish "nothing was on the air" from
+         * "the search looked in the wrong place" from "the audio was
+         * wrong" - and those need completely different fixes. */
+        ESP_LOGI(TAG, "  cand %d: f=%.2f Hz score=%.3g cycles=%u %s",
+                 i, cands[i].freq_hz, (double)cands[i].comb_score,
+                 r.cycles, r.ok ? "DECODED" : "rejected");
+        if (!r.ok) continue;
+
+        /* Both guards are MEASURED here whatever is enforced, so an
+         * ordinary session accumulates the evidence to choose between
+         * them on real signals. See wspr_decode.h. */
+        double dnear = -1.0;
+        int would_near = 0, would_slow = 0;
+        wspr_guard_verdict_t v = wspr_guard_check(&s_guards, &accepted, &r,
+                                                  &dnear, &would_near, &would_slow);
+        if (v != WSPR_GUARD_PASS) {
+            guarded++;
+            ESP_LOGW(TAG, "  GUARDED '%s' '%s' f=%.2f Hz cycles=%u dnear=%.2f Hz"
+                          " - rejected by %s (near=%d slow=%d)",
+                     r.callsign, r.grid, r.freq_hz, r.cycles, dnear,
+                     v == WSPR_GUARD_REJECT_NEAR ? "NEAR" : "SLOW",
+                     would_near, would_slow);
+            continue;
+        }
+
+        decoded++;
+        wspr_accepted_add(&accepted, r.freq_hz);
+        ESP_LOGW(TAG, "  DECODED '%s' '%s' %d dBm  f=%.2f Hz dt=%.2fs cycles=%u"
+                      " dnear=%.2f Hz would[near=%d slow=%d]",
+                 r.callsign, r.grid, r.power_dbm, r.freq_hz,
+                 r.best_dt_samples / WSPR_SAMPLE_RATE_HZ, r.cycles,
+                 dnear, would_near, would_slow);
+        file_spot(&r, cycle_utc, WSPR_SNR_UNKNOWN);
+    }
+    int64_t dec_ms = (esp_timer_get_time() - t0) / 1000;
+    /* `skipped` is reported even when zero. A budget that quietly drops the tail
+     * of the candidate list is the same invisible ceiling as the old cap of 8,
+     * and the whole point of raising that cap was that nothing had ever said so. */
+    ESP_LOGW(TAG, "cycle %lld: %d candidate(s), %d decode(s), %d guarded, "
+                  "%d skipped (budget), %lld ms",
+             (long long)cycle_utc, ncand, decoded, guarded, skipped,
+             (long long)dec_ms);
+    if (skipped)
+        ESP_LOGW(TAG, "cycle %lld: BUDGET CUT %d candidate(s) after %lld ms - "
+                      "lower WSPR_MAX_CANDS or make the decode faster",
+                 (long long)cycle_utc, skipped, (long long)dec_ms);
+    set_dec_status("%d decoded", decoded);
+}
+
+/* Nothing but "wait for a window, decode it, give the buffer back".
+ *
+ * ⛔ The buffer is released in a SINGLE place, after the decode returns, and the
+ * capture task frees the memory only once this task has confirmed it is gone
+ * (s_dec_exited). That ordering is not defensive habit: v0.19.5 crashed with
+ * "Load address misaligned" because a teardown freed a stack while a worker
+ * still held a pointer into it, and the fix was to JOIN rather than to delay. */
+static void wspr_dec_task(void *arg)
+{
+    (void)arg;
+    ESP_LOGI(TAG, "decode task up");
+    while (s_run) {
+        wspr_dec_job_t job;
+        if (xQueueReceive(s_dec_q, &job, pdMS_TO_TICKS(250)) != pdTRUE) continue;
+        if (job.slot < 0 || job.slot >= WSPR_PCM_SLOTS) continue;
+        decode_one_window(s_pcm[job.slot], job.cycle_utc);
+        s_pcm_busy[job.slot] = false;
+    }
+    set_dec_status("%s", "");
+    ESP_LOGI(TAG, "decode task stopped");
+    s_dec_exited = true;
+    vTaskDelete(NULL);
+}
+
 static void wspr_rx_task(void *arg)
 {
     (void)arg;
@@ -505,13 +700,23 @@ static void wspr_rx_task(void *arg)
      * shows up as "it stopped decoding overnight" and is miserable to chase. */
     float   *cap = heap_caps_malloc((size_t)CAP_SAMPLES * sizeof(float),
                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    int16_t *pcm = heap_caps_malloc((size_t)CAP_SAMPLES * sizeof(int16_t),
+    /* TWO int16 windows - the ping-pong. Only the int16 side is doubled: the
+     * float buffer is fully consumed by the conversion before the next capture
+     * opens, so a second one would be 5.6 MB of PSRAM bought for nothing. */
+    bool pcm_ok = true;
+    for (int i = 0; i < WSPR_PCM_SLOTS; i++) {
+        s_pcm[i] = heap_caps_malloc((size_t)CAP_SAMPLES * sizeof(int16_t),
                                     MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!cap || !pcm) {
-        ESP_LOGE(TAG, "could not allocate the capture buffers (%u KB + %u KB)",
+        s_pcm_busy[i] = false;
+        if (!s_pcm[i]) pcm_ok = false;
+    }
+    if (!cap || !pcm_ok) {
+        ESP_LOGE(TAG, "could not allocate the capture buffers (%u KB + %d x %u KB)",
                  (unsigned)(CAP_SAMPLES * sizeof(float) / 1024),
+                 WSPR_PCM_SLOTS,
                  (unsigned)(CAP_SAMPLES * sizeof(int16_t) / 1024));
-        free(cap); free(pcm);
+        free(cap);
+        for (int i = 0; i < WSPR_PCM_SLOTS; i++) { free(s_pcm[i]); s_pcm[i] = NULL; }
         set_status("out of memory");
         s_run = false; s_task = NULL;
         vTaskDelete(NULL);
@@ -520,16 +725,43 @@ static void wspr_rx_task(void *arg)
     ESP_LOGI(TAG, "guards: near=%s (%.1f Hz)  slow=%s (%u cycles) - both always measured",
              s_guards.enforce_near ? "ENFORCED" : "measured", s_guards.near_hz,
              s_guards.enforce_slow ? "ENFORCED" : "measured", s_guards.slow_cycles);
-    ESP_LOGI(TAG, "slot loop up: %u KB capture + %u KB decode, searching %.0f-%.0f Hz",
-             (unsigned)(CAP_SAMPLES * sizeof(float) / 1024),
+    ESP_LOGI(TAG, "slot loop up: %u KB capture + %d x %u KB decode (ping-pong), "
+                  "up to %d candidates, %d s budget, searching %.0f-%.0f Hz",
+             (unsigned)(CAP_SAMPLES * sizeof(float) / 1024), WSPR_PCM_SLOTS,
              (unsigned)(CAP_SAMPLES * sizeof(int16_t) / 1024),
+             WSPR_MAX_CANDS, WSPR_DECODE_BUDGET_MS / 1000,
              SEARCH_LO_HZ, SEARCH_HI_HZ);
 
+    int64_t last_cycle_idx = -1;
+
     while (s_run) {
-        /* ---- wait for the next even UTC minute ---- */
+        /* ---- wait for the next even UTC minute, OR arm late-but-anchored ----
+         *
+         * ⛔ THIS IS WHAT ACTUALLY ENDED THE EVERY-OTHER-CYCLE DEAFNESS, and
+         * splitting the decode onto its own task was NOT enough on its own.
+         *
+         * A WSPR capture is 120 s and a cycle is 120 s, so there is no slack:
+         * the next capture has to begin the instant the previous one ends. The
+         * float->int16 conversion (~2 s over 1.44 M samples) and, when armed, a
+         * 4.2 s SD dump sit in between - so by the time this loop came back
+         * round, the boundary had just passed and the old `wait` sent it to
+         * sleep for another 118 s. Measured after the ping-pong landed:
+         * captures still armed 19:46:00 and 19:50:00, 240 s apart.
+         *
+         * The pre-ring already solves it. `backfill` prepends however late we
+         * armed, and FT8_PRE_CAP is 180000 samples = 15 s of slack - far more
+         * than the ~7 s worst case. So being a few seconds late costs NOTHING:
+         * the window is still anchored to the boundary, sample-exact.
+         *
+         * The cycle-index guard is not optional. Without it the SIM path, which
+         * synthesizes a window in a moment rather than capturing for 120 s,
+         * would come straight back inside the grace window and re-run the same
+         * cycle in a tight loop. */
         int64_t t = now_ms();
         int64_t into = t % WSPR_CYCLE_MS;
-        int64_t wait = (into == 0) ? 0 : (WSPR_CYCLE_MS - into);
+        int64_t cyc  = t / WSPR_CYCLE_MS;
+        int64_t wait = (into <= WSPR_ARM_GRACE_MS && cyc != last_cycle_idx)
+                     ? 0 : (WSPR_CYCLE_MS - into);
         set_status("waiting %llds", (long long)(wait / 1000));
         while (s_run && wait > 0) {
             int64_t chunk = wait > 500 ? 500 : wait;   /* stay responsive to stop */
@@ -542,6 +774,7 @@ static void wspr_rx_task(void *arg)
         if (!s_run) break;
 
         int64_t cycle_utc = (now_ms() / WSPR_CYCLE_MS) * (WSPR_CYCLE_MS / 1000);
+        last_cycle_idx = now_ms() / WSPR_CYCLE_MS;
 
         /* ---- duty-cycle scheduler ------------------------------------
          *
@@ -623,9 +856,23 @@ static void wspr_rx_task(void *arg)
          * for practice and for iterating on the display. */
         if (wspr_sim_enabled()) {
             set_status("simulating");
-            wspr_sim_build_window(pcm, CAP_SAMPLES, cycle_utc);
-            build_waterfall(pcm, CAP_SAMPLES);
-            goto decode_window;
+            int sslot = claim_pcm_slot();
+            if (sslot < 0) {
+                ESP_LOGW(TAG, "sim: both decode buffers busy - skipping a cycle");
+                vTaskDelay(pdMS_TO_TICKS(2000));
+                continue;
+            }
+            wspr_sim_build_window(s_pcm[sslot], CAP_SAMPLES, cycle_utc);
+            build_waterfall(s_pcm[sslot], CAP_SAMPLES);
+            /* Through the SAME queue as a real window - a sim that took a
+             * shortcut past the handoff would stop exercising the thing most
+             * likely to be wrong about it. */
+            wspr_dec_job_t sjob = { .slot = sslot, .cycle_utc = cycle_utc };
+            if (!s_dec_q || xQueueSend(s_dec_q, &sjob, 0) != pdTRUE) {
+                ESP_LOGE(TAG, "sim: decode queue full - dropping window");
+                s_pcm_busy[sslot] = false;
+            }
+            continue;
         }
 
         /* ---- capture the window ----
@@ -678,6 +925,18 @@ static void wspr_rx_task(void *arg)
         }
         dsp_ft8_capture_finish(2000);
         if (!s_run) break;
+
+        /* A slot is claimed AFTER the capture, not before: the decoder may well
+         * have freed one during those 120 s, and claiming early would drop a
+         * cycle that had somewhere to go by the time it mattered. */
+        int slot = claim_pcm_slot();
+        if (slot < 0) {
+            ESP_LOGE(TAG, "cycle %lld: both decode buffers still busy - "
+                          "DROPPING this window", (long long)cycle_utc);
+            set_status("decoder behind");
+            continue;
+        }
+        int16_t *pcm = s_pcm[slot];
 
         /* ---- float -> int16 for the decoder ----
          * The capture pipeline produces floats; the decoder takes int16, the
@@ -753,63 +1012,38 @@ static void wspr_rx_task(void *arg)
          * it, or a stalled carpet is indistinguishable from a hung display. */
         wf_mark_boundary();
 
-    decode_window:
-        /* ---- decode ---- */
-        int64_t t0 = esp_timer_get_time();
-        wspr_freq_candidate_t cands[WSPR_MAX_CANDS];
-        int ncand = wspr_find_candidates(pcm, CAP_SAMPLES, SEARCH_LO_HZ, SEARCH_HI_HZ,
-                                          cands, WSPR_MAX_CANDS);
-        int decoded = 0;
-        int guarded = 0;
-        wspr_accepted_t accepted = { 0 };
-        for (int i = 0; i < ncand && s_run; i++) {
-            set_status("decoding %d/%d", i + 1, ncand);
-            wspr_decode_result_t r;
-            wspr_decode_candidate(pcm, CAP_SAMPLES, cands[i].freq_hz, &r);
-            /* Log EVERY candidate, not just the ones that decode. A silent
-             * "0 decodes" cannot distinguish "nothing was on the air" from
-             * "the search looked in the wrong place" from "the audio was
-             * wrong" - and those need completely different fixes. */
-            ESP_LOGI(TAG, "  cand %d: f=%.2f Hz score=%.3g cycles=%u %s",
-                     i, cands[i].freq_hz, (double)cands[i].comb_score,
-                     r.cycles, r.ok ? "DECODED" : "rejected");
-            if (!r.ok) continue;
-
-            /* Both guards are MEASURED here whatever is enforced, so an
-             * ordinary session accumulates the evidence to choose between
-             * them on real signals. See wspr_decode.h. */
-            double dnear = -1.0;
-            int would_near = 0, would_slow = 0;
-            wspr_guard_verdict_t v = wspr_guard_check(&s_guards, &accepted, &r,
-                                                      &dnear, &would_near, &would_slow);
-            if (v != WSPR_GUARD_PASS) {
-                guarded++;
-                ESP_LOGW(TAG, "  GUARDED '%s' '%s' f=%.2f Hz cycles=%u dnear=%.2f Hz"
-                              " - rejected by %s (near=%d slow=%d)",
-                         r.callsign, r.grid, r.freq_hz, r.cycles, dnear,
-                         v == WSPR_GUARD_REJECT_NEAR ? "NEAR" : "SLOW",
-                         would_near, would_slow);
-                continue;
+        /* Hand the finished window to the decode task and go straight back to
+         * the next boundary. THIS is what ends the every-other-cycle deafness:
+         * the capture below starts on time while this window is still decoding. */
+        {
+            wspr_dec_job_t job = { .slot = slot, .cycle_utc = cycle_utc };
+            if (!s_dec_q || xQueueSend(s_dec_q, &job, 0) != pdTRUE) {
+                ESP_LOGE(TAG, "cycle %lld: decode queue full - dropping window",
+                         (long long)cycle_utc);
+                s_pcm_busy[slot] = false;
             }
-
-            decoded++;
-            wspr_accepted_add(&accepted, r.freq_hz);
-            ESP_LOGW(TAG, "  DECODED '%s' '%s' %d dBm  f=%.2f Hz dt=%.2fs cycles=%u"
-                          " dnear=%.2f Hz would[near=%d slow=%d]",
-                     r.callsign, r.grid, r.power_dbm, r.freq_hz,
-                     r.best_dt_samples / WSPR_SAMPLE_RATE_HZ, r.cycles,
-                     dnear, would_near, would_slow);
-            file_spot(&r, cycle_utc, WSPR_SNR_UNKNOWN);
         }
-        int64_t dec_ms = (esp_timer_get_time() - t0) / 1000;
-        ESP_LOGW(TAG, "cycle %lld: %d candidate(s), %d decode(s), %d guarded, %lld ms",
-                 (long long)cycle_utc, ncand, decoded, guarded, (long long)dec_ms);
-        set_status("%d decoded", decoded);
     }
 
+    /* ⛔ JOIN, DO NOT DELAY. The decode task reads s_pcm[] and this task owns
+     * that memory, so freeing before it has exited is a use-after-free. v0.19.5
+     * crashed exactly this way ("Load address misaligned") because a teardown
+     * used a fixed 50 ms sleep instead of waiting for the worker to confirm it
+     * was gone. The decode loop checks s_run between candidates, so the wait is
+     * bounded by one candidate (~8 s); 30 s is generous cover for a slow one. */
+    for (int i = 0; i < 300 && !s_dec_exited; i++) vTaskDelay(pdMS_TO_TICKS(100));
+    if (!s_dec_exited)
+        ESP_LOGE(TAG, "decode task did not exit - LEAKING the windows rather "
+                      "than freeing memory it may still be reading");
+
     free(cap);
-    free(pcm);
+    if (s_dec_exited) {
+        for (int i = 0; i < WSPR_PCM_SLOTS; i++) { free(s_pcm[i]); s_pcm[i] = NULL; }
+    }
+    if (s_dec_q) { vQueueDelete(s_dec_q); s_dec_q = NULL; }
+    s_dec_task = NULL;
     set_status("idle");
+    set_dec_status("%s", "");
     ESP_LOGI(TAG, "slot loop stopped");
     s_task = NULL;
     vTaskDelete(NULL);
@@ -836,11 +1070,34 @@ bool wspr_rx_start(void)
      * xTaskCreate() would take that from the ~40 KB of free INTERNAL RAM. This
      * is background work on a two-minute cadence, which is what
      * psram_task_create() is for. */
+    /* The decode task and its queue come up FIRST, so the capture task can never
+     * finish a window and find nowhere to hand it. Same stack budget and the
+     * same reasoning as the capture task - this is where the decode actually
+     * runs now, so it is the one that needs the 32 KB. */
+    s_dec_exited = false;
+    for (int i = 0; i < WSPR_PCM_SLOTS; i++) s_pcm_busy[i] = false;
+    if (!s_dec_q) s_dec_q = xQueueCreate(WSPR_PCM_SLOTS, sizeof(wspr_dec_job_t));
+    if (!s_dec_q) {
+        ESP_LOGE(TAG, "could not create the decode queue");
+        s_run = false;
+        ui_mode_set(UI_MODE_PANADAPTER);
+        return false;
+    }
+    s_dec_task = psram_task_create(wspr_dec_task, "wspr_dec", 32768, NULL,
+                                   tskIDLE_PRIORITY + 1, tskNO_AFFINITY);
+    if (!s_dec_task) {
+        ESP_LOGE(TAG, "could not create the decode task");
+        vQueueDelete(s_dec_q); s_dec_q = NULL;
+        s_run = false;
+        ui_mode_set(UI_MODE_PANADAPTER);
+        return false;
+    }
+
     s_task = psram_task_create(wspr_rx_task, "wspr_rx", 32768, NULL,
                                tskIDLE_PRIORITY + 1, tskNO_AFFINITY);
     if (!s_task) {
         ESP_LOGE(TAG, "could not create the slot-loop task");
-        s_run = false;
+        s_run = false;   /* stands the decode task down too */
         ui_mode_set(UI_MODE_PANADAPTER);
         return false;
     }
