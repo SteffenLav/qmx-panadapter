@@ -55,6 +55,27 @@ $rec = Join-Path $dir "recovery-files"
 if (-not (Test-Path $rec)) { Write-Error "Missing recovery-files/" }
 Copy-Item $rec $stage -Recurse
 
+# ⛔ .command scripts MUST be LF, or bash on macOS/Linux refuses to run them
+# at all ("$'\r': command not found"). .gitattributes already declares
+# eol=lf for *.command, and it should be enough on its own - but it wasn't:
+# a working-tree copy drifted to CRLF anyway (core.autocrlf=true overriding
+# the per-path attribute on this checkout, or a stale pre-attribute copy
+# that was never renormalized - exact git mechanics unclear either way) and
+# every release since shipped the broken file until a user on Fedora
+# (Michael K Johnson KZ4LY) diagnosed it himself and ran dos2unix by hand.
+# .gitattributes is a POLICY, not a GUARANTEE about what's on disk right
+# now - strip CR here unconditionally so the shipped asset is correct
+# regardless of what state the working tree happens to be in on whatever
+# machine builds the release.
+Get-ChildItem -Path $stage -Recurse -Filter "*.command" | ForEach-Object {
+    $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+    $clean = [byte[]]($bytes | Where-Object { $_ -ne 13 })   # drop every CR
+    if ($clean.Length -ne $bytes.Length) {
+        [System.IO.File]::WriteAllBytes($_.FullName, $clean)
+        Write-Output "Stripped CRLF -> LF: $($_.Name)"
+    }
+}
+
 $zip = Join-Path $repo "scratchpad\QMX-Panadapter-flasher-$ver.zip"
 Remove-Item $zip -ErrorAction SilentlyContinue
 Compress-Archive -Path "$stage\*" -DestinationPath $zip
