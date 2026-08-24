@@ -141,6 +141,13 @@ capture, not after a result looks strange.**
    capture, check the process is alive AND that the file's `LastWriteTime` is
    within the last few seconds.** Note the parameter is `-Seconds`, not
    `-Minutes`; pass something long for a standing monitor.
+   ⛔ **Re-check DURING a long session, not only at the start.** A CONCURRENT
+   SESSION taking COM3 produces this exact state with the victim process still
+   running and reporting nothing wrong — 2026-08-24, a capture went deaf at
+   18:20 and read like a quiet, healthy device for two hours while the Tab5 was
+   fine. The PORT dies, not the process, so the file's timestamp is the only
+   honest liveness test. Running several sessions at once is the operator's
+   normal daily practice, so treat this as expected, not exotic.
 
 **And the standing one: NEVER GUESS.** When a symptom appears, get the
 measurement first. Every "obvious cause" in this file has been wrong when
