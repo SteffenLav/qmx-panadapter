@@ -2517,6 +2517,12 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "sim_mode_en",       c.sim_mode_en);
     cJSON_AddNumberToObject(root, "wspr_dial_hz",  c.wspr_dial_hz);
     cJSON_AddBoolToObject(root,   "wspr_tx_en",    c.wspr_tx_en);
+    /* Cycles still to be dumped. Exposed because otherwise "is a dump armed?"
+     * is only answerable from the serial log - and the arm reply tells you what
+     * happened at the time, not what the state is now. A persisted request that
+     * cannot be read back is the same silent-state trap as the rest of this
+     * file's warnings. */
+    cJSON_AddNumberToObject(root, "wspr_dump_cycles", c.wspr_dump_cycles);
     cJSON_AddNumberToObject(root, "wspr_duty_pct", c.wspr_duty_pct);
     cJSON_AddNumberToObject(root, "wspr_tx_dbm",   c.wspr_tx_dbm);
     // ARRL Field Day (#210, Randy N4OPI wanted the Filter modal reachable from the
