@@ -14,6 +14,7 @@
 #include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 
 #include "dsp.h"
 #include "ui_mode.h"
@@ -21,6 +22,7 @@
 #include "util/maidenhead.h"
 #include "util/dxcc.h"
 #include "storage/settings.h"
+#include "fft/kiss_fftr.h"
 #include "wspr_decode.h"
 #include "wspr_spots.h"
 #include "wspr_rx.h"
@@ -37,6 +39,15 @@ static const char *TAG = "wspr_rx";
  * candidate found slightly outside the nominal window still decodes. */
 #define SEARCH_LO_HZ      1350.0
 #define SEARCH_HI_HZ      1650.0
+
+/* ---- per-cycle waterfall ----
+ * Built from the captured window (see wspr_rx.h for why a LIVE spectrum is not
+ * possible on this page). Allocated on first use and reused: ~36 KB, and the
+ * kiss_fftr config for 8192 points is a few hundred KB more, so neither wants
+ * to be built 176 times a cycle - let alone once per row. */
+static uint8_t  *s_wf;                 /* WSPR_WF_ROWS * WSPR_WF_COLS */
+static uint32_t  s_wf_seq;
+static SemaphoreHandle_t s_wf_mtx;
 
 static volatile bool s_run;
 static TaskHandle_t  s_task;
@@ -89,6 +100,96 @@ static int64_t now_ms(void)
     gettimeofday(&tv, NULL);
     return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
 }
+
+/* One row per symbol period, one column per 1.4648 Hz bin.
+ *
+ * The bin size is not a choice: an 8192-point FFT at 12 kHz gives exactly
+ * WSPR's tone spacing, so a transmission occupies four adjacent columns and
+ * reads as a clean vertical trace rather than a smear.
+ *
+ * Scaled per capture against its own median and peak. WSPR captures have no
+ * absolute reference - the RF gain, the band and the time of day all move the
+ * floor - so a fixed dB mapping would be black on one band and saturated on the
+ * next. The median is the noise floor by construction here, since a WSPR window
+ * is mostly noise. */
+static void build_waterfall(const int16_t *pcm, long n)
+{
+    if (!s_wf) {
+        s_wf = heap_caps_malloc(WSPR_WF_ROWS * WSPR_WF_COLS,
+                                MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (!s_wf) { ESP_LOGW(TAG, "no PSRAM for the waterfall"); return; }
+    }
+    const int NF = 8192;
+    kiss_fftr_cfg cfg = kiss_fftr_alloc(NF, 0, NULL, NULL);
+    kiss_fft_scalar *in = malloc((size_t)NF * sizeof(kiss_fft_scalar));
+    kiss_fft_cpx *sp = malloc((size_t)(NF / 2 + 1) * sizeof(kiss_fft_cpx));
+    float *mag = malloc((size_t)WSPR_WF_ROWS * WSPR_WF_COLS * sizeof(float));
+    if (!cfg || !in || !sp || !mag) {
+        ESP_LOGW(TAG, "waterfall: out of memory");
+        free(in); free(sp); free(mag); free(cfg);
+        return;
+    }
+
+    const double bin_hz = WSPR_SAMPLE_RATE_HZ / NF;      /* 1.46484375 */
+    const int lo_bin = (int)(WSPR_WF_LO_HZ / bin_hz + 0.5);
+
+    for (int r = 0; r < WSPR_WF_ROWS; r++) {
+        long off = (long)r * NF;
+        for (int i = 0; i < NF; i++)
+            in[i] = (off + i < n) ? (kiss_fft_scalar)(pcm[off + i] / 32768.0) : 0;
+        kiss_fftr(cfg, in, sp);
+        for (int c = 0; c < WSPR_WF_COLS; c++) {
+            int b = lo_bin + c;
+            float p = (b <= NF / 2) ? sp[b].r * sp[b].r + sp[b].i * sp[b].i : 0;
+            mag[r * WSPR_WF_COLS + c] = p;
+        }
+    }
+
+    /* median of a subsample, as the floor; 99th-percentile-ish as the top */
+    static float samp[2048];
+    int ns = 0;
+    for (int i = 0; i < WSPR_WF_ROWS * WSPR_WF_COLS && ns < 2048; i += 17)
+        samp[ns++] = mag[i];
+    for (int a = 1; a < ns; a++) {          /* insertion sort, ns is small */
+        float v = samp[a]; int b = a - 1;
+        while (b >= 0 && samp[b] > v) { samp[b + 1] = samp[b]; b--; }
+        samp[b + 1] = v;
+    }
+    float med = ns ? samp[ns / 2] : 1e-12f;
+    float top = ns ? samp[(int)(ns * 0.995f)] : med * 100.0f;
+    if (med <= 0) med = 1e-12f;
+    if (top <= med) top = med * 100.0f;
+
+    /* dB against the capture's own floor, mapped over the span that actually
+     * has signal in it. */
+    float lo_db = 0.0f;
+    float hi_db = 10.0f * log10f(top / med);
+    if (hi_db < 6.0f) hi_db = 6.0f;
+
+    if (s_wf_mtx) xSemaphoreTake(s_wf_mtx, portMAX_DELAY);
+    for (int i = 0; i < WSPR_WF_ROWS * WSPR_WF_COLS; i++) {
+        float db = 10.0f * log10f((mag[i] + 1e-20f) / med);
+        float t = (db - lo_db) / (hi_db - lo_db);
+        if (t < 0) t = 0;
+        if (t > 1) t = 1;
+        s_wf[i] = (uint8_t)(t * 255.0f);
+    }
+    s_wf_seq++;
+    if (s_wf_mtx) xSemaphoreGive(s_wf_mtx);
+
+    free(in); free(sp); free(mag); free(cfg);
+}
+
+bool wspr_rx_get_waterfall(uint8_t *out)
+{
+    if (!s_wf || !out || s_wf_seq == 0) return false;
+    if (s_wf_mtx) xSemaphoreTake(s_wf_mtx, portMAX_DELAY);
+    memcpy(out, s_wf, WSPR_WF_ROWS * WSPR_WF_COLS);
+    if (s_wf_mtx) xSemaphoreGive(s_wf_mtx);
+    return true;
+}
+
+uint32_t wspr_rx_waterfall_seq(void) { return s_wf_seq; }
 
 static void wspr_rx_task(void *arg)
 {
@@ -212,6 +313,11 @@ static void wspr_rx_task(void *arg)
         ESP_LOGW(TAG, "capture level: peak=%.1f gain=%.0fx -> rms=%.0f of 32768",
                  peak, gain, sqrt(sumsq / CAP_SAMPLES));
 
+        /* Built BEFORE the decode, not after: the decode takes ~66 s and the
+         * operator should see the window they just captured while it runs, not
+         * a minute later. */
+        build_waterfall(pcm, CAP_SAMPLES);
+
         /* ---- decode ---- */
         int64_t t0 = esp_timer_get_time();
         wspr_freq_candidate_t cands[WSPR_MAX_CANDS];
@@ -258,6 +364,7 @@ bool wspr_rx_start(void)
      * flag set as the task's first statement means "has begun running" while
      * every reader needs "exists", and on this board the gap between the two is
      * long enough to matter. */
+    if (!s_wf_mtx) s_wf_mtx = xSemaphoreCreateMutex();
     s_run = true;
     ui_mode_set(UI_MODE_WSPR);
 

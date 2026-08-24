@@ -31,6 +31,34 @@ void wspr_rx_stop(void);
 
 bool wspr_rx_running(void);
 
+/* ---- the per-cycle waterfall ----
+ *
+ * A LIVE panadapter is not possible on this page and that is structural, not a
+ * shortcut: while a capture is armed the DSP diverts the IQ into the capture
+ * pre-ring instead of the panadapter FFT, and a capture fills 120 s of every
+ * 120 s cycle. A live spectrum would therefore be frozen for exactly the time
+ * it matters.
+ *
+ * So the waterfall is built FROM THE CAPTURED WINDOW after each cycle, which is
+ * what WSJT-X shows for WSPR anyway. One row per symbol period and 1.4648 Hz
+ * bins - an 8192-point FFT at 12 kHz gives exactly one bin per WSPR tone
+ * spacing - so each transmission reads as a clean vertical trace.
+ */
+#define WSPR_WF_ROWS   176            /* symbol periods in a 120 s window */
+#define WSPR_WF_LO_HZ  1350.0f
+#define WSPR_WF_HI_HZ  1650.0f
+#define WSPR_WF_COLS   205            /* (1650-1350) / 1.4648 */
+
+/* Copy the most recent cycle's waterfall. `out` must hold
+ * WSPR_WF_ROWS * WSPR_WF_COLS bytes (~36 KB - PSRAM or a static, NEVER a
+ * stack local on taskLVGL). Returns false until a cycle has produced one.
+ * Row 0 is the START of the window. */
+bool wspr_rx_get_waterfall(uint8_t *out);
+
+/* Bumped every time a new waterfall lands, so a UI can repaint only on change
+ * instead of every tick. */
+uint32_t wspr_rx_waterfall_seq(void);
+
 // What the loop is doing right now, for /api/wspr and any future UI:
 // "idle" / "waiting for the slot" / "capturing 62/120 s" / "decoding 3/8".
 const char *wspr_rx_status(void);

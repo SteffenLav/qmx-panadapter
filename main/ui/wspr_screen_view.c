@@ -12,6 +12,7 @@
 #include "wspr_screen_view.h"
 #include "wspr_spots.h"
 #include "wspr_rx.h"
+#include "esp_heap_caps.h"
 #include "cat.h"
 
 /* JetBrains Mono, already compiled in for the QMX terminal page (#147). The
@@ -38,7 +39,17 @@ LV_FONT_DECLARE(qmx_mono_25);
  * bounded: the snapshot is copied onto the caller's buffer and this runs on
  * taskLVGL, where CLAUDE.md keeps a list of crashes caused by kB-scale locals
  * (the v0.20.1 pounce crash was an 11 KB array on exactly this task). */
-#define VIEW_ROWS 18
+/* Right-hand area, split as the operator asked: the captured window's
+ * waterfall on top, the decode log underneath. */
+#define RIGHT_X    (LEFT_W + 8)
+#define RIGHT_W    (MID_W - RIGHT_X - 8)
+#define WF_Y       6
+#define WF_H       200
+#define AXIS_Y     (WF_Y + WF_H + 2)
+#define AXIS_H     22
+#define LIST_Y     (AXIS_Y + AXIS_H + 8)
+
+#define VIEW_ROWS 12
 
 static lv_obj_t *s_container;
 static lv_obj_t *s_lbl_title;
@@ -49,6 +60,11 @@ static lv_obj_t *s_lbl_status;
 static lv_obj_t *s_lbl_heard;
 static lv_obj_t *s_list;           /* right pane, one label per line */
 static lv_obj_t *s_lbl_rows;
+static lv_obj_t *s_wf_canvas;
+static lv_obj_t *s_lbl_axis;
+static uint8_t  *s_wf_buf;      /* RGB565 canvas pixels */
+static uint8_t  *s_wf_data;     /* WSPR_WF_ROWS x WSPR_WF_COLS intensities */
+static uint32_t  s_wf_seen;
 
 static int   s_last_spot_count = -1;
 static char  s_last_status[48];
@@ -110,9 +126,11 @@ void wspr_screen_view_init(lv_obj_t *parent)
     /* ---------------- left pane ---------------- */
     s_lbl_title = lv_label_create(s_container);
     lv_label_set_text(s_lbl_title, "MODE: WSPR");
-    lv_obj_set_style_text_font(s_lbl_title, &lv_font_montserrat_48, 0);
+    /* 28, not 48. "MODE: FT8" fits the 320 px panel at 48; "MODE: WSPR" is one
+     * character longer and overran it into the decode list's CALL column. */
+    lv_obj_set_style_text_font(s_lbl_title, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(s_lbl_title, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
-    lv_obj_set_pos(s_lbl_title, 16, 12);
+    lv_obj_set_pos(s_lbl_title, 16, 10);
 
     /* The dial, boxed like the FT8 page's preset. Read-only for now: the
      * standard-dial picker is the next piece (see docs/wspr-ui-design.md - a
@@ -121,7 +139,7 @@ void wspr_screen_view_init(lv_obj_t *parent)
      * sub-band). */
     lv_obj_t *box = lv_obj_create(s_container);
     lv_obj_set_size(box, LEFT_W - 32, 56);
-    lv_obj_set_pos(box, 16, 76);
+    lv_obj_set_pos(box, 16, 48);
     lv_obj_set_style_bg_color(box, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
     lv_obj_set_style_border_color(box, lv_color_hex(UI_COLOR_BORDER), 0);
     lv_obj_set_style_border_width(box, 1, 0);
@@ -142,11 +160,11 @@ void wspr_screen_view_init(lv_obj_t *parent)
     lv_label_set_text(s_lbl_cycle, "starting...");
     lv_obj_set_style_text_font(s_lbl_cycle, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(s_lbl_cycle, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
-    lv_obj_set_pos(s_lbl_cycle, 16, 148);
+    lv_obj_set_pos(s_lbl_cycle, 16, 118);
 
     s_bar_cycle = lv_bar_create(s_container);
     lv_obj_set_size(s_bar_cycle, LEFT_W - 32, 10);
-    lv_obj_set_pos(s_bar_cycle, 16, 184);
+    lv_obj_set_pos(s_bar_cycle, 16, 152);
     lv_bar_set_range(s_bar_cycle, 0, 120);
     lv_bar_set_value(s_bar_cycle, 0, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(s_bar_cycle, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
@@ -156,13 +174,13 @@ void wspr_screen_view_init(lv_obj_t *parent)
     lv_label_set_text(s_lbl_status, "");
     lv_obj_set_style_text_font(s_lbl_status, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(s_lbl_status, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-    lv_obj_set_pos(s_lbl_status, 16, 206);
+    lv_obj_set_pos(s_lbl_status, 16, 172);
 
     s_lbl_heard = lv_label_create(s_container);
     lv_label_set_text(s_lbl_heard, "Heard nothing yet");
     lv_obj_set_style_text_font(s_lbl_heard, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(s_lbl_heard, lv_color_hex(UI_COLOR_TEXT), 0);
-    lv_obj_set_pos(s_lbl_heard, 16, 240);
+    lv_obj_set_pos(s_lbl_heard, 16, 202);
 
     /* No TX control on this page yet, and saying so beats an inert button.
      * WSPR TX exists and has been on the air, but its duty-cycle scheduler is
@@ -171,18 +189,40 @@ void wspr_screen_view_init(lv_obj_t *parent)
     lv_label_set_text(note, "Receive only.\nTX is not wired to\nthis page yet.");
     lv_obj_set_style_text_font(note, &lv_font_montserrat_18, 0);
     lv_obj_set_style_text_color(note, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-    lv_obj_set_pos(note, 16, 280);
+    lv_obj_set_pos(note, 16, 240);
 
-    /* ---------------- right pane: the log ---------------- */
+    /* ---------------- right pane, upper: the captured window ---------------- */
+    /* RGB565 at display resolution rather than a 205x176 image scaled up:
+     * lv_canvas has no scaling, and drawing straight into display pixels keeps
+     * the frequency axis below it exactly aligned with the columns. */
+    s_wf_buf = heap_caps_malloc(RIGHT_W * WF_H * 2, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (s_wf_buf) {
+        s_wf_canvas = lv_canvas_create(s_container);
+        lv_canvas_set_buffer(s_wf_canvas, s_wf_buf, RIGHT_W, WF_H, LV_COLOR_FORMAT_RGB565);
+        lv_obj_set_pos(s_wf_canvas, RIGHT_X, WF_Y);
+        lv_canvas_fill_bg(s_wf_canvas, lv_color_hex(0x000000), LV_OPA_COVER);
+        lv_obj_add_flag(s_wf_canvas, UI_FLAG_NOT_HOT);
+    }
+
+    /* The frequency scale. Evenly spaced ticks with numbers, because a
+     * waterfall without them cannot answer "where is that signal?" - which is
+     * the only question it is there to answer. */
+    s_lbl_axis = lv_label_create(s_container);
+    lv_label_set_text(s_lbl_axis, "");
+    lv_obj_set_style_text_font(s_lbl_axis, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(s_lbl_axis, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+    lv_obj_set_pos(s_lbl_axis, RIGHT_X, AXIS_Y);
+
+    /* ---------------- right pane, lower: the log ---------------- */
     lv_obj_t *hdr = lv_label_create(s_container);
     lv_label_set_text(hdr, HEADER);
     lv_obj_set_style_text_font(hdr, &qmx_mono_25, 0);
     lv_obj_set_style_text_color(hdr, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-    lv_obj_set_pos(hdr, LEFT_W + 8, 10);
+    lv_obj_set_pos(hdr, RIGHT_X, LIST_Y);
 
     s_list = lv_obj_create(s_container);
-    lv_obj_set_size(s_list, MID_W - LEFT_W - 16, MID_H - 44);
-    lv_obj_set_pos(s_list, LEFT_W + 8, 36);
+    lv_obj_set_size(s_list, RIGHT_W, MID_H - LIST_Y - 34);
+    lv_obj_set_pos(s_list, RIGHT_X, LIST_Y + 30);
     lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
     lv_obj_set_style_pad_all(s_list, 0, 0);
@@ -221,6 +261,57 @@ void wspr_screen_view_hide(void)
 
 lv_obj_t *wspr_screen_view_get_container(void) { return s_container; }
 
+/* SDR-ish ramp: black -> blue -> cyan -> yellow -> red, same family the
+ * panadapter's waterfall uses so the two pages read alike. */
+static lv_color_t wf_colour(uint8_t v)
+{
+    uint8_t r, g, b;
+    if (v < 64)        { r = 0;               g = 0;                b = (uint8_t)(v * 3);   }
+    else if (v < 128)  { r = 0;               g = (uint8_t)((v - 64) * 4);  b = 255;        }
+    else if (v < 192)  { r = (uint8_t)((v - 128) * 4); g = 255;     b = (uint8_t)(255 - (v - 128) * 4); }
+    else               { r = 255;             g = (uint8_t)(255 - (v - 192) * 4); b = 0;    }
+    return lv_color_make(r, g, b);
+}
+
+/* Repaint the captured window. Only called when the sequence number has moved,
+ * i.e. once per cycle - painting ~190 k pixels every second would be pure waste
+ * on a board whose render budget CLAUDE.md keeps warning about. */
+static void repaint_waterfall(void)
+{
+    if (!s_wf_canvas || !s_wf_data) return;
+    lv_layer_t layer;
+    lv_canvas_init_layer(s_wf_canvas, &layer);
+
+    for (int y = 0; y < WF_H; y++) {
+        int row = y * WSPR_WF_ROWS / WF_H;          /* time: top = start of window */
+        for (int x = 0; x < RIGHT_W; x++) {
+            int col = x * WSPR_WF_COLS / RIGHT_W;   /* frequency */
+            uint8_t v = s_wf_data[row * WSPR_WF_COLS + col];
+            lv_canvas_set_px(s_wf_canvas, x, y, wf_colour(v), LV_OPA_COVER);
+        }
+    }
+    lv_canvas_finish_layer(s_wf_canvas, &layer);
+
+    /* The scale underneath: evenly spaced, every 50 Hz, positioned by the same
+     * arithmetic that maps a column to an x - so a label sits over the bin it
+     * names rather than near it. */
+    char ax[160];
+    size_t off = 0;
+    ax[0] = '\0';
+    int last_end = 0;
+    for (int hz = 1350; hz <= 1650; hz += 50) {
+        int x = (int)((hz - (int)WSPR_WF_LO_HZ) * RIGHT_W /
+                      (int)(WSPR_WF_HI_HZ - WSPR_WF_LO_HZ));
+        int chars = x / 10;                          /* montserrat_18 ~10 px/space */
+        while (last_end < chars && off < sizeof(ax) - 8) { ax[off++] = ' '; last_end++; }
+        off += snprintf(ax + off, sizeof(ax) - off, "%d", hz);
+        last_end += 4;
+        if (off >= sizeof(ax) - 8) break;
+    }
+    ax[off] = '\0';
+    lv_label_set_text(s_lbl_axis, ax);
+}
+
 void wspr_screen_view_tick(void)
 {
     if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) return;
@@ -252,6 +343,18 @@ void wspr_screen_view_tick(void)
     if (strncmp(st, s_last_status, sizeof(s_last_status)) != 0) {
         snprintf(s_last_status, sizeof(s_last_status), "%s", st);
         lv_label_set_text(s_lbl_status, s_last_status);
+    }
+
+    /* the captured window, repainted only when a new one has landed */
+    uint32_t seq = wspr_rx_waterfall_seq();
+    if (seq != s_wf_seen && s_wf_canvas) {
+        if (!s_wf_data)
+            s_wf_data = heap_caps_malloc(WSPR_WF_ROWS * WSPR_WF_COLS,
+                                          MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (s_wf_data && wspr_rx_get_waterfall(s_wf_data)) {
+            s_wf_seen = seq;
+            repaint_waterfall();
+        }
     }
 
     /* the log, repainted only when the spot count actually changed */
