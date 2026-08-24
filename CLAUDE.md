@@ -13,6 +13,42 @@ qmx m                               # monitor only
 
 Exit monitor: `Ctrl+T` then `Ctrl+X`.
 
+### ⛔⛔ THE QMX NEVER SURVIVES A FLASH. NOT ONCE. STOP RE-DISCOVERING THIS.
+
+**Every flash of a Tab5 with the radio attached wedges the QMX** (#74 — a flash
+is a warm reset, which is the documented trigger). It needs a **manual power
+cycle by the operator, every single time.** The operator's own words, said
+repeatedly: *"qmx can NOT survive any flash"* and *"it will never survive on
+its own"*.
+
+⛔ **NEVER report that the radio survived.** On 2026-08-24 I told him it had,
+on the strength of `audio: RX 48561 pairs/s` and a live `qmx_fw` about 40 s
+after boot — and offered it as "the first counter-example" to his own account
+of his own bench. What had actually happened, almost certainly, is that he was
+sitting at the shack and power-cycled it himself. **I credited the firmware for
+his hand, and argued with him about his own hardware.**
+
+**Why that evidence is worthless, and this file already said so:** the identical
+mistake is recorded under the `MU;` note — *"that figure proves the stream is
+flowing and says nothing about its content"*. A pairs/s reading cannot
+distinguish "re-enumerated on its own" from "the operator reached over and
+switched it off and on". Neither can `/api/status`, since it reports whatever
+the link currently is, not how it got there.
+
+**So the standing behaviour is:**
+1. Before flashing with the radio attached, say plainly that the QMX will need
+   a power cycle afterwards.
+2. After flashing, **ask** whether he has power-cycled it — never infer it.
+3. If audio is flowing, that means *someone* fixed it. Assume it was him.
+4. A survival claim would need the port watched across the whole reset with
+   nobody touching the radio. Absent that, there is no counter-example.
+
+⚠ **This lived only in a memory file until now, which is exactly why it kept
+happening** — memory is consulted when something feels relevant, and a routine
+flash never does. Same reasoning as the serial-capture rules below. It belongs
+here, in the file that is read in full every session.
+
+
 ### ⛔ FOUR boards share this machine — resolve every port by BENCH NAME
 
 `docs/bench-setup.md` is the standing reference and `tools/bench.json` is the

@@ -49,10 +49,50 @@ bool wspr_rx_running(void);
 #define WSPR_WF_HI_HZ  1650.0f
 #define WSPR_WF_COLS   205            /* (1650-1350) / 1.4648 */
 
-/* Copy the most recent cycle's waterfall. `out` must hold
- * WSPR_WF_ROWS * WSPR_WF_COLS bytes (~36 KB - PSRAM or a static, NEVER a
- * stack local on taskLVGL). Returns false until a cycle has produced one.
- * Row 0 is the START of the window. */
+/* ---- THE CARPET FLOWS, IT DOES NOT REDRAW ------------------------------
+ *
+ * The first version cleared the buffer at the start of every capture and
+ * filled rows 0 -> 175 downward, so the page went black, dripped a picture
+ * over 120 s, froze for the decode, and went black again. Two things were
+ * wrong with that and the operator named both.
+ *
+ * 1. TIME RAN THE WRONG WAY. Row 0 was the oldest and new rows pushed
+ *    DOWNWARD, while the panadapter waterfall in this same firmware puts the
+ *    newest row at the TOP (see the layout block in CLAUDE.md). Two
+ *    waterfalls on one device disagreeing about which way time flows is an
+ *    inconsistency, not a preference.
+ *
+ * 2. ONE CYCLE EXACTLY FILLED THE PANE, so there was nowhere for history to
+ *    go. WSPR is a mode you read over many cycles - the question is always
+ *    "is this station coming back", which a single window cannot answer.
+ *
+ * So this is a RING of two cycles' worth of rows, newest first, and nothing
+ * is ever blanked. The row period stays at one WSPR symbol (0.6827 s)
+ * because THE ROW PERIOD IS THE FLOW RATE: averaging symbols together to buy
+ * more history would make the carpet advance in visible jerks, which is the
+ * exact quality being asked for. It is also what keeps the 8192-point FFT at
+ * one bin per WSPR tone spacing. History comes from the ring being deeper
+ * than the pane, and the view's nearest-neighbour rowmap squeezes it into
+ * the 200 px available - a 110 s trace is ~160 rows, so it survives that
+ * easily. */
+#define WSPR_WF_CYCLES 2
+#define WSPR_WF_HIST_ROWS (WSPR_WF_CYCLES * WSPR_WF_ROWS)   /* 352 */
+
+/* Value written across a whole row to mark a cycle boundary, dashed so it
+ * cannot be read as signal - nothing real is uniform across 205 bins. It
+ * also marks the ~68 s the receiver is genuinely DEAF while decoding (see
+ * the every-other-cycle note in wspr_rx.c): without it the carpet simply
+ * stops, which looks identical to a hung display. */
+#define WSPR_WF_MARK   100
+#define WSPR_WF_MARK_ROWS 2   /* survives the view's 1.76:1 row downsample */
+
+/* Copy the scrolling waterfall in DISPLAY ORDER. `out` must hold
+ * WSPR_WF_HIST_ROWS * WSPR_WF_COLS bytes (~72 KB - PSRAM or a static, NEVER
+ * a stack local on taskLVGL). Returns false until a row has been produced.
+ *
+ * ⛔ ROW 0 IS THE NEWEST ROW, and row order runs backwards in time from
+ * there, so a view can map display y directly to out row y and get the
+ * panadapter's convention for free. Rows never yet written read as black. */
 bool wspr_rx_get_waterfall(uint8_t *out);
 
 /* Bumped every time a new waterfall lands, so a UI can repaint only on change

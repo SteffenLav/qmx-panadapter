@@ -51,7 +51,9 @@ static const char *TAG = "wspr_rx";
  * to be built 176 times a cycle - let alone once per row. */
 static wspr_guards_t s_guards;      /* see wspr_decode.h; set at slot-loop start */
 
-static uint8_t  *s_wf;                 /* WSPR_WF_ROWS * WSPR_WF_COLS */
+static uint8_t  *s_wf;                 /* RING: WSPR_WF_HIST_ROWS * WSPR_WF_COLS */
+static int       s_wf_head;            /* ring index the NEXT row is written to */
+static int       s_wf_cycle_base;      /* ring index of this cycle's row 0 */
 static uint32_t  s_wf_seq;
 static SemaphoreHandle_t s_wf_mtx;
 
@@ -169,12 +171,51 @@ static uint8_t wf_byte(float magv, float floorv)
     return (uint8_t)(t * 255.0f);
 }
 
+/* Ring index this cycle's row r occupies. Rows arrive in order, so a cycle
+ * lays down a contiguous run starting at s_wf_cycle_base. */
+static inline int wf_ring_idx(int row)
+{
+    return (s_wf_cycle_base + row) % WSPR_WF_HIST_ROWS;
+}
+
+/* Publish one already-computed row of bytes at ring index `idx`, advancing the
+ * head past it. Caller holds no lock; this takes it. */
+static void wf_publish(int idx, const uint8_t *bytes)
+{
+    if (s_wf_mtx) xSemaphoreTake(s_wf_mtx, portMAX_DELAY);
+    memcpy(&s_wf[(size_t)idx * WSPR_WF_COLS], bytes, WSPR_WF_COLS);
+    /* Callers only ever publish at or after the head, in increasing order, so
+     * this cannot rewind. wf_finalise() sets the head itself and does not come
+     * through here. */
+    s_wf_head = (idx + 1) % WSPR_WF_HIST_ROWS;
+    s_wf_seq++;
+    if (s_wf_mtx) xSemaphoreGive(s_wf_mtx);
+}
+
+/* One dashed row marking a cycle boundary - and the ~68 s of deafness that
+ * follows it while the decoder runs. See WSPR_WF_MARK. */
+static void wf_mark_boundary(void)
+{
+    if (!s_wf) return;
+    uint8_t row[WSPR_WF_COLS];
+    for (int c = 0; c < WSPR_WF_COLS; c++)
+        row[c] = ((c / 4) & 1) ? 0 : WSPR_WF_MARK;
+    /* ⛔ TWO rows, not one. The view downsamples HIST_ROWS into a 200 px pane
+     * nearest-neighbour - a step of 1.76 - so a single row is SKIPPED whenever
+     * the map jumps by 2, i.e. the marker would silently vanish on roughly two
+     * cycles in five. Consecutive floor(y*1.76) values step by 1 or 2, so
+     * missing two adjacent source rows would need a step of 3 and cannot
+     * happen. Anything one row thick in this buffer has the same problem. */
+    for (int k = 0; k < WSPR_WF_MARK_ROWS; k++) wf_publish(s_wf_head, row);
+}
+
 static bool wf_begin(void)
 {
     if (!s_wf) {
-        s_wf = heap_caps_malloc(WSPR_WF_ROWS * WSPR_WF_COLS,
+        s_wf = heap_caps_malloc(WSPR_WF_HIST_ROWS * WSPR_WF_COLS,
                                 MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!s_wf) { ESP_LOGW(TAG, "no PSRAM for the waterfall"); return false; }
+        memset(s_wf, 0, WSPR_WF_HIST_ROWS * WSPR_WF_COLS);   /* once, at birth */
     }
     if (!s_wf_mag) {
         s_wf_mag = heap_caps_malloc((size_t)WSPR_WF_ROWS * WSPR_WF_COLS * sizeof(float),
@@ -188,13 +229,14 @@ static bool wf_begin(void)
         ESP_LOGW(TAG, "waterfall: out of memory");
         return false;
     }
-    s_wf_rows_done = 0;
-    /* Blank first, so a short cycle cannot leave last cycle's rows standing
-     * below this one's - that would read as signal that is no longer there. */
-    if (s_wf_mtx) xSemaphoreTake(s_wf_mtx, portMAX_DELAY);
-    memset(s_wf, 0, WSPR_WF_ROWS * WSPR_WF_COLS);
-    s_wf_seq++;
-    if (s_wf_mtx) xSemaphoreGive(s_wf_mtx);
+    /* ⛔ NOTHING IS BLANKED. The old version cleared the buffer here, which is
+     * what produced the black-screen-then-drip the operator reported. The
+     * comment that used to justify it ("a short cycle must not leave last
+     * cycle's rows standing below this one's") was reasoning about a
+     * fixed-window picture; in a carpet the older rows SHOULD stand, that is
+     * the entire point, and a short cycle simply contributes fewer rows. */
+    s_wf_rows_done  = 0;
+    s_wf_cycle_base = s_wf_head;
     return true;
 }
 
@@ -227,14 +269,41 @@ static void wf_row(const float *fsrc, const int16_t *isrc, long navail, int row)
         }
     }
 
+    /* ⛔ FIRST CYCLE AFTER BOOT: seed a provisional floor from THIS ROW.
+     *
+     * The floor is normally carried from the previous cycle's median, so on the
+     * very first cycle after boot there is none and this branch never ran - the
+     * pane stayed black for a full 120 s and then the whole window appeared at
+     * once. Reported from the bench as "it took like 2 min before anything
+     * happened", which is the wrong first impression for a live display.
+     *
+     * One row's 205 bins is a fair floor estimate because WSPR occupies only a
+     * few of them, and it is only ever used to make the row visible NOW -
+     * wf_finalise() repaints this whole cycle against the real median at the
+     * end regardless, so a poor seed self-corrects within the cycle and is
+     * never what the operator ends up judging. */
+    if (s_wf_floor <= 0.0f) {
+        static float med[WSPR_WF_COLS];
+        memcpy(med, magrow, sizeof(med));
+        for (int a = 1; a < WSPR_WF_COLS; a++) {
+            float v = med[a]; int b = a - 1;
+            while (b >= 0 && med[b] > v) { med[b + 1] = med[b]; b--; }
+            med[b + 1] = v;
+        }
+        float m = med[WSPR_WF_COLS / 2];
+        if (m > 0.0f) {
+            s_wf_floor = m;
+            ESP_LOGI(TAG, "waterfall: seeded provisional floor from row %d", row);
+        }
+    }
+
     /* Paint now against the carried floor so the row is visible immediately;
      * wf_finalise() repaints it against this cycle's own median. */
     if (s_wf_floor > 0.0f) {
-        if (s_wf_mtx) xSemaphoreTake(s_wf_mtx, portMAX_DELAY);
+        uint8_t bytes[WSPR_WF_COLS];
         for (int c = 0; c < WSPR_WF_COLS; c++)
-            s_wf[(size_t)row * WSPR_WF_COLS + c] = wf_byte(magrow[c], s_wf_floor);
-        s_wf_seq++;
-        if (s_wf_mtx) xSemaphoreGive(s_wf_mtx);
+            bytes[c] = wf_byte(magrow[c], s_wf_floor);
+        wf_publish(wf_ring_idx(row), bytes);
     }
     if (row >= s_wf_rows_done) s_wf_rows_done = row + 1;
 }
@@ -275,9 +344,22 @@ static void wf_finalise(void)
     ESP_LOGI(TAG, "waterfall: span %.0f-%.0f dB over median; loudest bin +%.1f dB",
              WF_LO_DB, WF_HI_DB, 10.0f * log10f(top / med));
 
+    /* Only THIS cycle's rows are repainted, at the ring positions they already
+     * occupy. Older cycles keep the scale they were drawn with: rescaling them
+     * to a median measured minutes later would silently rewrite history, and a
+     * carpet whose past changes brightness cannot be read for trends. */
     if (s_wf_mtx) xSemaphoreTake(s_wf_mtx, portMAX_DELAY);
-    for (int i = 0; i < WSPR_WF_ROWS * WSPR_WF_COLS; i++)
-        s_wf[i] = wf_byte(s_wf_mag[i], med);
+    for (int r = 0; r < s_wf_rows_done; r++) {
+        uint8_t *dst = &s_wf[(size_t)wf_ring_idx(r) * WSPR_WF_COLS];
+        const float *src = &s_wf_mag[(size_t)r * WSPR_WF_COLS];
+        for (int c = 0; c < WSPR_WF_COLS; c++) dst[c] = wf_byte(src[c], med);
+    }
+    /* ⛔ The head is advanced HERE as well as in wf_publish(), because on the
+     * very first cycle after boot s_wf_floor is still 0, so wf_row() computes
+     * magnitudes but publishes nothing - and a head left at the cycle base
+     * would make the next cycle overwrite this one in place, i.e. no carpet at
+     * all until the second cycle. Idempotent when rows did publish. */
+    s_wf_head = wf_ring_idx(s_wf_rows_done);
     s_wf_seq++;
     if (s_wf_mtx) xSemaphoreGive(s_wf_mtx);
 
@@ -292,13 +374,23 @@ static void build_waterfall(const int16_t *pcm, long n)
     if (!wf_begin()) return;
     for (int r = 0; r < WSPR_WF_ROWS; r++) wf_row(NULL, pcm, n, r);
     wf_finalise();
+    wf_mark_boundary();
 }
 
 bool wspr_rx_get_waterfall(uint8_t *out)
 {
     if (!s_wf || !out || s_wf_seq == 0) return false;
+    /* Un-ring into DISPLAY order: out row 0 is the newest row, and each later
+     * row is one symbol period older. Doing the reversal here rather than in
+     * the view keeps every consumer - Tab5 page, and anything added later -
+     * agreeing on which way time runs, which is the bug this replaced. */
     if (s_wf_mtx) xSemaphoreTake(s_wf_mtx, portMAX_DELAY);
-    memcpy(out, s_wf, WSPR_WF_ROWS * WSPR_WF_COLS);
+    int idx = s_wf_head;
+    for (int r = 0; r < WSPR_WF_HIST_ROWS; r++) {
+        idx = (idx - 1 + WSPR_WF_HIST_ROWS) % WSPR_WF_HIST_ROWS;
+        memcpy(&out[(size_t)r * WSPR_WF_COLS],
+               &s_wf[(size_t)idx * WSPR_WF_COLS], WSPR_WF_COLS);
+    }
     if (s_wf_mtx) xSemaphoreGive(s_wf_mtx);
     return true;
 }
@@ -542,6 +634,10 @@ static void wspr_rx_task(void *arg)
          * so the ~8 s post-capture pause the old whole-window build cost is
          * gone - the picture was already there. */
         wf_finalise();
+        /* The carpet stops advancing from here until the next capture opens -
+         * ~68 s in which the receiver is genuinely DEAF, not merely idle. Mark
+         * it, or a stalled carpet is indistinguishable from a hung display. */
+        wf_mark_boundary();
 
     decode_window:
         /* ---- decode ---- */

@@ -130,7 +130,7 @@ static lv_obj_t *s_lbl_rows;
 static lv_obj_t *s_wf_canvas;
 
 static uint8_t  *s_wf_buf;      /* RGB565 canvas pixels */
-static uint8_t  *s_wf_data;     /* WSPR_WF_ROWS x WSPR_WF_COLS intensities */
+static uint8_t  *s_wf_data;     /* WSPR_WF_HIST_ROWS x WSPR_WF_COLS, NEWEST ROW FIRST */
 static uint32_t  s_wf_seen;
 
 static int   s_last_spot_count = -1;
@@ -452,7 +452,10 @@ static inline uint16_t wf_rgb565(uint8_t v)
  * time a cycle finished, and /ss.bmp truncating at 135 KB of 1.84 MB. A direct
  * buffer fill plus one invalidate does the same job without holding the task.
  *
- * Only called when the sequence number moves, i.e. once per cycle. */
+ * Called whenever the sequence number moves - which since the carpet became
+ * row-by-row is roughly once per WSPR symbol (~1.5 Hz) while a capture is
+ * filling, NOT once per cycle as this comment used to claim. That is the
+ * reason the direct-buffer rule above is load-bearing rather than a nicety. */
 static void repaint_waterfall(void)
 {
     if (!s_wf_canvas || !s_wf_data || !s_wf_buf) return;
@@ -462,7 +465,9 @@ static void repaint_waterfall(void)
     static uint16_t colmap[RIGHT_W];
     static uint16_t rowmap[WF_H];
     for (int x = 0; x < RIGHT_W; x++) colmap[x] = (uint16_t)(x * WSPR_WF_COLS / RIGHT_W);
-    for (int y = 0; y < WF_H;    y++) rowmap[y] = (uint16_t)(y * WSPR_WF_ROWS / WF_H);
+    /* out row 0 is the NEWEST row, so display y maps straight through and the
+     * newest data lands at the top - the panadapter's convention. */
+    for (int y = 0; y < WF_H;    y++) rowmap[y] = (uint16_t)(y * WSPR_WF_HIST_ROWS / WF_H);
 
     for (int y = 0; y < WF_H; y++) {
         const uint8_t *src = &s_wf_data[rowmap[y] * WSPR_WF_COLS];
@@ -555,7 +560,7 @@ void wspr_screen_view_tick(void)
     uint32_t seq = wspr_rx_waterfall_seq();
     if (seq != s_wf_seen && s_wf_canvas) {
         if (!s_wf_data)
-            s_wf_data = heap_caps_malloc(WSPR_WF_ROWS * WSPR_WF_COLS,
+            s_wf_data = heap_caps_malloc(WSPR_WF_HIST_ROWS * WSPR_WF_COLS,
                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (s_wf_data && wspr_rx_get_waterfall(s_wf_data)) {
             s_wf_seen = seq;
