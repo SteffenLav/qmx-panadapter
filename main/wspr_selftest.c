@@ -25,6 +25,7 @@
 #include "util/maidenhead.h"
 #include "util/dxcc.h"
 #include "storage/settings.h"
+#include "wspr_sim.h"
 #include "wspr_spots.h"
 #include "wspr_selftest.h"
 
@@ -48,76 +49,9 @@ static volatile bool s_running = false;
 
 // xorshift + Box-Muller, lifted from test/wspr_synth_harness.c so the on-device
 // signal is generated the same way the host tests generate theirs.
-/* FLOAT, not double. The P4's FPU is single-precision only, so every double
- * sqrt/log/cos here is software-emulated: the first version of this self-test
- * spent 80 SECONDS synthesizing its 1,440,000 samples. That is outside the
- * decode budget being measured, so it was never wrong - just slow enough to
- * make the probe annoying to re-run, which is its own kind of wrong. */
-static uint32_t s_rng = 0xC0FFEE01u;
-static float rng_gaussian(void)
-{
-    uint32_t s = s_rng;
-    s ^= s << 13; s ^= s >> 17; s ^= s << 5;
-    float u1 = (s % 1000000 + 1) / 1000001.0f;
-    s ^= s << 13; s ^= s >> 17; s ^= s << 5;
-    float u2 = (s % 1000000 + 1) / 1000001.0f;
-    s_rng = s;
-    return sqrtf(-2.0f * logf(u1)) * cosf(2.0f * (float)M_PI * u2);
-}
-
-/* Fill `buf` with gaussian noise, then add one continuous-phase 4-FSK WSPR
- * transmission on top of it.
- *
- * Done in ONE int16 buffer rather than the host harness's float accumulator +
- * conversion, because that would need 5.76 MB of float on top of 2.88 MB of
- * int16 and there is no reason to spend it: with a single signal every sample
- * is written once, so noise-first-then-add works and halves the footprint.
- */
-static void noise_fill(int16_t *buf, long n, float sigma)
-{
-    for (long i = 0; i < n; i++) {
-        float v = sigma * rng_gaussian() * 32767.0f;
-        if (v > 32767.0f) v = 32767.0f;
-        if (v < -32768.0f) v = -32768.0f;
-        buf[i] = (int16_t)v;
-    }
-}
-
-/* Add one continuous-phase 4-FSK WSPR transmission on top of whatever is
- * already in `buf`.
- *
- * Accumulating into the int16 buffer rather than the host harness's float
- * accumulator is deliberate: a float accumulator would need 5.76 MB on top of
- * the 2.88 MB int16, and there is no reason to spend it here. */
-static bool add_station(int16_t *buf, long n, const char *call, const char *grid,
-                        int dbm, double f0_hz, float amplitude)
-{
-    wspr_msg_bytes_t msg;
-    if (!wspr_pack_message(call, grid, dbm, &msg)) return false;
-    uint8_t raw[WSPR_NSYM], channel[WSPR_NSYM], tones[WSPR_NSYM];
-    wspr_convolve_encode(&msg, raw);
-    wspr_interleave(raw, channel);
-    wspr_symbols_to_tones(channel, tones);
-
-    long start = (long)(ST_START_S * WSPR_SAMPLE_RATE_HZ);
-    float phase = 0.0f;
-    for (int sym = 0; sym < WSPR_NSYM; sym++) {
-        float freq = (float)f0_hz + tones[sym] * (float)TONE_SPACING_HZ;
-        float dphi = 2.0f * (float)M_PI * freq / (float)WSPR_SAMPLE_RATE_HZ;
-        for (int k = 0; k < WSPR_SYM_LEN_SAMPLES; k++) {
-            long idx = start + (long)sym * WSPR_SYM_LEN_SAMPLES + k;
-            if (idx >= 0 && idx < n) {
-                float v = buf[idx] + amplitude * sinf(phase) * 32767.0f;
-                if (v > 32767.0f) v = 32767.0f;
-                if (v < -32768.0f) v = -32768.0f;
-                buf[idx] = (int16_t)v;
-            }
-            phase += dphi;
-            if (phase > 2.0f * (float)M_PI) phase -= 2.0f * (float)M_PI;
-        }
-    }
-    return true;
-}
+/* Synthesis lives in wspr_sim.c and is shared with simulation mode. Three
+ * copies of a 4-FSK synthesizer is how they drift apart and stop testing the
+ * same thing, so there is one. */
 
 static void heap_line(const char *when)
 {
@@ -210,11 +144,12 @@ static void wspr_selftest_task(void *arg)
     /* Light noise, then three stations at different frequencies and amplitudes -
      * the host harness's own multi-signal case, so a device result can be
      * compared against a host result directly. */
-    noise_fill(buf, CAP_SAMPLES, 0.02f);
+    wspr_sim_noise(buf, CAP_SAMPLES, 0.02f);
     bool ok = true;
     for (int i = 0; i < ST_N_STATIONS; i++) {
-        if (!add_station(buf, CAP_SAMPLES, s_stations[i].call, s_stations[i].grid,
-                         s_stations[i].dbm, s_stations[i].f0, s_stations[i].amp)) {
+        if (!wspr_sim_add_station(buf, CAP_SAMPLES, s_stations[i].call, s_stations[i].grid,
+                                  s_stations[i].dbm, s_stations[i].f0, ST_START_S,
+                                  s_stations[i].amp)) {
             ESP_LOGE(TAG, "synthesis refused '%s' - check the callsign/grid/power",
                      s_stations[i].call);
             ok = false;

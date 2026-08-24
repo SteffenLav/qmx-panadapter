@@ -24,6 +24,7 @@
 #include "storage/settings.h"
 #include "fft/kiss_fftr.h"
 #include "wspr_decode.h"
+#include "wspr_sim.h"
 #include "wspr_spots.h"
 #include "wspr_rx.h"
 
@@ -260,6 +261,24 @@ static void wspr_rx_task(void *arg)
 
         int64_t cycle_utc = (now_ms() / WSPR_CYCLE_MS) * (WSPR_CYCLE_MS / 1000);
 
+        /* ---- SIMULATION: synthesize the window instead of capturing it ----
+         *
+         * Everything downstream is untouched - the same waterfall, the same
+         * decoder, the same spot store, the same page. That is the whole value:
+         * a sim that shortcut the decoder would test nothing and would quietly
+         * misrepresent what the radio can hear. If a phantom does not decode,
+         * it does not appear.
+         *
+         * No 120 s wait either. The audio is generated in a moment, so results
+         * land ~70 s into the cycle instead of ~190 s, which makes this usable
+         * for practice and for iterating on the display. */
+        if (wspr_sim_enabled()) {
+            set_status("simulating");
+            wspr_sim_build_window(pcm, CAP_SAMPLES, cycle_utc);
+            build_waterfall(pcm, CAP_SAMPLES);
+            goto decode_window;
+        }
+
         /* ---- capture the window ----
          * backfill covers however late we armed: the pre-ring is already being
          * filled continuously by the DSP in this mode, so the window is anchored
@@ -340,6 +359,7 @@ static void wspr_rx_task(void *arg)
          * a minute later. */
         build_waterfall(pcm, CAP_SAMPLES);
 
+    decode_window:
         /* ---- decode ---- */
         int64_t t0 = esp_timer_get_time();
         wspr_freq_candidate_t cands[WSPR_MAX_CANDS];

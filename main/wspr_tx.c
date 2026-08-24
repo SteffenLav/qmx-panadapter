@@ -34,6 +34,18 @@ static const char *TAG = "wspr_tx";
 #define WSPR_TX_SEND_LIVE 0
 #endif
 
+/* SIMULATION INTERLOCK. ft8_tx.c carries the identical check and for the
+ * identical reason: with simulation on, a burst must not put one byte on the
+ * CAT link, even though the radio may be connected and perfectly willing. The
+ * check reads the SETTING on every call rather than a cached copy, so switching
+ * simulation on takes effect immediately rather than at the next boot. */
+static bool sim_active(void)
+{
+    qmx_settings_t s;
+    settings_load_all(&s);
+    return s.sim_mode_en;
+}
+
 #define WSPR_SYMBOL_PERIOD_US   682667  // 8192/12000 s, in microseconds
 #define WSPR_TONE_SPACING_HZ    1.46484375f
 #define WSPR_TX_KEYUP_TONE_HZ   0.0f    // "any value < 10 Hz" keys up (CAT manual)
@@ -48,6 +60,10 @@ static wspr_tx_state_t   s_state = WSPR_TX_IDLE;
 static wspr_tx_request_t s_armed;
 static volatile bool     s_disarm_requested = false;
 static volatile bool     s_abort_requested  = false;
+/* Latched once at the top of run_burst(), not read per symbol: settings_load_all()
+ * 162 times a burst would be absurd, and the answer cannot meaningfully change
+ * inside 110 seconds. */
+static bool              s_burst_sim = false;
 
 void wspr_tx_init(void)
 {
@@ -119,6 +135,10 @@ int wspr_tx_seconds_until_next_slot(void)
 
 static void tx_cmd(int64_t t0, const char *fmt_freq)
 {
+    if (s_burst_sim) {   /* simulation: the radio must not hear a thing */
+        ESP_LOGI(TAG, "[SIM t+%6lldus] %s", (long long)(esp_timer_get_time() - t0), fmt_freq);
+        return;
+    }
 #if WSPR_TX_SEND_LIVE
     esp_err_t err = cat_send_raw_cmd("%s", fmt_freq);
     if (err != ESP_OK) {
@@ -137,6 +157,10 @@ static void tx_cmd(int64_t t0, const char *fmt_freq)
 // force-RX reassert if it never gets through.
 static bool tx_cmd_critical(int64_t t0, const char *cmd)
 {
+    if (s_burst_sim) {
+        ESP_LOGI(TAG, "[SIM t+%6lldus] %s", (long long)(esp_timer_get_time() - t0), cmd);
+        return true;
+    }
 #if WSPR_TX_SEND_LIVE
     for (int i = 0; i < WSPR_TX_STOP_RETRIES; i++) {
         esp_err_t err = cat_send_raw_cmd("%s", cmd);
@@ -170,14 +194,16 @@ static void sleep_until(int64_t t0, int64_t offset_us)
 static void run_burst(const wspr_tx_request_t *req)
 {
     s_abort_requested = false;
+    s_burst_sim = sim_active();
     ESP_LOGI(TAG, "WSPR TX burst starting: '%s' '%s' %d dBm, base=%d Hz%s",
              req->callsign, req->grid, req->power_dbm, req->audio_freq_hz,
-             WSPR_TX_SEND_LIVE ? "" : "  [DRY RUN - logging only, radio not keyed]");
+             s_burst_sim      ? "  [SIMULATION - radio not keyed]"
+             : WSPR_TX_SEND_LIVE ? "" : "  [DRY RUN - logging only, radio not keyed]");
 
     // Exclusive use of the CDC-ACM link for the whole burst - see
     // ft8_tx.c's identical reasoning. Cooperative flag only, never
     // vTaskSuspend.
-    cat_poll_set_paused(true);
+    if (!s_burst_sim) cat_poll_set_paused(true);
 
     int64_t t0 = esp_timer_get_time();
     sleep_until(t0, 0);
@@ -212,7 +238,7 @@ static void run_burst(const wspr_tx_request_t *req)
     vTaskDelay(pdMS_TO_TICKS(WSPR_TX_ENVELOPE_SETTLE_MS));
     tx_cmd_critical(t0, "RX;");
 
-    cat_poll_set_paused(false);
+    if (!s_burst_sim) cat_poll_set_paused(false);
     ESP_LOGI(TAG, "WSPR TX burst %s (%.1f s)", aborted ? "ABORTED" : "complete",
              (double)(esp_timer_get_time() - t0) / 1e6);
 }
@@ -300,6 +326,10 @@ bool wspr_tx_arm(const wspr_tx_request_t *req, char *out_err, size_t out_err_len
     // A LIVE build keeps the check unconditionally. There the pre-flight is the
     // real thing - it is what stops a burst going out in the wrong mode.
     bool preflight_required = true;
+    if (sim_active()) {
+        ESP_LOGI(TAG, "arm: SIMULATION - skipping the Digi pre-flight, nothing will be sent");
+        preflight_required = false;
+    }
 #if !WSPR_TX_SEND_LIVE
     if (!cat_is_ready()) {
         ESP_LOGW(TAG, "arm: no CAT link - allowing anyway, this is a DRY RUN "

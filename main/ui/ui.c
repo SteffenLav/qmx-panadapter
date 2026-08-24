@@ -1899,20 +1899,32 @@ static lv_obj_t *s_grp_hdr[N_DRAWER_GROUPS];
 static lv_obj_t *s_expert_btn = NULL, *s_expert_lbl = NULL;
 static bool      s_drawer_expert = false;
 
-// Is this section allowed on the screen we are on at all?
-static bool drawer_sec_visible(int id, bool ft8, bool tune_ok)
+/* Is this section allowed on the screen we are on at all?
+ *
+ * Asks WHICH MODE, not "is it FT8". It took a bool until the WSPR page arrived
+ * and the two branches immediately meant the wrong thing: the simulation toggle
+ * (`return ft8`) vanished on the one page that most needs it, and every
+ * spectrum/waterfall control (`return !ft8`) appeared on a page that shows
+ * neither. Same trap ui_set_base_mode() had - a two-valued question with three
+ * answers. */
+static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
 {
+    const bool ft8  = (mode == UI_MODE_FT8);
+    const bool wspr = (mode == UI_MODE_WSPR);
+
     if (id == DRAWER_SEC_CWAUDIO) return false;   // shelved - see cw_audio.c
     if (id == DRAWER_SEC_RESMON)  return false;   // dev-only, driven by /api/cmd
     if (id == DRAWER_SEC_TUNE2)   return tune_ok;
-    if (id == DRAWER_SEC_DISTANCE || id == DRAWER_SEC_SIMMODE ||
-        id == DRAWER_SEC_FT8SYNC) return ft8;
-    // The spectrum/waterfall controls describe a view FT8 mode does not show.
+    /* Simulation belongs to BOTH decode pages - one setting drives the FT8
+     * phantoms and the WSPR ones (see wspr_sim.h). */
+    if (id == DRAWER_SEC_SIMMODE) return ft8 || wspr;
+    if (id == DRAWER_SEC_DISTANCE || id == DRAWER_SEC_FT8SYNC) return ft8;
+    // The spectrum/waterfall controls describe a view neither decode page shows.
     if (id == DRAWER_SEC_RITPILL || id == DRAWER_SEC_SPOTS   || id == DRAWER_SEC_PRESETS ||
         id == DRAWER_SEC_DBRANGE || id == DRAWER_SEC_SMOOTHING ||
         id == DRAWER_SEC_WATERFALL || id == DRAWER_SEC_FLAT ||
         id == DRAWER_SEC_IQ      || id == DRAWER_SEC_IFCAL ||
-        id == DRAWER_SEC_CMAP) return !ft8;
+        id == DRAWER_SEC_CMAP) return !ft8 && !wspr;
     return true;
 }
 
@@ -2075,7 +2087,7 @@ static void user_manual_cb(lv_event_t *e)
     }
     ui_open_user_manual();
 }
-static void drawer_set_ft8_mode(bool ft8);
+static void drawer_set_mode(ui_mode_t mode);
 static void drawer_open(void);
 static void drawer_close(void);
 static void drawer_anim_x_cb(void *obj, int32_t v);
@@ -2785,7 +2797,7 @@ void ui_rit_notify_retune(void)
 void ui_notify_qmx_fw_known(void)
 {
     if (!s_drawer) return;  // not built yet - drawer_build() will see the current firmware string
-    drawer_set_ft8_mode(ui_mode_get() == UI_MODE_FT8);
+    drawer_set_mode(ui_mode_get());
 }
 
 // Same breathing technique as the edge grips, applied to the bottom-bar
@@ -9262,7 +9274,7 @@ static void drawer_build(void)
 
     // Apply current UI mode's section visibility (drawer is pre-built at
     // boot before ui_apply_saved_mode() runs).
-    drawer_set_ft8_mode(ui_mode_get() == UI_MODE_FT8);
+    drawer_set_mode(ui_mode_get());
 }
 
 static void drawer_open(void)
@@ -9315,7 +9327,7 @@ void ui_set_drawer_expert(bool expert)
     if (s_drawer_expert == expert) return;
     s_drawer_expert = expert;
     drawer_expert_paint();
-    drawer_set_ft8_mode(ui_mode_get() == UI_MODE_FT8);
+    drawer_set_mode(ui_mode_get());
     if (s_drawer) lv_obj_scroll_to_y(s_drawer, 0, LV_ANIM_OFF);
 }
 
@@ -9356,8 +9368,9 @@ static void drawer_close(void)
 // map) is irrelevant there. Hide the rest and restack the kept sections near
 // the top of the drawer. Called on every mode switch (and once at boot via
 // drawer_build()).
-static void drawer_set_ft8_mode(bool ft8)
+static void drawer_set_mode(ui_mode_t mode)
 {
+    const bool ft8 = (mode == UI_MODE_FT8);   /* legacy local, still used below */
     if (!s_drawer) return;
     static const int keep[]   = { DRAWER_SEC_FLIP, DRAWER_SEC_QMXVOL, DRAWER_SEC_QMXRF, DRAWER_SEC_SLEEP, DRAWER_SEC_CHARGE, DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_WIFI, DRAWER_SEC_IDENTITY, DRAWER_SEC_PAUSE, DRAWER_SEC_TERM };
     // Heights must line up 1:1 with keep[] above (same order) - each is the
@@ -9413,7 +9426,7 @@ static void drawer_set_ft8_mode(bool ft8)
         if (show_group) {
             for (int k = 0; k < grp->n; k++)
                 if (s_drawer_sections[grp->ids[k]] &&
-                    drawer_sec_visible(grp->ids[k], ft8, tune_ok)) n_vis++;
+                    drawer_sec_visible(grp->ids[k], mode, tune_ok)) n_vis++;
         }
 
         if (s_grp_hdr[g]) {
@@ -9429,7 +9442,7 @@ static void drawer_set_ft8_mode(bool ft8)
 
         for (int k = 0; k < grp->n; k++) {
             int id = grp->ids[k];
-            if (!s_drawer_sections[id] || !drawer_sec_visible(id, ft8, tune_ok)) continue;
+            if (!s_drawer_sections[id] || !drawer_sec_visible(id, mode, tune_ok)) continue;
             lv_obj_clear_flag(s_drawer_sections[id], LV_OBJ_FLAG_HIDDEN);
             lv_obj_set_pos(s_drawer_sections[id], 0, y);
             y += s_drawer_section_h[id];
@@ -9925,7 +9938,7 @@ static void drawer_expert_btn_cb(lv_event_t *e)
     (void)e;
     s_drawer_expert = !s_drawer_expert;
     drawer_expert_paint();
-    drawer_set_ft8_mode(ui_mode_get() == UI_MODE_FT8);
+    drawer_set_mode(ui_mode_get());
     if (s_drawer) lv_obj_scroll_to_y(s_drawer, 0, LV_ANIM_OFF);
 }
 
@@ -10170,7 +10183,7 @@ void ui_apply_saved_mode(void)
     ESP_LOGI(TAG, "ui_apply_saved_mode: last_ui_mode from NVS = %u", (unsigned)s_saved_ui_mode);
     if (s_saved_ui_mode != UI_MODE_FT8) {
         ui_mode_set(UI_MODE_PANADAPTER);
-        drawer_set_ft8_mode(false);
+        drawer_set_mode(UI_MODE_PANADAPTER);
         ESP_LOGI(TAG, "UI mode restored from NVS: Panadapter");
         return;
     }
@@ -10182,7 +10195,7 @@ void ui_apply_saved_mode(void)
     if (s_waterfall_obj) lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN);
     spots_lane_set_visible(false);
     top_bar_set_ft8_dim(true);
-    drawer_set_ft8_mode(true);
+    drawer_set_mode(UI_MODE_FT8);
     // FT8 is a digital mode - force the radio into DiGi regardless of
     // whatever mode (e.g. CW) was active in Panadapter mode. Via the poll task
     // (reliable, retried) rather than a rate-limit-droppable direct write.
@@ -10227,7 +10240,7 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
     /* Both overlay pages dim the panadapter's top-bar controls; only FT8 wants
      * the drawer's FT8 sections. */
     top_bar_set_ft8_dim(next != UI_MODE_PANADAPTER);
-    drawer_set_ft8_mode(next == UI_MODE_FT8);
+    drawer_set_mode(next);
 
     /* STAND DOWN WHAT WE ARE LEAVING, before anything is shown.
      *
