@@ -75,19 +75,36 @@ bool wspr_rx_running(void);
  * than the pane, and the view's nearest-neighbour rowmap squeezes it into
  * the 200 px available - a 110 s trace is ~160 rows, so it survives that
  * easily. */
-#define WSPR_WF_CYCLES 2
-#define WSPR_WF_HIST_ROWS (WSPR_WF_CYCLES * WSPR_WF_ROWS)   /* 352 */
+/* ONE cycle fills the pane. Two was tried first and the arithmetic killed it:
+ * 352 rows in a 200 px pane makes each row 0.57 px, so at WSPR's 1.47 rows/s
+ * the carpet crawled at 0.83 px/s and took ~6 minutes to fill from black.
+ * At one cycle each row is 1.14 px and it moves at 1.67 px/s - twice as fast -
+ * and the pane is full after a single 120 s capture. History lives in the
+ * decode list, which is the right place for it: the list says WHAT was heard,
+ * the carpet shows the band NOW. */
+#define WSPR_WF_CYCLES 1
+#define WSPR_WF_HIST_ROWS (WSPR_WF_CYCLES * WSPR_WF_ROWS)   /* 176 */
 
 /* Value written across a whole row to mark a cycle boundary, dashed so it
  * cannot be read as signal - nothing real is uniform across 205 bins. It
  * also marks the ~68 s the receiver is genuinely DEAF while decoding (see
  * the every-other-cycle note in wspr_rx.c): without it the carpet simply
  * stops, which looks identical to a hung display. */
-#define WSPR_WF_MARK   100
-#define WSPR_WF_MARK_ROWS 2   /* survives the view's 1.76:1 row downsample */
+/* ⛔ A RESERVED SENTINEL, not a palette value. Picking a "light green" out of
+ * the signal ramp would not actually distinguish it, because a strong signal
+ * passes through green on its way to red. So wf_byte() is clamped to 0..254
+ * and 255 means MARKER, which the view renders as an explicit light green no
+ * signal can produce. Losing the top ramp value costs nothing visible. */
+#define WSPR_WF_MARK   255
+/* At one cycle the view UPSAMPLES (176 rows into 200 px), so every source
+ * row is drawn at least once and a single marker row could not be skipped.
+ * Kept at 2 anyway: it makes the line readable rather than hairline, and it
+ * stays correct if WSPR_WF_CYCLES is ever raised again - at which point the
+ * map downsamples and a 1-row marker WOULD vanish on some cycles. */
+#define WSPR_WF_MARK_ROWS 2
 
 /* Copy the scrolling waterfall in DISPLAY ORDER. `out` must hold
- * WSPR_WF_HIST_ROWS * WSPR_WF_COLS bytes (~72 KB - PSRAM or a static, NEVER
+ * WSPR_WF_HIST_ROWS * WSPR_WF_COLS bytes (~36 KB - PSRAM or a static, NEVER
  * a stack local on taskLVGL). Returns false until a row has been produced.
  *
  * ⛔ ROW 0 IS THE NEWEST ROW, and row order runs backwards in time from
@@ -106,6 +123,28 @@ const char *wspr_rx_status(void);
  * are measured either way; this only changes which one acts. Deliberately not
  * an NVS setting: it is an experiment knob for choosing between the two on
  * real signals, not a user preference, and it should not survive silently. */
+/* ---- CAPTURE DUMP -------------------------------------------------------
+ *
+ * Ask for the next `cycles` captured windows to be written to the SD card as
+ * WAV, so the SAME audio the on-device decoder saw can be run through real
+ * wsprd on a PC. That comparison is the only thing that separates the two
+ * explanations for a bright trace that does not decode: our sensitivity floor
+ * is short (~-22.7 dB against wsprd's ~-29), or the trace was never WSPR. The
+ * waterfall cannot answer it, because the display saturates anything 16 dB
+ * over the median and so draws QRM and a strong signal identically.
+ *
+ * SD rather than HTTP because a window is 2.88 MB and this link tops out
+ * around 211 KB per transfer. Bounded because each file is 2.88 MB: a
+ * mistyped 100 would be 288 MB and a full card.
+ *
+ * Returns the number actually armed (0 if no card is mounted), so a caller
+ * can tell "armed" from "there is nowhere to write". */
+#define WSPR_DUMP_MAX_CYCLES 20
+int wspr_rx_request_dump(int cycles);
+
+/* Cycles still to be written, for status reporting. */
+int wspr_rx_dump_pending(void);
+
 void wspr_rx_set_guards(int enforce_near, double near_hz,
                         int enforce_slow, unsigned int slow_cycles);
 

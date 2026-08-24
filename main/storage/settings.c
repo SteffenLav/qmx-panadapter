@@ -101,6 +101,7 @@ static const char *TAG = "settings";
 #define KEY_WSPR_TX_EN     "wspr_tx_en"
 #define KEY_WSPR_DUTY      "wspr_duty"
 #define KEY_WSPR_DBM       "wspr_dbm"
+#define KEY_WSPR_DUMP      "wspr_dump"
 #define KEY_FT8_OP_MODE    "ft8_op_mode"
 #define KEY_CHARGE_LIM_EN  "chg_lim_en"
 #define KEY_CHARGE_LIM_PCT "chg_lim_pct"
@@ -269,6 +270,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_WSPR_TX_EN     98
 #define DIRTY_WSPR_DUTY      99
 #define DIRTY_WSPR_DBM      100
+#define DIRTY_WSPR_DUMP     101
 #define DIRTY_FT8_OP_MODE    47
 #define DIRTY_FREQ_KP_POS    48
 #define DIRTY_FREQ_KP_SMALL  49
@@ -529,6 +531,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_WSPR_TX_EN))   nvs_set_u8(s_nvs, KEY_WSPR_TX_EN, snap.wspr_tx_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_WSPR_DUTY))    nvs_set_u8(s_nvs, KEY_WSPR_DUTY, snap.wspr_duty_pct);
         if (dirty_test(&dirty_local, DIRTY_WSPR_DBM))     nvs_set_i8(s_nvs, KEY_WSPR_DBM, snap.wspr_tx_dbm);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_DUMP))    nvs_set_u8(s_nvs, KEY_WSPR_DUMP, snap.wspr_dump_cycles);
         if (dirty_test(&dirty_local, DIRTY_FT8_OP_MODE))  nvs_set_u8(s_nvs, KEY_FT8_OP_MODE, snap.ft8_op_mode);
         if (dirty_test(&dirty_local, DIRTY_CHARGE_LIM_EN))  nvs_set_u8(s_nvs, KEY_CHARGE_LIM_EN,  snap.charge_limit_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_CHARGE_LIM_PCT)) nvs_set_u8(s_nvs, KEY_CHARGE_LIM_PCT, snap.charge_limit_pct);
@@ -717,6 +720,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->wspr_tx_en    = false;       /* TX off until deliberately enabled */
     out->wspr_duty_pct = 20;          /* the conventional WSPR fraction */
     out->wspr_tx_dbm   = 23;          /* what the code claimed before this was settable */
+    out->wspr_dump_cycles = 0;        /* never dump unless asked */
     out->ft8_op_mode = 0;     // FT8
     out->charge_limit_en  = DEF_CHARGE_LIM_EN;
     out->charge_limit_pct = DEF_CHARGE_LIM_PCT;
@@ -898,6 +902,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_WSPR_TX_EN, &u8v) == ESP_OK) out->wspr_tx_en = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_WSPR_DUTY, &u8v) == ESP_OK) out->wspr_duty_pct = u8v;
     { int8_t i8v; if (nvs_get_i8(s_nvs, KEY_WSPR_DBM, &i8v) == ESP_OK) out->wspr_tx_dbm = i8v; }
+    { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_DUMP, &u8v) == ESP_OK) out->wspr_dump_cycles = u8v; }
     if (nvs_get_u8(s_nvs, KEY_FT8_OP_MODE, &u8v) == ESP_OK) out->ft8_op_mode = u8v;
     if (nvs_get_u8(s_nvs, KEY_CHARGE_LIM_EN, &u8v) == ESP_OK) out->charge_limit_en = (u8v != 0);
     nvs_get_u8(s_nvs, KEY_CHARGE_LIM_PCT, &out->charge_limit_pct);
@@ -1993,6 +1998,16 @@ void settings_set_wspr_duty_pct(uint8_t v)
     s_pending.wspr_duty_pct = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_WSPR_DUTY);
+}
+
+void settings_set_wspr_dump_cycles(uint8_t v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wspr_dump_cycles == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wspr_dump_cycles = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WSPR_DUMP);
 }
 
 void settings_set_wspr_tx_dbm(int8_t v)

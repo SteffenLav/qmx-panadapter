@@ -249,6 +249,20 @@ typedef struct {
     bool     wspr_tx_en;      // WSPR transmit enabled at all (default OFF)
     uint8_t  wspr_duty_pct;   // fraction of cycles to transmit: 0/10/20/33/50
     int8_t   wspr_tx_dbm;     // declared TX power, dBm (default 23 = 200 mW)
+    /* Captured windows still to be written to the SD card as WAV.
+     *
+     * ⛔ PERSISTED, and that is the whole point. The SD card cannot be written
+     * while WiFi is up on this board - it unmounts within ~100 s as the
+     * MALLOC_CAP_DMA pool collapses, and sd_archive.c's own comment records
+     * that a remount then cannot succeed and that "a reboot with WiFi off
+     * gives the verified continuous-mirroring behaviour". So the request has
+     * to survive the reboot that makes it possible: arm it from the web while
+     * WiFi is still up, switch WiFi off, reboot, and the dumps land.
+     *
+     * Decremented as each file is written, so an interrupted run resumes
+     * rather than starting over, and a finished run cannot re-arm itself on
+     * the next boot and quietly fill the card. */
+    uint8_t  wspr_dump_cycles;
     uint8_t  ft8_op_mode;     // FT8/FT4 sub-mode (ft8_op_mode_t: 0=FT8 1=FT4), default 0 - see ft8_test.h
     uint32_t passband_width_hz; // last CAT-reported filter width (Hz), 0=unknown/use mode default. Persisted so the
                                  // band-plan strip's passband indicator shows the real width immediately at boot
@@ -451,6 +465,7 @@ void settings_set_wspr_dial_hz(uint32_t v);
 void settings_set_wspr_tx_en(bool v);
 void settings_set_wspr_duty_pct(uint8_t v);
 void settings_set_wspr_tx_dbm(int8_t v);
+void settings_set_wspr_dump_cycles(uint8_t v);
 void settings_set_ft8_op_mode(uint8_t v);
 
 // Last CAT-reported filter width in Hz (debounced flush). Restored at boot

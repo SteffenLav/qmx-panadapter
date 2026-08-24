@@ -14,6 +14,7 @@
 #include "wspr_rx.h"
 #include "esp_heap_caps.h"
 #include "cat.h"
+#include "util/dxcc.h"
 #include "wspr_tx.h"
 #include "storage/settings.h"
 
@@ -149,9 +150,48 @@ static char  s_last_status[48];
  *
  * Monospaced by construction (qmx_mono_25) - column arithmetic in characters
  * only means anything in a fixed-advance font. */
-#define ROW_FMT "%-9s %-5s %-4s %5s %5s %7s %5s %7s %4s"
+/* ---- THE COLUMN BUDGET, because it is exactly full ---------------------
+ *
+ * qmx_mono_25's advance is 15 px (240 sixteenths - see CELL_W in
+ * qmx_term_view.c), and the pane is RIGHT_W = 944 px, so there are exactly
+ * 62 characters. Every column below is its own true maximum and the gaps are
+ * a single space, which is what "squeeze them together but keep a proper gap"
+ * has to mean when the row is already at the edge:
+ *
+ *   UTC 5 (HH:MM)   CALL 10   GRID 4   COUNTRY 11   SNR 3   DRF 3
+ *   HZ 6 (1416.3)   PWR 3     KM 5 (18897)          BRG 3
+ *   = 53 + 9 single spaces = 62. Full. Nothing more fits.
+ *
+ * Consequences worth knowing before editing this:
+ *  - GRID is 4 because WSPR_SPOT_GRID_MAX is 5. A 6-char grid cannot arrive.
+ *  - KM is 5 because the antipode is ~20000 km.
+ *  - DRIFT is headed DRF: the word is 5 characters and the data is 3, and
+ *    since ONE format string serves header and rows the column would have to
+ *    be 5 to hold the title. Abbreviating the title is cheaper than two wasted
+ *    columns on every row.
+ *  - CALL gets 10 - the struct's whole capacity - because a truncated
+ *    CALLSIGN is a wrong identity, which this project does not print. COUNTRY
+ *    is allowed to fall back instead of truncating; see country_field().
+ *  - The UTC column is blank on all but the first row of a cycle. That still
+ *    costs 6 characters, and it is worth it: it replaced a standalone
+ *    timestamp line AND a blank line per group, so a 3-spot cycle went from
+ *    5 lines to 3. */
+#define ROW_FMT "%-5s %-10s %-4s %-11s %3s %3s %6s %3s %5s %3s"
 
-static void fmt_row(char *out, size_t n, const wspr_spot_t *sp)
+/* Spelled out if it fits, else the DXCC alpha-3. NEVER truncated: "United
+ * Stat" is not a country and a clipped name reads as a bug, while USA is
+ * simply the shorter true answer. The full name comes from the callsign via
+ * dxcc_lookup(), the same source the web panel uses, so the two screens
+ * cannot disagree. */
+#define COUNTRY_W 11
+static const char *country_field(const wspr_spot_t *sp)
+{
+    const char *full = dxcc_lookup(sp->call);
+    if (full && full[0] && strlen(full) <= COUNTRY_W) return full;
+    return sp->cty[0] ? sp->cty : "--";
+}
+
+static void fmt_row(char *out, size_t n, const wspr_spot_t *sp, const char *utc)
 {
     char snr[16], drift[16], hz[16], pwr[16], km[20], brg[16];
 
@@ -173,13 +213,13 @@ static void fmt_row(char *out, size_t n, const wspr_spot_t *sp)
     if (sp->bearing_deg < 0) snprintf(brg, sizeof(brg), "--");
     else snprintf(brg, sizeof(brg), "%d", (int)sp->bearing_deg);
 
-    snprintf(out, n, ROW_FMT, sp->call, sp->grid,
-             sp->cty[0] ? sp->cty : "--", snr, drift, hz, pwr, km, brg);
+    snprintf(out, n, ROW_FMT, utc, sp->call, sp->grid,
+             country_field(sp), snr, drift, hz, pwr, km, brg);
 }
 
 static void fmt_header(char *out, size_t n)
 {
-    snprintf(out, n, ROW_FMT, "CALL", "GRID", "CTY", "SNR", "DRIFT",
+    snprintf(out, n, ROW_FMT, "UTC", "CALL", "GRID", "COUNTRY", "SNR", "DRF",
              "HZ", "PWR", "KM", "BRG");
 }
 
@@ -188,7 +228,9 @@ static void cycle_label(char *out, size_t n, int64_t utc)
     time_t t = (time_t)utc;
     struct tm tmv;
     gmtime_r(&t, &tmv);
-    snprintf(out, n, "%02d:%02d UTC", tmv.tm_hour, tmv.tm_min);
+    /* HH:MM only - 5 characters, which is the column width. The word UTC is
+     * in the column HEADER now, so repeating it on every group wasted 4. */
+    snprintf(out, n, "%02d:%02d", tmv.tm_hour, tmv.tm_min);
 }
 
 void wspr_screen_view_init(lv_obj_t *parent)
@@ -436,6 +478,11 @@ lv_obj_t *wspr_screen_view_get_container(void) { return s_container; }
 static inline uint16_t wf_rgb565(uint8_t v)
 {
     uint8_t r, g, b;
+    /* Cycle-boundary marker: a light green (144,238,144) the signal ramp cannot
+     * produce, because wspr_rx.c clamps real intensities to 254. Deliberately
+     * NOT a value picked out of the ramp - a strong signal passes through green
+     * on its way to red, so a palette green would still be ambiguous. */
+    if (v == WSPR_WF_MARK) return (uint16_t)(((144 >> 3) << 11) | ((238 >> 2) << 5) | (144 >> 3));
     if (v < 64)        { r = 0; g = 0;                      b = (uint8_t)(v * 3); }
     else if (v < 128)  { r = 0; g = (uint8_t)((v - 64) * 4); b = 255; }
     else if (v < 192)  { r = (uint8_t)((v - 128) * 4); g = 255; b = (uint8_t)(255 - (v - 128) * 4); }
@@ -593,15 +640,17 @@ void wspr_screen_view_tick(void)
     size_t off = 0;
     int64_t last_cycle = 0;
     for (int i = 0; i < got && off < sizeof(buf) - 96; i++) {
+        /* The cycle time is the row FIRST COLUMN, printed once per cycle and
+         * blank for the rest. It used to be a line of its own preceded by a
+         * blank line - two lines per cycle to carry five characters, which on
+         * a pane this size was most of the log. A 3-spot cycle went 5 -> 3. */
+        char utc[8] = "";
         if (snap[i].cycle_utc != last_cycle) {
             last_cycle = snap[i].cycle_utc;
-            char cl[24];
-            cycle_label(cl, sizeof(cl), last_cycle);
-            off += snprintf(buf + off, sizeof(buf) - off, "%s%s\n",
-                            i ? "\n" : "", cl);
+            cycle_label(utc, sizeof(utc), last_cycle);
         }
         char row[160];
-        fmt_row(row, sizeof(row), &snap[i]);
+        fmt_row(row, sizeof(row), &snap[i], utc);
         off += snprintf(buf + off, sizeof(buf) - off, "%s\n", row);
     }
     lv_label_set_text(s_lbl_rows, buf);

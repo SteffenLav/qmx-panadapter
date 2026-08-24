@@ -8,6 +8,9 @@
 #include <time.h>
 #include <sys/time.h>
 #include <stdarg.h>
+#include <sys/stat.h>
+#include <errno.h>
+#include <unistd.h>
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -27,9 +30,11 @@
 #include "wspr_sim.h"
 #include "wspr_tx.h"
 #include "esp_random.h"
-#include "storage/settings.h"
 #include "wspr_spots.h"
 #include "wspr_rx.h"
+#include "wspr_wav.h"
+#include "storage/sd_archive.h"
+#include "net/webserver_ws.h"
 
 static const char *TAG = "wspr_rx";
 
@@ -168,7 +173,9 @@ static uint8_t wf_byte(float magv, float floorv)
     float t = (db - WF_LO_DB) / (WF_HI_DB - WF_LO_DB);
     if (t < 0) t = 0;
     if (t > 1) t = 1;
-    return (uint8_t)(t * 255.0f);
+    /* 254, not 255: 255 is reserved for the cycle-boundary marker so the view
+     * can colour it distinctly. See WSPR_WF_MARK. */
+    return (uint8_t)(t * 254.0f);
 }
 
 /* Ring index this cycle's row r occupies. Rows arrive in order, so a cycle
@@ -396,6 +403,95 @@ bool wspr_rx_get_waterfall(uint8_t *out)
 }
 
 uint32_t wspr_rx_waterfall_seq(void) { return s_wf_seq; }
+
+/* ---- capture dump ------------------------------------------------------ */
+
+/* Armed count lives in NVS, not in a volatile, because the dump can only
+ * SUCCEED on a boot with WiFi off (see settings.h wspr_dump_cycles) and so has
+ * to survive the reboot that makes it possible. */
+int wspr_rx_request_dump(int cycles)
+{
+    if (cycles < 0) return 0;
+    if (cycles > WSPR_DUMP_MAX_CYCLES) cycles = WSPR_DUMP_MAX_CYCLES;
+    settings_set_wspr_dump_cycles((uint8_t)cycles);
+    ESP_LOGW(TAG, "dump: armed for %d cycle(s), ~%d MB%s", cycles,
+             (int)((size_t)cycles * CAP_SAMPLES * 2 / (1024 * 1024)),
+             sd_archive_is_mounted() ? ""
+                 : " - NO CARD MOUNTED: reboot with WiFi off, or nothing is written");
+    return cycles;
+}
+
+int wspr_rx_dump_pending(void)
+{
+    qmx_settings_t st;
+    settings_load_all(&st);
+    return st.wspr_dump_cycles;
+}
+
+/* Write one captured window as a 12 kHz mono 16-bit WAV under
+ * /sdcard/qmx-panadapter/wspr/.
+ *
+ * ⛔ SD WRITES AND WIFI ARE THE WEDGE-PRONE COMBINATION on this board - the SD
+ * path and the C6's SDIO link contend, and CLAUDE.md records three separate
+ * field failures from it. So this takes sd_archive_lock() and quiets both the
+ * WS stream and the DSP transfers for its duration, exactly as the reader's
+ * offline save, the log download and the QRZ upload already do. 2.88 MB is a
+ * far bigger burst than any of those, which makes it more important here, not
+ * less.
+ *
+ * ⛔ fsync is MANDATORY, not tidiness: fflush leaves the bytes in FatFs
+ * buffers, so a card pulled - or a power cut, which happened once already
+ * today - reads the file back EMPTY. That bit the SD diag log once and the
+ * rule is in CLAUDE.md.
+ *
+ * Called from the slot loop AFTER the int16 conversion and BEFORE the decode,
+ * so the file holds byte-for-byte what the decoder is about to be given. A
+ * dump taken from anywhere else would be answering a different question. */
+static void dump_window(const int16_t *pcm, uint32_t nsamples, int64_t cycle_utc)
+{
+    char name[32];
+    if (wspr_wav_filename(name, sizeof(name), cycle_utc) == 0) return;
+
+    char path[96];
+    snprintf(path, sizeof(path), "/sdcard/qmx-panadapter/wspr/%s", name);
+
+    if (!sd_archive_lock(5000)) {
+        ESP_LOGW(TAG, "dump: SD busy - skipping %s", name);
+        return;
+    }
+    webserver_ws_set_paused(true);
+    dsp_set_transfer_quiet(true);
+
+    int64_t t0 = esp_timer_get_time();
+    bool ok = false;
+    mkdir("/sdcard/qmx-panadapter/wspr", 0777);   /* EEXIST is fine */
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        ESP_LOGE(TAG, "dump: cannot open %s (errno %d)", path, errno);
+    } else {
+        uint8_t hdr[WSPR_WAV_HDR_BYTES];
+        size_t hn = wspr_wav_header(hdr, nsamples, (uint32_t)WSPR_SAMPLE_RATE_HZ);
+        ok = (hn == sizeof(hdr)) && fwrite(hdr, 1, hn, f) == hn;
+        /* Written in chunks so one 2.88 MB fwrite cannot sit on the card for
+         * seconds at a time with the lock held. */
+        const uint32_t CH = 32768;
+        for (uint32_t off = 0; ok && off < nsamples; off += CH) {
+            uint32_t cnt = (nsamples - off) < CH ? (nsamples - off) : CH;
+            ok = fwrite(pcm + off, sizeof(int16_t), cnt, f) == cnt;
+        }
+        if (ok) { fflush(f); ok = (fsync(fileno(f)) == 0); }
+        fclose(f);
+    }
+
+    dsp_set_transfer_quiet(false);
+    webserver_ws_set_paused(false);
+    sd_archive_unlock();
+
+    int ms = (int)((esp_timer_get_time() - t0) / 1000);
+    if (ok) ESP_LOGW(TAG, "dump: wrote %s (%u KB, %d ms), %d cycle(s) left",
+                     name, (unsigned)(nsamples * 2 / 1024), ms, wspr_rx_dump_pending() - 1);
+    else    ESP_LOGE(TAG, "dump: FAILED writing %s after %d ms", name, ms);
+}
 
 static void wspr_rx_task(void *arg)
 {
@@ -634,6 +730,24 @@ static void wspr_rx_task(void *arg)
          * so the ~8 s post-capture pause the old whole-window build cost is
          * gone - the picture was already there. */
         wf_finalise();
+
+        /* Dump BEFORE the decode, so the file is byte-for-byte the audio the
+         * decoder is about to be handed. Dumping after would let a future
+         * in-place decode step change the samples and quietly answer a
+         * different question than the one being asked. */
+        {
+            qmx_settings_t dst;
+            settings_load_all(&dst);
+            if (dst.wspr_dump_cycles > 0 && sd_archive_is_mounted()) {
+                dump_window(pcm, CAP_SAMPLES, cycle_utc);
+                /* Decrement only after a write ATTEMPT, so a card that fails
+                 * mid-run cannot spin forever on the same cycle - and only
+                 * when a card is present, so an armed request survives until
+                 * there is somewhere to write it. */
+                settings_set_wspr_dump_cycles((uint8_t)(dst.wspr_dump_cycles - 1));
+            }
+        }
+
         /* The carpet stops advancing from here until the next capture opens -
          * ~68 s in which the receiver is genuinely DEAF, not merely idle. Mark
          * it, or a stalled carpet is indistinguishable from a hung display. */

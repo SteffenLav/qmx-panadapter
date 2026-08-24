@@ -1138,6 +1138,31 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         vTaskDelay(pdMS_TO_TICKS(150));
         ui_power_off_safely();
         return ESP_OK;
+    } else if (action && strcmp(action, "wspr_dump") == 0) {
+        /* Dev action: write the next N captured windows to the SD card as WAV,
+         * so the same audio can be run through real wsprd on a PC. That is the
+         * ONLY way to tell a short sensitivity floor from a trace that was
+         * never WSPR - the waterfall saturates anything 16 dB over the median
+         * and draws QRM and a strong signal identically.
+         * {"action":"wspr_dump","cycles":3}
+         * Replies with what was actually armed, because 0 means "no card" and
+         * that must not look like success. */
+        cJSON *jc = cJSON_GetObjectItem(root, "cycles");
+        int want = cJSON_IsNumber(jc) ? jc->valueint : 1;
+        int armed = wspr_rx_request_dump(want);
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        /* The armed count is IN THE BODY and 0 is reported as ok:false. This
+         * endpoint answers "unknown action" with HTTP 200 (see CLAUDE.md), so
+         * a status code proves nothing - and "no SD card" must not read as a
+         * successful arm, or an hour later the card is simply empty. */
+        char body[96];
+        snprintf(body, sizeof(body),
+                 armed > 0 ? "{\"ok\":true,\"dump_armed\":%d}"
+                           : "{\"ok\":false,\"dump_armed\":%d,"
+                             "\"error\":\"no SD card mounted\"}", armed);
+        httpd_resp_sendstr(req, body);
+        return ESP_OK;
     } else if (action && strcmp(action, "wspr_guards") == 0) {
         /* Dev action: choose which false-decode guard ACTS. Both are measured
          * regardless, so this exists to compare them on real signals without
