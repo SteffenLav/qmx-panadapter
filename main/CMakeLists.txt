@@ -99,6 +99,7 @@ idf_component_register(
         "wspr_tx.c"
         "wspr_selftest.c"
         "wspr_spots.c"
+        "wspr_rx.c"
         "adif/adif_log.c"
         "adif/qrz_upload.c"
         "adif/eqsl_upload.c"

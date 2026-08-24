@@ -975,7 +975,10 @@ static void fft_task(void *arg)
         // the first, on-time slot. The gap audio now lives in the ring and
         // dsp_ft8_capture_begin() backfills it. dsp_ft8_capture_progress()
         // (consumer task) copies the ring into the caller's dst.
-        if (ui_mode_get() == UI_MODE_FT8) {
+        // WSPR needs this identical chain - IF to DC, /4 to 12 kHz, pre-ring -
+        // and differs only in window length and what decodes it, so the branch
+        // is shared rather than duplicated. See ui_mode_uses_iq_capture().
+        if (ui_mode_uses_iq_capture(ui_mode_get())) {
             // FT8-mode entry edge: reset the decimation FIR + ring so a stale
             // delay line / old sample counter can't leak into slot 0.
             if (!s_ft8_in_mode) {

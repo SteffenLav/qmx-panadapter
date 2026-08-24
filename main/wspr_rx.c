@@ -1,0 +1,288 @@
+/* WSPR receive slot loop. See wspr_rx.h for what it does and what it does not
+ * do (it decodes every other cycle - read that note before "fixing" it). */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <time.h>
+#include <sys/time.h>
+#include <stdarg.h>
+
+#include "esp_log.h"
+#include "esp_timer.h"
+#include "esp_heap_caps.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
+#include "dsp.h"
+#include "ui_mode.h"
+#include "util/psram_task.h"
+#include "util/maidenhead.h"
+#include "util/dxcc.h"
+#include "storage/settings.h"
+#include "wspr_decode.h"
+#include "wspr_spots.h"
+#include "wspr_rx.h"
+
+static const char *TAG = "wspr_rx";
+
+#define WSPR_CYCLE_MS     120000
+#define CAP_SAMPLES       ((uint32_t)(120 * (uint32_t)WSPR_SAMPLE_RATE_HZ))  /* 1,440,000 */
+#define WSPR_MAX_CANDS    8
+
+/* The audio window sits between 1400 and 1600 Hz for a standard WSPR dial, but
+ * the search is widened a little either side: the operator's dial calibration,
+ * the QMX's own, and a transmitter's offset all move real signals about, and a
+ * candidate found slightly outside the nominal window still decodes. */
+#define SEARCH_LO_HZ      1350.0
+#define SEARCH_HI_HZ      1650.0
+
+static volatile bool s_run;
+static TaskHandle_t  s_task;
+static char          s_status[48] = "idle";
+
+static void set_status(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(s_status, sizeof(s_status), fmt, ap);
+    va_end(ap);
+}
+
+const char *wspr_rx_status(void) { return s_status; }
+bool wspr_rx_running(void)       { return s_run; }
+
+/* Same conversion the spot store's other producer does. Distance, bearing and
+ * country come from the device's own helpers so this list and the FT8 list
+ * cannot disagree. */
+static void file_spot(const wspr_decode_result_t *r, int64_t cycle_utc, int snr_db)
+{
+    wspr_spot_t sp;
+    memset(&sp, 0, sizeof(sp));
+    snprintf(sp.call, sizeof(sp.call), "%s", r->callsign);
+    snprintf(sp.grid, sizeof(sp.grid), "%s", r->grid);
+    sp.cycle_utc = cycle_utc;
+    sp.freq_hz   = (float)r->freq_hz;
+    sp.power_dbm = (int16_t)r->power_dbm;
+    sp.snr_db    = (int16_t)snr_db;          /* WSPR_SNR_UNKNOWN until measured */
+    sp.drift_hz  = WSPR_DRIFT_UNKNOWN;       /* likewise - 0 Hz is a REAL value */
+    sp.km = -1; sp.bearing_deg = -1;
+
+    const char *cty = dxcc_lookup_alpha3(r->callsign);
+    if (cty) snprintf(sp.cty, sizeof(sp.cty), "%s", cty);
+
+    qmx_settings_t qs;
+    settings_load_all(&qs);
+    double mlat, mlon, tlat, tlon;
+    if (qs.my_grid[0] && maidenhead_to_latlon(qs.my_grid, &mlat, &mlon) &&
+        maidenhead_to_latlon(sp.grid, &tlat, &tlon)) {
+        sp.km          = (int32_t)haversine_km(mlat, mlon, tlat, tlon);
+        sp.bearing_deg = (int16_t)bearing_deg(mlat, mlon, tlat, tlon);
+    }
+    wspr_spots_add(&sp);
+}
+
+static int64_t now_ms(void)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
+
+static void wspr_rx_task(void *arg)
+{
+    (void)arg;
+
+    /* Two buffers, allocated once and reused for the life of the loop.
+     *
+     * float capture (5.76 MB) + int16 for the decoder (2.88 MB) = 8.6 MB of the
+     * ~14.7 MB of free PSRAM. Allocating per cycle instead would risk failing on
+     * a fragmented heap 20 minutes in, which is exactly the kind of fault that
+     * shows up as "it stopped decoding overnight" and is miserable to chase. */
+    float   *cap = heap_caps_malloc((size_t)CAP_SAMPLES * sizeof(float),
+                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    int16_t *pcm = heap_caps_malloc((size_t)CAP_SAMPLES * sizeof(int16_t),
+                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!cap || !pcm) {
+        ESP_LOGE(TAG, "could not allocate the capture buffers (%u KB + %u KB)",
+                 (unsigned)(CAP_SAMPLES * sizeof(float) / 1024),
+                 (unsigned)(CAP_SAMPLES * sizeof(int16_t) / 1024));
+        free(cap); free(pcm);
+        set_status("out of memory");
+        s_run = false; s_task = NULL;
+        vTaskDelete(NULL);
+        return;
+    }
+    ESP_LOGI(TAG, "slot loop up: %u KB capture + %u KB decode, searching %.0f-%.0f Hz",
+             (unsigned)(CAP_SAMPLES * sizeof(float) / 1024),
+             (unsigned)(CAP_SAMPLES * sizeof(int16_t) / 1024),
+             SEARCH_LO_HZ, SEARCH_HI_HZ);
+
+    while (s_run) {
+        /* ---- wait for the next even UTC minute ---- */
+        int64_t t = now_ms();
+        int64_t into = t % WSPR_CYCLE_MS;
+        int64_t wait = (into == 0) ? 0 : (WSPR_CYCLE_MS - into);
+        set_status("waiting %llds", (long long)(wait / 1000));
+        while (s_run && wait > 0) {
+            int64_t chunk = wait > 500 ? 500 : wait;   /* stay responsive to stop */
+            vTaskDelay(pdMS_TO_TICKS((uint32_t)chunk));
+            t = now_ms();
+            into = t % WSPR_CYCLE_MS;
+            wait = (into == 0) ? 0 : (WSPR_CYCLE_MS - into);
+            if (wait > WSPR_CYCLE_MS - 100) break;     /* boundary just passed */
+        }
+        if (!s_run) break;
+
+        int64_t cycle_utc = (now_ms() / WSPR_CYCLE_MS) * (WSPR_CYCLE_MS / 1000);
+
+        /* ---- capture the window ----
+         * backfill covers however late we armed: the pre-ring is already being
+         * filled continuously by the DSP in this mode, so the window is anchored
+         * to the boundary rather than to when this task got a slice. Same
+         * mechanism, and same reason, as the FT8 boundary-discard fix. */
+        uint32_t start_off_ms = (uint32_t)(now_ms() % WSPR_CYCLE_MS);
+        uint32_t backfill     = start_off_ms * (uint32_t)(WSPR_SAMPLE_RATE_HZ / 1000);
+        esp_err_t err = dsp_ft8_capture_begin(cap, CAP_SAMPLES, backfill);
+        if (err != ESP_OK) {
+            ESP_LOGW(TAG, "capture_begin failed (%s) - skipping this cycle",
+                     esp_err_to_name(err));
+            set_status("capture failed");
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            continue;
+        }
+        ESP_LOGI(TAG, "cycle %lld: capturing (armed +%u ms)",
+                 (long long)cycle_utc, (unsigned)start_off_ms);
+
+        while (s_run) {
+            int got = dsp_ft8_capture_progress();
+            if (got >= (int)CAP_SAMPLES) break;
+            int64_t elapsed = now_ms() % WSPR_CYCLE_MS;
+            if (elapsed > WSPR_CYCLE_MS - 500 && got > 0) break;  /* boundary */
+            set_status("capturing %d/120 s", got / (int)WSPR_SAMPLE_RATE_HZ);
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+        dsp_ft8_capture_finish(2000);
+        if (!s_run) break;
+
+        /* ---- float -> int16 for the decoder ----
+         * The capture pipeline produces floats; the decoder takes int16, the
+         * format every WSPR reference recording uses and the one the host
+         * harnesses are validated against. Converting is cheap next to the
+         * decode and keeps the decoder byte-identical to the tested one. */
+        /* ---- float -> int16, NORMALISED ----
+         *
+         * MEASURED, and it overturned the obvious assumption. The capture
+         * pipeline hands back floats built from raw int16 IQ, so a straight cast
+         * looked right - but the real levels off the air are
+         * min=-57.5 max=22.2 rms=3.7. Casting those to int16 gives the decoder
+         * about SIX bits of a sixteen-bit format and silently throws ~9 bits of
+         * dynamic range away. It still decoded a strong Australian beacon, which
+         * is exactly why this would have gone unnoticed: the failure is not "no
+         * decodes", it is "only the loud ones".
+         *
+         * A per-capture gain is the correct fix rather than a fudge: every stage
+         * downstream - the comb search, the sync correlation, the Fano metric -
+         * works on RELATIVE power within the capture, so scaling the whole window
+         * changes nothing except how much of the int16 range is used.
+         *
+         * Guarded against silence: a capture of near-nothing must not be
+         * amplified into full-scale noise, which would manufacture candidates
+         * out of the noise floor. */
+        float peak = 0.0f;
+        for (uint32_t i = 0; i < CAP_SAMPLES; i++) {
+            float a = cap[i] < 0 ? -cap[i] : cap[i];
+            if (a > peak) peak = a;
+        }
+        float gain = 1.0f;
+        if (peak > 1e-3f) {
+            gain = 28000.0f / peak;          /* headroom below full scale */
+            if (gain > 4096.0f) gain = 4096.0f;   /* silence guard */
+            if (gain < 1.0f)    gain = 1.0f;      /* already large: don't attenuate */
+        }
+        double sumsq = 0;
+        for (uint32_t i = 0; i < CAP_SAMPLES; i++) {
+            float v = cap[i] * gain;
+            if (v >  32767.0f) v =  32767.0f;
+            if (v < -32768.0f) v = -32768.0f;
+            sumsq += (double)v * v;
+            pcm[i] = (int16_t)v;
+        }
+        ESP_LOGW(TAG, "capture level: peak=%.1f gain=%.0fx -> rms=%.0f of 32768",
+                 peak, gain, sqrt(sumsq / CAP_SAMPLES));
+
+        /* ---- decode ---- */
+        int64_t t0 = esp_timer_get_time();
+        wspr_freq_candidate_t cands[WSPR_MAX_CANDS];
+        int ncand = wspr_find_candidates(pcm, CAP_SAMPLES, SEARCH_LO_HZ, SEARCH_HI_HZ,
+                                          cands, WSPR_MAX_CANDS);
+        int decoded = 0;
+        for (int i = 0; i < ncand && s_run; i++) {
+            set_status("decoding %d/%d", i + 1, ncand);
+            wspr_decode_result_t r;
+            wspr_decode_candidate(pcm, CAP_SAMPLES, cands[i].freq_hz, &r);
+            /* Log EVERY candidate, not just the ones that decode. A silent
+             * "0 decodes" cannot distinguish "nothing was on the air" from
+             * "the search looked in the wrong place" from "the audio was
+             * wrong" - and those need completely different fixes. */
+            ESP_LOGI(TAG, "  cand %d: f=%.2f Hz score=%.3g cycles=%u %s",
+                     i, cands[i].freq_hz, (double)cands[i].comb_score,
+                     r.cycles, r.ok ? "DECODED" : "rejected");
+            if (!r.ok) continue;
+            decoded++;
+            ESP_LOGW(TAG, "  DECODED '%s' '%s' %d dBm  f=%.2f Hz dt=%.2fs cycles=%u",
+                     r.callsign, r.grid, r.power_dbm, r.freq_hz,
+                     r.best_dt_samples / WSPR_SAMPLE_RATE_HZ, r.cycles);
+            file_spot(&r, cycle_utc, WSPR_SNR_UNKNOWN);
+        }
+        int64_t dec_ms = (esp_timer_get_time() - t0) / 1000;
+        ESP_LOGW(TAG, "cycle %lld: %d candidate(s), %d decode(s), %lld ms",
+                 (long long)cycle_utc, ncand, decoded, (long long)dec_ms);
+        set_status("%d decoded", decoded);
+    }
+
+    free(cap);
+    free(pcm);
+    set_status("idle");
+    ESP_LOGI(TAG, "slot loop stopped");
+    s_task = NULL;
+    vTaskDelete(NULL);
+}
+
+bool wspr_rx_start(void)
+{
+    if (s_run) return true;
+
+    /* Claimed BEFORE the task exists, and cleared if creation fails - #199: a
+     * flag set as the task's first statement means "has begun running" while
+     * every reader needs "exists", and on this board the gap between the two is
+     * long enough to matter. */
+    s_run = true;
+    ui_mode_set(UI_MODE_WSPR);
+
+    /* 32 KB and in PSRAM: wspr_decode_candidate() alone reserves a flat 16 KB
+     * frame in its prologue, the self-test measured ~27.5 KB of high-water, and
+     * xTaskCreate() would take that from the ~40 KB of free INTERNAL RAM. This
+     * is background work on a two-minute cadence, which is what
+     * psram_task_create() is for. */
+    s_task = psram_task_create(wspr_rx_task, "wspr_rx", 32768, NULL,
+                               tskIDLE_PRIORITY + 1, tskNO_AFFINITY);
+    if (!s_task) {
+        ESP_LOGE(TAG, "could not create the slot-loop task");
+        s_run = false;
+        ui_mode_set(UI_MODE_PANADAPTER);
+        return false;
+    }
+    return true;
+}
+
+void wspr_rx_stop(void)
+{
+    if (!s_run) return;
+    s_run = false;
+    /* The task frees its own buffers and clears s_task; the mode goes back here
+     * so the panadapter starts drawing again immediately rather than waiting for
+     * a capture in flight to finish. */
+    ui_mode_set(UI_MODE_PANADAPTER);
+}

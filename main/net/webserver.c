@@ -19,6 +19,7 @@
 #include "wspr_tx.h"          // the dev "wspr_tx_test" action
 #include "wspr_selftest.h"    // the dev "wspr_selftest" action
 #include "wspr_spots.h"       // GET /api/wspr
+#include "wspr_rx.h"         // the RX slot loop
 #include "ft8_qso.h"          // ft8_qso_get_state / get_target / get_cq_calls_sent
 #include "ft8_status.h"       // ft8_status_get
 #include "dsp.h"              // dsp_get_peak_dbm_around_vfo
@@ -1132,6 +1133,21 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // UI element references this — it's meant to be fired from the browser
         // console/bookmarklet on the dev's PC.
         ui_resource_monitor_toggle();
+    } else if (action && strcmp(action, "wspr_rx") == 0) {
+        // Start/stop the WSPR receive slot loop. Entering it sets UI_MODE_WSPR,
+        // which diverts the DSP's IQ chain into the capture pre-ring - so the
+        // panadapter's spectrum and waterfall freeze while it runs. There is no
+        // Tab5 WSPR screen yet; this is the way in.
+        cJSON *on = cJSON_GetObjectItem(root, "on");
+        bool want = !cJSON_IsBool(on) || cJSON_IsTrue(on);
+        if (want) wspr_rx_start(); else wspr_rx_stop();
+        char out[128];
+        snprintf(out, sizeof(out), "{\"ok\":true,\"running\":%s,\"status\":\"%s\"}",
+                 wspr_rx_running() ? "true" : "false", wspr_rx_status());
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, out);
+        return ESP_OK;
     } else if (action && strcmp(action, "wspr_selftest") == 0) {
         // Developer probe: synthesize a known WSPR transmission, decode it with
         // the real decoder, and report per-stage milliseconds. Needs no radio,
@@ -2895,7 +2911,8 @@ static esp_err_t wspr_handler(httpd_req_t *req)
     cJSON *root = cJSON_CreateObject();
     cJSON_AddNumberToObject(root, "spots_held",   total);
     cJSON_AddNumberToObject(root, "unique_calls", wspr_spots_unique_calls());
-    cJSON_AddBoolToObject  (root, "rx_live",      false); /* until the slot loop exists */
+    cJSON_AddBoolToObject  (root, "rx_live",      wspr_rx_running());
+    cJSON_AddStringToObject(root, "rx_status",    wspr_rx_status());
 
     cJSON *arr = cJSON_AddArrayToObject(root, "spots");
     for (int i = 0; i < n; i++) {

@@ -78,7 +78,19 @@ static void render_task(void *arg)
         // the FT8 top bar — the v0.15.7 fix exists precisely to keep it
         // running there). The web UI is unaffected: ws_push_task reads
         // dsp_get_spectrum() itself, not this pipeline.
-        bool pan_visible = (ui_mode_get() != UI_MODE_FT8);
+        // WSPR is excluded for the same reason FT8 is, and it matters more
+        // there: a WSPR decode needs ~64 s of CPU inside a 120 s cycle, and the
+        // Tier 1 render gate is what freed core 0 for FT8 in the first place
+        // (~14-35 % idle -> ~70-80 %).
+        //
+        // ⚠ Note what this does NOT mean. dsp.c skips the panadapter FFT while a
+        // CAPTURE IS ARMED, not for the whole mode - so the spectrum is still
+        // being computed in the gaps between WSPR windows, and the WEB UI still
+        // shows it moving, because ws_push_task reads dsp_get_spectrum() on its
+        // own path rather than through this one. Measured, after I assumed the
+        // opposite: signal_dbm changed -96.7 -> -94.7 over 6 s with the slot loop
+        // running. This gate is a Tab5-render CPU saving, nothing more.
+        bool pan_visible = !ui_mode_uses_iq_capture(ui_mode_get());
         bool have_spectrum = false;
 
         if (pan_visible) {
