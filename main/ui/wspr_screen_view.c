@@ -14,6 +14,13 @@
 #include "wspr_rx.h"
 #include "cat.h"
 
+/* JetBrains Mono, already compiled in for the QMX terminal page (#147). The
+ * spot list is space-padded columns of short tokens, and in a PROPORTIONAL font
+ * those do not line up - the header would sit visibly off its own rows. Reusing
+ * the font that is already in the binary costs nothing and is the difference
+ * between a table and a mess. */
+LV_FONT_DECLARE(qmx_mono_25);
+
 /* Duplicated from ui.c / ft8_screen_view.c, which already each carry their own
  * copy. Following the existing pattern rather than introducing a shared header
  * as a side effect of adding a page - but all three must move together. */
@@ -25,12 +32,13 @@
 #define MID_W   1280
 #define LEFT_W  320
 
-/* Rows the list can show at once. The pane is MID_H tall and a row is 26 px, so
+/* Rows the list can show at once. The pane is MID_H tall and a mono-25 row plus
+ * line spacing is ~31 px, so 18 is a screenful including the cycle headers -
  * this is a screenful with the header - NOT the ring's capacity. Deliberately
  * bounded: the snapshot is copied onto the caller's buffer and this runs on
  * taskLVGL, where CLAUDE.md keeps a list of crashes caused by kB-scale locals
  * (the v0.20.1 pounce crash was an 11 KB array on exactly this task). */
-#define VIEW_ROWS 20
+#define VIEW_ROWS 18
 
 static lv_obj_t *s_container;
 static lv_obj_t *s_lbl_title;
@@ -168,7 +176,7 @@ void wspr_screen_view_init(lv_obj_t *parent)
     /* ---------------- right pane: the log ---------------- */
     lv_obj_t *hdr = lv_label_create(s_container);
     lv_label_set_text(hdr, HEADER);
-    lv_obj_set_style_text_font(hdr, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(hdr, &qmx_mono_25, 0);
     lv_obj_set_style_text_color(hdr, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_obj_set_pos(hdr, LEFT_W + 8, 10);
 
@@ -190,9 +198,9 @@ void wspr_screen_view_init(lv_obj_t *parent)
      * repeatedly run into. */
     s_lbl_rows = lv_label_create(s_list);
     lv_label_set_text(s_lbl_rows, "Listening...");
-    lv_obj_set_style_text_font(s_lbl_rows, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(s_lbl_rows, &qmx_mono_25, 0);
     lv_obj_set_style_text_color(s_lbl_rows, lv_color_hex(UI_COLOR_TEXT), 0);
-    lv_obj_set_style_text_line_space(s_lbl_rows, 6, 0);
+    lv_obj_set_style_text_line_space(s_lbl_rows, 2, 0);
     lv_obj_set_pos(s_lbl_rows, 0, 0);
 }
 
