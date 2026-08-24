@@ -210,6 +210,30 @@ disconnected every cycle and `/ss.bmp` truncated at 135 KB of 1.84 MB. Writing
 RGB565 straight into the canvas buffer plus one invalidate does the same work
 without holding the task.
 
+### OPEN: the waterfall's top-of-scale is set by the loudest thing present
+
+Demonstrated 2026-08-24 against a window with a KNOWN decode (YU1DGH/KN03 at
+1456.97 Hz), which is the only way to judge this - an empty window looks the
+same whether the scaling is right or wrong.
+
+In that frame the actual WSPR trace is a **faint** vertical streak at 1457 Hz,
+while the brightest features by far are **horizontal** streaks around
+1573-1630 Hz. Horizontal means broadband at one instant, i.e. local
+interference, not WSPR - a WSPR transmission is a constant frequency for 110 s
+and therefore vertical.
+
+The scaling takes the capture's 99.5th percentile as full-scale, so those
+interference bursts claim the top of the colour ramp and squeeze a genuine
++7 dB signal down to about 14 % brightness. **The loudest thing in the capture
+decides how visible everything else is**, which is the wrong contract for a
+display whose whole job is showing weak signals.
+
+Fix: a FIXED span, roughly +4 dB (black) to +16 dB (saturated) above the
+capture's median. WSPR lives at +7 to +22 dB in a 1.4648 Hz bin, so weak traces
+land in the middle of the ramp and interference simply clips - which is what
+clipping is for. Not applied yet only because it needs a reflash, and reflashing
+wedges the QMX (#74) and stops reception until someone can power-cycle it.
+
 ## Build order
 
 1. `wspr_spots.c` - the spot store (mutex-protected, aged, sortable), modelled
