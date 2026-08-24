@@ -202,3 +202,56 @@ that needs neither radio nor antenna sat blocked behind that.
 Now a dry-run build logs a warning and arms anyway when `cat_is_ready()` is
 false. **A live build keeps the check unconditionally** - there it is the real
 thing, the one that stops a burst going out in the wrong mode.
+
+## RX ON THE AIR — 2026-08-24, VK3QN in Australia
+
+The receive slot loop (`main/wspr_rx.c`) captures the even-minute window from
+the live IQ stream and decodes it. First over-the-air reception:
+
+```
+DECODED 'VK3QN' 'QF22' 37 dBm  f=1516.85 Hz dt=0.47s cycles=104   (05:30 window)
+DECODED 'VK3QN' 'QF22' 37 dBm  f=1517.03 Hz dt=1.09s cycles=94    (05:40 window)
+```
+
+QF22 is Victoria, Australia — **15,940 km at 81°**, which the device computed
+from the operator's own grid, and filed straight through the spot store to
+`/api/wspr` and the browser panel. Nothing synthetic anywhere in that chain.
+
+**How it hooks in**: the DSP's FT8 capture chain (+12 kHz IF to DC, /4 to 12 kHz
+mono, continuous pre-ring) is exactly what WSPR needs, so `UI_MODE_WSPR` joins
+FT8 in one shared predicate rather than duplicating it. It takes **3**, not 2 —
+the CW branch already owns 2.
+
+⚠ **It decodes EVERY OTHER cycle, by construction.** A cycle is 120 s, the
+capture fills all of it and the decode measures ~66 s, so one sequential task is
+still busy when the next window opens. The fix is a second buffer and the
+ping-pong `ft8_test.c` already uses. Left undone deliberately: a receiver that
+works at half rate beats a concurrent one that is wrong.
+
+### Two of my assumptions that measurement overturned
+
+Recorded because both were confident, plausible, and wrong.
+
+**"The spectrum freezes in WSPR mode."** Only half true, and the halves matter.
+`dsp.c` skips the panadapter FFT while a CAPTURE IS ARMED, not for the whole
+mode — and the web reads `dsp_get_spectrum()` on its own path regardless, so the
+browser keeps moving throughout. What did freeze was the **Tab5**, because I had
+also gated `render.c` on the mode. That gate is now reverted: measured, it buys
+nothing (64.1–65.5 s decode with the panadapter rendering vs 65.7–66.1 s with it
+gated off) and cost the operator a frozen screen within minutes of shipping.
+
+**"The captured floats are ±32768, so a straight cast is fine."** They are not —
+off the air they peak around ±57, so the cast was handing the decoder ~6 bits of
+a 16-bit format. That much was real. The *conclusion* was not: I assumed it was
+costing decodes, and a controlled test says otherwise. The reference WAV scaled
+down to a peak of **13** still decodes all five stations through the raw cast,
+identical to full scale — because each symbol is correlated over 8192 samples
+and the decision is a ratio of tone powers, so quantisation noise averages out.
+The normalisation is kept as insurance for a genuinely quiet capture, and is
+labelled as insurance rather than as a fix.
+
+**What actually explained 1-of-8** was the per-candidate logging, added for
+exactly this reason: candidate 0 scored 2.16e6 and decoded; candidates 1–6 sat
+in a tight cluster at 2.15–3.28e5, i.e. the noise floor. One real signal was on
+the air and the loop found it. A bare "0 decodes" line could never have
+distinguished that from a broken receiver.
