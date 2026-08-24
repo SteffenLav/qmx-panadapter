@@ -133,15 +133,27 @@ static void build_waterfall(const int16_t *pcm, long n)
     const double bin_hz = WSPR_SAMPLE_RATE_HZ / NF;      /* 1.46484375 */
     const int lo_bin = (int)(WSPR_WF_LO_HZ / bin_hz + 0.5);
 
+    /* TWO FFTs averaged per displayed row.
+     *
+     * A single FFT bin's noise power is exponentially distributed - its standard
+     * deviation EQUALS its mean, about 5.6 dB once expressed in dB. That is the
+     * speckle, and it swamps the signal: a weak WSPR transmission is only ~7 dB
+     * above the noise in a 1.4648 Hz bin (-25 dB in the 2500 Hz reference plus
+     * 10*log10(2500/1.4648)). Averaging two halves the variance for the cost of
+     * halving the time resolution, which at 1.4 s per row is free - a WSPR trace
+     * lasts 110 s. */
     for (int r = 0; r < WSPR_WF_ROWS; r++) {
-        long off = (long)r * NF;
-        for (int i = 0; i < NF; i++)
-            in[i] = (off + i < n) ? (kiss_fft_scalar)(pcm[off + i] / 32768.0) : 0;
-        kiss_fftr(cfg, in, sp);
-        for (int c = 0; c < WSPR_WF_COLS; c++) {
-            int b = lo_bin + c;
-            float p = (b <= NF / 2) ? sp[b].r * sp[b].r + sp[b].i * sp[b].i : 0;
-            mag[r * WSPR_WF_COLS + c] = p;
+        for (int c = 0; c < WSPR_WF_COLS; c++) mag[r * WSPR_WF_COLS + c] = 0;
+        for (int k = 0; k < 2; k++) {
+            long off = ((long)r * 2 + k) * (NF / 2);
+            for (int i = 0; i < NF; i++)
+                in[i] = (off + i < n) ? (kiss_fft_scalar)(pcm[off + i] / 32768.0) : 0;
+            kiss_fftr(cfg, in, sp);
+            for (int c = 0; c < WSPR_WF_COLS; c++) {
+                int b = lo_bin + c;
+                float p = (b <= NF / 2) ? sp[b].r * sp[b].r + sp[b].i * sp[b].i : 0;
+                mag[r * WSPR_WF_COLS + c] += p * 0.5f;
+            }
         }
     }
 
@@ -160,11 +172,21 @@ static void build_waterfall(const int16_t *pcm, long n)
     if (med <= 0) med = 1e-12f;
     if (top <= med) top = med * 100.0f;
 
-    /* dB against the capture's own floor, mapped over the span that actually
-     * has signal in it. */
-    float lo_db = 0.0f;
+    /* BLACK IS WELL ABOVE THE FLOOR, not at it.
+     *
+     * Mapping the median to black showed half the noise, and with ~5.6 dB of
+     * per-bin spread that reads as dense speckle with the signal lost in it -
+     * which is what the first version looked like on the operator's screen.
+     *
+     * 5 dB puts most noise at black; 20 dB is where real WSPR signals live in a
+     * 1.4648 Hz bin (weak ~7 dB above the floor, strong ~20). The capture's own
+     * 99.5th percentile widens the top if this particular window has something
+     * much stronger, so a loud local station does not clip everything flat. */
+    float lo_db = 5.0f;
     float hi_db = 10.0f * log10f(top / med);
-    if (hi_db < 6.0f) hi_db = 6.0f;
+    if (hi_db < 20.0f) hi_db = 20.0f;
+    if (hi_db > 40.0f) hi_db = 40.0f;
+    (void)0;
 
     if (s_wf_mtx) xSemaphoreTake(s_wf_mtx, portMAX_DELAY);
     for (int i = 0; i < WSPR_WF_ROWS * WSPR_WF_COLS; i++) {

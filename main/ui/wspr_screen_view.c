@@ -49,7 +49,8 @@ LV_FONT_DECLARE(qmx_mono_25);
 #define AXIS_H     22
 #define LIST_Y     (AXIS_Y + AXIS_H + 8)
 
-#define VIEW_ROWS 12
+#define AXIS_TICKS 7      /* 1350..1650 every 50 Hz */
+#define VIEW_ROWS  12
 
 static lv_obj_t *s_container;
 static lv_obj_t *s_lbl_title;
@@ -61,7 +62,7 @@ static lv_obj_t *s_lbl_heard;
 static lv_obj_t *s_list;           /* right pane, one label per line */
 static lv_obj_t *s_lbl_rows;
 static lv_obj_t *s_wf_canvas;
-static lv_obj_t *s_lbl_axis;
+
 static uint8_t  *s_wf_buf;      /* RGB565 canvas pixels */
 static uint8_t  *s_wf_data;     /* WSPR_WF_ROWS x WSPR_WF_COLS intensities */
 static uint32_t  s_wf_seen;
@@ -69,36 +70,51 @@ static uint32_t  s_wf_seen;
 static int   s_last_spot_count = -1;
 static char  s_last_status[48];
 
-/* Column layout for the spot list. Monospaced by construction - the values are
- * short tokens and a proportional font makes them ragged where columns should
- * line up. Same reasoning as the browser table and the FT8 list. */
-static const char *HEADER =
-    "CALL      GRID  CTY   SNR  DRIFT     HZ    PWR      KM  BRG";
+/* ONE format string for the header AND every row.
+ *
+ * These used to be two independent strings - a hand-spaced header and a
+ * printf format - and they drifted: PWR's data ended at column 43 where its
+ * header started, and KM/BRG were off by one and two. Nothing catches that
+ * except looking at the screen, which is how the operator found it.
+ *
+ * Every field is passed as a STRING, including the numeric ones, so the header
+ * can be produced by the same specifiers. Numbers are right-aligned and their
+ * headers with them, which is what a numeric column wants.
+ *
+ * Monospaced by construction (qmx_mono_25) - column arithmetic in characters
+ * only means anything in a fixed-advance font. */
+#define ROW_FMT "%-9s %-5s %-4s %5s %5s %7s %5s %7s %4s"
 
-static void fmt_row(char *out, size_t n, const wspr_spot_t *s)
+static void fmt_row(char *out, size_t n, const wspr_spot_t *sp)
 {
-    /* Generous, because -Werror=format-truncation counts the worst case an int
-     * can print, not the values WSPR can actually carry. */
-    char snr[16], drift[16], km[20], brg[16];
+    char snr[16], drift[16], hz[16], pwr[16], km[20], brg[16];
 
     /* An unmeasured value prints as a dash, never as a number. WSPR_SNR_UNKNOWN
      * and WSPR_DRIFT_UNKNOWN exist precisely so this cannot quietly become a
      * fabricated measurement - the same rule that deleted the ADIF "599". */
-    if (s->snr_db == WSPR_SNR_UNKNOWN) snprintf(snr, sizeof(snr), "%s", "--");
-    else snprintf(snr, sizeof(snr), "%+d", s->snr_db);
+    if (sp->snr_db == WSPR_SNR_UNKNOWN) snprintf(snr, sizeof(snr), "--");
+    else snprintf(snr, sizeof(snr), "%+d", sp->snr_db);
 
-    if (s->drift_hz == WSPR_DRIFT_UNKNOWN) snprintf(drift, sizeof(drift), "%s", "--");
-    else snprintf(drift, sizeof(drift), "%+d", s->drift_hz);
+    if (sp->drift_hz == WSPR_DRIFT_UNKNOWN) snprintf(drift, sizeof(drift), "--");
+    else snprintf(drift, sizeof(drift), "%+d", sp->drift_hz);
 
-    if (s->km < 0) snprintf(km, sizeof(km), "%s", "--");
-    else snprintf(km, sizeof(km), "%d", (int)s->km);
+    snprintf(hz,  sizeof(hz),  "%.1f", (double)sp->freq_hz);
+    snprintf(pwr, sizeof(pwr), "%d", (int)sp->power_dbm);
 
-    if (s->bearing_deg < 0) snprintf(brg, sizeof(brg), "%s", "--");
-    else snprintf(brg, sizeof(brg), "%d", (int)s->bearing_deg);
+    if (sp->km < 0) snprintf(km, sizeof(km), "--");
+    else snprintf(km, sizeof(km), "%d", (int)sp->km);
 
-    snprintf(out, n, "%-9s %-5s %-4s %5s %5s %6.1f %4d %7s %4s",
-             s->call, s->grid, s->cty[0] ? s->cty : "--",
-             snr, drift, (double)s->freq_hz, (int)s->power_dbm, km, brg);
+    if (sp->bearing_deg < 0) snprintf(brg, sizeof(brg), "--");
+    else snprintf(brg, sizeof(brg), "%d", (int)sp->bearing_deg);
+
+    snprintf(out, n, ROW_FMT, sp->call, sp->grid,
+             sp->cty[0] ? sp->cty : "--", snr, drift, hz, pwr, km, brg);
+}
+
+static void fmt_header(char *out, size_t n)
+{
+    snprintf(out, n, ROW_FMT, "CALL", "GRID", "CTY", "SNR", "DRIFT",
+             "HZ", "PWR", "KM", "BRG");
 }
 
 static void cycle_label(char *out, size_t n, int64_t utc)
@@ -207,15 +223,42 @@ void wspr_screen_view_init(lv_obj_t *parent)
     /* The frequency scale. Evenly spaced ticks with numbers, because a
      * waterfall without them cannot answer "where is that signal?" - which is
      * the only question it is there to answer. */
-    s_lbl_axis = lv_label_create(s_container);
-    lv_label_set_text(s_lbl_axis, "");
-    lv_obj_set_style_text_font(s_lbl_axis, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(s_lbl_axis, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-    lv_obj_set_pos(s_lbl_axis, RIGHT_X, AXIS_Y);
+    /* ONE LABEL PER TICK, positioned absolutely.
+     *
+     * The first version was a single space-padded string, which needs the
+     * font's space width to be known - I assumed ~10 px for montserrat_18 and
+     * it is about half that, so the scale ended at x~730 of a 944 px waterfall
+     * and every label pointed at the wrong column. Absolute positions cannot be
+     * wrong: each label is placed by the SAME arithmetic that maps a frequency
+     * to a waterfall column, then centred on it. */
+    for (int i = 0; i < AXIS_TICKS; i++) {
+        int hz = 1350 + i * 50;
+        int x  = (hz - (int)WSPR_WF_LO_HZ) * RIGHT_W /
+                 (int)(WSPR_WF_HI_HZ - WSPR_WF_LO_HZ);
+        lv_obj_t *t = lv_label_create(s_container);
+        lv_label_set_text_fmt(t, "%d", hz);
+        lv_obj_set_style_text_font(t, &lv_font_montserrat_18, 0);
+        lv_obj_set_style_text_color(t, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+        lv_obj_update_layout(t);
+        int w = lv_obj_get_width(t);
+        int px = RIGHT_X + x - w / 2;                /* centre on its column */
+        if (px < RIGHT_X) px = RIGHT_X;              /* keep the ends on-screen */
+        if (px + w > RIGHT_X + RIGHT_W) px = RIGHT_X + RIGHT_W - w;
+        lv_obj_set_pos(t, px, AXIS_Y);
+        /* A 1 px tick above the number, so the eye can follow it into the
+         * waterfall rather than estimating. */
+        lv_obj_t *tick = lv_obj_create(s_container);
+        lv_obj_remove_style_all(tick);
+        lv_obj_set_size(tick, 1, 4);
+        lv_obj_set_pos(tick, RIGHT_X + x, AXIS_Y - 4);
+        lv_obj_set_style_bg_color(tick, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+        lv_obj_set_style_bg_opa(tick, LV_OPA_COVER, 0);
+        lv_obj_add_flag(tick, UI_FLAG_NOT_HOT);
+    }
 
     /* ---------------- right pane, lower: the log ---------------- */
     lv_obj_t *hdr = lv_label_create(s_container);
-    lv_label_set_text(hdr, HEADER);
+    { char h[160]; fmt_header(h, sizeof(h)); lv_label_set_text(hdr, h); }
     lv_obj_set_style_text_font(hdr, &qmx_mono_25, 0);
     lv_obj_set_style_text_color(hdr, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_obj_set_pos(hdr, RIGHT_X, LIST_Y);
@@ -262,54 +305,46 @@ void wspr_screen_view_hide(void)
 lv_obj_t *wspr_screen_view_get_container(void) { return s_container; }
 
 /* SDR-ish ramp: black -> blue -> cyan -> yellow -> red, same family the
- * panadapter's waterfall uses so the two pages read alike. */
-static lv_color_t wf_colour(uint8_t v)
+ * panadapter's waterfall uses so the two pages read alike. Returns RGB565
+ * directly - see repaint_waterfall() for why this does not go through
+ * lv_color_t. */
+static inline uint16_t wf_rgb565(uint8_t v)
 {
     uint8_t r, g, b;
-    if (v < 64)        { r = 0;               g = 0;                b = (uint8_t)(v * 3);   }
-    else if (v < 128)  { r = 0;               g = (uint8_t)((v - 64) * 4);  b = 255;        }
-    else if (v < 192)  { r = (uint8_t)((v - 128) * 4); g = 255;     b = (uint8_t)(255 - (v - 128) * 4); }
-    else               { r = 255;             g = (uint8_t)(255 - (v - 192) * 4); b = 0;    }
-    return lv_color_make(r, g, b);
+    if (v < 64)        { r = 0; g = 0;                      b = (uint8_t)(v * 3); }
+    else if (v < 128)  { r = 0; g = (uint8_t)((v - 64) * 4); b = 255; }
+    else if (v < 192)  { r = (uint8_t)((v - 128) * 4); g = 255; b = (uint8_t)(255 - (v - 128) * 4); }
+    else               { r = 255; g = (uint8_t)(255 - (v - 192) * 4); b = 0; }
+    return (uint16_t)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3));
 }
 
-/* Repaint the captured window. Only called when the sequence number has moved,
- * i.e. once per cycle - painting ~190 k pixels every second would be pure waste
- * on a board whose render budget CLAUDE.md keeps warning about. */
+/* Repaint the captured window.
+ *
+ * ⛔ Writes STRAIGHT INTO THE RGB565 BUFFER, not via lv_canvas_set_px().
+ * This is 944 x 200 = 188,800 pixels, and set_px() goes through LVGL's draw
+ * layer for every one of them - enough to block taskLVGL long enough to starve
+ * the HTTP server. The symptom was the operator's browser disconnecting every
+ * time a cycle finished, and /ss.bmp truncating at 135 KB of 1.84 MB. A direct
+ * buffer fill plus one invalidate does the same job without holding the task.
+ *
+ * Only called when the sequence number moves, i.e. once per cycle. */
 static void repaint_waterfall(void)
 {
-    if (!s_wf_canvas || !s_wf_data) return;
-    lv_layer_t layer;
-    lv_canvas_init_layer(s_wf_canvas, &layer);
+    if (!s_wf_canvas || !s_wf_data || !s_wf_buf) return;
+    uint16_t *px = (uint16_t *)s_wf_buf;
+
+    /* Row and column maps precomputed once instead of a divide per pixel. */
+    static uint16_t colmap[RIGHT_W];
+    static uint16_t rowmap[WF_H];
+    for (int x = 0; x < RIGHT_W; x++) colmap[x] = (uint16_t)(x * WSPR_WF_COLS / RIGHT_W);
+    for (int y = 0; y < WF_H;    y++) rowmap[y] = (uint16_t)(y * WSPR_WF_ROWS / WF_H);
 
     for (int y = 0; y < WF_H; y++) {
-        int row = y * WSPR_WF_ROWS / WF_H;          /* time: top = start of window */
-        for (int x = 0; x < RIGHT_W; x++) {
-            int col = x * WSPR_WF_COLS / RIGHT_W;   /* frequency */
-            uint8_t v = s_wf_data[row * WSPR_WF_COLS + col];
-            lv_canvas_set_px(s_wf_canvas, x, y, wf_colour(v), LV_OPA_COVER);
-        }
+        const uint8_t *src = &s_wf_data[rowmap[y] * WSPR_WF_COLS];
+        uint16_t *dst = &px[y * RIGHT_W];
+        for (int x = 0; x < RIGHT_W; x++) dst[x] = wf_rgb565(src[colmap[x]]);
     }
-    lv_canvas_finish_layer(s_wf_canvas, &layer);
-
-    /* The scale underneath: evenly spaced, every 50 Hz, positioned by the same
-     * arithmetic that maps a column to an x - so a label sits over the bin it
-     * names rather than near it. */
-    char ax[160];
-    size_t off = 0;
-    ax[0] = '\0';
-    int last_end = 0;
-    for (int hz = 1350; hz <= 1650; hz += 50) {
-        int x = (int)((hz - (int)WSPR_WF_LO_HZ) * RIGHT_W /
-                      (int)(WSPR_WF_HI_HZ - WSPR_WF_LO_HZ));
-        int chars = x / 10;                          /* montserrat_18 ~10 px/space */
-        while (last_end < chars && off < sizeof(ax) - 8) { ax[off++] = ' '; last_end++; }
-        off += snprintf(ax + off, sizeof(ax) - off, "%d", hz);
-        last_end += 4;
-        if (off >= sizeof(ax) - 8) break;
-    }
-    ax[off] = '\0';
-    lv_label_set_text(s_lbl_axis, ax);
+    lv_obj_invalidate(s_wf_canvas);
 }
 
 void wspr_screen_view_tick(void)
