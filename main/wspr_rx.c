@@ -25,6 +25,9 @@
 #include "fft/kiss_fftr.h"
 #include "wspr_decode.h"
 #include "wspr_sim.h"
+#include "wspr_tx.h"
+#include "esp_random.h"
+#include "storage/settings.h"
 #include "wspr_spots.h"
 #include "wspr_rx.h"
 
@@ -288,6 +291,73 @@ static void wspr_rx_task(void *arg)
         if (!s_run) break;
 
         int64_t cycle_utc = (now_ms() / WSPR_CYCLE_MS) * (WSPR_CYCLE_MS / 1000);
+
+        /* ---- duty-cycle scheduler ------------------------------------
+         *
+         * WSPR's convention is "transmit in this fraction of slots, AT
+         * RANDOM", which is why the control is a duty cycle and not a
+         * transmit button. The randomness is load-bearing, not decoration:
+         * stations on a fixed schedule collide with the same neighbours
+         * forever.
+         *
+         * ⚠ ORDER MATTERS, and it is the opposite of what it first looks.
+         * The obvious design is "roll at the top of cycle N, arm for N+1",
+         * and it is WRONG here - measured, not reasoned: this loop reaches
+         * the top of a cycle exactly ON the even minute, and
+         * wspr_tx_arm() then treats THAT minute as its slot. The burst
+         * started 1000 ms after the arm, i.e. WSPR_TX_START_OFFSET_MS, in
+         * the same cycle. So the arm is for THIS cycle, and the receiver
+         * stand-down has to come AFTER it, not before.
+         *
+         * Getting this backwards is invisible in simulation - the sim
+         * synthesizes its window instead of capturing, so nothing clashes -
+         * and live would have spent 120 s capturing our own 110 s
+         * transmission. */
+        qmx_settings_t ws;
+        settings_load_all(&ws);
+
+        char txtext[64];
+
+        /* A burst still running from the previous cycle owns the radio. */
+        if (wspr_tx_get_status(txtext, sizeof(txtext), NULL) != WSPR_TX_IDLE) {
+            set_status("transmitting");
+            ESP_LOGW(TAG, "cycle %lld: TX still busy - receiver stood down",
+                     (long long)cycle_utc);
+            while (s_run && wspr_tx_get_status(txtext, sizeof(txtext), NULL) != WSPR_TX_IDLE) {
+                vTaskDelay(pdMS_TO_TICKS(500));
+            }
+            continue;
+        }
+
+        if (ws.wspr_tx_en && ws.wspr_duty_pct > 0 &&
+            (esp_random() % 100u) < ws.wspr_duty_pct) {
+            wspr_tx_request_t req;
+            char err[80] = "";
+            if (!ws.my_callsign[0] || !ws.my_grid[0]) {
+                ESP_LOGW(TAG, "TX skipped: callsign/grid not set");
+            } else if (!wspr_tx_build_request(ws.my_callsign, ws.my_grid,
+                                              ws.wspr_tx_dbm, WSPR_TX_DEFAULT_FREQ_HZ,
+                                              &req, err, sizeof(err))) {
+                ESP_LOGW(TAG, "TX skipped: %s", err);
+            } else if (!wspr_tx_arm(&req, err, sizeof(err))) {
+                ESP_LOGW(TAG, "TX arm refused: %s", err);
+            } else {
+                ESP_LOGW(TAG, "TX armed for THIS cycle: %s %s %d dBm (duty %u%%)",
+                         ws.my_callsign, ws.my_grid, ws.wspr_tx_dbm,
+                         (unsigned)ws.wspr_duty_pct);
+            }
+        }
+
+        /* Re-read AFTER the arm - see the ordering note above. */
+        if (wspr_tx_get_status(txtext, sizeof(txtext), NULL) != WSPR_TX_IDLE) {
+            set_status("transmitting");
+            ESP_LOGW(TAG, "cycle %lld: TX cycle - receiver stood down",
+                     (long long)cycle_utc);
+            while (s_run && wspr_tx_get_status(txtext, sizeof(txtext), NULL) != WSPR_TX_IDLE) {
+                vTaskDelay(pdMS_TO_TICKS(500));
+            }
+            continue;
+        }
 
         /* ---- SIMULATION: synthesize the window instead of capturing it ----
          *

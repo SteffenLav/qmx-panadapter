@@ -14,6 +14,8 @@
 #include "wspr_rx.h"
 #include "esp_heap_caps.h"
 #include "cat.h"
+#include "wspr_tx.h"
+#include "storage/settings.h"
 
 /* JetBrains Mono, already compiled in for the QMX terminal page (#147). The
  * spot list is space-padded columns of short tokens, and in a PROPORTIONAL font
@@ -59,6 +61,70 @@ static lv_obj_t *s_lbl_cycle;
 static lv_obj_t *s_bar_cycle;
 static lv_obj_t *s_lbl_status;
 static lv_obj_t *s_lbl_heard;
+
+static lv_obj_t *s_dd_dial;
+static lv_obj_t *s_btn_tx;
+static lv_obj_t *s_lbl_tx;
+static lv_obj_t *s_btn_duty;
+static lv_obj_t *s_lbl_duty;
+
+/* THE standard WSPR dial for each band - the whole list, not a range.
+ *
+ * WSPR lives in a 200 Hz sub-band per band, and a station outside it is heard
+ * by nobody. A free-entry keypad would therefore hand the operator a way to be
+ * silently wrong, which is the exact error class CLAUDE.md keeps recording; a
+ * list of the real ones cannot be. These are USB dial frequencies - the
+ * transmission itself sits ~1400-1600 Hz above each. */
+typedef struct { const char *label; uint32_t dial_hz; } wspr_band_t;
+static const wspr_band_t kBands[] = {
+    { "160 m  1.836600", 1836600u },
+    { "80 m   3.568600", 3568600u },
+    { "60 m   5.287200", 5287200u },
+    { "40 m   7.038600", 7038600u },
+    { "30 m  10.138700", 10138700u },
+    { "20 m  14.095600", 14095600u },
+    { "17 m  18.104600", 18104600u },
+    { "15 m  21.094600", 21094600u },
+    { "12 m  24.924600", 24924600u },
+    { "10 m  28.124600", 28124600u },
+    { "6 m   50.293000", 50293000u },
+};
+#define N_BANDS ((int)(sizeof(kBands) / sizeof(kBands[0])))
+
+/* Duty is a CYCLING VALUE, per docs/wspr-ui-design.md: WSPR asks "what
+ * fraction of slots", never "transmit now". 0 is a legitimate state - enabled
+ * but silent - while setting up. */
+static const uint8_t kDuty[] = { 0, 10, 20, 33, 50 };
+#define N_DUTY ((int)(sizeof(kDuty) / sizeof(kDuty[0])))
+
+static void dial_changed_cb(lv_event_t *e)
+{
+    uint16_t i = lv_dropdown_get_selected(lv_event_get_target(e));
+    if (i >= N_BANDS) return;
+    settings_set_wspr_dial_hz(kBands[i].dial_hz);
+    /* Forced: the ordinary setter shares a 200 ms rate limit with the CAT
+     * poll, and a band change the operator just asked for must not be the
+     * write that gets dropped. */
+    cat_set_frequency_forced(kBands[i].dial_hz);
+}
+
+static void tx_toggle_cb(lv_event_t *e)
+{
+    (void)e;
+    qmx_settings_t st;
+    settings_load_all(&st);
+    settings_set_wspr_tx_en(!st.wspr_tx_en);
+}
+
+static void duty_cycle_cb(lv_event_t *e)
+{
+    (void)e;
+    qmx_settings_t st;
+    settings_load_all(&st);
+    int i = 0;
+    for (int k = 0; k < N_DUTY; k++) if (kDuty[k] == st.wspr_duty_pct) { i = k; break; }
+    settings_set_wspr_duty_pct(kDuty[(i + 1) % N_DUTY]);
+}
 static lv_obj_t *s_list;           /* right pane, one label per line */
 static lv_obj_t *s_lbl_rows;
 static lv_obj_t *s_wf_canvas;
@@ -163,11 +229,50 @@ void wspr_screen_view_init(lv_obj_t *parent)
     lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(box, UI_FLAG_NOT_HOT);
 
-    s_lbl_dial = lv_label_create(box);
-    lv_label_set_text(s_lbl_dial, "Dial: --.------ MHz");
-    lv_obj_set_style_text_font(s_lbl_dial, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s_lbl_dial, lv_color_hex(UI_COLOR_TEXT), 0);
-    lv_obj_center(s_lbl_dial);
+    s_dd_dial = lv_dropdown_create(box);
+    {
+        char opts[N_BANDS * 20];
+        size_t used = 0;
+        opts[0] = '\0';
+        for (int i = 0; i < N_BANDS; i++) {
+            used += (size_t)snprintf(opts + used, sizeof(opts) - used, "%s%s",
+                                     i ? "\n" : "", kBands[i].label);
+        }
+        lv_dropdown_set_options(s_dd_dial, opts);
+    }
+    lv_obj_set_width(s_dd_dial, LEFT_W - 56);
+    lv_obj_center(s_dd_dial);
+    lv_obj_set_style_text_font(s_dd_dial, &lv_font_montserrat_20, 0);
+    /* Dark like everything else on this page; the stock dropdown is white. */
+    lv_obj_set_style_bg_color(s_dd_dial, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
+    lv_obj_set_style_text_color(s_dd_dial, lv_color_hex(UI_COLOR_TEXT), 0);
+    lv_obj_set_style_border_color(s_dd_dial, lv_color_hex(UI_COLOR_BORDER), 0);
+    {
+        lv_obj_t *list = lv_dropdown_get_list(s_dd_dial);
+        if (list) {
+            lv_obj_set_style_bg_color(list, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
+            lv_obj_set_style_text_color(list, lv_color_hex(UI_COLOR_TEXT), 0);
+            lv_obj_set_style_text_font(list, &lv_font_montserrat_20, 0);
+        }
+    }
+    /* Start on the STORED dial, not on entry 0.
+     *
+     * A screenshot caught this: with the radio wedged cat_get_frequency()
+     * returns 0, the tick's sync never runs, and the picker sat on "160 m"
+     * while the stored dial was 20 m. A control that displays a band it is not
+     * set to is worse than one that displays nothing. */
+    {
+        qmx_settings_t ds;
+        settings_load_all(&ds);
+        for (int i = 0; i < N_BANDS; i++) {
+            if (kBands[i].dial_hz == ds.wspr_dial_hz) {
+                lv_dropdown_set_selected(s_dd_dial, (uint16_t)i);
+                break;
+            }
+        }
+    }
+    lv_obj_add_event_cb(s_dd_dial, dial_changed_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    s_lbl_dial = NULL;   /* the dropdown IS the dial readout now */
 
     /* The cycle: plain language above, one 120 s bar below. It orients - "am I
      * receiving, how long left" - rather than urging, because nothing in WSPR
@@ -198,14 +303,34 @@ void wspr_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_lbl_heard, lv_color_hex(UI_COLOR_TEXT), 0);
     lv_obj_set_pos(s_lbl_heard, 16, 202);
 
-    /* No TX control on this page yet, and saying so beats an inert button.
-     * WSPR TX exists and has been on the air, but its duty-cycle scheduler is
-     * not built - see docs/wspr-ui-design.md. */
-    lv_obj_t *note = lv_label_create(s_container);
-    lv_label_set_text(note, "Receive only.\nTX is not wired to\nthis page yet.");
-    lv_obj_set_style_text_font(note, &lv_font_montserrat_18, 0);
-    lv_obj_set_style_text_color(note, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
-    lv_obj_set_pos(note, 16, 240);
+    /* TX and Duty, side by side.
+     *
+     * A WSPR transmission keys the radio for 110 SECONDS - eight times an FT8
+     * burst. This project's rule for controls that key the radio (written for
+     * SWR Tune) is that they must be impossible to trigger by accident and
+     * visibly ACTIVE while engaged, which is why TX is a labelled toggle
+     * reading OFF/ON rather than a one-tap "transmit". */
+    const int half = (LEFT_W - 32 - 8) / 2;
+
+    s_btn_tx = lv_btn_create(s_container);
+    lv_obj_set_size(s_btn_tx, half, 56);
+    lv_obj_set_pos(s_btn_tx, 16, 240);
+    lv_obj_set_style_radius(s_btn_tx, 8, 0);
+    lv_obj_add_event_cb(s_btn_tx, tx_toggle_cb, LV_EVENT_CLICKED, NULL);
+    s_lbl_tx = lv_label_create(s_btn_tx);
+    lv_label_set_text(s_lbl_tx, "TX  OFF");
+    lv_obj_set_style_text_font(s_lbl_tx, &lv_font_montserrat_20, 0);
+    lv_obj_center(s_lbl_tx);
+
+    s_btn_duty = lv_btn_create(s_container);
+    lv_obj_set_size(s_btn_duty, half, 56);
+    lv_obj_set_pos(s_btn_duty, 16 + half + 8, 240);
+    lv_obj_set_style_radius(s_btn_duty, 8, 0);
+    lv_obj_add_event_cb(s_btn_duty, duty_cycle_cb, LV_EVENT_CLICKED, NULL);
+    s_lbl_duty = lv_label_create(s_btn_duty);
+    lv_label_set_text(s_lbl_duty, "Duty 20%");
+    lv_obj_set_style_text_font(s_lbl_duty, &lv_font_montserrat_20, 0);
+    lv_obj_center(s_lbl_duty);
 
     /* ---------------- right pane, upper: the captured window ---------------- */
     /* RGB565 at display resolution rather than a 205x176 image scaled up:
@@ -351,15 +476,61 @@ void wspr_screen_view_tick(void)
 {
     if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) return;
 
-    /* dial */
+    /* Dial: select the standard entry matching the radio, so the picker shows
+     * where we actually are rather than what was last tapped. A dial that is
+     * not a standard WSPR frequency leaves the selection alone - the operator
+     * has tuned off the sub-band and the picker should not pretend otherwise. */
     uint32_t f = cat_get_frequency();
-    if (f) {
-        char d[40];
-        snprintf(d, sizeof(d), "Dial: %lu.%03lu.%03lu MHz",
-                 (unsigned long)(f / 1000000),
-                 (unsigned long)((f / 1000) % 1000),
-                 (unsigned long)(f % 1000));
-        lv_label_set_text(s_lbl_dial, d);
+    if (f && s_dd_dial) {
+        for (int i = 0; i < N_BANDS; i++) {
+            if (kBands[i].dial_hz == f) {
+                if (lv_dropdown_get_selected(s_dd_dial) != (uint16_t)i)
+                    lv_dropdown_set_selected(s_dd_dial, (uint16_t)i);
+                break;
+            }
+        }
+    }
+
+    /* TX and Duty, from settings so the web UI and the buttons cannot drift.
+     *
+     * While a burst is running the TX block goes UI_COLOR_TX_ACTIVE orange and
+     * counts down: this project's rule for anything that keys the radio is
+     * that the operator should never have to wonder whether it is
+     * transmitting. 110 s is a long time to be unsure. */
+    {
+        qmx_settings_t st;
+        settings_load_all(&st);
+
+        char txt[48];
+        int secs = 0;
+        wspr_tx_state_t tst = wspr_tx_get_status(NULL, 0, &secs);
+
+        if (tst == WSPR_TX_ACTIVE) {
+            snprintf(txt, sizeof(txt), "TX  ON AIR");
+            lv_obj_set_style_bg_color(s_btn_tx, lv_color_hex(UI_COLOR_TX_ACTIVE), 0);
+        } else if (tst == WSPR_TX_ARMED) {
+            snprintf(txt, sizeof(txt), "TX  in %d:%02d", secs / 60, secs % 60);
+            lv_obj_set_style_bg_color(s_btn_tx, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        } else {
+            snprintf(txt, sizeof(txt), "TX  %s", st.wspr_tx_en ? "ON" : "OFF");
+            lv_obj_set_style_bg_color(s_btn_tx,
+                lv_color_hex(st.wspr_tx_en ? UI_COLOR_PRIMARY : UI_COLOR_SURFACE_RAISED), 0);
+        }
+        if (strcmp(lv_label_get_text(s_lbl_tx), txt) != 0)
+            lv_label_set_text(s_lbl_tx, txt);
+
+        char dt[32];
+        snprintf(dt, sizeof(dt), "Duty %u%%", (unsigned)st.wspr_duty_pct);
+        if (strcmp(lv_label_get_text(s_lbl_duty), dt) != 0)
+            lv_label_set_text(s_lbl_duty, dt);
+        /* Duty is subordinate to TX and says nothing while TX is off, so it
+         * only takes colour when it can actually act. A screenshot had the
+         * bright button on Duty and the dull one on TX, which pulls the eye to
+         * the control that matters less. */
+        lv_obj_set_style_bg_color(s_btn_duty,
+            lv_color_hex(st.wspr_tx_en ? UI_COLOR_PRIMARY : UI_COLOR_SURFACE_RAISED), 0);
+        lv_obj_set_style_text_color(s_lbl_duty,
+            lv_color_hex(st.wspr_tx_en ? UI_COLOR_TEXT : UI_COLOR_TEXT_MUTED), 0);
     }
 
     /* cycle position: the bar is the 120 s window, so it is a real clock

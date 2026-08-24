@@ -2490,6 +2490,10 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddNumberToObject(root, "ft8_freq_hz",      (double)c.ft8_freq_hz);
     cJSON_AddNumberToObject(root, "hound_mode",      c.hound_mode);
     cJSON_AddBoolToObject(root, "sim_mode_en",       c.sim_mode_en);
+    cJSON_AddNumberToObject(root, "wspr_dial_hz",  c.wspr_dial_hz);
+    cJSON_AddBoolToObject(root,   "wspr_tx_en",    c.wspr_tx_en);
+    cJSON_AddNumberToObject(root, "wspr_duty_pct", c.wspr_duty_pct);
+    cJSON_AddNumberToObject(root, "wspr_tx_dbm",   c.wspr_tx_dbm);
     // ARRL Field Day (#210, Randy N4OPI wanted the Filter modal reachable from the
     // browser). Everything else in that modal was already here; this was the gap.
     cJSON_AddBoolToObject(root,   "field_day_en", c.field_day_en);
@@ -2632,6 +2636,22 @@ static esp_err_t settings_post_handler(httpd_req_t *req)
     // leaving it on is what produces phantom contacts in a real log.
     if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "sim_mode_en")))
         settings_set_sim_mode_en(cJSON_IsTrue(it));
+    /* WSPR. wspr_tx_en is the one that can put a signal on the air, so it gets
+     * the same deliberate treatment as sim_mode_en above. wspr_tx_dbm is a
+     * DECLARED power published with every spot - a wrong value here is
+     * misinformation about the operator's station, not a display bug. */
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_dial_hz")))
+        settings_set_wspr_dial_hz((uint32_t)it->valuedouble);
+    if (cJSON_IsBool(it = cJSON_GetObjectItem(root, "wspr_tx_en")))
+        settings_set_wspr_tx_en(cJSON_IsTrue(it));
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_duty_pct"))) {
+        int v = it->valueint;
+        if (v >= 0 && v <= 50) settings_set_wspr_duty_pct((uint8_t)v);
+    }
+    if (cJSON_IsNumber(it = cJSON_GetObjectItem(root, "wspr_tx_dbm"))) {
+        int v = it->valueint;
+        if (v >= 0 && v <= 60) settings_set_wspr_tx_dbm((int8_t)v);
+    }
 
     cJSON *cq = cJSON_GetObjectItem(root, "cq");
     if (cJSON_IsObject(cq)) {

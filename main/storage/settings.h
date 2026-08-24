@@ -236,6 +236,19 @@ typedef struct {
     char     fd_class[4];     // Field Day class, e.g. "16A" (1-2 digit transmitter count + category letter)
     char     fd_section[4];   // Field Day ARRL/RAC section abbreviation, e.g. "EMA"
     bool     sim_mode_en;     // FT8 simulation mode: phantom stations, real radio never keyed (default false)
+
+    /* ---- WSPR ---------------------------------------------------------
+     * wspr_dial_hz is one of the standard per-band WSPR dial frequencies -
+     * NOT free entry. A station outside the 200 Hz sub-band is heard by
+     * nobody, so an arbitrary number is only a way to be silently wrong
+     * (docs/wspr-ui-design.md).
+     * wspr_tx_dbm is a DECLARED power, published worldwide with every spot.
+     * It was a hardcoded 23 before this existed, so every spot claimed
+     * 0.2 W whatever the operator was actually running. */
+    uint32_t wspr_dial_hz;    // standard WSPR dial for the chosen band (default 20 m)
+    bool     wspr_tx_en;      // WSPR transmit enabled at all (default OFF)
+    uint8_t  wspr_duty_pct;   // fraction of cycles to transmit: 0/10/20/33/50
+    int8_t   wspr_tx_dbm;     // declared TX power, dBm (default 23 = 200 mW)
     uint8_t  ft8_op_mode;     // FT8/FT4 sub-mode (ft8_op_mode_t: 0=FT8 1=FT4), default 0 - see ft8_test.h
     uint32_t passband_width_hz; // last CAT-reported filter width (Hz), 0=unknown/use mode default. Persisted so the
                                  // band-plan strip's passband indicator shows the real width immediately at boot
@@ -434,6 +447,10 @@ void settings_set_fd_section(const char *section);
 // FT8 simulation mode (debounced flush): phantom-station practice mode -
 // see ft8_sim.h. The real QMX is never keyed while this is on.
 void settings_set_sim_mode_en(bool v);
+void settings_set_wspr_dial_hz(uint32_t v);
+void settings_set_wspr_tx_en(bool v);
+void settings_set_wspr_duty_pct(uint8_t v);
+void settings_set_wspr_tx_dbm(int8_t v);
 void settings_set_ft8_op_mode(uint8_t v);
 
 // Last CAT-reported filter width in Hz (debounced flush). Restored at boot
