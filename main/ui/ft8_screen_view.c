@@ -2649,7 +2649,14 @@ void ft8_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_radius(s_btn_filter, 8, 0);
     lv_obj_add_event_cb(s_btn_filter, filter_btn_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *filter_lbl = lv_label_create(s_btn_filter);
-    lv_label_set_text(filter_lbl, "Filter");
+    // Was "Filter" - Roy KI0ER pointed out the modal it opens holds real
+    // behaviour toggles (auto-work pileup, grey-listing) that aren't
+    // filters at all, and that an active-vs-inactive colour idea (Dirk
+    // DK7CVD's suggestion) wouldn't help anyway since most operators
+    // running FT8 seriously have at least one setting on permanently - the
+    // button would just always read as "active" and signal nothing. The
+    // name was simply inaccurate; fixing that is the real improvement.
+    lv_label_set_text(filter_lbl, "Options");
     lv_obj_set_style_text_color(filter_lbl, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(filter_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(filter_lbl);
