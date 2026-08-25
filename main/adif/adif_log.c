@@ -27,6 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
 
 static const char *TAG      = "adif";
 static const char *FILE_PATH = "/spiffs/qso.adi";
@@ -234,10 +235,38 @@ void adif_log_init(void)
     }
     s_mounted = true;
 
+    // Repair before anything reads or writes a byte. Found necessary in
+    // practice (2026-08-25): a unit reported `used` far exceeding what its
+    // actual files add up to (701 KB used, but qso.adi+diag.0.log+LoTW
+    // cert/key totalled ~170 KB) alongside a directory entry that couldn't
+    // even be stat()'d - that gap is orphaned/inconsistent index blocks, not
+    // legitimate usage, and it made every write fail with ENOSPC (a single
+    // record delete's temp file, and the diag log's own flash-persist)
+    // despite ~230 KB of nominally free space. esp_spiffs_check() is
+    // ESP-IDF's own consistency check/repair for exactly this - cheap
+    // (runs once, at boot, before any file is opened) and self-healing, so
+    // it costs nothing on an already-healthy card and fixes this class of
+    // fault on one that isn't.
+    esp_err_t chk = esp_spiffs_check("storage");
+    if (chk != ESP_OK) {
+        ESP_LOGW(TAG, "SPIFFS check: %s (continuing anyway)", esp_err_to_name(chk));
+    }
+    // check() fixes CONSISTENCY (an orphaned/corrupt index entry); it does
+    // not promise to reclaim space. gc() is the one that actively walks
+    // pages looking to free some - request enough for the delete-record
+    // temp file (a full copy of the log) plus real headroom. Field-tested
+    // 2026-08-25: check() alone reported success but a subsequent delete
+    // still hit ENOSPC, so both are needed, not either alone.
+    esp_err_t gc = esp_spiffs_gc("storage", 65536);
+    if (gc != ESP_OK) {
+        ESP_LOGW(TAG, "SPIFFS gc: %s (continuing anyway)", esp_err_to_name(gc));
+    }
+
     // Check free space and warn if low (< 64 KB).
     size_t total = 0, used = 0;
     if (esp_spiffs_info("storage", &total, &used) == ESP_OK) {
-        ESP_LOGI(TAG, "SPIFFS: %zu KB used / %zu KB total", used / 1024, total / 1024);
+        ESP_LOGI(TAG, "SPIFFS: %zu KB used / %zu KB total (check=%s gc=%s)",
+                 used / 1024, total / 1024, esp_err_to_name(chk), esp_err_to_name(gc));
         if (total - used < 65536)
             ESP_LOGW(TAG, "SPIFFS nearly full - ADIF writes may fail");
     }
@@ -680,15 +709,48 @@ bool adif_log_set_field(int idx, const char *field, const char *value)
 
 bool adif_log_delete_record(int idx)
 {
-    if (!s_mounted || idx < 0) return false;
+    // Every early return here used to be silent - the caller (adif_view_modal)
+    // only ever knew "failed", never WHY, and neither did anyone reading the
+    // log afterwards. Found necessary in practice: a delete attempt that
+    // logged plain "delete record #N failed" with none of these lines firing
+    // means the failure is at fopen(TMP_PATH), which this file had zero
+    // visibility into until now.
+    if (!s_mounted) { ESP_LOGE(TAG, "delete record #%d: log not mounted", idx); return false; }
+    if (idx < 0)    { ESP_LOGE(TAG, "delete record #%d: negative index", idx); return false; }
 
     // Rewrite the file to a temp, skipping record idx (line-oriented: header
     // first, then one record per line - same walk as adif_log_get_record).
     const char *TMP_PATH = "/spiffs/qso.tmp";
     FILE *in = fopen(FILE_PATH, "r");
-    if (!in) return false;
+    if (!in) { ESP_LOGE(TAG, "delete record #%d: could not open %s for read (errno %d)", idx, FILE_PATH, errno); return false; }
     FILE *out = fopen(TMP_PATH, "w");
-    if (!out) { fclose(in); return false; }
+    if (!out && errno == ENOSPC) {
+        // Live self-heal, not just a boot-time one: a unit whose SPIFFS has
+        // accumulated orphaned/inconsistent blocks (see adif_log_init()'s
+        // esp_spiffs_check()/esp_spiffs_gc() and its comment for the field
+        // case this came from) reports ENOSPC on a write this small even
+        // mid-session, and making the operator reboot just to delete one
+        // record is a bad answer when the fix is two function calls. Repair
+        // AND actively reclaim (check() alone fixes consistency but does not
+        // promise to free space - field-tested 2026-08-25: it reported
+        // success and the retry still hit ENOSPC until gc() was added too),
+        // then retry once.
+        size_t t0 = 0, u0 = 0, t1 = 0, u1 = 0;
+        esp_spiffs_info("storage", &t0, &u0);
+        esp_err_t chk = esp_spiffs_check("storage");
+        esp_err_t gc  = esp_spiffs_gc("storage", 65536);
+        esp_spiffs_info("storage", &t1, &u1);
+        ESP_LOGW(TAG, "delete record #%d: %s ENOSPC on open - check=%s gc=%s, "
+                      "used %zuKB/%zuKB -> %zuKB/%zuKB, retrying once",
+                 idx, TMP_PATH, esp_err_to_name(chk), esp_err_to_name(gc),
+                 u0 / 1024, t0 / 1024, u1 / 1024, t1 / 1024);
+        out = fopen(TMP_PATH, "w");
+    }
+    if (!out) {
+        ESP_LOGE(TAG, "delete record #%d: could not open %s for write (errno %d)", idx, TMP_PATH, errno);
+        fclose(in);
+        return false;
+    }
 
     char line[1024];
     int  rec = -1;         // -1 = header line pending
