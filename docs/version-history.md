@@ -2576,7 +2576,7 @@ arrow is a chevron that reads as `>` and is too heavy at 24 px; U+2192 is not
 in this font and renders as a tofu box. A real arrow needs `montserrat_24`
 regenerated with `lv_font_conv` — logged as #244.
 
-### Shipped in v1.9.4 — 2026-08-25 20:30 UTC
+### Shipped in v1.9.4 — 2026-08-25 20:46 UTC
 
 A feedback-batch release: the FT8-specific settings get their own home on
 both screens, the TX tone picker stops going stale while you decide, and the
