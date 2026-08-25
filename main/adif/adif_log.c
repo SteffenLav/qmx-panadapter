@@ -490,6 +490,26 @@ bool adif_log_get_record(int idx, char *out, size_t out_sz)
     return found;
 }
 
+// A station worked twice during one activation counts ONCE toward POTA's
+// 10-QSO (SOTA's 4-QSO) minimum, no matter the band or mode - the rule
+// exists to prove contact with N different people, not to reward working
+// the same one repeatedly. This was NOT applied before (Eric, GitHub
+// issue): the raw record count let a duplicate inflate the number the
+// device shows, so "10 contacts logged, park activated" could read true on
+// screen while POTA.app credited 9 and the activation failed on upload -
+// exactly what he reported (two QSOs with KO4JON, device said 10, POTA
+// credited 9, one short). Deliberately callsign-only, not
+// callsign+band/mode: that is the conservative direction - it can only ever
+// show a number LESS THAN OR EQUAL to what POTA would credit, never claim
+// activation early the way the old count could. If a future report shows
+// POTA crediting the same station twice on different bands, this needs
+// revisiting; until then, a missing extra credit is a far smaller error
+// than the one Eric hit.
+#define ADIF_ACT_MAX_TRACKED 512   // stations tracked for dedup; past this,
+                                   // still counted, just not re-checked -
+                                   // a >512-unique-station activation isn't
+                                   // a realistic field session
+
 int adif_log_count_activation(const char *sig_info)
 {
     if (!s_mounted || !sig_info || !sig_info[0]) return 0;
@@ -502,6 +522,14 @@ int adif_log_count_activation(const char *sig_info)
 
     char needle[32];
     snprintf(needle, sizeof(needle), "<MY_SIG_INFO:%u>%s", (unsigned)strlen(sig_info), sig_info);
+
+    // Heap (PSRAM), never the stack: this runs from activation_modal.c's
+    // refresh() on taskLVGL, which CLAUDE.md already documents as having
+    // only ~8 KB - a 512*16 array would be a guaranteed stack-protection
+    // fault, not a maybe.
+    char (*seen)[ADIF_CALL_MAX] =
+        heap_caps_malloc((size_t)ADIF_ACT_MAX_TRACKED * ADIF_CALL_MAX, MALLOC_CAP_SPIRAM);
+    int seen_n = 0;
 
     char line[1024];
     int  n = 0;
@@ -516,8 +544,27 @@ int adif_log_count_activation(const char *sig_info)
         for (; *p; p++) {
             if (strncasecmp(p, needle, nl) == 0) { hit = true; break; }
         }
-        if (hit) n++;
+        if (!hit) continue;
+
+        char call[ADIF_CALL_MAX];
+        if (!seen || !adif_log_extract_field(line, "CALL", call, sizeof(call))) {
+            n++;   // no CALL field, or the tracking buffer didn't allocate -
+            continue;  // over-counting one record is safer than losing it
+        }
+
+        bool dup = false;
+        for (int i = 0; i < seen_n; i++) {
+            if (strcasecmp(seen[i], call) == 0) { dup = true; break; }
+        }
+        if (dup) continue;
+
+        n++;
+        if (seen_n < ADIF_ACT_MAX_TRACKED) {
+            strcpy(seen[seen_n], call);   // call[] and seen[][] are both
+            seen_n++;                    // ADIF_CALL_MAX, already NUL-terminated
+        }
     }
+    if (seen) free(seen);
     fclose(f);
     return n;
 }
@@ -653,14 +700,40 @@ bool adif_log_delete_record(int idx)
         rec++;
     }
     fclose(in);
-    fflush(out);
-    fsync(fileno(out));    // mandatory before rename - see CLAUDE.md fsync rule
-    fclose(out);
 
-    if (!removed) { remove(TMP_PATH); return false; }
+    // ⛔ SAME RULE AS LOGGING A QSO: do not act on a write that may not have
+    // happened. This used to skip straight to fflush/fsync/close with none of
+    // their results checked, then delete the GOOD file and rename the temp
+    // one over it regardless - so a write that silently failed partway
+    // (SPIFFS ENOSPC-despite-free-space is a documented case on this
+    // filesystem; see CLAUDE.md) would have replaced the real log with a
+    // truncated one while `removed` (set purely from the READ side above)
+    // still reported success. Reported as "the delete UI runs through its
+    // whole motion but the record is still there afterwards" - which is
+    // consistent with the rewrite failing and the ORIGINAL file therefore
+    // being left alone by the fixed code below, not with anything on the
+    // read/index side (the confirm bar's own preview text, built from the
+    // same index, was never reported wrong).
+    bool write_ok = (ferror(out) == 0);
+    if (write_ok) {
+        fflush(out);
+        fsync(fileno(out));
+        write_ok = (ferror(out) == 0);
+    }
+    if (fclose(out) != 0) write_ok = false;
+
+    if (!removed || !write_ok) {
+        remove(TMP_PATH);
+        if (removed && !write_ok) {
+            ESP_LOGE(TAG, "delete record #%d: rewrite failed (storage full?) - original log left untouched", idx);
+            ui_toast("Delete failed - storage full? Log unchanged");
+        }
+        return false;
+    }
     remove(FILE_PATH);
     if (rename(TMP_PATH, FILE_PATH) != 0) {
         ESP_LOGE(TAG, "delete: rename %s -> %s failed", TMP_PATH, FILE_PATH);
+        ui_toast("Delete failed - could not replace the log file");
         return false;
     }
 
