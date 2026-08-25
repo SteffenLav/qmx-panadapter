@@ -686,13 +686,45 @@ void wspr_guards_defaults(wspr_guards_t *g)
 {
     if (!g) return;
     /* NEAR on: it is the surgical one and should cost no genuine decode.
-     * SLOW off: measured every cycle, but not acted on until real-world data
-     * says a genuine signal never needs that many cycles. Enforcing an
-     * untested sensitivity trade by default is exactly the wrong direction -
-     * a missed spot is invisible, where a false spot is published. */
+     *
+     * ⭐ SLOW IS NOW ON TOO, and the reason it took real-world data is exactly
+     * what this comment used to demand. Two continuous runs, 16 h, 807 decodes
+     * from 100 stations confirmed real by REPETITION (a real station transmits
+     * again; a fabrication does not - ground truth needing no second decoder):
+     *
+     *   - EVERY one of those 100 stations has at least one decode converging in
+     *     81-175 cycles. Not a single station's easiest sighting exceeded 175.
+     *   - The one-off population sits at a median of ~1238 cycles, and its
+     *     callsigns give it away: 740UIU, 805KIM, 859IKW, C28K - legal to the
+     *     encoder, impossible as callsigns.
+     *   - At 1000 cycles: 0 of 100 real STATIONS lost, 68 of 112 slow one-offs
+     *     rejected, and no confirmed-real reference decode rejected either.
+     *
+     * ⛔ THE UNIT MATTERS, AND I HAD IT WRONG. This gate does reject genuine
+     * DECODES - 40 of 807 - because a real station's individual sighting can be
+     * slow (G8MCD needed 826 live, and wsprd confirms 428 and 453 in the
+     * reference files). What it does not reject is a real STATION, because a
+     * station transmitting every few minutes always lands a fast one. Counting
+     * decodes said "no safe threshold"; counting stations says 600 is free.
+     *
+     * 1000 specifically: above the 823 that another implementation confirms as
+     * real ON THE CURRENT DECODE PATH, far above the 175 worst-case easiest
+     * decode, and below most of the fabrication population.
+     *
+     * ⚠ 600 was chosen first, from cycle counts measured BEFORE the
+     * windowed-sinc filter - and the filter moved them (PA3BCA: 336 -> 823), so
+     * 600 would have rejected a confirmed-real decode. A cycle count is a
+     * property of the DECODE PATH, not the signal: any front-end change
+     * invalidates every cycles threshold. Re-measure against
+     * test/wav_reference/wspr/ before trusting one.
+     *
+     * ⚠ THE RESIDUAL COST is a genuinely weak station heard EXACTLY ONCE and
+     * slowly - that is now dropped, and it cannot be quantified without wsprd
+     * on those same windows. If a confirmed real station is ever lost this way,
+     * RAISE the threshold; the gap is what matters, not the number. */
     g->enforce_near = 1;
     g->near_hz      = WSPR_GUARD_NEAR_HZ;
-    g->enforce_slow = 0;
+    g->enforce_slow = 1;
     g->slow_cycles  = WSPR_GUARD_SLOW_CYCLES;
 }
 

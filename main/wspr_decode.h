@@ -130,7 +130,25 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
  * accumulates the evidence to decide, which is the whole point. */
 
 #define WSPR_GUARD_NEAR_HZ      10.0   /* ~1.5x a WSPR signal's ~6 Hz width */
-#define WSPR_GUARD_SLOW_CYCLES  250u   /* ~2.5x the 82-102 genuine cluster */
+/* 1000, and ENFORCED as of 2026-08-25 - see wspr_guards_defaults() for the two
+ * runs that justify enforcing it at all.
+ *
+ * ⚠ THE NUMBER WAS 600 FOR ABOUT TEN MINUTES AND THAT WAS WRONG, from stale
+ * measurements: the cycle counts used to pick it came from BEFORE the
+ * windowed-sinc decimation filter landed, and the new filter moves them. The
+ * same wsprd-confirmed station (PA3BCA, 19:06 reference window) went from 336
+ * cycles pre-filter to 823 post-filter, so 600 would have rejected a decode
+ * another implementation calls real.
+ *
+ * ⭐ GENERALISE THAT: a Fano cycle count is a property of the DECODE PATH, not
+ * of the signal. Any change to the front end - filter, decimation, metric -
+ * invalidates every threshold expressed in cycles. Re-measure against
+ * test/wav_reference/wspr/ before trusting one.
+ *
+ * 1000 clears the highest confirmed-real decode observed on the current path
+ * (823) with margin, still rejects 68 of 112 slow one-offs across 16 h of
+ * running, and loses nothing anywhere in the data. */
+#define WSPR_GUARD_SLOW_CYCLES  1000u
 #define WSPR_ACCEPTED_MAX       16
 
 typedef struct {
