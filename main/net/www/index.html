@@ -3790,9 +3790,12 @@ async function tick() {
     if (batt && batt.present === false) {
       battStr = "🔌 USB";
     } else if (batt && batt.level >= 0) {
+      /* Voltage dropped (v1.9.4, matching the Tab5's own bar) - nobody
+         reading this needs the raw cell voltage, and the percentage already
+         carries the level. */
       battStr += batt.level + "%";
-      if (batt.mv > 0) battStr += " (" + (batt.mv / 1000).toFixed(1) + "V)";
       if (batt.charging) battStr += " ⚡";
+      if (batt.limit) battStr += " (limit)";
     } else {
       battStr += "--";
     }

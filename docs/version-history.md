@@ -2575,3 +2575,108 @@ The arrow between the two versions is plain ASCII `->`. LVGL's symbol-font
 arrow is a chevron that reads as `>` and is too heavy at 24 px; U+2192 is not
 in this font and renders as a tofu box. A real arrow needs `montserrat_24`
 regenerated with `lv_font_conv` — logged as #244.
+
+### Shipped in v1.9.4 — 2026-08-25 20:30 UTC
+
+A feedback-batch release: the FT8-specific settings get their own home on
+both screens, the TX tone picker stops going stale while you decide, and the
+web page finally works on a phone held upright.
+
+**FT8 Options — one place for everything that's only meaningful in FT8
+mode.** The Tab5's left-pane button was renamed **Filter → Options** (Roy
+KI0ER): the modal it opens already held real behaviour toggles — Auto-work
+pileup, grey-listing — not just filters, so the old name undersold it. The
+web UI gets the equivalent concept properly for the first time
+(`main/net/www/index.html`): CQ message presets and the FT8 filters group,
+previously scattered through one long general Settings list behind the
+bottom bar, now live behind a dedicated **Options** button next to **TX
+tone**, rendered only in FT8 mode (`FT8_OPTS_GROUPS`, `setBuildForm(cfg,
+ft8Opts)`). The entry button carries a **count** of currently-active
+settings rather than a binary colour — a colour would always read "active"
+for an operator who runs filters permanently, telling them nothing new each
+time (Dirk DK7CVD's "a more granular approach" refined against Roy's
+objection to a plain on/off indicator) — and hovering it lists which ones by
+name (`ft8OptsSummarize`). Inside the panel, an active checkbox gets an
+amber border/fill in addition to its own tick mark (Don N2VGU's
+accessibility point: colour alone is unreadable to colour-blind users, so
+the checkbox's own shape carries the signal too, the colour is redundant on
+top of it, never the only channel).
+
+**The TX tone picker no longer goes stale while you're deciding.**
+`toneOpen()` fetched `/api/tone` exactly once, on open, with no refresh
+until Apply or Cancel — so a slow decision (reading the E/O strip, weighing
+which window to use) could cross a 15-second FT8 boundary for free, and a
+station that landed on the slot you were about to pick stayed invisible the
+whole time. `toneRefresh()` now re-polls every 3 s while the modal is open,
+via `setInterval`/`clearInterval` on `toneOpen()`/`toneClose()`; the
+operator's own in-progress pick (`toneSel`/`toneHold`) is never touched by a
+refresh, only the busy/partner colouring redraws under it.
+
+**The web page works on a phone held upright.** `html, body { overflow:
+hidden }` combined with a `@media (max-width: 600px)` rule that outright set
+`#top-right { display: none }` meant a narrow portrait screen didn't clip
+overflowing controls, it deleted them from layout with no way back — landscape
+never hit this because there was room for the same content at its natural
+size (Randy N4OPI, iPhone Safari). Fixed in two parts: `#top`/`#bot` now
+scroll horizontally (`overflow-x: auto`) instead of clipping, the same
+pattern the decode-list table already used, and the narrow-width media query
+no longer hides `#top-right` at all — swiping reaches it instead. A
+`@media (orientation: portrait)` rule also allows the page itself to scroll
+vertically as a fallback for the rare case the fixed-viewport grid still
+doesn't fit.
+
+**Battery display simplified, and now says when charging is capped on
+purpose.** Cell voltage (`main/util/status.c`'s `%d.%dV`, and the matching
+`.mv` render in `index.html`) is dropped from both the Tab5 and the web
+page's battery readout — the percentage already carries the level, and
+nobody reading the bar needs the raw voltage underneath it. In its place:
+once the Battery Care charge limit trips (`s_charge_cutoff_active`), the
+reading now appends `(limit)` on **both** screens — a new
+`status_charge_limit_active()` accessor feeds `/api/status`'s `battery.limit`
+field so the web page can show the same thing. Before this, "capped on
+purpose at 80%" and "not charging for some other reason" read identically
+(Don N2VGU).
+
+**The snap-on keyboard can be attached — or reattached — any time, not just
+at boot.** `tab5_keyboard_init()` used to probe once at startup and, on
+failure, tear the I2C bus down entirely; a keyboard snapped on after boot
+was never found for the rest of the session. Replaced with a single
+persistent lifecycle task (`kb_task`) that keeps retrying every 2 s while
+absent and detects a genuine detach (5 consecutive failed polls, ~250 ms —
+long enough to ride out a transient bus glitch, short enough to notice a
+real unplug quickly) by watching for the STM32 to stop acking, so unplug and
+reattach mid-session both keep typing working without a Tab5 reboot —
+verified live on hardware, caught mid-cycle in the serial log (`no longer
+answering - treating as detached` at 27.1 s, `Tab5 keyboard detected` at
+33.2 s). The keyboard's two RGB LEDs are forced dark (`REG_RGB_MODE` =
+custom, both channels zero) on every claim, including a reattach — an
+earlier attempt at this release tried a battery-status readout on the LEDs,
+then a plain "active" green, and both were reverted: the LEDs run far
+brighter than any status glyph needs, the Tab5 screen already shows battery
+state, and stock "binding" mode turned out to be a richer state machine than
+assumed (purple on a hot attach, green on a boot attach, contradicting the
+simple attach/active pair this project's own notes originally described) —
+so once the keyboard is claimed, there is nothing left for a light to
+usefully distinguish, and it says nothing rather than something misleading.
+
+**The macOS/Linux flasher script works on more systems.** `flash.command`
+could ship with Windows line endings despite `.gitattributes` declaring
+`eol=lf` for it — a working-tree copy had drifted to CRLF, which some
+shells refuse outright (`bad interpreter: ...^M`) — caught and diagnosed by
+a user on Fedora rather than by us (Michael K Johnson KZ4LY).
+`tools/make_flasher_zip.ps1` now strips CR from every `.command` file
+unconditionally at packaging time, regardless of what state the working
+tree happens to be in on whatever machine builds the release.
+
+#### Also in this release
+
+- **Line-ending policy fixed repo-wide.** The same class of drift that hit
+  `flash.command` turned out to affect 84+ other tracked `.c`/`.h`/`.html`
+  files (LF-committed, CRLF on disk) with nothing in `.gitattributes`
+  preventing it from recurring. Added `eol=lf` for `.c/.h/.html/.md/.py/
+  .json/.yml`, matching the existing `.command`/`.sh` rule, and normalized
+  every currently-drifted tracked file (`git add --renormalize .` found 59
+  more beyond the initial extension-based sweep, mostly `test/wav_reference/
+  *.txt` fixtures) — every file individually byte-verified as EOL-only
+  before being included, zero functional change, rebuilt and binary-size-
+  matched twice to confirm. Developer-only; no user-visible effect.

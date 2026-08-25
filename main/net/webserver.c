@@ -9,6 +9,7 @@
 #include "cJSON.h"
 
 #include "battery.h"          // battery_get_level, battery_is_charging
+#include "util/status.h"      // status_charge_limit_active
 #include "wifi.h"             // wifi_get_ssid, wifi_get_rssi_dbm, wifi_get_ip
 #include "cat.h"              // cat_get_frequency, cat_get_band_list, cat_set_*
 #include "ui.h"               // ui_get_*, ui_set_zoom
@@ -373,6 +374,11 @@ static esp_err_t status_handler(httpd_req_t *req)
     // browser had no way to tell a real reading from the erratic rail of a unit
     // with no pack fitted, and showed a percentage either way (#194).
     cJSON_AddBoolToObject  (batt, "present",  battery_present());
+    // Same reasoning as the Tab5's own "(limit)" suffix (Don N2VGU): without
+    // this, "not charging" reads identically whether it's capped on purpose
+    // or something is actually wrong - and that's at least as useful to know
+    // checking from another room as it is looking at the Tab5 itself.
+    cJSON_AddBoolToObject  (batt, "limit",    status_charge_limit_active());
 
     cJSON *wifi_obj = cJSON_AddObjectToObject(root, "wifi");
     cJSON_AddStringToObject(wifi_obj, "ssid", wifi_get_ssid());

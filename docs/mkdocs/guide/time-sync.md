@@ -39,7 +39,7 @@ No internet needed — FT8 timing works offline.
     If you have no accurate time at all — the RTC was never set, or it has been
     unpowered for more than a day or two — then a QMX reading *is* used, because
     something is better than nothing. Failing that, set the clock by hand
-    (**FT8 → Filter → Sync Time**), which also accepts seconds.
+    (**FT8 → Options → Sync Time**), which also accepts seconds.
 
 ### 3. WiFi + SNTP
 
@@ -88,7 +88,7 @@ for it during a POTA activation and could not find it. Apologies. The clock is s
 FT8 screen:
 
 1. Switch to **FT8**
-2. Tap **Filter** (left pane)
+2. Tap **Options** (left pane)
 3. Tap **Sync Time** (bottom right of the modal)
 4. A panel appears with three boxes: **[HH] : [MM] : [SS]**
 5. Tap **HH** or **MM** to type them on the numpad (0–23, 0–59)
@@ -125,9 +125,9 @@ Most useful when: WiFi is unavailable, no GPS QMX, and your RTC has drifted.
 
 #### Fine-Tune Time with "Sync Time" (FT8 Only)
 
-In **FT8 mode**, the Filter modal includes a **"Sync Time" button** that opens an interactive time-setting panel:
+In **FT8 mode**, the Options modal includes a **"Sync Time" button** that opens an interactive time-setting panel:
 
-1. Tap the **Filter** button (FT8 screen, left pane)
+1. Tap the **Options** button (FT8 screen, left pane)
 2. Tap the **Sync Time** button (bottom right of the modal)
 3. A panel appears with three fields: **[HH] : [MM] : [SS]**
    - **HH** / **MM** (hours/minutes) — tap to edit via numpad (0–23, 0–59)

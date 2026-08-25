@@ -111,7 +111,7 @@ Once connected, the settings show your **IP address** — use this to access the
 **SNTP Server** — NTP pool (usually `pool.ntp.org`). Change only if you have a local NTP server.
 
 **Setting the time by hand** — there is no control for this in the drawer, despite what
-earlier versions of this guide said. The clock is set from the FT8 screen: **Filter →
+earlier versions of this guide said. The clock is set from the FT8 screen: **Options →
 Sync Time**. See [Setting the time by hand](time-sync.md#5-setting-the-time-by-hand),
 which also covers setting the seconds — the part that matters with no WiFi and no GPS.
 
@@ -142,6 +142,8 @@ Two things worth knowing, both from Randy N4OPI's side-by-side check against a r
 **Charge Limit** — Optionally stop charging once the battery reaches a set percentage (default **80%**), to reduce long-term wear on the pack. Enable it and choose the target in the settings drawer; charging restarts automatically if the level later falls well below the target (5% hysteresis). Leave it off to always charge to 100%.
 
 **Accurate charge reading while charging** — the displayed battery percentage (and the charge-limit trigger) now compensate for the voltage rise that occurs while charging current is flowing. Previously this made the reading jump around while plugged in, and made the charge limit either stick just short of the target or oscillate; both are fixed.
+
+**"(limit)" on the battery reading** (v1.9.4) — once the cap trips, the battery text on both the Tab5 and the web UI grows a `(limit)` suffix. Without it, "capped on purpose at 80%" and "not charging for some other reason" looked identical.
 
 ## Waterfall Controls
 
@@ -319,8 +321,14 @@ It does nothing at all until both your **callsign and grid** are set, and it is 
 
 ## The snap-on keyboard
 
-If the M5Stack Tab5 70-key snap-on keyboard is attached it is detected at boot
-and needs no configuration. It does considerably more than fill in text fields.
+If the M5Stack Tab5 70-key snap-on keyboard is attached it is detected and
+needs no configuration. It does considerably more than fill in text fields.
+
+**Snap it on any time** (v1.9.4) — attaching it after boot works too, found
+and ready to type within a couple of seconds; the same is true of taking it
+off and reattaching mid-session. Its two LEDs are deliberately dark once it's
+found - the keyboard works identically regardless of when it was attached, so
+there's nothing left for a light to usefully distinguish.
 
 **Typing.** Any window with text fields takes the keyboard directly — WiFi
 setup, your callsign and grid, CQ messages, FT8 filters, memory channels.

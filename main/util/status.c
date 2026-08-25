@@ -85,6 +85,11 @@ static int      s_sd_poll_countdown = 0;  // 0 = poll on the next tick
 #define CHARGE_LIMIT_HYSTERESIS_PCT 5
 static bool s_charge_cutoff_active = false;
 
+bool status_charge_limit_active(void)
+{
+    return s_charge_cutoff_active;
+}
+
 // Pick an LVGL battery glyph based on charge level (0-100).
 static const char *battery_glyph(int level)
 {

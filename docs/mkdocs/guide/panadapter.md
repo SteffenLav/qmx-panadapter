@@ -26,7 +26,7 @@ WiFi indicator with the network name and IP address.
 
 | Item | Meaning |
 |------|---------|
-| Battery % and voltage | Charge level, with the measured pack voltage beside it (e.g. `88% (8.1V)`) |
+| Battery % | Charge level (e.g. `88%`, or `88%  ⚡` while charging). `(limit)` is appended when charging has been deliberately capped at your Battery Care setting - it reads identically to "not charging" otherwise, and this tells you it's on purpose (v1.9.4) |
 | **SD** (green dot) | A microSD card is mounted and being mirrored **continuously** — the case with WiFi off (see [Settings](../guide/settings.md)) |
 | **SD** (yellow dot) | A card is present and your start-up backup is written, but continuous mirroring has stopped — the case with WiFi on. Your log, config and LoTW certificate are safe on the card; later QSOs are written at the next start-up |
 | `UTC(GPS)` / `UTC(NTP)` / `UTC(FT8)` / `UTC(FT4)` | The time source **currently** in charge — GPS-disciplined QMX, WiFi/SNTP, or FT8/FT4 offline sync (RTC / manual show as `UTC(RTC)` / `UTC(MAN)`) |

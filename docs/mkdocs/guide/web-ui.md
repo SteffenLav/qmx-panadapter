@@ -21,6 +21,15 @@ No installation, no configuration, and **no IP address to write down**.
 > box; a few Linux setups need `avahi-daemon` installed, and some guest/hotel
 > networks block the multicast that makes it work.
 
+## On a phone
+
+The layout is built for a landscape screen and reflows fine there. In
+**portrait** on a phone (v1.9.4), the top and bottom bars now scroll
+sideways if a control doesn't fit — swipe them like the decode list — and
+the page itself scrolls vertically if the whole layout is taller than the
+screen. Before this a portrait phone (Randy N4OPI, iPhone Safari) could
+lose the top and bottom bar controls entirely with no way to reach them.
+
 ## Remote Control
 
 The web UI provides full remote control:
@@ -97,7 +106,7 @@ than a made-up number.
 
 It is the **same list the Tab5 shows**, not a second opinion: the ordering comes
 from the device (the station you are working first, then anything addressed to
-you, then CQ calls, then strongest signal) and your Filter-window settings are
+you, then CQ calls, then strongest signal) and your Options-window settings are
 applied to it. The station being worked is highlighted, and anything carrying your
 own callsign stands out, as on the Tab5.
 
@@ -158,6 +167,12 @@ busy here is one the device would avoid anyway.
 - **Grey means unknown, not free.** If nothing has been decoded yet the device has
   no picture of the band, and the strip says so rather than showing reassuring
   green.
+- **The occupancy picture refreshes itself every 3 seconds while the picker is
+  open** (v1.9.4) — it used to be read once, when you opened it, so a slow
+  decision (reading the strip, weighing E vs O) could cross a 15-second slot
+  boundary and land you on a slot that filled in while you were choosing. Your
+  own in-progress pick is never disturbed by the refresh, only the busy/clear
+  colouring under it.
 
 Changing the tone mid-QSO is fine - your partner tracks your time slot, not your
 audio frequency - but it is refused **mid-burst**, and the reason is shown rather
