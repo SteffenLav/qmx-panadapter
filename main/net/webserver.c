@@ -35,6 +35,7 @@
 #include "factory_reset.h"     // factory_reset_request (web-triggered NVS reset)
 #include "bandplan.h"          // bandplan_get_segments / _effective_region / _seg_color
 #include "spots.h"             // spots_get_in_range - live spots for the web spectrum
+#include "spot_sig.h"          // spot_sig_for_ref - the ONE rule deciding an ADIF SIG
 #include "psk_rx.h"            // propagation feedback - who is hearing US
 #include "bt_hid_mouse.h"
 #include "hid_cursor.h"
@@ -1494,9 +1495,25 @@ static esp_err_t adif_edit_handler(httpd_req_t *req)
     if (httpd_query_key_value(query, "value", value_raw, sizeof(value_raw)) != ESP_OK) {
         value_raw[0] = '\0';
     }
-    if (strcmp(field, "RST_SENT") != 0 && strcmp(field, "RST_RCVD") != 0) {
+    // What may be edited, and why the line sits where it does:
+    //   RST_SENT / RST_RCVD  what was exchanged.
+    //   SIG_INFO             the park or summit THEY were activating, i.e. this
+    //                        contact was Park-to-Park. It can only be filled in
+    //                        afterwards: Don Adams WB0LQW reads the other
+    //                        activator's park number off the POTA spots page on
+    //                        his phone while operating and writes it down, then
+    //                        enters it at home (2026-08-24). SIG rides along and
+    //                        is DERIVED, never typed - see below.
+    // Everything else stays uneditable for the reason it always was: CALL, BAND,
+    // MODE, QSO_DATE and TIME_ON are what QRZ, eQSL and LoTW match a contact on,
+    // and a LoTW record is signed over exactly those. SIG/SIG_INFO are read by
+    // POTA and SOTA to credit an activation and by nothing that matches a QSO,
+    // so they fall on the safe side of that same boundary.
+    bool is_rst = (strcmp(field, "RST_SENT") == 0 || strcmp(field, "RST_RCVD") == 0);
+    bool is_ref = (strcmp(field, "SIG_INFO") == 0);
+    if (!is_rst && !is_ref) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
-                            "only RST_SENT and RST_RCVD are editable");
+                            "only RST_SENT, RST_RCVD and SIG_INFO are editable");
         return ESP_FAIL;
     }
     // %-decode both (a call can carry '/', a report a leading '+' sent as %2B).
@@ -1519,13 +1536,34 @@ static esp_err_t adif_edit_handler(httpd_req_t *req)
     // A report is a signed 2-digit dB figure. Validate rather than trust: this
     // string ends up in a file uploaded to three logbooks, and the whole reason
     // the RST fields are honest now is that nothing invents their contents.
-    if (value[0]) {
+    if (is_rst && value[0]) {
         const char *v = value;
         bool okfmt = (v[0] == '+' || v[0] == '-') && isdigit((unsigned char)v[1]) &&
                      isdigit((unsigned char)v[2]) && v[3] == '\0';
         if (!okfmt) {
             httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
                                 "report must be like -07 or +03, or empty to clear");
+            return ESP_FAIL;
+        }
+    }
+    // A reference is US-1241 (POTA), G/LD-049 (SOTA) or DLFF-0123 (WWFF):
+    // letters, digits, a dash, sometimes a slash. Uppercased, because that is
+    // how all three programmes write them and how POTA matches them. The dash is
+    // REQUIRED on purpose - it is what separates a real reference from a typo
+    // like "US1241", and this value is uploaded as a claim that a specific park
+    // was worked. Same principle as never fabricating a signal report: a missing
+    // reference is honest, a wrong one is not.
+    if (is_ref && value[0]) {
+        for (char *c = value; *c; c++) *c = (char)toupper((unsigned char)*c);
+        size_t n = strlen(value);
+        bool okfmt = (n >= 3 && n <= 16) && (strchr(value, '-') != NULL);
+        for (size_t i = 0; okfmt && i < n; i++) {
+            char c = value[i];
+            okfmt = isalnum((unsigned char)c) || c == '-' || c == '/';
+        }
+        if (!okfmt) {
+            httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                "reference must look like US-1241, G/LD-049 or DLFF-0123, or empty to clear");
             return ESP_FAIL;
         }
     }
@@ -1539,6 +1577,15 @@ static esp_err_t adif_edit_handler(httpd_req_t *req)
         return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"log changed - reload\"}");
     }
     bool ok = adif_log_set_field(idx, field, value);
+    if (ok && is_ref) {
+        // SIG is decided from the reference's own shape by the one function that
+        // already decides it for a chase logged off a spot (net/spot_sig.c,
+        // host-tested) - never typed, so it cannot end up disagreeing with the
+        // reference sitting beside it. Cleared with the reference too: "POTA"
+        // with no park behind it is a claim nothing can match, which is exactly
+        // what this endpoint refuses to allow anywhere else.
+        ok = adif_log_set_field(idx, "SIG", value[0] ? spot_sig_for_ref(value) : "");
+    }
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, ok ? "{\"ok\":true}"
                                       : "{\"ok\":false,\"error\":\"edit failed\"}");

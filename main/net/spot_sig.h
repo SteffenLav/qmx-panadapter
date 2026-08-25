@@ -12,3 +12,10 @@
 // `ref` may be NULL or empty; the result is then the source's own programme.
 // Never returns NULL.
 const char *spot_sig_for(spot_source_t src, const char *ref);
+
+// The same decision made from the REFERENCE ALONE, for a chase that never came
+// from a spot at all - the web log editor lets an operator type a park/summit
+// reference against an already-logged QSO to mark it Park-to-Park, and there is
+// no source to ask. Exported rather than duplicated in the web handler so there
+// stays exactly ONE rule deciding what ends up in somebody's SIG field.
+const char *spot_sig_for_ref(const char *ref);

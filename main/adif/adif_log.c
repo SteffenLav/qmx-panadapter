@@ -108,7 +108,7 @@ static void cache_add(const char *call, const char *band)
 
 // Extract an ADIF field value (<FIELD:len>value) from a single record line.
 // Returns false if the field is absent or doesn't fit. The "<FIELD:" tag is
-// '<'-anchored, so "CALL" never matches inside "MY_CALL", etc.
+// '<'-anchored, so "CALL" never matches inside "STATION_CALLSIGN", etc.
 bool adif_log_extract_field(const char *line, const char *field,
                             char *out, size_t out_sz)
 {
@@ -184,16 +184,36 @@ static void repair_legacy_submode_field(void)
     fclose(f);
     buf[n] = '\0';
 
-    static const char *bad_fields[] = { "<SUBMODE:3>FT8", "<SUBMODE:3>FT4" };
+    // ⛔ ONLY the self-referential pairing is bad, and since v1.9.6 that
+    // distinction is load-bearing: FT4 is now legitimately logged as
+    // MODE=MFSK + SUBMODE=FT4, and a blind sweep for "<SUBMODE:3>FT4" (which
+    // is what this used to do) would strip the submode off every new record
+    // at the next boot, leaving a bare MODE=MFSK that says nothing about
+    // which MFSK mode it was. So the SUBMODE is removed only from a record
+    // whose MODE is the SAME value - the pairing QRZ rejects - and each
+    // record is examined on its own line rather than the file as one string.
+    static const char *const dupes[][2] = {
+        { "<MODE:3>FT8", "<SUBMODE:3>FT8" },
+        { "<MODE:3>FT4", "<SUBMODE:3>FT4" },
+    };
     bool changed = false;
-    for (size_t b = 0; b < sizeof(bad_fields) / sizeof(bad_fields[0]); b++) {
-        const char *needle = bad_fields[b];
-        size_t nlen = strlen(needle);
-        char *p;
-        while ((p = strstr(buf, needle)) != NULL) {
-            memmove(p, p + nlen, strlen(p + nlen) + 1);   // shift left, incl. NUL
+    char *line = buf;
+    while (line && *line) {
+        size_t linelen = strcspn(line, "\n");
+        for (size_t d = 0; d < sizeof(dupes) / sizeof(dupes[0]); d++) {
+            char saved = line[linelen];
+            line[linelen] = '\0';                       // confine the search
+            char *mode = strstr(line, dupes[d][0]);
+            char *sub  = mode ? strstr(line, dupes[d][1]) : NULL;
+            size_t slen = strlen(dupes[d][1]);
+            line[linelen] = saved;
+            if (!sub) continue;
+            memmove(sub, sub + slen, strlen(sub + slen) + 1);  // incl. NUL
+            linelen -= slen;
             changed = true;
         }
+        char *nl = strchr(line, '\n');
+        line = nl ? nl + 1 : NULL;
     }
     if (changed) {
         FILE *out = fopen(FILE_PATH, "wb");
@@ -339,13 +359,39 @@ void adif_log_record(const adif_qso_t *qso)
     write_field(f, "CALL",         qso->their_call);
     write_field(f, "FREQ",         freq_str);
     write_field(f, "BAND",         freq_to_band(qso->freq_hz));
-    // FT8 and FT4 are both standalone leaf-level ADIF MODE values (not
-    // submodes of MFSK), so no SUBMODE field belongs here. A prior version
-    // wrote SUBMODE as a duplicate of MODE (e.g. MODE=FT4 SUBMODE=FT4) -
-    // QRZ's logbook import rejected at least FT4 records with this pairing
-    // ("Undefined message or mode"), most likely because its MODE/SUBMODE
-    // validation table has no self-referential entry for either mode.
-    write_field(f, "MODE",         qso->mode ? qso->mode : "FT8");
+    // ADIF is not symmetrical about these two: FT8 is a MODE in its own right,
+    // FT4 is only ever a SUBMODE of MFSK. So FT8 is written as MODE=FT8 and FT4
+    // as MODE=MFSK + SUBMODE=FT4 - which is also exactly what WSJT-X writes, so
+    // it is the form every other program expects to read.
+    //
+    // We wrote MODE=FT4 until v1.9.6. POTA accepts it, which is why it survived
+    // this long, but ADIFMaster refuses to load a file that declares FT4 as a
+    // mode at all, and an activator editing his log before submitting it hits
+    // that immediately (Don Adams WB0LQW, 2026-08-24). eQSL meanwhile silently
+    // remaps it and says so in its import report ("Mode: xxx was mapped to
+    // Mode: yyy Submode: zzz", added there 2026-03-01) - i.e. the receiving end
+    // was already correcting us.
+    //
+    // ⛔ This is the ADIF FILE only. It must NOT reach the LoTW upload as-is:
+    // MFSK is not one of LoTW's own modes, so a TQ8 carrying MODE=MFSK would be
+    // rejected. lotw_upload.c maps MODE+SUBMODE back to the LoTW mode (FT4)
+    // before signing - see lotw_mode_from_adif().
+    //
+    // A much earlier version wrote SUBMODE as a DUPLICATE of MODE (MODE=FT4
+    // SUBMODE=FT4). QRZ's logbook import rejects that pairing outright
+    // ("Undefined message or mode"), its validation table having no
+    // self-referential entry; repair_legacy_submode_field() still strips it
+    // from old records, and now tells that pairing apart from this legitimate
+    // one.
+    {
+        const char *mode = qso->mode ? qso->mode : "FT8";
+        if (strcasecmp(mode, "FT4") == 0) {
+            write_field(f, "MODE",    "MFSK");
+            write_field(f, "SUBMODE", "FT4");
+        } else {
+            write_field(f, "MODE",    mode);
+        }
+    }
     // An unknown report is OMITTED, never filled in. These used to default to
     // "599", which is a harmless convention in CW/SSB but in an FT8 log is a
     // fabricated measurement - and one that gets uploaded to QRZ, eQSL and LoTW
@@ -356,7 +402,15 @@ void adif_log_record(const adif_qso_t *qso)
     if (qso->rst_rcvd && qso->rst_rcvd[0]) write_field(f, "RST_RCVD", qso->rst_rcvd);
     write_field(f, "QSO_DATE",     date_str);
     write_field(f, "TIME_ON",      time_str);
-    write_field(f, "MY_CALL",      qso->my_call);
+    // STATION_CALLSIGN, not MY_CALL. Both carry the same thing - the callsign
+    // the contact was made under - but STATION_CALLSIGN is the ADIF-spec field
+    // and MY_CALL is not, so POTA accepts our file and then warns about it:
+    // "WARNING [QSO(s) 1-14] No station_callsign field, assuming operator
+    // WB0LQW" (Don Adams WB0LQW, after four real activations, 2026-08-24). It
+    // is only ever guessing the right answer there, and a guess about who made
+    // the contact is not something to leave in a log that gets uploaded.
+    // Nothing in this firmware reads MY_CALL back, so this is a pure rename.
+    write_field(f, "STATION_CALLSIGN", qso->my_call);
     write_field(f, "MY_GRIDSQUARE", qso->my_grid);
     write_field(f, "GRIDSQUARE",   qso->their_grid);
     if (qso->their_arrl_section && qso->their_arrl_section[0]) {
@@ -691,14 +745,36 @@ bool adif_log_set_field(int idx, const char *field, const char *value)
         rec++;
     }
     fclose(in);
-    fflush(out);
-    fsync(fileno(out));
-    fclose(out);
 
-    if (!edited) { remove(TMP_PATH); return false; }
+    /* ⛔ Verify the rewrite BEFORE committing it - the same rule, and the same
+     * bug, as adif_log_delete_record() carried until v1.9.5: `edited` is set
+     * purely from the READ side, so a write that failed partway (SPIFFS
+     * returns ENOSPC on this filesystem even with free space; see CLAUDE.md)
+     * would have deleted the good log and renamed a truncated temp over it
+     * while still reporting success. This path is no longer only used for the
+     * occasional report correction - it is how a Park-to-Park reference gets
+     * added to a whole activation's worth of QSOs - so it gets the same
+     * treatment rather than waiting to be reported. */
+    bool write_ok = (ferror(out) == 0);
+    if (write_ok) {
+        fflush(out);
+        fsync(fileno(out));
+        write_ok = (ferror(out) == 0);
+    }
+    if (fclose(out) != 0) write_ok = false;
+
+    if (!edited || !write_ok) {
+        remove(TMP_PATH);
+        if (edited && !write_ok) {
+            ESP_LOGE(TAG, "set_field: rewrite failed (storage full?) - original log left untouched");
+            ui_toast("Edit failed - storage full? Log unchanged");
+        }
+        return false;
+    }
     remove(FILE_PATH);
     if (rename(TMP_PATH, FILE_PATH) != 0) {
         ESP_LOGE(TAG, "set_field: rename %s -> %s failed", TMP_PATH, FILE_PATH);
+        ui_toast("Edit failed - could not replace the log file");
         return false;
     }
 

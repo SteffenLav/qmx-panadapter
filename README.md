@@ -425,6 +425,8 @@ The browser panadapter is a full-featured view in its own right — not just a w
 
 **QSO log — download, view, edit.** Once you have logged at least one completed FT8 QSO, a **"QSO Logs (N) ▲"** menu appears in the bottom bar of the web UI. **ADIF download ↓** fetches your `qso.adi` file directly. **View / edit log** (v1.3.5) opens the whole log as a table in the browser — click any column header to sort (click again to reverse; sorting by date groups an activation's QSOs together), delete a single record with the ✕ on its row, or **Delete all** to clear the log (it asks you to type `DELETE`, because there is no undo — download the ADIF first if you want a copy). The menu is only shown when the log contains data.
 
+Three columns can be corrected by clicking them: the two **reports**, and **P2P ref** — the park or summit the *other* station was activating. That last one is how a Park-to-Park contact gets into the log at all: while you are operating, the other activator's park number is on the POTA spots page on your phone and not in anything the radio sends, so you note it down and enter it when you get home *(Don Adams WB0LQW)*. Type the reference alone — `US-1241`, `G/LD-049`, `DLFF-0123` — and the Tab5 works out the programme (POTA, SOTA or WWFF) from its shape and writes both `SIG` and `SIG_INFO`; clear the reference and both go again. Nothing else is editable: callsign, band, mode, date and time are what QRZ, eQSL and LoTW match a contact on, so a wrong one is a delete-and-re-log.
+
 **QRZ / eQSL upload.** Two more buttons appear alongside the ADIF link once you have logged QSOs — see [QSO logging](#qso-logging-adif) for the full picture.
 
 ### Config backup, restore & edit
@@ -723,15 +725,17 @@ Every tap of **LoTW ↑** afterwards signs and uploads everything logged since t
 | CALL | Their callsign |
 | FREQ | Dial frequency in MHz (3 d.p., e.g. `14.074`) |
 | BAND | Amateur band (e.g. `20M`) |
-| MODE | `FT8` |
-| SUBMODE | `FT8` (required by LoTW TQSL and eQSL for digital mode credit) |
+| MODE | `FT8`, or `MFSK` for an FT4 contact — ADIF defines FT8 as a mode in its own right but FT4 only as a submode of MFSK, and this is the form WSJT-X writes and other software expects to read *(Don Adams WB0LQW)* |
+| SUBMODE | `FT4` on an FT4 contact, absent otherwise. Never a copy of MODE: QRZ rejects that pairing outright |
 | RST_SENT | Our SNR estimate (e.g. `−07`). **Omitted entirely if no report was exchanged** — writing a placeholder `599` into an FT8 log, as versions before v1.3.4 did, fabricates a measurement that then gets uploaded to QRZ/eQSL/LoTW |
 | RST_RCVD | Signal report received |
 | QSO_DATE | UTC date `YYYYMMDD` |
 | TIME_ON | UTC time `HHMMSS` |
-| MY_CALL | Your callsign (from Identity in the drawer) |
+| STATION_CALLSIGN | Your callsign (from Identity in the drawer). This is the ADIF field POTA reads; the older `MY_CALL` spelling made POTA warn *"No station_callsign field, assuming operator …"* on every upload |
 | MY_GRIDSQUARE | Your grid |
 | GRIDSQUARE | Their grid (from the decoded FT8 message) |
+| MY_SIG, MY_SIG_INFO | The programme and reference **you** were activating (`POTA` / `US-1241`), when an activation is set — this is what POTA and SOTA credit the activation from |
+| SIG, SIG_INFO | The programme and reference **they** were activating — a Park-to-Park or Summit-to-Summit contact. Filled in automatically when the QSO came from a spot, or by hand afterwards in **View / edit log** |
 | CONTEST_ID, STX_STRING, SRX_STRING, ARRL_SECT, MY_ARRL_SECT | Field Day mode only: contest ID `ARRL-FD`, your/their literal `<class> <section>` exchange text, and their/your section alone |
 
 **Clear.** `GET /api/adif/clear` from the web UI wipes the file and resets the worked-call cache.

@@ -304,6 +304,25 @@ with no records, not an error.
 `qso-YYYY-MM-DD.adi` so a daily file is self-identifying once it is saved. A day
 with no contacts returns a valid empty ADIF, not an error.
 
+### POST /api/adif/edit
+
+Correct **one field of one record**: `?idx=<n>&call=<CALL>&field=<F>&value=<V>`.
+
+`idx` is the record's position in the file and `call` must match the callsign
+already stored there — both, or the device answers `409` and changes nothing, so
+a browser showing a stale list cannot edit the wrong QSO.
+
+Only three fields are accepted: `RST_SENT`, `RST_RCVD` and `SIG_INFO`. An empty
+`value` removes the field, which for a report is the honest record of one that
+was never exchanged. `SIG_INFO` is the reference the *other* station was
+activating (`US-1241`, `G/LD-049`, `DLFF-0123`); the device derives `SIG` from
+its shape and writes it alongside, and clears it again when the reference is
+cleared. Everything else is refused with `400`: callsign, band, mode, date and
+time are what QRZ, eQSL and LoTW match a contact on, and a LoTW record is signed
+over exactly those.
+
+**Response**: `{"ok":true}`, or `{"ok":false,"error":"…"}`
+
 ### POST /api/adif/clear
 
 Clear all QSOs from ADIF log.

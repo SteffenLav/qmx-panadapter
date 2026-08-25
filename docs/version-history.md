@@ -2733,3 +2733,60 @@ full SPIFFS format (which wipes the partition: the ADIF log, the diag log,
 and the LoTW certificate/private key) to recover the bench itself. That is
 a one-time, hardware-specific recovery, not something this release does to
 anyone's device automatically or ships as a user-facing action.
+
+### Shipped in v1.9.6 — 2026-08-26
+
+A POTA/SOTA logging release, all of it from a seven-page report Don Adams
+WB0LQW wrote after four real park activations, comparing what the Tab5 writes
+against what POTA, SOTA and the ADIF specification actually ask for.
+
+**Your callsign is now `STATION_CALLSIGN`, the field POTA reads.** We wrote it
+as `MY_CALL`, which POTA accepts and then warns about on every single upload:
+*"No station_callsign field, assuming operator WB0LQW"*. It was guessing - it
+happened to guess right, from his account, but a log should say who made the
+contact rather than leave it to be inferred. `STATION_CALLSIGN` is the
+spec-correct field and is what the log now writes. Records logged before this
+release keep the old field name; POTA still accepts them, with the warning.
+
+**Park-to-Park and Summit-to-Summit contacts can be entered afterwards.** The
+web log editor (**QSO Logs -> View / edit log**) has a new **P2P ref** column.
+This is the one piece of a park-to-park contact that no radio can tell you:
+while you are operating, the other activator's park number is on the POTA spots
+page on your phone, and nothing in the FT8 exchange carries it. So you note it
+down, and when you get home you click that cell and type the reference -
+`US-1241`, `G/LD-049`, `DLFF-0123`. The Tab5 works out the programme from the
+reference's shape and writes both `SIG` and `SIG_INFO`, which is what POTA reads
+to award the P2P; clearing the reference clears both again. A chase that was
+logged from a spot already carried these fields automatically - this is for the
+contacts made without one.
+
+A reference must contain a dash to be accepted. `US1241` is refused rather than
+written, because that value goes out as a claim that a specific park was worked,
+and a missing reference is honest where a wrong one is not.
+
+**FT4 contacts are logged the way the ADIF specification defines them:**
+`MODE=MFSK` with `SUBMODE=FT4`, instead of `MODE=FT4`. ADIF makes FT8 a mode in
+its own right but FT4 only a submode of MFSK - an asymmetry, but the standard
+is the standard, and it is what WSJT-X writes and what other software expects to
+read. POTA accepted our old form, but ADIFMaster - the free editor Don uses to
+prepare a log before submitting it - refuses to open a file that declares FT4 as
+a mode at all. FT8 records are unchanged.
+
+LoTW uploads are unaffected: LoTW keeps its own list of modes and has no MFSK in
+it, so the pair is turned back into `FT4` before a QSO is signed, and the file
+that goes to LoTW is byte-for-byte what it was before. eQSL and QRZ both prefer
+the new form. As with the callsign field, FT4 QSOs logged before this release
+keep `MODE=FT4`; a **Today** download after upgrading gives you a file in the
+new form.
+
+**Also fixed:** editing a record verifies the rewrite before replacing the log,
+the same protection single-record delete got in v1.9.5 - on a filesystem that
+has filled up, an edit now fails cleanly and says so instead of risking the log
+it was rewriting.
+
+Two of Don's suggestions were deliberately not implemented. Dropping
+`FREQ`/`RST_SENT`/`RST_RCVD`/`GRIDSQUARE`/`MY_GRIDSQUARE` would tidy the file
+for POTA, which ignores them, at the cost of QRZ, eQSL, LoTW and your own record,
+which do not. And SOTA's own `MY_SOTA_REF`/`SOTA_REF` fields are still not
+written - `SIG`/`SIG_INFO` is valid ADIF for a summit too, but whether SOTA's
+uploader reads it needs a SOTA activator to confirm before anything is changed.

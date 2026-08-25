@@ -315,6 +315,14 @@ static void build_qso_row(lv_obj_t *parent, const char *line, bool even_row,
     adif_log_extract_field(line, "TIME_ON",  time_on,  sizeof(time_on));
     adif_log_extract_field(line, "BAND",     band,     sizeof(band));
     adif_log_extract_field(line, "MODE",     mode,     sizeof(mode));
+    // FT4 is stored the way ADIF requires - MODE=MFSK with SUBMODE=FT4 - so the
+    // submode is what the operator recognises and the column must show. "MFSK"
+    // alone would name a family of modes rather than the one worked.
+    {
+        char submode[8] = "";
+        if (adif_log_extract_field(line, "SUBMODE", submode, sizeof(submode)) && submode[0])
+            snprintf(mode, sizeof(mode), "%s", submode);
+    }
     adif_log_extract_field(line, "RST_SENT", rst_sent, sizeof(rst_sent));
     adif_log_extract_field(line, "RST_RCVD", rst_rcvd, sizeof(rst_rcvd));
 

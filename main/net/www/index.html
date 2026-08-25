@@ -487,8 +487,11 @@
   /* Gyula HA3HZ: the report column looked editable and was not. Now it is, and
      it says so - a dotted underline is the conventional "you can change this"
      without turning the table into a form. */
-  #adifv-table td.rstedit { cursor: pointer; border-bottom: 1px dotted #666; }
-  #adifv-table td.rstedit:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  #adifv-table td.rstedit, #adifv-table td.sigedit { cursor: pointer; border-bottom: 1px dotted #666; }
+  #adifv-table td.rstedit:hover, #adifv-table td.sigedit:hover { color: var(--accent); border-bottom-color: var(--accent); }
+  /* A filled-in P2P reference is the whole point of the column, so it reads as
+     set rather than as one more grey cell. */
+  #adifv-table td.sigedit.set { color: var(--accent); }
   #adifv-table td.del:hover { color: #ff9090; }
 
   /* ---- Frequency keypad (tap the VFO to open) ---- */
@@ -1682,8 +1685,8 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
   const title = document.getElementById("adifv-title");
   if (!modal) return;
 
-  const HDRS = ["Call", "Mode", "Band", "Freq", "Date", "Time", "Sent", "Rcvd", "Grid"];
-  const KEYS = ["CALL", "MODE", "BAND", "FREQ", "QSO_DATE", "TIME_ON", "RST_SENT", "RST_RCVD", "GRIDSQUARE"];
+  const HDRS = ["Call", "Mode", "Band", "Freq", "Date", "Time", "Sent", "Rcvd", "Grid", "P2P ref"];
+  const KEYS = ["CALL", "MODE", "BAND", "FREQ", "QSO_DATE", "TIME_ON", "RST_SENT", "RST_RCVD", "GRIDSQUARE", "SIG_INFO"];
   const NUMERIC = { FREQ: 1, RST_SENT: 1, RST_RCVD: 1 };
 
   let recs = [];
@@ -1734,7 +1737,7 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
     title.textContent = "QSO log — " + recs.length + " QSO" + (recs.length === 1 ? "" : "s");
     head.innerHTML = headHtml();
     if (!recs.length) {
-      body.innerHTML = "<tr><td colspan='10' style='color:#888'>No QSOs logged</td></tr>";
+      body.innerHTML = "<tr><td colspan='11' style='color:#888'>No QSOs logged</td></tr>";
       return;
     }
     let order = recs.map((r, k) => ({ r, k }));
@@ -1756,7 +1759,10 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
       const time = (r.TIME_ON || "").length >= 4
                  ? r.TIME_ON.slice(0, 2) + ":" + r.TIME_ON.slice(2, 4) : "--";
       const freq = r.FREQ ? (+r.FREQ).toFixed(3) : "--";
-      rows.push("<tr><td>" + esc(r.CALL) + "</td><td>" + esc(r.MODE || "FT8") +
+      /* FT4 is stored as ADIF requires it - MODE=MFSK with SUBMODE=FT4 - so
+         show the submode: "MFSK" names a family of modes, not the one worked. */
+      const mode = r.SUBMODE || r.MODE || "FT8";
+      rows.push("<tr><td>" + esc(r.CALL) + "</td><td>" + esc(mode) +
         "</td><td>" + esc(r.BAND || "--") + "</td><td>" + freq +
         "</td><td>" + date + "</td><td>" + time +
         "</td><td class='rstedit' data-k='" + k + "' data-f='RST_SENT'" +
@@ -1765,20 +1771,23 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
         "' data-f='RST_RCVD'" +
         " title='Click to correct the report you RECEIVED. Empty = never exchanged.'>" +
         esc(r.RST_RCVD || "-") +
-        "</td><td>" + esc(r.GRIDSQUARE || "-") + "</td>" +
+        "</td><td>" + esc(r.GRIDSQUARE || "-") +
+        "</td><td class='sigedit" + (r.SIG_INFO ? " set" : "") + "' data-k='" + k + "'" +
+        " title='Park-to-Park / Summit-to-Summit: click to enter the reference THEY were activating.'>" +
+        esc(r.SIG_INFO || "-") + "</td>" +
         "<td class='del' data-k='" + k + "' title='Delete this QSO'>&#10005;</td></tr>");
     }
     body.innerHTML = rows.join("");
   }
 
   async function load() {
-    body.innerHTML = "<tr><td colspan='10' style='color:#888'>Loading …</td></tr>";
+    body.innerHTML = "<tr><td colspan='11' style='color:#888'>Loading …</td></tr>";
     try {
       const r = await fetch("/api/adif");
       if (!r.ok) throw new Error("HTTP " + r.status);
       recs = parseAdif(await r.text());
     } catch (err) {
-      body.innerHTML = "<tr><td colspan='10' style='color:#ff6055'>Load failed: " +
+      body.innerHTML = "<tr><td colspan='11' style='color:#ff6055'>Load failed: " +
                        esc(err.message) + "</td></tr>";
       return;
     }
@@ -1799,7 +1808,44 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
            "Tab5's log only — the copy QRZ/eQSL/LoTW hold is unchanged.";
   }
 
+  /* Post one field edit and re-sync. Returns nothing - the list is always
+     reloaded from the device afterwards, so what is on screen is what the
+     device actually holds rather than what we hoped it would hold. */
+  async function postEdit(r, field, val) {
+    try {
+      const resp = await fetch("/api/adif/edit?idx=" + r._idx +
+                               "&call=" + encodeURIComponent(r.CALL) +
+                               "&field=" + field +
+                               "&value=" + encodeURIComponent(val), { method: "POST" });
+      if (resp.status === 409)
+        alert("The log changed since this page loaded — reloading the list, try again.");
+      else if (!resp.ok) {
+        const t = await resp.text();
+        throw new Error(t || ("HTTP " + resp.status));
+      }
+    } catch (err) {
+      alert("Edit failed: " + err.message);
+    }
+    load();
+  }
+
   body.addEventListener("click", async (e) => {
+    /* Park-to-Park / Summit-to-Summit: the reference the OTHER station was
+       activating. Only the reference is typed - the device derives the
+       programme (POTA/SOTA/WWFF) from its shape, so the two can never end up
+       disagreeing, and clears it again if the reference is cleared. */
+    const sig = e.target.closest("td.sigedit");
+    if (sig) {
+      const r = recs[+sig.dataset.k];
+      if (!r) return;
+      const v = prompt(
+        "Park-to-Park with " + r.CALL + "\n\nThe reference THEY were activating: " +
+        "US-1241 (POTA), G/LD-049 (SOTA) or DLFF-0123 (WWFF).\n" +
+        "Leave EMPTY to clear it." + uploadedWarning(r), r.SIG_INFO || "");
+      if (v === null) return;
+      await postEdit(r, "SIG_INFO", v.trim());
+      return;
+    }
     const rst = e.target.closest("td.rstedit");
     if (rst) {
       const r = recs[+rst.dataset.k];
@@ -1811,22 +1857,7 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
         "\n\nLike -07 or +03. Leave EMPTY to record that no report was exchanged." +
         (uploadedWarning(r) || ""), cur);
       if (v === null) return;
-      const val = v.trim();
-      try {
-        const resp = await fetch("/api/adif/edit?idx=" + r._idx +
-                                 "&call=" + encodeURIComponent(r.CALL) +
-                                 "&field=" + fld +
-                                 "&value=" + encodeURIComponent(val), { method: "POST" });
-        if (resp.status === 409)
-          alert("The log changed since this page loaded — reloading the list, try again.");
-        else if (!resp.ok) {
-          const t = await resp.text();
-          throw new Error(t || ("HTTP " + resp.status));
-        }
-      } catch (err) {
-        alert("Edit failed: " + err.message);
-      }
-      load();
+      await postEdit(r, fld, v.trim());
       return;
     }
     const td = e.target.closest("td.del");

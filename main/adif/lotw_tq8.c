@@ -59,6 +59,28 @@ static void sb_append(sb_t *sb, const char *s)
     sb_append_n(sb, s, strlen(s));
 }
 
+// See lotw_tq8.h: an ADIF mode/submode pair collapsed to the LoTW mode.
+// Deliberately narrow - MFSK is the only ADIF mode this firmware can produce
+// that is not itself a LoTW mode, so this handles exactly that and returns
+// everything else untouched. A general ADIF-to-LoTW mode table belongs in
+// TQSL's configuration data, which is updated by ARRL and not by us; guessing
+// at more of it here would be inventing a mapping rather than following one.
+const char *lotw_mode_from_adif(const char *mode, const char *submode)
+{
+    // Own case-insensitive compare rather than strcasecmp: this file is
+    // deliberately dependency-free so test/lotw_harness.c can compile it on any
+    // host, and strcasecmp lives in <strings.h>, which not every host has.
+    static const char mfsk[] = "MFSK";
+    if (!mode) return "";
+    if (submode && submode[0]) {
+        size_t i = 0;
+        for (; mfsk[i] && mode[i]; i++)
+            if (toupper((unsigned char)mode[i]) != mfsk[i]) break;
+        if (!mfsk[i] && !mode[i]) return submode;
+    }
+    return mode;
+}
+
 // <NAME:len>value  or  <NAME:len:type>value — len is the byte length of
 // value (newlines included), exactly like tqsllib's tqsl_adifMakeField.
 static void sb_field(sb_t *sb, const char *name, char type, const char *value)

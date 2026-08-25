@@ -237,7 +237,7 @@ static uint8_t *gzip_store(const uint8_t *src, size_t n, size_t *out_len)
 typedef struct {
     char call[16];
     char band[8];
-    char mode[12];
+    char mode[12];   // the LoTW mode, already collapsed from ADIF MODE+SUBMODE
     char freq[16];
     char date[12];   // "YYYY-MM-DD"
     char time[12];   // "HH:MM:SSZ"
@@ -265,6 +265,19 @@ static int fill_rec(int idx, lotw_rec_t *r)
     if (strlen(date) != 8 || strlen(tim) != 6) {
         ESP_LOGW(TAG, "record %d has bad date/time - skipping", idx);
         return 0;
+    }
+    // FT4 is logged the ADIF-correct way (MODE=MFSK + SUBMODE=FT4), but LoTW
+    // has no MFSK mode of its own, so the pair is collapsed back to the LoTW
+    // mode before anything is signed. lotw_mode_from_adif() returns "FT4" here
+    // and leaves every other mode - FT8 included - exactly as it was, so the
+    // bytes this uploader produces are unchanged from what LoTW has already
+    // been accepting.
+    {
+        char submode[12] = "";
+        if (adif_log_extract_field(line, "SUBMODE", submode, sizeof submode)) {
+            const char *m = lotw_mode_from_adif(r->mode, submode);
+            if (m != r->mode) snprintf(r->mode, sizeof r->mode, "%s", m);
+        }
     }
     // ADIF YYYYMMDD / HHMMSS -> TQ8 "YYYY-MM-DD" / "HH:MM:SSZ"
     snprintf(r->date, sizeof r->date, "%.4s-%.2s-%.2s", date, date + 4, date + 6);
