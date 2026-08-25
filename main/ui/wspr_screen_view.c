@@ -699,8 +699,11 @@ void wspr_screen_view_tick(void)
         }
     }
 
-    /* the log, repainted only when the spot count actually changed */
-    int n = wspr_spots_count();
+    /* Repainted when a spot was ADDED - not when the COUNT changed. The count
+     * saturates at the ring size and then never moves again, which froze this
+     * list and the header below for five hours of the 2026-08-24 overnight run
+     * while the receiver decoded normally throughout. */
+    int n = (int)wspr_spots_seq();
     if (n == s_last_spot_count) return;
     s_last_spot_count = n;
 

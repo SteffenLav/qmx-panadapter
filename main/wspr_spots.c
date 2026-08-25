@@ -21,6 +21,19 @@ static const char *TAG = "wspr_spots";
  * miniature. */
 static wspr_spot_t  *s_ring;
 static int           s_count;    /* how many valid entries (<= WSPR_SPOT_RING) */
+/* ⛔ A MONOTONIC COUNTER, BECAUSE THE COUNT STOPS BEING ONE.
+ *
+ * s_count saturates at WSPR_SPOT_RING and never changes again, so any consumer
+ * doing "repaint when the count changed" repaints for the first 256 spots and
+ * then NEVER AGAIN. That is not hypothetical: the Tab5's decode list and its
+ * "Heard N stations" header froze at 23:0x UTC during the 2026-08-24 overnight
+ * run - about two hours in, exactly when the ring filled - while the engine went
+ * on decoding perfectly for another five hours. The operator reported it as
+ * "last decode was 23:08"; the store at that moment held spots up to 04:20.
+ *
+ * This never wraps in practice (a spot every ~30 s is ~4000 years) and a wrap
+ * would only cost one missed repaint anyway. */
+static uint32_t s_seq;
 static int           s_head;     /* next write index */
 static SemaphoreHandle_t s_mtx;
 
@@ -52,6 +65,7 @@ void wspr_spots_add(const wspr_spot_t *spot)
     s_ring[s_head] = *spot;
     s_head = (s_head + 1) % WSPR_SPOT_RING;
     if (s_count < WSPR_SPOT_RING) s_count++;
+    s_seq++;
     unlock();
 }
 
@@ -67,6 +81,15 @@ int wspr_spots_get(wspr_spot_t *out, int max)
     }
     unlock();
     return n;
+}
+
+uint32_t wspr_spots_seq(void)
+{
+    if (!s_ring) return 0;
+    if (!lock()) return 0;
+    uint32_t v = s_seq;
+    unlock();
+    return v;
 }
 
 int wspr_spots_count(void)

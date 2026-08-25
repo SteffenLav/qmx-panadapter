@@ -65,6 +65,12 @@ int wspr_spots_get(wspr_spot_t *out, int max);
  * taskLVGL that only wants a count never has to allocate one. */
 int wspr_spots_count(void);
 
+/* Spots ever ADDED, monotonic. ⛔ Use this, not wspr_spots_count(), to decide
+ * whether a view needs repainting: the count saturates at WSPR_SPOT_RING and
+ * then never changes again, which froze the Tab5 decode list for five hours of
+ * an overnight run while the receiver was working perfectly. */
+uint32_t wspr_spots_seq(void);
+
 /* Distinct callsigns currently held. This is the number an operator actually
  * reads as "how am I doing" - 40 spots from 6 stations is a different night
  * from 40 spots from 40 stations. */

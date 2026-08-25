@@ -365,6 +365,31 @@ static int is_legal_power(int dbm)
  * count. */
 #define WSPR_CYCLES_SUSPECT 2000
 
+/* ⛔ LEGAL IS NOT THE SAME AS PLAUSIBLE. The protocol allows 0..60 dBm, and
+ * is_legal_power() only checks the 3 dB quantisation - so a garbage decode
+ * claiming 1 kW passes.
+ *
+ * MEASURED over a 7 h 20 m run on 40 m, 615 decodes, 141 unique calls:
+ *
+ *   - 75 calls were heard REPEATEDLY. A real station transmits again; a
+ *     fabrication does not, so repetition is ground truth that needs no
+ *     external decoder. NOT ONE of those 75 exceeded 40 dBm.
+ *   - 10 calls claimed 47-60 dBm. EVERY ONE was heard exactly once.
+ *
+ * Real <= 40 dBm and fabricated >= 47 dBm, with a clean gap between. 43 sits in
+ * the middle with margin on both sides, so this removed all 10 fabrications and
+ * cost ZERO of the 615 real decodes.
+ *
+ * ⚠ It does reject a LEGAL value, deliberately. 43 dBm is 20 W on a mode built
+ * for milliwatts, and a WSPR spot is a reception report: publishing a station
+ * that was never on the air is worse than missing a rare high-power one. Same
+ * reasoning as the ADIF "599" that was deleted and the PSK Reporter callsign
+ * rules.
+ *
+ * ⚠ One night, one band. If a real >43 dBm station is ever confirmed, raise
+ * this rather than deleting it - the gap is what matters, not the number. */
+#define WSPR_PLAUSIBLE_MAX_DBM 43
+
 /* ⛔ A CALLSIGN CAN SATISFY WSPR'S ENCODING AND STILL BE IMPOSSIBLE.
  *
  * The 28-bit field only demands a digit in the third character slot, so
@@ -420,6 +445,7 @@ static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
     if (strlen(call) < 3) return 0;
     if (!callsign_shape_ok(call)) return 0;
     if (!is_legal_power(dbm)) return 0;
+    if (dbm > WSPR_PLAUSIBLE_MAX_DBM) return 0;
     if (cycles > WSPR_CYCLES_SUSPECT) return 0;
     wspr_msg_bytes_t repack;
     if (!wspr_pack_message(call, grid, dbm, &repack)) return 0;
