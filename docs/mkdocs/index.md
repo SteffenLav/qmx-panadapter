@@ -70,10 +70,12 @@ Everything below is in the firmware **today**. Nothing needs a PC; only the item
 
 ## Status
 
-**v1.9.4 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
+**v1.9.5 — a complete, self-contained FT8/FT4 station with no PC in the loop, a second
 operating position in any browser, and the radio's own menus on the screen.** The
 panadapter, FT8/FT4 receive and transmit, ADIF logging and all four logbook uploads —
 QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog — are stable and in daily use.
+
+**New in v1.9.5 — a fast-follow patch: two ADIF logging bugs, no new features.** **A duplicate contact could falsely claim your park was activated** *(Eric, GitHub issue)* — working the same station twice made the device say "10 contacts, park activated" while POTA.app credited only 9 unique stations and rejected the upload, costing three activations in one outing before it was noticed. A station now counts once toward the minimum no matter how many times you work them. **Deleting a single QSO record could silently do nothing** — the delete never checked whether its rewrite actually succeeded before committing it, so a storage write failure looked like the delete "worked" while the record stayed put. It now verifies the rewrite, refuses to touch the log if it can't, and automatically repairs/reclaims space from storage that's fragmented over a long uptime, so a delete that would previously have failed now just works. Full detail in [docs/version-history.md](docs/version-history.md).
 
 **New in v1.9.4 — the FT8-specific settings get their own home, and the web page finally works on a phone held upright.** The Tab5's **Filter** button is renamed **Options** *(Roy KI0ER)* — it already held real behaviour toggles, not just filters — and the web page gets the same idea properly for the first time: CQ presets and FT8 filters move out of the general Settings list into their own **Options** panel, shown only in FT8 mode, with a count of what's active rather than a plain colour *(Dirk DK7CVD, Don N2VGU)*. The **TX tone picker stops going stale** — it now re-checks the band's occupancy every 3 seconds while you're deciding, instead of only once when you opened it. In **portrait on a phone**, the top and bottom bars now scroll sideways instead of losing controls off the edge entirely *(Randy N4OPI)*. The **battery reading drops the raw voltage** and instead says **`(limit)`** when charging is deliberately capped, on both screens *(Don N2VGU)*. The **snap-on keyboard can be attached (or reattached) any time**, not just at boot, and its LEDs stay dark once it's found. And the **macOS/Linux flasher script is guaranteed clean line endings** regardless of what machine builds the release *(Michael K Johnson KZ4LY)*. Full detail in [docs/version-history.md](docs/version-history.md).
 
@@ -124,7 +126,7 @@ Every release, newest first, is on the [Releases](releases.md) page.
 
 **Stuck, or not sure what something is called?** The Tab5 can help you itself — see [Getting Help](getting-help.md).
 
-**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.9.4.pdf) — the whole user guide as one printable document.
+**Want the whole guide at once?** Download the [User Guide PDF](QMX-Panadapter-UserGuide-v1.9.5.pdf) — the whole user guide as one printable document.
 
 **Builder?** Head to [Build from Source](build/build.md) for ESP-IDF setup and the complete module map.
 

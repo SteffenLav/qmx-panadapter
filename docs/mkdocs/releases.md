@@ -4,7 +4,16 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.9.4** — 2026-08-25
+**v1.9.5** — 2026-08-25
+
+**A fast-follow patch: two ADIF logging bugs, no new features.**
+
+- **A duplicate contact could falsely claim your park was activated** *(Eric, GitHub issue)*. Working the same station twice made the device say "10 contacts, park activated" while POTA.app credited only 9 unique stations and rejected the upload - cost three activations in one outing before it was noticed. A station now counts once toward the 10-QSO (SOTA 4-QSO) minimum no matter how many times you work them.
+- **Deleting a single QSO record could silently do nothing.** The delete never checked whether its rewrite actually succeeded before committing it, so a storage write failure looked like the delete "worked" while the record stayed put. It now verifies the rewrite, refuses to touch the log if it can't, and automatically repairs/reclaims space from storage that's become fragmented over a long uptime - so a delete that would previously have failed now just works.
+
+## Previous Releases
+
+### v1.9.4 — 2026-08-25
 
 **The FT8-specific settings get their own home, and the web page finally works on a phone held upright.**
 
@@ -14,8 +23,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **Battery reading simplified.** The raw cell voltage is gone from both screens - the percentage already carries the level. In its place: once your charge limit trips, the reading says `(limit)`, on the Tab5 and the web page *(Don N2VGU)*.
 - **The snap-on keyboard can be attached - or reattached - any time**, not just at boot. It's found within a couple of seconds whenever it's plugged in, and a detach-then-reattach mid-session works the same way. Its two LEDs stay dark once it's found.
 - **The macOS/Linux flasher script is guaranteed clean line endings** regardless of what machine builds the release *(Michael K Johnson KZ4LY, Fedora)*.
-
-## Previous Releases
 
 ### v1.9.3 — 2026-08-23
 
@@ -448,7 +455,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.9.4.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.9.5.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

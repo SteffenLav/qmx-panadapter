@@ -2680,3 +2680,56 @@ tree happens to be in on whatever machine builds the release.
   *.txt` fixtures) — every file individually byte-verified as EOL-only
   before being included, zero functional change, rebuilt and binary-size-
   matched twice to confirm. Developer-only; no user-visible effect.
+
+### Shipped in v1.9.5 — 2026-08-25 23:20 UTC
+
+A fast-follow patch: two ADIF logging bugs, both able to cost real credit or
+real data. No UI or feature changes.
+
+**POTA/SOTA activation count double-counted duplicate contacts (Eric,
+GitHub issue).** `adif_log_count_activation()` counted every logged record
+toward POTA's 10-QSO (SOTA's 4-QSO) minimum, with no dedup by callsign - it's
+the one function both the Tab5's Activation modal and the web UI's
+activation pill read from, so both screens showed the inflated number.
+Working the same station twice (Eric: KO4JON) made the device say "10
+contacts, park activated" while POTA.app credited 9 unique stations and
+rejected the activation - happened on three parks in one outing before he
+worked around it by ignoring the on-device count entirely. Fixed by
+deduping on callsign alone, not band/mode: the conservative direction, since
+it can only ever show a number at or below what POTA would actually credit,
+never claim activation early the way the old count could.
+
+**Single-record delete could silently fail, or corrupt the log on a card
+with damaged storage.** `adif_log_delete_record()`'s rewrite-to-temp-and-
+rename never checked whether the write actually succeeded before deleting
+the original file and renaming the (possibly incomplete) temp file over it
+- unlike the QSO-append path in the same file, which already has this exact
+`ferror`/`fflush`/`fsync`-checked pattern. Reported as "the delete UI runs
+through its whole motion but the record is still there afterwards."
+Root-caused on the dev bench down to the byte: `fopen("/spiffs/qso.tmp",
+"w")` returning `ENOSPC` (errno 28), on a partition reporting 701 KB used of
+934 KB while its actual files (`qso.adi` + `diag.0.log` + LoTW cert/key)
+only added up to ~170 KB - the ~530 KB gap, plus a directory entry that
+couldn't even be `stat()`'d, was orphaned/inconsistent SPIFFS index blocks,
+not legitimate usage. `esp_spiffs_check()` (ESP-IDF's own consistency
+check/repair) reported success but reclaimed nothing; `esp_spiffs_gc()`
+then confirmed why (`SPIFFS_gc failed`, 0 bytes reclaimed) - that bench's
+partition had a genuinely unrecoverable page, proved by a full format +
+hardware self-test (write two records, delete one, verify the count: PASS).
+
+Fixed two ways: `adif_log_delete_record()` now verifies the rewrite
+actually succeeded before touching the original file, and surfaces a toast
+instead of failing silently either way - so a real write failure is never
+mistaken for "it worked." And since `esp_spiffs_check()` + `esp_spiffs_gc()`
+together are far cheaper than asking an operator to reboot, both now run
+once at mount (`adif_log_init()`), and the delete path retries once through
+the same repair if it still hits `ENOSPC` live - so a real field unit whose
+diag log has fragmented storage over a long uptime self-heals instead of
+needing a power cycle, which is the case this bench's *un*recoverable page
+was standing in for.
+
+⚠ The dev bench's own corruption was NOT repairable in the end - it took a
+full SPIFFS format (which wipes the partition: the ADIF log, the diag log,
+and the LoTW certificate/private key) to recover the bench itself. That is
+a one-time, hardware-specific recovery, not something this release does to
+anyone's device automatically or ships as a user-facing action.
