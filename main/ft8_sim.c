@@ -28,6 +28,8 @@
 #include "ft8/message.h"
 
 #include <string.h>
+#include <sys/time.h>   // sim_now_ms - the slot grid is in ms
+#include "esp_random.h"   // per-phantom fading
 #include <stdio.h>
 #include <ctype.h>
 #include <time.h>
@@ -39,6 +41,8 @@
 static const char *TAG = "ft8_sim";
 
 static void fmt_report(int snr_db, char *out, size_t len);   // defined below
+static int64_t sim_cur_slot(void);                           // defined below
+static int64_t sim_next_slot(int64_t slot_sec);              // (slot arithmetic)
 
 typedef struct {
     const char *call;
@@ -81,12 +85,19 @@ typedef struct {
                                  // build_message: synth once at scheduling,
                                  // land instantly at the due moment)
     int         pend_snr;
+    // Where this station sits on the band, in dB, and it MOVES (#265). A real
+    // station fades; the simulator's did not, which is why every row read
+    // +9/+10 and why nothing that depends on a report CHANGING could be tested.
+    // Seeded per phantom so some are comfortable and some are marginal.
+    int         level_db;
     int         pend_score;
     bool        pend_early;      // fire early in the slot (pileup answers) vs
                                  // at the Fast-pounce-dependent decode instant
     int64_t     pend_next_slot;  // slot of the next (re)send
     int         pend_repeats;    // sends remaining incl. the first
 } ft8_sim_phantom_t;
+
+static void level_drift(ft8_sim_phantom_t *ph);   // defined with the slot helpers
 
 // Total sends of one message before a phantom gives up (first send + retries).
 #define SIM_PHANTOM_REPEATS 4
@@ -141,7 +152,7 @@ static ft8_sim_phantom_t s_phantoms[N_PHANTOMS] = {
 // out of ft8_qso_advance()'s scan (hardware-observed: R-09 landing at
 // boundary +1.5 s, missed every cycle, QSO never advanced).
 static bool build_message(const char *call_to, const char *call_de, const char *extra,
-                          bool use_fd, float tone_hz,
+                          bool use_fd, float tone_hz, int level_db,
                           char *text_out, size_t text_cap, int *snr_out, int *score_out)
 {
     ftx_message_t msg;
@@ -155,7 +166,10 @@ static bool build_message(const char *call_to, const char *call_de, const char *
 
     char text[FTX_MAX_MESSAGE_LENGTH];
     int snr_db = -10, score = 30;
-    if (!ft8_synth_and_decode(&msg, tone_hz, text, sizeof(text), &snr_db, &score)) {
+    // At the phantom's own level, in noise - so the SNR that comes back is one
+    // the decoder MEASURED rather than one the simulator announced (#265).
+    if (!ft8_synth_and_decode_at(&msg, tone_hz, level_db,
+                                 text, sizeof(text), &snr_db, &score)) {
         ESP_LOGW(TAG, "synth/decode failed for '%s' '%s' '%s'", call_to, call_de, extra);
         return false;
     }
@@ -167,11 +181,11 @@ static bool build_message(const char *call_to, const char *call_de, const char *
 
 // Prepare + inject immediately (idle CQs - landing time uncritical).
 static void build_and_inject(const char *call_to, const char *call_de, const char *extra,
-                             bool use_fd, float tone_hz, int64_t slot_sec)
+                             bool use_fd, float tone_hz, int level_db, int64_t slot_sec)
 {
     char text[FTX_MAX_MESSAGE_LENGTH];
     int snr_db, score;
-    if (!build_message(call_to, call_de, extra, use_fd, tone_hz,
+    if (!build_message(call_to, call_de, extra, use_fd, tone_hz, level_db,
                        text, sizeof(text), &snr_db, &score)) return;
     ft8_screen_record_decode(text, score, snr_db, (int)tone_hz, slot_sec, 0);  // phantom = on-beat (dt 0)
     ESP_LOGI(TAG, "injected '%s' (snr=%d score=%d slot=%lld)", text, snr_db, score, (long long)slot_sec);
@@ -189,12 +203,13 @@ static void build_and_inject(const char *call_to, const char *call_de, const cha
 // rest of the pool; TX detection runs in between).
 static bool inject_next_idle_cq(int *idx)
 {
-    int64_t slot_sec = (time(NULL) / 15) * 15;
+    int64_t slot_sec = sim_cur_slot();
     while (*idx < N_PHANTOMS) {
         int i = (*idx)++;
         if (s_phantoms[i].engaged) continue;
+        level_drift(&s_phantoms[i]);
         build_and_inject("CQ", s_phantoms[i].call, s_phantoms[i].grid, false,
-                         s_phantoms[i].tone_hz, slot_sec);
+                         s_phantoms[i].tone_hz, s_phantoms[i].level_db, slot_sec);
         return true;
     }
     return false;
@@ -257,7 +272,12 @@ static void set_pending(ft8_sim_phantom_t *ph, const char *to_call,
 {
     char text[FTX_MAX_MESSAGE_LENGTH];
     int snr, score;
-    if (!build_message(to_call, ph->call, extra, use_fd, ph->tone_hz,
+    // Fade between transmissions here too, not just while calling CQ: a partner
+    // whose signal moves mid-exchange is the whole reason a re-sent report has
+    // to be refreshed (#264), and with a fixed level that path could never be
+    // exercised on the bench.
+    level_drift(ph);
+    if (!build_message(to_call, ph->call, extra, use_fd, ph->tone_hz, ph->level_db,
                        text, sizeof(text), &snr, &score)) {
         ph->pend_active = false;
         return;
@@ -292,6 +312,70 @@ static void set_pending(ft8_sim_phantom_t *ph, const char *to_call,
     ph->engaged        = true;
 }
 
+
+// ---- Slot arithmetic, on whichever protocol is running -----------------------
+//
+// ⛔ NOT `+ 15`. FT8 slots are 15 s and FT4 slots are 7.5 s, and the engine
+// records a slot by its whole-second truncation of a MILLISECOND boundary
+// (ft8_test.c: `slot_sec = boundary_ms / 1000`). So in FT4 the ids step 7, 8,
+// 7, 8 - and a phantom reply scheduled 15 seconds after "now" lands in a slot
+// that half the time does not exist. ft8_qso_advance() scans for
+// `last_utc == slot_sec`, so those replies were never seen and no simulated FT4
+// QSO could ever complete (#256, found while trying to verify the FT4 ADIF
+// change - the operator has no FT4 partner on the bench either).
+//
+// Both helpers work in ms on the same grid the engine uses, then truncate the
+// same way it does.
+static int64_t sim_now_ms(void)
+{
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
+
+// The slot id for the boundary we are inside right now.
+static int64_t sim_cur_slot(void)
+{
+    int64_t period = ft8_op_mode_slot_ms();
+    return ((sim_now_ms() / period) * period) / 1000;
+}
+
+// The id of the slot AFTER the one `slot_sec` names. Snaps back to the true
+// millisecond boundary first, because slot_sec has already lost up to 999 ms of
+// it - in FT4 that is the difference between the right slot and no slot.
+static int64_t sim_next_slot(int64_t slot_sec)
+{
+    int64_t period = ft8_op_mode_slot_ms();
+    int64_t ms     = slot_sec * 1000;
+    int64_t bound  = ((ms + period / 2) / period) * period;   // nearest grid point
+    return (bound + period) / 1000;
+}
+
+// One slot's worth of fading for one phantom: a slow random walk, occasionally
+// a deeper dip, held inside a range where the strongest are easy and the weakest
+// are genuinely marginal. Nothing here pretends to be a propagation model - it
+// only has to make the number MOVE, because a report that never changes cannot
+// exercise the code that re-sends it.
+#define SIM_LEVEL_MIN_DB  (-18)
+#define SIM_LEVEL_MAX_DB  (12)
+// Spread the pool out at the start: all six sitting on the same level would be
+// the old problem in a new place.
+static void levels_seed(void)
+{
+    for (int i = 0; i < N_PHANTOMS; i++)
+        s_phantoms[i].level_db = SIM_LEVEL_MIN_DB +
+                                 (int)(esp_random() % (SIM_LEVEL_MAX_DB - SIM_LEVEL_MIN_DB + 1));
+}
+
+static void level_drift(ft8_sim_phantom_t *ph)
+{
+    int step = (int)(esp_random() % 7) - 3;              // -3..+3 dB
+    if ((esp_random() & 0x1F) == 0) step -= 6;           // an occasional fade
+    ph->level_db += step;
+    if (ph->level_db < SIM_LEVEL_MIN_DB) ph->level_db = SIM_LEVEL_MIN_DB;
+    if (ph->level_db > SIM_LEVEL_MAX_DB) ph->level_db = SIM_LEVEL_MAX_DB;
+}
+
 // Phantoms answer our CQ. Engages up to SIM_PILEUP_CALLERS idle phantoms,
 // each calling us in the SAME reply slot (a genuine pileup) at their own
 // tones - and, like real operators, each keeps calling every 30 s until
@@ -299,7 +383,7 @@ static void set_pending(ft8_sim_phantom_t *ph, const char *to_call,
 // the pileup tracker/viewer. No-op if none are idle.
 static void schedule_cq_answer(const char *my_call, int64_t our_slot)
 {
-    int64_t reply_slot = our_slot + 15;
+    int64_t reply_slot = sim_next_slot(our_slot);
     int n = 0;
     for (int i = 0; i < N_PHANTOMS && n < SIM_PILEUP_CALLERS; i++) {
         if (s_phantoms[i].engaged || s_phantoms[i].worked) continue;
@@ -380,7 +464,7 @@ static void schedule_phantom_reply(ft8_sim_phantom_t *ph, const char *my_call,
         // Lands EARLY in the Fox's own slot so it is in the decode table before
         // ft8_qso_advance() scans that slot - the same reason pileup answers use
         // the early flag. One send: the Fox moves on to the next hound.
-        set_pending(ph, victim, "-13", false, true, our_slot + 15, 1);
+        set_pending(ph, victim, "-13", false, true, sim_next_slot(our_slot), 1);
         // NOT engaged: it owes us nothing, and leaving it engaged would stop its
         // idle CQs, which are what keep it looking like a Fox in the decode list.
         ph->engaged = false;
@@ -425,7 +509,7 @@ static void schedule_phantom_reply(ft8_sim_phantom_t *ph, const char *my_call,
         fmt_report(-9, extra, sizeof(extra));
     }
 
-    set_pending(ph, my_call, extra, use_fd, false, our_slot + 15, repeats);
+    set_pending(ph, my_call, extra, use_fd, false, sim_next_slot(our_slot), repeats);
 }
 
 static void ft8_sim_task(void *arg)
@@ -433,6 +517,7 @@ static void ft8_sim_task(void *arg)
     (void)arg;
     int64_t last_tx_slot = -1;   // slot of the last burst we handled (see below)
     int64_t last_cq_inject_sec = 0;
+    levels_seed();               // #265: spread the pool out before anyone calls
     bool was_active = false;
     bool warned_no_call = false;
 
@@ -441,18 +526,21 @@ static void ft8_sim_task(void *arg)
 
         qmx_settings_t s;
         settings_load_all(&s);
-        // FT8-only: this phantom-station simulator is hardcoded to FT8
-        // protocol (ft8_synth_and_decode() in ft8_test.c) and has no concept
-        // of the FT8/FT4 sub-mode, so injecting its fake traffic while the
-        // real receiver is running FT4 timing would be nonsensical (fake
-        // FT8-protocol QSOs appearing in a decode list whose real RX uses a
-        // different slot length entirely). The drawer checkbox is dimmed and
-        // locked while in FT4 (ui.c's apply_sim_mode_lock) as the primary
-        // guard; this is the backend half of that same belt-and-suspenders
-        // pattern, in case sim_mode_en is left on from a prior FT8 session.
-        if (!s.sim_mode_en || ft8_op_mode_get() != FT8_OP_MODE_FT8) {
+        // FT4 WORKS HERE NOW (#256). This used to be FT8-only, and the reason
+        // given was honest: the synth was hardcoded to FT8's waveform and the
+        // slot arithmetic to a flat 15 s, so phantom traffic in FT4 would have
+        // been nonsense - which is why sim mode switched itself off. Both halves
+        // are fixed: ft8_synth_and_decode_at() encodes and decodes in whichever
+        // protocol is running, and sim_next_slot() follows the real grid (FT4
+        // slot ids step 7, 8, 7, 8 - never a flat 15, which is why a phantom's
+        // reply used to land in a slot that did not exist).
+        //
+        // It matters because the simulator is how an FT4 change gets tested at
+        // all: nobody has an FT4 partner on the bench, and the last FT4 fix had
+        // to ship host-tested only.
+        if (!s.sim_mode_en) {
             if (was_active) {
-                ESP_LOGI(TAG, "sim mode OFF (or FT4 active)");
+                ESP_LOGI(TAG, "sim mode OFF");
                 was_active = false;
                 // Fresh session next time: worked phantoms answer CQs again,
                 // and nothing pending survives the toggle.
@@ -527,9 +615,18 @@ static void ft8_sim_task(void *arg)
         // consecutive bursts are parity-locked >= 2 periods apart anyway).
         char tx_text[40];
         ft8_tx_state_t tx_state = ft8_tx_get_status(tx_text, sizeof(tx_text), NULL);
-        int64_t cur_slot = ((int64_t)time(NULL) / 15) * 15;
+        int64_t cur_slot = sim_cur_slot();
+        // TWO SLOTS OF THE PROTOCOL THAT IS RUNNING, not a hardcoded 30 s.
+        // Consecutive bursts are parity-locked two slots apart: 30 s in FT8 but
+        // 15 s in FT4 - so a flat 30 ignored every FT4 burst after the first,
+        // the phantom never saw our report go out, never sent its roger, and
+        // every simulated FT4 QSO timed out. Operator, watching the screen:
+        // "seems that a qso is never really initiated?" - exactly that. The
+        // FT4 ids truncate to a diff of exactly 15, so the comparison stays
+        // exact rather than needing slop.
+        int64_t min_sep = ((int64_t)ft8_op_mode_slot_ms() * 2) / 1000;
         if (tx_state == FT8_TX_ACTIVE &&
-            (last_tx_slot < 0 || cur_slot - last_tx_slot >= 30)) {
+            (last_tx_slot < 0 || cur_slot - last_tx_slot >= min_sep)) {
             last_tx_slot = cur_slot;
             int64_t our_slot = cur_slot;
             // display_text uses s.my_callsign verbatim (ft8_tx.c) - which may
@@ -629,7 +726,7 @@ static void ft8_sim_task(void *arg)
                 // rather than one message repeated at different callsigns.
                 const char *extra = (qn % 2) ? "-11" : "RR73";
                 set_pending(fx, victim, extra, false, true,
-                            ((nowq / 15) * 15) + 15, 1);
+                            sim_next_slot(sim_cur_slot()), 1);
                 fx->engaged = false;   // it owes US nothing; keep it CQ-able too
                 break;                 // one per iteration - synth is not free
             }

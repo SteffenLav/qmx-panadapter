@@ -1917,6 +1917,7 @@ static void ft8_task(void *arg)
 // ---------------------------------------------------------------------------
 
 #define FD_E2E_GFSK_BT     2.0f          // FT8 GFSK shaping bandwidth factor
+#define FT4_GFSK_BT        1.0f          // FT4's is narrower (ft8_lib's own demo)
 #define FD_E2E_GFSK_K      5.336446f     // pi * sqrt(2 / log(2))
 
 static bool synth_gfsk_heap(const uint8_t *symbols, int n_sym, float f0,
@@ -2077,28 +2078,89 @@ bool ft8_synth_and_decode(const ftx_message_t *msg, float tone_hz,
                           char *out_text, size_t out_len,
                           int *out_snr_db, int *out_score)
 {
+    // The original, noiseless behaviour. Every boot self-test comes through
+    // here and must keep reading what it always read.
+    return ft8_synth_and_decode_at(msg, tone_hz, FT8_SIM_SNR_CLEAN,
+                                   out_text, out_len, out_snr_db, out_score);
+}
+
+bool ft8_synth_and_decode_at(const ftx_message_t *msg, float tone_hz,
+                             int want_snr_db,
+                             char *out_text, size_t out_len,
+                             int *out_snr_db, int *out_score)
+{
     if (!msg || !out_text || !out_len) return false;
 
-    uint8_t tones[FT8_NN];
-    ft8_encode(msg->payload, tones);
+    // Whichever protocol is running. The simulator used to be FT8-only and said
+    // so - "no concept of the FT8/FT4 sub-mode" - which is why sim mode switched
+    // itself off in FT4 and no FT4 change could be exercised without a partner
+    // on the air (#256). FT4 is 105 symbols of 48 ms with narrower shaping;
+    // everything else about this function is the same.
+    bool  ft4       = (ft8_op_mode_get() == FT8_OP_MODE_FT4);
+    int   n_sym     = ft4 ? FT4_NN : FT8_NN;
+    float sym_per   = ft4 ? FT4_SYMBOL_PERIOD : FT8_SYMBOL_PERIOD;
+    float gfsk_bt   = ft4 ? FT4_GFSK_BT : FD_E2E_GFSK_BT;
+    int   slot_samp = ft4 ? (int)(SR_HZ * 7.5f) : SLOT_SAMPLES;
 
-    int n_spsym = (int)(0.5f + SR_HZ * FT8_SYMBOL_PERIOD);
-    int n_wave  = FT8_NN * n_spsym;
+    uint8_t tones[FT4_NN];              // FT4_NN (105) > FT8_NN (79)
+    if (ft4) ft4_encode(msg->payload, tones);
+    else     ft8_encode(msg->payload, tones);
 
-    float *signal = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
+    int n_spsym = (int)(0.5f + SR_HZ * sym_per);
+    int n_wave  = n_sym * n_spsym;
+
+    float *signal = heap_caps_malloc((size_t)slot_samp * sizeof(float), MALLOC_CAP_SPIRAM);
     if (!signal) return false;
-    memset(signal, 0, SLOT_SAMPLES * sizeof(float));
+    memset(signal, 0, (size_t)slot_samp * sizeof(float));
+
+    // A NOISE FLOOR TO MEASURE AGAINST (#265). Without it the buffer is silent
+    // and the estimator has nothing but the signal's own leakage to compare to,
+    // which scales with the signal - so every phantom came out at the same
+    // +9/+10 dB however loud it was meant to be.
+    //
+    // Uniform noise is enough here: the estimator averages power in bins, and
+    // what matters is that the floor is flat and independent of the signal.
+    // xorshift32 rather than rand(), to keep this off the C library's global
+    // state - this runs on the FT8 tasks.
+    float amp = 1.0f;
+    if (want_snr_db != FT8_SIM_SNR_CLEAN) {
+        const float sigma = 0.10f;                  // noise RMS
+        uint32_t x = 0x1234567u ^ (uint32_t)(tone_hz * 7.0f) ^ (uint32_t)esp_timer_get_time();
+        if (!x) x = 1;
+        const float scale = sigma * 1.7320508f;     // uniform[-s,s] has RMS s/sqrt(3)
+        for (int i = 0; i < slot_samp; i++) {
+            x ^= x << 13; x ^= x >> 17; x ^= x << 5;
+            signal[i] = scale * ((float)(int32_t)x / 2147483648.0f);
+        }
+        // Amplitude for the wanted ratio, in FT8's 2500 Hz reference bandwidth:
+        //   SNR = (a^2 / 2) / (sigma^2 * 2500 / (SR/2))
+        float nb = sigma * sigma * (2500.0f / (SR_HZ / 2.0f));
+        amp = sqrtf(2.0f * nb * powf(10.0f, (float)want_snr_db / 10.0f));
+    }
 
     int start = (int)(0.5f * SR_HZ);
-    if (start + n_wave > SLOT_SAMPLES) start = 0;
-    if (!synth_gfsk_heap(tones, FT8_NN, tone_hz, FD_E2E_GFSK_BT, FT8_SYMBOL_PERIOD, SR_HZ, signal + start)) {
+    if (start + n_wave > slot_samp) start = 0;
+    float *tone_buf = signal + start;
+    if (want_snr_db != FT8_SIM_SNR_CLEAN) {
+        // Synthesise into scratch, then ADD it to the noise at the chosen level.
+        tone_buf = heap_caps_malloc((size_t)n_wave * sizeof(float), MALLOC_CAP_SPIRAM);
+        if (!tone_buf) { heap_caps_free(signal); return false; }
+        memset(tone_buf, 0, (size_t)n_wave * sizeof(float));
+    }
+    if (!synth_gfsk_heap(tones, n_sym, tone_hz, gfsk_bt, sym_per, SR_HZ, tone_buf)) {
+        if (tone_buf != signal + start) heap_caps_free(tone_buf);
         heap_caps_free(signal);
         return false;
+    }
+    if (tone_buf != signal + start) {
+        for (int i = 0; i < n_wave; i++) signal[start + i] += amp * tone_buf[i];
+        heap_caps_free(tone_buf);
     }
 
     const monitor_config_t cfg = {
         .f_min = 200.0f, .f_max = 3000.0f, .sample_rate = SR_HZ,
-        .time_osr = 2, .freq_osr = 2, .protocol = FTX_PROTOCOL_FT8,
+        .time_osr = 2, .freq_osr = 2,
+        .protocol = ft4 ? FTX_PROTOCOL_FT4 : FTX_PROTOCOL_FT8,
     };
     monitor_t *mon = heap_caps_malloc(sizeof(monitor_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!mon) {

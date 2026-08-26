@@ -7899,26 +7899,26 @@ static void drawer_check_pskrep_cb(lv_event_t *e)
 // (The manual "QMX has GPS" checkbox was removed 2026-07-19 - GPS is now
 // auto-detected in time_sync.c from whether the QMX tick agrees with SNTP.)
 
-// Dim + lock the sim-mode checkbox while in FT4 - ft8_sim.c's phantom-station
-// simulator (W1AW/K9ZZ practice QSOs) is FT8-only: it's hardcoded to FT8
-// protocol internally (ft8_synth_and_decode()) and has no concept of the
-// FT8/FT4 sub-mode, so toggling it on while in FT4 used to inject fake
-// FT8-protocol phantom traffic into a decode list whose real receiver was
-// actually running FT4 timing - nonsensical. Rather than build a second,
-// FT4-specific phantom-station engine (a similarly-sized feature to the
-// original), the FT8 one is locked to FT8-only for now; see ft8_sim.c's own
-// op-mode gate for the belt-and-suspenders backend half of this.
-// Same dim+DISABLED+early-return-guard pattern as ft8_cq_modal.c's Field Day
-// lockout (apply_fd_dim) - don't rely on LVGL's DISABLED state alone.
+// UNLOCKED IN FT4 as of #256. This used to dim and disable the sim-mode
+// checkbox in FT4, and the reason was sound at the time: the phantom simulator
+// synthesised FT8's waveform on a flat 15 s slot grid, so switching it on in
+// FT4 would have put fake FT8 traffic in a decode list whose receiver was
+// running FT4 timing. Both halves are fixed now - ft8_synth_and_decode_at()
+// encodes and decodes in whichever protocol is live, and the sim follows the
+// real FT4 slot grid - so the lock has nothing left to protect against.
+//
+// It is kept as a function rather than deleted because the guard pattern
+// (dim + DISABLED + an early return in the handler) is the one this file uses
+// wherever a control must be genuinely unusable, and the next thing that needs
+// locking should copy it rather than reinvent it.
 static void apply_sim_mode_lock(bool ft4)
 {
-    s_sim_mode_locked = ft4;
-    lv_opa_t opa = ft4 ? LV_OPA_50 : LV_OPA_COVER;
-    if (s_lbl_sim_mode) lv_obj_set_style_opa(s_lbl_sim_mode, opa, 0);
+    (void)ft4;
+    s_sim_mode_locked = false;
+    if (s_lbl_sim_mode) lv_obj_set_style_opa(s_lbl_sim_mode, LV_OPA_COVER, 0);
     if (s_check_sim_mode) {
-        lv_obj_set_style_opa(s_check_sim_mode, opa, 0);
-        if (ft4) lv_obj_add_state(s_check_sim_mode, LV_STATE_DISABLED);
-        else     lv_obj_remove_state(s_check_sim_mode, LV_STATE_DISABLED);
+        lv_obj_set_style_opa(s_check_sim_mode, LV_OPA_COVER, 0);
+        lv_obj_remove_state(s_check_sim_mode, LV_STATE_DISABLED);
     }
 }
 

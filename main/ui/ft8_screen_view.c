@@ -1259,6 +1259,10 @@ void ft8_screen_view_request_reply(const char *call)
 
 // #221: ask for an FT8/FT4 preset from the API. freq_hz of 0 means "keep the
 // current frequency, only change sub-mode".
+// Defined further down, beside the preset tables it reads - those tables belong
+// with the preset UI, and this is used by the API drain above them.
+static uint32_t calling_freq_for(bool ft4, uint32_t near_hz);
+
 void ft8_screen_view_request_preset(uint32_t freq_hz, bool ft4)
 {
     s_web_preset_ft4 = ft4;
@@ -1418,11 +1422,44 @@ static void t_clock_cb(lv_timer_t *t)
         uint32_t hz  = s_web_preset_hz;
         bool     ft4 = s_web_preset_ft4;
         s_web_preset_hz = 0;                    // consume before acting
-        if (hz == 1) hz = cat_get_frequency();  // sentinel: keep the dial where it is
+        if (hz == 1) {
+            // Sentinel: keep the dial where it is. With the radio off or not yet
+            // enumerated CAT answers 0, and this used to fall straight through
+            // the `if (hz)` below - the request consumed, nothing done, no log
+            // line, and an {"ok":true} already sent to the caller. That is the
+            // silent-no-op shape CLAUDE.md warns about, and it cost a quarter of
+            // an hour of "why is it still FT8?" on a bench with the radio off.
+            // The stored FT8 frequency is the right fallback: it is what the FT8
+            // screen would have tuned to anyway.
+            hz = cat_get_frequency();
+            if (!hz) {
+                qmx_settings_t fs;
+                settings_load_all(&fs);
+                hz = fs.ft8_freq_hz;
+                ESP_LOGW(TAG, "API preset: no frequency from the radio - using the stored %lu Hz",
+                         (unsigned long)hz);
+            }
+            // Landing on the right frequency for the protocol asked for. FT4 has
+            // its own calling frequencies - 14.080 where FT8 uses 14.074 - and
+            // switching protocol while staying put means calling FT4 on the FT8
+            // watering hole, which is what "keep the dial where it is" quietly
+            // did (operator, 2026-08-26: "ft4 require change in freq??"). The
+            // Tab5's own Preset list has always set both together; this makes
+            // the API agree with it. A band with no standard frequency for that
+            // protocol keeps the current dial rather than jumping bands.
+            uint32_t want = calling_freq_for(ft4, hz);
+            if (want && want != hz) {
+                ESP_LOGW(TAG, "API preset: %s calling frequency on this band is %lu Hz",
+                         ft4 ? "FT4" : "FT8", (unsigned long)want);
+                hz = want;
+            }
+        }
         if (hz) {
             ESP_LOGW(TAG, "API: switching to %s on %lu Hz",
                      ft4 ? "FT4" : "FT8", (unsigned long)hz);
             apply_freq_preset(hz, ft4);
+        } else {
+            ESP_LOGE(TAG, "API preset ignored: no frequency from the radio and none stored");
         }
     }
 
@@ -2222,6 +2259,26 @@ static void ft8_freq_preset_cb(lv_event_t *e)
 }
 
 #if !FT4_MODE_DISABLED
+// The calling frequency for `ft4` on whatever band `near_hz` is in, or 0 if
+// this protocol has no standard frequency there (FT4 has none on 160 m or
+// 60 m). Nearest-entry rather than a band-label lookup: the tables are MHz
+// apart, so nearest is unambiguous, and the 5 % guard is what stops a band
+// without an entry silently jumping to the next band up.
+static uint32_t calling_freq_for(bool ft4, uint32_t near_hz)
+{
+    const ft8_band_freq_t *tbl = ft4 ? FT4_BAND_FREQS : FT8_BAND_FREQS;
+    int n = ft4 ? (int)N_FT4_BAND_FREQS : (int)N_FT8_BAND_FREQS;
+    if (!near_hz) return 0;
+    uint32_t best = 0, best_d = 0xFFFFFFFFu;
+    for (int i = 0; i < n; i++) {
+        uint32_t f = tbl[i].freq_hz;
+        uint32_t d = (f > near_hz) ? (f - near_hz) : (near_hz - f);
+        if (d < best_d) { best_d = d; best = f; }
+    }
+    if (!best) return 0;
+    return (best_d * 20 < near_hz) ? best : 0;   // within 5 % = same band
+}
+
 static void ft4_freq_preset_cb(lv_event_t *e)
 {
     apply_freq_preset((uint32_t)(uintptr_t)lv_event_get_user_data(e), true);
