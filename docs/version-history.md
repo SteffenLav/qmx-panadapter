@@ -2127,7 +2127,7 @@ After swapping cables he once got "is the radio set to 2 USB serial ports?" on a
 
 ## v1.8.8 — 2026-08-20
 
-Diagnostics + field reports. Full notes: `docs/release-notes-v1.8.8.md`.
+Diagnostics + field reports.
 
 - **#117 a crash now survives the reboot.** `util/panic_hook.c` wraps
   `esp_panic_handler` (`-Wl,--wrap=`) and stashes a record in RTC no-init RAM;
@@ -2173,8 +2173,6 @@ Diagnostics + field reports. Full notes: `docs/release-notes-v1.8.8.md`.
 - **WS health counters** in `/api/status`.
 
 ## v1.8.9 — 2026-08-20
-
-Full notes: `docs/release-notes-v1.8.9.md`.
 
 - **#146 the radio could be left transmitting, and now cannot.** Roy KI0ER's log
   is the whole mechanism: `cdc_acm: TX transfer timeout` mid-burst, then every

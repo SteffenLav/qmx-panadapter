@@ -1,7 +1,0 @@
-**A fast-follow patch: two logging bugs that could cost you a POTA activation or corrupt your QSO log's storage.**
-
-**A duplicate contact could falsely claim your park was activated.** If you worked the same station twice during an activation, both the Tab5 and the web page counted it toward POTA's 10-QSO (SOTA's 4-QSO) minimum — so the device could say "10 contacts, park activated" while POTA.app credited only 9 unique stations and rejected the upload *(Eric, GitHub issue — three parks in one outing affected before he noticed)*. Fixed: a station now counts once toward the minimum no matter how many times you work them.
-
-**Deleting a single QSO record could silently do nothing — or, on a card with damaged storage, corrupt the log.** The single-record delete (Tab5 ADIF viewer and the web log editor) never checked whether its file rewrite actually succeeded before replacing the log — so a storage write failure looked like the delete "worked" while the record stayed put, and in the worst case could have written a broken file over a good one. The device now verifies the rewrite before committing it, refuses to touch the log if it can't, and — new in this release — automatically repairs and reclaims space from a storage card that's become fragmented over a long uptime, so a delete that would have failed now just works.
-
-No new features, no UI changes. Everything else is exactly as it was in v1.9.4.
