@@ -30,6 +30,9 @@
 
 #include "wspr_decode.h"
 
+/* Guards are applied through the REAL wspr_guard_check(), never a copy: a
+ * harness that mirrors the code under test only ever proves the mirror. */
+
 #define MAX_SWEEP 64
 
 int main(int argc, char **argv)
@@ -55,24 +58,51 @@ int main(int argc, char **argv)
     printf("%s: %ld samples (%.1f s), trying up to %d candidates\n",
            path, n, n / 12000.0, max_c);
 
+    /* --guards applies the SHIPPED guard set, so this can measure what the
+     * device would actually PUBLISH rather than what the raw decoder emitted.
+     * Without it a noise-born fabrication counts as a decode, and any
+     * sensitivity number built on that is wrong - measured 2026-08-25, where
+     * two "decodes" at +8 and +10 dB of added noise were both fabrications
+     * that the SLOW guard catches. */
+    int use_guards = 0;
+    for (int a = 1; a < argc; a++) if (!strcmp(argv[a], "--guards")) use_guards = 1;
+
+    wspr_guards_t guards;
+    wspr_guards_defaults(&guards);
+    wspr_accepted_t accepted = { 0 };
+
     wspr_freq_candidate_t cands[MAX_SWEEP];
     int ncand = wspr_find_candidates(samples, n, 1350.0, 1650.0, cands, max_c);
-    printf("  found %d candidate(s)\n", ncand);
+    printf("  found %d candidate(s)%s\n", ncand,
+           use_guards ? " (guards ENFORCED)" : " (raw decoder, no guards)");
 
-    int decoded = 0, beyond8 = 0;
+    int decoded = 0, beyond8 = 0, guarded = 0;
     for (int i = 0; i < ncand; i++) {
         wspr_decode_result_t r;
         wspr_decode_candidate(samples, n, cands[i].freq_hz, &r);
+
+        int rej = 0;
+        if (r.ok && use_guards) {
+            double dnear; int wn, ws;
+            if (wspr_guard_check(&guards, &accepted, &r, &dnear, &wn, &ws) != WSPR_GUARD_PASS)
+                rej = 1;
+        }
+
         printf("  cand %2d f=%7.2f score=%9.3g cycles=%6u  %s",
                i, cands[i].freq_hz, (double)cands[i].comb_score, r.cycles,
-               r.ok ? "DECODED " : "rejected");
+               !r.ok ? "rejected" : (rej ? "GUARDED " : "DECODED "));
         if (r.ok) {
-            decoded++;
-            if (i >= 8) beyond8++;
             printf(" '%s' '%s' %d dBm", r.callsign, r.grid, r.power_dbm);
+            if (rej) guarded++;
+            else {
+                decoded++;
+                if (i >= 8) beyond8++;
+                if (use_guards) wspr_accepted_add(&accepted, r.freq_hz);
+            }
         }
         printf("\n");
     }
+    if (use_guards) printf("  %d guarded off\n", guarded);
     /* The number that matters: decodes that the old cap of 8 could never have
      * reached, no matter how good the decoder was. */
     printf("  => %d decode(s) of %d tried; %d of them beyond the old cap of 8\n",
