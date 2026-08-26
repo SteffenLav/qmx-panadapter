@@ -1876,7 +1876,13 @@ static const int GRP_STATION[]  = { DRAWER_SEC_IDENTITY, DRAWER_SEC_ACTIVATION,
 static const int GRP_RADIO[]    = { DRAWER_SEC_QMXVOL, DRAWER_SEC_QMXRF, DRAWER_SEC_CW,
                                     DRAWER_SEC_RITPILL, DRAWER_SEC_SWRLIM, DRAWER_SEC_TUNE2,
                                     DRAWER_SEC_PAUSE, DRAWER_SEC_TERM };
-static const int GRP_NETWORK[]  = { DRAWER_SEC_WIFI, DRAWER_SEC_SPOTS, DRAWER_SEC_BT };
+// DRAWER_SEC_OTADL sits here, not in Device, and that placement is the point:
+// Device is an EXPERT-only group, and "should this thing download 3.3 MB on my
+// hotspot" is a decision an ordinary session makes - the three people who asked
+// for the switch would not have found it behind Expert. It is a question about
+// what the network connection does unasked, so it belongs beside WiFi.
+static const int GRP_NETWORK[]  = { DRAWER_SEC_WIFI, DRAWER_SEC_OTADL,
+                                    DRAWER_SEC_SPOTS, DRAWER_SEC_BT };
 // Flip 180 last: it is the least-touched control in the group (operator).
 static const int GRP_DISPLAY[]  = { DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_SLEEP,
                                     DRAWER_SEC_CMAP, DRAWER_SEC_FLIP };
@@ -1884,7 +1890,7 @@ static const int GRP_FT8[]      = { DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRA
 static const int GRP_SPECTRUM[] = { DRAWER_SEC_PRESETS, DRAWER_SEC_DBRANGE, DRAWER_SEC_SMOOTHING,
                                     DRAWER_SEC_WATERFALL, DRAWER_SEC_FLAT, DRAWER_SEC_IQ,
                                     DRAWER_SEC_IFCAL };
-static const int GRP_DEVICE[]   = { DRAWER_SEC_CHARGE, DRAWER_SEC_OTADL };
+static const int GRP_DEVICE[]   = { DRAWER_SEC_CHARGE };
 
 #define GRP_DEF(name, arr, exp) { name, arr, (int)(sizeof(arr)/sizeof((arr)[0])), exp }
 // A group marked `expert` is hidden in Basic. Everything reached in a normal
@@ -9510,6 +9516,13 @@ void ui_set_drawer_expert(bool expert)
 {
     if (s_drawer_expert == expert) return;
     s_drawer_expert = expert;
+    // Remembered across a reboot. An operator who wants Expert wants it every
+    // time, and re-choosing it at each boot is the sort of small repeated tax
+    // that makes a device feel like it is not listening (Samuel W7STF,
+    // 2026-08-26: "selecting it seems to nuisance upon each boot-up"). Set here
+    // rather than in the button handler so every route persists; the setter
+    // ignores an unchanged value, so the boot-time restore writes nothing.
+    settings_set_drawer_expert(expert);
     drawer_expert_paint();
     drawer_set_ft8_mode(ui_mode_get() == UI_MODE_FT8);
     if (s_drawer) lv_obj_scroll_to_y(s_drawer, 0, LV_ANIM_OFF);
@@ -10130,16 +10143,9 @@ static void drawer_otadl_cb(lv_event_t *e)
 static void drawer_expert_btn_cb(lv_event_t *e)
 {
     (void)e;
-    s_drawer_expert = !s_drawer_expert;
-    // Remembered across a reboot. An operator who wants Expert wants it every
-    // time, and re-selecting it at each boot is exactly the sort of small
-    // repeated tax that makes a device feel like it is not listening
-    // (Samuel W7STF, 2026-08-26: "selecting it seems to nuisance upon each
-    // boot-up").
-    settings_set_drawer_expert(s_drawer_expert);
-    drawer_expert_paint();
-    drawer_set_ft8_mode(ui_mode_get() == UI_MODE_FT8);
-    if (s_drawer) lv_obj_scroll_to_y(s_drawer, 0, LV_ANIM_OFF);
+    // Straight through the one function that owns this, so the button, the boot
+    // restore and the dev action cannot drift apart - persistence included.
+    ui_set_drawer_expert(!s_drawer_expert);
 }
 
 // Release the radio / take it back. One button, two states - the label always
