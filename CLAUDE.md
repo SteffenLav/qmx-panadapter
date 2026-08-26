@@ -1191,6 +1191,60 @@ Fix, in `ft8_qso.c`: `final_resend_if_still_asked()` runs at the TOP of `ft8_qso
 
 Related, and worth knowing before "improving" any of this: `ft8_qso.c` is the **only** writer of ADIF records, so the log holds FT8/FT4 contacts and nothing else. SOTA is almost entirely CW/SSB (0 of 16 spots in a digi mode), so `SIG=SOTA` is nearly unreachable in practice — the SOTA source earns its place as the **spectrum lane**, not as chase logging. The reachable case for the SIG rule is a DX-cluster-sourced spot whose reference is a summit or a WWFF site, worked on FT8: that used to be filed as `SIG=POTA`, a claim nobody could match, and `net/spot_sig.c` now decides it from the reference's shape (covered by `test/spot_sig_harness.c` — which links the real function rather than mirroring it).
 
+### The ADIF file and the LoTW upload disagree about FT4 ON PURPOSE (v1.9.6)
+ADIF is asymmetric: **FT8 is a MODE, FT4 is only a SUBMODE of MFSK.** So
+`adif_log.c` writes FT4 as `MODE=MFSK` + `SUBMODE=FT4` (what WSJT-X writes, and
+what ADIFMaster demands — it refuses to open a file declaring FT4 as a mode at
+all, which is how Don Adams WB0LQW hit this while editing a log before
+submitting it). POTA accepted the old `MODE=FT4`, and eQSL was quietly remapping
+it for us.
+
+⛔ **LoTW has no MFSK mode of its own** — TQSL's config maps (ADIF mode, ADIF
+submode) pairs onto LoTW's own mode list, and MFSK appears only on the ADIF side
+of that map. We sign our own TQ8s instead of handing an ADIF to TQSL, so the
+collapse is ours to do: `lotw_mode_from_adif()` (portable, in `lotw_tq8.c`,
+8 cases in `test/lotw_harness.c`, mutation-tested) turns the pair back into
+`FT4`. **The invariant is byte identity** — an ADIF fix made for POTA and
+ADIFMaster must not change one byte of the verified LoTW path. Anything else
+reading `MODE` out of a record (`adif_view_modal.c`, the web log table) shows the
+SUBMODE when there is one, because "MFSK" names a family, not the mode worked.
+
+⚠ **The legacy duplicate-SUBMODE migration nearly ate this.**
+`repair_legacy_submode_field()` swept the whole file for `<SUBMODE:3>FT4` (a
+2026-06-30 fix for records that wrote SUBMODE as a copy of MODE, which QRZ
+rejects). Unscoped, it would have stripped the new, CORRECT submode off every
+record at the next boot — silently, and only visible in a file the operator
+uploads. It is now line-scoped and fires only when `MODE == SUBMODE`. Whenever a
+migration deletes a field by name, ask what else could legitimately carry that
+name later.
+
+⚠ **The FT4 half is NOT device-verified.** `ft8_sim.c`'s phantoms never engage in
+FT4 (`schedule_cq_answer()` hardcodes `our_slot + 15`, TODO #256), so no FT4 QSO
+could be logged on the bench with the radio wedged. FT8 records, the
+`STATION_CALLSIGN` rename and the whole Park-to-Park path WERE verified on
+hardware.
+
+### Only what was EXCHANGED is editable — and `SIG` is derived, never typed (v1.9.6)
+`POST /api/adif/edit` takes `RST_SENT`, `RST_RCVD` and `SIG_INFO`, and refuses
+everything else with a 400. The boundary is not squeamishness: CALL, BAND, MODE,
+QSO_DATE and TIME_ON are what QRZ, eQSL and LoTW match a contact on, and a LoTW
+record is signed over exactly those — delete and re-log is the correct route for
+those. `SIG`/`SIG_INFO` are read by POTA and SOTA for credit and by nothing that
+matches a QSO, so they sit on the safe side of it.
+
+**`SIG` is decided from the reference's shape** by `spot_sig_for_ref()` — the same
+function that decides it for a chase logged off a spot, exported rather than
+copied — so a typed programme cannot contradict the reference beside it, and it
+is cleared when the reference is cleared. **A reference must contain a dash**:
+`US1241` is refused rather than written, because the value goes out as a claim
+that a specific park was worked. Same rule as never fabricating a signal report —
+a missing field is honest, a wrong one is not.
+
+`adif_log_set_field()` also got the verify-before-commit fix `delete_record()`
+got in v1.9.5 (`ferror`, then `fflush`/`fsync`, then `fclose`, and only then
+replace the file). It was the same latent bug, and this path is now used for a
+whole activation's worth of records rather than the occasional report typo.
+
 ### Tone occupancy is filtered by slot PARITY (v1.3.4)
 Roy KI0ER: "a frequency offset could be entirely available to me, but only if I TX into the correct time window." `build_tone_occupancy()` (`ft8_tx.c`) counted every decoded station regardless of the slot it was heard in, so a tone busy only in the OPPOSITE window read as busy for us — on a crowded band, most of the strip — and `ft8_find_clear_tone_hz_near()` steered away from slots that were in fact free.
 
@@ -1505,7 +1559,7 @@ POUNCE (we answered their CQ)          CQ-RUN (they answered our CQ)
 - **Success detection is a SUBSTRING test**, matching TQSL's own check (`strstr(result, "accepted")`, v1.3.3 — was `strcmp`, stricter than the reference and so able to report failure on a decorated-but-successful status). Still matched only against the extracted `<!-- .UPL. -->` comment, never the raw page, so a login/landing page can't false-positive.
 - **The upload cursor only rewinds when the cert actually CHANGED** (v1.3.3). It used to rewind on every import — and since the station-location fields live only in the setup page, which requires re-picking the `.p12`, adding a state/county re-submitted the same cert and would have re-signed and re-sent the entire log for a two-field edit.
 - **`GET /api/lotw_tq8`** returns the whole log signed as a downloadable .tq8 — the offline verification path (gunzip + openssl-verify on a PC) and usable for manual upload at the LoTW website.
-- **LIVE-VERIFIED end-to-end 2026-07-14** (operator OZ1LAV): real TQSL .p12 imported through forge in a real browser, 22 QSOs signed on-device and **accepted by lotw.arrl.org**. Also earlier verified with a throwaway self-signed cert (host harness + on-device openssl signature checks). FT4 note: LoTW mode `FT4` is valid directly (confirmed in current TQSL config data), matching our ADIF `MODE=FT4` records.
+- **LIVE-VERIFIED end-to-end 2026-07-14** (operator OZ1LAV): real TQSL .p12 imported through forge in a real browser, 22 QSOs signed on-device and **accepted by lotw.arrl.org**. Also earlier verified with a throwaway self-signed cert (host harness + on-device openssl signature checks). FT4 note: LoTW mode `FT4` is valid directly (confirmed in current TQSL config data). ⚠ **Our ADIF stopped saying `MODE=FT4` in v1.9.6** — see the ADIF MODE/SUBMODE quirk below; the TQ8 still carries `FT4` because `lotw_mode_from_adif()` collapses `MFSK`+`SUBMODE` back before signing, and that identity is the whole design.
 - **Web-UI setup is a guided 2-page flow** (`#lotw-modal` in index.html): page 1 explains the TQSL "Save the Callsign Certificate" export (most users did it once, years ago) with **Next** opening ARRL's own `lotw-help/save-certificate` page in a new tab + advancing to page 2 (the import form). Button reads "LoTW setup" until configured, then "LoTW ↑"; **Ctrl-click re-runs setup** (cert renews ~every 3 years). Importing a cert **rewinds the upload cursor to 0** (`settings_set_lotw_uploaded_n(0)` in the `/api/lotw_cert` handler) — a new key means the whole log must be re-signed; server-side dupes are harmless.
 - **CRITICAL — LoTW setup must pause the spectrum WebSocket** (`pauseWs()`/`resumeWs()` in index.html, wired into the modal open/close + upload). This board's esp_hosted WiFi link is low-throughput; the ~10 fps spectrum WS saturates the uplink, and the 73 KB forge.min.js fetch landing on top of it **stalled and hard-wedged the single-threaded httpd** (ping still replied, httpd never recovered — reboot only). Diagnosed 2026-07-14 when the operator's first real import wedged the web server repeatedly (`curl` always worked because it held no competing WS stream). Same principle as the upload path quieting itself. Do NOT remove the WS pause, and do NOT reintroduce any large browser-side fetch that runs concurrently with the WS stream on this link.
 
