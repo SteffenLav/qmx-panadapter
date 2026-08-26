@@ -88,11 +88,12 @@ int main(int argc, char **argv)
                 rej = 1;
         }
 
-        printf("  cand %2d f=%7.2f score=%9.3g cycles=%6u  %s",
-               i, cands[i].freq_hz, (double)cands[i].comb_score, r.cycles,
-               !r.ok ? "rejected" : (rej ? "GUARDED " : "DECODED "));
+        printf("  cand %2d f=%7.2f score=%9.3g sync=%.4f cycles=%6u  %s",
+               i, cands[i].freq_hz, (double)cands[i].comb_score,
+               r.sync_score, r.cycles, !r.ok ? "rejected" : (rej ? "GUARDED " : "DECODED "));
         if (r.ok) {
-            printf(" '%s' '%s' %d dBm", r.callsign, r.grid, r.power_dbm);
+            printf(" '%s' '%s' %d dBm agree=%.3f/%.3f",
+                   r.callsign, r.grid, r.power_dbm, r.agree_hard, r.agree_soft);
             if (rej) guarded++;
             else {
                 decoded++;

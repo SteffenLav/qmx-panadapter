@@ -120,6 +120,20 @@ static const expected_t kExpected[] = {
     { "ND6P",   "DM04", 30 },
     { "W5BIT",  "EL09", 17 },
     { "KI7CI",  "DM09", 37 },
+    /* ⭐ ADDED 2026-08-27 with the soft-decision path, the frequency
+     * refinement and the re-encode agreement check. All three are stations
+     * wsprd finds in this file and this decoder previously could not:
+     *   NM7J  - the file's STRONGEST signal at -1 dB, and the long-standing
+     *           "candidate 0 does not decode" mystery (docs/wspr-phase1-
+     *           status.md blamed in-transmission fading). It was a FREQUENCY
+     *           error: the periodogram peak sat 0.2 Hz off and nothing ever
+     *           corrected it.
+     * Deliberately NOT listed: W3BI (-25 dB) and G8VDQ (-23 dB), which wsprd
+     * also finds here. W3BI decodes once the candidate list runs past 20, and
+     * G8VDQ sits 5 Hz from W5BIT. Both are the honest remaining gap, and
+     * asserting them would be asserting a result this decoder does not yet
+     * produce at the settings the device actually runs. */
+    { "NM7J",   "DM26", 30 },
 };
 #define N_EXPECTED (int)(sizeof(kExpected) / sizeof(kExpected[0]))
 
@@ -139,8 +153,16 @@ int main(void)
     }
     printf("loaded %s: %ld samples (%.1f s)\n\n", path, n, n / (double)rate);
 
-    wspr_freq_candidate_t cands[8];
-    int ncand = wspr_find_candidates(samples, n, 1350.0, 1650.0, cands, 8);
+    /* ⛔ THIS WAS 8, AND 8 WAS A CEILING PRETENDING TO BE A MEASUREMENT.
+     * wspr_find_candidates() no longer blanks +/-5.9 Hz around each peak (it
+     * notches the comb's sidelobes instead), so a cluster of stations now
+     * yields one candidate EACH rather than one between them - which is the
+     * whole point of that change. The extra entries pushed W5BIT and KI7CI out
+     * of the top 8 and this harness read that as two lost decodes, when both
+     * still decode perfectly from their own candidates. The device tries 20;
+     * so does this. */
+    wspr_freq_candidate_t cands[20];
+    int ncand = wspr_find_candidates(samples, n, 1350.0, 1650.0, cands, 20);
     printf("found %d frequency candidates\n\n", ncand);
 
     int matched[N_EXPECTED] = { 0 };
@@ -223,8 +245,14 @@ int main(void)
      * file header. If that candidate is ever explained/fixed, this count
      * should drop and this assertion should be updated deliberately, not
      * silently pass either way. */
-    int reject_ok = (n_rejected == 3);
-    printf("  %s  %d rejected (expected 3)\n", reject_ok ? "PASS" : "FAIL", n_rejected);
+    /* Not a fixed number any more: with 20 candidates the tail is noise, and
+     * how many of them there are says nothing about the decoder. What matters
+     * is that every known-good station above decoded, which is checked just
+     * up there. A hard count here would fail every time the candidate finder
+     * improved - which is exactly what it did do. */
+    int reject_ok = (n_ok >= N_EXPECTED);
+    printf("  %s  %d plausible decode(s), %d rejected; need >= %d\n",
+           reject_ok ? "PASS" : "FAIL", n_ok, n_rejected, N_EXPECTED);
     if (!reject_ok) g_fail++;
 
     printf("\n%s (%d failure%s) - %d/%d candidates decoded plausibly\n",

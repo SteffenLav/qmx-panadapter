@@ -1,4 +1,6 @@
 #include "wspr_decode.h"
+#include "wspr_metric_table.h"
+#include "wspr_subtract.h"   /* wspr_tones_from_message() - the re-encode check */
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -98,9 +100,35 @@ int wspr_find_candidates(const int16_t *samples, long n, double f_lo_hz,
             out[count].freq_hz = (best + lo_bin) * bin_hz;
             out[count].comb_score = bestv;
             count++;
-            int supp = tone_step_bins * 4;
-            for (int i = best - supp; i <= best + supp; i++) {
-                if (i >= 0 && i < nscore) score[i] = -1;
+            /* ⛔ THIS USED TO BLANK +/-4 TONE SPACINGS (5.9 Hz) AROUND EVERY
+             * PEAK, WHICH MADE WHOLE STATIONS UNREACHABLE - not merely
+             * unranked, unreachable, because a frequency that is never a
+             * candidate is never tried. Measured on the 19:10 reference
+             * window: DK8AF (1521.8 Hz) and DD3MS (1525.8 Hz) are 4 Hz apart
+             * and shared one candidate at 1524.6, where NEITHER decodes;
+             * handed their own frequencies, both decode cleanly (agreement
+             * 0.76 and 0.84). Three more stations shared a single candidate
+             * 2 Hz away from each of them.
+             *
+             * The wide blanking was not arbitrary - it exists because the comb
+             * score has SIDELOBES. The comb sums four bins one tone spacing
+             * apart, so sliding it by k tone spacings still lands 4-|k| teeth
+             * on a real signal, and one station would otherwise be reported up
+             * to seven times. But that is a set of SPIKES at known offsets,
+             * not a 12 Hz-wide plateau, so blank the spikes and leave the gaps
+             * between them - which is where a genuine neighbour lives.
+             *
+             * Anything closer than about a tone spacing is genuinely the same
+             * signal, so the k=0 case still blanks a small neighbourhood. */
+            for (int k = -3; k <= 3; k++) {
+                int c0 = best + k * tone_step_bins;
+#ifndef WSPR_SIDELOBE_DIV
+#define WSPR_SIDELOBE_DIV 4
+#endif
+                int half = (k == 0) ? tone_step_bins
+                                    : (tone_step_bins / WSPR_SIDELOBE_DIV);
+                for (int i = c0 - half; i <= c0 + half; i++)
+                    if (i >= 0 && i < nscore) score[i] = -1;
             }
         }
         free(score);
@@ -292,10 +320,17 @@ typedef struct {
     float sin_tab[4][WSPR_DEC_SPS];
 } tone_tw_t;
 
-static void build_tone_tw(tone_tw_t *tw)
+/* `df_hz` shifts all four tones together - the fine frequency search.
+ *
+ * It is legitimate to fold a frequency offset into the tone table and ignore
+ * the phase discontinuity it leaves between symbols, because every consumer
+ * takes the MAGNITUDE of the per-symbol correlation. A constant phase error
+ * per symbol is invisible to |.|^2. That is what makes the frequency search
+ * cost 1024 cos/sin per trial instead of another sweep of the whole capture. */
+static void build_tone_tw(tone_tw_t *tw, double df_hz)
 {
     for (int k = 0; k < 4; k++) {
-        double w = 2.0 * M_PI * (k * TONE_SPACING) / WSPR_DEC_RATE_HZ;
+        double w = 2.0 * M_PI * (k * TONE_SPACING + df_hz) / WSPR_DEC_RATE_HZ;
         for (int j = 0; j < WSPR_DEC_SPS; j++) {
             tw->cos_tab[k][j] = (float)cos(w * j);
             tw->sin_tab[k][j] = (float)sin(w * j);
@@ -334,16 +369,36 @@ static void extract_tone_powers(const baseband_t *bb, const tone_tw_t *tw,
 /* sync=1 tones are {1,3} (odd tone index), sync=0 tones are {0,2} - the
  * higher this is, the better the (f0, dt) alignment matches WSPR's known
  * 162-bit sync vector. */
+/* ⛔ THIS USED TO BE AN UNNORMALISED SUM OF POWERS, AND BOTH HALVES OF THAT
+ * WERE WRONG in a way that quietly mis-aimed every decode.
+ *
+ * UNNORMALISED: the search that picks the start time maximises this, so with
+ * total energy left in it the winner was partly "whichever alignment caught
+ * the most power" - a strong neighbour sliding into the window scores well
+ * without being in sync at all. Dividing by the total makes the metric a pure
+ * correlation in [-1, 1], answering "how well does this alignment match the
+ * sync vector" and nothing else. It is also then comparable ACROSS candidates
+ * and across frequency trials, which the frequency refinement below needs.
+ *
+ * POWER, NOT AMPLITUDE: squaring hands the sum to the loudest few symbols. On
+ * a fading signal - the normal case on HF - those are whichever symbols
+ * happened to arrive during a peak, so the alignment gets chosen by a fraction
+ * of the transmission. wsprd sums amplitudes here for the same reason.
+ *
+ * Both changes together are what let the frequency search work at all: the old
+ * metric grew with any extra energy admitted, so the best "frequency" was
+ * simply wherever the most noise sat. */
 static double sync_score(double tone_power[WSPR_NSYM][4])
 {
-    double s = 0;
+    double s = 0, tot = 0;
     for (int i = 0; i < WSPR_NSYM; i++) {
-        double p1 = tone_power[i][1] + tone_power[i][3];
-        double p0 = tone_power[i][0] + tone_power[i][2];
-        double favor1 = p1 - p0;
+        double a0 = sqrt(tone_power[i][0]), a1 = sqrt(tone_power[i][1]);
+        double a2 = sqrt(tone_power[i][2]), a3 = sqrt(tone_power[i][3]);
+        double favor1 = (a1 + a3) - (a0 + a2);
         s += wspr_sync_vector[i] ? favor1 : -favor1;
+        tot += a0 + a1 + a2 + a3;
     }
-    return s;
+    return (tot > 0) ? s / tot : -1.0;
 }
 
 static int is_legal_power(int dbm)
@@ -435,7 +490,46 @@ static int callsign_shape_ok(const char *call)
  * quantization, Fano convergence speed - see wspr_decode.h) and fills
  * *result if a decoded message passes all three. Shared by both decode
  * attempts below so the two can't silently apply different standards. */
+/* Re-encode the decoded message and score it against the audio we received.
+ * See wspr_decode_result_t for why this is the only check that can catch a
+ * wrong codeword. Fills result->agree_hard / agree_soft. */
+static void score_agreement(const char *call, const char *grid, int dbm,
+                             double tp[WSPR_NSYM][4], wspr_decode_result_t *result)
+{
+    result->agree_hard = 0.0f;
+    result->agree_soft = 0.0f;
+    uint8_t tones[WSPR_NSYM];
+    if (!wspr_tones_from_message(call, grid, dbm, tones)) return;
+
+    /* The same soft symbol the decoder used, normalised the same way, so the
+     * two numbers are directly comparable across captures and stations. */
+    double d[WSPR_NSYM], sum = 0, sq = 0;
+    for (int i = 0; i < WSPR_NSYM; i++) {
+        int sync = wspr_sync_vector[i];
+        double a1 = sqrt(sync ? tp[i][3] : tp[i][2]);
+        double a0 = sqrt(sync ? tp[i][1] : tp[i][0]);
+        d[i] = a1 - a0;
+        sum += d[i]; sq += d[i] * d[i];
+    }
+    double mean = sum / WSPR_NSYM;
+    double var  = sq / WSPR_NSYM - mean * mean;
+    double sd   = (var > 1e-30) ? sqrt(var) : 1e-15;
+
+    int agree = 0;
+    double soft = 0;
+    for (int i = 0; i < WSPR_NSYM; i++) {
+        /* WSPR tone = sync bit + 2 * data bit, so the data bit is the high one. */
+        int bit = tones[i] >> 1;
+        double want = bit ? d[i] : -d[i];       /* positive when the audio agrees */
+        if (want > 0) agree++;
+        soft += want / sd;
+    }
+    result->agree_hard = (float)agree / (float)WSPR_NSYM;
+    result->agree_soft = (float)(soft / WSPR_NSYM);
+}
+
 static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
+                                double tp[WSPR_NSYM][4],
                                 wspr_decode_result_t *result)
 {
     result->cycles = cycles;
@@ -450,11 +544,153 @@ static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
     wspr_msg_bytes_t repack;
     if (!wspr_pack_message(call, grid, dbm, &repack)) return 0;
 
+    score_agreement(call, grid, dbm, tp, result);
+
     strcpy(result->callsign, call);
     strcpy(result->grid, grid);
     result->power_dbm = dbm;
     result->ok = 1;
     return 1;
+}
+
+/* ---- soft-decision demodulation (the sensitivity path) ------------------
+ *
+ * ⭐ THIS IS THE PATH THAT CLOSED MOST OF THE GAP TO wsprd. Measured against
+ * the four reference WAVs, which between them hold 41 decodes wsprd finds:
+ * hard-decision alone found 17. See docs/wspr-phase3-sensitivity.md for the
+ * per-file table and the sweep that set ESNO_DB and BIAS.
+ *
+ * A K=32 rate-1/2 convolutional code is worth roughly 2 dB more with soft
+ * decisions than hard ones, and we were throwing all of it away: the hard
+ * path collapses each symbol to one bit and tells the Fano search that a
+ * symbol which barely favoured 1 is exactly as trustworthy as one that
+ * screamed it.
+ *
+ * ⚠ A SOFT METRIC WAS TRIED BEFORE AND REGRESSED THE REAL WAV BADLY - 1 of 8
+ * plausible decodes instead of 5 (docs/wspr-phase1-status.md). That attempt is
+ * not this one, and the difference is the whole lesson:
+ *
+ *   1. IT USED POWER, NOT AMPLITUDE. Squaring hands the sum to whichever few
+ *      symbols happened to be loudest, which under fading is exactly the
+ *      wrong emphasis. Every amplitude here is sqrt(power).
+ *   2. ITS TABLE AND ITS NORMALISATION WERE FITTED SEPARATELY. The table is
+ *      the statistics of a normalised soft symbol, so if the decoder
+ *      normalises differently the table describes a distribution that never
+ *      arrives. tools/gen_wspr_metric.py simulates whole 162-symbol blocks
+ *      and normalises each block exactly the way this function does.
+ *
+ * The normalisation is per TRANSMISSION, not per symbol: subtract the mean,
+ * divide by the standard deviation of the 162 values, scale, clip to a byte.
+ * That makes the metric independent of how loud the station is, which is what
+ * lets one fitted table serve every signal.
+ */
+#define WSPR_SOFT_SYMFAC   50.0    /* must match tools/gen_wspr_metric.py */
+
+/* How many (frequency, start-time) hypotheses to try before giving up, and
+ * the agreement at which an answer is convincing enough to stop looking.
+ * Both are cost knobs: on the device a candidate must fit inside the decode
+ * budget, and hypothesis 0 answers nearly every strong signal on its own. */
+/* ⚠ MEASURED AT 1, NOT ASSUMED. Trying the 2nd and 3rd sync peaks as well
+ * costs 25-45 % more time and found NOT ONE additional station across the four
+ * reference WAVs - the second station of a cluster is reached from its own
+ * candidate instead, once the sidelobe suppression stops erasing it (see
+ * wspr_find_candidates). The mechanism is kept because it is what makes the
+ * agreement check meaningful - a rejected answer has somewhere to fall back to
+ * - and because it should start paying once weaker signals are reachable, but
+ * shipping it above 1 would be paying for a result nothing has demonstrated. */
+#ifndef WSPR_HYPOTHESES
+#define WSPR_HYPOTHESES 1
+#endif
+#ifndef WSPR_AGREE_CONFIDENT
+#define WSPR_AGREE_CONFIDENT 0.70f
+#endif
+
+/* ⭐ THE ONE CHECK THAT CONSULTS THE AUDIO. Set from the measured gap, the
+ * same way the power and cycles guards were: across the four reference WAVs
+ * and three search settings, every one of NINE fabrications scored 0.355 to
+ * 0.513, and every one of the 21 wsprd-confirmed decodes scored 0.655 to
+ * 0.914. There is no overlap and the gap is wide, so the threshold sits in
+ * the middle of it rather than being tuned to either edge.
+ *
+ * ⚠ RE-MEASURE THIS AFTER ANY FRONT-END CHANGE, exactly as CLAUDE.md already
+ * requires for the Fano cycles threshold - agreement is a property of the
+ * demodulator, not of the signal. */
+#ifndef WSPR_AGREE_MIN
+#define WSPR_AGREE_MIN 0.58f
+#endif
+
+/* The rate term. A Fano search needs a random path's metric to drift DOWN,
+ * or it cannot tell a good path from a lucky one and never backs up. For a
+ * rate-1/2 code the textbook value is 0.5 bits per branch; slightly under
+ * that buys sensitivity at the cost of search time, which is the trade wsprd
+ * also makes (its own bias is 0.45). Swept - see the design note above. */
+#ifndef WSPR_SOFT_BIAS
+#define WSPR_SOFT_BIAS     0.45
+#endif
+
+/* ⛔ THE FANO THRESHOLD STEP IS IN THE SAME UNITS AS THE METRIC, AND GETTING
+ * THAT WRONG LOOKS EXACTLY LIKE A DECODER THAT CANNOT HEAR. The first version
+ * of this function passed delta=2 - correct for the hard table, whose metrics
+ * are +1/-3 - against a table scaled by WSPR_METRIC_SCALE (1000). The search
+ * then tightened its threshold in steps a five-hundredth of a symbol's worth
+ * of evidence, so every hard candidate ran to the 1,620,001-cycle ceiling and
+ * gave up, and the whole soft path measured as WORTH NOTHING (17 decodes, the
+ * same as before it existed). wsprd's delta is 60 against metrics scaled by
+ * 10, i.e. SIX BITS; this is the same figure in our units. */
+#ifndef WSPR_SOFT_DELTA_BITS
+#define WSPR_SOFT_DELTA_BITS  6
+#endif
+#define WSPR_SOFT_DELTA   (WSPR_SOFT_DELTA_BITS * WSPR_METRIC_SCALE)
+
+static int try_soft_decision(double tp[WSPR_NSYM][4], wspr_decode_result_t *result)
+{
+    double fsym[WSPR_NSYM];
+    for (int i = 0; i < WSPR_NSYM; i++) {
+        int sync = wspr_sync_vector[i];
+        /* AMPLITUDES. tp[][] holds power; the soft symbol is a difference of
+         * magnitudes, which is what the fitted table describes. */
+        double a1 = sqrt(sync ? tp[i][3] : tp[i][2]);
+        double a0 = sqrt(sync ? tp[i][1] : tp[i][0]);
+        fsym[i] = a1 - a0;
+    }
+
+    double sum = 0, sq = 0;
+    for (int i = 0; i < WSPR_NSYM; i++) { sum += fsym[i]; sq += fsym[i] * fsym[i]; }
+    double mean = sum / WSPR_NSYM;
+    double var  = sq / WSPR_NSYM - mean * mean;
+    double sd   = (var > 1e-30) ? sqrt(var) : 1e-15;
+
+    uint8_t chan[WSPR_NSYM];
+    for (int i = 0; i < WSPR_NSYM; i++) {
+        double v = WSPR_SOFT_SYMFAC * fsym[i] / sd;
+        if (v >  127.0) v =  127.0;
+        if (v < -128.0) v = -128.0;
+        chan[i] = (uint8_t)((int)lround(v) + 128);
+    }
+
+    uint8_t sym[WSPR_NSYM];
+    wspr_deinterleave(chan, sym);
+
+    /* Per-symbol branch metrics rather than a 2x256 table, purely for memory:
+     * this runs on a 16 KB task stack that has already overflowed once (see
+     * the tp[] note in wspr_decode_candidate), and 162x2 ints is 1.3 KB where
+     * the table form is 2 KB. Identical arithmetic either way. */
+    const int bias_q = (int)lround(WSPR_SOFT_BIAS * WSPR_METRIC_SCALE);
+    int branch_metric[WSPR_NSYM][2];
+    for (int i = 0; i < WSPR_NSYM; i++) {
+        int v = sym[i];
+        branch_metric[i][0] = wspr_metric0[v]       - bias_q;
+        branch_metric[i][1] = wspr_metric0[255 - v] - bias_q;
+    }
+
+    wspr_msg_bytes_t msg;
+    unsigned int metric = 0, cycles = 0;
+    if (!wspr_fano_decode_weighted(branch_metric, WSPR_SOFT_DELTA, 20000,
+                                   &msg, &metric, &cycles)) {
+        result->cycles = cycles;
+        return 0;
+    }
+    return accept_if_plausible(&msg, cycles, tp, result);
 }
 
 /* Hard-decision per symbol, conditioned on the known sync bit. Simple and
@@ -493,7 +729,7 @@ static int try_hard_decision(double tp[WSPR_NSYM][4], wspr_decode_result_t *resu
         result->cycles = cycles;
         return 0;
     }
-    return accept_if_plausible(&msg, cycles, result);
+    return accept_if_plausible(&msg, cycles, tp, result);
 }
 
 /* PER-SYMBOL reliability-weighted decision - targets a specific failure
@@ -610,7 +846,25 @@ static int try_weighted_decision(double tp[WSPR_NSYM][4], wspr_decode_result_t *
         result->cycles = cycles;
         return 0;
     }
-    return accept_if_plausible(&msg, cycles, result);
+    return accept_if_plausible(&msg, cycles, tp, result);
+}
+
+/* Local start-time refinement around `centre`, at the fine step. Shared by
+ * the first pass and by the re-take after the frequency moves. */
+static long refine_dt(const baseband_t *bb, const tone_tw_t *tw, long centre,
+                       long span, long step, long slack,
+                       double tp[WSPR_NSYM][4], double *best_score)
+{
+    long lo = centre - span, hi = centre + span;
+    if (lo < 0) lo = 0;
+    if (hi > slack) hi = slack;
+    long best = centre;
+    for (long dt = lo; dt <= hi; dt += step) {
+        extract_tone_powers(bb, tw, dt, tp);
+        double s = sync_score(tp);
+        if (s > *best_score) { *best_score = s; best = dt; }
+    }
+    return best;
 }
 
 void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
@@ -626,7 +880,7 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
     if (!mix_decimate(samples, n, f0_hz, &bb)) { free_baseband(&bb); return; }
 
     tone_tw_t tw;
-    build_tone_tw(&tw);
+    build_tone_tw(&tw, 0.0);
 
     long slack_dec = bb.n - (long)WSPR_NSYM * WSPR_DEC_SPS;
     if (slack_dec < 0) slack_dec = 0;
@@ -649,35 +903,165 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
      * search grid did not get coarser when the rate dropped. */
     long best_dt = 0;
     double best_score = -1e300;
+    double best_df = 0.0;
     long coarse_step = WSPR_DEC_SPS / 8;          /* 32 dec = 1024 orig */
     if (coarse_step < 1) coarse_step = 1;
+    long fine_step = WSPR_DEC_SPS / 32;           /* 8 dec = 256 orig */
+    if (fine_step < 1) fine_step = 1;
+
     for (long dt = 0; dt <= slack_dec; dt += coarse_step) {
         extract_tone_powers(&bb, &tw, dt, tp);
         double s = sync_score(tp);
         if (s > best_score) { best_score = s; best_dt = dt; }
     }
-    long fine_lo = best_dt - coarse_step, fine_hi = best_dt + coarse_step;
-    if (fine_lo < 0) fine_lo = 0;
-    if (fine_hi > slack_dec) fine_hi = slack_dec;
-    long fine_step = WSPR_DEC_SPS / 32;           /* 8 dec = 256 orig */
-    if (fine_step < 1) fine_step = 1;
-    for (long dt = fine_lo; dt <= fine_hi; dt += fine_step) {
-        extract_tone_powers(&bb, &tw, dt, tp);
-        double s = sync_score(tp);
-        if (s > best_score) { best_score = s; best_dt = dt; }
+    best_dt = refine_dt(&bb, &tw, best_dt, coarse_step, fine_step,
+                        slack_dec, tp, &best_score);
+
+    /* ---- FINE FREQUENCY, THEN THE START TIME AGAIN --------------------
+     *
+     * The candidate's frequency comes from an averaged periodogram over the
+     * whole 120 s window, so it is the frequency of the strongest BIN, not of
+     * the signal: a fading station's peak bin is pulled around by noise, and a
+     * neighbour 5 Hz away pulls it further. Being half a tone spacing out
+     * (0.73 Hz) puts a third of every symbol's energy in the wrong tone.
+     *
+     * So refine it the way wsprd does - on the sync correlation, which only
+     * peaks when the four tones actually line up, rather than on raw energy,
+     * which peaks wherever the most noise is. Sequential, not a product: best
+     * time, then best frequency, then best time again. Three cheap passes
+     * instead of one expensive 2-D grid, and it converges because the two are
+     * nearly independent.
+     *
+     * +/-0.7 Hz covers half a tone spacing either way, which is the whole
+     * range in which a wrong answer is even possible - beyond it the search
+     * would just lock onto the neighbouring tone. */
+#ifndef WSPR_DF_RANGE
+#define WSPR_DF_RANGE 1.5
+#endif
+#ifndef WSPR_DF_STEP
+#define WSPR_DF_STEP  0.1
+#endif
+#define WSPR_DF_NPT   ((int)(2 * WSPR_DF_RANGE / WSPR_DF_STEP) + 1)
+
+    /* ---- THE SYNC-vs-FREQUENCY CURVE, AND WHY ITS PEAKS ARE THE HYPOTHESES
+     *
+     * The candidate frequency comes from an averaged periodogram, so it is the
+     * strongest BIN in a neighbourhood, not the frequency of any one station.
+     * Measured on the 19:10 reference window, where wsprd finds 14 stations:
+     * every one of them has a candidate within ~1 Hz, but THREE of them
+     * (G4FBA, PD2LEO, PA5CA - 1471.8, 1472.8, 1474.8 Hz) share a single
+     * candidate at 1473.08, and DK8AF and DD3MS share another 2.8 Hz from one
+     * of them. So the misses were never "not detected"; they were "detected as
+     * somebody else".
+     *
+     * A single best-sync refinement can only ever return one of a cluster. The
+     * sync correlation, though, has a distinct local maximum at EACH real
+     * station - it only peaks where four tones line up on the sync vector, so
+     * a neighbour 2 Hz away makes its own peak rather than smearing this one.
+     * Taking the top few local maxima therefore hands the decoder one
+     * hypothesis per station present, which is exactly what it needs.
+     *
+     * +/-1.5 Hz is a full tone spacing either way. That is far too wide to be
+     * safe under "first answer wins" - it reaches neighbouring tones, and a
+     * wrong-frequency decode looks just like a right one. It is only usable
+     * because the re-encode check below can tell them apart. */
+    double curve[WSPR_DF_NPT];
+    for (int k = 0; k < WSPR_DF_NPT; k++) {
+        double df = -WSPR_DF_RANGE + k * WSPR_DF_STEP;
+        build_tone_tw(&tw, df);
+        extract_tone_powers(&bb, &tw, best_dt, tp);
+        curve[k] = sync_score(tp);
     }
 
-    extract_tone_powers(&bb, &tw, best_dt, tp);
-    free_baseband(&bb);
+    /* Local maxima, strongest first. A plateau counts once (>= on the left,
+     * > on the right), and the ends count so a station at the edge of the
+     * window is not silently dropped. */
+    double hyp_df[WSPR_HYPOTHESES];
+    double hyp_sc[WSPR_HYPOTHESES];
+    int nhyp = 0;
+    for (int k = 0; k < WSPR_DF_NPT; k++) {
+        int rise = (k == 0)                || curve[k] >= curve[k - 1];
+        int fall = (k == WSPR_DF_NPT - 1)  || curve[k] >  curve[k + 1];
+        if (!(rise && fall)) continue;
+        double df = -WSPR_DF_RANGE + k * WSPR_DF_STEP, sc = curve[k];
+        int pos = nhyp < WSPR_HYPOTHESES ? nhyp : WSPR_HYPOTHESES;
+        while (pos > 0 && hyp_sc[pos - 1] < sc) {
+            if (pos < WSPR_HYPOTHESES) { hyp_sc[pos] = hyp_sc[pos - 1]; hyp_df[pos] = hyp_df[pos - 1]; }
+            pos--;
+        }
+        if (pos < WSPR_HYPOTHESES) { hyp_sc[pos] = sc; hyp_df[pos] = df; }
+        if (nhyp < WSPR_HYPOTHESES) nhyp++;
+    }
+    if (nhyp == 0) { hyp_df[0] = 0.0; hyp_sc[0] = best_score; nhyp = 1; }
+    best_df = hyp_df[0];
+    best_score = hyp_sc[0];
 
-    /* reported in ORIGINAL samples, so the API is unchanged for callers */
-    result->best_dt_samples = best_dt * WSPR_DECIM;
     result->sync_score = best_score;
 
-    if (try_hard_decision(tp, result)) return;
-    /* Hard decision failed or was implausible - give the per-symbol
-     * weighted attempt a shot before giving up on this candidate. */
-    try_weighted_decision(tp, result);
+    /* ---- TRY, SCORE, AND KEEP THE BEST - NOT THE FIRST -----------------
+     *
+     * ⭐ THIS ORDERING ONLY BECAME POSSIBLE ONCE THE RE-ENCODE CHECK EXISTED,
+     * and it is the difference between a wider search helping and hurting.
+     * Measured: widening the frequency search from +/-0.0 to +/-0.7 Hz under
+     * "first answer wins" GAINED four decodes and LOST three real ones
+     * (PA4JAM, PE1JXI, G8ORM) to wrong codewords found at a wrong frequency,
+     * which is a wash bought with three fabrications. The search was not the
+     * problem; having no way to tell a good answer from a bad one was.
+     *
+     * With agreement in hand every hypothesis can be tried and scored, and the
+     * best-agreeing answer kept - so a wrong-frequency decode simply loses to
+     * the right one instead of pre-empting it.
+     *
+     * Cost is paid only when needed: the loop stops as soon as an answer
+     * agrees convincingly, which is the common case for anything but the
+     * weakest signals. */
+    wspr_decode_result_t best;
+    memset(&best, 0, sizeof(best));
+    best.agree_soft = -1e9f;
+
+    for (int h = 0; h < nhyp; h++) {
+        double df = hyp_df[h];
+        build_tone_tw(&tw, df);
+        /* Each peak gets its own start time: two stations 2 Hz apart are
+         * unrelated transmissions and will not have started together. */
+        extract_tone_powers(&bb, &tw, best_dt, tp);
+        double sc = sync_score(tp);
+        long dt = refine_dt(&bb, &tw, best_dt, coarse_step, fine_step,
+                             slack_dec, tp, &sc);
+        extract_tone_powers(&bb, &tw, dt, tp);
+
+        wspr_decode_result_t r;
+        for (int path = 0; path < 3; path++) {
+            memset(&r, 0, sizeof(r));
+            r.freq_hz = f0_hz + df;
+            r.best_dt_samples = dt * WSPR_DECIM;
+            r.sync_score = sc;
+            int got = (path == 0) ? try_soft_decision(tp, &r)
+                    : (path == 1) ? try_hard_decision(tp, &r)
+                                  : try_weighted_decision(tp, &r);
+            if (got && r.agree_soft > best.agree_soft) best = r;
+        }
+        if (best.ok && best.agree_soft >= WSPR_AGREE_CONFIDENT) break;
+    }
+
+    free_baseband(&bb);
+
+    /* WSPR has no CRC, so this is where a wrong-but-valid codeword is caught.
+     * Nothing above can do it: every other check tests the MESSAGE against
+     * itself, and a near-miss decode of a real station is a perfectly
+     * well-formed message. */
+    if (best.ok && best.agree_soft < WSPR_AGREE_MIN) {
+        best.ok = 0;
+    }
+
+    if (best.ok) {
+        double sync_keep = result->sync_score;
+        *result = best;
+        result->sync_score = sync_keep;
+    } else {
+        result->best_dt_samples = best_dt * WSPR_DECIM;
+        result->freq_hz = f0_hz + best_df;
+    }
 }
 
 /* ---- false-decode guards (see wspr_decode.h for the evidence) ---------- */

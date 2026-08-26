@@ -95,3 +95,15 @@ test/lotw_test_*.pem
 test/lotw_sample_tq8.txt
 test/device_tq8*
 .claude/
+
+# wsprd.exe scratch, written into the working directory by the reference
+# decoder whenever tools/wspr_noise_ladder.py or a manual comparison run runs
+# it from the repo root. Not ours, never wanted.
+ALL_WSPR.TXT
+hashtable.txt
+wspr_spots.txt
+wspr_timer.out
+wspr_wisdom.dat
+wspr_cap_sweep.exe
+wspr_decode_harness.exe
+wspr_subtract_sweep.exe

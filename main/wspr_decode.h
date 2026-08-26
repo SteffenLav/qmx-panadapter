@@ -80,6 +80,30 @@ typedef struct {
     long best_dt_samples; /* transmission start offset found within the capture */
     double sync_score;   /* higher = better match to the known sync vector */
     unsigned int cycles; /* Fano decoder cycle count - a quality signal, see wspr_decode.c */
+
+    /* ---- HOW WELL THE ANSWER MATCHES THE AUDIO -------------------------
+     *
+     * ⛔ WSPR CARRIES NO CHECKSUM, so a wrong-but-valid codeword is
+     * undetectable from the MESSAGE alone - which is why no callsign, grid or
+     * power heuristic can ever catch one. `PD2WND EL53 13 dBm` was reported
+     * three times at f=1473.08 Hz, exactly where the real `PD2LEO` lives: not
+     * noise inventing a station, a near-miss decode of a real one.
+     *
+     * The only test that can tell them apart re-encodes the decoded message
+     * back to its 162 channel symbols and asks whether the RECEIVED audio
+     * actually said that. Every other check in accept_if_plausible() is
+     * self-consistency of the message; these two are the only ones that
+     * consult the signal.
+     *
+     * agree_hard: fraction of the 162 symbols whose hard decision matches the
+     *   re-encoded bit. Blunt but absolute.
+     * agree_soft: the same comparison weighted by how strongly each symbol
+     *   argued, in units of the capture's own soft-symbol spread. Sensitive
+     *   where agree_hard saturates - at threshold a TRUE decode still has
+     *   plenty of wrong hard bits, which is the entire reason the code exists.
+     */
+    float agree_hard;
+    float agree_soft;
 } wspr_decode_result_t;
 
 /* Try to decode a WSPR transmission near candidate frequency f0_hz within

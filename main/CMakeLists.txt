@@ -97,6 +97,7 @@ idf_component_register(
         "wspr_proto.c"
         "wspr_fano.c"
         "wspr_decode.c"
+        "wspr_subtract.c"
         "wspr_tx.c"
         "wspr_selftest.c"
         "wspr_spots.c"
