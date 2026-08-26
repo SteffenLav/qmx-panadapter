@@ -19,7 +19,10 @@ from collections import defaultdict
 
 DEC = re.compile(
     r"\((\d+)\)\s+wspr_rx:\s+DECODED\s+'([A-Z0-9/]+)'\s+'([A-Z0-9]+)'\s+(-?\d+)\s+dBm"
-    r"\s+f=([\d.]+)\s+Hz\s+dt=(-?[\d.]+)s\s+cycles=(\d+)")
+    r"\s+f=([\d.]+)\s+Hz\s+dt=(-?[\d.]+)s\s+cycles=(\d+)"
+    # agree= is optional so this tool still reads captures from before the
+    # re-encode check existed - there are months of them and they stay useful.
+    r"(?:\s+agree=[\d.]+/(-?[\d.]+))?")
 CYC = re.compile(r"\((\d+)\)\s+wspr_rx:\s+cycle\s+(\d+):\s+(\d+)\s+candidate\(s\),\s+(\d+)\s+decode")
 ARM = re.compile(r"\((\d+)\)\s+wspr_rx:\s+cycle\s+(\d+):\s+capturing")
 LEGAL = {0,3,7,10,13,17,20,23,27,30,33,37,40,43,47,50,53,57,60}
@@ -63,10 +66,13 @@ def main():
 
     st = defaultdict(lambda: {'n':0,'pwr':None,'grid':None,'hz':[],'cyc':[],'up':[]})
     for m in DEC.finditer(raw):
-        up, call, grid, pwr, hz, dt, cyc = m.groups()
+        up, call, grid, pwr, hz, dt, cyc, agree = m.groups()
         s = st[call]
         s['n'] += 1; s['pwr'] = int(pwr); s['grid'] = grid
         s['hz'].append(float(hz)); s['cyc'].append(int(cyc)); s['up'].append(int(up))
+        # None for captures predating the re-encode check; the column then
+        # reads "-" rather than the tool refusing to run on old logs.
+        if agree is not None: s.setdefault('agree', []).append(float(agree))
 
     cycles = CYC.findall(raw); arms = ARM.findall(raw)
     total  = sum(s['n'] for s in st.values())
@@ -112,17 +118,23 @@ def main():
         L.append("")
 
     L.append("## Every station heard\n")
-    L.append("| call | grid | country-ish | km | brg | power | heard | Hz | Fano |")
-    L.append("|---|---|---|---|---|---|---|---|---|")
+    L.append("| call | grid | country-ish | km | brg | power | heard | Hz | Fano | agree |")
+    L.append("|---|---|---|---|---|---|---|---|---|---|")
     for c, s in sorted(st.items(), key=lambda kv: (-kv[1]['n'], kv[0])):
         d, br = km_brg(home, grid_ll(s['grid'] or ''))
         hz = sum(s['hz'])/len(s['hz'])
         cy = f"{min(s['cyc'])}-{max(s['cyc'])}" if s['n'] > 1 else str(s['cyc'][0])
         flag = " ⚠" if any(c == x[0] for x in sus) else ""
+        # The re-encode agreement score (wspr_decode.h). This is the column to
+        # read when a station looks wrong: it is the only number in the row
+        # that was measured against the received AUDIO rather than derived
+        # from the message. "-" means a capture from before the check existed.
+        ag = s.get('agree')
+        ags = f"{min(ag):.2f}" if ag else "-"
         L.append(f"| {c}{flag} | {s['grid']} | {(s['grid'] or '')[:2]} | "
-                 f"{d:.0f} | {br:.0f}° | {s['pwr']} dBm | {s['n']}x | {hz:.1f} | {cy} |"
+                 f"{d:.0f} | {br:.0f}° | {s['pwr']} dBm | {s['n']}x | {hz:.1f} | {cy} | {ags} |"
                  if d is not None else
-                 f"| {c}{flag} | {s['grid']} | ? | ? | ? | {s['pwr']} dBm | {s['n']}x | {hz:.1f} | {cy} |")
+                 f"| {c}{flag} | {s['grid']} | ? | ? | ? | {s['pwr']} dBm | {s['n']}x | {hz:.1f} | {cy} | {ags} |")
     L.append("\n⚠ = suspected fabrication, see above.\n")
 
     open(out, 'w', encoding='utf-8').write('\n'.join(L))

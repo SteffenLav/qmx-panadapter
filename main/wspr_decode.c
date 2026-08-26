@@ -1106,9 +1106,44 @@ void wspr_guards_defaults(wspr_guards_t *g)
      * slowly - that is now dropped, and it cannot be quantified without wsprd
      * on those same windows. If a confirmed real station is ever lost this way,
      * RAISE the threshold; the gap is what matters, not the number. */
-    g->enforce_near = 1;
+    /* ⛔ BOTH STOOD DOWN 2026-08-27, AND EVERYTHING ABOVE IS THE REASON THIS
+     * NOTE EXISTS RATHER THAN A DELETION. Neither guard was wrong. Both were
+     * measured carefully, on real data, and both did what they claimed. They
+     * are off because the re-encode agreement check (wspr_decode_result_t,
+     * WSPR_AGREE_MIN) now does their job better, and because on the current
+     * decode path they cost real stations:
+     *
+     *   SLOW at 1000 cycles rejects THREE wsprd-confirmed decodes - PA4JAM
+     *     (1716), PA2PGU (1491), DK8AF (1423). This is precisely the failure
+     *     the paragraph above predicts: a cycle count is a property of the
+     *     DECODE PATH, and the soft-decision metric is a different path. The
+     *     16-hour field measurement that set 1000 was taken on the hard
+     *     decision path and no longer describes this one. Re-deriving the
+     *     number is possible but pointless when a better test exists.
+     *
+     *   NEAR at 10 Hz rejects TWO confirmed decodes, and its own premise has
+     *     been overtaken: "two WSPR signals closer than ~6 Hz overlap anyway"
+     *     was true when a cluster yielded one candidate, but the candidate
+     *     finder now resolves them (2E0DLC and OE5OSP are 5.8 Hz apart and
+     *     both real; DK8AF and DD3MS are 4 Hz apart and both real).
+     *
+     * WHAT REPLACES THEM. The LG9TPW fabrication that motivated NEAR was a
+     * candidate on a strong signal's skirt - a decode that the received audio
+     * does not support, which is exactly what agreement measures. On the noise
+     * ladder, four fabrications survived all four guards before; with
+     * agreement enforced, none do, while the confirmed count under 1-2 dB of
+     * added noise doubled.
+     *
+     * ⭐ THEY ARE STILL MEASURED ON EVERY DECODE, which is the property the
+     * comment above rightly insisted on - so the day one of them is wanted
+     * back, the evidence for it is already in an ordinary session's log rather
+     * than needing two flashes and two different band conditions.
+     *
+     * The power guard (>43 dBm, in accept_if_plausible) is untouched: it costs
+     * nothing on any measured data and is free to keep. */
+    g->enforce_near = 0;
     g->near_hz      = WSPR_GUARD_NEAR_HZ;
-    g->enforce_slow = 1;
+    g->enforce_slow = 0;
     g->slow_cycles  = WSPR_GUARD_SLOW_CYCLES;
 }
 

@@ -642,11 +642,17 @@ static void decode_one_window(const int16_t *pcm, int64_t cycle_utc)
 
         decoded++;
         wspr_accepted_add(&accepted, r.freq_hz);
+        /* `agree` is the re-encode score - how well the received audio actually
+         * supports this message (wspr_decode.h). It is logged on EVERY decode
+         * on purpose: it is now the check that stands between us and
+         * publishing a station that was never on the air, and a check nobody
+         * can see is worth no more than no check at all. A field log therefore
+         * carries the evidence to re-set WSPR_AGREE_MIN without a reflash. */
         ESP_LOGW(TAG, "  DECODED '%s' '%s' %d dBm  f=%.2f Hz dt=%.2fs cycles=%u"
-                      " dnear=%.2f Hz would[near=%d slow=%d]",
+                      " agree=%.3f/%.3f dnear=%.2f Hz would[near=%d slow=%d]",
                  r.callsign, r.grid, r.power_dbm, r.freq_hz,
                  r.best_dt_samples / WSPR_SAMPLE_RATE_HZ, r.cycles,
-                 dnear, would_near, would_slow);
+                 r.agree_hard, r.agree_soft, dnear, would_near, would_slow);
         file_spot(&r, cycle_utc, WSPR_SNR_UNKNOWN);
     }
     int64_t dec_ms = (esp_timer_get_time() - t0) / 1000;

@@ -143,6 +143,51 @@ sidelobes, because sliding a four-tooth comb by k tone spacings still lands
 12 Hz plateau**. Notching the spikes and leaving the gaps between them is worth
 two stations on its own, and it is the largest single change of the four.
 
+## The guards that had to be stood down
+
+Two of the four false-decode guards now cost more than they save, and both were
+re-measured rather than assumed:
+
+| guard | what it would do to the current decoder |
+|---|---|
+| SLOW (1000 Fano cycles) | rejects **3 confirmed decodes** - PA4JAM (1716), PA2PGU (1491), DK8AF (1423) |
+| NEAR (10 Hz) | rejects **2 confirmed decodes** - 2E0DLC/OE5OSP 5.8 Hz apart, OE5MMP/DK8AF 7.8 Hz apart |
+| callsign shape | no effect on any measured data - kept |
+| power > 43 dBm | no effect on any measured data - kept |
+
+Neither was wrong when it was set. SLOW is the exact failure its own comment
+predicted: **a Fano cycle count is a property of the decode path**, the
+soft-decision metric is a different path, and the 16-hour field measurement
+that set 1000 was taken on the old one. NEAR's premise - "two WSPR signals
+closer than about 6 Hz overlap anyway" - was true when a cluster produced one
+candidate, and stopped being true when the candidate finder started resolving
+them.
+
+Both remain **measured on every decode**, which is the property the original
+design rightly insisted on, so the evidence to bring one back is in any
+ordinary session log rather than needing two flashes and two band conditions.
+
+## On the noise ladder
+
+`tools/wspr_noise_ladder.py` raises a recording's noise floor in known steps
+and compares both decoders on byte-identical audio, so the horizontal distance
+between the curves is the deficit in dB. Same file, same seed, before and
+after:
+
+| added noise | wsprd | ours before | ours after | fabrications before | after |
+|---|---|---|---|---|---|
+| 0 dB | 14 | 5 | **6** | 0 | 0 |
+| 1 dB | 8 | 2 | **4** | 0 | 0 |
+| 2 dB | 6 | 1 | **2** | 1 | 0 |
+| 3 dB | 5 | 0 | 0 | 1 | 0 |
+| 4 dB | 4 | 0 | 0 | 2 | 0 |
+
+**Deficit approximately 3 dB before, approximately 2 dB after, and the four
+fabrications that used to survive all four guards no longer survive one.**
+
+The curve is also less steep, which was the other half of the old complaint: a
+decoder sitting exactly at threshold loses half its yield to one dB of noise.
+
 ## What is still missing, honestly
 
 23 of a reachable 37. The remaining 14 split three ways:
