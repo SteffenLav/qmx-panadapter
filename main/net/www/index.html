@@ -87,7 +87,13 @@
        media query at all), so anything past the fold was simply gone, not
        reachable. Scroll it instead, same idea as the decode-list table's own
        `overflow: auto` wrapper - swipe sideways to reach what's clipped. */
-    overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch;
+    /* No -webkit-overflow-scrolling here. It is deprecated (iOS 13+ scrolls
+       with momentum natively) and it is not free: in Safari it makes the
+       scroller a containing block for position:fixed descendants, which is
+       what put the bar's popup menus behind the page from v1.9.4 (Randy
+       N4OPI, iPhone). Blink ignores the property entirely, which is why it
+       could not be reproduced in a desktop browser. */
+    overflow-x: auto; overflow-y: hidden;
   }
   #top-left  { display: flex; align-items: center; gap: 0.4rem; flex-wrap: nowrap; }
   #top-center { display: flex; justify-content: center; align-items: center; }
@@ -393,7 +399,13 @@
     background: var(--card); border: 1px solid var(--border); border-radius: 6px;
     font-size: 0.8rem; min-height: 2.2rem; gap: 0;
     /* Same reasoning as #top above - scroll rather than clip. */
-    overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch;
+    /* No -webkit-overflow-scrolling here. It is deprecated (iOS 13+ scrolls
+       with momentum natively) and it is not free: in Safari it makes the
+       scroller a containing block for position:fixed descendants, which is
+       what put the bar's popup menus behind the page from v1.9.4 (Randy
+       N4OPI, iPhone). Blink ignores the property entirely, which is why it
+       could not be reproduced in a desktop browser. */
+    overflow-x: auto; overflow-y: hidden;
   }
   #bot { flex-wrap: nowrap; }
   .bot-fill { flex: 1; min-width: 0; }
@@ -450,7 +462,13 @@
   .bot-menu-wrap { position: relative; display: inline-block; margin-left: 1.4rem; }
   .bot-menu-wrap > .bot-btn { margin-left: 0; }
   /* position:fixed (coords set in JS on open) so the popup escapes #bot's
-     overflow:hidden, which would otherwise clip a menu popping above the bar. */
+     overflow, which would otherwise clip a menu popping above the bar.
+     ⚠ position:fixed is NOT enough on its own: the menus are also MOVED to
+     <body> when the page loads (see the wiring loop). A fixed element is only
+     positioned against the viewport while no ancestor establishes a containing
+     block for it, and a scroll container can do exactly that - which is how
+     v1.9.4's portrait fix broke these popups on iOS. Being a child of <body>
+     means no bar styling can reach them at all. */
   .bot-menu {
     position: fixed; left: auto; right: 0; bottom: 3rem;
     display: none; flex-direction: column; gap: 2px;
@@ -4664,6 +4682,18 @@ document.addEventListener("keypress", (e) => {
     const b = document.getElementById(btnId);
     const m = document.getElementById(menuId);
     if (!b || !m) continue;
+    /* Move the popup OUT of the bar and onto <body>, once, at wiring time.
+       It stays in the markup next to its button because that is where it is
+       readable, but it must not remain a descendant of a scrolling, clipping,
+       stacking bar: a position:fixed element is positioned against the viewport
+       only while no ancestor establishes a containing block for it, and every
+       CSS property that does so (transform, filter, will-change,
+       -webkit-overflow-scrolling) is the sort of thing that gets added to a bar
+       later for an unrelated reason. That is exactly what happened in v1.9.4 -
+       the portrait scroll fix put these menus behind the page on iOS while a
+       desktop browser showed nothing wrong. As a child of <body> the question
+       cannot arise again. */
+    document.body.appendChild(m);
     b.addEventListener("click", (e) => {
       e.preventDefault();
       e.stopPropagation();   // don't let the document handler immediately re-close
@@ -4913,6 +4943,14 @@ function paintUpdateNotice(s) {
   } else if (ota === "failed") {
     set("Failed - tap retries", RED, () => otaInstall(u.latest),
         (u.ota_error || "Unknown error") + " - tap to try again");
+  } else if (u.checking) {
+    /* A check is a TLS fetch that takes SECONDS. This branch sits above the
+       up-to-date one because that verdict is the LAST one, and repainting it
+       half a second after the press is how this label claimed "up to date"
+       about a release that had already been published (Michael KZ4LY, Samuel
+       W7STF). Not tappable while it runs - pressing again changes nothing. */
+    set("checking…", CYAN, null,
+        "Asking GitHub whether anything is newer than " + (running || "this build") + ".");
   } else if (u.available && latest) {
     set(running + " \u2192 " + latest + "  tap?", CYAN,
         () => otaInstall(u.latest),
@@ -4943,10 +4981,14 @@ async function forceUpdateCheck() {
       setTimeout(() => { if (el) el.textContent = was; }, 4000);
       return;
     }
-    /* The check runs on its own task; the result arrives through the ordinary
-       /api/status poll, which repaints this label. Restore the old text if
-       nothing has changed it by then, so it cannot sit on "checking..." */
-    setTimeout(() => { if (el && el.textContent === "checking…") el.textContent = was; }, 8000);
+    /* The check runs on its own task and the result arrives through the
+       ordinary /api/status poll, which repaints this label - and now paints
+       "checking…" itself for as long as the DEVICE says a check is in flight
+       (u.checking), so the label no longer flips back to the previous verdict
+       within a second of the press. This local text is just the instant
+       acknowledgement before the next poll lands; the timeout is the backstop
+       for a status poll that never comes. */
+    setTimeout(() => { if (el && el.textContent === "checking…") el.textContent = was; }, 20000);
   } catch (e) {
     if (el) { el.textContent = "check failed"; el.style.color = "#ff6060"; }
     setTimeout(() => { if (el) el.textContent = was; }, 4000);

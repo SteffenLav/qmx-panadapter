@@ -60,6 +60,15 @@ static SemaphoreHandle_t s_lock = NULL;
 static char s_latest[24]  = {0};
 static bool s_available   = false;
 static volatile bool s_force = false;   // set by update_check_now()
+// A check takes SECONDS (TLS to GitHub), and until this existed nothing
+// could tell 'we asked, wait' from 'we asked, and the answer is no'. Both
+// screens rendered the previous verdict half a second after the press, so a
+// tester who had just read the release announcement was told "Up to date -
+// you are running v1.9.3" and only saw the offer appear seconds later, by
+// which time it read as the button having failed (Michael KZ4LY, Samuel
+// W7STF, 2026-08-26). Set at the REQUEST, not when the task wakes, or the
+// same gap reopens at 500 ms wide.
+static volatile bool s_checking = false;
 static bool s_started     = false;
 
 // ---- version compare -------------------------------------------------------
@@ -274,7 +283,9 @@ static void check_task(void *arg)
         // Not while an update is downloading: do_check()'s GitHub fallback
         // pulls 48 KB over TLS, and the thing it would be checking for is
         // already in flight. See net_quiet.h.
+        s_checking = true;
         bool ok = wifi_is_connected() && !net_quiet_active() && do_check();
+        s_checking = false;
 
         // #239: fetch it quietly, so the operator is only ever asked the one
         // question that matters - "restart into it?" - instead of starting a
@@ -315,7 +326,9 @@ static void check_task(void *arg)
     }
 }
 
-void update_check_now(void) { s_force = true; }
+void update_check_now(void) { s_checking = true; s_force = true; }
+
+bool update_check_in_progress(void) { return s_checking; }
 
 void update_check_start(void)
 {

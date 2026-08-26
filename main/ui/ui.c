@@ -4260,8 +4260,26 @@ static void mouse_timer_cb(lv_timer_t *t)
     // panel behind it refuses to move.
     for (lv_obj_t *o = target; o; o = lv_obj_get_parent(o)) {
         if (!lv_obj_has_flag(o, LV_OBJ_FLAG_SCROLLABLE)) continue;
+        // ⛔ CLAMP TO THE CONTENT. lv_obj_scroll_by() is the raw primitive and
+        // does NOT stop at the ends - LVGL's own clamping lives in its gesture
+        // handling, which a wheel applied from outside the indev never reaches.
+        // So the wheel drove settings and the ADIF log clean past their last row
+        // into empty space, and the panel read as blank until it was wound back
+        // (Roy KI0ER, 2026-08-26: "scrolling into the twilight zone").
+        //
+        // A positive dy moves the content down, which reveals what is above it
+        // and therefore spends scroll_top; a negative dy spends scroll_bottom.
+        // Zero room means this object is already at its limit, so the click goes
+        // to its parent instead - which is the chaining below, now reached for
+        // the right reason rather than because a scroll silently did nothing.
+        lv_coord_t dy   = clicks * MOUSE_WHEEL_STEP_PX;
+        lv_coord_t room = (dy > 0) ? lv_obj_get_scroll_top(o)
+                                   : lv_obj_get_scroll_bottom(o);
+        if (room <= 0) continue;
+        if (dy > room)  dy =  room;
+        if (-dy > room) dy = -room;
         lv_coord_t before = lv_obj_get_scroll_y(o);
-        lv_obj_scroll_by(o, 0, clicks * MOUSE_WHEEL_STEP_PX, LV_ANIM_OFF);
+        lv_obj_scroll_by(o, 0, dy, LV_ANIM_OFF);
         lv_coord_t after = lv_obj_get_scroll_y(o);
         if (after != before) {
             ESP_LOGI(TAG, "wheel %+d at (%d,%d): scroll_y %d -> %d%s",

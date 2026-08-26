@@ -403,6 +403,10 @@ static esp_err_t status_handler(httpd_req_t *req)
         update_check_get_latest(latest, sizeof(latest));
         cJSON_AddStringToObject(up, "latest",    latest);
         cJSON_AddBoolToObject(up,   "available", update_check_available());
+        // Both screens must be able to say "asking" rather than repeat the
+        // previous verdict while a check is in flight - see
+        // update_check_in_progress().
+        cJSON_AddBoolToObject(up,   "checking",  update_check_in_progress());
         int opct = 0; char omsg[128];
         ota_state_t ost = ota_update_get_state(&opct, omsg, sizeof(omsg));
         const char *ostr = (ost == OTA_RUNNING) ? "running"
