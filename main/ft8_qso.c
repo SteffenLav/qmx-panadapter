@@ -929,6 +929,40 @@ static void refresh_our_report(int fresh_snr, bool as_roger,
     arm_current_replacing_armed();
 }
 
+// The partner was not heard ADDRESSING US this slot, but we may well have heard
+// them anyway - calling CQ again, or working somebody else - and that decode
+// carries a newer measurement of their signal than the one baked into the
+// message we are about to re-send.
+//
+// Operator, 2026-08-26: "answering a CQ'ing station sends the SNR report
+// alright - but if the station does not reply immediately then I should call
+// with a new fresh (and often different) SNR report. Now it stays on the
+// original." Quite right: a report is a measurement, and re-sending a stale one
+// every 15 seconds means the number that eventually gets through - and into both
+// stations' logs - describes a signal from minutes ago.
+//
+// refresh_our_report() covers the case where they answer us and repeat
+// themselves; this covers the case where they say nothing to us at all, which is
+// the one that actually persists, because that is what a station working down a
+// pileup looks like from here.
+//
+// ⛔ Only acts when our outgoing message ALREADY carries a report. A plain
+// pounce TX1 is our GRID, and turning that into a report because we re-heard
+// them would change which message we are sending rather than just its number.
+// s_rst_sent is exactly that flag: set when we sent a report, empty otherwise.
+static void refresh_report_from_heard(bool as_roger, const char *target,
+                                      int freq, int64_t slot_sec)
+{
+    if (!s_rst_sent[0] || !target || !target[0]) return;
+    ft8_call_t heard;
+    if (!ft8_screen_find_call(target, &heard)) return;
+    // Only a decode from THIS slot is news. An older row would re-assert the
+    // number we already sent, and refresh_our_report() would drop it anyway -
+    // this just says so where it is cheap.
+    if (heard.last_utc != slot_sec) return;
+    refresh_our_report(heard.last_snr_db, as_roger, target, freq, slot_sec);
+}
+
 // Another station has drifted onto our tone since we picked it
 // (ft8_tx_is_clashing() true). Re-scan for the nearest still-clear 50 Hz slot
 // and move there instead of just flagging "FREQ BUSY" and transmitting over
@@ -2447,6 +2481,9 @@ void ft8_qso_advance(int64_t slot_sec)
             // relocate_tone_if_clashing(): at most QSO_MIDQSO_MOVE_MAX_HZ, at
             // most QSO_MIDQSO_MOVE_LIMIT times, never during a burst.
             relocate_tone_if_clashing(false);
+            // Skip-TX1 opens with a report, so this message can carry one
+            // even here; refresh it if we re-heard them this slot.
+            if (!fd_mode) refresh_report_from_heard(false, target, freq, slot_sec);
             register_miss("waiting for report");
             return;
         }
@@ -2535,6 +2572,10 @@ void ft8_qso_advance(int64_t slot_sec)
             // #219: same as WAIT_RPT - stepped on and getting nowhere is when a
             // WSJT-X operator moves, so do it here too, under the same bounds.
             relocate_tone_if_clashing(false);
+            // THE reported case: we answered their CQ with a report and
+            // they have not come back to us. Re-send with this slot's
+            // measurement rather than the one from when we first called.
+            if (!fd_mode) refresh_report_from_heard(false, target, freq, slot_sec);
             register_miss("waiting for roger");
             return;
         }
@@ -2595,6 +2636,9 @@ void ft8_qso_advance(int64_t slot_sec)
             // refresh our R<report> to this slot's fresh SNR before re-sending,
             // same WSJT-X behaviour as the CQ-run WAIT_ROGER path above.
             if (found && !fd_mode) refresh_our_report(snr_db, true, target, freq, slot_sec);
+            // Not addressed to us this slot, but still heard: our R<report>
+            // gets the same treatment.
+            else if (!fd_mode) refresh_report_from_heard(true, target, freq, slot_sec);
             relocate_tone_if_clashing(false);   // #219, same bounds
             register_miss("waiting for RR73");
             return;

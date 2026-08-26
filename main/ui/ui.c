@@ -4121,7 +4121,21 @@ static void cursor_set_hot(bool hot)
 // Cheaper than it looks: a subtree whose bounds exclude the point is rejected in
 // one comparison, so this descends only through objects actually under the
 // pointer, not the whole widget tree.
-static lv_obj_t *clickable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
+// One walk, two questions. `hot_only` picks which:
+//
+//   true  - "would a click here act on a CONTROL?", which is what colours the
+//           pointer. Surfaces you click to dismiss or drag, and plain
+//           backgrounds, are deliberately NOT reported (see the two tests at
+//           the bottom).
+//   false - "what object would LVGL hand the press to?", regardless of whether
+//           it is worth pointing out. The spectrum and the waterfall are both
+//           UI_FLAG_NOT_HOT, so the hot walk can never name them - which is
+//           exactly how wheel-to-tune shipped unable to fire even once
+//           (operator, 2026-08-26: "cannot in any way change the center freq").
+//
+// Kept as one function on purpose: the descent and the occlusion rule are the
+// delicate part, they were got right once, and two copies would drift.
+static lv_obj_t *hit_walk(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, bool hot_only)
 {
     if (!parent || lv_obj_has_flag(parent, LV_OBJ_FLAG_HIDDEN)) return NULL;
     // The CLICK area, not the coords: it already includes ext_click_area, so an
@@ -4134,7 +4148,7 @@ static lv_obj_t *clickable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
     uint32_t n = lv_obj_get_child_count(parent);
     for (uint32_t i = n; i > 0; i--) {
         lv_obj_t *child = lv_obj_get_child(parent, i - 1);
-        lv_obj_t *hit = clickable_at(child, x, y);
+        lv_obj_t *hit = hit_walk(child, x, y, hot_only);
         if (hit) return hit;
 
         // OCCLUSION. If LVGL would hand the press to this child, then nothing
@@ -4157,6 +4171,10 @@ static lv_obj_t *clickable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
     // So a slider reports hot on the knob and nowhere else, which is the truth.
     lv_point_t p = { x, y };
     if (!lv_obj_hit_test(parent, &p)) return NULL;
+
+    // "What takes the press" is answered here: LVGL would deliver it to this
+    // object, and the caller decides what that means.
+    if (!hot_only) return parent;
 
     // Being clickable is not the same as being worth pointing out. Almost every
     // container in this UI is clickable, because that is lv_obj's default, and
@@ -4191,6 +4209,20 @@ static lv_obj_t *clickable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
                              (c == &lv_roller_class)   || (c == &lv_buttonmatrix_class);
     if (!interactive_class && lv_obj_get_event_count(parent) == 0) return NULL;
     return parent;
+}
+
+// Would a click here act on a control? Drives the pointer's colour.
+static lv_obj_t *clickable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
+{
+    return hit_walk(parent, x, y, true);
+}
+
+// Which object would LVGL hand a press at this point to? Used by
+// wheel-to-tune, which must recognise the spectrum and the waterfall - two
+// objects the question above is specifically built to stay quiet about.
+static lv_obj_t *press_target_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
+{
+    return hit_walk(parent, x, y, false);
 }
 
 // The edge strips are the one place where "clickable" and "does something" part
@@ -4264,17 +4296,29 @@ static void wheel_tune_flush(void)
 
 // True when the clicks were used for tuning, so the caller leaves scrolling
 // alone. Tunes only when the pointer is over the spectrum or the waterfall AND
-// nothing is on top of them: clickable_at() answers the occlusion question the
-// same way the pointer's own colour does, so a modal, a dropdown or the drawer
-// covering the panadapter takes the wheel instead of the dial moving underneath
-// it. That is the rule the v1.8.1 deadzone note in CLAUDE.md insists on - do
-// not re-derive the geometry by hand here.
+// nothing is on top of them: the walk answers the occlusion question the same
+// way LVGL delivers a press, so a modal, a dropdown or the drawer covering the
+// panadapter takes the wheel instead of the dial moving underneath it. That is
+// the rule the v1.8.1 deadzone note in CLAUDE.md insists on - do not re-derive
+// the geometry by hand here.
 static bool wheel_tune_take(int clicks)
 {
     if (!s_spectrum_obj || !s_waterfall_obj) return false;
-    lv_obj_t *hit = clickable_at(lv_layer_top(), s_mouse_pt.x, s_mouse_pt.y);
-    if (!hit) hit = clickable_at(lv_screen_active(), s_mouse_pt.x, s_mouse_pt.y);
-    if (hit != s_spectrum_obj && hit != s_waterfall_obj) return false;
+    // ⛔ press_target_at(), NOT clickable_at(). The spectrum and the waterfall
+    // are UI_FLAG_NOT_HOT - they are drag surfaces, so the pointer stays white
+    // over them - and clickable_at() returns NULL for exactly those. Using it
+    // here made this test unsatisfiable and the whole feature inert.
+    lv_obj_t *hit = press_target_at(lv_layer_top(), s_mouse_pt.x, s_mouse_pt.y);
+    if (!hit) hit = press_target_at(lv_screen_active(), s_mouse_pt.x, s_mouse_pt.y);
+    if (hit != s_spectrum_obj && hit != s_waterfall_obj) {
+        // Logged because a wheel that does nothing is indistinguishable from a
+        // wheel that is not wired up - which is precisely how the first version
+        // of this went out. `hit` is the object LVGL would give the press to.
+        ESP_LOGI(TAG, "wheel %+d at (%d,%d): not over the panadapter (press target %p, spectrum %p, waterfall %p)",
+                 clicks, (int)s_mouse_pt.x, (int)s_mouse_pt.y,
+                 (void *)hit, (void *)s_spectrum_obj, (void *)s_waterfall_obj);
+        return false;
+    }
 
     int64_t now  = esp_timer_get_time();
     uint32_t cur = cat_get_frequency();
