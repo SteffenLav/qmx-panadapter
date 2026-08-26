@@ -354,7 +354,7 @@ bool update_check_available(void) { return s_available; }
 void update_check_get_asset_url(char *out, size_t out_sz)
 {
     if (!out || out_sz == 0) return;
-    out[0] = ' ';
+    out[0] = '\0';
     if (s_lock) xSemaphoreTake(s_lock, portMAX_DELAY);
     if (s_available && s_latest[0])
         snprintf(out, out_sz, RELEASE_ASSET_URL_FMT, s_latest);
