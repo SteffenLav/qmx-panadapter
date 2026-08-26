@@ -12,7 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.9.5.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.9.6.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+>
+> **New in v1.9.6 — POTA and SOTA logging put right, the mouse wheel tunes, and the phone menus work again.** **Your callsign is now written as `STATION_CALLSIGN`**, the field POTA reads — it used to warn *"No station_callsign field, assuming operator …"* on every upload and guess *(Don Adams WB0LQW)*. **Park-to-Park and Summit-to-Summit contacts can be entered afterwards**: a new **P2P ref** column in the web log editor, where you type just the reference and the Tab5 works out the programme. **FT4 is logged the way the ADIF specification defines it** (`MODE=MFSK`, `SUBMODE=FT4`), so editors like ADIFMaster will open the file — LoTW uploads are unchanged. **The mouse wheel tunes the radio** over the spectrum and waterfall: 10 Hz a click in CW and the digital modes, 100 Hz in SSB *(Roy KI0ER, John Dusek)*, and it no longer scrolls panels into blank space. **The bottom-bar menus work on an iPhone again** — a line added for portrait mode in v1.9.4 hid them behind the page in Safari *(Travis AK6TB, Randy N4OPI)*. **"Check for updates" stops saying you are up to date while it is still asking** *(Michael KZ4LY, Samuel W7STF)*, and **background downloading is now a switch** you can turn off while still being told a new version exists. **Coming back from the radio's own menus restores your frequency and mode** — they could leave the radio on 160 m *(Randy N4OPI)* — and **Basic/Expert is remembered** *(Samuel W7STF)*. Full detail in [docs/version-history.md](docs/version-history.md).
 >
 > **New in v1.9.5 — a fast-follow patch: two ADIF logging bugs, no new features.** **A duplicate contact could falsely claim a park was activated.** Working the same station twice made the device say "10 contacts, park activated" while POTA.app credited only 9 unique stations and rejected the upload *(Eric, GitHub issue — cost three activations in one outing)*. A station now counts once toward the minimum no matter how many times you work them. **Deleting a single QSO record could silently do nothing.** The delete never checked whether its rewrite actually succeeded before committing it, so a storage write failure looked like the delete "worked" while the record stayed. It now verifies the rewrite, refuses to touch the log if it can't, and automatically repairs/reclaims space from storage that's fragmented over a long uptime, so a delete that would have failed now just works. Full detail in [docs/version-history.md](docs/version-history.md).
 >
@@ -48,7 +50,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.9.5.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.9.6.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -975,7 +977,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.9.4 is here.** Next on the bench:
+**v1.9.6 is here.** Next on the bench:
 
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).

@@ -2828,3 +2828,64 @@ radio on 160 m whatever band you started on *(Randy N4OPI)*. Closing the session
 now puts the frequency and mode back if they moved, alongside the I/Q-mode
 re-enable that was already there. If you changed band deliberately while you were
 in there, that gets put back as well: the Tab5 cannot tell the two apart.
+
+The rest of this release came from the first days of v1.9.4 and v1.9.5 in the
+field.
+
+**The mouse wheel tunes the radio.** Over the spectrum or the waterfall, one
+click is **10 Hz in CW and the digital modes** - fine enough to zero-beat a CW
+signal by ear - and **100 Hz in SSB** *(Roy KI0ER, seconded by John Dusek)*. It
+stops at the band edges, a fast spin is not lost, and anything covering the
+panadapter takes the wheel instead, so the dial never moves under a window you
+are reading.
+
+**The wheel also stops scrolling panels into blank space.** Winding past the last
+row of the settings list or the QSO log used to carry the contents off the screen
+entirely, leaving the panel empty until you wound it back *(Roy KI0ER)*.
+
+**The bottom-bar menus work on an iPhone again.** Tapping *QSO Logs* highlighted
+the button and did nothing at all *(Travis AK6TB)*, or opened the menu behind the
+decode list so a selection could be made but not read *(Randy N4OPI)*. Both come
+from one line added in v1.9.4 to make the bars scroll sideways in portrait: it
+also makes Safari treat the bar as the frame those popups are positioned inside.
+That line is gone, and the menus have been moved out of the bars entirely so no
+future change to the bars can reach them. Travis confirmed the diagnosis from the
+other end - broken in Safari on macOS, iOS and iPadOS; fine in Edge and Chrome.
+
+**"Check for updates" no longer says you are up to date when you are not.** A
+check asks GitHub and takes a few seconds; both the Tab5's update window and the
+browser's version label were repainting the *previous* answer immediately after
+the press *(Michael KZ4LY, Samuel W7STF)*. Both now say **checking** until the
+answer actually arrives.
+
+**Background downloading is a switch.** It always was a setting, but it had no
+control anywhere - the config file was the only way to reach it, which is not an
+opt-out in any useful sense. It is now a checkbox in the Tab5's Settings under
+**Network**, and a row in the web Settings under **Updates**. Turn it off and the
+Tab5 still checks and still tells you a new version exists; it simply waits for
+you to ask before spending 3.3 MB, which matters on a phone hotspot *(Michael
+KZ4LY, Samuel W7STF, Steve N9SZ)*. Applying an update is a deliberate press
+either way - nothing installs itself.
+
+An automatic download now also waits until the Tab5 has been up for five minutes
+and has memory to spare. Steve N9SZ saw one start moments after boot, appear to
+finish, and then reboot the device back onto the old version - twice - while the
+same update started by hand worked. The download is verified before it is made
+bootable, so a reset during that step loses the download rather than anything
+else, but starting 30 seconds into boot is the worst moment on this hardware.
+
+**You come back from the radio's own menus where you left.** Using **Radio
+menus** to check something could leave the radio on 160 m whatever band you
+started on *(Randy N4OPI)*. Closing the session now puts the frequency and mode
+back if they moved. If you changed band deliberately while you were in there,
+that is put back too - the Tab5 cannot tell the two apart.
+
+**Basic/Expert is remembered** across a reboot *(Samuel W7STF)*, and switching
+FT8/FT4 from the web API lands on that mode's calling frequency instead of
+staying on the other one's.
+
+**Under the bonnet**, the built-in station simulator can now run FT4 - it had
+three separate places that assumed FT8's 15-second slots - and its practice
+stations now have signal levels that vary instead of every one reading the same.
+That is bench equipment rather than a feature, but it is how FT4 and
+signal-report behaviour get tested without putting a real station on the air.
