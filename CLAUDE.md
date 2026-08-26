@@ -985,6 +985,19 @@ A touch UI has no hover states, so a mouse user cannot tell what is live. The po
 - **A handle that is not itself clickable is reported by geometry** (`point_on_grip`): the edge grips and the band-plan knob deliberately let presses fall through to the strip that acts, so hit-testing alone would never find them. The tone modal took the other route — its picked cells became clickable and took the strip's own drag callbacks, so the white block is both grabbable and reported.
 - Because the edge strips are full-height clickable objects where only the grip activates, a strip reports **only** on its grip.
 
+⛔ **`clickable_at()` answers ONE question, and it is not "what would be pressed".**
+It returns NULL for every `UI_FLAG_NOT_HOT` surface, which is its whole purpose -
+and the spectrum and the waterfall both carry that flag. Wheel-to-tune (v1.9.6)
+gated on `clickable_at(...) == s_spectrum_obj`, which is **unsatisfiable by
+construction**, so the feature shipped completely inert and the operator found it
+in a minute: *"cannot in any way change the center freq"*. Both questions now share
+one walk - `hit_walk(..., bool hot_only)` - behind two names: **`clickable_at()`**
+for "would a click act on a control?" (the pointer's colour) and
+**`press_target_at()`** for "what object would LVGL deliver this press to?"
+(hit-testing, occlusion). Reach for the second whenever the answer must include a
+drag surface. And note the shape of the mistake: two different questions had one
+implementation, so picking the wrong one compiled, ran, and did nothing.
+
 Two things follow for the swipe gestures: the edge grips accept a **mouse click** (gated on the mouse indev, so a finger still behaves as before — a tap on the bottom strip must stay inert so reaching for it cannot retune), and the drawer and Memory Channels grew tappable handles on their **travelling** edge. The drawer's went on the right first and was wrong: that edge is pinned to the screen, so the handle sat still while the panel appeared from under it.
 
 ### No transition animations on this display — 220 ms is three frames (v1.5.0)
