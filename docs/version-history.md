@@ -2790,3 +2790,43 @@ for POTA, which ignores them, at the cost of QRZ, eQSL, LoTW and your own record
 which do not. And SOTA's own `MY_SOTA_REF`/`SOTA_REF` fields are still not
 written - `SIG`/`SIG_INFO` is valid ADIF for a summit too, but whether SOTA's
 uploader reads it needs a SOTA activator to confirm before anything is changed.
+
+Alongside the ADIF work, this release carries the first reports off v1.9.4 and
+v1.9.5.
+
+**The bottom-bar menus work again on an iPhone.** Tapping *QSO Logs* highlighted
+the button and did nothing at all *(Travis AK6TB)*, or opened the menu behind the
+decode list so a selection could be made but not read *(Randy N4OPI)*. Both come
+from one line added in v1.9.4 to make the bars scroll sideways in portrait: it
+also makes Safari treat the bar as the frame those popups are positioned inside,
+which either clips them away or drops them behind the page. That line is gone,
+and the menus have been moved out of the bar entirely so no future change to the
+bars can reach them.
+
+**"Check for updates" no longer says you are up to date when you are not.** A
+check asks GitHub and takes a few seconds; both the Tab5's update window and the
+browser's version label were repainting the *previous* answer immediately after
+the press, so you were told "Up to date, you are running v1.9.3" about a release
+that already existed — then the offer appeared on its own a moment later, by
+which point it read as the button having failed *(Michael KZ4LY, Samuel W7STF)*.
+Both now say **checking** until the answer actually arrives.
+
+**The mouse wheel tunes the radio.** Over the spectrum or the waterfall, one
+click is **10 Hz in CW and the digital modes** — fine enough to zero-beat a CW
+signal by ear — and **100 Hz in SSB** *(Roy KI0ER, seconded by John Dusek)*. It
+stops at the band edges, a fast spin is not lost, and anything covering the
+panadapter takes the wheel instead, so the dial never moves under a window you
+are reading.
+
+**The wheel also stops scrolling panels into blank space.** Winding past the last
+row of the settings list or the QSO log used to carry the contents off the screen
+entirely, leaving the panel empty until you wound it back *(Roy KI0ER)*. It now
+stops at the ends, and hands the click to whatever is behind when there is
+nothing left to move.
+
+**You come back from the radio's own menus where you left.** Using **Radio
+menus** to check something — Hardware Tests → Diagnostics, say — could leave the
+radio on 160 m whatever band you started on *(Randy N4OPI)*. Closing the session
+now puts the frequency and mode back if they moved, alongside the I/Q-mode
+re-enable that was already there. If you changed band deliberately while you were
+in there, that gets put back as well: the Tab5 cannot tell the two apart.

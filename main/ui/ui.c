@@ -4206,6 +4206,108 @@ static bool point_in_obj(lv_obj_t *o, lv_coord_t x, lv_coord_t y)
 }
 
 
+// ---- Wheel-to-tune ---------------------------------------------------------
+//
+// Roy KI0ER, seconded by John Dusek: "very similar to how convenient that can
+// be in SDR Console or SDR Sharp". The steps are HIS, deliberately: 10 Hz in CW
+// so a signal can be zero-beaten by ear, the same in the digital modes, ~100 Hz
+// in SSB. He explicitly did not want velocity scaling or a sensitivity setting -
+// "just a single hard-coded setting would work very well" - so there is no
+// setting here and no acceleration. Wheel up tunes up, which is the direction
+// both programs he named use.
+#define WHEEL_TUNE_STEP_CW_HZ    10
+#define WHEEL_TUNE_STEP_SSB_HZ  100
+// One CAT write per this long, however fast the wheel is spun. The pipe is
+// shared with the FA/MD/FW poll and a fast spin is 30+ clicks a second; the
+// clicks are ACCUMULATED and flushed as one write instead of being dropped by
+// the 200 ms rate-limiter, which would make a spin feel like it had missed.
+#define WHEEL_TUNE_WRITE_MS     120
+// Idle this long and the next click re-reads the dial from the radio. Without
+// it a stale target would fight the operator's own knob, or a spot click.
+#define WHEEL_TUNE_IDLE_MS     1200
+
+static uint32_t s_wheel_target_hz = 0;   // 0 = not currently wheel-tuning
+static int64_t  s_wheel_last_us   = 0;   // last accumulate
+static int64_t  s_wheel_wrote_us  = 0;   // last CAT write
+static bool     s_wheel_dirty     = false;
+
+static uint32_t wheel_tune_step_hz(void)
+{
+    const char *m = cat_get_mode_str();
+    if (!m || !m[0]) return WHEEL_TUNE_STEP_SSB_HZ;
+    // Substring matching, same convention as ui_theme.h's mode colour helper -
+    // the mode string is what CAT reports, not an enum we control.
+    if (strstr(m, "CW")   || strstr(m, "DiGi") || strstr(m, "DIGI") ||
+        strstr(m, "FT8")  || strstr(m, "FT4")  || strstr(m, "RTTY") ||
+        strstr(m, "DATA"))
+        return WHEEL_TUNE_STEP_CW_HZ;
+    return WHEEL_TUNE_STEP_SSB_HZ;
+}
+
+// Write the accumulated target, at most one write per WHEEL_TUNE_WRITE_MS.
+// Runs every tick, including ticks with no clicks, so the last few clicks of a
+// spin are never left unsent.
+static void wheel_tune_flush(void)
+{
+    if (!s_wheel_dirty || !s_wheel_target_hz) return;
+    int64_t now = esp_timer_get_time();
+    if (now - s_wheel_wrote_us < (int64_t)WHEEL_TUNE_WRITE_MS * 1000) return;
+    s_wheel_wrote_us = now;
+    s_wheel_dirty    = false;
+    // Forced, because this IS a deliberate user write - the rate-limiter exists
+    // to stop automatic paths flooding the pipe, and we are doing our own
+    // limiting above. Display first-class rather than waiting for the FA poll,
+    // same as every other tune path here.
+    cat_set_frequency_forced(s_wheel_target_hz);
+    ui_update_frequency(s_wheel_target_hz);
+}
+
+// True when the clicks were used for tuning, so the caller leaves scrolling
+// alone. Tunes only when the pointer is over the spectrum or the waterfall AND
+// nothing is on top of them: clickable_at() answers the occlusion question the
+// same way the pointer's own colour does, so a modal, a dropdown or the drawer
+// covering the panadapter takes the wheel instead of the dial moving underneath
+// it. That is the rule the v1.8.1 deadzone note in CLAUDE.md insists on - do
+// not re-derive the geometry by hand here.
+static bool wheel_tune_take(int clicks)
+{
+    if (!s_spectrum_obj || !s_waterfall_obj) return false;
+    lv_obj_t *hit = clickable_at(lv_layer_top(), s_mouse_pt.x, s_mouse_pt.y);
+    if (!hit) hit = clickable_at(lv_screen_active(), s_mouse_pt.x, s_mouse_pt.y);
+    if (hit != s_spectrum_obj && hit != s_waterfall_obj) return false;
+
+    int64_t now  = esp_timer_get_time();
+    uint32_t cur = cat_get_frequency();
+    if (!s_wheel_target_hz || now - s_wheel_last_us > (int64_t)WHEEL_TUNE_IDLE_MS * 1000)
+        s_wheel_target_hz = cur;          // fresh spin: start from the real dial
+    s_wheel_last_us = now;
+    if (!s_wheel_target_hz) {
+        // No CAT frequency at all - the radio is off or not yet enumerated.
+        // Say so once rather than silently doing nothing, which is how a dead
+        // wheel looks identical to an unimplemented one.
+        ESP_LOGI(TAG, "wheel tune ignored: no frequency from the radio yet");
+        return true;
+    }
+
+    int64_t step = (int64_t)wheel_tune_step_hz() * clicks;
+    int64_t tgt  = (int64_t)s_wheel_target_hz + step;
+
+    // Stay inside the band. The QMX rejects an out-of-band write outright (the
+    // "band locked out" report Ian G4LXX hit), so clamping is not politeness -
+    // it is what keeps the dial where the operator can see it.
+    uint32_t lo, hi;
+    if (legal_band_edges(s_wheel_target_hz, &lo, &hi)) {
+        if (tgt < (int64_t)lo) tgt = lo;
+        if (tgt > (int64_t)hi) tgt = hi;
+    }
+    if ((uint32_t)tgt == s_wheel_target_hz) return true;   // already at the edge
+
+    s_wheel_target_hz = (uint32_t)tgt;
+    s_wheel_dirty     = true;
+    wheel_tune_flush();     // try immediately; the rate limit decides
+    return true;
+}
+
 static void mouse_timer_cb(lv_timer_t *t)
 {
     (void)t;
@@ -4238,8 +4340,18 @@ static void mouse_timer_cb(lv_timer_t *t)
         cursor_set_hot(on_grip || hit != NULL);
     }
 
+    // Before anything else: a spin's last clicks must reach the radio even on a
+    // tick that carries none of its own.
+    wheel_tune_flush();
+
     int clicks = hid_cursor_take_wheel();
     if (!clicks) return;
+
+    // Over the panadapter, the wheel is a tuning knob (Roy KI0ER, John Dusek).
+    // Tried before the scroll search on purpose: the spectrum and waterfall are
+    // not scrollable, so scrolling would find some ancestor and move the page
+    // under the operator instead.
+    if (wheel_tune_take(clicks)) return;
 
     lv_obj_t *target = scrollable_at(lv_layer_top(), s_mouse_pt.x, s_mouse_pt.y);
     if (!target) target = scrollable_at(lv_screen_active(), s_mouse_pt.x, s_mouse_pt.y);

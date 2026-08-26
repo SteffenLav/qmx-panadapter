@@ -118,7 +118,12 @@ tagged from spots already seen and a single-reference ADIF export for uploading.
 
 **Bluetooth mouse** — A pointer that works *while the QMX stays plugged in*, which a USB
 mouse cannot do on this hardware. Pair once; it reconnects by itself. Move, click, and a
-wheel that scrolls whatever is under the pointer. **The mouse must be Bluetooth 4.0 or
+wheel that scrolls whatever is under the pointer — **and over the spectrum or waterfall,
+that wheel tunes**: 10 Hz a click in CW and the digital modes, so a signal can be
+zero-beaten by ear, and 100 Hz in SSB *(Roy KI0ER, John Dusek)*. It stops at the band
+edges, and anything on top of the panadapter — a modal, the settings drawer — takes the
+wheel instead, so the dial never moves under something you are reading.
+**The mouse must be Bluetooth 4.0 or
 later (Bluetooth Low Energy).** The Tab5's Bluetooth comes from a co-processor with no
 Bluetooth Classic radio, so an older Classic mouse cannot work and no firmware change can
 help — it never appears to the Tab5 at all. Most mice sold since about 2014 qualify; a
