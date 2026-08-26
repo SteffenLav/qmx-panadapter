@@ -2753,6 +2753,16 @@ const SET_FIELDS = [
   ["Display & waterfall", "display.db_max",         "num", "Scale ceiling (dBm)", "default -30"],
   ["Display & waterfall", "display.ema_pct",        "num", "Spectrum smoothing (%)", "EMA alpha x 100; default 20"],
 
+  /* The download half of updating, on its own switch. Three people asked for
+     it in one afternoon - Michael KZ4LY, Samuel W7STF and Steve N9SZ - and
+     the setting already existed; it simply had no control anywhere, so the
+     only way to turn it off was the config file. Off still TELLS you a new
+     version exists, which is the part nobody wanted to lose; it just waits
+     for you to ask before spending 3.3 MB. Applying an update is a separate,
+     always-deliberate press either way. */
+  ["Updates", "ota_autodl", "bool", "Download updates in the background",
+     "When a new version appears, fetch it quietly so it is ready to install in seconds. Turn this off to be told about it and download only when you ask - useful on a phone hotspot, where the image is 3.3 MB. Either way, nothing is ever installed without you pressing Restart"],
+
   ["WiFi", "wifi_ssid", "text", "Network name", "Add another network from here; the Tab5 remembers up to six"],
   ["WiFi", "wifi_pass", "pass", "Password", "Leave blank to keep the stored one - it is never sent back to the browser"],
 ];

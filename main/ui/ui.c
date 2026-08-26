@@ -1836,6 +1836,13 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_ACTIVATION 28  // POTA/SOTA activation session. In the Station group -
                                    // it is part of who you are on the air right now, and
                                    // it is what every logged QSO gets stamped with.
+#define DRAWER_SEC_OTADL      35  // Download a new release in the background, or wait
+                                  // until asked. The setting (ota_autodl) shipped in
+                                  // v1.9.3 with no control anywhere - the only way to
+                                  // change it was the config file - and three people
+                                  // asked for the switch in one afternoon (Michael
+                                  // KZ4LY, Samuel W7STF, Steve N9SZ). OFF still tells
+                                  // you a new version exists; it just waits.
 #define DRAWER_SEC_TERM       34  // "Radio menus": the QMX's own menu system on its second
                                    // serial port. Directly under the pause button, because
                                    // both are ways of getting at the radio itself, and an
@@ -1877,7 +1884,7 @@ static const int GRP_FT8[]      = { DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRA
 static const int GRP_SPECTRUM[] = { DRAWER_SEC_PRESETS, DRAWER_SEC_DBRANGE, DRAWER_SEC_SMOOTHING,
                                     DRAWER_SEC_WATERFALL, DRAWER_SEC_FLAT, DRAWER_SEC_IQ,
                                     DRAWER_SEC_IFCAL };
-static const int GRP_DEVICE[]   = { DRAWER_SEC_CHARGE };
+static const int GRP_DEVICE[]   = { DRAWER_SEC_CHARGE, DRAWER_SEC_OTADL };
 
 #define GRP_DEF(name, arr, exp) { name, arr, (int)(sizeof(arr)/sizeof((arr)[0])), exp }
 // A group marked `expert` is hidden in Basic. Everything reached in a normal
@@ -1894,6 +1901,7 @@ static const drawer_group_t s_drawer_groups[] = {
 #define N_DRAWER_GROUPS ((int)(sizeof(s_drawer_groups)/sizeof(s_drawer_groups[0])))
 
 static lv_obj_t *s_grp_hdr[N_DRAWER_GROUPS];
+static lv_obj_t *s_switch_otadl = NULL;
 static lv_obj_t *s_expert_btn = NULL, *s_expert_lbl = NULL;
 static bool      s_drawer_expert = false;
 
@@ -2026,6 +2034,7 @@ static void drawer_term_btn_cb(lv_event_t *e);
 static void topbar_reconcile_cb(lv_timer_t *t);
 static void drawer_slider_cwtxoff_cb(lv_event_t *e);
 static void ui_set_cw_tx_offset_label(int hz);
+static void drawer_otadl_cb(lv_event_t *e);
 static void drawer_expert_btn_cb(lv_event_t *e);
 static void drawer_expert_paint(void);
 static void drawer_check_flip_cb(lv_event_t *e);
@@ -8708,6 +8717,29 @@ static void drawer_build(void)
         y += 56;
     }
 
+    // Background download of a new release. Applying one is always a separate,
+    // deliberate press - see ota_update.h - so this switch is only about WHEN
+    // the 3.3 MB is fetched, not about whether an update can happen behind
+    // anyone's back.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_OTADL, y, 88);
+        lv_obj_t *l1 = lv_label_create(sec);
+        lv_label_set_text(l1, "Download updates");
+        lv_obj_set_style_text_color(l1, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(l1, &lv_font_montserrat_28, 0);
+        lv_obj_align(l1, LV_ALIGN_TOP_LEFT, 0, 6);
+        lv_obj_t *l2 = lv_label_create(sec);
+        lv_label_set_text(l2, "in the background, ready to install");
+        lv_obj_set_style_text_color(l2, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+        lv_obj_set_style_text_font(l2, &lv_font_montserrat_20, 0);
+        lv_obj_align(l2, LV_ALIGN_TOP_LEFT, 0, 44);
+        qmx_settings_t oc;
+        settings_load_all(&oc);
+        s_switch_otadl = make_drawer_checkbox(sec, oc.ota_autodl, drawer_otadl_cb, NULL);
+        lv_obj_align(s_switch_otadl, LV_ALIGN_TOP_RIGHT, 0, 6);
+        y += 88;
+    }
+
     // Phase 5.12: Flat Spectrum ON/OFF row
     {
         lv_obj_t *sec = drawer_section(DRAWER_SEC_FLAT, y, 56);
@@ -10083,11 +10115,28 @@ static void drawer_expert_paint(void)
         lv_color_hex(s_drawer_expert ? 0x7a4a12 : UI_COLOR_PRIMARY), 0);
 }
 
+// Background download on/off. Nothing else changes: the update check still
+// runs, the bar still says when a new version exists, and installing one is
+// still a deliberate press.
+static void drawer_otadl_cb(lv_event_t *e)
+{
+    lv_obj_t *cb = lv_event_get_target(e);
+    bool on = lv_obj_has_state(cb, LV_STATE_CHECKED);
+    settings_set_ota_autodl(on);
+    ESP_LOGI(TAG, "background download of updates: %s", on ? "ON" : "OFF");
+}
+
 // Flip the view and re-lay the drawer out for whichever screen is showing.
 static void drawer_expert_btn_cb(lv_event_t *e)
 {
     (void)e;
     s_drawer_expert = !s_drawer_expert;
+    // Remembered across a reboot. An operator who wants Expert wants it every
+    // time, and re-selecting it at each boot is exactly the sort of small
+    // repeated tax that makes a device feel like it is not listening
+    // (Samuel W7STF, 2026-08-26: "selecting it seems to nuisance upon each
+    // boot-up").
+    settings_set_drawer_expert(s_drawer_expert);
     drawer_expert_paint();
     drawer_set_ft8_mode(ui_mode_get() == UI_MODE_FT8);
     if (s_drawer) lv_obj_scroll_to_y(s_drawer, 0, LV_ANIM_OFF);

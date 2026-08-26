@@ -209,6 +209,12 @@ typedef struct {
     // minute. Downloading is safe to automate; APPLYING is not, and is not -
     // see the standing rule at the top of net/ota_update.h.
     bool     ota_autodl;
+    // Which half of the settings drawer is shown. Persisted because the
+    // operator who wants Expert wants it every time: Samuel W7STF,
+    // 2026-08-26 - "I just find myself leveraging the Expert version of
+    // the menu at this time and selecting it seems to nuisance upon each
+    // boot-up."
+    bool     drawer_expert;
     bool     pskreporter_en;  // FT8/FT4: report real decodes to pskreporter.info (UDP, batched ~5 min;
                               // needs callsign+grid; never in simulation mode; default TRUE - same
                               // as WSJT-X ships; drawer checkbox turns it off)
@@ -364,6 +370,7 @@ void settings_set_spots_en(bool v);
 void settings_set_rbn_en(bool v);
 void settings_set_sota_en(bool v);   // SOTA activations via spothole.app (opt-in)
 void settings_set_ota_autodl(bool v); // #239: download a new release quietly (never applies it)
+void settings_set_drawer_expert(bool v); // remember Basic vs Expert across a reboot
 
 // ---- Known WiFi networks --------------------------------------------------
 //

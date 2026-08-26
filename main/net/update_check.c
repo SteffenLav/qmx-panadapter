@@ -56,6 +56,15 @@ static const char *TAG = "update_check";
 #define GITHUB_MIN_GAP_MS   (60 * 60 * 1000)       // 1 h
 #define RETRY_WHEN_DOWN_MS  (10 * 60 * 1000)   // WiFi down: retry sooner
 
+// An AUTOMATIC download waits for both of these; see the guards in check_task().
+// 5 minutes clears WiFi bring-up, USB enumeration and the first FT8 slots. The
+// heap figure is a margin, not a measured cliff: the verify has been seen to die
+// with 10 KB free, and a healthy idle device here sits at 50 KB+, so 32 KB says
+// "there is room to spare" without waiting for a quiet moment that may never
+// come. A held-off download simply tries again at the next check.
+#define AUTODL_MIN_UPTIME_MS      (5 * 60 * 1000)
+#define AUTODL_MIN_INTERNAL_FREE  (32 * 1024)
+
 static SemaphoreHandle_t s_lock = NULL;
 static char s_latest[24]  = {0};
 static bool s_available   = false;
@@ -308,7 +317,50 @@ static void check_task(void *arg)
             qmx_settings_t cfg;
             settings_load_all(&cfg);
             ota_state_t st = ota_update_get_state(NULL, NULL, 0);
-            if (cfg.ota_autodl && st != OTA_RUNNING && st != OTA_DONE) {
+            // ⛔ TWO GUARDS, AND ONLY ON THE AUTOMATIC PATH.
+            //
+            // Steve N9SZ, 2026-08-26: booting his Tab5 started an automatic
+            // update, it "appeared to download fully", the device rebooted by
+            // itself and came back on the OLD version. Twice. Then the same
+            // update, started BY HAND minutes later, worked.
+            //
+            // That shape is explained by where esp_https_ota_finish() sits: it
+            // both verifies the image AND sets the boot partition, so a reset
+            // during the verify leaves the old image bootable and loses the
+            // download - precisely "it downloaded and I am still on the old
+            // version". And the verify is the memory-hungry end of the job:
+            // this file's own instrumentation records it dying inside segment 0
+            // with the internal heap at 10 KB free / 4 KB largest.
+            //
+            // The automatic download fired 30 s after boot, which is the worst
+            // moment on this board - WiFi bring-up has just taken ~100 KB of
+            // internal RAM, USB is enumerating, and the DMA pool is at its
+            // lowest. So: wait until the device has settled, and do not start
+            // when internal RAM is already tight. A missed window costs 30
+            // minutes; a watchdog reset costs the download and confuses the
+            // operator about which version they are running.
+            //
+            // ⚠ The MANUAL path keeps neither guard, deliberately. Someone who
+            // presses the button is watching, can retry, and must not be told
+            // "no" by a heuristic - and it was the manual path that worked for
+            // Steve.
+            //
+            // ⚠ HYPOTHESIS UNTIL HIS LOG ARRIVES. It fits the reported
+            // behaviour and the failure mode this code already documents, but
+            // the crash record (#117) from his device is what would confirm it.
+            int64_t up_ms = esp_timer_get_time() / 1000;
+            size_t  ifree = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+            if (cfg.ota_autodl && st != OTA_RUNNING && st != OTA_DONE &&
+                up_ms < AUTODL_MIN_UPTIME_MS) {
+                ESP_LOGW(TAG, "auto-download held: only %lld s since boot, waiting for the "
+                              "device to settle (a manual update is unaffected)",
+                         (long long)(up_ms / 1000));
+            } else if (cfg.ota_autodl && st != OTA_RUNNING && st != OTA_DONE &&
+                       ifree < AUTODL_MIN_INTERNAL_FREE) {
+                ESP_LOGW(TAG, "auto-download held: internal heap %u B, want %u B - the image "
+                              "verify needs room at the END of the download",
+                         (unsigned)ifree, (unsigned)AUTODL_MIN_INTERNAL_FREE);
+            } else if (cfg.ota_autodl && st != OTA_RUNNING && st != OTA_DONE) {
                 char aurl[192], oerr[96];
                 update_check_get_asset_url(aurl, sizeof(aurl));
                 if (aurl[0] && ota_update_start(aurl, oerr, sizeof(oerr)))
