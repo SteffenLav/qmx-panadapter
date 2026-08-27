@@ -23,21 +23,33 @@
   "benches": [
     {
       "name": "dev",
-      "role": "Daily driver. Always the newest main commit.",
+      "role": "ON LOAN TO THE WSPR WORK since 2026-08-26 - see tree/branch below.",
+      "role_note": [
+       "This bench normally runs the newest main commit. It is the WSPR",
+       "development board at the moment because 'lab', which is supposed to",
+       "do that job, has never been given a COM port.",
+       "tree/branch below describe WHAT IS ACTUALLY ON IT, because that is",
+       "what 'bench flash dev' builds from. A stale entry here does not read",
+       "as wrong - it silently flashes the other tree's firmware over this",
+       "one and then PASSES the MAC verify, because the board is the right",
+       "board. Put both back to C:/dev/qmx-panadapter + main when the WSPR",
+       "branch lands or moves to lab."
+      ],
       "board": "Tab5 #1",
       "mac": "30:ED:A0:EA:DD:57",
-      "ip": "192.168.1.213",
+      "ip": "192.168.1.209",
+      "ip_note": "DHCP, so it drifts - a convenience, not the authority. The board prints its own address at boot ('sta ip:' in its capture). qmx.local is NOT a discriminator: every unit answers to it, and on 2026-08-27 it resolved to a different board entirely.",
       "com": "COM3",
       "com_planned": "COM20",
       "radio": "QMX (small)",
-      "tree": "C:/dev/qmx-panadapter",
-      "branch": "main",
+      "tree": "C:/dev/qmx-panadapter-wspr",
+      "branch": "feat/wspr-page",
       "capture": "C:/dev/qmx-panadapter/scratchpad/capture-dev.txt",
       "usb_flash": "yes"
     },
     {
       "name": "lab",
-      "role": "Feature branch of the day (wspr, cw). Flashed freely.",
+      "role": "Feature branch of the day (wspr, cw). Flashed freely. NOT WIRED UP - no COM port assigned, so its work is running on 'dev' instead.",
       "board": "Tab5 #3 (new)",
       "mac": "UNKNOWN - fill in from the first boot line",
       "ip": "UNKNOWN",
