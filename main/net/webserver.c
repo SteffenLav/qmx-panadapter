@@ -400,6 +400,13 @@ static esp_err_t status_handler(httpd_req_t *req)
     cJSON_AddStringToObject(root, "screen",
         ui_mode_get() == UI_MODE_FT8  ? "ft8"  :
         ui_mode_get() == UI_MODE_WSPR ? "wspr" : "panadapter");
+    /* ⚠ ALSO IN /api/settings, AND BOTH ARE NEEDED. The web UI shows or hides
+     * the whole WSPR card from THIS field, on the 1 Hz status poll - it never
+     * reads /api/settings. Adding it only there (which is what shipped first)
+     * left the card permanently hidden even with the feature enabled, and no
+     * host test could see it: the bug is which endpoint serves the field, not
+     * what the field contains. */
+    cJSON_AddBoolToObject(root, "wspr_en", wspr_feature_enabled());
     // #218: firmware version + whether a newer release exists. The update check
     // has run since v1.1 but announced itself ONLY inside the on-device Reader,
     // so anyone who never opened the manual was never told - which is how people
