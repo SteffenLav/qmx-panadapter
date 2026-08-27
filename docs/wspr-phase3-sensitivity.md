@@ -509,6 +509,60 @@ timing is BOOT-SPECIFIC to about 35 %, so the comparison has to be made against
 a figure from the same boot, not against numbers recorded earlier in this
 document.
 
+## The next big cost win, worked out but NOT done: a shared front end
+
+After the changes above, `mix_decimate` is the largest single item again -
+projected ~660 ms of a ~2600 ms decoded candidate - and it is doing the same
+work twenty times over.
+
+Every candidate mixes and decimates the **whole 120 s capture** from 12 kHz to
+375 Hz, on its own. But all twenty candidates share one recording and sit
+inside a ~300 Hz window. A two-stage decimation does the expensive part once:
+
+- **Shared stage, once per cycle.** Mix to the middle of the candidate window,
+  low-pass and decimate by 8 to 1500 Hz. Must preserve the whole candidate
+  window (+/-150 Hz) plus the +/-34 Hz the decoder reads, so passband +/-184 Hz
+  and stopband from 1316 Hz (the first band that folds into it at a
+  decimate-by-8). Transition 0.094 normalised, so ~48 taps is generous.
+  Cost: 48 x 180,000 = **8.6 M MAC, once.**
+
+- **Per candidate.** Mix the residual offset (at most +/-150 Hz) and decimate
+  by 4 to 375 Hz, on 180,000 samples instead of 1.44 M. The filter here is
+  short: at a 1500 Hz input rate the stopband starts at 341 Hz (0.227
+  normalised) against a 34 Hz passband, a transition of 0.204, so ~16 taps is
+  enough and 24 is comfortable.
+  Cost: 24 x 45,000 = **1.08 M MAC per candidate.**
+
+Against today's single stage at 160 taps (160 x 45,000 = 7.2 M per candidate):
+
+| | 20 candidates |
+|---|---|
+| now | 144 M MAC |
+| two-stage | 8.6 M + 20 x 1.08 M = **30 M MAC** |
+
+Roughly **4.8x** on the largest remaining item, and the per-candidate mixing
+oscillator gets 8x cheaper too because it runs over 180,000 samples instead of
+1.44 M.
+
+### Why it is not done here
+
+Because of what the filter sweep above just demonstrated. A front-end change
+that is strictly better on paper moved which marginal stations decode - 128
+taps at 100 Hz beat 256 at 50 on both computed axes and silently traded PA2PGU
+for 5B4AHZ. A two-stage chain is a much bigger change to the same part of the
+signal path, so it needs the same treatment: sweep the two filter lengths
+against the reference set, watch the station SET rather than the count, and run
+the noise ladder both sides.
+
+That is a session's work with the radio available to confirm the projected
+milliseconds afterwards, not something to leave unflashed and unmeasured.
+
+⚠ It also touches `wspr_subtract`, which currently works on the raw 12 kHz
+samples. If the shared stage becomes the thing candidates are decoded from,
+subtraction has to happen somewhere both passes agree on - decide that before
+writing any of it, because getting it wrong would make the second pass subtract
+from audio the first pass never saw.
+
 ## Reproducing
 
 Reference decoder, for the ground-truth list:
