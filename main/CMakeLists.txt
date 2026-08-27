@@ -236,6 +236,23 @@ add_custom_command(
     VERBATIM
 )
 
+# Refuse to build settings.c with two settings sharing one dirty bit.
+#
+# The indices are hand-written #defines, so two features developed on separate
+# branches WILL eventually pick the same free number - and the merge is silent:
+# both defines survive, the compiler is happy, nothing complains at runtime.
+# That already happened once (DIRTY_WSPR_DIAL and DIRTY_DRAWER_EXPERT both at
+# 97 after merging feat/wspr-page with main). A collision is mostly a wasted
+# NVS write until one of the bits joins s_config_export_bits, at which point an
+# unrelated setting starts triggering the microSD config mirror - which is the
+# failure CLAUDE.md documents as killing WiFi. Latent, therefore build-checked.
+add_custom_command(
+    TARGET ${COMPONENT_LIB} PRE_BUILD
+    COMMAND ${PYTHON} "${CMAKE_CURRENT_SOURCE_DIR}/../tools/check_dirty_bits.py"
+    COMMENT "Checking settings dirty-bit indices are unique"
+    VERBATIM
+)
+
 # Refuse to build a web UI whose JavaScript does not parse (TODO #183).
 #
 # v1.8.5 shipped with one unterminated string literal, which stops the ENTIRE

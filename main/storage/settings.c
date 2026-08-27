@@ -268,7 +268,11 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_FD_CLASS       44
 #define DIRTY_FD_SECTION     45
 #define DIRTY_SIM_MODE       46
-/* WSPR. 96 was the highest index in use; the array holds 128. */
+/* WSPR. ⚠ This comment used to read "96 was the highest index in use", which
+ * was true when this branch was cut and stopped being true when main took 97
+ * for DIRTY_DRAWER_EXPERT. A hand-maintained note about what is free is
+ * exactly the thing that goes stale across a merge - the build check is the
+ * authority now, not this line. */
 #define DIRTY_WSPR_DIAL      97
 #define DIRTY_WSPR_TX_EN     98
 #define DIRTY_WSPR_DUTY      99
@@ -320,7 +324,12 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_HOUND_MODE     87
 #define DIRTY_KBD_BIND       95   /* #233 user-defined keyboard shortcuts */
 #define DIRTY_OTA_AUTODL     96   /* #239 quiet background download of a new release */
-#define DIRTY_DRAWER_EXPERT  97   /* Basic/Expert drawer choice, remembered */
+/* ⛔ 104, NOT 97. It WAS 97 on main, and the WSPR block below had already
+ * taken 97 on its own branch - so merging the two produced two settings
+ * sharing one bit, silently: both defines survive a merge, the compiler is
+ * happy, and nothing at runtime complains. tools/check_dirty_bits.py now
+ * fails the build on this, because nothing else was ever going to notice. */
+#define DIRTY_DRAWER_EXPERT 104   /* Basic/Expert drawer choice, remembered */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
