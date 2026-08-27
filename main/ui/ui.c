@@ -6807,62 +6807,6 @@ static bool update_line_hit(int x)
     return x >= (int)a.x1 - margin && x <= (int)a.x2 + margin;
 }
 
-/* ---- THE HIDDEN UNLOCK: seven taps on the firmware-version label -------
- *
- * WSPR ships on the main track switched off (see wspr_rx.h). This is how it
- * gets switched on from the DEVICE, with no laptop and nothing on screen that
- * hints it exists - the Android developer-options idiom, for the same reason
- * it is used there: seven taps inside three seconds is essentially impossible
- * to hit by accident, and it needs no UI of its own.
- *
- * ⭐ WHY THIS LABEL AND NOT A NEW GESTURE. In the normal state - no update
- * pending - `s_update_line_tappable` is false and a tap here does NOTHING AT
- * ALL, so the count is free and the OTA path is untouched. When an update IS
- * pending the existing tap still opens ota_modal exactly as before; the count
- * runs alongside it and does not consume the tap. Adding a bespoke gesture
- * somewhere else would have meant a new live touch target on a screen whose
- * every other target is documented and honest.
- *
- * ⚠ It TOGGLES rather than only switching on, so a unit can be put back into
- * the hidden state without a laptop, and the toast always says which way it
- * went - a silent toggle would be worse than no toggle. Turning it off while
- * the WSPR page is up also leaves the page, or the operator is stranded on a
- * screen the swipe cycle can no longer reach.
- *
- * ⚠ NO REBOOT NEEDED. wspr_feature_enabled() is read live on every gate, so
- * the swipe cycle picks it up immediately. A reboot would be ceremony, and on
- * this bench a warm reset with the radio attached is the documented #74
- * trigger - it would wedge the QMX every time somebody unlocked the feature.
- */
-#define UNLOCK_TAPS       7
-#define UNLOCK_WINDOW_MS  3000
-
-static uint32_t s_unlock_first_ms;
-static int      s_unlock_taps;
-
-static void hidden_unlock_tap(void)
-{
-    const uint32_t now = lv_tick_get();
-    if (s_unlock_taps == 0 || (now - s_unlock_first_ms) > UNLOCK_WINDOW_MS) {
-        s_unlock_first_ms = now;
-        s_unlock_taps = 1;
-        return;
-    }
-    if (++s_unlock_taps < UNLOCK_TAPS) return;
-    s_unlock_taps = 0;
-
-    const bool on = !wspr_feature_enabled();
-    settings_set_wspr_en(on);
-    if (!on && ui_mode_get() == UI_MODE_WSPR) {
-        wspr_rx_stop();
-        ui_request_base_mode_m(UI_MODE_PANADAPTER);
-    }
-    ESP_LOGW(TAG, "hidden unlock: WSPR %s by %d taps on the version label",
-             on ? "ENABLED" : "hidden", UNLOCK_TAPS);
-    ui_toast(on ? "WSPR unlocked - swipe left from FT8"
-               : "WSPR hidden again");
-}
-
 void ui_set_update_line(const char *text, uint32_t colour)
 {
     if (!s_bot_version) return;
@@ -7641,10 +7585,6 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
     }
 
     if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
-        /* Counted BEFORE the chain below and outside it, so it can never
-         * change what an existing gesture does - it only observes. */
-        if (be_decided == 0 && update_line_hit((int)p.x)) hidden_unlock_tap();
-
         if (be_decided == 2 && be_bp_ok && s_bp_drag_band_hi > s_bp_drag_band_lo) {
             uint32_t tgt = (uint32_t)s_bp_drag_target_hz;
             cat_set_frequency_forced(tgt);   // deliberate user action - bypass the 200ms rate-limiter

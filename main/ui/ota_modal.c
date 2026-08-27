@@ -7,6 +7,8 @@
 #include "net/ota_update.h"
 #include "net/update_check.h"
 #include "util/status.h"
+#include "storage/settings.h"   /* settings_set_wspr_en() - the hidden unlock */
+#include "wspr_rx.h"            /* wspr_feature_enabled(), wspr_rx_stop() */
 #include "esp_app_desc.h"
 #include "esp_system.h"
 #include "esp_log.h"
@@ -42,6 +44,70 @@ typedef enum {
 } ota_action_t;
 
 static ota_action_t s_action = ACT_NONE;
+
+static void close_modal(void);   /* used by the hidden unlock below */
+
+/* ---- THE HIDDEN UNLOCK: seven taps on the version line ----------------
+ *
+ * WSPR ships on the main track switched off (wspr_rx.h). This is how it is
+ * switched on from the DEVICE, with no laptop and nothing on screen that hints
+ * it exists: the Android developer-options idiom, seven taps inside three
+ * seconds on the line that names the running build.
+ *
+ * ⛔ IT LIVES HERE, NOT ON THE BOTTOM BAR, AND THE FIRST ATTEMPT PROVED WHY.
+ * It was first attached to the bottom-bar version label on the reasoning that
+ * a tap there "does nothing when no update is pending" - which is wrong.
+ * status.c makes that label tappable in the normal state too, offering a
+ * check-now, so tap ONE opened this very window and taps two to seven landed
+ * on it instead of the label. The device log showed three taps arriving nine
+ * and four seconds apart, one per dismissal. Reading the code and inferring
+ * the state is what produced that; the running device settled it in seconds.
+ *
+ * Here the modal is already open and covers the screen, so the count fights no
+ * existing gesture - and this is where the idiom actually belongs anyway
+ * (Settings -> About -> tap the build number), not on a status bar.
+ *
+ * ⚠ UI_FLAG_NOT_HOT keeps the mouse pointer WHITE over this label. Everywhere
+ * else that flag means "a surface you drag or dismiss"; here it means "do not
+ * advertise". That is a deliberate exception to the pointer-honesty rule, and
+ * it is the whole point of a hidden control - a green pointer would announce
+ * it to anyone with a mouse.
+ *
+ * ⚠ It TOGGLES, and the toast always says which way it went, so a unit can be
+ * put back into the hidden state without a laptop. No reboot: every gate reads
+ * wspr_feature_enabled() live, and a warm reset with the radio attached is the
+ * documented #74 trigger - unlocking must not wedge the QMX.
+ */
+#define UNLOCK_TAPS       7
+#define UNLOCK_WINDOW_MS  3000
+
+static uint32_t s_unlock_first_ms;
+static int      s_unlock_taps;
+
+static void unlock_tap_cb(lv_event_t *e)
+{
+    (void)e;
+    const uint32_t now = lv_tick_get();
+    if (s_unlock_taps == 0 || (now - s_unlock_first_ms) > UNLOCK_WINDOW_MS) {
+        s_unlock_first_ms = now;
+        s_unlock_taps = 1;
+        return;
+    }
+    if (++s_unlock_taps < UNLOCK_TAPS) return;
+    s_unlock_taps = 0;
+
+    const bool on = !wspr_feature_enabled();
+    settings_set_wspr_en(on);
+    if (!on && ui_mode_get() == UI_MODE_WSPR) {
+        wspr_rx_stop();
+        ui_request_base_mode_m(UI_MODE_PANADAPTER);
+    }
+    ESP_LOGW("ota_modal", "hidden unlock: WSPR %s by %d taps on the version line",
+             on ? "ENABLED" : "hidden", UNLOCK_TAPS);
+    close_modal();
+    ui_toast(on ? "WSPR unlocked - swipe left from FT8"
+                : "WSPR hidden again");
+}
 
 static void close_modal(void)
 {
@@ -253,6 +319,11 @@ static void modal_build(void)
     lv_obj_set_style_text_align(s_body, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(s_body, 700);
     lv_obj_align(s_body, LV_ALIGN_TOP_MID, 0, 80);
+    /* The hidden unlock - see the note above. NOT_HOT so the mouse pointer
+     * stays white and never advertises it. */
+    lv_obj_add_flag(s_body, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_flag(s_body, UI_FLAG_NOT_HOT);
+    lv_obj_add_event_cb(s_body, unlock_tap_cb, LV_EVENT_CLICKED, NULL);
 
     s_bar = lv_bar_create(s_panel);
     lv_obj_set_size(s_bar, 640, 18);
