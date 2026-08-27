@@ -157,6 +157,40 @@ int wspr_spots_repeat_calls(void)
     return n;
 }
 
+/* Publishable and not yet sent. See wspr_spots.h for why "heard more than
+ * once" is the gate and why nothing is marked here. */
+int wspr_spots_pending_upload(wspr_spot_t *out, int max)
+{
+    if (!out || max <= 0 || !s_ring) return 0;
+    if (!lock()) return 0;
+    int n = 0;
+    for (int a = 0; a < s_count && n < max; a++) {
+        const int ia = (s_head - 1 - a + WSPR_SPOT_RING * 2) % WSPR_SPOT_RING;
+        if (s_ring[ia].sent) continue;
+        /* Confirmed = this callsign appears at least twice in the ring. */
+        int seen = 0;
+        for (int b = 0; b < s_count && seen < 2; b++) {
+            const int ib = (s_head - 1 - b + WSPR_SPOT_RING * 2) % WSPR_SPOT_RING;
+            if (!strcmp(s_ring[ib].call, s_ring[ia].call)) seen++;
+        }
+        if (seen < 2) continue;
+        out[n++] = s_ring[ia];
+    }
+    unlock();
+    return n;
+}
+
+void wspr_spots_mark_sent(int64_t cycle_utc, const char *call)
+{
+    if (!call || !s_ring) return;
+    if (!lock()) return;
+    for (int i = 0; i < s_count; i++) {
+        if (s_ring[i].cycle_utc == cycle_utc && !strcmp(s_ring[i].call, call))
+            s_ring[i].sent = 1;
+    }
+    unlock();
+}
+
 void wspr_spots_clear(void)
 {
     if (!s_ring) return;

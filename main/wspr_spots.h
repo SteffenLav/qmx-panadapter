@@ -50,6 +50,12 @@ typedef struct {
     int16_t  power_dbm;     /* as REPORTED by that station - never inferred */
     int32_t  km;            /* -1 when the grid gives no answer */
     int16_t  bearing_deg;   /* -1 when unknown */
+    /* Set once this spot has been accepted by wsprnet. Lives in the ring
+     * rather than in the uploader because eligibility is a property of the
+     * RING: a spot becomes publishable when its callsign is heard a SECOND
+     * time, which can happen cycles after the spot itself arrived. A simple
+     * "everything newer than X" cursor cannot express that. */
+    uint8_t  sent;
 } wspr_spot_t;
 
 void wspr_spots_init(void);
@@ -92,3 +98,21 @@ int wspr_spots_best_dx(wspr_spot_t *out);
 int wspr_spots_repeat_calls(void);
 
 void wspr_spots_clear(void);
+
+/* ---- wsprnet upload support ------------------------------------------
+ *
+ * Spots that are PUBLISHABLE and not yet sent, newest first. The rule, agreed
+ * before any of this was written: a callsign must have been heard MORE THAN
+ * ONCE. A real station transmits again; a false decode does not. WSPR has no
+ * CRC, so repetition is the only confirmation available that needs neither a
+ * second decoder nor the internet - and wsprnet is a scientific dataset that
+ * other people draw propagation conclusions from, so publishing an unconfirmed
+ * decode is not a private mistake.
+ *
+ * Does NOT mark anything: a spot is only marked once the server has accepted
+ * it, so a failed upload is retried rather than silently dropped. */
+int wspr_spots_pending_upload(wspr_spot_t *out, int max);
+
+/* Mark one spot sent, identified the way the uploader knows it. */
+void wspr_spots_mark_sent(int64_t cycle_utc, const char *call);
+

@@ -21,6 +21,7 @@
 #include "wspr_selftest.h"    // the dev "wspr_selftest" action
 #include "wspr_spots.h"       // GET /api/wspr
 #include "wspr_rx.h"         // the RX slot loop
+#include "net/wsprnet.h"    // spot publishing (OFF by default)
 #include "ui_mode.h"
 #include "ft8_qso.h"          // ft8_qso_get_state / get_target / get_cq_calls_sent
 #include "ft8_status.h"       // ft8_status_get
@@ -1236,6 +1237,34 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         char buf[96];
         snprintf(buf, sizeof(buf), "{\"ok\":true,\"wspr_en\":%s}",
                  want ? "true" : "false");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, buf);
+        cJSON_Delete(root);
+        return ESP_OK;
+
+    } else if (action && strcmp(action, "wspr_net") == 0) {
+        /* ⛔ TURNS ON PUBLISHING TO A PUBLIC DATABASE UNDER THE OPERATOR'S
+         * CALLSIGN. Off by default and only ever switched here or in an
+         * imported config - never as a side effect of anything else.
+         *   {"action":"wspr_net","on":true}
+         *   {"action":"wspr_net","dry":true}   compose one and LOG it, send nothing
+         */
+        cJSON *dry = cJSON_GetObjectItem(root, "dry");
+        if (dry && (cJSON_IsTrue(dry) || dry->valueint)) {
+            const bool got = wsprnet_dry_run();
+            httpd_resp_set_type(req, "application/json");
+            httpd_resp_sendstr(req, got
+                ? "{\"ok\":true,\"note\":\"composed and logged - nothing sent\"}"
+                : "{\"ok\":false,\"error\":\"nothing publishable yet\"}");
+            cJSON_Delete(root);
+            return ESP_OK;
+        }
+        cJSON *on = cJSON_GetObjectItem(root, "on");
+        const bool want = on ? (cJSON_IsTrue(on) || on->valueint) : true;
+        settings_set_wspr_net_en(want);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "{\"ok\":true,\"wspr_net_en\":%s,\"status\":\"%s\"}",
+                 want ? "true" : "false", wsprnet_status());
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, buf);
         cJSON_Delete(root);

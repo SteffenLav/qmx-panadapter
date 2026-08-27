@@ -83,6 +83,7 @@ idf_component_register(
         "ft8_pileup.c"
         "ft8_greylist.c"
         "net/pskreporter.c"
+        "net/wsprnet.c"
         "net/spots.c"
         "net/spot_sig.c"
         "ft8_hound.c"

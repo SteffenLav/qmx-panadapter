@@ -307,6 +307,12 @@ typedef struct {
      * or wspr_enabled = yes in an imported config file. */
     bool     wspr_en;
 
+    /* ⛔ PUBLISHES TO A PUBLIC DATABASE UNDER THE OPERATOR'S CALLSIGN, so it
+     * starts OFF and only the operator turns it on. wsprnet is a scientific
+     * dataset other people draw propagation conclusions from - an upload is
+     * not a private action, and it cannot be taken back once indexed. */
+    bool     wspr_net_en;
+
     uint8_t  wspr_dump_cycles;
     uint8_t  ft8_op_mode;     // FT8/FT4 sub-mode (ft8_op_mode_t: 0=FT8 1=FT4), default 0 - see ft8_test.h
     uint32_t passband_width_hz; // last CAT-reported filter width (Hz), 0=unknown/use mode default. Persisted so the
@@ -514,6 +520,7 @@ void settings_set_wspr_tx_dbm(int8_t v);
 void settings_set_wspr_hop_mask(uint16_t v);
 void settings_set_wspr_hop_en(bool v);
 void settings_set_wspr_en(bool v);   // master switch for the WSPR page - default OFF
+void settings_set_wspr_net_en(bool v);   // publish spots to wsprnet - default OFF
 void settings_set_wspr_dump_cycles(uint8_t v);
 void settings_set_ft8_op_mode(uint8_t v);
 
