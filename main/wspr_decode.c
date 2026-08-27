@@ -748,6 +748,18 @@ static void score_agreement(const char *call, const char *grid, int dbm,
     double d[WSPR_NSYM], sum = 0, sq = 0;
     for (int i = 0; i < WSPR_NSYM; i++) {
         int sync = wspr_sync_vector[i];
+    /* ⚠ DOUBLE sqrt() HERE IS DELIBERATE, unlike sync_score() next door which
+     * is emphatically float. Swept 2026-08-27 after build_tone_tw turned out
+     * to be doing 2048 double trig calls: these two loops are the only other
+     * double math left on the WSPR path, and they are 324 sqrts in a function
+     * called a handful of times per candidate - about 0.15 % of the budget,
+     * against sync_score's ~100,000 calls where it mattered enormously.
+     *
+     * They also sit on the ACCURACY-critical path: this value feeds the soft
+     * metric whose table was fitted to our own normalisation, and the Fano
+     * thresholds are tuned to its measured distribution. Trading 4 ms for a
+     * shift in that distribution is the wrong way round. Left as double on
+     * purpose - do not "make it consistent". */
         double a1 = sqrt(sync ? tp[i][3] : tp[i][2]);
         double a0 = sqrt(sync ? tp[i][1] : tp[i][0]);
         d[i] = a1 - a0;
@@ -1043,6 +1055,18 @@ static int try_soft_decision(wspr_tp_t tp[WSPR_NSYM][4], double noise_ref,
         int sync = wspr_sync_vector[i];
         /* AMPLITUDES. tp[][] holds power; the soft symbol is a difference of
          * magnitudes, which is what the fitted table describes. */
+    /* ⚠ DOUBLE sqrt() HERE IS DELIBERATE, unlike sync_score() next door which
+     * is emphatically float. Swept 2026-08-27 after build_tone_tw turned out
+     * to be doing 2048 double trig calls: these two loops are the only other
+     * double math left on the WSPR path, and they are 324 sqrts in a function
+     * called a handful of times per candidate - about 0.15 % of the budget,
+     * against sync_score's ~100,000 calls where it mattered enormously.
+     *
+     * They also sit on the ACCURACY-critical path: this value feeds the soft
+     * metric whose table was fitted to our own normalisation, and the Fano
+     * thresholds are tuned to its measured distribution. Trading 4 ms for a
+     * shift in that distribution is the wrong way round. Left as double on
+     * purpose - do not "make it consistent". */
         double a1 = sqrt(sync ? tp[i][3] : tp[i][2]);
         double a0 = sqrt(sync ? tp[i][1] : tp[i][0]);
         fsym[i] = a1 - a0;
