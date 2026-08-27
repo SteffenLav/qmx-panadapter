@@ -7,6 +7,14 @@ Reads the wspr_rx log lines a run produces and writes one document with the
 run's shape, every station heard, and the evidence for calling any of them
 fabricated.
 
+ONE FILE IS NOT ONE RUN
+    A standing capture accumulates every session appended end to end. The dev
+    bench file held 112 capture sessions across 110 reboots and several
+    different firmware builds, and this tool used to report all of it as a
+    single run: 56 stations, 197 decodes, no hint that anything had been
+    pooled. It now splits on boots and reports only the LAST one, saying how
+    many it found. --all-boots restores the old behaviour deliberately.
+
 WHY THE "HEARD" COUNT IS THE IMPORTANT COLUMN
     A real station transmits again. A false decode does not. So repetition is
     ground truth that needs no second decoder and no internet - and on the
@@ -52,6 +60,46 @@ def km_brg(a, b):
     x = math.cos(la1)*math.sin(la2)-math.sin(la1)*math.cos(la2)*math.cos(lo2-lo1)
     return d, (math.degrees(math.atan2(y,x))+360) % 360
 
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+UP = re.compile(r"^[IWE] \((\d+)\)", re.M)
+
+
+def last_boot(raw):
+    """Return (text of the final boot, number of boots seen).
+
+    ⛔ DO NOT SPLIT ON 'Loaded app from partition'. That is what this function
+    replaced, and it is the mistake CLAUDE.md warns about in its own
+    boot-counting rule: A RESET DOES NOT ALWAYS PRINT THAT LINE. A standing
+    capture file accumulates every session appended end to end - the dev bench
+    file had 112 capture sessions across 109 reboots and many different
+    firmware builds - and rfind() of that marker landed in the middle of the
+    history, so the tool reported 56 stations and 197 decodes as though they
+    were one run. Nothing in the output hinted that four firmware versions had
+    been pooled.
+
+    THE ROBUST TEST IS A BACKWARD JUMP IN THE UPTIME COLUMN. Uptime is
+    monotonic within a boot and restarts near zero after any reset, printed or
+    not. The threshold exists because lines from different tasks interleave by
+    a few milliseconds; a real reboot drops by hundreds of thousands.
+    """
+    marks = [(m.start(), int(m.group(1))) for m in UP.finditer(raw)]
+    if not marks:
+        return raw, 1
+    starts = [0]
+    prev = marks[0][1]
+    for pos, up in marks:
+        if up < prev - 5000:
+            starts.append(pos)
+        prev = up
+    # Trim a trailing fragment with no decodes at all (a capture reopened
+    # seconds before the file was copied): reporting on it would say "no
+    # stations" about a receiver that is working perfectly.
+    seg = raw[starts[-1]:]
+    if len(starts) > 1 and not DEC.search(seg):
+        seg = raw[starts[-2]:]
+    return seg, len(starts)
+
+
 def main():
     if len(sys.argv) < 2: print(__doc__); return 1
     path = sys.argv[1]
@@ -60,9 +108,22 @@ def main():
     home = grid_ll(my)
 
     raw = open(path, 'rb').read().decode('utf-8', 'replace')
-    # only the LAST boot: an older run in the same file is a different session
-    b = raw.rfind('Loaded app from partition')
-    if b > 0: raw = raw[b:]
+    # ⛔ STRIP ANSI FIRST. Every line the device emits is wrapped in colour
+    # codes, so a line does NOT begin with its severity letter and any regex
+    # anchored with ^ silently matches nothing. That is not hypothetical: the
+    # first version of last_boot() anchored on ^[IWE], found zero uptimes,
+    # concluded there was one boot, and pooled 112 sessions - the exact failure
+    # it was written to prevent, reported as 255 stations.
+    raw = ANSI.sub('', raw)
+    raw, nseg = last_boot(raw)
+    if nseg > 1:
+        print("note: %d boot segment(s) in this file - reporting only the LAST."
+              % nseg)
+        print("      Pass --all-boots to pool them, but read the docstring first.")
+    if '--all-boots' in sys.argv:
+        raw = open(path, 'rb').read().decode('utf-8', 'replace')
+        print("note: --all-boots - POOLING every boot in this file. Different "
+              "firmware builds may be mixed.")
 
     st = defaultdict(lambda: {'n':0,'pwr':None,'grid':None,'hz':[],'cyc':[],'up':[]})
     for m in DEC.finditer(raw):
