@@ -539,59 +539,98 @@ in a third of cycles.
 in the cycle summary is exactly the number that will confirm or refute it, and
 it is already logged on every cycle - which is why it was worth logging.
 
-## The next big cost win, worked out but NOT done: a shared front end
+## The shared front end: done, 4.6x less filter work and two more confirmed stations
 
-After the changes above, `mix_decimate` is the largest single item again -
-projected ~660 ms of a ~2600 ms decoded candidate - and it is doing the same
-work twenty times over.
+Every candidate used to mix and decimate the **whole capture** on its own -
+1.44 M input samples through a 160-tap filter, ~1060 ms on the device - and
+with 20 candidates that same expensive work ran twenty times over one
+recording, when all twenty sit inside a 300 Hz window of it.
 
-Every candidate mixes and decimates the **whole 120 s capture** from 12 kHz to
-375 Hz, on its own. But all twenty candidates share one recording and sit
-inside a ~300 Hz window. A two-stage decimation does the expensive part once:
+| stage | what | filter |
+|---|---|---|
+| 1, once per capture | mix to 1500 Hz, decimate x8 -> 1500 Hz | 64 taps, 400 Hz |
+| 2, per candidate | mix the residual offset, decimate x4 -> 375 Hz | 24 taps, 120 Hz |
 
-- **Shared stage, once per cycle.** Mix to the middle of the candidate window,
-  low-pass and decimate by 8 to 1500 Hz. Must preserve the whole candidate
-  window (+/-150 Hz) plus the +/-34 Hz the decoder reads, so passband +/-184 Hz
-  and stopband from 1316 Hz (the first band that folds into it at a
-  decimate-by-8). Transition 0.094 normalised, so ~48 taps is generous.
-  Cost: 48 x 180,000 = **8.6 M MAC, once.**
+Stage 2's filter is short because at a 1500 Hz input rate the first band that
+folds into what the decoder reads starts at 341 Hz - a transition of 0.20
+normalised instead of 0.026.
 
-- **Per candidate.** Mix the residual offset (at most +/-150 Hz) and decimate
-  by 4 to 375 Hz, on 180,000 samples instead of 1.44 M. The filter here is
-  short: at a 1500 Hz input rate the stopband starts at 341 Hz (0.227
-  normalised) against a 34 Hz passband, a transition of 0.204, so ~16 taps is
-  enough and 24 is comfortable.
-  Cost: 24 x 45,000 = **1.08 M MAC per candidate.**
+    filter multiply-accumulates, four reference files
+    single stage (160 taps)   691.2 M
+    two stage                 149.8 M     4.6x
 
-Against today's single stage at 160 taps (160 x 45,000 = 7.2 M per candidate):
+### The trap: checking each stage separately would have missed it
 
-| | 20 candidates |
-|---|---|
-| now | 144 M MAC |
-| two-stage | 8.6 M + 20 x 1.08 M = **30 M MAC** |
+Content at **±750 Hz** from the mix centre folds **straight to DC** in stage 2,
+because 750 mod 375 == 0 - and stage 1 does *not* reject it, since stage 1's
+stopband only has to start near 1300 Hz to protect its own ±200 Hz passband.
 
-Roughly **4.8x** on the largest remaining item, and the per-candidate mixing
-oscillator gets 8x cheaper too because it runs over 180,000 samples instead of
-1.44 M.
+So the only honest question is the product `H1·H2` along the path each input
+frequency actually takes: `f1 = wrap(f, 1500)` after stage 1,
+`f2 = wrap(f1 - d, 375)` after stage 2, contaminating iff `|f2| <= 34`.
+`scratchpad/lpf2_design.py` computes that over every candidate offset `d` the
+search can produce.
 
-### Why it is not done here
+**Stage 1 must preserve ±200 Hz, not ±34.** The search runs 1350-1650 Hz around
+a 1500 Hz centre, so a candidate sits up to 150 Hz out and `measure_noise_ref`
+samples 34 Hz beyond that. Narrowing stage 1 toward what the decoder "reads"
+would quietly attenuate every off-centre candidate.
 
-Because of what the filter sweep above just demonstrated. A front-end change
-that is strictly better on paper moved which marginal stations decode - 128
-taps at 100 Hz beat 256 at 50 on both computed axes and silently traded PA2PGU
-for 5B4AHZ. A two-stage chain is a much bigger change to the same part of the
-signal path, so it needs the same treatment: sweep the two filter lengths
-against the reference set, watch the station SET rather than the count, and run
-the noise ladder both sides.
+### Measured against wsprd, not against ourselves
 
-That is a session's work with the radio available to confirm the projected
-milliseconds afterwards, not something to leave unflashed and unmeasured.
+| confirmed stations | 1906 | 1910 | 1914 | total |
+|---|---|---|---|---|
+| single stage | 8 | 6 | 3 | 17 |
+| two stage | **9** | 6 | **4** | **19** |
+| wsprd | 11 | 14 | 6 | 31 |
 
-⚠ It also touches `wspr_subtract`, which currently works on the raw 12 kHz
-samples. If the shared stage becomes the thing candidates are decoded from,
-subtraction has to happen somewhere both passes agree on - decide that before
-writing any of it, because getting it wrong would make the second pass subtract
-from audio the first pass never saw.
+Deficit stays ~2 dB; fabrications unchanged.
+
+### ⛔ A correction to the station counts used earlier in this document
+
+The "23 / 24 stations" figures above come from `wspr_cap_sweep`, which **does
+not validate against wsprd** - it counts decodes, fabrications included. The
+noise ladder classifies them, and shows that **5B4AHZ on 1914 is a fabrication
+in the single-stage build too**, pre-dating all of this work. Sweep counts are a
+progress signal; only the ladder's confirmed count is evidence.
+
+The sweep count is also a **lottery** at this sensitivity: nearby two-stage
+filter parameters produced 22, 23, 24, 25 and 26 with no monotonic order.
+Tuning against it would be fitting noise, which is why the chosen configuration
+rests on the ladder and on the cost - both stable.
+
+### The cache, and where it must be invalidated
+
+The shared stream is keyed on the sample buffer's address and length, which is
+**not sufficient on its own**: `wspr_subtract()` rewrites the capture in place -
+same pointer, same length, different audio. A stale stage 1 would let the second
+pass decode from audio that still contains what the first pass removed, which is
+exactly what that pass exists to look underneath.
+
+So `wspr_subtract()` invalidates it **itself**, next to the mutation, rather
+than leaving it as a rule two call sites are expected to remember.
+Mutation-tested: remove the invalidation and the multi-pass results change -
+subtraction silently becomes a no-op.
+
+Cost with subtraction in play: stage 1 rebuilds once per accepted decode, so a
+cycle with D decodes costs `33.1 + 11.5·D` MAC-millions against the single
+stage's 144:
+
+| D | 0 | 2.3 (measured mean) | 6 | 9 (best cycle seen) |
+|---|---|---|---|---|
+| gain | 4.3x | **2.4x** | 1.4x | break-even |
+
+Better everywhere, best where cycles are quiet. Deferring invalidation to pass
+boundaries would fix the busy case at the price of within-pass subtraction - not
+done, because it changes decode behaviour and this sample cannot validate it.
+
+### The profiler needed a second counter
+
+`wspr_corr_work` counts `extract_tone_powers()` calls and **cannot see the front
+end at all** - every decimation-filter MAC happens in `mix_decimate()`. Judging
+this change by it would have measured something the change does not touch: it
+barely moved (5959 -> 6274) while the filter work fell 4.6x. `wspr_filter_macs`
+counts the other half.
 
 ## Reproducing
 
