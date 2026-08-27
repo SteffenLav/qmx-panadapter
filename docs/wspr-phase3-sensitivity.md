@@ -310,6 +310,44 @@ No search needed, because after a decode the transmitted tones are known.
 > that it does not invent drift and that its noise floor is about 1 Hz. That it
 > reads a LARGE drift correctly is not shown.
 
+
+## A decode costs 35 % more on some boots, and I got the reason wrong twice
+
+`mix_decimate` does a FIXED amount of work every call, yet its mean is 792 ms
+on one boot and 1054-1071 on others. Per boot, and constant within one:
+
+| boot | build | mix mean | samples |
+|---|---|---|---|
+| 106 | v1.9.3-63 (SNR) | 1059 ms | 0 fast / 50 slow |
+| 107 | v1.9.3-65 (targeted pass 2) | 1054 ms | 0 / 195 |
+| 108 | v1.9.3-68 (UI fixes) | **792 ms** | 165 / 0 |
+| 109 | v1.9.6-68 (merged) | 1071 ms | 0 / 75 |
+
+`3ff7e6d` is fast while both the build before it and the merge OF it are slow,
+so this does not track the code.
+
+⛔ **Two explanations died on the way, and the second is the lesson.**
+
+1. *"The decode task is the lowest priority in the system, so its wall time is
+   load-dependent."* Falsified: correlation with how busy a cycle is comes to
+   **0.14**, and the state does not change within a boot.
+2. *"`RX<- TM;` appears 7 times in fast windows and 544 in slow ones - the GPS
+   second-tick poll is hammering the CAT pipe."* This was about to be reported
+   as the cause. It is an **artefact of pooling nine boots**: the log segment
+   being analysed contained nine undetected reboots, because a reset does not
+   always print `Loaded app from partition` - the marker CLAUDE.md prescribes
+   for counting them. **A backward jump in the uptime column is the robust
+   test**, and it is what unpicked this.
+
+What remains is where the buffers land: 8.6 MB of PSRAM claimed at page entry,
+addresses depending on the heap's state at that moment, and `mix_decimate` is
+dominated by streaming through them. Cache-line alignment is the obvious
+suspect - so the addresses are now **logged, not acted on**. A few boots settle
+it: if fast boots share an alignment slow ones do not, it is confirmed.
+
+⚠ Until then, treat any per-candidate timing as **boot-specific**. Comparing a
+number from one boot against another measures the boot, not the change.
+
 ## Not yet verified on hardware
 
 The DECODE QUALITY figures above are host measurements against recorded audio.
