@@ -2617,6 +2617,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "cluster_en",        c.cluster_en);
     cJSON_AddBoolToObject(root, "sota_en",           c.sota_en);
     cJSON_AddBoolToObject(root, "wspr_en",           c.wspr_en);
+    cJSON_AddBoolToObject(root, "wspr_net_en",       c.wspr_net_en);
     cJSON_AddBoolToObject(root, "ota_autodl",        c.ota_autodl);
     cJSON_AddBoolToObject(root, "spots_mode_filter", c.spots_mode_filter);
     // The last of the drawer's controls that had no remote equivalent. CW pitch and
