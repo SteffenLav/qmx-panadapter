@@ -60,7 +60,27 @@ static const char *TAG = "wspr_rx";
  * Raising it is only safe because the decode now runs on its own task while the
  * next capture fills (the ping-pong below), which buys a whole cycle instead of
  * the leftovers of one. WSPR_DECODE_BUDGET_MS is the real limiter; this number
- * just has to be high enough not to be the limiter itself. */
+ * just has to be high enough not to be the limiter itself.
+ *
+ * ⚠ STAYS AT 20, AND THAT IS A MEASURED DECISION, NOT INERTIA. Every cycle on
+ * air reports exactly 20 candidates, so this cap IS saturated 100 % of the
+ * time - the same shape as the "8 candidates" ceiling described above, which
+ * is a fair reason to suspect it. Swept on the four reference WAVs after the
+ * 2026-08-27 speed work made room for more:
+ *
+ *     cap   20    24    32    48
+ *     found 24    24    24    24
+ *
+ * NOT ONE extra station, while the correlation work rises by 95 %. So on this
+ * evidence the cap is not what is limiting us and raising it would buy nothing
+ * but heat.
+ *
+ * ⛔ WHAT THE REFERENCE FILES CANNOT TELL US is whether that holds on a
+ * genuinely crowded band - four recordings from two sites is a thin sample,
+ * and the comb ranks by ENERGY rather than SNR, which is exactly how a strong
+ * station ended up below eight noisier peaks last time. If a real session ever
+ * shows stations appearing only when the cap is lifted, this is the number to
+ * raise; do not raise it on the strength of a reference file that says no. */
 #define WSPR_MAX_CANDS    20
 
 /* Decode is ~7.9 s per candidate, and with the ping-pong it has a full 120 s

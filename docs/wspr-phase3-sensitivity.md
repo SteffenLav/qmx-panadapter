@@ -361,6 +361,154 @@ decodes, against a 0.58 threshold), the frequency search, SNR, and 20 of 20
 candidates inside budget. NOT yet seen firing on the air: the targeted second
 pass, and a large drift.
 
+## The cost pass of 2026-08-27 afternoon: 2.3x less work, and one more station
+
+Four changes, none of them to the decoding algorithm. Measured in
+**full-rate-equivalent correlations** - a device-independent unit, because this
+build host has a hardware double FPU and fast RAM and cannot measure the P4.
+
+| | correlations | reference stations |
+|---|---|---|
+| morning (the 23-station build) | 14,282 | 23 |
+| after all four | **6,215** | **24** |
+
+**1. `extract_tone_powers` read the baseband once PER TONE.** It is the hottest
+function in the receiver - ~150 calls per candidate, each 162 x 4 x 256
+multiply-accumulates - and the baseband is 360 KB of `malloc`'d float, which on
+this board means PSRAM. So three quarters of the decoder's PSRAM traffic was
+re-reading samples it had just read. Sample-outer with four accumulator pairs
+is **bit-identical**: each accumulator sums the same products in the same
+order. That was the requirement, not a bonus - WSPR has no CRC, so the
+agreement check is the only thing standing between us and a wrong codeword, and
+its thresholds are tuned to measured score distributions. A change to the hot
+path that moved those scores "a little" would invalidate them silently.
+
+**2. `build_tone_tw` did 2048 DOUBLE trig calls, 32 times per candidate.** The
+same trap `wspr_subtract` hit at 67 s per signal, hiding in a function nobody
+had looked at because it only fills a small table. Found by ACCOUNTING against
+the device's own phase timings rather than by reading code: `curve` reported
+~1290 ms while running only 30 correlations worth ~520 ms, and the missing
+~770 ms over 30 builds is ~26 ms each, i.e. **~12.7 us per double trig call -
+the same per-call figure `wspr_subtract` measured independently.** Two paths
+agreeing on that number is what makes it a result rather than a guess. Replaced
+with a phasor recurrence re-seeded exactly every 64 samples: 40 trig calls
+instead of 2048.
+
+**3. The coarse start-time scan runs at stride 4.** It is ~111 of the ~150
+correlations a candidate costs, and all it has to do is pick the right eighth
+of a symbol - the fine refinement does the precision work at full rate.
+
+- Legal ONLY because `mix_decimate` has already low-passed the baseband: at
+  stride 4 the folding frequency is 46.9 Hz, inside the filter's stopband. It
+  is the filter, not the arithmetic, that makes the shortcut safe, and it has
+  to be re-checked if the filter moves.
+- A strided score must never be compared with a full-rate one. `refine_dt` only
+  replaces its incumbent when a trial BEATS it, so seeding it with a strided
+  high-water mark would let the coarse pass veto every full-rate trial - the
+  refinement would silently stop refining while still looking like it ran.
+  Hence one full-rate re-score at the winning start time, which is also what
+  the sync gate then reads.
+
+**4. The decimation filter was 60 % longer than its job needs** - and this one
+is the interesting one.
+
+### The filter had never been sized against what it must reject
+
+`mix_decimate` is ~1060 ms per candidate on the device and ~90 % of that is the
+filter, so its length is the largest fixed cost in the receiver. 256 taps at a
+50 Hz cutoff was chosen to be "enormously generous to the signal", which it is.
+
+What it actually has to reject is narrower than that. Decimating 12000 to 375 Hz
+folds input frequency f onto f mod 375, and **the decoder only ever READS
++/-34 Hz** of the result: the four tones live within +/-4.4 Hz, the frequency
+search adds +/-1.5, and `measure_noise_ref` samples out to +/-34. So the only
+content that can contaminate a decode is what lands in +/-34 Hz - the input
+bands `k*375 +/- 34`, i.e. 341-409 Hz, 716-784 Hz, on to Nyquist. Everything
+from ~40 Hz to ~341 Hz aliases into a part of the decimated band that **nothing
+reads**. That slack is what 256 taps was paying for and not using.
+
+### The paper answer was wrong, which is the lesson
+
+`scratchpad/lpf_design.py` mirrors `build_lpf()` and computes the response over
+every folding band to Nyquist. On paper **128 taps at 100 Hz is strictly better
+than 256 at 50 on both axes at half the cost** - less passband droop AND better
+alias rejection. Measured, it silently trades PA2PGU for 5B4AHZ.
+
+A response curve does not predict which marginal stations survive it, because a
+marginal decode turns on where the aliases land relative to that one signal.
+This file already records PA2PGU's decode depending on aliasing from 188 Hz
+away; it is the canary. Had the paper answer shipped, the station count would
+still have read 23 and the SET would have changed underneath it.
+
+So it was swept:
+
+| taps | cut | droop at 34 Hz | worst alias | cost | stations |
+|---|---|---|---|---|---|
+| 256 | 50 | -2.17 dB | -65.5 dB | 1.00x | 23 |
+| 160 | 100 | -0.58 dB | -53.6 dB | 0.62x | **24** (+5B4AHZ) |
+| 152 | 100 | -0.58 dB | -55.9 dB | 0.59x | 24 |
+| 144 | 100 | -0.57 dB | -58.0 dB | 0.56x | 23 (-PA2PGU) |
+
+152 is the cliff. **160 ships, one step back from it** - 5 % of a filter is a
+poor price for standing on an edge that some unrelated front-end change could
+push us over.
+
+The passband win is real too: four times less droop where the noise reference
+is sampled. The old filter was quietly attenuating its own noise samples by up
+to 2.2 dB, which biases the measured floor DOWN and every reported SNR UP.
+Reported SNRs fall by about 1 dB as a result, which is the more honest number.
+
+The tap count is now decoupled from the ring size. The ring index is masked
+because a modulo here measured ~40 s per candidate - but that constraint
+belongs to the RING, and tying the two together left only 256 or 64 reachable
+when the answer was in between. Verified by rebuilding at 256 taps and
+reproducing the old baseline with nothing lost or gained.
+
+### Sensitivity: unchanged, and measured that way
+
+Same-session noise-ladder A/B, both arms rebuilt from the same tree, two files:
+
+| | 260824_1910 | 260824_1906 |
+|---|---|---|
+| before (256/50) | deficit ~2 dB, 0 fabrications | deficit ~2 dB, 0 fabrications |
+| after (160/100) | deficit ~2 dB, 0 fabrications | deficit ~2 dB, 0 fabrications |
+
+One marginal decode differs: at +2 dB of added noise on 1910 the old filter
+kept 2 confirmed stations and the new one keeps 1. That is a single station at
+one noise step and should not be read as a trend.
+
+**The ladder runs a PREBUILT `wspr_cap_sweep` and does not rebuild it.** A
+binary four hours stale produced a result that looked perfectly reasonable and
+described code that was no longer there. Rebuild it per arm;
+`scratchpad/ladder_ab.sh` does, and prints the binary's timestamp so the check
+is visible rather than remembered.
+
+### The candidate cap stays at 20, measured
+
+Every cycle on air reports exactly 20 candidates, so the cap is saturated 100 %
+of the time - the same shape as the old "8 candidates" ceiling, and a fair
+reason to suspect it. With the speed work making room, it was swept:
+
+| cap | 20 | 24 | 32 | 48 |
+|---|---|---|---|---|
+| stations found | 24 | 24 | 24 | 24 |
+
+Not one extra station, for 95 % more correlation work. What the reference files
+**cannot** say is whether that holds on a genuinely crowded band; four
+recordings from two sites is a thin sample, and the comb ranks by energy rather
+than SNR. If a real session ever shows stations appearing only when the cap is
+lifted, raise it then - not on the strength of a reference file that says no.
+
+### None of the millisecond figures here are measured on the new build
+
+The device has not been flashed - the QMX needs a hand on its power switch
+after every flash, and the operator was out. Every per-phase saving above is a
+PROJECTION from the old build's `[mix + coarse + curve + dec ms]` line. That
+same line is what will confirm or refute it. Remember also that per-candidate
+timing is BOOT-SPECIFIC to about 35 %, so the comparison has to be made against
+a figure from the same boot, not against numbers recorded earlier in this
+document.
+
 ## Reproducing
 
 Reference decoder, for the ground-truth list:
