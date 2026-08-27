@@ -288,28 +288,37 @@ void wspr_screen_view_init(lv_obj_t *parent)
     /* ---------------- left pane ---------------- */
     s_lbl_title = lv_label_create(s_container);
     lv_label_set_text(s_lbl_title, "MODE: WSPR");
-    /* 28, not 48. "MODE: FT8" fits the 320 px panel at 48; "MODE: WSPR" is one
-     * character longer and overran it into the decode list's CALL column. */
-    lv_obj_set_style_text_font(s_lbl_title, &lv_font_montserrat_28, 0);
+    /* SPANS THE PANEL AND IS CENTRED IN IT, rather than sitting left-aligned at
+     * x=16 while every control below it spans the full width - which is what
+     * made the header look shifted off its own column.
+     *
+     * 32, not 48. "MODE: FT8" fits the 320 px panel at 48; "MODE: WSPR" is one
+     * character longer and measures ~296 px against the 288 available, so it
+     * overran into the decode list's CALL column. Bounding the width now means
+     * an overrun would WRAP rather than spill, but 32 keeps it on one line with
+     * room to spare. */
+    lv_obj_set_style_text_font(s_lbl_title, &lv_font_montserrat_32, 0);
     lv_obj_set_style_text_color(s_lbl_title, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
-    lv_obj_set_pos(s_lbl_title, 16, 10);
+    lv_obj_set_width(s_lbl_title, LEFT_W - 32);
+    lv_obj_set_style_text_align(s_lbl_title, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_pos(s_lbl_title, 16, 8);
 
     /* The dial, boxed like the FT8 page's preset. Read-only for now: the
      * standard-dial picker is the next piece (see docs/wspr-ui-design.md - a
      * free-entry keypad is deliberately NOT wanted, because every band has one
      * canonical WSPR frequency and anything else is simply not in the
      * sub-band). */
-    lv_obj_t *box = lv_obj_create(s_container);
-    lv_obj_set_size(box, LEFT_W - 32, 56);
-    lv_obj_set_pos(box, 16, 48);
-    lv_obj_set_style_bg_color(box, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
-    lv_obj_set_style_border_color(box, lv_color_hex(UI_COLOR_BORDER), 0);
-    lv_obj_set_style_border_width(box, 1, 0);
-    lv_obj_set_style_radius(box, 8, 0);
-    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(box, UI_FLAG_NOT_HOT);
-
-    s_dd_dial = lv_dropdown_create(box);
+    /* ⛔ NO WRAPPER BOX. The dropdown used to be centred inside an lv_obj of the
+     * SAME colour that also had its own 1 px border and its own default
+     * padding - so the control rendered as a rounded box inset inside a second
+     * rounded box, with the chevron floating in the gap between them. That is
+     * the "strange" band button: two frames where the design has one, and an
+     * inner control narrower than everything below it.
+     *
+     * A dropdown is already a styleable box. Styling it directly gives one
+     * frame, full panel width, and the same left edge as the cycle bar and the
+     * TX buttons underneath. */
+    s_dd_dial = lv_dropdown_create(s_container);
     {
         char opts[N_BANDS * 20];
         size_t used = 0;
@@ -320,8 +329,10 @@ void wspr_screen_view_init(lv_obj_t *parent)
         }
         lv_dropdown_set_options(s_dd_dial, opts);
     }
-    lv_obj_set_width(s_dd_dial, LEFT_W - 56);
-    lv_obj_center(s_dd_dial);
+    lv_obj_set_size(s_dd_dial, LEFT_W - 32, 56);
+    lv_obj_set_pos(s_dd_dial, 16, 52);
+    lv_obj_set_style_radius(s_dd_dial, 8, 0);
+    lv_obj_set_style_border_width(s_dd_dial, 1, 0);
     lv_obj_set_style_text_font(s_dd_dial, &lv_font_montserrat_20, 0);
     /* Dark like everything else on this page; the stock dropdown is white. */
     lv_obj_set_style_bg_color(s_dd_dial, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
