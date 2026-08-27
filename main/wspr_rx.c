@@ -556,6 +556,11 @@ uint32_t wspr_rx_waterfall_seq(void) { return s_wf_seq; }
  * exists so that if it does, it is visible rather than silently wrong. */
 #define WSPR_PCM_SLOTS 2
 
+/* Up to ~20 s of retries: an FT8 slot is 15 s and that is the longest the
+ * previous page can hold its pool after the mode has changed. */
+#define WSPR_ALLOC_TRIES    21
+#define WSPR_ALLOC_WAIT_MS 1000
+
 static int16_t      *s_pcm[WSPR_PCM_SLOTS];
 static volatile bool s_pcm_busy[WSPR_PCM_SLOTS];
 static QueueHandle_t s_dec_q;
@@ -916,17 +921,48 @@ static void wspr_rx_task(void *arg)
      * ~14.7 MB of free PSRAM. Allocating per cycle instead would risk failing on
      * a fragmented heap 20 minutes in, which is exactly the kind of fault that
      * shows up as "it stopped decoding overnight" and is miserable to chase. */
-    float   *cap = heap_caps_malloc((size_t)CAP_SAMPLES * sizeof(float),
-                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    /* TWO int16 windows - the ping-pong. Only the int16 side is doubled: the
-     * float buffer is fully consumed by the conversion before the next capture
-     * opens, so a second one would be 5.6 MB of PSRAM bought for nothing. */
-    bool pcm_ok = true;
-    for (int i = 0; i < WSPR_PCM_SLOTS; i++) {
-        s_pcm[i] = heap_caps_malloc((size_t)CAP_SAMPLES * sizeof(int16_t),
-                                    MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-        s_pcm_busy[i] = false;
-        if (!s_pcm[i]) pcm_ok = false;
+    /* ⛔ RETRIED, BECAUSE THE PREVIOUS PAGE MAY STILL BE HOLDING THE MEMORY.
+     *
+     * Swiping FT8 -> WSPR asks for 11.25 MB about three MILLISECONDS after the
+     * FT8 view is told to hide - and hiding it does not free anything.
+     * ft8_task tests `ui_mode_get() == UI_MODE_FT8` at the top of its SLOT
+     * loop, so it can hold its own multi-megabyte pool for up to a full slot,
+     * fifteen seconds, after the mode has already changed. The allocation
+     * failed, the loop stopped, and the operator saw the waterfall freeze
+     * mid-cycle with nothing on screen to say why.
+     *
+     * ⚠ This path only became reachable today: before the edge strips were
+     * raised over the WSPR container there was no way to swipe FT8 -> WSPR at
+     * all, so the conflict existed and could not be met.
+     *
+     * Retrying is the right fix rather than reaching into FT8's teardown -
+     * CLAUDE.md puts the double-spawn and worker-join crashes squarely in that
+     * lifecycle, which is not somewhere to make a casual change. The memory
+     * genuinely does arrive; this just waits for it, and says so. */
+    float *cap = NULL;
+    bool   pcm_ok = false;
+    for (int attempt = 0; attempt < WSPR_ALLOC_TRIES; attempt++) {
+        if (!cap) cap = heap_caps_malloc((size_t)CAP_SAMPLES * sizeof(float),
+                                         MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        /* TWO int16 windows - the ping-pong. Only the int16 side is doubled:
+         * the float buffer is fully consumed by the conversion before the next
+         * capture opens, so a second would be 5.6 MB bought for nothing. */
+        pcm_ok = true;
+        for (int i = 0; i < WSPR_PCM_SLOTS; i++) {
+            if (!s_pcm[i])
+                s_pcm[i] = heap_caps_malloc((size_t)CAP_SAMPLES * sizeof(int16_t),
+                                            MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+            s_pcm_busy[i] = false;
+            if (!s_pcm[i]) pcm_ok = false;
+        }
+        if (cap && pcm_ok) break;
+        if (!s_run) break;                      /* asked to stop while waiting */
+        if (attempt == 0)
+            ESP_LOGW(TAG, "capture buffers not available yet (%u KB free) - "
+                          "waiting for the previous page to release",
+                     (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+        set_status("waiting for memory");
+        vTaskDelay(pdMS_TO_TICKS(WSPR_ALLOC_WAIT_MS));
     }
     if (!cap || !pcm_ok) {
         ESP_LOGE(TAG, "could not allocate the capture buffers (%u KB + %d x %u KB)",
