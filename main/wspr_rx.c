@@ -1207,6 +1207,28 @@ static void wspr_rx_task(void *arg)
         ESP_LOGW(TAG, "capture level: peak=%.1f gain=%.0fx -> rms=%.0f of 32768",
                  peak, gain, sqrt(sumsq / CAP_SAMPLES));
 
+        /* ⛔ NEW AUDIO IN AN OLD BUFFER - INVALIDATE, OR EVERY CYCLE AFTER THE
+         * FIRST DECODES THE FIRST ONE'S AUDIO.
+         *
+         * The decoder caches its shared 12000 -> 1500 Hz stream against the
+         * sample buffer's ADDRESS AND LENGTH, and claim_pcm_slot() returns the
+         * first FREE slot - so as soon as the decoder keeps up (which it now
+         * does: ~33 s of a 120 s cycle), slot 0 is always free and every cycle
+         * lands in the SAME buffer. Same pointer, same length, completely
+         * different audio: the cache hit every time and the stream was never
+         * rebuilt.
+         *
+         * Observed on air within an hour of shipping the two-stage front end:
+         * the first cycle decoded four stations, and every cycle after it
+         * decoded ZERO with all twenty candidates failing the sync gate -
+         * because they were re-reading cycle one's audio AFTER its own four
+         * signals had been subtracted out of it.
+         *
+         * ⚠ Note the speed-up is what exposed it. While a cycle took most of
+         * its 120 s the slots really did alternate and the pointer changed
+         * every time, so the address check looked sufficient. It never was. */
+        wspr_decode_capture_changed();
+
         /* The rows were drawn live as the capture filled; this only recomputes
          * the floor from the finished window and repaints against it. No FFTs,
          * so the ~8 s post-capture pause the old whole-window build cost is

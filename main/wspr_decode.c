@@ -368,17 +368,46 @@ static float               *s_s1i, *s_s1q;
 static long                 s_s1n;
 static const int16_t       *s_s1_src;
 static long                 s_s1_srcn;
+static uint32_t             s_s1_sig;
+
+/* ⛔ A CONTENT SIGNATURE, BECAUSE THE ADDRESS IS NOT THE AUDIO.
+ *
+ * Keying the cache on (pointer, length) alone shipped, and broke the receiver
+ * on air within the hour: wspr_rx's claim_pcm_slot() hands out the first FREE
+ * buffer, so once the decoder was fast enough to finish well inside a cycle,
+ * EVERY cycle landed in slot 0. Same pointer, same length, different audio -
+ * the cache hit forever and every cycle after the first re-decoded the first
+ * one's audio, with its own decoded signals already subtracted out of it.
+ *
+ * The call sites now invalidate explicitly (wspr_subtract, and wspr_rx when it
+ * writes a new capture). This is the BACKSTOP for the next call site that
+ * forgets - 64 samples spread across the window, which both a subtraction and
+ * a fresh capture change. It is not the contract and must not be relied on as
+ * one: it is cheap insurance against a silent failure that looks exactly like
+ * a dead band. */
+static uint32_t capture_signature(const int16_t *x, long n)
+{
+    uint32_t h = 2166136261u;
+    long step = n / 64;
+    if (step < 1) step = 1;
+    for (long i = 0; i < n; i += step) {
+        h ^= (uint32_t)(uint16_t)x[i];
+        h *= 16777619u;
+    }
+    return h;
+}
 
 void wspr_decode_capture_changed(void)
 {
     free(s_s1i); free(s_s1q);
     s_s1i = s_s1q = NULL;
-    s_s1n = 0; s_s1_src = NULL; s_s1_srcn = 0;
+    s_s1n = 0; s_s1_src = NULL; s_s1_srcn = 0; s_s1_sig = 0;
 }
 
 static int build_stage1(const int16_t *samples, long n)
 {
-    if (s_s1i && s_s1_src == samples && s_s1_srcn == n) return 1;
+    const uint32_t sig = capture_signature(samples, n);
+    if (s_s1i && s_s1_src == samples && s_s1_srcn == n && s_s1_sig == sig) return 1;
     wspr_decode_capture_changed();
 
     const long out_n = n / S1_DECIM;
@@ -439,6 +468,7 @@ static int build_stage1(const int16_t *samples, long n)
     s_s1n = out_n;
     s_s1_src = samples;
     s_s1_srcn = n;
+    s_s1_sig = sig;
     return 1;
 }
 
