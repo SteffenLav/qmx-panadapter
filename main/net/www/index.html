@@ -727,7 +727,7 @@
        util/maidenhead.c and util/dxcc.c the Tab5 reads - one implementation, so
        the two screens cannot disagree. Same rule the decode list follows.
        ===================================================================== -->
-  <div class="card" id="wspr-card"><div class="card-in">
+  <div class="card" id="wspr-card" style="display:none"><div class="card-in">
       <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px;">
         <strong style="color:#ffa040">WSPR spots</strong>
         <span id="wspr-count" style="color:var(--dim); font-size:13px"></span>
@@ -3060,8 +3060,19 @@ function wsprCycleLabel(utc) {
   return p(d.getUTCHours()) + ":" + p(d.getUTCMinutes()) + " UTC";
 }
 
+/* WSPR ships on the main track switched OFF (settings wspr_en), so this whole
+   card has to disappear rather than show an empty table - an empty table reads
+   as "the band is dead", not as "this feature is not enabled". Driven from
+   /api/status so the browser and the device gate on the SAME flag; a second
+   copy of the rule here is how the two surfaces end up disagreeing.
+
+   Skipping the poll matters on its own: this board's httpd has a single
+   worker, and a request every 5 s for a feature nobody enabled is pure
+   contention on the link the spectrum stream shares. */
+let wsprEnabled = false;
 let wsprPollInFlight = false;
 async function pollWspr() {
+  if (!wsprEnabled) return;
   if (wsprPollInFlight) return;          /* in-flight guard: this board's httpd
                                             is single-worker, and overlapping
                                             polls are how it gets wedged */
@@ -3826,6 +3837,13 @@ async function tick() {
     updateRitPill();   // the offset is radio state - it can be set from the Tab5
     lastAct        = s.activation || {type:0, ref:'', qsos:0};
     updateActPill();
+    /* Show or hide the WSPR card from the device's own flag. */
+    if (!!s.wspr_en !== wsprEnabled) {
+      wsprEnabled = !!s.wspr_en;
+      const wc = document.getElementById("wspr-card");
+      if (wc) wc.style.display = wsprEnabled ? "" : "none";
+      if (wsprEnabled) pollWspr();
+    }
     /* Waterfall colourisation, live from the Tab5 so a slider dragged there shows
        up here. The palette is only rebuilt when the index actually changes - it is
        a 1 KB loop and this runs every second. */
