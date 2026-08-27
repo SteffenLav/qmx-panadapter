@@ -26,6 +26,18 @@ here and keep failing for the human who copies it.
 
 Files with NO documented build line are reported as such rather than guessed
 at. Inventing one that has not been verified would be worse than none.
+
+--run also EXECUTES each harness that built and prints its last line.
+
+⚠ THAT IS A REPORT, NOT A VERDICT, and the distinction is deliberate. These
+harnesses do not share an output format - some end "ALL PASS (0 failures)",
+some "10 passed, 0 failed", some "PASSED (0 failures)", and spur_floor_harness
+ends with a sentence of analysis because it is a diagnostic and has no verdict
+at all. Pattern-matching that zoo would produce a checker that reads PASS when
+a harness changes its wording, which is worse than no checker: a green light
+nobody can trust is how a broken test survives a release. So a line that looks
+like a failure is FLAGGED, and everything else is printed for a human to read.
+Absence of a flag is not proof of passing.
 """
 import os, re, subprocess, sys, tempfile
 
@@ -47,6 +59,8 @@ def build_line(path):
             if not cont:
                 break
     return " ".join(out).strip() if out else None
+
+RUN = "--run" in sys.argv
 
 rows = []
 for name in sorted(os.listdir("test")):
@@ -70,11 +84,20 @@ for name in sorted(os.listdir("test")):
     # would otherwise need a test/ subdirectory there, and its absence would be
     # reported as a rotted build line when the fault is entirely mine.
     compile_only = re.sub(r"-o\s+(\S+)",
-                          lambda m: "-o " + tmp.replace("\\", "/") + "/" +
-                                    os.path.basename(m.group(1)), compile_only)
+                          lambda m: "-o " + tmp.replace("\\", "/") + "/h.exe",
+                          compile_only)
+    binpath = tmp.replace("\\", "/") + "/h.exe"
     r = subprocess.run(compile_only, shell=True, capture_output=True, text=True, cwd=cwd)
     if r.returncode == 0:
-        rows.append((name, "builds", ""))
+        note = ""
+        if RUN:
+            x = subprocess.run([binpath], capture_output=True, text=True, cwd=cwd)
+            out = (x.stdout or "") + (x.stderr or "")
+            tail = [l.strip() for l in out.splitlines() if l.strip()]
+            note = tail[-1][:70] if tail else "(no output)"
+            if re.search(r"[1-9][0-9]* (failure|failed|fail)|^ *FAIL", out, re.M):
+                note = "!! " + note
+        rows.append((name, "builds", note))
     else:
         err = [l for l in (r.stderr or "").split("\n")
                if "error" in l.lower() or "undefined reference" in l.lower()]
