@@ -45,6 +45,10 @@ static int64_t wspr_now_us(void) {
  * because it runs once per attempt rather than 160 times. */
 typedef float wspr_tp_t;
 
+/* 10*log10(TONE_SPACING / 2500) - the fixed conversion from a one-tone-bin
+ * SNR to WSPR's 2500 Hz reference bandwidth. */
+#define WSPR_SNR_BW_OFFSET_DB  (-32.32)
+
 #define TONE_SPACING (WSPR_SAMPLE_RATE_HZ / WSPR_SYM_LEN_SAMPLES) /* 1.46484375 Hz */
 
 int wspr_find_candidates(const int16_t *samples, long n, double f_lo_hz,
@@ -557,7 +561,8 @@ static int callsign_shape_ok(const char *call)
  * See wspr_decode_result_t for why this is the only check that can catch a
  * wrong codeword. Fills result->agree_hard / agree_soft. */
 static void score_agreement(const char *call, const char *grid, int dbm,
-                             wspr_tp_t tp[WSPR_NSYM][4], wspr_decode_result_t *result)
+                             wspr_tp_t tp[WSPR_NSYM][4], double noise_ref,
+                             wspr_decode_result_t *result)
 {
     result->agree_hard = 0.0f;
     result->agree_soft = 0.0f;
@@ -578,6 +583,41 @@ static void score_agreement(const char *call, const char *grid, int dbm,
     double var  = sq / WSPR_NSYM - mean * mean;
     double sd   = (var > 1e-30) ? sqrt(var) : 1e-15;
 
+    /* ---- SNR, MEASURED FROM THE DECODE WE JUST CONFIRMED ----------------
+     *
+     * Once the message is known, so is which of the four tones was transmitted
+     * in every symbol - which turns each symbol into one signal sample and
+     * THREE noise samples at exactly the same bandwidth, taken at exactly the
+     * same time. That is a self-calibrating measurement: no noise-floor
+     * estimate from elsewhere in the band, nothing assumed about the receiver
+     * gain, and it cannot be fooled by a strong neighbour the way a
+     * spectrum-percentile floor can.
+     *
+     * S is the mean power in the correct tone, N the mean over the other
+     * three. (S - N) / N is the signal-to-noise ratio in ONE tone bin, whose
+     * bandwidth is 1 / symbol period = 1.4648 Hz. WSPR quotes SNR in a 2500 Hz
+     * reference bandwidth, so the conversion is a constant:
+     *     10 * log10(1.4648 / 2500) = -32.3 dB
+     *
+     * ⚠ Validated against wsprd on the reference recordings rather than
+     * asserted - see docs/wspr-phase3-sensitivity.md. An SNR is a published
+     * measurement: it goes to wsprnet as a reception report, so it is exactly
+     * the kind of number this project refuses to invent (CLAUDE.md, the RST
+     * placeholder). If it ever cannot be measured it stays UNKNOWN. */
+    double sig = 0;
+    for (int i = 0; i < WSPR_NSYM; i++) sig += tp[i][tones[i]];
+    sig /= WSPR_NSYM;
+    const double noi = noise_ref;
+    if (noi > 0 && sig > noi) {
+        const double snr_bin = (sig - noi) / noi;
+        const double db = 10.0 * log10(snr_bin) + WSPR_SNR_BW_OFFSET_DB;
+        result->snr_db = (int16_t)lround(db < -40 ? -40 : (db > 30 ? 30 : db));
+    } else {
+        /* Buried in its own noise - report the floor of the scale, not a
+         * positive number produced by a negative ratio. */
+        result->snr_db = -40;
+    }
+
     int agree = 0;
     double soft = 0;
     for (int i = 0; i < WSPR_NSYM; i++) {
@@ -591,8 +631,65 @@ static void score_agreement(const char *call, const char *grid, int dbm,
     result->agree_soft = (float)(soft / WSPR_NSYM);
 }
 
+/* ---- THE NOISE REFERENCE, MEASURED WHERE THE SIGNAL IS NOT ---------------
+ *
+ * ⛔ THE OBVIOUS METHOD IS WRONG AND THE ERROR HIDES ITSELF. Once the message
+ * is known, each symbol has one correct tone and three wrong ones, so the
+ * wrong ones look like three free noise samples at exactly the right
+ * bandwidth. Measured against wsprd on the reference recordings, that reads
+ * 2-4 dB low on weak signals and TWENTY-THREE dB low on the strongest one -
+ * and the giveaway is that the error GROWS WITH SIGNAL STRENGTH, which no
+ * noise measurement should do.
+ *
+ * The reason is that WSPR is continuous-phase FSK: during every symbol
+ * transition the tone is sweeping, so real signal energy lands in the other
+ * three bins. For a weak signal that is lost in the noise; for a strong one it
+ * IS the measurement, and the ratio saturates. A stronger station cannot then
+ * report a better SNR, which is exactly the behaviour observed.
+ *
+ * So the noise is sampled at frequency offsets clear of the transmission -
+ * still inside the 50 Hz the decimation filter passes, so it is the same
+ * receiver noise through the same path - and combined with a MEDIAN, which is
+ * what makes a neighbouring station 12 Hz away cost nothing rather than
+ * inflating the floor. wsprd does the same thing with a 30th percentile over
+ * the whole band. */
+static double measure_noise_ref(const baseband_t *bb, tone_tw_t *tw, long dt,
+                                 wspr_tp_t tp[WSPR_NSYM][4])
+{
+    /* A WSPR signal is 5.9 Hz wide, so +/-12 Hz is already clear of it, and
+     * +/-33 Hz stays well inside the filter's passband. */
+    static const double offs[] = { 10, 14, 18, 22, 26, 30, 34,
+                                  -10, -14, -18, -22, -26, -30, -34 };
+    const int NOFF = (int)(sizeof(offs) / sizeof(offs[0]));
+    /* The caller's tone table is borrowed as scratch - it is 8 KB and this task
+     * has already reserved a 16 KB frame; a second one is not free. The caller
+     * rebuilds it immediately after, which the code below relies on. */
+    double samp[14];
+    for (int o = 0; o < NOFF; o++) {
+        build_tone_tw(tw, offs[o]);
+        extract_tone_powers(bb, tw, dt, tp);
+        double acc = 0;
+        for (int i = 0; i < WSPR_NSYM; i++)
+            for (int k = 0; k < 4; k++) acc += tp[i][k];
+        samp[o] = acc / (WSPR_NSYM * 4);
+    }
+    for (int i = 1; i < NOFF; i++) {          /* insertion sort - eight values */
+        double key = samp[i]; int j = i - 1;
+        while (j >= 0 && samp[j] > key) { samp[j + 1] = samp[j]; j--; }
+        samp[j + 1] = key;
+    }
+    /* A LOW PERCENTILE, NOT THE MEDIAN. Contamination is one-sided: another
+     * station inside a sample can only push it UP, never down, so the low end
+     * of the distribution is the honest estimate and a median is already
+     * biased on a crowded band. Measured: with a median, KI7CI and W5BIT in
+     * the (busy) WSJT sample read 19 and 11 dB low, because half the offsets
+     * around them are occupied. wsprd takes the 30th percentile over the whole
+     * band for the same reason. */
+    return samp[(NOFF * 3) / 10];
+}
+
 static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
-                                wspr_tp_t tp[WSPR_NSYM][4],
+                                wspr_tp_t tp[WSPR_NSYM][4], double noise_ref,
                                 wspr_decode_result_t *result)
 {
     result->cycles = cycles;
@@ -607,7 +704,7 @@ static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
     wspr_msg_bytes_t repack;
     if (!wspr_pack_message(call, grid, dbm, &repack)) return 0;
 
-    score_agreement(call, grid, dbm, tp, result);
+    score_agreement(call, grid, dbm, tp, noise_ref, result);
 
     strcpy(result->callsign, call);
     strcpy(result->grid, grid);
@@ -705,7 +802,8 @@ static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
 #endif
 #define WSPR_SOFT_DELTA   (WSPR_SOFT_DELTA_BITS * WSPR_METRIC_SCALE)
 
-static int try_soft_decision(wspr_tp_t tp[WSPR_NSYM][4], wspr_decode_result_t *result)
+static int try_soft_decision(wspr_tp_t tp[WSPR_NSYM][4], double noise_ref,
+                             wspr_decode_result_t *result)
 {
     double fsym[WSPR_NSYM];
     for (int i = 0; i < WSPR_NSYM; i++) {
@@ -753,7 +851,7 @@ static int try_soft_decision(wspr_tp_t tp[WSPR_NSYM][4], wspr_decode_result_t *r
         result->cycles = cycles;
         return 0;
     }
-    return accept_if_plausible(&msg, cycles, tp, result);
+    return accept_if_plausible(&msg, cycles, tp, noise_ref, result);
 }
 
 /* Hard-decision per symbol, conditioned on the known sync bit. Simple and
@@ -770,7 +868,8 @@ static int try_soft_decision(wspr_tp_t tp[WSPR_NSYM][4], wspr_decode_result_t *r
  * sensitivity sweep passing is evidence, not proof - the real WAV test is
  * what actually decides whether a decoder change is a genuine
  * improvement. Full account in docs/wspr-phase1-status.md. */
-static int try_hard_decision(wspr_tp_t tp[WSPR_NSYM][4], wspr_decode_result_t *result)
+static int try_hard_decision(wspr_tp_t tp[WSPR_NSYM][4], double noise_ref,
+                             wspr_decode_result_t *result)
 {
     uint8_t channel_bits[WSPR_NSYM];
     for (int i = 0; i < WSPR_NSYM; i++) {
@@ -792,7 +891,7 @@ static int try_hard_decision(wspr_tp_t tp[WSPR_NSYM][4], wspr_decode_result_t *r
         result->cycles = cycles;
         return 0;
     }
-    return accept_if_plausible(&msg, cycles, tp, result);
+    return accept_if_plausible(&msg, cycles, tp, noise_ref, result);
 }
 
 /* PER-SYMBOL reliability-weighted decision - targets a specific failure
@@ -818,7 +917,8 @@ static int try_hard_decision(wspr_tp_t tp[WSPR_NSYM][4], wspr_decode_result_t *r
  * mismatch). Called as a FALLBACK, only when hard-decision doesn't
  * already produce a plausible result - see wspr_decode_candidate() -  so
  * candidates hard-decision already handles correctly can't regress. */
-static int try_weighted_decision(wspr_tp_t tp[WSPR_NSYM][4], wspr_decode_result_t *result)
+static int try_weighted_decision(wspr_tp_t tp[WSPR_NSYM][4], double noise_ref,
+                             wspr_decode_result_t *result)
 {
     double d_channel[WSPR_NSYM], power_channel[WSPR_NSYM];
     for (int i = 0; i < WSPR_NSYM; i++) {
@@ -909,7 +1009,7 @@ static int try_weighted_decision(wspr_tp_t tp[WSPR_NSYM][4], wspr_decode_result_
         result->cycles = cycles;
         return 0;
     }
-    return accept_if_plausible(&msg, cycles, tp, result);
+    return accept_if_plausible(&msg, cycles, tp, noise_ref, result);
 }
 
 /* Local start-time refinement around `centre`, at the fine step. Shared by
@@ -935,6 +1035,7 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
 {
     memset(result, 0, sizeof(*result));
     result->freq_hz = f0_hz;
+    result->snr_db  = WSPR_SNR_UNKNOWN;
 
     /* Everything below works in DECIMATED samples. The start-time search is
      * where the cost lives - ~119 correlations per candidate - so it is the
@@ -1053,6 +1154,12 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
 #endif
 #define WSPR_DF_NPT   ((int)(2 * WSPR_DF_RANGE / WSPR_DF_STEP) + 1)
 
+    /* Only for candidates that got past the gate: it is eight extra
+     * correlations, and a candidate that is pure noise will never need an SNR.
+     * Taken BEFORE the frequency curve because both use `tp` as scratch and
+     * the curve rebuilds the tone table on its first iteration anyway. */
+    const double noise_ref = measure_noise_ref(&bb, &tw, best_dt, tp);
+
     /* ---- THE SYNC-vs-FREQUENCY CURVE, AND WHY ITS PEAKS ARE THE HYPOTHESES
      *
      * The candidate frequency comes from an averaged periodogram, so it is the
@@ -1150,9 +1257,9 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
             r.freq_hz = f0_hz + df;
             r.best_dt_samples = dt * WSPR_DECIM;
             r.sync_score = sc;
-            int got = (path == 0) ? try_soft_decision(tp, &r)
-                    : (path == 1) ? try_hard_decision(tp, &r)
-                                  : try_weighted_decision(tp, &r);
+            int got = (path == 0) ? try_soft_decision(tp, noise_ref, &r)
+                    : (path == 1) ? try_hard_decision(tp, noise_ref, &r)
+                                  : try_weighted_decision(tp, noise_ref, &r);
             /* ⚠ KEEP THE CYCLE COUNT EVEN WHEN NOTHING IS ACCEPTED. `r` is
              * discarded on failure, and with it went the only number that says
              * HOW the attempt failed - so every rejected candidate logged

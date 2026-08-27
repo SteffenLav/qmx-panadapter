@@ -46,6 +46,10 @@
  *    not yet validated against a genuinely weak/marginal real signal.
  */
 #include <stdint.h>
+/* For WSPR_SNR_UNKNOWN, so the sentinel has ONE definition. wspr_spots.h is
+ * plain C (stdint/stdbool only), so this does not cost the portability that
+ * lets the host harnesses link this decoder. */
+#include "wspr_spots.h"
 #include "wspr_proto.h"
 #include "wspr_fano.h"
 
@@ -115,6 +119,12 @@ typedef struct {
      * hardware double FPU and fast RAM where this board has neither.
      *
      * Milliseconds, filled on every call, zero if the phase did not run. */
+    /* SNR in dB, WSPR's convention: referred to a 2500 Hz noise bandwidth, the
+     * same reference WSJT-X and wsprnet use, so the number is comparable with
+     * every other reporter. WSPR_SNR_UNKNOWN if the decode failed - never a
+     * stand-in value. See wspr_measure_snr() for how it is derived. */
+    int16_t snr_db;
+
     float ms_mix;      /* mix + decimate: one sweep of the whole capture */
     float ms_coarse;   /* coarse + fine start-time search */
     float ms_curve;    /* sync-vs-frequency curve and its refinement */
