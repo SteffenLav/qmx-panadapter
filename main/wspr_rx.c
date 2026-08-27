@@ -896,6 +896,30 @@ static void wspr_rx_task(void *arg)
              WSPR_MAX_CANDS, WSPR_DECODE_BUDGET_MS / 1000,
              SEARCH_LO_HZ, SEARCH_HI_HZ);
 
+    /* ---- WHY THE BUFFER ADDRESSES ARE LOGGED --------------------------
+     *
+     * A decode costs ~35 % more on some boots than others, and the difference
+     * is PER BOOT and constant within it - measured across six boots of four
+     * builds, where mix_decimate's mean was 792 ms on one build and 1054-1071
+     * on both the build before it and the merge of it. Same code, same fixed
+     * amount of work, so it is not a regression and not the candidate load
+     * (correlation with how busy a cycle is: 0.14).
+     *
+     * What is left is where these buffers happened to land. They are ~8.6 MB
+     * of PSRAM claimed at page entry, so their addresses depend on the heap's
+     * state at that moment, and mix_decimate is dominated by streaming through
+     * them. Alignment relative to the cache line is the obvious suspect.
+     *
+     * ⚠ THAT IS A HYPOTHESIS, NOT A FINDING. It is logged rather than acted on
+     * precisely so the next few boots can settle it: if fast boots share an
+     * alignment that slow boots do not, it is confirmed; if they do not, the
+     * cause is elsewhere and this line costs nothing. */
+    ESP_LOGI(TAG, "buffers: cap=%p pcm0=%p pcm1=%p (align %u/%u/%u)",
+             (void *)cap, (void *)s_pcm[0], (void *)s_pcm[1],
+             (unsigned)((uintptr_t)cap      & 63u),
+             (unsigned)((uintptr_t)s_pcm[0] & 63u),
+             (unsigned)((uintptr_t)s_pcm[1] & 63u));
+
     int64_t last_cycle_idx = -1;
 
     while (s_run) {
