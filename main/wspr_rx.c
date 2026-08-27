@@ -620,6 +620,12 @@ static void dump_window(const int16_t *pcm, uint32_t nsamples, int64_t cycle_utc
  * of PSRAM) rather than a re-reading of this comment. */
 #define WSPR_PASSES 2
 
+/* How far from a subtracted signal a later pass still bothers to look. A WSPR
+ * transmission is 5.9 Hz wide and the cases this exists for - stations sharing
+ * one candidate - sat 2 to 4 Hz apart, so 15 Hz is generous to the effect
+ * while still excluding the rest of a 300 Hz window. */
+#define WSPR_PASS2_NEAR_HZ 15.0
+
 static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
 {
     /* ---- decode ---- */
@@ -633,6 +639,11 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
     int pass = 0;
     int subtracted = 0;
     int found_in_pass = 0;
+    /* Where the first pass removed something. A later pass only has a reason
+     * to look THERE - see the skip below. */
+    double subbed_hz[WSPR_MAX_CANDS];
+    int    nsubbed = 0;
+    int    tried_this_pass = 0;
     /* Callsigns already reported this cycle. A station re-decoded after its own
      * subtraction is the same reception report, not a second one. */
     char seen[WSPR_MAX_CANDS][7];
@@ -642,7 +653,25 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
     ncand = wspr_find_candidates(pcm, CAP_SAMPLES, SEARCH_LO_HZ, SEARCH_HI_HZ,
                                   cands, WSPR_MAX_CANDS);
     found_in_pass = 0;
+    tried_this_pass = 0;
     for (int i = 0; i < ncand && s_run; i++) {
+        /* ⛔ A SECOND PASS MUST NOT RE-SCAN THE WHOLE BAND. Measured on
+         * hardware: pass 1 took 82 s of the 115 s budget, pass 2 then started
+         * again from candidate 0 and was cut after two - so it cost a full
+         * pass's worth of budget to look mostly where nothing had changed.
+         *
+         * Subtraction can only ever reveal something NEAR a signal that was
+         * removed; everywhere else the audio is bit-identical to pass 1 and
+         * re-decoding it is guaranteed to reach the same answer. So a later
+         * pass looks only around what it took out, which turns a second full
+         * pass into a handful of candidates. */
+        if (pass > 0) {
+            int near = 0;
+            for (int k = 0; k < nsubbed; k++)
+                if (fabs(cands[i].freq_hz - subbed_hz[k]) < WSPR_PASS2_NEAR_HZ) { near = 1; break; }
+            if (!near) continue;
+        }
+        tried_this_pass++;
         /* ⛔ The budget is checked BEFORE starting a candidate, never mid-way:
          * wspr_decode_candidate() is not interruptible, so a check inside it
          * would either do nothing or leave a half-decoded result. */
@@ -699,8 +728,10 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
             uint8_t tones[WSPR_NSYM];
             if (wspr_tones_from_message(r.callsign, r.grid, r.power_dbm, tones) &&
                 wspr_subtract(pcm, CAP_SAMPLES, r.freq_hz,
-                              r.best_dt_samples, tones) > 0)
+                              r.best_dt_samples, tones) > 0) {
                 subtracted++;
+                if (nsubbed < WSPR_MAX_CANDS) subbed_hz[nsubbed++] = r.freq_hz;
+            }
         }
 
         decoded++;
@@ -730,8 +761,9 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
      * candidates and waste half the budget proving it. */
     if (++pass < WSPR_PASSES && found_in_pass > 0 && s_run &&
         (esp_timer_get_time() - t0) / 1000 < WSPR_DECODE_BUDGET_MS) {
-        ESP_LOGI(TAG, "  pass %d: %d signal(s) subtracted, looking underneath",
-                 pass, subtracted);
+        ESP_LOGI(TAG, "  pass %d: %d signal(s) subtracted, looking underneath "
+                      "(only within %.0f Hz of one)", pass, subtracted,
+                 (double)WSPR_PASS2_NEAR_HZ);
         goto next_pass;
     }
 
@@ -740,13 +772,20 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
      * of the candidate list is the same invisible ceiling as the old cap of 8,
      * and the whole point of raising that cap was that nothing had ever said so. */
     ESP_LOGW(TAG, "cycle %lld: %d candidate(s), %d decode(s), %d guarded, "
-                  "%d skipped (budget), %d pass(es), %d subtracted, %lld ms",
+                  "%d skipped (budget, pass %d), %d pass(es), %d subtracted, %lld ms",
              (long long)cycle_utc, ncand, decoded, guarded, skipped,
-             pass, subtracted, (long long)dec_ms);
+             pass, pass, subtracted, (long long)dec_ms);
+    /* ⚠ WHICH PASS was cut is the whole meaning of this warning. A cut in pass
+     * 1 means part of the band was never looked at; a cut in a later pass just
+     * means the cheap second look ran out of time, which costs at most a
+     * station hiding under another one. Reporting them the same way read as a
+     * failure when pass 1 had in fact completed all 20 candidates. */
     if (skipped)
-        ESP_LOGW(TAG, "cycle %lld: BUDGET CUT %d candidate(s) after %lld ms - "
-                      "lower WSPR_MAX_CANDS or make the decode faster",
-                 (long long)cycle_utc, skipped, (long long)dec_ms);
+        ESP_LOGW(TAG, "cycle %lld: BUDGET CUT %d candidate(s) in pass %d after "
+                      "%lld ms%s",
+                 (long long)cycle_utc, skipped, pass, (long long)dec_ms,
+                 pass > 1 ? " - second-look only, the band was fully scanned"
+                          : " - lower WSPR_MAX_CANDS or make the decode faster");
     set_dec_status("%d decoded", decoded);
 }
 
