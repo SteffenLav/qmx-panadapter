@@ -509,6 +509,36 @@ timing is BOOT-SPECIFIC to about 35 %, so the comparison has to be made against
 a figure from the same boot, not against numbers recorded earlier in this
 document.
 
+### What the budget cuts cost, measured on the air
+
+The case for the cost work is not "faster is nicer". Measured over 55
+consecutive cycles on 20 m (1.8 h, dev bench, the build BEFORE any of the
+changes above):
+
+| | |
+|---|---|
+| cycles run | 55 |
+| cycles cut short by the decode budget | **35 (64 %)** |
+| candidates abandoned when cut | mean **6.8** of 20 |
+| cycles that decoded 4 or more stations | 10 |
+| of those, cut short | **9 of 10**, mean 7.1 abandoned |
+
+The last two rows are the point. **The cycles cut hardest are the ones finding
+the most**, because every decode costs a candidate's full cost plus a
+subtraction, so a productive cycle runs out of budget precisely when there is
+most left to find. The decoder was quietest exactly when the band was busiest.
+
+Projected against the same cycle shape with the measured per-candidate savings
+- a gated candidate ~1310 ms instead of ~3150, a decoded one ~2580 instead of
+~5400 - a six-decode cycle costs about 34 s of its 115 s budget instead of
+overrunning it. If that holds, budget cuts should stop happening at all on a
+band like this one, and the second pass should complete every time instead of
+in a third of cycles.
+
+⚠ Projected. Not flashed, not observed. The `skipped (budget, pass N)` figure
+in the cycle summary is exactly the number that will confirm or refute it, and
+it is already logged on every cycle - which is why it was worth logging.
+
 ## The next big cost win, worked out but NOT done: a shared front end
 
 After the changes above, `mix_decimate` is the largest single item again -
