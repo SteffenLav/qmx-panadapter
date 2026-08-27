@@ -12,8 +12,8 @@
 #include "wspr_screen_view.h"
 #include "wspr_spots.h"
 #include "wspr_rx.h"
-#include "esp_heap_caps.h"
 #include "cat.h"
+#include "esp_heap_caps.h"
 #include "util/dxcc.h"
 #include "wspr_tx.h"
 #include "storage/settings.h"
@@ -77,21 +77,46 @@ static lv_obj_t *s_lbl_duty;
  * silently wrong, which is the exact error class CLAUDE.md keeps recording; a
  * list of the real ones cannot be. These are USB dial frequencies - the
  * transmission itself sits ~1400-1600 Hz above each. */
-typedef struct { const char *label; uint32_t dial_hz; } wspr_band_t;
+/* The type and the radio-availability accessor live in the header now, because
+ * the band-hop tick list needs the same table and the same filtering. */
 static const wspr_band_t kBands[] = {
-    { "160 m  1.836600", 1836600u },
-    { "80 m   3.568600", 3568600u },
-    { "60 m   5.287200", 5287200u },
-    { "40 m   7.038600", 7038600u },
-    { "30 m  10.138700", 10138700u },
-    { "20 m  14.095600", 14095600u },
-    { "17 m  18.104600", 18104600u },
-    { "15 m  21.094600", 21094600u },
-    { "12 m  24.924600", 24924600u },
-    { "10 m  28.124600", 28124600u },
-    { "6 m   50.293000", 50293000u },
+    { "160", "160 m  1.836600",  1836600u },
+    { "80",  "80 m   3.568600",  3568600u },
+    { "60",  "60 m   5.287200",  5287200u },
+    { "40",  "40 m   7.038600",  7038600u },
+    { "30",  "30 m  10.138700", 10138700u },
+    { "20",  "20 m  14.095600", 14095600u },
+    { "17",  "17 m  18.104600", 18104600u },
+    { "15",  "15 m  21.094600", 21094600u },
+    { "12",  "12 m  24.924600", 24924600u },
+    { "10",  "10 m  28.124600", 28124600u },
+    { "6",   "6 m   50.293000", 50293000u },
 };
 #define N_BANDS ((int)(sizeof(kBands) / sizeof(kBands[0])))
+
+const wspr_band_t *wspr_bands(int *out_count)
+{
+    if (out_count) *out_count = N_BANDS;
+    return kBands;
+}
+
+int wspr_bands_available(uint8_t *out, int max)
+{
+    if (!out || max <= 0) return 0;
+    int nradio = 0;
+    const cat_band_entry_t *radio = cat_get_band_list(&nradio);
+    int n = 0;
+    for (int i = 0; i < N_BANDS && n < max; i++) {
+        if (nradio > 0) {
+            int have = 0;
+            for (int r = 0; r < nradio; r++)
+                if (!strcmp(radio[r].name, kBands[i].name)) { have = 1; break; }
+            if (!have) continue;
+        }
+        out[n++] = (uint8_t)i;
+    }
+    return n;
+}
 
 /* Duty is a CYCLING VALUE, per docs/wspr-ui-design.md: WSPR asks "what
  * fraction of slots", never "transmit now". 0 is a legitimate state - enabled
@@ -99,10 +124,33 @@ static const wspr_band_t kBands[] = {
 static const uint8_t kDuty[] = { 0, 10, 20, 33, 50 };
 #define N_DUTY ((int)(sizeof(kDuty) / sizeof(kDuty[0])))
 
+/* Which kBands entries this radio can reach, in table order. Built when the
+ * page is constructed and refreshed whenever CAT reports a band list, because
+ * at boot the page can be built before the radio has answered. */
+static uint8_t s_avail[16];
+static int     s_navail;
+
+/* The picker lists only the bands the radio has, so its selection index is into
+ * s_avail[], never into kBands[] directly. Getting that wrong would silently
+ * tune the wrong band. */
+static void rebuild_dial_options(void)
+{
+    if (!s_dd_dial) return;
+    char opts[N_BANDS * 20];
+    size_t used = 0;
+    opts[0] = 0;
+    for (int k = 0; k < s_navail; k++) {
+        used += (size_t)snprintf(opts + used, sizeof(opts) - used, "%s%s",
+                                 k ? "\n" : "", kBands[s_avail[k]].label);
+    }
+    lv_dropdown_set_options(s_dd_dial, opts);
+}
+
 static void dial_changed_cb(lv_event_t *e)
 {
-    uint16_t i = lv_dropdown_get_selected(lv_event_get_target(e));
-    if (i >= N_BANDS) return;
+    uint16_t k = lv_dropdown_get_selected(lv_event_get_target(e));
+    if (k >= (uint16_t)s_navail) return;
+    const int i = s_avail[k];
     settings_set_wspr_dial_hz(kBands[i].dial_hz);
     /* Forced: the ordinary setter shares a 200 ms rate limit with the CAT
      * poll, and a band change the operator just asked for must not be the
@@ -288,20 +336,44 @@ void wspr_screen_view_init(lv_obj_t *parent)
     /* ---------------- left pane ---------------- */
     s_lbl_title = lv_label_create(s_container);
     lv_label_set_text(s_lbl_title, "MODE: WSPR");
-    /* SPANS THE PANEL AND IS CENTRED IN IT, rather than sitting left-aligned at
-     * x=16 while every control below it spans the full width - which is what
-     * made the header look shifted off its own column.
+    /* ⛔ THE SIZE IS MEASURED, NOT GUESSED - and the guess was wrong.
      *
-     * 32, not 48. "MODE: FT8" fits the 320 px panel at 48; "MODE: WSPR" is one
-     * character longer and measures ~296 px against the 288 available, so it
-     * overran into the decode list's CALL column. Bounding the width now means
-     * an overrun would WRAP rather than spill, but 32 keeps it on one line with
-     * room to spare. */
-    lv_obj_set_style_text_font(s_lbl_title, &lv_font_montserrat_32, 0);
+     * This started at 28 under a comment asserting that "MODE: WSPR" could not
+     * fit at 48 because it is one character longer than the FT8 page's
+     * "MODE: FT8". That was an ESTIMATE (~296 px against 288 available) written
+     * as if it were a fact, and it cost the page a header two sizes smaller
+     * than every other mode's for no established reason. The operator asked why
+     * it looked odd next to the other pages, which was the right question.
+     *
+     * It also compared against the wrong budget. The controls below use a 16 px
+     * margin, but a title is not a control and need not share it: the decode
+     * list starts at RIGHT_X (LEFT_W + 8), so the header can have the panel's
+     * full width and still clear it.
+     *
+     * So: try the big font, ASK LVGL how wide the text actually is, and step
+     * down only if it genuinely does not fit. Same pattern as the bottom bar's
+     * version label in ui.c. That way this page matches the others whenever it
+     * can, and can never spill into the CALL column when it cannot. */
+    {
+        static const lv_font_t *const kTitleFonts[] = {
+            &lv_font_montserrat_48, &lv_font_montserrat_32,
+            &lv_font_montserrat_28, &lv_font_montserrat_24,
+        };
+        const int budget_px = LEFT_W - 8;
+        const lv_font_t *use = kTitleFonts[0];
+        for (unsigned i = 0; i < sizeof(kTitleFonts) / sizeof(kTitleFonts[0]); i++) {
+            lv_point_t sz;
+            lv_text_get_size(&sz, "MODE: WSPR", kTitleFonts[i], 0, 0,
+                             LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+            use = kTitleFonts[i];
+            if (sz.x <= budget_px) break;
+        }
+        lv_obj_set_style_text_font(s_lbl_title, use, 0);
+    }
     lv_obj_set_style_text_color(s_lbl_title, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
-    lv_obj_set_width(s_lbl_title, LEFT_W - 32);
+    lv_obj_set_width(s_lbl_title, LEFT_W - 8);
     lv_obj_set_style_text_align(s_lbl_title, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(s_lbl_title, 16, 8);
+    lv_obj_set_pos(s_lbl_title, 4, 6);
 
     /* The dial, boxed like the FT8 page's preset. Read-only for now: the
      * standard-dial picker is the next piece (see docs/wspr-ui-design.md - a
@@ -319,21 +391,15 @@ void wspr_screen_view_init(lv_obj_t *parent)
      * frame, full panel width, and the same left edge as the cycle bar and the
      * TX buttons underneath. */
     s_dd_dial = lv_dropdown_create(s_container);
-    {
-        char opts[N_BANDS * 20];
-        size_t used = 0;
-        opts[0] = '\0';
-        for (int i = 0; i < N_BANDS; i++) {
-            used += (size_t)snprintf(opts + used, sizeof(opts) - used, "%s%s",
-                                     i ? "\n" : "", kBands[i].label);
-        }
-        lv_dropdown_set_options(s_dd_dial, opts);
-    }
+    s_navail = wspr_bands_available(s_avail, (int)sizeof(s_avail));
+    rebuild_dial_options();
     lv_obj_set_size(s_dd_dial, LEFT_W - 32, 56);
-    lv_obj_set_pos(s_dd_dial, 16, 52);
+    lv_obj_set_pos(s_dd_dial, 16, 70);
     lv_obj_set_style_radius(s_dd_dial, 8, 0);
     lv_obj_set_style_border_width(s_dd_dial, 1, 0);
-    lv_obj_set_style_text_font(s_dd_dial, &lv_font_montserrat_20, 0);
+    /* 24, not 20. Read on the actual screen at arm's length this was the
+     * smallest thing in the column and the one carrying the frequency. */
+    lv_obj_set_style_text_font(s_dd_dial, &lv_font_montserrat_24, 0);
     /* Dark like everything else on this page; the stock dropdown is white. */
     lv_obj_set_style_bg_color(s_dd_dial, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
     lv_obj_set_style_text_color(s_dd_dial, lv_color_hex(UI_COLOR_TEXT), 0);
@@ -343,7 +409,7 @@ void wspr_screen_view_init(lv_obj_t *parent)
         if (list) {
             lv_obj_set_style_bg_color(list, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
             lv_obj_set_style_text_color(list, lv_color_hex(UI_COLOR_TEXT), 0);
-            lv_obj_set_style_text_font(list, &lv_font_montserrat_20, 0);
+            lv_obj_set_style_text_font(list, &lv_font_montserrat_24, 0);
         }
     }
     /* Start on the STORED dial, not on entry 0.
@@ -355,9 +421,9 @@ void wspr_screen_view_init(lv_obj_t *parent)
     {
         qmx_settings_t ds;
         settings_load_all(&ds);
-        for (int i = 0; i < N_BANDS; i++) {
-            if (kBands[i].dial_hz == ds.wspr_dial_hz) {
-                lv_dropdown_set_selected(s_dd_dial, (uint16_t)i);
+        for (int k = 0; k < s_navail; k++) {
+            if (kBands[s_avail[k]].dial_hz == ds.wspr_dial_hz) {
+                lv_dropdown_set_selected(s_dd_dial, (uint16_t)k);
                 break;
             }
         }
@@ -372,11 +438,11 @@ void wspr_screen_view_init(lv_obj_t *parent)
     lv_label_set_text(s_lbl_cycle, "starting...");
     lv_obj_set_style_text_font(s_lbl_cycle, &lv_font_montserrat_24, 0);
     lv_obj_set_style_text_color(s_lbl_cycle, lv_color_hex(UI_COLOR_PRIMARY_BORDER), 0);
-    lv_obj_set_pos(s_lbl_cycle, 16, 118);
+    lv_obj_set_pos(s_lbl_cycle, 16, 136);
 
     s_bar_cycle = lv_bar_create(s_container);
     lv_obj_set_size(s_bar_cycle, LEFT_W - 32, 10);
-    lv_obj_set_pos(s_bar_cycle, 16, 152);
+    lv_obj_set_pos(s_bar_cycle, 16, 170);
     lv_bar_set_range(s_bar_cycle, 0, 120);
     lv_bar_set_value(s_bar_cycle, 0, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(s_bar_cycle, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
@@ -384,15 +450,17 @@ void wspr_screen_view_init(lv_obj_t *parent)
 
     s_lbl_status = lv_label_create(s_container);
     lv_label_set_text(s_lbl_status, "");
-    lv_obj_set_style_text_font(s_lbl_status, &lv_font_montserrat_18, 0);
+    /* 22, not 18 - this line carries the capture and decode progress and was
+     * the smallest text on the page. */
+    lv_obj_set_style_text_font(s_lbl_status, &lv_font_montserrat_22, 0);
     lv_obj_set_style_text_color(s_lbl_status, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-    lv_obj_set_pos(s_lbl_status, 16, 172);
+    lv_obj_set_pos(s_lbl_status, 16, 192);
 
     s_lbl_heard = lv_label_create(s_container);
     lv_label_set_text(s_lbl_heard, "Heard nothing yet");
-    lv_obj_set_style_text_font(s_lbl_heard, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_lbl_heard, &lv_font_montserrat_22, 0);
     lv_obj_set_style_text_color(s_lbl_heard, lv_color_hex(UI_COLOR_TEXT), 0);
-    lv_obj_set_pos(s_lbl_heard, 16, 202);
+    lv_obj_set_pos(s_lbl_heard, 16, 224);
 
     /* TX and Duty, side by side.
      *
@@ -405,7 +473,7 @@ void wspr_screen_view_init(lv_obj_t *parent)
 
     s_btn_tx = lv_btn_create(s_container);
     lv_obj_set_size(s_btn_tx, half, 56);
-    lv_obj_set_pos(s_btn_tx, 16, 240);
+    lv_obj_set_pos(s_btn_tx, 16, 258);
     lv_obj_set_style_radius(s_btn_tx, 8, 0);
     lv_obj_add_event_cb(s_btn_tx, tx_toggle_cb, LV_EVENT_CLICKED, NULL);
     s_lbl_tx = lv_label_create(s_btn_tx);
@@ -415,7 +483,7 @@ void wspr_screen_view_init(lv_obj_t *parent)
 
     s_btn_duty = lv_btn_create(s_container);
     lv_obj_set_size(s_btn_duty, half, 56);
-    lv_obj_set_pos(s_btn_duty, 16 + half + 8, 240);
+    lv_obj_set_pos(s_btn_duty, 16 + half + 8, 258);
     lv_obj_set_style_radius(s_btn_duty, 8, 0);
     lv_obj_add_event_cb(s_btn_duty, duty_cycle_cb, LV_EVENT_CLICKED, NULL);
     s_lbl_duty = lv_label_create(s_btn_duty);
@@ -629,10 +697,15 @@ void wspr_screen_view_tick(void)
      * has tuned off the sub-band and the picker should not pretend otherwise. */
     uint32_t f = cat_get_frequency();
     if (f && s_dd_dial) {
-        for (int i = 0; i < N_BANDS; i++) {
-            if (kBands[i].dial_hz == f) {
-                if (lv_dropdown_get_selected(s_dd_dial) != (uint16_t)i)
-                    lv_dropdown_set_selected(s_dd_dial, (uint16_t)i);
+        /* The radio may only have answered its band list AFTER the page was
+         * built, so re-take it here; the picker is otherwise stuck with
+         * whatever was known at construction (every band, if CAT was down). */
+        int n = wspr_bands_available(s_avail, (int)sizeof(s_avail));
+        if (n != s_navail) { s_navail = n; rebuild_dial_options(); }
+        for (int k = 0; k < s_navail; k++) {
+            if (kBands[s_avail[k]].dial_hz == f) {
+                if (lv_dropdown_get_selected(s_dd_dial) != (uint16_t)k)
+                    lv_dropdown_set_selected(s_dd_dial, (uint16_t)k);
                 break;
             }
         }

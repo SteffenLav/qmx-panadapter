@@ -148,3 +148,20 @@ int wspr_rx_dump_pending(void);
 void wspr_rx_set_guards(int enforce_near, double near_hz,
                         int enforce_slow, unsigned int slow_cycles);
 
+/* ---- CYCLE HISTORY -------------------------------------------------------
+ *
+ * How many stations each of the last cycles produced, oldest first. This is the
+ * one thing a WSPR monitor can say that a snapshot cannot: whether the band is
+ * opening or closing. "Heard 3 stations" is a moment; this is the trend.
+ *
+ * Deliberately a small fixed array of counts rather than anything derived from
+ * the spot store - that ring saturates at 256 spots and then forgets its oldest
+ * cycles, which would silently truncate exactly the history this exists to
+ * show. (The same saturation once froze the decode list for five hours; see
+ * wspr_spots_seq.)
+ */
+#define WSPR_CYCLE_HISTORY 40
+
+/* Writes up to `max` counts, OLDEST first, and returns how many were written.
+ * If the caller wants fewer than are held it gets the NEWEST ones. */
+int wspr_rx_cycle_history(uint8_t *out, int max);

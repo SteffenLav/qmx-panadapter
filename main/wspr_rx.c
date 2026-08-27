@@ -89,6 +89,29 @@ static const char *TAG = "wspr_rx";
  * possible on this page). Allocated on first use and reused: ~36 KB, and the
  * kiss_fftr config for 8192 points is a few hundred KB more, so neither wants
  * to be built 176 times a cycle - let alone once per row. */
+/* Newest at s_hist_n-1 once full. A plain shift keeps the getter trivial, and
+ * 40 bytes is not worth a ring's index arithmetic. */
+static uint8_t s_hist[WSPR_CYCLE_HISTORY];
+static int     s_hist_n;
+
+int wspr_rx_cycle_history(uint8_t *out, int max)
+{
+    if (!out || max <= 0) return 0;
+    int n = s_hist_n < max ? s_hist_n : max;
+    memcpy(out, s_hist + (s_hist_n - n), (size_t)n);
+    return n;
+}
+
+static void hist_push(int decoded)
+{
+    if (decoded > 255) decoded = 255;
+    if (s_hist_n >= WSPR_CYCLE_HISTORY) {
+        memmove(s_hist, s_hist + 1, WSPR_CYCLE_HISTORY - 1);
+        s_hist_n = WSPR_CYCLE_HISTORY - 1;
+    }
+    s_hist[s_hist_n++] = (uint8_t)decoded;
+}
+
 static wspr_guards_t s_guards;      /* see wspr_decode.h; set at slot-loop start */
 
 static uint8_t  *s_wf;                 /* RING: WSPR_WF_HIST_ROWS * WSPR_WF_COLS */
@@ -801,6 +824,7 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
                  (long long)cycle_utc, skipped, pass, (long long)dec_ms,
                  pass > 1 ? " - second-look only, the band was fully scanned"
                           : " - lower WSPR_MAX_CANDS or make the decode faster");
+    hist_push(decoded);
     set_dec_status("%d decoded", decoded);
 }
 

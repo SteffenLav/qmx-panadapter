@@ -76,4 +76,19 @@ uint32_t wspr_spots_seq(void);
  * from 40 spots from 40 stations. */
 int wspr_spots_unique_calls(void);
 
+/* The furthest station held, by km. Returns 0 if nothing has a distance yet.
+ *
+ * ⛔ AN ACCESSOR, NOT A SNAPSHOT, ON PURPOSE. The ring is 256 spots of 40
+ * bytes; a caller on taskLVGL that copied it to find one maximum would put
+ * 10 KB on a stack CLAUDE.md keeps a list of crashes for (the v0.20.1 pounce
+ * crash was an 11 KB array on exactly that task). This walks under the mutex
+ * and returns one struct. Same reasoning as wspr_spots_unique_calls(). */
+int wspr_spots_best_dx(wspr_spot_t *out);
+
+/* Distinct callsigns heard MORE THAN ONCE. A real station transmits again and a
+ * false decode does not, so this is the population that is safe to publish -
+ * see the repeat-test argument in docs/wspr-phase3-sensitivity.md and the
+ * wsprnet rule that no upload ships without it. */
+int wspr_spots_repeat_calls(void);
+
 void wspr_spots_clear(void);

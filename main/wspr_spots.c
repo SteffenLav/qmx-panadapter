@@ -123,6 +123,40 @@ int wspr_spots_unique_calls(void)
     return unique;
 }
 
+int wspr_spots_best_dx(wspr_spot_t *out)
+{
+    if (!out || !s_mtx) return 0;
+    int found = 0;
+    if (xSemaphoreTake(s_mtx, pdMS_TO_TICKS(50)) != pdTRUE) return 0;
+    int32_t best = -1;
+    for (int i = 0; i < s_count; i++) {
+        const wspr_spot_t *sp = &s_ring[i];
+        if (sp->km > best) { best = sp->km; *out = *sp; found = 1; }
+    }
+    xSemaphoreGive(s_mtx);
+    return found;
+}
+
+int wspr_spots_repeat_calls(void)
+{
+    if (!s_mtx) return 0;
+    if (xSemaphoreTake(s_mtx, pdMS_TO_TICKS(50)) != pdTRUE) return 0;
+    int n = 0;
+    for (int i = 0; i < s_count; i++) {
+        /* Count a call at its FIRST appearance only, and only if it appears
+         * again later - so each repeated station is counted exactly once. */
+        int seen_before = 0, seen_after = 0;
+        for (int j = 0; j < i; j++)
+            if (!strcmp(s_ring[j].call, s_ring[i].call)) { seen_before = 1; break; }
+        if (seen_before) continue;
+        for (int j = i + 1; j < s_count; j++)
+            if (!strcmp(s_ring[j].call, s_ring[i].call)) { seen_after = 1; break; }
+        if (seen_after) n++;
+    }
+    xSemaphoreGive(s_mtx);
+    return n;
+}
+
 void wspr_spots_clear(void)
 {
     if (!s_ring) return;

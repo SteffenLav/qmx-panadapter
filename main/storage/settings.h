@@ -262,6 +262,22 @@ typedef struct {
      * Decremented as each file is written, so an interrupted run resumes
      * rather than starting over, and a finished run cannot re-arm itself on
      * the next boot and quietly fill the card. */
+    /* ---- BAND HOPPING ------------------------------------------------
+     * A BITMASK over the standard WSPR band table (ui/wspr_screen_view.c's
+     * kBands), one bit per band the operator ticked. A mask rather than a list
+     * because the order is the table's, and because "which bands" is exactly a
+     * set - the operator ticks them off and the loop visits whichever are on.
+     *
+     * ⚠ The mask can name a band the RADIO does not have. That is deliberate:
+     * the tick list only ever OFFERS bands the QMX reports (cat_get_band_list),
+     * but a stored mask outlives a change of radio, and silently dropping bits
+     * would lose the operator's choice the moment CAT was slow to answer. The
+     * hop skips what the radio cannot reach; it does not forget it.
+     *
+     * 0 bands ticked, or hopping off, means stay on wspr_dial_hz. */
+    uint16_t wspr_hop_mask;
+    bool     wspr_hop_en;
+
     uint8_t  wspr_dump_cycles;
     uint8_t  ft8_op_mode;     // FT8/FT4 sub-mode (ft8_op_mode_t: 0=FT8 1=FT4), default 0 - see ft8_test.h
     uint32_t passband_width_hz; // last CAT-reported filter width (Hz), 0=unknown/use mode default. Persisted so the
@@ -465,6 +481,8 @@ void settings_set_wspr_dial_hz(uint32_t v);
 void settings_set_wspr_tx_en(bool v);
 void settings_set_wspr_duty_pct(uint8_t v);
 void settings_set_wspr_tx_dbm(int8_t v);
+void settings_set_wspr_hop_mask(uint16_t v);
+void settings_set_wspr_hop_en(bool v);
 void settings_set_wspr_dump_cycles(uint8_t v);
 void settings_set_ft8_op_mode(uint8_t v);
 

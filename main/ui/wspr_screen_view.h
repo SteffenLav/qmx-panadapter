@@ -21,3 +21,29 @@ lv_obj_t *wspr_screen_view_get_container(void);
 // Called from the 1 Hz UI tick while the page is up: refreshes the countdown,
 // the status line and (only when it has changed) the spot list.
 void      wspr_screen_view_tick(void);
+
+/* ---- THE STANDARD WSPR DIALS, AND WHICH OF THEM THIS RADIO HAS ------------
+ *
+ * The dial frequencies are a property of the PROTOCOL - every band has exactly
+ * one canonical WSPR sub-band and anything else is simply not where anyone is
+ * listening. Which bands are REACHABLE is a property of this particular radio:
+ * a QMX is built with a fixed set of band-pass filters, and the one on this
+ * bench reports 60/40/30/20/17/15 while a QMX+ covers 160-6.
+ *
+ * So the table is fixed and the AVAILABILITY is asked of the radio
+ * (cat_get_band_list). Offering a band the hardware cannot filter would be
+ * offering a dial that receives nothing.
+ */
+typedef struct {
+    const char *name;      /* "20" - matches what the QMX reports over CAT */
+    const char *label;     /* "20 m  14.095600" - what the picker shows */
+    uint32_t    dial_hz;
+} wspr_band_t;
+
+const wspr_band_t *wspr_bands(int *out_count);
+
+/* Indices into wspr_bands() that THIS radio can actually reach, in table order.
+ * Returns the count. With no CAT band list yet (radio off, or not polled) it
+ * returns every band - a picker that is empty because the radio has not
+ * answered yet is worse than one that offers too much. */
+int wspr_bands_available(uint8_t *out, int max);
