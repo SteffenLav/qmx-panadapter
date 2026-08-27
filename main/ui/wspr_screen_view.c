@@ -118,6 +118,10 @@ int wspr_bands_available(uint8_t *out, int max)
     return n;
 }
 
+/* Up here rather than beside the first ESP_LOGI that used it: band hopping logs
+ * the dial change it makes, and that code sits well above the old site. */
+static const char *TAG = "wspr_view";
+
 /* Duty is a CYCLING VALUE, per docs/wspr-ui-design.md: WSPR asks "what
  * fraction of slots", never "transmit now". 0 is a legitimate state - enabled
  * but silent - while setting up. */
@@ -158,6 +162,261 @@ static void dial_changed_cb(lv_event_t *e)
     cat_set_frequency_forced(kBands[i].dial_hz);
 }
 
+/* ---- THE LOWER HALF OF THE LEFT PANEL ------------------------------------
+ *
+ * Everything below the TX buttons answers a question the decode list cannot:
+ * how is the band DOING, rather than what did it just say.
+ *
+ *   BEST DX      - the furthest station this session. WSPR's whole point is
+ *                  how far a few milliwatts got, and that answer otherwise
+ *                  scrolls off the list within a few cycles.
+ *   HISTORY      - stations per cycle, oldest left. A snapshot cannot tell an
+ *                  opening band from a closing one; a row of bars can.
+ *   WSPRNET      - what would be published, and whether it can be.
+ *   BAND HOP     - which bands to rotate through, ticked off.
+ *
+ * All four read state that already exists. None of them measures anything new,
+ * which is deliberate: this is presentation, and the measuring belongs in the
+ * decoder where it can be validated against wsprd.
+ */
+#define EX_X      16
+#define EX_W      (LEFT_W - 32)
+#define EX_DX_Y   322
+#define EX_HIST_Y 404
+#define EX_NET_Y  470
+#define EX_HOP_Y  506
+
+#define HIST_BARS  WSPR_CYCLE_HISTORY
+#define HIST_BAR_W 6
+#define HIST_GAP   1
+#define HIST_H     30
+
+static lv_obj_t *s_lbl_dx;
+static lv_obj_t *s_hist_bar[HIST_BARS];
+static lv_obj_t *s_lbl_net;
+static lv_obj_t *s_hop_cb[16];
+static uint8_t   s_hop_band[16];   /* kBands index behind each checkbox */
+static int       s_hop_n;
+
+static void hop_toggled_cb(lv_event_t *e)
+{
+    lv_obj_t *cb = lv_event_get_target(e);
+    uint16_t mask = 0;
+    for (int i = 0; i < s_hop_n; i++) {
+        if (s_hop_cb[i] && lv_obj_has_state(s_hop_cb[i], LV_STATE_CHECKED))
+            mask |= (uint16_t)(1u << s_hop_band[i]);
+    }
+    (void)cb;
+    settings_set_wspr_hop_mask(mask);
+    /* Hopping is ON exactly when more than one band is ticked. A separate
+     * enable switch would be a second thing to get wrong, and "one band ticked"
+     * already means "stay there" - which is the same as off. */
+    settings_set_wspr_hop_en(__builtin_popcount(mask) > 1);
+}
+
+static lv_obj_t *ex_heading(const char *text, int y)
+{
+    lv_obj_t *l = lv_label_create(s_container);
+    lv_label_set_text(l, text);
+    lv_obj_set_style_text_font(l, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(l, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+    lv_obj_set_pos(l, EX_X, y);
+    return l;
+}
+
+static void build_left_extras(void)
+{
+    /* ---- best DX ---- */
+    ex_heading("BEST DX", EX_DX_Y);
+    s_lbl_dx = lv_label_create(s_container);
+    lv_label_set_text(s_lbl_dx, "-");
+    lv_obj_set_style_text_font(s_lbl_dx, &lv_font_montserrat_22, 0);
+    lv_obj_set_style_text_color(s_lbl_dx, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+    lv_obj_set_width(s_lbl_dx, EX_W);
+    lv_obj_set_pos(s_lbl_dx, EX_X, EX_DX_Y + 22);
+
+    /* ---- cycle history ---- */
+    ex_heading("STATIONS PER CYCLE", EX_HIST_Y);
+    for (int i = 0; i < HIST_BARS; i++) {
+        lv_obj_t *b = lv_obj_create(s_container);
+        lv_obj_remove_style_all(b);
+        lv_obj_set_size(b, HIST_BAR_W, 2);
+        lv_obj_set_pos(b, EX_X + i * (HIST_BAR_W + HIST_GAP),
+                       EX_HIST_Y + 22 + HIST_H - 2);
+        lv_obj_set_style_bg_color(b, lv_color_hex(UI_COLOR_BORDER), 0);
+        lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+        lv_obj_set_style_radius(b, 1, 0);
+        lv_obj_add_flag(b, UI_FLAG_NOT_HOT);
+        s_hist_bar[i] = b;
+    }
+
+    /* ---- wsprnet ---- */
+    s_lbl_net = lv_label_create(s_container);
+    lv_label_set_text(s_lbl_net, "wsprnet: -");
+    lv_obj_set_style_text_font(s_lbl_net, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(s_lbl_net, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+    lv_obj_set_width(s_lbl_net, EX_W);
+    lv_obj_set_pos(s_lbl_net, EX_X, EX_NET_Y);
+
+    /* ---- band hop ---- */
+    ex_heading("BAND HOP", EX_HOP_Y);
+    /* Scrollable, and fixed height on purpose: this bench's QMX offers six
+     * bands but a QMX+ offers eleven, and a list sized for six would run off
+     * the bottom of the panel on the radio that has more of them. */
+    lv_obj_t *hop = lv_obj_create(s_container);
+    lv_obj_set_size(hop, EX_W, MID_H - (EX_HOP_Y + 24) - 6);
+    lv_obj_set_pos(hop, EX_X, EX_HOP_Y + 22);
+    lv_obj_set_style_bg_opa(hop, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(hop, 0, 0);
+    lv_obj_set_style_pad_all(hop, 0, 0);
+    lv_obj_add_flag(hop, UI_FLAG_NOT_HOT);
+
+    qmx_settings_t hs;
+    settings_load_all(&hs);
+    s_hop_n = wspr_bands_available(s_hop_band, (int)sizeof(s_hop_band));
+    for (int i = 0; i < s_hop_n; i++) {
+        lv_obj_t *cb = lv_checkbox_create(hop);
+        lv_checkbox_set_text(cb, kBands[s_hop_band[i]].name);
+        lv_obj_set_style_text_font(cb, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(cb, lv_color_hex(UI_COLOR_TEXT), 0);
+        lv_obj_set_pos(cb, (i % 2) * (EX_W / 2), (i / 2) * 30);
+        if (hs.wspr_hop_mask & (1u << s_hop_band[i]))
+            lv_obj_add_state(cb, LV_STATE_CHECKED);
+        lv_obj_add_event_cb(cb, hop_toggled_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        s_hop_cb[i] = cb;
+    }
+}
+
+/* ---- BAND HOPPING --------------------------------------------------------
+ *
+ * ⛔ THERE IS NO SAFE MOMENT INSIDE A CYCLE TO CHANGE BAND. The capture arms on
+ * the even minute and runs the FULL 120 s, so a dial change at any point during
+ * it corrupts that window - the first half would be one band and the rest
+ * another, and the decoder would be handed something no station transmitted.
+ *
+ * So the hop happens in the last few seconds BEFORE a boundary, which is the
+ * only gap there is: the previous capture has finished and the next has not
+ * armed. Three seconds is comfortably more than a QMX takes to retune and
+ * comfortably less than the gap.
+ *
+ * Hopping is ON exactly when more than one band is ticked - "one band ticked"
+ * already means "stay there", so a separate enable switch would only be a
+ * second thing to get wrong.
+ */
+#define HOP_LEAD_SEC 3
+
+static int64_t s_hop_done_cycle = -1;
+
+static void hop_maybe(void)
+{
+    qmx_settings_t hs;
+    settings_load_all(&hs);
+    if (!hs.wspr_hop_en) return;
+
+    const uint16_t mask = hs.wspr_hop_mask;
+    if (__builtin_popcount(mask) < 2) return;
+
+    const time_t now = time(NULL);
+    if (now < 1600000000) return;                /* clock not set yet */
+    const int64_t next_cycle = (int64_t)(now / 120) + 1;
+    if ((now % 120) < (120 - HOP_LEAD_SEC)) return;
+    if (s_hop_done_cycle == next_cycle) return;  /* already hopped for it */
+
+    /* Next ticked band AFTER the current one, wrapping - so the rotation is the
+     * table's order and an operator can predict where it goes next. */
+    int cur = -1;
+    for (int i = 0; i < N_BANDS; i++)
+        if (kBands[i].dial_hz == hs.wspr_dial_hz) { cur = i; break; }
+
+    int pick = -1;
+    for (int step = 1; step <= N_BANDS; step++) {
+        const int i = (cur < 0 ? 0 : (cur + step) % N_BANDS);
+        if (!(mask & (1u << i))) continue;
+        /* ⚠ A stored mask can name a band this RADIO does not have - the mask
+         * outlives a change of radio, and settings.h says why it is not
+         * silently pruned. Skip it here rather than tuning somewhere the
+         * hardware cannot filter. */
+        int reachable = 0;
+        for (int k = 0; k < s_navail; k++) if (s_avail[k] == i) { reachable = 1; break; }
+        if (!reachable) continue;
+        pick = i;
+        break;
+    }
+    if (pick < 0 || kBands[pick].dial_hz == hs.wspr_dial_hz) {
+        s_hop_done_cycle = next_cycle;
+        return;
+    }
+
+    s_hop_done_cycle = next_cycle;
+    settings_set_wspr_dial_hz(kBands[pick].dial_hz);
+    cat_set_frequency_forced(kBands[pick].dial_hz);
+    if (s_dd_dial) {
+        for (int k = 0; k < s_navail; k++)
+            if (s_avail[k] == pick) { lv_dropdown_set_selected(s_dd_dial, (uint16_t)k); break; }
+    }
+    ESP_LOGI(TAG, "band hop -> %s m (%lu Hz) for the cycle starting in %llds",
+             kBands[pick].name, (unsigned long)kBands[pick].dial_hz,
+             (long long)(120 - (now % 120)));
+}
+
+static void refresh_left_extras(void)
+{
+    hop_maybe();
+
+    /* Best DX. An ACCESSOR, not a snapshot - see wspr_spots.h for why a 10 KB
+     * copy must not land on taskLVGL. */
+    if (s_lbl_dx) {
+        wspr_spot_t dx;
+        char t[64];
+        if (wspr_spots_best_dx(&dx) && dx.km >= 0) {
+            snprintf(t, sizeof(t), "%s  %s\n%ld km  %d dBm",
+                     dx.call, dx.cty[0] ? dx.cty : dx.grid,
+                     (long)dx.km, (int)dx.power_dbm);
+        } else {
+            snprintf(t, sizeof(t), "-");
+        }
+        lv_label_set_text(s_lbl_dx, t);
+    }
+
+    /* Stations per cycle. Scaled to the busiest cycle held rather than to a
+     * fixed ceiling: what matters is the SHAPE - rising or falling - and a fixed
+     * scale would flatten a quiet band into nothing. */
+    {
+        uint8_t h[HIST_BARS];
+        int n = wspr_rx_cycle_history(h, HIST_BARS);
+        int peak = 1;
+        for (int i = 0; i < n; i++) if (h[i] > peak) peak = h[i];
+        for (int i = 0; i < HIST_BARS; i++) {
+            if (!s_hist_bar[i]) continue;
+            /* Oldest at the left, so a partly-filled history grows rightwards
+             * the way the decode list does. */
+            int v = (i < n) ? h[i] : -1;
+            int px = (v <= 0) ? 2 : 2 + (v * (HIST_H - 2)) / peak;
+            lv_obj_set_size(s_hist_bar[i], HIST_BAR_W, px);
+            lv_obj_set_pos(s_hist_bar[i], EX_X + i * (HIST_BAR_W + HIST_GAP),
+                           EX_HIST_Y + 22 + HIST_H - px);
+            uint32_t c = (v < 0)  ? UI_COLOR_BORDER          /* no cycle yet */
+                       : (v == 0) ? 0x553333                 /* heard nothing */
+                                  : UI_COLOR_SUCCESS_BORDER;
+            lv_obj_set_style_bg_color(s_hist_bar[i], lv_color_hex(c), 0);
+        }
+    }
+
+    /* wsprnet. Upload is NOT built yet, and this says so rather than implying
+     * that spots are going somewhere. What it can already report honestly is
+     * how many would be publishable: the rule agreed for that upload is that a
+     * callsign must have been heard more than once, because a real station
+     * transmits again and a false decode does not. */
+    if (s_lbl_net) {
+        char t[64];
+        int rpt = wspr_spots_repeat_calls();
+        int all = wspr_spots_unique_calls();
+        snprintf(t, sizeof(t), "wsprnet: off - %d of %d call%s confirmed",
+                 rpt, all, all == 1 ? "" : "s");
+        lv_label_set_text(s_lbl_net, t);
+    }
+}
+
 static void tx_toggle_cb(lv_event_t *e)
 {
     (void)e;
@@ -185,7 +444,7 @@ static uint32_t  s_wf_seen;
 
 /* First logging in this file: the dial push is the one thing here that
  * silently changes the radio, so it says what it did and why. */
-static const char *TAG = "wspr_view";
+
 
 static int   s_last_spot_count = -1;
 static char  s_last_status[48];
@@ -354,26 +613,27 @@ void wspr_screen_view_init(lv_obj_t *parent)
      * down only if it genuinely does not fit. Same pattern as the bottom bar's
      * version label in ui.c. That way this page matches the others whenever it
      * can, and can never spill into the CALL column when it cannot. */
-    {
-        static const lv_font_t *const kTitleFonts[] = {
-            &lv_font_montserrat_48, &lv_font_montserrat_32,
-            &lv_font_montserrat_28, &lv_font_montserrat_24,
-        };
-        const int budget_px = LEFT_W - 8;
-        const lv_font_t *use = kTitleFonts[0];
-        for (unsigned i = 0; i < sizeof(kTitleFonts) / sizeof(kTitleFonts[0]); i++) {
-            lv_point_t sz;
-            lv_text_get_size(&sz, "MODE: WSPR", kTitleFonts[i], 0, 0,
-                             LV_COORD_MAX, LV_TEXT_FLAG_NONE);
-            use = kTitleFonts[i];
-            if (sz.x <= budget_px) break;
-        }
-        lv_obj_set_style_text_font(s_lbl_title, use, 0);
-    }
+    /* 48, the same as every other mode page, and it DOES NOT FIT in the panel.
+     *
+     * Measured at runtime rather than guessed: "MODE: WSPR" renders about
+     * 336 px at 48 pt against this panel's 320. "MODE: FT8" is one character
+     * shorter, ~302 px, which is exactly why the other pages fit and this one
+     * cannot. Two alternatives were built and rejected by the operator - a
+     * smaller font, and splitting "MODE:" off at 20 so only the name was large.
+     * His call, made with the constraint in front of him: consistency with the
+     * other pages matters more than the overlap, "if it then lap over the wf
+     * window then so be it".
+     *
+     * So it is foregrounded deliberately. The waterfall canvas is created after
+     * this label and LVGL draws siblings in creation order, so without this the
+     * title would be drawn UNDER the waterfall and simply disappear - the
+     * opposite of what was asked for. The overlap is ~24 px into the top-left
+     * corner of the waterfall, which carries the 1350 Hz edge of the window. */
+    lv_label_set_text(s_lbl_title, "MODE: WSPR");
+    lv_obj_set_style_text_font(s_lbl_title, &lv_font_montserrat_48, 0);
     lv_obj_set_style_text_color(s_lbl_title, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
-    lv_obj_set_width(s_lbl_title, LEFT_W - 8);
-    lv_obj_set_style_text_align(s_lbl_title, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(s_lbl_title, 4, 6);
+    lv_obj_set_pos(s_lbl_title, 16, 4);
+    lv_obj_move_foreground(s_lbl_title);
 
     /* The dial, boxed like the FT8 page's preset. Read-only for now: the
      * standard-dial picker is the next piece (see docs/wspr-ui-design.md - a
@@ -410,6 +670,13 @@ void wspr_screen_view_init(lv_obj_t *parent)
             lv_obj_set_style_bg_color(list, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
             lv_obj_set_style_text_color(list, lv_color_hex(UI_COLOR_TEXT), 0);
             lv_obj_set_style_text_font(list, &lv_font_montserrat_24, 0);
+            /* SHOW EVERY BAND WITHOUT SCROLLING. The stock list caps itself
+             * well below what this panel has room for, so a six-entry picker
+             * arrived scrollable for no reason - and a scrollbar on a list that
+             * would fit is a control asking to be fumbled on a touch screen.
+             * Bounded by the pane rather than unbounded, because a QMX+ offers
+             * eleven bands and the list must not run off the bottom. */
+            lv_obj_set_style_max_height(list, MID_H - 90, 0);
         }
     }
     /* Start on the STORED dial, not on entry 0.
@@ -490,6 +757,8 @@ void wspr_screen_view_init(lv_obj_t *parent)
     lv_label_set_text(s_lbl_duty, "Duty 20%");
     lv_obj_set_style_text_font(s_lbl_duty, &lv_font_montserrat_20, 0);
     lv_obj_center(s_lbl_duty);
+
+    build_left_extras();
 
     /* ---------------- right pane, upper: the captured window ---------------- */
     /* RGB565 at display resolution rather than a 205x176 image scaled up:
@@ -649,6 +918,10 @@ static void repaint_waterfall(void)
 void wspr_screen_view_tick(void)
 {
     if (!s_container || lv_obj_has_flag(s_container, LV_OBJ_FLAG_HIDDEN)) return;
+
+    /* After the visibility guard: these read the spot store under its mutex and
+     * walk a 256-entry ring, which is pure cost on a page nobody is looking at. */
+    refresh_left_extras();
 
     /* ---- re-arm triggers, then the pending push ---------------------- */
     {
