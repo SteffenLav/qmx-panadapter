@@ -676,7 +676,22 @@ static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
          * wspr_decode_candidate() is not interruptible, so a check inside it
          * would either do nothing or leave a half-decoded result. */
         int64_t used_ms = (esp_timer_get_time() - t0) / 1000;
-        if (used_ms > WSPR_DECODE_BUDGET_MS) { skipped = ncand - i; break; }
+        if (used_ms > WSPR_DECODE_BUDGET_MS) {
+            /* ⚠ COUNT WHAT WOULD ACTUALLY HAVE BEEN TRIED. In a later pass most
+             * of the remaining candidates are nowhere near a subtracted signal
+             * and would have been passed over for free, so `ncand - i` reports
+             * a loss that was never going to happen - it read as "13 skipped"
+             * where the real number was a handful. Reporting a cut honestly is
+             * the whole reason this line distinguishes the passes at all. */
+            for (int j = i; j < ncand; j++) {
+                if (pass == 0) { skipped++; continue; }
+                for (int k = 0; k < nsubbed; k++)
+                    if (fabs(cands[j].freq_hz - subbed_hz[k]) < WSPR_PASS2_NEAR_HZ) {
+                        skipped++; break;
+                    }
+            }
+            break;
+        }
         set_dec_status("dec %d/%d", i + 1, ncand);
         wspr_decode_result_t r;
         wspr_decode_candidate(pcm, CAP_SAMPLES, cands[i].freq_hz, &r);
