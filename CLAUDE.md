@@ -98,6 +98,21 @@ capture, not after a result looks strange.**
    because `scratchpad/` is gitignored — the most load-bearing diagnostic tool
    in the project was untracked, existed on exactly one disk, and would have
    been lost by a clone onto a new machine. Only pass `-Reset` when the boot itself is the thing under study.
+   ⛔ **AND "NO `-Reset`" IS NOT A GUARANTEE OF PASSIVITY. Opening the port
+   can reset the Tab5 anyway.** Caught 2026-08-27: a standing capture was
+   restarted with no `-Reset` and the device came up with
+   `rst:0x17 (CHIP_USB_UART_RESET)` - the USB-serial peripheral resetting the
+   chip, not a crash, and no panic record. The script never touches DTR/RTS
+   without the switch; .NET's `SerialPort.Open()` evidently drives the lines
+   enough for the P4's auto-reset circuit. **It is NOT deterministic** - an
+   identical restart four hours earlier on the same day left a 41-minute
+   uptime untouched, so it cannot be predicted either way.
+   The cost is never just the reboot: a warm reset with the radio attached is
+   the documented **#74** trigger, so that restart wedged the QMX and threw
+   away 4 h 17 m of accumulated in-RAM WSPR spots. **Treat restarting a
+   capture as an action that may reboot the device and wedge the radio.** Do
+   it when the operator can reach the power switch, not while they are out,
+   and never mid-run on a device that is accumulating something.
 2. **NEVER put `Stop-Process` in the same PowerShell call as the capture.** It
    exits non-zero, PowerShell aborts the rest of the chain, the capture never
    starts, and a zero-byte file gets read as "no crash in the log". This single
