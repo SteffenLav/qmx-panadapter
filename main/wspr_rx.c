@@ -251,7 +251,10 @@ static int64_t now_ms(void)
  * re-derives itself faster than it converges is not adaptive, it is noise. */
 
 static float *s_wf_mag;          /* ROWS*COLS magnitudes, PSRAM, alive per cycle */
-static float  s_wf_floor;        /* median carried from the previous cycle */
+static float  s_wf_floor;        /* rolling per-row noise floor - see wf_row() */
+/* ~3-4 rows to settle. Faster bands the picture on median noise; slower brings
+ * back the per-cycle step this replaced. */
+#define WF_FLOOR_ALPHA 0.25f
 static int    s_wf_rows_done;
 static kiss_fftr_cfg     s_wf_cfg;
 static kiss_fft_scalar  *s_wf_in;
@@ -375,36 +378,44 @@ static void wf_row(const float *fsrc, const int16_t *isrc, long navail, int row)
         }
     }
 
-    /* ⛔ FIRST CYCLE AFTER BOOT: seed a provisional floor from THIS ROW.
+    /* ---- THE FLOOR IS TRACKED PER ROW, NOT PER CYCLE ------------------
      *
-     * The floor is normally carried from the previous cycle's median, so on the
-     * very first cycle after boot there is none and this branch never ran - the
-     * pane stayed black for a full 120 s and then the whole window appeared at
-     * once. Reported from the bench as "it took like 2 min before anything
-     * happened", which is the wrong first impression for a live display.
+     * ⛔ IT USED TO BE ONE MEDIAN FOR A WHOLE 120 s CYCLE, and that is what
+     * made the carpet visibly change level every couple of minutes: every row
+     * of a cycle was painted against the PREVIOUS cycle's median while it
+     * arrived, then wf_finalise() repainted all ~35 of them against this
+     * cycle's own. So the display moved in one step, two minutes wide, and the
+     * operator could see it happening without knowing why.
      *
-     * One row's 205 bins is a fair floor estimate because WSPR occupies only a
-     * few of them, and it is only ever used to make the row visible NOW -
-     * wf_finalise() repaints this whole cycle against the real median at the
-     * end regardless, so a poor seed self-corrects within the cycle and is
-     * never what the operator ends up judging. */
-    if (s_wf_floor <= 0.0f) {
-        EXT_RAM_BSS_ATTR static float med[WSPR_WF_COLS];   /* cold: first cycle only */
+     * Now each row takes the median of its own 205 bins - robust, because WSPR
+     * occupies only a few of them - and that feeds a short EMA. WF_FLOOR_ALPHA
+     * of 1/4 settles in about three or four rows, which is the operator's own
+     * instinct ("maybe 2-3 of them"): fast enough to follow a band change,
+     * slow enough that row-to-row median noise does not band the picture.
+     *
+     * ⚠ THE TRADE, STATED PLAINLY: a tracked floor normalises away slow
+     * broadband changes, so the carpet no longer shows "the band got noisier" -
+     * it shows what is above the noise, which is what a WSPR display is for.
+     * CLAUDE.md records the panadapter's version of this going too far, where
+     * a fully adaptive per-bin floor made steady carriers FADE OUT over ~60 s.
+     * That cannot happen here because the floor is one number per row taken
+     * from the MEDIAN across frequency: a carrier occupies a handful of the
+     * 205 bins and can never move it. Do not make this per-bin. */
+    {
+        EXT_RAM_BSS_ATTR static float med[WSPR_WF_COLS];
         memcpy(med, magrow, sizeof(med));
         for (int a = 1; a < WSPR_WF_COLS; a++) {
             float v = med[a]; int b = a - 1;
             while (b >= 0 && med[b] > v) { med[b + 1] = med[b]; b--; }
             med[b + 1] = v;
         }
-        float m = med[WSPR_WF_COLS / 2];
+        const float m = med[WSPR_WF_COLS / 2];
         if (m > 0.0f) {
-            s_wf_floor = m;
-            ESP_LOGI(TAG, "waterfall: seeded provisional floor from row %d", row);
+            if (s_wf_floor <= 0.0f) s_wf_floor = m;      /* first row ever */
+            else s_wf_floor += WF_FLOOR_ALPHA * (m - s_wf_floor);
         }
     }
 
-    /* Paint now against the carried floor so the row is visible immediately;
-     * wf_finalise() repaints it against this cycle's own median. */
     if (s_wf_floor > 0.0f) {
         uint8_t bytes[WSPR_WF_COLS];
         for (int c = 0; c < WSPR_WF_COLS; c++)
@@ -416,6 +427,20 @@ static void wf_row(const float *fsrc, const int16_t *isrc, long navail, int row)
 
 /* Definitive pass: this cycle's own median, every row repainted from the
  * magnitudes already computed. No FFTs here - they were done row by row. */
+/* ⛔ A BAND CHANGE INVALIDATES THE FLOOR COMPLETELY, and nothing used to say
+ * so. The floor was carried across the hop, so the first rows on the new band
+ * were painted against the OLD band's noise - and since 30 m in the evening
+ * sits well above 20 m, every bin read far over the stale floor and the top of
+ * the carpet came out saturated red. Photographed on the bench immediately
+ * after a 20 -> 30 m hop.
+ *
+ * Zeroing it makes the next row re-seed from its own median, which is the same
+ * path the very first row after boot takes. */
+void wspr_rx_wf_floor_reset(void)
+{
+    s_wf_floor = 0.0f;
+}
+
 static void wf_finalise(void)
 {
     if (!s_wf || !s_wf_mag) return;
@@ -459,16 +484,14 @@ static void wf_finalise(void)
     ESP_LOGI(TAG, "waterfall: span %.0f-%.0f dB over median; loudest bin +%.1f dB",
              WF_LO_DB, WF_HI_DB, 10.0f * log10f(top / med));
 
-    /* Only THIS cycle's rows are repainted, at the ring positions they already
-     * occupy. Older cycles keep the scale they were drawn with: rescaling them
-     * to a median measured minutes later would silently rewrite history, and a
-     * carpet whose past changes brightness cannot be read for trends. */
+    /* ⛔ NO WHOLE-CYCLE REPAINT ANY MORE. Every row of this cycle used to be
+     * redrawn here against one median, which is exactly what made the carpet
+     * jump a level every two minutes - and it also rewrote rows the operator
+     * had already been reading. Each row now carries the floor that was true
+     * when it arrived (wf_row's rolling EMA), so there is nothing to correct
+     * and history stays as it was drawn. The median below is kept only for the
+     * log line, which is a useful record of where the floor sat. */
     if (s_wf_mtx) xSemaphoreTake(s_wf_mtx, portMAX_DELAY);
-    for (int r = 0; r < s_wf_rows_done; r++) {
-        uint8_t *dst = &s_wf[(size_t)wf_ring_idx(r) * WSPR_WF_COLS];
-        const float *src = &s_wf_mag[(size_t)r * WSPR_WF_COLS];
-        for (int c = 0; c < WSPR_WF_COLS; c++) dst[c] = wf_byte(src[c], med);
-    }
     /* ⛔ The head is advanced HERE as well as in wf_publish(), because on the
      * very first cycle after boot s_wf_floor is still 0, so wf_row() computes
      * magnitudes but publishes nothing - and a head left at the cycle base
@@ -478,7 +501,8 @@ static void wf_finalise(void)
     s_wf_seq++;
     if (s_wf_mtx) xSemaphoreGive(s_wf_mtx);
 
-    s_wf_floor = med;   /* the next cycle paints its live rows against this */
+    /* s_wf_floor is NOT overwritten here: it is a rolling per-row value now and
+     * slamming it to a whole-cycle median would put the two-minute step back. */
 }
 
 /* Whole-window build, used by the simulator, which has the entire window at

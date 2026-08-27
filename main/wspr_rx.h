@@ -46,6 +46,12 @@ bool wspr_feature_enabled(void);
 bool wspr_rx_start(void);
 void wspr_rx_stop(void);
 
+/* Drop the waterfall noise floor. ⛔ CALL THIS ON EVERY BAND CHANGE: the
+ * floor is a rolling estimate of THIS band's noise, and carrying it across a
+ * hop paints the new band against the old one - which came out as a
+ * saturated red block at the top of the carpet after a 20 -> 30 m hop. */
+void wspr_rx_wf_floor_reset(void);
+
 bool wspr_rx_running(void);
 
 /* ---- the per-cycle waterfall ----

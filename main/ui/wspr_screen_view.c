@@ -170,6 +170,7 @@ static void dial_changed_cb(lv_event_t *e)
     /* Forced: the ordinary setter shares a 200 ms rate limit with the CAT
      * poll, and a band change the operator just asked for must not be the
      * write that gets dropped. */
+    wspr_rx_wf_floor_reset();   /* the new band has its own noise floor */
     cat_set_frequency_forced(kBands[i].dial_hz);
 }
 
@@ -535,6 +536,7 @@ static void hop_maybe(void)
 
     s_hop_done_cycle = next_cycle;
     settings_set_wspr_dial_hz(kBands[pick].dial_hz);
+    wspr_rx_wf_floor_reset();   /* the new band has its own noise floor */
     cat_set_frequency_forced(kBands[pick].dial_hz);
     if (s_dd_dial) {
         for (int k = 0; k < s_navail; k++)
