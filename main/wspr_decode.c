@@ -263,8 +263,68 @@ static void free_baseband(baseband_t *bb)
  * A WSPR transmission is ~6 Hz wide (4 tones x 1.4648 Hz) and f0 is known to
  * ~0.1 Hz, so a cutoff of 50 Hz is enormously generous to the signal while
  * rejecting the neighbours. Windowed sinc, built once. */
-#define LPF_TAPS   256   /* POWER OF TWO on purpose - see the ring below */
-#define LPF_CUT_HZ 50.0
+/* ⭐ 160 TAPS AT 100 Hz, NOT 256 AT 50 - MEASURED ON THE REFERENCE FILES,
+ * NOT DESIGNED ON PAPER AND ASSUMED.
+ *
+ * This filter is ~90 % of mix_decimate, which the device measures at ~1060 ms
+ * per candidate, so its length is the single biggest fixed cost in the
+ * receiver. 256 taps at a 50 Hz cutoff was chosen to be "enormously generous
+ * to the signal", which it is - but generous in the wrong direction, because
+ * it was never sized against what the filter actually has to reject.
+ *
+ * WHAT IT HAS TO REJECT, exactly: decimating 12000 -> 375 Hz folds input
+ * frequency f onto f mod 375. The decoder only ever READS +/-34 Hz of the
+ * result - the four tones live within +/-4.4 Hz, the frequency search adds
+ * +/-1.5, and measure_noise_ref samples out to +/-34. So the only content
+ * that can contaminate a decode is what lands in +/-34 Hz, i.e. the input
+ * bands k*375 +/- 34 for k >= 1: 341-409 Hz, 716-784 Hz, and so on to
+ * Nyquist. Everything from ~40 Hz to ~341 Hz aliases somewhere in the
+ * decimated band that NOTHING READS. That slack is what the old design was
+ * paying for and not using.
+ *
+ * Computed over every folding band to 6 kHz (scratchpad/lpf_design.py mirrors
+ * build_lpf() exactly):
+ *
+ *     taps  cut   droop at 34 Hz   worst alias   cost   stations found
+ *      256   50        -2.17 dB      -65.5 dB    1.00x   23
+ *      160  100        -0.58 dB      -53.6 dB    0.62x   24  (+5B4AHZ)
+ *      152  100        -0.58 dB      -55.9 dB    0.59x   24
+ *      144  100        -0.57 dB      -58.0 dB    0.56x   23  (-PA2PGU)
+ *
+ * ⛔ AND THAT LAST COLUMN IS WHY THIS WAS SWEPT RATHER THAN CALCULATED. On
+ * paper 128 taps at 100 Hz is STRICTLY BETTER than 256 at 50 - less droop AND
+ * better alias rejection at half the cost - and it silently trades PA2PGU for
+ * 5B4AHZ. A filter's response curve does not predict which marginal stations
+ * survive it, because a marginal decode depends on where the aliases land
+ * relative to that particular signal. CLAUDE.md already records PA2PGU's
+ * decode turning on aliasing from 188 Hz away; it is the canary here.
+ *
+ * 152 is the cliff: at 144 PA2PGU goes. 160 is deliberately ONE STEP BACK from
+ * it, because 5 % of a filter is a poor price for standing on an edge that
+ * some unrelated front-end change could push us over.
+ *
+ * The gain is real in both directions: 38 % less work, and FOUR TIMES LESS
+ * PASSBAND DROOP where the noise reference is sampled - the old filter was
+ * quietly attenuating the +/-10..34 Hz noise samples by up to 2.2 dB, biasing
+ * the measured floor DOWN and every reported SNR up. Reported SNRs drop by
+ * about 1 dB as a result, which is the more honest number.
+ *
+ * ⚠ The +/-34 Hz figure is a CONTRACT WITH measure_noise_ref(). If its offset
+ * table ever reaches further out, this filter has to be re-checked against the
+ * new number - the analysis above is only valid for what the decoder reads. */
+/* ⛔ THE RING IS A POWER OF TWO; THE TAP COUNT NEED NOT BE, AND USED TO BE
+ * FORCED TO MATCH IT. The ring index is masked (`& (LPF_RING - 1)`) because a
+ * `% 255` here was measured at ~40 s per candidate - an integer division per
+ * tap, 11.5 M times. That constraint belongs to the RING, not to the filter
+ * length, and tying them together left only 256 or 64 reachable when the right
+ * answer was in between. Keep LPF_RING a power of two and >= LPF_TAPS. */
+#ifndef LPF_TAPS
+#define LPF_TAPS   160
+#endif
+#define LPF_RING   256
+#ifndef LPF_CUT_HZ
+#define LPF_CUT_HZ 100.0
+#endif
 
 static float  s_lpf[LPF_TAPS];
 static int    s_lpf_ready;
@@ -334,7 +394,7 @@ static int mix_decimate(const int16_t *samples, long n, double f0, baseband_t *b
      * like it could. Kept static rather than local because 2 KB on a task that
      * already reserves a 16 KB frame is not free, and kept internal rather than
      * PSRAM because the inner loop reads it ~11.5 M times per candidate. */
-    static float hi[LPF_TAPS], hq[LPF_TAPS];
+    static float hi[LPF_RING], hq[LPF_RING];
     memset(hi, 0, sizeof(hi));
     memset(hq, 0, sizeof(hq));
     int hp = 0;
@@ -345,7 +405,7 @@ static int mix_decimate(const int16_t *samples, long n, double f0, baseband_t *b
         const float x = samples[idx] * (1.0f / 32768.0f);
         hi[hp] = x * ore;
         hq[hp] = x * oim;
-        hp = (hp + 1) & (LPF_TAPS - 1);
+        hp = (hp + 1) & (LPF_RING - 1);
 
         if ((idx & (LO_RESEED - 1)) == (LO_RESEED - 1)) {
             /* Exact re-seed, not a rescale - see the note above. */
@@ -376,11 +436,15 @@ static int mix_decimate(const int16_t *samples, long n, double f0, baseband_t *b
              * double version and told me nothing, because it has neither
              * problem. */
             float ai = 0.0f, aq = 0.0f;
-            int r = hp;
+            /* Oldest of the LPF_TAPS samples still in the ring. With
+             * LPF_TAPS == LPF_RING this is just hp; with a shorter filter the
+             * read has to start LPF_TAPS behind the write pointer, or the
+             * coefficients line up against the wrong samples. */
+            int r = (hp + LPF_RING - LPF_TAPS) & (LPF_RING - 1);
             for (int k = 0; k < LPF_TAPS; k++) {
                 ai += s_lpf[k] * hi[r];
                 aq += s_lpf[k] * hq[r];
-                r = (r + 1) & (LPF_TAPS - 1);
+                r = (r + 1) & (LPF_RING - 1);
             }
             if (o < out_n) { bb->i[o] = ai; bb->q[o] = aq; o++; }
             cnt = 0;

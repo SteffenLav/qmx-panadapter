@@ -92,8 +92,13 @@ int main(int argc, char **argv)
                i, cands[i].freq_hz, (double)cands[i].comb_score,
                r.sync_score, r.cycles, !r.ok ? "rejected" : (rej ? "GUARDED " : "DECODED "));
         if (r.ok) {
-            printf(" '%s' '%s' %d dBm agree=%.3f/%.3f",
-                   r.callsign, r.grid, r.power_dbm, r.agree_hard, r.agree_soft);
+            /* SNR and drift printed too: a front-end change (the decimation
+             * filter, the noise reference) can leave the station SET untouched
+             * while moving what we report about each one, and the station list
+             * alone would not show it. */
+            printf(" '%s' '%s' %d dBm snr=%+3d drift=%+d agree=%.3f/%.3f",
+                   r.callsign, r.grid, r.power_dbm, (int)r.snr_db, (int)r.drift_hz,
+                   r.agree_hard, r.agree_soft);
             if (rej) guarded++;
             else {
                 decoded++;
