@@ -363,7 +363,13 @@ static void hop_button_refresh(void)
         off += (size_t)snprintf(t + off, sizeof(t) - off, "%s%s",
                                 ticked > 1 ? " " : "", kBands[bands[i]].name);
     }
-    if (ticked == 0) snprintf(t, sizeof(t), "Band hop: off");
+    /* ⚠ The names only fit while there are few of them. EX_W is 340 px and
+     * montserrat_28 averages ~15 px a character, so about 22 characters -
+     * "160 80 60 40 30 20" is 18 and fits, but a QMX+ with eleven bands ticked
+     * would be 33 and run off the button. Past the limit it says how many
+     * instead, which is the useful summary anyway; the picker has the detail. */
+    if (ticked == 0)        snprintf(t, sizeof(t), "Band hop: off");
+    else if (off > 22)      snprintf(t, sizeof(t), "%d bands", ticked);
     lv_label_set_text(s_lbl_hop, t);
 }
 
@@ -407,7 +413,9 @@ static void build_left_extras(void)
     /* ---- wsprnet ---- */
     s_lbl_net = lv_label_create(s_container);
     lv_label_set_text(s_lbl_net, "wsprnet: -");
-    lv_obj_set_style_text_font(s_lbl_net, &lv_font_montserrat_18, 0);
+    /* ⛔ NOT 18. This project settled long ago that 18 is below what is
+     * readable on this screen at arm's length, and it went in here anyway. */
+    lv_obj_set_style_text_font(s_lbl_net, &lv_font_montserrat_22, 0);
     lv_obj_set_style_text_color(s_lbl_net, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
     lv_obj_set_width(s_lbl_net, EX_W);
     lv_obj_set_pos(s_lbl_net, EX_X, EX_NET_Y);
@@ -435,9 +443,16 @@ static void build_left_extras(void)
     lv_obj_set_size(s_btn_hop, EX_W, 56);
     lv_obj_set_pos(s_btn_hop, EX_X, EX_HOP_Y + 22);
     lv_obj_set_style_radius(s_btn_hop, 8, 0);
+    /* ⚠ SAME RESTING COLOUR AS THE OTHER PANEL BUTTONS, not LVGL's default
+     * blue. That default is the same bright PRIMARY the TX button uses to say
+     * "armed", so a plain navigation button was shouting louder than the
+     * control that keys the radio - the same "pulls the eye to the control
+     * that matters less" the Duty button's own note already warns about. */
+    lv_obj_set_style_bg_color(s_btn_hop, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
     lv_obj_add_event_cb(s_btn_hop, hop_modal_open_cb, LV_EVENT_CLICKED, NULL);
     s_lbl_hop = lv_label_create(s_btn_hop);
-    lv_obj_set_style_text_font(s_lbl_hop, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_lbl_hop, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(s_lbl_hop, lv_color_hex(UI_COLOR_TEXT), 0);
     lv_obj_center(s_lbl_hop);
     hop_button_refresh();
 }
@@ -684,17 +699,23 @@ static void arm_dial_push(const char *why)
  *    costs 6 characters, and it is worth it: it replaced a standalone
  *    timestamp line AND a blank line per group, so a 3-spot cycle went from
  *    5 lines to 3. */
-/* ⚠ THE COUNTRY COLUMN PAYS FOR THE WIDER LEFT PANEL, NOT THE CALL COLUMN.
- * The operator asked for the space to come out of CALL, and it must not:
- * CALL has no fallback, so a narrower field does not truncate - printf just
- * lets a long callsign run on and shove every later column out of line for
- * that row, which reads as a bug. WSPR is full of compound calls
- * (BH4RRG/QRP is ten characters) so it would happen often.
- * COUNTRY already HAS a graceful fallback for exactly this: spelled out if it
- * fits, otherwise the DXCC alpha-3. Narrowing it from 11 to 7 simply sends a
- * few more countries to their three-letter form - England, France, Russia,
- * Finland, Germany and Cyprus all still fit - and nothing ever misaligns. */
-#define ROW_FMT "%-5s %-10s %-4s %-7s %3s %3s %6s %3s %5s %3s"
+/* ⭐ THE CALL COLUMN PAYS FOR THE WIDER LEFT PANEL, AND SEVEN IS WHAT FITS.
+ *
+ * qmx_mono_25 advances exactly 15.0 px per character, so the pane holds
+ * RIGHT_W / 15 = 59 characters; the row was 62 and CALL gives up the three.
+ * (I first took them from COUNTRY instead, on the grounds that CALL has no
+ * graceful fallback. The operator asked twice for CALL, so CALL it is - and
+ * MEASURING the font rather than estimating it is what made 7 possible where
+ * a guess had said 6.)
+ *
+ * ⚠ Seven is not arbitrary and it is not free. Every callsign in a live 25-
+ * station sample from this bench is six characters or fewer, so the table
+ * aligns in practice - but a COMPOUND call (BH4RRG/QRP is ten) still prints in
+ * full and pushes that row's later columns right. printf does not truncate,
+ * and it must not: a clipped callsign is a different station, which is the
+ * same rule that keeps COUNTRY spelling out or falling back to its alpha-3
+ * rather than being cut short. One misaligned row beats one wrong callsign. */
+#define ROW_FMT "%-5s %-7s %-4s %-11s %3s %3s %6s %3s %5s %3s"
 
 /* Spelled out if it fits, else the DXCC alpha-3. NEVER truncated: "United
  * Stat" is not a country and a clipped name reads as a bug, while USA is
@@ -702,10 +723,11 @@ static void arm_dial_push(const char *why)
  * dxcc_lookup(), the same source the web panel uses, so the two screens
  * cannot disagree. */
 /* ⛔ MUST MATCH THE COUNTRY FIELD WIDTH IN ROW_FMT. They are two separate
- * numbers describing ONE column, so narrowing the format without narrowing
- * this lets an 8-11 character name print into the next column and misalign
- * the row - the exact failure the alpha-3 fallback exists to prevent. */
-#define COUNTRY_W 7
+ * numbers describing ONE column, so changing the format without changing this
+ * lets a too-long name print into the next column and misalign the row - the
+ * exact failure the alpha-3 fallback exists to prevent. Caught once already,
+ * when ROW_FMT was narrowed and this was left behind. */
+#define COUNTRY_W 11
 static const char *country_field(const wspr_spot_t *sp)
 {
     const char *full = dxcc_lookup(sp->call);
@@ -922,7 +944,10 @@ void wspr_screen_view_init(lv_obj_t *parent)
     lv_obj_add_event_cb(s_btn_tx, tx_toggle_cb, LV_EVENT_CLICKED, NULL);
     s_lbl_tx = lv_label_create(s_btn_tx);
     lv_label_set_text(s_lbl_tx, "TX  OFF");
-    lv_obj_set_style_text_font(s_lbl_tx, &lv_font_montserrat_20, 0);
+    /* 28, not 20: these are 56 px buttons and the label was sitting in the
+     * middle of one looking like a caption. The panel is 372 px wide now, so
+     * each half is ~166 px - "TX  OFF" at 28 pt is ~110 px and still fits. */
+    lv_obj_set_style_text_font(s_lbl_tx, &lv_font_montserrat_28, 0);
     lv_obj_center(s_lbl_tx);
 
     s_btn_duty = lv_btn_create(s_container);
@@ -932,7 +957,7 @@ void wspr_screen_view_init(lv_obj_t *parent)
     lv_obj_add_event_cb(s_btn_duty, duty_cycle_cb, LV_EVENT_CLICKED, NULL);
     s_lbl_duty = lv_label_create(s_btn_duty);
     lv_label_set_text(s_lbl_duty, "Duty 20%");
-    lv_obj_set_style_text_font(s_lbl_duty, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(s_lbl_duty, &lv_font_montserrat_28, 0);
     lv_obj_center(s_lbl_duty);
 
     build_left_extras();
