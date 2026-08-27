@@ -223,6 +223,16 @@ window, mostly noise floor. It is set **below the weakest real decode observed
 (0.0815)** - it is a cost gate and must never be the reason a station is
 missed. `wsprd` gates the same quantity at 0.10.
 
+> ⚠ **This gate was written, measured, and then LOST** - reverted along with a
+> failed experiment in the same file - while this document and a commit message
+> both went on describing it. One flash therefore ran without it, and a device
+> log reading `cycles=0 rejected` was read as "the gate did its job" when the
+> candidate had in fact run the whole search and up to nine Fano attempts. The
+> conclusion drawn from that reading ("the fixed cost is everything") was
+> unfounded. Check that a thing is in the file before reasoning about what it
+> did, and prefer a measurement the device emits over an inference about which
+> code ran.
+
 That still leaves the fixed cost - `mix_decimate()` plus the coarse start-time
 search - dominating, and that is the next thing to attack. It is untouched by
 this work, and it was already the limiting factor.

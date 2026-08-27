@@ -618,9 +618,17 @@ static void decode_one_window(const int16_t *pcm, int64_t cycle_utc)
          * "0 decodes" cannot distinguish "nothing was on the air" from
          * "the search looked in the wrong place" from "the audio was
          * wrong" - and those need completely different fixes. */
-        ESP_LOGI(TAG, "  cand %d: f=%.2f Hz score=%.3g cycles=%u %s",
+        /* The phase breakdown is on EVERY candidate, decoded or not, because
+         * the cost is what limits how much of the band gets looked at - the
+         * budget fits nine candidates of twenty - and every attempt to reason
+         * about where it goes from first principles has been wrong by orders
+         * of magnitude. The host cannot measure it either: it has a hardware
+         * double FPU and fast RAM where this board has neither. */
+        ESP_LOGI(TAG, "  cand %d: f=%.2f Hz score=%.3g cycles=%u %s"
+                      " [mix %.0f + coarse %.0f + curve %.0f + dec %.0f ms]",
                  i, cands[i].freq_hz, (double)cands[i].comb_score,
-                 r.cycles, r.ok ? "DECODED" : "rejected");
+                 r.cycles, r.ok ? "DECODED" : "rejected",
+                 r.ms_mix, r.ms_coarse, r.ms_curve, r.ms_decode);
         if (!r.ok) continue;
 
         /* Both guards are MEASURED here whatever is enforced, so an

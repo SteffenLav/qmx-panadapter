@@ -104,6 +104,21 @@ typedef struct {
      */
     float agree_hard;
     float agree_soft;
+
+    /* ---- WHERE THE TIME WENT ------------------------------------------
+     *
+     * ⛔ MEASURED, BECAUSE EVERY GUESS ABOUT THIS HAS BEEN WRONG. A decode
+     * costs ~11 s on the device and the budget only fits nine of them, so the
+     * cost is the thing standing between the receiver and the rest of the
+     * band - and reasoning about it from MAC counts gave answers two orders of
+     * magnitude out. It is also not measurable on the host, which has a
+     * hardware double FPU and fast RAM where this board has neither.
+     *
+     * Milliseconds, filled on every call, zero if the phase did not run. */
+    float ms_mix;      /* mix + decimate: one sweep of the whole capture */
+    float ms_coarse;   /* coarse + fine start-time search */
+    float ms_curve;    /* sync-vs-frequency curve and its refinement */
+    float ms_decode;   /* the Fano attempts, including agreement scoring */
 } wspr_decode_result_t;
 
 /* Try to decode a WSPR transmission near candidate frequency f0_hz within

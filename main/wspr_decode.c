@@ -4,6 +4,20 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+/* Phase timing only. This file is deliberately free of ESP dependencies so the
+ * host harnesses can link the real decoder, hence the guard: on the device the
+ * microsecond timer, on a host whatever clock() offers. Nothing else here may
+ * follow this precedent without the same justification. */
+#if defined(ESP_PLATFORM)
+#include "esp_timer.h"
+static int64_t wspr_now_us(void) { return esp_timer_get_time(); }
+#else
+#include <time.h>
+static int64_t wspr_now_us(void) {
+    return (int64_t)((double)clock() * (1000000.0 / (double)CLOCKS_PER_SEC));
+}
+#endif
+
 #include "fft/kiss_fftr.h" /* ft8_lib's component INCLUDE_DIRS is its own root
                              ("."), not fft/ specifically - matters once this
                              file is built as part of the real firmware
@@ -925,8 +939,11 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
     /* Everything below works in DECIMATED samples. The start-time search is
      * where the cost lives - ~119 correlations per candidate - so it is the
      * part that had to move off the 12 kHz stream. */
+    const int64_t t_start = wspr_now_us();
     baseband_t bb;
     if (!mix_decimate(samples, n, f0_hz, &bb)) { free_baseband(&bb); return; }
+    const int64_t t_mix = wspr_now_us();
+    result->ms_mix = (float)((t_mix - t_start) / 1000.0);
 
     tone_tw_t tw;
     build_tone_tw(&tw, 0.0);
@@ -965,6 +982,46 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
     }
     best_dt = refine_dt(&bb, &tw, best_dt, coarse_step, fine_step,
                         slack_dec, tp, &best_score);
+    const int64_t t_coarse = wspr_now_us();
+    result->ms_coarse = (float)((t_coarse - t_mix) / 1000.0);
+
+    /* ---- STOP HERE IF NOTHING IS SYNCED --------------------------------
+     *
+     * ⚠ THIS GATE WAS WRITTEN, MEASURED, AND THEN LOST - reverted along with a
+     * failed experiment in the same file - while the commit message and the
+     * design note both went on describing it. So for one flash the device ran
+     * WITHOUT it, and a log line reading `cycles=0 rejected` was read as "the
+     * gate did its job" when in fact the candidate had run the entire search
+     * and up to nine Fano attempts. Check that a thing is in the file before
+     * reasoning about what it did.
+     *
+     * What it does: everything below - the frequency curve, per-hypothesis
+     * start times, the Fano attempts - is spent on candidates that are mostly
+     * NOISE. The comb finder ranks by energy, so in a 300 Hz window most of
+     * the 20 candidates are the loudest patches of noise floor. The normalised
+     * sync correlation separates them cheaply, which is the second reason it
+     * had to stop being an unnormalised power sum: an absolute threshold is
+     * only meaningful on a scale-free metric.
+     *
+     * Measured over the four reference WAVs: 133 candidates that decoded
+     * nothing against 28 that did, the weakest real decode scoring 0.0815 and
+     * more than half the rejects below it. wsprd gates the same quantity at
+     * 0.10; this sits below our own weakest observed decode rather than on
+     * wsprd's figure, because the two front ends are not identical.
+     *
+     * ⚠ A COST GATE, NOT A QUALITY GATE. It must never be the reason a station
+     * is missed - re-measure it after any front-end change. */
+#ifndef WSPR_MIN_SYNC
+#define WSPR_MIN_SYNC 0.075
+#endif
+    if (best_score < WSPR_MIN_SYNC) {
+        free_baseband(&bb);
+        result->sync_score = best_score;
+        result->best_dt_samples = best_dt * WSPR_DECIM;
+        result->freq_hz = f0_hz;
+        return;   /* ms_curve and ms_decode stay 0 - the gate is why */
+    }
+
 
     /* ---- FINE FREQUENCY, THEN THE START TIME AGAIN --------------------
      *
@@ -1068,9 +1125,13 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
      * Cost is paid only when needed: the loop stops as soon as an answer
      * agrees convincingly, which is the common case for anything but the
      * weakest signals. */
+    const int64_t t_curve = wspr_now_us();
+    result->ms_curve = (float)((t_curve - t_coarse) / 1000.0);
+
     wspr_decode_result_t best;
     memset(&best, 0, sizeof(best));
     best.agree_soft = -1e9f;
+    unsigned int worst_cycles = 0;
 
     for (int h = 0; h < nhyp; h++) {
         double df = hyp_df[h];
@@ -1092,12 +1153,20 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
             int got = (path == 0) ? try_soft_decision(tp, &r)
                     : (path == 1) ? try_hard_decision(tp, &r)
                                   : try_weighted_decision(tp, &r);
+            /* ⚠ KEEP THE CYCLE COUNT EVEN WHEN NOTHING IS ACCEPTED. `r` is
+             * discarded on failure, and with it went the only number that says
+             * HOW the attempt failed - so every rejected candidate logged
+             * `cycles=0`, which reads like "the search never ran" and is what
+             * led to one wrong conclusion already. Worst case across the
+             * attempts is the informative one. */
+            if (r.cycles > worst_cycles) worst_cycles = r.cycles;
             if (got && r.agree_soft > best.agree_soft) best = r;
         }
         if (best.ok && best.agree_soft >= WSPR_AGREE_CONFIDENT) break;
     }
 
     free_baseband(&bb);
+    const float ms_decode = (float)((wspr_now_us() - t_curve) / 1000.0);
 
     /* WSPR has no CRC, so this is where a wrong-but-valid codeword is caught.
      * Nothing above can do it: every other check tests the MESSAGE against
@@ -1108,13 +1177,20 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
     }
 
     if (best.ok) {
-        double sync_keep = result->sync_score;
+        /* `best` came from one attempt, so it carries none of the phase
+         * timings - those belong to the candidate, not to the attempt. */
+        const double sync_keep = result->sync_score;
+        const float mix = result->ms_mix, coarse = result->ms_coarse,
+                    curve = result->ms_curve;
         *result = best;
         result->sync_score = sync_keep;
+        result->ms_mix = mix; result->ms_coarse = coarse; result->ms_curve = curve;
     } else {
         result->best_dt_samples = best_dt * WSPR_DECIM;
         result->freq_hz = f0_hz + best_df;
+        result->cycles = worst_cycles;
     }
+    result->ms_decode = ms_decode;
 }
 
 /* ---- false-decode guards (see wspr_decode.h for the evidence) ---------- */
