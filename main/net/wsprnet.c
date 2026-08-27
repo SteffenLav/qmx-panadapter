@@ -45,6 +45,8 @@
 #include "esp_app_desc.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
+#include "esp_attr.h"
 
 #include "wspr_spots.h"
 #include "wspr_rx.h"
@@ -64,6 +66,34 @@ static const char *TAG = "wsprnet";
 #define PERIOD_MS  60000   /* once a minute: a cycle is two, so never behind */
 
 static char s_status[80] = "off";
+
+/* ⛔ THE WORK AREA IS STATIC, NOT ON THE STACK, AND THAT IS NOT AN
+ * OPTIMISATION - IT IS WHY THIS TASK STOPPED CRASHING.
+ *
+ * First version put all of it on a 5 KB task stack: qmx_settings_t is 844
+ * bytes, wspr_spot_t[16] is 896, the query is 512 and the URL another 530 -
+ * and then esp_http_client_perform() runs on top of what is left. It took a
+ * Stack protection fault in the wsprnet task at 905 s, on the first real
+ * upload pass. CLAUDE.md states the rule plainly and I did not apply it:
+ * "before adding a local bigger than a couple of hundred bytes, identify which
+ * task the code runs on".
+ *
+ * ⚠ The dry run had the SAME locals on the HTTPD task, which is a second
+ * fault that had not fired yet - it is called straight from a request handler.
+ * One shared work area fixes both.
+ *
+ * The mutex is required, not decorative: the uploader task and an /api/cmd dry
+ * run genuinely can run at once, and they would otherwise be writing the same
+ * buffers. */
+typedef struct {
+    qmx_settings_t cfg;
+    wspr_spot_t    sp[BATCH_MAX];
+    char           q[512];
+    char           url[512 + sizeof(POST_URL) + 2];
+} work_t;
+
+static EXT_RAM_BSS_ATTR work_t   s_work;
+static SemaphoreHandle_t         s_work_mtx;
 
 const char *wsprnet_status(void) { return s_status; }
 
@@ -116,11 +146,10 @@ static int build_query(char *out, size_t n, const wspr_spot_t *sp,
 
 static bool post_one(const char *query)
 {
-    /* Sized so the compiler can see the query can never be truncated into it:
-     * the query buffer is 512, and a silently clipped URL would publish a
-     * MALFORMED spot rather than fail, which is the worse outcome. */
-    char url[512 + sizeof(POST_URL) + 2];
-    snprintf(url, sizeof(url), "%s?%s", POST_URL, query);
+    /* The caller holds s_work_mtx; this borrows its URL buffer rather than
+     * putting another half-kilobyte on the stack. */
+    char *url = s_work.url;
+    snprintf(url, sizeof(s_work.url), "%s?%s", POST_URL, query);
 
     esp_http_client_config_t cfg = {
         .url = url,
@@ -145,23 +174,30 @@ static bool post_one(const char *query)
 
 bool wsprnet_dry_run(void)
 {
-    qmx_settings_t cfg;
-    settings_load_all(&cfg);
-
-    wspr_spot_t sp[BATCH_MAX];
-    const int n = wspr_spots_pending_upload(sp, BATCH_MAX);
-    if (n <= 0) { ESP_LOGW(TAG, "dry run: nothing publishable yet"); return false; }
-
-    char q[512];
-    /* The OLDEST eligible one - the next that would actually go. */
-    if (build_query(q, sizeof(q), &sp[n - 1], &cfg) <= 0) {
-        ESP_LOGW(TAG, "dry run: the oldest publishable spot cannot be described "
-                      "(callsign/grid unset, or an unmeasured field)");
+    /* Called from an httpd request handler, so it must not put the work area
+     * on that task's stack either - see the note beside s_work. */
+    if (!s_work_mtx || xSemaphoreTake(s_work_mtx, pdMS_TO_TICKS(2000)) != pdTRUE) {
+        ESP_LOGW(TAG, "dry run: uploader busy, try again");
         return false;
     }
-    ESP_LOGW(TAG, "dry run, NOT SENT:");
-    ESP_LOGW(TAG, "  %s?%s", POST_URL, q);
-    return true;
+    settings_load_all(&s_work.cfg);
+
+    const int n = wspr_spots_pending_upload(s_work.sp, BATCH_MAX);
+    bool ok = false;
+    if (n <= 0) {
+        ESP_LOGW(TAG, "dry run: nothing publishable yet");
+    } else if (build_query(s_work.q, sizeof(s_work.q),
+                           &s_work.sp[n - 1], &s_work.cfg) <= 0) {
+        /* The OLDEST eligible one - the next that would actually go. */
+        ESP_LOGW(TAG, "dry run: the oldest publishable spot cannot be described "
+                      "(callsign/grid unset, or an unmeasured field)");
+    } else {
+        ESP_LOGW(TAG, "dry run, NOT SENT:");
+        ESP_LOGW(TAG, "  %s?%s", POST_URL, s_work.q);
+        ok = true;
+    }
+    xSemaphoreGive(s_work_mtx);
+    return ok;
 }
 
 static void wsprnet_task(void *arg)
@@ -170,45 +206,60 @@ static void wsprnet_task(void *arg)
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(PERIOD_MS));
 
-        qmx_settings_t cfg;
-        settings_load_all(&cfg);
+        if (!s_work_mtx ||
+            xSemaphoreTake(s_work_mtx, pdMS_TO_TICKS(5000)) != pdTRUE) continue;
 
-        if (!cfg.wspr_net_en) { snprintf(s_status, sizeof(s_status), "off"); continue; }
-        if (!cfg.my_callsign[0] || !cfg.my_grid[0]) {
+        /* Everything below works out of s_work. NOTHING large goes on this
+         * stack - see the note beside s_work for what happened when it did. */
+        settings_load_all(&s_work.cfg);
+
+        int sent = 0, n = 0;
+        if (!s_work.cfg.wspr_net_en) {
+            snprintf(s_status, sizeof(s_status), "off");
+        } else if (!s_work.cfg.my_callsign[0] || !s_work.cfg.my_grid[0]) {
             snprintf(s_status, sizeof(s_status), "needs callsign and grid");
-            continue;
+        } else if (net_quiet_active()) {
+            /* Same courtesy every other feed on this board observes: stand
+             * down while something that needs the link more is using it. */
+        } else {
+            n = wspr_spots_pending_upload(s_work.sp, BATCH_MAX);
+            if (n <= 0) {
+                snprintf(s_status, sizeof(s_status), "on - nothing new to publish");
+            } else {
+                /* Oldest first, so a truncated batch leaves the NEWEST for
+                 * next time rather than stranding the oldest forever. */
+                for (int i = n - 1; i >= 0; i--) {
+                    if (build_query(s_work.q, sizeof(s_work.q),
+                                    &s_work.sp[i], &s_work.cfg) <= 0) continue;
+                    if (!post_one(s_work.q)) break;   /* stop on first failure */
+                    wspr_spots_mark_sent(s_work.sp[i].cycle_utc, s_work.sp[i].call);
+                    sent++;
+                    vTaskDelay(pdMS_TO_TICKS(500));   /* be a polite client */
+                }
+                if (sent) ESP_LOGW(TAG, "published %d spot(s)", sent);
+                snprintf(s_status, sizeof(s_status),
+                         "on - %d published, %d waiting", sent, n - sent);
+            }
         }
-        /* Same courtesy every other feed on this board observes: stand down
-         * while something that needs the link more is using it (an OTA). */
-        if (net_quiet_active()) continue;
 
-        wspr_spot_t sp[BATCH_MAX];
-        const int n = wspr_spots_pending_upload(sp, BATCH_MAX);
-        if (n <= 0) {
-            snprintf(s_status, sizeof(s_status), "on - nothing new to publish");
-            continue;
-        }
-
-        int sent = 0;
-        /* Oldest first, so a truncated batch leaves the NEWEST for next time
-         * rather than stranding the oldest forever. */
-        for (int i = n - 1; i >= 0; i--) {
-            char q[512];
-            if (build_query(q, sizeof(q), &sp[i], &cfg) <= 0) continue;
-            if (!post_one(q)) break;          /* stop on the first failure */
-            wspr_spots_mark_sent(sp[i].cycle_utc, sp[i].call);
-            sent++;
-            vTaskDelay(pdMS_TO_TICKS(500));   /* be a polite client */
-        }
-        if (sent) ESP_LOGW(TAG, "published %d spot(s)", sent);
-        snprintf(s_status, sizeof(s_status), "on - %d published, %d waiting",
-                 sent, n - sent);
+        /* ⛔ ONE RELEASE, ON EVERY PATH. The first version returned early from
+         * several branches and would have left the mutex held - which would
+         * have wedged the dry run permanently rather than crashing, i.e. the
+         * quiet kind of broken. */
+        xSemaphoreGive(s_work_mtx);
     }
 }
 
 void wsprnet_init(void)
 {
+    s_work_mtx = xSemaphoreCreateMutex();
+    if (!s_work_mtx) { ESP_LOGE(TAG, "no mutex - uploader not started"); return; }
+
     /* PSRAM stack: background, not latency-critical - the standing rule in
      * util/psram_task.h, and internal RAM is what the OTA verify runs out of. */
-    psram_task_create(wsprnet_task, "wsprnet", 5120, NULL, 2, 0);
+    /* 8192, not 5120. The work area is off the stack now, but
+     * esp_http_client_perform() still needs real room and the first version
+     * took a Stack protection fault here. pskreporter and update_check both
+     * use 6144 for comparable work; the extra is PSRAM and costs nothing. */
+    psram_task_create(wsprnet_task, "wsprnet", 8192, NULL, 2, tskNO_AFFINITY);
 }
