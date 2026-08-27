@@ -139,6 +139,37 @@ static uint8_t naive_reverse8(uint8_t v)
     return r;
 }
 
+/* Every legal power level, round-tripped.
+ *
+ * WHY THIS IS SEPARATE FROM THE TABLE ABOVE: that table covers ten of the
+ * nineteen legal values, and the gap was invisible. Mutating legal_power[2]
+ * from 7 to 8 in wspr_proto.c passed the ENTIRE host suite - so the quantiser
+ * could have been wrong at nine of its nineteen steps with every test green.
+ *
+ * That matters more than a normal coverage hole because the power field is
+ * not internal state: it is transmitted, decoded by everyone else on the
+ * band, and published to wsprnet as a claim about how much power a station
+ * was running. A wrong step is a wrong public number, not a wrong pixel. */
+static void test_all_legal_powers(void)
+{
+    printf("-- 1b. every legal power level --\n");
+    static const int legal[] = { 0, 3, 7, 10, 13, 17, 20, 23, 27, 30,
+                                 33, 37, 40, 43, 47, 50, 53, 57, 60 };
+    int bad = 0;
+    for (size_t i = 0; i < sizeof(legal) / sizeof(legal[0]); i++) {
+        wspr_msg_bytes_t msg;
+        char call_out[7], grid_out[5];
+        int dbm_out;
+        if (!wspr_pack_message("K1ABC", "FN20", legal[i], &msg) ||
+            !wspr_unpack_message(&msg, call_out, grid_out, &dbm_out) ||
+            dbm_out != legal[i]) {
+            printf("  FAIL  %d dBm round-tripped as %d\n", legal[i], dbm_out);
+            bad++; g_fail++;
+        }
+    }
+    if (!bad) printf("  PASS  all 19 legal power levels round-trip exactly\n");
+}
+
 static void test_interleave_self_consistency(void)
 {
     printf("-- 2. interleave self-consistency --\n");
@@ -346,6 +377,7 @@ static void test_input_validation(void)
 int main(void)
 {
     test_pack_unpack_roundtrip();
+    test_all_legal_powers();
     test_interleave_self_consistency();
     test_full_pipeline();
     test_single_bit_error_correction();

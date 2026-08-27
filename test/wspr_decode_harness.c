@@ -7,6 +7,7 @@
  *   gcc -O2 -Wall -I main -I components/ft8_lib \
  *       -o wspr_decode_harness test/wspr_decode_harness.c \
  *       main/wspr_proto.c main/wspr_fano.c main/wspr_decode.c \
+ *       main/wspr_subtract.c \
  *       components/ft8_lib/fft/kiss_fft.c components/ft8_lib/fft/kiss_fftr.c \
  *       -lm && ./wspr_decode_harness
  *
