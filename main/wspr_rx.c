@@ -28,6 +28,7 @@
 #include "storage/settings.h"
 #include "fft/kiss_fftr.h"
 #include "wspr_decode.h"
+#include "wspr_subtract.h"   /* two-pass: take a decoded signal back out */
 #include "wspr_sim.h"
 #include "wspr_tx.h"
 #include "esp_random.h"
@@ -594,17 +595,52 @@ static void dump_window(const int16_t *pcm, uint32_t nsamples, int64_t cycle_utc
  * decoder itself is re-entrant, every FFT config and scratch buffer being
  * malloc'd and freed per call rather than shared. (A shared FFT scratch is
  * exactly what bit the FT8 monitor pool; see CLAUDE.md.) */
-static void decode_one_window(const int16_t *pcm, int64_t cycle_utc)
+/* ---- TWO PASSES, WITH THE FIRST PASS'S SIGNALS TAKEN OUT IN BETWEEN -------
+ *
+ * ⭐ AFFORDABLE ONLY SINCE THE FLOAT CONVERSION. A candidate cost 11.7 s and
+ * the budget fit nine of twenty; it now costs ~2.3 s gated, ~3 s decoded, so a
+ * whole second pass fits inside the same 115 s with room left.
+ *
+ * WHY IT IS WORTH SPENDING THAT ON. Stations sit on top of each other: across
+ * the reference windows, nine of the stations wsprd finds are within 6 Hz of
+ * another. The candidate finder now resolves most of those (it notches comb
+ * sidelobes instead of blanking 5.9 Hz), but a weak station under a strong
+ * neighbour is still hidden by the neighbour, not by the search. Subtracting
+ * what we already decoded is what uncovers it, and it is what wsprd does.
+ *
+ * Host-measured on the four reference WAVs, this recovers DD3MS, G4FBA, W3BI,
+ * PA4JAM and 2E0DLC - all confirmed by wsprd, none reachable in one pass.
+ *
+ * ⚠ THE BUFFER IS MODIFIED IN PLACE, hence the non-const parameter. That is
+ * safe because this slot is handed back to the capture task immediately after
+ * this function returns and is fully overwritten before it is read again - but
+ * it is exactly the kind of assumption that stops being true quietly, so if a
+ * second reader of `pcm` ever appears, this needs its own scratch copy (2.9 MB
+ * of PSRAM) rather than a re-reading of this comment. */
+#define WSPR_PASSES 2
+
+static void decode_one_window(int16_t *pcm, int64_t cycle_utc)
 {
     /* ---- decode ---- */
     int64_t t0 = esp_timer_get_time();
     wspr_freq_candidate_t cands[WSPR_MAX_CANDS];
-    int ncand = wspr_find_candidates(pcm, CAP_SAMPLES, SEARCH_LO_HZ, SEARCH_HI_HZ,
-                                      cands, WSPR_MAX_CANDS);
+    int ncand = 0;
     int decoded = 0;
     int guarded = 0;
     wspr_accepted_t accepted = { 0 };
     int skipped = 0;
+    int pass = 0;
+    int subtracted = 0;
+    int found_in_pass = 0;
+    /* Callsigns already reported this cycle. A station re-decoded after its own
+     * subtraction is the same reception report, not a second one. */
+    char seen[WSPR_MAX_CANDS][7];
+    int nseen = 0;
+
+  next_pass:
+    ncand = wspr_find_candidates(pcm, CAP_SAMPLES, SEARCH_LO_HZ, SEARCH_HI_HZ,
+                                  cands, WSPR_MAX_CANDS);
+    found_in_pass = 0;
     for (int i = 0; i < ncand && s_run; i++) {
         /* ⛔ The budget is checked BEFORE starting a candidate, never mid-way:
          * wspr_decode_candidate() is not interruptible, so a check inside it
@@ -648,7 +684,26 @@ static void decode_one_window(const int16_t *pcm, int64_t cycle_utc)
             continue;
         }
 
+        int dup = 0;
+        for (int k = 0; k < nseen; k++)
+            if (!strcmp(seen[k], r.callsign)) { dup = 1; break; }
+        if (dup) continue;
+        if (nseen < WSPR_MAX_CANDS) snprintf(seen[nseen++], 7, "%s", r.callsign);
+
+        /* Take it out of the audio so the next pass can see underneath it.
+         * Done for EVERY accepted decode including the last pass's - the cost
+         * is one pass over the samples and it keeps the code honest about
+         * which signals are still present. */
+        if (pass + 1 < WSPR_PASSES) {
+            uint8_t tones[WSPR_NSYM];
+            if (wspr_tones_from_message(r.callsign, r.grid, r.power_dbm, tones) &&
+                wspr_subtract(pcm, CAP_SAMPLES, r.freq_hz,
+                              r.best_dt_samples, tones) > 0)
+                subtracted++;
+        }
+
         decoded++;
+        found_in_pass++;
         wspr_accepted_add(&accepted, r.freq_hz);
         /* `agree` is the re-encode score - how well the received audio actually
          * supports this message (wspr_decode.h). It is logged on EVERY decode
@@ -663,14 +718,24 @@ static void decode_one_window(const int16_t *pcm, int64_t cycle_utc)
                  r.agree_hard, r.agree_soft, dnear, would_near, would_slow);
         file_spot(&r, cycle_utc, WSPR_SNR_UNKNOWN);
     }
+    /* Only bother with another pass if this one actually removed something -
+     * re-running the finder over unchanged audio would return the identical
+     * candidates and waste half the budget proving it. */
+    if (++pass < WSPR_PASSES && found_in_pass > 0 && s_run &&
+        (esp_timer_get_time() - t0) / 1000 < WSPR_DECODE_BUDGET_MS) {
+        ESP_LOGI(TAG, "  pass %d: %d signal(s) subtracted, looking underneath",
+                 pass, subtracted);
+        goto next_pass;
+    }
+
     int64_t dec_ms = (esp_timer_get_time() - t0) / 1000;
     /* `skipped` is reported even when zero. A budget that quietly drops the tail
      * of the candidate list is the same invisible ceiling as the old cap of 8,
      * and the whole point of raising that cap was that nothing had ever said so. */
     ESP_LOGW(TAG, "cycle %lld: %d candidate(s), %d decode(s), %d guarded, "
-                  "%d skipped (budget), %lld ms",
+                  "%d skipped (budget), %d pass(es), %d subtracted, %lld ms",
              (long long)cycle_utc, ncand, decoded, guarded, skipped,
-             (long long)dec_ms);
+             pass, subtracted, (long long)dec_ms);
     if (skipped)
         ESP_LOGW(TAG, "cycle %lld: BUDGET CUT %d candidate(s) after %lld ms - "
                       "lower WSPR_MAX_CANDS or make the decode faster",
