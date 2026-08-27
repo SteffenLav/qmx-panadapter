@@ -12,6 +12,7 @@
 #include "ui_theme.h"
 #include "wspr_screen_view.h"
 #include "wspr_spots.h"
+#include "net/wsprnet.h"
 #include "wspr_rx.h"
 #include "cat.h"
 #include "esp_heap_caps.h"
@@ -598,17 +599,26 @@ static void refresh_left_extras(void)
         }
     }
 
-    /* wsprnet. Upload is NOT built yet, and this says so rather than implying
-     * that spots are going somewhere. What it can already report honestly is
-     * how many would be publishable: the rule agreed for that upload is that a
-     * callsign must have been heard more than once, because a real station
-     * transmits again and a false decode does not. */
+    /* ⛔ THIS SAID "off" AS A STRING LITERAL, AND WENT ON SAYING IT AFTER THE
+     * UPLOADER WAS BUILT AND PUBLISHING. The operator watched his own spots
+     * appear on wsprnet.org while this line told him it was switched off. It
+     * was written when upload genuinely did not exist and was honest then;
+     * nothing tied it to the truth afterwards.
+     *
+     * It now asks the uploader. Third time in one day that a thing was added
+     * and its surface left behind (wspr_en on the wrong endpoint, wspr_net_en
+     * missing from /api/settings, and this) - a status line must READ state,
+     * never restate what someone believed when they typed it.
+     *
+     * The confirmed count stays, because it is the part the operator cannot
+     * get anywhere else: how many of the calls heard are eligible under the
+     * heard-more-than-once rule that gates publication. */
     if (s_lbl_net) {
-        char t[64];
-        int rpt = wspr_spots_repeat_calls();
-        int all = wspr_spots_unique_calls();
-        snprintf(t, sizeof(t), "wsprnet: off - %d of %d call%s confirmed",
-                 rpt, all, all == 1 ? "" : "s");
+        char t[96];
+        const int rpt = wspr_spots_repeat_calls();
+        const int all = wspr_spots_unique_calls();
+        snprintf(t, sizeof(t), "wsprnet: %s\n%d of %d call%s confirmed",
+                 wsprnet_status(), rpt, all, all == 1 ? "" : "s");
         lv_label_set_text(s_lbl_net, t);
     }
 }

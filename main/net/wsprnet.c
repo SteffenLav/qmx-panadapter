@@ -234,11 +234,24 @@ static void wsprnet_task(void *arg)
                     if (!post_one(s_work.q)) break;   /* stop on first failure */
                     wspr_spots_mark_sent(s_work.sp[i].cycle_utc, s_work.sp[i].call);
                     sent++;
-                    vTaskDelay(pdMS_TO_TICKS(500));   /* be a polite client */
+                    /* ⚠ 1500 ms, not 500. Roughly half the posts were coming
+                     * back "no response" at 500 ms - the cause is NOT
+                     * established (wsprnet is a busy volunteer service, each
+                     * post opens a fresh connection and so a fresh DNS lookup,
+                     * and this board's WiFi link is not robust), so this is a
+                     * courtesy rather than a diagnosis. It costs nothing: a
+                     * cycle is 120 s and a busy one yields under ten spots. */
+                    vTaskDelay(pdMS_TO_TICKS(1500));
                 }
                 if (sent) ESP_LOGW(TAG, "published %d spot(s)", sent);
+                /* Says what is still owed, because a pass that stops on a
+                 * failure leaves the rest for next time - and "waiting" is the
+                 * honest word for a spot that is neither lost nor sent.
+                 * Nothing is marked sent unless the server accepted it, so a
+                 * failed post costs a minute, never a spot. */
                 snprintf(s_status, sizeof(s_status),
-                         "on - %d published, %d waiting", sent, n - sent);
+                         n - sent > 0 ? "on - %d sent, %d waiting"
+                                      : "on - %d sent", sent, n - sent);
             }
         }
 
