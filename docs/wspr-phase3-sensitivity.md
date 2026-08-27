@@ -244,12 +244,84 @@ this work, and it was already the limiting factor.
 > `WSPR_MIN_SYNC`. **Re-measure all three against `test/wav_reference/wspr/`
 > after any change to the front end.**
 
+
+## Cost, measured on the device (2026-08-27)
+
+The host cannot measure this board - hardware double FPU, fast RAM - so all of
+this comes from the per-candidate phase breakdown the firmware now logs:
+
+    [mix 770 + coarse 1530 + curve 480 + dec 200 ms]
+
+| | before | after |
+|---|---|---|
+| per candidate | 11.7 s | ~2.3 s gated, ~3 s decoded |
+| candidates skipped per cycle | 6-7 of 20 | 0 |
+
+**Every `double` on a path that runs 100,000+ times per candidate was the whole
+problem.** The ESP32-P4's FPU is single-precision, so each one is a
+software-library call. Three places: the tone-power array, `sync_score`'s 648
+square roots per call, and the local oscillator advancing once per input sample
+across all 1.44 M of them. The oscillator is float but **re-seeded exactly**
+every 1024 samples rather than renormalised - float alone is not safe, because
+a rotation applied 1.44 M times accumulates PHASE error and a renormalise only
+fixes MAGNITUDE. That makes it more accurate than what it replaced.
+
+### Two traps, both walked into after writing down the rule
+
+- **`wspr_subtract` called `cos()` and `sin()` per sample** - 5.3 M software
+  double trig calls, **67 seconds per subtracted signal**. A cycle went 58 s to
+  154 s and skipped 17 of 20 candidates, one commit after this document warned
+  about exactly this. Every host test passed. Fixed with the same re-seeded
+  float oscillator; the station list is byte-identical.
+- **The second pass re-scanned the whole band.** Pass 1 used 82 s of the 115 s
+  budget, pass 2 restarted at candidate 0 and was cut after two. Subtraction
+  can only reveal something NEAR a signal it removed - everywhere else the
+  audio is bit-identical, so re-decoding is guaranteed to reach the same answer
+  at full price. A later pass now looks only within 15 Hz of a subtracted
+  signal.
+
+## SNR and drift: the two empty columns
+
+Both printed `--` because nothing had measured them, which was correct - a WSPR
+spot is a reception report and this project does not publish invented numbers.
+
+**SNR**, validated against wsprd over 23 stations: median 1 dB low, stdev
+2.3 dB. No calibration constant; fitting one to 23 points would be fitting to
+our own reference set.
+
+> ⛔ **The obvious method is wrong and hides its own error.** Treating each
+> symbol's three WRONG tones as free noise samples reads 2-4 dB low on weak
+> signals and **23 dB low on the strongest** - and the tell is that the error
+> GROWS WITH SIGNAL STRENGTH, which no noise measurement should do. WSPR is
+> continuous-phase FSK, so every symbol transition sweeps real signal energy
+> into the other three bins; for a strong signal that IS the measurement, and
+> the ratio saturates. Noise is now sampled at 14 offsets clear of the
+> transmission, combined with the **30th percentile, not the median** -
+> contamination is one-sided, and on a crowded band a median is already biased
+> (worth 19 dB on KI7CI alone).
+
+**Drift**, from the transmission's own two halves: if frequency moves linearly
+by d Hz, the first half sits at -d/4 and the second at +d/4, so d = 2(f2 - f1).
+No search needed, because after a decode the transmitted tones are known.
+
+> ⚠ **Weakly validated, and it should stay labelled that way.** All 23 stations
+> agree with wsprd within 1 Hz - but 22 of those are wsprd ZEROS, and only one
+> non-zero case exists in common (PE1JXI +1, exact). What is established is
+> that it does not invent drift and that its noise floor is about 1 Hz. That it
+> reads a LARGE drift correctly is not shown.
+
 ## Not yet verified on hardware
 
-Everything above is measured on the host against recorded audio. It has not run
-on the Tab5. The decoder is the same code either way - `test/wspr_cap_sweep.c`
-links the real `main/wspr_decode.c` - but the timing is not, and timing is what
-the device is short of.
+The DECODE QUALITY figures above are host measurements against recorded audio.
+The COST figures are device measurements. That split is deliberate and it is
+the lesson of the session: the host is the only place decode quality can be
+compared against wsprd on identical audio, and the device is the only place
+timing means anything at all.
+
+Confirmed on the air: the soft path, the agreement check (0.74-0.91 on live
+decodes, against a 0.58 threshold), the frequency search, SNR, and 20 of 20
+candidates inside budget. NOT yet seen firing on the air: the targeted second
+pass, and a large drift.
 
 ## Reproducing
 
