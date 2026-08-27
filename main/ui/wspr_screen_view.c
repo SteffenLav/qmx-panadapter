@@ -1065,10 +1065,26 @@ void wspr_screen_view_tick(void)
     if (n == s_last_spot_count) return;
     s_last_spot_count = n;
 
+    /* BOTH numbers, because one of them alone is misread. "Heard 12 stations"
+     * over a list showing 18 rows reads as a bug - the operator asked whether
+     * the header was wrong within minutes of the list first working. It was
+     * not: the header counts DISTINCT CALLSIGNS and the list has one row per
+     * DECODE, so a station heard in four cycles is four rows and one station.
+     *
+     * "spots" is the WSPR word for a decode, so this is also the vocabulary
+     * every other WSPR tool and wsprnet itself uses - saying both makes the
+     * relationship obvious instead of leaving it to be worked out.
+     *
+     * ⚠ Neither figure is a session total. The ring holds WSPR_SPOT_RING (256)
+     * entries, roughly eight cycles of a busy band, and older spots fall off
+     * the end - so this is a rolling window, hours on a quiet band and about a
+     * quarter of an hour on a crowded one. */
     int uniq = wspr_spots_unique_calls();
-    char h[48];
+    int held = wspr_spots_count();
+    char h[64];
     if (uniq == 0) snprintf(h, sizeof(h), "Heard nothing yet");
-    else snprintf(h, sizeof(h), "Heard %d station%s", uniq, uniq == 1 ? "" : "s");
+    else snprintf(h, sizeof(h), "%d station%s / %d spot%s",
+                  uniq, uniq == 1 ? "" : "s", held, held == 1 ? "" : "s");
     lv_label_set_text(s_lbl_heard, h);
 
     if (n == 0) {
