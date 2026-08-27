@@ -214,8 +214,19 @@ int wspr_find_candidates(const int16_t *samples, long n, double f_lo_hz,
  * the reads, so counting calls would score a cheaper scan as free. */
 double wspr_corr_work = 0;
 #define WSPR_CORR_TICK(stride) (wspr_corr_work += 1.0 / (double)(stride))
+
+/* ⛔ A SECOND COUNTER, BECAUSE THE FIRST ONE CANNOT SEE THE FRONT END.
+ * wspr_corr_work counts extract_tone_powers() calls; every decimation-filter
+ * multiply-accumulate happens in mix_decimate() and is invisible to it. Judging
+ * a front-end change by the correlation count therefore measures something the
+ * change does not touch - it barely moved while the filter work fell by more
+ * than half. Filter MACs are counted separately and in the same units on both
+ * machines. */
+double wspr_filter_macs = 0;
+#define WSPR_FILT_TICK(n) (wspr_filter_macs += (double)(n))
 #else
 #define WSPR_CORR_TICK(stride) ((void)0)
+#define WSPR_FILT_TICK(n)      ((void)0)
 #endif
 
 #define WSPR_DECIM        32
@@ -243,157 +254,150 @@ static void free_baseband(baseband_t *bb)
  * scaled differently from its head, which is exactly the kind of slow error
  * that looks like fading and would be blamed on the ionosphere.
  */
-/* ---- ANTI-ALIASING LOW-PASS TAPS -------------------------------------
+/* ---- THE TWO-STAGE FRONT END -----------------------------------------
  *
- * ⛔ THIS REPLACED A SINGLE 32-TAP BOXCAR AVERAGE, WHICH WAS THE ONLY
- * ANTI-ALIASING THIS DECODER HAD.
+ * ⭐ EVERY CANDIDATE USED TO DECIMATE THE WHOLE CAPTURE ON ITS OWN. That is
+ * 1.44 M input samples through a 160-tap filter, ~1060 ms on the device, and
+ * with 20 candidates the SAME expensive work ran twenty times over one
+ * recording - when all twenty sit inside a 300 Hz window of it.
  *
- * A boxcar is a dreadful low-pass: first sidelobe only -13 dB. At WSPR_DECIM 32
- * the decimated band is +/-187.5 Hz, so every decode admitted everything within
- * 187 Hz at nearly full strength and folded in whatever lay beyond. On a WSPR
- * band carrying stations every 10-20 Hz across a 200 Hz window, that means
- * every decode was contaminated by every other station present.
+ * Split in two: decimate 12000 -> 1500 Hz ONCE per capture (stage 1, shared),
+ * then per candidate mix the residual offset and decimate 1500 -> 375 Hz on
+ * 180,000 samples instead of 1.44 M (stage 2). The per-candidate filter can
+ * also be far shorter, because at a 1500 Hz input rate the first band that
+ * folds into what the decoder reads starts at 341 Hz - a transition of 0.20
+ * normalised instead of 0.026.
  *
- * Found from two anomalies that no narrowband effect could explain: subtracting
- * G8MCD at 1407 Hz destroyed a decode of F6APU at 1441 Hz (34 Hz away, inside
- * the band), and subtracting a fabricated signal at 1400.94 Hz was what made
- * PA2PGU at 1589.72 Hz decodable at all (188.8 Hz away - just outside the band,
- * so aliased straight back in).
+ * ⛔ CHECKING THE TWO STAGES SEPARATELY IS NOT ENOUGH, AND THIS IS THE TRAP.
+ * Content at +/-750 Hz from the mix centre folds STRAIGHT TO DC in stage 2
+ * (750 mod 375 == 0), and stage 1 does not reject it - stage 1's stopband only
+ * has to start near 1300 Hz to protect its own +/-200 Hz passband. So the only
+ * honest question is the PRODUCT H1*H2 along the path each input frequency
+ * actually takes: f1 = wrap(f, 1500) after stage 1, f2 = wrap(f1 - d, 375)
+ * after stage 2, contaminating iff |f2| <= 34 Hz. scratchpad/lpf2_design.py
+ * computes exactly that, over every candidate offset d the search can produce.
  *
- * A WSPR transmission is ~6 Hz wide (4 tones x 1.4648 Hz) and f0 is known to
- * ~0.1 Hz, so a cutoff of 50 Hz is enormously generous to the signal while
- * rejecting the neighbours. Windowed sinc, built once. */
-/* ⭐ 160 TAPS AT 100 Hz, NOT 256 AT 50 - MEASURED ON THE REFERENCE FILES,
- * NOT DESIGNED ON PAPER AND ASSUMED.
+ * Swept, not calculated - the same discipline the single-stage filter needed
+ * when a design that was better on both computed axes silently traded PA2PGU
+ * for 5B4AHZ:
  *
- * This filter is ~90 % of mix_decimate, which the device measures at ~1060 ms
- * per candidate, so its length is the single biggest fixed cost in the
- * receiver. 256 taps at a 50 Hz cutoff was chosen to be "enormously generous
- * to the signal", which it is - but generous in the wrong direction, because
- * it was never sized against what the filter actually has to reject.
+ *   stage1     stage2    droop    worst alias   per-cand   shared    stations
+ *    96/400     32/150   -0.02 dB   -58.2 dB      0.200x    2.40x      (see
+ *    96/400     24/120   -0.23 dB   -58.5 dB      0.150x    2.40x     commit)
+ *    64/400     24/120   -0.70 dB   -59.0 dB      0.150x    1.60x
+ *   (single stage today: 160 taps, -0.58 dB, -53.6 dB, 1.00x, no shared cost)
  *
- * WHAT IT HAS TO REJECT, exactly: decimating 12000 -> 375 Hz folds input
- * frequency f onto f mod 375. The decoder only ever READS +/-34 Hz of the
- * result - the four tones live within +/-4.4 Hz, the frequency search adds
- * +/-1.5, and measure_noise_ref samples out to +/-34. So the only content
- * that can contaminate a decode is what lands in +/-34 Hz, i.e. the input
- * bands k*375 +/- 34 for k >= 1: 341-409 Hz, 716-784 Hz, and so on to
- * Nyquist. Everything from ~40 Hz to ~341 Hz aliases somewhere in the
- * decimated band that NOTHING READS. That slack is what the old design was
- * paying for and not using.
- *
- * Computed over every folding band to 6 kHz (scratchpad/lpf_design.py mirrors
- * build_lpf() exactly):
- *
- *     taps  cut   droop at 34 Hz   worst alias   cost   stations found
- *      256   50        -2.17 dB      -65.5 dB    1.00x   23
- *      160  100        -0.58 dB      -53.6 dB    0.62x   24  (+5B4AHZ)
- *      152  100        -0.58 dB      -55.9 dB    0.59x   24
- *      144  100        -0.57 dB      -58.0 dB    0.56x   23  (-PA2PGU)
- *
- * ⛔ AND THAT LAST COLUMN IS WHY THIS WAS SWEPT RATHER THAN CALCULATED. On
- * paper 128 taps at 100 Hz is STRICTLY BETTER than 256 at 50 - less droop AND
- * better alias rejection at half the cost - and it silently trades PA2PGU for
- * 5B4AHZ. A filter's response curve does not predict which marginal stations
- * survive it, because a marginal decode depends on where the aliases land
- * relative to that particular signal. CLAUDE.md already records PA2PGU's
- * decode turning on aliasing from 188 Hz away; it is the canary here.
- *
- * 152 is the cliff: at 144 PA2PGU goes. 160 is deliberately ONE STEP BACK from
- * it, because 5 % of a filter is a poor price for standing on an edge that
- * some unrelated front-end change could push us over.
- *
- * The gain is real in both directions: 38 % less work, and FOUR TIMES LESS
- * PASSBAND DROOP where the noise reference is sampled - the old filter was
- * quietly attenuating the +/-10..34 Hz noise samples by up to 2.2 dB, biasing
- * the measured floor DOWN and every reported SNR up. Reported SNRs drop by
- * about 1 dB as a result, which is the more honest number.
- *
- * ⚠ The +/-34 Hz figure is a CONTRACT WITH measure_noise_ref(). If its offset
- * table ever reaches further out, this filter has to be re-checked against the
- * new number - the analysis above is only valid for what the decoder reads. */
-/* ⛔ THE RING IS A POWER OF TWO; THE TAP COUNT NEED NOT BE, AND USED TO BE
- * FORCED TO MATCH IT. The ring index is masked (`& (LPF_RING - 1)`) because a
- * `% 255` here was measured at ~40 s per candidate - an integer division per
- * tap, 11.5 M times. That constraint belongs to the RING, not to the filter
- * length, and tying them together left only 256 or 64 reachable when the right
- * answer was in between. Keep LPF_RING a power of two and >= LPF_TAPS. */
-#ifndef LPF_TAPS
-#define LPF_TAPS   160
+ * ⚠ STAGE 1 MUST PRESERVE +/-200 Hz, not +/-34. The candidate search runs
+ * 1350-1650 Hz around a 1500 Hz centre, so a candidate can sit 150 Hz out, and
+ * measure_noise_ref then samples 34 Hz beyond that. Narrowing stage 1 toward
+ * what the decoder "reads" would quietly attenuate every off-centre candidate.
+ */
+#define S1_DECIM      8
+#define S1_RATE_HZ    (WSPR_SAMPLE_RATE_HZ / S1_DECIM)   /* 1500 Hz */
+#define S1_CENTRE_HZ  1500.0                             /* middle of 1350-1650 */
+#ifndef S1_TAPS
+#define S1_TAPS       64
 #endif
-#define LPF_RING   256
-#ifndef LPF_CUT_HZ
-#define LPF_CUT_HZ 100.0
+#ifndef S1_CUT_HZ
+#define S1_CUT_HZ     400.0
 #endif
 
-static float  s_lpf[LPF_TAPS];
-static int    s_lpf_ready;
+#define S2_DECIM      4
+#ifndef S2_TAPS
+#define S2_TAPS       24
+#endif
+#ifndef S2_CUT_HZ
+#define S2_CUT_HZ     120.0
+#endif
+
+/* The two stages must still compose to the decimation the rest of the file
+ * assumes; getting this wrong would change WSPR_DEC_SPS silently. */
+_Static_assert(S1_DECIM * S2_DECIM == WSPR_DECIM,
+               "stage decimations must multiply to WSPR_DECIM");
+
+/* ⛔ THE RING IS A POWER OF TWO; THE TAP COUNT NEED NOT BE. The ring index is
+ * masked because a `% 255` here measured ~40 s per candidate - an integer
+ * division per tap, millions of times. That constraint belongs to the RING,
+ * not to the filter length. Keep LPF_RING a power of two and >= both tap
+ * counts. */
+#define LPF_RING   256
+
+static float s_lpf1[S1_TAPS], s_lpf2[S2_TAPS];
+static int   s_lpf_ready;
+
+/* Windowed sinc, Hamming, normalised to unit DC gain. `fs` is the rate the
+ * filter runs AT, which differs between the stages - passing the wrong one
+ * produces a filter with the right shape at the wrong frequency, which is
+ * exactly the kind of error that still decodes the strong stations. */
+static void build_one_lpf(float *h, int n, double cut_hz, double fs)
+{
+    const double fc = cut_hz / fs;
+    const int    M  = n / 2;
+    double sum = 0.0;
+    for (int k = 0; k < n; k++) {
+        const int    m = k - M;
+        const double sinc = (m == 0) ? 2.0 * fc
+                                     : sin(2.0 * M_PI * fc * m) / (M_PI * m);
+        const double win = 0.54 - 0.46 * cos(2.0 * M_PI * k / (double)(n - 1));
+        h[k] = (float)(sinc * win);
+        sum += h[k];
+    }
+    if (sum != 0.0) for (int k = 0; k < n; k++) h[k] /= (float)sum;
+}
 
 static void build_lpf(void)
 {
     if (s_lpf_ready) return;
-    const double fc = LPF_CUT_HZ / WSPR_SAMPLE_RATE_HZ;   /* cycles/sample */
-    const int    M  = LPF_TAPS / 2;
-    double sum = 0.0;
-    for (int k = 0; k < LPF_TAPS; k++) {
-        const int    m = k - M;
-        const double sinc = (m == 0) ? 2.0 * fc
-                                     : sin(2.0 * M_PI * fc * m) / (M_PI * m);
-        /* Hamming: -43 dB sidelobes, which is what the boxcar's -13 dB was
-         * costing us. */
-        const double win = 0.54 - 0.46 * cos(2.0 * M_PI * k / (double)(LPF_TAPS - 1));
-        s_lpf[k] = (float)(sinc * win);
-        sum += s_lpf[k];
-    }
-    if (sum != 0.0) for (int k = 0; k < LPF_TAPS; k++) s_lpf[k] /= (float)sum;
+    build_one_lpf(s_lpf1, S1_TAPS, S1_CUT_HZ, WSPR_SAMPLE_RATE_HZ);
+    build_one_lpf(s_lpf2, S2_TAPS, S2_CUT_HZ, S1_RATE_HZ);
     s_lpf_ready = 1;
 }
 
-static int mix_decimate(const int16_t *samples, long n, double f0, baseband_t *bb)
+/* ---- stage 1: built once per capture, shared by every candidate ---------
+ *
+ * ⛔ THE CACHE IS KEYED ON (pointer, length) AND THAT IS NOT SUFFICIENT ON ITS
+ * OWN, because wspr_subtract() rewrites the capture IN PLACE - same pointer,
+ * same length, different audio. A stale stage 1 would then decode the second
+ * pass from audio that still contains the signals the first pass removed,
+ * which is precisely the thing the second pass exists to look underneath.
+ *
+ * So invalidation is explicit and lives INSIDE wspr_subtract(), next to the
+ * mutation, rather than being a rule call sites are expected to remember.
+ * The pointer/length check is only a backstop for a different buffer. */
+static float               *s_s1i, *s_s1q;
+static long                 s_s1n;
+static const int16_t       *s_s1_src;
+static long                 s_s1_srcn;
+
+void wspr_decode_capture_changed(void)
 {
-    memset(bb, 0, sizeof(*bb));
-    long out_n = n / WSPR_DECIM;
+    free(s_s1i); free(s_s1q);
+    s_s1i = s_s1q = NULL;
+    s_s1n = 0; s_s1_src = NULL; s_s1_srcn = 0;
+}
+
+static int build_stage1(const int16_t *samples, long n)
+{
+    if (s_s1i && s_s1_src == samples && s_s1_srcn == n) return 1;
+    wspr_decode_capture_changed();
+
+    const long out_n = n / S1_DECIM;
     if (out_n <= 0) return 0;
-    bb->i = (float *)malloc((size_t)out_n * sizeof(float));
-    bb->q = (float *)malloc((size_t)out_n * sizeof(float));
-    if (!bb->i || !bb->q) { free_baseband(bb); return 0; }
-    bb->n = out_n;
+    s_s1i = (float *)malloc((size_t)out_n * sizeof(float));
+    s_s1q = (float *)malloc((size_t)out_n * sizeof(float));
+    if (!s_s1i || !s_s1q) { wspr_decode_capture_changed(); return 0; }
 
     build_lpf();
 
-    /* ⛔ THE LOCAL OSCILLATOR RUNS IN FLOAT, RE-SEEDED EXACTLY IN DOUBLE.
-     *
-     * The recurrence advances once per INPUT sample - 1.44 M of them per
-     * candidate - and in double that is four software multiplies and two
-     * software adds each, on a chip whose FPU is single-precision only. It was
-     * the last double left on the per-input-sample path; everything else here
-     * was moved to float long ago for exactly this reason (see the FLOAT, NOT
-     * DOUBLE note on the filter loop below).
-     *
-     * Float alone would not be safe: a rotation applied 1.44 M times
-     * accumulates PHASE error, and the old code's periodic renormalise only
-     * fixed MAGNITUDE - it could not have caught a drifting angle. So instead
-     * of renormalising, the oscillator is now recomputed from the exact phase
-     * every LO_RESEED samples. Error can then accumulate over at most 1024
-     * steps (~1e-4 rad, far below anything a tone correlation notices) and is
-     * wiped rather than merely rescaled, which makes this strictly more
-     * accurate than what it replaces as well as faster. */
+    /* Local oscillator in FLOAT, re-seeded EXACTLY every LO_RESEED samples -
+     * see the long note this replaced: the recurrence runs once per input
+     * sample, the P4's FPU is single-precision, and a re-seed wipes phase
+     * error where a renormalise could only ever fix magnitude. */
 #define LO_RESEED 1024
-    const double w = 2.0 * M_PI * f0 / WSPR_SAMPLE_RATE_HZ;
-    const float cs = (float)cos(-w), sn = (float)sin(-w);   /* step: e^(-j*w) */
+    const double w = 2.0 * M_PI * S1_CENTRE_HZ / WSPR_SAMPLE_RATE_HZ;
+    const float cs = (float)cos(-w), sn = (float)sin(-w);
     float ore = 1.0f, oim = 0.0f;
 
-    /* Only the last LPF_TAPS mixed samples are ever needed, so this is a small
-     * ring rather than an 11 MB copy of the whole mixed capture. Outputs are
-     * computed 1-in-32, i.e. polyphase by hand: the filter cost falls on the
-     * 45000 outputs, not on the 1.44 M inputs. */
-    /* ⛔ FILE-SCOPE STATIC, SO wspr_decode_candidate() MUST NOT BE CALLED FROM
-     * TWO TASKS AT ONCE. It is not today - the ping-pong runs capture and
-     * decode concurrently but there is exactly one decode task - and that is
-     * precisely why this warning is here, because the architecture now LOOKS
-     * like it could. Kept static rather than local because 2 KB on a task that
-     * already reserves a 16 KB frame is not free, and kept internal rather than
-     * PSRAM because the inner loop reads it ~11.5 M times per candidate. */
     static float hi[LPF_RING], hq[LPF_RING];
     memset(hi, 0, sizeof(hi));
     memset(hq, 0, sizeof(hq));
@@ -401,14 +405,13 @@ static int mix_decimate(const int16_t *samples, long n, double f0, baseband_t *b
 
     long o = 0;
     int cnt = 0;
-    for (long idx = 0; idx < out_n * WSPR_DECIM; idx++) {
+    for (long idx = 0; idx < out_n * S1_DECIM; idx++) {
         const float x = samples[idx] * (1.0f / 32768.0f);
         hi[hp] = x * ore;
         hq[hp] = x * oim;
         hp = (hp + 1) & (LPF_RING - 1);
 
         if ((idx & (LO_RESEED - 1)) == (LO_RESEED - 1)) {
-            /* Exact re-seed, not a rescale - see the note above. */
             const double ph = -w * (double)(idx + 1);
             ore = (float)cos(ph);
             oim = (float)sin(ph);
@@ -418,32 +421,85 @@ static int mix_decimate(const int16_t *samples, long n, double f0, baseband_t *b
             ore = nre; oim = nim;
         }
 
-        if (++cnt == WSPR_DECIM) {
-            /* ⛔ FLOAT, NOT DOUBLE, AND A MASK, NOT A MODULO.
-             *
-             * This loop runs LPF_TAPS x 45000 = 11.5 M times per candidate, so
-             * both details are the difference between a working receiver and a
-             * broken one - measured on hardware, not guessed:
-             *
-             *   double accumulators + `% 255`  ->  ~40 s per candidate, 3 of 20
-             *                                      tried, decode yield destroyed
-             *   float accumulators + `& 255`   ->  see the commit message
-             *
-             * The ESP32-P4 has a SINGLE-PRECISION FPU, so `double` is a
-             * software library here (CLAUDE.md records 80 s vs 2.8 s for the
-             * same synthesis). And 255 is not a power of two, so the ring wrap
-             * was an integer division per tap. The host showed +5 % for the
-             * double version and told me nothing, because it has neither
-             * problem. */
+        if (++cnt == S1_DECIM) {
+            /* FLOAT accumulators and a MASK, not a modulo - both measured, see
+             * the note on the stage-2 loop below. */
             float ai = 0.0f, aq = 0.0f;
-            /* Oldest of the LPF_TAPS samples still in the ring. With
-             * LPF_TAPS == LPF_RING this is just hp; with a shorter filter the
-             * read has to start LPF_TAPS behind the write pointer, or the
-             * coefficients line up against the wrong samples. */
-            int r = (hp + LPF_RING - LPF_TAPS) & (LPF_RING - 1);
-            for (int k = 0; k < LPF_TAPS; k++) {
-                ai += s_lpf[k] * hi[r];
-                aq += s_lpf[k] * hq[r];
+            WSPR_FILT_TICK(S1_TAPS);
+            int r = (hp + LPF_RING - S1_TAPS) & (LPF_RING - 1);
+            for (int k = 0; k < S1_TAPS; k++) {
+                ai += s_lpf1[k] * hi[r];
+                aq += s_lpf1[k] * hq[r];
+                r = (r + 1) & (LPF_RING - 1);
+            }
+            if (o < out_n) { s_s1i[o] = ai; s_s1q[o] = aq; o++; }
+            cnt = 0;
+        }
+    }
+    s_s1n = out_n;
+    s_s1_src = samples;
+    s_s1_srcn = n;
+    return 1;
+}
+
+/* ---- stage 2: per candidate, on the shared stream ----------------------
+ *
+ * Mixes the candidate's residual offset (at most +/-150 Hz) to DC and
+ * decimates by 4. Input is COMPLEX, so the mix is a complex multiply rather
+ * than the real one stage 1 does.
+ */
+static int mix_decimate(const int16_t *samples, long n, double f0, baseband_t *bb)
+{
+    memset(bb, 0, sizeof(*bb));
+    if (!build_stage1(samples, n)) return 0;
+
+    const long out_n = s_s1n / S2_DECIM;
+    if (out_n <= 0) return 0;
+    bb->i = (float *)malloc((size_t)out_n * sizeof(float));
+    bb->q = (float *)malloc((size_t)out_n * sizeof(float));
+    if (!bb->i || !bb->q) { free_baseband(bb); return 0; }
+    bb->n = out_n;
+
+    const double w = 2.0 * M_PI * (f0 - S1_CENTRE_HZ) / S1_RATE_HZ;
+    const float cs = (float)cos(-w), sn = (float)sin(-w);
+    float ore = 1.0f, oim = 0.0f;
+
+    static float hi[LPF_RING], hq[LPF_RING];
+    memset(hi, 0, sizeof(hi));
+    memset(hq, 0, sizeof(hq));
+    int hp = 0;
+
+    long o = 0;
+    int cnt = 0;
+    for (long idx = 0; idx < out_n * S2_DECIM; idx++) {
+        const float xi = s_s1i[idx], xq = s_s1q[idx];
+        /* (xi + j*xq) * (ore + j*oim), with the oscillator already conjugated */
+        hi[hp] = xi * ore - xq * oim;
+        hq[hp] = xq * ore + xi * oim;
+        hp = (hp + 1) & (LPF_RING - 1);
+
+        if ((idx & (LO_RESEED - 1)) == (LO_RESEED - 1)) {
+            const double ph = -w * (double)(idx + 1);
+            ore = (float)cos(ph);
+            oim = (float)sin(ph);
+        } else {
+            const float nre = ore * cs - oim * sn;
+            const float nim = ore * sn + oim * cs;
+            ore = nre; oim = nim;
+        }
+
+        if (++cnt == S2_DECIM) {
+            /* ⛔ FLOAT, NOT DOUBLE, AND A MASK, NOT A MODULO. Measured on
+             * hardware when this loop ran at the full rate: double
+             * accumulators plus a `% 255` cost ~40 s per candidate and
+             * destroyed the decode yield. The ESP32-P4's FPU is
+             * single-precision, so `double` here is a software library call. */
+            float ai = 0.0f, aq = 0.0f;
+            WSPR_FILT_TICK(S2_TAPS);
+            int r = (hp + LPF_RING - S2_TAPS) & (LPF_RING - 1);
+            for (int k = 0; k < S2_TAPS; k++) {
+                ai += s_lpf2[k] * hi[r];
+                aq += s_lpf2[k] * hq[r];
                 r = (r + 1) & (LPF_RING - 1);
             }
             if (o < out_n) { bb->i[o] = ai; bb->q[o] = aq; o++; }
@@ -1478,8 +1534,15 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
     /* Local maxima, strongest first. A plateau counts once (>= on the left,
      * > on the right), and the ends count so a station at the edge of the
      * window is not silently dropped. */
-    double hyp_df[WSPR_HYPOTHESES];
-    double hyp_sc[WSPR_HYPOTHESES];
+    /* Explicitly seeded. Element 0 is always written before it is read - by
+     * the loop's first local maximum, or by the nhyp == 0 fallback below - but
+     * that depends on `pos` being 0 on the first pass, which the compiler
+     * cannot see. It warned once the front end was restructured and inlining
+     * changed; the seed states the invariant instead of silencing it, and
+     * cannot alter behaviour because the while() below only runs when a
+     * previous iteration has already written element 0. */
+    double hyp_df[WSPR_HYPOTHESES] = { 0.0 };
+    double hyp_sc[WSPR_HYPOTHESES] = { -1e300 };
     int nhyp = 0;
     for (int k = 0; k < WSPR_DF_NPT; k++) {
         int rise = (k == 0)                || curve[k] >= curve[k - 1];

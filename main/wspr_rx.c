@@ -911,6 +911,11 @@ static void wspr_rx_task(void *arg)
                  (unsigned)(CAP_SAMPLES * sizeof(int16_t) / 1024));
         free(cap);
         for (int i = 0; i < WSPR_PCM_SLOTS; i++) { free(s_pcm[i]); s_pcm[i] = NULL; }
+        /* And the decoder's shared 12000 -> 1500 Hz stream, ~1.4 MB of PSRAM
+         * that is otherwise held until the next capture happens to land on a
+         * different buffer. Freed HERE, with the buffers it was derived from,
+         * so leaving the page really does give the memory back. */
+        wspr_decode_capture_changed();
         set_status("out of memory");
         s_run = false; s_task = NULL;
         vTaskDelete(NULL);
@@ -1257,6 +1262,11 @@ static void wspr_rx_task(void *arg)
     free(cap);
     if (s_dec_exited) {
         for (int i = 0; i < WSPR_PCM_SLOTS; i++) { free(s_pcm[i]); s_pcm[i] = NULL; }
+        /* And the decoder's shared 12000 -> 1500 Hz stream, ~1.4 MB of PSRAM
+         * that is otherwise held until the next capture happens to land on a
+         * different buffer. Freed HERE, with the buffers it was derived from,
+         * so leaving the page really does give the memory back. */
+        wspr_decode_capture_changed();
     }
     if (s_dec_q) { vQueueDelete(s_dec_q); s_dec_q = NULL; }
     s_dec_task = NULL;

@@ -113,5 +113,13 @@ int wspr_subtract(int16_t *samples, long n, double f0_hz, long dt_samples,
         }
         done++;
     }
+    /* ⛔ THE CAPTURE HAS JUST BEEN REWRITTEN IN PLACE, so the decoder's shared
+     * 12000 -> 1500 Hz stream is now stale. Invalidating HERE, next to the
+     * mutation, rather than at the call sites, is deliberate: there are two
+     * call sites today and the rule would be silently broken by a third. A
+     * stale stage 1 does not fail loudly - the next pass simply decodes from
+     * audio that still contains what this call just removed, which is exactly
+     * what that pass exists to look underneath. */
+    if (done > 0) wspr_decode_capture_changed();
     return done;
 }

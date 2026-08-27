@@ -143,6 +143,21 @@ typedef struct {
  * least one full WSPR transmission plus some margin) and picks the best
  * alignment by sync-vector correlation. Fills *result unconditionally;
  * result->ok is the gated verdict. */
+/* ⛔ TELL THE DECODER THE CAPTURE'S AUDIO HAS CHANGED.
+
+ * The 12000 -> 1500 Hz decimation is done ONCE per capture and shared by every
+ * candidate (see the two-stage front end in wspr_decode.c). That shared stream
+ * is cached on the sample buffer's address and length - which is NOT enough by
+ * itself, because wspr_subtract() rewrites the capture IN PLACE: same pointer,
+ * same length, different audio. A stale stage 1 would let the second pass
+ * decode from audio that still contains the signals the first pass removed,
+ * which is exactly what that pass exists to look underneath.
+ *
+ * wspr_subtract() calls this itself, so it cannot be forgotten. Call it too if
+ * anything else ever modifies a capture in place.
+ */
+void wspr_decode_capture_changed(void);
+
 void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
                             wspr_decode_result_t *result);
 
