@@ -10485,7 +10485,7 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
         ui_save_snapshot(&s_ft8_snapshot);
         /* FT8 is always DiGi - never carry a drifted radio mode back in. */
         strncpy(s_ft8_snapshot.mode, "DiGi", sizeof(s_ft8_snapshot.mode) - 1);
-        s_ft8_snapshot.mode[sizeof(s_ft8_snapshot.mode) - 1] = ' ';
+        s_ft8_snapshot.mode[sizeof(s_ft8_snapshot.mode) - 1] = '\0';
     } else {
         ui_save_snapshot(&s_pan_snapshot);
     }
@@ -10629,9 +10629,17 @@ static void ui_advance_page(void)
         /* Panadapter -> FT8 -> WSPR -> Panadapter. WSPR joins the cycle rather
          * than hiding in the drawer because it is a peer operating mode, not a
          * setting - the same reasoning that gave FT8 its own page. */
+        /* WSPR is in the cycle only when it has been enabled. It ships on the
+         * main track unfinished so the update path carries it, and this is
+         * what keeps an operator who never asked for it from swiping into a
+         * half-built page. With it off the cycle is the old Panadapter <-> FT8
+         * toggle exactly as before, which is the point: nothing about an
+         * existing user's device changes. */
         ui_mode_t m = ui_mode_get();
+        const bool wspr_ok = wspr_feature_enabled();
         ui_set_base_mode(m == UI_MODE_PANADAPTER ? UI_MODE_FT8
-                       : m == UI_MODE_FT8        ? UI_MODE_WSPR
+                       : m == UI_MODE_FT8        ? (wspr_ok ? UI_MODE_WSPR
+                                                            : UI_MODE_PANADAPTER)
                                                  : UI_MODE_PANADAPTER, true);
     }
     // Close the drawer (if open) after switching. UX nicety, and (4c.1 finding)

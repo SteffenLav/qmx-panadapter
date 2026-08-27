@@ -284,6 +284,24 @@ typedef struct {
     uint16_t wspr_hop_mask;
     bool     wspr_hop_en;
 
+    /* ⭐ THE MASTER SWITCH FOR THE WHOLE WSPR PAGE, DEFAULT OFF.
+     *
+     * WSPR ships on the main track before it is finished, so that the update
+     * path carries it and can be exercised, while nobody meets it by accident:
+     * off, the page is not in the swipe cycle, /api/wspr says so rather than
+     * answering, and the RX loop cannot be started.
+     *
+     * ⚠ WHAT THIS DOES NOT BUY. Being off does NOT make the feature free -
+     * .bss is allocated whether code runs or not, and WSPR's share of internal
+     * RAM had to be dealt with separately (see the EXT_RAM_BSS_ATTR note in
+     * wspr_rx.c). Never reason from "the flag is off" to "it costs nothing".
+     *
+     * Deliberately has no drawer control: a half-finished mode should be
+     * reachable by someone who went looking for it, not offered in a list of
+     * settings. Turned on with /api/cmd {"action":"wspr_enable","on":true},
+     * or wspr_enabled = yes in an imported config file. */
+    bool     wspr_en;
+
     uint8_t  wspr_dump_cycles;
     uint8_t  ft8_op_mode;     // FT8/FT4 sub-mode (ft8_op_mode_t: 0=FT8 1=FT4), default 0 - see ft8_test.h
     uint32_t passband_width_hz; // last CAT-reported filter width (Hz), 0=unknown/use mode default. Persisted so the
@@ -490,6 +508,7 @@ void settings_set_wspr_duty_pct(uint8_t v);
 void settings_set_wspr_tx_dbm(int8_t v);
 void settings_set_wspr_hop_mask(uint16_t v);
 void settings_set_wspr_hop_en(bool v);
+void settings_set_wspr_en(bool v);   // master switch for the WSPR page - default OFF
 void settings_set_wspr_dump_cycles(uint8_t v);
 void settings_set_ft8_op_mode(uint8_t v);
 

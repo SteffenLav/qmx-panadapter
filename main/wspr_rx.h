@@ -1,5 +1,22 @@
 #pragma once
+
 #include <stdbool.h>
+
+/* ⭐ IS THE WSPR PAGE REACHABLE AT ALL?
+ *
+ * WSPR rides the main track before it is finished, so the release carries the
+ * code - and the OTA path that delivers it can be exercised - while nobody
+ * meets a half-built mode by accident. Every gate in the firmware asks THIS
+ * function rather than reading the setting itself, so the swipe cycle, the web
+ * screen switch, /api/wspr and the RX loop cannot drift apart about what "off"
+ * means. One of them disagreeing is how a feature ends up half-reachable.
+ *
+ * ⚠ OFF DOES NOT MEAN FREE. .bss is allocated whether the code runs or not.
+ * WSPR's internal-RAM share was dealt with separately; see the
+ * EXT_RAM_BSS_ATTR note in wspr_rx.c. Do not reason from this flag to memory.
+ */
+bool wspr_feature_enabled(void);
+
 
 /* WSPR receive slot loop.
  *

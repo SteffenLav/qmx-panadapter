@@ -53,6 +53,7 @@ char *config_io_export(size_t *out_len)
     APP("spots              = %s\n", yn(c.spots_en));
     APP("spots_rbn          = %s\n", yn(c.rbn_en));
     APP("spots_sota         = %s\n", yn(c.sota_en));
+    APP("wspr_enabled       = %s\n", yn(c.wspr_en));   /* the WSPR page master switch - default off */
     APP("zoom               = %.2f\n", (double)c.zoom_factor);
     APP("colormap           = %u\n", (unsigned)c.colormap_idx);
     APP("brightness         = %u\n", (unsigned)c.brightness_pct);
@@ -218,6 +219,7 @@ int config_io_import(char *text)
             else if (!strcasecmp(key, "spots"))             settings_set_spots_en(to_bool(val));
             else if (!strcasecmp(key, "spots_rbn"))         settings_set_rbn_en(to_bool(val));
             else if (!strcasecmp(key, "spots_sota"))        settings_set_sota_en(to_bool(val));
+            else if (!strcasecmp(key, "wspr_enabled"))      settings_set_wspr_en(to_bool(val));
             else if (!strcasecmp(key, "ota_autodownload")) settings_set_ota_autodl(to_bool(val));
             else if (!strcasecmp(key, "zoom"))              settings_set_zoom_factor((float)atof(val));
             else if (!strcasecmp(key, "colormap"))          settings_set_colormap_idx((uint8_t)atoi(val));

@@ -105,6 +105,7 @@ static const char *TAG = "settings";
 #define KEY_WSPR_DUMP      "wspr_dump"
 #define KEY_WSPR_HOPM      "wspr_hopm"
 #define KEY_WSPR_HOPE      "wspr_hope"
+#define KEY_WSPR_EN        "wspr_en"
 #define KEY_FT8_OP_MODE    "ft8_op_mode"
 #define KEY_CHARGE_LIM_EN  "chg_lim_en"
 #define KEY_CHARGE_LIM_PCT "chg_lim_pct"
@@ -280,6 +281,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_WSPR_DUMP     101
 #define DIRTY_WSPR_HOPM     102
 #define DIRTY_WSPR_HOPE     103
+#define DIRTY_WSPR_EN       105   /* 104 is DIRTY_DRAWER_EXPERT */
 #define DIRTY_FT8_OP_MODE    47
 #define DIRTY_FREQ_KP_POS    48
 #define DIRTY_FREQ_KP_SMALL  49
@@ -359,6 +361,7 @@ static const uint8_t s_config_export_bits[] = {
     DIRTY_SPOTS_EN, DIRTY_RBN_EN, DIRTY_WIFI_KNOWN, DIRTY_CW_TX_OFFSET,
     DIRTY_CQ_LISTEN, DIRTY_SWR_LIMIT, DIRTY_PSK_RX_EN, DIRTY_BT_MOUSE_EN,
     DIRTY_CLUSTER_EN, DIRTY_SOTA_EN, DIRTY_HOUND_MODE,
+    DIRTY_WSPR_EN,   /* joins because config_io_export() now prints wspr_enabled */
 };
 
 // ---- Module state ------------------------------------------------------
@@ -550,6 +553,7 @@ static void flush_task(void *arg)
         if (dirty_test(&dirty_local, DIRTY_WSPR_DUMP))    nvs_set_u8(s_nvs, KEY_WSPR_DUMP, snap.wspr_dump_cycles);
         if (dirty_test(&dirty_local, DIRTY_WSPR_HOPM))    nvs_set_u16(s_nvs, KEY_WSPR_HOPM, snap.wspr_hop_mask);
         if (dirty_test(&dirty_local, DIRTY_WSPR_HOPE))    nvs_set_u8(s_nvs, KEY_WSPR_HOPE, snap.wspr_hop_en ? 1 : 0);
+        if (dirty_test(&dirty_local, DIRTY_WSPR_EN))      nvs_set_u8(s_nvs, KEY_WSPR_EN,   snap.wspr_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_FT8_OP_MODE))  nvs_set_u8(s_nvs, KEY_FT8_OP_MODE, snap.ft8_op_mode);
         if (dirty_test(&dirty_local, DIRTY_CHARGE_LIM_EN))  nvs_set_u8(s_nvs, KEY_CHARGE_LIM_EN,  snap.charge_limit_en ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_CHARGE_LIM_PCT)) nvs_set_u8(s_nvs, KEY_CHARGE_LIM_PCT, snap.charge_limit_pct);
@@ -742,6 +746,7 @@ static void load_from_nvs(qmx_settings_t *out)
     out->wspr_dump_cycles = 0;        /* never dump unless asked */
     out->wspr_hop_mask = 0;           /* nothing ticked until the operator does */
     out->wspr_hop_en   = false;
+    out->wspr_en       = false;       /* the page is dark until asked for */
     out->ft8_op_mode = 0;     // FT8
     out->charge_limit_en  = DEF_CHARGE_LIM_EN;
     out->charge_limit_pct = DEF_CHARGE_LIM_PCT;
@@ -927,6 +932,7 @@ static void load_from_nvs(qmx_settings_t *out)
     { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_DUMP, &u8v) == ESP_OK) out->wspr_dump_cycles = u8v; }
     { uint16_t u16v; if (nvs_get_u16(s_nvs, KEY_WSPR_HOPM, &u16v) == ESP_OK) out->wspr_hop_mask = u16v; }
     { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_HOPE, &u8v) == ESP_OK) out->wspr_hop_en = (u8v != 0); }
+    { uint8_t u8v; if (nvs_get_u8(s_nvs, KEY_WSPR_EN,   &u8v) == ESP_OK) out->wspr_en   = (u8v != 0); }
     if (nvs_get_u8(s_nvs, KEY_FT8_OP_MODE, &u8v) == ESP_OK) out->ft8_op_mode = u8v;
     if (nvs_get_u8(s_nvs, KEY_CHARGE_LIM_EN, &u8v) == ESP_OK) out->charge_limit_en = (u8v != 0);
     nvs_get_u8(s_nvs, KEY_CHARGE_LIM_PCT, &out->charge_limit_pct);
@@ -2062,6 +2068,16 @@ void settings_set_wspr_hop_en(bool v)
     s_pending.wspr_hop_en = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_WSPR_HOPE);
+}
+
+void settings_set_wspr_en(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.wspr_en == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.wspr_en = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_WSPR_EN);
 }
 
 void settings_set_wspr_tx_dbm(int8_t v)

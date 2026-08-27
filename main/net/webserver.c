@@ -874,7 +874,22 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         if (scr) {
             /* Three pages now, so the bool form cannot express it. */
             if      (!strcmp(scr, "ft8"))  ui_request_base_mode_m(UI_MODE_FT8);
-            else if (!strcmp(scr, "wspr")) ui_request_base_mode_m(UI_MODE_WSPR);
+            else if (!strcmp(scr, "wspr")) {
+                /* Refused, and SAID SO. /api/cmd answers an action it does not
+                 * know with "unknown action" and HTTP 200, and CLAUDE.md
+                 * records a whole evening lost to a silent no-op read as a
+                 * result - so a gate that declines has to be louder than the
+                 * typo it resembles. */
+                if (!wspr_feature_enabled()) {
+                    httpd_resp_set_type(req, "application/json");
+                    httpd_resp_sendstr(req,
+                        "{\"ok\":false,\"error\":\"wspr disabled\","
+                        "\"hint\":\"send the wspr_enable action first\"}");
+                    cJSON_Delete(root);
+                    return ESP_OK;
+                }
+                ui_request_base_mode_m(UI_MODE_WSPR);
+            }
             else                            ui_request_base_mode_m(UI_MODE_PANADAPTER);
         }
     } else if (action && strcmp(action, "reply") == 0) {
@@ -1192,6 +1207,33 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // UI element references this — it's meant to be fired from the browser
         // console/bookmarklet on the dev's PC.
         ui_resource_monitor_toggle();
+    } else if (action && strcmp(action, "wspr_enable") == 0) {
+        /* The master switch. Deliberately an /api/cmd action and NOT a drawer
+         * control: WSPR ships on the main track before it is finished so that
+         * the release carries it and the OTA path can be exercised, and a
+         * half-built mode should be reachable by someone who went looking for
+         * it rather than offered in a list of settings.
+         *
+         * {"action":"wspr_enable","on":true}   - and it persists in NVS.
+         *
+         * Turning it OFF while the page is up also leaves it: otherwise the
+         * operator is left standing on a screen the swipe cycle can no longer
+         * reach, which is a trap rather than a setting. */
+        cJSON *on = cJSON_GetObjectItem(root, "on");
+        bool want = on ? (cJSON_IsTrue(on) || on->valueint) : true;
+        settings_set_wspr_en(want);
+        if (!want && ui_mode_get() == UI_MODE_WSPR) {
+            wspr_rx_stop();
+            ui_request_base_mode_m(UI_MODE_PANADAPTER);
+        }
+        char buf[96];
+        snprintf(buf, sizeof(buf), "{\"ok\":true,\"wspr_en\":%s}",
+                 want ? "true" : "false");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, buf);
+        cJSON_Delete(root);
+        return ESP_OK;
+
     } else if (action && strcmp(action, "wspr_rx") == 0) {
         // Start/stop the WSPR receive slot loop. Entering it sets UI_MODE_WSPR,
         // which diverts the DSP's IQ chain into the capture pre-ring - so the
@@ -2538,6 +2580,7 @@ static esp_err_t settings_get_handler(httpd_req_t *req)
     cJSON_AddBoolToObject(root, "rbn_en",            c.rbn_en);
     cJSON_AddBoolToObject(root, "cluster_en",        c.cluster_en);
     cJSON_AddBoolToObject(root, "sota_en",           c.sota_en);
+    cJSON_AddBoolToObject(root, "wspr_en",           c.wspr_en);
     cJSON_AddBoolToObject(root, "ota_autodl",        c.ota_autodl);
     cJSON_AddBoolToObject(root, "spots_mode_filter", c.spots_mode_filter);
     // The last of the drawer's controls that had no remote equivalent. CW pitch and
@@ -3077,6 +3120,18 @@ static esp_err_t psk_rx_handler(httpd_req_t *req)
  * free. */
 static esp_err_t wspr_handler(httpd_req_t *req)
 {
+    /* Answer honestly rather than with an empty spot list: "disabled" and
+     * "enabled but nothing heard yet" look identical otherwise, and a browser
+     * cannot tell which it is looking at. */
+    if (!wspr_feature_enabled()) {
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"enabled\":false,\"spots_held\":0,"
+                                "\"unique_calls\":0,\"rx_live\":false,"
+                                "\"rx_status\":\"WSPR is not enabled\","
+                                "\"spots\":[]}");
+        return ESP_OK;
+    }
+
     int total = wspr_spots_count();
     int want  = total < 128 ? total : 128;
 

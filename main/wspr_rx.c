@@ -1247,9 +1247,27 @@ static void wspr_rx_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/* The single answer to "is WSPR reachable" - see wspr_rx.h for why every gate
+ * asks this rather than reading the setting for itself. */
+bool wspr_feature_enabled(void)
+{
+    qmx_settings_t c;
+    settings_load_all(&c);
+    return c.wspr_en;
+}
+
 bool wspr_rx_start(void)
 {
     if (s_run) return true;
+
+    /* Last line of defence, not the only one. The UI and the web handler both
+     * refuse before getting here; this exists so a future caller cannot start
+     * an 8.6 MB decode loop for a page the operator has never enabled. */
+    if (!wspr_feature_enabled()) {
+        ESP_LOGW(TAG, "RX start refused - the WSPR page is not enabled "
+                      "(/api/cmd {\"action\":\"wspr_enable\",\"on\":true})");
+        return false;
+    }
 
     /* Claimed BEFORE the task exists, and cleared if creation fails - #199: a
      * flag set as the task's first statement means "has begun running" while
