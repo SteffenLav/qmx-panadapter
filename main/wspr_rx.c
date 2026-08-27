@@ -1143,7 +1143,9 @@ static void wspr_rx_task(void *arg)
             if (got >= (int)CAP_SAMPLES) break;
             int64_t elapsed = now_ms() % WSPR_CYCLE_MS;
             if (elapsed > WSPR_CYCLE_MS - 500 && got > 0) break;  /* boundary */
-            set_status("capturing %d/120 s", got / (int)WSPR_SAMPLE_RATE_HZ);
+            /* "captur." not "capturing": the line also carries "| dec n/20"
+             * and the full word ran past the left panel's right edge. */
+            set_status("captur. %d/120 s", got / (int)WSPR_SAMPLE_RATE_HZ);
             vTaskDelay(pdMS_TO_TICKS(500));
         }
         dsp_ft8_capture_finish(2000);

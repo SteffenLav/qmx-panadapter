@@ -36,7 +36,13 @@ LV_FONT_DECLARE(qmx_mono_25);
 #define MID_Y   TOP_BAR_H
 #define MID_H   (720 - TOP_BAR_H - BOTTOM_BAR_H)
 #define MID_W   1280
-#define LEFT_W  320
+/* ⭐ 372, NOT 320, TO FIT "MODE: WSPR" AT 48 pt. The header is ~336 px wide
+ * and starts at x=16, so 320 left it running out of the panel and over the
+ * waterfall. The operator accepted that overlap once ("the wf can run under
+ * it") but only because the alternative offered then was a smaller font; given
+ * a wider panel he would rather it simply fit. What the panel takes, the
+ * decode table gives back - see ROW_FMT. */
+#define LEFT_W  372
 
 /* Rows the list can show at once. The pane is MID_H tall and a mono-25 row plus
  * line spacing is ~31 px, so 18 is a screenful including the cycle headers -
@@ -55,7 +61,11 @@ LV_FONT_DECLARE(qmx_mono_25);
 #define LIST_Y     (AXIS_Y + AXIS_H + 8)
 
 #define AXIS_TICKS 7      /* 1350..1650 every 50 Hz */
-#define VIEW_ROWS  12
+/* Rows RENDERED, not rows visible - the pane shows about a dozen and scrolls
+ * through the rest, which is what the operator asked for ("like FT8/4"). 64 is
+ * a quarter of the 256-entry ring: several screenfuls to scroll back through
+ * without rendering a log nobody will reach. */
+#define VIEW_ROWS  64
 
 static lv_obj_t *s_container;
 static lv_obj_t *s_lbl_title;
@@ -198,6 +208,11 @@ static lv_obj_t *s_lbl_net;
 static lv_obj_t *s_hop_cb[16];
 static uint8_t   s_hop_band[16];   /* kBands index behind each checkbox */
 static int       s_hop_n;
+static lv_obj_t *s_btn_hop;        /* opens the picker */
+static lv_obj_t *s_lbl_hop;        /* says which bands are ticked */
+static lv_obj_t *s_hop_modal;      /* NULL when closed */
+
+static void hop_button_refresh(void);
 
 static void hop_toggled_cb(lv_event_t *e)
 {
@@ -213,7 +228,145 @@ static void hop_toggled_cb(lv_event_t *e)
      * enable switch would be a second thing to get wrong, and "one band ticked"
      * already means "stay there" - which is the same as off. */
     settings_set_wspr_hop_en(__builtin_popcount(mask) > 1);
+    hop_button_refresh();
 }
+
+/* ---- THE BAND-HOP PICKER ----------------------------------------------
+ *
+ * A full-screen window with finger-sized rows, opened from the panel button.
+ * The panel itself only ever shows WHICH bands are ticked; choosing them is a
+ * deliberate act that gets room to happen in.
+ *
+ * ⚠ THE LIST IS BUILT HERE, ON OPEN, NOT AT PAGE INIT. That is not tidiness:
+ * wspr_bands_available() filters against cat_get_band_list(), and CAT does not
+ * answer until ~17 s after boot. Built during init the filter always saw an
+ * empty radio list and silently offered every band in the table on every
+ * radio. Built on open, the radio has long since answered.
+ */
+static void hop_modal_close(void)
+{
+    if (!s_hop_modal) return;
+    lv_obj_del(s_hop_modal);
+    s_hop_modal = NULL;
+    for (int i = 0; i < 16; i++) s_hop_cb[i] = NULL;
+    s_hop_n = 0;
+    hop_button_refresh();
+}
+
+static void hop_close_cb(lv_event_t *e) { (void)e; hop_modal_close(); }
+
+static void hop_modal_open_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_hop_modal) return;
+
+    s_hop_modal = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(s_hop_modal, 1280, 720);
+    lv_obj_set_pos(s_hop_modal, 0, 0);
+    lv_obj_set_style_bg_color(s_hop_modal, lv_color_hex(0x000000), 0);
+    lv_obj_set_style_bg_opa(s_hop_modal, LV_OPA_70, 0);
+    lv_obj_set_style_border_width(s_hop_modal, 0, 0);
+    lv_obj_clear_flag(s_hop_modal, LV_OBJ_FLAG_SCROLLABLE);
+    /* A scrim you dismiss, not a control you press - so the mouse pointer
+     * stays white over it (ui_theme.h). */
+    lv_obj_add_flag(s_hop_modal, UI_FLAG_NOT_HOT);
+    lv_obj_add_flag(s_hop_modal, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_hop_modal, hop_close_cb, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *panel = lv_obj_create(s_hop_modal);
+    lv_obj_set_size(panel, 720, 560);
+    lv_obj_center(panel);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(UI_COLOR_SURFACE), 0);
+    lv_obj_set_style_border_color(panel, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+    lv_obj_set_style_border_width(panel, 2, 0);
+    lv_obj_set_style_radius(panel, 10, 0);
+    lv_obj_set_style_pad_all(panel, 18, 0);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+    /* Presses inside the panel must not reach the scrim's dismiss handler. */
+    lv_obj_add_flag(panel, LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *title = lv_label_create(panel);
+    lv_label_set_text(title, "Band hop");
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(title, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
+    lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
+
+    lv_obj_t *hint = lv_label_create(panel);
+    lv_label_set_text(hint,
+        "Tick more than one band to rotate through them.\n"
+        "One band ticked means stay there.");
+    lv_obj_set_style_text_font(hint, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(hint, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
+    lv_obj_align(hint, LV_ALIGN_TOP_LEFT, 0, 40);
+
+    qmx_settings_t hs;
+    settings_load_all(&hs);
+    s_hop_n = wspr_bands_available(s_hop_band, (int)sizeof(s_hop_band));
+
+    if (s_hop_n == 0) {
+        /* Says which of the two it is. "No bands" with the radio off reads as
+         * a broken feature; it is a disconnected radio. */
+        lv_obj_t *none = lv_label_create(panel);
+        lv_label_set_text(none, cat_is_ready()
+            ? "The radio reported no bands."
+            : "Waiting for the radio - connect the QMX and reopen this.");
+        lv_obj_set_style_text_font(none, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(none, lv_color_hex(UI_COLOR_TEXT), 0);
+        lv_obj_align(none, LV_ALIGN_TOP_LEFT, 0, 110);
+    }
+
+    /* Two columns of finger-sized rows. 64 px pitch and a 32 px tick box: the
+     * grid this replaces used 30 px rows and a 20 px box, which is what made
+     * it unusable with a finger. */
+    for (int i = 0; i < s_hop_n; i++) {
+        lv_obj_t *cb = lv_checkbox_create(panel);
+        lv_checkbox_set_text(cb, kBands[s_hop_band[i]].name);
+        lv_obj_set_style_text_font(cb, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_color(cb, lv_color_hex(UI_COLOR_TEXT), 0);
+        lv_obj_set_style_pad_all(cb, 8, 0);
+        lv_obj_set_style_width(cb, 32, LV_PART_INDICATOR);
+        lv_obj_set_style_height(cb, 32, LV_PART_INDICATOR);
+        lv_obj_align(cb, LV_ALIGN_TOP_LEFT, (i % 2) * 330, 110 + (i / 2) * 64);
+        if (hs.wspr_hop_mask & (1u << s_hop_band[i]))
+            lv_obj_add_state(cb, LV_STATE_CHECKED);
+        lv_obj_add_event_cb(cb, hop_toggled_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        s_hop_cb[i] = cb;
+    }
+
+    lv_obj_t *done = lv_btn_create(panel);
+    lv_obj_set_size(done, 200, 64);
+    lv_obj_align(done, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_set_style_radius(done, 8, 0);
+    lv_obj_add_event_cb(done, hop_close_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *dl = lv_label_create(done);
+    lv_label_set_text(dl, "Done");
+    lv_obj_set_style_text_font(dl, &lv_font_montserrat_28, 0);
+    lv_obj_center(dl);
+}
+
+/* The panel button says what is ticked, so the picker never has to be opened
+ * just to find out. */
+static void hop_button_refresh(void)
+{
+    if (!s_lbl_hop) return;
+    qmx_settings_t hs;
+    settings_load_all(&hs);
+
+    uint8_t bands[16];
+    int n = wspr_bands_available(bands, (int)sizeof(bands));
+    char t[64];
+    size_t off = 0;
+    int ticked = 0;
+    for (int i = 0; i < n && off < sizeof(t) - 8; i++) {
+        if (!(hs.wspr_hop_mask & (1u << bands[i]))) continue;
+        ticked++;
+        off += (size_t)snprintf(t + off, sizeof(t) - off, "%s%s",
+                                ticked > 1 ? " " : "", kBands[bands[i]].name);
+    }
+    if (ticked == 0) snprintf(t, sizeof(t), "Band hop: off");
+    lv_label_set_text(s_lbl_hop, t);
+}
+
 
 static lv_obj_t *ex_heading(const char *text, int y)
 {
@@ -259,33 +412,34 @@ static void build_left_extras(void)
     lv_obj_set_width(s_lbl_net, EX_W);
     lv_obj_set_pos(s_lbl_net, EX_X, EX_NET_Y);
 
-    /* ---- band hop ---- */
+    /* ---- band hop ----
+     *
+     * ⭐ A BUTTON, NOT A GRID OF CHECKBOXES IN THE PANEL, AND FOR TWO REASONS.
+     *
+     * The obvious one is the operator's: eleven 20 px checkboxes crammed into
+     * whatever height was left at the bottom of the panel cannot be hit with a
+     * finger. It was a list you could read and not use.
+     *
+     * The one that would have gone unnoticed is worse. The tick list is
+     * filtered to the bands the RADIO reports (wspr_bands_available ->
+     * cat_get_band_list), but it was built in this init function, which runs
+     * during boot - and CAT does not come up until about 17 s. So nradio was
+     * always 0, the filter never applied, and every band in the table was
+     * offered on every radio. Exactly the shape of the CW-pitch bug CLAUDE.md
+     * records: a value read once, too early, and never revisited.
+     *
+     * Building the list when the WINDOW OPENS fixes both at once - by then the
+     * radio has long since answered. */
     ex_heading("BAND HOP", EX_HOP_Y);
-    /* Scrollable, and fixed height on purpose: this bench's QMX offers six
-     * bands but a QMX+ offers eleven, and a list sized for six would run off
-     * the bottom of the panel on the radio that has more of them. */
-    lv_obj_t *hop = lv_obj_create(s_container);
-    lv_obj_set_size(hop, EX_W, MID_H - (EX_HOP_Y + 24) - 6);
-    lv_obj_set_pos(hop, EX_X, EX_HOP_Y + 22);
-    lv_obj_set_style_bg_opa(hop, LV_OPA_TRANSP, 0);
-    lv_obj_set_style_border_width(hop, 0, 0);
-    lv_obj_set_style_pad_all(hop, 0, 0);
-    lv_obj_add_flag(hop, UI_FLAG_NOT_HOT);
-
-    qmx_settings_t hs;
-    settings_load_all(&hs);
-    s_hop_n = wspr_bands_available(s_hop_band, (int)sizeof(s_hop_band));
-    for (int i = 0; i < s_hop_n; i++) {
-        lv_obj_t *cb = lv_checkbox_create(hop);
-        lv_checkbox_set_text(cb, kBands[s_hop_band[i]].name);
-        lv_obj_set_style_text_font(cb, &lv_font_montserrat_20, 0);
-        lv_obj_set_style_text_color(cb, lv_color_hex(UI_COLOR_TEXT), 0);
-        lv_obj_set_pos(cb, (i % 2) * (EX_W / 2), (i / 2) * 30);
-        if (hs.wspr_hop_mask & (1u << s_hop_band[i]))
-            lv_obj_add_state(cb, LV_STATE_CHECKED);
-        lv_obj_add_event_cb(cb, hop_toggled_cb, LV_EVENT_VALUE_CHANGED, NULL);
-        s_hop_cb[i] = cb;
-    }
+    s_btn_hop = lv_btn_create(s_container);
+    lv_obj_set_size(s_btn_hop, EX_W, 56);
+    lv_obj_set_pos(s_btn_hop, EX_X, EX_HOP_Y + 22);
+    lv_obj_set_style_radius(s_btn_hop, 8, 0);
+    lv_obj_add_event_cb(s_btn_hop, hop_modal_open_cb, LV_EVENT_CLICKED, NULL);
+    s_lbl_hop = lv_label_create(s_btn_hop);
+    lv_obj_set_style_text_font(s_lbl_hop, &lv_font_montserrat_20, 0);
+    lv_obj_center(s_lbl_hop);
+    hop_button_refresh();
 }
 
 /* ---- BAND HOPPING --------------------------------------------------------
@@ -370,8 +524,16 @@ static void refresh_left_extras(void)
         wspr_spot_t dx;
         char t[64];
         if (wspr_spots_best_dx(&dx) && dx.km >= 0) {
+            /* SPELLED OUT here, unlike the table's COUNTRY column. That
+             * column is one of ten on a fixed-width line and has to fall back
+             * to the alpha-3; this line has the whole panel width to itself,
+             * so "Germany" beats "DEU" with nothing to trade for it. Falls
+             * back the same way when the callsign is not in the DXCC table. */
+            const char *full = dxcc_lookup(dx.call);
+            const char *where = (full && full[0]) ? full
+                              : (dx.cty[0] ? dx.cty : dx.grid);
             snprintf(t, sizeof(t), "%s  %s\n%ld km  %d dBm",
-                     dx.call, dx.cty[0] ? dx.cty : dx.grid,
+                     dx.call, where,
                      (long)dx.km, (int)dx.power_dbm);
         } else {
             snprintf(t, sizeof(t), "-");
@@ -522,14 +684,28 @@ static void arm_dial_push(const char *why)
  *    costs 6 characters, and it is worth it: it replaced a standalone
  *    timestamp line AND a blank line per group, so a 3-spot cycle went from
  *    5 lines to 3. */
-#define ROW_FMT "%-5s %-10s %-4s %-11s %3s %3s %6s %3s %5s %3s"
+/* ⚠ THE COUNTRY COLUMN PAYS FOR THE WIDER LEFT PANEL, NOT THE CALL COLUMN.
+ * The operator asked for the space to come out of CALL, and it must not:
+ * CALL has no fallback, so a narrower field does not truncate - printf just
+ * lets a long callsign run on and shove every later column out of line for
+ * that row, which reads as a bug. WSPR is full of compound calls
+ * (BH4RRG/QRP is ten characters) so it would happen often.
+ * COUNTRY already HAS a graceful fallback for exactly this: spelled out if it
+ * fits, otherwise the DXCC alpha-3. Narrowing it from 11 to 7 simply sends a
+ * few more countries to their three-letter form - England, France, Russia,
+ * Finland, Germany and Cyprus all still fit - and nothing ever misaligns. */
+#define ROW_FMT "%-5s %-10s %-4s %-7s %3s %3s %6s %3s %5s %3s"
 
 /* Spelled out if it fits, else the DXCC alpha-3. NEVER truncated: "United
  * Stat" is not a country and a clipped name reads as a bug, while USA is
  * simply the shorter true answer. The full name comes from the callsign via
  * dxcc_lookup(), the same source the web panel uses, so the two screens
  * cannot disagree. */
-#define COUNTRY_W 11
+/* ⛔ MUST MATCH THE COUNTRY FIELD WIDTH IN ROW_FMT. They are two separate
+ * numbers describing ONE column, so narrowing the format without narrowing
+ * this lets an 8-11 character name print into the next column and misalign
+ * the row - the exact failure the alpha-3 fallback exists to prevent. */
+#define COUNTRY_W 7
 static const char *country_field(const wspr_spot_t *sp)
 {
     const char *full = dxcc_lookup(sp->call);
@@ -823,7 +999,15 @@ void wspr_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_bg_opa(s_list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(s_list, 0, 0);
     lv_obj_set_style_pad_all(s_list, 0, 0);
-    lv_obj_clear_flag(s_list, LV_OBJ_FLAG_SCROLLABLE);
+    /* SCROLLABLE, vertically only. The ring holds far more than a screenful
+     * and the operator wants to reach all of it, the way the FT8 list works.
+     * Horizontal scrolling is off: the table is sized to the pane, so sideways
+     * travel would only ever be a way to lose the columns off the edge.
+     * NOT_HOT because this is a surface you drag, not a control you press -
+     * nothing here is tappable (a WSPR spot is a measurement, not a station to
+     * work). */
+    lv_obj_set_scroll_dir(s_list, LV_DIR_VER);
+    lv_obj_set_scrollbar_mode(s_list, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_add_flag(s_list, UI_FLAG_NOT_HOT);
 
     /* ONE label holding every line, not one object per row.
@@ -839,6 +1023,16 @@ void wspr_screen_view_init(lv_obj_t *parent)
     lv_obj_set_style_text_color(s_lbl_rows, lv_color_hex(UI_COLOR_TEXT), 0);
     lv_obj_set_style_text_line_space(s_lbl_rows, 2, 0);
     lv_obj_set_pos(s_lbl_rows, 0, 0);
+
+    /* ⛔ RE-FOREGROUNDED HERE, AT THE END, AND THAT IS THE WHOLE POINT.
+     * lv_obj_move_foreground() only lifts a child above the siblings that
+     * exist WHEN IT RUNS - and the title is created near the top of this
+     * function while the waterfall canvas is created near the bottom. So the
+     * call beside the title was undone by every object built after it, and the
+     * operator saw the "R" of WSPR disappear behind the waterfall. Raising it
+     * once more, after the last sibling exists, is what actually puts it in
+     * front. */
+    lv_obj_move_foreground(s_lbl_title);
 }
 
 void wspr_screen_view_show(void)
@@ -1101,7 +1295,14 @@ void wspr_screen_view_tick(void)
 
     /* Grouped under the cycle each burst was heard in - the whole reason this
      * is a log and not a live list. */
-    char buf[VIEW_ROWS * 110 + 256];
+    /* ⛔ STATIC AND IN PSRAM, NOT A STACK LOCAL. At 12 rows this was 1.5 KB on
+     * the stack and got away with it; at 64 it is ~7.3 KB on taskLVGL, whose
+     * stack is about 8 KB - and CLAUDE.md carries a list of crashes from
+     * exactly this (the v0.20.1 pounce crash was an 11 KB array on this very
+     * task, and the compiler reserves the frame at the prologue whether the
+     * code path is taken or not). Safe as a static because this runs only on
+     * taskLVGL, the same reasoning snap[] above uses. */
+    EXT_RAM_BSS_ATTR static char buf[VIEW_ROWS * 110 + 256];
     size_t off = 0;
     int64_t last_cycle = 0;
     for (int i = 0; i < got && off < sizeof(buf) - 96; i++) {
