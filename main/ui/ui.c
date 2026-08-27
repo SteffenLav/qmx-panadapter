@@ -2004,6 +2004,21 @@ static void drawer_preset_noise_cb(lv_event_t *e);
 static void drawer_wifi_btn_cb(lv_event_t *e);
 static void drawer_identity_btn_cb(lv_event_t *e);
 static void ui_show_memories(void);
+
+/* Put the edge-swipe strips back on top of everything built after them.
+ *
+ * ⛔ A PAGE THAT FOREGROUNDS ITS OWN CONTAINER MUST CALL THIS. The FT8 and
+ * WSPR views are near-full-screen opaque panes, so raising one buries the
+ * strips underneath it and the operator simply cannot swipe off that page -
+ * which is how the WSPR page ended up with no way out. CLAUDE.md already
+ * carried the warning for FT8; this makes it one call instead of a rule each
+ * page is expected to remember. */
+void ui_raise_edge_strips(void)
+{
+    if (s_left_edge_strip)   lv_obj_move_foreground(s_left_edge_strip);
+    if (s_bottom_edge_strip) lv_obj_move_foreground(s_bottom_edge_strip);
+    if (s_right_edge_strip)  lv_obj_move_foreground(s_right_edge_strip);
+}
 static void ui_advance_page(void);
 static void drawer_slider_db_min_cb(lv_event_t *e);
 static void drawer_slider_db_max_cb(lv_event_t *e);
@@ -4713,9 +4728,7 @@ void ui_init(lv_display_t *disp)
     // called at the very top of ui_init) and re-foregrounded here, now that
     // every other widget - top-bar hit zones, modals, drawer, FT8 view,
     // signature - has been built after them.
-    if (s_left_edge_strip)   lv_obj_move_foreground(s_left_edge_strip);
-    if (s_bottom_edge_strip) lv_obj_move_foreground(s_bottom_edge_strip);
-    if (s_right_edge_strip)  lv_obj_move_foreground(s_right_edge_strip);
+    ui_raise_edge_strips();
     // Same reasoning for the resource-monitor overlay - it needs to stay
     // draggable/hit-testable regardless of what's built after it.
     if (s_resmon_panel)      lv_obj_move_foreground(s_resmon_panel);
@@ -7590,7 +7603,13 @@ static void bottom_edge_swipe_cb(lv_event_t *e)
             cat_set_frequency_forced(tgt);   // deliberate user action - bypass the 200ms rate-limiter
             ui_update_frequency(tgt);
         } else if (be_decided == 1 && s_bottom_edge_swipe_start_y >= 0 &&
-                   s_bottom_edge_swipe_start_y - (int)p.y >= EDGE_SWIPE_MIN_DY) {
+                   s_bottom_edge_swipe_start_y - (int)p.y >= EDGE_SWIPE_MIN_DY &&
+                   ui_mode_get() != UI_MODE_WSPR) {
+            /* Memory channels recall a frequency AND a mode, which on the WSPR
+             * page would silently take the radio off its WSPR dial mid-cycle -
+             * and the capture would be half one band and half another. The
+             * page has its own band control for the only move that makes sense
+             * here. */
             ui_show_memories();
         } else if (be_decided == 0 && s_update_press_ms && s_update_tap_cb) {
             // #239: a SHORT TAP now acts, and that is the whole point of the

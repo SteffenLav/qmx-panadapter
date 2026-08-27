@@ -195,7 +195,13 @@ static void dial_changed_cb(lv_event_t *e)
 #define EX_DX_Y   322
 #define EX_HIST_Y 404
 #define EX_NET_Y  470
-#define EX_HOP_Y  506
+/* ⚠ BAND HOP SITS AT THE BOTTOM, and the gap above it is not slack.
+ * The wsprnet line above wraps to TWO lines once the counts reach two digits
+ * ("wsprnet: off - 12 of 25 calls confirmed"), and at 506 the second line
+ * printed straight through the BAND HOP heading. Anchored to the panel's
+ * bottom instead of stacked below its neighbour, so a line that grows can
+ * never reach it. */
+#define EX_HOP_Y  (MID_H - 90)
 
 #define HIST_BARS  WSPR_CYCLE_HISTORY
 #define HIST_BAR_W 6
@@ -274,7 +280,7 @@ static void hop_modal_open_cb(lv_event_t *e)
     lv_obj_add_event_cb(s_hop_modal, hop_close_cb, LV_EVENT_CLICKED, NULL);
 
     lv_obj_t *panel = lv_obj_create(s_hop_modal);
-    lv_obj_set_size(panel, 720, 560);
+    lv_obj_set_size(panel, 780, 660);
     lv_obj_center(panel);
     lv_obj_set_style_bg_color(panel, lv_color_hex(UI_COLOR_SURFACE), 0);
     lv_obj_set_style_border_color(panel, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
@@ -287,17 +293,27 @@ static void hop_modal_open_cb(lv_event_t *e)
 
     lv_obj_t *title = lv_label_create(panel);
     lv_label_set_text(title, "Band hop");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_32, 0);   /* 36 and 40 are not built into this image; 32 is */
     lv_obj_set_style_text_color(title, lv_color_hex(UI_COLOR_ACCENT_GOLD), 0);
     lv_obj_align(title, LV_ALIGN_TOP_LEFT, 0, 0);
 
     lv_obj_t *hint = lv_label_create(panel);
+    /* Says how it works, in the order the questions actually arise. The
+     * operator asked all three of these, which is the sign the window was
+     * showing controls without explaining them:
+     *   - what does a tick DO?       one cycle each, so two minutes per band
+     *   - what if I tick only one?   nothing hops; the band selector wins
+     *   - so what should I do?       pick at least two - say it plainly */
     lv_label_set_text(hint,
-        "Tick more than one band to rotate through them.\n"
-        "One band ticked means stay there.");
-    lv_obj_set_style_text_font(hint, &lv_font_montserrat_20, 0);
+        "Pick at least two bands.\n"
+        "The radio moves to the next ticked band every cycle -\n"
+        "two minutes on each - in the order listed below, then wraps.\n"
+        "\n"
+        "Fewer than two ticked means no hopping at all: the band\n"
+        "selector on the page decides, and the radio stays there.");
+    lv_obj_set_style_text_font(hint, &lv_font_montserrat_22, 0);
     lv_obj_set_style_text_color(hint, lv_color_hex(UI_COLOR_TEXT_SECONDARY), 0);
-    lv_obj_align(hint, LV_ALIGN_TOP_LEFT, 0, 40);
+    lv_obj_align(hint, LV_ALIGN_TOP_LEFT, 0, 62);
 
     qmx_settings_t hs;
     settings_load_all(&hs);
@@ -312,7 +328,7 @@ static void hop_modal_open_cb(lv_event_t *e)
             : "Waiting for the radio - connect the QMX and reopen this.");
         lv_obj_set_style_text_font(none, &lv_font_montserrat_20, 0);
         lv_obj_set_style_text_color(none, lv_color_hex(UI_COLOR_TEXT), 0);
-        lv_obj_align(none, LV_ALIGN_TOP_LEFT, 0, 110);
+        lv_obj_align(none, LV_ALIGN_TOP_LEFT, 0, 238);
     }
 
     /* Two columns of finger-sized rows. 64 px pitch and a 32 px tick box: the
@@ -326,7 +342,7 @@ static void hop_modal_open_cb(lv_event_t *e)
         lv_obj_set_style_pad_all(cb, 8, 0);
         lv_obj_set_style_width(cb, 32, LV_PART_INDICATOR);
         lv_obj_set_style_height(cb, 32, LV_PART_INDICATOR);
-        lv_obj_align(cb, LV_ALIGN_TOP_LEFT, (i % 2) * 330, 110 + (i / 2) * 64);
+        lv_obj_align(cb, LV_ALIGN_TOP_LEFT, (i % 2) * 340, 238 + (i / 2) * 64);
         if (hs.wspr_hop_mask & (1u << s_hop_band[i]))
             lv_obj_add_state(cb, LV_STATE_CHECKED);
         lv_obj_add_event_cb(cb, hop_toggled_cb, LV_EVENT_VALUE_CHANGED, NULL);
@@ -335,7 +351,7 @@ static void hop_modal_open_cb(lv_event_t *e)
 
     lv_obj_t *done = lv_btn_create(panel);
     lv_obj_set_size(done, 200, 64);
-    lv_obj_align(done, LV_ALIGN_BOTTOM_RIGHT, 0, 0);
+    lv_obj_align(done, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_radius(done, 8, 0);
     lv_obj_add_event_cb(done, hop_close_cb, LV_EVENT_CLICKED, NULL);
     lv_obj_t *dl = lv_label_create(done);
@@ -712,22 +728,35 @@ static void arm_dial_push(const char *why)
  * station sample from this bench is six characters or fewer, so the table
  * aligns in practice - but a COMPOUND call (BH4RRG/QRP is ten) still prints in
  * full and pushes that row's later columns right. printf does not truncate,
- * and it must not: a clipped callsign is a different station, which is the
- * same rule that keeps COUNTRY spelling out or falling back to its alpha-3
- * rather than being cut short. One misaligned row beats one wrong callsign. */
-#define ROW_FMT "%-5s %-7s %-4s %-11s %3s %3s %6s %3s %5s %3s"
+ * and it must not: a clipped callsign is a different station.
+ *
+ * ⛔ THE WIDTHS ARE DEFINED ONCE AND THE FORMAT IS BUILT FROM THEM. Every
+ * column width used to appear twice - in ROW_FMT and again wherever the field
+ * was prepared - and that drift has already caused two bugs in one evening
+ * (COUNTRY_W left at 11 when the format went to 7, then the reverse). A
+ * stringified constant cannot disagree with itself. */
+#define W_UTC   5
+#define W_CALL  7
+#define W_GRID  4
+#define W_CTY  11
+#define W_SNR   3
+#define W_DRF   3
+#define W_TONE  6
+#define W_PWR   3
+#define W_KM    5
+#define W_BRG   3
+
+#define STRINGIFY2(x) #x
+#define STRINGIFY(x)  STRINGIFY2(x)
+
+#define ROW_FMT "%-" STRINGIFY(W_UTC)  "s %-" STRINGIFY(W_CALL) "s %-"                      STRINGIFY(W_GRID) "s %-" STRINGIFY(W_CTY)  "s %"                       STRINGIFY(W_SNR)  "s %"  STRINGIFY(W_DRF)  "s %"                       STRINGIFY(W_TONE) "s %"  STRINGIFY(W_PWR)  "s %"                       STRINGIFY(W_KM)   "s %"  STRINGIFY(W_BRG)  "s"
 
 /* Spelled out if it fits, else the DXCC alpha-3. NEVER truncated: "United
  * Stat" is not a country and a clipped name reads as a bug, while USA is
  * simply the shorter true answer. The full name comes from the callsign via
  * dxcc_lookup(), the same source the web panel uses, so the two screens
  * cannot disagree. */
-/* ⛔ MUST MATCH THE COUNTRY FIELD WIDTH IN ROW_FMT. They are two separate
- * numbers describing ONE column, so changing the format without changing this
- * lets a too-long name print into the next column and misalign the row - the
- * exact failure the alpha-3 fallback exists to prevent. Caught once already,
- * when ROW_FMT was narrowed and this was left behind. */
-#define COUNTRY_W 11
+#define COUNTRY_W W_CTY   /* one number, see the widths above */
 static const char *country_field(const wspr_spot_t *sp)
 {
     const char *full = dxcc_lookup(sp->call);
@@ -763,8 +792,31 @@ static void fmt_row(char *out, size_t n, const wspr_spot_t *sp, const char *utc)
 
 static void fmt_header(char *out, size_t n)
 {
-    snprintf(out, n, ROW_FMT, "UTC", "CALL", "GRID", "COUNTRY", "SNR", "DRF",
-             "HZ", "PWR", "KM", "BRG");
+    /* CENTRED over each column. printf has no centring conversion, so each
+     * heading is padded into a buffer of exactly its column width first - and
+     * because it then arrives at ROW_FMT already the right length, the format's
+     * own left/right alignment cannot move it again.
+     *
+     * "TONE" rather than "HZ": every column here is a number in some unit, so
+     * "HZ" named the unit while the others name the quantity. What the column
+     * holds is the station's audio tone within the 200 Hz window. */
+    char h[10][16];
+    const char *raw[10] = { "UTC", "CALL", "GRID", "COUNTRY", "SNR",
+                            "DRF", "TONE", "PWR", "KM", "BRG" };
+    const int   w[10]   = { W_UTC, W_CALL, W_GRID, W_CTY, W_SNR,
+                            W_DRF, W_TONE, W_PWR, W_KM, W_BRG };
+    for (int i = 0; i < 10; i++) {
+        const int len  = (int)strlen(raw[i]);
+        const int pad  = w[i] > len ? w[i] - len : 0;
+        const int left = pad / 2;
+        int k = 0;
+        for (int j = 0; j < left && k < (int)sizeof(h[i]) - 1; j++) h[i][k++] = ' ';
+        for (int j = 0; raw[i][j] && k < (int)sizeof(h[i]) - 1; j++) h[i][k++] = raw[i][j];
+        for (int j = 0; j < pad - left && k < (int)sizeof(h[i]) - 1; j++) h[i][k++] = ' ';
+        h[i][k] = '\0';
+    }
+    snprintf(out, n, ROW_FMT, h[0], h[1], h[2], h[3], h[4],
+             h[5], h[6], h[7], h[8], h[9]);
 }
 
 static void cycle_label(char *out, size_t n, int64_t utc)
@@ -856,9 +908,11 @@ void wspr_screen_view_init(lv_obj_t *parent)
     lv_obj_set_pos(s_dd_dial, 16, 70);
     lv_obj_set_style_radius(s_dd_dial, 8, 0);
     lv_obj_set_style_border_width(s_dd_dial, 1, 0);
-    /* 24, not 20. Read on the actual screen at arm's length this was the
-     * smallest thing in the column and the one carrying the frequency. */
-    lv_obj_set_style_text_font(s_dd_dial, &lv_font_montserrat_24, 0);
+    /* 28, not 24 and certainly not 20. Read on the actual screen at arm's
+     * length this was the smallest thing in the column and the one carrying
+     * the frequency. The panel is 372 px wide now, so "20 m  14.095600" at
+     * 28 pt is ~230 px inside a 340 px control - it fits with the chevron. */
+    lv_obj_set_style_text_font(s_dd_dial, &lv_font_montserrat_28, 0);
     /* Dark like everything else on this page; the stock dropdown is white. */
     lv_obj_set_style_bg_color(s_dd_dial, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
     lv_obj_set_style_text_color(s_dd_dial, lv_color_hex(UI_COLOR_TEXT), 0);
@@ -1065,6 +1119,11 @@ void wspr_screen_view_show(void)
     if (!s_container) return;
     lv_obj_clear_flag(s_container, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_container);
+    /* ⛔ AND THEN PUT THE EDGE STRIPS BACK ON TOP. This container is a
+     * near-full-screen opaque pane, so foregrounding it buries them - which is
+     * exactly why the swipe out of WSPR did nothing. CLAUDE.md already carried
+     * this warning for the FT8 view. */
+    ui_raise_edge_strips();
     s_last_spot_count = -1;      /* force a repaint on entry */
     s_last_status[0]  = '\0';
     /* Entering the page is the operator saying "receive WSPR", and that is
