@@ -11,6 +11,26 @@
                              host test builds that pass -I .../ft8_lib/fft
                              directly. */
 
+/* ⛔ THE TONE POWERS ARE FLOAT, AND ON THIS BOARD THAT IS NOT A MICRO-
+ * OPTIMISATION. The ESP32-P4 has a SINGLE-PRECISION FPU, so every `double`
+ * operation is a software-library call - mix_decimate() below carries the same
+ * warning on its inner loop, and CLAUDE.md records 80 s versus 2.8 s for one
+ * synthesis that differed only in this.
+ *
+ * This array is THE hot path: it is filled once per trial alignment, roughly
+ * 160 times per candidate. Measured on hardware before this change, a
+ * candidate cost 11.7 s - and a candidate rejected by the sync gate, which
+ * runs no Fano search at all, still cost 11.7 s. So essentially the whole
+ * decode budget is spent right here.
+ *
+ * Precision is not at risk: these are power values consumed only as RATIOS -
+ * a sync correlation normalised by total amplitude, a per-symbol difference
+ * normalised by the capture's own spread. Float carries about seven digits and
+ * nothing downstream asks for more. The per-decode arithmetic that genuinely
+ * wants double (the metric scaling, the agreement normaliser) still uses it,
+ * because it runs once per attempt rather than 160 times. */
+typedef float wspr_tp_t;
+
 #define TONE_SPACING (WSPR_SAMPLE_RATE_HZ / WSPR_SYM_LEN_SAMPLES) /* 1.46484375 Hz */
 
 int wspr_find_candidates(const int16_t *samples, long n, double f_lo_hz,
@@ -246,9 +266,27 @@ static int mix_decimate(const int16_t *samples, long n, double f0, baseband_t *b
 
     build_lpf();
 
+    /* ⛔ THE LOCAL OSCILLATOR RUNS IN FLOAT, RE-SEEDED EXACTLY IN DOUBLE.
+     *
+     * The recurrence advances once per INPUT sample - 1.44 M of them per
+     * candidate - and in double that is four software multiplies and two
+     * software adds each, on a chip whose FPU is single-precision only. It was
+     * the last double left on the per-input-sample path; everything else here
+     * was moved to float long ago for exactly this reason (see the FLOAT, NOT
+     * DOUBLE note on the filter loop below).
+     *
+     * Float alone would not be safe: a rotation applied 1.44 M times
+     * accumulates PHASE error, and the old code's periodic renormalise only
+     * fixed MAGNITUDE - it could not have caught a drifting angle. So instead
+     * of renormalising, the oscillator is now recomputed from the exact phase
+     * every LO_RESEED samples. Error can then accumulate over at most 1024
+     * steps (~1e-4 rad, far below anything a tone correlation notices) and is
+     * wiped rather than merely rescaled, which makes this strictly more
+     * accurate than what it replaces as well as faster. */
+#define LO_RESEED 1024
     const double w = 2.0 * M_PI * f0 / WSPR_SAMPLE_RATE_HZ;
-    const double cs = cos(-w), sn = sin(-w);   /* step: e^(-j*w) */
-    double ore = 1.0, oim = 0.0;
+    const float cs = (float)cos(-w), sn = (float)sin(-w);   /* step: e^(-j*w) */
+    float ore = 1.0f, oim = 0.0f;
 
     /* Only the last LPF_TAPS mixed samples are ever needed, so this is a small
      * ring rather than an 11 MB copy of the whole mixed capture. Outputs are
@@ -270,16 +308,19 @@ static int mix_decimate(const int16_t *samples, long n, double f0, baseband_t *b
     int cnt = 0;
     for (long idx = 0; idx < out_n * WSPR_DECIM; idx++) {
         const float x = samples[idx] * (1.0f / 32768.0f);
-        hi[hp] = x * (float)ore;
-        hq[hp] = x * (float)oim;
+        hi[hp] = x * ore;
+        hq[hp] = x * oim;
         hp = (hp + 1) & (LPF_TAPS - 1);
 
-        double nre = ore * cs - oim * sn;
-        double nim = ore * sn + oim * cs;
-        ore = nre; oim = nim;
-        if ((idx & 1023) == 1023) {           /* renormalise: |osc| -> 1 */
-            double m = sqrt(ore * ore + oim * oim);
-            if (m > 0) { ore /= m; oim /= m; }
+        if ((idx & (LO_RESEED - 1)) == (LO_RESEED - 1)) {
+            /* Exact re-seed, not a rescale - see the note above. */
+            const double ph = -w * (double)(idx + 1);
+            ore = (float)cos(ph);
+            oim = (float)sin(ph);
+        } else {
+            const float nre = ore * cs - oim * sn;
+            const float nim = ore * sn + oim * cs;
+            ore = nre; oim = nim;
         }
 
         if (++cnt == WSPR_DECIM) {
@@ -345,7 +386,7 @@ static void build_tone_tw(tone_tw_t *tw, double df_hz)
  * oscillator cancels and the tables can be indexed by the offset within the
  * symbol. */
 static void extract_tone_powers(const baseband_t *bb, const tone_tw_t *tw,
-                                 long start_dec, double tone_power[WSPR_NSYM][4])
+                                 long start_dec, wspr_tp_t tone_power[WSPR_NSYM][4])
 {
     for (int sym = 0; sym < WSPR_NSYM; sym++) {
         long base = start_dec + (long)sym * WSPR_DEC_SPS;
@@ -361,7 +402,7 @@ static void extract_tone_powers(const baseband_t *bb, const tone_tw_t *tw,
                 re += xi * ct[j] + xq * st[j];
                 im += xq * ct[j] - xi * st[j];
             }
-            tone_power[sym][k] = (double)re * re + (double)im * im;
+            tone_power[sym][k] = re * re + im * im;
         }
     }
 }
@@ -388,17 +429,25 @@ static void extract_tone_powers(const baseband_t *bb, const tone_tw_t *tw,
  * Both changes together are what let the frequency search work at all: the old
  * metric grew with any extra energy admitted, so the best "frequency" was
  * simply wherever the most noise sat. */
-static double sync_score(double tone_power[WSPR_NSYM][4])
+static double sync_score(wspr_tp_t tone_power[WSPR_NSYM][4])
 {
-    double s = 0, tot = 0;
+    /* ⛔ sqrtF, NOT sqrt, AND FLOAT ACCUMULATORS. This function is called once
+     * per trial alignment - roughly 160 times per candidate - and each call
+     * takes 648 square roots, so it runs about 100,000 times per candidate.
+     * The ESP32-P4 has a SINGLE-PRECISION FPU, so every `double` operation
+     * here is a software-library call (CLAUDE.md records 80 s vs 2.8 s for the
+     * same synthesis, and the decimation filter has the identical warning on
+     * its inner loop). The result is a ratio used only to rank alignments;
+     * float carries far more precision than that comparison needs. */
+    float s = 0, tot = 0;
     for (int i = 0; i < WSPR_NSYM; i++) {
-        double a0 = sqrt(tone_power[i][0]), a1 = sqrt(tone_power[i][1]);
-        double a2 = sqrt(tone_power[i][2]), a3 = sqrt(tone_power[i][3]);
-        double favor1 = (a1 + a3) - (a0 + a2);
+        float a0 = sqrtf((float)tone_power[i][0]), a1 = sqrtf((float)tone_power[i][1]);
+        float a2 = sqrtf((float)tone_power[i][2]), a3 = sqrtf((float)tone_power[i][3]);
+        float favor1 = (a1 + a3) - (a0 + a2);
         s += wspr_sync_vector[i] ? favor1 : -favor1;
         tot += a0 + a1 + a2 + a3;
     }
-    return (tot > 0) ? s / tot : -1.0;
+    return (tot > 0) ? (double)(s / tot) : -1.0;
 }
 
 static int is_legal_power(int dbm)
@@ -494,7 +543,7 @@ static int callsign_shape_ok(const char *call)
  * See wspr_decode_result_t for why this is the only check that can catch a
  * wrong codeword. Fills result->agree_hard / agree_soft. */
 static void score_agreement(const char *call, const char *grid, int dbm,
-                             double tp[WSPR_NSYM][4], wspr_decode_result_t *result)
+                             wspr_tp_t tp[WSPR_NSYM][4], wspr_decode_result_t *result)
 {
     result->agree_hard = 0.0f;
     result->agree_soft = 0.0f;
@@ -529,7 +578,7 @@ static void score_agreement(const char *call, const char *grid, int dbm,
 }
 
 static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
-                                double tp[WSPR_NSYM][4],
+                                wspr_tp_t tp[WSPR_NSYM][4],
                                 wspr_decode_result_t *result)
 {
     result->cycles = cycles;
@@ -642,7 +691,7 @@ static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
 #endif
 #define WSPR_SOFT_DELTA   (WSPR_SOFT_DELTA_BITS * WSPR_METRIC_SCALE)
 
-static int try_soft_decision(double tp[WSPR_NSYM][4], wspr_decode_result_t *result)
+static int try_soft_decision(wspr_tp_t tp[WSPR_NSYM][4], wspr_decode_result_t *result)
 {
     double fsym[WSPR_NSYM];
     for (int i = 0; i < WSPR_NSYM; i++) {
@@ -707,7 +756,7 @@ static int try_soft_decision(double tp[WSPR_NSYM][4], wspr_decode_result_t *resu
  * sensitivity sweep passing is evidence, not proof - the real WAV test is
  * what actually decides whether a decoder change is a genuine
  * improvement. Full account in docs/wspr-phase1-status.md. */
-static int try_hard_decision(double tp[WSPR_NSYM][4], wspr_decode_result_t *result)
+static int try_hard_decision(wspr_tp_t tp[WSPR_NSYM][4], wspr_decode_result_t *result)
 {
     uint8_t channel_bits[WSPR_NSYM];
     for (int i = 0; i < WSPR_NSYM; i++) {
@@ -755,7 +804,7 @@ static int try_hard_decision(double tp[WSPR_NSYM][4], wspr_decode_result_t *resu
  * mismatch). Called as a FALLBACK, only when hard-decision doesn't
  * already produce a plausible result - see wspr_decode_candidate() -  so
  * candidates hard-decision already handles correctly can't regress. */
-static int try_weighted_decision(double tp[WSPR_NSYM][4], wspr_decode_result_t *result)
+static int try_weighted_decision(wspr_tp_t tp[WSPR_NSYM][4], wspr_decode_result_t *result)
 {
     double d_channel[WSPR_NSYM], power_channel[WSPR_NSYM];
     for (int i = 0; i < WSPR_NSYM; i++) {
@@ -853,7 +902,7 @@ static int try_weighted_decision(double tp[WSPR_NSYM][4], wspr_decode_result_t *
  * the first pass and by the re-take after the frequency moves. */
 static long refine_dt(const baseband_t *bb, const tone_tw_t *tw, long centre,
                        long span, long step, long slack,
-                       double tp[WSPR_NSYM][4], double *best_score)
+                       wspr_tp_t tp[WSPR_NSYM][4], double *best_score)
 {
     long lo = centre - span, hi = centre + span;
     if (lo < 0) lo = 0;
@@ -892,7 +941,7 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
      * bytes. That matters here far more than it would on a host, because
      * xTaskCreate() takes its stack from INTERNAL RAM and this board runs with
      * roughly 40 KB of it free (see CLAUDE.md's task-stack and .bss notes). */
-    double tp[WSPR_NSYM][4];
+    wspr_tp_t tp[WSPR_NSYM][4];
 
     /* Coarse start-time search, then refine around the best coarse hit -
      * exhaustive at the fine step would be needlessly slow; this two-pass
@@ -939,7 +988,11 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
 #define WSPR_DF_RANGE 1.5
 #endif
 #ifndef WSPR_DF_STEP
-#define WSPR_DF_STEP  0.1
+/* 0.2, not 0.1. Measured on the four reference WAVs: the same 23 stations at
+ * half the trials. 0.3 loses one. The curve is 31 correlations at 0.1 Hz
+ * against a ~120-correlation baseline, i.e. a quarter of the whole decode, and
+ * on hardware a candidate costs 11.7 s - so this is worth about 1.5 s each. */
+#define WSPR_DF_STEP  0.2
 #endif
 #define WSPR_DF_NPT   ((int)(2 * WSPR_DF_RANGE / WSPR_DF_STEP) + 1)
 
