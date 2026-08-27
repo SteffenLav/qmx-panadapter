@@ -6,6 +6,7 @@
 
 #include "esp_log.h"
 #include "lvgl.h"
+#include "esp_attr.h"      /* EXT_RAM_BSS_ATTR on the row snapshot */
 
 #include "ui.h"
 #include "ui_theme.h"
@@ -1075,7 +1076,11 @@ void wspr_screen_view_tick(void)
         return;
     }
 
-    static wspr_spot_t snap[VIEW_ROWS];   /* file-scope static, never the stack */
+    /* Static, never the stack - and in PSRAM, because it is read once per
+     * second by a list rebuild and internal RAM is what the OTA verify runs
+     * out of. colmap/rowmap above stay internal deliberately: colmap is read
+     * once per PIXEL of a repaint. */
+    EXT_RAM_BSS_ATTR static wspr_spot_t snap[VIEW_ROWS];
     int got = wspr_spots_get(snap, VIEW_ROWS);
 
     /* Grouped under the cycle each burst was heard in - the whole reason this

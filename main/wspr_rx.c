@@ -15,6 +15,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "esp_heap_caps.h"
+#include "esp_attr.h"        /* EXT_RAM_BSS_ATTR - see wf_finalise() */
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
@@ -368,7 +369,7 @@ static void wf_row(const float *fsrc, const int16_t *isrc, long navail, int row)
      * end regardless, so a poor seed self-corrects within the cycle and is
      * never what the operator ends up judging. */
     if (s_wf_floor <= 0.0f) {
-        static float med[WSPR_WF_COLS];
+        EXT_RAM_BSS_ATTR static float med[WSPR_WF_COLS];   /* cold: first cycle only */
         memcpy(med, magrow, sizeof(med));
         for (int a = 1; a < WSPR_WF_COLS; a++) {
             float v = med[a]; int b = a - 1;
@@ -399,7 +400,16 @@ static void wf_finalise(void)
 {
     if (!s_wf || !s_wf_mag) return;
 
-    static float samp[2048];
+    /* ⛔ PSRAM, NOT INTERNAL RAM. 8 KB of internal .bss for a scratch array
+     * touched once every 120 s is the most expensive idle memory in the
+     * firmware: CLAUDE.md records that recovering 14,084 bytes of exactly this
+     * kind was the whole difference between an OTA download completing and
+     * taking four hardware watchdog resets. `static` is still right - the WSPR
+     * task's stack cannot carry 8 KB - but the section is not.
+     *
+     * ⚠ .bss is allocated whether the feature RUNS or not, so no amount of
+     * gating WSPR off would have made this free. That is the point. */
+    EXT_RAM_BSS_ATTR static float samp[2048];
     int ns = 0;
     for (int i = 0; i < WSPR_WF_ROWS * WSPR_WF_COLS && ns < 2048; i += 17)
         samp[ns++] = s_wf_mag[i];
