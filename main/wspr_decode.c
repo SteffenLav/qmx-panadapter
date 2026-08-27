@@ -569,9 +569,15 @@ static void extract_tone_powers_s(const baseband_t *bb, const tone_tw_t *tw,
          * with the same Fano cycle counts and the same agreement figures. */
         float re0 = 0, re1 = 0, re2 = 0, re3 = 0;
         float im0 = 0, im1 = 0, im2 = 0, im3 = 0;
-        const float *bi = bb->i + base, *bq = bb->q + base;
+        /* ⚠ Indexed as bb->i[base + j], NOT hoisted to a `bb->i + base`
+         * pointer. The clamp above contemplates a NEGATIVE base, and forming a
+         * pointer before the start of an array is undefined behaviour even
+         * when it is never dereferenced out of range. Today start_dec is
+         * always >= 0 so it cannot happen - but the guard is right there,
+         * which means someone eventually makes it happen. The hoist bought
+         * nothing anyway: the win here is the loop ORDER. */
         for (long j = j0; j < j1; j += stride) {
-            const float xi = bi[j], xq = bq[j];
+            const float xi = bb->i[base + j], xq = bb->q[base + j];
             const float *c = tw->cos_tab[j], *st = tw->sin_tab[j];
             /* (xi + j*xq) * e^(-j*w*j) */
             re0 += xi * c[0] + xq * st[0];  im0 += xq * c[0] - xi * st[0];
