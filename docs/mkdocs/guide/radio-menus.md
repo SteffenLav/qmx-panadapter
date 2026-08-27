@@ -81,6 +81,17 @@ Two things happen automatically so you cannot get stuck:
 - If nothing happens for **two minutes**, the Tab5 hands the radio back by itself.
   You will see *"session timed out — closed"*. Open it again to carry on.
 
+**You come back to the frequency and mode you left.** A trip through the radio's own
+menus can move the dial on its own — go into Hardware Tests → Diagnostics to read
+the supply voltage, come out, and the radio is on 160 m whatever band you started on
+*(Randy N4OPI)*. On closing, the Tab5 puts the frequency and mode back if they moved,
+along with re-enabling I/Q mode and re-reading the noise floor.
+
+!!! note "If you changed band on purpose"
+    That gets put back too — the Tab5 cannot tell a band you chose in Band
+    Configuration from one the menus changed behind your back. Set the band again
+    from the Tab5 afterwards.
+
 !!! tip "Where you land"
     A session opens on the **first** menu item, not on *Exit terminal* — even
     though *Exit terminal* is where the previous session left the highlight. That

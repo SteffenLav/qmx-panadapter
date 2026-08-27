@@ -155,6 +155,16 @@ static void refresh(void)
         ok_text  = "Try again";
         ok_col   = UI_COLOR_PRIMARY;
         s_action = ACT_RETRY;
+    } else if (update_check_in_progress()) {
+        // Held here until the answer actually lands. This branch sits ABOVE the
+        // "up to date" one deliberately: that verdict is the LAST one, and
+        // showing it while a check is in flight is how this window told people
+        // they were current about a release that already existed.
+        snprintf(title, sizeof(title), "Checking...");
+        snprintf(body, sizeof(body),
+                 "Asking GitHub whether anything is newer than %s.\n"
+                 "This takes a few seconds.", running);
+        s_action = ACT_NONE;
     } else if (update_check_available() && latest[0]) {
         snprintf(title, sizeof(title), "%s is available", latest);
         snprintf(body, sizeof(body), "You are running %s.", running);

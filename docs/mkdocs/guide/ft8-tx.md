@@ -73,7 +73,7 @@ note: amber | Transmit sends this message once; Auto Pounce runs the whole excha
 
 The reply follows **correct FT8/FT4 parity** — if you're replying to an even slot, you transmit on the odd slot, and vice versa. For FT4 the countdown timer correctly counts down in 7.5-second slot increments, not 15-second FT8 ones.
 
-**Skip TX1 (faster pounce).** With **Skip TX1** enabled in the Filter modal, pouncing a station opens with your signal report straight away instead of the grid exchange — saving one round trip. If the station has already dropped out of the decode list, it falls back to the normal grid exchange automatically.
+**Skip TX1 (faster pounce).** With **Skip TX1** enabled in the Options modal, pouncing a station opens with your signal report straight away instead of the grid exchange — saving one round trip. If the station has already dropped out of the decode list, it falls back to the normal grid exchange automatically.
 
 **If your target is working someone else**, the panadapter holds instead of keying up over their exchange — the status shows "working *call* - waiting" with a **TAP TO CANCEL** line. Waiting costs nothing (a hold doesn't count toward the timeout), but if you'd rather move on, tap the status to cancel the pounce and pick a different station; the abandoned exchange stays resumable for a few minutes via the resume prompt.
 
@@ -88,11 +88,11 @@ When you call CQ (or work a busy run), more than one station may answer at once 
 - A station is removed from the list automatically once you start a QSO with them, and a just-completed contact's trailing 73 can't put them back.
 - Stations you've worked before still appear in the pileup unless **Exclude worked-before** is checked — the pileup follows the same rule as the auto-answer.
 
-The pile-up tracker never transmits on its own — it only remembers callers; you choose who to work. If you'd rather it *did*, check **Auto-work pileup** in the Filter modal: the strongest waiting caller is pounced automatically when your current QSO completes — or immediately, if you enable it with callers already waiting and nothing else in progress. It carries the same unattended-TX warning as the robot.
+The pile-up tracker never transmits on its own — it only remembers callers; you choose who to work. If you'd rather it *did*, check **Auto-work pileup** in the Options modal: the strongest waiting caller is pounced automatically when your current QSO completes — or immediately, if you enable it with callers already waiting and nothing else in progress. It carries the same unattended-TX warning as the robot.
 
 #### Pick callers myself
 
-Normally, while you are calling CQ, the first station to answer starts the exchange straight away. Check **Pick callers myself** in the Filter modal and that no longer happens: an answering station waits in the pile-up until *you* tap them, and from that point the exchange runs automatically as usual.
+Normally, while you are calling CQ, the first station to answer starts the exchange straight away. Check **Pick callers myself** in the Options modal and that no longer happens: an answering station waits in the pile-up until *you* tap them, and from that point the exchange runs automatically as usual.
 
 Only the *choice* becomes manual. You are not signing up to type anything, or to send each message by hand.
 
@@ -131,7 +131,7 @@ like CQ stop it applies on the tap with no Save needed.
 
 ### 3. Auto-Reply (Robot Mode)
 
-⚠️ **Requires explicit checkbox in the Filter modal** to enable.
+⚠️ **Requires explicit checkbox in the Options modal** to enable.
 
 When robot mode is on and you're idle, the panadapter scans every FT8 decode for CQ callers matching your filters, picks the highest-priority match (Strongest SNR, Weakest SNR, or Most distant grid — your choice), and starts a full QSO:
 
@@ -216,7 +216,7 @@ Enable **FT8 Simulation Mode** in the settings drawer to practice everything: ma
 
 ### 5. ARRL Field Day Mode
 
-During [ARRL Field Day](https://www.arrl.org/field-day), tick **Field Day mode** in the Filter modal and fill in the two fields beside it:
+During [ARRL Field Day](https://www.arrl.org/field-day), tick **Field Day mode** in the Options modal and fill in the two fields beside it:
 
 - **Class** — your number of transmitters plus the category letter, written together: `16A`, `5B`, `1D`. It is not a power rating.
 - **Section** — your ARRL/RAC section, e.g. `EMA`, `WCF`, `NNJ`.
@@ -235,7 +235,7 @@ calls from above 1000 Hz. It is not the ordinary FT8 exchange: a hound that answ
 the Fox has to **move onto the Fox's frequency** to do it, because the Fox listens
 only to its own narrow slice.
 
-Set **Fox/Hound (DXpedition)** in the Filter window to one of three positions:
+Set **Fox/Hound (DXpedition)** in the Options window to one of three positions:
 
 - **Off** — normal FT8. Nothing changes.
 - **Guided** — the Tab5 tells you when it can see a Fox, and you tap it to call.

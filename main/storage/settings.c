@@ -89,6 +89,7 @@ static const char *TAG = "settings";
 #define KEY_RBN_EN         "rbn_en"
 #define KEY_SOTA_EN        "sota_en"
 #define KEY_OTA_AUTODL     "ota_autodl"
+#define KEY_DRAWER_EXPERT  "drw_expert"
 #define KEY_WIFI_KNOWN     "wifi_known"
 #define KEY_TX_TONE_HZ     "tx_tone_hz"
 #define KEY_TX_TONE_HOLD   "tx_tone_hold"
@@ -319,6 +320,7 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_HOUND_MODE     87
 #define DIRTY_KBD_BIND       95   /* #233 user-defined keyboard shortcuts */
 #define DIRTY_OTA_AUTODL     96   /* #239 quiet background download of a new release */
+#define DIRTY_DRAWER_EXPERT  97   /* Basic/Expert drawer choice, remembered */
 
 // Bits that actually affect config_io_export()'s output (storage/config_io.c).
 // Bookkeeping bits like DIRTY_LAST_TIME (rewritten every FT8 slot by the
@@ -508,6 +510,7 @@ static void flush_task(void *arg)
     if (dirty_test(&dirty_local, DIRTY_RBN_EN))        nvs_set_u8(s_nvs, KEY_RBN_EN,        snap.rbn_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_SOTA_EN))       nvs_set_u8(s_nvs, KEY_SOTA_EN,       snap.sota_en ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_OTA_AUTODL))    nvs_set_u8(s_nvs, KEY_OTA_AUTODL,    snap.ota_autodl ? 1 : 0);
+    if (dirty_test(&dirty_local, DIRTY_DRAWER_EXPERT)) nvs_set_u8(s_nvs, KEY_DRAWER_EXPERT, snap.drawer_expert ? 1 : 0);
     if (dirty_test(&dirty_local, DIRTY_WIFI_KNOWN)) {
         // Known-network list: not part of s_pending (see settings.h), so take a
         // consistent copy under the mutex before writing it out.
@@ -703,6 +706,7 @@ static void load_from_nvs(qmx_settings_t *out)
     // Still a real setting, and it must stay one: this pulls 3.3 MB, which is
     // not free on the phone hotspot a POTA operator is using.
     out->ota_autodl = true;
+    out->drawer_expert = false;   // a new operator starts on Basic
     out->tx_tone_hz   = 1500;     // conventional FT8 default; = FT8_TX_CQ_DEFAULT_FREQ_HZ
     out->tx_tone_hold = false;    // auto-pick a clear slot, as it always did
     out->bandplan_region = 0;     // 0 = auto (derive from grid)
@@ -870,6 +874,7 @@ static void load_from_nvs(qmx_settings_t *out)
     if (nvs_get_u8(s_nvs, KEY_RBN_EN,   &u8v) == ESP_OK) out->rbn_en   = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_SOTA_EN,  &u8v) == ESP_OK) out->sota_en  = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_OTA_AUTODL, &u8v) == ESP_OK) out->ota_autodl = (u8v != 0);
+    if (nvs_get_u8(s_nvs, KEY_DRAWER_EXPERT, &u8v) == ESP_OK) out->drawer_expert = (u8v != 0);
     if (nvs_get_u16(s_nvs, KEY_TX_TONE_HZ, &u16v) == ESP_OK) out->tx_tone_hz = u16v;
     if (nvs_get_u8(s_nvs, KEY_TX_TONE_HOLD, &u8v) == ESP_OK) out->tx_tone_hold = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_FT8_SYNC_LINES, &u8v) == ESP_OK) out->ft8_sync_lines = (u8v != 0);
@@ -1801,6 +1806,16 @@ void settings_set_ota_autodl(bool v)
     s_pending.ota_autodl = v;
     xSemaphoreGive(s_mutex);
     mark_dirty(DIRTY_OTA_AUTODL);
+}
+
+void settings_set_drawer_expert(bool v)
+{
+    if (!s_ready) return;
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (s_pending.drawer_expert == v) { xSemaphoreGive(s_mutex); return; }
+    s_pending.drawer_expert = v;
+    xSemaphoreGive(s_mutex);
+    mark_dirty(DIRTY_DRAWER_EXPERT);
 }
 
 // ---- Known WiFi networks ---------------------------------------------------

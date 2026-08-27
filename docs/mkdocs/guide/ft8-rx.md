@@ -19,7 +19,7 @@ You'll see:
 - **Decode list** (left pane) — every station heard, ordered so the ones that matter to you are at the top (see [Decode List](#2-decode-list) below)
 - **Waterfall** (right pane) — same real-time spectrum as panadapter mode
 - **Call CQ button** — start a CQ (requires QMX on the air)
-- **Filter button** — include/exclude stations, prioritise by SNR/distance, show only CQ callers
+- **Options button** — include/exclude stations, prioritise by SNR/distance, show only CQ callers
 
 ### 2. Decode List
 
@@ -53,9 +53,9 @@ The list shows every decoded FT8 message:
 
 **Nonstandard callsigns** — special-event and compound calls now resolve to the full callsign instead of showing `<...>`, once the station has been heard in full.
 
-### 3. Filtering & Priority
+### 3. FT8 Options
 
-Tap the **Filter** button to open the filter modal:
+Tap the **Options** button to open the Options modal:
 
 - **Include callsigns** — only show these calls (space or comma-separated)
 - **Include callsigns containing** — show any call with these substrings (e.g., `/P` for portable)
@@ -117,7 +117,7 @@ The reply always follows FT8 protocol (correct parity, proper message sequence) 
 
 ### 7. Auto-Reply (Robot Mode)
 
-⚠️ **Experimental** — enabled via a checkbox in the Filter modal.
+⚠️ **Experimental** — enabled via a checkbox in the Options modal.
 
 When robot mode is on, the Tab5 **automatically replies to CQ** without waiting for you to tap. It scans each FT8 slot for CQ callers matching your filters, picks the highest-priority station, and sends a full QSO exchange (TX1 → wait for report → TX2 → wait for RR73 → TX3). Everything is logged to ADIF.
 

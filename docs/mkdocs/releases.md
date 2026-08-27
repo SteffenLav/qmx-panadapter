@@ -4,7 +4,27 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.9.3** — 2026-08-23
+**v1.9.5** — 2026-08-25
+
+**A fast-follow patch: two ADIF logging bugs, no new features.**
+
+- **A duplicate contact could falsely claim your park was activated** *(Eric, GitHub issue)*. Working the same station twice made the device say "10 contacts, park activated" while POTA.app credited only 9 unique stations and rejected the upload - cost three activations in one outing before it was noticed. A station now counts once toward the 10-QSO (SOTA 4-QSO) minimum no matter how many times you work them.
+- **Deleting a single QSO record could silently do nothing.** The delete never checked whether its rewrite actually succeeded before committing it, so a storage write failure looked like the delete "worked" while the record stayed put. It now verifies the rewrite, refuses to touch the log if it can't, and automatically repairs/reclaims space from storage that's become fragmented over a long uptime - so a delete that would previously have failed now just works.
+
+## Previous Releases
+
+### v1.9.4 — 2026-08-25
+
+**The FT8-specific settings get their own home, and the web page finally works on a phone held upright.**
+
+- **FT8 Options.** The Tab5's **Filter** button is renamed **Options** *(Roy KI0ER)* - it already held real behaviour toggles, not just filters, so the old name undersold it. The web UI gets the equivalent for the first time: CQ message presets and the FT8 filters, previously buried in one long general Settings list, now live behind their own **Options** button next to **TX tone**, shown only in FT8 mode. The button carries a **count** of currently-active settings instead of a plain colour *(Dirk DK7CVD, Roy KI0ER - a colour would always read "active" for anyone who runs filters permanently and tell them nothing new)*, and hovering it lists which ones. Inside the panel, an active checkbox gets a coloured border in addition to its own tick mark, so nothing depends on colour alone *(Don N2VGU)*.
+- **The TX tone picker stops going stale.** It used to read the band's occupancy once, on open - a slow decision could cross a 15-second slot boundary and land you on a slot that filled in while you were choosing. It now re-checks every 3 seconds while the picker is open, without disturbing your own in-progress pick.
+- **The web page works on a phone held upright.** In portrait, the top and bottom bars could lose controls off the edge of the screen with no way to reach them - landscape was always fine *(Randy N4OPI, iPhone Safari)*. Both bars now scroll sideways, the same swipe as the decode list.
+- **Battery reading simplified.** The raw cell voltage is gone from both screens - the percentage already carries the level. In its place: once your charge limit trips, the reading says `(limit)`, on the Tab5 and the web page *(Don N2VGU)*.
+- **The snap-on keyboard can be attached - or reattached - any time**, not just at boot. It's found within a couple of seconds whenever it's plugged in, and a detach-then-reattach mid-session works the same way. Its two LEDs stay dark once it's found.
+- **The macOS/Linux flasher script is guaranteed clean line endings** regardless of what machine builds the release *(Michael K Johnson KZ4LY, Fedora)*.
+
+### v1.9.3 — 2026-08-23
 
 **Updating is now one decision instead of a procedure.**
 
@@ -17,8 +37,6 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **TXCQ ANY / EVEN / ODD on the web FT8 page** *(Randy N4OPI)* - choose which 15-second slot your CQ goes out in, from the browser. Same setting as the Tab5's own button, so the two always agree.
 - **SSB tune snap is now 500 Hz** *(Dave KX3DX)* - stations that stray off an integer kHz sit at 0.5, and a 1 kHz grid cannot reach them. Also half as many stops across a drag.
 
-## Previous Releases
-
 ### v1.9.2 — 2026-08-22
 
 **A field-report release: five things fixed or added, three of them from Randy N4OPI.**
@@ -26,7 +44,7 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **A stuck exchange that never logged** is fixed *(Roy KI0ER, working K7FD)*. When a caller's own first message back to us was already a signal report (not a fresh CQ), the QSO machine correctly built the reply but started itself in the wrong state - "waiting for their first report" instead of "waiting for RR73" - so it had no idea what to do with a bare RRR and kept re-sending the same reply for over ten minutes. Fixed at the single choke point all three ways of starting this kind of exchange share.
 - **The SWR-protection fault is visible from the web page now** *(Randy N4OPI)*. Before this, tripping SWR protection stopped transmission with no explanation anywhere but the Tab5's own prompt, and no way to clear it remotely - the web page showed only a bare "QSO Cancelled". It now shows the same fault message and clears the same way a tap on the Tab5 does.
 - **"Who is hearing me" gets time windows and sortable columns.** 15 min / 30 min / 6 h / 24 h chips, and every column header sorts by clicking it - both pure re-slices of the one fetch the device already makes. The FT8/FT4 decode list in the browser gets the same sortable columns, with a "CQ callers on top" link back to the device's own priority ordering.
-- **Working an older pileup caller from the web page now actually works** *(Randy N4OPI)*. Clicking a "Calling you:" entry used to refuse outright the moment the caller's row aged out of the live decode table, even though the Tab5's own pileup screen could work the identical caller fine. It now falls back to the same report-first reply the Tab5 has always used. Pileup entries show their age on both screens now, and the Tab5's decode-list HRD column is now **AGE in seconds** - a more useful number for judging how much to trust a row. How long a row survives before it drops off the list is now operator-tunable too: a "Max age:" dropdown in the Filter modal, 30 to 90 seconds.
+- **Working an older pileup caller from the web page now actually works** *(Randy N4OPI)*. Clicking a "Calling you:" entry used to refuse outright the moment the caller's row aged out of the live decode table, even though the Tab5's own pileup screen could work the identical caller fine. It now falls back to the same report-first reply the Tab5 has always used. Pileup entries show their age on both screens now, and the Tab5's decode-list HRD column is now **AGE in seconds** - a more useful number for judging how much to trust a row. How long a row survives before it drops off the list is now operator-tunable too: a "Max age:" dropdown in the Options modal, 30 to 90 seconds.
 - **Simulation mode no longer leaves real stations flickering on screen.** Turning it on now clears the decode list and pileup immediately, same as turning it off already did, and real decodes are suppressed from the shared list for as long as sim mode is on - a QMX still attached and receiving can no longer keep re-populating a practice session with genuine stations.
 
 ### v1.9.1 — 2026-08-21
@@ -93,7 +111,7 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 - **A radio left receiving on VFO B is put back on A, and tells you.** Frequency changes only ever go to VFO A, so with the radio on B nothing you tuned had any effect — while band select still worked, which is what makes it look like your own mistake. *(Markus DL8MBY)*
 - **The browser's spot and frequency labels are readable again** on a high-resolution display, where they were being drawn at about half size. *(Randy N4OPI)*
 - **A warning that blamed the wrong thing.** After a cable swap you could be told to set the radio to two USB serial ports when it already was. The port is now retried, and the setting is only mentioned when the radio is definitely connected. *(Samuel W7STF)*
-- **Pick callers myself.** New option in the FT8 Filter modal. While you are calling CQ, a station answering does not start the exchange - they wait in the pile-up until you tap them, and the exchange then runs itself as usual. Only the choice becomes manual. It keeps calling CQ while you pick, and it overrides Auto-work pileup. Off unless you turn it on. *(Eric K3FNB)*
+- **Pick callers myself.** New option in the FT8 Options modal. While you are calling CQ, a station answering does not start the exchange - they wait in the pile-up until you tap them, and the exchange then runs itself as usual. Only the choice becomes manual. It keeps calling CQ while you pick, and it overrides Auto-work pileup. Off unless you turn it on. *(Eric K3FNB)*
 - **A Bluetooth mouse whose pointer moved erratically.** Connected and scrolled perfectly, but the pointer jumped about. The mouse fix in v1.8.4 went into the USB path and this mouse is Bluetooth, so it never applied; and the movement itself was being read with the wrong layout, turning a small movement into a large jump the wrong way. Diagnosed entirely from the diagnostic log that was sent in. *(Kevin KW6E)*
 - **Entering FT8 could reboot the device.** A shared decoder buffer could be released twice if the decoder was set up twice without being torn down in between. Caught on the bench while testing this release, and almost certainly the unexplained heap crash that had been on the list since v1.3.0.
 - **Under the surface:** a crash after about seven hours of healthy operation is fixed, the flash-persisted diagnostic log no longer stops writing with space still free, and two silent USB workarounds now count what they catch so it is possible to tell "never happened" from "happened and was handled".
@@ -437,7 +455,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.9.2.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.9.5.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

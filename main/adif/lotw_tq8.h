@@ -43,6 +43,25 @@ typedef struct {
     const char *cert_pem;    // callsign certificate, full PEM incl. BEGIN/END lines (required)
 } lotw_station_t;
 
+// ⛔ The LoTW mode for an ADIF MODE/SUBMODE pair - NOT the ADIF mode itself.
+//
+// LoTW keeps its own list of modes for award credit and MFSK is not one of
+// them: TQSL's configuration data maps each (ADIF mode, ADIF submode) pair
+// onto a LoTW mode, and MFSK only ever appears on the ADIF side of that map.
+// We sign our own TQ8s rather than handing an ADIF to TQSL, so this mapping is
+// ours to do - and getting it wrong is silent, because a rejected upload only
+// says so in a web page nobody reads twice.
+//
+// Since v1.9.6 the log writes FT4 the ADIF-correct way, MODE=MFSK with
+// SUBMODE=FT4, so the pair must be collapsed back to "FT4" here. The result is
+// byte-for-byte what this firmware already sent (and LoTW already accepted)
+// when the log said MODE=FT4 - that identity is the point: an ADIF fix for
+// POTA/ADIFMaster must not change one byte of the LoTW path.
+//
+// `submode` may be NULL or empty. Returns `mode` unchanged for everything else,
+// including plain FT8, so no other mode's behaviour depends on this function.
+const char *lotw_mode_from_adif(const char *mode, const char *submode);
+
 typedef struct {
     const char *call;      // worked station (required)
     const char *band;      // LoTW band string, uppercase, e.g. "20M" (required)

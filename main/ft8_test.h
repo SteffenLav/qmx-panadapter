@@ -48,6 +48,20 @@ void ft8_arrl_fd_e2e_selftest(void);
 // stack (>=32 KB), same constraint as the self-test (see ft8_test.c's
 // comment on why this can't run on the default "main" task stack).
 // Returns false if encoding/allocation failed or no candidate decoded.
+// As ft8_synth_and_decode(), but the signal is placed at a chosen level in
+// synthetic noise so the decoder measures a REAL signal-to-noise ratio near
+// want_snr_db. FT8_SIM_SNR_CLEAN means "no noise at all" - the original
+// behaviour, which every self-test uses and which always reads about +10.
+//
+// The measured value will not equal want_snr_db exactly: it goes through the
+// same estimator as a real signal, including its calibration offset, and that
+// is the point - the simulator must not report a number it was simply told.
+#define FT8_SIM_SNR_CLEAN  999
+bool ft8_synth_and_decode_at(const ftx_message_t *msg, float tone_hz,
+                             int want_snr_db,
+                             char *out_text, size_t out_len,
+                             int *out_snr_db, int *out_score);
+
 bool ft8_synth_and_decode(const ftx_message_t *msg, float tone_hz,
                           char *out_text, size_t out_len,
                           int *out_snr_db, int *out_score);

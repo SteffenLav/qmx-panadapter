@@ -21,6 +21,15 @@ No installation, no configuration, and **no IP address to write down**.
 > box; a few Linux setups need `avahi-daemon` installed, and some guest/hotel
 > networks block the multicast that makes it work.
 
+## On a phone
+
+The layout is built for a landscape screen and reflows fine there. In
+**portrait** on a phone (v1.9.4), the top and bottom bars now scroll
+sideways if a control doesn't fit — swipe them like the decode list — and
+the page itself scrolls vertically if the whole layout is taller than the
+screen. Before this a portrait phone (Randy N4OPI, iPhone Safari) could
+lose the top and bottom bar controls entirely with no way to reach them.
+
 ## Remote Control
 
 The web UI provides full remote control:
@@ -97,7 +106,7 @@ than a made-up number.
 
 It is the **same list the Tab5 shows**, not a second opinion: the ordering comes
 from the device (the station you are working first, then anything addressed to
-you, then CQ calls, then strongest signal) and your Filter-window settings are
+you, then CQ calls, then strongest signal) and your Options-window settings are
 applied to it. The station being worked is highlighted, and anything carrying your
 own callsign stands out, as on the Tab5.
 
@@ -158,6 +167,12 @@ busy here is one the device would avoid anyway.
 - **Grey means unknown, not free.** If nothing has been decoded yet the device has
   no picture of the band, and the strip says so rather than showing reassuring
   green.
+- **The occupancy picture refreshes itself every 3 seconds while the picker is
+  open** (v1.9.4) — it used to be read once, when you opened it, so a slow
+  decision (reading the strip, weighing E vs O) could cross a 15-second slot
+  boundary and land you on a slot that filled in while you were choosing. Your
+  own in-progress pick is never disturbed by the refresh, only the busy/clear
+  colouring under it.
 
 Changing the tone mid-QSO is fine - your partner tracks your time slot, not your
 audio frequency - but it is refused **mid-burst**, and the reason is shown rather
@@ -273,7 +288,7 @@ The bottom bar groups its actions into four popup menus, plus a battery indicato
 - **LoTW setup** / **LoTW ↑** — upload ADIF to ARRL's Logbook of The World (see [LoTW Upload](#lotw-upload) below)
 - **Cloudlog upload ↑** — upload to your own Cloudlog or Wavelog. Asks for the server address, your API key and the station profile ID on first use. Plain `http://` is accepted for a server on the same network as the Tab5, given as a numeric address such as `http://192.168.1.20`; anything else needs `https://`. The check is repeated at every upload, so away from home the upload refuses instead of sending your key across someone else's network. If the server is on your own LAN this is the only upload that needs no internet at all *(Mark G4MEM)*
 - **↳ Change Cloudlog server** — appears once a server is stored, and replaces the address, key and station profile
-- **View / edit log** — opens the QSO log right in the browser (call, mode, band, frequency, date/time, reports, grid — newest first). **Click any column header to sort** by it (click again to reverse) — sorting by Date groups an activation's QSOs together. Each row has a ✕ to delete that one record, and a **Delete all** button clears the whole log (no undo, so it asks you to type `DELETE` to confirm — download the ADIF first if you want a copy). Handy before a POTA activation: start with an empty log and the ADIF at the end is exactly the file you submit. **The two report columns are editable** — click one and type the corrected value, or leave it empty to record that no report was exchanged. Only the reports can be changed: callsign, band, mode, date and time are what QRZ, eQSL and LoTW match a contact on, so those stay read-only and a wrong one is a delete-and-re-log. If the QSO has already been uploaded, an edit corrects the Tab5's log only — the copy the logbook holds is unchanged *(Gyula HA3HZ)*
+- **View / edit log** — opens the QSO log right in the browser (call, mode, band, frequency, date/time, reports, grid — newest first). **Click any column header to sort** by it (click again to reverse) — sorting by Date groups an activation's QSOs together. Each row has a ✕ to delete that one record, and a **Delete all** button clears the whole log (no undo, so it asks you to type `DELETE` to confirm — download the ADIF first if you want a copy). Handy before a POTA activation: start with an empty log and the ADIF at the end is exactly the file you submit. **Three columns are editable** — the two reports and **P2P ref**. Click one and type the corrected value, or leave it empty (for a report, that records that none was exchanged). **P2P ref** is the park or summit the *other* station was activating, i.e. a Park-to-Park or Summit-to-Summit contact: while you are operating, that reference is on the POTA spots page on your phone and in nothing the radio sends you, so you write it down and enter it when you get home *(Don Adams WB0LQW)*. Type the reference alone — `US-1241`, `G/LD-049`, `DLFF-0123` — and the Tab5 works out the programme from its shape and writes both `SIG` and `SIG_INFO`; clear the reference and both go with it. Nothing else can be changed: callsign, band, mode, date and time are what QRZ, eQSL and LoTW match a contact on, so those stay read-only and a wrong one is a delete-and-re-log. If the QSO has already been uploaded, an edit corrects the Tab5's log only — the copy the logbook holds is unchanged *(Gyula HA3HZ)*
 
 **Files ▲**:
 

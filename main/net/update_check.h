@@ -35,3 +35,13 @@ void update_check_get_asset_url(char *out, size_t out_sz);
 // rather than waited for - and so "is the update system working?" is a question
 // with a five-second answer.
 void update_check_now(void);
+
+// True from the moment a check is REQUESTED until its answer has landed. A
+// check is a TLS fetch that takes seconds; without this, both the Tab5's update
+// window and the browser's version label re-rendered the previous verdict
+// within half a second of the press and said "Up to date" about a release that
+// had already been published - the offer then appeared on its own moments
+// later, which reads as the button not having worked (Michael KZ4LY, Samuel
+// W7STF). Anything that shows the update state must show "checking" while this
+// is true rather than the last known answer.
+bool update_check_in_progress(void);

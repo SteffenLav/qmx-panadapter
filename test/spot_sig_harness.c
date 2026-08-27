@@ -45,6 +45,24 @@ static void expect(spot_source_t src, const char *ref, const char *want,
     }
 }
 
+// The reference-only entry point (spot_sig_for_ref), which the web log editor
+// calls when an operator types a Park-to-Park reference against an
+// already-logged QSO - there is no spot, so there is no source to ask. It must
+// agree with the cluster path on every input, because they are meant to be the
+// same rule and not two copies of it.
+static void expect_ref(const char *ref, const char *want, const char *why)
+{
+    const char *got  = spot_sig_for_ref(ref);
+    const char *clus = spot_sig_for(SPOT_SRC_CLUSTER, ref);
+    if (strcmp(got, want) != 0 || strcmp(got, clus) != 0) {
+        printf("  FAIL  ref=%-12s want=%-4s got=%-4s cluster=%-4s  (%s)\n",
+               ref ? ref : "(null)", want, got, clus, why);
+        fails++;
+    } else {
+        printf("  ok    ref=%-12s -> %-4s  (%s)\n", ref ? ref : "(null)", got, why);
+    }
+}
+
 int main(void)
 {
     printf("spot_sig_for() - ADIF SIG selection\n\n");
@@ -106,6 +124,14 @@ int main(void)
     // RBN never carries a reference and spots_activation_for_call() skips it
     // outright, so this only pins down that the function stays total.
     expect(SPOT_SRC_RBN, "", "POTA", "RBN: unreachable in practice, still total");
+
+    printf("\nBy reference alone - the web log editor's Park-to-Park path.\n");
+    expect_ref("US-3787",   "POTA", "real: Don WB0LQW's own P2P, 2026-08-24");
+    expect_ref("G/LD-049",  "SOTA", "a Summit-to-Summit typed by hand");
+    expect_ref("DLFF-0123", "WWFF", "WWFF typed by hand");
+    expect_ref("us-1241",   "POTA", "the handler uppercases, but this must not depend on it");
+    expect_ref("",          "POTA", "cleared reference - the caller clears SIG too, but stay total");
+    expect_ref(NULL,        "POTA", "NULL must not dereference on this path either");
 
     printf("\n%s (%d failure%s)\n", fails ? "FAILED" : "PASSED",
            fails, fails == 1 ? "" : "s");

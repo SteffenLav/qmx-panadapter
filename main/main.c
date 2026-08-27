@@ -332,6 +332,11 @@ void app_main(void)
     ui_set_zoom(ui_get_zoom_factor(), ui_get_pan_offset_bins());
     ESP_ERROR_CHECK(render_init());
 
+    // The drawer opens on whichever half the operator last chose. Applied here
+    // rather than inside ui_init() because it only moves widgets that already
+    // exist, and ui_set_drawer_expert() is a no-op when the value matches.
+    ui_set_drawer_expert(cfg.drawer_expert);
+
     // Apply persisted waterfall colorisation + FFT window (Waterfall drawer).
     render_waterfall_set_black_level(cfg.wf_black_db);
     render_waterfall_set_contrast_db(cfg.wf_contrast_db);

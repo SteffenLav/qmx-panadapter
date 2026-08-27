@@ -85,6 +85,11 @@ static int      s_sd_poll_countdown = 0;  // 0 = poll on the next tick
 #define CHARGE_LIMIT_HYSTERESIS_PCT 5
 static bool s_charge_cutoff_active = false;
 
+bool status_charge_limit_active(void)
+{
+    return s_charge_cutoff_active;
+}
+
 // Pick an LVGL battery glyph based on charge level (0-100).
 static const char *battery_glyph(int level)
 {
@@ -362,7 +367,6 @@ static void status_task(void *arg)
 
         // --- LEFT: battery icon (colored by level) + percentage text ---
         int  level    = battery_get_level();
-        int  mv       = battery_get_mv();
         bool charging = battery_is_charging();
 
         qmx_settings_t cfg;
@@ -431,15 +435,22 @@ static void status_task(void *arg)
             ui_set_resource_monitor_text(rbuf);
         }
 
+        // Charge-limit cutoff has no glyph of its own - "charging" is
+        // correctly false at this point (bsp_set_charge_en(false) really did
+        // stop it), so without this the charge symbol just silently
+        // disappears, identical to "unplugged" or "full" (Don N2VGU: no way
+        // to tell "capped on purpose" from "not charging for some unknown
+        // reason"). Short enough to fit the bar at every level width.
+        //
+        // The voltage used to be printed too ("80% (7.9V)"), dropped per the
+        // operator's own call - nobody reading the bar needs the raw cell
+        // voltage, and the battery icon already carries the level visually.
+        const char *limit_suffix = s_charge_cutoff_active ? "  (limit)" : "";
         if (level < 0) {
             snprintf(left, sizeof(left), "--%%");
-        } else if (mv < 0) {
-            snprintf(left, sizeof(left), "%d%%%s", level,
-                     charging ? "  " LV_SYMBOL_CHARGE : "");
         } else {
-            snprintf(left, sizeof(left), "%d%% (%d.%dV)%s",
-                     level, mv / 1000, (mv / 100) % 10,
-                     charging ? "  " LV_SYMBOL_CHARGE : "");
+            snprintf(left, sizeof(left), "%d%%%s%s", level,
+                     charging ? "  " LV_SYMBOL_CHARGE : "", limit_suffix);
         }
         const char *batt_icon = (level < 0) ? LV_SYMBOL_BATTERY_EMPTY : battery_glyph(level);
 

@@ -1838,6 +1838,13 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_ACTIVATION 28  // POTA/SOTA activation session. In the Station group -
                                    // it is part of who you are on the air right now, and
                                    // it is what every logged QSO gets stamped with.
+#define DRAWER_SEC_OTADL      35  // Download a new release in the background, or wait
+                                  // until asked. The setting (ota_autodl) shipped in
+                                  // v1.9.3 with no control anywhere - the only way to
+                                  // change it was the config file - and three people
+                                  // asked for the switch in one afternoon (Michael
+                                  // KZ4LY, Samuel W7STF, Steve N9SZ). OFF still tells
+                                  // you a new version exists; it just waits.
 #define DRAWER_SEC_TERM       34  // "Radio menus": the QMX's own menu system on its second
                                    // serial port. Directly under the pause button, because
                                    // both are ways of getting at the radio itself, and an
@@ -1871,7 +1878,13 @@ static const int GRP_STATION[]  = { DRAWER_SEC_IDENTITY, DRAWER_SEC_ACTIVATION,
 static const int GRP_RADIO[]    = { DRAWER_SEC_QMXVOL, DRAWER_SEC_QMXRF, DRAWER_SEC_CW,
                                     DRAWER_SEC_RITPILL, DRAWER_SEC_SWRLIM, DRAWER_SEC_TUNE2,
                                     DRAWER_SEC_PAUSE, DRAWER_SEC_TERM };
-static const int GRP_NETWORK[]  = { DRAWER_SEC_WIFI, DRAWER_SEC_SPOTS, DRAWER_SEC_BT };
+// DRAWER_SEC_OTADL sits here, not in Device, and that placement is the point:
+// Device is an EXPERT-only group, and "should this thing download 3.3 MB on my
+// hotspot" is a decision an ordinary session makes - the three people who asked
+// for the switch would not have found it behind Expert. It is a question about
+// what the network connection does unasked, so it belongs beside WiFi.
+static const int GRP_NETWORK[]  = { DRAWER_SEC_WIFI, DRAWER_SEC_OTADL,
+                                    DRAWER_SEC_SPOTS, DRAWER_SEC_BT };
 // Flip 180 last: it is the least-touched control in the group (operator).
 static const int GRP_DISPLAY[]  = { DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_SLEEP,
                                     DRAWER_SEC_CMAP, DRAWER_SEC_FLIP };
@@ -1896,6 +1909,7 @@ static const drawer_group_t s_drawer_groups[] = {
 #define N_DRAWER_GROUPS ((int)(sizeof(s_drawer_groups)/sizeof(s_drawer_groups[0])))
 
 static lv_obj_t *s_grp_hdr[N_DRAWER_GROUPS];
+static lv_obj_t *s_switch_otadl = NULL;
 static lv_obj_t *s_expert_btn = NULL, *s_expert_lbl = NULL;
 static bool      s_drawer_expert = false;
 
@@ -2040,6 +2054,7 @@ static void drawer_term_btn_cb(lv_event_t *e);
 static void topbar_reconcile_cb(lv_timer_t *t);
 static void drawer_slider_cwtxoff_cb(lv_event_t *e);
 static void ui_set_cw_tx_offset_label(int hz);
+static void drawer_otadl_cb(lv_event_t *e);
 static void drawer_expert_btn_cb(lv_event_t *e);
 static void drawer_expert_paint(void);
 static void drawer_check_flip_cb(lv_event_t *e);
@@ -4137,7 +4152,21 @@ static void cursor_set_hot(bool hot)
 // Cheaper than it looks: a subtree whose bounds exclude the point is rejected in
 // one comparison, so this descends only through objects actually under the
 // pointer, not the whole widget tree.
-static lv_obj_t *clickable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
+// One walk, two questions. `hot_only` picks which:
+//
+//   true  - "would a click here act on a CONTROL?", which is what colours the
+//           pointer. Surfaces you click to dismiss or drag, and plain
+//           backgrounds, are deliberately NOT reported (see the two tests at
+//           the bottom).
+//   false - "what object would LVGL hand the press to?", regardless of whether
+//           it is worth pointing out. The spectrum and the waterfall are both
+//           UI_FLAG_NOT_HOT, so the hot walk can never name them - which is
+//           exactly how wheel-to-tune shipped unable to fire even once
+//           (operator, 2026-08-26: "cannot in any way change the center freq").
+//
+// Kept as one function on purpose: the descent and the occlusion rule are the
+// delicate part, they were got right once, and two copies would drift.
+static lv_obj_t *hit_walk(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, bool hot_only)
 {
     if (!parent || lv_obj_has_flag(parent, LV_OBJ_FLAG_HIDDEN)) return NULL;
     // The CLICK area, not the coords: it already includes ext_click_area, so an
@@ -4150,7 +4179,7 @@ static lv_obj_t *clickable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
     uint32_t n = lv_obj_get_child_count(parent);
     for (uint32_t i = n; i > 0; i--) {
         lv_obj_t *child = lv_obj_get_child(parent, i - 1);
-        lv_obj_t *hit = clickable_at(child, x, y);
+        lv_obj_t *hit = hit_walk(child, x, y, hot_only);
         if (hit) return hit;
 
         // OCCLUSION. If LVGL would hand the press to this child, then nothing
@@ -4173,6 +4202,10 @@ static lv_obj_t *clickable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
     // So a slider reports hot on the knob and nowhere else, which is the truth.
     lv_point_t p = { x, y };
     if (!lv_obj_hit_test(parent, &p)) return NULL;
+
+    // "What takes the press" is answered here: LVGL would deliver it to this
+    // object, and the caller decides what that means.
+    if (!hot_only) return parent;
 
     // Being clickable is not the same as being worth pointing out. Almost every
     // container in this UI is clickable, because that is lv_obj's default, and
@@ -4209,6 +4242,20 @@ static lv_obj_t *clickable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
     return parent;
 }
 
+// Would a click here act on a control? Drives the pointer's colour.
+static lv_obj_t *clickable_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
+{
+    return hit_walk(parent, x, y, true);
+}
+
+// Which object would LVGL hand a press at this point to? Used by
+// wheel-to-tune, which must recognise the spectrum and the waterfall - two
+// objects the question above is specifically built to stay quiet about.
+static lv_obj_t *press_target_at(lv_obj_t *parent, lv_coord_t x, lv_coord_t y)
+{
+    return hit_walk(parent, x, y, false);
+}
+
 // The edge strips are the one place where "clickable" and "does something" part
 // company: each strip is a full-height clickable object, but only a click ON ITS
 // GRIP activates (see grip_mouse_click). Reporting the whole 30 px strip as hot
@@ -4221,6 +4268,120 @@ static bool point_in_obj(lv_obj_t *o, lv_coord_t x, lv_coord_t y)
     return x >= a.x1 && x <= a.x2 && y >= a.y1 && y <= a.y2;
 }
 
+
+// ---- Wheel-to-tune ---------------------------------------------------------
+//
+// Roy KI0ER, seconded by John Dusek: "very similar to how convenient that can
+// be in SDR Console or SDR Sharp". The steps are HIS, deliberately: 10 Hz in CW
+// so a signal can be zero-beaten by ear, the same in the digital modes, ~100 Hz
+// in SSB. He explicitly did not want velocity scaling or a sensitivity setting -
+// "just a single hard-coded setting would work very well" - so there is no
+// setting here and no acceleration. Wheel up tunes up, which is the direction
+// both programs he named use.
+#define WHEEL_TUNE_STEP_CW_HZ    10
+#define WHEEL_TUNE_STEP_SSB_HZ  100
+// One CAT write per this long, however fast the wheel is spun. The pipe is
+// shared with the FA/MD/FW poll and a fast spin is 30+ clicks a second; the
+// clicks are ACCUMULATED and flushed as one write instead of being dropped by
+// the 200 ms rate-limiter, which would make a spin feel like it had missed.
+#define WHEEL_TUNE_WRITE_MS     120
+// Idle this long and the next click re-reads the dial from the radio. Without
+// it a stale target would fight the operator's own knob, or a spot click.
+#define WHEEL_TUNE_IDLE_MS     1200
+
+static uint32_t s_wheel_target_hz = 0;   // 0 = not currently wheel-tuning
+static int64_t  s_wheel_last_us   = 0;   // last accumulate
+static int64_t  s_wheel_wrote_us  = 0;   // last CAT write
+static bool     s_wheel_dirty     = false;
+
+static uint32_t wheel_tune_step_hz(void)
+{
+    const char *m = cat_get_mode_str();
+    if (!m || !m[0]) return WHEEL_TUNE_STEP_SSB_HZ;
+    // Substring matching, same convention as ui_theme.h's mode colour helper -
+    // the mode string is what CAT reports, not an enum we control.
+    if (strstr(m, "CW")   || strstr(m, "DiGi") || strstr(m, "DIGI") ||
+        strstr(m, "FT8")  || strstr(m, "FT4")  || strstr(m, "RTTY") ||
+        strstr(m, "DATA"))
+        return WHEEL_TUNE_STEP_CW_HZ;
+    return WHEEL_TUNE_STEP_SSB_HZ;
+}
+
+// Write the accumulated target, at most one write per WHEEL_TUNE_WRITE_MS.
+// Runs every tick, including ticks with no clicks, so the last few clicks of a
+// spin are never left unsent.
+static void wheel_tune_flush(void)
+{
+    if (!s_wheel_dirty || !s_wheel_target_hz) return;
+    int64_t now = esp_timer_get_time();
+    if (now - s_wheel_wrote_us < (int64_t)WHEEL_TUNE_WRITE_MS * 1000) return;
+    s_wheel_wrote_us = now;
+    s_wheel_dirty    = false;
+    // Forced, because this IS a deliberate user write - the rate-limiter exists
+    // to stop automatic paths flooding the pipe, and we are doing our own
+    // limiting above. Display first-class rather than waiting for the FA poll,
+    // same as every other tune path here.
+    cat_set_frequency_forced(s_wheel_target_hz);
+    ui_update_frequency(s_wheel_target_hz);
+}
+
+// True when the clicks were used for tuning, so the caller leaves scrolling
+// alone. Tunes only when the pointer is over the spectrum or the waterfall AND
+// nothing is on top of them: the walk answers the occlusion question the same
+// way LVGL delivers a press, so a modal, a dropdown or the drawer covering the
+// panadapter takes the wheel instead of the dial moving underneath it. That is
+// the rule the v1.8.1 deadzone note in CLAUDE.md insists on - do not re-derive
+// the geometry by hand here.
+static bool wheel_tune_take(int clicks)
+{
+    if (!s_spectrum_obj || !s_waterfall_obj) return false;
+    // ⛔ press_target_at(), NOT clickable_at(). The spectrum and the waterfall
+    // are UI_FLAG_NOT_HOT - they are drag surfaces, so the pointer stays white
+    // over them - and clickable_at() returns NULL for exactly those. Using it
+    // here made this test unsatisfiable and the whole feature inert.
+    lv_obj_t *hit = press_target_at(lv_layer_top(), s_mouse_pt.x, s_mouse_pt.y);
+    if (!hit) hit = press_target_at(lv_screen_active(), s_mouse_pt.x, s_mouse_pt.y);
+    if (hit != s_spectrum_obj && hit != s_waterfall_obj) {
+        // Logged because a wheel that does nothing is indistinguishable from a
+        // wheel that is not wired up - which is precisely how the first version
+        // of this went out. `hit` is the object LVGL would give the press to.
+        ESP_LOGI(TAG, "wheel %+d at (%d,%d): not over the panadapter (press target %p, spectrum %p, waterfall %p)",
+                 clicks, (int)s_mouse_pt.x, (int)s_mouse_pt.y,
+                 (void *)hit, (void *)s_spectrum_obj, (void *)s_waterfall_obj);
+        return false;
+    }
+
+    int64_t now  = esp_timer_get_time();
+    uint32_t cur = cat_get_frequency();
+    if (!s_wheel_target_hz || now - s_wheel_last_us > (int64_t)WHEEL_TUNE_IDLE_MS * 1000)
+        s_wheel_target_hz = cur;          // fresh spin: start from the real dial
+    s_wheel_last_us = now;
+    if (!s_wheel_target_hz) {
+        // No CAT frequency at all - the radio is off or not yet enumerated.
+        // Say so once rather than silently doing nothing, which is how a dead
+        // wheel looks identical to an unimplemented one.
+        ESP_LOGI(TAG, "wheel tune ignored: no frequency from the radio yet");
+        return true;
+    }
+
+    int64_t step = (int64_t)wheel_tune_step_hz() * clicks;
+    int64_t tgt  = (int64_t)s_wheel_target_hz + step;
+
+    // Stay inside the band. The QMX rejects an out-of-band write outright (the
+    // "band locked out" report Ian G4LXX hit), so clamping is not politeness -
+    // it is what keeps the dial where the operator can see it.
+    uint32_t lo, hi;
+    if (legal_band_edges(s_wheel_target_hz, &lo, &hi)) {
+        if (tgt < (int64_t)lo) tgt = lo;
+        if (tgt > (int64_t)hi) tgt = hi;
+    }
+    if ((uint32_t)tgt == s_wheel_target_hz) return true;   // already at the edge
+
+    s_wheel_target_hz = (uint32_t)tgt;
+    s_wheel_dirty     = true;
+    wheel_tune_flush();     // try immediately; the rate limit decides
+    return true;
+}
 
 static void mouse_timer_cb(lv_timer_t *t)
 {
@@ -4254,8 +4415,18 @@ static void mouse_timer_cb(lv_timer_t *t)
         cursor_set_hot(on_grip || hit != NULL);
     }
 
+    // Before anything else: a spin's last clicks must reach the radio even on a
+    // tick that carries none of its own.
+    wheel_tune_flush();
+
     int clicks = hid_cursor_take_wheel();
     if (!clicks) return;
+
+    // Over the panadapter, the wheel is a tuning knob (Roy KI0ER, John Dusek).
+    // Tried before the scroll search on purpose: the spectrum and waterfall are
+    // not scrollable, so scrolling would find some ancestor and move the page
+    // under the operator instead.
+    if (wheel_tune_take(clicks)) return;
 
     lv_obj_t *target = scrollable_at(lv_layer_top(), s_mouse_pt.x, s_mouse_pt.y);
     if (!target) target = scrollable_at(lv_screen_active(), s_mouse_pt.x, s_mouse_pt.y);
@@ -4276,8 +4447,26 @@ static void mouse_timer_cb(lv_timer_t *t)
     // panel behind it refuses to move.
     for (lv_obj_t *o = target; o; o = lv_obj_get_parent(o)) {
         if (!lv_obj_has_flag(o, LV_OBJ_FLAG_SCROLLABLE)) continue;
+        // ⛔ CLAMP TO THE CONTENT. lv_obj_scroll_by() is the raw primitive and
+        // does NOT stop at the ends - LVGL's own clamping lives in its gesture
+        // handling, which a wheel applied from outside the indev never reaches.
+        // So the wheel drove settings and the ADIF log clean past their last row
+        // into empty space, and the panel read as blank until it was wound back
+        // (Roy KI0ER, 2026-08-26: "scrolling into the twilight zone").
+        //
+        // A positive dy moves the content down, which reveals what is above it
+        // and therefore spends scroll_top; a negative dy spends scroll_bottom.
+        // Zero room means this object is already at its limit, so the click goes
+        // to its parent instead - which is the chaining below, now reached for
+        // the right reason rather than because a scroll silently did nothing.
+        lv_coord_t dy   = clicks * MOUSE_WHEEL_STEP_PX;
+        lv_coord_t room = (dy > 0) ? lv_obj_get_scroll_top(o)
+                                   : lv_obj_get_scroll_bottom(o);
+        if (room <= 0) continue;
+        if (dy > room)  dy =  room;
+        if (-dy > room) dy = -room;
         lv_coord_t before = lv_obj_get_scroll_y(o);
-        lv_obj_scroll_by(o, 0, clicks * MOUSE_WHEEL_STEP_PX, LV_ANIM_OFF);
+        lv_obj_scroll_by(o, 0, dy, LV_ANIM_OFF);
         lv_coord_t after = lv_obj_get_scroll_y(o);
         if (after != before) {
             ESP_LOGI(TAG, "wheel %+d at (%d,%d): scroll_y %d -> %d%s",
@@ -7732,26 +7921,26 @@ static void drawer_check_pskrep_cb(lv_event_t *e)
 // (The manual "QMX has GPS" checkbox was removed 2026-07-19 - GPS is now
 // auto-detected in time_sync.c from whether the QMX tick agrees with SNTP.)
 
-// Dim + lock the sim-mode checkbox while in FT4 - ft8_sim.c's phantom-station
-// simulator (W1AW/K9ZZ practice QSOs) is FT8-only: it's hardcoded to FT8
-// protocol internally (ft8_synth_and_decode()) and has no concept of the
-// FT8/FT4 sub-mode, so toggling it on while in FT4 used to inject fake
-// FT8-protocol phantom traffic into a decode list whose real receiver was
-// actually running FT4 timing - nonsensical. Rather than build a second,
-// FT4-specific phantom-station engine (a similarly-sized feature to the
-// original), the FT8 one is locked to FT8-only for now; see ft8_sim.c's own
-// op-mode gate for the belt-and-suspenders backend half of this.
-// Same dim+DISABLED+early-return-guard pattern as ft8_cq_modal.c's Field Day
-// lockout (apply_fd_dim) - don't rely on LVGL's DISABLED state alone.
+// UNLOCKED IN FT4 as of #256. This used to dim and disable the sim-mode
+// checkbox in FT4, and the reason was sound at the time: the phantom simulator
+// synthesised FT8's waveform on a flat 15 s slot grid, so switching it on in
+// FT4 would have put fake FT8 traffic in a decode list whose receiver was
+// running FT4 timing. Both halves are fixed now - ft8_synth_and_decode_at()
+// encodes and decodes in whichever protocol is live, and the sim follows the
+// real FT4 slot grid - so the lock has nothing left to protect against.
+//
+// It is kept as a function rather than deleted because the guard pattern
+// (dim + DISABLED + an early return in the handler) is the one this file uses
+// wherever a control must be genuinely unusable, and the next thing that needs
+// locking should copy it rather than reinvent it.
 static void apply_sim_mode_lock(bool ft4)
 {
-    s_sim_mode_locked = ft4;
-    lv_opa_t opa = ft4 ? LV_OPA_50 : LV_OPA_COVER;
-    if (s_lbl_sim_mode) lv_obj_set_style_opa(s_lbl_sim_mode, opa, 0);
+    (void)ft4;
+    s_sim_mode_locked = false;
+    if (s_lbl_sim_mode) lv_obj_set_style_opa(s_lbl_sim_mode, LV_OPA_COVER, 0);
     if (s_check_sim_mode) {
-        lv_obj_set_style_opa(s_check_sim_mode, opa, 0);
-        if (ft4) lv_obj_add_state(s_check_sim_mode, LV_STATE_DISABLED);
-        else     lv_obj_remove_state(s_check_sim_mode, LV_STATE_DISABLED);
+        lv_obj_set_style_opa(s_check_sim_mode, LV_OPA_COVER, 0);
+        lv_obj_remove_state(s_check_sim_mode, LV_STATE_DISABLED);
     }
 }
 
@@ -8556,6 +8745,29 @@ static void drawer_build(void)
         y += 56;
     }
 
+    // Background download of a new release. Applying one is always a separate,
+    // deliberate press - see ota_update.h - so this switch is only about WHEN
+    // the 3.3 MB is fetched, not about whether an update can happen behind
+    // anyone's back.
+    {
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_OTADL, y, 88);
+        lv_obj_t *l1 = lv_label_create(sec);
+        lv_label_set_text(l1, "Download updates");
+        lv_obj_set_style_text_color(l1, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(l1, &lv_font_montserrat_28, 0);
+        lv_obj_align(l1, LV_ALIGN_TOP_LEFT, 0, 6);
+        lv_obj_t *l2 = lv_label_create(sec);
+        lv_label_set_text(l2, "in the background, ready to install");
+        lv_obj_set_style_text_color(l2, lv_color_hex(UI_COLOR_TEXT_MUTED), 0);
+        lv_obj_set_style_text_font(l2, &lv_font_montserrat_20, 0);
+        lv_obj_align(l2, LV_ALIGN_TOP_LEFT, 0, 44);
+        qmx_settings_t oc;
+        settings_load_all(&oc);
+        s_switch_otadl = make_drawer_checkbox(sec, oc.ota_autodl, drawer_otadl_cb, NULL);
+        lv_obj_align(s_switch_otadl, LV_ALIGN_TOP_RIGHT, 0, 6);
+        y += 88;
+    }
+
     // Phase 5.12: Flat Spectrum ON/OFF row
     {
         lv_obj_t *sec = drawer_section(DRAWER_SEC_FLAT, y, 56);
@@ -9326,6 +9538,13 @@ void ui_set_drawer_expert(bool expert)
 {
     if (s_drawer_expert == expert) return;
     s_drawer_expert = expert;
+    // Remembered across a reboot. An operator who wants Expert wants it every
+    // time, and re-choosing it at each boot is the sort of small repeated tax
+    // that makes a device feel like it is not listening (Samuel W7STF,
+    // 2026-08-26: "selecting it seems to nuisance upon each boot-up"). Set here
+    // rather than in the button handler so every route persists; the setter
+    // ignores an unchanged value, so the boot-time restore writes nothing.
+    settings_set_drawer_expert(expert);
     drawer_expert_paint();
     drawer_set_mode(ui_mode_get());
     if (s_drawer) lv_obj_scroll_to_y(s_drawer, 0, LV_ANIM_OFF);
@@ -9932,14 +10151,24 @@ static void drawer_expert_paint(void)
         lv_color_hex(s_drawer_expert ? 0x7a4a12 : UI_COLOR_PRIMARY), 0);
 }
 
+// Background download on/off. Nothing else changes: the update check still
+// runs, the bar still says when a new version exists, and installing one is
+// still a deliberate press.
+static void drawer_otadl_cb(lv_event_t *e)
+{
+    lv_obj_t *cb = lv_event_get_target(e);
+    bool on = lv_obj_has_state(cb, LV_STATE_CHECKED);
+    settings_set_ota_autodl(on);
+    ESP_LOGI(TAG, "background download of updates: %s", on ? "ON" : "OFF");
+}
+
 // Flip the view and re-lay the drawer out for whichever screen is showing.
 static void drawer_expert_btn_cb(lv_event_t *e)
 {
     (void)e;
-    s_drawer_expert = !s_drawer_expert;
-    drawer_expert_paint();
-    drawer_set_mode(ui_mode_get());
-    if (s_drawer) lv_obj_scroll_to_y(s_drawer, 0, LV_ANIM_OFF);
+    // Straight through the one function that owns this, so the button, the boot
+    // restore and the dev action cannot drift apart - persistence included.
+    ui_set_drawer_expert(!s_drawer_expert);
 }
 
 // Release the radio / take it back. One button, two states - the label always

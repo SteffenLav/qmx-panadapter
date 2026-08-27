@@ -12,11 +12,17 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.9.3.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.9.6.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+>
+> **New in v1.9.6 — POTA and SOTA logging put right, the mouse wheel tunes, and the phone menus work again.** **Your callsign is now written as `STATION_CALLSIGN`**, the field POTA reads — it used to warn *"No station_callsign field, assuming operator …"* on every upload and guess *(Don Adams WB0LQW)*. **Park-to-Park and Summit-to-Summit contacts can be entered afterwards**: a new **P2P ref** column in the web log editor, where you type just the reference and the Tab5 works out the programme. **FT4 is logged the way the ADIF specification defines it** (`MODE=MFSK`, `SUBMODE=FT4`), so editors like ADIFMaster will open the file — LoTW uploads are unchanged. **The mouse wheel tunes the radio** over the spectrum and waterfall: 10 Hz a click in CW and the digital modes, 100 Hz in SSB *(Roy KI0ER, John Dusek)*, and it no longer scrolls panels into blank space. **The bottom-bar menus work on an iPhone again** — a line added for portrait mode in v1.9.4 hid them behind the page in Safari *(Travis AK6TB, Randy N4OPI)*. **"Check for updates" stops saying you are up to date while it is still asking** *(Michael KZ4LY, Samuel W7STF)*, and **background downloading is now a switch** you can turn off while still being told a new version exists. **Coming back from the radio's own menus restores your frequency and mode** — they could leave the radio on 160 m *(Randy N4OPI)* — and **Basic/Expert is remembered** *(Samuel W7STF)*. Full detail in [docs/version-history.md](docs/version-history.md).
+>
+> **New in v1.9.5 — a fast-follow patch: two ADIF logging bugs, no new features.** **A duplicate contact could falsely claim a park was activated.** Working the same station twice made the device say "10 contacts, park activated" while POTA.app credited only 9 unique stations and rejected the upload *(Eric, GitHub issue — cost three activations in one outing)*. A station now counts once toward the minimum no matter how many times you work them. **Deleting a single QSO record could silently do nothing.** The delete never checked whether its rewrite actually succeeded before committing it, so a storage write failure looked like the delete "worked" while the record stayed. It now verifies the rewrite, refuses to touch the log if it can't, and automatically repairs/reclaims space from storage that's fragmented over a long uptime, so a delete that would have failed now just works. Full detail in [docs/version-history.md](docs/version-history.md).
+>
+> **New in v1.9.4 — the FT8-specific settings get their own home, and the web page works on a phone held upright.** The Tab5's **Filter** button is renamed **Options** *(Roy KI0ER)* — it already held real behaviour toggles, not just filters — and the web page finally gets the same idea: CQ presets and FT8 filters move out of the general Settings list into their own **Options** panel, shown only in FT8 mode, with a count of what's active rather than a plain colour *(Dirk DK7CVD, Don N2VGU)*. The **TX tone picker stops going stale** — it now re-checks the band's occupancy every 3 seconds while you're deciding, instead of only once when you opened it. In **portrait on a phone**, the top and bottom bars now scroll sideways instead of losing controls off the edge entirely *(Randy N4OPI)*. The **battery reading drops the raw voltage** and instead says **`(limit)`** when charging is deliberately capped, on both screens *(Don N2VGU)*. The **snap-on keyboard can be attached (or reattached) any time**, not just at boot, and its LEDs stay dark once it's found — there's nothing left for a light to usefully say. And the **macOS/Linux flasher script is guaranteed clean line endings** regardless of what machine builds the release *(Michael K Johnson KZ4LY)*. Full detail in [docs/version-history.md](docs/version-history.md).
 >
 > **New in v1.9.3 — updating is one decision instead of a procedure.** The Tab5 now **fetches a new release quietly in the background** and asks you once, when it is ready, in a **window in the middle of the screen** with **Restart now** / **Later** — no long-press, and no cryptic line at the bottom trying to explain itself in twenty characters. The bottom bar breathes gently while an update waits for you and goes quiet once you have said "later". Switch the background download off under **Settings → Network → Download updates automatically** if you are on a metered connection; each update is about 3.3 MB, and nothing is ever installed without you asking. **The spectrum, waterfall and FT8 decoding now keep running while an update downloads** — before, everything stopped until it finished. **Audio is no longer dropped while a log upload is running**, which could previously cost you FT8 decodes during a QRZ, eQSL or LoTW upload. The **band-plan strip is much easier to hit** — its touch area now reaches up into the waterfall while it still looks the same. Plus **TXCQ ANY/EVEN/ODD on the web FT8 page** *(Randy N4OPI)* and **SSB tuning that snaps to 500 Hz** instead of 250 *(Dave KX3DX)*. Full detail in [docs/version-history.md](docs/version-history.md).
 >
-> **New in v1.9.2 — a field-report release: five things fixed or added, three of them from Randy N4OPI.** A **stuck exchange that never logged** is fixed *(Roy KI0ER, working K7FD)*: when a caller's own first message to us was already a signal report, the QSO machine started itself in the wrong state and kept re-sending the same reply for over ten minutes while the far station sent RRR. **The SWR-protection fault is visible from the web page now** — before this, tripping it stopped transmission with no explanation on screen anywhere but the Tab5, and no way to clear it remotely *(Randy N4OPI)*. **"Who is hearing me" gets 15 min/30 min/6 h/24 h time windows and sortable columns**, and the FT8/FT4 decode list in the browser gets the same sortable columns with a "CQ callers on top" link back to the device's own ordering. **Working an older pileup caller from the web page now actually works** instead of refusing outright — it falls back to the same report-first reply the Tab5 has always used *(Randy N4OPI)*, and pileup entries now show their age on both screens. The Tab5's decode-list HRD column is now **AGE in seconds**, and how long a row survives before it drops off the list is **operator-tunable** (Filter modal, 30-90 s). **Simulation mode no longer leaves real stations flickering on screen** — entering it now clears the list immediately, and real decodes are suppressed for as long as it's on. Full detail in [docs/version-history.md](docs/version-history.md).
+> **New in v1.9.2 — a field-report release: five things fixed or added, three of them from Randy N4OPI.** A **stuck exchange that never logged** is fixed *(Roy KI0ER, working K7FD)*: when a caller's own first message to us was already a signal report, the QSO machine started itself in the wrong state and kept re-sending the same reply for over ten minutes while the far station sent RRR. **The SWR-protection fault is visible from the web page now** — before this, tripping it stopped transmission with no explanation on screen anywhere but the Tab5, and no way to clear it remotely *(Randy N4OPI)*. **"Who is hearing me" gets 15 min/30 min/6 h/24 h time windows and sortable columns**, and the FT8/FT4 decode list in the browser gets the same sortable columns with a "CQ callers on top" link back to the device's own ordering. **Working an older pileup caller from the web page now actually works** instead of refusing outright — it falls back to the same report-first reply the Tab5 has always used *(Randy N4OPI)*, and pileup entries now show their age on both screens. The Tab5's decode-list HRD column is now **AGE in seconds**, and how long a row survives before it drops off the list is **operator-tunable** (Options modal, 30-90 s). **Simulation mode no longer leaves real stations flickering on screen** — entering it now clears the list immediately, and real decodes are suppressed for as long as it's on. Full detail in [docs/version-history.md](docs/version-history.md).
 
 > **New in v1.9.1 — a hotfix: updating from the device did not work over a real download, on any version, ever, until this fix.** v1.9.0 was meant to be the first release where the OTA offer could actually be used; testing it for real for the first time turned up two bugs. GitHub's own redirect response carries more header data than the firmware's HTTP client could receive, so every download failed instantly - this is why v1.9.0's offer downloaded nothing for anyone who tried it. Fixed, and a second bug then appeared: the same fix made each downloaded chunk larger, and the download loop never yielded control back to the rest of the firmware while processing it, which could crash and reboot the device right at completion. Both fixed and verified on hardware: a real download completed twice with zero crashes and zero audio interruption. **If you are on v1.8.9 or v1.9.0, this needs one cable flash - your device's own broken download code cannot fetch any release, including this one. After that one flash, OTA works normally.**
 >
@@ -44,7 +50,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.9.3.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.9.6.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -114,7 +120,12 @@ tagged from spots already seen and a single-reference ADIF export for uploading.
 
 **Bluetooth mouse** — A pointer that works *while the QMX stays plugged in*, which a USB
 mouse cannot do on this hardware. Pair once; it reconnects by itself. Move, click, and a
-wheel that scrolls whatever is under the pointer. **The mouse must be Bluetooth 4.0 or
+wheel that scrolls whatever is under the pointer — **and over the spectrum or waterfall,
+that wheel tunes**: 10 Hz a click in CW and the digital modes, so a signal can be
+zero-beaten by ear, and 100 Hz in SSB *(Roy KI0ER, John Dusek)*. It stops at the band
+edges, and anything on top of the panadapter — a modal, the settings drawer — takes the
+wheel instead, so the dial never moves under something you are reading.
+**The mouse must be Bluetooth 4.0 or
 later (Bluetooth Low Energy).** The Tab5's Bluetooth comes from a co-processor with no
 Bluetooth Classic radio, so an older Classic mouse cannot work and no firmware change can
 help — it never appears to the Tab5 at all. Most mice sold since about 2014 qualify; a
@@ -169,7 +180,7 @@ Plus USB mouse support. *(The mouse and the QMX cannot share the single USB host
 ESP32-P4's USB stack lacks the Transaction Translator a hub would need — so the mouse is
 for setup, log review and reading the manual with the radio unplugged.)*
 
-**Built for the field** — WiFi is entirely optional; battery percentage and voltage with
+**Built for the field** — WiFi is entirely optional; battery percentage with
 a charge limit for battery care; display sleep and a 180° flip for awkward mounting;
 config backup and restore as a text file; and a settings reset that does not need a
 reflash.
@@ -401,7 +412,7 @@ spots**.
 
 With the Tab5 on WiFi, open `http://<tab5-ip>` in any modern browser. The IP is shown in the bottom status bar on the Tab5.
 
-The browser panadapter is a full-featured view in its own right — not just a window onto the Tab5. On a larger monitor you get more spectrum history, a bigger waterfall canvas, and mouse controls that are faster than touch for precise tuning. It shows live spectrum at ≈10 fps via WebSocket, full waterfall history (~50 s), the same thermal palette and floor maths, a graphical S-meter, and a top bar with Band / Mode / BW / Zoom controls. The bottom bar shows battery percentage + voltage, firmware version, a live UTC clock, and WiFi SSID + RSSI. To its right: download/upload buttons (ADIF, QRZ, eQSL — see [QSO logging](#qso-logging-adif)), **Files ▲ → Diagnostic download ↓** for the diagnostic logs, **Config ↓ / Config ↑** to back up / restore / edit all settings (see [Config backup, restore & edit](#config-backup-restore--edit)), and **Tab5Shot** which opens a live `/ss.bmp` screenshot in a new tab.
+The browser panadapter is a full-featured view in its own right — not just a window onto the Tab5. On a larger monitor you get more spectrum history, a bigger waterfall canvas, and mouse controls that are faster than touch for precise tuning. It shows live spectrum at ≈10 fps via WebSocket, full waterfall history (~50 s), the same thermal palette and floor maths, a graphical S-meter, and a top bar with Band / Mode / BW / Zoom controls. The bottom bar shows battery percentage, firmware version, a live UTC clock, and WiFi SSID + RSSI. To its right: download/upload buttons (ADIF, QRZ, eQSL — see [QSO logging](#qso-logging-adif)), **Files ▲ → Diagnostic download ↓** for the diagnostic logs, **Config ↓ / Config ↑** to back up / restore / edit all settings (see [Config backup, restore & edit](#config-backup-restore--edit)), and **Tab5Shot** which opens a live `/ss.bmp` screenshot in a new tab.
 
 **microSD file browser (new in v1.3.0).** **Files → SD Files** in the bottom bar opens `http://<tab5-ip>/files` — browse the microSD card from any computer without pulling it: download your logs and config backups, upload files, delete. Card access is coordinated with the WiFi link the same way the automatic backup is, so it's safe to use mid-session.
 
@@ -420,6 +431,8 @@ The browser panadapter is a full-featured view in its own right — not just a w
 **Zoom sync.** The browser renders the same zoomed window as the Tab5.
 
 **QSO log — download, view, edit.** Once you have logged at least one completed FT8 QSO, a **"QSO Logs (N) ▲"** menu appears in the bottom bar of the web UI. **ADIF download ↓** fetches your `qso.adi` file directly. **View / edit log** (v1.3.5) opens the whole log as a table in the browser — click any column header to sort (click again to reverse; sorting by date groups an activation's QSOs together), delete a single record with the ✕ on its row, or **Delete all** to clear the log (it asks you to type `DELETE`, because there is no undo — download the ADIF first if you want a copy). The menu is only shown when the log contains data.
+
+Three columns can be corrected by clicking them: the two **reports**, and **P2P ref** — the park or summit the *other* station was activating. That last one is how a Park-to-Park contact gets into the log at all: while you are operating, the other activator's park number is on the POTA spots page on your phone and not in anything the radio sends, so you note it down and enter it when you get home *(Don Adams WB0LQW)*. Type the reference alone — `US-1241`, `G/LD-049`, `DLFF-0123` — and the Tab5 works out the programme (POTA, SOTA or WWFF) from its shape and writes both `SIG` and `SIG_INFO`; clear the reference and both go again. Nothing else is editable: callsign, band, mode, date and time are what QRZ, eQSL and LoTW match a contact on, so a wrong one is a delete-and-re-log.
 
 **QRZ / eQSL upload.** Two more buttons appear alongside the ADIF link once you have logged QSOs — see [QSO logging](#qso-logging-adif) for the full picture.
 
@@ -467,7 +480,7 @@ Three things you can do with it:
 
 ```json
 {
-  "battery":     { "level": 100, "mv": 8320, "charging": true },
+  "battery":     { "level": 100, "mv": 8320, "charging": true, "present": true, "limit": false },
   "wifi":        { "ssid": "MyNet", "rssi": -44, "ip": "192.168.1.213" },
   "freq_hz":     14074000,
   "mode":        "USB",
@@ -579,7 +592,7 @@ Slot parity is set automatically — if you heard them on an EVEN slot, your rep
 
 **The auto-engine** works the full exchange: TX1 (grid) → wait for their report → TX2 (R+report) → wait for RR73/73 → TX3 (73) → DONE. At every step it re-sends the current message for up to 4 consecutive slots if the other station doesn't respond. If no reply comes after 4 slots, the QSO times out (orange status, tap to clear).
 
-**Skip TX1 (faster pounce).** With **Skip TX1** enabled in the Filter editor, a pounce opens with your signal report immediately instead of the grid exchange — saving one round trip. If the station has already aged out of the decode list, it falls back to the normal grid TX1 automatically.
+**Skip TX1 (faster pounce).** With **Skip TX1** enabled in the Options editor, a pounce opens with your signal report immediately instead of the grid exchange — saving one round trip. If the station has already aged out of the decode list, it falls back to the normal grid TX1 automatically.
 
 ### Working a pile-up
 
@@ -592,7 +605,7 @@ When you call CQ or work a run, more than one station may answer at once — and
 - Working a caller from the pileup sends the correct *next* message for that station, built from whatever they actually last transmitted — the same laddering as tapping a decode-list row (v1.3.2). Previously it always opened with a signal report, which could never produce the `R`+report a station needs when they come back minutes later with a report of their own.
 - Worked-before stations appear in the pileup unless **Exclude worked-before** is checked — the pileup follows the same rule as the auto-answer, so dupes you're willing to work stay visible.
 
-The tracker never transmits on its own — it only remembers callers; you choose who to work. If you'd rather it *did* transmit, check **Auto-work pileup** in the Filter editor: when your current QSO completes (or immediately, if you check it with callers already waiting and nothing else going on), the strongest waiting caller is pounced automatically, draining the pile one contact at a time. It carries the same unattended-TX warning as the robot.
+The tracker never transmits on its own — it only remembers callers; you choose who to work. If you'd rather it *did* transmit, check **Auto-work pileup** in the Options editor: when your current QSO completes (or immediately, if you check it with callers already waiting and nothing else going on), the strongest waiting caller is pounced automatically, draining the pile one contact at a time. It carries the same unattended-TX warning as the robot.
 
 ### Calling CQ — CQ-run mode
 
@@ -610,9 +623,11 @@ From there it's fully automatic:
 
 Tap **Cancel** in the TX status bar at any time to stop.
 
-### Reply filter
+### FT8 Options
 
-Tap **Filter** in the left pane to open the filter editor. Controls which stations CQ-run auto-answers and which rows appear in the decode list.
+Tap **Options** in the left pane to open the FT8 Options panel — everything that only means anything in FT8 mode, in one place rather than scattered through a general settings list (v1.9.4; was called **Filter**, renamed because the panel already held real behaviour toggles like Auto-work pileup and grey-listing, not just filters). Controls which stations CQ-run auto-answers, which rows appear in the decode list, and (on the web UI) the CQ message presets too.
+
+The web UI has the same panel behind its own **Options** button, shown only in FT8 mode next to **TX tone** — CQ messages and FT8 filters were pulled out of the general Settings list into it. The button carries a count badge of how many settings are currently on rather than a plain active/inactive colour (a colour would always read "on" for anyone who runs filters permanently, which tells you nothing); hovering it lists which ones. Inside the panel, an active checkbox gets an amber border/fill in addition to its own tick mark, so "what's already set" is never a colour-only signal.
 
 - **Include 1 / Include 2** — if either field has text, only messages containing one of its terms are eligible. Space- or comma-separated (e.g. `POTA SOTA` or `JA, VK`), matched against the *whole* decoded message text so POTA/SOTA tags, grid squares, country prefixes, `/P` suffixes etc. all work.
 - **Exclude 1 / Exclude 2** — messages containing any of these terms are skipped even if they'd otherwise match.
@@ -717,15 +732,17 @@ Every tap of **LoTW ↑** afterwards signs and uploads everything logged since t
 | CALL | Their callsign |
 | FREQ | Dial frequency in MHz (3 d.p., e.g. `14.074`) |
 | BAND | Amateur band (e.g. `20M`) |
-| MODE | `FT8` |
-| SUBMODE | `FT8` (required by LoTW TQSL and eQSL for digital mode credit) |
+| MODE | `FT8`, or `MFSK` for an FT4 contact — ADIF defines FT8 as a mode in its own right but FT4 only as a submode of MFSK, and this is the form WSJT-X writes and other software expects to read *(Don Adams WB0LQW)* |
+| SUBMODE | `FT4` on an FT4 contact, absent otherwise. Never a copy of MODE: QRZ rejects that pairing outright |
 | RST_SENT | Our SNR estimate (e.g. `−07`). **Omitted entirely if no report was exchanged** — writing a placeholder `599` into an FT8 log, as versions before v1.3.4 did, fabricates a measurement that then gets uploaded to QRZ/eQSL/LoTW |
 | RST_RCVD | Signal report received |
 | QSO_DATE | UTC date `YYYYMMDD` |
 | TIME_ON | UTC time `HHMMSS` |
-| MY_CALL | Your callsign (from Identity in the drawer) |
+| STATION_CALLSIGN | Your callsign (from Identity in the drawer). This is the ADIF field POTA reads; the older `MY_CALL` spelling made POTA warn *"No station_callsign field, assuming operator …"* on every upload |
 | MY_GRIDSQUARE | Your grid |
 | GRIDSQUARE | Their grid (from the decoded FT8 message) |
+| MY_SIG, MY_SIG_INFO | The programme and reference **you** were activating (`POTA` / `US-1241`), when an activation is set — this is what POTA and SOTA credit the activation from |
+| SIG, SIG_INFO | The programme and reference **they** were activating — a Park-to-Park or Summit-to-Summit contact. Filled in automatically when the QSO came from a spot, or by hand afterwards in **View / edit log** |
 | CONTEST_ID, STX_STRING, SRX_STRING, ARRL_SECT, MY_ARRL_SECT | Field Day mode only: contest ID `ARRL-FD`, your/their literal `<class> <section>` exchange text, and their/your section alone |
 
 **Clear.** `GET /api/adif/clear` from the web UI wipes the file and resets the worked-call cache.
@@ -752,7 +769,7 @@ Each accepted sync writes through to the RX8130CE so the clock persists across p
 
 ### FT8 time calibration modal
 
-On the FT8 screen, tap **Filter** → **Sync Time** to open the time calibration modal. It shows three large boxes: **\[HH\] : \[MM\] : \[SS\]**.
+On the FT8 screen, tap **Options** → **Sync Time** to open the time calibration modal. It shows three large boxes: **\[HH\] : \[MM\] : \[SS\]**.
 
 - **HH / MM** — pre-filled from the current UTC clock. Tap either box to edit it with a numpad. Use this for rare POTA situations where neither WiFi nor the QMX clock is available.
 - **SS** — auto-syncs continuously from decoded FT8 signals. Each slot, every successfully decoded station contributes a timing sample; a robust outlier-rejecting average (median ± a tolerance window) across all of them sets the correction, so one bad decode can't throw off the reading. The box border flashes bright blue for ~30 ms each time a fresh measurement lands — a visual heartbeat that sync is active — and the hint below reads **"Flash: FT8 synced..."**. A blue frame means it is actively tracking; tap SS to lock it.
@@ -960,7 +977,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.8.6 is here** — a same-day fix release: the browser interface works again (v1.8.5 shipped it completely dead), a USB crash that left the radio unable to reconnect overnight is patched, CW frequency display and tap-to-tune are corrected, and Radio menus no longer makes you type blind behind the keyboard. Next on the bench:
+**v1.9.6 is here.** Next on the bench:
 
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).

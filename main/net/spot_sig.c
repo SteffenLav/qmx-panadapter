@@ -9,7 +9,11 @@ const char *spot_sig_for(spot_source_t src, const char *ref)
     // A spot that came from a programme's OWN feed needs no guessing.
     if (src == SPOT_SRC_SOTA) return "SOTA";
     if (src == SPOT_SRC_POTA) return "POTA";
+    return spot_sig_for_ref(ref);
+}
 
+const char *spot_sig_for_ref(const char *ref)
+{
     // A DX cluster spot carries whatever the spotter typed, and
     // dxcluster.c's find_reference() deliberately accepts all three kinds, so
     // the reference's own shape has to settle it:

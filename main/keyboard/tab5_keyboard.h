@@ -38,19 +38,24 @@ extern "C" {
 // actually wanted 0x7F.
 typedef void (*tab5_kbd_text_cb_t)(const char *text, uint8_t mods, void *arg);
 
-/* Probe for the keyboard on GPIO0/1 and, if present, switch it to String mode
- * and start the poll task. Returns:
+/* Probe for the keyboard on GPIO0/1, spawn its lifecycle task, and return the
+ * result of that FIRST probe:
  *   ESP_OK            keyboard found and running
- *   ESP_ERR_NOT_FOUND no device answered at 0x6D (the bus is scanned and the
- *                     result logged; the feature is silently disabled)
+ *   ESP_ERR_NOT_FOUND no device answered at 0x6D yet (the bus is scanned and
+ *                     the result logged; the task keeps retrying in the
+ *                     background, so a keyboard attached later is still
+ *                     found - this return value is only a boot-time snapshot)
  *   other             I2C bus could not be created
- * Safe to call even if no keyboard is attached. */
+ * Safe to call even if no keyboard is attached. Detach is also handled: the
+ * task notices the STM32 has stopped answering and goes back to retrying, so
+ * unplug/replug keeps working without a Tab5 reboot. */
 esp_err_t tab5_keyboard_init(void);
 
 /* Register the text callback. May be called before or after tab5_keyboard_init(). */
 void tab5_keyboard_set_text_cb(tab5_kbd_text_cb_t cb, void *arg);
 
-/* True once a keyboard has been detected and the poll task is running. */
+/* True while a keyboard is attached and claimed. Can go back to false after
+ * a physical detach - see tab5_keyboard_init()'s comment. */
 bool tab5_keyboard_present(void);
 
 #ifdef __cplusplus

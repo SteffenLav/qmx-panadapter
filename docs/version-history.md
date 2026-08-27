@@ -2127,7 +2127,7 @@ After swapping cables he once got "is the radio set to 2 USB serial ports?" on a
 
 ## v1.8.8 — 2026-08-20
 
-Diagnostics + field reports. Full notes: `docs/release-notes-v1.8.8.md`.
+Diagnostics + field reports.
 
 - **#117 a crash now survives the reboot.** `util/panic_hook.c` wraps
   `esp_panic_handler` (`-Wl,--wrap=`) and stashes a record in RTC no-init RAM;
@@ -2173,8 +2173,6 @@ Diagnostics + field reports. Full notes: `docs/release-notes-v1.8.8.md`.
 - **WS health counters** in `/api/status`.
 
 ## v1.8.9 — 2026-08-20
-
-Full notes: `docs/release-notes-v1.8.9.md`.
 
 - **#146 the radio could be left transmitting, and now cannot.** Roy KI0ER's log
   is the whole mechanism: `cdc_acm: TX transfer timeout` mid-burst, then every
@@ -2575,3 +2573,319 @@ The arrow between the two versions is plain ASCII `->`. LVGL's symbol-font
 arrow is a chevron that reads as `>` and is too heavy at 24 px; U+2192 is not
 in this font and renders as a tofu box. A real arrow needs `montserrat_24`
 regenerated with `lv_font_conv` — logged as #244.
+
+### Shipped in v1.9.4 — 2026-08-25 20:46 UTC
+
+A feedback-batch release: the FT8-specific settings get their own home on
+both screens, the TX tone picker stops going stale while you decide, and the
+web page finally works on a phone held upright.
+
+**FT8 Options — one place for everything that's only meaningful in FT8
+mode.** The Tab5's left-pane button was renamed **Filter → Options** (Roy
+KI0ER): the modal it opens already held real behaviour toggles — Auto-work
+pileup, grey-listing — not just filters, so the old name undersold it. The
+web UI gets the equivalent concept properly for the first time
+(`main/net/www/index.html`): CQ message presets and the FT8 filters group,
+previously scattered through one long general Settings list behind the
+bottom bar, now live behind a dedicated **Options** button next to **TX
+tone**, rendered only in FT8 mode (`FT8_OPTS_GROUPS`, `setBuildForm(cfg,
+ft8Opts)`). The entry button carries a **count** of currently-active
+settings rather than a binary colour — a colour would always read "active"
+for an operator who runs filters permanently, telling them nothing new each
+time (Dirk DK7CVD's "a more granular approach" refined against Roy's
+objection to a plain on/off indicator) — and hovering it lists which ones by
+name (`ft8OptsSummarize`). Inside the panel, an active checkbox gets an
+amber border/fill in addition to its own tick mark (Don N2VGU's
+accessibility point: colour alone is unreadable to colour-blind users, so
+the checkbox's own shape carries the signal too, the colour is redundant on
+top of it, never the only channel).
+
+**The TX tone picker no longer goes stale while you're deciding.**
+`toneOpen()` fetched `/api/tone` exactly once, on open, with no refresh
+until Apply or Cancel — so a slow decision (reading the E/O strip, weighing
+which window to use) could cross a 15-second FT8 boundary for free, and a
+station that landed on the slot you were about to pick stayed invisible the
+whole time. `toneRefresh()` now re-polls every 3 s while the modal is open,
+via `setInterval`/`clearInterval` on `toneOpen()`/`toneClose()`; the
+operator's own in-progress pick (`toneSel`/`toneHold`) is never touched by a
+refresh, only the busy/partner colouring redraws under it.
+
+**The web page works on a phone held upright.** `html, body { overflow:
+hidden }` combined with a `@media (max-width: 600px)` rule that outright set
+`#top-right { display: none }` meant a narrow portrait screen didn't clip
+overflowing controls, it deleted them from layout with no way back — landscape
+never hit this because there was room for the same content at its natural
+size (Randy N4OPI, iPhone Safari). Fixed in two parts: `#top`/`#bot` now
+scroll horizontally (`overflow-x: auto`) instead of clipping, the same
+pattern the decode-list table already used, and the narrow-width media query
+no longer hides `#top-right` at all — swiping reaches it instead. A
+`@media (orientation: portrait)` rule also allows the page itself to scroll
+vertically as a fallback for the rare case the fixed-viewport grid still
+doesn't fit.
+
+**Battery display simplified, and now says when charging is capped on
+purpose.** Cell voltage (`main/util/status.c`'s `%d.%dV`, and the matching
+`.mv` render in `index.html`) is dropped from both the Tab5 and the web
+page's battery readout — the percentage already carries the level, and
+nobody reading the bar needs the raw voltage underneath it. In its place:
+once the Battery Care charge limit trips (`s_charge_cutoff_active`), the
+reading now appends `(limit)` on **both** screens — a new
+`status_charge_limit_active()` accessor feeds `/api/status`'s `battery.limit`
+field so the web page can show the same thing. Before this, "capped on
+purpose at 80%" and "not charging for some other reason" read identically
+(Don N2VGU).
+
+**The snap-on keyboard can be attached — or reattached — any time, not just
+at boot.** `tab5_keyboard_init()` used to probe once at startup and, on
+failure, tear the I2C bus down entirely; a keyboard snapped on after boot
+was never found for the rest of the session. Replaced with a single
+persistent lifecycle task (`kb_task`) that keeps retrying every 2 s while
+absent and detects a genuine detach (5 consecutive failed polls, ~250 ms —
+long enough to ride out a transient bus glitch, short enough to notice a
+real unplug quickly) by watching for the STM32 to stop acking, so unplug and
+reattach mid-session both keep typing working without a Tab5 reboot —
+verified live on hardware, caught mid-cycle in the serial log (`no longer
+answering - treating as detached` at 27.1 s, `Tab5 keyboard detected` at
+33.2 s). The keyboard's two RGB LEDs are forced dark (`REG_RGB_MODE` =
+custom, both channels zero) on every claim, including a reattach — an
+earlier attempt at this release tried a battery-status readout on the LEDs,
+then a plain "active" green, and both were reverted: the LEDs run far
+brighter than any status glyph needs, the Tab5 screen already shows battery
+state, and stock "binding" mode turned out to be a richer state machine than
+assumed (purple on a hot attach, green on a boot attach, contradicting the
+simple attach/active pair this project's own notes originally described) —
+so once the keyboard is claimed, there is nothing left for a light to
+usefully distinguish, and it says nothing rather than something misleading.
+
+**The macOS/Linux flasher script works on more systems.** `flash.command`
+could ship with Windows line endings despite `.gitattributes` declaring
+`eol=lf` for it — a working-tree copy had drifted to CRLF, which some
+shells refuse outright (`bad interpreter: ...^M`) — caught and diagnosed by
+a user on Fedora rather than by us (Michael K Johnson KZ4LY).
+`tools/make_flasher_zip.ps1` now strips CR from every `.command` file
+unconditionally at packaging time, regardless of what state the working
+tree happens to be in on whatever machine builds the release.
+
+#### Also in this release
+
+- **Line-ending policy fixed repo-wide.** The same class of drift that hit
+  `flash.command` turned out to affect 84+ other tracked `.c`/`.h`/`.html`
+  files (LF-committed, CRLF on disk) with nothing in `.gitattributes`
+  preventing it from recurring. Added `eol=lf` for `.c/.h/.html/.md/.py/
+  .json/.yml`, matching the existing `.command`/`.sh` rule, and normalized
+  every currently-drifted tracked file (`git add --renormalize .` found 59
+  more beyond the initial extension-based sweep, mostly `test/wav_reference/
+  *.txt` fixtures) — every file individually byte-verified as EOL-only
+  before being included, zero functional change, rebuilt and binary-size-
+  matched twice to confirm. Developer-only; no user-visible effect.
+
+### Shipped in v1.9.5 — 2026-08-25 23:20 UTC
+
+A fast-follow patch: two ADIF logging bugs, both able to cost real credit or
+real data. No UI or feature changes.
+
+**POTA/SOTA activation count double-counted duplicate contacts (Eric,
+GitHub issue).** `adif_log_count_activation()` counted every logged record
+toward POTA's 10-QSO (SOTA's 4-QSO) minimum, with no dedup by callsign - it's
+the one function both the Tab5's Activation modal and the web UI's
+activation pill read from, so both screens showed the inflated number.
+Working the same station twice (Eric: KO4JON) made the device say "10
+contacts, park activated" while POTA.app credited 9 unique stations and
+rejected the activation - happened on three parks in one outing before he
+worked around it by ignoring the on-device count entirely. Fixed by
+deduping on callsign alone, not band/mode: the conservative direction, since
+it can only ever show a number at or below what POTA would actually credit,
+never claim activation early the way the old count could.
+
+**Single-record delete could silently fail, or corrupt the log on a card
+with damaged storage.** `adif_log_delete_record()`'s rewrite-to-temp-and-
+rename never checked whether the write actually succeeded before deleting
+the original file and renaming the (possibly incomplete) temp file over it
+- unlike the QSO-append path in the same file, which already has this exact
+`ferror`/`fflush`/`fsync`-checked pattern. Reported as "the delete UI runs
+through its whole motion but the record is still there afterwards."
+Root-caused on the dev bench down to the byte: `fopen("/spiffs/qso.tmp",
+"w")` returning `ENOSPC` (errno 28), on a partition reporting 701 KB used of
+934 KB while its actual files (`qso.adi` + `diag.0.log` + LoTW cert/key)
+only added up to ~170 KB - the ~530 KB gap, plus a directory entry that
+couldn't even be `stat()`'d, was orphaned/inconsistent SPIFFS index blocks,
+not legitimate usage. `esp_spiffs_check()` (ESP-IDF's own consistency
+check/repair) reported success but reclaimed nothing; `esp_spiffs_gc()`
+then confirmed why (`SPIFFS_gc failed`, 0 bytes reclaimed) - that bench's
+partition had a genuinely unrecoverable page, proved by a full format +
+hardware self-test (write two records, delete one, verify the count: PASS).
+
+Fixed two ways: `adif_log_delete_record()` now verifies the rewrite
+actually succeeded before touching the original file, and surfaces a toast
+instead of failing silently either way - so a real write failure is never
+mistaken for "it worked." And since `esp_spiffs_check()` + `esp_spiffs_gc()`
+together are far cheaper than asking an operator to reboot, both now run
+once at mount (`adif_log_init()`), and the delete path retries once through
+the same repair if it still hits `ENOSPC` live - so a real field unit whose
+diag log has fragmented storage over a long uptime self-heals instead of
+needing a power cycle, which is the case this bench's *un*recoverable page
+was standing in for.
+
+⚠ The dev bench's own corruption was NOT repairable in the end - it took a
+full SPIFFS format (which wipes the partition: the ADIF log, the diag log,
+and the LoTW certificate/private key) to recover the bench itself. That is
+a one-time, hardware-specific recovery, not something this release does to
+anyone's device automatically or ships as a user-facing action.
+
+### Shipped in v1.9.6 — 2026-08-26
+
+A POTA/SOTA logging release, all of it from a seven-page report Don Adams
+WB0LQW wrote after four real park activations, comparing what the Tab5 writes
+against what POTA, SOTA and the ADIF specification actually ask for.
+
+**Your callsign is now `STATION_CALLSIGN`, the field POTA reads.** We wrote it
+as `MY_CALL`, which POTA accepts and then warns about on every single upload:
+*"No station_callsign field, assuming operator WB0LQW"*. It was guessing - it
+happened to guess right, from his account, but a log should say who made the
+contact rather than leave it to be inferred. `STATION_CALLSIGN` is the
+spec-correct field and is what the log now writes. Records logged before this
+release keep the old field name; POTA still accepts them, with the warning.
+
+**Park-to-Park and Summit-to-Summit contacts can be entered afterwards.** The
+web log editor (**QSO Logs -> View / edit log**) has a new **P2P ref** column.
+This is the one piece of a park-to-park contact that no radio can tell you:
+while you are operating, the other activator's park number is on the POTA spots
+page on your phone, and nothing in the FT8 exchange carries it. So you note it
+down, and when you get home you click that cell and type the reference -
+`US-1241`, `G/LD-049`, `DLFF-0123`. The Tab5 works out the programme from the
+reference's shape and writes both `SIG` and `SIG_INFO`, which is what POTA reads
+to award the P2P; clearing the reference clears both again. A chase that was
+logged from a spot already carried these fields automatically - this is for the
+contacts made without one.
+
+A reference must contain a dash to be accepted. `US1241` is refused rather than
+written, because that value goes out as a claim that a specific park was worked,
+and a missing reference is honest where a wrong one is not.
+
+**FT4 contacts are logged the way the ADIF specification defines them:**
+`MODE=MFSK` with `SUBMODE=FT4`, instead of `MODE=FT4`. ADIF makes FT8 a mode in
+its own right but FT4 only a submode of MFSK - an asymmetry, but the standard
+is the standard, and it is what WSJT-X writes and what other software expects to
+read. POTA accepted our old form, but ADIFMaster - the free editor Don uses to
+prepare a log before submitting it - refuses to open a file that declares FT4 as
+a mode at all. FT8 records are unchanged.
+
+LoTW uploads are unaffected: LoTW keeps its own list of modes and has no MFSK in
+it, so the pair is turned back into `FT4` before a QSO is signed, and the file
+that goes to LoTW is byte-for-byte what it was before. eQSL and QRZ both prefer
+the new form. As with the callsign field, FT4 QSOs logged before this release
+keep `MODE=FT4`; a **Today** download after upgrading gives you a file in the
+new form.
+
+**Also fixed:** editing a record verifies the rewrite before replacing the log,
+the same protection single-record delete got in v1.9.5 - on a filesystem that
+has filled up, an edit now fails cleanly and says so instead of risking the log
+it was rewriting.
+
+Two of Don's suggestions were deliberately not implemented. Dropping
+`FREQ`/`RST_SENT`/`RST_RCVD`/`GRIDSQUARE`/`MY_GRIDSQUARE` would tidy the file
+for POTA, which ignores them, at the cost of QRZ, eQSL, LoTW and your own record,
+which do not. And SOTA's own `MY_SOTA_REF`/`SOTA_REF` fields are still not
+written - `SIG`/`SIG_INFO` is valid ADIF for a summit too, but whether SOTA's
+uploader reads it needs a SOTA activator to confirm before anything is changed.
+
+Alongside the ADIF work, this release carries the first reports off v1.9.4 and
+v1.9.5.
+
+**The bottom-bar menus work again on an iPhone.** Tapping *QSO Logs* highlighted
+the button and did nothing at all *(Travis AK6TB)*, or opened the menu behind the
+decode list so a selection could be made but not read *(Randy N4OPI)*. Both come
+from one line added in v1.9.4 to make the bars scroll sideways in portrait: it
+also makes Safari treat the bar as the frame those popups are positioned inside,
+which either clips them away or drops them behind the page. That line is gone,
+and the menus have been moved out of the bar entirely so no future change to the
+bars can reach them.
+
+**"Check for updates" no longer says you are up to date when you are not.** A
+check asks GitHub and takes a few seconds; both the Tab5's update window and the
+browser's version label were repainting the *previous* answer immediately after
+the press, so you were told "Up to date, you are running v1.9.3" about a release
+that already existed — then the offer appeared on its own a moment later, by
+which point it read as the button having failed *(Michael KZ4LY, Samuel W7STF)*.
+Both now say **checking** until the answer actually arrives.
+
+**The mouse wheel tunes the radio.** Over the spectrum or the waterfall, one
+click is **10 Hz in CW and the digital modes** — fine enough to zero-beat a CW
+signal by ear — and **100 Hz in SSB** *(Roy KI0ER, seconded by John Dusek)*. It
+stops at the band edges, a fast spin is not lost, and anything covering the
+panadapter takes the wheel instead, so the dial never moves under a window you
+are reading.
+
+**The wheel also stops scrolling panels into blank space.** Winding past the last
+row of the settings list or the QSO log used to carry the contents off the screen
+entirely, leaving the panel empty until you wound it back *(Roy KI0ER)*. It now
+stops at the ends, and hands the click to whatever is behind when there is
+nothing left to move.
+
+**You come back from the radio's own menus where you left.** Using **Radio
+menus** to check something — Hardware Tests → Diagnostics, say — could leave the
+radio on 160 m whatever band you started on *(Randy N4OPI)*. Closing the session
+now puts the frequency and mode back if they moved, alongside the I/Q-mode
+re-enable that was already there. If you changed band deliberately while you were
+in there, that gets put back as well: the Tab5 cannot tell the two apart.
+
+The rest of this release came from the first days of v1.9.4 and v1.9.5 in the
+field.
+
+**The mouse wheel tunes the radio.** Over the spectrum or the waterfall, one
+click is **10 Hz in CW and the digital modes** - fine enough to zero-beat a CW
+signal by ear - and **100 Hz in SSB** *(Roy KI0ER, seconded by John Dusek)*. It
+stops at the band edges, a fast spin is not lost, and anything covering the
+panadapter takes the wheel instead, so the dial never moves under a window you
+are reading.
+
+**The wheel also stops scrolling panels into blank space.** Winding past the last
+row of the settings list or the QSO log used to carry the contents off the screen
+entirely, leaving the panel empty until you wound it back *(Roy KI0ER)*.
+
+**The bottom-bar menus work on an iPhone again.** Tapping *QSO Logs* highlighted
+the button and did nothing at all *(Travis AK6TB)*, or opened the menu behind the
+decode list so a selection could be made but not read *(Randy N4OPI)*. Both come
+from one line added in v1.9.4 to make the bars scroll sideways in portrait: it
+also makes Safari treat the bar as the frame those popups are positioned inside.
+That line is gone, and the menus have been moved out of the bars entirely so no
+future change to the bars can reach them. Travis confirmed the diagnosis from the
+other end - broken in Safari on macOS, iOS and iPadOS; fine in Edge and Chrome.
+
+**"Check for updates" no longer says you are up to date when you are not.** A
+check asks GitHub and takes a few seconds; both the Tab5's update window and the
+browser's version label were repainting the *previous* answer immediately after
+the press *(Michael KZ4LY, Samuel W7STF)*. Both now say **checking** until the
+answer actually arrives.
+
+**Background downloading is a switch.** It always was a setting, but it had no
+control anywhere - the config file was the only way to reach it, which is not an
+opt-out in any useful sense. It is now a checkbox in the Tab5's Settings under
+**Network**, and a row in the web Settings under **Updates**. Turn it off and the
+Tab5 still checks and still tells you a new version exists; it simply waits for
+you to ask before spending 3.3 MB, which matters on a phone hotspot *(Michael
+KZ4LY, Samuel W7STF, Steve N9SZ)*. Applying an update is a deliberate press
+either way - nothing installs itself.
+
+An automatic download now also waits until the Tab5 has been up for five minutes
+and has memory to spare. Steve N9SZ saw one start moments after boot, appear to
+finish, and then reboot the device back onto the old version - twice - while the
+same update started by hand worked. The download is verified before it is made
+bootable, so a reset during that step loses the download rather than anything
+else, but starting 30 seconds into boot is the worst moment on this hardware.
+
+**You come back from the radio's own menus where you left.** Using **Radio
+menus** to check something could leave the radio on 160 m whatever band you
+started on *(Randy N4OPI)*. Closing the session now puts the frequency and mode
+back if they moved. If you changed band deliberately while you were in there,
+that is put back too - the Tab5 cannot tell the two apart.
+
+**Basic/Expert is remembered** across a reboot *(Samuel W7STF)*, and switching
+FT8/FT4 from the web API lands on that mode's calling frequency instead of
+staying on the other one's.
+
+**Under the bonnet**, the built-in station simulator can now run FT4 - it had
+three separate places that assumed FT8's 15-second slots - and its practice
+stations now have signal levels that vary instead of every one reading the same.
+That is bench equipment rather than a feature, but it is how FT4 and
+signal-report behaviour get tested without putting a real station on the air.

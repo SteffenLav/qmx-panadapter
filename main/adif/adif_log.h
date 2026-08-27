@@ -85,7 +85,7 @@ bool adif_log_get_record(int idx, char *out, size_t out_sz);
 // Extract an ADIF field value (<FIELD:len>value) from a single record line as
 // returned by adif_log_get_record(). Returns false if the field is absent or
 // doesn't fit in out_sz. The "<FIELD:" tag is '<'-anchored, so e.g. "CALL"
-// never matches inside "MY_CALL".
+// never matches inside "STATION_CALLSIGN".
 bool adif_log_extract_field(const char *line, const char *field,
                             char *out, size_t out_sz);
 

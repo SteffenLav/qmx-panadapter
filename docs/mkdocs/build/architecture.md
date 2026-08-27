@@ -200,7 +200,9 @@ File: `/spiffs/qso.adi`
 Format: Standard ADIF (one QSO per `<EOR>` record). Each QSO stores:
 
 ```
-CALL, GRIDSQUARE, RST_SENT, RST_RCVD, TIME_ON, FREQ, MODE, OPERATOR, ...
+CALL, GRIDSQUARE, RST_SENT, RST_RCVD, QSO_DATE, TIME_ON, FREQ, BAND,
+MODE (+ SUBMODE on FT4), STATION_CALLSIGN, MY_GRIDSQUARE,
+MY_SIG/MY_SIG_INFO (our activation), SIG/SIG_INFO (theirs), ...
 ```
 
 Downloaded via web UI or serial.

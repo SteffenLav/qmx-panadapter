@@ -45,6 +45,18 @@ static const char *TAG = "qmx_term";
 #define QMX_TERM_OPEN_ATTEMPTS  4
 #define QMX_TERM_OPEN_RETRY_MS  200
 
+/* Where the dial was when the session opened, so it can be put back (#261,
+ * Randy N4OPI). He reproduced it precisely: Hardware Tests > Diagnostics, then
+ * leave the menus, and the radio is on 160 m whatever band it started on. The
+ * menus are not isolated from anything - that is the same lesson as the IQ-mode
+ * re-assert below, one layer up: this session changes radio state that has
+ * nothing to do with what the operator went in to look at.
+ *
+ * Mode is stored as the STRING cat reports, because cat_request_mode() takes the
+ * same spelling back - no enum in the middle to get out of step. */
+static uint32_t          s_pre_freq_hz;
+static char              s_pre_mode[12];
+
 static cdc_acm_dev_hdl_t s_dev;
 static ansi_term_t      *s_scr;          /* PSRAM: ~4 KB of cells */
 static bool              s_open;
@@ -281,6 +293,40 @@ static void close_locked(void)
     cat_request_iq_reassert();
     ui_flat_mode_reset();
 
+    /* Put the dial back where it was (#261, Randy N4OPI). The radio comes out of
+     * its own menus on 160 m regardless of where it started, which on a remote
+     * station is the difference between carrying on and having to find your way
+     * back by hand.
+     *
+     * Only written when it actually MOVED, so a session that changed nothing
+     * sends nothing. Both go through the poll task rather than being written
+     * from here: the poll task owns the CDC pipe, and this runs on whichever
+     * task closed the session (an HTTP worker, the idle watchdog, or the LVGL
+     * task via the Tab5's own view). cat_set_frequency() is the exception - it
+     * is already safe to call from any task and is what every other retune path
+     * here uses.
+     *
+     * ⚠ KNOWN AND ACCEPTED: an operator who went into Band Config to change
+     * band DELIBERATELY gets that undone. There is no way to tell the two apart
+     * from out here, and Randy asked for the restore explicitly; the Tab5
+     * already does exactly this across a panadapter<->FT8 switch, so it is the
+     * consistent behaviour rather than a new idea. */
+    uint32_t now_hz = cat_get_frequency();
+    if (s_pre_freq_hz && now_hz && now_hz != s_pre_freq_hz) {
+        ESP_LOGW(TAG, "the menus left the radio on %lu Hz - restoring %lu Hz",
+                 (unsigned long)now_hz, (unsigned long)s_pre_freq_hz);
+        cat_set_frequency_forced(s_pre_freq_hz);
+        ui_update_frequency(s_pre_freq_hz);
+    }
+    if (s_pre_mode[0]) {
+        const char *m = cat_get_mode_str();
+        if (!m || strcmp(m, s_pre_mode) != 0) {
+            ESP_LOGW(TAG, "the menus left the radio in %s - restoring %s",
+                     (m && m[0]) ? m : "?", s_pre_mode);
+            cat_request_mode(s_pre_mode);
+        }
+    }
+
     ESP_LOGI(TAG, "terminal session closed - IQ re-assert queued, flat floor re-seeded");
 }
 
@@ -334,6 +380,15 @@ bool qmx_term_open(void)
         }
     }
     ansi_term_reset(s_scr);
+
+    /* Snapshot the dial BEFORE the session touches anything. CAT keeps polling
+     * interface 0 throughout a terminal session (measured - see the header), so
+     * these are live values, not stale ones. */
+    s_pre_freq_hz = cat_get_frequency();
+    {
+        const char *m = cat_get_mode_str();
+        snprintf(s_pre_mode, sizeof(s_pre_mode), "%s", (m && m[0]) ? m : "");
+    }
 
     const cdc_acm_host_device_config_t cfg = {
         .connection_timeout_ms = 1000,
