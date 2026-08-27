@@ -688,6 +688,65 @@ static double measure_noise_ref(const baseband_t *bb, tone_tw_t *tw, long dt,
     return samp[(NOFF * 3) / 10];
 }
 
+/* ---- DRIFT, FROM THE TRANSMISSION'S OWN TWO HALVES -----------------------
+ *
+ * A search over drift rates is what wsprd does, and it is expensive: it
+ * multiplies the whole (frequency x time) grid by another axis. But drift only
+ * has to be REPORTED here, not searched for, and once the message is decoded
+ * the transmitted tone of every symbol is known - which turns the measurement
+ * into two ordinary frequency estimates.
+ *
+ * If the frequency moves linearly by d Hz across the transmission, the first
+ * half sits at -d/4 from centre and the second at +d/4, so d = 2 * (f2 - f1).
+ * Each half's frequency is found by correlating against the KNOWN tones at a
+ * range of offsets and taking the peak, refined by parabolic interpolation so
+ * the answer is not quantised to the search step.
+ *
+ * ⚠ WEAKLY VALIDATED. The four reference recordings contain only three
+ * non-zero drifts (+1, -2, -3), so this is checked mostly by agreeing with
+ * wsprd's ZEROS. It reports a number rather than a dash, which is an
+ * improvement, but do not treat a single drift reading as precise until it has
+ * been checked against a station with known, deliberate drift. */
+static int measure_drift(const baseband_t *bb, tone_tw_t *tw, long dt,
+                          const uint8_t tones[WSPR_NSYM],
+                          wspr_tp_t tp[WSPR_NSYM][4])
+{
+    /* +/-4 Hz is the range wsprd searches, and a WSPR transmitter drifting
+     * further than that is not decodable anyway. */
+    const double LO = -4.0, STEP = 0.5;
+    const int N = 17;
+    double h1[17], h2[17];
+    for (int j = 0; j < N; j++) {
+        build_tone_tw(tw, LO + j * STEP);
+        extract_tone_powers(bb, tw, dt, tp);
+        double a = 0, b = 0;
+        for (int i = 0; i < WSPR_NSYM / 2; i++)              a += tp[i][tones[i]];
+        for (int i = WSPR_NSYM / 2; i < WSPR_NSYM; i++)      b += tp[i][tones[i]];
+        h1[j] = a; h2[j] = b;
+    }
+    double f[2];
+    for (int half = 0; half < 2; half++) {
+        const double *h = half ? h2 : h1;
+        int best = 0;
+        for (int j = 1; j < N; j++) if (h[j] > h[best]) best = j;
+        double refine = 0.0;
+        if (best > 0 && best < N - 1) {
+            /* Parabolic peak through three points - sub-step resolution
+             * without a finer (and 3x more expensive) grid. */
+            const double y0 = h[best - 1], y1 = h[best], y2 = h[best + 1];
+            const double den = y0 - 2 * y1 + y2;
+            if (den < -1e-30) refine = 0.5 * (y0 - y2) / den;
+            if (refine > 1.0) refine = 1.0;
+            if (refine < -1.0) refine = -1.0;
+        }
+        f[half] = LO + (best + refine) * STEP;
+    }
+    double d = 2.0 * (f[1] - f[0]);
+    if (d >  9.0) d =  9.0;
+    if (d < -9.0) d = -9.0;
+    return (int)lround(d);
+}
+
 static int accept_if_plausible(const wspr_msg_bytes_t *msg, unsigned int cycles,
                                 wspr_tp_t tp[WSPR_NSYM][4], double noise_ref,
                                 wspr_decode_result_t *result)
@@ -1035,7 +1094,8 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
 {
     memset(result, 0, sizeof(*result));
     result->freq_hz = f0_hz;
-    result->snr_db  = WSPR_SNR_UNKNOWN;
+    result->snr_db   = WSPR_SNR_UNKNOWN;
+    result->drift_hz = WSPR_DRIFT_UNKNOWN;
 
     /* Everything below works in DECIMATED samples. The start-time search is
      * where the cost lives - ~119 correlations per candidate - so it is the
@@ -1270,6 +1330,17 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
             if (got && r.agree_soft > best.agree_soft) best = r;
         }
         if (best.ok && best.agree_soft >= WSPR_AGREE_CONFIDENT) break;
+    }
+
+    /* Drift is measured only for an accepted decode, and BEFORE the baseband
+     * is released - it needs the audio, and the transmitted tones, and both
+     * are only available together right here. */
+    if (best.ok) {
+        uint8_t dtones[WSPR_NSYM];
+        if (wspr_tones_from_message(best.callsign, best.grid, best.power_dbm, dtones))
+            best.drift_hz = (int16_t)measure_drift(&bb, &tw,
+                                                    best.best_dt_samples / WSPR_DECIM,
+                                                    dtones, tp);
     }
 
     free_baseband(&bb);

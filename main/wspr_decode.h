@@ -125,6 +125,12 @@ typedef struct {
      * stand-in value. See wspr_measure_snr() for how it is derived. */
     int16_t snr_db;
 
+    /* Frequency drift across the transmission, in Hz - WSPR's own convention
+     * and what wsprnet's `drift` field wants. WSPR_DRIFT_UNKNOWN if it could
+     * not be measured; 0 is a REAL and very common reading, so the two must
+     * not be confused. See measure_drift(). */
+    int16_t drift_hz;
+
     float ms_mix;      /* mix + decimate: one sweep of the whole capture */
     float ms_coarse;   /* coarse + fine start-time search */
     float ms_curve;    /* sync-vs-frequency curve and its refinement */
