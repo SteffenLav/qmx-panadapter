@@ -99,7 +99,12 @@ typedef struct {
     int16_t  cw_cal_hz;        // CW LO trim (Hz), default -60, range +/-100
     float    zoom_factor;      // spectrum/waterfall zoom, 1.0=full, max 24.0
     uint8_t  brightness_pct;   // LCD backlight brightness, 0..100, default 100
-    uint8_t  last_ui_mode;     // last UI mode: 0=Panadapter, 1=FT8 (default 0)
+    /* Last UI mode: 0=Panadapter, 1=FT8, 3=WSPR (default 0). ⚠ ui_apply_saved_mode()
+     * restores ONLY FT8 - every other value falls through to Panadapter, which
+     * is what makes it impossible to boot into WSPR with the feature disabled.
+     * Deliberate, not an oversight: a mode that ships dark should not be sticky
+     * across a reboot. This comment said "0 or 1" after 3 became storable. */
+    uint8_t  last_ui_mode;
     uint32_t last_unix_time;   // last UTC unix time seen from SNTP (0 = never synced)
     char     cq_msg[3][28];    // 3 user-editable CQ message presets (FT8 TX)
     uint8_t  cq_sel;           // which CQ preset is active, 0..2 (default 0)
