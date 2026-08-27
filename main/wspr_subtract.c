@@ -19,6 +19,44 @@ int wspr_tones_from_message(const char *callsign, const char *grid,
     return 1;
 }
 
+/* ⛔ NO cos()/sin() PER SAMPLE. This function ran two loops of 8192 samples per
+ * symbol, each calling cos() and sin() on a double - 5.3 MILLION software
+ * double trig calls per subtracted signal. On the ESP32-P4, whose FPU is
+ * single-precision only, that measured at 67 SECONDS per signal on hardware:
+ * a 120 s WSPR cycle went from 58 s to 154 s and started overrunning its own
+ * decode budget. On a host it is invisible - hardware double, fast libm - so
+ * it survived every host test of the two-pass path.
+ *
+ * Instead the oscillator advances by one complex multiply per sample in float
+ * and is re-seeded from the exact phase every OSC_RESEED samples. Error can
+ * then accumulate over at most 512 float steps and is WIPED rather than
+ * rescaled, so this is not a precision trade - the fit and the residual are as
+ * good as before, at about a thousandth of the trig cost. */
+#define OSC_RESEED 512
+
+typedef struct { double w; long base; float c, s, cs, sn; } osc_t;
+
+static void osc_init(osc_t *o, double w, long base)
+{
+    o->w = w; o->base = base;
+    o->cs = (float)cos(w); o->sn = (float)sin(w);
+    o->c = 1.0f; o->s = 0.0f;
+}
+
+/* cos/sin of w*(base+k), for k stepping 0,1,2,... in order. */
+static inline void osc_at(osc_t *o, long k)
+{
+    if ((k & (OSC_RESEED - 1)) == 0) {
+        const double ph = o->w * (double)(o->base + k);
+        o->c = (float)cos(ph);
+        o->s = (float)sin(ph);
+    } else {
+        const float nc = o->c * o->cs - o->s * o->sn;
+        const float ns = o->c * o->sn + o->s * o->cs;
+        o->c = nc; o->s = ns;
+    }
+}
+
 int wspr_subtract(int16_t *samples, long n, double f0_hz, long dt_samples,
                   const uint8_t tones[WSPR_NSYM])
 {
@@ -43,15 +81,17 @@ int wspr_subtract(int16_t *samples, long n, double f0_hz, long dt_samples,
          *
          * The absolute sample index is used for the phase so each symbol is
          * fitted in the same reference frame as it will be reconstructed in. */
-        double re = 0.0, im = 0.0;
+        osc_t osc;
+        osc_init(&osc, w, s0);
+        float re = 0.0f, im = 0.0f;
         for (long k = 0; k < LEN; k++) {
-            const double ph = w * (double)(s0 + k);
-            const double x  = (double)samples[s0 + k];
-            re += x * cos(ph);
-            im -= x * sin(ph);
+            osc_at(&osc, k);
+            const float x = (float)samples[s0 + k];
+            re += x * osc.c;
+            im -= x * osc.s;
         }
-        const double a_re = 2.0 * re / (double)LEN;
-        const double a_im = 2.0 * im / (double)LEN;
+        const float a_re = 2.0f * re / (float)LEN;
+        const float a_im = 2.0f * im / (float)LEN;
 
         /* ⚠ NO TAPER. A raised-cosine ramp over the symbol edges was tried, on
          * the theory that subtracting HARD-switched tones from a GFSK signal
@@ -60,9 +100,10 @@ int wspr_subtract(int16_t *samples, long n, double f0_hz, long dt_samples,
          * stations, 19:14 3 -> 1). Leaving more of the signal behind at each
          * transition costs more than the edge artefact does. Do not re-add it
          * without a measurement that says otherwise. */
+        osc_init(&osc, w, s0);
         for (long k = 0; k < LEN; k++) {
-            const double ph = w * (double)(s0 + k);
-            double v = (double)samples[s0 + k] - (a_re * cos(ph) - a_im * sin(ph));
+            osc_at(&osc, k);
+            double v = (double)samples[s0 + k] - (double)(a_re * osc.c - a_im * osc.s);
             /* Clamp: the residual can exceed int16 where two strong signals
              * overlap, and wrapping would inject a discontinuity that reads as
              * broadband noise to the next pass - the opposite of the point. */
