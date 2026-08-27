@@ -98,8 +98,22 @@ part of this plan rather than the binary size.
 ## Merging
 
 `origin/main` (`14d9093`) is an **ancestor** of `feat/wspr-page`, verified
-against the live remote. So putting this on main is a fast-forward — there is
-no merge to resolve and no conflict to get wrong.
+against the live remote, so as far as the REMOTE is concerned this is a
+fast-forward with no merge to resolve.
+
+Local `main` is NOT the same thing. It carries one unpushed commit this
+branch did not have: `86bcd84`, the bench-registry fix. That one matters
+rather than being bookkeeping - `tools/bench.json` here still described `dev`
+as running `main` out of `C:/dev/qmx-panadapter` at `.213`, when that board is
+really running THIS branch out of the `-wspr` worktree at `.209`. So `bench
+flash dev` would have built main's firmware over the WSPR build and then
+PASSED its own check, because the MAC is the right board's. Cherry-picked
+here for that reason.
+
+The two therefore now hold the same change as two different commits.
+Integrating them is a merge, not a fast-forward - git should resolve it
+silently since the content is identical, and resetting local `main` onto this
+branch is the tidier route.
 
 ## What is verified, and what is not
 
