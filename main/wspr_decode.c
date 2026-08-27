@@ -201,6 +201,23 @@ int wspr_find_candidates(const int16_t *samples, long n, double f_lo_hz,
  * negligible against the 630 M reads it removes.
  * ------------------------------------------------------------------------- */
 
+/* Cost meter for the host benchmarks, compiled out of the firmware entirely.
+ *
+ * Wall-clock on the build host cannot measure this board - it has a hardware
+ * double FPU and fast RAM, and CLAUDE.md records that mis-measurement costing
+ * two orders of magnitude. A COUNT of tone-power correlations is the same
+ * number on both machines, so it is what the sweep harness optimises against.
+ * The device still reports real milliseconds per phase; the two agree on which
+ * way a change moved, which is all a host measurement is entitled to claim. */
+#ifdef WSPR_PROFILE_CORR
+/* Counted in FULL-RATE-EQUIVALENT correlations: a strided one does 1/stride of
+ * the reads, so counting calls would score a cheaper scan as free. */
+double wspr_corr_work = 0;
+#define WSPR_CORR_TICK(stride) (wspr_corr_work += 1.0 / (double)(stride))
+#else
+#define WSPR_CORR_TICK(stride) ((void)0)
+#endif
+
 #define WSPR_DECIM        32
 #define WSPR_DEC_RATE_HZ  (WSPR_SAMPLE_RATE_HZ / WSPR_DECIM)     /* 375 Hz */
 #define WSPR_DEC_SPS      (WSPR_SYM_LEN_SAMPLES / WSPR_DECIM)    /* 256    */
@@ -375,8 +392,13 @@ static int mix_decimate(const int16_t *samples, long n, double f0, baseband_t *b
 /* Tone twiddles at the DECIMATED rate: one symbol long (256), four tones.
  * 8 KB in total, against the 46 MB the full-rate absolute-index tables wanted. */
 typedef struct {
-    float cos_tab[4][WSPR_DEC_SPS];
-    float sin_tab[4][WSPR_DEC_SPS];
+    /* ⛔ INDEXED [sample][tone], NOT [tone][sample]. The transpose is not
+     * cosmetic: extract_tone_powers() walks all four tones at one sample
+     * before moving on, so this order makes its inner four reads adjacent.
+     * Laid out the other way they are 1 KB apart and every symbol touches
+     * eight cache lines instead of two. */
+    float cos_tab[WSPR_DEC_SPS][4];
+    float sin_tab[WSPR_DEC_SPS][4];
 } tone_tw_t;
 
 /* `df_hz` shifts all four tones together - the fine frequency search.
@@ -386,13 +408,42 @@ typedef struct {
  * takes the MAGNITUDE of the per-symbol correlation. A constant phase error
  * per symbol is invisible to |.|^2. That is what makes the frequency search
  * cost 1024 cos/sin per trial instead of another sweep of the whole capture. */
+/* ⛔ 2048 DOUBLE TRIG CALLS PER BUILD, AND IT IS CALLED 32 TIMES PER
+ * CANDIDATE - the same trap that cost wspr_subtract 67 s per signal, in a
+ * function nobody had looked at because it only fills a small table.
+ *
+ * The ESP32-P4's FPU is single-precision, so every cos()/sin() here was a
+ * software-library call. Accounted from the device's own phase timings: the
+ * `curve` phase reported ~1290 ms while running only 30 correlations worth
+ * ~520 ms, and the missing ~770 ms over 30 builds works out at ~26 ms each,
+ * i.e. ~12.7 us per double trig call - which is the SAME per-call figure
+ * wspr_subtract measured. Two independent paths agreeing on that number is
+ * what makes this an accounting result rather than a guess.
+ *
+ * A complex phasor recurrence needs two trig calls instead of 512 per tone.
+ * It is re-seeded exactly every RESEED samples rather than renormalised, for
+ * the reason mix_decimate's oscillator note gives at length: a rescale fixes
+ * magnitude drift and cannot touch PHASE drift, and phase is what a tone
+ * correlation actually reads. Over 64 float steps the accumulated angle error
+ * is ~1e-6 rad, some four orders below the 0.2 Hz the frequency search
+ * resolves. */
 static void build_tone_tw(tone_tw_t *tw, double df_hz)
 {
+#define TW_RESEED 64
     for (int k = 0; k < 4; k++) {
-        double w = 2.0 * M_PI * (k * TONE_SPACING + df_hz) / WSPR_DEC_RATE_HZ;
+        const double w = 2.0 * M_PI * (k * TONE_SPACING + df_hz) / WSPR_DEC_RATE_HZ;
+        const float cs = (float)cos(w), sn = (float)sin(w);
+        float x = 1.0f, y = 0.0f;
         for (int j = 0; j < WSPR_DEC_SPS; j++) {
-            tw->cos_tab[k][j] = (float)cos(w * j);
-            tw->sin_tab[k][j] = (float)sin(w * j);
+            if ((j & (TW_RESEED - 1)) == 0 && j != 0) {
+                const double ph = w * (double)j;
+                x = (float)cos(ph); y = (float)sin(ph);
+            }
+            tw->cos_tab[j][k] = x;
+            tw->sin_tab[j][k] = y;
+            const float nx = x * cs - y * sn;
+            const float ny = x * sn + y * cs;
+            x = nx; y = ny;
         }
     }
 }
@@ -403,26 +454,79 @@ static void build_tone_tw(tone_tw_t *tw, double df_hz)
  * As before only the magnitude is kept, so the per-symbol phase of the local
  * oscillator cancels and the tables can be indexed by the offset within the
  * symbol. */
-static void extract_tone_powers(const baseband_t *bb, const tone_tw_t *tw,
-                                 long start_dec, wspr_tp_t tone_power[WSPR_NSYM][4])
+/* `stride` reads every Nth sample of the symbol instead of all 256.
+ *
+ * It exists for the coarse start-time scan, which is the single largest cost
+ * in the receiver (~120 correlations per candidate, measured at ~2070 ms on
+ * the device) and which only has to find the right 1/8th of a symbol - the
+ * fine refinement afterwards does the precision work at full rate.
+ *
+ * ⚠ SUB-SAMPLING WITHOUT A PRE-FILTER IS NORMALLY AN ALIASING BUG. It is safe
+ * HERE, and only here, because mix_decimate has already low-passed this
+ * baseband at 50 Hz with a 43 dB stopband: at stride 4 the folding frequency
+ * is 46.9 Hz, so everything that would alias is already down in that
+ * stopband. If LPF_CUT_HZ is ever raised, this assumption has to be re-checked
+ * - it is the filter, not the arithmetic, that makes the shortcut legal.
+ *
+ * The tone powers come out ~1/16 of their full-rate value, which does not
+ * matter to the only consumer: sync_score() is normalised by total power, so
+ * it is scale-free. A strided score is NOT comparable to a full-rate one
+ * though, and the caller must not mix them - see the re-score at full rate
+ * after the coarse scan. */
+static void extract_tone_powers_s(const baseband_t *bb, const tone_tw_t *tw,
+                                   long start_dec, wspr_tp_t tone_power[WSPR_NSYM][4],
+                                   int stride)
 {
+    WSPR_CORR_TICK(stride);
     for (int sym = 0; sym < WSPR_NSYM; sym++) {
         long base = start_dec + (long)sym * WSPR_DEC_SPS;
         long j0 = 0, j1 = WSPR_DEC_SPS;
         if (base < 0)               j0 = -base;
         if (base + j1 > bb->n)      j1 = bb->n - base;
-        for (int k = 0; k < 4; k++) {
-            const float *ct = tw->cos_tab[k], *st = tw->sin_tab[k];
-            float re = 0, im = 0;
-            for (long j = j0; j < j1; j++) {
-                float xi = bb->i[base + j], xq = bb->q[base + j];
-                /* (xi + j*xq) * e^(-j*w*j) */
-                re += xi * ct[j] + xq * st[j];
-                im += xq * ct[j] - xi * st[j];
-            }
-            tone_power[sym][k] = re * re + im * im;
+        /* ⛔ SAMPLE OUTER, TONE INNER - AND THE FOUR ACCUMULATORS ARE WHY IT
+         * IS ALLOWED TO BE.
+         *
+         * This is the hottest function in the receiver: ~150 calls per
+         * candidate, each 162 x 4 x 256 multiply-accumulates. Written with the
+         * tone loop outside, it re-reads the WHOLE baseband once per tone -
+         * and the baseband is 360 KB of malloc'd float, which on this board
+         * means PSRAM (CLAUDE.md: allocations at or above 16 KB spill there).
+         * So three quarters of the PSRAM traffic in the decoder was re-reading
+         * samples it had just read.
+         *
+         * Keeping a separate accumulator pair per tone makes the reordering
+         * EXACT rather than merely close: each accumulator still sums the same
+         * products in the same j order, so every result is bit-identical to
+         * what the tone-outer loop produced. That is the whole reason to do it
+         * this way instead of a single running sum - a change to the hottest
+         * path of a decoder with no CRC has to be provably output-preserving,
+         * or the agreement scores shift underneath the thresholds tuned to
+         * them. Verified: the four reference WAVs decode the same 23 stations
+         * with the same Fano cycle counts and the same agreement figures. */
+        float re0 = 0, re1 = 0, re2 = 0, re3 = 0;
+        float im0 = 0, im1 = 0, im2 = 0, im3 = 0;
+        const float *bi = bb->i + base, *bq = bb->q + base;
+        for (long j = j0; j < j1; j += stride) {
+            const float xi = bi[j], xq = bq[j];
+            const float *c = tw->cos_tab[j], *st = tw->sin_tab[j];
+            /* (xi + j*xq) * e^(-j*w*j) */
+            re0 += xi * c[0] + xq * st[0];  im0 += xq * c[0] - xi * st[0];
+            re1 += xi * c[1] + xq * st[1];  im1 += xq * c[1] - xi * st[1];
+            re2 += xi * c[2] + xq * st[2];  im2 += xq * c[2] - xi * st[2];
+            re3 += xi * c[3] + xq * st[3];  im3 += xq * c[3] - xi * st[3];
         }
+        tone_power[sym][0] = re0 * re0 + im0 * im0;
+        tone_power[sym][1] = re1 * re1 + im1 * im1;
+        tone_power[sym][2] = re2 * re2 + im2 * im2;
+        tone_power[sym][3] = re3 * re3 + im3 * im3;
     }
+}
+
+/* The full-rate correlation every accuracy-critical caller wants. */
+static void extract_tone_powers(const baseband_t *bb, const tone_tw_t *tw,
+                                 long start_dec, wspr_tp_t tone_power[WSPR_NSYM][4])
+{
+    extract_tone_powers_s(bb, tw, start_dec, tone_power, 1);
 }
 
 /* sync=1 tones are {1,3} (odd tone index), sync=0 tones are {0,2} - the
@@ -1131,16 +1235,40 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
     long best_dt = 0;
     double best_score = -1e300;
     double best_df = 0.0;
+#ifndef WSPR_COARSE_STRIDE
+#define WSPR_COARSE_STRIDE 4
+#endif
     long coarse_step = WSPR_DEC_SPS / 8;          /* 32 dec = 1024 orig */
     if (coarse_step < 1) coarse_step = 1;
     long fine_step = WSPR_DEC_SPS / 32;           /* 8 dec = 256 orig */
     if (fine_step < 1) fine_step = 1;
 
+    /* ⛔ THE COARSE SCAN RUNS AT STRIDE 4 AND ITS SCORES LIVE ON THEIR OWN
+     * SCALE. Both halves of that matter.
+     *
+     * The scan is ~111 of the ~150 correlations a candidate costs, and all it
+     * has to do is pick the right 1/8th of a symbol for the fine refinement
+     * below - which is a far weaker requirement than the one the full-rate
+     * correlation was being paid for. At stride 4 it reads 64 samples per
+     * symbol instead of 256 (legal because of the 50 Hz decimation filter -
+     * see extract_tone_powers_s).
+     *
+     * ⚠ A STRIDED SCORE MUST NEVER BE COMPARED WITH A FULL-RATE ONE. It is
+     * normalised, so it is on the same [-1,1] axis, but it is measured through
+     * a quarter of the integration and is therefore noisier and systematically
+     * a little different. refine_dt() only replaces its incumbent when a trial
+     * BEATS it, so seeding it with a strided score would let a strided
+     * high-water mark veto every full-rate trial - the refinement would
+     * silently stop refining. Hence the single full-rate re-score at the
+     * winning dt before refining, and hence the gate below reading a full-rate
+     * number. */
     for (long dt = 0; dt <= slack_dec; dt += coarse_step) {
-        extract_tone_powers(&bb, &tw, dt, tp);
+        extract_tone_powers_s(&bb, &tw, dt, tp, WSPR_COARSE_STRIDE);
         double s = sync_score(tp);
         if (s > best_score) { best_score = s; best_dt = dt; }
     }
+    extract_tone_powers(&bb, &tw, best_dt, tp);
+    best_score = sync_score(tp);
     best_dt = refine_dt(&bb, &tw, best_dt, coarse_step, fine_step,
                         slack_dec, tp, &best_score);
     const int64_t t_coarse = wspr_now_us();
@@ -1214,8 +1342,11 @@ void wspr_decode_candidate(const int16_t *samples, long n, double f0_hz,
 #endif
 #define WSPR_DF_NPT   ((int)(2 * WSPR_DF_RANGE / WSPR_DF_STEP) + 1)
 
-    /* Only for candidates that got past the gate: it is eight extra
-     * correlations, and a candidate that is pure noise will never need an SNR.
+    /* Only for candidates that got past the gate: it is fourteen extra
+     * correlations (one per offset in measure_noise_ref's table - this said
+     * "eight" while the table had already grown to fourteen, and the phase
+     * accounting above needs the real number), and a candidate that is pure
+     * noise will never need an SNR.
      * Taken BEFORE the frequency curve because both use `tp` as scratch and
      * the curve rebuilds the tone table on its first iteration anyway. */
     const double noise_ref = measure_noise_ref(&bb, &tw, best_dt, tp);

@@ -106,6 +106,12 @@ int main(int argc, char **argv)
     if (use_guards) printf("  %d guarded off\n", guarded);
     /* The number that matters: decodes that the old cap of 8 could never have
      * reached, no matter how good the decoder was. */
+#ifdef WSPR_PROFILE_CORR
+    /* Device-independent cost: how many tone-power correlations this file
+     * needed. See the note beside the counter in wspr_decode.c. */
+    extern double wspr_corr_work;
+    printf("  corr=%.0f\n", wspr_corr_work);
+#endif
     printf("  => %d decode(s) of %d tried; %d of them beyond the old cap of 8\n",
            decoded, ncand, beyond8);
     free(samples);
