@@ -617,8 +617,16 @@ static void refresh_left_extras(void)
         char t[96];
         const int rpt = wspr_spots_repeat_calls();
         const int all = wspr_spots_unique_calls();
-        snprintf(t, sizeof(t), "wsprnet: %s\n%d of %d call%s confirmed",
-                 wsprnet_status(), rpt, all, all == 1 ? "" : "s");
+        /* ⚠ TWO LINES, AND THE WIDTH IS PART OF THE CONTRACT. The panel is
+         * 340 px at 22 pt - about 28 characters - and this label sits directly
+         * above the BAND HOP heading. "wsprnet: on - 8 sent, 3 waiting" over
+         * "18 of 25 calls confirmed" ran to THREE wrapped lines and printed
+         * through the heading below, which is the same collision the wsprnet
+         * line already caused once when its counts reached double figures.
+         * Both halves are kept short at the source rather than trimmed here:
+         * see the note beside s_status in wsprnet.c. */
+        snprintf(t, sizeof(t), "wsprnet: %s\n%d/%d confirmed",
+                 wsprnet_status(), rpt, all);
         lv_label_set_text(s_lbl_net, t);
     }
 }

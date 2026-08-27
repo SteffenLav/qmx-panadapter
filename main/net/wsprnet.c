@@ -217,14 +217,14 @@ static void wsprnet_task(void *arg)
         if (!s_work.cfg.wspr_net_en) {
             snprintf(s_status, sizeof(s_status), "off");
         } else if (!s_work.cfg.my_callsign[0] || !s_work.cfg.my_grid[0]) {
-            snprintf(s_status, sizeof(s_status), "needs callsign and grid");
+            snprintf(s_status, sizeof(s_status), "no call/grid");
         } else if (net_quiet_active()) {
             /* Same courtesy every other feed on this board observes: stand
              * down while something that needs the link more is using it. */
         } else {
             n = wspr_spots_pending_upload(s_work.sp, BATCH_MAX);
             if (n <= 0) {
-                snprintf(s_status, sizeof(s_status), "on - nothing new to publish");
+                snprintf(s_status, sizeof(s_status), "idle");
             } else {
                 /* Oldest first, so a truncated batch leaves the NEWEST for
                  * next time rather than stranding the oldest forever. */
@@ -249,9 +249,14 @@ static void wsprnet_task(void *arg)
                  * honest word for a spot that is neither lost nor sent.
                  * Nothing is marked sent unless the server accepted it, so a
                  * failed post costs a minute, never a spot. */
+                /* ⚠ SHORT ENOUGH FOR THE PANEL, which is 340 px at 22 pt - about
+                 * 28 characters. "on - 8 sent, 3 waiting" wrapped to a third
+                 * line and collided with the BAND HOP heading below it. The
+                 * status string is consumed by a fixed-width label, so its
+                 * LENGTH is part of its contract, not a cosmetic detail. */
                 snprintf(s_status, sizeof(s_status),
-                         n - sent > 0 ? "on - %d sent, %d waiting"
-                                      : "on - %d sent", sent, n - sent);
+                         n - sent > 0 ? "%d sent %d wait" : "%d sent",
+                         sent, n - sent);
             }
         }
 
