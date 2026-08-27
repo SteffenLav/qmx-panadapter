@@ -2,8 +2,8 @@
 // operators type into the CQ editor.
 //
 // Build (from the repo root):
-//   gcc -O2 -I components/ft8_lib/ft8 -o ft8_cq_encode_harness \
-//       test/ft8_cq_encode_harness.c \
+//   gcc -O2 -I components/ft8_lib/ft8 -I main -o ft8_cq_encode_harness \
+//       test/ft8_cq_encode_harness.c main/ft8_msg_guard.c \
 //       components/ft8_lib/ft8/message.c components/ft8_lib/ft8/text.c
 //   ./ft8_cq_encode_harness
 //

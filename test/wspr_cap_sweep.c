@@ -3,7 +3,8 @@
  * Build (from the repo root):
  *   gcc -O2 -Wall -I main -I components/ft8_lib -o wspr_cap_sweep \
  *       test/wspr_cap_sweep.c main/wspr_proto.c main/wspr_fano.c \
- *       main/wspr_decode.c components/ft8_lib/fft/kiss_fft.c \
+ *       main/wspr_decode.c main/wspr_subtract.c \
+ *       components/ft8_lib/fft/kiss_fft.c \
  *       components/ft8_lib/fft/kiss_fftr.c -lm
  *   ./wspr_cap_sweep test/wav_reference/wspr/260824_1906.wav [max_cands]
  *
