@@ -76,14 +76,36 @@ void ui_kbd_add_scrollable(lv_obj_t *obj);
 #define UI_COLOR_TEXT           0xffffff
 #define UI_COLOR_TEXT_SECONDARY 0xc0c0c0
 
-// Bluetooth glyph in the bottom bar. Three states, because "enabled" and
-// "actually connected to something" are different facts and the operator needs
-// to tell them apart at a glance:
-//   OFF   - dim grey, feature disabled (still drawn, as a landmark)
-//   IDLE  - white-ish, stack up and scanning but nothing paired
-//   ON    - Bluetooth blue, a device is connected
+// Bluetooth glyph in the bottom bar. Three states, because "the radio is up"
+// and "actually connected to something" are different facts and the operator
+// needs to tell them apart at a glance (operator, 2026-08-28):
+//   OFF   - faint grey, the radio is not running (still drawn, as a landmark)
+//   IDLE  - YELLOW, the radio is up but no mouse is talking to us
+//   ON    - Bluetooth blue, a mouse is connected and driving the cursor
+//
+// IDLE was a white-ish grey and read as another dim glyph beside the OFF one -
+// two states that mean opposite things looked nearly the same. Yellow separates
+// them at a glance and carries the right sense: something is running and
+// waiting.
+//
+// ⚠ IDLE means "no mouse is CONNECTED", which covers a mouse that has gone to
+// sleep (a BLE mouse terminates the link rather than idling on it - see the
+// connect handler in bt_hid_mouse.c), one out of range, and one that was never
+// paired at all. The colour cannot tell those apart and does not claim to.
+//
+// ⛔ The glyph reports the RADIO, never the bt_mouse_en setting (#270, Don
+// N2VGU) - the setting only takes effect at the next boot, so driving the icon
+// from it greys out a radio that is still transmitting. util/status.c and
+// /api/status's bt.en both read bt_hid_mouse_started().
+// The drawer's "BT changed - Please restart" button. Amber, and NOT
+// UI_COLOR_PRIMARY: a blue button is one more control to press, and this is a
+// statement that the switch and the running radio disagree. It breathes for the
+// same reason - the operator's call, 2026-08-28, after a plain blue "Restart
+// now" was judged too easy to walk past.
+#define UI_COLOR_BT_RESTART 0xffb020
+
 #define UI_COLOR_BT_OFF  0x505050
-#define UI_COLOR_BT_IDLE 0xa0a0a0
+#define UI_COLOR_BT_IDLE 0xffd040
 #define UI_COLOR_BT_ON   0x3d8cff
 #define UI_COLOR_TEXT_MUTED     0x808890
 

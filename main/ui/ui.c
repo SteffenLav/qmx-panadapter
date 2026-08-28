@@ -1970,6 +1970,7 @@ static lv_obj_t *s_cb_bt             = NULL;  // Bluetooth mouse enable
 // A button that appears when it would do something and is absent otherwise is
 // the only version of this that cannot mislead (#270).
 static lv_obj_t *s_bt_restart_btn    = NULL;
+static lv_obj_t *s_bt_restart_lbl    = NULL;  // breathed while a restart is owed
 static lv_obj_t *s_check_cluster     = NULL;  // DX cluster spot source
 static lv_obj_t *s_check_spotmode    = NULL;  // show only the current mode's spots
 static lv_obj_t *s_slider_brightness = NULL;
@@ -2071,6 +2072,8 @@ static void drawer_bt_cb(lv_event_t *e);
 #define DRAWER_BT_H_PENDING   164
 static void drawer_bt_restart_cb(lv_event_t *e);
 static void drawer_bt_restart_refresh(void);
+static void bt_restart_breathe_anim_cb(void *var, int32_t v);
+static void bt_restart_start_breathing(lv_obj_t *lbl);
 static void drawer_cluster_cb(lv_event_t *e);
 static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_slider_qmx_vol_cb(lv_event_t *e);
@@ -2879,6 +2882,13 @@ void ui_restart_edge_grip_anims(void)
     if (s_burger_btn) grip_start_breathing(s_burger_btn);
     if (s_left_edge_grip) grip_start_breathing(s_left_edge_grip);
     if (s_bottom_edge_grip) grip_start_breathing(s_bottom_edge_grip);
+    // The Bluetooth "please restart" button breathes too, and it was wiped by
+    // the same lv_anim_delete_all() with nothing to bring it back - a
+    // screenshot of the drawer stopped it for good. Only re-assert it while it
+    // is actually on screen, so this cannot start a pulse on a hidden button.
+    if (s_bt_restart_lbl && s_bt_restart_btn &&
+        !lv_obj_has_flag(s_bt_restart_btn, LV_OBJ_FLAG_HIDDEN))
+        bt_restart_start_breathing(s_bt_restart_lbl);
 }
 
 // ==== Top bar ====
@@ -8721,19 +8731,26 @@ static void drawer_build(void)
         // it; drawer_bt_restart_refresh() grows the section when it is needed
         // and shrinks it back afterwards, so an operator who never touches the
         // switch never sees a button-sized hole.
+        // AMBER AND BREATHING, on the operator's call (2026-08-28). A calm blue
+        // button reads as one more thing you may press; this one is telling you
+        // the radio and the switch disagree, and it has to be seen. The wording
+        // says what changed as well as what to do - "Restart now" alone does not
+        // explain why it appeared.
         s_bt_restart_btn = lv_btn_create(sec);
         lv_obj_set_size(s_bt_restart_btn, DRAWER_W - 32, 56);
         lv_obj_align(s_bt_restart_btn, LV_ALIGN_TOP_LEFT, 0, DRAWER_BT_H_PLAIN + 4);
-        lv_obj_set_style_bg_color(s_bt_restart_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_set_style_bg_color(s_bt_restart_btn, lv_color_hex(UI_COLOR_BT_RESTART), 0);
         lv_obj_add_event_cb(s_bt_restart_btn, drawer_bt_restart_cb, LV_EVENT_CLICKED, NULL);
         lv_obj_add_flag(s_bt_restart_btn, LV_OBJ_FLAG_HIDDEN);
-        {
-            lv_obj_t *l = lv_label_create(s_bt_restart_btn);
-            lv_label_set_text(l, "Restart now");
-            lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
-            lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
-            lv_obj_center(l);
-        }
+        s_bt_restart_lbl = lv_label_create(s_bt_restart_btn);
+        // Verb first: the button says what to DO, then why it is there
+        // (operator, 2026-08-28). "BT changed - Please restart" led with the
+        // symptom and buried the action.
+        lv_label_set_text(s_bt_restart_lbl, "Press to restart - BT changed");
+        lv_obj_set_style_text_font(s_bt_restart_lbl, &lv_font_montserrat_28, 0);
+        // Dark text on amber: white on this yellow is barely legible.
+        lv_obj_set_style_text_color(s_bt_restart_lbl, lv_color_hex(0x201800), 0);
+        lv_obj_center(s_bt_restart_lbl);
         y += DRAWER_BT_H_PLAIN;
     }
 
@@ -10327,15 +10344,48 @@ static void drawer_bt_cb(lv_event_t *e)
 {
     bool on = lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED);
     settings_set_bt_mouse_en(on);
-    ui_toast(on ? "Bluetooth on after restart - then put the mouse in pairing mode"
-                : "Bluetooth off after restart");
     ESP_LOGI(TAG, "BLE mouse %s (applies on restart)", on ? "enabled" : "disabled");
-    // Offer the restart the toast just asked for - or take the offer away
-    // again if the operator has just put the switch back where it was.
+    // NO TOAST. There used to be one on each branch ("Bluetooth on/off after
+    // restart"), and it was the only thing saying a restart was needed - so it
+    // earned its place. It does not any more: the amber breathing button that
+    // appears immediately below the switch says the same thing, in the place
+    // the operator is already looking, and stays there until it is dealt with
+    // instead of vanishing after a few seconds. A mid-screen box repeating it
+    // is one more thing to dismiss (operator, 2026-08-28).
     drawer_bt_restart_refresh();
 }
 
-// Show the "Restart now" button exactly while the setting and the running
+// Breathing text for the restart button, the same technique and cadence as the
+// QMX-wait prompt and the edge grips - 900 ms each way, ease-in-out, on text
+// opacity rather than the object's, so the amber background stays solid and
+// only the words pulse.
+//
+// ⚠ Two screenshots are NOT a test for this. Ease-in-out lingers near full
+// opacity, so two samples taken a second apart can read identical on something
+// that is plainly breathing to the eye - that mistake is recorded in CLAUDE.md.
+static void bt_restart_breathe_anim_cb(void *var, int32_t v)
+{
+    lv_obj_set_style_text_opa((lv_obj_t *)var, (lv_opa_t)v, 0);
+}
+
+static void bt_restart_start_breathing(lv_obj_t *lbl)
+{
+    // Restarting an already-running animation on the same object would stack a
+    // second one; delete first, exactly as the sim bezel does.
+    lv_anim_delete(lbl, bt_restart_breathe_anim_cb);
+    lv_anim_t a;
+    lv_anim_init(&a);
+    lv_anim_set_var(&a, lbl);
+    lv_anim_set_exec_cb(&a, bt_restart_breathe_anim_cb);
+    lv_anim_set_values(&a, LV_OPA_40, LV_OPA_COVER);
+    lv_anim_set_time(&a, 900);
+    lv_anim_set_playback_time(&a, 900);
+    lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+    lv_anim_set_path_cb(&a, lv_anim_path_ease_in_out);
+    lv_anim_start(&a);
+}
+
+// Show the restart button exactly while the setting and the running
 // radio disagree, and give the section the height to hold it.
 //
 // The test is against what the setting said AT BOOT, not against
@@ -10362,10 +10412,40 @@ static void drawer_bt_restart_refresh(void)
 
     const bool pending = (s.bt_mouse_en != bt_hid_mouse_enabled_at_boot());
     const int  h       = pending ? DRAWER_BT_H_PENDING : DRAWER_BT_H_PLAIN;
-    if (s_drawer_section_h[DRAWER_SEC_BT] == h) return;   // nothing moved
 
-    if (pending) lv_obj_clear_flag(s_bt_restart_btn, LV_OBJ_FLAG_HIDDEN);
-    else         lv_obj_add_flag(s_bt_restart_btn, LV_OBJ_FLAG_HIDDEN);
+    // ⛔ RE-ASSERT THE ANIMATION EVERY TIME, ABOVE THE "nothing moved" GUARD.
+    //
+    // This used to sit below it, so the breathing was started only on the
+    // transition that changed the section's HEIGHT - and the operator reported
+    // the button sitting there perfectly still. Two things kill it, and neither
+    // changes the height:
+    //
+    //   1. screenshot.c calls lv_anim_delete_all() for EVERY /ss.bmp, to freeze
+    //      the UI for a stable snapshot. It wipes every infinite-repeat
+    //      breathing animation on the device - that is why
+    //      ui_restart_edge_grip_anims() exists and why the simulation bezel
+    //      keeps a 1 Hz keepalive. This button had neither, so taking a
+    //      screenshot of it was enough to stop it, permanently.
+    //   2. Once stopped, reopening the drawer could not restore it: h was
+    //      already DRAWER_BT_H_PENDING, so the guard returned first.
+    //
+    // Starting an animation that is already running is free - the helper
+    // deletes before it starts - so gating it on a layout change bought
+    // nothing and cost the whole feature.
+    if (pending) {
+        lv_obj_clear_flag(s_bt_restart_btn, LV_OBJ_FLAG_HIDDEN);
+        if (s_bt_restart_lbl) bt_restart_start_breathing(s_bt_restart_lbl);
+    } else {
+        lv_obj_add_flag(s_bt_restart_btn, LV_OBJ_FLAG_HIDDEN);
+        // An animation left running on a hidden object keeps ticking, and the
+        // next thing to reuse the object inherits a pulse nobody asked for.
+        if (s_bt_restart_lbl) {
+            lv_anim_delete(s_bt_restart_lbl, bt_restart_breathe_anim_cb);
+            lv_obj_set_style_text_opa(s_bt_restart_lbl, LV_OPA_COVER, 0);
+        }
+    }
+
+    if (s_drawer_section_h[DRAWER_SEC_BT] == h) return;   // layout unchanged
     lv_obj_set_height(s_drawer_sections[DRAWER_SEC_BT], h);
     s_drawer_section_h[DRAWER_SEC_BT] = h;
     // Everything below this section has to move with it. The section walk is
@@ -10378,8 +10458,10 @@ static void drawer_bt_restart_cb(lv_event_t *e)
 {
     (void)e;
     ESP_LOGW(TAG, "operator asked for a restart to apply the Bluetooth setting");
-    ui_toast("Restarting...");
-    lv_refr_now(NULL);          // paint it before we stop painting anything
+    // No toast here either. The screen goes dark 400 ms from now and the device
+    // reboots - a message nobody has time to read is not feedback, and the
+    // button's own pressed state already acknowledges the tap.
+    lv_refr_now(NULL);          // flush the pressed state before we stop painting
     // Go dark first, for the reason ota_modal.c's restart does: across
     // esp_restart() the backlight stays lit from the previous run, and
     // display_init() does not pull it down until ~2-3 s into boot - so without
