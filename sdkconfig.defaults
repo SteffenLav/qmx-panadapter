@@ -255,3 +255,9 @@ CONFIG_SPIFFS_GC_MAX_RUNS=32
 # That is the whole safety net - without it a bad update is a dead device with no
 # cable in the field. Marked valid from app_main once the UI and network are up.
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# TEMP INSTRUMENT (#283) - per-task heap tracking, so dma_owners_report()
+# can name which task holds the MALLOC_CAP_DMA bytes. Costs an owning-task
+# handle in every block header, so free figures on this build read LOW.
+# ⛔ REMOVE with the instrument - see the checklist in TODO #283.
+CONFIG_HEAP_TASK_TRACKING=y

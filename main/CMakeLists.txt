@@ -48,6 +48,7 @@ idf_component_register(
         "util/factory_reset.c"
 "util/usb_replug.c"
         "util/cpu_stats.c"
+        "util/dma_owners.c"   # TEMP INSTRUMENT #283 - delete with the diagnosis
         "cat/cat.c"
         "audio/audio.c"
         "audio/cw_audio.c"

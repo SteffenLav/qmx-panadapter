@@ -31,6 +31,7 @@
 #include "screenshot/screenshot.h"  // screenshot_capture_rgb565
 #include "diag_log.h"         // diag_log_size / diag_log_snapshot
 #include "adif/adif_log.h"    // adif_log_count / adif_log_file_path / adif_log_clear
+#include "util/dma_owners.h"   // TEMP INSTRUMENT #283
 #include "storage/sd_archive.h"  // sd_archive_is_mounted / sd_archive_log_path / lock / unlock
 #include "adif/qrz_upload.h"  // qrz_upload_pending
 #include "adif/eqsl_upload.h" // eqsl_upload_pending
@@ -1098,6 +1099,15 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_sendstr(req, "{\"ok\":true}");
         vTaskDelay(pdMS_TO_TICKS(250));
         esp_restart();
+    } else if (action && strcmp(action, "dma_owners") == 0) {
+        // TEMP INSTRUMENT (#283) - dev only. Names the task holding the
+        // MALLOC_CAP_DMA bytes. ⛔ Walks the heap with interrupts off, so it is
+        // ON DEMAND ONLY and may cost a one-frame cyan blink (see #281).
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, "{\"ok\":true,\"note\":\"see the serial log\"}");
+        dma_owners_report();
+        return ESP_OK;
     } else if (action && strcmp(action, "ota_reset") == 0) {
         // Dev only - clear a staged update in place so the next test run does
         // not need a reflash (and therefore a radio-wedging warm reset).
