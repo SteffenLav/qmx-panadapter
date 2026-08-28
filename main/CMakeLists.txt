@@ -91,6 +91,7 @@ idf_component_register(
         "hid_cursor.c"
         "bt_hid_mouse.c"
         "hid_report_map.c"
+        "hid_keycode.c"
         "net/rbn.c"
         "net/dxcluster.c"
         "ft8_robot.c"

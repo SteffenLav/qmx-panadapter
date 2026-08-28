@@ -42,6 +42,33 @@ typedef struct {
 // it never reads past len and gives up rather than guessing.
 bool hid_report_map_parse(const uint8_t *desc, size_t len, hid_mouse_layout_t *out);
 
+// ---------------------------------------------------------------------------
+// The KEYBOARD half of a combo device (#273, Don N2VGU's Rii i4).
+//
+// A keyboard/touchpad publishes ONE Report Map describing both, with a separate
+// report ID for each. The mouse parse above finds the pointer report; this finds
+// the keyboard one, so a notification can be routed to the right decoder instead
+// of the keyboard's keystrokes being decoded as mouse movement or silently
+// dropped for having the wrong report ID - which is precisely why his touchpad
+// works and his keys do nothing.
+//
+// The two are told apart by the Input item's own Data/Variable/Array bit, not by
+// a size heuristic: the modifier byte is 8 x 1-bit VARIABLE fields, the keycode
+// slots are an ARRAY of 8-bit usages. That is what the HID spec says a keyboard
+// is, so it is a definition rather than a guess.
+typedef struct {
+    bool     valid;
+    uint8_t  report_id;   // 0 = this report carries no ID byte
+    uint16_t mod_bit;     // bit offset of the modifier bitmap within the payload
+    uint8_t  mod_bits;    // its width; 8 on every keyboard, but read not assumed
+    uint16_t key_bit;     // bit offset of the first keycode slot
+    uint8_t  key_bits;    // bits per slot (8)
+    uint8_t  key_count;   // number of slots (6 on a boot-style report)
+    uint16_t total_bits;  // declared payload size of THIS report
+} hid_kbd_layout_t;
+
+bool hid_report_map_parse_keyboard(const uint8_t *desc, size_t len, hid_kbd_layout_t *out);
+
 // Extract a signed field of bits_wide bits starting at bit_off (LSB-first within
 // each byte, which is how HID packs them), sign-extended to int. Returns 0 if the
 // field would run past the end of the report.

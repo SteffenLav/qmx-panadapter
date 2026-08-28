@@ -19,6 +19,25 @@
 //   whole point: it fails loudly under the OLD assumption and passes under the
 //   parser.
 //
+// MUTATION RESULTS for the KEYBOARD cases (2026-08-28)
+//   Caught: Output/Feature items advancing the input bit cursor (3 failures) -
+//   the LED report sits between the modifier byte and the keycodes, so getting
+//   that wrong moves every keystroke; and the Variable/Array discriminator
+//   inverted (2), which swaps the modifier bitmap for the keycode slots.
+//
+//   SURVIVED FIRST TIME, and it was a REAL GAP: deleting the bit-cursor reset at
+//   a Report ID boundary left every case passing, because case 7's keyboard is
+//   the FIRST report and its cursor starts at 0 anyway. Case 9 is the same
+//   device with the mouse first, where the omission puts the modifier byte at
+//   bit 24 instead of 0 - it now fails with 3 failures. A combo device is
+//   exactly where this matters and the first draft could not see it.
+//
+//   SURVIVED and EQUIVALENT: dropping the INPUT_CONSTANT filter changes nothing
+//   for any realistic descriptor, because the reserved byte is declared
+//   Constant+VARIABLE with Report Size 8 and so is rejected by both branches on
+//   their own terms. The filter is kept because the HID spec says padding is not
+//   data; do not delete it, and do not contrive a test to kill this one.
+//
 // WHY IT COMPILES THE REAL FILE
 //   Mirroring the parser here would let the two drift, and a drifted copy of a
 //   parser is worse than no test: it would keep passing while the device got it
@@ -362,6 +381,173 @@ int main(void)
         check("decode Y", hid_field_signed(r, sizeof r, L.y_bit, L.y_bits),  -18);
     }
 
+
+    // ---------------------------------------------------------------------
+    printf("6. keyboard report: the standard boot-style layout\n");
+    {
+        // The keyboard descriptor every HOGP keyboard publishes, near enough
+        // verbatim from HID 1.11 Appendix B.1 - modifier bitmap, one reserved
+        // byte, five LED output bits + padding, then six keycode slots.
+        static const uint8_t DESC_KBD[] = {
+            0x05, 0x01,        // Usage Page (Generic Desktop)
+            0x09, 0x06,        //   Usage (Keyboard)
+            0xA1, 0x01,        //   Collection (Application)
+            0x05, 0x07,        //     Usage Page (Keyboard/Keypad)
+            0x19, 0xE0,        //     Usage Minimum (LeftControl)
+            0x29, 0xE7,        //     Usage Maximum (Right GUI)
+            0x15, 0x00, 0x25, 0x01,
+            0x75, 0x01,        //     Report Size (1)
+            0x95, 0x08,        //     Report Count (8)
+            0x81, 0x02,        //     INPUT (Data,Var,Abs)  <- the modifier byte
+            0x95, 0x01, 0x75, 0x08,
+            0x81, 0x03,        //     INPUT (Cnst,Var,Abs)  <- reserved byte
+            0x95, 0x05, 0x75, 0x01,
+            0x05, 0x08,        //     Usage Page (LEDs)
+            0x19, 0x01, 0x29, 0x05,
+            0x91, 0x02,        //     OUTPUT - must NOT move the input cursor
+            0x95, 0x01, 0x75, 0x03,
+            0x91, 0x03,        //     OUTPUT padding
+            0x95, 0x06, 0x75, 0x08,
+            0x15, 0x00, 0x25, 0x65,
+            0x05, 0x07,        //     Usage Page (Keyboard/Keypad)
+            0x19, 0x00, 0x29, 0x65,
+            0x81, 0x00,        //     INPUT (Data,Ary,Abs)  <- the six keycodes
+            0xC0
+        };
+        hid_kbd_layout_t K;
+        if (!hid_report_map_parse_keyboard(DESC_KBD, sizeof DESC_KBD, &K)) {
+            printf("  FAIL parse returned false\n"); g_fail++;
+        } else {
+            check("report_id",  K.report_id,  0);
+            check("mod_bit",    K.mod_bit,    0);
+            check("mod_bits",   K.mod_bits,   8);
+            // THE OUTPUT ITEMS MUST NOT ADVANCE THE INPUT CURSOR. If they do,
+            // key_bit lands past 16 and every keystroke decodes as the wrong key.
+            check("key_bit",    K.key_bit,   16);
+            check("key_bits",   K.key_bits,   8);
+            check("key_count",  K.key_count,  6);
+            check("total_bits", K.total_bits, 64);
+
+            // A real boot report: Shift held, "a" pressed.
+            const uint8_t r[] = { 0x02, 0x00, 0x04, 0, 0, 0, 0, 0 };
+            check("mod byte",  hid_field_signed(r, sizeof r, K.mod_bit, K.mod_bits), 2);
+            check("slot 0",    hid_field_signed(r, sizeof r, K.key_bit, K.key_bits), 4);
+            check("slot 1 empty",
+                  hid_field_signed(r, sizeof r, K.key_bit + K.key_bits, K.key_bits), 0);
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    printf("7. combo keyboard+touchpad: each half found, with its own report ID\n");
+    {
+        // The shape Don N2VGU's Rii i4 has: one Report Map, two report IDs. The
+        // keyboard parse must return report 1 and the MOUSE parse report 2 - if
+        // either picks up the other's fields the device routes notifications to
+        // the wrong decoder, which is the bug being fixed.
+        static const uint8_t DESC_COMBO[] = {
+            0x05, 0x01, 0x09, 0x06, 0xA1, 0x01,
+            0x85, 0x01,                     //   REPORT ID 1 - keyboard
+            0x05, 0x07, 0x19, 0xE0, 0x29, 0xE7,
+            0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02,
+            0x95, 0x01, 0x75, 0x08, 0x81, 0x03,
+            0x95, 0x06, 0x75, 0x08, 0x15, 0x00, 0x25, 0x65,
+            0x05, 0x07, 0x19, 0x00, 0x29, 0x65, 0x81, 0x00,
+            0xC0,
+            0x05, 0x01, 0x09, 0x02, 0xA1, 0x01,
+            0x85, 0x02,                     //   REPORT ID 2 - mouse
+            0x09, 0x01, 0xA1, 0x00,
+            0x05, 0x09, 0x19, 0x01, 0x29, 0x03,
+            0x15, 0x00, 0x25, 0x01, 0x95, 0x03, 0x75, 0x01, 0x81, 0x02,
+            0x95, 0x01, 0x75, 0x05, 0x81, 0x03,
+            0x05, 0x01, 0x09, 0x30, 0x09, 0x31, 0x09, 0x38,
+            0x15, 0x81, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x03, 0x81, 0x06,
+            0xC0, 0xC0
+        };
+        hid_kbd_layout_t K;
+        if (!hid_report_map_parse_keyboard(DESC_COMBO, sizeof DESC_COMBO, &K)) {
+            printf("  FAIL keyboard parse returned false\n"); g_fail++;
+        } else {
+            check("kbd report_id", K.report_id, 1);
+            check("kbd mod_bit",   K.mod_bit,   0);
+            check("kbd key_bit",   K.key_bit,  16);
+            check("kbd key_count", K.key_count, 6);
+        }
+        hid_mouse_layout_t M;
+        if (!hid_report_map_parse(DESC_COMBO, sizeof DESC_COMBO, &M)) {
+            printf("  FAIL mouse parse returned false\n"); g_fail++;
+        } else {
+            // The mouse must be found on report 2 and must not be confused by
+            // the keyboard collection that precedes it.
+            check("mouse report_id", M.report_id,  2);
+            check("mouse x_bit",     M.x_bit,      8);
+            check("mouse x_bits",    M.x_bits,     8);
+            check("mouse wheel",     M.have_wheel, 1);
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    printf("8. a mouse-only map has no keyboard, and must say so\n");
+    {
+        hid_kbd_layout_t K;
+        check("mouse-only refused",
+              hid_report_map_parse_keyboard(DESC_TWO_COLLECTIONS,
+                                            sizeof DESC_TWO_COLLECTIONS, &K) ? 1 : 0, 0);
+        check("and not marked valid", K.valid ? 1 : 0, 0);
+        // Truncation must be refused rather than half-parsed.
+        static const uint8_t DESC_KBD_CUT[] = {
+            0x05, 0x01, 0x09, 0x06, 0xA1, 0x01, 0x05, 0x07,
+            0x19, 0xE0, 0x29, 0xE7, 0x75, 0x01, 0x95
+        };
+        check("truncated refused",
+              hid_report_map_parse_keyboard(DESC_KBD_CUT, sizeof DESC_KBD_CUT, &K) ? 1 : 0, 0);
+    }
+
+    // ---------------------------------------------------------------------
+    printf("9. combo the OTHER way round: mouse first, keyboard second\n");
+    {
+        // Case 7 has the keyboard first, which hides a bug: the bit cursor
+        // starts at 0 anyway, so failing to RESET it at a Report ID boundary
+        // costs nothing there. Found by mutation testing - deleting the reset
+        // left case 7 passing. With the mouse first, the keyboard's fields sit
+        // 24 bits into a payload that does not contain them, and every
+        // keystroke decodes as the wrong key.
+        static const uint8_t DESC_COMBO2[] = {
+            0x05, 0x01, 0x09, 0x02, 0xA1, 0x01,
+            0x85, 0x01,                     //   REPORT ID 1 - mouse (24 bits)
+            0x09, 0x01, 0xA1, 0x00,
+            0x05, 0x09, 0x19, 0x01, 0x29, 0x03,
+            0x15, 0x00, 0x25, 0x01, 0x95, 0x03, 0x75, 0x01, 0x81, 0x02,
+            0x95, 0x01, 0x75, 0x05, 0x81, 0x03,
+            0x05, 0x01, 0x09, 0x30, 0x09, 0x31,
+            0x15, 0x81, 0x25, 0x7F, 0x75, 0x08, 0x95, 0x02, 0x81, 0x06,
+            0xC0, 0xC0,
+            0x05, 0x01, 0x09, 0x06, 0xA1, 0x01,
+            0x85, 0x02,                     //   REPORT ID 2 - keyboard
+            0x05, 0x07, 0x19, 0xE0, 0x29, 0xE7,
+            0x15, 0x00, 0x25, 0x01, 0x75, 0x01, 0x95, 0x08, 0x81, 0x02,
+            0x95, 0x01, 0x75, 0x08, 0x81, 0x03,
+            0x95, 0x06, 0x75, 0x08, 0x15, 0x00, 0x25, 0x65,
+            0x05, 0x07, 0x19, 0x00, 0x29, 0x65, 0x81, 0x00,
+            0xC0
+        };
+        hid_kbd_layout_t K;
+        if (!hid_report_map_parse_keyboard(DESC_COMBO2, sizeof DESC_COMBO2, &K)) {
+            printf("  FAIL keyboard parse returned false\n"); g_fail++;
+        } else {
+            check("kbd report_id", K.report_id, 2);
+            // THE POINT: 0 and 16, not 24 and 40.
+            check("kbd mod_bit",   K.mod_bit,   0);
+            check("kbd key_bit",   K.key_bit,  16);
+            check("kbd total",     K.total_bits, 64);
+        }
+        hid_mouse_layout_t M;
+        if (!hid_report_map_parse(DESC_COMBO2, sizeof DESC_COMBO2, &M)) {
+            printf("  FAIL mouse parse returned false\n"); g_fail++;
+        } else {
+            check("mouse report_id", M.report_id, 1);
+            check("mouse x_bit",     M.x_bit,     8);
+        }
+    }
     printf("\n%s (%d failure%s)\n", g_fail ? "FAILED" : "PASSED", g_fail,
            g_fail == 1 ? "" : "s");
     return g_fail ? 1 : 0;

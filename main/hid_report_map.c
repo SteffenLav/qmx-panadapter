@@ -26,6 +26,32 @@
 // mouse (buttons are declared as a range, not one usage each).
 #define MAX_LOCAL_USAGES 12
 
+// Decode ONE item from the stream: advance *p, hand back the tag+type (the
+// prefix with its size bits cleared) and the little-endian data payload.
+// Returns false on a long item or a truncated one - both mean "stop", never
+// "guess". Shared by the mouse and keyboard parsers so the byte-level decode
+// cannot drift between them.
+static bool next_item(const uint8_t *desc, size_t len, size_t *p,
+                      uint8_t *tag_type, uint32_t *data)
+{
+    if (*p >= len) return false;
+    uint8_t prefix = desc[(*p)++];
+    if (prefix == 0xFE) return false;        // long item: not in any HID mouse or
+                                             // keyboard, and guessing its length
+                                             // would be worse than declining
+    uint8_t size_code = prefix & 0x03;
+    uint8_t nbytes    = (size_code == 3) ? 4 : size_code;
+    if (*p + nbytes > len) return false;      // truncated
+
+    uint32_t v = 0;
+    for (uint8_t b = 0; b < nbytes; b++) v |= (uint32_t)desc[*p + b] << (8 * b);
+    *p += nbytes;
+
+    *data     = v;
+    *tag_type = prefix & 0xFC;
+    return true;
+}
+
 bool hid_report_map_parse(const uint8_t *desc, size_t len, hid_mouse_layout_t *out)
 {
     if (!desc || !out) return false;
@@ -41,19 +67,9 @@ bool hid_report_map_parse(const uint8_t *desc, size_t len, hid_mouse_layout_t *o
 
     size_t p = 0;
     while (p < len) {
-        uint8_t prefix = desc[p++];
-        if (prefix == 0xFE) return false;        // long item: not in any mouse, and
-                                                 // guessing its length would be worse
-                                                 // than declining
-        uint8_t size_code = prefix & 0x03;
-        uint8_t nbytes    = (size_code == 3) ? 4 : size_code;
-        if (p + nbytes > len) return false;       // truncated
-
-        uint32_t data = 0;
-        for (uint8_t b = 0; b < nbytes; b++) data |= (uint32_t)desc[p + b] << (8 * b);
-        p += nbytes;
-
-        uint8_t tag_type = prefix & 0xFC;         // tag+type, size bits cleared
+        uint8_t  tag_type;
+        uint32_t data;
+        if (!next_item(desc, len, &p, &tag_type, &data)) return false;
 
         switch (tag_type) {
         case 0x04:   // Usage Page (global)
@@ -146,6 +162,102 @@ bool hid_report_map_parse(const uint8_t *desc, size_t len, hid_mouse_layout_t *o
     // parse went wrong somewhere. Refuse rather than hand back nonsense.
     if (out->x_bits == 0 || out->x_bits > 32 || out->y_bits == 0 || out->y_bits > 32 ||
         out->x_bit > 512 || out->y_bit > 512) {
+        out->valid = false;
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard layout (#273). See hid_report_map.h for why this is a definition
+// rather than a heuristic.
+//
+// This walks the item stream a SECOND time rather than being folded into
+// hid_report_map_parse(). That function is host-tested and known good on real
+// mice, and a combo keyboard/touchpad is exactly the device where breaking the
+// pointer would be noticed - so the mouse path is left byte-for-byte alone. The
+// two share next_item() below, which is the only part that could drift.
+
+#define USAGE_PAGE_KEYBOARD 0x07
+
+// Input item data bits (HID 1.11 section 6.2.2.5).
+#define INPUT_CONSTANT 0x01   // filler/padding rather than data
+#define INPUT_VARIABLE 0x02   // clear = Array, i.e. a list of usages (keycodes)
+
+bool hid_report_map_parse_keyboard(const uint8_t *desc, size_t len, hid_kbd_layout_t *out)
+{
+    if (!desc || !out) return false;
+    for (size_t i = 0; i < sizeof *out; i++) ((uint8_t *)out)[i] = 0;
+
+    uint16_t usage_page = 0;
+    uint8_t  report_size = 0, report_count = 0;
+    uint16_t bit_cursor = 0;
+    uint8_t  cur_report_id = 0;
+    bool     have_mod = false, have_keys = false;
+
+    size_t p = 0;
+    while (p < len) {
+        uint8_t  tag_type;
+        uint32_t data;
+        if (!next_item(desc, len, &p, &tag_type, &data)) return false;
+
+        switch (tag_type) {
+        case 0x04: usage_page   = (uint16_t)data; break;   // Usage Page
+        case 0x74: report_size  = (uint8_t)data;  break;   // Report Size
+        case 0x94: report_count = (uint8_t)data;  break;   // Report Count
+        case 0x84:                                          // Report ID
+            if ((uint8_t)data != cur_report_id) {
+                cur_report_id = (uint8_t)data;
+                bit_cursor = 0;
+                // A new report means the fields found so far belonged to a
+                // different one. Only accept a modifier+keys PAIR from the SAME
+                // report; a half-match from the mouse report would place the
+                // keycodes at an offset in a payload that has none.
+                if (!(have_mod && have_keys)) {
+                    have_mod = have_keys = false;
+                    out->valid = false;
+                }
+            }
+            break;
+        case 0x80: {   // Input (main)
+            uint16_t width = (uint16_t)report_size * (uint16_t)report_count;
+            if (usage_page == USAGE_PAGE_KEYBOARD && report_count > 0 &&
+                !(data & INPUT_CONSTANT)) {
+                if ((data & INPUT_VARIABLE) && report_size == 1 && !have_mod) {
+                    // 8 x 1-bit variable fields on the keyboard page: the
+                    // modifier bitmap, Ctrl/Shift/Alt/GUI left and right.
+                    have_mod       = true;
+                    out->report_id = cur_report_id;
+                    out->mod_bit   = bit_cursor;
+                    out->mod_bits  = (uint8_t)((report_count > 32) ? 32 : report_count);
+                } else if (!(data & INPUT_VARIABLE) && report_size >= 8 && !have_keys) {
+                    // An ARRAY on the keyboard page: the keycode slots.
+                    have_keys       = true;
+                    out->report_id  = cur_report_id;
+                    out->key_bit    = bit_cursor;
+                    out->key_bits   = report_size;
+                    out->key_count  = report_count;
+                }
+                if (have_mod && have_keys) out->valid = true;
+            }
+            bit_cursor = (uint16_t)(bit_cursor + width);
+            if (out->valid && cur_report_id == out->report_id)
+                out->total_bits = bit_cursor;
+            break;
+        }
+        default:
+            // Output/Feature items do not sit in an input report's payload, and
+            // everything else affects interpretation rather than position.
+            break;
+        }
+    }
+
+    if (!out->valid) return false;
+    // Refuse nonsense rather than hand it back: a keycode slot must be a whole
+    // number of bytes we can index, and the offsets must be inside a plausible
+    // report.
+    if (out->key_bits == 0 || out->key_bits > 32 || out->key_count == 0 ||
+        out->key_bit > 512 || out->mod_bit > 512) {
         out->valid = false;
         return false;
     }
