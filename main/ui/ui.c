@@ -2000,6 +2000,7 @@ void ui_drawer_map_set(uint64_t basic_mask, uint64_t adv_mask);
 static void drawer_set_mode(ui_mode_t mode);
 // Defined below, next to the mode switch that is its other caller.
 static void hide_panadapter_widgets_instant(void);
+static void apply_edge_grips_for_mode(ui_mode_t m);
 
 static uint64_t drawer_default_mask(bool basic)
 {
@@ -8296,11 +8297,6 @@ static void drawer_check_wspr_net_cb(lv_event_t *e)
     settings_set_wspr_net_en(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
 }
 
-static void drawer_check_wspr_hop_cb(lv_event_t *e)
-{
-    settings_set_wspr_hop_en(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
-}
-
 static void drawer_btn_wspr_hop_cb(lv_event_t *e)
 {
     (void)e;
@@ -9773,6 +9769,11 @@ static void drawer_build(void)
             lv_dropdown_set_selected(dd, idx);
         }
         lv_obj_add_event_cb(dd, drawer_dropdown_wspr_dbm_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        /* The OPTION LIST is a separate object with its own font - without
+         * this it opens at LVGL's default, which is much smaller than
+         * everything around it. Every other dropdown in this drawer
+         * already does this; these two were added without it. */
+        lv_obj_add_event_cb(dd, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
         y += 150;
     }
     {
@@ -9798,34 +9799,40 @@ static void drawer_build(void)
             lv_dropdown_set_selected(dd, idx);
         }
         lv_obj_add_event_cb(dd, drawer_dropdown_wspr_duty_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        /* The OPTION LIST is a separate object with its own font - without
+         * this it opens at LVGL's default, which is much smaller than
+         * everything around it. Every other dropdown in this drawer
+         * already does this; these two were added without it. */
+        lv_obj_add_event_cb(dd, drawer_dropdown_cmap_open_cb, LV_EVENT_CLICKED, NULL);
         y += 100;
     }
     {
         qmx_settings_t ws;
         settings_load_all(&ws);
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRHOP, y, 150);
+        /* ⛔ NO SEPARATE ON/OFF SWITCH. The picker already decides it:
+         * hop_modal saves settings_set_wspr_hop_en(popcount(mask) > 1), so
+         * ticking a second band IS turning hopping on and untickng back to one
+         * IS turning it off. The checkbox that briefly stood here was a second
+         * control for the same state, and the two could disagree - tick two
+         * bands in the picker and hopping was on, then the drawer switch could
+         * turn it off while the picker still showed two bands ticked. One
+         * control, one meaning. */
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRHOP, y, 104);
         lv_obj_t *hdr = lv_label_create(sec);
-        lv_label_set_text(hdr, "WSPR band hopping");
+        lv_label_set_text(hdr, "Band hopping");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
         lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
         lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
-        lv_obj_t *l1 = lv_label_create(sec);
-        lv_label_set_text(l1, "Rotate through bands");
-        lv_obj_set_style_text_color(l1, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_text_font(l1, &lv_font_montserrat_28, 0);
-        lv_obj_align(l1, LV_ALIGN_TOP_LEFT, 0, 46);
-        lv_obj_t *cb = make_drawer_checkbox(sec, ws.wspr_hop_en, drawer_check_wspr_hop_cb, NULL);
-        lv_obj_align(cb, LV_ALIGN_TOP_RIGHT, 0, 42);
         lv_obj_t *btn = lv_btn_create(sec);
         lv_obj_set_size(btn, DRAWER_W - 32, 50);
-        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 92);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 44);
         lv_obj_set_style_radius(btn, 8, 0);
         lv_obj_add_event_cb(btn, drawer_btn_wspr_hop_cb, LV_EVENT_CLICKED, NULL);
         lv_obj_t *bl = lv_label_create(btn);
         lv_label_set_text(bl, "Choose bands...");
         lv_obj_set_style_text_font(bl, &lv_font_montserrat_28, 0);
         lv_obj_center(bl);
-        y += 150;
+        y += 104;
     }
     {
         qmx_settings_t ws;
@@ -11040,6 +11047,7 @@ void ui_apply_saved_mode(void)
         wspr_screen_view_show();
         wspr_rx_start();
         spots_lane_set_visible(false);
+        apply_edge_grips_for_mode(UI_MODE_WSPR);
         ESP_LOGI(TAG, "UI mode restored from NVS: WSPR");
         return;
     }
@@ -11085,6 +11093,30 @@ static void hide_panadapter_widgets_instant(void)
     if (spots_lane_obj()) lv_obj_set_x(spots_lane_obj(), 0);
 }
 
+/* The edge grips, per page.
+ *
+ * The WSPR container is a near-full-screen opaque pane, so it covers the
+ * right-edge drawer handle exactly the way CLAUDE.md records the FT8 container
+ * doing it - the drawer was still reachable by swiping, but with no breathing
+ * handle to say so. Foregrounding the handle is the fix, not moving the pane.
+ *
+ * The BOTTOM handle goes the other way: a bottom swipe opens Memory Channels,
+ * which is a panadapter idea. Advertising it on a WSPR page invites a gesture
+ * that lands somewhere unrelated, so the handle is hidden and the promise is
+ * not made. (Operator, 2026-08-28.) */
+static void apply_edge_grips_for_mode(ui_mode_t m)
+{
+    const bool wspr = (m == UI_MODE_WSPR);
+    if (s_burger_btn) {
+        lv_obj_clear_flag(s_burger_btn, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_burger_btn);
+    }
+    if (s_bottom_edge_grip) {
+        if (wspr) lv_obj_add_flag(s_bottom_edge_grip, LV_OBJ_FLAG_HIDDEN);
+        else      lv_obj_clear_flag(s_bottom_edge_grip, LV_OBJ_FLAG_HIDDEN);
+    }
+}
+
 static const char *mode_name(ui_mode_t m)
 {
     return m == UI_MODE_FT8  ? "FT8"
@@ -11104,6 +11136,7 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
      * the drawer's FT8 sections. */
     top_bar_set_ft8_dim(next != UI_MODE_PANADAPTER);
     drawer_set_mode(next);
+    apply_edge_grips_for_mode(next);
 
     /* STAND DOWN WHAT WE ARE LEAVING, before anything is shown.
      *
@@ -11135,6 +11168,7 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
         wspr_screen_view_show();
         wspr_rx_start();              /* sets nothing else - the mode is already WSPR */
         spots_lane_set_visible(false);
+        apply_edge_grips_for_mode(UI_MODE_WSPR);
         return;
     }
 
