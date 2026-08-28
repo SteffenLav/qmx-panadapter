@@ -1440,8 +1440,25 @@ void wspr_rx_stop(void)
     s_run = false;
     /* The task frees its own buffers and clears s_task; the mode goes back here
      * so the panadapter starts drawing again immediately rather than waiting for
-     * a capture in flight to finish. */
-    ui_mode_set(UI_MODE_PANADAPTER);
+     * a capture in flight to finish.
+     *
+     * ⛔ ONLY IF NOBODY HAS ALREADY CHOSEN THE NEXT MODE. Unconditionally, this
+     * was a restore that clobbered a newer value: ui_set_base_mode() sets the
+     * destination FIRST and stands the old page down SECOND, so a WSPR -> FT8
+     * swipe set FT8 and then this line put it back to PANADAPTER. ft8_task's
+     * `while (ui_mode_get() == UI_MODE_FT8)` therefore exited on its first
+     * test - "ft8_task exiting; processed 0 slots", ~30 ms after every start.
+     *
+     * The respawn watchdog then made that permanent rather than transient,
+     * restarting it once a second for ever; each cycle leaks three TCBs and
+     * their stacks, because a WithCaps task that deletes ITSELF leaks by IDF's
+     * own admission (see vTaskDeleteWithCaps in idf_additions.c). Internal
+     * heap went 38 KB -> 4 KB with a 0 KB largest block, which on this board
+     * is also the state that breaks TLS, USB endpoint allocation and SD.
+     *
+     * Measured 2026-08-27. The whole failure looked like a memory bug and was
+     * a mode bug; the heap was the symptom, not the cause. */
+    if (ui_mode_get() == UI_MODE_WSPR) ui_mode_set(UI_MODE_PANADAPTER);
 }
 
 void wspr_rx_set_guards(int enforce_near, double near_hz,

@@ -1387,6 +1387,15 @@ static void web_reply_drain(void)
     }
 }
 
+/* Respawn watchdog pacing - see the note at the check itself for the 390-retry
+ * incident these numbers exist to prevent. */
+#define RESPAWN_FAST_TRIES 3
+#define RESPAWN_FAST_MS    1000
+#define RESPAWN_SLOW_MS    30000
+
+static uint32_t s_respawn_next_ms = 0;
+static int      s_respawn_tries   = 0;
+
 static void t_clock_cb(lv_timer_t *t)
 {
     (void)t;
@@ -1513,9 +1522,44 @@ static void t_clock_cb(lv_timer_t *t)
     // ever notices that exit, so the view is left showing a stale status
     // forever with no task behind it. Checking here, once a second, closes
     // that gap regardless of the exact timing that caused it.
+    //
+    // BACKED OFF, because retrying once a second for ever is worse than not
+    // retrying at all. Measured 2026-08-27 on a WSPR -> FT8 switch: ft8_task
+    // could not get its capture scratch (WSPR still held 11.25 MB and frees on
+    // its own next pass), exited, and this fired ~390 times - every one of
+    // them failing to even create the task, because FT8's own entry had taken
+    // ~34 KB of internal heap it never gave back. Internal free went 38 KB ->
+    // 4 KB with a 0 KB largest block, which on this board is also the state
+    // that breaks TLS, USB endpoint allocation and the SD mount. A watchdog
+    // that degrades the device it is trying to rescue is not a watchdog.
+    //
+    // So: a few prompt retries for the ordinary lingering-task case this was
+    // written for, then every 30 s, and the log line only on a change - the
+    // repeat was 390 identical lines burying everything else in the capture.
     if (!ft8_task_is_alive()) {
-        ESP_LOGW(TAG, "t_clock_cb: FT8 view visible but no ft8_task alive - respawning");
-        ft8_self_test();
+        uint32_t now = (uint32_t)(esp_timer_get_time() / 1000);
+
+        if (now >= s_respawn_next_ms) {
+            if (s_respawn_tries < RESPAWN_FAST_TRIES) {
+                ESP_LOGW(TAG, "t_clock_cb: FT8 view visible but no ft8_task alive - respawning");
+                s_respawn_next_ms = now + RESPAWN_FAST_MS;
+            } else {
+                if (s_respawn_tries == RESPAWN_FAST_TRIES)
+                    ESP_LOGW(TAG, "t_clock_cb: ft8_task still will not start after %d tries"
+                                  " - backing off to %d s (int free=%u KB)",
+                             s_respawn_tries, RESPAWN_SLOW_MS / 1000,
+                             (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024));
+                s_respawn_next_ms = now + RESPAWN_SLOW_MS;
+            }
+            s_respawn_tries++;
+            ft8_self_test();
+        }
+    } else {
+        /* Cleared by a task that is actually running, so the NEXT time one
+         * dies it gets the prompt retries again rather than inheriting a
+         * back-off earned by an unrelated failure. */
+        s_respawn_tries = 0;
+        s_respawn_next_ms = 0;
     }
 
     if (s_lbl_count) {

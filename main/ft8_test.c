@@ -328,6 +328,11 @@ static volatile uint32_t s_decode_jobs_done   = 0;
 // Panadapter<->FT8 toggle could otherwise spawn a SECOND ft8_task before the
 // first finished tearing down; the two clobber the shared s_decode_queue and
 // one decode task ends up calling xQueueReceive(NULL) -> assert/reboot.
+/* Up to ~15 s: wspr_rx frees on its next loop pass, measured at ~2.6 s, and a
+ * WSPR cycle is 120 s so a pathological case wants room. */
+#define FT8_ALLOC_TRIES    16
+#define FT8_ALLOC_WAIT_MS 1000
+
 static volatile bool  s_ft8_task_alive = false;
 
 // Timing error from the last decoded slot: positive = system clock is fast.
@@ -1476,7 +1481,33 @@ static void ft8_task(void *arg)
     // FT4 (90000, fits inside). The pool is built for the CURRENT sub-mode; the
     // slot loop rebuilds it on an FT8<->FT4 toggle (reinit_pool_if_mode_changed).
     // s_mon_pool/s_cap_scratch are zeroed statics, so a partial-alloc frees clean.
-    s_cap_scratch = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
+    /* ⛔ RETRIED, BECAUSE THE PAGE WE JUST LEFT MAY STILL HOLD THE MEMORY.
+     *
+     * Switching WSPR -> FT8 asks for this scratch while wspr_rx is still
+     * holding 11.25 MB: wspr_rx_stop() only sets a flag, and its loop frees on
+     * its next pass - about 2.6 s later, measured. FT8 asked 147 ms after the
+     * mode changed, failed, and deleted itself.
+     *
+     * ⛔ AND THE RECOVERY WAS WORSE THAN THE FAULT. The respawn watchdog then
+     * retried once a SECOND for ever, and by then FT8's own entry had taken
+     * ~34 KB of internal heap it never gave back - so every retry failed on
+     * the TCB (`failed to spawn ft8_task (rc=0)`) with internal free at 4 KB
+     * and a 0 KB largest block. The device was left degraded, which on this
+     * board is the state that also breaks TLS, USB endpoint allocation and SD.
+     *
+     * The mirror of this exists in wspr_rx_task and was fixed a day earlier;
+     * fixing one direction and not asking about the other is what let this
+     * through. The memory genuinely arrives - wait for it. */
+    for (int attempt = 0; attempt < FT8_ALLOC_TRIES && !s_cap_scratch; attempt++) {
+        s_cap_scratch = heap_caps_malloc(SLOT_SAMPLES * sizeof(float), MALLOC_CAP_SPIRAM);
+        if (s_cap_scratch) break;
+        if (attempt == 0)
+            ESP_LOGW(TAG, "capture scratch not available yet (%u KB PSRAM free) - "
+                          "waiting for the previous page to release",
+                     (unsigned)(heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024));
+        if (ui_mode_get() != UI_MODE_FT8) break;   /* left again while waiting */
+        vTaskDelay(pdMS_TO_TICKS(FT8_ALLOC_WAIT_MS));
+    }
     if (!s_cap_scratch) {
         ESP_LOGE(TAG, "PSRAM alloc for capture scratch failed");
         s_ft8_task_alive = false;
