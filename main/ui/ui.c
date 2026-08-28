@@ -1998,6 +1998,8 @@ static uint64_t s_drawer_adv_mask;
 void ui_drawer_map_set(uint64_t basic_mask, uint64_t adv_mask);
 // Defined far below; the setter re-lays the drawer after a web change.
 static void drawer_set_mode(ui_mode_t mode);
+// Defined below, next to the mode switch that is its other caller.
+static void hide_panadapter_widgets_instant(void);
 
 static uint64_t drawer_default_mask(bool basic)
 {
@@ -11010,6 +11012,38 @@ uint32_t ui_get_passband_width_hz(void) { return s_passband_width_hz; }
 void ui_apply_saved_mode(void)
 {
     ESP_LOGI(TAG, "ui_apply_saved_mode: last_ui_mode from NVS = %u", (unsigned)s_saved_ui_mode);
+
+    /* WSPR resumes too, as of the 2026-08-28 launch. It used to fall through to
+     * Panadapter on purpose - "a mode that ships dark should not be sticky
+     * across a reboot" - and that reason ended when the page joined the swipe
+     * cycle. The operator asked for the plain thing: where the Tab5 was left is
+     * where it wakes up.
+     *
+     * Still gated on the feature being enabled, so turning WSPR off cannot
+     * leave a unit booting into a page it no longer offers.
+     *
+     * ⚠ WHAT THIS MEANS IN PRACTICE, because it is more than a screen: entering
+     * the page starts the receiver (8.6 MB), and if the operator left
+     * transmitting enabled with a non-zero duty cycle the station RESUMES
+     * BEACONING after a power cycle with nobody present. For a WSPR beacon that
+     * is the wanted behaviour - it is what a beacon is - but it is a real
+     * change from a device that only ever transmitted after somebody pressed
+     * something, and it will happen after an unplanned restart as readily as an
+     * intended one. The guards are the ones that were already there: TX is
+     * opt-in, callsign and grid are required, and SWR protection still trips. */
+    if (s_saved_ui_mode == UI_MODE_WSPR && wspr_feature_enabled()) {
+        ui_mode_set(UI_MODE_WSPR);
+        drawer_set_mode(UI_MODE_WSPR);
+        hide_panadapter_widgets_instant();
+        lv_obj_t *f = ft8_screen_view_get_container();
+        if (f) { ft8_screen_view_hide(); lv_obj_set_x(f, 0); }
+        wspr_screen_view_show();
+        wspr_rx_start();
+        spots_lane_set_visible(false);
+        ESP_LOGI(TAG, "UI mode restored from NVS: WSPR");
+        return;
+    }
+
     if (s_saved_ui_mode != UI_MODE_FT8) {
         ui_mode_set(UI_MODE_PANADAPTER);
         drawer_set_mode(UI_MODE_PANADAPTER);
