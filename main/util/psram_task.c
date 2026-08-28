@@ -6,7 +6,7 @@
 static const char *TAG = "psram_task";
 
 /* ---------------------------------------------------------------------------
- * Ending a PSRAM-stack task (#269)
+ * Ending a PSRAM-stack task (#279)
  *
  * The stack and TCB below are OURS - xTaskCreateStatic* means FreeRTOS never
  * owns or frees them. So a task created here that ends with vTaskDelete()

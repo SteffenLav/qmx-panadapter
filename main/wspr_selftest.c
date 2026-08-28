@@ -269,7 +269,7 @@ void wspr_selftest_start(void)
     // Decoding is background work on a 2-minute cadence, which is precisely
     // what psram_task_create() is for. Measuring WITH the PSRAM stack is
     // therefore measuring the real thing, not a laboratory best case.
-    psram_task_reap();   /* a previous run's parked task, if any (#269) */
+    psram_task_reap();   /* a previous run's parked task, if any (#279) */
     if (!psram_task_create_reapable(wspr_selftest_task, "wspr_st", 32768, NULL,
                            tskIDLE_PRIORITY + 1, tskNO_AFFINITY)) {
         ESP_LOGE(TAG, "could not create the self-test task");

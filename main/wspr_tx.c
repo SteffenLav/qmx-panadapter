@@ -390,7 +390,7 @@ bool wspr_tx_arm(const wspr_tx_request_t *req, char *out_err, size_t out_err_len
     // margin: see #51, where losing that margin cost 170-350 ms of audio a
     // slot, silently, at the wire.
     /* The previous transmission's worker parked; free its stack before we ask
-     * for another (#269). Small - 4 KB - but it is once per transmission, and
+     * for another (#279). Small - 4 KB - but it is once per transmission, and
      * WSPR transmits all day. */
     psram_task_reap();
     TaskHandle_t h = psram_task_create_reapable(wspr_tx_worker_task, "wspr_tx", 4096, NULL,

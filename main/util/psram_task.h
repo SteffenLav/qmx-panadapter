@@ -37,7 +37,7 @@ TaskHandle_t psram_task_create(TaskFunction_t func, const char *name,
 // Its stack and TCB belong to US, not to FreeRTOS - xTaskCreateStatic* means
 // nothing frees them on delete - so vTaskDelete() leaks the whole stack, every
 // time, silently. Measured: 64 KB per Panadapter/WSPR round trip from the two
-// wspr_rx tasks alone (#269).
+// wspr_rx tasks alone (#279).
 //
 // psram_task_park() marks the caller finished and stops it for good; it never
 // returns. An owner then calls psram_task_reap() from an ordinary task context

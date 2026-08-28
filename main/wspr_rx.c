@@ -1415,7 +1415,7 @@ bool wspr_rx_start(void)
     }
     /* Reap the pair from the PREVIOUS WSPR visit before creating another.
      * They parked on their way out and are still holding 32 KB of PSRAM each;
-     * without this every Panadapter/WSPR round trip lost a clean 64 KB (#269),
+     * without this every Panadapter/WSPR round trip lost a clean 64 KB (#279),
      * which is what the measurement showed. Here is the safe place: we are on
      * the LVGL task and last time's tasks are provably parked. */
     int reaped = psram_task_reap();

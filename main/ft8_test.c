@@ -1063,7 +1063,7 @@ static void decode_candidate_range(monitor_t *mon, const ftx_candidate_t *cands,
 // signals completion. Only one job is ever in flight (the decode task blocks on
 // ctx->done before issuing the next).
 /* ---------------------------------------------------------------------------
- * Reaping a WithCaps task (#269)
+ * Reaping a WithCaps task (#279)
  *
  * Every task in this file is created with xTaskCreatePinnedToCoreWithCaps() so
  * its 32-64 KB stack comes from PSRAM. Such a task MUST be freed with
@@ -1488,7 +1488,7 @@ static void ft8_decode_task(void *arg)
         xQueueSend(wctx->jobs, &sentinel, pdMS_TO_TICKS(1000));
         if (xSemaphoreTake(wctx->exited, pdMS_TO_TICKS(12000)) == pdTRUE) {
             /* The worker has finished and parked, so free its PSRAM stack
-             * before the context it was reading from (#269). On a TIMEOUT we
+             * before the context it was reading from (#279). On a TIMEOUT we
              * deliberately do NOT reap - the same reasoning as the ctx leak
              * below, and vTaskDeleteWithCaps on a task that is still working
              * would be the use-after-free we are avoiding. */
@@ -2012,7 +2012,7 @@ static void ft8_task(void *arg)
     // the join bound it was waiting on).
     xTaskNotifyWait(0x01, 0x01, NULL, pdMS_TO_TICKS(15000));
 
-    /* The decode task has notified us and parked; free its 64 KB stack (#269).
+    /* The decode task has notified us and parked; free its 64 KB stack (#279).
      * If the wait TIMED OUT it has not parked and is not on the list, so this
      * reaps nothing - which is the safe outcome, not a missed one. */
     reap_pending_tasks();
@@ -2354,7 +2354,7 @@ static void ft8_sim_synth_selftest_task(void *arg)
 
 void ft8_sim_synth_selftest(void)
 {
-    reap_pending_tasks();   /* the previous one-shot, if it has finished (#269) */
+    reap_pending_tasks();   /* the previous one-shot, if it has finished (#279) */
     BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
         ft8_sim_synth_selftest_task, "sim_synth_test", 65536, NULL,
         tskIDLE_PRIORITY + 1, NULL, 1,
@@ -2366,7 +2366,7 @@ void ft8_sim_synth_selftest(void)
 
 void ft8_arrl_fd_e2e_selftest(void)
 {
-    reap_pending_tasks();   /* the previous one-shot, if it has finished (#269) */
+    reap_pending_tasks();   /* the previous one-shot, if it has finished (#279) */
     BaseType_t rc = xTaskCreatePinnedToCoreWithCaps(
         ft8_arrl_fd_e2e_selftest_task, "fd_e2e_test", 65536, NULL,
         tskIDLE_PRIORITY + 1, NULL, 1,
@@ -2482,7 +2482,7 @@ void ft8_self_test(void)
     // of a race, not the race.
     /* NOTHING JOINS ft8_task, so its spawner is the owner. The previous
      * instance parked on its way out and is still holding 64 KB of PSRAM;
-     * free it here, before asking for another 64 KB (#269). Doing it at the
+     * free it here, before asking for another 64 KB (#279). Doing it at the
      * spawn rather than at the exit is what makes it safe - we are on the
      * LVGL task, an ordinary context, and the target is provably parked. */
     reap_pending_tasks();
