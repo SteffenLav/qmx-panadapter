@@ -2,6 +2,7 @@
 #include "ui.h"
 #include "ui_theme.h"
 #include "nvs.h"
+#include "wspr_screen_view.h"
 #include "render.h"
 #include "render_waterfall.h"
 #include "dsp.h"
@@ -1800,6 +1801,10 @@ static int s_drawer_scrim_swipe_start_x = -1;
 #define DRAWER_SEC_CHARGE     15  // battery care: stop-charging-at-% (was DRAWER_SEC_SNAP,
                                    // dead since v0.19.4; briefly DRAWER_SEC_TUNE until Antenna
                                    // Tune moved into its own tune_modal.c window, 2026-07-04)
+#define DRAWER_SEC_WSPRTX     31  // WSPR-only: transmit enable + declared power
+#define DRAWER_SEC_WSPRDUTY   32  // WSPR-only: duty cycle (moved off the page, 2026-08-28)
+#define DRAWER_SEC_WSPRHOP    33  // WSPR-only: band hopping on/off + the band picker
+#define DRAWER_SEC_WSPRNET    36  // WSPR-only: publish spots to wsprnet
 #define DRAWER_SEC_RITPILL    30  // panadapter-only: show/hide the RIT pill in the top bar.
                                    // Only the pill's VISIBILITY - the control itself stays where
                                    // it is; RIT is not operated from the drawer (operator).
@@ -1920,6 +1925,12 @@ static const drawer_item_t GRP_DISPLAY[] = {
     { DRAWER_SEC_CMAP, "Waterfall colour map", false },
     { DRAWER_SEC_FLIP, "Flip 180 degrees", false },
 };
+static const drawer_item_t GRP_WSPR[] = {
+    { DRAWER_SEC_WSPRTX, "WSPR transmit & power", true },
+    { DRAWER_SEC_WSPRDUTY, "WSPR duty cycle", true },
+    { DRAWER_SEC_WSPRHOP, "WSPR band hopping", true },
+    { DRAWER_SEC_WSPRNET, "Publish spots to wsprnet", true },
+};
 static const drawer_item_t GRP_FT8[] = {
     { DRAWER_SEC_DISTANCE, "Distance, fast pounce, PSK Reporter", true },
     { DRAWER_SEC_SIMMODE, "Simulation mode", false },
@@ -1948,6 +1959,7 @@ static const drawer_group_t s_drawer_groups[] = {
     GRP_DEF("Network",  GRP_NETWORK),
     GRP_DEF("Display",  GRP_DISPLAY),
     GRP_DEF("FT8",      GRP_FT8),
+    GRP_DEF("WSPR",     GRP_WSPR),
     GRP_DEF("Spectrum", GRP_SPECTRUM),
 };
 #define N_DRAWER_GROUPS ((int)(sizeof(s_drawer_groups)/sizeof(s_drawer_groups[0])))
@@ -2103,6 +2115,10 @@ static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
      * phantoms and the WSPR ones (see wspr_sim.h). */
     if (id == DRAWER_SEC_SIMMODE) return ft8 || wspr;
     if (id == DRAWER_SEC_DISTANCE || id == DRAWER_SEC_FT8SYNC) return ft8;
+    /* The WSPR settings belong to the WSPR page and nowhere else - duty cycle
+     * and band hopping mean nothing on a panadapter. */
+    if (id == DRAWER_SEC_WSPRTX || id == DRAWER_SEC_WSPRDUTY ||
+        id == DRAWER_SEC_WSPRHOP || id == DRAWER_SEC_WSPRNET) return wspr;
     // The spectrum/waterfall controls describe a view neither decode page shows.
     if (id == DRAWER_SEC_RITPILL || id == DRAWER_SEC_SPOTS   || id == DRAWER_SEC_PRESETS ||
         id == DRAWER_SEC_DBRANGE || id == DRAWER_SEC_SMOOTHING ||
@@ -8213,6 +8229,64 @@ static void drawer_sota_cb(lv_event_t *e)
     ESP_LOGI(TAG, "SOTA spot source: %s", on ? "on" : "off");
 }
 
+/* ---- WSPR settings, moved off the WSPR page (operator, 2026-08-28) --------
+ *
+ * Duty cycle and band hopping used to be buttons on the WSPR page left panel.
+ * Both are session POLICY - how much of the time may this transmit, and which
+ * bands should it rotate through - decided once and then left alone, which is
+ * what the drawer is for. The page keeps only TX ON/OFF, the one control
+ * actually reached while watching a session run.
+ *
+ * The callsign, grid and declared identity are NOT duplicated here. Callsign
+ * and grid come from Station, exactly as FT8 uses them, and WSPR refuses to
+ * transmit without them. A second copy would be a second thing to get wrong,
+ * and would put a station on the air under an identity the operator did not
+ * think they were setting.
+ */
+static void drawer_check_wspr_tx_cb(lv_event_t *e)
+{
+    settings_set_wspr_tx_en(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
+}
+
+static void drawer_check_wspr_net_cb(lv_event_t *e)
+{
+    settings_set_wspr_net_en(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
+}
+
+static void drawer_check_wspr_hop_cb(lv_event_t *e)
+{
+    settings_set_wspr_hop_en(lv_obj_has_state(lv_event_get_target(e), LV_STATE_CHECKED));
+}
+
+static void drawer_btn_wspr_hop_cb(lv_event_t *e)
+{
+    (void)e;
+    /* The picker still lives with the band table it filters, in
+     * wspr_screen_view.c, and parents to lv_layer_top() - so it opens correctly
+     * from here with the WSPR page hidden. */
+    wspr_screen_view_open_hop_picker();
+}
+
+static void drawer_dropdown_wspr_duty_cb(lv_event_t *e)
+{
+    uint16_t i = lv_dropdown_get_selected(lv_event_get_target(e));
+    if (i < WSPR_N_DUTY) settings_set_wspr_duty_pct(kDuty[i]);
+}
+
+/* Declared power. This is PUBLISHED WORLDWIDE with every spot and is what other
+ * operators propagation analyses are built on, so it is a claim about this
+ * station rather than a display preference. The list is the standard WSPR set
+ * up to the QMX 5 W ceiling; free entry would only let someone be precisely
+ * wrong. */
+static const int8_t kWsprDbm[] = { 0, 3, 7, 10, 13, 17, 20, 23, 27, 30, 33, 37 };
+#define N_WSPR_DBM ((int)(sizeof(kWsprDbm) / sizeof(kWsprDbm[0])))
+
+static void drawer_dropdown_wspr_dbm_cb(lv_event_t *e)
+{
+    uint16_t i = lv_dropdown_get_selected(lv_event_get_target(e));
+    if (i < N_WSPR_DBM) settings_set_wspr_tx_dbm(kWsprDbm[i]);
+}
+
 static lv_obj_t *make_drawer_checkbox(lv_obj_t *parent, bool checked,
                                        lv_event_cb_t cb, void *user_data)
 {
@@ -9614,6 +9688,113 @@ static void drawer_build(void)
         s_check_sim_mode = make_drawer_checkbox(sec, s_sim_mode_en, drawer_check_sim_mode_cb, NULL);
         lv_obj_align(s_check_sim_mode, LV_ALIGN_TOP_RIGHT, 0, 6);
         ui_refresh_sim_mode_indicator();   // also applies the FT4 lock (apply_sim_mode_lock)
+        y += 56;
+    }
+
+    /* ---- WSPR ------------------------------------------------------------
+     * Shown only on the WSPR page (drawer_sec_visible), like the FT8 sections. */
+    {
+        qmx_settings_t ws;
+        settings_load_all(&ws);
+
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRTX, y, 150);
+        lv_obj_t *hdr = lv_label_create(sec);
+        lv_label_set_text(hdr, "WSPR transmit");
+        lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_t *l1 = lv_label_create(sec);
+        lv_label_set_text(l1, "Allow transmitting");
+        lv_obj_set_style_text_color(l1, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(l1, &lv_font_montserrat_28, 0);
+        lv_obj_align(l1, LV_ALIGN_TOP_LEFT, 0, 46);
+        lv_obj_t *cb1 = make_drawer_checkbox(sec, ws.wspr_tx_en, drawer_check_wspr_tx_cb, NULL);
+        lv_obj_align(cb1, LV_ALIGN_TOP_RIGHT, 0, 42);
+        lv_obj_t *l2 = lv_label_create(sec);
+        lv_label_set_text(l2, "Declared power");
+        lv_obj_set_style_text_color(l2, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(l2, &lv_font_montserrat_28, 0);
+        lv_obj_align(l2, LV_ALIGN_TOP_LEFT, 0, 96);
+        lv_obj_t *dd = lv_dropdown_create(sec);
+        lv_dropdown_set_options(dd,
+            "0 dBm (1 mW)\n3 dBm (2 mW)\n7 dBm (5 mW)\n10 dBm (10 mW)\n"
+            "13 dBm (20 mW)\n17 dBm (50 mW)\n20 dBm (100 mW)\n23 dBm (200 mW)\n"
+            "27 dBm (500 mW)\n30 dBm (1 W)\n33 dBm (2 W)\n37 dBm (5 W)");
+        lv_obj_set_size(dd, 300, 50);
+        lv_obj_align(dd, LV_ALIGN_TOP_RIGHT, 0, 92);
+        lv_obj_set_style_text_font(dd, &lv_font_montserrat_28, 0);
+        {
+            uint16_t idx = 7;                         /* 23 dBm default */
+            for (int k = 0; k < N_WSPR_DBM; k++)
+                if (kWsprDbm[k] == ws.wspr_tx_dbm) { idx = (uint16_t)k; break; }
+            lv_dropdown_set_selected(dd, idx);
+        }
+        lv_obj_add_event_cb(dd, drawer_dropdown_wspr_dbm_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        y += 150;
+    }
+    {
+        qmx_settings_t ws;
+        settings_load_all(&ws);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRDUTY, y, 100);
+        lv_obj_t *hdr = lv_label_create(sec);
+        lv_label_set_text(hdr, "WSPR duty cycle");
+        lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_t *dd = lv_dropdown_create(sec);
+        lv_dropdown_set_options(dd,
+            "0% - receive only\n10% - about 1 cycle in 10\n20% - about 1 in 5\n"
+            "33% - about 1 in 3\n50% - about half");
+        lv_obj_set_size(dd, DRAWER_W - 32, 50);
+        lv_obj_align(dd, LV_ALIGN_TOP_LEFT, 0, 40);
+        lv_obj_set_style_text_font(dd, &lv_font_montserrat_28, 0);
+        {
+            uint16_t idx = 2;
+            for (int k = 0; k < WSPR_N_DUTY; k++)
+                if (kDuty[k] == ws.wspr_duty_pct) { idx = (uint16_t)k; break; }
+            lv_dropdown_set_selected(dd, idx);
+        }
+        lv_obj_add_event_cb(dd, drawer_dropdown_wspr_duty_cb, LV_EVENT_VALUE_CHANGED, NULL);
+        y += 100;
+    }
+    {
+        qmx_settings_t ws;
+        settings_load_all(&ws);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRHOP, y, 150);
+        lv_obj_t *hdr = lv_label_create(sec);
+        lv_label_set_text(hdr, "WSPR band hopping");
+        lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
+        lv_obj_set_style_text_font(hdr, &lv_font_montserrat_28, 0);
+        lv_obj_align(hdr, LV_ALIGN_TOP_LEFT, 0, 0);
+        lv_obj_t *l1 = lv_label_create(sec);
+        lv_label_set_text(l1, "Rotate through bands");
+        lv_obj_set_style_text_color(l1, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(l1, &lv_font_montserrat_28, 0);
+        lv_obj_align(l1, LV_ALIGN_TOP_LEFT, 0, 46);
+        lv_obj_t *cb = make_drawer_checkbox(sec, ws.wspr_hop_en, drawer_check_wspr_hop_cb, NULL);
+        lv_obj_align(cb, LV_ALIGN_TOP_RIGHT, 0, 42);
+        lv_obj_t *btn = lv_btn_create(sec);
+        lv_obj_set_size(btn, DRAWER_W - 32, 50);
+        lv_obj_align(btn, LV_ALIGN_TOP_LEFT, 0, 92);
+        lv_obj_set_style_radius(btn, 8, 0);
+        lv_obj_add_event_cb(btn, drawer_btn_wspr_hop_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *bl = lv_label_create(btn);
+        lv_label_set_text(bl, "Choose bands...");
+        lv_obj_set_style_text_font(bl, &lv_font_montserrat_28, 0);
+        lv_obj_center(bl);
+        y += 150;
+    }
+    {
+        qmx_settings_t ws;
+        settings_load_all(&ws);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_WSPRNET, y, 56);
+        lv_obj_t *l = lv_label_create(sec);
+        lv_label_set_text(l, "Publish spots to wsprnet");
+        lv_obj_set_style_text_color(l, lv_color_hex(0xFFFFFF), 0);
+        lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+        lv_obj_align(l, LV_ALIGN_TOP_LEFT, 0, 10);
+        lv_obj_t *cb = make_drawer_checkbox(sec, ws.wspr_net_en, drawer_check_wspr_net_cb, NULL);
+        lv_obj_align(cb, LV_ALIGN_TOP_RIGHT, 0, 6);
         y += 56;
     }
 

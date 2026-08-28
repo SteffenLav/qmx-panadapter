@@ -1,5 +1,6 @@
 #pragma once
 #include "lvgl.h"
+#include <stdint.h>
 
 /* The WSPR page: a sibling screen to Panadapter and FT8, shown while
  * ui_mode == UI_MODE_WSPR. Design and its reasoning are in
@@ -47,3 +48,14 @@ const wspr_band_t *wspr_bands(int *out_count);
  * returns every band - a picker that is empty because the radio has not
  * answered yet is worse than one that offers too much. */
 int wspr_bands_available(uint8_t *out, int max);
+
+/* Open the band-hop picker. Exported because the control that opens it now
+ * lives in the settings drawer rather than on this page; the modal parents to
+ * lv_layer_top(), so it does not care whether this page is visible. */
+void wspr_screen_view_open_hop_picker(void);
+
+/* The legal WSPR duty-cycle values, shared with the settings drawer so the two
+ * places that offer them cannot drift apart. WSPR asks "what fraction of cycles
+ * may I transmit", and these are the answers - see docs/wspr-ui-design.md. */
+extern const uint8_t kDuty[];
+#define WSPR_N_DUTY 5

@@ -745,7 +745,10 @@ static void load_from_nvs(qmx_settings_t *out)
     out->wspr_dump_cycles = 0;        /* never dump unless asked */
     out->wspr_hop_mask = 0;           /* nothing ticked until the operator does */
     out->wspr_hop_en   = false;
-    out->wspr_en       = false;       /* the page is dark until asked for */
+    /* LAUNCHED 2026-08-28: the WSPR page is in the swipe cycle by default.
+     * It shipped dark behind a seven-tap unlock while the bug rate had not
+     * flattened; that is over. Transmitting is still opt-in (wspr_tx_en). */
+    out->wspr_en       = true;
     out->wspr_net_en   = false;       /* nothing is published unasked */
     out->ft8_op_mode = 0;     // FT8
     out->charge_limit_en  = DEF_CHARGE_LIM_EN;

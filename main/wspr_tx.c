@@ -25,13 +25,28 @@ static const char *TAG = "wspr_tx";
 
 // Compile-time safety switch, same purpose and same default-OFF posture as
 // ft8_tx.c's FT8_TX_SEND_LIVE (see that file's comment for the full
-// reasoning - the short version: this new module has not yet keyed a real
-// radio even once, so it stays a dry run - full timing, full CAT-sequence
-// logging, zero bytes actually sent - until several burst cycles have been
-// visually verified in the logs on real hardware). Flip to 1 only
-// deliberately, never as a side effect of another change.
+// reasoning). This module HAS keyed a real radio and been spotted worldwide;
+// see the note on WSPR_TX_SEND_LIVE below for when that stopped being a
+// local-only experiment.
+/* ⭐ LIVE as of the 2026-08-28 launch. It was 0 - a dry run that logged a
+ * perfect burst and sent zero bytes - which was right while WSPR shipped dark
+ * and unreachable. It is the wrong default the moment the page is in the swipe
+ * cycle with a TX switch on it: the operator would arm TX, watch the burst run,
+ * and never be spotted by anybody. A control that reports success and does
+ * nothing is the worst outcome available.
+ *
+ * The on-air proof came from commit 3db70a8 ("ON THE AIR - 50 spots worldwide,
+ * zero drift, all fields correct"), which was built with this flipped locally
+ * while the committed source stayed at 0 - so the evidence and the default
+ * disagreed for weeks without anyone noticing.
+ *
+ * What still stands between this and an unexpected transmission, all of which
+ * predate this change: wspr_tx_en defaults OFF, the callsign and grid must be
+ * set or the slot loop refuses, simulation mode interlocks every byte, and
+ * tx_cmd_critical() retries the stop-transmit rather than leaving a radio
+ * keyed. */
 #ifndef WSPR_TX_SEND_LIVE
-#define WSPR_TX_SEND_LIVE 0
+#define WSPR_TX_SEND_LIVE 1
 #endif
 
 /* SIMULATION INTERLOCK. ft8_tx.c carries the identical check and for the

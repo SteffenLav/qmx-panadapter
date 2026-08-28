@@ -79,8 +79,6 @@ static lv_obj_t *s_lbl_heard;
 static lv_obj_t *s_dd_dial;
 static lv_obj_t *s_btn_tx;
 static lv_obj_t *s_lbl_tx;
-static lv_obj_t *s_btn_duty;
-static lv_obj_t *s_lbl_duty;
 
 /* THE standard WSPR dial for each band - the whole list, not a range.
  *
@@ -137,7 +135,9 @@ static const char *TAG = "wspr_view";
 /* Duty is a CYCLING VALUE, per docs/wspr-ui-design.md: WSPR asks "what
  * fraction of slots", never "transmit now". 0 is a legitimate state - enabled
  * but silent - while setting up. */
-static const uint8_t kDuty[] = { 0, 10, 20, 33, 50 };
+/* The ONLY legal duty values, and now shared with the settings drawer so the
+ * two cannot offer different sets. Exported through wspr_screen_view.h. */
+const uint8_t kDuty[] = { 0, 10, 20, 33, 50 };
 #define N_DUTY ((int)(sizeof(kDuty) / sizeof(kDuty[0])))
 
 /* Which kBands entries this radio can reach, in table order. Built when the
@@ -362,6 +362,15 @@ static void hop_modal_open_cb(lv_event_t *e)
     lv_obj_center(dl);
 }
 
+/* Opened from the settings drawer now that the button has moved off this page.
+ * The modal parents to lv_layer_top(), so it is indifferent to whether the
+ * WSPR page is visible - and it rebuilds its band list every time it opens,
+ * which is what makes it correct when the radio answered late. */
+void wspr_screen_view_open_hop_picker(void)
+{
+    hop_modal_open_cb(NULL);
+}
+
 /* The panel button says what is ticked, so the picker never has to be opened
  * just to find out. */
 static void hop_button_refresh(void)
@@ -456,23 +465,11 @@ static void build_left_extras(void)
      *
      * Building the list when the WINDOW OPENS fixes both at once - by then the
      * radio has long since answered. */
-    ex_heading("BAND HOP", EX_HOP_Y);
-    s_btn_hop = lv_btn_create(s_container);
-    lv_obj_set_size(s_btn_hop, EX_W, 56);
-    lv_obj_set_pos(s_btn_hop, EX_X, EX_HOP_Y + 22);
-    lv_obj_set_style_radius(s_btn_hop, 8, 0);
-    /* ⚠ SAME RESTING COLOUR AS THE OTHER PANEL BUTTONS, not LVGL's default
-     * blue. That default is the same bright PRIMARY the TX button uses to say
-     * "armed", so a plain navigation button was shouting louder than the
-     * control that keys the radio - the same "pulls the eye to the control
-     * that matters less" the Duty button's own note already warns about. */
-    lv_obj_set_style_bg_color(s_btn_hop, lv_color_hex(UI_COLOR_SURFACE_RAISED), 0);
-    lv_obj_add_event_cb(s_btn_hop, hop_modal_open_cb, LV_EVENT_CLICKED, NULL);
-    s_lbl_hop = lv_label_create(s_btn_hop);
-    lv_obj_set_style_text_font(s_lbl_hop, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(s_lbl_hop, lv_color_hex(UI_COLOR_TEXT), 0);
-    lv_obj_center(s_lbl_hop);
-    hop_button_refresh();
+/* BAND HOP moved to the settings drawer (operator, 2026-08-28), for the same
+     * reason Duty did: choosing WHICH BANDS to rotate through is a decision made
+     * once for a session, not a control reached while watching spots arrive. The
+     * picker itself is unchanged and still parents to lv_layer_top(), so it
+     * opens correctly from the drawer with this page hidden. */
 }
 
 /* ---- BAND HOPPING --------------------------------------------------------
@@ -639,15 +636,7 @@ static void tx_toggle_cb(lv_event_t *e)
     settings_set_wspr_tx_en(!st.wspr_tx_en);
 }
 
-static void duty_cycle_cb(lv_event_t *e)
-{
-    (void)e;
-    qmx_settings_t st;
-    settings_load_all(&st);
-    int i = 0;
-    for (int k = 0; k < N_DUTY; k++) if (kDuty[k] == st.wspr_duty_pct) { i = k; break; }
-    settings_set_wspr_duty_pct(kDuty[(i + 1) % N_DUTY]);
-}
+/* duty_cycle_cb moved to the settings drawer with its button (2026-08-28). */
 static lv_obj_t *s_list;           /* right pane, one label per line */
 static lv_obj_t *s_lbl_rows;
 static lv_obj_t *s_wf_canvas;
@@ -1009,10 +998,13 @@ void wspr_screen_view_init(lv_obj_t *parent)
      * SWR Tune) is that they must be impossible to trigger by accident and
      * visibly ACTIVE while engaged, which is why TX is a labelled toggle
      * reading OFF/ON rather than a one-tap "transmit". */
-    const int half = (LEFT_W - 32 - 8) / 2;
-
+    /* FULL WIDTH: the Duty button used to share this row, and moved to the
+     * settings drawer (operator, 2026-08-28). Duty is a policy chosen once for
+     * a session - "how much of the time may this thing transmit" - while TX
+     * ON/OFF is the control reached during one. Splitting them puts the
+     * decision where it belongs and gives the one live control the whole row. */
     s_btn_tx = lv_btn_create(s_container);
-    lv_obj_set_size(s_btn_tx, half, 56);
+    lv_obj_set_size(s_btn_tx, LEFT_W - 32, 56);
     lv_obj_set_pos(s_btn_tx, 16, 258);
     lv_obj_set_style_radius(s_btn_tx, 8, 0);
     lv_obj_add_event_cb(s_btn_tx, tx_toggle_cb, LV_EVENT_CLICKED, NULL);
@@ -1023,16 +1015,6 @@ void wspr_screen_view_init(lv_obj_t *parent)
      * each half is ~166 px - "TX  OFF" at 28 pt is ~110 px and still fits. */
     lv_obj_set_style_text_font(s_lbl_tx, &lv_font_montserrat_28, 0);
     lv_obj_center(s_lbl_tx);
-
-    s_btn_duty = lv_btn_create(s_container);
-    lv_obj_set_size(s_btn_duty, half, 56);
-    lv_obj_set_pos(s_btn_duty, 16 + half + 8, 258);
-    lv_obj_set_style_radius(s_btn_duty, 8, 0);
-    lv_obj_add_event_cb(s_btn_duty, duty_cycle_cb, LV_EVENT_CLICKED, NULL);
-    s_lbl_duty = lv_label_create(s_btn_duty);
-    lv_label_set_text(s_lbl_duty, "Duty 20%");
-    lv_obj_set_style_text_font(s_lbl_duty, &lv_font_montserrat_28, 0);
-    lv_obj_center(s_lbl_duty);
 
     build_left_extras();
 
@@ -1311,18 +1293,10 @@ void wspr_screen_view_tick(void)
         if (strcmp(lv_label_get_text(s_lbl_tx), txt) != 0)
             lv_label_set_text(s_lbl_tx, txt);
 
-        char dt[32];
-        snprintf(dt, sizeof(dt), "Duty %u%%", (unsigned)st.wspr_duty_pct);
-        if (strcmp(lv_label_get_text(s_lbl_duty), dt) != 0)
-            lv_label_set_text(s_lbl_duty, dt);
-        /* Duty is subordinate to TX and says nothing while TX is off, so it
-         * only takes colour when it can actually act. A screenshot had the
-         * bright button on Duty and the dull one on TX, which pulls the eye to
-         * the control that matters less. */
-        lv_obj_set_style_bg_color(s_btn_duty,
-            lv_color_hex(st.wspr_tx_en ? UI_COLOR_PRIMARY : UI_COLOR_SURFACE_RAISED), 0);
-        lv_obj_set_style_text_color(s_lbl_duty,
-            lv_color_hex(st.wspr_tx_en ? UI_COLOR_TEXT : UI_COLOR_TEXT_MUTED), 0);
+        /* The Duty readout that used to live here went to the drawer with its
+         * button (2026-08-28). Nothing is left to update: TX above still shows
+         * whether transmitting is armed at all, which is the part that changes
+         * during a session. */
     }
 
     /* cycle position: the bar is the 120 s window, so it is a real clock

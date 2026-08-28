@@ -3752,9 +3752,18 @@ document.getElementById("pause-btn").addEventListener("click", async () => {
   if (!a) return;
   a.addEventListener("click", async (e) => {
     e.preventDefault();
-    const goFt8 = (lastScreen !== "ft8");
+    /* CYCLES, because there are three pages now and a two-state toggle could
+       not reach the third: sitting on WSPR it offered "Switch to FT8/FT4" and
+       left no one-step way back to the panadapter. Same order as the Tab5's own
+       swipe cycle, and WSPR is only in the rotation when it is enabled - the
+       browser must be able to SELECT it, not merely reflect it, because for at
+       least one user (Markus DL8MBY) the Tab5 is "only the WiFi bridge and all
+       control is now done from the notebook". */
+    const cycle = wsprEnabled ? ["panadapter", "ft8", "wspr"] : ["panadapter", "ft8"];
+    const here  = cycle.indexOf(lastScreen || "panadapter");
+    const next  = cycle[(here < 0 ? 0 : here + 1) % cycle.length];
     a.textContent = "Switching...";
-    await sendCmd({ action: "set_screen", screen: goFt8 ? "ft8" : "panadapter" });
+    await sendCmd({ action: "set_screen", screen: next });
   });
 })();
 
@@ -3976,9 +3985,10 @@ async function tick() {
     /* Show or hide the WSPR card from the device's own flag. */
     if (!!s.wspr_en !== wsprEnabled) {
       wsprEnabled = !!s.wspr_en;
-      const wc = document.getElementById("wspr-card");
-      if (wc) wc.style.display = wsprEnabled ? "" : "none";
-      if (wsprEnabled) pollWspr();
+      /* Availability only. Whether the card is SHOWN is decided by the screen
+         mirror above; this just governs whether WSPR is offered as a page to
+         switch to at all. */
+      lastScreen = null;   /* force the mirror to re-evaluate on the next poll */
     }
     /* Waterfall colourisation, live from the Tab5 so a slider dragged there shows
        up here. The palette is only rebuilt when the index actually changes - it is
@@ -4012,7 +4022,12 @@ async function tick() {
     paintPaused(s.paused);
     {
       const a = document.getElementById("screen-toggle-link");
-      if (a) a.textContent = (s.screen === "ft8") ? "Switch to Panadapter" : "Switch to FT8/FT4";
+      if (a) {
+        const cyc  = wsprEnabled ? ["panadapter", "ft8", "wspr"] : ["panadapter", "ft8"];
+        const name = { panadapter: "Panadapter", ft8: "FT8/FT4", wspr: "WSPR" };
+        const i    = cyc.indexOf(s.screen || "panadapter");
+        a.textContent = "Switch to " + name[cyc[(i < 0 ? 0 : i + 1) % cyc.length]];
+      }
     }
     tuneAntSync(s);
     // #216 (Samuel W7STF): out of band the Tab5 keeps the strip and turns it
@@ -4030,13 +4045,34 @@ async function tick() {
     const screen = s.screen || "panadapter";
     if (screen !== lastScreen) {
       lastScreen = screen;
-      const isFt8 = (screen === "ft8");
-      document.getElementById("spec-wrap").style.display     = isFt8 ? "none" : "";
-      document.getElementById("freqaxis").style.display      = isFt8 ? "none" : "";
-      document.getElementById("split-handle").style.display  = isFt8 ? "none" : "";
-      document.getElementById("wf-wrap").style.display       = isFt8 ? "none" : "";
-      document.getElementById("bandplan-wrap").style.display = isFt8 ? "none" : "";  // falls back to the .show-class-controlled default when cleared
+      const isFt8  = (screen === "ft8");
+      const isWspr = (screen === "wspr");
+      /* The spectrum and waterfall belong to the panadapter and to nothing
+         else: neither decode page produces them, so both hide for FT8 and for
+         WSPR alike. One rule for the page - show what the Tab5 is showing. */
+      const noPan = isFt8 || isWspr;
+      document.getElementById("spec-wrap").style.display     = noPan ? "none" : "";
+      document.getElementById("freqaxis").style.display      = noPan ? "none" : "";
+      document.getElementById("split-handle").style.display  = noPan ? "none" : "";
+      document.getElementById("wf-wrap").style.display       = noPan ? "none" : "";
+      document.getElementById("bandplan-wrap").style.display = noPan ? "none" : "";  // falls back to the .show-class-controlled default when cleared
       document.getElementById("ft8-notice").style.display    = isFt8 ? "flex" : "none";
+      /* ⛔ The WSPR card follows the SCREEN, not the wspr_en feature flag.
+         It used to key off the flag alone, so it sat at the bottom of every
+         page - and worse than untidy, it was misleading: wspr_rx_start() runs
+         on entering the WSPR page and wspr_rx_stop() on leaving it, so on any
+         other page that table is frozen data that cannot update while looking
+         live. (Operator, 2026-08-28: "Right now i see wspr on the bottom of
+         all pages. No exactly logic....") */
+      {
+        const wc = document.getElementById("wspr-card");
+        if (wc) wc.style.display = isWspr ? "" : "none";
+        if (isWspr) pollWspr();
+      }
+      if (isWspr) {
+        fpsEl.textContent = "WSPR mode";
+        fpsEl.classList.remove("bad");
+      }
       if (isFt8) {
         fpsEl.textContent = "FT8 mode";
         fpsEl.classList.remove("bad");
