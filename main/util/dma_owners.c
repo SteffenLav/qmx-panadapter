@@ -39,6 +39,7 @@
 #include "dma_owners.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_memory_utils.h"   // esp_ptr_dma_capable
 
 #ifdef CONFIG_HEAP_TASK_TRACKING
 #include "esp_heap_task_info.h"
@@ -154,10 +155,78 @@ void dma_owners_report(void)
     } else {
         ESP_LOGW(TAG, "every allocation belongs to a live task");
     }
-    if (live) heap_caps_free(live);
     ESP_LOGW(TAG, "--- total attributed DMA-capable: %u B over %u tasks ---",
              (unsigned)dma_sum, (unsigned)num_totals);
 
+    // ---------------------------------------------------------------------
+    // PER-BLOCK BREAKDOWN. The totals say WHO; this says WHAT, which is the
+    // only view that shows what could be moved.
+    //
+    // The operator's point, and it is the real one: if the DMA-capable region
+    // is fully committed then no new feature can land - the CW page included -
+    // and "all resources are eaten up" becomes the honest thing to tell users.
+    // #65 recovered 52 KB by moving named buffers to PSRAM, so the way out is
+    // to name them again rather than to shave features.
+    //
+    // Only DMA-capable blocks are printed: the caps of the heap a block lives
+    // in are not in heap_task_block_t, so each address is asked directly.
+    {
+        enum { MAX_BLOCKS = 900, TOP_N = 30 };
+        heap_task_block_t *blocks =
+            heap_caps_calloc(MAX_BLOCKS, sizeof(heap_task_block_t),
+                             MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        if (blocks) {
+            size_t num_totals2 = 0;
+            heap_task_info_params_t bp = { 0 };
+            bp.caps[0] = MALLOC_CAP_DMA; bp.mask[0] = MALLOC_CAP_DMA;
+            bp.tasks      = NULL;         // every task
+            bp.num_tasks  = 0;
+            bp.totals     = NULL;
+            bp.num_totals = &num_totals2;
+            bp.max_totals = 0;
+            bp.blocks     = blocks;
+            bp.max_blocks = MAX_BLOCKS;
+            size_t n = heap_caps_get_per_task_info(&bp);
+
+            // Keep only the DMA-capable ones, then selection-sort the largest
+            // TOP_N into place. A full sort of 900 entries is not worth the
+            // stack or the time when only the head is read.
+            size_t m = 0;
+            for (size_t i = 0; i < n; i++) {
+                if (esp_ptr_dma_capable(blocks[i].address)) blocks[m++] = blocks[i];
+            }
+            size_t show = (m < TOP_N) ? m : TOP_N;
+            for (size_t i = 0; i < show; i++) {
+                size_t best = i;
+                for (size_t k = i + 1; k < m; k++)
+                    if (blocks[k].size > blocks[best].size) best = k;
+                heap_task_block_t t = blocks[i]; blocks[i] = blocks[best]; blocks[best] = t;
+            }
+
+            size_t all = 0;
+            for (size_t i = 0; i < m; i++) all += blocks[i].size;
+            ESP_LOGW(TAG, "=== biggest DMA-capable BLOCKS (%u seen%s, %u B total) ===",
+                     (unsigned)m, (n >= MAX_BLOCKS) ? ", TRUNCATED - raise MAX_BLOCKS" : "",
+                     (unsigned)all);
+            size_t head = 0;
+            for (size_t i = 0; i < show; i++) {
+                head += blocks[i].size;
+                const char *nm = "(dead/main)";
+                for (UBaseType_t k = 0; k < n_live; k++)
+                    if (live[k].xHandle == blocks[i].task) { nm = live[k].pcTaskName; break; }
+                ESP_LOGW(TAG, "  %8u B  @%p  %s",
+                         (unsigned)blocks[i].size, blocks[i].address, nm);
+            }
+            ESP_LOGW(TAG, "  ... top %u account for %u B of %u B (%u%%)",
+                     (unsigned)show, (unsigned)head, (unsigned)all,
+                     all ? (unsigned)((head * 100) / all) : 0);
+            heap_caps_free(blocks);
+        } else {
+            ESP_LOGW(TAG, "could not allocate the blocks array");
+        }
+    }
+
+    if (live) heap_caps_free(live);
     heap_caps_free(totals);
 }
 
