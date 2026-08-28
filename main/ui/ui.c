@@ -10348,6 +10348,18 @@ static void drawer_bt_restart_refresh(void)
     if (!s_bt_restart_btn || !s_drawer_sections[DRAWER_SEC_BT]) return;
     qmx_settings_t s;
     settings_load_all(&s);
+
+    // Repaint the tick from the stored setting, not from whatever this drawer
+    // was built with. bt_mouse_en can also be changed from the web Settings
+    // page, and it was: caught on the bench with the box still showing ticked
+    // beside a "Restart now" button that only appears when it is off - the
+    // drawer contradicting itself. lv_obj_add_state()/clear_state() do not
+    // send VALUE_CHANGED, so this cannot re-enter drawer_bt_cb().
+    if (s_cb_bt) {
+        if (s.bt_mouse_en) lv_obj_add_state(s_cb_bt, LV_STATE_CHECKED);
+        else               lv_obj_clear_state(s_cb_bt, LV_STATE_CHECKED);
+    }
+
     const bool pending = (s.bt_mouse_en != bt_hid_mouse_enabled_at_boot());
     const int  h       = pending ? DRAWER_BT_H_PENDING : DRAWER_BT_H_PLAIN;
     if (s_drawer_section_h[DRAWER_SEC_BT] == h) return;   // nothing moved
