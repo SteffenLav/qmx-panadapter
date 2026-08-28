@@ -6,7 +6,7 @@ The entire app is controlled via **one-finger swipes from screen edges** and **t
 
 | Gesture | From | Effect |
 |---|---|---|
-| Swipe → | **Left edge** | Toggle Panadapter ↔ FT8 view |
+| Swipe → | **Left edge** | Cycle Panadapter → FT8/FT4 → WSPR |
 | Swipe ← | **Right edge** | Open settings drawer |
 | Swipe ↑ | **Bottom edge** | Open memory channel picker |
 

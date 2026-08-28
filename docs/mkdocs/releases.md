@@ -4,14 +4,39 @@ All releases are available on [GitHub Releases](https://github.com/SteffenLav/qm
 
 ## Latest Release
 
-**v1.9.5** — 2026-08-25
+**v1.10.0** — 2026-08-28
+
+**WSPR, and a settings drawer you decide the shape of.**
+
+- **WSPR — a third page.** Swipe now cycles **Panadapter → FT8/FT4 → WSPR**. WSPR is a propagation beacon rather than a contact mode: you transmit a very slow, very weak signal carrying only your callsign, grid and power, and stations worldwide report hearing it. Over an evening you get a picture of where your antenna and your band actually reach, at power levels where nothing else would be heard at all. Nobody replies, and nothing goes in your log.
+- **The page** shows the stations heard in each two-minute cycle with distance and bearing, the furthest of the session, a per-cycle history so an opening band looks different from a closing one, and the captured 200 Hz window. Receiving is the default and is worth doing on its own; transmitting is opt-in and, like FT8, refuses to key without your callsign and grid.
+- **Its settings live in the drawer**, under **WSPR**, and appear only on that page: allow transmitting, declared power, duty cycle, band hopping, and whether to publish what you hear to wsprnet.org. The page itself keeps only the TX switch — duty cycle and band hopping are decisions made once for a session, not controls you reach while watching spots arrive. Ticking two or more bands in the picker is what turns hopping on.
+- **Declared power is a claim, not a measurement.** The Tab5 cannot know what your radio delivers, and every spot publishes that number worldwide into a database other operators reason from. Set it to what your transmitter really produces.
+- **The Tab5 now wakes up on the page you left it on**, including after a firmware update. If that page is WSPR with transmitting enabled, the station resumes beaconing on power-up — which is what a beacon is for, but worth knowing before you leave the shack.
+- **Basic and Advanced.** The drawer's EXPERT button is now **ADVANCED**, which names the contents rather than the reader. More usefully, which settings appear in which view is no longer fixed: the web UI's Settings window has a **Tab5 config** button opening a table of every section with Basic and Advanced ticks. Basic holds the things an operating session actually reaches; everything remains in Advanced. A firmware update that adds a setting will show it rather than hiding it behind a layout saved before it existed.
+- **Two field reports from Gyula HA3HZ**, both fixed. A station you had just worked could be called again within minutes — the decode list greyed the callsign while the engine ignored it unless a filter was ticked, so the screen and the machine disagreed. The automatic pickers now leave a station alone for 30 minutes after working it, whatever the filter says. And the red **FREQ BUSY** warning had no signal-strength test at all, so a barely-audible station on the other side of the world raised the same alarm as a loud neighbour; it is now graded by strength, and hidden entirely during an exchange, where your transmit tone is deliberately locked to your partner.
+- **Also:** the Tab5's frame rate and redraw load are now in the diagnostic log, Bluetooth's host task moved off the display core, several task stacks were returned to the pool, and a WSPR session no longer leaves the FT8 page tuned to the WSPR frequency.
+
+## Previous Releases
+
+### v1.9.6 — 2026-08-26
+
+**POTA and SOTA logging put right, the mouse wheel tunes, and the phone menus work again.**
+
+- **Your callsign is now written as `STATION_CALLSIGN`**, the field POTA reads *(Don Adams WB0LQW)*. It used to warn *"No station_callsign field, assuming operator …"* on every upload and guess.
+- **Park-to-Park and Summit-to-Summit contacts can be entered afterwards** — a new **P2P ref** column in the web log editor, where you type just the reference and the Tab5 works out the programme.
+- **FT4 is logged the way the ADIF specification defines it** (`MODE=MFSK`, `SUBMODE=FT4`), so editors like ADIFMaster will open the file. LoTW uploads are unchanged.
+- **The mouse wheel tunes the radio** over the spectrum and waterfall — 10 Hz a click in CW and the digital modes, 100 Hz in SSB *(Roy KI0ER, John Dusek)* — and it no longer scrolls panels into blank space.
+- **The bottom-bar menus work on an iPhone again** — a line added for portrait mode in v1.9.4 hid them behind the page in Safari *(Travis AK6TB, Randy N4OPI)*.
+- **"Check for updates" stops saying you are up to date while it is still asking** *(Michael KZ4LY, Samuel W7STF)*, and **background downloading is now a switch** you can turn off while still being told a new version exists.
+- **Coming back from the radio's own menus restores your frequency and mode** — they could leave the radio on 160 m *(Randy N4OPI)* — and **Basic/Expert is remembered** *(Samuel W7STF)*.
+
+### v1.9.5 — 2026-08-25
 
 **A fast-follow patch: two ADIF logging bugs, no new features.**
 
 - **A duplicate contact could falsely claim your park was activated** *(Eric, GitHub issue)*. Working the same station twice made the device say "10 contacts, park activated" while POTA.app credited only 9 unique stations and rejected the upload - cost three activations in one outing before it was noticed. A station now counts once toward the 10-QSO (SOTA 4-QSO) minimum no matter how many times you work them.
 - **Deleting a single QSO record could silently do nothing.** The delete never checked whether its rewrite actually succeeded before committing it, so a storage write failure looked like the delete "worked" while the record stayed put. It now verifies the rewrite, refuses to touch the log if it can't, and automatically repairs/reclaims space from storage that's become fragmented over a long uptime - so a delete that would previously have failed now just works.
-
-## Previous Releases
 
 ### v1.9.4 — 2026-08-25
 
@@ -439,12 +464,6 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 3. **Binaural CW audio** — a stereo sound stage so two stations a few tens of hertz apart land in different places in your head (asked for by Roy KI0ER; shaped by Don N2VGU and Michael KZ4LY, whose point that the stage **width** should be a setting rather than a fixed angle is now the plan). Waits on the same audio-output rework as the CW page
 4. **Live microSD mirroring while WiFi is up** — continuous mirroring currently only runs with WiFi off; v1.3.2 made that explicit and reliable (one complete backup per start-up with WiFi on). This was believed to be bus contention between the card and the WiFi co-processor. v1.4.0 found that a large part of it was actually a memory shortage — the pool the card needs to mount had been squeezed to almost nothing, and now has room again — so this may already behave better than documented. Needs a retest before the behaviour is changed
 
-### Phase 6.3 (FPS Recovery)
-
-- Native portrait LVGL rewrite (720×1280, all widgets transposed, canvas drawing ported)
-- Avoids 90° software rotation (~50% FPS gain)
-- Large effort; not yet started
-
 ### Future Additions
 
 - CW audio (shelved since v0.18.5 due to CPU contention; needs pipeline redesign)
@@ -455,7 +474,7 @@ See [Full Version History](https://github.com/SteffenLav/qmx-panadapter/blob/mai
 
 - **Source code:** [GitHub Repository](https://github.com/SteffenLav/qmx-panadapter)
 - **Releases:** [GitHub Releases](https://github.com/SteffenLav/qmx-panadapter/releases)
-- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.9.5.pdf) or [Web](quick-start.md)
+- **User Guide:** [PDF](QMX-Panadapter-UserGuide-v1.10.0.pdf) or [Web](quick-start.md)
 - **Build Guide:** [Build from Source](build/build.md)
 - **Technical Details:** [CLAUDE.md](https://github.com/SteffenLav/qmx-panadapter/blob/main/CLAUDE.md)
 

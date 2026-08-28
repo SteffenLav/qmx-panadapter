@@ -2941,6 +2941,11 @@ other side of the world raised the same alarm as a loud neighbour; it is now
 graded by strength, and hidden entirely during an exchange, where your transmit
 tone is deliberately locked to your partner and moving is the wrong thing to do.
 
+**The printable User Guide gains two chapters** — WSPR, and **Radio menus**, which
+had a line in the contents but no chapter behind it since v1.8.4. The PDF builder
+only injects a chapter where the README carries a matching heading, and neither had
+one; the guide is 116 pages now rather than 107.
+
 **Also:** the Tab5's frame rate and redraw load are now in the diagnostic log,
 Bluetooth's host task moved off the display core, several task stacks were
 returned to the pool, and a WSPR session no longer leaves the FT8 page tuned to

@@ -1981,7 +1981,8 @@ static lv_obj_t *s_grp_hdr[N_DRAWER_GROUPS];
 //
 // ⭐ THE DEFAULTS ARE THE OPERATOR'S OWN LAYOUT, chosen on the bench and read
 // back out of the device (drawer_item_t.basic). Advanced holds everything;
-// Basic holds the six sections an operating session actually reaches. That is
+// Basic holds the eight sections an operating session actually reaches, plus
+// the four WSPR ones that only appear on that page. That is
 // the answer to "what is Basic FOR?" that TODO #268 and #272 were stuck on: it
 // is not a beginner mode, it is the operating set.
 //

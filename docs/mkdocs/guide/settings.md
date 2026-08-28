@@ -6,16 +6,34 @@ The top two buttons are not settings but the two ways into help: **User Manual**
 opens this guide at the chapter for the screen you came from, and **Need guidance?**,
 which lists symptoms and questions in plain words. See [Getting Help](../getting-help.md).
 
-## Basic and Expert
+## Basic and Advanced
 
 The drawer is grouped under headings — **Station**, **Device**, **Radio**, **Network**,
-**Display**, **FT8** and **Spectrum** — and the toggle beside the **Settings** title
-chooses how much of it you see. It always says where you are and what a tap gives you:
-tapping **BASIC (tap for Expert)** reveals the Spectrum and Device groups, which hold the
-calibration and tuning controls you set once and rarely touch again.
+**Display**, **FT8**, **WSPR** and **Spectrum** — and the button beside the **Settings**
+title chooses how much of it you see. It reads **BASIC** or **ADVANCED**; tapping it
+swaps between them. (It said EXPERT until v1.10.0, which described the reader rather
+than the contents.)
 
-Nothing is lost in Basic; it is only hidden. The choice is not remembered between
-sessions, because it is a way of looking at the drawer rather than a preference.
+Advanced holds everything. Basic holds the sections an operating session actually
+reaches — Activation, QMX volume, RF gain, SWR protection, Antenna Tune, WiFi setup,
+Display brightness, and the FT8 group's distance and reporting options, plus the four
+WSPR sections when you are on the WSPR page. That is what Basic is *for*: it is the
+operating set, not a beginner mode. Nothing is lost in Basic; it is only hidden.
+
+**Which sections appear in which view is yours to set** (v1.10.0). In the web UI, open
+**Settings** and click **Tab5 config** next to Save: every section in the Tab5's drawer
+is listed in drawer order with a **Basic** and an **Advanced** tick. A section can be in
+both, in one, or in neither — neither being a legitimate answer meaning you never want
+to see it. It is deliberately edited from the browser rather than from the Tab5, so it
+stays out of the way of anyone who just wants to operate.
+
+A firmware update that adds a new setting **shows** it rather than hiding it behind a
+layout you saved before it existed — the device records which sections were known when
+you saved, so anything newer than that takes the shipped default instead of reading as
+"unticked".
+
+This layout is stored on the device and is deliberately **not** part of a config backup:
+it is a preference about the menu, not a station or radio setting.
 
 ## Radio
 
@@ -319,6 +337,12 @@ It does nothing at all until both your **callsign and grid** are set, and it is 
 **Keyboard** — M5Stack Tab5 snap-on keyboard support (if connected). See
 [The snap-on keyboard](#the-snap-on-keyboard) below for everything it can do.
 
+## WSPR
+
+The **WSPR** group appears only while the WSPR page is up, and holds **Allow
+transmitting**, **Declared power**, **Duty cycle**, **Band hopping** and **Publish spots
+to wsprnet**. They are described where they make sense — see [WSPR](wspr.md).
+
 ## The snap-on keyboard
 
 If the M5Stack Tab5 70-key snap-on keyboard is attached it is detected and
@@ -546,7 +570,7 @@ Use this to:
 - Transfer settings to another Tab5
 - Recover from accidental changes
 
-## Advanced / Expert
+## Resets — in the browser, not the drawer
 
 **These two live in the browser, not in the drawer** — a reset you can trigger by
 mistake on a touchscreen in the field is a worse idea than one that needs a

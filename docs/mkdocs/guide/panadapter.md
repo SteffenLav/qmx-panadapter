@@ -354,7 +354,7 @@ It is a readout, not a control: there is nothing to tap, and there is no peak-ho
 
 Swipe ← from the right edge to open the settings drawer, or tap the right grip handle.
 
-It is grouped — **Station, Device, Radio, Network, Display, FT8, Spectrum** — with a **Basic / Expert** toggle at the top. Basic shows what a normal session needs; Expert reveals the tuning and calibration controls, so the list stays short until you need it to be long.
+It is grouped — **Station, Device, Radio, Network, Display, FT8, WSPR, Spectrum** — with a **BASIC / ADVANCED** button at the top. Basic shows what an operating session needs; Advanced holds everything, including the tuning and calibration controls you set once. Which sections sit in which view is yours to change, from the web UI's **Settings → Tab5 config**.
 
 **Every control, group by group, is documented once in [Settings](settings.md)** — deliberately in one place rather than summarised here as well.
 

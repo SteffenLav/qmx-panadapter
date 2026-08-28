@@ -5,7 +5,7 @@ The panadapter includes **on-device FT8 and FT4 decoders** with real-time spectr
 
 ### 1. FT8 & FT4 View
 
-Swipe → from the left edge to toggle to FT8/FT4 view. The same decode list and waterfall work for both modes — switch modes via the **Preset** dropdown in the left pane (top).
+Swipe → from the left edge to reach the FT8/FT4 view (the edge cycles Panadapter → FT8/FT4 → WSPR). The same decode list and waterfall work for both modes — switch modes via the **Preset** dropdown in the left pane (top).
 
 **FT4 notes:**
 - Decodes refresh roughly twice as fast as FT8 because slots are 7.5 seconds

@@ -12,7 +12,9 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 
 *20 m FT8 pile-up around 14.074 MHz in flat-spectrum mode (v0.9.2). The spectrum trace tracks a per-bin noise floor so real signals pop sharp above a calm baseline. Top bar: band, mode, centre freq, S-meter. Bottom bar: battery, WiFi strength, IP. The same view streams live to any browser on the LAN — see [Web UI](#web-ui).*
 
-> **Release — v1.9.6.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+> **Release — v1.10.0.** A complete, self-contained FT8/FT4 station: spectrum and waterfall, on-device decode and transmit, automatic QSOs, ADIF logging, and upload to **four logbooks — QRZ, eQSL, ARRL LoTW and your own Cloudlog or Wavelog** — with no PC in the loop. It runs offline for POTA/SOTA, streams to any browser on the LAN, and carries its own user manual inside the firmware.
+>
+> **New in v1.10.0 — WSPR, and a settings drawer you decide the shape of.** **The Tab5 gains a third page**: swipe now cycles **Panadapter → FT8/FT4 → WSPR**. WSPR is a propagation beacon rather than a contact mode — you send a very slow, very weak signal carrying only your callsign, grid and power, and stations worldwide report hearing it, so over an evening you get a picture of where your antenna and your band actually reach at power levels where nothing else would be heard at all. Nobody replies and nothing goes in your log. The page shows what was heard each two-minute cycle with distance and bearing, the furthest of the session, and a per-cycle history so an opening band looks different from a closing one. **Receiving is the default**; transmitting is opt-in and, like FT8, refuses to key without your callsign and grid. Its settings — allow transmitting, declared power, duty cycle, band hopping, and publishing what you hear to wsprnet.org — live in the drawer under **WSPR**. **Declared power is a claim, not a measurement**: the Tab5 cannot know what your radio delivers, and that number is published worldwide, so set it to what your transmitter really produces. **The Tab5 also wakes up on the page you left it on**, including after an update — so a station left on WSPR with transmitting on resumes beaconing by itself. **Basic/Expert is now Basic/Advanced**, which names the contents rather than the reader, and **which settings appear in which view is yours to set** from a new **Tab5 config** button in the web UI's Settings window; a firmware update that adds a setting now shows it rather than hiding it behind a layout saved before it existed. **Two field reports from Gyula HA3HZ** are fixed: a station you had just worked could be called again within minutes (the automatic pickers now leave a station alone for 30 minutes after working it, whatever your filters say), and the red **FREQ BUSY** warning is now graded by signal strength and hidden during an exchange, where your tone is deliberately locked to your partner. Full detail in [docs/version-history.md](docs/version-history.md).
 >
 > **New in v1.9.6 — POTA and SOTA logging put right, the mouse wheel tunes, and the phone menus work again.** **Your callsign is now written as `STATION_CALLSIGN`**, the field POTA reads — it used to warn *"No station_callsign field, assuming operator …"* on every upload and guess *(Don Adams WB0LQW)*. **Park-to-Park and Summit-to-Summit contacts can be entered afterwards**: a new **P2P ref** column in the web log editor, where you type just the reference and the Tab5 works out the programme. **FT4 is logged the way the ADIF specification defines it** (`MODE=MFSK`, `SUBMODE=FT4`), so editors like ADIFMaster will open the file — LoTW uploads are unchanged. **The mouse wheel tunes the radio** over the spectrum and waterfall: 10 Hz a click in CW and the digital modes, 100 Hz in SSB *(Roy KI0ER, John Dusek)*, and it no longer scrolls panels into blank space. **The bottom-bar menus work on an iPhone again** — a line added for portrait mode in v1.9.4 hid them behind the page in Safari *(Travis AK6TB, Randy N4OPI)*. **"Check for updates" stops saying you are up to date while it is still asking** *(Michael KZ4LY, Samuel W7STF)*, and **background downloading is now a switch** you can turn off while still being told a new version exists. **Coming back from the radio's own menus restores your frequency and mode** — they could leave the radio on 160 m *(Randy N4OPI)* — and **Basic/Expert is remembered** *(Samuel W7STF)*. Full detail in [docs/version-history.md](docs/version-history.md).
 >
@@ -50,7 +52,7 @@ The QMX exposes I/Q audio over USB UAC plus CAT control over USB CDC-ACM. The Ta
 >
 > **What changed in earlier releases** is in **[docs/version-history.md](docs/version-history.md)** — every release from v0.1.0 onward, newest last. The section below describes what the firmware does **today**, not what any one release added.
 
-Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.9.6.pdf).
+Prefer a single printable file? [Download the User Guide PDF](docs/QMX-Panadapter-UserGuide-v1.10.0.pdf).
 
 <!-- USERGUIDE:START -->
 
@@ -198,6 +200,8 @@ reflash.
 - [FT8 Transmit](#ft8-transmit) — reply, CQ-run, auto-QSO, ADIF logging
 - [Time sync](#time-sync) — WiFi/SNTP, Tab5 RTC, POTA/offline use
 - [Settings](#settings) — every drawer control, group by group
+- [WSPR](#wspr) — two-minute propagation beacon: where your signal actually goes
+- [Radio menus](#radio-menus) — the QMX's own menu system on the Tab5
 - [Reference](#reference) — gestures, web API, hardware
 - [Build from source](#build-from-source)
 - [Under the hood](#under-the-hood) — DSP, I/Q correction, quirks
@@ -258,7 +262,7 @@ The whole app is driven by **one-finger swipes from the screen edges** and **tap
 
 | Gesture | From | Does |
 |---------|------|------|
-| Swipe → | Left edge | Toggle Panadapter ↔ FT8 screen |
+| Swipe → | Left edge | Cycle Panadapter → FT8/FT4 → WSPR |
 | Swipe ← | Right edge | Open settings drawer |
 | Swipe ↑ | Bottom edge | Open memory channel picker |
 | Tap or swipe ↓ | Any top-bar item | Open that item's selector |
@@ -780,12 +784,39 @@ On the FT8 screen, tap **Options** → **Sync Time** to open the time calibratio
 ## Settings
 
 The settings drawer, opened by swiping in from the right edge. It is grouped —
-**Station, Device, Radio, Network, Display, FT8, Spectrum** — with a **Basic /
-Expert** toggle that keeps the list short until you need it to be long. Changes
-save themselves; there is no OK button to hunt for.
+**Station, Device, Radio, Network, Display, FT8, WSPR, Spectrum** — with a
+**BASIC / ADVANCED** button that keeps the list short until you need it to be
+long. Which sections sit in which view is yours to set, from the web UI's
+**Settings → Tab5 config**. Changes save themselves; there is no OK button to
+hunt for.
 
 📖 Every control, group by group:
 [tab5.lav.dk/guide/settings](https://tab5.lav.dk/guide/settings/)
+
+---
+
+## WSPR
+
+A propagation beacon rather than a contact mode: a very slow, very weak signal
+carrying only your callsign, grid and declared power, reported by stations
+worldwide. Swipe → from the left edge cycles **Panadapter → FT8/FT4 → WSPR**.
+Receiving is the default and worth doing on its own; transmitting is opt-in.
+
+📖 The full chapter:
+[tab5.lav.dk/guide/wspr](https://tab5.lav.dk/guide/wspr/)
+
+---
+
+## Radio menus
+
+The QMX's own menu system, on the Tab5's screen, over the radio's **second** USB
+serial port — so CAT keeps running and the panadapter does not stop. Switch that
+port on once, on the radio: **System config → GPS & Ser. ports → USB serial
+ports → 2**. For a QMX+ with no control panel this is the only way into its
+menus.
+
+📖 The full chapter:
+[tab5.lav.dk/guide/radio-menus](https://tab5.lav.dk/guide/radio-menus/)
 
 ---
 
@@ -801,7 +832,7 @@ save themselves; there is no OK button to hunt for.
 | Double-tap | Spectrum / waterfall | Reset zoom and pan to ×1.0 / centred |
 | Pinch (two fingers) | Spectrum / waterfall | Zoom ×1.0–×24.0 |
 | Two-finger drag | Spectrum / waterfall (zoomed) | Pan the zoomed window |
-| Swipe → from left edge | Left edge strip | Toggle Panadapter ↔ FT8 screen |
+| Swipe → from left edge | Left edge strip | Cycle Panadapter → FT8/FT4 → WSPR |
 | Swipe ← from right edge | Right edge strip | Open settings drawer |
 | Tap right grip handle | Right edge | Open settings drawer (alternative) |
 | Swipe → | Open drawer, or spectrum while drawer open | Close settings drawer |
@@ -977,7 +1008,7 @@ The full per-version changelog — every release from v0.1.0 onward — lives in
 
 ### Next up
 
-**v1.9.6 is here.** Next on the bench:
+**v1.10.0 is here.** Next on the bench:
 
 - **Web-UI audio streaming.** Listen to the receiver in any browser on your LAN — demodulated on the Tab5, no PC. Already working in development; held back for quality tuning and an overnight streaming soak. Server mode (screen off, device just serves) rides along.
 - **CW page.** Canned-message CW TX memories first; decoded-CW display after (the QMX decodes internally — mirroring it over CAT looks cheap).
