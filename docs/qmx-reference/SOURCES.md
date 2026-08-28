@@ -10,8 +10,18 @@ Manual FT8 TX work in particular):
   1_04 CAT changes; 1_04_002 added no CAT changes). Added 2026-07-03 for the 1_03↔1_04
   comparison in `docs/qmx-1_04-cat-comparison.md`.
 - `QMX_operation_manual_1.04.001.pdf` — QMX Operating Manual, firmware 1_04_001 (same purpose)
+- `QMX_CAT_manual_1.04.004.pdf` — QMX CAT Programming Manual, **firmware 1_04_004 and above**
+  (document revision 1_04_004, 23-Jul-2026). Added 2026-08-29. **This is the current one** —
+  it covers 1_04_004 through 1_04_008 and documents six commands the 1_04_001 manual does
+  not: `BD`, `BN`, `BU`, `UI` (added 1_04_003) and `GP`, `SR` (added 1_04_004).
+  ⚠ Its page footers still say "firmware 1_04_003"; the document revision history is the
+  authority. Extract: `cat_104_004.txt`.
 
-`cat_103.txt` / `cat_104.txt` are local `pdftotext -layout` extracts of the two CAT
+**Not yet cached** (newer than the above, noted 2026-08-29): operating manual for
+1_04_004 and above (23-Jul-2026), and the Virtual U3S manual for **1_04_008a** and above
+(28-Aug-2026) — the "008a" implies a firmware revision past 1_04_008.
+
+`cat_103.txt` / `cat_104.txt` / `cat_104_004.txt` are local `pdftotext -layout` extracts of the CAT
 manuals (also gitignored) — regenerate with `pdftotext -layout <pdf> <txt>` if missing.
 
 **These PDFs are not committed to the repo** (see `.gitignore`). They are

@@ -27,6 +27,74 @@ is unfixed. Entries since 1_04_002 that touch us:
 | **1_04_005** | first-dit spike, PA mod test, key-down current spike | Radio-side. Nothing for us |
 | **1_04_001** | "Bug fix: CAT MU command and MM (when auto update enabled) loaded previously saved state (VFO etc)" | Directly relevant, and found late. "MM when auto update enabled" is **MM Effect = Immediate**. So `MU;` and MM-with-auto-reload mishandling saved VFO state is a KNOWN, already-fixed bug class. It also fits what we measured on 1_04_004: `MU;` discards session state (IQ mode `Q9` — the spectrum goes flat while USB audio keeps flowing at full rate) while an `MM` Set with MM Effect = Immediate does **not**. The two reload paths behave differently on purpose |
 
+### ⭐ 2026-08-29: the CAT surface DID change — six new commands, and we had the wrong manual
+
+This document was written against the **1_04_001** CAT manual, and §1's command diff is
+therefore two revisions stale. QRP Labs has published a **CAT programming manual for
+firmware 1_04_004 and above** (`cat_1_04_004.pdf`, 23-Jul-2026), now cached as
+`docs/qmx-reference/QMX_CAT_manual_1.04.004.pdf` with a `pdftotext -layout` extract at
+`cat_104_004.txt`. It covers 004 **through 008**, so it is authoritative for everything
+current.
+
+⚠ **Its page footers still read "firmware 1_04_003"** — Hans did not update them. The
+document revision history is the authority; you have the right file.
+
+Its own revision history is unambiguous:
+
+| Manual revision | Date | Added |
+|---|---|---|
+| **1_04_003** | 18-Jul-2026 | commands **BD, BN, BU, UI** |
+| **1_04_004** | 23-Jul-2026 | commands **GP** and **SR** |
+
+Diffed mechanically (command headings from both extracts): **6 added, 0 removed, 53 → 58
+documented commands.**
+
+⚠ **A first pass reported `IF` as REMOVED. It is not** — the line is preceded by a
+form-feed page break in the extract, so a `^[A-Z][A-Z0-9]:` anchor skipped it. `IF` is
+present in both (1_04_001 line 110, 1_04_004 line 163). Standing lesson, already in
+CLAUDE.md's serial-capture rules and equally true here: **a regex over extracted text
+invents changes.** Confirm any apparent removal by grepping for the command itself.
+
+#### What each one means for us
+
+| Cmd | From | What it does | Impact here |
+|---|---|---|---|
+| **SR** | 1_04_004 | Get/Set SWR-protection lock. `SR;` returns 0/1; `SR<any digit>;` resets the latch | ⭐ **HIGH — replaces a workaround we still ship.** We clear the SWR latch with a `TX;`/`RX;` dance (v0.15.17) and *infer* the state; v1.9.2 put that inferred state on the web page for Randy N4OPI. `SR;` reads the truth and `SR0;` is the documented reset |
+| **GP** | 1_04_004 | `GP;` → `GP+DD.DDDDDD+DDD.DDDDDD+YYYYMMDDHHMMSS;` — GPS position **and** date/time. Used by DL2MAN's Winlink app | ⭐ **HIGH — this is the clean answer to #173/#174.** Those are stuck because a clock we pushed is indistinguishable from a GPS-disciplined clock. **A POSITION is not**: we never push one, so a valid fix is positive proof of GPS in a way no timestamp can be. It would also let a GPS-equipped QMX+ fill in the operator's Maidenhead grid. ⚠ **Gate at ≥1_04_005, not 004** — the changelog records the longitude sign as reversed until 005. An earlier row in this document says "we do not use `GP`"; that stands as a statement of today's code and is **no longer the recommendation** |
+| **BN** | 1_04_003 | Get/Set band by **index** into the Band Configuration table (`BN2;` = 40 m on an 80–20 QMX; Get returns the current index) | **MEDIUM.** We tune by frequency and let the radio pick the band, so we do not need the Set. The **Get** is the interesting half: `RG` (RF gain) is **per band**, which is exactly why we refuse to store it — `BN;` names the slot the radio is actually on |
+| **BU / BD** | 1_04_003 | Band up / band down, equivalent to double-clicking the Volume knob and rotating one click | **LOW.** We set frequency directly, which is strictly more precise |
+| **UI** | 1_04_003 | 96-bit STM32 unique ID as 24 hex chars | **LOW.** A stable per-radio identity. Nothing needs it today |
+
+All six need a version gate. `cat_qmx_fw_at_least()` already exists (it parses the cached
+`VN;` string) and is the mechanism used for AM and SWR Tune: **1,4,3** for BD/BN/BU/UI,
+**1,4,5** for GP (not 4 — see the sign bug), **1,4,4** for SR.
+
+**The dev bench is already on `1_04_004`**, so BD/BN/BU/UI/SR can be exercised today; GP
+wants 005 or later.
+
+### Changelog since 1_04_006
+
+| Version | Entry | Why it matters here |
+|---|---|---|
+| **1_04_008** (27-Aug-2026) | "Added all remaining U3S modes to Virtual U3S" and **"Added RTTY to Virtual U3S (not available in real U3S)"** | The radio can now beacon RTTY itself. `JS8 / RTTY` sits in our roadmap behind `docs/rtty-feasibility.md`, where the cost was always the **transmit** side. If the QMX will key RTTY natively, the Tab5's part shrinks to choosing the frequency, showing the waterfall and driving it over CAT. Also worth thinking about against the WSPR page we shipped in v1.10.0: the radio's Virtual U3S is a standalone beacon, ours is receive + spots + reporting + transmit. Not a conflict; a question about what each is for. **No CAT change** — Virtual U3S is configured from the radio's own menus |
+| **1_04_007** (14-Aug-2026) | **"Bug fix: Fixed the 160m image rejection (90-degree quad LO phase relationship on 160m)"** | ⚠ **Do NOT file this as the cause of #118.** #118's phantom CW is reproducible on demand by a front-panel menu visit and cured by re-asserting IQ mode, which points at `Q9` session state, not LO phase — and it is not 160m-specific. What it *does* do is **weaken one piece of our own supporting evidence**: CLAUDE.md's spur section says the phantom-CW reports on low bands "stand on their own as evidence that image rejection is poor". On 160 m that was a known radio-side defect, fixed in 007, so it is no longer independent evidence |
+| **1_04_007** | Stored-CW-message fixes (frequency written as 00,000,000; continuous key-down between repeats), leading-edge CW RF spikes reintroduced in 006 | Radio-side. Relevant only to the CW page work on `feat/cw-page` |
+| **1_04_007** | "Image Sweep screen had incorrect result first time it ran" | Radio-side display |
+
+**Is 1_04 GA yet? Not established — and be careful how this is phrased.** The changelog
+labels **1_04_000** and **1_04_002** explicitly "Beta firmware version"; entries for
+**1_04_003 through 1_04_008 carry no such label**. That is the *absence* of a beta marker,
+not an announced general release, and a summarising fetch reading it as "not labelled
+BETA" is how that turns into a false claim. Our quick-start still recommends `1_03_002`.
+Changing that recommendation needs a positive statement from QRP Labs, or the §5 hardware
+checks actually run — not an inference from a missing word.
+
+**Also newer than our cache:** an **operating manual for 1_04_004 and above** (23-Jul-2026)
+and a **Virtual U3S manual for 1_04_008a and above** (28-Aug-2026). Note "**008a**" — a
+revision beyond 008 exists or is imminent. Neither is downloaded yet.
+
+---
+
 **Status of 1_04 (as of 2026-07-03, superseded above):** still **BETA**, no GA. Three betas so far.
 `1_04_000` was QMX+-only (hung on QMX — fixed in `1_04_001`). `1_04_002` is one unified
 image for QMX and QMX+, and **installing it executes a Factory Reset** (all radio settings
