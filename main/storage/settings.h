@@ -184,7 +184,6 @@ typedef struct {
     // 2026-08-10). Turn it off to see the whole band, and the labels then carry
     // a two-letter mode tag so the lane is not ambiguous.
     bool     spots_mode_filter;
-    bool     snap_to_peak;    // tap-to-tune snaps to the strongest nearby signal (default true)
     uint8_t  bandplan_region; // band-plan strip region: 0=auto(from grid) 1=R1 2=R2 3=R3
     bool     distance_in_miles; // FT8 decode list: show distance in miles instead of km (default false)
     bool     rit_pill_show;     // show the RIT pill in the panadapter top bar (default TRUE)

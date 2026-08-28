@@ -73,7 +73,6 @@ static const char *TAG = "settings";
 #define KEY_SWR_LIMIT    "swr_lim"
 #define KEY_ACT_TYPE     "act_type"
 #define KEY_ACT_REF      "act_ref"
-#define KEY_SNAP_PEAK    "snap_peak"
 #define KEY_BP_REGION    "bp_region"
 #define KEY_DISTANCE_MILES "dist_miles"
 #define KEY_RIT_PILL_SHOW  "rit_pill"
@@ -259,7 +258,6 @@ static inline bool dirty_test_any(const dirty_t *d, const uint8_t *bits, size_t 
 #define DIRTY_WF_BLEND      36
 #define DIRTY_WF_WINDOW     37
 #define DIRTY_DISP_FLIP     38
-#define DIRTY_SNAP_PEAK     39
 #define DIRTY_BP_REGION     40
 #define DIRTY_DISTANCE_MILES 41
 #define DIRTY_RIT_PILL_SHOW  88
@@ -508,7 +506,6 @@ static void flush_task(void *arg)
             nvs_set_u8(s_nvs, KEY_ACT_TYPE, snap.act_type);
             nvs_set_str(s_nvs, KEY_ACT_REF, snap.act_ref);
         }
-        if (dirty_test(&dirty_local, DIRTY_SNAP_PEAK))   nvs_set_u8(s_nvs, KEY_SNAP_PEAK, snap.snap_to_peak ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_BP_REGION))   nvs_set_u8(s_nvs, KEY_BP_REGION, snap.bandplan_region);
         if (dirty_test(&dirty_local, DIRTY_DISTANCE_MILES)) nvs_set_u8(s_nvs, KEY_DISTANCE_MILES, snap.distance_in_miles ? 1 : 0);
         if (dirty_test(&dirty_local, DIRTY_RIT_PILL_SHOW)) nvs_set_u8(s_nvs, KEY_RIT_PILL_SHOW, snap.rit_pill_show ? 1 : 0);
@@ -693,7 +690,6 @@ static void load_from_nvs(qmx_settings_t *out)
     out->wf_window      = DEF_WF_WINDOW;
     out->display_flip   = false;
     out->qmx_vol_db     = 20;   // fallback slider position only - never sent at boot
-    out->snap_to_peak   = true;   // on by default (legacy behaviour)
     out->ft8_early_decode = true; // on by default (WSJT-X-style fast pounce timing)
     out->greylist_en = false;     // opt-in ("Allow grey-listing", Filter modal)
     // ON by default: contributing reception reports is the norm for FT8
@@ -876,7 +872,6 @@ static void load_from_nvs(qmx_settings_t *out)
             out->cw_tx_offset_hz = i16v;
         }
     }
-    if (nvs_get_u8(s_nvs, KEY_SNAP_PEAK, &u8v) == ESP_OK) out->snap_to_peak = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_BP_REGION, &u8v) == ESP_OK) out->bandplan_region = (u8v <= 3) ? u8v : 0;
     if (nvs_get_u8(s_nvs, KEY_DISTANCE_MILES, &u8v) == ESP_OK) out->distance_in_miles = (u8v != 0);
     if (nvs_get_u8(s_nvs, KEY_RIT_PILL_SHOW, &u8v) == ESP_OK) out->rit_pill_show = (u8v != 0);

@@ -93,8 +93,10 @@ static int16_t s_cw_cal_hz = 0;  // loaded from NVS at boot, default -60
 
 // Baseband frequency (Hz) the QMX dial maps to: +12 kHz IF always, plus the
 // QMX CW LO offset + per-unit trim in CW mode. This is the pre-bin total the
-// display centers on; snap-to-peak passes it to dsp_find_peak_hz_around so the
-// peak search window stays centered on the tap in CW (not 640 Hz off).
+// display centers on, and it is what makes the spectrum, the waterfall, the
+// dial cursor and the RIT compensation agree about which frequency a pixel is.
+// (It used to be quoted as snap-to-peak's search centre too; that feature was
+// removed in 2026-08 - see the settings note below.)
 int ui_get_if_offset_hz(void)
 {
     int total_hz = IF_OFFSET_HZ;

@@ -88,15 +88,6 @@ bool dsp_avg_ready(float *dst);
 // Returns peak via *peak_dbm. ESP_ERR_NOT_FOUND if no spectrum yet.
 esp_err_t dsp_get_peak_dbm_around_vfo(int center_bin, int half_width_bins, float *peak_dbm);
 
-// Snap-to-peak helper for touch-to-tune. Given a touched frequency offset
-// from the QMX dial (in Hz, can be negative), search ±radius_hz for the
-// strongest spectrum bin. If the peak exceeds the local mean by >3 dB,
-// returns its Hz offset in *out_hz; otherwise returns center_hz unchanged.
-// if_offset_hz is the baseband frequency the dial maps to: +12 kHz IF in
-// SSB/data, plus the CW LO offset + per-unit trim in CW mode (use the same
-// value the display centers on, i.e. the pre-bin total in ui_get_if_bin_shift).
-esp_err_t dsp_find_peak_hz_around(int32_t center_hz, int32_t radius_hz, int32_t if_offset_hz, int32_t *out_hz);
-
 // Step 3 v0.10 FT8 RX: one-shot slot capture.
 // When armed, the FFT task diverts its 1024-sample reads through a mixer
 // (-12 kHz IF removal via fs/4 sign-flip), then an esp-dsp 31-tap FIR
