@@ -423,12 +423,12 @@ int ft8_tx_pick_tone_hz(void)
     return ft8_find_clear_tone_hz_near(s_tone_pref_hz);
 }
 
-bool ft8_tx_is_clashing(void)
+ft8_clash_t ft8_tx_clash_level(void)
 {
     // Grab the armed freq and target call under the lock, then release before
     // calling ft8_screen_get_all() (which takes its own mutex).
     lock();
-    if (s_state == FT8_TX_IDLE) { unlock(); return false; }
+    if (s_state == FT8_TX_IDLE) { unlock(); return FT8_CLASH_NONE; }
     int our_hz      = s_armed.audio_freq_hz;
     ft8_tx_kind_t kind = s_armed.kind;
     char target[FT8_CALL_MAX_LEN];
@@ -440,7 +440,7 @@ bool ft8_tx_is_clashing(void)
     // armed/active, far too frequent for an ~11 KB internal-RAM allocation.
     ft8_call_t *calls = heap_caps_malloc(FT8_CALL_TABLE_SIZE * sizeof(ft8_call_t),
                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (!calls) return false;
+    if (!calls) return FT8_CLASH_NONE;
     int n = 0;
     ft8_screen_get_all(calls, FT8_CALL_TABLE_SIZE, &n);
 
@@ -456,7 +456,10 @@ bool ft8_tx_is_clashing(void)
     bool parity_known = ft8_tx_get_parity_lock(&our_even);
     const int period_ms = ft8_op_mode_slot_ms();
 
+    // Track the STRONGEST colliding station rather than stopping at the first:
+    // one loud neighbour must outrank three faint ones for the display's sake.
     bool clash = false;
+    int  worst_snr = -128;
     if (our_bin >= 0 && our_bin < n_slots) {
         for (int i = 0; i < n; i++) {
             // For a REPLY, the target station IS expected at this frequency —
@@ -471,12 +474,23 @@ bool ft8_tx_is_clashing(void)
             int their_bin = ((int)calls[i].last_freq - FT8_AUDIO_SCAN_MIN_HZ) / FT8_AUDIO_SLOT_HZ;
             if (abs(their_bin - our_bin) <= 1) {
                 clash = true;
-                break;
+                if (calls[i].last_snr_db > worst_snr) worst_snr = calls[i].last_snr_db;
+                // No early break any more - the loudest collider decides the
+                // level, and the table is already in hand.
             }
         }
     }
     free(calls);
-    return clash;
+    if (!clash) return FT8_CLASH_NONE;
+    return (worst_snr >= FT8_CLASH_STRONG_SNR_DB) ? FT8_CLASH_STRONG : FT8_CLASH_WEAK;
+}
+
+// Unchanged contract for the ENGINE: any collision at all. relocate_cq_tone_if_
+// clashing() must keep moving a CQ off an occupied slot however weak the
+// occupant, so grading belongs to the display and nowhere else.
+bool ft8_tx_is_clashing(void)
+{
+    return ft8_tx_clash_level() != FT8_CLASH_NONE;
 }
 
 // ---------------------------------------------------------------------------

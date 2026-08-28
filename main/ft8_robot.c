@@ -215,6 +215,14 @@ void ft8_robot_tick(int64_t slot_sec)
         if (strcmp(snap[i].call, qs.my_callsign) == 0) continue;  // our own echo
         if (f->excl_worked_before &&
             adif_log_contains_call_on_band(snap[i].call, cat_get_frequency())) continue;
+        // ...and never inside the recently-worked grace window, checkbox or not.
+        // The decode list greys a worked station UNCONDITIONALLY, so calling it
+        // again is the machine contradicting its own screen - reported twice
+        // (BD4AHS 2026-08-06, Gyula HA3HZ 2026-08-28: "his callsign turns gray,
+        // he calls again shortly after - as if there was no previous completed
+        // QSO"). Beyond the window the checkbox rules exactly as before, so an
+        // operator who wants a later re-work still gets one.
+        if (ft8_qso_worked_recently(snap[i].call, cat_get_frequency())) continue;
         // Grey-listed after repeated failed pounces - stop re-calling them
         // every time their CQ reappears (gated by the same greylist_en the
         // timeout tracker uses).

@@ -6,6 +6,7 @@
 
 #include "esp_http_server.h"
 #include "esp_log.h"
+#include "nvs.h"
 #include "cJSON.h"
 
 #include "battery.h"          // battery_get_level, battery_is_charging
@@ -1107,6 +1108,40 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         httpd_resp_set_type(req, "application/json");
         httpd_resp_sendstr(req, "{\"ok\":true,\"note\":\"see the serial log\"}");
         dma_owners_report();
+        return ESP_OK;
+    } else if (action && strcmp(action, "gfx_exp") == 0) {
+        // TEMP (#285) dev only: choose where the LVGL draw buffers live and how
+        // tall each strip is, then reboot so display_init() picks it up. Stored
+        // in its own tiny NVS namespace rather than in settings.c, because this
+        // is an experiment and does not deserve a dirty bit or a config-export
+        // field. See the long comment in display.c.
+        //   {"action":"gfx_exp","internal":true,"lines":16}
+        cJSON *ji = cJSON_GetObjectItem(root, "internal");
+        cJSON *jl = cJSON_GetObjectItem(root, "lines");
+        uint8_t internal = (ji && (cJSON_IsTrue(ji) || ji->valueint)) ? 1 : 0;
+        int     lines    = (jl && cJSON_IsNumber(jl)) ? jl->valueint : 36;
+        if (lines < 4)  lines = 4;
+        if (lines > 64) lines = 64;
+        nvs_handle_t h;
+        esp_err_t err = nvs_open("devgfx", NVS_READWRITE, &h);
+        if (err == ESP_OK) {
+            nvs_set_u8(h, "internal", internal);
+            nvs_set_u8(h, "lines", (uint8_t)lines);
+            err = nvs_commit(h);
+            nvs_close(h);
+        }
+        char buf[160];
+        snprintf(buf, sizeof(buf),
+                 "{\"ok\":%s,\"internal\":%s,\"lines\":%d,\"note\":\"rebooting\"}",
+                 err == ESP_OK ? "true" : "false",
+                 internal ? "true" : "false", lines);
+        cJSON_Delete(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, buf);
+        if (err == ESP_OK) {
+            vTaskDelay(pdMS_TO_TICKS(250));
+            esp_restart();
+        }
         return ESP_OK;
     } else if (action && strcmp(action, "cpu_owners") == 0) {
         // TEMP INSTRUMENT (#284) - dev only. Names the task eating a core.

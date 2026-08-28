@@ -10,8 +10,82 @@
 #include "bsp/display.h"
 #include "esp_lvgl_port.h"
 #include "hal/axi_icm_ll.h"
+#include "esp_timer.h"
+#include "nvs.h"
 
 static const char *TAG = "display";
+
+/* ---------------------------------------------------------------------------
+ * FRAME COUNTER - so "smooth" is a NUMBER instead of a question to the operator.
+ *
+ * CLAUDE.md's module map lists a `util/fps.c`; that file does not exist, so
+ * there has never been a frame-rate readout anywhere - not on screen, not in
+ * /api/status, not in the log. Which meant the only instrument for the
+ * panadapter's smoothness was asking the operator to look, and on 2026-08-28 he
+ * gave the correct answer to that: *"these differences is super hard to see"*.
+ * A ~2 percentage-point change in core-0 idle is real and invisible; asking eyes
+ * to resolve it is asking the wrong instrument.
+ *
+ * LV_EVENT_REFR_READY fires once per completed LVGL refresh, which is exactly
+ * the rate the operator perceives. O(1) per frame, so unlike the heap and stack
+ * walks this is safe to leave on a periodic path (see the cyan-flash rule).
+ * ------------------------------------------------------------------------- */
+static volatile uint32_t s_frames;
+/* Invalidated pixels, summed per LV_EVENT_INVALIDATE_AREA. Frames alone do NOT
+ * characterise the load: with the radio off this display runs at 28 fps and
+ * core-0 idle is ~57%, while with audio it runs at ~13 fps and idle is 4-7% -
+ * i.e. the expensive variable is HOW MUCH is redrawn each frame, not how often.
+ * ⚠ This over-counts where LVGL later merges overlapping areas, so read it as
+ * "pixels requested", a load proxy, not an exact blit figure. O(1) per event. */
+static volatile uint64_t s_inval_px;
+
+static void disp_refr_ready_cb(lv_event_t *e)
+{
+    (void)e;
+    s_frames++;
+}
+
+static void disp_inval_area_cb(lv_event_t *e)
+{
+    const lv_area_t *a = (const lv_area_t *)lv_event_get_param(e);
+    if (!a) return;
+    int32_t w = a->x2 - a->x1 + 1;
+    int32_t h = a->y2 - a->y1 + 1;
+    if (w > 0 && h > 0) s_inval_px += (uint64_t)w * (uint64_t)h;
+}
+
+// Thousands of invalidated pixels per second since the previous call.
+unsigned display_inval_kpx_per_s(void)
+{
+    static uint64_t last_px;
+    static int64_t  last_us;
+    int64_t  now = esp_timer_get_time();
+    uint64_t px  = s_inval_px;
+    unsigned out = 0;
+    if (last_us && now > last_us)
+        out = (unsigned)(((px - last_px) * 1000000ULL) / (uint64_t)(now - last_us) / 1000ULL);
+    last_px = px;
+    last_us = now;
+    return out;
+}
+
+// Frames per second x10 SINCE THE PREVIOUS CALL, so the caller's own cadence
+// sets the averaging window. Returns 0 on the first call (no interval yet).
+unsigned display_fps_x10(void)
+{
+    static uint32_t last_n;
+    static int64_t  last_us;
+    int64_t  now = esp_timer_get_time();
+    uint32_t n   = s_frames;
+    unsigned out = 0;
+    if (last_us && now > last_us) {
+        out = (unsigned)(((uint64_t)(n - last_n) * 10ULL * 1000000ULL) /
+                         (uint64_t)(now - last_us));
+    }
+    last_n  = n;
+    last_us = now;
+    return out;
+}
 
 static lv_display_t *s_disp = NULL;
 static bool s_flipped = false;   // false = normal landscape (90), true = upside-down (270)
@@ -100,6 +174,76 @@ esp_err_t display_init(lv_display_t **out_disp)
     // -> assert in bsp_display_indev_init_to_st7123.
     vTaskDelay(pdMS_TO_TICKS(120));
 
+    /* -----------------------------------------------------------------
+     * #285 EXPERIMENT: WHERE THE LVGL DRAW BUFFERS LIVE.
+     *
+     * This has been `buff_spiram = 1` since Phase 6.2, which puts the entire
+     * hot path in PSRAM: the two canvases are blitted from PSRAM into a PSRAM
+     * draw buffer, that draw buffer is then read STRIDED by LVGL's
+     * rotate90_rgb565 (one 128-byte cache line fetched per 2-byte pixel), and
+     * the result written to the PSRAM framebuffer. Three full-screen passes per
+     * frame, all through the L2 cache, all on core 0 - where taskLVGL measures
+     * 73.9%.
+     *
+     * Neutering the rotation recovered only ~7 of those points, which is the
+     * clue: the strided read is expensive BECAUSE its source is PSRAM. From
+     * internal SRAM there are no cache lines to fill, so both the blit
+     * destination and the rotation source get dramatically cheaper.
+     *
+     * It costs internal RAM we did not have until now - and that is the join
+     * between #284 and #285: halving the L2 cache returns 128 KB of exactly the
+     * memory this needs. Two buffers at 16 lines is ~80 KB.
+     *
+     * ⚠ HYPOTHESIS, NOT A CONCLUSION. Four theories about core 0 were falsified
+     * on hardware on 2026-08-28 alone, so this is selectable at RUNTIME and
+     * defaults to the long-standing behaviour. `{"action":"gfx_exp",
+     * "internal":true,"lines":16}` stores the choice and reboots, so an A/B
+     * costs a reboot rather than a rebuild.
+     *
+     * ⛔ The size is checked against the LARGEST FREE BLOCK before asking, not
+     * after failing: bsp_display_start_with_config() returning NULL aborts the
+     * boot inside ESP_ERROR_CHECK, and retrying it after a partial init would
+     * be worse than not trying. If the memory is not there we log and stay on
+     * PSRAM.
+     * ----------------------------------------------------------------- */
+    bool want_internal = false;
+    int  buf_lines     = 36;
+    {
+        nvs_handle_t h;
+        if (nvs_open("devgfx", NVS_READONLY, &h) == ESP_OK) {
+            uint8_t v = 0;
+            if (nvs_get_u8(h, "internal", &v) == ESP_OK) want_internal = (v != 0);
+            uint8_t l = 0;
+            if (nvs_get_u8(h, "lines", &l) == ESP_OK && l >= 4 && l <= 64) buf_lines = l;
+            nvs_close(h);
+        }
+        if (want_internal) {
+            size_t need = (size_t)DISPLAY_H_RES * (size_t)buf_lines * 2;  // one buffer
+            // Each buffer must be contiguous, and leave real headroom: the SD
+            // mount alone needs ~26 KB of this pool later in the boot.
+            size_t largest = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
+            size_t total   = heap_caps_get_free_size(MALLOC_CAP_DMA);
+            // ⛔ 200 KB, not 48 KB - and the first version of this guard was
+            // WRONG in a way that took the device off the network. It checked
+            // the pool as it stands at display_init(), which is early: ~174 KB
+            // free. WiFi then takes ~111 KB of the SAME pool later in the boot,
+            // and the SD mount another ~26 KB. With 2 x 20 KB of draw buffers
+            // removed on top, the log read `int free=6KB (min=0KB lblk=2KB
+            // LOW!)` and the web server died while LVGL carried on at 27.9 fps -
+            // a device that looks fine on its screen and cannot be reached.
+            // A guard on a pool that has not finished being spent has to budget
+            // for the spending that is still coming.
+            if (largest < need || total < need * 2 + 200 * 1024) {
+                ESP_LOGW(TAG, "draw buffers stay in PSRAM: wanted 2 x %u B internal, "
+                              "largest free block %u B, total %u B",
+                         (unsigned)need, (unsigned)largest, (unsigned)total);
+                want_internal = false;
+            }
+        }
+        ESP_LOGW(TAG, "LVGL draw buffers: 2 x %d lines in %s",
+                 buf_lines, want_internal ? "INTERNAL RAM" : "PSRAM");
+    }
+
     bsp_display_cfg_t cfg = {
         .lvgl_port_cfg = {
             .task_priority    = 4,
@@ -136,20 +280,26 @@ esp_err_t display_init(lv_display_t **out_disp)
         // residency is evidently NOT the binding cost - tripling the flush count
         // (20 -> 60 per frame) cost more than any cache benefit bought.
         // Recorded so nobody spends another power cycle on it.
-        .buffer_size   = DISPLAY_H_RES * 36,
+        .buffer_size   = 0,   /* set from buf_lines just below */
         .double_buffer = true,
         .flags = {
-            .buff_dma    = 0,
+            .buff_dma    = 0,   /* set from want_internal just below */
             .buff_spiram = 1,
             .sw_rotate   = 1,   // Phase 6.2: enable LVGL software rotation
         },
     };
+
+    cfg.buffer_size        = DISPLAY_H_RES * buf_lines;
+    cfg.flags.buff_dma     = want_internal ? 1 : 0;
+    cfg.flags.buff_spiram  = want_internal ? 0 : 1;
 
     s_disp = bsp_display_start_with_config(&cfg);
     if (!s_disp) {
         ESP_LOGE(TAG, "bsp_display_start_with_config failed");
         return ESP_FAIL;
     }
+    lv_display_add_event_cb(s_disp, disp_refr_ready_cb, LV_EVENT_REFR_READY, NULL);
+    lv_display_add_event_cb(s_disp, disp_inval_area_cb, LV_EVENT_INVALIDATE_AREA, NULL);
 
     // Raise the AXI arbitration priority of the DW-GDMA masters (the DMA that
     // continuously streams the 1280x720 RGB565 framebuffer from PSRAM into the

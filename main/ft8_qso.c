@@ -211,6 +211,85 @@ static bool s_final_hold = false;
 static char               s_logged_call[FT8_CALL_MAX_LEN];
 static uint32_t           s_logged_freq_hz;
 static int64_t            s_logged_ts;
+
+// ---------------------------------------------------------------------------
+// RECENTLY-WORKED GRACE (Gyula HA3HZ, 2026-08-28; BD4AHS said the same on
+// 2026-08-06 and was told to tick a checkbox)
+//
+// The decode list greys a row whenever adif_log_contains_call_on_band() says we
+// have logged that station on this band - UNCONDITIONALLY. Every ENGINE path
+// skipped the same station only `if (excl_worked_before && ...)`. So on the
+// default the screen said "worked" in dim grey and the machine called them
+// again anyway: *"When I finish a QSO and his callsign turns gray, he calls
+// again shortly after - as if there was no previous completed QSO."*
+//
+// Two field reports of one behaviour is evidence the default is wrong, not that
+// two operators misconfigured it. But the checkbox is not simply wrong either -
+// an operator may legitimately want to re-work a station later, after a band
+// opening changes. So the fix is bounded in TIME rather than absolute: the
+// UNATTENDED pickers never re-work a station logged on this band within
+// RECENT_WORKED_GRACE_SEC, whatever the checkbox says, and beyond that window
+// the checkbox rules exactly as before.
+//
+// ⭐ There is a second, harder reason this must be unconditional. The duplicate
+// guard above REFUSES TO LOG a repeat inside QSO_DUP_LOG_WINDOW_SEC - so
+// without this, the machine transmits a complete exchange, keys the radio for
+// ~12.6 s per burst, and then throws the result away. Working a contact we have
+// already decided not to log is worse than declining to work it.
+//
+// ⚠ RAM-only, deliberately. It answers "did we work them in this session,
+// recently", which is exactly the reported symptom; the ADIF log (via the
+// checkbox) still covers everything older. A reboot clearing it is harmless
+// because the grace is minutes, not days. A ring rather than one slot because
+// the existing s_logged_* is a single entry - fine for the dup guard, useless
+// here the moment one other station is worked in between.
+#define RECENT_WORKED_MAX        16
+#define RECENT_WORKED_GRACE_SEC  (30 * 60)
+static struct {
+    char    call[FT8_CALL_MAX_LEN];
+    char    band[8];
+    int64_t ts;
+} s_recent[RECENT_WORKED_MAX];
+static int s_recent_head;
+
+static void note_worked_now(const char *call, uint32_t freq_hz)
+{
+    if (!call || !call[0]) return;
+    const char *band = adif_log_band_for_freq(freq_hz);
+    // Refresh an existing entry rather than filling the ring with one station.
+    for (int i = 0; i < RECENT_WORKED_MAX; i++) {
+        if (s_recent[i].call[0] && strcmp(s_recent[i].call, call) == 0 &&
+            strcmp(s_recent[i].band, band) == 0) {
+            s_recent[i].ts = (int64_t)time(NULL);
+            return;
+        }
+    }
+    int i = s_recent_head;
+    s_recent_head = (s_recent_head + 1) % RECENT_WORKED_MAX;
+    snprintf(s_recent[i].call, sizeof(s_recent[i].call), "%s", call);
+    snprintf(s_recent[i].band, sizeof(s_recent[i].band), "%s", band);
+    s_recent[i].ts = (int64_t)time(NULL);
+}
+
+bool ft8_qso_worked_recently(const char *call, uint32_t freq_hz)
+{
+    if (!call || !call[0]) return false;
+    // ⛔ Never let an unset clock turn this into a permanent skip. time(NULL) is
+    // small before the first sync, so a stored ts of 0 would read as "worked
+    // 56 years ago" or, worse, "worked in the future" and could refuse every
+    // station. Require a plausible epoch on BOTH sides.
+    int64_t now = (int64_t)time(NULL);
+    if (now < 1700000000) return false;          // clock not set yet - no grace
+    const char *band = adif_log_band_for_freq(freq_hz);
+    for (int i = 0; i < RECENT_WORKED_MAX; i++) {
+        if (!s_recent[i].call[0]) continue;
+        if (strcmp(s_recent[i].call, call) != 0) continue;
+        if (strcmp(s_recent[i].band, band) != 0) continue;
+        int64_t age = now - s_recent[i].ts;
+        if (age >= 0 && age < RECENT_WORKED_GRACE_SEC) return true;
+    }
+    return false;
+}
 // Signal reports captured during the exchange for ADIF logging.
 // Pounce: rst_rcvd = what they told us; rst_sent = our own locally-measured SNR
 //   of them (the protocol never has us transmit a numeric report of them - TX2
@@ -645,6 +724,10 @@ static bool scan_for_reply_to_me(int64_t slot_sec,
         // the robot applies to CQ callers). Band-aware: a new band is a new slot.
         if (qs.ft8_filters.excl_worked_before &&
             adif_log_contains_call_on_band(tok2, cat_get_frequency())) continue;
+        // ...and never inside the grace window, checkbox or not: the duplicate
+        // guard would refuse to LOG the result, so answering would key the radio
+        // through a whole exchange and throw it away (Gyula HA3HZ, 2026-08-28).
+        if (ft8_qso_worked_recently(tok2, cat_get_frequency())) continue;
         if (snap[i].last_snr_db > best_snr) {
             best_snr = snap[i].last_snr_db;
             best_idx = i;
@@ -1793,6 +1876,11 @@ static bool try_start_pileup_pounce(void)
         // rule the robot enforces, so auto-work never re-calls a logged station.
         if (qs.ft8_filters.excl_worked_before &&
             adif_log_contains_call_on_band(pile[i].call, cat_get_frequency())) continue;
+        // ...and never inside the grace window, checkbox or not. Deliberately
+        // NOT applied to capture_pileup_callers() above: a recently-worked
+        // caller stays VISIBLE in the pileup so the operator can still pick
+        // them by hand - this only stops the machine doing it unattended.
+        if (ft8_qso_worked_recently(pile[i].call, cat_get_frequency())) continue;
         // Grey-listed (repeated failed pounces) - don't auto-drain into them.
         if (qs.greylist_en && ft8_greylist_contains(pile[i].call)) continue;
         if (best < 0 || pile[i].snr_db > pile[best].snr_db) best = i;
@@ -2298,6 +2386,10 @@ void ft8_qso_advance(int64_t slot_sec)
                 s_logged_freq_hz = qso.freq_hz;
                 s_logged_ts      = (int64_t)time(NULL);
             }
+            // Grace ring: note it on BOTH branches. A contact reaching DONE a
+            // second time is still one we have just worked, and it is precisely
+            // the case the unattended pickers must not pick up again.
+            note_worked_now(target, qso.freq_hz);
             s_fd_their_exch[0] = '\0';
         }
         return;

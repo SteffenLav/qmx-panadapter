@@ -275,3 +275,16 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # handle in every block header, so free figures on this build read LOW.
 # ⛔ REMOVE with the instrument - see the checklist in TODO #283.
 CONFIG_HEAP_TASK_TRACKING=y
+
+# NimBLE host task on CORE 1, not the IDF default of core 0.
+# Measured 2026-08-28 (#285): with Bluetooth enabled and NOTHING connected, the
+# BLE host processes advertisements at priority 21 on core 0 - the same core as
+# taskLVGL (73.9%), audio_task and render - and was seen taking 6.6% of it, with
+# core-0 idle falling 6.9-7.6% -> 4.2-4.7%. An hour earlier the task did not
+# appear in the top 16 at all, so the cost tracks HOW MANY BLE DEVICES ARE
+# NEARBY: the panadapter gets jerkier because of the room, not because of
+# anything the operator did. That is the worst shape a performance bug can have.
+# Core 1 idles at ~89%, and 6.6% at priority 21 is a very different proposition
+# from the 70% that broke fft_task when taskLVGL was moved there - but WATCH THE
+# AUDIO DROP COUNTER after changing this, because that is the canary (#51).
+CONFIG_BT_NIMBLE_PINNED_TO_CORE_1=y

@@ -745,6 +745,61 @@ Do not re-take them** — each cost a QMX power cycle:
 The reasoning for each is in the comments at the relevant lines in
 `main/display/display.c` and `sdkconfig.defaults`.
 
+### ⭐ The panadapter's load, ACCOUNTED FOR: 10 Hz x a full-canvas invalidate
+`render.c`'s `RENDER_PERIOD_MS` is **100**, so the render task pushes one
+waterfall row 10 times a second - and `ui_push_waterfall_row()` ends with
+`lv_canvas_set_buffer()`, which **invalidates the whole object** (lv_canvas.c).
+So the entire 1280x370 waterfall is redrawn ten times a second in order to add
+one row, and the spectrum canvas the same when it has new data.
+
+The arithmetic and the instrument agree, which is what makes this solid rather
+than another theory:
+
+| | predicted | measured (`inval kpx/s`, radio OFF) |
+|---|---|---|
+| waterfall only, 10 Hz x 1280x370 | 4.74 Mpx/s | **4.7-4.9 Mpx/s** |
+| + spectrum, 10 Hz x 1280x200 (radio ON) | ~7.3 Mpx/s | not yet measured |
+
+With the radio off the spectrum canvas never invalidates (no new DSP data), which
+is exactly why the measured figure lands on the waterfall term alone. `fps` reads
+~28 because small widgets (the clock, the spot lane) refresh in between; the
+EXPENSIVE invalidations happen 10x/s. **So fps alone is useless as a load metric
+on this device** - `idle0`, `fps` and `inval kpx/s` are all three in the periodic
+line for that reason.
+
+⛔ **BUT THE COST PER PIXEL IS NOT YET ESTABLISHED, and neither is any fix.**
+Measured 2026-08-28 with the radio off, core-0 idle swings **47-57%** at a
+constant ~4.7 Mpx/s, purely on background activity - BLE scanning comes in bursts
+(`nimble_host` was 6.6% of core 0 in one sample and absent from the next) and the
+RBN/DX feeds add more. That noise band swallowed a whole experiment: putting the
+LVGL draw buffers in internal RAM instead of PSRAM measured 49-51% against
+57-58%, and **that difference is INSIDE the noise, so it proves nothing either
+way.** It is retracted rather than recorded.
+
+⚠ **So before the next attempt on this, fix the MEASUREMENT first**: quiesce BLE
+and the feeds, take many samples per configuration, and normalise by
+`inval kpx/s` rather than comparing raw idle figures. An effect smaller than
+10 points of core 0 cannot currently be seen at all.
+
+⚠ **Untested idea worth keeping, explicitly a hypothesis:** on the ESP32-P4 the
+L2 cache and the L2MEM heap are the SAME physical SRAM (`memory_layout.c` sizes
+the heap region as `SOC_DRAM_HIGH - CONFIG_CACHE_L2_CACHE_SIZE - ...`). If that
+means data placed in "fast internal RAM" is no faster than PSRAM behind a large
+cache - and costs cache to hold - it would explain both the L2-cache result and
+the draw-buffer result with one mechanism. It would also mean **this board's
+internal RAM is valuable for DMA reach, not for speed.** Nothing here tests that.
+
+⛔ **The draw-buffer location is runtime-selectable and DEFAULTS TO PSRAM:**
+`{"action":"gfx_exp","internal":true,"lines":16}` stores the choice in the
+`devgfx` NVS namespace and reboots. Its pre-flight guard requires **200 KB** of
+`MALLOC_CAP_DMA` free, and the first version requiring 48 KB **took the device
+off the network**: it checked the pool at `display_init()` (~174 KB free) without
+budgeting for WiFi's ~111 KB and the SD mount's ~26 KB later in the same boot.
+The log read `int free=6KB (min=0KB lblk=2KB LOW!)` while LVGL carried on at 27.9
+fps - a unit that looks perfect on its own screen and cannot be reached.
+**A guard on a resource that has not finished being spent must budget for the
+spending still to come.**
+
 ⚠ **PPA is the only untried hardware path left** and it was ruled out for a
 GDMA *channel-allocation* conflict with the USB host, not for an inability. If
 core-0 headroom is ever needed badly, re-examine it on the channel counts

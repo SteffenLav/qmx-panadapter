@@ -299,6 +299,33 @@ int ft8_find_clear_tone_hz_near(int center_hz);
 // the decode table is empty.  Safe to call from any task at 1 Hz or less.
 bool ft8_tx_is_clashing(void);
 
+// How BAD the clash is, for the display only. Gyula HA3HZ, 2026-08-28: "The freq
+// busy with red is also present when the other station is on the other side of
+// the earth and I can see his signal e.g. with -32. When I first used the
+// Panadapter, I jumped to the red message and changed the frequency, while I
+// shouldn't have because the partner didn't see my signal and the QSO was
+// broken." He is right - the test had no strength gate at all, so a -32 dB trace
+// read exactly like a loud local. He suggested colouring by DISTANCE; SNR is the
+// better proxy because we measure it directly and a distant station without a
+// grid has no distance.
+//
+// ⛔ ENGINE BEHAVIOUR IS UNCHANGED. ft8_tx_is_clashing() still reports any
+// collision, so relocate_cq_tone_if_clashing() keeps moving a CQ off an occupied
+// slot however weak the occupant - moving a CQ is free and staying put is not.
+// Only what the OPERATOR is shown is graded.
+typedef enum {
+    FT8_CLASH_NONE = 0,
+    FT8_CLASH_WEAK,      // someone is there, but faint - information, not an alarm
+    FT8_CLASH_STRONG,    // a real presence at our offset in our window
+} ft8_clash_t;
+
+// SNR at or above which a colliding station counts as STRONG. A judgement call,
+// not a measurement: FT8 reports run about -24..+15, so -15 keeps genuinely
+// loud neighbours red while a trace at the decode floor stops shouting.
+#define FT8_CLASH_STRONG_SNR_DB (-15)
+
+ft8_clash_t ft8_tx_clash_level(void);
+
 // ---- Consumed only by ft8_task's slot loop (ft8_test.c) --------------------
 
 // True if a request is currently ARMED and its required parity matches this

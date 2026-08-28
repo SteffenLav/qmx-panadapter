@@ -1656,7 +1656,32 @@ static void t_clock_cb(lv_timer_t *t)
         // it vanishes the instant TX ends (QSO finish or cancel), by request.
         if (s_lbl_tx_pswr) lv_obj_add_flag(s_lbl_tx_pswr, LV_OBJ_FLAG_HIDDEN);
 
-        bool clash = (tx_st != FT8_TX_IDLE) && ft8_tx_is_clashing();
+        // Clash: GRADED, and suppressed on screen mid-exchange (Gyula HA3HZ,
+        // 2026-08-28). He reported both halves of the same fault: *"The freq busy
+        // with red is also present when the other station is on the other side of
+        // the earth and I can see his signal e.g. with -32"*, and then *"I jumped
+        // to the red message and changed the frequency, while I shouldn't have
+        // because the partner didn't see my signal and the QSO was broken."*
+        //
+        // Two separate problems, and the second is the one that cost him a
+        // contact. During an exchange the tone is LOCKED to the partner by design
+        // - relocate_cq_tone_if_clashing() only ever moves a CQ between cycles -
+        // so a warning shown then cannot be acted on correctly. Showing an
+        // alarm at the one moment when obeying it is wrong is a UI fault whatever
+        // the detection says, so the SCREEN goes quiet in those states.
+        //
+        // ⛔ The LOG does not. #201 exists because "FREQ BUSY" was screen-only
+        // and Roy KI0ER's 29 minutes of diagnostic log never contained the
+        // string, so his report could not be investigated at all. Suppressing
+        // the display must not re-create that: raw_lvl is logged unconditionally.
+        const ft8_clash_t raw_lvl = (tx_st != FT8_TX_IDLE) ? ft8_tx_clash_level()
+                                                           : FT8_CLASH_NONE;
+        const bool in_exchange = (qso_st == FT8_QSO_WAIT_RPT  ||
+                                  qso_st == FT8_QSO_WAIT_ROGER ||
+                                  qso_st == FT8_QSO_WAIT_RR73 ||
+                                  qso_st == FT8_QSO_WAIT_DONE);
+        const ft8_clash_t clash_lvl = in_exchange ? FT8_CLASH_NONE : raw_lvl;
+        bool clash = (clash_lvl != FT8_CLASH_NONE);
 
         // ⛔ LOG THE CLASH. "⚠ FREQ BUSY" was a screen-only state: Roy KI0ER
         // photographed it and sent 29 minutes of diagnostic log in which the
@@ -1670,13 +1695,20 @@ static void t_clock_cb(lv_timer_t *t)
         // the map is empty and the warning is about nothing.
         {
             static int s_clash_logged = -1;
-            if ((int)clash != s_clash_logged) {
-                s_clash_logged = (int)clash;
+            int now_lvl = (int)raw_lvl * 2 + (in_exchange ? 1 : 0);
+            if (now_lvl != s_clash_logged) {
+                s_clash_logged = now_lvl;
                 int n_slots = 0, n_stations = 0;
                 (void)ft8_tx_get_tone_occupancy(&n_slots, &n_stations);
-                ESP_LOGI(TAG, "TX clash %s: tone=%d Hz, occupancy %d/%d slots busy from %d station(s)",
-                         clash ? "DETECTED" : "cleared",
-                         ft8_qso_get_tx_tone_hz(), n_slots, 52, n_stations);
+                ESP_LOGI(TAG, "TX clash %s: tone=%d Hz, occupancy %d/%d slots busy "
+                              "from %d station(s)%s",
+                         raw_lvl == FT8_CLASH_STRONG ? "DETECTED (strong)"
+                       : raw_lvl == FT8_CLASH_WEAK   ? "DETECTED (weak)"
+                                                     : "cleared",
+                         ft8_qso_get_tx_tone_hz(), n_slots, 52, n_stations,
+                         (raw_lvl != FT8_CLASH_NONE && in_exchange)
+                             ? " - not shown: mid-exchange, the tone is locked to the partner"
+                             : "");
             }
         }
 
@@ -1759,14 +1791,20 @@ static void t_clock_cb(lv_timer_t *t)
             // the state where it's still changeable, so the chip is where the
             // operator should be looking anyway.
             if (clash)
-                snprintf(b, sizeof(b), "TX armed:\n%s%s\n%s slot, ~%ds\nTAP TO CANCEL\n" LV_SYMBOL_WARNING " FREQ BUSY",
-                         tx_text, cq_line, tx_even ? "EVEN" : "ODD", secs_until);
+                snprintf(b, sizeof(b), "TX armed:\n%s%s\n%s slot, ~%ds\nTAP TO CANCEL\n" LV_SYMBOL_WARNING " FREQ BUSY%s",
+                         tx_text, cq_line, tx_even ? "EVEN" : "ODD", secs_until,
+                         (clash_lvl == FT8_CLASH_WEAK) ? " (weak)" : "");
             else
                 snprintf(b, sizeof(b), "TX armed:\n%s%s\n%s slot, ~%ds\nTAP TO CANCEL",
                          tx_text, cq_line, tx_even ? "EVEN" : "ODD", secs_until);
             lv_label_set_text(s_lbl_tx, b);
+            // Graded rather than binary: a loud neighbour still gets the
+            // red-orange, a faint one stays close to the normal armed amber so
+            // it reads as information instead of an instruction.
             lv_obj_set_style_text_color(s_lbl_tx,
-                clash ? lv_color_hex(0xFF4010) : lv_color_hex(0xFFA040), 0);
+                (clash_lvl == FT8_CLASH_STRONG) ? lv_color_hex(0xFF4010)
+              : (clash_lvl == FT8_CLASH_WEAK)   ? lv_color_hex(0xFFC060)
+                                                : lv_color_hex(0xFFA040), 0);
 
         } else if (qso_st == FT8_QSO_DONE) {
             // Bright green: QSO complete

@@ -166,6 +166,11 @@ void ui_set_cat_paused(bool paused);
  * /api/cmd {"action":"drawer"} dev action so a layout change can be checked on
  * a screenshot. Call with the display lock held. */
 void ui_set_drawer_open(bool open);
+
+// TEMP (#285): hide the spectrum/waterfall canvases so LVGL's drawing cost can
+// be decomposed against cpu_owners. bit0=spectrum, bit1=waterfall. Delete with
+// the #284/#285 instruments.
+void ui_dev_canvas_hide(unsigned mask);
 void ui_set_drawer_expert(bool expert);
 /* Scroll the open drawer so a section below the fold can be screenshotted. */
 void ui_set_drawer_scroll_y(int y);

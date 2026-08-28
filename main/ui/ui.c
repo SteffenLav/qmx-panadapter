@@ -11456,3 +11456,47 @@ void ui_kbd_bridge_init(void)
     kbd_bindings_load();     // before the first keystroke can arrive
     tab5_keyboard_set_text_cb(kbd_text_cb, NULL);
 }
+
+/* =========================================================================
+ * TEMP INSTRUMENT (#285, 2026-08-28) - DELETE WITH THE #284/#285 DIAGNOSIS.
+ *
+ * WHY: cpu_owners_report() showed taskLVGL at 73.9% of core 0, and neutering
+ * rotate90_rgb565 proved only ~7 of those points are the software rotation. So
+ * ~66 points is LVGL DRAWING, and the two candidates are the spectrum and the
+ * waterfall - the waterfall especially, because its view offset moves every
+ * tick, which may force LVGL to re-blit the whole visible 1280x370 canvas from
+ * PSRAM into the draw buffer on every frame.
+ *
+ * That is a HYPOTHESIS. Four hypotheses about core 0 were falsified on hardware
+ * in a single day (a cache working set, a smaller flush strip, moving the LVGL
+ * task to core 1, and the rotation itself), each costing a QMX power cycle. So
+ * this measures instead of assuming: hide one canvas, re-sample cpu_owners, and
+ * read the difference.
+ *
+ * Hiding is the right lever rather than stopping the render task: LVGL skips a
+ * hidden object entirely, while render.c/render_waterfall.c keep computing and
+ * writing into the canvas buffers exactly as before. So the delta is LVGL's
+ * drawing cost alone, with the producer side held constant - and `render` is a
+ * separate task on the same core (8.6%), already accounted for separately.
+ *
+ * mask: bit0 = hide the spectrum, bit1 = hide the waterfall, 0 = show both.
+ * ========================================================================= */
+void ui_dev_canvas_hide(unsigned mask)
+{
+    /* Recursive lock - safe from the httpd task, a no-op on the LVGL thread. */
+    if (!display_lock(200)) {
+        ESP_LOGW(TAG, "canvas_hide: could not take the display lock");
+        return;
+    }
+    if (s_spectrum_obj) {
+        if (mask & 1u) lv_obj_add_flag(s_spectrum_obj, LV_OBJ_FLAG_HIDDEN);
+        else           lv_obj_clear_flag(s_spectrum_obj, LV_OBJ_FLAG_HIDDEN);
+    }
+    if (s_waterfall_obj) {
+        if (mask & 2u) lv_obj_add_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN);
+        else           lv_obj_clear_flag(s_waterfall_obj, LV_OBJ_FLAG_HIDDEN);
+    }
+    display_unlock();
+    ESP_LOGW(TAG, "canvas_hide: mask=%u (spectrum %s, waterfall %s)", mask,
+             (mask & 1u) ? "HIDDEN" : "shown", (mask & 2u) ? "HIDDEN" : "shown");
+}

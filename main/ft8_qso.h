@@ -198,3 +198,12 @@ bool ft8_qso_get_working_target(char *buf, size_t len);
 // Note: this covers only the term filters; worked-before / plain-CQ toggles
 // are enforced by the caller.
 bool ft8_filter_match(const char *text, const ft8_filters_t *f);
+
+// True if this callsign was worked on this band inside the recently-worked
+// grace window (30 min, RAM-only, cleared by a reboot). The UNATTENDED pickers
+// consult this regardless of the "Exclude worked-before" checkbox, because the
+// decode list already greys such a station unconditionally and because the
+// duplicate guard would refuse to LOG a repeat inside its own window - so
+// working one would key the radio through a full exchange and discard it.
+// Gyula HA3HZ 2026-08-28, and BD4AHS said the same on 2026-08-06.
+bool ft8_qso_worked_recently(const char *call, uint32_t freq_hz);
