@@ -23,7 +23,7 @@
   "benches": [
     {
       "name": "dev",
-      "role": "ON LOAN TO THE WSPR WORK since 2026-08-26 - see tree/branch below.",
+      "role": "Runs the newest main commit. The WSPR loan ended 2026-08-28 when feat/wspr-page merged to main.",
       "role_note": [
        "This bench normally runs the newest main commit. It is the WSPR",
        "development board at the moment because 'lab', which is supposed to",
@@ -42,8 +42,8 @@
       "com": "COM3",
       "com_planned": "COM20",
       "radio": "QMX (small)",
-      "tree": "C:/dev/qmx-panadapter-wspr",
-      "branch": "feat/wspr-page",
+      "tree": "C:/dev/qmx-panadapter",
+      "branch": "main",
       "capture": "C:/dev/qmx-panadapter/scratchpad/capture-dev.txt",
       "usb_flash": "yes"
     },
