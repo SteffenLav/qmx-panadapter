@@ -1908,14 +1908,14 @@ static const drawer_item_t GRP_RADIO[] = {
 // for the switch would not have found it behind Expert. It is a question about
 // what the network connection does unasked, so it belongs beside WiFi.
 static const drawer_item_t GRP_NETWORK[] = {
-    { DRAWER_SEC_WIFI, "WiFi setup", false },
+    { DRAWER_SEC_WIFI, "WiFi setup", true },
     { DRAWER_SEC_OTADL, "Download updates in the background", false },
     { DRAWER_SEC_SPOTS, "Live spots (POTA/RBN/DX/SOTA)", false },
     { DRAWER_SEC_BT, "Bluetooth mouse", false },
 };
 // Flip 180 last: it is the least-touched control in the group (operator).
 static const drawer_item_t GRP_DISPLAY[] = {
-    { DRAWER_SEC_BRIGHTNESS, "Display brightness", false },
+    { DRAWER_SEC_BRIGHTNESS, "Display brightness", true },
     { DRAWER_SEC_SLEEP, "Display sleep", false },
     { DRAWER_SEC_CMAP, "Waterfall colour map", false },
     { DRAWER_SEC_FLIP, "Flip 180 degrees", false },
