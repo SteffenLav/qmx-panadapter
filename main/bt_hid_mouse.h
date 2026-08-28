@@ -9,4 +9,14 @@
 // by default: this starts a second radio subsystem on this board's most
 // fragile link, so it must be something the operator opts into.
 void bt_hid_mouse_init(void);
+
+// Is the NimBLE stack actually up? This is the RADIO, not the setting - the
+// bottom-bar glyph is driven from it so that unticking the box cannot grey out
+// an icon for a radio that is still transmitting (#270, Don N2VGU).
 bool bt_hid_mouse_started(void);
+
+// What bt_mouse_en said when this boot began, i.e. whether the radio was ever
+// going to come up this session. Differs from bt_hid_mouse_started() only
+// during the seconds NimBLE spends waiting for the C6 link, which is exactly
+// when a "restart pending?" test would otherwise get the wrong answer.
+bool bt_hid_mouse_enabled_at_boot(void);

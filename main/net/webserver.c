@@ -690,14 +690,21 @@ static esp_err_t status_handler(httpd_req_t *req)
         cJSON_AddNumberToObject(tn, "watts", pw);
         cJSON_AddNumberToObject(tn, "swr",   swr);
     }
-    // Bluetooth, mirroring the Tab5's bottom-bar glyph: "enabled" and
+    // Bluetooth, mirroring the Tab5's bottom-bar glyph: "the radio is up" and
     // "something is actually connected" are separate facts.
+    // "en" reports the RADIO, not the setting. It used to be ANDed with
+    // bt_mouse_en, which meant unticking the box reported Bluetooth off while
+    // NimBLE was still running - the setting only takes effect at the next boot
+    // (#270, Don N2VGU). "pending" is the disagreement, so a browser can say a
+    // restart is owed rather than leaving the operator to notice.
     {
         qmx_settings_t bs;
         settings_load_all(&bs);
         cJSON *bt = cJSON_AddObjectToObject(root, "bt");
-        cJSON_AddBoolToObject(bt, "en",   bs.bt_mouse_en && bt_hid_mouse_started());
-        cJSON_AddBoolToObject(bt, "conn", hid_cursor_present());
+        cJSON_AddBoolToObject(bt, "en",      bt_hid_mouse_started());
+        cJSON_AddBoolToObject(bt, "conn",    hid_cursor_present());
+        cJSON_AddBoolToObject(bt, "want",    bs.bt_mouse_en);
+        cJSON_AddBoolToObject(bt, "pending", bs.bt_mouse_en != bt_hid_mouse_enabled_at_boot());
     }
     cJSON_AddBoolToObject(root, "tune_ok", cat_qmx_fw_at_least(1, 4, 0));
     // Paused = the operator has released the radio to its own menu. Everything

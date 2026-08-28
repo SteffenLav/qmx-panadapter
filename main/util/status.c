@@ -527,12 +527,14 @@ static void status_task(void *arg)
         ui_set_bottom_wifi(ssid_buf, connected, rssi, suffix_buf);
         // Bluetooth, next to it. "Started" and "a mouse is on the other end"
         // are separate facts and the glyph shows both.
-        {
-            qmx_settings_t bs;
-            settings_load_all(&bs);
-            ui_set_bottom_bt(bs.bt_mouse_en && bt_hid_mouse_started(),
-                             hid_cursor_present());
-        }
+        // The first fact is the RADIO, and only the radio. This used to be
+        // ANDed with the bt_mouse_en setting, so unticking the box greyed the
+        // glyph out at once while NimBLE went on running until the next boot -
+        // "the icon does not truly reflect the state of the radio... a user
+        // needed to have the BT radio off but neglected to restart" (#270, Don
+        // N2VGU). The drawer offers the restart; the glyph must not pretend it
+        // already happened.
+        ui_set_bottom_bt(bt_hid_mouse_started(), hid_cursor_present());
     }
 }
 

@@ -120,7 +120,7 @@ static void close_modal(void)
 static void later_btn_cb(lv_event_t *e)
 {
     (void)e;
-    // "Later" does NOT cancel a download in flight. This is a window, not a
+    // Dismiss does NOT cancel a download in flight. This is a window, not a
     // switch; closing it would have to either abort the transfer (throwing away
     // bandwidth the operator already spent) or silently keep going, and only
     // one of those is honest. The bottom-bar line keeps saying where things
@@ -264,7 +264,9 @@ static void refresh(void)
     }
 
     // The dismiss button says what dismissing means in this state.
-    lv_label_set_text(s_no_lbl, (st == OTA_RUNNING) ? "Close" : "Later");
+    // "Dismiss", not "Later" - Don N2VGU: "Later" reads as scheduling
+    // something, and this button does one thing, which is close the window.
+    lv_label_set_text(s_no_lbl, (st == OTA_RUNNING) ? "Close" : "Dismiss");
 }
 
 static void timer_cb(lv_timer_t *t)
@@ -353,7 +355,7 @@ static void modal_build(void)
     lv_obj_set_style_radius(s_no_btn, 8, 0);
     lv_obj_add_event_cb(s_no_btn, later_btn_cb, LV_EVENT_CLICKED, NULL);
     s_no_lbl = lv_label_create(s_no_btn);
-    lv_label_set_text(s_no_lbl, "Later");
+    lv_label_set_text(s_no_lbl, "Dismiss");
     lv_obj_set_style_text_color(s_no_lbl, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_text_font(s_no_lbl, &lv_font_montserrat_24, 0);
     lv_obj_center(s_no_lbl);
@@ -369,7 +371,7 @@ void ota_modal_show(void)
     s_open = true;
     lv_obj_clear_flag(s_modal, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_modal);
-    ui_kbd_set_buttons(s_ok_btn, s_no_btn);   // Enter = the action, Esc = Later
+    ui_kbd_set_buttons(s_ok_btn, s_no_btn);   // Enter = the action, Esc = Dismiss
     refresh();
     // 500 ms: fast enough that a percentage looks live, slow enough to be
     // free. Only exists while the window is open.

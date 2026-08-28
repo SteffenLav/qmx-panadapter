@@ -63,6 +63,8 @@
 #include "qmx_term_view.h"     // "Radio menus" - the QMX's own menu system (#147)
 #include "ft8_test.h"
 #include "esp_lcd_touch.h"
+#include "esp_system.h"        // esp_restart - the drawer's "Restart now" (#270)
+#include "bt_hid_mouse.h"      // is the BLE radio actually up, and was it at boot
 
 static const char *TAG = "ui";
 
@@ -1964,6 +1966,10 @@ static lv_obj_t *s_dropdown_cmap = NULL;
 static lv_obj_t *s_dropdown_bpregion = NULL;  // band-plan region picker
 static lv_obj_t *s_dropdown_swrlim   = NULL;  // SWR protection limit picker
 static lv_obj_t *s_cb_bt             = NULL;  // Bluetooth mouse enable
+// "Restart now", shown only while the setting and the running radio disagree.
+// A button that appears when it would do something and is absent otherwise is
+// the only version of this that cannot mislead (#270).
+static lv_obj_t *s_bt_restart_btn    = NULL;
 static lv_obj_t *s_check_cluster     = NULL;  // DX cluster spot source
 static lv_obj_t *s_check_spotmode    = NULL;  // show only the current mode's spots
 static lv_obj_t *s_slider_brightness = NULL;
@@ -2056,6 +2062,15 @@ static void drawer_spotmode_cb(lv_event_t *e)
 }
 
 static void drawer_bt_cb(lv_event_t *e);
+// The Bluetooth section is two heights: the switch alone, or the switch plus a
+// "Restart now" button. The relayout reads s_drawer_section_h[], so switching
+// between them is a matter of setting that and re-running it - no second table
+// of heights to keep in step by hand, which is the mistake this drawer has
+// made twice (see drawer_section()).
+#define DRAWER_BT_H_PLAIN     100
+#define DRAWER_BT_H_PENDING   164
+static void drawer_bt_restart_cb(lv_event_t *e);
+static void drawer_bt_restart_refresh(void);
 static void drawer_cluster_cb(lv_event_t *e);
 static void drawer_slider_brightness_cb(lv_event_t *e);
 static void drawer_slider_qmx_vol_cb(lv_event_t *e);
@@ -8680,7 +8695,7 @@ static void drawer_build(void)
     // (put it in pairing mode with this on) and it reconnects by itself from
     // then on, including across a reboot: the bond lives in NVS.
     {
-        lv_obj_t *sec = drawer_section(DRAWER_SEC_BT, y, 100);
+        lv_obj_t *sec = drawer_section(DRAWER_SEC_BT, y, DRAWER_BT_H_PLAIN);
         lv_obj_t *hdr = lv_label_create(sec);
         lv_label_set_text(hdr, "Bluetooth mouse");
         lv_obj_set_style_text_color(hdr, lv_color_hex(0xA0E0A0), 0);
@@ -8700,7 +8715,26 @@ static void drawer_build(void)
         // x offset 0, matching every other drawer checkbox (Live spots, RBN,
         // Flip 180...). -8 put this one visibly out of the column.
         lv_obj_align(s_cb_bt, LV_ALIGN_TOP_RIGHT, 0, 46);
-        y += 100;
+
+        // The switch does not take effect until the next boot, so offer the
+        // boot. Built hidden and inside the plain-height section, which clips
+        // it; drawer_bt_restart_refresh() grows the section when it is needed
+        // and shrinks it back afterwards, so an operator who never touches the
+        // switch never sees a button-sized hole.
+        s_bt_restart_btn = lv_btn_create(sec);
+        lv_obj_set_size(s_bt_restart_btn, DRAWER_W - 32, 56);
+        lv_obj_align(s_bt_restart_btn, LV_ALIGN_TOP_LEFT, 0, DRAWER_BT_H_PLAIN + 4);
+        lv_obj_set_style_bg_color(s_bt_restart_btn, lv_color_hex(UI_COLOR_PRIMARY), 0);
+        lv_obj_add_event_cb(s_bt_restart_btn, drawer_bt_restart_cb, LV_EVENT_CLICKED, NULL);
+        lv_obj_add_flag(s_bt_restart_btn, LV_OBJ_FLAG_HIDDEN);
+        {
+            lv_obj_t *l = lv_label_create(s_bt_restart_btn);
+            lv_label_set_text(l, "Restart now");
+            lv_obj_set_style_text_font(l, &lv_font_montserrat_28, 0);
+            lv_obj_set_style_text_color(l, lv_color_hex(0xffffff), 0);
+            lv_obj_center(l);
+        }
+        y += DRAWER_BT_H_PLAIN;
     }
 
     // SWR protection: the limit at which a transmit burst is cut short and the
@@ -9534,6 +9568,10 @@ static void drawer_open(void)
     drawer_refresh_activation();
     drawer_refresh_qmx_rf();    // and its per-band RF gain, which changes with the band
     gain_resolve_start();       // ...and repaint whichever of those answers late
+    // A Bluetooth restart can be owed from an earlier visit to the drawer, or
+    // from the web settings page, so the offer is re-tested on every open
+    // rather than only when the switch is tapped here.
+    drawer_bt_restart_refresh();
     s_drawer_open = true;
     // Pull the QMX-wait prompt down now rather than waiting up to a second for its
     // own tick - it was drawing its headline straight across the open drawer.
@@ -10292,6 +10330,52 @@ static void drawer_bt_cb(lv_event_t *e)
     ui_toast(on ? "Bluetooth on after restart - then put the mouse in pairing mode"
                 : "Bluetooth off after restart");
     ESP_LOGI(TAG, "BLE mouse %s (applies on restart)", on ? "enabled" : "disabled");
+    // Offer the restart the toast just asked for - or take the offer away
+    // again if the operator has just put the switch back where it was.
+    drawer_bt_restart_refresh();
+}
+
+// Show the "Restart now" button exactly while the setting and the running
+// radio disagree, and give the section the height to hold it.
+//
+// The test is against what the setting said AT BOOT, not against
+// bt_hid_mouse_started(): NimBLE waits for the C6 link, so "started" is false
+// for the first several seconds of a session in which the radio is coming up
+// perfectly well, and the drawer can be opened inside that window. Comparing
+// with the boot value cannot get that wrong.
+static void drawer_bt_restart_refresh(void)
+{
+    if (!s_bt_restart_btn || !s_drawer_sections[DRAWER_SEC_BT]) return;
+    qmx_settings_t s;
+    settings_load_all(&s);
+    const bool pending = (s.bt_mouse_en != bt_hid_mouse_enabled_at_boot());
+    const int  h       = pending ? DRAWER_BT_H_PENDING : DRAWER_BT_H_PLAIN;
+    if (s_drawer_section_h[DRAWER_SEC_BT] == h) return;   // nothing moved
+
+    if (pending) lv_obj_clear_flag(s_bt_restart_btn, LV_OBJ_FLAG_HIDDEN);
+    else         lv_obj_add_flag(s_bt_restart_btn, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_height(s_drawer_sections[DRAWER_SEC_BT], h);
+    s_drawer_section_h[DRAWER_SEC_BT] = h;
+    // Everything below this section has to move with it. The section walk is
+    // the one place that knows where each section goes, so re-run it rather
+    // than nudging the neighbours by hand.
+    drawer_set_mode(ui_mode_get());
+}
+
+static void drawer_bt_restart_cb(lv_event_t *e)
+{
+    (void)e;
+    ESP_LOGW(TAG, "operator asked for a restart to apply the Bluetooth setting");
+    ui_toast("Restarting...");
+    lv_refr_now(NULL);          // paint it before we stop painting anything
+    // Go dark first, for the reason ota_modal.c's restart does: across
+    // esp_restart() the backlight stays lit from the previous run, and
+    // display_init() does not pull it down until ~2-3 s into boot - so without
+    // this the operator gets a few seconds of bright empty panel.
+    vTaskDelay(pdMS_TO_TICKS(400));
+    display_set_brightness(0);
+    vTaskDelay(pdMS_TO_TICKS(80));
+    esp_restart();
 }
 
 static void drawer_dropdown_swrlim_cb(lv_event_t *e)

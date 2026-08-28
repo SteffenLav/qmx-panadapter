@@ -1218,7 +1218,7 @@ static volatile int s_web_override_pending;
 // repaints two labels, and it must run on taskLVGL. Same deferral as the CQ and
 // override requests: the HTTP task leaves a request, the 1 Hz timer performs it.
 // Packed rather than two variables so a half-applied request cannot be drained.
-static void apply_freq_preset(uint32_t freq_hz, bool ft4);   // defined below
+static void apply_freq_preset(uint32_t freq_hz, bool ft4, const char *src);   // defined below
 static volatile uint32_t s_web_preset_hz  = 0;    // 0 = nothing pending
 static volatile bool     s_web_preset_ft4 = false;
 // The OUTCOME OF THE LAST BROWSER COMMAND - not a description of the current
@@ -1466,7 +1466,7 @@ static void t_clock_cb(lv_timer_t *t)
         if (hz) {
             ESP_LOGW(TAG, "API: switching to %s on %lu Hz",
                      ft4 ? "FT4" : "FT8", (unsigned long)hz);
-            apply_freq_preset(hz, ft4);
+            apply_freq_preset(hz, ft4, "api");
         } else {
             ESP_LOGE(TAG, "API preset ignored: no frequency from the radio and none stored");
         }
@@ -2259,8 +2259,16 @@ static void ft8_freq_popup_close(void)
 // op-mode flag and the "MODE:" label move. (The 7.5 s FT4 slot engine is a
 // pending follow-up; for now FT4 retunes + relabels but still decodes/TXes on
 // FT8 timing - see ft8_op_mode_set() and the TODO in ft8_test.c.)
-static void apply_freq_preset(uint32_t freq_hz, bool ft4)
+// `src` names the caller in the log, and it is not decoration (#269, Markus
+// DL8MBY). His diag log showed the Tab5 retuning his radio back to the previous
+// band 11.5 s after he changed it, and the write could be pinned to THIS
+// function - it is the only path that retunes, clears the decode list and
+// persists the frequency together - but not to which of its three call sites,
+// so the next question could not be answered from the log he had already sent.
+static void apply_freq_preset(uint32_t freq_hz, bool ft4, const char *src)
 {
+    ESP_LOGW(TAG, "freq preset: %lu Hz %s (from %s)",
+             (unsigned long)freq_hz, ft4 ? "FT4" : "FT8", src ? src : "?");
     ft8_freq_popup_close();
     // Force bypasses the 200 ms rate-limiter so a deliberate preset tap always
     // goes through even if the sticky-settings restore just fired a freq write.
@@ -2299,7 +2307,7 @@ static void apply_freq_preset(uint32_t freq_hz, bool ft4)
 
 static void ft8_freq_preset_cb(lv_event_t *e)
 {
-    apply_freq_preset((uint32_t)(uintptr_t)lv_event_get_user_data(e), false);
+    apply_freq_preset((uint32_t)(uintptr_t)lv_event_get_user_data(e), false, "ft8 preset row");
 }
 
 #if !FT4_MODE_DISABLED
@@ -2325,7 +2333,7 @@ static uint32_t calling_freq_for(bool ft4, uint32_t near_hz)
 
 static void ft4_freq_preset_cb(lv_event_t *e)
 {
-    apply_freq_preset((uint32_t)(uintptr_t)lv_event_get_user_data(e), true);
+    apply_freq_preset((uint32_t)(uintptr_t)lv_event_get_user_data(e), true, "ft4 preset row");
 }
 #endif
 

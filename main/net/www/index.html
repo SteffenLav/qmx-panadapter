@@ -511,8 +511,13 @@
      without turning the table into a form. */
   #adifv-table td.rstedit, #adifv-table td.sigedit { cursor: pointer; border-bottom: 1px dotted #666; }
   #adifv-table td.rstedit:hover, #adifv-table td.sigedit:hover { color: var(--accent); border-bottom-color: var(--accent); }
-  /* A filled-in P2P reference is the whole point of the column, so it reads as
-     set rather than as one more grey cell. */
+  /* A filled-in reference is the whole point of the column, so it reads as set
+     rather than as one more grey cell.
+     Header is "Their ref", NOT "P2P ref" (Don Adams WB0LQW): the field holds the
+     park or summit the OTHER station was activating, which is true whether or
+     not we were activating ourselves - ADIF's SIG/SIG_INFO describe THEIR
+     activity, MY_SIG/MY_SIG_INFO ours. It is only Park-to-Park when both are in
+     parks, so the old heading claimed something the data does not. */
   #adifv-table td.sigedit.set { color: var(--accent); }
   #adifv-table td.del:hover { color: #ff9090; }
 
@@ -1738,7 +1743,7 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
   const title = document.getElementById("adifv-title");
   if (!modal) return;
 
-  const HDRS = ["Call", "Mode", "Band", "Freq", "Date", "Time", "Sent", "Rcvd", "Grid", "P2P ref"];
+  const HDRS = ["Call", "Mode", "Band", "Freq", "Date", "Time", "Sent", "Rcvd", "Grid", "Their ref"];
   const KEYS = ["CALL", "MODE", "BAND", "FREQ", "QSO_DATE", "TIME_ON", "RST_SENT", "RST_RCVD", "GRIDSQUARE", "SIG_INFO"];
   const NUMERIC = { FREQ: 1, RST_SENT: 1, RST_RCVD: 1 };
 
@@ -1826,7 +1831,7 @@ document.getElementById("lotw-import").addEventListener("click", async () => {
         esc(r.RST_RCVD || "-") +
         "</td><td>" + esc(r.GRIDSQUARE || "-") +
         "</td><td class='sigedit" + (r.SIG_INFO ? " set" : "") + "' data-k='" + k + "'" +
-        " title='Park-to-Park / Summit-to-Summit: click to enter the reference THEY were activating.'>" +
+        " title='The park or summit THEY were activating. Fills itself in from a spot; click to enter or correct it. Counts as Park-to-Park only if you were activating too.'>" +
         esc(r.SIG_INFO || "-") + "</td>" +
         "<td class='del' data-k='" + k + "' title='Delete this QSO'>&#10005;</td></tr>");
     }
@@ -5922,7 +5927,43 @@ function termRender(j) {
     html += termRowHtml(rows[r], revByRow[r] || [], colByRow[r] || []) +
             (r < rows.length - 1 ? "\n" : "");
   document.getElementById("term-screen").innerHTML = html;
+  termFit();
 }
+
+/* Size the monospace font so all 80 columns FIT the box (#275, Samuel W7STF:
+   "there are portions of the right-side of the information that is just not
+   displayed"). The data was never the problem - term_json_row() sends every
+   column - but the <pre> lived at a fixed 14-15 px inside a box that narrows
+   with the window, so on anything but a wide screen the right of each line
+   scrolled out of sight with nothing to say it could be scrolled back.
+
+   Measured rather than calculated: character width depends on which of the
+   fallback fonts the browser actually picked, so an assumed 0.6 em ratio would
+   be wrong on some machines and silently wrong at that. The probe inherits the
+   pre's own font, and the font size is reset to the base first so repeated
+   calls cannot ratchet downward. overflow-x stays as the backstop for a window
+   too narrow even at the minimum size. */
+function termFit() {
+  const pre = document.getElementById("term-screen");
+  if (!pre || !pre.offsetParent) return;          // modal not on screen
+  const BASE = 15, MIN = 6;
+  pre.style.fontSize = BASE + "px";
+  const cs = getComputedStyle(pre);
+  const avail = pre.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+  if (!(avail > 0)) return;
+  const probe = document.createElement("span");
+  probe.textContent = "0".repeat(80);
+  probe.style.cssText = "position:absolute; visibility:hidden; white-space:pre;";
+  pre.appendChild(probe);
+  const w80 = probe.getBoundingClientRect().width;
+  pre.removeChild(probe);
+  if (!(w80 > 0)) return;
+  if (w80 <= avail) return;                       // already fits at full size
+  const size = Math.max(MIN, Math.floor(BASE * (avail / w80) * 10) / 10);
+  pre.style.fontSize = size + "px";
+}
+
+window.addEventListener("resize", termFit);
 
 async function termPoll() {
   try {

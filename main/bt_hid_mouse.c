@@ -69,6 +69,10 @@ static const char *TAG = "btmouse";
 static hid_mouse_layout_t s_layout;
 
 static bool s_started;
+// The setting as it was at boot - see bt_hid_mouse_init(). Not the same fact
+// as s_started, and the difference between the two is what "a restart is
+// pending" means.
+static bool s_boot_en;
 static int  s_seen;          // devices reported this scan, for a one-line summary
 // Per OPEN scan window, not per boot. High enough to see a whole room -
 // the point of the open window is to find a device you are holding.
@@ -744,6 +748,13 @@ void bt_hid_mouse_init(void)
 
     qmx_settings_t s;
     settings_load_all(&s);
+    // What the setting said when THIS session started, recorded before the
+    // early return so it is captured whichever way the decision went. It is
+    // the honest answer to "will the radio be on for the rest of this boot" -
+    // s_started cannot answer that, because it stays false for the several
+    // seconds NimBLE waits on the C6 link, and the drawer can be opened inside
+    // that window (#270, Don N2VGU).
+    s_boot_en = s.bt_mouse_en;
     if (!s.bt_mouse_en) {
         ESP_LOGI(TAG, "BLE mouse disabled in settings - stack not started");
         return;
@@ -755,3 +766,4 @@ void bt_hid_mouse_init(void)
 }
 
 bool bt_hid_mouse_started(void) { return s_started; }
+bool bt_hid_mouse_enabled_at_boot(void) { return s_boot_en; }
