@@ -243,53 +243,24 @@ static int64_t            s_logged_ts;
 // because the grace is minutes, not days. A ring rather than one slot because
 // the existing s_logged_* is a single entry - fine for the dup guard, useless
 // here the moment one other station is worked in between.
-#define RECENT_WORKED_MAX        16
-#define RECENT_WORKED_GRACE_SEC  (30 * 60)
-static struct {
-    char    call[FT8_CALL_MAX_LEN];
-    char    band[8];
-    int64_t ts;
-} s_recent[RECENT_WORKED_MAX];
-static int s_recent_head;
+// Extracted to main/ft8_recent.c so test/ft8_recent_harness.c can link the real
+// functions and step the clock at will. That was not gold-plating: the on-device
+// route needs a completed QSO, and in FT8 simulation mode on 2026-08-28 the
+// decode ran 15.4 s against a 15 s slot, so slots overran 2x and the robot never
+// saw a decode whose slot matched the current one. Six mutations of the logic are
+// caught by the harness, one of which exposed a hole in the tests themselves.
+#include "ft8_recent.h"
 
 static void note_worked_now(const char *call, uint32_t freq_hz)
 {
-    if (!call || !call[0]) return;
-    const char *band = adif_log_band_for_freq(freq_hz);
-    // Refresh an existing entry rather than filling the ring with one station.
-    for (int i = 0; i < RECENT_WORKED_MAX; i++) {
-        if (s_recent[i].call[0] && strcmp(s_recent[i].call, call) == 0 &&
-            strcmp(s_recent[i].band, band) == 0) {
-            s_recent[i].ts = (int64_t)time(NULL);
-            return;
-        }
-    }
-    int i = s_recent_head;
-    s_recent_head = (s_recent_head + 1) % RECENT_WORKED_MAX;
-    snprintf(s_recent[i].call, sizeof(s_recent[i].call), "%s", call);
-    snprintf(s_recent[i].band, sizeof(s_recent[i].band), "%s", band);
-    s_recent[i].ts = (int64_t)time(NULL);
+    ft8_recent_note(call, adif_log_band_for_freq(freq_hz), (int64_t)time(NULL));
 }
 
 bool ft8_qso_worked_recently(const char *call, uint32_t freq_hz)
 {
-    if (!call || !call[0]) return false;
-    // ⛔ Never let an unset clock turn this into a permanent skip. time(NULL) is
-    // small before the first sync, so a stored ts of 0 would read as "worked
-    // 56 years ago" or, worse, "worked in the future" and could refuse every
-    // station. Require a plausible epoch on BOTH sides.
-    int64_t now = (int64_t)time(NULL);
-    if (now < 1700000000) return false;          // clock not set yet - no grace
-    const char *band = adif_log_band_for_freq(freq_hz);
-    for (int i = 0; i < RECENT_WORKED_MAX; i++) {
-        if (!s_recent[i].call[0]) continue;
-        if (strcmp(s_recent[i].call, call) != 0) continue;
-        if (strcmp(s_recent[i].band, band) != 0) continue;
-        int64_t age = now - s_recent[i].ts;
-        if (age >= 0 && age < RECENT_WORKED_GRACE_SEC) return true;
-    }
-    return false;
+    return ft8_recent_worked(call, adif_log_band_for_freq(freq_hz), (int64_t)time(NULL));
 }
+
 // Signal reports captured during the exchange for ADIF logging.
 // Pounce: rst_rcvd = what they told us; rst_sent = our own locally-measured SNR
 //   of them (the protocol never has us transmit a numeric report of them - TX2

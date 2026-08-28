@@ -274,7 +274,14 @@ CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 # can name which task holds the MALLOC_CAP_DMA bytes. Costs an owning-task
 # handle in every block header, so free figures on this build read LOW.
 # ⛔ REMOVE with the instrument - see the checklist in TODO #283.
-CONFIG_HEAP_TASK_TRACKING=y
+# CONFIG_HEAP_TASK_TRACKING is DELIBERATELY OFF for shipping builds.
+# It stores an owning-task handle in every heap block header, so free figures
+# read low and the device's memory behaviour is not representative - measured
+# 2026-08-28 on a build that had it on: FT8 decode ran 15.4 s against a 15 s
+# slot with internal heap min at 1 KB. Turn it on only to run
+# /api/cmd {"action":"dma_owners"}, and turn it off again before measuring or
+# releasing anything. dma_owners_report() compiles to a stub without it.
+# CONFIG_HEAP_TASK_TRACKING is not set
 
 # NimBLE host task on CORE 1, not the IDF default of core 0.
 # Measured 2026-08-28 (#285): with Bluetooth enabled and NOTHING connected, the
