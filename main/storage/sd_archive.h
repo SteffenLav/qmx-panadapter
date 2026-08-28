@@ -98,6 +98,32 @@ void sd_archive_unlock(void);
 // acquired quickly - never blocks. Safe from any task.
 bool sd_archive_get_free_bytes(uint64_t *out_free, uint64_t *out_total);
 
+
+// ---------------------------------------------------------------------------
+// TEMP INSTRUMENT (#282) - remove with the diagnosis.
+//
+// Counters kept in RTC no-init RAM so they survive every warm reset and can be
+// read days later from /api/status ("sd_instr"), rather than needing a serial
+// capture to be running at the moment the fault recurs. Cleared by a full power
+// cycle only; boot_id says which boot a count belongs to.
+//
+// The two numbers being hunted are handle_no_mount and park_reentered - both
+// are states this file's own logic says cannot occur, and both were implied by
+// the 2026-08-28 capture. Any non-zero value is the answer.
+typedef struct {
+    uint32_t boot_id;
+    uint32_t mount_enter;
+    uint32_t mount_ok;
+    uint32_t handle_no_mount;
+    uint32_t unmount_calls;
+    uint32_t park_set;
+    uint32_t park_reentered;
+    uint32_t first_anom_uptime_s;
+    uint32_t first_anom_boot;
+} sd_archive_instr_t;
+
+void sd_archive_instr_get(sd_archive_instr_t *out);
+
 #ifdef __cplusplus
 }
 #endif

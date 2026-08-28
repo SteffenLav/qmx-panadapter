@@ -11,6 +11,8 @@
 #include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_attr.h"      // RTC_NOINIT_ATTR - the #282 durable instrument
+#include "esp_timer.h"
 #include "esp_vfs_fat.h"
 #include "esp_app_desc.h"   // esp_app_get_description() for the README version stamp
 
@@ -187,6 +189,77 @@ static void sd_fail_diag(const char *where, int err);   // TEMP DIAGNOSTIC, see 
 static int s_consec_write_fail = 0;
 
 // Quick mount retries inside the boot window, while DMA memory is still plentiful.
+// Forward declaration: the temp instrument in mirror_diag() reports it.
+static bool s_parked;
+
+// ===========================================================================
+// TEMP INSTRUMENT (#282) - DURABLE ON PURPOSE. Remove with the diagnosis.
+//
+// The 2026-08-28 capture contains a contradiction this file's code does not
+// allow: "diag write failed" (reachable only through mirror_diag() with a
+// non-NULL s_log_file, which only mount() sets) on a boot where mount() never
+// logged success and all five boot attempts failed; plus the "stopping probes"
+// line printed twice, though its branch is unreachable once s_parked is set and
+// nothing ever clears s_parked.
+//
+// ⛔ IT MUST SURVIVE NOT BEING WATCHED. A serial capture expires, rotates and
+// is only running when someone started it, and /api/log/saved holds ~11 minutes
+// (CLAUDE.md). If this takes days to recur, log lines alone would miss it. So
+// the evidence is COUNTED into RTC no-init RAM - the same store the crash
+// record uses - which survives every warm reset (a reboot, a flash, a panic)
+// and is served in /api/status as "sd_instr". Ask the device at any later date;
+// a non-zero handle_no_mount or park_reentered is the thing being hunted.
+//
+// Cleared only by a full power cycle, which is honest: RTC RAM does not survive
+// one, and the counters say which boot they belong to via boot_id.
+// ===========================================================================
+#define SD_INSTR_MAGIC 0x5D1A0282u
+RTC_NOINIT_ATTR static struct {
+    uint32_t magic;
+    uint32_t boot_id;          // increments each boot, so a count can be dated
+    uint32_t mount_enter;      // mount() called
+    uint32_t mount_ok;         // ...and reached the end
+    uint32_t handle_no_mount;  // ⭐ THE ANOMALY: a write path held a handle with !s_mounted
+    uint32_t unmount_calls;
+    uint32_t park_set;         // s_parked latched true
+    uint32_t park_reentered;   // ⭐ THE OTHER ANOMALY: the no-card branch ran while parked
+    uint32_t first_anom_uptime_s;  // uptime of the FIRST anomaly of either kind, 0 = none
+    uint32_t first_anom_boot;      // and which boot it was
+} s_instr;
+
+static void instr_init(void)
+{
+    if (s_instr.magic != SD_INSTR_MAGIC) {
+        memset(&s_instr, 0, sizeof s_instr);
+        s_instr.magic = SD_INSTR_MAGIC;
+    }
+    s_instr.boot_id++;
+}
+
+// Record the first anomaly seen, whichever kind, so there is a timestamp to
+// correlate against a capture if one happens to be running.
+static void instr_note_anomaly(void)
+{
+    if (s_instr.first_anom_uptime_s == 0) {
+        s_instr.first_anom_uptime_s = (uint32_t)(esp_timer_get_time() / 1000000);
+        s_instr.first_anom_boot     = s_instr.boot_id;
+    }
+}
+
+void sd_archive_instr_get(sd_archive_instr_t *out)
+{
+    if (!out) return;
+    out->boot_id             = s_instr.boot_id;
+    out->mount_enter         = s_instr.mount_enter;
+    out->mount_ok            = s_instr.mount_ok;
+    out->handle_no_mount     = s_instr.handle_no_mount;
+    out->unmount_calls       = s_instr.unmount_calls;
+    out->park_set            = s_instr.park_set;
+    out->park_reentered      = s_instr.park_reentered;
+    out->first_anom_uptime_s = s_instr.first_anom_uptime_s;
+    out->first_anom_boot     = s_instr.first_anom_boot;
+}
+
 #define SD_BOOT_MOUNT_TRIES   5
 #define SD_BOOT_MOUNT_GAP_MS  150
 
@@ -194,7 +267,29 @@ static int s_consec_write_fail = 0;
 // Returns false on a write error (possible card removal).
 static bool mirror_diag(void)
 {
-    if (!s_log_file) return false;
+    // === TEMP INSTRUMENT (2026-08-28, #282) - remove once the contradiction is
+    // closed. This early return is SILENT, which is why the 2026-08-28 capture
+    // could not be read: it shows "diag write failed" (reachable only with a
+    // non-NULL handle) on a boot where mount() never logged success, so either
+    // a mount happened without logging or a handle exists without a mount.
+    // Change-detected so a parked session does not spam.
+    // ⭐ THE ANOMALY, counted durably: a live handle with no mount. This is the
+    // state the 2026-08-28 capture implies and that the code says cannot exist.
+    if (s_log_file && !s_mounted) {
+        s_instr.handle_no_mount++;
+        instr_note_anomaly();
+        ESP_LOGE(TAG, "INSTR ANOMALY: log handle %p with s_mounted=0 (parked=%d) "
+                      "- this is the #282 case", (void *)s_log_file, (int)s_parked);
+    }
+    if (!s_log_file) {
+        static bool s_noted_nofile = false;
+        if (!s_noted_nofile) {
+            s_noted_nofile = true;
+            ESP_LOGW(TAG, "INSTR mirror_diag declined: no log handle "
+                          "(mounted=%d parked=%d)", (int)s_mounted, (int)s_parked);
+        }
+        return false;
+    }
 
     static char buf[DIAG_CHUNK];
     for (;;) {
@@ -202,7 +297,8 @@ static bool mirror_diag(void)
         size_t got = diag_log_read_from(s_diag_cursor, buf, sizeof(buf), &next);
         if (got == 0) break;
         if (fwrite(buf, 1, got, s_log_file) != got) {
-            ESP_LOGW(TAG, "diag write failed: %s", strerror(errno));
+            ESP_LOGW(TAG, "diag write failed: %s  [INSTR mounted=%d parked=%d file=%p]",
+                     strerror(errno), (int)s_mounted, (int)s_parked, (void *)s_log_file);
             sd_fail_diag("diagwrite", errno);
             // MUST clear the stream error indicator, or every later fwrite on
             // this FILE* returns short WITHOUT touching the card - the retry
@@ -242,7 +338,7 @@ static bool mirror_diag(void)
 }
 
 // True once we have deliberately stopped touching the card for this session.
-static bool s_parked = false;
+static bool s_parked = false;   // (forward-declared above for the temp instrument)
 static int64_t s_slow_last_us = 0;   // #153 slow diag mirror pacing
 static int     s_slow_fail    = 0;   // consecutive slow-mirror failures
 
@@ -317,8 +413,13 @@ static void park_snapshot(void)
                   "for Save-offline / web file browser", SLOW_LOG_MS / 1000);
 }
 
-static void unmount(void)
+static void unmount(const char *why)
 {
+    // === TEMP INSTRUMENT (#282): "SD card unmounted" said nothing about which
+    // path decided that, and the dot going dark is what the operator sees.
+    s_instr.unmount_calls++;
+    ESP_LOGW(TAG, "INSTR unmount(%s) (mounted=%d parked=%d file=%p)",
+             why ? why : "?", (int)s_mounted, (int)s_parked, (void *)s_log_file);
     if (s_log_file) { fclose(s_log_file); s_log_file = NULL; }
     bsp_sdcard_deinit(SD_MOUNT_POINT);
     s_mounted = false;
@@ -355,6 +456,12 @@ static bool try_mount(void)
 {
     size_t pre_i = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
     size_t pre_p = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    // === TEMP INSTRUMENT (#282): mount() logs success at the very END, so any
+    // path that opens the log handle and then leaves early is invisible - and
+    // that is exactly the shape the 2026-08-28 capture implies.
+    s_instr.mount_enter++;
+    ESP_LOGW(TAG, "INSTR mount() entered (mounted=%d parked=%d file=%p)",
+             (int)s_mounted, (int)s_parked, (void *)s_log_file);
     esp_err_t err = bsp_sdcard_init((char *)SD_MOUNT_POINT, 2);
     if (err != ESP_OK) {
         sd_fail_diag("mount", (int)err);
@@ -384,12 +491,17 @@ static bool try_mount(void)
     }
     long pos = ftell(s_log_file);
     s_log_bytes = (pos > 0) ? (size_t)pos : 0;
+    // The handle now EXISTS while s_mounted is still false. If anything below
+    // fails or blocks, that is the state the capture appears to have caught.
+    ESP_LOGW(TAG, "INSTR mount() opened log handle %p, s_mounted still %d",
+             (void *)s_log_file, (int)s_mounted);
 
     s_adif_dirty = true;           // force a full mirror right after mounting
     s_config_dirty = true;
     s_lotw_dirty = true;
     write_readme();                // self-describing card (fresh version stamp)
     s_mounted = true;
+    s_instr.mount_ok++;
     ui_set_sd_active(true);
     ESP_LOGI(TAG, "SD card mounted, mirroring to %s", SD_DIR);
     return true;
@@ -475,7 +587,7 @@ static void sd_archive_task(void *arg)
                             if (++s_slow_fail >= 3) {
                                 ESP_LOGW(TAG, "slow diag mirror failed %d times - card gone?",
                                          s_slow_fail);
-                                unmount();
+                                unmount("slow mirror failures");
                             }
                         } else if (s_slow_fail) {
                             ESP_LOGI(TAG, "slow diag mirror recovered after %d failure(s)",
@@ -494,6 +606,16 @@ static void sd_archive_task(void *arg)
         // futile (they fail 0x101 ESP_ERR_NO_MEM regardless of the card), and
         // retrying every 10 s forever is pure log noise. Stop cleanly instead.
         if (wifi_on && !s_mounted) {
+            // ⭐ THE OTHER ANOMALY: reaching here a second time means s_parked
+            // was false again, and nothing in this file ever clears it.
+            if (s_parked) {
+                s_instr.park_reentered++;
+                instr_note_anomaly();
+                ESP_LOGE(TAG, "INSTR ANOMALY: no-card branch re-entered while "
+                              "parked - s_parked was cleared by something (#282)");
+            } else {
+                s_instr.park_set++;
+            }
             s_parked = true;
             ui_set_sd_state(UI_SD_NONE);
             ESP_LOGW(TAG, "no card mounted in the boot window and WiFi is up - "
@@ -569,7 +691,7 @@ static void sd_archive_task(void *arg)
             ESP_LOGW(TAG, "SD write failed %d times consecutively - treating as removal",
                      s_consec_write_fail);
             s_consec_write_fail = 0;
-            unmount();
+            unmount("write failures");
             xSemaphoreGive(s_sd_mutex);
             vTaskDelay(pdMS_TO_TICKS(PROBE_MS));
             continue;
@@ -621,6 +743,7 @@ static void sd_archive_task(void *arg)
 
 void sd_archive_init(void)
 {
+    instr_init();   // TEMP INSTRUMENT (#282) - durable counters in RTC RAM
 #if SD_ARCHIVE_DISABLED
     ESP_LOGW(TAG, "SD auto-archive soft-disabled (see SD_ARCHIVE_DISABLED in "
                   "sd_archive.h) - shared-SDMMC/WiFi wedge not yet root-caused");

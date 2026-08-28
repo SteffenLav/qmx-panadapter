@@ -706,6 +706,27 @@ static esp_err_t status_handler(httpd_req_t *req)
         cJSON_AddBoolToObject(bt, "want",    bs.bt_mouse_en);
         cJSON_AddBoolToObject(bt, "pending", bs.bt_mouse_en != bt_hid_mouse_enabled_at_boot());
     }
+    // TEMP INSTRUMENT (#282) - served so the SD contradiction can be checked
+    // days later without a serial capture having been running. Reported ONLY
+    // when something has actually been counted, so a healthy device stays
+    // quiet and the object APPEARING is itself the signal.
+    {
+        sd_archive_instr_t si;
+        sd_archive_instr_get(&si);
+        if (si.handle_no_mount || si.park_reentered || si.unmount_calls ||
+            si.mount_enter != si.mount_ok) {
+            cJSON *sd = cJSON_AddObjectToObject(root, "sd_instr");
+            cJSON_AddNumberToObject(sd, "boot",            si.boot_id);
+            cJSON_AddNumberToObject(sd, "mount_enter",     si.mount_enter);
+            cJSON_AddNumberToObject(sd, "mount_ok",        si.mount_ok);
+            cJSON_AddNumberToObject(sd, "handle_no_mount", si.handle_no_mount);
+            cJSON_AddNumberToObject(sd, "unmount_calls",   si.unmount_calls);
+            cJSON_AddNumberToObject(sd, "park_set",        si.park_set);
+            cJSON_AddNumberToObject(sd, "park_reentered",  si.park_reentered);
+            cJSON_AddNumberToObject(sd, "first_anom_s",    si.first_anom_uptime_s);
+            cJSON_AddNumberToObject(sd, "first_anom_boot", si.first_anom_boot);
+        }
+    }
     cJSON_AddBoolToObject(root, "tune_ok", cat_qmx_fw_at_least(1, 4, 0));
     // Paused = the operator has released the radio to its own menu. Everything
     // frequency-, mode- and decode-shaped in this payload is frozen while it is
