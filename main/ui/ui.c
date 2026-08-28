@@ -10945,13 +10945,25 @@ static void ui_set_base_mode(ui_mode_t next, bool animate)
         // guard is what keeps the 1 Hz tick from doing work in FT8 mode.
         spots_lane_set_visible(false);
     } else {
-        // Sticky settings: remember where FT8 was left, restore where
-        // Panadapter was left (band/mode/bw/freq/zoom).
-        ui_save_snapshot(&s_ft8_snapshot);
-        // FT8 is always DiGi — never let the panadapter's mode (CW/SSB/...) be
-        // captured into the FT8 snapshot and carried back on the next FT8 entry.
-        strncpy(s_ft8_snapshot.mode, "DiGi", sizeof(s_ft8_snapshot.mode) - 1);
-        s_ft8_snapshot.mode[sizeof(s_ft8_snapshot.mode) - 1] = '\0';
+        // Sticky settings: restore where Panadapter was left (band/mode/bw/
+        // freq/zoom). Saving the OUTGOING page's state is NOT done here - the
+        // stand-down block at the top of this function does it, keyed on the
+        // mode actually being left.
+        //
+        // The unconditional ui_save_snapshot(&s_ft8_snapshot) that used to sit
+        // here SURVIVED THE VERY FIX WRITTEN TO REPLACE IT. The stand-down
+        // block's own comment describes this bug - "leaving WSPR would have run
+        // the Panadapter branch and saved the WSPR page's state into
+        // s_ft8_snapshot, corrupting where FT8 resumes" - the block was added,
+        // and this copy was left behind, so both ran. The visible result was
+        // the operator's report: after a WSPR session the FT8 page came back on
+        // the WSPR frequency, because leaving WSPR for the panadapter wrote
+        // WSPR's band-hopped dial into FT8's snapshot. Panadapter itself was
+        // always fine - it restores its own.
+        //
+        // Generalise it: when a fix MOVES logic, delete the original in the
+        // same commit. A duplicate that only misbehaves for a third case will
+        // outlive everyone's memory of why the fix was needed.
         ui_restore_snapshot(&s_pan_snapshot);
         int start_x = animate ? -DISPLAY_H_RES : 0;
         if (s_spectrum_obj)  { lv_obj_set_x(s_spectrum_obj,  start_x); lv_obj_clear_flag(s_spectrum_obj,  LV_OBJ_FLAG_HIDDEN); }

@@ -1401,14 +1401,37 @@ static esp_err_t cmd_handler(httpd_req_t *req)
         // "grid", "power_dbm", "freq_hz".
         qmx_settings_t wt_s;
         settings_load_all(&wt_s);
-        const char *call = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call"));
-        const char *grid = cJSON_GetStringValue(cJSON_GetObjectItem(root, "grid"));
-        cJSON *power_j = cJSON_GetObjectItem(root, "power_dbm");
+        // ⛔ THE CALLSIGN, GRID AND DECLARED POWER COME FROM SETTINGS ONLY.
+        //
+        // This endpoint used to accept "call" and "grid" in the body, falling
+        // back to the operator's own. That was a harmless bench affordance while
+        // WSPR shipped dark - and it stops being harmless the moment the feature
+        // is launched, because it puts an ARBITRARY CALLSIGN ON THE AIR from any
+        // browser on the LAN. The operator's instruction is the right rule and
+        // it is the same one FT8 already follows: the local user names the
+        // callsign and grid, and if they are not set there is no transmission.
+        //
+        // The declared power went the same way. It is not a local display
+        // value: every WSPR spot publishes it worldwide into a scientific
+        // database, so it is a CLAIM about this station and belongs with the
+        // station's own settings, not in a request body.
+        const char *call = wt_s.my_callsign;
+        const char *grid = wt_s.my_grid;
         cJSON *freq_j  = cJSON_GetObjectItem(root, "freq_hz");
-        if (!call || !call[0]) call = wt_s.my_callsign;
-        if (!grid || !grid[0]) grid = wt_s.my_grid;
-        int power_dbm  = cJSON_IsNumber(power_j) ? power_j->valueint : 23;
+        int power_dbm  = wt_s.wspr_tx_dbm;
         int freq_hz    = cJSON_IsNumber(freq_j) ? freq_j->valueint : WSPR_TX_DEFAULT_FREQ_HZ;
+
+        // Empty, not just NULL: wspr_tx_build_request() checks the pointer, and
+        // an unset callsign is "" rather than NULL, so it would have sailed past
+        // that guard and failed later with an encoding error nobody could read.
+        if (!call[0] || !grid[0]) {
+            cJSON_Delete(root);
+            httpd_resp_set_status(req, "409 Conflict");
+            httpd_resp_set_type(req, "application/json");
+            return httpd_resp_sendstr(req,
+                "{\"ok\":false,\"error\":\"set your callsign and grid first - "
+                "WSPR will not transmit without them\"}");
+        }
 
         wspr_tx_request_t wt_req;
         char wt_err[80] = "";
