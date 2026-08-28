@@ -1,6 +1,7 @@
 #include "esp_app_desc.h"   // #218: bottom-bar "update available"
 #include "ui.h"
 #include "ui_theme.h"
+#include "nvs.h"
 #include "render.h"
 #include "render_waterfall.h"
 #include "dsp.h"
@@ -1875,28 +1876,62 @@ static int       s_drawer_section_h[N_DRAWER_SECTIONS];
 // stays exactly where it is. Heights come from s_drawer_section_h[], recorded by
 // drawer_section() - there is no parallel table to keep in step by hand, which
 // is what went wrong twice before.
-typedef struct { const char *title; const int *ids; int n; bool expert; } drawer_group_t;
+// Each section carries its OWN label here, rather than a parallel array of
+// names kept in step by hand - CLAUDE.md records that shape going wrong twice.
+// The label is what the web 'Tab5 config' table shows, so the table can never
+// name a section the firmware does not have.
+typedef struct { int id; const char *label; } drawer_item_t;
+typedef struct { const char *title; const drawer_item_t *items; int n; bool expert; } drawer_group_t;
 
-static const int GRP_STATION[]  = { DRAWER_SEC_IDENTITY, DRAWER_SEC_ACTIVATION,
-                                    DRAWER_SEC_BPREGION };
-static const int GRP_RADIO[]    = { DRAWER_SEC_QMXVOL, DRAWER_SEC_QMXRF, DRAWER_SEC_CW,
-                                    DRAWER_SEC_RITPILL, DRAWER_SEC_SWRLIM, DRAWER_SEC_TUNE2,
-                                    DRAWER_SEC_PAUSE, DRAWER_SEC_TERM };
+static const drawer_item_t GRP_STATION[] = {
+    { DRAWER_SEC_IDENTITY, "Callsign & Grid square" },
+    { DRAWER_SEC_ACTIVATION, "Activation (POTA/SOTA)" },
+    { DRAWER_SEC_BPREGION, "Band-plan region" },
+};
+static const drawer_item_t GRP_RADIO[] = {
+    { DRAWER_SEC_QMXVOL, "QMX volume" },
+    { DRAWER_SEC_QMXRF, "RF gain" },
+    { DRAWER_SEC_CW, "CW centre & transmit offset" },
+    { DRAWER_SEC_RITPILL, "Show RIT button" },
+    { DRAWER_SEC_SWRLIM, "SWR protection" },
+    { DRAWER_SEC_TUNE2, "Antenna Tune" },
+    { DRAWER_SEC_PAUSE, "Release radio" },
+    { DRAWER_SEC_TERM, "Radio menus" },
+};
 // DRAWER_SEC_OTADL sits here, not in Device, and that placement is the point:
 // Device is an EXPERT-only group, and "should this thing download 3.3 MB on my
 // hotspot" is a decision an ordinary session makes - the three people who asked
 // for the switch would not have found it behind Expert. It is a question about
 // what the network connection does unasked, so it belongs beside WiFi.
-static const int GRP_NETWORK[]  = { DRAWER_SEC_WIFI, DRAWER_SEC_OTADL,
-                                    DRAWER_SEC_SPOTS, DRAWER_SEC_BT };
+static const drawer_item_t GRP_NETWORK[] = {
+    { DRAWER_SEC_WIFI, "WiFi setup" },
+    { DRAWER_SEC_OTADL, "Download updates in the background" },
+    { DRAWER_SEC_SPOTS, "Live spots (POTA/RBN/DX/SOTA)" },
+    { DRAWER_SEC_BT, "Bluetooth mouse" },
+};
 // Flip 180 last: it is the least-touched control in the group (operator).
-static const int GRP_DISPLAY[]  = { DRAWER_SEC_BRIGHTNESS, DRAWER_SEC_SLEEP,
-                                    DRAWER_SEC_CMAP, DRAWER_SEC_FLIP };
-static const int GRP_FT8[]      = { DRAWER_SEC_DISTANCE, DRAWER_SEC_SIMMODE, DRAWER_SEC_FT8SYNC };
-static const int GRP_SPECTRUM[] = { DRAWER_SEC_PRESETS, DRAWER_SEC_DBRANGE, DRAWER_SEC_SMOOTHING,
-                                    DRAWER_SEC_WATERFALL, DRAWER_SEC_FLAT, DRAWER_SEC_IQ,
-                                    DRAWER_SEC_IFCAL };
-static const int GRP_DEVICE[]   = { DRAWER_SEC_CHARGE };
+static const drawer_item_t GRP_DISPLAY[] = {
+    { DRAWER_SEC_BRIGHTNESS, "Display brightness" },
+    { DRAWER_SEC_SLEEP, "Display sleep" },
+    { DRAWER_SEC_CMAP, "Waterfall colour map" },
+    { DRAWER_SEC_FLIP, "Flip 180 degrees" },
+};
+static const drawer_item_t GRP_FT8[] = {
+    { DRAWER_SEC_DISTANCE, "Distance, fast pounce, PSK Reporter" },
+    { DRAWER_SEC_SIMMODE, "Simulation mode" },
+};
+static const drawer_item_t GRP_SPECTRUM[] = {
+    { DRAWER_SEC_PRESETS, "Presets" },
+    { DRAWER_SEC_DBRANGE, "dB Range" },
+    { DRAWER_SEC_SMOOTHING, "Smoothing" },
+    { DRAWER_SEC_WATERFALL, "Waterfall levels & FFT window" },
+    { DRAWER_SEC_FLAT, "Flat Spectrum" },
+    { DRAWER_SEC_IQ, "IQ Balance" },
+    { DRAWER_SEC_IFCAL, "IF calibration" },
+};
+static const drawer_item_t GRP_DEVICE[] = {
+    { DRAWER_SEC_CHARGE, "Battery care" },
+};
 
 #define GRP_DEF(name, arr, exp) { name, arr, (int)(sizeof(arr)/sizeof((arr)[0])), exp }
 // A group marked `expert` is hidden in Basic. Everything reached in a normal
@@ -1913,8 +1948,130 @@ static const drawer_group_t s_drawer_groups[] = {
 #define N_DRAWER_GROUPS ((int)(sizeof(s_drawer_groups)/sizeof(s_drawer_groups[0])))
 
 static lv_obj_t *s_grp_hdr[N_DRAWER_GROUPS];
+
+// ---------------------------------------------------------------------------
+// WHICH SECTIONS APPEAR IN BASIC, AND WHICH IN ADVANCED (operator, 2026-08-28)
+//
+// Until now this was decided per GROUP by drawer_group_t.expert, so the only
+// possible answers were "all of Spectrum" or "none of it". The operator wanted
+// it per SETTING, reachable from the web UI's "Tab5 config" table - deliberately
+// not from the Tab5 itself, so it stays out of the way of anyone who just wants
+// to operate.
+//
+// One bit per section id in each of two masks. A section may be in both (the
+// normal case for anything an ordinary session needs), in one, or in neither -
+// "neither" is a legitimate answer meaning "I never want to see this".
+//
+// ⭐ THE DEFAULTS REPRODUCE THE OLD BEHAVIOUR EXACTLY: Advanced holds every
+// section, Basic holds every section whose group was not marked expert. So a
+// unit that has never been configured behaves precisely as it did before, and
+// drawer_group_t.expert becomes the seed for the default rather than a runtime
+// test. That is why the reflow no longer consults it - see the note there.
+//
+// Stored in its own tiny NVS namespace rather than in settings.c: it is a
+// layout preference, not a station or radio setting, and keeping it out of
+// config_io_export() avoids the coupling CLAUDE.md warns about (anything added
+// to the export must also join s_config_export_bits or the SD mirror goes
+// stale). The cost is that it is not carried by a config backup, which for a
+// menu layout is the right trade.
+#define DRAWER_CFG_NS "drawercfg"
+static uint64_t s_drawer_basic_mask;
+static uint64_t s_drawer_adv_mask;
+
+void ui_drawer_map_set(uint64_t basic_mask, uint64_t adv_mask);
+// Defined far below; the setter re-lays the drawer after a web change.
+static void drawer_set_mode(ui_mode_t mode);
+
+static uint64_t drawer_default_mask(bool basic)
+{
+    uint64_t m = 0;
+    for (int g = 0; g < N_DRAWER_GROUPS; g++) {
+        const drawer_group_t *grp = &s_drawer_groups[g];
+        if (basic && grp->expert) continue;
+        for (int k = 0; k < grp->n; k++) m |= 1ULL << grp->items[k].id;
+    }
+    return m;
+}
+
+static void drawer_masks_load(void)
+{
+    s_drawer_basic_mask = drawer_default_mask(true);
+    s_drawer_adv_mask   = drawer_default_mask(false);
+    nvs_handle_t h;
+    if (nvs_open(DRAWER_CFG_NS, NVS_READONLY, &h) != ESP_OK) return;
+    uint64_t v;
+    if (nvs_get_u64(h, "basic", &v) == ESP_OK) s_drawer_basic_mask = v;
+    if (nvs_get_u64(h, "adv",   &v) == ESP_OK) s_drawer_adv_mask   = v;
+    nvs_close(h);
+}
+
+// Read the map out for the web table: one call per section, in DRAWER ORDER, so
+// the page never has to know the grouping or invent an order of its own.
+int ui_drawer_map_count(void)
+{
+    int n = 0;
+    for (int g = 0; g < N_DRAWER_GROUPS; g++) n += s_drawer_groups[g].n;
+    return n;
+}
+
+bool ui_drawer_map_entry(int idx, int *id, const char **group, const char **label,
+                         bool *in_basic, bool *in_adv)
+{
+    int n = 0;
+    for (int g = 0; g < N_DRAWER_GROUPS; g++) {
+        const drawer_group_t *grp = &s_drawer_groups[g];
+        for (int k = 0; k < grp->n; k++, n++) {
+            if (n != idx) continue;
+            int sid = grp->items[k].id;
+            if (id)       *id       = sid;
+            if (group)    *group    = grp->title;
+            if (label)    *label    = grp->items[k].label;
+            if (in_basic) *in_basic = !!(s_drawer_basic_mask & (1ULL << sid));
+            if (in_adv)   *in_adv   = !!(s_drawer_adv_mask   & (1ULL << sid));
+            return true;
+        }
+    }
+    return false;
+}
+
+void ui_drawer_map_masks(uint64_t *basic, uint64_t *adv)
+{
+    if (basic) *basic = s_drawer_basic_mask;
+    if (adv)   *adv   = s_drawer_adv_mask;
+}
+
+void ui_drawer_map_defaults(void)
+{
+    ui_drawer_map_set(drawer_default_mask(true), drawer_default_mask(false));
+}
+
+void ui_drawer_map_set(uint64_t basic_mask, uint64_t adv_mask)
+{
+    s_drawer_basic_mask = basic_mask;
+    s_drawer_adv_mask   = adv_mask;
+    nvs_handle_t h;
+    if (nvs_open(DRAWER_CFG_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u64(h, "basic", basic_mask);
+        nvs_set_u64(h, "adv",   adv_mask);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    // Re-lay the drawer under the display lock: this arrives on the httpd task,
+    // not the LVGL one. The lock is recursive, so a caller already on the LVGL
+    // thread is unaffected.
+    if (display_lock(200)) {
+        drawer_set_mode(ui_mode_get());
+        display_unlock();
+    }
+}
+
 static lv_obj_t *s_switch_otadl = NULL;
 static lv_obj_t *s_expert_btn = NULL, *s_expert_lbl = NULL;
+// The hint is a SEPARATE label, not a second line of s_expert_lbl: an LVGL
+// label carries one font, and the state name wants to be read at a glance
+// while '(tap for ...)' is a footnote. Two labels is the cheap way to get
+// two sizes - lv_span would pull in the span renderer for one button.
+static lv_obj_t *s_expert_sub = NULL;
 static bool      s_drawer_expert = false;
 
 /* Is this section allowed on the screen we are on at all?
@@ -1929,6 +2086,12 @@ static bool drawer_sec_visible(int id, ui_mode_t mode, bool tune_ok)
 {
     const bool ft8  = (mode == UI_MODE_FT8);
     const bool wspr = (mode == UI_MODE_WSPR);
+
+    // Basic/Advanced membership first: a section the operator has excluded from
+    // the level currently on screen is gone whatever the mode rules below say.
+    // Defaults reproduce the previous per-group behaviour exactly.
+    if (!((s_drawer_expert ? s_drawer_adv_mask : s_drawer_basic_mask) & (1ULL << id)))
+        return false;
 
     if (id == DRAWER_SEC_CWAUDIO) return false;   // shelved - see cw_audio.c
     if (id == DRAWER_SEC_RESMON)  return false;   // dev-only, driven by /api/cmd
@@ -8286,9 +8449,18 @@ static void drawer_build(void)
     lv_obj_add_event_cb(s_expert_btn, drawer_expert_btn_cb, LV_EVENT_CLICKED, NULL);
     s_expert_lbl = lv_label_create(s_expert_btn);
     lv_obj_set_style_text_align(s_expert_lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_font(s_expert_lbl, &lv_font_montserrat_20, 0);
-    lv_obj_center(s_expert_lbl);
+    lv_obj_set_style_text_font(s_expert_lbl, &lv_font_montserrat_24, 0);
+    lv_obj_align(s_expert_lbl, LV_ALIGN_TOP_MID, 0, 4);
+    s_expert_sub = lv_label_create(s_expert_btn);
+    lv_obj_set_style_text_align(s_expert_sub, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_font(s_expert_sub, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_opa(s_expert_sub, LV_OPA_70, 0);
+    lv_obj_align(s_expert_sub, LV_ALIGN_BOTTOM_MID, 0, -4);
     drawer_expert_paint();
+    // Load the Basic/Advanced membership before the first reflow, so a
+    // configured unit lays out correctly on the very first drawer open
+    // rather than only after something else triggers a re-lay.
+    drawer_masks_load();
 
     lv_obj_add_event_cb(s_drawer, drawer_touch_cb, LV_EVENT_PRESSED, NULL);
     lv_obj_add_event_cb(s_drawer, drawer_touch_cb, LV_EVENT_RELEASED, NULL);
@@ -9713,15 +9885,18 @@ static void drawer_set_mode(ui_mode_t mode)
     int y = s_drawer_sec_y0;
     for (int g = 0; g < N_DRAWER_GROUPS; g++) {
         const drawer_group_t *grp = &s_drawer_groups[g];
-        bool show_group = (!grp->expert || s_drawer_expert);
+        // grp->expert is now only the SEED for the default masks (see
+        // drawer_default_mask). Consulting it here as well would override a
+        // section the operator has deliberately moved into Basic.
+        bool show_group = true;
 
         // Count what would actually appear, so an empty group never leaves a
         // heading with nothing under it (Spectrum in FT8 mode, for one).
         int n_vis = 0;
         if (show_group) {
             for (int k = 0; k < grp->n; k++)
-                if (s_drawer_sections[grp->ids[k]] &&
-                    drawer_sec_visible(grp->ids[k], mode, tune_ok)) n_vis++;
+                if (s_drawer_sections[grp->items[k].id] &&
+                    drawer_sec_visible(grp->items[k].id, mode, tune_ok)) n_vis++;
         }
 
         if (s_grp_hdr[g]) {
@@ -9736,7 +9911,7 @@ static void drawer_set_mode(ui_mode_t mode)
         if (n_vis == 0) continue;
 
         for (int k = 0; k < grp->n; k++) {
-            int id = grp->ids[k];
+            int id = grp->items[k].id;
             if (!s_drawer_sections[id] || !drawer_sec_visible(id, mode, tune_ok)) continue;
             lv_obj_clear_flag(s_drawer_sections[id], LV_OBJ_FLAG_HIDDEN);
             lv_obj_set_pos(s_drawer_sections[id], 0, y);
@@ -10220,9 +10395,13 @@ static void drawer_cwtxoff_nudge_cb(lv_event_t *e)
 // Paint the view toggle: current mode on top, what a tap does underneath.
 static void drawer_expert_paint(void)
 {
-    if (!s_expert_btn || !s_expert_lbl) return;
-    lv_label_set_text(s_expert_lbl, s_drawer_expert ? "EXPERT\n(tap for Basic)"
-                                                    : "BASIC\n(tap for Expert)");
+    if (!s_expert_btn || !s_expert_lbl || !s_expert_sub) return;
+    // "Advanced", not "EXPERT" (operator, 2026-08-28). Expert names a PERSON
+    // and invites the wrong question - am I one? - where Advanced names the
+    // CONTENTS, which is what is actually being chosen between.
+    lv_label_set_text(s_expert_lbl, s_drawer_expert ? "ADVANCED" : "BASIC");
+    lv_label_set_text(s_expert_sub, s_drawer_expert ? "(tap for Basic)"
+                                                    : "(tap for Advanced)");
     lv_obj_set_style_bg_color(s_expert_btn,
         lv_color_hex(s_drawer_expert ? 0x7a4a12 : UI_COLOR_PRIMARY), 0);
 }

@@ -977,6 +977,7 @@
         <strong id="set-title" style="color:#ffa040; font-size:17px;">Settings</strong>
         <div style="flex:1"></div>
         <span id="set-status" style="color:var(--dim); font-size:13px; margin-right:10px"></span>
+        <button id="set-tab5cfg" class="btn-neutral" style="margin-right:6px">Tab5 config</button>
         <button id="set-save" class="btn-ok" style="margin-right:6px">Save</button>
         <button id="set-close" class="btn-neutral">Close</button>
       </div>
@@ -984,6 +985,35 @@
       <p style="color:var(--dim); font-size:13px; margin-top:14px">
         Saved straight to the Tab5. Its own settings drawer shows the same values next time you open it.
       </p>
+    </div>
+  </div>
+
+  <!-- Tab5 config: which settings appear in the Tab5's own drawer under BASIC,
+       under ADVANCED, or both. Reached only from the Settings window, on
+       purpose - it is a setup decision made once, not something to meet while
+       operating. The rows come from the device (/api/drawer_map) in drawer
+       order, so this page can never list a section the firmware does not have,
+       never miss one, and never disagree about the order. -->
+  <div id="t5-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.72); z-index:1001;">
+    <div style="max-width:760px; margin:4vh auto; background:#161616; border:1px solid #494949; border-radius:10px; padding:16px 20px; color:#ddd; font-size:14px; max-height:88vh; display:flex; flex-direction:column;">
+      <div style="display:flex; align-items:center; margin-bottom:6px;">
+        <strong style="color:#ffa040; font-size:17px;">Tab5 config &mdash; Basic / Advanced</strong>
+        <div style="flex:1"></div>
+        <span id="t5-status" style="color:var(--dim); font-size:13px; margin-right:10px"></span>
+        <button id="t5-save" class="btn-ok" style="margin-right:6px">Save</button>
+        <button id="t5-close" class="btn-neutral">Close</button>
+      </div>
+      <p style="color:var(--dim); font-size:13px; margin:0 0 10px">
+        The Tab5's settings drawer has a BASIC / ADVANCED button at the top. Tick where each
+        setting should appear. Both is fine; neither hides it completely. The order is always
+        the drawer's own.
+      </p>
+      <div style="display:flex; gap:8px; margin-bottom:8px;">
+        <button type="button" class="btn-neutral" id="t5-all-basic">All to Basic</button>
+        <button type="button" class="btn-neutral" id="t5-none-basic">None in Basic</button>
+        <button type="button" class="btn-neutral" id="t5-defaults">Restore defaults</button>
+      </div>
+      <div id="t5-body" style="overflow:auto; flex:1; border-top:1px solid #333;"></div>
     </div>
   </div>
 
@@ -2961,6 +2991,107 @@ async function setSave() {
 document.getElementById("settings-btn").addEventListener("click", () => setOpen(false));
 document.getElementById("ft8opts-btn").addEventListener("click", () => setOpen(true));
 document.getElementById("set-save").addEventListener("click", setSave);
+
+/* ---- Tab5 config: Basic / Advanced membership -----------------------------
+   Rows come from the device in drawer order (/api/drawer_map). Nothing about
+   the grouping, the labels or the order is duplicated here - if a section is
+   added to the firmware it appears in this table with no change to this page,
+   and it can never show one that does not exist. */
+let t5Rows = [];
+
+function t5Render() {
+  const body = document.getElementById("t5-body");
+  body.innerHTML = "";
+  let lastGroup = null;
+  const head = document.createElement("div");
+  head.style.cssText = "display:flex; position:sticky; top:0; background:#161616; padding:6px 4px; border-bottom:1px solid #333; color:var(--dim); font-size:12px;";
+  head.innerHTML = "<div style='flex:1'>Setting</div><div style='width:64px; text-align:center'>Basic</div><div style='width:80px; text-align:center'>Advanced</div>";
+  body.appendChild(head);
+
+  t5Rows.forEach((r, i) => {
+    if (r.group !== lastGroup) {
+      lastGroup = r.group;
+      const g = document.createElement("div");
+      g.style.cssText = "color:#ffa040; font-size:13px; font-weight:bold; padding:10px 4px 4px;";
+      g.textContent = r.group;
+      body.appendChild(g);
+    }
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex; align-items:center; padding:4px; border-bottom:1px solid #232323;";
+    const name = document.createElement("div");
+    name.style.cssText = "flex:1";
+    name.textContent = r.label;
+    const mk = (checked, key) => {
+      const w = document.createElement("div");
+      w.style.cssText = (key === "basic" ? "width:64px" : "width:80px") + "; text-align:center";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = !!checked;
+      cb.addEventListener("change", () => { t5Rows[i][key] = cb.checked; });
+      w.appendChild(cb);
+      return w;
+    };
+    row.appendChild(name);
+    row.appendChild(mk(r.basic, "basic"));
+    row.appendChild(mk(r.adv, "adv"));
+    body.appendChild(row);
+  });
+}
+
+async function t5Load(note) {
+  const st = document.getElementById("t5-status");
+  st.textContent = "Loading...";
+  try {
+    const d = await (await fetch("/api/drawer_map")).json();
+    t5Rows = (d && d.items) || [];
+    t5Render();
+    st.textContent = note || "";
+  } catch (e) {
+    st.textContent = "Could not read the Tab5";
+  }
+}
+
+async function t5Post(payload, note) {
+  const st = document.getElementById("t5-status");
+  st.textContent = "Saving...";
+  try {
+    const r = await fetch("/api/drawer_map", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    const d = await r.json();
+    st.textContent = (d && d.ok) ? (note || "Saved") : "Refused";
+    return !!(d && d.ok);
+  } catch (e) {
+    st.textContent = "Save failed";
+    return false;
+  }
+}
+
+document.getElementById("set-tab5cfg").addEventListener("click", () => {
+  document.getElementById("t5-modal").style.display = "block";
+  t5Load();
+});
+document.getElementById("t5-close").addEventListener("click", () => {
+  document.getElementById("t5-modal").style.display = "none";
+});
+document.getElementById("t5-modal").addEventListener("click", (e) => {
+  if (e.target.id === "t5-modal") document.getElementById("t5-modal").style.display = "none";
+});
+document.getElementById("t5-save").addEventListener("click", () => {
+  t5Post({ items: t5Rows.map(r => ({ id: r.id, basic: !!r.basic, adv: !!r.adv })) },
+         "Saved - the Tab5 drawer is already re-laid out");
+});
+document.getElementById("t5-all-basic").addEventListener("click", () => {
+  t5Rows.forEach(r => { r.basic = true; }); t5Render();
+});
+document.getElementById("t5-none-basic").addEventListener("click", () => {
+  t5Rows.forEach(r => { r.basic = false; }); t5Render();
+});
+document.getElementById("t5-defaults").addEventListener("click", async () => {
+  if (await t5Post({ defaults: true }, "Defaults restored")) t5Load("Defaults restored");
+});
 document.getElementById("set-close").addEventListener("click", () => {
   document.getElementById("set-modal").style.display = "none";
   resumeWs();

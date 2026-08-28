@@ -3601,6 +3601,121 @@ static const httpd_uri_t uri_signal = {
     .uri = "/api/signal", .method = HTTP_GET, .handler = signal_handler,
 };
 
+// ---------------------------------------------------------------------------
+// GET/POST /api/drawer_map - the Tab5's Basic/Advanced menu membership.
+//
+// Reached only from the web UI's "Tab5 config" button, next to Save in the
+// Settings window (operator, 2026-08-28): "This way it is not prominent - but
+// those nerds like me Sam and Don can play with it". Deliberately NOT a control
+// on the Tab5 itself - it is a setup decision, made once, not something to meet
+// while operating.
+//
+// The rows come from the SAME table the drawer lays itself out from, in drawer
+// order, so the page cannot show a section the firmware does not have, cannot
+// miss one, and cannot invent an order of its own.
+static esp_err_t drawer_map_get_handler(httpd_req_t *req)
+{
+    cJSON *root  = cJSON_CreateObject();
+    cJSON *items = cJSON_AddArrayToObject(root, "items");
+    int n = ui_drawer_map_count();
+    for (int i = 0; i < n; i++) {
+        int id = 0; const char *grp = NULL; const char *lbl = NULL;
+        bool b = false, a = false;
+        if (!ui_drawer_map_entry(i, &id, &grp, &lbl, &b, &a)) continue;
+        cJSON *o = cJSON_CreateObject();
+        cJSON_AddNumberToObject(o, "id",    id);
+        cJSON_AddStringToObject(o, "group", grp ? grp : "");
+        cJSON_AddStringToObject(o, "label", lbl ? lbl : "");
+        cJSON_AddBoolToObject  (o, "basic", b);
+        cJSON_AddBoolToObject  (o, "adv",   a);
+        cJSON_AddItemToArray(items, o);
+    }
+    char *txt = cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    httpd_resp_set_type(req, "application/json");
+    esp_err_t r = httpd_resp_sendstr(req, txt ? txt : "{}");
+    if (txt) free(txt);
+    return r;
+}
+
+static esp_err_t drawer_map_post_handler(httpd_req_t *req)
+{
+    // Body is a list of {id, basic, adv}. Sized from content_len with a receive
+    // LOOP, never a fixed buffer and a single recv: CLAUDE.md records exactly
+    // that shape silently truncating a settings POST once one checkbox too many
+    // was added, and every save then failing with an unexplained 400.
+    int total = req->content_len;
+    if (total <= 0 || total > 8192) {
+        httpd_resp_set_status(req, "400 Bad Request");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"bad length\"}");
+    }
+    char *buf = malloc(total + 1);
+    if (!buf) {
+        httpd_resp_set_status(req, "500 Internal Server Error");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"no memory\"}");
+    }
+    int got = 0;
+    while (got < total) {
+        int r = httpd_req_recv(req, buf + got, total - got);
+        if (r <= 0) { free(buf); return ESP_FAIL; }
+        got += r;
+    }
+    buf[got] = 0;
+
+    cJSON *root = cJSON_Parse(buf);
+    free(buf);
+    // ⛔ "Restore defaults" is checked BEFORE the items[] validation, because the
+    // first version put it after and it was therefore unreachable - the button
+    // answered {"ok":false,"error":"expected items[]"} every time.
+    cJSON *jdef = root ? cJSON_GetObjectItem(root, "defaults") : NULL;
+    if (jdef && cJSON_IsTrue(jdef)) {
+        cJSON_Delete(root);
+        ui_drawer_map_defaults();
+        httpd_resp_set_type(req, "application/json");
+        return httpd_resp_sendstr(req, "{\"ok\":true,\"note\":\"defaults restored\"}");
+    }
+
+    cJSON *items = root ? cJSON_GetObjectItem(root, "items") : NULL;
+    if (!cJSON_IsArray(items)) {
+        if (root) cJSON_Delete(root);
+        httpd_resp_set_status(req, "400 Bad Request");
+        return httpd_resp_sendstr(req, "{\"ok\":false,\"error\":\"expected items[]\"}");
+    }
+
+    // ⛔ Start from the CURRENT masks, so an id the caller did not mention is
+    // left alone. The first version started from zero, which is fine for the web
+    // page (it always sends every row) and a trap for anyone driving this by
+    // hand - posting a single item hid the entire drawer but one section, which
+    // is exactly what happened the first time it was tested. This endpoint is
+    // aimed at people who will curl it, so it has to survive being curled.
+    uint64_t basic = 0, adv = 0;
+    ui_drawer_map_masks(&basic, &adv);
+    cJSON *it = NULL;
+    cJSON_ArrayForEach(it, items) {
+        cJSON *jid = cJSON_GetObjectItem(it, "id");
+        if (!cJSON_IsNumber(jid)) continue;
+        int id = jid->valueint;
+        if (id < 0 || id > 63) continue;            // bit index must be in range
+        cJSON *jb = cJSON_GetObjectItem(it, "basic");
+        cJSON *ja = cJSON_GetObjectItem(it, "adv");
+        // Set OR clear per mentioned id; absent keys leave that bit as it was.
+        if (jb) { if (cJSON_IsTrue(jb)) basic |= 1ULL << id; else basic &= ~(1ULL << id); }
+        if (ja) { if (cJSON_IsTrue(ja)) adv   |= 1ULL << id; else adv   &= ~(1ULL << id); }
+    }
+    cJSON_Delete(root);
+
+    ui_drawer_map_set(basic, adv);
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"ok\":true}");
+}
+
+static const httpd_uri_t uri_drawer_map_get = {
+    .uri = "/api/drawer_map", .method = HTTP_GET, .handler = drawer_map_get_handler,
+};
+static const httpd_uri_t uri_drawer_map_post = {
+    .uri = "/api/drawer_map", .method = HTTP_POST, .handler = drawer_map_post_handler,
+};
+
 static const httpd_uri_t uri_tone_get = {
     .uri = "/api/tone", .method = HTTP_GET, .handler = tone_get_handler,
 };
@@ -4050,7 +4165,7 @@ esp_err_t webserver_start(void)
     // silently from the endpoint's point of view, so the symptom would have been
     // "the shortcuts page 404s" with nothing obviously wrong. Counted, not
     // guessed: grep -c httpd_register_uri_handler in both files.
-    config.max_uri_handlers = 49;   // 39 API + WS + 5 file-browser + headroom
+    config.max_uri_handlers = 51;   // 41 API + WS + 5 file-browser + headroom
     config.lru_purge_enable = true;
     // LWIP_MAX_SOCKETS is 16; httpd reserves 3, so up to 13 sessions are safe.
     // Give the browser headroom (WS + /api polls + reconnect bursts) so a stale
@@ -4088,6 +4203,8 @@ esp_err_t webserver_start(void)
     httpd_register_uri_handler(s_server, &uri_qrz_upload);
     httpd_register_uri_handler(s_server, &uri_upload_status);
     httpd_register_uri_handler(s_server, &uri_signal);
+    httpd_register_uri_handler(s_server, &uri_drawer_map_get);
+    httpd_register_uri_handler(s_server, &uri_drawer_map_post);
     httpd_register_uri_handler(s_server, &uri_tone_get);
     httpd_register_uri_handler(s_server, &uri_tone_post);
     httpd_register_uri_handler(s_server, &uri_memory_get);

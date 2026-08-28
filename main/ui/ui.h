@@ -3,6 +3,7 @@
 
 #include "lvgl.h"
 #include <stdbool.h>
+#include <stdint.h>
 
 void ui_init(lv_display_t *disp);
 
@@ -315,3 +316,20 @@ void        ui_kbd_bindings_reset_defaults(void);
 // that applies typed characters to the focused textarea on the LVGL thread).
 // Call once after the UI is built.
 void ui_kbd_bridge_init(void);
+
+// ---- Basic/Advanced drawer membership (web "Tab5 config" table) -----------
+// One entry per drawer section, in DRAWER ORDER, so the web page renders the
+// table without knowing the grouping or inventing an order. The label comes
+// from the same table the drawer itself is laid out from, so the page can never
+// name a section the firmware does not have.
+int  ui_drawer_map_count(void);
+bool ui_drawer_map_entry(int idx, int *id, const char **group, const char **label,
+                         bool *in_basic, bool *in_adv);
+// Replace both masks (bit N = section id N) and re-lay the drawer. Safe from
+// the httpd task: it takes the display lock itself.
+void ui_drawer_map_set(uint64_t basic_mask, uint64_t adv_mask);
+// Seeded from the group table's own expert flag, so the browser never has to
+// know what the firmware considers advanced.
+void ui_drawer_map_defaults(void);
+// Current masks, so a partial update can leave untouched sections alone.
+void ui_drawer_map_masks(uint64_t *basic, uint64_t *adv);
